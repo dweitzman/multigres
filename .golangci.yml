@@ -23,6 +23,7 @@ linters:
     - errcheck
     - govet
     - ineffassign
+    - revive
     - staticcheck
   settings:
     depguard:
@@ -40,23 +41,27 @@ linters:
             - pkg: "math/rand$"
               desc: "Please use math/rand/v2"
     govet:
-    disable:
-      - nilness
-      - unusedwrite
-      - loopclosure
-  staticcheck:
-    checks:
-      - "all"
-      - "-ST1000"
-      - "-ST1003"
-      - "-ST1005"
-      - "-ST1016"
-      - "-ST1020"
-      - "-ST1021"
-      - "-ST1022"
-      - "-QF1001"
-      - "-QF1005"
-      - "-QF1008"
+      disable:
+        - nilness
+        - unusedwrite
+        - loopclosure
+    revive:
+      rules:
+        - name: package-comments
+          disable: false
+    staticcheck:
+      checks:
+        - "all"
+        - "-ST1000"
+        - "-ST1003"
+        - "-ST1005"
+        - "-ST1016"
+        - "-ST1020"
+        - "-ST1021"
+        - "-ST1022"
+        - "-QF1001"
+        - "-QF1005"
+        - "-QF1008"
   exclusions:
     generated: lax
     presets:

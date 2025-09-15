@@ -83,7 +83,6 @@
 // Most but not all of the code in this file was originally copied from
 // Vittes, which also is mostly a copy from:
 // https://github.com/pkg/errors/blob/v0.8.0/errors.go
-
 package mterrors
 
 import (
