@@ -21,7 +21,7 @@ Usage:
 import json
 import re
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 
 def extract_sql_statements(content: str) -> List[str]:
@@ -78,14 +78,16 @@ def extract_sql_statements(content: str) -> List[str]:
                 elif re.search(r"\s+as\s+(\$\w*\$)", stmt_so_far, re.IGNORECASE):
                     # Dollar-quoted function body starts
                     match = re.search(r"\s+as\s+(\$\w*\$)", stmt_so_far, re.IGNORECASE)
-                    dollar_quote_tag = match.group(1)
+                    if match:
+                        dollar_quote_tag = match.group(1)
                     in_function_body = True
                     function_quote_style = "dollar"
             # Look for DO blocks with dollar quotes
             elif re.search(r"^do\s+(\$\w*\$)", stmt_so_far, re.IGNORECASE):
                 # DO block starts
                 match = re.search(r"^do\s+(\$\w*\$)", stmt_so_far, re.IGNORECASE)
-                dollar_quote_tag = match.group(1)
+                if match:
+                    dollar_quote_tag = match.group(1)
                 in_function_body = True
                 function_quote_style = "dollar"
             # Look for DO blocks with single quotes
@@ -135,7 +137,7 @@ def extract_sql_statements(content: str) -> List[str]:
 
             elif function_quote_style == "dollar":
                 # Look for the matching dollar quote tag
-                if dollar_quote_tag in clean_line:
+                if dollar_quote_tag and dollar_quote_tag in clean_line:
                     if is_do_block:
                         # For DO blocks, just check for the closing tag (possibly with semicolon)
                         pattern = re.escape(dollar_quote_tag) + r"\s*;?\s*$"
@@ -295,7 +297,7 @@ def is_ignored_statement(stmt: str) -> bool:
     return False
 
 
-def handle_parameterized_queries(stmt: str) -> str:
+def handle_parameterized_queries(stmt: str) -> Optional[str]:
     """
     Handle PostgreSQL parameterized queries by replacing psql variables with placeholder values.
     Returns None if the statement should be skipped.
