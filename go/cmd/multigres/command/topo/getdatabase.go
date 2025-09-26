@@ -24,7 +24,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	multiadminpb "github.com/multigres/multigres/go/pb/multiadmin"
+	multiadminpb "github.com/multigres/multigres/go/pb/multiadmin/v1"
 )
 
 // GetDatabaseCommand implements the getdatabase CLI command

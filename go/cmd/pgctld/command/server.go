@@ -24,7 +24,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	pb "github.com/multigres/multigres/go/pb/pgctldservice"
+	pb "github.com/multigres/multigres/go/pb/pgctldservice/v1"
 )
 
 func init() {
@@ -75,7 +75,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 
 		// Register gRPC service with the global GRPCServer
 		if servenv.GRPCCheckServiceMap("pgctld") {
-			pb.RegisterPgCtldServer(servenv.GRPCServer, pgctldService)
+			pb.RegisterPgCtldServiceServer(servenv.GRPCServer, pgctldService)
 		}
 	})
 
@@ -91,7 +91,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 
 // PgCtldService implements the pgctld gRPC service
 type PgCtldService struct {
-	pb.UnimplementedPgCtldServer
+	pb.UnimplementedPgCtldServiceServer
 	logger     *slog.Logger
 	pgPort     int
 	pgUser     string

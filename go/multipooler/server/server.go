@@ -23,8 +23,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	multipoolerpb "github.com/multigres/multigres/go/pb/multipoolerservice"
-	querypb "github.com/multigres/multigres/go/pb/query"
+	multipoolerpb "github.com/multigres/multigres/go/pb/multipoolerservice/v1"
+	querypb "github.com/multigres/multigres/go/pb/query/v1"
 	"github.com/multigres/multigres/go/servenv"
 
 	"google.golang.org/grpc"

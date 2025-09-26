@@ -26,7 +26,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata/v1"
 )
 
 // timeUntilLockIsTaken is the time to wait until a lock is taken.

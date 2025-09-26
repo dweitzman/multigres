@@ -25,12 +25,12 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 
-	pb "github.com/multigres/multigres/go/pb/pgctldservice"
+	pb "github.com/multigres/multigres/go/pb/pgctldservice/v1"
 )
 
 // MockPgCtldService implements a mock version of the PgCtld gRPC service for testing
 type MockPgCtldService struct {
-	pb.UnimplementedPgCtldServer
+	pb.UnimplementedPgCtldServiceServer
 	StartCalls   []*pb.StartRequest
 	StopCalls    []*pb.StopRequest
 	RestartCalls []*pb.RestartRequest
@@ -166,8 +166,8 @@ func NewTestGRPCServer(t *testing.T) *TestGRPCServer {
 }
 
 // RegisterService registers a service with the test server
-func (ts *TestGRPCServer) RegisterService(service pb.PgCtldServer) {
-	pb.RegisterPgCtldServer(ts.server, service)
+func (ts *TestGRPCServer) RegisterService(service pb.PgCtldServiceServer) {
+	pb.RegisterPgCtldServiceServer(ts.server, service)
 }
 
 // Start starts the test gRPC server
@@ -188,7 +188,7 @@ func (ts *TestGRPCServer) Stop() {
 }
 
 // NewClient creates a new gRPC client connected to the test server
-func (ts *TestGRPCServer) NewClient(t *testing.T) pb.PgCtldClient {
+func (ts *TestGRPCServer) NewClient(t *testing.T) pb.PgCtldServiceClient {
 	t.Helper()
 
 	dialer := func(context.Context, string) (net.Conn, error) {
@@ -208,11 +208,11 @@ func (ts *TestGRPCServer) NewClient(t *testing.T) pb.PgCtldClient {
 		conn.Close()
 	})
 
-	return pb.NewPgCtldClient(conn)
+	return pb.NewPgCtldServiceClient(conn)
 }
 
 // StartTestServer starts a real gRPC server on a random port for integration testing
-func StartTestServer(t *testing.T, service pb.PgCtldServer) (pb.PgCtldClient, func()) {
+func StartTestServer(t *testing.T, service pb.PgCtldServiceServer) (pb.PgCtldServiceClient, func()) {
 	t.Helper()
 
 	// Find an available port
@@ -225,7 +225,7 @@ func StartTestServer(t *testing.T, service pb.PgCtldServer) (pb.PgCtldClient, fu
 
 	// Create gRPC server
 	server := grpc.NewServer()
-	pb.RegisterPgCtldServer(server, service)
+	pb.RegisterPgCtldServiceServer(server, service)
 
 	// Start server in background
 	go func() {
@@ -243,7 +243,7 @@ func StartTestServer(t *testing.T, service pb.PgCtldServer) (pb.PgCtldClient, fu
 		t.Fatalf("Failed to connect to test server: %v", err)
 	}
 
-	client := pb.NewPgCtldClient(conn)
+	client := pb.NewPgCtldServiceClient(conn)
 
 	// Wait for server to be ready
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

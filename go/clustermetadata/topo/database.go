@@ -19,7 +19,7 @@ import (
 	"errors"
 	"path"
 
-	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata/v1"
 
 	"google.golang.org/protobuf/proto"
 )

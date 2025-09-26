@@ -24,8 +24,8 @@ import (
 	"log/slog"
 
 	"github.com/multigres/multigres/go/clustermetadata/topo"
-	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multiadminpb "github.com/multigres/multigres/go/pb/multiadmin"
+	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata/v1"
+	multiadminpb "github.com/multigres/multigres/go/pb/multiadmin/v1"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"

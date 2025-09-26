@@ -14,12 +14,12 @@
 
 syntax = "proto3";
 
-package pgctldservice;
+package pgctldservice.v1;
 
-option go_package = "github.com/multigres/multigres/go/pb/pgctldservice";
+option go_package = "github.com/multigres/multigres/go/pb/pgctldservice/v1";
 
 // PostgreSQL Control Service
-service PgCtld {
+service PgCtldService {
   // Start PostgreSQL server
   rpc Start(StartRequest) returns (StartResponse);
 

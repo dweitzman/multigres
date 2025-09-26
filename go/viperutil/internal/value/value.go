@@ -23,7 +23,7 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/multigres/multigres/go/mterrors"
-	"github.com/multigres/multigres/go/pb/mtrpc"
+	mtrpc "github.com/multigres/multigres/go/pb/mtrpc/v1"
 	"github.com/multigres/multigres/go/viperutil/internal/registry"
 	"github.com/multigres/multigres/go/viperutil/internal/sync"
 )

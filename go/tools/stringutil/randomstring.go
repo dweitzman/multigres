@@ -20,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata/v1"
 )
 
 // ComponentTypeToString converts a ComponentType enum to its string representation.

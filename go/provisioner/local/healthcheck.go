@@ -24,7 +24,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	pb "github.com/multigres/multigres/go/pb/pgctldservice"
+	pb "github.com/multigres/multigres/go/pb/pgctldservice/v1"
 )
 
 // waitForServiceReady waits for a service to become ready by checking appropriate endpoints
@@ -116,7 +116,7 @@ func (p *localProvisioner) checkPgctldGrpcHealth(address string) error {
 	}
 	defer conn.Close()
 
-	client := pb.NewPgCtldClient(conn)
+	client := pb.NewPgCtldServiceClient(conn)
 	_, err = client.Status(ctx, &pb.StatusRequest{})
 	if err != nil {
 		return fmt.Errorf("pgctld gRPC status call failed: %w", err)

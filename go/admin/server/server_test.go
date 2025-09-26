@@ -20,8 +20,8 @@ import (
 	"testing"
 
 	"github.com/multigres/multigres/go/clustermetadata/topo/memorytopo"
-	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multiadminpb "github.com/multigres/multigres/go/pb/multiadmin"
+	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata/v1"
+	multiadminpb "github.com/multigres/multigres/go/pb/multiadmin/v1"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

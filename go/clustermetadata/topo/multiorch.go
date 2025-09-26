@@ -25,7 +25,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata/v1"
 )
 
 // NewMultiOrch creates a new MultiOrch record with the given name, cell, and hostname.

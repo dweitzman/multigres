@@ -27,7 +27,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"gopkg.in/yaml.v3"
 
-	multiadminpb "github.com/multigres/multigres/go/pb/multiadmin"
+	multiadminpb "github.com/multigres/multigres/go/pb/multiadmin/v1"
 	"github.com/multigres/multigres/go/provisioner/local"
 )
 

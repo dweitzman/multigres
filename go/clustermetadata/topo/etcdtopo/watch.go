@@ -28,7 +28,7 @@ import (
 
 	"github.com/multigres/multigres/go/clustermetadata/topo"
 	"github.com/multigres/multigres/go/mterrors"
-	"github.com/multigres/multigres/go/pb/mtrpc"
+	mtrpc "github.com/multigres/multigres/go/pb/mtrpc/v1"
 )
 
 // Watch is part of the topo.Conn interface.

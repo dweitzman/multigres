@@ -18,9 +18,9 @@ limitations under the License.
 
 syntax = "proto3";
 
-package query;
+package query.v1;
 
-option go_package = "github.com/multigres/multigres/go/pb/query";
+option go_package = "github.com/multigres/multigres/go/pb/query/v1";
 
 // QueryResult represents the result of executing a query
 message QueryResult {

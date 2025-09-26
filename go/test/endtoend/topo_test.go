@@ -27,8 +27,8 @@ import (
 	"testing"
 	"time"
 
-	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multiadminpb "github.com/multigres/multigres/go/pb/multiadmin"
+	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata/v1"
+	multiadminpb "github.com/multigres/multigres/go/pb/multiadmin/v1"
 	"github.com/multigres/multigres/go/test/utils"
 
 	"github.com/spf13/cobra"

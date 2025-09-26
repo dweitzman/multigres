@@ -27,7 +27,7 @@ import (
 
 	"github.com/multigres/multigres/go/clustermetadata/topo"
 	"github.com/multigres/multigres/go/netutil"
-	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata/v1"
 	"github.com/multigres/multigres/go/servenv"
 
 	"github.com/spf13/cobra"

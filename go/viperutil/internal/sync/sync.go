@@ -30,7 +30,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 
 	"github.com/multigres/multigres/go/mterrors"
-	"github.com/multigres/multigres/go/pb/mtrpc"
+	mtrpc "github.com/multigres/multigres/go/pb/mtrpc/v1"
 )
 
 // Viper is a wrapper around a pair of viper.Viper instances to provide config-

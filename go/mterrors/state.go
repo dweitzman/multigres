@@ -14,7 +14,7 @@
 
 package mterrors
 
-import mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
+import mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc/v1"
 
 // State represents an error state that we will later use to mimic PostgreSQL errors
 type State int

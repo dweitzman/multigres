@@ -24,8 +24,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
-	multipoolerpb "github.com/multigres/multigres/go/pb/multipoolerservice"
+	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc/v1"
+	multipoolerpb "github.com/multigres/multigres/go/pb/multipoolerservice/v1"
 )
 
 func TestNewMultiPoolerServer(t *testing.T) {

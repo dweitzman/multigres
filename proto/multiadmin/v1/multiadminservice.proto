@@ -14,11 +14,11 @@
 
 syntax = "proto3";
 
-package multiadmin;
+package multiadmin.v1;
 
-import "clustermetadata.proto";
+import "clustermetadata/v1/clustermetadata.proto";
 
-option go_package = "github.com/multigres/multigres/go/pb/multiadmin";
+option go_package = "github.com/multigres/multigres/go/pb/multiadmin/v1";
 
 // MultiAdminService provides administrative gRPC APIs for querying cluster metadata
 service MultiAdminService {
@@ -53,7 +53,7 @@ message GetCellRequest {
 // GetCellResponse contains the cell information
 message GetCellResponse {
   // cell contains the Cell protobuf object
-  clustermetadata.Cell cell = 1;
+  clustermetadata.v1.Cell cell = 1;
 }
 
 // GetDatabaseRequest specifies the database to retrieve
@@ -65,7 +65,7 @@ message GetDatabaseRequest {
 // GetDatabaseResponse contains the database information
 message GetDatabaseResponse {
   // database contains the Database protobuf object
-  clustermetadata.Database database = 1;
+  clustermetadata.v1.Database database = 1;
 }
 
 // GetCellNamesRequest requests all cell names
@@ -94,7 +94,7 @@ message GetGatewaysRequest {
 
 // GetGatewaysResponse contains the filtered gateways
 message GetGatewaysResponse {
-  repeated clustermetadata.MultiGateway gateways = 1;
+  repeated clustermetadata.v1.MultiGateway gateways = 1;
 }
 
 // GetPoolersRequest requests poolers with optional filtering
@@ -109,7 +109,7 @@ message GetPoolersRequest {
 
 // GetPoolersResponse contains the filtered poolers
 message GetPoolersResponse {
-  repeated clustermetadata.MultiPooler poolers = 1;
+  repeated clustermetadata.v1.MultiPooler poolers = 1;
 }
 
 // GetOrchsRequest requests orchestrators with optional filtering
@@ -121,5 +121,5 @@ message GetOrchsRequest {
 // GetOrchsResponse contains the filtered orchestrators
 message GetOrchsResponse {
   // protolint:disable:next REPEATED_FIELD_NAMES_PLURALIZED
-  repeated clustermetadata.MultiOrch orchs = 1;
+  repeated clustermetadata.v1.MultiOrch orchs = 1;
 }

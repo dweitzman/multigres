@@ -21,7 +21,7 @@
 package multiadmin
 
 import (
-	clustermetadata "github.com/multigres/multigres/go/pb/clustermetadata"
+	clustermetadata "github.com/multigres/multigres/go/pb/clustermetadata/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"

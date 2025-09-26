@@ -24,8 +24,8 @@
 package multipoolerservice
 
 import (
-	mtrpc "github.com/multigres/multigres/go/pb/mtrpc"
-	query "github.com/multigres/multigres/go/pb/query"
+	mtrpc "github.com/multigres/multigres/go/pb/mtrpc/v1"
+	query "github.com/multigres/multigres/go/pb/query/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"

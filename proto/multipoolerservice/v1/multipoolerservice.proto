@@ -18,12 +18,12 @@ limitations under the License.
 
 syntax = "proto3";
 
-package multipoolerservice;
+package multipoolerservice.v1;
 
-import "mtrpc.proto";
-import "query.proto";
+import "mtrpc/v1/mtrpc.proto";
+import "query/v1/query.proto";
 
-option go_package = "github.com/multigres/multigres/go/pb/multipoolerservice";
+option go_package = "github.com/multigres/multigres/go/pb/multipoolerservice/v1";
 
 // MultiPoolerService provides connection pooling and query execution
 service MultiPoolerService {
@@ -37,10 +37,10 @@ message ExecuteQueryRequest {
   uint64 max_rows = 2;
   // caller_id identifies the caller. This is the effective caller ID,
   // set by the application to further identify the caller.
-  mtrpc.CallerID caller_id = 3;
+  mtrpc.v1.CallerID caller_id = 3;
 }
 
 // ExecuteQueryResponse represents the response from executing a SQL query
 message ExecuteQueryResponse {
-  query.QueryResult result = 1;
+  query.v1.QueryResult result = 1;
 }

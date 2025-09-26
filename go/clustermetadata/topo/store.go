@@ -75,7 +75,7 @@ import (
 
 	"github.com/spf13/pflag"
 
-	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata/v1"
 )
 
 const (

@@ -23,7 +23,7 @@ import (
 
 	"github.com/multigres/multigres/go/clustermetadata/topo"
 	"github.com/multigres/multigres/go/mterrors"
-	"github.com/multigres/multigres/go/pb/mtrpc"
+	mtrpc "github.com/multigres/multigres/go/pb/mtrpc/v1"
 )
 
 // Conn wraps a topo.Conn with automatic reconnection and error handling.

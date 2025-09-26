@@ -26,7 +26,7 @@ import (
 
 	"github.com/multigres/multigres/go/clustermetadata/topo"
 
-	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata/v1"
 )
 
 // waitForInitialValue waits for the initial value of

@@ -19,7 +19,7 @@ import (
 	"fmt"
 
 	"github.com/multigres/multigres/go/clustermetadata/topo"
-	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata/v1"
 )
 
 // CreateTestGateway creates a test gateway in the specified cell for testing

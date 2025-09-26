@@ -25,9 +25,9 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
-	multipoolerpb "github.com/multigres/multigres/go/pb/multipoolerservice"
-	querypb "github.com/multigres/multigres/go/pb/query"
+	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc/v1"
+	multipoolerpb "github.com/multigres/multigres/go/pb/multipoolerservice/v1"
+	querypb "github.com/multigres/multigres/go/pb/query/v1"
 )
 
 // MultiPoolerTestClient wraps the gRPC client for testing

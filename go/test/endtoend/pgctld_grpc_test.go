@@ -32,7 +32,7 @@ import (
 	"github.com/multigres/multigres/go/cmd/pgctld/command"
 
 	"github.com/multigres/multigres/go/cmd/pgctld/testutil"
-	pb "github.com/multigres/multigres/go/pb/pgctldservice"
+	pb "github.com/multigres/multigres/go/pb/pgctldservice/v1"
 )
 
 // TestGRPCServerIntegration tests the gRPC server with mock PostgreSQL
@@ -61,7 +61,7 @@ func TestGRPCServerIntegration(t *testing.T) {
 	require.NoError(t, err)
 	defer conn.Close()
 
-	client := pb.NewPgCtldClient(conn)
+	client := pb.NewPgCtldServiceClient(conn)
 
 	t.Run("complete_grpc_lifecycle", func(t *testing.T) {
 		ctx := context.Background()
@@ -144,7 +144,7 @@ func TestGRPCErrorHandling(t *testing.T) {
 	require.NoError(t, err)
 	defer conn.Close()
 
-	client := pb.NewPgCtldClient(conn)
+	client := pb.NewPgCtldServiceClient(conn)
 
 	t.Run("start_already_running", func(t *testing.T) {
 		ctx := context.Background()
@@ -225,7 +225,7 @@ func TestGRPCConcurrentRequests(t *testing.T) {
 	require.NoError(t, err)
 	defer conn.Close()
 
-	client := pb.NewPgCtldClient(conn)
+	client := pb.NewPgCtldServiceClient(conn)
 	ctx := context.Background()
 
 	// Initialize and start PostgreSQL first
@@ -305,7 +305,7 @@ func TestGRPCWithDifferentConfigurations(t *testing.T) {
 		require.NoError(t, err)
 		defer conn.Close()
 
-		client := pb.NewPgCtldClient(conn)
+		client := pb.NewPgCtldServiceClient(conn)
 		ctx := context.Background()
 
 		stopModes := []string{"smart", "fast", "immediate"}
@@ -359,7 +359,7 @@ func TestGRPCUninitializedDatabase(t *testing.T) {
 	require.NoError(t, err)
 	defer conn.Close()
 
-	client := pb.NewPgCtldClient(conn)
+	client := pb.NewPgCtldServiceClient(conn)
 
 	t.Run("uninitialized_database_operations", func(t *testing.T) {
 		ctx := context.Background()
@@ -493,7 +493,7 @@ func createTestGRPCServer(t *testing.T, dataDir, binDir string) (net.Listener, f
 	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
 
 	// Register the service
-	pb.RegisterPgCtldServer(grpcServer, service)
+	pb.RegisterPgCtldServiceServer(grpcServer, service)
 
 	// Start server in background
 	go func() {

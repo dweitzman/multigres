@@ -24,7 +24,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	pb "github.com/multigres/multigres/go/pb/pgctldservice"
+	pb "github.com/multigres/multigres/go/pb/pgctldservice/v1"
 )
 
 // startPostgreSQLViaPgctld starts PostgreSQL via pgctld gRPC and verifies it's running
@@ -38,7 +38,7 @@ func (p *localProvisioner) startPostgreSQLViaPgctld(address string) error {
 	}
 	defer conn.Close()
 
-	client := pb.NewPgCtldClient(conn)
+	client := pb.NewPgCtldServiceClient(conn)
 
 	// First, check if PostgreSQL is already running
 	statusResp, err := client.Status(ctx, &pb.StatusRequest{})
@@ -98,7 +98,7 @@ func (p *localProvisioner) stopPostgreSQLViaPgctld(address string) error {
 	}
 	defer conn.Close()
 
-	client := pb.NewPgCtldClient(conn)
+	client := pb.NewPgCtldServiceClient(conn)
 
 	// Check if PostgreSQL is running
 	statusResp, err := client.Status(ctx, &pb.StatusRequest{})
