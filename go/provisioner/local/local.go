@@ -399,31 +399,34 @@ func (p *localProvisioner) provisionMultigateway(ctx context.Context, req *provi
 	topoGlobalRoot := req.Params["topo_global_root"].(string)
 
 	// Get cell-specific multigateway config
-	multigatewayConfig, err := p.getCellServiceConfig(cell, "multigateway")
+	multigatewayConfig, err := p.getMultigatewayConfig(cell)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get multigateway config for cell %s: %w", cell, err)
 	}
 
 	// Get HTTP port from cell-specific config
 	httpPort := ports.DefaultMultigatewayHTTP
-	if p, ok := multigatewayConfig["http_port"].(int); ok && p > 0 {
-		httpPort = p
+	if multigatewayConfig.HttpPort > 0 {
+		httpPort = multigatewayConfig.HttpPort
 	}
 
 	// Get gRPC port from cell-specific config
 	grpcPort := ports.DefaultMultigatewayGRPC
-	if p, ok := multigatewayConfig["grpc_port"].(int); ok && p > 0 {
-		grpcPort = p
+	if multigatewayConfig.GrpcPort > 0 {
+		grpcPort = multigatewayConfig.GrpcPort
 	}
 
 	// Get log level
 	logLevel := "info"
-	if level, ok := multigatewayConfig["log_level"].(string); ok {
-		logLevel = level
+	if multigatewayConfig.LogLevel != "" {
+		logLevel = multigatewayConfig.LogLevel
 	}
 
+	// Convert to map for findBinary
+	configMap := map[string]any{"path": multigatewayConfig.Path}
+
 	// Find multigateway binary
-	multigatewayBinary, err := p.findBinary("multigateway", multigatewayConfig)
+	multigatewayBinary, err := p.findBinary("multigateway", configMap)
 	if err != nil {
 		return nil, fmt.Errorf("multigateway binary not found: %w", err)
 	}
@@ -669,75 +672,81 @@ func (p *localProvisioner) provisionMultipooler(ctx context.Context, req *provis
 	topoGlobalRoot := req.Params["topo_global_root"].(string)
 
 	// Get cell-specific multipooler config
-	multipoolerConfig, err := p.getCellServiceConfig(cell, "multipooler")
+	multipoolerConfig, err := p.getMultipoolerConfig(cell)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get multipooler config for cell %s: %w", cell, err)
 	}
 
 	// Get HTTP port from cell-specific config
 	httpPort := ports.DefaultMultipoolerHTTP
-	if p, ok := multipoolerConfig["http_port"].(int); ok && p > 0 {
-		httpPort = p
+	if multipoolerConfig.HttpPort > 0 {
+		httpPort = multipoolerConfig.HttpPort
 	}
 
 	// Get grpc port from cell-specific config
 	grpcPort := ports.DefaultMultipoolerGRPC
-	if port, ok := multipoolerConfig["grpc_port"].(int); ok && port > 0 {
-		grpcPort = port
+	if multipoolerConfig.GrpcPort > 0 {
+		grpcPort = multipoolerConfig.GrpcPort
 	}
 
 	// Get database from multipooler config, fall back to request if not set
-	database := ""
-	if dbFromConfig, ok := multipoolerConfig["database"].(string); ok && dbFromConfig != "" {
-		database = dbFromConfig
-	} else {
-		database = req.DatabaseName
+	database := req.DatabaseName
+	if multipoolerConfig.Database != "" {
+		database = multipoolerConfig.Database
 	}
 
 	// Get table group from multipooler config, default to "default" if not set
 	tableGroup := "default"
-	if tgFromConfig, ok := multipoolerConfig["table_group"].(string); ok && tgFromConfig != "" {
-		tableGroup = tgFromConfig
+	if multipoolerConfig.TableGroup != "" {
+		tableGroup = multipoolerConfig.TableGroup
 	}
 
 	// Get log level
 	logLevel := "info"
-	if level, ok := multipoolerConfig["log_level"].(string); ok {
-		logLevel = level
+	if multipoolerConfig.LogLevel != "" {
+		logLevel = multipoolerConfig.LogLevel
 	}
 
 	// Get pooler directory
-	poolerDir := ""
-	if val, ok := multipoolerConfig["pooler_dir"].(string); ok && val != "" {
-		poolerDir = val
-	}
+	poolerDir := multipoolerConfig.PoolerDir
 
 	// Get PostgreSQL port from config or use default
 	pgPort := ports.DefaultPostgresPort
-	if port, ok := multipoolerConfig["pg_port"].(int); ok && port > 0 {
-		pgPort = port
+	if multipoolerConfig.PgPort > 0 {
+		pgPort = multipoolerConfig.PgPort
 	}
 
 	// Get gRPC socket file if configured
-	socketFile, err := getGRPCSocketFile(multipoolerConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to configure gRPC socket file: %w", err)
-	}
+	socketFile := multipoolerConfig.GRPCSocketFile
 	if socketFile != "" {
+		// Convert to absolute path since the working directory may change
+		absSocketFile, err := filepath.Abs(socketFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve socket file path: %w", err)
+		}
+		socketFile = absSocketFile
+
+		// Ensure socket directory exists
+		socketDir := filepath.Dir(socketFile)
+		if err := os.MkdirAll(socketDir, 0o755); err != nil {
+			return nil, fmt.Errorf("failed to create socket directory: %w", err)
+		}
+
 		fmt.Printf("▶️  - Configuring multipooler gRPC Unix socket: %s\n", socketFile)
 	}
 
+	// Convert to map for findBinary
+	configMap := map[string]any{"path": multipoolerConfig.Path}
+
 	// Find multipooler binary
-	multipoolerBinary, err := p.findBinary("multipooler", multipoolerConfig)
+	multipoolerBinary, err := p.findBinary("multipooler", configMap)
 	if err != nil {
 		return nil, fmt.Errorf("multipooler binary not found: %w", err)
 	}
 
 	// Get service ID from multipooler config - this should always be set
-	serviceID := ""
-	if id, ok := multipoolerConfig["service-id"].(string); ok && id != "" {
-		serviceID = id
-	} else {
+	serviceID := multipoolerConfig.ServiceID
+	if serviceID == "" {
 		return nil, fmt.Errorf("service-id not found in multipooler config for cell %s", cell)
 	}
 
@@ -875,31 +884,34 @@ func (p *localProvisioner) provisionMultiOrch(ctx context.Context, req *provisio
 	cell = req.Params["cell"].(string)
 
 	// Get cell-specific multiorch config
-	multiorchConfig, err := p.getCellServiceConfig(cell, "multiorch")
+	multiorchConfig, err := p.getMultiorchConfig(cell)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get multiorch config for cell %s: %w", cell, err)
 	}
 
 	// Get HTTP port from cell-specific config
 	httpPort := ports.DefaultMultiorchHTTP
-	if p, ok := multiorchConfig["http_port"].(int); ok && p > 0 {
-		httpPort = p
+	if multiorchConfig.HttpPort > 0 {
+		httpPort = multiorchConfig.HttpPort
 	}
 
 	// Get grpc port from cell-specific config
 	grpcPort := ports.DefaultMultiorchGRPC
-	if port, ok := multiorchConfig["grpc_port"].(int); ok && port > 0 {
-		grpcPort = port
+	if multiorchConfig.GrpcPort > 0 {
+		grpcPort = multiorchConfig.GrpcPort
 	}
 
 	// Get log level
 	logLevel := "info"
-	if level, ok := multiorchConfig["log_level"].(string); ok {
-		logLevel = level
+	if multiorchConfig.LogLevel != "" {
+		logLevel = multiorchConfig.LogLevel
 	}
 
+	// Convert to map for findBinary
+	configMap := map[string]any{"path": multiorchConfig.Path}
+
 	// Find multiorch binary
-	multiorchBinary, err := p.findBinary("multiorch", multiorchConfig)
+	multiorchBinary, err := p.findBinary("multiorch", configMap)
 	if err != nil {
 		return nil, fmt.Errorf("multiorch binary not found: %w", err)
 	}

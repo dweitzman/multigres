@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
 
 	"google.golang.org/grpc"
@@ -169,63 +170,74 @@ func (p *localProvisioner) provisionPgctld(ctx context.Context, dbName, tableGro
 	}
 
 	// Get cell-specific pgctld config
-	pgctldConfig, err := p.getCellServiceConfig(cell, "pgctld")
+	pgctldConfig, err := p.getPgctldConfig(cell)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get pgctld config for cell %s: %w", cell, err)
 	}
 
+	// Convert to map for findBinary
+	configMap := map[string]any{"path": pgctldConfig.Path}
+
 	// Find pgctld binary
-	pgctldBinary, err := p.findBinary("pgctld", pgctldConfig)
+	pgctldBinary, err := p.findBinary("pgctld", configMap)
 	if err != nil {
 		return nil, fmt.Errorf("pgctld binary not found: %w", err)
 	}
 
 	// Get gRPC port from config or use default
 	grpcPort := 17000
-	if port, ok := pgctldConfig["grpc_port"].(int); ok {
-		grpcPort = port
+	if pgctldConfig.GrpcPort > 0 {
+		grpcPort = pgctldConfig.GrpcPort
 	}
 
 	// Get PostgreSQL port from config or use default
 	pgPort := 5432
-	if port, ok := pgctldConfig["pg_port"].(int); ok {
-		pgPort = port
+	if pgctldConfig.PgPort > 0 {
+		pgPort = pgctldConfig.PgPort
 	}
 
 	// Get other pgctld configuration values with defaults
 	pgDatabase := "postgres"
-	if db, ok := pgctldConfig["pg_database"].(string); ok && db != "" {
-		pgDatabase = db
+	if pgctldConfig.PgDatabase != "" {
+		pgDatabase = pgctldConfig.PgDatabase
 	}
 
 	pgUser := "postgres"
-	if user, ok := pgctldConfig["pg_user"].(string); ok && user != "" {
-		pgUser = user
+	if pgctldConfig.PgUser != "" {
+		pgUser = pgctldConfig.PgUser
 	}
 
 	timeout := 30
-	if t, ok := pgctldConfig["timeout"].(int); ok {
-		timeout = t
+	if pgctldConfig.Timeout > 0 {
+		timeout = pgctldConfig.Timeout
 	}
 
 	logLevel := "info"
-	if level, ok := pgctldConfig["log_level"].(string); ok && level != "" {
-		logLevel = level
+	if pgctldConfig.LogLevel != "" {
+		logLevel = pgctldConfig.LogLevel
 	}
 
-	poolerDir := ""
-	dir, ok := pgctldConfig["pooler_dir"].(string)
-	if !ok {
+	poolerDir := pgctldConfig.PoolerDir
+	if poolerDir == "" {
 		return nil, fmt.Errorf("pooler_dir not found in config")
 	}
-	poolerDir = dir
 
 	// Get gRPC socket file if configured
-	socketFile, err := getGRPCSocketFile(pgctldConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to configure gRPC socket file: %w", err)
-	}
+	socketFile := pgctldConfig.GRPCSocketFile
 	if socketFile != "" {
+		// Convert to absolute path since the working directory may change
+		absSocketFile, err := filepath.Abs(socketFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve socket file path: %w", err)
+		}
+		socketFile = absSocketFile
+
+		// Ensure socket directory exists
+		socketDir := filepath.Dir(socketFile)
+		if err := os.MkdirAll(socketDir, 0o755); err != nil {
+			return nil, fmt.Errorf("failed to create socket directory: %w", err)
+		}
+
 		fmt.Printf("▶️  - Configuring pgctld gRPC Unix socket: %s\n", socketFile)
 	}
 
@@ -249,8 +261,8 @@ func (p *localProvisioner) provisionPgctld(ctx context.Context, dbName, tableGro
 	}
 
 	// Add password file if available
-	if pgPwfile, ok := pgctldConfig["pg_pwfile"].(string); ok && pgPwfile != "" {
-		initArgs = append(initArgs, "--pg-pwfile", pgPwfile)
+	if pgctldConfig.PgPwfile != "" {
+		initArgs = append(initArgs, "--pg-pwfile", pgctldConfig.PgPwfile)
 	}
 
 	initCmd := exec.CommandContext(ctx, pgctldBinary, initArgs...)

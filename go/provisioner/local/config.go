@@ -329,56 +329,38 @@ func (p *localProvisioner) getServiceConfig(service string) map[string]any {
 	}
 }
 
-// getCellServiceConfig gets the configuration for a specific service in a specific cell
-func (p *localProvisioner) getCellServiceConfig(cellName, service string) (map[string]any, error) {
+// getMultigatewayConfig gets the multigateway configuration for a specific cell
+func (p *localProvisioner) getMultigatewayConfig(cellName string) (*MultigatewayConfig, error) {
 	cellServices, exists := p.config.Cells[cellName]
 	if !exists {
 		return nil, fmt.Errorf("cell %s not found in configuration", cellName)
 	}
+	return &cellServices.Multigateway, nil
+}
 
-	switch service {
-	case "multigateway":
-		return map[string]any{
-			"path":      cellServices.Multigateway.Path,
-			"http_port": cellServices.Multigateway.HttpPort,
-			"grpc_port": cellServices.Multigateway.GrpcPort,
-			"pg_port":   cellServices.Multigateway.PgPort,
-			"log_level": cellServices.Multigateway.LogLevel,
-		}, nil
-	case "multipooler":
-		return map[string]any{
-			"path":             cellServices.Multipooler.Path,
-			"database":         cellServices.Multipooler.Database,
-			"table_group":      cellServices.Multipooler.TableGroup,
-			"service-id":       cellServices.Multipooler.ServiceID,
-			"http_port":        cellServices.Multipooler.HttpPort,
-			"grpc_port":        cellServices.Multipooler.GrpcPort,
-			"grpc_socket_file": cellServices.Multipooler.GRPCSocketFile,
-			"log_level":        cellServices.Multipooler.LogLevel,
-			"pooler_dir":       cellServices.Multipooler.PoolerDir,
-			"pg_port":          cellServices.Multipooler.PgPort,
-		}, nil
-	case "multiorch":
-		return map[string]any{
-			"path":      cellServices.Multiorch.Path,
-			"http_port": cellServices.Multiorch.HttpPort,
-			"grpc_port": cellServices.Multiorch.GrpcPort,
-			"log_level": cellServices.Multiorch.LogLevel,
-		}, nil
-	case "pgctld":
-		return map[string]any{
-			"path":             cellServices.Pgctld.Path,
-			"pooler_dir":       cellServices.Pgctld.PoolerDir,
-			"grpc_port":        cellServices.Pgctld.GrpcPort,
-			"grpc_socket_file": cellServices.Pgctld.GRPCSocketFile,
-			"pg_port":          cellServices.Pgctld.PgPort,
-			"pg_database":      cellServices.Pgctld.PgDatabase,
-			"pg_user":          cellServices.Pgctld.PgUser,
-			"pg_pwfile":        cellServices.Pgctld.PgPwfile,
-			"timeout":          cellServices.Pgctld.Timeout,
-			"log_level":        cellServices.Pgctld.LogLevel,
-		}, nil
-	default:
-		return nil, fmt.Errorf("unknown service %s", service)
+// getMultipoolerConfig gets the multipooler configuration for a specific cell
+func (p *localProvisioner) getMultipoolerConfig(cellName string) (*MultipoolerConfig, error) {
+	cellServices, exists := p.config.Cells[cellName]
+	if !exists {
+		return nil, fmt.Errorf("cell %s not found in configuration", cellName)
 	}
+	return &cellServices.Multipooler, nil
+}
+
+// getMultiorchConfig gets the multiorch configuration for a specific cell
+func (p *localProvisioner) getMultiorchConfig(cellName string) (*MultiorchConfig, error) {
+	cellServices, exists := p.config.Cells[cellName]
+	if !exists {
+		return nil, fmt.Errorf("cell %s not found in configuration", cellName)
+	}
+	return &cellServices.Multiorch, nil
+}
+
+// getPgctldConfig gets the pgctld configuration for a specific cell
+func (p *localProvisioner) getPgctldConfig(cellName string) (*PgctldConfig, error) {
+	cellServices, exists := p.config.Cells[cellName]
+	if !exists {
+		return nil, fmt.Errorf("cell %s not found in configuration", cellName)
+	}
+	return &cellServices.Pgctld, nil
 }

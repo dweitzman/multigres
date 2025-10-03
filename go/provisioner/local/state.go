@@ -342,32 +342,39 @@ func (p *localProvisioner) findRunningDbService(serviceName, databaseName, cell 
 func (p *localProvisioner) getExpectedPortsForDbService(serviceName, cell string) map[string]int {
 	ports := make(map[string]int)
 
-	cellConfig, err := p.getCellServiceConfig(cell, serviceName)
-	if err != nil {
-		return ports
-	}
-
 	switch serviceName {
 	case "multigateway":
-		if httpPort, ok := cellConfig["http_port"].(int); ok {
-			ports["http"] = httpPort
+		config, err := p.getMultigatewayConfig(cell)
+		if err != nil {
+			return ports
 		}
-		if grpcPort, ok := cellConfig["grpc_port"].(int); ok {
-			ports["grpc"] = grpcPort
+		if config.HttpPort > 0 {
+			ports["http"] = config.HttpPort
+		}
+		if config.GrpcPort > 0 {
+			ports["grpc"] = config.GrpcPort
 		}
 	case "multipooler":
-		if grpcPort, ok := cellConfig["grpc_port"].(int); ok {
-			ports["grpc"] = grpcPort
+		config, err := p.getMultipoolerConfig(cell)
+		if err != nil {
+			return ports
 		}
-		if httpPort, ok := cellConfig["http_port"].(int); ok && httpPort > 0 {
-			ports["http"] = httpPort
+		if config.GrpcPort > 0 {
+			ports["grpc"] = config.GrpcPort
+		}
+		if config.HttpPort > 0 {
+			ports["http"] = config.HttpPort
 		}
 	case "multiorch":
-		if grpcPort, ok := cellConfig["grpc_port"].(int); ok {
-			ports["grpc"] = grpcPort
+		config, err := p.getMultiorchConfig(cell)
+		if err != nil {
+			return ports
 		}
-		if httpPort, ok := cellConfig["http_port"].(int); ok && httpPort > 0 {
-			ports["http"] = httpPort
+		if config.GrpcPort > 0 {
+			ports["grpc"] = config.GrpcPort
+		}
+		if config.HttpPort > 0 {
+			ports["http"] = config.HttpPort
 		}
 	}
 
