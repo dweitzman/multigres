@@ -16,6 +16,7 @@ package topo
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -23,7 +24,7 @@ import (
 
 	"github.com/multigres/multigres/go/mterrors"
 	"github.com/multigres/multigres/go/pb/mtrpc"
-	"github.com/multigres/multigres/go/tools/timertools"
+	"github.com/multigres/multigres/go/tools/backoff"
 )
 
 // WrapperConn wraps a Conn with automatic reconnection and error handling.
@@ -120,37 +121,40 @@ func (c *WrapperConn) retryConnection() {
 		c.retrying = false
 	}()
 
-	ticker := timertools.NewBackoffTicker(10*time.Millisecond, 30*time.Second)
-	defer ticker.Stop()
+	r := backoff.NewWithOptions(
+		backoff.WithMinDelay(10*time.Millisecond),
+		backoff.WithMaxDelay(30*time.Second),
+		backoff.WithMaxAttempts(0), // Unlimited retries
+	)
 
-	for range ticker.C {
+	_ = r.Do(context.Background(), func(attempt int) error {
 		conn, err := c.newFunc()
-		mustContinue := func() bool {
-			// We have to do this entire operation within a lock:
-			// Once we check the value of c.closed, it should not be allowed
-			// to change until we also set the value of c.wrapped. Otherwise,
-			// it will conflict with c.Close.
-			c.mu.Lock()
-			defer c.mu.Unlock()
 
-			if c.closed {
-				// If the wrapper was closed, we have to close this extra
-				// connection and stop retrying.
-				if conn != nil {
-					_ = conn.Close()
-				}
-				return false
+		// We have to do this entire operation within a lock:
+		// Once we check the value of c.closed, it should not be allowed
+		// to change until we also set the value of c.wrapped. Otherwise,
+		// it will conflict with c.Close.
+		c.mu.Lock()
+		defer c.mu.Unlock()
+
+		if c.closed {
+			// If the wrapper was closed, we have to close this extra
+			// connection and stop retrying immediately.
+			if conn != nil {
+				_ = conn.Close()
 			}
-			if err != nil {
-				return true
-			}
-			c.wrapped = conn
-			return false
-		}()
-		if !mustContinue {
-			return
+			// Use Abort to stop retries - connection is permanently closed
+			return backoff.NonRetryableError(fmt.Errorf("connection wrapper closed"))
 		}
-	}
+
+		if err != nil {
+			// Retry on connection errors
+			return err
+		}
+
+		c.wrapped = conn
+		return nil // Success
+	})
 }
 
 func (c *WrapperConn) getConnection() (Conn, error) {

@@ -26,6 +26,10 @@ import (
 // It starts with an initial interval and doubles the interval on each tick
 // until it reaches the maximum interval. It also adds 10% jitter to prevent
 // thundering herd problems.
+//
+// Deprecated: Use github.com/multigres/multigres/go/tools/backoff.Retryer instead.
+// The callback-based approach in the backoff package provides better timing guarantees
+// (delays start after work completes) and more flexible configuration.
 type BackoffTicker struct {
 	C chan time.Time // The channel on which the ticks are delivered.
 
@@ -41,6 +45,8 @@ type BackoffTicker struct {
 // NewBackoffTicker creates a new BackoffTicker with the given initial delay and maximum interval.
 // The ticker will start with initialDelay and double on each tick until it reaches maxInterval.
 // A 10% jitter is added to each interval to prevent synchronized behavior across multiple tickers.
+//
+// Deprecated: Use github.com/multigres/multigres/go/tools/backoff.NewWithOptions instead.
 func NewBackoffTicker(initialDelay, maxInterval time.Duration) *BackoffTicker {
 	if initialDelay <= 0 {
 		panic("ticker: non-positive interval for NewBackoffTicker")

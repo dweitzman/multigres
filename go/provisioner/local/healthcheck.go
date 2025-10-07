@@ -16,6 +16,7 @@ package local
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -27,42 +28,46 @@ import (
 
 	"github.com/multigres/multigres/go/grpccommon"
 	pb "github.com/multigres/multigres/go/pb/pgctldservice"
-	"github.com/multigres/multigres/go/tools/timertools"
+	"github.com/multigres/multigres/go/tools/backoff"
 )
 
 // waitForServiceReady waits for a service to become ready by checking appropriate endpoints
 func (p *localProvisioner) waitForServiceReady(serviceName string, host string, servicePorts map[string]int, timeout time.Duration) error {
-	ticker := timertools.NewBackoffTicker(10*time.Millisecond, time.Second)
-	// Trigger an immediate first check
-	ticker.C <- time.Now()
-	defer ticker.Stop()
-	deadline := time.After(timeout)
-	for {
-		select {
-		case <-deadline:
-			return fmt.Errorf("%s did not become ready within %v", serviceName, timeout)
-		case <-ticker.C:
-			// First check TCP connectivity on all advertised ports
-			allPortsReady := true
-			for _, port := range servicePorts {
-				address := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-				conn, err := net.DialTimeout("tcp", address, 2*time.Second)
-				if err != nil {
-					allPortsReady = false
-					break // This port not ready yet
-				}
-				conn.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	r := backoff.NewWithOptions(
+		backoff.WithMinDelay(10*time.Millisecond),
+		backoff.WithMaxDelay(time.Second),
+		backoff.WithMaxAttempts(0), // Unlimited, rely on context timeout
+	)
+
+	err := r.Do(ctx, func(attempt int) error {
+		// First check TCP connectivity on all advertised ports
+		for _, port := range servicePorts {
+			address := net.JoinHostPort(host, fmt.Sprintf("%d", port))
+			conn, err := net.DialTimeout("tcp", address, 2*time.Second)
+			if err != nil {
+				return fmt.Errorf("port %d not ready: %w", port, err)
 			}
-			if !allPortsReady {
-				continue // Not all ports ready yet
-			}
-			// For services with HTTP endpoints, check debug/config endpoint
-			if err := p.checkMultigresServiceHealth(serviceName, host, servicePorts); err != nil {
-				continue // HTTP endpoint not ready yet
-			}
-			return nil // Service is ready
+			conn.Close()
 		}
+
+		// For services with HTTP endpoints, check debug/config endpoint
+		if err := p.checkMultigresServiceHealth(serviceName, host, servicePorts); err != nil {
+			return err
+		}
+
+		return nil // Service is ready
+	})
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("%s did not become ready within %v", serviceName, timeout)
+		}
+		return fmt.Errorf("%s readiness check failed: %w", serviceName, err)
 	}
+
+	return nil
 }
 
 // checkMultigresServiceHealth checks health for all supported service port types
