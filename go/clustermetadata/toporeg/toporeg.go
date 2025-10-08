@@ -61,7 +61,8 @@ func Register(register func(ctx context.Context) error, unregister func(ctx cont
 		r := backoff.NewWithOptions(
 			backoff.WithMinDelay(10*time.Millisecond),
 			backoff.WithMaxDelay(30*time.Second),
-			backoff.WithMaxAttempts(0), // Unlimited retries
+			backoff.WithMaxAttempts(0),     // Unlimited retries
+			backoff.WithSkipFirstAttempt(), // We already tried once
 		)
 
 		err := r.Do(tp.ctx, func(attempt int) error {
