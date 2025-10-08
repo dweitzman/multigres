@@ -50,7 +50,7 @@ func TestDefaultConfig(t *testing.T) {
 	assert.Equal(t, time.Second, cfg.MinDelay)
 	assert.Equal(t, time.Minute, cfg.MaxDelay)
 	assert.Equal(t, 0.0, cfg.JitterFraction)
-	assert.False(t, cfg.SkipFirstAttempt)
+	assert.False(t, cfg.DelayBeforeAttempt)
 	// DefaultConfig returns -1 as sentinel, which New() converts to 10
 	assert.Equal(t, -1, cfg.MaxAttempts)
 }
@@ -107,6 +107,8 @@ func TestRetryer_Success_AfterRetries(t *testing.T) {
 
 	attempts := 0
 	err := r.Do(context.Background(), func(attempt int) error {
+		// Make sure delays happen after this operation.
+		assert.Equal(t, attempts, len(ft.delays))
 		attempts++
 		if attempt < 3 {
 			return errors.New("temporary error")
@@ -189,26 +191,28 @@ func TestRetryer_MaxDelay(t *testing.T) {
 	assert.Equal(t, 25*time.Millisecond, ft.delays[3]) // capped (would be 80)
 }
 
-func TestRetryer_SkipFirstAttempt(t *testing.T) {
+func TestRetryer_DelayBeforeAttempt(t *testing.T) {
 	r, ft := newRetryerWithFakeTimer(
 		WithMinDelay(10*time.Millisecond),
 		WithMaxAttempts(3),
-		WithSkipFirstAttempt(),
+		WithDelayBeforeAttempt(),
 	)
 
 	attempts := 0
 	err := r.Do(context.Background(), func(attempt int) error {
 		attempts++
+		// Make sure delay happened prior to callign this operation.
+		assert.Equal(t, attempts, len(ft.delays))
 		return errors.New("error")
 	})
 
 	assert.Error(t, err)
-	// With SkipFirstAttempt and MaxAttempts=3, we skip iteration 0, then execute on iterations 1 and 2
-	assert.Equal(t, 2, attempts)
-	// Should have: skip delay (attempt 0), backoff delay after attempt 1
-	require.Len(t, ft.delays, 2)
-	assert.Equal(t, 10*time.Millisecond, ft.delays[0]) // skip delay
-	assert.Equal(t, 20*time.Millisecond, ft.delays[1]) // backoff after attempt 1 (MinDelay * 2^1)
+	// With DelayBeforeAttempt and MaxAttempts=3, all three attempts are made.
+	assert.Equal(t, 3, attempts)
+	require.Len(t, ft.delays, 3)
+	assert.Equal(t, 10*time.Millisecond, ft.delays[0]) // before attempt 0 (MinDelay)
+	assert.Equal(t, 20*time.Millisecond, ft.delays[1]) // before attempt 1 (MinDelay * 2^1)
+	assert.Equal(t, 40*time.Millisecond, ft.delays[2]) // backoff after attempt 2 (MinDelay * 2^2)
 }
 
 func TestRetryer_ContextCancellation(t *testing.T) {
@@ -417,7 +421,7 @@ func TestRetryer_ContextTimeoutDuringSkip(t *testing.T) {
 	// Use real timer for this test since we need actual timing
 	r := NewWithOptions(
 		WithMinDelay(100*time.Millisecond),
-		WithSkipFirstAttempt(),
+		WithDelayBeforeAttempt(),
 	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)

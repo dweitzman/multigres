@@ -87,20 +87,20 @@ type Config struct {
 	// Default: 10
 	MaxAttempts int
 
-	// SkipFirstAttempt starts with the first backoff delay instead of immediately
+	// DelayBeforeAttempt starts with the first backoff delay instead of immediately
 	// calling the operation. Useful when you've already tried once before calling Do().
 	// Default: false (call operation immediately)
-	SkipFirstAttempt bool
+	DelayBeforeAttempt bool
 }
 
 // DefaultConfig returns a Config with sensible defaults.
 func DefaultConfig() Config {
 	return Config{
-		MinDelay:         time.Second,
-		MaxDelay:         time.Minute,
-		JitterFraction:   0,
-		MaxAttempts:      -1, // sentinel for "use default"
-		SkipFirstAttempt: false,
+		MinDelay:           time.Second,
+		MaxDelay:           time.Minute,
+		JitterFraction:     0,
+		MaxAttempts:        -1, // sentinel for "use default"
+		DelayBeforeAttempt: false,
 	}
 }
 
@@ -135,10 +135,10 @@ func WithMaxAttempts(n int) Option {
 	return func(c *Config) { c.MaxAttempts = n }
 }
 
-// WithSkipFirstAttempt configures the retryer to start with a delay instead of
+// WithDelayBeforeAttempt configures the retryer to start with a delay instead of
 // immediately calling the operation. Use this when you've already tried once.
-func WithSkipFirstAttempt() Option {
-	return func(c *Config) { c.SkipFirstAttempt = true }
+func WithDelayBeforeAttempt() Option {
+	return func(c *Config) { c.DelayBeforeAttempt = true }
 }
 
 // New creates a new Retryer with the given config.
@@ -194,19 +194,21 @@ func (r *Retryer) Do(ctx context.Context, operation func(attempt int) error) err
 	var lastErr error
 
 	for r.attempts = 0; ; r.attempts++ {
-		// Skip first attempt if configured (start with delay)
-		if r.attempts == 0 && r.cfg.SkipFirstAttempt {
-			delay := r.calculateDelay()
+		// Check if we've exceeded max attempts
+		if r.cfg.MaxAttempts > 0 && r.attempts >= r.cfg.MaxAttempts {
+			return lastErr
+		}
+
+		// Calculate delay with exponential backoff
+		delay := r.calculateDelay()
+
+		if r.cfg.DelayBeforeAttempt {
+			// Wait for the delay or context cancellation
 			select {
 			case <-r.timer.After(delay):
 			case <-ctx.Done():
 				return ctx.Err()
 			}
-			continue
-		}
-		// Check if we've exceeded max attempts
-		if r.cfg.MaxAttempts > 0 && r.attempts >= r.cfg.MaxAttempts {
-			return lastErr
 		}
 
 		// Execute the operation
@@ -226,15 +228,14 @@ func (r *Retryer) Do(ctx context.Context, operation func(attempt int) error) err
 			continue
 		}
 
-		// Calculate delay with exponential backoff
-		delay := r.calculateDelay()
-
-		// Wait for the delay or context cancellation
-		select {
-		case <-r.timer.After(delay):
-			// Continue to next attempt
-		case <-ctx.Done():
-			return ctx.Err()
+		if !r.cfg.DelayBeforeAttempt {
+			// Wait for the delay or context cancellation
+			select {
+			case <-r.timer.After(delay):
+				// Continue to next attempt
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
 	}
 }
