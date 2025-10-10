@@ -184,14 +184,13 @@ func (pm *MultiPoolerManager) loadMultiPoolerFromTopo() {
 	})
 	if err != nil {
 		pm.mu.Lock()
+		pm.state = ManagerStateError
 		if pm.ctx.Err() != nil {
-			// Parent context cancelled
-			pm.state = ManagerStateError
 			pm.stateError = fmt.Errorf("manager context cancelled while loading multipooler record")
-		} else {
-			// Timeout occurred
-			pm.state = ManagerStateError
+		} else if timeoutCtx.Err() != nil {
 			pm.stateError = fmt.Errorf("timeout waiting for multipooler record to be available in topology after %v", pm.loadTimeout)
+		} else {
+			pm.stateError = fmt.Errorf("unexpected error: %w", err)
 		}
 		pm.mu.Unlock()
 		pm.logger.Error("Manager state changed", "state", ManagerStateError, "service_id", pm.serviceID.String(), "error", pm.stateError.Error())
