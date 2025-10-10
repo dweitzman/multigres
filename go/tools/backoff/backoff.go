@@ -77,8 +77,9 @@ type Config struct {
 	// Required.
 	MaxDelay time.Duration
 
-	// JitterFraction is the fraction of the delay to add as random jitter (0.0 to 1.0).
-	// For example, 0.1 means add up to 10% random jitter.
+	// JitterFraction is the fraction of the delay to vary randomly (0.0 to 1.0).
+	// For example, 0.1 means vary the delay by ±10% (e.g., 100ms becomes 90-110ms).
+	// This applies to both MinDelay and MaxDelay to prevent synchronized retries.
 	// Default: 0 (no jitter)
 	JitterFraction float64
 
@@ -100,6 +101,7 @@ type Retryer struct {
 type Option func(*Config)
 
 // WithJitter sets the jitter fraction (0.0 to 1.0).
+// The delay will be randomly varied by ±fraction (e.g., 0.1 = ±10%).
 func WithJitter(fraction float64) Option {
 	return func(c *Config) { c.JitterFraction = fraction }
 }
@@ -215,13 +217,19 @@ func (r *Retryer) calculateDelay() time.Duration {
 		}
 	}
 
-	// Add jitter (applied before final cap to ensure we never exceed MaxDelay)
+	// Apply jitter: vary delay by ±JitterFraction
+	// This prevents synchronized retries, even at MaxDelay
 	if r.cfg.JitterFraction > 0 {
-		jitter := time.Duration(float64(delay) * r.cfg.JitterFraction * r.rng.Float64())
+		// Calculate the jitter range: delay * JitterFraction
+		jitterRange := float64(delay) * r.cfg.JitterFraction
+		// Apply random jitter in range [-jitterRange, +jitterRange]
+		// r.rng.Float64() returns [0.0, 1.0), scale to [-1.0, 1.0)
+		jitter := time.Duration(jitterRange * (2.0*r.rng.Float64() - 1.0))
 		delay += jitter
-		// Cap again in case jitter pushed us over
-		if delay > r.cfg.MaxDelay {
-			delay = r.cfg.MaxDelay
+
+		// Ensure delay doesn't go negative
+		if delay < 0 {
+			delay = 0
 		}
 	}
 
