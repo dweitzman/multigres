@@ -39,7 +39,6 @@ func (p *localProvisioner) waitForServiceReady(serviceName string, host string, 
 	r := backoff.NewWithOptions(
 		backoff.WithMinDelay(10*time.Millisecond),
 		backoff.WithMaxDelay(time.Second),
-		backoff.WithMaxAttempts(0), // Unlimited, rely on context timeout
 	)
 
 	err := r.Do(ctx, func(attempt int) error {

@@ -82,11 +82,6 @@ type Config struct {
 	// Default: 0 (no jitter)
 	JitterFraction float64
 
-	// MaxAttempts is the maximum number of attempts.
-	// 0 means unlimited attempts (no maximum).
-	// Default: 10
-	MaxAttempts int
-
 	// DelayBeforeAttempt starts with the first backoff delay instead of immediately
 	// calling the operation. Useful when you've already tried once before calling Do().
 	// Default: false (call operation immediately)
@@ -99,7 +94,6 @@ func DefaultConfig() Config {
 		MinDelay:           time.Second,
 		MaxDelay:           time.Minute,
 		JitterFraction:     0,
-		MaxAttempts:        -1, // sentinel for "use default"
 		DelayBeforeAttempt: false,
 	}
 }
@@ -130,11 +124,6 @@ func WithMaxDelay(d time.Duration) Option {
 	return func(c *Config) { c.MaxDelay = d }
 }
 
-// WithMaxAttempts sets the maximum number of attempts (0 = unlimited).
-func WithMaxAttempts(n int) Option {
-	return func(c *Config) { c.MaxAttempts = n }
-}
-
 // WithDelayBeforeAttempt configures the retryer to start with a delay instead of
 // immediately calling the operation. Use this when you've already tried once.
 func WithDelayBeforeAttempt() Option {
@@ -152,10 +141,6 @@ func New(cfg Config) *Retryer {
 	if cfg.MaxDelay == 0 {
 		cfg.MaxDelay = time.Minute
 	}
-	if cfg.MaxAttempts < 0 {
-		cfg.MaxAttempts = 10
-	}
-	// Note: MaxAttempts == 0 means unlimited, so we keep it as 0
 
 	// Validate configuration after defaults (panic on coding errors)
 	if cfg.MinDelay < 0 {
@@ -191,14 +176,7 @@ func NewWithOptions(opts ...Option) *Retryer {
 // The operation function receives the attempt number (0-indexed).
 // Returns nil if operation succeeds, or the last error if all attempts fail.
 func (r *Retryer) Do(ctx context.Context, operation func(attempt int) error) error {
-	var lastErr error
-
 	for r.attempts = 0; ; r.attempts++ {
-		// Check if we've exceeded max attempts
-		if r.cfg.MaxAttempts > 0 && r.attempts >= r.cfg.MaxAttempts {
-			return lastErr
-		}
-
 		// Calculate delay with exponential backoff
 		delay := r.calculateDelay()
 
@@ -212,20 +190,15 @@ func (r *Retryer) Do(ctx context.Context, operation func(attempt int) error) err
 		}
 
 		// Execute the operation
-		lastErr = operation(r.attempts)
-		if lastErr == nil {
+		err := operation(r.attempts)
+		if err == nil {
 			return nil // Success!
 		}
 
 		// Check if the error signals that we should stop retries
 		var nre *nonRetryableError
-		if errors.As(lastErr, &nre) {
+		if errors.As(err, &nre) {
 			return nre.err
-		}
-
-		// Don't wait after the last allowed attempt
-		if r.cfg.MaxAttempts > 0 && r.attempts+1 >= r.cfg.MaxAttempts {
-			continue
 		}
 
 		if !r.cfg.DelayBeforeAttempt {
@@ -291,7 +264,6 @@ func (r *Retryer) Attempts() int {
 // retryer := backoff.NewWithOptions(
 //     backoff.WithMinDelay(500 * time.Millisecond),
 //     backoff.WithJitter(0.1),
-//     backoff.WithMaxAttempts(5),
 // )
 // err := retryer.Do(ctx, func(attempt int) error {
 //     result, err := makeAPICall()
@@ -316,13 +288,12 @@ func (r *Retryer) Attempts() int {
 //     return nil
 // })
 //
-// // Time-bounded retry with context timeout (preferred pattern):
+// // Time-bounded retry with context timeout (recommended pattern):
 // ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 // defer cancel()
 // retryer := backoff.NewWithOptions(
 //     backoff.WithMinDelay(100 * time.Millisecond),
 //     backoff.WithMaxDelay(5 * time.Second),
-//     backoff.WithMaxAttempts(0), // Unlimited, rely on context timeout
 // )
 // err := retryer.Do(ctx, func(attempt int) error {
 //     return checkServiceReady()

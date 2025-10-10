@@ -124,7 +124,6 @@ func (c *WrapperConn) retryConnection() {
 	r := backoff.NewWithOptions(
 		backoff.WithMinDelay(10*time.Millisecond),
 		backoff.WithMaxDelay(30*time.Second),
-		backoff.WithMaxAttempts(0), // Unlimited retries
 	)
 
 	_ = r.Do(context.Background(), func(attempt int) error {

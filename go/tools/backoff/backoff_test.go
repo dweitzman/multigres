@@ -51,8 +51,6 @@ func TestDefaultConfig(t *testing.T) {
 	assert.Equal(t, time.Minute, cfg.MaxDelay)
 	assert.Equal(t, 0.0, cfg.JitterFraction)
 	assert.False(t, cfg.DelayBeforeAttempt)
-	// DefaultConfig returns -1 as sentinel, which New() converts to 10
-	assert.Equal(t, -1, cfg.MaxAttempts)
 }
 
 func TestNew_AppliesDefaults(t *testing.T) {
@@ -60,26 +58,15 @@ func TestNew_AppliesDefaults(t *testing.T) {
 	r := New(cfg)
 	assert.Equal(t, time.Second, r.cfg.MinDelay)
 	assert.Equal(t, time.Minute, r.cfg.MaxDelay)
-	// Config{} has MaxAttempts=0, which means unlimited, so New() keeps it as 0
-	assert.Equal(t, 0, r.cfg.MaxAttempts)
-}
-
-func TestNew_AppliesDefaultMaxAttempts(t *testing.T) {
-	cfg := DefaultConfig() // Has MaxAttempts=-1 (sentinel)
-	r := New(cfg)
-	// New() converts -1 to 10
-	assert.Equal(t, 10, r.cfg.MaxAttempts)
 }
 
 func TestNewWithOptions(t *testing.T) {
 	r := NewWithOptions(
 		WithMinDelay(500*time.Millisecond),
 		WithJitter(0.2),
-		WithMaxAttempts(5),
 	)
 	assert.Equal(t, 500*time.Millisecond, r.cfg.MinDelay)
 	assert.Equal(t, 0.2, r.cfg.JitterFraction)
-	assert.Equal(t, 5, r.cfg.MaxAttempts)
 	assert.Equal(t, time.Minute, r.cfg.MaxDelay)
 }
 
@@ -127,46 +114,31 @@ func TestRetryer_Success_AfterRetries(t *testing.T) {
 	assert.Equal(t, 20*time.Millisecond, ft.delays[2]) // 5 * 2^2
 }
 
-func TestRetryer_MaxAttempts(t *testing.T) {
-	r, ft := newRetryerWithFakeTimer(
-		WithMinDelay(1*time.Millisecond),
-		WithMaxAttempts(3),
-	)
-
-	attempts := 0
-	testErr := errors.New("persistent error")
-	err := r.Do(context.Background(), func(attempt int) error {
-		attempts++
-		return testErr
-	})
-
-	assert.Error(t, err)
-	assert.Equal(t, 3, attempts)
-	assert.Equal(t, testErr, err)
-	// Should have 2 delays: after attempts 0 and 1 (no delay after last attempt)
-	assert.Len(t, ft.delays, 2)
-}
-
 func TestRetryer_ExponentialBackoff(t *testing.T) {
 	r, ft := newRetryerWithFakeTimer(
 		WithMinDelay(10*time.Millisecond),
 		WithMaxDelay(100*time.Millisecond),
 		WithJitter(0),
-		WithMaxAttempts(5),
 	)
 
+	attempts := 0
 	err := r.Do(context.Background(), func(attempt int) error {
+		attempts++
+		if attempts > 5 {
+			return nil // Stop after 5 attempts to avoid infinite loop
+		}
 		return errors.New("error")
 	})
 
-	assert.Error(t, err)
-	require.Len(t, ft.delays, 4) // 4 delays after 5 attempts
+	assert.NoError(t, err)
+	require.Len(t, ft.delays, 5) // 5 delays after 6 attempts
 
-	// Verify exponential growth: 10, 20, 40, 80
-	assert.Equal(t, 10*time.Millisecond, ft.delays[0]) // 10 * 2^0
-	assert.Equal(t, 20*time.Millisecond, ft.delays[1]) // 10 * 2^1
-	assert.Equal(t, 40*time.Millisecond, ft.delays[2]) // 10 * 2^2
-	assert.Equal(t, 80*time.Millisecond, ft.delays[3]) // 10 * 2^3
+	// Verify exponential growth: 10, 20, 40, 80, 100 (capped)
+	assert.Equal(t, 10*time.Millisecond, ft.delays[0])  // 10 * 2^0
+	assert.Equal(t, 20*time.Millisecond, ft.delays[1])  // 10 * 2^1
+	assert.Equal(t, 40*time.Millisecond, ft.delays[2])  // 10 * 2^2
+	assert.Equal(t, 80*time.Millisecond, ft.delays[3])  // 10 * 2^3
+	assert.Equal(t, 100*time.Millisecond, ft.delays[4]) // capped at MaxDelay
 }
 
 func TestRetryer_MaxDelay(t *testing.T) {
@@ -174,52 +146,57 @@ func TestRetryer_MaxDelay(t *testing.T) {
 		WithMinDelay(10*time.Millisecond),
 		WithMaxDelay(25*time.Millisecond),
 		WithJitter(0),
-		WithMaxAttempts(5),
 	)
 
+	attempts := 0
 	err := r.Do(context.Background(), func(attempt int) error {
+		attempts++
+		if attempts > 5 {
+			return nil
+		}
 		return errors.New("error")
 	})
 
-	assert.Error(t, err)
-	require.Len(t, ft.delays, 4)
+	assert.NoError(t, err)
+	require.Len(t, ft.delays, 5)
 
 	// Verify delays are capped at MaxDelay
 	assert.Equal(t, 10*time.Millisecond, ft.delays[0]) // 10 * 2^0
 	assert.Equal(t, 20*time.Millisecond, ft.delays[1]) // 10 * 2^1
 	assert.Equal(t, 25*time.Millisecond, ft.delays[2]) // capped (would be 40)
 	assert.Equal(t, 25*time.Millisecond, ft.delays[3]) // capped (would be 80)
+	assert.Equal(t, 25*time.Millisecond, ft.delays[4]) // capped (would be 160)
 }
 
 func TestRetryer_DelayBeforeAttempt(t *testing.T) {
 	r, ft := newRetryerWithFakeTimer(
 		WithMinDelay(10*time.Millisecond),
-		WithMaxAttempts(3),
 		WithDelayBeforeAttempt(),
 	)
 
 	attempts := 0
 	err := r.Do(context.Background(), func(attempt int) error {
 		attempts++
-		// Make sure delay happened prior to callign this operation.
+		// Make sure delay happened prior to calling this operation.
 		assert.Equal(t, attempts, len(ft.delays))
+		if attempts >= 3 {
+			return nil
+		}
 		return errors.New("error")
 	})
 
-	assert.Error(t, err)
-	// With DelayBeforeAttempt and MaxAttempts=3, all three attempts are made.
+	assert.NoError(t, err)
 	assert.Equal(t, 3, attempts)
 	require.Len(t, ft.delays, 3)
 	assert.Equal(t, 10*time.Millisecond, ft.delays[0]) // before attempt 0 (MinDelay)
 	assert.Equal(t, 20*time.Millisecond, ft.delays[1]) // before attempt 1 (MinDelay * 2^1)
-	assert.Equal(t, 40*time.Millisecond, ft.delays[2]) // backoff after attempt 2 (MinDelay * 2^2)
+	assert.Equal(t, 40*time.Millisecond, ft.delays[2]) // before attempt 2 (MinDelay * 2^2)
 }
 
 func TestRetryer_ContextCancellation(t *testing.T) {
 	// Use real timer since context cancellation requires real timing to work correctly
 	r := NewWithOptions(
-		WithMinDelay(10*time.Millisecond),
-		WithMaxAttempts(10),
+		WithMinDelay(10 * time.Millisecond),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -240,8 +217,7 @@ func TestRetryer_ContextCancellation(t *testing.T) {
 
 func TestRetryer_UnlimitedAttempts(t *testing.T) {
 	r, ft := newRetryerWithFakeTimer(
-		WithMinDelay(1*time.Millisecond),
-		WithMaxAttempts(0), // Unlimited
+		WithMinDelay(1 * time.Millisecond),
 	)
 
 	attempts := 0
@@ -262,8 +238,7 @@ func TestRetryer_UnlimitedAttempts(t *testing.T) {
 
 func TestRetryer_AttemptsCounter(t *testing.T) {
 	r, _ := newRetryerWithFakeTimer(
-		WithMinDelay(1*time.Millisecond),
-		WithMaxAttempts(5),
+		WithMinDelay(1 * time.Millisecond),
 	)
 
 	recordedAttempts := make([]int, 0)
@@ -272,13 +247,15 @@ func TestRetryer_AttemptsCounter(t *testing.T) {
 		recordedAttempts = append(recordedAttempts, attempt)
 		// During execution, Attempts() returns the current attempt number
 		assert.Equal(t, attempt, r.Attempts())
+		if attempt >= 4 {
+			return nil
+		}
 		return errors.New("error")
 	})
 
-	assert.Error(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, []int{0, 1, 2, 3, 4}, recordedAttempts)
-	// After completion, the loop has incremented once more before exiting
-	assert.Equal(t, 5, r.Attempts())
+	assert.Equal(t, 4, r.Attempts())
 }
 
 func TestCalculateDelay(t *testing.T) {
@@ -380,17 +357,21 @@ func TestCalculateDelay_JitterVariation(t *testing.T) {
 
 func TestRetryer_NoDelayAfterLastAttempt(t *testing.T) {
 	r, ft := newRetryerWithFakeTimer(
-		WithMinDelay(10*time.Millisecond),
-		WithMaxAttempts(3),
+		WithMinDelay(10 * time.Millisecond),
 	)
 
+	attempts := 0
 	err := r.Do(context.Background(), func(attempt int) error {
+		attempts++
+		if attempts > 3 {
+			return nil
+		}
 		return errors.New("error")
 	})
 
-	assert.Error(t, err)
-	// With 3 attempts (0, 1, 2), should only have 2 delays (after 0 and 1)
-	assert.Len(t, ft.delays, 2, "should not delay after last attempt")
+	assert.NoError(t, err)
+	// With 4 attempts (3 errors, 1 success), should have 3 delays (after 0, 1, 2)
+	assert.Len(t, ft.delays, 3, "should not delay after last attempt")
 }
 
 func TestRetryer_DelayAfterWorkCompletes(t *testing.T) {
@@ -400,21 +381,25 @@ func TestRetryer_DelayAfterWorkCompletes(t *testing.T) {
 	r, ft := newRetryerWithFakeTimer(
 		WithMinDelay(10*time.Millisecond),
 		WithJitter(0),
-		WithMaxAttempts(3),
 	)
 
 	executionOrder := []string{}
+	attempts := 0
 
 	err := r.Do(context.Background(), func(attempt int) error {
 		executionOrder = append(executionOrder, "work")
+		attempts++
+		if attempts > 3 {
+			return nil
+		}
 		return errors.New("error")
 	})
 
-	assert.Error(t, err)
-	// Work should execute 3 times
-	assert.Equal(t, []string{"work", "work", "work"}, executionOrder)
-	// Delays happen after work, before next work
-	assert.Len(t, ft.delays, 2)
+	assert.NoError(t, err)
+	// Work should execute 4 times
+	assert.Equal(t, []string{"work", "work", "work", "work"}, executionOrder)
+	// Delays happen after work, before next work (3 delays for 4 attempts)
+	assert.Len(t, ft.delays, 3)
 }
 
 func TestRetryer_ContextTimeoutDuringSkip(t *testing.T) {
@@ -441,8 +426,7 @@ func TestRetryer_ContextTimeoutDuringSkip(t *testing.T) {
 func TestRetryer_ContextTimeoutDuringBackoff(t *testing.T) {
 	// Use real timer for this test
 	r := NewWithOptions(
-		WithMinDelay(50*time.Millisecond),
-		WithMaxAttempts(10),
+		WithMinDelay(50 * time.Millisecond),
 	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
@@ -464,8 +448,7 @@ func TestRetryer_ContextTimeoutDuringBackoff(t *testing.T) {
 
 func TestRetryer_ExplicitRetry(t *testing.T) {
 	r, ft := newRetryerWithFakeTimer(
-		WithMinDelay(10*time.Millisecond),
-		WithMaxAttempts(5),
+		WithMinDelay(10 * time.Millisecond),
 	)
 
 	attempts := 0
@@ -484,8 +467,7 @@ func TestRetryer_ExplicitRetry(t *testing.T) {
 
 func TestRetryer_NonRetryableStopsRetries(t *testing.T) {
 	r, ft := newRetryerWithFakeTimer(
-		WithMinDelay(10*time.Millisecond),
-		WithMaxAttempts(10), // Would normally retry many times
+		WithMinDelay(10 * time.Millisecond),
 	)
 
 	attempts := 0
@@ -510,8 +492,7 @@ func TestRetryer_NonRetryableStopsRetries(t *testing.T) {
 
 func TestRetryer_NonRetryableWithNilError(t *testing.T) {
 	r, ft := newRetryerWithFakeTimer(
-		WithMinDelay(10*time.Millisecond),
-		WithMaxAttempts(10),
+		WithMinDelay(10 * time.Millisecond),
 	)
 
 	attempts := 0
@@ -529,10 +510,9 @@ func TestRetryer_NonRetryableWithNilError(t *testing.T) {
 	assert.Len(t, ft.delays, 1)
 }
 
-func TestRetryer_NonRetryableBypassesMaxAttempts(t *testing.T) {
+func TestRetryer_NonRetryableStopsImmediately(t *testing.T) {
 	r, _ := newRetryerWithFakeTimer(
-		WithMinDelay(1*time.Millisecond),
-		WithMaxAttempts(10),
+		WithMinDelay(1 * time.Millisecond),
 	)
 
 	attempts := 0
@@ -547,14 +527,11 @@ func TestRetryer_NonRetryableBypassesMaxAttempts(t *testing.T) {
 	assert.Error(t, err)
 	assert.Equal(t, underlyingErr, err)
 	assert.Equal(t, 1, attempts, "should abort without retrying")
-	// Error should not mention max attempts
-	assert.NotContains(t, err.Error(), "max attempts")
 }
 
 func TestRetryer_RegularErrorsStillRetry(t *testing.T) {
 	r, ft := newRetryerWithFakeTimer(
-		WithMinDelay(10*time.Millisecond),
-		WithMaxAttempts(5),
+		WithMinDelay(10 * time.Millisecond),
 	)
 
 	attempts := 0
@@ -574,8 +551,7 @@ func TestRetryer_RegularErrorsStillRetry(t *testing.T) {
 
 func TestRetryer_NonRetryableErrorMessage(t *testing.T) {
 	r, _ := newRetryerWithFakeTimer(
-		WithMinDelay(1*time.Millisecond),
-		WithMaxAttempts(10),
+		WithMinDelay(1 * time.Millisecond),
 	)
 
 	underlyingErr := errors.New("database connection failed")
@@ -590,8 +566,7 @@ func TestRetryer_NonRetryableErrorMessage(t *testing.T) {
 
 func TestRetryer_MixedErrorTypes(t *testing.T) {
 	r, ft := newRetryerWithFakeTimer(
-		WithMinDelay(10*time.Millisecond),
-		WithMaxAttempts(10),
+		WithMinDelay(10 * time.Millisecond),
 	)
 
 	attempts := 0
@@ -629,8 +604,7 @@ func TestRetryer_MixedErrorTypes(t *testing.T) {
 
 func TestNonRetryableError_Detection(t *testing.T) {
 	r, _ := newRetryerWithFakeTimer(
-		WithMinDelay(1*time.Millisecond),
-		WithMaxAttempts(10),
+		WithMinDelay(1 * time.Millisecond),
 	)
 
 	underlyingErr := errors.New("auth failed")
@@ -697,7 +671,7 @@ func TestNew_PanicsOnInvalidConfig(t *testing.T) {
 		},
 		{
 			name:   "valid config with all fields",
-			config: Config{MinDelay: time.Second, MaxDelay: time.Minute, JitterFraction: 0.5, MaxAttempts: 10},
+			config: Config{MinDelay: time.Second, MaxDelay: time.Minute, JitterFraction: 0.5},
 			panics: false,
 		},
 		{

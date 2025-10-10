@@ -1147,7 +1147,6 @@ func (p *localProvisioner) waitForProcessExit(process *os.Process, timeout time.
 	r := backoff.NewWithOptions(
 		backoff.WithMinDelay(10*time.Millisecond),
 		backoff.WithMaxDelay(time.Second),
-		backoff.WithMaxAttempts(0), // Unlimited, rely on context timeout
 	)
 
 	err := r.Do(ctx, func(attempt int) error {

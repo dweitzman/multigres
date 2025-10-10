@@ -161,7 +161,6 @@ func (pm *MultiPoolerManager) loadMultiPoolerFromTopo() {
 	r := backoff.NewWithOptions(
 		backoff.WithMinDelay(100*time.Millisecond),
 		backoff.WithMaxDelay(30*time.Second),
-		backoff.WithMaxAttempts(0), // Unlimited, rely on context timeout
 	)
 
 	err := r.Do(timeoutCtx, func(attempt int) error {
