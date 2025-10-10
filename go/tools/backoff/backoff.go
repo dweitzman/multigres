@@ -70,11 +70,11 @@ func (realTimer) After(d time.Duration) <-chan time.Time {
 type Config struct {
 	// MinDelay is the starting delay for exponential backoff (delay * 2^attempt).
 	// Each retry doubles the delay up to MaxDelay.
-	// Default: 1 second
+	// Required.
 	MinDelay time.Duration
 
 	// MaxDelay is the maximum wait time between attempts.
-	// Default: 1 minute
+	// Required.
 	MaxDelay time.Duration
 
 	// JitterFraction is the fraction of the delay to add as random jitter (0.0 to 1.0).
@@ -88,16 +88,6 @@ type Config struct {
 	DelayBeforeAttempt bool
 }
 
-// DefaultConfig returns a Config with sensible defaults.
-func DefaultConfig() Config {
-	return Config{
-		MinDelay:           time.Second,
-		MaxDelay:           time.Minute,
-		JitterFraction:     0,
-		DelayBeforeAttempt: false,
-	}
-}
-
 // Retryer manages the retry state.
 type Retryer struct {
 	cfg      Config
@@ -109,19 +99,9 @@ type Retryer struct {
 // Option is a functional option for configuring a Retryer.
 type Option func(*Config)
 
-// WithMinDelay sets the minimum delay for exponential backoff.
-func WithMinDelay(d time.Duration) Option {
-	return func(c *Config) { c.MinDelay = d }
-}
-
 // WithJitter sets the jitter fraction (0.0 to 1.0).
 func WithJitter(fraction float64) Option {
 	return func(c *Config) { c.JitterFraction = fraction }
-}
-
-// WithMaxDelay sets the maximum delay between attempts.
-func WithMaxDelay(d time.Duration) Option {
-	return func(c *Config) { c.MaxDelay = d }
 }
 
 // WithDelayBeforeAttempt configures the retryer to start with a delay instead of
@@ -130,28 +110,32 @@ func WithDelayBeforeAttempt() Option {
 	return func(c *Config) { c.DelayBeforeAttempt = true }
 }
 
-// New creates a new Retryer with the given config.
-// Zero values are replaced with sensible defaults before validation.
-// Panics if the config is invalid after defaults are applied (represents a coding error).
-func New(cfg Config) *Retryer {
-	// Apply defaults for zero values
-	if cfg.MinDelay == 0 {
-		cfg.MinDelay = time.Second
+// New creates a new Retryer with the given minDelay and maxDelay, plus optional configuration.
+// Panics if the parameters are invalid (represents a coding error).
+func New(minDelay, maxDelay time.Duration, opts ...Option) *Retryer {
+	// Validate required parameters (panic on coding errors)
+	if minDelay <= 0 {
+		panic("backoff: MinDelay must be positive")
 	}
-	if cfg.MaxDelay == 0 {
-		cfg.MaxDelay = time.Minute
+	if maxDelay <= 0 {
+		panic("backoff: MaxDelay must be positive")
 	}
-
-	// Validate configuration after defaults (panic on coding errors)
-	if cfg.MinDelay < 0 {
-		panic("backoff: MinDelay cannot be negative")
-	}
-	if cfg.MaxDelay < 0 {
-		panic("backoff: MaxDelay cannot be negative")
-	}
-	if cfg.MinDelay > cfg.MaxDelay {
+	if minDelay > maxDelay {
 		panic("backoff: MinDelay cannot be greater than MaxDelay")
 	}
+
+	// Build config
+	cfg := Config{
+		MinDelay: minDelay,
+		MaxDelay: maxDelay,
+	}
+
+	// Apply optional configuration
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
+	// Validate optional configuration
 	if cfg.JitterFraction < 0 || cfg.JitterFraction > 1.0 {
 		panic("backoff: JitterFraction must be between 0.0 and 1.0")
 	}
@@ -161,15 +145,6 @@ func New(cfg Config) *Retryer {
 		rng:   rand.New(rand.NewPCG(uint64(time.Now().UnixNano()), uint64(time.Now().UnixNano()))),
 		timer: realTimer{},
 	}
-}
-
-// NewWithOptions creates a new Retryer with functional options.
-func NewWithOptions(opts ...Option) *Retryer {
-	cfg := DefaultConfig()
-	for _, opt := range opts {
-		opt(&cfg)
-	}
-	return New(cfg)
 }
 
 // Do executes the operation with exponential backoff.
@@ -260,9 +235,10 @@ func (r *Retryer) Attempts() int {
 
 // Example usage:
 //
-// // Basic usage with functional options (recommended):
-// retryer := backoff.NewWithOptions(
-//     backoff.WithMinDelay(500 * time.Millisecond),
+// // Basic usage:
+// retryer := backoff.New(
+//     500 * time.Millisecond,  // minDelay
+//     30 * time.Second,         // maxDelay
 //     backoff.WithJitter(0.1),
 // )
 // err := retryer.Do(ctx, func(attempt int) error {
@@ -291,9 +267,9 @@ func (r *Retryer) Attempts() int {
 // // Time-bounded retry with context timeout (recommended pattern):
 // ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 // defer cancel()
-// retryer := backoff.NewWithOptions(
-//     backoff.WithMinDelay(100 * time.Millisecond),
-//     backoff.WithMaxDelay(5 * time.Second),
+// retryer := backoff.New(
+//     100 * time.Millisecond,  // minDelay
+//     5 * time.Second,          // maxDelay
 // )
 // err := retryer.Do(ctx, func(attempt int) error {
 //     return checkServiceReady()

@@ -121,10 +121,7 @@ func (c *WrapperConn) retryConnection() {
 		c.retrying = false
 	}()
 
-	r := backoff.NewWithOptions(
-		backoff.WithMinDelay(10*time.Millisecond),
-		backoff.WithMaxDelay(30*time.Second),
-	)
+	r := backoff.New(10*time.Millisecond, 30*time.Second)
 
 	_ = r.Do(context.Background(), func(attempt int) error {
 		conn, err := c.newFunc()

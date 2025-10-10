@@ -58,9 +58,9 @@ func Register(register func(ctx context.Context) error, unregister func(ctx cont
 		tp.logger.Error("Failed to register component with topology", "error", err)
 	}
 	tp.wg.Go(func() {
-		r := backoff.NewWithOptions(
-			backoff.WithMinDelay(10*time.Millisecond),
-			backoff.WithMaxDelay(30*time.Second),
+		r := backoff.New(
+			10*time.Millisecond,
+			30*time.Second,
 			backoff.WithDelayBeforeAttempt(), // We already tried once
 		)
 

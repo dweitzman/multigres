@@ -1144,10 +1144,7 @@ func (p *localProvisioner) waitForProcessExit(process *os.Process, timeout time.
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	r := backoff.NewWithOptions(
-		backoff.WithMinDelay(10*time.Millisecond),
-		backoff.WithMaxDelay(time.Second),
-	)
+	r := backoff.New(10*time.Millisecond, time.Second)
 
 	err := r.Do(ctx, func(attempt int) error {
 		// Send null signal to test if process exists
