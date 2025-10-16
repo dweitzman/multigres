@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package backoff
+package retry
 
 import (
 	"context"
@@ -45,7 +45,7 @@ func (e *nonRetryableError) Unwrap() error {
 // Example:
 //
 //	if errors.Is(err, ErrUnauthorized) {
-//	    return backoff.NonRetryableError(err)
+//	    return retry.NonRetryableError(err)
 //	}
 func NonRetryableError(err error) error {
 	if err == nil {
@@ -115,13 +115,13 @@ func withDisableJitter() Option {
 func New(minDelay, maxDelay time.Duration, opts ...Option) *Retryer {
 	// Validate required parameters (panic on coding errors)
 	if minDelay <= 0 {
-		panic("backoff: MinDelay must be positive")
+		panic("retry: MinDelay must be positive")
 	}
 	if maxDelay <= 0 {
-		panic("backoff: MaxDelay must be positive")
+		panic("retry: MaxDelay must be positive")
 	}
 	if minDelay > maxDelay {
-		panic("backoff: MinDelay cannot be greater than MaxDelay")
+		panic("retry: MinDelay cannot be greater than MaxDelay")
 	}
 
 	// Build config
@@ -295,11 +295,11 @@ func (r *Retryer) Attempt() int {
 // Example usage:
 //
 // // Basic usage with Full Jitter (automatic):
-// retryer := backoff.New(
+// r := retry.New(
 //     500 * time.Millisecond,  // minDelay
 //     30 * time.Second,         // maxDelay
 // )
-// err := retryer.Do(ctx, func(attempt int) error {
+// err := r.Do(ctx, func(attempt int) error {
 //     result, err := makeAPICall()
 //     if err != nil {
 //         // Any error triggers retry by default
@@ -309,12 +309,12 @@ func (r *Retryer) Attempt() int {
 // })
 //
 // // Stopping retries for permanent errors:
-// err := retryer.Do(ctx, func(attempt int) error {
+// err := r.Do(ctx, func(attempt int) error {
 //     result, err := makeAPICall()
 //     if err != nil {
 //         // Stop immediately on auth errors - no point retrying
 //         if errors.Is(err, ErrUnauthorized) {
-//             return backoff.NonRetryableError(err)
+//             return retry.NonRetryableError(err)
 //         }
 //         // Any other error triggers retry
 //         return err
@@ -325,11 +325,11 @@ func (r *Retryer) Attempt() int {
 // // Time-bounded retry with context timeout (recommended pattern):
 // ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 // defer cancel()
-// retryer := backoff.New(
+// r := retry.New(
 //     100 * time.Millisecond,  // minDelay
 //     5 * time.Second,          // maxDelay
 // )
-// err := retryer.Do(ctx, func(attempt int) error {
+// err := r.Do(ctx, func(attempt int) error {
 //     return checkServiceReady()
 // })
 //

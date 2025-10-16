@@ -23,7 +23,7 @@ import (
 	"time"
 
 	"github.com/multigres/multigres/go/servenv"
-	"github.com/multigres/multigres/go/tools/backoff"
+	"github.com/multigres/multigres/go/tools/retry"
 )
 
 // TopoReg contains the metadata of the component being registered.
@@ -58,10 +58,10 @@ func Register(register func(ctx context.Context) error, unregister func(ctx cont
 		tp.logger.Error("Failed to register component with topology", "error", err)
 	}
 	tp.wg.Go(func() {
-		r := backoff.New(
+		r := retry.New(
 			10*time.Millisecond,
 			30*time.Second,
-			backoff.WithDelayBeforeAttempt(), // We already tried once
+			retry.WithDelayBeforeAttempt(), // We already tried once
 		)
 
 		err := r.Do(tp.ctx, func(attempt int) error {

@@ -28,7 +28,7 @@ import (
 
 	"github.com/multigres/multigres/go/grpccommon"
 	pb "github.com/multigres/multigres/go/pb/pgctldservice"
-	"github.com/multigres/multigres/go/tools/backoff"
+	"github.com/multigres/multigres/go/tools/retry"
 )
 
 // waitForServiceReady waits for a service to become ready by checking appropriate endpoints
@@ -36,7 +36,7 @@ func (p *localProvisioner) waitForServiceReady(serviceName string, host string, 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	r := backoff.New(10*time.Millisecond, time.Second)
+	r := retry.New(10*time.Millisecond, time.Second)
 
 	err := r.Do(ctx, func(attempt int) error {
 		// First check TCP connectivity on all advertised ports

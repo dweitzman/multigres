@@ -34,8 +34,8 @@ import (
 	"github.com/multigres/multigres/go/clustermetadata/topo"
 	"github.com/multigres/multigres/go/provisioner"
 	"github.com/multigres/multigres/go/provisioner/local/ports"
-	"github.com/multigres/multigres/go/tools/backoff"
 	"github.com/multigres/multigres/go/tools/pathutil"
+	"github.com/multigres/multigres/go/tools/retry"
 	"github.com/multigres/multigres/go/tools/semver"
 	"github.com/multigres/multigres/go/tools/stringutil"
 
@@ -1144,7 +1144,7 @@ func (p *localProvisioner) waitForProcessExit(process *os.Process, timeout time.
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	r := backoff.New(10*time.Millisecond, time.Second)
+	r := retry.New(10*time.Millisecond, time.Second)
 
 	err := r.Do(ctx, func(attempt int) error {
 		// Send null signal to test if process exists

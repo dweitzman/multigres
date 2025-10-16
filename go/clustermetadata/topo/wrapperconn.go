@@ -24,7 +24,7 @@ import (
 
 	"github.com/multigres/multigres/go/mterrors"
 	"github.com/multigres/multigres/go/pb/mtrpc"
-	"github.com/multigres/multigres/go/tools/backoff"
+	"github.com/multigres/multigres/go/tools/retry"
 )
 
 // WrapperConn wraps a Conn with automatic reconnection and error handling.
@@ -121,7 +121,7 @@ func (c *WrapperConn) retryConnection() {
 		c.retrying = false
 	}()
 
-	r := backoff.New(10*time.Millisecond, 30*time.Second)
+	r := retry.New(10*time.Millisecond, 30*time.Second)
 
 	_ = r.Do(context.Background(), func(attempt int) error {
 		conn, err := c.newFunc()
@@ -140,7 +140,7 @@ func (c *WrapperConn) retryConnection() {
 				_ = conn.Close()
 			}
 			// Use Abort to stop retries - connection is permanently closed
-			return backoff.NonRetryableError(fmt.Errorf("connection wrapper closed"))
+			return retry.NonRetryableError(fmt.Errorf("connection wrapper closed"))
 		}
 
 		if err != nil {
