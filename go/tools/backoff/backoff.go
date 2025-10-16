@@ -77,16 +77,14 @@ type Config struct {
 	// Required.
 	MaxDelay time.Duration
 
-	// JitterFraction is the fraction of the delay to vary randomly (0.0 to 1.0).
-	// For example, 0.1 means vary the delay by ±10% (e.g., 100ms becomes 90-110ms).
-	// This applies to both MinDelay and MaxDelay to prevent synchronized retries.
-	// Default: 0 (no jitter)
-	JitterFraction float64
-
 	// DelayBeforeAttempt starts with the first backoff delay instead of immediately
 	// calling the operation. Useful when you've already tried once before calling Do().
 	// Default: false (call operation immediately)
 	DelayBeforeAttempt bool
+
+	// disableJitter disables jitter for deterministic testing.
+	// Not exported - only used by test helpers.
+	disableJitter bool
 }
 
 // Retryer manages the retry state.
@@ -100,16 +98,16 @@ type Retryer struct {
 // Option is a functional option for configuring a Retryer.
 type Option func(*Config)
 
-// WithJitter sets the jitter fraction (0.0 to 1.0).
-// The delay will be randomly varied by ±fraction (e.g., 0.1 = ±10%).
-func WithJitter(fraction float64) Option {
-	return func(c *Config) { c.JitterFraction = fraction }
-}
-
 // WithDelayBeforeAttempt configures the retryer to start with a delay instead of
 // immediately calling the operation. Use this when you've already tried once.
 func WithDelayBeforeAttempt() Option {
 	return func(c *Config) { c.DelayBeforeAttempt = true }
+}
+
+// withDisableJitter disables jitter for deterministic testing.
+// Not exported - only used by test helpers.
+func withDisableJitter() Option {
+	return func(c *Config) { c.disableJitter = true }
 }
 
 // New creates a new Retryer with the given minDelay and maxDelay, plus optional configuration.
@@ -135,11 +133,6 @@ func New(minDelay, maxDelay time.Duration, opts ...Option) *Retryer {
 	// Apply optional configuration
 	for _, opt := range opts {
 		opt(&cfg)
-	}
-
-	// Validate optional configuration
-	if cfg.JitterFraction < 0 || cfg.JitterFraction > 1.0 {
-		panic("backoff: JitterFraction must be between 0.0 and 1.0")
 	}
 
 	return &Retryer{
@@ -190,7 +183,15 @@ func (r *Retryer) Do(ctx context.Context, operation func(attempt int) error) err
 	}
 }
 
-// calculateDelay computes the next delay with exponential backoff and jitter.
+// calculateDelay computes the next delay with exponential backoff and Full Jitter.
+//
+// This implements the "Full Jitter" algorithm recommended by AWS:
+// sleep = random_between(0, min(cap, base * 2^attempt))
+//
+// Full Jitter provides maximum randomization to prevent thundering herd problems
+// where multiple clients retry at the same time, causing synchronized load spikes.
+//
+// Reference: https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/
 func (r *Retryer) calculateDelay() time.Duration {
 	// Exponential backoff: minDelay * 2^attempts
 	// Use bit shifting for precise integer math and overflow protection
@@ -217,20 +218,12 @@ func (r *Retryer) calculateDelay() time.Duration {
 		}
 	}
 
-	// Apply jitter: vary delay by ±JitterFraction
-	// This prevents synchronized retries, even at MaxDelay
-	if r.cfg.JitterFraction > 0 {
-		// Calculate the jitter range: delay * JitterFraction
-		jitterRange := float64(delay) * r.cfg.JitterFraction
-		// Apply random jitter in range [-jitterRange, +jitterRange]
-		// r.rng.Float64() returns [0.0, 1.0), scale to [-1.0, 1.0)
-		jitter := time.Duration(jitterRange * (2.0*r.rng.Float64() - 1.0))
-		delay += jitter
-
-		// Ensure delay doesn't go negative
-		if delay < 0 {
-			delay = 0
-		}
+	// Apply Full Jitter: randomize between 0 and computed delay
+	// This prevents synchronized retries by spreading retries across time
+	if !r.cfg.disableJitter {
+		// random_between(0, delay)
+		// r.rng.Float64() returns [0.0, 1.0)
+		delay = time.Duration(float64(delay) * r.rng.Float64())
 	}
 
 	return delay
@@ -243,11 +236,10 @@ func (r *Retryer) Attempts() int {
 
 // Example usage:
 //
-// // Basic usage:
+// // Basic usage with Full Jitter (automatic):
 // retryer := backoff.New(
 //     500 * time.Millisecond,  // minDelay
 //     30 * time.Second,         // maxDelay
-//     backoff.WithJitter(0.1),
 // )
 // err := retryer.Do(ctx, func(attempt int) error {
 //     result, err := makeAPICall()
@@ -282,3 +274,6 @@ func (r *Retryer) Attempts() int {
 // err := retryer.Do(ctx, func(attempt int) error {
 //     return checkServiceReady()
 // })
+//
+// Note: Full Jitter is always enabled to prevent thundering herd problems.
+// See: https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/

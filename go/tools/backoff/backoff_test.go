@@ -39,18 +39,33 @@ func (f *fakeTimer) After(d time.Duration) <-chan time.Time {
 }
 
 // newRetryerWithFakeTimer creates a retryer with a fake timer for testing.
+// Automatically disables jitter for deterministic tests.
 func newRetryerWithFakeTimer(minDelay, maxDelay time.Duration, opts ...Option) (*Retryer, *fakeTimer) {
+	// Prepend withDisableJitter to make tests deterministic by default
+	allOpts := append([]Option{withDisableJitter()}, opts...)
+	r := New(minDelay, maxDelay, allOpts...)
+	ft := &fakeTimer{}
+	r.timer = ft
+	return r, ft
+}
+
+// newRetryerWithFakeTimerAndJitter creates a retryer with fake timer but WITH jitter enabled.
+// Use this for tests that specifically test jitter behavior.
+// Takes a seed parameter for deterministic jitter in tests.
+func newRetryerWithFakeTimerAndJitter(minDelay, maxDelay time.Duration, seed1, seed2 uint64, opts ...Option) (*Retryer, *fakeTimer) {
 	r := New(minDelay, maxDelay, opts...)
+	// Use provided seed for deterministic testing
+	r.rng = rand.New(rand.NewPCG(seed1, seed2))
 	ft := &fakeTimer{}
 	r.timer = ft
 	return r, ft
 }
 
 func TestNew_CreatesRetryer(t *testing.T) {
-	r := New(500*time.Millisecond, time.Minute, WithJitter(0.2))
+	r := New(500*time.Millisecond, time.Minute)
 	assert.Equal(t, 500*time.Millisecond, r.cfg.MinDelay)
 	assert.Equal(t, time.Minute, r.cfg.MaxDelay)
-	assert.Equal(t, 0.2, r.cfg.JitterFraction)
+	assert.False(t, r.cfg.disableJitter, "jitter should be enabled by default")
 }
 
 func TestRetryer_Success_FirstAttempt(t *testing.T) {
@@ -72,7 +87,6 @@ func TestRetryer_Success_AfterRetries(t *testing.T) {
 	r, ft := newRetryerWithFakeTimer(
 		5*time.Millisecond,
 		20*time.Millisecond,
-		WithJitter(0), // No jitter for predictable testing
 	)
 
 	attempts := 0
@@ -101,7 +115,6 @@ func TestRetryer_ExponentialBackoff(t *testing.T) {
 	r, ft := newRetryerWithFakeTimer(
 		10*time.Millisecond,
 		100*time.Millisecond,
-		WithJitter(0),
 	)
 
 	attempts := 0
@@ -128,7 +141,6 @@ func TestRetryer_MaxDelay(t *testing.T) {
 	r, ft := newRetryerWithFakeTimer(
 		10*time.Millisecond,
 		25*time.Millisecond,
-		WithJitter(0),
 	)
 
 	attempts := 0
@@ -247,8 +259,8 @@ func TestCalculateDelay(t *testing.T) {
 		name        string
 		minDelay    time.Duration
 		maxDelay    time.Duration
-		opts        []Option
 		attempt     int
+		withJitter  bool
 		expectedMin time.Duration
 		expectedMax time.Duration
 	}{
@@ -256,8 +268,8 @@ func TestCalculateDelay(t *testing.T) {
 			name:        "first attempt no jitter",
 			minDelay:    10 * time.Millisecond,
 			maxDelay:    time.Minute,
-			opts:        []Option{WithJitter(0)},
 			attempt:     0,
+			withJitter:  false,
 			expectedMin: 10 * time.Millisecond,
 			expectedMax: 10 * time.Millisecond,
 		},
@@ -265,8 +277,8 @@ func TestCalculateDelay(t *testing.T) {
 			name:        "second attempt no jitter",
 			minDelay:    10 * time.Millisecond,
 			maxDelay:    time.Minute,
-			opts:        []Option{WithJitter(0)},
 			attempt:     1,
+			withJitter:  false,
 			expectedMin: 20 * time.Millisecond,
 			expectedMax: 20 * time.Millisecond,
 		},
@@ -274,8 +286,8 @@ func TestCalculateDelay(t *testing.T) {
 			name:        "third attempt no jitter",
 			minDelay:    10 * time.Millisecond,
 			maxDelay:    time.Minute,
-			opts:        []Option{WithJitter(0)},
 			attempt:     2,
+			withJitter:  false,
 			expectedMin: 40 * time.Millisecond,
 			expectedMax: 40 * time.Millisecond,
 		},
@@ -283,26 +295,26 @@ func TestCalculateDelay(t *testing.T) {
 			name:        "with max delay cap",
 			minDelay:    10 * time.Millisecond,
 			maxDelay:    30 * time.Millisecond,
-			opts:        []Option{WithJitter(0)},
 			attempt:     5,
+			withJitter:  false,
 			expectedMin: 30 * time.Millisecond,
 			expectedMax: 30 * time.Millisecond,
 		},
 		{
-			name:        "with jitter",
+			name:        "with full jitter",
 			minDelay:    100 * time.Millisecond,
 			maxDelay:    time.Minute,
-			opts:        []Option{WithJitter(0.2)},
 			attempt:     0,
-			expectedMin: 80 * time.Millisecond,  // 100ms - 20% = 80ms
-			expectedMax: 120 * time.Millisecond, // 100ms + 20% = 120ms
+			withJitter:  true,
+			expectedMin: 34028597 * time.Nanosecond, // Full Jitter with seed(1,1): 100ms * 0.340286
+			expectedMax: 34028597 * time.Nanosecond,
 		},
 		{
 			name:        "exponential growth",
 			minDelay:    5 * time.Millisecond,
 			maxDelay:    time.Minute,
-			opts:        []Option{WithJitter(0)},
 			attempt:     4,
+			withJitter:  false,
 			expectedMin: 80 * time.Millisecond, // 5 * 2^4
 			expectedMax: 80 * time.Millisecond,
 		},
@@ -310,24 +322,27 @@ func TestCalculateDelay(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r, _ := newRetryerWithFakeTimer(tt.minDelay, tt.maxDelay, tt.opts...)
+			var r *Retryer
+			if tt.withJitter {
+				r, _ = newRetryerWithFakeTimerAndJitter(tt.minDelay, tt.maxDelay, 1, 1)
+			} else {
+				r, _ = newRetryerWithFakeTimer(tt.minDelay, tt.maxDelay)
+			}
 			r.attempts = tt.attempt
 
-			// Test multiple times to account for jitter randomness
-			for i := 0; i < 10; i++ {
-				delay := r.calculateDelay()
-				assert.GreaterOrEqual(t, delay, tt.expectedMin, "delay should be >= expectedMin")
-				assert.LessOrEqual(t, delay, tt.expectedMax, "delay should be <= expectedMax")
-			}
+			delay := r.calculateDelay()
+			assert.Equal(t, tt.expectedMin, delay)
+			assert.Equal(t, tt.expectedMax, delay)
 		})
 	}
 }
 
 func TestCalculateDelay_JitterVariation(t *testing.T) {
-	r, _ := newRetryerWithFakeTimer(
+	// Test that Full Jitter produces different values across multiple attempts
+	r, _ := newRetryerWithFakeTimerAndJitter(
 		100*time.Millisecond,
 		time.Minute,
-		WithJitter(0.3), // 30% jitter
+		42, 42, // Use seed(42,42) for this test
 	)
 	r.attempts = 0
 
@@ -335,13 +350,13 @@ func TestCalculateDelay_JitterVariation(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		delay := r.calculateDelay()
 		delays[delay] = true
-		// All delays should be between 70ms and 130ms (100ms ± 30%)
-		assert.GreaterOrEqual(t, delay, 70*time.Millisecond)
-		assert.LessOrEqual(t, delay, 130*time.Millisecond)
+		// Full Jitter: all delays should be between 0 and 100ms
+		assert.GreaterOrEqual(t, delay, time.Duration(0))
+		assert.LessOrEqual(t, delay, 100*time.Millisecond)
 	}
 
 	// Should have seen multiple different delay values due to jitter
-	assert.Greater(t, len(delays), 5, "jitter should produce variation")
+	assert.Greater(t, len(delays), 5, "jitter should produce variation across multiple calls")
 }
 
 func TestRetryer_NoDelayAfterLastAttempt(t *testing.T) {
@@ -371,7 +386,6 @@ func TestRetryer_DelayAfterWorkCompletes(t *testing.T) {
 	r, ft := newRetryerWithFakeTimer(
 		10*time.Millisecond,
 		time.Minute,
-		WithJitter(0),
 	)
 
 	executionOrder := []string{}
@@ -651,24 +665,10 @@ func TestNew_PanicsOnInvalidConfig(t *testing.T) {
 			panics:   true,
 		},
 		{
-			name:     "JitterFraction less than 0",
+			name:     "valid config with DelayBeforeAttempt",
 			minDelay: time.Second,
 			maxDelay: time.Minute,
-			opts:     []Option{WithJitter(-0.1)},
-			panics:   true,
-		},
-		{
-			name:     "JitterFraction greater than 1",
-			minDelay: time.Second,
-			maxDelay: time.Minute,
-			opts:     []Option{WithJitter(1.5)},
-			panics:   true,
-		},
-		{
-			name:     "valid config with all fields",
-			minDelay: time.Second,
-			maxDelay: time.Minute,
-			opts:     []Option{WithJitter(0.5)},
+			opts:     []Option{WithDelayBeforeAttempt()},
 			panics:   false,
 		},
 		{
@@ -745,7 +745,6 @@ func TestCalculateDelay_ExtremeAttemptCounts(t *testing.T) {
 			r, _ := newRetryerWithFakeTimer(
 				tt.minDelay,
 				tt.maxDelay,
-				WithJitter(0),
 			)
 			r.attempts = tt.attempts
 
@@ -770,143 +769,88 @@ func TestCalculateDelay_ExtremeAttemptCounts(t *testing.T) {
 
 func TestCalculateDelay_JitterVariesAroundTarget(t *testing.T) {
 	tests := []struct {
-		name           string
-		minDelay       time.Duration
-		maxDelay       time.Duration
-		jitterFraction float64
-		attempts       int
-		expectedMin    time.Duration
-		expectedMax    time.Duration
+		name         string
+		minDelay     time.Duration
+		maxDelay     time.Duration
+		attempts     int
+		seed1, seed2 uint64
+		expected     time.Duration
 	}{
 		{
-			name:           "max jitter at MinDelay",
-			minDelay:       100 * time.Millisecond,
-			maxDelay:       time.Minute,
-			jitterFraction: 1.0,
-			attempts:       0,
-			expectedMin:    0,                      // 100ms - 100% = 0
-			expectedMax:    200 * time.Millisecond, // 100ms + 100% = 200ms
+			name:     "full jitter at MinDelay with seed(1,1)",
+			minDelay: 100 * time.Millisecond,
+			maxDelay: time.Minute,
+			attempts: 0,
+			seed1:    1,
+			seed2:    1,
+			expected: 34028597 * time.Nanosecond, // 100ms * 0.340286
 		},
 		{
-			name:           "max jitter at MaxDelay",
-			minDelay:       10 * time.Millisecond,
-			maxDelay:       50 * time.Millisecond,
-			jitterFraction: 1.0,
-			attempts:       3, // 10 * 2^3 = 80ms, capped to 50ms, then ±100% jitter
-			expectedMin:    0,
-			expectedMax:    100 * time.Millisecond, // 50ms + 100% = 100ms
+			name:     "full jitter at MaxDelay cap with seed(2,2)",
+			minDelay: 10 * time.Millisecond,
+			maxDelay: 50 * time.Millisecond,
+			attempts: 3, // 10 * 2^3 = 80ms, capped to 50ms
+			seed1:    2,
+			seed2:    2,
+			expected: 3914553 * time.Nanosecond, // 50ms * 0.078291
 		},
 		{
-			name:           "moderate jitter at max delay",
-			minDelay:       time.Second,
-			maxDelay:       10 * time.Second,
-			jitterFraction: 0.1,
-			attempts:       5,                // Would be 32s without cap, capped to 10s, then ±10% jitter
-			expectedMin:    9 * time.Second,  // 10s - 10% = 9s
-			expectedMax:    11 * time.Second, // 10s + 10% = 11s
+			name:     "full jitter at high attempts with seed(3,3)",
+			minDelay: time.Second,
+			maxDelay: 10 * time.Second,
+			attempts: 5, // Would be 32s without cap, capped to 10s
+			seed1:    3,
+			seed2:    3,
+			expected: 3128509851 * time.Nanosecond, // 10s * 0.312851
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r, _ := newRetryerWithFakeTimer(
+			r, _ := newRetryerWithFakeTimerAndJitter(
 				tt.minDelay,
 				tt.maxDelay,
-				WithJitter(tt.jitterFraction),
+				tt.seed1,
+				tt.seed2,
 			)
 			r.attempts = tt.attempts
 
-			// Test multiple times due to randomness
-			for i := 0; i < 50; i++ {
-				delay := r.calculateDelay()
-				assert.GreaterOrEqual(t, delay, tt.expectedMin,
-					"delay %v below expectedMin %v on iteration %d", delay, tt.expectedMin, i)
-				assert.LessOrEqual(t, delay, tt.expectedMax,
-					"delay %v exceeded expectedMax %v on iteration %d", delay, tt.expectedMax, i)
-				assert.GreaterOrEqual(t, delay, time.Duration(0),
-					"delay should never be negative")
-			}
+			delay := r.calculateDelay()
+			assert.Equal(t, tt.expected, delay)
 		})
 	}
 }
 
-func TestCalculateDelay_JitterDeterministic(t *testing.T) {
-	t.Run("jitter goes below MinDelay with known seed", func(t *testing.T) {
-		r, _ := newRetryerWithFakeTimer(
-			100*time.Millisecond,
-			time.Minute,
-			WithJitter(0.5), // ±50%
-		)
-		// Use seed that produces a delay below 100ms
-		r.rng = rand.New(rand.NewPCG(0, 18))
-		r.attempts = 0
-
-		delay := r.calculateDelay()
-
-		// With seed (0, 18), we get exactly 50.154578ms
-		// This proves jitter can bring us below MinDelay (100ms)
-		assert.Equal(t, 50*time.Millisecond+154*time.Microsecond+578*time.Nanosecond, delay,
-			"jitter should produce delay below MinDelay")
-		assert.Less(t, delay, 100*time.Millisecond,
-			"delay is below MinDelay, proving jitter works bidirectionally")
-	})
-
-	t.Run("jitter exceeds MaxDelay with known seed", func(t *testing.T) {
-		r, _ := newRetryerWithFakeTimer(
-			10*time.Millisecond,
-			50*time.Millisecond,
-			WithJitter(0.5), // ±50%
-		)
-		// Use seed that produces a delay above 50ms
-		r.rng = rand.New(rand.NewPCG(0, 0))
-		r.attempts = 3 // 10 * 2^3 = 80ms, capped to MaxDelay of 50ms
-
-		delay := r.calculateDelay()
-
-		// With seed (0, 0), we get exactly 74.996379ms
-		// This proves jitter can exceed MaxDelay (50ms)
-		assert.Equal(t, 74*time.Millisecond+996*time.Microsecond+379*time.Nanosecond, delay,
-			"jitter should produce delay above MaxDelay")
-		assert.Greater(t, delay, 50*time.Millisecond,
-			"delay exceeds MaxDelay, proving jitter can go beyond the cap")
-	})
-
-	t.Run("different seeds produce different delays", func(t *testing.T) {
-		r1, _ := newRetryerWithFakeTimer(100*time.Millisecond, time.Minute, WithJitter(0.5))
-		r1.rng = rand.New(rand.NewPCG(0, 18))
+func TestCalculateDelay_FullJitterDeterministic(t *testing.T) {
+	t.Run("different seeds produce different jittered delays", func(t *testing.T) {
+		r1, _ := newRetryerWithFakeTimerAndJitter(100*time.Millisecond, time.Minute, 1, 1)
 		r1.attempts = 0
 		delay1 := r1.calculateDelay()
 
-		r2, _ := newRetryerWithFakeTimer(100*time.Millisecond, time.Minute, WithJitter(0.5))
-		r2.rng = rand.New(rand.NewPCG(1, 24))
+		r2, _ := newRetryerWithFakeTimerAndJitter(100*time.Millisecond, time.Minute, 2, 2)
 		r2.attempts = 0
 		delay2 := r2.calculateDelay()
 
-		// With seed (0, 18): 50.154578ms
-		// With seed (1, 24): 51.307743ms
+		// Different seeds produce different delays
 		assert.NotEqual(t, delay1, delay2, "different seeds should produce different delays")
-		assert.Equal(t, 50*time.Millisecond+154*time.Microsecond+578*time.Nanosecond, delay1)
-		assert.Equal(t, 51*time.Millisecond+307*time.Microsecond+743*time.Nanosecond, delay2)
+		assert.Equal(t, 34028597*time.Nanosecond, delay1) // seed(1,1): 100ms * 0.340286
+		assert.Equal(t, 7829106*time.Nanosecond, delay2)  // seed(2,2): 100ms * 0.078291
 	})
 
-	t.Run("jitter at MaxDelay varies both above and below", func(t *testing.T) {
-		// Seed that gives us a delay BELOW MaxDelay
-		r1, _ := newRetryerWithFakeTimer(10*time.Millisecond, 50*time.Millisecond, WithJitter(0.5))
-		r1.rng = rand.New(rand.NewPCG(0, 3))
-		r1.attempts = 3 // Reaches MaxDelay of 50ms
-		delayBelow := r1.calculateDelay()
+	t.Run("full jitter produces values in valid range", func(t *testing.T) {
+		// Test multiple attempts with same seed to ensure all values in range
+		seeds := []struct{ s1, s2 uint64 }{
+			{10, 20}, {42, 42}, {100, 200},
+		}
 
-		// Seed that gives us a delay ABOVE MaxDelay
-		r2, _ := newRetryerWithFakeTimer(10*time.Millisecond, 50*time.Millisecond, WithJitter(0.5))
-		r2.rng = rand.New(rand.NewPCG(0, 0))
-		r2.attempts = 3
-		delayAbove := r2.calculateDelay()
+		for _, seed := range seeds {
+			r, _ := newRetryerWithFakeTimerAndJitter(200*time.Millisecond, time.Minute, seed.s1, seed.s2)
+			r.attempts = 0
 
-		// With seed (0, 3): 28.601162ms (below 50ms)
-		// With seed (0, 0): 74.996379ms (above 50ms)
-		assert.Less(t, delayBelow, 50*time.Millisecond, "one seed produces delay below MaxDelay")
-		assert.Greater(t, delayAbove, 50*time.Millisecond, "another seed produces delay above MaxDelay")
-		assert.Equal(t, 28*time.Millisecond+601*time.Microsecond+162*time.Nanosecond, delayBelow)
-		assert.Equal(t, 74*time.Millisecond+996*time.Microsecond+379*time.Nanosecond, delayAbove)
+			delay := r.calculateDelay()
+			// Full Jitter: should be between 0 and 200ms
+			assert.GreaterOrEqual(t, delay, time.Duration(0))
+			assert.LessOrEqual(t, delay, 200*time.Millisecond)
+		}
 	})
 }
