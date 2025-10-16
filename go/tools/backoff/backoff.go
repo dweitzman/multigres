@@ -192,6 +192,64 @@ func (r *Retryer) Do(ctx context.Context, operation func(attempt int) error) err
 // where multiple clients retry at the same time, causing synchronized load spikes.
 //
 // Reference: https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/
+//
+// TODO: Consider supporting multiple jitter strategies in the future:
+//
+//  1. Full Jitter (current implementation):
+//     Formula: sleep = random_between(0, min(cap, base * 2^attempt))
+//     Best for: Most distributed systems, especially when multiple clients may retry simultaneously
+//     Examples:
+//     - Retrying failed API calls in microservices
+//     - Reconnecting to shared databases or message queues after connection loss
+//     - Polling for job completion when many workers compete for resources
+//     - Waiting for backend services to become healthy after deployment
+//     Pros: Maximum load spreading, best thundering herd protection
+//     Cons: Can produce very short delays (close to 0), which may cause rapid retries
+//     Recommendation: Use this as the default unless you have specific latency requirements
+//
+//  2. Decorrelated Jitter:
+//     Formula: sleep = min(cap, random_between(base, prev_sleep * 3))
+//     Best for: When you want some randomization but prefer smoother retry patterns
+//     Examples:
+//     - User-facing retries where UX benefits from more predictable timing
+//     - Scenarios where previous delay provides useful signal about system state
+//     Pros: Maintains some dependency on previous delay, can feel more "natural"
+//     Cons: Has clamping issues that reduce jitter effectiveness over time
+//     Recommendation: Use with caution; AWS article notes this has flaws
+//
+//  3. Fractional Jitter (also called "Equal Jitter" when fraction=0.5):
+//     Formula: sleep = delay * (1-fraction) + random_between(0, delay * fraction)
+//     Examples: fraction=0.5: sleep = delay/2 + random_between(0, delay/2)
+//     fraction=0.2: sleep = 80% of delay + random_between(0, 20% of delay)
+//     Best for: Latency-sensitive scenarios where delays must never get too short
+//     Examples:
+//     - OLTP query retries where sub-millisecond retries could overwhelm the database
+//     - Rate limiting scenarios where you need guaranteed minimum spacing between requests
+//     - Retrying latency-sensitive operations where very short delays are counterproductive
+//     - Infinite polling loops where minimum delay prevents resource exhaustion
+//     Pros: Configurable minimum delay (1-fraction), more predictable latency bounds
+//     Cons: Less randomization than Full Jitter, less effective at preventing thundering herd
+//     Recommendation: Use when you need guaranteed minimum delays (e.g., fraction=0.5 ensures
+//     delays are never less than 50% of the computed exponential backoff)
+//
+// Proposed API for future extension:
+//
+//	type JitterStrategy interface {
+//	    Apply(delay time.Duration, rng *rand.Rand, prevDelay time.Duration) time.Duration
+//	}
+//
+//	// Built-in strategies:
+//	func FullJitter() JitterStrategy { ... }
+//	func DecorrelatedJitter() JitterStrategy { ... }
+//	func FractionalJitter(fraction float64) JitterStrategy { ... }
+//
+//	func WithJitterStrategy(strategy JitterStrategy) Option {
+//	    return func(c *Config) { c.jitterStrategy = strategy }
+//	}
+//
+// This would allow users to opt into alternative strategies while keeping
+// Full Jitter as the recommended default, and make fraction configurable for
+// Fractional Jitter.
 func (r *Retryer) calculateDelay() time.Duration {
 	// Exponential backoff: minDelay * 2^attempts
 	// Use bit shifting for precise integer math and overflow protection
