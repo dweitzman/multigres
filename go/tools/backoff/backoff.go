@@ -89,10 +89,10 @@ type Config struct {
 
 // Retryer manages the retry state.
 type Retryer struct {
-	cfg      Config
-	attempts int
-	rng      *rand.Rand
-	timer    Timer
+	cfg     Config
+	attempt int
+	rng     *rand.Rand
+	timer   Timer
 }
 
 // Option is a functional option for configuring a Retryer.
@@ -146,7 +146,7 @@ func New(minDelay, maxDelay time.Duration, opts ...Option) *Retryer {
 // The operation function receives the attempt number (0-indexed).
 // Returns nil if operation succeeds, or the last error if all attempts fail.
 func (r *Retryer) Do(ctx context.Context, operation func(attempt int) error) error {
-	for r.attempts = 0; ; r.attempts++ {
+	for r.attempt = 0; ; r.attempt++ {
 		// Calculate delay with exponential backoff
 		delay := r.calculateDelay()
 
@@ -160,7 +160,7 @@ func (r *Retryer) Do(ctx context.Context, operation func(attempt int) error) err
 		}
 
 		// Execute the operation
-		err := operation(r.attempts)
+		err := operation(r.attempt)
 		if err == nil {
 			return nil // Success!
 		}
@@ -253,7 +253,7 @@ func (r *Retryer) Do(ctx context.Context, operation func(attempt int) error) err
 func (r *Retryer) calculateDelay() time.Duration {
 	// Exponential backoff: minDelay * 2^attempts
 	// Use bit shifting for precise integer math and overflow protection
-	attempts := r.attempts
+	attempts := r.attempt
 	if attempts > 62 {
 		// Cap to prevent overflow (shifting more than 62 bits would overflow int64)
 		attempts = 62
@@ -287,9 +287,9 @@ func (r *Retryer) calculateDelay() time.Duration {
 	return delay
 }
 
-// Attempts returns the current attempt number (0-indexed).
-func (r *Retryer) Attempts() int {
-	return r.attempts
+// Attempt returns the current attempt number (0-indexed).
+func (r *Retryer) Attempt() int {
+	return r.attempt
 }
 
 // Example usage:
