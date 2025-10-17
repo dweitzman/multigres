@@ -15,14 +15,11 @@
 package retry
 
 import (
-	"context"
-	"errors"
 	"math/rand/v2"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // testSeed represents a pair of seed values for deterministic random number generation.
@@ -53,29 +50,26 @@ const (
 	jitter_seed2x2_100ms = 7829106 * time.Nanosecond // 100ms * 0.078291 ≈ 7.829ms
 )
 
-// fakeTimer is a deterministic timer for testing that completes immediately.
-type fakeTimer struct {
-	delays []time.Duration
-}
-
-func (f *fakeTimer) After(d time.Duration) <-chan time.Time {
-	f.delays = append(f.delays, d)
-	ch := make(chan time.Time, 1)
-	ch <- time.Now() // Complete immediately
-	return ch
-}
-
-// withBackoff is a test-only option to set a custom backoff strategy.
-func withBackoff(b backoff) Option {
-	return func(c *Config) { c.backoff = b }
-}
-
 // newRetryerWithFakeTimer creates a retryer with a fake timer for testing.
 // Automatically disables jitter for deterministic tests.
 func newRetryerWithFakeTimer(minDelay, maxDelay time.Duration, opts ...Option) (*Retryer, *fakeTimer) {
 	// Prepend backoff without jitter to make tests deterministic by default
-	allOpts := append([]Option{withBackoff(newExponentialBackoffNoJitter())}, opts...)
+	allOpts := append([]Option{withBackoff(newExponentialBackoffNoJitter(minDelay, maxDelay))}, opts...)
 	r := New(minDelay, maxDelay, allOpts...)
+	ft := &fakeTimer{}
+	r.timer = ft
+	return r, ft
+}
+
+// newRetryerWithFakeBackoff creates a retryer with predetermined backoff delays.
+// This is useful for testing retry orchestration logic without depending on
+// specific backoff calculations. No longer needs minDelay/maxDelay since
+// fakeBackoff manages its own delays.
+func newRetryerWithFakeBackoff(delays []time.Duration, opts ...Option) (*Retryer, *fakeTimer) {
+	fb := &fakeBackoff{delays: delays}
+	allOpts := append([]Option{withBackoff(fb)}, opts...)
+	// Use dummy values for minDelay/maxDelay - they're only used for validation
+	r := New(1*time.Millisecond, 1*time.Minute, allOpts...)
 	ft := &fakeTimer{}
 	r.timer = ft
 	return r, ft
@@ -86,32 +80,12 @@ func newRetryerWithFakeTimer(minDelay, maxDelay time.Duration, opts ...Option) (
 // Takes a testSeed parameter for deterministic jitter in tests.
 func newRetryerWithFakeTimerAndJitter(minDelay, maxDelay time.Duration, seed testSeed, opts ...Option) (*Retryer, *fakeTimer) {
 	// Use provided seed for deterministic testing
-	backoffWithSeed := newExponentialFullJitterBackoffWithRNG(rand.New(rand.NewPCG(seed.s1, seed.s2)))
+	backoffWithSeed := newExponentialFullJitterBackoffWithRNG(minDelay, maxDelay, rand.New(rand.NewPCG(seed.s1, seed.s2)))
 	allOpts := append([]Option{withBackoff(backoffWithSeed)}, opts...)
 	r := New(minDelay, maxDelay, allOpts...)
 	ft := &fakeTimer{}
 	r.timer = ft
 	return r, ft
-}
-
-// Helper functions to reduce duplicate test setup code
-
-// runRetryUntilAttempt runs the retry loop until maxAttempts, then succeeds.
-func runRetryUntilAttempt(t *testing.T, r *Retryer, maxAttempts int) int {
-	t.Helper()
-	attempts := 0
-	err := r.Do(context.Background(), func(attempt int) error {
-		// During execution, Attempts() returns the current attempt number
-		assert.Equal(t, attempt, r.Attempt())
-
-		attempts++
-		if attempts > maxAttempts {
-			return nil
-		}
-		return errors.New("error")
-	})
-	require.NoError(t, err, "retry should eventually succeed")
-	return attempts
 }
 
 func TestCalculateDelay(t *testing.T) {
@@ -216,12 +190,12 @@ func TestCalculateDelay(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var b backoff
 			if tt.withJitter {
-				b = newExponentialFullJitterBackoffWithRNG(rand.New(rand.NewPCG(tt.seed.s1, tt.seed.s2)))
+				b = newExponentialFullJitterBackoffWithRNG(tt.minDelay, tt.maxDelay, rand.New(rand.NewPCG(tt.seed.s1, tt.seed.s2)))
 			} else {
-				b = newExponentialBackoffNoJitter()
+				b = newExponentialBackoffNoJitter(tt.minDelay, tt.maxDelay)
 			}
 
-			delay := b.nextDelay(tt.attempt, tt.minDelay, tt.maxDelay)
+			delay := b.nextDelay(tt.attempt)
 			assert.Equal(t, tt.expected, delay)
 		})
 	}
@@ -274,14 +248,14 @@ func TestCalculateDelay_ExtremeAttemptCounts(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			b := newExponentialBackoffNoJitter()
+			b := newExponentialBackoffNoJitter(tt.minDelay, tt.maxDelay)
 
 			// Should not panic even with extreme values
 			assert.NotPanics(t, func() {
-				_ = b.nextDelay(tt.attempts, tt.minDelay, tt.maxDelay)
+				_ = b.nextDelay(tt.attempts)
 			})
 
-			delay := b.nextDelay(tt.attempts, tt.minDelay, tt.maxDelay)
+			delay := b.nextDelay(tt.attempts)
 
 			// Should match expected delay
 			assert.Equal(t, tt.expectedDelay, delay)
@@ -333,9 +307,9 @@ func TestCalculateDelay_JitterVariesAroundTarget(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Use default backoff with jitter enabled
-			b := newExponentialFullJitterBackoff()
+			b := newExponentialFullJitterBackoff(tt.minDelay, tt.maxDelay)
 
-			delay := b.nextDelay(tt.attempts, tt.minDelay, tt.maxDelay)
+			delay := b.nextDelay(tt.attempts)
 			assert.GreaterOrEqual(t, delay, tt.expectedMin)
 			assert.LessOrEqual(t, delay, tt.expectedMax)
 		})

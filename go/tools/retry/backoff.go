@@ -22,11 +22,10 @@ import (
 
 // backoff calculates retry delays based on attempt numbers.
 // Implementations determine the backoff strategy (exponential, linear, constant, etc.).
+// Each strategy manages its own configuration internally.
 type backoff interface {
 	// nextDelay calculates the delay for a given attempt number (0-indexed).
-	// minDelay and maxDelay provide bounds for the calculation.
-	// The implementation determines how these bounds are used.
-	nextDelay(attempt int, minDelay, maxDelay time.Duration) time.Duration
+	nextDelay(attempt int) time.Duration
 }
 
 // exponentialFullJitterBackoff implements exponential backoff with Full Jitter.
@@ -57,33 +56,41 @@ type backoff interface {
 // Note: For use cases requiring guaranteed minimum delays, consider implementing
 // a fractionalJitter strategy in the future.
 type exponentialFullJitterBackoff struct {
+	minDelay      time.Duration
+	maxDelay      time.Duration
 	rng           *rand.Rand
 	disableJitter bool // For deterministic testing
 }
 
 // newExponentialFullJitterBackoff creates a new exponential backoff with full jitter.
-func newExponentialFullJitterBackoff() *exponentialFullJitterBackoff {
+func newExponentialFullJitterBackoff(minDelay, maxDelay time.Duration) *exponentialFullJitterBackoff {
 	return &exponentialFullJitterBackoff{
-		rng: rand.New(rand.NewPCG(uint64(time.Now().UnixNano()), uint64(time.Now().UnixNano()))),
+		minDelay: minDelay,
+		maxDelay: maxDelay,
+		rng:      rand.New(rand.NewPCG(uint64(time.Now().UnixNano()), uint64(time.Now().UnixNano()))),
 	}
 }
 
 // newExponentialFullJitterBackoffWithRNG creates a backoff with a specific RNG (for testing).
-func newExponentialFullJitterBackoffWithRNG(rng *rand.Rand) *exponentialFullJitterBackoff {
+func newExponentialFullJitterBackoffWithRNG(minDelay, maxDelay time.Duration, rng *rand.Rand) *exponentialFullJitterBackoff {
 	return &exponentialFullJitterBackoff{
-		rng: rng,
+		minDelay: minDelay,
+		maxDelay: maxDelay,
+		rng:      rng,
 	}
 }
 
 // newExponentialBackoffNoJitter creates a backoff without jitter (for testing).
-func newExponentialBackoffNoJitter() *exponentialFullJitterBackoff {
+func newExponentialBackoffNoJitter(minDelay, maxDelay time.Duration) *exponentialFullJitterBackoff {
 	return &exponentialFullJitterBackoff{
+		minDelay:      minDelay,
+		maxDelay:      maxDelay,
 		disableJitter: true,
 	}
 }
 
 // nextDelay calculates the next delay using exponential backoff with full jitter.
-func (e *exponentialFullJitterBackoff) nextDelay(attempt int, minDelay, maxDelay time.Duration) time.Duration {
+func (e *exponentialFullJitterBackoff) nextDelay(attempt int) time.Duration {
 	// Exponential backoff: minDelay * 2^attempt
 	// Use bit shifting for precise integer math and overflow protection
 	attempts := attempt
@@ -95,17 +102,17 @@ func (e *exponentialFullJitterBackoff) nextDelay(attempt int, minDelay, maxDelay
 	// Calculate delay = minDelay * (1 << attempts)
 	// time.Duration is int64, so we can work with it directly
 	multiplier := int64(1 << attempts)
-	minDelayInt := int64(minDelay)
+	minDelayInt := int64(e.minDelay)
 
 	var delay time.Duration
 	if minDelayInt > 0 && multiplier > math.MaxInt64/minDelayInt {
 		// Would overflow, use maxDelay
-		delay = maxDelay
+		delay = e.maxDelay
 	} else {
 		delay = time.Duration(minDelayInt * multiplier)
 		// Apply max delay cap
-		if delay > maxDelay {
-			delay = maxDelay
+		if delay > e.maxDelay {
+			delay = e.maxDelay
 		}
 	}
 

@@ -24,6 +24,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// runRetryUntilAttempt runs the retry loop until maxAttempts, then succeeds.
+func runRetryUntilAttempt(t *testing.T, r *Retryer, maxAttempts int) int {
+	t.Helper()
+	attempts := 0
+	err := r.Do(context.Background(), func(attempt int) error {
+		// During execution, Attempts() returns the current attempt number
+		assert.Equal(t, attempt, r.Attempt())
+
+		attempts++
+		if attempts > maxAttempts {
+			return nil
+		}
+		return errors.New("error")
+	})
+	require.NoError(t, err, "retry should eventually succeed")
+	return attempts
+}
+
 func TestNew_CreatesRetryer(t *testing.T) {
 	r := New(500*time.Millisecond, time.Minute)
 	assert.Equal(t, 500*time.Millisecond, r.cfg.MinDelay)
@@ -48,10 +66,8 @@ func TestRetryer_Success_FirstAttempt(t *testing.T) {
 }
 
 func TestRetryer_Success_AfterRetries(t *testing.T) {
-	r, ft := newRetryerWithFakeTimer(
-		5*time.Millisecond,
-		20*time.Millisecond,
-	)
+	delays := []time.Duration{5 * time.Millisecond, 10 * time.Millisecond, 15 * time.Millisecond}
+	r, ft := newRetryerWithFakeBackoff(delays)
 
 	attempts := 0
 	err := r.Do(context.Background(), func(attempt int) error {
@@ -69,33 +85,32 @@ func TestRetryer_Success_AfterRetries(t *testing.T) {
 	assert.Equal(t, 3, r.Attempt())
 	// Should have 3 delays: after attempts 0, 1, 2
 	require.Len(t, ft.delays, 3, "should have 3 delays (after each failed attempt)")
+	// Verify the backoff strategy was used
+	assert.Equal(t, delays, ft.delays)
 }
 
-func TestRetryer_ExponentialBackoff(t *testing.T) {
-	r, ft := newRetryerWithFakeTimer(
-		10*time.Millisecond,
-		100*time.Millisecond,
-	)
+func TestRetryer_AppliesBackoffDelays(t *testing.T) {
+	// Define custom backoff delays to verify retry orchestration uses them
+	customDelays := []time.Duration{
+		10 * time.Millisecond,
+		20 * time.Millisecond,
+		40 * time.Millisecond,
+		80 * time.Millisecond,
+		100 * time.Millisecond,
+	}
+	r, ft := newRetryerWithFakeBackoff(customDelays)
 
 	attempts := runRetryUntilAttempt(t, r, 5)
 
 	assert.Equal(t, 6, attempts)
 	require.Len(t, ft.delays, 5)
-
-	// Verify exponential growth: 10, 20, 40, 80, 100 (capped)
-	assert.Equal(t, 10*time.Millisecond, ft.delays[0], "delay 0: 10 * 2^0")
-	assert.Equal(t, 20*time.Millisecond, ft.delays[1], "delay 1: 10 * 2^1")
-	assert.Equal(t, 40*time.Millisecond, ft.delays[2], "delay 2: 10 * 2^2")
-	assert.Equal(t, 80*time.Millisecond, ft.delays[3], "delay 3: 10 * 2^3")
-	assert.Equal(t, 100*time.Millisecond, ft.delays[4], "delay 4: capped at MaxDelay")
+	// Verify the retry logic correctly applied the backoff delays
+	assert.Equal(t, customDelays, ft.delays, "delays should match backoff strategy output")
 }
 
 func TestRetryer_DelayBeforeAttempt(t *testing.T) {
-	r, ft := newRetryerWithFakeTimer(
-		10*time.Millisecond,
-		time.Minute,
-		WithDelayBeforeAttempt(),
-	)
+	delays := []time.Duration{10 * time.Millisecond, 20 * time.Millisecond, 40 * time.Millisecond}
+	r, ft := newRetryerWithFakeBackoff(delays, WithDelayBeforeAttempt())
 
 	attempts := 0
 	err := r.Do(context.Background(), func(attempt int) error {
@@ -111,15 +126,14 @@ func TestRetryer_DelayBeforeAttempt(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 3, attempts)
 	require.Len(t, ft.delays, 3)
-	assert.Equal(t, 10*time.Millisecond, ft.delays[0]) // before attempt 0 (MinDelay)
-	assert.Equal(t, 20*time.Millisecond, ft.delays[1]) // before attempt 1 (MinDelay * 2^1)
-	assert.Equal(t, 40*time.Millisecond, ft.delays[2]) // before attempt 2 (MinDelay * 2^2)
+	// Verify delays occurred before each attempt
+	assert.Equal(t, delays, ft.delays)
 }
 
 func TestRetryer_ContextCancellation(t *testing.T) {
 	// Use real timer since context cancellation requires real timing to work correctly
 	// Disable jitter for predictable timing
-	r := New(10*time.Millisecond, time.Minute, withBackoff(newExponentialBackoffNoJitter()))
+	r := New(10*time.Millisecond, time.Minute, withBackoff(newExponentialBackoffNoJitter(10*time.Millisecond, time.Minute)))
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -138,7 +152,8 @@ func TestRetryer_ContextCancellation(t *testing.T) {
 }
 
 func TestRetryer_ContextTimeoutBeforeAttempt(t *testing.T) {
-	r, ft := newRetryerWithFakeTimer(10*time.Millisecond, time.Minute)
+	delays := []time.Duration{10 * time.Millisecond}
+	r, ft := newRetryerWithFakeBackoff(delays)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	cancel()
@@ -156,7 +171,8 @@ func TestRetryer_ContextTimeoutBeforeAttempt(t *testing.T) {
 }
 
 func TestRetryer_ContextTimeoutDuringBackoff(t *testing.T) {
-	r, ft := newRetryerWithFakeTimer(10*time.Millisecond, time.Minute)
+	delays := []time.Duration{10 * time.Millisecond}
+	r, ft := newRetryerWithFakeBackoff(delays)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
 	defer cancel()
@@ -177,7 +193,8 @@ func TestRetryer_ContextTimeoutDuringBackoff(t *testing.T) {
 // Sentinel error tests
 
 func TestRetryer_NonRetryableStopsRetries(t *testing.T) {
-	r, ft := newRetryerWithFakeTimer(10*time.Millisecond, time.Minute)
+	delays := []time.Duration{10 * time.Millisecond, 20 * time.Millisecond}
+	r, ft := newRetryerWithFakeBackoff(delays)
 
 	attempts := 0
 	underlyingErr := errors.New("unrecoverable error")
@@ -197,10 +214,12 @@ func TestRetryer_NonRetryableStopsRetries(t *testing.T) {
 	assert.Equal(t, 3, attempts, "should stop immediately after abort")
 	// Should have 2 delays before abort
 	assert.Len(t, ft.delays, 2)
+	assert.Equal(t, delays, ft.delays)
 }
 
 func TestRetryer_NonRetryableWithNilError(t *testing.T) {
-	r, ft := newRetryerWithFakeTimer(10*time.Millisecond, time.Minute)
+	delays := []time.Duration{10 * time.Millisecond}
+	r, ft := newRetryerWithFakeBackoff(delays)
 
 	attempts := 0
 	err := r.Do(context.Background(), func(attempt int) error {
@@ -215,6 +234,7 @@ func TestRetryer_NonRetryableWithNilError(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 2, attempts)
 	assert.Len(t, ft.delays, 1)
+	assert.Equal(t, delays, ft.delays)
 }
 
 // Config validation tests

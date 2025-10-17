@@ -111,7 +111,7 @@ func New(minDelay, maxDelay time.Duration, opts ...Option) *Retryer {
 	cfg := Config{
 		MinDelay: minDelay,
 		MaxDelay: maxDelay,
-		backoff:  newExponentialFullJitterBackoff(),
+		backoff:  newExponentialFullJitterBackoff(minDelay, maxDelay),
 	}
 
 	// Apply optional configuration
@@ -154,7 +154,7 @@ func (r *Retryer) Do(ctx context.Context, operation func(attempt int) error) err
 		}
 
 		// Calculate delay with backoff strategy
-		delay := r.cfg.backoff.nextDelay(r.attempt, r.cfg.MinDelay, r.cfg.MaxDelay)
+		delay := r.cfg.backoff.nextDelay(r.attempt)
 
 		if r.cfg.DelayBeforeAttempt {
 			// Wait for the delay or context cancellation
