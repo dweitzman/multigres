@@ -83,7 +83,7 @@ func Register(register func(ctx context.Context) error, unregister func(ctx cont
 
 		// Context cancellation means Unregister() was called so we're shutting
 		// down and can give up.
-		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		if err != nil && !errors.Is(err, context.Canceled) {
 			tp.logger.Error("Registration retry loop exited unexpectedly", "error", err)
 		}
 	})
