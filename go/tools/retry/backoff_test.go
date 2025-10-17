@@ -37,26 +37,21 @@ var (
 	seed1x1 = testSeed{1, 1}
 	// seed2x2 produces Float64() ≈ 0.078291, giving ~8% of max delay (low value)
 	seed2x2 = testSeed{2, 2}
-	// seed42 produces a varied random sequence for variation testing
-	seed42 = testSeed{42, 42}
-	// Additional seeds for range testing
-	seed10x20   = testSeed{10, 20}
-	seed100x200 = testSeed{100, 200}
 )
 
-// Jitter fractions produced by each seed's first Float64() call.
-// These can be multiplied by any duration to get the expected jittered delay.
+// Jitter test values: expected delays after applying jitter with specific seeds.
+// Format: jitter_<seed>_<base_delay_in_ms> = actual nanoseconds result
+// This makes tests deterministic and easy to verify.
 const (
-	// seed1x1 produces Float64() that results in 34.028597ms when applied to 100ms
-	jitterFractionSeed1x1 = 0.34028597
-	// seed2x2 produces Float64() that results in 7.829106ms when applied to 100ms
-	jitterFractionSeed2x2 = 0.07829106
-)
+	// seed1x1 jitter results (fraction ≈ 0.34028597866062337829)
+	jitter_seed1x1_10ms  = 3402859 * time.Nanosecond  // 10ms * 0.340286 ≈ 3.403ms
+	jitter_seed1x1_100ms = 34028597 * time.Nanosecond // 100ms * 0.340286 ≈ 34.029ms
+	jitter_seed1x1_150ms = 51042896 * time.Nanosecond // 150ms * 0.340286 ≈ 51.043ms
+	jitter_seed1x1_200ms = 68057195 * time.Nanosecond // 200ms * 0.340286 ≈ 68.057ms
 
-// jitter calculates the expected jittered delay for a given duration and jitter fraction.
-func jitter(d time.Duration, fraction float64) time.Duration {
-	return time.Duration(fraction * float64(d))
-}
+	// seed2x2 jitter results (fraction ≈ 0.07829106)
+	jitter_seed2x2_100ms = 7829106 * time.Nanosecond // 100ms * 0.078291 ≈ 7.829ms
+)
 
 // fakeTimer is a deterministic timer for testing that completes immediately.
 type fakeTimer struct {
@@ -232,6 +227,7 @@ func TestCalculateDelay(t *testing.T) {
 		maxDelay   time.Duration
 		attempt    int
 		withJitter bool
+		seed       testSeed
 		expected   time.Duration
 	}{
 		{
@@ -267,12 +263,58 @@ func TestCalculateDelay(t *testing.T) {
 			expected:   30 * time.Millisecond,
 		},
 		{
-			name:       "with full jitter",
+			name:       "with full jitter seed1x1",
 			minDelay:   100 * time.Millisecond,
 			maxDelay:   time.Minute,
 			attempt:    0,
 			withJitter: true,
-			expected:   jitter(100*time.Millisecond, jitterFractionSeed1x1),
+			seed:       seed1x1,
+			expected:   jitter_seed1x1_100ms,
+		},
+		{
+			name:       "with full jitter seed2x2 (low value)",
+			minDelay:   100 * time.Millisecond,
+			maxDelay:   time.Minute,
+			attempt:    0,
+			withJitter: true,
+			seed:       seed2x2,
+			expected:   jitter_seed2x2_100ms,
+		},
+		{
+			name:       "jitter on second attempt",
+			minDelay:   100 * time.Millisecond,
+			maxDelay:   time.Minute,
+			attempt:    1,
+			withJitter: true,
+			seed:       seed1x1,
+			expected:   jitter_seed1x1_200ms, // 100ms * 2^1 = 200ms base
+		},
+		{
+			name:       "jitter on third attempt",
+			minDelay:   50 * time.Millisecond,
+			maxDelay:   time.Minute,
+			attempt:    2,
+			withJitter: true,
+			seed:       seed1x1,
+			expected:   jitter_seed1x1_200ms, // 50ms * 2^2 = 200ms base
+		},
+		{
+			name:       "jitter with max delay cap",
+			minDelay:   100 * time.Millisecond,
+			maxDelay:   150 * time.Millisecond,
+			attempt:    5,
+			withJitter: true,
+			seed:       seed1x1,
+			expected:   jitter_seed1x1_150ms, // 100ms * 2^5 = 3200ms, capped to 150ms
+		},
+		{
+			name:       "jitter with small delays",
+			minDelay:   10 * time.Millisecond,
+			maxDelay:   time.Minute,
+			attempt:    0,
+			withJitter: true,
+			seed:       seed1x1,
+			expected:   jitter_seed1x1_10ms,
 		},
 	}
 
@@ -280,7 +322,7 @@ func TestCalculateDelay(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var r *Retryer
 			if tt.withJitter {
-				r, _ = newRetryerWithFakeTimerAndJitter(tt.minDelay, tt.maxDelay, seed1x1)
+				r, _ = newRetryerWithFakeTimerAndJitter(tt.minDelay, tt.maxDelay, tt.seed)
 			} else {
 				r, _ = newRetryerWithFakeTimer(tt.minDelay, tt.maxDelay)
 			}
