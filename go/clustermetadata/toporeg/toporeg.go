@@ -17,6 +17,7 @@ package toporeg
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -81,7 +82,8 @@ func Register(register func(ctx context.Context) error, unregister func(ctx cont
 		})
 
 		// If we exit due to context cancellation, that's expected
-		if err != nil && tp.ctx.Err() == nil {
+		// If we exit due to context cancellation, that's expected
+		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			tp.logger.Error("Registration retry loop exited unexpectedly", "error", err)
 		}
 	})

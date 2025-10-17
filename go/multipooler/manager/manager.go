@@ -17,6 +17,7 @@ package manager
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -181,9 +182,9 @@ func (pm *MultiPoolerManager) loadMultiPoolerFromTopo() {
 	if err != nil {
 		pm.mu.Lock()
 		pm.state = ManagerStateError
-		if pm.ctx.Err() != nil {
+		if errors.Is(err, context.Canceled) {
 			pm.stateError = fmt.Errorf("manager context cancelled while loading multipooler record")
-		} else if timeoutCtx.Err() != nil {
+		} else if errors.Is(err, context.DeadlineExceeded) {
 			pm.stateError = fmt.Errorf("timeout waiting for multipooler record to be available in topology after %v", pm.loadTimeout)
 		} else {
 			pm.stateError = fmt.Errorf("unexpected error: %w", err)
