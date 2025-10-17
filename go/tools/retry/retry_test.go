@@ -24,6 +24,45 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Test infrastructure
+
+// fakeTimer is a deterministic timer for testing that completes immediately.
+type fakeTimer struct {
+	delays []time.Duration
+}
+
+func (f *fakeTimer) After(d time.Duration) <-chan time.Time {
+	f.delays = append(f.delays, d)
+	ch := make(chan time.Time, 1)
+	ch <- time.Now() // Complete immediately
+	return ch
+}
+
+// fakeBackoff returns predetermined delays for testing retry logic in isolation.
+// This allows retry tests to focus on orchestration without depending on
+// specific backoff calculations.
+type fakeBackoff struct {
+	delays []time.Duration
+}
+
+func (f *fakeBackoff) nextDelay(attempt int) time.Duration {
+	if attempt < len(f.delays) {
+		return f.delays[attempt]
+	}
+	// Return the last delay for attempts beyond the predetermined list
+	if len(f.delays) > 0 {
+		return f.delays[len(f.delays)-1]
+	}
+	return 1 * time.Second // Default fallback
+}
+
+// withBackoff is a test-only option to set a custom backoff strategy.
+func withBackoff(b backoff) Option {
+	return func(c *Config) { c.backoff = b }
+}
+
+// Test helpers
+
 // runRetryUntilAttempt runs the retry loop until maxAttempts, then succeeds.
 func runRetryUntilAttempt(t *testing.T, r *Retryer, maxAttempts int) int {
 	t.Helper()
@@ -42,6 +81,20 @@ func runRetryUntilAttempt(t *testing.T, r *Retryer, maxAttempts int) int {
 	return attempts
 }
 
+// newRetryerWithFakeBackoff creates a retryer with predetermined backoff delays.
+// This is useful for testing retry orchestration logic without depending on
+// specific backoff calculations. No longer needs minDelay/maxDelay since
+// fakeBackoff manages its own delays.
+func newRetryerWithFakeBackoff(delays []time.Duration, opts ...Option) (*Retryer, *fakeTimer) {
+	fb := &fakeBackoff{delays: delays}
+	allOpts := append([]Option{withBackoff(fb)}, opts...)
+	// Use dummy values for minDelay/maxDelay - they're only used for validation
+	r := New(1*time.Millisecond, 1*time.Minute, allOpts...)
+	ft := &fakeTimer{}
+	r.timer = ft
+	return r, ft
+}
+
 func TestNew_CreatesRetryer(t *testing.T) {
 	r := New(500*time.Millisecond, time.Minute)
 	assert.Equal(t, 500*time.Millisecond, r.cfg.MinDelay)
@@ -51,7 +104,7 @@ func TestNew_CreatesRetryer(t *testing.T) {
 }
 
 func TestRetryer_Success_FirstAttempt(t *testing.T) {
-	r, ft := newRetryerWithFakeTimer(10*time.Millisecond, time.Minute)
+	r, ft := newRetryerWithFakeBackoff([]time.Duration{10 * time.Millisecond})
 
 	attempts := 0
 	err := r.Do(context.Background(), func(attempt int) error {

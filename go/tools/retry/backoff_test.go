@@ -50,44 +50,6 @@ const (
 	jitter_seed2x2_100ms = 7829106 * time.Nanosecond // 100ms * 0.078291 ≈ 7.829ms
 )
 
-// newRetryerWithFakeTimer creates a retryer with a fake timer for testing.
-// Automatically disables jitter for deterministic tests.
-func newRetryerWithFakeTimer(minDelay, maxDelay time.Duration, opts ...Option) (*Retryer, *fakeTimer) {
-	// Prepend backoff without jitter to make tests deterministic by default
-	allOpts := append([]Option{withBackoff(newExponentialBackoffNoJitter(minDelay, maxDelay))}, opts...)
-	r := New(minDelay, maxDelay, allOpts...)
-	ft := &fakeTimer{}
-	r.timer = ft
-	return r, ft
-}
-
-// newRetryerWithFakeBackoff creates a retryer with predetermined backoff delays.
-// This is useful for testing retry orchestration logic without depending on
-// specific backoff calculations. No longer needs minDelay/maxDelay since
-// fakeBackoff manages its own delays.
-func newRetryerWithFakeBackoff(delays []time.Duration, opts ...Option) (*Retryer, *fakeTimer) {
-	fb := &fakeBackoff{delays: delays}
-	allOpts := append([]Option{withBackoff(fb)}, opts...)
-	// Use dummy values for minDelay/maxDelay - they're only used for validation
-	r := New(1*time.Millisecond, 1*time.Minute, allOpts...)
-	ft := &fakeTimer{}
-	r.timer = ft
-	return r, ft
-}
-
-// newRetryerWithFakeTimerAndJitter creates a retryer with fake timer but WITH jitter enabled.
-// Use this for tests that specifically test jitter behavior.
-// Takes a testSeed parameter for deterministic jitter in tests.
-func newRetryerWithFakeTimerAndJitter(minDelay, maxDelay time.Duration, seed testSeed, opts ...Option) (*Retryer, *fakeTimer) {
-	// Use provided seed for deterministic testing
-	backoffWithSeed := newExponentialFullJitterBackoffWithRNG(minDelay, maxDelay, rand.New(rand.NewPCG(seed.s1, seed.s2)))
-	allOpts := append([]Option{withBackoff(backoffWithSeed)}, opts...)
-	r := New(minDelay, maxDelay, allOpts...)
-	ft := &fakeTimer{}
-	r.timer = ft
-	return r, ft
-}
-
 func TestCalculateDelay(t *testing.T) {
 	tests := []struct {
 		name       string
