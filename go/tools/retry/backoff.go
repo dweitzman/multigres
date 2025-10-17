@@ -147,6 +147,10 @@ func New(minDelay, maxDelay time.Duration, opts ...Option) *Retryer {
 // Returns nil if operation succeeds, or the last error if all attempts fail.
 func (r *Retryer) Do(ctx context.Context, operation func(attempt int) error) error {
 	for r.attempt = 0; ; r.attempt++ {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
 		// Calculate delay with exponential backoff
 		delay := r.calculateDelay()
 
@@ -163,6 +167,10 @@ func (r *Retryer) Do(ctx context.Context, operation func(attempt int) error) err
 		err := operation(r.attempt)
 		if err == nil {
 			return nil // Success!
+		}
+
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
 
 		// Check if the error signals that we should stop retries

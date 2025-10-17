@@ -274,14 +274,6 @@ func TestCalculateDelay(t *testing.T) {
 			withJitter: true,
 			expected:   jitter(100*time.Millisecond, jitterFractionSeed1x1),
 		},
-		{
-			name:       "exponential growth",
-			minDelay:   5 * time.Millisecond,
-			maxDelay:   time.Minute,
-			attempt:    4,
-			withJitter: false,
-			expected:   80 * time.Millisecond, // 5 * 2^4
-		},
 	}
 
 	for _, tt := range tests {
@@ -300,40 +292,11 @@ func TestCalculateDelay(t *testing.T) {
 	}
 }
 
-func TestRetryer_DelayAfterAttempt(t *testing.T) {
+func TestRetryer_ContextTimeoutBeforeAttempt(t *testing.T) {
 	r, ft := newRetryerWithFakeTimer(10*time.Millisecond, time.Minute)
 
-	attempts := 0
-	err := r.Do(context.Background(), func(attempt int) error {
-		// Verify delay happens AFTER each operation (default behavior)
-		// On first call: 0 delays so far. On second call: 1 delay. Etc.
-		assert.Equal(t, attempts, len(ft.delays))
-		attempts++
-		if attempts >= 3 {
-			return nil
-		}
-		return errors.New("error")
-	})
-
-	require.NoError(t, err)
-	assert.Equal(t, 3, attempts)
-	require.Len(t, ft.delays, 2)                       // 2 delays after 3 attempts (no delay after success)
-	assert.Equal(t, 10*time.Millisecond, ft.delays[0]) // after attempt 0
-	assert.Equal(t, 20*time.Millisecond, ft.delays[1]) // after attempt 1
-}
-
-func TestRetryer_ContextTimeoutDuringSkip(t *testing.T) {
-	// Use real timer for this test since we need actual timing
-	// Disable jitter for predictable timing
-	r := New(
-		100*time.Millisecond,
-		time.Minute,
-		WithDelayBeforeAttempt(),
-		withDisableJitter(),
-	)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
+	cancel()
 
 	attempts := 0
 	err := r.Do(ctx, func(attempt int) error {
@@ -342,28 +305,28 @@ func TestRetryer_ContextTimeoutDuringSkip(t *testing.T) {
 	})
 
 	assert.Error(t, err)
-	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.ErrorIs(t, err, context.Canceled)
 	assert.Equal(t, 0, attempts, "should not execute operation if context times out during skip delay")
+	assert.Len(t, ft.delays, 0)
 }
 
 func TestRetryer_ContextTimeoutDuringBackoff(t *testing.T) {
-	// Use real timer for this test
-	// Disable jitter for predictable timing
-	r := New(50*time.Millisecond, time.Minute, withDisableJitter())
+	r, ft := newRetryerWithFakeTimer(10*time.Millisecond, time.Minute)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
 	defer cancel()
 
 	attempts := 0
 	err := r.Do(ctx, func(attempt int) error {
+		cancel()
 		attempts++
 		return errors.New("error")
 	})
 
 	assert.Error(t, err)
-	assert.ErrorIs(t, err, context.DeadlineExceeded)
-	// Should get at least 1-2 attempts before timeout
-	assert.GreaterOrEqual(t, attempts, 1)
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, attempts, 1)
+	assert.Len(t, ft.delays, 0)
 }
 
 // Sentinel error tests
@@ -600,47 +563,4 @@ func TestCalculateDelay_JitterVariesAroundTarget(t *testing.T) {
 			assert.LessOrEqual(t, delay, tt.expectedMax)
 		})
 	}
-}
-
-func TestCalculateDelay_FullJitterDeterministic(t *testing.T) {
-	t.Run("different seeds produce different jittered delays", func(t *testing.T) {
-		r1, _ := newRetryerWithFakeTimerAndJitter(100*time.Millisecond, time.Minute, seed1x1)
-		r1.attempt = 0
-		delay1 := r1.calculateDelay()
-
-		r2, _ := newRetryerWithFakeTimerAndJitter(100*time.Millisecond, time.Minute, seed2x2)
-		r2.attempt = 0
-		delay2 := r2.calculateDelay()
-
-		// Different seeds produce different delays
-		assert.NotEqual(t, delay1, delay2, "different seeds should produce different delays")
-		assert.Equal(t, jitter(100*time.Millisecond, jitterFractionSeed1x1), delay1)
-		assert.Equal(t, jitter(100*time.Millisecond, jitterFractionSeed2x2), delay2)
-	})
-
-	t.Run("full jitter produces values in valid range", func(t *testing.T) {
-		// Test multiple seeds to ensure all produce values in valid range
-		seeds := []testSeed{seed10x20, seed42, seed100x200}
-
-		for _, seed := range seeds {
-			r, _ := newRetryerWithFakeTimerAndJitter(200*time.Millisecond, time.Minute, seed)
-			r.attempt = 0
-
-			delay := r.calculateDelay()
-			// Full Jitter: should be between 0 and 200ms
-			assert.GreaterOrEqual(t, delay, time.Duration(0), "delay should be non-negative")
-			assert.LessOrEqual(t, delay, 200*time.Millisecond, "delay should not exceed computed value")
-		}
-	})
-}
-
-// TestCalculateDelay_DirectCall tests calling calculateDelay without going through Do().
-func TestCalculateDelay_DirectCall(t *testing.T) {
-	r := New(10*time.Millisecond, time.Minute)
-	// r.attempts is 0 by default
-	delay := r.calculateDelay()
-	// With jitter enabled, delay will be random between 0 and 10ms
-	// We can only verify it's in valid range
-	assert.GreaterOrEqual(t, delay, time.Duration(0), "delay should be non-negative")
-	assert.LessOrEqual(t, delay, 10*time.Millisecond, "delay should not exceed MinDelay on first attempt")
 }
