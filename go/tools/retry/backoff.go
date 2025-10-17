@@ -15,183 +15,21 @@
 package retry
 
 import (
-	"context"
-	"errors"
 	"math"
 	"math/rand/v2"
 	"time"
 )
 
-// nonRetryableError signals that an operation should not be retried.
-// The retry loop will stop immediately and return the underlying error.
-type nonRetryableError struct {
-	err error
+// backoff calculates retry delays based on attempt numbers.
+// Implementations determine the backoff strategy (exponential, linear, constant, etc.).
+type backoff interface {
+	// nextDelay calculates the delay for a given attempt number (0-indexed).
+	// minDelay and maxDelay provide bounds for the calculation.
+	// The implementation determines how these bounds are used.
+	nextDelay(attempt int, minDelay, maxDelay time.Duration) time.Duration
 }
 
-func (e *nonRetryableError) Error() string {
-	if e.err == nil {
-		return "non-retryable error"
-	}
-	return e.err.Error()
-}
-
-func (e *nonRetryableError) Unwrap() error {
-	return e.err
-}
-
-// NonRetryableError wraps an error to signal that retries should stop immediately.
-// Use this for permanent failures like authentication errors, invalid configuration, etc.
-//
-// Example:
-//
-//	if errors.Is(err, ErrUnauthorized) {
-//	    return retry.NonRetryableError(err)
-//	}
-func NonRetryableError(err error) error {
-	if err == nil {
-		return nil
-	}
-	return &nonRetryableError{err: err}
-}
-
-// Timer is an interface for time operations, allowing for fake timers in tests.
-type Timer interface {
-	After(d time.Duration) <-chan time.Time
-}
-
-// realTimer implements Timer using real time.
-type realTimer struct{}
-
-func (realTimer) After(d time.Duration) <-chan time.Time {
-	return time.After(d)
-}
-
-// Config holds the configuration for exponential backoff.
-type Config struct {
-	// MinDelay is the starting delay for exponential backoff (delay * 2^attempt).
-	// Each retry doubles the delay up to MaxDelay.
-	// Required.
-	MinDelay time.Duration
-
-	// MaxDelay is the maximum wait time between attempts.
-	// Required.
-	MaxDelay time.Duration
-
-	// DelayBeforeAttempt starts with the first backoff delay instead of immediately
-	// calling the operation. Useful when you've already tried once before calling Do().
-	// Default: false (call operation immediately)
-	DelayBeforeAttempt bool
-
-	// disableJitter disables jitter for deterministic testing.
-	// Not exported - only used by test helpers.
-	disableJitter bool
-}
-
-// Retryer manages the retry state.
-type Retryer struct {
-	cfg     Config
-	attempt int
-	rng     *rand.Rand
-	timer   Timer
-}
-
-// Option is a functional option for configuring a Retryer.
-type Option func(*Config)
-
-// WithDelayBeforeAttempt configures the retryer to start with a delay instead of
-// immediately calling the operation. Use this when you've already tried once.
-func WithDelayBeforeAttempt() Option {
-	return func(c *Config) { c.DelayBeforeAttempt = true }
-}
-
-// withDisableJitter disables jitter for deterministic testing.
-// Not exported - only used by test helpers.
-func withDisableJitter() Option {
-	return func(c *Config) { c.disableJitter = true }
-}
-
-// New creates a new Retryer with the given minDelay and maxDelay, plus optional configuration.
-// Panics if the parameters are invalid (represents a coding error).
-func New(minDelay, maxDelay time.Duration, opts ...Option) *Retryer {
-	// Validate required parameters (panic on coding errors)
-	if minDelay <= 0 {
-		panic("retry: MinDelay must be positive")
-	}
-	if maxDelay <= 0 {
-		panic("retry: MaxDelay must be positive")
-	}
-	if minDelay > maxDelay {
-		panic("retry: MinDelay cannot be greater than MaxDelay")
-	}
-
-	// Build config
-	cfg := Config{
-		MinDelay: minDelay,
-		MaxDelay: maxDelay,
-	}
-
-	// Apply optional configuration
-	for _, opt := range opts {
-		opt(&cfg)
-	}
-
-	return &Retryer{
-		cfg:   cfg,
-		rng:   rand.New(rand.NewPCG(uint64(time.Now().UnixNano()), uint64(time.Now().UnixNano()))),
-		timer: realTimer{},
-	}
-}
-
-// Do executes the operation with exponential backoff.
-// The operation function receives the attempt number (0-indexed).
-// Returns nil if operation succeeds, or the last error if all attempts fail.
-func (r *Retryer) Do(ctx context.Context, operation func(attempt int) error) error {
-	for r.attempt = 0; ; r.attempt++ {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-
-		// Calculate delay with exponential backoff
-		delay := r.calculateDelay()
-
-		if r.cfg.DelayBeforeAttempt {
-			// Wait for the delay or context cancellation
-			select {
-			case <-r.timer.After(delay):
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-
-		// Execute the operation
-		err := operation(r.attempt)
-		if err == nil {
-			return nil // Success!
-		}
-
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-
-		// Check if the error signals that we should stop retries
-		var nre *nonRetryableError
-		if errors.As(err, &nre) {
-			return nre.err
-		}
-
-		if !r.cfg.DelayBeforeAttempt {
-			// Wait for the delay or context cancellation
-			select {
-			case <-r.timer.After(delay):
-				// Continue to next attempt
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-	}
-}
-
-// calculateDelay computes the next delay with exponential backoff and Full Jitter.
+// exponentialFullJitterBackoff implements exponential backoff with Full Jitter.
 //
 // This implements the "Full Jitter" algorithm recommended by AWS:
 // sleep = random_between(0, min(cap, base * 2^attempt))
@@ -201,145 +39,115 @@ func (r *Retryer) Do(ctx context.Context, operation func(attempt int) error) err
 //
 // Reference: https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/
 //
-// TODO: Consider supporting multiple jitter strategies in the future:
+// The algorithm works as follows:
+//  1. Calculate exponential delay: minDelay * 2^attempt
+//  2. Cap at maxDelay to prevent unbounded growth
+//  3. Apply Full Jitter: randomize between 0 and computed delay
 //
-//  1. Full Jitter (current implementation):
-//     Formula: sleep = random_between(0, min(cap, base * 2^attempt))
-//     Best for: Most distributed systems, especially when multiple clients may retry simultaneously
-//     Examples:
-//     - Retrying failed API calls in microservices
-//     - Reconnecting to shared databases or message queues after connection loss
-//     - Polling for job completion when many workers compete for resources
-//     - Waiting for backend services to become healthy after deployment
-//     Pros: Maximum load spreading, best thundering herd protection
-//     Cons: Can produce very short delays (close to 0), which may cause rapid retries
-//     Recommendation: Use this as the default unless you have specific latency requirements
+// Best for: Most distributed systems, especially when multiple clients may retry simultaneously
+// Examples:
+// - Retrying failed API calls in microservices
+// - Reconnecting to shared databases or message queues after connection loss
+// - Polling for job completion when many workers compete for resources
+// - Waiting for backend services to become healthy after deployment
 //
-//  2. Decorrelated Jitter:
-//     Formula: sleep = min(cap, random_between(base, prev_sleep * 3))
-//     Best for: When you want some randomization but prefer smoother retry patterns
-//     Examples:
-//     - User-facing retries where UX benefits from more predictable timing
-//     - Scenarios where previous delay provides useful signal about system state
-//     Pros: Maintains some dependency on previous delay, can feel more "natural"
-//     Cons: Has clamping issues that reduce jitter effectiveness over time
-//     Recommendation: Use with caution; AWS article notes this has flaws
+// Pros: Maximum load spreading, best thundering herd protection
+// Cons: Can produce very short delays (close to 0), which may cause rapid retries
 //
-//  3. Fractional Jitter (also called "Equal Jitter" when fraction=0.5):
-//     Formula: sleep = delay * (1-fraction) + random_between(0, delay * fraction)
-//     Examples: fraction=0.5: sleep = delay/2 + random_between(0, delay/2)
-//     fraction=0.2: sleep = 80% of delay + random_between(0, 20% of delay)
-//     Best for: Latency-sensitive scenarios where delays must never get too short
-//     Examples:
-//     - OLTP query retries where sub-millisecond retries could overwhelm the database
-//     - Rate limiting scenarios where you need guaranteed minimum spacing between requests
-//     - Retrying latency-sensitive operations where very short delays are counterproductive
-//     - Infinite polling loops where minimum delay prevents resource exhaustion
-//     Pros: Configurable minimum delay (1-fraction), more predictable latency bounds
-//     Cons: Less randomization than Full Jitter, less effective at preventing thundering herd
-//     Recommendation: Use when you need guaranteed minimum delays (e.g., fraction=0.5 ensures
-//     delays are never less than 50% of the computed exponential backoff)
-//
-// Proposed API for future extension:
-//
-//	type JitterStrategy interface {
-//	    Apply(delay time.Duration, rng *rand.Rand, prevDelay time.Duration) time.Duration
-//	}
-//
-//	// Built-in strategies:
-//	func FullJitter() JitterStrategy { ... }
-//	func DecorrelatedJitter() JitterStrategy { ... }
-//	func FractionalJitter(fraction float64) JitterStrategy { ... }
-//
-//	func WithJitterStrategy(strategy JitterStrategy) Option {
-//	    return func(c *Config) { c.jitterStrategy = strategy }
-//	}
-//
-// This would allow users to opt into alternative strategies while keeping
-// Full Jitter as the recommended default, and make fraction configurable for
-// Fractional Jitter.
-func (r *Retryer) calculateDelay() time.Duration {
-	// Exponential backoff: minDelay * 2^attempts
+// Note: For use cases requiring guaranteed minimum delays, consider implementing
+// a fractionalJitter strategy in the future.
+type exponentialFullJitterBackoff struct {
+	rng           *rand.Rand
+	disableJitter bool // For deterministic testing
+}
+
+// newExponentialFullJitterBackoff creates a new exponential backoff with full jitter.
+func newExponentialFullJitterBackoff() *exponentialFullJitterBackoff {
+	return &exponentialFullJitterBackoff{
+		rng: rand.New(rand.NewPCG(uint64(time.Now().UnixNano()), uint64(time.Now().UnixNano()))),
+	}
+}
+
+// newExponentialFullJitterBackoffWithRNG creates a backoff with a specific RNG (for testing).
+func newExponentialFullJitterBackoffWithRNG(rng *rand.Rand) *exponentialFullJitterBackoff {
+	return &exponentialFullJitterBackoff{
+		rng: rng,
+	}
+}
+
+// newExponentialBackoffNoJitter creates a backoff without jitter (for testing).
+func newExponentialBackoffNoJitter() *exponentialFullJitterBackoff {
+	return &exponentialFullJitterBackoff{
+		disableJitter: true,
+	}
+}
+
+// nextDelay calculates the next delay using exponential backoff with full jitter.
+func (e *exponentialFullJitterBackoff) nextDelay(attempt int, minDelay, maxDelay time.Duration) time.Duration {
+	// Exponential backoff: minDelay * 2^attempt
 	// Use bit shifting for precise integer math and overflow protection
-	attempts := r.attempt
+	attempts := attempt
 	if attempts > 62 {
 		// Cap to prevent overflow (shifting more than 62 bits would overflow int64)
 		attempts = 62
 	}
 
-	// Calculate delay = MinDelay * (1 << attempts)
+	// Calculate delay = minDelay * (1 << attempts)
 	// time.Duration is int64, so we can work with it directly
 	multiplier := int64(1 << attempts)
-	minDelay := int64(r.cfg.MinDelay)
+	minDelayInt := int64(minDelay)
 
 	var delay time.Duration
-	if minDelay > 0 && multiplier > math.MaxInt64/minDelay {
-		// Would overflow, use MaxDelay
-		delay = r.cfg.MaxDelay
+	if minDelayInt > 0 && multiplier > math.MaxInt64/minDelayInt {
+		// Would overflow, use maxDelay
+		delay = maxDelay
 	} else {
-		delay = time.Duration(minDelay * multiplier)
+		delay = time.Duration(minDelayInt * multiplier)
 		// Apply max delay cap
-		if delay > r.cfg.MaxDelay {
-			delay = r.cfg.MaxDelay
+		if delay > maxDelay {
+			delay = maxDelay
 		}
 	}
 
 	// Apply Full Jitter: randomize between 0 and computed delay
 	// This prevents synchronized retries by spreading retries across time
-	if !r.cfg.disableJitter {
+	if !e.disableJitter {
 		// random_between(0, delay)
-		// r.rng.Float64() returns [0.0, 1.0)
-		delay = time.Duration(float64(delay) * r.rng.Float64())
+		// rng.Float64() returns [0.0, 1.0)
+		delay = time.Duration(float64(delay) * e.rng.Float64())
 	}
 
 	return delay
 }
 
-// Attempt returns the current attempt number (0-indexed).
-func (r *Retryer) Attempt() int {
-	return r.attempt
-}
-
-// Example usage:
+// Future backoff strategies to consider implementing:
 //
-// // Basic usage with Full Jitter (automatic):
-// r := retry.New(
-//     500 * time.Millisecond,  // minDelay
-//     30 * time.Second,         // maxDelay
-// )
-// err := r.Do(ctx, func(attempt int) error {
-//     result, err := makeAPICall()
-//     if err != nil {
-//         // Any error triggers retry by default
-//         return err
-//     }
-//     return nil
-// })
+// 1. decorrelatedJitterBackoff:
+//    Formula: sleep = min(cap, random_between(base, prev_sleep * 3))
+//    Best for: When you want some randomization but prefer smoother retry patterns
+//    Examples:
+//    - User-facing retries where UX benefits from more predictable timing
+//    - Scenarios where previous delay provides useful signal about system state
+//    Pros: Maintains some dependency on previous delay, can feel more "natural"
+//    Cons: Has clamping issues that reduce jitter effectiveness over time
+//    Note: Would require a stateful interface or passing prevDelay parameter
 //
-// // Stopping retries for permanent errors:
-// err := r.Do(ctx, func(attempt int) error {
-//     result, err := makeAPICall()
-//     if err != nil {
-//         // Stop immediately on auth errors - no point retrying
-//         if errors.Is(err, ErrUnauthorized) {
-//             return retry.NonRetryableError(err)
-//         }
-//         // Any other error triggers retry
-//         return err
-//     }
-//     return nil
-// })
+// 2. fractionalJitterBackoff (also called "Equal Jitter" when fraction=0.5):
+//    Formula: sleep = delay * (1-fraction) + random_between(0, delay * fraction)
+//    Examples: fraction=0.5: sleep = delay/2 + random_between(0, delay/2)
+//              fraction=0.2: sleep = 80% of delay + random_between(0, 20% of delay)
+//    Best for: Latency-sensitive scenarios where delays must never get too short
+//    Examples:
+//    - OLTP query retries where sub-millisecond retries could overwhelm the database
+//    - Rate limiting scenarios where you need guaranteed minimum spacing between requests
+//    - Retrying latency-sensitive operations where very short delays are counterproductive
+//    Pros: Configurable minimum delay (1-fraction), more predictable latency bounds
+//    Cons: Less randomization than Full Jitter, less effective at preventing thundering herd
 //
-// // Time-bounded retry with context timeout (recommended pattern):
-// ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-// defer cancel()
-// r := retry.New(
-//     100 * time.Millisecond,  // minDelay
-//     5 * time.Second,          // maxDelay
-// )
-// err := r.Do(ctx, func(attempt int) error {
-//     return checkServiceReady()
-// })
+// 3. constantBackoff:
+//    Formula: sleep = minDelay (always)
+//    Best for: Simple scenarios where exponential growth isn't needed
 //
-// Note: Full Jitter is always enabled to prevent thundering herd problems.
-// See: https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/
+// 4. linearBackoff:
+//    Formula: sleep = min(cap, base * attempt)
+//    Best for: Gradual increase without exponential growth
