@@ -139,7 +139,7 @@ func (c *WrapperConn) retryConnection() {
 			if conn != nil {
 				_ = conn.Close()
 			}
-			// Use Abort to stop retries - connection is permanently closed
+			// Stop retries - connection is permanently closed
 			return retry.NonRetryableError(fmt.Errorf("connection wrapper closed"))
 		}
 
