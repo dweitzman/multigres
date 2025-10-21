@@ -17,13 +17,14 @@ package toporeg
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/multigres/multigres/go/servenv"
-	"github.com/multigres/multigres/go/tools/timertools"
+	"github.com/multigres/multigres/go/tools/retry"
 )
 
 // TopoReg contains the metadata of the component being registered.
@@ -58,24 +59,32 @@ func Register(register func(ctx context.Context) error, unregister func(ctx cont
 		tp.logger.Error("Failed to register component with topology", "error", err)
 	}
 	tp.wg.Go(func() {
-		ticker := timertools.NewBackoffTicker(10*time.Millisecond, 30*time.Second)
-		for {
-			select {
-			case <-ticker.C:
-				ctx, cancel := context.WithTimeout(tp.ctx, time.Second)
-				if err := register(ctx); err == nil {
-					tp.logger.Info("Successfully registered component with topology")
-					alarm("")
-					cancel()
-					return
-				} else {
-					// Just call alarm. No need to spam logs.
-					alarm(fmt.Sprintf("Failed to register component with topology: %v", err))
-				}
-				cancel()
-			case <-tp.ctx.Done():
-				return
+		r := retry.New(
+			10*time.Millisecond,
+			30*time.Second,
+			retry.WithInitialDelay(), // We already tried once
+		)
+
+		err := r.Do(tp.ctx, func(attempt int) error {
+			ctx, cancel := context.WithTimeout(tp.ctx, time.Second)
+			defer cancel()
+
+			if err := register(ctx); err != nil {
+				// Just call alarm. No need to spam logs.
+				alarm(fmt.Sprintf("Failed to register component with topology: %v", err))
+				return err
 			}
+
+			// Success!
+			tp.logger.Info("Successfully registered component with topology")
+			alarm("")
+			return nil
+		})
+
+		// Context cancellation means Unregister() was called so we're shutting
+		// down and can give up.
+		if err != nil && !errors.Is(err, context.Canceled) {
+			tp.logger.Error("Registration retry loop exited unexpectedly", "error", err)
 		}
 	})
 	return tp

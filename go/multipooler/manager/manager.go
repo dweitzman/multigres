@@ -17,6 +17,7 @@ package manager
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -28,7 +29,7 @@ import (
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	multipoolermanagerdata "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	"github.com/multigres/multigres/go/servenv"
-	"github.com/multigres/multigres/go/tools/timertools"
+	"github.com/multigres/multigres/go/tools/retry"
 )
 
 // ManagerState represents the state of the MultiPoolerManager
@@ -154,50 +155,42 @@ func (pm *MultiPoolerManager) loadMultiPoolerFromTopo() {
 		return
 	}
 
-	ticker := timertools.NewBackoffTicker(100*time.Millisecond, 30*time.Second)
-	defer ticker.Stop()
-
 	// Set timeout for the entire loading process
 	timeoutCtx, timeoutCancel := context.WithTimeout(pm.ctx, pm.loadTimeout)
 	defer timeoutCancel()
 
-	for {
-		select {
-		case <-ticker.C:
-			ctx, cancel := context.WithTimeout(pm.ctx, 5*time.Second)
-			mp, err := pm.topoClient.GetMultiPooler(ctx, pm.serviceID)
-			cancel()
+	r := retry.New(100*time.Millisecond, 30*time.Second)
 
-			if err != nil {
-				continue
-			}
+	err := r.Do(timeoutCtx, func(attempt int) error {
+		ctx, cancel := context.WithTimeout(pm.ctx, 5*time.Second)
+		defer cancel()
 
-			// Successfully loaded
-			pm.mu.Lock()
-			pm.multipooler = mp
-			pm.state = ManagerStateReady
-			pm.mu.Unlock()
-
-			pm.logger.Info("Manager state changed", "state", ManagerStateReady, "service_id", pm.serviceID.String(), "database", mp.Database)
-			return
-
-		case <-timeoutCtx.Done():
-			pm.mu.Lock()
-			pm.state = ManagerStateError
-			pm.stateError = fmt.Errorf("timeout waiting for multipooler record to be available in topology after %v", pm.loadTimeout)
-			pm.mu.Unlock()
-			pm.logger.Error("Manager state changed", "state", ManagerStateError, "service_id", pm.serviceID.String(), "error", pm.stateError.Error())
-			return
-
-		case <-pm.ctx.Done():
-			// Parent context cancelled - treat as error
-			pm.mu.Lock()
-			pm.state = ManagerStateError
-			pm.stateError = fmt.Errorf("manager context cancelled while loading multipooler record")
-			pm.mu.Unlock()
-			pm.logger.Error("Manager state changed", "state", ManagerStateError, "service_id", pm.serviceID.String(), "error", pm.stateError.Error())
-			return
+		mp, err := pm.topoClient.GetMultiPooler(ctx, pm.serviceID)
+		if err != nil {
+			return err
 		}
+
+		// Successfully loaded
+		pm.mu.Lock()
+		pm.multipooler = mp
+		pm.state = ManagerStateReady
+		pm.mu.Unlock()
+
+		pm.logger.Info("Manager state changed", "state", ManagerStateReady, "service_id", pm.serviceID.String(), "database", mp.Database)
+		return nil
+	})
+	if err != nil {
+		pm.mu.Lock()
+		pm.state = ManagerStateError
+		if errors.Is(err, context.Canceled) {
+			pm.stateError = fmt.Errorf("manager context cancelled while loading multipooler record")
+		} else if errors.Is(err, context.DeadlineExceeded) {
+			pm.stateError = fmt.Errorf("timeout waiting for multipooler record to be available in topology after %v", pm.loadTimeout)
+		} else {
+			pm.stateError = fmt.Errorf("unexpected error: %w", err)
+		}
+		pm.mu.Unlock()
+		pm.logger.Error("Manager state changed", "state", ManagerStateError, "service_id", pm.serviceID.String(), "error", pm.stateError.Error())
 	}
 }
 
