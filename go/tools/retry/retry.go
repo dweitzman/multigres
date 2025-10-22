@@ -79,7 +79,7 @@ type Config struct {
 // Retryer manages the retry state and executes operations with backoff.
 type Retryer struct {
 	cfg     Config
-	attempt int
+	attempt int // Total attempts (monotonic, public via Attempt())
 	timer   Timer
 }
 
@@ -160,7 +160,8 @@ func (r *Retryer) Do(ctx context.Context, operation func(attempt int) error) err
 		}
 
 		// Calculate delay with backoff strategy
-		delay := r.cfg.backoff.nextDelay(r.attempt)
+		// The backoff manages its own internal state
+		delay := r.cfg.backoff.nextDelay()
 
 		if r.cfg.InitialDelay {
 			// Wait for the delay or context cancellation
@@ -202,4 +203,38 @@ func (r *Retryer) Do(ctx context.Context, operation func(attempt int) error) err
 // Attempt returns the current attempt number (0-indexed).
 func (r *Retryer) Attempt() int {
 	return r.attempt
+}
+
+// Reset resets the backoff state to the initial delay.
+// Use this when you've determined the system is healthy and future errors
+// should start from the minimum backoff.
+//
+// This is useful for infinite retry loops where a long-running stable connection
+// indicates system health. For example, after successfully establishing a watch
+// that remains stable for some time, you can reset the backoff so that if a new
+// error occurs later, it starts with minimal delay rather than a large backoff.
+//
+// Note: Reset only affects the backoff calculation. The attempt counter returned
+// by Attempt() is never reset and continues to increment monotonically.
+//
+// Example:
+//
+//	r := retry.New(500*time.Millisecond, 30*time.Second)
+//	err := r.Do(ctx, func(attempt int) error {
+//	    watcher, err := establishWatch()
+//	    if err != nil {
+//	        return err
+//	    }
+//
+//	    // Start a timer to reset backoff after watch is stable
+//	    resetTimer := time.AfterFunc(30*time.Second, func() {
+//	        r.Reset() // Reset if watch stays healthy for 30s
+//	    })
+//	    defer resetTimer.Stop()
+//
+//	    // Run the watch loop
+//	    return runWatchLoop(watcher)
+//	})
+func (r *Retryer) Reset() {
+	r.cfg.backoff.reset()
 }

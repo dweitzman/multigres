@@ -93,6 +93,14 @@ func (pd *PoolerDiscovery) Start() {
 			// Process initial values
 			pd.processInitialPoolers(initial)
 
+			// Reset backoff after watch has been stable for 30s
+			// This ensures that if an error occurs after a long period of stability,
+			// we retry quickly rather than with a large backoff
+			resetTimer := time.AfterFunc(30*time.Second, func() {
+				r.Reset()
+			})
+			defer resetTimer.Stop()
+
 			// Process changes as they come in
 			for {
 				select {

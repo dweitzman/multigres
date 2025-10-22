@@ -42,18 +42,32 @@ func (f *fakeTimer) After(d time.Duration) <-chan time.Time {
 // This allows retry tests to focus on orchestration without depending on
 // specific backoff calculations.
 type fakeBackoff struct {
-	delays []time.Duration
+	delays       []time.Duration
+	attempt      int
+	nextDelayNum int   // Count of nextDelay() calls
+	resetsAt     []int // Track after which nextDelay call reset() was called
 }
 
-func (f *fakeBackoff) nextDelay(attempt int) time.Duration {
-	if attempt < len(f.delays) {
-		return f.delays[attempt]
+func (f *fakeBackoff) nextDelay() time.Duration {
+	var delay time.Duration
+	if f.attempt < len(f.delays) {
+		delay = f.delays[f.attempt]
+	} else if len(f.delays) > 0 {
+		// Return the last delay for attempts beyond the predetermined list
+		delay = f.delays[len(f.delays)-1]
+	} else {
+		// Default fallback
+		delay = 1 * time.Second
 	}
-	// Return the last delay for attempts beyond the predetermined list
-	if len(f.delays) > 0 {
-		return f.delays[len(f.delays)-1]
-	}
-	return 1 * time.Second // Default fallback
+	f.attempt++
+	f.nextDelayNum++
+	return delay
+}
+
+func (f *fakeBackoff) reset() {
+	// Record that reset was called after this many nextDelay() calls
+	f.resetsAt = append(f.resetsAt, f.nextDelayNum)
+	f.attempt = 0
 }
 
 // withBackoff is a test-only option to set a custom backoff strategy.
@@ -85,14 +99,14 @@ func runRetryUntilAttempt(t *testing.T, r *Retryer, maxAttempts int) int {
 // This is useful for testing retry orchestration logic without depending on
 // specific backoff calculations. No longer needs baseDelay/maxDelay since
 // fakeBackoff manages its own delays.
-func newRetryerWithFakeBackoff(delays []time.Duration, opts ...Option) (*Retryer, *fakeTimer) {
+func newRetryerWithFakeBackoff(delays []time.Duration, opts ...Option) (*Retryer, *fakeTimer, *fakeBackoff) {
 	fb := &fakeBackoff{delays: delays}
 	allOpts := append([]Option{withBackoff(fb)}, opts...)
 	// Use dummy values for baseDelay/maxDelay - they're only used for validation
 	r := New(1*time.Millisecond, 1*time.Minute, allOpts...)
 	ft := &fakeTimer{}
 	r.timer = ft
-	return r, ft
+	return r, ft, fb
 }
 
 func TestNew_CreatesRetryer(t *testing.T) {
@@ -104,7 +118,7 @@ func TestNew_CreatesRetryer(t *testing.T) {
 }
 
 func TestRetryer_Success_FirstAttempt(t *testing.T) {
-	r, ft := newRetryerWithFakeBackoff([]time.Duration{10 * time.Millisecond})
+	r, ft, _ := newRetryerWithFakeBackoff([]time.Duration{10 * time.Millisecond})
 
 	attempts := 0
 	err := r.Do(context.Background(), func(attempt int) error {
@@ -120,7 +134,7 @@ func TestRetryer_Success_FirstAttempt(t *testing.T) {
 
 func TestRetryer_Success_AfterRetries(t *testing.T) {
 	delays := []time.Duration{5 * time.Millisecond, 10 * time.Millisecond, 15 * time.Millisecond}
-	r, ft := newRetryerWithFakeBackoff(delays)
+	r, ft, _ := newRetryerWithFakeBackoff(delays)
 
 	attempts := 0
 	err := r.Do(context.Background(), func(attempt int) error {
@@ -151,7 +165,7 @@ func TestRetryer_AppliesBackoffDelays(t *testing.T) {
 		80 * time.Millisecond,
 		100 * time.Millisecond,
 	}
-	r, ft := newRetryerWithFakeBackoff(customDelays)
+	r, ft, _ := newRetryerWithFakeBackoff(customDelays)
 
 	attempts := runRetryUntilAttempt(t, r, 5)
 
@@ -163,7 +177,7 @@ func TestRetryer_AppliesBackoffDelays(t *testing.T) {
 
 func TestRetryer_InitialDelay(t *testing.T) {
 	delays := []time.Duration{10 * time.Millisecond, 20 * time.Millisecond, 40 * time.Millisecond}
-	r, ft := newRetryerWithFakeBackoff(delays, WithInitialDelay())
+	r, ft, _ := newRetryerWithFakeBackoff(delays, WithInitialDelay())
 
 	attempts := 0
 	err := r.Do(context.Background(), func(attempt int) error {
@@ -206,7 +220,7 @@ func TestRetryer_ContextCancellation(t *testing.T) {
 
 func TestRetryer_ContextTimeoutBeforeAttempt(t *testing.T) {
 	delays := []time.Duration{10 * time.Millisecond}
-	r, ft := newRetryerWithFakeBackoff(delays)
+	r, ft, _ := newRetryerWithFakeBackoff(delays)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	cancel()
@@ -225,7 +239,7 @@ func TestRetryer_ContextTimeoutBeforeAttempt(t *testing.T) {
 
 func TestRetryer_ContextTimeoutDuringBackoff(t *testing.T) {
 	delays := []time.Duration{10 * time.Millisecond}
-	r, ft := newRetryerWithFakeBackoff(delays)
+	r, ft, _ := newRetryerWithFakeBackoff(delays)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
 	defer cancel()
@@ -247,7 +261,7 @@ func TestRetryer_ContextTimeoutDuringBackoff(t *testing.T) {
 
 func TestRetryer_NonRetryableStopsRetries(t *testing.T) {
 	delays := []time.Duration{10 * time.Millisecond, 20 * time.Millisecond}
-	r, ft := newRetryerWithFakeBackoff(delays)
+	r, ft, _ := newRetryerWithFakeBackoff(delays)
 
 	attempts := 0
 	underlyingErr := errors.New("unrecoverable error")
@@ -272,7 +286,7 @@ func TestRetryer_NonRetryableStopsRetries(t *testing.T) {
 
 func TestRetryer_NonRetryableWithNilError(t *testing.T) {
 	delays := []time.Duration{10 * time.Millisecond}
-	r, ft := newRetryerWithFakeBackoff(delays)
+	r, ft, _ := newRetryerWithFakeBackoff(delays)
 
 	attempts := 0
 	err := r.Do(context.Background(), func(attempt int) error {
@@ -409,4 +423,40 @@ func Example_withTimeout() {
 	if errors.Is(err, context.DeadlineExceeded) {
 		// Timeout reached
 	}
+}
+
+// TestRetryer_Reset tests that Reset() resets the backoff state.
+func TestRetryer_Reset(t *testing.T) {
+	delays := []time.Duration{10 * time.Millisecond, 20 * time.Millisecond, 40 * time.Millisecond}
+	r, ft, fb := newRetryerWithFakeBackoff(delays)
+
+	attempts := 0
+	err := r.Do(context.Background(), func(attempt int) error {
+		assert.Equal(t, attempts, attempt)
+
+		attempts++
+		if attempts <= 2 {
+			return errors.New("error") // Build up backoff
+		}
+		if attempts == 3 {
+			r.Reset()
+			return errors.New("error after reset")
+		}
+
+		return nil // Success
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, 4, attempts)
+
+	// Verify delays: 10ms, 20ms, 40ms (no delay after success)
+	require.Len(t, ft.delays, 3)
+	assert.Equal(t, delays[0], ft.delays[0])
+	assert.Equal(t, delays[1], ft.delays[1])
+	assert.Equal(t, delays[2], ft.delays[2])
+
+	// Verify reset was called after 3rd nextDelay()
+	// (nextDelay for attempt 1, 2, and 3 - then reset is called during attempt 3)
+	require.Len(t, fb.resetsAt, 1)
+	assert.Equal(t, 3, fb.resetsAt[0])
 }

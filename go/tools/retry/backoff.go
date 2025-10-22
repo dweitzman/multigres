@@ -17,15 +17,24 @@ package retry
 import (
 	"math"
 	"math/rand/v2"
+	"sync"
 	"time"
 )
 
-// backoff calculates retry delays based on attempt numbers.
+// backoff calculates retry delays and manages backoff state.
 // Implementations determine the backoff strategy (exponential, linear, constant, etc.).
-// Each strategy manages its own configuration internally.
+// Each strategy manages its own configuration and state internally.
+//
+// Implementations must be thread-safe as reset() may be called from a different
+// goroutine than nextDelay().
 type backoff interface {
-	// nextDelay calculates the delay for a given attempt number (0-indexed).
-	nextDelay(attempt int) time.Duration
+	// nextDelay calculates and returns the next delay, then advances the internal state.
+	// Must be thread-safe.
+	nextDelay() time.Duration
+
+	// reset resets the backoff state to initial values.
+	// Must be thread-safe and safe to call concurrently with nextDelay().
+	reset()
 }
 
 // exponentialFullJitterBackoff implements exponential backoff with Full Jitter.
@@ -53,6 +62,9 @@ type exponentialFullJitterBackoff struct {
 	maxDelay      time.Duration
 	rng           *rand.Rand
 	disableJitter bool // For deterministic testing
+
+	mu      sync.Mutex
+	attempt int // Current attempt number (0-indexed), protected by mu
 }
 
 // newExponentialFullJitterBackoff creates a new exponential backoff with full jitter.
@@ -82,10 +94,17 @@ func newExponentialBackoffNoJitter(baseDelay, maxDelay time.Duration) *exponenti
 	}
 }
 
-// nextDelay calculates the next delay using exponential backoff with full jitter.
-func (e *exponentialFullJitterBackoff) nextDelay(attempt int) time.Duration {
+// nextDelay calculates the next delay using exponential backoff with full jitter,
+// then increments the internal attempt counter.
+// Thread-safe: can be called concurrently with reset().
+func (e *exponentialFullJitterBackoff) nextDelay() time.Duration {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	// Exponential backoff: baseDelay * 2^attempt
 	// Use bit shifting for precise integer math and overflow protection
+
+	attempt := e.attempt
 
 	// Cap attempt count to prevent overflow (shifting more than 62 bits would overflow int64)
 	if attempt > 62 {
@@ -111,13 +130,25 @@ func (e *exponentialFullJitterBackoff) nextDelay(attempt int) time.Duration {
 
 	// Apply Full Jitter: randomize between 0 and computed delay
 	// This prevents synchronized retries by spreading retries across time
+	// Note: rand.Rand is not thread-safe, so we call it while holding the mutex
 	if !e.disableJitter {
 		// random_between(0, delay)
 		// rng.Float64() returns [0.0, 1.0)
 		delay = time.Duration(float64(delay) * e.rng.Float64())
 	}
 
+	// Increment attempt counter for next call
+	e.attempt++
+
 	return delay
+}
+
+// reset resets the backoff state to initial values.
+// Thread-safe: can be called concurrently with nextDelay().
+func (e *exponentialFullJitterBackoff) reset() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.attempt = 0
 }
 
 // Future backoff strategies to consider implementing:

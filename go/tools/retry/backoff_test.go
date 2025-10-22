@@ -36,15 +36,34 @@ var (
 	seed2x2 = testSeed{2, 2}
 )
 
+// multiDelay calls nextDelay() on the backoff n+1 times to advance to attempt n,
+// returning the delay for attempt n.
+func multiDelay(b backoff, attempt int) time.Duration {
+	var delay time.Duration
+	for i := 0; i <= attempt; i++ {
+		delay = b.nextDelay()
+	}
+	return delay
+}
+
 // Jitter test values: expected delays after applying jitter with specific seeds.
-// Format: jitter_<seed>_<base_delay_in_ms> = actual nanoseconds result
+// Format: jitter_<seed>_<attempt>_<base_delay_in_ms> = actual nanoseconds result
 // This makes tests deterministic and easy to verify.
+// Note: For attempt > 0, the RNG state advances with each call, producing different values.
 const (
-	// seed1x1 jitter results (fraction ≈ 0.34028597866062337829)
+	// seed1x1 jitter results for attempt 0 (first call, fraction ≈ 0.34028597866062337829)
 	jitter_seed1x1_10ms  = 3402859 * time.Nanosecond  // 10ms * 0.340286 ≈ 3.403ms
 	jitter_seed1x1_100ms = 34028597 * time.Nanosecond // 100ms * 0.340286 ≈ 34.029ms
 	jitter_seed1x1_150ms = 51042896 * time.Nanosecond // 150ms * 0.340286 ≈ 51.043ms
-	jitter_seed1x1_200ms = 68057195 * time.Nanosecond // 200ms * 0.340286 ≈ 68.057ms
+
+	// seed1x1 jitter results for attempt 1 (second call, RNG advanced once)
+	jitter_seed1x1_attempt1_200ms = 181991587 * time.Nanosecond // 200ms * 0.909958 ≈ 181.992ms
+
+	// seed1x1 jitter results for attempt 2 (third call, RNG advanced twice)
+	jitter_seed1x1_attempt2_200ms = 165756971 * time.Nanosecond // 200ms * 0.828785 ≈ 165.757ms
+
+	// seed1x1 jitter results for attempt 5 (sixth call, RNG advanced 5 times)
+	jitter_seed1x1_attempt5_150ms = 142925804 * time.Nanosecond // 150ms * 0.952839 ≈ 142.926ms
 
 	// seed2x2 jitter results (fraction ≈ 0.07829106)
 	jitter_seed2x2_100ms = 7829106 * time.Nanosecond // 100ms * 0.078291 ≈ 7.829ms
@@ -117,7 +136,7 @@ func TestCalculateDelay(t *testing.T) {
 			attempt:    1,
 			withJitter: true,
 			seed:       seed1x1,
-			expected:   jitter_seed1x1_200ms, // 100ms * 2^1 = 200ms base
+			expected:   jitter_seed1x1_attempt1_200ms, // 100ms * 2^1 = 200ms base
 		},
 		{
 			name:       "jitter on third attempt",
@@ -126,7 +145,7 @@ func TestCalculateDelay(t *testing.T) {
 			attempt:    2,
 			withJitter: true,
 			seed:       seed1x1,
-			expected:   jitter_seed1x1_200ms, // 50ms * 2^2 = 200ms base
+			expected:   jitter_seed1x1_attempt2_200ms, // 50ms * 2^2 = 200ms base
 		},
 		{
 			name:       "jitter with max delay cap",
@@ -135,7 +154,7 @@ func TestCalculateDelay(t *testing.T) {
 			attempt:    5,
 			withJitter: true,
 			seed:       seed1x1,
-			expected:   jitter_seed1x1_150ms, // 100ms * 2^5 = 3200ms, capped to 150ms
+			expected:   jitter_seed1x1_attempt5_150ms, // 100ms * 2^5 = 3200ms, capped to 150ms
 		},
 		{
 			name:       "jitter with small delays",
@@ -157,7 +176,7 @@ func TestCalculateDelay(t *testing.T) {
 				b = newExponentialBackoffNoJitter(tt.baseDelay, tt.maxDelay)
 			}
 
-			delay := b.nextDelay(tt.attempt)
+			delay := multiDelay(b, tt.attempt)
 			assert.Equal(t, tt.expected, delay)
 		})
 	}
@@ -213,11 +232,10 @@ func TestCalculateDelay_ExtremeAttemptCounts(t *testing.T) {
 			b := newExponentialBackoffNoJitter(tt.baseDelay, tt.maxDelay)
 
 			// Should not panic even with extreme values
+			var delay time.Duration
 			assert.NotPanics(t, func() {
-				_ = b.nextDelay(tt.attempts)
+				delay = multiDelay(b, tt.attempts)
 			})
-
-			delay := b.nextDelay(tt.attempts)
 
 			// Should match expected delay
 			assert.Equal(t, tt.expectedDelay, delay)
@@ -271,9 +289,33 @@ func TestCalculateDelay_JitterVariesAroundTarget(t *testing.T) {
 			// Use default backoff with jitter enabled
 			b := newExponentialFullJitterBackoff(tt.baseDelay, tt.maxDelay)
 
-			delay := b.nextDelay(tt.attempts)
+			delay := multiDelay(b, tt.attempts)
 			assert.GreaterOrEqual(t, delay, tt.expectedMin)
 			assert.LessOrEqual(t, delay, tt.expectedMax)
 		})
 	}
+}
+
+// TestBackoff_Reset tests that backoff.reset() properly resets internal state.
+func TestBackoff_Reset(t *testing.T) {
+	b := newExponentialBackoffNoJitter(10*time.Millisecond, time.Minute)
+
+	// Get first delay
+	delay1 := b.nextDelay()
+	assert.Equal(t, 10*time.Millisecond, delay1)
+
+	// Get second delay (should double)
+	delay2 := b.nextDelay()
+	assert.Equal(t, 20*time.Millisecond, delay2)
+
+	// Reset backoff
+	b.reset()
+
+	// Get delay after reset (should be back to initial)
+	delay3 := b.nextDelay()
+	assert.Equal(t, 10*time.Millisecond, delay3)
+
+	// Get next delay (should double from initial again)
+	delay4 := b.nextDelay()
+	assert.Equal(t, 20*time.Millisecond, delay4)
 }
