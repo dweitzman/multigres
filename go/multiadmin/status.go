@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/multigres/multigres/go/servenv"
 	"github.com/multigres/multigres/go/web"
 )
 
@@ -38,36 +37,50 @@ type Status struct {
 	Links []Link `json:"links"`
 }
 
-var serverStatus = Status{
-	Title: "Multiadmin",
-	Links: []Link{
-		{"Config", "Server configuration details", "/config"},
-		{"Live", "URL for liveness check", "/live"},
-		{"Ready", "URL for readiness check", "/ready"},
-	},
-}
-
-func init() {
-	servenv.HTTPHandleFunc("/", handleIndex)
-	servenv.HTTPHandleFunc("/ready", handleReady)
-}
-
 // handleIndex serves the index page
-func handleIndex(w http.ResponseWriter, r *http.Request) {
-	err := web.Templates.ExecuteTemplate(w, "admin_index.html", serverStatus)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to execute template: %v", err), http.StatusInternalServerError)
-		return
+func (ma *MultiAdmin) getHandleIndex() func(http.ResponseWriter, *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		err := web.Templates.ExecuteTemplate(w, "admin_index.html", ma.serverStatus)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to execute template: %v", err), http.StatusInternalServerError)
+			return
+		}
 	}
 }
 
-func handleReady(w http.ResponseWriter, r *http.Request) {
-	isReady := (len(serverStatus.InitError) == 0)
-	if !isReady {
-		w.WriteHeader(http.StatusServiceUnavailable)
+// handleServices discovers and displays all cluster services
+func (ma *MultiAdmin) getHandleServices() func(http.ResponseWriter, *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+
+		// Discover services from topology (may be slow, that's okay for this endpoint)
+		services, err := ma.DiscoverServices(ctx)
+		if err != nil {
+			// Show error but still try to render what we have
+			if services == nil {
+				services = &ServiceList{
+					Error: fmt.Sprintf("Failed to discover services: %v", err),
+				}
+			}
+		}
+
+		// Render services template
+		if err := web.Templates.ExecuteTemplate(w, "admin_services.html", services); err != nil {
+			http.Error(w, fmt.Sprintf("Failed to execute template: %v", err), http.StatusInternalServerError)
+			return
+		}
 	}
-	if err := web.Templates.ExecuteTemplate(w, "isok.html", isReady); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to execute template: %v", err), http.StatusInternalServerError)
-		return
+}
+
+func (ma *MultiAdmin) getHandleReady() func(http.ResponseWriter, *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		isReady := (len(ma.serverStatus.InitError) == 0)
+		if !isReady {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+		if err := web.Templates.ExecuteTemplate(w, "isok.html", isReady); err != nil {
+			http.Error(w, fmt.Sprintf("Failed to execute template: %v", err), http.StatusInternalServerError)
+			return
+		}
 	}
 }
