@@ -70,7 +70,7 @@ type MultiPoolerManager struct {
 	multipooler     *topo.MultiPoolerInfo
 	state           ManagerState
 	stateError      error
-	consensusTerm   *pgctldpb.ConsensusTerm
+	consensusTerm   *pgctldpb.ConsensusTerm // Mutations guarded by actionSema; reads guarded by mu
 	topoLoaded      bool
 	consensusLoaded bool
 	ctx             context.Context
@@ -111,6 +111,24 @@ func (pm *MultiPoolerManager) lock(ctx context.Context) error {
 // unlock is the symmetrical action to lock.
 func (pm *MultiPoolerManager) unlock() {
 	pm.actionSema.Release(1)
+}
+
+// assertActionLockHeld is a best-effort check that the actionSema lock is held.
+// This helps catch bugs where methods requiring the action lock are called without it.
+//
+// IMPORTANT LIMITATION: This check is not perfect. It cannot distinguish between:
+//   - The caller holding the lock (correct)
+//   - Another goroutine holding the lock (incorrect, but undetectable)
+//
+// Despite this limitation, this assertion catches most common bugs during development
+// and testing when methods are called without any lock held at all.
+func (pm *MultiPoolerManager) assertActionLockHeld() {
+	if pm.actionSema.TryAcquire(1) {
+		// We were able to acquire the lock, which means it wasn't held
+		pm.actionSema.Release(1)
+		panic("BUG: actionSema must be held by caller")
+	}
+	// TryAcquire failed, so the lock is held (hopefully by our caller)
 }
 
 // connectDB establishes a connection to PostgreSQL (reuses the shared logic)
@@ -478,11 +496,15 @@ func (pm *MultiPoolerManager) IsReadOnly(ctx context.Context) (bool, error) {
 	return false, mterrors.New(mtrpcpb.Code_UNIMPLEMENTED, "method IsReadOnly not implemented")
 }
 
-// validateAndUpdateTerm validates the request term against the current term following Consensus rules.
+// validateAndUpdateTermLockedAction validates the request term against the current term following Consensus rules.
 // Returns an error if the request term is stale (less than current term).
 // If the request term is higher, it updates the term in pgctld and the cache.
 // If force is true, validation is skipped.
-func (pm *MultiPoolerManager) validateAndUpdateTerm(ctx context.Context, requestTerm int64, force bool) error {
+//
+// REQUIRES: actionSema must be held by the caller.
+func (pm *MultiPoolerManager) validateAndUpdateTermLockedAction(ctx context.Context, requestTerm int64, force bool) error {
+	pm.assertActionLockHeld()
+
 	if force {
 		return nil // Skip validation if force is set
 	}
@@ -673,7 +695,7 @@ func (pm *MultiPoolerManager) SetPrimaryConnInfo(ctx context.Context, host strin
 		"force", force)
 
 	// Validate and update consensus term following consensus rules
-	if err := pm.validateAndUpdateTerm(ctx, currentTerm, force); err != nil {
+	if err := pm.validateAndUpdateTermLockedAction(ctx, currentTerm, force); err != nil {
 		return err
 	}
 
@@ -930,8 +952,12 @@ func (pm *MultiPoolerManager) ResetReplication(ctx context.Context) error {
 	return nil
 }
 
-// setSynchronousCommit sets the PostgreSQL synchronous_commit level
-func (pm *MultiPoolerManager) setSynchronousCommit(ctx context.Context, synchronousCommit multipoolermanagerdata.SynchronousCommitLevel) error {
+// setSynchronousCommitLockedAction sets the PostgreSQL synchronous_commit level
+//
+// REQUIRES: actionSema must be held by the caller.
+func (pm *MultiPoolerManager) setSynchronousCommitLockedAction(ctx context.Context, synchronousCommit multipoolermanagerdata.SynchronousCommitLevel) error {
+	pm.assertActionLockHeld()
+
 	// Convert enum to PostgreSQL string value
 	var syncCommitValue string
 	switch synchronousCommit {
@@ -960,7 +986,7 @@ func (pm *MultiPoolerManager) setSynchronousCommit(ctx context.Context, synchron
 	return nil
 }
 
-// setSynchronousStandbyNames builds and sets the PostgreSQL synchronous_standby_names configuration
+// setSynchronousStandbyNamesLockedAction builds and sets the PostgreSQL synchronous_standby_names configuration
 // Format: https://www.postgresql.org/docs/current/runtime-config-replication.html#GUC-SYNCHRONOUS-STANDBY-NAMES
 // Examples:
 //
@@ -969,7 +995,10 @@ func (pm *MultiPoolerManager) setSynchronousCommit(ctx context.Context, synchron
 //
 // Note: Use '*' to match all connected standbys, or specify explicit standby application_name values
 // Application names are generated from multipooler IDs using the shared generateApplicationName helper
-func (pm *MultiPoolerManager) setSynchronousStandbyNames(ctx context.Context, synchronousMethod multipoolermanagerdata.SynchronousMethod, numSync int32, standbyIDs []*clustermetadatapb.ID) error {
+//
+// REQUIRES: actionSema must be held by the caller.
+func (pm *MultiPoolerManager) setSynchronousStandbyNamesLockedAction(ctx context.Context, synchronousMethod multipoolermanagerdata.SynchronousMethod, numSync int32, standbyIDs []*clustermetadatapb.ID) error {
+	pm.assertActionLockHeld()
 	if len(standbyIDs) == 0 {
 		return nil
 	}
@@ -1085,12 +1114,12 @@ func (pm *MultiPoolerManager) ConfigureSynchronousReplication(ctx context.Contex
 	}
 
 	// Set synchronous_commit level
-	if err := pm.setSynchronousCommit(ctx, synchronousCommit); err != nil {
+	if err := pm.setSynchronousCommitLockedAction(ctx, synchronousCommit); err != nil {
 		return err
 	}
 
 	// Build and set synchronous_standby_names
-	if err := pm.setSynchronousStandbyNames(ctx, synchronousMethod, numSync, standbyIDs); err != nil {
+	if err := pm.setSynchronousStandbyNamesLockedAction(ctx, synchronousMethod, numSync, standbyIDs); err != nil {
 		return err
 	}
 
