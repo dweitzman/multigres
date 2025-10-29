@@ -24,7 +24,7 @@ export ADDLICENSE_VER
 ETCD_VER = v3.6.4
 export ETCD_VER
 
-.PHONY: all build build-all clean install test proto tools parser
+.PHONY: all build build-all clean install test proto tools parser test-integration-local
 
 # Default target
 all: build
@@ -117,3 +117,22 @@ validate-generated-files: clean build-all
 	else \
 		echo "Generated files are up-to-date."; \
 	fi
+
+# Run integration tests locally in Docker (mimics GitHub Actions workflow)
+# Usage:
+#   make test-integration-local
+#   make test-integration-local GO_TEST_PACKAGES=./go/test/endtoend
+#   make test-integration-local GO_TEST_FLAGS="-run TestSpecificTest -v"
+#   make test-integration-local GO_TEST_PACKAGES=./go/test/endtoend GO_TEST_FLAGS="-run TestMyTest"
+GO_TEST_PACKAGES ?= ./...
+GO_TEST_FLAGS ?=
+
+test-integration-local:
+	@echo "Building integration test Docker image..."
+	docker build --platform linux/amd64 -f Dockerfile.integration-test -t multigres-integration-test .
+	@echo "Running integration tests in Docker..."
+	@echo "Testing: $(GO_TEST_PACKAGES) $(GO_TEST_FLAGS)"
+	docker run --platform linux/amd64 --rm \
+		-e GO_TEST_PACKAGES="$(GO_TEST_PACKAGES)" \
+		-e GO_TEST_FLAGS="$(GO_TEST_FLAGS)" \
+		multigres-integration-test

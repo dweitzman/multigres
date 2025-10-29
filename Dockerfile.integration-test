@@ -1,0 +1,56 @@
+# Copyright 2025 Supabase, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Use the same Postgres image as GitHub Actions
+FROM supabase/postgres:17.6.1.029
+
+# Install Go 1.25.0
+RUN apt-get update && apt-get install -y wget && \
+    wget -q https://go.dev/dl/go1.25.0.linux-amd64.tar.gz && \
+    rm -rf /usr/local/go && \
+    tar -C /usr/local -xzf go1.25.0.linux-amd64.tar.gz && \
+    rm go1.25.0.linux-amd64.tar.gz
+
+ENV PATH="/usr/local/go/bin:${PATH}"
+
+# Install etcd binary
+RUN curl -L https://github.com/etcd-io/etcd/releases/download/v3.5.0/etcd-v3.5.0-linux-amd64.tar.gz | tar xz && \
+    cp etcd-v3.5.0-linux-amd64/etcd /usr/local/bin/ && \
+    rm -rf etcd-v3.5.0-linux-amd64
+
+# Set working directory
+WORKDIR /workspace
+
+# Copy go.mod and go.sum first for better caching
+COPY go.mod go.sum ./
+
+# Download dependencies (this layer will be cached)
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the project (this layer will be cached unless source changes)
+RUN make build
+
+# PostgreSQL binaries path will be set dynamically in scripts
+
+# Set PostgreSQL connection timeout
+ENV PGCONNECT_TIMEOUT=5
+
+# Make scripts executable
+RUN chmod +x /workspace/scripts/*.sh
+
+# Default command runs the integration tests
+CMD ["/workspace/scripts/run-integration-tests.sh"]
