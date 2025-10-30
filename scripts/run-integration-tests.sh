@@ -20,23 +20,25 @@ set -e
 PGBIN="/usr/lib/postgresql/$(ls /usr/lib/postgresql/ | head -1)/bin"
 export PATH="$PGBIN:$PATH"
 
-# Setup PostgreSQL
+# Setup PostgreSQL (needs to run as root)
 /workspace/scripts/setup-postgres.sh
 
 # Set defaults if not provided
 GO_TEST_PACKAGES=${GO_TEST_PACKAGES:-./...}
 GO_TEST_FLAGS=${GO_TEST_FLAGS:-}
 
-# Run integration tests
+# Run integration tests as postgres user (to avoid initdb root error)
 echo "Running integration tests..."
 echo "Packages: $GO_TEST_PACKAGES"
 echo "Flags: $GO_TEST_FLAGS"
+# Use 'su' without '-' to preserve environment, and explicitly set needed paths
+# Use postgres user's actual home directory instead of /tmp
 # shellcheck disable=SC2086
-go test -json -v $GO_TEST_FLAGS $GO_TEST_PACKAGES | go tool tparse -follow
-TEST_EXIT=$?
+su postgres -c "cd /workspace && PATH=/usr/local/go/bin:$PGBIN:\$PATH go test -json -v $GO_TEST_FLAGS $GO_TEST_PACKAGES" 2>&1 | go tool tparse -follow
+TEST_EXIT=${PIPESTATUS[0]}
 
 # Stop PostgreSQL
 echo "Stopping PostgreSQL..."
 su - postgres -c "PATH=$PATH pg_ctl -D /etc/postgresql stop" || true
 
-exit $TEST_EXIT
+exit "$TEST_EXIT"

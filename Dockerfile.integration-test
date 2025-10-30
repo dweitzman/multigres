@@ -52,5 +52,8 @@ ENV PGCONNECT_TIMEOUT=5
 # Make scripts executable
 RUN chmod +x /workspace/scripts/*.sh
 
-# Default command runs the integration tests
+# Change ownership of workspace to postgres user so tests can run as non-root
+RUN chown -R postgres:postgres /workspace
+
+# Default command runs the integration tests (stays as root to start PostgreSQL, then switches user for tests)
 CMD ["/workspace/scripts/run-integration-tests.sh"]

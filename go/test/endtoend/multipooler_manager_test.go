@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1708,6 +1709,145 @@ func TestStopReplicationAndGetStatus(t *testing.T) {
 	})
 }
 
+// Global counter for reload sentinel values
+var reloadSentinelCounter atomic.Int64
+
+// sentinelCleanupRegistered tracks which tests have registered sentinel cleanup
+var sentinelCleanupRegistered = struct {
+	sync.Mutex
+	tests map[*testing.T]bool
+}{tests: make(map[*testing.T]bool)}
+
+// waitForPostgresConfigReload waits for pg_reload_conf() to complete by using a custom GUC sentinel.
+// It sets multigres.test_reload_sentinel to an incrementing value, triggers reload, and waits for it.
+// Automatically registers cleanup on first call per test to completely clear the sentinel.
+func waitForPostgresConfigReload(t *testing.T, pooler *ProcessInstance) {
+	t.Helper()
+
+	addr := fmt.Sprintf("localhost:%d", pooler.GrpcPort)
+
+	// Register cleanup once per test to completely clear sentinel at end
+	sentinelCleanupRegistered.Lock()
+	if !sentinelCleanupRegistered.tests[t] {
+		sentinelCleanupRegistered.tests[t] = true
+		sentinelCleanupRegistered.Unlock()
+
+		t.Cleanup(func() {
+			// Completely clear sentinel value (RESET removes it entirely)
+			client, err := NewMultiPoolerTestClient(addr)
+			if err != nil {
+				t.Logf("Cleanup: Failed to create client for sentinel reset: %v", err)
+				return
+			}
+			defer client.Close()
+
+			_, _ = client.ExecuteQuery(context.Background(), "ALTER SYSTEM RESET multigres.test_reload_sentinel", 1)
+			_, _ = client.ExecuteQuery(context.Background(), "SELECT pg_reload_conf()", 1)
+
+			// Remove from tracking map
+			sentinelCleanupRegistered.Lock()
+			delete(sentinelCleanupRegistered.tests, t)
+			sentinelCleanupRegistered.Unlock()
+		})
+	} else {
+		sentinelCleanupRegistered.Unlock()
+	}
+
+	// Get next sentinel value (atomically increment global counter)
+	sentinelValue := reloadSentinelCounter.Add(1)
+
+	client, err := NewMultiPoolerTestClient(addr)
+	require.NoError(t, err, "Failed to create client for reload wait")
+	defer client.Close()
+
+	// Set sentinel value
+	_, err = client.ExecuteQuery(context.Background(),
+		fmt.Sprintf("ALTER SYSTEM SET multigres.test_reload_sentinel = '%d'", sentinelValue), 1)
+	require.NoError(t, err, "Failed to set sentinel value")
+
+	// Trigger reload
+	_, err = client.ExecuteQuery(context.Background(), "SELECT pg_reload_conf()", 1)
+	require.NoError(t, err, "Failed to reload config")
+
+	// Wait for sentinel value to appear (proving reload completed)
+	t.Logf("Waiting for config reload (sentinel: %d)...", sentinelValue)
+	require.Eventually(t, func() bool {
+		tmpClient, clientErr := NewMultiPoolerTestClient(addr)
+		if clientErr != nil {
+			return false
+		}
+		defer tmpClient.Close()
+
+		queryResp, queryErr := tmpClient.ExecuteQuery(context.Background(), "SHOW multigres.test_reload_sentinel", 1)
+		if queryErr != nil || len(queryResp.Rows) == 0 {
+			return false
+		}
+		valueStr := string(queryResp.Rows[0].Values[0])
+		value, parseErr := strconv.Atoi(valueStr)
+		return parseErr == nil && value >= int(sentinelValue)
+	}, 5*time.Second, 100*time.Millisecond, "Config reload should complete")
+}
+
+// setupPostgresConfigCleanup captures current PostgreSQL configuration parameters
+// and registers a cleanup that restores them after pg_reload_conf() completes.
+// This prevents race conditions between tests that modify PostgreSQL configuration.
+//
+// Usage: setupPostgresConfigCleanup(t, setup.PrimaryMultipooler, []string{"synchronous_commit", "synchronous_standby_names"})
+func setupPostgresConfigCleanup(t *testing.T, pooler *ProcessInstance, configParams []string) {
+	t.Helper()
+
+	// Build address from pooler instance
+	addr := fmt.Sprintf("localhost:%d", pooler.GrpcPort)
+
+	// Create a client to query current values
+	client, err := NewMultiPoolerTestClient(addr)
+	require.NoError(t, err, "Failed to create client for config capture")
+	defer client.Close()
+
+	// Capture current configuration values before test modifications
+	originalValues := make(map[string]string)
+	for _, paramName := range configParams {
+		resp, err := client.ExecuteQuery(context.Background(), fmt.Sprintf("SHOW %s", paramName), 1)
+		require.NoError(t, err, "Failed to query %s", paramName)
+		require.Len(t, resp.Rows, 1)
+		originalValues[paramName] = string(resp.Rows[0].Values[0])
+		t.Logf("Captured original config: %s='%s'", paramName, originalValues[paramName])
+	}
+
+	// Register cleanup that restores config and waits for reload to complete
+	t.Cleanup(func() {
+		t.Log("Cleanup: Restoring PostgreSQL configuration parameters...")
+
+		// Create a new client for cleanup
+		cleanupClient, err := NewMultiPoolerTestClient(addr)
+		if err != nil {
+			t.Logf("Cleanup: Failed to create client: %v", err)
+			return
+		}
+		defer cleanupClient.Close()
+
+		// Restore each parameter to its original value
+		for paramName, originalValue := range originalValues {
+			var query string
+			if originalValue == "" {
+				// If original was empty, use RESET to clear it
+				query = fmt.Sprintf("ALTER SYSTEM RESET %s", paramName)
+			} else {
+				// Otherwise, set it back to the original value
+				query = fmt.Sprintf("ALTER SYSTEM SET %s = '%s'", paramName, originalValue)
+			}
+			_, err := cleanupClient.ExecuteQuery(context.Background(), query, 1)
+			require.NoError(t, err, "Failed to restore %s", paramName)
+			t.Logf("Cleanup: Restored %s to '%s'", paramName, originalValue)
+		}
+
+		// Wait for configuration reload to complete using sentinel
+		waitForPostgresConfigReload(t, pooler)
+
+		t.Log("Cleanup: Configuration restoration completed")
+	})
+}
+
 // TestConfigureSynchronousReplication tests the ConfigureSynchronousReplication API
 func TestConfigureSynchronousReplication(t *testing.T) {
 	if testing.Short() {
@@ -1742,6 +1882,9 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 	t.Cleanup(func() { primaryPoolerClient.Close() })
 
 	t.Run("ConfigureSynchronousReplication_Primary_Success", func(t *testing.T) {
+		// Setup config cleanup to prevent race conditions with async pg_reload_conf()
+		setupPostgresConfigCleanup(t, setup.PrimaryMultipooler, []string{"synchronous_commit", "synchronous_standby_names"})
+
 		// This test verifies that ConfigureSynchronousReplication successfully configures
 		// synchronous replication on the primary
 		t.Log("Testing ConfigureSynchronousReplication on PRIMARY...")
@@ -1762,6 +1905,9 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 		require.NoError(t, err, "ConfigureSynchronousReplication should succeed on primary")
 
 		t.Log("ConfigureSynchronousReplication completed successfully")
+
+		// Wait for pg_reload_conf() to complete before verifying
+		waitForPostgresConfigReload(t, setup.PrimaryMultipooler)
 
 		// Close the old connection and create a new one to pick up the reloaded settings
 		primaryPoolerClient.Close()
@@ -1801,6 +1947,9 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 	})
 
 	t.Run("ConfigureSynchronousReplication_Primary_AnyMethod", func(t *testing.T) {
+		// Setup config cleanup to prevent race conditions with async pg_reload_conf()
+		setupPostgresConfigCleanup(t, setup.PrimaryMultipooler, []string{"synchronous_commit", "synchronous_standby_names"})
+
 		// This test verifies that ConfigureSynchronousReplication works with ANY method
 		t.Log("Testing ConfigureSynchronousReplication with ANY method on PRIMARY...")
 
@@ -1822,6 +1971,9 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 		require.NoError(t, err, "ConfigureSynchronousReplication should succeed on primary")
 
 		t.Log("ConfigureSynchronousReplication with ANY method completed successfully")
+
+		// Wait for pg_reload_conf() to complete before verifying
+		waitForPostgresConfigReload(t, setup.PrimaryMultipooler)
 
 		// Close the old connection and create a new one to pick up the reloaded settings
 		primaryPoolerClient.Close()
@@ -1860,6 +2012,9 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 	})
 
 	t.Run("ConfigureSynchronousReplication_AllCommitLevels", func(t *testing.T) {
+		// Setup config cleanup to prevent race conditions with async pg_reload_conf()
+		setupPostgresConfigCleanup(t, setup.PrimaryMultipooler, []string{"synchronous_commit", "synchronous_standby_names"})
+
 		// This test verifies that all SynchronousCommitLevel values work correctly
 		t.Log("Testing ConfigureSynchronousReplication with all commit levels...")
 
@@ -1904,6 +2059,9 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 
 				t.Logf("ConfigureSynchronousReplication with %s completed successfully", tc.level.String())
 
+				// Wait for pg_reload_conf() to complete before verifying
+				waitForPostgresConfigReload(t, setup.PrimaryMultipooler)
+
 				// Close and reconnect to pick up new settings
 				primaryPoolerClient.Close()
 				primaryPoolerClient, err = NewMultiPoolerTestClient(fmt.Sprintf("localhost:%d", setup.PrimaryMultipooler.GrpcPort))
@@ -1936,6 +2094,9 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 	})
 
 	t.Run("ConfigureSynchronousReplication_AllSynchronousMethods", func(t *testing.T) {
+		// Setup config cleanup to prevent race conditions with async pg_reload_conf()
+		setupPostgresConfigCleanup(t, setup.PrimaryMultipooler, []string{"synchronous_commit", "synchronous_standby_names"})
+
 		// This test verifies that FIRST and ANY methods work correctly with different num_sync values
 		t.Log("Testing ConfigureSynchronousReplication with all synchronous methods...")
 
@@ -2048,6 +2209,9 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 				require.NoError(t, err, "ConfigureSynchronousReplication should succeed for %s", tc.name)
 
 				t.Logf("ConfigureSynchronousReplication with %s completed successfully", tc.name)
+
+				// Wait for pg_reload_conf() to complete before verifying
+				waitForPostgresConfigReload(t, setup.PrimaryMultipooler)
 
 				// Close and reconnect to pick up new settings
 				primaryPoolerClient.Close()
