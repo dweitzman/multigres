@@ -189,7 +189,7 @@ func (e *Executor) executeModifyQuery(ctx context.Context, queryStr string) (*qu
 	}
 
 	// Generate command tag based on query type
-	commandTag := e.generateCommandTag(queryStr, uint64(rowsAffected))
+	commandTag := e.generateCommandTag(queryStr, rowsAffected)
 
 	return &query.QueryResult{
 		Fields:       []*query.Field{}, // No fields for modification queries
@@ -200,7 +200,7 @@ func (e *Executor) executeModifyQuery(ctx context.Context, queryStr string) (*qu
 }
 
 // generateCommandTag generates a PostgreSQL command tag for the result.
-func (e *Executor) generateCommandTag(queryStr string, rowsAffected uint64) string {
+func (e *Executor) generateCommandTag(queryStr string, rowsAffected int64) string {
 	trimmedQuery := strings.TrimSpace(strings.ToUpper(queryStr))
 
 	switch {

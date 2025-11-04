@@ -21,10 +21,16 @@ linters:
     - bodyclose
     - depguard
     - errcheck
+    - gosec
     - govet
     - ineffassign
     - staticcheck
+    # - unused
   settings:
+    gosec:
+      excludes:
+        - G404 # Our random numbers don't need to be secure
+        - G204 # Subprocesses with potential tainted input or arguments
     depguard:
       rules:
         main:
