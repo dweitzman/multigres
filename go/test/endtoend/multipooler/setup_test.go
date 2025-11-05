@@ -815,7 +815,6 @@ type cleanupOption func(*cleanupConfig)
 
 // cleanupConfig holds the configuration for test cleanup
 type cleanupConfig struct {
-	tablesToDrop     []string
 	gucsToReset      []string
 	noReplication    bool // Explicitly disable replication setup
 	pauseReplication bool // Start replication but pause WAL replay
@@ -844,13 +843,6 @@ func WithPausedReplication() cleanupOption {
 	return func(c *cleanupConfig) {
 		c.pauseReplication = true
 		c.gucsToReset = append(c.gucsToReset, "synchronous_standby_names", "synchronous_commit", "primary_conninfo")
-	}
-}
-
-// WithDropTables returns a cleanup option that registers tables to drop on cleanup
-func WithDropTables(tables ...string) cleanupOption {
-	return func(c *cleanupConfig) {
-		c.tablesToDrop = append(c.tablesToDrop, tables...)
 	}
 }
 
@@ -983,7 +975,9 @@ func validateCleanState(t *testing.T, setup *MultipoolerTestSetup) {
 //   - Pauses WAL replay: Changes stop being applied (for testing resume)
 //   - Use for tests that need to test pg_wal_replay_resume()
 //
-// Other options: WithResetGuc(), WithDropTables()
+// Other options: WithResetGuc()
+//
+// Note: All tables in the public schema are automatically dropped during cleanup.
 func setupPoolerTest(t *testing.T, setup *MultipoolerTestSetup, opts ...cleanupOption) {
 	t.Helper()
 
@@ -1149,12 +1143,22 @@ func setupPoolerTest(t *testing.T, setup *MultipoolerTestSetup, opts ...cleanupO
 			}
 		}
 
-		// Step 3: Drop tables if specified (must be last, requires working replication)
-		if len(config.tablesToDrop) > 0 && primaryPoolerClient != nil {
-			for _, table := range config.tablesToDrop {
-				_, err := primaryPoolerClient.ExecuteQuery(context.Background(), fmt.Sprintf("DROP TABLE IF EXISTS %s", table), 1)
-				if err != nil {
-					t.Logf("Warning: Failed to drop table %s in cleanup: %v", table, err)
+		// Step 3: Drop all tables in the public schema (must be last, requires working replication)
+		if primaryPoolerClient != nil {
+			// Query for all tables in the public schema
+			resp, err := primaryPoolerClient.ExecuteQuery(context.Background(), "SELECT tablename FROM pg_tables WHERE schemaname = 'public'", 1)
+			if err != nil {
+				t.Errorf("Cleanup: Failed to query for tables: %v", err)
+			} else if len(resp.Rows) > 0 {
+				// Drop each table
+				for _, row := range resp.Rows {
+					if len(row.Values) > 0 {
+						tableName := string(row.Values[0])
+						_, err := primaryPoolerClient.ExecuteQuery(context.Background(), fmt.Sprintf("DROP TABLE IF EXISTS %s CASCADE", tableName), 1)
+						if err != nil {
+							t.Errorf("Cleanup: Failed to drop table %s: %v", tableName, err)
+						}
+					}
 				}
 			}
 		}

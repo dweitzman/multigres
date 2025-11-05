@@ -72,7 +72,7 @@ func TestReplicationAPIs(t *testing.T) {
 	standbyManagerClient := multipoolermanagerpb.NewMultiPoolerManagerClient(standbyConn)
 
 	t.Run("ConfigureReplicationAndValidate", func(t *testing.T) {
-		setupPoolerTest(t, setup, WithoutReplication(), WithDropTables("test_replication"))
+		setupPoolerTest(t, setup, WithoutReplication())
 
 		t.Log("Creating table and inserting data in primary...")
 		_, err = primaryPoolerClient.ExecuteQuery(context.Background(), "CREATE TABLE IF NOT EXISTS test_replication (id SERIAL PRIMARY KEY, data TEXT)", 0)
@@ -318,7 +318,7 @@ func TestReplicationAPIs(t *testing.T) {
 	})
 
 	t.Run("WaitForLSN_Standby_Success", func(t *testing.T) {
-		setupPoolerTest(t, setup, WithDropTables("test_wait_lsn"))
+		setupPoolerTest(t, setup)
 
 		// Insert data on primary to generate a new LSN
 		t.Log("Creating table and inserting data on primary...")
@@ -513,7 +513,7 @@ func TestReplicationAPIs(t *testing.T) {
 	})
 
 	t.Run("ResetReplication_Success", func(t *testing.T) {
-		setupPoolerTest(t, setup, WithDropTables("test_reset_replication"))
+		setupPoolerTest(t, setup)
 
 		// This test verifies that ResetReplication successfully disconnects the standby from the primary
 		// and that data inserted after reset does not replicate until replication is re-enabled
@@ -880,7 +880,7 @@ func TestStopReplicationAndGetStatus(t *testing.T) {
 		t.Log("Testing StopReplicationAndGetStatus on standby with running replication...")
 
 		// Setup cleanup to restore replication state after test
-		setupPoolerTest(t, setup, WithoutReplication(), WithDropTables("stop_repl_test"))
+		setupPoolerTest(t, setup, WithoutReplication())
 
 		// Connect to primary pooler to write test data
 		primaryPoolerClient, err := endtoend.NewMultiPoolerTestClient(fmt.Sprintf("localhost:%d", setup.PrimaryMultipooler.GrpcPort))
@@ -1296,7 +1296,7 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 	})
 
 	t.Run("ConfigureSynchronousReplication_EndToEnd_WithRealStandby", func(t *testing.T) {
-		setupPoolerTest(t, setup, WithoutReplication(), WithDropTables("test_sync_repl"))
+		setupPoolerTest(t, setup, WithoutReplication())
 		// This test validates the complete synchronous replication flow:
 		// 1. Configure primary with remote_apply and the actual standby name
 		// 2. Ensure standby is connected and replicating
