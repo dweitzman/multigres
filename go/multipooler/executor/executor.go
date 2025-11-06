@@ -19,11 +19,11 @@ package executor
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log/slog"
 	"strings"
 
+	"github.com/multigres/multigres/go/connpool"
 	"github.com/multigres/multigres/go/multipooler/queryservice"
 	"github.com/multigres/multigres/go/pb/query"
 )
@@ -31,11 +31,11 @@ import (
 // Executor implements the QueryService interface for executing queries against PostgreSQL.
 type Executor struct {
 	logger *slog.Logger
-	db     *sql.DB
+	db     *connpool.Pool
 }
 
 // NewExecutor creates a new Executor instance.
-func NewExecutor(logger *slog.Logger, db *sql.DB) *Executor {
+func NewExecutor(logger *slog.Logger, db *connpool.Pool) *Executor {
 	return &Executor{
 		logger: logger,
 		db:     db,

@@ -15,17 +15,19 @@
 package manager
 
 import (
-	"database/sql"
+	"context"
 	"fmt"
 	"log/slog"
 	"path/filepath"
 	"strings"
 
 	_ "github.com/lib/pq" // PostgreSQL driver
+
+	"github.com/multigres/multigres/go/connpool"
 )
 
 // CreateDBConnection establishes a new connection to PostgreSQL using the config
-func CreateDBConnection(logger *slog.Logger, config *Config) (*sql.DB, error) {
+func CreateDBConnection(logger *slog.Logger, config *Config) (*connpool.Pool, error) {
 	// Debug: Log the configuration we received
 	logger.Info("createDBConnection: Configuration received",
 		"pooler_dir", config.PoolerDir,
@@ -76,30 +78,28 @@ func CreateDBConnection(logger *slog.Logger, config *Config) (*sql.DB, error) {
 			config.Database)
 	}
 
-	db, err := sql.Open("postgres", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open database connection: %w", err)
-	}
+	// Create the connection pool
+	pool := connpool.NewPool("postgres", dsn)
 
 	// Test the connection
-	if err := db.Ping(); err != nil {
-		db.Close()
+	if err := pool.Ping(); err != nil {
+		pool.Close()
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
 	logger.Info("Connected to PostgreSQL", "socket_path", config.SocketFilePath, "database", config.Database)
-	return db, nil
+	return pool, nil
 }
 
 // CreateSidecarSchema creates the multigres sidecar schema and heartbeat table if they don't exist
-func CreateSidecarSchema(db *sql.DB) error {
-	_, err := db.Exec("CREATE SCHEMA IF NOT EXISTS multigres")
+func CreateSidecarSchema(ctx context.Context, db *connpool.Pool) error {
+	_, err := db.ExecContext(ctx, "CREATE SCHEMA IF NOT EXISTS multigres")
 	if err != nil {
 		return fmt.Errorf("failed to create multigres schema: %w", err)
 	}
 
 	// Create the heartbeat table
-	_, err = db.Exec(`
+	_, err = db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS multigres.heartbeat (
 			shard_id BYTEA PRIMARY KEY,
 			leader_id TEXT NOT NULL,

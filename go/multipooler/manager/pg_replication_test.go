@@ -28,6 +28,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/multigres/multigres/go/connpool"
 	"github.com/multigres/multigres/go/mterrors"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -729,7 +730,7 @@ func TestIsPrimary(t *testing.T) {
 
 			pm := &MultiPoolerManager{
 				logger: logger,
-				db:     mockDB,
+				db:     connpool.NewPoolFromDB(mockDB),
 			}
 
 			ctx := context.Background()
@@ -793,7 +794,7 @@ func TestGetPrimaryLSN(t *testing.T) {
 
 			pm := &MultiPoolerManager{
 				logger: logger,
-				db:     mockDB,
+				db:     connpool.NewPoolFromDB(mockDB),
 			}
 
 			ctx := context.Background()
@@ -857,7 +858,7 @@ func TestGetStandbyReplayLSN(t *testing.T) {
 
 			pm := &MultiPoolerManager{
 				logger: logger,
-				db:     mockDB,
+				db:     connpool.NewPoolFromDB(mockDB),
 			}
 
 			ctx := context.Background()
@@ -994,7 +995,7 @@ func TestGetSynchronousReplicationConfig(t *testing.T) {
 
 			pm := &MultiPoolerManager{
 				logger: logger,
-				db:     mockDB,
+				db:     connpool.NewPoolFromDB(mockDB),
 			}
 
 			ctx := context.Background()
@@ -1069,7 +1070,7 @@ func TestSetSynchronousStandbyNames(t *testing.T) {
 			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 			pm := &MultiPoolerManager{
 				logger: logger,
-				db:     mockDB,
+				db:     connpool.NewPoolFromDB(mockDB),
 			}
 
 			expectedSQL := fmt.Sprintf("ALTER SYSTEM SET synchronous_standby_names = '%s'", tt.expectedValue)
@@ -1152,7 +1153,7 @@ func TestValidateExpectedLSN(t *testing.T) {
 				logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 				pm := &MultiPoolerManager{
 					logger: logger,
-					db:     mockDB,
+					db:     connpool.NewPoolFromDB(mockDB),
 				}
 
 				ctx := context.Background()
@@ -1168,7 +1169,7 @@ func TestValidateExpectedLSN(t *testing.T) {
 			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 			pm := &MultiPoolerManager{
 				logger: logger,
-				db:     mockDB,
+				db:     connpool.NewPoolFromDB(mockDB),
 			}
 
 			query := "SELECT pg_last_wal_replay_lsn()::text, pg_is_wal_replay_paused()"
@@ -1674,7 +1675,7 @@ func TestPauseReplication(t *testing.T) {
 
 			pm := &MultiPoolerManager{
 				logger: logger,
-				db:     mockDB,
+				db:     connpool.NewPoolFromDB(mockDB),
 			}
 
 			ctx := context.Background()
@@ -1754,7 +1755,7 @@ func TestResetPrimaryConnInfo(t *testing.T) {
 
 			pm := &MultiPoolerManager{
 				logger: logger,
-				db:     mockDB,
+				db:     connpool.NewPoolFromDB(mockDB),
 			}
 
 			ctx := context.Background()
@@ -1927,7 +1928,7 @@ func TestQueryReplicationStatus(t *testing.T) {
 			// Create minimal manager with mock DB
 			pm := &MultiPoolerManager{
 				logger: logger,
-				db:     mockDB,
+				db:     connpool.NewPoolFromDB(mockDB),
 			}
 
 			// Call the method

@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/multigres/multigres/go/connpool"
 	"github.com/multigres/multigres/go/fakepgdb"
 	"github.com/multigres/multigres/go/timer"
 
@@ -177,7 +178,7 @@ func newTestReader(t *testing.T, db *fakepgdb.DB, frozenTime *time.Time) *Reader
 	sqlDB := db.OpenDB()
 	t.Cleanup(func() { sqlDB.Close() })
 
-	tr := NewReader(sqlDB, logger, shardID)
+	tr := NewReader(connpool.NewPoolFromDB(sqlDB), logger, shardID)
 	// Use 250ms interval for tests to oversample
 	tr.interval = 250 * time.Millisecond
 	tr.ticks = timer.NewTimer(250 * time.Millisecond)

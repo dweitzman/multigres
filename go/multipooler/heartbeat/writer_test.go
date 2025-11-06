@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/multigres/multigres/go/connpool"
 	"github.com/multigres/multigres/go/fakepgdb"
 
 	"github.com/stretchr/testify/assert"
@@ -256,7 +257,7 @@ func newTestWriter(t *testing.T, db *fakepgdb.DB, frozenTime *time.Time) *Writer
 	})
 
 	// Use 250ms interval for tests to oversample our 1s test ticker
-	tw := NewWriter(sqlDB, logger, shardID, poolerID, 250)
+	tw := NewWriter(connpool.NewPoolFromDB(sqlDB), logger, shardID, poolerID, 250)
 
 	if frozenTime != nil {
 		tw.now = func() time.Time {

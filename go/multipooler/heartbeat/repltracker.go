@@ -15,9 +15,10 @@
 package heartbeat
 
 import (
-	"database/sql"
 	"log/slog"
 	"sync"
+
+	"github.com/multigres/multigres/go/connpool"
 )
 
 // TODO: add stats for heartbeat reads and writes
@@ -32,7 +33,7 @@ type ReplTracker struct {
 }
 
 // NewReplTracker creates a new ReplTracker.
-func NewReplTracker(db *sql.DB, logger *slog.Logger, shardID []byte, poolerID string, intervalMs int) *ReplTracker {
+func NewReplTracker(db *connpool.Pool, logger *slog.Logger, shardID []byte, poolerID string, intervalMs int) *ReplTracker {
 	return &ReplTracker{
 		hw: NewWriter(db, logger, shardID, poolerID, intervalMs),
 		hr: NewReader(db, logger, shardID),

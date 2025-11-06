@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/multigres/multigres/go/connpool"
 	"github.com/multigres/multigres/go/fakepgdb"
 
 	"github.com/stretchr/testify/assert"
@@ -46,7 +47,7 @@ func TestReplTrackerMakePrimary(t *testing.T) {
 	shardID := []byte("test-shard")
 	poolerID := "test-pooler"
 
-	rt := NewReplTracker(sqlDB, logger, shardID, poolerID, 250)
+	rt := NewReplTracker(connpool.NewPoolFromDB(sqlDB), logger, shardID, poolerID, 250)
 	defer rt.Close()
 
 	assert.False(t, rt.IsPrimary())
@@ -91,7 +92,7 @@ func TestReplTrackerMakeNonPrimary(t *testing.T) {
 	shardID := []byte("test-shard")
 	poolerID := "test-pooler"
 
-	rt := NewReplTracker(sqlDB, logger, shardID, poolerID, 250)
+	rt := NewReplTracker(connpool.NewPoolFromDB(sqlDB), logger, shardID, poolerID, 250)
 	defer rt.Close()
 
 	rt.MakePrimary()
@@ -136,7 +137,7 @@ func TestReplTrackerEnableHeartbeat(t *testing.T) {
 	shardID := []byte("test-shard")
 	poolerID := "test-pooler"
 
-	rt := NewReplTracker(sqlDB, logger, shardID, poolerID, 250)
+	rt := NewReplTracker(connpool.NewPoolFromDB(sqlDB), logger, shardID, poolerID, 250)
 	defer rt.Close()
 
 	rt.hw.Open()
@@ -196,7 +197,7 @@ func TestReplTrackerMakePrimaryAndNonPrimary(t *testing.T) {
 	shardID := []byte("test-shard")
 	poolerID := "test-pooler"
 
-	rt := NewReplTracker(sqlDB, logger, shardID, poolerID, 250)
+	rt := NewReplTracker(connpool.NewPoolFromDB(sqlDB), logger, shardID, poolerID, 250)
 	defer rt.Close()
 
 	// Use shorter intervals for testing

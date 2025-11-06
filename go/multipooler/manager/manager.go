@@ -16,7 +16,6 @@ package manager
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -26,6 +25,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/multigres/multigres/go/clustermetadata/topo"
+	"github.com/multigres/multigres/go/connpool"
 	"github.com/multigres/multigres/go/mterrors"
 	"github.com/multigres/multigres/go/multipooler/heartbeat"
 	"github.com/multigres/multigres/go/servenv"
@@ -58,7 +58,7 @@ const (
 type MultiPoolerManager struct {
 	logger       *slog.Logger
 	config       *Config
-	db           *sql.DB
+	db           *connpool.Pool
 	topoClient   topo.Store
 	serviceID    *clustermetadatapb.ID
 	replTracker  *heartbeat.ReplTracker
@@ -195,7 +195,7 @@ func (pm *MultiPoolerManager) connectDB() error {
 		} else if isPrimary {
 			// Only create the sidecar schema on primary databases
 			pm.logger.InfoContext(ctx, "MultiPoolerManager: Creating sidecar schema on primary database")
-			if err := CreateSidecarSchema(pm.db); err != nil {
+			if err := CreateSidecarSchema(ctx, pm.db); err != nil {
 				return fmt.Errorf("failed to create sidecar schema: %w", err)
 			}
 		} else {
@@ -732,16 +732,7 @@ func (pm *MultiPoolerManager) restartPostgresAsStandby(ctx context.Context, stat
 		"message", resp.Message)
 
 	// Close database connection since PostgreSQL restarted
-	if pm.db != nil {
-		pm.db.Close()
-		pm.db = nil
-	}
-
-	// Reconnect to PostgreSQL
-	if err := pm.connectDB(); err != nil {
-		pm.logger.ErrorContext(ctx, "Failed to reconnect to database after restart", "error", err)
-		return mterrors.Wrap(err, "failed to reconnect to database")
-	}
+	pm.db.Reconnect()
 
 	// Verify server is in recovery mode (standby)
 	var inRecovery bool

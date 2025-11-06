@@ -18,12 +18,12 @@ package heartbeat
 
 import (
 	"context"
-	"database/sql"
 	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/multigres/multigres/go/connpool"
 	"github.com/multigres/multigres/go/mterrors"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	"github.com/multigres/multigres/go/timer"
@@ -39,7 +39,7 @@ const (
 // Lag is calculated by comparing the most recent timestamp in the heartbeat
 // table against the current time at read time.
 type Reader struct {
-	db       *sql.DB
+	db       *connpool.Pool
 	logger   *slog.Logger
 	shardID  []byte
 	interval time.Duration
@@ -59,7 +59,7 @@ type Reader struct {
 }
 
 // NewReader returns a new heartbeat reader.
-func NewReader(db *sql.DB, logger *slog.Logger, shardID []byte) *Reader {
+func NewReader(db *connpool.Pool, logger *slog.Logger, shardID []byte) *Reader {
 	return &Reader{
 		db:       db,
 		logger:   logger,

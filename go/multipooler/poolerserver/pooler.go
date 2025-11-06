@@ -17,10 +17,10 @@ package poolerserver
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log/slog"
 
+	"github.com/multigres/multigres/go/connpool"
 	"github.com/multigres/multigres/go/multipooler/executor"
 	"github.com/multigres/multigres/go/multipooler/manager"
 	"github.com/multigres/multigres/go/multipooler/queryservice"
@@ -31,7 +31,7 @@ import (
 type MultiPooler struct {
 	logger   *slog.Logger
 	config   *manager.Config
-	db       *sql.DB
+	db       *connpool.Pool
 	executor queryservice.QueryService
 }
 
@@ -73,7 +73,7 @@ func (s *MultiPooler) connectDB() error {
 		// Don't fail the connection if primary check fails
 	} else if isPrimary {
 		s.logger.Info("Creating sidecar schema on primary database")
-		if err := manager.CreateSidecarSchema(s.db); err != nil {
+		if err := manager.CreateSidecarSchema(ctx, s.db); err != nil {
 			return fmt.Errorf("failed to create sidecar schema: %w", err)
 		}
 	} else {

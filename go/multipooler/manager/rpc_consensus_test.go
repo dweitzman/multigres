@@ -28,6 +28,7 @@ import (
 
 	"github.com/multigres/multigres/go/clustermetadata/topo/memorytopo"
 	"github.com/multigres/multigres/go/cmd/pgctld/testutil"
+	"github.com/multigres/multigres/go/connpool"
 	"github.com/multigres/multigres/go/servenv"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -82,7 +83,7 @@ func setupManagerWithMockDB(t *testing.T) (*MultiPoolerManager, sqlmock.Sqlmock,
 	require.NoError(t, err)
 	t.Cleanup(func() { mockDB.Close() })
 
-	pm.db = mockDB
+	pm.db = connpool.NewPoolFromDB(mockDB)
 
 	// Create the pg_data directory to simulate initialized data directory
 	pgDataDir := tmpDir + "/pg_data"

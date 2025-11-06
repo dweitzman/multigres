@@ -18,13 +18,13 @@ package heartbeat
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/multigres/multigres/go/connpool"
 	"github.com/multigres/multigres/go/mterrors"
 	"github.com/multigres/multigres/go/timer"
 )
@@ -37,7 +37,7 @@ var (
 // Writer runs on primary databases and writes heartbeats to the heartbeat
 // table at regular intervals.
 type Writer struct {
-	db *sql.DB // TODO: use connection pooling when it's implemented
+	db *connpool.Pool
 	// TODO: this has the potential to be spammy, so we need to throttle this
 	// or convert these into alerts.
 	logger     *slog.Logger
@@ -58,8 +58,7 @@ type Writer struct {
 // NewWriter creates a new heartbeat writer.
 //
 // We do not support on-demand or disabled heartbeats at this time.
-func NewWriter(db *sql.DB, logger *slog.Logger, shardID []byte, poolerID string, intervalMs int) *Writer {
-	// TODO: use a connection pool when it's implemented
+func NewWriter(db *connpool.Pool, logger *slog.Logger, shardID []byte, poolerID string, intervalMs int) *Writer {
 	interval := time.Duration(intervalMs) * time.Millisecond
 	if intervalMs <= 0 {
 		interval = defaultHeartbeatInterval
@@ -170,12 +169,11 @@ func (w *Writer) write() error {
 	defer cancel()
 
 	// Get connection for tracking (for potential kill)
-	// TODO: get connection from pool when we have pools
-	conn, err := w.db.Conn(ctx)
+	conn, err := w.db.GetConn(ctx)
 	if err != nil {
 		return mterrors.Wrap(err, "failed to get connection")
 	}
-	defer conn.Close()
+	defer conn.Recycle()
 
 	// Query the backend PID for this connection
 	var pid int64

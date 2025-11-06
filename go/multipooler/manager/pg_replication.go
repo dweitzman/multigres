@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/multigres/multigres/go/connpool"
 	"github.com/multigres/multigres/go/mterrors"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
@@ -472,7 +473,7 @@ func buildSynchronousStandbyNamesValue(method multipoolermanagerdatapb.Synchrono
 }
 
 // applySynchronousStandbyNames applies the synchronous_standby_names setting to PostgreSQL
-func applySynchronousStandbyNames(ctx context.Context, db *sql.DB, logger *slog.Logger, value string) error {
+func applySynchronousStandbyNames(ctx context.Context, db *connpool.Pool, logger *slog.Logger, value string) error {
 	logger.InfoContext(ctx, "Setting synchronous_standby_names", "value", value)
 
 	// Escape single quotes in the value by doubling them (PostgreSQL standard)
