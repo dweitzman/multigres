@@ -26,6 +26,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime/debug"
 	"strconv"
 	"syscall"
@@ -44,10 +45,10 @@ func (sv *ServEnv) Init() {
 	// Initialize OpenTelemetry if enabled
 	telemetry := GetGlobalTelemetry()
 	if telemetry.IsEnabled() {
-		// Use os.Args[0] as default service name if not specified
+		// Use basename of os.Args[0] as default service name if not specified
 		defaultServiceName := "multigres-service"
 		if len(os.Args) > 0 {
-			defaultServiceName = os.Args[0]
+			defaultServiceName = filepath.Base(os.Args[0])
 		}
 		if err := telemetry.InitTelemetry(context.Background(), defaultServiceName); err != nil {
 			slog.Error("Failed to initialize OpenTelemetry", "error", err)

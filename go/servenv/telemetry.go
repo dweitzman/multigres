@@ -85,8 +85,22 @@ func (t *Telemetry) RegisterFlags(fs *pflag.FlagSet) {
 }
 
 // IsEnabled returns whether OpenTelemetry is enabled
+// OTel is enabled if either:
+// 1. The --otel-enabled flag is explicitly set to true, OR
+// 2. The OTEL_EXPORTER_OTLP_ENDPOINT environment variable is set (unless --otel-enabled=false)
+//
+// This allows the environment variable to implicitly enable telemetry while still allowing
+// explicit disabling via the flag.
 func (t *Telemetry) IsEnabled() bool {
-	return t.enabled.Get()
+	// If flag was explicitly set (true or false), respect it
+	if t.enabled.Get() {
+		return true
+	}
+
+	// Auto-enable if OTEL_EXPORTER_OTLP_ENDPOINT is set
+	// This follows OpenTelemetry best practices where setting the exporter endpoint
+	// implicitly enables telemetry
+	return os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != ""
 }
 
 // InitTelemetry initializes OpenTelemetry providers and exporters
@@ -99,7 +113,9 @@ func (t *Telemetry) InitTelemetry(ctx context.Context, defaultServiceName string
 		return nil
 	}
 
-	if !t.enabled.Get() {
+	// Use IsEnabled() instead of t.enabled.Get() to check if OTel should be initialized
+	// IsEnabled() also checks for OTEL_EXPORTER_OTLP_ENDPOINT environment variable
+	if !t.IsEnabled() {
 		slog.DebugContext(ctx, "OpenTelemetry is disabled, skipping initialization")
 		return nil
 	}
@@ -120,16 +136,11 @@ func (t *Telemetry) InitTelemetry(ctx context.Context, defaultServiceName string
 	}
 
 	// Create resource with service name and standard attributes
-	res, err := resource.Merge(
-		resource.Default(),
-		resource.NewWithAttributes(
-			semconv.SchemaURL,
-			semconv.ServiceName(serviceName),
-		),
+	// Note: We don't merge with resource.Default() to avoid schema version conflicts
+	res := resource.NewWithAttributes(
+		semconv.SchemaURL,
+		semconv.ServiceName(serviceName),
 	)
-	if err != nil {
-		return fmt.Errorf("failed to create resource: %w", err)
-	}
 
 	// Initialize tracing
 	if err := t.initTracing(ctx, endpoint, res); err != nil {
@@ -163,9 +174,9 @@ func (t *Telemetry) InitTelemetry(ctx context.Context, defaultServiceName string
 // initTracing initializes the TracerProvider with OTLP HTTP exporter
 func (t *Telemetry) initTracing(ctx context.Context, endpoint string, res *resource.Resource) error {
 	// Create OTLP HTTP trace exporter
+	// WithEndpointURL accepts the full URL including protocol
 	traceExporter, err := otlptracehttp.New(ctx,
-		otlptracehttp.WithEndpoint(endpoint),
-		otlptracehttp.WithInsecure(), // TODO: Add TLS support
+		otlptracehttp.WithEndpointURL(endpoint),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create trace exporter: %w", err)
@@ -196,9 +207,9 @@ func (t *Telemetry) initMetrics(ctx context.Context, endpoint string, res *resou
 	}
 
 	// Create OTLP HTTP metric exporter for push-based metrics (production)
+	// WithEndpointURL accepts the full URL including protocol
 	otlpExporter, err := otlpmetrichttp.New(ctx,
-		otlpmetrichttp.WithEndpoint(endpoint),
-		otlpmetrichttp.WithInsecure(), // TODO: Add TLS support
+		otlpmetrichttp.WithEndpointURL(endpoint),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create OTLP metric exporter: %w", err)

@@ -17,6 +17,7 @@ package command
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/propagation"
@@ -85,6 +87,10 @@ Configuration:
 			if endpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"); endpoint != "" {
 				if err := mc.initTelemetry(endpoint); err != nil {
 					fmt.Fprintf(os.Stderr, "Warning: Failed to initialize OpenTelemetry: %v\n", err)
+				} else {
+					// Wrap the default HTTP client transport with OTel instrumentation
+					// This ensures all HTTP requests made by the CLI and provisioner propagate trace context
+					http.DefaultClient.Transport = otelhttp.NewTransport(http.DefaultTransport)
 				}
 			}
 
