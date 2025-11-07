@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -31,6 +32,7 @@ import (
 	"github.com/multigres/multigres/go/cmd/pgctld/testutil"
 	pb "github.com/multigres/multigres/go/pb/pgctldservice"
 	"github.com/multigres/multigres/go/viperutil"
+	"github.com/multigres/multigres/go/viperutil/vipertest"
 )
 
 func TestPgCtldServiceStart(t *testing.T) {
@@ -419,26 +421,46 @@ func TestGetPoolerDir(t *testing.T) {
 	tempDir := t.TempDir()
 
 	// Test with configured directory
-	pg1 := PgCtlCommand{
-		poolerDir: viperutil.Configure("pooler-dir", viperutil.Options[string]{
-			Default:  tempDir,
-			FlagName: "pooler-dir",
-			Dynamic:  false,
-		}),
-	}
-	result := pg1.GetPoolerDir()
-	assert.Equal(t, tempDir, result, "GetPoolerDir should return configured directory")
+	t.Run("returns configured directory", func(t *testing.T) {
+		// Create an isolated viper instance for this test to avoid state leakage
+		v := viper.New()
+		v.SetDefault("pooler-dir", tempDir)
+
+		pg1 := PgCtlCommand{
+			poolerDir: viperutil.Configure("pooler-dir", viperutil.Options[string]{
+				Default:  tempDir,
+				FlagName: "pooler-dir",
+				Dynamic:  false,
+			}),
+		}
+
+		// Stub the value to use our isolated viper instance instead of the global registry
+		defer vipertest.Stub(t, v, pg1.poolerDir)()
+
+		result := pg1.GetPoolerDir()
+		assert.Equal(t, tempDir, result, "GetPoolerDir should return configured directory")
+	})
 
 	// Test empty case
-	pg2 := PgCtlCommand{
-		poolerDir: viperutil.Configure("pooler-dir", viperutil.Options[string]{
-			Default:  "",
-			FlagName: "pooler-dir",
-			Dynamic:  false,
-		}),
-	}
-	result = pg2.GetPoolerDir()
-	assert.Equal(t, "", result, "GetPoolerDir should return empty string when not configured")
+	t.Run("returns empty string when not configured", func(t *testing.T) {
+		// Create an isolated viper instance for this test
+		v := viper.New()
+		v.SetDefault("pooler-dir", "")
+
+		pg2 := PgCtlCommand{
+			poolerDir: viperutil.Configure("pooler-dir", viperutil.Options[string]{
+				Default:  "",
+				FlagName: "pooler-dir",
+				Dynamic:  false,
+			}),
+		}
+
+		// Stub the value to use our isolated viper instance instead of the global registry
+		defer vipertest.Stub(t, v, pg2.poolerDir)()
+
+		result := pg2.GetPoolerDir()
+		assert.Equal(t, "", result, "GetPoolerDir should return empty string when not configured")
+	})
 }
 
 // testLogger returns a no-op logger for testing

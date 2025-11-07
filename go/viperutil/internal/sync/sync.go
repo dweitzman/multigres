@@ -74,6 +74,22 @@ func New() *Viper {
 	}
 }
 
+// Reset clears all adapted getter keys from this Viper instance.
+// This is useful in tests to prevent "already adapted a getter for key X" panics
+// when tests run multiple times (e.g., via -count=N).
+//
+// Note: This only clears the keys map. The underlying viper instances (disk and live)
+// are not reset, so configuration values will remain. Use this in conjunction with
+// clearing values if you need a complete reset.
+func (v *Viper) Reset() {
+	v.m.Lock()
+	defer v.m.Unlock()
+
+	// Clear the keys map to allow re-adapting getters
+	v.keys = map[string]*sync.Mutex{}
+	v.watchingConfig = false
+}
+
 // Set sets the given key to the given value, in both the disk and live vipers.
 func (v *Viper) Set(key string, value any) {
 	m, ok := v.keys[key]

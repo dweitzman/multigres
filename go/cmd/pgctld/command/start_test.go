@@ -25,6 +25,7 @@ import (
 
 	"github.com/multigres/multigres/go/cmd/pgctld/testutil"
 	"github.com/multigres/multigres/go/pgctld"
+	"github.com/multigres/multigres/go/viperutil/vipertest"
 )
 
 func TestRunStart(t *testing.T) {
@@ -67,6 +68,10 @@ func TestRunStart(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Clean up global Viper state after test to prevent state leakage to other tests.
+			// TestRunStart executes cobra commands that bind flags to the global registry.
+			t.Cleanup(vipertest.ResetStaticRegistry)
+
 			// Setup temporary directories
 			baseDir, cleanup := testutil.TempDir(t, "pgctld_start_test")
 			defer cleanup()

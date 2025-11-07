@@ -31,11 +31,16 @@ import (
 
 	"github.com/multigres/multigres/go/viperutil"
 	"github.com/multigres/multigres/go/viperutil/internal/value"
+	"github.com/multigres/multigres/go/viperutil/vipertest"
 
 	vipersync "github.com/multigres/multigres/go/viperutil/internal/sync"
 )
 
 func TestWatchConfig(t *testing.T) {
+	// Clean up global Dynamic registry to prevent "already adapted a getter" panics
+	// when this test runs multiple times (e.g., via -count=N)
+	t.Cleanup(vipertest.ResetDynamicRegistry)
+
 	type config struct {
 		A, B int
 	}
@@ -93,6 +98,7 @@ func TestWatchConfig(t *testing.T) {
 	rCh <- struct{}{}
 
 	sv := vipersync.New()
+	// panic: already adapted a getter for key a [recovered, repanicked]
 	A := viperutil.Configure("a", viperutil.Options[int]{Dynamic: true})
 	B := viperutil.Configure("b", viperutil.Options[int]{FlagName: "b", Dynamic: true, Default: 5})
 

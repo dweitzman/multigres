@@ -377,6 +377,10 @@ func TestReplicationAPIs(t *testing.T) {
 	})
 
 	t.Run("WaitForLSN_Timeout", func(t *testing.T) {
+		// FAIL: previous stest state leaked
+		//  rpc_manager_replication_api_test.go:380: setupPoolerTest: Standby has primary_conninfo='host=localhost port=9905 user=
+		// postgres application_name=test-cell_standby-multipooler' (expected ''). Previous test leaked state. Make sure all subtests cal
+		// l setupPoolerTest().
 		setupPoolerTest(t, setup)
 
 		// Test timeout behavior by waiting for a very high LSN that won't be reached
@@ -444,6 +448,8 @@ func TestReplicationAPIs(t *testing.T) {
 	})
 
 	t.Run("StartReplication_Primary_Fails", func(t *testing.T) {
+		//        rpc_manager_replication_api_test.go:447: setupPoolerTest: Standby has primary_conninfo='host=localhost port=9905 user=
+		// postgres application_name=test-cell_standby-multipooler' (expected ''). Previous test leaked state. Make sure all subtests call setupPoolerTest().
 		setupPoolerTest(t, setup)
 
 		// StartReplication should fail on PRIMARY pooler type

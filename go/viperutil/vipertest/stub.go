@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/multigres/multigres/go/viperutil"
+	"github.com/multigres/multigres/go/viperutil/internal/registry"
 	"github.com/multigres/multigres/go/viperutil/internal/value"
 )
 
@@ -57,4 +58,40 @@ func Stub[T any](t *testing.T, v *viper.Viper, val viperutil.Value[T]) func() {
 	return func() {
 		base.BoundGetFunc = oldGet
 	}
+}
+
+// ResetStaticRegistry clears all configuration values from the global Static registry.
+// This is useful in tests to prevent state leakage between test cases when commands
+// or code under test bind flags to the global registry.
+//
+// It's particularly important to call this in cleanup when tests execute cobra commands
+// that bind flags, as those flag values persist in the global registry and can affect
+// subsequent tests.
+//
+// Example usage:
+//
+//	func TestMyCommand(t *testing.T) {
+//	    t.Cleanup(vipertest.ResetStaticRegistry)
+//	    // ... test code that uses cobra commands with viperutil flags
+//	}
+func ResetStaticRegistry() {
+	// Viper instances don't have a Reset() method, so we need to clear all keys manually
+	for _, key := range registry.Static.AllKeys() {
+		registry.Static.Set(key, nil)
+	}
+}
+
+// ResetDynamicRegistry clears all adapted getter keys and configuration values from
+// the global Dynamic registry. This is useful in tests to prevent "already adapted a
+// getter for key X" panics when tests call viperutil.Configure with Dynamic:true
+// multiple times (e.g., via -count=N).
+//
+// Example usage:
+//
+//	func TestWithDynamicConfig(t *testing.T) {
+//	    t.Cleanup(vipertest.ResetDynamicRegistry)
+//	    // ... test code that uses viperutil.Configure with Dynamic: true
+//	}
+func ResetDynamicRegistry() {
+	registry.Dynamic.Reset()
 }

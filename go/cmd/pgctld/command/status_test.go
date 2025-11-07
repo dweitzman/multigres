@@ -26,6 +26,7 @@ import (
 
 	"github.com/multigres/multigres/go/cmd/pgctld/testutil"
 	"github.com/multigres/multigres/go/pgctld"
+	"github.com/multigres/multigres/go/viperutil/vipertest"
 )
 
 func TestRunStatus(t *testing.T) {
@@ -63,6 +64,9 @@ func TestRunStatus(t *testing.T) {
 
 	// Test 1: Not initialized (no data directory exists yet)
 	t.Run("not_initialized", func(t *testing.T) {
+		// Clean up global Viper state after test to prevent state leakage to other tests.
+		t.Cleanup(vipertest.ResetStaticRegistry)
+
 		_, err := runStatusCommand()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "data directory not initialized")
@@ -70,6 +74,9 @@ func TestRunStatus(t *testing.T) {
 
 	// Test 2: Stopped (initialized but no PID file)
 	t.Run("stopped", func(t *testing.T) {
+		// Clean up global Viper state after test to prevent state leakage to other tests.
+		t.Cleanup(vipertest.ResetStaticRegistry)
+
 		testutil.CreateDataDir(t, baseDir, true)
 		output, err := runStatusCommand()
 		require.NoError(t, err)
@@ -78,6 +85,9 @@ func TestRunStatus(t *testing.T) {
 
 	// Test 3: Running (initialized with PID file)
 	t.Run("running", func(t *testing.T) {
+		// Clean up global Viper state after test to prevent state leakage to other tests.
+		t.Cleanup(vipertest.ResetStaticRegistry)
+
 		// Generate PostgreSQL config and create PID file to simulate running
 		dataDir := testutil.CreateDataDir(t, baseDir, true)
 		testutil.CreatePIDFile(t, dataDir, 12345)
@@ -92,6 +102,9 @@ func TestRunStatus(t *testing.T) {
 
 	// Test 4: No pooler directory - should get an error
 	t.Run("no_pooler_dir", func(t *testing.T) {
+		// Clean up global Viper state after test to prevent state leakage to other tests.
+		t.Cleanup(vipertest.ResetStaticRegistry)
+
 		cmd, _ := GetRootCommand()
 		cmd.SetArgs([]string{"status", "--pooler-dir", ""})
 		err := cmd.Execute()
