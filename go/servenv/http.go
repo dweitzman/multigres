@@ -22,6 +22,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/pprof"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // HTTPHandle registers the given handler for the internal servenv mux.
@@ -37,7 +39,16 @@ func (sv *ServEnv) HTTPHandleFunc(pattern string, handler func(http.ResponseWrit
 // HTTPServe starts the HTTP server for the internal servenv mux on the listener.
 func (sv *ServEnv) HTTPServe(l net.Listener) error {
 	slog.Info("Listening for HTTP calls on port", "httpPort", sv.httpPort.Get())
-	err := http.Serve(l, sv.mux)
+
+	// Wrap the mux with OpenTelemetry instrumentation if enabled
+	var handler http.Handler = sv.mux
+	telemetry := GetGlobalTelemetry()
+	if telemetry.IsEnabled() {
+		slog.Info("enabling OpenTelemetry HTTP instrumentation")
+		handler = otelhttp.NewHandler(sv.mux, "http-server")
+	}
+
+	err := http.Serve(l, handler)
 	if errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
 		return nil
 	}
@@ -55,4 +66,21 @@ func (sv *ServEnv) HTTPRegisterPprofProfile() {
 	sv.HTTPHandleFunc("/debug/pprof/profile", pprof.Profile)
 	sv.HTTPHandleFunc("/debug/pprof/symbol", pprof.Symbol)
 	sv.HTTPHandleFunc("/debug/pprof/trace", pprof.Trace)
+}
+
+// HTTPRegisterPrometheusMetrics registers the Prometheus metrics endpoint with the internal servenv mux.
+// This provides a /metrics endpoint that exposes OpenTelemetry metrics in Prometheus format for local debugging.
+func (sv *ServEnv) HTTPRegisterPrometheusMetrics() {
+	if !sv.httpPrometheus.Get() {
+		return
+	}
+
+	telemetry := GetGlobalTelemetry()
+	if !telemetry.IsEnabled() {
+		slog.Warn("Prometheus endpoint requested but OpenTelemetry is not enabled")
+		return
+	}
+
+	slog.Info("Registering Prometheus metrics endpoint at /metrics")
+	sv.HTTPHandle("/metrics", telemetry.GetPrometheusHandler())
 }

@@ -341,6 +341,12 @@ func (lg *Logger) SetupLogging() {
 			})
 		}
 
+		// Wrap handler with OpenTelemetry bridge to inject trace context
+		telemetry := GetGlobalTelemetry()
+		if telemetry.IsEnabled() {
+			handler = telemetry.WrapSlogHandler(handler)
+		}
+
 		// Create logger
 		newLogger := slog.New(handler)
 

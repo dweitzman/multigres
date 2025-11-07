@@ -156,7 +156,7 @@ func (p *localProvisioner) provisionPgctld(ctx context.Context, dbName, tableGro
 
 		// Verify PostgreSQL is running via gRPC health check
 		grpcAddress := fmt.Sprintf("localhost:%d", existingService.Ports["grpc_port"])
-		if err := p.checkPgctldGrpcHealth(grpcAddress); err != nil {
+		if err := p.checkPgctldGrpcHealth(ctx, grpcAddress); err != nil {
 			logs := p.readServiceLogs(existingService.LogFile, 20)
 			return nil, fmt.Errorf("pgctld health check failed: %w\n\nLast 20 lines from pgctld logs:\n%s", err, logs)
 		}
@@ -255,6 +255,9 @@ func (p *localProvisioner) provisionPgctld(ctx context.Context, dbName, tableGro
 	}
 
 	initCmd := exec.CommandContext(ctx, pgctldBinary, initArgs...)
+	// Inject trace context for distributed tracing
+	injectTraceContext(ctx, initCmd)
+
 	if err := initCmd.Run(); err != nil {
 		return nil, fmt.Errorf("failed to initialize pgctld data directory: %w", err)
 	}
@@ -281,6 +284,9 @@ func (p *localProvisioner) provisionPgctld(ctx context.Context, dbName, tableGro
 	}
 
 	pgctldCmd := exec.CommandContext(ctx, pgctldBinary, serverArgs...)
+	// Inject trace context for distributed tracing
+	injectTraceContext(ctx, pgctldCmd)
+
 	if err := pgctldCmd.Start(); err != nil {
 		return nil, fmt.Errorf("failed to start pgctld server: %w", err)
 	}
@@ -292,7 +298,7 @@ func (p *localProvisioner) provisionPgctld(ctx context.Context, dbName, tableGro
 
 	// Wait for pgctld to be ready
 	servicePorts := map[string]int{"grpc_port": grpcPort}
-	if err := p.waitForServiceReady("pgctld", "localhost", servicePorts, 60*time.Second); err != nil {
+	if err := p.waitForServiceReady(ctx, "pgctld", "localhost", servicePorts, 60*time.Second); err != nil {
 		logs := p.readServiceLogs(pgctldLogFile, 20)
 		return nil, fmt.Errorf("pgctld readiness check failed: %w\n\nLast 20 lines from pgctld logs:\n%s", err, logs)
 	}

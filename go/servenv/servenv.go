@@ -46,6 +46,7 @@ type ServEnv struct {
 	onCloseTimeout viperutil.Value[time.Duration]
 	pidFile        viperutil.Value[string]
 	httpPprof      viperutil.Value[bool]
+	httpPrometheus viperutil.Value[bool]
 	pprofFlag      viperutil.Value[[]string]
 	serviceMapFlag viperutil.Value[[]string]
 	catchSigpipe   bool
@@ -125,6 +126,11 @@ func NewServEnvWithConfig(lg *Logger, vc *viperutil.ViperConfig) *ServEnv {
 		httpPprof: viperutil.Configure("pprof-http", viperutil.Options[bool]{
 			Default:  false,
 			FlagName: "pprof-http",
+			Dynamic:  false,
+		}),
+		httpPrometheus: viperutil.Configure("prometheus-http", viperutil.Options[bool]{
+			Default:  false,
+			FlagName: "prometheus-http",
 			Dynamic:  false,
 		}),
 		pprofFlag: viperutil.Configure("pprof", viperutil.Options[[]string]{
@@ -346,6 +352,7 @@ func (se *ServEnv) registerFlags(fs *pflag.FlagSet, includeLoggerAndConfig bool)
 	fs.String("bind-address", se.bindAddress.Default(), "Bind address for the server. If empty, the server will listen on all available unicast and anycast IP addresses of the local system.")
 	fs.String("hostname", se.hostname.Default(), "Hostname to use for service registration. If not set, will auto-detect using FQDN or os.Hostname()")
 	fs.Bool("pprof-http", se.httpPprof.Default(), "enable pprof http endpoints")
+	fs.Bool("prometheus-http", se.httpPrometheus.Default(), "enable prometheus metrics endpoint at /metrics")
 	fs.StringSlice("pprof", se.pprofFlag.Default(), "enable profiling")
 	fs.StringSlice("service-map", se.serviceMapFlag.Default(), "comma separated list of services to enable (or disable if prefixed with '-') Example: grpc-queryservice")
 
@@ -355,7 +362,7 @@ func (se *ServEnv) registerFlags(fs *pflag.FlagSet, includeLoggerAndConfig bool)
 	fs.Duration("onclose-timeout", se.onCloseTimeout.Default(), "wait no more than this for OnClose handlers before stopping")
 	fs.String("pid-file", se.pidFile.Default(), "If set, the process will write its pid to the named file, and delete it on graceful shutdown.")
 
-	viperutil.BindFlags(fs, se.httpPort, se.bindAddress, se.hostname, se.lameduckPeriod, se.onTermTimeout, se.onCloseTimeout, se.pidFile, se.httpPprof, se.pprofFlag, se.serviceMapFlag)
+	viperutil.BindFlags(fs, se.httpPort, se.bindAddress, se.hostname, se.lameduckPeriod, se.onTermTimeout, se.onCloseTimeout, se.pidFile, se.httpPprof, se.httpPrometheus, se.pprofFlag, se.serviceMapFlag)
 
 	// Server auth flags
 	for _, fn := range grpcAuthServerFlagHooks {

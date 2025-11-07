@@ -41,6 +41,10 @@ import (
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -61,6 +65,30 @@ const (
 // Name returns the name of this provisioner
 func (p *localProvisioner) Name() string {
 	return "local"
+}
+
+// injectTraceContext adds trace context to a command's environment for distributed tracing
+// This allows subprocesses to participate in the same trace as the parent provisioner
+func injectTraceContext(ctx context.Context, cmd *exec.Cmd) {
+	span := trace.SpanFromContext(ctx)
+	if !span.SpanContext().IsValid() {
+		return
+	}
+
+	// Extract trace context to W3C Trace Context format
+	carrier := propagation.MapCarrier{}
+	propagator := otel.GetTextMapPropagator()
+	propagator.Inject(ctx, carrier)
+
+	// Get traceparent value (format: version-trace_id-span_id-flags)
+	if traceparent, ok := carrier["traceparent"]; ok {
+		// Initialize Env with current environment if not set
+		if cmd.Env == nil {
+			cmd.Env = os.Environ()
+		}
+		// Add STARTUP_TRACEPARENT environment variable
+		cmd.Env = append(cmd.Env, fmt.Sprintf("STARTUP_TRACEPARENT=%s", traceparent))
+	}
 }
 
 // createPasswordFileAndDirectories creates the pooler directory structure and password file
@@ -196,6 +224,9 @@ func (p *localProvisioner) provisionEtcd(ctx context.Context, req *provisioner.P
 	// Start etcd process
 	etcdCmd := exec.CommandContext(ctx, etcdBinary, args...)
 
+	// Inject trace context so etcd startup is part of the cluster_startup trace
+	injectTraceContext(ctx, etcdCmd)
+
 	fmt.Printf("▶️  - Launching etcd on port %d...", port)
 
 	if err := etcdCmd.Start(); err != nil {
@@ -209,7 +240,7 @@ func (p *localProvisioner) provisionEtcd(ctx context.Context, req *provisioner.P
 
 	// Wait for etcd to be ready
 	servicePorts := map[string]int{"etcd_port": port}
-	if err := p.waitForServiceReady("etcd", "localhost", servicePorts, 10*time.Second); err != nil {
+	if err := p.waitForServiceReady(ctx, "etcd", "localhost", servicePorts, 10*time.Second); err != nil {
 		logs := p.readServiceLogs(logFile, 20)
 		return nil, fmt.Errorf("etcd readiness check failed: %w\n\nLast 20 lines from etcd logs:\n%s", err, logs)
 	}
@@ -460,6 +491,9 @@ func (p *localProvisioner) provisionMultigateway(ctx context.Context, req *provi
 	// Start multigateway process
 	multigatewayCmd := exec.CommandContext(ctx, multigatewayBinary, args...)
 
+	// Inject trace context for distributed tracing
+	injectTraceContext(ctx, multigatewayCmd)
+
 	fmt.Printf("▶️  - Launching multigateway (HTTP:%d, gRPC:%d, pg:%d)...", httpPort, grpcPort, pgPort)
 
 	if err := multigatewayCmd.Start(); err != nil {
@@ -491,7 +525,7 @@ func (p *localProvisioner) provisionMultigateway(ctx context.Context, req *provi
 
 	// Wait for multigateway to be ready
 	servicePorts := map[string]int{"http_port": httpPort, "grpc_port": grpcPort, "pg_port": pgPort}
-	if err := p.waitForServiceReady("multigateway", "localhost", servicePorts, 10*time.Second); err != nil {
+	if err := p.waitForServiceReady(ctx, "multigateway", "localhost", servicePorts, 10*time.Second); err != nil {
 		logs := p.readServiceLogs(logFile, 20)
 		return nil, fmt.Errorf("multigateway readiness check failed: %w\n\nLast 20 lines from multigateway logs:\n%s", err, logs)
 	}
@@ -595,6 +629,9 @@ func (p *localProvisioner) provisionMultiadmin(ctx context.Context, req *provisi
 	// Start multiadmin process
 	multiadminCmd := exec.CommandContext(ctx, multiadminBinary, args...)
 
+	// Inject trace context for distributed tracing
+	injectTraceContext(ctx, multiadminCmd)
+
 	fmt.Printf("▶️  - Launching multiadmin (HTTP:%d, gRPC:%d)...", httpPort, grpcPort)
 
 	if err := multiadminCmd.Start(); err != nil {
@@ -625,7 +662,7 @@ func (p *localProvisioner) provisionMultiadmin(ctx context.Context, req *provisi
 
 	// Wait for multiadmin to be ready (check HTTP port)
 	servicePorts := map[string]int{"http_port": httpPort, "grpc_port": grpcPort}
-	if err := p.waitForServiceReady("multiadmin", "localhost", servicePorts, 10*time.Second); err != nil {
+	if err := p.waitForServiceReady(ctx, "multiadmin", "localhost", servicePorts, 10*time.Second); err != nil {
 		logs := p.readServiceLogs(logFile, 20)
 		return nil, fmt.Errorf("multiadmin readiness check failed: %w\n\nLast 20 lines from multiadmin logs:\n%s", err, logs)
 	}
@@ -793,6 +830,9 @@ func (p *localProvisioner) provisionMultipooler(ctx context.Context, req *provis
 	// Start multipooler process
 	multipoolerCmd := exec.CommandContext(ctx, multipoolerBinary, args...)
 
+	// Inject trace context for distributed tracing
+	injectTraceContext(ctx, multipoolerCmd)
+
 	fmt.Printf("▶️  - Launching multipooler (HTTP:%d, gRPC:%d)...", httpPort, grpcPort)
 
 	if err := multipoolerCmd.Start(); err != nil {
@@ -806,7 +846,7 @@ func (p *localProvisioner) provisionMultipooler(ctx context.Context, req *provis
 
 	// Wait for multipooler to be ready
 	servicePorts := map[string]int{"http_port": httpPort, "grpc_port": grpcPort}
-	if err := p.waitForServiceReady("multipooler", "localhost", servicePorts, 10*time.Second); err != nil {
+	if err := p.waitForServiceReady(ctx, "multipooler", "localhost", servicePorts, 10*time.Second); err != nil {
 		logs := p.readServiceLogs(logFile, 20)
 		return nil, fmt.Errorf("multipooler readiness check failed: %w\n\nLast 20 lines from multipooler logs:\n%s", err, logs)
 	}
@@ -940,6 +980,9 @@ func (p *localProvisioner) provisionMultiOrch(ctx context.Context, req *provisio
 	// Start multiorch process
 	multiorchCmd := exec.CommandContext(ctx, multiorchBinary, args...)
 
+	// Inject trace context for distributed tracing
+	injectTraceContext(ctx, multiorchCmd)
+
 	fmt.Printf("▶️  - Launching multiorch (HTTP:%d, gRPC:%d)...", httpPort, grpcPort)
 
 	if err := multiorchCmd.Start(); err != nil {
@@ -953,7 +996,7 @@ func (p *localProvisioner) provisionMultiOrch(ctx context.Context, req *provisio
 
 	// Wait for multiorch to be ready
 	servicePorts := map[string]int{"http_port": httpPort, "grpc_port": grpcPort}
-	if err := p.waitForServiceReady("multiorch", "localhost", servicePorts, 10*time.Second); err != nil {
+	if err := p.waitForServiceReady(ctx, "multiorch", "localhost", servicePorts, 10*time.Second); err != nil {
 		logs := p.readServiceLogs(logFile, 20)
 		return nil, fmt.Errorf("multiorch readiness check failed: %w\n\nLast 20 lines from multiorch logs:\n%s", err, logs)
 	}
@@ -1180,6 +1223,11 @@ func (p *localProvisioner) waitForProcessExit(process *os.Process, timeout time.
 
 // Bootstrap sets up etcd and creates the default database
 func (p *localProvisioner) Bootstrap(ctx context.Context) ([]*provisioner.ProvisionResult, error) {
+	// Create root span for cluster startup tracing
+	tracer := otel.Tracer("multigres/provisioner/local")
+	ctx, span := tracer.Start(ctx, "cluster_startup")
+	defer span.End()
+
 	// Validate binary paths before starting
 	if err := p.validateBinaryPaths(p.config); err != nil {
 		return nil, err

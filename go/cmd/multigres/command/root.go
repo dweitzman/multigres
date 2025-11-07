@@ -15,15 +15,28 @@
 package command
 
 import (
+	"context"
+	"fmt"
+	"os"
+	"time"
+
 	"github.com/multigres/multigres/go/viperutil"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
 // MultigresCommand holds the configuration for multigres commands
 type MultigresCommand struct {
-	vc *viperutil.ViperConfig
+	vc             *viperutil.ViperConfig
+	tracerProvider *sdktrace.TracerProvider
 }
 
 // GetRootCommand creates and returns the root command for multigres with all subcommands
@@ -63,7 +76,31 @@ Configuration:
 
 			// Load config (without the full servenv setup)
 			_, err := mc.vc.LoadConfig()
-			return err
+			if err != nil {
+				return err
+			}
+
+			// Initialize OpenTelemetry if OTEL_EXPORTER_OTLP_ENDPOINT is set
+			// For CLI commands, we only need traces (no metrics/Prometheus endpoint)
+			if endpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"); endpoint != "" {
+				if err := mc.initTelemetry(endpoint); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: Failed to initialize OpenTelemetry: %v\n", err)
+				}
+			}
+
+			return nil
+		},
+		PersistentPostRunE: func(cmd *cobra.Command, args []string) error {
+			// Shutdown OpenTelemetry to flush all pending spans
+			// This is critical for CLI commands to export traces before process exit
+			if mc.tracerProvider != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if err := mc.tracerProvider.Shutdown(ctx); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: Failed to shutdown OpenTelemetry: %v\n", err)
+				}
+			}
+			return nil
 		},
 	}
 
@@ -80,4 +117,47 @@ Configuration:
 	AddTopoCommands(root, mc)
 
 	return root
+}
+
+// initTelemetry sets up OpenTelemetry tracing for CLI commands
+// Unlike services, CLI commands only need traces (no metrics or Prometheus endpoint)
+func (mc *MultigresCommand) initTelemetry(endpoint string) error {
+	ctx := context.Background()
+
+	// Create resource with service name
+	res, err := resource.New(ctx,
+		resource.WithAttributes(
+			semconv.ServiceName("multigres-cli"),
+		),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create resource: %w", err)
+	}
+
+	// Create OTLP HTTP trace exporter
+	// WithEndpointURL accepts the full URL including protocol
+	traceExporter, err := otlptracehttp.New(ctx,
+		otlptracehttp.WithEndpointURL(endpoint),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create trace exporter: %w", err)
+	}
+
+	// Create TracerProvider with batch span processor
+	// Batch processing reduces overhead by grouping spans before export
+	mc.tracerProvider = sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(traceExporter),
+		sdktrace.WithResource(res),
+		// Sampler is configured via OTEL_TRACES_SAMPLER env var
+		// Defaults to parentbased_always_on if not set
+		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.AlwaysSample())),
+	)
+
+	// Set global tracer provider so provisioner can create spans
+	otel.SetTracerProvider(mc.tracerProvider)
+
+	// Set up W3C Trace Context propagation
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+
+	return nil
 }
