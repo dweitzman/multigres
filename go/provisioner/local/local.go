@@ -1969,6 +1969,78 @@ func NewLocalProvisioner() (provisioner.Provisioner, error) {
 	return p, nil
 }
 
+// buildBootstrapResources creates the resource list for bootstrap (etcd, cells, multiadmin)
+func (p *localProvisioner) buildBootstrapResources() ([]Resource, error) {
+	var resources []Resource
+
+	// 1. Global topology (etcd)
+	etcdResource := NewGlobalTopoResource("etcd", &p.config.Etcd)
+	resources = append(resources, etcdResource)
+
+	// 2. Cell topology resources (one per cell)
+	for _, cellConfig := range p.config.Topology.Cells {
+		cellResource := NewCellTopoResource(cellConfig.Name, &cellConfig)
+		resources = append(resources, cellResource)
+	}
+
+	// 3. Multiadmin (global admin service)
+	multiadminResource := NewMultiadminResource("multiadmin", &p.config.Multiadmin)
+	resources = append(resources, multiadminResource)
+
+	return resources, nil
+}
+
+// buildDatabaseResources creates the resource list for a database (database + services in all cells)
+func (p *localProvisioner) buildDatabaseResources(databaseName string) ([]Resource, error) {
+	var resources []Resource
+
+	// Get cell names
+	cellNames, err := p.getCellNames()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get cell names: %w", err)
+	}
+
+	// 1. Database resource (registers database in topology)
+	databaseConfig := &DatabaseConfig{
+		Name:             databaseName,
+		BackupLocation:   "",
+		DurabilityPolicy: "none",
+		Cells:            cellNames,
+	}
+	databaseResource := NewDatabaseResource(databaseConfig)
+	resources = append(resources, databaseResource)
+
+	// 2. Cell services (multigateway, multipooler, multiorch per cell)
+	for _, cellName := range cellNames {
+		cellServices, ok := p.config.Cells[cellName]
+		if !ok {
+			return nil, fmt.Errorf("no configuration found for cell %s", cellName)
+		}
+
+		// Generate service IDs
+		multigatewayID := fmt.Sprintf("multigateway-%s-%s", cellName, stringutil.RandomString(8))
+		multipoolerID := cellServices.Multipooler.ServiceID
+		if multipoolerID == "" {
+			multipoolerID = stringutil.RandomString(8)
+		}
+		multiorchID := fmt.Sprintf("multiorch-%s-%s", cellName, stringutil.RandomString(8))
+
+		// Multigateway
+		multigatewayResource := NewMultigatewayResource(cellName, databaseName, multigatewayID, &cellServices.Multigateway)
+		resources = append(resources, multigatewayResource)
+
+		// Multipooler (includes pgctld)
+		multipoolerResource := NewMultipoolerResource(cellName, databaseName, multipoolerID, &cellServices.Multipooler, &cellServices.Pgctld)
+		resources = append(resources, multipoolerResource)
+
+		// Multiorch
+		multiorchResource := NewMultiorchResource(cellName, databaseName, multiorchID, &cellServices.Multiorch)
+		resources = append(resources, multiorchResource)
+	}
+
+	return resources, nil
+}
+
 func getExecutablePath() (string, error) {
 	executablePath, err := os.Executable()
 	if err != nil {

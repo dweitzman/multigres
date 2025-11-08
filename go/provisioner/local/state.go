@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	"github.com/multigres/multigres/go/provisioner"
 )
 
@@ -474,4 +475,44 @@ func (p *localProvisioner) findRunningService(serviceName string) (*LocalProvisi
 	}
 
 	return nil, nil // No running service found
+}
+
+// OrphanDetectionResult contains information about orphaned resources
+type OrphanDetectionResult struct {
+	OrphanResources []*LocalProvisionedService
+	TotalOrphans    int
+}
+
+// DetectOrphans compares running services (from state files) against desired resources
+// Returns resources that exist in state but are not in the desired set
+func DetectOrphans(runningStates []*LocalProvisionedService, desiredResources []Resource) *OrphanDetectionResult {
+	// Build a map of desired resource IDs for quick lookup
+	desiredMap := make(map[string]bool)
+	for _, resource := range desiredResources {
+		id := resource.ID()
+		key := makeResourceKey(id)
+		desiredMap[key] = true
+	}
+
+	// Find orphaned resources
+	var orphans []*LocalProvisionedService
+	for _, state := range runningStates {
+		resourceID := state.toResourceID()
+		key := makeResourceKey(resourceID)
+
+		// If this resource is not in the desired set, it's an orphan
+		if !desiredMap[key] {
+			orphans = append(orphans, state)
+		}
+	}
+
+	return &OrphanDetectionResult{
+		OrphanResources: orphans,
+		TotalOrphans:    len(orphans),
+	}
+}
+
+// makeResourceKey creates a unique key for a resource ID
+func makeResourceKey(id *clustermetadatapb.ID) string {
+	return fmt.Sprintf("%s:%s:%s", id.Component.String(), id.Cell, id.Name)
 }
