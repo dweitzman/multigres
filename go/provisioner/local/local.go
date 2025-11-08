@@ -2041,6 +2041,130 @@ func (p *localProvisioner) buildDatabaseResources(databaseName string) ([]Resour
 	return resources, nil
 }
 
+// buildAllBootstrapResources creates ALL resources for bootstrap (infrastructure + default database)
+func (p *localProvisioner) buildAllBootstrapResources() ([]Resource, error) {
+	var resources []Resource
+
+	// 1. Global topology (etcd)
+	etcdResource := NewGlobalTopoResource("etcd", &p.config.Etcd)
+	resources = append(resources, etcdResource)
+
+	// 2. Cell topology resources (one per cell)
+	for _, cellConfig := range p.config.Topology.Cells {
+		cellResource := NewCellTopoResource(cellConfig.Name, &cellConfig)
+		resources = append(resources, cellResource)
+	}
+
+	// 3. Multiadmin (global admin service)
+	multiadminResource := NewMultiadminResource("multiadmin", &p.config.Multiadmin)
+	resources = append(resources, multiadminResource)
+
+	// 4. Default database + all its services
+	defaultDBName, err := p.getDefaultDatabaseName()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get default database name: %w", err)
+	}
+
+	dbResources, err := p.buildDatabaseResources(defaultDBName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build database resources: %w", err)
+	}
+	resources = append(resources, dbResources...)
+
+	return resources, nil
+}
+
+// BootstrapV2 bootstraps the entire cluster using the new resource-based architecture
+// Single call provisions everything: etcd → cells → multiadmin → database → all cell services
+// The engine handles dependency ordering and parallel execution automatically
+func (p *localProvisioner) BootstrapV2(ctx context.Context, failFast bool) ([]*provisioner.ProvisionResult, error) {
+	// Validate binary paths before starting
+	if err := p.validateBinaryPaths(p.config); err != nil {
+		return nil, err
+	}
+
+	// Validate required system binaries
+	if err := p.validateSystemBinaries(); err != nil {
+		return nil, err
+	}
+
+	// Build ALL resources (everything needed for a working cluster)
+	resources, err := p.buildAllBootstrapResources()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build resources: %w", err)
+	}
+
+	// Create provisioning context and engine
+	pctx := newProvisionContext(p)
+	engine := NewProvisionerEngine(pctx, failFast)
+
+	// Single call provisions everything - engine handles dependency ordering and parallelism
+	results, err := engine.ProvisionResources(ctx, resources)
+	if err != nil {
+		return nil, fmt.Errorf("bootstrap failed: %w", err)
+	}
+
+	return results, nil
+}
+
+// CleanupOrphans detects and removes orphaned services
+func (p *localProvisioner) CleanupOrphans(ctx context.Context, dryRun bool) error {
+	fmt.Println("=== Detecting orphaned services ===")
+
+	// Get all running services from state files
+	pctx := newProvisionContext(p)
+	allStates, err := pctx.ListStates()
+	if err != nil {
+		return fmt.Errorf("failed to list states: %w", err)
+	}
+
+	// Build all expected resources (what should be running)
+	allExpectedResources, err := p.buildAllBootstrapResources()
+	if err != nil {
+		return fmt.Errorf("failed to build expected resources: %w", err)
+	}
+
+	// Detect orphans
+	result := DetectOrphans(allStates, allExpectedResources)
+
+	if result.TotalOrphans == 0 {
+		fmt.Println("✓ No orphaned services found")
+		return nil
+	}
+
+	fmt.Printf("Found %d orphaned service(s):\n", result.TotalOrphans)
+	for _, orphan := range result.OrphanResources {
+		fmt.Printf("  - %s (ID: %s, PID: %d)\n", orphan.Service, orphan.ID, orphan.PID)
+	}
+
+	if dryRun {
+		fmt.Println("\nDry run mode - no services will be stopped")
+		return nil
+	}
+
+	// Stop orphaned processes and delete state
+	fmt.Println("\nCleaning up orphaned services...")
+	for _, orphan := range result.OrphanResources {
+		resourceID := orphan.toResourceID()
+
+		fmt.Printf("  - Stopping %s (PID: %d)\n", orphan.Service, orphan.PID)
+
+		if orphan.PID > 0 {
+			if err := pctx.StopProcess(orphan.PID); err != nil {
+				fmt.Printf("    Warning: failed to stop process %d: %v\n", orphan.PID, err)
+			}
+		}
+
+		// Delete state file
+		if err := pctx.DeleteState(resourceID); err != nil {
+			fmt.Printf("    Warning: failed to delete state for %s: %v\n", orphan.ID, err)
+		}
+	}
+
+	fmt.Printf("\n✓ Cleaned up %d orphaned service(s)\n", result.TotalOrphans)
+	return nil
+}
+
 func getExecutablePath() (string, error) {
 	executablePath, err := os.Executable()
 	if err != nil {

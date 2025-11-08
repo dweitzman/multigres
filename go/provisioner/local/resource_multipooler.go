@@ -17,12 +17,13 @@ package local
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"time"
 
 	"github.com/multigres/multigres/go/grpccommon"
-	pb "github.com/multigres/multigres/go/pb/pgctldservice"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	pb "github.com/multigres/multigres/go/pb/pgctldservice"
 	"github.com/multigres/multigres/go/provisioner"
 	"github.com/multigres/multigres/go/provisioner/local/ports"
 	"google.golang.org/grpc"
@@ -30,12 +31,12 @@ import (
 
 // MultipoolerResource represents the multipooler service (including pgctld)
 type MultipoolerResource struct {
-	id             *clustermetadatapb.ID
-	databaseID     *clustermetadatapb.ID
-	cellName       string
-	databaseName   string
-	config         *MultipoolerConfig
-	pgctldConfig   *PgctldConfig
+	id           *clustermetadatapb.ID
+	databaseID   *clustermetadatapb.ID
+	cellName     string
+	databaseName string
+	config       *MultipoolerConfig
+	pgctldConfig *PgctldConfig
 }
 
 // NewMultipoolerResource creates a new multipooler resource
@@ -179,6 +180,18 @@ func (r *MultipoolerResource) provisionPgctld(ctx context.Context, pctx Provisio
 	pgctldLogFile, err := pctx.LogPath("pgctld", pgctldServiceID, r.databaseName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create pgctld log file: %w", err)
+	}
+
+	// Create pooler directory
+	if err := os.MkdirAll(poolerDir, 0o755); err != nil {
+		return nil, fmt.Errorf("failed to create pooler directory %s: %w", poolerDir, err)
+	}
+
+	// Create password file if configured
+	if r.pgctldConfig.PgPwfile != "" {
+		if err := os.WriteFile(r.pgctldConfig.PgPwfile, []byte("postgres"), 0o600); err != nil {
+			return nil, fmt.Errorf("failed to create password file %s: %w", r.pgctldConfig.PgPwfile, err)
+		}
 	}
 
 	// Initialize pgctld data directory
