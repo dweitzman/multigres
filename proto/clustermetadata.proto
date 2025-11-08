@@ -161,6 +161,24 @@ message ID {
 
     // MULTIORCH represents a multiorch component
     MULTIORCH = 3;
+
+    // GLOBAL_TOPO represents the global topology service (etcd)
+    GLOBAL_TOPO = 4;
+
+    // CELL_TOPO represents cell topology registration
+    CELL_TOPO = 5;
+
+    // MULTIADMIN represents the global multiadmin service
+    MULTIADMIN = 6;
+
+    // PGCTLD represents a PostgreSQL controller
+    PGCTLD = 7;
+
+    // DATABASE represents a database-level resource
+    DATABASE = 8;
+
+    // CLUSTER represents the cluster-level root resource
+    CLUSTER = 9;
   }
 }
 
