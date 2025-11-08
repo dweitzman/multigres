@@ -57,6 +57,59 @@ type ProvisionResult struct {
 	Ports map[string]int
 	// Metadata contains additional provisioner-specific information
 	Metadata map[string]any
+	// Messages contains optional human-readable status messages (e.g., "already running (PID 12345)", warnings, etc.)
+	Messages []string
+}
+
+// ProvisionTask represents an in-progress service provisioning operation.
+// It allows callers to start multiple provisioning operations in parallel
+// and wait for their results later, enabling better concurrency while
+// maintaining readable sequential output.
+type ProvisionTask struct {
+	serviceName string
+	resultChan  chan *ProvisionResult
+	errChan     chan error
+}
+
+// NewProvisionTask creates a new ProvisionTask for the given service and immediately
+// starts executing fn in a goroutine. The task will be completed or failed automatically
+// based on what fn returns, ensuring the task is always completed.
+func NewProvisionTask(serviceName string, fn func() (*ProvisionResult, error)) *ProvisionTask {
+	task := &ProvisionTask{
+		serviceName: serviceName,
+		resultChan:  make(chan *ProvisionResult, 1),
+		errChan:     make(chan error, 1),
+	}
+
+	go func() {
+		result, err := fn()
+		if err != nil {
+			task.errChan <- err
+		} else {
+			task.resultChan <- result
+		}
+	}()
+
+	return task
+}
+
+// ServiceName returns the name of the service being provisioned.
+func (t *ProvisionTask) ServiceName() string {
+	return t.serviceName
+}
+
+// Wait blocks until the provisioning operation completes or the context is cancelled.
+// It returns the ProvisionResult on success, or an error if the operation failed
+// or the context was cancelled.
+func (t *ProvisionTask) Wait(ctx context.Context) (*ProvisionResult, error) {
+	select {
+	case result := <-t.resultChan:
+		return result, nil
+	case err := <-t.errChan:
+		return nil, err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // ProvisionRequest contains the parameters for provisioning a service.

@@ -25,6 +25,7 @@ import (
 
 	"github.com/multigres/multigres/go/grpccommon"
 	pb "github.com/multigres/multigres/go/pb/pgctldservice"
+	"github.com/multigres/multigres/go/provisioner"
 	"github.com/multigres/multigres/go/provisioner/local/ports"
 )
 
@@ -140,45 +141,55 @@ func (p *localProvisioner) stopPostgreSQLViaPgctld(address string) error {
 }
 
 // provisionPgctld provisions a pgctld instance for a multipooler with the new directory structure
-func (p *localProvisioner) provisionPgctld(ctx context.Context, dbName, tableGroup, serviceID, cell string) (*PgctldProvisionResult, error) {
+// It returns the pgctld address immediately and a task to wait for provisioning completion
+func (p *localProvisioner) provisionPgctld(ctx context.Context, dbName, tableGroup, serviceID, cell string) (string, *provisioner.ProvisionTask, error) {
 	// Create unique pgctld service ID using multipooler's service ID
 	pgctldServiceID := fmt.Sprintf("pgctld-%s", serviceID)
 
 	// Check if pgctld is already running for this service combination
 	existingService, err := p.findRunningDbService("pgctld", dbName, cell)
 	if err != nil {
-		return nil, fmt.Errorf("failed to check for existing pgctld service: %w", err)
+		return "", nil, fmt.Errorf("failed to check for existing pgctld service: %w", err)
 	}
 
 	// Check if the existing service matches our specific service ID
 	if existingService != nil && existingService.ID == pgctldServiceID {
-		fmt.Printf("pgctld is already running (PID %d)", existingService.PID)
-
 		// Verify PostgreSQL is running via gRPC health check
 		grpcAddress := fmt.Sprintf("localhost:%d", existingService.Ports["grpc_port"])
 		if err := p.checkPgctldGrpcHealth(grpcAddress); err != nil {
 			logs := p.readServiceLogs(existingService.LogFile, 20)
-			return nil, fmt.Errorf("pgctld health check failed: %w\n\nLast 20 lines from pgctld logs:\n%s", err, logs)
+			return "", nil, fmt.Errorf("pgctld health check failed: %w\n\nLast 20 lines from pgctld logs:\n%s", err, logs)
 		}
 
-		fmt.Printf(" ✓\n")
-		return &PgctldProvisionResult{
-			Address: fmt.Sprintf("localhost:%d", existingService.Ports["grpc_port"]),
-			Port:    existingService.Ports["grpc_port"],
-			LogFile: existingService.LogFile,
-		}, nil
+		// Create a task that returns immediately since service is already running
+		task := provisioner.NewProvisionTask("pgctld", func() (*provisioner.ProvisionResult, error) {
+			return &provisioner.ProvisionResult{
+				ServiceName: "pgctld",
+				FQDN:        "localhost",
+				Ports: map[string]int{
+					"grpc_port": existingService.Ports["grpc_port"],
+				},
+				Metadata: map[string]any{
+					"pgctld_address": grpcAddress,
+					"log_file":       existingService.LogFile,
+				},
+				Messages: []string{fmt.Sprintf("already running (PID %d)", existingService.PID)},
+			}, nil
+		})
+
+		return grpcAddress, task, nil
 	}
 
 	// Get cell-specific pgctld config
 	pgctldConfig, err := p.getCellServiceConfig(cell, "pgctld")
 	if err != nil {
-		return nil, fmt.Errorf("failed to get pgctld config for cell %s: %w", cell, err)
+		return "", nil, fmt.Errorf("failed to get pgctld config for cell %s: %w", cell, err)
 	}
 
 	// Find pgctld binary
 	pgctldBinary, err := p.findBinary("pgctld", pgctldConfig)
 	if err != nil {
-		return nil, fmt.Errorf("pgctld binary not found: %w", err)
+		return "", nil, fmt.Errorf("pgctld binary not found: %w", err)
 	}
 
 	// Get gRPC port from config or use default
@@ -217,27 +228,22 @@ func (p *localProvisioner) provisionPgctld(ctx context.Context, dbName, tableGro
 	poolerDir := ""
 	dir, ok := pgctldConfig["pooler_dir"].(string)
 	if !ok {
-		return nil, fmt.Errorf("pooler_dir not found in config")
+		return "", nil, fmt.Errorf("pooler_dir not found in config")
 	}
 	poolerDir = dir
 
 	// Get gRPC socket file if configured
 	socketFile, err := getGRPCSocketFile(pgctldConfig)
 	if err != nil {
-		return nil, fmt.Errorf("failed to configure gRPC socket file: %w", err)
+		return "", nil, fmt.Errorf("failed to configure gRPC socket file: %w", err)
 	}
-	if socketFile != "" {
-		fmt.Printf("▶️  - Configuring pgctld gRPC Unix socket: %s\n", socketFile)
-	}
-
 	// Create pgctld log file
 	pgctldLogFile, err := p.createLogFile("pgctld", serviceID, dbName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create pgctld log file: %w", err)
+		return "", nil, fmt.Errorf("failed to create pgctld log file: %w", err)
 	}
 
 	// Initialize pgctld data directory
-	fmt.Printf("▶️  - Initializing pgctld for %s/%s/%s...", dbName, tableGroup, serviceID)
 
 	initArgs := []string{
 		"init",
@@ -256,12 +262,10 @@ func (p *localProvisioner) provisionPgctld(ctx context.Context, dbName, tableGro
 
 	initCmd := exec.CommandContext(ctx, pgctldBinary, initArgs...)
 	if err := initCmd.Run(); err != nil {
-		return nil, fmt.Errorf("failed to initialize pgctld data directory: %w", err)
+		return "", nil, fmt.Errorf("failed to initialize pgctld data directory: %w", err)
 	}
-	fmt.Printf(" initialized ✓\n")
 
 	// Start pgctld server
-	fmt.Printf("▶️  - Starting pgctld server (gRPC:%d)...", grpcPort)
 
 	serverArgs := []string{
 		"server",
@@ -282,29 +286,11 @@ func (p *localProvisioner) provisionPgctld(ctx context.Context, dbName, tableGro
 
 	pgctldCmd := exec.CommandContext(ctx, pgctldBinary, serverArgs...)
 	if err := pgctldCmd.Start(); err != nil {
-		return nil, fmt.Errorf("failed to start pgctld server: %w", err)
+		return "", nil, fmt.Errorf("failed to start pgctld server: %w", err)
 	}
 
-	// Validate process is running
-	if err := p.validateProcessRunning(pgctldCmd.Process.Pid); err != nil {
-		return nil, fmt.Errorf("pgctld process validation failed: %w", err)
-	}
-
-	// Wait for pgctld to be ready
-	servicePorts := map[string]int{"grpc_port": grpcPort}
-	if err := p.waitForServiceReady("pgctld", "localhost", servicePorts, 60*time.Second); err != nil {
-		logs := p.readServiceLogs(pgctldLogFile, 20)
-		return nil, fmt.Errorf("pgctld readiness check failed: %w\n\nLast 20 lines from pgctld logs:\n%s", err, logs)
-	}
-
-	// Now that pgctld is healthy, start PostgreSQL
+	// Calculate the gRPC address to return immediately
 	grpcAddress := fmt.Sprintf("localhost:%d", grpcPort)
-	if err := p.startPostgreSQLViaPgctld(grpcAddress); err != nil {
-		logs := p.readServiceLogs(pgctldLogFile, 20)
-		return nil, fmt.Errorf("failed to start PostgreSQL: %w\n\nLast 20 lines from pgctld logs:\n%s", err, logs)
-	}
-
-	fmt.Printf(" ready ✓\n")
 
 	// Create provision state for pgctld
 	service := &LocalProvisionedService{
@@ -321,15 +307,51 @@ func (p *localProvisioner) provisionPgctld(ctx context.Context, dbName, tableGro
 	}
 
 	// Save pgctld service state to disk
-	if err := p.saveServiceState(service, dbName); err != nil {
-		fmt.Printf("Warning: failed to save pgctld service state: %v\n", err)
-	}
+	saveStateErr := p.saveServiceState(service, dbName)
 
-	return &PgctldProvisionResult{
-		Address: fmt.Sprintf("localhost:%d", grpcPort),
-		Port:    grpcPort,
-		LogFile: pgctldLogFile,
-	}, nil
+	// Create task to track async completion
+	task := provisioner.NewProvisionTask("pgctld", func() (*provisioner.ProvisionResult, error) {
+		// Validate process is running
+		if err := p.validateProcessRunning(pgctldCmd.Process.Pid); err != nil {
+			return nil, fmt.Errorf("pgctld process validation failed: %w", err)
+		}
+
+		// Wait for pgctld to be ready
+		servicePorts := map[string]int{"grpc_port": grpcPort}
+		if err := p.waitForServiceReady("pgctld", "localhost", servicePorts, 60*time.Second); err != nil {
+			logs := p.readServiceLogs(pgctldLogFile, 20)
+			return nil, fmt.Errorf("pgctld readiness check failed: %w\n\nLast 20 lines from pgctld logs:\n%s", err, logs)
+		}
+
+		// Now that pgctld is healthy, start PostgreSQL
+		if err := p.startPostgreSQLViaPgctld(grpcAddress); err != nil {
+			logs := p.readServiceLogs(pgctldLogFile, 20)
+			return nil, fmt.Errorf("failed to start PostgreSQL: %w\n\nLast 20 lines from pgctld logs:\n%s", err, logs)
+		}
+
+		var messages []string
+		if saveStateErr != nil {
+			messages = append(messages, fmt.Sprintf("warning: failed to save service state: %v", saveStateErr))
+		}
+		if socketFile != "" {
+			messages = append(messages, fmt.Sprintf("using gRPC Unix socket: %s", socketFile))
+		}
+
+		return &provisioner.ProvisionResult{
+			ServiceName: "pgctld",
+			FQDN:        "localhost",
+			Ports: map[string]int{
+				"grpc_port": grpcPort,
+			},
+			Metadata: map[string]any{
+				"pgctld_address": grpcAddress,
+				"log_file":       pgctldLogFile,
+			},
+			Messages: messages,
+		}, nil
+	})
+
+	return grpcAddress, task, nil
 }
 
 // deprovisionPgctld stops PostgreSQL via gRPC and then stops the pgctld process
