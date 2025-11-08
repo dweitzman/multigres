@@ -41,7 +41,7 @@ func (p *localProvisioner) waitForServiceReady(parentCtx context.Context, servic
 	ctx, cancel := context.WithTimeout(parentCtx, timeout)
 	defer cancel()
 
-	ctx, span := tracer.Start(ctx, "wait_for_service_ready")
+	ctx, span := tracer.Start(ctx, fmt.Sprintf("wait_for_service_ready/%s", serviceName))
 	defer span.End()
 
 	span.SetAttributes(attribute.String("service.name", serviceName))

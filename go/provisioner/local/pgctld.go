@@ -29,8 +29,8 @@ import (
 )
 
 // startPostgreSQLViaPgctld starts PostgreSQL via pgctld gRPC and verifies it's running
-func (p *localProvisioner) startPostgreSQLViaPgctld(address string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+func (p *localProvisioner) startPostgreSQLViaPgctld(ctx context.Context, address string) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	conn, err := grpc.NewClient(address, grpccommon.LocalClientDialOptions()...)
@@ -305,7 +305,7 @@ func (p *localProvisioner) provisionPgctld(ctx context.Context, dbName, tableGro
 
 	// Now that pgctld is healthy, start PostgreSQL
 	grpcAddress := fmt.Sprintf("localhost:%d", grpcPort)
-	if err := p.startPostgreSQLViaPgctld(grpcAddress); err != nil {
+	if err := p.startPostgreSQLViaPgctld(ctx, grpcAddress); err != nil {
 		logs := p.readServiceLogs(pgctldLogFile, 20)
 		return nil, fmt.Errorf("failed to start PostgreSQL: %w\n\nLast 20 lines from pgctld logs:\n%s", err, logs)
 	}
