@@ -153,7 +153,7 @@ message ID {
     // UNKNOWN represents an unknown or uninitialized component type
     UNKNOWN = 0;
 
-    // MULTIPOOLER represents a multipooler component
+    // MULTIPOOLER represents a multipooler component (includes pgctld)
     MULTIPOOLER = 1;
 
     // MULTIGATEWAY represents a multigateway component
@@ -161,6 +161,18 @@ message ID {
 
     // MULTIORCH represents a multiorch component
     MULTIORCH = 3;
+
+    // GLOBAL_TOPO represents the global topology server (etcd)
+    GLOBAL_TOPO = 4;
+
+    // MULTIADMIN represents a multiadmin component (global)
+    MULTIADMIN = 5;
+
+    // CELL_TOPO represents a cell topology resource
+    CELL_TOPO = 6;
+
+    // DATABASE represents a database registration resource
+    DATABASE = 7;
   }
 }
 

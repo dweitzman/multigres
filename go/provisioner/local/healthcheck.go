@@ -31,14 +31,11 @@ import (
 )
 
 // waitForServiceReady waits for a service to become ready by checking appropriate endpoints
-func (p *localProvisioner) waitForServiceReady(serviceName string, host string, servicePorts map[string]int, timeout time.Duration) error {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
+func (p *localProvisioner) waitForServiceReady(ctx context.Context, serviceName string, host string, servicePorts map[string]int) error {
 	r := retry.New(10*time.Millisecond, time.Second)
 	for attempt, err := range r.Attempts(ctx) {
 		if err != nil {
-			return fmt.Errorf("%s did not become ready within %v after %d attempts: %w", serviceName, timeout, attempt, err)
+			return fmt.Errorf("%s did not become ready after %d attempts: %w", serviceName, attempt, err)
 		}
 
 		// First check TCP connectivity on all advertised ports

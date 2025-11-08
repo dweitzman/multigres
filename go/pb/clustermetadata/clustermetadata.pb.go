@@ -170,12 +170,20 @@ type ID_ComponentType int32
 const (
 	// UNKNOWN represents an unknown or uninitialized component type
 	ID_UNKNOWN ID_ComponentType = 0
-	// MULTIPOOLER represents a multipooler component
+	// MULTIPOOLER represents a multipooler component (includes pgctld)
 	ID_MULTIPOOLER ID_ComponentType = 1
 	// MULTIGATEWAY represents a multigateway component
 	ID_MULTIGATEWAY ID_ComponentType = 2
 	// MULTIORCH represents a multiorch component
 	ID_MULTIORCH ID_ComponentType = 3
+	// GLOBAL_TOPO represents the global topology server (etcd)
+	ID_GLOBAL_TOPO ID_ComponentType = 4
+	// MULTIADMIN represents a multiadmin component (global)
+	ID_MULTIADMIN ID_ComponentType = 5
+	// CELL_TOPO represents a cell topology resource
+	ID_CELL_TOPO ID_ComponentType = 6
+	// DATABASE represents a database registration resource
+	ID_DATABASE ID_ComponentType = 7
 )
 
 // Enum value maps for ID_ComponentType.
@@ -185,12 +193,20 @@ var (
 		1: "MULTIPOOLER",
 		2: "MULTIGATEWAY",
 		3: "MULTIORCH",
+		4: "GLOBAL_TOPO",
+		5: "MULTIADMIN",
+		6: "CELL_TOPO",
+		7: "DATABASE",
 	}
 	ID_ComponentType_value = map[string]int32{
 		"UNKNOWN":      0,
 		"MULTIPOOLER":  1,
 		"MULTIGATEWAY": 2,
 		"MULTIORCH":    3,
+		"GLOBAL_TOPO":  4,
+		"MULTIADMIN":   5,
+		"CELL_TOPO":    6,
+		"DATABASE":     7,
 	}
 )
 
@@ -842,16 +858,21 @@ const file_clustermetadata_proto_rawDesc = "" +
 	"\bport_map\x18\x03 \x03(\v2'.clustermetadata.MultiOrch.PortMapEntryR\aportMap\x1a:\n" +
 	"\fPortMapEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\x05R\x05value:\x028\x01\"\xbd\x01\n" +
+	"\x05value\x18\x02 \x01(\x05R\x05value:\x028\x01\"\xfc\x01\n" +
 	"\x02ID\x12?\n" +
 	"\tcomponent\x18\x01 \x01(\x0e2!.clustermetadata.ID.ComponentTypeR\tcomponent\x12\x12\n" +
 	"\x04cell\x18\x02 \x01(\tR\x04cell\x12\x12\n" +
-	"\x04name\x18\x03 \x01(\tR\x04name\"N\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\"\x8c\x01\n" +
 	"\rComponentType\x12\v\n" +
 	"\aUNKNOWN\x10\x00\x12\x0f\n" +
 	"\vMULTIPOOLER\x10\x01\x12\x10\n" +
 	"\fMULTIGATEWAY\x10\x02\x12\r\n" +
-	"\tMULTIORCH\x10\x03\"2\n" +
+	"\tMULTIORCH\x10\x03\x12\x0f\n" +
+	"\vGLOBAL_TOPO\x10\x04\x12\x0e\n" +
+	"\n" +
+	"MULTIADMIN\x10\x05\x12\r\n" +
+	"\tCELL_TOPO\x10\x06\x12\f\n" +
+	"\bDATABASE\x10\a\"2\n" +
 	"\bKeyRange\x12\x14\n" +
 	"\x05start\x18\x01 \x01(\fR\x05start\x12\x10\n" +
 	"\x03end\x18\x02 \x01(\fR\x03end*3\n" +

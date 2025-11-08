@@ -292,7 +292,9 @@ func (p *localProvisioner) provisionPgctld(ctx context.Context, dbName, tableGro
 
 	// Wait for pgctld to be ready
 	servicePorts := map[string]int{"grpc_port": grpcPort}
-	if err := p.waitForServiceReady("pgctld", "localhost", servicePorts, 60*time.Second); err != nil {
+	readyCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	if err := p.waitForServiceReady(readyCtx, "pgctld", "localhost", servicePorts); err != nil {
 		logs := p.readServiceLogs(pgctldLogFile, 20)
 		return nil, fmt.Errorf("pgctld readiness check failed: %w\n\nLast 20 lines from pgctld logs:\n%s", err, logs)
 	}
