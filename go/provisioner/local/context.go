@@ -22,7 +22,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -33,10 +32,6 @@ import (
 // provisionContext implements the ProvisionContext interface
 type provisionContext struct {
 	provisioner *localProvisioner
-
-	// Cached topology store connection
-	topoStore topo.Store
-	topoMu    sync.Mutex
 }
 
 // newProvisionContext creates a new ProvisionContext for the given provisioner
@@ -184,16 +179,9 @@ func (pc *provisionContext) ListStates() ([]*LocalProvisionedService, error) {
 	return states, nil
 }
 
-// OpenGlobalTopo returns the topology store for global operations
+// OpenGlobalTopo returns a new topology store for global operations
+// Each call creates a new connection - caller is responsible for closing it
 func (pc *provisionContext) OpenGlobalTopo(ctx context.Context) (topo.Store, error) {
-	pc.topoMu.Lock()
-	defer pc.topoMu.Unlock()
-
-	// Return cached connection if available
-	if pc.topoStore != nil {
-		return pc.topoStore, nil
-	}
-
 	// Get etcd configuration
 	etcdAddr := pc.EtcdClientAddress()
 
@@ -215,8 +203,6 @@ func (pc *provisionContext) OpenGlobalTopo(ctx context.Context) (topo.Store, err
 		return nil, fmt.Errorf("failed to open topology server: %w", err)
 	}
 
-	// Cache the connection
-	pc.topoStore = store
 	return store, nil
 }
 
