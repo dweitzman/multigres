@@ -49,10 +49,8 @@ func (pe *ProvisionerEngine) ProvisionResources(ctx context.Context, resources [
 	}
 
 	// Build dependency graph
-	graph := pe.buildDependencyGraph(resources)
-
-	// Check for circular dependencies
-	if err := graph.detectCycles(); err != nil {
+	graph, resourceMap, err := pe.buildDependencyGraph(resources)
+	if err != nil {
 		return nil, err
 	}
 
@@ -61,7 +59,7 @@ func (pe *ProvisionerEngine) ProvisionResources(ctx context.Context, resources [
 	defer pe.statusMonitor.Stop()
 
 	// Execute provisioning
-	results, err := pe.executeProvisioning(ctx, graph)
+	results, err := pe.executeProvisioning(ctx, graph, resourceMap)
 	if err != nil {
 		return results, err
 	}
@@ -75,97 +73,80 @@ func (pe *ProvisionerEngine) DeprovisionResources(ctx context.Context, resources
 		return nil
 	}
 
-	// Build dependency graph and invert it for deprovisioning
-	graph := pe.buildDependencyGraph(resources)
-	invertedGraph := graph.invert()
-
-	// Track errors
-	var allErrors []error
-	var errorsMu sync.Mutex
-
-	// Start resources as they become eligible
-	for !invertedGraph.allStarted() {
-		resource, err := invertedGraph.startEligibleResource(ctx)
-		if err != nil {
-			// Context cancelled
-			return err
-		}
-
-		if resource == nil {
-			// No more resources to start (all started or failed)
-			break
-		}
-
-		// Start goroutine to deprovision this resource
-		go func(r Resource) {
-			// Update status
-			pe.statusMonitor.UpdateStatus(r.ID(), StatusDeprovisioning)
-
-			// Deprovision the resource
-			if err := r.Deprovision(ctx, pe.context); err != nil {
-				err = fmt.Errorf("failed to deprovision %s (%s): %w",
-					r.ID().Component, r.ID().Name, err)
-				errorsMu.Lock()
-				allErrors = append(allErrors, err)
-				errorsMu.Unlock()
-				pe.statusMonitor.UpdateStatus(r.ID(), StatusFailed)
-
-				// Mark as failed in the graph (cascades to dependents)
-				invertedGraph.markFailed(r.ID())
-
-				if pe.failFast {
-					return
-				}
-				return
-			}
-
-			// Delete state file
-			if err := pe.context.DeleteState(r.ID()); err != nil {
-				// Log warning but don't fail
-				fmt.Printf("Warning: failed to delete state for %s: %v\n", r.ID().Name, err)
-			}
-
-			// Update status
-			pe.statusMonitor.UpdateStatus(r.ID(), StatusReady)
-
-			// Mark as completed in the graph
-			invertedGraph.markCompleted(r.ID())
-		}(resource)
-	}
-
-	// Wait for all resources to complete or fail
-	if err := invertedGraph.Wait(ctx); err != nil {
+	// Build dependency graph
+	graph, resourceMap, err := pe.buildDependencyGraph(resources)
+	if err != nil {
 		return err
 	}
 
-	// Check for errors
-	if len(allErrors) > 0 {
-		if pe.failFast {
-			return allErrors[0]
+	// Traverse backwards to deprovision in reverse dependency order
+	result, err := graph.TraverseBackwards(ctx, func(key string) error {
+		r := resourceMap[key]
+
+		// Update status
+		pe.statusMonitor.UpdateStatus(r.ID(), StatusDeprovisioning)
+
+		// Deprovision the resource
+		if err := r.Deprovision(ctx, pe.context); err != nil {
+			pe.statusMonitor.UpdateStatus(r.ID(), StatusFailed)
+			return fmt.Errorf("failed to deprovision %s (%s): %w",
+				r.ID().Component, r.ID().Name, err)
+		}
+
+		// Delete state file
+		if err := pe.context.DeleteState(r.ID()); err != nil {
+			// Log warning but don't fail
+			fmt.Printf("Warning: failed to delete state for %s: %v\n", r.ID().Name, err)
+		}
+
+		// Update status
+		pe.statusMonitor.UpdateStatus(r.ID(), StatusReady)
+
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	// Check if any nodes failed or were skipped
+	if len(result.Failed) > 0 || len(result.Skipped) > 0 {
+		if pe.failFast && len(result.Failed) > 0 {
+			// Return first error
+			for _, key := range result.Failed {
+				if err := result.Errors[key]; err != nil {
+					return err
+				}
+			}
 		}
 		// Log all errors
-		for _, err := range allErrors {
-			fmt.Printf("Warning: error during deprovisioning: %v\n", err)
+		for key, err := range result.Errors {
+			fmt.Printf("Warning: error during deprovisioning of %s: %v\n", key, err)
 		}
-		return fmt.Errorf("deprovisioning completed with %d error(s)", len(allErrors))
+		if len(result.Failed) > 0 {
+			return fmt.Errorf("deprovisioning completed with %d error(s), %d skipped", len(result.Failed), len(result.Skipped))
+		}
 	}
 
 	return nil
 }
 
 // buildDependencyGraph creates a dependency graph from the resources
-func (pe *ProvisionerEngine) buildDependencyGraph(resources []Resource) *dependencyGraph {
-	graph := newDependencyGraph()
+// Returns the graph and a map from resource key to Resource
+func (pe *ProvisionerEngine) buildDependencyGraph(resources []Resource) (*Graph, map[string]Resource, error) {
+	graph := NewGraph()
+	resourceMap := make(map[string]Resource)
 
-	// Add all resources to the graph
+	// Add all nodes
 	for _, r := range resources {
-		graph.addResource(r)
+		key := resourceKey(r.ID())
+		resourceMap[key] = r
+		graph.AddNode(key)
 	}
 
 	// Add explicit dependencies
 	for _, r := range resources {
 		for _, depID := range r.Dependencies() {
-			graph.addDependency(r.ID(), depID)
+			graph.AddDependency(resourceKey(r.ID()), resourceKey(depID))
 		}
 	}
 
@@ -175,7 +156,7 @@ func (pe *ProvisionerEngine) buildDependencyGraph(resources []Resource) *depende
 		if r.ID().Component != clustermetadatapb.ID_GLOBAL_TOPO {
 			globalTopoID := findResourceByComponent(resources, clustermetadatapb.ID_GLOBAL_TOPO)
 			if globalTopoID != nil {
-				graph.addDependency(r.ID(), globalTopoID)
+				graph.AddDependency(resourceKey(r.ID()), resourceKey(globalTopoID))
 			}
 		}
 
@@ -183,93 +164,75 @@ func (pe *ProvisionerEngine) buildDependencyGraph(resources []Resource) *depende
 		if r.ID().Cell != topo.GlobalCell && r.ID().Component != clustermetadatapb.ID_CELL_TOPO {
 			cellTopoID := findResourceByCellAndComponent(resources, r.ID().Cell, clustermetadatapb.ID_CELL_TOPO)
 			if cellTopoID != nil {
-				graph.addDependency(r.ID(), cellTopoID)
+				graph.AddDependency(resourceKey(r.ID()), resourceKey(cellTopoID))
 			}
 		}
 	}
 
-	return graph
+	return graph, resourceMap, nil
 }
 
 // executeProvisioning executes the provisioning with parallel execution where possible
-func (pe *ProvisionerEngine) executeProvisioning(ctx context.Context, graph *dependencyGraph) ([]*provisioner.ProvisionResult, error) {
+func (pe *ProvisionerEngine) executeProvisioning(ctx context.Context, graph *Graph, resourceMap map[string]Resource) ([]*provisioner.ProvisionResult, error) {
 	var allResults []*provisioner.ProvisionResult
 	var resultsMu sync.Mutex
 
-	// Track errors
-	var allErrors []error
-	var errorsMu sync.Mutex
+	// Traverse the graph and provision each resource
+	result, err := graph.Traverse(ctx, func(key string) error {
+		r := resourceMap[key]
 
-	// Start resources as they become eligible
-	for !graph.allStarted() {
-		resource, err := graph.startEligibleResource(ctx)
+		// Update status
+		pe.statusMonitor.UpdateStatus(r.ID(), StatusProvisioning)
+
+		// Provision the resource
+		provResult, err := r.Provision(ctx, pe.context)
 		if err != nil {
-			// Context cancelled
-			return allResults, err
+			pe.statusMonitor.UpdateStatus(r.ID(), StatusFailed)
+			return fmt.Errorf("failed to provision %s (%s): %w",
+				r.ID().Component, r.ID().Name, err)
 		}
 
-		if resource == nil {
-			// No more resources to start (all started or failed)
-			break
+		// Update status
+		pe.statusMonitor.UpdateStatus(r.ID(), StatusReady)
+
+		// Add result to collection
+		if provResult != nil {
+			resultsMu.Lock()
+			allResults = append(allResults, provResult)
+			resultsMu.Unlock()
 		}
 
-		// Start goroutine to provision this resource
-		go func(r Resource) {
-			// Update status
-			pe.statusMonitor.UpdateStatus(r.ID(), StatusProvisioning)
-
-			// Provision the resource
-			result, err := r.Provision(ctx, pe.context)
-			if err != nil {
-				err = fmt.Errorf("failed to provision %s (%s): %w",
-					r.ID().Component, r.ID().Name, err)
-				errorsMu.Lock()
-				allErrors = append(allErrors, err)
-				errorsMu.Unlock()
-				pe.statusMonitor.UpdateStatus(r.ID(), StatusFailed)
-
-				// Mark as failed in the graph (cascades to dependents)
-				graph.markFailed(r.ID())
-
-				if pe.failFast {
-					return
-				}
-				return
-			}
-
-			// Update status
-			pe.statusMonitor.UpdateStatus(r.ID(), StatusReady)
-
-			// Add result to collection
-			if result != nil {
-				resultsMu.Lock()
-				allResults = append(allResults, result)
-				resultsMu.Unlock()
-			}
-
-			// Mark as completed in the graph
-			graph.markCompleted(r.ID())
-		}(resource)
-	}
-
-	// Wait for all resources to complete or fail
-	if err := graph.Wait(ctx); err != nil {
+		return nil
+	})
+	if err != nil {
 		return allResults, err
 	}
 
-	// Check for errors
-	if len(allErrors) > 0 {
-		if pe.failFast {
-			return allResults, allErrors[0]
+	// Check if any nodes failed or were skipped
+	if len(result.Failed) > 0 || len(result.Skipped) > 0 {
+		if pe.failFast && len(result.Failed) > 0 {
+			// Return first error
+			for _, key := range result.Failed {
+				if err := result.Errors[key]; err != nil {
+					return allResults, err
+				}
+			}
 		}
 		// Log all errors
-		for _, err := range allErrors {
-			fmt.Printf("Warning: error during provisioning: %v\n", err)
+		for key, err := range result.Errors {
+			fmt.Printf("Warning: error during provisioning of %s: %v\n", key, err)
 		}
-		return allResults, fmt.Errorf("provisioning completed with %d error(s)", len(allErrors))
+		if len(result.Failed) > 0 {
+			return allResults, fmt.Errorf("provisioning completed with %d error(s), %d skipped", len(result.Failed), len(result.Skipped))
+		}
 	}
 
 	return allResults, nil
+}
+
+// resourceKey generates a unique key for a resource ID
+func resourceKey(id *clustermetadatapb.ID) string {
+	return fmt.Sprintf("%s:%s:%s", id.Component, id.Cell, id.Name)
 }
 
 // findResourceByComponent finds a resource ID by component type
