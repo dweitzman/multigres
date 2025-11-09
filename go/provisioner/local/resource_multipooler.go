@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"time"
 
+	"github.com/multigres/multigres/go/clustermetadata/topo"
 	"github.com/multigres/multigres/go/grpccommon"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	pb "github.com/multigres/multigres/go/pb/pgctldservice"
@@ -49,7 +50,7 @@ func NewMultipoolerResource(cellName, databaseName, serviceID string, config *Mu
 		},
 		databaseID: &clustermetadatapb.ID{
 			Component: clustermetadatapb.ID_DATABASE,
-			Cell:      "",
+			Cell:      topo.GlobalCell,
 			Name:      databaseName,
 		},
 		cellName:     cellName,

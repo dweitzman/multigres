@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"time"
 
+	"github.com/multigres/multigres/go/clustermetadata/topo"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	"github.com/multigres/multigres/go/provisioner"
 	"github.com/multigres/multigres/go/provisioner/local/ports"
@@ -44,7 +45,7 @@ func NewMultiorchResource(cellName, databaseName, serviceID string, config *Mult
 		},
 		databaseID: &clustermetadatapb.ID{
 			Component: clustermetadatapb.ID_DATABASE,
-			Cell:      "",
+			Cell:      topo.GlobalCell,
 			Name:      databaseName,
 		},
 		cellName:     cellName,

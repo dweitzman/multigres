@@ -81,7 +81,11 @@ func (pe *ProvisionerEngine) DeprovisionResources(ctx context.Context, resources
 
 	// Traverse backwards to deprovision in reverse dependency order
 	result, err := graph.TraverseBackwards(ctx, func(key string) error {
-		r := resourceMap[key]
+		r, exists := resourceMap[key]
+		if !exists {
+			// This should not happen - it means we have a node in the graph without a corresponding resource
+			return fmt.Errorf("internal error: resource key %s not found in resource map", key)
+		}
 
 		// Update status
 		pe.statusMonitor.UpdateStatus(r.ID(), StatusDeprovisioning)
@@ -179,7 +183,11 @@ func (pe *ProvisionerEngine) executeProvisioning(ctx context.Context, graph *Gra
 
 	// Traverse the graph and provision each resource
 	result, err := graph.Traverse(ctx, func(key string) error {
-		r := resourceMap[key]
+		r, exists := resourceMap[key]
+		if !exists {
+			// This should not happen - it means we have a node in the graph without a corresponding resource
+			return fmt.Errorf("internal error: resource key %s not found in resource map", key)
+		}
 
 		// Update status
 		pe.statusMonitor.UpdateStatus(r.ID(), StatusProvisioning)
