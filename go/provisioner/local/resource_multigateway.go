@@ -160,6 +160,7 @@ func (r *MultigatewayResource) Provision(ctx context.Context, pctx ProvisionCont
 	state = &LocalProvisionedService{
 		ID:         r.id.Name,
 		Service:    "multigateway",
+		Database:   r.databaseName,
 		PID:        multigatewayCmd.Process.Pid,
 		BinaryPath: multigatewayBinary,
 		Ports:      map[string]int{"http_port": httpPort, "grpc_port": grpcPort, "pg_port": pgPort},

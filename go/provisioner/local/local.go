@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -141,40 +142,46 @@ type PgctldProvisionResult struct {
 // loadServiceState loads a specific service state from disk
 func (p *localProvisioner) loadServiceState(req *provisioner.DeprovisionRequest) (*LocalProvisionedService, error) {
 	stateDir := p.getStateDir()
-	var targetDir string
 
-	if req.DatabaseName != "" {
-		// For database services: state/dbs/dbname
-		targetDir = filepath.Join(stateDir, "dbs", req.DatabaseName)
-	} else {
-		// For non-database services (like etcd): state/
-		targetDir = stateDir
-	}
+	// With flat structure, we need to search for files matching the service and ID
+	// File format is: <component>_<cell>_<name>.json
+	// We don't have cell info in the request, so search for any file ending with _<serviceID>.json
 
-	fileName := fmt.Sprintf("%s_%s.json", req.Service, req.ServiceID)
-	filePath := filepath.Join(targetDir, fileName)
-
-	// Check if state file exists
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		return nil, nil // Service not found
-	}
-
-	data, err := os.ReadFile(filePath)
+	entries, err := os.ReadDir(stateDir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read state file %s: %w", filePath, err)
+		return nil, fmt.Errorf("failed to read state directory: %w", err)
 	}
 
-	var service LocalProvisionedService
-	if err := json.Unmarshal(data, &service); err != nil {
-		return nil, fmt.Errorf("failed to parse state file %s: %w", filePath, err)
+	// Search for matching state file
+	suffix := fmt.Sprintf("_%s.json", req.ServiceID)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), suffix) {
+			continue
+		}
+
+		// Read and parse the file
+		filePath := filepath.Join(stateDir, entry.Name())
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			continue
+		}
+
+		var service LocalProvisionedService
+		if err := json.Unmarshal(data, &service); err != nil {
+			continue
+		}
+
+		// Check if this matches our criteria
+		if service.Service == req.Service && service.ID == req.ServiceID {
+			// For database services, also check database name if provided
+			if req.DatabaseName != "" && service.Database != req.DatabaseName {
+				continue
+			}
+			return &service, nil
+		}
 	}
 
-	// Sanity check: ensure this method is called for the expected service type
-	if req.Service != service.Service {
-		return nil, fmt.Errorf("deprovision%s called for wrong service type: %s", service.Service, req.Service)
-	}
-
-	return &service, nil
+	return nil, nil // Service not found
 }
 
 // stopService stops a specific service based on its type using the internal methods
@@ -317,24 +324,51 @@ func (p *localProvisioner) Bootstrap(ctx context.Context) ([]*provisioner.Provis
 // discoverDatabasesFromState discovers all databases that have running services by examining state files
 func (p *localProvisioner) discoverDatabasesFromState() ([]string, error) {
 	stateDir := p.getStateDir()
-	dbsDir := filepath.Join(stateDir, "dbs")
 
-	// Check if dbs directory exists
-	if _, err := os.Stat(dbsDir); os.IsNotExist(err) {
-		return nil, nil // No databases directory, no databases to deprovision
+	// Check if state directory exists
+	if _, err := os.Stat(stateDir); os.IsNotExist(err) {
+		return nil, nil // No state directory, no databases to deprovision
 	}
 
-	// Read all database directories
-	entries, err := os.ReadDir(dbsDir)
+	// Read all state files
+	entries, err := os.ReadDir(stateDir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read databases directory %s: %w", dbsDir, err)
+		return nil, fmt.Errorf("failed to read state directory %s: %w", stateDir, err)
 	}
 
-	var databases []string
+	// Collect unique database names from state files
+	dbMap := make(map[string]bool)
 	for _, entry := range entries {
-		if entry.IsDir() {
-			databases = append(databases, entry.Name())
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
 		}
+
+		// Read and parse the state file
+		filePath := filepath.Join(stateDir, entry.Name())
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			// Log warning but continue
+			fmt.Printf("Warning: failed to read state file %s: %v\n", filePath, err)
+			continue
+		}
+
+		var state LocalProvisionedService
+		if err := json.Unmarshal(data, &state); err != nil {
+			// Log warning but continue
+			fmt.Printf("Warning: failed to parse state file %s: %v\n", filePath, err)
+			continue
+		}
+
+		// Add database name if it exists
+		if state.Database != "" {
+			dbMap[state.Database] = true
+		}
+	}
+
+	// Convert map to slice
+	var databases []string
+	for db := range dbMap {
+		databases = append(databases, db)
 	}
 
 	return databases, nil
@@ -857,6 +891,75 @@ func (p *localProvisioner) buildBootstrapResources() ([]Resource, error) {
 	return resources, nil
 }
 
+// findMatchingStateFiles searches state files and returns those matching the predicate
+func (p *localProvisioner) findMatchingStateFiles(predicate func(*LocalProvisionedService) bool) []*LocalProvisionedService {
+	stateDir := p.getStateDir()
+
+	// Check if state directory exists
+	if _, err := os.Stat(stateDir); os.IsNotExist(err) {
+		return nil
+	}
+
+	// Read all state files
+	entries, err := os.ReadDir(stateDir)
+	if err != nil {
+		return nil
+	}
+
+	var matches []*LocalProvisionedService
+
+	// Search for matching services
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+
+		// Read and parse the state file
+		filePath := filepath.Join(stateDir, entry.Name())
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			continue
+		}
+
+		var state LocalProvisionedService
+		if err := json.Unmarshal(data, &state); err != nil {
+			continue
+		}
+
+		// Check if this matches the predicate
+		if predicate(&state) {
+			matches = append(matches, &state)
+		}
+	}
+
+	return matches
+}
+
+// generateDeterministicServiceID generates a deterministic service ID based on the resource configuration.
+// The ID will be consistent across restarts as long as the configuration remains the same.
+func generateDeterministicServiceID(serviceName, cellName, databaseName string, config any) string {
+	// Hash the configuration to generate a seed
+	h := fnv.New64a()
+
+	// Include service type, cell, and database in the hash for uniqueness
+	h.Write([]byte(serviceName))
+	h.Write([]byte(cellName))
+	h.Write([]byte(databaseName))
+
+	// Include the config in the hash
+	if config != nil {
+		configJSON, err := json.Marshal(config)
+		if err == nil {
+			h.Write(configJSON)
+		}
+	}
+
+	seed := h.Sum64()
+
+	// Generate deterministic random string from seed
+	return stringutil.DeterministicString(8, seed)
+}
+
 // buildDatabaseResourcesFromState creates the resource list for a database by reading state files
 // This is used for deprovisioning to ensure we clean up all services that are actually running,
 // regardless of what's in the configuration
@@ -949,13 +1052,18 @@ func (p *localProvisioner) buildDatabaseResources(databaseName string) ([]Resour
 			return nil, fmt.Errorf("no configuration found for cell %s", cellName)
 		}
 
-		// Generate service IDs
-		multigatewayID := fmt.Sprintf("multigateway-%s-%s", cellName, stringutil.RandomString(8))
+		// Generate service IDs (deterministic based on config for consistent IDs across restarts)
+		// Format: <service>-<cell>-<8-char-deterministic-suffix>
+		multigatewayID := fmt.Sprintf("multigateway-%s-%s", cellName,
+			generateDeterministicServiceID("multigateway", cellName, databaseName, cellServices.Multigateway))
+
 		multipoolerID := cellServices.Multipooler.ServiceID
 		if multipoolerID == "" {
-			multipoolerID = stringutil.RandomString(8)
+			multipoolerID = generateDeterministicServiceID("multipooler", cellName, databaseName, cellServices.Multipooler)
 		}
-		multiorchID := fmt.Sprintf("multiorch-%s-%s", cellName, stringutil.RandomString(8))
+
+		multiorchID := fmt.Sprintf("multiorch-%s-%s", cellName,
+			generateDeterministicServiceID("multiorch", cellName, databaseName, cellServices.Multiorch))
 
 		// Multigateway
 		multigatewayResource := NewMultigatewayResource(cellName, databaseName, multigatewayID, &cellServices.Multigateway)

@@ -249,6 +249,7 @@ func (r *MultipoolerResource) provisionPgctld(ctx context.Context, pctx Provisio
 	prelimState := &LocalProvisionedService{
 		ID:        serviceID,
 		Service:   "multipooler",
+		Database:  r.databaseName,
 		PID:       0, // Not started yet
 		FQDN:      "localhost",
 		StartedAt: time.Now(),

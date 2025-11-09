@@ -226,28 +226,11 @@ func (pc *provisionContext) StatePath(resourceID *clustermetadatapb.ID) string {
 	stateDir := pc.provisioner.getStateDir()
 
 	// Generate state file name from resource ID
-	// Format: <component>_<name>.json for global resources
-	// Format: dbs/<database>/<component>_<name>.json for database resources
-	var statePath string
-
-	// Check if this is a database-scoped resource
-	if resourceID.Component == clustermetadatapb.ID_MULTIPOOLER ||
-		resourceID.Component == clustermetadatapb.ID_MULTIGATEWAY ||
-		resourceID.Component == clustermetadatapb.ID_MULTIORCH {
-		// Database-scoped resource - need to extract database name from metadata
-		// For now, use a "dbs" subdirectory. This will be populated correctly
-		// by SaveState which has access to the full state including metadata.
-		// When reading, we'll search recursively.
-		dbName := "unknown" // This will be overridden by the actual metadata
-		statePath = filepath.Join(stateDir, "dbs", dbName, fmt.Sprintf("%s_%s.json",
-			strings.ToLower(resourceID.Component.String()), resourceID.Name))
-	} else {
-		// Global resource
-		statePath = filepath.Join(stateDir, fmt.Sprintf("%s_%s.json",
-			strings.ToLower(resourceID.Component.String()), resourceID.Name))
-	}
-
-	return statePath
+	// Format: <component>_<cell>_<name>.json
+	// Using a flat structure so we can always find the file from just the resource ID
+	componentName := strings.ToLower(resourceID.Component.String())
+	fileName := fmt.Sprintf("%s_%s_%s.json", componentName, resourceID.Cell, resourceID.Name)
+	return filepath.Join(stateDir, fileName)
 }
 
 // FindBinary finds a binary in PATH or uses the configured path

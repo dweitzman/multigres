@@ -154,6 +154,7 @@ func (r *MultiorchResource) Provision(ctx context.Context, pctx ProvisionContext
 	state = &LocalProvisionedService{
 		ID:         r.id.Name,
 		Service:    "multiorch",
+		Database:   r.databaseName,
 		PID:        multiorchCmd.Process.Pid,
 		BinaryPath: multiorchBinary,
 		Ports:      map[string]int{"http_port": httpPort, "grpc_port": grpcPort},

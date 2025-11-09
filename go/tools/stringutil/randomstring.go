@@ -55,22 +55,15 @@ const (
 	maxAlphanumsPerInt = 63 / alphanumsIdxBits
 )
 
-// RandomString generates a random alphanumeric string, without vowels, which is n
-// characters long.  This will panic if n is less than zero.
-// How the random string is created:
-// - we generate random int63's
-// - from each int63, we are extracting multiple random letters by bit-shifting and masking
-// - if some index is out of range of alphanums we neglect it (unlikely to happen multiple times in a row)
-func RandomString(n int) string {
+// generateString is the core string generation logic shared by RandomString and DeterministicString.
+// It extracts random letters from int64s using bit-shifting and masking.
+func generateString(n int, r *rand.Rand) string {
 	b := make([]byte, n)
-	rng.Lock()
-	defer rng.Unlock()
-
-	randomInt64 := rng.rand.Int64()
+	randomInt64 := r.Int64()
 	remaining := maxAlphanumsPerInt
 	for i := 0; i < n; {
 		if remaining == 0 {
-			randomInt64, remaining = rng.rand.Int64(), maxAlphanumsPerInt
+			randomInt64, remaining = r.Int64(), maxAlphanumsPerInt
 		}
 		if idx := int(randomInt64 & alphanumsIdxMask); idx < len(alphanums) {
 			b[i] = alphanums[idx]
@@ -80,4 +73,20 @@ func RandomString(n int) string {
 		remaining--
 	}
 	return string(b)
+}
+
+// RandomString generates a random alphanumeric string, without vowels, which is n
+// characters long.  This will panic if n is less than zero.
+func RandomString(n int) string {
+	rng.Lock()
+	defer rng.Unlock()
+	return generateString(n, rng.rand)
+}
+
+// DeterministicString generates a deterministic alphanumeric string based on a seed.
+// The string will be n characters long and will always be the same for the same seed.
+// This is useful for generating stable service IDs across restarts.
+func DeterministicString(n int, seed uint64) string {
+	r := rand.New(rand.NewPCG(seed, seed))
+	return generateString(n, r)
 }

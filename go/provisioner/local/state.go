@@ -30,6 +30,7 @@ import (
 type LocalProvisionedService struct {
 	ID         string         `json:"id"`                    // Unique instance ID
 	Service    string         `json:"service"`               // Service name (etcd, multigateway, etc.)
+	Database   string         `json:"database,omitempty"`    // Database name for database-scoped services
 	PID        int            `json:"pid,omitempty"`         // For binary processes
 	BinaryPath string         `json:"binary-path,omitempty"` // Path to the binary
 	DataDir    string         `json:"data-dir,omitempty"`    // Data directory
