@@ -19,7 +19,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
+
+	"google.golang.org/grpc"
 
 	"github.com/multigres/multigres/go/clustermetadata/topo"
 	"github.com/multigres/multigres/go/grpccommon"
@@ -27,7 +30,6 @@ import (
 	pb "github.com/multigres/multigres/go/pb/pgctldservice"
 	"github.com/multigres/multigres/go/provisioner"
 	"github.com/multigres/multigres/go/provisioner/local/ports"
-	"google.golang.org/grpc"
 )
 
 // MultipoolerResource represents the multipooler service (including pgctld)
@@ -131,11 +133,6 @@ func (r *MultipoolerResource) provisionPgctld(ctx context.Context, pctx Provisio
 	}
 
 	// Get configuration
-	httpPort := r.config.HttpPort
-	if httpPort == 0 {
-		httpPort = ports.DefaultMultipoolerHTTP
-	}
-
 	grpcPort := r.pgctldConfig.GrpcPort
 	if grpcPort == 0 {
 		grpcPort = ports.DefaultPgctldGRPC
@@ -230,6 +227,11 @@ func (r *MultipoolerResource) provisionPgctld(ctx context.Context, pctx Provisio
 
 	if r.pgctldConfig.GRPCSocketFile != "" {
 		serverArgs = append(serverArgs, "--grpc-socket-file", r.pgctldConfig.GRPCSocketFile)
+		// Ensure socket directory exists
+		socketDir := filepath.Dir(r.pgctldConfig.GRPCSocketFile)
+		if err := os.MkdirAll(socketDir, 0o755); err != nil {
+			return nil, fmt.Errorf("failed to create socket directory %s: %w", socketDir, err)
+		}
 	}
 
 	pgctldCmd := exec.CommandContext(ctx, pgctldBinary, serverArgs...)
@@ -367,6 +369,11 @@ func (r *MultipoolerResource) provisionMultipoolerService(ctx context.Context, p
 
 	if r.config.GRPCSocketFile != "" {
 		args = append(args, "--grpc-socket-file", r.config.GRPCSocketFile)
+		// Ensure socket directory exists
+		socketDir := filepath.Dir(r.config.GRPCSocketFile)
+		if err := os.MkdirAll(socketDir, 0o755); err != nil {
+			return nil, fmt.Errorf("failed to create socket directory %s: %w", socketDir, err)
+		}
 	}
 
 	args = append(args, "--service-map", "grpc-pooler")

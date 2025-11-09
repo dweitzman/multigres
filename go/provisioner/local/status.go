@@ -144,13 +144,14 @@ func (sm *StatusMonitor) displayResourceStatus(state *ResourceState) {
 
 	// Format the resource name
 	var name string
-	if id.Component == clustermetadatapb.ID_GLOBAL_TOPO {
+	switch id.Component {
+	case clustermetadatapb.ID_GLOBAL_TOPO:
 		name = fmt.Sprintf("Global topology (%s)", id.Name)
-	} else if id.Component == clustermetadatapb.ID_CELL_TOPO {
+	case clustermetadatapb.ID_CELL_TOPO:
 		name = fmt.Sprintf("Cell %s topology", id.Cell)
-	} else if id.Component == clustermetadatapb.ID_DATABASE {
+	case clustermetadatapb.ID_DATABASE:
 		name = fmt.Sprintf("Database '%s'", id.Name)
-	} else {
+	default:
 		name = fmt.Sprintf("%s (%s)", id.Component.String(), id.Name)
 	}
 
