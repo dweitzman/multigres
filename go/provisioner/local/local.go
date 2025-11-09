@@ -24,8 +24,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -138,24 +136,6 @@ type PgctldProvisionResult struct {
 	Address string
 	Port    int
 	LogFile string
-}
-
-// Deprovision removes/stops a specific service
-func (p *localProvisioner) Deprovision(ctx context.Context, req *provisioner.DeprovisionRequest) error {
-	fmt.Printf("Deprovisioning %s service (ID: %s)...\n", req.Service, req.ServiceID)
-
-	// Stop the service using the service-specific method
-	if err := p.stopService(ctx, req); err != nil {
-		return fmt.Errorf("failed to stop %s service: %w", req.Service, err)
-	}
-
-	// Remove state file on successful stop
-	if err := p.removeServiceState(req.ServiceID, req.Service, req.DatabaseName); err != nil {
-		fmt.Printf("Warning: failed to remove state file: %v\n", err)
-	}
-
-	fmt.Printf("%s service (ID: %s) deprovisioned successfully ✓\n", req.Service, req.ServiceID)
-	return nil
 }
 
 // loadServiceState loads a specific service state from disk
@@ -334,65 +314,84 @@ func (p *localProvisioner) Bootstrap(ctx context.Context) ([]*provisioner.Provis
 	return p.BootstrapV2(ctx, false)
 }
 
+// discoverDatabasesFromState discovers all databases that have running services by examining state files
+func (p *localProvisioner) discoverDatabasesFromState() ([]string, error) {
+	stateDir := p.getStateDir()
+	dbsDir := filepath.Join(stateDir, "dbs")
+
+	// Check if dbs directory exists
+	if _, err := os.Stat(dbsDir); os.IsNotExist(err) {
+		return nil, nil // No databases directory, no databases to deprovision
+	}
+
+	// Read all database directories
+	entries, err := os.ReadDir(dbsDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read databases directory %s: %w", dbsDir, err)
+	}
+
+	var databases []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			databases = append(databases, entry.Name())
+		}
+	}
+
+	return databases, nil
+}
+
+// buildGlobalResources creates Resource objects for global services (etcd, multiadmin)
+func (p *localProvisioner) buildGlobalResources() ([]Resource, error) {
+	var resources []Resource
+
+	// Add etcd resource
+	etcdResource := NewGlobalTopoResource("etcd", &p.config.Etcd)
+	resources = append(resources, etcdResource)
+
+	// Add multiadmin resource
+	multiadminResource := NewMultiadminResource("multiadmin", &p.config.Multiadmin)
+	resources = append(resources, multiadminResource)
+
+	return resources, nil
+}
+
 // Teardown shuts down all services (reverse of Bootstrap)
 func (p *localProvisioner) Teardown(ctx context.Context, clean bool) error {
 	fmt.Println("=== Tearing down Multigres cluster ===")
 
-	// Get the typed configuration
-	config := p.config
-
-	// Get etcd address (assuming etcd is running locally)
-	etcdPort := config.Etcd.Port
+	// Get etcd address for database deprovisioning
+	etcdPort := p.config.Etcd.Port
 	etcdAddress := fmt.Sprintf("localhost:%d", etcdPort)
 
-	// 1. Deprovision database services first
-	if err := p.DeprovisionDatabase(ctx, config.DefaultDbName, etcdAddress); err != nil {
-		fmt.Printf("Warning: failed to deprovision database: %v\n", err)
+	// 1. Discover and deprovision all databases from state files
+	databases, err := p.discoverDatabasesFromState()
+	if err != nil {
+		fmt.Printf("Warning: failed to discover databases from state: %v\n", err)
+	} else if len(databases) > 0 {
+		fmt.Printf("Found %d database(s) to deprovision\n", len(databases))
+		for _, dbName := range databases {
+			fmt.Printf("Deprovisioning database: %s\n", dbName)
+			if err := p.DeprovisionDatabase(ctx, dbName, etcdAddress); err != nil {
+				fmt.Printf("Warning: failed to deprovision database %s: %v\n", dbName, err)
+			}
+		}
 	}
 
-	// 2. Deprovision global services (multiadmin)
+	// 2. Deprovision global services (multiadmin, etcd) using the provisioner engine
 	fmt.Println("=== Deprovisioning global services ===")
-	globalServices, err := p.loadGlobalServices()
+	globalResources, err := p.buildGlobalResources()
 	if err != nil {
-		fmt.Printf("Warning: failed to load global service states: %v\n", err)
+		fmt.Printf("Warning: failed to build global resources: %v\n", err)
 	} else {
-		for _, service := range globalServices {
-			if service.Service == "multiadmin" {
-				req := &provisioner.DeprovisionRequest{
-					Service:      "multiadmin",
-					ServiceID:    service.ID,
-					DatabaseName: "", // multiadmin is a global service
-					Clean:        clean,
-				}
-				if err := p.deprovisionService(ctx, req); err != nil {
-					fmt.Printf("Warning: failed to deprovision multiadmin: %v\n", err)
-				}
-			}
+		pctx := newProvisionContext(p)
+		engine := NewProvisionerEngine(pctx, false) // Don't fail fast during teardown
+
+		if err := engine.DeprovisionResources(ctx, globalResources); err != nil {
+			fmt.Printf("Warning: failed to deprovision global services: %v\n", err)
 		}
 	}
 
-	// 3. Deprovision etcd last
-	fmt.Println("=== Deprovisioning etcd ===")
-	etcdServices, err := p.loadEtcdServices()
-	if err != nil {
-		return fmt.Errorf("failed to load etcd service states: %w", err)
-	}
-
-	for _, service := range etcdServices {
-		if service.Service == "etcd" {
-			req := &provisioner.DeprovisionRequest{
-				Service:      "etcd",
-				ServiceID:    service.ID,
-				DatabaseName: "", // etcd is a global service
-				Clean:        clean,
-			}
-			if err := p.deprovisionService(ctx, req); err != nil {
-				fmt.Printf("Warning: failed to deprovision etcd: %v\n", err)
-			}
-		}
-	}
-
-	// 4. Clean up logs, state, and data directories if requested
+	// 3. Clean up logs, state, and data directories if requested
 	if clean {
 		logsDir := p.getLogsDir()
 		if err := p.cleanupLogsDirectory(logsDir); err != nil {
@@ -539,43 +538,31 @@ func (p *localProvisioner) ProvisionDatabase(ctx context.Context, databaseName s
 	return results, nil
 }
 
-// DeprovisionDatabase deprovisions all services for a database
+// DeprovisionDatabase deprovisions all services for a database using the provisioner engine
+// It discovers services from state files rather than configuration
 func (p *localProvisioner) DeprovisionDatabase(ctx context.Context, databaseName string, etcdAddress string) error {
 	fmt.Printf("=== Deprovisioning database: %s ===\n", databaseName)
 
-	// Find all running services related to this database
-	services, err := p.loadDbProvisionedServices(databaseName)
+	// Build database resources from actual running state, not configuration
+	dbResources, err := p.buildDatabaseResourcesFromState(databaseName)
 	if err != nil {
-		return fmt.Errorf("failed to load service states for database %s: %w", databaseName, err)
+		return fmt.Errorf("failed to build database resources for %s: %w", databaseName, err)
 	}
 
-	var servicesStopped atomic.Int64
-
-	var wg sync.WaitGroup
-	for _, service := range services {
-		fmt.Printf("Stopping %s service (ID: %s) for database %s...\n", service.Service, service.ID, databaseName)
-
-		req := &provisioner.DeprovisionRequest{
-			Service:      service.Service,
-			ServiceID:    service.ID,
-			DatabaseName: databaseName,
-			Clean:        true, // Clean up data when deprovisioning database
-		}
-
-		wg.Go(func() {
-			if err := p.stopService(ctx, req); err != nil {
-				fmt.Printf("Warning: failed to stop %s service: %v\n", service.Service, err)
-			}
-			// Remove state file
-			if err := p.removeServiceState(service.ID, req.Service, req.DatabaseName); err != nil {
-				fmt.Printf("Warning: failed to remove state file: %v\n", err)
-			}
-			servicesStopped.Add(1)
-		})
+	if len(dbResources) == 0 {
+		fmt.Printf("No services found for database %s\n", databaseName)
+		return nil
 	}
-	wg.Wait()
 
-	fmt.Printf("Database %s deprovisioned successfully (%d services stopped)\n", databaseName, servicesStopped.Load())
+	// Use the provisioner engine to deprovision all database resources in reverse order
+	pctx := newProvisionContext(p)
+	engine := NewProvisionerEngine(pctx, false) // Don't fail fast during teardown
+
+	if err := engine.DeprovisionResources(ctx, dbResources); err != nil {
+		return fmt.Errorf("failed to deprovision database %s: %w", databaseName, err)
+	}
+
+	fmt.Printf("Database %s deprovisioned successfully\n", databaseName)
 	return nil
 }
 
@@ -866,6 +853,71 @@ func (p *localProvisioner) buildBootstrapResources() ([]Resource, error) {
 	// 3. Multiadmin (global admin service)
 	multiadminResource := NewMultiadminResource("multiadmin", &p.config.Multiadmin)
 	resources = append(resources, multiadminResource)
+
+	return resources, nil
+}
+
+// buildDatabaseResourcesFromState creates the resource list for a database by reading state files
+// This is used for deprovisioning to ensure we clean up all services that are actually running,
+// regardless of what's in the configuration
+func (p *localProvisioner) buildDatabaseResourcesFromState(databaseName string) ([]Resource, error) {
+	var resources []Resource
+
+	// Load all services from state for this database
+	services, err := p.loadDbProvisionedServices(databaseName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load services from state: %w", err)
+	}
+
+	// Create resource objects for each service found in state
+	for _, service := range services {
+		// Extract metadata
+		cell, _ := service.Metadata["cell"].(string)
+		if cell == "" {
+			fmt.Printf("Warning: service %s has no cell metadata, skipping\n", service.ID)
+			continue
+		}
+
+		// Get cell config - for deprovisioning we need minimal config
+		cellServices, ok := p.config.Cells[cell]
+		if !ok {
+			// If cell doesn't exist in config, create minimal config for deprovisioning
+			// This can happen if services were created with a different config
+			cellServices = CellServicesConfig{}
+		}
+
+		// Create the appropriate resource based on service type
+		switch service.Service {
+		case "multigateway":
+			resource := NewMultigatewayResource(cell, databaseName, service.ID, &cellServices.Multigateway)
+			resources = append(resources, resource)
+
+		case "multipooler":
+			resource := NewMultipoolerResource(cell, databaseName, service.ID, &cellServices.Multipooler, &cellServices.Pgctld)
+			resources = append(resources, resource)
+
+		case "multiorch":
+			resource := NewMultiorchResource(cell, databaseName, service.ID, &cellServices.Multiorch)
+			resources = append(resources, resource)
+
+		case "pgctld":
+			// Pgctld is handled by multipooler resource, skip standalone pgctld entries
+			continue
+
+		default:
+			fmt.Printf("Warning: unknown service type %s for service %s, skipping\n", service.Service, service.ID)
+		}
+	}
+
+	// Add database resource for topology cleanup
+	// Note: For deprovisioning, we don't need full database config
+	if len(resources) > 0 {
+		databaseConfig := &DatabaseConfig{
+			Name: databaseName,
+		}
+		databaseResource := NewDatabaseResource(databaseConfig)
+		resources = append(resources, databaseResource)
+	}
 
 	return resources, nil
 }

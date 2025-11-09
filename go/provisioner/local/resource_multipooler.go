@@ -95,41 +95,37 @@ func (r *MultipoolerResource) Provision(ctx context.Context, pctx ProvisionConte
 	}
 
 	// Step 1: Provision pgctld first
-	pgctldResult, err := r.provisionPgctld(ctx, pctx)
+	pgctldResult, prelimState, err := r.provisionPgctld(ctx, pctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to provision pgctld: %w", err)
 	}
 
 	// Step 2: Provision multipooler
-	return r.provisionMultipoolerService(ctx, pctx, pgctldResult.Address)
+	return r.provisionMultipoolerService(ctx, pctx, pgctldResult.Address, prelimState)
 }
 
-// provisionPgctld provisions pgctld and PostgreSQL
-func (r *MultipoolerResource) provisionPgctld(ctx context.Context, pctx ProvisionContext) (*pgctldProvisionResult, error) {
+// provisionPgctld provisions pgctld and PostgreSQL, returns pgctld info and preliminary multipooler state
+func (r *MultipoolerResource) provisionPgctld(ctx context.Context, pctx ProvisionContext) (*pgctldProvisionResult, *LocalProvisionedService, error) {
 	serviceID := r.id.Name
 	pgctldServiceID := fmt.Sprintf("pgctld-%s", serviceID)
 
-	// Create pgctld resource ID
-	pgctldID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER, // Pgctld is part of multipooler
-		Cell:      r.cellName,
-		Name:      pgctldServiceID,
-	}
+	// Check if multipooler is already running (which means pgctld is too)
+	multipoolerState, err := pctx.ReadState(r.id)
+	if err == nil && multipoolerState != nil {
+		// Extract pgctld info from metadata
+		pgctldPort, _ := multipoolerState.Metadata["pgctld_port"].(int)
+		if pgctldPort > 0 {
+			// Verify health
+			grpcAddress := fmt.Sprintf("localhost:%d", pgctldPort)
+			if err := checkPgctldHealth(grpcAddress); err != nil {
+				return nil, nil, fmt.Errorf("pgctld health check failed: %w", err)
+			}
 
-	// Check if pgctld is already running
-	pgctldState, err := pctx.ReadState(pgctldID)
-	if err == nil && pgctldState != nil && pgctldState.PID > 0 {
-		// Verify health
-		grpcAddress := fmt.Sprintf("localhost:%d", pgctldState.Ports["grpc_port"])
-		if err := checkPgctldHealth(grpcAddress); err != nil {
-			return nil, fmt.Errorf("pgctld health check failed: %w", err)
+			return &pgctldProvisionResult{
+				Address: grpcAddress,
+				Port:    pgctldPort,
+			}, multipoolerState, nil
 		}
-
-		return &pgctldProvisionResult{
-			Address: grpcAddress,
-			Port:    pgctldState.Ports["grpc_port"],
-			LogFile: pgctldState.LogFile,
-		}, nil
 	}
 
 	// Get configuration
@@ -171,24 +167,24 @@ func (r *MultipoolerResource) provisionPgctld(ctx context.Context, pctx Provisio
 	// Find pgctld binary
 	pgctldBinary, err := pctx.FindBinary("pgctld", r.pgctldConfig.Path)
 	if err != nil {
-		return nil, fmt.Errorf("pgctld binary not found: %w", err)
+		return nil, nil, fmt.Errorf("pgctld binary not found: %w", err)
 	}
 
 	// Create log file
 	pgctldLogFile, err := pctx.LogPath("pgctld", pgctldServiceID, r.databaseName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create pgctld log file: %w", err)
+		return nil, nil, fmt.Errorf("failed to create pgctld log file: %w", err)
 	}
 
 	// Create pooler directory
 	if err := os.MkdirAll(poolerDir, 0o755); err != nil {
-		return nil, fmt.Errorf("failed to create pooler directory %s: %w", poolerDir, err)
+		return nil, nil, fmt.Errorf("failed to create pooler directory %s: %w", poolerDir, err)
 	}
 
 	// Create password file if configured
 	if r.pgctldConfig.PgPwfile != "" {
 		if err := os.WriteFile(r.pgctldConfig.PgPwfile, []byte("postgres"), 0o600); err != nil {
-			return nil, fmt.Errorf("failed to create password file %s: %w", r.pgctldConfig.PgPwfile, err)
+			return nil, nil, fmt.Errorf("failed to create password file %s: %w", r.pgctldConfig.PgPwfile, err)
 		}
 	}
 
@@ -209,7 +205,7 @@ func (r *MultipoolerResource) provisionPgctld(ctx context.Context, pctx Provisio
 
 	initCmd := exec.CommandContext(ctx, pgctldBinary, initArgs...)
 	if err := initCmd.Run(); err != nil {
-		return nil, fmt.Errorf("failed to initialize pgctld data directory: %w", err)
+		return nil, nil, fmt.Errorf("failed to initialize pgctld data directory: %w", err)
 	}
 
 	// Start pgctld server
@@ -230,66 +226,68 @@ func (r *MultipoolerResource) provisionPgctld(ctx context.Context, pctx Provisio
 		// Ensure socket directory exists
 		socketDir := filepath.Dir(r.pgctldConfig.GRPCSocketFile)
 		if err := os.MkdirAll(socketDir, 0o755); err != nil {
-			return nil, fmt.Errorf("failed to create socket directory %s: %w", socketDir, err)
+			return nil, nil, fmt.Errorf("failed to create socket directory %s: %w", socketDir, err)
 		}
 	}
 
 	pgctldCmd := exec.CommandContext(ctx, pgctldBinary, serverArgs...)
 	if err := pgctldCmd.Start(); err != nil {
-		return nil, fmt.Errorf("failed to start pgctld server: %w", err)
+		return nil, nil, fmt.Errorf("failed to start pgctld server: %w", err)
 	}
 
 	// Validate process is running
 	if err := pctx.ValidateProcessRunning(pgctldCmd.Process.Pid); err != nil {
-		return nil, fmt.Errorf("pgctld process validation failed: %w", err)
+		return nil, nil, fmt.Errorf("pgctld process validation failed: %w", err)
 	}
 
-	// Save pgctld state
-	pgctldState = &LocalProvisionedService{
-		ID:         pgctldServiceID,
-		Service:    "pgctld",
-		PID:        pgctldCmd.Process.Pid,
-		BinaryPath: pgctldBinary,
-		Ports:      map[string]int{"grpc_port": grpcPort},
-		FQDN:       "localhost",
-		LogFile:    pgctldLogFile,
-		StartedAt:  time.Now(),
-		DataDir:    poolerDir,
+	// Create and save preliminary multipooler state with pgctld info (before health check)
+	tableGroup := r.config.TableGroup
+	if tableGroup == "" {
+		tableGroup = "default"
+	}
+
+	prelimState := &LocalProvisionedService{
+		ID:        serviceID,
+		Service:   "multipooler",
+		PID:       0, // Not started yet
+		FQDN:      "localhost",
+		StartedAt: time.Now(),
 		Metadata: map[string]any{
-			"cell":                   r.cellName,
-			"database":               r.databaseName,
-			"table_group":            r.config.TableGroup,
-			"service_id":             serviceID,
-			"multipooler_service_id": serviceID,
+			"cell":        r.cellName,
+			"database":    r.databaseName,
+			"table_group": tableGroup,
+			"pgctld_pid":  pgctldCmd.Process.Pid,
+			"pgctld_port": grpcPort,
 		},
 	}
 
-	if err := pctx.SaveState(pgctldState); err != nil {
-		return nil, fmt.Errorf("failed to save pgctld state: %w", err)
+	if err := pctx.SaveState(prelimState); err != nil {
+		return nil, nil, fmt.Errorf("failed to save preliminary multipooler state: %w", err)
 	}
 
 	// Wait for pgctld to be ready
+	pgctldPorts := map[string]int{"grpc_port": grpcPort}
 	readyCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	if err := pctx.WaitForServiceReady(readyCtx, "pgctld", "localhost", pgctldState.Ports); err != nil {
-		return nil, fmt.Errorf("pgctld readiness check failed: %w", err)
+	if err := pctx.WaitForServiceReady(readyCtx, "pgctld", "localhost", pgctldPorts); err != nil {
+		return nil, nil, fmt.Errorf("pgctld readiness check failed: %w", err)
 	}
 
 	// Start PostgreSQL via pgctld
 	grpcAddress := fmt.Sprintf("localhost:%d", grpcPort)
 	if err := startPostgreSQLViaPgctld(grpcAddress); err != nil {
-		return nil, fmt.Errorf("failed to start PostgreSQL: %w", err)
+		return nil, nil, fmt.Errorf("failed to start PostgreSQL: %w", err)
 	}
 
 	return &pgctldProvisionResult{
 		Address: grpcAddress,
 		Port:    grpcPort,
 		LogFile: pgctldLogFile,
-	}, nil
+	}, prelimState, nil
 }
 
 // provisionMultipoolerService provisions the multipooler service
-func (r *MultipoolerResource) provisionMultipoolerService(ctx context.Context, pctx ProvisionContext, pgctldAddress string) (*provisioner.ProvisionResult, error) {
+func (r *MultipoolerResource) provisionMultipoolerService(ctx context.Context, pctx ProvisionContext, pgctldAddress string, prelimState *LocalProvisionedService) (*provisioner.ProvisionResult, error) {
 	serviceID := r.id.Name
 
 	// Get configuration
@@ -389,24 +387,14 @@ func (r *MultipoolerResource) provisionMultipoolerService(ctx context.Context, p
 		return nil, fmt.Errorf("multipooler process validation failed: %w", err)
 	}
 
-	// Create state
-	state := &LocalProvisionedService{
-		ID:         serviceID,
-		Service:    "multipooler",
-		PID:        multipoolerCmd.Process.Pid,
-		BinaryPath: multipoolerBinary,
-		Ports:      map[string]int{"http_port": httpPort, "grpc_port": grpcPort},
-		FQDN:       "localhost",
-		LogFile:    logFile,
-		StartedAt:  time.Now(),
-		Metadata: map[string]any{
-			"cell":        r.cellName,
-			"database":    database,
-			"table_group": tableGroup,
-		},
-	}
+	// Update preliminary state with multipooler info (preserving pgctld metadata)
+	state := prelimState
+	state.PID = multipoolerCmd.Process.Pid
+	state.BinaryPath = multipoolerBinary
+	state.Ports = map[string]int{"http_port": httpPort, "grpc_port": grpcPort}
+	state.LogFile = logFile
 
-	// Save state
+	// Save updated state
 	if err := pctx.SaveState(state); err != nil {
 		return nil, fmt.Errorf("failed to save state: %w", err)
 	}
@@ -437,8 +425,6 @@ func (r *MultipoolerResource) provisionMultipoolerService(ctx context.Context, p
 
 // Deprovision stops both multipooler and pgctld
 func (r *MultipoolerResource) Deprovision(ctx context.Context, pctx ProvisionContext) error {
-	serviceID := r.id.Name
-
 	// Stop multipooler first
 	multipoolerState, err := pctx.ReadState(r.id)
 	if err == nil && multipoolerState != nil && multipoolerState.PID > 0 {
@@ -447,26 +433,22 @@ func (r *MultipoolerResource) Deprovision(ctx context.Context, pctx ProvisionCon
 		}
 	}
 
-	// Then stop pgctld (which will stop PostgreSQL first)
-	pgctldServiceID := fmt.Sprintf("pgctld-%s", serviceID)
-	pgctldID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
-		Cell:      r.cellName,
-		Name:      pgctldServiceID,
-	}
+	// Then stop pgctld (info stored in multipooler metadata)
+	if multipoolerState != nil {
+		pgctldPID, _ := multipoolerState.Metadata["pgctld_pid"].(int)
+		pgctldPort, _ := multipoolerState.Metadata["pgctld_port"].(int)
 
-	pgctldState, err := pctx.ReadState(pgctldID)
-	if err == nil && pgctldState != nil && pgctldState.PID > 0 {
-		// Stop PostgreSQL via gRPC first
-		grpcAddress := fmt.Sprintf("localhost:%d", pgctldState.Ports["grpc_port"])
-		if err := stopPostgreSQLViaPgctld(grpcAddress); err != nil {
-			// Log warning but continue
-			fmt.Printf("Warning: failed to stop PostgreSQL gracefully: %v\n", err)
-		}
+		if pgctldPID > 0 && pgctldPort > 0 {
+			// Stop PostgreSQL via gRPC first
+			grpcAddress := fmt.Sprintf("localhost:%d", pgctldPort)
+			if err := stopPostgreSQLViaPgctld(grpcAddress); err != nil {
+				return fmt.Errorf("failed to stop PostgreSQL gracefully: %w", err)
+			}
 
-		// Stop pgctld process
-		if err := pctx.StopProcess(pgctldState.PID); err != nil {
-			return fmt.Errorf("failed to stop pgctld process: %w", err)
+			// Stop pgctld process
+			if err := pctx.StopProcess(pgctldPID); err != nil {
+				return fmt.Errorf("failed to stop pgctld process: %w", err)
+			}
 		}
 	}
 
