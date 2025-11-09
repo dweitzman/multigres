@@ -51,11 +51,16 @@ func (pe *ProvisionerEngine) ProvisionResources(ctx context.Context, resources [
 	// Build dependency graph
 	graph := pe.buildDependencyGraph(resources)
 
+	// Check for circular dependencies
+	if err := graph.detectCycles(); err != nil {
+		return nil, err
+	}
+
 	// Start status monitoring
 	pe.statusMonitor.Start(resources)
 	defer pe.statusMonitor.Stop()
 
-	// Execute provisioning with topological ordering
+	// Execute provisioning
 	results, err := pe.executeProvisioning(ctx, graph)
 	if err != nil {
 		return results, err
@@ -70,72 +75,78 @@ func (pe *ProvisionerEngine) DeprovisionResources(ctx context.Context, resources
 		return nil
 	}
 
-	// Build dependency graph (we'll reverse it for deprovisioning)
+	// Build dependency graph and invert it for deprovisioning
 	graph := pe.buildDependencyGraph(resources)
-
-	// Deprovision in reverse topological order
-	levels := graph.topologicalLevels()
+	invertedGraph := graph.invert()
 
 	// Track errors
 	var allErrors []error
 	var errorsMu sync.Mutex
 
-	// Reverse the levels for deprovisioning
-	for i := len(levels) - 1; i >= 0; i-- {
-		level := levels[i]
+	// Start resources as they become eligible
+	for !invertedGraph.allStarted() {
+		resource, err := invertedGraph.startEligibleResource(ctx)
+		if err != nil {
+			// Context cancelled
+			return err
+		}
 
-		// Deprovision all resources in this level in parallel
-		var wg sync.WaitGroup
+		if resource == nil {
+			// No more resources to start (all started or failed)
+			break
+		}
 
-		for _, resource := range level {
-			wg.Add(1)
-			go func(r Resource) {
-				defer wg.Done()
+		// Start goroutine to deprovision this resource
+		go func(r Resource) {
+			// Update status
+			pe.statusMonitor.UpdateStatus(r.ID(), StatusDeprovisioning)
 
-				// Update status
-				pe.statusMonitor.UpdateStatus(r.ID(), StatusDeprovisioning)
+			// Deprovision the resource
+			if err := r.Deprovision(ctx, pe.context); err != nil {
+				err = fmt.Errorf("failed to deprovision %s (%s): %w",
+					r.ID().Component, r.ID().Name, err)
+				errorsMu.Lock()
+				allErrors = append(allErrors, err)
+				errorsMu.Unlock()
+				pe.statusMonitor.UpdateStatus(r.ID(), StatusFailed)
 
-				// Deprovision the resource
-				if err := r.Deprovision(ctx, pe.context); err != nil {
-					err = fmt.Errorf("failed to deprovision %s (%s): %w",
-						r.ID().Component, r.ID().Name, err)
-					errorsMu.Lock()
-					allErrors = append(allErrors, err)
-					errorsMu.Unlock()
-					pe.statusMonitor.UpdateStatus(r.ID(), StatusFailed)
+				// Mark as failed in the graph (cascades to dependents)
+				invertedGraph.markFailed(r.ID())
 
-					if pe.failFast {
-						return
-					}
+				if pe.failFast {
 					return
 				}
-
-				// Delete state file
-				if err := pe.context.DeleteState(r.ID()); err != nil {
-					// Log warning but don't fail
-					fmt.Printf("Warning: failed to delete state for %s: %v\n", r.ID().Name, err)
-				}
-
-				// Update status
-				pe.statusMonitor.UpdateStatus(r.ID(), StatusReady)
-			}(resource)
-		}
-
-		wg.Wait()
-
-		// Check for errors
-		if len(allErrors) > 0 {
-			if pe.failFast {
-				return allErrors[0]
+				return
 			}
-			// Continue but remember the errors
-			for _, err := range allErrors {
-				fmt.Printf("Warning: error during deprovisioning: %v\n", err)
+
+			// Delete state file
+			if err := pe.context.DeleteState(r.ID()); err != nil {
+				// Log warning but don't fail
+				fmt.Printf("Warning: failed to delete state for %s: %v\n", r.ID().Name, err)
 			}
-		}
+
+			// Update status
+			pe.statusMonitor.UpdateStatus(r.ID(), StatusReady)
+
+			// Mark as completed in the graph
+			invertedGraph.markCompleted(r.ID())
+		}(resource)
 	}
 
+	// Wait for all resources to complete or fail
+	if err := invertedGraph.Wait(ctx); err != nil {
+		return err
+	}
+
+	// Check for errors
 	if len(allErrors) > 0 {
+		if pe.failFast {
+			return allErrors[0]
+		}
+		// Log all errors
+		for _, err := range allErrors {
+			fmt.Printf("Warning: error during deprovisioning: %v\n", err)
+		}
 		return fmt.Errorf("deprovisioning completed with %d error(s)", len(allErrors))
 	}
 
@@ -182,9 +193,6 @@ func (pe *ProvisionerEngine) buildDependencyGraph(resources []Resource) *depende
 
 // executeProvisioning executes the provisioning with parallel execution where possible
 func (pe *ProvisionerEngine) executeProvisioning(ctx context.Context, graph *dependencyGraph) ([]*provisioner.ProvisionResult, error) {
-	// Get topological levels (resources that can be provisioned in parallel at each level)
-	levels := graph.topologicalLevels()
-
 	var allResults []*provisioner.ProvisionResult
 	var resultsMu sync.Mutex
 
@@ -192,61 +200,72 @@ func (pe *ProvisionerEngine) executeProvisioning(ctx context.Context, graph *dep
 	var allErrors []error
 	var errorsMu sync.Mutex
 
-	// Provision each level in sequence, but provision resources within each level in parallel
-	for _, level := range levels {
-		var wg sync.WaitGroup
+	// Start resources as they become eligible
+	for !graph.allStarted() {
+		resource, err := graph.startEligibleResource(ctx)
+		if err != nil {
+			// Context cancelled
+			return allResults, err
+		}
 
-		for _, resource := range level {
-			wg.Add(1)
-			go func(r Resource) {
-				defer wg.Done()
+		if resource == nil {
+			// No more resources to start (all started or failed)
+			break
+		}
 
-				// Update status
-				pe.statusMonitor.UpdateStatus(r.ID(), StatusProvisioning)
+		// Start goroutine to provision this resource
+		go func(r Resource) {
+			// Update status
+			pe.statusMonitor.UpdateStatus(r.ID(), StatusProvisioning)
 
-				// Provision the resource
-				result, err := r.Provision(ctx, pe.context)
-				if err != nil {
-					err = fmt.Errorf("failed to provision %s (%s): %w",
-						r.ID().Component, r.ID().Name, err)
-					errorsMu.Lock()
-					allErrors = append(allErrors, err)
-					errorsMu.Unlock()
-					pe.statusMonitor.UpdateStatus(r.ID(), StatusFailed)
+			// Provision the resource
+			result, err := r.Provision(ctx, pe.context)
+			if err != nil {
+				err = fmt.Errorf("failed to provision %s (%s): %w",
+					r.ID().Component, r.ID().Name, err)
+				errorsMu.Lock()
+				allErrors = append(allErrors, err)
+				errorsMu.Unlock()
+				pe.statusMonitor.UpdateStatus(r.ID(), StatusFailed)
 
-					if pe.failFast {
-						return
-					}
+				// Mark as failed in the graph (cascades to dependents)
+				graph.markFailed(r.ID())
+
+				if pe.failFast {
 					return
 				}
-
-				// Update status
-				pe.statusMonitor.UpdateStatus(r.ID(), StatusReady)
-
-				// Add result to collection
-				if result != nil {
-					resultsMu.Lock()
-					allResults = append(allResults, result)
-					resultsMu.Unlock()
-				}
-			}(resource)
-		}
-
-		wg.Wait()
-
-		// Check for errors
-		if len(allErrors) > 0 {
-			if pe.failFast {
-				return allResults, allErrors[0]
+				return
 			}
-			// Continue but log the errors
-			for _, err := range allErrors {
-				fmt.Printf("Warning: error during provisioning: %v\n", err)
+
+			// Update status
+			pe.statusMonitor.UpdateStatus(r.ID(), StatusReady)
+
+			// Add result to collection
+			if result != nil {
+				resultsMu.Lock()
+				allResults = append(allResults, result)
+				resultsMu.Unlock()
 			}
-		}
+
+			// Mark as completed in the graph
+			graph.markCompleted(r.ID())
+		}(resource)
 	}
 
+	// Wait for all resources to complete or fail
+	if err := graph.Wait(ctx); err != nil {
+		return allResults, err
+	}
+
+	// Check for errors
 	if len(allErrors) > 0 {
+		if pe.failFast {
+			return allResults, allErrors[0]
+		}
+		// Log all errors
+		for _, err := range allErrors {
+			fmt.Printf("Warning: error during provisioning: %v\n", err)
+		}
 		return allResults, fmt.Errorf("provisioning completed with %d error(s)", len(allErrors))
 	}
 
@@ -271,124 +290,4 @@ func findResourceByCellAndComponent(resources []Resource, cell string, component
 		}
 	}
 	return nil
-}
-
-// dependencyGraph represents a directed acyclic graph of resource dependencies
-type dependencyGraph struct {
-	resources    map[string]Resource
-	dependencies map[string][]string // resourceKey -> []dependencyKeys
-	mu           sync.RWMutex
-}
-
-// newDependencyGraph creates a new dependency graph
-func newDependencyGraph() *dependencyGraph {
-	return &dependencyGraph{
-		resources:    make(map[string]Resource),
-		dependencies: make(map[string][]string),
-	}
-}
-
-// resourceKey generates a unique key for a resource ID
-func resourceKey(id *clustermetadatapb.ID) string {
-	return fmt.Sprintf("%s:%s:%s", id.Component, id.Cell, id.Name)
-}
-
-// addResource adds a resource to the graph
-func (g *dependencyGraph) addResource(r Resource) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-
-	key := resourceKey(r.ID())
-	g.resources[key] = r
-
-	// Initialize dependencies slice if not exists
-	if _, exists := g.dependencies[key]; !exists {
-		g.dependencies[key] = []string{}
-	}
-}
-
-// addDependency adds a dependency relationship (from depends on to)
-func (g *dependencyGraph) addDependency(from, to *clustermetadatapb.ID) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-
-	fromKey := resourceKey(from)
-	toKey := resourceKey(to)
-
-	// Add dependency if not already present
-	if !contains(g.dependencies[fromKey], toKey) {
-		g.dependencies[fromKey] = append(g.dependencies[fromKey], toKey)
-	}
-}
-
-// topologicalLevels returns resources grouped by dependency level
-// Resources in the same level can be provisioned in parallel
-func (g *dependencyGraph) topologicalLevels() [][]Resource {
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-
-	// Calculate in-degree for each resource
-	inDegree := make(map[string]int)
-	for key := range g.resources {
-		inDegree[key] = 0
-	}
-	for _, deps := range g.dependencies {
-		for _, dep := range deps {
-			inDegree[dep]++
-		}
-	}
-
-	// Find all resources with no dependencies (in-degree 0)
-	var levels [][]Resource
-	queue := []string{}
-	for key, degree := range inDegree {
-		if degree == 0 {
-			queue = append(queue, key)
-		}
-	}
-
-	// Process resources level by level
-	for len(queue) > 0 {
-		levelSize := len(queue)
-		var currentLevel []Resource
-
-		for i := 0; i < levelSize; i++ {
-			key := queue[0]
-			queue = queue[1:]
-
-			resource := g.resources[key]
-			currentLevel = append(currentLevel, resource)
-
-			// Reduce in-degree for resources that depend on this one
-			for depKey := range g.resources {
-				if contains(g.dependencies[depKey], key) {
-					inDegree[depKey]--
-					if inDegree[depKey] == 0 {
-						queue = append(queue, depKey)
-					}
-				}
-			}
-		}
-
-		levels = append(levels, currentLevel)
-	}
-
-	// Check for cycles (any resources with non-zero in-degree)
-	for key, degree := range inDegree {
-		if degree > 0 {
-			panic(fmt.Sprintf("circular dependency detected involving resource %s", key))
-		}
-	}
-
-	return levels
-}
-
-// contains checks if a string slice contains a string
-func contains(slice []string, item string) bool {
-	for _, s := range slice {
-		if s == item {
-			return true
-		}
-	}
-	return false
 }
