@@ -425,18 +425,19 @@ func (p *localProvisioner) Teardown(ctx context.Context, clean bool) error {
 		}
 	}
 
-	// 3. Clean up logs, state, and data directories if requested
+	// 3. Always clean up logs and state files (even on normal stop)
+	logsDir := p.getLogsDir()
+	if err := p.cleanupLogsDirectory(logsDir); err != nil {
+		fmt.Printf("Warning: failed to clean up logs directory: %v\n", err)
+	}
+
+	stateDir := p.getStateDir()
+	if err := p.cleanupStateDirectory(stateDir); err != nil {
+		fmt.Printf("Warning: failed to clean up state directory: %v\n", err)
+	}
+
+	// 4. Clean up data and socket directories only if --clean flag is set
 	if clean {
-		logsDir := p.getLogsDir()
-		if err := p.cleanupLogsDirectory(logsDir); err != nil {
-			fmt.Printf("Warning: failed to clean up logs directory: %v\n", err)
-		}
-
-		stateDir := p.getStateDir()
-		if err := p.cleanupStateDirectory(stateDir); err != nil {
-			fmt.Printf("Warning: failed to clean up state directory: %v\n", err)
-		}
-
 		dataDir := p.getDataDir()
 		if err := p.cleanupDataDirectory(dataDir); err != nil {
 			fmt.Printf("Warning: failed to clean up data directory: %v\n", err)
@@ -452,35 +453,69 @@ func (p *localProvisioner) Teardown(ctx context.Context, clean bool) error {
 	return nil
 }
 
-// cleanupLogsDirectory removes the entire logs directory and all its contents
+// cleanupLogsDirectory removes all log files but keeps the directory structure
 func (p *localProvisioner) cleanupLogsDirectory(logsDir string) error {
 	// Check if logs directory exists
 	if _, err := os.Stat(logsDir); os.IsNotExist(err) {
 		return nil // Directory doesn't exist, nothing to clean up
 	}
 
-	// Remove the entire logs directory
-	if err := os.RemoveAll(logsDir); err != nil {
-		return fmt.Errorf("failed to remove logs directory %s: %w", logsDir, err)
+	// Walk the directory tree and remove all files (but keep directories)
+	err := filepath.WalkDir(logsDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Skip directories (keep them)
+		if d.IsDir() {
+			return nil
+		}
+
+		// Remove the file
+		if err := os.Remove(path); err != nil {
+			return fmt.Errorf("failed to remove log file %s: %w", path, err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("failed to clean up logs directory %s: %w", logsDir, err)
 	}
 
-	fmt.Printf("Cleaned up logs directory: %s\n", logsDir)
+	fmt.Printf("Cleaned up log files in: %s\n", logsDir)
 	return nil
 }
 
-// cleanupStateDirectory removes the entire state directory and all its contents
+// cleanupStateDirectory removes all state files but keeps the directory structure
 func (p *localProvisioner) cleanupStateDirectory(stateDir string) error {
 	// Check if state directory exists
 	if _, err := os.Stat(stateDir); os.IsNotExist(err) {
 		return nil // Directory doesn't exist, nothing to clean up
 	}
 
-	// Remove the entire state directory
-	if err := os.RemoveAll(stateDir); err != nil {
-		return fmt.Errorf("failed to remove state directory %s: %w", stateDir, err)
+	// Walk the directory tree and remove all files (but keep directories)
+	err := filepath.WalkDir(stateDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Skip directories (keep them)
+		if d.IsDir() {
+			return nil
+		}
+
+		// Remove the file
+		if err := os.Remove(path); err != nil {
+			return fmt.Errorf("failed to remove state file %s: %w", path, err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("failed to clean up state directory %s: %w", stateDir, err)
 	}
 
-	fmt.Printf("Cleaned up state directory: %s\n", stateDir)
+	fmt.Printf("Cleaned up state files in: %s\n", stateDir)
 	return nil
 }
 
