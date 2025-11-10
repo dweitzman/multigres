@@ -88,11 +88,25 @@ You should see metrics like:
 - `http_server_duration_milliseconds` - HTTP request durations with exemplars
 - `target_info` - Service identification metadata
 
-**Exemplars** appear as comments showing trace IDs that link metrics to specific traces:
+**Exemplars** link individual metric samples to their corresponding distributed traces. They appear in the OpenMetrics format:
 
-```prometheus
-# {span_id="00f067aa0ba902b7",trace_id="4bf92f3577b34da6a3ce929d0e0e4736"} 42.5 1234567890.123
+```bash
+# Request metrics with OpenMetrics format to see exemplars
+curl -H "Accept: application/openmetrics-text" http://localhost:15100/metrics | grep "# {trace_id"
 ```
+
+Example output:
+
+```
+http_server_request_duration_seconds_bucket{...,le="0.005"} 11 # {trace_id="0d7f9f991279712d5248fc8c6d522208",span_id="05121bb1dd5635c3"} 0.000702375 1.762809925577199e+09
+```
+
+The exemplar (after `#`) shows:
+
+- `trace_id`: The distributed trace ID you can look up in Jaeger
+- `span_id`: The specific span that recorded this measurement
+- Value: The actual measurement value (duration in seconds)
+- Timestamp: When this sample was recorded
 
 ### 5. Verify Trace Context in Logs
 
@@ -221,26 +235,66 @@ cluster_startup (provisioner)
 
 ### Scenario 5: Metrics with Exemplars
 
-**Goal**: Verify metrics include exemplars linking to traces
+**Goal**: Verify metrics include exemplars linking to traces, enabling correlation from aggregated metrics to individual traces
 
 **Steps**:
 
-1. Start cluster with `--prometheus-http --otel-enabled` flags
-2. Generate some traffic (startup or manual requests)
-3. Check `/metrics` endpoint: `curl http://localhost:8080/metrics | grep exemplar`
+1. Start Jaeger (if not already running):
+
+   ```bash
+   docker run -d --name jaeger -p 16686:16686 -p 4318:4318 jaegertracing/jaeger:2.3.0
+   ```
+
+2. Start cluster with tracing enabled:
+
+   ```bash
+   OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
+   OTEL_TRACES_EXPORTER=otlp \
+   OTEL_METRICS_EXPORTER=none \
+   ./bin/multigres cluster start
+   ```
+
+3. Generate traffic to create metrics and traces:
+
+   ```bash
+   for i in {1..10}; do curl -s http://localhost:15100/ > /dev/null; done
+   ```
+
+4. Request metrics in OpenMetrics format to see exemplars:
+
+   ```bash
+   curl -H "Accept: application/openmetrics-text" http://localhost:15100/metrics | grep '# {trace_id'
+   ```
+
+5. Extract a trace ID from an exemplar and look it up in Jaeger:
+   ```bash
+   TRACE_ID=$(curl -s -H "Accept: application/openmetrics-text" http://localhost:15100/metrics | grep -m 1 '# {trace_id' | sed -E 's/.*trace_id="([^"]+)".*/\1/')
+   echo "View trace: http://localhost:16686/trace/$TRACE_ID"
+   ```
 
 **Success Criteria**:
 
-- ✅ Histogram metrics have exemplar comments
+- ✅ Histogram metrics have exemplar comments in OpenMetrics format
 - ✅ Exemplar format includes `trace_id` and `span_id`
 - ✅ Exemplar trace IDs can be found in Jaeger
-- ✅ Can navigate from high-latency metric exemplar to specific trace in Jaeger
+- ✅ Exemplar duration values match the corresponding span duration in the trace
+- ✅ Can navigate from high-latency metric exemplar to specific trace in Jaeger for root cause analysis
 
 Example exemplar in metrics output:
 
 ```
-rpc_server_duration_milliseconds_bucket{le="100"} 42 # {span_id="00f067aa0ba902b7",trace_id="4bf92f3577b34da6a3ce929d0e0e4736"} 85.3 1736252445.123
+http_server_request_duration_seconds_bucket{http_request_method="GET",http_response_status_code="200",...,le="0.005"} 11 # {trace_id="0d7f9f991279712d5248fc8c6d522208",span_id="05121bb1dd5635c3"} 0.000702375 1.762809925577199e+09
 ```
+
+**How Exemplars Work**:
+
+Exemplars provide a powerful observability workflow:
+
+1. **Monitor aggregated metrics** - Notice anomalies in histogram buckets (e.g., high latency)
+2. **Find example traces** - Use the exemplar's trace_id to jump to a real request that contributed to that metric
+3. **Analyze root cause** - Examine the full distributed trace to understand what caused the issue
+
+**Note**: Exemplars only appear when using OpenMetrics format (`Accept: application/openmetrics-text`). The standard Prometheus text format does not support exemplars.
 
 ## Configuration Options
 

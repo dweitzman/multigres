@@ -22,11 +22,12 @@ import (
 	"os"
 	"sync"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"go.opentelemetry.io/contrib/exporters/autoexport"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/exporters/prometheus"
+	otelprom "go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/propagation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -170,7 +171,7 @@ func (t *Telemetry) initTracing(ctx context.Context, res *resource.Resource) err
 func (t *Telemetry) initMetrics(ctx context.Context, res *resource.Resource) error {
 	// Create Prometheus exporter for pull-based metrics (local debugging)
 	// This is always created so we can serve metrics at /metrics endpoint
-	promExporter, err := prometheus.New()
+	promExporter, err := otelprom.New()
 	if err != nil {
 		return fmt.Errorf("failed to create prometheus exporter: %w", err)
 	}
@@ -256,8 +257,14 @@ func (t *Telemetry) GetPrometheusHandler() http.Handler {
 	}
 
 	// The prometheus exporter is automatically registered as a collector with the default registry
-	// Use promhttp.Handler() to serve metrics from the default prometheus registry
-	return promhttp.Handler()
+	// Use promhttp.HandlerFor() with OpenMetrics enabled to support exemplars
+	// Exemplars link metrics to traces by embedding trace_id and span_id in metric samples
+	return promhttp.HandlerFor(
+		prometheus.DefaultGatherer,
+		promhttp.HandlerOpts{
+			EnableOpenMetrics: true,
+		},
+	)
 }
 
 // GetTracerProvider returns the configured TracerProvider

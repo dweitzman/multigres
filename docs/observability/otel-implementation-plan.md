@@ -1,5 +1,12 @@
 # OpenTelemetry Implementation Plan
 
+> **Note**: This document represents the original implementation plan. The actual implementation differs in some details:
+>
+> - Telemetry is always initialized (no `--otel-enabled` flag)
+> - Prometheus metrics endpoint is always enabled (no `--prometheus-http` flag)
+> - Configuration is done entirely via standard OpenTelemetry environment variables
+> - See [local-testing-guide.md](./local-testing-guide.md) for current usage documentation
+
 ## Overview
 
 This document outlines the plan for adding comprehensive observability to Multigres services using OpenTelemetry. The implementation will provide:
