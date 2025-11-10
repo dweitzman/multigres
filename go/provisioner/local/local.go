@@ -117,38 +117,6 @@ func createPasswordFileAndDirectories(poolerDir, passwordFilePath string) error 
 	return nil
 }
 
-// initializePgctldDirectories initializes all pgctld directories and password files based on the config
-func (p *localProvisioner) initializePgctldDirectories() error {
-	// Get the typed configuration
-	config := p.config
-
-	// Initialize directories for each cell's pgctld configuration
-	for cellName, cellConfig := range config.Cells {
-		fmt.Printf("Setting up pgctld directory for cell %s...\n", cellName)
-
-		poolerDir := cellConfig.Pgctld.PoolerDir
-
-		if poolerDir == "" {
-			return fmt.Errorf("pooler-dir not found in config for pgtctld in cell %s", cellName)
-		}
-
-		passwordFile := cellConfig.Pgctld.PgPwfile
-
-		if passwordFile == "" {
-			return fmt.Errorf("pgctld password file not found in config for cell %s", cellName)
-		}
-
-		if err := createPasswordFileAndDirectories(poolerDir, passwordFile); err != nil {
-			return fmt.Errorf("failed to initialize pgctld directory for cell %s: %w", cellName, err)
-		}
-
-		fmt.Printf("✓ Created pooler directory: %s\n", poolerDir)
-		fmt.Printf("✓ Created password file: %s\n", passwordFile)
-	}
-
-	return nil
-}
-
 // =============================================================================
 // Resource Implementations
 // =============================================================================
@@ -843,6 +811,25 @@ func (r *multipoolerResource) Provision(id *clustermetadatapb.ID, ctx context.Co
 		return nil, fmt.Errorf("failed to create log file: %w", err)
 	}
 
+	// Initialize pooler directory and password file before provisioning pgctld
+	// Get pgctld config to access pooler_dir and pg_pwfile
+	pgctldConfig, err := p.getCellServiceConfig(cell, "pgctld")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get pgctld config for cell %s: %w", cell, err)
+	}
+
+	if poolerDir != "" {
+		passwordFile := ""
+		if val, ok := pgctldConfig["pg_pwfile"].(string); ok && val != "" {
+			passwordFile = val
+		}
+		if passwordFile != "" {
+			if err := createPasswordFileAndDirectories(poolerDir, passwordFile); err != nil {
+				return nil, fmt.Errorf("failed to initialize pooler directory: %w", err)
+			}
+		}
+	}
+
 	// Provision pgctld for this multipooler using pgctldResource
 	pgctldRes := &pgctldResource{}
 	pgctldPctx := &ProvisionContext{
@@ -1417,13 +1404,6 @@ func (p *localProvisioner) Bootstrap(ctx context.Context) ([]*provisioner.Provis
 
 	etcdAddress := fmt.Sprintf("%s:%d", etcdResult.FQDN, tcpPort)
 	pctx.etcdAddress = etcdAddress
-
-	// Initialize pgctld directories and password files
-	fmt.Println("=== Setting up pgctld directories ===")
-	if err := p.initializePgctldDirectories(); err != nil {
-		return nil, fmt.Errorf("failed to initialize pgctld directories: %w", err)
-	}
-	fmt.Println("")
 
 	topoConfig, err := p.getTopologyConfig()
 	if err != nil {
