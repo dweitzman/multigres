@@ -91,6 +91,7 @@ func NewMultiGateway() *MultiGateway {
 				{"Config", "Server configuration details", "/config"},
 				{"Live", "URL for liveness check", "/live"},
 				{"Ready", "URL for readiness check", "/ready"},
+				{"Metrics", "Prometheus metrics endpoint", "/metrics"},
 			},
 		},
 	}

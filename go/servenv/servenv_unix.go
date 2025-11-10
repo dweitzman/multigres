@@ -107,6 +107,7 @@ func (sv *ServEnv) Init() {
 	sv.registerPidFile()
 	sv.RegisterCommonHTTPEndpoints()
 	sv.HTTPRegisterPprofProfile()
+	sv.HTTPRegisterPrometheusMetrics()
 	sv.pprofInit()
 	sv.updateServiceMap()
 	sv.startOrphanDetection()
