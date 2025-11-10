@@ -1,0 +1,58 @@
+version: "3.8"
+
+services:
+  # Jaeger all-in-one for distributed tracing
+  jaeger:
+    image: jaegertracing/jaeger:2.3.0
+    container_name: multigres-jaeger
+    ports:
+      - "16686:16686" # Jaeger UI
+      - "4318:4318" # OTLP HTTP
+      - "4317:4317" # OTLP gRPC
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    networks:
+      - multigres-obs
+
+  # Prometheus for metrics collection
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    container_name: multigres-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./multigres_local/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+      - "--enable-feature=exemplar-storage" # Enable exemplar storage
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - multigres-obs
+
+  # Grafana for visualization
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: multigres-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+    volumes:
+      - ./observability/grafana/datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+      - ./observability/grafana/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro
+      - ./observability/grafana/dashboard.json:/var/lib/grafana/dashboards/multigres.json:ro
+    depends_on:
+      - prometheus
+      - jaeger
+    networks:
+      - multigres-obs
+
+networks:
+  multigres-obs:
+    driver: bridge

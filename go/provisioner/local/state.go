@@ -54,6 +54,11 @@ func (p *localProvisioner) getDataDir() string {
 	return filepath.Join(p.getRootWorkingDir(), "data")
 }
 
+// getObservabilityDir returns the path to the observability directory
+func (p *localProvisioner) getObservabilityDir() string {
+	return filepath.Join(p.getRootWorkingDir(), "observability")
+}
+
 // createLogFile creates a log file path and ensures the directory exists
 func (p *localProvisioner) createLogFile(serviceName, serviceID, databaseName string) (string, error) {
 	logsDir := p.getLogsDir()

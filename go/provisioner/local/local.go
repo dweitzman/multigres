@@ -16,6 +16,7 @@ package local
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,6 +30,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"text/template"
 	"time"
 
 	"github.com/multigres/multigres/go/clustermetadata/topo"
@@ -47,6 +49,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
+
+//go:embed templates/prometheus.yml.template
+var prometheusTemplate string
 
 // localProvisioner implements the Provisioner interface for local binary-based provisioning
 type localProvisioner struct {
@@ -1322,7 +1327,66 @@ func (p *localProvisioner) Bootstrap(ctx context.Context) ([]*provisioner.Provis
 
 	allResults = append(allResults, databaseResults...)
 
+	// Generate Prometheus configuration for observability
+	if err := p.generatePrometheusConfig(allResults); err != nil {
+		return nil, fmt.Errorf("failed to generate Prometheus configuration: %w", err)
+	}
+
 	return allResults, nil
+}
+
+// generatePrometheusConfig creates a Prometheus configuration file with all running services
+func (p *localProvisioner) generatePrometheusConfig(results []*provisioner.ProvisionResult) error {
+	// Create observability directory
+	obsDir := p.getObservabilityDir()
+	if err := os.MkdirAll(obsDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create observability directory: %w", err)
+	}
+
+	// Service target for template
+	type ServiceTarget struct {
+		Name string
+		Host string
+		Port int
+	}
+
+	// Collect all services with HTTP ports
+	var services []ServiceTarget
+	for _, result := range results {
+		if httpPort, hasHTTP := result.Ports["http_port"]; hasHTTP {
+			services = append(services, ServiceTarget{
+				Name: result.ServiceName,
+				Host: result.FQDN,
+				Port: httpPort,
+			})
+		}
+	}
+
+	// Parse and execute template
+	tmpl, err := template.New("prometheus").Parse(prometheusTemplate)
+	if err != nil {
+		return fmt.Errorf("failed to parse Prometheus template: %w", err)
+	}
+
+	prometheusPath := filepath.Join(obsDir, "prometheus.yml")
+	f, err := os.Create(prometheusPath)
+	if err != nil {
+		return fmt.Errorf("failed to create Prometheus config file: %w", err)
+	}
+	defer f.Close()
+
+	data := struct {
+		Services []ServiceTarget
+	}{
+		Services: services,
+	}
+
+	if err := tmpl.Execute(f, data); err != nil {
+		return fmt.Errorf("failed to execute Prometheus template: %w", err)
+	}
+
+	fmt.Printf("📊 - Generated Prometheus config: %s\n", prometheusPath)
+	return nil
 }
 
 // Teardown shuts down all services (reverse of Bootstrap)
