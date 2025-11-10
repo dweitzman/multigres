@@ -58,9 +58,48 @@ const (
 	StateDir = "state"
 )
 
+// Resource represents a provisionable/deprovisionable resource
+type Resource interface {
+	// Provision provisions the resource
+	Provision(id *clustermetadatapb.ID, ctx context.Context, pctx *ProvisionContext) (*provisioner.ProvisionResult, error)
+
+	// Deprovision deprovisions the resource
+	Deprovision(id *clustermetadatapb.ID, ctx context.Context, pctx *ProvisionContext) error
+}
+
+// ProvisionContext provides helper methods for resource provisioning
+type ProvisionContext struct {
+	provisioner    *localProvisioner
+	database       string // Optional: database name for database-scoped resources
+	cell           string // Optional: cell name for cell-scoped resources
+	clean          bool   // Optional: whether to clean up data directories on deprovision
+	etcdAddress    string // Optional: etcd address for topology operations
+	topoBackend    string // Optional: topology backend (e.g., "etcd2")
+	topoGlobalRoot string // Optional: topology global root path
+	tableGroup     string // Optional: table group for multipooler/pgctld resources
+}
+
 // Name returns the name of this provisioner
 func (p *localProvisioner) Name() string {
 	return "local"
+}
+
+// getOrGenerateServiceID returns the ID of a running service or generates a new one
+func (p *localProvisioner) getOrGenerateServiceID(serviceName string) string {
+	existingService, err := p.findRunningService(serviceName)
+	if err == nil && existingService != nil {
+		return existingService.ID
+	}
+	return stringutil.RandomString(8)
+}
+
+// getOrGenerateDbServiceID returns the ID of a running database service or generates a new one
+func (p *localProvisioner) getOrGenerateDbServiceID(serviceName, database, cell string) string {
+	existingService, err := p.findRunningDbService(serviceName, database, cell)
+	if err == nil && existingService != nil {
+		return existingService.ID
+	}
+	return stringutil.RandomString(8)
 }
 
 // createPasswordFileAndDirectories creates the pooler directory structure and password file
@@ -110,12 +149,16 @@ func (p *localProvisioner) initializePgctldDirectories() error {
 	return nil
 }
 
-// provisionEtcd provisions etcd using local binary
-func (p *localProvisioner) provisionEtcd(ctx context.Context, req *provisioner.ProvisionRequest) (*provisioner.ProvisionResult, error) {
-	// Sanity check: ensure this method is called for etcd service
-	if req.Service != "etcd" {
-		return nil, fmt.Errorf("provisionEtcd called for wrong service type: %s", req.Service)
-	}
+// =============================================================================
+// Resource Implementations
+// =============================================================================
+
+// globalTopoResource provisions etcd and initializes global topology
+type globalTopoResource struct{}
+
+// Provision provisions etcd and sets up global topology (creates cells)
+func (r *globalTopoResource) Provision(id *clustermetadatapb.ID, ctx context.Context, pctx *ProvisionContext) (*provisioner.ProvisionResult, error) {
+	p := pctx.provisioner
 
 	etcdConfig := p.getServiceConfig("etcd")
 
@@ -126,6 +169,10 @@ func (p *localProvisioner) provisionEtcd(ctx context.Context, req *provisioner.P
 	}
 
 	if existingService != nil {
+		// Verify the service ID matches what we expect
+		if existingService.ID != id.Name {
+			return nil, fmt.Errorf("etcd service already exists with different ID: expected %s, found %s", id.Name, existingService.ID)
+		}
 		fmt.Printf("etcd is already running (PID %d) ✓\n", existingService.PID)
 		return &provisioner.ProvisionResult{
 			ServiceName: "etcd",
@@ -250,6 +297,20 @@ func (p *localProvisioner) provisionEtcd(ctx context.Context, req *provisioner.P
 	}, nil
 }
 
+// Deprovision stops etcd
+func (r *globalTopoResource) Deprovision(id *clustermetadatapb.ID, ctx context.Context, pctx *ProvisionContext) error {
+	p := pctx.provisioner
+
+	req := &provisioner.DeprovisionRequest{
+		Service:      "etcd",
+		ServiceID:    id.Name,
+		DatabaseName: pctx.database,
+		Clean:        pctx.clean,
+	}
+
+	return p.deprovisionService(ctx, req)
+}
+
 // findBinary finds a binary by name, checking PATH first, then the executable directory,
 // and then the optional configured path
 func (p *localProvisioner) findBinary(name string, serviceConfig map[string]any) (string, error) {
@@ -364,23 +425,29 @@ func GeneratePoolerDir(baseDir, serviceID string) string {
 	return filepath.Join(baseDir, "data", fmt.Sprintf("pooler_%s", serviceID))
 }
 
-// provisionMultigateway provisions multigateway using either binaries or Docker containers
-func (p *localProvisioner) provisionMultigateway(ctx context.Context, req *provisioner.ProvisionRequest) (*provisioner.ProvisionResult, error) {
-	// Sanity check: ensure this method is called for multigateway service
-	if req.Service != "multigateway" {
-		return nil, fmt.Errorf("provisionMultigateway called for wrong service type: %s", req.Service)
-	}
+// multigatewayResource provisions multigateway (database gateway service)
+type multigatewayResource struct{}
 
-	// Get cell parameter
-	cell := req.Params["cell"].(string)
+// Provision provisions multigateway using local binary
+func (r *multigatewayResource) Provision(id *clustermetadatapb.ID, ctx context.Context, pctx *ProvisionContext) (*provisioner.ProvisionResult, error) {
+	p := pctx.provisioner
+	cell := pctx.cell
+	database := pctx.database
+	etcdAddress := pctx.etcdAddress
+	topoBackend := pctx.topoBackend
+	topoGlobalRoot := pctx.topoGlobalRoot
 
 	// Check if multigateway is already running
-	existingService, err := p.findRunningDbService("multigateway", req.DatabaseName, cell)
+	existingService, err := p.findRunningDbService("multigateway", database, cell)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check for existing multigateway service: %w", err)
 	}
 
 	if existingService != nil {
+		// Verify the service ID matches what we expect
+		if existingService.ID != id.Name {
+			return nil, fmt.Errorf("multigateway service already exists for database %s in cell %s with different ID: expected %s, found %s", database, cell, id.Name, existingService.ID)
+		}
 		fmt.Printf("multigateway is already running (PID %d) ✓\n", existingService.PID)
 		return &provisioner.ProvisionResult{
 			ServiceName: "multigateway",
@@ -392,11 +459,6 @@ func (p *localProvisioner) provisionMultigateway(ctx context.Context, req *provi
 			},
 		}, nil
 	}
-
-	// Get parameters from request
-	etcdAddress := req.Params["etcd_address"].(string)
-	topoBackend := req.Params["topo_backend"].(string)
-	topoGlobalRoot := req.Params["topo_global_root"].(string)
 
 	// Get cell-specific multigateway config
 	multigatewayConfig, err := p.getCellServiceConfig(cell, "multigateway")
@@ -434,11 +496,11 @@ func (p *localProvisioner) provisionMultigateway(ctx context.Context, req *provi
 		return nil, fmt.Errorf("multigateway binary not found: %w", err)
 	}
 
-	// Generate unique ID for this service instance (needed for log file)
-	serviceID := stringutil.RandomString(8)
+	// Use service ID from resource ID
+	serviceID := id.Name
 
 	// Create log file path
-	logFile, err := p.createLogFile("multigateway", serviceID, req.DatabaseName)
+	logFile, err := p.createLogFile("multigateway", serviceID, database)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create log file: %w", err)
 	}
@@ -485,7 +547,7 @@ func (p *localProvisioner) provisionMultigateway(ctx context.Context, req *provi
 	}
 
 	// Save service state to disk
-	if err := p.saveServiceState(service, req.DatabaseName); err != nil {
+	if err := p.saveServiceState(service, database); err != nil {
 		fmt.Printf("Warning: failed to save service state: %v\n", err)
 	}
 
@@ -512,12 +574,29 @@ func (p *localProvisioner) provisionMultigateway(ctx context.Context, req *provi
 	}, nil
 }
 
-// provisionMultiadmin provisions multiadmin using local binary
-func (p *localProvisioner) provisionMultiadmin(ctx context.Context, req *provisioner.ProvisionRequest) (*provisioner.ProvisionResult, error) {
-	// Sanity check: ensure this method is called for multiadmin service
-	if req.Service != "multiadmin" {
-		return nil, fmt.Errorf("provisionMultiadmin called for wrong service type: %s", req.Service)
+// Deprovision stops multigateway
+func (r *multigatewayResource) Deprovision(id *clustermetadatapb.ID, ctx context.Context, pctx *ProvisionContext) error {
+	p := pctx.provisioner
+
+	req := &provisioner.DeprovisionRequest{
+		Service:      "multigateway",
+		ServiceID:    id.Name,
+		DatabaseName: pctx.database,
+		Clean:        pctx.clean,
 	}
+
+	return p.deprovisionService(ctx, req)
+}
+
+// multiadminResource provisions multiadmin (global admin service)
+type multiadminResource struct{}
+
+// Provision provisions multiadmin using local binary
+func (r *multiadminResource) Provision(id *clustermetadatapb.ID, ctx context.Context, pctx *ProvisionContext) (*provisioner.ProvisionResult, error) {
+	p := pctx.provisioner
+	etcdAddress := pctx.etcdAddress
+	topoBackend := pctx.topoBackend
+	topoGlobalRoot := pctx.topoGlobalRoot
 
 	// Check if multiadmin is already running
 	existingService, err := p.findRunningService("multiadmin")
@@ -526,6 +605,10 @@ func (p *localProvisioner) provisionMultiadmin(ctx context.Context, req *provisi
 	}
 
 	if existingService != nil {
+		// Verify the service ID matches what we expect
+		if existingService.ID != id.Name {
+			return nil, fmt.Errorf("multiadmin service already exists with different ID: expected %s, found %s", id.Name, existingService.ID)
+		}
 		fmt.Printf("multiadmin is already running (PID %d) ✓\n", existingService.PID)
 		return &provisioner.ProvisionResult{
 			ServiceName: "multiadmin",
@@ -553,11 +636,6 @@ func (p *localProvisioner) provisionMultiadmin(ctx context.Context, req *provisi
 		grpcPort = p
 	}
 
-	// Get parameters from request
-	etcdAddress := req.Params["etcd_address"].(string)
-	topoBackend := req.Params["topo_backend"].(string)
-	topoGlobalRoot := req.Params["topo_global_root"].(string)
-
 	// Get log level
 	logLevel := "info"
 	if level, ok := multiadminConfig["log_level"].(string); ok {
@@ -570,8 +648,8 @@ func (p *localProvisioner) provisionMultiadmin(ctx context.Context, req *provisi
 		return nil, fmt.Errorf("multiadmin binary not found: %w", err)
 	}
 
-	// Generate unique ID for this service instance (needed for log file)
-	serviceID := stringutil.RandomString(8)
+	// Use service ID from resource ID
+	serviceID := id.Name
 
 	// Create log file path
 	logFile, err := p.createLogFile("multiadmin", serviceID, "")
@@ -645,22 +723,42 @@ func (p *localProvisioner) provisionMultiadmin(ctx context.Context, req *provisi
 	}, nil
 }
 
-// provisionMultipooler provisions multipooler using local binary
-func (p *localProvisioner) provisionMultipooler(ctx context.Context, req *provisioner.ProvisionRequest) (*provisioner.ProvisionResult, error) {
-	// Sanity check: ensure this method is called for multipooler service
-	if req.Service != "multipooler" {
-		return nil, fmt.Errorf("provisionMultipooler called for wrong service type: %s", req.Service)
+// Deprovision stops multiadmin
+func (r *multiadminResource) Deprovision(id *clustermetadatapb.ID, ctx context.Context, pctx *ProvisionContext) error {
+	p := pctx.provisioner
+
+	req := &provisioner.DeprovisionRequest{
+		Service:      "multiadmin",
+		ServiceID:    id.Name,
+		DatabaseName: pctx.database,
+		Clean:        pctx.clean,
 	}
 
-	// Get cell parameter
-	cell := req.Params["cell"].(string)
+	return p.deprovisionService(ctx, req)
+}
+
+// multipoolerResource provisions multipooler (connection pooler)
+type multipoolerResource struct{}
+
+// Provision provisions multipooler using local binary
+func (r *multipoolerResource) Provision(id *clustermetadatapb.ID, ctx context.Context, pctx *ProvisionContext) (*provisioner.ProvisionResult, error) {
+	p := pctx.provisioner
+	cell := pctx.cell
+	database := pctx.database
+	etcdAddress := pctx.etcdAddress
+	topoBackend := pctx.topoBackend
+	topoGlobalRoot := pctx.topoGlobalRoot
 
 	// Check if multipooler is already running
-	existingService, err := p.findRunningDbService("multipooler", req.DatabaseName, cell)
+	existingService, err := p.findRunningDbService("multipooler", database, cell)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check for existing multipooler service: %w", err)
 	}
 	if existingService != nil {
+		// Verify the service ID matches what we expect
+		if existingService.ID != id.Name {
+			return nil, fmt.Errorf("multipooler service already exists for database %s in cell %s with different ID: expected %s, found %s", database, cell, id.Name, existingService.ID)
+		}
 		fmt.Printf("multipooler is already running (PID %d) ✓\n", existingService.PID)
 		return &provisioner.ProvisionResult{
 			ServiceName: "multipooler",
@@ -672,11 +770,6 @@ func (p *localProvisioner) provisionMultipooler(ctx context.Context, req *provis
 			},
 		}, nil
 	}
-
-	// Get parameters from request
-	etcdAddress := req.Params["etcd_address"].(string)
-	topoBackend := req.Params["topo_backend"].(string)
-	topoGlobalRoot := req.Params["topo_global_root"].(string)
 
 	// Get cell-specific multipooler config
 	multipoolerConfig, err := p.getCellServiceConfig(cell, "multipooler")
@@ -696,12 +789,10 @@ func (p *localProvisioner) provisionMultipooler(ctx context.Context, req *provis
 		grpcPort = port
 	}
 
-	// Get database from multipooler config, fall back to request if not set
-	database := ""
+	// Get database from multipooler config, fall back to database from context if not set
+	configDatabase := database
 	if dbFromConfig, ok := multipoolerConfig["database"].(string); ok && dbFromConfig != "" {
-		database = dbFromConfig
-	} else {
-		database = req.DatabaseName
+		configDatabase = dbFromConfig
 	}
 
 	// Get table group from multipooler config, default to "default" if not set
@@ -743,22 +834,29 @@ func (p *localProvisioner) provisionMultipooler(ctx context.Context, req *provis
 		return nil, fmt.Errorf("multipooler binary not found: %w", err)
 	}
 
-	// Get service ID from multipooler config - this should always be set
-	serviceID := ""
-	if id, ok := multipoolerConfig["service-id"].(string); ok && id != "" {
-		serviceID = id
-	} else {
-		return nil, fmt.Errorf("service-id not found in multipooler config for cell %s", cell)
-	}
+	// Use service ID from resource ID
+	serviceID := id.Name
 
 	// Create log file path
-	logFile, err := p.createLogFile("multipooler", serviceID, req.DatabaseName)
+	logFile, err := p.createLogFile("multipooler", serviceID, database)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create log file: %w", err)
 	}
 
-	// Provision pgctld for this multipooler
-	pgctldResult, err := p.provisionPgctld(ctx, database, tableGroup, serviceID, cell)
+	// Provision pgctld for this multipooler using pgctldResource
+	pgctldRes := &pgctldResource{}
+	pgctldPctx := &ProvisionContext{
+		provisioner: p,
+		database:    configDatabase,
+		cell:        cell,
+		tableGroup:  tableGroup,
+	}
+	pgctldID := &clustermetadatapb.ID{
+		Component: clustermetadatapb.ID_PGCTLD,
+		Cell:      cell,
+		Name:      fmt.Sprintf("pgctld-%s", serviceID),
+	}
+	pgctldResult, err := pgctldRes.Provision(pgctldID, ctx, pgctldPctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to provision pgctld for multipooler: %w", err)
 	}
@@ -771,7 +869,7 @@ func (p *localProvisioner) provisionMultipooler(ctx context.Context, req *provis
 		"--topo-global-root", topoGlobalRoot,
 		"--topo-implementation", topoBackend,
 		"--cell", cell,
-		"--database", database,
+		"--database", configDatabase,
 		"--table-group", tableGroup,
 		"--service-id", serviceID,
 		"--pgctld-addr", pgctldResult.Address,
@@ -826,7 +924,7 @@ func (p *localProvisioner) provisionMultipooler(ctx context.Context, req *provis
 	}
 
 	// Save service state to disk
-	if err := p.saveServiceState(service, req.DatabaseName); err != nil {
+	if err := p.saveServiceState(service, database); err != nil {
 		fmt.Printf("Warning: failed to save service state: %v\n", err)
 	}
 
@@ -844,6 +942,20 @@ func (p *localProvisioner) provisionMultipooler(ctx context.Context, req *provis
 	}, nil
 }
 
+// Deprovision stops multipooler
+func (r *multipoolerResource) Deprovision(id *clustermetadatapb.ID, ctx context.Context, pctx *ProvisionContext) error {
+	p := pctx.provisioner
+
+	req := &provisioner.DeprovisionRequest{
+		Service:      "multipooler",
+		ServiceID:    id.Name,
+		DatabaseName: pctx.database,
+		Clean:        pctx.clean,
+	}
+
+	return p.deprovisionService(ctx, req)
+}
+
 // PgctldProvisionResult contains the result of provisioning pgctld
 type PgctldProvisionResult struct {
 	Address string
@@ -851,22 +963,28 @@ type PgctldProvisionResult struct {
 	LogFile string
 }
 
-// provisionMultiOrch provisions multi-orchestrator using local binary
-func (p *localProvisioner) provisionMultiOrch(ctx context.Context, req *provisioner.ProvisionRequest) (*provisioner.ProvisionResult, error) {
-	// Sanity check: ensure this method is called for multiorch service
-	if req.Service != "multiorch" {
-		return nil, fmt.Errorf("provisionMultiOrch called for wrong service type: %s", req.Service)
-	}
+// multiOrchResource provisions multiorch (multi-orchestrator)
+type multiOrchResource struct{}
 
-	// Get cell parameter
-	cell := req.Params["cell"].(string)
+// Provision provisions multi-orchestrator using local binary
+func (r *multiOrchResource) Provision(id *clustermetadatapb.ID, ctx context.Context, pctx *ProvisionContext) (*provisioner.ProvisionResult, error) {
+	p := pctx.provisioner
+	cell := pctx.cell
+	database := pctx.database
+	etcdAddress := pctx.etcdAddress
+	topoBackend := pctx.topoBackend
+	topoGlobalRoot := pctx.topoGlobalRoot
 
 	// Check if multiorch is already running
-	existingService, err := p.findRunningDbService("multiorch", req.DatabaseName, cell)
+	existingService, err := p.findRunningDbService("multiorch", database, cell)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check for existing multiorch service: %w", err)
 	}
 	if existingService != nil {
+		// Verify the service ID matches what we expect
+		if existingService.ID != id.Name {
+			return nil, fmt.Errorf("multiorch service already exists for database %s in cell %s with different ID: expected %s, found %s", database, cell, id.Name, existingService.ID)
+		}
 		fmt.Printf("multiorch is already running (PID %d) ✓\n", existingService.PID)
 		return &provisioner.ProvisionResult{
 			ServiceName: "multiorch",
@@ -878,12 +996,6 @@ func (p *localProvisioner) provisionMultiOrch(ctx context.Context, req *provisio
 			},
 		}, nil
 	}
-
-	// Get parameters from request
-	etcdAddress := req.Params["etcd_address"].(string)
-	topoBackend := req.Params["topo_backend"].(string)
-	topoGlobalRoot := req.Params["topo_global_root"].(string)
-	cell = req.Params["cell"].(string)
 
 	// Get cell-specific multiorch config
 	multiorchConfig, err := p.getCellServiceConfig(cell, "multiorch")
@@ -915,11 +1027,11 @@ func (p *localProvisioner) provisionMultiOrch(ctx context.Context, req *provisio
 		return nil, fmt.Errorf("multiorch binary not found: %w", err)
 	}
 
-	// Generate unique ID for this service instance (needed for log file)
-	serviceID := stringutil.RandomString(8)
+	// Use service ID from resource ID
+	serviceID := id.Name
 
 	// Create log file path
-	logFile, err := p.createLogFile("multiorch", serviceID, req.DatabaseName)
+	logFile, err := p.createLogFile("multiorch", serviceID, database)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create log file: %w", err)
 	}
@@ -973,7 +1085,7 @@ func (p *localProvisioner) provisionMultiOrch(ctx context.Context, req *provisio
 	}
 
 	// Save service state to disk
-	if err := p.saveServiceState(service, req.DatabaseName); err != nil {
+	if err := p.saveServiceState(service, database); err != nil {
 		fmt.Printf("Warning: failed to save service state: %v\n", err)
 	}
 
@@ -989,6 +1101,20 @@ func (p *localProvisioner) provisionMultiOrch(ctx context.Context, req *provisio
 			"log_file":   logFile,
 		},
 	}, nil
+}
+
+// Deprovision stops multiorch
+func (r *multiOrchResource) Deprovision(id *clustermetadatapb.ID, ctx context.Context, pctx *ProvisionContext) error {
+	p := pctx.provisioner
+
+	req := &provisioner.DeprovisionRequest{
+		Service:      "multiorch",
+		ServiceID:    id.Name,
+		DatabaseName: pctx.database,
+		Clean:        pctx.clean,
+	}
+
+	return p.deprovisionService(ctx, req)
 }
 
 // Deprovision removes/stops a specific service
@@ -1048,29 +1174,97 @@ func (p *localProvisioner) loadServiceState(req *provisioner.DeprovisionRequest)
 	return &service, nil
 }
 
-// stopService stops a specific service based on its type using the internal methods
+// stopService stops a specific service based on its type using resource Deprovision methods
 func (p *localProvisioner) stopService(ctx context.Context, req *provisioner.DeprovisionRequest) error {
+	// Load service state to extract metadata (needed for cell, etc.)
+	service, err := p.loadServiceState(req)
+	if err != nil {
+		return err
+	}
+	if service == nil {
+		return fmt.Errorf("%s service not found", req.Service)
+	}
+
+	// Extract cell from service metadata
+	cell := ""
+	if service.Metadata != nil {
+		if cellVal, ok := service.Metadata["cell"].(string); ok {
+			cell = cellVal
+		}
+	}
+
+	// Create provision context for resource deprovisioning
+	pctx := &ProvisionContext{
+		provisioner: p,
+		database:    req.DatabaseName,
+		cell:        cell,
+		clean:       req.Clean,
+	}
+
 	switch req.Service {
 	case "etcd":
-		fallthrough
+		res := &globalTopoResource{}
+		id := &clustermetadatapb.ID{
+			Component: clustermetadatapb.ID_GLOBAL_TOPO,
+			Cell:      topo.GlobalCell,
+			Name:      req.ServiceID,
+		}
+		return res.Deprovision(id, ctx, pctx)
+
 	case "multigateway":
-		fallthrough
+		res := &multigatewayResource{}
+		id := &clustermetadatapb.ID{
+			Component: clustermetadatapb.ID_MULTIGATEWAY,
+			Cell:      cell,
+			Name:      req.ServiceID,
+		}
+		return res.Deprovision(id, ctx, pctx)
+
 	case "multipooler":
-		fallthrough
+		res := &multipoolerResource{}
+		id := &clustermetadatapb.ID{
+			Component: clustermetadatapb.ID_MULTIPOOLER,
+			Cell:      cell,
+			Name:      req.ServiceID,
+		}
+		return res.Deprovision(id, ctx, pctx)
+
 	case "multiorch":
-		fallthrough
+		res := &multiOrchResource{}
+		id := &clustermetadatapb.ID{
+			Component: clustermetadatapb.ID_MULTIORCH,
+			Cell:      cell,
+			Name:      req.ServiceID,
+		}
+		return res.Deprovision(id, ctx, pctx)
+
 	case "multiadmin":
-		return p.deprovisionService(ctx, req)
+		res := &multiadminResource{}
+		id := &clustermetadatapb.ID{
+			Component: clustermetadatapb.ID_MULTIADMIN,
+			Cell:      topo.GlobalCell,
+			Name:      req.ServiceID,
+		}
+		return res.Deprovision(id, ctx, pctx)
+
 	case "pgctld":
-		// pgctld requires special handling to stop PostgreSQL first
-		service, err := p.loadServiceState(req)
-		if err != nil {
-			return err
+		// Extract table group from metadata if available
+		tableGroup := ""
+		if service.Metadata != nil {
+			if tg, ok := service.Metadata["table_group"].(string); ok {
+				tableGroup = tg
+			}
 		}
-		if service == nil {
-			return fmt.Errorf("pgctld service not found")
+		pctx.tableGroup = tableGroup
+
+		res := &pgctldResource{}
+		id := &clustermetadatapb.ID{
+			Component: clustermetadatapb.ID_PGCTLD,
+			Cell:      cell,
+			Name:      req.ServiceID,
 		}
-		return p.deprovisionPgctld(ctx, service)
+		return res.Deprovision(id, ctx, pctx)
+
 	default:
 		return fmt.Errorf("unknown service type: %s", req.Service)
 	}
@@ -1195,9 +1389,21 @@ func (p *localProvisioner) Bootstrap(ctx context.Context) ([]*provisioner.Provis
 
 	var allResults []*provisioner.ProvisionResult
 
-	// Provision etcd
+	// Create provision context
+	pctx := &ProvisionContext{
+		provisioner: p,
+		cell:        topo.GlobalCell,
+	}
+
+	// Provision etcd using globalTopoResource
 	fmt.Println("=== Provisioning etcd ===")
-	etcdResult, err := p.provisionEtcd(ctx, &provisioner.ProvisionRequest{Service: "etcd"})
+	globalTopoRes := &globalTopoResource{}
+	etcdID := &clustermetadatapb.ID{
+		Component: clustermetadatapb.ID_GLOBAL_TOPO,
+		Cell:      topo.GlobalCell,
+		Name:      p.getOrGenerateServiceID("etcd"),
+	}
+	etcdResult, err := globalTopoRes.Provision(etcdID, ctx, pctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to provision etcd: %w", err)
 	}
@@ -1210,6 +1416,7 @@ func (p *localProvisioner) Bootstrap(ctx context.Context) ([]*provisioner.Provis
 	allResults = append(allResults, etcdResult)
 
 	etcdAddress := fmt.Sprintf("%s:%d", etcdResult.FQDN, tcpPort)
+	pctx.etcdAddress = etcdAddress
 
 	// Initialize pgctld directories and password files
 	fmt.Println("=== Setting up pgctld directories ===")
@@ -1230,8 +1437,15 @@ func (p *localProvisioner) Bootstrap(ctx context.Context) ([]*provisioner.Provis
 	}
 
 	// Set up all cells
+	cellTopoRes := &cellTopoResource{}
 	for _, cellName := range cellNames {
-		if err := p.setupDefaultCell(ctx, cellName, etcdAddress); err != nil {
+		pctx.cell = cellName
+		cellID := &clustermetadatapb.ID{
+			Component: clustermetadatapb.ID_CELL_TOPO,
+			Cell:      cellName,
+			Name:      cellName,
+		}
+		if _, err := cellTopoRes.Provision(cellID, ctx, pctx); err != nil {
 			return nil, fmt.Errorf("failed to setup cell %s: %w", cellName, err)
 		}
 	}
@@ -1239,16 +1453,15 @@ func (p *localProvisioner) Bootstrap(ctx context.Context) ([]*provisioner.Provis
 
 	// Provision multiadmin (global admin service)
 	fmt.Println("=== Starting MultiAdmin ===")
-	multiadminReq := &provisioner.ProvisionRequest{
-		Service: "multiadmin",
-		Params: map[string]any{
-			"etcd_address":     etcdAddress,
-			"topo_backend":     topoConfig.Backend,
-			"topo_global_root": topoConfig.GlobalRootPath,
-		},
+	pctx.topoBackend = topoConfig.Backend
+	pctx.topoGlobalRoot = topoConfig.GlobalRootPath
+	multiadminRes := &multiadminResource{}
+	multiadminID := &clustermetadatapb.ID{
+		Component: clustermetadatapb.ID_MULTIADMIN,
+		Cell:      topo.GlobalCell,
+		Name:      p.getOrGenerateServiceID("multiadmin"),
 	}
-
-	multiadminResult, err := p.provisionMultiadmin(ctx, multiadminReq)
+	multiadminResult, err := multiadminRes.Provision(multiadminID, ctx, pctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to provision multiadmin: %w", err)
 	}
@@ -1512,24 +1725,29 @@ func (p *localProvisioner) ProvisionDatabase(ctx context.Context, databaseName s
 
 	var results []*provisioner.ProvisionResult
 
+	// Create provision context
+	pctx := &ProvisionContext{
+		provisioner:    p,
+		database:       databaseName,
+		etcdAddress:    etcdAddress,
+		topoBackend:    topoConfig.Backend,
+		topoGlobalRoot: topoConfig.GlobalRootPath,
+	}
+
 	// Provision services in each cell
 	for _, cellName := range cellNames {
 		fmt.Printf("=== Provisioning services in cell: %s ===\n", cellName)
+		pctx.cell = cellName
 
 		// Provision multigateway
 		fmt.Printf("=== Starting Multigateway in %s ===\n", cellName)
-		multigatewayReq := &provisioner.ProvisionRequest{
-			Service:      "multigateway",
-			DatabaseName: databaseName,
-			Params: map[string]any{
-				"etcd_address":     etcdAddress,
-				"topo_backend":     topoConfig.Backend,
-				"topo_global_root": topoConfig.GlobalRootPath,
-				"cell":             cellName,
-			},
+		multigatewayRes := &multigatewayResource{}
+		multigatewayID := &clustermetadatapb.ID{
+			Component: clustermetadatapb.ID_MULTIGATEWAY,
+			Cell:      cellName,
+			Name:      p.getOrGenerateDbServiceID("multigateway", databaseName, cellName),
 		}
-
-		multigatewayResult, err := p.provisionMultigateway(ctx, multigatewayReq)
+		multigatewayResult, err := multigatewayRes.Provision(multigatewayID, ctx, pctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to provision multigateway for database %s in cell %s: %w", databaseName, cellName, err)
 		}
@@ -1540,18 +1758,13 @@ func (p *localProvisioner) ProvisionDatabase(ctx context.Context, databaseName s
 
 		// Provision multipooler
 		fmt.Printf("\n=== Starting Multipooler in %s ===\n", cellName)
-		multipoolerReq := &provisioner.ProvisionRequest{
-			Service:      "multipooler",
-			DatabaseName: databaseName,
-			Params: map[string]any{
-				"etcd_address":     etcdAddress,
-				"topo_backend":     topoConfig.Backend,
-				"topo_global_root": topoConfig.GlobalRootPath,
-				"cell":             cellName,
-			},
+		multipoolerRes := &multipoolerResource{}
+		multipoolerID := &clustermetadatapb.ID{
+			Component: clustermetadatapb.ID_MULTIPOOLER,
+			Cell:      cellName,
+			Name:      p.getOrGenerateDbServiceID("multipooler", databaseName, cellName),
 		}
-
-		multipoolerResult, err := p.provisionMultipooler(ctx, multipoolerReq)
+		multipoolerResult, err := multipoolerRes.Provision(multipoolerID, ctx, pctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to provision multipooler for database %s in cell %s: %w", databaseName, cellName, err)
 		}
@@ -1562,18 +1775,13 @@ func (p *localProvisioner) ProvisionDatabase(ctx context.Context, databaseName s
 
 		// Provision multiorch
 		fmt.Printf("\n=== Starting MultiOrchestrator in %s ===\n", cellName)
-		multiorchReq := &provisioner.ProvisionRequest{
-			Service:      "multiorch",
-			DatabaseName: databaseName,
-			Params: map[string]any{
-				"etcd_address":     etcdAddress,
-				"topo_backend":     topoConfig.Backend,
-				"topo_global_root": topoConfig.GlobalRootPath,
-				"cell":             cellName,
-			},
+		multiorchRes := &multiOrchResource{}
+		multiorchID := &clustermetadatapb.ID{
+			Component: clustermetadatapb.ID_MULTIORCH,
+			Cell:      cellName,
+			Name:      p.getOrGenerateDbServiceID("multiorch", databaseName, cellName),
 		}
-
-		multiorchResult, err := p.provisionMultiOrch(ctx, multiorchReq)
+		multiorchResult, err := multiorchRes.Provision(multiorchID, ctx, pctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to provision multiorch for database %s in cell %s: %w", databaseName, cellName, err)
 		}
@@ -1589,8 +1797,22 @@ func (p *localProvisioner) ProvisionDatabase(ctx context.Context, databaseName s
 	return results, nil
 }
 
-// setupDefaultCell initializes the topology cell configuration for a database
-func (p *localProvisioner) setupDefaultCell(ctx context.Context, cellName, etcdAddress string) error {
+// cellTopoResource initializes cell topology (creates cells in topology)
+type cellTopoResource struct{}
+
+// Provision creates a cell in the topology
+func (r *cellTopoResource) Provision(id *clustermetadatapb.ID, ctx context.Context, pctx *ProvisionContext) (*provisioner.ProvisionResult, error) {
+	p := pctx.provisioner
+	cellName := pctx.cell
+	etcdAddress := pctx.etcdAddress
+
+	if cellName == "" {
+		return nil, fmt.Errorf("cell name not set in ProvisionContext")
+	}
+	if etcdAddress == "" {
+		return nil, fmt.Errorf("etcd address not set in ProvisionContext")
+	}
+
 	fmt.Println("=== Configuring cell ===")
 	fmt.Printf("⚙️  - Configuring cell: %s\n", cellName)
 	fmt.Printf("⚙️  - Using etcd at: %s\n", etcdAddress)
@@ -1601,7 +1823,7 @@ func (p *localProvisioner) setupDefaultCell(ctx context.Context, cellName, etcdA
 	// Create topology store using configured backend
 	ts, err := topo.OpenServer(topoConfig.Backend, topoConfig.GlobalRootPath, []string{etcdAddress})
 	if err != nil {
-		return fmt.Errorf("failed to connect to topology server: %w", err)
+		return nil, fmt.Errorf("failed to connect to topology server: %w", err)
 	}
 	defer ts.Close()
 
@@ -1609,7 +1831,12 @@ func (p *localProvisioner) setupDefaultCell(ctx context.Context, cellName, etcdA
 	_, err = ts.GetCell(ctx, cellName)
 	if err == nil {
 		fmt.Printf("⚙️  - Cell \"%s\" detected — reusing existing cell ✓\n", cellName)
-		return nil
+		return &provisioner.ProvisionResult{
+			ServiceName: "cell-topo",
+			Metadata: map[string]any{
+				"cell": cellName,
+			},
+		}, nil
 	}
 
 	// Create the cell if it doesn't exist
@@ -1619,7 +1846,7 @@ func (p *localProvisioner) setupDefaultCell(ctx context.Context, cellName, etcdA
 		// Get the specific cell config for this cell name
 		cellConfigData, err := p.getCellByName(cellName)
 		if err != nil {
-			return fmt.Errorf("failed to get cell config for %s: %w", cellName, err)
+			return nil, fmt.Errorf("failed to get cell config for %s: %w", cellName, err)
 		}
 
 		cellConfig := &clustermetadatapb.Cell{
@@ -1629,15 +1856,26 @@ func (p *localProvisioner) setupDefaultCell(ctx context.Context, cellName, etcdA
 		}
 
 		if err := ts.CreateCell(ctx, cellName, cellConfig); err != nil {
-			return fmt.Errorf("failed to create cell '%s': %w", cellName, err)
+			return nil, fmt.Errorf("failed to create cell '%s': %w", cellName, err)
 		}
 
 		fmt.Printf("⚙️  - Cell \"%s\" created successfully ✓\n", cellName)
-		return nil
+		return &provisioner.ProvisionResult{
+			ServiceName: "cell-topo",
+			Metadata: map[string]any{
+				"cell": cellName,
+			},
+		}, nil
 	}
 
 	// Some other error occurred
-	return fmt.Errorf("failed to check cell '%s': %w", cellName, err)
+	return nil, fmt.Errorf("failed to check cell '%s': %w", cellName, err)
+}
+
+// Deprovision is a no-op for cell topology (cells are cleaned up when etcd is torn down)
+func (r *cellTopoResource) Deprovision(id *clustermetadatapb.ID, ctx context.Context, pctx *ProvisionContext) error {
+	// No-op: cells are stored in etcd and will be cleaned up when etcd is deprovisioned
+	return nil
 }
 
 // DeprovisionDatabase deprovisions all services for a database

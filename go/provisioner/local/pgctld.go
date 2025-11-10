@@ -19,12 +19,15 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"google.golang.org/grpc"
 
 	"github.com/multigres/multigres/go/grpccommon"
+	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	pb "github.com/multigres/multigres/go/pb/pgctldservice"
+	"github.com/multigres/multigres/go/provisioner"
 	"github.com/multigres/multigres/go/provisioner/local/ports"
 )
 
@@ -139,10 +142,20 @@ func (p *localProvisioner) stopPostgreSQLViaPgctld(address string) error {
 	return nil
 }
 
-// provisionPgctld provisions a pgctld instance for a multipooler with the new directory structure
-func (p *localProvisioner) provisionPgctld(ctx context.Context, dbName, tableGroup, serviceID, cell string) (*PgctldProvisionResult, error) {
-	// Create unique pgctld service ID using multipooler's service ID
-	pgctldServiceID := fmt.Sprintf("pgctld-%s", serviceID)
+// pgctldResource provisions pgctld (PostgreSQL control daemon)
+type pgctldResource struct{}
+
+// Provision provisions pgctld for a multipooler instance
+func (r *pgctldResource) Provision(id *clustermetadatapb.ID, ctx context.Context, pctx *ProvisionContext) (*PgctldProvisionResult, error) {
+	p := pctx.provisioner
+	cell := pctx.cell
+	dbName := pctx.database
+	tableGroup := pctx.tableGroup
+
+	// Use service ID from resource ID
+	pgctldServiceID := id.Name
+	// Extract multipooler service ID from pgctld service ID (format: "pgctld-{multipoolerID}")
+	multipoolerServiceID := strings.TrimPrefix(pgctldServiceID, "pgctld-")
 
 	// Check if pgctld is already running for this service combination
 	existingService, err := p.findRunningDbService("pgctld", dbName, cell)
@@ -231,13 +244,13 @@ func (p *localProvisioner) provisionPgctld(ctx context.Context, dbName, tableGro
 	}
 
 	// Create pgctld log file
-	pgctldLogFile, err := p.createLogFile("pgctld", serviceID, dbName)
+	pgctldLogFile, err := p.createLogFile("pgctld", pgctldServiceID, dbName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create pgctld log file: %w", err)
 	}
 
 	// Initialize pgctld data directory
-	fmt.Printf("▶️  - Initializing pgctld for %s/%s/%s...", dbName, tableGroup, serviceID)
+	fmt.Printf("▶️  - Initializing pgctld for %s/%s/%s...", dbName, tableGroup, pgctldServiceID)
 
 	initArgs := []string{
 		"init",
@@ -317,7 +330,7 @@ func (p *localProvisioner) provisionPgctld(ctx context.Context, dbName, tableGro
 		LogFile:    pgctldLogFile,
 		StartedAt:  time.Now(),
 		DataDir:    poolerDir,
-		Metadata:   map[string]any{"cell": cell, "database": dbName, "table_group": tableGroup, "service_id": serviceID, "multipooler_service_id": serviceID},
+		Metadata:   map[string]any{"cell": cell, "database": dbName, "table_group": tableGroup, "service_id": pgctldServiceID, "multipooler_service_id": multipoolerServiceID},
 	}
 
 	// Save pgctld service state to disk
@@ -332,8 +345,27 @@ func (p *localProvisioner) provisionPgctld(ctx context.Context, dbName, tableGro
 	}, nil
 }
 
-// deprovisionPgctld stops PostgreSQL via gRPC and then stops the pgctld process
-func (p *localProvisioner) deprovisionPgctld(ctx context.Context, service *LocalProvisionedService) error {
+// Deprovision stops pgctld and cleans up resources
+func (r *pgctldResource) Deprovision(id *clustermetadatapb.ID, ctx context.Context, pctx *ProvisionContext) error {
+	p := pctx.provisioner
+	pgctldServiceID := id.Name
+
+	// Load the pgctld service state
+	req := &provisioner.DeprovisionRequest{
+		Service:      "pgctld",
+		ServiceID:    pgctldServiceID,
+		DatabaseName: pctx.database,
+		Clean:        pctx.clean,
+	}
+
+	service, err := p.loadServiceState(req)
+	if err != nil {
+		return fmt.Errorf("failed to load pgctld service state: %w", err)
+	}
+	if service == nil {
+		return nil
+	}
+
 	// First, try to gracefully stop PostgreSQL via pgctld gRPC
 	grpcPort := service.Ports["grpc_port"]
 	address := fmt.Sprintf("localhost:%d", grpcPort)
@@ -354,6 +386,19 @@ func (p *localProvisioner) deprovisionPgctld(ctx context.Context, service *Local
 		fmt.Printf("Cleaning up pgctld log file...")
 		if err := os.Remove(service.LogFile); err != nil && !os.IsNotExist(err) {
 			fmt.Printf("Warning: failed to remove pgctld log file %s: %v\n", service.LogFile, err)
+		}
+	}
+
+	// Remove state file
+	if err := p.removeServiceState(req.ServiceID, req.Service, req.DatabaseName); err != nil {
+		fmt.Printf("Warning: failed to remove pgctld state file: %v\n", err)
+	}
+
+	// Clean up data directory if requested
+	if req.Clean && service.DataDir != "" {
+		fmt.Printf("Cleaning pgctld data directory: %s\n", service.DataDir)
+		if err := os.RemoveAll(service.DataDir); err != nil {
+			return fmt.Errorf("failed to remove pgctld data directory: %w", err)
 		}
 	}
 
