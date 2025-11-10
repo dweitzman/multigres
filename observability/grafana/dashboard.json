@@ -287,8 +287,8 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "sum by (rpc_grpc_status_code) (rate({__name__=~\"rpc\\\\.server\\\\.duration_count\"}[1m]))",
-          "legendFormat": "gRPC {{rpc_grpc_status_code}}",
+          "expr": "max by (job, `rpc.grpc.status_code`) (rate({__name__=~\"rpc\\\\.server\\\\.duration_milliseconds_bucket\"}[1m]))",
+          "legendFormat": "{{job}} - gRPC {{rpc.grpc.status_code}}",
           "range": true,
           "refId": "A"
         }
@@ -489,8 +489,8 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "histogram_quantile(0.95, sum by (le, job, rpc_method) (rate({__name__=~\"rpc\\\\.server\\\\.duration_bucket\"}[1m])))",
-          "legendFormat": "p95 - {{job}} {{rpc_method}}",
+          "expr": "histogram_quantile(0.95, sum by (le, job, `rpc.method`) (rate({__name__=~\"rpc\\\\.server\\\\.duration_milliseconds_bucket\"}[1m]))) / 1000",
+          "legendFormat": "p95 - {{job}} {{rpc.method}}",
           "range": true,
           "refId": "A"
         },
@@ -501,8 +501,8 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "histogram_quantile(0.50, sum by (le, job, rpc_method) (rate({__name__=~\"rpc\\\\.server\\\\.duration_bucket\"}[1m])))",
-          "legendFormat": "p50 - {{job}} {{rpc_method}}",
+          "expr": "histogram_quantile(0.50, sum by (le, job, `rpc.method`) (rate({__name__=~\"rpc\\\\.server\\\\.duration_milliseconds_bucket\"}[1m]))) / 1000",
+          "legendFormat": "p50 - {{job}} {{rpc.method}}",
           "range": true,
           "refId": "B"
         }
