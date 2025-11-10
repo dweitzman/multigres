@@ -42,18 +42,18 @@ func (sv *ServEnv) Init() {
 	sv.mu.Unlock()
 	sv.lg.SetupLogging()
 
-	// Initialize OpenTelemetry if enabled
+	// Initialize OpenTelemetry
+	// Configuration is done via standard OTEL environment variables
+	// If no OTEL_TRACES_EXPORTER or OTEL_METRICS_EXPORTER is set, noop exporters are used
 	telemetry := GetGlobalTelemetry()
-	if telemetry.IsEnabled() {
-		// Use basename of os.Args[0] as default service name if not specified
-		defaultServiceName := "multigres-service"
-		if len(os.Args) > 0 {
-			defaultServiceName = filepath.Base(os.Args[0])
-		}
-		if err := telemetry.InitTelemetry(context.Background(), defaultServiceName); err != nil {
-			slog.Error("Failed to initialize OpenTelemetry", "error", err)
-			// Continue without telemetry rather than crashing
-		}
+	// Use basename of os.Args[0] as default service name if not specified via OTEL_SERVICE_NAME
+	defaultServiceName := "multigres-service"
+	if len(os.Args) > 0 {
+		defaultServiceName = filepath.Base(os.Args[0])
+	}
+	if err := telemetry.InitTelemetry(context.Background(), defaultServiceName); err != nil {
+		slog.Error("Failed to initialize OpenTelemetry", "error", err)
+		// Continue without telemetry rather than crashing
 	}
 
 	// Ignore SIGPIPE if specified

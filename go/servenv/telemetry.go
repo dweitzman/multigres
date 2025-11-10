@@ -22,15 +22,10 @@ import (
 	"os"
 	"sync"
 
-	"github.com/multigres/multigres/go/viperutil"
-
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"github.com/spf13/pflag"
-
+	"go.opentelemetry.io/contrib/exporters/autoexport"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/propagation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -40,13 +35,18 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+const (
+	// EnvOTELTracesSampler is the standard OpenTelemetry environment variable for trace sampling
+	EnvOTELTracesSampler = "OTEL_TRACES_SAMPLER"
+
+	// EnvCommandOTELTracesSampler is a custom environment variable for CLI commands
+	// If set and OTEL_TRACES_SAMPLER is not set, it will be used as the sampler for the CLI command only
+	// This allows CLI commands to have different sampling (e.g., always_on) than subprocesses
+	EnvCommandOTELTracesSampler = "COMMAND_OTEL_TRACES_SAMPLER"
+)
+
 // Telemetry holds OpenTelemetry configuration and state
 type Telemetry struct {
-	// Configuration
-	enabled     viperutil.Value[bool]
-	serviceName viperutil.Value[string]
-	endpoint    viperutil.Value[string]
-
 	// State
 	mu               sync.Mutex
 	tracerProvider   *sdktrace.TracerProvider
@@ -55,56 +55,21 @@ type Telemetry struct {
 	initialized      bool
 }
 
-// NewTelemetry creates a new Telemetry instance with default configuration
+// NewTelemetry creates a new Telemetry instance
 func NewTelemetry() *Telemetry {
-	return &Telemetry{
-		enabled: viperutil.Configure("otel-enabled", viperutil.Options[bool]{
-			Default:  false,
-			FlagName: "otel-enabled",
-			Dynamic:  false,
-		}),
-		serviceName: viperutil.Configure("otel-service-name", viperutil.Options[string]{
-			Default:  "",
-			FlagName: "otel-service-name",
-			Dynamic:  false,
-		}),
-		endpoint: viperutil.Configure("otel-endpoint", viperutil.Options[string]{
-			Default:  "http://localhost:4318",
-			FlagName: "otel-endpoint",
-			Dynamic:  false,
-		}),
-	}
-}
-
-// RegisterFlags registers telemetry-related command line flags
-func (t *Telemetry) RegisterFlags(fs *pflag.FlagSet) {
-	fs.Bool("otel-enabled", t.enabled.Default(), "Enable OpenTelemetry instrumentation")
-	fs.String("otel-service-name", t.serviceName.Default(), "Service name for OpenTelemetry (overrides OTEL_SERVICE_NAME)")
-	fs.String("otel-endpoint", t.endpoint.Default(), "OTLP endpoint for OpenTelemetry (overrides OTEL_EXPORTER_OTLP_ENDPOINT)")
-	viperutil.BindFlags(fs, t.enabled, t.serviceName, t.endpoint)
-}
-
-// IsEnabled returns whether OpenTelemetry is enabled
-// OTel is enabled if either:
-// 1. The --otel-enabled flag is explicitly set to true, OR
-// 2. The OTEL_EXPORTER_OTLP_ENDPOINT environment variable is set (unless --otel-enabled=false)
-//
-// This allows the environment variable to implicitly enable telemetry while still allowing
-// explicit disabling via the flag.
-func (t *Telemetry) IsEnabled() bool {
-	// If flag was explicitly set (true or false), respect it
-	if t.enabled.Get() {
-		return true
-	}
-
-	// Auto-enable if OTEL_EXPORTER_OTLP_ENDPOINT is set
-	// This follows OpenTelemetry best practices where setting the exporter endpoint
-	// implicitly enables telemetry
-	return os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != ""
+	return &Telemetry{}
 }
 
 // InitTelemetry initializes OpenTelemetry providers and exporters
 // This should be called early in the service lifecycle, typically in OnInit or OnRun hooks
+// Configuration is done via standard OpenTelemetry environment variables:
+// - OTEL_SERVICE_NAME: Service name (defaults to defaultServiceName)
+// - OTEL_EXPORTER_OTLP_ENDPOINT: OTLP endpoint URL
+// - OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf" or "grpc"
+// - OTEL_TRACES_EXPORTER: "otlp", "console", or "none"
+// - OTEL_METRICS_EXPORTER: "otlp", "console", or "none"
+// - OTEL_TRACES_SAMPLER: "always_on", "always_off", "traceidratio", "parentbased_always_on", etc.
+// - COMMAND_OTEL_TRACES_SAMPLER: CLI-specific sampler (used when OTEL_TRACES_SAMPLER is unset)
 func (t *Telemetry) InitTelemetry(ctx context.Context, defaultServiceName string) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -113,26 +78,10 @@ func (t *Telemetry) InitTelemetry(ctx context.Context, defaultServiceName string
 		return nil
 	}
 
-	// Use IsEnabled() instead of t.enabled.Get() to check if OTel should be initialized
-	// IsEnabled() also checks for OTEL_EXPORTER_OTLP_ENDPOINT environment variable
-	if !t.IsEnabled() {
-		slog.DebugContext(ctx, "OpenTelemetry is disabled, skipping initialization")
-		return nil
-	}
-
-	// Determine service name (flag > env var > default)
-	serviceName := t.serviceName.Get()
-	if serviceName == "" {
-		serviceName = os.Getenv("OTEL_SERVICE_NAME")
-	}
+	// Determine service name (env var > default)
+	serviceName := os.Getenv("OTEL_SERVICE_NAME")
 	if serviceName == "" {
 		serviceName = defaultServiceName
-	}
-
-	// Determine OTLP endpoint (flag > env var)
-	endpoint := t.endpoint.Get()
-	if envEndpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"); envEndpoint != "" {
-		endpoint = envEndpoint
 	}
 
 	// Create resource with service name and standard attributes
@@ -143,12 +92,12 @@ func (t *Telemetry) InitTelemetry(ctx context.Context, defaultServiceName string
 	)
 
 	// Initialize tracing
-	if err := t.initTracing(ctx, endpoint, res); err != nil {
+	if err := t.initTracing(ctx, res); err != nil {
 		return fmt.Errorf("failed to initialize tracing: %w", err)
 	}
 
 	// Initialize metrics
-	if err := t.initMetrics(ctx, endpoint, res); err != nil {
+	if err := t.initMetrics(ctx, res); err != nil {
 		return fmt.Errorf("failed to initialize metrics: %w", err)
 	}
 
@@ -163,33 +112,52 @@ func (t *Telemetry) InitTelemetry(ctx context.Context, defaultServiceName string
 
 	t.initialized = true
 
-	slog.InfoContext(ctx, "OpenTelemetry initialized",
-		"service", serviceName,
-		"endpoint", endpoint,
-	)
+	slog.InfoContext(ctx, "OpenTelemetry initialized", "service", serviceName)
 
 	return nil
 }
 
-// initTracing initializes the TracerProvider with OTLP HTTP exporter
-func (t *Telemetry) initTracing(ctx context.Context, endpoint string, res *resource.Resource) error {
-	// Create OTLP HTTP trace exporter
-	// WithEndpointURL accepts the full URL including protocol
-	traceExporter, err := otlptracehttp.New(ctx,
-		otlptracehttp.WithEndpointURL(endpoint),
-	)
+// initTracing initializes the TracerProvider using autoexport
+// The exporter is automatically configured based on OTEL_TRACES_EXPORTER and OTEL_EXPORTER_OTLP_PROTOCOL
+func (t *Telemetry) initTracing(ctx context.Context, res *resource.Resource) error {
+	// Support COMMAND_OTEL_TRACES_SAMPLER for CLI commands
+	// This allows CLI commands to have different sampling behavior than subprocesses
+	// If COMMAND_OTEL_TRACES_SAMPLER is set and OTEL_TRACES_SAMPLER is not, temporarily use it
+	var originalSampler string
+	var restoreSampler bool
+	if commandSampler := os.Getenv(EnvCommandOTELTracesSampler); commandSampler != "" {
+		if os.Getenv(EnvOTELTracesSampler) == "" {
+			originalSampler = os.Getenv(EnvOTELTracesSampler)
+			os.Setenv(EnvOTELTracesSampler, commandSampler)
+			restoreSampler = true
+		}
+	}
+	defer func() {
+		if restoreSampler {
+			if originalSampler == "" {
+				os.Unsetenv(EnvOTELTracesSampler)
+			} else {
+				os.Setenv(EnvOTELTracesSampler, originalSampler)
+			}
+		}
+	}()
+
+	// Create trace exporter using autoexport
+	// This automatically selects the right exporter based on environment variables:
+	// - OTEL_TRACES_EXPORTER: "otlp" (default), "console", or "none"
+	// - OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf" (default) or "grpc"
+	// - OTEL_EXPORTER_OTLP_ENDPOINT or OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+	traceExporter, err := autoexport.NewSpanExporter(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to create trace exporter: %w", err)
 	}
 
 	// Create TracerProvider with batch span processor
 	// Batch processing reduces overhead by grouping spans before export
+	// Sampler is automatically configured from OTEL_TRACES_SAMPLER (or COMMAND_OTEL_TRACES_SAMPLER)
 	t.tracerProvider = sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(traceExporter),
 		sdktrace.WithResource(res),
-		// Sampler is configured via OTEL_TRACES_SAMPLER env var
-		// Defaults to parentbased_always_on if not set
-		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.AlwaysSample())),
 	)
 
 	// Set global tracer provider
@@ -198,30 +166,32 @@ func (t *Telemetry) initTracing(ctx context.Context, endpoint string, res *resou
 	return nil
 }
 
-// initMetrics initializes the MeterProvider with dual exporters (OTLP + Prometheus)
-func (t *Telemetry) initMetrics(ctx context.Context, endpoint string, res *resource.Resource) error {
+// initMetrics initializes the MeterProvider with dual exporters (autoexport + Prometheus)
+func (t *Telemetry) initMetrics(ctx context.Context, res *resource.Resource) error {
 	// Create Prometheus exporter for pull-based metrics (local debugging)
+	// This is always created so we can serve metrics at /metrics endpoint
 	promExporter, err := prometheus.New()
 	if err != nil {
 		return fmt.Errorf("failed to create prometheus exporter: %w", err)
 	}
 
-	// Create OTLP HTTP metric exporter for push-based metrics (production)
-	// WithEndpointURL accepts the full URL including protocol
-	otlpExporter, err := otlpmetrichttp.New(ctx,
-		otlpmetrichttp.WithEndpointURL(endpoint),
-	)
+	// Create metric reader using autoexport
+	// This automatically selects the right exporter based on environment variables:
+	// - OTEL_METRICS_EXPORTER: "otlp" (default), "prometheus", "console", or "none"
+	// - OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf" (default) or "grpc"
+	// - OTEL_EXPORTER_OTLP_ENDPOINT or OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+	autoMetricReader, err := autoexport.NewMetricReader(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to create OTLP metric exporter: %w", err)
+		return fmt.Errorf("failed to create metric reader: %w", err)
 	}
 
 	// Create MeterProvider with both readers
 	// Prometheus reader is pull-based (scraped via /metrics endpoint)
-	// OTLP reader is push-based (periodically sends to collector)
+	// Auto reader can be OTLP push-based, console, or noop depending on env vars
 	t.meterProvider = sdkmetric.NewMeterProvider(
 		sdkmetric.WithResource(res),
-		sdkmetric.WithReader(promExporter),                              // Pull-based for local debugging
-		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(otlpExporter)), // Push-based for production
+		sdkmetric.WithReader(promExporter),     // Pull-based for local debugging
+		sdkmetric.WithReader(autoMetricReader), // Configured via env vars
 	)
 
 	// Set global meter provider
@@ -344,9 +314,6 @@ func (t *Telemetry) ShutdownTelemetry(ctx context.Context) error {
 
 // WrapSlogHandler wraps an slog.Handler to inject trace context
 func (t *Telemetry) WrapSlogHandler(handler slog.Handler) slog.Handler {
-	if !t.enabled.Get() {
-		return handler
-	}
 	return &traceHandler{wrapped: handler}
 }
 
@@ -390,9 +357,4 @@ func GetGlobalTelemetry() *Telemetry {
 		globalTelemetry = NewTelemetry()
 	})
 	return globalTelemetry
-}
-
-// RegisterTelemetryFlags registers telemetry flags on the global instance
-func RegisterTelemetryFlags(fs *pflag.FlagSet) {
-	GetGlobalTelemetry().RegisterFlags(fs)
 }

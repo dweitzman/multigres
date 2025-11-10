@@ -40,13 +40,9 @@ func (sv *ServEnv) HTTPHandleFunc(pattern string, handler func(http.ResponseWrit
 func (sv *ServEnv) HTTPServe(l net.Listener) error {
 	slog.Info("Listening for HTTP calls on port", "httpPort", sv.httpPort.Get())
 
-	// Wrap the mux with OpenTelemetry instrumentation if enabled
-	var handler http.Handler = sv.mux
-	telemetry := GetGlobalTelemetry()
-	if telemetry.IsEnabled() {
-		slog.Info("enabling OpenTelemetry HTTP instrumentation")
-		handler = otelhttp.NewHandler(sv.mux, "http-server")
-	}
+	// Wrap the mux with OpenTelemetry instrumentation
+	// If no OTEL exporters are configured, noop exporters are used with minimal overhead
+	handler := otelhttp.NewHandler(sv.mux, "http-server")
 
 	err := http.Serve(l, handler)
 	if errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
@@ -69,18 +65,10 @@ func (sv *ServEnv) HTTPRegisterPprofProfile() {
 }
 
 // HTTPRegisterPrometheusMetrics registers the Prometheus metrics endpoint with the internal servenv mux.
-// This provides a /metrics endpoint that exposes OpenTelemetry metrics in Prometheus format for local debugging.
+// This provides a /metrics endpoint that exposes OpenTelemetry metrics in Prometheus format.
+// The endpoint is always registered as it has minimal overhead.
 func (sv *ServEnv) HTTPRegisterPrometheusMetrics() {
-	if !sv.httpPrometheus.Get() {
-		return
-	}
-
 	telemetry := GetGlobalTelemetry()
-	if !telemetry.IsEnabled() {
-		slog.Warn("Prometheus endpoint requested but OpenTelemetry is not enabled")
-		return
-	}
-
 	slog.Info("Registering Prometheus metrics endpoint at /metrics")
 	sv.HTTPHandle("/metrics", telemetry.GetPrometheusHandler())
 }

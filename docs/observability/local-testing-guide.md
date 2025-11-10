@@ -31,12 +31,16 @@ In a new terminal:
 ```bash
 # Set OpenTelemetry environment variables
 export OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4318"
+export OTEL_TRACES_EXPORTER="otlp"
+export OTEL_METRICS_EXPORTER="otlp"
 export OTEL_TRACES_SAMPLER="always_on"
 export OTEL_SERVICE_NAME="multigres-local"
 
-# Start cluster with OTel and Prometheus metrics enabled
-./bin/multigres cluster start --otel-enabled --prometheus-http
+# Start cluster
+./bin/multigres cluster start
 ```
+
+> **Note**: Telemetry is always initialized in Multigres. When `OTEL_TRACES_EXPORTER` or `OTEL_METRICS_EXPORTER` are not set (or set to "none"), noop exporters are used with minimal overhead.
 
 ### 3. View Traces
 
@@ -120,7 +124,7 @@ Expected output:
 **Steps**:
 
 1. Start Jaeger all-in-one
-2. Start cluster with `OTEL_TRACES_SAMPLER=always_on` and `--otel-enabled`
+2. Start cluster with `OTEL_TRACES_EXPORTER=otlp` and `OTEL_TRACES_SAMPLER=always_on` environment variables
 3. Open Jaeger UI and search for traces
 4. Find the trace with operation `cluster_startup`
 
@@ -242,29 +246,50 @@ rpc_server_duration_milliseconds_bucket{le="100"} 42 # {span_id="00f067aa0ba902b
 
 ### Environment Variables (Standard OTel)
 
-| Variable                      | Description                    | Example                                                            | Default                        |
-| ----------------------------- | ------------------------------ | ------------------------------------------------------------------ | ------------------------------ |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP collector endpoint        | `http://localhost:4318`                                            | `http://localhost:4318`        |
-| `OTEL_TRACES_SAMPLER`         | Sampling strategy              | `always_on`, `always_off`, `traceidratio`, `parentbased_always_on` | `parentbased_always_on`        |
-| `OTEL_SERVICE_NAME`           | Service name in traces         | `multipooler`                                                      | Auto-detected from binary name |
-| `OTEL_RESOURCE_ATTRIBUTES`    | Additional resource attributes | `deployment.environment=local,version=1.0.0`                       | None                           |
+| Variable                      | Description                                                  | Example                                                            | Default                        |
+| ----------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------ |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP collector endpoint                                      | `http://localhost:4318`                                            | -                              |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | OTLP protocol                                                | `http/protobuf`, `grpc`                                            | `http/protobuf`                |
+| `OTEL_TRACES_EXPORTER`        | Traces exporter type                                         | `otlp`, `console`, `none`                                          | `otlp`                         |
+| `OTEL_METRICS_EXPORTER`       | Metrics exporter type                                        | `otlp`, `console`, `none`                                          | `otlp`                         |
+| `OTEL_TRACES_SAMPLER`         | Sampling strategy                                            | `always_on`, `always_off`, `traceidratio`, `parentbased_always_on` | `parentbased_always_on`        |
+| `OTEL_TRACES_SAMPLER_ARG`     | Sampler ratio (for traceidratio)                             | `0.01` (1%)                                                        | `1.0` (100%)                   |
+| `COMMAND_OTEL_TRACES_SAMPLER` | CLI command-specific sampler (not inherited by subprocesses) | `always_on`                                                        | -                              |
+| `OTEL_SERVICE_NAME`           | Service name in traces                                       | `multipooler`                                                      | Auto-detected from binary name |
+| `OTEL_RESOURCE_ATTRIBUTES`    | Additional resource attributes                               | `deployment.environment=local,version=1.0.0`                       | None                           |
 
 ### Sampling Strategies
 
 - `always_on`: Sample 100% of traces (high overhead, use for testing only)
 - `always_off`: Sample 0% of traces (disables tracing)
-- `traceidratio=0.01`: Sample 1% of traces (production recommended)
-- `parentbased_always_on`: Always sample if parent was sampled, otherwise always sample
-- `parentbased_traceidratio=0.01`: Sample 1% of root spans, always sample children
+- `traceidratio`: Sample based on ratio set in `OTEL_TRACES_SAMPLER_ARG` (e.g., 0.01 = 1%)
+- `parentbased_always_on`: Always sample if parent was sampled, otherwise always sample (default)
+- `parentbased_traceidratio`: Sample based on ratio for root spans, always sample children
 
-### CLI Flags
+### CLI-Specific Sampling
 
-| Flag                  | Description                           | Default                 |
-| --------------------- | ------------------------------------- | ----------------------- |
-| `--otel-enabled`      | Enable OpenTelemetry instrumentation  | `false`                 |
-| `--otel-service-name` | Override service name                 | (auto-detected)         |
-| `--otel-endpoint`     | Override OTLP endpoint                | `http://localhost:4318` |
-| `--prometheus-http`   | Enable Prometheus `/metrics` endpoint | `false`                 |
+The `COMMAND_OTEL_TRACES_SAMPLER` environment variable allows you to set different sampling behavior for CLI commands without affecting subprocesses they start:
+
+- If `OTEL_TRACES_SAMPLER` is not set and `COMMAND_OTEL_TRACES_SAMPLER` is set, the CLI command will use `COMMAND_OTEL_TRACES_SAMPLER` for its sampling strategy
+- Subprocesses started by the CLI command will not inherit `COMMAND_OTEL_TRACES_SAMPLER` behavior (they use standard `OTEL_TRACES_SAMPLER`)
+- This is useful for debugging CLI operations with `always_on` sampling while keeping services at lower sampling rates
+
+Example:
+
+```bash
+# CLI uses always_on sampling, but services use parentbased_always_on (default)
+export COMMAND_OTEL_TRACES_SAMPLER=always_on
+./bin/multigres cluster start
+
+# Both CLI and services use always_on sampling
+export OTEL_TRACES_SAMPLER=always_on
+./bin/multigres cluster start
+```
+
+### Endpoints
+
+- **Prometheus metrics**: Always available at `/metrics` endpoint (minimal overhead when not scraped)
+- **pprof profiling**: Available at `/debug/pprof/*` when `--pprof-http` flag is set
 
 ## Troubleshooting
 
@@ -276,9 +301,10 @@ rpc_server_duration_milliseconds_bucket{le="100"} 42 # {span_id="00f067aa0ba902b
 
 1. Jaeger is running: `curl http://localhost:16686`
 2. OTLP endpoint is reachable: `curl http://localhost:4318/v1/traces` (should return 405 Method Not Allowed, which is expected)
-3. `--otel-enabled` flag is set when starting cluster
-4. `OTEL_TRACES_SAMPLER` is not set to `always_off`
-5. Services are actually starting (check `./bin/multigres cluster status`)
+3. `OTEL_TRACES_EXPORTER` is set to `otlp` (or unset, defaults to `otlp`)
+4. `OTEL_EXPORTER_OTLP_ENDPOINT` is set correctly (e.g., `http://localhost:4318`)
+5. `OTEL_TRACES_SAMPLER` is not set to `always_off`
+6. Services are actually starting (check `./bin/multigres cluster status`)
 
 **Debug**:
 
@@ -298,10 +324,9 @@ curl -X POST http://localhost:4318/v1/traces \
 
 **Check**:
 
-1. OTel is enabled (`--otel-enabled`)
-2. Logging bridge is initialized (check for "OpenTelemetry" in startup logs)
-3. Operations are actually being traced (verify in Jaeger)
-4. Log format is JSON (`--log-format json`)
+1. Telemetry is initialized (check for "OpenTelemetry initialized" in startup logs)
+2. Operations are actually being traced (verify in Jaeger)
+3. Log format is JSON (`--log-format json`)
 
 **Debug**:
 
@@ -313,24 +338,24 @@ grep "logging initialized" logs/*.log
 head -1 logs/multipooler_*.log | jq '.'
 ```
 
-### Metrics Endpoint Returns 503
+### Metrics Endpoint Returns 503 or 404
 
-**Symptoms**: `curl http://localhost:8080/metrics` returns 503 Service Unavailable
+**Symptoms**: `curl http://localhost:8080/metrics` returns 503 or 404
 
 **Check**:
 
-1. `--prometheus-http` flag is set
-2. `--otel-enabled` flag is set (metrics require OTel)
-3. Service has HTTP port configured (`--http-port` for services)
+1. Telemetry is initialized (check for "OpenTelemetry initialized" in startup logs)
+2. Service has HTTP port configured and is listening (`--http-port` for services)
+3. Check that you're accessing the correct port (multiadmin: 8080, multigateway/multipooler: varies by zone)
 
 **Debug**:
 
 ```bash
-# Check if Prometheus endpoint was registered
-curl -v http://localhost:8080/metrics 2>&1 | grep -i "prometheus\|otel"
+# Check if service is listening on HTTP port
+curl -v http://localhost:8080/live
 
-# Check service configuration
-curl http://localhost:8080/config | jq '.prometheus_http, .otel_enabled'
+# Check if metrics endpoint exists
+curl -v http://localhost:8080/metrics 2>&1 | head -20
 ```
 
 ### Startup Trace Not Showing Child Spans

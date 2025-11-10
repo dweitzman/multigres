@@ -347,11 +347,8 @@ func (g *GrpcServer) Create() {
 	opts = append(opts, grpc.KeepaliveParams(ka))
 
 	// Add OpenTelemetry instrumentation for distributed tracing and metrics
-	telemetry := GetGlobalTelemetry()
-	if telemetry.IsEnabled() {
-		slog.Info("enabling OpenTelemetry gRPC instrumentation")
-		opts = append(opts, grpc.StatsHandler(otelgrpc.NewServerHandler()))
-	}
+	// If no OTEL exporters are configured, noop exporters are used with minimal overhead
+	opts = append(opts, grpc.StatsHandler(otelgrpc.NewServerHandler()))
 
 	opts = append(opts, g.interceptors()...)
 
