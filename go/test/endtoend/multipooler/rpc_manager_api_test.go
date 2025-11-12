@@ -55,7 +55,7 @@ func TestMultipoolerPrimaryPosition(t *testing.T) {
 		defer conn.Close()
 
 		client := multipoolermanagerpb.NewMultiPoolerManagerClient(conn)
-		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), 1*time.Second)
 		defer cancel()
 
 		req := &multipoolermanagerdata.PrimaryPositionRequest{}
@@ -87,7 +87,7 @@ func TestMultipoolerPrimaryPosition(t *testing.T) {
 		defer conn.Close()
 
 		client := multipoolermanagerpb.NewMultiPoolerManagerClient(conn)
-		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), 1*time.Second)
 		defer cancel()
 
 		req := &multipoolermanagerdata.PrimaryPositionRequest{}
@@ -296,7 +296,7 @@ func TestPrimaryStatus(t *testing.T) {
 
 		t.Log("Testing PrimaryStatus on REPLICA pooler (should fail)...")
 
-		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), 1*time.Second)
 		defer cancel()
 
 		_, err := standbyManagerClient.PrimaryStatus(ctx, &multipoolermanagerdata.PrimaryStatusRequest{})
@@ -597,7 +597,7 @@ func TestGetFollowers(t *testing.T) {
 
 		t.Log("Testing GetFollowers on REPLICA pooler (should fail)...")
 
-		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), 1*time.Second)
 		defer cancel()
 
 		_, err := standbyManagerClient.GetFollowers(ctx, &multipoolermanagerdata.GetFollowersRequest{})

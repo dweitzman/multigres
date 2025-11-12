@@ -15,7 +15,6 @@
 package topo_test
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"testing"
@@ -29,7 +28,7 @@ import (
 )
 
 func TestCellCRUDOperations(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cell := "test-cell-1"
 	cell2 := "test-cell-2"
 

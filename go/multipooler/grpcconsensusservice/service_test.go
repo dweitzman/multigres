@@ -15,7 +15,6 @@
 package grpcconsensusservice
 
 import (
-	"context"
 	"log/slog"
 	"os"
 	"testing"
@@ -35,7 +34,7 @@ import (
 )
 
 func TestConsensusService_BeginTerm(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	ts, _ := memorytopo.NewServerAndFactory(ctx, "zone1")
 	defer ts.Close()
@@ -107,7 +106,7 @@ func TestConsensusService_BeginTerm(t *testing.T) {
 }
 
 func TestConsensusService_Status(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	ts, _ := memorytopo.NewServerAndFactory(ctx, "zone1")
 	defer ts.Close()
@@ -178,7 +177,7 @@ func TestConsensusService_Status(t *testing.T) {
 }
 
 func TestConsensusService_GetLeadershipView(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	ts, _ := memorytopo.NewServerAndFactory(ctx, "zone1")
 	defer ts.Close()
@@ -244,7 +243,7 @@ func TestConsensusService_GetLeadershipView(t *testing.T) {
 }
 
 func TestConsensusService_CanReachPrimary(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	ts, _ := memorytopo.NewServerAndFactory(ctx, "zone1")
 	defer ts.Close()
@@ -312,7 +311,7 @@ func TestConsensusService_CanReachPrimary(t *testing.T) {
 }
 
 func TestConsensusService_AllMethods(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	ts, _ := memorytopo.NewServerAndFactory(ctx, "zone1")
 	defer ts.Close()

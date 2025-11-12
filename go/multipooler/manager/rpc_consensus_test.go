@@ -15,7 +15,6 @@
 package manager
 
 import (
-	"context"
 	"database/sql"
 	"log/slog"
 	"os"
@@ -38,7 +37,7 @@ import (
 
 // Helper function to setup a manager with a mock database
 func setupManagerWithMockDB(t *testing.T) (*MultiPoolerManager, sqlmock.Sqlmock, string) {
-	ctx := context.Background()
+	ctx := t.Context()
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	ts, _ := memorytopo.NewServerAndFactory(ctx, "zone1")
 	t.Cleanup(func() { ts.Close() })
@@ -238,7 +237,7 @@ func TestBeginTerm(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			pm, mock, tmpDir := setupManagerWithMockDB(t)
 
 			// Initialize term on disk
@@ -280,7 +279,7 @@ func TestBeginTerm(t *testing.T) {
 	// Run save failure tests
 	for _, tt := range saveFailureTests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			pm, mock, tmpDir := setupManagerWithMockDB(t)
 
 			// Initialize term on disk
@@ -447,7 +446,7 @@ func TestCanReachPrimary(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			pm, mock, _ := setupManagerWithMockDB(t)
 
 			if tt.nilDB {
@@ -580,7 +579,7 @@ func TestConsensusStatus(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			pm, mock, tmpDir := setupManagerWithMockDB(t)
 
 			// Initialize term on disk

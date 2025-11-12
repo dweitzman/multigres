@@ -171,20 +171,20 @@ func TestRetry_startAttempt_FirstAttemptNoDelay(t *testing.T) {
 	r, ft, _ := newRetryWithFakeBackoff(delays)
 
 	// First call should return immediately without waiting
-	err := r.startAttempt(context.Background())
+	err := r.startAttempt(t.Context())
 	assert.NoError(t, err)
 	assert.Equal(t, 1, r.attempt)
 	assert.Empty(t, ft.delays, "first attempt should not wait")
 
 	// Second call should wait with backoff
-	err = r.startAttempt(context.Background())
+	err = r.startAttempt(t.Context())
 	assert.NoError(t, err)
 	assert.Equal(t, 2, r.attempt)
 	require.Len(t, ft.delays, 1)
 	assert.Equal(t, delays[0], ft.delays[0])
 
 	// Third call should wait with larger backoff
-	err = r.startAttempt(context.Background())
+	err = r.startAttempt(t.Context())
 	assert.NoError(t, err)
 	assert.Equal(t, 3, r.attempt)
 	require.Len(t, ft.delays, 2)
@@ -196,14 +196,14 @@ func TestRetry_startAttempt_WithInitialDelay(t *testing.T) {
 	r, ft, _ := newRetryWithFakeBackoff(delays, WithInitialDelay())
 
 	// First call should wait when WithInitialDelay is set
-	err := r.startAttempt(context.Background())
+	err := r.startAttempt(t.Context())
 	assert.NoError(t, err)
 	assert.Equal(t, 1, r.attempt)
 	require.Len(t, ft.delays, 1)
 	assert.Equal(t, delays[0], ft.delays[0])
 
 	// Second call should also wait
-	err = r.startAttempt(context.Background())
+	err = r.startAttempt(t.Context())
 	assert.NoError(t, err)
 	assert.Equal(t, 2, r.attempt)
 	require.Len(t, ft.delays, 2)
@@ -214,7 +214,7 @@ func TestRetry_startAttempt_ContextCancelled(t *testing.T) {
 	delays := []time.Duration{10 * time.Millisecond}
 	r, _, _ := newRetryWithFakeBackoff(delays)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel() // Cancel immediately
 
 	// First attempt should check context and return error
@@ -228,7 +228,7 @@ func TestRetry_startAttempt_ContextCancelledDuringWait(t *testing.T) {
 	// Use real timer for this test since we need actual timing
 	r := New(10*time.Millisecond, time.Minute, withBackoff(newExponentialBackoffNoJitter(10*time.Millisecond, time.Minute)))
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	// First attempt succeeds
 	err := r.startAttempt(ctx)
@@ -249,7 +249,7 @@ func TestRetry_startAttempt_ContextCancelledDuringWait(t *testing.T) {
 func TestRetry_Reset(t *testing.T) {
 	delays := []time.Duration{10 * time.Millisecond, 20 * time.Millisecond, 10 * time.Millisecond}
 	r, _, fb := newRetryWithFakeBackoff(delays)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Make a few attempts
 	require.NoError(t, r.startAttempt(ctx)) // No wait (first attempt), attempt 1
@@ -275,7 +275,7 @@ func TestRetry_Reset(t *testing.T) {
 
 func TestRetry_IntegrationExample(t *testing.T) {
 	r := New(100*time.Millisecond, 30*time.Second, withBackoff(newExponentialBackoffNoJitter(100*time.Millisecond, 30*time.Second)))
-	ctx := context.Background()
+	ctx := t.Context()
 
 	for attempt, err := range r.Attempts(ctx) {
 		if err != nil {
@@ -293,7 +293,7 @@ func TestRetry_IntegrationExample(t *testing.T) {
 
 func TestRetry_IntegrationWithContextTimeout(t *testing.T) {
 	r := New(10*time.Millisecond, time.Second, withBackoff(newExponentialBackoffNoJitter(10*time.Millisecond, time.Second)))
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
 
 	var lastErr error
@@ -315,7 +315,7 @@ func TestRetry_IntegrationWithContextTimeout(t *testing.T) {
 // Example demonstrates basic backoff usage with exponential backoff and full jitter.
 func Example() {
 	r := New(500*time.Millisecond, 30*time.Second)
-	ctx := context.Background()
+	ctx := context.TODO()
 
 	for _, err := range r.Attempts(ctx) {
 		if err != nil {
@@ -337,7 +337,7 @@ func Example() {
 
 // Example_withTimeout shows time-bounded retry with context timeout.
 func Example_withTimeout() {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.TODO(), 30*time.Second)
 	defer cancel()
 
 	r := New(100*time.Millisecond, 5*time.Second)
@@ -368,7 +368,7 @@ func TestRetry_Attempts_SuccessfulAttempts(t *testing.T) {
 	r := New(10*time.Millisecond, 100*time.Millisecond)
 	r.timer = &fakeTimer{}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	attemptCount := 0
 
 	for attempt, err := range r.Attempts(ctx) {
@@ -391,7 +391,7 @@ func TestRetry_Attempts_ContextCancelled(t *testing.T) {
 	r := New(10*time.Millisecond, 100*time.Millisecond)
 	r.timer = &fakeTimer{}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	for attempt, err := range r.Attempts(ctx) {
@@ -413,7 +413,7 @@ func TestRetry_Attempts_ContextTimeout(t *testing.T) {
 	r := New(10*time.Millisecond, 100*time.Millisecond)
 	r.timer = &fakeTimer{}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
 
 	var lastAttempt int
@@ -439,7 +439,7 @@ func TestRetry_Attempts_EarlyBreak(t *testing.T) {
 	r := New(10*time.Millisecond, 100*time.Millisecond)
 	r.timer = ft
 
-	ctx := context.Background()
+	ctx := t.Context()
 	attemptCount := 0
 
 	for _, err := range r.Attempts(ctx) {
@@ -462,7 +462,7 @@ func TestRetry_Attempts_WithInitialDelay(t *testing.T) {
 	r := New(10*time.Millisecond, 100*time.Millisecond, WithInitialDelay())
 	r.timer = ft
 
-	ctx := context.Background()
+	ctx := t.Context()
 	attemptCount := 0
 
 	for _, err := range r.Attempts(ctx) {

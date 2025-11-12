@@ -78,7 +78,7 @@ func createTestPooler(name, cell, hostname, database, shard string, poolerType c
 // Integration tests - these use the public API (Start/Stop/GetPoolers)
 
 func TestNewPoolerDiscovery(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, _ := memorytopo.NewServerAndFactory(ctx, "test-cell")
 	defer store.Close()
 	logger := slog.Default()
@@ -94,7 +94,7 @@ func TestNewPoolerDiscovery(t *testing.T) {
 }
 
 func TestPoolerDiscovery_StartStop(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, _ := memorytopo.NewServerAndFactory(ctx, "test-cell")
 	defer store.Close()
 	logger := slog.Default()
@@ -126,7 +126,7 @@ func TestPoolerDiscovery_StartStop(t *testing.T) {
 }
 
 func TestPoolerDiscovery_MultiplePoolerUpdates(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, _ := memorytopo.NewServerAndFactory(ctx, "test-cell")
 	defer store.Close()
 	logger := slog.Default()
@@ -167,7 +167,7 @@ func TestPoolerDiscovery_MultiplePoolerUpdates(t *testing.T) {
 }
 
 func TestPoolerDiscovery_EmptyInitialState(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, _ := memorytopo.NewServerAndFactory(ctx, "test-cell")
 	defer store.Close()
 	logger := slog.Default()
@@ -194,7 +194,7 @@ func TestPoolerDiscovery_EmptyInitialState(t *testing.T) {
 }
 
 func TestPoolerDiscovery_VerifyPoolerDetails(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, _ := memorytopo.NewServerAndFactory(ctx, "test-cell")
 	defer store.Close()
 	logger := slog.Default()
@@ -236,7 +236,7 @@ func TestPoolerDiscovery_VerifyPoolerDetails(t *testing.T) {
 }
 
 func TestPoolerDiscovery_GetPoolers_ThreadSafe(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, _ := memorytopo.NewServerAndFactory(ctx, "test-cell")
 	defer store.Close()
 	logger := slog.Default()
@@ -263,7 +263,7 @@ func TestPoolerDiscovery_GetPoolers_ThreadSafe(t *testing.T) {
 }
 
 func TestPoolerDiscovery_InvalidDataHandling(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, _ := memorytopo.NewServerAndFactory(ctx, "test-cell")
 	defer store.Close()
 	logger := slog.Default()
@@ -319,7 +319,7 @@ func TestPoolerDiscovery_InvalidDataHandling(t *testing.T) {
 // Internal unit tests - these test internal methods directly for edge cases
 
 func TestPoolerDiscovery_LastRefresh(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, _ := memorytopo.NewServerAndFactory(ctx, "test-cell")
 	defer store.Close()
 	logger := slog.Default()
@@ -348,7 +348,7 @@ func TestPoolerDiscovery_LastRefresh(t *testing.T) {
 }
 
 func TestPoolerDiscovery_ContextCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	store, _ := memorytopo.NewServerAndFactory(ctx, "test-cell")
 	defer store.Close()
 	logger := slog.Default()
@@ -386,7 +386,7 @@ func TestPoolerDiscovery_ContextCancellation(t *testing.T) {
 // TestPoolerDiscovery_ReconnectsAfterWatchClosed tests that discovery reconnects
 // when the watch channel is closed (e.g., due to etcd compaction).
 func TestPoolerDiscovery_ReconnectsAfterWatchClosed(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, factory := memorytopo.NewServerAndFactory(ctx, "test-cell")
 	defer store.Close()
 	logger := slog.Default()

@@ -147,7 +147,7 @@ func TestAllMethods_Success(t *testing.T) {
 	factory := newMockFactory()
 	wrapper := NewWrapperConn(factory.newConn, nil)
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Test all methods for successful execution
 	t.Run("ListDir", func(t *testing.T) {
@@ -238,7 +238,7 @@ func TestAllMethods_NoConnection(t *testing.T) {
 	factory.setShouldFail(true)
 	wrapper := NewWrapperConn(factory.newConn, nil)
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Test all methods return error when no connection
 	methods := []struct {
@@ -308,7 +308,7 @@ func TestAllMethods_NoConnection(t *testing.T) {
 }
 
 func TestAllMethods_ConnectionError(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Test all methods trigger retry on connection error
 	methods := []struct {
@@ -539,7 +539,7 @@ func TestOperationsTriggersHandleConnectionError(t *testing.T) {
 	factory := newMockFactoryWithDelayedFailure(2)
 	wrapper := NewWrapperConn(factory.newConn, nil)
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// First call should succeed
 	_, err := wrapper.ListDir(ctx, "/test", true)
@@ -596,7 +596,7 @@ func TestMultipleOperationsWithConnectionErrors(t *testing.T) {
 			factory := newMockFactoryWithDelayedFailure(0)
 			wrapper := NewWrapperConn(factory.newConn, nil)
 
-			ctx := context.Background()
+			ctx := t.Context()
 			initialCount := factory.getCreateCount()
 
 			// Operation should fail and trigger retry
@@ -869,7 +869,7 @@ func TestAlarm_CalledOnConnectionError(t *testing.T) {
 	mockConn := conn.(*mockConn)
 	mockConn.setShouldFailCalls(true)
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Trigger a connection error
 	_, err = wrapper.ListDir(ctx, "/test", true)

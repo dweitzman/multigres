@@ -84,7 +84,7 @@ func TestWriteHeartbeatOpen(t *testing.T) {
 	defer tw.Close()
 
 	t.Run("open, heartbeats", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 		defer cancel()
 		ticker := time.NewTicker(1 * time.Second)
 		defer ticker.Stop()
@@ -158,7 +158,7 @@ func TestCloseWhileStuckWriting(t *testing.T) {
 	startedWaitWg.Wait()
 
 	// Even if the write is blocked, we should be able to close without waiting indefinitely
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	go func() {
 		tw.Close()
 		cancel()

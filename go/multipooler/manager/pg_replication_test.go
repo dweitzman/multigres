@@ -15,7 +15,6 @@
 package manager
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"io"
@@ -732,7 +731,7 @@ func TestIsPrimary(t *testing.T) {
 				db:     mockDB,
 			}
 
-			ctx := context.Background()
+			ctx := t.Context()
 			result, err := pm.isPrimary(ctx)
 
 			if tt.expectError {
@@ -796,7 +795,7 @@ func TestGetPrimaryLSN(t *testing.T) {
 				db:     mockDB,
 			}
 
-			ctx := context.Background()
+			ctx := t.Context()
 			result, err := pm.getPrimaryLSN(ctx)
 
 			if tt.expectError {
@@ -860,7 +859,7 @@ func TestGetStandbyReplayLSN(t *testing.T) {
 				db:     mockDB,
 			}
 
-			ctx := context.Background()
+			ctx := t.Context()
 			result, err := pm.getStandbyReplayLSN(ctx)
 
 			if tt.expectError {
@@ -997,7 +996,7 @@ func TestGetSynchronousReplicationConfig(t *testing.T) {
 				db:     mockDB,
 			}
 
-			ctx := context.Background()
+			ctx := t.Context()
 			result, err := pm.getSynchronousReplicationConfig(ctx)
 
 			if tt.expectError {
@@ -1081,7 +1080,7 @@ func TestSetSynchronousStandbyNames(t *testing.T) {
 					WillReturnResult(sqlmock.NewResult(0, 0))
 			}
 
-			ctx := context.Background()
+			ctx := t.Context()
 			err = pm.setSynchronousStandbyNames(ctx, tt.synchronousMethod, tt.numSync, tt.standbyIDs)
 
 			if tt.expectError {
@@ -1155,7 +1154,7 @@ func TestValidateExpectedLSN(t *testing.T) {
 					db:     mockDB,
 				}
 
-				ctx := context.Background()
+				ctx := t.Context()
 				err = pm.validateExpectedLSN(ctx, tt.expectedLSN)
 				assert.NoError(t, err)
 				return
@@ -1182,7 +1181,7 @@ func TestValidateExpectedLSN(t *testing.T) {
 					WillReturnRows(rows)
 			}
 
-			ctx := context.Background()
+			ctx := t.Context()
 			err = pm.validateExpectedLSN(ctx, tt.expectedLSN)
 
 			if tt.expectError {
@@ -1677,7 +1676,7 @@ func TestPauseReplication(t *testing.T) {
 				db:     mockDB,
 			}
 
-			ctx := context.Background()
+			ctx := t.Context()
 			status, err := pm.pauseReplication(ctx, tt.mode, tt.wait)
 
 			if tt.expectError {
@@ -1757,7 +1756,7 @@ func TestResetPrimaryConnInfo(t *testing.T) {
 				db:     mockDB,
 			}
 
-			ctx := context.Background()
+			ctx := t.Context()
 			err = pm.resetPrimaryConnInfo(ctx)
 
 			if tt.expectError {
@@ -1931,7 +1930,7 @@ func TestQueryReplicationStatus(t *testing.T) {
 			}
 
 			// Call the method
-			ctx := context.Background()
+			ctx := t.Context()
 			status, err := pm.queryReplicationStatus(ctx)
 
 			// Validate results

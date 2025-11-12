@@ -26,7 +26,7 @@ import (
 // of this test. If the test has finished successfully, it will be checked for goroutine
 // leaks after context cancellation.
 func LeakCheckContext(t testing.TB) context.Context {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(func() {
 		cancel()
 		EnsureNoLeaks(t)
@@ -37,7 +37,7 @@ func LeakCheckContext(t testing.TB) context.Context {
 // LeakCheckContextTimeout behaves like LeakCheckContext but the returned Context will
 // be cancelled after `timeout`, or after the test finishes, whichever happens first.
 func LeakCheckContextTimeout(t testing.TB, timeout time.Duration) context.Context {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(t.Context(), timeout)
 	t.Cleanup(func() {
 		cancel()
 		EnsureNoLeaks(t)

@@ -167,7 +167,7 @@ func TestServerGetMultiGatewaysByCell(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 
 			ts, factory := memorytopo.NewServerAndFactory(ctx, cell)
@@ -245,7 +245,7 @@ func TestMultiGatewayIDString(t *testing.T) {
 
 // TestMultiGatewayCRUDOperations tests basic CRUD operations for multigateways
 func TestMultiGatewayCRUDOperations(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cell := "zone-1"
 
 	tests := []struct {
@@ -371,7 +371,7 @@ func TestMultiGatewayCRUDOperations(t *testing.T) {
 
 // TestGetMultiGatewayIDsByCell tests getting multigateway IDs by cell
 func TestGetMultiGatewayIDsByCell(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cell1 := "zone-1"
 	cell2 := "zone-2"
 
@@ -468,7 +468,7 @@ func TestGetMultiGatewayIDsByCell(t *testing.T) {
 
 // TestUpdateMultiGatewayFields tests the update fields functionality with retry logic
 func TestUpdateMultiGatewayFields(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cell := "zone-1"
 
 	tests := []struct {
@@ -604,7 +604,7 @@ func TestUpdateMultiGatewayFields(t *testing.T) {
 
 // TestInitMultiGateway tests the init multigateway functionality
 func TestInitMultiGateway(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cell := "zone-1"
 
 	tests := []struct {
@@ -825,7 +825,7 @@ func TestMultiGatewayInfo(t *testing.T) {
 
 // TestGetMultiGatewaysByCell covers comprehensive scenarios for the GetMultiGatewaysByCell method
 func TestGetMultiGatewaysByCell_Comprehensive(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
 	t.Run("cell with multiple multigateways", func(t *testing.T) {

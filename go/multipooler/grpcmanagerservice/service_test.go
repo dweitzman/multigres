@@ -15,7 +15,6 @@
 package grpcmanagerservice
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -39,7 +38,7 @@ import (
 )
 
 func TestManagerServiceMethods_NotImplemented(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	ts, _ := memorytopo.NewServerAndFactory(ctx, "zone1")
 	defer ts.Close()
@@ -120,7 +119,7 @@ func TestManagerServiceMethods_NotImplemented(t *testing.T) {
 }
 
 func TestManagerServiceMethods_ManagerNotReady(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	ts, _ := memorytopo.NewServerAndFactory(ctx, "zone1")
 	defer ts.Close()

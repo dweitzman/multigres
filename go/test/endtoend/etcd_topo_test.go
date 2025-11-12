@@ -15,7 +15,6 @@
 package endtoend
 
 import (
-	"context"
 	"fmt"
 	"path"
 	"testing"
@@ -51,7 +50,7 @@ func TestEtcd2Topo(t *testing.T) {
 		require.NoError(t, err, "OpenServer() failed")
 
 		// Create the CellInfo.
-		err = ts.CreateCell(context.Background(), test.LocalCellName, &clustermetadatapb.Cell{
+		err = ts.CreateCell(t.Context(), test.LocalCellName, &clustermetadatapb.Cell{
 			ServerAddresses: []string{clientAddr},
 			Root:            path.Join(testRoot, test.LocalCellName),
 		})
@@ -76,7 +75,7 @@ func TestEtcd2Topo(t *testing.T) {
 // Note TTL granularity is in seconds, even though the API uses time.Duration.
 // So we have to wait a long time in these tests.
 func testDatabaseLock(t *testing.T, ts topo.Store) {
-	ctx := context.Background()
+	ctx := t.Context()
 	databasePath := path.Join(topo.DatabasesPath, "test_database")
 	err := ts.CreateDatabase(ctx, "test_database", &clustermetadatapb.Database{})
 	require.NoError(t, err, "CreateKeyspace")

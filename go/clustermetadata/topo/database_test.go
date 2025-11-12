@@ -15,7 +15,6 @@
 package topo_test
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -28,7 +27,7 @@ import (
 )
 
 func TestDatabaseOperations(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cell := "zone-1"
 	cell2 := "zone-2"
 	database_a := "db_a"
@@ -191,7 +190,7 @@ func TestDatabaseOperations(t *testing.T) {
 }
 
 func TestDatabaseCRUDOperations(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cell := "zone-1"
 	database := "test_db"
 

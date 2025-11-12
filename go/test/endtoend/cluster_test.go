@@ -326,7 +326,7 @@ func createTestConfigWithPorts(tempDir string, portConfig *testPortConfig) (stri
 }
 
 // checkCellExistsInTopology checks if a cell exists in the topology server
-func checkCellExistsInTopology(etcdAddress, globalRootPath, cellName string) error {
+func checkCellExistsInTopology(ctx context.Context, etcdAddress, globalRootPath, cellName string) error {
 	// Create topology store connection
 	ts, err := topo.OpenServer("etcd2", globalRootPath, []string{etcdAddress})
 	if err != nil {
@@ -335,7 +335,7 @@ func checkCellExistsInTopology(etcdAddress, globalRootPath, cellName string) err
 	defer ts.Close()
 
 	// Try to get the cell
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	cell, err := ts.GetCell(ctx, cellName)
@@ -358,7 +358,7 @@ func checkCellExistsInTopology(etcdAddress, globalRootPath, cellName string) err
 }
 
 // checkMultipoolerDatabaseInTopology checks if multipooler is registered with database field in topology
-func checkMultipoolerDatabaseInTopology(etcdAddress, globalRootPath, cellName, expectedDatabase string) error {
+func checkMultipoolerDatabaseInTopology(ctx context.Context, etcdAddress, globalRootPath, cellName, expectedDatabase string) error {
 	// Create topology store connection
 	ts, err := topo.OpenServer("etcd2", globalRootPath, []string{etcdAddress})
 	if err != nil {
@@ -367,7 +367,7 @@ func checkMultipoolerDatabaseInTopology(etcdAddress, globalRootPath, cellName, e
 	defer ts.Close()
 
 	// Get all multipooler IDs in the cell
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	multipoolerInfos, err := ts.GetMultiPoolersByCell(ctx, cellName, nil)
@@ -474,10 +474,10 @@ func checkServiceConnectivity(service string, state local.LocalProvisionedServic
 }
 
 // checkHeartbeatsWritten checks if at least one heartbeat was written to the heartbeat table
-func checkHeartbeatsWritten(multipoolerAddr string) (bool, error) {
+func checkHeartbeatsWritten(ctx context.Context, multipoolerAddr string) (bool, error) {
 	// Connect to multipooler via gRPC
 	time.Sleep(2 * time.Second)
-	count, err := queryHeartbeatCount(multipoolerAddr)
+	count, err := queryHeartbeatCount(ctx, multipoolerAddr)
 	if err != nil {
 		return false, fmt.Errorf("failed to query heartbeat table: %w", err)
 	}
@@ -487,16 +487,16 @@ func checkHeartbeatsWritten(multipoolerAddr string) (bool, error) {
 
 // queryHeartbeatCount queries the number of heartbeats in the heartbeat table via
 // the multipooler gRPC service
-func queryHeartbeatCount(addr string) (int, error) {
+func queryHeartbeatCount(ctx context.Context, addr string) (int, error) {
 	// Create gRPC client
-	client, err := NewMultiPoolerTestClient(addr)
+	client, err := NewMultiPoolerTestClient(ctx, addr)
 	if err != nil {
 		return 0, fmt.Errorf("failed to connect to multipooler gRPC at %s: %w", addr, err)
 	}
 	defer client.Close()
 
 	// Execute query to count heartbeats
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	result, err := client.ExecuteQuery(ctx, "SELECT COUNT(*) FROM multigres.heartbeat", 1)
 	if err != nil {
@@ -1024,12 +1024,12 @@ func TestClusterLifecycle(t *testing.T) {
 
 		t.Logf("Checking cell '%s' exists in topology at %s with root path %s",
 			cellName, etcdAddress, globalRootPath)
-		require.NoError(t, checkCellExistsInTopology(etcdAddress, globalRootPath, cellName),
+		require.NoError(t, checkCellExistsInTopology(t.Context(), etcdAddress, globalRootPath, cellName),
 			"cell should exist in topology after cluster start command")
 
 		// Verify multipooler is registered with database field in topology
 		t.Log("Verifying multipooler has database field populated in topology...")
-		require.NoError(t, checkMultipoolerDatabaseInTopology(etcdAddress, globalRootPath, cellName, expectedDatabase),
+		require.NoError(t, checkMultipoolerDatabaseInTopology(t.Context(), etcdAddress, globalRootPath, cellName, expectedDatabase),
 			"multipooler should be registered with database field in topology")
 
 		// Test PostgreSQL connectivity for both zones
@@ -1066,7 +1066,7 @@ func TestClusterLifecycle(t *testing.T) {
 		// Verify heartbeats were written before stopping cluster
 		t.Log("Verifying heartbeats were written...")
 		multipoolerAddr := fmt.Sprintf("localhost:%d", testPorts.MultipoolerGRPCPort)
-		heartbeatsWritten, err := checkHeartbeatsWritten(multipoolerAddr)
+		heartbeatsWritten, err := checkHeartbeatsWritten(t.Context(), multipoolerAddr)
 		require.NoError(t, err, "should be able to check heartbeats")
 		assert.True(t, heartbeatsWritten, "at least one heartbeat should have been written before cluster stopped")
 		t.Log("Heartbeats verified successfully!")
@@ -1253,7 +1253,7 @@ func testMultipoolerGRPC(t *testing.T, addr string) {
 	t.Helper()
 
 	// Connect to multipooler gRPC service
-	client, err := NewMultiPoolerTestClient(addr)
+	client, err := NewMultiPoolerTestClient(t.Context(), addr)
 	require.NoError(t, err, "Failed to connect to multipooler gRPC at %s", addr)
 	defer client.Close()
 
@@ -1309,7 +1309,7 @@ func testPgctldGRPC(t *testing.T, addr string) {
 	defer conn.Close()
 
 	client := pb.NewPgCtldClient(conn)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Test Status call to verify connectivity
 	statusResp, err := client.Status(ctx, &pb.StatusRequest{})

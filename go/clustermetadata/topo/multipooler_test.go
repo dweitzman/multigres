@@ -450,7 +450,7 @@ func TestServerGetMultiPoolersByCell(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 
 			ts, factory := memorytopo.NewServerAndFactory(ctx, cell)
@@ -498,7 +498,7 @@ func TestServerGetMultiPoolersByCell(t *testing.T) {
 	// Run validation error tests
 	for _, tt := range validationTests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 
 			ts, _ := memorytopo.NewServerAndFactory(ctx, cell)
@@ -548,7 +548,7 @@ func TestMultiPoolerIDString(t *testing.T) {
 
 // TestMultiPoolerCRUDOperations tests basic CRUD operations for multipoolers
 func TestMultiPoolerCRUDOperations(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cell := "zone-1"
 
 	tests := []struct {
@@ -692,7 +692,7 @@ func TestMultiPoolerCRUDOperations(t *testing.T) {
 
 // TestGetMultiPoolerIDsByCell tests getting multipooler IDs by cell
 func TestGetMultiPoolerIDsByCell(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cell1 := "zone-1"
 	cell2 := "zone-2"
 
@@ -797,7 +797,7 @@ func TestGetMultiPoolerIDsByCell(t *testing.T) {
 
 // TestUpdateMultiPoolerFields tests the update fields functionality with retry logic
 func TestUpdateMultiPoolerFields(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cell := "zone-1"
 
 	tests := []struct {
@@ -949,7 +949,7 @@ func TestUpdateMultiPoolerFields(t *testing.T) {
 
 // TestInitMultiPooler tests the init multipooler functionality
 func TestInitMultiPooler(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cell := "zone-1"
 
 	tests := []struct {
@@ -1173,7 +1173,7 @@ func TestNewMultiPooler(t *testing.T) {
 
 // TestMultiPoolerDatabaseField tests database field handling
 func TestMultiPoolerDatabaseField(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cell := "zone-1"
 
 	tests := []struct {
@@ -1336,7 +1336,7 @@ func TestMultiPoolerInfo(t *testing.T) {
 
 // TestGetMultiPoolersByCell covers comprehensive scenarios for the GetMultiPoolersByCell method
 func TestGetMultiPoolersByCell_Comprehensive(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
 	t.Run("cell with multiple multipoolers without filtering", func(t *testing.T) {

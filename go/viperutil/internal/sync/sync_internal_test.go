@@ -17,7 +17,6 @@
 package sync
 
 import (
-	"context"
 	"encoding/json"
 	"math/rand/v2"
 	"testing"
@@ -75,7 +74,7 @@ func TestPersistConfig(t *testing.T) {
 		v.onConfigWrite = func() { ch <- struct{}{} }
 		v.SetFs(fs)
 
-		cancel, err := v.Watch(context.Background(), static, minWaitInterval)
+		cancel, err := v.Watch(t.Context(), static, minWaitInterval)
 		require.NoError(t, err)
 
 		t.Cleanup(cancel)

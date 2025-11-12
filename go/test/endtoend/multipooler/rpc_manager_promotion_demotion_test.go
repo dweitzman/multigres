@@ -15,7 +15,6 @@
 package multipooler
 
 import (
-	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -475,7 +474,7 @@ func TestDemoteAndPromote(t *testing.T) {
 			DrainTimeout:  nil,
 			Force:         false,
 		}
-		_, err = standbyManagerClient.Demote(context.Background(), demoteReq)
+		_, err = standbyManagerClient.Demote(t.Context(), demoteReq)
 		require.Error(t, err, "Demote should fail on standby")
 		assert.Contains(t, err.Error(), "pooler type is REPLICA, must be PRIMARY")
 

@@ -92,7 +92,7 @@ func TestNewTelemetry(t *testing.T) {
 
 func TestInitTelemetry_DefaultServiceName(t *testing.T) {
 	setup := setupTestTelemetry(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	err := setup.telemetry.InitTelemetry(ctx, "test-service")
 	require.NoError(t, err)
@@ -111,7 +111,7 @@ func TestInitTelemetry_WithServiceNameEnvVar(t *testing.T) {
 	t.Setenv("OTEL_SERVICE_NAME", "custom-service-from-env")
 
 	setup := setupTestTelemetry(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	err := setup.telemetry.InitTelemetry(ctx, "default-service")
 	require.NoError(t, err)
@@ -126,7 +126,7 @@ func TestInitTelemetry_WithServiceNameEnvVar(t *testing.T) {
 
 func TestInitTelemetry_Idempotency(t *testing.T) {
 	setup := setupTestTelemetry(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// First initialization
 	err := setup.telemetry.InitTelemetry(ctx, "test-service")
@@ -145,7 +145,7 @@ func TestInitTelemetry_Idempotency(t *testing.T) {
 
 func TestGetTracerProvider(t *testing.T) {
 	setup := setupTestTelemetry(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Before initialization, should return a provider (possibly noop)
 	provider1 := setup.telemetry.GetTracerProvider()
@@ -168,7 +168,7 @@ func TestGetTracerProvider(t *testing.T) {
 
 func TestGetTracer(t *testing.T) {
 	setup := setupTestTelemetry(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	err := setup.telemetry.InitTelemetry(ctx, "test-service")
 	require.NoError(t, err)
@@ -197,7 +197,7 @@ func TestGetTracer(t *testing.T) {
 
 func TestShutdownTelemetry_BeforeInit(t *testing.T) {
 	setup := setupTestTelemetry(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Shutdown before initialization should not error
 	err := setup.telemetry.ShutdownTelemetry(ctx)
@@ -206,7 +206,7 @@ func TestShutdownTelemetry_BeforeInit(t *testing.T) {
 
 func TestShutdownTelemetry_WithTimeout(t *testing.T) {
 	setup := setupTestTelemetry(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	err := setup.telemetry.InitTelemetry(ctx, "test-service")
 	require.NoError(t, err)
@@ -226,7 +226,7 @@ func TestShutdownTelemetry_WithTimeout(t *testing.T) {
 
 func TestWrapSlogHandler_InjectsTraceContext(t *testing.T) {
 	setup := setupTestTelemetry(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	err := setup.telemetry.InitTelemetry(ctx, "test-service")
 	require.NoError(t, err)
@@ -282,7 +282,7 @@ func TestWrapSlogHandler_InjectsTraceContext(t *testing.T) {
 
 func TestWrapSlogHandler_NoSpanContext(t *testing.T) {
 	setup := setupTestTelemetry(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	err := setup.telemetry.InitTelemetry(ctx, "test-service")
 	require.NoError(t, err)
@@ -440,7 +440,7 @@ func TestServEnvTelemetryIntegration(t *testing.T) {
 	// Run subtests for different telemetry behaviors
 	t.Run("HTTP_TracePropagation", func(t *testing.T) {
 		spanExporter.Reset()
-		ctx := context.Background()
+		ctx := t.Context()
 
 		// Create a parent span representing an application-level operation
 		tracer := otel.Tracer("http-test")
@@ -529,7 +529,7 @@ func TestServEnvTelemetryIntegration(t *testing.T) {
 	})
 
 	t.Run("HTTP_Metrics", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := t.Context()
 
 		// Make an HTTP request
 		resp, err := http.Get(httpURL + "/live")
@@ -570,7 +570,7 @@ func TestServEnvTelemetryIntegration(t *testing.T) {
 
 	t.Run("GRPC_TracePropagation", func(t *testing.T) {
 		spanExporter.Reset()
-		ctx := context.Background()
+		ctx := t.Context()
 
 		// Create gRPC client with otelgrpc instrumentation
 		conn, err := grpc.NewClient(
@@ -648,7 +648,7 @@ func TestServEnvTelemetryIntegration(t *testing.T) {
 	})
 
 	t.Run("GRPC_MetricsAndExemplars", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := t.Context()
 
 		// Create gRPC client
 		conn, err := grpc.NewClient(
@@ -728,7 +728,7 @@ func TestServEnvTelemetryIntegration(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Cleanup telemetry
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	_ = telemetry.ShutdownTelemetry(ctx)
 }

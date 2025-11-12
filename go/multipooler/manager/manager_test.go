@@ -15,7 +15,6 @@
 package manager
 
 import (
-	"context"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -37,7 +36,7 @@ import (
 )
 
 func TestManagerState_InitialState(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	ts, _ := memorytopo.NewServerAndFactory(ctx, "zone1")
 	defer ts.Close()
@@ -64,7 +63,7 @@ func TestManagerState_InitialState(t *testing.T) {
 }
 
 func TestManagerState_SuccessfulLoad(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	ts, _ := memorytopo.NewServerAndFactory(ctx, "zone1")
 	defer ts.Close()
@@ -116,7 +115,7 @@ func TestManagerState_SuccessfulLoad(t *testing.T) {
 }
 
 func TestManagerState_LoadFailureTimeout(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	ts, factory := memorytopo.NewServerAndFactory(ctx, "zone1")
 	defer ts.Close()
@@ -156,7 +155,7 @@ func TestManagerState_LoadFailureTimeout(t *testing.T) {
 }
 
 func TestManagerState_CancellationDuringLoad(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	ts, factory := memorytopo.NewServerAndFactory(ctx, "zone1")
 	defer ts.Close()
@@ -199,7 +198,7 @@ func TestManagerState_CancellationDuringLoad(t *testing.T) {
 }
 
 func TestManagerState_RetryUntilSuccess(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	ts, factory := memorytopo.NewServerAndFactory(ctx, "zone1")
 	defer ts.Close()
@@ -255,7 +254,7 @@ func TestManagerState_RetryUntilSuccess(t *testing.T) {
 }
 
 func TestManagerState_NilServiceID(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	ts, _ := memorytopo.NewServerAndFactory(ctx, "zone1")
 	defer ts.Close()
@@ -285,7 +284,7 @@ func TestManagerState_NilServiceID(t *testing.T) {
 }
 
 func TestValidateAndUpdateTerm(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	serviceID := &clustermetadatapb.ID{

@@ -15,7 +15,6 @@
 package endtoend
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 	"net"
@@ -64,7 +63,7 @@ func TestGRPCServerIntegration(t *testing.T) {
 	client := pb.NewPgCtldClient(conn)
 
 	t.Run("complete_grpc_lifecycle", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := t.Context()
 
 		// Step 1: Check initial status
 		statusResp, err := client.Status(ctx, &pb.StatusRequest{})
@@ -147,7 +146,7 @@ func TestGRPCErrorHandling(t *testing.T) {
 	client := pb.NewPgCtldClient(conn)
 
 	t.Run("start_already_running", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := t.Context()
 
 		// Initialize and start first
 		_, err := client.InitDataDir(ctx, &pb.InitDataDirRequest{})
@@ -171,7 +170,7 @@ func TestGRPCErrorHandling(t *testing.T) {
 	})
 
 	t.Run("stop_not_running", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := t.Context()
 
 		// Try to stop when not running
 		stopResp, err := client.Stop(ctx, &pb.StopRequest{Mode: "fast"})
@@ -185,7 +184,7 @@ func TestGRPCErrorHandling(t *testing.T) {
 	})
 
 	t.Run("reload_when_not_running", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := t.Context()
 
 		// Try to reload when not running
 		reloadResp, err := client.ReloadConfig(ctx, &pb.ReloadConfigRequest{})
@@ -226,7 +225,7 @@ func TestGRPCConcurrentRequests(t *testing.T) {
 	defer conn.Close()
 
 	client := pb.NewPgCtldClient(conn)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Initialize and start PostgreSQL first
 	err = InitAndStartPostgreSQL(t, lis.Addr().String())
@@ -303,7 +302,7 @@ func TestGRPCWithDifferentConfigurations(t *testing.T) {
 		defer conn.Close()
 
 		client := pb.NewPgCtldClient(conn)
-		ctx := context.Background()
+		ctx := t.Context()
 
 		stopModes := []string{"smart", "fast", "immediate"}
 
@@ -356,7 +355,7 @@ func TestGRPCUninitializedDatabase(t *testing.T) {
 	client := pb.NewPgCtldClient(conn)
 
 	t.Run("uninitialized_database_operations", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := t.Context()
 
 		// Step 1: Check initial status - should be NOT_INITIALIZED
 		statusResp, err := client.Status(ctx, &pb.StatusRequest{})
@@ -438,7 +437,7 @@ func TestGRPCPortableConfig(t *testing.T) {
 		t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
 
 		// Initialize the data directory with the initial port
-		ctx := context.Background()
+		ctx := t.Context()
 		_, err = service.InitDataDir(ctx, &pb.InitDataDirRequest{})
 		require.NoError(t, err)
 

@@ -15,7 +15,6 @@
 package command
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -95,7 +94,7 @@ func TestPgCtldServiceStart(t *testing.T) {
 			service, err := NewPgCtldService(testLogger(), 5432, "postgres", "postgres", 30, poolerDir, "localhost")
 			require.NoError(t, err)
 
-			resp, err := service.Start(context.Background(), tt.request)
+			resp, err := service.Start(t.Context(), tt.request)
 
 			if tt.expectError {
 				fmt.Println(resp)
@@ -184,7 +183,7 @@ func TestPgCtldServiceStop(t *testing.T) {
 			service, err := NewPgCtldService(testLogger(), 5432, "postgres", "postgres", 30, poolerDir, "localhost")
 			require.NoError(t, err)
 
-			resp, err := service.Stop(context.Background(), tt.request)
+			resp, err := service.Stop(t.Context(), tt.request)
 
 			if tt.expectError {
 				require.Error(t, err)
@@ -249,7 +248,7 @@ func TestPgCtldServiceStatus(t *testing.T) {
 			service, err := NewPgCtldService(testLogger(), 5432, "postgres", "postgres", 30, poolerDir, "localhost")
 			require.NoError(t, err)
 
-			resp, err := service.Status(context.Background(), tt.request)
+			resp, err := service.Status(t.Context(), tt.request)
 
 			require.NoError(t, err)
 			require.NotNil(t, resp)
@@ -284,7 +283,7 @@ func TestPgCtldServiceRestart(t *testing.T) {
 			Port:    5432,
 		}
 
-		resp, err := service.Restart(context.Background(), request)
+		resp, err := service.Restart(t.Context(), request)
 
 		require.NoError(t, err)
 		require.NotNil(t, resp)
@@ -312,7 +311,7 @@ func TestPgCtldServiceReloadConfig(t *testing.T) {
 
 		request := &pb.ReloadConfigRequest{}
 
-		resp, err := service.ReloadConfig(context.Background(), request)
+		resp, err := service.ReloadConfig(t.Context(), request)
 
 		require.NoError(t, err)
 		require.NotNil(t, resp)
@@ -333,7 +332,7 @@ func TestPgCtldServiceReloadConfig(t *testing.T) {
 
 		request := &pb.ReloadConfigRequest{}
 
-		_, err = service.ReloadConfig(context.Background(), request)
+		_, err = service.ReloadConfig(t.Context(), request)
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "not running")
@@ -360,7 +359,7 @@ func TestPgCtldServiceVersion(t *testing.T) {
 			User:     "postgres",
 		}
 
-		resp, err := service.Version(context.Background(), request)
+		resp, err := service.Version(t.Context(), request)
 
 		require.NoError(t, err)
 		require.NotNil(t, resp)
@@ -387,7 +386,7 @@ func TestPgCtldServiceInitDataDir(t *testing.T) {
 			AuthHost:  "md5",
 		}
 
-		resp, err := service.InitDataDir(context.Background(), request)
+		resp, err := service.InitDataDir(t.Context(), request)
 
 		require.NoError(t, err)
 		require.NotNil(t, resp)
@@ -406,7 +405,7 @@ func TestPgCtldServiceInitDataDir(t *testing.T) {
 
 		request := &pb.InitDataDirRequest{}
 
-		resp, err := service.InitDataDir(context.Background(), request)
+		resp, err := service.InitDataDir(t.Context(), request)
 
 		require.NoError(t, err)
 		require.NotNil(t, resp)

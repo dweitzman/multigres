@@ -39,7 +39,7 @@ import (
 )
 
 func TestPrimaryPosition(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	serviceID := &clustermetadatapb.ID{
@@ -122,7 +122,7 @@ func TestPrimaryPosition(t *testing.T) {
 }
 
 func TestActionLock_MutationMethodsTimeout(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	serviceID := &clustermetadatapb.ID{
@@ -164,7 +164,7 @@ func TestActionLock_MutationMethodsTimeout(t *testing.T) {
 
 	// Helper function to hold the lock for a duration
 	holdLock := func(duration time.Duration) context.CancelFunc {
-		lockCtx, cancel := context.WithDeadline(context.Background(), time.Now().Add(duration))
+		lockCtx, cancel := context.WithDeadline(t.Context(), time.Now().Add(duration))
 		lockAcquired := make(chan struct{})
 		go func() {
 			if err := manager.lock(lockCtx); err == nil {
@@ -306,7 +306,7 @@ func TestActionLock_MutationMethodsTimeout(t *testing.T) {
 
 // setupPromoteTestManager creates a manager configured as a REPLICA for promotion tests
 func setupPromoteTestManager(t *testing.T) (*MultiPoolerManager, sqlmock.Sqlmock, string) {
-	ctx := context.Background()
+	ctx := t.Context()
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	ts, _ := memorytopo.NewServerAndFactory(ctx, "zone1")
 	t.Cleanup(func() { ts.Close() })
@@ -379,7 +379,7 @@ func setupPromoteTestManager(t *testing.T) (*MultiPoolerManager, sqlmock.Sqlmock
 // TestPromoteIdempotency_PostgreSQLPromotedButTopologyNotUpdated tests the critical idempotency scenario:
 // PostgreSQL was promoted but topology update failed. The retry should succeed and only update topology.
 func TestPromoteIdempotency_PostgreSQLPromotedButTopologyNotUpdated(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	pm, mock, _ := setupPromoteTestManager(t)
 
 	// Simulate partial completion:
@@ -424,7 +424,7 @@ func TestPromoteIdempotency_PostgreSQLPromotedButTopologyNotUpdated(t *testing.T
 // TestPromoteIdempotency_FullyCompleteTopologyPrimary tests that Promote succeeds when everything is complete
 // This is the true idempotency case - calling Promote when topology is PRIMARY and everything is consistent
 func TestPromoteIdempotency_FullyCompleteTopologyPrimary(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	pm, mock, _ := setupPromoteTestManager(t)
 
 	// Simulate fully completed promotion:
@@ -459,7 +459,7 @@ func TestPromoteIdempotency_FullyCompleteTopologyPrimary(t *testing.T) {
 
 // TestPromoteIdempotency_InconsistentStateTopologyPrimaryPgNotPrimary tests error when topology is PRIMARY but PG is not
 func TestPromoteIdempotency_InconsistentStateTopologyPrimaryPgNotPrimary(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	pm, mock, _ := setupPromoteTestManager(t)
 
 	// Simulate inconsistent state (should never happen):
@@ -487,7 +487,7 @@ func TestPromoteIdempotency_InconsistentStateTopologyPrimaryPgNotPrimary(t *test
 
 // TestPromoteIdempotency_InconsistentStateFixedWithForce tests that force flag fixes inconsistent state
 func TestPromoteIdempotency_InconsistentStateFixedWithForce(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	pm, mock, _ := setupPromoteTestManager(t)
 
 	// Simulate inconsistent state:
@@ -535,7 +535,7 @@ func TestPromoteIdempotency_InconsistentStateFixedWithForce(t *testing.T) {
 
 // TestPromoteIdempotency_NothingCompleteYet tests promotion from scratch
 func TestPromoteIdempotency_NothingCompleteYet(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	pm, mock, _ := setupPromoteTestManager(t)
 
 	// Simulate fresh promotion - nothing done yet:
@@ -590,7 +590,7 @@ func TestPromoteIdempotency_NothingCompleteYet(t *testing.T) {
 
 // TestPromoteIdempotency_LSNMismatchBeforePromotion tests that promotion fails if LSN doesn't match
 func TestPromoteIdempotency_LSNMismatchBeforePromotion(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	pm, mock, _ := setupPromoteTestManager(t)
 
 	// PostgreSQL is still in recovery
@@ -615,7 +615,7 @@ func TestPromoteIdempotency_LSNMismatchBeforePromotion(t *testing.T) {
 
 // TestPromoteIdempotency_TermMismatch tests that promotion fails with wrong term
 func TestPromoteIdempotency_TermMismatch(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	pm, mock, _ := setupPromoteTestManager(t)
 
 	// Explicitly set the term to 10 to ensure we have the expected value using SetTerm
@@ -634,7 +634,7 @@ func TestPromoteIdempotency_TermMismatch(t *testing.T) {
 
 // TestPromoteIdempotency_SecondCallSucceedsAfterCompletion tests that calling Promote after completion succeeds (idempotent)
 func TestPromoteIdempotency_SecondCallSucceedsAfterCompletion(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	pm, mock, _ := setupPromoteTestManager(t)
 
 	// Setup for first call - complete promotion
@@ -681,7 +681,7 @@ func TestPromoteIdempotency_SecondCallSucceedsAfterCompletion(t *testing.T) {
 
 // TestPromoteIdempotency_EmptyExpectedLSNSkipsValidation tests that empty expectedLSN skips validation
 func TestPromoteIdempotency_EmptyExpectedLSNSkipsValidation(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	pm, mock, _ := setupPromoteTestManager(t)
 
 	// PostgreSQL is still in recovery

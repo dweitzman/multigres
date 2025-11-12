@@ -116,7 +116,7 @@ func TestConnForCell_GlobalCell(t *testing.T) {
 	ts := NewWithFactory(factory, "/test", []string{"localhost:2181"})
 	defer ts.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Global cell should return the global connection
 	conn, err := ts.ConnForCell(ctx, GlobalCell)
@@ -137,7 +137,7 @@ func TestConnForCell_NewCell(t *testing.T) {
 	require.NotNil(t, ts)
 	defer ts.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create a cell in the global topology first
 	cellInfo := &clustermetadatapb.Cell{
@@ -164,7 +164,7 @@ func TestConnForCell_CachedConnection(t *testing.T) {
 	require.NotNil(t, ts)
 	defer ts.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create a cell
 	cellInfo := &clustermetadatapb.Cell{
@@ -196,7 +196,7 @@ func TestConnForCell_UpdatedCellConfig(t *testing.T) {
 	require.NotNil(t, ts)
 	defer ts.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create a cell
 	cellInfo := &clustermetadatapb.Cell{
@@ -236,7 +236,7 @@ func TestConnForCell_NonexistentCell(t *testing.T) {
 	require.NotNil(t, ts)
 	defer ts.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Try to get connection for nonexistent cell
 	conn, err := ts.ConnForCell(ctx, "nonexistent")
@@ -250,7 +250,7 @@ func TestConnForCell_CanceledContext(t *testing.T) {
 	require.NotNil(t, ts)
 	defer ts.Close()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel() // Cancel immediately
 
 	// Should fail with context error
@@ -264,7 +264,7 @@ func TestStoreClose(t *testing.T) {
 	factory := newMockFactory()
 	ts := NewWithFactory(factory, "/test", []string{"localhost:2181"})
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create some cells
 	cellInfo := &clustermetadatapb.Cell{
@@ -291,7 +291,7 @@ func TestStoreClose_VerifiesConnectionsClosed(t *testing.T) {
 	factory := newMockFactory()
 	ts := NewWithFactory(factory, "/test", []string{"localhost:2181"})
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create a cell and get its connection
 	cellInfo := &clustermetadatapb.Cell{
@@ -340,7 +340,7 @@ func TestConnForCell_ProtoEquality(t *testing.T) {
 	require.NotNil(t, ts)
 	defer ts.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create a cell
 	cellInfo := &clustermetadatapb.Cell{
@@ -377,7 +377,7 @@ func TestConnForCell_ConcurrentAccess(t *testing.T) {
 	require.NotNil(t, ts)
 	defer ts.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create a cell
 	cellInfo := &clustermetadatapb.Cell{
@@ -537,7 +537,7 @@ func TestStatus_CellConnection(t *testing.T) {
 	require.NotNil(t, ts)
 	defer ts.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create a cell
 	cellInfo := &clustermetadatapb.Cell{
@@ -564,7 +564,7 @@ func TestStatus_MultipleCells(t *testing.T) {
 	require.NotNil(t, ts)
 	defer ts.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create multiple cells
 	for i := 1; i < 4; i++ {
@@ -602,7 +602,7 @@ func TestStatus_CellConnectionError(t *testing.T) {
 	require.NotNil(t, ts)
 	defer ts.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create a cell
 	cellInfo := &clustermetadatapb.Cell{
@@ -635,7 +635,7 @@ func TestStatus_ReturnsCopy(t *testing.T) {
 	require.NotNil(t, ts)
 	defer ts.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Get initial status
 	status1 := ts.Status()

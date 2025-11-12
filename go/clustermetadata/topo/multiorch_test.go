@@ -167,7 +167,7 @@ func TestServerGetMultiOrchsByCell(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 
 			ts, factory := memorytopo.NewServerAndFactory(ctx, cell)
@@ -245,7 +245,7 @@ func TestMultiOrchIDString(t *testing.T) {
 
 // TestMultiOrchCRUDOperations tests basic CRUD operations for multiorchs
 func TestMultiOrchCRUDOperations(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cell := "zone-1"
 
 	tests := []struct {
@@ -371,7 +371,7 @@ func TestMultiOrchCRUDOperations(t *testing.T) {
 
 // TestGetMultiOrchIDsByCell tests getting multiorch IDs by cell
 func TestGetMultiOrchIDsByCell(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cell1 := "zone-1"
 	cell2 := "zone-2"
 
@@ -468,7 +468,7 @@ func TestGetMultiOrchIDsByCell(t *testing.T) {
 
 // TestUpdateMultiOrchFields tests the update fields functionality with retry logic
 func TestUpdateMultiOrchFields(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cell := "zone-1"
 
 	tests := []struct {
@@ -604,7 +604,7 @@ func TestUpdateMultiOrchFields(t *testing.T) {
 
 // TestInitMultiOrch tests the init multiorch functionality
 func TestInitMultiOrch(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cell := "zone-1"
 
 	tests := []struct {
@@ -825,7 +825,7 @@ func TestMultiOrchInfo(t *testing.T) {
 
 // TestGetMultiOrchsByCell covers comprehensive scenarios for the GetMultiOrchsByCell method
 func TestGetMultiOrchsByCell_Comprehensive(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
 	t.Run("cell with multiple multiorchs", func(t *testing.T) {
