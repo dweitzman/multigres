@@ -29,6 +29,7 @@ import (
 	"github.com/multigres/multigres/go/multipooler/grpcpoolerservice"
 	"github.com/multigres/multigres/go/multipooler/manager"
 	"github.com/multigres/multigres/go/servenv"
+	"github.com/multigres/multigres/go/tools/telemetry"
 	"github.com/multigres/multigres/go/viperutil"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -53,7 +54,7 @@ type MultiPooler struct {
 	senv *servenv.ServEnv
 	// TopoConfig holds topology configuration
 	topoConfig *topo.TopoConfig
-	telemetry  *servenv.Telemetry
+	telemetry  *telemetry.Telemetry
 
 	ts           topo.Store
 	tr           *toporeg.TopoReg
@@ -65,7 +66,7 @@ func (mp *MultiPooler) CobraPreRunE(cmd *cobra.Command) error {
 }
 
 // NewMultiPooler creates a new MultiPooler instance with default configuration
-func NewMultiPooler(telemetry *servenv.Telemetry) *MultiPooler {
+func NewMultiPooler(telemetry *telemetry.Telemetry) *MultiPooler {
 	reg := viperutil.NewRegistry()
 	mp := &MultiPooler{
 		pgctldAddr: viperutil.Configure(reg, "pgctld-addr", viperutil.Options[string]{
@@ -168,7 +169,7 @@ func (mp *MultiPooler) RegisterFlags(flags *pflag.FlagSet) {
 // or if some connections fail, it launches goroutines that retry
 // until successful.
 func (mp *MultiPooler) Init(startCtx context.Context) {
-	startCtx, span := servenv.Tracer().Start(startCtx, "Init")
+	startCtx, span := telemetry.Tracer().Start(startCtx, "Init")
 	defer span.End()
 
 	mp.senv.Init("multipooler")

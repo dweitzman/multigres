@@ -24,14 +24,14 @@ import (
 	"time"
 
 	"github.com/multigres/multigres/go/multipooler"
-	"github.com/multigres/multigres/go/servenv"
+	"github.com/multigres/multigres/go/tools/telemetry"
 
 	"github.com/spf13/cobra"
 )
 
 // CreateMultiPoolerCommand creates a cobra command with a MultiPooler instance and registers its flags
 func CreateMultiPoolerCommand() (*cobra.Command, *multipooler.MultiPooler) {
-	telemetry := servenv.NewTelemetry()
+	telemetry := telemetry.NewTelemetry()
 	mp := multipooler.NewMultiPooler(telemetry)
 
 	cmd := &cobra.Command{
@@ -46,7 +46,7 @@ func CreateMultiPoolerCommand() (*cobra.Command, *multipooler.MultiPooler) {
 			return run(cmd, args, mp)
 		},
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			if _, err := telemetry.InitForCommand(cmd, "multipooler", false); err != nil {
+			if _, err := telemetry.InitForCommand(cmd, "multipooler", false /* startSpan */); err != nil {
 				return fmt.Errorf("failed to initialize OpenTelemetry: %w", err)
 			}
 

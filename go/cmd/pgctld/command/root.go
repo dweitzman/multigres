@@ -24,6 +24,7 @@ import (
 
 	"github.com/multigres/multigres/go/pgctld"
 	"github.com/multigres/multigres/go/servenv"
+	"github.com/multigres/multigres/go/tools/telemetry"
 	"github.com/multigres/multigres/go/viperutil"
 
 	"github.com/spf13/cobra"
@@ -40,12 +41,12 @@ type PgCtlCommand struct {
 	pgListenAddresses viperutil.Value[string]
 	vc                *viperutil.ViperConfig
 	lg                *servenv.Logger
-	telemetry         *servenv.Telemetry
+	telemetry         *telemetry.Telemetry
 }
 
 // GetRootCommand creates and returns the root command for pgctld with all subcommands
 func GetRootCommand() (*cobra.Command, *PgCtlCommand) {
-	telemetry := servenv.NewTelemetry()
+	telemetry := telemetry.NewTelemetry()
 	reg := viperutil.NewRegistry()
 	pc := &PgCtlCommand{
 		reg: reg,
@@ -97,7 +98,7 @@ management for PostgreSQL servers.`,
 			pc.lg.SetupLogging()
 			// Initialize telemetry for CLI commands (server command will re-initialize via ServEnv.Init)
 			var err error
-			if span, err = pc.telemetry.InitForCommand(cmd, "pgctld", cmd.Use != "server"); err != nil {
+			if span, err = pc.telemetry.InitForCommand(cmd, "pgctld", cmd.Use != "server" /* startSpan */); err != nil {
 				return fmt.Errorf("failed to initialize OpenTelemetry: %w", err)
 			}
 

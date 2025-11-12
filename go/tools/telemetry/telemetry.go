@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package servenv
+package telemetry
 
 import (
 	"context"
@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -38,7 +39,16 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-var otelEnvVariables = []string{"OTEL_TRACES_SAMPLER"}
+// TODO(dweitzman): Do we want package-specific tracing services, or is a shared
+// one for all of multigres fine?
+const tracingServiceName = "github.com/multigres/multigres"
+
+var tracer = otel.Tracer(tracingServiceName)
+
+// Tracer returns a tracer for creating spans named github.com/multigres/multigres
+func Tracer() trace.Tracer {
+	return tracer
+}
 
 // Telemetry holds OpenTelemetry configuration and state
 type Telemetry struct {
@@ -77,15 +87,6 @@ func (t *Telemetry) InitTelemetry(ctx context.Context, defaultServiceName string
 
 	if t.initialized {
 		return nil
-	}
-
-	const startupEnvPrefix = "STARTUP_"
-	for _, envVarName := range otelEnvVariables {
-		if tempEnvValue := os.Getenv(startupEnvPrefix + envVarName); tempEnvValue != "" {
-			oldEnvValue := os.Getenv(envVarName)
-			defer os.Setenv(envVarName, oldEnvValue)
-			os.Setenv(envVarName, tempEnvValue)
-		}
 	}
 
 	// Determine service name (env var > default)
@@ -219,9 +220,9 @@ func (t *Telemetry) initMetrics(ctx context.Context, res *resource.Resource) err
 	return nil
 }
 
-// WithTraceparent parses the TRACEPARENT env variable and returns a context within that
+// WithEnvTraceparent parses the TRACEPARENT env variable and returns a context within that
 // parent
-func (t *Telemetry) WithTraceparent(ctx context.Context) context.Context {
+func (t *Telemetry) WithEnvTraceparent(ctx context.Context) context.Context {
 	traceparent := os.Getenv("TRACEPARENT")
 
 	if traceparent == "" {
@@ -243,7 +244,7 @@ func (t *Telemetry) InitForCommand(cmd *cobra.Command, defaultServiceName string
 		return nil, fmt.Errorf("failed to initialize OpenTelemetry: %w", err)
 	}
 
-	ctx := t.WithTraceparent(cmd.Context())
+	ctx := t.WithEnvTraceparent(cmd.Context())
 	var span trace.Span
 	if startSpan {
 		ctx, span = tracer.Start(ctx, cmd.Use)
@@ -357,13 +358,26 @@ func (h *traceHandler) WithGroup(name string) slog.Handler {
 	return &traceHandler{wrapped: h.wrapped.WithGroup(name)}
 }
 
-// TODO(dweitzman): Do we want package-specific tracing services, or is a shared
-// one for all of multigres fine?
-const tracingServiceName = "github.com/multigres/multigres"
+// SetCmdEnvTraceContext adds trace context to a command's environment for distributed tracing
+// This allows subprocesses to participate in the same trace as the parent provisioner
+func SetCmdEnvTraceContext(ctx context.Context, cmd *exec.Cmd) {
+	span := trace.SpanFromContext(ctx)
+	if !span.SpanContext().IsValid() {
+		return
+	}
 
-var tracer = otel.Tracer(tracingServiceName)
+	// Extract trace context to W3C Trace Context format
+	carrier := propagation.MapCarrier{}
+	propagator := otel.GetTextMapPropagator()
+	propagator.Inject(ctx, carrier)
 
-// Tracer returns a tracer for creating spans named github.com/multigres/multigres
-func Tracer() trace.Tracer {
-	return tracer
+	// Get traceparent value (format: version-trace_id-span_id-flags)
+	if traceparent, ok := carrier["traceparent"]; ok {
+		// Initialize Env with current environment if not set
+		if cmd.Env == nil {
+			cmd.Env = os.Environ()
+		}
+		// Add TRACEPARENT environment variable
+		cmd.Env = append(cmd.Env, fmt.Sprintf("TRACEPARENT=%s", traceparent))
+	}
 }
