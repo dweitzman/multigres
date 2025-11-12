@@ -24,6 +24,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/spf13/cobra"
 
 	"go.opentelemetry.io/contrib/exporters/autoexport"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -235,6 +236,21 @@ func (t *Telemetry) WithTraceparent(ctx context.Context) context.Context {
 
 	propagator := otel.GetTextMapPropagator()
 	return propagator.Extract(ctx, carrier)
+}
+
+func (t *Telemetry) InitForCommand(cmd *cobra.Command, defaultServiceName string, startSpan bool) (trace.Span, error) {
+	if err := t.InitTelemetry(cmd.Context(), defaultServiceName); err != nil {
+		return nil, fmt.Errorf("failed to initialize OpenTelemetry: %w", err)
+	}
+
+	tracer := otel.Tracer("")
+	ctx := t.WithTraceparent(cmd.Context())
+	var span trace.Span
+	if startSpan {
+		ctx, span = tracer.Start(ctx, cmd.Use)
+	}
+	cmd.SetContext(ctx)
+	return span, nil
 }
 
 // GetPrometheusHandler returns the HTTP handler for the Prometheus metrics endpoint

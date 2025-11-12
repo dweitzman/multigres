@@ -1138,7 +1138,7 @@ func (p *localProvisioner) deprovisionService(ctx context.Context, req *provisio
 
 	// Stop the process if it's running
 	if service.PID > 0 {
-		if err := p.stopProcessByPID(service.PID); err != nil {
+		if err := p.stopProcessByPID(ctx, service.PID); err != nil {
 			return fmt.Errorf("failed to stop process: %w", err)
 		}
 	}
@@ -1167,7 +1167,7 @@ func (p *localProvisioner) deprovisionService(ctx context.Context, req *provisio
 }
 
 // stopProcessByPID stops a process by its PID
-func (p *localProvisioner) stopProcessByPID(pid int) error {
+func (p *localProvisioner) stopProcessByPID(ctx context.Context, pid int) error {
 	// Check if process exists
 	process, err := os.FindProcess(pid)
 	if err != nil {
@@ -1198,14 +1198,14 @@ func (p *localProvisioner) stopProcessByPID(pid int) error {
 	}
 
 	// Wait for the process to actually exit
-	p.waitForProcessExit(process, 2*time.Second)
+	p.waitForProcessExit(ctx, process, 2*time.Second)
 
 	return nil
 }
 
 // waitForProcessExit waits for a process to exit by polling with Signal(0)
-func (p *localProvisioner) waitForProcessExit(process *os.Process, timeout time.Duration) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+func (p *localProvisioner) waitForProcessExit(ctx context.Context, process *os.Process, timeout time.Duration) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	r := retry.New(10*time.Millisecond, 1*time.Second)
@@ -1228,11 +1228,6 @@ func (p *localProvisioner) waitForProcessExit(process *os.Process, timeout time.
 
 // Bootstrap sets up etcd and creates the default database
 func (p *localProvisioner) Bootstrap(ctx context.Context) ([]*provisioner.ProvisionResult, error) {
-	// Create root span for cluster startup tracing
-	tracer := otel.Tracer("multigres/provisioner/local")
-	ctx, span := tracer.Start(ctx, "cluster_startup")
-	defer span.End()
-
 	// Validate binary paths before starting
 	if err := p.validateBinaryPaths(p.config); err != nil {
 		return nil, err

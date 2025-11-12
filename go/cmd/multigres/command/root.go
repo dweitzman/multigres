@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"time"
 
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/multigres/multigres/go/servenv"
@@ -47,7 +46,6 @@ func GetRootCommand() *cobra.Command {
 	}
 
 	var span trace.Span
-	tracer := otel.Tracer("")
 
 	root := &cobra.Command{
 		Use:   "multigres",
@@ -84,13 +82,9 @@ Configuration:
 				return err
 			}
 
-			if err := mc.telemetry.InitTelemetry(context.Background(), "multigres-cli"); err != nil {
+			if span, err = mc.telemetry.InitForCommand(cmd, "multigres-cli", true); err != nil {
 				return fmt.Errorf("failed to initialize OpenTelemetry: %w", err)
 			}
-
-			ctx := telemetry.WithTraceparent(cmd.Context())
-			ctx, span = tracer.Start(ctx, cmd.Use)
-			cmd.SetContext(ctx)
 
 			return nil
 		},

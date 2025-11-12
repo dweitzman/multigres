@@ -20,7 +20,6 @@ import (
 	"log/slog"
 	"time"
 
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/multigres/multigres/go/pgctld"
@@ -86,7 +85,6 @@ func GetRootCommand() (*cobra.Command, *PgCtlCommand) {
 	}
 
 	var span trace.Span
-	tracer := otel.Tracer("")
 
 	root := &cobra.Command{
 		Use:   "pgctld",
@@ -98,13 +96,11 @@ management for PostgreSQL servers.`,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			pc.lg.SetupLogging()
 			// Initialize telemetry for CLI commands (server command will re-initialize via ServEnv.Init)
-			if err := pc.telemetry.InitTelemetry(cmd.Context(), "pgctld"); err != nil {
+			var err error
+			if span, err = pc.telemetry.InitForCommand(cmd, "pgctld", true); err != nil {
 				return fmt.Errorf("failed to initialize OpenTelemetry: %w", err)
 			}
 
-			ctx := telemetry.WithTraceparent(cmd.Context())
-			ctx, span = tracer.Start(ctx, "test-span")
-			cmd.SetContext(ctx)
 			return nil
 		},
 		PersistentPostRunE: func(cmd *cobra.Command, args []string) error {

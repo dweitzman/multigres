@@ -89,8 +89,8 @@ func (p *localProvisioner) startPostgreSQLViaPgctld(ctx context.Context, address
 }
 
 // stopPostgreSQLViaPgctld stops PostgreSQL via pgctld gRPC
-func (p *localProvisioner) stopPostgreSQLViaPgctld(address string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+func (p *localProvisioner) stopPostgreSQLViaPgctld(ctx context.Context, address string) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	conn, err := grpc.NewClient(address, grpccommon.LocalClientDialOptions()...)
@@ -345,13 +345,13 @@ func (p *localProvisioner) deprovisionPgctld(ctx context.Context, service *Local
 	address := fmt.Sprintf("localhost:%d", grpcPort)
 
 	fmt.Printf("Stopping PostgreSQL via pgctld...")
-	if err := p.stopPostgreSQLViaPgctld(address); err != nil {
+	if err := p.stopPostgreSQLViaPgctld(ctx, address); err != nil {
 		fmt.Printf("Warning: failed to stop PostgreSQL gracefully: %v\n", err)
 	}
 
 	// Then stop the pgctld process itself
 	fmt.Printf("Stopping pgctld process...")
-	if err := p.stopProcessByPID(service.PID); err != nil {
+	if err := p.stopProcessByPID(ctx, service.PID); err != nil {
 		return fmt.Errorf("failed to stop pgctld process: %w", err)
 	}
 
