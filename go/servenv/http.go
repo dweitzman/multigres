@@ -68,7 +68,6 @@ func (sv *ServEnv) HTTPRegisterPprofProfile() {
 // This provides a /metrics endpoint that exposes OpenTelemetry metrics in Prometheus format.
 // The endpoint is always registered as it has minimal overhead.
 func (sv *ServEnv) HTTPRegisterPrometheusMetrics() {
-	telemetry := GetGlobalTelemetry()
 	slog.Info("Registering Prometheus metrics endpoint at /metrics")
-	sv.HTTPHandle("/metrics", telemetry.GetPrometheusHandler())
+	sv.HTTPHandle("/metrics", sv.telemetry.GetPrometheusHandler())
 }

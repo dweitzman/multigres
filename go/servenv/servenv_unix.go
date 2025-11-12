@@ -26,7 +26,6 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"runtime/debug"
 	"strconv"
 	"syscall"
@@ -36,22 +35,14 @@ import (
 )
 
 // Init is the first phase of the server startup.
-func (sv *ServEnv) Init() {
+func (sv *ServEnv) Init(serviceName string) {
 	sv.mu.Lock()
 	sv.initStartTime = time.Now()
 	sv.mu.Unlock()
 	sv.lg.SetupLogging()
 
 	// Initialize OpenTelemetry
-	// Configuration is done via standard OTEL environment variables
-	// If no OTEL_TRACES_EXPORTER or OTEL_METRICS_EXPORTER is set, noop exporters are used
-	telemetry := GetGlobalTelemetry()
-	// Use basename of os.Args[0] as default service name if not specified via OTEL_SERVICE_NAME
-	defaultServiceName := "multigres-service"
-	if len(os.Args) > 0 {
-		defaultServiceName = filepath.Base(os.Args[0])
-	}
-	if err := telemetry.InitTelemetry(context.Background(), defaultServiceName); err != nil {
+	if err := sv.telemetry.InitTelemetry(context.Background(), serviceName); err != nil {
 		slog.Error("Failed to initialize OpenTelemetry", "error", err)
 		// Continue without telemetry rather than crashing
 	}

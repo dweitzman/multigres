@@ -26,6 +26,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"go.opentelemetry.io/contrib/exporters/autoexport"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	otelprom "go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/propagation"
@@ -36,15 +37,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-const (
-	// EnvOTELTracesSampler is the standard OpenTelemetry environment variable for trace sampling
-	EnvOTELTracesSampler = "OTEL_TRACES_SAMPLER"
-
-	// EnvCommandOTELTracesSampler is a custom environment variable for CLI commands
-	// If set and OTEL_TRACES_SAMPLER is not set, it will be used as the sampler for the CLI command only
-	// This allows CLI commands to have different sampling (e.g., always_on) than subprocesses
-	EnvCommandOTELTracesSampler = "COMMAND_OTEL_TRACES_SAMPLER"
-)
+var otelEnvVariables = []string{"OTEL_TRACES_SAMPLER"}
 
 // Telemetry holds OpenTelemetry configuration and state
 type Telemetry struct {
@@ -52,8 +45,12 @@ type Telemetry struct {
 	mu               sync.Mutex
 	tracerProvider   *sdktrace.TracerProvider
 	meterProvider    *sdkmetric.MeterProvider
-	startupParentCtx context.Context
 	initialized      bool
+	startupParentCtx context.Context
+
+	// Test overrides (only used in tests)
+	testSpanExporter sdktrace.SpanExporter
+	testMetricReader sdkmetric.Reader
 }
 
 // NewTelemetry creates a new Telemetry instance
@@ -61,22 +58,33 @@ func NewTelemetry() *Telemetry {
 	return &Telemetry{}
 }
 
+// WithTestExporters configures the telemetry instance to use test exporters instead of autoexport.
+// This allows tests to capture and verify telemetry data while still going through normal initialization.
+// Must be called before InitTelemetry().
+func (t *Telemetry) WithTestExporters(spanExporter sdktrace.SpanExporter, metricReader sdkmetric.Reader) *Telemetry {
+	t.testSpanExporter = spanExporter
+	t.testMetricReader = metricReader
+	return t
+}
+
 // InitTelemetry initializes OpenTelemetry providers and exporters
-// This should be called early in the service lifecycle, typically in OnInit or OnRun hooks
-// Configuration is done via standard OpenTelemetry environment variables:
-// - OTEL_SERVICE_NAME: Service name (defaults to defaultServiceName)
-// - OTEL_EXPORTER_OTLP_ENDPOINT: OTLP endpoint URL
-// - OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf" or "grpc"
-// - OTEL_TRACES_EXPORTER: "otlp", "console", or "none"
-// - OTEL_METRICS_EXPORTER: "otlp", "console", or "none"
-// - OTEL_TRACES_SAMPLER: "always_on", "always_off", "traceidratio", "parentbased_always_on", etc.
-// - COMMAND_OTEL_TRACES_SAMPLER: CLI-specific sampler (used when OTEL_TRACES_SAMPLER is unset)
+//
+// Configuration is done via standard OpenTelemetry environment variables
 func (t *Telemetry) InitTelemetry(ctx context.Context, defaultServiceName string) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	if t.initialized {
 		return nil
+	}
+
+	const startupEnvPrefix = "STARTUP_"
+	for _, envVarName := range otelEnvVariables {
+		if tempEnvValue := os.Getenv(startupEnvPrefix + envVarName); tempEnvValue != "" {
+			oldEnvValue := os.Getenv(envVarName)
+			defer os.Setenv(envVarName, oldEnvValue)
+			os.Setenv(envVarName, tempEnvValue)
+		}
 	}
 
 	// Determine service name (env var > default)
@@ -92,24 +100,24 @@ func (t *Telemetry) InitTelemetry(ctx context.Context, defaultServiceName string
 		semconv.ServiceName(serviceName),
 	)
 
-	// Initialize tracing
 	if err := t.initTracing(ctx, res); err != nil {
 		return fmt.Errorf("failed to initialize tracing: %w", err)
 	}
 
-	// Initialize metrics
 	if err := t.initMetrics(ctx, res); err != nil {
 		return fmt.Errorf("failed to initialize metrics: %w", err)
 	}
+
+	// Instrument the default HTTP client for automatic tracing and metrics of outgoing HTTP requests
+	// This must happen AFTER both tracing and metrics are initialized so otelhttp can capture
+	// the correct TracerProvider and MeterProvider
+	http.DefaultClient.Transport = otelhttp.NewTransport(http.DefaultTransport)
 
 	// Set up trace context propagation
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
 		propagation.TraceContext{},
 		propagation.Baggage{},
 	))
-
-	// Parse startup trace parent if present
-	t.parseStartupTraceParent()
 
 	t.initialized = true
 
@@ -121,47 +129,51 @@ func (t *Telemetry) InitTelemetry(ctx context.Context, defaultServiceName string
 // initTracing initializes the TracerProvider using autoexport
 // The exporter is automatically configured based on OTEL_TRACES_EXPORTER and OTEL_EXPORTER_OTLP_PROTOCOL
 func (t *Telemetry) initTracing(ctx context.Context, res *resource.Resource) error {
-	// Support COMMAND_OTEL_TRACES_SAMPLER for CLI commands
-	// This allows CLI commands to have different sampling behavior than subprocesses
-	// If COMMAND_OTEL_TRACES_SAMPLER is set and OTEL_TRACES_SAMPLER is not, temporarily use it
-	var originalSampler string
-	var restoreSampler bool
-	if commandSampler := os.Getenv(EnvCommandOTELTracesSampler); commandSampler != "" {
-		if os.Getenv(EnvOTELTracesSampler) == "" {
-			originalSampler = os.Getenv(EnvOTELTracesSampler)
-			os.Setenv(EnvOTELTracesSampler, commandSampler)
-			restoreSampler = true
+	var traceExporter sdktrace.SpanExporter
+	var err error
+
+	// Use test exporter if provided, otherwise use autoexport
+	if t.testSpanExporter != nil {
+		traceExporter = t.testSpanExporter
+	} else {
+		// Default to "none" if OTEL_TRACES_EXPORTER is not explicitly set
+		// This prevents unwanted data export when telemetry is not explicitly configured
+		if os.Getenv("OTEL_TRACES_EXPORTER") == "" {
+			os.Setenv("OTEL_TRACES_EXPORTER", "none")
+		}
+
+		traceExporter, err = autoexport.NewSpanExporter(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to create trace exporter: %w", err)
 		}
 	}
-	defer func() {
-		if restoreSampler {
-			if originalSampler == "" {
-				os.Unsetenv(EnvOTELTracesSampler)
-			} else {
-				os.Setenv(EnvOTELTracesSampler, originalSampler)
-			}
-		}
-	}()
 
-	// Create trace exporter using autoexport
-	// This automatically selects the right exporter based on environment variables:
-	// - OTEL_TRACES_EXPORTER: "otlp" (default), "console", or "none"
-	// - OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf" (default) or "grpc"
-	// - OTEL_EXPORTER_OTLP_ENDPOINT or OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
-	traceExporter, err := autoexport.NewSpanExporter(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to create trace exporter: %w", err)
-	}
+	// TODO(dweitzman): For "multigres cluster start" we may want different tracing settings for
+	// the "multigres" command vs for the long-running services it starts. For example, maybe
+	// the multigres command itself should have tracing at 100% but the services should have tracing
+	// at a lower sample rate.
+	//
+	// Also, different commands may want to export their telemetry data in different ways. They can't
+	// all use the same port for a Prometheus exporter, for example.
 
-	// Create TracerProvider with batch span processor
+	// Create TracerProvider with batch span processor (or syncer for tests)
 	// Batch processing reduces overhead by grouping spans before export
 	// Sampler is automatically configured from OTEL_TRACES_SAMPLER (or COMMAND_OTEL_TRACES_SAMPLER)
-	t.tracerProvider = sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(traceExporter),
-		sdktrace.WithResource(res),
-	)
+	var providerOpts []sdktrace.TracerProviderOption
+	if t.testSpanExporter != nil {
+		// Use synchronous export for tests to avoid timing issues
+		providerOpts = []sdktrace.TracerProviderOption{
+			sdktrace.WithSyncer(traceExporter),
+			sdktrace.WithResource(res),
+		}
+	} else {
+		providerOpts = []sdktrace.TracerProviderOption{
+			sdktrace.WithBatcher(traceExporter),
+			sdktrace.WithResource(res),
+		}
+	}
+	t.tracerProvider = sdktrace.NewTracerProvider(providerOpts...)
 
-	// Set global tracer provider
 	otel.SetTracerProvider(t.tracerProvider)
 
 	return nil
@@ -176,23 +188,28 @@ func (t *Telemetry) initMetrics(ctx context.Context, res *resource.Resource) err
 		return fmt.Errorf("failed to create prometheus exporter: %w", err)
 	}
 
-	// Create metric reader using autoexport
-	// This automatically selects the right exporter based on environment variables:
-	// - OTEL_METRICS_EXPORTER: "otlp" (default), "prometheus", "console", or "none"
-	// - OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf" (default) or "grpc"
-	// - OTEL_EXPORTER_OTLP_ENDPOINT or OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
-	autoMetricReader, err := autoexport.NewMetricReader(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to create metric reader: %w", err)
+	var metricReader sdkmetric.Reader
+
+	// Use test metric reader if provided, otherwise use autoexport
+	if t.testMetricReader != nil {
+		metricReader = t.testMetricReader
+	} else {
+		// Default to "none" if OTEL_METRICS_EXPORTER is not explicitly set
+		// This prevents unwanted data export when telemetry is not explicitly configured
+		if os.Getenv("OTEL_METRICS_EXPORTER") == "" {
+			os.Setenv("OTEL_METRICS_EXPORTER", "none")
+		}
+
+		metricReader, err = autoexport.NewMetricReader(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to create metric reader: %w", err)
+		}
 	}
 
-	// Create MeterProvider with both readers
-	// Prometheus reader is pull-based (scraped via /metrics endpoint)
-	// Auto reader can be OTLP push-based, console, or noop depending on env vars
 	t.meterProvider = sdkmetric.NewMeterProvider(
+		sdkmetric.WithReader(promExporter), // Pull-based for local debugging
 		sdkmetric.WithResource(res),
-		sdkmetric.WithReader(promExporter),     // Pull-based for local debugging
-		sdkmetric.WithReader(autoMetricReader), // Configured via env vars
+		sdkmetric.WithReader(metricReader), // Configured via env vars or test reader
 	)
 
 	// Set global meter provider
@@ -201,12 +218,13 @@ func (t *Telemetry) initMetrics(ctx context.Context, res *resource.Resource) err
 	return nil
 }
 
-// parseStartupTraceParent parses the STARTUP_TRACEPARENT environment variable
-// and creates a context with the parent span context for service startup tracing
-func (t *Telemetry) parseStartupTraceParent() {
-	traceparent := os.Getenv("STARTUP_TRACEPARENT")
+// WithTraceparent parses the TRACEPARENT env variable and returns a context within that
+// parent
+func (t *Telemetry) WithTraceparent(ctx context.Context) context.Context {
+	traceparent := os.Getenv("TRACEPARENT")
+
 	if traceparent == "" {
-		return
+		return ctx
 	}
 
 	// Parse W3C Trace Context format: version-trace_id-span_id-flags
@@ -216,30 +234,7 @@ func (t *Telemetry) parseStartupTraceParent() {
 	}
 
 	propagator := otel.GetTextMapPropagator()
-	ctx := propagator.Extract(context.Background(), carrier)
-
-	// Check if we successfully extracted a span context
-	if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
-		t.startupParentCtx = ctx
-		slog.Info("Parsed startup trace parent",
-			"trace_id", span.SpanContext().TraceID().String(),
-			"span_id", span.SpanContext().SpanID().String(),
-		)
-	} else {
-		slog.Warn("Failed to parse STARTUP_TRACEPARENT", "value", traceparent)
-	}
-}
-
-// GetStartupContext returns a context with the startup trace parent if available
-// This allows services to create spans that are children of the provisioner's startup span
-func (t *Telemetry) GetStartupContext() context.Context {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	if t.startupParentCtx != nil {
-		return t.startupParentCtx
-	}
-	return context.Background()
+	return propagator.Extract(ctx, carrier)
 }
 
 // GetPrometheusHandler returns the HTTP handler for the Prometheus metrics endpoint
@@ -350,18 +345,4 @@ func (h *traceHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 
 func (h *traceHandler) WithGroup(name string) slog.Handler {
 	return &traceHandler{wrapped: h.wrapped.WithGroup(name)}
-}
-
-// Global telemetry instance for convenience
-var (
-	globalTelemetry     *Telemetry
-	globalTelemetryOnce sync.Once
-)
-
-// GetGlobalTelemetry returns the global telemetry instance
-func GetGlobalTelemetry() *Telemetry {
-	globalTelemetryOnce.Do(func() {
-		globalTelemetry = NewTelemetry()
-	})
-	return globalTelemetry
 }

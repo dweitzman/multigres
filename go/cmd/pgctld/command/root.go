@@ -15,8 +15,13 @@
 package command
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
+	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/multigres/multigres/go/pgctld"
 	"github.com/multigres/multigres/go/servenv"
@@ -27,6 +32,7 @@ import (
 
 // PgCtlCommand holds the configuration for pgctld commands
 type PgCtlCommand struct {
+	reg               *viperutil.Registry
 	pgDatabase        viperutil.Value[string]
 	pgUser            viperutil.Value[string]
 	poolerDir         viperutil.Value[string]
@@ -35,44 +41,52 @@ type PgCtlCommand struct {
 	pgListenAddresses viperutil.Value[string]
 	vc                *viperutil.ViperConfig
 	lg                *servenv.Logger
+	telemetry         *servenv.Telemetry
 }
 
 // GetRootCommand creates and returns the root command for pgctld with all subcommands
 func GetRootCommand() (*cobra.Command, *PgCtlCommand) {
+	telemetry := servenv.NewTelemetry()
+	reg := viperutil.NewRegistry()
 	pc := &PgCtlCommand{
-		pgDatabase: viperutil.Configure("pg-database", viperutil.Options[string]{
+		reg: reg,
+		pgDatabase: viperutil.Configure(reg, "pg-database", viperutil.Options[string]{
 			Default:  "postgres",
 			FlagName: "pg-database",
 			Dynamic:  false,
 		}),
-		pgUser: viperutil.Configure("pg-user", viperutil.Options[string]{
+		pgUser: viperutil.Configure(reg, "pg-user", viperutil.Options[string]{
 			Default:  "postgres",
 			FlagName: "pg-user",
 			Dynamic:  false,
 		}),
-		timeout: viperutil.Configure("timeout", viperutil.Options[int]{
+		timeout: viperutil.Configure(reg, "timeout", viperutil.Options[int]{
 			Default:  30,
 			FlagName: "timeout",
 			Dynamic:  false,
 		}),
-		poolerDir: viperutil.Configure("pooler-dir", viperutil.Options[string]{
+		poolerDir: viperutil.Configure(reg, "pooler-dir", viperutil.Options[string]{
 			Default:  "",
 			FlagName: "pooler-dir",
 			Dynamic:  false,
 		}),
-		pgPort: viperutil.Configure("pg-port", viperutil.Options[int]{
+		pgPort: viperutil.Configure(reg, "pg-port", viperutil.Options[int]{
 			Default:  5432,
 			FlagName: "pg-port",
 			Dynamic:  false,
 		}),
-		pgListenAddresses: viperutil.Configure("pg-listen-addresses", viperutil.Options[string]{
+		pgListenAddresses: viperutil.Configure(reg, "pg-listen-addresses", viperutil.Options[string]{
 			Default:  "localhost",
 			FlagName: "pg-listen-addresses",
 			Dynamic:  false,
 		}),
-		vc: viperutil.NewViperConfig(),
-		lg: servenv.NewLogger(),
+		vc:        viperutil.NewViperConfig(reg),
+		lg:        servenv.NewLogger(reg, telemetry),
+		telemetry: telemetry,
 	}
+
+	var span trace.Span
+	tracer := otel.Tracer("")
 
 	root := &cobra.Command{
 		Use:   "pgctld",
@@ -81,8 +95,29 @@ func GetRootCommand() (*cobra.Command, *PgCtlCommand) {
 It provides lifecycle management including start, stop, restart, and configuration
 management for PostgreSQL servers.`,
 		Args: cobra.NoArgs,
-		PreRun: func(cmd *cobra.Command, args []string) {
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			pc.lg.SetupLogging()
+			// Initialize telemetry for CLI commands (server command will re-initialize via ServEnv.Init)
+			if err := pc.telemetry.InitTelemetry(cmd.Context(), "pgctld"); err != nil {
+				return fmt.Errorf("failed to initialize OpenTelemetry: %w", err)
+			}
+
+			ctx := telemetry.WithTraceparent(cmd.Context())
+			ctx, span = tracer.Start(ctx, "test-span")
+			cmd.SetContext(ctx)
+			return nil
+		},
+		PersistentPostRunE: func(cmd *cobra.Command, args []string) error {
+			span.End()
+
+			// Shutdown OpenTelemetry to flush all pending spans
+			// For server command, this runs after the server has shut down
+			ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Second)
+			defer cancel()
+			if err := pc.telemetry.ShutdownTelemetry(ctx); err != nil {
+				return fmt.Errorf("failed to shutdown OpenTelemetry: %w", err)
+			}
+			return nil
 		},
 	}
 

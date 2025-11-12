@@ -91,8 +91,8 @@ func injectTraceContext(ctx context.Context, cmd *exec.Cmd) {
 		if cmd.Env == nil {
 			cmd.Env = os.Environ()
 		}
-		// Add STARTUP_TRACEPARENT environment variable
-		cmd.Env = append(cmd.Env, fmt.Sprintf("STARTUP_TRACEPARENT=%s", traceparent))
+		// Add TRACEPARENT environment variable
+		cmd.Env = append(cmd.Env, fmt.Sprintf("TRACEPARENT=%s", traceparent))
 	}
 }
 

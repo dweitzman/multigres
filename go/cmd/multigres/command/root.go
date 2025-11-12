@@ -17,30 +17,37 @@ package command
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/multigres/multigres/go/servenv"
 	"github.com/multigres/multigres/go/viperutil"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // MultigresCommand holds the configuration for multigres commands
 type MultigresCommand struct {
+	reg       *viperutil.Registry
 	vc        *viperutil.ViperConfig
 	telemetry *servenv.Telemetry
 }
 
 // GetRootCommand creates and returns the root command for multigres with all subcommands
 func GetRootCommand() *cobra.Command {
+	reg := viperutil.NewRegistry()
+	telemetry := servenv.NewTelemetry()
 	mc := &MultigresCommand{
-		vc:        viperutil.NewViperConfig(),
-		telemetry: servenv.NewTelemetry(),
+		reg:       reg,
+		vc:        viperutil.NewViperConfig(reg),
+		telemetry: telemetry,
 	}
+
+	var span trace.Span
+	tracer := otel.Tracer("")
 
 	root := &cobra.Command{
 		Use:   "multigres",
@@ -72,26 +79,24 @@ Configuration:
 			viper.SetConfigName("multigres")
 
 			// Load config (without the full servenv setup)
-			_, err := mc.vc.LoadConfig()
+			_, err := mc.vc.LoadConfig(mc.reg)
 			if err != nil {
 				return err
 			}
 
-			// Initialize OpenTelemetry
-			// Configuration is done via standard OTEL environment variables
-			// For CLI commands, you can set COMMAND_OTEL_TRACES_SAMPLER=always_on for better debugging
-			// unless explicitly overridden by OTEL_TRACES_SAMPLER
 			if err := mc.telemetry.InitTelemetry(context.Background(), "multigres-cli"); err != nil {
 				return fmt.Errorf("failed to initialize OpenTelemetry: %w", err)
 			}
 
-			// Wrap the default HTTP client transport with OTel instrumentation
-			// This ensures all HTTP requests made by the CLI and provisioner propagate trace context
-			http.DefaultClient.Transport = otelhttp.NewTransport(http.DefaultTransport)
+			ctx := telemetry.WithTraceparent(cmd.Context())
+			ctx, span = tracer.Start(ctx, cmd.Use)
+			cmd.SetContext(ctx)
 
 			return nil
 		},
 		PersistentPostRunE: func(cmd *cobra.Command, args []string) error {
+			span.End()
+
 			// Shutdown OpenTelemetry to flush all pending spans
 			// This is critical for CLI commands to export traces before process exit
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

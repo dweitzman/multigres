@@ -63,8 +63,6 @@ func LocalClientDialOptions() []grpc.DialOption {
 	return []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithDisableServiceConfig(),
-		// Add OpenTelemetry instrumentation for automatic trace context propagation
-		// If OTel is not configured, this will be a no-op
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 	}
 }
