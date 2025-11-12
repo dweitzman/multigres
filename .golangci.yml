@@ -25,6 +25,7 @@ linters:
     - ineffassign
     - sloglint
     - staticcheck
+    - usetesting
   settings:
     depguard:
       rules:
@@ -64,6 +65,8 @@ linters:
       - nilness
       - unusedwrite
       - loopclosure
+    usetesting:
+      context-background: true
   staticcheck:
     checks:
       - "all"
