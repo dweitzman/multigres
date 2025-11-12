@@ -44,6 +44,7 @@ import (
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 
@@ -1138,7 +1139,7 @@ func (p *localProvisioner) deprovisionService(ctx context.Context, req *provisio
 
 	// Stop the process if it's running
 	if service.PID > 0 {
-		if err := p.stopProcessByPID(ctx, service.PID); err != nil {
+		if err := p.stopProcessByPID(ctx, service.Service, service.PID); err != nil {
 			return fmt.Errorf("failed to stop process: %w", err)
 		}
 	}
@@ -1167,7 +1168,12 @@ func (p *localProvisioner) deprovisionService(ctx context.Context, req *provisio
 }
 
 // stopProcessByPID stops a process by its PID
-func (p *localProvisioner) stopProcessByPID(ctx context.Context, pid int) error {
+func (p *localProvisioner) stopProcessByPID(ctx context.Context, name string, pid int) error {
+	tracer := otel.Tracer("multigres/provisioner/local")
+	ctx, span := tracer.Start(ctx, "stopProcessByPID")
+	span.SetAttributes(attribute.String("service", name))
+	defer span.End()
+
 	// Check if process exists
 	process, err := os.FindProcess(pid)
 	if err != nil {

@@ -97,7 +97,7 @@ management for PostgreSQL servers.`,
 			pc.lg.SetupLogging()
 			// Initialize telemetry for CLI commands (server command will re-initialize via ServEnv.Init)
 			var err error
-			if span, err = pc.telemetry.InitForCommand(cmd, "pgctld", true); err != nil {
+			if span, err = pc.telemetry.InitForCommand(cmd, "pgctld", cmd.Use != "server"); err != nil {
 				return fmt.Errorf("failed to initialize OpenTelemetry: %w", err)
 			}
 

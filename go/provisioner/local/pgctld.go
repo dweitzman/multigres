@@ -351,7 +351,7 @@ func (p *localProvisioner) deprovisionPgctld(ctx context.Context, service *Local
 
 	// Then stop the pgctld process itself
 	fmt.Printf("Stopping pgctld process...")
-	if err := p.stopProcessByPID(ctx, service.PID); err != nil {
+	if err := p.stopProcessByPID(ctx, service.Service, service.PID); err != nil {
 		return fmt.Errorf("failed to stop pgctld process: %w", err)
 	}
 
