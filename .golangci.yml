@@ -97,6 +97,9 @@ linters:
       - linters:
           - errcheck
         path: ^proto/
+      - linters:
+          - forbidigo
+        path: (.+)_test.go
 formatters:
   enable:
     - gofumpt
