@@ -54,6 +54,8 @@ import (
 //go:embed templates/prometheus.yml.template
 var prometheusTemplate string
 
+var tracer = otel.Tracer("github.com/multigres/multigres/go/provisioner/local")
+
 // localProvisioner implements the Provisioner interface for local binary-based provisioning
 type localProvisioner struct {
 	config  *LocalProvisionerConfig
@@ -1169,7 +1171,6 @@ func (p *localProvisioner) deprovisionService(ctx context.Context, req *provisio
 
 // stopProcessByPID stops a process by its PID
 func (p *localProvisioner) stopProcessByPID(ctx context.Context, name string, pid int) error {
-	tracer := otel.Tracer("multigres/provisioner/local")
 	ctx, span := tracer.Start(ctx, "stopProcessByPID")
 	span.SetAttributes(attribute.String("service", name))
 	defer span.End()

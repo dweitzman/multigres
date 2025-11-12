@@ -22,8 +22,6 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
-	"go.opentelemetry.io/otel"
-
 	"github.com/multigres/multigres/go/clustermetadata/topo"
 	"github.com/multigres/multigres/go/clustermetadata/toporeg"
 	"github.com/multigres/multigres/go/multipooler/grpcconsensusservice"
@@ -170,8 +168,7 @@ func (mp *MultiPooler) RegisterFlags(flags *pflag.FlagSet) {
 // or if some connections fail, it launches goroutines that retry
 // until successful.
 func (mp *MultiPooler) Init(startCtx context.Context) {
-	tracer := otel.Tracer("multigres/multipooler")
-	startCtx, span := tracer.Start(startCtx, "Init")
+	startCtx, span := servenv.Tracer().Start(startCtx, "Init")
 	defer span.End()
 
 	mp.senv.Init("multipooler")

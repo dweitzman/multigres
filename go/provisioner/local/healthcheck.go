@@ -29,7 +29,6 @@ import (
 	pb "github.com/multigres/multigres/go/pb/pgctldservice"
 	"github.com/multigres/multigres/go/tools/retry"
 
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 )
 
@@ -37,7 +36,6 @@ import (
 // The provided parentCtx should contain any active span for distributed tracing
 func (p *localProvisioner) waitForServiceReady(parentCtx context.Context, serviceName string, host string, servicePorts map[string]int, timeout time.Duration) error {
 	// Create span as child of parent context
-	tracer := otel.Tracer("multigres/provisioner/local")
 	ctx, cancel := context.WithTimeout(parentCtx, timeout)
 	defer cancel()
 

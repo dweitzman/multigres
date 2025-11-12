@@ -243,7 +243,6 @@ func (t *Telemetry) InitForCommand(cmd *cobra.Command, defaultServiceName string
 		return nil, fmt.Errorf("failed to initialize OpenTelemetry: %w", err)
 	}
 
-	tracer := otel.Tracer("")
 	ctx := t.WithTraceparent(cmd.Context())
 	var span trace.Span
 	if startSpan {
@@ -287,11 +286,6 @@ func (t *Telemetry) GetTracerProvider() trace.TracerProvider {
 		return otel.GetTracerProvider()
 	}
 	return t.tracerProvider
-}
-
-// GetTracer returns a named tracer for creating spans
-func (t *Telemetry) GetTracer(name string) trace.Tracer {
-	return t.GetTracerProvider().Tracer(name)
 }
 
 // ShutdownTelemetry gracefully shuts down all telemetry providers
@@ -361,4 +355,15 @@ func (h *traceHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 
 func (h *traceHandler) WithGroup(name string) slog.Handler {
 	return &traceHandler{wrapped: h.wrapped.WithGroup(name)}
+}
+
+// TODO(dweitzman): Do we want package-specific tracing services, or is a shared
+// one for all of multigres fine?
+const tracingServiceName = "github.com/multigres/multigres"
+
+var tracer = otel.Tracer(tracingServiceName)
+
+// Tracer returns a tracer for creating spans named github.com/multigres/multigres
+func Tracer() trace.Tracer {
+	return tracer
 }
