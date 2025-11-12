@@ -231,6 +231,8 @@ func TestWrapSlogHandler_InjectsTraceContext(t *testing.T) {
 	err := setup.telemetry.InitTelemetry(ctx, "test-service")
 	require.NoError(t, err)
 	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
+		defer cancel()
 		require.NoError(t, setup.telemetry.ShutdownTelemetry(ctx))
 	})
 
@@ -287,6 +289,8 @@ func TestWrapSlogHandler_NoSpanContext(t *testing.T) {
 	err := setup.telemetry.InitTelemetry(ctx, "test-service")
 	require.NoError(t, err)
 	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
+		defer cancel()
 		require.NoError(t, setup.telemetry.ShutdownTelemetry(ctx))
 	})
 

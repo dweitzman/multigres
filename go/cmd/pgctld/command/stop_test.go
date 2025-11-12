@@ -105,8 +105,7 @@ func TestStopPostgreSQLWithResult(t *testing.T) {
 				testutil.CreateMockPostgreSQLBinaries(t, binDir)
 
 				originalPath := os.Getenv("PATH")
-				os.Setenv("PATH", binDir+":"+originalPath)
-				defer os.Setenv("PATH", originalPath)
+				t.Setenv("PATH", binDir+":"+originalPath)
 			}
 
 			// Always create data directory
@@ -209,8 +208,7 @@ func TestRunStop(t *testing.T) {
 				testutil.CreateMockPostgreSQLBinaries(t, binDir)
 
 				originalPath := os.Getenv("PATH")
-				os.Setenv("PATH", binDir+":"+originalPath)
-				defer os.Setenv("PATH", originalPath)
+				t.Setenv("PATH", binDir+":"+originalPath)
 			}
 
 			// Create a fresh root command for each test
@@ -270,8 +268,7 @@ func TestStopPostgreSQLWithConfig(t *testing.T) {
 				testutil.CreateMockPostgreSQLBinaries(t, binDir)
 
 				originalPath := os.Getenv("PATH")
-				os.Setenv("PATH", binDir+":"+originalPath)
-				defer os.Setenv("PATH", originalPath)
+				t.Setenv("PATH", binDir+":"+originalPath)
 			}
 
 			// Create a mock PostgreSQL server config
@@ -357,8 +354,7 @@ func TestTakeCheckpoint(t *testing.T) {
 				}
 
 				originalPath := os.Getenv("PATH")
-				os.Setenv("PATH", binDir+":"+originalPath)
-				defer os.Setenv("PATH", originalPath)
+				t.Setenv("PATH", binDir+":"+originalPath)
 			}
 
 			logger := slog.New(slog.DiscardHandler)

@@ -81,8 +81,7 @@ func TestRunStart(t *testing.T) {
 
 				// Add to PATH for test
 				originalPath := os.Getenv("PATH")
-				os.Setenv("PATH", binDir+":"+originalPath)
-				defer os.Setenv("PATH", originalPath)
+				t.Setenv("PATH", binDir+":"+originalPath)
 			}
 
 			// Create a fresh root command for each test
@@ -204,8 +203,7 @@ func TestInitializeDataDir(t *testing.T) {
 
 		// Add to PATH for test
 		originalPath := os.Getenv("PATH")
-		os.Setenv("PATH", binDir+":"+originalPath)
-		defer os.Setenv("PATH", originalPath)
+		t.Setenv("PATH", binDir+":"+originalPath)
 
 		logger := slog.New(slog.DiscardHandler)
 		err := initializeDataDir(logger, dataDir, "postgres", "")
@@ -243,8 +241,7 @@ func TestWaitForPostgreSQL(t *testing.T) {
 		testutil.CreateMockPostgreSQLBinaries(t, binDir)
 
 		originalPath := os.Getenv("PATH")
-		os.Setenv("PATH", binDir+":"+originalPath)
-		defer os.Setenv("PATH", originalPath)
+		t.Setenv("PATH", binDir+":"+originalPath)
 
 		// Create config that matches the test setup
 		config, err := pgctld.NewPostgresCtlConfig(
@@ -277,8 +274,7 @@ func TestWaitForPostgreSQL(t *testing.T) {
 		testutil.MockBinary(t, binDir, "pg_isready", "exit 1")
 
 		originalPath := os.Getenv("PATH")
-		os.Setenv("PATH", binDir+":"+originalPath)
-		defer os.Setenv("PATH", originalPath)
+		t.Setenv("PATH", binDir+":"+originalPath)
 
 		// Create config with short timeout for test
 		config, err := pgctld.NewPostgresCtlConfig(

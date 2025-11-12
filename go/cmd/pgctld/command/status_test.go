@@ -38,8 +38,7 @@ func TestRunStatus(t *testing.T) {
 	testutil.CreateMockPostgreSQLBinaries(t, binDir)
 
 	originalPath := os.Getenv("PATH")
-	os.Setenv("PATH", binDir+":"+originalPath)
-	defer os.Setenv("PATH", originalPath)
+	t.Setenv("PATH", binDir+":"+originalPath)
 
 	// Helper function to capture command output
 	runStatusCommand := func() (string, error) {
@@ -134,8 +133,7 @@ func TestIsServerReady(t *testing.T) {
 			tt.setupBinary(binDir)
 
 			originalPath := os.Getenv("PATH")
-			os.Setenv("PATH", binDir+":"+originalPath)
-			defer os.Setenv("PATH", originalPath)
+			t.Setenv("PATH", binDir+":"+originalPath)
 
 			// Create initialized data directory with postgresql.conf
 			testutil.CreateDataDir(t, baseDir, true)
@@ -195,8 +193,7 @@ func TestGetServerVersion(t *testing.T) {
 			testutil.CreateDataDir(t, baseDir, true)
 
 			originalPath := os.Getenv("PATH")
-			os.Setenv("PATH", binDir+":"+originalPath)
-			defer os.Setenv("PATH", originalPath)
+			t.Setenv("PATH", binDir+":"+originalPath)
 
 			// Create config directly for the test
 			config, err := pgctld.NewPostgresCtlConfig(

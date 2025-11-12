@@ -21,9 +21,6 @@ import (
 )
 
 func TestAppendPath(t *testing.T) {
-	originalPath := os.Getenv("PATH")
-	defer os.Setenv("PATH", originalPath)
-
 	testPath := "test-path"
 	err := os.Mkdir(testPath, 0o755)
 	if err != nil {
@@ -37,7 +34,7 @@ func TestAppendPath(t *testing.T) {
 	}
 
 	// Test appending to an existing PATH
-	os.Setenv("PATH", "/bin")
+	t.Setenv("PATH", "/bin")
 	PrependPath(testPath)
 	newPath := os.Getenv("PATH")
 	separator := string(os.PathListSeparator)
@@ -67,11 +64,8 @@ func TestFindModuleRoot(t *testing.T) {
 }
 
 func TestPrependBinToPath(t *testing.T) {
-	originalPath := os.Getenv("PATH")
-	defer os.Setenv("PATH", originalPath)
-
 	// Reset PATH to a known state
-	os.Setenv("PATH", "/usr/bin:/bin")
+	t.Setenv("PATH", "/usr/bin:/bin")
 
 	// Call PrependBinToPath
 	err := PrependBinToPath()
