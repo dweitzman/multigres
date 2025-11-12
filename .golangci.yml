@@ -21,11 +21,20 @@ linters:
     - bodyclose
     - depguard
     - errcheck
+    # - forbidigo
     - govet
     - ineffassign
     - sloglint
     - staticcheck
   settings:
+    forbidigo:
+      forbid:
+        - pattern: ^exec\.CommandContext$
+          msg: Use telemetry.CommandContext
+        - pattern: ^exec\.Command$
+          msg: Use telemetry.Command
+      # Optionally give a message or replacement suggestion
+      exclude_godoc_examples: true
     depguard:
       rules:
         main:
