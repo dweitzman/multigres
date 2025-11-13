@@ -46,8 +46,6 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/propagation"
-	"go.opentelemetry.io/otel/trace"
 
 	"gopkg.in/yaml.v3"
 )
@@ -74,30 +72,6 @@ const (
 // Name returns the name of this provisioner
 func (p *localProvisioner) Name() string {
 	return "local"
-}
-
-// injectTraceContext adds trace context to a command's environment for distributed tracing
-// This allows subprocesses to participate in the same trace as the parent provisioner
-func injectTraceContext(ctx context.Context, cmd *exec.Cmd) {
-	span := trace.SpanFromContext(ctx)
-	if !span.SpanContext().IsValid() {
-		return
-	}
-
-	// Extract trace context to W3C Trace Context format
-	carrier := propagation.MapCarrier{}
-	propagator := otel.GetTextMapPropagator()
-	propagator.Inject(ctx, carrier)
-
-	// Get traceparent value (format: version-trace_id-span_id-flags)
-	if traceparent, ok := carrier["traceparent"]; ok {
-		// Initialize Env with current environment if not set
-		if cmd.Env == nil {
-			cmd.Env = os.Environ()
-		}
-		// Add TRACEPARENT environment variable
-		cmd.Env = append(cmd.Env, fmt.Sprintf("TRACEPARENT=%s", traceparent))
-	}
 }
 
 // createPasswordFileAndDirectories creates the pooler directory structure and password file
