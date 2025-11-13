@@ -256,10 +256,8 @@ func (p *localProvisioner) provisionPgctld(ctx context.Context, dbName, tableGro
 	}
 
 	initCmd := exec.CommandContext(ctx, pgctldBinary, initArgs...)
-	// Inject trace context for distributed tracing
-	telemetry.SetCmdEnvTraceContext(ctx, initCmd)
 
-	if err := initCmd.Run(); err != nil {
+	if err := telemetry.RunCmd(ctx, initCmd, true /* clientSpan */); err != nil {
 		return nil, fmt.Errorf("failed to initialize pgctld data directory: %w", err)
 	}
 	fmt.Printf(" initialized ✓\n")
@@ -285,10 +283,8 @@ func (p *localProvisioner) provisionPgctld(ctx context.Context, dbName, tableGro
 	}
 
 	pgctldCmd := exec.CommandContext(ctx, pgctldBinary, serverArgs...)
-	// Inject trace context for distributed tracing
-	telemetry.SetCmdEnvTraceContext(ctx, pgctldCmd)
 
-	if err := pgctldCmd.Start(); err != nil {
+	if err := telemetry.StartCmd(ctx, pgctldCmd); err != nil {
 		return nil, fmt.Errorf("failed to start pgctld server: %w", err)
 	}
 
