@@ -23,7 +23,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/multigres/multigres/go/multipooler"
+	"github.com/multigres/multigres/go/services/multipooler"
 	"github.com/multigres/multigres/go/tools/telemetry"
 
 	"github.com/spf13/cobra"

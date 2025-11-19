@@ -20,7 +20,7 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/multigres/multigres/go/multigateway"
+	"github.com/multigres/multigres/go/services/multigateway"
 
 	"github.com/spf13/cobra"
 )

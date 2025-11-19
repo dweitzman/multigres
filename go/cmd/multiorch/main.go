@@ -20,7 +20,7 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/multigres/multigres/go/multiorch"
+	"github.com/multigres/multigres/go/services/multiorch"
 
 	"github.com/spf13/cobra"
 )

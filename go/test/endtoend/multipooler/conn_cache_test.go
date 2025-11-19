@@ -27,12 +27,12 @@ import (
 	"golang.org/x/net/nettest"
 	"google.golang.org/grpc"
 
-	"github.com/multigres/multigres/go/multipooler/rpcclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	consensuspb "github.com/multigres/multigres/go/pb/consensus"
 	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 	multipoolermanagerpb "github.com/multigres/multigres/go/pb/multipoolermanager"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
+	"github.com/multigres/multigres/go/services/multipooler/rpcclient"
 )
 
 // makePooler creates a multipooler object from an address for testing.
