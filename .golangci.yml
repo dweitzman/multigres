@@ -48,6 +48,61 @@ linters:
           allow:
             - $gostd
             - github.com/multigres/multigres/go/tools
+        multiadmin-isolation:
+          files:
+            - "!**/go/services/multiadmin/*.go"
+            - "!**/go/services/multiadmin/**/*.go"
+            - "!**/go/cmd/multiadmin/*.go"
+            - "!**/go/cmd/multiadmin/**/*.go"
+            - "**/*.go"
+          list-mode: lax
+          deny:
+            - pkg: "github.com/multigres/multigres/go/services/multiadmin"
+              desc: "multiadmin can only be imported by its own package and cmd"
+        multigateway-isolation:
+          files:
+            - "!**/go/services/multigateway/*.go"
+            - "!**/go/services/multigateway/**/*.go"
+            - "!**/go/cmd/multigateway/*.go"
+            - "!**/go/cmd/multigateway/**/*.go"
+            - "**/*.go"
+          list-mode: lax
+          deny:
+            - pkg: "github.com/multigres/multigres/go/services/multigateway"
+              desc: "multigateway can only be imported by its own package and cmd"
+        multipooler-isolation:
+          files:
+            - "!**/go/services/multipooler/*.go"
+            - "!**/go/services/multipooler/**/*.go"
+            - "!**/go/cmd/multipooler/*.go"
+            - "!**/go/cmd/multipooler/**/*.go"
+            - "**/*.go"
+          list-mode: lax
+          deny:
+            - pkg: "github.com/multigres/multigres/go/services/multipooler"
+              desc: "multipooler can only be imported by its own package and cmd"
+        multiorch-isolation:
+          files:
+            - "!**/go/services/multiorch/*.go"
+            - "!**/go/services/multiorch/**/*.go"
+            - "!**/go/cmd/multiorch/*.go"
+            - "!**/go/cmd/multiorch/**/*.go"
+            - "**/*.go"
+          list-mode: lax
+          deny:
+            - pkg: "github.com/multigres/multigres/go/services/multiorch"
+              desc: "multiorch can only be imported by its own package and cmd"
+        pgctld-isolation:
+          files:
+            - "!**/go/services/pgctld/*.go"
+            - "!**/go/services/pgctld/**/*.go"
+            - "!**/go/cmd/pgctld/*.go"
+            - "!**/go/cmd/pgctld/**/*.go"
+            - "**/*.go"
+          list-mode: lax
+          deny:
+            - pkg: "github.com/multigres/multigres/go/services/pgctld"
+              desc: "pgctld can only be imported by its own package and cmd"
         provisioner:
           files:
             - "!$test"
