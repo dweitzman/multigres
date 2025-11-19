@@ -26,10 +26,10 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/multigres/multigres/go/services/multigateway/engine"
-	"github.com/multigres/multigres/go/services/multipooler/queryservice"
+	"github.com/multigres/multigres/go/common/queryservice"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	"github.com/multigres/multigres/go/pb/query"
+	"github.com/multigres/multigres/go/services/multigateway/engine"
 )
 
 // ScatterConn coordinates query execution across multiple multipooler instances.

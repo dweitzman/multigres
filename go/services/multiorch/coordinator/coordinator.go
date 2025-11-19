@@ -19,8 +19,8 @@ import (
 	"log/slog"
 
 	"github.com/multigres/multigres/go/clustermetadata/topo"
+	"github.com/multigres/multigres/go/common/rpcclient"
 	"github.com/multigres/multigres/go/mterrors"
-	"github.com/multigres/multigres/go/services/multipooler/rpcclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 )

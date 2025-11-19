@@ -26,7 +26,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/multigres/multigres/go/services/multipooler/queryservice"
+	"github.com/multigres/multigres/go/common/queryservice"
 	"github.com/multigres/multigres/go/pb/query"
 )
 

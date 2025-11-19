@@ -22,9 +22,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/multigres/multigres/go/services/multipooler/executor"
-	"github.com/multigres/multigres/go/services/multipooler/queryservice"
+	"github.com/multigres/multigres/go/common/queryservice"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	"github.com/multigres/multigres/go/services/multipooler/executor"
 )
 
 // QueryPoolerServer is the core pooler implementation for query serving.
