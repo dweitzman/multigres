@@ -20,8 +20,8 @@ import (
 	"time"
 
 	"github.com/multigres/multigres/go/clustermetadata/topo"
-	"github.com/multigres/multigres/go/services/multiorch/store"
 	"github.com/multigres/multigres/go/pb/clustermetadata"
+	"github.com/multigres/multigres/go/services/multiorch/store"
 )
 
 // pollPooler performs health check on a single pooler instance.

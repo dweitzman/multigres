@@ -21,8 +21,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/multigres/multigres/go/services/multiorch/store"
 	"github.com/multigres/multigres/go/pb/clustermetadata"
+	"github.com/multigres/multigres/go/services/multiorch/store"
 )
 
 func TestForgetLongUnseenInstances_BrokenEntries(t *testing.T) {
