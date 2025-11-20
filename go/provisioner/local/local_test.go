@@ -21,8 +21,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/multigres/multigres/go/common/provisionercfg"
 )
 
 func TestValidateUnixSocketPathLength(t *testing.T) {
@@ -54,7 +52,7 @@ func TestValidateUnixSocketPathLength(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config := &provisionercfg.LocalProvisionerConfig{
+			config := &LocalProvisionerConfig{
 				RootWorkingDir: tt.rootDir,
 			}
 
@@ -97,7 +95,7 @@ func TestValidateUnixSocketPathLengthWithWorkingDirectory(t *testing.T) {
 	require.NoError(t, os.Chdir(tempDir))
 
 	provisioner := &localProvisioner{}
-	config := &provisionercfg.LocalProvisionerConfig{
+	config := &LocalProvisionerConfig{
 		RootWorkingDir: "./relative_path", // This should be converted to absolute
 	}
 

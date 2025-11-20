@@ -104,6 +104,18 @@ linters:
           deny:
             - pkg: "github.com/multigres/multigres/go/services/pgctld"
               desc: "pgctld can only be imported by its own package and cmd"
+        provisioner-isolation:
+          files:
+            - "!**/go/provisioner/*.go"
+            - "!**/go/provisioner/**/*.go"
+            - "!**/go/cmd/multigres/*.go"
+            - "!**/go/cmd/multigres/**/*.go"
+            - "!**/go/test/**/*.go"
+            - "**/*.go"
+          list-mode: lax
+          deny:
+            - pkg: "github.com/multigres/multigres/go/provisioner"
+              desc: "provisioner can only be imported by multigres cmd and tests"
         provisioner:
           files:
             - "!$test"
@@ -116,7 +128,6 @@ linters:
           allow:
             - $gostd
             - github.com/multigres/multigres/go/common/clustermetadata/topo
-            - github.com/multigres/multigres/go/common/provisionercfg
             - github.com/multigres/multigres/go/tools
             - github.com/multigres/multigres/go/pb
             - github.com/multigres/multigres/go/provisioner

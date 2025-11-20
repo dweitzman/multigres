@@ -35,7 +35,6 @@ import (
 
 	"github.com/multigres/multigres/go/cmd/multigres/command/cluster"
 	"github.com/multigres/multigres/go/common/clustermetadata/topo"
-	"github.com/multigres/multigres/go/common/provisionercfg"
 	pb "github.com/multigres/multigres/go/pb/pgctldservice"
 	"github.com/multigres/multigres/go/provisioner/local"
 	"github.com/multigres/multigres/go/test/utils"
@@ -175,18 +174,18 @@ func createTestConfigWithPorts(tempDir string, portConfig *testPortConfig) (stri
 	serviceIDZone1 := stringutil.RandomString(8)
 	serviceIDZone2 := stringutil.RandomString(8)
 
-	localConfig := &provisionercfg.LocalProvisionerConfig{
+	localConfig := &local.LocalProvisionerConfig{
 		RootWorkingDir: tempDir,
 		DefaultDbName:  "postgres",
-		Etcd: provisionercfg.EtcdConfig{
+		Etcd: local.EtcdConfig{
 			Version: "3.5.9",
 			DataDir: filepath.Join(tempDir, "data", "etcd-data"),
 			Port:    portConfig.EtcdPort,
 		},
-		Topology: provisionercfg.TopologyConfig{
+		Topology: local.TopologyConfig{
 			Backend:        "etcd2",
 			GlobalRootPath: "/multigres/global",
-			Cells: []provisionercfg.CellConfig{
+			Cells: []local.CellConfig{
 				{
 					Name:     "zone1",
 					RootPath: "/multigres/zone1",
@@ -197,22 +196,22 @@ func createTestConfigWithPorts(tempDir string, portConfig *testPortConfig) (stri
 				},
 			},
 		},
-		Multiadmin: provisionercfg.MultiadminConfig{
+		Multiadmin: local.MultiadminConfig{
 			Path:     "multiadmin",
 			HttpPort: portConfig.MultiadminHTTPPort,
 			GrpcPort: portConfig.MultiadminGRPCPort,
 			LogLevel: "info",
 		},
-		Cells: map[string]provisionercfg.CellServicesConfig{
+		Cells: map[string]local.CellServicesConfig{
 			"zone1": {
-				Multigateway: provisionercfg.MultigatewayConfig{
+				Multigateway: local.MultigatewayConfig{
 					Path:     "multigateway",
 					HttpPort: portConfig.MultigatewayHTTPPort,
 					GrpcPort: portConfig.MultigatewayGRPCPort,
 					PgPort:   portConfig.MultigatewayPGPort,
 					LogLevel: "info",
 				},
-				Multipooler: provisionercfg.MultipoolerConfig{
+				Multipooler: local.MultipoolerConfig{
 					Path:           "multipooler",
 					Database:       "postgres",
 					TableGroup:     "default",
@@ -224,13 +223,13 @@ func createTestConfigWithPorts(tempDir string, portConfig *testPortConfig) (stri
 					GRPCSocketFile: filepath.Join(tempDir, "sockets", "multipooler-zone1.sock"),
 					LogLevel:       "info",
 				},
-				Multiorch: provisionercfg.MultiorchConfig{
+				Multiorch: local.MultiorchConfig{
 					Path:     "multiorch",
 					HttpPort: portConfig.MultiorchHTTPPort,
 					GrpcPort: portConfig.MultiorchGRPCPort,
 					LogLevel: "info",
 				},
-				Pgctld: provisionercfg.PgctldConfig{
+				Pgctld: local.PgctldConfig{
 					Path:           "pgctld",
 					GrpcPort:       portConfig.PgctldGRPCPort,
 					GRPCSocketFile: filepath.Join(tempDir, "sockets", "pgctld-zone1.sock"),
@@ -244,14 +243,14 @@ func createTestConfigWithPorts(tempDir string, portConfig *testPortConfig) (stri
 				},
 			},
 			"zone2": {
-				Multigateway: provisionercfg.MultigatewayConfig{
+				Multigateway: local.MultigatewayConfig{
 					Path:     "multigateway",
 					HttpPort: portConfig.MultigatewayHTTPPort + 100,
 					GrpcPort: portConfig.MultigatewayGRPCPort + 100,
 					PgPort:   portConfig.MultigatewayPGPort + 100,
 					LogLevel: "info",
 				},
-				Multipooler: provisionercfg.MultipoolerConfig{
+				Multipooler: local.MultipoolerConfig{
 					Path:           "multipooler",
 					Database:       "postgres",
 					TableGroup:     "default",
@@ -263,13 +262,13 @@ func createTestConfigWithPorts(tempDir string, portConfig *testPortConfig) (stri
 					GRPCSocketFile: filepath.Join(tempDir, "sockets", "multipooler-zone2.sock"),
 					LogLevel:       "info",
 				},
-				Multiorch: provisionercfg.MultiorchConfig{
+				Multiorch: local.MultiorchConfig{
 					Path:     "multiorch",
 					HttpPort: portConfig.MultiorchHTTPPort + 100,
 					GrpcPort: portConfig.MultiorchGRPCPort + 100,
 					LogLevel: "info",
 				},
-				Pgctld: provisionercfg.PgctldConfig{
+				Pgctld: local.PgctldConfig{
 					Path:           "pgctld",
 					GrpcPort:       portConfig.PgctldGRPCPort + 100, // offset for zone2
 					GRPCSocketFile: filepath.Join(tempDir, "sockets", "pgctld-zone2.sock"),

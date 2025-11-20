@@ -32,7 +32,6 @@ import (
 	"time"
 
 	"github.com/multigres/multigres/go/common/clustermetadata/topo"
-	"github.com/multigres/multigres/go/common/provisionercfg"
 	"github.com/multigres/multigres/go/provisioner"
 	"github.com/multigres/multigres/go/provisioner/local/ports"
 	"github.com/multigres/multigres/go/tools/pathutil"
@@ -53,7 +52,7 @@ var tracer = otel.Tracer("github.com/multigres/multigres/go/provisioner/local")
 
 // localProvisioner implements the Provisioner interface for local binary-based provisioning
 type localProvisioner struct {
-	config  *provisionercfg.LocalProvisionerConfig
+	config  *LocalProvisionerConfig
 	dataDir string // Base data directory for this provisioner instance
 }
 
@@ -1725,7 +1724,7 @@ func (p *localProvisioner) DeprovisionDatabase(ctx context.Context, databaseName
 }
 
 // getTopologyConfig extracts topology configuration from provisioner config
-func (p *localProvisioner) getTopologyConfig() (*provisionercfg.TopologyConfig, error) {
+func (p *localProvisioner) getTopologyConfig() (*TopologyConfig, error) {
 	if p.config == nil {
 		return nil, fmt.Errorf("provisioner config not set")
 	}
@@ -1734,7 +1733,7 @@ func (p *localProvisioner) getTopologyConfig() (*provisionercfg.TopologyConfig, 
 }
 
 // getAllCells returns all configured cells
-func (p *localProvisioner) getAllCells() ([]provisionercfg.CellConfig, error) {
+func (p *localProvisioner) getAllCells() ([]CellConfig, error) {
 	if p.config == nil {
 		return nil, fmt.Errorf("provisioner config not set")
 	}
@@ -1778,7 +1777,7 @@ func (p *localProvisioner) getCellIndex(cellName string) (int, error) {
 }
 
 // getCellByName returns the cell configuration for a specific cell name
-func (p *localProvisioner) getCellByName(cellName string) (*provisionercfg.CellConfig, error) {
+func (p *localProvisioner) getCellByName(cellName string) (*CellConfig, error) {
 	if p.config == nil {
 		return nil, fmt.Errorf("provisioner config not set")
 	}
@@ -1800,7 +1799,7 @@ func (p *localProvisioner) getCellByName(cellName string) (*provisionercfg.CellC
 // ValidateConfig validates the local provisioner configuration
 func (p *localProvisioner) ValidateConfig(config map[string]any) error {
 	// Convert to typed configuration for validation
-	typedConfig := &provisionercfg.LocalProvisionerConfig{}
+	typedConfig := &LocalProvisionerConfig{}
 	yamlData, err := yaml.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
@@ -1848,7 +1847,7 @@ func UnixPathMax() int {
 }
 
 // validateUnixSocketPathLength validates that Unix socket paths won't exceed system limits
-func (p *localProvisioner) validateUnixSocketPathLength(config *provisionercfg.LocalProvisionerConfig) error {
+func (p *localProvisioner) validateUnixSocketPathLength(config *LocalProvisionerConfig) error {
 	maxSocketPathLength := UnixPathMax()
 
 	// Convert root working dir to absolute path for accurate length calculation
@@ -1889,7 +1888,7 @@ func (p *localProvisioner) validateUnixSocketPathLength(config *provisionercfg.L
 }
 
 // validateBinaryPaths validates that all configured binary paths exist and are executable
-func (p *localProvisioner) validateBinaryPaths(config *provisionercfg.LocalProvisionerConfig) error {
+func (p *localProvisioner) validateBinaryPaths(config *LocalProvisionerConfig) error {
 	var errors []string
 
 	// Validate global service binaries
@@ -1979,7 +1978,7 @@ func (p *localProvisioner) validateSystemBinaries() error {
 // NewLocalProvisioner creates a new local provisioner instance
 func NewLocalProvisioner() (provisioner.Provisioner, error) {
 	p := &localProvisioner{
-		config: &provisionercfg.LocalProvisionerConfig{},
+		config: &LocalProvisionerConfig{},
 	}
 
 	return p, nil

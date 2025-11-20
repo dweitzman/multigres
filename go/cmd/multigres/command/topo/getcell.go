@@ -27,8 +27,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"gopkg.in/yaml.v3"
 
-	"github.com/multigres/multigres/go/common/provisionercfg"
 	multiadminpb "github.com/multigres/multigres/go/pb/multiadmin"
+	"github.com/multigres/multigres/go/provisioner/local"
 )
 
 // AddGetCellCommand adds the getcell subcommand
@@ -121,7 +121,7 @@ func getAdminServerFromConfig(configPaths []string) (string, error) {
 			return "", fmt.Errorf("failed to marshal provisioner config: %w", err)
 		}
 
-		var localConfig provisionercfg.LocalProvisionerConfig
+		var localConfig local.LocalProvisionerConfig
 		if err := yaml.Unmarshal(yamlData, &localConfig); err != nil {
 			return "", fmt.Errorf("failed to unmarshal local provisioner config: %w", err)
 		}
