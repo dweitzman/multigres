@@ -58,7 +58,7 @@ pb: $(PROTO_SRCS)
 # Ported from vitess/Makefile:174-175 sqlparser generation
 parser:
 	@echo "$$(date): Generating PostgreSQL parser from grammar and AST helpers"
-	go generate ./go/parser/...
+	go generate ./go/common/parser/...
 	@echo "Parser and ast helpers generation completed"
 
 generate: parser
