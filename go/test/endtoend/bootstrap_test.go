@@ -337,16 +337,11 @@ func createEmptyNode(t *testing.T, baseDir, cell, shard, database string, index 
 
 	// Start pgctld server
 	logFile := filepath.Join(dataDir, "pgctld.log")
-	pgctldCmd := exec.Command("pgctld", "server",
+	pgctldCmd := utils.CommandContext(t, t.Context(), baseDir, "pgctld", "server",
 		"--pooler-dir", dataDir,
 		"--grpc-port", fmt.Sprintf("%d", pgctldGrpcPort),
 		"--pg-port", fmt.Sprintf("%d", pgPort),
 		"--log-output", logFile)
-
-	// Set MULTIGRES_TESTDATA_DIR for directory-deletion triggered cleanup
-	pgctldCmd.Env = append(os.Environ(),
-		"MULTIGRES_TESTDATA_DIR="+baseDir,
-	)
 
 	require.NoError(t, pgctldCmd.Start())
 	t.Logf("Started pgctld for %s (pid: %d, grpc: %d, pg: %d)", name, pgctldCmd.Process.Pid, pgctldGrpcPort, pgPort)
@@ -356,7 +351,7 @@ func createEmptyNode(t *testing.T, baseDir, cell, shard, database string, index 
 
 	// Start multipooler
 	serviceID := fmt.Sprintf("%s/%s", cell, name)
-	multipoolerCmd := exec.Command("multipooler",
+	multipoolerCmd := utils.CommandContext(t, t.Context(), baseDir, "multipooler",
 		"--grpc-port", fmt.Sprintf("%d", grpcPort),
 		"--database", database,
 		"--table-group", "test", // table group is required

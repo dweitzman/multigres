@@ -151,27 +151,18 @@ timeout: 30
 		pgPort := testutil.GenerateRandomPort()
 		t.Logf("gRPC test using ports - gRPC: %d, PostgreSQL: %d", grpcPort, pgPort)
 
-		// Start gRPC server in background
-		serverCmd := exec.Command("pgctld", "server",
+		// Start gRPC server
+		serverCmd := utils.CommandContext(t, t.Context(), tempDir, "pgctld", "server",
 			"--pooler-dir", dataDir,
 			"--grpc-port", strconv.Itoa(grpcPort),
 			"--pg-port", strconv.Itoa(pgPort),
 			"--config-file", pgctldConfigFile)
 
-		// Set MULTIGRES_TESTDATA_DIR for directory-deletion triggered cleanup
-		serverCmd.Env = append(os.Environ(),
-			"MULTIGRES_TESTDATA_DIR="+tempDir,
-			"PGCONNECT_TIMEOUT=5",
-		)
+		// Add additional environment variables
+		serverCmd.Env = append(serverCmd.Env, "PGCONNECT_TIMEOUT=5")
 
 		err := serverCmd.Start()
 		require.NoError(t, err)
-		defer func() {
-			if serverCmd.Process != nil {
-				_ = serverCmd.Process.Kill()
-				_ = serverCmd.Wait()
-			}
-		}()
 
 		deadline := time.Now().Add(20 * time.Second)
 		serverStarted := false
@@ -1088,18 +1079,16 @@ func TestOrphanDetectionWithRealPostgreSQL(t *testing.T) {
 	require.NoError(t, initCmd.Run())
 
 	// Start pgctld server subprocess with orphan detection enabled
-	serverCmd := exec.Command("pgctld", "server",
+	serverCmd := utils.CommandContext(t, t.Context(), dataDir, "pgctld", "server",
 		"--pooler-dir", dataDir,
 		"--grpc-port", strconv.Itoa(grpcPort),
 		"--pg-port", strconv.Itoa(pgPort),
 		"--config-file", pgctldConfigFile)
 
-	// Set MULTIGRES_TESTDATA_DIR for directory-deletion triggered cleanup
 	// Add endtoend directory to PATH so run_command_if_parent_dies.sh can be found
 	endtoendDir, err := filepath.Abs(".")
 	require.NoError(t, err)
-	serverCmd.Env = append(os.Environ(),
-		"MULTIGRES_TESTDATA_DIR="+dataDir,
+	serverCmd.Env = append(serverCmd.Env,
 		"PGCONNECT_TIMEOUT=5",
 		"PATH="+endtoendDir+":"+os.Getenv("PATH"))
 	require.NoError(t, serverCmd.Start())
