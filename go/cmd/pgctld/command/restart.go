@@ -20,8 +20,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/multigres/multigres/go/common/viperutil"
 	"github.com/multigres/multigres/go/services/pgctld"
-	"github.com/multigres/multigres/go/viperutil"
 
 	"github.com/spf13/cobra"
 )

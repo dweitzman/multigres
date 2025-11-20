@@ -19,9 +19,9 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/multigres/multigres/go/common/servenv"
 	multipoolerpb "github.com/multigres/multigres/go/pb/multipoolerservice"
 	querypb "github.com/multigres/multigres/go/pb/query"
-	"github.com/multigres/multigres/go/servenv"
 	"github.com/multigres/multigres/go/services/multipooler/poolerserver"
 )
 

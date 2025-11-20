@@ -21,6 +21,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/multigres/multigres/go/common/provisionercfg"
 )
 
 func TestGeneratePgBackRestConfigs(t *testing.T) {
@@ -29,12 +31,12 @@ func TestGeneratePgBackRestConfigs(t *testing.T) {
 
 		// Create a minimal config
 		p := &localProvisioner{
-			config: &LocalProvisionerConfig{
+			config: &provisionercfg.LocalProvisionerConfig{
 				RootWorkingDir: tmpDir,
 				BackupRepoPath: filepath.Join(tmpDir, "data", "backups"),
-				Cells: map[string]CellServicesConfig{
+				Cells: map[string]provisionercfg.CellServicesConfig{
 					"zone1": {
-						Multipooler: MultipoolerConfig{
+						Multipooler: provisionercfg.MultipoolerConfig{
 							ServiceID:  "test-service-1",
 							Database:   "postgres",
 							TableGroup: "default",
@@ -44,7 +46,7 @@ func TestGeneratePgBackRestConfigs(t *testing.T) {
 						},
 					},
 					"zone2": {
-						Multipooler: MultipoolerConfig{
+						Multipooler: provisionercfg.MultipoolerConfig{
 							ServiceID:  "test-service-2",
 							Database:   "postgres",
 							TableGroup: "default",
@@ -97,12 +99,12 @@ func TestGeneratePgBackRestConfigs(t *testing.T) {
 
 		// Create config without BackupConf specified
 		p := &localProvisioner{
-			config: &LocalProvisionerConfig{
+			config: &provisionercfg.LocalProvisionerConfig{
 				RootWorkingDir: tmpDir,
 				BackupRepoPath: "", // Empty - should use default
-				Cells: map[string]CellServicesConfig{
+				Cells: map[string]provisionercfg.CellServicesConfig{
 					"zone1": {
-						Multipooler: MultipoolerConfig{
+						Multipooler: provisionercfg.MultipoolerConfig{
 							ServiceID:  "test-service",
 							Database:   "postgres",
 							TableGroup: "default",
@@ -146,11 +148,11 @@ func TestGeneratePgBackRestConfigs(t *testing.T) {
 		tmpDir := t.TempDir()
 
 		// Create config with 3 cells
-		cells := make(map[string]CellServicesConfig)
+		cells := make(map[string]provisionercfg.CellServicesConfig)
 		for i := 1; i <= 3; i++ {
 			cellName := filepath.Join(tmpDir, "pooler", string(rune('0'+i)))
-			cells[cellName] = CellServicesConfig{
-				Multipooler: MultipoolerConfig{
+			cells[cellName] = provisionercfg.CellServicesConfig{
+				Multipooler: provisionercfg.MultipoolerConfig{
 					ServiceID:  "service-" + string(rune('0'+i)),
 					Database:   "postgres",
 					TableGroup: "default",
@@ -164,7 +166,7 @@ func TestGeneratePgBackRestConfigs(t *testing.T) {
 		}
 
 		p := &localProvisioner{
-			config: &LocalProvisionerConfig{
+			config: &provisionercfg.LocalProvisionerConfig{
 				RootWorkingDir: tmpDir,
 				BackupRepoPath: filepath.Join(tmpDir, "data", "backups"),
 				Cells:          cells,
@@ -198,12 +200,12 @@ func TestGeneratePgBackRestConfigs(t *testing.T) {
 		backupPath := filepath.Join(tmpDir, "custom-backups")
 
 		p := &localProvisioner{
-			config: &LocalProvisionerConfig{
+			config: &provisionercfg.LocalProvisionerConfig{
 				RootWorkingDir: tmpDir,
 				BackupRepoPath: backupPath,
-				Cells: map[string]CellServicesConfig{
+				Cells: map[string]provisionercfg.CellServicesConfig{
 					"zone1": {
-						Multipooler: MultipoolerConfig{
+						Multipooler: provisionercfg.MultipoolerConfig{
 							ServiceID:  "test",
 							Database:   "postgres",
 							TableGroup: "default",
@@ -234,12 +236,12 @@ func TestGeneratePgBackRestConfigs(t *testing.T) {
 		// Create 3 cells with predictable names (alphabetically sorted)
 		// to ensure consistent pg2/pg3 ordering
 		p := &localProvisioner{
-			config: &LocalProvisionerConfig{
+			config: &provisionercfg.LocalProvisionerConfig{
 				RootWorkingDir: tmpDir,
 				BackupRepoPath: filepath.Join(tmpDir, "data", "backups"),
-				Cells: map[string]CellServicesConfig{
+				Cells: map[string]provisionercfg.CellServicesConfig{
 					"cell-a": {
-						Multipooler: MultipoolerConfig{
+						Multipooler: provisionercfg.MultipoolerConfig{
 							ServiceID:  "service-a",
 							Database:   "postgres",
 							TableGroup: "default",
@@ -249,7 +251,7 @@ func TestGeneratePgBackRestConfigs(t *testing.T) {
 						},
 					},
 					"cell-b": {
-						Multipooler: MultipoolerConfig{
+						Multipooler: provisionercfg.MultipoolerConfig{
 							ServiceID:  "service-b",
 							Database:   "postgres",
 							TableGroup: "default",
@@ -259,7 +261,7 @@ func TestGeneratePgBackRestConfigs(t *testing.T) {
 						},
 					},
 					"cell-c": {
-						Multipooler: MultipoolerConfig{
+						Multipooler: provisionercfg.MultipoolerConfig{
 							ServiceID:  "service-c",
 							Database:   "postgres",
 							TableGroup: "default",

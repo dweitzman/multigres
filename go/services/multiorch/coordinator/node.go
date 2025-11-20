@@ -18,7 +18,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/multigres/multigres/go/clustermetadata/topo"
+	"github.com/multigres/multigres/go/common/clustermetadata/topo"
 	"github.com/multigres/multigres/go/common/rpcclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 )

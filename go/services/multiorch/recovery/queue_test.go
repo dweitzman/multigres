@@ -24,8 +24,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/multigres/multigres/go/common/viperutil"
 	"github.com/multigres/multigres/go/services/multiorch/config"
-	"github.com/multigres/multigres/go/viperutil"
 )
 
 func TestQueue(t *testing.T) {

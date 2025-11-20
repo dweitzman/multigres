@@ -21,9 +21,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/multigres/multigres/go/parser/ast"
+	"github.com/multigres/multigres/go/common/parser/ast"
+	"github.com/multigres/multigres/go/common/pgprotocol/server"
 	"github.com/multigres/multigres/go/pb/query"
-	"github.com/multigres/multigres/go/pgprotocol/server"
 )
 
 // mockExecutor is a mock implementation of the Executor interface for testing.

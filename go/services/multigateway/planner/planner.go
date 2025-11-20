@@ -19,7 +19,7 @@ package planner
 import (
 	"log/slog"
 
-	"github.com/multigres/multigres/go/pgprotocol/server"
+	"github.com/multigres/multigres/go/common/pgprotocol/server"
 	"github.com/multigres/multigres/go/services/multigateway/engine"
 )
 

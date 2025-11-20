@@ -22,13 +22,13 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
-	"github.com/multigres/multigres/go/clustermetadata/topo"
-	"github.com/multigres/multigres/go/clustermetadata/toporeg"
+	"github.com/multigres/multigres/go/common/clustermetadata/topo"
+	"github.com/multigres/multigres/go/common/clustermetadata/toporeg"
 	"github.com/multigres/multigres/go/common/rpcclient"
-	"github.com/multigres/multigres/go/servenv"
+	"github.com/multigres/multigres/go/common/servenv"
+	"github.com/multigres/multigres/go/common/viperutil"
 	"github.com/multigres/multigres/go/services/multiorch/config"
 	"github.com/multigres/multigres/go/services/multiorch/recovery"
-	"github.com/multigres/multigres/go/viperutil"
 )
 
 type MultiOrch struct {

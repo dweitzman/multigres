@@ -26,9 +26,9 @@ import (
 
 	"github.com/lib/pq"
 
-	"github.com/multigres/multigres/go/clustermetadata/topo"
-	"github.com/multigres/multigres/go/mterrors"
-	"github.com/multigres/multigres/go/servenv"
+	"github.com/multigres/multigres/go/common/clustermetadata/topo"
+	"github.com/multigres/multigres/go/common/mterrors"
+	"github.com/multigres/multigres/go/common/servenv"
 	"github.com/multigres/multigres/go/services/multipooler/heartbeat"
 	"github.com/multigres/multigres/go/services/multipooler/poolerserver"
 	"github.com/multigres/multigres/go/tools/retry"

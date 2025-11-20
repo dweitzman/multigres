@@ -19,7 +19,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/multigres/multigres/go/clustermetadata/topo"
+	"github.com/multigres/multigres/go/common/clustermetadata/topo"
 	"github.com/multigres/multigres/go/pb/clustermetadata"
 	"github.com/multigres/multigres/go/services/multiorch/store"
 )

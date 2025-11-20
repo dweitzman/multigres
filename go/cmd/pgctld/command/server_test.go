@@ -29,8 +29,8 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	"github.com/multigres/multigres/go/cmd/pgctld/testutil"
+	"github.com/multigres/multigres/go/common/viperutil"
 	pb "github.com/multigres/multigres/go/pb/pgctldservice"
-	"github.com/multigres/multigres/go/viperutil"
 )
 
 func TestPgCtldServiceStart(t *testing.T) {

@@ -19,10 +19,10 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/multigres/multigres/go/parser"
-	"github.com/multigres/multigres/go/parser/ast"
+	"github.com/multigres/multigres/go/common/parser"
+	"github.com/multigres/multigres/go/common/parser/ast"
+	"github.com/multigres/multigres/go/common/pgprotocol/server"
 	"github.com/multigres/multigres/go/pb/query"
-	"github.com/multigres/multigres/go/pgprotocol/server"
 )
 
 // Executor defines the interface for query execution.

@@ -25,15 +25,15 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
-	"github.com/multigres/multigres/go/clustermetadata/topo"
-	"github.com/multigres/multigres/go/clustermetadata/toporeg"
-	"github.com/multigres/multigres/go/pgprotocol/server"
-	"github.com/multigres/multigres/go/servenv"
+	"github.com/multigres/multigres/go/common/clustermetadata/topo"
+	"github.com/multigres/multigres/go/common/clustermetadata/toporeg"
+	"github.com/multigres/multigres/go/common/pgprotocol/server"
+	"github.com/multigres/multigres/go/common/servenv"
+	"github.com/multigres/multigres/go/common/viperutil"
 	"github.com/multigres/multigres/go/services/multigateway/executor"
 	"github.com/multigres/multigres/go/services/multigateway/handler"
 	"github.com/multigres/multigres/go/services/multigateway/poolergateway"
 	"github.com/multigres/multigres/go/services/multigateway/scatterconn"
-	"github.com/multigres/multigres/go/viperutil"
 )
 
 type MultiGateway struct {

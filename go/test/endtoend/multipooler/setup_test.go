@@ -33,8 +33,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/multigres/multigres/go/clustermetadata/topo"
 	"github.com/multigres/multigres/go/cmd/pgctld/testutil"
+	"github.com/multigres/multigres/go/common/clustermetadata/topo"
 	"github.com/multigres/multigres/go/provisioner/local/pgbackrest"
 	"github.com/multigres/multigres/go/test/endtoend"
 	"github.com/multigres/multigres/go/test/utils"
@@ -46,7 +46,7 @@ import (
 	"github.com/multigres/multigres/go/pb/pgctldservice"
 
 	// Register topo plugins
-	_ "github.com/multigres/multigres/go/plugins/topo"
+	_ "github.com/multigres/multigres/go/common/plugins/topo"
 )
 
 var (

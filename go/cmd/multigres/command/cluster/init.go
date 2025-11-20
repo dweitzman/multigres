@@ -19,7 +19,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/multigres/multigres/go/clustermetadata/topo"
+	"github.com/multigres/multigres/go/common/clustermetadata/topo"
 	"github.com/multigres/multigres/go/provisioner"
 
 	"github.com/spf13/cobra"

@@ -29,9 +29,9 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/multigres/multigres/go/common/viperutil"
 	consensuspb "github.com/multigres/multigres/go/pb/consensus"
 	multipoolermanagerpb "github.com/multigres/multigres/go/pb/multipoolermanager"
-	"github.com/multigres/multigres/go/viperutil"
 )
 
 const defaultCapacity = 100

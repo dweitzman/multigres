@@ -17,7 +17,7 @@ package handler
 import (
 	"sync"
 
-	"github.com/multigres/multigres/go/parser/ast"
+	"github.com/multigres/multigres/go/common/parser/ast"
 )
 
 // PreparedStatement represents a prepared statement in the extended query protocol.

@@ -98,6 +98,7 @@ linters:
             - "!**/go/services/pgctld/**/*.go"
             - "!**/go/cmd/pgctld/*.go"
             - "!**/go/cmd/pgctld/**/*.go"
+            - "!**/go/test/**/*.go"
             - "**/*.go"
           list-mode: lax
           deny:
@@ -114,12 +115,12 @@ linters:
               desc: "provisioners should not depend on multigres logic aside from the topo"
           allow:
             - $gostd
-            - github.com/multigres/multigres/go/clustermetadata/topo
+            - github.com/multigres/multigres/go/common/clustermetadata/topo
+            - github.com/multigres/multigres/go/common/provisionercfg
             - github.com/multigres/multigres/go/tools
             - github.com/multigres/multigres/go/pb
             - github.com/multigres/multigres/go/provisioner
             - github.com/multigres/multigres/go/provisioner/local
-            - github.com/multigres/multigres/go/grpccommon
         use_modern_packages:
           list-mode: lax
           deny:

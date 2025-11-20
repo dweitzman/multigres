@@ -23,12 +23,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/multigres/multigres/go/clustermetadata/topo/memorytopo"
 	"github.com/multigres/multigres/go/cmd/pgctld/testutil"
-	"github.com/multigres/multigres/go/mterrors"
-	"github.com/multigres/multigres/go/servenv"
+	"github.com/multigres/multigres/go/common/clustermetadata/topo/memorytopo"
+	"github.com/multigres/multigres/go/common/mterrors"
+	"github.com/multigres/multigres/go/common/servenv"
+	"github.com/multigres/multigres/go/common/viperutil"
 	"github.com/multigres/multigres/go/services/multipooler/manager"
-	"github.com/multigres/multigres/go/viperutil"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

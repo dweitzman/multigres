@@ -21,8 +21,8 @@ import (
 
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/multigres/multigres/go/common/viperutil"
 	"github.com/multigres/multigres/go/tools/telemetry"
-	"github.com/multigres/multigres/go/viperutil"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"

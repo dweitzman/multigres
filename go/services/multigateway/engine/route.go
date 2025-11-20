@@ -18,8 +18,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/multigres/multigres/go/common/pgprotocol/server"
 	"github.com/multigres/multigres/go/pb/query"
-	"github.com/multigres/multigres/go/pgprotocol/server"
 )
 
 // Route is a primitive that routes a query to a specific tablegroup.

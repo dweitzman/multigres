@@ -22,15 +22,15 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
-	"github.com/multigres/multigres/go/clustermetadata/topo"
-	"github.com/multigres/multigres/go/clustermetadata/toporeg"
-	"github.com/multigres/multigres/go/servenv"
+	"github.com/multigres/multigres/go/common/clustermetadata/topo"
+	"github.com/multigres/multigres/go/common/clustermetadata/toporeg"
+	"github.com/multigres/multigres/go/common/servenv"
+	"github.com/multigres/multigres/go/common/viperutil"
 	"github.com/multigres/multigres/go/services/multipooler/grpcconsensusservice"
 	"github.com/multigres/multigres/go/services/multipooler/grpcmanagerservice"
 	"github.com/multigres/multigres/go/services/multipooler/grpcpoolerservice"
 	"github.com/multigres/multigres/go/services/multipooler/manager"
 	"github.com/multigres/multigres/go/tools/telemetry"
-	"github.com/multigres/multigres/go/viperutil"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 )
