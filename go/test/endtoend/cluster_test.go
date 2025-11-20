@@ -542,7 +542,7 @@ func TestMain(m *testing.M) {
 func executeInitCommand(t *testing.T, args []string) (string, error) {
 	// Prepare the full command: "multigres cluster init <args>"
 	cmdArgs := append([]string{"cluster", "init"}, args...)
-	cmd := exec.Command("multigres", cmdArgs...)
+	cmd := utils.CommandContext(t, t.Context(), "", "multigres", cmdArgs...)
 
 	output, err := cmd.CombinedOutput()
 	return string(output), err
@@ -738,12 +738,7 @@ func TestInitCommandConfigFileAlreadyExists(t *testing.T) {
 func executeStartCommand(t *testing.T, args []string, tempDir string) (string, error) {
 	// Prepare the full command: "multigres cluster start <args>"
 	cmdArgs := append([]string{"cluster", "start"}, args...)
-	cmd := exec.Command("multigres", cmdArgs...)
-
-	// Set MULTIGRES_TESTDATA_DIR for directory-deletion triggered cleanup
-	cmd.Env = append(os.Environ(),
-		"MULTIGRES_TESTDATA_DIR="+tempDir,
-	)
+	cmd := utils.CommandContext(t, t.Context(), tempDir, "multigres", cmdArgs...)
 
 	output, err := cmd.CombinedOutput()
 	return string(output), err
@@ -753,7 +748,7 @@ func executeStartCommand(t *testing.T, args []string, tempDir string) (string, e
 func executeStopCommand(t *testing.T, args []string) (string, error) {
 	// Prepare the full command: "multigres cluster down <args>"
 	cmdArgs := append([]string{"cluster", "stop"}, args...)
-	cmd := exec.Command("multigres", cmdArgs...)
+	cmd := utils.CommandContext(t, t.Context(), "", "multigres", cmdArgs...)
 
 	output, err := cmd.CombinedOutput()
 	return string(output), err
@@ -765,13 +760,11 @@ func testPostgreSQLConnection(t *testing.T, port int, zone string) {
 
 	t.Logf("Testing PostgreSQL connection on port %d (Zone %s)...", port, zone)
 
-	// Set up environment for psql command
-	env := os.Environ()
-	env = append(env, "PGPASSWORD=postgres")
-
 	// Execute psql command to test connectivity
-	cmd := exec.Command("psql", "-h", "localhost", "-p", fmt.Sprintf("%d", port), "-U", "postgres", "-d", "postgres", "-c", fmt.Sprintf("SELECT 'Zone %s PostgreSQL is working!' as status, version();", zone))
-	cmd.Env = env
+	cmd := utils.CommandContext(t, t.Context(), "", "psql", "-h", "localhost", "-p", fmt.Sprintf("%d", port), "-U", "postgres", "-d", "postgres", "-c", fmt.Sprintf("SELECT 'Zone %s PostgreSQL is working!' as status, version();", zone))
+
+	// Set up environment for psql command
+	cmd.Env = append(cmd.Env, "PGPASSWORD=postgres")
 
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, "PostgreSQL connection failed on port %d (Zone %s): %s", port, zone, string(output))
@@ -1031,7 +1024,7 @@ func TestClusterLifecycle(t *testing.T) {
 
 		// Try to run multipooler without --database flag (should fail)
 		t.Log("Testing multipooler without --database flag (should fail)...")
-		cmd := exec.Command("multipooler",
+		cmd := utils.CommandContext(t, t.Context(), tempDir, "multipooler",
 			"--topo-global-server-addresses", "fake-address",
 			"--topo-global-root", "fake-root",
 			"--topo-implementation", "etcd2",
@@ -1046,7 +1039,7 @@ func TestClusterLifecycle(t *testing.T) {
 
 		// Try to run multipooler with --database flag (should succeed with setup)
 		t.Log("Testing multipooler with --database flag (should not show database error)...")
-		cmd = exec.Command("multipooler", "--cell", "testcell", "--database", "testdb", "--help")
+		cmd = utils.CommandContext(t, t.Context(), "", "multipooler", "--cell", "testcell", "--database", "testdb", "--help")
 		output, err = cmd.CombinedOutput()
 		require.NoError(t, err)
 

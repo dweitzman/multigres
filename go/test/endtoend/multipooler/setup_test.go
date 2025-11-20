@@ -184,16 +184,14 @@ func (p *ProcessInstance) startPgctld(t *testing.T) error {
 	t.Logf("Data dir: %s, gRPC port: %d, PG port: %d", p.DataDir, p.GrpcPort, p.PgPort)
 
 	// Start the gRPC server
-	p.Process = exec.Command(p.Binary, "server",
+	p.Process = utils.CommandContext(t, t.Context(), filepath.Dir(p.DataDir), p.Binary, "server",
 		"--pooler-dir", p.DataDir,
 		"--grpc-port", strconv.Itoa(p.GrpcPort),
 		"--pg-port", strconv.Itoa(p.PgPort),
 		"--log-output", p.LogFile)
 
-	// Set MULTIGRES_TESTDATA_DIR for directory-deletion triggered cleanup
-	p.Process.Env = append(p.Environment,
-		"MULTIGRES_TESTDATA_DIR="+filepath.Dir(p.DataDir),
-	)
+	// Append additional environment variables
+	p.Process.Env = append(p.Process.Env, p.Environment...)
 
 	t.Logf("Running server command: %v", p.Process.Args)
 	if err := p.waitForStartup(t, 20*time.Second, 50); err != nil {
@@ -232,12 +230,10 @@ func (p *ProcessInstance) startMultipooler(t *testing.T) error {
 	}
 
 	// Start the multipooler server
-	p.Process = exec.Command(p.Binary, args...)
+	p.Process = utils.CommandContext(t, t.Context(), filepath.Dir(p.DataDir), p.Binary, args...)
 
-	// Set MULTIGRES_TESTDATA_DIR for directory-deletion triggered cleanup
-	p.Process.Env = append(p.Environment,
-		"MULTIGRES_TESTDATA_DIR="+filepath.Dir(p.DataDir),
-	)
+	// Append additional environment variables
+	p.Process.Env = append(p.Process.Env, p.Environment...)
 
 	t.Logf("Running multipooler command: %v", p.Process.Args)
 	return p.waitForStartup(t, 15*time.Second, 30)
@@ -738,7 +734,7 @@ func getSharedTestSetup(t *testing.T) *MultipoolerTestSetup {
 			setupError = fmt.Errorf("failed to create etcd data directory: %w", err)
 			return
 		}
-		etcdClientAddr, etcdCmd, err := startEtcdForSharedSetup(etcdDataDir)
+		etcdClientAddr, etcdCmd, err := startEtcdForSharedSetup(t, etcdDataDir)
 		if err != nil {
 			setupError = fmt.Errorf("failed to start etcd: %w", err)
 			return
@@ -840,7 +836,7 @@ func getSharedTestSetup(t *testing.T) *MultipoolerTestSetup {
 
 // startEtcdForSharedSetup starts etcd without registering t.Cleanup() handlers
 // since cleanup is handled manually by TestMain via cleanupSharedTestSetup()
-func startEtcdForSharedSetup(dataDir string) (string, *exec.Cmd, error) {
+func startEtcdForSharedSetup(t *testing.T, dataDir string) (string, *exec.Cmd, error) {
 	// Check if etcd is available in PATH
 	_, err := exec.LookPath("etcd")
 	if err != nil {
@@ -856,7 +852,7 @@ func startEtcdForSharedSetup(dataDir string) (string, *exec.Cmd, error) {
 	initialCluster := fmt.Sprintf("%v=%v", name, peerAddr)
 
 	// Wrap etcd with run_in_test to ensure cleanup if test process dies
-	cmd := exec.Command("run_in_test.sh", "etcd",
+	cmd := utils.CommandContext(t, t.Context(), dataDir, "run_in_test.sh", "etcd",
 		"-name", name,
 		"-advertise-client-urls", clientAddr,
 		"-initial-advertise-peer-urls", peerAddr,
@@ -864,11 +860,6 @@ func startEtcdForSharedSetup(dataDir string) (string, *exec.Cmd, error) {
 		"-listen-peer-urls", peerAddr,
 		"-initial-cluster", initialCluster,
 		"-data-dir", dataDir)
-
-	// Set MULTIGRES_TESTDATA_DIR for directory-deletion triggered cleanup
-	cmd.Env = append(os.Environ(),
-		"MULTIGRES_TESTDATA_DIR="+dataDir,
-	)
 
 	if err := cmd.Start(); err != nil {
 		return "", nil, fmt.Errorf("failed to start etcd: %w", err)
@@ -935,7 +926,7 @@ func setupStandbyReplication(t *testing.T, primaryPgctld *ProcessInstance, stand
 	// Note: pg_basebackup needs to write to the pg_data subdirectory, not the pooler-dir
 	// We do NOT use -R flag because we want to test SetPrimaryConnInfo RPC method later
 	t.Logf("Creating base backup from primary (port %d) to standby pg_data dir...", primaryPgctld.PgPort)
-	basebackupCmd := exec.Command("pg_basebackup",
+	basebackupCmd := utils.CommandContext(t, t.Context(), standbyPgctld.DataDir, "pg_basebackup",
 		"-h", "localhost",
 		"-p", strconv.Itoa(primaryPgctld.PgPort),
 		"-U", "postgres",
@@ -943,7 +934,7 @@ func setupStandbyReplication(t *testing.T, primaryPgctld *ProcessInstance, stand
 		"-X", "stream",
 		"-c", "fast")
 
-	basebackupCmd.Env = append(os.Environ(), "PGPASSWORD=postgres")
+	basebackupCmd.Env = append(basebackupCmd.Env, "PGPASSWORD=postgres")
 	output, err := basebackupCmd.CombinedOutput()
 	if err != nil {
 		t.Logf("pg_basebackup output: %s", string(output))

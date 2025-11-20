@@ -58,7 +58,7 @@ const (
 //	cmd := utils.CommandContext(t, ctx, tempDir, "myapp")
 //	require.NoError(t, cmd.Start())
 //	// MULTIGRES_TESTDATA_DIR is automatically set to tempDir
-func CommandContext(t *testing.T, ctx context.Context, testDataDir string, name string, arg ...string) *exec.Cmd {
+func CommandContext(t testing.TB, ctx context.Context, testDataDir string, name string, arg ...string) *exec.Cmd {
 	t.Helper()
 
 	cmd := exec.CommandContext(ctx, name, arg...)
