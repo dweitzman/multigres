@@ -55,3 +55,17 @@ func disallowMetricsConstructorArgs(m dsl.Matcher) {
 				m["params"].Text != "()").
 		Report("NewMetrics() in metrics.go should take no arguments to maintain isolation from service code. Return (*Metrics, error) and let caller handle logging.")
 }
+
+func requireUtilsCommandContextInTests(m dsl.Matcher) {
+	m.Import("os/exec")
+
+	// Disallow exec.Command in test files
+	m.Match(`exec.Command($*_)`).
+		Where(m.File().Name.Matches(`_test\.go$`)).
+		Report("Use utils.CommandContext() instead of exec.Command() in test files. It provides graceful termination with SIGTERM and automatic MULTIGRES_TESTDATA_DIR setup.")
+
+	// Disallow exec.CommandContext in test files
+	m.Match(`exec.CommandContext($*_)`).
+		Where(m.File().Name.Matches(`_test\.go$`)).
+		Report("Use utils.CommandContext() instead of exec.CommandContext() in test files. It provides graceful termination with SIGTERM and automatic MULTIGRES_TESTDATA_DIR setup.")
+}
