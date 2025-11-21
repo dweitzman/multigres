@@ -72,9 +72,12 @@ func CommandContext(t testing.TB, ctx context.Context, testDataDir string, name 
 	}
 	cmd.WaitDelay = DefaultWaitDelay
 
-	// Set up environment with test data directory if provided
+	// Always initialize cmd.Env with current environment to allow callers to safely append
+	cmd.Env = os.Environ()
+
+	// Add test data directory to environment if provided
 	if testDataDir != "" {
-		cmd.Env = append(os.Environ(), "MULTIGRES_TESTDATA_DIR="+testDataDir)
+		cmd.Env = append(cmd.Env, "MULTIGRES_TESTDATA_DIR="+testDataDir)
 	}
 
 	return cmd
