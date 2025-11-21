@@ -323,40 +323,76 @@ func (p *ProcessInstance) logRecentOutput(t *testing.T, context string) {
 	t.Logf("%s %s - Recent log output from %s:\n%s", p.Name, context, p.LogFile, logContent)
 }
 
-// Stop stops the process instance
+// Stop stops the process instance with graceful shutdown
 func (p *ProcessInstance) Stop() {
 	if p.Process == nil || p.Process.ProcessState != nil {
 		return // Process not running
 	}
 
 	// If this is pgctld, stop PostgreSQL first via gRPC
+	var pgStopErr error
 	if p.Binary == "pgctld" {
-		p.stopPostgreSQL()
+		pgStopErr = p.stopPostgreSQL()
 	}
 
-	// Then kill the process
-	_ = p.Process.Process.Kill()
-	_ = p.Process.Wait()
+	// Send SIGTERM for graceful shutdown (always blocking)
+	if err := p.Process.Process.Signal(syscall.SIGTERM); err != nil {
+		// Process may have already exited
+		_ = p.Process.Wait()
+		return
+	}
+
+	// Determine if we should block on the wait+kill sequence
+	// Block only if pgctld's PostgreSQL stop failed (critical situation)
+	shouldBlock := p.Binary == "pgctld" && pgStopErr != nil
+
+	waitAndKillFn := func() {
+		// Wait up to 2 seconds for graceful exit
+		done := make(chan error, 1)
+		go func() {
+			done <- p.Process.Wait()
+		}()
+
+		select {
+		case <-done:
+			// Exited gracefully
+			return
+		case <-time.After(2 * time.Second):
+			// Timeout, force kill
+			_ = p.Process.Process.Kill()
+			<-done // Wait for Wait() to complete
+		}
+	}
+
+	if shouldBlock {
+		// Blocking - PostgreSQL stop failed, wait synchronously
+		waitAndKillFn()
+	} else {
+		// Non-blocking - let it finish in background
+		go waitAndKillFn()
+	}
 }
 
-// stopPostgreSQL stops PostgreSQL via gRPC (best effort, no error handling)
-func (p *ProcessInstance) stopPostgreSQL() {
+// stopPostgreSQL stops PostgreSQL via gRPC
+// Returns nil if PostgreSQL was stopped successfully (or wasn't running)
+func (p *ProcessInstance) stopPostgreSQL() error {
 	conn, err := grpc.NewClient(
 		fmt.Sprintf("localhost:%d", p.GrpcPort),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	if err != nil {
-		return // Can't connect, nothing we can do
+		return fmt.Errorf("failed to connect to pgctld: %w", err)
 	}
 	defer conn.Close()
 
 	client := pgctldservice.NewPgCtldClient(conn)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Stop PostgreSQL
-	_, _ = client.Stop(ctx, &pgctldservice.StopRequest{Mode: "fast"})
+	// Stop PostgreSQL - this blocks until pg_ctl completes
+	_, err = client.Stop(ctx, &pgctldservice.StopRequest{Mode: "fast"})
+	return err
 }
 
 // createPgctldInstance creates a new pgctld instance configuration
