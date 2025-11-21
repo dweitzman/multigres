@@ -87,7 +87,7 @@ func StartEtcdWithOptions(t *testing.T, opts EtcdOptions) (string, *exec.Cmd) {
 	initialCluster := fmt.Sprintf("%v=%v", name, peerAddr)
 
 	// Wrap etcd with run_in_test.sh to ensure cleanup if test process dies
-	cmd := exec.Command("run_in_test.sh", "etcd",
+	cmd := utils.CommandContext(t, t.Context(), dataDir, "run_in_test.sh", "etcd",
 		"-name", name,
 		"-advertise-client-urls", clientAddr,
 		"-initial-advertise-peer-urls", peerAddr,
@@ -95,11 +95,6 @@ func StartEtcdWithOptions(t *testing.T, opts EtcdOptions) (string, *exec.Cmd) {
 		"-listen-peer-urls", peerAddr,
 		"-initial-cluster", initialCluster,
 		"-data-dir", dataDir)
-
-	// Set MULTIGRES_TESTDATA_DIR for directory-deletion triggered cleanup
-	cmd.Env = append(os.Environ(),
-		"MULTIGRES_TESTDATA_DIR="+dataDir,
-	)
 
 	err = cmd.Start()
 	require.NoError(t, err, "failed to start etcd")

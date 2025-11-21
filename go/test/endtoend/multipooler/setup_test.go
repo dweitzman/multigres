@@ -369,13 +369,14 @@ func createPgctldInstance(t *testing.T, name, baseDir string, grpcPort, pgPort i
 	require.NoError(t, err)
 
 	return &ProcessInstance{
-		Name:        name,
-		DataDir:     dataDir,
-		LogFile:     logFile,
-		GrpcPort:    grpcPort,
-		PgPort:      pgPort,
-		Binary:      "pgctld", // Assume binary is in PATH
-		Environment: append(os.Environ(), "PGCONNECT_TIMEOUT=5", "LC_ALL=en_US.UTF-8"),
+		Name:     name,
+		DataDir:  dataDir,
+		LogFile:  logFile,
+		GrpcPort: grpcPort,
+		PgPort:   pgPort,
+		Binary:   "pgctld", // Assume binary is in PATH
+		// Only store custom environment variables here; os.Environ() is already set by utils.CommandContext()
+		Environment: []string{"PGCONNECT_TIMEOUT=5", "LC_ALL=en_US.UTF-8"},
 	}
 }
 
@@ -389,17 +390,18 @@ func createMultipoolerInstance(t *testing.T, name, baseDir string, grpcPort int,
 	require.NoError(t, err)
 
 	return &ProcessInstance{
-		Name:        name,
-		ServiceID:   name, // ServiceID is just the name, cell is passed separately via --cell
-		LogFile:     logFile,
-		GrpcPort:    grpcPort,
-		PgPort:      pgPort,
-		PgctldAddr:  pgctldAddr,
-		DataDir:     pgctldDataDir, // Use the same data dir as pgctld for pooler-dir
-		EtcdAddr:    etcdAddr,
-		StanzaName:  stanzaName,    // pgBackRest stanza name
-		Binary:      "multipooler", // Assume binary is in PATH
-		Environment: append(os.Environ(), "PGCONNECT_TIMEOUT=5"),
+		Name:       name,
+		ServiceID:  name, // ServiceID is just the name, cell is passed separately via --cell
+		LogFile:    logFile,
+		GrpcPort:   grpcPort,
+		PgPort:     pgPort,
+		PgctldAddr: pgctldAddr,
+		DataDir:    pgctldDataDir, // Use the same data dir as pgctld for pooler-dir
+		EtcdAddr:   etcdAddr,
+		StanzaName: stanzaName,    // pgBackRest stanza name
+		Binary:     "multipooler", // Assume binary is in PATH
+		// Only store custom environment variables here; os.Environ() is already set by utils.CommandContext()
+		Environment: []string{"PGCONNECT_TIMEOUT=5"},
 	}
 }
 
