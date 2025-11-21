@@ -54,10 +54,6 @@ var (
 	sharedTestSetup *MultipoolerTestSetup
 	setupOnce       sync.Once
 	setupError      error
-	// sharedTestCtx is the context for shared infrastructure that lives across all tests
-	// It gets cancelled in TestMain after all tests complete
-	sharedTestCtx       context.Context
-	sharedTestCtxCancel context.CancelFunc
 )
 
 // TestMain sets the path and cleans up after all tests
@@ -76,25 +72,17 @@ func TestMain(m *testing.M) {
 	// MULTIGRES_TESTDATA_DIR for directory-deletion triggered cleanup.
 	os.Setenv("MULTIGRES_TEST_PARENT_PID", fmt.Sprintf("%d", os.Getpid()))
 
-	// Create a context for shared infrastructure that lives across all tests
-	// This context will be cancelled after all tests complete to trigger graceful shutdown
-	sharedTestCtx, sharedTestCtxCancel = context.WithCancel(context.Background())
-
 	// Set up signal handler to ensure cleanup on interrupt
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-sigChan
-		sharedTestCtxCancel() // Cancel context to trigger graceful shutdown
 		cleanupSharedTestSetup()
 		os.Exit(1)
 	}()
 
 	// Run all tests
 	exitCode := m.Run()
-
-	// Cancel the shared context to trigger graceful shutdown of processes
-	sharedTestCtxCancel()
 
 	// Clean up shared multipooler test infrastructure
 	cleanupSharedTestSetup()
@@ -726,6 +714,11 @@ func initializeStandby(ctx context.Context, t *testing.T, baseDir string, primar
 func getSharedTestSetup(t *testing.T) *MultipoolerTestSetup {
 	t.Helper()
 	setupOnce.Do(func() {
+		// Use context.Background() for shared infrastructure - processes will be stopped
+		// explicitly by cleanupSharedTestSetup(), not via context cancellation.
+		// This avoids race conditions where both context cancellation and Stop() try to Wait().
+		ctx := context.Background()
+
 		// Set the PATH so our binaries can be found (like cluster_test.go does)
 		// Use automatic module root detection instead of hard-coded relative paths
 		if err := pathutil.PrependBinToPath(); err != nil {
@@ -750,7 +743,7 @@ func getSharedTestSetup(t *testing.T) *MultipoolerTestSetup {
 			setupError = fmt.Errorf("failed to create etcd data directory: %w", err)
 			return
 		}
-		etcdClientAddr, etcdCmd, err := startEtcdForSharedSetup(t, etcdDataDir)
+		etcdClientAddr, etcdCmd, err := startEtcdForSharedSetup(ctx, t, etcdDataDir)
 		if err != nil {
 			setupError = fmt.Errorf("failed to start etcd: %w", err)
 			return
@@ -818,15 +811,13 @@ func getSharedTestSetup(t *testing.T) *MultipoolerTestSetup {
 		}
 
 		// Initialize primary (pgctld, PostgreSQL, pgbackrest, consensus term, multipooler, type)
-		// Use sharedTestCtx for shared infrastructure that lives across all tests
-		if err := initializePrimary(sharedTestCtx, t, tempDir, primaryPgctld, primaryMultipooler, standbyPgctld, stanzaName); err != nil {
+		if err := initializePrimary(ctx, t, tempDir, primaryPgctld, primaryMultipooler, standbyPgctld, stanzaName); err != nil {
 			setupError = err
 			return
 		}
 
 		// Initialize standby (pgctld, PostgreSQL with replication, consensus term, multipooler, type)
-		// Use sharedTestCtx for shared infrastructure that lives across all tests
-		if err := initializeStandby(sharedTestCtx, t, tempDir, primaryPgctld, standbyPgctld, standbyMultipooler, stanzaName); err != nil {
+		if err := initializeStandby(ctx, t, tempDir, primaryPgctld, standbyPgctld, standbyMultipooler, stanzaName); err != nil {
 			setupError = err
 			return
 		}
@@ -854,7 +845,7 @@ func getSharedTestSetup(t *testing.T) *MultipoolerTestSetup {
 
 // startEtcdForSharedSetup starts etcd without registering t.Cleanup() handlers
 // since cleanup is handled manually by TestMain via cleanupSharedTestSetup()
-func startEtcdForSharedSetup(t *testing.T, dataDir string) (string, *exec.Cmd, error) {
+func startEtcdForSharedSetup(ctx context.Context, t *testing.T, dataDir string) (string, *exec.Cmd, error) {
 	// Check if etcd is available in PATH
 	_, err := exec.LookPath("etcd")
 	if err != nil {
@@ -870,8 +861,7 @@ func startEtcdForSharedSetup(t *testing.T, dataDir string) (string, *exec.Cmd, e
 	initialCluster := fmt.Sprintf("%v=%v", name, peerAddr)
 
 	// Wrap etcd with run_in_test to ensure cleanup if test process dies
-	// Use sharedTestCtx for shared infrastructure that lives across all tests
-	cmd := utils.CommandContext(t, sharedTestCtx, dataDir, "run_in_test.sh", "etcd",
+	cmd := utils.CommandContext(t, ctx, dataDir, "run_in_test.sh", "etcd",
 		"-name", name,
 		"-advertise-client-urls", clientAddr,
 		"-initial-advertise-peer-urls", peerAddr,
