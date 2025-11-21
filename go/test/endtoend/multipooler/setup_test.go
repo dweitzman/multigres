@@ -54,6 +54,10 @@ var (
 	sharedTestSetup *MultipoolerTestSetup
 	setupOnce       sync.Once
 	setupError      error
+	// sharedTestCtx is the context for shared infrastructure that lives across all tests
+	// It gets cancelled in TestMain after all tests complete
+	sharedTestCtx       context.Context
+	sharedTestCtxCancel context.CancelFunc
 )
 
 // TestMain sets the path and cleans up after all tests
@@ -72,17 +76,25 @@ func TestMain(m *testing.M) {
 	// MULTIGRES_TESTDATA_DIR for directory-deletion triggered cleanup.
 	os.Setenv("MULTIGRES_TEST_PARENT_PID", fmt.Sprintf("%d", os.Getpid()))
 
+	// Create a context for shared infrastructure that lives across all tests
+	// This context will be cancelled after all tests complete to trigger graceful shutdown
+	sharedTestCtx, sharedTestCtxCancel = context.WithCancel(context.Background())
+
 	// Set up signal handler to ensure cleanup on interrupt
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-sigChan
+		sharedTestCtxCancel() // Cancel context to trigger graceful shutdown
 		cleanupSharedTestSetup()
 		os.Exit(1)
 	}()
 
 	// Run all tests
 	exitCode := m.Run()
+
+	// Cancel the shared context to trigger graceful shutdown of processes
+	sharedTestCtxCancel()
 
 	// Clean up shared multipooler test infrastructure
 	cleanupSharedTestSetup()
@@ -164,27 +176,28 @@ type MultipoolerTestSetup struct {
 }
 
 // Start starts the process instance (pgctld or multipooler)
-func (p *ProcessInstance) Start(t *testing.T) error {
+func (p *ProcessInstance) Start(ctx context.Context, t *testing.T) error {
 	t.Helper()
 
 	switch p.Binary {
 	case "pgctld":
-		return p.startPgctld(t)
+		return p.startPgctld(ctx, t)
 	case "multipooler":
-		return p.startMultipooler(t)
+		return p.startMultipooler(ctx, t)
 	}
 	return fmt.Errorf("unknown binary type: %s", p.Binary)
 }
 
 // startPgctld starts a pgctld instance (server only, PostgreSQL init/start done separately)
-func (p *ProcessInstance) startPgctld(t *testing.T) error {
+func (p *ProcessInstance) startPgctld(ctx context.Context, t *testing.T) error {
 	t.Helper()
 
 	t.Logf("Starting %s with binary '%s'", p.Name, p.Binary)
 	t.Logf("Data dir: %s, gRPC port: %d, PG port: %d", p.DataDir, p.GrpcPort, p.PgPort)
 
 	// Start the gRPC server
-	p.Process = utils.CommandContext(t, t.Context(), filepath.Dir(p.DataDir), p.Binary, "server",
+	// The provided context controls the process lifetime
+	p.Process = utils.CommandContext(t, ctx, filepath.Dir(p.DataDir), p.Binary, "server",
 		"--pooler-dir", p.DataDir,
 		"--grpc-port", strconv.Itoa(p.GrpcPort),
 		"--pg-port", strconv.Itoa(p.PgPort),
@@ -202,7 +215,7 @@ func (p *ProcessInstance) startPgctld(t *testing.T) error {
 }
 
 // startMultipooler starts a multipooler instance
-func (p *ProcessInstance) startMultipooler(t *testing.T) error {
+func (p *ProcessInstance) startMultipooler(ctx context.Context, t *testing.T) error {
 	t.Helper()
 
 	t.Logf("Starting %s: binary '%s', gRPC port %d, ServiceID %s", p.Name, p.Binary, p.GrpcPort, p.ServiceID)
@@ -230,7 +243,8 @@ func (p *ProcessInstance) startMultipooler(t *testing.T) error {
 	}
 
 	// Start the multipooler server
-	p.Process = utils.CommandContext(t, t.Context(), filepath.Dir(p.DataDir), p.Binary, args...)
+	// The provided context controls the process lifetime
+	p.Process = utils.CommandContext(t, ctx, filepath.Dir(p.DataDir), p.Binary, args...)
 
 	// Append additional environment variables
 	p.Process.Env = append(p.Process.Env, p.Environment...)
@@ -406,11 +420,11 @@ func createMultipoolerInstance(t *testing.T, name, baseDir string, grpcPort int,
 }
 
 // initializePrimary sets up the primary pgctld, PostgreSQL, consensus term, and multipooler
-func initializePrimary(t *testing.T, baseDir string, pgctld *ProcessInstance, multipooler *ProcessInstance, standbyPgctld *ProcessInstance, stanzaName string) error {
+func initializePrimary(ctx context.Context, t *testing.T, baseDir string, pgctld *ProcessInstance, multipooler *ProcessInstance, standbyPgctld *ProcessInstance, stanzaName string) error {
 	t.Helper()
 
 	// Start primary pgctld server
-	if err := pgctld.Start(t); err != nil {
+	if err := pgctld.Start(ctx, t); err != nil {
 		return fmt.Errorf("failed to start primary pgctld: %w", err)
 	}
 
@@ -513,7 +527,7 @@ archive_command = 'pgbackrest --stanza=%s --config=%s archive-push %%p'
 	t.Logf("Initialized pgbackrest stanza: %s", stanzaName)
 
 	// Start primary multipooler
-	if err := multipooler.Start(t); err != nil {
+	if err := multipooler.Start(ctx, t); err != nil {
 		return fmt.Errorf("failed to start primary multipooler: %w", err)
 	}
 
@@ -566,11 +580,11 @@ archive_command = 'pgbackrest --stanza=%s --config=%s archive-push %%p'
 }
 
 // initializeStandby sets up the standby pgctld, PostgreSQL (with replication), consensus term, and multipooler
-func initializeStandby(t *testing.T, baseDir string, primaryPgctld *ProcessInstance, standbyPgctld *ProcessInstance, standbyMultipooler *ProcessInstance, stanzaName string) error {
+func initializeStandby(ctx context.Context, t *testing.T, baseDir string, primaryPgctld *ProcessInstance, standbyPgctld *ProcessInstance, standbyMultipooler *ProcessInstance, stanzaName string) error {
 	t.Helper()
 
 	// Start standby pgctld server
-	if err := standbyPgctld.Start(t); err != nil {
+	if err := standbyPgctld.Start(ctx, t); err != nil {
 		return fmt.Errorf("failed to start standby pgctld: %w", err)
 	}
 
@@ -641,7 +655,7 @@ func initializeStandby(t *testing.T, baseDir string, primaryPgctld *ProcessInsta
 	// 3. The stanza was already created when initializing the primary
 
 	// Start standby multipooler
-	if err := standbyMultipooler.Start(t); err != nil {
+	if err := standbyMultipooler.Start(ctx, t); err != nil {
 		return fmt.Errorf("failed to start standby multipooler: %w", err)
 	}
 
@@ -804,13 +818,15 @@ func getSharedTestSetup(t *testing.T) *MultipoolerTestSetup {
 		}
 
 		// Initialize primary (pgctld, PostgreSQL, pgbackrest, consensus term, multipooler, type)
-		if err := initializePrimary(t, tempDir, primaryPgctld, primaryMultipooler, standbyPgctld, stanzaName); err != nil {
+		// Use sharedTestCtx for shared infrastructure that lives across all tests
+		if err := initializePrimary(sharedTestCtx, t, tempDir, primaryPgctld, primaryMultipooler, standbyPgctld, stanzaName); err != nil {
 			setupError = err
 			return
 		}
 
 		// Initialize standby (pgctld, PostgreSQL with replication, consensus term, multipooler, type)
-		if err := initializeStandby(t, tempDir, primaryPgctld, standbyPgctld, standbyMultipooler, stanzaName); err != nil {
+		// Use sharedTestCtx for shared infrastructure that lives across all tests
+		if err := initializeStandby(sharedTestCtx, t, tempDir, primaryPgctld, standbyPgctld, standbyMultipooler, stanzaName); err != nil {
 			setupError = err
 			return
 		}
@@ -854,7 +870,8 @@ func startEtcdForSharedSetup(t *testing.T, dataDir string) (string, *exec.Cmd, e
 	initialCluster := fmt.Sprintf("%v=%v", name, peerAddr)
 
 	// Wrap etcd with run_in_test to ensure cleanup if test process dies
-	cmd := utils.CommandContext(t, t.Context(), dataDir, "run_in_test.sh", "etcd",
+	// Use sharedTestCtx for shared infrastructure that lives across all tests
+	cmd := utils.CommandContext(t, sharedTestCtx, dataDir, "run_in_test.sh", "etcd",
 		"-name", name,
 		"-advertise-client-urls", clientAddr,
 		"-initial-advertise-peer-urls", peerAddr,
