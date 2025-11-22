@@ -1,8 +1,8 @@
 # Multigres Directory Structure Refactoring
 
-**Status**: In Progress
+**Status**: In Progress - Phase 2 (Small common packages)
 **Created**: 2025-11-21
-**Last Updated**: 2025-11-21
+**Last Updated**: 2025-11-22
 
 ## Overview
 
@@ -172,20 +172,25 @@ The exact order within each group can be adjusted based on active development to
 
 ## Detailed Task Breakdown
 
-### Phase 1: Add tools/ isolation rule
+### Phase 1: Add tools/ isolation rule ✅
 
-- [ ] **PR: Enforce tools/ isolation**
+- [x] **PR: Enforce tools/ isolation**
   - Add depguard rule preventing `go/tools/**` from importing any `github.com/multigres/multigres/go` packages
   - Rule allows: stdlib, external packages, other tools packages
   - Validation: `golangci-lint run --disable-all --enable=depguard`
+  - **Status**: Complete via PR #258
 
-### Phase 2: Move small common packages
+### Phase 2: Move small common packages (In Progress)
 
-- [ ] **PR: Small stable packages**
-  - Move `go/event` → `go/common/event`
-  - Move `go/fakepgdb` → `go/common/fakepgdb`
-  - Move `go/mterrors` → `go/common/mterrors`
-  - Move `go/plugins` → `go/common/plugins`
+- [x] **Moved to tools/** (Note: event and fakepgdb went to tools/ instead of common/ - they have no internal dependencies)
+  - Move `go/event` → `go/tools/event` ✅
+  - Move `go/fakepgdb` → `go/tools/fakepgdb` ✅
+
+- [x] **Moved to common/**
+  - Move `go/mterrors` → `go/common/mterrors` ✅
+  - Move `go/plugins` → `go/common/plugins` ✅
+
+- [ ] **TODO: Complete Phase 2**
   - Move `go/web` → `go/common/web`
   - Update imports throughout codebase
   - Run tests and build all binaries
