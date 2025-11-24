@@ -887,7 +887,7 @@ func (t *TypeName) SqlString() string {
 		var modStrs []string
 
 		// Special handling for INTERVAL types
-		if strings.ToLower(typeName) == "interval" && t.Typmods.Len() >= 1 {
+		if strings.EqualFold(typeName, "interval") && t.Typmods.Len() >= 1 {
 			if firstMod, ok := t.Typmods.Items[0].(*Integer); ok {
 				if firstMod.IVal == INTERVAL_FULL_RANGE {
 					// Skip the INTERVAL_FULL_RANGE (first modifier) and only include the precision (second modifier)

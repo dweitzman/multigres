@@ -118,7 +118,7 @@ func (p *localProvisioner) checkEtcdHealth(ctx context.Context, address string) 
 	defer cancel()
 
 	url := fmt.Sprintf("http://%s/health", address)
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, http.NoBody)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
@@ -141,7 +141,7 @@ func (p *localProvisioner) checkDebugConfigEndpoint(ctx context.Context, address
 	defer cancel()
 
 	url := fmt.Sprintf("http://%s/live", address)
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, http.NoBody)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}

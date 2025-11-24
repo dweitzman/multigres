@@ -636,7 +636,7 @@ func (f *FuncCall) SqlString() string {
 		for i, item := range f.Funcname.Items {
 			if part, ok := item.(*String); ok && part != nil {
 				// Skip pg_catalog schema for built-in functions
-				if i == 0 && strings.ToLower(part.SVal) == "pg_catalog" {
+				if i == 0 && strings.EqualFold(part.SVal, "pg_catalog") {
 					continue
 				}
 
@@ -751,7 +751,7 @@ func (f *FuncCall) SqlString() string {
 
 	// Handle special function syntax
 	var result string
-	if strings.ToLower(funcName) == "extract" && len(argStrs) >= 2 {
+	if strings.EqualFold(funcName, "extract") && len(argStrs) >= 2 {
 		// EXTRACT function uses special syntax: EXTRACT(field FROM source)
 		// The first argument should be the field name without quotes, the second is the source
 		field := argStrs[0]
@@ -761,7 +761,7 @@ func (f *FuncCall) SqlString() string {
 		}
 		// Use lowercase for function name to match PostgreSQL style
 		result = fmt.Sprintf("extract(%s FROM %s)", field, strings.Join(argStrs[1:], ", "))
-	} else if strings.ToLower(funcName) == "substring" && f.Funcformat == COERCE_SQL_SYNTAX {
+	} else if strings.EqualFold(funcName, "substring") && f.Funcformat == COERCE_SQL_SYNTAX {
 		// SUBSTRING function with SQL standard syntax: SUBSTRING(string FROM start [FOR length])
 		if len(argStrs) >= 3 {
 			// SUBSTRING(string FROM start FOR length)
@@ -773,7 +773,7 @@ func (f *FuncCall) SqlString() string {
 			// Fallback to regular function call
 			result = fmt.Sprintf("%s(%s)", funcName, funcArgs)
 		}
-	} else if strings.ToLower(funcName) == "position" && f.Funcformat == COERCE_SQL_SYNTAX {
+	} else if strings.EqualFold(funcName, "position") && f.Funcformat == COERCE_SQL_SYNTAX {
 		// POSITION function with SQL standard syntax: POSITION(substring IN string)
 		// Note: Parser reorders arguments to [string, substring], so we need to swap them back
 		if len(argStrs) >= 2 {
@@ -783,7 +783,7 @@ func (f *FuncCall) SqlString() string {
 			// Fallback to regular function call
 			result = fmt.Sprintf("%s(%s)", funcName, funcArgs)
 		}
-	} else if strings.ToLower(funcName) == "overlay" && f.Funcformat == COERCE_SQL_SYNTAX {
+	} else if strings.EqualFold(funcName, "overlay") && f.Funcformat == COERCE_SQL_SYNTAX {
 		// OVERLAY function with SQL standard syntax: OVERLAY(string PLACING substring FROM start [FOR length])
 		if len(argStrs) >= 4 {
 			// OVERLAY(string PLACING substring FROM start FOR length)
@@ -795,7 +795,7 @@ func (f *FuncCall) SqlString() string {
 			// Fallback to regular function call
 			result = fmt.Sprintf("%s(%s)", funcName, funcArgs)
 		}
-	} else if strings.ToLower(funcName) == "normalize" && f.Args != nil && len(f.Args.Items) >= 2 {
+	} else if strings.EqualFold(funcName, "normalize") && f.Args != nil && len(f.Args.Items) >= 2 {
 		// NORMALIZE function: normalize(string [, form])
 		// The second argument is an A_Const containing the normalization form as a keyword
 		normalForm := argStrs[1] // Default to the string representation
@@ -813,7 +813,7 @@ func (f *FuncCall) SqlString() string {
 			// normalize(string, form)
 			result = fmt.Sprintf("normalize(%s, %s)", argStrs[0], normalForm)
 		}
-	} else if strings.ToLower(funcName) == "is_normalized" {
+	} else if strings.EqualFold(funcName, "is_normalized") {
 		if len(f.Args.Items) == 2 {
 			normalForm := argStrs[1] // Default to the string representation
 			if constNode, ok := f.Args.Items[1].(*A_Const); ok && constNode.Val != nil {
@@ -827,10 +827,10 @@ func (f *FuncCall) SqlString() string {
 		} else {
 			result = fmt.Sprintf("%s is normalized", argStrs[0])
 		}
-	} else if strings.ToLower(funcName) == "system_user" && len(argStrs) == 0 {
+	} else if strings.EqualFold(funcName, "system_user") && len(argStrs) == 0 {
 		// SYSTEM_USER function call with no arguments should be deparsed as SYSTEM_USER (SQL value function)
 		result = "SYSTEM_USER"
-	} else if strings.ToLower(funcName) == "xmlexists" && f.Funcformat == COERCE_SQL_SYNTAX {
+	} else if strings.EqualFold(funcName, "xmlexists") && f.Funcformat == COERCE_SQL_SYNTAX {
 		// xmlexists function with SQL syntax: xmlexists(xpath PASSING [BY REF] document [BY REF])
 		// The grammar converts xmlexists(A PASSING [BY REF] B [BY REF]) to xmlexists(A, B, ...)
 		// We restore the xmlexists syntax using BY REF as separator between arguments

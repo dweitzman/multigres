@@ -75,11 +75,14 @@ linters:
         - nilness
         - unusedwrite
         - loopclosure
+      enable:
+        # - fieldalignment
+        # - shadow
     gocritic:
       # TODO(dweitzman): Re-enable default checks. Some of them seem worthwhile.
-      disable-all: true
-      enabled-checks:
-        - ruleguard
+      enable-all: true
+      disabled-checks:
+        - importShadow
       settings:
         ruleguard:
           rules: "go/tools/ruleguard/rules.go"

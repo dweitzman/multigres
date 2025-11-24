@@ -2695,7 +2695,7 @@ func (n *CreateAssertionStmt) String() string {
 				if str, ok := item.(*String); ok {
 					names = append(names, str.SVal)
 				} else {
-					names = append(names, fmt.Sprintf("%v", item))
+					names = append(names, item.String())
 				}
 			}
 		}
@@ -2710,7 +2710,7 @@ func (n *CreateAssertionStmt) String() string {
 		// Add constraint attributes if any
 		for i := 0; i < n.ConstraintAttrSpec.Len(); i++ {
 			if attr := n.ConstraintAttrSpec.Items[i]; attr != nil {
-				parts = append(parts, fmt.Sprintf("%v", attr))
+				parts = append(parts, attr.String())
 			}
 		}
 	}

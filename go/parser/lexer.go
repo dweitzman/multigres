@@ -181,7 +181,7 @@ func (l *Lexer) peekUescapeValue() (string, error) {
 
 	// Skip the UESCAPE keyword
 	ident := l.peekNextIdentifier()
-	if strings.ToLower(ident) != "uescape" {
+	if !strings.EqualFold(ident, "uescape") {
 		return "", fmt.Errorf("expected UESCAPE keyword")
 	}
 	l.skipIdentifier()
@@ -233,7 +233,7 @@ func (l *Lexer) consumeUescapeTokens() {
 	// Skip whitespace and consume UESCAPE keyword
 	_ = l.skipWhitespace()
 	ident := l.peekNextIdentifier()
-	if strings.ToLower(ident) == "uescape" {
+	if strings.EqualFold(ident, "uescape") {
 		l.skipIdentifier()
 	}
 

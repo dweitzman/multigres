@@ -138,7 +138,7 @@ func TestServEnvTelemetryIntegration(t *testing.T) {
 		// Make HTTP request with parent context
 		// http.DefaultClient is instrumented (creates client span)
 		// ServEnv HTTP server is instrumented with otelhttp.NewHandler (creates server span)
-		req, err := http.NewRequestWithContext(parentCtx, "GET", httpURL+"/live", nil)
+		req, err := http.NewRequestWithContext(parentCtx, "GET", httpURL+"/live", http.NoBody)
 		require.NoError(t, err)
 
 		resp, err := http.DefaultClient.Do(req)

@@ -647,7 +647,7 @@ func formatSubscriptionOption(d *DefElem) string {
 		// Special handling for specific subscription options
 		switch optionName {
 		case "slot_name":
-			if strings.ToLower(arg.SVal) == "none" {
+			if strings.EqualFold(arg.SVal, "none") {
 				return optionName + " = NONE"
 			}
 			return optionName + " = " + arg.SVal
