@@ -6,7 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Multigres is a Vitess-style distributed database proxy for PostgreSQL. It provides horizontal scaling, connection pooling, and cluster orchestration for PostgreSQL deployments.
 
-## Build Commands
+## Getting Started
+
+### Build Commands
 
 ```bash
 make tools      # Install build dependencies (protoc, goyacc, etc.)
@@ -20,14 +22,14 @@ make test-race  # Run tests with race detector
 make clean      # Remove build artifacts
 ```
 
-## Running a Single Test
+### Running Tests
 
 ```bash
 go test -v -run TestName ./go/path/to/package/...
 go test -v ./go/multipooler/...  # Run all tests in a package
 ```
 
-## Local Development Cluster
+### Local Development Cluster
 
 ```bash
 ./bin/multigres cluster init    # Initialize local cluster
@@ -36,7 +38,12 @@ go test -v ./go/multipooler/...  # Run all tests in a package
 ./bin/multigres cluster status  # Check service status
 ```
 
-Configuration for local development is in `multigres_local/multigres.yaml`.
+Configuration: `multigres_local/multigres.yaml`
+
+### Development Workflow
+
+- Run `make proto` after modifying `.proto` files
+- Run `make build` before running integration tests
 
 ## Architecture
 
@@ -52,7 +59,7 @@ Configuration for local development is in `multigres_local/multigres.yaml`.
 ### Key Packages
 
 - **go/pgprotocol/** - PostgreSQL wire protocol implementation (server/client, buffer pooling)
-- **go/parser/** - PostgreSQL SQL parser (43% complete AST implementation, sufficient for parsing)
+- **go/parser/** - PostgreSQL SQL parser (partial AST implementation, sufficient for query analysis)
 - **go/clustermetadata/** - Cluster topology and metadata management
 - **go/servenv/** - Service environment (config, logging, HTTP/gRPC setup)
 - **go/viperutil/** - Configuration utilities using Viper
@@ -98,17 +105,6 @@ This is mission-critical infrastructure. Prioritize reliability, security, and m
 - Use `sync.Pool` for frequently allocated objects in hot paths (see `go/pgprotocol/server/`)
 - Profile before optimizing; measure after
 
-### Testing
-
-- High test coverage required across:
-  - **Query path**: Protocol handling, connection pooling, routing
-  - **Management plane**: Multipooler manager operations, state transitions
-  - **Orchestration**: Failover, promotion/demotion, consensus
-- Fast, reliable failover is essential - test failure scenarios thoroughly
-- Test error paths, not just happy paths
-- Use `bufconn.Listener` for fast gRPC unit tests, real TCP for integration tests
-- Mock services: embed `pb.UnimplementedXxxServer`, track calls for assertions
-
 ### Security
 
 - Validate all external input at system boundaries
@@ -144,17 +140,15 @@ Ungraceful termination causes real problems:
 - Using the service lifecycle hooks for shutdown logic
 - Reserving `os.Exit()` for truly unrecoverable initialization failures
 
-## Code Style
+## Code Patterns
+
+### Formatting and Linting
 
 - Go 1.25+
 - Formatting: gofumpt + goimports (local prefix: `github.com/multigres`)
 - Linting: golangci-lint with custom ruleguard rules in `go/tools/ruleguard/rules.go`
 - Use `math/rand/v2` not `math/rand`
 - Protobufs follow [Google Cloud API Design Guide](https://cloud.google.com/apis/design/)
-
-### SQL Queries
-
-Define SQL queries in separate helper files rather than inline. This keeps queries visible and modifiable in one place without reading through service logic.
 
 ### Context Usage
 
@@ -169,6 +163,10 @@ Propagate existing context to preserve cancellation and telemetry (tracing spans
 
 Use `*Context()` log methods (e.g., `InfoContext()` over `Info()`) to propagate telemetry data like trace IDs.
 
+### SQL Queries
+
+Define SQL queries in separate helper files rather than inline. This keeps queries visible and modifiable in one place without reading through service logic.
+
 ### Retry Logic
 
 Use `go/tools/retry.Retry` for exponential backoff instead of custom solutions.
@@ -177,13 +175,31 @@ Use `go/tools/retry.Retry` for exponential backoff instead of custom solutions.
 
 Follow OpenTelemetry naming conventions for metrics, attributes, and span names. Separate metric definitions from instrumented code. Telemetry data is a form of API—aim for clean, useful, stable output.
 
-## Testing Notes
+## Testing
 
-- End-to-end tests in `go/test/endtoend/` require PostgreSQL binaries (initdb, postgres, pg_ctl, pg_isready)
-- Use `-short` flag to skip tests requiring real PostgreSQL
+### Coverage Requirements
+
+High test coverage required across:
+
+- **Query path**: Protocol handling, connection pooling, routing
+- **Management plane**: Multipooler manager operations, state transitions
+- **Orchestration**: Failover, promotion/demotion, consensus
+
+Fast, reliable failover is essential—test failure scenarios thoroughly. Test error paths, not just happy paths.
+
+### Test Patterns
+
+- Use `bufconn.Listener` for fast gRPC unit tests, real TCP for integration tests
+- Mock services: embed `pb.UnimplementedXxxServer`, track calls for assertions
 - Prefer `require.Eventually()` over `time.Sleep()` to minimize unnecessary waiting
 
-### Test Subprocess Management
+### End-to-End Tests
+
+- Located in `go/test/endtoend/`
+- Require PostgreSQL binaries: `initdb`, `postgres`, `pg_ctl`, `pg_isready`
+- Use `-short` flag to skip tests requiring real PostgreSQL
+
+### Subprocess Management
 
 End-to-end tests spawn subprocesses (postgres, etcd, services) that must be cleaned up reliably:
 
@@ -196,8 +212,3 @@ When writing tests that spawn processes:
 - Always register cleanup in `t.Cleanup()`
 - Use graceful termination (see Process Termination section)
 - Set `MULTIGRES_TESTDATA_DIR` and `MULTIGRES_TEST_PARENT_PID` for orphan detection
-
-## Development Workflow
-
-- Run `make proto` after modifying `.proto` files
-- Run `make build` before running integration tests
