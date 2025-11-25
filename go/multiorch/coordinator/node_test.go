@@ -31,25 +31,25 @@ func TestCreateNode(t *testing.T) {
 
 	t.Run("success - creates node with valid pooler info", func(t *testing.T) {
 		poolerInfo := &topo.MultiPoolerInfo{
-			MultiPooler: &clustermetadatapb.MultiPooler{
-				Id: &clustermetadatapb.ID{
+			MultiPooler: clustermetadatapb.MultiPooler_builder{
+				Id: clustermetadatapb.ID_builder{
 					Component: clustermetadatapb.ID_MULTIPOOLER,
 					Cell:      "zone1",
 					Name:      "mp1",
-				},
+				}.Build(),
 				Hostname: "localhost",
 				PortMap: map[string]int32{
 					"grpc": 9000,
 				},
 				Shard: "shard0",
-			},
+			}.Build(),
 		}
 
 		node, err := CreateNode(ctx, fakeClient, poolerInfo)
 		require.NoError(t, err)
 		require.NotNil(t, node)
-		require.Equal(t, "mp1", node.ID.Name)
-		require.Equal(t, "zone1", node.ID.Cell)
+		require.Equal(t, "mp1", node.ID.GetName())
+		require.Equal(t, "zone1", node.ID.GetCell())
 		require.Equal(t, "localhost", node.Hostname)
 		require.Equal(t, int32(9000), node.Port)
 		require.Equal(t, "shard0", node.ShardID)
@@ -65,39 +65,39 @@ func TestCreateNodes(t *testing.T) {
 	t.Run("success - creates multiple nodes", func(t *testing.T) {
 		poolerInfos := []*topo.MultiPoolerInfo{
 			{
-				MultiPooler: &clustermetadatapb.MultiPooler{
-					Id: &clustermetadatapb.ID{
+				MultiPooler: clustermetadatapb.MultiPooler_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      "zone1",
 						Name:      "mp1",
-					},
+					}.Build(),
 					Hostname: "localhost",
 					PortMap: map[string]int32{
 						"grpc": 9000,
 					},
 					Shard: "shard0",
-				},
+				}.Build(),
 			},
 			{
-				MultiPooler: &clustermetadatapb.MultiPooler{
-					Id: &clustermetadatapb.ID{
+				MultiPooler: clustermetadatapb.MultiPooler_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      "zone1",
 						Name:      "mp2",
-					},
+					}.Build(),
 					Hostname: "localhost",
 					PortMap: map[string]int32{
 						"grpc": 9001,
 					},
 					Shard: "shard0",
-				},
+				}.Build(),
 			},
 		}
 
 		nodes, err := CreateNodes(ctx, fakeClient, poolerInfos)
 		require.NoError(t, err)
 		require.Len(t, nodes, 2)
-		require.Equal(t, "mp1", nodes[0].ID.Name)
-		require.Equal(t, "mp2", nodes[1].ID.Name)
+		require.Equal(t, "mp1", nodes[0].ID.GetName())
+		require.Equal(t, "mp2", nodes[1].ID.GetName())
 	})
 }

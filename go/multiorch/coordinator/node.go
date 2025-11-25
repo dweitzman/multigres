@@ -52,10 +52,10 @@ func CreateNode(ctx context.Context, rpcClient rpcclient.MultiPoolerClient, pool
 	pooler := poolerInfo.MultiPooler
 
 	node := &Node{
-		ID:        poolerInfo.Id,
-		Hostname:  poolerInfo.Hostname,
-		Port:      poolerInfo.PortMap["grpc"],
-		ShardID:   poolerInfo.Shard,
+		ID:        poolerInfo.GetId(),
+		Hostname:  poolerInfo.GetHostname(),
+		Port:      poolerInfo.GetPortMap()["grpc"],
+		ShardID:   poolerInfo.GetShard(),
 		RpcClient: rpcClient,
 		Pooler:    pooler,
 	}

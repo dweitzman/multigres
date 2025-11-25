@@ -65,16 +65,16 @@ func (h *testHandler) HandleExecute(ctx context.Context, conn *Conn, portalName 
 		return h.executeFunc(ctx, conn, portalName, maxRows, callback)
 	}
 	// Return a simple result for testing via callback.
-	return callback(ctx, &query.QueryResult{
+	return callback(ctx, query.QueryResult_builder{
 		Fields: []*query.Field{
-			{Name: "id", DataTypeOid: 23},
-			{Name: "name", DataTypeOid: 25},
+			query.Field_builder{Name: "id", DataTypeOid: 23}.Build(),
+			query.Field_builder{Name: "name", DataTypeOid: 25}.Build(),
 		},
 		Rows: []*query.Row{
-			{Values: [][]byte{[]byte("1"), []byte("test")}},
+			query.Row_builder{Values: [][]byte{[]byte("1"), []byte("test")}}.Build(),
 		},
 		CommandTag: "SELECT 1",
-	})
+	}.Build())
 }
 
 func (h *testHandler) HandleDescribe(ctx context.Context, conn *Conn, typ byte, name string) (*query.StatementDescription, error) {

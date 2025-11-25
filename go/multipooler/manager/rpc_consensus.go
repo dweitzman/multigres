@@ -65,32 +65,32 @@ func (pm *MultiPoolerManager) BeginTerm(ctx context.Context, req *consensusdatap
 		return nil, fmt.Errorf("failed to get term: %w", err)
 	}
 
-	response := &consensusdatapb.BeginTermResponse{
+	response := consensusdatapb.BeginTermResponse_builder{
 		Term:     currentTerm,
 		Accepted: false,
 		PoolerId: pm.serviceID.GetName(),
-	}
+	}.Build()
 
 	// Reject if term is outdated
-	if req.Term < currentTerm {
+	if req.GetTerm() < currentTerm {
 		return response, nil
 	}
 
 	// Check if we've already accepted this term from a different coordinator
-	if req.Term == currentTerm && term != nil && term.AcceptedTermFromCoordinatorId != nil {
+	if req.GetTerm() == currentTerm && term != nil && term.HasAcceptedTermFromCoordinatorId() {
 		// Compare full ID (component, cell, name) not just name
-		if !proto.Equal(term.AcceptedTermFromCoordinatorId, req.CandidateId) {
+		if !proto.Equal(term.GetAcceptedTermFromCoordinatorId(), req.GetCandidateId()) {
 			return response, nil
 		}
 	}
 
 	// Update term if needed (only if req.Term > currentTerm)
 	// This will reset AcceptedTermFromCoordinatorId to nil
-	if req.Term > currentTerm {
-		if err := pm.validateAndUpdateTerm(ctx, req.Term, false); err != nil {
+	if req.GetTerm() > currentTerm {
+		if err := pm.validateAndUpdateTerm(ctx, req.GetTerm(), false); err != nil {
 			return nil, fmt.Errorf("failed to update term: %w", err)
 		}
-		response.Term = req.Term
+		response.SetTerm(req.GetTerm())
 	}
 
 	// TODO: Use pooler serving state to decide whether to accept
@@ -109,11 +109,11 @@ func (pm *MultiPoolerManager) BeginTerm(ctx context.Context, req *consensusdatap
 	}
 
 	// Accept term from coordinator atomically (checks, saves to disk, updates memory)
-	if err := cs.AcceptCandidateAndSave(ctx, req.CandidateId); err != nil {
+	if err := cs.AcceptCandidateAndSave(ctx, req.GetCandidateId()); err != nil {
 		return nil, fmt.Errorf("failed to accept term from coordinator: %w", err)
 	}
 
-	response.Accepted = true
+	response.SetAccepted(true)
 	return response, nil
 }
 
@@ -138,9 +138,9 @@ func (pm *MultiPoolerManager) ConsensusStatus(ctx context.Context, req *consensu
 	isHealthy := pm.db != nil
 
 	// Get WAL position and determine role (primary/replica)
-	walPosition := &consensusdatapb.WALPosition{
+	walPosition := consensusdatapb.WALPosition_builder{
 		Timestamp: timestamppb.New(time.Now()),
-	}
+	}.Build()
 	role := "replica"
 
 	if isHealthy {
@@ -152,20 +152,20 @@ func (pm *MultiPoolerManager) ConsensusStatus(ctx context.Context, req *consensu
 				role = "primary"
 				currentLsn, err := pm.getPrimaryLSN(ctx)
 				if err == nil {
-					walPosition.CurrentLsn = currentLsn
+					walPosition.SetCurrentLsn(currentLsn)
 				}
 			} else {
 				// On standby: get receive and replay positions
 				status, err := pm.queryReplicationStatus(ctx)
 				if err == nil {
-					walPosition.LastReceiveLsn = status.LastReceiveLsn
-					walPosition.LastReplayLsn = status.LastReplayLsn
+					walPosition.SetLastReceiveLsn(status.GetLastReceiveLsn())
+					walPosition.SetLastReplayLsn(status.GetLastReplayLsn())
 				}
 			}
 		}
 	}
 
-	return &consensusdatapb.StatusResponse{
+	return consensusdatapb.StatusResponse_builder{
 		PoolerId:    pm.serviceID.GetName(),
 		CurrentTerm: localTerm,
 		WalPosition: walPosition,
@@ -173,7 +173,7 @@ func (pm *MultiPoolerManager) ConsensusStatus(ctx context.Context, req *consensu
 		IsEligible:  true, // TODO: implement eligibility logic based on policy
 		Cell:        pm.serviceID.GetCell(),
 		Role:        role,
-	}, nil
+	}.Build(), nil
 }
 
 // GetLeadershipView returns leadership information from the heartbeat table
@@ -189,11 +189,11 @@ func (pm *MultiPoolerManager) GetLeadershipView(ctx context.Context, req *consen
 		return nil, fmt.Errorf("failed to get leadership view: %w", err)
 	}
 
-	return &consensusdatapb.LeadershipViewResponse{
+	return consensusdatapb.LeadershipViewResponse_builder{
 		LeaderId:         view.LeaderID,
 		LastHeartbeat:    timestamppb.New(view.LastHeartbeat),
 		ReplicationLagNs: view.ReplicationLag.Nanoseconds(),
-	}, nil
+	}.Build(), nil
 }
 
 // CanReachPrimary checks if this node can reach the specified primary
@@ -201,10 +201,10 @@ func (pm *MultiPoolerManager) GetLeadershipView(ctx context.Context, req *consen
 // and verifying it's connected to the expected primary host/port
 func (pm *MultiPoolerManager) CanReachPrimary(ctx context.Context, req *consensusdatapb.CanReachPrimaryRequest) (*consensusdatapb.CanReachPrimaryResponse, error) {
 	if pm.db == nil {
-		return &consensusdatapb.CanReachPrimaryResponse{
+		return consensusdatapb.CanReachPrimaryResponse_builder{
 			Reachable:    false,
 			ErrorMessage: "database connection not available",
-		}, nil
+		}.Build(), nil
 	}
 
 	// Query pg_stat_wal_receiver to check if we can reach the primary
@@ -212,47 +212,47 @@ func (pm *MultiPoolerManager) CanReachPrimary(ctx context.Context, req *consensu
 	err := pm.db.QueryRowContext(ctx, "SELECT status, conninfo FROM pg_stat_wal_receiver").Scan(&status, &conninfo)
 	if err != nil {
 		// No rows returned means we're not receiving WAL (likely not a replica or not connected)
-		return &consensusdatapb.CanReachPrimaryResponse{
+		return consensusdatapb.CanReachPrimaryResponse_builder{
 			Reachable:    false,
 			ErrorMessage: "no active WAL receiver",
-		}, nil
+		}.Build(), nil
 	}
 
 	// If status is "stopping", the connection is not healthy
 	if status == "stopping" {
-		return &consensusdatapb.CanReachPrimaryResponse{
+		return consensusdatapb.CanReachPrimaryResponse_builder{
 			Reachable:    false,
 			ErrorMessage: "WAL receiver is stopping",
-		}, nil
+		}.Build(), nil
 	}
 
 	// Parse conninfo to extract host and port
 	parsedConnInfo, err := parseAndRedactPrimaryConnInfo(conninfo)
 	if err != nil {
-		return &consensusdatapb.CanReachPrimaryResponse{
+		return consensusdatapb.CanReachPrimaryResponse_builder{
 			Reachable:    false,
 			ErrorMessage: fmt.Sprintf("failed to parse conninfo: %v", err),
-		}, nil
+		}.Build(), nil
 	}
 
 	// Compare with requested primary host and port
-	if parsedConnInfo.Host != req.PrimaryHost {
-		return &consensusdatapb.CanReachPrimaryResponse{
+	if parsedConnInfo.GetHost() != req.GetPrimaryHost() {
+		return consensusdatapb.CanReachPrimaryResponse_builder{
 			Reachable:    false,
-			ErrorMessage: fmt.Sprintf("WAL receiver connected to different host: expected %s, got %s", req.PrimaryHost, parsedConnInfo.Host),
-		}, nil
+			ErrorMessage: fmt.Sprintf("WAL receiver connected to different host: expected %s, got %s", req.GetPrimaryHost(), parsedConnInfo.GetHost()),
+		}.Build(), nil
 	}
 
-	if parsedConnInfo.Port != req.PrimaryPort {
-		return &consensusdatapb.CanReachPrimaryResponse{
+	if parsedConnInfo.GetPort() != req.GetPrimaryPort() {
+		return consensusdatapb.CanReachPrimaryResponse_builder{
 			Reachable:    false,
-			ErrorMessage: fmt.Sprintf("WAL receiver connected to different port: expected %d, got %d", req.PrimaryPort, parsedConnInfo.Port),
-		}, nil
+			ErrorMessage: fmt.Sprintf("WAL receiver connected to different port: expected %d, got %d", req.GetPrimaryPort(), parsedConnInfo.GetPort()),
+		}.Build(), nil
 	}
 
 	// WAL receiver is active and connected to the expected primary
-	return &consensusdatapb.CanReachPrimaryResponse{
+	return consensusdatapb.CanReachPrimaryResponse_builder{
 		Reachable:    true,
 		ErrorMessage: "",
-	}, nil
+	}.Build(), nil
 }

@@ -49,19 +49,19 @@ func TestManagerServiceMethods_NotImplemented(t *testing.T) {
 	defer cleanupPgctld()
 
 	// Create the multipooler in topology so manager can reach ready state
-	serviceID := &clustermetadata.ID{
+	serviceID := clustermetadata.ID_builder{
 		Component: clustermetadata.ID_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-service",
-	}
-	multipooler := &clustermetadata.MultiPooler{
+	}.Build()
+	multipooler := clustermetadata.MultiPooler_builder{
 		Id:            serviceID,
 		Database:      "testdb",
 		Hostname:      "localhost",
 		PortMap:       map[string]int32{"grpc": 8080},
 		Type:          clustermetadata.PoolerType_PRIMARY,
 		ServingStatus: clustermetadata.PoolerServingStatus_SERVING,
-	}
+	}.Build()
 	require.NoError(t, ts.CreateMultiPooler(ctx, multipooler))
 
 	config := &manager.Config{
@@ -127,11 +127,11 @@ func TestManagerServiceMethods_ManagerNotReady(t *testing.T) {
 
 	// Create manager but DON'T create multipooler in topo and DON'T start it
 	// This keeps the manager in "starting" state
-	serviceID := &clustermetadata.ID{
+	serviceID := clustermetadata.ID_builder{
 		Component: clustermetadata.ID_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-service",
-	}
+	}.Build()
 
 	config := &manager.Config{
 		TopoClient: ts,
@@ -155,10 +155,10 @@ func TestManagerServiceMethods_ManagerNotReady(t *testing.T) {
 		{
 			name: "SetPrimaryConnInfo",
 			method: func() error {
-				req := &multipoolermanagerdata.SetPrimaryConnInfoRequest{
+				req := multipoolermanagerdata.SetPrimaryConnInfoRequest_builder{
 					Host: "primary.example.com",
 					Port: 5432,
-				}
+				}.Build()
 				_, err := svc.SetPrimaryConnInfo(ctx, req)
 				return err
 			},
@@ -198,18 +198,18 @@ func TestManagerServiceMethods_ManagerNotReady(t *testing.T) {
 		{
 			name: "ConfigureSynchronousReplication",
 			method: func() error {
-				req := &multipoolermanagerdata.ConfigureSynchronousReplicationRequest{
+				req := multipoolermanagerdata.ConfigureSynchronousReplicationRequest_builder{
 					SynchronousCommit: multipoolermanagerdata.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 					SynchronousMethod: multipoolermanagerdata.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 					NumSync:           1,
 					StandbyIds: []*clustermetadata.ID{
-						{
+						clustermetadata.ID_builder{
 							Component: clustermetadata.ID_MULTIPOOLER,
 							Cell:      "zone1",
 							Name:      "standby1",
-						},
+						}.Build(),
 					},
-				}
+				}.Build()
 				_, err := svc.ConfigureSynchronousReplication(ctx, req)
 				return err
 			},
@@ -217,19 +217,19 @@ func TestManagerServiceMethods_ManagerNotReady(t *testing.T) {
 		{
 			name: "UpdateSynchronousStandbyList",
 			method: func() error {
-				req := &multipoolermanagerdata.UpdateSynchronousStandbyListRequest{
+				req := multipoolermanagerdata.UpdateSynchronousStandbyListRequest_builder{
 					Operation: multipoolermanagerdata.StandbyUpdateOperation_STANDBY_UPDATE_OPERATION_ADD,
 					StandbyIds: []*clustermetadata.ID{
-						{
+						clustermetadata.ID_builder{
 							Component: clustermetadata.ID_MULTIPOOLER,
 							Cell:      "zone1",
 							Name:      "standby1",
-						},
+						}.Build(),
 					},
 					ReloadConfig:  true,
 					ConsensusTerm: 0,
 					Force:         true,
-				}
+				}.Build()
 				_, err := svc.UpdateSynchronousStandbyList(ctx, req)
 				return err
 			},
@@ -245,10 +245,10 @@ func TestManagerServiceMethods_ManagerNotReady(t *testing.T) {
 		{
 			name: "StopReplicationAndGetStatus",
 			method: func() error {
-				req := &multipoolermanagerdata.StopReplicationAndGetStatusRequest{
+				req := multipoolermanagerdata.StopReplicationAndGetStatusRequest_builder{
 					Mode: multipoolermanagerdata.ReplicationPauseMode_REPLICATION_PAUSE_MODE_REPLAY_ONLY,
 					Wait: true,
-				}
+				}.Build()
 				_, err := svc.StopReplicationAndGetStatus(ctx, req)
 				return err
 			},
@@ -256,9 +256,9 @@ func TestManagerServiceMethods_ManagerNotReady(t *testing.T) {
 		{
 			name: "ChangeType",
 			method: func() error {
-				req := &multipoolermanagerdata.ChangeTypeRequest{
+				req := multipoolermanagerdata.ChangeTypeRequest_builder{
 					PoolerType: clustermetadata.PoolerType_PRIMARY,
-				}
+				}.Build()
 				_, err := svc.ChangeType(ctx, req)
 				return err
 			},

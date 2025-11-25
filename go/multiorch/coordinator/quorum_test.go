@@ -29,11 +29,11 @@ func TestValidateAnyNQuorum(t *testing.T) {
 	c := &Coordinator{logger: logger}
 
 	t.Run("success - exact count", func(t *testing.T) {
-		rule := &clustermetadatapb.QuorumRule{
+		rule := clustermetadatapb.QuorumRule_builder{
 			QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_ANY_N,
 			RequiredCount: 2,
 			Description:   "Any 2 nodes",
-		}
+		}.Build()
 
 		cohort := []*Node{
 			createTestNode("mp1", "cell1"),
@@ -51,11 +51,11 @@ func TestValidateAnyNQuorum(t *testing.T) {
 	})
 
 	t.Run("success - more than required", func(t *testing.T) {
-		rule := &clustermetadatapb.QuorumRule{
+		rule := clustermetadatapb.QuorumRule_builder{
 			QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_ANY_N,
 			RequiredCount: 2,
 			Description:   "Any 2 nodes",
-		}
+		}.Build()
 
 		cohort := []*Node{
 			createTestNode("mp1", "cell1"),
@@ -70,11 +70,11 @@ func TestValidateAnyNQuorum(t *testing.T) {
 	})
 
 	t.Run("error - insufficient nodes", func(t *testing.T) {
-		rule := &clustermetadatapb.QuorumRule{
+		rule := clustermetadatapb.QuorumRule_builder{
 			QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_ANY_N,
 			RequiredCount: 3,
 			Description:   "Any 3 nodes",
-		}
+		}.Build()
 
 		cohort := []*Node{
 			createTestNode("mp1", "cell1"),
@@ -94,11 +94,11 @@ func TestValidateAnyNQuorum(t *testing.T) {
 	})
 
 	t.Run("success - single node quorum", func(t *testing.T) {
-		rule := &clustermetadatapb.QuorumRule{
+		rule := clustermetadatapb.QuorumRule_builder{
 			QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_ANY_N,
 			RequiredCount: 1,
 			Description:   "Any 1 node",
-		}
+		}.Build()
 
 		cohort := []*Node{
 			createTestNode("mp1", "cell1"),
@@ -116,11 +116,11 @@ func TestValidateMultiCellQuorum(t *testing.T) {
 	c := &Coordinator{logger: logger}
 
 	t.Run("success - exactly required cells", func(t *testing.T) {
-		rule := &clustermetadatapb.QuorumRule{
+		rule := clustermetadatapb.QuorumRule_builder{
 			QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_MULTI_CELL_ANY_N,
 			RequiredCount: 2,
 			Description:   "At least 1 node from 2 cells",
-		}
+		}.Build()
 
 		recruited := []*Node{
 			createTestNode("mp1", "us-west-1a"),
@@ -132,11 +132,11 @@ func TestValidateMultiCellQuorum(t *testing.T) {
 	})
 
 	t.Run("success - more than required cells", func(t *testing.T) {
-		rule := &clustermetadatapb.QuorumRule{
+		rule := clustermetadatapb.QuorumRule_builder{
 			QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_MULTI_CELL_ANY_N,
 			RequiredCount: 2,
 			Description:   "At least 1 node from 2 cells",
-		}
+		}.Build()
 
 		recruited := []*Node{
 			createTestNode("mp1", "us-west-1a"),
@@ -149,11 +149,11 @@ func TestValidateMultiCellQuorum(t *testing.T) {
 	})
 
 	t.Run("success - multiple nodes from same cell", func(t *testing.T) {
-		rule := &clustermetadatapb.QuorumRule{
+		rule := clustermetadatapb.QuorumRule_builder{
 			QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_MULTI_CELL_ANY_N,
 			RequiredCount: 2,
 			Description:   "At least 1 node from 2 cells",
-		}
+		}.Build()
 
 		recruited := []*Node{
 			createTestNode("mp1", "us-west-1a"),
@@ -166,11 +166,11 @@ func TestValidateMultiCellQuorum(t *testing.T) {
 	})
 
 	t.Run("error - insufficient cells", func(t *testing.T) {
-		rule := &clustermetadatapb.QuorumRule{
+		rule := clustermetadatapb.QuorumRule_builder{
 			QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_MULTI_CELL_ANY_N,
 			RequiredCount: 3,
 			Description:   "At least 1 node from 3 cells",
-		}
+		}.Build()
 
 		recruited := []*Node{
 			createTestNode("mp1", "us-west-1a"),
@@ -184,11 +184,11 @@ func TestValidateMultiCellQuorum(t *testing.T) {
 	})
 
 	t.Run("error - all nodes from same cell", func(t *testing.T) {
-		rule := &clustermetadatapb.QuorumRule{
+		rule := clustermetadatapb.QuorumRule_builder{
 			QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_MULTI_CELL_ANY_N,
 			RequiredCount: 2,
 			Description:   "At least 1 node from 2 cells",
-		}
+		}.Build()
 
 		recruited := []*Node{
 			createTestNode("mp1", "us-west-1a"),
@@ -203,11 +203,11 @@ func TestValidateMultiCellQuorum(t *testing.T) {
 	})
 
 	t.Run("success - single cell requirement", func(t *testing.T) {
-		rule := &clustermetadatapb.QuorumRule{
+		rule := clustermetadatapb.QuorumRule_builder{
 			QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_MULTI_CELL_ANY_N,
 			RequiredCount: 1,
 			Description:   "At least 1 node from 1 cell",
-		}
+		}.Build()
 
 		recruited := []*Node{
 			createTestNode("mp1", "us-west-1a"),
@@ -223,11 +223,11 @@ func TestValidateQuorum(t *testing.T) {
 	c := &Coordinator{logger: logger}
 
 	t.Run("ANY_N - delegates to validateAnyNQuorum", func(t *testing.T) {
-		rule := &clustermetadatapb.QuorumRule{
+		rule := clustermetadatapb.QuorumRule_builder{
 			QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_ANY_N,
 			RequiredCount: 2,
 			Description:   "Any 2 nodes",
-		}
+		}.Build()
 
 		cohort := []*Node{
 			createTestNode("mp1", "cell1"),
@@ -241,11 +241,11 @@ func TestValidateQuorum(t *testing.T) {
 	})
 
 	t.Run("MULTI_CELL_ANY_N - delegates to validateMultiCellQuorum", func(t *testing.T) {
-		rule := &clustermetadatapb.QuorumRule{
+		rule := clustermetadatapb.QuorumRule_builder{
 			QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_MULTI_CELL_ANY_N,
 			RequiredCount: 2,
 			Description:   "At least 1 node from 2 cells",
-		}
+		}.Build()
 
 		cohort := []*Node{
 			createTestNode("mp1", "us-west-1a"),
@@ -259,11 +259,11 @@ func TestValidateQuorum(t *testing.T) {
 	})
 
 	t.Run("error - unknown quorum type", func(t *testing.T) {
-		rule := &clustermetadatapb.QuorumRule{
+		rule := clustermetadatapb.QuorumRule_builder{
 			QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_UNKNOWN,
 			RequiredCount: 2,
 			Description:   "Unknown quorum type",
-		}
+		}.Build()
 
 		cohort := []*Node{
 			createTestNode("mp1", "cell1"),
@@ -280,10 +280,10 @@ func TestValidateQuorum(t *testing.T) {
 // createTestNode creates a test node with minimal configuration
 func createTestNode(name, cell string) *Node {
 	return &Node{
-		ID: &clustermetadatapb.ID{
+		ID: clustermetadatapb.ID_builder{
 			Component: clustermetadatapb.ID_MULTIPOOLER,
 			Cell:      cell,
 			Name:      name,
-		},
+		}.Build(),
 	}
 }

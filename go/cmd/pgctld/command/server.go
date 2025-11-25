@@ -182,7 +182,7 @@ func NewPgCtldService(logger *slog.Logger, pgPort int, pgUser string, pgDatabase
 }
 
 func (s *PgCtldService) Start(ctx context.Context, req *pb.StartRequest) (*pb.StartResponse, error) {
-	s.logger.InfoContext(ctx, "gRPC Start request", "port", req.Port)
+	s.logger.InfoContext(ctx, "gRPC Start request", "port", req.GetPort())
 
 	// Check if data directory is initialized
 	if !pgctld.IsDataDirInitialized(s.poolerDir) {
@@ -196,14 +196,14 @@ func (s *PgCtldService) Start(ctx context.Context, req *pb.StartRequest) (*pb.St
 		return nil, fmt.Errorf("failed to start PostgreSQL: %w", err)
 	}
 
-	return &pb.StartResponse{
+	return pb.StartResponse_builder{
 		Pid:     int32(result.PID),
 		Message: result.Message,
-	}, nil
+	}.Build(), nil
 }
 
 func (s *PgCtldService) Stop(ctx context.Context, req *pb.StopRequest) (*pb.StopResponse, error) {
-	s.logger.InfoContext(ctx, "gRPC Stop request", "mode", req.Mode)
+	s.logger.InfoContext(ctx, "gRPC Stop request", "mode", req.GetMode())
 
 	// Check if data directory is initialized
 	if !pgctld.IsDataDirInitialized(s.poolerDir) {
@@ -212,18 +212,18 @@ func (s *PgCtldService) Stop(ctx context.Context, req *pb.StopRequest) (*pb.Stop
 	}
 
 	// Use the pre-configured PostgreSQL config for stop operation
-	result, err := StopPostgreSQLWithResult(s.logger, s.config, req.Mode)
+	result, err := StopPostgreSQLWithResult(s.logger, s.config, req.GetMode())
 	if err != nil {
 		return nil, fmt.Errorf("failed to stop PostgreSQL: %w", err)
 	}
 
-	return &pb.StopResponse{
+	return pb.StopResponse_builder{
 		Message: result.Message,
-	}, nil
+	}.Build(), nil
 }
 
 func (s *PgCtldService) Restart(ctx context.Context, req *pb.RestartRequest) (*pb.RestartResponse, error) {
-	s.logger.InfoContext(ctx, "gRPC Restart request", "mode", req.Mode, "port", req.Port, "as_standby", req.AsStandby)
+	s.logger.InfoContext(ctx, "gRPC Restart request", "mode", req.GetMode(), "port", req.GetPort(), "as_standby", req.GetAsStandby())
 
 	// Check if data directory is initialized
 	if !pgctld.IsDataDirInitialized(s.poolerDir) {
@@ -232,15 +232,15 @@ func (s *PgCtldService) Restart(ctx context.Context, req *pb.RestartRequest) (*p
 	}
 
 	// Use the pre-configured PostgreSQL config for restart operation
-	result, err := RestartPostgreSQLWithResult(s.logger, s.config, req.Mode, req.AsStandby)
+	result, err := RestartPostgreSQLWithResult(s.logger, s.config, req.GetMode(), req.GetAsStandby())
 	if err != nil {
 		return nil, fmt.Errorf("failed to restart PostgreSQL: %w", err)
 	}
 
-	return &pb.RestartResponse{
+	return pb.RestartResponse_builder{
 		Pid:     int32(result.PID),
 		Message: result.Message,
-	}, nil
+	}.Build(), nil
 }
 
 func (s *PgCtldService) ReloadConfig(ctx context.Context, req *pb.ReloadConfigRequest) (*pb.ReloadConfigResponse, error) {
@@ -258,9 +258,9 @@ func (s *PgCtldService) ReloadConfig(ctx context.Context, req *pb.ReloadConfigRe
 		return nil, fmt.Errorf("failed to reload PostgreSQL configuration: %w", err)
 	}
 
-	return &pb.ReloadConfigResponse{
+	return pb.ReloadConfigResponse_builder{
 		Message: result.Message,
-	}, nil
+	}.Build(), nil
 }
 
 func (s *PgCtldService) Status(ctx context.Context, req *pb.StatusRequest) (*pb.StatusResponse, error) {
@@ -268,12 +268,12 @@ func (s *PgCtldService) Status(ctx context.Context, req *pb.StatusRequest) (*pb.
 
 	// First check if data directory is initialized
 	if !pgctld.IsDataDirInitialized(s.poolerDir) {
-		return &pb.StatusResponse{
+		return pb.StatusResponse_builder{
 			Status:  pb.ServerStatus_NOT_INITIALIZED,
 			DataDir: pgctld.PostgresDataDir(s.poolerDir),
 			Port:    int32(s.pgPort),
 			Message: "Data directory is not initialized",
-		}, nil
+		}.Build(), nil
 	}
 
 	// Use the pre-configured PostgreSQL config for status operation
@@ -293,7 +293,7 @@ func (s *PgCtldService) Status(ctx context.Context, req *pb.StatusRequest) (*pb.
 		status = pb.ServerStatus_STOPPED
 	}
 
-	return &pb.StatusResponse{
+	return pb.StatusResponse_builder{
 		Status:  status,
 		Pid:     int32(result.PID),
 		Version: result.Version,
@@ -302,7 +302,7 @@ func (s *PgCtldService) Status(ctx context.Context, req *pb.StatusRequest) (*pb.
 		Port:    int32(result.Port),
 		Ready:   result.Ready,
 		Message: result.Message,
-	}, nil
+	}.Build(), nil
 }
 
 func (s *PgCtldService) Version(ctx context.Context, req *pb.VersionRequest) (*pb.VersionResponse, error) {
@@ -312,22 +312,22 @@ func (s *PgCtldService) Version(ctx context.Context, req *pb.VersionRequest) (*p
 		return nil, fmt.Errorf("failed to get version: %w", err)
 	}
 
-	return &pb.VersionResponse{
+	return pb.VersionResponse_builder{
 		Version: result.Version,
 		Message: result.Message,
-	}, nil
+	}.Build(), nil
 }
 
 func (s *PgCtldService) InitDataDir(ctx context.Context, req *pb.InitDataDirRequest) (*pb.InitDataDirResponse, error) {
 	s.logger.InfoContext(ctx, "gRPC InitDataDir request")
 
 	// Use the shared init function with detailed result
-	result, err := InitDataDirWithResult(s.logger, s.poolerDir, s.pgPort, s.pgUser, req.PgPwfile)
+	result, err := InitDataDirWithResult(s.logger, s.poolerDir, s.pgPort, s.pgUser, req.GetPgPwfile())
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize data directory: %w", err)
 	}
 
-	return &pb.InitDataDirResponse{
+	return pb.InitDataDirResponse_builder{
 		Message: result.Message,
-	}, nil
+	}.Build(), nil
 }

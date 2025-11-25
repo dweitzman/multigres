@@ -110,20 +110,20 @@ func TestBootstrapInitialization(t *testing.T) {
 	require.NoError(t, err, "Failed to open topology server")
 	defer ts.Close()
 
-	err = ts.CreateCell(ctx, cellName, &clustermetadatapb.Cell{
+	err = ts.CreateCell(ctx, cellName, clustermetadatapb.Cell_builder{
 		ServerAddresses: []string{etcdClientAddr},
 		Root:            cellRoot,
-	})
+	}.Build())
 	require.NoError(t, err, "Failed to create cell")
 
 	// Use postgres database (multigres always uses postgres database with table_group for isolation)
 	database := "postgres"
 	backupLocation := filepath.Join(tempDir, "pgbackrest-repo")
-	err = ts.CreateDatabase(ctx, database, &clustermetadatapb.Database{
+	err = ts.CreateDatabase(ctx, database, clustermetadatapb.Database_builder{
 		Name:             database,
 		BackupLocation:   backupLocation,
 		DurabilityPolicy: "ANY_2",
-	})
+	}.Build())
 	require.NoError(t, err, "Failed to create database in topology")
 
 	t.Logf("Created database '%s' with policy 'ANY_2' and backup_location=%s", database, backupLocation)
@@ -144,7 +144,7 @@ func TestBootstrapInitialization(t *testing.T) {
 	// Verify all nodes are uninitialized
 	for i, node := range nodes {
 		status := checkInitializationStatus(t, node)
-		require.False(t, status.IsInitialized, "Node %d should be uninitialized", i)
+		require.False(t, status.GetIsInitialized(), "Node %d should be uninitialized", i)
 		t.Logf("Node %d (%s) confirmed uninitialized", i, node.name)
 	}
 
@@ -155,23 +155,23 @@ func TestBootstrapInitialization(t *testing.T) {
 	rpcClient := rpcclient.NewClient(10) // connection pool capacity
 	coordNodes := make([]*coordinator.Node, 3)
 	for i, node := range nodes {
-		pooler := &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{
+		pooler := clustermetadatapb.MultiPooler_builder{
+			Id: clustermetadatapb.ID_builder{
 				Component: clustermetadatapb.ID_MULTIPOOLER,
 				Cell:      node.cell,
 				Name:      node.name,
-			},
+			}.Build(),
 			Hostname: "localhost",
 			PortMap: map[string]int32{
 				"grpc": int32(node.grpcPort),
 			},
 			Shard:    shardID,
 			Database: database,
-		}
+		}.Build()
 
 		coordNodes[i] = &coordinator.Node{
-			ID:        pooler.Id,
-			Hostname:  pooler.Hostname,
+			ID:        pooler.GetId(),
+			Hostname:  pooler.GetHostname(),
 			Port:      int32(node.pgPort),
 			ShardID:   shardID,
 			RpcClient: rpcClient,
@@ -198,7 +198,7 @@ func TestBootstrapInitialization(t *testing.T) {
 		var primaryNode *nodeInstance
 		for _, node := range nodes {
 			status := checkInitializationStatus(t, node)
-			if status.IsInitialized && status.Role == "primary" {
+			if status.GetIsInitialized() && status.GetRole() == "primary" {
 				primaryNode = node
 				break
 			}
@@ -272,7 +272,7 @@ func TestBootstrapInitialization(t *testing.T) {
 		standbyCount := 0
 		for _, node := range nodes {
 			status := checkInitializationStatus(t, node)
-			if status.IsInitialized && status.Role == "standby" {
+			if status.GetIsInitialized() && status.GetRole() == "standby" {
 				standbyCount++
 				t.Logf("Standby node: %s", node.name)
 			}
@@ -285,9 +285,9 @@ func TestBootstrapInitialization(t *testing.T) {
 		// Verify tables exist on all initialized nodes (both primary and standbys)
 		for _, node := range nodes {
 			status := checkInitializationStatus(t, node)
-			if status.IsInitialized {
+			if status.GetIsInitialized() {
 				verifyMultigresTablesExist(t, node)
-				t.Logf("Verified multigres tables exist on %s (%s)", node.name, status.Role)
+				t.Logf("Verified multigres tables exist on %s (%s)", node.name, status.GetRole())
 			}
 		}
 	})
@@ -296,8 +296,8 @@ func TestBootstrapInitialization(t *testing.T) {
 		// All initialized nodes should have consensus term = 1
 		for _, node := range nodes {
 			status := checkInitializationStatus(t, node)
-			if status.IsInitialized {
-				assert.Equal(t, int64(1), status.ConsensusTerm, "Node %s should have consensus term 1", node.name)
+			if status.GetIsInitialized() {
+				assert.Equal(t, int64(1), status.GetConsensusTerm(), "Node %s should have consensus term 1", node.name)
 			}
 		}
 	})
@@ -380,12 +380,12 @@ func createEmptyNode(t *testing.T, baseDir, cell, shard, database string, index 
 
 // createMultiPoolerProto creates a MultiPooler proto for the given gRPC port
 func createMultiPoolerProto(grpcPort int) *clustermetadatapb.MultiPooler {
-	return &clustermetadatapb.MultiPooler{
+	return clustermetadatapb.MultiPooler_builder{
 		Hostname: "localhost",
 		PortMap: map[string]int32{
 			"grpc": int32(grpcPort),
 		},
-	}
+	}.Build()
 }
 
 // waitForMultipoolerReady polls the multipooler gRPC endpoint until it's ready

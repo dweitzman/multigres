@@ -56,10 +56,10 @@ func parseApplicationName(appName string) (*clustermetadatapb.ID, error) {
 		return nil, fmt.Errorf("invalid application name: name cannot be empty in %q", appName)
 	}
 
-	return &clustermetadatapb.ID{
+	return clustermetadatapb.ID_builder{
 		Cell: cell,
 		Name: name,
-	}, nil
+	}.Build(), nil
 }
 
 // parseSynchronousStandbyNames parses a PostgreSQL synchronous_standby_names string
@@ -187,20 +187,20 @@ func parseAndRedactPrimaryConnInfo(connInfoStr string) (*multipoolermanagerdata.
 		// Parse specific fields we care about
 		switch key {
 		case "host":
-			connInfo.Host = value
+			connInfo.SetHost(value)
 		case "port":
 			if port, err := strconv.ParseInt(value, 10, 32); err == nil {
-				connInfo.Port = int32(port)
+				connInfo.SetPort(int32(port))
 			}
 		case "user":
-			connInfo.User = value
+			connInfo.SetUser(value)
 		case "application_name":
-			connInfo.ApplicationName = value
+			connInfo.SetApplicationName(value)
 		}
 	}
 
 	// Set the redacted raw string
-	connInfo.Raw = strings.Join(redactedParts, " ")
+	connInfo.SetRaw(strings.Join(redactedParts, " "))
 
 	return connInfo, nil
 }

@@ -125,10 +125,10 @@ func TestBackup_CreateListAndRestore(t *testing.T) {
 	t.Run("CreateFullBackup", func(t *testing.T) {
 		t.Log("Step 2: Creating full backup...")
 
-		req := &multipoolermanagerdata.BackupRequest{
+		req := multipoolermanagerdata.BackupRequest_builder{
 			ForcePrimary: true, // Required for backups from primary
 			Type:         "full",
-		}
+		}.Build()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
@@ -138,23 +138,23 @@ func TestBackup_CreateListAndRestore(t *testing.T) {
 		require.NotNil(t, resp, "Response should not be nil")
 
 		// Verify backup ID format
-		assert.NotEmpty(t, resp.BackupId, "Backup ID should not be empty")
+		assert.NotEmpty(t, resp.GetBackupId(), "Backup ID should not be empty")
 
 		// Backup ID should match pgbackrest format: YYYYMMDD-HHMMSSF
 		// F indicates full backup, D indicates differential, I indicates incremental
 		backupIDPattern := regexp.MustCompile(`^\d{8}-\d{6}F$`)
-		assert.True(t, backupIDPattern.MatchString(resp.BackupId),
-			"Backup ID should match format YYYYMMDD-HHMMSSF, got: %s", resp.BackupId)
+		assert.True(t, backupIDPattern.MatchString(resp.GetBackupId()),
+			"Backup ID should match format YYYYMMDD-HHMMSSF, got: %s", resp.GetBackupId())
 
-		fullBackupID := resp.BackupId
+		fullBackupID := resp.GetBackupId()
 		t.Logf("Full backup created successfully with ID: %s", fullBackupID)
 
 		t.Run("GetBackups_VerifyFullBackup", func(t *testing.T) {
 			t.Log("Step 3: Listing backups to verify full backup...")
 
-			listReq := &multipoolermanagerdata.GetBackupsRequest{
+			listReq := multipoolermanagerdata.GetBackupsRequest_builder{
 				Limit: 10,
-			}
+			}.Build()
 
 			listCtx := utils.WithShortDeadline(t)
 			listResp, err := backupClient.GetBackups(listCtx, listReq)
@@ -162,12 +162,12 @@ func TestBackup_CreateListAndRestore(t *testing.T) {
 			require.NotNil(t, listResp, "List response should not be nil")
 
 			// Verify at least one backup exists
-			assert.NotEmpty(t, listResp.Backups, "Should have at least one backup")
+			assert.NotEmpty(t, listResp.GetBackups(), "Should have at least one backup")
 
 			// Find our backup in the list
 			var foundBackup *multipoolermanagerdata.BackupMetadata
-			for _, backup := range listResp.Backups {
-				if backup.BackupId == fullBackupID {
+			for _, backup := range listResp.GetBackups() {
+				if backup.GetBackupId() == fullBackupID {
 					foundBackup = backup
 					break
 				}
@@ -176,13 +176,13 @@ func TestBackup_CreateListAndRestore(t *testing.T) {
 			require.NotNil(t, foundBackup, "Our backup should be in the list")
 
 			// Verify backup metadata
-			assert.Equal(t, fullBackupID, foundBackup.BackupId, "Backup ID should match")
-			assert.Equal(t, multipoolermanagerdata.BackupMetadata_COMPLETE, foundBackup.Status,
+			assert.Equal(t, fullBackupID, foundBackup.GetBackupId(), "Backup ID should match")
+			assert.Equal(t, multipoolermanagerdata.BackupMetadata_COMPLETE, foundBackup.GetStatus(),
 				"Backup status should be COMPLETE")
-			assert.NotEmpty(t, foundBackup.FinalLsn, "Backup should have final LSN")
+			assert.NotEmpty(t, foundBackup.GetFinalLsn(), "Backup should have final LSN")
 
 			t.Logf("Backup verified in list: ID=%s, Status=%s, FinalLSN=%s",
-				foundBackup.BackupId, foundBackup.Status, foundBackup.FinalLsn)
+				foundBackup.GetBackupId(), foundBackup.GetStatus(), foundBackup.GetFinalLsn())
 		})
 
 		t.Run("RestoreAndVerify", func(t *testing.T) {
@@ -206,9 +206,9 @@ func TestBackup_CreateListAndRestore(t *testing.T) {
 
 			t.Log("Step 5: Verifying backup exists in standby's list...")
 
-			listReq := &multipoolermanagerdata.GetBackupsRequest{
+			listReq := multipoolermanagerdata.GetBackupsRequest_builder{
 				Limit: 20,
-			}
+			}.Build()
 
 			listCtx := utils.WithShortDeadline(t)
 			listResp, err := standbyBackupClient.GetBackups(listCtx, listReq)
@@ -217,19 +217,19 @@ func TestBackup_CreateListAndRestore(t *testing.T) {
 
 			// Find our backup in the standby's list
 			var foundBackup *multipoolermanagerdata.BackupMetadata
-			for _, backup := range listResp.Backups {
-				if backup.BackupId == fullBackupID {
+			for _, backup := range listResp.GetBackups() {
+				if backup.GetBackupId() == fullBackupID {
 					foundBackup = backup
 					break
 				}
 			}
 
 			require.NotNil(t, foundBackup, "Backup should be in standby's list")
-			assert.Equal(t, multipoolermanagerdata.BackupMetadata_COMPLETE, foundBackup.Status,
+			assert.Equal(t, multipoolermanagerdata.BackupMetadata_COMPLETE, foundBackup.GetStatus(),
 				"Backup status should be COMPLETE")
-			assert.NotEmpty(t, foundBackup.FinalLsn, "Backup should have final LSN")
+			assert.NotEmpty(t, foundBackup.GetFinalLsn(), "Backup should have final LSN")
 			t.Logf("Backup verified in standby's list: ID=%s, Status=%s, FinalLSN=%s",
-				foundBackup.BackupId, foundBackup.Status, foundBackup.FinalLsn)
+				foundBackup.GetBackupId(), foundBackup.GetStatus(), foundBackup.GetFinalLsn())
 
 			t.Log("Step 6: Preparing standby for restore (stopping PostgreSQL and removing PGDATA)...")
 
@@ -245,7 +245,7 @@ func TestBackup_CreateListAndRestore(t *testing.T) {
 			// Stop PostgreSQL on standby
 			stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer stopCancel()
-			_, err = standbyPgctldClient.Stop(stopCtx, &pgctldservice.StopRequest{Mode: "fast"})
+			_, err = standbyPgctldClient.Stop(stopCtx, pgctldservice.StopRequest_builder{Mode: "fast"}.Build())
 			require.NoError(t, err, "Should be able to stop PostgreSQL on standby")
 			t.Log("PostgreSQL stopped on standby")
 
@@ -254,10 +254,10 @@ func TestBackup_CreateListAndRestore(t *testing.T) {
 
 			t.Log("Step 7: Restoring from backup to standby...")
 
-			restoreReq := &multipoolermanagerdata.RestoreFromBackupRequest{
+			restoreReq := multipoolermanagerdata.RestoreFromBackupRequest_builder{
 				BackupId:  fullBackupID,
 				AsStandby: true, // Must match current standby state
-			}
+			}.Build()
 
 			restoreCtx, restoreCancel := context.WithTimeout(context.Background(), 10*time.Minute)
 			defer restoreCancel()
@@ -271,14 +271,14 @@ func TestBackup_CreateListAndRestore(t *testing.T) {
 
 			// Configure replication after restore
 			t.Log("Configuring replication after restore...")
-			setPrimaryReq := &multipoolermanagerdata.SetPrimaryConnInfoRequest{
+			setPrimaryReq := multipoolermanagerdata.SetPrimaryConnInfoRequest_builder{
 				Host:                  "localhost",
 				Port:                  int32(setup.PrimaryPgctld.PgPort),
 				StartReplicationAfter: true,
 				StopReplicationBefore: false,
 				CurrentTerm:           1,
 				Force:                 true, // Force reconfiguration after restore
-			}
+			}.Build()
 			setPrimaryCtx, setPrimaryCancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer setPrimaryCancel()
 			_, err = standbyBackupClient.SetPrimaryConnInfo(setPrimaryCtx, setPrimaryReq)
@@ -350,9 +350,9 @@ func TestBackup_CreateListAndRestore(t *testing.T) {
 		t.Run("GetBackups_WithoutLimit", func(t *testing.T) {
 			t.Log("Listing backups without limit...")
 
-			listReq := &multipoolermanagerdata.GetBackupsRequest{
+			listReq := multipoolermanagerdata.GetBackupsRequest_builder{
 				Limit: 0, // No limit
-			}
+			}.Build()
 
 			listCtx := utils.WithShortDeadline(t)
 			listResp, err := backupClient.GetBackups(listCtx, listReq)
@@ -360,17 +360,17 @@ func TestBackup_CreateListAndRestore(t *testing.T) {
 			require.NotNil(t, listResp, "List response should not be nil")
 
 			// Should have at least our backup
-			assert.NotEmpty(t, listResp.Backups, "Should have at least one backup")
+			assert.NotEmpty(t, listResp.GetBackups(), "Should have at least one backup")
 
-			t.Logf("Listed %d backup(s) without limit", len(listResp.Backups))
+			t.Logf("Listed %d backup(s) without limit", len(listResp.GetBackups()))
 		})
 
 		t.Run("GetBackups_WithSmallLimit", func(t *testing.T) {
 			t.Log("Listing backups with limit=1...")
 
-			listReq := &multipoolermanagerdata.GetBackupsRequest{
+			listReq := multipoolermanagerdata.GetBackupsRequest_builder{
 				Limit: 1,
-			}
+			}.Build()
 
 			listCtx := utils.WithShortDeadline(t)
 			listResp, err := backupClient.GetBackups(listCtx, listReq)
@@ -378,20 +378,20 @@ func TestBackup_CreateListAndRestore(t *testing.T) {
 			require.NotNil(t, listResp, "List response should not be nil")
 
 			// Should return at most 1 backup
-			assert.LessOrEqual(t, len(listResp.Backups), 1,
+			assert.LessOrEqual(t, len(listResp.GetBackups()), 1,
 				"Should return at most 1 backup when limit=1")
 
-			t.Logf("Listed %d backup(s) with limit=1", len(listResp.Backups))
+			t.Logf("Listed %d backup(s) with limit=1", len(listResp.GetBackups()))
 		})
 	})
 
 	t.Run("CreateDifferentialBackup", func(t *testing.T) {
 		t.Log("Creating differential backup...")
 
-		req := &multipoolermanagerdata.BackupRequest{
+		req := multipoolermanagerdata.BackupRequest_builder{
 			ForcePrimary: true, // Required for backups from primary
 			Type:         "differential",
-		}
+		}.Build()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
@@ -400,38 +400,38 @@ func TestBackup_CreateListAndRestore(t *testing.T) {
 		require.NoError(t, err, "Differential backup should succeed")
 		require.NotNil(t, resp, "Response should not be nil")
 
-		assert.NotEmpty(t, resp.BackupId, "Backup ID should not be empty")
+		assert.NotEmpty(t, resp.GetBackupId(), "Backup ID should not be empty")
 
 		// Differential backup ID should contain reference to full backup
 		// Format: YYYYMMDD-HHMMSSF_YYYYMMDD-HHMMSSD
-		assert.Contains(t, resp.BackupId, "D",
+		assert.Contains(t, resp.GetBackupId(), "D",
 			"Differential backup ID should contain 'D'")
 
-		t.Logf("Differential backup created successfully with ID: %s", resp.BackupId)
+		t.Logf("Differential backup created successfully with ID: %s", resp.GetBackupId())
 
 		// Verify differential backup appears in list
-		listReq := &multipoolermanagerdata.GetBackupsRequest{
+		listReq := multipoolermanagerdata.GetBackupsRequest_builder{
 			Limit: 10,
-		}
+		}.Build()
 
 		listCtx := utils.WithShortDeadline(t)
 		listResp, err := backupClient.GetBackups(listCtx, listReq)
 		require.NoError(t, err, "Listing backups should succeed")
 
 		// Should now have at least 2 backups (full + differential)
-		assert.GreaterOrEqual(t, len(listResp.Backups), 2,
+		assert.GreaterOrEqual(t, len(listResp.GetBackups()), 2,
 			"Should have at least 2 backups (full + differential)")
 
-		t.Logf("Verified %d total backups exist", len(listResp.Backups))
+		t.Logf("Verified %d total backups exist", len(listResp.GetBackups()))
 	})
 
 	t.Run("CreateIncrementalBackup", func(t *testing.T) {
 		t.Log("Creating incremental backup...")
 
-		req := &multipoolermanagerdata.BackupRequest{
+		req := multipoolermanagerdata.BackupRequest_builder{
 			ForcePrimary: true, // Required for backups from primary
 			Type:         "incremental",
-		}
+		}.Build()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
@@ -440,29 +440,29 @@ func TestBackup_CreateListAndRestore(t *testing.T) {
 		require.NoError(t, err, "Incremental backup should succeed")
 		require.NotNil(t, resp, "Response should not be nil")
 
-		assert.NotEmpty(t, resp.BackupId, "Backup ID should not be empty")
+		assert.NotEmpty(t, resp.GetBackupId(), "Backup ID should not be empty")
 
 		// Incremental backup ID should contain reference to full backup
 		// Format: YYYYMMDD-HHMMSSF_YYYYMMDD-HHMMSSI
-		assert.Contains(t, resp.BackupId, "I",
+		assert.Contains(t, resp.GetBackupId(), "I",
 			"Incremental backup ID should contain 'I'")
 
-		t.Logf("Incremental backup created successfully with ID: %s", resp.BackupId)
+		t.Logf("Incremental backup created successfully with ID: %s", resp.GetBackupId())
 
 		// Verify incremental backup appears in list
-		listReq := &multipoolermanagerdata.GetBackupsRequest{
+		listReq := multipoolermanagerdata.GetBackupsRequest_builder{
 			Limit: 10,
-		}
+		}.Build()
 
 		listCtx := utils.WithShortDeadline(t)
 		listResp, err := backupClient.GetBackups(listCtx, listReq)
 		require.NoError(t, err, "Listing backups should succeed")
 
 		// Should now have at least 3 backups (full + differential + incremental)
-		assert.GreaterOrEqual(t, len(listResp.Backups), 3,
+		assert.GreaterOrEqual(t, len(listResp.GetBackups()), 3,
 			"Should have at least 3 backups (full + differential + incremental)")
 
-		t.Logf("Verified %d total backups exist", len(listResp.Backups))
+		t.Logf("Verified %d total backups exist", len(listResp.GetBackups()))
 	})
 }
 
@@ -487,10 +487,10 @@ func TestBackup_ValidationErrors(t *testing.T) {
 	backupClient := multipoolermanagerpb.NewMultiPoolerManagerClient(conn)
 
 	t.Run("MissingType", func(t *testing.T) {
-		req := &multipoolermanagerdata.BackupRequest{
+		req := multipoolermanagerdata.BackupRequest_builder{
 			ForcePrimary: true, // Set to true to test type validation
 			Type:         "",   // Missing
-		}
+		}.Build()
 
 		ctx := utils.WithShortDeadline(t)
 		resp, err := backupClient.Backup(ctx, req)
@@ -501,10 +501,10 @@ func TestBackup_ValidationErrors(t *testing.T) {
 	})
 
 	t.Run("InvalidType", func(t *testing.T) {
-		req := &multipoolermanagerdata.BackupRequest{
+		req := multipoolermanagerdata.BackupRequest_builder{
 			ForcePrimary: true,      // Set to true to test type validation
 			Type:         "invalid", // Invalid type
-		}
+		}.Build()
 
 		ctx := utils.WithShortDeadline(t)
 		resp, err := backupClient.Backup(ctx, req)
@@ -515,10 +515,10 @@ func TestBackup_ValidationErrors(t *testing.T) {
 	})
 
 	t.Run("BackupFromPrimaryWithoutForcePrimary", func(t *testing.T) {
-		req := &multipoolermanagerdata.BackupRequest{
+		req := multipoolermanagerdata.BackupRequest_builder{
 			ForcePrimary: false, // Not forced
 			Type:         "full",
-		}
+		}.Build()
 
 		ctx := utils.WithShortDeadline(t)
 		resp, err := backupClient.Backup(ctx, req)
@@ -552,10 +552,10 @@ func TestBackup_FromStandby(t *testing.T) {
 	t.Run("CreateFullBackupFromStandby", func(t *testing.T) {
 		t.Log("Creating full backup from standby...")
 
-		req := &multipoolermanagerdata.BackupRequest{
+		req := multipoolermanagerdata.BackupRequest_builder{
 			ForcePrimary: false, // Should use standby since we're connected to standby
 			Type:         "full",
-		}
+		}.Build()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
@@ -565,19 +565,19 @@ func TestBackup_FromStandby(t *testing.T) {
 		require.NotNil(t, resp, "Response should not be nil")
 
 		// Verify backup ID format
-		assert.NotEmpty(t, resp.BackupId, "Backup ID should not be empty")
+		assert.NotEmpty(t, resp.GetBackupId(), "Backup ID should not be empty")
 
 		// Backup ID should match pgbackrest format: YYYYMMDD-HHMMSSF
 		backupIDPattern := regexp.MustCompile(`^\d{8}-\d{6}F$`)
-		assert.True(t, backupIDPattern.MatchString(resp.BackupId),
-			"Backup ID should match format YYYYMMDD-HHMMSSF, got: %s", resp.BackupId)
+		assert.True(t, backupIDPattern.MatchString(resp.GetBackupId()),
+			"Backup ID should match format YYYYMMDD-HHMMSSF, got: %s", resp.GetBackupId())
 
-		t.Logf("Full backup from standby created successfully with ID: %s", resp.BackupId)
+		t.Logf("Full backup from standby created successfully with ID: %s", resp.GetBackupId())
 
 		// Verify backup appears in standby's backup list
-		listReq := &multipoolermanagerdata.GetBackupsRequest{
+		listReq := multipoolermanagerdata.GetBackupsRequest_builder{
 			Limit: 10,
-		}
+		}.Build()
 
 		listCtx := utils.WithShortDeadline(t)
 		listResp, err := backupClient.GetBackups(listCtx, listReq)
@@ -585,34 +585,34 @@ func TestBackup_FromStandby(t *testing.T) {
 		require.NotNil(t, listResp, "List response should not be nil")
 
 		// Verify at least one backup exists
-		assert.NotEmpty(t, listResp.Backups, "Should have at least one backup")
+		assert.NotEmpty(t, listResp.GetBackups(), "Should have at least one backup")
 
 		// Find our backup in the list
 		var foundBackup *multipoolermanagerdata.BackupMetadata
-		for _, backup := range listResp.Backups {
-			if backup.BackupId == resp.BackupId {
+		for _, backup := range listResp.GetBackups() {
+			if backup.GetBackupId() == resp.GetBackupId() {
 				foundBackup = backup
 				break
 			}
 		}
 
 		require.NotNil(t, foundBackup, "Standby backup should be in the list")
-		assert.Equal(t, resp.BackupId, foundBackup.BackupId, "Backup ID should match")
-		assert.Equal(t, multipoolermanagerdata.BackupMetadata_COMPLETE, foundBackup.Status,
+		assert.Equal(t, resp.GetBackupId(), foundBackup.GetBackupId(), "Backup ID should match")
+		assert.Equal(t, multipoolermanagerdata.BackupMetadata_COMPLETE, foundBackup.GetStatus(),
 			"Backup status should be COMPLETE")
-		assert.NotEmpty(t, foundBackup.FinalLsn, "Backup should have final LSN")
+		assert.NotEmpty(t, foundBackup.GetFinalLsn(), "Backup should have final LSN")
 
 		t.Logf("Standby backup verified in list: ID=%s, Status=%s, FinalLSN=%s",
-			foundBackup.BackupId, foundBackup.Status, foundBackup.FinalLsn)
+			foundBackup.GetBackupId(), foundBackup.GetStatus(), foundBackup.GetFinalLsn())
 	})
 
 	t.Run("CreateIncrementalBackupFromStandby", func(t *testing.T) {
 		t.Log("Creating incremental backup from standby...")
 
-		req := &multipoolermanagerdata.BackupRequest{
+		req := multipoolermanagerdata.BackupRequest_builder{
 			ForcePrimary: false,
 			Type:         "incremental",
-		}
+		}.Build()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
@@ -621,12 +621,12 @@ func TestBackup_FromStandby(t *testing.T) {
 		require.NoError(t, err, "Incremental backup from standby should succeed")
 		require.NotNil(t, resp, "Response should not be nil")
 
-		assert.NotEmpty(t, resp.BackupId, "Backup ID should not be empty")
+		assert.NotEmpty(t, resp.GetBackupId(), "Backup ID should not be empty")
 
 		// Incremental backup ID should contain 'I'
-		assert.Contains(t, resp.BackupId, "I",
+		assert.Contains(t, resp.GetBackupId(), "I",
 			"Incremental backup ID should contain 'I'")
 
-		t.Logf("Incremental backup from standby created successfully with ID: %s", resp.BackupId)
+		t.Logf("Incremental backup from standby created successfully with ID: %s", resp.GetBackupId())
 	})
 }

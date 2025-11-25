@@ -1533,12 +1533,12 @@ func (p *localProvisioner) ProvisionDatabase(ctx context.Context, databaseName s
 		// Create the database if it doesn't exist
 		fmt.Printf("⚙️  - Creating database \"%s\" with cells: [%s]...\n", databaseName, strings.Join(cellNames, ", "))
 
-		databaseConfig := &clustermetadatapb.Database{
+		databaseConfig := clustermetadatapb.Database_builder{
 			Name:             databaseName,
 			BackupLocation:   p.config.BackupRepoPath,
 			DurabilityPolicy: "none",    // Default durability policy
 			Cells:            cellNames, // Register with all cells
-		}
+		}.Build()
 
 		if err := ts.CreateDatabase(ctx, databaseName, databaseConfig); err != nil {
 			return nil, fmt.Errorf("failed to create database '%s' in topology: %w", databaseName, err)
@@ -1669,11 +1669,11 @@ func (p *localProvisioner) setupDefaultCell(ctx context.Context, cellName, etcdA
 			return fmt.Errorf("failed to get cell config for %s: %w", cellName, err)
 		}
 
-		cellConfig := &clustermetadatapb.Cell{
+		cellConfig := clustermetadatapb.Cell_builder{
 			Name:            cellName,
 			ServerAddresses: []string{etcdAddress},
 			Root:            cellConfigData.RootPath,
-		}
+		}.Build()
 
 		if err := ts.CreateCell(ctx, cellName, cellConfig); err != nil {
 			return fmt.Errorf("failed to create cell '%s': %w", cellName, err)

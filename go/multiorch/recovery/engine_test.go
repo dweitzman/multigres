@@ -473,18 +473,18 @@ func TestRecoveryEngine_DiscoveryLoop_Integration(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	// Add poolers to topology BEFORE starting engine
-	require.NoError(t, ts.CreateMultiPooler(ctx, &clustermetadata.MultiPooler{
-		Id:       &clustermetadata.ID{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "pooler1"},
+	require.NoError(t, ts.CreateMultiPooler(ctx, clustermetadata.MultiPooler_builder{
+		Id:       clustermetadata.ID_builder{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "pooler1"}.Build(),
 		Database: "mydb", TableGroup: "tg1", Shard: "0",
-	}))
-	require.NoError(t, ts.CreateMultiPooler(ctx, &clustermetadata.MultiPooler{
-		Id:       &clustermetadata.ID{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "pooler2"},
+	}.Build()))
+	require.NoError(t, ts.CreateMultiPooler(ctx, clustermetadata.MultiPooler_builder{
+		Id:       clustermetadata.ID_builder{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "pooler2"}.Build(),
 		Database: "mydb", TableGroup: "tg1", Shard: "1",
-	}))
-	require.NoError(t, ts.CreateMultiPooler(ctx, &clustermetadata.MultiPooler{
-		Id:       &clustermetadata.ID{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "pooler3"},
+	}.Build()))
+	require.NoError(t, ts.CreateMultiPooler(ctx, clustermetadata.MultiPooler_builder{
+		Id:       clustermetadata.ID_builder{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "pooler3"}.Build(),
 		Database: "mydb", TableGroup: "tg2", Shard: "0",
-	}))
+	}.Build()))
 
 	// Create engine with short refresh interval for testing
 	cfg := config.NewTestConfig(
@@ -554,10 +554,10 @@ func TestRecoveryEngine_BookkeepingLoop_Integration(t *testing.T) {
 	key1 := poolerKey("zone1", "old-pooler")
 	oldTime := time.Now().Add(-5 * time.Hour) // 5 hours ago (> 4 hour threshold)
 	re.poolerStore.Set(key1, &store.PoolerHealth{
-		MultiPooler: &clustermetadata.MultiPooler{
-			Id:       &clustermetadata.ID{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "old-pooler"},
+		MultiPooler: clustermetadata.MultiPooler_builder{
+			Id:       clustermetadata.ID_builder{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "old-pooler"}.Build(),
 			Database: "mydb", TableGroup: "tg1", Shard: "0",
-		},
+		}.Build(),
 		LastSeen:            oldTime,
 		LastCheckAttempted:  oldTime,
 		LastCheckSuccessful: oldTime,
@@ -566,10 +566,10 @@ func TestRecoveryEngine_BookkeepingLoop_Integration(t *testing.T) {
 
 	key2 := poolerKey("zone1", "never-seen")
 	re.poolerStore.Set(key2, &store.PoolerHealth{
-		MultiPooler: &clustermetadata.MultiPooler{
-			Id:       &clustermetadata.ID{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "never-seen"},
+		MultiPooler: clustermetadata.MultiPooler_builder{
+			Id:       clustermetadata.ID_builder{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "never-seen"}.Build(),
 			Database: "mydb", TableGroup: "tg1", Shard: "1",
-		},
+		}.Build(),
 		LastCheckAttempted: oldTime,
 		LastSeen:           time.Time{}, // Zero - never seen
 		IsUpToDate:         false,
@@ -578,10 +578,10 @@ func TestRecoveryEngine_BookkeepingLoop_Integration(t *testing.T) {
 	key3 := poolerKey("zone1", "healthy-pooler")
 	recentTime := time.Now().Add(-1 * time.Hour) // 1 hour ago (< 4 hour threshold)
 	re.poolerStore.Set(key3, &store.PoolerHealth{
-		MultiPooler: &clustermetadata.MultiPooler{
-			Id:       &clustermetadata.ID{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "healthy-pooler"},
+		MultiPooler: clustermetadata.MultiPooler_builder{
+			Id:       clustermetadata.ID_builder{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "healthy-pooler"}.Build(),
 			Database: "mydb", TableGroup: "tg1", Shard: "2",
-		},
+		}.Build(),
 		LastSeen:            recentTime,
 		LastCheckAttempted:  recentTime,
 		LastCheckSuccessful: recentTime,
@@ -639,20 +639,20 @@ func TestRecoveryEngine_FullIntegration(t *testing.T) {
 	)
 
 	// Add pooler to topology BEFORE starting
-	require.NoError(t, ts.CreateMultiPooler(ctx, &clustermetadata.MultiPooler{
-		Id:       &clustermetadata.ID{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "new-pooler"},
+	require.NoError(t, ts.CreateMultiPooler(ctx, clustermetadata.MultiPooler_builder{
+		Id:       clustermetadata.ID_builder{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "new-pooler"}.Build(),
 		Database: "mydb", TableGroup: "tg1", Shard: "0",
 		Hostname: "host1",
-	}))
+	}.Build()))
 
 	// Add an old pooler to store BEFORE starting
 	keyOld := poolerKey("zone1", "old-pooler")
 	oldTime := time.Now().Add(-5 * time.Hour)
 	re.poolerStore.Set(keyOld, &store.PoolerHealth{
-		MultiPooler: &clustermetadata.MultiPooler{
-			Id:       &clustermetadata.ID{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "old-pooler"},
+		MultiPooler: clustermetadata.MultiPooler_builder{
+			Id:       clustermetadata.ID_builder{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "old-pooler"}.Build(),
 			Database: "mydb", TableGroup: "tg1", Shard: "1",
-		},
+		}.Build(),
 		LastSeen:            oldTime,
 		LastCheckAttempted:  oldTime,
 		LastCheckSuccessful: oldTime,
@@ -685,23 +685,23 @@ func TestRecoveryEngine_FullIntegration(t *testing.T) {
 	re.poolerStore.Set(keyNew, info)
 
 	// Update topology (change hostname)
-	retrieved, err := ts.GetMultiPooler(ctx, &clustermetadata.ID{
+	retrieved, err := ts.GetMultiPooler(ctx, clustermetadata.ID_builder{
 		Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "new-pooler",
-	})
+	}.Build())
 	require.NoError(t, err)
-	retrieved.MultiPooler.Hostname = "host2"
+	retrieved.MultiPooler.SetHostname("host2")
 	require.NoError(t, ts.UpdateMultiPooler(ctx, retrieved))
 
 	// Wait for refresh to pick up the change
 	require.Eventually(t, func() bool {
 		info, ok := re.poolerStore.Get(keyNew)
-		return ok && info.MultiPooler.Hostname == "host2"
+		return ok && info.MultiPooler.GetHostname() == "host2"
 	}, 1*time.Second, 50*time.Millisecond, "hostname update should be discovered")
 
 	// Verify timestamps were preserved
 	updatedInfo, ok := re.poolerStore.Get(keyNew)
 	require.True(t, ok)
-	require.Equal(t, "host2", updatedInfo.MultiPooler.Hostname, "hostname should be updated")
+	require.Equal(t, "host2", updatedInfo.MultiPooler.GetHostname(), "hostname should be updated")
 	require.Equal(t, now.Unix(), updatedInfo.LastSeen.Unix(), "LastSeen should be preserved")
 	require.True(t, updatedInfo.IsUpToDate, "IsUpToDate should be preserved")
 

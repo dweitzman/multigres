@@ -166,7 +166,7 @@ func (ts *store) DeleteCell(ctx context.Context, cell string, force bool) error 
 			}
 
 			// Check if this database references the cell to be deleted
-			if slices.Contains(db.Cells, cell) {
+			if slices.Contains(db.GetCells(), cell) {
 				return NewError(NodeNotEmpty, fmt.Sprintf("cell %s is referenced by database %s. This could create serving issues in the cluster. Either remove the cell from the database or use force=true to delete the cell anyway.", cell, dbName))
 			}
 		}

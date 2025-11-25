@@ -22,7 +22,7 @@ import (
 
 // ValidateQuorum checks if the recruited nodes satisfy the quorum rule
 func (c *Coordinator) ValidateQuorum(rule *clustermetadatapb.QuorumRule, cohort []*Node, recruited []*Node) error {
-	switch rule.QuorumType {
+	switch rule.GetQuorumType() {
 	case clustermetadatapb.QuorumType_QUORUM_TYPE_ANY_N:
 		return c.validateAnyNQuorum(rule, cohort, recruited)
 
@@ -30,13 +30,13 @@ func (c *Coordinator) ValidateQuorum(rule *clustermetadatapb.QuorumRule, cohort 
 		return c.validateMultiCellQuorum(rule, recruited)
 
 	default:
-		return fmt.Errorf("unknown quorum type: %v", rule.QuorumType)
+		return fmt.Errorf("unknown quorum type: %v", rule.GetQuorumType())
 	}
 }
 
 // validateAnyNQuorum validates that we have at least N nodes recruited
 func (c *Coordinator) validateAnyNQuorum(rule *clustermetadatapb.QuorumRule, cohort []*Node, recruited []*Node) error {
-	required := int(rule.RequiredCount)
+	required := int(rule.GetRequiredCount())
 	recruitedCount := len(recruited)
 
 	c.logger.Debug("validating ANY_N quorum",
@@ -46,7 +46,7 @@ func (c *Coordinator) validateAnyNQuorum(rule *clustermetadatapb.QuorumRule, coh
 
 	if recruitedCount < required {
 		return fmt.Errorf("quorum not satisfied: recruited %d nodes, required %d (%s)",
-			recruitedCount, required, rule.Description)
+			recruitedCount, required, rule.GetDescription())
 	}
 
 	c.logger.Info("ANY_N quorum satisfied",
@@ -61,11 +61,11 @@ func (c *Coordinator) validateMultiCellQuorum(rule *clustermetadatapb.QuorumRule
 	// Group recruited nodes by cell
 	nodesByCell := make(map[string][]*Node)
 	for _, node := range recruited {
-		cell := node.ID.Cell
+		cell := node.ID.GetCell()
 		nodesByCell[cell] = append(nodesByCell[cell], node)
 	}
 
-	requiredCells := int(rule.RequiredCount)
+	requiredCells := int(rule.GetRequiredCount())
 	recruitedCells := len(nodesByCell)
 
 	c.logger.Debug("validating MULTI_CELL_ANY_N quorum",
@@ -75,7 +75,7 @@ func (c *Coordinator) validateMultiCellQuorum(rule *clustermetadatapb.QuorumRule
 
 	if recruitedCells < requiredCells {
 		return fmt.Errorf("quorum not satisfied: recruited nodes from %d cells, required %d cells (%s)",
-			recruitedCells, requiredCells, rule.Description)
+			recruitedCells, requiredCells, rule.GetDescription())
 	}
 
 	c.logger.Info("MULTI_CELL_ANY_N quorum satisfied",

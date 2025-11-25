@@ -57,16 +57,16 @@ func TestRecoveryEngine_HealthCheckQueue(t *testing.T) {
 	)
 
 	// Add poolers to topology
-	require.NoError(t, ts.CreateMultiPooler(ctx, &clustermetadata.MultiPooler{
-		Id:       &clustermetadata.ID{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "pooler1"},
+	require.NoError(t, ts.CreateMultiPooler(ctx, clustermetadata.MultiPooler_builder{
+		Id:       clustermetadata.ID_builder{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "pooler1"}.Build(),
 		Database: "mydb", TableGroup: "tg1", Shard: "0",
 		Hostname: "host1",
-	}))
-	require.NoError(t, ts.CreateMultiPooler(ctx, &clustermetadata.MultiPooler{
-		Id:       &clustermetadata.ID{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "pooler2"},
+	}.Build()))
+	require.NoError(t, ts.CreateMultiPooler(ctx, clustermetadata.MultiPooler_builder{
+		Id:       clustermetadata.ID_builder{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "pooler2"}.Build(),
 		Database: "mydb", TableGroup: "tg1", Shard: "1",
 		Hostname: "host2",
-	}))
+	}.Build()))
 
 	// Start the engine - discovery should add poolers to store
 	err := re.Start()
@@ -150,11 +150,11 @@ func TestRecoveryEngine_HealthCheckQueueDeduplication(t *testing.T) {
 	)
 
 	// Add pooler to topology
-	require.NoError(t, ts.CreateMultiPooler(ctx, &clustermetadata.MultiPooler{
-		Id:       &clustermetadata.ID{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "pooler1"},
+	require.NoError(t, ts.CreateMultiPooler(ctx, clustermetadata.MultiPooler_builder{
+		Id:       clustermetadata.ID_builder{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "pooler1"}.Build(),
 		Database: "mydb", TableGroup: "tg1", Shard: "0",
 		Hostname: "host1",
-	}))
+	}.Build()))
 
 	err := re.Start()
 	require.NoError(t, err)
@@ -208,11 +208,11 @@ func TestRecoveryEngine_HealthCheckWorkerPool(t *testing.T) {
 
 	// Add multiple poolers
 	for i := range 20 {
-		require.NoError(t, ts.CreateMultiPooler(ctx, &clustermetadata.MultiPooler{
-			Id:       &clustermetadata.ID{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: fmt.Sprintf("pooler-%d", i)},
+		require.NoError(t, ts.CreateMultiPooler(ctx, clustermetadata.MultiPooler_builder{
+			Id:       clustermetadata.ID_builder{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: fmt.Sprintf("pooler-%d", i)}.Build(),
 			Database: "mydb", TableGroup: "tg1", Shard: "0",
 			Hostname: "host1",
-		}))
+		}.Build()))
 	}
 
 	err := re.Start()

@@ -42,11 +42,11 @@ func TestPrimaryPosition(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	serviceID := &clustermetadatapb.ID{
+	serviceID := clustermetadatapb.ID_builder{
 		Component: clustermetadatapb.ID_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-service",
-	}
+	}.Build()
 
 	tests := []struct {
 		name          string
@@ -78,14 +78,14 @@ func TestPrimaryPosition(t *testing.T) {
 			// Create temp directory for pooler-dir
 			poolerDir := t.TempDir()
 
-			multipooler := &clustermetadatapb.MultiPooler{
+			multipooler := clustermetadatapb.MultiPooler_builder{
 				Id:            serviceID,
 				Database:      "testdb",
 				Hostname:      "localhost",
 				PortMap:       map[string]int32{"grpc": 8080},
 				Type:          tt.poolerType,
 				ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-			}
+			}.Build()
 			require.NoError(t, ts.CreateMultiPooler(ctx, multipooler))
 
 			config := &Config{
@@ -125,11 +125,11 @@ func TestActionLock_MutationMethodsTimeout(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	serviceID := &clustermetadatapb.ID{
+	serviceID := clustermetadatapb.ID_builder{
 		Component: clustermetadatapb.ID_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-service",
-	}
+	}.Build()
 
 	ts, _ := memorytopo.NewServerAndFactory(ctx, "zone1")
 	defer ts.Close()
@@ -137,14 +137,14 @@ func TestActionLock_MutationMethodsTimeout(t *testing.T) {
 	poolerDir := t.TempDir()
 
 	// Create PRIMARY multipooler for testing
-	multipooler := &clustermetadatapb.MultiPooler{
+	multipooler := clustermetadatapb.MultiPooler_builder{
 		Id:            serviceID,
 		Database:      "testdb",
 		Hostname:      "localhost",
 		PortMap:       map[string]int32{"grpc": 8080},
 		Type:          clustermetadatapb.PoolerType_PRIMARY,
 		ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-	}
+	}.Build()
 	require.NoError(t, ts.CreateMultiPooler(ctx, multipooler))
 
 	config := &Config{
@@ -262,7 +262,7 @@ func TestActionLock_MutationMethodsTimeout(t *testing.T) {
 			name:       "SetTerm times out when lock is held",
 			poolerType: clustermetadatapb.PoolerType_PRIMARY,
 			callMethod: func(ctx context.Context) error {
-				return manager.SetTerm(ctx, &multipoolermanagerdatapb.ConsensusTerm{TermNumber: 5})
+				return manager.SetTerm(ctx, multipoolermanagerdatapb.ConsensusTerm_builder{TermNumber: 5}.Build())
 			},
 		},
 		{
@@ -277,9 +277,9 @@ func TestActionLock_MutationMethodsTimeout(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Update the pooler type if needed for this test
-			if tt.poolerType != multipooler.Type {
+			if tt.poolerType != multipooler.GetType() {
 				updatedMultipooler, err := ts.UpdateMultiPoolerFields(ctx, serviceID, func(mp *clustermetadatapb.MultiPooler) error {
-					mp.Type = tt.poolerType
+					mp.SetType(tt.poolerType)
 					return nil
 				})
 				require.NoError(t, err)
@@ -315,21 +315,21 @@ func setupPromoteTestManager(t *testing.T) (*MultiPoolerManager, sqlmock.Sqlmock
 	pgctldAddr, cleanupPgctld := testutil.StartMockPgctldServer(t)
 	t.Cleanup(cleanupPgctld)
 
-	serviceID := &clustermetadatapb.ID{
+	serviceID := clustermetadatapb.ID_builder{
 		Component: clustermetadatapb.ID_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-replica",
-	}
+	}.Build()
 
 	// Create as REPLICA (ready for promotion)
-	multipooler := &clustermetadatapb.MultiPooler{
+	multipooler := clustermetadatapb.MultiPooler_builder{
 		Id:            serviceID,
 		Database:      "testdb",
 		Hostname:      "localhost",
 		PortMap:       map[string]int32{"grpc": 8080},
 		Type:          clustermetadatapb.PoolerType_REPLICA,
 		ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-	}
+	}.Build()
 	require.NoError(t, ts.CreateMultiPooler(ctx, multipooler))
 
 	tmpDir := t.TempDir()
@@ -365,7 +365,7 @@ func setupPromoteTestManager(t *testing.T) (*MultiPoolerManager, sqlmock.Sqlmock
 	require.NoError(t, err)
 
 	// Set consensus term to expected value (10) for testing using SetTerm
-	term := &multipoolermanagerdatapb.ConsensusTerm{TermNumber: 10}
+	term := multipoolermanagerdatapb.ConsensusTerm_builder{TermNumber: 10}.Build()
 	err = pm.SetTerm(ctx, term)
 	require.NoError(t, err)
 
@@ -394,7 +394,7 @@ func TestPromoteIdempotency_PostgreSQLPromotedButTopologyNotUpdated(t *testing.T
 
 	// Topology is still REPLICA (this is what the guard rail checks)
 	pm.mu.Lock()
-	pm.multipooler.Type = clustermetadatapb.PoolerType_REPLICA
+	pm.multipooler.GetType() = clustermetadatapb.PoolerType_REPLICA
 	pm.mu.Unlock()
 
 	// Mock: checkPromotionState queries pg_is_in_recovery() - returns false (already promoted)
@@ -414,13 +414,13 @@ func TestPromoteIdempotency_PostgreSQLPromotedButTopologyNotUpdated(t *testing.T
 	require.NoError(t, err, "Should succeed - idempotent retry after partial failure")
 	require.NotNil(t, resp)
 
-	assert.False(t, resp.WasAlreadyPrimary, "Should not report as fully complete since topology wasn't updated")
-	assert.Equal(t, int64(10), resp.ConsensusTerm)
-	assert.Equal(t, "0/ABCDEF0", resp.LsnPosition)
+	assert.False(t, resp.GetWasAlreadyPrimary(), "Should not report as fully complete since topology wasn't updated")
+	assert.Equal(t, int64(10), resp.GetConsensusTerm())
+	assert.Equal(t, "0/ABCDEF0", resp.GetLsnPosition())
 
 	// Verify topology was updated
 	pm.mu.Lock()
-	assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, pm.multipooler.Type, "Topology should be updated to PRIMARY")
+	assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, pm.multipooler.GetType(), "Topology should be updated to PRIMARY")
 	pm.mu.Unlock()
 
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -447,7 +447,7 @@ func TestPromoteIdempotency_FullyCompleteTopologyPrimary(t *testing.T) {
 
 	// Topology is already PRIMARY
 	pm.mu.Lock()
-	pm.multipooler.Type = clustermetadatapb.PoolerType_PRIMARY
+	pm.multipooler.GetType() = clustermetadatapb.PoolerType_PRIMARY
 	pm.mu.Unlock()
 
 	// Call Promote - should succeed with WasAlreadyPrimary=true (idempotent)
@@ -455,9 +455,9 @@ func TestPromoteIdempotency_FullyCompleteTopologyPrimary(t *testing.T) {
 	require.NoError(t, err, "Should succeed - everything is already complete")
 	require.NotNil(t, resp)
 
-	assert.True(t, resp.WasAlreadyPrimary, "Should report as already primary")
-	assert.Equal(t, int64(10), resp.ConsensusTerm)
-	assert.Equal(t, "0/FEDCBA0", resp.LsnPosition)
+	assert.True(t, resp.GetWasAlreadyPrimary(), "Should report as already primary")
+	assert.Equal(t, int64(10), resp.GetConsensusTerm())
+	assert.Equal(t, "0/FEDCBA0", resp.GetLsnPosition())
 
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -478,7 +478,7 @@ func TestPromoteIdempotency_InconsistentStateTopologyPrimaryPgNotPrimary(t *test
 
 	// Topology shows PRIMARY (inconsistent!)
 	pm.mu.Lock()
-	pm.multipooler.Type = clustermetadatapb.PoolerType_PRIMARY
+	pm.multipooler.GetType() = clustermetadatapb.PoolerType_PRIMARY
 	pm.mu.Unlock()
 
 	// Call Promote without force - should fail with inconsistent state error
@@ -506,7 +506,7 @@ func TestPromoteIdempotency_InconsistentStateFixedWithForce(t *testing.T) {
 
 	// Topology shows PRIMARY (inconsistent!)
 	pm.mu.Lock()
-	pm.multipooler.Type = clustermetadatapb.PoolerType_PRIMARY
+	pm.multipooler.GetType() = clustermetadatapb.PoolerType_PRIMARY
 	pm.mu.Unlock()
 
 	// Mock: Validate expected LSN
@@ -531,9 +531,9 @@ func TestPromoteIdempotency_InconsistentStateFixedWithForce(t *testing.T) {
 	require.NotNil(t, resp)
 
 	// PostgreSQL was promoted, so this is not "already primary" case
-	assert.False(t, resp.WasAlreadyPrimary)
-	assert.Equal(t, int64(10), resp.ConsensusTerm)
-	assert.Equal(t, "0/FEDCBA0", resp.LsnPosition)
+	assert.False(t, resp.GetWasAlreadyPrimary())
+	assert.Equal(t, int64(10), resp.GetConsensusTerm())
+	assert.Equal(t, "0/FEDCBA0", resp.GetLsnPosition())
 
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -554,7 +554,7 @@ func TestPromoteIdempotency_NothingCompleteYet(t *testing.T) {
 
 	// Topology is REPLICA
 	pm.mu.Lock()
-	pm.multipooler.Type = clustermetadatapb.PoolerType_REPLICA
+	pm.multipooler.GetType() = clustermetadatapb.PoolerType_REPLICA
 	pm.mu.Unlock()
 
 	// Mock: Validate expected LSN (pg_last_wal_replay_lsn + pg_is_wal_replay_paused)
@@ -582,12 +582,12 @@ func TestPromoteIdempotency_NothingCompleteYet(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 
-	assert.False(t, resp.WasAlreadyPrimary)
-	assert.Equal(t, int64(10), resp.ConsensusTerm)
+	assert.False(t, resp.GetWasAlreadyPrimary())
+	assert.Equal(t, int64(10), resp.GetConsensusTerm())
 
 	// Verify topology was updated
 	pm.mu.Lock()
-	assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, pm.multipooler.Type)
+	assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, pm.multipooler.GetType())
 	pm.mu.Unlock()
 
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -603,7 +603,7 @@ func TestPromoteIdempotency_LSNMismatchBeforePromotion(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"pg_is_in_recovery"}).AddRow(true))
 
 	pm.mu.Lock()
-	pm.multipooler.Type = clustermetadatapb.PoolerType_REPLICA
+	pm.multipooler.GetType() = clustermetadatapb.PoolerType_REPLICA
 	pm.mu.Unlock()
 
 	// Mock: Check LSN - return different value than expected
@@ -624,7 +624,7 @@ func TestPromoteIdempotency_TermMismatch(t *testing.T) {
 	pm, mock, _ := setupPromoteTestManager(t)
 
 	// Explicitly set the term to 10 to ensure we have the expected value using SetTerm
-	term := &multipoolermanagerdatapb.ConsensusTerm{TermNumber: 10}
+	term := multipoolermanagerdatapb.ConsensusTerm_builder{TermNumber: 10}.Build()
 	err := pm.SetTerm(ctx, term)
 	require.NoError(t, err)
 
@@ -647,7 +647,7 @@ func TestPromoteIdempotency_SecondCallSucceedsAfterCompletion(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"pg_is_in_recovery"}).AddRow(true))
 
 	pm.mu.Lock()
-	pm.multipooler.Type = clustermetadatapb.PoolerType_REPLICA
+	pm.multipooler.GetType() = clustermetadatapb.PoolerType_REPLICA
 	pm.mu.Unlock()
 
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT pg_last_wal_replay_lsn()::text, pg_is_wal_replay_paused()")).
@@ -662,11 +662,11 @@ func TestPromoteIdempotency_SecondCallSucceedsAfterCompletion(t *testing.T) {
 	// First call
 	resp1, err := pm.Promote(ctx, 10, "0/AAA1111", nil, false /* force */)
 	require.NoError(t, err)
-	assert.False(t, resp1.WasAlreadyPrimary)
+	assert.False(t, resp1.GetWasAlreadyPrimary())
 
 	// Verify topology was updated to PRIMARY
 	pm.mu.Lock()
-	assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, pm.multipooler.Type)
+	assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, pm.multipooler.GetType())
 	pm.mu.Unlock()
 
 	// Setup for second call - everything already complete
@@ -678,8 +678,8 @@ func TestPromoteIdempotency_SecondCallSucceedsAfterCompletion(t *testing.T) {
 	// Second call should SUCCEED - topology is PRIMARY and everything is consistent (idempotent)
 	resp2, err := pm.Promote(ctx, 10, "0/AAA1111", nil, false /* force */)
 	require.NoError(t, err, "Second call should succeed - idempotent operation")
-	assert.True(t, resp2.WasAlreadyPrimary, "Second call should report as already primary")
-	assert.Equal(t, "0/AAA1111", resp2.LsnPosition)
+	assert.True(t, resp2.GetWasAlreadyPrimary(), "Second call should report as already primary")
+	assert.Equal(t, "0/AAA1111", resp2.GetLsnPosition())
 
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -694,7 +694,7 @@ func TestPromoteIdempotency_EmptyExpectedLSNSkipsValidation(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"pg_is_in_recovery"}).AddRow(true))
 
 	pm.mu.Lock()
-	pm.multipooler.Type = clustermetadatapb.PoolerType_REPLICA
+	pm.multipooler.GetType() = clustermetadatapb.PoolerType_REPLICA
 	pm.mu.Unlock()
 
 	// Mock: pg_promote() call (LSN validation skipped because expectedLSN is empty)
@@ -714,8 +714,8 @@ func TestPromoteIdempotency_EmptyExpectedLSNSkipsValidation(t *testing.T) {
 	require.NoError(t, err, "Should succeed with empty expectedLSN")
 	require.NotNil(t, resp)
 
-	assert.False(t, resp.WasAlreadyPrimary)
-	assert.Equal(t, "0/BBBBBBB", resp.LsnPosition)
+	assert.False(t, resp.GetWasAlreadyPrimary())
+	assert.Equal(t, "0/BBBBBBB", resp.GetLsnPosition())
 
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -724,11 +724,11 @@ func TestReplicationStatus(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	serviceID := &clustermetadatapb.ID{
+	serviceID := clustermetadatapb.ID_builder{
 		Component: clustermetadatapb.ID_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-service",
-	}
+	}.Build()
 
 	t.Run("PRIMARY_pooler_returns_primary_status", func(t *testing.T) {
 		ts, _ := memorytopo.NewServerAndFactory(ctx, "zone1")
@@ -738,14 +738,14 @@ func TestReplicationStatus(t *testing.T) {
 		t.Cleanup(cleanupPgctld)
 
 		// Create PRIMARY multipooler
-		multipooler := &clustermetadatapb.MultiPooler{
+		multipooler := clustermetadatapb.MultiPooler_builder{
 			Id:            serviceID,
 			Database:      "testdb",
 			Hostname:      "localhost",
 			PortMap:       map[string]int32{"grpc": 8080},
 			Type:          clustermetadatapb.PoolerType_PRIMARY,
 			ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-		}
+		}.Build()
 		require.NoError(t, ts.CreateMultiPooler(ctx, multipooler))
 
 		tmpDir := t.TempDir()
@@ -799,10 +799,10 @@ func TestReplicationStatus(t *testing.T) {
 		require.NotNil(t, status)
 
 		// Verify response structure
-		assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, status.PoolerType)
-		assert.NotNil(t, status.PrimaryStatus, "PrimaryStatus should be populated")
-		assert.Nil(t, status.ReplicationStatus, "ReplicationStatus should be nil for PRIMARY")
-		assert.Equal(t, "0/12345678", status.PrimaryStatus.Lsn)
+		assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, status.GetPoolerType())
+		assert.NotNil(t, status.GetPrimaryStatus(), "PrimaryStatus should be populated")
+		assert.Nil(t, status.GetReplicationStatus(), "ReplicationStatus should be nil for PRIMARY")
+		assert.Equal(t, "0/12345678", status.GetPrimaryStatus().GetLsn())
 
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
@@ -815,14 +815,14 @@ func TestReplicationStatus(t *testing.T) {
 		t.Cleanup(cleanupPgctld)
 
 		// Create REPLICA multipooler
-		multipooler := &clustermetadatapb.MultiPooler{
+		multipooler := clustermetadatapb.MultiPooler_builder{
 			Id:            serviceID,
 			Database:      "testdb",
 			Hostname:      "localhost",
 			PortMap:       map[string]int32{"grpc": 8080},
 			Type:          clustermetadatapb.PoolerType_REPLICA,
 			ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-		}
+		}.Build()
 		require.NoError(t, ts.CreateMultiPooler(ctx, multipooler))
 
 		tmpDir := t.TempDir()
@@ -872,10 +872,10 @@ func TestReplicationStatus(t *testing.T) {
 		require.NotNil(t, status)
 
 		// Verify response structure
-		assert.Equal(t, clustermetadatapb.PoolerType_REPLICA, status.PoolerType)
-		assert.Nil(t, status.PrimaryStatus, "PrimaryStatus should be nil for REPLICA")
-		assert.NotNil(t, status.ReplicationStatus, "ReplicationStatus should be populated")
-		assert.Equal(t, "0/12345600", status.ReplicationStatus.LastReplayLsn)
+		assert.Equal(t, clustermetadatapb.PoolerType_REPLICA, status.GetPoolerType())
+		assert.Nil(t, status.GetPrimaryStatus(), "PrimaryStatus should be nil for REPLICA")
+		assert.NotNil(t, status.GetReplicationStatus(), "ReplicationStatus should be populated")
+		assert.Equal(t, "0/12345600", status.GetReplicationStatus().GetLastReplayLsn())
 
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
@@ -888,14 +888,14 @@ func TestReplicationStatus(t *testing.T) {
 		t.Cleanup(cleanupPgctld)
 
 		// Create PRIMARY multipooler (but PG will be in standby mode - mismatch!)
-		multipooler := &clustermetadatapb.MultiPooler{
+		multipooler := clustermetadatapb.MultiPooler_builder{
 			Id:            serviceID,
 			Database:      "testdb",
 			Hostname:      "localhost",
 			PortMap:       map[string]int32{"grpc": 8080},
 			Type:          clustermetadatapb.PoolerType_PRIMARY,
 			ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-		}
+		}.Build()
 		require.NoError(t, ts.CreateMultiPooler(ctx, multipooler))
 
 		tmpDir := t.TempDir()
@@ -950,14 +950,14 @@ func TestReplicationStatus(t *testing.T) {
 		t.Cleanup(cleanupPgctld)
 
 		// Create REPLICA multipooler (but PG will be in primary mode - mismatch!)
-		multipooler := &clustermetadatapb.MultiPooler{
+		multipooler := clustermetadatapb.MultiPooler_builder{
 			Id:            serviceID,
 			Database:      "testdb",
 			Hostname:      "localhost",
 			PortMap:       map[string]int32{"grpc": 8080},
 			Type:          clustermetadatapb.PoolerType_REPLICA,
 			ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-		}
+		}.Build()
 		require.NoError(t, ts.CreateMultiPooler(ctx, multipooler))
 
 		tmpDir := t.TempDir()

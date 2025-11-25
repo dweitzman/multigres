@@ -45,10 +45,10 @@ func TestPgCtldServiceStart(t *testing.T) {
 	}{
 		{
 			name: "start with uninitialized data dir should fail",
-			request: &pb.StartRequest{
+			request: pb.StartRequest_builder{
 				Port:      5432,
 				ExtraArgs: []string{},
-			},
+			}.Build(),
 			setupDataDir: func(baseDir string) string {
 				return testutil.CreateDataDir(t, baseDir, false)
 			},
@@ -58,9 +58,9 @@ func TestPgCtldServiceStart(t *testing.T) {
 		},
 		{
 			name: "start already running server",
-			request: &pb.StartRequest{
+			request: pb.StartRequest_builder{
 				Port: 5432,
-			},
+			}.Build(),
 			setupDataDir: func(baseDir string) string {
 				dataDir := testutil.CreateDataDir(t, baseDir, true)
 				testutil.CreatePIDFile(t, dataDir, 12345)
@@ -69,7 +69,7 @@ func TestPgCtldServiceStart(t *testing.T) {
 			setupBinaries: true,
 			expectError:   false,
 			checkResponse: func(t *testing.T, resp *pb.StartResponse) {
-				assert.Contains(t, resp.Message, "already running")
+				assert.Contains(t, resp.GetMessage(), "already running")
 			},
 		},
 	}
@@ -134,10 +134,10 @@ func TestPgCtldServiceStop(t *testing.T) {
 	}{
 		{
 			name: "successful stop",
-			request: &pb.StopRequest{
+			request: pb.StopRequest_builder{
 				Mode:    "fast",
 				Timeout: durationpb.New(30 * time.Second),
-			},
+			}.Build(),
 			setupDataDir: func(baseDir string) string {
 				dataDir := testutil.CreateDataDir(t, baseDir, true)
 				testutil.CreatePIDFile(t, dataDir, 12345)
@@ -146,21 +146,21 @@ func TestPgCtldServiceStop(t *testing.T) {
 			setupBinaries: true,
 			expectError:   false,
 			checkResponse: func(t *testing.T, resp *pb.StopResponse) {
-				assert.Contains(t, resp.Message, "successfully")
+				assert.Contains(t, resp.GetMessage(), "successfully")
 			},
 		},
 		{
 			name: "stop not running server",
-			request: &pb.StopRequest{
+			request: pb.StopRequest_builder{
 				Mode: "fast",
-			},
+			}.Build(),
 			setupDataDir: func(baseDir string) string {
 				return testutil.CreateDataDir(t, baseDir, true) // No PID file
 			},
 			setupBinaries: false,
 			expectError:   false,
 			checkResponse: func(t *testing.T, resp *pb.StopResponse) {
-				assert.Contains(t, resp.Message, "not running")
+				assert.Contains(t, resp.GetMessage(), "not running")
 			},
 		},
 	}
@@ -253,9 +253,9 @@ func TestPgCtldServiceStatus(t *testing.T) {
 
 			require.NoError(t, err)
 			require.NotNil(t, resp)
-			assert.Equal(t, tt.expected, resp.Status)
+			assert.Equal(t, tt.expected, resp.GetStatus())
 			// TODO: This assertion needs to be updated when we fix this test in detail
-			assert.Equal(t, int32(5432), resp.Port)
+			assert.Equal(t, int32(5432), resp.GetPort())
 		})
 	}
 }
@@ -278,17 +278,17 @@ func TestPgCtldServiceRestart(t *testing.T) {
 		service, err := NewPgCtldService(testLogger(), 5432, "postgres", "postgres", 30, poolerDir, "localhost")
 		require.NoError(t, err)
 
-		request := &pb.RestartRequest{
+		request := pb.RestartRequest_builder{
 			Mode:    "fast",
 			Timeout: durationpb.New(30 * time.Second),
 			Port:    5432,
-		}
+		}.Build()
 
 		resp, err := service.Restart(context.Background(), request)
 
 		require.NoError(t, err)
 		require.NotNil(t, resp)
-		assert.Contains(t, resp.Message, "restarted successfully")
+		assert.Contains(t, resp.GetMessage(), "restarted successfully")
 	})
 }
 
@@ -316,7 +316,7 @@ func TestPgCtldServiceReloadConfig(t *testing.T) {
 
 		require.NoError(t, err)
 		require.NotNil(t, resp)
-		assert.Contains(t, resp.Message, "reloaded successfully")
+		assert.Contains(t, resp.GetMessage(), "reloaded successfully")
 	})
 
 	t.Run("reload when not running", func(t *testing.T) {
@@ -354,17 +354,17 @@ func TestPgCtldServiceVersion(t *testing.T) {
 		service, err := NewPgCtldService(testLogger(), 5432, "postgres", "postgres", 30, poolerDir, "localhost")
 		require.NoError(t, err)
 
-		request := &pb.VersionRequest{
+		request := pb.VersionRequest_builder{
 			Port:     5432,
 			Database: "postgres",
 			User:     "postgres",
-		}
+		}.Build()
 
 		resp, err := service.Version(context.Background(), request)
 
 		require.NoError(t, err)
 		require.NotNil(t, resp)
-		assert.Contains(t, resp.Version, "PostgreSQL")
+		assert.Contains(t, resp.GetVersion(), "PostgreSQL")
 	})
 }
 
@@ -382,16 +382,16 @@ func TestPgCtldServiceInitDataDir(t *testing.T) {
 		service, err := NewPgCtldService(testLogger(), 5432, "postgres", "postgres", 30, poolerDir, "localhost")
 		require.NoError(t, err)
 
-		request := &pb.InitDataDirRequest{
+		request := pb.InitDataDirRequest_builder{
 			AuthLocal: "trust",
 			AuthHost:  "md5",
-		}
+		}.Build()
 
 		resp, err := service.InitDataDir(context.Background(), request)
 
 		require.NoError(t, err)
 		require.NotNil(t, resp)
-		assert.Contains(t, resp.Message, "initialized successfully")
+		assert.Contains(t, resp.GetMessage(), "initialized successfully")
 	})
 
 	t.Run("already initialized", func(t *testing.T) {
@@ -410,7 +410,7 @@ func TestPgCtldServiceInitDataDir(t *testing.T) {
 
 		require.NoError(t, err)
 		require.NotNil(t, resp)
-		assert.Contains(t, resp.Message, "already initialized")
+		assert.Contains(t, resp.GetMessage(), "already initialized")
 	})
 }
 

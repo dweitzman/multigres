@@ -59,63 +59,63 @@ func (s *MultiAdminServer) RegisterWithGRPCServer(grpcServer *grpc.Server) {
 
 // GetCell retrieves information about a specific cell
 func (s *MultiAdminServer) GetCell(ctx context.Context, req *multiadminpb.GetCellRequest) (*multiadminpb.GetCellResponse, error) {
-	s.logger.DebugContext(ctx, "GetCell request received", "cell_name", req.Name)
+	s.logger.DebugContext(ctx, "GetCell request received", "cell_name", req.GetName())
 
 	// Validate request
-	if req.Name == "" {
+	if req.GetName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "cell name cannot be empty")
 	}
 
 	// Get cell from topology
-	cell, err := s.ts.GetCell(ctx, req.Name)
+	cell, err := s.ts.GetCell(ctx, req.GetName())
 	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to get cell from topology", "cell_name", req.Name, "error", err)
+		s.logger.ErrorContext(ctx, "Failed to get cell from topology", "cell_name", req.GetName(), "error", err)
 
 		// Check if it's a not found error
 		if errors.Is(err, &topo.TopoError{Code: topo.NoNode}) {
-			return nil, status.Errorf(codes.NotFound, "cell '%s' not found", req.Name)
+			return nil, status.Errorf(codes.NotFound, "cell '%s' not found", req.GetName())
 		}
 
 		return nil, status.Errorf(codes.Internal, "failed to retrieve cell: %v", err)
 	}
 
 	// Return the response
-	response := &multiadminpb.GetCellResponse{
+	response := multiadminpb.GetCellResponse_builder{
 		Cell: cell,
-	}
+	}.Build()
 
-	s.logger.DebugContext(ctx, "GetCell request completed successfully", "cell_name", req.Name)
+	s.logger.DebugContext(ctx, "GetCell request completed successfully", "cell_name", req.GetName())
 	return response, nil
 }
 
 // GetDatabase retrieves information about a specific database
 func (s *MultiAdminServer) GetDatabase(ctx context.Context, req *multiadminpb.GetDatabaseRequest) (*multiadminpb.GetDatabaseResponse, error) {
-	s.logger.DebugContext(ctx, "GetDatabase request received", "database_name", req.Name)
+	s.logger.DebugContext(ctx, "GetDatabase request received", "database_name", req.GetName())
 
 	// Validate request
-	if req.Name == "" {
+	if req.GetName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "database name cannot be empty")
 	}
 
 	// Get database from topology
-	database, err := s.ts.GetDatabase(ctx, req.Name)
+	database, err := s.ts.GetDatabase(ctx, req.GetName())
 	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to get database from topology", "database_name", req.Name, "error", err)
+		s.logger.ErrorContext(ctx, "Failed to get database from topology", "database_name", req.GetName(), "error", err)
 
 		// Check if it's a not found error
 		if errors.Is(err, &topo.TopoError{Code: topo.NoNode}) {
-			return nil, status.Errorf(codes.NotFound, "database '%s' not found", req.Name)
+			return nil, status.Errorf(codes.NotFound, "database '%s' not found", req.GetName())
 		}
 
 		return nil, status.Errorf(codes.Internal, "failed to retrieve database: %v", err)
 	}
 
 	// Return the response
-	response := &multiadminpb.GetDatabaseResponse{
+	response := multiadminpb.GetDatabaseResponse_builder{
 		Database: database,
-	}
+	}.Build()
 
-	s.logger.DebugContext(ctx, "GetDatabase request completed successfully", "database_name", req.Name)
+	s.logger.DebugContext(ctx, "GetDatabase request completed successfully", "database_name", req.GetName())
 	return response, nil
 }
 
@@ -129,9 +129,9 @@ func (s *MultiAdminServer) GetCellNames(ctx context.Context, req *multiadminpb.G
 		return nil, status.Errorf(codes.Internal, "failed to retrieve cell names: %v", err)
 	}
 
-	response := &multiadminpb.GetCellNamesResponse{
+	response := multiadminpb.GetCellNamesResponse_builder{
 		Names: names,
-	}
+	}.Build()
 
 	s.logger.DebugContext(ctx, "GetCellNames request completed successfully", "count", len(names))
 	return response, nil
@@ -147,9 +147,9 @@ func (s *MultiAdminServer) GetDatabaseNames(ctx context.Context, req *multiadmin
 		return nil, status.Errorf(codes.Internal, "failed to retrieve database names: %v", err)
 	}
 
-	response := &multiadminpb.GetDatabaseNamesResponse{
+	response := multiadminpb.GetDatabaseNamesResponse_builder{
 		Names: names,
-	}
+	}.Build()
 
 	s.logger.DebugContext(ctx, "GetDatabaseNames request completed successfully", "count", len(names))
 	return response, nil
@@ -157,10 +157,10 @@ func (s *MultiAdminServer) GetDatabaseNames(ctx context.Context, req *multiadmin
 
 // GetGateways retrieves gateways filtered by cells
 func (s *MultiAdminServer) GetGateways(ctx context.Context, req *multiadminpb.GetGatewaysRequest) (*multiadminpb.GetGatewaysResponse, error) {
-	s.logger.DebugContext(ctx, "GetGateways request received", "cells", req.Cells)
+	s.logger.DebugContext(ctx, "GetGateways request received", "cells", req.GetCells())
 
 	// Determine which cells to query
-	cellsToQuery := req.Cells
+	cellsToQuery := req.GetCells()
 	if len(cellsToQuery) == 0 {
 		// If no cells specified, get all cells
 		allCells, err := s.ts.GetCellNames(ctx)
@@ -190,9 +190,9 @@ func (s *MultiAdminServer) GetGateways(ctx context.Context, req *multiadminpb.Ge
 		}
 	}
 
-	response := &multiadminpb.GetGatewaysResponse{
+	response := multiadminpb.GetGatewaysResponse_builder{
 		Gateways: allGateways,
-	}
+	}.Build()
 
 	// Return partial results with error if some cells failed
 	if len(errors) > 0 {
@@ -206,10 +206,10 @@ func (s *MultiAdminServer) GetGateways(ctx context.Context, req *multiadminpb.Ge
 
 // GetPoolers retrieves poolers filtered by cells and/or database
 func (s *MultiAdminServer) GetPoolers(ctx context.Context, req *multiadminpb.GetPoolersRequest) (*multiadminpb.GetPoolersResponse, error) {
-	s.logger.DebugContext(ctx, "GetPoolers request received", "cells", req.Cells, "database", req.Database)
+	s.logger.DebugContext(ctx, "GetPoolers request received", "cells", req.GetCells(), "database", req.GetDatabase())
 
 	// Determine which cells to query
-	cellsToQuery := req.Cells
+	cellsToQuery := req.GetCells()
 	if len(cellsToQuery) == 0 {
 		// If no cells specified, get all cells
 		allCells, err := s.ts.GetCellNames(ctx)
@@ -227,11 +227,11 @@ func (s *MultiAdminServer) GetPoolers(ctx context.Context, req *multiadminpb.Get
 	for _, cellName := range cellsToQuery {
 		var opts *topo.GetMultiPoolersByCellOptions
 		// filter by database and shard if specified
-		if req.Database != "" {
+		if req.GetDatabase() != "" {
 			opts = &topo.GetMultiPoolersByCellOptions{
 				DatabaseShard: &topo.DatabaseShard{
-					Database: req.Database,
-					Shard:    req.Shard,
+					Database: req.GetDatabase(),
+					Shard:    req.GetShard(),
 				},
 			}
 		}
@@ -249,9 +249,9 @@ func (s *MultiAdminServer) GetPoolers(ctx context.Context, req *multiadminpb.Get
 		}
 	}
 
-	response := &multiadminpb.GetPoolersResponse{
+	response := multiadminpb.GetPoolersResponse_builder{
 		Poolers: allPoolers,
-	}
+	}.Build()
 
 	// Return partial results with error if some cells failed
 	if len(errors) > 0 {
@@ -265,10 +265,10 @@ func (s *MultiAdminServer) GetPoolers(ctx context.Context, req *multiadminpb.Get
 
 // GetOrchs retrieves orchestrators filtered by cells
 func (s *MultiAdminServer) GetOrchs(ctx context.Context, req *multiadminpb.GetOrchsRequest) (*multiadminpb.GetOrchsResponse, error) {
-	s.logger.DebugContext(ctx, "GetOrchs request received", "cells", req.Cells)
+	s.logger.DebugContext(ctx, "GetOrchs request received", "cells", req.GetCells())
 
 	// Determine which cells to query
-	cellsToQuery := req.Cells
+	cellsToQuery := req.GetCells()
 	if len(cellsToQuery) == 0 {
 		// If no cells specified, get all cells
 		allCells, err := s.ts.GetCellNames(ctx)
@@ -298,9 +298,9 @@ func (s *MultiAdminServer) GetOrchs(ctx context.Context, req *multiadminpb.GetOr
 		}
 	}
 
-	response := &multiadminpb.GetOrchsResponse{
+	response := multiadminpb.GetOrchsResponse_builder{
 		Orchs: allOrchs,
-	}
+	}.Build()
 
 	// Return partial results with error if some cells failed
 	if len(errors) > 0 {

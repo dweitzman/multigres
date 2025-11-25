@@ -38,7 +38,7 @@ func TestMultiAdminServerGetCell(t *testing.T) {
 
 	// Test getting a non-existent cell
 	t.Run("non-existent cell returns NotFound", func(t *testing.T) {
-		req := &multiadminpb.GetCellRequest{Name: "nonexistent"}
+		req := multiadminpb.GetCellRequest_builder{Name: "nonexistent"}.Build()
 		resp, err := server.GetCell(ctx, req)
 
 		assert.Nil(t, resp)
@@ -52,7 +52,7 @@ func TestMultiAdminServerGetCell(t *testing.T) {
 
 	// Test with empty cell name
 	t.Run("empty cell name returns InvalidArgument", func(t *testing.T) {
-		req := &multiadminpb.GetCellRequest{Name: ""}
+		req := multiadminpb.GetCellRequest_builder{Name: ""}.Build()
 		resp, err := server.GetCell(ctx, req)
 
 		assert.Nil(t, resp)
@@ -67,25 +67,25 @@ func TestMultiAdminServerGetCell(t *testing.T) {
 	// Test getting an existing cell
 	t.Run("existing cell returns cell data", func(t *testing.T) {
 		// First create a cell
-		testCell := &clustermetadatapb.Cell{
+		testCell := clustermetadatapb.Cell_builder{
 			Name:            "testcell",
 			ServerAddresses: []string{"localhost:2379"},
 			Root:            "/multigres/testcell",
-		}
+		}.Build()
 
 		err := ts.CreateCell(ctx, "testcell", testCell)
 		require.NoError(t, err)
 
 		// Now try to get it
-		req := &multiadminpb.GetCellRequest{Name: "testcell"}
+		req := multiadminpb.GetCellRequest_builder{Name: "testcell"}.Build()
 		resp, err := server.GetCell(ctx, req)
 
 		require.NoError(t, err)
 		require.NotNil(t, resp)
-		require.NotNil(t, resp.Cell)
-		assert.Equal(t, "testcell", resp.Cell.Name)
-		assert.Equal(t, []string{"localhost:2379"}, resp.Cell.ServerAddresses)
-		assert.Equal(t, "/multigres/testcell", resp.Cell.Root)
+		require.NotNil(t, resp.GetCell())
+		assert.Equal(t, "testcell", resp.GetCell().GetName())
+		assert.Equal(t, []string{"localhost:2379"}, resp.GetCell().GetServerAddresses())
+		assert.Equal(t, "/multigres/testcell", resp.GetCell().GetRoot())
 	})
 }
 
@@ -98,7 +98,7 @@ func TestMultiAdminServerGetDatabase(t *testing.T) {
 
 	// Test getting a non-existent database
 	t.Run("non-existent database returns NotFound", func(t *testing.T) {
-		req := &multiadminpb.GetDatabaseRequest{Name: "nonexistent"}
+		req := multiadminpb.GetDatabaseRequest_builder{Name: "nonexistent"}.Build()
 		resp, err := server.GetDatabase(ctx, req)
 
 		assert.Nil(t, resp)
@@ -112,7 +112,7 @@ func TestMultiAdminServerGetDatabase(t *testing.T) {
 
 	// Test with empty database name
 	t.Run("empty database name returns InvalidArgument", func(t *testing.T) {
-		req := &multiadminpb.GetDatabaseRequest{Name: ""}
+		req := multiadminpb.GetDatabaseRequest_builder{Name: ""}.Build()
 		resp, err := server.GetDatabase(ctx, req)
 
 		assert.Nil(t, resp)
@@ -127,27 +127,27 @@ func TestMultiAdminServerGetDatabase(t *testing.T) {
 	// Test getting an existing database
 	t.Run("existing database returns database data", func(t *testing.T) {
 		// First create a database
-		testDatabase := &clustermetadatapb.Database{
+		testDatabase := clustermetadatapb.Database_builder{
 			Name:             "testdb",
 			BackupLocation:   "s3://backup-bucket/testdb",
 			DurabilityPolicy: "none",
 			Cells:            []string{"cell1", "cell2"},
-		}
+		}.Build()
 
 		err := ts.CreateDatabase(ctx, "testdb", testDatabase)
 		require.NoError(t, err)
 
 		// Now try to get it
-		req := &multiadminpb.GetDatabaseRequest{Name: "testdb"}
+		req := multiadminpb.GetDatabaseRequest_builder{Name: "testdb"}.Build()
 		resp, err := server.GetDatabase(ctx, req)
 
 		require.NoError(t, err)
 		require.NotNil(t, resp)
-		require.NotNil(t, resp.Database)
-		assert.Equal(t, "testdb", resp.Database.Name)
-		assert.Equal(t, "s3://backup-bucket/testdb", resp.Database.BackupLocation)
-		assert.Equal(t, "none", resp.Database.DurabilityPolicy)
-		assert.Equal(t, []string{"cell1", "cell2"}, resp.Database.Cells)
+		require.NotNil(t, resp.GetDatabase())
+		assert.Equal(t, "testdb", resp.GetDatabase().GetName())
+		assert.Equal(t, "s3://backup-bucket/testdb", resp.GetDatabase().GetBackupLocation())
+		assert.Equal(t, "none", resp.GetDatabase().GetDurabilityPolicy())
+		assert.Equal(t, []string{"cell1", "cell2"}, resp.GetDatabase().GetCells())
 	})
 }
 
@@ -163,18 +163,18 @@ func TestMultiAdminServerGetCellNames(t *testing.T) {
 
 		require.NoError(t, err)
 		require.NotNil(t, resp)
-		assert.Empty(t, resp.Names)
+		assert.Empty(t, resp.GetNames())
 	})
 
 	t.Run("returns all cell names", func(t *testing.T) {
 		// Create test cells
 		cells := []*clustermetadatapb.Cell{
-			{Name: "cell1", ServerAddresses: []string{"localhost:2379"}, Root: "/multigres/cell1"},
-			{Name: "cell2", ServerAddresses: []string{"localhost:2380"}, Root: "/multigres/cell2"},
+			clustermetadatapb.Cell_builder{Name: "cell1", ServerAddresses: []string{"localhost:2379"}, Root: "/multigres/cell1"}.Build(),
+			clustermetadatapb.Cell_builder{Name: "cell2", ServerAddresses: []string{"localhost:2380"}, Root: "/multigres/cell2"}.Build(),
 		}
 
 		for _, cell := range cells {
-			err := ts.CreateCell(ctx, cell.Name, cell)
+			err := ts.CreateCell(ctx, cell.GetName(), cell)
 			require.NoError(t, err)
 		}
 
@@ -183,7 +183,7 @@ func TestMultiAdminServerGetCellNames(t *testing.T) {
 
 		require.NoError(t, err)
 		require.NotNil(t, resp)
-		assert.ElementsMatch(t, []string{"cell1", "cell2"}, resp.Names)
+		assert.ElementsMatch(t, []string{"cell1", "cell2"}, resp.GetNames())
 	})
 }
 
@@ -199,18 +199,18 @@ func TestMultiAdminServerGetDatabaseNames(t *testing.T) {
 
 		require.NoError(t, err)
 		require.NotNil(t, resp)
-		assert.Empty(t, resp.Names)
+		assert.Empty(t, resp.GetNames())
 	})
 
 	t.Run("returns all database names", func(t *testing.T) {
 		// Create test databases
 		databases := []*clustermetadatapb.Database{
-			{Name: "db1", DurabilityPolicy: "none", Cells: []string{"cell1"}},
-			{Name: "db2", DurabilityPolicy: "none", Cells: []string{"cell1"}},
+			clustermetadatapb.Database_builder{Name: "db1", DurabilityPolicy: "none", Cells: []string{"cell1"}}.Build(),
+			clustermetadatapb.Database_builder{Name: "db2", DurabilityPolicy: "none", Cells: []string{"cell1"}}.Build(),
 		}
 
 		for _, db := range databases {
-			err := ts.CreateDatabase(ctx, db.Name, db)
+			err := ts.CreateDatabase(ctx, db.GetName(), db)
 			require.NoError(t, err)
 		}
 
@@ -219,7 +219,7 @@ func TestMultiAdminServerGetDatabaseNames(t *testing.T) {
 
 		require.NoError(t, err)
 		require.NotNil(t, resp)
-		assert.ElementsMatch(t, []string{"db1", "db2"}, resp.Names)
+		assert.ElementsMatch(t, []string{"db1", "db2"}, resp.GetNames())
 	})
 }
 
@@ -235,18 +235,18 @@ func TestMultiAdminServerGetGateways(t *testing.T) {
 
 		require.NoError(t, err)
 		require.NotNil(t, resp)
-		assert.Empty(t, resp.Gateways)
+		assert.Empty(t, resp.GetGateways())
 	})
 
 	t.Run("get gateways filtered by non-existent cell", func(t *testing.T) {
-		req := &multiadminpb.GetGatewaysRequest{
+		req := multiadminpb.GetGatewaysRequest_builder{
 			Cells: []string{"nonexistent"},
-		}
+		}.Build()
 		resp, err := server.GetGateways(ctx, req)
 
 		require.Error(t, err)
 		require.NotNil(t, resp)
-		assert.Empty(t, resp.Gateways)
+		assert.Empty(t, resp.GetGateways())
 		assert.Contains(t, err.Error(), "partial results returned due to errors in 1 cell(s)")
 		assert.Contains(t, err.Error(), "failed to get gateways for cell nonexistent")
 	})
@@ -267,43 +267,43 @@ func TestMultiAdminServerGetGatewaysMultiCell(t *testing.T) {
 
 		require.NoError(t, err)
 		require.NotNil(t, resp)
-		assert.Len(t, resp.Gateways, 3) // gw1, gw2, gw3
+		assert.Len(t, resp.GetGateways(), 3) // gw1, gw2, gw3
 	})
 
 	t.Run("get gateways filtered by single cell", func(t *testing.T) {
-		req := &multiadminpb.GetGatewaysRequest{
+		req := multiadminpb.GetGatewaysRequest_builder{
 			Cells: []string{"cell1"},
-		}
+		}.Build()
 		resp, err := server.GetGateways(ctx, req)
 
 		require.NoError(t, err)
 		require.NotNil(t, resp)
-		assert.Len(t, resp.Gateways, 2) // gw1, gw2
-		for _, gw := range resp.Gateways {
-			assert.Equal(t, "cell1", gw.Id.Cell)
+		assert.Len(t, resp.GetGateways(), 2) // gw1, gw2
+		for _, gw := range resp.GetGateways() {
+			assert.Equal(t, "cell1", gw.GetId().GetCell())
 		}
 	})
 
 	t.Run("get gateways filtered by multiple cells", func(t *testing.T) {
-		req := &multiadminpb.GetGatewaysRequest{
+		req := multiadminpb.GetGatewaysRequest_builder{
 			Cells: []string{"cell1", "cell2"},
-		}
+		}.Build()
 		resp, err := server.GetGateways(ctx, req)
 
 		require.NoError(t, err)
 		require.NotNil(t, resp)
-		assert.Len(t, resp.Gateways, 3) // gw1, gw2, gw3
+		assert.Len(t, resp.GetGateways(), 3) // gw1, gw2, gw3
 	})
 
 	t.Run("get gateways with mixed existing and non-existing cells", func(t *testing.T) {
-		req := &multiadminpb.GetGatewaysRequest{
+		req := multiadminpb.GetGatewaysRequest_builder{
 			Cells: []string{"cell1", "nonexistent", "cell2"},
-		}
+		}.Build()
 		resp, err := server.GetGateways(ctx, req)
 
 		require.Error(t, err)
 		require.NotNil(t, resp)
-		assert.Len(t, resp.Gateways, 3) // Should get results from existing cells only
+		assert.Len(t, resp.GetGateways(), 3) // Should get results from existing cells only
 		assert.Contains(t, err.Error(), "partial results returned due to errors in 1 cell(s)")
 		assert.Contains(t, err.Error(), "failed to get gateways for cell nonexistent")
 	})
@@ -321,18 +321,18 @@ func TestMultiAdminServerGetPoolers(t *testing.T) {
 
 		require.NoError(t, err)
 		require.NotNil(t, resp)
-		assert.Empty(t, resp.Poolers)
+		assert.Empty(t, resp.GetPoolers())
 	})
 
 	t.Run("get poolers filtered by non-existent cell", func(t *testing.T) {
-		req := &multiadminpb.GetPoolersRequest{
+		req := multiadminpb.GetPoolersRequest_builder{
 			Cells: []string{"nonexistent"},
-		}
+		}.Build()
 		resp, err := server.GetPoolers(ctx, req)
 
 		require.Error(t, err)
 		require.NotNil(t, resp)
-		assert.Empty(t, resp.Poolers)
+		assert.Empty(t, resp.GetPoolers())
 		assert.Contains(t, err.Error(), "partial results returned due to errors in 1 cell(s)")
 		assert.Contains(t, err.Error(), "failed to get poolers for cell nonexistent")
 	})
@@ -353,84 +353,84 @@ func TestMultiAdminServerGetPoolersMultiCell(t *testing.T) {
 
 		require.NoError(t, err)
 		require.NotNil(t, resp)
-		assert.Len(t, resp.Poolers, 3) // pool1, pool2, pool3
+		assert.Len(t, resp.GetPoolers(), 3) // pool1, pool2, pool3
 	})
 
 	t.Run("get poolers filtered by single cell", func(t *testing.T) {
-		req := &multiadminpb.GetPoolersRequest{
+		req := multiadminpb.GetPoolersRequest_builder{
 			Cells: []string{"cell2"},
-		}
+		}.Build()
 		resp, err := server.GetPoolers(ctx, req)
 
 		require.NoError(t, err)
 		require.NotNil(t, resp)
-		assert.Len(t, resp.Poolers, 2) // pool2, pool3
-		for _, pooler := range resp.Poolers {
-			assert.Equal(t, "cell2", pooler.Id.Cell)
+		assert.Len(t, resp.GetPoolers(), 2) // pool2, pool3
+		for _, pooler := range resp.GetPoolers() {
+			assert.Equal(t, "cell2", pooler.GetId().GetCell())
 		}
 	})
 
 	t.Run("get poolers filtered by database", func(t *testing.T) {
-		req := &multiadminpb.GetPoolersRequest{
+		req := multiadminpb.GetPoolersRequest_builder{
 			Database: "db1",
-		}
+		}.Build()
 		resp, err := server.GetPoolers(ctx, req)
 
 		require.NoError(t, err)
 		require.NotNil(t, resp)
-		assert.Len(t, resp.Poolers, 2) // pool1 and pool2
-		for _, pooler := range resp.Poolers {
-			assert.Equal(t, "db1", pooler.Database)
+		assert.Len(t, resp.GetPoolers(), 2) // pool1 and pool2
+		for _, pooler := range resp.GetPoolers() {
+			assert.Equal(t, "db1", pooler.GetDatabase())
 		}
 	})
 
 	t.Run("get poolers filtered by cell and database", func(t *testing.T) {
-		req := &multiadminpb.GetPoolersRequest{
+		req := multiadminpb.GetPoolersRequest_builder{
 			Cells:    []string{"cell2"},
 			Database: "db1",
-		}
+		}.Build()
 		resp, err := server.GetPoolers(ctx, req)
 
 		require.NoError(t, err)
 		require.NotNil(t, resp)
-		assert.Len(t, resp.Poolers, 1) // only pool2
-		assert.Equal(t, "cell2", resp.Poolers[0].Id.Cell)
-		assert.Equal(t, "db1", resp.Poolers[0].Database)
+		assert.Len(t, resp.GetPoolers(), 1) // only pool2
+		assert.Equal(t, "cell2", resp.GetPoolers()[0].GetId().GetCell())
+		assert.Equal(t, "db1", resp.GetPoolers()[0].GetDatabase())
 	})
 
 	t.Run("get poolers filtered by non-existent database", func(t *testing.T) {
-		req := &multiadminpb.GetPoolersRequest{
+		req := multiadminpb.GetPoolersRequest_builder{
 			Database: "nonexistent-db",
-		}
+		}.Build()
 		resp, err := server.GetPoolers(ctx, req)
 
 		require.NoError(t, err)
 		require.NotNil(t, resp)
-		assert.Empty(t, resp.Poolers)
+		assert.Empty(t, resp.GetPoolers())
 	})
 
 	t.Run("get poolers filtered by database db2", func(t *testing.T) {
-		req := &multiadminpb.GetPoolersRequest{
+		req := multiadminpb.GetPoolersRequest_builder{
 			Database: "db2",
-		}
+		}.Build()
 		resp, err := server.GetPoolers(ctx, req)
 
 		require.NoError(t, err)
 		require.NotNil(t, resp)
-		assert.Len(t, resp.Poolers, 1) // only pool3
-		assert.Equal(t, "db2", resp.Poolers[0].Database)
-		assert.Equal(t, "pool3", resp.Poolers[0].Id.Name)
+		assert.Len(t, resp.GetPoolers(), 1) // only pool3
+		assert.Equal(t, "db2", resp.GetPoolers()[0].GetDatabase())
+		assert.Equal(t, "pool3", resp.GetPoolers()[0].GetId().GetName())
 	})
 
 	t.Run("get poolers with empty database filter returns all", func(t *testing.T) {
-		req := &multiadminpb.GetPoolersRequest{
+		req := multiadminpb.GetPoolersRequest_builder{
 			Database: "",
-		}
+		}.Build()
 		resp, err := server.GetPoolers(ctx, req)
 
 		require.NoError(t, err)
 		require.NotNil(t, resp)
-		assert.Len(t, resp.Poolers, 3) // all poolers
+		assert.Len(t, resp.GetPoolers(), 3) // all poolers
 	})
 }
 
@@ -446,18 +446,18 @@ func TestMultiAdminServerGetOrchs(t *testing.T) {
 
 		require.NoError(t, err)
 		require.NotNil(t, resp)
-		assert.Empty(t, resp.Orchs)
+		assert.Empty(t, resp.GetOrchs())
 	})
 
 	t.Run("get orchestrators filtered by non-existent cell", func(t *testing.T) {
-		req := &multiadminpb.GetOrchsRequest{
+		req := multiadminpb.GetOrchsRequest_builder{
 			Cells: []string{"nonexistent"},
-		}
+		}.Build()
 		resp, err := server.GetOrchs(ctx, req)
 
 		require.Error(t, err)
 		require.NotNil(t, resp)
-		assert.Empty(t, resp.Orchs)
+		assert.Empty(t, resp.GetOrchs())
 		assert.Contains(t, err.Error(), "partial results returned due to errors in 1 cell(s)")
 		assert.Contains(t, err.Error(), "failed to get orchestrators for cell nonexistent")
 	})
@@ -478,31 +478,31 @@ func TestMultiAdminServerGetOrchsMultiCell(t *testing.T) {
 
 		require.NoError(t, err)
 		require.NotNil(t, resp)
-		assert.Len(t, resp.Orchs, 2) // orch1, orch2
+		assert.Len(t, resp.GetOrchs(), 2) // orch1, orch2
 	})
 
 	t.Run("get orchestrators filtered by single cell", func(t *testing.T) {
-		req := &multiadminpb.GetOrchsRequest{
+		req := multiadminpb.GetOrchsRequest_builder{
 			Cells: []string{"cell1"},
-		}
+		}.Build()
 		resp, err := server.GetOrchs(ctx, req)
 
 		require.NoError(t, err)
 		require.NotNil(t, resp)
-		assert.Len(t, resp.Orchs, 1) // orch1
-		assert.Equal(t, "cell1", resp.Orchs[0].Id.Cell)
-		assert.Equal(t, "orch1", resp.Orchs[0].Id.Name)
+		assert.Len(t, resp.GetOrchs(), 1) // orch1
+		assert.Equal(t, "cell1", resp.GetOrchs()[0].GetId().GetCell())
+		assert.Equal(t, "orch1", resp.GetOrchs()[0].GetId().GetName())
 	})
 
 	t.Run("get orchestrators with empty result for non-existent cell", func(t *testing.T) {
-		req := &multiadminpb.GetOrchsRequest{
+		req := multiadminpb.GetOrchsRequest_builder{
 			Cells: []string{"nonexistent"},
-		}
+		}.Build()
 		resp, err := server.GetOrchs(ctx, req)
 
 		require.Error(t, err)
 		require.NotNil(t, resp)
-		assert.Empty(t, resp.Orchs)
+		assert.Empty(t, resp.GetOrchs())
 		assert.Contains(t, err.Error(), "partial results returned due to errors in 1 cell(s)")
 		assert.Contains(t, err.Error(), "failed to get orchestrators for cell nonexistent")
 	})

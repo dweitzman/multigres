@@ -76,7 +76,7 @@ func (re *Engine) forgetLongUnseenInstances() {
 	// Iterate using Range() to hold lock during iteration
 	re.poolerStore.Range(func(poolerID string, poolerInfo *store.PoolerHealth) bool {
 		// Case 0: Broken entry (should never happen)
-		if poolerInfo == nil || poolerInfo.MultiPooler == nil || poolerInfo.MultiPooler.Id == nil {
+		if poolerInfo == nil || poolerInfo.MultiPooler == nil || !poolerInfo.MultiPooler.HasId() {
 			toDelete = append(toDelete, deleteEntry{
 				poolerID:  poolerID,
 				auditType: "forget-broken-entry",
@@ -86,9 +86,9 @@ func (re *Engine) forgetLongUnseenInstances() {
 			return true // continue iteration
 		}
 
-		database := poolerInfo.MultiPooler.Database
-		tableGroup := poolerInfo.MultiPooler.TableGroup
-		shard := poolerInfo.MultiPooler.Shard
+		database := poolerInfo.MultiPooler.GetDatabase()
+		tableGroup := poolerInfo.MultiPooler.GetTableGroup()
+		shard := poolerInfo.MultiPooler.GetShard()
 
 		// Case 1: Never successfully health checked (LastSeen is zero)
 		if poolerInfo.LastSeen.IsZero() {

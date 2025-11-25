@@ -212,10 +212,10 @@ func (mp *MultiPooler) Init(startCtx context.Context) {
 	}
 	// Create MultiPooler instance for topo registration
 	multipooler := topo.NewMultiPooler(mp.serviceID.Get(), mp.cell.Get(), mp.senv.GetHostname(), mp.tableGroup.Get())
-	multipooler.PortMap["grpc"] = int32(mp.grpcServer.Port())
-	multipooler.PortMap["http"] = int32(mp.senv.GetHTTPPort())
-	multipooler.Database = mp.database.Get()
-	multipooler.ServingStatus = clustermetadatapb.PoolerServingStatus_NOT_SERVING
+	multipooler.GetPortMap()["grpc"] = int32(mp.grpcServer.Port())
+	multipooler.GetPortMap()["http"] = int32(mp.senv.GetHTTPPort())
+	multipooler.SetDatabase(mp.database.Get())
+	multipooler.SetServingStatus(clustermetadatapb.PoolerServingStatus_NOT_SERVING)
 
 	logger.InfoContext(startCtx, "Initializing MultiPoolerManager")
 	poolerManager := manager.NewMultiPoolerManager(logger, &manager.Config{
@@ -224,7 +224,7 @@ func (mp *MultiPooler) Init(startCtx context.Context) {
 		PgPort:              mp.pgPort.Get(),
 		Database:            mp.database.Get(),
 		TopoClient:          mp.ts,
-		ServiceID:           multipooler.Id,
+		ServiceID:           multipooler.GetId(),
 		HeartbeatIntervalMs: mp.heartbeatIntervalMs.Get(),
 		PgctldAddr:          mp.pgctldAddr.Get(),
 		PgBackRestStanza:    mp.pgBackRestStanza.Get(),
@@ -248,9 +248,9 @@ func (mp *MultiPooler) Init(startCtx context.Context) {
 			// For poolers, we don't un-register them on shutdown (they are persistent component)
 			// If they are actually deleted, they need to be cleaned up outside the lifecycle of starting / stopping.
 			unregisterFunc := func(ctx context.Context) error {
-				_, err := mp.ts.UpdateMultiPoolerFields(ctx, multipooler.Id,
+				_, err := mp.ts.UpdateMultiPoolerFields(ctx, multipooler.GetId(),
 					func(mp *clustermetadatapb.MultiPooler) error {
-						mp.ServingStatus = clustermetadatapb.PoolerServingStatus_NOT_SERVING
+						mp.SetServingStatus(clustermetadatapb.PoolerServingStatus_NOT_SERVING)
 						return nil
 					})
 				return err

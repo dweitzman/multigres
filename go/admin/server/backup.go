@@ -26,11 +26,11 @@ import (
 // Backup starts an async backup of a specific shard
 func (s *MultiAdminServer) Backup(ctx context.Context, req *multiadminpb.BackupRequest) (*multiadminpb.BackupResponse, error) {
 	s.logger.DebugContext(ctx, "Backup request received",
-		"database", req.Database,
-		"table_group", req.TableGroup,
-		"shard", req.Shard,
-		"type", req.Type,
-		"force_primary", req.ForcePrimary)
+		"database", req.GetDatabase(),
+		"table_group", req.GetTableGroup(),
+		"shard", req.GetShard(),
+		"type", req.GetType(),
+		"force_primary", req.GetForcePrimary())
 
 	// TODO: Implement async backup logic
 	return nil, status.Error(codes.Unimplemented, "Backup operation is not yet implemented")
@@ -39,10 +39,10 @@ func (s *MultiAdminServer) Backup(ctx context.Context, req *multiadminpb.BackupR
 // RestoreFromBackup starts an async restore of a specific shard from a backup
 func (s *MultiAdminServer) RestoreFromBackup(ctx context.Context, req *multiadminpb.RestoreFromBackupRequest) (*multiadminpb.RestoreFromBackupResponse, error) {
 	s.logger.DebugContext(ctx, "RestoreFromBackup request received",
-		"database", req.Database,
-		"table_group", req.TableGroup,
-		"shard", req.Shard,
-		"backup_id", req.BackupId)
+		"database", req.GetDatabase(),
+		"table_group", req.GetTableGroup(),
+		"shard", req.GetShard(),
+		"backup_id", req.GetBackupId())
 
 	// TODO: Implement async restore logic
 	return nil, status.Error(codes.Unimplemented, "RestoreFromBackup operation is not yet implemented")
@@ -50,7 +50,7 @@ func (s *MultiAdminServer) RestoreFromBackup(ctx context.Context, req *multiadmi
 
 // GetBackupJobStatus checks the status of a backup or restore job
 func (s *MultiAdminServer) GetBackupJobStatus(ctx context.Context, req *multiadminpb.GetBackupJobStatusRequest) (*multiadminpb.GetBackupJobStatusResponse, error) {
-	s.logger.DebugContext(ctx, "GetBackupJobStatus request received", "job_id", req.JobId)
+	s.logger.DebugContext(ctx, "GetBackupJobStatus request received", "job_id", req.GetJobId())
 
 	// TODO: Implement job status lookup
 	return nil, status.Error(codes.Unimplemented, "GetBackupJobStatus operation is not yet implemented")
@@ -59,10 +59,10 @@ func (s *MultiAdminServer) GetBackupJobStatus(ctx context.Context, req *multiadm
 // GetBackups lists backup artifacts with optional filtering
 func (s *MultiAdminServer) GetBackups(ctx context.Context, req *multiadminpb.GetBackupsRequest) (*multiadminpb.GetBackupsResponse, error) {
 	s.logger.DebugContext(ctx, "GetBackups request received",
-		"database", req.Database,
-		"table_group", req.TableGroup,
-		"shard", req.Shard,
-		"limit", req.Limit)
+		"database", req.GetDatabase(),
+		"table_group", req.GetTableGroup(),
+		"shard", req.GetShard(),
+		"limit", req.GetLimit())
 
 	// TODO: Implement backup listing with topology discovery and aggregation
 	return nil, status.Error(codes.Unimplemented, "GetBackups operation is not yet implemented")

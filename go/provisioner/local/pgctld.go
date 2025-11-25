@@ -116,7 +116,7 @@ func (p *localProvisioner) stopPostgreSQLViaPgctld(ctx context.Context, address 
 
 	// Stop PostgreSQL with fast mode
 	fmt.Printf(" stopping PostgreSQL...")
-	stopResp, err := client.Stop(ctx, &pb.StopRequest{Mode: "fast"})
+	stopResp, err := client.Stop(ctx, pb.StopRequest_builder{Mode: "fast"}.Build())
 	if err != nil {
 		return fmt.Errorf("failed to stop PostgreSQL: %w", err)
 	}

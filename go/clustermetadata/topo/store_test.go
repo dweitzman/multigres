@@ -140,10 +140,10 @@ func TestConnForCell_NewCell(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a cell in the global topology first
-	cellInfo := &clustermetadatapb.Cell{
+	cellInfo := clustermetadatapb.Cell_builder{
 		ServerAddresses: []string{"cell1:2181"},
 		Root:            "/cell1",
-	}
+	}.Build()
 	err := ts.CreateCell(ctx, "cell1", cellInfo)
 	require.NoError(t, err, "CreateCell should succeed")
 
@@ -167,10 +167,10 @@ func TestConnForCell_CachedConnection(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a cell
-	cellInfo := &clustermetadatapb.Cell{
+	cellInfo := clustermetadatapb.Cell_builder{
 		ServerAddresses: []string{"cell1:2181"},
 		Root:            "/cell1",
-	}
+	}.Build()
 	err := ts.CreateCell(ctx, "cell1", cellInfo)
 	require.NoError(t, err)
 
@@ -199,10 +199,10 @@ func TestConnForCell_UpdatedCellConfig(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a cell
-	cellInfo := &clustermetadatapb.Cell{
+	cellInfo := clustermetadatapb.Cell_builder{
 		ServerAddresses: []string{"cell1:2181"},
 		Root:            "/cell1",
-	}
+	}.Build()
 	err := ts.CreateCell(ctx, "cell1", cellInfo)
 	require.NoError(t, err)
 
@@ -213,8 +213,8 @@ func TestConnForCell_UpdatedCellConfig(t *testing.T) {
 
 	// Update cell configuration
 	err = ts.UpdateCellFields(ctx, "cell1", func(c *clustermetadatapb.Cell) error {
-		c.ServerAddresses = []string{"cell1-new:2181"}
-		c.Root = "/cell1-new"
+		c.SetServerAddresses([]string{"cell1-new:2181"})
+		c.SetRoot("/cell1-new")
 		return nil
 	})
 	require.NoError(t, err)
@@ -267,10 +267,10 @@ func TestStoreClose(t *testing.T) {
 	ctx := context.Background()
 
 	// Create some cells
-	cellInfo := &clustermetadatapb.Cell{
+	cellInfo := clustermetadatapb.Cell_builder{
 		ServerAddresses: []string{"cell1:2181"},
 		Root:            "/cell1",
-	}
+	}.Build()
 	err := ts.CreateCell(ctx, "cell1", cellInfo)
 	require.NoError(t, err)
 
@@ -294,10 +294,10 @@ func TestStoreClose_VerifiesConnectionsClosed(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a cell and get its connection
-	cellInfo := &clustermetadatapb.Cell{
+	cellInfo := clustermetadatapb.Cell_builder{
 		ServerAddresses: []string{"cell1:2181"},
 		Root:            "/cell1",
-	}
+	}.Build()
 	err := ts.CreateCell(ctx, "cell1", cellInfo)
 	require.NoError(t, err)
 
@@ -318,10 +318,10 @@ func TestStoreClose_VerifiesConnectionsClosed(t *testing.T) {
 
 func TestCellConnStruct(t *testing.T) {
 	// Test that cellConn stores both Cell config and connection
-	cellInfo := &clustermetadatapb.Cell{
+	cellInfo := clustermetadatapb.Cell_builder{
 		ServerAddresses: []string{"test:2181"},
 		Root:            "/test",
-	}
+	}.Build()
 
 	conn := newMockConn(1)
 
@@ -343,10 +343,10 @@ func TestConnForCell_ProtoEquality(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a cell
-	cellInfo := &clustermetadatapb.Cell{
+	cellInfo := clustermetadatapb.Cell_builder{
 		ServerAddresses: []string{"cell1:2181"},
 		Root:            "/cell1",
-	}
+	}.Build()
 	err := ts.CreateCell(ctx, "cell1", cellInfo)
 	require.NoError(t, err)
 
@@ -380,10 +380,10 @@ func TestConnForCell_ConcurrentAccess(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a cell
-	cellInfo := &clustermetadatapb.Cell{
+	cellInfo := clustermetadatapb.Cell_builder{
 		ServerAddresses: []string{"cell1:2181"},
 		Root:            "/cell1",
-	}
+	}.Build()
 	err := ts.CreateCell(ctx, "cell1", cellInfo)
 	require.NoError(t, err)
 
@@ -540,10 +540,10 @@ func TestStatus_CellConnection(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a cell
-	cellInfo := &clustermetadatapb.Cell{
+	cellInfo := clustermetadatapb.Cell_builder{
 		ServerAddresses: []string{"cell1:2181"},
 		Root:            "/cell1",
-	}
+	}.Build()
 	err := ts.CreateCell(ctx, "cell1", cellInfo)
 	require.NoError(t, err)
 
@@ -569,10 +569,10 @@ func TestStatus_MultipleCells(t *testing.T) {
 	// Create multiple cells
 	for i := 1; i < 4; i++ {
 		cellName := fmt.Sprintf("cell%d", i)
-		cellInfo := &clustermetadatapb.Cell{
+		cellInfo := clustermetadatapb.Cell_builder{
 			ServerAddresses: []string{fmt.Sprintf("%s:2181", cellName)},
 			Root:            fmt.Sprintf("/%s", cellName),
-		}
+		}.Build()
 		err := ts.CreateCell(ctx, cellName, cellInfo)
 		require.NoError(t, err)
 
@@ -605,10 +605,10 @@ func TestStatus_CellConnectionError(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a cell
-	cellInfo := &clustermetadatapb.Cell{
+	cellInfo := clustermetadatapb.Cell_builder{
 		ServerAddresses: []string{"cell1:2181"},
 		Root:            "/cell1",
-	}
+	}.Build()
 	err := ts.CreateCell(ctx, "cell1", cellInfo)
 	require.NoError(t, err)
 
@@ -641,10 +641,10 @@ func TestStatus_ReturnsCopy(t *testing.T) {
 	status1 := ts.Status()
 
 	// Create a cell
-	cellInfo := &clustermetadatapb.Cell{
+	cellInfo := clustermetadatapb.Cell_builder{
 		ServerAddresses: []string{"cell1:2181"},
 		Root:            "/cell1",
-	}
+	}.Build()
 	err := ts.CreateCell(ctx, "cell1", cellInfo)
 	require.NoError(t, err)
 

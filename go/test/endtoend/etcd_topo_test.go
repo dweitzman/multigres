@@ -51,10 +51,10 @@ func TestEtcd2Topo(t *testing.T) {
 		require.NoError(t, err, "OpenServer() failed")
 
 		// Create the CellInfo.
-		err = ts.CreateCell(context.Background(), test.LocalCellName, &clustermetadatapb.Cell{
+		err = ts.CreateCell(context.Background(), test.LocalCellName, clustermetadatapb.Cell_builder{
 			ServerAddresses: []string{clientAddr},
 			Root:            path.Join(testRoot, test.LocalCellName),
-		})
+		}.Build())
 		require.NoError(t, err, "CreateCellInfo() failed")
 
 		return ts

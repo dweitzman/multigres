@@ -43,34 +43,34 @@ func TestGenerateApplicationName(t *testing.T) {
 	}{
 		{
 			name: "standard ID",
-			id: &clustermetadatapb.ID{
+			id: clustermetadatapb.ID_builder{
 				Cell: "us-west",
 				Name: "replica-1",
-			},
+			}.Build(),
 			expected: "us-west_replica-1",
 		},
 		{
 			name: "single character values",
-			id: &clustermetadatapb.ID{
+			id: clustermetadatapb.ID_builder{
 				Cell: "a",
 				Name: "b",
-			},
+			}.Build(),
 			expected: "a_b",
 		},
 		{
 			name: "hyphenated names",
-			id: &clustermetadatapb.ID{
+			id: clustermetadatapb.ID_builder{
 				Cell: "us-east-1a",
 				Name: "primary-db-001",
-			},
+			}.Build(),
 			expected: "us-east-1a_primary-db-001",
 		},
 		{
 			name: "numeric values",
-			id: &clustermetadatapb.ID{
+			id: clustermetadatapb.ID_builder{
 				Cell: "zone1",
 				Name: "pooler-001",
-			},
+			}.Build(),
 			expected: "zone1_pooler-001",
 		},
 	}
@@ -97,24 +97,24 @@ func TestFormatStandbyList(t *testing.T) {
 		{
 			name: "single standby",
 			standbyIDs: []*clustermetadatapb.ID{
-				{Cell: "zone1", Name: "replica-1"},
+				clustermetadatapb.ID_builder{Cell: "zone1", Name: "replica-1"}.Build(),
 			},
 			expected: `"zone1_replica-1"`,
 		},
 		{
 			name: "multiple standbys",
 			standbyIDs: []*clustermetadatapb.ID{
-				{Cell: "zone1", Name: "replica-1"},
-				{Cell: "zone2", Name: "replica-2"},
-				{Cell: "zone3", Name: "replica-3"},
+				clustermetadatapb.ID_builder{Cell: "zone1", Name: "replica-1"}.Build(),
+				clustermetadatapb.ID_builder{Cell: "zone2", Name: "replica-2"}.Build(),
+				clustermetadatapb.ID_builder{Cell: "zone3", Name: "replica-3"}.Build(),
 			},
 			expected: `"zone1_replica-1", "zone2_replica-2", "zone3_replica-3"`,
 		},
 		{
 			name: "two standbys",
 			standbyIDs: []*clustermetadatapb.ID{
-				{Cell: "east", Name: "standby-a"},
-				{Cell: "west", Name: "standby-b"},
+				clustermetadatapb.ID_builder{Cell: "east", Name: "standby-a"}.Build(),
+				clustermetadatapb.ID_builder{Cell: "west", Name: "standby-b"}.Build(),
 			},
 			expected: `"east_standby-a", "west_standby-b"`,
 		},
@@ -151,7 +151,7 @@ func TestBuildSynchronousStandbyNamesValue(t *testing.T) {
 			method:  multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			numSync: 1,
 			standbyIDs: []*clustermetadatapb.ID{
-				{Cell: "zone1", Name: "replica-1"},
+				clustermetadatapb.ID_builder{Cell: "zone1", Name: "replica-1"}.Build(),
 			},
 			expected:    `FIRST 1 ("zone1_replica-1")`,
 			expectError: false,
@@ -161,9 +161,9 @@ func TestBuildSynchronousStandbyNamesValue(t *testing.T) {
 			method:  multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			numSync: 2,
 			standbyIDs: []*clustermetadatapb.ID{
-				{Cell: "zone1", Name: "replica-1"},
-				{Cell: "zone2", Name: "replica-2"},
-				{Cell: "zone3", Name: "replica-3"},
+				clustermetadatapb.ID_builder{Cell: "zone1", Name: "replica-1"}.Build(),
+				clustermetadatapb.ID_builder{Cell: "zone2", Name: "replica-2"}.Build(),
+				clustermetadatapb.ID_builder{Cell: "zone3", Name: "replica-3"}.Build(),
 			},
 			expected:    `FIRST 2 ("zone1_replica-1", "zone2_replica-2", "zone3_replica-3")`,
 			expectError: false,
@@ -173,8 +173,8 @@ func TestBuildSynchronousStandbyNamesValue(t *testing.T) {
 			method:  multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_ANY,
 			numSync: 1,
 			standbyIDs: []*clustermetadatapb.ID{
-				{Cell: "zone1", Name: "replica-1"},
-				{Cell: "zone2", Name: "replica-2"},
+				clustermetadatapb.ID_builder{Cell: "zone1", Name: "replica-1"}.Build(),
+				clustermetadatapb.ID_builder{Cell: "zone2", Name: "replica-2"}.Build(),
 			},
 			expected:    `ANY 1 ("zone1_replica-1", "zone2_replica-2")`,
 			expectError: false,
@@ -184,9 +184,9 @@ func TestBuildSynchronousStandbyNamesValue(t *testing.T) {
 			method:  multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_ANY,
 			numSync: 2,
 			standbyIDs: []*clustermetadatapb.ID{
-				{Cell: "a", Name: "1"},
-				{Cell: "b", Name: "2"},
-				{Cell: "c", Name: "3"},
+				clustermetadatapb.ID_builder{Cell: "a", Name: "1"}.Build(),
+				clustermetadatapb.ID_builder{Cell: "b", Name: "2"}.Build(),
+				clustermetadatapb.ID_builder{Cell: "c", Name: "3"}.Build(),
 			},
 			expected:    `ANY 2 ("a_1", "b_2", "c_3")`,
 			expectError: false,
@@ -196,7 +196,7 @@ func TestBuildSynchronousStandbyNamesValue(t *testing.T) {
 			method:  multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_UNSPECIFIED,
 			numSync: 1,
 			standbyIDs: []*clustermetadatapb.ID{
-				{Cell: "zone1", Name: "replica-1"},
+				clustermetadatapb.ID_builder{Cell: "zone1", Name: "replica-1"}.Build(),
 			},
 			expected:    "",
 			expectError: true,
@@ -229,22 +229,22 @@ func TestValidateStandbyIDs(t *testing.T) {
 		{
 			name: "valid single standby",
 			standbyIDs: []*clustermetadatapb.ID{
-				{Cell: "zone1", Name: "replica-1"},
+				clustermetadatapb.ID_builder{Cell: "zone1", Name: "replica-1"}.Build(),
 			},
 			expectError: false,
 		},
 		{
 			name: "valid multiple standbys",
 			standbyIDs: []*clustermetadatapb.ID{
-				{Cell: "zone1", Name: "replica-1"},
-				{Cell: "zone2", Name: "replica-2"},
+				clustermetadatapb.ID_builder{Cell: "zone1", Name: "replica-1"}.Build(),
+				clustermetadatapb.ID_builder{Cell: "zone2", Name: "replica-2"}.Build(),
 			},
 			expectError: false,
 		},
 		{
 			name: "valid with hyphens",
 			standbyIDs: []*clustermetadatapb.ID{
-				{Cell: "us-west-1", Name: "replica-db-001"},
+				clustermetadatapb.ID_builder{Cell: "us-west-1", Name: "replica-db-001"}.Build(),
 			},
 			expectError: false,
 		},
@@ -257,7 +257,7 @@ func TestValidateStandbyIDs(t *testing.T) {
 		{
 			name: "nil ID returns error",
 			standbyIDs: []*clustermetadatapb.ID{
-				{Cell: "zone1", Name: "replica-1"},
+				clustermetadatapb.ID_builder{Cell: "zone1", Name: "replica-1"}.Build(),
 				nil,
 			},
 			expectError: true,
@@ -266,7 +266,7 @@ func TestValidateStandbyIDs(t *testing.T) {
 		{
 			name: "empty cell returns error",
 			standbyIDs: []*clustermetadatapb.ID{
-				{Cell: "", Name: "replica-1"},
+				clustermetadatapb.ID_builder{Cell: "", Name: "replica-1"}.Build(),
 			},
 			expectError: true,
 			errorMsg:    "standby_ids[0] has empty cell",
@@ -274,7 +274,7 @@ func TestValidateStandbyIDs(t *testing.T) {
 		{
 			name: "empty name returns error",
 			standbyIDs: []*clustermetadatapb.ID{
-				{Cell: "zone1", Name: ""},
+				clustermetadatapb.ID_builder{Cell: "zone1", Name: ""}.Build(),
 			},
 			expectError: true,
 			errorMsg:    "standby_ids[0] has empty name",
@@ -282,7 +282,7 @@ func TestValidateStandbyIDs(t *testing.T) {
 		{
 			name: "underscore in cell returns error",
 			standbyIDs: []*clustermetadatapb.ID{
-				{Cell: "us_west", Name: "replica-1"},
+				clustermetadatapb.ID_builder{Cell: "us_west", Name: "replica-1"}.Build(),
 			},
 			expectError: true,
 			errorMsg:    "cell contains underscore",
@@ -290,7 +290,7 @@ func TestValidateStandbyIDs(t *testing.T) {
 		{
 			name: "underscore in name returns error",
 			standbyIDs: []*clustermetadatapb.ID{
-				{Cell: "zone1", Name: "replica_1"},
+				clustermetadatapb.ID_builder{Cell: "zone1", Name: "replica_1"}.Build(),
 			},
 			expectError: true,
 			errorMsg:    "name contains underscore",
@@ -298,7 +298,7 @@ func TestValidateStandbyIDs(t *testing.T) {
 		{
 			name: "multiple underscores in cell",
 			standbyIDs: []*clustermetadatapb.ID{
-				{Cell: "us_west_1a", Name: "replica"},
+				clustermetadatapb.ID_builder{Cell: "us_west_1a", Name: "replica"}.Build(),
 			},
 			expectError: true,
 			errorMsg:    "cell contains underscore",
@@ -306,7 +306,7 @@ func TestValidateStandbyIDs(t *testing.T) {
 		{
 			name: "multiple underscores in name",
 			standbyIDs: []*clustermetadatapb.ID{
-				{Cell: "zone1", Name: "replica_test_1"},
+				clustermetadatapb.ID_builder{Cell: "zone1", Name: "replica_test_1"}.Build(),
 			},
 			expectError: true,
 			errorMsg:    "name contains underscore",
@@ -314,8 +314,8 @@ func TestValidateStandbyIDs(t *testing.T) {
 		{
 			name: "underscore in second standby",
 			standbyIDs: []*clustermetadatapb.ID{
-				{Cell: "zone1", Name: "replica-1"},
-				{Cell: "zone2", Name: "replica_2"},
+				clustermetadatapb.ID_builder{Cell: "zone1", Name: "replica-1"}.Build(),
+				clustermetadatapb.ID_builder{Cell: "zone2", Name: "replica_2"}.Build(),
 			},
 			expectError: true,
 			errorMsg:    "standby_ids[1] name contains underscore",
@@ -342,9 +342,9 @@ func TestSyncReplicationConfigMatches(t *testing.T) {
 		logger: logger,
 	}
 
-	standby1 := &clustermetadatapb.ID{Cell: "zone1", Name: "replica-1"}
-	standby2 := &clustermetadatapb.ID{Cell: "zone2", Name: "replica-2"}
-	standby3 := &clustermetadatapb.ID{Cell: "zone3", Name: "replica-3"}
+	standby1 := clustermetadatapb.ID_builder{Cell: "zone1", Name: "replica-1"}.Build()
+	standby2 := clustermetadatapb.ID_builder{Cell: "zone2", Name: "replica-2"}.Build()
+	standby3 := clustermetadatapb.ID_builder{Cell: "zone3", Name: "replica-3"}.Build()
 
 	tests := []struct {
 		name      string
@@ -354,146 +354,146 @@ func TestSyncReplicationConfigMatches(t *testing.T) {
 	}{
 		{
 			name: "perfect match",
-			current: &multipoolermanagerdatapb.SynchronousReplicationConfiguration{
+			current: multipoolermanagerdatapb.SynchronousReplicationConfiguration_builder{
 				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync:           2,
 				StandbyIds:        []*clustermetadatapb.ID{standby1, standby2, standby3},
-			},
-			requested: &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
+			}.Build(),
+			requested: multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest_builder{
 				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync:           2,
 				StandbyIds:        []*clustermetadatapb.ID{standby1, standby2, standby3},
-			},
+			}.Build(),
 			expected: true,
 		},
 		{
 			name: "different synchronous commit level",
-			current: &multipoolermanagerdatapb.SynchronousReplicationConfiguration{
+			current: multipoolermanagerdatapb.SynchronousReplicationConfiguration_builder{
 				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync:           1,
 				StandbyIds:        []*clustermetadatapb.ID{standby1},
-			},
-			requested: &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
+			}.Build(),
+			requested: multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest_builder{
 				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_APPLY,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync:           1,
 				StandbyIds:        []*clustermetadatapb.ID{standby1},
-			},
+			}.Build(),
 			expected: false,
 		},
 		{
 			name: "different synchronous method",
-			current: &multipoolermanagerdatapb.SynchronousReplicationConfiguration{
+			current: multipoolermanagerdatapb.SynchronousReplicationConfiguration_builder{
 				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync:           1,
 				StandbyIds:        []*clustermetadatapb.ID{standby1, standby2},
-			},
-			requested: &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
+			}.Build(),
+			requested: multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest_builder{
 				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_ANY,
 				NumSync:           1,
 				StandbyIds:        []*clustermetadatapb.ID{standby1, standby2},
-			},
+			}.Build(),
 			expected: false,
 		},
 		{
 			name: "different num_sync",
-			current: &multipoolermanagerdatapb.SynchronousReplicationConfiguration{
+			current: multipoolermanagerdatapb.SynchronousReplicationConfiguration_builder{
 				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync:           1,
 				StandbyIds:        []*clustermetadatapb.ID{standby1, standby2},
-			},
-			requested: &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
+			}.Build(),
+			requested: multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest_builder{
 				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync:           2,
 				StandbyIds:        []*clustermetadatapb.ID{standby1, standby2},
-			},
+			}.Build(),
 			expected: false,
 		},
 		{
 			name: "different standby count",
-			current: &multipoolermanagerdatapb.SynchronousReplicationConfiguration{
+			current: multipoolermanagerdatapb.SynchronousReplicationConfiguration_builder{
 				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync:           1,
 				StandbyIds:        []*clustermetadatapb.ID{standby1, standby2},
-			},
-			requested: &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
+			}.Build(),
+			requested: multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest_builder{
 				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync:           1,
 				StandbyIds:        []*clustermetadatapb.ID{standby1, standby2, standby3},
-			},
+			}.Build(),
 			expected: false,
 		},
 		{
 			name: "different standbys same count",
-			current: &multipoolermanagerdatapb.SynchronousReplicationConfiguration{
+			current: multipoolermanagerdatapb.SynchronousReplicationConfiguration_builder{
 				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync:           1,
 				StandbyIds:        []*clustermetadatapb.ID{standby1, standby2},
-			},
-			requested: &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
+			}.Build(),
+			requested: multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest_builder{
 				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync:           1,
 				StandbyIds:        []*clustermetadatapb.ID{standby1, standby3},
-			},
+			}.Build(),
 			expected: false,
 		},
 		{
 			name: "same standbys different order - should match",
-			current: &multipoolermanagerdatapb.SynchronousReplicationConfiguration{
+			current: multipoolermanagerdatapb.SynchronousReplicationConfiguration_builder{
 				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync:           2,
 				StandbyIds:        []*clustermetadatapb.ID{standby1, standby2, standby3},
-			},
-			requested: &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
+			}.Build(),
+			requested: multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest_builder{
 				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync:           2,
 				StandbyIds:        []*clustermetadatapb.ID{standby3, standby1, standby2},
-			},
+			}.Build(),
 			expected: true,
 		},
 		{
 			name: "empty standbys in both",
-			current: &multipoolermanagerdatapb.SynchronousReplicationConfiguration{
+			current: multipoolermanagerdatapb.SynchronousReplicationConfiguration_builder{
 				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LOCAL,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync:           0,
 				StandbyIds:        []*clustermetadatapb.ID{},
-			},
-			requested: &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
+			}.Build(),
+			requested: multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest_builder{
 				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LOCAL,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync:           0,
 				StandbyIds:        []*clustermetadatapb.ID{},
-			},
+			}.Build(),
 			expected: true,
 		},
 		{
 			name: "empty vs non-empty standbys",
-			current: &multipoolermanagerdatapb.SynchronousReplicationConfiguration{
+			current: multipoolermanagerdatapb.SynchronousReplicationConfiguration_builder{
 				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync:           0,
 				StandbyIds:        []*clustermetadatapb.ID{},
-			},
-			requested: &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
+			}.Build(),
+			requested: multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest_builder{
 				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync:           0,
 				StandbyIds:        []*clustermetadatapb.ID{standby1},
-			},
+			}.Build(),
 			expected: false,
 		},
 	}
@@ -507,9 +507,9 @@ func TestSyncReplicationConfigMatches(t *testing.T) {
 }
 
 func TestApplyAddOperation(t *testing.T) {
-	standby1 := &clustermetadatapb.ID{Cell: "zone1", Name: "replica-1"}
-	standby2 := &clustermetadatapb.ID{Cell: "zone2", Name: "replica-2"}
-	standby3 := &clustermetadatapb.ID{Cell: "zone3", Name: "replica-3"}
+	standby1 := clustermetadatapb.ID_builder{Cell: "zone1", Name: "replica-1"}.Build()
+	standby2 := clustermetadatapb.ID_builder{Cell: "zone2", Name: "replica-2"}.Build()
+	standby3 := clustermetadatapb.ID_builder{Cell: "zone3", Name: "replica-3"}.Build()
 
 	tests := []struct {
 		name            string
@@ -575,9 +575,9 @@ func TestApplyAddOperation(t *testing.T) {
 }
 
 func TestApplyRemoveOperation(t *testing.T) {
-	standby1 := &clustermetadatapb.ID{Cell: "zone1", Name: "replica-1"}
-	standby2 := &clustermetadatapb.ID{Cell: "zone2", Name: "replica-2"}
-	standby3 := &clustermetadatapb.ID{Cell: "zone3", Name: "replica-3"}
+	standby1 := clustermetadatapb.ID_builder{Cell: "zone1", Name: "replica-1"}.Build()
+	standby2 := clustermetadatapb.ID_builder{Cell: "zone2", Name: "replica-2"}.Build()
+	standby3 := clustermetadatapb.ID_builder{Cell: "zone3", Name: "replica-3"}.Build()
 
 	tests := []struct {
 		name             string
@@ -649,9 +649,9 @@ func TestApplyRemoveOperation(t *testing.T) {
 }
 
 func TestApplyReplaceOperation(t *testing.T) {
-	standby1 := &clustermetadatapb.ID{Cell: "zone1", Name: "replica-1"}
-	standby2 := &clustermetadatapb.ID{Cell: "zone2", Name: "replica-2"}
-	standby3 := &clustermetadatapb.ID{Cell: "zone3", Name: "replica-3"}
+	standby1 := clustermetadatapb.ID_builder{Cell: "zone1", Name: "replica-1"}.Build()
+	standby2 := clustermetadatapb.ID_builder{Cell: "zone2", Name: "replica-2"}.Build()
+	standby3 := clustermetadatapb.ID_builder{Cell: "zone3", Name: "replica-3"}.Build()
 
 	tests := []struct {
 		name        string
@@ -896,10 +896,10 @@ func TestGetSynchronousReplicationConfig(t *testing.T) {
 			},
 			expectError: false,
 			validateResult: func(t *testing.T, config *multipoolermanagerdatapb.SynchronousReplicationConfiguration) {
-				assert.Equal(t, multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST, config.SynchronousMethod)
-				assert.Equal(t, int32(2), config.NumSync)
-				assert.Equal(t, 3, len(config.StandbyIds))
-				assert.Equal(t, multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON, config.SynchronousCommit)
+				assert.Equal(t, multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST, config.GetSynchronousMethod())
+				assert.Equal(t, int32(2), config.GetNumSync())
+				assert.Equal(t, 3, len(config.GetStandbyIds()))
+				assert.Equal(t, multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON, config.GetSynchronousCommit())
 			},
 		},
 		{
@@ -914,12 +914,12 @@ func TestGetSynchronousReplicationConfig(t *testing.T) {
 			},
 			expectError: false,
 			validateResult: func(t *testing.T, config *multipoolermanagerdatapb.SynchronousReplicationConfiguration) {
-				assert.Equal(t, multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_ANY, config.SynchronousMethod)
-				assert.Equal(t, int32(1), config.NumSync)
-				assert.Equal(t, 1, len(config.StandbyIds))
-				assert.Equal(t, "zone1", config.StandbyIds[0].Cell)
-				assert.Equal(t, "replica-1", config.StandbyIds[0].Name)
-				assert.Equal(t, multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_APPLY, config.SynchronousCommit)
+				assert.Equal(t, multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_ANY, config.GetSynchronousMethod())
+				assert.Equal(t, int32(1), config.GetNumSync())
+				assert.Equal(t, 1, len(config.GetStandbyIds()))
+				assert.Equal(t, "zone1", config.GetStandbyIds()[0].GetCell())
+				assert.Equal(t, "replica-1", config.GetStandbyIds()[0].GetName())
+				assert.Equal(t, multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_APPLY, config.GetSynchronousCommit())
 			},
 		},
 		{
@@ -933,8 +933,8 @@ func TestGetSynchronousReplicationConfig(t *testing.T) {
 			},
 			expectError: false,
 			validateResult: func(t *testing.T, config *multipoolermanagerdatapb.SynchronousReplicationConfiguration) {
-				assert.Equal(t, 0, len(config.StandbyIds))
-				assert.Equal(t, multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LOCAL, config.SynchronousCommit)
+				assert.Equal(t, 0, len(config.GetStandbyIds()))
+				assert.Equal(t, multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LOCAL, config.GetSynchronousCommit())
 			},
 		},
 		{
@@ -948,7 +948,7 @@ func TestGetSynchronousReplicationConfig(t *testing.T) {
 			},
 			expectError: false,
 			validateResult: func(t *testing.T, config *multipoolermanagerdatapb.SynchronousReplicationConfiguration) {
-				assert.Equal(t, multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_OFF, config.SynchronousCommit)
+				assert.Equal(t, multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_OFF, config.GetSynchronousCommit())
 			},
 		},
 		{
@@ -962,7 +962,7 @@ func TestGetSynchronousReplicationConfig(t *testing.T) {
 			},
 			expectError: false,
 			validateResult: func(t *testing.T, config *multipoolermanagerdatapb.SynchronousReplicationConfiguration) {
-				assert.Equal(t, multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_WRITE, config.SynchronousCommit)
+				assert.Equal(t, multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_WRITE, config.GetSynchronousCommit())
 			},
 		},
 		{
@@ -1030,8 +1030,8 @@ func TestSetSynchronousStandbyNames(t *testing.T) {
 			synchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			numSync:           1,
 			standbyIDs: []*clustermetadatapb.ID{
-				{Cell: "cell1", Name: "pooler1"},
-				{Cell: "cell1", Name: "pooler2"},
+				clustermetadatapb.ID_builder{Cell: "cell1", Name: "pooler1"}.Build(),
+				clustermetadatapb.ID_builder{Cell: "cell1", Name: "pooler2"}.Build(),
 			},
 			expectError:   false,
 			expectedValue: `FIRST 1 ("cell1_pooler1", "cell1_pooler2")`,
@@ -1041,9 +1041,9 @@ func TestSetSynchronousStandbyNames(t *testing.T) {
 			synchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_ANY,
 			numSync:           2,
 			standbyIDs: []*clustermetadatapb.ID{
-				{Cell: "cell1", Name: "pooler1"},
-				{Cell: "cell2", Name: "pooler2"},
-				{Cell: "cell2", Name: "pooler3"},
+				clustermetadatapb.ID_builder{Cell: "cell1", Name: "pooler1"}.Build(),
+				clustermetadatapb.ID_builder{Cell: "cell2", Name: "pooler2"}.Build(),
+				clustermetadatapb.ID_builder{Cell: "cell2", Name: "pooler3"}.Build(),
 			},
 			expectError:   false,
 			expectedValue: `ANY 2 ("cell1_pooler1", "cell2_pooler2", "cell2_pooler3")`,
@@ -1053,7 +1053,7 @@ func TestSetSynchronousStandbyNames(t *testing.T) {
 			synchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			numSync:           1,
 			standbyIDs: []*clustermetadatapb.ID{
-				{Cell: "cell1", Name: "pooler1"},
+				clustermetadatapb.ID_builder{Cell: "cell1", Name: "pooler1"}.Build(),
 			},
 			expectError:   true,
 			expectedValue: `FIRST 1 ("cell1_pooler1")`,
@@ -1211,11 +1211,11 @@ func TestValidateSyncReplicationParams(t *testing.T) {
 			name:    "Valid single standby",
 			numSync: 1,
 			standbyIDs: []*clustermetadatapb.ID{
-				{
+				clustermetadatapb.ID_builder{
 					Component: clustermetadatapb.ID_MULTIPOOLER,
 					Cell:      "zone1",
 					Name:      "standby1",
-				},
+				}.Build(),
 			},
 			expectError: false,
 		},
@@ -1223,16 +1223,16 @@ func TestValidateSyncReplicationParams(t *testing.T) {
 			name:    "Valid multiple standbys",
 			numSync: 2,
 			standbyIDs: []*clustermetadatapb.ID{
-				{
+				clustermetadatapb.ID_builder{
 					Component: clustermetadatapb.ID_MULTIPOOLER,
 					Cell:      "zone1",
 					Name:      "standby1",
-				},
-				{
+				}.Build(),
+				clustermetadatapb.ID_builder{
 					Component: clustermetadatapb.ID_MULTIPOOLER,
 					Cell:      "zone1",
 					Name:      "standby2",
-				},
+				}.Build(),
 			},
 			expectError: false,
 		},
@@ -1259,16 +1259,16 @@ func TestValidateSyncReplicationParams(t *testing.T) {
 			name:    "Invalid numSync exceeds standby count",
 			numSync: 3,
 			standbyIDs: []*clustermetadatapb.ID{
-				{
+				clustermetadatapb.ID_builder{
 					Component: clustermetadatapb.ID_MULTIPOOLER,
 					Cell:      "zone1",
 					Name:      "standby1",
-				},
-				{
+				}.Build(),
+				clustermetadatapb.ID_builder{
 					Component: clustermetadatapb.ID_MULTIPOOLER,
 					Cell:      "zone1",
 					Name:      "standby2",
-				},
+				}.Build(),
 			},
 			expectError: true,
 			errorMsg:    "num_sync (3) cannot exceed number of standby_ids (2)",
@@ -1277,11 +1277,11 @@ func TestValidateSyncReplicationParams(t *testing.T) {
 			name:    "Invalid nil standby ID",
 			numSync: 1,
 			standbyIDs: []*clustermetadatapb.ID{
-				{
+				clustermetadatapb.ID_builder{
 					Component: clustermetadatapb.ID_MULTIPOOLER,
 					Cell:      "zone1",
 					Name:      "standby1",
-				},
+				}.Build(),
 				nil,
 			},
 			expectError: true,
@@ -1291,11 +1291,11 @@ func TestValidateSyncReplicationParams(t *testing.T) {
 			name:    "Invalid empty cell",
 			numSync: 1,
 			standbyIDs: []*clustermetadatapb.ID{
-				{
+				clustermetadatapb.ID_builder{
 					Component: clustermetadatapb.ID_MULTIPOOLER,
 					Cell:      "",
 					Name:      "standby1",
-				},
+				}.Build(),
 			},
 			expectError: true,
 			errorMsg:    "standby_ids[0] has empty cell",
@@ -1304,11 +1304,11 @@ func TestValidateSyncReplicationParams(t *testing.T) {
 			name:    "Invalid empty name",
 			numSync: 1,
 			standbyIDs: []*clustermetadatapb.ID{
-				{
+				clustermetadatapb.ID_builder{
 					Component: clustermetadatapb.ID_MULTIPOOLER,
 					Cell:      "zone1",
 					Name:      "",
-				},
+				}.Build(),
 			},
 			expectError: true,
 			errorMsg:    "standby_ids[0] has empty name",
@@ -1374,8 +1374,8 @@ func TestPauseReplication(t *testing.T) {
 			expectError:  false,
 			expectStatus: true,
 			validateResult: func(t *testing.T, status *multipoolermanagerdatapb.StandbyReplicationStatus) {
-				assert.Equal(t, "0/3000000", status.LastReplayLsn)
-				assert.True(t, status.IsWalReplayPaused)
+				assert.Equal(t, "0/3000000", status.GetLastReplayLsn())
+				assert.True(t, status.GetIsWalReplayPaused())
 			},
 		},
 		{
@@ -1441,9 +1441,9 @@ func TestPauseReplication(t *testing.T) {
 			expectError:  false,
 			expectStatus: true,
 			validateResult: func(t *testing.T, status *multipoolermanagerdatapb.StandbyReplicationStatus) {
-				assert.Equal(t, "0/4000000", status.LastReplayLsn)
-				assert.False(t, status.IsWalReplayPaused)
-				assert.Empty(t, status.LastReceiveLsn)
+				assert.Equal(t, "0/4000000", status.GetLastReplayLsn())
+				assert.False(t, status.GetIsWalReplayPaused())
+				assert.Empty(t, status.GetLastReceiveLsn())
 			},
 		},
 		{
@@ -1549,8 +1549,8 @@ func TestPauseReplication(t *testing.T) {
 			expectError:  false,
 			expectStatus: true,
 			validateResult: func(t *testing.T, status *multipoolermanagerdatapb.StandbyReplicationStatus) {
-				assert.Equal(t, "0/5000000", status.LastReplayLsn)
-				assert.True(t, status.IsWalReplayPaused)
+				assert.Equal(t, "0/5000000", status.GetLastReplayLsn())
+				assert.True(t, status.GetIsWalReplayPaused())
 			},
 		},
 		{
@@ -1805,13 +1805,13 @@ func TestQueryReplicationStatus(t *testing.T) {
 			},
 			expectError: false,
 			validateResult: func(t *testing.T, status *multipoolermanagerdatapb.StandbyReplicationStatus) {
-				assert.Equal(t, "0/3000000", status.LastReplayLsn)
-				assert.Equal(t, "0/3000100", status.LastReceiveLsn)
-				assert.False(t, status.IsWalReplayPaused)
-				assert.Equal(t, "not paused", status.WalReplayPauseState)
-				assert.Equal(t, "2025-01-15 10:00:00+00", status.LastXactReplayTimestamp)
-				assert.NotNil(t, status.PrimaryConnInfo)
-				assert.Equal(t, "primary", status.PrimaryConnInfo.Host)
+				assert.Equal(t, "0/3000000", status.GetLastReplayLsn())
+				assert.Equal(t, "0/3000100", status.GetLastReceiveLsn())
+				assert.False(t, status.GetIsWalReplayPaused())
+				assert.Equal(t, "not paused", status.GetWalReplayPauseState())
+				assert.Equal(t, "2025-01-15 10:00:00+00", status.GetLastXactReplayTimestamp())
+				assert.NotNil(t, status.GetPrimaryConnInfo())
+				assert.Equal(t, "primary", status.GetPrimaryConnInfo().GetHost())
 			},
 		},
 		{
@@ -1836,11 +1836,11 @@ func TestQueryReplicationStatus(t *testing.T) {
 			},
 			expectError: false,
 			validateResult: func(t *testing.T, status *multipoolermanagerdatapb.StandbyReplicationStatus) {
-				assert.Empty(t, status.LastReplayLsn, "LastReplayLsn should be empty when NULL")
-				assert.Empty(t, status.LastReceiveLsn, "LastReceiveLsn should be empty when NULL")
-				assert.False(t, status.IsWalReplayPaused)
-				assert.Equal(t, "not paused", status.WalReplayPauseState)
-				assert.Empty(t, status.LastXactReplayTimestamp, "LastXactReplayTimestamp should be empty when NULL")
+				assert.Empty(t, status.GetLastReplayLsn(), "LastReplayLsn should be empty when NULL")
+				assert.Empty(t, status.GetLastReceiveLsn(), "LastReceiveLsn should be empty when NULL")
+				assert.False(t, status.GetIsWalReplayPaused())
+				assert.Equal(t, "not paused", status.GetWalReplayPauseState())
+				assert.Empty(t, status.GetLastXactReplayTimestamp(), "LastXactReplayTimestamp should be empty when NULL")
 			},
 		},
 		{
@@ -1865,16 +1865,16 @@ func TestQueryReplicationStatus(t *testing.T) {
 			},
 			expectError: false,
 			validateResult: func(t *testing.T, status *multipoolermanagerdatapb.StandbyReplicationStatus) {
-				assert.Equal(t, "0/4000000", status.LastReplayLsn)
-				assert.Equal(t, "0/4000200", status.LastReceiveLsn)
-				assert.True(t, status.IsWalReplayPaused)
-				assert.Equal(t, "paused", status.WalReplayPauseState)
-				assert.Equal(t, "2025-01-15 11:00:00+00", status.LastXactReplayTimestamp)
-				assert.NotNil(t, status.PrimaryConnInfo)
-				assert.Equal(t, "primary", status.PrimaryConnInfo.Host)
-				assert.Equal(t, int32(5432), status.PrimaryConnInfo.Port)
-				assert.Equal(t, "replicator", status.PrimaryConnInfo.User)
-				assert.Equal(t, "standby1", status.PrimaryConnInfo.ApplicationName)
+				assert.Equal(t, "0/4000000", status.GetLastReplayLsn())
+				assert.Equal(t, "0/4000200", status.GetLastReceiveLsn())
+				assert.True(t, status.GetIsWalReplayPaused())
+				assert.Equal(t, "paused", status.GetWalReplayPauseState())
+				assert.Equal(t, "2025-01-15 11:00:00+00", status.GetLastXactReplayTimestamp())
+				assert.NotNil(t, status.GetPrimaryConnInfo())
+				assert.Equal(t, "primary", status.GetPrimaryConnInfo().GetHost())
+				assert.Equal(t, int32(5432), status.GetPrimaryConnInfo().GetPort())
+				assert.Equal(t, "replicator", status.GetPrimaryConnInfo().GetUser())
+				assert.Equal(t, "standby1", status.GetPrimaryConnInfo().GetApplicationName())
 			},
 		},
 		{
@@ -1899,10 +1899,10 @@ func TestQueryReplicationStatus(t *testing.T) {
 			},
 			expectError: false,
 			validateResult: func(t *testing.T, status *multipoolermanagerdatapb.StandbyReplicationStatus) {
-				assert.Equal(t, "0/5000000", status.LastReplayLsn, "LastReplayLsn should be populated")
-				assert.Empty(t, status.LastReceiveLsn, "LastReceiveLsn should be empty when NULL")
-				assert.False(t, status.IsWalReplayPaused)
-				assert.Empty(t, status.LastXactReplayTimestamp, "LastXactReplayTimestamp should be empty when NULL")
+				assert.Equal(t, "0/5000000", status.GetLastReplayLsn(), "LastReplayLsn should be populated")
+				assert.Empty(t, status.GetLastReceiveLsn(), "LastReceiveLsn should be empty when NULL")
+				assert.False(t, status.GetIsWalReplayPaused())
+				assert.Empty(t, status.GetLastXactReplayTimestamp(), "LastXactReplayTimestamp should be empty when NULL")
 			},
 		},
 		{

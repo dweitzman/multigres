@@ -29,17 +29,17 @@ func TestStore_BasicOperations(t *testing.T) {
 	// Test Set and Get
 	poolerID := "zone1/multipooler-1"
 	info := &PoolerHealth{
-		MultiPooler: &clustermetadata.MultiPooler{
-			Id: &clustermetadata.ID{
+		MultiPooler: clustermetadata.MultiPooler_builder{
+			Id: clustermetadata.ID_builder{
 				Component: clustermetadata.ID_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "multipooler-1",
-			},
+			}.Build(),
 			Database:   "postgres",
 			TableGroup: "default",
 			Shard:      "-",
 			Type:       clustermetadata.PoolerType_PRIMARY,
-		},
+		}.Build(),
 		LastSeen:         time.Now(),
 		IsUpToDate:       true,
 		IsLastCheckValid: true,
@@ -50,8 +50,8 @@ func TestStore_BasicOperations(t *testing.T) {
 	// Get should return the value
 	retrieved, ok := store.Get(poolerID)
 	require.True(t, ok)
-	require.Equal(t, info.MultiPooler.Id.Name, retrieved.MultiPooler.Id.Name)
-	require.Equal(t, info.MultiPooler.Database, retrieved.MultiPooler.Database)
+	require.Equal(t, info.MultiPooler.GetId().GetName(), retrieved.MultiPooler.GetId().GetName())
+	require.Equal(t, info.MultiPooler.GetDatabase(), retrieved.MultiPooler.GetDatabase())
 
 	// Get non-existent key
 	_, ok = store.Get("nonexistent")
@@ -63,13 +63,13 @@ func TestStore_Delete(t *testing.T) {
 
 	key := "test-key"
 	info := &PoolerHealth{
-		MultiPooler: &clustermetadata.MultiPooler{
-			Id: &clustermetadata.ID{
+		MultiPooler: clustermetadata.MultiPooler_builder{
+			Id: clustermetadata.ID_builder{
 				Component: clustermetadata.ID_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "test",
-			},
-		},
+			}.Build(),
+		}.Build(),
 	}
 
 	// Set and verify
@@ -140,34 +140,34 @@ func TestStore_Range(t *testing.T) {
 
 	// Add test items
 	store.Set("key1", &PoolerHealth{
-		MultiPooler: &clustermetadata.MultiPooler{
-			Id: &clustermetadata.ID{
+		MultiPooler: clustermetadata.MultiPooler_builder{
+			Id: clustermetadata.ID_builder{
 				Component: clustermetadata.ID_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "pooler1",
-			},
+			}.Build(),
 			Database: "db1",
-		},
+		}.Build(),
 	})
 	store.Set("key2", &PoolerHealth{
-		MultiPooler: &clustermetadata.MultiPooler{
-			Id: &clustermetadata.ID{
+		MultiPooler: clustermetadata.MultiPooler_builder{
+			Id: clustermetadata.ID_builder{
 				Component: clustermetadata.ID_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "pooler2",
-			},
+			}.Build(),
 			Database: "db2",
-		},
+		}.Build(),
 	})
 	store.Set("key3", &PoolerHealth{
-		MultiPooler: &clustermetadata.MultiPooler{
-			Id: &clustermetadata.ID{
+		MultiPooler: clustermetadata.MultiPooler_builder{
+			Id: clustermetadata.ID_builder{
 				Component: clustermetadata.ID_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "pooler3",
-			},
+			}.Build(),
 			Database: "db3",
-		},
+		}.Build(),
 	})
 
 	// Test iterating over all items

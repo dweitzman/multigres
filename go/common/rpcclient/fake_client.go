@@ -129,10 +129,10 @@ func NewFakeClient() *FakeClient {
 // Helper methods
 
 func (f *FakeClient) getPoolerID(pooler *clustermetadatapb.MultiPooler) string {
-	if pooler == nil || pooler.Id == nil {
+	if pooler == nil || !pooler.HasId() {
 		return ""
 	}
-	return topo.MultiPoolerIDString(pooler.Id)
+	return topo.MultiPoolerIDString(pooler.GetId())
 }
 
 func (f *FakeClient) logCall(method string, poolerID string) {
@@ -631,7 +631,7 @@ func (f *FakeClient) CreateDurabilityPolicy(ctx context.Context, pooler *cluster
 	if resp, ok := f.CreateDurabilityPolicyResponses[poolerID]; ok {
 		return resp, nil
 	}
-	return &multipoolermanagerdatapb.CreateDurabilityPolicyResponse{Success: true}, nil
+	return multipoolermanagerdatapb.CreateDurabilityPolicyResponse_builder{Success: true}.Build(), nil
 }
 
 //

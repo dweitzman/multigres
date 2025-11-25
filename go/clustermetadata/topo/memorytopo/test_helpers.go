@@ -24,44 +24,44 @@ import (
 
 // CreateTestGateway creates a test gateway in the specified cell for testing
 func CreateTestGateway(ctx context.Context, ts topo.Store, cellName, gatewayName string) error {
-	gateway := &clustermetadatapb.MultiGateway{
-		Id: &clustermetadatapb.ID{
+	gateway := clustermetadatapb.MultiGateway_builder{
+		Id: clustermetadatapb.ID_builder{
 			Component: clustermetadatapb.ID_MULTIGATEWAY,
 			Cell:      cellName,
 			Name:      gatewayName,
-		},
+		}.Build(),
 		Hostname: fmt.Sprintf("gateway-%s.%s", gatewayName, cellName),
 		PortMap:  map[string]int32{"grpc": 8080, "postgres": 5432},
-	}
+	}.Build()
 	return ts.CreateMultiGateway(ctx, gateway)
 }
 
 // CreateTestPooler creates a test pooler in the specified cell for testing
 func CreateTestPooler(ctx context.Context, ts topo.Store, cellName, poolerName string, database string) error {
-	pooler := &clustermetadatapb.MultiPooler{
-		Id: &clustermetadatapb.ID{
+	pooler := clustermetadatapb.MultiPooler_builder{
+		Id: clustermetadatapb.ID_builder{
 			Component: clustermetadatapb.ID_MULTIPOOLER,
 			Cell:      cellName,
 			Name:      poolerName,
-		},
+		}.Build(),
 		Hostname: fmt.Sprintf("pooler-%s.%s", poolerName, cellName),
 		PortMap:  map[string]int32{"grpc": 8081, "postgres": 5433},
 		Database: database,
-	}
+	}.Build()
 	return ts.CreateMultiPooler(ctx, pooler)
 }
 
 // CreateTestOrchestrator creates a test orchestrator in the specified cell for testing
 func CreateTestOrchestrator(ctx context.Context, ts topo.Store, cellName, orchName string) error {
-	orch := &clustermetadatapb.MultiOrch{
-		Id: &clustermetadatapb.ID{
+	orch := clustermetadatapb.MultiOrch_builder{
+		Id: clustermetadatapb.ID_builder{
 			Component: clustermetadatapb.ID_MULTIORCH,
 			Cell:      cellName,
 			Name:      orchName,
-		},
+		}.Build(),
 		Hostname: fmt.Sprintf("orch-%s.%s", orchName, cellName),
 		PortMap:  map[string]int32{"grpc": 8082},
-	}
+	}.Build()
 	return ts.CreateMultiOrch(ctx, orch)
 }
 

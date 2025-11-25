@@ -141,7 +141,7 @@ func (pm *MultiPoolerManager) setPrimaryConnInfoLocked(ctx context.Context, host
 	// Format: host=<host> port=<port> user=<user> application_name=<name>
 	// The heartbeat_interval is converted to keepalives_interval/keepalives_idle
 	pm.mu.Lock()
-	database := pm.multipooler.Database
+	database := pm.multipooler.GetDatabase()
 	pm.mu.Unlock()
 
 	// Generate application name using the shared helper
@@ -257,11 +257,11 @@ func (pm *MultiPoolerManager) StandbyReplicationStatus(ctx context.Context) (*mu
 	}
 
 	pm.logger.InfoContext(ctx, "StandbyReplicationStatus completed",
-		"last_replay_lsn", status.LastReplayLsn,
-		"last_receive_lsn", status.LastReceiveLsn,
-		"is_paused", status.IsWalReplayPaused,
-		"pause_state", status.WalReplayPauseState,
-		"primary_conn_info", status.PrimaryConnInfo)
+		"last_replay_lsn", status.GetLastReplayLsn(),
+		"last_receive_lsn", status.GetLastReceiveLsn(),
+		"is_paused", status.GetIsWalReplayPaused(),
+		"pause_state", status.GetWalReplayPauseState(),
+		"primary_conn_info", status.GetPrimaryConnInfo())
 
 	return status, nil
 }
@@ -276,7 +276,7 @@ func (pm *MultiPoolerManager) Status(ctx context.Context) (*multipoolermanagerda
 
 	// Get pooler type from topology
 	pm.mu.Lock()
-	poolerType := pm.multipooler.MultiPooler.Type
+	poolerType := pm.multipooler.MultiPooler.GetType()
 	pm.mu.Unlock()
 
 	// Check actual PostgreSQL role
@@ -299,9 +299,9 @@ func (pm *MultiPoolerManager) Status(ctx context.Context) (*multipoolermanagerda
 		return nil, mterrors.MT13002(poolerType.String(), pgRole).Err
 	}
 
-	poolerStatus := &multipoolermanagerdatapb.Status{
+	poolerStatus := multipoolermanagerdatapb.Status_builder{
 		PoolerType: poolerType,
-	}
+	}.Build()
 
 	// Based on actual PostgreSQL role, populate appropriate status
 	if isPrimary {
@@ -311,10 +311,10 @@ func (pm *MultiPoolerManager) Status(ctx context.Context) (*multipoolermanagerda
 			pm.logger.ErrorContext(ctx, "Failed to get primary status", "error", err)
 			return nil, err
 		}
-		poolerStatus.PrimaryStatus = primaryStatus
+		poolerStatus.SetPrimaryStatus(primaryStatus)
 		pm.logger.InfoContext(ctx, "ReplicationStatus completed (acting as primary)",
 			"pooler_type", poolerType,
-			"lsn", primaryStatus.Lsn)
+			"lsn", primaryStatus.GetLsn())
 	} else {
 		// Acting as standby - get replication status
 		replStatus, err := pm.StandbyReplicationStatus(ctx)
@@ -322,10 +322,10 @@ func (pm *MultiPoolerManager) Status(ctx context.Context) (*multipoolermanagerda
 			pm.logger.ErrorContext(ctx, "Failed to get standby replication status", "error", err)
 			return nil, err
 		}
-		poolerStatus.ReplicationStatus = replStatus
+		poolerStatus.SetReplicationStatus(replStatus)
 		pm.logger.InfoContext(ctx, "ReplicationStatus completed (acting as standby)",
 			"pooler_type", poolerType,
-			"last_replay_lsn", replStatus.LastReplayLsn)
+			"last_replay_lsn", replStatus.GetLastReplayLsn())
 	}
 
 	return poolerStatus, nil
@@ -466,14 +466,14 @@ func (pm *MultiPoolerManager) UpdateSynchronousStandbyList(ctx context.Context, 
 	}
 
 	// Check if synchronous replication is configured
-	if len(syncConfig.StandbyIds) == 0 {
+	if len(syncConfig.GetStandbyIds()) == 0 {
 		pm.logger.ErrorContext(ctx, "UpdateSynchronousStandbyList requires synchronous replication to be configured")
 		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
 			"synchronous replication is not configured - use ConfigureSynchronousReplication first")
 	}
 
 	// Build the current value string for comparison
-	currentValue, err := buildSynchronousStandbyNamesValue(syncConfig.SynchronousMethod, syncConfig.NumSync, syncConfig.StandbyIds)
+	currentValue, err := buildSynchronousStandbyNamesValue(syncConfig.GetSynchronousMethod(), syncConfig.GetNumSync(), syncConfig.GetStandbyIds())
 	if err != nil {
 		return err
 	}
@@ -486,10 +486,10 @@ func (pm *MultiPoolerManager) UpdateSynchronousStandbyList(ctx context.Context, 
 	var updatedStandbys []*clustermetadatapb.ID
 	switch operation {
 	case multipoolermanagerdatapb.StandbyUpdateOperation_STANDBY_UPDATE_OPERATION_ADD:
-		updatedStandbys = applyAddOperation(syncConfig.StandbyIds, standbyIDs)
+		updatedStandbys = applyAddOperation(syncConfig.GetStandbyIds(), standbyIDs)
 
 	case multipoolermanagerdatapb.StandbyUpdateOperation_STANDBY_UPDATE_OPERATION_REMOVE:
-		updatedStandbys = applyRemoveOperation(syncConfig.StandbyIds, standbyIDs)
+		updatedStandbys = applyRemoveOperation(syncConfig.GetStandbyIds(), standbyIDs)
 
 	case multipoolermanagerdatapb.StandbyUpdateOperation_STANDBY_UPDATE_OPERATION_REPLACE:
 		updatedStandbys = applyReplaceOperation(standbyIDs)
@@ -508,7 +508,7 @@ func (pm *MultiPoolerManager) UpdateSynchronousStandbyList(ctx context.Context, 
 	// === Build and Apply New Configuration ===
 
 	// Build new synchronous_standby_names value using shared helper
-	newValue, err := buildSynchronousStandbyNamesValue(syncConfig.SynchronousMethod, syncConfig.NumSync, updatedStandbys)
+	newValue, err := buildSynchronousStandbyNamesValue(syncConfig.GetSynchronousMethod(), syncConfig.GetNumSync(), updatedStandbys)
 	if err != nil {
 		return err
 	}
@@ -560,24 +560,24 @@ func (pm *MultiPoolerManager) PrimaryStatus(ctx context.Context) (*multipoolerma
 	if err != nil {
 		return nil, err
 	}
-	status.Lsn = lsn
+	status.SetLsn(lsn)
 	// If we got to this point, checkPrimaryGuardrails passed, so this is a
 	// PRIMARY server from the PG perspective and should be ready to serve traffic.
-	status.Ready = true
+	status.SetReady(true)
 
 	// Get connected followers from pg_stat_replication
 	followers, err := pm.getConnectedFollowerIDs(ctx)
 	if err != nil {
 		return nil, err
 	}
-	status.ConnectedFollowers = followers
+	status.SetConnectedFollowers(followers)
 
 	// Get synchronous replication configuration
 	syncConfig, err := pm.getSynchronousReplicationConfig(ctx)
 	if err != nil {
 		return nil, err
 	}
-	status.SyncReplicationConfig = syncConfig
+	status.SetSyncReplicationConfig(syncConfig)
 
 	pm.logger.InfoContext(ctx, "PrimaryStatus completed", "lsn", lsn, "followers_count", len(followers))
 	return status, nil
@@ -626,11 +626,11 @@ func (pm *MultiPoolerManager) StopReplicationAndGetStatus(ctx context.Context, m
 	}
 
 	pm.logger.InfoContext(ctx, "StopReplicationAndGetStatus completed",
-		"last_replay_lsn", status.LastReplayLsn,
-		"last_receive_lsn", status.LastReceiveLsn,
-		"is_paused", status.IsWalReplayPaused,
-		"pause_state", status.WalReplayPauseState,
-		"primary_conn_info", status.PrimaryConnInfo)
+		"last_replay_lsn", status.GetLastReplayLsn(),
+		"last_receive_lsn", status.GetLastReceiveLsn(),
+		"is_paused", status.GetIsWalReplayPaused(),
+		"pause_state", status.GetWalReplayPauseState(),
+		"primary_conn_info", status.GetPrimaryConnInfo())
 
 	return status, nil
 }
@@ -667,7 +667,7 @@ func (pm *MultiPoolerManager) ChangeType(ctx context.Context, poolerType string)
 	pm.logger.InfoContext(ctx, "ChangeType called", "pooler_type", poolerType, "service_id", pm.serviceID.String())
 	// Update the multipooler record in topology
 	updatedMultipooler, err := pm.topoClient.UpdateMultiPoolerFields(ctx, pm.serviceID, func(mp *clustermetadatapb.MultiPooler) error {
-		mp.Type = newType
+		mp.SetType(newType)
 		return nil
 	})
 	if err != nil {
@@ -695,10 +695,10 @@ func (pm *MultiPoolerManager) State(ctx context.Context) (*multipoolermanagerdat
 		errorMessage = pm.stateError.Error()
 	}
 
-	return &multipoolermanagerdatapb.StateResponse{
+	return multipoolermanagerdatapb.StateResponse_builder{
 		State:        state,
 		ErrorMessage: errorMessage,
-	}, nil
+	}.Build(), nil
 }
 
 // GetFollowers gets the list of follower servers with detailed replication status
@@ -727,21 +727,21 @@ func (pm *MultiPoolerManager) GetFollowers(ctx context.Context) (*multipoolerman
 	}
 
 	// Build the response with all configured standbys
-	followers := make([]*multipoolermanagerdatapb.FollowerInfo, 0, len(syncConfig.StandbyIds))
-	for _, standbyID := range syncConfig.StandbyIds {
+	followers := make([]*multipoolermanagerdatapb.FollowerInfo, 0, len(syncConfig.GetStandbyIds()))
+	for _, standbyID := range syncConfig.GetStandbyIds() {
 		appName := generateApplicationName(standbyID)
 
-		followerInfo := &multipoolermanagerdatapb.FollowerInfo{
+		followerInfo := multipoolermanagerdatapb.FollowerInfo_builder{
 			FollowerId:      standbyID,
 			ApplicationName: appName,
-		}
+		}.Build()
 
 		// Check if this standby is currently connected
 		if stats, connected := connectedMap[appName]; connected {
-			followerInfo.IsConnected = true
-			followerInfo.ReplicationStats = stats
+			followerInfo.SetIsConnected(true)
+			followerInfo.SetReplicationStats(stats)
 		} else {
-			followerInfo.IsConnected = false
+			followerInfo.SetIsConnected(false)
 			// ReplicationStats remains nil for disconnected followers
 		}
 
@@ -752,10 +752,10 @@ func (pm *MultiPoolerManager) GetFollowers(ctx context.Context) (*multipoolerman
 		"total_configured", len(followers),
 		"connected_count", len(connectedMap))
 
-	return &multipoolermanagerdatapb.GetFollowersResponse{
+	return multipoolermanagerdatapb.GetFollowersResponse_builder{
 		Followers:  followers,
 		SyncConfig: syncConfig,
-	}, nil
+	}.Build(), nil
 }
 
 // Demote demotes the current primary server
@@ -806,12 +806,12 @@ func (pm *MultiPoolerManager) Demote(ctx context.Context, consensusTerm int64, d
 	if state.isServingReadOnly && state.isReplicaInTopology && state.isReadOnly {
 		pm.logger.InfoContext(ctx, "Demotion already complete (idempotent)",
 			"lsn", state.finalLSN)
-		return &multipoolermanagerdatapb.DemoteResponse{
+		return multipoolermanagerdatapb.DemoteResponse_builder{
 			WasAlreadyDemoted:     true,
 			ConsensusTerm:         consensusTerm,
 			LsnPosition:           state.finalLSN,
 			ConnectionsTerminated: 0,
-		}, nil
+		}.Build(), nil
 	}
 
 	// Transition to Read-Only Serving
@@ -869,12 +869,12 @@ func (pm *MultiPoolerManager) Demote(ctx context.Context, consensusTerm int64, d
 		"consensus_term", consensusTerm,
 		"connections_terminated", connectionsTerminated)
 
-	return &multipoolermanagerdatapb.DemoteResponse{
+	return multipoolermanagerdatapb.DemoteResponse_builder{
 		WasAlreadyDemoted:     false,
 		ConsensusTerm:         consensusTerm,
 		LsnPosition:           finalLSN,
 		ConnectionsTerminated: connectionsTerminated,
-	}, nil
+	}.Build(), nil
 }
 
 // UndoDemote undoes a demotion
@@ -941,11 +941,11 @@ func (pm *MultiPoolerManager) Promote(ctx context.Context, consensusTerm int64, 
 			// Everything is consistent and complete - idempotent success
 			pm.logger.InfoContext(ctx, "Promotion already complete and consistent (idempotent)",
 				"lsn", state.currentLSN)
-			return &multipoolermanagerdatapb.PromoteResponse{
+			return multipoolermanagerdatapb.PromoteResponse_builder{
 				LsnPosition:       state.currentLSN,
 				WasAlreadyPrimary: true,
 				ConsensusTerm:     consensusTerm,
-			}, nil
+			}.Build(), nil
 		}
 
 		// Inconsistent state detected
@@ -1004,11 +1004,11 @@ func (pm *MultiPoolerManager) Promote(ctx context.Context, consensusTerm int64, 
 		"consensus_term", consensusTerm,
 		"was_already_primary", state.isPrimaryInPostgres)
 
-	return &multipoolermanagerdatapb.PromoteResponse{
+	return multipoolermanagerdatapb.PromoteResponse_builder{
 		LsnPosition:       finalLSN,
 		WasAlreadyPrimary: state.isPrimaryInPostgres && state.isPrimaryInTopology && state.syncReplicationMatches,
 		ConsensusTerm:     consensusTerm,
-	}, nil
+	}.Build(), nil
 }
 
 // SetTerm sets the consensus term information to local disk
@@ -1051,58 +1051,58 @@ func (pm *MultiPoolerManager) CreateDurabilityPolicy(ctx context.Context, req *m
 		return nil, err
 	}
 
-	pm.logger.InfoContext(ctx, "CreateDurabilityPolicy called", "policy_name", req.PolicyName)
+	pm.logger.InfoContext(ctx, "CreateDurabilityPolicy called", "policy_name", req.GetPolicyName())
 
 	// Validate inputs
-	if req.PolicyName == "" {
-		return &multipoolermanagerdatapb.CreateDurabilityPolicyResponse{
+	if req.GetPolicyName() == "" {
+		return multipoolermanagerdatapb.CreateDurabilityPolicyResponse_builder{
 			Success:      false,
 			ErrorMessage: "policy_name is required",
-		}, nil
+		}.Build(), nil
 	}
 
-	if req.QuorumRule == nil {
-		return &multipoolermanagerdatapb.CreateDurabilityPolicyResponse{
+	if !req.HasQuorumRule() {
+		return multipoolermanagerdatapb.CreateDurabilityPolicyResponse_builder{
 			Success:      false,
 			ErrorMessage: "quorum_rule is required",
-		}, nil
+		}.Build(), nil
 	}
 
 	// Check that we have a database connection
 	if pm.db == nil {
-		return &multipoolermanagerdatapb.CreateDurabilityPolicyResponse{
+		return multipoolermanagerdatapb.CreateDurabilityPolicyResponse_builder{
 			Success:      false,
 			ErrorMessage: "database connection not available",
-		}, nil
+		}.Build(), nil
 	}
 
 	// Marshal the quorum rule to JSON using protojson
 	marshaler := protojson.MarshalOptions{
 		UseEnumNumbers: true, // Encode enums as numbers, not strings
 	}
-	quorumRuleJSON, err := marshaler.Marshal(req.QuorumRule)
+	quorumRuleJSON, err := marshaler.Marshal(req.GetQuorumRule())
 	if err != nil {
-		return &multipoolermanagerdatapb.CreateDurabilityPolicyResponse{
+		return multipoolermanagerdatapb.CreateDurabilityPolicyResponse_builder{
 			Success:      false,
 			ErrorMessage: fmt.Sprintf("failed to marshal quorum rule: %v", err),
-		}, nil
+		}.Build(), nil
 	}
 
 	// Insert the policy into the durability_policy table using helper function
-	if err := InsertDurabilityPolicy(ctx, pm.db, req.PolicyName, quorumRuleJSON); err != nil {
+	if err := InsertDurabilityPolicy(ctx, pm.db, req.GetPolicyName(), quorumRuleJSON); err != nil {
 		pm.logger.ErrorContext(ctx, "Failed to insert durability policy", "error", err)
-		return &multipoolermanagerdatapb.CreateDurabilityPolicyResponse{
+		return multipoolermanagerdatapb.CreateDurabilityPolicyResponse_builder{
 			Success:      false,
 			ErrorMessage: err.Error(),
-		}, nil
+		}.Build(), nil
 	}
 
 	pm.logger.InfoContext(ctx, "Successfully created durability policy",
-		"policy_name", req.PolicyName,
-		"quorum_type", req.QuorumRule.QuorumType,
-		"required_count", req.QuorumRule.RequiredCount)
+		"policy_name", req.GetPolicyName(),
+		"quorum_type", req.GetQuorumRule().GetQuorumType(),
+		"required_count", req.GetQuorumRule().GetRequiredCount())
 
-	return &multipoolermanagerdatapb.CreateDurabilityPolicyResponse{
+	return multipoolermanagerdatapb.CreateDurabilityPolicyResponse_builder{
 		Success: true,
-	}, nil
+	}.Build(), nil
 }

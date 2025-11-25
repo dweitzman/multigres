@@ -75,8 +75,8 @@ func (re *Engine) pollPooler(ctx context.Context, poolerID *clustermetadata.ID, 
 		re.metrics.poolerPollDuration.Record(
 			re.ctx,
 			totalLatency.Seconds(),
-			pooler.MultiPooler.Database,
-			pooler.MultiPooler.TableGroup,
+			pooler.MultiPooler.GetDatabase(),
+			pooler.MultiPooler.GetTableGroup(),
 			status,
 		)
 	}()
@@ -111,7 +111,7 @@ func (re *Engine) pollPooler(ctx context.Context, poolerID *clustermetadata.ID, 
 	if forceDiscovery {
 		re.logger.InfoContext(ctx, "force polling pooler",
 			"pooler_id", poolerIDStr,
-			"type", pooler.MultiPooler.Type,
+			"type", pooler.MultiPooler.GetType(),
 		)
 	}
 
@@ -139,7 +139,7 @@ func (re *Engine) pollPooler(ctx context.Context, poolerID *clustermetadata.ID, 
 	if err != nil {
 		re.logger.WarnContext(ctx, "pooler poll failed",
 			"pooler_id", poolerIDStr,
-			"type", pooler.MultiPooler.Type,
+			"type", pooler.MultiPooler.GetType(),
 			"error", err,
 			"latency", time.Since(totalStart),
 		)
@@ -148,8 +148,8 @@ func (re *Engine) pollPooler(ctx context.Context, poolerID *clustermetadata.ID, 
 		re.metrics.poolerPollDuration.Record(
 			re.ctx,
 			time.Since(totalStart).Seconds(),
-			pooler.MultiPooler.Database,
-			pooler.MultiPooler.TableGroup,
+			pooler.MultiPooler.GetDatabase(),
+			pooler.MultiPooler.GetTableGroup(),
 			PoolerPollStatusFailure,
 		)
 
@@ -175,30 +175,30 @@ func (re *Engine) pollPooler(ctx context.Context, poolerID *clustermetadata.ID, 
 		LastSeen:            successTime,
 		IsUpToDate:          true,
 		IsLastCheckValid:    true,
-		PoolerType:          statusResp.Status.PoolerType,
+		PoolerType:          statusResp.GetStatus().GetPoolerType(),
 	}
 
 	// Populate type-specific fields based on what the pooler reports
-	if statusResp.Status.PrimaryStatus != nil {
-		ps := statusResp.Status.PrimaryStatus
-		success.PrimaryLSN = ps.Lsn
-		success.PrimaryReady = ps.Ready
-		success.PrimaryConnectedFollowers = ps.ConnectedFollowers
-		success.PrimarySyncConfig = ps.SyncReplicationConfig
+	if statusResp.GetStatus().HasPrimaryStatus() {
+		ps := statusResp.GetStatus().GetPrimaryStatus()
+		success.PrimaryLSN = ps.GetLsn()
+		success.PrimaryReady = ps.GetReady()
+		success.PrimaryConnectedFollowers = ps.GetConnectedFollowers()
+		success.PrimarySyncConfig = ps.GetSyncReplicationConfig()
 	}
 
-	if statusResp.Status.ReplicationStatus != nil {
-		rs := statusResp.Status.ReplicationStatus
-		success.ReplicaLastReplayLSN = rs.LastReplayLsn
-		success.ReplicaLastReceiveLSN = rs.LastReceiveLsn
-		success.ReplicaIsWalReplayPaused = rs.IsWalReplayPaused
-		success.ReplicaWalReplayPauseState = rs.WalReplayPauseState
-		success.ReplicaLastXactReplayTimestamp = rs.LastXactReplayTimestamp
-		success.ReplicaPrimaryConnInfo = rs.PrimaryConnInfo
+	if statusResp.GetStatus().HasReplicationStatus() {
+		rs := statusResp.GetStatus().GetReplicationStatus()
+		success.ReplicaLastReplayLSN = rs.GetLastReplayLsn()
+		success.ReplicaLastReceiveLSN = rs.GetLastReceiveLsn()
+		success.ReplicaIsWalReplayPaused = rs.GetIsWalReplayPaused()
+		success.ReplicaWalReplayPauseState = rs.GetWalReplayPauseState()
+		success.ReplicaLastXactReplayTimestamp = rs.GetLastXactReplayTimestamp()
+		success.ReplicaPrimaryConnInfo = rs.GetPrimaryConnInfo()
 
 		// Convert lag duration to milliseconds
-		if rs.Lag != nil {
-			success.ReplicaLagMillis = rs.Lag.AsDuration().Milliseconds()
+		if rs.HasLag() {
+			success.ReplicaLagMillis = rs.GetLag().AsDuration().Milliseconds()
 		}
 	}
 
@@ -206,8 +206,8 @@ func (re *Engine) pollPooler(ctx context.Context, poolerID *clustermetadata.ID, 
 
 	re.logger.DebugContext(ctx, "pooler poll successful",
 		"pooler_id", poolerIDStr,
-		"topology_type", pooler.MultiPooler.Type,
-		"reported_type", statusResp.Status.PoolerType,
+		"topology_type", pooler.MultiPooler.GetType(),
+		"reported_type", statusResp.GetStatus().GetPoolerType(),
 		"latency", time.Since(totalStart),
 	)
 }
@@ -221,9 +221,9 @@ func (re *Engine) pollPoolerStatus(ctx context.Context, poolerID *clustermetadat
 
 	re.logger.DebugContext(ctx, "polling pooler status",
 		"pooler_id", poolerIDStr,
-		"hostname", pooler.MultiPooler.Hostname,
-		"grpc_port", pooler.MultiPooler.PortMap["grpc"],
-		"type", pooler.MultiPooler.Type,
+		"hostname", pooler.MultiPooler.GetHostname(),
+		"grpc_port", pooler.MultiPooler.GetPortMap()["grpc"],
+		"type", pooler.MultiPooler.GetType(),
 	)
 
 	// Call Status RPC
@@ -233,16 +233,16 @@ func (re *Engine) pollPoolerStatus(ctx context.Context, poolerID *clustermetadat
 	}
 
 	// Validate response
-	if resp == nil || resp.Status == nil {
+	if resp == nil || !resp.HasStatus() {
 		return nil, fmt.Errorf("received nil status response")
 	}
 
 	// Log status information for observability
 	re.logger.DebugContext(ctx, "pooler status received",
 		"pooler_id", poolerIDStr,
-		"pooler_type", resp.Status.PoolerType,
-		"has_primary_status", resp.Status.PrimaryStatus != nil,
-		"has_replication_status", resp.Status.ReplicationStatus != nil,
+		"pooler_type", resp.GetStatus().GetPoolerType(),
+		"has_primary_status", resp.GetStatus().HasPrimaryStatus(),
+		"has_replication_status", resp.GetStatus().HasReplicationStatus(),
 	)
 
 	return resp, nil
@@ -337,7 +337,7 @@ func (re *Engine) handlePoolerHealthChecks() {
 				}
 
 				// Poll the pooler with engine context (respects shutdown)
-				re.pollPooler(re.ctx, poolerInfo.MultiPooler.Id, poolerInfo, false /* forceDiscovery */)
+				re.pollPooler(re.ctx, poolerInfo.MultiPooler.GetId(), poolerInfo, false /* forceDiscovery */)
 			}()
 		}
 	}

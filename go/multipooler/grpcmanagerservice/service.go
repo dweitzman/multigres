@@ -46,7 +46,7 @@ func RegisterPoolerManagerServices(senv *servenv.ServEnv, grpc *servenv.GrpcServ
 
 // WaitForLSN waits for PostgreSQL server to reach a specific LSN position
 func (s *managerService) WaitForLSN(ctx context.Context, req *multipoolermanagerdatapb.WaitForLSNRequest) (*multipoolermanagerdatapb.WaitForLSNResponse, error) {
-	err := s.manager.WaitForLSN(ctx, req.TargetLsn)
+	err := s.manager.WaitForLSN(ctx, req.GetTargetLsn())
 	if err != nil {
 		return nil, mterrors.ToGRPC(err)
 	}
@@ -56,12 +56,12 @@ func (s *managerService) WaitForLSN(ctx context.Context, req *multipoolermanager
 // SetPrimaryConnInfo sets the primary connection info for a standby server
 func (s *managerService) SetPrimaryConnInfo(ctx context.Context, req *multipoolermanagerdatapb.SetPrimaryConnInfoRequest) (*multipoolermanagerdatapb.SetPrimaryConnInfoResponse, error) {
 	err := s.manager.SetPrimaryConnInfo(ctx,
-		req.Host,
-		req.Port,
-		req.StopReplicationBefore,
-		req.StartReplicationAfter,
-		req.CurrentTerm,
-		req.Force)
+		req.GetHost(),
+		req.GetPort(),
+		req.GetStopReplicationBefore(),
+		req.GetStartReplicationAfter(),
+		req.GetCurrentTerm(),
+		req.GetForce())
 	if err != nil {
 		return nil, mterrors.ToGRPC(err)
 	}
@@ -79,7 +79,7 @@ func (s *managerService) StartReplication(ctx context.Context, req *multipoolerm
 
 // StopReplication stops replication based on the specified mode
 func (s *managerService) StopReplication(ctx context.Context, req *multipoolermanagerdatapb.StopReplicationRequest) (*multipoolermanagerdatapb.StopReplicationResponse, error) {
-	err := s.manager.StopReplication(ctx, req.Mode, req.Wait)
+	err := s.manager.StopReplication(ctx, req.GetMode(), req.GetWait())
 	if err != nil {
 		return nil, mterrors.ToGRPC(err)
 	}
@@ -92,9 +92,9 @@ func (s *managerService) StandbyReplicationStatus(ctx context.Context, req *mult
 	if err != nil {
 		return nil, mterrors.ToGRPC(err)
 	}
-	return &multipoolermanagerdatapb.StandbyReplicationStatusResponse{
+	return multipoolermanagerdatapb.StandbyReplicationStatusResponse_builder{
 		Status: status,
-	}, nil
+	}.Build(), nil
 }
 
 // Status gets unified status that works for both PRIMARY and REPLICA poolers
@@ -103,9 +103,9 @@ func (s *managerService) Status(ctx context.Context, req *multipoolermanagerdata
 	if err != nil {
 		return nil, mterrors.ToGRPC(err)
 	}
-	return &multipoolermanagerdatapb.StatusResponse{
+	return multipoolermanagerdatapb.StatusResponse_builder{
 		Status: status,
-	}, nil
+	}.Build(), nil
 }
 
 // ResetReplication resets the standby's connection to its primary
@@ -120,11 +120,11 @@ func (s *managerService) ResetReplication(ctx context.Context, req *multipoolerm
 // ConfigureSynchronousReplication configures PostgreSQL synchronous replication settings
 func (s *managerService) ConfigureSynchronousReplication(ctx context.Context, req *multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest) (*multipoolermanagerdatapb.ConfigureSynchronousReplicationResponse, error) {
 	err := s.manager.ConfigureSynchronousReplication(ctx,
-		req.SynchronousCommit,
-		req.SynchronousMethod,
-		req.NumSync,
-		req.StandbyIds,
-		req.ReloadConfig)
+		req.GetSynchronousCommit(),
+		req.GetSynchronousMethod(),
+		req.GetNumSync(),
+		req.GetStandbyIds(),
+		req.GetReloadConfig())
 	if err != nil {
 		return nil, mterrors.ToGRPC(err)
 	}
@@ -134,11 +134,11 @@ func (s *managerService) ConfigureSynchronousReplication(ctx context.Context, re
 // UpdateSynchronousStandbyList updates the synchronous standby list
 func (s *managerService) UpdateSynchronousStandbyList(ctx context.Context, req *multipoolermanagerdatapb.UpdateSynchronousStandbyListRequest) (*multipoolermanagerdatapb.UpdateSynchronousStandbyListResponse, error) {
 	err := s.manager.UpdateSynchronousStandbyList(ctx,
-		req.Operation,
-		req.StandbyIds,
-		req.ReloadConfig,
-		req.ConsensusTerm,
-		req.Force)
+		req.GetOperation(),
+		req.GetStandbyIds(),
+		req.GetReloadConfig(),
+		req.GetConsensusTerm(),
+		req.GetForce())
 	if err != nil {
 		return nil, mterrors.ToGRPC(err)
 	}
@@ -151,9 +151,9 @@ func (s *managerService) PrimaryStatus(ctx context.Context, req *multipoolermana
 	if err != nil {
 		return nil, mterrors.ToGRPC(err)
 	}
-	return &multipoolermanagerdatapb.PrimaryStatusResponse{
+	return multipoolermanagerdatapb.PrimaryStatusResponse_builder{
 		Status: status,
-	}, nil
+	}.Build(), nil
 }
 
 // PrimaryPosition gets the current LSN position of the leader
@@ -162,25 +162,25 @@ func (s *managerService) PrimaryPosition(ctx context.Context, req *multipoolerma
 	if err != nil {
 		return nil, mterrors.ToGRPC(err)
 	}
-	return &multipoolermanagerdatapb.PrimaryPositionResponse{
+	return multipoolermanagerdatapb.PrimaryPositionResponse_builder{
 		LsnPosition: position,
-	}, nil
+	}.Build(), nil
 }
 
 // StopReplicationAndGetStatus stops PostgreSQL replication and returns the status
 func (s *managerService) StopReplicationAndGetStatus(ctx context.Context, req *multipoolermanagerdatapb.StopReplicationAndGetStatusRequest) (*multipoolermanagerdatapb.StopReplicationAndGetStatusResponse, error) {
-	status, err := s.manager.StopReplicationAndGetStatus(ctx, req.Mode, req.Wait)
+	status, err := s.manager.StopReplicationAndGetStatus(ctx, req.GetMode(), req.GetWait())
 	if err != nil {
 		return nil, mterrors.ToGRPC(err)
 	}
-	return &multipoolermanagerdatapb.StopReplicationAndGetStatusResponse{
+	return multipoolermanagerdatapb.StopReplicationAndGetStatusResponse_builder{
 		Status: status,
-	}, nil
+	}.Build(), nil
 }
 
 // ChangeType changes the pooler type (LEADER/FOLLOWER)
 func (s *managerService) ChangeType(ctx context.Context, req *multipoolermanagerdatapb.ChangeTypeRequest) (*multipoolermanagerdatapb.ChangeTypeResponse, error) {
-	err := s.manager.ChangeType(ctx, req.PoolerType.String())
+	err := s.manager.ChangeType(ctx, req.GetPoolerType().String())
 	if err != nil {
 		return nil, mterrors.ToGRPC(err)
 	}
@@ -200,14 +200,14 @@ func (s *managerService) GetFollowers(ctx context.Context, req *multipoolermanag
 func (s *managerService) Demote(ctx context.Context, req *multipoolermanagerdatapb.DemoteRequest) (*multipoolermanagerdatapb.DemoteResponse, error) {
 	// Default drain timeout if not specified
 	drainTimeout := 5 * time.Second
-	if req.DrainTimeout != nil {
-		drainTimeout = req.DrainTimeout.AsDuration()
+	if req.HasDrainTimeout() {
+		drainTimeout = req.GetDrainTimeout().AsDuration()
 	}
 
 	resp, err := s.manager.Demote(ctx,
-		req.ConsensusTerm,
+		req.GetConsensusTerm(),
 		drainTimeout,
-		req.Force)
+		req.GetForce())
 	if err != nil {
 		return nil, mterrors.ToGRPC(err)
 	}
@@ -226,10 +226,10 @@ func (s *managerService) UndoDemote(ctx context.Context, req *multipoolermanager
 // Promote promotes a replica to leader (Multigres-level operation)
 func (s *managerService) Promote(ctx context.Context, req *multipoolermanagerdatapb.PromoteRequest) (*multipoolermanagerdatapb.PromoteResponse, error) {
 	resp, err := s.manager.Promote(ctx,
-		req.ConsensusTerm,
-		req.ExpectedLsn,
-		req.SyncReplicationConfig,
-		req.Force)
+		req.GetConsensusTerm(),
+		req.GetExpectedLsn(),
+		req.GetSyncReplicationConfig(),
+		req.GetForce())
 	if err != nil {
 		return nil, mterrors.ToGRPC(err)
 	}
@@ -243,7 +243,7 @@ func (s *managerService) State(ctx context.Context, req *multipoolermanagerdatap
 
 // SetTerm sets the consensus term information
 func (s *managerService) SetTerm(ctx context.Context, req *multipoolermanagerdatapb.SetTermRequest) (*multipoolermanagerdatapb.SetTermResponse, error) {
-	if err := s.manager.SetTerm(ctx, req.Term); err != nil {
+	if err := s.manager.SetTerm(ctx, req.GetTerm()); err != nil {
 		return nil, mterrors.ToGRPC(err)
 	}
 	return &multipoolermanagerdatapb.SetTermResponse{}, nil
@@ -251,19 +251,19 @@ func (s *managerService) SetTerm(ctx context.Context, req *multipoolermanagerdat
 
 // Backup performs a backup
 func (s *managerService) Backup(ctx context.Context, req *multipoolermanagerdatapb.BackupRequest) (*multipoolermanagerdatapb.BackupResponse, error) {
-	backupID, err := s.manager.Backup(ctx, req.ForcePrimary, req.Type)
+	backupID, err := s.manager.Backup(ctx, req.GetForcePrimary(), req.GetType())
 	if err != nil {
 		return nil, mterrors.ToGRPC(err)
 	}
 
-	return &multipoolermanagerdatapb.BackupResponse{
+	return multipoolermanagerdatapb.BackupResponse_builder{
 		BackupId: backupID,
-	}, nil
+	}.Build(), nil
 }
 
 // RestoreFromBackup restores from a backup
 func (s *managerService) RestoreFromBackup(ctx context.Context, req *multipoolermanagerdatapb.RestoreFromBackupRequest) (*multipoolermanagerdatapb.RestoreFromBackupResponse, error) {
-	err := s.manager.RestoreFromBackup(ctx, req.BackupId)
+	err := s.manager.RestoreFromBackup(ctx, req.GetBackupId())
 	if err != nil {
 		return nil, mterrors.ToGRPC(err)
 	}
@@ -273,14 +273,14 @@ func (s *managerService) RestoreFromBackup(ctx context.Context, req *multipooler
 
 // GetBackups retrieves backup information
 func (s *managerService) GetBackups(ctx context.Context, req *multipoolermanagerdatapb.GetBackupsRequest) (*multipoolermanagerdatapb.GetBackupsResponse, error) {
-	backups, err := s.manager.GetBackups(ctx, req.Limit)
+	backups, err := s.manager.GetBackups(ctx, req.GetLimit())
 	if err != nil {
 		return nil, mterrors.ToGRPC(err)
 	}
 
-	return &multipoolermanagerdatapb.GetBackupsResponse{
+	return multipoolermanagerdatapb.GetBackupsResponse_builder{
 		Backups: backups,
-	}, nil
+	}.Build(), nil
 }
 
 // InitializationStatus returns the initialization status of this pooler

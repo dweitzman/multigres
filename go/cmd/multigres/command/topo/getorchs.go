@@ -62,9 +62,9 @@ func runGetOrchs(cmd *cobra.Command, args []string) error {
 	client := multiadminpb.NewMultiAdminServiceClient(conn)
 	ctx := context.Background()
 
-	request := &multiadminpb.GetOrchsRequest{
+	request := multiadminpb.GetOrchsRequest_builder{
 		Cells: cells,
-	}
+	}.Build()
 
 	response, err := client.GetOrchs(ctx, request)
 	if err != nil {

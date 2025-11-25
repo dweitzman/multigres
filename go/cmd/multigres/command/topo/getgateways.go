@@ -62,9 +62,9 @@ func runGetGateways(cmd *cobra.Command, args []string) error {
 	client := multiadminpb.NewMultiAdminServiceClient(conn)
 	ctx := context.Background()
 
-	request := &multiadminpb.GetGatewaysRequest{
+	request := multiadminpb.GetGatewaysRequest_builder{
 		Cells: cells,
-	}
+	}.Build()
 
 	response, err := client.GetGateways(ctx, request)
 	if err != nil {

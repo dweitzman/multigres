@@ -78,7 +78,7 @@ func TestGRPCServerIntegration(t *testing.T) {
 		// Step 3: Start PostgreSQL
 		startResp, err := client.Start(ctx, &pb.StartRequest{})
 		require.NoError(t, err)
-		assert.NotEmpty(t, startResp.Message)
+		assert.NotEmpty(t, startResp.GetMessage())
 
 		// Step 4: Check status - should be running
 		statusResp, err = client.Status(ctx, &pb.StatusRequest{})
@@ -89,17 +89,17 @@ func TestGRPCServerIntegration(t *testing.T) {
 		// Step 5: Get version
 		versionResp, err := client.Version(ctx, &pb.VersionRequest{})
 		require.NoError(t, err)
-		assert.NotEmpty(t, versionResp.Version)
+		assert.NotEmpty(t, versionResp.GetVersion())
 
 		// Step 6: Reload config
 		reloadResp, err := client.ReloadConfig(ctx, &pb.ReloadConfigRequest{})
 		require.NoError(t, err)
-		assert.NotEmpty(t, reloadResp.Message)
+		assert.NotEmpty(t, reloadResp.GetMessage())
 
 		// Step 7: Restart
 		restartResp, err := client.Restart(ctx, &pb.RestartRequest{})
 		require.NoError(t, err)
-		assert.NotEmpty(t, restartResp.Message)
+		assert.NotEmpty(t, restartResp.GetMessage())
 
 		// Step 8: Check status again
 		statusResp, err = client.Status(ctx, &pb.StatusRequest{})
@@ -107,9 +107,9 @@ func TestGRPCServerIntegration(t *testing.T) {
 		assert.Equal(t, pb.ServerStatus_RUNNING, statusResp.GetStatus())
 
 		// Step 9: Stop PostgreSQL
-		stopResp, err := client.Stop(ctx, &pb.StopRequest{Mode: "fast"})
+		stopResp, err := client.Stop(ctx, pb.StopRequest_builder{Mode: "fast"}.Build())
 		require.NoError(t, err)
-		assert.NotEmpty(t, stopResp.Message)
+		assert.NotEmpty(t, stopResp.GetMessage())
 
 		// Step 10: Final status check
 		statusResp, err = client.Status(ctx, &pb.StatusRequest{})
@@ -163,24 +163,24 @@ func TestGRPCErrorHandling(t *testing.T) {
 			t.Logf("Expected error on duplicate start: %v", err)
 		} else {
 			// Or success with appropriate message
-			assert.Contains(t, startResp.Message, "already")
+			assert.Contains(t, startResp.GetMessage(), "already")
 		}
 
 		// Clean up
-		_, _ = client.Stop(ctx, &pb.StopRequest{Mode: "fast"})
+		_, _ = client.Stop(ctx, pb.StopRequest_builder{Mode: "fast"}.Build())
 	})
 
 	t.Run("stop_not_running", func(t *testing.T) {
 		ctx := context.Background()
 
 		// Try to stop when not running
-		stopResp, err := client.Stop(ctx, &pb.StopRequest{Mode: "fast"})
+		stopResp, err := client.Stop(ctx, pb.StopRequest_builder{Mode: "fast"}.Build())
 		if err != nil {
 			// Error is acceptable
 			t.Logf("Expected error on stop when not running: %v", err)
 		} else {
 			// Or success with appropriate message
-			assert.NotEmpty(t, stopResp.Message)
+			assert.NotEmpty(t, stopResp.GetMessage())
 		}
 	})
 
@@ -194,7 +194,7 @@ func TestGRPCErrorHandling(t *testing.T) {
 			t.Logf("Expected error on reload when not running: %v", err)
 		} else {
 			// Or success with appropriate message
-			assert.NotEmpty(t, reloadResp.Message)
+			assert.NotEmpty(t, reloadResp.GetMessage())
 		}
 	})
 }
@@ -233,7 +233,7 @@ func TestGRPCConcurrentRequests(t *testing.T) {
 	require.NoError(t, err)
 
 	defer func() {
-		_, _ = client.Stop(ctx, &pb.StopRequest{Mode: "fast"})
+		_, _ = client.Stop(ctx, pb.StopRequest_builder{Mode: "fast"}.Build())
 	}()
 
 	t.Run("concurrent_status_requests", func(t *testing.T) {
@@ -314,9 +314,9 @@ func TestGRPCWithDifferentConfigurations(t *testing.T) {
 				require.NoError(t, err)
 
 				// Stop with specific mode
-				stopResp, err := client.Stop(ctx, &pb.StopRequest{Mode: mode})
+				stopResp, err := client.Stop(ctx, pb.StopRequest_builder{Mode: mode}.Build())
 				require.NoError(t, err)
-				assert.NotEmpty(t, stopResp.Message)
+				assert.NotEmpty(t, stopResp.GetMessage())
 
 				// Verify stopped
 				statusResp, err := client.Status(ctx, &pb.StatusRequest{})
@@ -371,7 +371,7 @@ func TestGRPCUninitializedDatabase(t *testing.T) {
 		assert.Contains(t, err.Error(), "Run 'pgctld init' first")
 
 		// Step 3: Try to stop without initialization - should return appropriate message
-		stopResp, err := client.Stop(ctx, &pb.StopRequest{Mode: "fast"})
+		stopResp, err := client.Stop(ctx, pb.StopRequest_builder{Mode: "fast"}.Build())
 		if err != nil {
 			// If it errors, should be about not being initialized or not running
 			assert.Contains(t, err.Error(), "not initialized")
@@ -381,7 +381,7 @@ func TestGRPCUninitializedDatabase(t *testing.T) {
 		}
 
 		// Step 4: Try restart without initialization - should fail
-		_, err = client.Restart(ctx, &pb.RestartRequest{Mode: "fast"})
+		_, err = client.Restart(ctx, pb.RestartRequest_builder{Mode: "fast"}.Build())
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "data directory not initialized")
 

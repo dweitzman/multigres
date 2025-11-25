@@ -124,16 +124,16 @@ func (h *testHandlerWithState) HandleExecute(ctx context.Context, conn *Conn, po
 	}
 
 	// Return a simple test result via callback
-	return callback(ctx, &query.QueryResult{
+	return callback(ctx, query.QueryResult_builder{
 		Fields: []*query.Field{
-			{Name: "column1", Type: "int4"},
+			query.Field_builder{Name: "column1", Type: "int4"}.Build(),
 		},
 		Rows: []*query.Row{
-			{Values: [][]byte{[]byte("1")}},
+			query.Row_builder{Values: [][]byte{[]byte("1")}}.Build(),
 		},
 		CommandTag:   "SELECT 1",
 		RowsAffected: 1,
-	})
+	}.Build())
 }
 
 func (h *testHandlerWithState) HandleDescribe(ctx context.Context, conn *Conn, typ byte, name string) (*query.StatementDescription, error) {
@@ -152,15 +152,15 @@ func (h *testHandlerWithState) HandleDescribe(ctx context.Context, conn *Conn, t
 		// Convert param types to parameter descriptions.
 		params := make([]*query.ParameterDescription, len(stmt.ParamTypes))
 		for i, oid := range stmt.ParamTypes {
-			params[i] = &query.ParameterDescription{
+			params[i] = query.ParameterDescription_builder{
 				DataTypeOid: oid,
-			}
+			}.Build()
 		}
 
-		return &query.StatementDescription{
+		return query.StatementDescription_builder{
 			Parameters: params,
 			Fields:     nil,
-		}, nil
+		}.Build(), nil
 
 	case 'P': // Describe portal
 		state.mu.Lock()
@@ -174,15 +174,15 @@ func (h *testHandlerWithState) HandleDescribe(ctx context.Context, conn *Conn, t
 		// Convert param types to parameter descriptions.
 		params := make([]*query.ParameterDescription, len(portal.Statement.ParamTypes))
 		for i, oid := range portal.Statement.ParamTypes {
-			params[i] = &query.ParameterDescription{
+			params[i] = query.ParameterDescription_builder{
 				DataTypeOid: oid,
-			}
+			}.Build()
 		}
 
-		return &query.StatementDescription{
+		return query.StatementDescription_builder{
 			Parameters: params,
 			Fields:     nil,
-		}, nil
+		}.Build(), nil
 
 	default:
 		return nil, fmt.Errorf("invalid describe type: %c", typ)

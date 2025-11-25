@@ -72,11 +72,11 @@ func TestInitializationStatus(t *testing.T) {
 			store, _ := memorytopo.NewServerAndFactory(ctx, "test-cell")
 			defer store.Close()
 
-			serviceID := &clustermetadatapb.ID{
+			serviceID := clustermetadatapb.ID_builder{
 				Component: clustermetadatapb.ID_MULTIPOOLER,
 				Cell:      "test-cell",
 				Name:      "test-pooler",
-			}
+			}.Build()
 
 			config := &Config{
 				PoolerDir:  poolerDir,
@@ -90,12 +90,12 @@ func TestInitializationStatus(t *testing.T) {
 			pm := NewMultiPoolerManager(logger, config)
 
 			// Create multipooler record in topology
-			multipooler := &clustermetadatapb.MultiPooler{
+			multipooler := clustermetadatapb.MultiPooler_builder{
 				Id:         serviceID,
 				Database:   "testdb",
 				TableGroup: "testgroup",
 				Shard:      tt.expectedShardID,
-			}
+			}.Build()
 
 			pm.mu.Lock()
 			pm.multipooler = &topo.MultiPoolerInfo{MultiPooler: multipooler}
@@ -113,10 +113,10 @@ func TestInitializationStatus(t *testing.T) {
 			require.NotNil(t, resp)
 
 			// Verify response
-			assert.Equal(t, tt.expectedInitialized, resp.IsInitialized, "IsInitialized mismatch")
-			assert.Equal(t, tt.expectedHasDataDir, resp.HasDataDirectory, "HasDataDirectory mismatch")
-			assert.Equal(t, tt.expectedRole, resp.Role, "Role mismatch")
-			assert.Equal(t, tt.expectedShardID, resp.ShardId, "ShardId mismatch")
+			assert.Equal(t, tt.expectedInitialized, resp.GetIsInitialized(), "IsInitialized mismatch")
+			assert.Equal(t, tt.expectedHasDataDir, resp.GetHasDataDirectory(), "HasDataDirectory mismatch")
+			assert.Equal(t, tt.expectedRole, resp.GetRole(), "Role mismatch")
+			assert.Equal(t, tt.expectedShardID, resp.GetShardId(), "ShardId mismatch")
 		})
 	}
 }
@@ -160,11 +160,11 @@ func TestInitializeEmptyPrimary(t *testing.T) {
 			// Create test config
 			store, _ := memorytopo.NewServerAndFactory(ctx, "test-cell")
 			defer store.Close()
-			serviceID := &clustermetadatapb.ID{
+			serviceID := clustermetadatapb.ID_builder{
 				Component: clustermetadatapb.ID_MULTIPOOLER,
 				Cell:      "test-cell",
 				Name:      "test-pooler",
-			}
+			}.Build()
 
 			config := &Config{
 				PoolerDir:  poolerDir,
@@ -189,9 +189,9 @@ func TestInitializeEmptyPrimary(t *testing.T) {
 			}
 
 			// Call InitializeEmptyPrimary
-			req := &multipoolermanagerdatapb.InitializeEmptyPrimaryRequest{
+			req := multipoolermanagerdatapb.InitializeEmptyPrimaryRequest_builder{
 				ConsensusTerm: tt.term,
-			}
+			}.Build()
 
 			resp, err := pm.InitializeEmptyPrimary(ctx, req)
 
@@ -208,7 +208,7 @@ func TestInitializeEmptyPrimary(t *testing.T) {
 					assert.Contains(t, err.Error(), "pgctld")
 				}
 				if resp != nil {
-					assert.True(t, resp.Success)
+					assert.True(t, resp.GetSuccess())
 				}
 			}
 		})
@@ -264,11 +264,11 @@ func TestInitializeAsStandby(t *testing.T) {
 			// Create test config
 			store, _ := memorytopo.NewServerAndFactory(ctx, "test-cell")
 			defer store.Close()
-			serviceID := &clustermetadatapb.ID{
+			serviceID := clustermetadatapb.ID_builder{
 				Component: clustermetadatapb.ID_MULTIPOOLER,
 				Cell:      "test-cell",
 				Name:      "test-pooler",
-			}
+			}.Build()
 
 			config := &Config{
 				PoolerDir:  poolerDir,
@@ -300,12 +300,12 @@ func TestInitializeAsStandby(t *testing.T) {
 			}
 
 			// Call InitializeAsStandby
-			req := &multipoolermanagerdatapb.InitializeAsStandbyRequest{
+			req := multipoolermanagerdatapb.InitializeAsStandbyRequest_builder{
 				PrimaryHost:   tt.primaryHost,
 				PrimaryPort:   tt.primaryPort,
 				ConsensusTerm: tt.term,
 				Force:         tt.force,
-			}
+			}.Build()
 
 			resp, err := pm.InitializeAsStandby(ctx, req)
 
@@ -331,7 +331,7 @@ func TestInitializeAsStandby(t *testing.T) {
 					t.Logf("Expected error (pgctld or Restore not available): %v", err)
 				}
 				if resp != nil {
-					assert.True(t, resp.Success)
+					assert.True(t, resp.GetSuccess())
 				}
 			}
 		})
@@ -356,18 +356,18 @@ func TestHelperMethods(t *testing.T) {
 	})
 
 	t.Run("getShardID", func(t *testing.T) {
-		serviceID := &clustermetadatapb.ID{
+		serviceID := clustermetadatapb.ID_builder{
 			Component: clustermetadatapb.ID_MULTIPOOLER,
 			Cell:      "test-cell",
 			Name:      "test-pooler",
-		}
+		}.Build()
 
-		multipooler := &clustermetadatapb.MultiPooler{
+		multipooler := clustermetadatapb.MultiPooler_builder{
 			Id:         serviceID,
 			Database:   "testdb",
 			TableGroup: "testgroup",
 			Shard:      "shard-123",
-		}
+		}.Build()
 
 		pm := &MultiPoolerManager{
 			multipooler: &topo.MultiPoolerInfo{MultiPooler: multipooler},

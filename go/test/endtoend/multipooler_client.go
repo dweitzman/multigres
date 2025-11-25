@@ -59,9 +59,9 @@ func NewMultiPoolerTestClient(addr string) (*MultiPoolerTestClient, error) {
 	defer cancel()
 
 	// Try to make a basic ExecuteQuery call to test connectivity
-	_, err = client.ExecuteQuery(ctx, &multipoolerpb.ExecuteQueryRequest{
+	_, err = client.ExecuteQuery(ctx, multipoolerpb.ExecuteQueryRequest_builder{
 		Query: "SELECT 1",
-	})
+	}.Build())
 	// We expect this to fail for non-existent servers
 	// The specific error doesn't matter, we just want to know if we can connect
 	if err != nil {
@@ -78,23 +78,23 @@ func NewMultiPoolerTestClient(addr string) (*MultiPoolerTestClient, error) {
 
 // ExecuteQuery executes a SQL query via the multipooler gRPC service
 func (c *MultiPoolerTestClient) ExecuteQuery(ctx context.Context, query string, maxRows uint64) (*querypb.QueryResult, error) {
-	req := &multipoolerpb.ExecuteQueryRequest{
+	req := multipoolerpb.ExecuteQueryRequest_builder{
 		Query:   query,
 		MaxRows: maxRows,
-		CallerId: &mtrpcpb.CallerID{
+		CallerId: mtrpcpb.CallerID_builder{
 			Principal:    "test-user",
 			Component:    "endtoend-test",
 			Subcomponent: "multipooler-test",
-		},
+		}.Build(),
 		Target: &querypb.Target{},
-	}
+	}.Build()
 
 	resp, err := c.client.ExecuteQuery(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("ExecuteQuery failed: %w", err)
 	}
 
-	return resp.Result, nil
+	return resp.GetResult(), nil
 }
 
 // Close closes the gRPC connection
@@ -123,11 +123,11 @@ func TestBasicSelect(t *testing.T, client *MultiPoolerTestClient) {
 	require.NotNil(t, result, "Result should not be nil")
 
 	// Verify structure
-	assert.Len(t, result.Fields, 1, "Should have one field")
-	assert.Equal(t, "test_column", result.Fields[0].Name, "Field name should match")
-	assert.Len(t, result.Rows, 1, "Should have one row")
-	assert.Len(t, result.Rows[0].Values, 1, "Row should have one value")
-	assert.Equal(t, []byte("1"), result.Rows[0].Values[0], "Value should be '1'")
+	assert.Len(t, result.GetFields(), 1, "Should have one field")
+	assert.Equal(t, "test_column", result.GetFields()[0].GetName(), "Field name should match")
+	assert.Len(t, result.GetRows(), 1, "Should have one row")
+	assert.Len(t, result.GetRows()[0].GetValues(), 1, "Row should have one value")
+	assert.Equal(t, []byte("1"), result.GetRows()[0].GetValues()[0], "Value should be '1'")
 }
 
 // TestCreateTable tests creating a table
@@ -149,8 +149,8 @@ func TestCreateTable(t *testing.T, client *MultiPoolerTestClient, tableName stri
 	require.NotNil(t, result, "Result should not be nil")
 
 	// CREATE TABLE is a modification query, so no rows returned
-	assert.Empty(t, result.Fields, "CREATE TABLE should have no fields")
-	assert.Empty(t, result.Rows, "CREATE TABLE should have no rows")
+	assert.Empty(t, result.GetFields(), "CREATE TABLE should have no fields")
+	assert.Empty(t, result.GetRows(), "CREATE TABLE should have no rows")
 }
 
 // TestInsertData tests inserting data into a table
@@ -168,9 +168,9 @@ func TestInsertData(t *testing.T, client *MultiPoolerTestClient, tableName strin
 		require.NotNil(t, result, "Result should not be nil")
 
 		// INSERT is a modification query
-		assert.Empty(t, result.Fields, "INSERT should have no fields")
-		assert.Empty(t, result.Rows, "INSERT should have no rows")
-		assert.Equal(t, uint64(1), result.RowsAffected, "INSERT should affect 1 row")
+		assert.Empty(t, result.GetFields(), "INSERT should have no fields")
+		assert.Empty(t, result.GetRows(), "INSERT should have no rows")
+		assert.Equal(t, uint64(1), result.GetRowsAffected(), "INSERT should affect 1 row")
 	}
 }
 
@@ -187,17 +187,17 @@ func TestSelectData(t *testing.T, client *MultiPoolerTestClient, tableName strin
 	require.NotNil(t, result, "Result should not be nil")
 
 	// Verify structure
-	assert.Len(t, result.Fields, 3, "Should have three fields")
-	assert.Equal(t, "id", result.Fields[0].Name, "First field should be id")
-	assert.Equal(t, "name", result.Fields[1].Name, "Second field should be name")
-	assert.Equal(t, "value", result.Fields[2].Name, "Third field should be value")
+	assert.Len(t, result.GetFields(), 3, "Should have three fields")
+	assert.Equal(t, "id", result.GetFields()[0].GetName(), "First field should be id")
+	assert.Equal(t, "name", result.GetFields()[1].GetName(), "Second field should be name")
+	assert.Equal(t, "value", result.GetFields()[2].GetName(), "Third field should be value")
 
-	assert.Len(t, result.Rows, expectedRowCount, "Should have expected number of rows")
-	assert.Equal(t, uint64(0), result.RowsAffected, "SELECT should not affect rows")
+	assert.Len(t, result.GetRows(), expectedRowCount, "Should have expected number of rows")
+	assert.Equal(t, uint64(0), result.GetRowsAffected(), "SELECT should not affect rows")
 
 	// Verify each row has the right number of values
-	for i, row := range result.Rows {
-		assert.Len(t, row.Values, 3, "Row %d should have 3 values", i)
+	for i, row := range result.GetRows() {
+		assert.Len(t, row.GetValues(), 3, "Row %d should have 3 values", i)
 	}
 }
 
@@ -214,7 +214,7 @@ func TestQueryLimits(t *testing.T, client *MultiPoolerTestClient, tableName stri
 	require.NoError(t, err, "SELECT with limit should succeed")
 	require.NotNil(t, result, "Result should not be nil")
 
-	assert.LessOrEqual(t, len(result.Rows), 2, "Should respect max_rows limit")
+	assert.LessOrEqual(t, len(result.GetRows()), 2, "Should respect max_rows limit")
 }
 
 // TestUpdateData tests updating data in a table
@@ -230,9 +230,9 @@ func TestUpdateData(t *testing.T, client *MultiPoolerTestClient, tableName strin
 	require.NotNil(t, result, "Result should not be nil")
 
 	// UPDATE is a modification query
-	assert.Empty(t, result.Fields, "UPDATE should have no fields")
-	assert.Empty(t, result.Rows, "UPDATE should have no rows")
-	assert.LessOrEqual(t, uint64(1), result.RowsAffected, "UPDATE should affect at least 1 row")
+	assert.Empty(t, result.GetFields(), "UPDATE should have no fields")
+	assert.Empty(t, result.GetRows(), "UPDATE should have no rows")
+	assert.LessOrEqual(t, uint64(1), result.GetRowsAffected(), "UPDATE should affect at least 1 row")
 }
 
 // TestDeleteData tests deleting data from a table
@@ -248,9 +248,9 @@ func TestDeleteData(t *testing.T, client *MultiPoolerTestClient, tableName strin
 	require.NotNil(t, result, "Result should not be nil")
 
 	// DELETE is a modification query
-	assert.Empty(t, result.Fields, "DELETE should have no fields")
-	assert.Empty(t, result.Rows, "DELETE should have no rows")
-	assert.LessOrEqual(t, uint64(1), result.RowsAffected, "DELETE should affect at least 1 row")
+	assert.Empty(t, result.GetFields(), "DELETE should have no fields")
+	assert.Empty(t, result.GetRows(), "DELETE should have no rows")
+	assert.LessOrEqual(t, uint64(1), result.GetRowsAffected(), "DELETE should affect at least 1 row")
 }
 
 // TestDropTable tests dropping a table
@@ -266,8 +266,8 @@ func TestDropTable(t *testing.T, client *MultiPoolerTestClient, tableName string
 	require.NotNil(t, result, "Result should not be nil")
 
 	// DROP TABLE is a modification query
-	assert.Empty(t, result.Fields, "DROP TABLE should have no fields")
-	assert.Empty(t, result.Rows, "DROP TABLE should have no rows")
+	assert.Empty(t, result.GetFields(), "DROP TABLE should have no fields")
+	assert.Empty(t, result.GetRows(), "DROP TABLE should have no rows")
 }
 
 // TestDataTypes tests various PostgreSQL data types
@@ -303,9 +303,9 @@ func TestDataTypes(t *testing.T, client *MultiPoolerTestClient) {
 			result, err := client.ExecuteQuery(ctx, tt.query, 1)
 			require.NoError(t, err, "Query should succeed for %s", tt.name)
 			require.NotNil(t, result, "Result should not be nil")
-			assert.Len(t, result.Fields, 1, "Should have one field")
-			assert.Len(t, result.Rows, 1, "Should have one row")
-			assert.Equal(t, tt.expectedType, result.Fields[0].Type, "Field type should match")
+			assert.Len(t, result.GetFields(), 1, "Should have one field")
+			assert.Len(t, result.GetRows(), 1, "Should have one row")
+			assert.Equal(t, tt.expectedType, result.GetFields()[0].GetType(), "Field type should match")
 		})
 	}
 }
@@ -322,9 +322,9 @@ func TestMultigresSchemaExists(t *testing.T, client *MultiPoolerTestClient) {
 	require.NoError(t, err, "Schema existence check should succeed")
 	require.NotNil(t, result, "Result should not be nil")
 
-	assert.Len(t, result.Rows, 1, "multigres schema should exist")
-	if len(result.Rows) > 0 {
-		schemaName := string(result.Rows[0].Values[0])
+	assert.Len(t, result.GetRows(), 1, "multigres schema should exist")
+	if len(result.GetRows()) > 0 {
+		schemaName := string(result.GetRows()[0].GetValues()[0])
 		assert.Equal(t, "multigres", schemaName, "Schema name should be 'multigres'")
 	}
 }
@@ -347,7 +347,7 @@ func TestHeartbeatTableExists(t *testing.T, client *MultiPoolerTestClient) {
 	result, err := client.ExecuteQuery(ctx, tableQuery, 10)
 	require.NoError(t, err, "Table existence check should succeed")
 	require.NotNil(t, result, "Result should not be nil")
-	assert.Len(t, result.Rows, 1, "heartbeat table should exist in multigres schema")
+	assert.Len(t, result.GetRows(), 1, "heartbeat table should exist in multigres schema")
 
 	// Check the columns
 	columnsQuery := `
@@ -365,12 +365,12 @@ func TestHeartbeatTableExists(t *testing.T, client *MultiPoolerTestClient) {
 	result, err = client.ExecuteQuery(ctx, columnsQuery, 10)
 	require.NoError(t, err, "Columns check should succeed")
 	require.NotNil(t, result, "Result should not be nil")
-	assert.Len(t, result.Rows, 3, "heartbeat table should have 3 columns")
+	assert.Len(t, result.GetRows(), 3, "heartbeat table should have 3 columns")
 
 	// Verify column details - check that we have the expected columns
 	columnNames := make(map[string]bool)
-	for _, row := range result.Rows {
-		columnName := string(row.Values[0])
+	for _, row := range result.GetRows() {
+		columnName := string(row.GetValues()[0])
 		columnNames[columnName] = true
 	}
 
@@ -394,9 +394,9 @@ func TestHeartbeatTableExists(t *testing.T, client *MultiPoolerTestClient) {
 	result, err = client.ExecuteQuery(ctx, pkQuery, 10)
 	require.NoError(t, err, "Primary key check should succeed")
 	require.NotNil(t, result, "Result should not be nil")
-	assert.Len(t, result.Rows, 1, "heartbeat table should have a primary key")
-	if len(result.Rows) > 0 {
-		pkColumnName := string(result.Rows[0].Values[0])
+	assert.Len(t, result.GetRows(), 1, "heartbeat table should have a primary key")
+	if len(result.GetRows()) > 0 {
+		pkColumnName := string(result.GetRows()[0].GetValues()[0])
 		assert.Equal(t, "shard_id", pkColumnName, "Primary key should be on shard_id column")
 	}
 }
@@ -413,9 +413,9 @@ func TestPrimaryDetection(t *testing.T, client *MultiPoolerTestClient) {
 	result, err := client.ExecuteQuery(ctx, query, 1)
 	require.NoError(t, err, "pg_is_in_recovery() check should succeed")
 	require.NotNil(t, result, "Result should not be nil")
-	require.Len(t, result.Rows, 1, "Should return one row")
+	require.Len(t, result.GetRows(), 1, "Should return one row")
 
-	inRecovery := string(result.Rows[0].Values[0])
+	inRecovery := string(result.GetRows()[0].GetValues()[0])
 	t.Logf("pg_is_in_recovery() returned: %s", inRecovery)
 
 	// In test environments, we're typically connected to a primary

@@ -123,12 +123,12 @@ func (mo *MultiOrch) Init() {
 	// Create MultiOrch instance for topo registration
 	// TODO(sougou): Is serviceID needed? It's sent as empty string for now.
 	multiorch := topo.NewMultiOrch("", mo.cfg.GetCell(), mo.senv.GetHostname())
-	multiorch.PortMap["grpc"] = int32(mo.grpcServer.Port())
-	multiorch.PortMap["http"] = int32(mo.senv.GetHTTPPort())
+	multiorch.GetPortMap()["grpc"] = int32(mo.grpcServer.Port())
+	multiorch.GetPortMap()["http"] = int32(mo.senv.GetHTTPPort())
 
 	mo.tr = toporeg.Register(
 		func(ctx context.Context) error { return mo.ts.RegisterMultiOrch(ctx, multiorch, true) },
-		func(ctx context.Context) error { return mo.ts.UnregisterMultiOrch(ctx, multiorch.Id) },
+		func(ctx context.Context) error { return mo.ts.UnregisterMultiOrch(ctx, multiorch.GetId()) },
 		func(s string) {
 			mo.serverStatus.mu.Lock()
 			defer mo.serverStatus.mu.Unlock()

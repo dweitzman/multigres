@@ -327,11 +327,11 @@ func NewServerAndFactory(ctx context.Context, cells ...string) (topo.Store, *Fac
 	for _, cell := range cells {
 		f.cells[cell] = f.newDirectory(cell, nil)
 		// Create cell with mock server addresses for testing
-		cellInfo := &clustermetadatapb.Cell{
+		cellInfo := clustermetadatapb.Cell_builder{
 			Name:            cell,
 			ServerAddresses: []string{fmt.Sprintf("localhost:%d", 2379+len(f.cells))},
 			Root:            fmt.Sprintf("/multigres/%s", cell),
-		}
+		}.Build()
 		if err := ts.CreateCell(ctx, cell, cellInfo); err != nil {
 			slog.ErrorContext(ctx, "ts.CreateCellInfo failed", "cell", cell, "error", err)
 		}

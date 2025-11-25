@@ -40,17 +40,17 @@ func TestCellCRUDOperations(t *testing.T) {
 		{
 			name: "Create and Get Cell",
 			test: func(t *testing.T, ts topo.Store) {
-				cl := &clustermetadatapb.Cell{
+				cl := clustermetadatapb.Cell_builder{
 					ServerAddresses: []string{"server1:2181", "server2:2181"},
 					Root:            "/topo",
-				}
+				}.Build()
 				err := ts.CreateCell(ctx, cell, cl)
 				require.NoError(t, err)
 
 				retrieved, err := ts.GetCell(ctx, cell)
 				require.NoError(t, err)
-				require.Equal(t, cl.ServerAddresses, retrieved.ServerAddresses)
-				require.Equal(t, cl.Root, retrieved.Root)
+				require.Equal(t, cl.GetServerAddresses(), retrieved.GetServerAddresses())
+				require.Equal(t, cl.GetRoot(), retrieved.GetRoot())
 			},
 		},
 		{
@@ -64,17 +64,17 @@ func TestCellCRUDOperations(t *testing.T) {
 		{
 			name: "Update Cell Fields",
 			test: func(t *testing.T, ts topo.Store) {
-				cl := &clustermetadatapb.Cell{
+				cl := clustermetadatapb.Cell_builder{
 					ServerAddresses: []string{"server1:2181"},
 					Root:            "/topo",
-				}
+				}.Build()
 				err := ts.CreateCell(ctx, cell, cl)
 				require.NoError(t, err)
 
 				// Update the cell location
 				err = ts.UpdateCellFields(ctx, cell, func(cl *clustermetadatapb.Cell) error {
-					cl.ServerAddresses = append(cl.ServerAddresses, "server2:2181")
-					cl.Root = "/new_topo"
+					cl.SetServerAddresses(append(cl.GetServerAddresses(), "server2:2181"))
+					cl.SetRoot("/new_topo")
 					return nil
 				})
 				require.NoError(t, err)
@@ -82,17 +82,17 @@ func TestCellCRUDOperations(t *testing.T) {
 				// Verify the update
 				retrieved, err := ts.GetCell(ctx, cell)
 				require.NoError(t, err)
-				require.Contains(t, retrieved.ServerAddresses, "server2:2181")
-				require.Equal(t, "/new_topo", retrieved.Root)
+				require.Contains(t, retrieved.GetServerAddresses(), "server2:2181")
+				require.Equal(t, "/new_topo", retrieved.GetRoot())
 			},
 		},
 		{
 			name: "Update Cell Fields with failing update function",
 			test: func(t *testing.T, ts topo.Store) {
-				cl := &clustermetadatapb.Cell{
+				cl := clustermetadatapb.Cell_builder{
 					ServerAddresses: []string{"server1:2181"},
 					Root:            "/topo",
-				}
+				}.Build()
 				err := ts.CreateCell(ctx, cell, cl)
 				require.NoError(t, err)
 
@@ -107,22 +107,22 @@ func TestCellCRUDOperations(t *testing.T) {
 				// Verify cell location was not modified
 				retrieved, err := ts.GetCell(ctx, cell)
 				require.NoError(t, err)
-				require.Equal(t, []string{"server1:2181"}, retrieved.ServerAddresses)
-				require.Equal(t, "/topo", retrieved.Root)
+				require.Equal(t, []string{"server1:2181"}, retrieved.GetServerAddresses())
+				require.Equal(t, "/topo", retrieved.GetRoot())
 			},
 		},
 		{
 			name: "Get Cell Names",
 			test: func(t *testing.T, ts topo.Store) {
 				// Create multiple cell locations
-				cl1 := &clustermetadatapb.Cell{
+				cl1 := clustermetadatapb.Cell_builder{
 					ServerAddresses: []string{"server1:2181"},
 					Root:            "/topo1",
-				}
-				cl2 := &clustermetadatapb.Cell{
+				}.Build()
+				cl2 := clustermetadatapb.Cell_builder{
 					ServerAddresses: []string{"server2:2181"},
 					Root:            "/topo2",
-				}
+				}.Build()
 
 				err := ts.CreateCell(ctx, cell, cl1)
 				require.NoError(t, err)
@@ -144,10 +144,10 @@ func TestCellCRUDOperations(t *testing.T) {
 		{
 			name: "Delete Cell",
 			test: func(t *testing.T, ts topo.Store) {
-				cl := &clustermetadatapb.Cell{
+				cl := clustermetadatapb.Cell_builder{
 					ServerAddresses: []string{"server1:2181"},
 					Root:            "/topo",
-				}
+				}.Build()
 				err := ts.CreateCell(ctx, cell, cl)
 				require.NoError(t, err)
 
@@ -168,10 +168,10 @@ func TestCellCRUDOperations(t *testing.T) {
 				tsWithFactory, factory := memorytopo.NewServerAndFactory(ctx, "zone-1")
 				defer tsWithFactory.Close()
 
-				cl := &clustermetadatapb.Cell{
+				cl := clustermetadatapb.Cell_builder{
 					ServerAddresses: []string{"server1:2181"},
 					Root:            "/topo",
-				}
+				}.Build()
 				err := tsWithFactory.CreateCell(ctx, cell, cl)
 				require.NoError(t, err)
 
@@ -184,8 +184,8 @@ func TestCellCRUDOperations(t *testing.T) {
 
 				err = tsWithFactory.UpdateCellFields(ctx, cell, func(cl *clustermetadatapb.Cell) error {
 					updateCallCount++
-					cl.ServerAddresses = append(cl.ServerAddresses, "server2:2181")
-					cl.Root = "/new_topo"
+					cl.SetServerAddresses(append(cl.GetServerAddresses(), "server2:2181"))
+					cl.SetRoot("/new_topo")
 					return nil
 				})
 				require.NoError(t, err)
@@ -196,27 +196,27 @@ func TestCellCRUDOperations(t *testing.T) {
 				// Verify the update was successful
 				retrieved, err := tsWithFactory.GetCell(ctx, cell)
 				require.NoError(t, err)
-				require.Contains(t, retrieved.ServerAddresses, "server2:2181")
-				require.Equal(t, "/new_topo", retrieved.Root)
+				require.Contains(t, retrieved.GetServerAddresses(), "server2:2181")
+				require.Equal(t, "/new_topo", retrieved.GetRoot())
 			},
 		},
 		{
 			name: "Delete Cell with database reference",
 			test: func(t *testing.T, ts topo.Store) {
 				// Create a cell
-				cl := &clustermetadatapb.Cell{
+				cl := clustermetadatapb.Cell_builder{
 					ServerAddresses: []string{"server1:2181"},
 					Name:            cell,
 					Root:            "/cell-root-abc",
-				}
+				}.Build()
 				err := ts.CreateCell(ctx, cell, cl)
 				require.NoError(t, err)
 
 				// Create a database that references the cell
-				db := &clustermetadatapb.Database{
+				db := clustermetadatapb.Database_builder{
 					Name:  "test-db",
 					Cells: []string{cell},
-				}
+				}.Build()
 				err = ts.CreateDatabase(ctx, "test-db", db)
 				require.NoError(t, err)
 
@@ -246,22 +246,22 @@ func TestCellCRUDOperations(t *testing.T) {
 			name: "Delete Cell with multiple database references",
 			test: func(t *testing.T, ts topo.Store) {
 				// Create a cell
-				cl := &clustermetadatapb.Cell{
+				cl := clustermetadatapb.Cell_builder{
 					ServerAddresses: []string{"server1:2181"},
 					Root:            "/topo",
-				}
+				}.Build()
 				err := ts.CreateCell(ctx, cell, cl)
 				require.NoError(t, err)
 
 				// Create multiple databases that reference the cell
-				db1 := &clustermetadatapb.Database{
+				db1 := clustermetadatapb.Database_builder{
 					Name:  "test-db-1",
 					Cells: []string{cell, "other-cell"},
-				}
-				db2 := &clustermetadatapb.Database{
+				}.Build()
+				db2 := clustermetadatapb.Database_builder{
 					Name:  "test-db-2",
 					Cells: []string{"other-cell", cell},
-				}
+				}.Build()
 
 				err = ts.CreateDatabase(ctx, "test-db-1", db1)
 				require.NoError(t, err)
@@ -295,18 +295,18 @@ func TestCellCRUDOperations(t *testing.T) {
 			name: "Delete Cell with no database references",
 			test: func(t *testing.T, ts topo.Store) {
 				// Create a cell
-				cl := &clustermetadatapb.Cell{
+				cl := clustermetadatapb.Cell_builder{
 					ServerAddresses: []string{"server1:2181"},
 					Root:            "/topo",
-				}
+				}.Build()
 				err := ts.CreateCell(ctx, cell, cl)
 				require.NoError(t, err)
 
 				// Create a database that doesn't reference the cell
-				db := &clustermetadatapb.Database{
+				db := clustermetadatapb.Database_builder{
 					Name:  "test-db",
 					Cells: []string{"other-cell"},
-				}
+				}.Build()
 				err = ts.CreateDatabase(ctx, "test-db", db)
 				require.NoError(t, err)
 

@@ -160,15 +160,15 @@ func (pd *PoolerDiscovery) processInitialPoolers(initial []*topo.WatchDataRecurs
 		}
 
 		if pooler != nil {
-			poolerID := topo.MultiPoolerIDString(pooler.Id)
+			poolerID := topo.MultiPoolerIDString(pooler.GetId())
 			pd.poolers[poolerID] = pooler
 			pd.logger.Info("Initial pooler discovered",
 				"id", poolerID,
-				"hostname", pooler.Hostname,
+				"hostname", pooler.GetHostname(),
 				"addr", pooler.Addr(),
-				"database", pooler.Database,
-				"shard", pooler.Shard,
-				"type", pooler.Type.String())
+				"database", pooler.GetDatabase(),
+				"shard", pooler.GetShard(),
+				"type", pooler.GetType().String())
 		}
 	}
 
@@ -197,7 +197,7 @@ func (pd *PoolerDiscovery) processPoolerChange(watchData *topo.WatchDataRecursiv
 	}
 
 	// Add or update the pooler
-	poolerID := topo.MultiPoolerIDString(pooler.Id)
+	poolerID := topo.MultiPoolerIDString(pooler.GetId())
 
 	// Check if this is a new pooler
 	_, existed := pd.poolers[poolerID]
@@ -205,28 +205,28 @@ func (pd *PoolerDiscovery) processPoolerChange(watchData *topo.WatchDataRecursiv
 	pd.lastRefresh = time.Now()
 	// TODO: Remove this. Currently a hack, poolers not registering as the correct
 	// type in the topo, so making do with this for now.
-	if pooler.Type == clustermetadatapb.PoolerType_UNKNOWN {
-		pooler.Type = clustermetadatapb.PoolerType_PRIMARY
+	if pooler.GetType() == clustermetadatapb.PoolerType_UNKNOWN {
+		pooler.SetType(clustermetadatapb.PoolerType_PRIMARY)
 	}
 
 	if !existed {
 		pd.logger.Info("New pooler discovered",
 			"id", poolerID,
-			"hostname", pooler.Hostname,
+			"hostname", pooler.GetHostname(),
 			"addr", pooler.Addr(),
-			"tableGroup", pooler.TableGroup,
-			"database", pooler.Database,
-			"shard", pooler.Shard,
-			"type", pooler.Type.String())
+			"tableGroup", pooler.GetTableGroup(),
+			"database", pooler.GetDatabase(),
+			"shard", pooler.GetShard(),
+			"type", pooler.GetType().String())
 	} else {
 		pd.logger.Info("Pooler updated",
 			"id", poolerID,
-			"hostname", pooler.Hostname,
+			"hostname", pooler.GetHostname(),
 			"addr", pooler.Addr(),
-			"tableGroup", pooler.TableGroup,
-			"database", pooler.Database,
-			"shard", pooler.Shard,
-			"type", pooler.Type.String())
+			"tableGroup", pooler.GetTableGroup(),
+			"database", pooler.GetDatabase(),
+			"shard", pooler.GetShard(),
+			"type", pooler.GetType().String())
 	}
 }
 
@@ -255,7 +255,7 @@ func (pd *PoolerDiscovery) GetPooler(target *query.Target) *clustermetadatapb.Mu
 	defer pd.mu.Unlock()
 
 	// Default to PRIMARY if not specified
-	targetType := target.PoolerType
+	targetType := target.GetPoolerType()
 	if targetType == clustermetadatapb.PoolerType_UNKNOWN {
 		targetType = clustermetadatapb.PoolerType_PRIMARY
 	}
@@ -263,17 +263,17 @@ func (pd *PoolerDiscovery) GetPooler(target *query.Target) *clustermetadatapb.Mu
 	// Find matching pooler
 	for _, pooler := range pd.poolers {
 		// TableGroup must match
-		if pooler.TableGroup != target.TableGroup {
+		if pooler.GetTableGroup() != target.GetTableGroup() {
 			continue
 		}
 
 		// PoolerType must match
-		if pooler.Type != targetType {
+		if pooler.GetType() != targetType {
 			continue
 		}
 
 		// Shard must match if specified
-		if target.Shard != "" && pooler.Shard != target.Shard {
+		if target.GetShard() != "" && pooler.GetShard() != target.GetShard() {
 			continue
 		}
 
@@ -282,8 +282,8 @@ func (pd *PoolerDiscovery) GetPooler(target *query.Target) *clustermetadatapb.Mu
 	}
 
 	pd.logger.Warn("no matching pooler found",
-		"tablegroup", target.TableGroup,
-		"shard", target.Shard,
+		"tablegroup", target.GetTableGroup(),
+		"shard", target.GetShard(),
 		"pooler_type", targetType.String())
 	return nil
 }

@@ -44,25 +44,25 @@ func init() {
 }
 
 func getMultiGateway(cell string, uid uint32) *clustermetadatapb.MultiGateway {
-	return &clustermetadatapb.MultiGateway{
-		Id: &clustermetadatapb.ID{
+	return clustermetadatapb.MultiGateway_builder{
+		Id: clustermetadatapb.ID_builder{
 			Component: clustermetadatapb.ID_MULTIGATEWAY,
 			Cell:      cell,
 			Name:      fmt.Sprintf("%d", uid),
-		},
+		}.Build(),
 		Hostname: "host1",
 		PortMap: map[string]int32{
 			"grpc":     int32(uid),
 			"postgres": int32(uid + 5432),
 		},
-	}
+	}.Build()
 }
 
 func checkMultiGatewaysEqual(t *testing.T, expected, actual *clustermetadatapb.MultiGateway) {
 	t.Helper()
-	require.Equal(t, expected.Id.String(), actual.Id.String())
-	require.Equal(t, expected.Hostname, actual.Hostname)
-	require.Equal(t, expected.PortMap, actual.PortMap)
+	require.Equal(t, expected.GetId().String(), actual.GetId().String())
+	require.Equal(t, expected.GetHostname(), actual.GetHostname())
+	require.Equal(t, expected.GetPortMap(), actual.GetPortMap())
 }
 
 func checkMultiGatewayInfosEqual(t *testing.T, expected, actual []*topo.MultiGatewayInfo) {
@@ -71,7 +71,7 @@ func checkMultiGatewayInfosEqual(t *testing.T, expected, actual []*topo.MultiGat
 	for _, actualMG := range actual {
 		found := false
 		for _, expectedMG := range expected {
-			if topo.MultiGatewayIDString(actualMG.Id) == topo.MultiGatewayIDString(expectedMG.Id) {
+			if topo.MultiGatewayIDString(actualMG.GetId()) == topo.MultiGatewayIDString(expectedMG.GetId()) {
 				checkMultiGatewaysEqual(t, expectedMG.MultiGateway, actualMG.MultiGateway)
 				found = true
 				break
@@ -95,72 +95,72 @@ func TestServerGetMultiGatewaysByCell(t *testing.T) {
 			name:                    "single",
 			createCellMultiGateways: 1,
 			expectedMultiGateways: []*clustermetadatapb.MultiGateway{
-				{
-					Id: &clustermetadatapb.ID{
+				clustermetadatapb.MultiGateway_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIGATEWAY,
 						Cell:      cell,
 						Name:      "alpha",
-					},
+					}.Build(),
 					Hostname: "host1",
 					PortMap: map[string]int32{
 						"grpc":     1,
 						"postgres": 5433,
 					},
-				},
+				}.Build(),
 			},
 		},
 		{
 			name:                    "multiple",
 			createCellMultiGateways: 4,
 			expectedMultiGateways: []*clustermetadatapb.MultiGateway{
-				{
-					Id: &clustermetadatapb.ID{
+				clustermetadatapb.MultiGateway_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIGATEWAY,
 						Cell:      cell,
 						Name:      "beta",
-					},
+					}.Build(),
 					Hostname: "host1",
 					PortMap: map[string]int32{
 						"grpc":     1,
 						"postgres": 5433,
 					},
-				},
-				{
-					Id: &clustermetadatapb.ID{
+				}.Build(),
+				clustermetadatapb.MultiGateway_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIGATEWAY,
 						Cell:      cell,
 						Name:      "echo",
-					},
+					}.Build(),
 					Hostname: "host1",
 					PortMap: map[string]int32{
 						"grpc":     2,
 						"postgres": 5434,
 					},
-				},
-				{
-					Id: &clustermetadatapb.ID{
+				}.Build(),
+				clustermetadatapb.MultiGateway_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIGATEWAY,
 						Cell:      cell,
 						Name:      "foxtrot",
-					},
+					}.Build(),
 					Hostname: "host1",
 					PortMap: map[string]int32{
 						"grpc":     3,
 						"postgres": 5435,
 					},
-				},
-				{
-					Id: &clustermetadatapb.ID{
+				}.Build(),
+				clustermetadatapb.MultiGateway_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIGATEWAY,
 						Cell:      cell,
 						Name:      "golf",
-					},
+					}.Build(),
 					Hostname: "host1",
 					PortMap: map[string]int32{
 						"grpc":     4,
 						"postgres": 5436,
 					},
-				},
+				}.Build(),
 			},
 		},
 	}
@@ -177,18 +177,18 @@ func TestServerGetMultiGatewaysByCell(t *testing.T) {
 
 			// Create multigateways with names from expected results
 			for i, expectedMG := range tt.expectedMultiGateways {
-				multigateway := &clustermetadatapb.MultiGateway{
-					Id: &clustermetadatapb.ID{
+				multigateway := clustermetadatapb.MultiGateway_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIGATEWAY,
 						Cell:      cell,
-						Name:      expectedMG.Id.Name,
-					},
+						Name:      expectedMG.GetId().GetName(),
+					}.Build(),
 					Hostname: "host1",
 					PortMap: map[string]int32{
 						"grpc":     int32(i + 1),
 						"postgres": int32(i + 1 + 5432),
 					},
-				}
+				}.Build()
 				require.NoError(t, ts.CreateMultiGateway(ctx, multigateway))
 			}
 
@@ -197,10 +197,10 @@ func TestServerGetMultiGatewaysByCell(t *testing.T) {
 			require.Len(t, out, len(tt.expectedMultiGateways))
 
 			slices.SortFunc(out, func(i, j *topo.MultiGatewayInfo) int {
-				return cmp.Compare(i.Id.Name, j.Id.Name)
+				return cmp.Compare(i.GetId().GetName(), j.GetId().GetName())
 			})
 			slices.SortFunc(tt.expectedMultiGateways, func(i, j *clustermetadatapb.MultiGateway) int {
-				return cmp.Compare(i.Id.Name, j.Id.Name)
+				return cmp.Compare(i.GetId().GetName(), j.GetId().GetName())
 			})
 
 			for i, multigatewayInfo := range out {
@@ -219,17 +219,17 @@ func TestMultiGatewayIDString(t *testing.T) {
 	}{
 		{
 			name:     "simple case",
-			id:       &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIGATEWAY, Cell: "zone1", Name: "100"},
+			id:       clustermetadatapb.ID_builder{Component: clustermetadatapb.ID_MULTIGATEWAY, Cell: "zone1", Name: "100"}.Build(),
 			expected: "multigateway-zone1-100",
 		},
 		{
 			name:     "you can use name as numbers",
-			id:       &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIGATEWAY, Cell: "prod", Name: "0"},
+			id:       clustermetadatapb.ID_builder{Component: clustermetadatapb.ID_MULTIGATEWAY, Cell: "prod", Name: "0"}.Build(),
 			expected: "multigateway-prod-0",
 		},
 		{
 			name:     "funny name",
-			id:       &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIGATEWAY, Cell: "prod", Name: "sleepy"},
+			id:       clustermetadatapb.ID_builder{Component: clustermetadatapb.ID_MULTIGATEWAY, Cell: "prod", Name: "sleepy"}.Build(),
 			expected: "multigateway-prod-sleepy",
 		},
 	}
@@ -254,19 +254,19 @@ func TestMultiGatewayCRUDOperations(t *testing.T) {
 		{
 			name: "Create and Get MultiGateway",
 			test: func(t *testing.T, ts topo.Store) {
-				multigateway := &clustermetadatapb.MultiGateway{
-					Id: &clustermetadatapb.ID{
+				multigateway := clustermetadatapb.MultiGateway_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIGATEWAY,
 						Cell:      cell,
 						Name:      "november",
-					},
+					}.Build(),
 					Hostname: "host1.example.com",
 					PortMap:  map[string]int32{"grpc": 8080, "postgres": 5432},
-				}
+				}.Build()
 				err := ts.CreateMultiGateway(ctx, multigateway)
 				require.NoError(t, err)
 
-				retrieved, err := ts.GetMultiGateway(ctx, multigateway.Id)
+				retrieved, err := ts.GetMultiGateway(ctx, multigateway.GetId())
 				require.NoError(t, err)
 				checkMultiGatewaysEqual(t, multigateway, retrieved.MultiGateway)
 				require.NotZero(t, retrieved.Version())
@@ -275,7 +275,7 @@ func TestMultiGatewayCRUDOperations(t *testing.T) {
 		{
 			name: "Get nonexistent MultiGateway",
 			test: func(t *testing.T, ts topo.Store) {
-				id := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIGATEWAY, Cell: cell, Name: "999"}
+				id := clustermetadatapb.ID_builder{Component: clustermetadatapb.ID_MULTIGATEWAY, Cell: cell, Name: "999"}.Build()
 				_, err := ts.GetMultiGateway(ctx, id)
 				require.Error(t, err)
 				require.True(t, errors.Is(err, &topo.TopoError{Code: topo.NoNode}))
@@ -284,15 +284,15 @@ func TestMultiGatewayCRUDOperations(t *testing.T) {
 		{
 			name: "Create duplicate MultiGateway fails",
 			test: func(t *testing.T, ts topo.Store) {
-				multigateway := &clustermetadatapb.MultiGateway{
-					Id: &clustermetadatapb.ID{
+				multigateway := clustermetadatapb.MultiGateway_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIGATEWAY,
 						Cell:      cell,
 						Name:      "oscar",
-					},
+					}.Build(),
 					Hostname: "host1.example.com",
 					PortMap:  map[string]int32{"grpc": 8080},
-				}
+				}.Build()
 				err := ts.CreateMultiGateway(ctx, multigateway)
 				require.NoError(t, err)
 
@@ -304,54 +304,54 @@ func TestMultiGatewayCRUDOperations(t *testing.T) {
 		{
 			name: "Update MultiGateway",
 			test: func(t *testing.T, ts topo.Store) {
-				multigateway := &clustermetadatapb.MultiGateway{
-					Id: &clustermetadatapb.ID{
+				multigateway := clustermetadatapb.MultiGateway_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIGATEWAY,
 						Cell:      cell,
 						Name:      "papa",
-					},
+					}.Build(),
 					Hostname: "host1.example.com",
 					PortMap:  map[string]int32{"grpc": 8080},
-				}
+				}.Build()
 				err := ts.CreateMultiGateway(ctx, multigateway)
 				require.NoError(t, err)
 
-				retrieved, err := ts.GetMultiGateway(ctx, multigateway.Id)
+				retrieved, err := ts.GetMultiGateway(ctx, multigateway.GetId())
 				require.NoError(t, err)
 				oldVersion := retrieved.Version()
 
-				retrieved.Hostname = "host2.example.com"
-				retrieved.PortMap["postgres"] = 5432
+				retrieved.GetHostname() = "host2.example.com"
+				retrieved.GetPortMap()["postgres"] = 5432
 
 				err = ts.UpdateMultiGateway(ctx, retrieved)
 				require.NoError(t, err)
 
-				updated, err := ts.GetMultiGateway(ctx, multigateway.Id)
+				updated, err := ts.GetMultiGateway(ctx, multigateway.GetId())
 				require.NoError(t, err)
-				require.Equal(t, "host2.example.com", updated.Hostname)
-				require.Equal(t, int32(5432), updated.PortMap["postgres"])
+				require.Equal(t, "host2.example.com", updated.GetHostname())
+				require.Equal(t, int32(5432), updated.GetPortMap()["postgres"])
 				require.NotEqual(t, oldVersion, updated.Version())
 			},
 		},
 		{
 			name: "Delete MultiGateway",
 			test: func(t *testing.T, ts topo.Store) {
-				multigateway := &clustermetadatapb.MultiGateway{
-					Id: &clustermetadatapb.ID{
+				multigateway := clustermetadatapb.MultiGateway_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIGATEWAY,
 						Cell:      cell,
 						Name:      "quebec",
-					},
+					}.Build(),
 					Hostname: "host1.example.com",
 					PortMap:  map[string]int32{"grpc": 8080},
-				}
+				}.Build()
 				err := ts.CreateMultiGateway(ctx, multigateway)
 				require.NoError(t, err)
 
-				err = ts.UnregisterMultiGateway(ctx, multigateway.Id)
+				err = ts.UnregisterMultiGateway(ctx, multigateway.GetId())
 				require.NoError(t, err)
 
-				_, err = ts.GetMultiGateway(ctx, multigateway.Id)
+				_, err = ts.GetMultiGateway(ctx, multigateway.GetId())
 				require.Error(t, err)
 
 				require.True(t, errors.Is(err, &topo.TopoError{Code: topo.NoNode}))
@@ -390,24 +390,24 @@ func TestGetMultiGatewayIDsByCell(t *testing.T) {
 			name: "Cell with multigateways",
 			test: func(t *testing.T, ts topo.Store) {
 				multigateways := []*clustermetadatapb.MultiGateway{
-					{
-						Id: &clustermetadatapb.ID{
+					clustermetadatapb.MultiGateway_builder{
+						Id: clustermetadatapb.ID_builder{
 							Component: clustermetadatapb.ID_MULTIGATEWAY,
 							Cell:      cell1,
 							Name:      "bravo",
-						},
+						}.Build(),
 						Hostname: "host1",
 						PortMap:  map[string]int32{"grpc": 8080},
-					},
-					{
-						Id: &clustermetadatapb.ID{
+					}.Build(),
+					clustermetadatapb.MultiGateway_builder{
+						Id: clustermetadatapb.ID_builder{
 							Component: clustermetadatapb.ID_MULTIGATEWAY,
 							Cell:      cell1,
 							Name:      "charlie",
-						},
+						}.Build(),
 						Hostname: "host3",
 						PortMap:  map[string]int32{"grpc": 8083},
-					},
+					}.Build(),
 				}
 
 				for _, mg := range multigateways {
@@ -419,25 +419,25 @@ func TestGetMultiGatewayIDsByCell(t *testing.T) {
 				require.Len(t, ids, 2)
 
 				expectedIDs := []*clustermetadatapb.ID{
-					{
+					clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIGATEWAY,
 						Cell:      cell1,
 						Name:      "bravo",
-					},
-					{
+					}.Build(),
+					clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIGATEWAY,
 						Cell:      cell1,
 						Name:      "charlie",
-					},
+					}.Build(),
 				}
 
 				slices.SortFunc(ids, func(a, b *clustermetadatapb.ID) int {
-					return cmp.Compare(a.Name, b.Name)
+					return cmp.Compare(a.GetName(), b.GetName())
 				})
 
 				for i, id := range ids {
-					require.Equal(t, expectedIDs[i].Cell, id.Cell)
-					require.Equal(t, expectedIDs[i].Name, id.Name)
+					require.Equal(t, expectedIDs[i].GetCell(), id.GetCell())
+					require.Equal(t, expectedIDs[i].GetName(), id.GetName())
 				}
 
 				// Verify cell boundary: multigateways are NOT accessible from cell2
@@ -477,46 +477,46 @@ func TestUpdateMultiGatewayFields(t *testing.T) {
 		{
 			name: "Successful update",
 			test: func(t *testing.T, ts topo.Store) {
-				id := &clustermetadatapb.ID{
+				id := clustermetadatapb.ID_builder{
 					Component: clustermetadatapb.ID_MULTIGATEWAY,
 					Cell:      cell,
 					Name:      "tango",
-				}
-				multigateway := &clustermetadatapb.MultiGateway{
+				}.Build()
+				multigateway := clustermetadatapb.MultiGateway_builder{
 					Id:       id,
 					Hostname: "host1",
 					PortMap:  map[string]int32{"grpc": 8080},
-				}
+				}.Build()
 				require.NoError(t, ts.CreateMultiGateway(ctx, multigateway))
 
 				updated, err := ts.UpdateMultiGatewayFields(ctx, id, func(mg *clustermetadatapb.MultiGateway) error {
-					mg.Hostname = "newhost"
-					mg.PortMap["postgres"] = 5432
+					mg.SetHostname("newhost")
+					mg.GetPortMap()["postgres"] = 5432
 					return nil
 				})
 				require.NoError(t, err)
-				require.Equal(t, "newhost", updated.Hostname)
-				require.Equal(t, int32(5432), updated.PortMap["postgres"])
+				require.Equal(t, "newhost", updated.GetHostname())
+				require.Equal(t, int32(5432), updated.GetPortMap()["postgres"])
 
 				retrieved, err := ts.GetMultiGateway(ctx, id)
 				require.NoError(t, err)
-				require.Equal(t, "newhost", retrieved.Hostname)
-				require.Equal(t, int32(5432), retrieved.PortMap["postgres"])
+				require.Equal(t, "newhost", retrieved.GetHostname())
+				require.Equal(t, int32(5432), retrieved.GetPortMap()["postgres"])
 			},
 		},
 		{
 			name: "Update function returns error",
 			test: func(t *testing.T, ts topo.Store) {
-				id := &clustermetadatapb.ID{
+				id := clustermetadatapb.ID_builder{
 					Component: clustermetadatapb.ID_MULTIGATEWAY,
 					Cell:      cell,
 					Name:      "uniform",
-				}
-				multigateway := &clustermetadatapb.MultiGateway{
+				}.Build()
+				multigateway := clustermetadatapb.MultiGateway_builder{
 					Id:       id,
 					Hostname: "host1",
 					PortMap:  map[string]int32{"grpc": 8080},
-				}
+				}.Build()
 				require.NoError(t, ts.CreateMultiGateway(ctx, multigateway))
 
 				updateErr := errors.New("update failed")
@@ -528,22 +528,22 @@ func TestUpdateMultiGatewayFields(t *testing.T) {
 
 				retrieved, err := ts.GetMultiGateway(ctx, id)
 				require.NoError(t, err)
-				require.Equal(t, "host1", retrieved.Hostname)
+				require.Equal(t, "host1", retrieved.GetHostname())
 			},
 		},
 		{
 			name: "NoUpdateNeeded returns nil",
 			test: func(t *testing.T, ts topo.Store) {
-				id := &clustermetadatapb.ID{
+				id := clustermetadatapb.ID_builder{
 					Component: clustermetadatapb.ID_MULTIGATEWAY,
 					Cell:      cell,
 					Name:      "victor",
-				}
-				multigateway := &clustermetadatapb.MultiGateway{
+				}.Build()
+				multigateway := clustermetadatapb.MultiGateway_builder{
 					Id:       id,
 					Hostname: "host1",
 					PortMap:  map[string]int32{"grpc": 8080},
-				}
+				}.Build()
 				require.NoError(t, ts.CreateMultiGateway(ctx, multigateway))
 
 				result, err := ts.UpdateMultiGatewayFields(ctx, id, func(mg *clustermetadatapb.MultiGateway) error {
@@ -559,16 +559,16 @@ func TestUpdateMultiGatewayFields(t *testing.T) {
 				tsWithFactory, factory := memorytopo.NewServerAndFactory(ctx, cell)
 				defer tsWithFactory.Close()
 
-				id := &clustermetadatapb.ID{
+				id := clustermetadatapb.ID_builder{
 					Component: clustermetadatapb.ID_MULTIGATEWAY,
 					Cell:      cell,
 					Name:      "whiskey",
-				}
-				multigateway := &clustermetadatapb.MultiGateway{
+				}.Build()
+				multigateway := clustermetadatapb.MultiGateway_builder{
 					Id:       id,
 					Hostname: "host1",
 					PortMap:  map[string]int32{"grpc": 8080},
-				}
+				}.Build()
 				require.NoError(t, tsWithFactory.CreateMultiGateway(ctx, multigateway))
 
 				badVersionErr := &topo.TopoError{Code: topo.BadVersion}
@@ -578,16 +578,16 @@ func TestUpdateMultiGatewayFields(t *testing.T) {
 				updateCallCount := 0
 				updated, err := tsWithFactory.UpdateMultiGatewayFields(ctx, id, func(mg *clustermetadatapb.MultiGateway) error {
 					updateCallCount++
-					mg.Hostname = "newhost"
+					mg.SetHostname("newhost")
 					return nil
 				})
 				require.NoError(t, err)
 				require.Equal(t, 2, updateCallCount)
-				require.Equal(t, "newhost", updated.Hostname)
+				require.Equal(t, "newhost", updated.GetHostname())
 
 				retrieved, err := tsWithFactory.GetMultiGateway(ctx, id)
 				require.NoError(t, err)
-				require.Equal(t, "newhost", retrieved.Hostname)
+				require.Equal(t, "newhost", retrieved.GetHostname())
 			},
 		},
 	}
@@ -613,20 +613,20 @@ func TestInitMultiGateway(t *testing.T) {
 		{
 			name: "Create new multigateway",
 			test: func(t *testing.T, ts topo.Store) {
-				multigateway := &clustermetadatapb.MultiGateway{
-					Id: &clustermetadatapb.ID{
+				multigateway := clustermetadatapb.MultiGateway_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIGATEWAY,
 						Cell:      cell,
 						Name:      "zulu",
-					},
+					}.Build(),
 					Hostname: "host1",
 					PortMap:  map[string]int32{"grpc": 8080},
-				}
+				}.Build()
 
 				err := ts.RegisterMultiGateway(ctx, multigateway, false)
 				require.NoError(t, err)
 
-				retrieved, err := ts.GetMultiGateway(ctx, multigateway.Id)
+				retrieved, err := ts.GetMultiGateway(ctx, multigateway.GetId())
 				require.NoError(t, err)
 				checkMultiGatewaysEqual(t, multigateway, retrieved.MultiGateway)
 			},
@@ -634,31 +634,31 @@ func TestInitMultiGateway(t *testing.T) {
 		{
 			name: "Update existing multigateway with allowUpdate=true",
 			test: func(t *testing.T, ts topo.Store) {
-				original := &clustermetadatapb.MultiGateway{
-					Id: &clustermetadatapb.ID{
+				original := clustermetadatapb.MultiGateway_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIGATEWAY,
 						Cell:      cell,
 						Name:      "xray",
-					},
+					}.Build(),
 					Hostname: "host1",
 					PortMap:  map[string]int32{"grpc": 8080},
-				}
+				}.Build()
 				require.NoError(t, ts.CreateMultiGateway(ctx, original))
 
-				updated := &clustermetadatapb.MultiGateway{
-					Id: &clustermetadatapb.ID{
+				updated := clustermetadatapb.MultiGateway_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIGATEWAY,
 						Cell:      cell,
 						Name:      "xray",
-					},
+					}.Build(),
 					Hostname: "newhost",
 					PortMap:  map[string]int32{"grpc": 8081, "postgres": 5432},
-				}
+				}.Build()
 
 				err := ts.RegisterMultiGateway(ctx, updated, true)
 				require.NoError(t, err)
 
-				retrieved, err := ts.GetMultiGateway(ctx, original.Id)
+				retrieved, err := ts.GetMultiGateway(ctx, original.GetId())
 				require.NoError(t, err)
 				checkMultiGatewaysEqual(t, updated, retrieved.MultiGateway)
 			},
@@ -666,26 +666,26 @@ func TestInitMultiGateway(t *testing.T) {
 		{
 			name: "Fail to update existing multigateway with allowUpdate=false",
 			test: func(t *testing.T, ts topo.Store) {
-				original := &clustermetadatapb.MultiGateway{
-					Id: &clustermetadatapb.ID{
+				original := clustermetadatapb.MultiGateway_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIGATEWAY,
 						Cell:      cell,
 						Name:      "whiskey",
-					},
+					}.Build(),
 					Hostname: "host1",
 					PortMap:  map[string]int32{"grpc": 8080},
-				}
+				}.Build()
 				require.NoError(t, ts.CreateMultiGateway(ctx, original))
 
-				updated := &clustermetadatapb.MultiGateway{
-					Id: &clustermetadatapb.ID{
+				updated := clustermetadatapb.MultiGateway_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIGATEWAY,
 						Cell:      cell,
 						Name:      "whiskey",
-					},
+					}.Build(),
 					Hostname: "newhost",
 					PortMap:  map[string]int32{"grpc": 8081},
-				}
+				}.Build()
 
 				err := ts.RegisterMultiGateway(ctx, updated, false)
 				require.Error(t, err)
@@ -717,24 +717,24 @@ func TestNewMultiGateway(t *testing.T) {
 			name:     "100",
 			cell:     "zone1",
 			host:     "host.example.com",
-			expected: &clustermetadatapb.MultiGateway{
-				Id: &clustermetadatapb.ID{
+			expected: clustermetadatapb.MultiGateway_builder{
+				Id: clustermetadatapb.ID_builder{
 					Cell: "zone1",
 					Name: "100",
-				},
+				}.Build(),
 				Hostname: "host.example.com",
 				PortMap:  map[string]int32{},
-			},
+			}.Build(),
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.testName, func(t *testing.T) {
 			result := topo.NewMultiGateway(tt.name, tt.cell, tt.host)
-			require.Equal(t, tt.expected.Id.Cell, result.Id.Cell)
-			require.Equal(t, tt.expected.Id.Name, result.Id.Name)
-			require.Equal(t, tt.expected.Hostname, result.Hostname)
-			require.NotNil(t, result.PortMap)
+			require.Equal(t, tt.expected.GetId().GetCell(), result.GetId().GetCell())
+			require.Equal(t, tt.expected.GetId().GetName(), result.GetId().GetName())
+			require.Equal(t, tt.expected.GetHostname(), result.GetHostname())
+			require.NotNil(t, result.GetPortMap())
 		})
 	}
 
@@ -743,40 +743,40 @@ func TestNewMultiGateway(t *testing.T) {
 		result := topo.NewMultiGateway("", "zone2", "host2.example.com")
 
 		// Verify basic properties
-		require.Equal(t, "zone2", result.Id.Cell)
-		require.Equal(t, "host2.example.com", result.Hostname)
-		require.NotNil(t, result.PortMap)
+		require.Equal(t, "zone2", result.GetId().GetCell())
+		require.Equal(t, "host2.example.com", result.GetHostname())
+		require.NotNil(t, result.GetPortMap())
 
 		// Verify random name was generated
-		require.NotEmpty(t, result.Id.Name, "expected random name to be generated for empty name")
-		require.Len(t, result.Id.Name, 8, "expected random name to be 8 characters long")
+		require.NotEmpty(t, result.GetId().GetName(), "expected random name to be generated for empty name")
+		require.Len(t, result.GetId().GetName(), 8, "expected random name to be 8 characters long")
 
 		// Verify the generated name only contains valid characters
 		validChars := "bcdfghjklmnpqrstvwxz2456789"
-		for _, char := range result.Id.Name {
+		for _, char := range result.GetId().GetName() {
 			require.Contains(t, validChars, string(char), "generated name should only contain valid characters")
 		}
 
 		// Test that multiple calls generate different names
 		result2 := topo.NewMultiGateway("", "zone2", "host2.example.com")
-		require.NotEqual(t, result.Id.Name, result2.Id.Name, "multiple calls should generate different random names")
+		require.NotEqual(t, result.GetId().GetName(), result2.GetId().GetName(), "multiple calls should generate different random names")
 	})
 }
 
 // TestMultiGatewayInfo tests the MultiGatewayInfo methods
 func TestMultiGatewayInfo(t *testing.T) {
-	multigateway := &clustermetadatapb.MultiGateway{
-		Id: &clustermetadatapb.ID{
+	multigateway := clustermetadatapb.MultiGateway_builder{
+		Id: clustermetadatapb.ID_builder{
 			Component: clustermetadatapb.ID_MULTIGATEWAY,
 			Cell:      "zone1",
 			Name:      "100",
-		},
+		}.Build(),
 		Hostname: "host.example.com",
 		PortMap: map[string]int32{
 			"grpc":     8080,
 			"postgres": 5432,
 		},
-	}
+	}.Build()
 	version := memorytopo.NodeVersion(123)
 	info := topo.NewMultiGatewayInfo(multigateway, version)
 
@@ -799,17 +799,17 @@ func TestMultiGatewayInfo(t *testing.T) {
 	})
 
 	t.Run("Addr method without grpc port", func(t *testing.T) {
-		multigatewayNoGrpc := &clustermetadatapb.MultiGateway{
-			Id: &clustermetadatapb.ID{
+		multigatewayNoGrpc := clustermetadatapb.MultiGateway_builder{
+			Id: clustermetadatapb.ID_builder{
 				Component: clustermetadatapb.ID_MULTIGATEWAY,
 				Cell:      "zone1",
 				Name:      "100",
-			},
+			}.Build(),
 			Hostname: "host.example.com",
 			PortMap: map[string]int32{
 				"postgres": 5432,
 			},
-		}
+		}.Build()
 		infoNoGrpc := topo.NewMultiGatewayInfo(multigatewayNoGrpc, version)
 		result := infoNoGrpc.Addr()
 		expected := "host.example.com"
@@ -834,21 +834,21 @@ func TestGetMultiGatewaysByCell_Comprehensive(t *testing.T) {
 
 		// Setup: Create 3 multigateways in zone1
 		multigateways := []*clustermetadatapb.MultiGateway{
-			{
-				Id:       &clustermetadatapb.ID{Cell: "zone1", Name: "1"},
+			clustermetadatapb.MultiGateway_builder{
+				Id:       clustermetadatapb.ID_builder{Cell: "zone1", Name: "1"}.Build(),
 				Hostname: "host1",
 				PortMap:  map[string]int32{"grpc": 8080, "postgres": 5432},
-			},
-			{
-				Id:       &clustermetadatapb.ID{Cell: "zone1", Name: "2"},
+			}.Build(),
+			clustermetadatapb.MultiGateway_builder{
+				Id:       clustermetadatapb.ID_builder{Cell: "zone1", Name: "2"}.Build(),
 				Hostname: "host2",
 				PortMap:  map[string]int32{"grpc": 8081, "postgres": 5433},
-			},
-			{
-				Id:       &clustermetadatapb.ID{Cell: "zone1", Name: "3"},
+			}.Build(),
+			clustermetadatapb.MultiGateway_builder{
+				Id:       clustermetadatapb.ID_builder{Cell: "zone1", Name: "3"}.Build(),
 				Hostname: "host3",
 				PortMap:  map[string]int32{"grpc": 8082, "postgres": 5434},
-			},
+			}.Build(),
 		}
 
 		// Create all multigateways
@@ -907,24 +907,24 @@ func TestGetMultiGatewaysByCell_Comprehensive(t *testing.T) {
 		defer ts.Close()
 
 		// Setup: Create multigateways in both cells
-		zone1MultiGateway := &clustermetadatapb.MultiGateway{
-			Id: &clustermetadatapb.ID{
+		zone1MultiGateway := clustermetadatapb.MultiGateway_builder{
+			Id: clustermetadatapb.ID_builder{
 				Component: clustermetadatapb.ID_MULTIGATEWAY,
 				Cell:      "zone1",
 				Name:      "1",
-			},
+			}.Build(),
 			Hostname: "host1",
 			PortMap:  map[string]int32{"grpc": 8080, "postgres": 5432},
-		}
-		zone2MultiGateway := &clustermetadatapb.MultiGateway{
-			Id: &clustermetadatapb.ID{
+		}.Build()
+		zone2MultiGateway := clustermetadatapb.MultiGateway_builder{
+			Id: clustermetadatapb.ID_builder{
 				Component: clustermetadatapb.ID_MULTIGATEWAY,
 				Cell:      "zone2",
 				Name:      "1",
-			},
+			}.Build(),
 			Hostname: "host2",
 			PortMap:  map[string]int32{"grpc": 8081, "postgres": 5433},
-		}
+		}.Build()
 
 		// Create multigateways in their respective cells
 		require.NoError(t, ts.CreateMultiGateway(ctx, zone1MultiGateway))
@@ -934,23 +934,23 @@ func TestGetMultiGatewaysByCell_Comprehensive(t *testing.T) {
 		zone1Infos, err := ts.GetMultiGatewaysByCell(ctx, "zone1")
 		require.NoError(t, err)
 		require.Len(t, zone1Infos, 1)
-		require.Equal(t, "zone1", zone1Infos[0].Id.Cell)
+		require.Equal(t, "zone1", zone1Infos[0].Id.GetCell())
 		require.Equal(t, "host1", zone1Infos[0].Hostname)
 
 		// Test: Verify zone2 can only see its own multigateway
 		zone2Infos, err := ts.GetMultiGatewaysByCell(ctx, "zone2")
 		require.NoError(t, err)
 		require.Len(t, zone2Infos, 1)
-		require.Equal(t, "zone2", zone2Infos[0].Id.Cell)
+		require.Equal(t, "zone2", zone2Infos[0].Id.GetCell())
 		require.Equal(t, "host2", zone2Infos[0].Hostname)
 
 		// Test: Verify cross-cell access is properly isolated
-		zone1FromZone2, err := ts.GetMultiGateway(ctx, zone1MultiGateway.Id)
+		zone1FromZone2, err := ts.GetMultiGateway(ctx, zone1MultiGateway.GetId())
 		require.NoError(t, err, "should be able to get multigateway by ID regardless of current cell context")
-		require.Equal(t, "zone1", zone1FromZone2.Id.Cell)
+		require.Equal(t, "zone1", zone1FromZone2.Id.GetCell())
 
-		zone2FromZone1, err := ts.GetMultiGateway(ctx, zone2MultiGateway.Id)
+		zone2FromZone1, err := ts.GetMultiGateway(ctx, zone2MultiGateway.GetId())
 		require.NoError(t, err, "should be able to get multigateway by ID regardless of current cell context")
-		require.Equal(t, "zone2", zone2FromZone1.Id.Cell)
+		require.Equal(t, "zone2", zone2FromZone1.Id.GetCell())
 	})
 }

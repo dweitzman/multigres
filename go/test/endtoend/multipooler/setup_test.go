@@ -358,7 +358,7 @@ func (p *ProcessInstance) stopPostgreSQL() {
 	defer cancel()
 
 	// Stop PostgreSQL
-	_, _ = client.Stop(ctx, &pgctldservice.StopRequest{Mode: "fast"})
+	_, _ = client.Stop(ctx, pgctldservice.StopRequest_builder{Mode: "fast"}.Build())
 }
 
 // createPgctldInstance creates a new pgctld instance configuration
@@ -535,15 +535,15 @@ archive_command = 'pgbackrest --stanza=%s --config=%s --repo1-path=%s archive-pu
 
 	// Initialize consensus term to 1 via multipooler manager API
 	t.Logf("Initializing consensus term to 1 for primary...")
-	initialTerm := &multipoolermanagerdatapb.ConsensusTerm{
+	initialTerm := multipoolermanagerdatapb.ConsensusTerm_builder{
 		TermNumber:                    1,
 		AcceptedTermFromCoordinatorId: nil,
 		LastAcceptanceTime:            nil,
 		LeaderId:                      nil,
-	}
+	}.Build()
 
 	ctx, cancel = context.WithTimeout(context.Background(), 1*time.Second)
-	_, err = client.SetTerm(ctx, &multipoolermanagerdatapb.SetTermRequest{Term: initialTerm})
+	_, err = client.SetTerm(ctx, multipoolermanagerdatapb.SetTermRequest_builder{Term: initialTerm}.Build())
 	cancel()
 	if err != nil {
 		return fmt.Errorf("failed to set term for primary: %w", err)
@@ -554,9 +554,9 @@ archive_command = 'pgbackrest --stanza=%s --config=%s --repo1-path=%s archive-pu
 	ctx, cancel = context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
-	changeTypeReq := &multipoolermanagerdatapb.ChangeTypeRequest{
+	changeTypeReq := multipoolermanagerdatapb.ChangeTypeRequest_builder{
 		PoolerType: clustermetadatapb.PoolerType_PRIMARY,
-	}
+	}.Build()
 	_, err = client.ChangeType(ctx, changeTypeReq)
 	if err != nil {
 		return fmt.Errorf("failed to set primary pooler type: %w", err)
@@ -658,15 +658,15 @@ func initializeStandby(t *testing.T, baseDir string, primaryPgctld *ProcessInsta
 
 	// Initialize consensus term to 1 via multipooler manager API
 	t.Logf("Initializing consensus term to 1 for standby...")
-	initialTerm := &multipoolermanagerdatapb.ConsensusTerm{
+	initialTerm := multipoolermanagerdatapb.ConsensusTerm_builder{
 		TermNumber:                    1,
 		AcceptedTermFromCoordinatorId: nil,
 		LastAcceptanceTime:            nil,
 		LeaderId:                      nil,
-	}
+	}.Build()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	_, err = standbyClient.SetTerm(ctx, &multipoolermanagerdatapb.SetTermRequest{Term: initialTerm})
+	_, err = standbyClient.SetTerm(ctx, multipoolermanagerdatapb.SetTermRequest_builder{Term: initialTerm}.Build())
 	cancel()
 	if err != nil {
 		return fmt.Errorf("failed to set term for standby: %w", err)
@@ -684,7 +684,7 @@ func initializeStandby(t *testing.T, baseDir string, primaryPgctld *ProcessInsta
 	if err != nil {
 		return fmt.Errorf("failed to check standby recovery status: %w", err)
 	}
-	if len(queryResp.Rows) == 0 || len(queryResp.Rows[0].Values) == 0 || string(queryResp.Rows[0].Values[0]) != "true" {
+	if len(queryResp.GetRows()) == 0 || len(queryResp.GetRows()[0].GetValues()) == 0 || string(queryResp.GetRows()[0].GetValues()[0]) != "true" {
 		return fmt.Errorf("standby is not in recovery mode")
 	}
 
@@ -692,9 +692,9 @@ func initializeStandby(t *testing.T, baseDir string, primaryPgctld *ProcessInsta
 	ctx, cancel = context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
-	changeTypeReq := &multipoolermanagerdatapb.ChangeTypeRequest{
+	changeTypeReq := multipoolermanagerdatapb.ChangeTypeRequest_builder{
 		PoolerType: clustermetadatapb.PoolerType_REPLICA,
-	}
+	}.Build()
 	_, err = standbyClient.ChangeType(ctx, changeTypeReq)
 	if err != nil {
 		return fmt.Errorf("failed to set standby pooler type: %w", err)
@@ -753,10 +753,10 @@ func getSharedTestSetup(t *testing.T) *MultipoolerTestSetup {
 		// Note: cleanup will be handled by TestMain
 
 		// Create the cell
-		err = ts.CreateCell(context.Background(), cellName, &clustermetadatapb.Cell{
+		err = ts.CreateCell(context.Background(), cellName, clustermetadatapb.Cell_builder{
 			ServerAddresses: []string{etcdClientAddr},
 			Root:            cellRoot,
-		})
+		}.Build())
 		if err != nil {
 			setupError = fmt.Errorf("failed to create cell: %w", err)
 			return
@@ -768,11 +768,11 @@ func getSharedTestSetup(t *testing.T) *MultipoolerTestSetup {
 		// This is needed for getBackupLocation() calls in multipooler manager
 		database := "postgres"
 		backupLocation := filepath.Join(tempDir, "backup-repo", database, "test", "0")
-		err = ts.CreateDatabase(context.Background(), database, &clustermetadatapb.Database{
+		err = ts.CreateDatabase(context.Background(), database, clustermetadatapb.Database_builder{
 			Name:             database,
 			BackupLocation:   backupLocation,
 			DurabilityPolicy: "ANY_2",
-		})
+		}.Build())
 		if err != nil {
 			setupError = fmt.Errorf("failed to create database in topology: %w", err)
 			return
@@ -914,10 +914,10 @@ func waitForManagerReady(t *testing.T, setup *MultipoolerTestSetup, manager *Pro
 		if err != nil {
 			return false
 		}
-		if resp.State == "error" {
-			t.Fatalf("Manager failed to initialize: %s", resp.ErrorMessage)
+		if resp.GetState() == "error" {
+			t.Fatalf("Manager failed to initialize: %s", resp.GetErrorMessage())
 		}
-		return resp.State == "ready"
+		return resp.GetState() == "ready"
 	}, 30*time.Second, 100*time.Millisecond, "Manager should become ready within 30 seconds")
 
 	t.Logf("Manager %s is ready", manager.Name)
@@ -973,11 +973,11 @@ func setupStandbyReplication(t *testing.T, primaryPgctld *ProcessInstance, stand
 
 // makeMultipoolerID creates a multipooler ID for testing
 func makeMultipoolerID(cell, name string) *clustermetadatapb.ID {
-	return &clustermetadatapb.ID{
+	return clustermetadatapb.ID_builder{
 		Component: clustermetadatapb.ID_MULTIPOOLER,
 		Cell:      cell,
 		Name:      name,
-	}
+	}.Build()
 }
 
 // Helper function to get PrimaryStatus from a manager client
@@ -985,8 +985,8 @@ func getPrimaryStatusFromClient(t *testing.T, client multipoolermanagerpb.MultiP
 	t.Helper()
 	statusResp, err := client.PrimaryStatus(utils.WithShortDeadline(t), &multipoolermanagerdatapb.PrimaryStatusRequest{})
 	require.NoError(t, err, "PrimaryStatus should succeed")
-	require.NotNil(t, statusResp.Status, "Status should not be nil")
-	return statusResp.Status
+	require.NotNil(t, statusResp.GetStatus(), "Status should not be nil")
+	return statusResp.GetStatus()
 }
 
 // Helper function to wait for synchronous replication config to converge to expected value
@@ -994,7 +994,7 @@ func waitForSyncConfigConvergenceWithClient(t *testing.T, client multipoolermana
 	t.Helper()
 	require.Eventually(t, func() bool {
 		status := getPrimaryStatusFromClient(t, client)
-		return checkFunc(status.SyncReplicationConfig)
+		return checkFunc(status.GetSyncReplicationConfig())
 	}, 5*time.Second, 200*time.Millisecond, message)
 }
 
@@ -1003,8 +1003,8 @@ func containsStandbyIDInConfig(config *multipoolermanagerdatapb.SynchronousRepli
 	if config == nil {
 		return false
 	}
-	for _, id := range config.StandbyIds {
-		if id.Cell == cell && id.Name == name {
+	for _, id := range config.GetStandbyIds() {
+		if id.GetCell() == cell && id.GetName() == name {
 			return true
 		}
 	}
@@ -1064,10 +1064,10 @@ func queryStringValue(ctx context.Context, client *endtoend.MultiPoolerTestClien
 	if err != nil {
 		return "", err
 	}
-	if len(resp.Rows) == 0 || len(resp.Rows[0].Values) == 0 {
+	if len(resp.GetRows()) == 0 || len(resp.GetRows()[0].GetValues()) == 0 {
 		return "", nil
 	}
-	return string(resp.Rows[0].Values[0]), nil
+	return string(resp.GetRows()[0].GetValues()[0]), nil
 }
 
 // validateGUCValue queries a GUC and returns an error if it doesn't match the expected value.
@@ -1279,8 +1279,8 @@ func setupPoolerTest(t *testing.T, setup *MultipoolerTestSetup, opts ...cleanupO
 			alreadyStreaming := false
 			if standbyPoolerClient != nil {
 				resp, err := standbyPoolerClient.ExecuteQuery(context.Background(), "SELECT status FROM pg_stat_wal_receiver", 1)
-				if err == nil && len(resp.Rows) > 0 && len(resp.Rows[0].Values) > 0 {
-					status := string(resp.Rows[0].Values[0])
+				if err == nil && len(resp.GetRows()) > 0 && len(resp.GetRows()[0].GetValues()) > 0 {
+					status := string(resp.GetRows()[0].GetValues()[0])
 					if status == "streaming" {
 						alreadyStreaming = true
 						t.Log("Test setup: Replication already streaming")
@@ -1302,24 +1302,24 @@ func setupPoolerTest(t *testing.T, setup *MultipoolerTestSetup, opts ...cleanupO
 				standbyClient := multipoolermanagerpb.NewMultiPoolerManagerClient(standbyConn)
 
 				// Set consensus term
-				_, err = standbyClient.SetTerm(utils.WithShortDeadline(t), &multipoolermanagerdatapb.SetTermRequest{
-					Term: &multipoolermanagerdatapb.ConsensusTerm{
+				_, err = standbyClient.SetTerm(utils.WithShortDeadline(t), multipoolermanagerdatapb.SetTermRequest_builder{
+					Term: multipoolermanagerdatapb.ConsensusTerm_builder{
 						TermNumber: 1,
-					},
-				})
+					}.Build(),
+				}.Build())
 				if err != nil {
 					t.Logf("Warning: Failed to set term on standby: %v", err)
 				}
 
 				// Configure replication with Force=true to ensure it works
-				setPrimaryReq := &multipoolermanagerdatapb.SetPrimaryConnInfoRequest{
+				setPrimaryReq := multipoolermanagerdatapb.SetPrimaryConnInfoRequest_builder{
 					Host:                  "localhost",
 					Port:                  int32(setup.PrimaryPgctld.PgPort),
 					StartReplicationAfter: true,
 					StopReplicationBefore: false,
 					CurrentTerm:           1,
 					Force:                 true, // Force reconfiguration to ensure it works
-				}
+				}.Build()
 				ctxSetPrimary, cancelSetPrimary := context.WithTimeout(context.Background(), 5*time.Second)
 				_, err = standbyClient.SetPrimaryConnInfo(ctxSetPrimary, setPrimaryReq)
 				cancelSetPrimary()
@@ -1333,10 +1333,10 @@ func setupPoolerTest(t *testing.T, setup *MultipoolerTestSetup, opts ...cleanupO
 			if standbyPoolerClient != nil {
 				require.Eventually(t, func() bool {
 					resp, err := standbyPoolerClient.ExecuteQuery(context.Background(), "SELECT status FROM pg_stat_wal_receiver", 1)
-					if err != nil || len(resp.Rows) == 0 {
+					if err != nil || len(resp.GetRows()) == 0 {
 						return false
 					}
-					return string(resp.Rows[0].Values[0]) == "streaming"
+					return string(resp.GetRows()[0].GetValues()[0]) == "streaming"
 				}, 10*time.Second, 100*time.Millisecond, "Replication should be streaming after setup")
 
 				if config.pauseReplication {

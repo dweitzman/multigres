@@ -32,26 +32,26 @@ func (c *Coordinator) LoadQuorumRuleFromNode(ctx context.Context, node *Node, da
 	req := &multipoolermanagerdatapb.GetDurabilityPolicyRequest{}
 	resp, err := node.RpcClient.GetDurabilityPolicy(ctx, node.Pooler, req)
 	if err != nil {
-		return nil, mterrors.Wrapf(err, "failed to get durability policy from node %s", node.ID.Name)
+		return nil, mterrors.Wrapf(err, "failed to get durability policy from node %s", node.ID.GetName())
 	}
 
 	// Check if a policy was returned
-	if resp.Policy == nil || resp.Policy.QuorumRule == nil {
+	if !resp.HasPolicy() || !resp.GetPolicy().HasQuorumRule() {
 		// No active policy found - return a default policy
 		c.logger.WarnContext(ctx, "No active durability policy found, using default ANY_N with majority",
-			"node", node.ID.Name,
+			"node", node.ID.GetName(),
 			"database", database)
 		return c.getDefaultQuorumRule(ctx, 0), nil
 	}
 
-	quorumRule := resp.Policy.QuorumRule
+	quorumRule := resp.GetPolicy().GetQuorumRule()
 
 	c.logger.InfoContext(ctx, "Loaded durability policy from node",
-		"node", node.ID.Name,
+		"node", node.ID.GetName(),
 		"database", database,
-		"quorum_type", quorumRule.QuorumType,
-		"required_count", quorumRule.RequiredCount,
-		"description", quorumRule.Description)
+		"quorum_type", quorumRule.GetQuorumType(),
+		"required_count", quorumRule.GetRequiredCount(),
+		"description", quorumRule.GetDescription())
 
 	return quorumRule, nil
 }
@@ -70,7 +70,7 @@ func (c *Coordinator) LoadQuorumRule(ctx context.Context, cohort []*Node, databa
 	var primaryNode *Node
 	var replicaNodes []*Node
 	for _, node := range cohort {
-		switch node.Pooler.Type {
+		switch node.Pooler.GetType() {
 		case clustermetadatapb.PoolerType_PRIMARY:
 			primaryNode = node
 		case clustermetadatapb.PoolerType_REPLICA:
@@ -81,12 +81,12 @@ func (c *Coordinator) LoadQuorumRule(ctx context.Context, cohort []*Node, databa
 	// If PRIMARY exists, load from it
 	if primaryNode != nil {
 		c.logger.InfoContext(ctx, "Loading durability policy from PRIMARY node",
-			"node", primaryNode.ID.Name,
+			"node", primaryNode.ID.GetName(),
 			"database", database)
 		rule, err := c.LoadQuorumRuleFromNode(ctx, primaryNode, database)
 		if err != nil {
 			c.logger.WarnContext(ctx, "Failed to load policy from PRIMARY, falling back to REPLICAs",
-				"node", primaryNode.ID.Name,
+				"node", primaryNode.ID.GetName(),
 				"error", err)
 			// Fall through to REPLICA strategy
 		} else {
@@ -133,7 +133,7 @@ func (c *Coordinator) loadFromReplicasInParallel(ctx context.Context, replicas [
 				return
 			}
 
-			if resp.Policy == nil || resp.Policy.QuorumRule == nil {
+			if !resp.HasPolicy() || !resp.GetPolicy().HasQuorumRule() {
 				results <- result{
 					node: n,
 					err:  fmt.Errorf("no active policy found"),
@@ -143,8 +143,8 @@ func (c *Coordinator) loadFromReplicasInParallel(ctx context.Context, replicas [
 
 			results <- result{
 				node:   n,
-				policy: resp.Policy,
-				rule:   resp.Policy.QuorumRule,
+				policy: resp.GetPolicy(),
+				rule:   resp.GetPolicy().GetQuorumRule(),
 			}
 		}(node)
 	}
@@ -167,7 +167,7 @@ func (c *Coordinator) loadFromReplicasInParallel(ctx context.Context, replicas [
 	for res := range results {
 		if res.err != nil {
 			c.logger.WarnContext(ctx, "Failed to load policy from REPLICA",
-				"node", res.node.ID.Name,
+				"node", res.node.ID.GetName(),
 				"error", res.err)
 			errorCount++
 			continue
@@ -175,11 +175,11 @@ func (c *Coordinator) loadFromReplicasInParallel(ctx context.Context, replicas [
 
 		successCount++
 		c.logger.InfoContext(ctx, "Loaded policy from REPLICA",
-			"node", res.node.ID.Name,
-			"version", res.policy.PolicyVersion)
+			"node", res.node.ID.GetName(),
+			"version", res.policy.GetPolicyVersion())
 
 		// Select policy with highest version
-		if bestPolicy == nil || res.policy.PolicyVersion > bestPolicy.PolicyVersion {
+		if bestPolicy == nil || res.policy.GetPolicyVersion() > bestPolicy.GetPolicyVersion() {
 			bestPolicy = res.policy
 			bestRule = res.rule
 		}
@@ -201,10 +201,10 @@ func (c *Coordinator) loadFromReplicasInParallel(ctx context.Context, replicas [
 	}
 
 	c.logger.InfoContext(ctx, "Selected durability policy",
-		"policy_name", bestPolicy.PolicyName,
-		"policy_version", bestPolicy.PolicyVersion,
-		"quorum_type", bestRule.QuorumType,
-		"required_count", bestRule.RequiredCount)
+		"policy_name", bestPolicy.GetPolicyName(),
+		"policy_version", bestPolicy.GetPolicyVersion(),
+		"quorum_type", bestRule.GetQuorumType(),
+		"required_count", bestRule.GetRequiredCount())
 
 	return bestRule, nil
 }
@@ -216,50 +216,50 @@ func (c *Coordinator) getDefaultQuorumRule(ctx context.Context, cohortSize int) 
 	if cohortSize > 0 {
 		// Calculate majority
 		requiredCount := cohortSize/2 + 1
-		return &clustermetadatapb.QuorumRule{
+		return clustermetadatapb.QuorumRule_builder{
 			QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_ANY_N,
 			RequiredCount: int32(requiredCount),
 			Description:   fmt.Sprintf("Default majority quorum (%d of %d nodes)", requiredCount, cohortSize),
-		}
+		}.Build()
 	}
 
 	// Safe fallback
-	return &clustermetadatapb.QuorumRule{
+	return clustermetadatapb.QuorumRule_builder{
 		QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_ANY_N,
 		RequiredCount: 2,
 		Description:   "Default ANY_N quorum (2 nodes)",
-	}
+	}.Build()
 }
 
 // CreateDefaultPolicy creates a default durability policy in the given database.
 // This is useful for bootstrapping new shards.
 func (c *Coordinator) CreateDefaultPolicy(ctx context.Context, node *Node, database string, policyName string) error {
 	// Create default ANY_N policy with required_count = 2
-	quorumRule := &clustermetadatapb.QuorumRule{
+	quorumRule := clustermetadatapb.QuorumRule_builder{
 		QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_ANY_N,
 		RequiredCount: 2,
 		Description:   "Default ANY_N quorum (2 nodes)",
-	}
+	}.Build()
 
 	// Call CreateDurabilityPolicy RPC
-	req := &multipoolermanagerdatapb.CreateDurabilityPolicyRequest{
+	req := multipoolermanagerdatapb.CreateDurabilityPolicyRequest_builder{
 		PolicyName: policyName,
 		QuorumRule: quorumRule,
-	}
+	}.Build()
 
 	resp, err := node.RpcClient.CreateDurabilityPolicy(ctx, node.Pooler, req)
 	if err != nil {
-		return mterrors.Wrapf(err, "failed to create durability policy on node %s", node.ID.Name)
+		return mterrors.Wrapf(err, "failed to create durability policy on node %s", node.ID.GetName())
 	}
 
-	if !resp.Success {
+	if !resp.GetSuccess() {
 		return mterrors.Errorf(mtrpcpb.Code_INTERNAL,
 			"failed to create durability policy on node %s: %s",
-			node.ID.Name, resp.ErrorMessage)
+			node.ID.GetName(), resp.GetErrorMessage())
 	}
 
 	c.logger.InfoContext(ctx, "Created default durability policy",
-		"node", node.ID.Name,
+		"node", node.ID.GetName(),
 		"database", database,
 		"policy_name", policyName)
 

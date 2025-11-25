@@ -44,9 +44,9 @@ func TestBootstrapParsePolicyANY_2(t *testing.T) {
 	rule, err := action.parsePolicy("ANY_2")
 	assert.NoError(t, err)
 	assert.NotNil(t, rule)
-	assert.Equal(t, clustermetadatapb.QuorumType_QUORUM_TYPE_ANY_N, rule.QuorumType)
-	assert.Equal(t, int32(2), rule.RequiredCount)
-	assert.Equal(t, "Any 2 nodes must acknowledge", rule.Description)
+	assert.Equal(t, clustermetadatapb.QuorumType_QUORUM_TYPE_ANY_N, rule.GetQuorumType())
+	assert.Equal(t, int32(2), rule.GetRequiredCount())
+	assert.Equal(t, "Any 2 nodes must acknowledge", rule.GetDescription())
 }
 
 func TestBootstrapParsePolicyMULTI_CELL_ANY_2(t *testing.T) {
@@ -56,9 +56,9 @@ func TestBootstrapParsePolicyMULTI_CELL_ANY_2(t *testing.T) {
 	rule, err := action.parsePolicy("MULTI_CELL_ANY_2")
 	assert.NoError(t, err)
 	assert.NotNil(t, rule)
-	assert.Equal(t, clustermetadatapb.QuorumType_QUORUM_TYPE_MULTI_CELL_ANY_N, rule.QuorumType)
-	assert.Equal(t, int32(2), rule.RequiredCount)
-	assert.Equal(t, "Any 2 nodes from different cells must acknowledge", rule.Description)
+	assert.Equal(t, clustermetadatapb.QuorumType_QUORUM_TYPE_MULTI_CELL_ANY_N, rule.GetQuorumType())
+	assert.Equal(t, int32(2), rule.GetRequiredCount())
+	assert.Equal(t, "Any 2 nodes from different cells must acknowledge", rule.GetDescription())
 }
 
 func TestBootstrapParsePolicyInvalid(t *testing.T) {

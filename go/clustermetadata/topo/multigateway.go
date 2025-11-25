@@ -34,15 +34,15 @@ func NewMultiGateway(name string, cell, host string) *clustermetadatapb.MultiGat
 	if name == "" {
 		name = stringutil.RandomString(8)
 	}
-	return &clustermetadatapb.MultiGateway{
-		Id: &clustermetadatapb.ID{
+	return clustermetadatapb.MultiGateway_builder{
+		Id: clustermetadatapb.ID_builder{
 			Component: clustermetadatapb.ID_MULTIGATEWAY,
 			Cell:      cell,
 			Name:      name,
-		},
+		}.Build(),
 		Hostname: host,
 		PortMap:  make(map[string]int32),
-	}
+	}.Build()
 }
 
 // MultiGatewayInfo is the container for a MultiGateway, read from the topology server.
@@ -53,21 +53,21 @@ type MultiGatewayInfo struct {
 
 // String returns a string describing the multigateway.
 func (mgi *MultiGatewayInfo) String() string {
-	return fmt.Sprintf("MultiGateway{%v}", MultiGatewayIDString(mgi.Id))
+	return fmt.Sprintf("MultiGateway{%v}", MultiGatewayIDString(mgi.GetId()))
 }
 
 // IDString returns the string representation of the multigateway id
 func (mgi *MultiGatewayInfo) IDString() string {
-	return MultiGatewayIDString(mgi.Id)
+	return MultiGatewayIDString(mgi.GetId())
 }
 
 // Addr returns hostname:grpc port.
 func (mgi *MultiGatewayInfo) Addr() string {
-	grpcPort, ok := mgi.PortMap["grpc"]
+	grpcPort, ok := mgi.GetPortMap()["grpc"]
 	if !ok {
-		return mgi.Hostname
+		return mgi.GetHostname()
 	}
-	return fmt.Sprintf("%s:%d", mgi.Hostname, grpcPort)
+	return fmt.Sprintf("%s:%d", mgi.GetHostname(), grpcPort)
 }
 
 // Version returns the version of this multigateway from last time it was read or updated.
@@ -83,14 +83,14 @@ func NewMultiGatewayInfo(multigateway *clustermetadatapb.MultiGateway, version V
 
 // MultiGatewayIDString returns the string representation of a MultiGateway ID
 func MultiGatewayIDString(id *clustermetadatapb.ID) string {
-	return fmt.Sprintf("%s-%s-%s", ComponentTypeToString(id.Component), id.Cell, id.Name)
+	return fmt.Sprintf("%s-%s-%s", ComponentTypeToString(id.GetComponent()), id.GetCell(), id.GetName())
 }
 
 // GetMultiGateway is a high level function to read multigateway data.
 func (ts *store) GetMultiGateway(ctx context.Context, id *clustermetadatapb.ID) (*MultiGatewayInfo, error) {
-	conn, err := ts.ConnForCell(ctx, id.Cell)
+	conn, err := ts.ConnForCell(ctx, id.GetCell())
 	if err != nil {
-		return nil, mterrors.Wrap(err, fmt.Sprintf("unable to get connection for cell %q", id.Cell))
+		return nil, mterrors.Wrap(err, fmt.Sprintf("unable to get connection for cell %q", id.GetCell()))
 	}
 
 	gatewayPath := path.Join(GatewaysPath, MultiGatewayIDString(id), GatewayFile)
@@ -135,7 +135,7 @@ func (ts *store) GetMultiGatewayIDsByCell(ctx context.Context, cell string) ([]*
 		if err := proto.Unmarshal(child.Value, multigateway); err != nil {
 			return nil, err
 		}
-		result[i] = multigateway.Id
+		result[i] = multigateway.GetId()
 	}
 	return result, nil
 }
@@ -171,7 +171,7 @@ func (ts *store) GetMultiGatewaysByCell(ctx context.Context, cellName string) ([
 
 // UpdateMultiGateway updates the multigateway data only - not associated replication paths.
 func (ts *store) UpdateMultiGateway(ctx context.Context, mgi *MultiGatewayInfo) error {
-	conn, err := ts.ConnForCell(ctx, mgi.Id.Cell)
+	conn, err := ts.ConnForCell(ctx, mgi.GetId().GetCell())
 	if err != nil {
 		return err
 	}
@@ -180,7 +180,7 @@ func (ts *store) UpdateMultiGateway(ctx context.Context, mgi *MultiGatewayInfo) 
 	if err != nil {
 		return err
 	}
-	gatewayPath := path.Join(GatewaysPath, MultiGatewayIDString(mgi.Id), GatewayFile)
+	gatewayPath := path.Join(GatewaysPath, MultiGatewayIDString(mgi.GetId()), GatewayFile)
 	newVersion, err := conn.Update(ctx, gatewayPath, data, mgi.version)
 	if err != nil {
 		return err
@@ -216,7 +216,7 @@ func (ts *store) UpdateMultiGatewayFields(ctx context.Context, id *clustermetada
 
 // CreateMultiGateway creates a new multigateway and all associated paths.
 func (ts *store) CreateMultiGateway(ctx context.Context, mtgateway *clustermetadatapb.MultiGateway) error {
-	conn, err := ts.ConnForCell(ctx, mtgateway.Id.Cell)
+	conn, err := ts.ConnForCell(ctx, mtgateway.GetId().GetCell())
 	if err != nil {
 		return err
 	}
@@ -225,7 +225,7 @@ func (ts *store) CreateMultiGateway(ctx context.Context, mtgateway *clustermetad
 	if err != nil {
 		return err
 	}
-	gatewayPath := path.Join(GatewaysPath, MultiGatewayIDString(mtgateway.Id), GatewayFile)
+	gatewayPath := path.Join(GatewaysPath, MultiGatewayIDString(mtgateway.GetId()), GatewayFile)
 	if _, err := conn.Create(ctx, gatewayPath, data); err != nil {
 		return err
 	}
@@ -235,7 +235,7 @@ func (ts *store) CreateMultiGateway(ctx context.Context, mtgateway *clustermetad
 
 // UnregisterMultiGateway deletes the specified multigateway.
 func (ts *store) UnregisterMultiGateway(ctx context.Context, id *clustermetadatapb.ID) error {
-	conn, err := ts.ConnForCell(ctx, id.Cell)
+	conn, err := ts.ConnForCell(ctx, id.GetCell())
 	if err != nil {
 		return err
 	}
@@ -254,14 +254,14 @@ func (ts *store) RegisterMultiGateway(ctx context.Context, mtgateway *clustermet
 	err := ts.CreateMultiGateway(ctx, mtgateway)
 	if errors.Is(err, &TopoError{Code: NodeExists}) && allowUpdate {
 		// Try to update then
-		oldMtGateway, err := ts.GetMultiGateway(ctx, mtgateway.Id)
+		oldMtGateway, err := ts.GetMultiGateway(ctx, mtgateway.GetId())
 		if err != nil {
-			return fmt.Errorf("failed reading existing mtgateway %v: %v", MultiGatewayIDString(mtgateway.Id), err)
+			return fmt.Errorf("failed reading existing mtgateway %v: %v", MultiGatewayIDString(mtgateway.GetId()), err)
 		}
 
 		oldMtGateway.MultiGateway = proto.Clone(mtgateway).(*clustermetadatapb.MultiGateway)
 		if err := ts.UpdateMultiGateway(ctx, oldMtGateway); err != nil {
-			return fmt.Errorf("failed updating mtgateway %v: %v", MultiGatewayIDString(mtgateway.Id), err)
+			return fmt.Errorf("failed updating mtgateway %v: %v", MultiGatewayIDString(mtgateway.GetId()), err)
 		}
 		return nil
 	}

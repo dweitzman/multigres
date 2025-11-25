@@ -74,9 +74,9 @@ func (c *Coordinator) AppointLeader(ctx context.Context, shardID string, cohort 
 
 	c.logger.InfoContext(ctx, "Loaded durability policy",
 		"shard", shardID,
-		"quorum_type", quorumRule.QuorumType,
-		"required_count", quorumRule.RequiredCount,
-		"description", quorumRule.Description)
+		"quorum_type", quorumRule.GetQuorumType(),
+		"required_count", quorumRule.GetRequiredCount(),
+		"description", quorumRule.GetDescription())
 
 	// Stage 1-5: BeginTerm (recruit nodes, get consensus, validate quorum)
 	c.logger.InfoContext(ctx, "Stage 1-5: Beginning term", "shard", shardID)
@@ -88,7 +88,7 @@ func (c *Coordinator) AppointLeader(ctx context.Context, shardID string, cohort 
 	c.logger.InfoContext(ctx, "BeginTerm succeeded",
 		"shard", shardID,
 		"term", term,
-		"candidate", candidate.ID.Name,
+		"candidate", candidate.ID.GetName(),
 		"standbys", len(standbys))
 
 	// Stage 6: Propagate (setup replication within shard)
@@ -117,7 +117,7 @@ func (c *Coordinator) AppointLeader(ctx context.Context, shardID string, cohort 
 
 	c.logger.InfoContext(ctx, "Leader appointment complete",
 		"shard", shardID,
-		"leader", candidate.ID.Name)
+		"leader", candidate.ID.GetName())
 
 	// Async: Repair excluded nodes in this shard
 	// TODO: Implement RepairExcluded
@@ -130,7 +130,7 @@ func (c *Coordinator) AppointLeader(ctx context.Context, shardID string, cohort 
 func (c *Coordinator) updateTopology(ctx context.Context, candidate *Node, standbys []*Node) error {
 	// Update candidate to PRIMARY type
 	_, err := c.topoStore.UpdateMultiPoolerFields(ctx, candidate.ID, func(mp *clustermetadatapb.MultiPooler) error {
-		mp.Type = clustermetadatapb.PoolerType_PRIMARY
+		mp.SetType(clustermetadatapb.PoolerType_PRIMARY)
 		return nil
 	})
 	if err != nil {
@@ -140,13 +140,13 @@ func (c *Coordinator) updateTopology(ctx context.Context, candidate *Node, stand
 	// Update standbys to REPLICA type
 	for _, standby := range standbys {
 		_, err := c.topoStore.UpdateMultiPoolerFields(ctx, standby.ID, func(mp *clustermetadatapb.MultiPooler) error {
-			mp.Type = clustermetadatapb.PoolerType_REPLICA
+			mp.SetType(clustermetadatapb.PoolerType_REPLICA)
 			return nil
 		})
 		if err != nil {
 			// Log but continue with other standbys
 			c.logger.WarnContext(ctx, "Failed to update standby type",
-				"node", standby.ID.Name,
+				"node", standby.ID.GetName(),
 				"error", err)
 		}
 	}

@@ -66,10 +66,10 @@ func runGetPoolers(cmd *cobra.Command, args []string) error {
 	client := multiadminpb.NewMultiAdminServiceClient(conn)
 	ctx := context.Background()
 
-	request := &multiadminpb.GetPoolersRequest{
+	request := multiadminpb.GetPoolersRequest_builder{
 		Cells:    cells,
 		Database: database,
-	}
+	}.Build()
 
 	response, err := client.GetPoolers(ctx, request)
 	if err != nil {

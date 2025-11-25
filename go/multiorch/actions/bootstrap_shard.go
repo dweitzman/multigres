@@ -80,28 +80,28 @@ func (a *BootstrapShardAction) Execute(ctx context.Context, shardID string, data
 	a.logger.InfoContext(ctx, "Selected bootstrap candidate",
 		"shard", shardID,
 		"database", database,
-		"candidate", candidate.ID.Name)
+		"candidate", candidate.ID.GetName())
 
 	// Step 3: Initialize the candidate as an empty primary with term=1
-	req := &multipoolermanagerdatapb.InitializeEmptyPrimaryRequest{
+	req := multipoolermanagerdatapb.InitializeEmptyPrimaryRequest_builder{
 		ConsensusTerm: 1,
-	}
+	}.Build()
 	resp, err := candidate.RpcClient.InitializeEmptyPrimary(ctx, candidate.Pooler, req)
 	if err != nil {
 		return mterrors.Wrap(err, "failed to initialize empty primary")
 	}
 
-	if !resp.Success {
+	if !resp.GetSuccess() {
 		return mterrors.Errorf(mtrpcpb.Code_INTERNAL,
 			"failed to initialize empty primary on node %s: %s",
-			candidate.ID.Name, resp.ErrorMessage)
+			candidate.ID.GetName(), resp.GetErrorMessage())
 	}
 
 	a.logger.InfoContext(ctx, "Successfully initialized primary",
 		"shard", shardID,
 		"database", database,
-		"primary", candidate.ID.Name,
-		"backup_id", resp.BackupId)
+		"primary", candidate.ID.GetName(),
+		"backup_id", resp.GetBackupId())
 
 	// Step 4: Create durability policy in the primary's database
 	quorumRule, err := a.parsePolicy(policyName)
@@ -109,18 +109,18 @@ func (a *BootstrapShardAction) Execute(ctx context.Context, shardID string, data
 		return mterrors.Wrap(err, "failed to parse policy")
 	}
 
-	createPolicyReq := &multipoolermanagerdatapb.CreateDurabilityPolicyRequest{
+	createPolicyReq := multipoolermanagerdatapb.CreateDurabilityPolicyRequest_builder{
 		PolicyName: policyName,
 		QuorumRule: quorumRule,
-	}
+	}.Build()
 	createPolicyResp, err := candidate.RpcClient.CreateDurabilityPolicy(ctx, candidate.Pooler, createPolicyReq)
 	if err != nil {
 		return mterrors.Wrap(err, "failed to create durability policy")
 	}
 
-	if !createPolicyResp.Success {
+	if !createPolicyResp.GetSuccess() {
 		return mterrors.Errorf(mtrpcpb.Code_INTERNAL,
-			"failed to create durability policy: %s", createPolicyResp.ErrorMessage)
+			"failed to create durability policy: %s", createPolicyResp.GetErrorMessage())
 	}
 
 	a.logger.InfoContext(ctx, "Successfully created durability policy",
@@ -131,12 +131,12 @@ func (a *BootstrapShardAction) Execute(ctx context.Context, shardID string, data
 	// Step 5: Initialize remaining nodes as standbys
 	standbys := make([]*coordinator.Node, 0, len(cohort)-1)
 	for _, node := range cohort {
-		if node.ID.Name != candidate.ID.Name {
+		if node.ID.GetName() != candidate.ID.GetName() {
 			standbys = append(standbys, node)
 		}
 	}
 
-	if err := a.initializeStandbys(ctx, shardID, candidate, standbys, resp.BackupId); err != nil {
+	if err := a.initializeStandbys(ctx, shardID, candidate, standbys, resp.GetBackupId()); err != nil {
 		// Log but don't fail - we have a primary at least
 		a.logger.WarnContext(ctx, "Failed to initialize some standbys",
 			"shard", shardID,
@@ -147,7 +147,7 @@ func (a *BootstrapShardAction) Execute(ctx context.Context, shardID string, data
 	a.logger.InfoContext(ctx, "Bootstrap initialization complete",
 		"shard", shardID,
 		"database", database,
-		"primary", candidate.ID.Name,
+		"primary", candidate.ID.GetName(),
 		"standbys", len(standbys))
 
 	return nil
@@ -166,14 +166,14 @@ func (a *BootstrapShardAction) selectBootstrapCandidate(ctx context.Context, coh
 		status, err := node.RpcClient.InitializationStatus(ctx, node.Pooler, req)
 		if err != nil {
 			a.logger.WarnContext(ctx, "Node unreachable during candidate selection",
-				"node", node.ID.Name,
+				"node", node.ID.GetName(),
 				"error", err)
 			continue
 		}
 
-		if !status.IsInitialized {
+		if !status.GetIsInitialized() {
 			a.logger.InfoContext(ctx, "Selected node as bootstrap candidate",
-				"node", node.ID.Name)
+				"node", node.ID.GetName())
 			return node, nil
 		}
 	}
@@ -190,7 +190,7 @@ func (a *BootstrapShardAction) initializeStandbys(ctx context.Context, shardID s
 
 	a.logger.InfoContext(ctx, "Initializing standbys",
 		"shard", shardID,
-		"primary", primary.ID.Name,
+		"primary", primary.ID.GetName(),
 		"standby_count", len(standbys),
 		"backup_id", backupID)
 
@@ -206,32 +206,32 @@ func (a *BootstrapShardAction) initializeStandbys(ctx context.Context, shardID s
 	for _, standby := range standbys {
 		go func(node *coordinator.Node) {
 			// Set pooler type to REPLICA before initializing as standby
-			changeTypeReq := &multipoolermanagerdatapb.ChangeTypeRequest{
+			changeTypeReq := multipoolermanagerdatapb.ChangeTypeRequest_builder{
 				PoolerType: clustermetadatapb.PoolerType_REPLICA,
-			}
+			}.Build()
 			_, err := node.RpcClient.ChangeType(ctx, node.Pooler, changeTypeReq)
 			if err != nil {
 				results <- result{node: node, err: fmt.Errorf("failed to set pooler type: %w", err)}
 				return
 			}
 
-			req := &multipoolermanagerdatapb.InitializeAsStandbyRequest{
+			req := multipoolermanagerdatapb.InitializeAsStandbyRequest_builder{
 				PrimaryHost:   primary.Hostname,
 				PrimaryPort:   primary.Port,
 				ConsensusTerm: 1,
 				Force:         false,
 				BackupId:      backupID,
-			}
+			}.Build()
 			resp, err := node.RpcClient.InitializeAsStandby(ctx, node.Pooler, req)
 			if err != nil {
 				results <- result{node: node, err: err}
 				return
 			}
 
-			if !resp.Success {
+			if !resp.GetSuccess() {
 				results <- result{
 					node: node,
-					err:  fmt.Errorf("initialization failed: %s", resp.ErrorMessage),
+					err:  fmt.Errorf("initialization failed: %s", resp.GetErrorMessage()),
 				}
 				return
 			}
@@ -247,13 +247,13 @@ func (a *BootstrapShardAction) initializeStandbys(ctx context.Context, shardID s
 		if res.err != nil {
 			a.logger.WarnContext(ctx, "Failed to initialize standby",
 				"shard", shardID,
-				"node", res.node.ID.Name,
+				"node", res.node.ID.GetName(),
 				"error", res.err)
-			failedNodes = append(failedNodes, res.node.ID.Name)
+			failedNodes = append(failedNodes, res.node.ID.GetName())
 		} else {
 			a.logger.InfoContext(ctx, "Successfully initialized standby",
 				"shard", shardID,
-				"node", res.node.ID.Name)
+				"node", res.node.ID.GetName())
 		}
 	}
 
@@ -272,18 +272,18 @@ func (a *BootstrapShardAction) getDurabilityPolicyName(ctx context.Context, data
 		return "", mterrors.Wrapf(err, "failed to get database %s from topology", database)
 	}
 
-	if db.DurabilityPolicy == "" {
+	if db.GetDurabilityPolicy() == "" {
 		return "", mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
 			"database %s has no durability_policy configured", database)
 	}
 
 	// Validate that the policy name is supported
-	switch db.DurabilityPolicy {
+	switch db.GetDurabilityPolicy() {
 	case "ANY_2", "MULTI_CELL_ANY_2":
-		return db.DurabilityPolicy, nil
+		return db.GetDurabilityPolicy(), nil
 	default:
 		return "", mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,
-			"unsupported durability policy: %s (must be ANY_2 or MULTI_CELL_ANY_2)", db.DurabilityPolicy)
+			"unsupported durability policy: %s (must be ANY_2 or MULTI_CELL_ANY_2)", db.GetDurabilityPolicy())
 	}
 }
 
@@ -291,18 +291,18 @@ func (a *BootstrapShardAction) getDurabilityPolicyName(ctx context.Context, data
 func (a *BootstrapShardAction) parsePolicy(policyName string) (*clustermetadatapb.QuorumRule, error) {
 	switch policyName {
 	case "ANY_2":
-		return &clustermetadatapb.QuorumRule{
+		return clustermetadatapb.QuorumRule_builder{
 			QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_ANY_N,
 			RequiredCount: 2,
 			Description:   "Any 2 nodes must acknowledge",
-		}, nil
+		}.Build(), nil
 
 	case "MULTI_CELL_ANY_2":
-		return &clustermetadatapb.QuorumRule{
+		return clustermetadatapb.QuorumRule_builder{
 			QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_MULTI_CELL_ANY_N,
 			RequiredCount: 2,
 			Description:   "Any 2 nodes from different cells must acknowledge",
-		}, nil
+		}.Build(), nil
 
 	default:
 		return nil, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,

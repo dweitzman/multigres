@@ -31,51 +31,51 @@ import (
 
 // createMockNode creates a mock node for testing using FakeClient
 func createMockNode(fakeClient *rpcclient.FakeClient, name string, term int64, walPosition string, healthy bool, role string) *Node {
-	poolerID := &clustermetadatapb.ID{
+	poolerID := clustermetadatapb.ID_builder{
 		Component: clustermetadatapb.ID_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      name,
-	}
+	}.Build()
 
-	pooler := &clustermetadatapb.MultiPooler{
+	pooler := clustermetadatapb.MultiPooler_builder{
 		Id:       poolerID,
 		Hostname: "localhost",
 		PortMap: map[string]int32{
 			"grpc": 9000,
 		},
-	}
+	}.Build()
 
 	// Use topo helper to generate consistent key format
 	poolerKey := topo.MultiPoolerIDString(poolerID)
 
 	// Configure FakeClient responses for this pooler
-	fakeClient.ConsensusStatusResponses[poolerKey] = &consensusdatapb.StatusResponse{
+	fakeClient.ConsensusStatusResponses[poolerKey] = consensusdatapb.StatusResponse_builder{
 		CurrentTerm: term,
 		IsHealthy:   healthy,
 		Role:        role,
-		WalPosition: &consensusdatapb.WALPosition{
+		WalPosition: consensusdatapb.WALPosition_builder{
 			CurrentLsn:     walPosition,
 			LastReceiveLsn: walPosition,
 			LastReplayLsn:  walPosition,
-		},
-	}
+		}.Build(),
+	}.Build()
 
-	fakeClient.BeginTermResponses[poolerKey] = &consensusdatapb.BeginTermResponse{
+	fakeClient.BeginTermResponses[poolerKey] = consensusdatapb.BeginTermResponse_builder{
 		Accepted: true,
-	}
+	}.Build()
 
-	fakeClient.StateResponses[poolerKey] = &multipoolermanagerdatapb.StateResponse{
+	fakeClient.StateResponses[poolerKey] = multipoolermanagerdatapb.StateResponse_builder{
 		State: "ready",
-	}
+	}.Build()
 
 	fakeClient.PromoteResponses[poolerKey] = &multipoolermanagerdatapb.PromoteResponse{}
 
 	fakeClient.SetPrimaryConnInfoResponses[poolerKey] = &multipoolermanagerdatapb.SetPrimaryConnInfoResponse{}
 
 	return &Node{
-		ID:        pooler.Id,
-		Hostname:  pooler.Hostname,
-		Port:      pooler.PortMap["grpc"],
+		ID:        pooler.GetId(),
+		Hostname:  pooler.GetHostname(),
+		Port:      pooler.GetPortMap()["grpc"],
 		ShardID:   "shard0",
 		RpcClient: fakeClient,
 		Pooler:    pooler,
@@ -85,11 +85,11 @@ func createMockNode(fakeClient *rpcclient.FakeClient, name string, term int64, w
 func TestDiscoverMaxTerm(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	coordID := &clustermetadatapb.ID{
+	coordID := clustermetadatapb.ID_builder{
 		Component: clustermetadatapb.ID_MULTIORCH,
 		Cell:      "test-cell",
 		Name:      "test-coordinator",
-	}
+	}.Build()
 	c := &Coordinator{
 		coordinatorID: coordID,
 		logger:        logger,
@@ -123,24 +123,24 @@ func TestDiscoverMaxTerm(t *testing.T) {
 	t.Run("success - ignores failed nodes", func(t *testing.T) {
 		fakeClient := rpcclient.NewFakeClient()
 
-		pooler2ID := &clustermetadatapb.ID{
+		pooler2ID := clustermetadatapb.ID_builder{
 			Component: clustermetadatapb.ID_MULTIPOOLER,
 			Cell:      "zone1",
 			Name:      "mp2",
-		}
-		pooler2 := &clustermetadatapb.MultiPooler{
+		}.Build()
+		pooler2 := clustermetadatapb.MultiPooler_builder{
 			Id:       pooler2ID,
 			Hostname: "localhost",
 			PortMap:  map[string]int32{"grpc": 9000},
-		}
+		}.Build()
 		fakeClient.Errors[topo.MultiPoolerIDString(pooler2ID)] = context.DeadlineExceeded
 
 		cohort := []*Node{
 			createMockNode(fakeClient, "mp1", 5, "0/1000000", true, "standby"),
 			{
-				ID:        pooler2.Id,
-				Hostname:  pooler2.Hostname,
-				Port:      pooler2.PortMap["grpc"],
+				ID:        pooler2.GetId(),
+				Hostname:  pooler2.GetHostname(),
+				Port:      pooler2.GetPortMap()["grpc"],
 				ShardID:   "shard0",
 				RpcClient: fakeClient,
 				Pooler:    pooler2,
@@ -157,11 +157,11 @@ func TestDiscoverMaxTerm(t *testing.T) {
 func TestSelectCandidate(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	coordID := &clustermetadatapb.ID{
+	coordID := clustermetadatapb.ID_builder{
 		Component: clustermetadatapb.ID_MULTIORCH,
 		Cell:      "test-cell",
 		Name:      "test-coordinator",
-	}
+	}.Build()
 	c := &Coordinator{
 		coordinatorID: coordID,
 		logger:        logger,
@@ -177,7 +177,7 @@ func TestSelectCandidate(t *testing.T) {
 
 		candidate, err := c.selectCandidate(ctx, cohort)
 		require.NoError(t, err)
-		require.Equal(t, "mp2", candidate.ID.Name)
+		require.Equal(t, "mp2", candidate.ID.GetName())
 	})
 
 	t.Run("success - prefers healthy nodes", func(t *testing.T) {
@@ -189,7 +189,7 @@ func TestSelectCandidate(t *testing.T) {
 
 		candidate, err := c.selectCandidate(ctx, cohort)
 		require.NoError(t, err)
-		require.Equal(t, "mp2", candidate.ID.Name)
+		require.Equal(t, "mp2", candidate.ID.GetName())
 	})
 
 	t.Run("success - falls back to first node if none healthy", func(t *testing.T) {
@@ -203,30 +203,30 @@ func TestSelectCandidate(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, candidate)
 		// Should select first available node
-		require.Equal(t, "mp1", candidate.ID.Name)
+		require.Equal(t, "mp1", candidate.ID.GetName())
 	})
 
 	t.Run("error - no nodes available", func(t *testing.T) {
 		fakeClient := rpcclient.NewFakeClient()
 
-		poolerID := &clustermetadatapb.ID{
+		poolerID := clustermetadatapb.ID_builder{
 			Component: clustermetadatapb.ID_MULTIPOOLER,
 			Cell:      "zone1",
 			Name:      "mp1",
-		}
+		}.Build()
 		fakeClient.Errors[topo.MultiPoolerIDString(poolerID)] = context.DeadlineExceeded
 
-		pooler := &clustermetadatapb.MultiPooler{
+		pooler := clustermetadatapb.MultiPooler_builder{
 			Id:       poolerID,
 			Hostname: "localhost",
 			PortMap:  map[string]int32{"grpc": 9000},
-		}
+		}.Build()
 
 		cohort := []*Node{
 			{
-				ID:        pooler.Id,
-				Hostname:  pooler.Hostname,
-				Port:      pooler.PortMap["grpc"],
+				ID:        pooler.GetId(),
+				Hostname:  pooler.GetHostname(),
+				Port:      pooler.GetPortMap()["grpc"],
 				ShardID:   "shard0",
 				RpcClient: fakeClient,
 				Pooler:    pooler,
@@ -243,11 +243,11 @@ func TestSelectCandidate(t *testing.T) {
 func TestRecruitNodes(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	coordID := &clustermetadatapb.ID{
+	coordID := clustermetadatapb.ID_builder{
 		Component: clustermetadatapb.ID_MULTIORCH,
 		Cell:      "test-cell",
 		Name:      "test-coordinator",
-	}
+	}.Build()
 	c := &Coordinator{
 		coordinatorID: coordID,
 		logger:        logger,
@@ -278,12 +278,12 @@ func TestRecruitNodes(t *testing.T) {
 		}
 
 		// mp3 will reject the term (override after creating the node)
-		mp3ID := &clustermetadatapb.ID{
+		mp3ID := clustermetadatapb.ID_builder{
 			Component: clustermetadatapb.ID_MULTIPOOLER,
 			Cell:      "zone1",
 			Name:      "mp3",
-		}
-		fakeClient.BeginTermResponses[topo.MultiPoolerIDString(mp3ID)] = &consensusdatapb.BeginTermResponse{Accepted: false}
+		}.Build()
+		fakeClient.BeginTermResponses[topo.MultiPoolerIDString(mp3ID)] = consensusdatapb.BeginTermResponse_builder{Accepted: false}.Build()
 
 		recruited, err := c.recruitNodes(ctx, cohort, 6, candidate)
 		require.NoError(t, err)
@@ -294,11 +294,11 @@ func TestRecruitNodes(t *testing.T) {
 func TestBeginTerm(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	coordID := &clustermetadatapb.ID{
+	coordID := clustermetadatapb.ID_builder{
 		Component: clustermetadatapb.ID_MULTIORCH,
 		Cell:      "test-cell",
 		Name:      "test-coordinator",
-	}
+	}.Build()
 	c := &Coordinator{
 		coordinatorID: coordID,
 		logger:        logger,
@@ -313,16 +313,16 @@ func TestBeginTerm(t *testing.T) {
 		}
 
 		// Create default ANY_N quorum rule (majority: 2 of 3)
-		quorumRule := &clustermetadatapb.QuorumRule{
+		quorumRule := clustermetadatapb.QuorumRule_builder{
 			QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_ANY_N,
 			RequiredCount: 2,
 			Description:   "Test majority quorum",
-		}
+		}.Build()
 
 		candidate, standbys, term, err := c.BeginTerm(ctx, "shard0", cohort, quorumRule)
 		require.NoError(t, err)
 		require.NotNil(t, candidate)
-		require.Equal(t, "mp1", candidate.ID.Name) // Most advanced WAL
+		require.Equal(t, "mp1", candidate.ID.GetName()) // Most advanced WAL
 		require.Len(t, standbys, 2)
 		require.Equal(t, int64(6), term)
 	})
@@ -340,27 +340,27 @@ func TestBeginTerm(t *testing.T) {
 
 		// Override responses after creating nodes
 		// mp2 rejects the term
-		mp2ID := &clustermetadatapb.ID{
+		mp2ID := clustermetadatapb.ID_builder{
 			Component: clustermetadatapb.ID_MULTIPOOLER,
 			Cell:      "zone1",
 			Name:      "mp2",
-		}
-		fakeClient.BeginTermResponses[topo.MultiPoolerIDString(mp2ID)] = &consensusdatapb.BeginTermResponse{Accepted: false}
+		}.Build()
+		fakeClient.BeginTermResponses[topo.MultiPoolerIDString(mp2ID)] = consensusdatapb.BeginTermResponse_builder{Accepted: false}.Build()
 
 		// mp3 returns an error
-		mp3ID := &clustermetadatapb.ID{
+		mp3ID := clustermetadatapb.ID_builder{
 			Component: clustermetadatapb.ID_MULTIPOOLER,
 			Cell:      "zone1",
 			Name:      "mp3",
-		}
+		}.Build()
 		fakeClient.Errors[topo.MultiPoolerIDString(mp3ID)] = context.DeadlineExceeded
 
 		// Create ANY_N quorum rule requiring 2 nodes
-		quorumRule := &clustermetadatapb.QuorumRule{
+		quorumRule := clustermetadatapb.QuorumRule_builder{
 			QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_ANY_N,
 			RequiredCount: 2,
 			Description:   "Test quorum requiring 2 nodes",
-		}
+		}.Build()
 
 		candidate, standbys, term, err := c.BeginTerm(ctx, "shard0", cohort, quorumRule)
 		require.Error(t, err)
@@ -374,11 +374,11 @@ func TestBeginTerm(t *testing.T) {
 func TestPropagate(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	coordID := &clustermetadatapb.ID{
+	coordID := clustermetadatapb.ID_builder{
 		Component: clustermetadatapb.ID_MULTIORCH,
 		Cell:      "test-cell",
 		Name:      "test-coordinator",
-	}
+	}.Build()
 	c := &Coordinator{
 		coordinatorID: coordID,
 		logger:        logger,
@@ -392,11 +392,11 @@ func TestPropagate(t *testing.T) {
 			createMockNode(fakeClient, "mp3", 5, "0/1000000", true, "standby"),
 		}
 
-		quorumRule := &clustermetadatapb.QuorumRule{
+		quorumRule := clustermetadatapb.QuorumRule_builder{
 			QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_ANY_N,
 			RequiredCount: 2,
 			Description:   "Test quorum",
-		}
+		}.Build()
 
 		err := c.Propagate(ctx, candidate, standbys, 6, quorumRule)
 		require.NoError(t, err)
@@ -407,11 +407,11 @@ func TestPropagate(t *testing.T) {
 		candidate := createMockNode(fakeClient, "mp1", 5, "0/3000000", true, "primary")
 
 		// mp3 will fail SetPrimaryConnInfo
-		mp3ID := &clustermetadatapb.ID{
+		mp3ID := clustermetadatapb.ID_builder{
 			Component: clustermetadatapb.ID_MULTIPOOLER,
 			Cell:      "zone1",
 			Name:      "mp3",
-		}
+		}.Build()
 		fakeClient.SetPrimaryConnInfoResponses[topo.MultiPoolerIDString(mp3ID)] = nil
 		fakeClient.Errors[topo.MultiPoolerIDString(mp3ID)] = context.DeadlineExceeded
 
@@ -420,11 +420,11 @@ func TestPropagate(t *testing.T) {
 			createMockNode(fakeClient, "mp3", 5, "0/1000000", true, "standby"),
 		}
 
-		quorumRule := &clustermetadatapb.QuorumRule{
+		quorumRule := clustermetadatapb.QuorumRule_builder{
 			QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_ANY_N,
 			RequiredCount: 2,
 			Description:   "Test quorum",
-		}
+		}.Build()
 
 		err := c.Propagate(ctx, candidate, standbys, 6, quorumRule)
 		// Should succeed even though one standby failed
@@ -435,11 +435,11 @@ func TestPropagate(t *testing.T) {
 func TestEstablishLeader(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	coordID := &clustermetadatapb.ID{
+	coordID := clustermetadatapb.ID_builder{
 		Component: clustermetadatapb.ID_MULTIORCH,
 		Cell:      "test-cell",
 		Name:      "test-coordinator",
-	}
+	}.Build()
 	c := &Coordinator{
 		coordinatorID: coordID,
 		logger:        logger,
@@ -458,14 +458,14 @@ func TestEstablishLeader(t *testing.T) {
 		candidate := createMockNode(fakeClient, "mp1", 5, "0/3000000", true, "primary")
 
 		// Override the status response to indicate not ready
-		mp1ID := &clustermetadatapb.ID{
+		mp1ID := clustermetadatapb.ID_builder{
 			Component: clustermetadatapb.ID_MULTIPOOLER,
 			Cell:      "zone1",
 			Name:      "mp1",
-		}
-		fakeClient.StateResponses[topo.MultiPoolerIDString(mp1ID)] = &multipoolermanagerdatapb.StateResponse{
+		}.Build()
+		fakeClient.StateResponses[topo.MultiPoolerIDString(mp1ID)] = multipoolermanagerdatapb.StateResponse_builder{
 			State: "initializing",
-		}
+		}.Build()
 
 		err := c.EstablishLeader(ctx, candidate, 6)
 		require.Error(t, err)
@@ -476,11 +476,11 @@ func TestEstablishLeader(t *testing.T) {
 func TestSelectCandidate_LSNComparison(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	coordID := &clustermetadatapb.ID{
+	coordID := clustermetadatapb.ID_builder{
 		Component: clustermetadatapb.ID_MULTIORCH,
 		Cell:      "test-cell",
 		Name:      "test-coordinator",
-	}
+	}.Build()
 	c := &Coordinator{
 		coordinatorID: coordID,
 		logger:        logger,
@@ -496,7 +496,7 @@ func TestSelectCandidate_LSNComparison(t *testing.T) {
 
 		candidate, err := c.selectCandidate(ctx, cohort)
 		require.NoError(t, err)
-		require.Equal(t, "mp2", candidate.ID.Name,
+		require.Equal(t, "mp2", candidate.ID.GetName(),
 			"should select node with highest LSN (0/9000000)")
 	})
 
@@ -510,7 +510,7 @@ func TestSelectCandidate_LSNComparison(t *testing.T) {
 
 		candidate, err := c.selectCandidate(ctx, cohort)
 		require.NoError(t, err)
-		require.Equal(t, "mp2", candidate.ID.Name,
+		require.Equal(t, "mp2", candidate.ID.GetName(),
 			"should use numeric comparison: segment 10 > segment 9")
 	})
 

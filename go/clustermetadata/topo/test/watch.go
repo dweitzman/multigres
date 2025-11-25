@@ -128,11 +128,11 @@ func checkWatch(t *testing.T, ctx context.Context, ts topo.Store) {
 	}
 
 	// create some data
-	database := &clustermetadatapb.Database{
+	database := clustermetadatapb.Database_builder{
 		Name: "test_database",
-	}
+	}.Build()
 	err = ts.UpdateDatabaseFields(ctx, "test_database", func(db *clustermetadatapb.Database) error {
-		db.Name = "test_database"
+		db.SetName("test_database")
 		return nil
 	})
 	require.NoError(t, err, "UpdateDatabaseFields(1) failed")
@@ -142,9 +142,9 @@ func checkWatch(t *testing.T, ctx context.Context, ts topo.Store) {
 	defer secondCancel()
 
 	// change the data
-	database.Name = "test_database_new"
+	database.SetName("test_database_new")
 	err = ts.UpdateDatabaseFields(ctx, "test_database", func(db *clustermetadatapb.Database) error {
-		db.Name = database.Name
+		db.SetName(database.GetName())
 		return nil
 	})
 	require.NoError(t, err, "UpdateDatabaseFields(2) failed")
@@ -164,15 +164,15 @@ func checkWatch(t *testing.T, ctx context.Context, ts topo.Store) {
 		err := proto.Unmarshal(wd.Contents, got)
 		require.NoError(t, err, "cannot proto-unmarshal data")
 
-		if got.Name == "test_database" {
+		if got.GetName() == "test_database" {
 			// extra first value, still good
 			continue
 		}
-		if got.Name == "test_database_new" {
+		if got.GetName() == "test_database_new" {
 			// watch worked, good
 			break
 		}
-		assert.Contains(t, []string{"test_database", "test_database_new"}, got.Name, "got unknown Database: %v", got)
+		assert.Contains(t, []string{"test_database", "test_database_new"}, got.GetName(), "got unknown Database: %v", got)
 	}
 
 	// remove the database
@@ -198,11 +198,11 @@ func checkWatch(t *testing.T, ctx context.Context, ts topo.Store) {
 		got := &clustermetadatapb.Database{}
 		err := proto.Unmarshal(wd.Contents, got)
 		require.NoError(t, err, "cannot proto-unmarshal data")
-		if got.Name == "test_database_new" {
+		if got.GetName() == "test_database_new" {
 			// good value
 			continue
 		}
-		require.Equal(t, "test_database_new", got.Name, "got unknown Database waiting for deletion: %v", got)
+		require.Equal(t, "test_database_new", got.GetName(), "got unknown Database waiting for deletion: %v", got)
 	}
 
 	// now the channel should be closed
@@ -217,11 +217,11 @@ func checkWatchInterrupt(t *testing.T, ctx context.Context, ts topo.Store) {
 	require.NoError(t, err, "ConnForCell(test) failed")
 
 	// create some data
-	database := &clustermetadatapb.Database{
+	database := clustermetadatapb.Database_builder{
 		Name: "test_database",
-	}
+	}.Build()
 	if err := ts.UpdateDatabaseFields(ctx, "test_database", func(db *clustermetadatapb.Database) error {
-		db.Name = database.Name
+		db.SetName(database.GetName())
 		return nil
 	}); err != nil {
 		require.NoError(t, err, "UpdateDatabaseFields(1) failed")
@@ -250,11 +250,11 @@ func checkWatchInterrupt(t *testing.T, ctx context.Context, ts topo.Store) {
 		got := &clustermetadatapb.Database{}
 		err := proto.Unmarshal(wd.Contents, got)
 		require.NoError(t, err, "cannot proto-unmarshal data")
-		if got.Name == "test_database" {
+		if got.GetName() == "test_database" {
 			// good value
 			continue
 		}
-		require.Equal(t, "test_database_new", got.Name, "got unknown Database waiting for deletion: %v", got)
+		require.Equal(t, "test_database_new", got.GetName(), "got unknown Database waiting for deletion: %v", got)
 	}
 
 	// Now the channel should be closed.
@@ -274,11 +274,11 @@ func checkWatchRecursive(t *testing.T, ctx context.Context, ts topo.Store) {
 	require.NoError(t, err, "ConnForCell(test) failed")
 
 	// create some data
-	database := &clustermetadatapb.Database{
+	database := clustermetadatapb.Database_builder{
 		Name: "test_database",
-	}
+	}.Build()
 	if err := ts.UpdateDatabaseFields(ctx, "test_database", func(db *clustermetadatapb.Database) error {
-		db.Name = database.Name
+		db.SetName(database.GetName())
 		return nil
 	}); err != nil {
 		require.NoError(t, err, "UpdateDatabaseFields(1) failed")
@@ -294,9 +294,9 @@ func checkWatchRecursive(t *testing.T, ctx context.Context, ts topo.Store) {
 	defer secondCancel()
 
 	// change the data
-	database.Name = "test_database_new"
+	database.SetName("test_database_new")
 	err = ts.UpdateDatabaseFields(ctx, "test_database", func(db *clustermetadatapb.Database) error {
-		db.Name = "test_database_new"
+		db.SetName("test_database_new")
 		return nil
 	})
 	require.NoError(t, err, "UpdateDatabaseFields(2) failed")
@@ -316,15 +316,15 @@ func checkWatchRecursive(t *testing.T, ctx context.Context, ts topo.Store) {
 		err := proto.Unmarshal(wd.Contents, got)
 		require.NoError(t, err, "cannot proto-unmarshal data")
 
-		if got.Name == "test_database" {
+		if got.GetName() == "test_database" {
 			// extra first value, still good
 			continue
 		}
-		if got.Name == "test_database_new" {
+		if got.GetName() == "test_database_new" {
 			// watch worked, good
 			break
 		}
-		assert.Contains(t, []string{"test_database", "test_database_new"}, got.Name, "got unknown Database: %v", got)
+		assert.Contains(t, []string{"test_database", "test_database_new"}, got.GetName(), "got unknown Database: %v", got)
 	}
 
 	// remove the database
@@ -351,11 +351,11 @@ func checkWatchRecursive(t *testing.T, ctx context.Context, ts topo.Store) {
 		got := &clustermetadatapb.Database{}
 		err := proto.Unmarshal(wd.Contents, got)
 		require.NoError(t, err, "cannot proto-unmarshal data")
-		if got.Name == "test_database_new" {
+		if got.GetName() == "test_database_new" {
 			// good value
 			continue
 		}
-		require.Equal(t, "test_database_new", got.Name, "got unknown Database waiting for deletion: %v", got)
+		require.Equal(t, "test_database_new", got.GetName(), "got unknown Database waiting for deletion: %v", got)
 	}
 
 	// We now have to stop watching. This doesn't automatically
@@ -380,11 +380,11 @@ func checkWatchRecursive(t *testing.T, ctx context.Context, ts topo.Store) {
 		got := &clustermetadatapb.Database{}
 		err := proto.Unmarshal(wd.Contents, got)
 		require.NoError(t, err, "cannot proto-unmarshal data")
-		if got.Name == "test_database" {
+		if got.GetName() == "test_database" {
 			// good value
 			continue
 		}
-		require.Equal(t, "test_database_new", got.Name, "got unknown Database waiting for deletion: %v", got)
+		require.Equal(t, "test_database_new", got.GetName(), "got unknown Database waiting for deletion: %v", got)
 	}
 
 	// Now the channel should be closed.

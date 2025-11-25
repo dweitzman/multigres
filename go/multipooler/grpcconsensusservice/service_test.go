@@ -45,19 +45,19 @@ func TestConsensusService_BeginTerm(t *testing.T) {
 	t.Cleanup(cleanupPgctld)
 
 	// Create the multipooler in topology so manager can reach ready state
-	serviceID := &clustermetadata.ID{
+	serviceID := clustermetadata.ID_builder{
 		Component: clustermetadata.ID_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-service",
-	}
-	multipooler := &clustermetadata.MultiPooler{
+	}.Build()
+	multipooler := clustermetadata.MultiPooler_builder{
 		Id:            serviceID,
 		Database:      "testdb",
 		Hostname:      "localhost",
 		PortMap:       map[string]int32{"grpc": 8080},
 		Type:          clustermetadata.PoolerType_REPLICA,
 		ServingStatus: clustermetadata.PoolerServingStatus_SERVING,
-	}
+	}.Build()
 	require.NoError(t, ts.CreateMultiPooler(ctx, multipooler))
 
 	// Create temporary directory for pooler
@@ -87,15 +87,15 @@ func TestConsensusService_BeginTerm(t *testing.T) {
 	}
 
 	t.Run("BeginTerm without database connection should fail", func(t *testing.T) {
-		req := &consensusdata.BeginTermRequest{
+		req := consensusdata.BeginTermRequest_builder{
 			Term: 5,
-			CandidateId: &clustermetadata.ID{
+			CandidateId: clustermetadata.ID_builder{
 				Component: clustermetadata.ID_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "candidate-1",
-			},
+			}.Build(),
 			ShardId: "shard-1",
-		}
+		}.Build()
 
 		resp, err := svc.BeginTerm(ctx, req)
 
@@ -117,19 +117,19 @@ func TestConsensusService_Status(t *testing.T) {
 	t.Cleanup(cleanupPgctld)
 
 	// Create the multipooler in topology
-	serviceID := &clustermetadata.ID{
+	serviceID := clustermetadata.ID_builder{
 		Component: clustermetadata.ID_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-service",
-	}
-	multipooler := &clustermetadata.MultiPooler{
+	}.Build()
+	multipooler := clustermetadata.MultiPooler_builder{
 		Id:            serviceID,
 		Database:      "testdb",
 		Hostname:      "localhost",
 		PortMap:       map[string]int32{"grpc": 8080},
 		Type:          clustermetadata.PoolerType_REPLICA,
 		ServingStatus: clustermetadata.PoolerServingStatus_SERVING,
-	}
+	}.Build()
 	require.NoError(t, ts.CreateMultiPooler(ctx, multipooler))
 
 	// Create temporary directory for pooler
@@ -159,21 +159,21 @@ func TestConsensusService_Status(t *testing.T) {
 	}
 
 	t.Run("Status returns node information", func(t *testing.T) {
-		req := &consensusdata.StatusRequest{
+		req := consensusdata.StatusRequest_builder{
 			ShardId: "shard-1",
-		}
+		}.Build()
 
 		resp, err := svc.Status(ctx, req)
 
 		// Should succeed
 		assert.NoError(t, err)
 		assert.NotNil(t, resp)
-		assert.Equal(t, "test-service", resp.PoolerId)
-		assert.Equal(t, "zone1", resp.Cell)
+		assert.Equal(t, "test-service", resp.GetPoolerId())
+		assert.Equal(t, "zone1", resp.GetCell())
 		// Without database, should not be healthy
-		assert.False(t, resp.IsHealthy)
+		assert.False(t, resp.GetIsHealthy())
 		// But should still be eligible
-		assert.True(t, resp.IsEligible)
+		assert.True(t, resp.GetIsEligible())
 	})
 }
 
@@ -188,19 +188,19 @@ func TestConsensusService_GetLeadershipView(t *testing.T) {
 	t.Cleanup(cleanupPgctld)
 
 	// Create the multipooler in topology
-	serviceID := &clustermetadata.ID{
+	serviceID := clustermetadata.ID_builder{
 		Component: clustermetadata.ID_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-service",
-	}
-	multipooler := &clustermetadata.MultiPooler{
+	}.Build()
+	multipooler := clustermetadata.MultiPooler_builder{
 		Id:            serviceID,
 		Database:      "testdb",
 		Hostname:      "localhost",
 		PortMap:       map[string]int32{"grpc": 8080},
 		Type:          clustermetadata.PoolerType_REPLICA,
 		ServingStatus: clustermetadata.PoolerServingStatus_SERVING,
-	}
+	}.Build()
 	require.NoError(t, ts.CreateMultiPooler(ctx, multipooler))
 
 	// Create temporary directory for pooler
@@ -230,9 +230,9 @@ func TestConsensusService_GetLeadershipView(t *testing.T) {
 	}
 
 	t.Run("GetLeadershipView without replication tracker should fail", func(t *testing.T) {
-		req := &consensusdata.LeadershipViewRequest{
+		req := consensusdata.LeadershipViewRequest_builder{
 			ShardId: "shard-1",
-		}
+		}.Build()
 
 		resp, err := svc.GetLeadershipView(ctx, req)
 
@@ -254,19 +254,19 @@ func TestConsensusService_CanReachPrimary(t *testing.T) {
 	t.Cleanup(cleanupPgctld)
 
 	// Create the multipooler in topology
-	serviceID := &clustermetadata.ID{
+	serviceID := clustermetadata.ID_builder{
 		Component: clustermetadata.ID_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-service",
-	}
-	multipooler := &clustermetadata.MultiPooler{
+	}.Build()
+	multipooler := clustermetadata.MultiPooler_builder{
 		Id:            serviceID,
 		Database:      "testdb",
 		Hostname:      "localhost",
 		PortMap:       map[string]int32{"grpc": 8080},
 		Type:          clustermetadata.PoolerType_REPLICA,
 		ServingStatus: clustermetadata.PoolerServingStatus_SERVING,
-	}
+	}.Build()
 	require.NoError(t, ts.CreateMultiPooler(ctx, multipooler))
 
 	// Create temporary directory for pooler
@@ -296,18 +296,18 @@ func TestConsensusService_CanReachPrimary(t *testing.T) {
 	}
 
 	t.Run("CanReachPrimary without database connection", func(t *testing.T) {
-		req := &consensusdata.CanReachPrimaryRequest{
+		req := consensusdata.CanReachPrimaryRequest_builder{
 			PrimaryHost: "primary.example.com",
 			PrimaryPort: 5432,
-		}
+		}.Build()
 
 		resp, err := svc.CanReachPrimary(ctx, req)
 
 		// Should succeed but indicate not reachable due to no database connection
 		assert.NoError(t, err)
 		assert.NotNil(t, resp)
-		assert.False(t, resp.Reachable) // No database connection
-		assert.Equal(t, "database connection not available", resp.ErrorMessage)
+		assert.False(t, resp.GetReachable()) // No database connection
+		assert.Equal(t, "database connection not available", resp.GetErrorMessage())
 	})
 }
 
@@ -322,19 +322,19 @@ func TestConsensusService_AllMethods(t *testing.T) {
 	t.Cleanup(cleanupPgctld)
 
 	// Create the multipooler in topology
-	serviceID := &clustermetadata.ID{
+	serviceID := clustermetadata.ID_builder{
 		Component: clustermetadata.ID_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-service",
-	}
-	multipooler := &clustermetadata.MultiPooler{
+	}.Build()
+	multipooler := clustermetadata.MultiPooler_builder{
 		Id:            serviceID,
 		Database:      "testdb",
 		Hostname:      "localhost",
 		PortMap:       map[string]int32{"grpc": 8080},
 		Type:          clustermetadata.PoolerType_REPLICA,
 		ServingStatus: clustermetadata.PoolerServingStatus_SERVING,
-	}
+	}.Build()
 	require.NoError(t, ts.CreateMultiPooler(ctx, multipooler))
 
 	// Create temporary directory for pooler
@@ -371,15 +371,15 @@ func TestConsensusService_AllMethods(t *testing.T) {
 		{
 			name: "BeginTerm",
 			method: func() error {
-				req := &consensusdata.BeginTermRequest{
+				req := consensusdata.BeginTermRequest_builder{
 					Term: 5,
-					CandidateId: &clustermetadata.ID{
+					CandidateId: clustermetadata.ID_builder{
 						Component: clustermetadata.ID_MULTIPOOLER,
 						Cell:      "zone1",
 						Name:      "candidate-1",
-					},
+					}.Build(),
 					ShardId: "shard-1",
-				}
+				}.Build()
 				_, err := svc.BeginTerm(ctx, req)
 				return err
 			},
@@ -388,9 +388,9 @@ func TestConsensusService_AllMethods(t *testing.T) {
 		{
 			name: "Status",
 			method: func() error {
-				req := &consensusdata.StatusRequest{
+				req := consensusdata.StatusRequest_builder{
 					ShardId: "shard-1",
-				}
+				}.Build()
 				_, err := svc.Status(ctx, req)
 				return err
 			},
@@ -399,9 +399,9 @@ func TestConsensusService_AllMethods(t *testing.T) {
 		{
 			name: "GetLeadershipView",
 			method: func() error {
-				req := &consensusdata.LeadershipViewRequest{
+				req := consensusdata.LeadershipViewRequest_builder{
 					ShardId: "shard-1",
-				}
+				}.Build()
 				_, err := svc.GetLeadershipView(ctx, req)
 				return err
 			},
@@ -410,10 +410,10 @@ func TestConsensusService_AllMethods(t *testing.T) {
 		{
 			name: "CanReachPrimary",
 			method: func() error {
-				req := &consensusdata.CanReachPrimaryRequest{
+				req := consensusdata.CanReachPrimaryRequest_builder{
 					PrimaryHost: "primary.example.com",
 					PrimaryPort: 5432,
-				}
+				}.Build()
 				_, err := svc.CanReachPrimary(ctx, req)
 				return err
 			},

@@ -34,26 +34,26 @@ func TestParseApplicationName(t *testing.T) {
 		{
 			name:    "Valid application name",
 			appName: "us-west_replica-1",
-			expected: &clustermetadatapb.ID{
+			expected: clustermetadatapb.ID_builder{
 				Cell: "us-west",
 				Name: "replica-1",
-			},
+			}.Build(),
 		},
 		{
 			name:    "Application name with underscores in name part",
 			appName: "cell1_standby_server_1",
-			expected: &clustermetadatapb.ID{
+			expected: clustermetadatapb.ID_builder{
 				Cell: "cell1",
 				Name: "standby_server_1",
-			},
+			}.Build(),
 		},
 		{
 			name:    "Simple cell and name",
 			appName: "zone1_primary",
-			expected: &clustermetadatapb.ID{
+			expected: clustermetadatapb.ID_builder{
 				Cell: "zone1",
 				Name: "primary",
-			},
+			}.Build(),
 		},
 		{
 			name:        "Missing underscore separator",
@@ -92,8 +92,8 @@ func TestParseApplicationName(t *testing.T) {
 			} else {
 				require.NoError(t, err, "Should not return error for valid format")
 				require.NotNil(t, result, "Result should not be nil")
-				assert.Equal(t, tt.expected.Cell, result.Cell, "Cell should match")
-				assert.Equal(t, tt.expected.Name, result.Name, "Name should match")
+				assert.Equal(t, tt.expected.GetCell(), result.GetCell(), "Cell should match")
+				assert.Equal(t, tt.expected.GetName(), result.GetName(), "Name should match")
 			}
 		})
 	}
@@ -113,7 +113,7 @@ func TestParseSynchronousStandbyNames(t *testing.T) {
 				Method:  multipoolermanagerdata.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync: 1,
 				StandbyIDs: []*clustermetadatapb.ID{
-					{Cell: "cell1", Name: "replica1"},
+					clustermetadatapb.ID_builder{Cell: "cell1", Name: "replica1"}.Build(),
 				},
 			},
 		},
@@ -124,9 +124,9 @@ func TestParseSynchronousStandbyNames(t *testing.T) {
 				Method:  multipoolermanagerdata.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync: 2,
 				StandbyIDs: []*clustermetadatapb.ID{
-					{Cell: "us-west", Name: "replica1"},
-					{Cell: "us-west", Name: "replica2"},
-					{Cell: "us-east", Name: "replica1"},
+					clustermetadatapb.ID_builder{Cell: "us-west", Name: "replica1"}.Build(),
+					clustermetadatapb.ID_builder{Cell: "us-west", Name: "replica2"}.Build(),
+					clustermetadatapb.ID_builder{Cell: "us-east", Name: "replica1"}.Build(),
 				},
 			},
 		},
@@ -137,8 +137,8 @@ func TestParseSynchronousStandbyNames(t *testing.T) {
 				Method:  multipoolermanagerdata.SynchronousMethod_SYNCHRONOUS_METHOD_ANY,
 				NumSync: 1,
 				StandbyIDs: []*clustermetadatapb.ID{
-					{Cell: "zone1", Name: "standby1"},
-					{Cell: "zone2", Name: "standby1"},
+					clustermetadatapb.ID_builder{Cell: "zone1", Name: "standby1"}.Build(),
+					clustermetadatapb.ID_builder{Cell: "zone2", Name: "standby1"}.Build(),
 				},
 			},
 		},
@@ -164,8 +164,8 @@ func TestParseSynchronousStandbyNames(t *testing.T) {
 				Method:  multipoolermanagerdata.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync: 1,
 				StandbyIDs: []*clustermetadatapb.ID{
-					{Cell: "cell", Name: "name1"},
-					{Cell: "cell", Name: "name2"},
+					clustermetadatapb.ID_builder{Cell: "cell", Name: "name1"}.Build(),
+					clustermetadatapb.ID_builder{Cell: "cell", Name: "name2"}.Build(),
 				},
 			},
 		},
@@ -176,10 +176,10 @@ func TestParseSynchronousStandbyNames(t *testing.T) {
 				Method:  multipoolermanagerdata.SynchronousMethod_SYNCHRONOUS_METHOD_ANY,
 				NumSync: 3,
 				StandbyIDs: []*clustermetadatapb.ID{
-					{Cell: "a", Name: "b"},
-					{Cell: "c", Name: "d"},
-					{Cell: "e", Name: "f"},
-					{Cell: "g", Name: "h"},
+					clustermetadatapb.ID_builder{Cell: "a", Name: "b"}.Build(),
+					clustermetadatapb.ID_builder{Cell: "c", Name: "d"}.Build(),
+					clustermetadatapb.ID_builder{Cell: "e", Name: "f"}.Build(),
+					clustermetadatapb.ID_builder{Cell: "g", Name: "h"}.Build(),
 				},
 			},
 		},
@@ -230,7 +230,7 @@ func TestParseSynchronousStandbyNames(t *testing.T) {
 				Method:  multipoolermanagerdata.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync: 1,
 				StandbyIDs: []*clustermetadatapb.ID{
-					{Cell: "cell", Name: "replica1"},
+					clustermetadatapb.ID_builder{Cell: "cell", Name: "replica1"}.Build(),
 				},
 			},
 		},
@@ -241,8 +241,8 @@ func TestParseSynchronousStandbyNames(t *testing.T) {
 				Method:  multipoolermanagerdata.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync: 2,
 				StandbyIDs: []*clustermetadatapb.ID{
-					{Cell: "cell1", Name: "name1"},
-					{Cell: "cell2", Name: "name2"},
+					clustermetadatapb.ID_builder{Cell: "cell1", Name: "name1"}.Build(),
+					clustermetadatapb.ID_builder{Cell: "cell2", Name: "name2"}.Build(),
 				},
 			},
 		},
@@ -266,8 +266,8 @@ func TestParseSynchronousStandbyNames(t *testing.T) {
 				} else {
 					require.Len(t, result.StandbyIDs, len(tt.expected.StandbyIDs), "StandbyIDs length should match")
 					for i, expectedID := range tt.expected.StandbyIDs {
-						assert.Equal(t, expectedID.Cell, result.StandbyIDs[i].Cell, "Cell should match at index %d", i)
-						assert.Equal(t, expectedID.Name, result.StandbyIDs[i].Name, "Name should match at index %d", i)
+						assert.Equal(t, expectedID.GetCell(), result.StandbyIDs[i].GetCell(), "Cell should match at index %d", i)
+						assert.Equal(t, expectedID.GetName(), result.StandbyIDs[i].GetName(), "Name should match at index %d", i)
 					}
 				}
 			}
@@ -285,277 +285,277 @@ func TestParseAndRedactPrimaryConnInfo(t *testing.T) {
 		{
 			name:     "Complete connection string",
 			connInfo: "host=localhost port=5432 user=postgres application_name=test_cell_standby1",
-			expected: &multipoolermanagerdata.PrimaryConnInfo{
+			expected: multipoolermanagerdata.PrimaryConnInfo_builder{
 				Host:            "localhost",
 				Port:            5432,
 				User:            "postgres",
 				ApplicationName: "test_cell_standby1",
 				Raw:             "host=localhost port=5432 user=postgres application_name=test_cell_standby1",
-			},
+			}.Build(),
 		},
 		{
 			name:     "Missing application_name",
 			connInfo: "host=primary.example.com port=5433 user=replicator",
-			expected: &multipoolermanagerdata.PrimaryConnInfo{
+			expected: multipoolermanagerdata.PrimaryConnInfo_builder{
 				Host:            "primary.example.com",
 				Port:            5433,
 				User:            "replicator",
 				ApplicationName: "",
 				Raw:             "host=primary.example.com port=5433 user=replicator",
-			},
+			}.Build(),
 		},
 		{
 			name:     "Missing port",
 			connInfo: "host=localhost user=postgres application_name=test_app",
-			expected: &multipoolermanagerdata.PrimaryConnInfo{
+			expected: multipoolermanagerdata.PrimaryConnInfo_builder{
 				Host:            "localhost",
 				Port:            0,
 				User:            "postgres",
 				ApplicationName: "test_app",
 				Raw:             "host=localhost user=postgres application_name=test_app",
-			},
+			}.Build(),
 		},
 		{
 			name:     "Empty string",
 			connInfo: "",
-			expected: &multipoolermanagerdata.PrimaryConnInfo{
+			expected: multipoolermanagerdata.PrimaryConnInfo_builder{
 				Host:            "",
 				Port:            0,
 				User:            "",
 				ApplicationName: "",
 				Raw:             "",
-			},
+			}.Build(),
 		},
 		{
 			name:     "Extra parameters ignored",
 			connInfo: "host=localhost port=5432 user=postgres application_name=test keepalives_idle=30 keepalives_interval=10",
-			expected: &multipoolermanagerdata.PrimaryConnInfo{
+			expected: multipoolermanagerdata.PrimaryConnInfo_builder{
 				Host:            "localhost",
 				Port:            5432,
 				User:            "postgres",
 				ApplicationName: "test",
 				Raw:             "host=localhost port=5432 user=postgres application_name=test keepalives_idle=30 keepalives_interval=10",
-			},
+			}.Build(),
 		},
 		{
 			name:     "Invalid port ignored",
 			connInfo: "host=localhost port=invalid user=postgres",
-			expected: &multipoolermanagerdata.PrimaryConnInfo{
+			expected: multipoolermanagerdata.PrimaryConnInfo_builder{
 				Host:            "localhost",
 				Port:            0,
 				User:            "postgres",
 				ApplicationName: "",
 				Raw:             "host=localhost port=invalid user=postgres",
-			},
+			}.Build(),
 		},
 		{
 			name:     "Connection with sslmode",
 			connInfo: "host=localhost port=5432 user=postgres sslmode=require",
-			expected: &multipoolermanagerdata.PrimaryConnInfo{
+			expected: multipoolermanagerdata.PrimaryConnInfo_builder{
 				Host:            "localhost",
 				Port:            5432,
 				User:            "postgres",
 				ApplicationName: "",
 				Raw:             "host=localhost port=5432 user=postgres sslmode=require",
-			},
+			}.Build(),
 		},
 		{
 			name:     "Connection with password (redacted)",
 			connInfo: "host=localhost port=5432 user=postgres password=secret123",
-			expected: &multipoolermanagerdata.PrimaryConnInfo{
+			expected: multipoolermanagerdata.PrimaryConnInfo_builder{
 				Host:            "localhost",
 				Port:            5432,
 				User:            "postgres",
 				ApplicationName: "",
 				Raw:             "host=localhost port=5432 user=postgres password=[REDACTED]",
-			},
+			}.Build(),
 		},
 		{
 			name:     "Connection with passfile",
 			connInfo: "host=localhost port=5432 user=postgres passfile=/home/user/.pgpass",
-			expected: &multipoolermanagerdata.PrimaryConnInfo{
+			expected: multipoolermanagerdata.PrimaryConnInfo_builder{
 				Host:            "localhost",
 				Port:            5432,
 				User:            "postgres",
 				ApplicationName: "",
 				Raw:             "host=localhost port=5432 user=postgres passfile=/home/user/.pgpass",
-			},
+			}.Build(),
 		},
 		{
 			name:     "Connection with multiple SSL parameters",
 			connInfo: "host=localhost port=5432 user=postgres sslmode=verify-full sslcert=/path/to/cert.pem sslkey=/path/to/key.pem sslrootcert=/path/to/ca.pem",
-			expected: &multipoolermanagerdata.PrimaryConnInfo{
+			expected: multipoolermanagerdata.PrimaryConnInfo_builder{
 				Host:            "localhost",
 				Port:            5432,
 				User:            "postgres",
 				ApplicationName: "",
 				Raw:             "host=localhost port=5432 user=postgres sslmode=verify-full sslcert=/path/to/cert.pem sslkey=/path/to/key.pem sslrootcert=/path/to/ca.pem",
-			},
+			}.Build(),
 		},
 		{
 			name:     "Connection with keepalive and timeout parameters",
 			connInfo: "host=localhost port=5432 user=postgres keepalives_idle=30 keepalives_interval=10 keepalives_count=5 connect_timeout=10",
-			expected: &multipoolermanagerdata.PrimaryConnInfo{
+			expected: multipoolermanagerdata.PrimaryConnInfo_builder{
 				Host:            "localhost",
 				Port:            5432,
 				User:            "postgres",
 				ApplicationName: "",
 				Raw:             "host=localhost port=5432 user=postgres keepalives_idle=30 keepalives_interval=10 keepalives_count=5 connect_timeout=10",
-			},
+			}.Build(),
 		},
 		{
 			name:     "Connection with channel_binding",
 			connInfo: "host=localhost port=5432 user=postgres channel_binding=require",
-			expected: &multipoolermanagerdata.PrimaryConnInfo{
+			expected: multipoolermanagerdata.PrimaryConnInfo_builder{
 				Host:            "localhost",
 				Port:            5432,
 				User:            "postgres",
 				ApplicationName: "",
 				Raw:             "host=localhost port=5432 user=postgres channel_binding=require",
-			},
+			}.Build(),
 		},
 		{
 			name:     "Connection with gssencmode",
 			connInfo: "host=localhost port=5432 user=postgres gssencmode=prefer",
-			expected: &multipoolermanagerdata.PrimaryConnInfo{
+			expected: multipoolermanagerdata.PrimaryConnInfo_builder{
 				Host:            "localhost",
 				Port:            5432,
 				User:            "postgres",
 				ApplicationName: "",
 				Raw:             "host=localhost port=5432 user=postgres gssencmode=prefer",
-			},
+			}.Build(),
 		},
 		{
 			name:     "Complex connection with all parsed and unparsed fields",
 			connInfo: "host=primary.db.local port=5433 user=replicator application_name=zone1_standby2 sslmode=require keepalives_idle=60 connect_timeout=30",
-			expected: &multipoolermanagerdata.PrimaryConnInfo{
+			expected: multipoolermanagerdata.PrimaryConnInfo_builder{
 				Host:            "primary.db.local",
 				Port:            5433,
 				User:            "replicator",
 				ApplicationName: "zone1_standby2",
 				Raw:             "host=primary.db.local port=5433 user=replicator application_name=zone1_standby2 sslmode=require keepalives_idle=60 connect_timeout=30",
-			},
+			}.Build(),
 		},
 		{
 			name:     "Connection with hostaddr",
 			connInfo: "hostaddr=172.28.40.9 port=5432 user=postgres",
-			expected: &multipoolermanagerdata.PrimaryConnInfo{
+			expected: multipoolermanagerdata.PrimaryConnInfo_builder{
 				Host:            "",
 				Port:            5432,
 				User:            "postgres",
 				ApplicationName: "",
 				Raw:             "hostaddr=172.28.40.9 port=5432 user=postgres",
-			},
+			}.Build(),
 		},
 		{
 			name:     "Connection with dbname",
 			connInfo: "host=localhost port=5432 dbname=mydb user=postgres",
-			expected: &multipoolermanagerdata.PrimaryConnInfo{
+			expected: multipoolermanagerdata.PrimaryConnInfo_builder{
 				Host:            "localhost",
 				Port:            5432,
 				User:            "postgres",
 				ApplicationName: "",
 				Raw:             "host=localhost port=5432 dbname=mydb user=postgres",
-			},
+			}.Build(),
 		},
 		{
 			name:     "Connection with client_encoding",
 			connInfo: "host=localhost port=5432 user=postgres client_encoding=UTF8",
-			expected: &multipoolermanagerdata.PrimaryConnInfo{
+			expected: multipoolermanagerdata.PrimaryConnInfo_builder{
 				Host:            "localhost",
 				Port:            5432,
 				User:            "postgres",
 				ApplicationName: "",
 				Raw:             "host=localhost port=5432 user=postgres client_encoding=UTF8",
-			},
+			}.Build(),
 		},
 		{
 			name:     "Connection with options parameter",
 			connInfo: "host=localhost port=5432 user=postgres options=-c\\ geqo=off",
-			expected: &multipoolermanagerdata.PrimaryConnInfo{
+			expected: multipoolermanagerdata.PrimaryConnInfo_builder{
 				Host:            "localhost",
 				Port:            5432,
 				User:            "postgres",
 				ApplicationName: "",
 				Raw:             "host=localhost port=5432 user=postgres options=-c\\ geqo=off",
-			},
+			}.Build(),
 		},
 		{
 			name:     "Connection with replication mode",
 			connInfo: "host=localhost port=5432 user=postgres replication=database",
-			expected: &multipoolermanagerdata.PrimaryConnInfo{
+			expected: multipoolermanagerdata.PrimaryConnInfo_builder{
 				Host:            "localhost",
 				Port:            5432,
 				User:            "postgres",
 				ApplicationName: "",
 				Raw:             "host=localhost port=5432 user=postgres replication=database",
-			},
+			}.Build(),
 		},
 		{
 			name:     "Connection with target_session_attrs",
 			connInfo: "host=localhost port=5432 user=postgres target_session_attrs=read-write",
-			expected: &multipoolermanagerdata.PrimaryConnInfo{
+			expected: multipoolermanagerdata.PrimaryConnInfo_builder{
 				Host:            "localhost",
 				Port:            5432,
 				User:            "postgres",
 				ApplicationName: "",
 				Raw:             "host=localhost port=5432 user=postgres target_session_attrs=read-write",
-			},
+			}.Build(),
 		},
 		{
 			name:     "Connection with sslcrl and sslcompression",
 			connInfo: "host=localhost port=5432 user=postgres sslmode=verify-full sslcrl=/path/to/crl.pem sslcompression=1",
-			expected: &multipoolermanagerdata.PrimaryConnInfo{
+			expected: multipoolermanagerdata.PrimaryConnInfo_builder{
 				Host:            "localhost",
 				Port:            5432,
 				User:            "postgres",
 				ApplicationName: "",
 				Raw:             "host=localhost port=5432 user=postgres sslmode=verify-full sslcrl=/path/to/crl.pem sslcompression=1",
-			},
+			}.Build(),
 		},
 		{
 			name:     "Connection with requirepeer",
 			connInfo: "host=localhost port=5432 user=postgres requirepeer=postgres",
-			expected: &multipoolermanagerdata.PrimaryConnInfo{
+			expected: multipoolermanagerdata.PrimaryConnInfo_builder{
 				Host:            "localhost",
 				Port:            5432,
 				User:            "postgres",
 				ApplicationName: "",
 				Raw:             "host=localhost port=5432 user=postgres requirepeer=postgres",
-			},
+			}.Build(),
 		},
 		{
 			name:     "Connection with krbsrvname and gsslib",
 			connInfo: "host=localhost port=5432 user=postgres krbsrvname=postgres gsslib=gssapi",
-			expected: &multipoolermanagerdata.PrimaryConnInfo{
+			expected: multipoolermanagerdata.PrimaryConnInfo_builder{
 				Host:            "localhost",
 				Port:            5432,
 				User:            "postgres",
 				ApplicationName: "",
 				Raw:             "host=localhost port=5432 user=postgres krbsrvname=postgres gsslib=gssapi",
-			},
+			}.Build(),
 		},
 		{
 			name:     "Connection with service",
 			connInfo: "service=myservice",
-			expected: &multipoolermanagerdata.PrimaryConnInfo{
+			expected: multipoolermanagerdata.PrimaryConnInfo_builder{
 				Host:            "",
 				Port:            0,
 				User:            "",
 				ApplicationName: "",
 				Raw:             "service=myservice",
-			},
+			}.Build(),
 		},
 		{
 			name:     "Comprehensive connection with password redaction",
 			connInfo: "host=prod.db.com port=5433 user=repl_user password=SuperSecret123 application_name=standby1 sslmode=verify-full sslcert=/certs/client.pem sslkey=/certs/client.key keepalives_idle=30 connect_timeout=10",
-			expected: &multipoolermanagerdata.PrimaryConnInfo{
+			expected: multipoolermanagerdata.PrimaryConnInfo_builder{
 				Host:            "prod.db.com",
 				Port:            5433,
 				User:            "repl_user",
 				ApplicationName: "standby1",
 				Raw:             "host=prod.db.com port=5433 user=repl_user password=[REDACTED] application_name=standby1 sslmode=verify-full sslcert=/certs/client.pem sslkey=/certs/client.key keepalives_idle=30 connect_timeout=10",
-			},
+			}.Build(),
 		},
 		{
 			name:        "Invalid format - space-separated without equals",
@@ -575,24 +575,24 @@ func TestParseAndRedactPrimaryConnInfo(t *testing.T) {
 		{
 			name:     "Connection with multiple spaces between parameters",
 			connInfo: "host=localhost   port=5432  user=postgres",
-			expected: &multipoolermanagerdata.PrimaryConnInfo{
+			expected: multipoolermanagerdata.PrimaryConnInfo_builder{
 				Host:            "localhost",
 				Port:            5432,
 				User:            "postgres",
 				ApplicationName: "",
 				Raw:             "host=localhost port=5432 user=postgres", // Spaces normalized due to split/join
-			},
+			}.Build(),
 		},
 		{
 			name:     "Connection with leading and trailing spaces",
 			connInfo: "  host=localhost port=5432 user=postgres  ",
-			expected: &multipoolermanagerdata.PrimaryConnInfo{
+			expected: multipoolermanagerdata.PrimaryConnInfo_builder{
 				Host:            "localhost",
 				Port:            5432,
 				User:            "postgres",
 				ApplicationName: "",
 				Raw:             "host=localhost port=5432 user=postgres", // Leading/trailing spaces trimmed
-			},
+			}.Build(),
 		},
 	}
 
@@ -608,11 +608,11 @@ func TestParseAndRedactPrimaryConnInfo(t *testing.T) {
 				// Expect parsing to succeed
 				require.NoError(t, err, "Should not return error for valid format")
 				require.NotNil(t, result, "Result should not be nil")
-				assert.Equal(t, tt.expected.Host, result.Host, "Host should match")
-				assert.Equal(t, tt.expected.Port, result.Port, "Port should match")
-				assert.Equal(t, tt.expected.User, result.User, "User should match")
-				assert.Equal(t, tt.expected.ApplicationName, result.ApplicationName, "ApplicationName should match")
-				assert.Equal(t, tt.expected.Raw, result.Raw, "Raw should match")
+				assert.Equal(t, tt.expected.GetHost(), result.GetHost(), "Host should match")
+				assert.Equal(t, tt.expected.GetPort(), result.GetPort(), "Port should match")
+				assert.Equal(t, tt.expected.GetUser(), result.GetUser(), "User should match")
+				assert.Equal(t, tt.expected.GetApplicationName(), result.GetApplicationName(), "ApplicationName should match")
+				assert.Equal(t, tt.expected.GetRaw(), result.GetRaw(), "Raw should match")
 			}
 		})
 	}

@@ -87,7 +87,7 @@ func TestReplicationAPIs(t *testing.T) {
 
 		primaryPosResp, err := primaryManagerClient.PrimaryPosition(ctx, &multipoolermanagerdatapb.PrimaryPositionRequest{})
 		require.NoError(t, err)
-		primaryLSN := primaryPosResp.LsnPosition
+		primaryLSN := primaryPosResp.GetLsnPosition()
 		t.Logf("Primary LSN after insert: %s", primaryLSN)
 
 		// Validate data is NOT in standby yet (no replication configured)
@@ -98,9 +98,9 @@ func TestReplicationAPIs(t *testing.T) {
 		ctx, cancel = context.WithTimeout(context.Background(), 1*time.Second)
 		defer cancel()
 
-		waitReq := &multipoolermanagerdatapb.WaitForLSNRequest{
+		waitReq := multipoolermanagerdatapb.WaitForLSNRequest_builder{
 			TargetLsn: primaryLSN,
-		}
+		}.Build()
 		_, err = standbyManagerClient.WaitForLSN(ctx, waitReq)
 		require.Error(t, err, "WaitForLSN should timeout without replication configured")
 		// Check that the error is a timeout (gRPC code DEADLINE_EXCEEDED or CANCELED)
@@ -113,8 +113,8 @@ func TestReplicationAPIs(t *testing.T) {
 		// Verify table doesn't exist in standby
 		queryResp, err := standbyPoolerClient.ExecuteQuery(context.Background(), "SELECT COUNT(*) FROM pg_tables WHERE tablename = 'test_replication'", 1)
 		require.NoError(t, err)
-		require.Len(t, queryResp.Rows, 1)
-		tableCount := string(queryResp.Rows[0].Values[0])
+		require.Len(t, queryResp.GetRows(), 1)
+		tableCount := string(queryResp.GetRows()[0].GetValues()[0])
 		assert.Equal(t, "0", tableCount, "Table should not exist in standby yet")
 
 		// Configure replication using SetPrimaryConnInfo RPC
@@ -124,21 +124,21 @@ func TestReplicationAPIs(t *testing.T) {
 		defer cancel()
 
 		// Call SetPrimaryConnInfo with StartReplicationAfter=true
-		_, err = standbyManagerClient.SetTerm(utils.WithShortDeadline(t), &multipoolermanagerdatapb.SetTermRequest{
-			Term: &multipoolermanagerdatapb.ConsensusTerm{
+		_, err = standbyManagerClient.SetTerm(utils.WithShortDeadline(t), multipoolermanagerdatapb.SetTermRequest_builder{
+			Term: multipoolermanagerdatapb.ConsensusTerm_builder{
 				TermNumber: 1,
-			},
-		})
+			}.Build(),
+		}.Build())
 		require.NoError(t, err, "SetTerm should succeed on standby")
 
-		setPrimaryReq := &multipoolermanagerdatapb.SetPrimaryConnInfoRequest{
+		setPrimaryReq := multipoolermanagerdatapb.SetPrimaryConnInfoRequest_builder{
 			Host:                  "localhost",
 			Port:                  int32(setup.PrimaryPgctld.PgPort),
 			StartReplicationAfter: true,
 			StopReplicationBefore: false,
 			CurrentTerm:           1,
 			Force:                 false,
-		}
+		}.Build()
 		_, err = standbyManagerClient.SetPrimaryConnInfo(ctx, setPrimaryReq)
 		require.NoError(t, err, "SetPrimaryConnInfo should succeed")
 		t.Log("Replication configured successfully")
@@ -149,27 +149,27 @@ func TestReplicationAPIs(t *testing.T) {
 		ctx, cancel = context.WithTimeout(context.Background(), 1*time.Second)
 		defer cancel()
 
-		waitReq = &multipoolermanagerdatapb.WaitForLSNRequest{
+		waitReq = multipoolermanagerdatapb.WaitForLSNRequest_builder{
 			TargetLsn: primaryLSN,
-		}
+		}.Build()
 		_, err = standbyManagerClient.WaitForLSN(ctx, waitReq)
 		require.NoError(t, err, "Standby should catch up to primary LSN after replication is configured")
 
 		// Verify the table now exists in standby
 		require.Eventually(t, func() bool {
 			resp, err := standbyPoolerClient.ExecuteQuery(context.Background(), "SELECT COUNT(*) FROM pg_tables WHERE tablename = 'test_replication'", 1)
-			if err != nil || len(resp.Rows) == 0 {
+			if err != nil || len(resp.GetRows()) == 0 {
 				return false
 			}
-			tableCount := string(resp.Rows[0].Values[0])
+			tableCount := string(resp.GetRows()[0].GetValues()[0])
 			return tableCount == "1"
 		}, 15*time.Second, 500*time.Millisecond, "Table should exist in standby after replication")
 
 		// Verify the data replicated
 		dataResp, err := standbyPoolerClient.ExecuteQuery(context.Background(), "SELECT COUNT(*) FROM test_replication", 1)
 		require.NoError(t, err)
-		require.Len(t, dataResp.Rows, 1)
-		rowCount := string(dataResp.Rows[0].Values[0])
+		require.Len(t, dataResp.GetRows(), 1)
+		rowCount := string(dataResp.GetRows()[0].GetValues()[0])
 		assert.Equal(t, "1", rowCount, "Should have 1 row in standby")
 
 		t.Log("Replication is working! Data successfully replicated from primary to standby")
@@ -182,20 +182,20 @@ func TestReplicationAPIs(t *testing.T) {
 		defer cancel()
 
 		// Try to set primary conn info with stale term (current term is 1, we'll try with 0)
-		setPrimaryReq := &multipoolermanagerdatapb.SetPrimaryConnInfoRequest{
+		setPrimaryReq := multipoolermanagerdatapb.SetPrimaryConnInfoRequest_builder{
 			Host:                  "localhost",
 			Port:                  int32(setup.PrimaryPgctld.PgPort),
 			StartReplicationAfter: true,
 			StopReplicationBefore: false,
 			CurrentTerm:           0, // Stale term (lower than current term 1)
 			Force:                 false,
-		}
+		}.Build()
 		_, err = standbyManagerClient.SetPrimaryConnInfo(ctx, setPrimaryReq)
 		require.Error(t, err, "SetPrimaryConnInfo should fail with stale term")
 		assert.Contains(t, err.Error(), "consensus term too old", "Error should mention term is too old")
 
 		// Try again with force=true, should succeed
-		setPrimaryReq.Force = true
+		setPrimaryReq.SetForce(true)
 		_, err = standbyManagerClient.SetPrimaryConnInfo(ctx, setPrimaryReq)
 		require.NoError(t, err, "SetPrimaryConnInfo should succeed with force=true")
 	})
@@ -210,16 +210,16 @@ func TestReplicationAPIs(t *testing.T) {
 		t.Log("Verifying replication is running...")
 		queryResp, err := standbyPoolerClient.ExecuteQuery(context.Background(), "SELECT status FROM pg_stat_wal_receiver", 1)
 		require.NoError(t, err)
-		require.Len(t, queryResp.Rows, 1)
-		initialStatus := string(queryResp.Rows[0].Values[0])
+		require.Len(t, queryResp.GetRows(), 1)
+		initialStatus := string(queryResp.GetRows()[0].GetValues()[0])
 		t.Logf("Initial WAL receiver status: %s", initialStatus)
 		assert.Equal(t, "streaming", initialStatus, "Replication should be streaming")
 
 		// Check if WAL replay is not paused
 		queryResp, err = standbyPoolerClient.ExecuteQuery(context.Background(), "SELECT pg_is_wal_replay_paused()", 1)
 		require.NoError(t, err)
-		require.Len(t, queryResp.Rows, 1)
-		isPaused := string(queryResp.Rows[0].Values[0])
+		require.Len(t, queryResp.GetRows(), 1)
+		isPaused := string(queryResp.GetRows()[0].GetValues()[0])
 		assert.Equal(t, "false", isPaused, "WAL replay should not be paused initially")
 
 		// Call SetPrimaryConnInfo with StopReplicationBefore=true and StartReplicationAfter=false
@@ -227,14 +227,14 @@ func TestReplicationAPIs(t *testing.T) {
 		defer cancel()
 
 		t.Log("Calling SetPrimaryConnInfo with StopReplicationBefore=true, StartReplicationAfter=false...")
-		setPrimaryReq := &multipoolermanagerdatapb.SetPrimaryConnInfoRequest{
+		setPrimaryReq := multipoolermanagerdatapb.SetPrimaryConnInfoRequest_builder{
 			Host:                  "localhost",
 			Port:                  int32(setup.PrimaryPgctld.PgPort),
 			StartReplicationAfter: false, // Don't start after
 			StopReplicationBefore: true,  // Stop before
 			CurrentTerm:           1,
 			Force:                 false,
-		}
+		}.Build()
 		_, err = standbyManagerClient.SetPrimaryConnInfo(ctx, setPrimaryReq)
 		require.NoError(t, err, "SetPrimaryConnInfo should succeed")
 
@@ -242,8 +242,8 @@ func TestReplicationAPIs(t *testing.T) {
 		t.Log("Verifying replication is paused after StopReplicationBefore...")
 		queryResp, err = standbyPoolerClient.ExecuteQuery(context.Background(), "SELECT pg_is_wal_replay_paused()", 1)
 		require.NoError(t, err)
-		require.Len(t, queryResp.Rows, 1)
-		isPaused = string(queryResp.Rows[0].Values[0])
+		require.Len(t, queryResp.GetRows(), 1)
+		isPaused = string(queryResp.GetRows()[0].GetValues()[0])
 		assert.Equal(t, "true", isPaused, "WAL replay should be paused after StopReplicationBefore=true")
 
 		t.Log("Replication successfully stopped with StopReplicationBefore flag")
@@ -257,10 +257,10 @@ func TestReplicationAPIs(t *testing.T) {
 		// Stop replication using StopReplication RPC
 		t.Log("Stopping replication using StopReplication RPC...")
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-		stopReq := &multipoolermanagerdatapb.StopReplicationRequest{
+		stopReq := multipoolermanagerdatapb.StopReplicationRequest_builder{
 			Mode: multipoolermanagerdatapb.ReplicationPauseMode_REPLICATION_PAUSE_MODE_REPLAY_ONLY,
 			Wait: true,
-		}
+		}.Build()
 		_, err = standbyManagerClient.StopReplication(ctx, stopReq)
 		require.NoError(t, err)
 		cancel()
@@ -268,8 +268,8 @@ func TestReplicationAPIs(t *testing.T) {
 		// Verify replication is paused
 		queryResp, err := standbyPoolerClient.ExecuteQuery(context.Background(), "SELECT pg_is_wal_replay_paused()", 1)
 		require.NoError(t, err)
-		require.Len(t, queryResp.Rows, 1)
-		isPaused := string(queryResp.Rows[0].Values[0])
+		require.Len(t, queryResp.GetRows(), 1)
+		isPaused := string(queryResp.GetRows()[0].GetValues()[0])
 		assert.Equal(t, "true", isPaused, "WAL replay should be paused")
 
 		// Call SetPrimaryConnInfo with StartReplicationAfter=false
@@ -277,21 +277,21 @@ func TestReplicationAPIs(t *testing.T) {
 		defer cancel()
 
 		t.Log("Calling SetPrimaryConnInfo with StartReplicationAfter=false...")
-		_, err = standbyManagerClient.SetTerm(utils.WithShortDeadline(t), &multipoolermanagerdatapb.SetTermRequest{
-			Term: &multipoolermanagerdatapb.ConsensusTerm{
+		_, err = standbyManagerClient.SetTerm(utils.WithShortDeadline(t), multipoolermanagerdatapb.SetTermRequest_builder{
+			Term: multipoolermanagerdatapb.ConsensusTerm_builder{
 				TermNumber: 1,
-			},
-		})
+			}.Build(),
+		}.Build())
 		require.NoError(t, err, "SetTerm should succeed on standby")
 
-		setPrimaryReq := &multipoolermanagerdatapb.SetPrimaryConnInfoRequest{
+		setPrimaryReq := multipoolermanagerdatapb.SetPrimaryConnInfoRequest_builder{
 			Host:                  "localhost",
 			Port:                  int32(setup.PrimaryPgctld.PgPort),
 			StartReplicationAfter: false, // Don't start after
 			StopReplicationBefore: false,
 			CurrentTerm:           1,
 			Force:                 false,
-		}
+		}.Build()
 		_, err = standbyManagerClient.SetPrimaryConnInfo(ctx, setPrimaryReq)
 		require.NoError(t, err, "SetPrimaryConnInfo should succeed")
 
@@ -299,13 +299,13 @@ func TestReplicationAPIs(t *testing.T) {
 		t.Log("Verifying replication remains paused when StartReplicationAfter=false...")
 		queryResp, err = standbyPoolerClient.ExecuteQuery(context.Background(), "SELECT pg_is_wal_replay_paused()", 1)
 		require.NoError(t, err)
-		require.Len(t, queryResp.Rows, 1)
-		isPaused = string(queryResp.Rows[0].Values[0])
+		require.Len(t, queryResp.GetRows(), 1)
+		isPaused = string(queryResp.GetRows()[0].GetValues()[0])
 		assert.Equal(t, "true", isPaused, "WAL replay should still be paused when StartReplicationAfter=false")
 
 		// Now call again with StartReplicationAfter=true
 		t.Log("Calling SetPrimaryConnInfo with StartReplicationAfter=true...")
-		setPrimaryReq.StartReplicationAfter = true
+		setPrimaryReq.SetStartReplicationAfter(true)
 		_, err = standbyManagerClient.SetPrimaryConnInfo(ctx, setPrimaryReq)
 		require.NoError(t, err, "SetPrimaryConnInfo should succeed")
 
@@ -313,8 +313,8 @@ func TestReplicationAPIs(t *testing.T) {
 		t.Log("Verifying replication started when StartReplicationAfter=true...")
 		queryResp, err = standbyPoolerClient.ExecuteQuery(context.Background(), "SELECT pg_is_wal_replay_paused()", 1)
 		require.NoError(t, err)
-		require.Len(t, queryResp.Rows, 1)
-		isPaused = string(queryResp.Rows[0].Values[0])
+		require.Len(t, queryResp.GetRows(), 1)
+		isPaused = string(queryResp.GetRows()[0].GetValues()[0])
 		assert.Equal(t, "false", isPaused, "WAL replay should be running after StartReplicationAfter=true")
 
 		t.Log("Replication successfully started with StartReplicationAfter flag")
@@ -337,7 +337,7 @@ func TestReplicationAPIs(t *testing.T) {
 
 		primaryPosResp, err := primaryManagerClient.PrimaryPosition(ctx, &multipoolermanagerdatapb.PrimaryPositionRequest{})
 		require.NoError(t, err)
-		targetLSN := primaryPosResp.LsnPosition
+		targetLSN := primaryPosResp.GetLsnPosition()
 		t.Logf("Target LSN from primary: %s", targetLSN)
 
 		// Wait for standby to reach the target LSN
@@ -345,9 +345,9 @@ func TestReplicationAPIs(t *testing.T) {
 		ctx, cancel = context.WithTimeout(context.Background(), 1*time.Second)
 		defer cancel()
 
-		waitReq := &multipoolermanagerdatapb.WaitForLSNRequest{
+		waitReq := multipoolermanagerdatapb.WaitForLSNRequest_builder{
 			TargetLsn: targetLSN,
-		}
+		}.Build()
 		_, err = standbyManagerClient.WaitForLSN(ctx, waitReq)
 		require.NoError(t, err, "WaitForLSN should succeed on standby")
 
@@ -356,8 +356,8 @@ func TestReplicationAPIs(t *testing.T) {
 		// Verify the data replicated
 		queryResp, err := standbyPoolerClient.ExecuteQuery(context.Background(), "SELECT COUNT(*) FROM test_wait_lsn", 1)
 		require.NoError(t, err)
-		require.Len(t, queryResp.Rows, 1)
-		rowCount := string(queryResp.Rows[0].Values[0])
+		require.Len(t, queryResp.GetRows(), 1)
+		rowCount := string(queryResp.GetRows()[0].GetValues()[0])
 		assert.Equal(t, "1", rowCount, "Should have 1 row in standby")
 	})
 
@@ -368,9 +368,9 @@ func TestReplicationAPIs(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 		defer cancel()
 
-		waitReq := &multipoolermanagerdatapb.WaitForLSNRequest{
+		waitReq := multipoolermanagerdatapb.WaitForLSNRequest_builder{
 			TargetLsn: "0/1000000",
-		}
+		}.Build()
 		_, err = primaryManagerClient.WaitForLSN(ctx, waitReq)
 		require.Error(t, err, "WaitForLSN should fail on primary")
 		assert.Contains(t, err.Error(), "operation not allowed", "Error should indicate operation not allowed on PRIMARY")
@@ -388,9 +388,9 @@ func TestReplicationAPIs(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 		defer cancel()
 
-		waitReq := &multipoolermanagerdatapb.WaitForLSNRequest{
+		waitReq := multipoolermanagerdatapb.WaitForLSNRequest_builder{
 			TargetLsn: unreachableLSN,
-		}
+		}.Build()
 		_, err = standbyManagerClient.WaitForLSN(ctx, waitReq)
 		st, ok := status.FromError(err)
 		require.True(t, ok, "Error should be a gRPC status error")
@@ -407,10 +407,10 @@ func TestReplicationAPIs(t *testing.T) {
 		// First stop replication using StopReplication RPC
 		t.Log("Stopping replication using StopReplication RPC...")
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-		stopReq := &multipoolermanagerdatapb.StopReplicationRequest{
+		stopReq := multipoolermanagerdatapb.StopReplicationRequest_builder{
 			Mode: multipoolermanagerdatapb.ReplicationPauseMode_REPLICATION_PAUSE_MODE_REPLAY_ONLY,
 			Wait: true,
-		}
+		}.Build()
 		_, err = standbyManagerClient.StopReplication(ctx, stopReq)
 		require.NoError(t, err)
 		cancel()
@@ -418,8 +418,8 @@ func TestReplicationAPIs(t *testing.T) {
 		// Verify replication is paused
 		queryResp, err := standbyPoolerClient.ExecuteQuery(context.Background(), "SELECT pg_is_wal_replay_paused()", 1)
 		require.NoError(t, err)
-		require.Len(t, queryResp.Rows, 1)
-		isPaused := string(queryResp.Rows[0].Values[0])
+		require.Len(t, queryResp.GetRows(), 1)
+		isPaused := string(queryResp.GetRows()[0].GetValues()[0])
 		assert.Equal(t, "true", isPaused, "WAL replay should be paused")
 		t.Log("Confirmed: WAL replay is paused")
 
@@ -436,8 +436,8 @@ func TestReplicationAPIs(t *testing.T) {
 		t.Log("Verifying replication is running after StartReplication...")
 		queryResp, err = standbyPoolerClient.ExecuteQuery(context.Background(), "SELECT pg_is_wal_replay_paused()", 1)
 		require.NoError(t, err)
-		require.Len(t, queryResp.Rows, 1)
-		isPaused = string(queryResp.Rows[0].Values[0])
+		require.Len(t, queryResp.GetRows(), 1)
+		isPaused = string(queryResp.GetRows()[0].GetValues()[0])
 		assert.Equal(t, "false", isPaused, "WAL replay should be running after StartReplication")
 
 		t.Log("StartReplication successfully resumed WAL replay")
@@ -469,8 +469,8 @@ func TestReplicationAPIs(t *testing.T) {
 		t.Log("Ensuring replication is running...")
 		queryResp, err := standbyPoolerClient.ExecuteQuery(context.Background(), "SELECT pg_is_wal_replay_paused()", 1)
 		require.NoError(t, err)
-		require.Len(t, queryResp.Rows, 1)
-		isPaused := string(queryResp.Rows[0].Values[0])
+		require.Len(t, queryResp.GetRows(), 1)
+		isPaused := string(queryResp.GetRows()[0].GetValues()[0])
 		if isPaused == "true" {
 			// Resume it first using StartReplication RPC
 			ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
@@ -487,10 +487,10 @@ func TestReplicationAPIs(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 		defer cancel()
 
-		stopReq := &multipoolermanagerdatapb.StopReplicationRequest{
+		stopReq := multipoolermanagerdatapb.StopReplicationRequest_builder{
 			Mode: multipoolermanagerdatapb.ReplicationPauseMode_REPLICATION_PAUSE_MODE_REPLAY_ONLY,
 			Wait: true,
-		}
+		}.Build()
 		_, err = standbyManagerClient.StopReplication(ctx, stopReq)
 		require.NoError(t, err, "StopReplication should succeed on standby")
 
@@ -498,8 +498,8 @@ func TestReplicationAPIs(t *testing.T) {
 		t.Log("Verifying replication is paused after StopReplication...")
 		queryResp, err = standbyPoolerClient.ExecuteQuery(context.Background(), "SELECT pg_is_wal_replay_paused()", 1)
 		require.NoError(t, err)
-		require.Len(t, queryResp.Rows, 1)
-		isPaused = string(queryResp.Rows[0].Values[0])
+		require.Len(t, queryResp.GetRows(), 1)
+		isPaused = string(queryResp.GetRows()[0].GetValues()[0])
 		assert.Equal(t, "true", isPaused, "WAL replay should be paused after StopReplication")
 
 		t.Log("StopReplication successfully paused WAL replay")
@@ -514,10 +514,10 @@ func TestReplicationAPIs(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 		defer cancel()
 
-		stopReq := &multipoolermanagerdatapb.StopReplicationRequest{
+		stopReq := multipoolermanagerdatapb.StopReplicationRequest_builder{
 			Mode: multipoolermanagerdatapb.ReplicationPauseMode_REPLICATION_PAUSE_MODE_REPLAY_ONLY,
 			Wait: true,
-		}
+		}.Build()
 		_, err = primaryManagerClient.StopReplication(ctx, stopReq)
 		require.Error(t, err, "StopReplication should fail on primary")
 		assert.Contains(t, err.Error(), "operation not allowed", "Error should indicate operation not allowed on PRIMARY")
@@ -536,18 +536,18 @@ func TestReplicationAPIs(t *testing.T) {
 		t.Log("Verifying replication is streaming...")
 		require.Eventually(t, func() bool {
 			queryResp, err := standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT COUNT(*) FROM pg_stat_wal_receiver WHERE status = 'streaming'", 1)
-			if err != nil || len(queryResp.Rows) == 0 {
+			if err != nil || len(queryResp.GetRows()) == 0 {
 				return false
 			}
-			count := string(queryResp.Rows[0].Values[0])
+			count := string(queryResp.GetRows()[0].GetValues()[0])
 			return count == "1"
 		}, 10*time.Second, 500*time.Millisecond, "Replication should be streaming")
 
 		// Verify WAL replay is NOT paused initially
 		queryResp, err := standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT pg_is_wal_replay_paused()", 1)
 		require.NoError(t, err)
-		require.Len(t, queryResp.Rows, 1)
-		isPaused := string(queryResp.Rows[0].Values[0])
+		require.Len(t, queryResp.GetRows(), 1)
+		isPaused := string(queryResp.GetRows()[0].GetValues()[0])
 		assert.Equal(t, "false", isPaused, "WAL replay should not be paused initially")
 		t.Log("Confirmed: Replication is streaming and replay is running")
 
@@ -562,10 +562,10 @@ func TestReplicationAPIs(t *testing.T) {
 		t.Log("Waiting for data to replicate to standby...")
 		require.Eventually(t, func() bool {
 			resp, err := standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT COUNT(*) FROM test_receiver_only WHERE data = 'before_stop'", 1)
-			if err != nil || len(resp.Rows) == 0 {
+			if err != nil || len(resp.GetRows()) == 0 {
 				return false
 			}
-			count := string(resp.Rows[0].Values[0])
+			count := string(resp.GetRows()[0].GetValues()[0])
 			return count == "1"
 		}, 10*time.Second, 500*time.Millisecond, "Data should replicate to standby")
 		t.Log("Confirmed: Data replicated successfully before stopping receiver")
@@ -573,10 +573,10 @@ func TestReplicationAPIs(t *testing.T) {
 		// Call StopReplication with RECEIVER_ONLY mode and wait=true
 		t.Log("Calling StopReplication with RECEIVER_ONLY mode and wait=true...")
 
-		stopReq := &multipoolermanagerdatapb.StopReplicationRequest{
+		stopReq := multipoolermanagerdatapb.StopReplicationRequest_builder{
 			Mode: multipoolermanagerdatapb.ReplicationPauseMode_REPLICATION_PAUSE_MODE_RECEIVER_ONLY,
 			Wait: true,
-		}
+		}.Build()
 		_, err = standbyManagerClient.StopReplication(utils.WithShortDeadline(t), stopReq)
 		require.NoError(t, err, "StopReplication with RECEIVER_ONLY should succeed")
 
@@ -584,23 +584,23 @@ func TestReplicationAPIs(t *testing.T) {
 		t.Log("Verifying receiver is disconnected (should be immediate with wait=true)...")
 		queryResp, err = standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT COUNT(*) FROM pg_stat_wal_receiver", 1)
 		require.NoError(t, err)
-		require.Len(t, queryResp.Rows, 1)
-		receiverCount := string(queryResp.Rows[0].Values[0])
+		require.Len(t, queryResp.GetRows(), 1)
+		receiverCount := string(queryResp.GetRows()[0].GetValues()[0])
 		assert.Equal(t, "0", receiverCount, "WAL receiver should be disconnected after RECEIVER_ONLY with wait=true")
 
 		// Verify WAL replay is still NOT paused (RECEIVER_ONLY shouldn't pause replay)
 		queryResp, err = standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT pg_is_wal_replay_paused()", 1)
 		require.NoError(t, err)
-		require.Len(t, queryResp.Rows, 1)
-		isPaused = string(queryResp.Rows[0].Values[0])
+		require.Len(t, queryResp.GetRows(), 1)
+		isPaused = string(queryResp.GetRows()[0].GetValues()[0])
 		assert.Equal(t, "false", isPaused, "WAL replay should still be running after RECEIVER_ONLY mode")
 
 		// Verify that data inserted before stopping receiver is still visible (replay continues on buffered WAL)
 		t.Log("Verifying that previously replicated data is still visible...")
 		dataResp, err := standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT COUNT(*) FROM test_receiver_only WHERE data = 'before_stop'", 1)
 		require.NoError(t, err)
-		require.Len(t, dataResp.Rows, 1)
-		count := string(dataResp.Rows[0].Values[0])
+		require.Len(t, dataResp.GetRows(), 1)
+		count := string(dataResp.GetRows()[0].GetValues()[0])
 		assert.Equal(t, "1", count, "Previously replicated data should still be visible")
 
 		// Insert new data on primary after receiver is disconnected
@@ -613,8 +613,8 @@ func TestReplicationAPIs(t *testing.T) {
 		time.Sleep(2 * time.Second) // Give it time to potentially replicate (it shouldn't)
 		newDataResp, err := standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT COUNT(*) FROM test_receiver_only WHERE data = 'after_stop'", 1)
 		require.NoError(t, err)
-		require.Len(t, newDataResp.Rows, 1)
-		newCount := string(newDataResp.Rows[0].Values[0])
+		require.Len(t, newDataResp.GetRows(), 1)
+		newCount := string(newDataResp.GetRows()[0].GetValues()[0])
 		assert.Equal(t, "0", newCount, "New data should NOT replicate after receiver disconnect")
 
 		t.Log("Confirmed: Receiver disconnected, replay still running, and new data does not replicate")
@@ -631,10 +631,10 @@ func TestReplicationAPIs(t *testing.T) {
 		t.Log("Verifying replication is streaming...")
 		require.Eventually(t, func() bool {
 			queryResp, err := standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT COUNT(*) FROM pg_stat_wal_receiver WHERE status = 'streaming'", 1)
-			if err != nil || len(queryResp.Rows) == 0 {
+			if err != nil || len(queryResp.GetRows()) == 0 {
 				return false
 			}
-			count := string(queryResp.Rows[0].Values[0])
+			count := string(queryResp.GetRows()[0].GetValues()[0])
 			return count == "1"
 		}, 10*time.Second, 500*time.Millisecond, "Replication should be streaming")
 
@@ -649,10 +649,10 @@ func TestReplicationAPIs(t *testing.T) {
 		t.Log("Waiting for data to replicate to standby...")
 		require.Eventually(t, func() bool {
 			resp, err := standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT COUNT(*) FROM test_receiver_only_nowait WHERE data = 'before_stop'", 1)
-			if err != nil || len(resp.Rows) == 0 {
+			if err != nil || len(resp.GetRows()) == 0 {
 				return false
 			}
-			count := string(resp.Rows[0].Values[0])
+			count := string(resp.GetRows()[0].GetValues()[0])
 			return count == "1"
 		}, 10*time.Second, 500*time.Millisecond, "Data should replicate to standby")
 		t.Log("Confirmed: Data replicated successfully before stopping receiver")
@@ -660,10 +660,10 @@ func TestReplicationAPIs(t *testing.T) {
 		// Call StopReplication with RECEIVER_ONLY mode and wait=false
 		t.Log("Calling StopReplication with RECEIVER_ONLY mode and wait=false (should return immediately)...")
 
-		stopReq := &multipoolermanagerdatapb.StopReplicationRequest{
+		stopReq := multipoolermanagerdatapb.StopReplicationRequest_builder{
 			Mode: multipoolermanagerdatapb.ReplicationPauseMode_REPLICATION_PAUSE_MODE_RECEIVER_ONLY,
 			Wait: false,
-		}
+		}.Build()
 		_, err := standbyManagerClient.StopReplication(utils.WithShortDeadline(t), stopReq)
 		require.NoError(t, err, "StopReplication with RECEIVER_ONLY and wait=false should succeed")
 
@@ -671,26 +671,26 @@ func TestReplicationAPIs(t *testing.T) {
 		t.Log("Verifying receiver eventually disconnects asynchronously...")
 		require.Eventually(t, func() bool {
 			queryResp, err := standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT COUNT(*) FROM pg_stat_wal_receiver", 1)
-			if err != nil || len(queryResp.Rows) == 0 {
+			if err != nil || len(queryResp.GetRows()) == 0 {
 				return false
 			}
-			count := string(queryResp.Rows[0].Values[0])
+			count := string(queryResp.GetRows()[0].GetValues()[0])
 			return count == "0"
 		}, 10*time.Second, 500*time.Millisecond, "WAL receiver should eventually disconnect")
 
 		// Verify WAL replay is still NOT paused
 		queryResp, err := standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT pg_is_wal_replay_paused()", 1)
 		require.NoError(t, err)
-		require.Len(t, queryResp.Rows, 1)
-		isPaused := string(queryResp.Rows[0].Values[0])
+		require.Len(t, queryResp.GetRows(), 1)
+		isPaused := string(queryResp.GetRows()[0].GetValues()[0])
 		assert.Equal(t, "false", isPaused, "WAL replay should still be running after RECEIVER_ONLY mode")
 
 		// Verify that data inserted before stopping receiver is still visible
 		t.Log("Verifying that previously replicated data is still visible...")
 		dataResp, err := standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT COUNT(*) FROM test_receiver_only_nowait WHERE data = 'before_stop'", 1)
 		require.NoError(t, err)
-		require.Len(t, dataResp.Rows, 1)
-		count := string(dataResp.Rows[0].Values[0])
+		require.Len(t, dataResp.GetRows(), 1)
+		count := string(dataResp.GetRows()[0].GetValues()[0])
 		assert.Equal(t, "1", count, "Previously replicated data should still be visible")
 
 		t.Log("Confirmed: Receiver eventually disconnected, replay still running, and data visible")
@@ -707,18 +707,18 @@ func TestReplicationAPIs(t *testing.T) {
 		t.Log("Verifying replication is streaming...")
 		require.Eventually(t, func() bool {
 			queryResp, err := standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT COUNT(*) FROM pg_stat_wal_receiver WHERE status = 'streaming'", 1)
-			if err != nil || len(queryResp.Rows) == 0 {
+			if err != nil || len(queryResp.GetRows()) == 0 {
 				return false
 			}
-			count := string(queryResp.Rows[0].Values[0])
+			count := string(queryResp.GetRows()[0].GetValues()[0])
 			return count == "1"
 		}, 10*time.Second, 500*time.Millisecond, "Replication should be streaming")
 
 		// Verify WAL replay is NOT paused initially
 		queryResp, err := standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT pg_is_wal_replay_paused()", 1)
 		require.NoError(t, err)
-		require.Len(t, queryResp.Rows, 1)
-		isPaused := string(queryResp.Rows[0].Values[0])
+		require.Len(t, queryResp.GetRows(), 1)
+		isPaused := string(queryResp.GetRows()[0].GetValues()[0])
 		assert.Equal(t, "false", isPaused, "WAL replay should not be paused initially")
 
 		// Create a test table and insert data on primary before pausing
@@ -732,10 +732,10 @@ func TestReplicationAPIs(t *testing.T) {
 		t.Log("Waiting for initial data to replicate to standby...")
 		require.Eventually(t, func() bool {
 			resp, err := standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT COUNT(*) FROM test_replay_and_receiver WHERE data = 'before_pause'", 1)
-			if err != nil || len(resp.Rows) == 0 {
+			if err != nil || len(resp.GetRows()) == 0 {
 				return false
 			}
-			count := string(resp.Rows[0].Values[0])
+			count := string(resp.GetRows()[0].GetValues()[0])
 			return count == "1"
 		}, 10*time.Second, 500*time.Millisecond, "Initial data should replicate to standby")
 		t.Log("Confirmed: Initial data replicated successfully")
@@ -743,10 +743,10 @@ func TestReplicationAPIs(t *testing.T) {
 		// Call StopReplication with REPLAY_AND_RECEIVER mode and wait=true
 		t.Log("Calling StopReplication with REPLAY_AND_RECEIVER mode and wait=true...")
 
-		stopReq := &multipoolermanagerdatapb.StopReplicationRequest{
+		stopReq := multipoolermanagerdatapb.StopReplicationRequest_builder{
 			Mode: multipoolermanagerdatapb.ReplicationPauseMode_REPLICATION_PAUSE_MODE_REPLAY_AND_RECEIVER,
 			Wait: true,
-		}
+		}.Build()
 		_, err = standbyManagerClient.StopReplication(utils.WithShortDeadline(t), stopReq)
 		require.NoError(t, err, "StopReplication with REPLAY_AND_RECEIVER should succeed")
 
@@ -754,15 +754,15 @@ func TestReplicationAPIs(t *testing.T) {
 		t.Log("Verifying replay is paused (should be immediate with wait=true)...")
 		queryResp, err = standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT pg_is_wal_replay_paused()", 1)
 		require.NoError(t, err)
-		require.Len(t, queryResp.Rows, 1)
-		isPaused = string(queryResp.Rows[0].Values[0])
+		require.Len(t, queryResp.GetRows(), 1)
+		isPaused = string(queryResp.GetRows()[0].GetValues()[0])
 		assert.Equal(t, "true", isPaused, "WAL replay should be paused after REPLAY_AND_RECEIVER with wait=true")
 
 		t.Log("Verifying receiver is disconnected (should be immediate with wait=true)...")
 		queryResp, err = standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT COUNT(*) FROM pg_stat_wal_receiver", 1)
 		require.NoError(t, err)
-		require.Len(t, queryResp.Rows, 1)
-		receiverCount := string(queryResp.Rows[0].Values[0])
+		require.Len(t, queryResp.GetRows(), 1)
+		receiverCount := string(queryResp.GetRows()[0].GetValues()[0])
 		assert.Equal(t, "0", receiverCount, "WAL receiver should be disconnected after REPLAY_AND_RECEIVER with wait=true")
 
 		// Insert new data on primary after stopping replication
@@ -775,15 +775,15 @@ func TestReplicationAPIs(t *testing.T) {
 		time.Sleep(2 * time.Second) // Give it time to potentially replicate (it shouldn't)
 		newDataResp, err := standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT COUNT(*) FROM test_replay_and_receiver WHERE data = 'after_pause'", 1)
 		require.NoError(t, err)
-		require.Len(t, newDataResp.Rows, 1)
-		newCount := string(newDataResp.Rows[0].Values[0])
+		require.Len(t, newDataResp.GetRows(), 1)
+		newCount := string(newDataResp.GetRows()[0].GetValues()[0])
 		assert.Equal(t, "0", newCount, "New data should NOT appear on standby after REPLAY_AND_RECEIVER stop")
 
 		// Verify old data is still visible
 		oldDataResp, err := standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT COUNT(*) FROM test_replay_and_receiver WHERE data = 'before_pause'", 1)
 		require.NoError(t, err)
-		require.Len(t, oldDataResp.Rows, 1)
-		oldCount := string(oldDataResp.Rows[0].Values[0])
+		require.Len(t, oldDataResp.GetRows(), 1)
+		oldCount := string(oldDataResp.GetRows()[0].GetValues()[0])
 		assert.Equal(t, "1", oldCount, "Old data should still be visible")
 
 		t.Log("Confirmed: Both replay paused and receiver disconnected, new data does not replicate")
@@ -799,10 +799,10 @@ func TestReplicationAPIs(t *testing.T) {
 		t.Log("Verifying replication is streaming...")
 		require.Eventually(t, func() bool {
 			queryResp, err := standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT COUNT(*) FROM pg_stat_wal_receiver WHERE status = 'streaming'", 1)
-			if err != nil || len(queryResp.Rows) == 0 {
+			if err != nil || len(queryResp.GetRows()) == 0 {
 				return false
 			}
-			count := string(queryResp.Rows[0].Values[0])
+			count := string(queryResp.GetRows()[0].GetValues()[0])
 			return count == "1"
 		}, 10*time.Second, 500*time.Millisecond, "Replication should be streaming")
 
@@ -817,10 +817,10 @@ func TestReplicationAPIs(t *testing.T) {
 		t.Log("Waiting for initial data to replicate to standby...")
 		require.Eventually(t, func() bool {
 			resp, err := standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT COUNT(*) FROM test_replay_and_receiver_nowait WHERE data = 'before_pause'", 1)
-			if err != nil || len(resp.Rows) == 0 {
+			if err != nil || len(resp.GetRows()) == 0 {
 				return false
 			}
-			count := string(resp.Rows[0].Values[0])
+			count := string(resp.GetRows()[0].GetValues()[0])
 			return count == "1"
 		}, 10*time.Second, 500*time.Millisecond, "Initial data should replicate to standby")
 		t.Log("Confirmed: Initial data replicated successfully")
@@ -828,10 +828,10 @@ func TestReplicationAPIs(t *testing.T) {
 		// Call StopReplication with REPLAY_AND_RECEIVER mode and wait=false
 		t.Log("Calling StopReplication with REPLAY_AND_RECEIVER mode and wait=false (should return immediately)...")
 
-		stopReq := &multipoolermanagerdatapb.StopReplicationRequest{
+		stopReq := multipoolermanagerdatapb.StopReplicationRequest_builder{
 			Mode: multipoolermanagerdatapb.ReplicationPauseMode_REPLICATION_PAUSE_MODE_REPLAY_AND_RECEIVER,
 			Wait: false,
-		}
+		}.Build()
 		_, err := standbyManagerClient.StopReplication(utils.WithShortDeadline(t), stopReq)
 		require.NoError(t, err, "StopReplication with REPLAY_AND_RECEIVER and wait=false should succeed")
 
@@ -839,20 +839,20 @@ func TestReplicationAPIs(t *testing.T) {
 		t.Log("Verifying replay eventually pauses asynchronously...")
 		require.Eventually(t, func() bool {
 			queryResp, err := standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT pg_is_wal_replay_paused()", 1)
-			if err != nil || len(queryResp.Rows) == 0 {
+			if err != nil || len(queryResp.GetRows()) == 0 {
 				return false
 			}
-			isPaused := string(queryResp.Rows[0].Values[0])
+			isPaused := string(queryResp.GetRows()[0].GetValues()[0])
 			return isPaused == "true"
 		}, 10*time.Second, 500*time.Millisecond, "WAL replay should eventually pause")
 
 		t.Log("Verifying receiver eventually disconnects asynchronously...")
 		require.Eventually(t, func() bool {
 			queryResp, err := standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT COUNT(*) FROM pg_stat_wal_receiver", 1)
-			if err != nil || len(queryResp.Rows) == 0 {
+			if err != nil || len(queryResp.GetRows()) == 0 {
 				return false
 			}
-			count := string(queryResp.Rows[0].Values[0])
+			count := string(queryResp.GetRows()[0].GetValues()[0])
 			return count == "0"
 		}, 10*time.Second, 500*time.Millisecond, "WAL receiver should eventually disconnect")
 
@@ -860,8 +860,8 @@ func TestReplicationAPIs(t *testing.T) {
 		t.Log("Verifying that previously replicated data is still visible...")
 		oldDataResp, err := standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT COUNT(*) FROM test_replay_and_receiver_nowait WHERE data = 'before_pause'", 1)
 		require.NoError(t, err)
-		require.Len(t, oldDataResp.Rows, 1)
-		oldCount := string(oldDataResp.Rows[0].Values[0])
+		require.Len(t, oldDataResp.GetRows(), 1)
+		oldCount := string(oldDataResp.GetRows()[0].GetValues()[0])
 		assert.Equal(t, "1", oldCount, "Previously replicated data should still be visible")
 
 		t.Log("Confirmed: Both replay paused and receiver disconnected eventually, old data visible")
@@ -875,20 +875,20 @@ func TestReplicationAPIs(t *testing.T) {
 
 		// First ensure replication is configured
 		t.Log("Ensuring replication is configured...")
-		_, err = standbyManagerClient.SetTerm(utils.WithShortDeadline(t), &multipoolermanagerdatapb.SetTermRequest{
-			Term: &multipoolermanagerdatapb.ConsensusTerm{
+		_, err = standbyManagerClient.SetTerm(utils.WithShortDeadline(t), multipoolermanagerdatapb.SetTermRequest_builder{
+			Term: multipoolermanagerdatapb.ConsensusTerm_builder{
 				TermNumber: 1,
-			},
-		})
+			}.Build(),
+		}.Build())
 		require.NoError(t, err, "SetTerm should succeed on standby")
-		setPrimaryReq := &multipoolermanagerdatapb.SetPrimaryConnInfoRequest{
+		setPrimaryReq := multipoolermanagerdatapb.SetPrimaryConnInfoRequest_builder{
 			Host:                  "localhost",
 			Port:                  int32(setup.PrimaryPgctld.PgPort),
 			StartReplicationAfter: true,
 			StopReplicationBefore: false,
 			CurrentTerm:           1,
 			Force:                 false,
-		}
+		}.Build()
 		_, err = standbyManagerClient.SetPrimaryConnInfo(utils.WithShortDeadline(t), setPrimaryReq)
 		require.NoError(t, err, "SetPrimaryConnInfo should succeed")
 
@@ -896,10 +896,10 @@ func TestReplicationAPIs(t *testing.T) {
 		t.Log("Verifying replication is working...")
 		require.Eventually(t, func() bool {
 			queryResp, err := standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT COUNT(*) FROM pg_stat_wal_receiver WHERE status = 'streaming'", 1)
-			if err != nil || len(queryResp.Rows) == 0 {
+			if err != nil || len(queryResp.GetRows()) == 0 {
 				return false
 			}
-			count := string(queryResp.Rows[0].Values[0])
+			count := string(queryResp.GetRows()[0].GetValues()[0])
 			return count == "1"
 		}, 10*time.Second, 500*time.Millisecond, "Replication should be streaming")
 		t.Log("Confirmed: Replication is streaming")
@@ -916,8 +916,8 @@ func TestReplicationAPIs(t *testing.T) {
 		t.Log("Verifying replication is disconnected after ResetReplication...")
 		queryResp, err := standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT COUNT(*) FROM pg_stat_wal_receiver", 1)
 		require.NoError(t, err, "Query should succeed")
-		require.NotEmpty(t, queryResp.Rows, "Query should return a row")
-		count := string(queryResp.Rows[0].Values[0])
+		require.NotEmpty(t, queryResp.GetRows(), "Query should return a row")
+		count := string(queryResp.GetRows()[0].GetValues()[0])
 		require.Equal(t, "0", count, "WAL receiver should be disconnected after ResetReplication")
 
 		t.Log("ResetReplication successfully disconnected standby from primary")
@@ -933,37 +933,37 @@ func TestReplicationAPIs(t *testing.T) {
 		// Get LSN from primary after the insert
 		primaryPosResp, err := primaryManagerClient.PrimaryPosition(utils.WithShortDeadline(t), &multipoolermanagerdatapb.PrimaryPositionRequest{})
 		require.NoError(t, err)
-		primaryLSNAfterInsert := primaryPosResp.LsnPosition
+		primaryLSNAfterInsert := primaryPosResp.GetLsnPosition()
 		t.Logf("Primary LSN after insert: %s", primaryLSNAfterInsert)
 
 		// Verify standby CANNOT reach the primary LSN (replication is disconnected)
 		t.Log("Verifying standby cannot reach primary LSN (replication disconnected)...")
-		waitReq := &multipoolermanagerdatapb.WaitForLSNRequest{
+		waitReq := multipoolermanagerdatapb.WaitForLSNRequest_builder{
 			TargetLsn: primaryLSNAfterInsert,
-		}
+		}.Build()
 		_, err = standbyManagerClient.WaitForLSN(utils.WithShortDeadline(t), waitReq)
 		require.Error(t, err, "WaitForLSN should timeout since replication is disconnected")
 		t.Log("Confirmed: Standby cannot reach primary LSN (data did NOT replicate)")
 
 		// Re-enable replication using SetPrimaryConnInfo
 		t.Log("Re-enabling replication...")
-		setPrimaryReq = &multipoolermanagerdatapb.SetPrimaryConnInfoRequest{
+		setPrimaryReq = multipoolermanagerdatapb.SetPrimaryConnInfoRequest_builder{
 			Host:                  "localhost",
 			Port:                  int32(setup.PrimaryPgctld.PgPort),
 			StartReplicationAfter: true,
 			StopReplicationBefore: false,
 			CurrentTerm:           1,
 			Force:                 false,
-		}
+		}.Build()
 		_, err = standbyManagerClient.SetPrimaryConnInfo(utils.WithShortDeadline(t), setPrimaryReq)
 		require.NoError(t, err, "SetPrimaryConnInfo should succeed")
 
 		// Wait for standby to catch up to primary's LSN
 		t.Logf("Waiting for standby to catch up to primary LSN: %s", primaryLSNAfterInsert)
 
-		waitReq = &multipoolermanagerdatapb.WaitForLSNRequest{
+		waitReq = multipoolermanagerdatapb.WaitForLSNRequest_builder{
 			TargetLsn: primaryLSNAfterInsert,
-		}
+		}.Build()
 		_, err = standbyManagerClient.WaitForLSN(utils.WithShortDeadline(t), waitReq)
 		require.NoError(t, err, "Standby should catch up after re-enabling replication")
 
@@ -971,8 +971,8 @@ func TestReplicationAPIs(t *testing.T) {
 		t.Log("Verifying data replicated after re-enabling replication...")
 		dataResp, err := standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT COUNT(*) FROM test_reset_replication", 1)
 		require.NoError(t, err)
-		require.Len(t, dataResp.Rows, 1)
-		rowCount := string(dataResp.Rows[0].Values[0])
+		require.Len(t, dataResp.GetRows(), 1)
+		rowCount := string(dataResp.GetRows()[0].GetValues()[0])
 		assert.Equal(t, "1", rowCount, "Should have 1 row on standby after re-enabling replication")
 
 		t.Log("Confirmed: Data successfully replicated after re-enabling replication")
@@ -1053,23 +1053,23 @@ func TestStandbyReplicationStatus(t *testing.T) {
 				return false
 			}
 			// Config cleared when PrimaryConnInfo is nil or Host is empty
-			return statusResp.Status.PrimaryConnInfo == nil ||
-				statusResp.Status.PrimaryConnInfo.Host == ""
+			return !statusResp.GetStatus().HasPrimaryConnInfo() ||
+				statusResp.GetStatus().GetPrimaryConnInfo().GetHost() == ""
 		}, 5*time.Second, 200*time.Millisecond, "primary_conninfo should be cleared after ResetReplication")
 
 		// Get final status
 		statusResp, err := standbyManagerClient.StandbyReplicationStatus(utils.WithShortDeadline(t), &multipoolermanagerdatapb.StandbyReplicationStatusRequest{})
 		require.NoError(t, err, "ReplicationStatus should succeed on standby")
-		require.NotNil(t, statusResp.Status, "Status should not be nil")
+		require.NotNil(t, statusResp.GetStatus(), "Status should not be nil")
 
 		// Verify fields
-		assert.NotEmpty(t, statusResp.Status.LastReplayLsn, "Last replay LSN should not be empty")
-		assert.NotEmpty(t, statusResp.Status.LastReceiveLsn, "Last receive LSN should not be empty")
-		assert.False(t, statusResp.Status.IsWalReplayPaused, "WAL replay should not be paused by default")
+		assert.NotEmpty(t, statusResp.GetStatus().GetLastReplayLsn(), "Last replay LSN should not be empty")
+		assert.NotEmpty(t, statusResp.GetStatus().GetLastReceiveLsn(), "Last receive LSN should not be empty")
+		assert.False(t, statusResp.GetStatus().GetIsWalReplayPaused(), "WAL replay should not be paused by default")
 
 		// PrimaryConnInfo should be nil or empty when no replication is configured
-		if statusResp.Status.PrimaryConnInfo != nil {
-			assert.Empty(t, statusResp.Status.PrimaryConnInfo.Host, "Host should be empty when no replication configured")
+		if statusResp.GetStatus().HasPrimaryConnInfo() {
+			assert.Empty(t, statusResp.GetStatus().GetPrimaryConnInfo().GetHost(), "Host should be empty when no replication configured")
 		}
 	})
 
@@ -1078,14 +1078,14 @@ func TestStandbyReplicationStatus(t *testing.T) {
 
 		// Configure replication
 		t.Log("Configuring replication on standby...")
-		setPrimaryReq := &multipoolermanagerdatapb.SetPrimaryConnInfoRequest{
+		setPrimaryReq := multipoolermanagerdatapb.SetPrimaryConnInfoRequest_builder{
 			Host:                  "localhost",
 			Port:                  int32(setup.PrimaryPgctld.PgPort),
 			StartReplicationAfter: true,
 			StopReplicationBefore: false,
 			CurrentTerm:           1,
 			Force:                 false,
-		}
+		}.Build()
 		_, err := standbyManagerClient.SetPrimaryConnInfo(utils.WithShortDeadline(t), setPrimaryReq)
 		require.NoError(t, err, "SetPrimaryConnInfo should succeed")
 
@@ -1098,29 +1098,29 @@ func TestStandbyReplicationStatus(t *testing.T) {
 				return false
 			}
 			// Config set when PrimaryConnInfo is not nil and Host is populated
-			return statusResp.Status.PrimaryConnInfo != nil &&
-				statusResp.Status.PrimaryConnInfo.Host != ""
+			return statusResp.GetStatus().HasPrimaryConnInfo() &&
+				statusResp.GetStatus().GetPrimaryConnInfo().GetHost() != ""
 		}, 5*time.Second, 200*time.Millisecond, "primary_conninfo should be set after SetPrimaryConnInfo")
 
 		// Get final status
 		statusResp, err := standbyManagerClient.StandbyReplicationStatus(utils.WithShortDeadline(t), &multipoolermanagerdatapb.StandbyReplicationStatusRequest{})
 		require.NoError(t, err, "ReplicationStatus should succeed")
-		require.NotNil(t, statusResp.Status, "Status should not be nil")
+		require.NotNil(t, statusResp.GetStatus(), "Status should not be nil")
 
 		// Verify LSN
-		assert.NotEmpty(t, statusResp.Status.LastReplayLsn, "Last replay LSN should not be empty")
-		assert.Contains(t, statusResp.Status.LastReplayLsn, "/", "Last replay LSN should be in PostgreSQL format (e.g., 0/1234ABCD)")
-		assert.NotEmpty(t, statusResp.Status.LastReceiveLsn, "Last receive LSN should not be empty")
-		assert.Contains(t, statusResp.Status.LastReceiveLsn, "/", "Last receive LSN should be in PostgreSQL format (e.g., 0/1234ABCD)")
+		assert.NotEmpty(t, statusResp.GetStatus().GetLastReplayLsn(), "Last replay LSN should not be empty")
+		assert.Contains(t, statusResp.GetStatus().GetLastReplayLsn(), "/", "Last replay LSN should be in PostgreSQL format (e.g., 0/1234ABCD)")
+		assert.NotEmpty(t, statusResp.GetStatus().GetLastReceiveLsn(), "Last receive LSN should not be empty")
+		assert.Contains(t, statusResp.GetStatus().GetLastReceiveLsn(), "/", "Last receive LSN should be in PostgreSQL format (e.g., 0/1234ABCD)")
 
 		// Verify replication is not paused
-		assert.False(t, statusResp.Status.IsWalReplayPaused, "WAL replay should not be paused")
+		assert.False(t, statusResp.GetStatus().GetIsWalReplayPaused(), "WAL replay should not be paused")
 
 		// Verify PrimaryConnInfo is populated
-		require.NotNil(t, statusResp.Status.PrimaryConnInfo, "PrimaryConnInfo should not be nil")
-		assert.Equal(t, "localhost", statusResp.Status.PrimaryConnInfo.Host, "Host should match")
-		assert.Equal(t, int32(setup.PrimaryPgctld.PgPort), statusResp.Status.PrimaryConnInfo.Port, "Port should match")
-		assert.NotEmpty(t, statusResp.Status.PrimaryConnInfo.Raw, "Raw connection string should not be empty")
+		require.NotNil(t, statusResp.GetStatus().GetPrimaryConnInfo(), "PrimaryConnInfo should not be nil")
+		assert.Equal(t, "localhost", statusResp.GetStatus().GetPrimaryConnInfo().GetHost(), "Host should match")
+		assert.Equal(t, int32(setup.PrimaryPgctld.PgPort), statusResp.GetStatus().GetPrimaryConnInfo().GetPort(), "Port should match")
+		assert.NotEmpty(t, statusResp.GetStatus().GetPrimaryConnInfo().GetRaw(), "Raw connection string should not be empty")
 	})
 
 	t.Run("ReplicationStatus_Standby_PausedReplication", func(t *testing.T) {
@@ -1128,21 +1128,21 @@ func TestStandbyReplicationStatus(t *testing.T) {
 
 		// Configure replication but stop it
 		t.Log("Configuring replication and then stopping it...")
-		_, err := standbyManagerClient.SetTerm(utils.WithShortDeadline(t), &multipoolermanagerdatapb.SetTermRequest{
-			Term: &multipoolermanagerdatapb.ConsensusTerm{
+		_, err := standbyManagerClient.SetTerm(utils.WithShortDeadline(t), multipoolermanagerdatapb.SetTermRequest_builder{
+			Term: multipoolermanagerdatapb.ConsensusTerm_builder{
 				TermNumber: 1,
-			},
-		})
+			}.Build(),
+		}.Build())
 		require.NoError(t, err, "SetTerm should succeed on standby")
 
-		setPrimaryReq := &multipoolermanagerdatapb.SetPrimaryConnInfoRequest{
+		setPrimaryReq := multipoolermanagerdatapb.SetPrimaryConnInfoRequest_builder{
 			Host:                  "localhost",
 			Port:                  int32(setup.PrimaryPgctld.PgPort),
 			StartReplicationAfter: false,
 			StopReplicationBefore: true,
 			CurrentTerm:           1,
 			Force:                 false,
-		}
+		}.Build()
 		_, err = standbyManagerClient.SetPrimaryConnInfo(utils.WithShortDeadline(t), setPrimaryReq)
 		require.NoError(t, err, "SetPrimaryConnInfo should succeed")
 
@@ -1154,17 +1154,17 @@ func TestStandbyReplicationStatus(t *testing.T) {
 				t.Logf("ReplicationStatus error: %v", err)
 				return false
 			}
-			return statusResp.Status.IsWalReplayPaused
+			return statusResp.GetStatus().GetIsWalReplayPaused()
 		}, 5*time.Second, 200*time.Millisecond, "WAL replay should be paused after SetPrimaryConnInfo with StopReplicationBefore")
 
 		// Get final status
 		statusResp, err := standbyManagerClient.StandbyReplicationStatus(utils.WithShortDeadline(t), &multipoolermanagerdatapb.StandbyReplicationStatusRequest{})
 		require.NoError(t, err, "ReplicationStatus should succeed")
-		require.NotNil(t, statusResp.Status, "Status should not be nil")
+		require.NotNil(t, statusResp.GetStatus(), "Status should not be nil")
 
 		// Verify WAL replay is paused
-		assert.True(t, statusResp.Status.IsWalReplayPaused, "WAL replay should be paused")
-		assert.NotEmpty(t, statusResp.Status.WalReplayPauseState, "Pause state should not be empty")
+		assert.True(t, statusResp.GetStatus().GetIsWalReplayPaused(), "WAL replay should be paused")
+		assert.NotEmpty(t, statusResp.GetStatus().GetWalReplayPauseState(), "Pause state should not be empty")
 		// Clean up: resume replication
 		startReq := &multipoolermanagerdatapb.StartReplicationRequest{}
 		_, err = standbyManagerClient.StartReplication(utils.WithShortDeadline(t), startReq)
@@ -1208,10 +1208,10 @@ func TestStopReplicationAndGetStatus(t *testing.T) {
 		// StopReplicationAndGetStatus should fail on PRIMARY pooler type
 		t.Log("Testing StopReplicationAndGetStatus on PRIMARY (should fail)...")
 
-		_, err := primaryManagerClient.StopReplicationAndGetStatus(utils.WithShortDeadline(t), &multipoolermanagerdatapb.StopReplicationAndGetStatusRequest{
+		_, err := primaryManagerClient.StopReplicationAndGetStatus(utils.WithShortDeadline(t), multipoolermanagerdatapb.StopReplicationAndGetStatusRequest_builder{
 			Mode: multipoolermanagerdatapb.ReplicationPauseMode_REPLICATION_PAUSE_MODE_REPLAY_ONLY,
 			Wait: true,
-		})
+		}.Build())
 		require.Error(t, err, "StopReplicationAndGetStatus should fail on PRIMARY")
 		assert.Contains(t, err.Error(), "operation not allowed", "Error should indicate operation not allowed on PRIMARY")
 		t.Log("Confirmed: StopReplicationAndGetStatus correctly rejected on PRIMARY pooler")
@@ -1230,22 +1230,22 @@ func TestStopReplicationAndGetStatus(t *testing.T) {
 		defer primaryPoolerClient.Close()
 
 		// First, configure and start replication
-		_, err = standbyManagerClient.SetTerm(utils.WithShortDeadline(t), &multipoolermanagerdatapb.SetTermRequest{
-			Term: &multipoolermanagerdatapb.ConsensusTerm{
+		_, err = standbyManagerClient.SetTerm(utils.WithShortDeadline(t), multipoolermanagerdatapb.SetTermRequest_builder{
+			Term: multipoolermanagerdatapb.ConsensusTerm_builder{
 				TermNumber: 1,
-			},
-		})
+			}.Build(),
+		}.Build())
 		require.NoError(t, err, "SetTerm should succeed on standby")
 
 		t.Log("Configuring replication on standby...")
-		setPrimaryReq := &multipoolermanagerdatapb.SetPrimaryConnInfoRequest{
+		setPrimaryReq := multipoolermanagerdatapb.SetPrimaryConnInfoRequest_builder{
 			Host:                  "localhost",
 			Port:                  int32(setup.PrimaryPgctld.PgPort),
 			StartReplicationAfter: true,
 			StopReplicationBefore: false,
 			CurrentTerm:           1,
 			Force:                 false,
-		}
+		}.Build()
 		_, err = standbyManagerClient.SetPrimaryConnInfo(utils.WithShortDeadline(t), setPrimaryReq)
 		require.NoError(t, err, "SetPrimaryConnInfo should succeed")
 
@@ -1256,40 +1256,40 @@ func TestStopReplicationAndGetStatus(t *testing.T) {
 			if err != nil {
 				return false
 			}
-			return statusResp.Status.PrimaryConnInfo != nil &&
-				statusResp.Status.PrimaryConnInfo.Host != "" &&
-				!statusResp.Status.IsWalReplayPaused
+			return statusResp.GetStatus().HasPrimaryConnInfo() &&
+				statusResp.GetStatus().GetPrimaryConnInfo().GetHost() != "" &&
+				!statusResp.GetStatus().GetIsWalReplayPaused()
 		}, 5*time.Second, 200*time.Millisecond, "Replication should be running")
 
 		// Call StopReplicationAndGetStatus
 		// Note: This method waits internally for pause to complete, so status is guaranteed to be paused when it returns
 		t.Log("Calling StopReplicationAndGetStatus...")
-		stopResp, err := standbyManagerClient.StopReplicationAndGetStatus(utils.WithShortDeadline(t), &multipoolermanagerdatapb.StopReplicationAndGetStatusRequest{
+		stopResp, err := standbyManagerClient.StopReplicationAndGetStatus(utils.WithShortDeadline(t), multipoolermanagerdatapb.StopReplicationAndGetStatusRequest_builder{
 			Mode: multipoolermanagerdatapb.ReplicationPauseMode_REPLICATION_PAUSE_MODE_REPLAY_ONLY,
 			Wait: true,
-		})
+		}.Build())
 		require.NoError(t, err, "StopReplicationAndGetStatus should succeed on standby")
 		require.NotNil(t, stopResp, "Response should not be nil")
-		require.NotNil(t, stopResp.Status, "Status should not be nil")
+		require.NotNil(t, stopResp.GetStatus(), "Status should not be nil")
 
 		t.Log("Verifying status shows replication is paused...")
-		assert.True(t, stopResp.Status.IsWalReplayPaused, "WAL replay should be paused after StopReplicationAndGetStatus")
-		assert.NotEmpty(t, stopResp.Status.WalReplayPauseState, "Pause state should not be empty")
+		assert.True(t, stopResp.GetStatus().GetIsWalReplayPaused(), "WAL replay should be paused after StopReplicationAndGetStatus")
+		assert.NotEmpty(t, stopResp.GetStatus().GetWalReplayPauseState(), "Pause state should not be empty")
 
 		// Verify LSN is populated
-		assert.NotEmpty(t, stopResp.Status.LastReplayLsn, "Last replay LSN should not be empty")
-		assert.Contains(t, stopResp.Status.LastReplayLsn, "/", "Last replay LSN should be in PostgreSQL format")
-		assert.NotEmpty(t, stopResp.Status.LastReceiveLsn, "Last receive LSN should not be empty")
-		assert.Contains(t, stopResp.Status.LastReceiveLsn, "/", "Last receive LSN should be in PostgreSQL format")
+		assert.NotEmpty(t, stopResp.GetStatus().GetLastReplayLsn(), "Last replay LSN should not be empty")
+		assert.Contains(t, stopResp.GetStatus().GetLastReplayLsn(), "/", "Last replay LSN should be in PostgreSQL format")
+		assert.NotEmpty(t, stopResp.GetStatus().GetLastReceiveLsn(), "Last receive LSN should not be empty")
+		assert.Contains(t, stopResp.GetStatus().GetLastReceiveLsn(), "/", "Last receive LSN should be in PostgreSQL format")
 
 		// Verify PrimaryConnInfo is populated (should still be set even though replication is paused)
-		require.NotNil(t, stopResp.Status.PrimaryConnInfo, "PrimaryConnInfo should not be nil")
-		assert.Equal(t, "localhost", stopResp.Status.PrimaryConnInfo.Host, "Host should match")
-		assert.Equal(t, int32(setup.PrimaryPgctld.PgPort), stopResp.Status.PrimaryConnInfo.Port, "Port should match")
-		assert.NotEmpty(t, stopResp.Status.PrimaryConnInfo.Raw, "Raw connection string should not be empty")
+		require.NotNil(t, stopResp.GetStatus().GetPrimaryConnInfo(), "PrimaryConnInfo should not be nil")
+		assert.Equal(t, "localhost", stopResp.GetStatus().GetPrimaryConnInfo().GetHost(), "Host should match")
+		assert.Equal(t, int32(setup.PrimaryPgctld.PgPort), stopResp.GetStatus().GetPrimaryConnInfo().GetPort(), "Port should match")
+		assert.NotEmpty(t, stopResp.GetStatus().GetPrimaryConnInfo().GetRaw(), "Raw connection string should not be empty")
 
 		// Store the LSN after stopping
-		lsnAfterStop := stopResp.Status.LastReplayLsn
+		lsnAfterStop := stopResp.GetStatus().GetLastReplayLsn()
 		t.Logf("Standby LSN after stopping replication: %s", lsnAfterStop)
 
 		// Write data to primary (this should NOT replicate to standby since replication is stopped)
@@ -1310,7 +1310,7 @@ func TestStopReplicationAndGetStatus(t *testing.T) {
 		t.Log("Verifying standby LSN hasn't advanced...")
 		statusAfterWrite, err := standbyManagerClient.StandbyReplicationStatus(utils.WithShortDeadline(t), &multipoolermanagerdatapb.StandbyReplicationStatusRequest{})
 		require.NoError(t, err, "ReplicationStatus should succeed")
-		lsnAfterWrite := statusAfterWrite.Status.LastReplayLsn
+		lsnAfterWrite := statusAfterWrite.GetStatus().GetLastReplayLsn()
 		t.Logf("Standby LSN after writes to primary: %s", lsnAfterWrite)
 
 		assert.Equal(t, lsnAfterStop, lsnAfterWrite, "Standby replay LSN should not have advanced after primary writes (replication is stopped)")
@@ -1329,26 +1329,26 @@ func TestStopReplicationAndGetStatus(t *testing.T) {
 		// First, stop replication
 		// StopReplication now waits internally for the pause to complete, so no manual wait needed
 		t.Log("Stopping replication first...")
-		_, err := standbyManagerClient.StopReplication(utils.WithShortDeadline(t), &multipoolermanagerdatapb.StopReplicationRequest{
+		_, err := standbyManagerClient.StopReplication(utils.WithShortDeadline(t), multipoolermanagerdatapb.StopReplicationRequest_builder{
 			Mode: multipoolermanagerdatapb.ReplicationPauseMode_REPLICATION_PAUSE_MODE_REPLAY_ONLY,
 			Wait: true,
-		})
+		}.Build())
 		require.NoError(t, err, "StopReplication should succeed")
 
 		// Call StopReplicationAndGetStatus (should succeed even though already paused)
 		// Note: This method waits internally for pause to complete, so status is guaranteed to be paused when it returns
 		t.Log("Calling StopReplicationAndGetStatus on already paused replication...")
-		stopResp, err := standbyManagerClient.StopReplicationAndGetStatus(utils.WithShortDeadline(t), &multipoolermanagerdatapb.StopReplicationAndGetStatusRequest{
+		stopResp, err := standbyManagerClient.StopReplicationAndGetStatus(utils.WithShortDeadline(t), multipoolermanagerdatapb.StopReplicationAndGetStatusRequest_builder{
 			Mode: multipoolermanagerdatapb.ReplicationPauseMode_REPLICATION_PAUSE_MODE_REPLAY_ONLY,
 			Wait: true,
-		})
+		}.Build())
 		require.NoError(t, err, "StopReplicationAndGetStatus should succeed even when already paused")
 		require.NotNil(t, stopResp, "Response should not be nil")
-		require.NotNil(t, stopResp.Status, "Status should not be nil")
+		require.NotNil(t, stopResp.GetStatus(), "Status should not be nil")
 
-		assert.True(t, stopResp.Status.IsWalReplayPaused, "WAL replay should be paused")
-		assert.NotEmpty(t, stopResp.Status.LastReplayLsn, "Last replay LSN should not be empty")
-		assert.NotEmpty(t, stopResp.Status.LastReceiveLsn, "Last receive LSN should not be empty")
+		assert.True(t, stopResp.GetStatus().GetIsWalReplayPaused(), "WAL replay should be paused")
+		assert.NotEmpty(t, stopResp.GetStatus().GetLastReplayLsn(), "Last replay LSN should not be empty")
+		assert.NotEmpty(t, stopResp.GetStatus().GetLastReceiveLsn(), "Last receive LSN should not be empty")
 
 		t.Log("StopReplicationAndGetStatus successfully handled already-paused replication")
 	})
@@ -1400,13 +1400,13 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 		standbyAppName := "test-standby"
 
 		// Configure synchronous replication with FIRST method
-		req := &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
+		req := multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest_builder{
 			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 			SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			NumSync:           1,
 			StandbyIds:        []*clustermetadatapb.ID{makeMultipoolerID("test-cell", "test-standby")},
 			ReloadConfig:      true,
-		}
+		}.Build()
 		_, err := primaryManagerClient.ConfigureSynchronousReplication(utils.WithShortDeadline(t), req)
 		require.NoError(t, err, "ConfigureSynchronousReplication should succeed on primary")
 
@@ -1416,9 +1416,9 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 		t.Log("Waiting for configuration to converge...")
 		waitForSyncConfigConvergenceWithClient(t, primaryManagerClient, func(config *multipoolermanagerdatapb.SynchronousReplicationConfiguration) bool {
 			return config != nil &&
-				config.SynchronousCommit == multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON &&
-				config.SynchronousMethod == multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST &&
-				config.NumSync == 1 &&
+				config.GetSynchronousCommit() == multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON &&
+				config.GetSynchronousMethod() == multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST &&
+				config.GetNumSync() == 1 &&
 				containsStandbyIDInConfig(config, "test-cell", standbyAppName)
 		}, "Configuration should converge to expected values")
 
@@ -1439,13 +1439,13 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 		}
 
 		// Configure synchronous replication with ANY method
-		req := &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
+		req := multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest_builder{
 			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_APPLY,
 			SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_ANY,
 			NumSync:           1,
 			StandbyIds:        standbyIDs,
 			ReloadConfig:      true,
-		}
+		}.Build()
 		_, err := primaryManagerClient.ConfigureSynchronousReplication(utils.WithShortDeadline(t), req)
 		require.NoError(t, err, "ConfigureSynchronousReplication should succeed on primary")
 
@@ -1455,10 +1455,10 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 		t.Log("Waiting for configuration to converge...")
 		waitForSyncConfigConvergenceWithClient(t, primaryManagerClient, func(config *multipoolermanagerdatapb.SynchronousReplicationConfiguration) bool {
 			return config != nil &&
-				config.SynchronousCommit == multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_APPLY &&
-				config.SynchronousMethod == multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_ANY &&
-				config.NumSync == 1 &&
-				len(config.StandbyIds) == 2
+				config.GetSynchronousCommit() == multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_APPLY &&
+				config.GetSynchronousMethod() == multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_ANY &&
+				config.GetNumSync() == 1 &&
+				len(config.GetStandbyIds()) == 2
 		}, "Configuration should converge to expected values")
 
 		t.Log("Synchronous replication with ANY method configured and verified successfully")
@@ -1492,13 +1492,13 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 		for _, tc := range testCases {
 			t.Run(tc.level.String(), func(t *testing.T) {
 				// Configure with this commit level
-				req := &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
+				req := multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest_builder{
 					SynchronousCommit: tc.level,
 					SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 					NumSync:           1,
 					StandbyIds:        []*clustermetadatapb.ID{makeMultipoolerID("test-cell", "test-standby")},
 					ReloadConfig:      true,
-				}
+				}.Build()
 				_, err := primaryManagerClient.ConfigureSynchronousReplication(utils.WithShortDeadline(t), req)
 				require.NoError(t, err, "ConfigureSynchronousReplication should succeed for %s", tc.level.String())
 
@@ -1507,12 +1507,12 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 				// Wait for configuration to converge and verify using PrimaryStatus API
 				t.Logf("Waiting for configuration to converge to %s...", tc.level.String())
 				waitForSyncConfigConvergenceWithClient(t, primaryManagerClient, func(config *multipoolermanagerdatapb.SynchronousReplicationConfiguration) bool {
-					return config != nil && config.SynchronousCommit == tc.level
+					return config != nil && config.GetSynchronousCommit() == tc.level
 				}, "Configuration should converge to expected commit level")
 
 				// Verify the configuration using PrimaryStatus
 				status := getPrimaryStatusFromClient(t, primaryManagerClient)
-				assert.Equal(t, tc.level, status.SyncReplicationConfig.SynchronousCommit, "synchronous_commit should be %s", tc.level.String())
+				assert.Equal(t, tc.level, status.GetSyncReplicationConfig().GetSynchronousCommit(), "synchronous_commit should be %s", tc.level.String())
 
 				t.Logf("Successfully verified synchronous_commit level: %s", tc.level.String())
 			})
@@ -1614,13 +1614,13 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
 				// Configure with this synchronous method
-				req := &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
+				req := multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest_builder{
 					SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 					SynchronousMethod: tc.method,
 					NumSync:           tc.numSync,
 					StandbyIds:        tc.standbyIDs,
 					ReloadConfig:      true,
-				}
+				}.Build()
 				_, err := primaryManagerClient.ConfigureSynchronousReplication(utils.WithShortDeadline(t), req)
 				require.NoError(t, err, "ConfigureSynchronousReplication should succeed for %s", tc.name)
 
@@ -1630,16 +1630,16 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 				t.Logf("Waiting for configuration to converge for %s...", tc.name)
 				waitForSyncConfigConvergenceWithClient(t, primaryManagerClient, func(config *multipoolermanagerdatapb.SynchronousReplicationConfiguration) bool {
 					return config != nil &&
-						config.SynchronousMethod == tc.method &&
-						config.NumSync == tc.numSync &&
-						len(config.StandbyIds) == len(tc.standbyIDs)
+						config.GetSynchronousMethod() == tc.method &&
+						config.GetNumSync() == tc.numSync &&
+						len(config.GetStandbyIds()) == len(tc.standbyIDs)
 				}, "Configuration should converge to expected values")
 
 				// Verify the configuration using PrimaryStatus
 				status := getPrimaryStatusFromClient(t, primaryManagerClient)
-				assert.Equal(t, tc.method, status.SyncReplicationConfig.SynchronousMethod, "synchronous_method should match")
-				assert.Equal(t, tc.numSync, status.SyncReplicationConfig.NumSync, "num_sync should match")
-				assert.Len(t, status.SyncReplicationConfig.StandbyIds, len(tc.standbyIDs), "should have correct number of standbys")
+				assert.Equal(t, tc.method, status.GetSyncReplicationConfig().GetSynchronousMethod(), "synchronous_method should match")
+				assert.Equal(t, tc.numSync, status.GetSyncReplicationConfig().GetNumSync(), "num_sync should match")
+				assert.Len(t, status.GetSyncReplicationConfig().GetStandbyIds(), len(tc.standbyIDs), "should have correct number of standbys")
 
 				t.Logf("Successfully verified synchronous method configuration: %s", tc.name)
 			})
@@ -1664,34 +1664,34 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 
 		// Configure synchronous replication on primary with remote_apply and actual standby
 		t.Log("Configuring synchronous replication on primary with remote_apply...")
-		configReq := &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
+		configReq := multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest_builder{
 			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_APPLY,
 			SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			NumSync:           1,
 			StandbyIds:        []*clustermetadatapb.ID{standbyID},
 			ReloadConfig:      true,
-		}
+		}.Build()
 		_, err := primaryManagerClient.ConfigureSynchronousReplication(utils.WithShortDeadline(t), configReq)
 		require.NoError(t, err, "ConfigureSynchronousReplication should succeed on primary")
 
 		// Ensure standby is connected and replicating
 
-		_, err = standbyManagerClient.SetTerm(utils.WithShortDeadline(t), &multipoolermanagerdatapb.SetTermRequest{
-			Term: &multipoolermanagerdatapb.ConsensusTerm{
+		_, err = standbyManagerClient.SetTerm(utils.WithShortDeadline(t), multipoolermanagerdatapb.SetTermRequest_builder{
+			Term: multipoolermanagerdatapb.ConsensusTerm_builder{
 				TermNumber: 1,
-			},
-		})
+			}.Build(),
+		}.Build())
 		require.NoError(t, err, "SetTerm should succeed")
 
 		t.Log("Ensuring standby is connected to primary and replicating...")
-		setPrimaryReq := &multipoolermanagerdatapb.SetPrimaryConnInfoRequest{
+		setPrimaryReq := multipoolermanagerdatapb.SetPrimaryConnInfoRequest_builder{
 			Host:                  "localhost",
 			Port:                  int32(setup.PrimaryPgctld.PgPort),
 			StartReplicationAfter: true,
 			StopReplicationBefore: false,
 			CurrentTerm:           1,
 			Force:                 false,
-		}
+		}.Build()
 		_, err = standbyManagerClient.SetPrimaryConnInfo(utils.WithShortDeadline(t), setPrimaryReq)
 		require.NoError(t, err, "SetPrimaryConnInfo should succeed")
 
@@ -1702,25 +1702,25 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 			if err != nil {
 				return false
 			}
-			return statusResp.Status.PrimaryConnInfo != nil &&
-				statusResp.Status.PrimaryConnInfo.Host != "" &&
-				!statusResp.Status.IsWalReplayPaused
+			return statusResp.GetStatus().HasPrimaryConnInfo() &&
+				statusResp.GetStatus().GetPrimaryConnInfo().GetHost() != "" &&
+				!statusResp.GetStatus().GetIsWalReplayPaused()
 		}, 5*time.Second, 200*time.Millisecond, "Replication should be configured and active")
 
 		// Verify standby is connected and replicating using ReplicationStatus API
 		t.Log("Verifying standby is connected and replicating...")
 		statusResp, err := standbyManagerClient.StandbyReplicationStatus(utils.WithShortDeadline(t), &multipoolermanagerdatapb.StandbyReplicationStatusRequest{})
 		require.NoError(t, err, "ReplicationStatus should succeed")
-		require.NotNil(t, statusResp.Status, "Status should not be nil")
-		require.NotNil(t, statusResp.Status.PrimaryConnInfo, "PrimaryConnInfo should not be nil")
+		require.NotNil(t, statusResp.GetStatus(), "Status should not be nil")
+		require.NotNil(t, statusResp.GetStatus().GetPrimaryConnInfo(), "PrimaryConnInfo should not be nil")
 		t.Logf("Standby replication status: replay_lsn=%s, receive_lsn=%s, is_paused=%v, pause_state=%s, primary_conn_info=%s",
-			statusResp.Status.LastReplayLsn, statusResp.Status.LastReceiveLsn, statusResp.Status.IsWalReplayPaused, statusResp.Status.WalReplayPauseState, statusResp.Status.PrimaryConnInfo.Raw)
+			statusResp.GetStatus().GetLastReplayLsn(), statusResp.GetStatus().GetLastReceiveLsn(), statusResp.GetStatus().GetIsWalReplayPaused(), statusResp.GetStatus().GetWalReplayPauseState(), statusResp.GetStatus().GetPrimaryConnInfo().GetRaw())
 
 		// Verify standby is not paused
-		require.False(t, statusResp.Status.IsWalReplayPaused, "Standby should be actively replicating (not paused)")
+		require.False(t, statusResp.GetStatus().GetIsWalReplayPaused(), "Standby should be actively replicating (not paused)")
 
 		// Verify primary_conninfo contains the expected application_name
-		require.Equal(t, standbyAppName, statusResp.Status.PrimaryConnInfo.ApplicationName,
+		require.Equal(t, standbyAppName, statusResp.GetStatus().GetPrimaryConnInfo().GetApplicationName(),
 			"PrimaryConnInfo.ApplicationName should match expected standby application name")
 
 		// Test write with synchronous replication enabled
@@ -1745,12 +1745,12 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 		t.Log("Verifying standby caught up to primary after successful write...")
 		primaryPosResp, err := primaryManagerClient.PrimaryPosition(utils.WithShortDeadline(t), &multipoolermanagerdatapb.PrimaryPositionRequest{})
 		require.NoError(t, err, "Should be able to get primary position")
-		primaryLSN := primaryPosResp.LsnPosition
+		primaryLSN := primaryPosResp.GetLsnPosition()
 		t.Logf("Primary LSN after write: %s", primaryLSN)
 
-		waitReq := &multipoolermanagerdatapb.WaitForLSNRequest{
+		waitReq := multipoolermanagerdatapb.WaitForLSNRequest_builder{
 			TargetLsn: primaryLSN,
-		}
+		}.Build()
 		_, err = standbyManagerClient.WaitForLSN(utils.WithShortDeadline(t), waitReq)
 		require.NoError(t, err, "Standby should have caught up to primary after successful write")
 		t.Log("Standby successfully caught up to primary")
@@ -1769,10 +1769,10 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 			}
 			defer standbyPoolerClient.Close()
 			queryResp, err := standbyPoolerClient.ExecuteQuery(context.Background(), "SELECT COUNT(*) FROM pg_stat_wal_receiver", 1)
-			if err != nil || len(queryResp.Rows) == 0 {
+			if err != nil || len(queryResp.GetRows()) == 0 {
 				return false
 			}
-			count := string(queryResp.Rows[0].Values[0])
+			count := string(queryResp.GetRows()[0].GetValues()[0])
 			return count == "0"
 		}, 10*time.Second, 500*time.Millisecond, "Standby should disconnect after ResetReplication")
 		t.Log("Standby disconnected successfully")
@@ -1781,7 +1781,7 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 		t.Log("Getting standby LSN before failed write attempt...")
 		standbyStatusBefore, err := standbyManagerClient.StandbyReplicationStatus(utils.WithShortDeadline(t), &multipoolermanagerdatapb.StandbyReplicationStatusRequest{})
 		require.NoError(t, err, "Should be able to get standby status")
-		standbyLSNBefore := standbyStatusBefore.Status.LastReplayLsn
+		standbyLSNBefore := standbyStatusBefore.GetStatus().GetLastReplayLsn()
 		t.Logf("Standby replay LSN before write attempt: %s", standbyLSNBefore)
 
 		// Test write timeout without standby
@@ -1805,7 +1805,7 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 		t.Log("Verifying standby LSN did not advance after failed write...")
 		standbyStatusAfter, err := standbyManagerClient.StandbyReplicationStatus(utils.WithShortDeadline(t), &multipoolermanagerdatapb.StandbyReplicationStatusRequest{})
 		require.NoError(t, err, "Should be able to get standby status")
-		standbyLSNAfter := standbyStatusAfter.Status.LastReplayLsn
+		standbyLSNAfter := standbyStatusAfter.GetStatus().GetLastReplayLsn()
 		t.Logf("Standby LSN after failed write: %s", standbyLSNAfter)
 		assert.Equal(t, standbyLSNBefore, standbyLSNAfter, "Standby LSN should not have advanced since replication is disconnected and write failed")
 
@@ -1820,7 +1820,7 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 		t.Log("Testing ConfigureSynchronousReplication can clear configuration...")
 
 		// First, configure synchronous replication with some standbys
-		configReq := &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
+		configReq := multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest_builder{
 			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 			SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			NumSync:           1,
@@ -1829,7 +1829,7 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 				makeMultipoolerID("test-cell", "standby2"),
 			},
 			ReloadConfig: true,
-		}
+		}.Build()
 		_, err := primaryManagerClient.ConfigureSynchronousReplication(utils.WithShortDeadline(t), configReq)
 		require.NoError(t, err, "ConfigureSynchronousReplication should succeed")
 
@@ -1837,22 +1837,22 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 		t.Log("Waiting for initial configuration to converge...")
 		waitForSyncConfigConvergenceWithClient(t, primaryManagerClient, func(config *multipoolermanagerdatapb.SynchronousReplicationConfiguration) bool {
 			return config != nil &&
-				config.SynchronousMethod == multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST &&
-				config.NumSync == 1 &&
-				len(config.StandbyIds) == 2
+				config.GetSynchronousMethod() == multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST &&
+				config.GetNumSync() == 1 &&
+				len(config.GetStandbyIds()) == 2
 		}, "Initial configuration should converge")
 
 		t.Log("Initial configuration verified")
 
 		// Now clear the configuration by providing empty standby list
 		t.Log("Clearing synchronous_standby_names configuration...")
-		clearReq := &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
+		clearReq := multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest_builder{
 			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 			SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			NumSync:           0,
 			StandbyIds:        []*clustermetadatapb.ID{},
 			ReloadConfig:      true,
-		}
+		}.Build()
 		_, err = primaryManagerClient.ConfigureSynchronousReplication(utils.WithShortDeadline(t), clearReq)
 		require.NoError(t, err, "ConfigureSynchronousReplication should succeed with empty config")
 
@@ -1860,8 +1860,8 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 		t.Log("Waiting for configuration to be cleared...")
 		waitForSyncConfigConvergenceWithClient(t, primaryManagerClient, func(config *multipoolermanagerdatapb.SynchronousReplicationConfiguration) bool {
 			return config != nil &&
-				config.NumSync == 0 &&
-				len(config.StandbyIds) == 0
+				config.GetNumSync() == 0 &&
+				len(config.GetStandbyIds()) == 0
 		}, "Configuration should be cleared")
 
 		t.Log("Successfully verified synchronous_standby_names is cleared")
@@ -1876,7 +1876,7 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 		defer cancel()
 
-		req := &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
+		req := multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest_builder{
 			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 			SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			NumSync:           1,
@@ -1884,7 +1884,7 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 				makeMultipoolerID("test-cell", "standby1"),
 			},
 			ReloadConfig: true,
-		}
+		}.Build()
 		_, err := standbyManagerClient.ConfigureSynchronousReplication(ctx, req)
 		require.Error(t, err, "ConfigureSynchronousReplication should fail on standby")
 		assert.Contains(t, err.Error(), "operation not allowed", "Error should indicate operation not allowed on REPLICA")
@@ -1929,58 +1929,58 @@ func TestUpdateSynchronousStandbyList(t *testing.T) {
 		t.Log("Testing UpdateSynchronousStandbyList ADD operation...")
 
 		// First, configure initial synchronous replication with one standby
-		configReq := &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
+		configReq := multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest_builder{
 			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 			SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			NumSync:           1,
 			StandbyIds:        []*clustermetadatapb.ID{makeMultipoolerID("test-cell", "standby1")},
 			ReloadConfig:      true,
-		}
+		}.Build()
 		_, err := primaryManagerClient.ConfigureSynchronousReplication(utils.WithShortDeadline(t), configReq)
 		require.NoError(t, err, "Initial configuration should succeed")
 
 		// Wait for config to converge
 		waitForSyncConfigConvergenceWithClient(t, primaryManagerClient, func(config *multipoolermanagerdatapb.SynchronousReplicationConfiguration) bool {
-			return config != nil && len(config.StandbyIds) == 1 && containsStandbyIDInConfig(config, "test-cell", "standby1")
+			return config != nil && len(config.GetStandbyIds()) == 1 && containsStandbyIDInConfig(config, "test-cell", "standby1")
 		}, "Initial config should converge")
 
 		// Verify initial configuration
 		status := getPrimaryStatusFromClient(t, primaryManagerClient)
-		assert.Equal(t, multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST, status.SyncReplicationConfig.SynchronousMethod)
-		assert.Equal(t, int32(1), status.SyncReplicationConfig.NumSync)
-		assert.Len(t, status.SyncReplicationConfig.StandbyIds, 1)
-		assert.True(t, containsStandbyIDInConfig(status.SyncReplicationConfig, "test-cell", "standby1"))
+		assert.Equal(t, multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST, status.GetSyncReplicationConfig().GetSynchronousMethod())
+		assert.Equal(t, int32(1), status.GetSyncReplicationConfig().GetNumSync())
+		assert.Len(t, status.GetSyncReplicationConfig().GetStandbyIds(), 1)
+		assert.True(t, containsStandbyIDInConfig(status.GetSyncReplicationConfig(), "test-cell", "standby1"))
 		t.Log("Initial configuration verified")
 
-		_, err = primaryManagerClient.SetTerm(utils.WithShortDeadline(t), &multipoolermanagerdatapb.SetTermRequest{
-			Term: &multipoolermanagerdatapb.ConsensusTerm{
+		_, err = primaryManagerClient.SetTerm(utils.WithShortDeadline(t), multipoolermanagerdatapb.SetTermRequest_builder{
+			Term: multipoolermanagerdatapb.ConsensusTerm_builder{
 				TermNumber: 1,
-			},
-		})
+			}.Build(),
+		}.Build())
 		require.NoError(t, err, "SetTerm should succeed on primary")
 
-		updateReq := &multipoolermanagerdatapb.UpdateSynchronousStandbyListRequest{
+		updateReq := multipoolermanagerdatapb.UpdateSynchronousStandbyListRequest_builder{
 			Operation:     multipoolermanagerdatapb.StandbyUpdateOperation_STANDBY_UPDATE_OPERATION_ADD,
 			StandbyIds:    []*clustermetadatapb.ID{makeMultipoolerID("test-cell", "standby2")},
 			ReloadConfig:  true,
 			ConsensusTerm: 1,
 			Force:         false,
-		}
+		}.Build()
 		_, err = primaryManagerClient.UpdateSynchronousStandbyList(utils.WithShortDeadline(t), updateReq)
 		require.NoError(t, err, "ADD should succeed")
 
 		require.Eventually(t, func() bool {
-			numStandbys := getPrimaryStatusFromClient(t, primaryManagerClient).SyncReplicationConfig.StandbyIds
+			numStandbys := getPrimaryStatusFromClient(t, primaryManagerClient).GetSyncReplicationConfig().GetStandbyIds()
 			return len(numStandbys) == 2
 		}, 5*time.Second, 50*time.Millisecond)
 
 		// Verify both standbys are now in the list
 		status = getPrimaryStatusFromClient(t, primaryManagerClient)
-		assert.Equal(t, multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST, status.SyncReplicationConfig.SynchronousMethod)
-		assert.Equal(t, int32(1), status.SyncReplicationConfig.NumSync)
-		assert.Len(t, status.SyncReplicationConfig.StandbyIds, 2)
-		assert.True(t, containsStandbyIDInConfig(status.SyncReplicationConfig, "test-cell", "standby1"))
-		assert.True(t, containsStandbyIDInConfig(status.SyncReplicationConfig, "test-cell", "standby2"))
+		assert.Equal(t, multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST, status.GetSyncReplicationConfig().GetSynchronousMethod())
+		assert.Equal(t, int32(1), status.GetSyncReplicationConfig().GetNumSync())
+		assert.Len(t, status.GetSyncReplicationConfig().GetStandbyIds(), 2)
+		assert.True(t, containsStandbyIDInConfig(status.GetSyncReplicationConfig(), "test-cell", "standby1"))
+		assert.True(t, containsStandbyIDInConfig(status.GetSyncReplicationConfig(), "test-cell", "standby2"))
 
 		t.Log("ADD operation verified successfully")
 	})
@@ -1990,7 +1990,7 @@ func TestUpdateSynchronousStandbyList(t *testing.T) {
 		t.Log("Testing UpdateSynchronousStandbyList ADD operation is idempotent...")
 
 		// Configure with two standbys
-		configReq := &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
+		configReq := multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest_builder{
 			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 			SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			NumSync:           1,
@@ -1999,13 +1999,13 @@ func TestUpdateSynchronousStandbyList(t *testing.T) {
 				makeMultipoolerID("test-cell", "standby2"),
 			},
 			ReloadConfig: true,
-		}
+		}.Build()
 		_, err := primaryManagerClient.ConfigureSynchronousReplication(utils.WithShortDeadline(t), configReq)
 		require.NoError(t, err)
 
 		// Wait for config to converge
 		waitForSyncConfigConvergenceWithClient(t, primaryManagerClient, func(config *multipoolermanagerdatapb.SynchronousReplicationConfiguration) bool {
-			return config != nil && len(config.StandbyIds) == 2 &&
+			return config != nil && len(config.GetStandbyIds()) == 2 &&
 				containsStandbyIDInConfig(config, "test-cell", "standby1") &&
 				containsStandbyIDInConfig(config, "test-cell", "standby2")
 		}, "Initial config should converge")
@@ -2014,13 +2014,13 @@ func TestUpdateSynchronousStandbyList(t *testing.T) {
 		t.Log("Initial configuration verified")
 
 		// Try to ADD a standby that already exists
-		updateReq := &multipoolermanagerdatapb.UpdateSynchronousStandbyListRequest{
+		updateReq := multipoolermanagerdatapb.UpdateSynchronousStandbyListRequest_builder{
 			Operation:     multipoolermanagerdatapb.StandbyUpdateOperation_STANDBY_UPDATE_OPERATION_ADD,
 			StandbyIds:    []*clustermetadatapb.ID{makeMultipoolerID("test-cell", "standby1")},
 			ReloadConfig:  true,
 			ConsensusTerm: 0,
 			Force:         true,
-		}
+		}.Build()
 		_, err = primaryManagerClient.UpdateSynchronousStandbyList(utils.WithShortDeadline(t), updateReq)
 		require.NoError(t, err, "ADD should be idempotent")
 
@@ -2028,9 +2028,9 @@ func TestUpdateSynchronousStandbyList(t *testing.T) {
 		time.Sleep(1 * time.Second)
 		// Configuration should be unchanged (idempotent)
 		afterStatus := getPrimaryStatusFromClient(t, primaryManagerClient)
-		assert.Equal(t, len(initialStatus.SyncReplicationConfig.StandbyIds), len(afterStatus.SyncReplicationConfig.StandbyIds), "Standby count should be unchanged")
-		assert.True(t, containsStandbyIDInConfig(afterStatus.SyncReplicationConfig, "test-cell", "standby1"))
-		assert.True(t, containsStandbyIDInConfig(afterStatus.SyncReplicationConfig, "test-cell", "standby2"))
+		assert.Equal(t, len(initialStatus.GetSyncReplicationConfig().GetStandbyIds()), len(afterStatus.GetSyncReplicationConfig().GetStandbyIds()), "Standby count should be unchanged")
+		assert.True(t, containsStandbyIDInConfig(afterStatus.GetSyncReplicationConfig(), "test-cell", "standby1"))
+		assert.True(t, containsStandbyIDInConfig(afterStatus.GetSyncReplicationConfig(), "test-cell", "standby2"))
 	})
 
 	t.Run("UpdateSynchronousStandbyList_Add_MixedExistingAndNew", func(t *testing.T) {
@@ -2038,7 +2038,7 @@ func TestUpdateSynchronousStandbyList(t *testing.T) {
 		t.Log("Testing UpdateSynchronousStandbyList ADD with both existing and new standbys...")
 
 		// Configure with two standbys
-		configReq := &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
+		configReq := multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest_builder{
 			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 			SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			NumSync:           1,
@@ -2047,19 +2047,19 @@ func TestUpdateSynchronousStandbyList(t *testing.T) {
 				makeMultipoolerID("test-cell", "standby2"),
 			},
 			ReloadConfig: true,
-		}
+		}.Build()
 		_, err := primaryManagerClient.ConfigureSynchronousReplication(utils.WithShortDeadline(t), configReq)
 		require.NoError(t, err)
 
 		// Wait for config to converge
 		waitForSyncConfigConvergenceWithClient(t, primaryManagerClient, func(config *multipoolermanagerdatapb.SynchronousReplicationConfiguration) bool {
-			return config != nil && len(config.StandbyIds) == 2
+			return config != nil && len(config.GetStandbyIds()) == 2
 		}, "Initial config with 2 standbys should converge")
 
 		t.Log("Initial configuration verified")
 
 		// ADD with mix: standby2 already exists, standby3 and standby4 are new
-		updateReq := &multipoolermanagerdatapb.UpdateSynchronousStandbyListRequest{
+		updateReq := multipoolermanagerdatapb.UpdateSynchronousStandbyListRequest_builder{
 			Operation: multipoolermanagerdatapb.StandbyUpdateOperation_STANDBY_UPDATE_OPERATION_ADD,
 			StandbyIds: []*clustermetadatapb.ID{
 				makeMultipoolerID("test-cell", "standby2"), // already exists
@@ -2069,13 +2069,13 @@ func TestUpdateSynchronousStandbyList(t *testing.T) {
 			ReloadConfig:  true,
 			ConsensusTerm: 0,
 			Force:         true,
-		}
+		}.Build()
 		_, err = primaryManagerClient.UpdateSynchronousStandbyList(utils.WithShortDeadline(t), updateReq)
 		require.NoError(t, err, "ADD with mixed existing and new standbys should succeed")
 
 		// Wait for config to converge with all 4 standbys
 		waitForSyncConfigConvergenceWithClient(t, primaryManagerClient, func(config *multipoolermanagerdatapb.SynchronousReplicationConfiguration) bool {
-			return config != nil && len(config.StandbyIds) == 4 &&
+			return config != nil && len(config.GetStandbyIds()) == 4 &&
 				containsStandbyIDInConfig(config, "test-cell", "standby1") &&
 				containsStandbyIDInConfig(config, "test-cell", "standby2") &&
 				containsStandbyIDInConfig(config, "test-cell", "standby3") &&
@@ -2088,7 +2088,7 @@ func TestUpdateSynchronousStandbyList(t *testing.T) {
 		t.Log("Testing UpdateSynchronousStandbyList ADD followed by REMOVE in sequence...")
 
 		// Configure with initial standbys
-		configReq := &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
+		configReq := multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest_builder{
 			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 			SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_ANY,
 			NumSync:           2,
@@ -2097,19 +2097,19 @@ func TestUpdateSynchronousStandbyList(t *testing.T) {
 				makeMultipoolerID("test-cell", "standby2"),
 			},
 			ReloadConfig: true,
-		}
+		}.Build()
 		_, err := primaryManagerClient.ConfigureSynchronousReplication(utils.WithShortDeadline(t), configReq)
 		require.NoError(t, err)
 
 		// Wait for config to converge
 		waitForSyncConfigConvergenceWithClient(t, primaryManagerClient, func(config *multipoolermanagerdatapb.SynchronousReplicationConfiguration) bool {
-			return config != nil && len(config.StandbyIds) == 2
+			return config != nil && len(config.GetStandbyIds()) == 2
 		}, "Initial config with 2 standbys should converge")
 
 		t.Log("Initial configuration verified")
 
 		// ADD new standbys
-		addReq := &multipoolermanagerdatapb.UpdateSynchronousStandbyListRequest{
+		addReq := multipoolermanagerdatapb.UpdateSynchronousStandbyListRequest_builder{
 			Operation: multipoolermanagerdatapb.StandbyUpdateOperation_STANDBY_UPDATE_OPERATION_ADD,
 			StandbyIds: []*clustermetadatapb.ID{
 				makeMultipoolerID("test-cell", "standby3"),
@@ -2118,21 +2118,21 @@ func TestUpdateSynchronousStandbyList(t *testing.T) {
 			ReloadConfig:  true,
 			ConsensusTerm: 0,
 			Force:         true,
-		}
+		}.Build()
 		_, err = primaryManagerClient.UpdateSynchronousStandbyList(utils.WithShortDeadline(t), addReq)
 		require.NoError(t, err, "ADD operation should succeed")
 
 		// Wait for config to converge with all 4 standbys
 		waitForSyncConfigConvergenceWithClient(t, primaryManagerClient, func(config *multipoolermanagerdatapb.SynchronousReplicationConfiguration) bool {
-			return config != nil && len(config.StandbyIds) == 4
+			return config != nil && len(config.GetStandbyIds()) == 4
 		}, "Config should have 4 standbys after ADD")
 
 		afterAddStatus := getPrimaryStatusFromClient(t, primaryManagerClient)
-		assert.Len(t, afterAddStatus.SyncReplicationConfig.StandbyIds, 4, "Should have 4 standbys after ADD")
+		assert.Len(t, afterAddStatus.GetSyncReplicationConfig().GetStandbyIds(), 4, "Should have 4 standbys after ADD")
 		t.Log("ADD operation verified")
 
 		// Now REMOVE some standbys (including one that was just added and one original)
-		removeReq := &multipoolermanagerdatapb.UpdateSynchronousStandbyListRequest{
+		removeReq := multipoolermanagerdatapb.UpdateSynchronousStandbyListRequest_builder{
 			Operation: multipoolermanagerdatapb.StandbyUpdateOperation_STANDBY_UPDATE_OPERATION_REMOVE,
 			StandbyIds: []*clustermetadatapb.ID{
 				makeMultipoolerID("test-cell", "standby2"), // original
@@ -2141,24 +2141,24 @@ func TestUpdateSynchronousStandbyList(t *testing.T) {
 			ReloadConfig:  true,
 			ConsensusTerm: 0,
 			Force:         true,
-		}
+		}.Build()
 		_, err = primaryManagerClient.UpdateSynchronousStandbyList(utils.WithShortDeadline(t), removeReq)
 		require.NoError(t, err, "REMOVE operation should succeed")
 
 		// Wait for config to converge with 2 remaining standbys
 		waitForSyncConfigConvergenceWithClient(t, primaryManagerClient, func(config *multipoolermanagerdatapb.SynchronousReplicationConfiguration) bool {
-			return config != nil && len(config.StandbyIds) == 2 &&
+			return config != nil && len(config.GetStandbyIds()) == 2 &&
 				containsStandbyIDInConfig(config, "test-cell", "standby1") &&
 				containsStandbyIDInConfig(config, "test-cell", "standby3")
 		}, "Config should have only standby1 and standby3 after REMOVE")
 
 		// Verify final state
 		finalStatus := getPrimaryStatusFromClient(t, primaryManagerClient)
-		assert.Len(t, finalStatus.SyncReplicationConfig.StandbyIds, 2, "Should have 2 standbys after REMOVE")
-		assert.True(t, containsStandbyIDInConfig(finalStatus.SyncReplicationConfig, "test-cell", "standby1"))
-		assert.True(t, containsStandbyIDInConfig(finalStatus.SyncReplicationConfig, "test-cell", "standby3"))
-		assert.False(t, containsStandbyIDInConfig(finalStatus.SyncReplicationConfig, "test-cell", "standby2"))
-		assert.False(t, containsStandbyIDInConfig(finalStatus.SyncReplicationConfig, "test-cell", "standby4"))
+		assert.Len(t, finalStatus.GetSyncReplicationConfig().GetStandbyIds(), 2, "Should have 2 standbys after REMOVE")
+		assert.True(t, containsStandbyIDInConfig(finalStatus.GetSyncReplicationConfig(), "test-cell", "standby1"))
+		assert.True(t, containsStandbyIDInConfig(finalStatus.GetSyncReplicationConfig(), "test-cell", "standby3"))
+		assert.False(t, containsStandbyIDInConfig(finalStatus.GetSyncReplicationConfig(), "test-cell", "standby2"))
+		assert.False(t, containsStandbyIDInConfig(finalStatus.GetSyncReplicationConfig(), "test-cell", "standby4"))
 	})
 
 	t.Run("UpdateSynchronousStandbyList_Remove_Success", func(t *testing.T) {
@@ -2166,7 +2166,7 @@ func TestUpdateSynchronousStandbyList(t *testing.T) {
 		t.Log("Testing UpdateSynchronousStandbyList REMOVE operation...")
 
 		// Configure with three standbys
-		configReq := &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
+		configReq := multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest_builder{
 			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 			SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_ANY,
 			NumSync:           2,
@@ -2176,29 +2176,29 @@ func TestUpdateSynchronousStandbyList(t *testing.T) {
 				makeMultipoolerID("test-cell", "standby3"),
 			},
 			ReloadConfig: true,
-		}
+		}.Build()
 		_, err := primaryManagerClient.ConfigureSynchronousReplication(utils.WithShortDeadline(t), configReq)
 		require.NoError(t, err)
 
 		// Wait for config to converge
 		waitForSyncConfigConvergenceWithClient(t, primaryManagerClient, func(config *multipoolermanagerdatapb.SynchronousReplicationConfiguration) bool {
-			return config != nil && len(config.StandbyIds) == 3 && containsStandbyIDInConfig(config, "test-cell", "standby2")
+			return config != nil && len(config.GetStandbyIds()) == 3 && containsStandbyIDInConfig(config, "test-cell", "standby2")
 		}, "Initial config with 3 standbys should converge")
 
 		// REMOVE standby2
-		updateReq := &multipoolermanagerdatapb.UpdateSynchronousStandbyListRequest{
+		updateReq := multipoolermanagerdatapb.UpdateSynchronousStandbyListRequest_builder{
 			Operation:     multipoolermanagerdatapb.StandbyUpdateOperation_STANDBY_UPDATE_OPERATION_REMOVE,
 			StandbyIds:    []*clustermetadatapb.ID{makeMultipoolerID("test-cell", "standby2")},
 			ReloadConfig:  true,
 			ConsensusTerm: 0,
 			Force:         true,
-		}
+		}.Build()
 		_, err = primaryManagerClient.UpdateSynchronousStandbyList(utils.WithShortDeadline(t), updateReq)
 		require.NoError(t, err, "REMOVE operation should succeed")
 
 		// Wait for config to converge without standby2
 		waitForSyncConfigConvergenceWithClient(t, primaryManagerClient, func(config *multipoolermanagerdatapb.SynchronousReplicationConfiguration) bool {
-			return config != nil && len(config.StandbyIds) == 2 &&
+			return config != nil && len(config.GetStandbyIds()) == 2 &&
 				!containsStandbyIDInConfig(config, "test-cell", "standby2") &&
 				containsStandbyIDInConfig(config, "test-cell", "standby1") &&
 				containsStandbyIDInConfig(config, "test-cell", "standby3")
@@ -2206,12 +2206,12 @@ func TestUpdateSynchronousStandbyList(t *testing.T) {
 
 		// Verify standby2 was removed
 		status := getPrimaryStatusFromClient(t, primaryManagerClient)
-		assert.Equal(t, multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_ANY, status.SyncReplicationConfig.SynchronousMethod)
-		assert.Equal(t, int32(2), status.SyncReplicationConfig.NumSync)
-		assert.Len(t, status.SyncReplicationConfig.StandbyIds, 2)
-		assert.True(t, containsStandbyIDInConfig(status.SyncReplicationConfig, "test-cell", "standby1"))
-		assert.False(t, containsStandbyIDInConfig(status.SyncReplicationConfig, "test-cell", "standby2"))
-		assert.True(t, containsStandbyIDInConfig(status.SyncReplicationConfig, "test-cell", "standby3"))
+		assert.Equal(t, multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_ANY, status.GetSyncReplicationConfig().GetSynchronousMethod())
+		assert.Equal(t, int32(2), status.GetSyncReplicationConfig().GetNumSync())
+		assert.Len(t, status.GetSyncReplicationConfig().GetStandbyIds(), 2)
+		assert.True(t, containsStandbyIDInConfig(status.GetSyncReplicationConfig(), "test-cell", "standby1"))
+		assert.False(t, containsStandbyIDInConfig(status.GetSyncReplicationConfig(), "test-cell", "standby2"))
+		assert.True(t, containsStandbyIDInConfig(status.GetSyncReplicationConfig(), "test-cell", "standby3"))
 
 		t.Log("REMOVE operation verified successfully")
 	})
@@ -2221,7 +2221,7 @@ func TestUpdateSynchronousStandbyList(t *testing.T) {
 		t.Log("Testing UpdateSynchronousStandbyList REMOVE operation with non-existent standby (idempotency)...")
 
 		// Configure with two standbys
-		configReq := &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
+		configReq := multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest_builder{
 			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 			SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			NumSync:           1,
@@ -2230,21 +2230,21 @@ func TestUpdateSynchronousStandbyList(t *testing.T) {
 				makeMultipoolerID("test-cell", "standby2"),
 			},
 			ReloadConfig: true,
-		}
+		}.Build()
 		_, err := primaryManagerClient.ConfigureSynchronousReplication(utils.WithShortDeadline(t), configReq)
 		require.NoError(t, err)
 
 		// Wait for config to converge
 		waitForSyncConfigConvergenceWithClient(t, primaryManagerClient, func(config *multipoolermanagerdatapb.SynchronousReplicationConfiguration) bool {
-			return config != nil && len(config.StandbyIds) == 2
+			return config != nil && len(config.GetStandbyIds()) == 2
 		}, "Initial config with 2 standbys should converge")
 
 		// Get initial state
 		initialStatus := getPrimaryStatusFromClient(t, primaryManagerClient)
-		require.Len(t, initialStatus.SyncReplicationConfig.StandbyIds, 2, "Should start with 2 standbys")
+		require.Len(t, initialStatus.GetSyncReplicationConfig().GetStandbyIds(), 2, "Should start with 2 standbys")
 
 		// Try to REMOVE a standby that doesn't exist - should be idempotent
-		updateReq := &multipoolermanagerdatapb.UpdateSynchronousStandbyListRequest{
+		updateReq := multipoolermanagerdatapb.UpdateSynchronousStandbyListRequest_builder{
 			Operation: multipoolermanagerdatapb.StandbyUpdateOperation_STANDBY_UPDATE_OPERATION_REMOVE,
 			StandbyIds: []*clustermetadatapb.ID{
 				makeMultipoolerID("test-cell", "standby-does-not-exist"),
@@ -2253,17 +2253,17 @@ func TestUpdateSynchronousStandbyList(t *testing.T) {
 			ReloadConfig:  true,
 			ConsensusTerm: 0,
 			Force:         true,
-		}
+		}.Build()
 		_, err = primaryManagerClient.UpdateSynchronousStandbyList(utils.WithShortDeadline(t), updateReq)
 		require.NoError(t, err, "REMOVE operation should succeed even with non-existent standbys")
 
 		// Verify configuration remains unchanged (idempotent)
 		finalStatus := getPrimaryStatusFromClient(t, primaryManagerClient)
-		assert.Len(t, finalStatus.SyncReplicationConfig.StandbyIds, 2, "Should still have 2 standbys")
-		assert.True(t, containsStandbyIDInConfig(finalStatus.SyncReplicationConfig, "test-cell", "standby1"), "standby1 should still be present")
-		assert.True(t, containsStandbyIDInConfig(finalStatus.SyncReplicationConfig, "test-cell", "standby2"), "standby2 should still be present")
-		assert.False(t, containsStandbyIDInConfig(finalStatus.SyncReplicationConfig, "test-cell", "standby-does-not-exist"), "non-existent standby should not be present")
-		assert.False(t, containsStandbyIDInConfig(finalStatus.SyncReplicationConfig, "test-cell", "another-does-not-exist-standby"), "another non-existent standby should not be present")
+		assert.Len(t, finalStatus.GetSyncReplicationConfig().GetStandbyIds(), 2, "Should still have 2 standbys")
+		assert.True(t, containsStandbyIDInConfig(finalStatus.GetSyncReplicationConfig(), "test-cell", "standby1"), "standby1 should still be present")
+		assert.True(t, containsStandbyIDInConfig(finalStatus.GetSyncReplicationConfig(), "test-cell", "standby2"), "standby2 should still be present")
+		assert.False(t, containsStandbyIDInConfig(finalStatus.GetSyncReplicationConfig(), "test-cell", "standby-does-not-exist"), "non-existent standby should not be present")
+		assert.False(t, containsStandbyIDInConfig(finalStatus.GetSyncReplicationConfig(), "test-cell", "another-does-not-exist-standby"), "another non-existent standby should not be present")
 
 		t.Log("REMOVE operation with non-existent standby verified as idempotent")
 	})
@@ -2273,7 +2273,7 @@ func TestUpdateSynchronousStandbyList(t *testing.T) {
 		t.Log("Testing UpdateSynchronousStandbyList REPLACE operation...")
 
 		// Configure initial set
-		configReq := &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
+		configReq := multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest_builder{
 			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 			SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			NumSync:           1,
@@ -2282,13 +2282,13 @@ func TestUpdateSynchronousStandbyList(t *testing.T) {
 				makeMultipoolerID("test-cell", "standby2"),
 			},
 			ReloadConfig: true,
-		}
+		}.Build()
 		_, err := primaryManagerClient.ConfigureSynchronousReplication(utils.WithShortDeadline(t), configReq)
 		require.NoError(t, err)
 
 		// Wait for config to converge
 		waitForSyncConfigConvergenceWithClient(t, primaryManagerClient, func(config *multipoolermanagerdatapb.SynchronousReplicationConfiguration) bool {
-			return config != nil && len(config.StandbyIds) == 2 &&
+			return config != nil && len(config.GetStandbyIds()) == 2 &&
 				containsStandbyIDInConfig(config, "test-cell", "standby1") &&
 				containsStandbyIDInConfig(config, "test-cell", "standby2")
 		}, "Initial config should converge")
@@ -2296,7 +2296,7 @@ func TestUpdateSynchronousStandbyList(t *testing.T) {
 		t.Log("Initial configuration verified")
 
 		// REPLACE with completely different set
-		updateReq := &multipoolermanagerdatapb.UpdateSynchronousStandbyListRequest{
+		updateReq := multipoolermanagerdatapb.UpdateSynchronousStandbyListRequest_builder{
 			Operation: multipoolermanagerdatapb.StandbyUpdateOperation_STANDBY_UPDATE_OPERATION_REPLACE,
 			StandbyIds: []*clustermetadatapb.ID{
 				makeMultipoolerID("test-cell", "standby3"),
@@ -2305,13 +2305,13 @@ func TestUpdateSynchronousStandbyList(t *testing.T) {
 			ReloadConfig:  true,
 			ConsensusTerm: 0,
 			Force:         true,
-		}
+		}.Build()
 		_, err = primaryManagerClient.UpdateSynchronousStandbyList(utils.WithShortDeadline(t), updateReq)
 		require.NoError(t, err, "REPLACE operation should succeed")
 
 		// Wait for config to converge with new standbys
 		waitForSyncConfigConvergenceWithClient(t, primaryManagerClient, func(config *multipoolermanagerdatapb.SynchronousReplicationConfiguration) bool {
-			return config != nil && len(config.StandbyIds) == 2 &&
+			return config != nil && len(config.GetStandbyIds()) == 2 &&
 				containsStandbyIDInConfig(config, "test-cell", "standby3") &&
 				containsStandbyIDInConfig(config, "test-cell", "standby4") &&
 				!containsStandbyIDInConfig(config, "test-cell", "standby1") &&
@@ -2320,13 +2320,13 @@ func TestUpdateSynchronousStandbyList(t *testing.T) {
 
 		// Verify list was completely replaced
 		status := getPrimaryStatusFromClient(t, primaryManagerClient)
-		assert.Equal(t, multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST, status.SyncReplicationConfig.SynchronousMethod)
-		assert.Equal(t, int32(1), status.SyncReplicationConfig.NumSync)
-		assert.Len(t, status.SyncReplicationConfig.StandbyIds, 2)
-		assert.False(t, containsStandbyIDInConfig(status.SyncReplicationConfig, "test-cell", "standby1"))
-		assert.False(t, containsStandbyIDInConfig(status.SyncReplicationConfig, "test-cell", "standby2"))
-		assert.True(t, containsStandbyIDInConfig(status.SyncReplicationConfig, "test-cell", "standby3"))
-		assert.True(t, containsStandbyIDInConfig(status.SyncReplicationConfig, "test-cell", "standby4"))
+		assert.Equal(t, multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST, status.GetSyncReplicationConfig().GetSynchronousMethod())
+		assert.Equal(t, int32(1), status.GetSyncReplicationConfig().GetNumSync())
+		assert.Len(t, status.GetSyncReplicationConfig().GetStandbyIds(), 2)
+		assert.False(t, containsStandbyIDInConfig(status.GetSyncReplicationConfig(), "test-cell", "standby1"))
+		assert.False(t, containsStandbyIDInConfig(status.GetSyncReplicationConfig(), "test-cell", "standby2"))
+		assert.True(t, containsStandbyIDInConfig(status.GetSyncReplicationConfig(), "test-cell", "standby3"))
+		assert.True(t, containsStandbyIDInConfig(status.GetSyncReplicationConfig(), "test-cell", "standby4"))
 
 		t.Log("REPLACE operation verified successfully")
 	})
@@ -2337,29 +2337,29 @@ func TestUpdateSynchronousStandbyList(t *testing.T) {
 		t.Log("Testing UpdateSynchronousStandbyList fails when sync replication not configured...")
 
 		// Ensure synchronous replication is not configured
-		resetReq := &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
+		resetReq := multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest_builder{
 			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 			SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			NumSync:           0,
 			StandbyIds:        []*clustermetadatapb.ID{},
 			ReloadConfig:      true,
-		}
+		}.Build()
 		_, err := primaryManagerClient.ConfigureSynchronousReplication(utils.WithShortDeadline(t), resetReq)
 		require.NoError(t, err)
 
 		// Wait for config to be cleared
 		waitForSyncConfigConvergenceWithClient(t, primaryManagerClient, func(config *multipoolermanagerdatapb.SynchronousReplicationConfiguration) bool {
-			return config != nil && len(config.StandbyIds) == 0
+			return config != nil && len(config.GetStandbyIds()) == 0
 		}, "Config should be cleared")
 
 		// Try to update when no sync replication is configured
-		updateReq := &multipoolermanagerdatapb.UpdateSynchronousStandbyListRequest{
+		updateReq := multipoolermanagerdatapb.UpdateSynchronousStandbyListRequest_builder{
 			Operation:     multipoolermanagerdatapb.StandbyUpdateOperation_STANDBY_UPDATE_OPERATION_ADD,
 			StandbyIds:    []*clustermetadatapb.ID{makeMultipoolerID("test-cell", "standby1")},
 			ReloadConfig:  true,
 			ConsensusTerm: 0,
 			Force:         true,
-		}
+		}.Build()
 		_, err = primaryManagerClient.UpdateSynchronousStandbyList(utils.WithShortDeadline(t), updateReq)
 		require.Error(t, err, "Should fail when sync replication not configured")
 		assert.Contains(t, err.Error(), "not configured", "Error should mention sync replication not configured")
@@ -2375,13 +2375,13 @@ func TestUpdateSynchronousStandbyList(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 		defer cancel()
 
-		updateReq := &multipoolermanagerdatapb.UpdateSynchronousStandbyListRequest{
+		updateReq := multipoolermanagerdatapb.UpdateSynchronousStandbyListRequest_builder{
 			Operation:     multipoolermanagerdatapb.StandbyUpdateOperation_STANDBY_UPDATE_OPERATION_ADD,
 			StandbyIds:    []*clustermetadatapb.ID{makeMultipoolerID("test-cell", "standby1")},
 			ReloadConfig:  true,
 			ConsensusTerm: 0,
 			Force:         true,
-		}
+		}.Build()
 		_, err := standbyManagerClient.UpdateSynchronousStandbyList(ctx, updateReq)
 		require.Error(t, err, "UpdateSynchronousStandbyList should fail on standby")
 		assert.Contains(t, err.Error(), "operation not allowed", "Error should indicate operation not allowed on REPLICA")
@@ -2426,22 +2426,22 @@ func TestReplicationStatus(t *testing.T) {
 		// Call ReplicationStatus on PRIMARY
 		statusResp, err := primaryManagerClient.Status(utils.WithShortDeadline(t), &multipoolermanagerdatapb.StatusRequest{})
 		require.NoError(t, err, "ReplicationStatus should succeed on PRIMARY")
-		require.NotNil(t, statusResp.Status, "Status should not be nil")
+		require.NotNil(t, statusResp.GetStatus(), "Status should not be nil")
 
 		// Verify pooler type
-		assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, statusResp.Status.PoolerType, "PoolerType should be PRIMARY")
+		assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, statusResp.GetStatus().GetPoolerType(), "PoolerType should be PRIMARY")
 
 		// Verify PrimaryStatus is populated
-		assert.NotNil(t, statusResp.Status.PrimaryStatus, "PrimaryStatus should be populated for PRIMARY pooler")
-		assert.Nil(t, statusResp.Status.ReplicationStatus, "ReplicationStatus should be nil for PRIMARY pooler")
+		assert.NotNil(t, statusResp.GetStatus().GetPrimaryStatus(), "PrimaryStatus should be populated for PRIMARY pooler")
+		assert.Nil(t, statusResp.GetStatus().GetReplicationStatus(), "ReplicationStatus should be nil for PRIMARY pooler")
 
 		// Verify PrimaryStatus fields
-		assert.NotEmpty(t, statusResp.Status.PrimaryStatus.Lsn, "LSN should be present")
-		assert.Regexp(t, `^[0-9A-F]+/[0-9A-F]+$`, statusResp.Status.PrimaryStatus.Lsn, "LSN should be in PostgreSQL format")
-		assert.True(t, statusResp.Status.PrimaryStatus.Ready, "Primary should be ready")
-		assert.NotNil(t, statusResp.Status.PrimaryStatus.SyncReplicationConfig, "Sync replication config should be present")
+		assert.NotEmpty(t, statusResp.GetStatus().GetPrimaryStatus().GetLsn(), "LSN should be present")
+		assert.Regexp(t, `^[0-9A-F]+/[0-9A-F]+$`, statusResp.GetStatus().GetPrimaryStatus().GetLsn(), "LSN should be in PostgreSQL format")
+		assert.True(t, statusResp.GetStatus().GetPrimaryStatus().GetReady(), "Primary should be ready")
+		assert.NotNil(t, statusResp.GetStatus().GetPrimaryStatus().GetSyncReplicationConfig(), "Sync replication config should be present")
 
-		t.Logf("ReplicationStatus on PRIMARY verified: LSN=%s", statusResp.Status.PrimaryStatus.Lsn)
+		t.Logf("ReplicationStatus on PRIMARY verified: LSN=%s", statusResp.GetStatus().GetPrimaryStatus().GetLsn())
 	})
 
 	t.Run("ReplicationStatus_REPLICA_returns_replication_status", func(t *testing.T) {
@@ -2455,30 +2455,30 @@ func TestReplicationStatus(t *testing.T) {
 			if err != nil {
 				return false
 			}
-			return statusResp.Status != nil && statusResp.Status.PrimaryConnInfo != nil
+			return statusResp.HasStatus() && statusResp.GetStatus().HasPrimaryConnInfo()
 		}, 10*time.Second, 500*time.Millisecond, "Standby should be connected (from default setup)")
 
 		// Call ReplicationStatus on REPLICA
 		statusResp, err := standbyManagerClient.Status(utils.WithShortDeadline(t), &multipoolermanagerdatapb.StatusRequest{})
 		require.NoError(t, err, "ReplicationStatus should succeed on REPLICA")
-		require.NotNil(t, statusResp.Status, "Status should not be nil")
+		require.NotNil(t, statusResp.GetStatus(), "Status should not be nil")
 
 		// Verify pooler type
-		assert.Equal(t, clustermetadatapb.PoolerType_REPLICA, statusResp.Status.PoolerType, "PoolerType should be REPLICA")
+		assert.Equal(t, clustermetadatapb.PoolerType_REPLICA, statusResp.GetStatus().GetPoolerType(), "PoolerType should be REPLICA")
 
 		// Verify ReplicationStatus is populated
-		assert.Nil(t, statusResp.Status.PrimaryStatus, "PrimaryStatus should be nil for REPLICA pooler")
-		assert.NotNil(t, statusResp.Status.ReplicationStatus, "ReplicationStatus should be populated for REPLICA pooler")
+		assert.Nil(t, statusResp.GetStatus().GetPrimaryStatus(), "PrimaryStatus should be nil for REPLICA pooler")
+		assert.NotNil(t, statusResp.GetStatus().GetReplicationStatus(), "ReplicationStatus should be populated for REPLICA pooler")
 
 		// Verify ReplicationStatus fields
-		assert.NotEmpty(t, statusResp.Status.ReplicationStatus.LastReplayLsn, "LastReplayLsn should be present")
-		assert.NotEmpty(t, statusResp.Status.ReplicationStatus.LastReceiveLsn, "LastReceiveLsn should be present")
-		assert.NotNil(t, statusResp.Status.ReplicationStatus.PrimaryConnInfo, "PrimaryConnInfo should be present")
-		assert.NotEmpty(t, statusResp.Status.ReplicationStatus.PrimaryConnInfo.Host, "Primary host should be present")
+		assert.NotEmpty(t, statusResp.GetStatus().GetReplicationStatus().GetLastReplayLsn(), "LastReplayLsn should be present")
+		assert.NotEmpty(t, statusResp.GetStatus().GetReplicationStatus().GetLastReceiveLsn(), "LastReceiveLsn should be present")
+		assert.NotNil(t, statusResp.GetStatus().GetReplicationStatus().GetPrimaryConnInfo(), "PrimaryConnInfo should be present")
+		assert.NotEmpty(t, statusResp.GetStatus().GetReplicationStatus().GetPrimaryConnInfo().GetHost(), "Primary host should be present")
 
 		t.Logf("ReplicationStatus on REPLICA verified: LastReplayLSN=%s, PrimaryHost=%s",
-			statusResp.Status.ReplicationStatus.LastReplayLsn,
-			statusResp.Status.ReplicationStatus.PrimaryConnInfo.Host)
+			statusResp.GetStatus().GetReplicationStatus().GetLastReplayLsn(),
+			statusResp.GetStatus().GetReplicationStatus().GetPrimaryConnInfo().GetHost())
 	})
 
 	t.Run("ReplicationStatus_unified_API_works_for_both", func(t *testing.T) {
@@ -2494,13 +2494,13 @@ func TestReplicationStatus(t *testing.T) {
 		require.NoError(t, err, "ReplicationStatus should succeed on REPLICA")
 
 		// Verify each returns the appropriate status
-		assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, primaryStatusResp.Status.PoolerType)
-		assert.NotNil(t, primaryStatusResp.Status.PrimaryStatus, "PRIMARY should return PrimaryStatus")
-		assert.Nil(t, primaryStatusResp.Status.ReplicationStatus, "PRIMARY should not return ReplicationStatus")
+		assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, primaryStatusResp.GetStatus().GetPoolerType())
+		assert.NotNil(t, primaryStatusResp.GetStatus().GetPrimaryStatus(), "PRIMARY should return PrimaryStatus")
+		assert.Nil(t, primaryStatusResp.GetStatus().GetReplicationStatus(), "PRIMARY should not return ReplicationStatus")
 
-		assert.Equal(t, clustermetadatapb.PoolerType_REPLICA, standbyStatusResp.Status.PoolerType)
-		assert.Nil(t, standbyStatusResp.Status.PrimaryStatus, "REPLICA should not return PrimaryStatus")
-		assert.NotNil(t, standbyStatusResp.Status.ReplicationStatus, "REPLICA should return ReplicationStatus")
+		assert.Equal(t, clustermetadatapb.PoolerType_REPLICA, standbyStatusResp.GetStatus().GetPoolerType())
+		assert.Nil(t, standbyStatusResp.GetStatus().GetPrimaryStatus(), "REPLICA should not return PrimaryStatus")
+		assert.NotNil(t, standbyStatusResp.GetStatus().GetReplicationStatus(), "REPLICA should return ReplicationStatus")
 
 		t.Log("Verified: Same ReplicationStatus RPC works correctly for both PRIMARY and REPLICA")
 	})

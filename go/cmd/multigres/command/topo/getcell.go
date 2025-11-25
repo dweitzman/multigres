@@ -157,9 +157,9 @@ func runGetCell(cmd *cobra.Command, args []string) error {
 	// Create client and call GetCell RPC
 	client := multiadminpb.NewMultiAdminServiceClient(conn)
 
-	response, err := client.GetCell(ctx, &multiadminpb.GetCellRequest{
+	response, err := client.GetCell(ctx, multiadminpb.GetCellRequest_builder{
 		Name: cellName,
-	})
+	}.Build())
 	if err != nil {
 		return fmt.Errorf("GetCell RPC failed: %w", err)
 	}

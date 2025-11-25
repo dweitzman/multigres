@@ -31,34 +31,34 @@ func TestDetermineScenario(t *testing.T) {
 		{
 			name: "all empty - bootstrap",
 			statuses: []*multipoolermanagerdatapb.InitializationStatusResponse{
-				{IsInitialized: false},
-				{IsInitialized: false},
-				{IsInitialized: false},
+				multipoolermanagerdatapb.InitializationStatusResponse_builder{IsInitialized: false}.Build(),
+				multipoolermanagerdatapb.InitializationStatusResponse_builder{IsInitialized: false}.Build(),
+				multipoolermanagerdatapb.InitializationStatusResponse_builder{IsInitialized: false}.Build(),
 			},
 			expected: ScenarioBootstrap,
 		},
 		{
 			name: "all initialized - reelect",
 			statuses: []*multipoolermanagerdatapb.InitializationStatusResponse{
-				{IsInitialized: true},
-				{IsInitialized: true},
-				{IsInitialized: true},
+				multipoolermanagerdatapb.InitializationStatusResponse_builder{IsInitialized: true}.Build(),
+				multipoolermanagerdatapb.InitializationStatusResponse_builder{IsInitialized: true}.Build(),
+				multipoolermanagerdatapb.InitializationStatusResponse_builder{IsInitialized: true}.Build(),
 			},
 			expected: ScenarioReelect,
 		},
 		{
 			name: "mixed initialized and empty - repair",
 			statuses: []*multipoolermanagerdatapb.InitializationStatusResponse{
-				{IsInitialized: true},
-				{IsInitialized: false},
-				{IsInitialized: true},
+				multipoolermanagerdatapb.InitializationStatusResponse_builder{IsInitialized: true}.Build(),
+				multipoolermanagerdatapb.InitializationStatusResponse_builder{IsInitialized: false}.Build(),
+				multipoolermanagerdatapb.InitializationStatusResponse_builder{IsInitialized: true}.Build(),
 			},
 			expected: ScenarioRepair,
 		},
 		{
 			name: "one empty node - bootstrap",
 			statuses: []*multipoolermanagerdatapb.InitializationStatusResponse{
-				{IsInitialized: false},
+				multipoolermanagerdatapb.InitializationStatusResponse_builder{IsInitialized: false}.Build(),
 			},
 			expected: ScenarioBootstrap,
 		},
@@ -74,18 +74,18 @@ func TestDetermineScenario(t *testing.T) {
 		{
 			name: "some unavailable with initialized - reelect",
 			statuses: []*multipoolermanagerdatapb.InitializationStatusResponse{
-				{IsInitialized: true},
+				multipoolermanagerdatapb.InitializationStatusResponse_builder{IsInitialized: true}.Build(),
 				nil,
-				{IsInitialized: true},
+				multipoolermanagerdatapb.InitializationStatusResponse_builder{IsInitialized: true}.Build(),
 			},
 			expected: ScenarioReelect,
 		},
 		{
 			name: "some unavailable with empty - bootstrap",
 			statuses: []*multipoolermanagerdatapb.InitializationStatusResponse{
-				{IsInitialized: false},
+				multipoolermanagerdatapb.InitializationStatusResponse_builder{IsInitialized: false}.Build(),
 				nil,
-				{IsInitialized: false},
+				multipoolermanagerdatapb.InitializationStatusResponse_builder{IsInitialized: false}.Build(),
 			},
 			expected: ScenarioBootstrap,
 		},

@@ -89,7 +89,7 @@ func (c *Conn) writeParameterDescription(params []*query.ParameterDescription) e
 
 	// Write each parameter OID.
 	for _, param := range params {
-		if err := writeInt32(w, int32(param.DataTypeOid)); err != nil {
+		if err := writeInt32(w, int32(param.GetDataTypeOid())); err != nil {
 			return err
 		}
 	}
@@ -118,13 +118,13 @@ func (c *Conn) writeRowDescription(fields []*query.Field) error {
 	// Calculate message size.
 	size := 4 + 2 // length + field count
 	for _, field := range fields {
-		size += len(field.Name) + 1 // name + null terminator
-		size += 4                   // table OID
-		size += 2                   // column number
-		size += 4                   // type OID
-		size += 2                   // type size
-		size += 4                   // type modifier
-		size += 2                   // format code
+		size += len(field.GetName()) + 1 // name + null terminator
+		size += 4                        // table OID
+		size += 2                        // column number
+		size += 4                        // type OID
+		size += 2                        // type size
+		size += 4                        // type modifier
+		size += 2                        // format code
 	}
 
 	w := c.getWriter()
@@ -147,37 +147,37 @@ func (c *Conn) writeRowDescription(fields []*query.Field) error {
 	// Write each field.
 	for _, field := range fields {
 		// Field name (null-terminated).
-		if err := writeString(w, field.Name); err != nil {
+		if err := writeString(w, field.GetName()); err != nil {
 			return err
 		}
 
 		// Table OID.
-		if err := writeInt32(w, int32(field.TableOid)); err != nil {
+		if err := writeInt32(w, int32(field.GetTableOid())); err != nil {
 			return err
 		}
 
 		// Column number (attribute number).
-		if err := writeInt16(w, int16(field.TableAttributeNumber)); err != nil {
+		if err := writeInt16(w, int16(field.GetTableAttributeNumber())); err != nil {
 			return err
 		}
 
 		// Type OID.
-		if err := writeInt32(w, int32(field.DataTypeOid)); err != nil {
+		if err := writeInt32(w, int32(field.GetDataTypeOid())); err != nil {
 			return err
 		}
 
 		// Type size.
-		if err := writeInt16(w, int16(field.DataTypeSize)); err != nil {
+		if err := writeInt16(w, int16(field.GetDataTypeSize())); err != nil {
 			return err
 		}
 
 		// Type modifier.
-		if err := writeInt32(w, field.TypeModifier); err != nil {
+		if err := writeInt32(w, field.GetTypeModifier()); err != nil {
 			return err
 		}
 
 		// Format code.
-		if err := writeInt16(w, int16(field.Format)); err != nil {
+		if err := writeInt16(w, int16(field.GetFormat())); err != nil {
 			return err
 		}
 	}
@@ -196,7 +196,7 @@ func (c *Conn) writeRowDescription(fields []*query.Field) error {
 func (c *Conn) writeDataRow(row *query.Row) error {
 	// Calculate message size.
 	size := 4 + 2 // length + column count
-	for _, value := range row.Values {
+	for _, value := range row.GetValues() {
 		size += 4 // value length
 		if value != nil {
 			size += len(value)
@@ -216,12 +216,12 @@ func (c *Conn) writeDataRow(row *query.Row) error {
 	}
 
 	// Write column count.
-	if err := writeInt16(w, int16(len(row.Values))); err != nil {
+	if err := writeInt16(w, int16(len(row.GetValues()))); err != nil {
 		return err
 	}
 
 	// Write each column value.
-	for _, value := range row.Values {
+	for _, value := range row.GetValues() {
 		if value == nil {
 			// NULL value.
 			if err := writeInt32(w, -1); err != nil {

@@ -71,10 +71,10 @@ func TestMultipoolerPrimaryPosition(t *testing.T) {
 		// Assert that it succeeds and returns a valid LSN
 		require.NoError(t, err)
 		require.NotNil(t, resp)
-		assert.NotEmpty(t, resp.LsnPosition, "LSN should not be empty")
+		assert.NotEmpty(t, resp.GetLsnPosition(), "LSN should not be empty")
 
 		// PostgreSQL LSN format is typically like "0/1234ABCD"
-		assert.Contains(t, resp.LsnPosition, "/", "LSN should be in PostgreSQL format (e.g., 0/1234ABCD)")
+		assert.Contains(t, resp.GetLsnPosition(), "/", "LSN should be in PostgreSQL format (e.g., 0/1234ABCD)")
 	})
 
 	t.Run("PrimaryPosition_Standby", func(t *testing.T) {
@@ -131,35 +131,35 @@ func TestPrimaryStatus(t *testing.T) {
 		t.Log("Testing PrimaryStatus without synchronous replication configured...")
 
 		// Clear any existing sync replication configuration
-		clearReq := &multipoolermanagerdata.ConfigureSynchronousReplicationRequest{
+		clearReq := multipoolermanagerdata.ConfigureSynchronousReplicationRequest_builder{
 			SynchronousCommit: multipoolermanagerdata.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 			SynchronousMethod: multipoolermanagerdata.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			NumSync:           0,
 			StandbyIds:        []*clustermetadatapb.ID{},
 			ReloadConfig:      true,
-		}
+		}.Build()
 		_, err := primaryManagerClient.ConfigureSynchronousReplication(utils.WithShortDeadline(t), clearReq)
 		require.NoError(t, err)
 
 		// Get primary status
 		statusResp, err := primaryManagerClient.PrimaryStatus(utils.WithShortDeadline(t), &multipoolermanagerdata.PrimaryStatusRequest{})
 		require.NoError(t, err, "PrimaryStatus should succeed")
-		require.NotNil(t, statusResp.Status, "Status should not be nil")
+		require.NotNil(t, statusResp.GetStatus(), "Status should not be nil")
 
 		// Verify LSN is present and valid format
-		assert.NotEmpty(t, statusResp.Status.Lsn, "LSN should be present")
-		assert.Regexp(t, `^[0-9A-F]+/[0-9A-F]+$`, statusResp.Status.Lsn, "LSN should be in PostgreSQL format (X/XXXXXXXX)")
-		t.Logf("Primary LSN: %s", statusResp.Status.Lsn)
+		assert.NotEmpty(t, statusResp.GetStatus().GetLsn(), "LSN should be present")
+		assert.Regexp(t, `^[0-9A-F]+/[0-9A-F]+$`, statusResp.GetStatus().GetLsn(), "LSN should be in PostgreSQL format (X/XXXXXXXX)")
+		t.Logf("Primary LSN: %s", statusResp.GetStatus().GetLsn())
 
 		// Verify ready status
-		assert.True(t, statusResp.Status.Ready, "Primary should be ready")
+		assert.True(t, statusResp.GetStatus().GetReady(), "Primary should be ready")
 
 		// Verify sync replication config is present but with empty standby list
-		require.NotNil(t, statusResp.Status.SyncReplicationConfig, "Sync replication config should be present")
+		require.NotNil(t, statusResp.GetStatus().GetSyncReplicationConfig(), "Sync replication config should be present")
 		assert.Equal(t, multipoolermanagerdata.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
-			statusResp.Status.SyncReplicationConfig.SynchronousCommit, "Should have synchronous_commit level")
-		assert.Empty(t, statusResp.Status.SyncReplicationConfig.StandbyIds, "StandbyIds should be empty when not configured")
-		assert.Equal(t, int32(0), statusResp.Status.SyncReplicationConfig.NumSync, "NumSync should be 0")
+			statusResp.GetStatus().GetSyncReplicationConfig().GetSynchronousCommit(), "Should have synchronous_commit level")
+		assert.Empty(t, statusResp.GetStatus().GetSyncReplicationConfig().GetStandbyIds(), "StandbyIds should be empty when not configured")
+		assert.Equal(t, int32(0), statusResp.GetStatus().GetSyncReplicationConfig().GetNumSync(), "NumSync should be 0")
 
 		t.Log("PrimaryStatus without sync replication verified successfully")
 	})
@@ -174,13 +174,13 @@ func TestPrimaryStatus(t *testing.T) {
 			makeMultipoolerID("test-cell", "standby1"),
 			makeMultipoolerID("test-cell", "standby2"),
 		}
-		configReq := &multipoolermanagerdata.ConfigureSynchronousReplicationRequest{
+		configReq := multipoolermanagerdata.ConfigureSynchronousReplicationRequest_builder{
 			SynchronousCommit: multipoolermanagerdata.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_APPLY,
 			SynchronousMethod: multipoolermanagerdata.SynchronousMethod_SYNCHRONOUS_METHOD_ANY,
 			NumSync:           2,
 			StandbyIds:        standbyIDs,
 			ReloadConfig:      true,
-		}
+		}.Build()
 		_, err := primaryManagerClient.ConfigureSynchronousReplication(utils.WithShortDeadline(t), configReq)
 		require.NoError(t, err)
 
@@ -188,30 +188,30 @@ func TestPrimaryStatus(t *testing.T) {
 		t.Log("Waiting for configuration to converge...")
 		waitForSyncConfigConvergenceWithClient(t, primaryManagerClient, func(config *multipoolermanagerdata.SynchronousReplicationConfiguration) bool {
 			return config != nil &&
-				config.SynchronousCommit == multipoolermanagerdata.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_APPLY &&
-				config.SynchronousMethod == multipoolermanagerdata.SynchronousMethod_SYNCHRONOUS_METHOD_ANY &&
-				config.NumSync == 2 &&
-				len(config.StandbyIds) == 2
+				config.GetSynchronousCommit() == multipoolermanagerdata.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_APPLY &&
+				config.GetSynchronousMethod() == multipoolermanagerdata.SynchronousMethod_SYNCHRONOUS_METHOD_ANY &&
+				config.GetNumSync() == 2 &&
+				len(config.GetStandbyIds()) == 2
 		}, "Configuration should converge to expected values")
 
 		// Get primary status and verify
 		statusResp, err := primaryManagerClient.PrimaryStatus(utils.WithShortDeadline(t), &multipoolermanagerdata.PrimaryStatusRequest{})
 		require.NoError(t, err, "PrimaryStatus should succeed")
-		require.NotNil(t, statusResp.Status, "Status should not be nil")
+		require.NotNil(t, statusResp.GetStatus(), "Status should not be nil")
 
 		// Verify sync replication config is present and correct
-		require.NotNil(t, statusResp.Status.SyncReplicationConfig, "Sync replication config should be present")
+		require.NotNil(t, statusResp.GetStatus().GetSyncReplicationConfig(), "Sync replication config should be present")
 		assert.Equal(t, multipoolermanagerdata.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_APPLY,
-			statusResp.Status.SyncReplicationConfig.SynchronousCommit, "Synchronous commit level should match")
+			statusResp.GetStatus().GetSyncReplicationConfig().GetSynchronousCommit(), "Synchronous commit level should match")
 		assert.Equal(t, multipoolermanagerdata.SynchronousMethod_SYNCHRONOUS_METHOD_ANY,
-			statusResp.Status.SyncReplicationConfig.SynchronousMethod, "Synchronous method should match")
-		assert.Equal(t, int32(2), statusResp.Status.SyncReplicationConfig.NumSync, "NumSync should match")
-		assert.Len(t, statusResp.Status.SyncReplicationConfig.StandbyIds, 2, "Should have 2 standby IDs")
+			statusResp.GetStatus().GetSyncReplicationConfig().GetSynchronousMethod(), "Synchronous method should match")
+		assert.Equal(t, int32(2), statusResp.GetStatus().GetSyncReplicationConfig().GetNumSync(), "NumSync should match")
+		assert.Len(t, statusResp.GetStatus().GetSyncReplicationConfig().GetStandbyIds(), 2, "Should have 2 standby IDs")
 
 		// Verify standby IDs
 		standbyIDMap := make(map[string]bool)
-		for _, id := range statusResp.Status.SyncReplicationConfig.StandbyIds {
-			key := fmt.Sprintf("%s_%s", id.Cell, id.Name)
+		for _, id := range statusResp.GetStatus().GetSyncReplicationConfig().GetStandbyIds() {
+			key := fmt.Sprintf("%s_%s", id.GetCell(), id.GetName())
 			standbyIDMap[key] = true
 		}
 		assert.True(t, standbyIDMap["test-cell_standby1"], "standby1 should be in the list")
@@ -220,13 +220,13 @@ func TestPrimaryStatus(t *testing.T) {
 		t.Log("PrimaryStatus with sync replication verified successfully")
 
 		// Cleanup
-		clearReq := &multipoolermanagerdata.ConfigureSynchronousReplicationRequest{
+		clearReq := multipoolermanagerdata.ConfigureSynchronousReplicationRequest_builder{
 			SynchronousCommit: multipoolermanagerdata.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 			SynchronousMethod: multipoolermanagerdata.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			NumSync:           0,
 			StandbyIds:        []*clustermetadatapb.ID{},
 			ReloadConfig:      true,
-		}
+		}.Build()
 		_, err = primaryManagerClient.ConfigureSynchronousReplication(utils.WithShortDeadline(t), clearReq)
 		require.NoError(t, err)
 	})
@@ -237,14 +237,14 @@ func TestPrimaryStatus(t *testing.T) {
 		t.Log("Testing PrimaryStatus with connected follower...")
 
 		// Ensure standby is connected and replicating
-		setPrimaryReq := &multipoolermanagerdata.SetPrimaryConnInfoRequest{
+		setPrimaryReq := multipoolermanagerdata.SetPrimaryConnInfoRequest_builder{
 			Host:                  "localhost",
 			Port:                  int32(setup.PrimaryPgctld.PgPort),
 			StartReplicationAfter: true,
 			StopReplicationBefore: false,
 			CurrentTerm:           1,
 			Force:                 false,
-		}
+		}.Build()
 		_, err := standbyManagerClient.SetPrimaryConnInfo(utils.WithShortDeadline(t), setPrimaryReq)
 		require.NoError(t, err)
 
@@ -254,9 +254,9 @@ func TestPrimaryStatus(t *testing.T) {
 			if err != nil {
 				return false
 			}
-			return statusResp.Status.PrimaryConnInfo != nil &&
-				statusResp.Status.PrimaryConnInfo.Host != "" &&
-				!statusResp.Status.IsWalReplayPaused
+			return statusResp.GetStatus().HasPrimaryConnInfo() &&
+				statusResp.GetStatus().GetPrimaryConnInfo().GetHost() != "" &&
+				!statusResp.GetStatus().GetIsWalReplayPaused()
 		}, 5*time.Second, 200*time.Millisecond, "Replication should be established")
 
 		// Wait for primary to register the follower in pg_stat_replication
@@ -270,23 +270,23 @@ func TestPrimaryStatus(t *testing.T) {
 				t.Logf("PrimaryStatus error: %v", err)
 				return false
 			}
-			return statusResp.Status != nil && len(statusResp.Status.ConnectedFollowers) > 0
+			return statusResp.HasStatus() && len(statusResp.GetStatus().GetConnectedFollowers()) > 0
 		}, 10*time.Second, 200*time.Millisecond, "Primary should register the follower")
 
 		// Verify followers list contains the standby
-		require.NotEmpty(t, statusResp.Status.ConnectedFollowers, "Should have at least one follower")
+		require.NotEmpty(t, statusResp.GetStatus().GetConnectedFollowers(), "Should have at least one follower")
 
 		// Find our standby in the followers list
 		expectedAppName := fmt.Sprintf("test-cell_%s", setup.StandbyMultipooler.ServiceID)
 		foundStandby := false
-		for _, follower := range statusResp.Status.ConnectedFollowers {
-			if follower.Cell == "test-cell" && follower.Name == setup.StandbyMultipooler.ServiceID {
+		for _, follower := range statusResp.GetStatus().GetConnectedFollowers() {
+			if follower.GetCell() == "test-cell" && follower.GetName() == setup.StandbyMultipooler.ServiceID {
 				foundStandby = true
 				break
 			}
 		}
 		assert.True(t, foundStandby, "Standby should be in followers list with application_name: %s", expectedAppName)
-		t.Logf("Found %d connected follower(s)", len(statusResp.Status.ConnectedFollowers))
+		t.Logf("Found %d connected follower(s)", len(statusResp.GetStatus().GetConnectedFollowers()))
 
 		t.Log("PrimaryStatus with connected follower verified successfully")
 	})
@@ -341,13 +341,13 @@ func TestGetFollowers(t *testing.T) {
 		t.Log("Testing GetFollowers without synchronous replication configured...")
 
 		// Clear any existing sync replication configuration
-		clearReq := &multipoolermanagerdata.ConfigureSynchronousReplicationRequest{
+		clearReq := multipoolermanagerdata.ConfigureSynchronousReplicationRequest_builder{
 			SynchronousCommit: multipoolermanagerdata.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 			SynchronousMethod: multipoolermanagerdata.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			NumSync:           0,
 			StandbyIds:        []*clustermetadatapb.ID{},
 			ReloadConfig:      true,
-		}
+		}.Build()
 		_, err := primaryManagerClient.ConfigureSynchronousReplication(utils.WithShortDeadline(t), clearReq)
 		require.NoError(t, err)
 
@@ -357,11 +357,11 @@ func TestGetFollowers(t *testing.T) {
 		require.NotNil(t, followersResp, "Response should not be nil")
 
 		// Verify empty followers list since no sync replication is configured
-		assert.Empty(t, followersResp.Followers, "Followers list should be empty when no sync replication configured")
+		assert.Empty(t, followersResp.GetFollowers(), "Followers list should be empty when no sync replication configured")
 
 		// Verify sync config is present
-		require.NotNil(t, followersResp.SyncConfig, "Sync config should be present")
-		assert.Empty(t, followersResp.SyncConfig.StandbyIds, "StandbyIds should be empty")
+		require.NotNil(t, followersResp.GetSyncConfig(), "Sync config should be present")
+		assert.Empty(t, followersResp.GetSyncConfig().GetStandbyIds(), "StandbyIds should be empty")
 
 		t.Log("GetFollowers without sync replication verified successfully")
 	})
@@ -378,18 +378,18 @@ func TestGetFollowers(t *testing.T) {
 			if err != nil {
 				return false
 			}
-			return statusResp.Status != nil && statusResp.Status.PrimaryConnInfo != nil
+			return statusResp.HasStatus() && statusResp.GetStatus().HasPrimaryConnInfo()
 		}, 10*time.Second, 500*time.Millisecond, "Standby should be connected (from default setup)")
 
 		// Configure synchronous replication with the standby
 		standbyID := makeMultipoolerID("test-cell", setup.StandbyMultipooler.ServiceID)
-		configReq := &multipoolermanagerdata.ConfigureSynchronousReplicationRequest{
+		configReq := multipoolermanagerdata.ConfigureSynchronousReplicationRequest_builder{
 			SynchronousCommit: multipoolermanagerdata.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 			SynchronousMethod: multipoolermanagerdata.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			NumSync:           1,
 			StandbyIds:        []*clustermetadatapb.ID{standbyID},
 			ReloadConfig:      true,
-		}
+		}.Build()
 		_, err = primaryManagerClient.ConfigureSynchronousReplication(utils.WithShortDeadline(t), configReq)
 		require.NoError(t, err)
 
@@ -401,7 +401,7 @@ func TestGetFollowers(t *testing.T) {
 				return false
 			}
 			// Check if any followers are connected
-			return statusResp.Status != nil && len(statusResp.Status.ConnectedFollowers) > 0
+			return statusResp.HasStatus() && len(statusResp.GetStatus().GetConnectedFollowers()) > 0
 		}, 10*time.Second, 500*time.Millisecond, "Standby should connect to primary")
 
 		// Get followers
@@ -410,29 +410,29 @@ func TestGetFollowers(t *testing.T) {
 		require.NotNil(t, followersResp, "Response should not be nil")
 
 		// Verify followers list
-		require.Len(t, followersResp.Followers, 1, "Should have exactly 1 follower configured")
+		require.Len(t, followersResp.GetFollowers(), 1, "Should have exactly 1 follower configured")
 
-		follower := followersResp.Followers[0]
-		assert.Equal(t, "test-cell", follower.FollowerId.Cell, "Follower cell should match")
-		assert.Equal(t, setup.StandbyMultipooler.ServiceID, follower.FollowerId.Name, "Follower name should match")
-		assert.True(t, follower.IsConnected, "Follower should be connected")
-		assert.NotEmpty(t, follower.ApplicationName, "Application name should be set")
+		follower := followersResp.GetFollowers()[0]
+		assert.Equal(t, "test-cell", follower.GetFollowerId().GetCell(), "Follower cell should match")
+		assert.Equal(t, setup.StandbyMultipooler.ServiceID, follower.GetFollowerId().GetName(), "Follower name should match")
+		assert.True(t, follower.GetIsConnected(), "Follower should be connected")
+		assert.NotEmpty(t, follower.GetApplicationName(), "Application name should be set")
 
 		// Verify replication stats are present
-		require.NotNil(t, follower.ReplicationStats, "Replication stats should be present for connected follower")
-		assert.NotZero(t, follower.ReplicationStats.Pid, "PID should be set")
-		assert.NotEmpty(t, follower.ReplicationStats.State, "State should be set")
-		assert.NotEmpty(t, follower.ReplicationStats.SyncState, "Sync state should be set")
-		assert.NotEmpty(t, follower.ReplicationStats.SentLsn, "Sent LSN should be set")
-		assert.NotEmpty(t, follower.ReplicationStats.WriteLsn, "Write LSN should be set")
-		assert.NotEmpty(t, follower.ReplicationStats.FlushLsn, "Flush LSN should be set")
-		assert.NotEmpty(t, follower.ReplicationStats.ReplayLsn, "Replay LSN should be set")
+		require.NotNil(t, follower.GetReplicationStats(), "Replication stats should be present for connected follower")
+		assert.NotZero(t, follower.GetReplicationStats().GetPid(), "PID should be set")
+		assert.NotEmpty(t, follower.GetReplicationStats().GetState(), "State should be set")
+		assert.NotEmpty(t, follower.GetReplicationStats().GetSyncState(), "Sync state should be set")
+		assert.NotEmpty(t, follower.GetReplicationStats().GetSentLsn(), "Sent LSN should be set")
+		assert.NotEmpty(t, follower.GetReplicationStats().GetWriteLsn(), "Write LSN should be set")
+		assert.NotEmpty(t, follower.GetReplicationStats().GetFlushLsn(), "Flush LSN should be set")
+		assert.NotEmpty(t, follower.GetReplicationStats().GetReplayLsn(), "Replay LSN should be set")
 
 		t.Logf("Follower stats: PID=%d, State=%s, SyncState=%s, SentLSN=%s",
-			follower.ReplicationStats.Pid,
-			follower.ReplicationStats.State,
-			follower.ReplicationStats.SyncState,
-			follower.ReplicationStats.SentLsn)
+			follower.GetReplicationStats().GetPid(),
+			follower.GetReplicationStats().GetState(),
+			follower.GetReplicationStats().GetSyncState(),
+			follower.GetReplicationStats().GetSentLsn())
 	})
 
 	t.Run("GetFollowers_FollowerDisconnects", func(t *testing.T) {
@@ -447,18 +447,18 @@ func TestGetFollowers(t *testing.T) {
 			if err != nil {
 				return false
 			}
-			return statusResp.Status != nil && statusResp.Status.PrimaryConnInfo != nil
+			return statusResp.HasStatus() && statusResp.GetStatus().HasPrimaryConnInfo()
 		}, 10*time.Second, 500*time.Millisecond, "Standby should be connected (from default setup)")
 
 		// Configure synchronous replication with the standby
 		standbyID := makeMultipoolerID("test-cell", setup.StandbyMultipooler.ServiceID)
-		configReq := &multipoolermanagerdata.ConfigureSynchronousReplicationRequest{
+		configReq := multipoolermanagerdata.ConfigureSynchronousReplicationRequest_builder{
 			SynchronousCommit: multipoolermanagerdata.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 			SynchronousMethod: multipoolermanagerdata.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			NumSync:           1,
 			StandbyIds:        []*clustermetadatapb.ID{standbyID},
 			ReloadConfig:      true,
-		}
+		}.Build()
 		_, err = primaryManagerClient.ConfigureSynchronousReplication(utils.WithShortDeadline(t), configReq)
 		require.NoError(t, err)
 
@@ -470,19 +470,19 @@ func TestGetFollowers(t *testing.T) {
 				return false
 			}
 			// Check if any followers are connected
-			return statusResp.Status != nil && len(statusResp.Status.ConnectedFollowers) > 0
+			return statusResp.HasStatus() && len(statusResp.GetStatus().GetConnectedFollowers()) > 0
 		}, 10*time.Second, 500*time.Millisecond, "Standby should connect to primary")
 
 		// Verify follower is connected
 		followersResp, err := primaryManagerClient.GetFollowers(utils.WithShortDeadline(t), &multipoolermanagerdata.GetFollowersRequest{})
 		require.NoError(t, err, "GetFollowers should succeed")
-		require.Len(t, followersResp.Followers, 1, "Should have exactly 1 follower configured")
+		require.Len(t, followersResp.GetFollowers(), 1, "Should have exactly 1 follower configured")
 
-		follower := followersResp.Followers[0]
-		assert.True(t, follower.IsConnected, "Follower should be connected initially")
-		assert.NotNil(t, follower.ReplicationStats, "Replication stats should be present initially")
+		follower := followersResp.GetFollowers()[0]
+		assert.True(t, follower.GetIsConnected(), "Follower should be connected initially")
+		assert.NotNil(t, follower.GetReplicationStats(), "Replication stats should be present initially")
 		t.Logf("Initial state: Follower connected with PID=%d, State=%s",
-			follower.ReplicationStats.Pid, follower.ReplicationStats.State)
+			follower.GetReplicationStats().GetPid(), follower.GetReplicationStats().GetState())
 
 		// Now reset replication on the standby to disconnect it
 		t.Log("Resetting replication on standby to disconnect...")
@@ -497,24 +497,24 @@ func TestGetFollowers(t *testing.T) {
 				t.Logf("GetFollowers failed: %v", err)
 				return false
 			}
-			if len(followersResp.Followers) != 1 {
-				t.Logf("Expected 1 follower, got %d", len(followersResp.Followers))
+			if len(followersResp.GetFollowers()) != 1 {
+				t.Logf("Expected 1 follower, got %d", len(followersResp.GetFollowers()))
 				return false
 			}
 			// Check if follower is now disconnected
-			return !followersResp.Followers[0].IsConnected
+			return !followersResp.GetFollowers()[0].GetIsConnected()
 		}, 10*time.Second, 500*time.Millisecond, "Follower should be marked as disconnected after ResetReplication")
 
 		// Verify the final state
 		followersResp, err = primaryManagerClient.GetFollowers(utils.WithShortDeadline(t), &multipoolermanagerdata.GetFollowersRequest{})
 		require.NoError(t, err, "GetFollowers should succeed")
-		require.Len(t, followersResp.Followers, 1, "Should still have 1 follower configured")
+		require.Len(t, followersResp.GetFollowers(), 1, "Should still have 1 follower configured")
 
-		follower = followersResp.Followers[0]
-		assert.False(t, follower.IsConnected, "Follower should be disconnected")
-		assert.Nil(t, follower.ReplicationStats, "Replication stats should be nil for disconnected follower")
-		assert.Equal(t, "test-cell", follower.FollowerId.Cell, "Follower cell should still match")
-		assert.Equal(t, setup.StandbyMultipooler.ServiceID, follower.FollowerId.Name, "Follower name should still match")
+		follower = followersResp.GetFollowers()[0]
+		assert.False(t, follower.GetIsConnected(), "Follower should be disconnected")
+		assert.Nil(t, follower.GetReplicationStats(), "Replication stats should be nil for disconnected follower")
+		assert.Equal(t, "test-cell", follower.GetFollowerId().GetCell(), "Follower cell should still match")
+		assert.Equal(t, setup.StandbyMultipooler.ServiceID, follower.GetFollowerId().GetName(), "Follower name should still match")
 
 		t.Log("Verified: Follower disconnect is correctly reflected in GetFollowers response")
 	})
@@ -531,25 +531,25 @@ func TestGetFollowers(t *testing.T) {
 			if err != nil {
 				return false
 			}
-			return statusResp.Status != nil && statusResp.Status.PrimaryConnInfo != nil
+			return statusResp.HasStatus() && statusResp.GetStatus().HasPrimaryConnInfo()
 		}, 10*time.Second, 500*time.Millisecond, "Standby should be connected (from default setup)")
 
 		// Configure synchronous replication with real standby + fake standby
 		connectedID := makeMultipoolerID("test-cell", setup.StandbyMultipooler.ServiceID)
 		disconnectedID := makeMultipoolerID("test-cell", "missing-standby")
-		configReq := &multipoolermanagerdata.ConfigureSynchronousReplicationRequest{
+		configReq := multipoolermanagerdata.ConfigureSynchronousReplicationRequest_builder{
 			SynchronousCommit: multipoolermanagerdata.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 			SynchronousMethod: multipoolermanagerdata.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			NumSync:           2,
 			StandbyIds:        []*clustermetadatapb.ID{connectedID, disconnectedID},
 			ReloadConfig:      true,
-		}
+		}.Build()
 		_, err = primaryManagerClient.ConfigureSynchronousReplication(utils.WithShortDeadline(t), configReq)
 		require.NoError(t, err)
 
 		// Wait for configuration to converge
 		waitForSyncConfigConvergenceWithClient(t, primaryManagerClient, func(config *multipoolermanagerdata.SynchronousReplicationConfiguration) bool {
-			return config != nil && len(config.StandbyIds) == 2
+			return config != nil && len(config.GetStandbyIds()) == 2
 		}, "Configuration should converge")
 
 		// Wait for the real standby to actually connect (the fake one won't)
@@ -560,7 +560,7 @@ func TestGetFollowers(t *testing.T) {
 				return false
 			}
 			// Check if any followers are connected
-			return statusResp.Status != nil && len(statusResp.Status.ConnectedFollowers) > 0
+			return statusResp.HasStatus() && len(statusResp.GetStatus().GetConnectedFollowers()) > 0
 		}, 10*time.Second, 500*time.Millisecond, "Real standby should connect to primary")
 
 		// Get followers
@@ -569,20 +569,20 @@ func TestGetFollowers(t *testing.T) {
 		require.NotNil(t, followersResp, "Response should not be nil")
 
 		// Verify followers list
-		require.Len(t, followersResp.Followers, 2, "Should have exactly 2 followers configured")
+		require.Len(t, followersResp.GetFollowers(), 2, "Should have exactly 2 followers configured")
 
 		// Count connected and disconnected
 		connectedCount := 0
 		disconnectedCount := 0
-		for _, follower := range followersResp.Followers {
-			if follower.IsConnected {
+		for _, follower := range followersResp.GetFollowers() {
+			if follower.GetIsConnected() {
 				connectedCount++
-				assert.NotNil(t, follower.ReplicationStats, "Connected follower should have stats")
-				assert.Equal(t, setup.StandbyMultipooler.ServiceID, follower.FollowerId.Name, "Connected follower name should match")
+				assert.NotNil(t, follower.GetReplicationStats(), "Connected follower should have stats")
+				assert.Equal(t, setup.StandbyMultipooler.ServiceID, follower.GetFollowerId().GetName(), "Connected follower name should match")
 			} else {
 				disconnectedCount++
-				assert.Nil(t, follower.ReplicationStats, "Disconnected follower should not have stats")
-				assert.Equal(t, "missing-standby", follower.FollowerId.Name, "Disconnected follower name should match")
+				assert.Nil(t, follower.GetReplicationStats(), "Disconnected follower should not have stats")
+				assert.Equal(t, "missing-standby", follower.GetFollowerId().GetName(), "Disconnected follower name should match")
 			}
 		}
 

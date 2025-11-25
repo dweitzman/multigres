@@ -51,7 +51,7 @@ func InitAndStartPostgreSQL(t *testing.T, grpcAddr string) error {
 	if err != nil {
 		return fmt.Errorf("call toInitDataDir RPC failed: %w", err)
 	}
-	t.Logf("Init response: %s", initResp.Message)
+	t.Logf("Init response: %s", initResp.GetMessage())
 
 	// Start PostgreSQL
 	t.Logf("Starting PostgreSQL via gRPC at %s", grpcAddr)
@@ -60,7 +60,7 @@ func InitAndStartPostgreSQL(t *testing.T, grpcAddr string) error {
 		return fmt.Errorf("call to Start RPC failed: %w", err)
 	}
 
-	t.Logf("PostgreSQL started: PID=%d, Message=%s", startResp.Pid, startResp.Message)
+	t.Logf("PostgreSQL started: PID=%d, Message=%s", startResp.GetPid(), startResp.GetMessage())
 	return nil
 }
 
@@ -88,7 +88,7 @@ func InitPostgreSQLDataDir(t *testing.T, grpcAddr string) error {
 	if err != nil {
 		return fmt.Errorf("InitDataDir RPC failed: %w", err)
 	}
-	t.Logf("Init response: %s", initResp.Message)
+	t.Logf("Init response: %s", initResp.GetMessage())
 	return nil
 }
 
@@ -117,6 +117,6 @@ func StartPostgreSQL(t *testing.T, grpcAddr string) error {
 		return fmt.Errorf("call to Start RPC failed: %w", err)
 	}
 
-	t.Logf("PostgreSQL started: PID=%d, Message=%s", startResp.Pid, startResp.Message)
+	t.Logf("PostgreSQL started: PID=%d, Message=%s", startResp.GetPid(), startResp.GetMessage())
 	return nil
 }

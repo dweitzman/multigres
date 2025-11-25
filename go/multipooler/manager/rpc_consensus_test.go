@@ -46,19 +46,19 @@ func setupManagerWithMockDB(t *testing.T) (*MultiPoolerManager, sqlmock.Sqlmock,
 	pgctldAddr, cleanupPgctld := testutil.StartMockPgctldServer(t)
 	t.Cleanup(cleanupPgctld)
 
-	serviceID := &clustermetadatapb.ID{
+	serviceID := clustermetadatapb.ID_builder{
 		Component: clustermetadatapb.ID_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-pooler",
-	}
-	multipooler := &clustermetadatapb.MultiPooler{
+	}.Build()
+	multipooler := clustermetadatapb.MultiPooler_builder{
 		Id:            serviceID,
 		Database:      "testdb",
 		Hostname:      "localhost",
 		PortMap:       map[string]int32{"grpc": 8080},
 		Type:          clustermetadatapb.PoolerType_PRIMARY,
 		ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-	}
+	}.Build()
 	require.NoError(t, ts.CreateMultiPooler(ctx, multipooler))
 
 	tmpDir := t.TempDir()
@@ -119,20 +119,20 @@ func TestBeginTerm(t *testing.T) {
 	}{
 		{
 			name: "AlreadyAcceptedLeaderInOlderTerm",
-			initialTerm: &multipoolermanagerdatapb.ConsensusTerm{
+			initialTerm: multipoolermanagerdatapb.ConsensusTerm_builder{
 				TermNumber: 5,
-				AcceptedTermFromCoordinatorId: &clustermetadatapb.ID{
+				AcceptedTermFromCoordinatorId: clustermetadatapb.ID_builder{
 					Component: clustermetadatapb.ID_MULTIPOOLER,
 					Cell:      "zone1",
 					Name:      "candidate-A",
-				},
-			},
+				}.Build(),
+			}.Build(),
 			requestTerm: 10,
-			requestCandidate: &clustermetadatapb.ID{
+			requestCandidate: clustermetadatapb.ID_builder{
 				Component: clustermetadatapb.ID_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "candidate-B",
-			},
+			}.Build(),
 			setupMocks: func(mock sqlmock.Sqlmock) {
 				mock.ExpectPing()
 				recentTime := time.Now().Add(-5 * time.Second)
@@ -146,20 +146,20 @@ func TestBeginTerm(t *testing.T) {
 		},
 		{
 			name: "AlreadyAcceptedLeaderInSameTerm",
-			initialTerm: &multipoolermanagerdatapb.ConsensusTerm{
+			initialTerm: multipoolermanagerdatapb.ConsensusTerm_builder{
 				TermNumber: 5,
-				AcceptedTermFromCoordinatorId: &clustermetadatapb.ID{
+				AcceptedTermFromCoordinatorId: clustermetadatapb.ID_builder{
 					Component: clustermetadatapb.ID_MULTIPOOLER,
 					Cell:      "zone1",
 					Name:      "candidate-A",
-				},
-			},
+				}.Build(),
+			}.Build(),
 			requestTerm: 5,
-			requestCandidate: &clustermetadatapb.ID{
+			requestCandidate: clustermetadatapb.ID_builder{
 				Component: clustermetadatapb.ID_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "candidate-B",
-			},
+			}.Build(),
 			setupMocks: func(mock sqlmock.Sqlmock) {
 				mock.ExpectPing()
 			},
@@ -170,20 +170,20 @@ func TestBeginTerm(t *testing.T) {
 		},
 		{
 			name: "AlreadyAcceptedSameCandidateInSameTerm",
-			initialTerm: &multipoolermanagerdatapb.ConsensusTerm{
+			initialTerm: multipoolermanagerdatapb.ConsensusTerm_builder{
 				TermNumber: 5,
-				AcceptedTermFromCoordinatorId: &clustermetadatapb.ID{
+				AcceptedTermFromCoordinatorId: clustermetadatapb.ID_builder{
 					Component: clustermetadatapb.ID_MULTIPOOLER,
 					Cell:      "zone1",
 					Name:      "candidate-A",
-				},
-			},
+				}.Build(),
+			}.Build(),
 			requestTerm: 5,
-			requestCandidate: &clustermetadatapb.ID{
+			requestCandidate: clustermetadatapb.ID_builder{
 				Component: clustermetadatapb.ID_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "candidate-A",
-			},
+			}.Build(),
 			setupMocks: func(mock sqlmock.Sqlmock) {
 				mock.ExpectPing()
 				recentTime := time.Now().Add(-5 * time.Second)
@@ -212,16 +212,16 @@ func TestBeginTerm(t *testing.T) {
 	}{
 		{
 			name: "SaveFailureDuringAcceptance_MemoryUnchanged",
-			initialTerm: &multipoolermanagerdatapb.ConsensusTerm{
+			initialTerm: multipoolermanagerdatapb.ConsensusTerm_builder{
 				TermNumber:                    5,
 				AcceptedTermFromCoordinatorId: nil, // No coordinator accepted yet
-			},
+			}.Build(),
 			requestTerm: 5,
-			requestCandidate: &clustermetadatapb.ID{
+			requestCandidate: clustermetadatapb.ID_builder{
 				Component: clustermetadatapb.ID_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "candidate-B",
-			},
+			}.Build(),
 			makeFilesystemReadOnly: true,
 			setupMocks: func(mock sqlmock.Sqlmock) {
 				mock.ExpectPing()
@@ -248,31 +248,31 @@ func TestBeginTerm(t *testing.T) {
 			// Load into consensus state
 			loadedTermNumber, err := pm.consensusState.Load()
 			require.NoError(t, err)
-			assert.Equal(t, tt.initialTerm.TermNumber, loadedTermNumber, "Loaded term number should match initial term")
+			assert.Equal(t, tt.initialTerm.GetTermNumber(), loadedTermNumber, "Loaded term number should match initial term")
 
 			// Setup mocks
 			tt.setupMocks(mock)
 
 			// Make request
-			req := &consensusdatapb.BeginTermRequest{
+			req := consensusdatapb.BeginTermRequest_builder{
 				Term:        tt.requestTerm,
 				CandidateId: tt.requestCandidate,
 				ShardId:     "shard-1",
-			}
+			}.Build()
 
 			resp, err := pm.BeginTerm(ctx, req)
 
 			// Verify response
 			require.NoError(t, err)
 			require.NotNil(t, resp)
-			assert.Equal(t, tt.expectedAccepted, resp.Accepted, tt.description)
-			assert.Equal(t, tt.expectedTerm, resp.Term)
+			assert.Equal(t, tt.expectedAccepted, resp.GetAccepted(), tt.description)
+			assert.Equal(t, tt.expectedTerm, resp.GetTerm())
 
 			// Verify persisted state
 			persistedTerm, err := getConsensusTerm(tmpDir)
 			require.NoError(t, err)
-			assert.Equal(t, tt.expectedTerm, persistedTerm.TermNumber)
-			assert.Equal(t, tt.expectedAcceptedTermFromCoordinator, persistedTerm.AcceptedTermFromCoordinatorId.GetName())
+			assert.Equal(t, tt.expectedTerm, persistedTerm.GetTermNumber())
+			assert.Equal(t, tt.expectedAcceptedTermFromCoordinator, persistedTerm.GetAcceptedTermFromCoordinatorId().GetName())
 
 			assert.NoError(t, mock.ExpectationsWereMet())
 		})
@@ -291,7 +291,7 @@ func TestBeginTerm(t *testing.T) {
 			// Load into consensus state
 			loadedTermNumber, err := pm.consensusState.Load()
 			require.NoError(t, err)
-			assert.Equal(t, tt.initialTerm.TermNumber, loadedTermNumber, "Loaded term number should match initial term")
+			assert.Equal(t, tt.initialTerm.GetTermNumber(), loadedTermNumber, "Loaded term number should match initial term")
 
 			// Make filesystem read-only to simulate save failure
 			if tt.makeFilesystemReadOnly {
@@ -309,11 +309,11 @@ func TestBeginTerm(t *testing.T) {
 			tt.setupMocks(mock)
 
 			// Make request
-			req := &consensusdatapb.BeginTermRequest{
+			req := consensusdatapb.BeginTermRequest_builder{
 				Term:        tt.requestTerm,
 				CandidateId: tt.requestCandidate,
 				ShardId:     "shard-1",
-			}
+			}.Build()
 
 			resp, err := pm.BeginTerm(ctx, req)
 
@@ -338,9 +338,9 @@ func TestBeginTerm(t *testing.T) {
 				// Verify disk is unchanged
 				loadedTerm, loadErr := getConsensusTerm(tmpDir)
 				require.NoError(t, loadErr)
-				assert.Equal(t, tt.expectedMemoryTerm, loadedTerm.TermNumber, "Disk term should match initial state after save failure")
+				assert.Equal(t, tt.expectedMemoryTerm, loadedTerm.GetTermNumber(), "Disk term should match initial state after save failure")
 				if tt.expectedMemoryLeader != "" {
-					assert.Equal(t, tt.expectedMemoryLeader, loadedTerm.AcceptedTermFromCoordinatorId.GetName(), "Disk leader should match initial state after save failure")
+					assert.Equal(t, tt.expectedMemoryLeader, loadedTerm.GetAcceptedTermFromCoordinatorId().GetName(), "Disk leader should match initial state after save failure")
 				}
 			}
 
@@ -467,21 +467,21 @@ func TestCanReachPrimary(t *testing.T) {
 				tt.setupMocks(mock)
 			}
 
-			req := &consensusdatapb.CanReachPrimaryRequest{
+			req := consensusdatapb.CanReachPrimaryRequest_builder{
 				PrimaryHost: tt.requestHost,
 				PrimaryPort: tt.requestPort,
-			}
+			}.Build()
 
 			resp, err := pm.CanReachPrimary(ctx, req)
 
 			require.NoError(t, err)
 			require.NotNil(t, resp)
-			assert.Equal(t, tt.expectedReachable, resp.Reachable, tt.description)
+			assert.Equal(t, tt.expectedReachable, resp.GetReachable(), tt.description)
 
 			if tt.expectedErrorContains != "" {
-				assert.Contains(t, resp.ErrorMessage, tt.expectedErrorContains)
+				assert.Contains(t, resp.GetErrorMessage(), tt.expectedErrorContains)
 			} else {
-				assert.Empty(t, resp.ErrorMessage)
+				assert.Empty(t, resp.GetErrorMessage())
 			}
 
 			if !tt.nilDB {
@@ -510,13 +510,13 @@ func TestConsensusStatus(t *testing.T) {
 	}{
 		{
 			name: "HealthyPrimary",
-			initialTerm: &multipoolermanagerdatapb.ConsensusTerm{
+			initialTerm: multipoolermanagerdatapb.ConsensusTerm_builder{
 				TermNumber: 5,
-				AcceptedTermFromCoordinatorId: &clustermetadatapb.ID{
+				AcceptedTermFromCoordinatorId: clustermetadatapb.ID_builder{
 					Cell: "zone1",
 					Name: "leader-node",
-				},
-			},
+				}.Build(),
+			}.Build(),
 			termInMemory: true,
 			setupMocks: func(mock sqlmock.Sqlmock) {
 				// Single pg_is_in_recovery check determines both role and which WAL position to query
@@ -533,10 +533,10 @@ func TestConsensusStatus(t *testing.T) {
 		},
 		{
 			name: "HealthyStandby",
-			initialTerm: &multipoolermanagerdatapb.ConsensusTerm{
+			initialTerm: multipoolermanagerdatapb.ConsensusTerm_builder{
 				TermNumber:                    3,
 				AcceptedTermFromCoordinatorId: nil,
-			},
+			}.Build(),
 			termInMemory: true,
 			setupMocks: func(mock sqlmock.Sqlmock) {
 				// Single pg_is_in_recovery check determines both role and which WAL position to query
@@ -561,10 +561,10 @@ func TestConsensusStatus(t *testing.T) {
 		},
 		{
 			name: "NoDatabaseConnection",
-			initialTerm: &multipoolermanagerdatapb.ConsensusTerm{
+			initialTerm: multipoolermanagerdatapb.ConsensusTerm_builder{
 				TermNumber:                    7,
 				AcceptedTermFromCoordinatorId: nil,
-			},
+			}.Build(),
 			termInMemory:        true,
 			nilDB:               true,
 			expectedCurrentTerm: 7,
@@ -574,10 +574,10 @@ func TestConsensusStatus(t *testing.T) {
 		},
 		{
 			name: "DatabaseQueryFailure",
-			initialTerm: &multipoolermanagerdatapb.ConsensusTerm{
+			initialTerm: multipoolermanagerdatapb.ConsensusTerm_builder{
 				TermNumber:                    4,
 				AcceptedTermFromCoordinatorId: nil,
-			},
+			}.Build(),
 			termInMemory: true,
 			setupMocks: func(mock sqlmock.Sqlmock) {
 				// No database queries expected - database connection exists but no queries made
@@ -612,29 +612,29 @@ func TestConsensusStatus(t *testing.T) {
 				tt.setupMocks(mock)
 			}
 
-			req := &consensusdatapb.StatusRequest{
+			req := consensusdatapb.StatusRequest_builder{
 				ShardId: "test-shard",
-			}
+			}.Build()
 
 			resp, err := pm.ConsensusStatus(ctx, req)
 
 			// Verify response
 			require.NoError(t, err, tt.description)
 			require.NotNil(t, resp)
-			assert.Equal(t, "test-pooler", resp.PoolerId)
-			assert.Equal(t, tt.expectedCurrentTerm, resp.CurrentTerm)
-			assert.Equal(t, tt.expectedIsHealthy, resp.IsHealthy, tt.description)
-			assert.True(t, resp.IsEligible)
-			assert.Equal(t, "zone1", resp.Cell)
-			assert.Equal(t, tt.expectedRole, resp.Role)
+			assert.Equal(t, "test-pooler", resp.GetPoolerId())
+			assert.Equal(t, tt.expectedCurrentTerm, resp.GetCurrentTerm())
+			assert.Equal(t, tt.expectedIsHealthy, resp.GetIsHealthy(), tt.description)
+			assert.True(t, resp.GetIsEligible())
+			assert.Equal(t, "zone1", resp.GetCell())
+			assert.Equal(t, tt.expectedRole, resp.GetRole())
 
 			// Verify WAL position if expected
-			require.NotNil(t, resp.WalPosition)
+			require.NotNil(t, resp.GetWalPosition())
 			if tt.expectedWALLsn != "" {
 				if tt.expectedRole == "primary" {
-					assert.Equal(t, tt.expectedWALLsn, resp.WalPosition.CurrentLsn)
+					assert.Equal(t, tt.expectedWALLsn, resp.GetWalPosition().GetCurrentLsn())
 				} else if tt.expectedRole == "replica" && tt.expectedIsHealthy {
-					assert.Equal(t, tt.expectedWALLsn, resp.WalPosition.LastReceiveLsn)
+					assert.Equal(t, tt.expectedWALLsn, resp.GetWalPosition().GetLastReceiveLsn())
 				}
 			}
 

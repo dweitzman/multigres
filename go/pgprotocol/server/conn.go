@@ -376,15 +376,15 @@ func (c *Conn) handleQuery() error {
 		}
 
 		// On first callback with fields for this result set, send RowDescription.
-		if !sentRowDescription && len(result.Fields) > 0 {
-			if err := c.writeRowDescription(result.Fields); err != nil {
+		if !sentRowDescription && len(result.GetFields()) > 0 {
+			if err := c.writeRowDescription(result.GetFields()); err != nil {
 				return fmt.Errorf("writing row description: %w", err)
 			}
 			sentRowDescription = true
 		}
 
 		// Send all data rows in this chunk.
-		for _, row := range result.Rows {
+		for _, row := range result.GetRows() {
 			if err := c.writeDataRow(row); err != nil {
 				return fmt.Errorf("writing data row: %w", err)
 			}
@@ -392,8 +392,8 @@ func (c *Conn) handleQuery() error {
 
 		// If CommandTag is set, this is the last packet of the current result set.
 		// Send CommandComplete and reset state for the next result set.
-		if result.CommandTag != "" {
-			if err := c.writeCommandComplete(result.CommandTag); err != nil {
+		if result.GetCommandTag() != "" {
+			if err := c.writeCommandComplete(result.GetCommandTag()); err != nil {
 				return fmt.Errorf("writing command complete: %w", err)
 			}
 
@@ -628,15 +628,15 @@ func (c *Conn) handleExecute() error {
 	// The handler is responsible for retrieving the portal and executing it.
 	err = c.handler.HandleExecute(c.ctx, c, portalName, maxRows, func(ctx context.Context, result *query.QueryResult) error {
 		// On first callback with fields, send RowDescription.
-		if !sentRowDescription && len(result.Fields) > 0 {
-			if err := c.writeRowDescription(result.Fields); err != nil {
+		if !sentRowDescription && len(result.GetFields()) > 0 {
+			if err := c.writeRowDescription(result.GetFields()); err != nil {
 				return fmt.Errorf("writing row description: %w", err)
 			}
 			sentRowDescription = true
 		}
 
 		// Send all data rows in this chunk.
-		for _, row := range result.Rows {
+		for _, row := range result.GetRows() {
 			if err := c.writeDataRow(row); err != nil {
 				return fmt.Errorf("writing data row: %w", err)
 			}
@@ -644,8 +644,8 @@ func (c *Conn) handleExecute() error {
 
 		// If CommandTag is set, this is the last packet.
 		// Send CommandComplete.
-		if result.CommandTag != "" {
-			if err := c.writeCommandComplete(result.CommandTag); err != nil {
+		if result.GetCommandTag() != "" {
+			if err := c.writeCommandComplete(result.GetCommandTag()); err != nil {
 				return fmt.Errorf("writing command complete: %w", err)
 			}
 		}
@@ -705,15 +705,15 @@ func (c *Conn) handleDescribe() error {
 	}
 
 	// Send ParameterDescription if there are parameters.
-	if len(desc.Parameters) > 0 {
-		if err := c.writeParameterDescription(desc.Parameters); err != nil {
+	if len(desc.GetParameters()) > 0 {
+		if err := c.writeParameterDescription(desc.GetParameters()); err != nil {
 			return fmt.Errorf("failed to write parameter description: %w", err)
 		}
 	}
 
 	// Send RowDescription or NoData based on whether we have field info.
-	if len(desc.Fields) > 0 {
-		if err := c.writeRowDescription(desc.Fields); err != nil {
+	if len(desc.GetFields()) > 0 {
+		if err := c.writeRowDescription(desc.GetFields()); err != nil {
 			return fmt.Errorf("failed to write row description: %w", err)
 		}
 	} else {

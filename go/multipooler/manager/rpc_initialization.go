@@ -33,7 +33,7 @@ import (
 // InitializeEmptyPrimary initializes this pooler as an empty primary
 // Used during bootstrap initialization of a new shard
 func (pm *MultiPoolerManager) InitializeEmptyPrimary(ctx context.Context, req *multipoolermanagerdatapb.InitializeEmptyPrimaryRequest) (*multipoolermanagerdatapb.InitializeEmptyPrimaryResponse, error) {
-	pm.logger.InfoContext(ctx, "InitializeEmptyPrimary called", "shard", pm.getShardID(), "term", req.ConsensusTerm)
+	pm.logger.InfoContext(ctx, "InitializeEmptyPrimary called", "shard", pm.getShardID(), "term", req.GetConsensusTerm())
 
 	// Acquire action lock
 	var err error
@@ -44,15 +44,15 @@ func (pm *MultiPoolerManager) InitializeEmptyPrimary(ctx context.Context, req *m
 	defer pm.actionLock.Release(ctx)
 
 	// 1. Validate consensus term must be 1 for new primary
-	if req.ConsensusTerm != 1 {
-		return nil, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT, "consensus term must be 1 for new primary initialization, got %d", req.ConsensusTerm)
+	if req.GetConsensusTerm() != 1 {
+		return nil, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT, "consensus term must be 1 for new primary initialization, got %d", req.GetConsensusTerm())
 	}
 
 	// 2. Check if already initialized
 	if pm.isInitialized() {
 		pm.logger.InfoContext(ctx, "Pooler already initialized", "shard", pm.getShardID())
 		// Note: backup_id will be empty for idempotent case since we didn't create a new backup
-		return &multipoolermanagerdatapb.InitializeEmptyPrimaryResponse{Success: true}, nil
+		return multipoolermanagerdatapb.InitializeEmptyPrimaryResponse_builder{Success: true}.Build(), nil
 	}
 
 	// 3. Initialize data directory via pgctld if needed
@@ -100,7 +100,7 @@ func (pm *MultiPoolerManager) InitializeEmptyPrimary(ctx context.Context, req *m
 
 	// 7. Set consensus term
 	if pm.consensusState != nil {
-		if err := pm.consensusState.UpdateTermAndSave(ctx, req.ConsensusTerm); err != nil {
+		if err := pm.consensusState.UpdateTermAndSave(ctx, req.GetConsensusTerm()); err != nil {
 			return nil, mterrors.Wrap(err, "failed to set consensus term")
 		}
 	}
@@ -119,11 +119,11 @@ func (pm *MultiPoolerManager) InitializeEmptyPrimary(ctx context.Context, req *m
 	}
 	pm.logger.InfoContext(ctx, "Initial backup created", "backup_id", backupID)
 
-	pm.logger.InfoContext(ctx, "Successfully initialized pooler as empty primary", "shard", pm.getShardID(), "term", req.ConsensusTerm)
-	return &multipoolermanagerdatapb.InitializeEmptyPrimaryResponse{
+	pm.logger.InfoContext(ctx, "Successfully initialized pooler as empty primary", "shard", pm.getShardID(), "term", req.GetConsensusTerm())
+	return multipoolermanagerdatapb.InitializeEmptyPrimaryResponse_builder{
 		Success:  true,
 		BackupId: backupID,
-	}, nil
+	}.Build(), nil
 }
 
 // InitializeAsStandby initializes this pooler as a standby from a primary backup
@@ -131,9 +131,9 @@ func (pm *MultiPoolerManager) InitializeEmptyPrimary(ctx context.Context, req *m
 func (pm *MultiPoolerManager) InitializeAsStandby(ctx context.Context, req *multipoolermanagerdatapb.InitializeAsStandbyRequest) (*multipoolermanagerdatapb.InitializeAsStandbyResponse, error) {
 	pm.logger.InfoContext(ctx, "InitializeAsStandby called",
 		"shard", pm.getShardID(),
-		"primary", fmt.Sprintf("%s:%d", req.PrimaryHost, req.PrimaryPort),
-		"term", req.ConsensusTerm,
-		"force", req.Force)
+		"primary", fmt.Sprintf("%s:%d", req.GetPrimaryHost(), req.GetPrimaryPort()),
+		"term", req.GetConsensusTerm(),
+		"force", req.GetForce())
 
 	// Acquire action lock
 	var err error
@@ -145,7 +145,7 @@ func (pm *MultiPoolerManager) InitializeAsStandby(ctx context.Context, req *mult
 
 	// 1. Check for existing data directory
 	if pm.hasDataDirectory() {
-		if !req.Force {
+		if !req.GetForce() {
 			return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, "data directory already exists, use force=true to reinitialize")
 		}
 		// Remove data directory if force
@@ -156,21 +156,21 @@ func (pm *MultiPoolerManager) InitializeAsStandby(ctx context.Context, req *mult
 	}
 
 	// 2. Restore from the specified backup (or latest if not specified)
-	if req.BackupId != "" {
-		pm.logger.InfoContext(ctx, "Restoring from specified backup", "backup_id", req.BackupId, "primary", fmt.Sprintf("%s:%d", req.PrimaryHost, req.PrimaryPort))
+	if req.GetBackupId() != "" {
+		pm.logger.InfoContext(ctx, "Restoring from specified backup", "backup_id", req.GetBackupId(), "primary", fmt.Sprintf("%s:%d", req.GetPrimaryHost(), req.GetPrimaryPort()))
 	} else {
-		pm.logger.InfoContext(ctx, "Restoring from latest backup on primary", "primary", fmt.Sprintf("%s:%d", req.PrimaryHost, req.PrimaryPort))
+		pm.logger.InfoContext(ctx, "Restoring from latest backup on primary", "primary", fmt.Sprintf("%s:%d", req.GetPrimaryHost(), req.GetPrimaryPort()))
 	}
 
 	// Restore from backup (empty string means latest)
 	// RestoreFromBackup will check that this is a standby and start PostgreSQL in standby mode
-	err = pm.RestoreFromBackup(ctx, req.BackupId)
+	err = pm.RestoreFromBackup(ctx, req.GetBackupId())
 	if err != nil {
 		return nil, mterrors.Wrap(err, "failed to restore from backup")
 	}
 
-	if req.BackupId != "" {
-		pm.logger.InfoContext(ctx, "Successfully restored from specified backup", "backup_id", req.BackupId)
+	if req.GetBackupId() != "" {
+		pm.logger.InfoContext(ctx, "Successfully restored from specified backup", "backup_id", req.GetBackupId())
 	} else {
 		pm.logger.InfoContext(ctx, "Successfully restored from latest backup")
 	}
@@ -186,9 +186,9 @@ func (pm *MultiPoolerManager) InitializeAsStandby(ctx context.Context, req *mult
 	}
 
 	finalLSN := ""
-	if len(backups) > 0 && backups[0].FinalLsn != "" {
-		finalLSN = backups[0].FinalLsn
-		pm.logger.InfoContext(ctx, "Backup LSN captured", "backup_id", backups[0].BackupId, "final_lsn", finalLSN)
+	if len(backups) > 0 && backups[0].GetFinalLsn() != "" {
+		finalLSN = backups[0].GetFinalLsn()
+		pm.logger.InfoContext(ctx, "Backup LSN captured", "backup_id", backups[0].GetBackupId(), "final_lsn", finalLSN)
 	} else {
 		pm.logger.WarnContext(ctx, "No LSN available from backup metadata")
 	}
@@ -201,23 +201,23 @@ func (pm *MultiPoolerManager) InitializeAsStandby(ctx context.Context, req *mult
 
 	// 4. Configure primary_conninfo now that PostgreSQL is running
 	// Use the locked version since we're already holding the action lock
-	pm.logger.InfoContext(ctx, "Configuring primary connection info", "primary_host", req.PrimaryHost, "primary_port", req.PrimaryPort)
-	if err := pm.setPrimaryConnInfoLocked(ctx, req.PrimaryHost, req.PrimaryPort, false, true); err != nil {
+	pm.logger.InfoContext(ctx, "Configuring primary connection info", "primary_host", req.GetPrimaryHost(), "primary_port", req.GetPrimaryPort())
+	if err := pm.setPrimaryConnInfoLocked(ctx, req.GetPrimaryHost(), req.GetPrimaryPort(), false, true); err != nil {
 		return nil, mterrors.Wrap(err, "failed to set primary_conninfo")
 	}
 
 	// 5. Set consensus term
 	if pm.consensusState != nil {
-		if err := pm.consensusState.UpdateTermAndSave(ctx, req.ConsensusTerm); err != nil {
+		if err := pm.consensusState.UpdateTermAndSave(ctx, req.GetConsensusTerm()); err != nil {
 			return nil, mterrors.Wrap(err, "failed to set consensus term")
 		}
 	}
 
-	pm.logger.InfoContext(ctx, "Successfully initialized pooler as standby", "shard", pm.getShardID(), "term", req.ConsensusTerm)
-	return &multipoolermanagerdatapb.InitializeAsStandbyResponse{
+	pm.logger.InfoContext(ctx, "Successfully initialized pooler as standby", "shard", pm.getShardID(), "term", req.GetConsensusTerm())
+	return multipoolermanagerdatapb.InitializeAsStandbyResponse_builder{
 		Success:  true,
 		FinalLsn: finalLSN,
-	}, nil
+	}.Build(), nil
 }
 
 // InitializationStatus returns the initialization status of this pooler
@@ -236,20 +236,20 @@ func (pm *MultiPoolerManager) InitializationStatus(ctx context.Context, req *mul
 	// Get WAL position (ignore errors, just return empty string)
 	walPosition, _ := pm.getWALPosition(ctx)
 
-	resp := &multipoolermanagerdatapb.InitializationStatusResponse{
+	resp := multipoolermanagerdatapb.InitializationStatusResponse_builder{
 		IsInitialized:    pm.isInitialized(),
 		HasDataDirectory: pm.hasDataDirectory(),
 		PostgresRunning:  pm.isPostgresRunning(ctx),
 		Role:             pm.getRole(ctx),
 		WalPosition:      walPosition,
 		ShardId:          pm.getShardID(),
-	}
+	}.Build()
 
 	// Get consensus term if available
 	if pm.consensusState != nil {
 		term, err := pm.consensusState.GetCurrentTermNumber(ctx)
 		if err == nil {
-			resp.ConsensusTerm = term
+			resp.SetConsensusTerm(term)
 		}
 	}
 
@@ -300,7 +300,7 @@ func (pm *MultiPoolerManager) isPostgresRunning(ctx context.Context) bool {
 		return false
 	}
 
-	return statusResp.Status == pgctldpb.ServerStatus_RUNNING
+	return statusResp.GetStatus() == pgctldpb.ServerStatus_RUNNING
 }
 
 // getRole returns the current role of this pooler ("primary", "standby", or "unknown")
@@ -346,7 +346,7 @@ func (pm *MultiPoolerManager) getShardID() string {
 		return ""
 	}
 
-	return pm.multipooler.Shard
+	return pm.multipooler.GetShard()
 }
 
 // removeDataDirectory removes the PostgreSQL data directory

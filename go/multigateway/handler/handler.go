@@ -186,18 +186,18 @@ func (h *MultiGatewayHandler) HandleDescribe(ctx context.Context, conn *server.C
 		// Convert param types to parameter descriptions.
 		params := make([]*query.ParameterDescription, len(stmt.ParamTypes))
 		for i, oid := range stmt.ParamTypes {
-			params[i] = &query.ParameterDescription{
+			params[i] = query.ParameterDescription_builder{
 				DataTypeOid: oid,
-			}
+			}.Build()
 		}
 
 		// Return a statement description.
 		// TODO: For now, we return empty fields since we don't parse the query to determine result columns.
 		// The client will get actual field information when executing.
-		return &query.StatementDescription{
+		return query.StatementDescription_builder{
 			Parameters: params,
 			Fields:     nil, // Would require query parsing to determine result columns
-		}, nil
+		}.Build(), nil
 
 	case 'P': // Describe portal
 		portal := state.GetPortal(name)
@@ -208,17 +208,17 @@ func (h *MultiGatewayHandler) HandleDescribe(ctx context.Context, conn *server.C
 		// Convert param types to parameter descriptions.
 		params := make([]*query.ParameterDescription, len(portal.Statement.ParamTypes))
 		for i, oid := range portal.Statement.ParamTypes {
-			params[i] = &query.ParameterDescription{
+			params[i] = query.ParameterDescription_builder{
 				DataTypeOid: oid,
-			}
+			}.Build()
 		}
 
 		// Return a statement description for the portal's query.
 		// TODO: Similar to above, we don't have field information without executing.
-		return &query.StatementDescription{
+		return query.StatementDescription_builder{
 			Parameters: params,
 			Fields:     nil, // Would require query parsing/execution to determine result columns
-		}, nil
+		}.Build(), nil
 
 	default:
 		return nil, fmt.Errorf("invalid describe type: %c (expected 'S' or 'P')", typ)

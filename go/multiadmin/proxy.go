@@ -58,38 +58,38 @@ func parseProxyPath(path string) (*proxyPathInfo, error) {
 
 // lookupCellService retrieves service information from topology service
 func (ma *MultiAdmin) lookupCellService(r *http.Request, pathInfo proxyPathInfo) (hostname string, httpPort int, err error) {
-	id := &clustermetadatapb.ID{
+	id := clustermetadatapb.ID_builder{
 		Cell: pathInfo.cellName,
 		Name: pathInfo.serviceName,
-	}
+	}.Build()
 
 	var portMap map[string]int32
 
 	switch pathInfo.serviceType {
 	case "gate":
-		id.Component = clustermetadatapb.ID_MULTIGATEWAY
+		id.SetComponent(clustermetadatapb.ID_MULTIGATEWAY)
 		gwInfo, lookupErr := ma.ts.GetMultiGateway(r.Context(), id)
 		if lookupErr != nil {
 			return "", 0, lookupErr
 		}
-		hostname = gwInfo.Hostname
-		portMap = gwInfo.PortMap
+		hostname = gwInfo.GetHostname()
+		portMap = gwInfo.GetPortMap()
 	case "pool":
-		id.Component = clustermetadatapb.ID_MULTIPOOLER
+		id.SetComponent(clustermetadatapb.ID_MULTIPOOLER)
 		poolerInfo, lookupErr := ma.ts.GetMultiPooler(r.Context(), id)
 		if lookupErr != nil {
 			return "", 0, lookupErr
 		}
-		hostname = poolerInfo.Hostname
-		portMap = poolerInfo.PortMap
+		hostname = poolerInfo.GetHostname()
+		portMap = poolerInfo.GetPortMap()
 	case "orch":
-		id.Component = clustermetadatapb.ID_MULTIORCH
+		id.SetComponent(clustermetadatapb.ID_MULTIORCH)
 		orchInfo, lookupErr := ma.ts.GetMultiOrch(r.Context(), id)
 		if lookupErr != nil {
 			return "", 0, lookupErr
 		}
-		hostname = orchInfo.Hostname
-		portMap = orchInfo.PortMap
+		hostname = orchInfo.GetHostname()
+		portMap = orchInfo.GetPortMap()
 	default:
 		return "", 0, fmt.Errorf("invalid service type: %s", pathInfo.serviceType)
 	}

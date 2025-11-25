@@ -129,7 +129,7 @@ func TestWriteRowDescription(t *testing.T) {
 		{
 			name: "single column",
 			fields: []*query.Field{
-				{
+				query.Field_builder{
 					Name:                 "id",
 					Type:                 "integer",
 					TableOid:             16384,
@@ -138,33 +138,33 @@ func TestWriteRowDescription(t *testing.T) {
 					DataTypeSize:         4,
 					TypeModifier:         -1,
 					Format:               0, // text
-				},
+				}.Build(),
 			},
 		},
 		{
 			name: "multiple columns",
 			fields: []*query.Field{
-				{
+				query.Field_builder{
 					Name:         "id",
 					DataTypeOid:  23,
 					DataTypeSize: 4,
 					TypeModifier: -1,
 					Format:       0,
-				},
-				{
+				}.Build(),
+				query.Field_builder{
 					Name:         "name",
 					DataTypeOid:  25, // text
 					DataTypeSize: -1, // variable
 					TypeModifier: -1,
 					Format:       0,
-				},
-				{
+				}.Build(),
+				query.Field_builder{
 					Name:         "created_at",
 					DataTypeOid:  1114, // timestamp
 					DataTypeSize: 8,
 					TypeModifier: -1,
 					Format:       0,
-				},
+				}.Build(),
 			},
 		},
 		{
@@ -209,43 +209,43 @@ func TestWriteRowDescription(t *testing.T) {
 				// Read field name.
 				name, err := readNullTerminatedString(&buf)
 				require.NoError(t, err, "field %d", i)
-				assert.Equal(t, field.Name, name, "field %d name", i)
+				assert.Equal(t, field.GetName(), name, "field %d name", i)
 
 				// Read table OID.
 				var tableOid uint32
 				err = binary.Read(&buf, binary.BigEndian, &tableOid)
 				require.NoError(t, err)
-				assert.Equal(t, field.TableOid, tableOid)
+				assert.Equal(t, field.GetTableOid(), tableOid)
 
 				// Read column number.
 				var colNum int16
 				err = binary.Read(&buf, binary.BigEndian, &colNum)
 				require.NoError(t, err)
-				assert.Equal(t, int16(field.TableAttributeNumber), colNum)
+				assert.Equal(t, int16(field.GetTableAttributeNumber()), colNum)
 
 				// Read type OID.
 				var typeOid uint32
 				err = binary.Read(&buf, binary.BigEndian, &typeOid)
 				require.NoError(t, err)
-				assert.Equal(t, field.DataTypeOid, typeOid)
+				assert.Equal(t, field.GetDataTypeOid(), typeOid)
 
 				// Read type size.
 				var typeSize int16
 				err = binary.Read(&buf, binary.BigEndian, &typeSize)
 				require.NoError(t, err)
-				assert.Equal(t, int16(field.DataTypeSize), typeSize)
+				assert.Equal(t, int16(field.GetDataTypeSize()), typeSize)
 
 				// Read type modifier.
 				var typeMod int32
 				err = binary.Read(&buf, binary.BigEndian, &typeMod)
 				require.NoError(t, err)
-				assert.Equal(t, field.TypeModifier, typeMod)
+				assert.Equal(t, field.GetTypeModifier(), typeMod)
 
 				// Read format.
 				var format int16
 				err = binary.Read(&buf, binary.BigEndian, &format)
 				require.NoError(t, err)
-				assert.Equal(t, int16(field.Format), format)
+				assert.Equal(t, int16(field.GetFormat()), format)
 			}
 		})
 	}
@@ -259,37 +259,37 @@ func TestWriteDataRow(t *testing.T) {
 	}{
 		{
 			name: "single value",
-			row: &query.Row{
+			row: query.Row_builder{
 				Values: [][]byte{
 					[]byte("1"),
 				},
-			},
+			}.Build(),
 		},
 		{
 			name: "multiple values",
-			row: &query.Row{
+			row: query.Row_builder{
 				Values: [][]byte{
 					[]byte("42"),
 					[]byte("John Doe"),
 					[]byte("2024-01-01 00:00:00"),
 				},
-			},
+			}.Build(),
 		},
 		{
 			name: "with NULL values",
-			row: &query.Row{
+			row: query.Row_builder{
 				Values: [][]byte{
 					[]byte("1"),
 					nil, // NULL
 					[]byte("test"),
 				},
-			},
+			}.Build(),
 		},
 		{
 			name: "empty values",
-			row: &query.Row{
+			row: query.Row_builder{
 				Values: [][]byte{},
-			},
+			}.Build(),
 		},
 	}
 
@@ -315,10 +315,10 @@ func TestWriteDataRow(t *testing.T) {
 			var colCount int16
 			err = binary.Read(&buf, binary.BigEndian, &colCount)
 			require.NoError(t, err)
-			assert.Equal(t, int16(len(tt.row.Values)), colCount)
+			assert.Equal(t, int16(len(tt.row.GetValues())), colCount)
 
 			// Verify each column value.
-			for i, expectedValue := range tt.row.Values {
+			for i, expectedValue := range tt.row.GetValues() {
 				var valueLen int32
 				err = binary.Read(&buf, binary.BigEndian, &valueLen)
 				require.NoError(t, err, "column %d", i)

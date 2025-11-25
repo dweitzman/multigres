@@ -17,7 +17,7 @@ SHELL := /bin/bash
 # These variables are used by the shell scripts.
 MTROOT := $(shell pwd)
 export MTROOT
-PROTOC_VER = 25.1
+PROTOC_VER = 30.2
 export PROTOC_VER
 ADDLICENSE_VER = v1.2.0
 export ADDLICENSE_VER
@@ -36,9 +36,13 @@ PROTO_GO_OUTS = pb
 # Install protobuf tools
 tools:
 	echo $$(date): Installing build tools
-	mkdir -p .git/hooks
-	ln -sf "$(MTROOT)/misc/git/pre-commit" .git/hooks/pre-commit
-	ln -sf "$(MTROOT)/misc/git/commit-msg" .git/hooks/commit-msg
+	@if [ -d .git ]; then \
+		mkdir -p .git/hooks && \
+		ln -sf "$(MTROOT)/misc/git/pre-commit" .git/hooks/pre-commit && \
+		ln -sf "$(MTROOT)/misc/git/commit-msg" .git/hooks/commit-msg; \
+	else \
+		echo "Skipping git hooks setup (worktree)"; \
+	fi
 	./tools/setup_build_tools.sh
 	go install golang.org/x/tools/cmd/goyacc@latest
 
@@ -48,6 +52,7 @@ proto: tools $(PROTO_GO_OUTS)
 pb: $(PROTO_SRCS)
 	$(MTROOT)/dist/protoc-$(PROTOC_VER)/bin/protoc \
 	--plugin=$(MTROOT)/bin/protoc-gen-go --go_out=. \
+	--go_opt=default_api_level=API_OPAQUE \
 	--plugin=$(MTROOT)/bin/protoc-gen-go-grpc --go-grpc_out=. \
 		--proto_path=proto $(PROTO_SRCS) && \
 	mkdir -p go/pb && \

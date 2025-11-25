@@ -53,12 +53,12 @@ func init() {
 }
 
 func getMultiPooler(database string, shard string, cell string, uid uint32) *clustermetadatapb.MultiPooler {
-	return &clustermetadatapb.MultiPooler{
-		Id: &clustermetadatapb.ID{
+	return clustermetadatapb.MultiPooler_builder{
+		Id: clustermetadatapb.ID_builder{
 			Component: clustermetadatapb.ID_MULTIPOOLER,
 			Cell:      cell,
 			Name:      fmt.Sprintf("%d", uid),
-		},
+		}.Build(),
 		Database: database,
 		Shard:    shard,
 		Hostname: "host1",
@@ -67,18 +67,18 @@ func getMultiPooler(database string, shard string, cell string, uid uint32) *clu
 		},
 		Type:          clustermetadatapb.PoolerType_PRIMARY,
 		ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-	}
+	}.Build()
 }
 
 func checkMultiPoolersEqual(t *testing.T, expected, actual *clustermetadatapb.MultiPooler) {
 	t.Helper()
-	require.Equal(t, expected.Id.String(), actual.Id.String())
-	require.Equal(t, expected.Database, actual.Database)
-	require.Equal(t, expected.Shard, actual.Shard)
-	require.Equal(t, expected.Hostname, actual.Hostname)
-	require.Equal(t, expected.Type, actual.Type)
-	require.Equal(t, expected.ServingStatus, actual.ServingStatus)
-	require.Equal(t, expected.PortMap, actual.PortMap)
+	require.Equal(t, expected.GetId().String(), actual.GetId().String())
+	require.Equal(t, expected.GetDatabase(), actual.GetDatabase())
+	require.Equal(t, expected.GetShard(), actual.GetShard())
+	require.Equal(t, expected.GetHostname(), actual.GetHostname())
+	require.Equal(t, expected.GetType(), actual.GetType())
+	require.Equal(t, expected.GetServingStatus(), actual.GetServingStatus())
+	require.Equal(t, expected.GetPortMap(), actual.GetPortMap())
 }
 
 func checkMultiPoolerInfosEqual(t *testing.T, expected, actual []*topo.MultiPoolerInfo) {
@@ -120,12 +120,12 @@ func TestServerGetMultiPoolersByCell(t *testing.T) {
 			},
 			createShardMultiPoolers: 1,
 			expectedMultiPoolers: []*clustermetadatapb.MultiPooler{
-				{
-					Id: &clustermetadatapb.ID{
+				clustermetadatapb.MultiPooler_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      cell,
 						Name:      "alpha",
-					},
+					}.Build(),
 					Hostname: "host1",
 					PortMap: map[string]int32{
 						"grpc": int32(1),
@@ -134,7 +134,7 @@ func TestServerGetMultiPoolersByCell(t *testing.T) {
 					Shard:         shard,
 					Type:          clustermetadatapb.PoolerType_PRIMARY,
 					ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-				},
+				}.Build(),
 			},
 			opt: nil,
 		},
@@ -145,12 +145,12 @@ func TestServerGetMultiPoolersByCell(t *testing.T) {
 			},
 			createShardMultiPoolers: 4,
 			expectedMultiPoolers: []*clustermetadatapb.MultiPooler{
-				{
-					Id: &clustermetadatapb.ID{
+				clustermetadatapb.MultiPooler_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      cell,
 						Name:      "beta",
-					},
+					}.Build(),
 					Hostname: "host1",
 					PortMap: map[string]int32{
 						"grpc": int32(1),
@@ -159,13 +159,13 @@ func TestServerGetMultiPoolersByCell(t *testing.T) {
 					Shard:         shard,
 					Type:          clustermetadatapb.PoolerType_PRIMARY,
 					ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-				},
-				{
-					Id: &clustermetadatapb.ID{
+				}.Build(),
+				clustermetadatapb.MultiPooler_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      cell,
 						Name:      "echo",
-					},
+					}.Build(),
 					Hostname: "host1",
 					PortMap: map[string]int32{
 						"grpc": int32(2),
@@ -174,13 +174,13 @@ func TestServerGetMultiPoolersByCell(t *testing.T) {
 					Shard:         shard,
 					Type:          clustermetadatapb.PoolerType_PRIMARY,
 					ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-				},
-				{
-					Id: &clustermetadatapb.ID{
+				}.Build(),
+				clustermetadatapb.MultiPooler_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      cell,
 						Name:      "foxtrot",
-					},
+					}.Build(),
 					Hostname: "host1",
 					PortMap: map[string]int32{
 						"grpc": int32(3),
@@ -189,13 +189,13 @@ func TestServerGetMultiPoolersByCell(t *testing.T) {
 					Shard:         shard,
 					Type:          clustermetadatapb.PoolerType_PRIMARY,
 					ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-				},
-				{
-					Id: &clustermetadatapb.ID{
+				}.Build(),
+				clustermetadatapb.MultiPooler_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      cell,
 						Name:      "golf",
-					},
+					}.Build(),
 					Hostname: "host1",
 					PortMap: map[string]int32{
 						"grpc": int32(4),
@@ -204,7 +204,7 @@ func TestServerGetMultiPoolersByCell(t *testing.T) {
 					Shard:         shard,
 					Type:          clustermetadatapb.PoolerType_PRIMARY,
 					ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-				},
+				}.Build(),
 			},
 		},
 		{
@@ -215,12 +215,12 @@ func TestServerGetMultiPoolersByCell(t *testing.T) {
 			},
 			createShardMultiPoolers: 2,
 			expectedMultiPoolers: []*clustermetadatapb.MultiPooler{
-				{
-					Id: &clustermetadatapb.ID{
+				clustermetadatapb.MultiPooler_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      cell,
 						Name:      "hotel",
-					},
+					}.Build(),
 					Hostname:      "host1",
 					PortMap:       map[string]int32{"grpc": int32(1)},
 					Database:      database,
@@ -228,13 +228,13 @@ func TestServerGetMultiPoolersByCell(t *testing.T) {
 					Shard:         shard,
 					Type:          clustermetadatapb.PoolerType_PRIMARY,
 					ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-				},
-				{
-					Id: &clustermetadatapb.ID{
+				}.Build(),
+				clustermetadatapb.MultiPooler_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      cell,
 						Name:      "india",
-					},
+					}.Build(),
 					Hostname:      "host1",
 					PortMap:       map[string]int32{"grpc": int32(2)},
 					Database:      database,
@@ -242,7 +242,7 @@ func TestServerGetMultiPoolersByCell(t *testing.T) {
 					Shard:         shard,
 					Type:          clustermetadatapb.PoolerType_PRIMARY,
 					ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-				},
+				}.Build(),
 			},
 			opt: &topo.GetMultiPoolersByCellOptions{
 				DatabaseShard: &topo.DatabaseShard{
@@ -260,12 +260,12 @@ func TestServerGetMultiPoolersByCell(t *testing.T) {
 			},
 			createShardMultiPoolers: 2,
 			expectedMultiPoolers: []*clustermetadatapb.MultiPooler{
-				{
-					Id: &clustermetadatapb.ID{
+				clustermetadatapb.MultiPooler_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      cell,
 						Name:      "juliet",
-					},
+					}.Build(),
 					Hostname: "host1",
 					PortMap: map[string]int32{
 						"grpc": int32(1),
@@ -274,13 +274,13 @@ func TestServerGetMultiPoolersByCell(t *testing.T) {
 					Shard:         shard,
 					Type:          clustermetadatapb.PoolerType_PRIMARY,
 					ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-				},
-				{
-					Id: &clustermetadatapb.ID{
+				}.Build(),
+				clustermetadatapb.MultiPooler_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      cell,
 						Name:      "kilo",
-					},
+					}.Build(),
 					Hostname: "host1",
 					PortMap: map[string]int32{
 						"grpc": int32(2),
@@ -289,13 +289,13 @@ func TestServerGetMultiPoolersByCell(t *testing.T) {
 					Shard:         shard,
 					Type:          clustermetadatapb.PoolerType_PRIMARY,
 					ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-				},
-				{
-					Id: &clustermetadatapb.ID{
+				}.Build(),
+				clustermetadatapb.MultiPooler_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      cell,
 						Name:      "lima",
-					},
+					}.Build(),
 					Hostname: "host1",
 					PortMap: map[string]int32{
 						"grpc": int32(3),
@@ -304,13 +304,13 @@ func TestServerGetMultiPoolersByCell(t *testing.T) {
 					Shard:         shard + "2",
 					Type:          clustermetadatapb.PoolerType_PRIMARY,
 					ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-				},
-				{
-					Id: &clustermetadatapb.ID{
+				}.Build(),
+				clustermetadatapb.MultiPooler_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      cell,
 						Name:      "mike",
-					},
+					}.Build(),
 					Hostname: "host1",
 					PortMap: map[string]int32{
 						"grpc": int32(4),
@@ -319,7 +319,7 @@ func TestServerGetMultiPoolersByCell(t *testing.T) {
 					Shard:         shard + "2",
 					Type:          clustermetadatapb.PoolerType_PRIMARY,
 					ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-				},
+				}.Build(),
 			},
 			opt: &topo.GetMultiPoolersByCellOptions{
 				DatabaseShard: &topo.DatabaseShard{
@@ -337,12 +337,12 @@ func TestServerGetMultiPoolersByCell(t *testing.T) {
 			},
 			createShardMultiPoolers: 2,
 			expectedMultiPoolers: []*clustermetadatapb.MultiPooler{
-				{
-					Id: &clustermetadatapb.ID{
+				clustermetadatapb.MultiPooler_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      cell,
 						Name:      "laperla",
-					},
+					}.Build(),
 					Hostname:      "host1",
 					PortMap:       map[string]int32{"grpc": int32(1)},
 					Database:      database,
@@ -350,13 +350,13 @@ func TestServerGetMultiPoolersByCell(t *testing.T) {
 					Shard:         "shard1",
 					Type:          clustermetadatapb.PoolerType_PRIMARY,
 					ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-				},
-				{
-					Id: &clustermetadatapb.ID{
+				}.Build(),
+				clustermetadatapb.MultiPooler_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      cell,
 						Name:      "berghain",
-					},
+					}.Build(),
 					Hostname:      "host1",
 					PortMap:       map[string]int32{"grpc": int32(2)},
 					Database:      database,
@@ -364,7 +364,7 @@ func TestServerGetMultiPoolersByCell(t *testing.T) {
 					Shard:         "shard2",
 					Type:          clustermetadatapb.PoolerType_REPLICA,
 					ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-				},
+				}.Build(),
 			},
 			opt: &topo.GetMultiPoolersByCellOptions{
 				DatabaseShard: &topo.DatabaseShard{
@@ -382,12 +382,12 @@ func TestServerGetMultiPoolersByCell(t *testing.T) {
 			},
 			createShardMultiPoolers: 1,
 			expectedMultiPoolers: []*clustermetadatapb.MultiPooler{
-				{
-					Id: &clustermetadatapb.ID{
+				clustermetadatapb.MultiPooler_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      cell,
 						Name:      "papa",
-					},
+					}.Build(),
 					Hostname:      "host1",
 					PortMap:       map[string]int32{"grpc": int32(1)},
 					Database:      database,
@@ -395,7 +395,7 @@ func TestServerGetMultiPoolersByCell(t *testing.T) {
 					Shard:         "shard1",
 					Type:          clustermetadatapb.PoolerType_PRIMARY,
 					ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-				},
+				}.Build(),
 			},
 			opt: &topo.GetMultiPoolersByCellOptions{
 				DatabaseShard: &topo.DatabaseShard{
@@ -460,20 +460,20 @@ func TestServerGetMultiPoolersByCell(t *testing.T) {
 
 			// Create multipoolers with names from expected results
 			for i, expectedMP := range tt.expectedMultiPoolers {
-				multipooler := &clustermetadatapb.MultiPooler{
-					Id: &clustermetadatapb.ID{
+				multipooler := clustermetadatapb.MultiPooler_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      cell,
-						Name:      expectedMP.Id.Name,
-					},
+						Name:      expectedMP.GetId().GetName(),
+					}.Build(),
 					Hostname:      "host1",
 					PortMap:       map[string]int32{"grpc": int32(i + 1)},
-					Database:      expectedMP.Database,
-					TableGroup:    expectedMP.TableGroup,
-					Shard:         expectedMP.Shard,
-					Type:          expectedMP.Type,
-					ServingStatus: expectedMP.ServingStatus,
-				}
+					Database:      expectedMP.GetDatabase(),
+					TableGroup:    expectedMP.GetTableGroup(),
+					Shard:         expectedMP.GetShard(),
+					Type:          expectedMP.GetType(),
+					ServingStatus: expectedMP.GetServingStatus(),
+				}.Build()
 				require.NoError(t, ts.CreateMultiPooler(ctx, multipooler))
 			}
 
@@ -482,10 +482,10 @@ func TestServerGetMultiPoolersByCell(t *testing.T) {
 			require.Len(t, out, len(tt.expectedMultiPoolers))
 
 			slices.SortFunc(out, func(i, j *topo.MultiPoolerInfo) int {
-				return cmp.Compare(i.Id.Name, j.Id.Name)
+				return cmp.Compare(i.GetId().GetName(), j.GetId().GetName())
 			})
 			slices.SortFunc(tt.expectedMultiPoolers, func(i, j *clustermetadatapb.MultiPooler) int {
-				return cmp.Compare(i.Id.Name, j.Id.Name)
+				return cmp.Compare(i.GetId().GetName(), j.GetId().GetName())
 			})
 
 			for i, multipoolerInfo := range out {
@@ -519,17 +519,17 @@ func TestMultiPoolerIDString(t *testing.T) {
 	}{
 		{
 			name:     "simple case",
-			id:       &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "100"},
+			id:       clustermetadatapb.ID_builder{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "100"}.Build(),
 			expected: "multipooler-zone1-100",
 		},
 		{
 			name:     "you can use name as numbers",
-			id:       &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "prod", Name: "0"},
+			id:       clustermetadatapb.ID_builder{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "prod", Name: "0"}.Build(),
 			expected: "multipooler-prod-0",
 		},
 		{
 			name:     "funny name",
-			id:       &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "prod", Name: "sleepy"},
+			id:       clustermetadatapb.ID_builder{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "prod", Name: "sleepy"}.Build(),
 			expected: "multipooler-prod-sleepy",
 		},
 	}
@@ -556,23 +556,23 @@ func TestMultiPoolerCRUDOperations(t *testing.T) {
 		{
 			name: "Create and Get MultiPooler",
 			test: func(t *testing.T, ts topo.Store) {
-				multipooler := &clustermetadatapb.MultiPooler{
-					Id: &clustermetadatapb.ID{
+				multipooler := clustermetadatapb.MultiPooler_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      cell,
 						Name:      "november",
-					},
+					}.Build(),
 					Database:      "testdb",
 					Shard:         "testshard",
 					Hostname:      "host1.example.com",
 					PortMap:       map[string]int32{"grpc": 8080, "http": 8081},
 					Type:          clustermetadatapb.PoolerType_PRIMARY,
 					ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-				}
+				}.Build()
 				err := ts.CreateMultiPooler(ctx, multipooler)
 				require.NoError(t, err)
 
-				retrieved, err := ts.GetMultiPooler(ctx, multipooler.Id)
+				retrieved, err := ts.GetMultiPooler(ctx, multipooler.GetId())
 				require.NoError(t, err)
 				checkMultiPoolersEqual(t, multipooler, retrieved.MultiPooler)
 				require.NotZero(t, retrieved.Version())
@@ -581,7 +581,7 @@ func TestMultiPoolerCRUDOperations(t *testing.T) {
 		{
 			name: "Get nonexistent MultiPooler",
 			test: func(t *testing.T, ts topo.Store) {
-				id := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: cell, Name: "999"}
+				id := clustermetadatapb.ID_builder{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: cell, Name: "999"}.Build()
 				_, err := ts.GetMultiPooler(ctx, id)
 				require.Error(t, err)
 				require.True(t, errors.Is(err, &topo.TopoError{Code: topo.NoNode}))
@@ -590,19 +590,19 @@ func TestMultiPoolerCRUDOperations(t *testing.T) {
 		{
 			name: "Create duplicate MultiPooler fails",
 			test: func(t *testing.T, ts topo.Store) {
-				multipooler := &clustermetadatapb.MultiPooler{
-					Id: &clustermetadatapb.ID{
+				multipooler := clustermetadatapb.MultiPooler_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      cell,
 						Name:      "oscar",
-					},
+					}.Build(),
 					Database:      "testdb",
 					Shard:         "testshard",
 					Hostname:      "host1.example.com",
 					PortMap:       map[string]int32{"grpc": 8080},
 					Type:          clustermetadatapb.PoolerType_PRIMARY,
 					ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-				}
+				}.Build()
 				err := ts.CreateMultiPooler(ctx, multipooler)
 				require.NoError(t, err)
 
@@ -614,64 +614,64 @@ func TestMultiPoolerCRUDOperations(t *testing.T) {
 		{
 			name: "Update MultiPooler",
 			test: func(t *testing.T, ts topo.Store) {
-				multipooler := &clustermetadatapb.MultiPooler{
-					Id: &clustermetadatapb.ID{
+				multipooler := clustermetadatapb.MultiPooler_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      cell,
 						Name:      "papa",
-					},
+					}.Build(),
 					Database:      "testdb",
 					Shard:         "testshard",
 					Hostname:      "host1.example.com",
 					PortMap:       map[string]int32{"grpc": 8080},
 					Type:          clustermetadatapb.PoolerType_PRIMARY,
 					ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-				}
+				}.Build()
 				err := ts.CreateMultiPooler(ctx, multipooler)
 				require.NoError(t, err)
 
-				retrieved, err := ts.GetMultiPooler(ctx, multipooler.Id)
+				retrieved, err := ts.GetMultiPooler(ctx, multipooler.GetId())
 				require.NoError(t, err)
 				oldVersion := retrieved.Version()
 
-				retrieved.Hostname = "host2.example.com"
-				retrieved.PortMap["http"] = 8081
-				retrieved.ServingStatus = clustermetadatapb.PoolerServingStatus_NOT_SERVING
+				retrieved.GetHostname() = "host2.example.com"
+				retrieved.GetPortMap()["http"] = 8081
+				retrieved.GetServingStatus() = clustermetadatapb.PoolerServingStatus_NOT_SERVING
 
 				err = ts.UpdateMultiPooler(ctx, retrieved)
 				require.NoError(t, err)
 
-				updated, err := ts.GetMultiPooler(ctx, multipooler.Id)
+				updated, err := ts.GetMultiPooler(ctx, multipooler.GetId())
 				require.NoError(t, err)
-				require.Equal(t, "host2.example.com", updated.Hostname)
-				require.Equal(t, int32(8081), updated.PortMap["http"])
-				require.Equal(t, clustermetadatapb.PoolerServingStatus_NOT_SERVING, updated.ServingStatus)
+				require.Equal(t, "host2.example.com", updated.GetHostname())
+				require.Equal(t, int32(8081), updated.GetPortMap()["http"])
+				require.Equal(t, clustermetadatapb.PoolerServingStatus_NOT_SERVING, updated.GetServingStatus())
 				require.NotEqual(t, oldVersion, updated.Version())
 			},
 		},
 		{
 			name: "Delete MultiPooler",
 			test: func(t *testing.T, ts topo.Store) {
-				multipooler := &clustermetadatapb.MultiPooler{
-					Id: &clustermetadatapb.ID{
+				multipooler := clustermetadatapb.MultiPooler_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      cell,
 						Name:      "quebec",
-					},
+					}.Build(),
 					Database:      "testdb",
 					Shard:         "testshard",
 					Hostname:      "host1.example.com",
 					PortMap:       map[string]int32{"grpc": 8080},
 					Type:          clustermetadatapb.PoolerType_PRIMARY,
 					ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-				}
+				}.Build()
 				err := ts.CreateMultiPooler(ctx, multipooler)
 				require.NoError(t, err)
 
-				err = ts.UnregisterMultiPooler(ctx, multipooler.Id)
+				err = ts.UnregisterMultiPooler(ctx, multipooler.GetId())
 				require.NoError(t, err)
 
-				_, err = ts.GetMultiPooler(ctx, multipooler.Id)
+				_, err = ts.GetMultiPooler(ctx, multipooler.GetId())
 				require.Error(t, err)
 
 				require.True(t, errors.Is(err, &topo.TopoError{Code: topo.NoNode}))
@@ -710,32 +710,32 @@ func TestGetMultiPoolerIDsByCell(t *testing.T) {
 			name: "Cell with multipoolers",
 			test: func(t *testing.T, ts topo.Store) {
 				multipoolers := []*clustermetadatapb.MultiPooler{
-					{
-						Id: &clustermetadatapb.ID{
+					clustermetadatapb.MultiPooler_builder{
+						Id: clustermetadatapb.ID_builder{
 							Component: clustermetadatapb.ID_MULTIPOOLER,
 							Cell:      cell1,
 							Name:      "bravo",
-						},
+						}.Build(),
 						Database:      "db1",
 						Shard:         "shard1",
 						Hostname:      "host1",
 						PortMap:       map[string]int32{"grpc": 8080},
 						Type:          clustermetadatapb.PoolerType_PRIMARY,
 						ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-					},
-					{
-						Id: &clustermetadatapb.ID{
+					}.Build(),
+					clustermetadatapb.MultiPooler_builder{
+						Id: clustermetadatapb.ID_builder{
 							Component: clustermetadatapb.ID_MULTIPOOLER,
 							Cell:      cell1,
 							Name:      "charlie",
-						},
+						}.Build(),
 						Database:      "db2",
 						Shard:         "shard2",
 						Hostname:      "host3",
 						PortMap:       map[string]int32{"grpc": 8083},
 						Type:          clustermetadatapb.PoolerType_REPLICA,
 						ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-					},
+					}.Build(),
 				}
 
 				for _, mp := range multipoolers {
@@ -747,25 +747,25 @@ func TestGetMultiPoolerIDsByCell(t *testing.T) {
 				require.Len(t, ids, 2)
 
 				expectedIDs := []*clustermetadatapb.ID{
-					{
+					clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      cell1,
 						Name:      "bravo",
-					},
-					{
+					}.Build(),
+					clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      cell1,
 						Name:      "charlie",
-					},
+					}.Build(),
 				}
 
 				slices.SortFunc(ids, func(a, b *clustermetadatapb.ID) int {
-					return cmp.Compare(a.Name, b.Name)
+					return cmp.Compare(a.GetName(), b.GetName())
 				})
 
 				for i, id := range ids {
-					require.Equal(t, expectedIDs[i].Cell, id.Cell)
-					require.Equal(t, expectedIDs[i].Name, id.Name)
+					require.Equal(t, expectedIDs[i].GetCell(), id.GetCell())
+					require.Equal(t, expectedIDs[i].GetName(), id.GetName())
 				}
 
 				// Verify cell boundary: multipoolers are NOT accessible from cell2
@@ -805,12 +805,12 @@ func TestUpdateMultiPoolerFields(t *testing.T) {
 		{
 			name: "Successful update",
 			test: func(t *testing.T, ts topo.Store) {
-				id := &clustermetadatapb.ID{
+				id := clustermetadatapb.ID_builder{
 					Component: clustermetadatapb.ID_MULTIPOOLER,
 					Cell:      cell,
 					Name:      "tango",
-				}
-				multipooler := &clustermetadatapb.MultiPooler{
+				}.Build()
+				multipooler := clustermetadatapb.MultiPooler_builder{
 					Id:            id,
 					Database:      "testdb",
 					Shard:         "testshard",
@@ -818,33 +818,33 @@ func TestUpdateMultiPoolerFields(t *testing.T) {
 					PortMap:       map[string]int32{"grpc": 8080},
 					Type:          clustermetadatapb.PoolerType_PRIMARY,
 					ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-				}
+				}.Build()
 				require.NoError(t, ts.CreateMultiPooler(ctx, multipooler))
 
 				updated, err := ts.UpdateMultiPoolerFields(ctx, id, func(mp *clustermetadatapb.MultiPooler) error {
-					mp.Hostname = "newhost"
-					mp.PortMap["http"] = 8081
+					mp.SetHostname("newhost")
+					mp.GetPortMap()["http"] = 8081
 					return nil
 				})
 				require.NoError(t, err)
-				require.Equal(t, "newhost", updated.Hostname)
-				require.Equal(t, int32(8081), updated.PortMap["http"])
+				require.Equal(t, "newhost", updated.GetHostname())
+				require.Equal(t, int32(8081), updated.GetPortMap()["http"])
 
 				retrieved, err := ts.GetMultiPooler(ctx, id)
 				require.NoError(t, err)
-				require.Equal(t, "newhost", retrieved.Hostname)
-				require.Equal(t, int32(8081), retrieved.PortMap["http"])
+				require.Equal(t, "newhost", retrieved.GetHostname())
+				require.Equal(t, int32(8081), retrieved.GetPortMap()["http"])
 			},
 		},
 		{
 			name: "Update function returns error",
 			test: func(t *testing.T, ts topo.Store) {
-				id := &clustermetadatapb.ID{
+				id := clustermetadatapb.ID_builder{
 					Component: clustermetadatapb.ID_MULTIPOOLER,
 					Cell:      cell,
 					Name:      "uniform",
-				}
-				multipooler := &clustermetadatapb.MultiPooler{
+				}.Build()
+				multipooler := clustermetadatapb.MultiPooler_builder{
 					Id:            id,
 					Database:      "testdb",
 					Shard:         "testshard",
@@ -852,7 +852,7 @@ func TestUpdateMultiPoolerFields(t *testing.T) {
 					PortMap:       map[string]int32{"grpc": 8080},
 					Type:          clustermetadatapb.PoolerType_PRIMARY,
 					ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-				}
+				}.Build()
 				require.NoError(t, ts.CreateMultiPooler(ctx, multipooler))
 
 				updateErr := errors.New("update failed")
@@ -864,18 +864,18 @@ func TestUpdateMultiPoolerFields(t *testing.T) {
 
 				retrieved, err := ts.GetMultiPooler(ctx, id)
 				require.NoError(t, err)
-				require.Equal(t, "host1", retrieved.Hostname)
+				require.Equal(t, "host1", retrieved.GetHostname())
 			},
 		},
 		{
 			name: "NoUpdateNeeded returns nil",
 			test: func(t *testing.T, ts topo.Store) {
-				id := &clustermetadatapb.ID{
+				id := clustermetadatapb.ID_builder{
 					Component: clustermetadatapb.ID_MULTIPOOLER,
 					Cell:      cell,
 					Name:      "victor",
-				}
-				multipooler := &clustermetadatapb.MultiPooler{
+				}.Build()
+				multipooler := clustermetadatapb.MultiPooler_builder{
 					Id:            id,
 					Database:      "testdb",
 					Shard:         "testshard",
@@ -883,7 +883,7 @@ func TestUpdateMultiPoolerFields(t *testing.T) {
 					PortMap:       map[string]int32{"grpc": 8080},
 					Type:          clustermetadatapb.PoolerType_PRIMARY,
 					ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-				}
+				}.Build()
 				require.NoError(t, ts.CreateMultiPooler(ctx, multipooler))
 
 				result, err := ts.UpdateMultiPoolerFields(ctx, id, func(mp *clustermetadatapb.MultiPooler) error {
@@ -899,12 +899,12 @@ func TestUpdateMultiPoolerFields(t *testing.T) {
 				tsWithFactory, factory := memorytopo.NewServerAndFactory(ctx, cell)
 				defer tsWithFactory.Close()
 
-				id := &clustermetadatapb.ID{
+				id := clustermetadatapb.ID_builder{
 					Component: clustermetadatapb.ID_MULTIPOOLER,
 					Cell:      cell,
 					Name:      "whiskey",
-				}
-				multipooler := &clustermetadatapb.MultiPooler{
+				}.Build()
+				multipooler := clustermetadatapb.MultiPooler_builder{
 					Id:            id,
 					Database:      "testdb",
 					Shard:         "testshard",
@@ -912,7 +912,7 @@ func TestUpdateMultiPoolerFields(t *testing.T) {
 					PortMap:       map[string]int32{"grpc": 8080},
 					Type:          clustermetadatapb.PoolerType_PRIMARY,
 					ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-				}
+				}.Build()
 				require.NoError(t, tsWithFactory.CreateMultiPooler(ctx, multipooler))
 
 				badVersionErr := &topo.TopoError{Code: topo.BadVersion}
@@ -922,16 +922,16 @@ func TestUpdateMultiPoolerFields(t *testing.T) {
 				updateCallCount := 0
 				updated, err := tsWithFactory.UpdateMultiPoolerFields(ctx, id, func(mp *clustermetadatapb.MultiPooler) error {
 					updateCallCount++
-					mp.Hostname = "newhost"
+					mp.SetHostname("newhost")
 					return nil
 				})
 				require.NoError(t, err)
 				require.Equal(t, 2, updateCallCount)
-				require.Equal(t, "newhost", updated.Hostname)
+				require.Equal(t, "newhost", updated.GetHostname())
 
 				retrieved, err := tsWithFactory.GetMultiPooler(ctx, id)
 				require.NoError(t, err)
-				require.Equal(t, "newhost", retrieved.Hostname)
+				require.Equal(t, "newhost", retrieved.GetHostname())
 			},
 		},
 	}
@@ -957,24 +957,24 @@ func TestInitMultiPooler(t *testing.T) {
 		{
 			name: "Create new multipooler",
 			test: func(t *testing.T, ts topo.Store) {
-				multipooler := &clustermetadatapb.MultiPooler{
-					Id: &clustermetadatapb.ID{
+				multipooler := clustermetadatapb.MultiPooler_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      cell,
 						Name:      "zulu",
-					},
+					}.Build(),
 					Database:      "testdb",
 					Shard:         "testshard",
 					Hostname:      "host1",
 					PortMap:       map[string]int32{"grpc": 8080},
 					Type:          clustermetadatapb.PoolerType_PRIMARY,
 					ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-				}
+				}.Build()
 
 				err := ts.RegisterMultiPooler(ctx, multipooler, false)
 				require.NoError(t, err)
 
-				retrieved, err := ts.GetMultiPooler(ctx, multipooler.Id)
+				retrieved, err := ts.GetMultiPooler(ctx, multipooler.GetId())
 				require.NoError(t, err)
 				checkMultiPoolersEqual(t, multipooler, retrieved.MultiPooler)
 			},
@@ -982,39 +982,39 @@ func TestInitMultiPooler(t *testing.T) {
 		{
 			name: "Update existing multipooler with allowUpdate=true",
 			test: func(t *testing.T, ts topo.Store) {
-				original := &clustermetadatapb.MultiPooler{
-					Id: &clustermetadatapb.ID{
+				original := clustermetadatapb.MultiPooler_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      cell,
 						Name:      "xray",
-					},
+					}.Build(),
 					Database:      "testdb",
 					Shard:         "testshard",
 					Hostname:      "host1",
 					PortMap:       map[string]int32{"grpc": 8080},
 					Type:          clustermetadatapb.PoolerType_PRIMARY,
 					ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-				}
+				}.Build()
 				require.NoError(t, ts.CreateMultiPooler(ctx, original))
 
-				updated := &clustermetadatapb.MultiPooler{
-					Id: &clustermetadatapb.ID{
+				updated := clustermetadatapb.MultiPooler_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      cell,
 						Name:      "xray",
-					},
+					}.Build(),
 					Database:      "testdb",
 					Shard:         "testshard",
 					Hostname:      "newhost",
 					PortMap:       map[string]int32{"grpc": 8081},
 					Type:          clustermetadatapb.PoolerType_REPLICA,
 					ServingStatus: clustermetadatapb.PoolerServingStatus_NOT_SERVING,
-				}
+				}.Build()
 
 				err := ts.RegisterMultiPooler(ctx, updated, true)
 				require.NoError(t, err)
 
-				retrieved, err := ts.GetMultiPooler(ctx, original.Id)
+				retrieved, err := ts.GetMultiPooler(ctx, original.GetId())
 				require.NoError(t, err)
 				checkMultiPoolersEqual(t, updated, retrieved.MultiPooler)
 			},
@@ -1022,34 +1022,34 @@ func TestInitMultiPooler(t *testing.T) {
 		{
 			name: "Fail to update existing multipooler with allowUpdate=false",
 			test: func(t *testing.T, ts topo.Store) {
-				original := &clustermetadatapb.MultiPooler{
-					Id: &clustermetadatapb.ID{
+				original := clustermetadatapb.MultiPooler_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      cell,
 						Name:      "whiskey",
-					},
+					}.Build(),
 					Database:      "testdb",
 					Shard:         "testshard",
 					Hostname:      "host1",
 					PortMap:       map[string]int32{"grpc": 8080},
 					Type:          clustermetadatapb.PoolerType_PRIMARY,
 					ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-				}
+				}.Build()
 				require.NoError(t, ts.CreateMultiPooler(ctx, original))
 
-				updated := &clustermetadatapb.MultiPooler{
-					Id: &clustermetadatapb.ID{
+				updated := clustermetadatapb.MultiPooler_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      cell,
 						Name:      "whiskey",
-					},
+					}.Build(),
 					Database:      "testdb",
 					Shard:         "testshard",
 					Hostname:      "newhost",
 					PortMap:       map[string]int32{"grpc": 8081},
 					Type:          clustermetadatapb.PoolerType_REPLICA,
 					ServingStatus: clustermetadatapb.PoolerServingStatus_NOT_SERVING,
-				}
+				}.Build()
 
 				err := ts.RegisterMultiPooler(ctx, updated, false)
 				require.Error(t, err)
@@ -1059,34 +1059,34 @@ func TestInitMultiPooler(t *testing.T) {
 		{
 			name: "Fail to update with different database/shard",
 			test: func(t *testing.T, ts topo.Store) {
-				original := &clustermetadatapb.MultiPooler{
-					Id: &clustermetadatapb.ID{
+				original := clustermetadatapb.MultiPooler_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      cell,
 						Name:      "whiskey",
-					},
+					}.Build(),
 					Database:      "testdb",
 					Shard:         "testshard",
 					Hostname:      "host1",
 					PortMap:       map[string]int32{"grpc": 8080},
 					Type:          clustermetadatapb.PoolerType_PRIMARY,
 					ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-				}
+				}.Build()
 				require.NoError(t, ts.CreateMultiPooler(ctx, original))
 
-				updated := &clustermetadatapb.MultiPooler{
-					Id: &clustermetadatapb.ID{
+				updated := clustermetadatapb.MultiPooler_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      cell,
 						Name:      "whiskey",
-					},
+					}.Build(),
 					Database:      "differentdb",
 					Shard:         "testshard",
 					Hostname:      "host1",
 					PortMap:       map[string]int32{"grpc": 8080},
 					Type:          clustermetadatapb.PoolerType_PRIMARY,
 					ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-				}
+				}.Build()
 
 				err := ts.RegisterMultiPooler(ctx, updated, true)
 				require.Error(t, err)
@@ -1120,27 +1120,27 @@ func TestNewMultiPooler(t *testing.T) {
 			cell:       "zone1",
 			host:       "host.example.com",
 			tableGroup: "default",
-			expected: &clustermetadatapb.MultiPooler{
-				Id: &clustermetadatapb.ID{
+			expected: clustermetadatapb.MultiPooler_builder{
+				Id: clustermetadatapb.ID_builder{
 					Cell: "zone1",
 					Name: "100",
-				},
+				}.Build(),
 				Hostname:   "host.example.com",
 				TableGroup: "default",
 				PortMap:    map[string]int32{},
 				Database:   "", // Default empty database
-			},
+			}.Build(),
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.testName, func(t *testing.T) {
 			result := topo.NewMultiPooler(tt.name, tt.cell, tt.host, tt.tableGroup)
-			require.Equal(t, tt.expected.Id.Cell, result.Id.Cell)
-			require.Equal(t, tt.expected.Id.Name, result.Id.Name)
-			require.Equal(t, tt.expected.Hostname, result.Hostname)
-			require.Equal(t, tt.expected.TableGroup, result.TableGroup)
-			require.NotNil(t, result.PortMap)
+			require.Equal(t, tt.expected.GetId().GetCell(), result.GetId().GetCell())
+			require.Equal(t, tt.expected.GetId().GetName(), result.GetId().GetName())
+			require.Equal(t, tt.expected.GetHostname(), result.GetHostname())
+			require.Equal(t, tt.expected.GetTableGroup(), result.GetTableGroup())
+			require.NotNil(t, result.GetPortMap())
 		})
 	}
 
@@ -1149,23 +1149,23 @@ func TestNewMultiPooler(t *testing.T) {
 		result := topo.NewMultiPooler("", "zone2", "host2.example.com", "default")
 
 		// Verify basic properties
-		require.Equal(t, "zone2", result.Id.Cell)
-		require.Equal(t, "host2.example.com", result.Hostname)
-		require.NotNil(t, result.PortMap)
+		require.Equal(t, "zone2", result.GetId().GetCell())
+		require.Equal(t, "host2.example.com", result.GetHostname())
+		require.NotNil(t, result.GetPortMap())
 
 		// Verify random name was generated
-		require.NotEmpty(t, result.Id.Name, "expected random name to be generated for empty name")
-		require.Len(t, result.Id.Name, 8, "expected random name to be 8 characters long")
+		require.NotEmpty(t, result.GetId().GetName(), "expected random name to be generated for empty name")
+		require.Len(t, result.GetId().GetName(), 8, "expected random name to be 8 characters long")
 
 		// Verify the generated name only contains valid characters
 		validChars := "bcdfghjklmnpqrstvwxz2456789"
-		for _, char := range result.Id.Name {
+		for _, char := range result.GetId().GetName() {
 			require.Contains(t, validChars, string(char), "generated name should only contain valid characters")
 		}
 
 		// Test that multiple calls generate different names
 		result2 := topo.NewMultiPooler("", "zone2", "host2.example.com", "default")
-		require.NotEqual(t, result.Id.Name, result2.Id.Name, "multiple calls should generate different random names")
+		require.NotEqual(t, result.GetId().GetName(), result2.GetId().GetName(), "multiple calls should generate different random names")
 	})
 }
 
@@ -1181,85 +1181,85 @@ func TestMultiPoolerDatabaseField(t *testing.T) {
 		{
 			name: "Create MultiPooler with database field",
 			test: func(t *testing.T, ts topo.Store) {
-				multipooler := &clustermetadatapb.MultiPooler{
-					Id: &clustermetadatapb.ID{
+				multipooler := clustermetadatapb.MultiPooler_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      cell,
 						Name:      "db-test1",
-					},
+					}.Build(),
 					Database:      "testdb",
 					Shard:         "testshard",
 					Hostname:      "host1.example.com",
 					PortMap:       map[string]int32{"grpc": 8080},
 					Type:          clustermetadatapb.PoolerType_PRIMARY,
 					ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-				}
+				}.Build()
 				err := ts.CreateMultiPooler(ctx, multipooler)
 				require.NoError(t, err)
 
-				retrieved, err := ts.GetMultiPooler(ctx, multipooler.Id)
+				retrieved, err := ts.GetMultiPooler(ctx, multipooler.GetId())
 				require.NoError(t, err)
-				require.Equal(t, "testdb", retrieved.Database)
+				require.Equal(t, "testdb", retrieved.GetDatabase())
 			},
 		},
 		{
 			name: "Update MultiPooler preserves database field",
 			test: func(t *testing.T, ts topo.Store) {
-				multipooler := &clustermetadatapb.MultiPooler{
-					Id: &clustermetadatapb.ID{
+				multipooler := clustermetadatapb.MultiPooler_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      cell,
 						Name:      "db-test2",
-					},
+					}.Build(),
 					Database:      "originaldb",
 					Shard:         "testshard",
 					Hostname:      "host1.example.com",
 					PortMap:       map[string]int32{"grpc": 8080},
 					Type:          clustermetadatapb.PoolerType_PRIMARY,
 					ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-				}
+				}.Build()
 				err := ts.CreateMultiPooler(ctx, multipooler)
 				require.NoError(t, err)
 
-				retrieved, err := ts.GetMultiPooler(ctx, multipooler.Id)
+				retrieved, err := ts.GetMultiPooler(ctx, multipooler.GetId())
 				require.NoError(t, err)
 				oldVersion := retrieved.Version()
 
 				// Update hostname but keep database
-				retrieved.Hostname = "host2.example.com"
+				retrieved.GetHostname() = "host2.example.com"
 
 				err = ts.UpdateMultiPooler(ctx, retrieved)
 				require.NoError(t, err)
 
-				updated, err := ts.GetMultiPooler(ctx, multipooler.Id)
+				updated, err := ts.GetMultiPooler(ctx, multipooler.GetId())
 				require.NoError(t, err)
-				require.Equal(t, "originaldb", updated.Database) // Database preserved
-				require.Equal(t, "host2.example.com", updated.Hostname)
+				require.Equal(t, "originaldb", updated.GetDatabase()) // Database preserved
+				require.Equal(t, "host2.example.com", updated.GetHostname())
 				require.NotEqual(t, oldVersion, updated.Version())
 			},
 		},
 		{
 			name: "Create MultiPooler with empty database field",
 			test: func(t *testing.T, ts topo.Store) {
-				multipooler := &clustermetadatapb.MultiPooler{
-					Id: &clustermetadatapb.ID{
+				multipooler := clustermetadatapb.MultiPooler_builder{
+					Id: clustermetadatapb.ID_builder{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      cell,
 						Name:      "db-test3",
-					},
+					}.Build(),
 					Database:      "", // Empty database
 					Shard:         "testshard",
 					Hostname:      "host1.example.com",
 					PortMap:       map[string]int32{"grpc": 8080},
 					Type:          clustermetadatapb.PoolerType_PRIMARY,
 					ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-				}
+				}.Build()
 				err := ts.CreateMultiPooler(ctx, multipooler)
 				require.NoError(t, err)
 
-				retrieved, err := ts.GetMultiPooler(ctx, multipooler.Id)
+				retrieved, err := ts.GetMultiPooler(ctx, multipooler.GetId())
 				require.NoError(t, err)
-				require.Equal(t, "", retrieved.Database)
+				require.Equal(t, "", retrieved.GetDatabase())
 			},
 		},
 	}
@@ -1275,18 +1275,18 @@ func TestMultiPoolerDatabaseField(t *testing.T) {
 
 // TestMultiPoolerInfo tests the MultiPoolerInfo methods
 func TestMultiPoolerInfo(t *testing.T) {
-	multipooler := &clustermetadatapb.MultiPooler{
-		Id: &clustermetadatapb.ID{
+	multipooler := clustermetadatapb.MultiPooler_builder{
+		Id: clustermetadatapb.ID_builder{
 			Component: clustermetadatapb.ID_MULTIPOOLER,
 			Cell:      "zone1",
 			Name:      "100",
-		},
+		}.Build(),
 		Hostname: "host.example.com",
 		PortMap: map[string]int32{
 			"grpc": 8080,
 			"http": 8081,
 		},
-	}
+	}.Build()
 	version := memorytopo.NodeVersion(123)
 	info := topo.NewMultiPoolerInfo(multipooler, version)
 
@@ -1309,17 +1309,17 @@ func TestMultiPoolerInfo(t *testing.T) {
 	})
 
 	t.Run("Addr method without grpc port", func(t *testing.T) {
-		multipoolerNoGrpc := &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{
+		multipoolerNoGrpc := clustermetadatapb.MultiPooler_builder{
+			Id: clustermetadatapb.ID_builder{
 				Component: clustermetadatapb.ID_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "100",
-			},
+			}.Build(),
 			Hostname: "host.example.com",
 			PortMap: map[string]int32{
 				"http": 8081,
 			},
-		}
+		}.Build()
 		infoNoGrpc := topo.NewMultiPoolerInfo(multipoolerNoGrpc, version)
 		result := infoNoGrpc.Addr()
 		expected := "host.example.com"
@@ -1344,42 +1344,42 @@ func TestGetMultiPoolersByCell_Comprehensive(t *testing.T) {
 
 		// Setup: Create 4 multipoolers in zone1 (2 databases × 2 shards)
 		multipoolers := []*clustermetadatapb.MultiPooler{
-			{
-				Id:            &clustermetadatapb.ID{Cell: "zone1", Name: "1"},
+			clustermetadatapb.MultiPooler_builder{
+				Id:            clustermetadatapb.ID_builder{Cell: "zone1", Name: "1"}.Build(),
 				Database:      "db1",
 				Shard:         "-8",
 				Hostname:      "host1",
 				PortMap:       map[string]int32{"grpc": 8080},
 				Type:          clustermetadatapb.PoolerType_PRIMARY,
 				ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-			},
-			{
-				Id:            &clustermetadatapb.ID{Cell: "zone1", Name: "2"},
+			}.Build(),
+			clustermetadatapb.MultiPooler_builder{
+				Id:            clustermetadatapb.ID_builder{Cell: "zone1", Name: "2"}.Build(),
 				Database:      "db1",
 				Shard:         "8-",
 				Hostname:      "host2",
 				PortMap:       map[string]int32{"grpc": 8081},
 				Type:          clustermetadatapb.PoolerType_REPLICA,
 				ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-			},
-			{
-				Id:            &clustermetadatapb.ID{Cell: "zone1", Name: "3"},
+			}.Build(),
+			clustermetadatapb.MultiPooler_builder{
+				Id:            clustermetadatapb.ID_builder{Cell: "zone1", Name: "3"}.Build(),
 				Database:      "db2",
 				Shard:         "-8",
 				Hostname:      "host3",
 				PortMap:       map[string]int32{"grpc": 8082},
 				Type:          clustermetadatapb.PoolerType_PRIMARY,
 				ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-			},
-			{
-				Id:            &clustermetadatapb.ID{Cell: "zone1", Name: "4"},
+			}.Build(),
+			clustermetadatapb.MultiPooler_builder{
+				Id:            clustermetadatapb.ID_builder{Cell: "zone1", Name: "4"}.Build(),
 				Database:      "db2",
 				Shard:         "8-",
 				Hostname:      "host4",
 				PortMap:       map[string]int32{"grpc": 8083},
 				Type:          clustermetadatapb.PoolerType_REPLICA,
 				ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-			},
+			}.Build(),
 		}
 
 		// Create all multipoolers
@@ -1414,32 +1414,32 @@ func TestGetMultiPoolersByCell_Comprehensive(t *testing.T) {
 
 		// Setup: Create 2 multipoolers for db1 in zone1
 		multipoolers := []*clustermetadatapb.MultiPooler{
-			{
-				Id: &clustermetadatapb.ID{
+			clustermetadatapb.MultiPooler_builder{
+				Id: clustermetadatapb.ID_builder{
 					Component: clustermetadatapb.ID_MULTIPOOLER,
 					Cell:      "zone1",
 					Name:      "1",
-				},
+				}.Build(),
 				Database:      "db1",
 				Shard:         "-8",
 				Hostname:      "host1",
 				PortMap:       map[string]int32{"grpc": 8080},
 				Type:          clustermetadatapb.PoolerType_PRIMARY,
 				ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-			},
-			{
-				Id: &clustermetadatapb.ID{
+			}.Build(),
+			clustermetadatapb.MultiPooler_builder{
+				Id: clustermetadatapb.ID_builder{
 					Component: clustermetadatapb.ID_MULTIPOOLER,
 					Cell:      "zone1",
 					Name:      "2",
-				},
+				}.Build(),
 				Database:      "db1",
 				Shard:         "8-",
 				Hostname:      "host2",
 				PortMap:       map[string]int32{"grpc": 8081},
 				Type:          clustermetadatapb.PoolerType_REPLICA,
 				ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-			},
+			}.Build(),
 		}
 
 		// Create multipoolers
@@ -1477,12 +1477,12 @@ func TestGetMultiPoolersByCell_Comprehensive(t *testing.T) {
 
 		// Setup: Create 2 multipoolers for db2 in zone1
 		multipoolers := []*clustermetadatapb.MultiPooler{
-			{
-				Id: &clustermetadatapb.ID{
+			clustermetadatapb.MultiPooler_builder{
+				Id: clustermetadatapb.ID_builder{
 					Component: clustermetadatapb.ID_MULTIPOOLER,
 					Cell:      "zone1",
 					Name:      "1",
-				},
+				}.Build(),
 				Database:      "db2",
 				TableGroup:    "tg1",
 				Shard:         "-8",
@@ -1490,13 +1490,13 @@ func TestGetMultiPoolersByCell_Comprehensive(t *testing.T) {
 				PortMap:       map[string]int32{"grpc": 8080},
 				Type:          clustermetadatapb.PoolerType_PRIMARY,
 				ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-			},
-			{
-				Id: &clustermetadatapb.ID{
+			}.Build(),
+			clustermetadatapb.MultiPooler_builder{
+				Id: clustermetadatapb.ID_builder{
 					Component: clustermetadatapb.ID_MULTIPOOLER,
 					Cell:      "zone1",
 					Name:      "2",
-				},
+				}.Build(),
 				Database:      "db2",
 				TableGroup:    "tg1",
 				Shard:         "8-",
@@ -1504,7 +1504,7 @@ func TestGetMultiPoolersByCell_Comprehensive(t *testing.T) {
 				PortMap:       map[string]int32{"grpc": 8081},
 				Type:          clustermetadatapb.PoolerType_REPLICA,
 				ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-			},
+			}.Build(),
 		}
 
 		// Create multipoolers
@@ -1568,32 +1568,32 @@ func TestGetMultiPoolersByCell_Comprehensive(t *testing.T) {
 		defer ts.Close()
 
 		// Setup: Create multipoolers in both cells
-		zone1Multipooler := &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{
+		zone1Multipooler := clustermetadatapb.MultiPooler_builder{
+			Id: clustermetadatapb.ID_builder{
 				Component: clustermetadatapb.ID_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "1",
-			},
+			}.Build(),
 			Database:      "db1",
 			Shard:         "-8",
 			Hostname:      "host1",
 			PortMap:       map[string]int32{"grpc": 8080},
 			Type:          clustermetadatapb.PoolerType_PRIMARY,
 			ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-		}
-		zone2Multipooler := &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{
+		}.Build()
+		zone2Multipooler := clustermetadatapb.MultiPooler_builder{
+			Id: clustermetadatapb.ID_builder{
 				Component: clustermetadatapb.ID_MULTIPOOLER,
 				Cell:      "zone2",
 				Name:      "1",
-			},
+			}.Build(),
 			Database:      "db1",
 			Shard:         "-8",
 			Hostname:      "host2",
 			PortMap:       map[string]int32{"grpc": 8081},
 			Type:          clustermetadatapb.PoolerType_REPLICA,
 			ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-		}
+		}.Build()
 
 		// Create multipoolers in their respective cells
 		require.NoError(t, ts.CreateMultiPooler(ctx, zone1Multipooler))
@@ -1603,23 +1603,23 @@ func TestGetMultiPoolersByCell_Comprehensive(t *testing.T) {
 		zone1Infos, err := ts.GetMultiPoolersByCell(ctx, "zone1", nil)
 		require.NoError(t, err)
 		require.Len(t, zone1Infos, 1)
-		require.Equal(t, "zone1", zone1Infos[0].Id.Cell)
+		require.Equal(t, "zone1", zone1Infos[0].Id.GetCell())
 		require.Equal(t, "host1", zone1Infos[0].Hostname)
 
 		// Test: Verify zone2 can only see its own multipooler
 		zone2Infos, err := ts.GetMultiPoolersByCell(ctx, "zone2", nil)
 		require.NoError(t, err)
 		require.Len(t, zone2Infos, 1)
-		require.Equal(t, "zone2", zone2Infos[0].Id.Cell)
+		require.Equal(t, "zone2", zone2Infos[0].Id.GetCell())
 		require.Equal(t, "host2", zone2Infos[0].Hostname)
 
 		// Test: Verify cross-cell access is properly isolated
-		zone1FromZone2, err := ts.GetMultiPooler(ctx, zone1Multipooler.Id)
+		zone1FromZone2, err := ts.GetMultiPooler(ctx, zone1Multipooler.GetId())
 		require.NoError(t, err, "should be able to get multipooler by ID regardless of current cell context")
-		require.Equal(t, "zone1", zone1FromZone2.Id.Cell)
+		require.Equal(t, "zone1", zone1FromZone2.Id.GetCell())
 
-		zone2FromZone1, err := ts.GetMultiPooler(ctx, zone2Multipooler.Id)
+		zone2FromZone1, err := ts.GetMultiPooler(ctx, zone2Multipooler.GetId())
 		require.NoError(t, err, "should be able to get multipooler by ID regardless of current cell context")
-		require.Equal(t, "zone2", zone2FromZone1.Id.Cell)
+		require.Equal(t, "zone2", zone2FromZone1.Id.GetCell())
 	})
 }

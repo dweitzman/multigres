@@ -68,7 +68,7 @@ func GatherInitializationStatus(ctx context.Context, cohort []*coordinator.Node,
 		if err != nil {
 			if logger != nil {
 				logger.WarnContext(ctx, "Failed to get initialization status from node",
-					"node", node.ID.Name,
+					"node", node.ID.GetName(),
 					"error", err)
 			}
 			// Continue with nil status - we'll handle missing statuses in DetermineScenario
@@ -95,7 +95,7 @@ func DetermineScenario(statuses []*multipoolermanagerdatapb.InitializationStatus
 			continue
 		}
 
-		if status.IsInitialized {
+		if status.GetIsInitialized() {
 			initializedCount++
 		} else {
 			emptyCount++

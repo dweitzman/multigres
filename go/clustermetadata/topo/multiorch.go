@@ -34,15 +34,15 @@ func NewMultiOrch(name string, cell, host string) *clustermetadatapb.MultiOrch {
 	if name == "" {
 		name = stringutil.RandomString(8)
 	}
-	return &clustermetadatapb.MultiOrch{
-		Id: &clustermetadatapb.ID{
+	return clustermetadatapb.MultiOrch_builder{
+		Id: clustermetadatapb.ID_builder{
 			Component: clustermetadatapb.ID_MULTIORCH,
 			Cell:      cell,
 			Name:      name,
-		},
+		}.Build(),
 		Hostname: host,
 		PortMap:  make(map[string]int32),
-	}
+	}.Build()
 }
 
 // MultiOrchInfo is the container for a MultiOrch, read from the topology server.
@@ -53,21 +53,21 @@ type MultiOrchInfo struct {
 
 // String returns a string describing the multiorch.
 func (moi *MultiOrchInfo) String() string {
-	return fmt.Sprintf("MultiOrch{%v}", MultiOrchIDString(moi.Id))
+	return fmt.Sprintf("MultiOrch{%v}", MultiOrchIDString(moi.GetId()))
 }
 
 // IDString returns the string representation of the multiorch id
 func (moi *MultiOrchInfo) IDString() string {
-	return MultiOrchIDString(moi.Id)
+	return MultiOrchIDString(moi.GetId())
 }
 
 // Addr returns hostname:grpc port.
 func (moi *MultiOrchInfo) Addr() string {
-	grpcPort, ok := moi.PortMap["grpc"]
+	grpcPort, ok := moi.GetPortMap()["grpc"]
 	if !ok {
-		return moi.Hostname
+		return moi.GetHostname()
 	}
-	return fmt.Sprintf("%s:%d", moi.Hostname, grpcPort)
+	return fmt.Sprintf("%s:%d", moi.GetHostname(), grpcPort)
 }
 
 // Version returns the version of this multiorch from last time it was read or updated.
@@ -83,14 +83,14 @@ func NewMultiOrchInfo(multiorch *clustermetadatapb.MultiOrch, version Version) *
 
 // MultiOrchIDString returns the string representation of a MultiOrch ID
 func MultiOrchIDString(id *clustermetadatapb.ID) string {
-	return fmt.Sprintf("%s-%s-%s", ComponentTypeToString(id.Component), id.Cell, id.Name)
+	return fmt.Sprintf("%s-%s-%s", ComponentTypeToString(id.GetComponent()), id.GetCell(), id.GetName())
 }
 
 // GetMultiOrch is a high level function to read multiorch data.
 func (ts *store) GetMultiOrch(ctx context.Context, id *clustermetadatapb.ID) (*MultiOrchInfo, error) {
-	conn, err := ts.ConnForCell(ctx, id.Cell)
+	conn, err := ts.ConnForCell(ctx, id.GetCell())
 	if err != nil {
-		return nil, mterrors.Wrap(err, fmt.Sprintf("unable to get connection for cell %q", id.Cell))
+		return nil, mterrors.Wrap(err, fmt.Sprintf("unable to get connection for cell %q", id.GetCell()))
 	}
 
 	orchPath := path.Join(OrchsPath, MultiOrchIDString(id), OrchFile)
@@ -135,7 +135,7 @@ func (ts *store) GetMultiOrchIDsByCell(ctx context.Context, cell string) ([]*clu
 		if err := proto.Unmarshal(child.Value, multiorch); err != nil {
 			return nil, err
 		}
-		result[i] = multiorch.Id
+		result[i] = multiorch.GetId()
 	}
 	return result, nil
 }
@@ -171,7 +171,7 @@ func (ts *store) GetMultiOrchsByCell(ctx context.Context, cellName string) ([]*M
 
 // UpdateMultiOrch updates the multiorch data only - not associated replication paths.
 func (ts *store) UpdateMultiOrch(ctx context.Context, moi *MultiOrchInfo) error {
-	conn, err := ts.ConnForCell(ctx, moi.Id.Cell)
+	conn, err := ts.ConnForCell(ctx, moi.GetId().GetCell())
 	if err != nil {
 		return err
 	}
@@ -180,7 +180,7 @@ func (ts *store) UpdateMultiOrch(ctx context.Context, moi *MultiOrchInfo) error 
 	if err != nil {
 		return err
 	}
-	orchPath := path.Join(OrchsPath, MultiOrchIDString(moi.Id), OrchFile)
+	orchPath := path.Join(OrchsPath, MultiOrchIDString(moi.GetId()), OrchFile)
 	newVersion, err := conn.Update(ctx, orchPath, data, moi.version)
 	if err != nil {
 		return err
@@ -216,7 +216,7 @@ func (ts *store) UpdateMultiOrchFields(ctx context.Context, id *clustermetadatap
 
 // CreateMultiOrch creates a new multiorch and all associated paths.
 func (ts *store) CreateMultiOrch(ctx context.Context, mtorch *clustermetadatapb.MultiOrch) error {
-	conn, err := ts.ConnForCell(ctx, mtorch.Id.Cell)
+	conn, err := ts.ConnForCell(ctx, mtorch.GetId().GetCell())
 	if err != nil {
 		return err
 	}
@@ -225,7 +225,7 @@ func (ts *store) CreateMultiOrch(ctx context.Context, mtorch *clustermetadatapb.
 	if err != nil {
 		return err
 	}
-	orchPath := path.Join(OrchsPath, MultiOrchIDString(mtorch.Id), OrchFile)
+	orchPath := path.Join(OrchsPath, MultiOrchIDString(mtorch.GetId()), OrchFile)
 	if _, err := conn.Create(ctx, orchPath, data); err != nil {
 		return err
 	}
@@ -235,7 +235,7 @@ func (ts *store) CreateMultiOrch(ctx context.Context, mtorch *clustermetadatapb.
 
 // UnregisterMultiOrch deletes the specified multiorch.
 func (ts *store) UnregisterMultiOrch(ctx context.Context, id *clustermetadatapb.ID) error {
-	conn, err := ts.ConnForCell(ctx, id.Cell)
+	conn, err := ts.ConnForCell(ctx, id.GetCell())
 	if err != nil {
 		return err
 	}
@@ -254,14 +254,14 @@ func (ts *store) RegisterMultiOrch(ctx context.Context, mtorch *clustermetadatap
 	err := ts.CreateMultiOrch(ctx, mtorch)
 	if errors.Is(err, &TopoError{Code: NodeExists}) && allowUpdate {
 		// Try to update then
-		oldMtOrch, err := ts.GetMultiOrch(ctx, mtorch.Id)
+		oldMtOrch, err := ts.GetMultiOrch(ctx, mtorch.GetId())
 		if err != nil {
-			return fmt.Errorf("failed reading existing mtorch %v: %v", MultiOrchIDString(mtorch.Id), err)
+			return fmt.Errorf("failed reading existing mtorch %v: %v", MultiOrchIDString(mtorch.GetId()), err)
 		}
 
 		oldMtOrch.MultiOrch = proto.Clone(mtorch).(*clustermetadatapb.MultiOrch)
 		if err := ts.UpdateMultiOrch(ctx, oldMtOrch); err != nil {
-			return fmt.Errorf("failed updating mtorch %v: %v", MultiOrchIDString(mtorch.Id), err)
+			return fmt.Errorf("failed updating mtorch %v: %v", MultiOrchIDString(mtorch.GetId()), err)
 		}
 		return nil
 	}

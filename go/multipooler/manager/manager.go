@@ -228,7 +228,7 @@ func (pm *MultiPoolerManager) Open() error {
 		shardID := []byte("0") // default shard ID
 
 		// Use the multipooler name from serviceID as the pooler ID
-		poolerID := pm.serviceID.Name
+		poolerID := pm.serviceID.GetName()
 
 		// Check if connected to a primary database
 		isPrimary, err := pm.isPrimary(ctx)
@@ -363,7 +363,7 @@ func (pm *MultiPoolerManager) getBackupStanza() string {
 	if pm.config.PgBackRestStanza != "" {
 		return pm.config.PgBackRestStanza
 	}
-	return pm.serviceID.Name
+	return pm.serviceID.GetName()
 }
 
 // getPgCtldClient returns the pgctld gRPC client
@@ -376,7 +376,7 @@ func (pm *MultiPoolerManager) getTableGroup() string {
 	pm.cachedMultipooler.mu.Lock()
 	defer pm.cachedMultipooler.mu.Unlock()
 	if pm.cachedMultipooler.multipooler != nil && pm.cachedMultipooler.multipooler.MultiPooler != nil {
-		return pm.cachedMultipooler.multipooler.TableGroup
+		return pm.cachedMultipooler.multipooler.GetTableGroup()
 	}
 	return ""
 }
@@ -386,7 +386,7 @@ func (pm *MultiPoolerManager) getShard() string {
 	pm.cachedMultipooler.mu.Lock()
 	defer pm.cachedMultipooler.mu.Unlock()
 	if pm.cachedMultipooler.multipooler != nil && pm.cachedMultipooler.multipooler.MultiPooler != nil {
-		return pm.cachedMultipooler.multipooler.Shard
+		return pm.cachedMultipooler.multipooler.GetShard()
 	}
 	return ""
 }
@@ -396,7 +396,7 @@ func (pm *MultiPoolerManager) getPoolerType() clustermetadatapb.PoolerType {
 	pm.cachedMultipooler.mu.Lock()
 	defer pm.cachedMultipooler.mu.Unlock()
 	if pm.cachedMultipooler.multipooler != nil && pm.cachedMultipooler.multipooler.MultiPooler != nil {
-		return pm.cachedMultipooler.multipooler.Type
+		return pm.cachedMultipooler.multipooler.GetType()
 	}
 	return clustermetadatapb.PoolerType_UNKNOWN
 }
@@ -406,7 +406,7 @@ func (pm *MultiPoolerManager) getDatabase() string {
 	pm.cachedMultipooler.mu.Lock()
 	defer pm.cachedMultipooler.mu.Unlock()
 	if pm.cachedMultipooler.multipooler != nil && pm.cachedMultipooler.multipooler.MultiPooler != nil {
-		return pm.cachedMultipooler.multipooler.Database
+		return pm.cachedMultipooler.multipooler.GetDatabase()
 	}
 	return ""
 }
@@ -423,12 +423,12 @@ func (pm *MultiPoolerManager) getBackupLocation(ctx context.Context) (string, er
 		return "", mterrors.Wrapf(err, "failed to get database %s from topology", database)
 	}
 
-	if db.BackupLocation == "" {
+	if db.GetBackupLocation() == "" {
 		return "", mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
 			"database %s has no backup_location configured", database)
 	}
 
-	return db.BackupLocation, nil
+	return db.GetBackupLocation(), nil
 }
 
 // updateCachedMultipooler updates the cached multipooler info with the current multipooler
@@ -460,7 +460,7 @@ func (pm *MultiPoolerManager) checkReady() error {
 // checkPoolerType verifies that the pooler matches the expected type
 func (pm *MultiPoolerManager) checkPoolerType(expectedType clustermetadatapb.PoolerType, operationName string) error {
 	pm.mu.Lock()
-	poolerType := pm.multipooler.Type
+	poolerType := pm.multipooler.GetType()
 	pm.mu.Unlock()
 
 	if poolerType != expectedType {
@@ -610,7 +610,7 @@ func (pm *MultiPoolerManager) loadMultiPoolerFromTopo() {
 		pm.topoLoaded = true
 		pm.mu.Unlock()
 
-		pm.logger.InfoContext(ctx, "Loaded multipooler record from topology", "service_id", pm.serviceID.String(), "database", mp.Database)
+		pm.logger.InfoContext(ctx, "Loaded multipooler record from topology", "service_id", pm.serviceID.String(), "database", mp.GetDatabase())
 		pm.checkAndSetReady()
 		return
 	}
@@ -768,8 +768,8 @@ func (pm *MultiPoolerManager) checkDemotionState(ctx context.Context) (*demotion
 
 	// Check topology state
 	pm.mu.Lock()
-	poolerType := pm.multipooler.Type
-	servingStatus := pm.multipooler.ServingStatus
+	poolerType := pm.multipooler.GetType()
+	servingStatus := pm.multipooler.GetServingStatus()
 	pm.mu.Unlock()
 
 	state.isReplicaInTopology = (poolerType == clustermetadatapb.PoolerType_REPLICA)
@@ -820,7 +820,7 @@ func (pm *MultiPoolerManager) setServingReadOnly(ctx context.Context, state *dem
 
 	// Update serving status in topology
 	updatedMultipooler, err := pm.topoClient.UpdateMultiPoolerFields(ctx, pm.serviceID, func(mp *clustermetadatapb.MultiPooler) error {
-		mp.ServingStatus = clustermetadatapb.PoolerServingStatus_SERVING_RDONLY
+		mp.SetServingStatus(clustermetadatapb.PoolerServingStatus_SERVING_RDONLY)
 		return nil
 	})
 	if err != nil {
@@ -879,13 +879,13 @@ func (pm *MultiPoolerManager) restartPostgresAsStandby(ctx context.Context, stat
 
 	// Call pgctld to restart as standby
 	// This will create standby.signal and restart the server
-	req := &pgctldpb.RestartRequest{
+	req := pgctldpb.RestartRequest_builder{
 		Mode:      "fast",
 		Timeout:   nil, // Use default timeout
 		Port:      0,   // Use default port
 		ExtraArgs: nil,
 		AsStandby: true, // Create standby.signal before restart
-	}
+	}.Build()
 
 	// Close the query service controller to release its stale database connection
 	if err := pm.Close(); err != nil {
@@ -900,8 +900,8 @@ func (pm *MultiPoolerManager) restartPostgresAsStandby(ctx context.Context, stat
 	}
 
 	pm.logger.InfoContext(ctx, "PostgreSQL restarted as standby",
-		"pid", resp.Pid,
-		"message", resp.Message)
+		"pid", resp.GetPid(),
+		"message", resp.GetMessage())
 
 	// Reopen the manager
 	if err := pm.Open(); err != nil {
@@ -935,7 +935,7 @@ func (pm *MultiPoolerManager) updateTopologyAfterDemotion(ctx context.Context, s
 
 	pm.logger.InfoContext(ctx, "Updating pooler type in topology to REPLICA")
 	updatedMultipooler, err := pm.topoClient.UpdateMultiPoolerFields(ctx, pm.serviceID, func(mp *clustermetadatapb.MultiPooler) error {
-		mp.Type = clustermetadatapb.PoolerType_REPLICA
+		mp.SetType(clustermetadatapb.PoolerType_REPLICA)
 		return nil
 	})
 	if err != nil {
@@ -1103,7 +1103,7 @@ func (pm *MultiPoolerManager) checkPromotionState(ctx context.Context, syncRepli
 
 	// Check topology state
 	pm.mu.Lock()
-	poolerType := pm.multipooler.Type
+	poolerType := pm.multipooler.GetType()
 	pm.mu.Unlock()
 
 	state.isPrimaryInTopology = (poolerType == clustermetadatapb.PoolerType_PRIMARY)
@@ -1196,7 +1196,7 @@ func (pm *MultiPoolerManager) updateTopologyAfterPromotion(ctx context.Context, 
 	pm.logger.InfoContext(ctx, "Topology update needed")
 	pm.logger.InfoContext(ctx, "Updating pooler type in topology to PRIMARY")
 	updatedMultipooler, err := pm.topoClient.UpdateMultiPoolerFields(ctx, pm.serviceID, func(mp *clustermetadatapb.MultiPooler) error {
-		mp.Type = clustermetadatapb.PoolerType_PRIMARY
+		mp.SetType(clustermetadatapb.PoolerType_PRIMARY)
 		return nil
 	})
 	if err != nil {
@@ -1233,11 +1233,11 @@ func (pm *MultiPoolerManager) configureReplicationAfterPromotion(ctx context.Con
 	pm.logger.InfoContext(ctx, "Sync replication configuration needed")
 	pm.logger.InfoContext(ctx, "Configuring synchronous replication for new cohort")
 	err := pm.ConfigureSynchronousReplication(ctx,
-		syncReplicationConfig.SynchronousCommit,
-		syncReplicationConfig.SynchronousMethod,
-		syncReplicationConfig.NumSync,
-		syncReplicationConfig.StandbyIds,
-		syncReplicationConfig.ReloadConfig)
+		syncReplicationConfig.GetSynchronousCommit(),
+		syncReplicationConfig.GetSynchronousMethod(),
+		syncReplicationConfig.GetNumSync(),
+		syncReplicationConfig.GetStandbyIds(),
+		syncReplicationConfig.GetReloadConfig())
 	if err != nil {
 		pm.logger.ErrorContext(ctx, "Failed to configure synchronous replication", "error", err)
 		return mterrors.Wrap(err, "promotion succeeded but failed to configure synchronous replication")

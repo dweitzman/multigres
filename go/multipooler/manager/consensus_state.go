@@ -61,7 +61,7 @@ func (cs *ConsensusState) Load() (int64, error) {
 	cs.term = term
 	cs.mu.Unlock()
 
-	return term.TermNumber, nil
+	return term.GetTermNumber(), nil
 }
 
 // GetCurrentTermNumber returns the current term.
@@ -97,10 +97,10 @@ func (cs *ConsensusState) GetAcceptedLeader(ctx context.Context) (string, error)
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
-	if cs.term == nil || cs.term.AcceptedTermFromCoordinatorId == nil {
+	if cs.term == nil || !cs.term.HasAcceptedTermFromCoordinatorId() {
 		return "", nil
 	}
-	return cs.term.AcceptedTermFromCoordinatorId.GetName(), nil
+	return cs.term.GetAcceptedTermFromCoordinatorId().GetName(), nil
 }
 
 // GetTerm returns a copy of the current consensus term.
@@ -140,25 +140,25 @@ func (cs *ConsensusState) AcceptCandidateAndSave(ctx context.Context, candidateI
 	}
 
 	// If already accepted from this coordinator, idempotent success
-	if cs.term.AcceptedTermFromCoordinatorId != nil && proto.Equal(cs.term.AcceptedTermFromCoordinatorId, candidateID) {
+	if cs.term.HasAcceptedTermFromCoordinatorId() && proto.Equal(cs.term.GetAcceptedTermFromCoordinatorId(), candidateID) {
 		return nil
 	}
 
 	// Check if already accepted from someone else in this term
-	if cs.term.AcceptedTermFromCoordinatorId != nil {
+	if cs.term.HasAcceptedTermFromCoordinatorId() {
 		return fmt.Errorf("already accepted term from %s in term %d",
-			cs.term.AcceptedTermFromCoordinatorId.GetName(), cs.term.TermNumber)
+			cs.term.GetAcceptedTermFromCoordinatorId().GetName(), cs.term.GetTermNumber())
 	}
 
 	// Prepare acceptance
 	newTerm := cloneTerm(cs.term)
 
 	// Update acceptance - use proto.Clone to ensure deep copy
-	newTerm.AcceptedTermFromCoordinatorId = proto.Clone(candidateID).(*clustermetadatapb.ID)
+	newTerm.SetAcceptedTermFromCoordinatorId(proto.Clone(candidateID).(*clustermetadatapb.ID))
 
 	// Update last acceptance time
 	now := time.Now()
-	newTerm.LastAcceptanceTime = timestamppb.New(now)
+	newTerm.SetLastAcceptanceTime(timestamppb.New(now))
 
 	// Save and update under lock
 	return cs.saveAndUpdateLocked(newTerm)
@@ -190,12 +190,12 @@ func (cs *ConsensusState) UpdateTermAndSave(ctx context.Context, newTerm int64) 
 	}
 
 	// Only if newTerm > currentTerm: create new term with reset acceptance
-	term := &multipoolermanagerdatapb.ConsensusTerm{
+	term := multipoolermanagerdatapb.ConsensusTerm_builder{
 		TermNumber:                    newTerm,
 		AcceptedTermFromCoordinatorId: nil,
 		LastAcceptanceTime:            nil,
 		LeaderId:                      nil,
-	}
+	}.Build()
 
 	// Save and update under lock
 	return cs.saveAndUpdateLocked(term)

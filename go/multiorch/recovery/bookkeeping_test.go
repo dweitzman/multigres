@@ -37,9 +37,9 @@ func TestForgetLongUnseenInstances_BrokenEntries(t *testing.T) {
 		MultiPooler: nil,
 	})
 	engine.poolerStore.Set("broken-nil-id", &store.PoolerHealth{
-		MultiPooler: &clustermetadata.MultiPooler{
+		MultiPooler: clustermetadata.MultiPooler_builder{
 			Id: nil,
-		},
+		}.Build(),
 	})
 
 	require.Equal(t, 3, engine.poolerStore.Len())
@@ -62,16 +62,16 @@ func TestForgetLongUnseenInstances_NeverSeen(t *testing.T) {
 
 	// Add pooler that was never successfully health checked, discovered > 4 hours ago
 	oldPooler := &store.PoolerHealth{
-		MultiPooler: &clustermetadata.MultiPooler{
-			Id: &clustermetadata.ID{
+		MultiPooler: clustermetadata.MultiPooler_builder{
+			Id: clustermetadata.ID_builder{
 				Component: clustermetadata.ID_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "old-pooler",
-			},
+			}.Build(),
 			Database:   "db1",
 			TableGroup: "default",
 			Shard:      "-",
-		},
+		}.Build(),
 		LastCheckAttempted: now.Add(-threshold - time.Hour), // > 4 hours ago
 		LastSeen:           time.Time{},                     // Zero value = never seen
 	}
@@ -79,14 +79,14 @@ func TestForgetLongUnseenInstances_NeverSeen(t *testing.T) {
 
 	// Add pooler that was never health checked, but discovered recently
 	recentPooler := &store.PoolerHealth{
-		MultiPooler: &clustermetadata.MultiPooler{
-			Id: &clustermetadata.ID{
+		MultiPooler: clustermetadata.MultiPooler_builder{
+			Id: clustermetadata.ID_builder{
 				Component: clustermetadata.ID_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "recent-pooler",
-			},
+			}.Build(),
 			Database: "db1",
-		},
+		}.Build(),
 		LastCheckAttempted: now.Add(-time.Hour), // Only 1 hour ago
 		LastSeen:           time.Time{},         // Zero value = never seen
 	}
@@ -94,14 +94,14 @@ func TestForgetLongUnseenInstances_NeverSeen(t *testing.T) {
 
 	// Add pooler with no attempts yet (should be skipped)
 	noAttempts := &store.PoolerHealth{
-		MultiPooler: &clustermetadata.MultiPooler{
-			Id: &clustermetadata.ID{
+		MultiPooler: clustermetadata.MultiPooler_builder{
+			Id: clustermetadata.ID_builder{
 				Component: clustermetadata.ID_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "no-attempts",
-			},
+			}.Build(),
 			Database: "db1",
-		},
+		}.Build(),
 		LastCheckAttempted: time.Time{}, // No attempts yet
 		LastSeen:           time.Time{}, // Never seen
 	}
@@ -137,14 +137,14 @@ func TestForgetLongUnseenInstances_LongUnseen(t *testing.T) {
 
 	// Add pooler that was healthy but not seen in > 4 hours
 	oldHealthyPooler := &store.PoolerHealth{
-		MultiPooler: &clustermetadata.MultiPooler{
-			Id: &clustermetadata.ID{
+		MultiPooler: clustermetadata.MultiPooler_builder{
+			Id: clustermetadata.ID_builder{
 				Component: clustermetadata.ID_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "old-healthy",
-			},
+			}.Build(),
 			Database: "db1",
-		},
+		}.Build(),
 		LastSeen:            now.Add(-threshold - time.Hour), // > 4 hours ago
 		LastCheckAttempted:  now.Add(-threshold - time.Hour),
 		LastCheckSuccessful: now.Add(-threshold - time.Hour),
@@ -154,14 +154,14 @@ func TestForgetLongUnseenInstances_LongUnseen(t *testing.T) {
 
 	// Add pooler that was healthy and seen recently
 	recentHealthyPooler := &store.PoolerHealth{
-		MultiPooler: &clustermetadata.MultiPooler{
-			Id: &clustermetadata.ID{
+		MultiPooler: clustermetadata.MultiPooler_builder{
+			Id: clustermetadata.ID_builder{
 				Component: clustermetadata.ID_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "recent-healthy",
-			},
+			}.Build(),
 			Database: "db1",
-		},
+		}.Build(),
 		LastSeen:            now.Add(-time.Hour), // Only 1 hour ago
 		LastCheckAttempted:  now.Add(-time.Hour),
 		LastCheckSuccessful: now.Add(-time.Hour),
@@ -198,45 +198,45 @@ func TestForgetLongUnseenInstances_MixedScenario(t *testing.T) {
 	cases := map[string]*store.PoolerHealth{
 		"broken": nil,
 		"never-seen-old": {
-			MultiPooler: &clustermetadata.MultiPooler{
-				Id: &clustermetadata.ID{
+			MultiPooler: clustermetadata.MultiPooler_builder{
+				Id: clustermetadata.ID_builder{
 					Component: clustermetadata.ID_MULTIPOOLER,
 					Cell:      "zone1",
 					Name:      "never-seen-old",
-				},
-			},
+				}.Build(),
+			}.Build(),
 			LastCheckAttempted: now.Add(-threshold - time.Hour),
 			LastSeen:           time.Time{},
 		},
 		"never-seen-recent": {
-			MultiPooler: &clustermetadata.MultiPooler{
-				Id: &clustermetadata.ID{
+			MultiPooler: clustermetadata.MultiPooler_builder{
+				Id: clustermetadata.ID_builder{
 					Component: clustermetadata.ID_MULTIPOOLER,
 					Cell:      "zone1",
 					Name:      "never-seen-recent",
-				},
-			},
+				}.Build(),
+			}.Build(),
 			LastCheckAttempted: now.Add(-time.Hour),
 			LastSeen:           time.Time{},
 		},
 		"long-unseen": {
-			MultiPooler: &clustermetadata.MultiPooler{
-				Id: &clustermetadata.ID{
+			MultiPooler: clustermetadata.MultiPooler_builder{
+				Id: clustermetadata.ID_builder{
 					Component: clustermetadata.ID_MULTIPOOLER,
 					Cell:      "zone1",
 					Name:      "long-unseen",
-				},
-			},
+				}.Build(),
+			}.Build(),
 			LastSeen: now.Add(-threshold - time.Hour),
 		},
 		"healthy": {
-			MultiPooler: &clustermetadata.MultiPooler{
-				Id: &clustermetadata.ID{
+			MultiPooler: clustermetadata.MultiPooler_builder{
+				Id: clustermetadata.ID_builder{
 					Component: clustermetadata.ID_MULTIPOOLER,
 					Cell:      "zone1",
 					Name:      "healthy",
-				},
-			},
+				}.Build(),
+			}.Build(),
 			LastSeen: now.Add(-time.Minute),
 		},
 	}
@@ -294,13 +294,13 @@ func TestRunBookkeeping(t *testing.T) {
 
 	// Add an old pooler that should be forgotten
 	oldPooler := &store.PoolerHealth{
-		MultiPooler: &clustermetadata.MultiPooler{
-			Id: &clustermetadata.ID{
+		MultiPooler: clustermetadata.MultiPooler_builder{
+			Id: clustermetadata.ID_builder{
 				Component: clustermetadata.ID_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "old",
-			},
-		},
+			}.Build(),
+		}.Build(),
 		LastCheckAttempted: now.Add(-threshold - time.Hour),
 		LastSeen:           time.Time{},
 	}

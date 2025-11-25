@@ -67,17 +67,17 @@ func (g *grpcQueryService) StreamExecute(
 ) error {
 	g.logger.DebugContext(ctx, "streaming query execution",
 		"pooler_id", g.poolerID,
-		"tablegroup", target.TableGroup,
-		"shard", target.Shard,
-		"pooler_type", target.PoolerType.String(),
+		"tablegroup", target.GetTableGroup(),
+		"shard", target.GetShard(),
+		"pooler_type", target.GetPoolerType().String(),
 		"query", sql)
 
 	// Create the request
-	req := &multipoolerservice.StreamExecuteRequest{
+	req := multipoolerservice.StreamExecuteRequest_builder{
 		Query:  sql,
 		Target: target,
 		// TODO: Add caller_id when we have authentication
-	}
+	}.Build()
 
 	// Call the gRPC StreamExecute
 	stream, err := g.client.StreamExecute(ctx, req)
@@ -98,13 +98,13 @@ func (g *grpcQueryService) StreamExecute(
 		}
 
 		// Extract result from response
-		if response.Result == nil {
+		if !response.HasResult() {
 			g.logger.WarnContext(ctx, "received response with nil result", "pooler_id", g.poolerID)
 			continue
 		}
 
 		// Call the callback with the result
-		if err := callback(ctx, response.Result); err != nil {
+		if err := callback(ctx, response.GetResult()); err != nil {
 			// Callback returned error, stop streaming
 			g.logger.DebugContext(ctx, "callback returned error, stopping stream",
 				"pooler_id", g.poolerID,
@@ -120,19 +120,19 @@ func (g *grpcQueryService) StreamExecute(
 func (g *grpcQueryService) ExecuteQuery(ctx context.Context, target *query.Target, sql string, maxRows uint64) (*query.QueryResult, error) {
 	g.logger.DebugContext(ctx, "Executing query",
 		"pooler_id", g.poolerID,
-		"tablegroup", target.TableGroup,
-		"shard", target.Shard,
-		"pooler_type", target.PoolerType.String(),
+		"tablegroup", target.GetTableGroup(),
+		"shard", target.GetShard(),
+		"pooler_type", target.GetPoolerType().String(),
 		"max_rows", maxRows,
 		"query", sql)
 
 	// Create the request
-	req := &multipoolerservice.ExecuteQueryRequest{
+	req := multipoolerservice.ExecuteQueryRequest_builder{
 		Query:   sql,
 		Target:  target,
 		MaxRows: maxRows,
 		// TODO: Add caller_id when we have authentication
-	}
+	}.Build()
 
 	// Call the gRPC ExecuteQuery
 	res, err := g.client.ExecuteQuery(ctx, req)

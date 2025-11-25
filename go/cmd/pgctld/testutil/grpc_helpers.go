@@ -66,7 +66,7 @@ func (m *MockPgCtldService) Start(ctx context.Context, req *pb.StartRequest) (*p
 	if m.StartResponse != nil {
 		return m.StartResponse, nil
 	}
-	return &pb.StartResponse{Pid: 12345, Message: "Mock server started"}, nil
+	return pb.StartResponse_builder{Pid: 12345, Message: "Mock server started"}.Build(), nil
 }
 
 func (m *MockPgCtldService) Stop(ctx context.Context, req *pb.StopRequest) (*pb.StopResponse, error) {
@@ -77,7 +77,7 @@ func (m *MockPgCtldService) Stop(ctx context.Context, req *pb.StopRequest) (*pb.
 	if m.StopResponse != nil {
 		return m.StopResponse, nil
 	}
-	return &pb.StopResponse{Message: "Mock server stopped"}, nil
+	return pb.StopResponse_builder{Message: "Mock server stopped"}.Build(), nil
 }
 
 func (m *MockPgCtldService) Restart(ctx context.Context, req *pb.RestartRequest) (*pb.RestartResponse, error) {
@@ -88,7 +88,7 @@ func (m *MockPgCtldService) Restart(ctx context.Context, req *pb.RestartRequest)
 	if m.RestartResponse != nil {
 		return m.RestartResponse, nil
 	}
-	return &pb.RestartResponse{Pid: 12346, Message: "Mock server restarted"}, nil
+	return pb.RestartResponse_builder{Pid: 12346, Message: "Mock server restarted"}.Build(), nil
 }
 
 func (m *MockPgCtldService) ReloadConfig(ctx context.Context, req *pb.ReloadConfigRequest) (*pb.ReloadConfigResponse, error) {
@@ -99,7 +99,7 @@ func (m *MockPgCtldService) ReloadConfig(ctx context.Context, req *pb.ReloadConf
 	if m.ReloadResponse != nil {
 		return m.ReloadResponse, nil
 	}
-	return &pb.ReloadConfigResponse{Message: "Mock config reloaded"}, nil
+	return pb.ReloadConfigResponse_builder{Message: "Mock config reloaded"}.Build(), nil
 }
 
 func (m *MockPgCtldService) Status(ctx context.Context, req *pb.StatusRequest) (*pb.StatusResponse, error) {
@@ -110,7 +110,7 @@ func (m *MockPgCtldService) Status(ctx context.Context, req *pb.StatusRequest) (
 	if m.StatusResponse != nil {
 		return m.StatusResponse, nil
 	}
-	return &pb.StatusResponse{
+	return pb.StatusResponse_builder{
 		Status:  pb.ServerStatus_RUNNING,
 		Pid:     12345,
 		Version: "PostgreSQL 15.0",
@@ -119,7 +119,7 @@ func (m *MockPgCtldService) Status(ctx context.Context, req *pb.StatusRequest) (
 		Host:    "localhost",
 		Ready:   true,
 		Message: "Mock server running",
-	}, nil
+	}.Build(), nil
 }
 
 func (m *MockPgCtldService) Version(ctx context.Context, req *pb.VersionRequest) (*pb.VersionResponse, error) {
@@ -130,7 +130,7 @@ func (m *MockPgCtldService) Version(ctx context.Context, req *pb.VersionRequest)
 	if m.VersionResponse != nil {
 		return m.VersionResponse, nil
 	}
-	return &pb.VersionResponse{Version: "PostgreSQL 15.0", Message: "Mock version"}, nil
+	return pb.VersionResponse_builder{Version: "PostgreSQL 15.0", Message: "Mock version"}.Build(), nil
 }
 
 func (m *MockPgCtldService) InitDataDir(ctx context.Context, req *pb.InitDataDirRequest) (*pb.InitDataDirResponse, error) {
@@ -141,7 +141,7 @@ func (m *MockPgCtldService) InitDataDir(ctx context.Context, req *pb.InitDataDir
 	if m.InitDirResponse != nil {
 		return m.InitDirResponse, nil
 	}
-	return &pb.InitDataDirResponse{Message: "Mock data directory initialized"}, nil
+	return pb.InitDataDirResponse_builder{Message: "Mock data directory initialized"}.Build(), nil
 }
 
 // TestGRPCServer provides utilities for testing gRPC services

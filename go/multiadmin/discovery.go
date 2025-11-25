@@ -78,11 +78,11 @@ func (ma *MultiAdmin) DiscoverServices(ctx context.Context) (*ServiceList, error
 		if err == nil && len(gateways) > 0 {
 			// Use the first registered gateway
 			gw := gateways[0].MultiGateway
-			gatewayName := gateways[0].Id.Name
+			gatewayName := gateways[0].GetId().GetName()
 			proxyURL := fmt.Sprintf("/proxy/gate/%s/%s", cell, gatewayName)
 			directURL := ""
-			if httpPort, ok := gw.PortMap["http"]; ok && httpPort > 0 {
-				directURL = fmt.Sprintf("http://%s:%d/", gw.Hostname, httpPort)
+			if httpPort, ok := gw.GetPortMap()["http"]; ok && httpPort > 0 {
+				directURL = fmt.Sprintf("http://%s:%d/", gw.GetHostname(), httpPort)
 			}
 			result.CellServices[cell] = append(result.CellServices[cell], ServiceInfo{
 				Name:       "multigateway",
@@ -97,11 +97,11 @@ func (ma *MultiAdmin) DiscoverServices(ctx context.Context) (*ServiceList, error
 		if err == nil && len(poolers) > 0 {
 			// Use the first registered pooler
 			mp := poolers[0].MultiPooler
-			poolerName := poolers[0].Id.Name
+			poolerName := poolers[0].GetId().GetName()
 			proxyURL := fmt.Sprintf("/proxy/pool/%s/%s", cell, poolerName)
 			directURL := ""
-			if httpPort, ok := mp.PortMap["http"]; ok && httpPort > 0 {
-				directURL = fmt.Sprintf("http://%s:%d/", mp.Hostname, httpPort)
+			if httpPort, ok := mp.GetPortMap()["http"]; ok && httpPort > 0 {
+				directURL = fmt.Sprintf("http://%s:%d/", mp.GetHostname(), httpPort)
 			}
 			result.CellServices[cell] = append(result.CellServices[cell], ServiceInfo{
 				Name:       "multipooler",
@@ -116,11 +116,11 @@ func (ma *MultiAdmin) DiscoverServices(ctx context.Context) (*ServiceList, error
 		if err == nil && len(orchs) > 0 {
 			// Use the first registered orch
 			mo := orchs[0].MultiOrch
-			orchName := orchs[0].Id.Name
+			orchName := orchs[0].GetId().GetName()
 			proxyURL := fmt.Sprintf("/proxy/orch/%s/%s", cell, orchName)
 			directURL := ""
-			if httpPort, ok := mo.PortMap["http"]; ok && httpPort > 0 {
-				directURL = fmt.Sprintf("http://%s:%d/", mo.Hostname, httpPort)
+			if httpPort, ok := mo.GetPortMap()["http"]; ok && httpPort > 0 {
+				directURL = fmt.Sprintf("http://%s:%d/", mo.GetHostname(), httpPort)
 			}
 			result.CellServices[cell] = append(result.CellServices[cell], ServiceInfo{
 				Name:       "multiorch",

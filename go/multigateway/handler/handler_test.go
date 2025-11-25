@@ -31,16 +31,16 @@ type mockExecutor struct{}
 
 func (m *mockExecutor) StreamExecute(ctx context.Context, conn *server.Conn, queryStr string, astStmt ast.Stmt, callback func(ctx context.Context, result *query.QueryResult) error) error {
 	// Return a simple test result
-	return callback(ctx, &query.QueryResult{
+	return callback(ctx, query.QueryResult_builder{
 		Fields: []*query.Field{
-			{Name: "column1", Type: "int4"},
+			query.Field_builder{Name: "column1", Type: "int4"}.Build(),
 		},
 		Rows: []*query.Row{
-			{Values: [][]byte{[]byte("1")}},
+			query.Row_builder{Values: [][]byte{[]byte("1")}}.Build(),
 		},
 		CommandTag:   "SELECT 1",
 		RowsAffected: 1,
-	})
+	}.Build())
 }
 
 // TestHandleQueryEmptyQuery tests that empty queries are handled correctly.

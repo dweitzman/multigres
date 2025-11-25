@@ -105,9 +105,9 @@ func (e *Executor) ExecuteQuery(ctx context.Context, target *query.Target, sql s
 		target = &query.Target{}
 	}
 	e.logger.DebugContext(ctx, "executing query",
-		"tablegroup", target.TableGroup,
-		"shard", target.Shard,
-		"pooler_type", target.PoolerType.String(),
+		"tablegroup", target.GetTableGroup(),
+		"shard", target.GetShard(),
+		"pooler_type", target.GetPoolerType().String(),
 		"query", sql)
 
 	// Execute the query and stream results
@@ -213,10 +213,10 @@ func (e *Executor) executeSelectQuery(ctx context.Context, queryStr string, maxR
 	// Build field information
 	fields := make([]*query.Field, len(columns))
 	for i, col := range columns {
-		fields[i] = &query.Field{
+		fields[i] = query.Field_builder{
 			Name: col,
 			Type: columnTypes[i].DatabaseTypeName(),
-		}
+		}.Build()
 	}
 
 	// Read rows
@@ -244,7 +244,7 @@ func (e *Executor) executeSelectQuery(ctx context.Context, queryStr string, maxR
 			}
 		}
 
-		resultRows = append(resultRows, &query.Row{Values: values})
+		resultRows = append(resultRows, query.Row_builder{Values: values}.Build())
 		rowCount++
 	}
 
@@ -255,12 +255,12 @@ func (e *Executor) executeSelectQuery(ctx context.Context, queryStr string, maxR
 	// Generate command tag for SELECT
 	commandTag := fmt.Sprintf("SELECT %d", rowCount)
 
-	return &query.QueryResult{
+	return query.QueryResult_builder{
 		Fields:       fields,
 		RowsAffected: 0, // SELECT queries don't affect rows
 		Rows:         resultRows,
 		CommandTag:   commandTag,
-	}, nil
+	}.Build(), nil
 }
 
 // executeModifyQuery executes an INSERT, UPDATE, DELETE, or other modification query.
@@ -279,12 +279,12 @@ func (e *Executor) executeModifyQuery(ctx context.Context, queryStr string) (*qu
 	// Generate command tag based on query type
 	commandTag := e.generateCommandTag(queryStr, uint64(rowsAffected))
 
-	return &query.QueryResult{
+	return query.QueryResult_builder{
 		Fields:       []*query.Field{}, // No fields for modification queries
 		RowsAffected: uint64(rowsAffected),
 		Rows:         []*query.Row{}, // No rows for modification queries
 		CommandTag:   commandTag,
-	}, nil
+	}.Build(), nil
 }
 
 // generateCommandTag generates a PostgreSQL command tag for the result.

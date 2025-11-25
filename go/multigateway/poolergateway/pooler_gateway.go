@@ -123,17 +123,17 @@ func (pg *PoolerGateway) getQueryServiceForTarget(ctx context.Context, target *q
 	pooler := pg.discovery.GetPooler(target)
 	if pooler == nil {
 		return nil, fmt.Errorf("no pooler found for target: tablegroup=%s, shard=%s, type=%s",
-			target.TableGroup, target.Shard, target.PoolerType.String())
+			target.GetTableGroup(), target.GetShard(), target.GetPoolerType().String())
 	}
 
-	poolerID := topo.MultiPoolerIDString(pooler.Id)
+	poolerID := topo.MultiPoolerIDString(pooler.GetId())
 
 	pg.logger.DebugContext(ctx, "selected pooler for target",
-		"tablegroup", target.TableGroup,
-		"shard", target.Shard,
-		"pooler_type", target.PoolerType.String(),
+		"tablegroup", target.GetTableGroup(),
+		"shard", target.GetShard(),
+		"pooler_type", target.GetPoolerType().String(),
 		"pooler_id", poolerID,
-		"actual_pooler_type", pooler.Type.String())
+		"actual_pooler_type", pooler.GetType().String())
 
 	// Get or create connection to this pooler
 	queryService, err := pg.getOrCreateConnection(ctx, pooler)
@@ -163,7 +163,7 @@ func (pg *PoolerGateway) getOrCreateConnection(
 	ctx context.Context,
 	pooler *clustermetadatapb.MultiPooler,
 ) (queryservice.QueryService, error) {
-	poolerID := topo.MultiPoolerIDString(pooler.Id)
+	poolerID := topo.MultiPoolerIDString(pooler.GetId())
 
 	// Check if we already have a connection
 	pg.mu.Lock()

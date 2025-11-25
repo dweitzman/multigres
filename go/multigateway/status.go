@@ -76,7 +76,7 @@ func (mg *MultiGateway) handleIndex(w http.ResponseWriter, r *http.Request) {
 	mg.serverStatus.Poolers = make([]PoolerStatus, 0, len(poolers))
 	for _, pooler := range poolers {
 		mg.serverStatus.Poolers = append(mg.serverStatus.Poolers, PoolerStatus{
-			Name:     pooler.Id.GetName(),
+			Name:     pooler.GetId().GetName(),
 			Database: pooler.GetDatabase(),
 			Type:     pooler.GetType().String(),
 		})

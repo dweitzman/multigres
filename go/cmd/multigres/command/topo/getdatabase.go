@@ -70,9 +70,9 @@ func runGetDatabase(cmd *cobra.Command, args []string) error {
 	// Create client and call GetDatabase RPC
 	client := multiadminpb.NewMultiAdminServiceClient(conn)
 
-	response, err := client.GetDatabase(ctx, &multiadminpb.GetDatabaseRequest{
+	response, err := client.GetDatabase(ctx, multiadminpb.GetDatabaseRequest_builder{
 		Name: databaseName,
-	})
+	}.Build())
 	if err != nil {
 		return fmt.Errorf("GetDatabase RPC failed: %w", err)
 	}

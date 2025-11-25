@@ -291,13 +291,13 @@ func checkCellExistsInTopology(etcdAddress, globalRootPath, cellName string) err
 	}
 
 	// Verify cell has expected properties
-	if cell.Name != cellName {
-		return fmt.Errorf("cell name mismatch: expected %s, got %s", cellName, cell.Name)
+	if cell.GetName() != cellName {
+		return fmt.Errorf("cell name mismatch: expected %s, got %s", cellName, cell.GetName())
 	}
-	if len(cell.ServerAddresses) == 0 {
+	if len(cell.GetServerAddresses()) == 0 {
 		return fmt.Errorf("cell '%s' has no server addresses", cellName)
 	}
-	if cell.Root == "" {
+	if cell.GetRoot() == "" {
 		return fmt.Errorf("cell '%s' has no root path", cellName)
 	}
 
@@ -451,16 +451,16 @@ func queryHeartbeatCount(addr string) (int, error) {
 	}
 
 	// Parse the result
-	if len(result.Rows) != 1 {
-		return 0, fmt.Errorf("expected 1 row, got %d", len(result.Rows))
+	if len(result.GetRows()) != 1 {
+		return 0, fmt.Errorf("expected 1 row, got %d", len(result.GetRows()))
 	}
 
-	if len(result.Rows[0].Values) != 1 {
-		return 0, fmt.Errorf("expected 1 column, got %d", len(result.Rows[0].Values))
+	if len(result.GetRows()[0].GetValues()) != 1 {
+		return 0, fmt.Errorf("expected 1 column, got %d", len(result.GetRows()[0].GetValues()))
 	}
 
 	// Convert the count value from bytes to int
-	countStr := string(result.Rows[0].Values[0])
+	countStr := string(result.GetRows()[0].GetValues()[0])
 	var count int
 	_, err = fmt.Sscanf(countStr, "%d", &count)
 	if err != nil {

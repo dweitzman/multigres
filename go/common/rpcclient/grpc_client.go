@@ -58,7 +58,7 @@ func (c *Client) dialPersistent(ctx context.Context, pooler *clustermetadatapb.M
 
 // getPoolerAddr returns the gRPC address for a pooler.
 func getPoolerAddr(pooler *clustermetadatapb.MultiPooler) string {
-	return netutil.JoinHostPort(pooler.Hostname, pooler.PortMap["grpc"])
+	return netutil.JoinHostPort(pooler.GetHostname(), pooler.GetPortMap()["grpc"])
 }
 
 //

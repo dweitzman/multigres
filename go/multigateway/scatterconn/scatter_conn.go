@@ -70,18 +70,18 @@ func (sc *ScatterConn) StreamExecute(
 	// Create target for routing
 	// TODO: Add query analysis to determine if this is a read or write query
 	// For now, always route to PRIMARY (safe default)
-	target := &query.Target{
+	target := query.Target_builder{
 		TableGroup: tableGroup,
 		PoolerType: clustermetadatapb.PoolerType_PRIMARY,
 		Shard:      shard,
-	}
+	}.Build()
 
 	// Execute query via QueryService (PoolerGateway) and stream results
 	// PoolerGateway will use the target to find the right pooler
 	sc.logger.DebugContext(ctx, "executing query via query service",
 		"tablegroup", tableGroup,
 		"shard", shard,
-		"pooler_type", target.PoolerType.String())
+		"pooler_type", target.GetPoolerType().String())
 
 	if err := sc.queryService.StreamExecute(ctx, target, sql, callback); err != nil {
 		return fmt.Errorf("query execution failed: %w", err)

@@ -448,18 +448,18 @@ func (ts *store) ConnForCell(ctx context.Context, cell string) (Conn, error) {
 	ts.setStatus(cell, "")
 	conn := NewWrapperConn(
 		func() (Conn, error) {
-			return ts.factory.Create(cell, ci.Root, ci.ServerAddresses)
+			return ts.factory.Create(cell, ci.GetRoot(), ci.GetServerAddresses())
 		},
 		func(s string) {
 			ts.setStatus(cell, s)
 		},
 	)
 	ts.cellConns[cell] = cellConn{
-		Cell: &clustermetadatapb.Cell{
-			Name:            ci.Name,
-			ServerAddresses: slices.Clone(ci.ServerAddresses),
-			Root:            ci.Root,
-		},
+		Cell: clustermetadatapb.Cell_builder{
+			Name:            ci.GetName(),
+			ServerAddresses: slices.Clone(ci.GetServerAddresses()),
+			Root:            ci.GetRoot(),
+		}.Build(),
 		conn: conn,
 	}
 	return conn, nil
@@ -475,9 +475,9 @@ func cellsEqual(a, b *clustermetadatapb.Cell) bool {
 	if a == nil || b == nil {
 		return false
 	}
-	return a.Name == b.Name &&
-		a.Root == b.Root &&
-		slices.Equal(a.ServerAddresses, b.ServerAddresses)
+	return a.GetName() == b.GetName() &&
+		a.GetRoot() == b.GetRoot() &&
+		slices.Equal(a.GetServerAddresses(), b.GetServerAddresses())
 }
 
 func (ts *store) setStatus(cell string, status string) {

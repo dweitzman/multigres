@@ -47,12 +47,12 @@ func TestDatabaseOperations(t *testing.T) {
 				require.Empty(t, databases)
 
 				// Create a database
-				db := &clustermetadatapb.Database{
+				db := clustermetadatapb.Database_builder{
 					Name:             database_a,
 					BackupLocation:   "/backups",
 					DurabilityPolicy: "semi_sync",
 					Cells:            []string{cell},
-				}
+				}.Build()
 				err = ts.CreateDatabase(ctx, database_a, db)
 				require.NoError(t, err)
 
@@ -65,10 +65,10 @@ func TestDatabaseOperations(t *testing.T) {
 				// Get the full database
 				retrieved, err := ts.GetDatabase(ctx, database_a)
 				require.NoError(t, err)
-				require.Equal(t, db.Name, retrieved.Name)
-				require.Equal(t, db.BackupLocation, retrieved.BackupLocation)
-				require.Equal(t, db.DurabilityPolicy, retrieved.DurabilityPolicy)
-				require.Equal(t, db.Cells, retrieved.Cells)
+				require.Equal(t, db.GetName(), retrieved.GetName())
+				require.Equal(t, db.GetBackupLocation(), retrieved.GetBackupLocation())
+				require.Equal(t, db.GetDurabilityPolicy(), retrieved.GetDurabilityPolicy())
+				require.Equal(t, db.GetCells(), retrieved.GetCells())
 
 				// Delete the database
 				err = ts.DeleteDatabase(ctx, database_a, true)
@@ -84,18 +84,18 @@ func TestDatabaseOperations(t *testing.T) {
 			name: "Multiple databases management",
 			test: func(t *testing.T, ts topo.Store) {
 				// Create multiple databases
-				db1 := &clustermetadatapb.Database{
+				db1 := clustermetadatapb.Database_builder{
 					Name:             database_a,
 					BackupLocation:   "/backups",
 					DurabilityPolicy: "semi_sync",
 					Cells:            []string{cell},
-				}
-				db2 := &clustermetadatapb.Database{
+				}.Build()
+				db2 := clustermetadatapb.Database_builder{
 					Name:             database_b,
 					BackupLocation:   "/backups2",
 					DurabilityPolicy: "async",
 					Cells:            []string{cell2},
-				}
+				}.Build()
 
 				err := ts.CreateDatabase(ctx, database_b, db2)
 				require.NoError(t, err)
@@ -117,7 +117,7 @@ func TestDatabaseOperations(t *testing.T) {
 				// Verify the other remains
 				db, err := ts.GetDatabase(ctx, database_b)
 				require.NoError(t, err)
-				require.Equal(t, database_b, db.Name)
+				require.Equal(t, database_b, db.GetName())
 
 				// Verify first is gone
 				_, err = ts.GetDatabase(ctx, database_a)
@@ -129,18 +129,18 @@ func TestDatabaseOperations(t *testing.T) {
 			name: "Updating fields",
 			test: func(t *testing.T, ts topo.Store) {
 				// Create databases with different configurations
-				db1 := &clustermetadatapb.Database{
+				db1 := clustermetadatapb.Database_builder{
 					Name:             database_a,
 					BackupLocation:   "/backups",
 					DurabilityPolicy: "semi_sync",
 					Cells:            []string{cell, cell2},
-				}
-				db2 := &clustermetadatapb.Database{
+				}.Build()
+				db2 := clustermetadatapb.Database_builder{
 					Name:             database_b,
 					BackupLocation:   "/backups2",
 					DurabilityPolicy: "async",
 					Cells:            []string{cell},
-				}
+				}.Build()
 
 				err := ts.CreateDatabase(ctx, database_a, db1)
 				require.NoError(t, err)
@@ -149,7 +149,7 @@ func TestDatabaseOperations(t *testing.T) {
 
 				// Update one database
 				err = ts.UpdateDatabaseFields(ctx, database_a, func(db *clustermetadatapb.Database) error {
-					db.BackupLocation = "/new_backups"
+					db.SetBackupLocation("/new_backups")
 					return nil
 				})
 				require.NoError(t, err)
@@ -157,26 +157,26 @@ func TestDatabaseOperations(t *testing.T) {
 				// Verify first database was updated
 				retrieved1, err := ts.GetDatabase(ctx, database_a)
 				require.NoError(t, err)
-				require.Equal(t, "/new_backups", retrieved1.BackupLocation)
-				require.Equal(t, "semi_sync", retrieved1.DurabilityPolicy)
+				require.Equal(t, "/new_backups", retrieved1.GetBackupLocation())
+				require.Equal(t, "semi_sync", retrieved1.GetDurabilityPolicy())
 
 				// You can update multiple fields at once.
 				err = ts.UpdateDatabaseFields(ctx, database_a, func(db *clustermetadatapb.Database) error {
-					db.BackupLocation = "/new_backups_3"
-					db.DurabilityPolicy = "sync"
+					db.SetBackupLocation("/new_backups_3")
+					db.SetDurabilityPolicy("sync")
 					return nil
 				})
 				require.NoError(t, err)
 				retrieved1, err = ts.GetDatabase(ctx, database_a)
 				require.NoError(t, err)
-				require.Equal(t, "/new_backups_3", retrieved1.BackupLocation)
-				require.Equal(t, "sync", retrieved1.DurabilityPolicy)
+				require.Equal(t, "/new_backups_3", retrieved1.GetBackupLocation())
+				require.Equal(t, "sync", retrieved1.GetDurabilityPolicy())
 
 				// Verify second database was not affected
 				retrieved2, err := ts.GetDatabase(ctx, database_b)
 				require.NoError(t, err)
-				require.Equal(t, "/backups2", retrieved2.BackupLocation)
-				require.Equal(t, "async", retrieved2.DurabilityPolicy)
+				require.Equal(t, "/backups2", retrieved2.GetBackupLocation())
+				require.Equal(t, "async", retrieved2.GetDurabilityPolicy())
 			},
 		},
 	}
@@ -202,21 +202,21 @@ func TestDatabaseCRUDOperations(t *testing.T) {
 		{
 			name: "Create and Get Database",
 			test: func(t *testing.T, ts topo.Store) {
-				db := &clustermetadatapb.Database{
+				db := clustermetadatapb.Database_builder{
 					Name:             database,
 					BackupLocation:   "/backups/test_db",
 					DurabilityPolicy: "semi_sync",
 					Cells:            []string{cell, "zone-2"},
-				}
+				}.Build()
 				err := ts.CreateDatabase(ctx, database, db)
 				require.NoError(t, err)
 
 				retrieved, err := ts.GetDatabase(ctx, database)
 				require.NoError(t, err)
-				require.Equal(t, db.Name, retrieved.Name)
-				require.Equal(t, db.BackupLocation, retrieved.BackupLocation)
-				require.Equal(t, db.DurabilityPolicy, retrieved.DurabilityPolicy)
-				require.Equal(t, db.Cells, retrieved.Cells)
+				require.Equal(t, db.GetName(), retrieved.GetName())
+				require.Equal(t, db.GetBackupLocation(), retrieved.GetBackupLocation())
+				require.Equal(t, db.GetDurabilityPolicy(), retrieved.GetDurabilityPolicy())
+				require.Equal(t, db.GetCells(), retrieved.GetCells())
 			},
 		},
 		{
@@ -230,12 +230,12 @@ func TestDatabaseCRUDOperations(t *testing.T) {
 		{
 			name: "Create duplicate Database fails",
 			test: func(t *testing.T, ts topo.Store) {
-				db := &clustermetadatapb.Database{
+				db := clustermetadatapb.Database_builder{
 					Name:             database,
 					BackupLocation:   "/backups/test_db",
 					DurabilityPolicy: "semi_sync",
 					Cells:            []string{cell},
-				}
+				}.Build()
 				err := ts.CreateDatabase(ctx, database, db)
 				require.NoError(t, err)
 
@@ -247,20 +247,20 @@ func TestDatabaseCRUDOperations(t *testing.T) {
 		{
 			name: "Update Database Fields",
 			test: func(t *testing.T, ts topo.Store) {
-				db := &clustermetadatapb.Database{
+				db := clustermetadatapb.Database_builder{
 					Name:             database,
 					BackupLocation:   "/backups/test_db",
 					DurabilityPolicy: "semi_sync",
 					Cells:            []string{cell},
-				}
+				}.Build()
 				err := ts.CreateDatabase(ctx, database, db)
 				require.NoError(t, err)
 
 				// Update the database
 				err = ts.UpdateDatabaseFields(ctx, database, func(db *clustermetadatapb.Database) error {
-					db.BackupLocation = "/new_backups/test_db"
-					db.DurabilityPolicy = "async"
-					db.Cells = append(db.Cells, "zone-2")
+					db.SetBackupLocation("/new_backups/test_db")
+					db.SetDurabilityPolicy("async")
+					db.SetCells(append(db.GetCells(), "zone-2"))
 					return nil
 				})
 				require.NoError(t, err)
@@ -268,19 +268,19 @@ func TestDatabaseCRUDOperations(t *testing.T) {
 				// Verify the update
 				retrieved, err := ts.GetDatabase(ctx, database)
 				require.NoError(t, err)
-				require.Equal(t, "/new_backups/test_db", retrieved.BackupLocation)
-				require.Equal(t, "async", retrieved.DurabilityPolicy)
-				require.Contains(t, retrieved.Cells, "zone-2")
+				require.Equal(t, "/new_backups/test_db", retrieved.GetBackupLocation())
+				require.Equal(t, "async", retrieved.GetDurabilityPolicy())
+				require.Contains(t, retrieved.GetCells(), "zone-2")
 			},
 		},
 		{
 			name: "Update nonexistent Database creates it",
 			test: func(t *testing.T, ts topo.Store) {
 				err := ts.UpdateDatabaseFields(ctx, "new_db", func(db *clustermetadatapb.Database) error {
-					db.Name = "new_db"
-					db.BackupLocation = "/backups/new_db"
-					db.DurabilityPolicy = "sync"
-					db.Cells = []string{cell}
+					db.SetName("new_db")
+					db.SetBackupLocation("/backups/new_db")
+					db.SetDurabilityPolicy("sync")
+					db.SetCells([]string{cell})
 					return nil
 				})
 				require.NoError(t, err)
@@ -288,18 +288,18 @@ func TestDatabaseCRUDOperations(t *testing.T) {
 				// Verify it was created
 				retrieved, err := ts.GetDatabase(ctx, "new_db")
 				require.NoError(t, err)
-				require.Equal(t, "new_db", retrieved.Name)
+				require.Equal(t, "new_db", retrieved.GetName())
 			},
 		},
 		{
 			name: "Delete Database",
 			test: func(t *testing.T, ts topo.Store) {
-				db := &clustermetadatapb.Database{
+				db := clustermetadatapb.Database_builder{
 					Name:             database,
 					BackupLocation:   "/backups/test_db",
 					DurabilityPolicy: "semi_sync",
 					Cells:            []string{cell},
-				}
+				}.Build()
 				err := ts.CreateDatabase(ctx, database, db)
 				require.NoError(t, err)
 
@@ -317,18 +317,18 @@ func TestDatabaseCRUDOperations(t *testing.T) {
 			name: "Get Database Names",
 			test: func(t *testing.T, ts topo.Store) {
 				// Create multiple databases
-				db1 := &clustermetadatapb.Database{
+				db1 := clustermetadatapb.Database_builder{
 					Name:             "db1",
 					BackupLocation:   "/backups/db1",
 					DurabilityPolicy: "semi_sync",
 					Cells:            []string{cell},
-				}
-				db2 := &clustermetadatapb.Database{
+				}.Build()
+				db2 := clustermetadatapb.Database_builder{
 					Name:             "db2",
 					BackupLocation:   "/backups/db2",
 					DurabilityPolicy: "async",
 					Cells:            []string{cell},
-				}
+				}.Build()
 
 				err := ts.CreateDatabase(ctx, "db1", db1)
 				require.NoError(t, err)
@@ -349,12 +349,12 @@ func TestDatabaseCRUDOperations(t *testing.T) {
 		{
 			name: "Update Database Fields with failing update function",
 			test: func(t *testing.T, ts topo.Store) {
-				db := &clustermetadatapb.Database{
+				db := clustermetadatapb.Database_builder{
 					Name:             database,
 					BackupLocation:   "/backups/test_db",
 					DurabilityPolicy: "semi_sync",
 					Cells:            []string{cell},
-				}
+				}.Build()
 				err := ts.CreateDatabase(ctx, database, db)
 				require.NoError(t, err)
 
@@ -369,8 +369,8 @@ func TestDatabaseCRUDOperations(t *testing.T) {
 				// Verify database was not modified
 				retrieved, err := ts.GetDatabase(ctx, database)
 				require.NoError(t, err)
-				require.Equal(t, "/backups/test_db", retrieved.BackupLocation)
-				require.Equal(t, "semi_sync", retrieved.DurabilityPolicy)
+				require.Equal(t, "/backups/test_db", retrieved.GetBackupLocation())
+				require.Equal(t, "semi_sync", retrieved.GetDurabilityPolicy())
 			},
 		},
 		{
@@ -380,12 +380,12 @@ func TestDatabaseCRUDOperations(t *testing.T) {
 				tsWithFactory, factory := memorytopo.NewServerAndFactory(ctx, cell, "zone-2")
 				defer tsWithFactory.Close()
 
-				db := &clustermetadatapb.Database{
+				db := clustermetadatapb.Database_builder{
 					Name:             database,
 					BackupLocation:   "/backups/test_db",
 					DurabilityPolicy: "semi_sync",
 					Cells:            []string{cell},
-				}
+				}.Build()
 				err := tsWithFactory.CreateDatabase(ctx, database, db)
 				require.NoError(t, err)
 
@@ -398,8 +398,8 @@ func TestDatabaseCRUDOperations(t *testing.T) {
 
 				err = tsWithFactory.UpdateDatabaseFields(ctx, database, func(db *clustermetadatapb.Database) error {
 					updateCallCount++
-					db.BackupLocation = "/new_backups/test_db"
-					db.DurabilityPolicy = "async"
+					db.SetBackupLocation("/new_backups/test_db")
+					db.SetDurabilityPolicy("async")
 					return nil
 				})
 				require.NoError(t, err)
@@ -410,8 +410,8 @@ func TestDatabaseCRUDOperations(t *testing.T) {
 				// Verify the update was successful
 				retrieved, err := tsWithFactory.GetDatabase(ctx, database)
 				require.NoError(t, err)
-				require.Equal(t, "/new_backups/test_db", retrieved.BackupLocation)
-				require.Equal(t, "async", retrieved.DurabilityPolicy)
+				require.Equal(t, "/new_backups/test_db", retrieved.GetBackupLocation())
+				require.Equal(t, "async", retrieved.GetDurabilityPolicy())
 			},
 		},
 	}

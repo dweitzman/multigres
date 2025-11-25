@@ -58,12 +58,12 @@ func waitForCondition(t *testing.T, condition func() bool, msgAndArgs ...any) {
 
 // Helper function to create a pooler protobuf message
 func createTestPooler(name, cell, hostname, database, shard string, poolerType clustermetadatapb.PoolerType) *clustermetadatapb.MultiPooler {
-	return &clustermetadatapb.MultiPooler{
-		Id: &clustermetadatapb.ID{
+	return clustermetadatapb.MultiPooler_builder{
+		Id: clustermetadatapb.ID_builder{
 			Component: clustermetadatapb.ID_MULTIPOOLER,
 			Cell:      cell,
 			Name:      name,
-		},
+		}.Build(),
 		Hostname:   hostname,
 		Database:   database,
 		Shard:      shard,
@@ -72,7 +72,7 @@ func createTestPooler(name, cell, hostname, database, shard string, poolerType c
 		PortMap: map[string]int32{
 			"grpc": 5432,
 		},
-	}
+	}.Build()
 }
 
 // Integration tests - these use the public API (Start/Stop/GetPoolers)
@@ -146,7 +146,7 @@ func TestPoolerDiscovery_MultiplePoolerUpdates(t *testing.T) {
 	waitForPoolerCount(t, pd, 2)
 
 	// Update an existing pooler
-	pooler1Info, err := store.GetMultiPooler(ctx, pooler1.Id)
+	pooler1Info, err := store.GetMultiPooler(ctx, pooler1.GetId())
 	require.NoError(t, err)
 	pooler1Info.Hostname = "host1-updated"
 	require.NoError(t, store.UpdateMultiPooler(ctx, pooler1Info))
@@ -155,7 +155,7 @@ func TestPoolerDiscovery_MultiplePoolerUpdates(t *testing.T) {
 	waitForCondition(t, func() bool {
 		poolers := pd.GetPoolers()
 		for _, p := range poolers {
-			if p.Id.Name == "pooler1" && p.Hostname == "host1-updated" {
+			if p.GetId().GetName() == "pooler1" && p.GetHostname() == "host1-updated" {
 				return true
 			}
 		}
@@ -217,22 +217,22 @@ func TestPoolerDiscovery_VerifyPoolerDetails(t *testing.T) {
 	poolers := pd.GetPoolers()
 	poolerMap := make(map[string]*clustermetadatapb.MultiPooler)
 	for _, p := range poolers {
-		poolerMap[p.Id.Name] = p
+		poolerMap[p.GetId().GetName()] = p
 	}
 
 	// Verify pooler1
 	require.Contains(t, poolerMap, "pooler1")
-	assert.Equal(t, "primary.example.com", poolerMap["pooler1"].Hostname)
-	assert.Equal(t, "mydb", poolerMap["pooler1"].Database)
-	assert.Equal(t, "shard-01", poolerMap["pooler1"].Shard)
-	assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, poolerMap["pooler1"].Type)
+	assert.Equal(t, "primary.example.com", poolerMap["pooler1"].GetHostname())
+	assert.Equal(t, "mydb", poolerMap["pooler1"].GetDatabase())
+	assert.Equal(t, "shard-01", poolerMap["pooler1"].GetShard())
+	assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, poolerMap["pooler1"].GetType())
 
 	// Verify pooler2
 	require.Contains(t, poolerMap, "pooler2")
-	assert.Equal(t, "replica.example.com", poolerMap["pooler2"].Hostname)
-	assert.Equal(t, "mydb", poolerMap["pooler2"].Database)
-	assert.Equal(t, "shard-02", poolerMap["pooler2"].Shard)
-	assert.Equal(t, clustermetadatapb.PoolerType_REPLICA, poolerMap["pooler2"].Type)
+	assert.Equal(t, "replica.example.com", poolerMap["pooler2"].GetHostname())
+	assert.Equal(t, "mydb", poolerMap["pooler2"].GetDatabase())
+	assert.Equal(t, "shard-02", poolerMap["pooler2"].GetShard())
+	assert.Equal(t, clustermetadatapb.PoolerType_REPLICA, poolerMap["pooler2"].GetType())
 }
 
 func TestPoolerDiscovery_GetPoolers_ThreadSafe(t *testing.T) {
@@ -259,7 +259,7 @@ func TestPoolerDiscovery_GetPoolers_ThreadSafe(t *testing.T) {
 	assert.NotSame(t, poolers1[0], poolers2[0])
 
 	// But they should have the same data
-	assert.Equal(t, poolers1[0].Hostname, poolers2[0].Hostname)
+	assert.Equal(t, poolers1[0].GetHostname(), poolers2[0].GetHostname())
 }
 
 func TestPoolerDiscovery_InvalidDataHandling(t *testing.T) {
@@ -283,7 +283,7 @@ func TestPoolerDiscovery_InvalidDataHandling(t *testing.T) {
 	require.NoError(t, store.CreateMultiPooler(ctx, pooler2))
 
 	// Verify we can read pooler1 data directly to validate the path
-	pooler1Path := "poolers/" + topo.MultiPoolerIDString(pooler1.Id) + "/Pooler"
+	pooler1Path := "poolers/" + topo.MultiPoolerIDString(pooler1.GetId()) + "/Pooler"
 	pooler1Data, _, err := conn.Get(ctx, pooler1Path)
 	require.NoError(t, err, "Should be able to read valid pooler data")
 	require.NotEmpty(t, pooler1Data, "Valid pooler data should not be empty")
@@ -305,15 +305,15 @@ func TestPoolerDiscovery_InvalidDataHandling(t *testing.T) {
 	poolers := pd.GetPoolers()
 	poolerMap := make(map[string]*clustermetadatapb.MultiPooler)
 	for _, p := range poolers {
-		poolerMap[p.Id.Name] = p
+		poolerMap[p.GetId().GetName()] = p
 	}
 
 	// Verify only valid poolers were discovered
 	assert.Contains(t, poolerMap, "pooler1")
 	assert.Contains(t, poolerMap, "pooler2")
 	assert.NotContains(t, poolerMap, "pooler3")
-	assert.Equal(t, "host1", poolerMap["pooler1"].Hostname)
-	assert.Equal(t, "host2", poolerMap["pooler2"].Hostname)
+	assert.Equal(t, "host1", poolerMap["pooler1"].GetHostname())
+	assert.Equal(t, "host2", poolerMap["pooler2"].GetHostname())
 }
 
 // Internal unit tests - these test internal methods directly for edge cases
@@ -404,7 +404,7 @@ func TestPoolerDiscovery_ReconnectsAfterWatchClosed(t *testing.T) {
 	waitForPoolerCount(t, pd, 1)
 	poolers := pd.GetPoolers()
 	require.Len(t, poolers, 1)
-	assert.Equal(t, "pooler1", poolers[0].Id.Name)
+	assert.Equal(t, "pooler1", poolers[0].GetId().GetName())
 
 	// Simulate watch channel closure (like etcd compaction)
 	// This closes all watch channels for the "poolers" path
@@ -425,7 +425,7 @@ func TestPoolerDiscovery_ReconnectsAfterWatchClosed(t *testing.T) {
 	// Verify both poolers are present
 	poolers = pd.GetPoolers()
 	require.Len(t, poolers, 2)
-	names := []string{poolers[0].Id.Name, poolers[1].Id.Name}
+	names := []string{poolers[0].GetId().GetName(), poolers[1].GetId().GetName()}
 	assert.Contains(t, names, "pooler1")
 	assert.Contains(t, names, "pooler2")
 }

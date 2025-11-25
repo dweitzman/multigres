@@ -45,11 +45,11 @@ func TestManagerState_InitialState(t *testing.T) {
 
 	config := &Config{
 		TopoClient: ts,
-		ServiceID: &clustermetadatapb.ID{
+		ServiceID: clustermetadatapb.ID_builder{
 			Component: clustermetadatapb.ID_MULTIPOOLER,
 			Cell:      "zone1",
 			Name:      "test-service",
-		},
+		}.Build(),
 	}
 
 	manager := NewMultiPoolerManager(logger, config)
@@ -74,19 +74,19 @@ func TestManagerState_SuccessfulLoad(t *testing.T) {
 	poolerDir := t.TempDir()
 
 	// Create the multipooler in topology
-	serviceID := &clustermetadatapb.ID{
+	serviceID := clustermetadatapb.ID_builder{
 		Component: clustermetadatapb.ID_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-service",
-	}
-	multipooler := &clustermetadatapb.MultiPooler{
+	}.Build()
+	multipooler := clustermetadatapb.MultiPooler_builder{
 		Id:            serviceID,
 		Database:      "testdb",
 		Hostname:      "localhost",
 		PortMap:       map[string]int32{"grpc": 8080},
 		Type:          clustermetadatapb.PoolerType_PRIMARY,
 		ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-	}
+	}.Build()
 	require.NoError(t, ts.CreateMultiPooler(ctx, multipooler))
 
 	config := &Config{
@@ -112,8 +112,8 @@ func TestManagerState_SuccessfulLoad(t *testing.T) {
 	assert.NotNil(t, mp)
 	assert.Equal(t, ManagerStateReady, state)
 	assert.Nil(t, err)
-	assert.Equal(t, "test-service", mp.Id.Name)
-	assert.Equal(t, "testdb", mp.Database)
+	assert.Equal(t, "test-service", mp.GetId().GetName())
+	assert.Equal(t, "testdb", mp.GetDatabase())
 }
 
 func TestManagerState_LoadFailureTimeout(t *testing.T) {
@@ -123,11 +123,11 @@ func TestManagerState_LoadFailureTimeout(t *testing.T) {
 	defer ts.Close()
 
 	// Inject error for all Get operations on multipooler
-	serviceID := &clustermetadatapb.ID{
+	serviceID := clustermetadatapb.ID_builder{
 		Component: clustermetadatapb.ID_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-service",
-	}
+	}.Build()
 	poolerPath := "/poolers/" + topo.MultiPoolerIDString(serviceID) + "/Pooler"
 	factory.AddOperationError(memorytopo.Get, poolerPath, assert.AnError)
 
@@ -163,11 +163,11 @@ func TestManagerState_CancellationDuringLoad(t *testing.T) {
 	defer ts.Close()
 
 	// Inject error to keep it retrying
-	serviceID := &clustermetadatapb.ID{
+	serviceID := clustermetadatapb.ID_builder{
 		Component: clustermetadatapb.ID_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-service",
-	}
+	}.Build()
 	poolerPath := "/poolers/" + topo.MultiPoolerIDString(serviceID) + "/Pooler"
 	factory.AddOperationError(memorytopo.Get, poolerPath, assert.AnError)
 
@@ -208,19 +208,19 @@ func TestManagerState_RetryUntilSuccess(t *testing.T) {
 	poolerDir := t.TempDir()
 
 	// Create the multipooler in topology
-	serviceID := &clustermetadatapb.ID{
+	serviceID := clustermetadatapb.ID_builder{
 		Component: clustermetadatapb.ID_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-service",
-	}
-	multipooler := &clustermetadatapb.MultiPooler{
+	}.Build()
+	multipooler := clustermetadatapb.MultiPooler_builder{
 		Id:            serviceID,
 		Database:      "testdb",
 		Hostname:      "localhost",
 		PortMap:       map[string]int32{"grpc": 8080},
 		Type:          clustermetadatapb.PoolerType_PRIMARY,
 		ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-	}
+	}.Build()
 	require.NoError(t, ts.CreateMultiPooler(ctx, multipooler))
 
 	// Inject 2 one-time errors to simulate transient failures
@@ -251,7 +251,7 @@ func TestManagerState_RetryUntilSuccess(t *testing.T) {
 	assert.NotNil(t, mp)
 	assert.Equal(t, ManagerStateReady, state)
 	assert.Nil(t, err)
-	assert.Equal(t, "testdb", mp.Database)
+	assert.Equal(t, "testdb", mp.GetDatabase())
 }
 
 func TestManagerState_NilServiceID(t *testing.T) {
@@ -288,11 +288,11 @@ func TestValidateAndUpdateTerm(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	serviceID := &clustermetadatapb.ID{
+	serviceID := clustermetadatapb.ID_builder{
 		Component: clustermetadatapb.ID_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-service",
-	}
+	}.Build()
 
 	tests := []struct {
 		name          string
@@ -359,20 +359,20 @@ func TestValidateAndUpdateTerm(t *testing.T) {
 
 			// Set initial consensus term on disk if currentTerm > 0
 			if tt.currentTerm > 0 {
-				initialTerm := &multipoolermanagerdatapb.ConsensusTerm{
+				initialTerm := multipoolermanagerdatapb.ConsensusTerm_builder{
 					TermNumber: tt.currentTerm,
-				}
+				}.Build()
 				require.NoError(t, setConsensusTerm(poolerDir, initialTerm))
 			}
 
-			multipooler := &clustermetadatapb.MultiPooler{
+			multipooler := clustermetadatapb.MultiPooler_builder{
 				Id:            serviceID,
 				Database:      "testdb",
 				Hostname:      "localhost",
 				PortMap:       map[string]int32{"grpc": 8080},
 				Type:          clustermetadatapb.PoolerType_PRIMARY,
 				ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-			}
+			}.Build()
 			require.NoError(t, ts.CreateMultiPooler(ctx, multipooler))
 
 			config := &Config{
@@ -424,19 +424,19 @@ func TestGetBackupLocation(t *testing.T) {
 
 	// Create test database with backup_location
 	database := "testdb"
-	err := ts.CreateDatabase(ctx, database, &clustermetadatapb.Database{
+	err := ts.CreateDatabase(ctx, database, clustermetadatapb.Database_builder{
 		Name:             database,
 		BackupLocation:   "/var/backups/pgbackrest",
 		DurabilityPolicy: "ANY_2",
-	})
+	}.Build())
 	require.NoError(t, err)
 
 	// Create manager config
-	serviceID := &clustermetadatapb.ID{
+	serviceID := clustermetadatapb.ID_builder{
 		Component: clustermetadatapb.ID_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-service",
-	}
+	}.Build()
 	config := &Config{
 		TopoClient: ts,
 		ServiceID:  serviceID,
@@ -449,9 +449,9 @@ func TestGetBackupLocation(t *testing.T) {
 
 	// Set the multipooler to have the database
 	multipoolerInfo := &topo.MultiPoolerInfo{
-		MultiPooler: &clustermetadatapb.MultiPooler{
+		MultiPooler: clustermetadatapb.MultiPooler_builder{
 			Database: database,
-		},
+		}.Build(),
 	}
 	manager.multipooler = multipoolerInfo
 	manager.cachedMultipooler.multipooler = topo.NewMultiPoolerInfo(
@@ -474,11 +474,11 @@ func TestGetBackupLocationError(t *testing.T) {
 	defer ts.Close()
 
 	// Create manager config
-	serviceID := &clustermetadatapb.ID{
+	serviceID := clustermetadatapb.ID_builder{
 		Component: clustermetadatapb.ID_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-service",
-	}
+	}.Build()
 	config := &Config{
 		TopoClient: ts,
 		ServiceID:  serviceID,
@@ -490,9 +490,9 @@ func TestGetBackupLocationError(t *testing.T) {
 
 	// Set the multipooler to have a nonexistent database
 	multipoolerInfo := &topo.MultiPoolerInfo{
-		MultiPooler: &clustermetadatapb.MultiPooler{
+		MultiPooler: clustermetadatapb.MultiPooler_builder{
 			Database: "nonexistent",
-		},
+		}.Build(),
 	}
 	manager.multipooler = multipoolerInfo
 	manager.cachedMultipooler.multipooler = topo.NewMultiPoolerInfo(
@@ -516,19 +516,19 @@ func TestGetBackupLocationEmpty(t *testing.T) {
 
 	// Create test database WITHOUT backup_location
 	database := "testdb"
-	err := ts.CreateDatabase(ctx, database, &clustermetadatapb.Database{
+	err := ts.CreateDatabase(ctx, database, clustermetadatapb.Database_builder{
 		Name:             database,
 		BackupLocation:   "", // Empty
 		DurabilityPolicy: "ANY_2",
-	})
+	}.Build())
 	require.NoError(t, err)
 
 	// Create manager config
-	serviceID := &clustermetadatapb.ID{
+	serviceID := clustermetadatapb.ID_builder{
 		Component: clustermetadatapb.ID_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-service",
-	}
+	}.Build()
 	config := &Config{
 		TopoClient: ts,
 		ServiceID:  serviceID,
@@ -540,9 +540,9 @@ func TestGetBackupLocationEmpty(t *testing.T) {
 
 	// Set the multipooler to have the database
 	multipoolerInfo := &topo.MultiPoolerInfo{
-		MultiPooler: &clustermetadatapb.MultiPooler{
+		MultiPooler: clustermetadatapb.MultiPooler_builder{
 			Database: database,
-		},
+		}.Build(),
 	}
 	manager.multipooler = multipoolerInfo
 	manager.cachedMultipooler.multipooler = topo.NewMultiPoolerInfo(

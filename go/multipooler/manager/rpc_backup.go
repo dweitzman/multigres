@@ -208,9 +208,9 @@ func (pm *MultiPoolerManager) startPostgreSQLAfterRestore(ctx context.Context, b
 	slog.InfoContext(ctx, "Starting PostgreSQL after restore",
 		"backup_id", backupID)
 
-	_, err := pgctldClient.Restart(restartCtx, &pgctldpb.RestartRequest{
+	_, err := pgctldClient.Restart(restartCtx, pgctldpb.RestartRequest_builder{
 		AsStandby: true,
-	})
+	}.Build())
 	if err != nil {
 		return mterrors.New(mtrpcpb.Code_INTERNAL,
 			fmt.Sprintf("failed to start PostgreSQL after restore: %v", err))
@@ -307,13 +307,13 @@ func (pm *MultiPoolerManager) GetBackups(ctx context.Context, limit uint32) ([]*
 				finalLSN = pgBackup.LSN.Stop
 			}
 
-			backups = append(backups, &multipoolermanagerdata.BackupMetadata{
+			backups = append(backups, multipoolermanagerdata.BackupMetadata_builder{
 				BackupId:   pgBackup.Label,
 				Status:     status,
 				TableGroup: tableGroup,
 				Shard:      shard,
 				FinalLsn:   finalLSN,
-			})
+			}.Build())
 		}
 	}
 

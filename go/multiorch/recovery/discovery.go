@@ -83,7 +83,7 @@ func (re *Engine) refreshClusterMetadata() {
 
 			// Store each pooler in the state store
 			for _, pooler := range poolers {
-				key := topo.MultiPoolerIDString(pooler.Id)
+				key := topo.MultiPoolerIDString(pooler.GetId())
 
 				// Check if we already know about this pooler
 				if existing, ok := re.poolerStore.Get(key); ok {

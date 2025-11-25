@@ -40,86 +40,86 @@ func TestLoadQuorumRule_PrimaryPreference(t *testing.T) {
 		fakeClient := rpcclient.NewFakeClient()
 
 		// Create PRIMARY node
-		primaryPooler := &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{
+		primaryPooler := clustermetadatapb.MultiPooler_builder{
+			Id: clustermetadatapb.ID_builder{
 				Component: clustermetadatapb.ID_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "primary",
-			},
+			}.Build(),
 			Type: clustermetadatapb.PoolerType_PRIMARY,
-		}
+		}.Build()
 		primaryNode := &Node{
-			ID:        primaryPooler.Id,
+			ID:        primaryPooler.GetId(),
 			Pooler:    primaryPooler,
 			RpcClient: fakeClient,
 		}
 
 		// Create REPLICA nodes
-		replica1Pooler := &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{
+		replica1Pooler := clustermetadatapb.MultiPooler_builder{
+			Id: clustermetadatapb.ID_builder{
 				Component: clustermetadatapb.ID_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "replica1",
-			},
+			}.Build(),
 			Type: clustermetadatapb.PoolerType_REPLICA,
-		}
+		}.Build()
 		replica1Node := &Node{
-			ID:        replica1Pooler.Id,
+			ID:        replica1Pooler.GetId(),
 			Pooler:    replica1Pooler,
 			RpcClient: fakeClient,
 		}
 
-		replica2Pooler := &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{
+		replica2Pooler := clustermetadatapb.MultiPooler_builder{
+			Id: clustermetadatapb.ID_builder{
 				Component: clustermetadatapb.ID_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "replica2",
-			},
+			}.Build(),
 			Type: clustermetadatapb.PoolerType_REPLICA,
-		}
+		}.Build()
 		replica2Node := &Node{
-			ID:        replica2Pooler.Id,
+			ID:        replica2Pooler.GetId(),
 			Pooler:    replica2Pooler,
 			RpcClient: fakeClient,
 		}
 
 		// Setup PRIMARY response with version 100
-		fakeClient.GetDurabilityPolicyResponses[topo.MultiPoolerIDString(primaryPooler.Id)] = &multipoolermanagerdatapb.GetDurabilityPolicyResponse{
-			Policy: &clustermetadatapb.DurabilityPolicy{
+		fakeClient.GetDurabilityPolicyResponses[topo.MultiPoolerIDString(primaryPooler.GetId())] = multipoolermanagerdatapb.GetDurabilityPolicyResponse_builder{
+			Policy: clustermetadatapb.DurabilityPolicy_builder{
 				PolicyName:    "primary-policy",
 				PolicyVersion: 100,
-				QuorumRule: &clustermetadatapb.QuorumRule{
+				QuorumRule: clustermetadatapb.QuorumRule_builder{
 					QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_ANY_N,
 					RequiredCount: 2,
 					Description:   "Primary policy",
-				},
-			},
-		}
+				}.Build(),
+			}.Build(),
+		}.Build()
 
 		// Setup REPLICA responses with older versions
-		fakeClient.GetDurabilityPolicyResponses[topo.MultiPoolerIDString(replica1Pooler.Id)] = &multipoolermanagerdatapb.GetDurabilityPolicyResponse{
-			Policy: &clustermetadatapb.DurabilityPolicy{
+		fakeClient.GetDurabilityPolicyResponses[topo.MultiPoolerIDString(replica1Pooler.GetId())] = multipoolermanagerdatapb.GetDurabilityPolicyResponse_builder{
+			Policy: clustermetadatapb.DurabilityPolicy_builder{
 				PolicyName:    "replica1-policy",
 				PolicyVersion: 50,
-				QuorumRule: &clustermetadatapb.QuorumRule{
+				QuorumRule: clustermetadatapb.QuorumRule_builder{
 					QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_ANY_N,
 					RequiredCount: 1,
 					Description:   "Replica1 policy",
-				},
-			},
-		}
+				}.Build(),
+			}.Build(),
+		}.Build()
 
-		fakeClient.GetDurabilityPolicyResponses[topo.MultiPoolerIDString(replica2Pooler.Id)] = &multipoolermanagerdatapb.GetDurabilityPolicyResponse{
-			Policy: &clustermetadatapb.DurabilityPolicy{
+		fakeClient.GetDurabilityPolicyResponses[topo.MultiPoolerIDString(replica2Pooler.GetId())] = multipoolermanagerdatapb.GetDurabilityPolicyResponse_builder{
+			Policy: clustermetadatapb.DurabilityPolicy_builder{
 				PolicyName:    "replica2-policy",
 				PolicyVersion: 60,
-				QuorumRule: &clustermetadatapb.QuorumRule{
+				QuorumRule: clustermetadatapb.QuorumRule_builder{
 					QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_ANY_N,
 					RequiredCount: 1,
 					Description:   "Replica2 policy",
-				},
-			},
-		}
+				}.Build(),
+			}.Build(),
+		}.Build()
 
 		cohort := []*Node{primaryNode, replica1Node, replica2Node}
 
@@ -129,8 +129,8 @@ func TestLoadQuorumRule_PrimaryPreference(t *testing.T) {
 		require.NotNil(t, rule)
 
 		// Should get PRIMARY's rule, not REPLICA's
-		require.Equal(t, "Primary policy", rule.Description)
-		require.Equal(t, int32(2), rule.RequiredCount)
+		require.Equal(t, "Primary policy", rule.GetDescription())
+		require.Equal(t, int32(2), rule.GetRequiredCount())
 	})
 
 	t.Run("falls back to REPLICAs when PRIMARY fails", func(t *testing.T) {
@@ -140,76 +140,76 @@ func TestLoadQuorumRule_PrimaryPreference(t *testing.T) {
 		fakeClient := rpcclient.NewFakeClient()
 
 		// Create PRIMARY node
-		primaryPooler := &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{
+		primaryPooler := clustermetadatapb.MultiPooler_builder{
+			Id: clustermetadatapb.ID_builder{
 				Component: clustermetadatapb.ID_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "primary",
-			},
+			}.Build(),
 			Type: clustermetadatapb.PoolerType_PRIMARY,
-		}
+		}.Build()
 		primaryNode := &Node{
-			ID:        primaryPooler.Id,
+			ID:        primaryPooler.GetId(),
 			Pooler:    primaryPooler,
 			RpcClient: fakeClient,
 		}
 
 		// Create REPLICA nodes
-		replica1Pooler := &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{
+		replica1Pooler := clustermetadatapb.MultiPooler_builder{
+			Id: clustermetadatapb.ID_builder{
 				Component: clustermetadatapb.ID_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "replica1",
-			},
+			}.Build(),
 			Type: clustermetadatapb.PoolerType_REPLICA,
-		}
+		}.Build()
 		replica1Node := &Node{
-			ID:        replica1Pooler.Id,
+			ID:        replica1Pooler.GetId(),
 			Pooler:    replica1Pooler,
 			RpcClient: fakeClient,
 		}
 
-		replica2Pooler := &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{
+		replica2Pooler := clustermetadatapb.MultiPooler_builder{
+			Id: clustermetadatapb.ID_builder{
 				Component: clustermetadatapb.ID_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "replica2",
-			},
+			}.Build(),
 			Type: clustermetadatapb.PoolerType_REPLICA,
-		}
+		}.Build()
 		replica2Node := &Node{
-			ID:        replica2Pooler.Id,
+			ID:        replica2Pooler.GetId(),
 			Pooler:    replica2Pooler,
 			RpcClient: fakeClient,
 		}
 
 		// Setup PRIMARY to fail
-		fakeClient.Errors[topo.MultiPoolerIDString(primaryPooler.Id)] = fmt.Errorf("primary is down")
+		fakeClient.Errors[topo.MultiPoolerIDString(primaryPooler.GetId())] = fmt.Errorf("primary is down")
 
 		// Setup REPLICA responses
-		fakeClient.GetDurabilityPolicyResponses[topo.MultiPoolerIDString(replica1Pooler.Id)] = &multipoolermanagerdatapb.GetDurabilityPolicyResponse{
-			Policy: &clustermetadatapb.DurabilityPolicy{
+		fakeClient.GetDurabilityPolicyResponses[topo.MultiPoolerIDString(replica1Pooler.GetId())] = multipoolermanagerdatapb.GetDurabilityPolicyResponse_builder{
+			Policy: clustermetadatapb.DurabilityPolicy_builder{
 				PolicyName:    "replica1-policy",
 				PolicyVersion: 50,
-				QuorumRule: &clustermetadatapb.QuorumRule{
+				QuorumRule: clustermetadatapb.QuorumRule_builder{
 					QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_ANY_N,
 					RequiredCount: 2,
 					Description:   "Replica1 policy",
-				},
-			},
-		}
+				}.Build(),
+			}.Build(),
+		}.Build()
 
-		fakeClient.GetDurabilityPolicyResponses[topo.MultiPoolerIDString(replica2Pooler.Id)] = &multipoolermanagerdatapb.GetDurabilityPolicyResponse{
-			Policy: &clustermetadatapb.DurabilityPolicy{
+		fakeClient.GetDurabilityPolicyResponses[topo.MultiPoolerIDString(replica2Pooler.GetId())] = multipoolermanagerdatapb.GetDurabilityPolicyResponse_builder{
+			Policy: clustermetadatapb.DurabilityPolicy_builder{
 				PolicyName:    "replica2-policy",
 				PolicyVersion: 60,
-				QuorumRule: &clustermetadatapb.QuorumRule{
+				QuorumRule: clustermetadatapb.QuorumRule_builder{
 					QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_ANY_N,
 					RequiredCount: 2,
 					Description:   "Replica2 policy",
-				},
-			},
-		}
+				}.Build(),
+			}.Build(),
+		}.Build()
 
 		cohort := []*Node{primaryNode, replica1Node, replica2Node}
 
@@ -219,8 +219,8 @@ func TestLoadQuorumRule_PrimaryPreference(t *testing.T) {
 		require.NotNil(t, rule)
 
 		// Should get highest version from REPLICAs (replica2 has version 60)
-		require.Equal(t, "Replica2 policy", rule.Description)
-		require.Equal(t, int32(2), rule.RequiredCount)
+		require.Equal(t, "Replica2 policy", rule.GetDescription())
+		require.Equal(t, int32(2), rule.GetRequiredCount())
 	})
 }
 
@@ -235,84 +235,84 @@ func TestLoadQuorumRule_ParallelReplicaLoading(t *testing.T) {
 		fakeClient := rpcclient.NewFakeClient()
 
 		// Create REPLICA nodes only (no PRIMARY)
-		replica1Pooler := &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{
+		replica1Pooler := clustermetadatapb.MultiPooler_builder{
+			Id: clustermetadatapb.ID_builder{
 				Component: clustermetadatapb.ID_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "replica1",
-			},
+			}.Build(),
 			Type: clustermetadatapb.PoolerType_REPLICA,
-		}
+		}.Build()
 		replica1Node := &Node{
-			ID:        replica1Pooler.Id,
+			ID:        replica1Pooler.GetId(),
 			Pooler:    replica1Pooler,
 			RpcClient: fakeClient,
 		}
 
-		replica2Pooler := &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{
+		replica2Pooler := clustermetadatapb.MultiPooler_builder{
+			Id: clustermetadatapb.ID_builder{
 				Component: clustermetadatapb.ID_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "replica2",
-			},
+			}.Build(),
 			Type: clustermetadatapb.PoolerType_REPLICA,
-		}
+		}.Build()
 		replica2Node := &Node{
-			ID:        replica2Pooler.Id,
+			ID:        replica2Pooler.GetId(),
 			Pooler:    replica2Pooler,
 			RpcClient: fakeClient,
 		}
 
-		replica3Pooler := &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{
+		replica3Pooler := clustermetadatapb.MultiPooler_builder{
+			Id: clustermetadatapb.ID_builder{
 				Component: clustermetadatapb.ID_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "replica3",
-			},
+			}.Build(),
 			Type: clustermetadatapb.PoolerType_REPLICA,
-		}
+		}.Build()
 		replica3Node := &Node{
-			ID:        replica3Pooler.Id,
+			ID:        replica3Pooler.GetId(),
 			Pooler:    replica3Pooler,
 			RpcClient: fakeClient,
 		}
 
 		// Setup REPLICA responses with different versions
-		fakeClient.GetDurabilityPolicyResponses[topo.MultiPoolerIDString(replica1Pooler.Id)] = &multipoolermanagerdatapb.GetDurabilityPolicyResponse{
-			Policy: &clustermetadatapb.DurabilityPolicy{
+		fakeClient.GetDurabilityPolicyResponses[topo.MultiPoolerIDString(replica1Pooler.GetId())] = multipoolermanagerdatapb.GetDurabilityPolicyResponse_builder{
+			Policy: clustermetadatapb.DurabilityPolicy_builder{
 				PolicyName:    "replica1-policy",
 				PolicyVersion: 50,
-				QuorumRule: &clustermetadatapb.QuorumRule{
+				QuorumRule: clustermetadatapb.QuorumRule_builder{
 					QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_ANY_N,
 					RequiredCount: 1,
 					Description:   "Replica1 policy v50",
-				},
-			},
-		}
+				}.Build(),
+			}.Build(),
+		}.Build()
 
-		fakeClient.GetDurabilityPolicyResponses[topo.MultiPoolerIDString(replica2Pooler.Id)] = &multipoolermanagerdatapb.GetDurabilityPolicyResponse{
-			Policy: &clustermetadatapb.DurabilityPolicy{
+		fakeClient.GetDurabilityPolicyResponses[topo.MultiPoolerIDString(replica2Pooler.GetId())] = multipoolermanagerdatapb.GetDurabilityPolicyResponse_builder{
+			Policy: clustermetadatapb.DurabilityPolicy_builder{
 				PolicyName:    "replica2-policy",
 				PolicyVersion: 100,
-				QuorumRule: &clustermetadatapb.QuorumRule{
+				QuorumRule: clustermetadatapb.QuorumRule_builder{
 					QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_ANY_N,
 					RequiredCount: 2,
 					Description:   "Replica2 policy v100",
-				},
-			},
-		}
+				}.Build(),
+			}.Build(),
+		}.Build()
 
-		fakeClient.GetDurabilityPolicyResponses[topo.MultiPoolerIDString(replica3Pooler.Id)] = &multipoolermanagerdatapb.GetDurabilityPolicyResponse{
-			Policy: &clustermetadatapb.DurabilityPolicy{
+		fakeClient.GetDurabilityPolicyResponses[topo.MultiPoolerIDString(replica3Pooler.GetId())] = multipoolermanagerdatapb.GetDurabilityPolicyResponse_builder{
+			Policy: clustermetadatapb.DurabilityPolicy_builder{
 				PolicyName:    "replica3-policy",
 				PolicyVersion: 75,
-				QuorumRule: &clustermetadatapb.QuorumRule{
+				QuorumRule: clustermetadatapb.QuorumRule_builder{
 					QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_ANY_N,
 					RequiredCount: 1,
 					Description:   "Replica3 policy v75",
-				},
-			},
-		}
+				}.Build(),
+			}.Build(),
+		}.Build()
 
 		cohort := []*Node{replica1Node, replica2Node, replica3Node}
 
@@ -322,8 +322,8 @@ func TestLoadQuorumRule_ParallelReplicaLoading(t *testing.T) {
 		require.NotNil(t, rule)
 
 		// Should get highest version (replica2 has version 100)
-		require.Equal(t, "Replica2 policy v100", rule.Description)
-		require.Equal(t, int32(2), rule.RequiredCount)
+		require.Equal(t, "Replica2 policy v100", rule.GetDescription())
+		require.Equal(t, int32(2), rule.GetRequiredCount())
 	})
 
 	t.Run("selects policy with highest version", func(t *testing.T) {
@@ -333,58 +333,58 @@ func TestLoadQuorumRule_ParallelReplicaLoading(t *testing.T) {
 		fakeClient := rpcclient.NewFakeClient()
 
 		// Create REPLICA nodes
-		replica1Pooler := &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{
+		replica1Pooler := clustermetadatapb.MultiPooler_builder{
+			Id: clustermetadatapb.ID_builder{
 				Component: clustermetadatapb.ID_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "replica1",
-			},
+			}.Build(),
 			Type: clustermetadatapb.PoolerType_REPLICA,
-		}
+		}.Build()
 		replica1Node := &Node{
-			ID:        replica1Pooler.Id,
+			ID:        replica1Pooler.GetId(),
 			Pooler:    replica1Pooler,
 			RpcClient: fakeClient,
 		}
 
-		replica2Pooler := &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{
+		replica2Pooler := clustermetadatapb.MultiPooler_builder{
+			Id: clustermetadatapb.ID_builder{
 				Component: clustermetadatapb.ID_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "replica2",
-			},
+			}.Build(),
 			Type: clustermetadatapb.PoolerType_REPLICA,
-		}
+		}.Build()
 		replica2Node := &Node{
-			ID:        replica2Pooler.Id,
+			ID:        replica2Pooler.GetId(),
 			Pooler:    replica2Pooler,
 			RpcClient: fakeClient,
 		}
 
 		// Setup responses with version 200 (higher) and version 50 (lower)
-		fakeClient.GetDurabilityPolicyResponses[topo.MultiPoolerIDString(replica1Pooler.Id)] = &multipoolermanagerdatapb.GetDurabilityPolicyResponse{
-			Policy: &clustermetadatapb.DurabilityPolicy{
+		fakeClient.GetDurabilityPolicyResponses[topo.MultiPoolerIDString(replica1Pooler.GetId())] = multipoolermanagerdatapb.GetDurabilityPolicyResponse_builder{
+			Policy: clustermetadatapb.DurabilityPolicy_builder{
 				PolicyName:    "old-policy",
 				PolicyVersion: 50,
-				QuorumRule: &clustermetadatapb.QuorumRule{
+				QuorumRule: clustermetadatapb.QuorumRule_builder{
 					QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_ANY_N,
 					RequiredCount: 1,
 					Description:   "Old policy v50",
-				},
-			},
-		}
+				}.Build(),
+			}.Build(),
+		}.Build()
 
-		fakeClient.GetDurabilityPolicyResponses[topo.MultiPoolerIDString(replica2Pooler.Id)] = &multipoolermanagerdatapb.GetDurabilityPolicyResponse{
-			Policy: &clustermetadatapb.DurabilityPolicy{
+		fakeClient.GetDurabilityPolicyResponses[topo.MultiPoolerIDString(replica2Pooler.GetId())] = multipoolermanagerdatapb.GetDurabilityPolicyResponse_builder{
+			Policy: clustermetadatapb.DurabilityPolicy_builder{
 				PolicyName:    "new-policy",
 				PolicyVersion: 200,
-				QuorumRule: &clustermetadatapb.QuorumRule{
+				QuorumRule: clustermetadatapb.QuorumRule_builder{
 					QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_ANY_N,
 					RequiredCount: 3,
 					Description:   "New policy v200",
-				},
-			},
-		}
+				}.Build(),
+			}.Build(),
+		}.Build()
 
 		cohort := []*Node{replica1Node, replica2Node}
 
@@ -394,8 +394,8 @@ func TestLoadQuorumRule_ParallelReplicaLoading(t *testing.T) {
 		require.NotNil(t, rule)
 
 		// Should select higher version (200)
-		require.Equal(t, "New policy v200", rule.Description)
-		require.Equal(t, int32(3), rule.RequiredCount)
+		require.Equal(t, "New policy v200", rule.GetDescription())
+		require.Equal(t, int32(3), rule.GetRequiredCount())
 	})
 }
 
@@ -412,33 +412,33 @@ func TestLoadQuorumRule_ResponseWaiting(t *testing.T) {
 		// Create 4 REPLICA nodes
 		var replicaNodes []*Node
 		for i := 1; i <= 4; i++ {
-			pooler := &clustermetadatapb.MultiPooler{
-				Id: &clustermetadatapb.ID{
+			pooler := clustermetadatapb.MultiPooler_builder{
+				Id: clustermetadatapb.ID_builder{
 					Component: clustermetadatapb.ID_MULTIPOOLER,
 					Cell:      "cell1",
 					Name:      fmt.Sprintf("replica%d", i),
-				},
+				}.Build(),
 				Type: clustermetadatapb.PoolerType_REPLICA,
-			}
+			}.Build()
 			node := &Node{
-				ID:        pooler.Id,
+				ID:        pooler.GetId(),
 				Pooler:    pooler,
 				RpcClient: fakeClient,
 			}
 			replicaNodes = append(replicaNodes, node)
 
 			// Setup response for this replica
-			fakeClient.GetDurabilityPolicyResponses[topo.MultiPoolerIDString(pooler.Id)] = &multipoolermanagerdatapb.GetDurabilityPolicyResponse{
-				Policy: &clustermetadatapb.DurabilityPolicy{
+			fakeClient.GetDurabilityPolicyResponses[topo.MultiPoolerIDString(pooler.GetId())] = multipoolermanagerdatapb.GetDurabilityPolicyResponse_builder{
+				Policy: clustermetadatapb.DurabilityPolicy_builder{
 					PolicyName:    fmt.Sprintf("policy-%d", i),
 					PolicyVersion: int64(i * 10),
-					QuorumRule: &clustermetadatapb.QuorumRule{
+					QuorumRule: clustermetadatapb.QuorumRule_builder{
 						QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_ANY_N,
 						RequiredCount: int32(i),
 						Description:   fmt.Sprintf("Policy v%d", i*10),
-					},
-				},
-			}
+					}.Build(),
+				}.Build(),
+			}.Build()
 		}
 
 		// With 4 replicas, should wait for all 4 responses
@@ -450,7 +450,7 @@ func TestLoadQuorumRule_ResponseWaiting(t *testing.T) {
 
 		// Should get the highest version (40 from replica4)
 		// since all replicas respond successfully
-		require.Contains(t, rule.Description, "Policy v")
+		require.Contains(t, rule.GetDescription(), "Policy v")
 	})
 
 	t.Run("succeeds with partial failures using best available", func(t *testing.T) {
@@ -460,75 +460,75 @@ func TestLoadQuorumRule_ResponseWaiting(t *testing.T) {
 		fakeClient := rpcclient.NewFakeClient()
 
 		// Create 3 REPLICA nodes
-		replica1Pooler := &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{
+		replica1Pooler := clustermetadatapb.MultiPooler_builder{
+			Id: clustermetadatapb.ID_builder{
 				Component: clustermetadatapb.ID_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "replica1",
-			},
+			}.Build(),
 			Type: clustermetadatapb.PoolerType_REPLICA,
-		}
+		}.Build()
 		replica1Node := &Node{
-			ID:        replica1Pooler.Id,
+			ID:        replica1Pooler.GetId(),
 			Pooler:    replica1Pooler,
 			RpcClient: fakeClient,
 		}
 
-		replica2Pooler := &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{
+		replica2Pooler := clustermetadatapb.MultiPooler_builder{
+			Id: clustermetadatapb.ID_builder{
 				Component: clustermetadatapb.ID_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "replica2",
-			},
+			}.Build(),
 			Type: clustermetadatapb.PoolerType_REPLICA,
-		}
+		}.Build()
 		replica2Node := &Node{
-			ID:        replica2Pooler.Id,
+			ID:        replica2Pooler.GetId(),
 			Pooler:    replica2Pooler,
 			RpcClient: fakeClient,
 		}
 
-		replica3Pooler := &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{
+		replica3Pooler := clustermetadatapb.MultiPooler_builder{
+			Id: clustermetadatapb.ID_builder{
 				Component: clustermetadatapb.ID_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "replica3",
-			},
+			}.Build(),
 			Type: clustermetadatapb.PoolerType_REPLICA,
-		}
+		}.Build()
 		replica3Node := &Node{
-			ID:        replica3Pooler.Id,
+			ID:        replica3Pooler.GetId(),
 			Pooler:    replica3Pooler,
 			RpcClient: fakeClient,
 		}
 
 		// Setup replica1 to fail
-		fakeClient.Errors[topo.MultiPoolerIDString(replica1Pooler.Id)] = fmt.Errorf("replica1 is down")
+		fakeClient.Errors[topo.MultiPoolerIDString(replica1Pooler.GetId())] = fmt.Errorf("replica1 is down")
 
 		// Setup replica2 and replica3 to succeed
-		fakeClient.GetDurabilityPolicyResponses[topo.MultiPoolerIDString(replica2Pooler.Id)] = &multipoolermanagerdatapb.GetDurabilityPolicyResponse{
-			Policy: &clustermetadatapb.DurabilityPolicy{
+		fakeClient.GetDurabilityPolicyResponses[topo.MultiPoolerIDString(replica2Pooler.GetId())] = multipoolermanagerdatapb.GetDurabilityPolicyResponse_builder{
+			Policy: clustermetadatapb.DurabilityPolicy_builder{
 				PolicyName:    "policy-2",
 				PolicyVersion: 100,
-				QuorumRule: &clustermetadatapb.QuorumRule{
+				QuorumRule: clustermetadatapb.QuorumRule_builder{
 					QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_ANY_N,
 					RequiredCount: 2,
 					Description:   "Policy v100",
-				},
-			},
-		}
+				}.Build(),
+			}.Build(),
+		}.Build()
 
-		fakeClient.GetDurabilityPolicyResponses[topo.MultiPoolerIDString(replica3Pooler.Id)] = &multipoolermanagerdatapb.GetDurabilityPolicyResponse{
-			Policy: &clustermetadatapb.DurabilityPolicy{
+		fakeClient.GetDurabilityPolicyResponses[topo.MultiPoolerIDString(replica3Pooler.GetId())] = multipoolermanagerdatapb.GetDurabilityPolicyResponse_builder{
+			Policy: clustermetadatapb.DurabilityPolicy_builder{
 				PolicyName:    "policy-3",
 				PolicyVersion: 90,
-				QuorumRule: &clustermetadatapb.QuorumRule{
+				QuorumRule: clustermetadatapb.QuorumRule_builder{
 					QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_ANY_N,
 					RequiredCount: 2,
 					Description:   "Policy v90",
-				},
-			},
-		}
+				}.Build(),
+			}.Build(),
+		}.Build()
 
 		cohort := []*Node{replica1Node, replica2Node, replica3Node}
 
@@ -539,7 +539,7 @@ func TestLoadQuorumRule_ResponseWaiting(t *testing.T) {
 		require.NotNil(t, rule)
 
 		// Should get highest version from successful responses (v100 from replica2)
-		require.Equal(t, "Policy v100", rule.Description)
+		require.Equal(t, "Policy v100", rule.GetDescription())
 	})
 }
 
@@ -554,37 +554,37 @@ func TestLoadQuorumRule_FallbackBehaviors(t *testing.T) {
 		fakeClient := rpcclient.NewFakeClient()
 
 		// Create REPLICA nodes
-		replica1Pooler := &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{
+		replica1Pooler := clustermetadatapb.MultiPooler_builder{
+			Id: clustermetadatapb.ID_builder{
 				Component: clustermetadatapb.ID_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "replica1",
-			},
+			}.Build(),
 			Type: clustermetadatapb.PoolerType_REPLICA,
-		}
+		}.Build()
 		replica1Node := &Node{
-			ID:        replica1Pooler.Id,
+			ID:        replica1Pooler.GetId(),
 			Pooler:    replica1Pooler,
 			RpcClient: fakeClient,
 		}
 
-		replica2Pooler := &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{
+		replica2Pooler := clustermetadatapb.MultiPooler_builder{
+			Id: clustermetadatapb.ID_builder{
 				Component: clustermetadatapb.ID_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "replica2",
-			},
+			}.Build(),
 			Type: clustermetadatapb.PoolerType_REPLICA,
-		}
+		}.Build()
 		replica2Node := &Node{
-			ID:        replica2Pooler.Id,
+			ID:        replica2Pooler.GetId(),
 			Pooler:    replica2Pooler,
 			RpcClient: fakeClient,
 		}
 
 		// Setup all REPLICAs to fail
-		fakeClient.Errors[topo.MultiPoolerIDString(replica1Pooler.Id)] = fmt.Errorf("replica1 is down")
-		fakeClient.Errors[topo.MultiPoolerIDString(replica2Pooler.Id)] = fmt.Errorf("replica2 is down")
+		fakeClient.Errors[topo.MultiPoolerIDString(replica1Pooler.GetId())] = fmt.Errorf("replica1 is down")
+		fakeClient.Errors[topo.MultiPoolerIDString(replica2Pooler.GetId())] = fmt.Errorf("replica2 is down")
 
 		cohort := []*Node{replica1Node, replica2Node}
 
@@ -594,8 +594,8 @@ func TestLoadQuorumRule_FallbackBehaviors(t *testing.T) {
 		require.NotNil(t, rule)
 
 		// Default policy should be ANY_N with majority
-		require.Equal(t, clustermetadatapb.QuorumType_QUORUM_TYPE_ANY_N, rule.QuorumType)
-		require.Equal(t, int32(2), rule.RequiredCount) // Majority of 2 is 2
+		require.Equal(t, clustermetadatapb.QuorumType_QUORUM_TYPE_ANY_N, rule.GetQuorumType())
+		require.Equal(t, int32(2), rule.GetRequiredCount()) // Majority of 2 is 2
 	})
 
 	t.Run("returns default policy when no nodes available", func(t *testing.T) {
@@ -605,22 +605,22 @@ func TestLoadQuorumRule_FallbackBehaviors(t *testing.T) {
 		fakeClient := rpcclient.NewFakeClient()
 
 		// Create PRIMARY node that fails
-		primaryPooler := &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{
+		primaryPooler := clustermetadatapb.MultiPooler_builder{
+			Id: clustermetadatapb.ID_builder{
 				Component: clustermetadatapb.ID_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "primary",
-			},
+			}.Build(),
 			Type: clustermetadatapb.PoolerType_PRIMARY,
-		}
+		}.Build()
 		primaryNode := &Node{
-			ID:        primaryPooler.Id,
+			ID:        primaryPooler.GetId(),
 			Pooler:    primaryPooler,
 			RpcClient: fakeClient,
 		}
 
 		// Setup PRIMARY to fail
-		fakeClient.Errors[topo.MultiPoolerIDString(primaryPooler.Id)] = fmt.Errorf("primary is down")
+		fakeClient.Errors[topo.MultiPoolerIDString(primaryPooler.GetId())] = fmt.Errorf("primary is down")
 
 		// No REPLICA nodes available
 		cohort := []*Node{primaryNode}
@@ -631,8 +631,8 @@ func TestLoadQuorumRule_FallbackBehaviors(t *testing.T) {
 		require.NotNil(t, rule)
 
 		// Default policy should be ANY_N with majority
-		require.Equal(t, clustermetadatapb.QuorumType_QUORUM_TYPE_ANY_N, rule.QuorumType)
-		require.Equal(t, int32(1), rule.RequiredCount) // Majority of 1 is 1
+		require.Equal(t, clustermetadatapb.QuorumType_QUORUM_TYPE_ANY_N, rule.GetQuorumType())
+		require.Equal(t, int32(1), rule.GetRequiredCount()) // Majority of 1 is 1
 	})
 
 	t.Run("returns error when cohort is empty", func(t *testing.T) {

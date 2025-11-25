@@ -53,7 +53,7 @@ import (
 // - SetPrimaryConnInfo: standby's application_name when connecting to primary
 // - ConfigureSynchronousReplication: standby names in synchronous_standby_names
 func generateApplicationName(id *clustermetadatapb.ID) string {
-	return fmt.Sprintf("%s_%s", id.Cell, id.Name)
+	return fmt.Sprintf("%s_%s", id.GetCell(), id.GetName())
 }
 
 // formatStandbyList converts standby IDs to a comma-separated list of quoted application names
@@ -180,19 +180,19 @@ func (pm *MultiPoolerManager) queryReplicationStatus(ctx context.Context) (*mult
 		return nil, mterrors.Wrap(err, "failed to query replication status")
 	}
 
-	status := &multipoolermanagerdatapb.StandbyReplicationStatus{
+	status := multipoolermanagerdatapb.StandbyReplicationStatus_builder{
 		IsWalReplayPaused:   isPaused,
 		WalReplayPauseState: pauseState,
-	}
+	}.Build()
 
 	if replayLsn.Valid {
-		status.LastReplayLsn = replayLsn.String
+		status.SetLastReplayLsn(replayLsn.String)
 	}
 	if receiveLsn.Valid {
-		status.LastReceiveLsn = receiveLsn.String
+		status.SetLastReceiveLsn(receiveLsn.String)
 	}
 	if lastXactTime.Valid {
-		status.LastXactReplayTimestamp = lastXactTime.String
+		status.SetLastXactReplayTimestamp(lastXactTime.String)
 	}
 
 	// Parse primary_conninfo into structured format
@@ -200,7 +200,7 @@ func (pm *MultiPoolerManager) queryReplicationStatus(ctx context.Context) (*mult
 	if err != nil {
 		return nil, mterrors.Wrap(err, "failed to parse primary_conninfo")
 	}
-	status.PrimaryConnInfo = parsedConnInfo
+	status.SetPrimaryConnInfo(parsedConnInfo)
 
 	return status, nil
 }
@@ -234,11 +234,11 @@ func (pm *MultiPoolerManager) waitForReplicationPause(ctx context.Context) (*mul
 			}
 
 			// Once paused, we have the exact state at the moment replication stopped
-			if status.IsWalReplayPaused {
+			if status.GetIsWalReplayPaused() {
 				pm.logger.InfoContext(ctx, "WAL replay is now paused",
-					"last_replay_lsn", status.LastReplayLsn,
-					"last_receive_lsn", status.LastReceiveLsn,
-					"pause_state", status.WalReplayPauseState)
+					"last_replay_lsn", status.GetLastReplayLsn(),
+					"last_receive_lsn", status.GetLastReceiveLsn(),
+					"pause_state", status.GetWalReplayPauseState())
 
 				return status, nil
 			}
@@ -658,9 +658,9 @@ func (pm *MultiPoolerManager) getSynchronousReplicationConfig(ctx context.Contex
 		if err != nil {
 			return nil, err
 		}
-		config.SynchronousMethod = syncConfig.Method
-		config.NumSync = syncConfig.NumSync
-		config.StandbyIds = syncConfig.StandbyIDs
+		config.SetSynchronousMethod(syncConfig.Method)
+		config.SetNumSync(syncConfig.NumSync)
+		config.SetStandbyIds(syncConfig.StandbyIDs)
 	}
 
 	// Query synchronous_commit
@@ -687,7 +687,7 @@ func (pm *MultiPoolerManager) getSynchronousReplicationConfig(ctx context.Contex
 		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
 			fmt.Sprintf("unknown synchronous_commit value: %q", syncCommitStr))
 	}
-	config.SynchronousCommit = syncCommitLevel
+	config.SetSynchronousCommit(syncCommitLevel)
 
 	return config, nil
 }
@@ -721,35 +721,35 @@ func (pm *MultiPoolerManager) resetSynchronousReplication(ctx context.Context) e
 // syncReplicationConfigMatches checks if the current sync replication config matches the requested config
 func (pm *MultiPoolerManager) syncReplicationConfigMatches(current *multipoolermanagerdatapb.SynchronousReplicationConfiguration, requested *multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest) bool {
 	// Check synchronous commit level
-	if current.SynchronousCommit != requested.SynchronousCommit {
+	if current.GetSynchronousCommit() != requested.GetSynchronousCommit() {
 		return false
 	}
 
 	// Check synchronous method
-	if current.SynchronousMethod != requested.SynchronousMethod {
+	if current.GetSynchronousMethod() != requested.GetSynchronousMethod() {
 		return false
 	}
 
 	// Check num_sync
-	if current.NumSync != requested.NumSync {
+	if current.GetNumSync() != requested.GetNumSync() {
 		return false
 	}
 
 	// Check standby IDs (must match exactly 1:1, so sort and compare)
-	if len(current.StandbyIds) != len(requested.StandbyIds) {
+	if len(current.GetStandbyIds()) != len(requested.GetStandbyIds()) {
 		return false
 	}
 
 	// Sort both lists by cell_name for comparison
-	currentSorted := make([]string, len(current.StandbyIds))
-	for i, id := range current.StandbyIds {
-		currentSorted[i] = fmt.Sprintf("%s_%s", id.Cell, id.Name)
+	currentSorted := make([]string, len(current.GetStandbyIds()))
+	for i, id := range current.GetStandbyIds() {
+		currentSorted[i] = fmt.Sprintf("%s_%s", id.GetCell(), id.GetName())
 	}
 	sort.Strings(currentSorted)
 
-	requestedSorted := make([]string, len(requested.StandbyIds))
-	for i, id := range requested.StandbyIds {
-		requestedSorted[i] = fmt.Sprintf("%s_%s", id.Cell, id.Name)
+	requestedSorted := make([]string, len(requested.GetStandbyIds()))
+	for i, id := range requested.GetStandbyIds() {
+		requestedSorted[i] = fmt.Sprintf("%s_%s", id.GetCell(), id.GetName())
 	}
 	sort.Strings(requestedSorted)
 
@@ -777,23 +777,23 @@ func validateStandbyIDs(standbyIDs []*clustermetadatapb.ID) error {
 			return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
 				fmt.Sprintf("standby_ids[%d] is nil", i))
 		}
-		if id.Cell == "" {
+		if id.GetCell() == "" {
 			return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
 				fmt.Sprintf("standby_ids[%d] has empty cell", i))
 		}
-		if id.Name == "" {
+		if id.GetName() == "" {
 			return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
 				fmt.Sprintf("standby_ids[%d] has empty name", i))
 		}
 		// Underscores are not allowed in Cell or Name because they are used as delimiters
 		// in the application_name format (cell_name). Allowing underscores would break parsing.
-		if strings.Contains(id.Cell, "_") {
+		if strings.Contains(id.GetCell(), "_") {
 			return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
-				fmt.Sprintf("standby_ids[%d] cell contains underscore: %q (underscores not allowed)", i, id.Cell))
+				fmt.Sprintf("standby_ids[%d] cell contains underscore: %q (underscores not allowed)", i, id.GetCell()))
 		}
-		if strings.Contains(id.Name, "_") {
+		if strings.Contains(id.GetName(), "_") {
 			return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
-				fmt.Sprintf("standby_ids[%d] name contains underscore: %q (underscores not allowed)", i, id.Name))
+				fmt.Sprintf("standby_ids[%d] name contains underscore: %q (underscores not allowed)", i, id.GetName()))
 		}
 	}
 
@@ -969,7 +969,7 @@ func (pm *MultiPoolerManager) queryFollowerReplicationStats(ctx context.Context)
 			return nil, mterrors.Wrap(err, "failed to scan replication statistics")
 		}
 
-		stats := &multipoolermanagerdatapb.ReplicationStats{
+		stats := multipoolermanagerdatapb.ReplicationStats_builder{
 			Pid:        pid,
 			ClientAddr: clientAddr,
 			State:      state,
@@ -978,17 +978,17 @@ func (pm *MultiPoolerManager) queryFollowerReplicationStats(ctx context.Context)
 			WriteLsn:   writeLsn,
 			FlushLsn:   flushLsn,
 			ReplayLsn:  replayLsn,
-		}
+		}.Build()
 
 		// Convert lag values from seconds to Duration (only if not null)
 		if writeLagSecs.Valid {
-			stats.WriteLag = durationpb.New(time.Duration(writeLagSecs.Float64 * float64(time.Second)))
+			stats.SetWriteLag(durationpb.New(time.Duration(writeLagSecs.Float64 * float64(time.Second))))
 		}
 		if flushLagSecs.Valid {
-			stats.FlushLag = durationpb.New(time.Duration(flushLagSecs.Float64 * float64(time.Second)))
+			stats.SetFlushLag(durationpb.New(time.Duration(flushLagSecs.Float64 * float64(time.Second))))
 		}
 		if replayLagSecs.Valid {
-			stats.ReplayLag = durationpb.New(time.Duration(replayLagSecs.Float64 * float64(time.Second)))
+			stats.SetReplayLag(durationpb.New(time.Duration(replayLagSecs.Float64 * float64(time.Second))))
 		}
 
 		connectedMap[appName] = stats

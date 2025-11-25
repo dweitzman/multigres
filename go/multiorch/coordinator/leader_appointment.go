@@ -54,7 +54,7 @@ func (c *Coordinator) BeginTerm(ctx context.Context, shardID string, cohort []*N
 		return nil, nil, 0, mterrors.Wrap(err, "failed to select candidate")
 	}
 
-	c.logger.InfoContext(ctx, "Selected candidate", "shard", shardID, "candidate", candidate.ID.Name)
+	c.logger.InfoContext(ctx, "Selected candidate", "shard", shardID, "candidate", candidate.ID.GetName())
 
 	// Stage 4: Recruit Nodes - Send BeginTerm RPC to all nodes in parallel
 	recruited, err := c.recruitNodes(ctx, cohort, newTerm, candidate)
@@ -67,8 +67,8 @@ func (c *Coordinator) BeginTerm(ctx context.Context, shardID string, cohort []*N
 	// Stage 5: Validate Quorum using durability policy
 	c.logger.InfoContext(ctx, "Validating quorum",
 		"shard", shardID,
-		"quorum_type", quorumRule.QuorumType,
-		"required_count", quorumRule.RequiredCount)
+		"quorum_type", quorumRule.GetQuorumType(),
+		"required_count", quorumRule.GetRequiredCount())
 
 	if err := c.ValidateQuorum(quorumRule, cohort, recruited); err != nil {
 		return nil, nil, 0, mterrors.Wrapf(err, "quorum validation failed for shard %s", shardID)
@@ -77,7 +77,7 @@ func (c *Coordinator) BeginTerm(ctx context.Context, shardID string, cohort []*N
 	// Separate candidate from standbys
 	var standbys []*Node
 	for _, node := range recruited {
-		if node.ID.Name != candidate.ID.Name {
+		if node.ID.GetName() != candidate.ID.GetName() {
 			standbys = append(standbys, node)
 		}
 	}
@@ -105,7 +105,7 @@ func (c *Coordinator) discoverMaxTerm(ctx context.Context, cohort []*Node) (int6
 				results <- result{err: err}
 				return
 			}
-			results <- result{term: resp.CurrentTerm}
+			results <- result{term: resp.GetCurrentTerm()}
 		}(node)
 	}
 
@@ -158,23 +158,23 @@ func (c *Coordinator) selectCandidate(ctx context.Context, cohort []*Node) (*Nod
 		resp, err := node.RpcClient.ConsensusStatus(ctx, node.Pooler, req)
 		if err != nil {
 			c.logger.WarnContext(ctx, "Failed to get status from node",
-				"node", node.ID.Name,
+				"node", node.ID.GetName(),
 				"error", err)
 			continue
 		}
 
 		status := nodeStatus{
 			node:    node,
-			healthy: resp.IsHealthy,
+			healthy: resp.GetIsHealthy(),
 		}
 
 		// Extract WAL position based on role
-		if resp.WalPosition != nil {
-			if resp.Role == "primary" {
-				status.walPosition = resp.WalPosition.CurrentLsn
+		if resp.HasWalPosition() {
+			if resp.GetRole() == "primary" {
+				status.walPosition = resp.GetWalPosition().GetCurrentLsn()
 			} else {
 				// For standbys, use receive position (includes unreplayed WAL)
-				status.walPosition = resp.WalPosition.LastReceiveLsn
+				status.walPosition = resp.GetWalPosition().GetLastReceiveLsn()
 			}
 		}
 
@@ -200,7 +200,7 @@ func (c *Coordinator) selectCandidate(ctx context.Context, cohort []*Node) (*Nod
 		if err != nil {
 			return nil, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,
 				"invalid LSN format for node %s: %s (error: %v)",
-				status.node.ID.Name, status.walPosition, err)
+				status.node.ID.GetName(), status.walPosition, err)
 		}
 
 		// Select node with highest LSN
@@ -214,7 +214,7 @@ func (c *Coordinator) selectCandidate(ctx context.Context, cohort []*Node) (*Nod
 		// Fall back to first available node if no healthy nodes
 		bestCandidate = statuses[0].node
 		c.logger.WarnContext(ctx, "No healthy nodes, using first available",
-			"node", bestCandidate.ID.Name)
+			"node", bestCandidate.ID.GetName())
 	}
 
 	return bestCandidate, nil
@@ -235,16 +235,16 @@ func (c *Coordinator) recruitNodes(ctx context.Context, cohort []*Node, term int
 		wg.Add(1)
 		go func(n *Node) {
 			defer wg.Done()
-			req := &consensusdatapb.BeginTermRequest{
+			req := consensusdatapb.BeginTermRequest_builder{
 				Term:        term,
 				CandidateId: c.coordinatorID,
-			}
+			}.Build()
 			resp, err := n.RpcClient.BeginTerm(ctx, n.Pooler, req)
 			if err != nil {
 				results <- result{node: n, err: err}
 				return
 			}
-			results <- result{node: n, accepted: resp.Accepted}
+			results <- result{node: n, accepted: resp.GetAccepted()}
 		}(node)
 	}
 
@@ -259,18 +259,18 @@ func (c *Coordinator) recruitNodes(ctx context.Context, cohort []*Node, term int
 	for r := range results {
 		if r.err != nil {
 			c.logger.WarnContext(ctx, "BeginTerm failed for node",
-				"node", r.node.ID.Name,
+				"node", r.node.ID.GetName(),
 				"error", r.err)
 			continue
 		}
 		if r.accepted {
 			recruited = append(recruited, r.node)
 			c.logger.InfoContext(ctx, "Node accepted term",
-				"node", r.node.ID.Name,
+				"node", r.node.ID.GetName(),
 				"term", term)
 		} else {
 			c.logger.WarnContext(ctx, "Node rejected term",
-				"node", r.node.ID.Name,
+				"node", r.node.ID.GetName(),
 				"term", term)
 		}
 	}
@@ -282,10 +282,10 @@ func (c *Coordinator) recruitNodes(ctx context.Context, cohort []*Node, term int
 // Returns nil if synchronous replication should not be configured (required_count=1 or no standbys).
 // For MULTI_CELL_ANY_N policies, excludes standbys in the same cell as the candidate (primary).
 func (c *Coordinator) buildSyncReplicationConfig(quorumRule *clustermetadatapb.QuorumRule, standbys []*Node, candidate *Node) (*multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest, error) {
-	requiredCount := int(quorumRule.RequiredCount)
+	requiredCount := int(quorumRule.GetRequiredCount())
 
 	// Determine async fallback mode (default to REJECT if unset)
-	asyncFallback := quorumRule.AsyncFallback
+	asyncFallback := quorumRule.GetAsyncFallback()
 	if asyncFallback == clustermetadatapb.AsyncReplicationFallbackMode_ASYNC_REPLICATION_FALLBACK_MODE_UNKNOWN {
 		asyncFallback = clustermetadatapb.AsyncReplicationFallbackMode_ASYNC_REPLICATION_FALLBACK_MODE_REJECT
 	}
@@ -317,11 +317,11 @@ func (c *Coordinator) buildSyncReplicationConfig(quorumRule *clustermetadatapb.Q
 	// For MULTI_CELL_ANY_N, filter out standbys in the same cell as the primary
 	// This ensures that synchronous replication requires acknowledgment from different cells
 	eligibleStandbys := standbys
-	if quorumRule.QuorumType == clustermetadatapb.QuorumType_QUORUM_TYPE_MULTI_CELL_ANY_N {
+	if quorumRule.GetQuorumType() == clustermetadatapb.QuorumType_QUORUM_TYPE_MULTI_CELL_ANY_N {
 		eligibleStandbys = c.filterStandbysByCell(candidate, standbys)
 
 		c.logger.Info("Filtered standbys for MULTI_CELL_ANY_N",
-			"candidate_cell", candidate.ID.Cell,
+			"candidate_cell", candidate.ID.GetCell(),
 			"total_standbys", len(standbys),
 			"eligible_standbys", len(eligibleStandbys),
 			"excluded_same_cell", len(standbys)-len(eligibleStandbys))
@@ -331,10 +331,10 @@ func (c *Coordinator) buildSyncReplicationConfig(quorumRule *clustermetadatapb.Q
 			if asyncFallback == clustermetadatapb.AsyncReplicationFallbackMode_ASYNC_REPLICATION_FALLBACK_MODE_REJECT {
 				return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
 					fmt.Sprintf("cannot establish synchronous replication: no eligible standbys in different cells (candidate_cell=%s, async_fallback=REJECT)",
-						candidate.ID.Cell))
+						candidate.ID.GetCell()))
 			}
 			c.logger.Warn("No eligible standbys in different cells, using async replication",
-				"candidate_cell", candidate.ID.Cell,
+				"candidate_cell", candidate.ID.GetCell(),
 				"total_standbys", len(standbys))
 			return nil, nil
 		}
@@ -369,28 +369,28 @@ func (c *Coordinator) buildSyncReplicationConfig(quorumRule *clustermetadatapb.Q
 	}
 
 	c.logger.Info("Configuring synchronous replication",
-		"quorum_type", quorumRule.QuorumType,
+		"quorum_type", quorumRule.GetQuorumType(),
 		"required_count", requiredCount,
 		"num_sync", numSync,
 		"total_standbys", len(eligibleStandbys))
 
-	return &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
+	return multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest_builder{
 		SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_WRITE,
 		SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_ANY,
 		NumSync:           numSync,
 		StandbyIds:        standbyIDs,
 		ReloadConfig:      true,
-	}, nil
+	}.Build(), nil
 }
 
 // filterStandbysByCell returns standbys that are NOT in the same cell as the candidate.
 // Used for MULTI_CELL_ANY_N to ensure synchronous replication spans multiple cells.
 func (c *Coordinator) filterStandbysByCell(candidate *Node, standbys []*Node) []*Node {
-	candidateCell := candidate.ID.Cell
+	candidateCell := candidate.ID.GetCell()
 	filtered := make([]*Node, 0, len(standbys))
 
 	for _, standby := range standbys {
-		if standby.ID.Cell != candidateCell {
+		if standby.ID.GetCell() != candidateCell {
 			filtered = append(filtered, standby)
 		}
 	}
@@ -411,7 +411,7 @@ func (c *Coordinator) Propagate(ctx context.Context, candidate *Node, standbys [
 
 	// Promote candidate to primary
 	c.logger.InfoContext(ctx, "Promoting candidate to primary",
-		"node", candidate.ID.Name,
+		"node", candidate.ID.GetName(),
 		"term", term)
 
 	// Get current WAL position before promotion (for validation)
@@ -422,23 +422,23 @@ func (c *Coordinator) Propagate(ctx context.Context, candidate *Node, standbys [
 	}
 
 	expectedLSN := ""
-	if status.WalPosition != nil {
-		if status.Role == "primary" {
-			expectedLSN = status.WalPosition.CurrentLsn
+	if status.HasWalPosition() {
+		if status.GetRole() == "primary" {
+			expectedLSN = status.GetWalPosition().GetCurrentLsn()
 		} else {
 			// For standbys, use receive position (includes unreplayed WAL)
-			expectedLSN = status.WalPosition.LastReceiveLsn
+			expectedLSN = status.GetWalPosition().GetLastReceiveLsn()
 
 			// Wait for standby to replay all received WAL before promotion
 			// This ensures validateExpectedLSN in Promote will pass
 			if expectedLSN != "" {
 				c.logger.InfoContext(ctx, "Waiting for candidate to replay all received WAL",
-					"node", candidate.ID.Name,
+					"node", candidate.ID.GetName(),
 					"target_lsn", expectedLSN)
 
-				waitReq := &multipoolermanagerdatapb.WaitForLSNRequest{
+				waitReq := multipoolermanagerdatapb.WaitForLSNRequest_builder{
 					TargetLsn: expectedLSN,
-				}
+				}.Build()
 				if _, err := candidate.RpcClient.WaitForLSN(ctx, candidate.Pooler, waitReq); err != nil {
 					return mterrors.Wrapf(err, "candidate failed to replay WAL to %s", expectedLSN)
 				}
@@ -446,18 +446,18 @@ func (c *Coordinator) Propagate(ctx context.Context, candidate *Node, standbys [
 		}
 	}
 
-	promoteReq := &multipoolermanagerdatapb.PromoteRequest{
+	promoteReq := multipoolermanagerdatapb.PromoteRequest_builder{
 		ConsensusTerm:         term,
 		ExpectedLsn:           expectedLSN,
 		SyncReplicationConfig: syncConfig,
 		Force:                 false,
-	}
+	}.Build()
 	_, err = candidate.RpcClient.Promote(ctx, candidate.Pooler, promoteReq)
 	if err != nil {
 		return mterrors.Wrap(err, "failed to promote candidate")
 	}
 
-	c.logger.InfoContext(ctx, "Candidate promoted successfully", "node", candidate.ID.Name)
+	c.logger.InfoContext(ctx, "Candidate promoted successfully", "node", candidate.ID.GetName())
 
 	// Configure standbys to replicate from the new primary
 	var wg sync.WaitGroup
@@ -468,23 +468,23 @@ func (c *Coordinator) Propagate(ctx context.Context, candidate *Node, standbys [
 		go func(s *Node) {
 			defer wg.Done()
 			c.logger.InfoContext(ctx, "Configuring standby replication",
-				"standby", s.ID.Name,
-				"primary", candidate.ID.Name)
+				"standby", s.ID.GetName(),
+				"primary", candidate.ID.GetName())
 
-			setPrimaryReq := &multipoolermanagerdatapb.SetPrimaryConnInfoRequest{
+			setPrimaryReq := multipoolermanagerdatapb.SetPrimaryConnInfoRequest_builder{
 				Host:                  candidate.Hostname,
 				Port:                  candidate.Port,
 				CurrentTerm:           term,
 				StopReplicationBefore: false,
 				StartReplicationAfter: false,
 				Force:                 false,
-			}
+			}.Build()
 			if _, err := s.RpcClient.SetPrimaryConnInfo(ctx, s.Pooler, setPrimaryReq); err != nil {
-				errChan <- mterrors.Wrapf(err, "failed to configure standby %s", s.ID.Name)
+				errChan <- mterrors.Wrapf(err, "failed to configure standby %s", s.ID.GetName())
 				return
 			}
 
-			c.logger.InfoContext(ctx, "Standby configured successfully", "standby", s.ID.Name)
+			c.logger.InfoContext(ctx, "Standby configured successfully", "standby", s.ID.GetName())
 		}(standby)
 	}
 
@@ -522,7 +522,7 @@ func (c *Coordinator) EstablishLeader(ctx context.Context, candidate *Node, term
 	// finalization steps that might be needed in the future.
 
 	c.logger.InfoContext(ctx, "Leader established",
-		"node", candidate.ID.Name,
+		"node", candidate.ID.GetName(),
 		"term", term)
 
 	// Verify the leader is actually serving
@@ -532,9 +532,9 @@ func (c *Coordinator) EstablishLeader(ctx context.Context, candidate *Node, term
 		return mterrors.Wrap(err, "failed to verify leader status")
 	}
 
-	if state.State != "ready" {
+	if state.GetState() != "ready" {
 		return mterrors.Errorf(mtrpcpb.Code_INTERNAL,
-			"leader is not in ready state: %s", state.State)
+			"leader is not in ready state: %s", state.GetState())
 	}
 
 	return nil

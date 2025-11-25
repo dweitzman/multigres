@@ -40,12 +40,12 @@ func createTestManagerWithBackupLocation(poolerDir, stanzaName, tableGroup, shar
 	database := "test-database"
 
 	multipoolerInfo := &topo.MultiPoolerInfo{
-		MultiPooler: &clustermetadatapb.MultiPooler{
+		MultiPooler: clustermetadatapb.MultiPooler_builder{
 			Type:       poolerType,
 			TableGroup: tableGroup,
 			Shard:      shard,
 			Database:   database,
-		},
+		}.Build(),
 	}
 
 	// Create a topology store with backup location if provided
@@ -53,11 +53,11 @@ func createTestManagerWithBackupLocation(poolerDir, stanzaName, tableGroup, shar
 	if backupLocation != "" {
 		ctx := context.Background()
 		ts, _ := memorytopo.NewServerAndFactory(ctx, "zone1")
-		err := ts.CreateDatabase(ctx, database, &clustermetadatapb.Database{
+		err := ts.CreateDatabase(ctx, database, clustermetadatapb.Database_builder{
 			Name:             database,
 			BackupLocation:   backupLocation,
 			DurabilityPolicy: "ANY_2",
-		})
+		}.Build())
 		if err == nil {
 			topoClient = ts
 		}
@@ -67,9 +67,9 @@ func createTestManagerWithBackupLocation(poolerDir, stanzaName, tableGroup, shar
 		config: &Config{
 			PoolerDir:        poolerDir,
 			PgBackRestStanza: stanzaName,
-			ServiceID:        &clustermetadatapb.ID{Name: "test-service"},
+			ServiceID:        clustermetadatapb.ID_builder{Name: "test-service"}.Build(),
 		},
-		serviceID:   &clustermetadatapb.ID{Name: "test-service"},
+		serviceID:   clustermetadatapb.ID_builder{Name: "test-service"}.Build(),
 		topoClient:  topoClient,
 		multipooler: multipoolerInfo,
 		cachedMultipooler: cachedMultiPoolerInfo{

@@ -41,6 +41,9 @@ get_sha256() {
     "25.1-osx-aarch_64")
       echo "320308ce18c359564948754f51748de41cf02a4e7edf0cf47a805b9d38610f16"
       ;;
+    "30.2-osx-aarch_64")
+      echo "92728c650f6cf2b6c37891ae04ef5bc2d4b5f32c5fbbd101eda623f90bb95f63"
+      ;;
     *)
       echo "ERROR: no SHA256 hash available for protoc $version-$platform-$arch" >&2
       exit 1

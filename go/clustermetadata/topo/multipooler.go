@@ -34,16 +34,16 @@ func NewMultiPooler(name string, cell, host, tableGroup string) *clustermetadata
 	if name == "" {
 		name = stringutil.RandomString(8)
 	}
-	return &clustermetadatapb.MultiPooler{
-		Id: &clustermetadatapb.ID{
+	return clustermetadatapb.MultiPooler_builder{
+		Id: clustermetadatapb.ID_builder{
 			Component: clustermetadatapb.ID_MULTIPOOLER,
 			Cell:      cell,
 			Name:      name,
-		},
+		}.Build(),
 		Hostname:   host,
 		TableGroup: tableGroup,
 		PortMap:    make(map[string]int32),
-	}
+	}.Build()
 }
 
 // MultiPoolerInfo is the container for a MultiPooler, read from the topology server.
@@ -54,21 +54,21 @@ type MultiPoolerInfo struct {
 
 // String returns a string describing the multipooler.
 func (mpi *MultiPoolerInfo) String() string {
-	return fmt.Sprintf("MultiPooler{%v}", MultiPoolerIDString(mpi.Id))
+	return fmt.Sprintf("MultiPooler{%v}", MultiPoolerIDString(mpi.GetId()))
 }
 
 // IDString returns the string representation of the multipooler id
 func (mpi *MultiPoolerInfo) IDString() string {
-	return MultiPoolerIDString(mpi.Id)
+	return MultiPoolerIDString(mpi.GetId())
 }
 
 // Addr returns hostname:grpc port.
 func (mpi *MultiPoolerInfo) Addr() string {
-	grpcPort, ok := mpi.PortMap["grpc"]
+	grpcPort, ok := mpi.GetPortMap()["grpc"]
 	if !ok {
-		return mpi.Hostname
+		return mpi.GetHostname()
 	}
-	return fmt.Sprintf("%s:%d", mpi.Hostname, grpcPort)
+	return fmt.Sprintf("%s:%d", mpi.GetHostname(), grpcPort)
 }
 
 // Version returns the version of this multipooler from last time it was read or updated.
@@ -84,14 +84,14 @@ func NewMultiPoolerInfo(multipooler *clustermetadatapb.MultiPooler, version Vers
 
 // MultiPoolerIDString returns the string representation of a MultiPooler ID
 func MultiPoolerIDString(id *clustermetadatapb.ID) string {
-	return fmt.Sprintf("%s-%s-%s", ComponentTypeToString(id.Component), id.Cell, id.Name)
+	return fmt.Sprintf("%s-%s-%s", ComponentTypeToString(id.GetComponent()), id.GetCell(), id.GetName())
 }
 
 // GetMultiPooler is a high level function to read multipooler data.
 func (ts *store) GetMultiPooler(ctx context.Context, id *clustermetadatapb.ID) (*MultiPoolerInfo, error) {
-	conn, err := ts.ConnForCell(ctx, id.Cell)
+	conn, err := ts.ConnForCell(ctx, id.GetCell())
 	if err != nil {
-		return nil, mterrors.Wrap(err, fmt.Sprintf("unable to get connection for cell %q", id.Cell))
+		return nil, mterrors.Wrap(err, fmt.Sprintf("unable to get connection for cell %q", id.GetCell()))
 	}
 
 	poolerPath := path.Join(PoolersPath, MultiPoolerIDString(id), PoolerFile)
@@ -136,7 +136,7 @@ func (ts *store) GetMultiPoolerIDsByCell(ctx context.Context, cell string) ([]*c
 		if err := proto.Unmarshal(child.Value, multipooler); err != nil {
 			return nil, err
 		}
-		result[i] = multipooler.Id
+		result[i] = multipooler.GetId()
 	}
 	return result, nil
 }
@@ -204,15 +204,15 @@ func (ts *store) GetMultiPoolersByCell(ctx context.Context, cellName string, opt
 		}
 		if opt != nil && opt.DatabaseShard != nil && opt.DatabaseShard.Database != "" {
 			// Database must match
-			if opt.DatabaseShard.Database != multipooler.Database {
+			if opt.DatabaseShard.Database != multipooler.GetDatabase() {
 				continue
 			}
 			// If TableGroup is specified, it must match
-			if opt.DatabaseShard.TableGroup != "" && opt.DatabaseShard.TableGroup != multipooler.TableGroup {
+			if opt.DatabaseShard.TableGroup != "" && opt.DatabaseShard.TableGroup != multipooler.GetTableGroup() {
 				continue
 			}
 			// If Shard is specified, it must match
-			if opt.DatabaseShard.Shard != "" && opt.DatabaseShard.Shard != multipooler.Shard {
+			if opt.DatabaseShard.Shard != "" && opt.DatabaseShard.Shard != multipooler.GetShard() {
 				continue
 			}
 		}
@@ -223,7 +223,7 @@ func (ts *store) GetMultiPoolersByCell(ctx context.Context, cellName string, opt
 
 // UpdateMultiPooler updates the multipooler data only - not associated replication paths.
 func (ts *store) UpdateMultiPooler(ctx context.Context, mpi *MultiPoolerInfo) error {
-	conn, err := ts.ConnForCell(ctx, mpi.Id.Cell)
+	conn, err := ts.ConnForCell(ctx, mpi.GetId().GetCell())
 	if err != nil {
 		return err
 	}
@@ -232,7 +232,7 @@ func (ts *store) UpdateMultiPooler(ctx context.Context, mpi *MultiPoolerInfo) er
 	if err != nil {
 		return err
 	}
-	poolerPath := path.Join(PoolersPath, MultiPoolerIDString(mpi.Id), PoolerFile)
+	poolerPath := path.Join(PoolersPath, MultiPoolerIDString(mpi.GetId()), PoolerFile)
 	newVersion, err := conn.Update(ctx, poolerPath, data, mpi.version)
 	if err != nil {
 		return err
@@ -268,7 +268,7 @@ func (ts *store) UpdateMultiPoolerFields(ctx context.Context, id *clustermetadat
 
 // CreateMultiPooler creates a new multipooler and all associated paths.
 func (ts *store) CreateMultiPooler(ctx context.Context, mtpooler *clustermetadatapb.MultiPooler) error {
-	conn, err := ts.ConnForCell(ctx, mtpooler.Id.Cell)
+	conn, err := ts.ConnForCell(ctx, mtpooler.GetId().GetCell())
 	if err != nil {
 		return err
 	}
@@ -277,7 +277,7 @@ func (ts *store) CreateMultiPooler(ctx context.Context, mtpooler *clustermetadat
 	if err != nil {
 		return err
 	}
-	poolerPath := path.Join(PoolersPath, MultiPoolerIDString(mtpooler.Id), PoolerFile)
+	poolerPath := path.Join(PoolersPath, MultiPoolerIDString(mtpooler.GetId()), PoolerFile)
 	if _, err := conn.Create(ctx, poolerPath, data); err != nil {
 		return err
 	}
@@ -287,7 +287,7 @@ func (ts *store) CreateMultiPooler(ctx context.Context, mtpooler *clustermetadat
 
 // UnregisterMultiPooler deletes the specified multipooler.
 func (ts *store) UnregisterMultiPooler(ctx context.Context, id *clustermetadatapb.ID) error {
-	conn, err := ts.ConnForCell(ctx, id.Cell)
+	conn, err := ts.ConnForCell(ctx, id.GetCell())
 	if err != nil {
 		return err
 	}
@@ -306,19 +306,19 @@ func (ts *store) RegisterMultiPooler(ctx context.Context, mtpooler *clustermetad
 	err := ts.CreateMultiPooler(ctx, mtpooler)
 	if errors.Is(err, &TopoError{Code: NodeExists}) && allowUpdate {
 		// Try to update then
-		oldMtPooler, err := ts.GetMultiPooler(ctx, mtpooler.Id)
+		oldMtPooler, err := ts.GetMultiPooler(ctx, mtpooler.GetId())
 		if err != nil {
-			return fmt.Errorf("failed reading existing mtpooler %v: %v", MultiPoolerIDString(mtpooler.Id), err)
+			return fmt.Errorf("failed reading existing mtpooler %v: %v", MultiPoolerIDString(mtpooler.GetId()), err)
 		}
 
 		// Check we have the same database / shard, and if not,
 		// require the allowDifferentShard flag.
-		if oldMtPooler.Database != mtpooler.Database || oldMtPooler.Shard != mtpooler.Shard {
-			return fmt.Errorf("old mtpooler has shard %v/%v. Cannot override with shard %v/%v. Delete and re-add mtpooler if you want to change the mtpooler's database/shard", oldMtPooler.Database, oldMtPooler.Shard, mtpooler.Database, mtpooler.Shard)
+		if oldMtPooler.GetDatabase() != mtpooler.GetDatabase() || oldMtPooler.GetShard() != mtpooler.GetShard() {
+			return fmt.Errorf("old mtpooler has shard %v/%v. Cannot override with shard %v/%v. Delete and re-add mtpooler if you want to change the mtpooler's database/shard", oldMtPooler.GetDatabase(), oldMtPooler.GetShard(), mtpooler.GetDatabase(), mtpooler.GetShard())
 		}
 		oldMtPooler.MultiPooler = proto.Clone(mtpooler).(*clustermetadatapb.MultiPooler)
 		if err := ts.UpdateMultiPooler(ctx, oldMtPooler); err != nil {
-			return fmt.Errorf("failed updating mtpooler %v: %v", MultiPoolerIDString(mtpooler.Id), err)
+			return fmt.Errorf("failed updating mtpooler %v: %v", MultiPoolerIDString(mtpooler.GetId()), err)
 		}
 		return nil
 	}

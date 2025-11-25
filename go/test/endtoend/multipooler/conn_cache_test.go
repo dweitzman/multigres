@@ -42,10 +42,10 @@ func makePooler(addr string) *clustermetadatapb.MultiPooler {
 	host, portStr, _ := strings.Cut(addr, ":")
 	port, _ := strconv.Atoi(portStr)
 
-	return &clustermetadatapb.MultiPooler{
+	return clustermetadatapb.MultiPooler_builder{
 		Hostname: host,
 		PortMap:  map[string]int32{"grpc": int32(port)},
-	}
+	}.Build()
 }
 
 // fakeConsensusServer is a minimal implementation of the consensus service for testing.
