@@ -89,6 +89,10 @@ The system uses etcd for service discovery and topology storage. The topology is
 - **go/tools/**: Generic helpers (timers, retry, etc.) that aren't multigres-specific
 - **go/common/**: Shared multigres code (error codes, gRPC clients, protocol code)
 
+### Generated Files
+
+Files with `// Code generated` comments should not be edited directly. Regenerate with `make proto` (protobufs) or `make parser` (SQL parser/AST). When debugging, trace to source files instead of analyzing generated code.
+
 ## Engineering Principles
 
 This is mission-critical infrastructure. Prioritize reliability, security, and maintainability.
