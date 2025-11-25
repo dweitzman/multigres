@@ -316,23 +316,27 @@ func (p *localProvisioner) DefaultConfig(configPaths []string) map[string]any {
 	return configMap
 }
 
+// structToMap converts a struct to map[string]any using YAML serialization.
+// This ensures all struct fields are included with their yaml tag names.
+func structToMap(v any) map[string]any {
+	data, err := yaml.Marshal(v)
+	if err != nil {
+		return map[string]any{}
+	}
+	var result map[string]any
+	if err := yaml.Unmarshal(data, &result); err != nil {
+		return map[string]any{}
+	}
+	return result
+}
+
 // getServiceConfig gets the configuration for a specific service (global services only)
 func (p *localProvisioner) getServiceConfig(service string) map[string]any {
 	switch service {
 	case "etcd":
-		return map[string]any{
-			"version":   p.config.Etcd.Version,
-			"data-dir":  p.config.Etcd.DataDir,
-			"port":      p.config.Etcd.Port,
-			"peer-port": p.config.Etcd.PeerPort,
-		}
+		return structToMap(p.config.Etcd)
 	case "multiadmin":
-		return map[string]any{
-			"path":      p.config.Multiadmin.Path,
-			"http_port": p.config.Multiadmin.HttpPort,
-			"grpc_port": p.config.Multiadmin.GrpcPort,
-			"log_level": p.config.Multiadmin.LogLevel,
-		}
+		return structToMap(p.config.Multiadmin)
 	default:
 		// Return empty config if not found
 		return map[string]any{}
@@ -348,47 +352,13 @@ func (p *localProvisioner) getCellServiceConfig(cellName, service string) (map[s
 
 	switch service {
 	case "multigateway":
-		return map[string]any{
-			"path":      cellServices.Multigateway.Path,
-			"http_port": cellServices.Multigateway.HttpPort,
-			"grpc_port": cellServices.Multigateway.GrpcPort,
-			"pg_port":   cellServices.Multigateway.PgPort,
-			"log_level": cellServices.Multigateway.LogLevel,
-		}, nil
+		return structToMap(cellServices.Multigateway), nil
 	case "multipooler":
-		return map[string]any{
-			"path":             cellServices.Multipooler.Path,
-			"database":         cellServices.Multipooler.Database,
-			"table_group":      cellServices.Multipooler.TableGroup,
-			"service-id":       cellServices.Multipooler.ServiceID,
-			"http_port":        cellServices.Multipooler.HttpPort,
-			"grpc_port":        cellServices.Multipooler.GrpcPort,
-			"grpc_socket_file": cellServices.Multipooler.GRPCSocketFile,
-			"log_level":        cellServices.Multipooler.LogLevel,
-			"pooler_dir":       cellServices.Multipooler.PoolerDir,
-			"pg_port":          cellServices.Multipooler.PgPort,
-			"backup_conf":      cellServices.Multipooler.BackupConf,
-		}, nil
+		return structToMap(cellServices.Multipooler), nil
 	case "multiorch":
-		return map[string]any{
-			"path":      cellServices.Multiorch.Path,
-			"http_port": cellServices.Multiorch.HttpPort,
-			"grpc_port": cellServices.Multiorch.GrpcPort,
-			"log_level": cellServices.Multiorch.LogLevel,
-		}, nil
+		return structToMap(cellServices.Multiorch), nil
 	case "pgctld":
-		return map[string]any{
-			"path":             cellServices.Pgctld.Path,
-			"pooler_dir":       cellServices.Pgctld.PoolerDir,
-			"grpc_port":        cellServices.Pgctld.GrpcPort,
-			"grpc_socket_file": cellServices.Pgctld.GRPCSocketFile,
-			"pg_port":          cellServices.Pgctld.PgPort,
-			"pg_database":      cellServices.Pgctld.PgDatabase,
-			"pg_user":          cellServices.Pgctld.PgUser,
-			"pg_pwfile":        cellServices.Pgctld.PgPwfile,
-			"timeout":          cellServices.Pgctld.Timeout,
-			"log_level":        cellServices.Pgctld.LogLevel,
-		}, nil
+		return structToMap(cellServices.Pgctld), nil
 	default:
 		return nil, fmt.Errorf("unknown service %s", service)
 	}

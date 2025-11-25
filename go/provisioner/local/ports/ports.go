@@ -17,6 +17,15 @@
 // at 15x00 and the corresponding gRPC port at 15x70.
 package ports
 
+// Port key constants for use in map[string]int port mappings.
+// These match the YAML struct tags and provide type-safe, consistent keys.
+const (
+	KeyHTTP = "http-port"
+	KeyGRPC = "grpc-port"
+	KeyPG   = "pg-port"
+	KeyTCP  = "tcp"
+)
+
 const (
 	// Standard ports (unchanged)
 	DefaultEtcdPort     = 2379

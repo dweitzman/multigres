@@ -416,25 +416,25 @@ func (p *localProvisioner) provisionMultigateway(ctx context.Context, req *provi
 
 	// Get HTTP port from cell-specific config
 	httpPort := ports.DefaultMultigatewayHTTP
-	if p, ok := multigatewayConfig["http_port"].(int); ok && p > 0 {
+	if p, ok := multigatewayConfig[ports.KeyHTTP].(int); ok && p > 0 {
 		httpPort = p
 	}
 
 	// Get gRPC port from cell-specific config
 	grpcPort := ports.DefaultMultigatewayGRPC
-	if p, ok := multigatewayConfig["grpc_port"].(int); ok && p > 0 {
+	if p, ok := multigatewayConfig[ports.KeyGRPC].(int); ok && p > 0 {
 		grpcPort = p
 	}
 
 	// Get pg port from cell-specific config
 	pgPort := ports.DefaultMultigatewayPG
-	if p, ok := multigatewayConfig["pg_port"].(int); ok && p > 0 {
+	if p, ok := multigatewayConfig[ports.KeyPG].(int); ok && p > 0 {
 		pgPort = p
 	}
 
 	// Get log level
 	logLevel := "info"
-	if level, ok := multigatewayConfig["log_level"].(string); ok {
+	if level, ok := multigatewayConfig[ports.KeyLogLevel].(string); ok {
 		logLevel = level
 	}
 
