@@ -52,6 +52,9 @@ dist/*
 # Local development directory
 multigres_local/
 
+# Git worktrees
+.worktrees/
+
 # Local linter output directory
 super-linter-output/
 .mypy_cache/
