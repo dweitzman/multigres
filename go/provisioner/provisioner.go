@@ -56,6 +56,38 @@ type Port struct {
 	Name string `json:"name"`
 }
 
+// FindPort finds a port by name in a slice of ports.
+// Returns the port and true if found, zero Port and false otherwise.
+func FindPort(ports []Port, name string) (Port, bool) {
+	for _, p := range ports {
+		if p.Name == name {
+			return p, true
+		}
+	}
+	return Port{}, false
+}
+
+// FindPortByProtocol finds the first port with a given protocol.
+// Returns the port and true if found, zero Port and false otherwise.
+func FindPortByProtocol(ports []Port, protocol string) (Port, bool) {
+	for _, p := range ports {
+		if p.Protocol == protocol {
+			return p, true
+		}
+	}
+	return Port{}, false
+}
+
+// PortsToMap converts a slice of ports to a map[string]int keyed by port name.
+// This is useful for backwards compatibility with code expecting the old format.
+func PortsToMap(ports []Port) map[string]int {
+	m := make(map[string]int, len(ports))
+	for _, p := range ports {
+		m[p.Name] = p.Number
+	}
+	return m
+}
+
 // ProvisionResult contains the result of provisioning a service.
 // It provides information about where and how the service is accessible.
 type ProvisionResult struct {
