@@ -1169,3 +1169,24 @@ git commit -m "docs: mark provisioner type safety design as implemented"
 
 - `go/provisioner/port_test.go`
 - `go/provisioner/local/config_test.go`
+
+---
+
+## Progress Tracking
+
+**Last Updated:** 2025-11-25
+
+| Task                                   | Status      | Commit    |
+| -------------------------------------- | ----------- | --------- |
+| Task 1: Add Port type                  | ✅ Complete | `4ee2ec1` |
+| Task 2: Add Port helper functions      | ✅ Complete | `2c0407a` |
+| Task 3: Add tests for Port helpers     | ⏳ Pending  |           |
+| Task 4-9: Add Ports() methods          | ⏳ Pending  |           |
+| Task 10: Add tests for Ports() methods | ⏳ Pending  |           |
+| Task 11-12: Update Ports types         | ⏳ Pending  |           |
+| Task 13-21: Fix all usages             | ⏳ Pending  |           |
+| Task 22: Remove deprecated functions   | ⏳ Pending  |           |
+| Task 23: Run full test suite           | ⏳ Pending  |           |
+| Task 24: Update design doc             | ⏳ Pending  |           |
+
+**To Resume:** Continue with Task 3 (Add tests for Port helpers)
