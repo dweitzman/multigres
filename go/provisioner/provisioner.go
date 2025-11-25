@@ -46,6 +46,16 @@ import (
 	"fmt"
 )
 
+// Port represents a network port with its protocol and identifier
+type Port struct {
+	// Number is the port number
+	Number int `json:"number"`
+	// Protocol is the network protocol: "http", "grpc", "tcp", "postgres"
+	Protocol string `json:"protocol"`
+	// Name is a human-readable identifier: "client", "peer", "http", "grpc", etc.
+	Name string `json:"name"`
+}
+
 // ProvisionResult contains the result of provisioning a service.
 // It provides information about where and how the service is accessible.
 type ProvisionResult struct {
