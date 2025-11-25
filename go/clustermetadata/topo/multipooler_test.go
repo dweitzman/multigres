@@ -87,7 +87,7 @@ func checkMultiPoolerInfosEqual(t *testing.T, expected, actual []*topo.MultiPool
 	for _, actualMP := range actual {
 		found := false
 		for _, expectedMP := range expected {
-			if topo.MultiPoolerIDString(actualMP.Id) == topo.MultiPoolerIDString(expectedMP.Id) {
+			if topo.MultiPoolerIDString(actualMP.GetId()) == topo.MultiPoolerIDString(expectedMP.GetId()) {
 				checkMultiPoolersEqual(t, expectedMP.MultiPooler, actualMP.MultiPooler)
 				found = true
 				break
@@ -634,9 +634,9 @@ func TestMultiPoolerCRUDOperations(t *testing.T) {
 				require.NoError(t, err)
 				oldVersion := retrieved.Version()
 
-				retrieved.GetHostname() = "host2.example.com"
+				retrieved.SetHostname("host2.example.com")
 				retrieved.GetPortMap()["http"] = 8081
-				retrieved.GetServingStatus() = clustermetadatapb.PoolerServingStatus_NOT_SERVING
+				retrieved.SetServingStatus(clustermetadatapb.PoolerServingStatus_NOT_SERVING)
 
 				err = ts.UpdateMultiPooler(ctx, retrieved)
 				require.NoError(t, err)
@@ -1226,7 +1226,7 @@ func TestMultiPoolerDatabaseField(t *testing.T) {
 				oldVersion := retrieved.Version()
 
 				// Update hostname but keep database
-				retrieved.GetHostname() = "host2.example.com"
+				retrieved.SetHostname("host2.example.com")
 
 				err = ts.UpdateMultiPooler(ctx, retrieved)
 				require.NoError(t, err)
@@ -1461,7 +1461,7 @@ func TestGetMultiPoolersByCell_Comprehensive(t *testing.T) {
 
 		// Verify only db1 multipoolers are returned
 		for _, info := range multipoolerInfos {
-			require.Equal(t, "db1", info.Database)
+			require.Equal(t, "db1", info.GetDatabase())
 		}
 
 		// Verify cell boundary: multipoolers are NOT accessible from other cells
@@ -1526,9 +1526,9 @@ func TestGetMultiPoolersByCell_Comprehensive(t *testing.T) {
 		require.Len(t, multipoolerInfos, 1)
 
 		// Verify correct multipooler is returned
-		require.Equal(t, "db2", multipoolerInfos[0].Database)
-		require.Equal(t, "tg1", multipoolerInfos[0].TableGroup)
-		require.Equal(t, "-8", multipoolerInfos[0].Shard)
+		require.Equal(t, "db2", multipoolerInfos[0].GetDatabase())
+		require.Equal(t, "tg1", multipoolerInfos[0].GetTableGroup())
+		require.Equal(t, "-8", multipoolerInfos[0].GetShard())
 
 		// Verify cell boundary: multipoolers are NOT accessible from other cells
 		otherCellInfos, err := ts.GetMultiPoolersByCell(ctx, "zone2", nil)
@@ -1603,23 +1603,23 @@ func TestGetMultiPoolersByCell_Comprehensive(t *testing.T) {
 		zone1Infos, err := ts.GetMultiPoolersByCell(ctx, "zone1", nil)
 		require.NoError(t, err)
 		require.Len(t, zone1Infos, 1)
-		require.Equal(t, "zone1", zone1Infos[0].Id.GetCell())
-		require.Equal(t, "host1", zone1Infos[0].Hostname)
+		require.Equal(t, "zone1", zone1Infos[0].GetId().GetCell())
+		require.Equal(t, "host1", zone1Infos[0].GetHostname())
 
 		// Test: Verify zone2 can only see its own multipooler
 		zone2Infos, err := ts.GetMultiPoolersByCell(ctx, "zone2", nil)
 		require.NoError(t, err)
 		require.Len(t, zone2Infos, 1)
-		require.Equal(t, "zone2", zone2Infos[0].Id.GetCell())
-		require.Equal(t, "host2", zone2Infos[0].Hostname)
+		require.Equal(t, "zone2", zone2Infos[0].GetId().GetCell())
+		require.Equal(t, "host2", zone2Infos[0].GetHostname())
 
 		// Test: Verify cross-cell access is properly isolated
 		zone1FromZone2, err := ts.GetMultiPooler(ctx, zone1Multipooler.GetId())
 		require.NoError(t, err, "should be able to get multipooler by ID regardless of current cell context")
-		require.Equal(t, "zone1", zone1FromZone2.Id.GetCell())
+		require.Equal(t, "zone1", zone1FromZone2.GetId().GetCell())
 
 		zone2FromZone1, err := ts.GetMultiPooler(ctx, zone2Multipooler.GetId())
 		require.NoError(t, err, "should be able to get multipooler by ID regardless of current cell context")
-		require.Equal(t, "zone2", zone2FromZone1.Id.GetCell())
+		require.Equal(t, "zone2", zone2FromZone1.GetId().GetCell())
 	})
 }

@@ -148,7 +148,7 @@ func TestPoolerDiscovery_MultiplePoolerUpdates(t *testing.T) {
 	// Update an existing pooler
 	pooler1Info, err := store.GetMultiPooler(ctx, pooler1.GetId())
 	require.NoError(t, err)
-	pooler1Info.Hostname = "host1-updated"
+	pooler1Info.SetHostname("host1-updated")
 	require.NoError(t, store.UpdateMultiPooler(ctx, pooler1Info))
 
 	// Verify the update is reflected

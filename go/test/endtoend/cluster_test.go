@@ -328,7 +328,7 @@ func checkMultipoolerDatabaseInTopology(etcdAddress, globalRootPath, cellName, e
 
 	// Check that at least one multipooler has the correct database field
 	for _, info := range multipoolerInfos {
-		if info.Database == expectedDatabase {
+		if info.GetDatabase() == expectedDatabase {
 			// Found a multipooler with the expected database
 			return nil
 		}
@@ -337,7 +337,7 @@ func checkMultipoolerDatabaseInTopology(etcdAddress, globalRootPath, cellName, e
 	// If we get here, no multipooler had the expected database
 	var foundDatabases []string
 	for _, info := range multipoolerInfos {
-		foundDatabases = append(foundDatabases, fmt.Sprintf("'%s'", info.Database))
+		foundDatabases = append(foundDatabases, fmt.Sprintf("'%s'", info.GetDatabase()))
 	}
 
 	return fmt.Errorf("expected to find multipooler with database '%s' but found databases: [%s]",

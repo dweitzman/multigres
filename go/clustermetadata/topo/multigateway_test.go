@@ -320,7 +320,7 @@ func TestMultiGatewayCRUDOperations(t *testing.T) {
 				require.NoError(t, err)
 				oldVersion := retrieved.Version()
 
-				retrieved.GetHostname() = "host2.example.com"
+				retrieved.SetHostname("host2.example.com")
 				retrieved.GetPortMap()["postgres"] = 5432
 
 				err = ts.UpdateMultiGateway(ctx, retrieved)
@@ -934,23 +934,23 @@ func TestGetMultiGatewaysByCell_Comprehensive(t *testing.T) {
 		zone1Infos, err := ts.GetMultiGatewaysByCell(ctx, "zone1")
 		require.NoError(t, err)
 		require.Len(t, zone1Infos, 1)
-		require.Equal(t, "zone1", zone1Infos[0].Id.GetCell())
-		require.Equal(t, "host1", zone1Infos[0].Hostname)
+		require.Equal(t, "zone1", zone1Infos[0].GetId().GetCell())
+		require.Equal(t, "host1", zone1Infos[0].GetHostname())
 
 		// Test: Verify zone2 can only see its own multigateway
 		zone2Infos, err := ts.GetMultiGatewaysByCell(ctx, "zone2")
 		require.NoError(t, err)
 		require.Len(t, zone2Infos, 1)
-		require.Equal(t, "zone2", zone2Infos[0].Id.GetCell())
-		require.Equal(t, "host2", zone2Infos[0].Hostname)
+		require.Equal(t, "zone2", zone2Infos[0].GetId().GetCell())
+		require.Equal(t, "host2", zone2Infos[0].GetHostname())
 
 		// Test: Verify cross-cell access is properly isolated
 		zone1FromZone2, err := ts.GetMultiGateway(ctx, zone1MultiGateway.GetId())
 		require.NoError(t, err, "should be able to get multigateway by ID regardless of current cell context")
-		require.Equal(t, "zone1", zone1FromZone2.Id.GetCell())
+		require.Equal(t, "zone1", zone1FromZone2.GetId().GetCell())
 
 		zone2FromZone1, err := ts.GetMultiGateway(ctx, zone2MultiGateway.GetId())
 		require.NoError(t, err, "should be able to get multigateway by ID regardless of current cell context")
-		require.Equal(t, "zone2", zone2FromZone1.Id.GetCell())
+		require.Equal(t, "zone2", zone2FromZone1.GetId().GetCell())
 	})
 }

@@ -71,7 +71,7 @@ func checkMultiOrchInfosEqual(t *testing.T, expected, actual []*topo.MultiOrchIn
 	for _, actualMO := range actual {
 		found := false
 		for _, expectedMO := range expected {
-			if topo.MultiOrchIDString(actualMO.Id) == topo.MultiOrchIDString(expectedMO.Id) {
+			if topo.MultiOrchIDString(actualMO.GetId()) == topo.MultiOrchIDString(expectedMO.GetId()) {
 				checkMultiOrchsEqual(t, expectedMO.MultiOrch, actualMO.MultiOrch)
 				found = true
 				break
@@ -320,7 +320,7 @@ func TestMultiOrchCRUDOperations(t *testing.T) {
 				require.NoError(t, err)
 				oldVersion := retrieved.Version()
 
-				retrieved.GetHostname() = "host2.example.com"
+				retrieved.SetHostname("host2.example.com")
 				retrieved.GetPortMap()["http"] = 9090
 
 				err = ts.UpdateMultiOrch(ctx, retrieved)
@@ -934,23 +934,23 @@ func TestGetMultiOrchsByCell_Comprehensive(t *testing.T) {
 		zone1Infos, err := ts.GetMultiOrchsByCell(ctx, "zone1")
 		require.NoError(t, err)
 		require.Len(t, zone1Infos, 1)
-		require.Equal(t, "zone1", zone1Infos[0].Id.GetCell())
-		require.Equal(t, "host1", zone1Infos[0].Hostname)
+		require.Equal(t, "zone1", zone1Infos[0].GetId().GetCell())
+		require.Equal(t, "host1", zone1Infos[0].GetHostname())
 
 		// Test: Verify zone2 can only see its own multiorch
 		zone2Infos, err := ts.GetMultiOrchsByCell(ctx, "zone2")
 		require.NoError(t, err)
 		require.Len(t, zone2Infos, 1)
-		require.Equal(t, "zone2", zone2Infos[0].Id.GetCell())
-		require.Equal(t, "host2", zone2Infos[0].Hostname)
+		require.Equal(t, "zone2", zone2Infos[0].GetId().GetCell())
+		require.Equal(t, "host2", zone2Infos[0].GetHostname())
 
 		// Test: Verify cross-cell access is properly isolated
 		zone1FromZone2, err := ts.GetMultiOrch(ctx, zone1MultiOrch.GetId())
 		require.NoError(t, err, "should be able to get multiorch by ID regardless of current cell context")
-		require.Equal(t, "zone1", zone1FromZone2.Id.GetCell())
+		require.Equal(t, "zone1", zone1FromZone2.GetId().GetCell())
 
 		zone2FromZone1, err := ts.GetMultiOrch(ctx, zone2MultiOrch.GetId())
 		require.NoError(t, err, "should be able to get multiorch by ID regardless of current cell context")
-		require.Equal(t, "zone2", zone2FromZone1.Id.GetCell())
+		require.Equal(t, "zone2", zone2FromZone1.GetId().GetCell())
 	})
 }

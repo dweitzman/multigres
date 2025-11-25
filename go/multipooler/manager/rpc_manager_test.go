@@ -394,7 +394,7 @@ func TestPromoteIdempotency_PostgreSQLPromotedButTopologyNotUpdated(t *testing.T
 
 	// Topology is still REPLICA (this is what the guard rail checks)
 	pm.mu.Lock()
-	pm.multipooler.GetType() = clustermetadatapb.PoolerType_REPLICA
+	pm.multipooler.SetType(clustermetadatapb.PoolerType_REPLICA)
 	pm.mu.Unlock()
 
 	// Mock: checkPromotionState queries pg_is_in_recovery() - returns false (already promoted)
@@ -447,7 +447,7 @@ func TestPromoteIdempotency_FullyCompleteTopologyPrimary(t *testing.T) {
 
 	// Topology is already PRIMARY
 	pm.mu.Lock()
-	pm.multipooler.GetType() = clustermetadatapb.PoolerType_PRIMARY
+	pm.multipooler.SetType(clustermetadatapb.PoolerType_PRIMARY)
 	pm.mu.Unlock()
 
 	// Call Promote - should succeed with WasAlreadyPrimary=true (idempotent)
@@ -478,7 +478,7 @@ func TestPromoteIdempotency_InconsistentStateTopologyPrimaryPgNotPrimary(t *test
 
 	// Topology shows PRIMARY (inconsistent!)
 	pm.mu.Lock()
-	pm.multipooler.GetType() = clustermetadatapb.PoolerType_PRIMARY
+	pm.multipooler.SetType(clustermetadatapb.PoolerType_PRIMARY)
 	pm.mu.Unlock()
 
 	// Call Promote without force - should fail with inconsistent state error
@@ -506,7 +506,7 @@ func TestPromoteIdempotency_InconsistentStateFixedWithForce(t *testing.T) {
 
 	// Topology shows PRIMARY (inconsistent!)
 	pm.mu.Lock()
-	pm.multipooler.GetType() = clustermetadatapb.PoolerType_PRIMARY
+	pm.multipooler.SetType(clustermetadatapb.PoolerType_PRIMARY)
 	pm.mu.Unlock()
 
 	// Mock: Validate expected LSN
@@ -554,7 +554,7 @@ func TestPromoteIdempotency_NothingCompleteYet(t *testing.T) {
 
 	// Topology is REPLICA
 	pm.mu.Lock()
-	pm.multipooler.GetType() = clustermetadatapb.PoolerType_REPLICA
+	pm.multipooler.SetType(clustermetadatapb.PoolerType_REPLICA)
 	pm.mu.Unlock()
 
 	// Mock: Validate expected LSN (pg_last_wal_replay_lsn + pg_is_wal_replay_paused)
@@ -603,7 +603,7 @@ func TestPromoteIdempotency_LSNMismatchBeforePromotion(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"pg_is_in_recovery"}).AddRow(true))
 
 	pm.mu.Lock()
-	pm.multipooler.GetType() = clustermetadatapb.PoolerType_REPLICA
+	pm.multipooler.SetType(clustermetadatapb.PoolerType_REPLICA)
 	pm.mu.Unlock()
 
 	// Mock: Check LSN - return different value than expected
@@ -647,7 +647,7 @@ func TestPromoteIdempotency_SecondCallSucceedsAfterCompletion(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"pg_is_in_recovery"}).AddRow(true))
 
 	pm.mu.Lock()
-	pm.multipooler.GetType() = clustermetadatapb.PoolerType_REPLICA
+	pm.multipooler.SetType(clustermetadatapb.PoolerType_REPLICA)
 	pm.mu.Unlock()
 
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT pg_last_wal_replay_lsn()::text, pg_is_wal_replay_paused()")).
@@ -694,7 +694,7 @@ func TestPromoteIdempotency_EmptyExpectedLSNSkipsValidation(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"pg_is_in_recovery"}).AddRow(true))
 
 	pm.mu.Lock()
-	pm.multipooler.GetType() = clustermetadatapb.PoolerType_REPLICA
+	pm.multipooler.SetType(clustermetadatapb.PoolerType_REPLICA)
 	pm.mu.Unlock()
 
 	// Mock: pg_promote() call (LSN validation skipped because expectedLSN is empty)
