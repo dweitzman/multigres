@@ -15,6 +15,7 @@ Fast, reliable failover is essential—test failure scenarios thoroughly. Test e
 - Use `bufconn.Listener` for fast gRPC unit tests, real TCP for integration tests
 - Mock services: embed `pb.UnimplementedXxxServer`, track calls for assertions
 - Prefer `require.Eventually()` over `time.Sleep()` to minimize unnecessary waiting
+- `t.Context()` over `context.Background()`, except `Cleanup()` where context is already cancelled
 
 ## End-to-End Tests
 
