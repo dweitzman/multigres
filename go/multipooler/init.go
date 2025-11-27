@@ -230,7 +230,7 @@ func (mp *MultiPooler) Init(startCtx context.Context) {
 	})
 
 	// Start the MultiPoolerManager
-	poolerManager.Start(mp.senv)
+	poolerManager.Start(startCtx, mp.senv)
 	grpcmanagerservice.RegisterPoolerManagerServices(mp.senv, mp.grpcServer)
 	grpcconsensusservice.RegisterConsensusServices(mp.senv, mp.grpcServer)
 	grpcpoolerservice.RegisterPoolerServices(mp.senv, mp.grpcServer)

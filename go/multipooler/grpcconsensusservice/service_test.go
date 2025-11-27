@@ -90,7 +90,7 @@ func TestConsensusService_BeginTerm(t *testing.T) {
 
 	// Start the async loader
 	senv := servenv.NewServEnv(viperutil.NewRegistry())
-	go pm.Start(senv)
+	go pm.Start(t.Context(), senv)
 
 	// Wait for the manager to become ready
 	require.Eventually(t, func() bool {
@@ -165,7 +165,7 @@ func TestConsensusService_Status(t *testing.T) {
 
 	// Start the async loader
 	senv := servenv.NewServEnv(viperutil.NewRegistry())
-	go pm.Start(senv)
+	go pm.Start(t.Context(), senv)
 
 	// Wait for the manager to become ready
 	require.Eventually(t, func() bool {
@@ -239,7 +239,7 @@ func TestConsensusService_GetLeadershipView(t *testing.T) {
 
 	// Start the async loader
 	senv := servenv.NewServEnv(viperutil.NewRegistry())
-	go pm.Start(senv)
+	go pm.Start(t.Context(), senv)
 
 	// Wait for the manager to become ready
 	require.Eventually(t, func() bool {
@@ -308,7 +308,7 @@ func TestConsensusService_CanReachPrimary(t *testing.T) {
 
 	// Start the async loader
 	senv := servenv.NewServEnv(viperutil.NewRegistry())
-	go pm.Start(senv)
+	go pm.Start(t.Context(), senv)
 
 	// Wait for the manager to become ready
 	require.Eventually(t, func() bool {
@@ -379,7 +379,7 @@ func TestConsensusService_AllMethods(t *testing.T) {
 
 	// Start the async loader
 	senv := servenv.NewServEnv(viperutil.NewRegistry())
-	go pm.Start(senv)
+	go pm.Start(t.Context(), senv)
 
 	// Wait for the manager to become ready
 	require.Eventually(t, func() bool {

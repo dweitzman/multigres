@@ -164,7 +164,7 @@ func (pm *MultiPoolerManager) setPrimaryConnInfoLocked(ctx context.Context, host
 	// even if we don't set startReplicationAfter to true, replication will be running.
 	if startReplicationAfter {
 		// Reconnect to database after restart
-		if err := pm.connectDB(); err != nil {
+		if err := pm.connectDB(ctx); err != nil {
 			pm.logger.ErrorContext(ctx, "Failed to reconnect to database after restart", "error", err)
 			return mterrors.Wrap(err, "failed to reconnect to database")
 		}

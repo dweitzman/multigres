@@ -26,9 +26,9 @@ import (
 )
 
 // CreateDBConnection establishes a new connection to PostgreSQL using the config
-func CreateDBConnection(logger *slog.Logger, config *Config) (*sql.DB, error) {
+func CreateDBConnection(ctx context.Context, logger *slog.Logger, config *Config) (*sql.DB, error) {
 	// Debug: Log the configuration we received
-	logger.Info("createDBConnection: Configuration received",
+	logger.InfoContext(ctx, "createDBConnection: Configuration received",
 		"pooler_dir", config.PoolerDir,
 		"pg_port", config.PgPort,
 		"socket_file_path", config.SocketFilePath,
@@ -51,7 +51,7 @@ func CreateDBConnection(logger *slog.Logger, config *Config) (*sql.DB, error) {
 		dsn = fmt.Sprintf("user=postgres dbname=%s host=%s port=%s sslmode=disable connect_timeout=2",
 			config.Database, socketDir, port)
 
-		logger.Info("Unix socket connection via pooler directory",
+		logger.InfoContext(ctx, "Unix socket connection via pooler directory",
 			"pooler_dir", config.PoolerDir,
 			"socket_dir", socketDir,
 			"pg_port", config.PgPort,
@@ -72,7 +72,7 @@ func CreateDBConnection(logger *slog.Logger, config *Config) (*sql.DB, error) {
 		dsn = fmt.Sprintf("user=postgres dbname=%s host=%s port=%s sslmode=disable",
 			config.Database, socketDir, port)
 
-		logger.Info("Unix socket connection via socket file path (fallback)",
+		logger.InfoContext(ctx, "Unix socket connection via socket file path (fallback)",
 			"original_socket_path", config.SocketFilePath,
 			"socket_dir", socketDir,
 			"socket_file", socketFile,
@@ -90,24 +90,24 @@ func CreateDBConnection(logger *slog.Logger, config *Config) (*sql.DB, error) {
 	}
 
 	// Test the connection
-	if err := db.Ping(); err != nil {
+	if err := db.PingContext(ctx); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	logger.Info("Connected to PostgreSQL", "socket_path", config.SocketFilePath, "database", config.Database)
+	logger.InfoContext(ctx, "Connected to PostgreSQL", "socket_path", config.SocketFilePath, "database", config.Database)
 	return db, nil
 }
 
 // CreateSidecarSchema creates the multigres sidecar schema and heartbeat table if they don't exist
-func CreateSidecarSchema(db *sql.DB) error {
-	_, err := db.Exec("CREATE SCHEMA IF NOT EXISTS multigres")
+func CreateSidecarSchema(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx, "CREATE SCHEMA IF NOT EXISTS multigres")
 	if err != nil {
 		return fmt.Errorf("failed to create multigres schema: %w", err)
 	}
 
 	// Create the heartbeat table
-	_, err = db.Exec(`
+	_, err = db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS multigres.heartbeat (
 			shard_id BYTEA PRIMARY KEY,
 			leader_id TEXT NOT NULL,
@@ -119,7 +119,7 @@ func CreateSidecarSchema(db *sql.DB) error {
 	}
 
 	// Create the durability_policy table
-	_, err = db.Exec(`
+	_, err = db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS multigres.durability_policy (
 			id BIGSERIAL PRIMARY KEY,
 			policy_name TEXT NOT NULL,
@@ -139,7 +139,7 @@ func CreateSidecarSchema(db *sql.DB) error {
 	}
 
 	// Create index on is_active for efficient active policy lookups
-	_, err = db.Exec(`
+	_, err = db.ExecContext(ctx, `
 		CREATE INDEX IF NOT EXISTS idx_durability_policy_active
 		ON multigres.durability_policy(is_active)
 		WHERE is_active = true

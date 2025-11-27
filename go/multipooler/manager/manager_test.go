@@ -398,7 +398,7 @@ func TestValidateAndUpdateTerm(t *testing.T) {
 
 			// Start and wait for ready
 			senv := servenv.NewServEnv(viperutil.NewRegistry())
-			go manager.Start(senv)
+			go manager.Start(t.Context(), senv)
 			require.Eventually(t, func() bool {
 				return manager.GetState() == ManagerStateReady
 			}, 5*time.Second, 100*time.Millisecond, "Manager should reach Ready state")

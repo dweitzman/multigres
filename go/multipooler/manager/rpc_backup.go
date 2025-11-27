@@ -234,7 +234,7 @@ func (pm *MultiPoolerManager) reopenPoolerManager(ctx context.Context) error {
 		slog.ErrorContext(ctx, "Failed to close pooler manager after restore", "error", err)
 		return mterrors.Wrap(err, "failed to close pooler manager after restore")
 	}
-	if err := pm.Open(); err != nil {
+	if err := pm.Open(ctx); err != nil {
 		slog.ErrorContext(ctx, "Failed to reopen pooler manager after restore", "error", err)
 		return mterrors.Wrap(err, "failed to reopen pooler manager after restore")
 	}

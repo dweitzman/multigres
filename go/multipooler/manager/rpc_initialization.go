@@ -94,7 +94,7 @@ func (pm *MultiPoolerManager) InitializeEmptyPrimary(ctx context.Context, req *m
 	}
 
 	// 6. Create multigres schema and tables (heartbeat, durability_policy)
-	if err := CreateSidecarSchema(pm.db); err != nil {
+	if err := CreateSidecarSchema(ctx, pm.db); err != nil {
 		return nil, mterrors.Wrap(err, "failed to initialize multigres schema")
 	}
 
@@ -401,7 +401,7 @@ func (pm *MultiPoolerManager) waitForDatabaseConnection(ctx context.Context) err
 		}
 
 		// Try to open the connection
-		if err := pm.connectDB(); err == nil {
+		if err := pm.connectDB(ctx); err == nil {
 			pm.logger.InfoContext(ctx, "Database connection established successfully", "attempts", attempt)
 			return nil
 		} else {

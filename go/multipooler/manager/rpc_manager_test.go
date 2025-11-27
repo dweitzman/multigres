@@ -115,7 +115,7 @@ func TestPrimaryPosition(t *testing.T) {
 
 			// Start and wait for ready
 			senv := servenv.NewServEnv(viperutil.NewRegistry())
-			go manager.Start(senv)
+			go manager.Start(t.Context(), senv)
 			require.Eventually(t, func() bool {
 				return manager.GetState() == ManagerStateReady
 			}, 5*time.Second, 100*time.Millisecond, "Manager should reach Ready state")
@@ -178,7 +178,7 @@ func TestActionLock_MutationMethodsTimeout(t *testing.T) {
 
 	// Start and wait for ready
 	senv := servenv.NewServEnv(viperutil.NewRegistry())
-	go manager.Start(senv)
+	go manager.Start(t.Context(), senv)
 	require.Eventually(t, func() bool {
 		return manager.GetState() == ManagerStateReady
 	}, 5*time.Second, 100*time.Millisecond, "Manager should reach Ready state")
@@ -368,7 +368,7 @@ func setupPromoteTestManager(t *testing.T) (*MultiPoolerManager, sqlmock.Sqlmock
 	t.Cleanup(func() { pm.Close() })
 
 	senv := servenv.NewServEnv(viperutil.NewRegistry())
-	go pm.Start(senv)
+	go pm.Start(t.Context(), senv)
 
 	require.Eventually(t, func() bool {
 		return pm.GetState() == ManagerStateReady
@@ -788,7 +788,7 @@ func TestReplicationStatus(t *testing.T) {
 		t.Cleanup(func() { pm.Close() })
 
 		senv := servenv.NewServEnv(viperutil.NewRegistry())
-		go pm.Start(senv)
+		go pm.Start(t.Context(), senv)
 
 		require.Eventually(t, func() bool {
 			return pm.GetState() == ManagerStateReady
@@ -869,7 +869,7 @@ func TestReplicationStatus(t *testing.T) {
 		t.Cleanup(func() { pm.Close() })
 
 		senv := servenv.NewServEnv(viperutil.NewRegistry())
-		go pm.Start(senv)
+		go pm.Start(t.Context(), senv)
 
 		require.Eventually(t, func() bool {
 			return pm.GetState() == ManagerStateReady
@@ -946,7 +946,7 @@ func TestReplicationStatus(t *testing.T) {
 		t.Cleanup(func() { pm.Close() })
 
 		senv := servenv.NewServEnv(viperutil.NewRegistry())
-		go pm.Start(senv)
+		go pm.Start(t.Context(), senv)
 
 		require.Eventually(t, func() bool {
 			return pm.GetState() == ManagerStateReady
@@ -1012,7 +1012,7 @@ func TestReplicationStatus(t *testing.T) {
 		t.Cleanup(func() { pm.Close() })
 
 		senv := servenv.NewServEnv(viperutil.NewRegistry())
-		go pm.Start(senv)
+		go pm.Start(t.Context(), senv)
 
 		require.Eventually(t, func() bool {
 			return pm.GetState() == ManagerStateReady

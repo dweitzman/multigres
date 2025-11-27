@@ -179,25 +179,25 @@ func NewMultiPoolerManagerWithTimeout(logger *slog.Logger, config *Config, loadT
 }
 
 // connectDB establishes a connection to PostgreSQL (reuses the shared logic)
-func (pm *MultiPoolerManager) connectDB() error {
+func (pm *MultiPoolerManager) connectDB(ctx context.Context) error {
 	if pm.db != nil {
 		return nil // Already connected
 	}
 
-	db, err := CreateDBConnection(pm.logger, pm.config)
+	db, err := CreateDBConnection(ctx, pm.logger, pm.config)
 	if err != nil {
 		return err
 	}
 	pm.db = db
 
 	// Test the connection
-	if err := pm.db.Ping(); err != nil {
+	if err := pm.db.PingContext(ctx); err != nil {
 		pm.db.Close()
 		pm.db = nil
 		return fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	pm.logger.Info("MultiPoolerManager: Connected to PostgreSQL", "socket_path", pm.config.SocketFilePath, "database", pm.config.Database)
+	pm.logger.InfoContext(ctx, "MultiPoolerManager: Connected to PostgreSQL", "socket_path", pm.config.SocketFilePath, "database", pm.config.Database)
 
 	return nil
 }
@@ -209,7 +209,7 @@ func (pm *MultiPoolerManager) connectDB() error {
 //   - The replTracker is being Open/Close with a big hammer. A better approach
 //     is to call MakePrimary / MakeNonPrimary during state transitions.
 //     We can do this, once we introduce the proper state manager.
-func (pm *MultiPoolerManager) Open() error {
+func (pm *MultiPoolerManager) Open(ctx context.Context) error {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 
@@ -217,17 +217,16 @@ func (pm *MultiPoolerManager) Open() error {
 		return nil
 	}
 
-	pm.logger.Info("MultiPoolerManager: opening")
+	pm.logger.InfoContext(ctx, "MultiPoolerManager: opening")
 
-	if err := pm.connectDB(); err != nil {
+	if err := pm.connectDB(ctx); err != nil {
 		return fmt.Errorf("failed to connect to database: %w", err)
 	}
 
 	// Create sidecar schema and start heartbeat before opening query service controller
 	// This ensures the schema exists before queries can be served
 	if pm.replTracker == nil {
-		pm.logger.Info("MultiPoolerManager: Starting database heartbeat")
-		ctx := context.Background()
+		pm.logger.InfoContext(ctx, "MultiPoolerManager: Starting database heartbeat")
 		// TODO: populate shard ID
 		shardID := []byte("0") // default shard ID
 
@@ -242,7 +241,7 @@ func (pm *MultiPoolerManager) Open() error {
 		} else if isPrimary {
 			// Only create the sidecar schema on primary databases
 			pm.logger.InfoContext(ctx, "MultiPoolerManager: Creating sidecar schema on primary database")
-			if err := CreateSidecarSchema(pm.db); err != nil {
+			if err := CreateSidecarSchema(ctx, pm.db); err != nil {
 				return fmt.Errorf("failed to create sidecar schema: %w", err)
 			}
 		} else {
@@ -257,12 +256,12 @@ func (pm *MultiPoolerManager) Open() error {
 
 	// Now open the query service controller
 	if err := pm.qsc.Open(); err != nil {
-		pm.logger.Error("Failed to open query service controller", "error", err)
+		pm.logger.ErrorContext(ctx, "Failed to open query service controller", "error", err)
 		return fmt.Errorf("failed to open controller: %w", err)
 	}
 
 	pm.isOpen = true
-	pm.logger.Info("MultiPoolerManager opened database connection")
+	pm.logger.InfoContext(ctx, "MultiPoolerManager opened database connection")
 
 	return nil
 }
@@ -509,7 +508,7 @@ func (pm *MultiPoolerManager) checkReplicaGuardrails(ctx context.Context) error 
 	}
 
 	// Ensure database connection
-	if err := pm.connectDB(); err != nil {
+	if err := pm.connectDB(ctx); err != nil {
 		pm.logger.ErrorContext(ctx, "Failed to connect to database", "error", err)
 		return mterrors.Wrap(err, "database connection failed")
 	}
@@ -540,7 +539,7 @@ func (pm *MultiPoolerManager) checkPrimaryGuardrails(ctx context.Context) error 
 	}
 
 	// Ensure database connection
-	if err := pm.connectDB(); err != nil {
+	if err := pm.connectDB(ctx); err != nil {
 		pm.logger.ErrorContext(ctx, "Failed to connect to database", "error", err)
 		return mterrors.Wrap(err, "database connection failed")
 	}
@@ -933,7 +932,7 @@ func (pm *MultiPoolerManager) restartPostgresAsStandby(ctx context.Context, stat
 		"message", resp.Message)
 
 	// Reopen the manager
-	if err := pm.Open(); err != nil {
+	if err := pm.Open(ctx); err != nil {
 		pm.logger.ErrorContext(ctx, "Failed to reopen query service controller after restart", "error", err)
 		return mterrors.Wrap(err, "failed to reopen query service controller")
 	}
@@ -1289,7 +1288,7 @@ func (pm *MultiPoolerManager) ReplicationLag(ctx context.Context) (time.Duration
 }
 
 // Start initializes the MultiPoolerManager
-func (pm *MultiPoolerManager) Start(senv *servenv.ServEnv) {
+func (pm *MultiPoolerManager) Start(ctx context.Context, senv *servenv.ServEnv) {
 	// Start loading multipooler record from topology asynchronously
 	go pm.loadMultiPoolerFromTopo()
 	// Start loading consensus term from local disk asynchronously (only if consensus is enabled)
@@ -1305,16 +1304,16 @@ func (pm *MultiPoolerManager) Start(senv *servenv.ServEnv) {
 		PgPort:         pm.config.PgPort,
 	}
 	if err := pm.qsc.InitDBConfig(dbConfig); err != nil {
-		pm.logger.Error("Failed to initialize query service controller", "error", err)
+		pm.logger.ErrorContext(ctx, "Failed to initialize query service controller", "error", err)
 	} else {
-		pm.logger.Info("Initialized query service controller with database config")
+		pm.logger.InfoContext(ctx, "Initialized query service controller with database config")
 	}
 
 	// Open the database connections and start background operations
 	// This calls connectDB() internally and opens the query service controller
 	// TODO: This should be managed by a proper state manager (like tm_state.go)
-	if err := pm.Open(); err != nil {
-		pm.logger.Error("Failed to open manager during startup", "error", err)
+	if err := pm.Open(ctx); err != nil {
+		pm.logger.ErrorContext(ctx, "Failed to open manager during startup", "error", err)
 		// Don't fail startup if Open fails - will retry on demand
 	}
 
