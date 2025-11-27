@@ -23,8 +23,9 @@ import (
 )
 
 func createSocketPair(t *testing.T) (net.Listener, net.Conn, net.Conn) {
+	ctx := t.Context()
 	// Create a listener.
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
 	assert.NoError(t, err)
 	addr := listener.Addr().String()
 
@@ -34,7 +35,7 @@ func createSocketPair(t *testing.T) (net.Listener, net.Conn, net.Conn) {
 	var clientConn net.Conn
 	wg.Go(func() {
 		var err error
-		clientConn, err = net.Dial("tcp", addr)
+		clientConn, err = (&net.Dialer{}).DialContext(ctx, "tcp", addr)
 		assert.NoError(t, err)
 	})
 

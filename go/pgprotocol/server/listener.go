@@ -71,12 +71,12 @@ type ListenerConfig struct {
 }
 
 // NewListener creates a new PostgreSQL protocol listener.
-func NewListener(config ListenerConfig) (*Listener, error) {
+func NewListener(ctx context.Context, config ListenerConfig) (*Listener, error) {
 	if config.Handler == nil {
 		return nil, fmt.Errorf("handler is required")
 	}
 
-	netListener, err := net.Listen("tcp", config.Address)
+	netListener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", config.Address)
 	if err != nil {
 		return nil, fmt.Errorf("failed to listen on %s: %w", config.Address, err)
 	}
@@ -86,7 +86,7 @@ func NewListener(config ListenerConfig) (*Listener, error) {
 		logger = slog.Default()
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 
 	l := &Listener{
 		listener: netListener,
@@ -109,7 +109,7 @@ func NewListener(config ListenerConfig) (*Listener, error) {
 	}
 	l.bufPool = bufpool.New(16*1024, 64*1024*1024) // 16 KB to 64 MB
 
-	logger.Info("PostgreSQL listener started", "address", config.Address)
+	logger.InfoContext(ctx, "PostgreSQL listener started", "address", config.Address)
 
 	return l, nil
 }

@@ -17,6 +17,7 @@
 package servenv
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -168,7 +169,7 @@ func (se *ServEnv) SetListeningURL(u url.URL) {
 
 // PopulateListeningURL sets the listening URL based on hostname and port
 func (se *ServEnv) PopulateListeningURL(port int32) {
-	host, err := netutil.FullyQualifiedHostname()
+	host, err := netutil.FullyQualifiedHostname(context.TODO())
 	if err != nil {
 		slog.Warn("Failed to get fully qualified hostname, falling back to simple hostname",
 			"error", err,

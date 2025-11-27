@@ -255,7 +255,7 @@ func (pm *MultiPoolerManager) Open(ctx context.Context) error {
 	}
 
 	// Now open the query service controller
-	if err := pm.qsc.Open(); err != nil {
+	if err := pm.qsc.Open(ctx); err != nil {
 		pm.logger.ErrorContext(ctx, "Failed to open query service controller", "error", err)
 		return fmt.Errorf("failed to open controller: %w", err)
 	}

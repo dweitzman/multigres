@@ -164,7 +164,7 @@ func (p *localProvisioner) provisionEtcd(ctx context.Context, req *provisioner.P
 	// Check etcd version
 	expectedVersion, ok := etcdConfig["version"].(string)
 	if ok && expectedVersion != "" {
-		if err := p.checkEtcdVersion(etcdBinary, expectedVersion); err != nil {
+		if err := p.checkEtcdVersion(ctx, etcdBinary, expectedVersion); err != nil {
 			return nil, fmt.Errorf("etcd version check failed: %w", err)
 		}
 	}
@@ -288,9 +288,9 @@ func (p *localProvisioner) findBinary(name string, serviceConfig map[string]any)
 }
 
 // checkEtcdVersion verifies that the etcd binary major version matches expected version
-func (p *localProvisioner) checkEtcdVersion(binaryPath, expectedVersion string) error {
+func (p *localProvisioner) checkEtcdVersion(ctx context.Context, binaryPath, expectedVersion string) error {
 	// Run etcd --version to get version info
-	cmd := exec.Command(binaryPath, "--version")
+	cmd := exec.CommandContext(ctx, binaryPath, "--version")
 	output, err := cmd.Output()
 	if err != nil {
 		return fmt.Errorf("failed to get etcd version: %w", err)

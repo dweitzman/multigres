@@ -156,7 +156,7 @@ func (mg *MultiGateway) Init() {
 	pgHandler := handler.NewMultiGatewayHandler(mg.executor, logger)
 	pgAddr := fmt.Sprintf("localhost:%d", mg.pgPort.Get())
 	var err error
-	mg.pgListener, err = server.NewListener(server.ListenerConfig{
+	mg.pgListener, err = server.NewListener(context.TODO(), server.ListenerConfig{
 		Address: pgAddr,
 		Handler: pgHandler,
 		Logger:  logger,

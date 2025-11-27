@@ -19,6 +19,7 @@ package netutil
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -55,7 +56,7 @@ func JoinHostPort(host string, port int32) string {
 }
 
 // FullyQualifiedHostname returns the FQDN of the machine.
-func FullyQualifiedHostname() (string, error) {
+func FullyQualifiedHostname(ctx context.Context) (string, error) {
 	// The machine hostname (which is also returned by os.Hostname()) may not be
 	// set to the FQDN, but only the first part of it e.g. "localhost" instead of
 	// "localhost.localdomain".
@@ -64,13 +65,14 @@ func FullyQualifiedHostname() (string, error) {
 	// 1. Get the machine hostname. Example: localhost
 	hostname, err := os.Hostname()
 	if err != nil {
-		return "", fmt.Errorf("FullyQualifiedHostname: failed to retrieve the hostname of this machine: %v", err)
+		return "", fmt.Errorf("FullyQualifiedHostname: failed to retrieve the hostname of this machine: %w", err)
 	}
 
 	// 2. Look up the IP address for that hostname. Example: 127.0.0.1
-	ips, err := net.LookupHost(hostname)
+	resolver := net.DefaultResolver
+	ips, err := resolver.LookupHost(ctx, hostname)
 	if err != nil {
-		return "", fmt.Errorf("FullyQualifiedHostname: failed to lookup the IP of this machine's hostname (%v): %v", hostname, err)
+		return "", fmt.Errorf("FullyQualifiedHostname: failed to lookup the IP of this machine's hostname (%v): %w", hostname, err)
 	}
 	if len(ips) == 0 {
 		return "", fmt.Errorf("FullyQualifiedHostname: lookup of the IP of this machine's hostname (%v) did not return any IP address", hostname)
@@ -101,9 +103,9 @@ func FullyQualifiedHostname() (string, error) {
 	}
 
 	// 3. Reverse lookup the IP. Example: localhost.localdomain
-	resolvedHostnames, err := net.LookupAddr(localIP)
+	resolvedHostnames, err := resolver.LookupAddr(ctx, localIP)
 	if err != nil {
-		return "", fmt.Errorf("FullyQualifiedHostname: failed to reverse lookup this machine's local IP (%v): %v", localIP, err)
+		return "", fmt.Errorf("FullyQualifiedHostname: failed to reverse lookup this machine's local IP (%v): %w", localIP, err)
 	}
 	if len(resolvedHostnames) == 0 {
 		return "", fmt.Errorf("FullyQualifiedHostname: reverse lookup of this machine's local IP (%v) did not return any hostnames", localIP)
@@ -119,17 +121,19 @@ func FullyQualifiedHostname() (string, error) {
 }
 
 // FullyQualifiedHostnameOrPanic is the same as FullyQualifiedHostname
-// but panics in case of an error.
+// but panics in case of an error. Uses context.TODO() since this is
+// typically called during initialization.
 func FullyQualifiedHostnameOrPanic() string {
-	hostname, err := FullyQualifiedHostname()
+	hostname, err := FullyQualifiedHostname(context.TODO())
 	if err != nil {
 		panic(err)
 	}
 	return hostname
 }
 
-func dnsLookup(host string) ([]net.IP, error) {
-	addrs, err := net.LookupHost(host)
+func dnsLookup(ctx context.Context, host string) ([]net.IP, error) {
+	resolver := net.DefaultResolver
+	addrs, err := resolver.LookupHost(ctx, host)
 	if err != nil {
 		return nil, fmt.Errorf("error looking up dns name [%v]: (%v)", host, err)
 	}
@@ -148,18 +152,18 @@ func dnsLookup(host string) ([]net.IP, error) {
 //	tracking changes in the DNS resolution of a target dns name
 //	returns true if the DNS name resolution has changed
 //	If there is a lookup problem, we pretend nothing has changed
-func DNSTracker(host string) func() (bool, error) {
+func DNSTracker(ctx context.Context, host string) func(context.Context) (bool, error) {
 	dnsName := host
 	var addrs []net.IP
 	if dnsName != "" {
-		addrs, _ = dnsLookup(dnsName)
+		addrs, _ = dnsLookup(ctx, dnsName)
 	}
 
-	return func() (bool, error) {
+	return func(ctx context.Context) (bool, error) {
 		if dnsName == "" {
 			return false, nil
 		}
-		newaddrs, err := dnsLookup(dnsName)
+		newaddrs, err := dnsLookup(ctx, dnsName)
 		if err != nil {
 			return false, err
 		}

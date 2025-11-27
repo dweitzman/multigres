@@ -61,7 +61,7 @@ type PoolerController interface {
 
 	// Open opens the database connection.
 	// This is called by MultiPoolerManager after InitDBConfig.
-	Open() error
+	Open(ctx context.Context) error
 
 	// SetServingType transitions the query service to the required serving state.
 	//
@@ -89,11 +89,11 @@ type PoolerController interface {
 	//   - Database connection is alive
 	//   - Controller is initialized
 	//   - No internal errors
-	IsHealthy() error
+	IsHealthy(ctx context.Context) error
 
 	// Executor returns the query executor for handling queries.
 	// Returns an error if the controller is not initialized or not opened.
-	Executor() (queryservice.QueryService, error)
+	Executor(ctx context.Context) (queryservice.QueryService, error)
 
 	// RegisterGRPCServices registers gRPC services with the server.
 	// This is called by MultiPoolerManager during startup.

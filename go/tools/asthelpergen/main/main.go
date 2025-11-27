@@ -15,6 +15,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
 	"strings"
@@ -62,8 +63,9 @@ func main() {
 	}
 
 	// Either verify or save the generated files
+	ctx := context.Background()
 	if verify {
-		errors := asthelpergen.VerifyFilesOnDisk(result)
+		errors := asthelpergen.VerifyFilesOnDisk(ctx, result)
 		if len(errors) > 0 {
 			for _, err := range errors {
 				log.Println(err)
@@ -73,7 +75,7 @@ func main() {
 		log.Printf("%d files OK", len(result))
 	} else {
 		for fullPath, file := range result {
-			if err := internal.SaveJenFile(fullPath, file); err != nil {
+			if err := internal.SaveJenFile(ctx, fullPath, file); err != nil {
 				log.Fatal(err)
 			}
 		}

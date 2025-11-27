@@ -84,12 +84,13 @@ func TestNormalizeIP(t *testing.T) {
 }
 
 func TestDNSTracker(t *testing.T) {
-	refresh := DNSTracker("localhost")
-	_, err := refresh()
+	ctx := t.Context()
+	refresh := DNSTracker(ctx, "localhost")
+	_, err := refresh(ctx)
 	assert.NoError(t, err)
 
-	refresh = DNSTracker("")
-	val, err := refresh()
+	refresh = DNSTracker(ctx, "")
+	val, err := refresh(ctx)
 	assert.NoError(t, err)
 	assert.False(t, val, "DNS name resolution should not have changed")
 }

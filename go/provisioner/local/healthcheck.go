@@ -54,7 +54,7 @@ func (p *localProvisioner) waitForServiceReady(parentCtx context.Context, servic
 		allPortsReady := true
 		for _, port := range servicePorts {
 			address := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-			conn, err := net.DialTimeout("tcp", address, 2*time.Second)
+			conn, err := (&net.Dialer{Timeout: 2 * time.Second}).DialContext(ctx, "tcp", address)
 			if err != nil {
 				allPortsReady = false
 				break // This port not ready yet
@@ -199,13 +199,13 @@ func (p *localProvisioner) validateProcessRunning(pid int) error {
 }
 
 // checkPortConflict checks if a port is already in use by another process
-func (p *localProvisioner) checkPortConflict(port int, serviceName, portName string) error {
+func (p *localProvisioner) checkPortConflict(ctx context.Context, port int, serviceName, portName string) error {
 	if port <= 0 {
 		return nil // Skip invalid ports
 	}
 
 	address := fmt.Sprintf("localhost:%d", port)
-	conn, err := net.DialTimeout("tcp", address, 1*time.Second)
+	conn, err := (&net.Dialer{Timeout: 1 * time.Second}).DialContext(ctx, "tcp", address)
 	if err != nil {
 		// Port is not in use, this is good
 		return nil

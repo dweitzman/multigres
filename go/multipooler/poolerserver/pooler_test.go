@@ -32,7 +32,7 @@ func TestNewMultiPooler(t *testing.T) {
 	assert.NotNil(t, pooler)
 	assert.Equal(t, logger, pooler.logger)
 	// Executor should be nil until InitDBConfig is called
-	exec, err := pooler.Executor()
+	exec, err := pooler.Executor(t.Context())
 	assert.Error(t, err)
 	assert.Nil(t, exec)
 }
@@ -84,23 +84,25 @@ func TestExecuteQuery_InvalidInput(t *testing.T) {
 		PgPort:         5432,
 	}
 
+	ctx := t.Context()
+
 	// Initialize the config
 	err := pooler.InitDBConfig(dbConfig)
 	assert.NoError(t, err)
 
 	// Try to open - this should fail because the socket doesn't exist
-	err = pooler.Open()
+	err = pooler.Open(ctx)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to ping database")
 
 	// Executor should fail since the database is not opened
-	exec, err := pooler.Executor()
+	exec, err := pooler.Executor(ctx)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "executor not ready")
 	assert.Nil(t, exec)
 
 	// IsHealthy should fail since the database connection is not opened
-	err = pooler.IsHealthy()
+	err = pooler.IsHealthy(ctx)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "database connection not initialized")
 }

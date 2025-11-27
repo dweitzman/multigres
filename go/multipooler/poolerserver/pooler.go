@@ -95,7 +95,7 @@ func (s *QueryPoolerServer) InitDBConfig(dbConfig *DBConfig) error {
 
 // Open opens the database connection via the executor.
 // Following Vitess pattern: manager calls Open explicitly.
-func (s *QueryPoolerServer) Open() error {
+func (s *QueryPoolerServer) Open(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -103,7 +103,7 @@ func (s *QueryPoolerServer) Open() error {
 		return fmt.Errorf("executor not initialized - call InitDBConfig first")
 	}
 
-	return s.executor.Open()
+	return s.executor.Open(ctx)
 }
 
 // SetServingType transitions the serving state.
@@ -135,7 +135,7 @@ func (s *QueryPoolerServer) IsServing() bool {
 
 // IsHealthy checks if the controller is healthy.
 // Implements PoolerController interface.
-func (s *QueryPoolerServer) IsHealthy() error {
+func (s *QueryPoolerServer) IsHealthy(ctx context.Context) error {
 	s.mu.Lock()
 	exec := s.executor
 	s.mu.Unlock()
@@ -144,7 +144,7 @@ func (s *QueryPoolerServer) IsHealthy() error {
 		return fmt.Errorf("executor not initialized")
 	}
 
-	return exec.IsHealthy()
+	return exec.IsHealthy(ctx)
 }
 
 // RegisterGRPCServices registers gRPC services (called by manager during startup).
@@ -163,16 +163,14 @@ func (s *QueryPoolerServer) RegisterGRPCServices() {
 //   - Open()
 //   - Register()
 //   - SetServingType()
-func (s *QueryPoolerServer) StartServiceForTests(dbConfig *DBConfig) error {
+func (s *QueryPoolerServer) StartServiceForTests(ctx context.Context, dbConfig *DBConfig) error {
 	if err := s.InitDBConfig(dbConfig); err != nil {
 		return err
 	}
-	if err := s.Open(); err != nil {
+	if err := s.Open(ctx); err != nil {
 		return err
 	}
 	// Set to SERVING state (tests assume the pooler is ready to serve)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 	return s.SetServingType(ctx, clustermetadatapb.PoolerServingStatus_SERVING)
 }
 
@@ -194,7 +192,7 @@ func (s *QueryPoolerServer) Close() error {
 // Executor returns the executor instance for use by gRPC service handlers.
 // Implements PoolerController interface.
 // Returns error if the pooler is not opened or unhealthy.
-func (s *QueryPoolerServer) Executor() (queryservice.QueryService, error) {
+func (s *QueryPoolerServer) Executor(ctx context.Context) (queryservice.QueryService, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -203,7 +201,7 @@ func (s *QueryPoolerServer) Executor() (queryservice.QueryService, error) {
 	}
 
 	// Check if the executor is healthy (db connection is opened)
-	if err := s.executor.IsHealthy(); err != nil {
+	if err := s.executor.IsHealthy(ctx); err != nil {
 		return nil, fmt.Errorf("executor not ready: %w", err)
 	}
 

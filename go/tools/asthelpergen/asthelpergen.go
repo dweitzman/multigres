@@ -34,6 +34,7 @@ package asthelpergen
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"go/types"
 	"os"
@@ -220,7 +221,7 @@ func (gen *astHelperGen) GenerateCode() (map[string]*jen.File, error) {
 
 // VerifyFilesOnDisk compares the generated results from the codegen against the files that
 // currently exist on disk and returns any mismatches
-func VerifyFilesOnDisk(result map[string]*jen.File) (errors []error) {
+func VerifyFilesOnDisk(ctx context.Context, result map[string]*jen.File) (errors []error) {
 	for fullPath, file := range result {
 		existing, err := os.ReadFile(fullPath)
 		if err != nil {
@@ -228,7 +229,7 @@ func VerifyFilesOnDisk(result map[string]*jen.File) (errors []error) {
 			continue
 		}
 
-		genFile, err := internal.FormatJenFile(file)
+		genFile, err := internal.FormatJenFile(ctx, file)
 		if err != nil {
 			errors = append(errors, fmt.Errorf("goimport error: %w", err))
 			continue

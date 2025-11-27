@@ -15,6 +15,7 @@
 package local
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -330,7 +331,7 @@ func (p *localProvisioner) findRunningDbService(serviceName, databaseName, cell 
 	// Check for port conflicts with other processes using cell-specific config
 	expectedPorts := p.getExpectedPortsForDbService(serviceName, cell)
 	for portName, port := range expectedPorts {
-		if err := p.checkPortConflict(port, serviceName, portName); err != nil {
+		if err := p.checkPortConflict(context.TODO(), port, serviceName, portName); err != nil {
 			return nil, err
 		}
 	}
@@ -438,7 +439,7 @@ func (p *localProvisioner) findRunningEtcdService() (*LocalProvisionedService, e
 	// Check for port conflicts with other processes
 	expectedPorts := p.getExpectedPortsForService("etcd")
 	for portName, port := range expectedPorts {
-		if err := p.checkPortConflict(port, "etcd", portName); err != nil {
+		if err := p.checkPortConflict(context.TODO(), port, "etcd", portName); err != nil {
 			return nil, err
 		}
 	}
@@ -468,7 +469,7 @@ func (p *localProvisioner) findRunningService(serviceName string) (*LocalProvisi
 	// Check for port conflicts with other processes
 	expectedPorts := p.getExpectedPortsForService(serviceName)
 	for portName, port := range expectedPorts {
-		if err := p.checkPortConflict(port, serviceName, portName); err != nil {
+		if err := p.checkPortConflict(context.TODO(), port, serviceName, portName); err != nil {
 			return nil, err
 		}
 	}

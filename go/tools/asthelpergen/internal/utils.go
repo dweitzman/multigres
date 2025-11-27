@@ -15,6 +15,7 @@
 package internal
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -45,7 +46,7 @@ func Title(s string) string {
 
 // FormatJenFile formats the given *jen.File with goimports and return a slice
 // of byte corresponding to the formatted file.
-func FormatJenFile(file *jen.File) ([]byte, error) {
+func FormatJenFile(ctx context.Context, file *jen.File) ([]byte, error) {
 	tempFile, err := os.CreateTemp("/tmp", "*.go")
 	if err != nil {
 		return nil, err
@@ -57,7 +58,7 @@ func FormatJenFile(file *jen.File) ([]byte, error) {
 		return nil, err
 	}
 
-	err = GoImports(tempFile.Name())
+	err = GoImports(ctx, tempFile.Name())
 	if err != nil {
 		return nil, err
 	}
@@ -65,16 +66,16 @@ func FormatJenFile(file *jen.File) ([]byte, error) {
 }
 
 // GoImports runs gofmt and goimports on the given file
-func GoImports(fullPath string) error {
+func GoImports(ctx context.Context, fullPath string) error {
 	// Run gofmt with simplification flag
-	cmd := exec.Command("gofmt", "-s", "-w", fullPath)
+	cmd := exec.CommandContext(ctx, "gofmt", "-s", "-w", fullPath)
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return err
 	}
 
 	// Run goimports
-	cmd = exec.Command("go", "tool", "goimports", "-local", "github.com/supabase/multigres", "-w", fullPath)
+	cmd = exec.CommandContext(ctx, "go", "tool", "goimports", "-local", "github.com/supabase/multigres", "-w", fullPath)
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return err
@@ -84,11 +85,11 @@ func GoImports(fullPath string) error {
 }
 
 // SaveJenFile saves a jen.File to disk and formats it
-func SaveJenFile(fullPath string, file *jen.File) error {
+func SaveJenFile(ctx context.Context, fullPath string, file *jen.File) error {
 	if err := file.Save(fullPath); err != nil {
 		return err
 	}
-	if err := GoImports(fullPath); err != nil {
+	if err := GoImports(ctx, fullPath); err != nil {
 		return err
 	}
 	log.Printf("saved '%s'", fullPath)

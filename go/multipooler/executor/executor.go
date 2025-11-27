@@ -57,12 +57,12 @@ func NewExecutor(logger *slog.Logger, dbConfig *DBConfig) *Executor {
 }
 
 // Open creates the database connection.
-func (e *Executor) Open() error {
+func (e *Executor) Open(ctx context.Context) error {
 	if e.isOpen.Load() {
 		return nil
 	}
 
-	e.logger.Info("Executor: opening")
+	e.logger.InfoContext(ctx, "Executor: opening")
 
 	if e.dbConfig == nil {
 		return fmt.Errorf("database config not set")
@@ -76,7 +76,7 @@ func (e *Executor) Open() error {
 	dsn := fmt.Sprintf("user=postgres dbname=%s host=%s port=%s sslmode=disable",
 		e.dbConfig.Database, socketDir, port)
 
-	e.logger.Info("Executor: Unix socket connection",
+	e.logger.InfoContext(ctx, "Executor: Unix socket connection",
 		"pooler_dir", e.dbConfig.PoolerDir,
 		"socket_dir", socketDir,
 		"pg_port", e.dbConfig.PgPort)
@@ -87,14 +87,14 @@ func (e *Executor) Open() error {
 	}
 
 	// Test the connection
-	if err := db.Ping(); err != nil {
+	if err := db.PingContext(ctx); err != nil {
 		db.Close()
 		return fmt.Errorf("failed to ping database: %w", err)
 	}
 
 	e.db = db
 	e.isOpen.Store(true)
-	e.logger.Info("Executor opened database connection")
+	e.logger.InfoContext(ctx, "Executor opened database connection")
 
 	return nil
 }
@@ -165,11 +165,11 @@ func (e *Executor) Close(ctx context.Context) error {
 }
 
 // IsHealthy checks if the executor is healthy and can serve queries.
-func (e *Executor) IsHealthy() error {
+func (e *Executor) IsHealthy(ctx context.Context) error {
 	if e.db == nil {
 		return fmt.Errorf("database connection not initialized")
 	}
-	if err := e.db.Ping(); err != nil {
+	if err := e.db.PingContext(ctx); err != nil {
 		return fmt.Errorf("database ping failed: %w", err)
 	}
 	return nil

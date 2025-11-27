@@ -111,7 +111,7 @@ func (sv *ServEnv) populateHostname() {
 	}
 
 	// Otherwise, auto-detect hostname
-	host, err := netutil.FullyQualifiedHostname()
+	host, err := netutil.FullyQualifiedHostname(context.TODO())
 	if err != nil {
 		slog.Warn("Failed to get fully qualified hostname, falling back to simple hostname",
 			"error", err,
