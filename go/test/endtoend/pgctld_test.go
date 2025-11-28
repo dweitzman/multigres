@@ -15,6 +15,7 @@
 package endtoend
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -32,6 +33,7 @@ import (
 	"github.com/multigres/multigres/go/cmd/pgctld/testutil"
 	"github.com/multigres/multigres/go/pgctld"
 	"github.com/multigres/multigres/go/test/utils"
+	"github.com/multigres/multigres/go/tools/executil"
 )
 
 // setupTestEnv sets up environment variables for PostgreSQL tests
@@ -170,7 +172,9 @@ timeout: 30
 		require.NoError(t, err)
 		defer func() {
 			if serverCmd.Process != nil {
-				_ = serverCmd.Process.Kill()
+				termCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+				_ = executil.TerminateProcess(termCtx, serverCmd.Process)
+				cancel()
 				_ = serverCmd.Wait()
 			}
 		}()
@@ -1137,7 +1141,9 @@ func TestOrphanDetectionWithRealPostgreSQL(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, pgProcess.Signal(syscall.Signal(0)))
 
-	// Kill the pgctld server subprocess abruptly
+	// Kill the pgctld server subprocess abruptly (SIGKILL, no SIGTERM)
+	// This simulates a crash scenario for orphan detection testing
+	//nolint:gocritic // intentionally using Kill() to test orphan detection
 	require.NoError(t, serverCmd.Process.Kill())
 	_, _ = serverCmd.Process.Wait()
 

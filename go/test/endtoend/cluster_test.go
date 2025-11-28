@@ -23,7 +23,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -38,6 +37,7 @@ import (
 	pb "github.com/multigres/multigres/go/pb/pgctldservice"
 	"github.com/multigres/multigres/go/provisioner/local"
 	"github.com/multigres/multigres/go/test/utils"
+	"github.com/multigres/multigres/go/tools/executil"
 	"github.com/multigres/multigres/go/tools/pathutil"
 	"github.com/multigres/multigres/go/tools/stringutil"
 
@@ -108,24 +108,16 @@ func getTestPortConfig(t *testing.T, numZones int) *testPortConfig {
 	return config
 }
 
-// killProcessByPID kills a process by PID using kill -9
+// killProcessByPID kills a process by PID using graceful SIGTERM -> SIGKILL termination
 func killProcessByPID(pid int) error {
 	if pid <= 0 {
 		return fmt.Errorf("invalid PID: %d", pid)
 	}
 
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return fmt.Errorf("failed to find process %d: %w", pid, err)
-	}
-
-	// Use kill -9 (SIGKILL) to forcefully terminate
-	err = process.Signal(syscall.SIGKILL)
-	if err != nil {
-		return fmt.Errorf("failed to kill process %d: %w", pid, err)
-	}
-
-	return nil
+	// Use executil for graceful SIGTERM -> SIGKILL termination (1s grace period)
+	termCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	return executil.TerminatePID(termCtx, pid)
 }
 
 // cleanupTestProcesses kills all processes that were started during the test

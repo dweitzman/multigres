@@ -19,10 +19,11 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/multigres/multigres/go/tools/executil"
 )
 
 // PgHost represents a PostgreSQL host configuration for pgBackRest
@@ -163,7 +164,7 @@ func StanzaCreate(ctx context.Context, stanzaName, configPath, repoPath string) 
 	defer cancel()
 
 	// Build pgbackrest command
-	cmd := exec.CommandContext(ctx, "pgbackrest",
+	cmd := executil.Command(ctx, "pgbackrest",
 		"--stanza="+stanzaName,
 		"--config="+configPath,
 		"--repo1-path="+repoPath,

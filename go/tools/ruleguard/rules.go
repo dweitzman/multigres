@@ -55,3 +55,24 @@ func disallowMetricsConstructorArgs(m dsl.Matcher) {
 				m["params"].Text != "()").
 		Report("NewMetrics() in metrics.go should take no arguments to maintain isolation from service code. Return (*Metrics, error) and let caller handle logging.")
 }
+
+// disallowDirectExecCommandContext enforces use of executil.Command() for
+// graceful termination support, proper environment variable handling, and
+// trace propagation.
+func disallowDirectExecCommandContext(m dsl.Matcher) {
+	m.Import("os/exec")
+
+	m.Match(`exec.CommandContext($*_)`).
+		Where(!m.File().PkgPath.Matches(`tools/executil$`)).
+		Report("use executil.Command() instead of exec.CommandContext() for graceful termination, proper env handling, and trace propagation")
+}
+
+// disallowDirectProcessTermination enforces use of executil.TerminateProcess()
+// or executil.TerminatePID() for consistent SIGTERM -> SIGKILL termination.
+func disallowDirectProcessTermination(m dsl.Matcher) {
+	m.Import("syscall")
+
+	m.Match(`$p.Signal(syscall.SIGTERM)`, `$p.Signal(syscall.SIGKILL)`, `$p.Kill()`).
+		Where(!m.File().PkgPath.Matches(`tools/executil$`)).
+		Report("use executil.TerminateProcess() or executil.TerminatePID() for graceful SIGTERM -> SIGKILL termination")
+}

@@ -38,6 +38,7 @@ import (
 	"github.com/multigres/multigres/go/provisioner/local/pgbackrest"
 	"github.com/multigres/multigres/go/test/endtoend"
 	"github.com/multigres/multigres/go/test/utils"
+	"github.com/multigres/multigres/go/tools/executil"
 	"github.com/multigres/multigres/go/tools/pathutil"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -123,7 +124,9 @@ func cleanupSharedTestSetup() {
 
 	// Stop etcd
 	if sharedTestSetup.EtcdCmd != nil && sharedTestSetup.EtcdCmd.Process != nil {
-		_ = sharedTestSetup.EtcdCmd.Process.Kill()
+		termCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		_ = executil.TerminateProcess(termCtx, sharedTestSetup.EtcdCmd.Process)
+		cancel()
 		_ = sharedTestSetup.EtcdCmd.Wait()
 	}
 
@@ -337,7 +340,9 @@ func (p *ProcessInstance) Stop() {
 	}
 
 	// Then kill the process
-	_ = p.Process.Process.Kill()
+	termCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	_ = executil.TerminateProcess(termCtx, p.Process.Process)
+	cancel()
 	_ = p.Process.Wait()
 }
 
@@ -955,7 +960,7 @@ func setupStandbyReplication(t *testing.T, primaryPgctld *ProcessInstance, stand
 	backupCtx, backupCancel := context.WithTimeout(t.Context(), 5*time.Minute)
 	defer backupCancel()
 
-	backupCmd := exec.CommandContext(backupCtx, "pgbackrest",
+	backupCmd := executil.Command(backupCtx, "pgbackrest",
 		"--stanza="+stanzaName,
 		"--config="+primaryConfigPath,
 		"--repo1-path="+repoPath,
@@ -1009,7 +1014,7 @@ func setupStandbyReplication(t *testing.T, primaryPgctld *ProcessInstance, stand
 	restoreCtx, restoreCancel := context.WithTimeout(t.Context(), 5*time.Minute)
 	defer restoreCancel()
 
-	restoreCmd := exec.CommandContext(restoreCtx, "pgbackrest",
+	restoreCmd := executil.Command(restoreCtx, "pgbackrest",
 		"--stanza="+stanzaName,
 		"--config="+standbyConfigPath,
 		"--repo1-path="+repoPath,

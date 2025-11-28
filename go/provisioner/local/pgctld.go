@@ -18,15 +18,14 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"time"
 
 	"google.golang.org/grpc"
 
 	pb "github.com/multigres/multigres/go/pb/pgctldservice"
 	"github.com/multigres/multigres/go/provisioner/local/ports"
+	"github.com/multigres/multigres/go/tools/executil"
 	"github.com/multigres/multigres/go/tools/grpccommon"
-	"github.com/multigres/multigres/go/tools/telemetry"
 )
 
 // startPostgreSQLViaPgctld starts PostgreSQL via pgctld gRPC and verifies it's running
@@ -255,9 +254,9 @@ func (p *localProvisioner) provisionPgctld(ctx context.Context, dbName, tableGro
 		initArgs = append(initArgs, "--pg-pwfile", pgPwfile)
 	}
 
-	initCmd := exec.CommandContext(ctx, pgctldBinary, initArgs...)
+	initCmd := executil.Command(ctx, pgctldBinary, initArgs...).WithClientSpan()
 
-	if err := telemetry.RunCmd(ctx, initCmd, true /* clientSpan */); err != nil {
+	if err := initCmd.Run(); err != nil {
 		return nil, fmt.Errorf("failed to initialize pgctld data directory: %w", err)
 	}
 	fmt.Printf(" initialized ✓\n")
@@ -282,9 +281,9 @@ func (p *localProvisioner) provisionPgctld(ctx context.Context, dbName, tableGro
 		serverArgs = append(serverArgs, "--grpc-socket-file", socketFile)
 	}
 
-	pgctldCmd := exec.CommandContext(ctx, pgctldBinary, serverArgs...)
+	pgctldCmd := executil.Command(ctx, pgctldBinary, serverArgs...)
 
-	if err := telemetry.StartCmd(ctx, pgctldCmd); err != nil {
+	if err := pgctldCmd.Start(); err != nil {
 		return nil, fmt.Errorf("failed to start pgctld server: %w", err)
 	}
 

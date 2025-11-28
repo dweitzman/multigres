@@ -38,6 +38,7 @@ import (
 	"github.com/multigres/multigres/go/multiorch/actions"
 	"github.com/multigres/multigres/go/provisioner/local/pgbackrest"
 	"github.com/multigres/multigres/go/test/utils"
+	"github.com/multigres/multigres/go/tools/executil"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
@@ -49,14 +50,16 @@ import (
 
 // nodeInstance represents a multipooler node for bootstrap testing
 type nodeInstance struct {
-	name           string
-	cell           string
-	grpcPort       int
-	pgPort         int
-	pgctldGrpcPort int
-	dataDir        string
-	pgctldProcess  *exec.Cmd
-	multipoolerCmd *exec.Cmd
+	name              string
+	cell              string
+	grpcPort          int
+	pgPort            int
+	pgctldGrpcPort    int
+	dataDir           string
+	pgctldCmd         *executil.Cmd
+	pgctldCancel      context.CancelFunc
+	multipoolerCmd    *executil.Cmd
+	multipoolerCancel context.CancelFunc
 }
 
 func TestBootstrapInitialization(t *testing.T) {
@@ -316,18 +319,15 @@ func createEmptyNode(t *testing.T, baseDir, cell, shard, database string, index 
 	pgPort := utils.GetFreePort(t)
 	grpcPort := utils.GetFreePort(t)
 
-	// Start pgctld server
+	// Start pgctld server with cancellable context for graceful termination
 	logFile := filepath.Join(dataDir, "pgctld.log")
-	pgctldCmd := exec.Command("pgctld", "server",
+	pgctldCtx, pgctldCancel := context.WithCancel(context.Background())
+	pgctldCmd := executil.Command(pgctldCtx, "pgctld", "server",
 		"--pooler-dir", dataDir,
 		"--grpc-port", fmt.Sprintf("%d", pgctldGrpcPort),
 		"--pg-port", fmt.Sprintf("%d", pgPort),
-		"--log-output", logFile)
-
-	// Set MULTIGRES_TESTDATA_DIR for directory-deletion triggered cleanup
-	pgctldCmd.Env = append(os.Environ(),
-		"MULTIGRES_TESTDATA_DIR="+baseDir,
-	)
+		"--log-output", logFile).
+		AddEnv("MULTIGRES_TESTDATA_DIR=" + baseDir)
 
 	require.NoError(t, pgctldCmd.Start())
 	t.Logf("Started pgctld for %s (pid: %d, grpc: %d, pg: %d)", name, pgctldCmd.Process.Pid, pgctldGrpcPort, pgPort)
@@ -335,9 +335,10 @@ func createEmptyNode(t *testing.T, baseDir, cell, shard, database string, index 
 	// Wait for pgctld to be ready
 	waitForProcessReady(t, "pgctld", pgctldGrpcPort, 10*time.Second)
 
-	// Start multipooler
+	// Start multipooler with cancellable context for graceful termination
 	serviceID := fmt.Sprintf("%s/%s", cell, name)
-	multipoolerCmd := exec.Command("multipooler",
+	multipoolerCtx, multipoolerCancel := context.WithCancel(context.Background())
+	multipoolerCmd := executil.Command(multipoolerCtx, "multipooler",
 		"--grpc-port", fmt.Sprintf("%d", grpcPort),
 		"--database", database,
 		"--table-group", "test", // table group is required
@@ -351,8 +352,7 @@ func createEmptyNode(t *testing.T, baseDir, cell, shard, database string, index 
 		"--cell", cell,
 		"--service-id", serviceID,
 		"--pgbackrest-stanza", pgBackRestStanza,
-	)
-	multipoolerCmd.Dir = dataDir
+	).SetDir(dataDir)
 	mpLogFile := filepath.Join(dataDir, "multipooler.log")
 	mpLogF, err := os.Create(mpLogFile)
 	require.NoError(t, err)
@@ -367,14 +367,16 @@ func createEmptyNode(t *testing.T, baseDir, cell, shard, database string, index 
 	t.Logf("Multipooler %s is ready", name)
 
 	return &nodeInstance{
-		name:           name,
-		cell:           cell,
-		grpcPort:       grpcPort,
-		pgPort:         pgPort,
-		pgctldGrpcPort: pgctldGrpcPort,
-		dataDir:        dataDir,
-		pgctldProcess:  pgctldCmd,
-		multipoolerCmd: multipoolerCmd,
+		name:              name,
+		cell:              cell,
+		grpcPort:          grpcPort,
+		pgPort:            pgPort,
+		pgctldGrpcPort:    pgctldGrpcPort,
+		dataDir:           dataDir,
+		pgctldCmd:         pgctldCmd,
+		pgctldCancel:      pgctldCancel,
+		multipoolerCmd:    multipoolerCmd,
+		multipoolerCancel: multipoolerCancel,
 	}
 }
 
@@ -407,50 +409,31 @@ func waitForMultipoolerReady(t *testing.T, grpcPort int, timeout time.Duration) 
 	}, timeout, 200*time.Millisecond, "Multipooler at port %d did not become ready", grpcPort)
 }
 
-// terminateProcess gracefully terminates a process by first sending SIGTERM,
-// waiting for graceful shutdown, and only using SIGKILL if necessary.
-func terminateProcess(t *testing.T, cmd *exec.Cmd, name string, timeout time.Duration) {
-	t.Helper()
-	if cmd == nil || cmd.Process == nil {
-		return
-	}
-
-	// Try graceful shutdown with SIGTERM first
-	if err := cmd.Process.Signal(os.Interrupt); err != nil {
-		t.Logf("Failed to send SIGTERM to %s: %v, forcing kill", name, err)
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		return
-	}
-
-	// Wait for graceful shutdown with timeout
-	done := make(chan error, 1)
-	go func() {
-		done <- cmd.Wait()
-	}()
-
-	select {
-	case <-time.After(timeout):
-		t.Logf("%s did not terminate gracefully within %v, forcing kill", name, timeout)
-		_ = cmd.Process.Kill()
-		<-done // Wait for process to actually die
-	case err := <-done:
-		if err != nil {
-			t.Logf("%s terminated with error: %v", name, err)
-		} else {
-			t.Logf("%s terminated gracefully", name)
-		}
-	}
-}
-
-// cleanupNode stops pgctld and multipooler processes
+// cleanupNode stops pgctld and multipooler processes using context cancellation.
+// The executil.Command wrapper handles graceful SIGTERM -> SIGKILL termination.
 func cleanupNode(t *testing.T, node *nodeInstance) {
 	t.Helper()
-	if node.multipoolerCmd != nil && node.multipoolerCmd.Process != nil {
-		terminateProcess(t, node.multipoolerCmd, "multipooler", 2*time.Second)
+	// Stop multipooler first (it depends on pgctld)
+	if node.multipoolerCancel != nil {
+		node.multipoolerCancel()
 	}
-	if node.pgctldProcess != nil && node.pgctldProcess.Process != nil {
-		terminateProcess(t, node.pgctldProcess, "pgctld", 2*time.Second)
+	if node.multipoolerCmd != nil {
+		if err := node.multipoolerCmd.Wait(); err != nil {
+			t.Logf("multipooler terminated with error: %v", err)
+		} else {
+			t.Logf("multipooler terminated gracefully")
+		}
+	}
+	// Then stop pgctld
+	if node.pgctldCancel != nil {
+		node.pgctldCancel()
+	}
+	if node.pgctldCmd != nil {
+		if err := node.pgctldCmd.Wait(); err != nil {
+			t.Logf("pgctld terminated with error: %v", err)
+		} else {
+			t.Logf("pgctld terminated gracefully")
+		}
 	}
 }
 

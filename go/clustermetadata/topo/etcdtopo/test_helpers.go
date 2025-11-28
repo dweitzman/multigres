@@ -29,6 +29,7 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"github.com/multigres/multigres/go/test/utils"
+	"github.com/multigres/multigres/go/tools/executil"
 )
 
 // checkPortAvailable checks if a port is available for binding
@@ -141,15 +142,11 @@ func StartEtcdWithOptions(t *testing.T, opts EtcdOptions) (string, *exec.Cmd) {
 	t.Cleanup(func() {
 		// Ensure the process is killed and cleaned up
 		if cmd.Process != nil {
-			// Try graceful shutdown first
-			if err := cmd.Process.Signal(os.Interrupt); err == nil {
-				// Wait a bit for graceful shutdown
-				time.Sleep(100 * time.Millisecond)
-			}
-
-			// Force kill if still running
-			if err := cmd.Process.Kill(); err != nil {
-				slog.Error("cmd.Process.Kill() failed killing etcd", "error", err)
+			// Use executil for graceful SIGTERM -> SIGKILL termination
+			termCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+			defer cancel()
+			if err := executil.TerminateProcess(termCtx, cmd.Process); err != nil {
+				slog.Error("executil.TerminateProcess() failed killing etcd", "error", err)
 			}
 
 			// Wait for process to finish
