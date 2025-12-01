@@ -156,6 +156,6 @@ func TestWatchConfig(t *testing.T) {
 	wg.Wait()
 }
 
-func jitter(min, max int) int {
-	return min + rand.IntN(max-min+1)
+func jitter(minVal, maxVal int) int {
+	return minVal + rand.IntN(maxVal-minVal+1)
 }

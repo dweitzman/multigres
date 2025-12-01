@@ -87,7 +87,7 @@ func (l *Lexer) scanDelimitedIdentifierState(startPos, startScanPos int) (*Token
 
 			// Check for zero-length identifier
 			// postgres/src/backend/parser/scan.l:818
-			if len(ident) == 0 {
+			if ident == "" {
 				err := l.context.AddErrorWithType(ZeroLengthIdentifier, "zero-length delimited identifier")
 				return nil, err
 			}

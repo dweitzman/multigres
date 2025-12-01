@@ -22,7 +22,7 @@ import (
 
 	// Guarantee that the built-in proto is called registered before this one
 	// so that it can be replaced.
-	_ "google.golang.org/grpc/encoding/proto" // nolint:revive
+	_ "google.golang.org/grpc/encoding/proto" //nolint:revive // import for side effects: registers proto codec
 )
 
 // Name is the name registered for the proto compressor.

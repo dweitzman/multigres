@@ -209,14 +209,14 @@ func (db *DB) RemoveQueryPattern(queryPattern string) {
 }
 
 // RejectQueryPattern allows a query pattern to be rejected with an error
-func (db *DB) RejectQueryPattern(queryPattern, error string) {
+func (db *DB) RejectQueryPattern(queryPattern, errMsg string) {
 	expr := regexp.MustCompile("(?is)^" + queryPattern + "$")
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	db.patternData[queryPattern] = exprResult{
 		queryPattern: queryPattern,
 		expr:         expr,
-		err:          error,
+		err:          errMsg,
 	}
 }
 

@@ -522,7 +522,7 @@ func TestPostgreSQLAuthentication(t *testing.T) {
 		t.Logf("Testing Unix socket connection (no password required)")
 		socketDir := pgctld.PostgresSocketDir(baseDir)
 		t.Logf("Socket directory path: %s", socketDir)
-		t.Logf("Socket directory absolute path: %s", filepath.Join(socketDir))
+		t.Logf("Socket directory absolute path: %s", socketDir)
 
 		socketCmd := exec.Command("psql",
 			"-h", socketDir,

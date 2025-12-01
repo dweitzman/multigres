@@ -62,7 +62,7 @@ func (mo *MultiOrch) handleReady(w http.ResponseWriter, r *http.Request) {
 	mo.serverStatus.mu.Lock()
 	defer mo.serverStatus.mu.Unlock()
 
-	isReady := (len(mo.serverStatus.InitError) == 0)
+	isReady := mo.serverStatus.InitError == ""
 	if !isReady {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}

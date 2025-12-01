@@ -165,10 +165,28 @@ linters:
         # Check for misuses of sync.WaitGroup.
         - waitgroup
     gocritic:
-      # TODO(dweitzman): Re-enable default checks. Some of them seem worthwhile.
       enable-all: true
       disabled-checks:
+        # Shadows imported package names - too noisy with common names
         - importShadow
+        # Style preference: `a string, b string` is often clearer than `a, b string`
+        - paramTypeCombine
+        # Switch not always better than if-else chain
+        - ifElseChain
+        # Many false positives (e.g., `// continue iteration` flagged as code)
+        - commentedOutCode
+        # If-else type assertions often clearer than type switch
+        - typeAssertChain
+        # Named results aren't always better
+        - unnamedResult
+        # Combined appends often less readable
+        - appendCombine
+        # `err = f()` vs `err := f()` is style-only
+        - sloppyReassign
+        # %q adds escaping which may not be intended vs "%s"
+        - sprintfQuotedString
+        # Opinionated restructuring suggestions
+        - nestingReduce
       settings:
         ruleguard:
           rules: "go/tools/ruleguard/rules.go"

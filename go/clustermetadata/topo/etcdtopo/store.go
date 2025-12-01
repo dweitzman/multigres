@@ -38,8 +38,6 @@ import (
 
 	"github.com/spf13/pflag"
 	"go.etcd.io/etcd/client/pkg/v3/tlsutil"
-	"google.golang.org/grpc"
-
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"github.com/multigres/multigres/go/clustermetadata/topo"
@@ -139,7 +137,6 @@ func NewServerWithOpts(serverAddrs []string, root, certPath, keyPath, caPath str
 	config := clientv3.Config{
 		Endpoints:   serverAddrs,
 		DialTimeout: time.Second,
-		DialOptions: []grpc.DialOption{grpc.WithBlock()}, // nolint:staticcheck
 	}
 
 	tlscfg, err := newTLSConfig(certPath, keyPath, caPath)

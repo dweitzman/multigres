@@ -133,7 +133,7 @@ func TestRootCause(t *testing.T) {
 		want: nil,
 	}, {
 		// explicit nil error is nil
-		err:  (error)(nil),
+		err:  error(nil),
 		want: nil,
 	}, {
 		// typed nil is nil
@@ -254,7 +254,7 @@ func TestStackFormat(t *testing.T) {
 	assertContains(t, got, "outer", false)
 
 	setLogErrStacks(true)
-	defer func() { setLogErrStacks(false) }()
+	defer setLogErrStacks(false)
 	got = fmt.Sprintf("%v", err)
 	assertContains(t, got, "innerMost", true)
 	assertContains(t, got, "middle", true)

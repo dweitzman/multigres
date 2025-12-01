@@ -1228,7 +1228,7 @@ func (bs *BitString) ExpressionType() string {
 func (bs *BitString) SqlString() string {
 	// The BSVal contains a prefix character ('b' or 'x') followed by the actual bit string
 	// This matches PostgreSQL's scan.l implementation
-	if len(bs.BSVal) == 0 {
+	if bs.BSVal == "" {
 		return "B''"
 	}
 

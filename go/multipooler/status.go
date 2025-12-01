@@ -73,7 +73,7 @@ func (mp *MultiPooler) handleReady(w http.ResponseWriter, r *http.Request) {
 	mp.serverStatus.mu.Lock()
 	defer mp.serverStatus.mu.Unlock()
 
-	isReady := (len(mp.serverStatus.InitError) == 0)
+	isReady := mp.serverStatus.InitError == ""
 	if !isReady {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}

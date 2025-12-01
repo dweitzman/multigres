@@ -201,12 +201,12 @@ func (mp *MultiPooler) Init(startCtx context.Context) {
 
 	if mp.database.Get() == "" {
 		logger.ErrorContext(startCtx, "database is required")
-		os.Exit(1)
+		os.Exit(1) //nolint:gocritic // exitAfterDefer: we should avoid calling Exit() here
 	}
 
 	if mp.tableGroup.Get() == "" {
 		logger.ErrorContext(startCtx, "table group is required")
-		os.Exit(1)
+		os.Exit(1) //nolint:gocritic // exitAfterDefer: we should avoid calling Exit() here
 	}
 	// Create MultiPooler instance for topo registration
 	multipooler := topo.NewMultiPooler(mp.serviceID.Get(), mp.cell.Get(), mp.senv.GetHostname(), mp.tableGroup.Get())

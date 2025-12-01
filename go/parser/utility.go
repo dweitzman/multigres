@@ -404,10 +404,10 @@ func doNegate(n ast.Node, location int) ast.Node {
 // Ported from postgres/src/backend/parser/gram.y:doNegateFloat
 func doNegateFloat(v *ast.Float) {
 	oldval := v.FVal
-	if len(oldval) > 0 && oldval[0] == '+' {
+	if oldval != "" && oldval[0] == '+' {
 		// Remove leading +
 		v.FVal = "-" + oldval[1:]
-	} else if len(oldval) > 0 && oldval[0] == '-' {
+	} else if oldval != "" && oldval[0] == '-' {
 		// Remove leading -
 		v.FVal = oldval[1:]
 	} else {

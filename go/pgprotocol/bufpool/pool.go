@@ -91,7 +91,7 @@ func (p *Pool) findPool(size int) *sizedPool {
 
 	// If size is an exact power-of-2 multiple of minSize, adjust index.
 	if rem == 0 && div != 0 && (div&(div-1)) == 0 {
-		idx = idx - 1
+		idx--
 	}
 
 	// Ensure index is within bounds.

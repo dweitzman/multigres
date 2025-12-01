@@ -94,7 +94,7 @@ func (mg *MultiGateway) handleReady(w http.ResponseWriter, r *http.Request) {
 	mg.serverStatus.mu.Lock()
 	defer mg.serverStatus.mu.Unlock()
 
-	isReady := (len(mg.serverStatus.InitError) == 0)
+	isReady := mg.serverStatus.InitError == ""
 	if !isReady {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}

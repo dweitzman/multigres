@@ -213,13 +213,13 @@ func parse(v string) (p parsed, ok bool) {
 	if !ok {
 		return p, ok
 	}
-	if len(v) > 0 && v[0] == '-' {
+	if v != "" && v[0] == '-' {
 		p.prerelease, v, ok = parsePrerelease(v)
 		if !ok {
 			return p, ok
 		}
 	}
-	if len(v) > 0 && v[0] == '+' {
+	if v != "" && v[0] == '+' {
 		p.build, v, ok = parseBuild(v)
 		if !ok {
 			return p, ok

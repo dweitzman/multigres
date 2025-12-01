@@ -266,7 +266,7 @@ func (l *Lexer) isValidUescapeChar(escape byte) bool {
 // Implements the same logic as PostgreSQL's str_udeescape function
 // Equivalent to postgres/src/backend/parser/parser.c:371-527 (str_udeescape)
 func (l *Lexer) decodeUnicodeString(input string, escapeChar byte) (string, error) {
-	if len(input) == 0 {
+	if input == "" {
 		return input, nil
 	}
 
@@ -1424,7 +1424,7 @@ func (l *Lexer) processIntegerLiteral(text string, startPos int) *Token {
 // Returns the value and whether an overflow occurred
 // Based on PostgreSQL's pg_strtoint32_safe implementation
 func (l *Lexer) parseInteger32(s string) (int32, bool) {
-	if len(s) == 0 {
+	if s == "" {
 		return 0, false
 	}
 

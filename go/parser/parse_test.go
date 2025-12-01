@@ -201,9 +201,9 @@ func getParserOutput(query string) (string, error) {
 	var sqls string
 	for _, ast := range asts {
 		if sqls != "" {
-			sqls = sqls + "; "
+			sqls += "; "
 		}
-		sqls = sqls + ast.SqlString()
+		sqls += ast.SqlString()
 	}
 
 	// Deparse query.

@@ -191,9 +191,8 @@ func (p *ProcessInstance) startPgctld(t *testing.T) error {
 		"--log-output", p.LogFile)
 
 	// Set MULTIGRES_TESTDATA_DIR for directory-deletion triggered cleanup
-	p.Process.Env = append(p.Environment,
-		"MULTIGRES_TESTDATA_DIR="+filepath.Dir(p.DataDir),
-	)
+	//nolint:gocritic // appendAssign: intentionally setting Process.Env from base Environment
+	p.Process.Env = append(p.Environment, "MULTIGRES_TESTDATA_DIR="+filepath.Dir(p.DataDir))
 
 	t.Logf("Running server command: %v", p.Process.Args)
 	if err := p.waitForStartup(t, 20*time.Second, 50); err != nil {
@@ -235,9 +234,8 @@ func (p *ProcessInstance) startMultipooler(t *testing.T) error {
 	p.Process = exec.Command(p.Binary, args...)
 
 	// Set MULTIGRES_TESTDATA_DIR for directory-deletion triggered cleanup
-	p.Process.Env = append(p.Environment,
-		"MULTIGRES_TESTDATA_DIR="+filepath.Dir(p.DataDir),
-	)
+	//nolint:gocritic // appendAssign: intentionally setting Process.Env from base Environment
+	p.Process.Env = append(p.Environment, "MULTIGRES_TESTDATA_DIR="+filepath.Dir(p.DataDir))
 
 	t.Logf("Running multipooler command: %v", p.Process.Args)
 	return p.waitForStartup(t, 15*time.Second, 30)

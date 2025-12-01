@@ -407,7 +407,7 @@ func (l *Lexer) scanHexEscape() error {
 		}
 	}
 
-	if len(hexDigits) == 0 {
+	if hexDigits == "" {
 		_ = ctx.AddErrorWithType(InvalidEscape, "invalid hexadecimal escape sequence")
 		return nil
 	}
@@ -440,7 +440,7 @@ func (l *Lexer) scanOctalEscape() error {
 		}
 	}
 
-	if len(octalDigits) == 0 {
+	if octalDigits == "" {
 		_ = ctx.AddErrorWithType(InvalidEscape, "invalid octal escape sequence")
 		return nil
 	}

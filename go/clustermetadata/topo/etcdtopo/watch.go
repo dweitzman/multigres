@@ -161,7 +161,7 @@ func (s *Server) Watch(ctx context.Context, filePath string) (*topo.WatchData, <
 func (s *Server) WatchRecursive(ctx context.Context, dirpath string) ([]*topo.WatchDataRecursive, <-chan *topo.WatchDataRecursive, error) {
 	nodePath := path.Join(s.root, dirpath)
 	if !strings.HasSuffix(nodePath, "/") {
-		nodePath = nodePath + "/"
+		nodePath += "/"
 	}
 
 	// Get the initial version of the file
