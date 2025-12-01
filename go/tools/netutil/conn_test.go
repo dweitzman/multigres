@@ -32,22 +32,18 @@ func createSocketPair(t *testing.T) (net.Listener, net.Conn, net.Conn) {
 	wg := sync.WaitGroup{}
 
 	var clientConn net.Conn
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		var err error
 		clientConn, err = net.Dial("tcp", addr)
 		assert.NoError(t, err)
-	}()
+	})
 
 	var serverConn net.Conn
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		var err error
 		serverConn, err = listener.Accept()
 		assert.NoError(t, err)
-	}()
+	})
 
 	wg.Wait()
 
@@ -86,13 +82,20 @@ func TestWriteTimeout(t *testing.T) {
 		cConn.Close()
 	}()
 
+	// Make the write buffer small so that it fills up quickly
+	if tcpConn, ok := sConn.(*net.TCPConn); ok {
+		err := tcpConn.SetWriteBuffer(1024)
+		assert.NoError(t, err)
+	}
+
 	sConnWithTimeout := NewConnWithTimeouts(sConn, 1*time.Millisecond, 1*time.Millisecond)
 
 	c := make(chan error, 1)
 	go func() {
-		// The timeout will trigger when the buffer is full, so to test this we need to write multiple times.
+		// Use a larger payload to fill the buffer faster
+		payload := make([]byte, 4096)
 		for {
-			_, err := sConnWithTimeout.Write([]byte("payload"))
+			_, err := sConnWithTimeout.Write(payload)
 			if err != nil {
 				c <- err
 				return

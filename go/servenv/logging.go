@@ -22,7 +22,7 @@ import (
 	"sync"
 
 	"github.com/multigres/multigres/go/tools/telemetry"
-	"github.com/multigres/multigres/go/viperutil"
+	"github.com/multigres/multigres/go/tools/viperutil"
 
 	"github.com/spf13/pflag"
 )
@@ -228,18 +228,6 @@ func fireLoggingSetupHooks(l *slog.Logger) {
 	}
 }
 
-// fireLoggingChangeHooks calls all registered logging change hooks.
-func fireLoggingChangeHooks(l *slog.Logger) {
-	loggingHooksMu.Lock()
-	hooks := make([]func(*slog.Logger), len(loggingChangeHooks))
-	copy(hooks, loggingChangeHooks)
-	loggingHooksMu.Unlock()
-
-	for _, hook := range hooks {
-		hook(l)
-	}
-}
-
 // GetLogLevel returns the current log level setting.
 func GetLogLevel() string {
 	return logLevel
@@ -394,18 +382,6 @@ func (lg *Logger) fireLoggingSetupHooks(l *slog.Logger) {
 	lg.loggingHooksMu.Lock()
 	hooks := make([]func(*slog.Logger), len(lg.loggingSetupHooks))
 	copy(hooks, lg.loggingSetupHooks)
-	lg.loggingHooksMu.Unlock()
-
-	for _, hook := range hooks {
-		hook(l)
-	}
-}
-
-// fireLoggingChangeHooks calls all registered logging change hooks.
-func (lg *Logger) fireLoggingChangeHooks(l *slog.Logger) {
-	lg.loggingHooksMu.Lock()
-	hooks := make([]func(*slog.Logger), len(lg.loggingChangeHooks))
-	copy(hooks, lg.loggingChangeHooks)
 	lg.loggingHooksMu.Unlock()
 
 	for _, hook := range hooks {
