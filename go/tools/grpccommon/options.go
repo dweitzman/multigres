@@ -23,14 +23,10 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-var (
-	// maxMessageSize is the maximum message size which the gRPC server will
-	// accept. Larger messages will be rejected.
-	// Note: We're using 16 MiB as default value because that's the default in MySQL
-	maxMessageSize = 16 * 1024 * 1024
-	// enablePrometheus sets a flag to enable grpc client/server grpc monitoring.
-	enablePrometheus bool
-)
+// maxMessageSize is the maximum message size which the gRPC server will
+// accept. Larger messages will be rejected.
+// Note: We're using 16 MiB as default value because that's the default in MySQL
+var maxMessageSize = 16 * 1024 * 1024
 
 // RegisterFlags installs grpccommon flags on the given FlagSet.
 //
@@ -40,12 +36,6 @@ var (
 func RegisterFlags(fs *pflag.FlagSet) {
 	fs.IntVar(&maxMessageSize, "grpc-max-message-size", maxMessageSize, "Maximum allowed RPC message size. Larger messages will be rejected by gRPC with the error 'exceeding the max size'.")
 	fs.BoolVar(&grpc.EnableTracing, "grpc-enable-tracing", grpc.EnableTracing, "Enable gRPC tracing.")
-	fs.BoolVar(&enablePrometheus, "grpc-prometheus", enablePrometheus, "Enable gRPC monitoring with Prometheus.")
-}
-
-// EnableGRPCPrometheus returns the value of the --grpc-prometheus flag.
-func EnableGRPCPrometheus() bool {
-	return enablePrometheus
 }
 
 // MaxMessageSize returns the value of the --grpc-max-message-size flag.

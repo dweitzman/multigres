@@ -364,3 +364,173 @@ func assertEquals(t *testing.T, a, b any) {
 		t.Fatalf("expected [%s] to be equal to [%s]", a, b)
 	}
 }
+
+func TestEquals(t *testing.T) {
+	tests := []struct {
+		name string
+		a    error
+		b    error
+		want bool
+	}{
+		{
+			name: "both nil",
+			a:    nil,
+			b:    nil,
+			want: true,
+		},
+		{
+			name: "first nil",
+			a:    nil,
+			b:    New(mtrpcpb.Code_UNKNOWN, "error"),
+			want: false,
+		},
+		{
+			name: "second nil",
+			a:    New(mtrpcpb.Code_UNKNOWN, "error"),
+			b:    nil,
+			want: false,
+		},
+		{
+			name: "same message different code",
+			a:    New(mtrpcpb.Code_INVALID_ARGUMENT, "error"),
+			b:    New(mtrpcpb.Code_ALREADY_EXISTS, "error"),
+			want: false,
+		},
+		{
+			name: "same code different message",
+			a:    New(mtrpcpb.Code_INVALID_ARGUMENT, "error1"),
+			b:    New(mtrpcpb.Code_INVALID_ARGUMENT, "error2"),
+			want: false,
+		},
+		{
+			name: "same code and message",
+			a:    New(mtrpcpb.Code_INVALID_ARGUMENT, "same error"),
+			b:    New(mtrpcpb.Code_INVALID_ARGUMENT, "same error"),
+			want: true,
+		},
+		{
+			name: "standard errors equal",
+			a:    errors.New("test"),
+			b:    errors.New("test"),
+			want: true, // both have UNKNOWN code and same message
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Equals(tt.a, tt.b)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestPrint(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		wantMsg  string
+		wantCode string
+	}{
+		{
+			name:     "mterror with code",
+			err:      New(mtrpcpb.Code_INVALID_ARGUMENT, "bad input"),
+			wantMsg:  "bad input",
+			wantCode: "INVALID_ARGUMENT",
+		},
+		{
+			name:     "standard error",
+			err:      errors.New("standard error"),
+			wantMsg:  "standard error",
+			wantCode: "UNKNOWN",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Print(tt.err)
+			assert.Contains(t, got, tt.wantMsg)
+			assert.Contains(t, got, tt.wantCode)
+		})
+	}
+}
+
+func TestTruncateError(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		max      int
+		wantNil  bool
+		wantMsg  string
+		wantCode mtrpcpb.Code
+	}{
+		{
+			name:    "nil error",
+			err:     nil,
+			max:     100,
+			wantNil: true,
+		},
+		{
+			name:     "max zero returns original",
+			err:      New(mtrpcpb.Code_UNKNOWN, "test"),
+			max:      0,
+			wantMsg:  "test",
+			wantCode: mtrpcpb.Code_UNKNOWN,
+		},
+		{
+			name:     "max negative returns original",
+			err:      New(mtrpcpb.Code_UNKNOWN, "test"),
+			max:      -1,
+			wantMsg:  "test",
+			wantCode: mtrpcpb.Code_UNKNOWN,
+		},
+		{
+			name:     "error shorter than max returns original",
+			err:      New(mtrpcpb.Code_INVALID_ARGUMENT, "short"),
+			max:      100,
+			wantMsg:  "short",
+			wantCode: mtrpcpb.Code_INVALID_ARGUMENT,
+		},
+		{
+			name:     "max <= 12 returns just truncated marker",
+			err:      New(mtrpcpb.Code_UNKNOWN, "this is a very long error message"),
+			max:      12,
+			wantMsg:  "[TRUNCATED]",
+			wantCode: mtrpcpb.Code_UNKNOWN,
+		},
+		{
+			name:     "truncates long message",
+			err:      New(mtrpcpb.Code_INTERNAL, "this is a very long error message that should be truncated"),
+			max:      30,
+			wantMsg:  "[TRUNCATED]",
+			wantCode: mtrpcpb.Code_INTERNAL,
+		},
+		{
+			name:     "preserves code when truncating",
+			err:      New(mtrpcpb.Code_PERMISSION_DENIED, "a]very long permission denied error message"),
+			max:      25,
+			wantCode: mtrpcpb.Code_PERMISSION_DENIED,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := TruncateError(tt.err, tt.max)
+
+			if tt.wantNil {
+				assert.Nil(t, got)
+				return
+			}
+
+			assert.NotNil(t, got)
+			if tt.wantMsg != "" {
+				assert.Contains(t, got.Error(), tt.wantMsg)
+			}
+			assert.Equal(t, tt.wantCode, Code(got))
+
+			// Verify truncated messages don't exceed max length
+			if tt.max > 0 && len(tt.err.Error()) > tt.max {
+				assert.LessOrEqual(t, len(got.Error()), tt.max)
+			}
+		})
+	}
+}
