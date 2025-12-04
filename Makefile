@@ -27,7 +27,7 @@ export ETCD_VER
 CMDS = multigateway multipooler pgctld multiorch multigres multiadmin
 BIN_DIR = bin
 
-.PHONY: all build build-all clean install test proto tools parser help
+.PHONY: all build build-all clean install test proto tools parser help coverage coverage-short coverage-html
 
 ##@ General
 
@@ -113,6 +113,28 @@ test-short: ## Run short tests.
 
 test-race: ## Run tests with race detection.
 	go test -short -v -race ./...
+
+# Packages to include in coverage (excludes generated protobuf)
+COVERPKGS = $(shell go list ./... | grep -v '/pb/' | tr '\n' ',')
+
+coverage: ## Run all tests with coverage (may fail locally without PostgreSQL/etcd).
+	go test -count=1 -cover -covermode=atomic -coverprofile=coverage.unfiltered.txt -coverpkg=$(COVERPKGS) ./...
+	@# Filter out generated parser files and corrupted lines that confuse coverage tools
+	@grep -v -E 'postgres\.y|yaccpar|yacctab|\.go:.+\.go:' coverage.unfiltered.txt > coverage.txt || true
+	@echo ""
+	@echo "Coverage report written to coverage.txt"
+	@go tool cover -func=coverage.txt | tail -1
+
+coverage-short: ## Run short tests with coverage (skips integration tests).
+	go test -short -count=1 -cover -covermode=atomic -coverprofile=coverage.unfiltered.txt -coverpkg=$(COVERPKGS) ./...
+	@# Filter out generated parser files and corrupted lines that confuse coverage tools
+	@grep -v -E 'postgres\.y|yaccpar|yacctab|\.go:.+\.go:' coverage.unfiltered.txt > coverage.txt || true
+	@echo ""
+	@echo "Coverage report written to coverage.txt"
+	@go tool cover -func=coverage.txt | tail -1
+
+coverage-html: coverage-short ## Open coverage report in browser.
+	go tool cover -html=coverage.txt
 
 ##@ Maintenance
 
