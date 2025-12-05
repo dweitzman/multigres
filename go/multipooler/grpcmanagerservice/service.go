@@ -20,10 +20,10 @@ import (
 	"time"
 
 	"github.com/multigres/multigres/go/common/mterrors"
+	"github.com/multigres/multigres/go/common/servenv"
 	"github.com/multigres/multigres/go/multipooler/manager"
 	multipoolermanagerpb "github.com/multigres/multigres/go/pb/multipoolermanager"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
-	"github.com/multigres/multigres/go/servenv"
 )
 
 // managerService is the gRPC wrapper for MultiPoolerManager
@@ -281,15 +281,6 @@ func (s *managerService) GetBackups(ctx context.Context, req *multipoolermanager
 	return &multipoolermanagerdatapb.GetBackupsResponse{
 		Backups: backups,
 	}, nil
-}
-
-// InitializationStatus returns the initialization status of this pooler
-func (s *managerService) InitializationStatus(ctx context.Context, req *multipoolermanagerdatapb.InitializationStatusRequest) (*multipoolermanagerdatapb.InitializationStatusResponse, error) {
-	resp, err := s.manager.InitializationStatus(ctx, req)
-	if err != nil {
-		return nil, mterrors.ToGRPC(err)
-	}
-	return resp, nil
 }
 
 // InitializeEmptyPrimary initializes an empty PostgreSQL instance as a primary
