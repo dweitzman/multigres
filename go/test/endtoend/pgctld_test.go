@@ -1093,21 +1093,19 @@ func TestOrphanDetectionWithRealPostgreSQL(t *testing.T) {
 	setupTestEnv(initCmd)
 	require.NoError(t, initCmd.Run())
 
-	// Start pgctld server subprocess with orphan detection enabled
-	serverCmd := exec.Command("pgctld", "server",
+	// Start pgctld server subprocess with orphan detection enabled.
+	// Use executil.Cmd for proper Kill() handling with channel-based wait synchronization.
+	// Add endtoend directory to PATH so postgres_orphan_watchdog.sh can be found.
+	endtoendDir, err := filepath.Abs(".")
+	require.NoError(t, err)
+	serverCmd := executil.Command(context.Background(), "pgctld", "server",
 		"--pooler-dir", dataDir,
 		"--grpc-port", strconv.Itoa(grpcPort),
 		"--pg-port", strconv.Itoa(pgPort),
-		"--config-file", pgctldConfigFile)
-
-	// Set MULTIGRES_TESTDATA_DIR for directory-deletion triggered cleanup
-	// Add endtoend directory to PATH so run_command_if_parent_dies.sh can be found
-	endtoendDir, err := filepath.Abs(".")
-	require.NoError(t, err)
-	serverCmd.Env = append(os.Environ(),
-		"MULTIGRES_TESTDATA_DIR="+dataDir,
-		"PGCONNECT_TIMEOUT=5",
-		"PATH="+endtoendDir+":"+os.Getenv("PATH"))
+		"--config-file", pgctldConfigFile).
+		AddEnv("MULTIGRES_TESTDATA_DIR=" + dataDir).
+		AddEnv("PGCONNECT_TIMEOUT=5").
+		AddEnv("PATH=" + endtoendDir + ":" + os.Getenv("PATH"))
 	require.NoError(t, serverCmd.Start())
 
 	// Wait for gRPC server to be ready
@@ -1142,26 +1140,25 @@ func TestOrphanDetectionWithRealPostgreSQL(t *testing.T) {
 	require.NoError(t, pgProcess.Signal(syscall.Signal(0)))
 
 	// Kill the pgctld server subprocess abruptly (SIGKILL, no SIGTERM)
-	// This simulates a crash scenario for orphan detection testing
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-	err, killed := executil.KillProcess(ctx, serverCmd.Process)
+	// This simulates a crash scenario for orphan detection testing.
+	// The watchdog process (postgres_orphan_watchdog.sh) monitors pgctld's PID and
+	// tracks the postgres PID from postmaster.pid. When pgctld dies or the testdata
+	// directory is deleted, the watchdog kills the last known postgres PID.
+	killCtx, killCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer killCancel()
+	err, killed := serverCmd.Kill(killCtx)
 	require.True(t, killed, "Failed to kill pgctld: %v", err)
-	_, _ = serverCmd.Process.Wait()
 
-	// TODO(dweitzman): Start a process using sleep command and use that PID for orphan detection
-
-	// Delete the temp directory, triggering orphan detection
+	// Delete the temp directory - the watchdog already has the postgres PID cached
+	// from postmaster.pid, so it can still kill postgres even after this deletion.
 	os.RemoveAll(tempDir)
 
-	// Wait for orphan detection to stop postgres
-	time.Sleep(2 * time.Second)
-
-	// Verify postgres is stopped
+	// Verify postgres is stopped by the watchdog (Signal(0) returns error when process is gone)
+	// The watchdog polls every 1 second, so allow up to 10 seconds for it to act.
 	require.Eventually(t, func() bool {
 		err = pgProcess.Signal(syscall.Signal(0))
-		return err == nil
-	}, 5*time.Second, 100*time.Millisecond)
+		return err != nil
+	}, 10*time.Second, 500*time.Millisecond, "postgres should be stopped by orphan detection watchdog")
 }
 
 func readPostmasterPID(dataDir string) (int, error) {

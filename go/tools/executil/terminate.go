@@ -42,11 +42,38 @@ func TerminateProcess(ctx context.Context, process *os.Process) bool {
 // Returns (ctx.Err(), false) if the wait timed out (unexpected for SIGKILL).
 //
 // Returns (nil, true) immediately if process is nil or was already dead.
+//
+// Unlike KillPID, this function uses process.Wait() to detect process exit,
+// which properly reaps zombie children. Use this when you have the *os.Process
+// from exec.Cmd.Process.
 func KillProcess(ctx context.Context, process *os.Process) (error, bool) {
 	if process == nil {
 		return nil, true
 	}
-	return KillPID(ctx, process.Pid)
+
+	// Send SIGKILL
+	if err := process.Kill(); err != nil {
+		if isProcessGone(err) {
+			return nil, true
+		}
+		return err, false
+	}
+
+	// Use Wait() to detect process exit - this properly reaps zombie children.
+	// Signal(0) polling doesn't work for zombies because they still exist in
+	// the process table until Wait() is called.
+	waitDone := make(chan struct{})
+	go func() {
+		_, _ = process.Wait()
+		close(waitDone)
+	}()
+
+	select {
+	case <-waitDone:
+		return nil, true
+	case <-ctx.Done():
+		return ctx.Err(), false
+	}
 }
 
 // TerminatePID sends SIGTERM to a process by PID and waits for graceful exit.

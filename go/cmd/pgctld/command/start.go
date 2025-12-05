@@ -250,15 +250,20 @@ func startPostgreSQLWithConfig(logger *slog.Logger, config *pgctld.PostgresCtlCo
 		return fmt.Errorf("failed to start PostgreSQL with pg_ctl: %w", err)
 	}
 
+	// Wait for PostgreSQL to be ready using pg_isready
+	if err := waitForPostgreSQLWithConfig(config); err != nil {
+		return err
+	}
+
 	// If orphan detection environment variables are set, spawn a watchdog process
-	// that will stop postgres if the test parent dies or testdata dir is deleted
+	// that monitors postmaster.pid and kills postgres if the parent dies or testdata
+	// dir is deleted. The watchdog tracks the PID from postmaster.pid continuously,
+	// so it handles postgres restarts and can kill even after datadir deletion.
 	if servenv.IsTestOrphanDetectionEnabled() {
-		logger.Info("Spawning watchdog process for orphan detection")
+		logger.Info("Spawning watchdog process for orphan detection", "dataDir", config.PostgresDataDir)
 		watchdogCmd := exec.Command(
-			"run_command_if_parent_dies.sh",
-			"pg_ctl", "stop",
-			"-D", config.PostgresDataDir,
-			"-m", "fast",
+			"postgres_orphan_watchdog.sh",
+			config.PostgresDataDir,
 		)
 		// Environment variables automatically inherit
 		if err := watchdogCmd.Start(); err != nil {
@@ -269,8 +274,7 @@ func startPostgreSQLWithConfig(logger *slog.Logger, config *pgctld.PostgresCtlCo
 		}
 	}
 
-	// Wait for PostgreSQL to be ready using pg_isready
-	return waitForPostgreSQLWithConfig(config)
+	return nil
 }
 
 func waitForPostgreSQLWithConfig(config *pgctld.PostgresCtlConfig) error {
