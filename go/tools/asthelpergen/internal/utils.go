@@ -15,16 +15,18 @@
 package internal
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path"
 	"strings"
 	"unicode"
 
 	"github.com/dave/jennifer/jen"
 	"golang.org/x/tools/go/packages"
+
+	"github.com/multigres/multigres/go/tools/executil"
 )
 
 // Title returns a copy of the string s with all Unicode letters that begin words
@@ -67,14 +69,14 @@ func FormatJenFile(file *jen.File) ([]byte, error) {
 // GoImports runs gofmt and goimports on the given file
 func GoImports(fullPath string) error {
 	// Run gofmt with simplification flag
-	cmd := exec.Command("gofmt", "-s", "-w", fullPath)
+	cmd := executil.Command(context.TODO(), "gofmt", "-s", "-w", fullPath)
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return err
 	}
 
 	// Run goimports
-	cmd = exec.Command("go", "tool", "goimports", "-local", "github.com/supabase/multigres", "-w", fullPath)
+	cmd = executil.Command(context.TODO(), "go", "tool", "goimports", "-local", "github.com/supabase/multigres", "-w", fullPath)
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return err

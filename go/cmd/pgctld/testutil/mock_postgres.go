@@ -15,11 +15,13 @@
 package testutil
 
 import (
+	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/multigres/multigres/go/tools/executil"
 )
 
 // MockExecCommand mocks exec.Command for testing
@@ -48,11 +50,11 @@ func (m *MockExecCommand) AddCommand(cmdLine string, result MockCommandResult) {
 }
 
 // MockCommand simulates command execution for testing
-func (m *MockExecCommand) MockCommand(name string, args ...string) *exec.Cmd {
+func (m *MockExecCommand) MockCommand(name string, args ...string) *executil.Cmd {
 	cmdLine := fmt.Sprintf("%s %s", name, strings.Join(args, " "))
 
 	// Create a fake command that will be handled by the test helper
-	cmd := exec.Command("echo", "mock")
+	cmd := executil.Command(context.TODO(), "echo", "mock")
 
 	// Store the command line for verification
 	if cmd.Env == nil {

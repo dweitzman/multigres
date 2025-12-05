@@ -15,10 +15,10 @@
 package command
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -29,6 +29,7 @@ import (
 
 	"github.com/multigres/multigres/go/common/servenv"
 	"github.com/multigres/multigres/go/pgctld"
+	"github.com/multigres/multigres/go/tools/executil"
 )
 
 // StartResult contains the result of starting PostgreSQL
@@ -242,7 +243,7 @@ func startPostgreSQLWithConfig(logger *slog.Logger, config *pgctld.PostgresCtlCo
 
 	logger.Info("Starting PostgreSQL with configuration", "port", config.Port, "dataDir", config.PostgresDataDir, "configFile", config.PostgresConfigFile)
 
-	cmd := exec.Command("pg_ctl", args...)
+	cmd := executil.Command(context.TODO(), "pg_ctl", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
@@ -261,7 +262,7 @@ func startPostgreSQLWithConfig(logger *slog.Logger, config *pgctld.PostgresCtlCo
 	// so it handles postgres restarts and can kill even after datadir deletion.
 	if servenv.IsTestOrphanDetectionEnabled() {
 		logger.Info("Spawning watchdog process for orphan detection", "dataDir", config.PostgresDataDir)
-		watchdogCmd := exec.Command(
+		watchdogCmd := executil.Command(context.TODO(),
 			"postgres_orphan_watchdog.sh",
 			config.PostgresDataDir,
 		)
@@ -281,7 +282,7 @@ func waitForPostgreSQLWithConfig(config *pgctld.PostgresCtlConfig) error {
 	// Try to connect using pg_isready
 	socketDir := pgctld.PostgresSocketDir(config.PoolerDir)
 	for i := 0; i < config.Timeout; i++ {
-		cmd := exec.Command("pg_isready",
+		cmd := executil.Command(context.TODO(), "pg_isready",
 			"-h", socketDir,
 			"-p", fmt.Sprintf("%d", config.Port), // Need port even for socket connections
 			"-U", config.User,

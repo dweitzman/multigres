@@ -15,15 +15,16 @@
 package command
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
-
-	"github.com/multigres/multigres/go/pgctld"
-	"github.com/multigres/multigres/go/tools/viperutil"
 
 	"github.com/spf13/cobra"
+
+	"github.com/multigres/multigres/go/pgctld"
+	"github.com/multigres/multigres/go/tools/executil"
+	"github.com/multigres/multigres/go/tools/viperutil"
 )
 
 // StopResult contains the result of stopping PostgreSQL
@@ -178,7 +179,7 @@ func stopWithPgCtlWithConfig(logger *slog.Logger, config *pgctld.PostgresCtlConf
 		"-t", fmt.Sprintf("%d", config.Timeout),
 	}
 
-	cmd := exec.Command("pg_ctl", args...)
+	cmd := executil.Command(context.TODO(), "pg_ctl", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
@@ -200,7 +201,7 @@ func takeCheckpoint(logger *slog.Logger, config *pgctld.PostgresCtlConfig) error
 		"-q", // quiet mode - suppress messages
 	}
 
-	cmd := exec.Command("psql", args...)
+	cmd := executil.Command(context.TODO(), "psql", args...)
 
 	// Capture output to avoid cluttering the terminal
 	output, err := cmd.CombinedOutput()

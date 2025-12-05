@@ -16,7 +16,6 @@ package manager
 
 import (
 	"context"
-	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -218,9 +217,9 @@ fi
 exit 1
 `
 			pgbackrestPath := tmpDir + "/pgbackrest"
-			err := exec.Command("sh", "-c", "cat > "+pgbackrestPath+" << 'EOF'\n"+mockScript+"\nEOF").Run()
+			err := executil.Command(context.TODO(), "sh", "-c", "cat > "+pgbackrestPath+" << 'EOF'\n"+mockScript+"\nEOF").Run()
 			require.NoError(t, err)
-			err = exec.Command("chmod", "+x", pgbackrestPath).Run()
+			err = executil.Command(context.TODO(), "chmod", "+x", pgbackrestPath).Run()
 			require.NoError(t, err)
 
 			// Prepend temp dir to PATH so our mock pgbackrest is found first
