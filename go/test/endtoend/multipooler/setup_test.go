@@ -167,10 +167,7 @@ func cleanupSharedTestSetup() {
 
 	// Stop etcd
 	if sharedTestSetup.EtcdCmd != nil && sharedTestSetup.EtcdCmd.Process != nil {
-		termCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-		_ = executil.TerminateProcess(termCtx, sharedTestSetup.EtcdCmd.Process)
-		cancel()
-		_ = sharedTestSetup.EtcdCmd.Wait()
+		_, _ = sharedTestSetup.EtcdCmd.Stop(1*time.Second, 5*time.Second)
 	}
 
 	// Clean up temp directory
@@ -191,7 +188,7 @@ type ProcessInstance struct {
 	PgctldAddr  string // Used by multipooler
 	EtcdAddr    string // Used by multipooler for topology
 	StanzaName  string // pgBackRest stanza name (used by multipooler)
-	Process     *exec.Cmd
+	Process     *executil.Cmd
 	Binary      string
 	Environment []string
 }
@@ -201,7 +198,7 @@ type MultipoolerTestSetup struct {
 	TempDir            string
 	TempDirCleanup     func()
 	EtcdClientAddr     string
-	EtcdCmd            *exec.Cmd
+	EtcdCmd            *executil.Cmd
 	TopoServer         topoclient.Store
 	PrimaryPgctld      *ProcessInstance
 	StandbyPgctld      *ProcessInstance
@@ -229,17 +226,14 @@ func (p *ProcessInstance) startPgctld(t *testing.T) error {
 	t.Logf("Starting %s with binary '%s'", p.Name, p.Binary)
 	t.Logf("Data dir: %s, gRPC port: %d, PG port: %d", p.DataDir, p.GrpcPort, p.PgPort)
 
-	// Start the gRPC server
-	p.Process = exec.Command(p.Binary, "server",
+	// Start the gRPC server using executil.Command for proper termination handling
+	p.Process = executil.Command(context.Background(), p.Binary, "server",
 		"--pooler-dir", p.DataDir,
 		"--grpc-port", strconv.Itoa(p.GrpcPort),
 		"--pg-port", strconv.Itoa(p.PgPort),
-		"--log-output", p.LogFile)
-
-	// Set MULTIGRES_TESTDATA_DIR for directory-deletion triggered cleanup
-	p.Process.Env = append(p.Environment,
-		"MULTIGRES_TESTDATA_DIR="+filepath.Dir(p.DataDir),
-	)
+		"--log-output", p.LogFile).
+		SetEnv(p.Environment).
+		AddEnv("MULTIGRES_TESTDATA_DIR=" + filepath.Dir(p.DataDir))
 
 	t.Logf("Running server command: %v", p.Process.Args)
 	if err := p.waitForStartup(t, 20*time.Second, 50); err != nil {
@@ -278,13 +272,10 @@ func (p *ProcessInstance) startMultipooler(t *testing.T) error {
 		args = append(args, "--pgbackrest-stanza", p.StanzaName)
 	}
 
-	// Start the multipooler server
-	p.Process = exec.Command(p.Binary, args...)
-
-	// Set MULTIGRES_TESTDATA_DIR for directory-deletion triggered cleanup
-	p.Process.Env = append(p.Environment,
-		"MULTIGRES_TESTDATA_DIR="+filepath.Dir(p.DataDir),
-	)
+	// Start the multipooler server using executil.Command for proper termination handling
+	p.Process = executil.Command(context.Background(), p.Binary, args...).
+		SetEnv(p.Environment).
+		AddEnv("MULTIGRES_TESTDATA_DIR=" + filepath.Dir(p.DataDir))
 
 	t.Logf("Running multipooler command: %v", p.Process.Args)
 	return p.waitForStartup(t, 15*time.Second, 30)
@@ -383,11 +374,8 @@ func (p *ProcessInstance) Stop() {
 		p.stopPostgreSQL()
 	}
 
-	// Then kill the process
-	termCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	_ = executil.TerminateProcess(termCtx, p.Process.Process)
-	cancel()
-	_ = p.Process.Wait()
+	// Use executil.Cmd.Stop() for graceful SIGTERM then SIGKILL termination
+	_, _ = p.Process.Stop(1*time.Second, 5*time.Second)
 }
 
 // IsRunning checks if the process is still running.
@@ -935,7 +923,7 @@ func getSharedTestSetup(t *testing.T) *MultipoolerTestSetup {
 
 // startEtcdForSharedSetup starts etcd without registering t.Cleanup() handlers
 // since cleanup is handled manually by TestMain via cleanupSharedTestSetup()
-func startEtcdForSharedSetup(t *testing.T, dataDir string) (string, *exec.Cmd, error) {
+func startEtcdForSharedSetup(t *testing.T, dataDir string) (string, *executil.Cmd, error) {
 	// Check if etcd is available in PATH
 	_, err := exec.LookPath("etcd")
 	if err != nil {
@@ -952,19 +940,16 @@ func startEtcdForSharedSetup(t *testing.T, dataDir string) (string, *exec.Cmd, e
 	initialCluster := fmt.Sprintf("%v=%v", name, peerAddr)
 
 	// Wrap etcd with run_in_test to ensure cleanup if test process dies
-	cmd := exec.Command("run_in_test.sh", "etcd",
+	// Use executil.Command for proper termination handling
+	cmd := executil.Command(context.Background(), "run_in_test.sh", "etcd",
 		"-name", name,
 		"-advertise-client-urls", clientAddr,
 		"-initial-advertise-peer-urls", peerAddr,
 		"-listen-client-urls", clientAddr,
 		"-listen-peer-urls", peerAddr,
 		"-initial-cluster", initialCluster,
-		"-data-dir", dataDir)
-
-	// Set MULTIGRES_TESTDATA_DIR for directory-deletion triggered cleanup
-	cmd.Env = append(os.Environ(),
-		"MULTIGRES_TESTDATA_DIR="+dataDir,
-	)
+		"-data-dir", dataDir).
+		AddEnv("MULTIGRES_TESTDATA_DIR=" + dataDir)
 
 	if err := cmd.Start(); err != nil {
 		return "", nil, fmt.Errorf("failed to start etcd: %w", err)
@@ -981,10 +966,8 @@ func startEtcdForSharedSetup(t *testing.T, dataDir string) (string, *exec.Cmd, e
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	// If we get here, etcd didn't start in time - kill it and return error
-	termCtx, termCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer termCancel()
-	_ = executil.TerminateProcess(termCtx, cmd.Process)
+	// If we get here, etcd didn't start in time - stop it and return error
+	_, _ = cmd.Stop(1*time.Second, 5*time.Second)
 	return "", nil, fmt.Errorf("etcd failed to become ready within 10 seconds")
 }
 

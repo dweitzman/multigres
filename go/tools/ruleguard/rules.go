@@ -62,7 +62,7 @@ func disallowMetricsConstructorArgs(m dsl.Matcher) {
 func disallowDirectExecCommandContext(m dsl.Matcher) {
 	m.Import("os/exec")
 
-	m.Match(`exec.CommandContext($*_)`).
+	m.Match(`exec.CommandContext($*_)`, `exec.Command($*_)`).
 		Where(!m.File().PkgPath.Matches(`tools/executil$`)).
 		Report("use executil.Command() instead of exec.CommandContext() for graceful termination, proper env handling, and trace propagation")
 }
