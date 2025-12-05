@@ -1143,8 +1143,10 @@ func TestOrphanDetectionWithRealPostgreSQL(t *testing.T) {
 
 	// Kill the pgctld server subprocess abruptly (SIGKILL, no SIGTERM)
 	// This simulates a crash scenario for orphan detection testing
-	//nolint:gocritic // intentionally using Kill() to test orphan detection
-	require.NoError(t, serverCmd.Process.Kill())
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	err, killed := executil.KillProcess(ctx, serverCmd.Process)
+	require.True(t, killed, "Failed to kill pgctld: %v", err)
 	_, _ = serverCmd.Process.Wait()
 
 	// TODO(dweitzman): Start a process using sleep command and use that PID for orphan detection

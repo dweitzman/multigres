@@ -67,14 +67,14 @@ func disallowDirectExecCommandContext(m dsl.Matcher) {
 		Report("use executil.Command() instead of exec.CommandContext() for graceful termination, proper env handling, and trace propagation")
 }
 
-// disallowDirectProcessTermination enforces use of executil.TerminateProcess()
-// or executil.TerminatePID() for consistent SIGTERM -> SIGKILL termination.
+// disallowDirectProcessTermination enforces use of executil functions
+// for consistent graceful SIGTERM -> SIGKILL termination.
 func disallowDirectProcessTermination(m dsl.Matcher) {
 	m.Import("syscall")
 
 	m.Match(`$p.Signal(syscall.SIGTERM)`, `$p.Signal(syscall.SIGKILL)`, `$p.Kill()`).
 		Where(!m.File().PkgPath.Matches(`tools/executil$`)).
-		Report("use executil.TerminateProcess() or executil.TerminatePID() for graceful SIGTERM -> SIGKILL termination")
+		Report("use executil.StopProcess/StopPID (recommended) or executil.TerminateProcess/TerminatePID for graceful termination")
 }
 
 func requireContextBackgroundJustification(m dsl.Matcher) {

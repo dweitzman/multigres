@@ -19,9 +19,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"os"
 	"os/exec"
-	"strings"
 	"testing"
 	"time"
 
@@ -60,7 +58,7 @@ type EtcdOptions struct {
 
 // StartEtcd starts an etcd subprocess with automatically allocated ports.
 // Returns the client address (which includes the port) and the process handle.
-func StartEtcd(t *testing.T) (string, *exec.Cmd) {
+func StartEtcd(t *testing.T) (string, *executil.Cmd) {
 	clientPort := utils.GetFreePort(t)
 	peerPort := utils.GetFreePort(t)
 	return StartEtcdWithOptions(t, EtcdOptions{
@@ -70,7 +68,7 @@ func StartEtcd(t *testing.T) (string, *exec.Cmd) {
 }
 
 // StartEtcdWithOptions starts an etcd subprocess with custom options, and waits for it to be ready.
-func StartEtcdWithOptions(t *testing.T, opts EtcdOptions) (string, *exec.Cmd) {
+func StartEtcdWithOptions(t *testing.T, opts EtcdOptions) (string, *executil.Cmd) {
 	// Check if etcd is available in PATH
 	_, err := exec.LookPath("etcd")
 	require.NoError(t, err, "etcd not found in PATH")
@@ -99,20 +97,17 @@ func StartEtcdWithOptions(t *testing.T, opts EtcdOptions) (string, *exec.Cmd) {
 	peerAddr := fmt.Sprintf("http://localhost:%v", peerPort)
 	initialCluster := fmt.Sprintf("%v=%v", name, peerAddr)
 
-	// Wrap etcd with run_in_test.sh to ensure cleanup if test process dies
-	cmd := exec.Command("run_in_test.sh", "etcd",
+	// Wrap etcd with run_in_test.sh to ensure cleanup if test process dies.
+	// Use context.TODO() since process lifetime is managed manually via t.Cleanup().
+	cmd := executil.Command(context.TODO(), "run_in_test.sh", "etcd",
 		"-name", name,
 		"-advertise-client-urls", clientAddr,
 		"-initial-advertise-peer-urls", peerAddr,
 		"-listen-client-urls", clientAddr,
 		"-listen-peer-urls", peerAddr,
 		"-initial-cluster", initialCluster,
-		"-data-dir", dataDir)
-
-	// Set MULTIGRES_TESTDATA_DIR for directory-deletion triggered cleanup
-	cmd.Env = append(os.Environ(),
-		"MULTIGRES_TESTDATA_DIR="+dataDir,
-	)
+		"-data-dir", dataDir).
+		AddEnv("MULTIGRES_TESTDATA_DIR=" + dataDir)
 
 	err = cmd.Start()
 	require.NoError(t, err, "failed to start etcd")
@@ -140,22 +135,9 @@ func StartEtcdWithOptions(t *testing.T, opts EtcdOptions) (string, *exec.Cmd) {
 	}
 
 	t.Cleanup(func() {
-		// Ensure the process is killed and cleaned up
-		if cmd.Process != nil {
-			// Use executil for graceful SIGTERM -> SIGKILL termination
-			termCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-			defer cancel()
-			if err := executil.TerminateProcess(termCtx, cmd.Process); err != nil {
-				slog.Error("executil.TerminateProcess() failed killing etcd", "error", err)
-			}
-
-			// Wait for process to finish
-			if err := cmd.Wait(); err != nil {
-				// Ignore "signal: killed" and "signal: interrupt" errors as they're expected
-				if !strings.Contains(err.Error(), "signal: killed") && !strings.Contains(err.Error(), "signal: interrupt") {
-					slog.Error("cmd.Wait() failed killing etcd", "error", err)
-				}
-			}
+		// Graceful SIGTERM -> SIGKILL termination
+		if err, stopped := cmd.Stop(1*time.Second, 5*time.Second); !stopped {
+			slog.Error("cmd.Stop() failed to stop etcd", "error", err)
 		}
 
 		// Additional cleanup: try to release the ports

@@ -109,18 +109,6 @@ func getTestPortConfig(t *testing.T, numZones int) *testPortConfig {
 	return config
 }
 
-// killProcessByPID kills a process by PID using graceful SIGTERM -> SIGKILL termination
-func killProcessByPID(pid int) error {
-	if pid <= 0 {
-		return fmt.Errorf("invalid PID: %d", pid)
-	}
-
-	// Use executil for graceful SIGTERM -> SIGKILL termination (1s grace period)
-	termCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	defer cancel()
-	return executil.TerminatePID(termCtx, pid)
-}
-
 // cleanupTestProcesses kills all processes that were started during the test
 func cleanupTestProcesses(tempDir string) error {
 	serviceStates, err := getServiceStates(tempDir)
@@ -133,8 +121,9 @@ func cleanupTestProcesses(tempDir string) error {
 	for serviceName, state := range serviceStates {
 		if state.PID > 0 {
 			fmt.Printf("Cleaning up %s process (PID: %d)...\n", serviceName, state.PID)
-			if err := killProcessByPID(state.PID); err != nil {
-				errors = append(errors, fmt.Sprintf("failed to kill %s (PID %d): %v", serviceName, state.PID, err))
+			// Use graceful SIGTERM -> SIGKILL termination (1s grace period, 5s kill timeout)
+			if err, stopped := executil.StopPID(1*time.Second, 5*time.Second, state.PID); !stopped {
+				errors = append(errors, fmt.Sprintf("failed to stop %s (PID %d): %v", serviceName, state.PID, err))
 			}
 		}
 	}

@@ -33,6 +33,7 @@
 package endtoend
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -49,6 +50,7 @@ import (
 	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/common/topoclient/etcdtopo"
 	"github.com/multigres/multigres/go/test/utils"
+	"github.com/multigres/multigres/go/tools/executil"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 
@@ -150,12 +152,12 @@ func TestBootstrapInitialization(t *testing.T) {
 
 		// 1. Start pgctld server
 		logFile := filepath.Join(node.dataDir, "pgctld.log")
-		pgctldCmd := exec.Command("pgctld", "server",
+		pgctldCmd := executil.Command(context.Background(), "pgctld", "server",
 			"--pooler-dir", node.dataDir,
 			"--grpc-port", fmt.Sprintf("%d", node.pgctldGrpcPort),
 			"--pg-port", fmt.Sprintf("%d", node.pgPort),
-			"--log-output", logFile)
-		pgctldCmd.Env = append(os.Environ(), "MULTIGRES_TESTDATA_DIR="+tempDir)
+			"--log-output", logFile).
+			AddEnv("MULTIGRES_TESTDATA_DIR=" + tempDir)
 		require.NoError(t, pgctldCmd.Start())
 		node.pgctldProcess = pgctldCmd
 		t.Logf("Started pgctld for %s (pid: %d, grpc: %d, pg: %d)", node.name, pgctldCmd.Process.Pid, node.pgctldGrpcPort, node.pgPort)
@@ -170,7 +172,7 @@ func TestBootstrapInitialization(t *testing.T) {
 
 		// 4. Start multipooler (without postgres running, it will wait for bootstrap)
 		serviceID := fmt.Sprintf("%s/%s", cellName, node.name)
-		multipoolerCmd := exec.Command("multipooler",
+		multipoolerCmd := executil.Command(context.Background(), "multipooler",
 			"--grpc-port", fmt.Sprintf("%d", node.grpcPort),
 			"--database", database,
 			"--table-group", constants.DefaultTableGroup,
@@ -185,13 +187,13 @@ func TestBootstrapInitialization(t *testing.T) {
 			"--cell", cellName,
 			"--service-id", serviceID,
 			"--pgbackrest-stanza", pgBackRestStanza,
-		)
-		multipoolerCmd.Dir = node.dataDir
+		).SetDir(node.dataDir)
+
 		mpLogFile := filepath.Join(node.dataDir, "multipooler.log")
 		mpLogF, err := os.Create(mpLogFile)
 		require.NoError(t, err)
-		multipoolerCmd.Stdout = mpLogF
-		multipoolerCmd.Stderr = mpLogF
+		multipoolerCmd.Cmd.Stdout = mpLogF
+		multipoolerCmd.Cmd.Stderr = mpLogF
 		require.NoError(t, multipoolerCmd.Start())
 		node.multipoolerCmd = multipoolerCmd
 		t.Logf("Started multipooler for %s (pid: %d, grpc: %d)", node.name, multipoolerCmd.Process.Pid, node.grpcPort)

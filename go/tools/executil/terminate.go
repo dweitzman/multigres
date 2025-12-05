@@ -24,60 +24,125 @@ import (
 )
 
 // TerminateProcess sends SIGTERM to a process and waits for graceful exit.
-// If ctx expires before the process exits, sends SIGKILL and waits for exit.
-// Returns nil if process is nil or was already dead when SIGTERM was attempted.
-func TerminateProcess(ctx context.Context, process *os.Process) error {
+//
+// Returns true if the process exited before ctx expired.
+// Returns false if ctx expired - process may still be running, call KillProcess().
+//
+// Returns true immediately if process is nil or was already dead.
+func TerminateProcess(ctx context.Context, process *os.Process) bool {
 	if process == nil {
-		return nil
+		return true
 	}
 	return TerminatePID(ctx, process.Pid)
 }
 
+// KillProcess sends SIGKILL to a process and waits for it to exit.
+//
+// Returns (nil, true) if the process exited before ctx expired.
+// Returns (ctx.Err(), false) if the wait timed out (unexpected for SIGKILL).
+//
+// Returns (nil, true) immediately if process is nil or was already dead.
+func KillProcess(ctx context.Context, process *os.Process) (error, bool) {
+	if process == nil {
+		return nil, true
+	}
+	return KillPID(ctx, process.Pid)
+}
+
 // TerminatePID sends SIGTERM to a process by PID and waits for graceful exit.
-// If ctx expires before the process exits, sends SIGKILL and waits for exit.
-// Returns nil if the process was already dead when SIGTERM was attempted.
-func TerminatePID(ctx context.Context, pid int) error {
+//
+// Returns true if the process exited before ctx expired.
+// Returns false if ctx expired - process may still be running, call KillPID().
+//
+// Returns true immediately if the process was already dead.
+func TerminatePID(ctx context.Context, pid int) bool {
 	process, err := os.FindProcess(pid)
 	if err != nil {
-		return nil
+		return true // Process doesn't exist
 	}
 
 	// Send SIGTERM
 	if err := process.Signal(syscall.SIGTERM); err != nil {
 		if isProcessGone(err) {
-			return nil
+			return true
 		}
-		// SIGTERM failed for unexpected reason, try SIGKILL immediately
-		return killProcess(process)
+		// SIGTERM failed for unexpected reason - process state unknown
+		return false
 	}
 
-	// Wait for process to exit gracefully
-	if waitForProcessExit(ctx, process) {
-		return nil
-	}
-
-	// Context expired - escalate to SIGKILL
-	if err := killProcess(process); err != nil {
-		return err
-	}
-
-	// Wait for process to fully exit after SIGKILL (with a reasonable timeout)
-	killCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	waitForProcessExit(killCtx, process)
-
-	return nil
+	// Wait for process to exit or context timeout
+	return waitForProcessExit(ctx, process)
 }
 
-// killProcess sends SIGKILL to a process, returning nil if the process is already gone.
-func killProcess(process *os.Process) error {
+// KillPID sends SIGKILL to a process by PID and waits for it to exit.
+//
+// Returns (nil, true) if the process exited before ctx expired.
+// Returns (ctx.Err(), false) if the wait timed out (unexpected for SIGKILL).
+//
+// Returns (nil, true) immediately if the process was already dead.
+func KillPID(ctx context.Context, pid int) (error, bool) {
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		//nolint:nilerr // err means process doesn't exist, which is success for kill
+		return nil, true
+	}
+
+	// Send SIGKILL
 	if err := process.Kill(); err != nil {
 		if isProcessGone(err) {
-			return nil
+			return nil, true
 		}
-		return err
+		return err, false
 	}
-	return nil
+
+	// Wait for process to exit
+	if waitForProcessExit(ctx, process) {
+		return nil, true
+	}
+	return ctx.Err(), false
+}
+
+// StopProcess gracefully stops a process: SIGTERM first, then SIGKILL if needed.
+//
+// gracePeriod is how long to wait for SIGTERM to take effect.
+// killTimeout is how long to wait after SIGKILL (should be short, SIGKILL is immediate).
+//
+// Returns (nil, true) if the process stopped.
+// Returns (ctx.Err(), false) if the process couldn't be stopped (SIGKILL timeout - very rare).
+//
+// This is the recommended way to stop a process - always try graceful termination first.
+func StopProcess(gracePeriod, killTimeout time.Duration, process *os.Process) (error, bool) {
+	if process == nil {
+		return nil, true
+	}
+	return StopPID(gracePeriod, killTimeout, process.Pid)
+}
+
+// StopPID gracefully stops a process by PID: SIGTERM first, then SIGKILL if needed.
+//
+// gracePeriod is how long to wait for SIGTERM to take effect.
+// killTimeout is how long to wait after SIGKILL (should be short, SIGKILL is immediate).
+//
+// Returns (nil, true) if the process stopped.
+// Returns (ctx.Err(), false) if the process couldn't be stopped (SIGKILL timeout - very rare).
+//
+// This is the recommended way to stop a process - always try graceful termination first.
+func StopPID(gracePeriod, killTimeout time.Duration, pid int) (error, bool) {
+	//nolint:gocritic // Fresh context for controlled shutdown timing
+	termCtx, termCancel := context.WithTimeout(context.Background(), gracePeriod)
+	exited := TerminatePID(termCtx, pid)
+	termCancel()
+
+	if exited {
+		return nil, true
+	}
+
+	//nolint:gocritic // Fresh context for kill timeout
+	killCtx, killCancel := context.WithTimeout(context.Background(), killTimeout)
+	err, killed := KillPID(killCtx, pid)
+	killCancel()
+
+	return err, killed
 }
 
 // isProcessGone returns true if the error indicates the process doesn't exist.

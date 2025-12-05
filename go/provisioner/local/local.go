@@ -1160,10 +1160,12 @@ func (p *localProvisioner) stopProcessByPID(ctx context.Context, name string, pi
 	span.SetAttributes(attribute.String("service", name))
 	defer span.End()
 
-	// Use 10 second grace period (context timeout controls when SIGKILL is sent)
-	termCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	return executil.TerminatePID(termCtx, pid)
+	// Use 10 second grace period for SIGTERM, 5 second timeout for SIGKILL
+	err, stopped := executil.StopPID(10*time.Second, 5*time.Second, pid)
+	if !stopped {
+		return err
+	}
+	return nil
 }
 
 // Bootstrap sets up etcd and creates the default database
