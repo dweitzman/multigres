@@ -29,6 +29,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/multigres/multigres/go/pb/query"
+	"github.com/multigres/multigres/go/pgprotocol/auth"
 	"github.com/multigres/multigres/go/pgprotocol/protocol"
 )
 
@@ -407,4 +408,244 @@ func TestCancelRequest(t *testing.T) {
 	// Verify no response was sent (cancel requests don't get responses).
 	output := mock.writeBuf.Bytes()
 	assert.Empty(t, output, "should not send any response to cancel request")
+}
+
+// mockPasswordHashProvider implements auth.PasswordHashProvider for testing.
+type mockPasswordHashProvider struct {
+	hashes map[string]*auth.ScramHash
+}
+
+func (m *mockPasswordHashProvider) GetPasswordHash(_ context.Context, username string) (*auth.ScramHash, error) {
+	hash, ok := m.hashes[username]
+	if !ok {
+		return nil, auth.ErrUserNotFound
+	}
+	return hash, nil
+}
+
+// createTestScramHash creates a ScramHash for testing.
+func createTestScramHash(password string, salt []byte, iterations int) *auth.ScramHash {
+	saltedPassword := auth.ComputeSaltedPassword(password, salt, iterations)
+	clientKey := auth.ComputeClientKey(saltedPassword)
+	storedKey := auth.ComputeStoredKey(clientKey)
+	serverKey := auth.ComputeServerKey(saltedPassword)
+	return &auth.ScramHash{
+		Iterations: iterations,
+		Salt:       salt,
+		StoredKey:  storedKey,
+		ServerKey:  serverKey,
+	}
+}
+
+// testListenerWithSCRAM creates a test listener with SCRAM authentication.
+func testListenerWithSCRAM(t *testing.T, provider auth.PasswordHashProvider) *Listener {
+	listener, err := NewListener(ListenerConfig{
+		Address:              "localhost:0",
+		Handler:              &mockHandler{},
+		PasswordHashProvider: provider,
+		Logger:               testLogger(t),
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		listener.Close()
+	})
+	return listener
+}
+
+// writeSASLInitialResponse writes a SASLInitialResponse message to the buffer.
+func writeSASLInitialResponse(buf *bytes.Buffer, mechanism string, clientFirstMessage string) {
+	// Message format: 'p' + length + mechanism-name + int32(response-length) + response-data
+	msgBody := &bytes.Buffer{}
+	msgBody.WriteString(mechanism)
+	msgBody.WriteByte(0) // null terminator for mechanism
+	_ = binary.Write(msgBody, binary.BigEndian, int32(len(clientFirstMessage)))
+	msgBody.WriteString(clientFirstMessage)
+
+	// Write message type.
+	buf.WriteByte(protocol.MsgPasswordMsg)
+	// Write length (includes length field itself).
+	_ = binary.Write(buf, binary.BigEndian, uint32(4+msgBody.Len()))
+	// Write body.
+	buf.Write(msgBody.Bytes())
+}
+
+// writeSASLResponse writes a SASLResponse message to the buffer.
+func writeSASLResponse(buf *bytes.Buffer, clientFinalMessage string) {
+	// Message format: 'p' + length + response-data
+	buf.WriteByte(protocol.MsgPasswordMsg)
+	_ = binary.Write(buf, binary.BigEndian, uint32(4+len(clientFinalMessage)))
+	buf.WriteString(clientFinalMessage)
+}
+
+func TestSCRAMAuthentication(t *testing.T) {
+	testSalt := []byte("testsalt12345678")
+	testIterations := 4096
+	testPassword := "correctpassword"
+
+	// TODO: Add full end-to-end SCRAM authentication test.
+	// This requires either:
+	// 1. A SCRAM client implementation in go/pgprotocol/client for proper handshake simulation
+	// 2. End-to-end tests using the standard lib/pq or pgx driver against a real server
+	// The challenge is that the server generates random nonces, making it difficult to
+	// pre-compute client responses without intercepting intermediate messages.
+
+	t.Run("AuthenticationSASL message format", func(t *testing.T) {
+		mock := newMockConn()
+		provider := &mockPasswordHashProvider{
+			hashes: map[string]*auth.ScramHash{
+				"testuser": createTestScramHash(testPassword, testSalt, testIterations),
+			},
+		}
+
+		listener := testListenerWithSCRAM(t, provider)
+		c := &Conn{
+			conn:           mock,
+			listener:       listener,
+			bufferedReader: bufio.NewReader(mock),
+			bufferedWriter: bufio.NewWriter(mock),
+			params:         make(map[string]string),
+			txnStatus:      protocol.TxnStatusIdle,
+		}
+		c.logger = testLogger(t)
+
+		// Send AuthenticationSASL message.
+		err := c.sendAuthenticationSASL([]string{"SCRAM-SHA-256"})
+		require.NoError(t, err)
+		err = c.flush()
+		require.NoError(t, err)
+
+		// Parse the output.
+		output := mock.writeBuf.Bytes()
+		require.NotEmpty(t, output)
+
+		// Verify message type.
+		assert.Equal(t, byte(protocol.MsgAuthenticationRequest), output[0])
+
+		// Verify length.
+		msgLen := binary.BigEndian.Uint32(output[1:5])
+		assert.Equal(t, uint32(len(output)-1), msgLen) // length includes itself but not type byte
+
+		// Verify auth code.
+		authCode := binary.BigEndian.Uint32(output[5:9])
+		assert.Equal(t, uint32(protocol.AuthSASL), authCode)
+
+		// Verify mechanism name is present.
+		mechanismBytes := output[9:]
+		assert.Contains(t, string(mechanismBytes), "SCRAM-SHA-256")
+	})
+
+	t.Run("AuthenticationSASLContinue message format", func(t *testing.T) {
+		mock := newMockConn()
+		listener := testListener(t)
+		c := &Conn{
+			conn:           mock,
+			listener:       listener,
+			bufferedReader: bufio.NewReader(mock),
+			bufferedWriter: bufio.NewWriter(mock),
+			params:         make(map[string]string),
+			txnStatus:      protocol.TxnStatusIdle,
+		}
+		c.logger = testLogger(t)
+
+		serverFirstMessage := "r=clientnonce+servernonce,s=c2FsdA==,i=4096"
+		err := c.sendAuthenticationSASLContinue(serverFirstMessage)
+		require.NoError(t, err)
+		err = c.flush()
+		require.NoError(t, err)
+
+		output := mock.writeBuf.Bytes()
+		require.NotEmpty(t, output)
+
+		// Verify message type.
+		assert.Equal(t, byte(protocol.MsgAuthenticationRequest), output[0])
+
+		// Verify auth code.
+		authCode := binary.BigEndian.Uint32(output[5:9])
+		assert.Equal(t, uint32(protocol.AuthSASLContinue), authCode)
+
+		// Verify server-first-message is present.
+		msgData := output[9:]
+		assert.Equal(t, serverFirstMessage, string(msgData))
+	})
+
+	t.Run("AuthenticationSASLFinal message format", func(t *testing.T) {
+		mock := newMockConn()
+		listener := testListener(t)
+		c := &Conn{
+			conn:           mock,
+			listener:       listener,
+			bufferedReader: bufio.NewReader(mock),
+			bufferedWriter: bufio.NewWriter(mock),
+			params:         make(map[string]string),
+			txnStatus:      protocol.TxnStatusIdle,
+		}
+		c.logger = testLogger(t)
+
+		serverFinalMessage := "v=serverSignatureBase64=="
+		err := c.sendAuthenticationSASLFinal(serverFinalMessage)
+		require.NoError(t, err)
+		err = c.flush()
+		require.NoError(t, err)
+
+		output := mock.writeBuf.Bytes()
+		require.NotEmpty(t, output)
+
+		// Verify message type.
+		assert.Equal(t, byte(protocol.MsgAuthenticationRequest), output[0])
+
+		// Verify auth code.
+		authCode := binary.BigEndian.Uint32(output[5:9])
+		assert.Equal(t, uint32(protocol.AuthSASLFinal), authCode)
+
+		// Verify server-final-message is present.
+		msgData := output[9:]
+		assert.Equal(t, serverFinalMessage, string(msgData))
+	})
+
+	t.Run("readSASLInitialResponse parses correctly", func(t *testing.T) {
+		mock := newMockConn()
+		listener := testListener(t)
+		c := &Conn{
+			conn:           mock,
+			listener:       listener,
+			bufferedReader: bufio.NewReader(mock),
+			bufferedWriter: bufio.NewWriter(mock),
+			params:         make(map[string]string),
+			txnStatus:      protocol.TxnStatusIdle,
+		}
+		c.logger = testLogger(t)
+
+		// Write a SASLInitialResponse.
+		clientFirstMessage := "n,,n=testuser,r=clientnonce"
+		writeSASLInitialResponse(mock.readBuf, "SCRAM-SHA-256", clientFirstMessage)
+
+		// Read it back.
+		mechanism, response, err := c.readSASLInitialResponse()
+		require.NoError(t, err)
+		assert.Equal(t, "SCRAM-SHA-256", mechanism)
+		assert.Equal(t, clientFirstMessage, response)
+	})
+
+	t.Run("readSASLResponse parses correctly", func(t *testing.T) {
+		mock := newMockConn()
+		listener := testListener(t)
+		c := &Conn{
+			conn:           mock,
+			listener:       listener,
+			bufferedReader: bufio.NewReader(mock),
+			bufferedWriter: bufio.NewWriter(mock),
+			params:         make(map[string]string),
+			txnStatus:      protocol.TxnStatusIdle,
+		}
+		c.logger = testLogger(t)
+
+		// Write a SASLResponse.
+		clientFinalMessage := "c=biws,r=combinednonce,p=proofBase64=="
+		writeSASLResponse(mock.readBuf, clientFinalMessage)
+
+		// Read it back.
+		response, err := c.readSASLResponse()
+		require.NoError(t, err)
+		assert.Equal(t, clientFinalMessage, response)
+	})
 }

@@ -25,6 +25,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/multigres/multigres/go/pgprotocol/auth"
 	"github.com/multigres/multigres/go/pgprotocol/bufpool"
 )
 
@@ -35,6 +36,10 @@ type Listener struct {
 
 	// handler processes queries for connections.
 	handler Handler
+
+	// passwordHashProvider provides password hashes for SCRAM authentication.
+	// If nil, trust authentication is used (no password required).
+	passwordHashProvider auth.PasswordHashProvider
 
 	// logger for logging.
 	logger *slog.Logger
@@ -67,6 +72,10 @@ type ListenerConfig struct {
 	// Handler processes queries.
 	Handler Handler
 
+	// PasswordHashProvider provides password hashes for SCRAM-SHA-256 authentication.
+	// If nil, trust authentication is used (no password required).
+	PasswordHashProvider auth.PasswordHashProvider
+
 	// Logger for logging (optional, defaults to slog.Default()).
 	Logger *slog.Logger
 }
@@ -90,11 +99,12 @@ func NewListener(config ListenerConfig) (*Listener, error) {
 	ctx, cancel := context.WithCancel(context.TODO())
 
 	l := &Listener{
-		listener: netListener,
-		handler:  config.Handler,
-		logger:   logger,
-		ctx:      ctx,
-		cancel:   cancel,
+		listener:             netListener,
+		handler:              config.Handler,
+		passwordHashProvider: config.PasswordHashProvider,
+		logger:               logger,
+		ctx:                  ctx,
+		cancel:               cancel,
 	}
 
 	// Initialize buffer pools.
