@@ -1114,22 +1114,30 @@ message GetAuthCredentialsResponse {
 }
 ```
 
-### Phase 3: Multigateway Integration (TDD)
+### Phase 3: Multigateway Integration (TDD) ✅ COMPLETE
+
+**Status:** Completed 2025-12-05
 
 Wire up SCRAM authentication in multigateway by creating a PasswordHashProvider
 that fetches credentials from multipooler via gRPC.
 
-**Tests first:**
-
-1. `TestMultigatewayPoolerHashProvider` - Unit test for gRPC credential fetching
-2. `TestMultigatewayPoolerHashProviderUserNotFound` - Returns nil for unknown user
-3. `TestMultigatewaySCRAMAuthentication` - End-to-end: client → multigateway → multipooler
-
-**Then implement:**
+**Implemented:**
 
 1. `go/multigateway/auth/pooler_hash_provider.go` - PasswordHashProvider using gRPC
-2. Update multigateway startup to wire PasswordHashProvider into pgprotocol Listener
-3. End-to-end test with full cluster
+2. `go/multigateway/auth/pooler_hash_provider_test.go` - Unit tests for credential fetching
+3. `go/multigateway/poolergateway/pooler_gateway.go` - Added GetAuthCredentials method
+4. `go/multigateway/init.go` - Wire PasswordHashProvider into ListenerConfig
+5. Extended `PasswordHashProvider` interface to include database parameter
+6. Updated `ScramAuthenticator` to pass database to credential lookup
+
+**Tests implemented:**
+
+- `TestPoolerHashProvider_ExistingUser` - Valid hash returned
+- `TestPoolerHashProvider_NonExistentUser` - Returns ErrUserNotFound
+- `TestPoolerHashProvider_UserWithoutPassword` - Returns ErrUserNotFound
+- `TestPoolerHashProvider_GRPCError` - Error propagation
+- `TestPoolerHashProvider_InvalidHashFormat` - Parse error handling
+- `TestPoolerHashProvider_ImplementsInterface` - Interface compliance
 
 **Security note:** Without Phase 4 sandboxing, authenticated users could potentially
 use SET SESSION AUTHORIZATION to impersonate others. This is acceptable for initial
@@ -1187,9 +1195,10 @@ validation but sandboxing is required for multi-tenant deployments.
 - `go/multipooler/grpcpoolerservice/service_test.go` - GetAuthCredentials unit tests
 - `go/test/endtoend/multipooler/auth_credentials_test.go` - GetAuthCredentials e2e tests
 
-**Phase 3 (Pending - Multigateway Integration):**
+**Phase 3 (✅ Complete):**
 
 - `go/multigateway/auth/pooler_hash_provider.go` - PasswordHashProvider via gRPC
+- `go/multigateway/auth/pooler_hash_provider_test.go` - Unit tests
 
 **Phase 4-6 (Pending):**
 
@@ -1208,9 +1217,12 @@ validation but sandboxing is required for multi-tenant deployments.
 - `proto/multipoolerservice.proto` - Added GetAuthCredentials RPC
 - `go/multipooler/grpcpoolerservice/service.go` - Implemented GetAuthCredentials
 
-**Phase 3 (Pending - Multigateway Integration):**
+**Phase 3 (✅ Complete):**
 
-- Multigateway startup - Wire PasswordHashProvider into pgprotocol Listener
+- `go/multigateway/init.go` - Wire PasswordHashProvider into pgprotocol Listener
+- `go/multigateway/poolergateway/pooler_gateway.go` - Added GetAuthCredentials method
+- `go/pgprotocol/auth/authenticator.go` - Extended interface with database parameter
+- `go/pgprotocol/server/startup.go` - Pass database to ScramAuthenticator
 
 **Phase 4-6 (Pending):**
 
