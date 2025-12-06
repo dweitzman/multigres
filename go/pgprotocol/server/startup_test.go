@@ -482,12 +482,8 @@ func TestSCRAMAuthentication(t *testing.T) {
 	testIterations := 4096
 	testPassword := "correctpassword"
 
-	// TODO: Add full end-to-end SCRAM authentication test.
-	// This requires either:
-	// 1. A SCRAM client implementation in go/pgprotocol/client for proper handshake simulation
-	// 2. End-to-end tests using the standard lib/pq or pgx driver against a real server
-	// The challenge is that the server generates random nonces, making it difficult to
-	// pre-compute client responses without intercepting intermediate messages.
+	// Full end-to-end SCRAM authentication tests are in scram_endtoend_test.go,
+	// using lib/pq driver for realistic client simulation.
 
 	t.Run("AuthenticationSASL message format", func(t *testing.T) {
 		mock := newMockConn()

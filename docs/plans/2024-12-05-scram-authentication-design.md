@@ -1032,24 +1032,50 @@ PostgreSQL connections traditionally never expire - changing a password doesn't 
 
 ## Implementation Phases
 
-### Phase 1: SCRAM Protocol (TDD)
+### Phase 1: SCRAM Protocol (TDD) ✅ COMPLETE
 
-**Tests first:**
+**Status:** Completed 2025-12-05
 
-1. `TestParseScramHash` - Parse PostgreSQL password hash format
-2. `TestParseClientFirstMessage` - Parse SCRAM client-first
-3. `TestGenerateServerFirstMessage` - Generate server-first with nonce
-4. `TestVerifyClientProof` - Cryptographic verification
-5. `TestFullScramHandshake` - End-to-end with test vectors
+**Tests implemented:**
 
-**Then implement:**
+- `TestParseScramHash` - Parse PostgreSQL password hash format
+- `TestParseClientFirstMessage` - Parse SCRAM client-first
+- `TestGenerateServerFirstMessage` - Generate server-first with nonce
+- `TestVerifyClientProof` - Cryptographic verification
+- `TestFullScramHandshake` - End-to-end with test vectors
+- `TestSCRAMEndToEnd` - Full integration test using lib/pq driver
 
-1. `go/pgprotocol/auth/password.go` - Hash parsing
-2. `go/pgprotocol/auth/scram.go` - Message parsing/generation
-3. `go/pgprotocol/auth/scram_crypto.go` - PBKDF2, HMAC operations
-4. `go/pgprotocol/auth/authenticator.go` - State machine
+**Files created:**
 
-**Integration:** 5. Update `go/pgprotocol/server/startup.go` - Use SCRAM instead of trust
+- `go/pgprotocol/auth/password.go` - Hash parsing (122 lines)
+- `go/pgprotocol/auth/password_test.go` - Hash parsing tests (178 lines)
+- `go/pgprotocol/auth/scram.go` - Message parsing/generation (288 lines)
+- `go/pgprotocol/auth/scram_test.go` - Message tests (275 lines)
+- `go/pgprotocol/auth/scram_crypto.go` - PBKDF2, HMAC operations (146 lines)
+- `go/pgprotocol/auth/scram_crypto_test.go` - Crypto tests with RFC 5802 vectors (401 lines)
+- `go/pgprotocol/auth/authenticator.go` - State machine (241 lines)
+- `go/pgprotocol/auth/authenticator_test.go` - Authenticator tests (490 lines)
+- `go/pgprotocol/server/scram_endtoend_test.go` - End-to-end tests with lib/pq (282 lines)
+
+**Files modified:**
+
+- `go/pgprotocol/server/startup.go` - SCRAM integration (~220 lines added)
+- `go/pgprotocol/server/startup_test.go` - SASL message format tests (~170 lines added)
+- `go/pgprotocol/server/listener.go` - Added PasswordHashProvider config
+
+**Key interfaces:**
+
+```go
+// PasswordHashProvider abstracts credential storage for SCRAM authentication.
+type PasswordHashProvider interface {
+    GetPasswordHash(ctx context.Context, username string) (*ScramHash, error)
+}
+
+// ListenerConfig now accepts PasswordHashProvider for SCRAM auth.
+// If nil, trust authentication is used (no password required).
+```
+
+**Test coverage:** 69+ unit tests in auth package, 5 SASL message tests, 3 end-to-end tests
 
 ### Phase 2: Credential Fetching (TDD)
 
@@ -1105,16 +1131,28 @@ PostgreSQL connections traditionally never expire - changing a password doesn't 
 
 ### New Files
 
+**Phase 1 (✅ Complete):**
+
 - `go/pgprotocol/auth/scram.go` - SCRAM protocol implementation
 - `go/pgprotocol/auth/scram_crypto.go` - Cryptographic operations
 - `go/pgprotocol/auth/password.go` - Password hash parsing
 - `go/pgprotocol/auth/authenticator.go` - Auth state machine
+- `go/pgprotocol/server/scram_endtoend_test.go` - End-to-end tests with lib/pq
+
+**Phase 2-3 (Pending):**
+
 - `go/multipooler/security/session_auth_filter.go` - SQL security filter
 - `go/multigateway/auth/credential_cache.go` - Hash caching
 
 ### Modified Files
 
+**Phase 1 (✅ Complete):**
+
 - `go/pgprotocol/server/startup.go` - SCRAM integration
+- `go/pgprotocol/server/listener.go` - PasswordHashProvider config
+
+**Phase 2-4 (Pending):**
+
 - `go/pgprotocol/server/conn.go` - Auth state tracking
 - `go/multigateway/poolergateway/grpc_query_service.go` - Populate caller_id
 - `go/multipooler/grpcpoolerservice/service.go` - GetAuthCredentials + sandboxing
