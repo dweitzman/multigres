@@ -1077,21 +1077,46 @@ type PasswordHashProvider interface {
 
 **Test coverage:** 69+ unit tests in auth package, 5 SASL message tests, 3 end-to-end tests
 
-### Phase 2: Credential Fetching (TDD)
+### Phase 2: Credential Fetching (TDD) ✅ COMPLETE
 
-**Tests first:**
+**Status:** Completed 2025-12-05
 
-1. `TestGetAuthCredentialsGRPC` - Endpoint returns hash
-2. `TestGetAuthCredentialsNonexistentUser` - Returns user_exists=false
-3. `TestCredentialCacheHit` - Cache returns without fetch
-4. `TestCredentialCacheTTL` - Cache expires and refetches
-5. `TestCredentialCacheInvalidation` - Auth failure clears cache
+**Tests implemented:**
 
-**Then implement:**
+- `TestGetAuthCredentials_NilPooler` - Returns UNAVAILABLE when pooler is nil
+- `TestGetAuthCredentials_ValidatesRequest` - Validates username/database required
+- `TestGetAuthCredentials_ExistingUser` - Fetches SCRAM hash for existing user
+- `TestGetAuthCredentials_NonExistentUser` - Returns user_exists=false
+- `TestGetAuthCredentials_PostgresUser` - Tests postgres superuser lookup
+- `TestGetAuthCredentials_InvalidRequest` - Validates empty field rejection
 
-1. Update `proto/multipoolerservice.proto` - Add GetAuthCredentials
-2. `go/multipooler/grpcpoolerservice/credentials.go` - Query pg_authid
-3. `go/multigateway/auth/credential_cache.go` - Caching layer
+**Files created:**
+
+- `go/multipooler/grpcpoolerservice/service_test.go` - Unit tests
+- `go/test/endtoend/multipooler/auth_credentials_test.go` - End-to-end tests
+
+**Files modified:**
+
+- `proto/multipoolerservice.proto` - Added GetAuthCredentials RPC and messages
+- `go/multipooler/grpcpoolerservice/service.go` - Implemented GetAuthCredentials
+- `go/pb/multipoolerservice/*.go` - Generated proto code
+
+**Key implementation:**
+
+```go
+// GetAuthCredentials retrieves SCRAM hash from pg_catalog.pg_authid
+rpc GetAuthCredentials(GetAuthCredentialsRequest) returns (GetAuthCredentialsResponse);
+
+message GetAuthCredentialsResponse {
+  string scram_hash = 1;   // SCRAM-SHA-256$iterations:salt:stored_key:server_key
+  bool user_exists = 2;    // False if user not found
+  int32 hash_version = 3;  // Version 1 = SCRAM-SHA-256
+}
+```
+
+**Remaining for Phase 2 (optional):**
+
+- `go/multigateway/auth/credential_cache.go` - Caching layer (deferred to Phase 4)
 
 ### Phase 3: Connection Pool Sandboxing (TDD)
 
@@ -1139,7 +1164,12 @@ type PasswordHashProvider interface {
 - `go/pgprotocol/auth/authenticator.go` - Auth state machine
 - `go/pgprotocol/server/scram_endtoend_test.go` - End-to-end tests with lib/pq
 
-**Phase 2-3 (Pending):**
+**Phase 2 (✅ Complete):**
+
+- `go/multipooler/grpcpoolerservice/service_test.go` - GetAuthCredentials unit tests
+- `go/test/endtoend/multipooler/auth_credentials_test.go` - GetAuthCredentials e2e tests
+
+**Phase 3-4 (Pending):**
 
 - `go/multipooler/security/session_auth_filter.go` - SQL security filter
 - `go/multigateway/auth/credential_cache.go` - Hash caching
@@ -1151,7 +1181,12 @@ type PasswordHashProvider interface {
 - `go/pgprotocol/server/startup.go` - SCRAM integration
 - `go/pgprotocol/server/listener.go` - PasswordHashProvider config
 
-**Phase 2-4 (Pending):**
+**Phase 2 (✅ Complete):**
+
+- `proto/multipoolerservice.proto` - Added GetAuthCredentials RPC
+- `go/multipooler/grpcpoolerservice/service.go` - Implemented GetAuthCredentials
+
+**Phase 3-4 (Pending):**
 
 - `go/pgprotocol/server/conn.go` - Auth state tracking
 - `go/multigateway/poolergateway/grpc_query_service.go` - Populate caller_id
