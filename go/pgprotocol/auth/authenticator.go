@@ -34,9 +34,9 @@ var (
 // This abstraction allows the authenticator to be used with different
 // storage backends (PostgreSQL, cache, etc.).
 type PasswordHashProvider interface {
-	// GetPasswordHash retrieves the SCRAM-SHA-256 hash for a user.
+	// GetPasswordHash retrieves the SCRAM-SHA-256 hash for a user in a database.
 	// Returns ErrUserNotFound if the user does not exist.
-	GetPasswordHash(ctx context.Context, username string) (*ScramHash, error)
+	GetPasswordHash(ctx context.Context, username, database string) (*ScramHash, error)
 }
 
 // authenticatorState tracks the current state of the SCRAM handshake.
@@ -64,6 +64,9 @@ const (
 type ScramAuthenticator struct {
 	provider PasswordHashProvider
 
+	// Database for credential lookup.
+	database string
+
 	// Current state of the authentication handshake.
 	state authenticatorState
 
@@ -83,15 +86,16 @@ type ScramAuthenticator struct {
 }
 
 // NewScramAuthenticator creates a new SCRAM authenticator with the given
-// password hash provider.
+// password hash provider and database name for credential lookup.
 //
 // Panics if provider is nil.
-func NewScramAuthenticator(provider PasswordHashProvider) *ScramAuthenticator {
+func NewScramAuthenticator(provider PasswordHashProvider, database string) *ScramAuthenticator {
 	if provider == nil {
 		panic("auth: password hash provider cannot be nil")
 	}
 	return &ScramAuthenticator{
 		provider: provider,
+		database: database,
 		state:    stateInitial,
 	}
 }
@@ -132,7 +136,7 @@ func (a *ScramAuthenticator) HandleClientFirst(ctx context.Context, clientFirstM
 	a.clientFirstMessageBare = parsed.ClientFirstMessageBare
 
 	// Look up the password hash for this user.
-	hash, err := a.provider.GetPasswordHash(ctx, a.username)
+	hash, err := a.provider.GetPasswordHash(ctx, a.username, a.database)
 	if err != nil {
 		a.state = stateFailed
 		if errors.Is(err, ErrUserNotFound) {

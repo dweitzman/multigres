@@ -1114,11 +1114,28 @@ message GetAuthCredentialsResponse {
 }
 ```
 
-**Remaining for Phase 2 (optional):**
+### Phase 3: Multigateway Integration (TDD)
 
-- `go/multigateway/auth/credential_cache.go` - Caching layer (deferred to Phase 4)
+Wire up SCRAM authentication in multigateway by creating a PasswordHashProvider
+that fetches credentials from multipooler via gRPC.
 
-### Phase 3: Connection Pool Sandboxing (TDD)
+**Tests first:**
+
+1. `TestMultigatewayPoolerHashProvider` - Unit test for gRPC credential fetching
+2. `TestMultigatewayPoolerHashProviderUserNotFound` - Returns nil for unknown user
+3. `TestMultigatewaySCRAMAuthentication` - End-to-end: client → multigateway → multipooler
+
+**Then implement:**
+
+1. `go/multigateway/auth/pooler_hash_provider.go` - PasswordHashProvider using gRPC
+2. Update multigateway startup to wire PasswordHashProvider into pgprotocol Listener
+3. End-to-end test with full cluster
+
+**Security note:** Without Phase 4 sandboxing, authenticated users could potentially
+use SET SESSION AUTHORIZATION to impersonate others. This is acceptable for initial
+validation but sandboxing is required for multi-tenant deployments.
+
+### Phase 4: Connection Pool Sandboxing (TDD)
 
 **Tests first:**
 
@@ -1135,20 +1152,21 @@ message GetAuthCredentialsResponse {
 2. Update `go/multipooler/poolerserver/pooler.go` - Integrate filter
 3. Update `go/multipooler/grpcpoolerservice/service.go` - Sandbox on checkout
 
-### Phase 4: Identity Propagation
+### Phase 5: Identity Propagation
 
 1. Update `go/multigateway/poolergateway/grpc_query_service.go` - Populate caller_id
 2. Update `go/multipooler/grpcpoolerservice/service.go` - Validate and use caller_id
 3. Add audit logging for authenticated identity
 
-### Phase 5: End-to-End Testing
+### Phase 6: End-to-End Testing & Caching
 
-1. Test SCRAM auth with real PostgreSQL instance
-2. Test role switching (`SET ROLE`) works correctly within sandbox
-3. Test session auth blocking with malicious SQL
-4. Test connection reuse across different users
-5. Test credential cache behavior under load
-6. Performance benchmarks vs trust auth baseline
+1. `go/multigateway/auth/credential_cache.go` - Optional caching layer
+2. Test SCRAM auth with real PostgreSQL instance
+3. Test role switching (`SET ROLE`) works correctly within sandbox
+4. Test session auth blocking with malicious SQL
+5. Test connection reuse across different users
+6. Test credential cache behavior under load
+7. Performance benchmarks vs trust auth baseline
 
 ---
 
@@ -1169,10 +1187,14 @@ message GetAuthCredentialsResponse {
 - `go/multipooler/grpcpoolerservice/service_test.go` - GetAuthCredentials unit tests
 - `go/test/endtoend/multipooler/auth_credentials_test.go` - GetAuthCredentials e2e tests
 
-**Phase 3-4 (Pending):**
+**Phase 3 (Pending - Multigateway Integration):**
+
+- `go/multigateway/auth/pooler_hash_provider.go` - PasswordHashProvider via gRPC
+
+**Phase 4-6 (Pending):**
 
 - `go/multipooler/security/session_auth_filter.go` - SQL security filter
-- `go/multigateway/auth/credential_cache.go` - Hash caching
+- `go/multigateway/auth/credential_cache.go` - Hash caching (optional)
 
 ### Modified Files
 
@@ -1186,13 +1208,16 @@ message GetAuthCredentialsResponse {
 - `proto/multipoolerservice.proto` - Added GetAuthCredentials RPC
 - `go/multipooler/grpcpoolerservice/service.go` - Implemented GetAuthCredentials
 
-**Phase 3-4 (Pending):**
+**Phase 3 (Pending - Multigateway Integration):**
+
+- Multigateway startup - Wire PasswordHashProvider into pgprotocol Listener
+
+**Phase 4-6 (Pending):**
 
 - `go/pgprotocol/server/conn.go` - Auth state tracking
 - `go/multigateway/poolergateway/grpc_query_service.go` - Populate caller_id
-- `go/multipooler/grpcpoolerservice/service.go` - GetAuthCredentials + sandboxing
+- `go/multipooler/grpcpoolerservice/service.go` - Sandboxing
 - `go/multipooler/poolerserver/pooler.go` - Session auth on checkout/return
-- `proto/multipoolerservice.proto` - GetAuthCredentials RPC
 
 ### Reference Files (Read Before Implementing)
 

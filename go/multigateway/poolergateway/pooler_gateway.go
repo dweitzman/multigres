@@ -29,9 +29,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/multigres/multigres/go/common/constants"
 	"github.com/multigres/multigres/go/common/queryservice"
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	multipoolerpb "github.com/multigres/multigres/go/pb/multipoolerservice"
 	"github.com/multigres/multigres/go/pb/query"
 
 	"google.golang.org/grpc"
@@ -311,4 +313,45 @@ func (pg *PoolerGateway) Stats() map[string]any {
 		"active_connections": len(pg.connections),
 		"poolers_discovered": len(pg.discovery.GetPoolers()),
 	}
+}
+
+// GetAuthCredentials retrieves authentication credentials for a user from a pooler.
+// This is used by multigateway to authenticate clients using SCRAM-SHA-256.
+func (pg *PoolerGateway) GetAuthCredentials(ctx context.Context, req *multipoolerpb.GetAuthCredentialsRequest) (*multipoolerpb.GetAuthCredentialsResponse, error) {
+	// Get a pooler using the standard discovery mechanism with the default tablegroup.
+	// Auth credentials can be fetched from any pooler since they all
+	// have access to the same PostgreSQL credential store.
+	target := &query.Target{
+		TableGroup: constants.DefaultTableGroup,
+	}
+	pooler := pg.discovery.GetPooler(target)
+	if pooler == nil {
+		return nil, fmt.Errorf("no poolers available for authentication")
+	}
+
+	poolerID := topoclient.MultiPoolerIDString(pooler.Id)
+
+	pg.logger.DebugContext(ctx, "getting auth credentials",
+		"pooler_id", poolerID,
+		"database", req.Database,
+		"username", req.Username)
+
+	// Get or create connection to this pooler
+	pg.mu.Lock()
+	conn, ok := pg.connections[poolerID]
+	if !ok {
+		pg.mu.Unlock()
+		// Create new connection
+		_, err := pg.getOrCreateConnection(ctx, pooler)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get connection to pooler %s: %w", poolerID, err)
+		}
+		pg.mu.Lock()
+		conn = pg.connections[poolerID]
+	}
+	pg.mu.Unlock()
+
+	// Call GetAuthCredentials on the pooler
+	client := multipoolerpb.NewMultiPoolerServiceClient(conn.conn)
+	return client.GetAuthCredentials(ctx, req)
 }

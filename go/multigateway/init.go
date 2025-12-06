@@ -28,6 +28,7 @@ import (
 	"github.com/multigres/multigres/go/common/servenv"
 	"github.com/multigres/multigres/go/common/servenv/toporeg"
 	"github.com/multigres/multigres/go/common/topoclient"
+	"github.com/multigres/multigres/go/multigateway/auth"
 	"github.com/multigres/multigres/go/multigateway/executor"
 	"github.com/multigres/multigres/go/multigateway/handler"
 	"github.com/multigres/multigres/go/multigateway/poolergateway"
@@ -152,14 +153,19 @@ func (mg *MultiGateway) Init() {
 	// Pass ScatterConn as the IExecute implementation
 	mg.executor = executor.NewExecutor(mg.scatterConn, logger)
 
+	// Create password hash provider for SCRAM-SHA-256 authentication
+	// This fetches credentials from multipooler via gRPC
+	passwordHashProvider := auth.NewPoolerHashProvider(mg.poolerGateway)
+
 	// Create and start PostgreSQL protocol listener
 	pgHandler := handler.NewMultiGatewayHandler(mg.executor, logger)
 	pgAddr := fmt.Sprintf("localhost:%d", mg.pgPort.Get())
 	var err error
 	mg.pgListener, err = server.NewListener(server.ListenerConfig{
-		Address: pgAddr,
-		Handler: pgHandler,
-		Logger:  logger,
+		Address:              pgAddr,
+		Handler:              pgHandler,
+		PasswordHashProvider: passwordHashProvider,
+		Logger:               logger,
 	})
 	if err != nil {
 		logger.Error("failed to create PostgreSQL listener", "error", err, "port", mg.pgPort.Get())

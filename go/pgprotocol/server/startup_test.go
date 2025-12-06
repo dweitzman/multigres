@@ -415,7 +415,7 @@ type mockPasswordHashProvider struct {
 	hashes map[string]*auth.ScramHash
 }
 
-func (m *mockPasswordHashProvider) GetPasswordHash(_ context.Context, username string) (*auth.ScramHash, error) {
+func (m *mockPasswordHashProvider) GetPasswordHash(_ context.Context, username, _ string) (*auth.ScramHash, error) {
 	hash, ok := m.hashes[username]
 	if !ok {
 		return nil, auth.ErrUserNotFound

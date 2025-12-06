@@ -30,7 +30,7 @@ type mockHashProvider struct {
 	err    error
 }
 
-func (m *mockHashProvider) GetPasswordHash(_ context.Context, username string) (*ScramHash, error) {
+func (m *mockHashProvider) GetPasswordHash(_ context.Context, username, _ string) (*ScramHash, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -98,13 +98,13 @@ func simulateClientFinalMessage(password string, serverFirstMessage string, clie
 func TestNewScramAuthenticator(t *testing.T) {
 	t.Run("creates authenticator with valid config", func(t *testing.T) {
 		provider := &mockHashProvider{}
-		auth := NewScramAuthenticator(provider)
+		auth := NewScramAuthenticator(provider, "testdb")
 		require.NotNil(t, auth)
 	})
 
 	t.Run("panics with nil provider", func(t *testing.T) {
 		assert.Panics(t, func() {
-			NewScramAuthenticator(nil)
+			NewScramAuthenticator(nil, "testdb")
 		})
 	})
 }
@@ -112,7 +112,7 @@ func TestNewScramAuthenticator(t *testing.T) {
 func TestScramAuthenticator_StartAuthentication(t *testing.T) {
 	t.Run("returns SASL mechanism list", func(t *testing.T) {
 		provider := &mockHashProvider{}
-		auth := NewScramAuthenticator(provider)
+		auth := NewScramAuthenticator(provider, "testdb")
 
 		mechanisms := auth.StartAuthentication()
 
@@ -131,7 +131,7 @@ func TestScramAuthenticator_HandleClientFirst(t *testing.T) {
 				"testuser": createTestHash(testPassword, testSalt, testIterations),
 			},
 		}
-		auth := NewScramAuthenticator(provider)
+		auth := NewScramAuthenticator(provider, "testdb")
 		auth.StartAuthentication()
 
 		clientNonce := "rOprNGfwEbeRWgbNEkqO"
@@ -150,7 +150,7 @@ func TestScramAuthenticator_HandleClientFirst(t *testing.T) {
 		provider := &mockHashProvider{
 			hashes: map[string]*ScramHash{},
 		}
-		auth := NewScramAuthenticator(provider)
+		auth := NewScramAuthenticator(provider, "testdb")
 		auth.StartAuthentication()
 
 		clientFirstMessage := simulateClientFirstMessage("unknownuser", "clientnonce")
@@ -162,7 +162,7 @@ func TestScramAuthenticator_HandleClientFirst(t *testing.T) {
 
 	t.Run("invalid client-first-message - empty", func(t *testing.T) {
 		provider := &mockHashProvider{}
-		auth := NewScramAuthenticator(provider)
+		auth := NewScramAuthenticator(provider, "testdb")
 		auth.StartAuthentication()
 
 		_, err := auth.HandleClientFirst(context.Background(), "")
@@ -171,7 +171,7 @@ func TestScramAuthenticator_HandleClientFirst(t *testing.T) {
 
 	t.Run("invalid client-first-message - missing username", func(t *testing.T) {
 		provider := &mockHashProvider{}
-		auth := NewScramAuthenticator(provider)
+		auth := NewScramAuthenticator(provider, "testdb")
 		auth.StartAuthentication()
 
 		_, err := auth.HandleClientFirst(context.Background(), "n,,r=clientnonce")
@@ -184,7 +184,7 @@ func TestScramAuthenticator_HandleClientFirst(t *testing.T) {
 				"testuser": createTestHash(testPassword, testSalt, testIterations),
 			},
 		}
-		auth := NewScramAuthenticator(provider)
+		auth := NewScramAuthenticator(provider, "testdb")
 		auth.StartAuthentication()
 
 		// Client requests channel binding (p=tls-server-end-point)
@@ -200,7 +200,7 @@ func TestScramAuthenticator_HandleClientFirst(t *testing.T) {
 		provider := &mockHashProvider{
 			err: expectedErr,
 		}
-		auth := NewScramAuthenticator(provider)
+		auth := NewScramAuthenticator(provider, "testdb")
 		auth.StartAuthentication()
 
 		clientFirstMessage := simulateClientFirstMessage("testuser", "clientnonce")
@@ -223,7 +223,7 @@ func TestScramAuthenticator_HandleClientFinal(t *testing.T) {
 				"testuser": createTestHash(testPassword, testSalt, testIterations),
 			},
 		}
-		auth := NewScramAuthenticator(provider)
+		auth := NewScramAuthenticator(provider, "testdb")
 		auth.StartAuthentication()
 
 		// Step 1: Client first message.
@@ -255,7 +255,7 @@ func TestScramAuthenticator_HandleClientFinal(t *testing.T) {
 				"testuser": createTestHash(testPassword, testSalt, testIterations),
 			},
 		}
-		auth := NewScramAuthenticator(provider)
+		auth := NewScramAuthenticator(provider, "testdb")
 		auth.StartAuthentication()
 
 		// Step 1: Client first message.
@@ -283,7 +283,7 @@ func TestScramAuthenticator_HandleClientFinal(t *testing.T) {
 				"testuser": createTestHash(testPassword, testSalt, testIterations),
 			},
 		}
-		auth := NewScramAuthenticator(provider)
+		auth := NewScramAuthenticator(provider, "testdb")
 		auth.StartAuthentication()
 
 		clientFirstMessage := simulateClientFirstMessage("testuser", clientNonce)
@@ -300,7 +300,7 @@ func TestScramAuthenticator_HandleClientFinal(t *testing.T) {
 				"testuser": createTestHash(testPassword, testSalt, testIterations),
 			},
 		}
-		auth := NewScramAuthenticator(provider)
+		auth := NewScramAuthenticator(provider, "testdb")
 		auth.StartAuthentication()
 
 		clientFirstMessage := simulateClientFirstMessage("testuser", clientNonce)
@@ -315,7 +315,7 @@ func TestScramAuthenticator_HandleClientFinal(t *testing.T) {
 
 	t.Run("called without HandleClientFirst - state error", func(t *testing.T) {
 		provider := &mockHashProvider{}
-		auth := NewScramAuthenticator(provider)
+		auth := NewScramAuthenticator(provider, "testdb")
 		auth.StartAuthentication()
 
 		// Skip HandleClientFirst, go directly to HandleClientFinal.
@@ -340,7 +340,7 @@ func TestScramAuthenticator_FullExchange(t *testing.T) {
 				"user": createTestHash(testPassword, testSalt, testIterations),
 			},
 		}
-		auth := NewScramAuthenticator(provider)
+		auth := NewScramAuthenticator(provider, "testdb")
 
 		// 1. Server sends mechanism list (AuthSASL).
 		mechanisms := auth.StartAuthentication()
@@ -391,7 +391,7 @@ func TestScramAuthenticator_FullExchange(t *testing.T) {
 				username: createTestHash(testPassword, testSalt, testIterations),
 			},
 		}
-		auth := NewScramAuthenticator(provider)
+		auth := NewScramAuthenticator(provider, "testdb")
 		auth.StartAuthentication()
 
 		// Client-first-message with encoded username.
@@ -425,7 +425,7 @@ func TestScramAuthenticator_Reset(t *testing.T) {
 				"testuser": createTestHash(testPassword, testSalt, testIterations),
 			},
 		}
-		auth := NewScramAuthenticator(provider)
+		auth := NewScramAuthenticator(provider, "testdb")
 
 		// Complete a successful authentication.
 		auth.StartAuthentication()
@@ -461,7 +461,7 @@ func TestScramAuthenticatorState(t *testing.T) {
 				"user": createTestHash("password", []byte("salt12345678"), 4096),
 			},
 		}
-		auth := NewScramAuthenticator(provider)
+		auth := NewScramAuthenticator(provider, "testdb")
 
 		// Cannot call HandleClientFirst before StartAuthentication.
 		_, err := auth.HandleClientFirst(context.Background(), "n,,n=user,r=nonce")

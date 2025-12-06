@@ -259,8 +259,8 @@ func (c *Conn) authenticate() error {
 // authenticateSCRAM performs SCRAM-SHA-256 authentication.
 // This implements the server side of the SASL SCRAM handshake.
 func (c *Conn) authenticateSCRAM() error {
-	// Create SCRAM authenticator.
-	authenticator := auth.NewScramAuthenticator(c.listener.passwordHashProvider)
+	// Create SCRAM authenticator with the database from startup params.
+	authenticator := auth.NewScramAuthenticator(c.listener.passwordHashProvider, c.database)
 
 	// Step 1: Send AuthenticationSASL with mechanism list.
 	mechanisms := authenticator.StartAuthentication()

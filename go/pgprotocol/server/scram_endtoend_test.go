@@ -92,7 +92,7 @@ type e2ePasswordHashProvider struct {
 	hashes map[string]*auth.ScramHash
 }
 
-func (p *e2ePasswordHashProvider) GetPasswordHash(_ context.Context, username string) (*auth.ScramHash, error) {
+func (p *e2ePasswordHashProvider) GetPasswordHash(_ context.Context, username, _ string) (*auth.ScramHash, error) {
 	hash, ok := p.hashes[username]
 	if !ok {
 		return nil, auth.ErrUserNotFound
