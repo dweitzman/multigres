@@ -36,25 +36,77 @@ const (
 	scramNonceLength = 24
 )
 
+// keyProvider abstracts how SCRAM keys are obtained.
+// Password-based auth derives keys from password; passthrough uses pre-computed keys.
+type keyProvider interface {
+	// getKeys returns the ClientKey and ServerKey for SCRAM authentication.
+	// For password-based auth, this derives keys from the password using salt and iterations.
+	// For passthrough auth, this returns the pre-computed keys directly.
+	getKeys(salt []byte, iterations int) (clientKey, serverKey []byte, err error)
+}
+
+// passwordKeyProvider derives SCRAM keys from a password.
+type passwordKeyProvider struct {
+	password string
+}
+
+func (p *passwordKeyProvider) getKeys(salt []byte, iterations int) (clientKey, serverKey []byte, err error) {
+	// Compute SaltedPassword = Hi(password, salt, iterations).
+	saltedPassword := pbkdf2.Key([]byte(p.password), salt, iterations, sha256.Size, sha256.New)
+
+	// Compute ClientKey = HMAC(SaltedPassword, "Client Key").
+	clientKey = hmacSHA256(saltedPassword, []byte("Client Key"))
+
+	// Compute ServerKey = HMAC(SaltedPassword, "Server Key").
+	serverKey = hmacSHA256(saltedPassword, []byte("Server Key"))
+
+	return clientKey, serverKey, nil
+}
+
+// passthroughKeyProvider uses pre-computed SCRAM keys.
+type passthroughKeyProvider struct {
+	clientKey []byte
+	serverKey []byte
+}
+
+func (p *passthroughKeyProvider) getKeys(_ []byte, _ int) (clientKey, serverKey []byte, err error) {
+	// Keys are already computed; salt and iterations are ignored.
+	return p.clientKey, p.serverKey, nil
+}
+
 // scramClient handles the SCRAM-SHA-256 authentication flow.
 type scramClient struct {
-	conn     *Conn
-	username string
-	password string
+	conn        *Conn
+	username    string
+	keyProvider keyProvider
 
 	// State maintained across the authentication exchange.
 	clientNonce            string
 	clientFirstMessageBare string
 	serverFirstMessage     string
-	saltedPassword         []byte
+
+	// Keys computed during authentication (from keyProvider).
+	clientKey []byte
+	serverKey []byte
 }
 
-// newScramClient creates a new SCRAM client for authentication.
+// newScramClient creates a new SCRAM client using password-based authentication.
 func newScramClient(conn *Conn, username, password string) *scramClient {
 	return &scramClient{
-		conn:     conn,
-		username: username,
-		password: password,
+		conn:        conn,
+		username:    username,
+		keyProvider: &passwordKeyProvider{password: password},
+	}
+}
+
+// newScramClientWithKeys creates a SCRAM client using pre-computed keys.
+// This enables SCRAM passthrough authentication where keys were extracted during
+// client authentication and are reused for backend authentication.
+func newScramClientWithKeys(conn *Conn, username string, clientKey, serverKey []byte) *scramClient {
+	return &scramClient{
+		conn:        conn,
+		username:    username,
+		keyProvider: &passthroughKeyProvider{clientKey: clientKey, serverKey: serverKey},
 	}
 }
 
@@ -179,14 +231,14 @@ func (s *scramClient) sendClientFinal() error {
 		return fmt.Errorf("failed to decode salt: %w", err)
 	}
 
-	// Compute SaltedPassword = Hi(password, salt, iterations).
-	s.saltedPassword = pbkdf2.Key([]byte(s.password), salt, iterations, sha256.Size, sha256.New)
-
-	// Compute ClientKey = HMAC(SaltedPassword, "Client Key").
-	clientKey := hmacSHA256(s.saltedPassword, []byte("Client Key"))
+	// Get keys from the key provider.
+	s.clientKey, s.serverKey, err = s.keyProvider.getKeys(salt, iterations)
+	if err != nil {
+		return fmt.Errorf("failed to get keys: %w", err)
+	}
 
 	// Compute StoredKey = H(ClientKey).
-	storedKey := sha256Sum(clientKey)
+	storedKey := sha256Sum(s.clientKey)
 
 	// Build client-final-message-without-proof.
 	// c=<base64(channel-binding)>,r=<nonce>
@@ -201,7 +253,7 @@ func (s *scramClient) sendClientFinal() error {
 	clientSignature := hmacSHA256(storedKey, []byte(authMessage))
 
 	// Compute ClientProof = ClientKey XOR ClientSignature.
-	clientProof := xorBytes(clientKey, clientSignature)
+	clientProof := xorBytes(s.clientKey, clientSignature)
 
 	// Build client-final-message: <client-final-without-proof>,p=<base64(ClientProof)>.
 	clientFinalMessage := clientFinalWithoutProof + ",p=" + base64.StdEncoding.EncodeToString(clientProof)
@@ -256,10 +308,6 @@ func (s *scramClient) receiveServerFinal() error {
 		return fmt.Errorf("failed to decode server signature: %w", err)
 	}
 
-	// Compute expected server signature.
-	// ServerKey = HMAC(SaltedPassword, "Server Key")
-	serverKey := hmacSHA256(s.saltedPassword, []byte("Server Key"))
-
 	// Build AuthMessage again (same as in sendClientFinal).
 	channelBinding := base64.StdEncoding.EncodeToString([]byte("n,,"))
 	// We need to reconstruct serverNonce from server-first-message
@@ -274,7 +322,7 @@ func (s *scramClient) receiveServerFinal() error {
 	authMessage := s.clientFirstMessageBare + "," + s.serverFirstMessage + "," + clientFinalWithoutProof
 
 	// ServerSignature = HMAC(ServerKey, AuthMessage)
-	expectedServerSignature := hmacSHA256(serverKey, []byte(authMessage))
+	expectedServerSignature := hmacSHA256(s.serverKey, []byte(authMessage))
 
 	// Verify server signature.
 	if !hmac.Equal(serverSignature, expectedServerSignature) {

@@ -18,44 +18,41 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sync/atomic"
 
-	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/multigres/multigres/go/pgprotocol/client"
 )
 
-// PgxConnection wraps a pgconn.PgConn to implement the Connection interface.
+// PoolConnection wraps a client.Conn to implement the Connection interface.
 // It provides SCRAM-authenticated connections to PostgreSQL using key passthrough.
-type PgxConnection struct {
-	conn   *pgconn.PgConn
-	closed atomic.Bool
+type PoolConnection struct {
+	conn *client.Conn
 }
 
-// NewPgxConnection wraps an existing pgconn.PgConn.
-func NewPgxConnection(conn *pgconn.PgConn) *PgxConnection {
-	return &PgxConnection{conn: conn}
+// NewPoolConnection wraps an existing client.Conn.
+func NewPoolConnection(conn *client.Conn) *PoolConnection {
+	return &PoolConnection{conn: conn}
 }
 
-// Conn returns the underlying pgconn.PgConn for executing queries.
-func (c *PgxConnection) Conn() *pgconn.PgConn {
+// Conn returns the underlying client.Conn for executing queries.
+func (c *PoolConnection) Conn() *client.Conn {
 	return c.conn
 }
 
 // Close closes the connection.
-func (c *PgxConnection) Close() error {
-	if c.closed.Swap(true) {
-		return nil // Already closed
+func (c *PoolConnection) Close() error {
+	if c.conn == nil {
+		return nil
 	}
-	//nolint:gocritic // Close is called during cleanup when no context is available
-	return c.conn.Close(context.Background())
+	return c.conn.Close()
 }
 
 // IsClosed returns true if the connection has been closed.
-func (c *PgxConnection) IsClosed() bool {
-	return c.closed.Load() || c.conn.IsClosed()
+func (c *PoolConnection) IsClosed() bool {
+	return c.conn == nil || c.conn.IsClosed()
 }
 
-// PgxConnectorConfig holds configuration for creating PostgreSQL connections.
-type PgxConnectorConfig struct {
+// ConnectorConfig holds configuration for creating PostgreSQL connections.
+type ConnectorConfig struct {
 	// Host is the PostgreSQL server host (IP, hostname, or Unix socket directory).
 	Host string
 
@@ -69,18 +66,18 @@ type PgxConnectorConfig struct {
 	Logger *slog.Logger
 }
 
-// PgxConnector creates connections to PostgreSQL using SCRAM key passthrough.
-// It implements ConnectorFunc[*PgxConnection] for use with the Manager.
-type PgxConnector struct {
-	config PgxConnectorConfig
+// Connector creates connections to PostgreSQL using SCRAM key passthrough.
+// It implements ConnectorFunc[*PoolConnection] for use with the Manager.
+type Connector struct {
+	config ConnectorConfig
 }
 
-// NewPgxConnector creates a new connector with the given configuration.
-func NewPgxConnector(config PgxConnectorConfig) *PgxConnector {
+// NewConnector creates a new connector with the given configuration.
+func NewConnector(config ConnectorConfig) *Connector {
 	if config.Logger == nil {
 		config.Logger = slog.Default()
 	}
-	return &PgxConnector{config: config}
+	return &Connector{config: config}
 }
 
 // Connect creates a new connection to PostgreSQL for the specified user,
@@ -90,18 +87,7 @@ func NewPgxConnector(config PgxConnectorConfig) *PgxConnector {
 // - clientKey and serverKey were extracted during client authentication
 // - We use them to authenticate to PostgreSQL without knowing the password
 // - PostgreSQL sees a normal SCRAM-SHA-256 handshake
-func (c *PgxConnector) Connect(ctx context.Context, username string, clientKey, serverKey []byte) (*PgxConnection, error) {
-	// Build pgconn config with SCRAM keys
-	connConfig := &pgconn.Config{
-		Host:           c.config.Host,
-		Port:           c.config.Port,
-		Database:       c.config.Database,
-		User:           username,
-		SCRAMClientKey: clientKey,
-		SCRAMServerKey: serverKey,
-		// No password needed - we have the SCRAM keys
-	}
-
+func (c *Connector) Connect(ctx context.Context, username string, clientKey, serverKey []byte) (*PoolConnection, error) {
 	c.config.Logger.DebugContext(ctx, "connecting to PostgreSQL with SCRAM passthrough",
 		"user", username,
 		"host", c.config.Host,
@@ -111,10 +97,21 @@ func (c *PgxConnector) Connect(ctx context.Context, username string, clientKey, 
 		"has_server_key", len(serverKey) > 0,
 	)
 
-	// Connect using pgconn with SCRAM key passthrough
-	conn, err := pgconn.ConnectConfig(ctx, connConfig)
+	// Build client config with SCRAM keys
+	connConfig := &client.Config{
+		Host:           c.config.Host,
+		Port:           int(c.config.Port),
+		Database:       c.config.Database,
+		User:           username,
+		SCRAMClientKey: clientKey,
+		SCRAMServerKey: serverKey,
+		// No password needed - we have the SCRAM keys
+	}
+
+	// Connect using internal client with SCRAM key passthrough
+	conn, err := client.Connect(ctx, connConfig)
 	if err != nil {
-		return nil, fmt.Errorf("pgx connect with SCRAM keys: %w", err)
+		return nil, fmt.Errorf("connect with SCRAM keys: %w", err)
 	}
 
 	c.config.Logger.DebugContext(ctx, "connected to PostgreSQL",
@@ -122,10 +119,10 @@ func (c *PgxConnector) Connect(ctx context.Context, username string, clientKey, 
 		"database", c.config.Database,
 	)
 
-	return NewPgxConnection(conn), nil
+	return NewPoolConnection(conn), nil
 }
 
 // ConnectFunc returns a ConnectorFunc suitable for use with Manager.GetConnection.
-func (c *PgxConnector) ConnectFunc() ConnectorFunc[*PgxConnection] {
+func (c *Connector) ConnectFunc() ConnectorFunc[*PoolConnection] {
 	return c.Connect
 }

@@ -23,41 +23,41 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPgxConnection_Interface(t *testing.T) {
-	t.Run("PgxConnection implements Connection interface", func(t *testing.T) {
-		// Compile-time check that PgxConnection implements Connection
-		var _ Connection = (*PgxConnection)(nil)
+func TestPoolConnection_Interface(t *testing.T) {
+	t.Run("PoolConnection implements Connection interface", func(t *testing.T) {
+		// Compile-time check that PoolConnection implements Connection
+		var _ Connection = (*PoolConnection)(nil)
 	})
 }
 
-func TestPgxConnector_Creation(t *testing.T) {
+func TestConnector_Creation(t *testing.T) {
 	t.Run("creates connector with config", func(t *testing.T) {
-		config := PgxConnectorConfig{
+		config := ConnectorConfig{
 			Host:     "localhost",
 			Port:     5432,
 			Database: "postgres",
 			Logger:   slog.Default(),
 		}
 
-		connector := NewPgxConnector(config)
+		connector := NewConnector(config)
 		require.NotNil(t, connector)
 	})
 
 	t.Run("uses default logger when none provided", func(t *testing.T) {
-		config := PgxConnectorConfig{
+		config := ConnectorConfig{
 			Host:     "localhost",
 			Port:     5432,
 			Database: "postgres",
 		}
 
-		connector := NewPgxConnector(config)
+		connector := NewConnector(config)
 		require.NotNil(t, connector)
 	})
 }
 
-func TestPgxConnector_ConnectFunc(t *testing.T) {
+func TestConnector_ConnectFunc(t *testing.T) {
 	t.Run("returns a ConnectorFunc", func(t *testing.T) {
-		connector := NewPgxConnector(PgxConnectorConfig{
+		connector := NewConnector(ConnectorConfig{
 			Host:     "localhost",
 			Port:     5432,
 			Database: "postgres",
@@ -72,9 +72,9 @@ func TestPgxConnector_ConnectFunc(t *testing.T) {
 	})
 }
 
-// TestPgxConnector_Integration tests real PostgreSQL connections.
+// TestConnector_Integration tests real PostgreSQL connections.
 // Skip in short mode since it requires a running PostgreSQL instance.
-func TestPgxConnector_Integration(t *testing.T) {
+func TestConnector_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -89,23 +89,25 @@ func TestPgxConnector_Integration(t *testing.T) {
 	t.Skip("requires PostgreSQL with SCRAM test user - TODO: add test fixtures")
 }
 
-func TestPgxConnection_CloseIdempotent(t *testing.T) {
-	t.Run("close is idempotent", func(t *testing.T) {
-		// Create a mock-like test using a nil connection
-		// In reality, we'd need a real connection to test this properly
-		conn := &PgxConnection{}
-		conn.closed.Store(true) // Simulate already closed
+func TestPoolConnection_NilSafety(t *testing.T) {
+	t.Run("IsClosed handles nil underlying conn", func(t *testing.T) {
+		conn := &PoolConnection{}
+		// Should not panic and should return true for nil conn
+		assert.True(t, conn.IsClosed())
+	})
 
-		// Should not panic and should be idempotent
+	t.Run("Close handles nil underlying conn", func(t *testing.T) {
+		conn := &PoolConnection{}
+		// Should not panic and should return nil
 		err := conn.Close()
 		assert.NoError(t, err)
 	})
 }
 
-func TestManagerWithPgxConnector(t *testing.T) {
-	t.Run("manager works with PgxConnector type", func(t *testing.T) {
-		// Verify the Manager can be instantiated with PgxConnection type
-		manager := NewManager[*PgxConnection](ManagerConfig{
+func TestManagerWithConnector(t *testing.T) {
+	t.Run("manager works with PoolConnection type", func(t *testing.T) {
+		// Verify the Manager can be instantiated with PoolConnection type
+		manager := NewManager[*PoolConnection](ManagerConfig{
 			MaxPoolsPerManager:    10,
 			MaxConnectionsPerPool: 5,
 			IdlePoolTimeout:       0,
@@ -118,12 +120,12 @@ func TestManagerWithPgxConnector(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	t.Run("GetConnection accepts PgxConnector.ConnectFunc", func(t *testing.T) {
+	t.Run("GetConnection accepts Connector.ConnectFunc", func(t *testing.T) {
 		if testing.Short() {
 			t.Skip("skipping test that would attempt real connection")
 		}
 
-		manager := NewManager[*PgxConnection](ManagerConfig{
+		manager := NewManager[*PoolConnection](ManagerConfig{
 			MaxPoolsPerManager:    10,
 			MaxConnectionsPerPool: 5,
 			IdlePoolTimeout:       0,
@@ -131,7 +133,7 @@ func TestManagerWithPgxConnector(t *testing.T) {
 		})
 		defer manager.Close()
 
-		connector := NewPgxConnector(PgxConnectorConfig{
+		connector := NewConnector(ConnectorConfig{
 			Host:     "localhost",
 			Port:     5432,
 			Database: "postgres",

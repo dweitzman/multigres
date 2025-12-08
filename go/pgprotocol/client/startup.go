@@ -219,6 +219,11 @@ func (c *Conn) handleAuthenticationRequest(body []byte) error {
 		}
 
 		// Perform SCRAM-SHA-256 authentication.
+		// Use pre-computed keys if available (SCRAM passthrough), otherwise derive from password.
+		if len(c.config.SCRAMClientKey) > 0 && len(c.config.SCRAMServerKey) > 0 {
+			scram := newScramClientWithKeys(c, c.config.User, c.config.SCRAMClientKey, c.config.SCRAMServerKey)
+			return scram.authenticate()
+		}
 		scram := newScramClient(c, c.config.User, c.config.Password)
 		return scram.authenticate()
 

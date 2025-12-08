@@ -1642,48 +1642,39 @@ client := auth.NewSCRAMClientWithKeys(username, clientKey, serverKey)
 
 **Validation:** The end-to-end test `TestSCRAMPassthrough` creates a user in PostgreSQL, extracts SCRAM keys from a simulated client auth, then uses those keys to authenticate directly to PostgreSQL via raw TCP. The test passes, proving the mechanism works.
 
-#### Part B: Per-User Pool Manager ✅ IN PROGRESS
+#### Part B: Per-User Pool Manager ✅ COMPLETE
 
-**Status:** Core infrastructure completed 2025-12-08
+**Status:** Completed 2025-12-08
 
-**Implementation approach:** Instead of creating a custom PostgreSQL protocol client, we forked `jackc/pgx` to add SCRAM key passthrough support. This leverages pgx's battle-tested PostgreSQL protocol implementation while adding the ability to authenticate using pre-computed SCRAM keys.
+**Implementation approach:** We use the internal `go/pgprotocol/client` package for PostgreSQL connections with SCRAM key passthrough. This package was recently added to multigres and provides a full PostgreSQL wire protocol client implementation. We extended it to support SCRAM passthrough by adding `SCRAMClientKey`/`SCRAMServerKey` fields to the config and a `keyProvider` interface that allows either password-based or key-based authentication.
 
-**pgx fork modifications:**
+**Approaches considered and rejected:**
 
-The fork at `/Users/weitzman/src/pgx` (referenced via `go.mod` replace directive) adds:
-
-| File                   | Changes                                                                   |
-| ---------------------- | ------------------------------------------------------------------------- |
-| `pgconn/config.go`     | Added `SCRAMClientKey` and `SCRAMServerKey` fields to Config struct       |
-| `pgconn/auth_scram.go` | Added `scramAuthWithKeys()` for key-based SCRAM authentication            |
-|                        | Added `scramClientWithKeys` struct and `computeClientProofFromKey()`      |
-|                        | Added `computeServerSignatureFromKey()` for server signature verification |
-
-**Alternative approaches considered:**
-
+- **Forked pgx:** Initially implemented with a forked `jackc/pgx` but switched to internal client for consistency
 - **lib/pq:** Simpler SCRAM implementation but `database/sql` driver provides less pooling control
-- **Custom protocol client:** More work, pgx already handles PostgreSQL protocol edge cases
 
 **Files created:**
 
-| File                                            | Description                                  |
-| ----------------------------------------------- | -------------------------------------------- |
-| `go/multipooler/pools/userpool/manager.go`      | Generic per-user pool manager with lifecycle |
-| `go/multipooler/pools/userpool/manager_test.go` | TDD tests for pool creation, reuse, GC, caps |
-| `go/multipooler/pools/userpool/pgxconn.go`      | pgx connector using SCRAM key passthrough    |
-| `go/multipooler/pools/userpool/pgxconn_test.go` | Unit tests for pgx connector                 |
+| File                                               | Description                                     |
+| -------------------------------------------------- | ----------------------------------------------- |
+| `go/multipooler/pools/userpool/manager.go`         | Generic per-user pool manager with lifecycle    |
+| `go/multipooler/pools/userpool/manager_test.go`    | TDD tests for pool creation, reuse, GC, caps    |
+| `go/multipooler/pools/userpool/connection.go`      | Pool connector using internal client with SCRAM |
+| `go/multipooler/pools/userpool/connection_test.go` | Unit tests for connector                        |
 
 **Files modified:**
 
-| File                                          | Changes                                                     |
-| --------------------------------------------- | ----------------------------------------------------------- |
-| `proto/mtrpc.proto`                           | Added `scram_client_key` and `scram_server_key` to CallerID |
-| `go/pgprotocol/auth/authenticator.go`         | Added `ExtractedKeys()` method for key extraction           |
-| `go/pgprotocol/server/conn.go`                | Added `SCRAMKeys()` getter for extracted keys               |
-| `go/pgprotocol/server/startup.go`             | Extract and store SCRAM keys after authentication           |
-| `go/multigateway/scatterconn/scatter_conn.go` | Pass SCRAM keys in CallerID to multipooler                  |
-| `go/multipooler/executor/executor.go`         | Integrated UserPoolManager, removed SET SESSION AUTH        |
-| `go.mod`                                      | Added replace directive for pgx fork                        |
+| File                                          | Changes                                                              |
+| --------------------------------------------- | -------------------------------------------------------------------- |
+| `proto/mtrpc.proto`                           | Added `scram_client_key` and `scram_server_key` to CallerID          |
+| `go/pgprotocol/client/conn.go`                | Added `SCRAMClientKey`/`SCRAMServerKey` fields to Config             |
+| `go/pgprotocol/client/scram.go`               | Added `keyProvider` interface and `passthroughKeyProvider`           |
+| `go/pgprotocol/client/startup.go`             | Use key-based SCRAM when keys provided in config                     |
+| `go/pgprotocol/auth/authenticator.go`         | Added `ExtractedKeys()` method for key extraction                    |
+| `go/pgprotocol/server/conn.go`                | Added `SCRAMKeys()` getter for extracted keys                        |
+| `go/pgprotocol/server/startup.go`             | Extract and store SCRAM keys after authentication                    |
+| `go/multigateway/scatterconn/scatter_conn.go` | Pass SCRAM keys in CallerID to multipooler                           |
+| `go/multipooler/executor/executor.go`         | Integrated UserPoolManager with internal client, no SET SESSION AUTH |
 
 **Tests implemented:**
 
@@ -1692,12 +1683,12 @@ The fork at `/Users/weitzman/src/pgx` (referenced via `go.mod` replace directive
 3. ✅ `TestGlobalConnectionCap` - Global connection limit enforced
 4. ✅ `TestIdlePoolGarbageCollection` - Pools GC'd after idle timeout
 5. ✅ `TestSCRAMKeysPassedToConnector` - Keys passed to connector function
-6. ✅ `TestPgxConnection_Interface` - PgxConnection implements Connection
-7. ✅ `TestManagerWithPgxConnector` - Manager works with PgxConnector type
+6. ✅ `TestPoolConnection_Interface` - PoolConnection implements Connection
+7. ✅ `TestManagerWithConnector` - Manager works with Connector type
+8. ✅ `TestPoolConnection_NilSafety` - Handles nil underlying connection
 
 **Remaining work:**
 
-- [ ] TODO: Upstream pgx changes or create public multigres fork
 - [ ] End-to-end integration test with real PostgreSQL using SCRAM passthrough
 - [ ] Performance benchmarks vs SET SESSION AUTHORIZATION approach
 

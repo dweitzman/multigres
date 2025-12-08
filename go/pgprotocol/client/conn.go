@@ -48,6 +48,15 @@ type Config struct {
 	// Password is the user's password (optional for trust auth).
 	Password string
 
+	// SCRAMClientKey is the pre-computed SCRAM ClientKey for SCRAM passthrough authentication.
+	// When set along with SCRAMServerKey, these are used instead of deriving keys from Password.
+	// This enables connection poolers to authenticate using keys extracted during client auth.
+	SCRAMClientKey []byte
+
+	// SCRAMServerKey is the pre-computed SCRAM ServerKey for SCRAM passthrough authentication.
+	// Must be set together with SCRAMClientKey.
+	SCRAMServerKey []byte
+
 	// Database is the database name to connect to.
 	Database string
 

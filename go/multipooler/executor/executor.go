@@ -29,8 +29,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgconn"
-
 	"github.com/multigres/multigres/go/common/queryservice"
 	"github.com/multigres/multigres/go/multipooler/pools/userpool"
 	"github.com/multigres/multigres/go/pb/query"
@@ -53,10 +51,10 @@ type Executor struct {
 
 	// userPoolManager manages per-user connection pools for SCRAM passthrough authentication.
 	// When a caller provides SCRAM keys, we use their dedicated pool instead of SET SESSION AUTHORIZATION.
-	userPoolManager *userpool.Manager[*userpool.PgxConnection]
+	userPoolManager *userpool.Manager[*userpool.PoolConnection]
 
-	// pgxConnector creates connections for the user pool manager.
-	pgxConnector *userpool.PgxConnector
+	// connector creates connections for the user pool manager.
+	connector *userpool.Connector
 }
 
 // NewExecutor creates a new Executor instance.
@@ -108,15 +106,15 @@ func (e *Executor) Open() error {
 	// Initialize user pool manager for SCRAM passthrough authentication.
 	// This allows per-user connection pools where each user's connections
 	// are authenticated using their extracted SCRAM keys.
-	e.userPoolManager = userpool.NewManager[*userpool.PgxConnection](userpool.ManagerConfig{
+	e.userPoolManager = userpool.NewManager[*userpool.PoolConnection](userpool.ManagerConfig{
 		MaxPoolsPerManager:    1000,            // Support many concurrent users
 		MaxConnectionsPerPool: 10,              // Connections per user
 		IdlePoolTimeout:       5 * time.Minute, // Clean up idle user pools
 		GlobalConnectionCap:   500,             // Total connections across all users
 	})
 
-	// Create the pgx connector for SCRAM passthrough connections.
-	e.pgxConnector = userpool.NewPgxConnector(userpool.PgxConnectorConfig{
+	// Create the connector for SCRAM passthrough connections.
+	e.connector = userpool.NewConnector(userpool.ConnectorConfig{
 		Host:     socketDir,
 		Port:     uint16(e.dbConfig.PgPort),
 		Database: e.dbConfig.Database,
@@ -284,7 +282,7 @@ func (e *Executor) executeQueryWithSCRAMPassthrough(ctx context.Context, querySt
 		ServerKey: serverKey,
 	}
 
-	pooledConn, err := e.userPoolManager.GetConnection(ctx, username, keys, e.pgxConnector.ConnectFunc())
+	pooledConn, err := e.userPoolManager.GetConnection(ctx, username, keys, e.connector.ConnectFunc())
 	if err != nil {
 		return nil, fmt.Errorf("failed to get SCRAM-authenticated connection for user %q: %w", username, err)
 	}
@@ -292,120 +290,34 @@ func (e *Executor) executeQueryWithSCRAMPassthrough(ctx context.Context, querySt
 
 	e.logger.DebugContext(ctx, "using SCRAM passthrough connection", "username", username)
 
-	// Execute the query using pgx
-	return e.executeQueryOnPgxConn(ctx, pooledConn.Conn, queryStr, maxRows)
+	// Execute the query using the pooled connection
+	return e.executeQueryOnPoolConn(ctx, pooledConn.Conn, queryStr, maxRows)
 }
 
-// executeQueryOnPgxConn executes a query on a pgx connection.
-func (e *Executor) executeQueryOnPgxConn(ctx context.Context, conn *userpool.PgxConnection, queryStr string, maxRows uint64) (*query.QueryResult, error) {
-	pgConn := conn.Conn()
-
-	// Determine if this is a SELECT query or a modification query
-	trimmedQuery := strings.TrimSpace(strings.ToUpper(queryStr))
-	isSelect := strings.HasPrefix(trimmedQuery, "SELECT") ||
-		strings.HasPrefix(trimmedQuery, "WITH") ||
-		strings.HasPrefix(trimmedQuery, "SHOW") ||
-		strings.HasPrefix(trimmedQuery, "EXPLAIN")
-
-	if isSelect {
-		return e.executeSelectQueryOnPgxConn(ctx, pgConn, queryStr, maxRows)
-	}
-	return e.executeModifyQueryOnPgxConn(ctx, pgConn, queryStr)
-}
-
-// executeSelectQueryOnPgxConn executes a SELECT query on a pgx connection.
-func (e *Executor) executeSelectQueryOnPgxConn(ctx context.Context, conn *pgconn.PgConn, queryStr string, maxRows uint64) (*query.QueryResult, error) {
-	mrr := conn.Exec(ctx, queryStr)
-
-	var fields []*query.Field
-	var resultRows []*query.Row
-	var rowCount uint64
-
-	for mrr.NextResult() {
-		rr := mrr.ResultReader()
-		fieldDescs := rr.FieldDescriptions()
-
-		// Build field information on first result
-		if fields == nil {
-			fields = make([]*query.Field, len(fieldDescs))
-			for i, fd := range fieldDescs {
-				fields[i] = &query.Field{
-					Name: fd.Name,
-					Type: fmt.Sprintf("OID:%d", fd.DataTypeOID),
-				}
-			}
-		}
-
-		// Read rows using NextRow() which returns bool, Values() returns the data
-		for rr.NextRow() {
-			if maxRows > 0 && rowCount >= maxRows {
-				break
-			}
-
-			values := rr.Values()
-			rowValues := make([][]byte, len(values))
-			for i, v := range values {
-				if v != nil {
-					rowValues[i] = make([]byte, len(v))
-					copy(rowValues[i], v)
-				}
-			}
-
-			resultRows = append(resultRows, &query.Row{Values: rowValues})
-			rowCount++
-		}
-
-		// Close the result reader to get any errors
-		if _, err := rr.Close(); err != nil {
-			return nil, fmt.Errorf("failed to close result reader: %w", err)
-		}
-	}
-
-	if err := mrr.Close(); err != nil {
+// executeQueryOnPoolConn executes a query using the internal pgprotocol client.
+func (e *Executor) executeQueryOnPoolConn(ctx context.Context, conn *userpool.PoolConnection, queryStr string, maxRows uint64) (*query.QueryResult, error) {
+	// Use the internal client's Query method which handles all query types
+	results, err := conn.Conn().Query(ctx, queryStr)
+	if err != nil {
 		return nil, fmt.Errorf("failed to execute query: %w", err)
 	}
 
-	commandTag := fmt.Sprintf("SELECT %d", rowCount)
-
-	return &query.QueryResult{
-		Fields:       fields,
-		RowsAffected: 0,
-		Rows:         resultRows,
-		CommandTag:   commandTag,
-	}, nil
-}
-
-// executeModifyQueryOnPgxConn executes a modification query on a pgx connection.
-func (e *Executor) executeModifyQueryOnPgxConn(ctx context.Context, conn *pgconn.PgConn, queryStr string) (*query.QueryResult, error) {
-	mrr := conn.Exec(ctx, queryStr)
-
-	var commandTag pgconn.CommandTag
-
-	// Read through results to get command tag
-	for mrr.NextResult() {
-		rr := mrr.ResultReader()
-		// Consume any rows (there shouldn't be any for modification queries)
-		for rr.NextRow() {
-			// Just consume
-		}
-		// Close returns (CommandTag, error)
-		var err error
-		commandTag, err = rr.Close()
-		if err != nil {
-			return nil, fmt.Errorf("failed to close result reader: %w", err)
-		}
+	if len(results) == 0 {
+		return &query.QueryResult{
+			Fields: []*query.Field{},
+			Rows:   []*query.Row{},
+		}, nil
 	}
 
-	if err := mrr.Close(); err != nil {
-		return nil, fmt.Errorf("failed to execute query: %w", err)
+	// Return the first result (multi-statement queries return multiple results)
+	result := results[0]
+
+	// Apply maxRows limit if specified
+	if maxRows > 0 && uint64(len(result.Rows)) > maxRows {
+		result.Rows = result.Rows[:maxRows]
 	}
 
-	return &query.QueryResult{
-		Fields:       []*query.Field{},
-		RowsAffected: uint64(commandTag.RowsAffected()),
-		Rows:         []*query.Row{},
-		CommandTag:   commandTag.String(),
-	}, nil
+	return result, nil
 }
 
 // executeQuery executes a SQL query and returns the result.
