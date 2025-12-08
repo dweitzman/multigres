@@ -58,6 +58,7 @@ const (
 //  2. After receiving client-first-message, call HandleClientFirst().
 //  3. After receiving client-final-message, call HandleClientFinal().
 //  4. Check IsAuthenticated() to see if auth succeeded.
+//  5. Call ExtractedKeys() to get SCRAM keys for passthrough authentication.
 //
 // The authenticator maintains state between calls and enforces valid
 // state transitions to prevent protocol errors.
@@ -83,6 +84,11 @@ type ScramAuthenticator struct {
 	// Messages needed for AuthMessage computation.
 	clientFirstMessageBare string
 	serverFirstMessage     string
+
+	// extractedClientKey is the ClientKey recovered from the client's proof.
+	// This can be used for SCRAM passthrough authentication to backends.
+	// See RFC 5802: ClientKey = ClientProof XOR ClientSignature.
+	extractedClientKey []byte
 }
 
 // NewScramAuthenticator creates a new SCRAM authenticator with the given
@@ -204,11 +210,13 @@ func (a *ScramAuthenticator) HandleClientFinal(clientFinalMessage string) (strin
 		parsed.ClientFinalMessageWithoutProof,
 	)
 
-	// Verify the client proof.
-	if !VerifyClientProof(a.hash.StoredKey, authMessage, parsed.Proof) {
+	// Verify the client proof and extract the ClientKey for passthrough authentication.
+	extractedClientKey, valid := ExtractAndVerifyClientProof(a.hash.StoredKey, authMessage, parsed.Proof)
+	if !valid {
 		a.state = stateFailed
 		return "", ErrAuthenticationFailed
 	}
+	a.extractedClientKey = extractedClientKey
 
 	// Authentication successful! Compute the server signature.
 	serverSignature := ComputeServerSignature(a.hash.ServerKey, authMessage)
@@ -232,6 +240,20 @@ func (a *ScramAuthenticator) AuthenticatedUser() string {
 	return a.username
 }
 
+// ExtractedKeys returns the SCRAM keys extracted during authentication.
+// These can be used for passthrough authentication to backend PostgreSQL servers.
+//
+// ClientKey is recovered from the client's proof (ClientKey = ClientProof XOR ClientSignature).
+// ServerKey comes from the stored password hash.
+//
+// Returns nil, nil if authentication has not completed successfully.
+func (a *ScramAuthenticator) ExtractedKeys() (clientKey, serverKey []byte) {
+	if a.state != stateAuthenticated {
+		return nil, nil
+	}
+	return a.extractedClientKey, a.hash.ServerKey
+}
+
 // Reset clears the authenticator state, allowing it to be reused for
 // another authentication attempt.
 func (a *ScramAuthenticator) Reset() {
@@ -242,4 +264,5 @@ func (a *ScramAuthenticator) Reset() {
 	a.combinedNonce = ""
 	a.clientFirstMessageBare = ""
 	a.serverFirstMessage = ""
+	a.extractedClientKey = nil
 }

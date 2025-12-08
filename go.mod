@@ -80,7 +80,7 @@ require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jackc/pgio v1.0.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
-	github.com/jackc/pgservicefile v0.0.0-20221227161230-091c0ba34f0a // indirect
+	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/pgx/v5 v5.5.4 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
@@ -148,3 +148,21 @@ tool (
 	google.golang.org/protobuf/cmd/protoc-gen-go
 	mvdan.cc/gofumpt
 )
+
+// Fork of pgx with SCRAM-SHA-256 key passthrough support.
+// Allows authenticating to PostgreSQL using pre-computed ClientKey/ServerKey
+// instead of deriving them from a password. This enables connection poolers
+// to extract SCRAM keys during client authentication and pass them through
+// to backend PostgreSQL servers without storing plaintext passwords.
+//
+// Fork modifications (pgconn/config.go, pgconn/auth_scram.go):
+// - Added SCRAMClientKey/SCRAMServerKey fields to Config struct
+// - Added scramAuthWithKeys() for key-based authentication
+// - Added computeClientProofFromKey() and computeServerSignatureFromKey()
+//
+// Alternative approaches considered:
+// - lib/pq: Simpler SCRAM impl but database/sql driver with less pooling control
+// - Custom protocol client: More work, pgx already handles edge cases
+//
+// TODO: Upstream these changes to jackc/pgx or create a public multigres fork
+replace github.com/jackc/pgx/v5 => /Users/weitzman/src/pgx

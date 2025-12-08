@@ -86,11 +86,16 @@ func (sc *ScatterConn) StreamExecute(
 		Shard:      shard,
 	}
 
+	// Get SCRAM keys for passthrough authentication to multipooler
+	scramClientKey, scramServerKey := conn.SCRAMKeys()
+
 	eo := &query.ExecuteOptions{
 		CallerId: &mtrpc.CallerID{
-			Principal:    conn.User(),
-			Component:    "multigateway",
-			Subcomponent: conn.Database(),
+			Principal:      conn.User(),
+			Component:      "multigateway",
+			Subcomponent:   conn.Database(),
+			ScramClientKey: scramClientKey,
+			ScramServerKey: scramServerKey,
 		},
 	}
 
@@ -156,12 +161,17 @@ func (sc *ScatterConn) PortalStreamExecute(
 		Shard:      shard,
 	}
 
+	// Get SCRAM keys for passthrough authentication to multipooler
+	scramClientKey, scramServerKey := conn.SCRAMKeys()
+
 	eo := &query.ExecuteOptions{
 		MaxRows: uint64(maxRows),
 		CallerId: &mtrpc.CallerID{
-			Principal:    conn.User(),
-			Component:    "multigateway",
-			Subcomponent: conn.Database(),
+			Principal:      conn.User(),
+			Component:      "multigateway",
+			Subcomponent:   conn.Database(),
+			ScramClientKey: scramClientKey,
+			ScramServerKey: scramServerKey,
 		},
 	}
 
@@ -229,11 +239,16 @@ func (sc *ScatterConn) Describe(
 		Shard:      shard,
 	}
 
+	// Get SCRAM keys for passthrough authentication to multipooler
+	scramClientKey, scramServerKey := conn.SCRAMKeys()
+
 	eo := &query.ExecuteOptions{
 		CallerId: &mtrpc.CallerID{
-			Principal:    conn.User(),
-			Component:    "multigateway",
-			Subcomponent: conn.Database(),
+			Principal:      conn.User(),
+			Component:      "multigateway",
+			Subcomponent:   conn.Database(),
+			ScramClientKey: scramClientKey,
+			ScramServerKey: scramServerKey,
 		},
 	}
 	var preparedStatement *query.PreparedStatement

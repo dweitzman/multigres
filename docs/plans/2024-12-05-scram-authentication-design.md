@@ -1642,73 +1642,89 @@ client := auth.NewSCRAMClientWithKeys(username, clientKey, serverKey)
 
 **Validation:** The end-to-end test `TestSCRAMPassthrough` creates a user in PostgreSQL, extracts SCRAM keys from a simulated client auth, then uses those keys to authenticate directly to PostgreSQL via raw TCP. The test passes, proving the mechanism works.
 
-#### Part B: Per-User Pool Manager (Pending)
+#### Part B: Per-User Pool Manager ✅ IN PROGRESS
 
-**Existing code to modify:**
+**Status:** Core infrastructure completed 2025-12-08
 
-Phase 5 implemented SET SESSION AUTHORIZATION as a temporary measure. With per-user pools, this code needs to be replaced:
+**Implementation approach:** Instead of creating a custom PostgreSQL protocol client, we forked `jackc/pgx` to add SCRAM key passthrough support. This leverages pgx's battle-tested PostgreSQL protocol implementation while adding the ability to authenticate using pre-computed SCRAM keys.
 
-| File                                          | Current State                                                                    | Required Change                                                              |
-| --------------------------------------------- | -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `go/multipooler/executor/executor.go`         | `executeQueryAsUser()` uses SET SESSION AUTHORIZATION                            | Replace with per-user pool lookup; remove SET SESSION AUTHORIZATION entirely |
-| `go/test/endtoend/multigateway_scram_test.go` | `TestMultiGateway_SessionAuthorizationSandbox` skipped with "KNOWN SECURITY GAP" | Remove test - not needed with per-user pools (no sandbox to escape)          |
-| `proto/multipoolerservice.proto`              | CallerID has `principal` only                                                    | Add `scram_client_key` and `scram_server_key` fields for pool auth           |
-| `go/multigateway/auth/`                       | Extracts hash, performs SCRAM auth                                               | Also extract ClientKey/ServerKey from proof for passthrough                  |
+**pgx fork modifications:**
 
-**Tests first:**
+The fork at `/Users/weitzman/src/pgx` (referenced via `go.mod` replace directive) adds:
 
-1. `TestPoolCreatedOnFirstRequest` - Pool created dynamically
-2. `TestConnectionReuse` - Connections reused within user pool
-3. `TestGlobalConnectionCapLRUEviction` - LRU eviction when at cap
-4. `TestIdlePoolGarbageCollection` - Pools GC'd after idle timeout
-5. `TestSCRAMKeyPassthrough` - Pool auth uses extracted SCRAM keys
-6. `TestUserPermissionsEnforced` - PostgreSQL enforces user permissions
+| File                   | Changes                                                                   |
+| ---------------------- | ------------------------------------------------------------------------- |
+| `pgconn/config.go`     | Added `SCRAMClientKey` and `SCRAMServerKey` fields to Config struct       |
+| `pgconn/auth_scram.go` | Added `scramAuthWithKeys()` for key-based SCRAM authentication            |
+|                        | Added `scramClientWithKeys` struct and `computeClientProofFromKey()`      |
+|                        | Added `computeServerSignatureFromKey()` for server signature verification |
 
-**Then implement:**
+**Alternative approaches considered:**
 
-1. `go/multipooler/pool/user_pool_manager.go` - Per-user pool manager
-2. `go/multipooler/pool/scram_key_cache.go` - SCRAM key caching
-3. `go/multipooler/pool/scram_client.go` - SCRAM client for pool connections
-4. Update `go/multipooler/grpcpoolerservice/service.go` - Use per-user pools
-5. Update `go/multipooler/executor/executor.go` - Remove SET SESSION AUTHORIZATION code
+- **lib/pq:** Simpler SCRAM implementation but `database/sql` driver provides less pooling control
+- **Custom protocol client:** More work, pgx already handles PostgreSQL protocol edge cases
 
-### Phase 5: Identity Propagation ✅ COMPLETE
+**Files created:**
 
-**Status:** Completed 2025-12-06
-
-**⚠️ Note:** The SET SESSION AUTHORIZATION implementation is **temporary scaffolding**. With the per-user pools decision (Phase 4), this code will be replaced:
-
-- CallerID propagation ✅ **Retained** - still needed for pool selection
-- SET SESSION AUTHORIZATION ❌ **To be removed** - replaced by per-user pool lookup
-- Sandbox escape tests ❌ **To be removed** - no sandbox to escape with per-user pools
-
-**Implemented:**
-
-1. Added `caller_id` field to `query.ExecuteOptions` proto
-2. `ScatterConn` populates `CallerID` with `conn.User()` (authenticated username)
-3. `grpcQueryService` includes `CallerID` in all gRPC requests to multipooler
-4. Multipooler executor uses `SET SESSION AUTHORIZATION` when CallerID is present _(temporary)_
-5. Fixed `[]byte` to string conversion in query result scanning
+| File                                            | Description                                  |
+| ----------------------------------------------- | -------------------------------------------- |
+| `go/multipooler/pools/userpool/manager.go`      | Generic per-user pool manager with lifecycle |
+| `go/multipooler/pools/userpool/manager_test.go` | TDD tests for pool creation, reuse, GC, caps |
+| `go/multipooler/pools/userpool/pgxconn.go`      | pgx connector using SCRAM key passthrough    |
+| `go/multipooler/pools/userpool/pgxconn_test.go` | Unit tests for pgx connector                 |
 
 **Files modified:**
 
-- `proto/query.proto` - Added caller_id to ExecuteOptions
-- `go/multigateway/scatterconn/scatter_conn.go` - Populate CallerID
-- `go/multigateway/poolergateway/grpc_query_service.go` - Pass CallerID in requests
-- `go/multipooler/grpcpoolerservice/service.go` - Pass options to executor
-- `go/multipooler/executor/executor.go` - SET SESSION AUTHORIZATION implementation _(to be replaced in Phase 4)_
-- `go/test/endtoend/multigateway_scram_test.go` - Test current_user returns auth user
+| File                                          | Changes                                                     |
+| --------------------------------------------- | ----------------------------------------------------------- |
+| `proto/mtrpc.proto`                           | Added `scram_client_key` and `scram_server_key` to CallerID |
+| `go/pgprotocol/auth/authenticator.go`         | Added `ExtractedKeys()` method for key extraction           |
+| `go/pgprotocol/server/conn.go`                | Added `SCRAMKeys()` getter for extracted keys               |
+| `go/pgprotocol/server/startup.go`             | Extract and store SCRAM keys after authentication           |
+| `go/multigateway/scatterconn/scatter_conn.go` | Pass SCRAM keys in CallerID to multipooler                  |
+| `go/multipooler/executor/executor.go`         | Integrated UserPoolManager, removed SET SESSION AUTH        |
+| `go.mod`                                      | Added replace directive for pgx fork                        |
 
-**Key implementation (temporary, will be replaced in Phase 4):**
+**Tests implemented:**
 
-```go
-// In executor.go - executeQueryAsUser()
-// Gets dedicated connection, sets session auth, executes query, resets
-// NOTE: This will be replaced with per-user pool lookup in Phase 4
-setAuthSQL := fmt.Sprintf("SET SESSION AUTHORIZATION %s", quoteIdent(username))
-conn.ExecContext(ctx, setAuthSQL)
-defer conn.ExecContext(ctx, "RESET SESSION AUTHORIZATION")
-```
+1. ✅ `TestPoolCreatedOnFirstRequest` - Pool created dynamically
+2. ✅ `TestConnectionReuse` - Connections reused within user pool
+3. ✅ `TestGlobalConnectionCap` - Global connection limit enforced
+4. ✅ `TestIdlePoolGarbageCollection` - Pools GC'd after idle timeout
+5. ✅ `TestSCRAMKeysPassedToConnector` - Keys passed to connector function
+6. ✅ `TestPgxConnection_Interface` - PgxConnection implements Connection
+7. ✅ `TestManagerWithPgxConnector` - Manager works with PgxConnector type
+
+**Remaining work:**
+
+- [ ] TODO: Upstream pgx changes or create public multigres fork
+- [ ] End-to-end integration test with real PostgreSQL using SCRAM passthrough
+- [ ] Performance benchmarks vs SET SESSION AUTHORIZATION approach
+
+### Phase 5: Identity Propagation ✅ COMPLETE
+
+**Status:** Completed 2025-12-06, **Updated 2025-12-08**
+
+**Update (2025-12-08):** The temporary SET SESSION AUTHORIZATION code has been **removed** and replaced with per-user connection pools using SCRAM key passthrough (see Phase 4 Part B).
+
+- CallerID propagation ✅ **Retained** - used for per-user pool selection
+- CallerID SCRAM keys ✅ **Added** - `scram_client_key` and `scram_server_key` in CallerID
+- SET SESSION AUTHORIZATION ✅ **Removed** - replaced by per-user pool lookup
+- Sandbox escape tests ✅ **Not needed** - no sandbox to escape with per-user pools
+
+**Current implementation:**
+
+1. CallerID includes authenticated username (`principal`) and SCRAM keys
+2. `ScatterConn` populates `CallerID` with `conn.User()` and `conn.SCRAMKeys()`
+3. Multipooler executor uses per-user connection pools authenticated via SCRAM passthrough
+4. When SCRAM keys are present, each user gets their own authenticated pool
+5. When SCRAM keys are absent, executor returns error (SCRAM-SHA-256 required)
+
+**Files modified:**
+
+- `proto/mtrpc.proto` - Added `scram_client_key` and `scram_server_key` to CallerID
+- `go/multigateway/scatterconn/scatter_conn.go` - Populate CallerID with SCRAM keys
+- `go/multipooler/executor/executor.go` - Uses per-user pools, removed SET SESSION AUTHORIZATION
 
 ### Phase 6: End-to-End Testing & Caching
 

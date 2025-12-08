@@ -251,9 +251,15 @@ type CallerID struct {
 	// servlet name or an API endpoint name.
 	Subcomponent string `protobuf:"bytes,3,opt,name=subcomponent,proto3" json:"subcomponent,omitempty"`
 	// set of security groups that should be assigned to this caller.
-	Groups        []string `protobuf:"bytes,4,rep,name=groups,proto3" json:"groups,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Groups []string `protobuf:"bytes,4,rep,name=groups,proto3" json:"groups,omitempty"`
+	// scram_client_key is the SCRAM ClientKey extracted from the client's proof.
+	// Used to compute ClientProof for backend PostgreSQL authentication.
+	ScramClientKey []byte `protobuf:"bytes,5,opt,name=scram_client_key,json=scramClientKey,proto3" json:"scram_client_key,omitempty"`
+	// scram_server_key is the SCRAM ServerKey from the user's password hash.
+	// Used to verify PostgreSQL's server signature (mutual authentication).
+	ScramServerKey []byte `protobuf:"bytes,6,opt,name=scram_server_key,json=scramServerKey,proto3" json:"scram_server_key,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *CallerID) Reset() {
@@ -310,6 +316,20 @@ func (x *CallerID) GetSubcomponent() string {
 func (x *CallerID) GetGroups() []string {
 	if x != nil {
 		return x.Groups
+	}
+	return nil
+}
+
+func (x *CallerID) GetScramClientKey() []byte {
+	if x != nil {
+		return x.ScramClientKey
+	}
+	return nil
+}
+
+func (x *CallerID) GetScramServerKey() []byte {
+	if x != nil {
+		return x.ScramServerKey
 	}
 	return nil
 }
@@ -374,12 +394,14 @@ var File_mtrpc_proto protoreflect.FileDescriptor
 
 const file_mtrpc_proto_rawDesc = "" +
 	"\n" +
-	"\vmtrpc.proto\x12\x05mtrpc\"\x82\x01\n" +
+	"\vmtrpc.proto\x12\x05mtrpc\"\xd6\x01\n" +
 	"\bCallerID\x12\x1c\n" +
 	"\tprincipal\x18\x01 \x01(\tR\tprincipal\x12\x1c\n" +
 	"\tcomponent\x18\x02 \x01(\tR\tcomponent\x12\"\n" +
 	"\fsubcomponent\x18\x03 \x01(\tR\fsubcomponent\x12\x16\n" +
-	"\x06groups\x18\x04 \x03(\tR\x06groups\"E\n" +
+	"\x06groups\x18\x04 \x03(\tR\x06groups\x12(\n" +
+	"\x10scram_client_key\x18\x05 \x01(\fR\x0escramClientKey\x12(\n" +
+	"\x10scram_server_key\x18\x06 \x01(\fR\x0escramServerKey\"E\n" +
 	"\bRPCError\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\x12\x1f\n" +
 	"\x04code\x18\x02 \x01(\x0e2\v.mtrpc.CodeR\x04code*\xd8\x02\n" +

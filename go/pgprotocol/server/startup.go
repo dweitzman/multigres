@@ -329,7 +329,13 @@ func (c *Conn) authenticateSCRAM() error {
 		return fmt.Errorf("failed to flush AuthenticationOk: %w", err)
 	}
 
-	c.logger.Debug("SCRAM authentication successful", "user", c.user)
+	// Extract SCRAM keys for passthrough authentication to backends.
+	// These keys allow multipooler to authenticate to PostgreSQL as this user
+	// without knowing the plaintext password.
+	c.scramClientKey, c.scramServerKey = authenticator.ExtractedKeys()
+
+	c.logger.Debug("SCRAM authentication successful", "user", c.user,
+		"has_scram_keys", c.scramClientKey != nil)
 	return nil
 }
 

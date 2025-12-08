@@ -75,6 +75,11 @@ type Conn struct {
 	database string
 	params   map[string]string
 
+	// SCRAM keys extracted during authentication for passthrough to backends.
+	// These are only set when SCRAM-SHA-256 authentication is used.
+	scramClientKey []byte
+	scramServerKey []byte
+
 	// protocolVersion is the negotiated protocol version.
 	protocolVersion protocol.ProtocolVersion
 
@@ -169,6 +174,13 @@ func (c *Conn) User() string {
 // Database returns the database name.
 func (c *Conn) Database() string {
 	return c.database
+}
+
+// SCRAMKeys returns the SCRAM keys extracted during authentication.
+// These can be used for passthrough authentication to backend PostgreSQL servers.
+// Returns nil, nil if SCRAM authentication was not used.
+func (c *Conn) SCRAMKeys() (clientKey, serverKey []byte) {
+	return c.scramClientKey, c.scramServerKey
 }
 
 // Context returns the connection's context.

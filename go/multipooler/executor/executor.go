@@ -27,8 +27,12 @@ import (
 	"strings"
 	"sync/atomic"
 	"syscall"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/multigres/multigres/go/common/queryservice"
+	"github.com/multigres/multigres/go/multipooler/pools/userpool"
 	"github.com/multigres/multigres/go/pb/query"
 )
 
@@ -46,6 +50,13 @@ type Executor struct {
 	dbConfig *DBConfig
 	db       *sql.DB
 	isOpen   atomic.Bool
+
+	// userPoolManager manages per-user connection pools for SCRAM passthrough authentication.
+	// When a caller provides SCRAM keys, we use their dedicated pool instead of SET SESSION AUTHORIZATION.
+	userPoolManager *userpool.Manager[*userpool.PgxConnection]
+
+	// pgxConnector creates connections for the user pool manager.
+	pgxConnector *userpool.PgxConnector
 }
 
 // NewExecutor creates a new Executor instance.
@@ -56,7 +67,7 @@ func NewExecutor(logger *slog.Logger, dbConfig *DBConfig) *Executor {
 	}
 }
 
-// Open creates the database connection.
+// Open creates the database connection and initializes the user pool manager.
 func (e *Executor) Open() error {
 	if e.isOpen.Load() {
 		return nil
@@ -93,8 +104,27 @@ func (e *Executor) Open() error {
 	}
 
 	e.db = db
+
+	// Initialize user pool manager for SCRAM passthrough authentication.
+	// This allows per-user connection pools where each user's connections
+	// are authenticated using their extracted SCRAM keys.
+	e.userPoolManager = userpool.NewManager[*userpool.PgxConnection](userpool.ManagerConfig{
+		MaxPoolsPerManager:    1000,            // Support many concurrent users
+		MaxConnectionsPerPool: 10,              // Connections per user
+		IdlePoolTimeout:       5 * time.Minute, // Clean up idle user pools
+		GlobalConnectionCap:   500,             // Total connections across all users
+	})
+
+	// Create the pgx connector for SCRAM passthrough connections.
+	e.pgxConnector = userpool.NewPgxConnector(userpool.PgxConnectorConfig{
+		Host:     socketDir,
+		Port:     uint16(e.dbConfig.PgPort),
+		Database: e.dbConfig.Database,
+		Logger:   e.logger,
+	})
+
 	e.isOpen.Store(true)
-	e.logger.Info("Executor opened database connection")
+	e.logger.Info("Executor opened database connection and user pool manager")
 
 	return nil
 }
@@ -107,10 +137,16 @@ func (e *Executor) ExecuteQuery(ctx context.Context, target *query.Target, sql s
 
 	var maxRows uint64
 	var callerID string
+	var scramClientKey, scramServerKey []byte
+
 	if options != nil {
 		maxRows = options.MaxRows
-		if options.CallerId != nil && options.CallerId.Principal != "" {
-			callerID = options.CallerId.Principal
+		if options.CallerId != nil {
+			if options.CallerId.Principal != "" {
+				callerID = options.CallerId.Principal
+			}
+			scramClientKey = options.CallerId.ScramClientKey
+			scramServerKey = options.CallerId.ScramServerKey
 		}
 	}
 
@@ -119,14 +155,21 @@ func (e *Executor) ExecuteQuery(ctx context.Context, target *query.Target, sql s
 		"shard", target.Shard,
 		"pooler_type", target.PoolerType.String(),
 		"caller_id", callerID,
+		"has_scram_keys", len(scramClientKey) > 0 && len(scramServerKey) > 0,
 		"query", sql)
 
-	// If we have a caller ID, use a dedicated connection with SET SESSION AUTHORIZATION
-	if callerID != "" {
-		return e.executeQueryAsUser(ctx, sql, callerID, maxRows)
+	// If we have SCRAM keys, use the per-user connection pool with SCRAM passthrough.
+	// This provides true per-user authentication to PostgreSQL.
+	if callerID != "" && len(scramClientKey) > 0 && len(scramServerKey) > 0 {
+		return e.executeQueryWithSCRAMPassthrough(ctx, sql, callerID, scramClientKey, scramServerKey, maxRows)
 	}
 
-	// No caller ID, execute directly on the pool
+	// Caller ID without SCRAM keys is not supported - clients must use SCRAM-SHA-256.
+	if callerID != "" {
+		return nil, fmt.Errorf("SCRAM keys required for user %q: client must use SCRAM-SHA-256 authentication", callerID)
+	}
+
+	// No caller ID, execute directly on the shared pool (administrative queries)
 	return e.executeQuery(ctx, sql, maxRows)
 }
 
@@ -159,6 +202,14 @@ func (e *Executor) StreamExecute(
 func (e *Executor) Close(ctx context.Context) error {
 	if !e.isOpen.Swap(false) {
 		return nil
+	}
+
+	// Close user pool manager first (closes all per-user connection pools)
+	if e.userPoolManager != nil {
+		if err := e.userPoolManager.Close(); err != nil {
+			e.logger.WarnContext(ctx, "Executor: error closing user pool manager", "error", err)
+		}
+		e.userPoolManager = nil
 	}
 
 	if e.db != nil {
@@ -217,38 +268,38 @@ func (e *Executor) IsHealthy() error {
 	return nil
 }
 
-// executeQueryAsUser executes a SQL query as a specific user using SET SESSION AUTHORIZATION.
-// This gets a dedicated connection, sets the session authorization, executes the query,
-// and resets the session before returning the connection to the pool.
-func (e *Executor) executeQueryAsUser(ctx context.Context, queryStr string, username string, maxRows uint64) (*query.QueryResult, error) {
-	// Get a dedicated connection from the pool
-	conn, err := e.db.Conn(ctx)
+// executeQueryWithSCRAMPassthrough executes a query using a per-user connection pool
+// authenticated with SCRAM key passthrough. This is the preferred method when SCRAM keys
+// are available from client authentication.
+//
+// Benefits over SET SESSION AUTHORIZATION:
+// - Each user has their own authenticated connection pool
+// - PostgreSQL sees actual user authentication, not superuser impersonation
+// - Row-level security and audit logs correctly reflect the authenticated user
+// - No need for superuser privileges on the pooler connection
+func (e *Executor) executeQueryWithSCRAMPassthrough(ctx context.Context, queryStr string, username string, clientKey, serverKey []byte, maxRows uint64) (*query.QueryResult, error) {
+	// Get a connection from the user's pool (creates pool if needed)
+	keys := &userpool.SCRAMKeys{
+		ClientKey: clientKey,
+		ServerKey: serverKey,
+	}
+
+	pooledConn, err := e.userPoolManager.GetConnection(ctx, username, keys, e.pgxConnector.ConnectFunc())
 	if err != nil {
-		return nil, fmt.Errorf("failed to get connection: %w", err)
+		return nil, fmt.Errorf("failed to get SCRAM-authenticated connection for user %q: %w", username, err)
 	}
-	defer conn.Close()
+	defer e.userPoolManager.ReturnConnection(pooledConn)
 
-	// Set session authorization to the target user
-	// Using quote_ident to safely escape the username
-	setAuthSQL := fmt.Sprintf("SET SESSION AUTHORIZATION %s", quoteIdent(username))
-	if _, err := conn.ExecContext(ctx, setAuthSQL); err != nil {
-		return nil, fmt.Errorf("failed to set session authorization to %q: %w", username, err)
-	}
+	e.logger.DebugContext(ctx, "using SCRAM passthrough connection", "username", username)
 
-	e.logger.DebugContext(ctx, "set session authorization", "username", username)
-
-	// Reset session authorization when done (ensures connection returns to pool in clean state)
-	defer func() {
-		// Reset to superuser - ignore errors since we're cleaning up
-		_, _ = conn.ExecContext(ctx, "RESET SESSION AUTHORIZATION")
-	}()
-
-	// Execute the query on the dedicated connection
-	return e.executeQueryOnConn(ctx, conn, queryStr, maxRows)
+	// Execute the query using pgx
+	return e.executeQueryOnPgxConn(ctx, pooledConn.Conn, queryStr, maxRows)
 }
 
-// executeQueryOnConn executes a query on a specific connection.
-func (e *Executor) executeQueryOnConn(ctx context.Context, conn *sql.Conn, queryStr string, maxRows uint64) (*query.QueryResult, error) {
+// executeQueryOnPgxConn executes a query on a pgx connection.
+func (e *Executor) executeQueryOnPgxConn(ctx context.Context, conn *userpool.PgxConnection, queryStr string, maxRows uint64) (*query.QueryResult, error) {
+	pgConn := conn.Conn()
+
 	// Determine if this is a SELECT query or a modification query
 	trimmedQuery := strings.TrimSpace(strings.ToUpper(queryStr))
 	isSelect := strings.HasPrefix(trimmedQuery, "SELECT") ||
@@ -257,52 +308,104 @@ func (e *Executor) executeQueryOnConn(ctx context.Context, conn *sql.Conn, query
 		strings.HasPrefix(trimmedQuery, "EXPLAIN")
 
 	if isSelect {
-		return e.executeSelectQueryOnConn(ctx, conn, queryStr, maxRows)
+		return e.executeSelectQueryOnPgxConn(ctx, pgConn, queryStr, maxRows)
 	}
-	return e.executeModifyQueryOnConn(ctx, conn, queryStr)
+	return e.executeModifyQueryOnPgxConn(ctx, pgConn, queryStr)
 }
 
-// executeSelectQueryOnConn executes a SELECT query on a specific connection.
-func (e *Executor) executeSelectQueryOnConn(ctx context.Context, conn *sql.Conn, queryStr string, maxRows uint64) (*query.QueryResult, error) {
-	rows, err := conn.QueryContext(ctx, queryStr)
-	if err != nil {
+// executeSelectQueryOnPgxConn executes a SELECT query on a pgx connection.
+func (e *Executor) executeSelectQueryOnPgxConn(ctx context.Context, conn *pgconn.PgConn, queryStr string, maxRows uint64) (*query.QueryResult, error) {
+	mrr := conn.Exec(ctx, queryStr)
+
+	var fields []*query.Field
+	var resultRows []*query.Row
+	var rowCount uint64
+
+	for mrr.NextResult() {
+		rr := mrr.ResultReader()
+		fieldDescs := rr.FieldDescriptions()
+
+		// Build field information on first result
+		if fields == nil {
+			fields = make([]*query.Field, len(fieldDescs))
+			for i, fd := range fieldDescs {
+				fields[i] = &query.Field{
+					Name: fd.Name,
+					Type: fmt.Sprintf("OID:%d", fd.DataTypeOID),
+				}
+			}
+		}
+
+		// Read rows using NextRow() which returns bool, Values() returns the data
+		for rr.NextRow() {
+			if maxRows > 0 && rowCount >= maxRows {
+				break
+			}
+
+			values := rr.Values()
+			rowValues := make([][]byte, len(values))
+			for i, v := range values {
+				if v != nil {
+					rowValues[i] = make([]byte, len(v))
+					copy(rowValues[i], v)
+				}
+			}
+
+			resultRows = append(resultRows, &query.Row{Values: rowValues})
+			rowCount++
+		}
+
+		// Close the result reader to get any errors
+		if _, err := rr.Close(); err != nil {
+			return nil, fmt.Errorf("failed to close result reader: %w", err)
+		}
+	}
+
+	if err := mrr.Close(); err != nil {
 		return nil, fmt.Errorf("failed to execute query: %w", err)
 	}
-	defer rows.Close()
 
-	return e.scanQueryRows(rows, maxRows)
-}
-
-// executeModifyQueryOnConn executes a modification query on a specific connection.
-func (e *Executor) executeModifyQueryOnConn(ctx context.Context, conn *sql.Conn, queryStr string) (*query.QueryResult, error) {
-	result, err := conn.ExecContext(ctx, queryStr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute query: %w", err)
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		// Some queries don't support RowsAffected, that's okay
-		rowsAffected = 0
-	}
-
-	// Generate command tag based on query type
-	commandTag := e.generateCommandTag(queryStr, uint64(rowsAffected))
+	commandTag := fmt.Sprintf("SELECT %d", rowCount)
 
 	return &query.QueryResult{
-		Fields:       []*query.Field{},
-		RowsAffected: uint64(rowsAffected),
-		Rows:         []*query.Row{},
+		Fields:       fields,
+		RowsAffected: 0,
+		Rows:         resultRows,
 		CommandTag:   commandTag,
 	}, nil
 }
 
-// quoteIdent quotes a PostgreSQL identifier to prevent SQL injection.
-// This follows PostgreSQL's identifier quoting rules.
-func quoteIdent(s string) string {
-	// Double any double quotes in the identifier
-	escaped := strings.ReplaceAll(s, `"`, `""`)
-	return `"` + escaped + `"`
+// executeModifyQueryOnPgxConn executes a modification query on a pgx connection.
+func (e *Executor) executeModifyQueryOnPgxConn(ctx context.Context, conn *pgconn.PgConn, queryStr string) (*query.QueryResult, error) {
+	mrr := conn.Exec(ctx, queryStr)
+
+	var commandTag pgconn.CommandTag
+
+	// Read through results to get command tag
+	for mrr.NextResult() {
+		rr := mrr.ResultReader()
+		// Consume any rows (there shouldn't be any for modification queries)
+		for rr.NextRow() {
+			// Just consume
+		}
+		// Close returns (CommandTag, error)
+		var err error
+		commandTag, err = rr.Close()
+		if err != nil {
+			return nil, fmt.Errorf("failed to close result reader: %w", err)
+		}
+	}
+
+	if err := mrr.Close(); err != nil {
+		return nil, fmt.Errorf("failed to execute query: %w", err)
+	}
+
+	return &query.QueryResult{
+		Fields:       []*query.Field{},
+		RowsAffected: uint64(commandTag.RowsAffected()),
+		Rows:         []*query.Row{},
+		CommandTag:   commandTag.String(),
+	}, nil
 }
 
 // executeQuery executes a SQL query and returns the result.

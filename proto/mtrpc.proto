@@ -50,6 +50,19 @@ message CallerID {
 
   // set of security groups that should be assigned to this caller.
   repeated string groups = 4;
+
+  // SCRAM authentication keys for per-user connection pool authentication.
+  // These are extracted during client SCRAM authentication (ClientKey = ClientProof XOR ClientSignature)
+  // and passed to multipooler so it can authenticate to PostgreSQL as this user.
+  // See: RFC 5802 for SCRAM-SHA-256 specification.
+
+  // scram_client_key is the SCRAM ClientKey extracted from the client's proof.
+  // Used to compute ClientProof for backend PostgreSQL authentication.
+  bytes scram_client_key = 5;
+
+  // scram_server_key is the SCRAM ServerKey from the user's password hash.
+  // Used to verify PostgreSQL's server signature (mutual authentication).
+  bytes scram_server_key = 6;
 }
 
 // Code represents canonical error codes. The names, numbers and comments
