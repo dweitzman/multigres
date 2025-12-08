@@ -32,6 +32,7 @@ import (
 
 	"github.com/multigres/multigres/go/common/queryservice"
 	"github.com/multigres/multigres/go/multipooler/pools/userpool"
+	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	"github.com/multigres/multigres/go/pb/query"
 )
 
@@ -41,6 +42,9 @@ type DBConfig struct {
 	PoolerDir      string
 	Database       string
 	PgPort         int
+	// PoolerID identifies this multipooler instance.
+	// Used for routing subsequent requests in a transaction to the same pooler.
+	PoolerID *clustermetadatapb.ID
 }
 
 // Executor implements the QueryService interface for executing queries against PostgreSQL.
@@ -314,12 +318,14 @@ func (e *Executor) streamExecuteWithReservation(
 			// Already reserved, return same ID
 			return queryservice.ReservedState{
 				ReservedConnectionId: reservedConnID,
+				PoolerID:             e.dbConfig.PoolerID,
 			}, nil
 		}
 		// New connection, reserve it
 		newID := e.reserveConnection(pooledConn, username, clientKey, serverKey)
 		return queryservice.ReservedState{
 			ReservedConnectionId: newID,
+			PoolerID:             e.dbConfig.PoolerID,
 		}, nil
 	}
 

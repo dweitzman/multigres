@@ -83,6 +83,7 @@ func (s *QueryPoolerServer) InitDBConfig(dbConfig *DBConfig) error {
 		PoolerDir:      dbConfig.PoolerDir,
 		Database:       dbConfig.Database,
 		PgPort:         dbConfig.PgPort,
+		PoolerID:       dbConfig.PoolerID,
 	}
 	s.executor = executor.NewExecutor(s.logger, execConfig)
 

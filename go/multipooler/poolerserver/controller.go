@@ -29,6 +29,9 @@ type DBConfig struct {
 	PoolerDir      string
 	Database       string
 	PgPort         int
+	// PoolerID identifies this multipooler instance.
+	// Used for routing subsequent requests in a transaction to the same pooler.
+	PoolerID *clustermetadatapb.ID
 }
 
 // PoolerController defines the control interface for query serving.

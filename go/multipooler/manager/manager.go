@@ -1318,6 +1318,7 @@ func (pm *MultiPoolerManager) Start(senv *servenv.ServEnv) {
 		PoolerDir:      pm.config.PoolerDir,
 		Database:       pm.config.Database,
 		PgPort:         pm.config.PgPort,
+		PoolerID:       pm.serviceID,
 	}
 	if err := pm.qsc.InitDBConfig(dbConfig); err != nil {
 		pm.logger.Error("Failed to initialize query service controller", "error", err)
