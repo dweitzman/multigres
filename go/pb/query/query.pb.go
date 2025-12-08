@@ -53,7 +53,12 @@ type QueryResult struct {
 	// When streaming results, this should only be set on the final packet of a result set.
 	// When set, the protocol layer will send CommandComplete and reset state for the next result set.
 	// Examples: "SELECT 42", "INSERT 0 5", "UPDATE 10", "DELETE 3", "CREATE TABLE"
-	CommandTag    string `protobuf:"bytes,4,opt,name=command_tag,json=commandTag,proto3" json:"command_tag,omitempty"`
+	CommandTag string `protobuf:"bytes,4,opt,name=command_tag,json=commandTag,proto3" json:"command_tag,omitempty"`
+	// txn_status is the PostgreSQL transaction status from the ReadyForQuery message.
+	// This is propagated from the backend PostgreSQL through multipooler to multigateway.
+	// Values: 'I' (idle), 'T' (in transaction block), 'E' (in failed transaction block)
+	// Multigateway uses this to set the correct status in its ReadyForQuery response.
+	TxnStatus     []byte `protobuf:"bytes,5,opt,name=txn_status,json=txnStatus,proto3" json:"txn_status,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -114,6 +119,13 @@ func (x *QueryResult) GetCommandTag() string {
 		return x.CommandTag
 	}
 	return ""
+}
+
+func (x *QueryResult) GetTxnStatus() []byte {
+	if x != nil {
+		return x.TxnStatus
+	}
+	return nil
 }
 
 // Field represents metadata about a column in the result set.
@@ -693,14 +705,16 @@ var File_query_proto protoreflect.FileDescriptor
 
 const file_query_proto_rawDesc = "" +
 	"\n" +
-	"\vquery.proto\x12\x05query\x1a\x15clustermetadata.proto\x1a\vmtrpc.proto\"\x99\x01\n" +
+	"\vquery.proto\x12\x05query\x1a\x15clustermetadata.proto\x1a\vmtrpc.proto\"\xb8\x01\n" +
 	"\vQueryResult\x12$\n" +
 	"\x06fields\x18\x01 \x03(\v2\f.query.FieldR\x06fields\x12#\n" +
 	"\rrows_affected\x18\x02 \x01(\x04R\frowsAffected\x12\x1e\n" +
 	"\x04rows\x18\x03 \x03(\v2\n" +
 	".query.RowR\x04rows\x12\x1f\n" +
 	"\vcommand_tag\x18\x04 \x01(\tR\n" +
-	"commandTag\"\x89\x02\n" +
+	"commandTag\x12\x1d\n" +
+	"\n" +
+	"txn_status\x18\x05 \x01(\fR\ttxnStatus\"\x89\x02\n" +
 	"\x05Field\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
 	"\x04type\x18\x02 \x01(\tR\x04type\x12\x1b\n" +

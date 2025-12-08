@@ -1766,9 +1766,43 @@ client := auth.NewSCRAMClientWithKeys(username, clientKey, serverKey)
 
 **Remaining work:**
 
-- [ ] Transaction status tracking in multigateway (blocks SET ROLE/ConnectionCleanup e2e tests)
+- [x] Transaction status tracking in multigateway ✅ Completed 2025-12-08
+- [ ] Connection reservation for transactions (blocks SET ROLE/ConnectionCleanup e2e tests)
 - [ ] Test credential cache behavior under load
 - [ ] Performance benchmarks vs trust auth baseline
+
+**Transaction status tracking (2025-12-08) ✅ COMPLETE:**
+
+The e2e tests for SET ROLE and ConnectionCleanup fail because multigateway always returns
+`TxnStatusIdle` ('I') in ReadyForQuery, even after BEGIN. The Go database/sql driver uses
+this status to determine if it's in a transaction.
+
+**Root cause:** `server.Conn.txnStatus` is initialized to `TxnStatusIdle` and never updated.
+The status from PostgreSQL's ReadyForQuery is received by multipooler but not propagated
+back through gRPC.
+
+**How PgBouncer/Supavisor handle this:** They are pure PostgreSQL protocol proxies that
+forward the ReadyForQuery message (including txn_status byte) directly from PostgreSQL
+to the client. Multigres uses gRPC between multigateway and multipooler, breaking this
+transparency.
+
+**Design decision: Propagate txn_status through QueryResult proto**
+
+| Option           | Description                                  | Pros                                 | Cons                           |
+| ---------------- | -------------------------------------------- | ------------------------------------ | ------------------------------ |
+| A. Proto field   | Add `txn_status` to QueryResult              | Backend is source of truth, accurate | Proto change                   |
+| B. Infer locally | Detect BEGIN/COMMIT/ROLLBACK in multigateway | No proto change                      | Could drift from backend state |
+
+**Chosen: Option A** - The backend PostgreSQL is the authoritative source of transaction
+state. Multipooler already tracks this via `client.Conn.TxnStatus()`. We just need to
+propagate it.
+
+**Implementation:**
+
+1. Add `bytes txn_status = N;` to `QueryResult` in `proto/query.proto`
+2. Multipooler executor returns `pooledConn.Conn.TxnStatus()` in response
+3. Add `SetTxnStatus(byte)` method to `pgprotocol/server/conn.go`
+4. Multigateway handler updates `conn.SetTxnStatus()` from response
 
 **Connection cleanup analysis (2025-12-08):**
 

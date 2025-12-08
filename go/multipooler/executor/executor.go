@@ -302,10 +302,14 @@ func (e *Executor) executeQueryOnPoolConn(ctx context.Context, conn *userpool.Po
 		return nil, fmt.Errorf("failed to execute query: %w", err)
 	}
 
+	// Get transaction status from the connection (updated by ReadyForQuery from PostgreSQL)
+	txnStatus := conn.Conn().TxnStatus()
+
 	if len(results) == 0 {
 		return &query.QueryResult{
-			Fields: []*query.Field{},
-			Rows:   []*query.Row{},
+			Fields:    []*query.Field{},
+			Rows:      []*query.Row{},
+			TxnStatus: []byte{txnStatus},
 		}, nil
 	}
 
@@ -316,6 +320,9 @@ func (e *Executor) executeQueryOnPoolConn(ctx context.Context, conn *userpool.Po
 	if maxRows > 0 && uint64(len(result.Rows)) > maxRows {
 		result.Rows = result.Rows[:maxRows]
 	}
+
+	// Set transaction status from the backend connection
+	result.TxnStatus = []byte{txnStatus}
 
 	return result, nil
 }

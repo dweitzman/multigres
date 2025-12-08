@@ -200,6 +200,34 @@ func (c *Conn) SetConnectionState(state any) {
 	c.state = state
 }
 
+// TxnStatus returns the current transaction status.
+// Returns one of: protocol.TxnStatusIdle ('I'), protocol.TxnStatusInBlock ('T'),
+// or protocol.TxnStatusFailed ('E').
+func (c *Conn) TxnStatus() byte {
+	return c.txnStatus
+}
+
+// SetTxnStatus sets the transaction status for this connection.
+// This should be called with the transaction status received from the backend
+// PostgreSQL server (via multipooler). The status will be included in the
+// next ReadyForQuery message sent to the client.
+func (c *Conn) SetTxnStatus(status byte) {
+	c.txnStatus = status
+}
+
+// updateTxnStatusFromResult extracts the transaction status from a QueryResult
+// and updates the connection's txnStatus field.
+//
+// TxnStatus is a []byte because protobuf has no single-byte type, but PostgreSQL's
+// ReadyForQuery message always sends exactly one status byte ('I', 'T', or 'E').
+// This status is propagated from multipooler so ReadyForQuery returns the correct
+// transaction state to the client.
+func (c *Conn) updateTxnStatusFromResult(result *query.QueryResult) {
+	if result != nil && len(result.TxnStatus) > 0 {
+		c.txnStatus = result.TxnStatus[0]
+	}
+}
+
 // returnReader returns the buffered reader to the pool.
 func (c *Conn) returnReader() {
 	c.bufMu.Lock()
@@ -387,6 +415,9 @@ func (c *Conn) handleQuery() error {
 		if result == nil {
 			return c.writeEmptyQueryResponse()
 		}
+
+		// Update transaction status from backend PostgreSQL for ReadyForQuery.
+		c.updateTxnStatusFromResult(result)
 
 		// On first callback with fields for this result set, send RowDescription.
 		if !sentRowDescription && len(result.Fields) > 0 {
@@ -640,6 +671,9 @@ func (c *Conn) handleExecute() error {
 	// Call the handler to execute the portal with streaming callback.
 	// The handler is responsible for retrieving the portal and executing it.
 	err = c.handler.HandleExecute(c.ctx, c, portalName, maxRows, func(ctx context.Context, result *query.QueryResult) error {
+		// Update transaction status from backend PostgreSQL for ReadyForQuery.
+		c.updateTxnStatusFromResult(result)
+
 		// On first callback with fields, send RowDescription.
 		if !sentRowDescription && len(result.Fields) > 0 {
 			if err := c.writeRowDescription(result.Fields); err != nil {

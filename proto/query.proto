@@ -41,6 +41,12 @@ message QueryResult {
   // When set, the protocol layer will send CommandComplete and reset state for the next result set.
   // Examples: "SELECT 42", "INSERT 0 5", "UPDATE 10", "DELETE 3", "CREATE TABLE"
   string command_tag = 4;
+
+  // txn_status is the PostgreSQL transaction status from the ReadyForQuery message.
+  // This is propagated from the backend PostgreSQL through multipooler to multigateway.
+  // Values: 'I' (idle), 'T' (in transaction block), 'E' (in failed transaction block)
+  // Multigateway uses this to set the correct status in its ReadyForQuery response.
+  bytes txn_status = 5;
 }
 
 // Field represents metadata about a column in the result set.
