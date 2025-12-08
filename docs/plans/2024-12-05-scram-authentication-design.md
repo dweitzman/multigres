@@ -1617,6 +1617,17 @@ that fetches credentials from multipooler via gRPC.
 
 ### Phase 4: Per-User Connection Pools (TDD)
 
+**Existing code to modify:**
+
+Phase 5 implemented SET SESSION AUTHORIZATION as a temporary measure. With per-user pools, this code needs to be replaced:
+
+| File                                          | Current State                                                                    | Required Change                                                              |
+| --------------------------------------------- | -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `go/multipooler/executor/executor.go`         | `executeQueryAsUser()` uses SET SESSION AUTHORIZATION                            | Replace with per-user pool lookup; remove SET SESSION AUTHORIZATION entirely |
+| `go/test/endtoend/multigateway_scram_test.go` | `TestMultiGateway_SessionAuthorizationSandbox` skipped with "KNOWN SECURITY GAP" | Remove test - not needed with per-user pools (no sandbox to escape)          |
+| `proto/multipoolerservice.proto`              | CallerID has `principal` only                                                    | Add `scram_client_key` and `scram_server_key` fields for pool auth           |
+| `go/multigateway/auth/`                       | Extracts hash, performs SCRAM auth                                               | Also extract ClientKey/ServerKey from proof for passthrough                  |
+
 **Tests first:**
 
 1. `TestPoolCreatedOnFirstRequest` - Pool created dynamically
@@ -1632,17 +1643,24 @@ that fetches credentials from multipooler via gRPC.
 2. `go/multipooler/pool/scram_key_cache.go` - SCRAM key caching
 3. `go/multipooler/pool/scram_client.go` - SCRAM client for pool connections
 4. Update `go/multipooler/grpcpoolerservice/service.go` - Use per-user pools
+5. Update `go/multipooler/executor/executor.go` - Remove SET SESSION AUTHORIZATION code
 
 ### Phase 5: Identity Propagation ✅ COMPLETE
 
 **Status:** Completed 2025-12-06
+
+**⚠️ Note:** The SET SESSION AUTHORIZATION implementation is **temporary scaffolding**. With the per-user pools decision (Phase 4), this code will be replaced:
+
+- CallerID propagation ✅ **Retained** - still needed for pool selection
+- SET SESSION AUTHORIZATION ❌ **To be removed** - replaced by per-user pool lookup
+- Sandbox escape tests ❌ **To be removed** - no sandbox to escape with per-user pools
 
 **Implemented:**
 
 1. Added `caller_id` field to `query.ExecuteOptions` proto
 2. `ScatterConn` populates `CallerID` with `conn.User()` (authenticated username)
 3. `grpcQueryService` includes `CallerID` in all gRPC requests to multipooler
-4. Multipooler executor uses `SET SESSION AUTHORIZATION` when CallerID is present
+4. Multipooler executor uses `SET SESSION AUTHORIZATION` when CallerID is present _(temporary)_
 5. Fixed `[]byte` to string conversion in query result scanning
 
 **Files modified:**
@@ -1651,14 +1669,15 @@ that fetches credentials from multipooler via gRPC.
 - `go/multigateway/scatterconn/scatter_conn.go` - Populate CallerID
 - `go/multigateway/poolergateway/grpc_query_service.go` - Pass CallerID in requests
 - `go/multipooler/grpcpoolerservice/service.go` - Pass options to executor
-- `go/multipooler/executor/executor.go` - SET SESSION AUTHORIZATION implementation
+- `go/multipooler/executor/executor.go` - SET SESSION AUTHORIZATION implementation _(to be replaced in Phase 4)_
 - `go/test/endtoend/multigateway_scram_test.go` - Test current_user returns auth user
 
-**Key implementation:**
+**Key implementation (temporary, will be replaced in Phase 4):**
 
 ```go
 // In executor.go - executeQueryAsUser()
 // Gets dedicated connection, sets session auth, executes query, resets
+// NOTE: This will be replaced with per-user pool lookup in Phase 4
 setAuthSQL := fmt.Sprintf("SET SESSION AUTHORIZATION %s", quoteIdent(username))
 conn.ExecContext(ctx, setAuthSQL)
 defer conn.ExecContext(ctx, "RESET SESSION AUTHORIZATION")
