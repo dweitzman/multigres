@@ -494,8 +494,9 @@ func TestMultiGateway_UserIsolation(t *testing.T) {
 }
 
 // TestMultiGateway_SetRole tests that SET ROLE and RESET ROLE work correctly
-// within a user's role memberships. This verifies that PostgreSQL's native
-// role system works correctly through the proxy.
+// within a transaction. In transaction-mode pooling, SET ROLE only persists
+// within the same transaction - each statement outside a transaction gets a
+// fresh connection that is reset after use.
 func TestMultiGateway_SetRole(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping SET ROLE test in short mode")
@@ -556,55 +557,192 @@ func TestMultiGateway_SetRole(t *testing.T) {
 	// Force single connection to test role state on same connection
 	userDB.SetMaxOpenConns(1)
 
-	// Verify initial identity
-	var currentUser, sessionUser string
-	err = userDB.QueryRowContext(ctx, "SELECT current_user, session_user").Scan(&currentUser, &sessionUser)
-	require.NoError(t, err, "initial identity query should succeed")
-	assert.Equal(t, testUser, currentUser, "current_user should be test user initially")
-	assert.Equal(t, testUser, sessionUser, "session_user should be test user")
+	t.Run("SET ROLE persists within a transaction", func(t *testing.T) {
+		// Start a transaction to hold the connection
+		tx, err := userDB.BeginTx(ctx, nil)
+		require.NoError(t, err, "BEGIN should succeed")
 
-	t.Run("SET ROLE to granted role succeeds", func(t *testing.T) {
-		_, err := userDB.ExecContext(ctx, fmt.Sprintf("SET ROLE %s", grantedRole))
+		// SET ROLE within the transaction
+		_, err = tx.ExecContext(ctx, fmt.Sprintf("SET ROLE %s", grantedRole))
 		require.NoError(t, err, "SET ROLE to granted role should succeed")
 
-		// current_user changes, but session_user stays the same
-		err = userDB.QueryRowContext(ctx, "SELECT current_user, session_user").Scan(&currentUser, &sessionUser)
+		// Verify role changed within same transaction
+		var currentUser, sessionUser string
+		err = tx.QueryRowContext(ctx, "SELECT current_user, session_user").Scan(&currentUser, &sessionUser)
 		require.NoError(t, err, "identity query after SET ROLE should succeed")
-		assert.Equal(t, grantedRole, currentUser, "current_user should be the granted role")
+		assert.Equal(t, grantedRole, currentUser, "current_user should be the granted role within transaction")
 		assert.Equal(t, testUser, sessionUser, "session_user should still be test user")
-	})
 
-	t.Run("RESET ROLE returns to session user", func(t *testing.T) {
-		_, err := userDB.ExecContext(ctx, "RESET ROLE")
+		// RESET ROLE within transaction
+		_, err = tx.ExecContext(ctx, "RESET ROLE")
 		require.NoError(t, err, "RESET ROLE should succeed")
 
-		err = userDB.QueryRowContext(ctx, "SELECT current_user, session_user").Scan(&currentUser, &sessionUser)
+		err = tx.QueryRowContext(ctx, "SELECT current_user").Scan(&currentUser)
 		require.NoError(t, err, "identity query after RESET ROLE should succeed")
 		assert.Equal(t, testUser, currentUser, "current_user should return to test user after RESET ROLE")
-		assert.Equal(t, testUser, sessionUser, "session_user should still be test user")
+
+		// Commit to release the connection
+		err = tx.Commit()
+		require.NoError(t, err, "COMMIT should succeed")
 	})
 
 	t.Run("SET ROLE to ungranted role fails", func(t *testing.T) {
-		_, err := userDB.ExecContext(ctx, fmt.Sprintf("SET ROLE %s", ungrantedRole))
+		tx, err := userDB.BeginTx(ctx, nil)
+		require.NoError(t, err, "BEGIN should succeed")
+		defer tx.Rollback() //nolint:errcheck // Cleanup on failure
+
+		_, err = tx.ExecContext(ctx, fmt.Sprintf("SET ROLE %s", ungrantedRole))
 		require.Error(t, err, "SET ROLE to ungranted role should fail")
 
 		// Verify current_user unchanged after failed SET ROLE
-		err = userDB.QueryRowContext(ctx, "SELECT current_user").Scan(&currentUser)
+		var currentUser string
+		err = tx.QueryRowContext(ctx, "SELECT current_user").Scan(&currentUser)
 		require.NoError(t, err, "identity query should succeed")
 		assert.Equal(t, testUser, currentUser, "current_user should be unchanged after failed SET ROLE")
 	})
 
 	t.Run("SET ROLE NONE returns to session user", func(t *testing.T) {
-		// First SET ROLE to granted role
-		_, err := userDB.ExecContext(ctx, fmt.Sprintf("SET ROLE %s", grantedRole))
+		tx, err := userDB.BeginTx(ctx, nil)
+		require.NoError(t, err, "BEGIN should succeed")
+		defer tx.Rollback() //nolint:errcheck // Cleanup on failure
+
+		// SET ROLE to granted role
+		_, err = tx.ExecContext(ctx, fmt.Sprintf("SET ROLE %s", grantedRole))
 		require.NoError(t, err, "SET ROLE should succeed")
 
 		// Then SET ROLE NONE
-		_, err = userDB.ExecContext(ctx, "SET ROLE NONE")
+		_, err = tx.ExecContext(ctx, "SET ROLE NONE")
 		require.NoError(t, err, "SET ROLE NONE should succeed")
 
-		err = userDB.QueryRowContext(ctx, "SELECT current_user").Scan(&currentUser)
+		var currentUser string
+		err = tx.QueryRowContext(ctx, "SELECT current_user").Scan(&currentUser)
 		require.NoError(t, err, "identity query should succeed")
 		assert.Equal(t, testUser, currentUser, "current_user should return to test user after SET ROLE NONE")
+	})
+}
+
+// TestMultiGateway_ConnectionCleanup tests that connection state is cleaned up in
+// transaction-mode pooling. Each statement outside a transaction gets a fresh connection
+// that is reset after use, ensuring SET ROLE and other session state doesn't persist.
+func TestMultiGateway_ConnectionCleanup(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping connection cleanup test in short mode")
+	}
+	if utils.ShouldSkipRealPostgres() {
+		t.Skip("PostgreSQL binaries not found, skipping test")
+	}
+
+	// Setup full test cluster
+	cluster := setupTestCluster(t)
+	t.Cleanup(cluster.Cleanup)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
+	// Connect to multipooler via gRPC to create test user and role
+	poolerAddr := fmt.Sprintf("localhost:%d", cluster.PortConfig.Zones[0].MultipoolerGRPCPort)
+	poolerClient, err := NewMultiPoolerTestClient(poolerAddr)
+	require.NoError(t, err, "failed to connect to multipooler via gRPC")
+	defer poolerClient.Close()
+
+	// Create test user and a role they can SET ROLE to
+	timestamp := time.Now().UnixNano()
+	testUser := fmt.Sprintf("cleanup_test_%d", timestamp)
+	grantedRole := fmt.Sprintf("cleanup_role_%d", timestamp)
+	testPassword := "cleanup_password_123" //nolint:gosec // Test credentials
+
+	// Create role and user
+	_, err = poolerClient.ExecuteQuery(ctx, fmt.Sprintf("CREATE USER %s NOLOGIN", grantedRole), 0)
+	require.NoError(t, err, "failed to create role")
+	_, err = poolerClient.ExecuteQuery(ctx, fmt.Sprintf("CREATE USER %s WITH PASSWORD '%s'", testUser, testPassword), 0)
+	require.NoError(t, err, "failed to create test user")
+	_, err = poolerClient.ExecuteQuery(ctx, fmt.Sprintf("GRANT %s TO %s", grantedRole, testUser), 0)
+	require.NoError(t, err, "failed to grant role to user")
+	_, err = poolerClient.ExecuteQuery(ctx, fmt.Sprintf("GRANT CONNECT ON DATABASE postgres TO %s", testUser), 0)
+	require.NoError(t, err, "failed to grant connect privilege")
+
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		_, _ = poolerClient.ExecuteQuery(cleanupCtx, fmt.Sprintf("DROP USER IF EXISTS %s", testUser), 0)
+		_, _ = poolerClient.ExecuteQuery(cleanupCtx, fmt.Sprintf("DROP ROLE IF EXISTS %s", grantedRole), 0)
+	})
+
+	userConnStr := fmt.Sprintf("host=localhost port=%d user=%s password=%s dbname=postgres sslmode=disable connect_timeout=5",
+		cluster.PortConfig.Zones[0].MultigatewayPGPort, testUser, testPassword)
+
+	userDB, err := sql.Open("postgres", userConnStr)
+	require.NoError(t, err, "failed to open connection")
+	defer userDB.Close()
+	userDB.SetMaxOpenConns(1)
+
+	t.Run("SET ROLE is reset after transaction commits", func(t *testing.T) {
+		// Do SET ROLE inside a transaction
+		tx, err := userDB.BeginTx(ctx, nil)
+		require.NoError(t, err, "BEGIN should succeed")
+
+		_, err = tx.ExecContext(ctx, fmt.Sprintf("SET ROLE %s", grantedRole))
+		require.NoError(t, err, "SET ROLE should succeed")
+
+		// Verify role changed within transaction
+		var currentUser string
+		err = tx.QueryRowContext(ctx, "SELECT current_user").Scan(&currentUser)
+		require.NoError(t, err, "query should succeed")
+		assert.Equal(t, grantedRole, currentUser, "current_user should be granted role within transaction")
+
+		// Commit - connection should be reset and returned to pool
+		err = tx.Commit()
+		require.NoError(t, err, "COMMIT should succeed")
+
+		// Next statement gets a fresh (reset) connection
+		// Role should be back to the session user
+		err = userDB.QueryRowContext(ctx, "SELECT current_user").Scan(&currentUser)
+		require.NoError(t, err, "query should succeed")
+		assert.Equal(t, testUser, currentUser,
+			"current_user should be reset to session user (%q) after transaction, not stuck as SET ROLE role (%q)",
+			testUser, grantedRole)
+	})
+
+	t.Run("SET ROLE is reset after transaction rollback", func(t *testing.T) {
+		// Do SET ROLE inside a transaction
+		tx, err := userDB.BeginTx(ctx, nil)
+		require.NoError(t, err, "BEGIN should succeed")
+
+		_, err = tx.ExecContext(ctx, fmt.Sprintf("SET ROLE %s", grantedRole))
+		require.NoError(t, err, "SET ROLE should succeed")
+
+		// Verify role changed within transaction
+		var currentUser string
+		err = tx.QueryRowContext(ctx, "SELECT current_user").Scan(&currentUser)
+		require.NoError(t, err, "query should succeed")
+		assert.Equal(t, grantedRole, currentUser, "current_user should be granted role within transaction")
+
+		// Rollback - connection should be reset and returned to pool
+		err = tx.Rollback()
+		require.NoError(t, err, "ROLLBACK should succeed")
+
+		// Next statement gets a fresh (reset) connection
+		err = userDB.QueryRowContext(ctx, "SELECT current_user").Scan(&currentUser)
+		require.NoError(t, err, "query should succeed")
+		assert.Equal(t, testUser, currentUser,
+			"current_user should be reset to session user (%q) after rollback, not stuck as SET ROLE role (%q)",
+			testUser, grantedRole)
+	})
+
+	t.Run("SET ROLE outside transaction does not persist to next statement", func(t *testing.T) {
+		// SET ROLE outside transaction - each statement gets its own connection
+		_, err := userDB.ExecContext(ctx, fmt.Sprintf("SET ROLE %s", grantedRole))
+		require.NoError(t, err, "SET ROLE should succeed")
+
+		// The SET ROLE was executed on one connection, then that connection was
+		// reset and returned to the pool. The next query gets a fresh connection.
+		var currentUser string
+		err = userDB.QueryRowContext(ctx, "SELECT current_user").Scan(&currentUser)
+		require.NoError(t, err, "query should succeed")
+
+		// In transaction-mode pooling, SET ROLE doesn't persist outside transactions
+		assert.Equal(t, testUser, currentUser,
+			"SET ROLE outside transaction should not persist; got %q expected %q",
+			currentUser, testUser)
 	})
 }
