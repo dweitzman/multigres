@@ -1906,6 +1906,88 @@ When a connection is returned to the pool, session state (role, search_path, tem
 
 ---
 
+## Future: Token-Based Authentication
+
+For longer-lived, distributed authentication across shards:
+
+1. **Token Generation**: multipooler issues signed JWT on successful SCRAM auth
+
+   ```json
+   {
+     "sub": "postgres_user_foo", // PostgreSQL role
+     "identity": "bob@company.com", // Real user identity
+     "databases": ["mydb"], // Authorized databases
+     "exp": 1699900000, // Expiration
+     "iat": 1699896400 // Issued at
+   }
+   ```
+
+2. **Token Usage**: multigateway caches token, reuses for multiple shards
+
+3. **Token Refresh**: Opportunistic re-authentication on new connections
+
+4. **Expiration Handling**:
+   - Future PostgreSQL "GoAway" message support
+   - Graceful connection termination with re-auth hint
+
+**Benefits:**
+
+- Reduced gRPC calls for credential verification
+- Audit trail with real identity
+- Cross-shard authentication with single credential exchange
+
+---
+
+## Future: Pool Architecture Refactor
+
+### Current State
+
+Two pool implementations exist:
+
+- **connpool** (`go/multipooler/pools/connpool/`): Sophisticated pool with settings bucketing (8 stacks based on session settings). Not currently used.
+- **userpool** (`go/multipooler/pools/userpool/`): Simpler per-user pools with SCRAM passthrough. Actively used by executor.
+
+### Goal: Layered Architecture (Option B)
+
+Refactor userpool to be a thin layer on top of connpool:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                          userpool                               │
+│  • User identity management (username → pool mapping)           │
+│  • SCRAM key storage and passthrough                            │
+│  • User-level metrics with username tags                        │
+│  • Delegates connection lifecycle to connpool                   │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                          connpool                               │
+│  • Connection lifecycle (create, health check, close)           │
+│  • Settings bucketing (session state isolation)                 │
+│  • Pool-level metrics with bucket tags                          │
+│  • Idle timeout and connection limits                           │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Design Principles
+
+1. **Clean separation of responsibilities**: Each layer owns distinct concerns
+2. **No duplicate functionality**: Connection lifecycle in connpool only, user identity in userpool only
+3. **Unified metrics**: OpenTelemetry metrics with consistent tags (user, bucket) for observability
+4. **Minimal risk**: Prove SCRAM passthrough and pooling mechanisms work before refactoring
+
+### Deferred Until
+
+This refactor should be done after:
+
+1. SCRAM authentication is proven end-to-end
+2. Connection cleanup (RESET ROLE) is verified
+3. Credential caching is implemented
+4. The core authentication flow is stable
+
+---
+
 ## References
 
 - [RFC 5802 - SCRAM](https://tools.ietf.org/html/rfc5802)
