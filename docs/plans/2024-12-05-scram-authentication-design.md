@@ -1762,7 +1762,41 @@ client := auth.NewSCRAMClientWithKeys(username, clientKey, serverKey)
 - [ ] `go/multigateway/auth/credential_cache.go` - Optional caching layer
 - [ ] Test credential cache behavior under load
 - [ ] Performance benchmarks vs trust auth baseline
-- [ ] Investigate connection cleanup when returning to pool (RESET ROLE, DISCARD ALL, etc.)
+- [ ] Implement connection cleanup when returning to pool (see analysis below)
+
+**Connection cleanup analysis (2025-12-08):**
+
+When a connection is returned to the pool, session state (role, search_path, temp tables, prepared statements) may persist to the next checkout. This could cause functional surprises.
+
+**Industry practice:**
+
+| Pooler    | Cleanup Mechanism                  | Default Behavior                              |
+| --------- | ---------------------------------- | --------------------------------------------- |
+| PgBouncer | `server_reset_query` config option | `DISCARD ALL` in session mode only            |
+| Supavisor | None - just returns to poolboy     | No cleanup (expects transaction-mode clients) |
+
+**PgBouncer details** (from [config.md](https://www.pgbouncer.org/config.html)):
+
+- `server_reset_query = DISCARD ALL` - Query sent on connection release
+- `server_reset_query_always = 0` - Only runs in session-pooling mode by default
+- In transaction mode, reset query is NOT used (clients shouldn't use session features)
+
+**What `DISCARD ALL` does:**
+
+- Releases temp tables, prepared statements, session variables
+- Performs `RESET ROLE` (returns current_user to session_user)
+- Resets search_path and other session parameters
+
+**Options for Multigres:**
+
+| Option                  | Pros                              | Cons                                   |
+| ----------------------- | --------------------------------- | -------------------------------------- |
+| No cleanup (current)    | Zero overhead, matches Supavisor  | Session state leaks between checkouts  |
+| `DISCARD ALL` on return | Clean slate, matches PgBouncer    | Performance overhead, invalidates PS   |
+| `RESET ROLE` only       | Minimal overhead, fixes role leak | Doesn't clean temp tables, search_path |
+| Configurable query      | Flexible like PgBouncer           | More configuration complexity          |
+
+**Recommendation:** Start with `RESET ROLE` on connection return - it addresses the main functional concern (role leaking) with minimal overhead. Consider making it configurable later if users need `DISCARD ALL` behavior.
 
 **Test coverage summary:**
 
