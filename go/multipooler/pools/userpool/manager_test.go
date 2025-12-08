@@ -27,8 +27,9 @@ import (
 
 // MockConnection implements a simple mock for testing.
 type MockConnection struct {
-	username string
-	closed   atomic.Bool
+	username   string
+	closed     atomic.Bool
+	resetCount atomic.Int32
 }
 
 func (m *MockConnection) Close() error {
@@ -38,6 +39,11 @@ func (m *MockConnection) Close() error {
 
 func (m *MockConnection) IsClosed() bool {
 	return m.closed.Load()
+}
+
+func (m *MockConnection) Reset(ctx context.Context) error {
+	m.resetCount.Add(1)
+	return nil
 }
 
 // MockConnector creates mock connections and tracks connection attempts.
@@ -115,7 +121,7 @@ func TestPoolCreatedOnFirstRequest(t *testing.T) {
 		assert.Equal(t, 1, connector.ConnectionsForUser("alice"))
 
 		// Return the connection
-		manager.ReturnConnection(conn)
+		manager.ReturnConnection(ctx, conn)
 	})
 
 	t.Run("separate pools created for different users", func(t *testing.T) {
@@ -148,8 +154,8 @@ func TestPoolCreatedOnFirstRequest(t *testing.T) {
 		assert.Equal(t, 1, connector.ConnectionsForUser("alice"))
 		assert.Equal(t, 1, connector.ConnectionsForUser("bob"))
 
-		manager.ReturnConnection(connAlice)
-		manager.ReturnConnection(connBob)
+		manager.ReturnConnection(ctx, connAlice)
+		manager.ReturnConnection(ctx, connBob)
 	})
 }
 
@@ -171,7 +177,7 @@ func TestConnectionReuse(t *testing.T) {
 		require.NoError(t, err)
 
 		// Return it
-		manager.ReturnConnection(conn1)
+		manager.ReturnConnection(ctx, conn1)
 
 		// Get another connection for same user
 		conn2, err := manager.GetConnection(ctx, "alice", keys, connector.Connect)
@@ -183,7 +189,7 @@ func TestConnectionReuse(t *testing.T) {
 		// Should be the same connection object
 		assert.Same(t, conn1.Conn, conn2.Conn, "should return same connection")
 
-		manager.ReturnConnection(conn2)
+		manager.ReturnConnection(ctx, conn2)
 	})
 
 	t.Run("multiple concurrent requests create multiple connections up to pool size", func(t *testing.T) {
@@ -211,7 +217,7 @@ func TestConnectionReuse(t *testing.T) {
 
 		// Return all
 		for _, conn := range connections {
-			manager.ReturnConnection(conn)
+			manager.ReturnConnection(ctx, conn)
 		}
 
 		// Get one more - should reuse
@@ -219,7 +225,7 @@ func TestConnectionReuse(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 3, connector.ConnectionCount(), "should reuse existing connection")
 
-		manager.ReturnConnection(conn)
+		manager.ReturnConnection(ctx, conn)
 	})
 }
 
@@ -241,7 +247,7 @@ func TestIdlePoolGarbageCollection(t *testing.T) {
 		// Create a pool
 		conn, err := manager.GetConnection(ctx, "alice", keys, connector.Connect)
 		require.NoError(t, err)
-		manager.ReturnConnection(conn)
+		manager.ReturnConnection(ctx, conn)
 
 		assert.Equal(t, 1, manager.PoolCount())
 
@@ -282,7 +288,7 @@ func TestIdlePoolGarbageCollection(t *testing.T) {
 		// Pool should still exist (has active connection)
 		assert.Equal(t, 1, manager.PoolCount(), "active pool should not be removed")
 
-		manager.ReturnConnection(conn)
+		manager.ReturnConnection(ctx, conn)
 	})
 }
 
@@ -318,7 +324,7 @@ func TestGlobalConnectionCap(t *testing.T) {
 		assert.Error(t, err, "should fail when global cap reached")
 
 		// Return a connection
-		manager.ReturnConnection(connections[0])
+		manager.ReturnConnection(ctx, connections[0])
 		connections = connections[1:]
 
 		// Now should be able to get a connection
@@ -328,7 +334,7 @@ func TestGlobalConnectionCap(t *testing.T) {
 
 		// Cleanup
 		for _, c := range connections {
-			manager.ReturnConnection(c)
+			manager.ReturnConnection(ctx, c)
 		}
 	})
 }
@@ -365,7 +371,7 @@ func TestSCRAMKeysPassedToConnector(t *testing.T) {
 		assert.Equal(t, []byte("expected-client-key"), capturedClientKey)
 		assert.Equal(t, []byte("expected-server-key"), capturedServerKey)
 
-		manager.ReturnConnection(conn)
+		manager.ReturnConnection(ctx, conn)
 	})
 }
 
@@ -392,7 +398,7 @@ func TestManagerClose(t *testing.T) {
 
 		// Return connections
 		for _, conn := range connections {
-			manager.ReturnConnection(conn)
+			manager.ReturnConnection(ctx, conn)
 		}
 
 		// Close manager

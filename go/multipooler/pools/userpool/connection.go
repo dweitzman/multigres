@@ -51,6 +51,16 @@ func (c *PoolConnection) IsClosed() bool {
 	return c.conn == nil || c.conn.IsClosed()
 }
 
+// Reset cleans up connection state before returning to the pool.
+// It runs RESET ROLE to ensure no SET ROLE changes persist across sessions.
+func (c *PoolConnection) Reset(ctx context.Context) error {
+	if c.conn == nil {
+		return nil
+	}
+	_, err := c.conn.Query(ctx, "RESET ROLE")
+	return err
+}
+
 // ConnectorConfig holds configuration for creating PostgreSQL connections.
 type ConnectorConfig struct {
 	// Host is the PostgreSQL server host (IP, hostname, or Unix socket directory).

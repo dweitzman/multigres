@@ -286,7 +286,7 @@ func (e *Executor) executeQueryWithSCRAMPassthrough(ctx context.Context, querySt
 	if err != nil {
 		return nil, fmt.Errorf("failed to get SCRAM-authenticated connection for user %q: %w", username, err)
 	}
-	defer e.userPoolManager.ReturnConnection(pooledConn)
+	defer e.userPoolManager.ReturnConnection(ctx, pooledConn)
 
 	e.logger.DebugContext(ctx, "using SCRAM passthrough connection", "username", username)
 

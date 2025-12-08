@@ -20,6 +20,7 @@ package userpool
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -36,6 +37,8 @@ var (
 type Connection interface {
 	Close() error
 	IsClosed() bool
+	// Reset cleans up connection state (e.g., RESET ROLE) before returning to pool.
+	Reset(ctx context.Context) error
 }
 
 // ConnectorFunc creates a new connection for a specific user using SCRAM keys.
@@ -65,6 +68,9 @@ type ManagerConfig struct {
 	// GlobalConnectionCap is the maximum total connections across all pools.
 	// This prevents resource exhaustion when many users connect.
 	GlobalConnectionCap int
+
+	// Logger for pool manager events. If nil, slog.Default() is used.
+	Logger *slog.Logger
 }
 
 // PooledConnection wraps a connection with pool management metadata.
@@ -178,6 +184,7 @@ func (p *userPool[C]) close() {
 // It handles pool lifecycle, connection limits, and garbage collection.
 type Manager[C Connection] struct {
 	config ManagerConfig
+	logger *slog.Logger
 
 	mu              sync.RWMutex
 	pools           map[string]*userPool[C]
@@ -187,8 +194,13 @@ type Manager[C Connection] struct {
 
 // NewManager creates a new user pool manager.
 func NewManager[C Connection](config ManagerConfig) *Manager[C] {
+	logger := config.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &Manager[C]{
 		config: config,
+		logger: logger,
 		pools:  make(map[string]*userPool[C]),
 	}
 }
@@ -272,10 +284,29 @@ func (m *Manager[C]) releaseGlobalConnection() {
 }
 
 // ReturnConnection returns a connection to its pool for reuse.
-func (m *Manager[C]) ReturnConnection(conn *PooledConnection[C]) {
+// It runs cleanup (RESET ROLE) to ensure connections have predictable state.
+//
+// In transaction-mode pooling, connections are returned after each query
+// (outside transactions) or after commit/rollback (inside transactions).
+// The cleanup ensures SET ROLE and other session state doesn't leak between
+// different queries or transactions.
+func (m *Manager[C]) ReturnConnection(ctx context.Context, conn *PooledConnection[C]) {
 	if conn == nil || conn.pool == nil {
 		return
 	}
+
+	// Reset connection state before returning to pool.
+	// This ensures SET ROLE changes don't persist across queries/transactions.
+	if err := conn.Conn.Reset(ctx); err != nil {
+		m.logger.WarnContext(ctx, "failed to reset connection before returning to pool",
+			"username", conn.username,
+			"error", err)
+		// Close the connection instead of returning one with potentially dirty state
+		conn.Conn.Close()
+		m.releaseGlobalConnection()
+		return
+	}
+
 	conn.pool.returnConn(conn.Conn)
 	m.releaseGlobalConnection()
 }
