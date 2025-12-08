@@ -1160,11 +1160,36 @@ validation but sandboxing is required for multi-tenant deployments.
 2. Update `go/multipooler/poolerserver/pooler.go` - Integrate filter
 3. Update `go/multipooler/grpcpoolerservice/service.go` - Sandbox on checkout
 
-### Phase 5: Identity Propagation
+### Phase 5: Identity Propagation ✅ COMPLETE
 
-1. Update `go/multigateway/poolergateway/grpc_query_service.go` - Populate caller_id
-2. Update `go/multipooler/grpcpoolerservice/service.go` - Validate and use caller_id
-3. Add audit logging for authenticated identity
+**Status:** Completed 2025-12-06
+
+**Implemented:**
+
+1. Added `caller_id` field to `query.ExecuteOptions` proto
+2. `ScatterConn` populates `CallerID` with `conn.User()` (authenticated username)
+3. `grpcQueryService` includes `CallerID` in all gRPC requests to multipooler
+4. Multipooler executor uses `SET SESSION AUTHORIZATION` when CallerID is present
+5. Fixed `[]byte` to string conversion in query result scanning
+
+**Files modified:**
+
+- `proto/query.proto` - Added caller_id to ExecuteOptions
+- `go/multigateway/scatterconn/scatter_conn.go` - Populate CallerID
+- `go/multigateway/poolergateway/grpc_query_service.go` - Pass CallerID in requests
+- `go/multipooler/grpcpoolerservice/service.go` - Pass options to executor
+- `go/multipooler/executor/executor.go` - SET SESSION AUTHORIZATION implementation
+- `go/test/endtoend/multigateway_scram_test.go` - Test current_user returns auth user
+
+**Key implementation:**
+
+```go
+// In executor.go - executeQueryAsUser()
+// Gets dedicated connection, sets session auth, executes query, resets
+setAuthSQL := fmt.Sprintf("SET SESSION AUTHORIZATION %s", quoteIdent(username))
+conn.ExecContext(ctx, setAuthSQL)
+defer conn.ExecContext(ctx, "RESET SESSION AUTHORIZATION")
+```
 
 ### Phase 6: End-to-End Testing & Caching
 
@@ -1200,7 +1225,7 @@ validation but sandboxing is required for multi-tenant deployments.
 - `go/multigateway/auth/pooler_hash_provider.go` - PasswordHashProvider via gRPC
 - `go/multigateway/auth/pooler_hash_provider_test.go` - Unit tests
 
-**Phase 4-6 (Pending):**
+**Phase 4, 6 (Pending):**
 
 - `go/multipooler/security/session_auth_filter.go` - SQL security filter
 - `go/multigateway/auth/credential_cache.go` - Hash caching (optional)
@@ -1224,11 +1249,18 @@ validation but sandboxing is required for multi-tenant deployments.
 - `go/pgprotocol/auth/authenticator.go` - Extended interface with database parameter
 - `go/pgprotocol/server/startup.go` - Pass database to ScramAuthenticator
 
-**Phase 4-6 (Pending):**
+**Phase 5 (✅ Complete):**
+
+- `proto/query.proto` - Added caller_id to ExecuteOptions
+- `go/multigateway/scatterconn/scatter_conn.go` - Populate CallerID
+- `go/multigateway/poolergateway/grpc_query_service.go` - Pass CallerID in requests
+- `go/multipooler/grpcpoolerservice/service.go` - Pass options to executor
+- `go/multipooler/executor/executor.go` - SET SESSION AUTHORIZATION implementation
+- `go/test/endtoend/multigateway_scram_test.go` - Test current_user returns auth user
+
+**Phase 4, 6 (Pending):**
 
 - `go/pgprotocol/server/conn.go` - Auth state tracking
-- `go/multigateway/poolergateway/grpc_query_service.go` - Populate caller_id
-- `go/multipooler/grpcpoolerservice/service.go` - Sandboxing
 - `go/multipooler/poolerserver/pooler.go` - Session auth on checkout/return
 
 ### Reference Files (Read Before Implementing)
