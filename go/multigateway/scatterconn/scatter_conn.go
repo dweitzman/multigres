@@ -32,6 +32,7 @@ import (
 	"github.com/multigres/multigres/go/multigateway/handler"
 	"github.com/multigres/multigres/go/multigateway/poolergateway"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	"github.com/multigres/multigres/go/pb/mtrpc"
 	"github.com/multigres/multigres/go/pb/query"
 	"github.com/multigres/multigres/go/pgprotocol/server"
 )
@@ -85,7 +86,13 @@ func (sc *ScatterConn) StreamExecute(
 		Shard:      shard,
 	}
 
-	eo := &query.ExecuteOptions{}
+	eo := &query.ExecuteOptions{
+		CallerId: &mtrpc.CallerID{
+			Principal:    conn.User(),
+			Component:    "multigateway",
+			Subcomponent: conn.Database(),
+		},
+	}
 
 	var qs queryservice.QueryService = sc.gateway
 	var err error
@@ -151,6 +158,11 @@ func (sc *ScatterConn) PortalStreamExecute(
 
 	eo := &query.ExecuteOptions{
 		MaxRows: uint64(maxRows),
+		CallerId: &mtrpc.CallerID{
+			Principal:    conn.User(),
+			Component:    "multigateway",
+			Subcomponent: conn.Database(),
+		},
 	}
 
 	var qs queryservice.QueryService = sc.gateway
@@ -217,7 +229,13 @@ func (sc *ScatterConn) Describe(
 		Shard:      shard,
 	}
 
-	eo := &query.ExecuteOptions{}
+	eo := &query.ExecuteOptions{
+		CallerId: &mtrpc.CallerID{
+			Principal:    conn.User(),
+			Component:    "multigateway",
+			Subcomponent: conn.Database(),
+		},
+	}
 	var preparedStatement *query.PreparedStatement
 	var portal *query.Portal
 	if portalInfo != nil {

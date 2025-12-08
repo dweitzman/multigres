@@ -25,6 +25,7 @@ package query
 
 import (
 	clustermetadata "github.com/multigres/multigres/go/pb/clustermetadata"
+	mtrpc "github.com/multigres/multigres/go/pb/mtrpc"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -620,8 +621,14 @@ type ExecuteOptions struct {
 	// Used for connection pinning - this tells the multipooler which specific
 	// connection to use for executing this query.
 	ReservedConnectionId uint64 `protobuf:"varint,5,opt,name=reserved_connection_id,json=reservedConnectionId,proto3" json:"reserved_connection_id,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// caller_id identifies the authenticated user making the request.
+	// This is propagated from multigateway to multipooler for:
+	// - Setting session authorization on pooled connections
+	// - Audit logging
+	// - Access control
+	CallerId      *mtrpc.CallerID `protobuf:"bytes,6,opt,name=caller_id,json=callerId,proto3" json:"caller_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ExecuteOptions) Reset() {
@@ -675,11 +682,18 @@ func (x *ExecuteOptions) GetReservedConnectionId() uint64 {
 	return 0
 }
 
+func (x *ExecuteOptions) GetCallerId() *mtrpc.CallerID {
+	if x != nil {
+		return x.CallerId
+	}
+	return nil
+}
+
 var File_query_proto protoreflect.FileDescriptor
 
 const file_query_proto_rawDesc = "" +
 	"\n" +
-	"\vquery.proto\x12\x05query\x1a\x15clustermetadata.proto\"\x99\x01\n" +
+	"\vquery.proto\x12\x05query\x1a\x15clustermetadata.proto\x1a\vmtrpc.proto\"\x99\x01\n" +
 	"\vQueryResult\x12$\n" +
 	"\x06fields\x18\x01 \x03(\v2\f.query.FieldR\x06fields\x12#\n" +
 	"\rrows_affected\x18\x02 \x01(\x04R\frowsAffected\x12\x1e\n" +
@@ -721,11 +735,12 @@ const file_query_proto_rawDesc = "" +
 	"\x17prepared_statement_name\x18\x02 \x01(\tR\x15preparedStatementName\x12\x16\n" +
 	"\x06params\x18\x03 \x03(\fR\x06params\x12#\n" +
 	"\rparam_formats\x18\x04 \x03(\x05R\fparamFormats\x12%\n" +
-	"\x0eresult_formats\x18\x05 \x03(\x05R\rresultFormats\"\xfc\x01\n" +
+	"\x0eresult_formats\x18\x05 \x03(\x05R\rresultFormats\"\xaa\x02\n" +
 	"\x0eExecuteOptions\x12U\n" +
 	"\x10session_settings\x18\x01 \x03(\v2*.query.ExecuteOptions.SessionSettingsEntryR\x0fsessionSettings\x12\x19\n" +
 	"\bmax_rows\x18\x04 \x01(\x04R\amaxRows\x124\n" +
-	"\x16reserved_connection_id\x18\x05 \x01(\x04R\x14reservedConnectionId\x1aB\n" +
+	"\x16reserved_connection_id\x18\x05 \x01(\x04R\x14reservedConnectionId\x12,\n" +
+	"\tcaller_id\x18\x06 \x01(\v2\x0f.mtrpc.CallerIDR\bcallerId\x1aB\n" +
 	"\x14SessionSettingsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B,Z*github.com/multigres/multigres/go/pb/queryb\x06proto3"
@@ -755,6 +770,7 @@ var file_query_proto_goTypes = []any{
 	(*ExecuteOptions)(nil),          // 8: query.ExecuteOptions
 	nil,                             // 9: query.ExecuteOptions.SessionSettingsEntry
 	(clustermetadata.PoolerType)(0), // 10: clustermetadata.PoolerType
+	(*mtrpc.CallerID)(nil),          // 11: mtrpc.CallerID
 }
 var file_query_proto_depIdxs = []int32{
 	1,  // 0: query.QueryResult.fields:type_name -> query.Field
@@ -763,11 +779,12 @@ var file_query_proto_depIdxs = []int32{
 	1,  // 3: query.StatementDescription.fields:type_name -> query.Field
 	10, // 4: query.Target.pooler_type:type_name -> clustermetadata.PoolerType
 	9,  // 5: query.ExecuteOptions.session_settings:type_name -> query.ExecuteOptions.SessionSettingsEntry
-	6,  // [6:6] is the sub-list for method output_type
-	6,  // [6:6] is the sub-list for method input_type
-	6,  // [6:6] is the sub-list for extension type_name
-	6,  // [6:6] is the sub-list for extension extendee
-	0,  // [0:6] is the sub-list for field type_name
+	11, // 6: query.ExecuteOptions.caller_id:type_name -> mtrpc.CallerID
+	7,  // [7:7] is the sub-list for method output_type
+	7,  // [7:7] is the sub-list for method input_type
+	7,  // [7:7] is the sub-list for extension type_name
+	7,  // [7:7] is the sub-list for extension extendee
+	0,  // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_query_proto_init() }

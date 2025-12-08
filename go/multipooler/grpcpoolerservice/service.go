@@ -57,7 +57,7 @@ func (s *poolerService) StreamExecute(req *multipoolerpb.StreamExecuteRequest, s
 	}
 
 	// Execute the query and stream results
-	err = executor.StreamExecute(stream.Context(), req.Target, req.Query, nil, func(ctx context.Context, result *querypb.QueryResult) error {
+	err = executor.StreamExecute(stream.Context(), req.Target, req.Query, req.Options, func(ctx context.Context, result *querypb.QueryResult) error {
 		// Send the result back to the client
 		response := &multipoolerpb.StreamExecuteResponse{
 			Result: result,
@@ -78,8 +78,16 @@ func (s *poolerService) ExecuteQuery(ctx context.Context, req *multipoolerpb.Exe
 		return nil, fmt.Errorf("executor not initialized")
 	}
 
-	// Execute the query and stream results
-	options := &querypb.ExecuteOptions{MaxRows: req.MaxRows}
+	// Use the options from request if provided, otherwise create minimal options
+	options := req.Options
+	if options == nil {
+		options = &querypb.ExecuteOptions{}
+	}
+	// Ensure MaxRows is set from request if provided at top level
+	if req.MaxRows > 0 && options.MaxRows == 0 {
+		options.MaxRows = req.MaxRows
+	}
+
 	res, err := executor.ExecuteQuery(ctx, req.Target, req.Query, options)
 	if err != nil {
 		return nil, err

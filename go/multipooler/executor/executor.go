@@ -104,18 +104,29 @@ func (e *Executor) ExecuteQuery(ctx context.Context, target *query.Target, sql s
 	if target == nil {
 		target = &query.Target{}
 	}
+
+	var maxRows uint64
+	var callerID string
+	if options != nil {
+		maxRows = options.MaxRows
+		if options.CallerId != nil && options.CallerId.Principal != "" {
+			callerID = options.CallerId.Principal
+		}
+	}
+
 	e.logger.DebugContext(ctx, "executing query",
 		"tablegroup", target.TableGroup,
 		"shard", target.Shard,
 		"pooler_type", target.PoolerType.String(),
+		"caller_id", callerID,
 		"query", sql)
 
-	var maxRows uint64
-	if options != nil {
-		maxRows = options.MaxRows
+	// If we have a caller ID, use a dedicated connection with SET SESSION AUTHORIZATION
+	if callerID != "" {
+		return e.executeQueryAsUser(ctx, sql, callerID, maxRows)
 	}
 
-	// Execute the query and stream results
+	// No caller ID, execute directly on the pool
 	return e.executeQuery(ctx, sql, maxRows)
 }
 
@@ -206,6 +217,94 @@ func (e *Executor) IsHealthy() error {
 	return nil
 }
 
+// executeQueryAsUser executes a SQL query as a specific user using SET SESSION AUTHORIZATION.
+// This gets a dedicated connection, sets the session authorization, executes the query,
+// and resets the session before returning the connection to the pool.
+func (e *Executor) executeQueryAsUser(ctx context.Context, queryStr string, username string, maxRows uint64) (*query.QueryResult, error) {
+	// Get a dedicated connection from the pool
+	conn, err := e.db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get connection: %w", err)
+	}
+	defer conn.Close()
+
+	// Set session authorization to the target user
+	// Using quote_ident to safely escape the username
+	setAuthSQL := fmt.Sprintf("SET SESSION AUTHORIZATION %s", quoteIdent(username))
+	if _, err := conn.ExecContext(ctx, setAuthSQL); err != nil {
+		return nil, fmt.Errorf("failed to set session authorization to %q: %w", username, err)
+	}
+
+	e.logger.DebugContext(ctx, "set session authorization", "username", username)
+
+	// Reset session authorization when done (ensures connection returns to pool in clean state)
+	defer func() {
+		// Reset to superuser - ignore errors since we're cleaning up
+		_, _ = conn.ExecContext(ctx, "RESET SESSION AUTHORIZATION")
+	}()
+
+	// Execute the query on the dedicated connection
+	return e.executeQueryOnConn(ctx, conn, queryStr, maxRows)
+}
+
+// executeQueryOnConn executes a query on a specific connection.
+func (e *Executor) executeQueryOnConn(ctx context.Context, conn *sql.Conn, queryStr string, maxRows uint64) (*query.QueryResult, error) {
+	// Determine if this is a SELECT query or a modification query
+	trimmedQuery := strings.TrimSpace(strings.ToUpper(queryStr))
+	isSelect := strings.HasPrefix(trimmedQuery, "SELECT") ||
+		strings.HasPrefix(trimmedQuery, "WITH") ||
+		strings.HasPrefix(trimmedQuery, "SHOW") ||
+		strings.HasPrefix(trimmedQuery, "EXPLAIN")
+
+	if isSelect {
+		return e.executeSelectQueryOnConn(ctx, conn, queryStr, maxRows)
+	}
+	return e.executeModifyQueryOnConn(ctx, conn, queryStr)
+}
+
+// executeSelectQueryOnConn executes a SELECT query on a specific connection.
+func (e *Executor) executeSelectQueryOnConn(ctx context.Context, conn *sql.Conn, queryStr string, maxRows uint64) (*query.QueryResult, error) {
+	rows, err := conn.QueryContext(ctx, queryStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute query: %w", err)
+	}
+	defer rows.Close()
+
+	return e.scanQueryRows(rows, maxRows)
+}
+
+// executeModifyQueryOnConn executes a modification query on a specific connection.
+func (e *Executor) executeModifyQueryOnConn(ctx context.Context, conn *sql.Conn, queryStr string) (*query.QueryResult, error) {
+	result, err := conn.ExecContext(ctx, queryStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute query: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		// Some queries don't support RowsAffected, that's okay
+		rowsAffected = 0
+	}
+
+	// Generate command tag based on query type
+	commandTag := e.generateCommandTag(queryStr, uint64(rowsAffected))
+
+	return &query.QueryResult{
+		Fields:       []*query.Field{},
+		RowsAffected: uint64(rowsAffected),
+		Rows:         []*query.Row{},
+		CommandTag:   commandTag,
+	}, nil
+}
+
+// quoteIdent quotes a PostgreSQL identifier to prevent SQL injection.
+// This follows PostgreSQL's identifier quoting rules.
+func quoteIdent(s string) string {
+	// Double any double quotes in the identifier
+	escaped := strings.ReplaceAll(s, `"`, `""`)
+	return `"` + escaped + `"`
+}
+
 // executeQuery executes a SQL query and returns the result.
 // This is the internal method that handles both SELECT and modification queries.
 func (e *Executor) executeQuery(ctx context.Context, queryStr string, maxRows uint64) (*query.QueryResult, error) {
@@ -222,14 +321,9 @@ func (e *Executor) executeQuery(ctx context.Context, queryStr string, maxRows ui
 	return e.executeModifyQuery(ctx, queryStr)
 }
 
-// executeSelectQuery executes a SELECT query and returns rows.
-func (e *Executor) executeSelectQuery(ctx context.Context, queryStr string, maxRows uint64) (*query.QueryResult, error) {
-	rows, err := e.db.QueryContext(ctx, queryStr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute query: %w", err)
-	}
-	defer rows.Close()
-
+// scanQueryRows scans rows from a query result into a QueryResult.
+// This is shared by both executeSelectQuery and executeSelectQueryOnConn.
+func (e *Executor) scanQueryRows(rows *sql.Rows, maxRows uint64) (*query.QueryResult, error) {
 	// Get column information
 	columns, err := rows.Columns()
 	if err != nil {
@@ -270,6 +364,9 @@ func (e *Executor) executeSelectQuery(ctx context.Context, queryStr string, maxR
 		for i, val := range scanValues {
 			if val == nil {
 				values[i] = nil
+			} else if b, ok := val.([]byte); ok {
+				// lib/pq returns TEXT as []byte - use it directly
+				values[i] = b
 			} else {
 				values[i] = fmt.Appendf(nil, "%v", val)
 			}
@@ -292,6 +389,17 @@ func (e *Executor) executeSelectQuery(ctx context.Context, queryStr string, maxR
 		Rows:         resultRows,
 		CommandTag:   commandTag,
 	}, nil
+}
+
+// executeSelectQuery executes a SELECT query and returns rows.
+func (e *Executor) executeSelectQuery(ctx context.Context, queryStr string, maxRows uint64) (*query.QueryResult, error) {
+	rows, err := e.db.QueryContext(ctx, queryStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute query: %w", err)
+	}
+	defer rows.Close()
+
+	return e.scanQueryRows(rows, maxRows)
 }
 
 // executeModifyQuery executes an INSERT, UPDATE, DELETE, or other modification query.

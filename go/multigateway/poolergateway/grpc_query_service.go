@@ -76,10 +76,10 @@ func (g *grpcQueryService) StreamExecute(
 
 	// Create the request
 	req := &multipoolerservice.StreamExecuteRequest{
-		Query:   sql,
-		Target:  target,
-		Options: options,
-		// TODO: Add caller_id when we have authentication
+		Query:    sql,
+		Target:   target,
+		Options:  options,
+		CallerId: options.GetCallerId(),
 	}
 
 	// Call the gRPC StreamExecute
@@ -130,10 +130,10 @@ func (g *grpcQueryService) ExecuteQuery(ctx context.Context, target *query.Targe
 
 	// Create the request
 	req := &multipoolerservice.ExecuteQueryRequest{
-		Query:   sql,
-		Target:  target,
-		Options: options,
-		// TODO: Add caller_id when we have authentication
+		Query:    sql,
+		Target:   target,
+		Options:  options,
+		CallerId: options.GetCallerId(),
 	}
 
 	// Call the gRPC ExecuteQuery
@@ -164,7 +164,7 @@ func (g *grpcQueryService) PortalStreamExecute(
 		PreparedStatement: preparedStatement,
 		Portal:            portal,
 		Options:           options,
-		// TODO: Add caller_id when we have authentication
+		CallerId:          options.GetCallerId(),
 	}
 
 	// Call the gRPC PortalStreamExecute
@@ -233,7 +233,7 @@ func (g *grpcQueryService) Describe(
 		PreparedStatement: preparedStatement,
 		Portal:            portal,
 		Options:           options,
-		// TODO: Add caller_id when we have authentication
+		CallerId:          options.GetCallerId(),
 	}
 
 	// Call the gRPC Describe

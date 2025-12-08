@@ -88,9 +88,12 @@ func TestMultiGateway_SCRAMAuthentication(t *testing.T) {
 		require.NoError(t, err, "query should succeed after SCRAM authentication")
 		assert.Equal(t, 1, result)
 
-		// Note: We don't check current_user because multipooler uses connection pooling
-		// with a shared backend user (postgres). The SCRAM authentication happens at
-		// the multigateway layer, not at the PostgreSQL layer.
+		// Verify that current_user returns the authenticated user
+		// This confirms identity propagation via SET SESSION AUTHORIZATION
+		var currentUser string
+		err = userDB.QueryRowContext(ctx, "SELECT current_user").Scan(&currentUser)
+		require.NoError(t, err, "SELECT current_user should succeed")
+		assert.Equal(t, testUser, currentUser, "current_user should match authenticated user")
 	})
 
 	t.Run("SCRAM authentication fails with wrong password", func(t *testing.T) {
