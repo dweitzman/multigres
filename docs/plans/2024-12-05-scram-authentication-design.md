@@ -115,6 +115,65 @@ pgbouncer cannot safely share connections across users with role assumption beca
 
 **multigres advantage:** We have a full SQL parser, so we CAN safely implement shared pools with role assumption.
 
+#### Prior Art: How Other PostgreSQL Proxies Handle This
+
+**Important finding (December 2024):** No major PostgreSQL proxy uses shared pools with user switching. All use per-user connection pools:
+
+| Proxy                                                                           | Architecture                    | Source                                                                                                                    |
+| ------------------------------------------------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| **[PgBouncer](http://www.pgbouncer.org/config.html)**                           | One pool per user+database pair | "PgBouncer tries to log into the destination database with client username, meaning that there will be one pool per user" |
+| **[Supavisor](https://supabase.com/blog/supavisor-postgres-connection-pooler)** | Per-tenant pools                | Each tenant gets their own pool of database connections                                                                   |
+| **[PgCat](https://github.com/postgresml/pgcat)**                                | Per user+database pools         | "Each database/user combination will be a separate connection pool"                                                       |
+| **[Odyssey](https://github.com/yandex/odyssey)**                                | Per user+database pools         | "Allows to define connection pools as a pair of Database and User"                                                        |
+
+**Why shared pools with SET SESSION AUTHORIZATION are problematic:**
+
+Per [Stack Overflow security discussion](https://stackoverflow.com/questions/77272972/enforcing-row-level-security-in-a-shared-postgres-pool):
+
+> "The problem is that this tenant user can himself do a 'SET SESSION AUTHORIZATION some_other_tenant' and then Row security doesn't matter."
+
+> "The problem is a fundamental one: you handle authentication in the application, not in the database."
+
+**Security vectors that are difficult to mitigate:**
+
+1. **Direct SQL escape**: User sends `RESET SESSION AUTHORIZATION` or `SET SESSION AUTHORIZATION 'admin'`
+   - Mitigation: SQL parsing/rewriting (adds latency, complexity)
+
+2. **Stored procedure escape**: `SECURITY DEFINER` function contains escape command
+   - Mitigation: Requires PostgreSQL extension hook (complex deployment)
+
+3. **Multi-statement injection**: `RESET SESSION AUTHORIZATION; DROP TABLE users`
+   - Mitigation: Parse all statements, filter each one
+
+4. **Dynamic SQL in functions**: `EXECUTE 'RESET SESSION AUTHORIZATION'`
+   - Mitigation: Cannot be caught by proxy-level filtering
+
+#### Tradeoffs: Per-User Pools vs Shared Pool with User Swapping
+
+| Factor                | Per-User Pools (Option A)        | Shared Pool + SET SESSION AUTH (Option D)                            |
+| --------------------- | -------------------------------- | -------------------------------------------------------------------- |
+| **Security**          | ✅ Complete isolation by design  | ⚠️ Requires SQL filtering + extension for SECURITY DEFINER functions |
+| **Connection count**  | ❌ N users × M connections       | ✅ Single shared pool                                                |
+| **Complexity**        | ✅ Simple, no SQL parsing needed | ❌ Requires SQL parser integration                                   |
+| **Latency**           | ✅ No per-query overhead         | ⚠️ SET/RESET overhead per query + SQL parsing                        |
+| **Industry adoption** | ✅ Used by all major proxies     | ❌ Not used in production by any major proxy                         |
+| **Stored procedures** | ✅ User's permissions apply      | ⚠️ Pool user's permissions unless extension installed                |
+
+#### Recommendation: Reconsider Per-User Pools
+
+Given that:
+
+1. No major proxy uses the shared pool + user swapping approach
+2. Security requires SQL filtering + PostgreSQL extension for complete coverage
+3. Modern PostgreSQL deployments often have <100 active users
+
+**Per-user pools may be the better choice** despite the connection overhead. The security model is simpler and proven in production by all major proxies.
+
+**Hybrid approach to consider:**
+
+- Per-user pools for authenticated users (secure, simple)
+- Shared pool only for internal/trusted operations (multiorch, admin)
+
 ---
 
 ### Decision 3: Stored Procedure Escape Vector
