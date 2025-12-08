@@ -202,3 +202,107 @@ func TestMultiGateway_SCRAMMultipleConnections(t *testing.T) {
 		require.NoError(t, r.err, "user %d SCRAM authentication failed", r.userIndex)
 	}
 }
+
+// TestMultiGateway_SessionAuthorizationSandbox tests that users cannot escape their
+// sandboxed session by executing RESET SESSION AUTHORIZATION or SET SESSION AUTHORIZATION.
+//
+// SECURITY: This is a critical security test. Without proper SQL filtering, a malicious
+// user could execute "RESET SESSION AUTHORIZATION" to escalate privileges to the
+// superuser that the connection pool uses internally.
+func TestMultiGateway_SessionAuthorizationSandbox(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping session authorization sandbox test in short mode")
+	}
+	if utils.ShouldSkipRealPostgres() {
+		t.Skip("PostgreSQL binaries not found, skipping test")
+	}
+
+	// Setup full test cluster
+	cluster := setupTestCluster(t)
+	t.Cleanup(cluster.Cleanup)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
+	// Connect to multipooler via gRPC to create test user
+	poolerAddr := fmt.Sprintf("localhost:%d", cluster.PortConfig.Zones[0].MultipoolerGRPCPort)
+	poolerClient, err := NewMultiPoolerTestClient(poolerAddr)
+	require.NoError(t, err, "failed to connect to multipooler via gRPC")
+	defer poolerClient.Close()
+
+	// Create a test user
+	testUser := fmt.Sprintf("sandbox_test_%d", time.Now().UnixNano())
+	testPassword := "sandbox_password_123"
+
+	_, err = poolerClient.ExecuteQuery(ctx, fmt.Sprintf("CREATE USER %s WITH PASSWORD '%s'", testUser, testPassword), 0)
+	require.NoError(t, err, "failed to create test user")
+
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		_, _ = poolerClient.ExecuteQuery(cleanupCtx, fmt.Sprintf("DROP USER IF EXISTS %s", testUser), 0)
+	})
+
+	_, err = poolerClient.ExecuteQuery(ctx, fmt.Sprintf("GRANT CONNECT ON DATABASE postgres TO %s", testUser), 0)
+	require.NoError(t, err, "failed to grant connect privilege")
+
+	// Connect as test user
+	userConnStr := fmt.Sprintf("host=localhost port=%d user=%s password=%s dbname=postgres sslmode=disable connect_timeout=5",
+		cluster.PortConfig.Zones[0].MultigatewayPGPort, testUser, testPassword)
+	userDB, err := sql.Open("postgres", userConnStr)
+	require.NoError(t, err, "failed to open user database connection")
+	defer userDB.Close()
+
+	// Verify initial identity
+	var currentUser string
+	err = userDB.QueryRowContext(ctx, "SELECT current_user").Scan(&currentUser)
+	require.NoError(t, err, "SELECT current_user should succeed")
+	require.Equal(t, testUser, currentUser, "current_user should be test user initially")
+
+	t.Run("RESET SESSION AUTHORIZATION should reset to authenticated user", func(t *testing.T) {
+		// TODO(Phase4): Remove this skip once SQL filtering is implemented.
+		// See docs/plans/2024-12-05-scram-authentication-design.md Phase 4.
+		t.Skip("KNOWN SECURITY GAP: Phase 4 SQL filtering not yet implemented")
+
+		// SECURITY: RESET SESSION AUTHORIZATION should be rewritten to:
+		//   SET SESSION AUTHORIZATION '<authenticated_user>'
+		// This makes RESET a no-op that keeps the user as the authenticated user,
+		// rather than escalating to the superuser.
+		//
+		// Without this rewrite, an attacker could send multi-statement queries like:
+		//   "RESET SESSION AUTHORIZATION; DROP TABLE users"
+		// and the DROP would execute as the superuser.
+
+		_, err := userDB.ExecContext(ctx, "RESET SESSION AUTHORIZATION")
+		require.NoError(t, err, "RESET SESSION AUTHORIZATION should succeed (as a rewritten no-op)")
+
+		// After RESET, current_user should still be the authenticated test user
+		var userAfterReset string
+		err = userDB.QueryRowContext(ctx, "SELECT current_user").Scan(&userAfterReset)
+		require.NoError(t, err, "SELECT current_user should succeed")
+		assert.Equal(t, testUser, userAfterReset,
+			"SECURITY GAP: RESET SESSION AUTHORIZATION escalated to %q instead of staying as %q",
+			userAfterReset, testUser)
+	})
+
+	t.Run("SET SESSION AUTHORIZATION should be blocked", func(t *testing.T) {
+		// TODO(Phase4): Remove this skip once SQL filtering is implemented.
+		// See docs/plans/2024-12-05-scram-authentication-design.md Phase 4.
+		t.Skip("KNOWN SECURITY GAP: Phase 4 SQL filtering not yet implemented")
+
+		// SECURITY: SET SESSION AUTHORIZATION should be blocked entirely.
+		// It's a superuser-only command that allows impersonating other users.
+
+		_, err := userDB.ExecContext(ctx, "SET SESSION AUTHORIZATION 'postgres'")
+
+		// Once Phase 4 is implemented, this should return an error.
+		if err != nil {
+			// Good - SET was blocked
+			t.Logf("SET SESSION AUTHORIZATION was blocked: %v", err)
+		} else {
+			// Bad - SET was allowed. This is the security gap.
+			t.Error("SECURITY GAP: SET SESSION AUTHORIZATION 'postgres' was not blocked. " +
+				"This allows direct privilege escalation.")
+		}
+	})
+}
