@@ -492,3 +492,119 @@ func TestMultiGateway_UserIsolation(t *testing.T) {
 	require.NoError(t, err, "Alice's table should still exist")
 	assert.Equal(t, "alice_secret_data", aliceData, "Alice's data should be unchanged")
 }
+
+// TestMultiGateway_SetRole tests that SET ROLE and RESET ROLE work correctly
+// within a user's role memberships. This verifies that PostgreSQL's native
+// role system works correctly through the proxy.
+func TestMultiGateway_SetRole(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping SET ROLE test in short mode")
+	}
+	if utils.ShouldSkipRealPostgres() {
+		t.Skip("PostgreSQL binaries not found, skipping test")
+	}
+
+	// Setup full test cluster
+	cluster := setupTestCluster(t)
+	t.Cleanup(cluster.Cleanup)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
+	// Connect to multipooler via gRPC to create test user and roles
+	poolerAddr := fmt.Sprintf("localhost:%d", cluster.PortConfig.Zones[0].MultipoolerGRPCPort)
+	poolerClient, err := NewMultiPoolerTestClient(poolerAddr)
+	require.NoError(t, err, "failed to connect to multipooler via gRPC")
+	defer poolerClient.Close()
+
+	// Create test user, a role they're a member of, and a role they're NOT a member of
+	timestamp := time.Now().UnixNano()
+	testUser := fmt.Sprintf("roletest_%d", timestamp)
+	grantedRole := fmt.Sprintf("granted_role_%d", timestamp)
+	ungrantedRole := fmt.Sprintf("ungranted_role_%d", timestamp)
+	testPassword := "roletest_password_123" //nolint:gosec // Test credentials
+
+	// Create the roles first (use CREATE USER ... NOLOGIN which is equivalent to CREATE ROLE)
+	_, err = poolerClient.ExecuteQuery(ctx, fmt.Sprintf("CREATE USER %s NOLOGIN", grantedRole), 0)
+	require.NoError(t, err, "failed to create granted role")
+	_, err = poolerClient.ExecuteQuery(ctx, fmt.Sprintf("CREATE USER %s NOLOGIN", ungrantedRole), 0)
+	require.NoError(t, err, "failed to create ungranted role")
+
+	// Create user and grant one role
+	_, err = poolerClient.ExecuteQuery(ctx, fmt.Sprintf("CREATE USER %s WITH PASSWORD '%s'", testUser, testPassword), 0)
+	require.NoError(t, err, "failed to create test user")
+	_, err = poolerClient.ExecuteQuery(ctx, fmt.Sprintf("GRANT %s TO %s", grantedRole, testUser), 0)
+	require.NoError(t, err, "failed to grant role to user")
+	_, err = poolerClient.ExecuteQuery(ctx, fmt.Sprintf("GRANT CONNECT ON DATABASE postgres TO %s", testUser), 0)
+	require.NoError(t, err, "failed to grant connect privilege")
+
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		_, _ = poolerClient.ExecuteQuery(cleanupCtx, fmt.Sprintf("DROP USER IF EXISTS %s", testUser), 0)
+		_, _ = poolerClient.ExecuteQuery(cleanupCtx, fmt.Sprintf("DROP ROLE IF EXISTS %s", grantedRole), 0)
+		_, _ = poolerClient.ExecuteQuery(cleanupCtx, fmt.Sprintf("DROP ROLE IF EXISTS %s", ungrantedRole), 0)
+	})
+
+	// Connect as test user
+	userConnStr := fmt.Sprintf("host=localhost port=%d user=%s password=%s dbname=postgres sslmode=disable connect_timeout=5",
+		cluster.PortConfig.Zones[0].MultigatewayPGPort, testUser, testPassword)
+	userDB, err := sql.Open("postgres", userConnStr)
+	require.NoError(t, err, "failed to open user database connection")
+	defer userDB.Close()
+
+	// Force single connection to test role state on same connection
+	userDB.SetMaxOpenConns(1)
+
+	// Verify initial identity
+	var currentUser, sessionUser string
+	err = userDB.QueryRowContext(ctx, "SELECT current_user, session_user").Scan(&currentUser, &sessionUser)
+	require.NoError(t, err, "initial identity query should succeed")
+	assert.Equal(t, testUser, currentUser, "current_user should be test user initially")
+	assert.Equal(t, testUser, sessionUser, "session_user should be test user")
+
+	t.Run("SET ROLE to granted role succeeds", func(t *testing.T) {
+		_, err := userDB.ExecContext(ctx, fmt.Sprintf("SET ROLE %s", grantedRole))
+		require.NoError(t, err, "SET ROLE to granted role should succeed")
+
+		// current_user changes, but session_user stays the same
+		err = userDB.QueryRowContext(ctx, "SELECT current_user, session_user").Scan(&currentUser, &sessionUser)
+		require.NoError(t, err, "identity query after SET ROLE should succeed")
+		assert.Equal(t, grantedRole, currentUser, "current_user should be the granted role")
+		assert.Equal(t, testUser, sessionUser, "session_user should still be test user")
+	})
+
+	t.Run("RESET ROLE returns to session user", func(t *testing.T) {
+		_, err := userDB.ExecContext(ctx, "RESET ROLE")
+		require.NoError(t, err, "RESET ROLE should succeed")
+
+		err = userDB.QueryRowContext(ctx, "SELECT current_user, session_user").Scan(&currentUser, &sessionUser)
+		require.NoError(t, err, "identity query after RESET ROLE should succeed")
+		assert.Equal(t, testUser, currentUser, "current_user should return to test user after RESET ROLE")
+		assert.Equal(t, testUser, sessionUser, "session_user should still be test user")
+	})
+
+	t.Run("SET ROLE to ungranted role fails", func(t *testing.T) {
+		_, err := userDB.ExecContext(ctx, fmt.Sprintf("SET ROLE %s", ungrantedRole))
+		require.Error(t, err, "SET ROLE to ungranted role should fail")
+
+		// Verify current_user unchanged after failed SET ROLE
+		err = userDB.QueryRowContext(ctx, "SELECT current_user").Scan(&currentUser)
+		require.NoError(t, err, "identity query should succeed")
+		assert.Equal(t, testUser, currentUser, "current_user should be unchanged after failed SET ROLE")
+	})
+
+	t.Run("SET ROLE NONE returns to session user", func(t *testing.T) {
+		// First SET ROLE to granted role
+		_, err := userDB.ExecContext(ctx, fmt.Sprintf("SET ROLE %s", grantedRole))
+		require.NoError(t, err, "SET ROLE should succeed")
+
+		// Then SET ROLE NONE
+		_, err = userDB.ExecContext(ctx, "SET ROLE NONE")
+		require.NoError(t, err, "SET ROLE NONE should succeed")
+
+		err = userDB.QueryRowContext(ctx, "SELECT current_user").Scan(&currentUser)
+		require.NoError(t, err, "identity query should succeed")
+		assert.Equal(t, testUser, currentUser, "current_user should return to test user after SET ROLE NONE")
+	})
+}

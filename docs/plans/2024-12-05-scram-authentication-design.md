@@ -1748,13 +1748,37 @@ client := auth.NewSCRAMClientWithKeys(username, clientKey, serverKey)
 
 ### Phase 6: End-to-End Testing & Caching
 
-1. `go/multigateway/auth/credential_cache.go` - Optional caching layer
-2. Test SCRAM auth with real PostgreSQL instance
-3. Test role switching (`SET ROLE`) works correctly with user permissions
-4. Test per-user pool isolation (users can't access other users' connections)
-5. Test connection reuse within user pool
-6. Test credential cache behavior under load
-7. Performance benchmarks vs trust auth baseline
+**Completed e2e tests (2025-12-08):**
+
+1. ✅ `TestMultiGateway_SCRAMAuthentication` - SCRAM auth with real PostgreSQL
+2. ✅ `TestMultiGateway_SCRAMMultipleConnections` - Concurrent SCRAM connections
+3. ✅ `TestMultiGateway_SessionAuthorizationSandbox` - SET/RESET SESSION AUTHORIZATION behavior
+4. ✅ `TestMultiGateway_ConnectionPoolReuse` - Backend connection reuse across reconnects
+5. ✅ `TestMultiGateway_UserIsolation` - User A cannot access user B's tables
+6. ✅ `TestMultiGateway_SetRole` - SET ROLE/RESET ROLE within user's role memberships
+
+**Remaining work:**
+
+- [ ] `go/multigateway/auth/credential_cache.go` - Optional caching layer
+- [ ] Test credential cache behavior under load
+- [ ] Performance benchmarks vs trust auth baseline
+- [ ] Investigate connection cleanup when returning to pool (RESET ROLE, DISCARD ALL, etc.)
+
+**Test coverage summary:**
+
+| Command                        | Test                                           | Expected Behavior                               |
+| ------------------------------ | ---------------------------------------------- | ----------------------------------------------- |
+| `SET SESSION AUTHORIZATION`    | `TestMultiGateway_SessionAuthorizationSandbox` | Rejected - requires superuser                   |
+| `RESET SESSION AUTHORIZATION`  | `TestMultiGateway_SessionAuthorizationSandbox` | Allowed - returns to authenticated user (no-op) |
+| `SET ROLE <granted>`           | `TestMultiGateway_SetRole`                     | Allowed - changes current_user                  |
+| `SET ROLE <ungranted>`         | `TestMultiGateway_SetRole`                     | Rejected - not a member                         |
+| `RESET ROLE` / `SET ROLE NONE` | `TestMultiGateway_SetRole`                     | Allowed - returns to session_user               |
+
+**Future improvement - Test helpers:**
+
+- [ ] Create reusable test helpers for user/role creation and cleanup
+- [ ] Reduce duplicate setup/teardown code across tests
+- [ ] Consider a test fixture pattern for common scenarios (user with roles, user isolation, etc.)
 
 ---
 
