@@ -17,11 +17,12 @@ package endtoend
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
-	_ "github.com/lib/pq" // PostgreSQL driver
+	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -206,9 +207,10 @@ func TestMultiGateway_SCRAMMultipleConnections(t *testing.T) {
 // TestMultiGateway_SessionAuthorizationSandbox tests that users cannot escape their
 // sandboxed session by executing RESET SESSION AUTHORIZATION or SET SESSION AUTHORIZATION.
 //
-// SECURITY: This is a critical security test. Without proper SQL filtering, a malicious
-// user could execute "RESET SESSION AUTHORIZATION" to escalate privileges to the
-// superuser that the connection pool uses internally.
+// SECURITY: With per-user connection pools using SCRAM passthrough authentication, each
+// user authenticates directly to PostgreSQL as themselves. This means:
+// - RESET SESSION AUTHORIZATION resets to the authenticated user (themselves) - harmless
+// - SET SESSION AUTHORIZATION requires superuser, which regular users don't have - blocked by PostgreSQL
 func TestMultiGateway_SessionAuthorizationSandbox(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping session authorization sandbox test in short mode")
@@ -259,50 +261,40 @@ func TestMultiGateway_SessionAuthorizationSandbox(t *testing.T) {
 	require.NoError(t, err, "SELECT current_user should succeed")
 	require.Equal(t, testUser, currentUser, "current_user should be test user initially")
 
-	t.Run("RESET SESSION AUTHORIZATION should reset to authenticated user", func(t *testing.T) {
-		// TODO(Phase4): Remove this skip once SQL filtering is implemented.
-		// See docs/plans/2024-12-05-scram-authentication-design.md Phase 4.
-		t.Skip("KNOWN SECURITY GAP: Phase 4 SQL filtering not yet implemented")
-
-		// SECURITY: RESET SESSION AUTHORIZATION should be rewritten to:
-		//   SET SESSION AUTHORIZATION '<authenticated_user>'
-		// This makes RESET a no-op that keeps the user as the authenticated user,
-		// rather than escalating to the superuser.
-		//
-		// Without this rewrite, an attacker could send multi-statement queries like:
-		//   "RESET SESSION AUTHORIZATION; DROP TABLE users"
-		// and the DROP would execute as the superuser.
+	t.Run("RESET SESSION AUTHORIZATION stays as authenticated user", func(t *testing.T) {
+		// With per-user pools using SCRAM passthrough, each user authenticates directly
+		// to PostgreSQL as themselves. RESET SESSION AUTHORIZATION resets to the
+		// session's authenticated user, which is the test user - not superuser.
+		// This is harmless and actually a no-op in our architecture.
 
 		_, err := userDB.ExecContext(ctx, "RESET SESSION AUTHORIZATION")
-		require.NoError(t, err, "RESET SESSION AUTHORIZATION should succeed (as a rewritten no-op)")
+		require.NoError(t, err, "RESET SESSION AUTHORIZATION should succeed")
 
 		// After RESET, current_user should still be the authenticated test user
+		// because the connection was authenticated as the test user (not superuser)
 		var userAfterReset string
 		err = userDB.QueryRowContext(ctx, "SELECT current_user").Scan(&userAfterReset)
 		require.NoError(t, err, "SELECT current_user should succeed")
 		assert.Equal(t, testUser, userAfterReset,
-			"SECURITY GAP: RESET SESSION AUTHORIZATION escalated to %q instead of staying as %q",
-			userAfterReset, testUser)
+			"RESET SESSION AUTHORIZATION should stay as authenticated user %q, got %q",
+			testUser, userAfterReset)
 	})
 
-	t.Run("SET SESSION AUTHORIZATION should be blocked", func(t *testing.T) {
-		// TODO(Phase4): Remove this skip once SQL filtering is implemented.
-		// See docs/plans/2024-12-05-scram-authentication-design.md Phase 4.
-		t.Skip("KNOWN SECURITY GAP: Phase 4 SQL filtering not yet implemented")
-
-		// SECURITY: SET SESSION AUTHORIZATION should be blocked entirely.
-		// It's a superuser-only command that allows impersonating other users.
+	t.Run("SET SESSION AUTHORIZATION rejected by PostgreSQL", func(t *testing.T) {
+		// With per-user pools, users authenticate as themselves (not superuser).
+		// SET SESSION AUTHORIZATION requires superuser privileges, so PostgreSQL
+		// will reject this with a permission error.
 
 		_, err := userDB.ExecContext(ctx, "SET SESSION AUTHORIZATION 'postgres'")
 
-		// Once Phase 4 is implemented, this should return an error.
-		if err != nil {
-			// Good - SET was blocked
-			t.Logf("SET SESSION AUTHORIZATION was blocked: %v", err)
-		} else {
-			// Bad - SET was allowed. This is the security gap.
-			t.Error("SECURITY GAP: SET SESSION AUTHORIZATION 'postgres' was not blocked. " +
-				"This allows direct privilege escalation.")
-		}
+		// PostgreSQL should reject this because the user is not a superuser
+		require.Error(t, err, "SET SESSION AUTHORIZATION should be rejected for non-superuser")
+
+		// The PostgreSQL error is in the Detail field of pq.Error.
+		// lib/pq's err.Error() only returns Message, so we need to check Detail directly.
+		var pqErr *pq.Error
+		require.True(t, errors.As(err, &pqErr), "error should be a pq.Error")
+		assert.Contains(t, pqErr.Detail, "permission denied",
+			"Detail should contain permission denied, got: %q", pqErr.Detail)
 	})
 }

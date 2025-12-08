@@ -70,17 +70,40 @@ It then performs SCRAM verification locally. We'll do the same, but fetch via gR
 | **C. SET SESSION AUTHORIZATION**         | Change session user      | Full isolation         | Requires superuser; escape via RESET       |
 | **D. SET SESSION AUTH + proxy blocking** | C with SQL filtering     | Full isolation, secure | Complexity in SQL filtering                |
 
-**Chosen: Option D** - SET SESSION AUTHORIZATION with proxy-level SQL filtering.
+**Chosen: Option A** - Separate pools per user, with SCRAM key passthrough for backend authentication.
 
 **Rationale:**
 
+Per-user pools provide complete security isolation by design. Each user authenticates directly to PostgreSQL as themselves via SCRAM key passthrough (see "Backend Authentication: SCRAM Key Passthrough" below). This approach:
+
+- Eliminates privilege escalation risks entirely - no superuser connections to escape to
+- Matches industry practice (PgBouncer, Supavisor, PgCat, Odyssey all use per-user pools)
+- Requires no SQL parsing or filtering in the connection pool path
+- Has lower complexity and latency than shared pool approaches
+
+**Why Options B/C/D were rejected:**
+
 The key insight from our analysis: **PostgreSQL cannot provide a one-way sandbox**. After `SET SESSION AUTHORIZATION 'alice'`, the connection can `RESET SESSION AUTHORIZATION` back to the superuser because PostgreSQL checks the _authenticated user's_ privileges, not the _current user's_.
 
-Therefore, the proxy must be the sandbox enforcement layer:
+To make shared pools secure with current PostgreSQL, the proxy would need to be the sandbox enforcement layer, requiring:
 
 - Block `SET SESSION AUTHORIZATION` entirely (superuser-only command anyway)
 - Rewrite `RESET SESSION AUTHORIZATION` to `SET SESSION AUTHORIZATION '<authenticated_user>'`
-- The user can never access the pool connector's superuser privileges
+- A PostgreSQL extension to block escape attempts inside stored procedures
+
+This complexity is unnecessary with per-user pools.
+
+**Future possibility: Custom PostgreSQL extension for secure shared pools**
+
+A custom PostgreSQL extension could enable secure shared pools by making session authorization changes require explicit unlock:
+
+1. The extension intercepts `RESET SESSION AUTHORIZATION` and similar commands
+2. Instead of restoring the connection to superuser, it could:
+   - Require a secret key to restore the original role (passed when returning connection to pool)
+   - Require a command from a separate superuser connection to expand permissions
+3. This would create a true one-way sandbox that users cannot escape
+
+This approach would allow `N users × 1 pool` instead of `N users × N pools`, reducing connection count significantly. However, it requires installing a custom extension in PostgreSQL and careful security analysis, so it remains a future consideration.
 
 **Why not SET ROLE?**
 `SET ROLE` has a different problem:
@@ -1689,8 +1712,14 @@ client := auth.NewSCRAMClientWithKeys(username, clientKey, serverKey)
 
 **Remaining work:**
 
-- [ ] End-to-end integration test with real PostgreSQL using SCRAM passthrough
+- [x] End-to-end integration test with real PostgreSQL using SCRAM passthrough ✅
 - [ ] Performance benchmarks vs SET SESSION AUTHORIZATION approach
+
+**Additional work completed (2025-12-08):**
+
+- Added Unix socket support to internal `pgprotocol/client` (detects paths starting with `/`)
+- Updated `pg_hba.conf` template to use `scram-sha-256` for local connections (was `peer`)
+- Added `TestMultiGateway_SessionAuthorizationSandbox` e2e test proving security model
 
 ### Phase 5: Identity Propagation ✅ COMPLETE
 
@@ -1701,7 +1730,7 @@ client := auth.NewSCRAMClientWithKeys(username, clientKey, serverKey)
 - CallerID propagation ✅ **Retained** - used for per-user pool selection
 - CallerID SCRAM keys ✅ **Added** - `scram_client_key` and `scram_server_key` in CallerID
 - SET SESSION AUTHORIZATION ✅ **Removed** - replaced by per-user pool lookup
-- Sandbox escape tests ✅ **Not needed** - no sandbox to escape with per-user pools
+- Sandbox escape tests ✅ **Updated** - now verify RESET is harmless and SET is blocked by PostgreSQL
 
 **Current implementation:**
 
