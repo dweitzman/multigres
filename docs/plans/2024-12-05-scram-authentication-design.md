@@ -159,20 +159,132 @@ Per [Stack Overflow security discussion](https://stackoverflow.com/questions/772
 | **Industry adoption** | ✅ Used by all major proxies     | ❌ Not used in production by any major proxy                         |
 | **Stored procedures** | ✅ User's permissions apply      | ⚠️ Pool user's permissions unless extension installed                |
 
-#### Recommendation: Reconsider Per-User Pools
+#### Pool Sizing Configuration in Major Proxies
 
-Given that:
+Since all major proxies use per-user pools, understanding how they handle pool sizing is critical:
 
-1. No major proxy uses the shared pool + user swapping approach
-2. Security requires SQL filtering + PostgreSQL extension for complete coverage
-3. Modern PostgreSQL deployments often have <100 active users
+##### PgBouncer Pool Sizing ([config docs](http://www.pgbouncer.org/config.html))
 
-**Per-user pools may be the better choice** despite the connection overhead. The security model is simpler and proven in production by all major proxies.
+**Global settings:**
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `default_pool_size` | 20 | Server connections per user/database pair |
+| `min_pool_size` | 0 | Minimum connections to maintain (when clients connected) |
+| `reserve_pool_size` | 0 | Additional connections for demand spikes |
+| `reserve_pool_timeout` | 5s | Seconds before using reserve pool |
+| `max_client_conn` | 100 | Maximum client connections allowed |
+| `max_user_connections` | 0 | Max server connections per user (all databases) |
+| `max_db_connections` | 0 | Max server connections per database (all users) |
 
-**Hybrid approach to consider:**
+**Per-database overrides:** `pool_size`, `min_pool_size`, `reserve_pool_size`, `max_db_connections`
 
-- Per-user pools for authenticated users (secure, simple)
-- Shared pool only for internal/trusted operations (multiorch, admin)
+**Per-user overrides:** `pool_size`, `reserve_pool_size`, `max_user_connections`
+
+**Sizing formula:** With `default_pool_size=20` and `max_client_conn=100`, 5 distinct user/database pairs can each max out their pools before hitting limits.
+
+**Note:** There's a [longstanding feature request](https://github.com/pgbouncer/pgbouncer/issues/166) for finer-grained per-user pool size configuration. Current workarounds include running multiple PgBouncer instances.
+
+##### Supavisor Pool Sizing ([source](https://github.com/supabase/supavisor))
+
+Supavisor organizes pools hierarchically: **Tenant** → **User** → **Pool**.
+
+- **Tenant** = A Supabase project (maps to a database server: `db_host`, `db_port`, `db_database`)
+- **User** = A PostgreSQL database user within that tenant
+- **Pool identity** = `{tenant, user, mode, db_name}` - each combination gets its own pool
+
+**Per-tenant settings** (defaults for users in this tenant):
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `default_pool_size` | 15 | Database connections per user pool |
+| `default_max_clients` | 1000 | Client connections limit per user |
+
+**Per-user settings** (overrides tenant defaults):
+| Parameter | Description |
+|-----------|-------------|
+| `pool_size` | Override tenant's `default_pool_size` for this user |
+| `max_clients` | Override tenant's `default_max_clients` for this user |
+| `mode_type` | `:transaction` or `:session` pooling |
+| `pool_checkout_timeout` | Max wait time for a connection |
+
+**Key behavior:**
+
+- Pools are created dynamically on first client connection
+- Each pool connects to PostgreSQL **as the actual user** (not a superuser)
+- Session mode limits connections to `pool_size` (one client per connection)
+- Transaction mode allows `max_clients` concurrent clients sharing `pool_size` connections
+
+##### PgCat Pool Sizing ([CONFIG.md](https://github.com/postgresml/pgcat/blob/main/CONFIG.md))
+
+**Per-user settings:**
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `pool_size` | 9 | Max server connections for this user |
+| `min_pool_size` | 0 | Minimum idle connections to retain |
+| `connect_timeout` | 1000ms | How long client waits before aborting |
+| `idle_timeout` | 30000ms | Duration idle connections remain available |
+| `statement_timeout` | 0 | Max query duration (0 = disabled) |
+
+**Total connections:** Sum of `pool_size` across all users must fit within PostgreSQL `max_connections`.
+
+**Sizing guidance:** Set `pool_size x users` to fit within Postgres `max_connections` with headroom. Common practice: 25-50% of total connections.
+
+##### Odyssey Pool Sizing ([GitHub](https://github.com/yandex/odyssey))
+
+**Per user+database pair:**
+| Parameter | Description |
+|-----------|-------------|
+| `pool_size` | Max connections in pool (0 = dynamic) |
+| `client_max` | Max concurrent client connections |
+| `pool_timeout` | Timeout for pool operations |
+| `pool_ttl` | Connection lifetime in pool |
+| `pool_client_idle_timeout` | Idle client timeout |
+| `pool_idle_in_transaction_timeout` | Idle-in-transaction timeout |
+| `server_lifetime` | Backend connection max age |
+
+**Dynamic behavior:** `pool_size 0` enables dynamic pool sizing.
+
+**Sizing formula:** `default_pool_size = (RAM / 20MB) / databases`, max 100-200 per server.
+
+#### Decision: Use Per-User Connection Pools
+
+**Chosen approach:** Per-user connection pools (matching industry practice).
+
+**Rationale:**
+
+1. All major PostgreSQL proxies use per-user pools
+2. Security model is simple and proven in production
+3. No risk of privilege escalation via SQL injection or stored procedures
+4. Lower complexity - no SQL parsing required in the connection pool path
+
+**Future option:** Keep the shared pool + SET SESSION AUTHORIZATION approach available for potential future use if/when we develop a secure implementation (likely requiring a PostgreSQL extension to block session auth commands inside stored procedures).
+
+**Hybrid approach:**
+
+- Per-user pools for authenticated client connections (secure, simple)
+- Shared superuser pool for internal/trusted operations only (multiorch, admin tasks)
+
+#### Pool Sizing Recommendations for Multigres
+
+Based on prior art, multigres should support:
+
+**Global settings:**
+
+- `default_pool_size` - Per user+database pool size (default: 10-20)
+- `max_user_connections` - Hard limit per user across all databases
+- `max_db_connections` - Hard limit per database across all users
+- `max_client_conn` - Total client connection limit
+
+**Per-user/database overrides:**
+
+- `pool_size` - Override default for specific users/databases
+- `min_pool_size` - Keep warm connections for frequently-used pools
+- `reserve_pool_size` - Burst capacity for demand spikes
+
+**Dynamic sizing (future):**
+
+- Start with 0 connections, grow on demand
+- Shrink idle pools after timeout
+- Auto-size based on PostgreSQL `max_connections`
 
 ---
 
