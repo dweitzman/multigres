@@ -6,7 +6,7 @@ This is **critical enterprise infrastructure**. The implementation must be:
 
 - **Correct**: Authentication must never allow unauthorized access. Edge cases must be handled. The SCRAM protocol implementation must match RFC 5802 exactly.
 - **Secure**: No privilege escalation paths. Defense in depth. All security assumptions documented and tested.
-- **Scalable**: Connection pooling must support thousands of concurrent users without per-user connection overhead.
+- **Scalable**: Connection pooling must support many concurrent users with per-user pools and efficient resource management (idle timeout, LRU eviction).
 - **Performant**: Authentication should not add measurable latency to connection establishment. Hash caching, efficient crypto operations.
 - **Thoroughly tested**: Unit tests for all crypto operations with known test vectors. Integration tests for the full auth flow. Security-focused tests that attempt bypass. Fuzz testing for protocol parsing.
 
@@ -14,14 +14,14 @@ Every code path must be tested. Security-critical code must have additional revi
 
 ## Overview
 
-Implement PostgreSQL SCRAM-SHA-256 authentication in multigres with secure connection pooling that allows a shared pool to serve multiple authenticated users without privilege escalation.
+Implement PostgreSQL SCRAM-SHA-256 authentication in multigres with per-user connection pooling using SCRAM key passthrough for secure backend authentication.
 
 ## Problem Statement
 
 multigres currently uses "trust" authentication - any client can connect as any user without a password. To be production-ready, we need:
 
 1. **Real authentication**: Verify client identity using PostgreSQL's SCRAM-SHA-256 protocol
-2. **Connection pooling compatibility**: Share backend connections across authenticated users without leaking privileges
+2. **Connection pooling**: Per-user connection pools that authenticate to PostgreSQL as the actual user
 3. **Performance**: Avoid PostgreSQL round-trips during authentication by verifying passwords locally
 
 ## Design Decisions and Alternatives Considered
@@ -465,25 +465,27 @@ static void multigres_executor_start(QueryDesc *queryDesc, int eflags) {
 │                        multigateway                                 │
 │  • Accepts PostgreSQL connections                                   │
 │  • Performs SCRAM authentication using hashes from multipooler      │
+│  • Extracts SCRAM keys (ClientKey/ServerKey) from auth proof        │
 │  • Routes queries to appropriate shards                             │
-│  • Trusted to assert authenticated identity to multipooler          │
+│  • Passes authenticated identity + SCRAM keys to multipooler        │
 │  • Caches password hashes with TTL                                  │
 └─────────────────────────────────────────────────────────────────────┘
                                 │
-                                │ gRPC (authenticated session info)
+                                │ gRPC (CallerID + SCRAM keys)
                                 │
                                 ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                        multipooler                                  │
 │  • Source of truth for credentials (fetches from PostgreSQL)        │
-│  • Maintains shared connection pool (superuser connections)         │
-│  • Sandboxes queries via SET SESSION AUTHORIZATION                  │
-│  • Enforces session auth restrictions at SQL level                  │
-│  • Rewrites RESET SESSION AUTHORIZATION                             │
+│  • Maintains per-user connection pools                              │
+│  • Creates pools dynamically on first request per user              │
+│  • Authenticates to PostgreSQL using SCRAM keys (no passwords)      │
+│  • Pools connect as actual user (not superuser)                     │
+│  • Garbage collects idle pools after timeout                        │
 └─────────────────────────────────────────────────────────────────────┘
                                 │
                                 │ PostgreSQL wire protocol
-                                │ (superuser connection)
+                                │ (per-user authenticated connections)
                                 ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         PostgreSQL                                  │
@@ -498,21 +500,25 @@ static void multigres_executor_start(QueryDesc *queryDesc, int eflags) {
 - Performs SCRAM-SHA-256 authentication:
   - Fetches password hashes from multipooler via gRPC
   - Executes SCRAM handshake locally (no PostgreSQL round-trip during auth)
+  - Extracts ClientKey/ServerKey from client's SCRAM proof
   - Caches hashes with TTL for performance
-- Passes authenticated identity (user, database) to multipooler with each request
+- Passes authenticated identity and SCRAM keys to multipooler with each request via CallerID
 - Routes queries across multiple shards/table groups
 
 ### multipooler
 
 - Source of truth for authentication credentials
 - Provides gRPC endpoint to fetch SCRAM password hashes
-- Maintains shared connection pool using superuser PostgreSQL connections
-- Sandboxes each request:
-  - On request start: `SET SESSION AUTHORIZATION '<authenticated_user>'`
-  - On request end: `RESET SESSION AUTHORIZATION`
-- Enforces SQL-level restrictions:
-  - Block `SET SESSION AUTHORIZATION` (superuser-only command)
-  - Rewrite `RESET SESSION AUTHORIZATION` → `SET SESSION AUTHORIZATION '<auth_user>'`
+- Maintains per-user connection pools:
+  - Pool identity: `(username)` (multipooler belongs to single tablegroup)
+  - Pools created dynamically on first request for a user
+  - Authenticates to PostgreSQL using cached SCRAM keys (no plaintext passwords)
+  - Pools connect as the actual PostgreSQL user (not superuser)
+- Pool lifecycle management:
+  - Dynamic sizing based on demand
+  - Idle timeout garbage collection
+  - Global connection cap with LRU eviction
+- SET SESSION AUTHORIZATION no longer needed (connections already authenticated as user)
 
 ---
 
@@ -988,159 +994,341 @@ func TestCredentialCache(t *testing.T) {
 
 ---
 
-## Part 3: Connection Pool Sandboxing
+## Part 3: Per-User Connection Pools
 
-### Pool Connection Lifecycle
+With per-user pools using SCRAM key passthrough, connection pooling becomes simpler and more secure than shared pools with SET SESSION AUTHORIZATION.
+
+### Pool Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    Connection Pool (Idle)                       │
-│         Connections as superuser, no session auth set           │
+│                        multipooler                              │
+│                                                                 │
+│  ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐   │
+│  │  Pool: alice    │ │  Pool: bob      │ │  Pool: admin    │   │
+│  │  ┌───┐ ┌───┐   │ │  ┌───┐ ┌───┐   │ │  ┌───┐         │   │
+│  │  │ C │ │ C │   │ │  │ C │ │ C │   │ │  │ C │         │   │
+│  │  └───┘ └───┘   │ │  └───┘ └───┘   │ │  └───┘         │   │
+│  │  (2 conns)     │ │  (2 conns)     │ │  (1 conn)      │   │
+│  └─────────────────┘ └─────────────────┘ └─────────────────┘   │
+│                                                                 │
+│  Pool Manager:                                                  │
+│  • SCRAM key cache per user                                    │
+│  • Global connection cap: 100                                  │
+│  • Idle timeout: 10 minutes                                    │
+│  • LRU eviction when cap reached                               │
 └─────────────────────────────────────────────────────────────────┘
-                              │
-                              │ Checkout for user 'alice'
-                              ▼
+        │              │              │
+        │ alice        │ bob          │ admin
+        ▼              ▼              ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│              SET SESSION AUTHORIZATION 'alice'                  │
-│                                                                 │
-│  • session_user = alice                                         │
-│  • current_user = alice                                         │
-│  • SET ROLE restricted to alice's memberships                   │
-│  • RESET ROLE returns to alice                                  │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              │ Execute user queries (filtered)
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    SQL Security Filter                          │
-│                                                                 │
-│  BLOCK:                                                         │
-│    • SET SESSION AUTHORIZATION (any form)                       │
-│                                                                 │
-│  REWRITE:                                                       │
-│    • RESET SESSION AUTHORIZATION                                │
-│      → SET SESSION AUTHORIZATION 'alice'                        │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              │ Return to pool
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│              RESET SESSION AUTHORIZATION                        │
-│              (trusted path, bypasses filter)                    │
-│                                                                 │
-│              Connection returns to superuser state              │
+│                         PostgreSQL                              │
+│  • Each connection authenticated as actual user                 │
+│  • No superuser pool connections                                │
+│  • User permissions enforced by PostgreSQL                      │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### SQL Filter Implementation
+### Pool Identity
 
-Location: `go/multipooler/security/session_auth_filter.go`
+Each pool is identified by the **username** only. Database is not part of the pool identity because:
 
-The SQL parser already recognizes `SET SESSION AUTHORIZATION` and `RESET SESSION AUTHORIZATION` as `VariableSetStmt` with `Name = "session_authorization"`.
+- Each multipooler instance belongs to a single tablegroup
+- A tablegroup maps to a single PostgreSQL database
+- Different databases would be handled by different multipooler instances
 
 ```go
-// FilterSessionAuthCommands checks parsed SQL for session authorization commands
-// and either blocks or rewrites them based on the authenticated user.
-func FilterSessionAuthCommands(stmts []ast.Stmt, authUser string) ([]ast.Stmt, error) {
-    result := make([]ast.Stmt, len(stmts))
-    copy(result, stmts)
-
-    for i, stmt := range result {
-        varSet, ok := stmt.(*ast.VariableSetStmt)
-        if !ok {
-            continue
-        }
-
-        if strings.ToLower(varSet.Name) != "session_authorization" {
-            continue
-        }
-
-        switch varSet.Kind {
-        case ast.VAR_RESET:
-            // Rewrite: RESET SESSION AUTHORIZATION → SET SESSION AUTHORIZATION 'authUser'
-            result[i] = &ast.VariableSetStmt{
-                Kind: ast.VAR_SET_VALUE,
-                Name: "session_authorization",
-                Args: makeStringArg(authUser),
-            }
-        case ast.VAR_SET_VALUE, ast.VAR_SET_DEFAULT:
-            // Block: SET SESSION AUTHORIZATION is not permitted
-            return nil, fmt.Errorf("SET SESSION AUTHORIZATION is not permitted")
-        }
-    }
-
-    return result, nil
+type PoolID struct {
+    Username string // PostgreSQL role name
 }
 ```
+
+### Pool Lifecycle
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                          Pool Lifecycle                                   │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  1. FIRST REQUEST FOR USER                                               │
+│     ─────────────────────                                                │
+│     • Request arrives with CallerID.principal = "alice"                  │
+│     • Request includes SCRAM keys (ClientKey, ServerKey)                 │
+│     • Pool manager: no pool exists for "alice"                           │
+│     • Create new pool for "alice"                                        │
+│     • Cache SCRAM keys                                                   │
+│     • Open connection to PostgreSQL using SCRAM key auth                 │
+│     • Execute query, return connection to pool                           │
+│                                                                          │
+│  2. SUBSEQUENT REQUESTS                                                  │
+│     ────────────────────                                                 │
+│     • Request arrives for "alice"                                        │
+│     • Pool exists, checkout connection                                   │
+│     • Execute query, return to pool                                      │
+│     • Update pool's last-used timestamp                                  │
+│                                                                          │
+│  3. POOL GROWTH                                                          │
+│     ───────────────                                                      │
+│     • Concurrent requests exceed available connections                   │
+│     • Pool size < max_pool_size                                          │
+│     • Open new connection using cached SCRAM keys                        │
+│     • Add to pool                                                        │
+│                                                                          │
+│  4. IDLE TIMEOUT                                                         │
+│     ─────────────                                                        │
+│     • Connection idle > idle_connection_timeout                          │
+│     • Close connection, remove from pool                                 │
+│     • If pool empty and no requests for idle_pool_timeout: GC pool       │
+│                                                                          │
+│  5. GLOBAL CONNECTION CAP                                                │
+│     ─────────────────────                                                │
+│     • Need new connection but total >= max_total_connections             │
+│     • Find LRU idle connection across all pools                          │
+│     • Evict that connection                                              │
+│     • Create new connection for requesting user                          │
+│                                                                          │
+│  6. SCRAM KEY REFRESH                                                    │
+│     ─────────────────────                                                │
+│     • Each request brings fresh SCRAM keys from multigateway             │
+│     • Update cached keys on each request                                 │
+│     • Ensures password changes are reflected when users reconnect        │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+### Pool Configuration
+
+**Global settings (multipooler configuration):**
+
+| Parameter                 | Default | Description                                |
+| ------------------------- | ------- | ------------------------------------------ |
+| `max_total_connections`   | 100     | Hard limit on total PostgreSQL connections |
+| `idle_connection_timeout` | 5m      | Close connections idle longer than this    |
+| `idle_pool_timeout`       | 10m     | GC empty pools after this idle time        |
+| `connection_timeout`      | 10s     | Timeout for establishing new connections   |
+
+**Per-user settings (future, stored in metadata):**
+
+| Parameter       | Default | Description                                 |
+| --------------- | ------- | ------------------------------------------- |
+| `max_pool_size` | 10      | Max connections for this user               |
+| `min_pool_size` | 0       | Minimum connections to maintain             |
+| `priority`      | normal  | Eviction priority (low pools evicted first) |
+
+**Initial implementation:** Use global defaults for all users. Per-user configuration can be added later via metadata storage (similar to Supavisor's tenant/user model).
+
+### SCRAM Key Cache
+
+```go
+type SCRAMKeyCache struct {
+    mu      sync.RWMutex
+    entries map[string]*SCRAMKeys  // username -> keys
+}
+
+type SCRAMKeys struct {
+    ClientKey   []byte
+    ServerKey   []byte
+    UpdatedAt   time.Time
+}
+```
+
+**Key lifecycle:**
+
+1. Keys arrive with each gRPC request from multigateway
+2. Cache is updated on every request (ensures freshness)
+3. Keys used when creating new pool connections
+4. Keys cleared when pool is garbage collected
+
+**Security notes:**
+
+- Keys are equivalent to password for establishing connections
+- Keys should be stored securely in memory (consider mlock)
+- Keys have implicit lifetime tied to pool lifetime
+- gRPC transport must use TLS
+
+### Connection Authentication Flow
+
+When creating a new connection for a user pool:
+
+```
+multipooler                                        PostgreSQL
+    │                                                  │
+    │─── StartupMessage (user=alice) ─────────────────►│
+    │                                                  │
+    │◄── AuthenticationSASL (SCRAM-SHA-256) ──────────│
+    │                                                  │
+    │─── SASLInitialResponse ─────────────────────────►│
+    │    (generate client-first using cached keys)     │
+    │                                                  │
+    │◄── AuthenticationSASLContinue ──────────────────│
+    │    (server-first message)                        │
+    │                                                  │
+    │─── SASLResponse ────────────────────────────────►│
+    │    (compute ClientProof from cached ClientKey)   │
+    │                                                  │
+    │◄── AuthenticationSASLFinal ─────────────────────│
+    │    (verify ServerSignature using ServerKey)      │
+    │                                                  │
+    │◄── AuthenticationOk ────────────────────────────│
+    │                                                  │
+```
+
+**Note:** This uses the same SCRAM keys that multigateway extracted during client authentication. No plaintext password is ever stored or transmitted.
+
+### Why Per-User Pools (Current Approach)
+
+Per-user pools provide complete security isolation without complexity:
+
+- **No privilege escalation:** Connections are the actual user, not a sandboxed superuser
+- **No SQL filtering needed:** PostgreSQL enforces permissions directly
+- **Simple implementation:** Standard connection pool per user
+- **Proven approach:** Used by PgBouncer, Supavisor, PgCat, Odyssey
+
+The tradeoff is connection count: N users × M connections instead of a shared pool.
+
+### Future Direction: Shared Pool with PostgreSQL Extension
+
+For scenarios where connection count is critical, a shared superuser pool with SET SESSION AUTHORIZATION is attractive but requires bulletproof security. The main challenge is preventing escape from the sandbox via stored procedures:
+
+```sql
+-- SECURITY DEFINER function owned by superuser
+CREATE FUNCTION escape_sandbox() RETURNS void AS $$
+BEGIN
+    RESET SESSION AUTHORIZATION;  -- Back to superuser!
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+```
+
+**Future solution: PostgreSQL extension with ExecutorStart hook:**
+
+```c
+// Block session auth changes at statement execution time
+static void multigres_executor_start(QueryDesc *queryDesc, int eflags) {
+    if (multigres_sandbox_enabled) {
+        // Detect SET/RESET SESSION AUTHORIZATION in any statement
+        // including those inside stored procedures
+        if (is_session_auth_command(queryDesc->plannedstmt)) {
+            ereport(ERROR, (errmsg("session authorization changes blocked")));
+        }
+    }
+    // Call previous hook
+}
+```
+
+This would allow safe shared pools because:
+
+1. Proxy-level SQL filter blocks direct escape attempts
+2. PostgreSQL extension blocks escape attempts inside stored procedures
+3. Superuser connections can be safely shared via SET SESSION AUTHORIZATION
+
+This is a future enhancement - per-user pools are the current approach.
 
 ### Test-Driven Development Approach
 
-**Test 1: Block SET SESSION AUTHORIZATION**
+**Test 1: Pool creation on first request**
 
 ```go
-func TestBlockSetSessionAuthorization(t *testing.T) {
-    stmts := parseSQL(t, "SET SESSION AUTHORIZATION 'mallory'")
-    _, err := FilterSessionAuthCommands(stmts, "alice")
-    assert.Error(t, err)
-    assert.Contains(t, err.Error(), "not permitted")
-}
-```
+func TestPoolCreatedOnFirstRequest(t *testing.T) {
+    pm := NewPoolManager(config)
 
-**Test 2: Rewrite RESET SESSION AUTHORIZATION**
+    // No pools initially
+    assert.Equal(t, 0, pm.PoolCount())
 
-```go
-func TestRewriteResetSessionAuthorization(t *testing.T) {
-    stmts := parseSQL(t, "RESET SESSION AUTHORIZATION")
-    result, err := FilterSessionAuthCommands(stmts, "alice")
+    // First request for alice
+    conn, err := pm.GetConnection(ctx, "alice", scramKeys)
     require.NoError(t, err)
+    defer pm.ReturnConnection(conn)
 
-    // Verify rewritten to SET SESSION AUTHORIZATION 'alice'
-    varSet := result[0].(*ast.VariableSetStmt)
-    assert.Equal(t, "session_authorization", varSet.Name)
-    assert.Equal(t, ast.VAR_SET_VALUE, varSet.Kind)
-    assert.Equal(t, "alice", extractStringArg(varSet.Args))
+    // Pool now exists
+    assert.Equal(t, 1, pm.PoolCount())
+    assert.True(t, pm.HasPool("alice"))
 }
 ```
 
-**Test 3: Allow normal SET commands**
+**Test 2: Connection reuse**
 
 ```go
-func TestAllowNormalSetCommands(t *testing.T) {
-    stmts := parseSQL(t, "SET search_path TO public; SET timezone TO 'UTC'")
-    result, err := FilterSessionAuthCommands(stmts, "alice")
-    require.NoError(t, err)
-    assert.Len(t, result, 2)
+func TestConnectionReuse(t *testing.T) {
+    pm := NewPoolManager(config)
+
+    // First request
+    conn1, _ := pm.GetConnection(ctx, "alice", scramKeys)
+    pm.ReturnConnection(conn1)
+
+    // Second request should reuse
+    conn2, _ := pm.GetConnection(ctx, "alice", scramKeys)
+    pm.ReturnConnection(conn2)
+
+    // Same underlying connection
+    assert.Equal(t, conn1.ID(), conn2.ID())
 }
 ```
 
-**Test 4: Allow SET ROLE (PostgreSQL validates)**
+**Test 3: Global connection cap with LRU eviction**
 
 ```go
-func TestAllowSetRole(t *testing.T) {
-    stmts := parseSQL(t, "SET ROLE 'some_role'")
-    result, err := FilterSessionAuthCommands(stmts, "alice")
-    require.NoError(t, err)
-    assert.Len(t, result, 1)
-    // SET ROLE is allowed - PostgreSQL will validate against alice's memberships
+func TestGlobalConnectionCapLRUEviction(t *testing.T) {
+    pm := NewPoolManager(Config{MaxTotalConnections: 2})
+
+    // Create connections for alice and bob
+    connAlice, _ := pm.GetConnection(ctx, "alice", aliceKeys)
+    pm.ReturnConnection(connAlice)
+
+    connBob, _ := pm.GetConnection(ctx, "bob", bobKeys)
+    pm.ReturnConnection(connBob)
+
+    // At cap (2 connections)
+    assert.Equal(t, 2, pm.TotalConnections())
+
+    // Request for carol should evict LRU (alice, older)
+    connCarol, _ := pm.GetConnection(ctx, "carol", carolKeys)
+    pm.ReturnConnection(connCarol)
+
+    assert.Equal(t, 2, pm.TotalConnections())
+    assert.False(t, pm.HasPool("alice"))  // Evicted
+    assert.True(t, pm.HasPool("bob"))
+    assert.True(t, pm.HasPool("carol"))
 }
 ```
 
-**Test 5: Integration - sandbox escape attempt**
+**Test 4: Idle pool garbage collection**
 
 ```go
-func TestSandboxEscapePrevented(t *testing.T) {
+func TestIdlePoolGarbageCollection(t *testing.T) {
+    pm := NewPoolManager(Config{IdlePoolTimeout: 100*time.Millisecond})
+
+    conn, _ := pm.GetConnection(ctx, "alice", scramKeys)
+    pm.ReturnConnection(conn)
+
+    assert.True(t, pm.HasPool("alice"))
+
+    // Wait for idle timeout + GC cycle
+    time.Sleep(200 * time.Millisecond)
+    pm.RunGC()
+
+    assert.False(t, pm.HasPool("alice"))
+}
+```
+
+**Test 5: User can run SET SESSION AUTHORIZATION (no-op to self)**
+
+```go
+func TestSetSessionAuthorizationAllowed(t *testing.T) {
     // Connect as alice through the full stack
     conn := connectAsUser(t, "alice", "alicepassword")
 
-    // Attempt to escape via SET SESSION AUTHORIZATION
-    _, err := conn.Exec(ctx, "SET SESSION AUTHORIZATION 'postgres'")
-    assert.Error(t, err)
+    // This is allowed but has no effect (alice -> alice)
+    _, err := conn.Exec(ctx, "SET SESSION AUTHORIZATION 'alice'")
+    require.NoError(t, err)
 
-    // Attempt to escape via RESET SESSION AUTHORIZATION
+    // Attempting to set to another user fails (not superuser)
+    _, err = conn.Exec(ctx, "SET SESSION AUTHORIZATION 'bob'")
+    assert.Error(t, err)  // PostgreSQL error: must be superuser
+
+    // RESET just returns to alice
     _, err = conn.Exec(ctx, "RESET SESSION AUTHORIZATION")
-    require.NoError(t, err) // This succeeds but...
+    require.NoError(t, err)
 
-    // Verify still alice (was rewritten)
     var user string
     conn.QueryRow(ctx, "SELECT session_user").Scan(&user)
     assert.Equal(t, "alice", user)
@@ -1259,43 +1447,60 @@ PostgreSQL connections traditionally never expire - changing a password doesn't 
 
 ## Security Model Summary
 
+### Current Approach: Per-User Pools
+
+With per-user connection pools using SCRAM key passthrough, many traditional threats are eliminated by design.
+
 ### Threat: Privilege Escalation via SQL
 
 **Attack:** User sends `SET SESSION AUTHORIZATION 'admin'` or `RESET SESSION AUTHORIZATION`
-**Mitigation:** SQL filter blocks SET, rewrites RESET
+
+**Mitigation (per-user pools):** Not a threat - connections authenticate as the actual user, not a sandboxed superuser. `SET SESSION AUTHORIZATION` requires superuser privileges which the user doesn't have. `RESET SESSION AUTHORIZATION` just resets to the same user.
 
 ### Threat: Stored Procedure Escape
 
 **Attack:** SECURITY DEFINER function contains `RESET SESSION AUTHORIZATION`
-**Status:** Documented limitation for initial release
-**Mitigation:**
 
-- Short-term: Document as known limitation
-- Long-term: PostgreSQL extension with ExecutorStart hook
+**Status (per-user pools):** Not a threat - even if a function runs as its definer, `RESET SESSION AUTHORIZATION` returns to the connection's authenticated user, which is the actual user (not a superuser to escalate to).
 
 ### Threat: Connection Pool Identity Confusion
 
 **Attack:** Connection returned to pool with wrong session user
-**Mitigation:**
 
-- Always `SET SESSION AUTHORIZATION` on checkout
-- Always `RESET SESSION AUTHORIZATION` on return (trusted path)
-- Superuser connections never exposed to user queries
+**Mitigation (per-user pools):** Not possible - each user has their own pool of connections that authenticate as that user. No session user switching occurs.
 
 ### Threat: Hash Interception
 
 **Attack:** Attacker intercepts password hash in transit
 **Mitigation:**
 
-- gRPC between multigateway and multipooler should use TLS
-- Hashes are salted and use PBKDF2, not useful for rainbow tables
+- gRPC between multigateway and multipooler uses TLS
+- Hashes are salted and use PBKDF2, slow to brute-force
+
+### Threat: SCRAM Key Interception
+
+**Attack:** Attacker intercepts SCRAM keys passed from multigateway to multipooler
+**Mitigation:**
+
+- gRPC transport must use TLS
+- Keys are session-equivalent but not replayable (bound to SCRAM nonce)
+- Keys refresh with each client authentication
 
 ### Trust Boundaries
 
-- multigateway is trusted to correctly assert authenticated identity
+- multigateway is trusted to correctly assert authenticated identity and extract SCRAM keys
 - multipooler is source of truth for credentials
-- PostgreSQL superuser access limited to multipooler
-- Clients are untrusted (all SQL is filtered)
+- PostgreSQL connections authenticate as actual users (no superuser pool)
+- Clients are untrusted but don't require SQL filtering (PostgreSQL enforces permissions)
+
+### Future Direction: Shared Pool Security Model
+
+If we later implement shared superuser pools with SET SESSION AUTHORIZATION, additional security measures will be required:
+
+1. **Proxy-level SQL filter** - Block `SET SESSION AUTHORIZATION`, rewrite `RESET SESSION AUTHORIZATION`
+2. **PostgreSQL extension** - ExecutorStart hook to block session auth changes inside stored procedures
+
+This combination would provide defense-in-depth against all escape vectors, including `SECURITY DEFINER` functions. See "Part 3: Future Direction" for details.
 
 ---
 
@@ -1408,26 +1613,25 @@ that fetches credentials from multipooler via gRPC.
 - `TestPoolerHashProvider_InvalidHashFormat` - Parse error handling
 - `TestPoolerHashProvider_ImplementsInterface` - Interface compliance
 
-**Security note:** Without Phase 4 sandboxing, authenticated users could potentially
-use SET SESSION AUTHORIZATION to impersonate others. This is acceptable for initial
-validation but sandboxing is required for multi-tenant deployments.
+**Note:** With the per-user pools approach (Phase 4), SET SESSION AUTHORIZATION is not a security concern because connections authenticate as the actual user, not a superuser.
 
-### Phase 4: Connection Pool Sandboxing (TDD)
+### Phase 4: Per-User Connection Pools (TDD)
 
 **Tests first:**
 
-1. `TestBlockSetSessionAuthorization` - SQL blocked
-2. `TestRewriteResetSessionAuthorization` - SQL rewritten
-3. `TestAllowSetRole` - Not blocked (PostgreSQL validates)
-4. `TestPoolCheckoutSetsSessionAuth` - Connection sandboxed
-5. `TestPoolReturnResetsSessionAuth` - Connection restored
-6. `TestSandboxEscapeAttempt` - Full integration test
+1. `TestPoolCreatedOnFirstRequest` - Pool created dynamically
+2. `TestConnectionReuse` - Connections reused within user pool
+3. `TestGlobalConnectionCapLRUEviction` - LRU eviction when at cap
+4. `TestIdlePoolGarbageCollection` - Pools GC'd after idle timeout
+5. `TestSCRAMKeyPassthrough` - Pool auth uses extracted SCRAM keys
+6. `TestUserPermissionsEnforced` - PostgreSQL enforces user permissions
 
 **Then implement:**
 
-1. `go/multipooler/security/session_auth_filter.go` - SQL filter
-2. Update `go/multipooler/poolerserver/pooler.go` - Integrate filter
-3. Update `go/multipooler/grpcpoolerservice/service.go` - Sandbox on checkout
+1. `go/multipooler/pool/user_pool_manager.go` - Per-user pool manager
+2. `go/multipooler/pool/scram_key_cache.go` - SCRAM key caching
+3. `go/multipooler/pool/scram_client.go` - SCRAM client for pool connections
+4. Update `go/multipooler/grpcpoolerservice/service.go` - Use per-user pools
 
 ### Phase 5: Identity Propagation ✅ COMPLETE
 
@@ -1464,9 +1668,9 @@ defer conn.ExecContext(ctx, "RESET SESSION AUTHORIZATION")
 
 1. `go/multigateway/auth/credential_cache.go` - Optional caching layer
 2. Test SCRAM auth with real PostgreSQL instance
-3. Test role switching (`SET ROLE`) works correctly within sandbox
-4. Test session auth blocking with malicious SQL
-5. Test connection reuse across different users
+3. Test role switching (`SET ROLE`) works correctly with user permissions
+4. Test per-user pool isolation (users can't access other users' connections)
+5. Test connection reuse within user pool
 6. Test credential cache behavior under load
 7. Performance benchmarks vs trust auth baseline
 
@@ -1494,9 +1698,14 @@ defer conn.ExecContext(ctx, "RESET SESSION AUTHORIZATION")
 - `go/multigateway/auth/pooler_hash_provider.go` - PasswordHashProvider via gRPC
 - `go/multigateway/auth/pooler_hash_provider_test.go` - Unit tests
 
-**Phase 4, 6 (Pending):**
+**Phase 4 (Pending):**
 
-- `go/multipooler/security/session_auth_filter.go` - SQL security filter
+- `go/multipooler/pool/user_pool_manager.go` - Per-user pool manager with lifecycle
+- `go/multipooler/pool/scram_key_cache.go` - SCRAM key caching for backend auth
+- `go/multipooler/pool/scram_client.go` - SCRAM client for pool connections to PostgreSQL
+
+**Phase 6 (Pending):**
+
 - `go/multigateway/auth/credential_cache.go` - Hash caching (optional)
 
 ### Modified Files
@@ -1527,18 +1736,22 @@ defer conn.ExecContext(ctx, "RESET SESSION AUTHORIZATION")
 - `go/multipooler/executor/executor.go` - SET SESSION AUTHORIZATION implementation
 - `go/test/endtoend/multigateway_scram_test.go` - Test current_user returns auth user
 
-**Phase 4, 6 (Pending):**
+**Phase 4 (Pending):**
 
-- `go/pgprotocol/server/conn.go` - Auth state tracking
-- `go/multipooler/poolerserver/pooler.go` - Session auth on checkout/return
+- `go/multipooler/grpcpoolerservice/service.go` - Use per-user pool manager
+- `go/multipooler/executor/executor.go` - Remove SET SESSION AUTHORIZATION (not needed with per-user pools)
+- `proto/multipoolerservice.proto` - Add SCRAM keys to CallerID
+
+**Phase 6 (Pending):**
+
+- `go/multigateway/auth/pooler_hash_provider.go` - Add caching layer
 
 ### Reference Files (Read Before Implementing)
 
 - `go/pgprotocol/server/packet.go` - Message encoding/decoding patterns
 - `go/pgprotocol/protocol/constants.go` - Auth message constants (AuthSASL, etc.)
 - `go/multipooler/connstate/connection_state.go` - Connection state patterns
-- `go/parser/ast/utility_statements.go` - VariableSetStmt for SET SESSION AUTH
-- `go/multigateway/handler/handler.go` - Where SQL parsing happens
+- `go/pgprotocol/auth/scram_crypto.go` - SCRAM key operations for backend auth
 
 ---
 
