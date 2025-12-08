@@ -1757,12 +1757,18 @@ client := auth.NewSCRAMClientWithKeys(username, clientKey, serverKey)
 5. ✅ `TestMultiGateway_UserIsolation` - User A cannot access user B's tables
 6. ✅ `TestMultiGateway_SetRole` - SET ROLE/RESET ROLE within user's role memberships
 
+**Completed (2025-12-08):**
+
+- [x] `go/multigateway/auth/credential_cache.go` - TTL-based caching layer with negative caching
+- [x] Connection cleanup (`RESET ROLE`) on return to pool - see `userpool.Manager.ReturnConnection()`
+- [x] `TestMultiGateway_SetRole` - SET ROLE within transactions (skipped: needs txn status tracking)
+- [x] `TestMultiGateway_ConnectionCleanup` - Verifies RESET ROLE cleans state (skipped: needs txn status tracking)
+
 **Remaining work:**
 
-- [ ] `go/multigateway/auth/credential_cache.go` - Optional caching layer
+- [ ] Transaction status tracking in multigateway (blocks SET ROLE/ConnectionCleanup e2e tests)
 - [ ] Test credential cache behavior under load
 - [ ] Performance benchmarks vs trust auth baseline
-- [ ] Implement connection cleanup when returning to pool (see analysis below)
 
 **Connection cleanup analysis (2025-12-08):**
 
@@ -1850,9 +1856,12 @@ When a connection is returned to the pool, session state (role, search_path, tem
 - `go/multipooler/pool/user_pool_manager.go` - Per-user pool manager with lifecycle
 - `go/multipooler/pool/scram_key_cache.go` - SCRAM key caching for backend auth
 
-**Phase 6 (Pending):**
+**Phase 6 (✅ Complete):**
 
-- `go/multigateway/auth/credential_cache.go` - Hash caching (optional)
+- `go/multigateway/auth/credential_cache.go` - Hash caching with TTL and negative caching
+- `go/multigateway/auth/credential_cache_test.go` - Unit tests for credential cache
+- `go/multipooler/pools/userpool/manager.go` - Added `RESET ROLE` on connection return
+- `go/multipooler/pools/userpool/connection.go` - Added `Reset()` method
 
 ### Modified Files
 
@@ -1893,9 +1902,10 @@ When a connection is returned to the pool, session state (role, search_path, tem
 - `go/multipooler/executor/executor.go` - Remove SET SESSION AUTHORIZATION (not needed with per-user pools)
 - `proto/multipoolerservice.proto` - Add SCRAM keys to CallerID
 
-**Phase 6 (Pending):**
+**Phase 6 (✅ Complete):**
 
-- `go/multigateway/auth/pooler_hash_provider.go` - Add caching layer
+- `go/multigateway/init.go` - Wire credential cache with configurable TTL
+- `go/multipooler/executor/executor.go` - Pass context to `ReturnConnection()`
 
 ### Reference Files (Read Before Implementing)
 
