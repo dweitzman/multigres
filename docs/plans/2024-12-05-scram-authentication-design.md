@@ -1617,6 +1617,33 @@ that fetches credentials from multipooler via gRPC.
 
 ### Phase 4: Per-User Connection Pools (TDD)
 
+#### Part A: SCRAM Key Passthrough Primitives ✅ COMPLETE
+
+**Status:** Validated 2025-12-08
+
+The SCRAM key passthrough mechanism has been implemented and validated end-to-end:
+
+**Files created:**
+
+- `go/pgprotocol/auth/scram_crypto.go` - Added `ExtractAndVerifyClientProof()` to extract ClientKey from proof
+- `go/pgprotocol/auth/scram_client.go` - SCRAM client supporting both password and key passthrough modes
+- `go/pgprotocol/auth/scram_client_test.go` - Unit tests for passthrough mechanism
+- `go/test/endtoend/scram_passthrough_test.go` - End-to-end test proving passthrough works against real PostgreSQL
+
+**Key implementation:**
+
+```go
+// Extract ClientKey during client auth verification
+clientKey, ok := auth.ExtractAndVerifyClientProof(storedKey, authMessage, clientProof)
+
+// Use extracted keys for backend auth (no password needed)
+client := auth.NewSCRAMClientWithKeys(username, clientKey, serverKey)
+```
+
+**Validation:** The end-to-end test `TestSCRAMPassthrough` creates a user in PostgreSQL, extracts SCRAM keys from a simulated client auth, then uses those keys to authenticate directly to PostgreSQL via raw TCP. The test passes, proving the mechanism works.
+
+#### Part B: Per-User Pool Manager (Pending)
+
 **Existing code to modify:**
 
 Phase 5 implemented SET SESSION AUTHORIZATION as a temporary measure. With per-user pools, this code needs to be replaced:
@@ -1717,11 +1744,17 @@ defer conn.ExecContext(ctx, "RESET SESSION AUTHORIZATION")
 - `go/multigateway/auth/pooler_hash_provider.go` - PasswordHashProvider via gRPC
 - `go/multigateway/auth/pooler_hash_provider_test.go` - Unit tests
 
-**Phase 4 (Pending):**
+**Phase 4 Part A (✅ Complete):**
+
+- `go/pgprotocol/auth/scram_crypto.go` - Added `ExtractAndVerifyClientProof()` for key extraction
+- `go/pgprotocol/auth/scram_client.go` - SCRAM client with password and passthrough modes
+- `go/pgprotocol/auth/scram_client_test.go` - Unit tests for SCRAM client and passthrough
+- `go/test/endtoend/scram_passthrough_test.go` - End-to-end test proving passthrough works
+
+**Phase 4 Part B (Pending):**
 
 - `go/multipooler/pool/user_pool_manager.go` - Per-user pool manager with lifecycle
 - `go/multipooler/pool/scram_key_cache.go` - SCRAM key caching for backend auth
-- `go/multipooler/pool/scram_client.go` - SCRAM client for pool connections to PostgreSQL
 
 **Phase 6 (Pending):**
 
@@ -1755,7 +1788,12 @@ defer conn.ExecContext(ctx, "RESET SESSION AUTHORIZATION")
 - `go/multipooler/executor/executor.go` - SET SESSION AUTHORIZATION implementation
 - `go/test/endtoend/multigateway_scram_test.go` - Test current_user returns auth user
 
-**Phase 4 (Pending):**
+**Phase 4 Part A (✅ Complete):**
+
+- `go/pgprotocol/auth/scram_crypto.go` - Added `ExtractAndVerifyClientProof()` for passthrough
+- `go/pgprotocol/auth/scram_crypto_test.go` - Added tests for key extraction
+
+**Phase 4 Part B (Pending):**
 
 - `go/multipooler/grpcpoolerservice/service.go` - Use per-user pool manager
 - `go/multipooler/executor/executor.go` - Remove SET SESSION AUTHORIZATION (not needed with per-user pools)

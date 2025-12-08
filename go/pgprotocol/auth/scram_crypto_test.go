@@ -249,6 +249,110 @@ func TestVerifyClientProof(t *testing.T) {
 	})
 }
 
+func TestExtractAndVerifyClientProof(t *testing.T) {
+	t.Run("extracts correct ClientKey from valid proof", func(t *testing.T) {
+		// Simulate a full SCRAM exchange
+		password := "pencil"
+		salt := []byte("testsalt")
+		iterations := 4096
+		authMessage := "n=user,r=clientnonce,r=clientnonce+servernonce,s=dGVzdHNhbHQ=,i=4096,c=biws,r=clientnonce+servernonce"
+
+		// Server side: compute stored values from password
+		saltedPassword := ComputeSaltedPassword(password, salt, iterations)
+		originalClientKey := ComputeClientKey(saltedPassword)
+		storedKey := ComputeStoredKey(originalClientKey)
+
+		// Client side: compute proof
+		clientSignature := ComputeClientSignature(storedKey, authMessage)
+		clientProof := ComputeClientProof(originalClientKey, clientSignature)
+
+		// Server side: extract ClientKey from proof
+		extractedClientKey, ok := ExtractAndVerifyClientProof(storedKey, authMessage, clientProof)
+
+		assert.True(t, ok, "proof should be valid")
+		assert.Equal(t, originalClientKey, extractedClientKey, "extracted ClientKey should match original")
+	})
+
+	t.Run("extracted ClientKey can be used for client-side SCRAM auth", func(t *testing.T) {
+		// This test validates the SCRAM passthrough mechanism:
+		// 1. Server verifies client and extracts ClientKey
+		// 2. Server uses extracted ClientKey to authenticate as client to another server
+
+		password := "testpassword123"
+		salt := []byte("randomsalt123456")
+		iterations := 4096
+
+		// === Phase 1: Client authenticates to multigateway ===
+		// Compute keys from password (what PostgreSQL stores)
+		saltedPassword := ComputeSaltedPassword(password, salt, iterations)
+		clientKey := ComputeClientKey(saltedPassword)
+		storedKey := ComputeStoredKey(clientKey)
+		serverKey := ComputeServerKey(saltedPassword)
+
+		// Client generates proof for first auth
+		clientNonce := "client-nonce-12345"
+		serverNoncePart := "server-nonce-67890"
+		combinedNonce := clientNonce + serverNoncePart
+		clientFirstBare := "n=user,r=" + clientNonce
+		serverFirst := "r=" + combinedNonce + ",s=" + base64.StdEncoding.EncodeToString(salt) + ",i=4096"
+		clientFinalWithoutProof := "c=biws,r=" + combinedNonce
+		authMessage1 := clientFirstBare + "," + serverFirst + "," + clientFinalWithoutProof
+
+		clientSignature1 := ComputeClientSignature(storedKey, authMessage1)
+		clientProof1 := ComputeClientProof(clientKey, clientSignature1)
+
+		// Server (multigateway) verifies and extracts ClientKey
+		extractedClientKey, ok := ExtractAndVerifyClientProof(storedKey, authMessage1, clientProof1)
+		require.True(t, ok, "first auth should succeed")
+
+		// === Phase 2: Use extracted keys for second SCRAM auth (to PostgreSQL) ===
+		// This simulates multipooler authenticating to PostgreSQL using extracted keys
+
+		// PostgreSQL sends new challenge with same salt/iterations
+		clientNonce2 := "pooler-client-nonce"
+		serverNoncePart2 := "pg-server-nonce"
+		combinedNonce2 := clientNonce2 + serverNoncePart2
+		clientFirstBare2 := "n=user,r=" + clientNonce2
+		serverFirst2 := "r=" + combinedNonce2 + ",s=" + base64.StdEncoding.EncodeToString(salt) + ",i=4096"
+		clientFinalWithoutProof2 := "c=biws,r=" + combinedNonce2
+		authMessage2 := clientFirstBare2 + "," + serverFirst2 + "," + clientFinalWithoutProof2
+
+		// Compute new proof using extracted ClientKey
+		// Note: StoredKey = H(ClientKey), so we compute it from the extracted key
+		extractedStoredKey := ComputeStoredKey(extractedClientKey)
+		clientSignature2 := ComputeClientSignature(extractedStoredKey, authMessage2)
+		clientProof2 := ComputeClientProof(extractedClientKey, clientSignature2)
+
+		// PostgreSQL verifies using its stored key (which should equal extractedStoredKey)
+		valid := VerifyClientProof(storedKey, authMessage2, clientProof2)
+		assert.True(t, valid, "second auth using extracted ClientKey should succeed")
+
+		// Also verify we can compute correct ServerSignature using passed ServerKey
+		expectedServerSig := ComputeServerSignature(serverKey, authMessage2)
+		assert.Len(t, expectedServerSig, 32, "server signature should be 32 bytes")
+	})
+
+	t.Run("returns nil for invalid proof", func(t *testing.T) {
+		storedKey := make([]byte, 32)
+		authMessage := "auth message"
+		invalidProof := []byte("this is not a valid proof!!!!!")
+
+		extractedKey, ok := ExtractAndVerifyClientProof(storedKey, authMessage, invalidProof)
+		assert.False(t, ok)
+		assert.Nil(t, extractedKey)
+	})
+
+	t.Run("returns nil for wrong-length proof", func(t *testing.T) {
+		storedKey := make([]byte, 32)
+		authMessage := "auth message"
+		shortProof := []byte("short")
+
+		extractedKey, ok := ExtractAndVerifyClientProof(storedKey, authMessage, shortProof)
+		assert.False(t, ok)
+		assert.Nil(t, extractedKey)
+	})
+}
+
 func TestFullScramExchange(t *testing.T) {
 	t.Run("complete SCRAM-SHA-256 exchange", func(t *testing.T) {
 		// This test simulates a complete SCRAM exchange

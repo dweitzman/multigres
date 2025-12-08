@@ -83,8 +83,25 @@ func ComputeServerSignature(serverKey []byte, authMessage string) []byte {
 //
 // This uses constant-time comparison to prevent timing attacks.
 func VerifyClientProof(storedKey []byte, authMessage string, clientProof []byte) bool {
+	_, ok := ExtractAndVerifyClientProof(storedKey, authMessage, clientProof)
+	return ok
+}
+
+// ExtractAndVerifyClientProof verifies the client's proof and extracts the ClientKey.
+// This is used for SCRAM key passthrough: after verifying a client, we can use the
+// extracted ClientKey to authenticate as that user to PostgreSQL.
+//
+// The verification process:
+// 1. Compute ClientSignature = HMAC(StoredKey, AuthMessage)
+// 2. Recover ClientKey = ClientProof XOR ClientSignature
+// 3. Compute RecoveredStoredKey = H(ClientKey)
+// 4. Verify RecoveredStoredKey == StoredKey
+//
+// Returns (clientKey, true) on success, (nil, false) on failure.
+// Uses constant-time comparison to prevent timing attacks.
+func ExtractAndVerifyClientProof(storedKey []byte, authMessage string, clientProof []byte) ([]byte, bool) {
 	if len(clientProof) != sha256Size {
-		return false
+		return nil, false
 	}
 
 	// Compute ClientSignature
@@ -97,7 +114,11 @@ func VerifyClientProof(storedKey []byte, authMessage string, clientProof []byte)
 	recoveredStoredKey := ComputeStoredKey(recoveredClientKey)
 
 	// Constant-time comparison to prevent timing attacks
-	return subtle.ConstantTimeCompare(storedKey, recoveredStoredKey) == 1
+	if subtle.ConstantTimeCompare(storedKey, recoveredStoredKey) != 1 {
+		return nil, false
+	}
+
+	return recoveredClientKey, true
 }
 
 // BuildAuthMessage constructs the AuthMessage for SCRAM.
