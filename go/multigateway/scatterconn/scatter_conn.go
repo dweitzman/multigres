@@ -122,8 +122,18 @@ func (sc *ScatterConn) StreamExecute(
 		"shard", shard,
 		"pooler_type", target.PoolerType.String())
 
-	if err := qs.StreamExecute(ctx, target, sql, eo, callback); err != nil {
+	reservedState, err := qs.StreamExecute(ctx, target, sql, eo, callback)
+	if err != nil {
 		return fmt.Errorf("query execution failed: %w", err)
+	}
+
+	// Store reserved connection state if the query started/continued a transaction
+	if reservedState.ReservedConnectionId != 0 {
+		state.StoreReservedConnection(target, reservedState)
+		sc.logger.DebugContext(ctx, "stored reserved connection from simple query",
+			"tablegroup", tableGroup,
+			"shard", shard,
+			"reserved_connection_id", reservedState.ReservedConnectionId)
 	}
 
 	sc.logger.DebugContext(ctx, "query execution completed successfully",

@@ -55,6 +55,11 @@ type Executor struct {
 
 	// connector creates connections for the user pool manager.
 	connector *userpool.Connector
+
+	// TODO: Add reserved connection tracking for transactions.
+	// When a query results in txnStatus='T' or 'E', the connection should be reserved
+	// and not returned to the pool until the transaction completes.
+	// Fields needed: reservedConnMu, reservedConns map, nextReservedConnID counter
 }
 
 // NewExecutor creates a new Executor instance.
@@ -173,27 +178,31 @@ func (e *Executor) ExecuteQuery(ctx context.Context, target *query.Target, sql s
 
 // StreamExecute executes a query and streams results back via callback.
 // This implements the queryservice.QueryService interface.
+// Returns ReservedState when the query starts or continues a transaction.
 func (e *Executor) StreamExecute(
 	ctx context.Context,
 	target *query.Target,
 	sql string,
 	options *query.ExecuteOptions,
 	callback func(context.Context, *query.QueryResult) error,
-) error {
+) (queryservice.ReservedState, error) {
 	// Execute the query and stream results
 	// TODO(GuptaManan100): Actually stream the results from postgres.
 	result, err := e.ExecuteQuery(ctx, target, sql, options)
 	if err != nil {
 		e.logger.ErrorContext(ctx, "query execution failed", "error", err, "query", sql)
-		return fmt.Errorf("query execution failed: %w", err)
+		return queryservice.ReservedState{}, fmt.Errorf("query execution failed: %w", err)
 	}
 
 	// Stream the result via callback
 	if err := callback(ctx, result); err != nil {
-		return err
+		return queryservice.ReservedState{}, err
 	}
 
-	return nil
+	// TODO: Implement reserved connection tracking for transactions
+	// When txnStatus is 'T' or 'E', return a ReservedState with connection ID
+	// For now, return empty state (no reservation)
+	return queryservice.ReservedState{}, nil
 }
 
 // Close closes the executor and releases resources.

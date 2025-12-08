@@ -57,7 +57,7 @@ func (s *poolerService) StreamExecute(req *multipoolerpb.StreamExecuteRequest, s
 	}
 
 	// Execute the query and stream results
-	err = executor.StreamExecute(stream.Context(), req.Target, req.Query, req.Options, func(ctx context.Context, result *querypb.QueryResult) error {
+	reservedState, execErr := executor.StreamExecute(stream.Context(), req.Target, req.Query, req.Options, func(ctx context.Context, result *querypb.QueryResult) error {
 		// Send the result back to the client
 		response := &multipoolerpb.StreamExecuteResponse{
 			Result: result,
@@ -65,7 +65,26 @@ func (s *poolerService) StreamExecute(req *multipoolerpb.StreamExecuteRequest, s
 		return stream.Send(response)
 	})
 
-	return err
+	// Send session state as the final message, even if there was an error.
+	// Following Vitess pattern: session state may have changed even on error,
+	// and client needs it to maintain connection state.
+	if reservedState.ReservedConnectionId != 0 {
+		sessionState := &multipoolerpb.SessionState{
+			ReservedConnectionId: reservedState.ReservedConnectionId,
+			PoolerId:             reservedState.PoolerID,
+		}
+		if sendErr := stream.Send(&multipoolerpb.StreamExecuteResponse{
+			SessionState: sessionState,
+		}); sendErr != nil {
+			// If we had an exec error, prefer returning that
+			if execErr != nil {
+				return execErr
+			}
+			return sendErr
+		}
+	}
+
+	return execErr
 }
 
 // ExecuteQuery executes a SQL query and returns the result

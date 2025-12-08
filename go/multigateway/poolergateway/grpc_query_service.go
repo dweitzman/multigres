@@ -60,13 +60,14 @@ func newGRPCQueryService(
 }
 
 // StreamExecute executes a query and streams results back via callback.
+// Returns ReservedState when the query starts or continues a transaction.
 func (g *grpcQueryService) StreamExecute(
 	ctx context.Context,
 	target *query.Target,
 	sql string,
 	options *query.ExecuteOptions,
 	callback func(context.Context, *query.QueryResult) error,
-) error {
+) (queryservice.ReservedState, error) {
 	g.logger.DebugContext(ctx, "streaming query execution",
 		"pooler_id", g.poolerID,
 		"tablegroup", target.TableGroup,
@@ -85,8 +86,10 @@ func (g *grpcQueryService) StreamExecute(
 	// Call the gRPC StreamExecute
 	stream, err := g.client.StreamExecute(ctx, req)
 	if err != nil {
-		return fmt.Errorf("failed to start stream execute: %w", err)
+		return queryservice.ReservedState{}, fmt.Errorf("failed to start stream execute: %w", err)
 	}
+
+	var reservedState queryservice.ReservedState
 
 	// Stream results back via callback
 	for {
@@ -94,10 +97,19 @@ func (g *grpcQueryService) StreamExecute(
 		if errors.Is(err, io.EOF) {
 			// Stream completed successfully
 			g.logger.DebugContext(ctx, "stream completed", "pooler_id", g.poolerID)
-			return nil
+			return reservedState, nil
 		}
 		if err != nil {
-			return fmt.Errorf("stream receive error: %w", err)
+			return reservedState, fmt.Errorf("stream receive error: %w", err)
+		}
+
+		// Extract session state (reserved connection info) if present
+		if ss := response.GetSessionState(); ss != nil && ss.GetReservedConnectionId() != 0 {
+			reservedState.ReservedConnectionId = ss.GetReservedConnectionId()
+			reservedState.PoolerID = ss.GetPoolerId()
+			g.logger.DebugContext(ctx, "received reserved connection",
+				"reserved_connection_id", ss.GetReservedConnectionId(),
+				"pooler_id", ss.GetPoolerId().String())
 		}
 
 		// Extract result from response
@@ -112,7 +124,7 @@ func (g *grpcQueryService) StreamExecute(
 			g.logger.DebugContext(ctx, "callback returned error, stopping stream",
 				"pooler_id", g.poolerID,
 				"error", err)
-			return err
+			return reservedState, err
 		}
 	}
 }
@@ -187,13 +199,13 @@ func (g *grpcQueryService) PortalStreamExecute(
 			return reservedState, fmt.Errorf("portal stream receive error: %w", err)
 		}
 
-		// Extract reserved state if present
-		if response.ReservedConnectionId != 0 {
-			reservedState.ReservedConnectionId = response.ReservedConnectionId
-			reservedState.PoolerID = response.PoolerId
+		// Extract session state (reserved connection info) if present
+		if ss := response.GetSessionState(); ss != nil && ss.GetReservedConnectionId() != 0 {
+			reservedState.ReservedConnectionId = ss.GetReservedConnectionId()
+			reservedState.PoolerID = ss.GetPoolerId()
 			g.logger.DebugContext(ctx, "received reserved connection",
-				"reserved_connection_id", response.ReservedConnectionId,
-				"pooler_id", response.PoolerId.String())
+				"reserved_connection_id", ss.GetReservedConnectionId(),
+				"pooler_id", ss.GetPoolerId().String())
 		}
 
 		// Extract result from response

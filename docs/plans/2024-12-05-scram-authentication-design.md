@@ -1854,6 +1854,132 @@ When a connection is returned to the pool, session state (role, search_path, tem
 - [ ] Reduce duplicate setup/teardown code across tests
 - [ ] Consider a test fixture pattern for common scenarios (user with roles, user isolation, etc.)
 
+**Connection reservation for transactions (2025-12-08) - IN PROGRESS:**
+
+The SET ROLE and ConnectionCleanup e2e tests are still failing because each query in a
+transaction gets a different backend connection. This happens because
+`executor.executeQueryWithSCRAMPassthrough()` does `defer ReturnConnection()` after each query.
+
+**How Vitess handles this ([vtgate.proto](https://github.com/vitessio/vitess/blob/main/proto/vtgate.proto)):**
+
+Vitess uses a **Session object** that flows through all requests and responses:
+
+```protobuf
+message Session {
+  bool in_transaction = 1;           // Currently in a transaction
+  bool in_reserved_conn = 17;        // Using a reserved connection
+  repeated ShardSession shard_sessions = 2;  // Per-shard state
+  // ...
+}
+
+message ShardSession {
+  query.Target target = 1;
+  int64 transaction_id = 2;
+  topodata.TabletAlias tablet_alias = 3;  // Which tablet (like our pooler_id)
+  int64 reserved_id = 4;                  // Reserved connection ID
+}
+```
+
+Every request includes `Session session` and every response returns the updated session.
+This "cookie-like" pattern ensures state propagates correctly.
+
+**Vitess reserved connection semantics:**
+
+- Reserved connections are used for transactions, temporary tables, advisory locks, system variables
+- Once reserved, connection stays reserved until session closes or explicit release
+- `reserved_id` in ShardSession identifies the specific connection at the vttablet
+- `tablet_alias` ensures routing to the correct tablet even after failover
+
+**Our current pattern vs Vitess:**
+
+| Aspect                   | Vitess                               | Multigres (current)                           |
+| ------------------------ | ------------------------------------ | --------------------------------------------- |
+| Session state storage    | Flows through requests/responses     | Stored in multigateway `ConnectionState`      |
+| Reserved connection ID   | In `ShardSession.reserved_id`        | In `ExecuteOptions.reserved_connection_id`    |
+| Transaction indicator    | `Session.in_transaction` bool        | `QueryResult.txn_status` byte from PostgreSQL |
+| Return session in stream | Yes, `StreamExecuteResponse.session` | No (gap!)                                     |
+
+**Key insight:** Our `StreamExecuteResponse` doesn't return reserved connection state. The
+extended query protocol (`PortalStreamExecuteResponse`) already has `reserved_connection_id`
+and `pooler_id` fields - we just need the same for simple query protocol.
+
+**Implementation approach (minimal change):**
+
+1. **Proto change (done):** Add `reserved_connection_id` and `pooler_id` to `StreamExecuteResponse`
+2. **QueryService interface:** Change `StreamExecute` to return `(ReservedState, error)`
+3. **Multipooler executor:** Track reserved connections, don't return to pool during transaction
+4. **Multigateway:** Store reserved state from `StreamExecute` responses
+
+**What we're keeping similar to Vitess:**
+
+- Per-shard tracking of reserved connections (`ShardState` ≈ `ShardSession`)
+- Using `reserved_connection_id` in requests to route to specific connection
+- Pooler ID / tablet alias for routing to correct instance
+
+**What we're doing differently:**
+
+- Not implementing full Session object (would be larger refactor)
+- Using PostgreSQL's `txn_status` byte rather than tracking `in_transaction` bool ourselves
+- Simpler model: reserved connections released when txn_status returns to 'I'
+
+**How Vitess implements reserved connections (from [scatter_conn.go](https://github.com/vitessio/vitess/blob/main/go/vt/vtgate/scatter_conn.go)):**
+
+Vitess has explicit query service methods for different scenarios:
+
+```go
+// From scatter_conn.go lines 230-265:
+case reserve:
+    state, innerqr, err = qs.ReserveExecute(ctx, rs.Target, session.SetPreQueries(),
+        queries[i].Sql, queries[i].BindVariables, transactionID, opts)
+    reservedID = state.ReservedID  // Gets reserved ID from tablet response
+    alias = state.TabletAlias
+
+case begin:
+    state, innerqr, err = qs.BeginExecute(ctx, rs.Target, session.SavePoints(),
+        queries[i].Sql, queries[i].BindVariables, reservedID, opts)
+    transactionID = state.TransactionID
+    alias = state.TabletAlias
+
+case reserveBegin:
+    state, innerqr, err = qs.ReserveBeginExecute(ctx, rs.Target, session.SetPreQueries(),
+        session.SavePoints(), queries[i].Sql, queries[i].BindVariables, opts)
+    transactionID = state.TransactionID
+    reservedID = state.ReservedID
+    alias = state.TabletAlias
+```
+
+After execution, the session is updated:
+
+```go
+newInfo := info.updateTransactionAndReservedID(transactionID, reservedID, alias, innerqr)
+// This updates shardActionInfo, which gets stored in SafeSession.ShardSessions
+```
+
+The `shardActionInfo` struct carries state between request and response:
+
+```go
+type shardActionInfo struct {
+    actionNeeded              actionNeeded
+    reservedID, transactionID int64
+    alias                     *topodatapb.TabletAlias
+    ignoreOldSession          bool
+    rowsAffected              bool
+}
+```
+
+**Key differences in our approach:**
+
+| Aspect                | Vitess                                             | Multigres                                   |
+| --------------------- | -------------------------------------------------- | ------------------------------------------- |
+| Transaction detection | Explicit `BeginExecute`, tracks `InTransaction`    | Implicit via PostgreSQL `txn_status` byte   |
+| Reserve semantics     | Explicit `ReserveExecute` for system vars, locks   | Implicit - reserve when `txn_status` is 'T' |
+| Release trigger       | Explicit commit/rollback                           | Automatic when `txn_status` returns to 'I'  |
+| Method signatures     | Multiple methods (`Execute`, `BeginExecute`, etc.) | Single `StreamExecute` with options         |
+
+Our simpler model relies on PostgreSQL's authoritative transaction state rather than tracking
+it ourselves. This reduces complexity but means we can't distinguish between "reserved for
+transaction" and "reserved for other reasons" (temp tables, locks). For now, that's acceptable.
+
 ---
 
 ## Critical Files

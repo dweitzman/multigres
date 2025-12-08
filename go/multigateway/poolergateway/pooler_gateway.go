@@ -127,11 +127,11 @@ func (pg *PoolerGateway) StreamExecute(
 	sql string,
 	options *query.ExecuteOptions,
 	callback func(context.Context, *query.QueryResult) error,
-) error {
+) (queryservice.ReservedState, error) {
 	// Get a pooler matching the target
 	queryService, err := pg.getQueryServiceForTarget(ctx, target)
 	if err != nil {
-		return err
+		return queryservice.ReservedState{}, err
 	}
 
 	// Delegate to the pooler's QueryService

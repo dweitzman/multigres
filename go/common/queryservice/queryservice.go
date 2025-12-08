@@ -65,6 +65,11 @@ type QueryService interface {
 	// The callback will be called for each QueryResult. If the callback returns
 	// an error, streaming stops and that error is returned.
 	//
+	// Returns ReservedState when the query starts or continues a transaction.
+	// The caller should store this state to ensure subsequent queries in the
+	// same transaction use the same backend connection. When txn_status in the
+	// result is 'I' (idle), the reserved connection is released automatically.
+	//
 	// The context can be used to cancel the stream.
 	StreamExecute(
 		ctx context.Context,
@@ -72,7 +77,7 @@ type QueryService interface {
 		sql string,
 		options *query.ExecuteOptions,
 		callback func(context.Context, *query.QueryResult) error,
-	) error
+	) (ReservedState, error)
 
 	// PortalStreamExecute executes a portal (bound prepared statement) and streams results back via callback.
 	// Returns ReservedState containing information about the reserved connection used for this execution.
