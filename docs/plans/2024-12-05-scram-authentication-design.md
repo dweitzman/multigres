@@ -286,9 +286,107 @@ Based on prior art, multigres should support:
 - Shrink idle pools after timeout
 - Auto-size based on PostgreSQL `max_connections`
 
+#### Backend Authentication: SCRAM Key Passthrough
+
+**The problem:** With per-user pools, multipooler needs to authenticate to PostgreSQL as each user. But:
+
+- SCRAM authentication never transmits the plaintext password (only proofs)
+- We only have the SCRAM hash from `pg_authid`, not the password
+- Storing plaintext passwords is a security risk
+
+**How PgBouncer solves this** ([source](https://github.com/pgbouncer/pgbouncer/blob/master/src/scram.c)):
+
+PgBouncer extracts SCRAM keys from the client's authentication proof:
+
+```c
+/* Extract the ClientKey that the client calculated from the proof */
+for (i = 0; i < state->key_length; i++)
+    state->ClientKey[i] = ClientProof[i] ^ ClientSignature[i];
+```
+
+This works because:
+
+1. `ClientProof = ClientKey XOR ClientSignature`
+2. PgBouncer has `StoredKey` (from auth_file/auth_query hash)
+3. PgBouncer computes `ClientSignature = HMAC(StoredKey, AuthMessage)`
+4. Therefore: `ClientKey = ClientProof XOR ClientSignature`
+
+Once PgBouncer has `ClientKey` and `ServerKey`, it can perform SCRAM authentication to PostgreSQL **without the plaintext password**.
+
+**Multigres SCRAM passthrough design:**
+
+```
+┌─────────┐      SCRAM       ┌─────────────┐     gRPC + Keys      ┌────────────┐      SCRAM       ┌────────────┐
+│  Client │ ◄──────────────► │ Multigateway │ ─────────────────► │ Multipooler │ ◄──────────────► │ PostgreSQL │
+└─────────┘                  └─────────────┘                     └────────────┘                  └────────────┘
+     │                              │                                   │                              │
+     │ 1. ClientProof              │                                   │                              │
+     ├────────────────────────────►│                                   │                              │
+     │                              │ 2. Extract ClientKey              │                              │
+     │                              │    from proof + stored hash       │                              │
+     │                              │                                   │                              │
+     │                              │ 3. Pass ClientKey/ServerKey       │                              │
+     │                              ├──────────────────────────────────►│                              │
+     │                              │    with CallerID via gRPC         │                              │
+     │                              │                                   │                              │
+     │                              │                                   │ 4. Create pool connection    │
+     │                              │                                   │    using cached SCRAM keys   │
+     │                              │                                   ├─────────────────────────────►│
+     │                              │                                   │                              │
+```
+
+**Implementation steps:**
+
+1. **Multigateway SCRAM auth**: During client authentication, extract `ClientKey` and `ServerKey` from the client's SCRAM proof (same technique as PgBouncer)
+
+2. **Key transmission**: Include SCRAM keys in gRPC requests to multipooler:
+
+   ```protobuf
+   message CallerID {
+     string principal = 1;
+     bytes scram_client_key = 2;  // For backend SCRAM auth
+     bytes scram_server_key = 3;
+   }
+   ```
+
+3. **Per-user pool creation**: When multipooler needs a new connection for user X:
+   - Use cached SCRAM keys to perform SCRAM-SHA-256 auth to PostgreSQL
+   - Connection authenticates as user X (not a superuser)
+   - No plaintext password needed
+
+4. **Key caching**: Multipooler caches SCRAM keys per user for pool connections
+
+**Benefits:**
+
+- True per-user pools with actual PostgreSQL authentication
+- No plaintext password storage or transmission
+- No trust authentication needed from multipooler
+- Matches PgBouncer's proven approach
+
+**Pool lifecycle with SCRAM passthrough:**
+
+| Event                         | Action                                               |
+| ----------------------------- | ---------------------------------------------------- |
+| First request for user X      | Create pool, use SCRAM keys to establish connections |
+| Subsequent requests           | Reuse existing pool connections                      |
+| Pool idle timeout             | Close idle connections, keep keys cached             |
+| User pool empty + idle        | Garbage collect pool and cached keys                 |
+| Global connection cap reached | Evict LRU idle connection from any pool              |
+
+**Security considerations:**
+
+- SCRAM keys are sensitive (equivalent to password for this session)
+- Keys should be encrypted in transit (gRPC TLS)
+- Keys should have limited lifetime (tied to client session or pool lifetime)
+- This aligns with long-term vision of signed tokens for cross-pooler auth
+
 ---
 
 ### Decision 3: Stored Procedure Escape Vector
+
+**Note:** With per-user pools using SCRAM passthrough, this security concern is **largely mitigated**. Since connections authenticate as the actual user (not a superuser), `RESET SESSION AUTHORIZATION` simply resets to that user. There's no superuser to escalate to.
+
+The analysis below applies only if we later implement shared pools with SET SESSION AUTHORIZATION.
 
 **The problem:** A stored procedure could contain `RESET SESSION AUTHORIZATION` that the proxy never sees.
 
