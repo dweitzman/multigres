@@ -298,3 +298,197 @@ func TestMultiGateway_SessionAuthorizationSandbox(t *testing.T) {
 			"Detail should contain permission denied, got: %q", pqErr.Detail)
 	})
 }
+
+// TestMultiGateway_ConnectionPoolReuse tests that connections are reused within a user's pool.
+// This verifies the per-user connection pooling is working correctly by connecting,
+// disconnecting, and reconnecting - the backend PID should remain the same.
+func TestMultiGateway_ConnectionPoolReuse(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping connection pool reuse test in short mode")
+	}
+	if utils.ShouldSkipRealPostgres() {
+		t.Skip("PostgreSQL binaries not found, skipping test")
+	}
+
+	// Setup full test cluster
+	cluster := setupTestCluster(t)
+	t.Cleanup(cluster.Cleanup)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
+	// Connect to multipooler via gRPC to create test user
+	poolerAddr := fmt.Sprintf("localhost:%d", cluster.PortConfig.Zones[0].MultipoolerGRPCPort)
+	poolerClient, err := NewMultiPoolerTestClient(poolerAddr)
+	require.NoError(t, err, "failed to connect to multipooler via gRPC")
+	defer poolerClient.Close()
+
+	// Create a test user
+	testUser := fmt.Sprintf("poolreuse_%d", time.Now().UnixNano())
+	testPassword := "poolreuse_password_123" //nolint:gosec // Test credentials for e2e test
+
+	_, err = poolerClient.ExecuteQuery(ctx, fmt.Sprintf("CREATE USER %s WITH PASSWORD '%s'", testUser, testPassword), 0)
+	require.NoError(t, err, "failed to create test user")
+
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		_, _ = poolerClient.ExecuteQuery(cleanupCtx, fmt.Sprintf("DROP USER IF EXISTS %s", testUser), 0)
+	})
+
+	_, err = poolerClient.ExecuteQuery(ctx, fmt.Sprintf("GRANT CONNECT ON DATABASE postgres TO %s", testUser), 0)
+	require.NoError(t, err, "failed to grant connect privilege")
+
+	userConnStr := fmt.Sprintf("host=localhost port=%d user=%s password=%s dbname=postgres sslmode=disable connect_timeout=5",
+		cluster.PortConfig.Zones[0].MultigatewayPGPort, testUser, testPassword)
+
+	// First connection - get backend PID
+	userDB1, err := sql.Open("postgres", userConnStr)
+	require.NoError(t, err, "failed to open first connection")
+	userDB1.SetMaxOpenConns(1)
+
+	var pid1 int
+	err = userDB1.QueryRowContext(ctx, "SELECT pg_backend_pid()").Scan(&pid1)
+	require.NoError(t, err, "first pg_backend_pid query should succeed")
+	require.NotZero(t, pid1, "backend PID should not be zero")
+
+	// Close the first connection - this returns it to multipooler's pool
+	userDB1.Close()
+
+	// Second connection - should reuse the same backend connection from multipooler's pool
+	userDB2, err := sql.Open("postgres", userConnStr)
+	require.NoError(t, err, "failed to open second connection")
+	defer userDB2.Close()
+	userDB2.SetMaxOpenConns(1)
+
+	var pid2 int
+	err = userDB2.QueryRowContext(ctx, "SELECT pg_backend_pid()").Scan(&pid2)
+	require.NoError(t, err, "second pg_backend_pid query should succeed")
+
+	// The backend PID should be the same - proving multipooler reused the connection
+	assert.Equal(t, pid1, pid2,
+		"backend PID should be the same after reconnect (got %d then %d), proving pool reuse", pid1, pid2)
+
+	// Third connection - verify pool continues to work
+	userDB2.Close()
+	userDB3, err := sql.Open("postgres", userConnStr)
+	require.NoError(t, err, "failed to open third connection")
+	defer userDB3.Close()
+	userDB3.SetMaxOpenConns(1)
+
+	var pid3 int
+	err = userDB3.QueryRowContext(ctx, "SELECT pg_backend_pid()").Scan(&pid3)
+	require.NoError(t, err, "third pg_backend_pid query should succeed")
+	assert.Equal(t, pid1, pid3,
+		"backend PID should still be the same on third reconnect (got %d)", pid3)
+}
+
+// TestMultiGateway_UserIsolation tests that users cannot access each other's objects.
+// This verifies that per-user pools maintain proper security isolation.
+func TestMultiGateway_UserIsolation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping user isolation test in short mode")
+	}
+	if utils.ShouldSkipRealPostgres() {
+		t.Skip("PostgreSQL binaries not found, skipping test")
+	}
+
+	// Setup full test cluster
+	cluster := setupTestCluster(t)
+	t.Cleanup(cluster.Cleanup)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
+	// Connect to multipooler via gRPC to create test users
+	poolerAddr := fmt.Sprintf("localhost:%d", cluster.PortConfig.Zones[0].MultipoolerGRPCPort)
+	poolerClient, err := NewMultiPoolerTestClient(poolerAddr)
+	require.NoError(t, err, "failed to connect to multipooler via gRPC")
+	defer poolerClient.Close()
+
+	// Create two test users
+	timestamp := time.Now().UnixNano()
+	userAlice := fmt.Sprintf("alice_%d", timestamp)
+	userBob := fmt.Sprintf("bob_%d", timestamp)
+	password := "test_password_123"
+
+	for _, user := range []string{userAlice, userBob} {
+		_, err = poolerClient.ExecuteQuery(ctx, fmt.Sprintf("CREATE USER %s WITH PASSWORD '%s'", user, password), 0)
+		require.NoError(t, err, "failed to create user %s", user)
+		_, err = poolerClient.ExecuteQuery(ctx, fmt.Sprintf("GRANT CONNECT ON DATABASE postgres TO %s", user), 0)
+		require.NoError(t, err, "failed to grant connect to %s", user)
+	}
+
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		// Drop tables first (as superuser)
+		_, _ = poolerClient.ExecuteQuery(cleanupCtx, fmt.Sprintf("DROP TABLE IF EXISTS %s_secret", userAlice), 0)
+		_, _ = poolerClient.ExecuteQuery(cleanupCtx, fmt.Sprintf("DROP TABLE IF EXISTS %s_secret", userBob), 0)
+		// Then drop users
+		_, _ = poolerClient.ExecuteQuery(cleanupCtx, fmt.Sprintf("DROP USER IF EXISTS %s", userAlice), 0)
+		_, _ = poolerClient.ExecuteQuery(cleanupCtx, fmt.Sprintf("DROP USER IF EXISTS %s", userBob), 0)
+	})
+
+	// Grant CREATE permission on public schema to both users
+	_, err = poolerClient.ExecuteQuery(ctx, fmt.Sprintf("GRANT CREATE ON SCHEMA public TO %s, %s", userAlice, userBob), 0)
+	require.NoError(t, err, "failed to grant CREATE on public schema")
+
+	// Connect as Alice and create a table with secret data
+	aliceConnStr := fmt.Sprintf("host=localhost port=%d user=%s password=%s dbname=postgres sslmode=disable connect_timeout=5",
+		cluster.PortConfig.Zones[0].MultigatewayPGPort, userAlice, password)
+	aliceDB, err := sql.Open("postgres", aliceConnStr)
+	require.NoError(t, err, "failed to open Alice's connection")
+	defer aliceDB.Close()
+
+	// Alice creates her secret table
+	_, err = aliceDB.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s_secret (data TEXT)", userAlice))
+	require.NoError(t, err, "Alice should be able to create her table")
+
+	_, err = aliceDB.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s_secret VALUES ('alice_secret_data')", userAlice))
+	require.NoError(t, err, "Alice should be able to insert into her table")
+
+	// Verify Alice can read her own data
+	var aliceData string
+	err = aliceDB.QueryRowContext(ctx, fmt.Sprintf("SELECT data FROM %s_secret", userAlice)).Scan(&aliceData)
+	require.NoError(t, err, "Alice should be able to read her own table")
+	assert.Equal(t, "alice_secret_data", aliceData)
+
+	// Connect as Bob
+	bobConnStr := fmt.Sprintf("host=localhost port=%d user=%s password=%s dbname=postgres sslmode=disable connect_timeout=5",
+		cluster.PortConfig.Zones[0].MultigatewayPGPort, userBob, password)
+	bobDB, err := sql.Open("postgres", bobConnStr)
+	require.NoError(t, err, "failed to open Bob's connection")
+	defer bobDB.Close()
+
+	// Verify Bob's identity
+	var currentUser string
+	err = bobDB.QueryRowContext(ctx, "SELECT current_user").Scan(&currentUser)
+	require.NoError(t, err, "Bob should be able to query current_user")
+	assert.Equal(t, userBob, currentUser, "Bob should be connected as himself")
+
+	// Bob should NOT be able to read Alice's table (permission denied)
+	var bobReadAttempt string
+	err = bobDB.QueryRowContext(ctx, fmt.Sprintf("SELECT data FROM %s_secret", userAlice)).Scan(&bobReadAttempt)
+	require.Error(t, err, "Bob should NOT be able to read Alice's table")
+
+	// Verify the error indicates permission denied (PostgreSQL returns this in Detail)
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		assert.Contains(t, pqErr.Detail, "permission denied",
+			"error detail should contain permission denied, got: %q", pqErr.Detail)
+	}
+
+	// Bob should NOT be able to modify Alice's table
+	_, err = bobDB.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s_secret VALUES ('bob_injection')", userAlice))
+	require.Error(t, err, "Bob should NOT be able to insert into Alice's table")
+
+	// Bob should NOT be able to drop Alice's table
+	_, err = bobDB.ExecContext(ctx, fmt.Sprintf("DROP TABLE %s_secret", userAlice))
+	require.Error(t, err, "Bob should NOT be able to drop Alice's table")
+
+	// Verify Alice's data is still intact
+	err = aliceDB.QueryRowContext(ctx, fmt.Sprintf("SELECT data FROM %s_secret", userAlice)).Scan(&aliceData)
+	require.NoError(t, err, "Alice's table should still exist")
+	assert.Equal(t, "alice_secret_data", aliceData, "Alice's data should be unchanged")
+}
