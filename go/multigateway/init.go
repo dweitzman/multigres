@@ -21,6 +21,7 @@ package multigateway
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -43,6 +44,8 @@ type MultiGateway struct {
 	serviceID viperutil.Value[string]
 	// pgPort is the PostgreSQL protocol listen port
 	pgPort viperutil.Value[int]
+	// credentialCacheTTL is how long to cache password hashes before re-fetching
+	credentialCacheTTL viperutil.Value[time.Duration]
 	// poolerDiscovery handles discovery of multipoolers
 	poolerDiscovery *PoolerDiscovery
 	// poolerGateway manages connections to poolers
@@ -85,6 +88,12 @@ func NewMultiGateway() *MultiGateway {
 			Dynamic:  false,
 			EnvVars:  []string{"MT_PG_PORT"},
 		}),
+		credentialCacheTTL: viperutil.Configure(reg, "credential-cache-ttl", viperutil.Options[time.Duration]{
+			Default:  5 * time.Minute,
+			FlagName: "credential-cache-ttl",
+			Dynamic:  false,
+			EnvVars:  []string{"MT_CREDENTIAL_CACHE_TTL"},
+		}),
 		grpcServer: servenv.NewGrpcServer(reg),
 		senv:       servenv.NewServEnv(reg),
 		topoConfig: topoclient.NewTopoConfig(reg),
@@ -115,10 +124,12 @@ func (mg *MultiGateway) RegisterFlags(fs *pflag.FlagSet) {
 	fs.String("cell", mg.cell.Default(), "cell to use")
 	fs.String("service-id", mg.serviceID.Default(), "optional service ID (if empty, a random ID will be generated)")
 	fs.Int("pg-port", mg.pgPort.Default(), "PostgreSQL protocol listen port")
+	fs.Duration("credential-cache-ttl", mg.credentialCacheTTL.Default(), "how long to cache credential hashes before re-fetching from multipooler")
 	viperutil.BindFlags(fs,
 		mg.cell,
 		mg.serviceID,
 		mg.pgPort,
+		mg.credentialCacheTTL,
 	)
 	mg.senv.RegisterFlags(fs)
 	mg.grpcServer.RegisterFlags(fs)
@@ -154,8 +165,9 @@ func (mg *MultiGateway) Init() {
 	mg.executor = executor.NewExecutor(mg.scatterConn, logger)
 
 	// Create password hash provider for SCRAM-SHA-256 authentication
-	// This fetches credentials from multipooler via gRPC
-	passwordHashProvider := auth.NewPoolerHashProvider(mg.poolerGateway)
+	// This fetches credentials from multipooler via gRPC, with caching
+	poolerHashProvider := auth.NewPoolerHashProvider(mg.poolerGateway)
+	passwordHashProvider := auth.NewCredentialCache(poolerHashProvider, mg.credentialCacheTTL.Get())
 
 	// Create and start PostgreSQL protocol listener
 	pgHandler := handler.NewMultiGatewayHandler(mg.executor, logger)
