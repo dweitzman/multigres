@@ -25,6 +25,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -56,17 +57,29 @@ type Executor struct {
 	// connector creates connections for the user pool manager.
 	connector *userpool.Connector
 
-	// TODO: Add reserved connection tracking for transactions.
-	// When a query results in txnStatus='T' or 'E', the connection should be reserved
-	// and not returned to the pool until the transaction completes.
-	// Fields needed: reservedConnMu, reservedConns map, nextReservedConnID counter
+	// Reserved connection tracking for transactions.
+	// When a query results in txnStatus='T' or 'E', the connection is reserved
+	// and not returned to the pool until the transaction completes (txnStatus='I').
+	reservedConnMu     sync.Mutex
+	reservedConns      map[uint64]*reservedConnection
+	nextReservedConnID atomic.Uint64
+}
+
+// reservedConnection holds a connection that is reserved for a transaction.
+type reservedConnection struct {
+	pooledConn *userpool.PooledConnection[*userpool.PoolConnection]
+	username   string
+	// SCRAM keys needed if we need to reconnect
+	clientKey []byte
+	serverKey []byte
 }
 
 // NewExecutor creates a new Executor instance.
 func NewExecutor(logger *slog.Logger, dbConfig *DBConfig) *Executor {
 	return &Executor{
-		logger:   logger,
-		dbConfig: dbConfig,
+		logger:        logger,
+		dbConfig:      dbConfig,
+		reservedConns: make(map[uint64]*reservedConnection),
 	}
 }
 
@@ -186,22 +199,139 @@ func (e *Executor) StreamExecute(
 	options *query.ExecuteOptions,
 	callback func(context.Context, *query.QueryResult) error,
 ) (queryservice.ReservedState, error) {
-	// Execute the query and stream results
-	// TODO(GuptaManan100): Actually stream the results from postgres.
-	result, err := e.ExecuteQuery(ctx, target, sql, options)
+	if target == nil {
+		target = &query.Target{}
+	}
+
+	// Extract caller info and SCRAM keys from options
+	var maxRows uint64
+	var callerID string
+	var scramClientKey, scramServerKey []byte
+	var reservedConnID uint64
+
+	if options != nil {
+		maxRows = options.MaxRows
+		reservedConnID = options.ReservedConnectionId
+		if options.CallerId != nil {
+			if options.CallerId.Principal != "" {
+				callerID = options.CallerId.Principal
+			}
+			scramClientKey = options.CallerId.ScramClientKey
+			scramServerKey = options.CallerId.ScramServerKey
+		}
+	}
+
+	// For non-SCRAM queries (admin queries), delegate to ExecuteQuery
+	// These don't support transactions in this implementation
+	if callerID == "" || len(scramClientKey) == 0 || len(scramServerKey) == 0 {
+		// TODO(GuptaManan100): Actually stream the results from postgres.
+		result, err := e.ExecuteQuery(ctx, target, sql, options)
+		if err != nil {
+			e.logger.ErrorContext(ctx, "query execution failed", "error", err, "query", sql)
+			return queryservice.ReservedState{}, fmt.Errorf("query execution failed: %w", err)
+		}
+		if err := callback(ctx, result); err != nil {
+			return queryservice.ReservedState{}, err
+		}
+		return queryservice.ReservedState{}, nil
+	}
+
+	// For SCRAM-authenticated queries, handle reserved connections for transactions
+	return e.streamExecuteWithReservation(ctx, sql, callerID, scramClientKey, scramServerKey, maxRows, reservedConnID, callback)
+}
+
+// streamExecuteWithReservation executes a query with transaction-aware connection handling.
+// It uses an existing reserved connection if one is provided, otherwise gets a new connection.
+// Based on the transaction status after execution, it either:
+// - Reserves the connection (txnStatus='T' or 'E') and returns a ReservedState
+// - Returns the connection to the pool (txnStatus='I')
+func (e *Executor) streamExecuteWithReservation(
+	ctx context.Context,
+	sql string,
+	username string,
+	clientKey, serverKey []byte,
+	maxRows uint64,
+	reservedConnID uint64,
+	callback func(context.Context, *query.QueryResult) error,
+) (queryservice.ReservedState, error) {
+	var pooledConn *userpool.PooledConnection[*userpool.PoolConnection]
+	var isNewConnection bool
+
+	// Check if we should use an existing reserved connection
+	if reservedConnID != 0 {
+		reserved := e.getReservedConnection(reservedConnID)
+		if reserved == nil {
+			return queryservice.ReservedState{}, fmt.Errorf("reserved connection %d not found", reservedConnID)
+		}
+		pooledConn = reserved.pooledConn
+		e.logger.DebugContext(ctx, "using reserved connection",
+			"reserved_id", reservedConnID,
+			"username", username)
+	} else {
+		// Get a new connection from the user's pool
+		keys := &userpool.SCRAMKeys{
+			ClientKey: clientKey,
+			ServerKey: serverKey,
+		}
+		var err error
+		pooledConn, err = e.userPoolManager.GetConnection(ctx, username, keys, e.connector.ConnectFunc())
+		if err != nil {
+			return queryservice.ReservedState{}, fmt.Errorf("failed to get connection for user %q: %w", username, err)
+		}
+		isNewConnection = true
+		e.logger.DebugContext(ctx, "using new connection from pool", "username", username)
+	}
+
+	// Execute the query
+	result, err := e.executeQueryOnPoolConn(ctx, pooledConn.Conn, sql, maxRows)
 	if err != nil {
-		e.logger.ErrorContext(ctx, "query execution failed", "error", err, "query", sql)
+		// On error, return connection to pool if it was new (not reserved)
+		if isNewConnection {
+			e.userPoolManager.ReturnConnection(ctx, pooledConn)
+		}
 		return queryservice.ReservedState{}, fmt.Errorf("query execution failed: %w", err)
 	}
 
 	// Stream the result via callback
 	if err := callback(ctx, result); err != nil {
+		// On callback error, return connection to pool if it was new
+		if isNewConnection {
+			e.userPoolManager.ReturnConnection(ctx, pooledConn)
+		}
 		return queryservice.ReservedState{}, err
 	}
 
-	// TODO: Implement reserved connection tracking for transactions
-	// When txnStatus is 'T' or 'E', return a ReservedState with connection ID
-	// For now, return empty state (no reservation)
+	// Check transaction status to determine if we need to reserve the connection
+	txnStatus := byte('I') // Default to idle
+	if len(result.TxnStatus) > 0 {
+		txnStatus = result.TxnStatus[0]
+	}
+
+	// Transaction status: 'I' = idle, 'T' = in transaction, 'E' = in failed transaction
+	if txnStatus == 'T' || txnStatus == 'E' {
+		// In a transaction - reserve the connection
+		if reservedConnID != 0 {
+			// Already reserved, return same ID
+			return queryservice.ReservedState{
+				ReservedConnectionId: reservedConnID,
+			}, nil
+		}
+		// New connection, reserve it
+		newID := e.reserveConnection(pooledConn, username, clientKey, serverKey)
+		return queryservice.ReservedState{
+			ReservedConnectionId: newID,
+		}, nil
+	}
+
+	// Not in a transaction (txnStatus='I')
+	if reservedConnID != 0 {
+		// Had a reserved connection but transaction is done - release it
+		e.releaseReservedConnection(ctx, reservedConnID)
+	} else if isNewConnection {
+		// New connection and no transaction - return to pool
+		e.userPoolManager.ReturnConnection(ctx, pooledConn)
+	}
+
 	return queryservice.ReservedState{}, nil
 }
 
@@ -211,7 +341,17 @@ func (e *Executor) Close(ctx context.Context) error {
 		return nil
 	}
 
-	// Close user pool manager first (closes all per-user connection pools)
+	// Close all reserved connections first
+	e.reservedConnMu.Lock()
+	for id, reserved := range e.reservedConns {
+		if reserved.pooledConn != nil {
+			reserved.pooledConn.Conn.Close()
+		}
+		delete(e.reservedConns, id)
+	}
+	e.reservedConnMu.Unlock()
+
+	// Close user pool manager (closes all per-user connection pools)
 	if e.userPoolManager != nil {
 		if err := e.userPoolManager.Close(); err != nil {
 			e.logger.WarnContext(ctx, "Executor: error closing user pool manager", "error", err)
@@ -237,6 +377,63 @@ func (e *Executor) Close(ctx context.Context) error {
 
 	e.logger.InfoContext(ctx, "Executor: closed")
 	return nil
+}
+
+// getReservedConnection returns a reserved connection by ID.
+// Returns nil if the connection doesn't exist.
+func (e *Executor) getReservedConnection(id uint64) *reservedConnection {
+	e.reservedConnMu.Lock()
+	defer e.reservedConnMu.Unlock()
+	return e.reservedConns[id]
+}
+
+// reserveConnection reserves a pooled connection and returns its ID.
+// The connection will not be returned to the pool until released.
+func (e *Executor) reserveConnection(
+	pooledConn *userpool.PooledConnection[*userpool.PoolConnection],
+	username string,
+	clientKey, serverKey []byte,
+) uint64 {
+	id := e.nextReservedConnID.Add(1)
+
+	e.reservedConnMu.Lock()
+	defer e.reservedConnMu.Unlock()
+
+	e.reservedConns[id] = &reservedConnection{
+		pooledConn: pooledConn,
+		username:   username,
+		clientKey:  clientKey,
+		serverKey:  serverKey,
+	}
+
+	e.logger.Debug("reserved connection for transaction",
+		"reserved_id", id,
+		"username", username)
+
+	return id
+}
+
+// releaseReservedConnection releases a reserved connection back to the pool.
+// Called when a transaction completes (txnStatus='I').
+func (e *Executor) releaseReservedConnection(ctx context.Context, id uint64) {
+	e.reservedConnMu.Lock()
+	reserved, exists := e.reservedConns[id]
+	if exists {
+		delete(e.reservedConns, id)
+	}
+	e.reservedConnMu.Unlock()
+
+	if !exists {
+		e.logger.WarnContext(ctx, "attempted to release non-existent reserved connection",
+			"reserved_id", id)
+		return
+	}
+
+	// Return the connection to its pool
+	e.userPoolManager.ReturnConnection(ctx, reserved.pooledConn)
+	e.logger.DebugContext(ctx, "released reserved connection",
+		"reserved_id", id,
+		"username", reserved.username)
 }
 
 // PortalStreamExecute executes a portal and streams results back via callback.
