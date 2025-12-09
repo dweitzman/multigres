@@ -1767,7 +1767,8 @@ client := auth.NewSCRAMClientWithKeys(username, clientKey, serverKey)
 **Remaining work:**
 
 - [x] Transaction status tracking in multigateway ✅ Completed 2025-12-08
-- [ ] Connection reservation for transactions (blocks SET ROLE/ConnectionCleanup e2e tests)
+- [x] Connection reservation for transactions (basic support) ✅ Completed 2025-12-09
+- [ ] Session state tracking for SET ROLE support (blocks SET ROLE/ConnectionCleanup e2e tests)
 - [ ] Test credential cache behavior under load
 - [ ] Performance benchmarks vs trust auth baseline
 
@@ -1854,11 +1855,11 @@ When a connection is returned to the pool, session state (role, search_path, tem
 - [ ] Reduce duplicate setup/teardown code across tests
 - [ ] Consider a test fixture pattern for common scenarios (user with roles, user isolation, etc.)
 
-**Connection reservation for transactions (2025-12-08) - IN PROGRESS:**
+**Connection reservation for transactions (2025-12-08 → 2025-12-09) - MOSTLY COMPLETE:**
 
-The SET ROLE and ConnectionCleanup e2e tests are still failing because each query in a
-transaction gets a different backend connection. This happens because
-`executor.executeQueryWithSCRAMPassthrough()` does `defer ReturnConnection()` after each query.
+**Update 2025-12-09:** Core transaction support is complete. Basic transactions (BEGIN/COMMIT/ROLLBACK)
+work correctly with reserved connections. SET ROLE persistence within transactions still fails because
+it requires tracking session-level state (current_role, search_path, etc.) in the SessionState proto.
 
 **How Vitess handles this ([vtgate.proto](https://github.com/vitessio/vitess/blob/main/proto/vtgate.proto)):**
 
@@ -1909,6 +1910,41 @@ and `pooler_id` fields - we just need the same for simple query protocol.
 2. **QueryService interface:** Change `StreamExecute` to return `(ReservedState, error)`
 3. **Multipooler executor:** Track reserved connections, don't return to pool during transaction
 4. **Multigateway:** Store reserved state from `StreamExecute` responses
+
+**Implementation status (2025-12-09):**
+
+✅ **Completed:**
+
+1. Proto changes: Added `SessionState` message to `multipoolerservice.proto` with `reserved_connection_id` and `pooler_id`
+2. QueryService interface: Changed `StreamExecute` to return `(ReservedState, error)`
+3. Executor tracking: Implemented reserved connection tracking in `multipooler/executor/executor.go`:
+   - `reservedConns` map tracks active reserved connections
+   - `streamExecuteWithReservation` checks txnStatus to reserve/release connections
+   - Reserves when txnStatus='T' or 'E', releases when txnStatus='I'
+4. SessionState propagation: Always send SessionState (even with ReservedConnectionId=0) to clear reservations
+5. Test setup fix: Added `waitForPrimaryZone()` to ensure primary election before running tests
+6. Basic transaction support: BEGIN/COMMIT/ROLLBACK work correctly with reserved connections
+
+**Test results:**
+
+- ✅ `TestPgProtocolClientTransactions` - Basic transactions work
+- ✅ CREATE ROLE queries work (no more "read-only transaction" errors)
+- ❌ `TestMultiGateway_SetRole` - SET ROLE within transactions fails
+- ❌ `TestMultiGateway_ConnectionCleanup` - SET ROLE state leaks between queries
+
+**Root cause of remaining failures:** SET ROLE changes session-level state in PostgreSQL
+(current_role, search_path, etc.) which is not tracked in SessionState proto. When queries
+in a transaction execute on the same reserved connection, the SET ROLE takes effect on that
+PostgreSQL connection, but our code doesn't capture or restore this state.
+
+**Next steps for SET ROLE support:**
+
+1. Add session state fields to SessionState proto (current_role, search_path, etc.)
+2. Query PostgreSQL for session state after each command (SELECT current_role, current_setting('search_path'))
+3. Restore session state when reusing a reserved connection (SET ROLE, SET search_path)
+4. Handle session state cleanup on connection release (RESET ROLE, etc.)
+
+This is a larger feature that should be tackled separately from basic transaction support.
 
 **What we're keeping similar to Vitess:**
 
