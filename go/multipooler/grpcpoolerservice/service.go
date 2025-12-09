@@ -68,20 +68,20 @@ func (s *poolerService) StreamExecute(req *multipoolerpb.StreamExecuteRequest, s
 	// Send session state as the final message, even if there was an error.
 	// Following Vitess pattern: session state may have changed even on error,
 	// and client needs it to maintain connection state.
-	if reservedState.ReservedConnectionId != 0 {
-		sessionState := &multipoolerpb.SessionState{
-			ReservedConnectionId: reservedState.ReservedConnectionId,
-			PoolerId:             reservedState.PoolerID,
+	// Always send SessionState, even if ReservedConnectionId is 0, so the client
+	// knows to clear any existing reservation when the transaction ends.
+	sessionState := &multipoolerpb.SessionState{
+		ReservedConnectionId: reservedState.ReservedConnectionId,
+		PoolerId:             reservedState.PoolerID,
+	}
+	if sendErr := stream.Send(&multipoolerpb.StreamExecuteResponse{
+		SessionState: sessionState,
+	}); sendErr != nil {
+		// If we had an exec error, prefer returning that
+		if execErr != nil {
+			return execErr
 		}
-		if sendErr := stream.Send(&multipoolerpb.StreamExecuteResponse{
-			SessionState: sessionState,
-		}); sendErr != nil {
-			// If we had an exec error, prefer returning that
-			if execErr != nil {
-				return execErr
-			}
-			return sendErr
-		}
+		return sendErr
 	}
 
 	return execErr

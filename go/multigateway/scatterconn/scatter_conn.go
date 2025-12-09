@@ -127,14 +127,14 @@ func (sc *ScatterConn) StreamExecute(
 		return fmt.Errorf("query execution failed: %w", err)
 	}
 
-	// Store reserved connection state if the query started/continued a transaction
-	if reservedState.ReservedConnectionId != 0 {
-		state.StoreReservedConnection(target, reservedState)
-		sc.logger.DebugContext(ctx, "stored reserved connection from simple query",
-			"tablegroup", tableGroup,
-			"shard", shard,
-			"reserved_connection_id", reservedState.ReservedConnectionId)
-	}
+	// Always store reserved connection state from the response.
+	// If ReservedConnectionId is 0, this clears any existing reservation
+	// (e.g., when a transaction ends with COMMIT/ROLLBACK).
+	state.StoreReservedConnection(target, reservedState)
+	sc.logger.DebugContext(ctx, "stored reserved connection state from simple query",
+		"tablegroup", tableGroup,
+		"shard", shard,
+		"reserved_connection_id", reservedState.ReservedConnectionId)
 
 	sc.logger.DebugContext(ctx, "query execution completed successfully",
 		"tablegroup", tableGroup,

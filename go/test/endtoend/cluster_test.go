@@ -1201,6 +1201,30 @@ func stringHash(s string) int {
 	return h
 }
 
+// waitForPrimaryZone waits for multiorch to elect a primary zone by checking the PoolerType
+// of each zone's multipooler. Returns the index of the primary zone.
+func waitForPrimaryZone(t *testing.T, portConfig *testPortConfig, timeout time.Duration) int {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	checkInterval := 2 * time.Second
+
+	for time.Now().Before(deadline) {
+		for i, zone := range portConfig.Zones {
+			addr := fmt.Sprintf("localhost:%d", zone.MultipoolerGRPCPort)
+			isPrimary, err := IsPrimary(addr)
+			if err == nil && isPrimary {
+				return i
+			}
+		}
+		t.Logf("Waiting for primary election... (checking again in %v)", checkInterval)
+		time.Sleep(checkInterval)
+	}
+
+	t.Fatalf("Timeout: no primary elected within %v", timeout)
+	return -1
+}
+
 // testClusterSetup holds the resources for a test cluster
 type testClusterSetup struct {
 	TempDir    string
@@ -1297,6 +1321,13 @@ func setupTestCluster(t *testing.T) *testClusterSetup {
 	multipoolerAddr2 := fmt.Sprintf("localhost:%d", testPorts.Zones[1].MultipoolerGRPCPort)
 	require.NoError(t, WaitForBootstrap(t, multipoolerAddr2, 60*time.Second, tempDir, database),
 		"multiorch should bootstrap zone2 within timeout")
+
+	// Wait for multiorch to elect a primary. After bootstrap completes, multiorch should
+	// promote one of the zones to PRIMARY. Tests that run write queries (like CREATE ROLE)
+	// need to connect to the primary zone.
+	t.Log("Waiting for multiorch to elect a primary...")
+	primaryZoneIdx := waitForPrimaryZone(t, testPorts, 60*time.Second)
+	t.Logf("Primary elected in zone %d (multipooler port: %d)", primaryZoneIdx+1, testPorts.Zones[primaryZoneIdx].MultipoolerGRPCPort)
 
 	t.Log("Test cluster setup completed successfully")
 

@@ -103,11 +103,14 @@ func (g *grpcQueryService) StreamExecute(
 			return reservedState, fmt.Errorf("stream receive error: %w", err)
 		}
 
-		// Extract session state (reserved connection info) if present
-		if ss := response.GetSessionState(); ss != nil && ss.GetReservedConnectionId() != 0 {
+		// Extract session state (reserved connection info) if present.
+		// Always update reservedState when SessionState is present, even if
+		// ReservedConnectionId is 0 (which indicates the transaction ended and
+		// the reservation should be cleared).
+		if ss := response.GetSessionState(); ss != nil {
 			reservedState.ReservedConnectionId = ss.GetReservedConnectionId()
 			reservedState.PoolerID = ss.GetPoolerId()
-			g.logger.DebugContext(ctx, "received reserved connection",
+			g.logger.DebugContext(ctx, "received session state",
 				"reserved_connection_id", ss.GetReservedConnectionId(),
 				"pooler_id", ss.GetPoolerId().String())
 		}
@@ -199,11 +202,14 @@ func (g *grpcQueryService) PortalStreamExecute(
 			return reservedState, fmt.Errorf("portal stream receive error: %w", err)
 		}
 
-		// Extract session state (reserved connection info) if present
-		if ss := response.GetSessionState(); ss != nil && ss.GetReservedConnectionId() != 0 {
+		// Extract session state (reserved connection info) if present.
+		// Always update reservedState when SessionState is present, even if
+		// ReservedConnectionId is 0 (which indicates the transaction ended and
+		// the reservation should be cleared).
+		if ss := response.GetSessionState(); ss != nil {
 			reservedState.ReservedConnectionId = ss.GetReservedConnectionId()
 			reservedState.PoolerID = ss.GetPoolerId()
-			g.logger.DebugContext(ctx, "received reserved connection",
+			g.logger.DebugContext(ctx, "received session state",
 				"reserved_connection_id", ss.GetReservedConnectionId(),
 				"pooler_id", ss.GetPoolerId().String())
 		}
