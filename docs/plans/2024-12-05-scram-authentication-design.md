@@ -1246,6 +1246,193 @@ This would allow safe shared pools because:
 
 This is a future enhancement - per-user pools are the current approach.
 
+#### Alternative Approaches for Shared Pools
+
+Beyond the ExecutorStart hook approach above, there are two additional architectural options
+for enabling secure shared pools with impersonation:
+
+**Option 1: Token-Based Extension API**
+
+A PostgreSQL extension could provide a secure token-based API for impersonation that prevents
+clients from breaking out of the sandbox:
+
+```sql
+-- Extension provides two functions:
+CREATE FUNCTION multigres.impersonate_user(target_user text) RETURNS text AS $$
+DECLARE
+    token bytea;
+    token_hash bytea;
+BEGIN
+    -- Generate cryptographically secure random token (32 bytes)
+    token := gen_random_bytes(32);
+
+    -- Store hash in session memory (not accessible to SQL)
+    token_hash := sha256(token);
+    PERFORM multigres_store_session_token(token_hash);
+
+    -- Execute SET SESSION AUTHORIZATION
+    EXECUTE format('SET SESSION AUTHORIZATION %I', target_user);
+
+    -- Return token to pooler (hex-encoded)
+    RETURN encode(token, 'hex');
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE FUNCTION multigres.reset_to_pooler(token_hex text) RETURNS void AS $$
+DECLARE
+    provided_hash bytea;
+    stored_hash bytea;
+BEGIN
+    -- Compute hash of provided token
+    provided_hash := sha256(decode(token_hex, 'hex'));
+
+    -- Retrieve stored hash from session memory
+    stored_hash := multigres_get_session_token();
+
+    -- Validate token matches
+    IF provided_hash != stored_hash THEN
+        RAISE EXCEPTION 'invalid reset token';
+    END IF;
+
+    -- Clear stored token
+    PERFORM multigres_clear_session_token();
+
+    -- Reset to pooler superuser
+    RESET SESSION AUTHORIZATION;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+```
+
+**Security properties:**
+
+- Token is generated server-side with cryptographic randomness
+- Only hash is stored in session memory (not accessible via SQL)
+- Client receives token but can't forge it (doesn't know server's hash)
+- `RESET SESSION AUTHORIZATION` only works with valid token
+- Even SECURITY DEFINER functions can't escape without token
+
+**Flow:**
+
+1. Pooler calls `SELECT multigres.impersonate_user('alice')` on connection from shared pool
+2. Extension generates token, stores hash, executes `SET SESSION AUTHORIZATION alice`
+3. Extension returns token to pooler (e.g., `'a3f9b2c8...'`)
+4. Pooler stores token, hands connection to client
+5. Client queries run as alice, can use `RESET ROLE` normally
+6. When returning connection to pool, pooler calls `SELECT multigres.reset_to_pooler('a3f9b2c8...')`
+7. Extension validates token, resets to superuser
+
+**Advantages:**
+
+- No changes to PostgreSQL wire protocol
+- Pure extension solution (no core patches)
+- Defense-in-depth: even if SQL filter fails, can't escape without token
+- Audit trail: extension can log all impersonation events
+
+**Disadvantages:**
+
+- Extension roundtrips for impersonate/reset (2 extra queries per connection checkout/return)
+- Token storage in session memory requires C code (can't be pure PL/pgSQL)
+
+---
+
+**Option 2: Wire Protocol Extension**
+
+A more performant approach would be to extend the PostgreSQL wire protocol itself to support
+impersonation at the protocol level, completely bypassing SQL:
+
+**Using FastPath protocol (existing but underutilized):**
+
+PostgreSQL already has a [FastPath protocol](https://www.postgresql.org/docs/current/protocol-flow.html#PROTOCOL-FLOW-FASTPATH)
+(`FunctionCall` message) that allows calling internal functions without SQL parsing. We could
+hijack this for impersonation:
+
+```
+Frontend → Backend:
+  FunctionCall {
+    function_oid: <reserved_oid_for_impersonate>  // e.g., 999999
+    arg_formats: [1]  // binary
+    args: ["alice"]
+    result_format: 1  // binary
+  }
+
+Backend → Frontend:
+  FunctionCallResponse {
+    result: <32-byte-token>
+  }
+```
+
+**Or ideally, new protocol messages:**
+
+If we're willing to modify PostgreSQL core, dedicated protocol messages would be cleanest:
+
+```
+Frontend → Backend:
+  Impersonate { target_role: "alice" }
+
+Backend → Frontend:
+  ImpersonateResponse {
+    status: 'S',  // Success
+    token: <32-byte-token>
+  }
+
+Frontend → Backend:
+  ResetImpersonation { token: <32-byte-token> }
+
+Backend → Frontend:
+  CommandComplete { tag: "RESET IMPERSONATION" }
+```
+
+**Security properties:**
+
+- Impersonation commands never appear in PostgreSQL logs (not SQL)
+- Client cannot construct these packets (pooler intercepts at wire protocol layer)
+- Even if client sends raw bytes, pooler validates/strips before forwarding
+- No SQL parsing overhead
+
+**Flow:**
+
+1. Client connects to pooler requesting alice
+2. Pooler checks out connection from shared superuser pool
+3. Pooler sends `Impersonate{target_role: "alice"}` packet to backend
+4. Backend generates token, stores hash, switches to alice
+5. Backend sends `ImpersonateResponse{token}` back to pooler
+6. Pooler stores token, forwards all client packets to backend
+7. Pooler intercepts any `Impersonate` or `ResetImpersonation` from client (reject)
+8. On disconnect, pooler sends `ResetImpersonation{token}` to backend
+9. Backend validates token, resets to superuser, returns connection to pool
+
+**Advantages:**
+
+- Zero SQL overhead (no extra queries)
+- Invisible to logs and query analysis tools
+- Impossible for client to break out (don't have packet construction ability)
+- Clean separation of concerns (wire protocol is pooler's layer)
+
+**Disadvantages:**
+
+- Requires PostgreSQL core modification (for new message types)
+- Or requires hijacking existing unused protocol features (FastPath)
+- More complex to implement than extension approach
+- Potential compatibility concerns with protocol-aware tools
+
+---
+
+**Comparison:**
+
+| Aspect                  | ExecutorStart Hook  | Token-Based Extension  | Wire Protocol               |
+| ----------------------- | ------------------- | ---------------------- | --------------------------- |
+| PostgreSQL modification | Extension (C code)  | Extension (C code)     | Core modification or hijack |
+| Performance overhead    | Negligible          | 2 SQL queries          | Zero                        |
+| Log pollution           | None                | Extension can suppress | None                        |
+| Client escape risk      | Medium (SQL filter) | Very Low (token)       | None (protocol)             |
+| Implementation effort   | Medium              | Medium                 | High                        |
+| Protocol compatibility  | Full                | Full                   | May break tools             |
+
+For a production shared pool implementation, the **token-based extension** approach offers the
+best balance of security, compatibility, and maintainability without requiring PostgreSQL core
+changes. The **wire protocol** approach would be ideal for performance-critical deployments
+where the extra roundtrips matter and core modifications are acceptable.
+
 ### Test-Driven Development Approach
 
 **Test 1: Pool creation on first request**
