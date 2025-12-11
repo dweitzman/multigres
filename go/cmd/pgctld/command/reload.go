@@ -15,15 +15,16 @@
 package command
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"syscall"
 
-	"github.com/multigres/multigres/go/services/pgctld"
-
 	"github.com/spf13/cobra"
+
+	"github.com/multigres/multigres/go/services/pgctld"
+	"github.com/multigres/multigres/go/tools/executil"
 )
 
 // ReloadResult contains the result of reloading PostgreSQL configuration
@@ -129,11 +130,11 @@ func reloadWithPgCtl(dataDir string) error {
 		"-D", dataDir,
 	}
 
-	cmd := exec.Command("pg_ctl", args...)
+	cmd := executil.Command("pg_ctl", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	return cmd.Run()
+	return cmd.Run(context.TODO(), executil.DefaultGracePeriod)
 }
 
 func reloadWithSignal(dataDir string) error {

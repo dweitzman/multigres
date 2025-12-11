@@ -15,16 +15,17 @@
 package command
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"time"
 
-	"github.com/multigres/multigres/go/services/pgctld"
-
 	"github.com/spf13/cobra"
+
+	"github.com/multigres/multigres/go/services/pgctld"
+	"github.com/multigres/multigres/go/tools/executil"
 )
 
 // StatusResult contains the result of checking PostgreSQL status
@@ -195,20 +196,20 @@ func formatUptime(seconds int64) string {
 func isServerReadyWithConfig(config *pgctld.PostgresCtlConfig) bool {
 	// Use Unix socket connection for pg_isready
 	socketDir := pgctld.PostgresSocketDir(config.PoolerDir)
-	cmd := exec.Command("pg_isready",
+	cmd := executil.Command("pg_isready",
 		"-h", socketDir,
 		"-p", fmt.Sprintf("%d", config.Port), // Need port even for socket connections
 		"-U", config.User,
 		"-d", config.Database,
 	)
 
-	return cmd.Run() == nil
+	return cmd.Run(context.TODO(), executil.DefaultGracePeriod) == nil
 }
 
 func getServerVersionWithConfig(config *pgctld.PostgresCtlConfig) string {
 	// Use Unix socket connection for psql
 	socketDir := pgctld.PostgresSocketDir(config.PoolerDir)
-	cmd := exec.Command("psql",
+	cmd := executil.Command("psql",
 		"-h", socketDir,
 		"-p", fmt.Sprintf("%d", config.Port), // Need port even for socket connections
 		"-U", config.User,
@@ -216,7 +217,7 @@ func getServerVersionWithConfig(config *pgctld.PostgresCtlConfig) string {
 		"-t", "-c", "SELECT version()",
 	)
 
-	output, err := cmd.Output()
+	output, err := cmd.Output(context.TODO(), executil.DefaultGracePeriod)
 	if err != nil {
 		return ""
 	}

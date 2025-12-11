@@ -15,10 +15,10 @@
 package command
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -29,6 +29,7 @@ import (
 
 	"github.com/multigres/multigres/go/common/servenv"
 	"github.com/multigres/multigres/go/services/pgctld"
+	"github.com/multigres/multigres/go/tools/executil"
 )
 
 // StartResult contains the result of starting PostgreSQL
@@ -242,11 +243,11 @@ func startPostgreSQLWithConfig(logger *slog.Logger, config *pgctld.PostgresCtlCo
 
 	logger.Info("Starting PostgreSQL with configuration", "port", config.Port, "dataDir", config.PostgresDataDir, "configFile", config.PostgresConfigFile)
 
-	cmd := exec.Command("pg_ctl", args...)
+	cmd := executil.Command("pg_ctl", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	if err := cmd.Run(); err != nil {
+	if err := cmd.Run(context.TODO(), executil.DefaultGracePeriod); err != nil {
 		return fmt.Errorf("failed to start PostgreSQL with pg_ctl: %w", err)
 	}
 
@@ -254,18 +255,19 @@ func startPostgreSQLWithConfig(logger *slog.Logger, config *pgctld.PostgresCtlCo
 	// that will stop postgres if the test parent dies or testdata dir is deleted
 	if servenv.IsTestOrphanDetectionEnabled() {
 		logger.Info("Spawning watchdog process for orphan detection")
-		watchdogCmd := exec.Command(
+		watchdogCmd := executil.Command(
 			"run_command_if_parent_dies.sh",
 			"pg_ctl", "stop",
 			"-D", config.PostgresDataDir,
 			"-m", "fast",
 		)
 		// Environment variables automatically inherit
-		if err := watchdogCmd.Start(); err != nil {
+		// Use DaemonContext since this is a long-running background process
+		if err := watchdogCmd.Start(executil.DaemonContext); err != nil {
 			logger.Warn("Failed to start watchdog process", "error", err)
 			// Don't fail the start operation if watchdog fails to start
 		} else {
-			logger.Info("Watchdog process started", "pid", watchdogCmd.Process.Pid)
+			logger.Info("Watchdog process started", "pid", watchdogCmd.Process().Pid)
 		}
 	}
 
@@ -277,14 +279,14 @@ func waitForPostgreSQLWithConfig(config *pgctld.PostgresCtlConfig) error {
 	// Try to connect using pg_isready
 	socketDir := pgctld.PostgresSocketDir(config.PoolerDir)
 	for i := 0; i < config.Timeout; i++ {
-		cmd := exec.Command("pg_isready",
+		cmd := executil.Command("pg_isready",
 			"-h", socketDir,
 			"-p", fmt.Sprintf("%d", config.Port), // Need port even for socket connections
 			"-U", config.User,
 			"-d", config.Database,
 		)
 
-		if err := cmd.Run(); err == nil {
+		if err := cmd.Run(context.TODO(), executil.DefaultGracePeriod); err == nil {
 			return nil
 		}
 

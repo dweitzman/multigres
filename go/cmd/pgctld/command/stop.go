@@ -15,15 +15,16 @@
 package command
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
-
-	"github.com/multigres/multigres/go/services/pgctld"
-	"github.com/multigres/multigres/go/tools/viperutil"
 
 	"github.com/spf13/cobra"
+
+	"github.com/multigres/multigres/go/services/pgctld"
+	"github.com/multigres/multigres/go/tools/executil"
+	"github.com/multigres/multigres/go/tools/viperutil"
 )
 
 // StopResult contains the result of stopping PostgreSQL
@@ -178,11 +179,11 @@ func stopWithPgCtlWithConfig(logger *slog.Logger, config *pgctld.PostgresCtlConf
 		"-t", fmt.Sprintf("%d", config.Timeout),
 	}
 
-	cmd := exec.Command("pg_ctl", args...)
+	cmd := executil.Command("pg_ctl", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	return cmd.Run()
+	return cmd.Run(context.TODO(), executil.DefaultGracePeriod)
 }
 
 // takeCheckpoint executes a CHECKPOINT command to ensure all data is written to disk before shutdown
@@ -200,10 +201,10 @@ func takeCheckpoint(logger *slog.Logger, config *pgctld.PostgresCtlConfig) error
 		"-q", // quiet mode - suppress messages
 	}
 
-	cmd := exec.Command("psql", args...)
+	cmd := executil.Command("psql", args...)
 
 	// Capture output to avoid cluttering the terminal
-	output, err := cmd.CombinedOutput()
+	output, err := cmd.CombinedOutput(context.TODO(), executil.DefaultGracePeriod)
 	if err != nil {
 		return fmt.Errorf("checkpoint command failed: %w, output: %s", err, string(output))
 	}

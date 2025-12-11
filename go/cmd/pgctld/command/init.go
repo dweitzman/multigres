@@ -15,16 +15,17 @@
 package command
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"strings"
 
-	"github.com/multigres/multigres/go/services/pgctld"
-	"github.com/multigres/multigres/go/tools/viperutil"
-
 	"github.com/spf13/cobra"
+
+	"github.com/multigres/multigres/go/services/pgctld"
+	"github.com/multigres/multigres/go/tools/executil"
+	"github.com/multigres/multigres/go/tools/viperutil"
 )
 
 // InitResult contains the result of initializing PostgreSQL data directory
@@ -142,10 +143,10 @@ func initializeDataDir(logger *slog.Logger, dataDir string, pgUser string, pgPwf
 	// pgBackRest will validate checksums for the Postgres cluster it's backing up.
 	// However, pgBackRest merely logs checksum validation errors but does not fail
 	// the backup.
-	cmd := exec.Command("initdb", "-D", dataDir, "--data-checksums", "--auth-local=trust", "--auth-host=md5", "-U", pgUser)
+	cmd := executil.Command("initdb", "-D", dataDir, "--data-checksums", "--auth-local=trust", "--auth-host=md5", "-U", pgUser)
 
 	// Capture both stdout and stderr to include in error messages
-	output, err := cmd.CombinedOutput()
+	output, err := cmd.CombinedOutput(context.TODO(), executil.DefaultGracePeriod)
 	if err != nil {
 		return fmt.Errorf("initdb failed: %w\nOutput: %s", err, string(output))
 	}
@@ -191,13 +192,13 @@ func setPostgresPassword(dataDir string, pgUser string, pgPwfile string) error {
 	// Start PostgreSQL temporarily in single-user mode to set password
 	// Use the configured user in single-user mode with trust auth to set the password
 	// Set password_encryption to scram-sha-256 to ensure SCRAM encoding
-	cmd := exec.Command("postgres", "--single", "-D", dataDir, pgUser)
+	cmd := executil.Command("postgres", "--single", "-D", dataDir, pgUser)
 	sqlCommands := fmt.Sprintf("SET password_encryption = 'scram-sha-256';\nALTER USER %s WITH PASSWORD '%s';\n", pgUser, effectivePassword)
 	cmd.Stdin = strings.NewReader(sqlCommands)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	if err := cmd.Run(); err != nil {
+	if err := cmd.Run(context.TODO(), executil.DefaultGracePeriod); err != nil {
 		return fmt.Errorf("failed to set %s password: %w", pgUser, err)
 	}
 
