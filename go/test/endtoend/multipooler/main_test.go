@@ -15,6 +15,7 @@
 package multipooler
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
@@ -30,8 +31,19 @@ const (
 	testPostgresPassword = "test_password_123"
 )
 
+// sharedTestCtx is the context for shared test infrastructure processes.
+// It lives for the duration of all tests and is cancelled during cleanup.
+// This allows shared processes (etcd, pgctld, multipooler) to outlive
+// individual test contexts while still being tied to the test suite lifetime.
+var (
+	sharedTestCtx    context.Context
+	sharedTestCancel context.CancelFunc
+)
+
 // TestMain sets the path and cleans up after all tests
 func TestMain(m *testing.M) {
+	// Create shared context for test infrastructure processes
+	sharedTestCtx, sharedTestCancel = context.WithCancel(context.Background())
 	// Set the PATH so dependencies like etcd and run_in_test.sh can be found
 	// Use automatic module root detection instead of hard-coded relative paths
 	if err := pathutil.PrependBinToPath(); err != nil {
@@ -74,6 +86,9 @@ func TestMain(m *testing.M) {
 	if exitCode != 0 {
 		dumpServiceLogs()
 	}
+
+	// Cancel shared context to signal processes to stop gracefully
+	sharedTestCancel()
 
 	// Clean up shared multipooler test infrastructure
 	cleanupSharedTestSetup()

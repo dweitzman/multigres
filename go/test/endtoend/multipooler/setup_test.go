@@ -39,6 +39,7 @@ import (
 	"github.com/multigres/multigres/go/provisioner/local/pgbackrest"
 	"github.com/multigres/multigres/go/test/endtoend"
 	"github.com/multigres/multigres/go/test/utils"
+	"github.com/multigres/multigres/go/tools/executil"
 	"github.com/multigres/multigres/go/tools/pathutil"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -152,37 +153,34 @@ func dumpServiceLogs() {
 	fmt.Println("\n" + "=" + "=== END SERVICE LOGS ===" + "=")
 }
 
-// cleanupSharedTestSetup cleans up the shared test infrastructure
+// cleanupSharedTestSetup cleans up the shared test infrastructure.
+// Called after sharedTestCancel() has signaled processes to stop.
 func cleanupSharedTestSetup() {
 	if sharedTestSetup == nil {
 		return
 	}
 
-	// Stop multipooler instances
-	if sharedTestSetup.StandbyMultipooler != nil {
-		sharedTestSetup.StandbyMultipooler.Stop()
-	}
-	if sharedTestSetup.PrimaryMultipooler != nil {
-		sharedTestSetup.PrimaryMultipooler.Stop()
-	}
+	// Create a timeout context for waiting on processes to exit
+	// after they received SIGTERM from sharedTestCancel()
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer waitCancel()
+
+	// Stop multipooler instances (pgctld processes need explicit stop for PostgreSQL)
+	sharedTestSetup.StandbyMultipooler.Stop(waitCtx)
+	sharedTestSetup.PrimaryMultipooler.Stop(waitCtx)
 
 	// Stop pgctld instances
-	if sharedTestSetup.StandbyPgctld != nil {
-		sharedTestSetup.StandbyPgctld.Stop()
-	}
-	if sharedTestSetup.PrimaryPgctld != nil {
-		sharedTestSetup.PrimaryPgctld.Stop()
-	}
+	sharedTestSetup.StandbyPgctld.Stop(waitCtx)
+	sharedTestSetup.PrimaryPgctld.Stop(waitCtx)
 
 	// Close topology server
 	if sharedTestSetup.TopoServer != nil {
 		sharedTestSetup.TopoServer.Close()
 	}
 
-	// Stop etcd
-	if sharedTestSetup.EtcdCmd != nil && sharedTestSetup.EtcdCmd.Process != nil {
-		_ = sharedTestSetup.EtcdCmd.Process.Kill()
-		_ = sharedTestSetup.EtcdCmd.Wait()
+	// Stop etcd gracefully
+	if sharedTestSetup.EtcdCmd != nil {
+		_ = sharedTestSetup.EtcdCmd.Term(waitCtx)
 	}
 
 	// Clean up temp directory
@@ -203,7 +201,7 @@ type ProcessInstance struct {
 	PgctldAddr  string // Used by multipooler
 	EtcdAddr    string // Used by multipooler for topology
 	StanzaName  string // pgBackRest stanza name (used by multipooler)
-	Process     *exec.Cmd
+	Process     *executil.Cmd
 	Binary      string
 	Environment []string
 }
@@ -213,7 +211,7 @@ type MultipoolerTestSetup struct {
 	TempDir            string
 	TempDirCleanup     func()
 	EtcdClientAddr     string
-	EtcdCmd            *exec.Cmd
+	EtcdCmd            *executil.Cmd
 	TopoServer         topoclient.Store
 	PrimaryPgctld      *ProcessInstance
 	StandbyPgctld      *ProcessInstance
@@ -242,18 +240,16 @@ func (p *ProcessInstance) startPgctld(t *testing.T) error {
 	t.Logf("Data dir: %s, gRPC port: %d, PG port: %d", p.DataDir, p.GrpcPort, p.PgPort)
 
 	// Start the gRPC server
-	p.Process = exec.Command(p.Binary, "server",
+	// AddEnv accumulates on top of inherited os.Environ()
+	p.Process = executil.Command(p.Binary, "server",
 		"--pooler-dir", p.DataDir,
 		"--grpc-port", strconv.Itoa(p.GrpcPort),
 		"--pg-port", strconv.Itoa(p.PgPort),
-		"--log-output", p.LogFile)
+		"--log-output", p.LogFile).
+		AddEnv(p.Environment...).
+		AddEnv("MULTIGRES_TESTDATA_DIR=" + filepath.Dir(p.DataDir))
 
-	// Set MULTIGRES_TESTDATA_DIR for directory-deletion triggered cleanup
-	p.Process.Env = append(p.Environment,
-		"MULTIGRES_TESTDATA_DIR="+filepath.Dir(p.DataDir),
-	)
-
-	t.Logf("Running server command: %v", p.Process.Args)
+	t.Logf("Running server command: %v", p.Process.Args())
 	if err := p.waitForStartup(t, 20*time.Second, 50); err != nil {
 		return err
 	}
@@ -291,14 +287,12 @@ func (p *ProcessInstance) startMultipooler(t *testing.T) error {
 	}
 
 	// Start the multipooler server
-	p.Process = exec.Command(p.Binary, args...)
+	// AddEnv accumulates on top of inherited os.Environ()
+	p.Process = executil.Command(p.Binary, args...).
+		AddEnv(p.Environment...).
+		AddEnv("MULTIGRES_TESTDATA_DIR=" + filepath.Dir(p.DataDir))
 
-	// Set MULTIGRES_TESTDATA_DIR for directory-deletion triggered cleanup
-	p.Process.Env = append(p.Environment,
-		"MULTIGRES_TESTDATA_DIR="+filepath.Dir(p.DataDir),
-	)
-
-	t.Logf("Running multipooler command: %v", p.Process.Args)
+	t.Logf("Running multipooler command: %v", p.Process.Args())
 	return p.waitForStartup(t, 15*time.Second, 30)
 }
 
@@ -306,21 +300,22 @@ func (p *ProcessInstance) startMultipooler(t *testing.T) error {
 func (p *ProcessInstance) waitForStartup(t *testing.T, timeout time.Duration, logInterval int) error {
 	t.Helper()
 
-	// Start the process in background (like cluster_test.go does)
-	err := p.Process.Start()
+	// Start the process with sharedTestCtx so it gets SIGTERM when tests complete.
+	// The shared context outlives individual tests but is cancelled in TestMain cleanup.
+	err := p.Process.Start(sharedTestCtx)
 	if err != nil {
 		return fmt.Errorf("failed to start %s: %w", p.Name, err)
 	}
-	t.Logf("%s server process started with PID %d", p.Name, p.Process.Process.Pid)
+	t.Logf("%s server process started with PID %d", p.Name, p.Process.Process().Pid)
 
 	// Give the process a moment to potentially fail immediately
 	time.Sleep(500 * time.Millisecond)
 
 	// Check if process died immediately
-	if p.Process.ProcessState != nil {
-		t.Logf("%s process died immediately: exit code %d", p.Name, p.Process.ProcessState.ExitCode())
+	if p.Process.ProcessState() != nil {
+		t.Logf("%s process died immediately: exit code %d", p.Name, p.Process.ProcessState().ExitCode())
 		p.logRecentOutput(t, "Process died immediately")
-		return fmt.Errorf("%s process died immediately: exit code %d", p.Name, p.Process.ProcessState.ExitCode())
+		return fmt.Errorf("%s process died immediately: exit code %d", p.Name, p.Process.ProcessState().ExitCode())
 	}
 
 	// Wait for server to be ready
@@ -328,10 +323,10 @@ func (p *ProcessInstance) waitForStartup(t *testing.T, timeout time.Duration, lo
 	connectAttempts := 0
 	for time.Now().Before(deadline) {
 		// Check if process died during startup
-		if p.Process.ProcessState != nil {
-			t.Logf("%s process died during startup: exit code %d", p.Name, p.Process.ProcessState.ExitCode())
+		if p.Process.ProcessState() != nil {
+			t.Logf("%s process died during startup: exit code %d", p.Name, p.Process.ProcessState().ExitCode())
 			p.logRecentOutput(t, "Process died during startup")
-			return fmt.Errorf("%s process died: exit code %d", p.Name, p.Process.ProcessState.ExitCode())
+			return fmt.Errorf("%s process died: exit code %d", p.Name, p.Process.ProcessState().ExitCode())
 		}
 
 		connectAttempts++
@@ -353,7 +348,7 @@ func (p *ProcessInstance) waitForStartup(t *testing.T, timeout time.Duration, lo
 	}
 
 	// If we timed out, try to get process status
-	if p.Process.ProcessState == nil {
+	if p.Process.ProcessState() == nil {
 		t.Logf("%s process is still running but not responding on gRPC port %d", p.Name, p.GrpcPort)
 	}
 
@@ -384,10 +379,12 @@ func (p *ProcessInstance) logRecentOutput(t *testing.T, context string) {
 	t.Logf("%s %s - Recent log output from %s:\n%s", p.Name, context, p.LogFile, logContent)
 }
 
-// Stop stops the process instance
-func (p *ProcessInstance) Stop() {
-	if p.Process == nil || p.Process.ProcessState != nil {
-		return // Process not running
+// Stop gracefully terminates the process instance.
+// Sends SIGTERM and waits for exit (with SIGKILL fallback on ctx timeout).
+// Safe to call multiple times - subsequent calls return immediately.
+func (p *ProcessInstance) Stop(ctx context.Context) {
+	if p == nil || p.Process == nil {
+		return
 	}
 
 	// If this is pgctld, stop PostgreSQL first via gRPC
@@ -395,23 +392,22 @@ func (p *ProcessInstance) Stop() {
 		p.stopPostgreSQL()
 	}
 
-	// Then kill the process
-	_ = p.Process.Process.Kill()
-	_ = p.Process.Wait()
+	// Gracefully terminate (SIGTERM + wait, SIGKILL on timeout)
+	_ = p.Process.Term(ctx)
 }
 
 // IsRunning checks if the process is still running.
 // Returns false if the process has exited or was never started.
 func (p *ProcessInstance) IsRunning() bool {
-	if p == nil || p.Process == nil || p.Process.Process == nil {
+	if p == nil || p.Process == nil || p.Process.Process() == nil {
 		return false
 	}
 	// ProcessState is set after Wait() returns, meaning process has exited
-	if p.Process.ProcessState != nil {
+	if p.Process.ProcessState() != nil {
 		return false
 	}
 	// Signal 0 checks if process exists without actually sending a signal
-	err := p.Process.Process.Signal(syscall.Signal(0))
+	err := p.Process.Process().Signal(syscall.Signal(0))
 	return err == nil
 }
 
@@ -453,7 +449,7 @@ func createPgctldInstance(t *testing.T, name, baseDir string, grpcPort, pgPort i
 		GrpcPort:    grpcPort,
 		PgPort:      pgPort,
 		Binary:      "pgctld", // Assume binary is in PATH
-		Environment: append(os.Environ(), "PGCONNECT_TIMEOUT=5", "LC_ALL=en_US.UTF-8"),
+		Environment: []string{"PGCONNECT_TIMEOUT=5", "LC_ALL=en_US.UTF-8"},
 	}
 }
 
@@ -477,7 +473,7 @@ func createMultipoolerInstance(t *testing.T, name, baseDir string, grpcPort int,
 		EtcdAddr:    etcdAddr,
 		StanzaName:  stanzaName,    // pgBackRest stanza name
 		Binary:      "multipooler", // Assume binary is in PATH
-		Environment: append(os.Environ(), "PGCONNECT_TIMEOUT=5"),
+		Environment: []string{"PGCONNECT_TIMEOUT=5"},
 	}
 }
 
@@ -932,10 +928,9 @@ func getSharedTestSetup(t *testing.T) *MultipoolerTestSetup {
 
 // startEtcdForSharedSetup starts etcd without registering t.Cleanup() handlers
 // since cleanup is handled manually by TestMain via cleanupSharedTestSetup()
-func startEtcdForSharedSetup(t *testing.T, dataDir string) (string, *exec.Cmd, error) {
+func startEtcdForSharedSetup(t *testing.T, dataDir string) (string, *executil.Cmd, error) {
 	// Check if etcd is available in PATH
-	_, err := exec.LookPath("etcd")
-	if err != nil {
+	if _, err := exec.LookPath("etcd"); err != nil {
 		return "", nil, fmt.Errorf("etcd not found in PATH: %w", err)
 	}
 
@@ -949,26 +944,24 @@ func startEtcdForSharedSetup(t *testing.T, dataDir string) (string, *exec.Cmd, e
 	initialCluster := fmt.Sprintf("%v=%v", name, peerAddr)
 
 	// Wrap etcd with run_in_test to ensure cleanup if test process dies
-	cmd := exec.Command("run_in_test.sh", "etcd",
+	cmd := executil.Command("run_in_test.sh", "etcd",
 		"-name", name,
 		"-advertise-client-urls", clientAddr,
 		"-initial-advertise-peer-urls", peerAddr,
 		"-listen-client-urls", clientAddr,
 		"-listen-peer-urls", peerAddr,
 		"-initial-cluster", initialCluster,
-		"-data-dir", dataDir)
+		"-data-dir", dataDir).
+		AddEnv("MULTIGRES_TESTDATA_DIR=" + dataDir)
 
-	// Set MULTIGRES_TESTDATA_DIR for directory-deletion triggered cleanup
-	cmd.Env = append(os.Environ(),
-		"MULTIGRES_TESTDATA_DIR="+dataDir,
-	)
-
-	if err := cmd.Start(); err != nil {
+	// Start with sharedTestCtx so it gets SIGTERM when tests complete
+	if err := cmd.Start(sharedTestCtx); err != nil {
 		return "", nil, fmt.Errorf("failed to start etcd: %w", err)
 	}
 
 	if err := waitForEtcdReady(t, clientAddr, 10*time.Second); err != nil {
-		_ = cmd.Process.Kill()
+		// Kill on failure
+		_ = cmd.Term(t.Context())
 		return "", nil, err
 	}
 
@@ -1067,7 +1060,7 @@ func setupStandbyReplication(t *testing.T, primaryPgctld *ProcessInstance, stand
 	backupCtx, backupCancel := context.WithTimeout(t.Context(), 5*time.Minute)
 	defer backupCancel()
 
-	backupCmd := exec.CommandContext(backupCtx, "pgbackrest",
+	backupCmd := executil.Command("pgbackrest",
 		"--stanza="+stanzaName,
 		"--config="+primaryConfigPath,
 		"--repo1-path="+repoPath,
@@ -1075,7 +1068,7 @@ func setupStandbyReplication(t *testing.T, primaryPgctld *ProcessInstance, stand
 		"--log-level-console=info",
 		"backup")
 
-	backupOutput, err := backupCmd.CombinedOutput()
+	backupOutput, err := backupCmd.CombinedOutput(backupCtx, executil.DefaultGracePeriod)
 	if err != nil {
 		t.Logf("pgbackrest backup output: %s", string(backupOutput))
 	}
@@ -1121,14 +1114,14 @@ func setupStandbyReplication(t *testing.T, primaryPgctld *ProcessInstance, stand
 	restoreCtx, restoreCancel := context.WithTimeout(t.Context(), 5*time.Minute)
 	defer restoreCancel()
 
-	restoreCmd := exec.CommandContext(restoreCtx, "pgbackrest",
+	restoreCmd := executil.Command("pgbackrest",
 		"--stanza="+stanzaName,
 		"--config="+standbyConfigPath,
 		"--repo1-path="+repoPath,
 		"--log-level-console=info",
 		"restore")
 
-	restoreOutput, err := restoreCmd.CombinedOutput()
+	restoreOutput, err := restoreCmd.CombinedOutput(restoreCtx, executil.DefaultGracePeriod)
 	if err != nil {
 		t.Logf("pgbackrest restore output: %s", string(restoreOutput))
 	}

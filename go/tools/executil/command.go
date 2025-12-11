@@ -52,10 +52,12 @@ type Cmd struct {
 	Stderr any // io.Writer or *os.File
 
 	// Runtime state (protected by mu)
-	mu      sync.Mutex
-	cmd     *exec.Cmd
-	span    trace.Span
-	startCh chan struct{} // closed when Start() completes
+	mu       sync.Mutex
+	cmd      *exec.Cmd
+	span     trace.Span
+	startCh  chan struct{} // closed when Start() completes
+	waitOnce sync.Once     // ensures Wait() only runs once
+	waitErr  error         // result of first Wait()
 }
 
 // Command creates a new Cmd. Context is provided at execution time, not here.
@@ -106,6 +108,32 @@ func (c *Cmd) Process() *os.Process {
 		return nil
 	}
 	return c.cmd.Process
+}
+
+// ProcessState returns the os.ProcessState after Wait() has been called.
+// Returns nil if the command hasn't been started or hasn't finished.
+func (c *Cmd) ProcessState() *os.ProcessState {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cmd == nil {
+		return nil
+	}
+	return c.cmd.ProcessState
+}
+
+// Term sends SIGTERM to the process and waits for it to exit.
+// The context deadline/timeout limits how long to wait before sending SIGKILL.
+// Safe to call multiple times - subsequent calls return immediately with the first result.
+// Safe to call even if process wasn't started - returns nil.
+func (c *Cmd) Term(ctx context.Context) error {
+	proc := c.Process()
+	if proc == nil {
+		return nil
+	}
+	// Send SIGTERM (ignore error - process may have already exited)
+	_ = proc.Signal(syscall.SIGTERM)
+	// Wait for exit with SIGKILL fallback on ctx timeout
+	return c.Wait(ctx)
 }
 
 // buildEnv prepares the final environment for the command.
@@ -398,6 +426,7 @@ func (c *Cmd) StartDaemon(ctx context.Context) error {
 // Wait waits for the command to exit.
 // The context deadline/timeout limits how long to wait before sending SIGKILL.
 // If the context has no deadline, waits indefinitely for the process to exit.
+// Safe to call multiple times - subsequent calls return immediately with the first result.
 func (c *Cmd) Wait(ctx context.Context) error {
 	c.mu.Lock()
 	cmd := c.cmd
@@ -413,24 +442,28 @@ func (c *Cmd) Wait(ctx context.Context) error {
 		<-startCh
 	}
 
-	// Wait for process with context-based timeout for SIGKILL
-	done := make(chan error, 1)
-	go func() {
-		done <- cmd.Wait()
-	}()
+	// Use sync.Once to ensure we only wait once
+	c.waitOnce.Do(func() {
+		// Wait for process with context-based timeout for SIGKILL
+		done := make(chan error, 1)
+		go func() {
+			done <- cmd.Wait()
+		}()
 
-	select {
-	case err := <-done:
-		c.endSpan(err)
-		return err
-	case <-ctx.Done():
-		// Context expired, kill the process
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
+		select {
+		case c.waitErr = <-done:
+			// Process exited
+		case <-ctx.Done():
+			// Context expired, kill the process
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
+			// Still wait for the process to actually exit
+			c.waitErr = <-done
 		}
-		// Still wait for the process to actually exit
-		err := <-done
-		c.endSpan(err)
-		return err
-	}
+
+		c.endSpan(c.waitErr)
+	})
+
+	return c.waitErr
 }
