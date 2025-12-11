@@ -29,6 +29,7 @@ import (
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	multipoolermanagerdata "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	pgctldpb "github.com/multigres/multigres/go/pb/pgctldservice"
+	"github.com/multigres/multigres/go/tools/executil"
 	"github.com/multigres/multigres/go/tools/retry"
 )
 
@@ -103,10 +104,10 @@ func (pm *MultiPoolerManager) backupLocked(ctx context.Context, forcePrimary boo
 
 	args = append(args, "backup")
 
-	cmd := exec.CommandContext(ctx, "pgbackrest", args...)
+	cmd := executil.Command("pgbackrest", args...)
 
 	// Capture output for logging
-	output, err := cmd.CombinedOutput()
+	output, err := cmd.CombinedOutput(ctx, executil.DefaultGracePeriod)
 	if err != nil {
 		return "", mterrors.New(mtrpcpb.Code_INTERNAL,
 			fmt.Sprintf("pgbackrest backup failed: %v\nOutput: %s", err, string(output)))
@@ -123,7 +124,7 @@ func (pm *MultiPoolerManager) backupLocked(ctx context.Context, forcePrimary boo
 	verifyCtx, verifyCancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer verifyCancel()
 
-	verifyCmd := exec.CommandContext(verifyCtx, "pgbackrest",
+	verifyCmd := executil.Command("pgbackrest",
 		"--stanza="+stanzaName,
 		"--config="+configPath,
 		"--repo1-path="+pm.backupLocation,
@@ -131,7 +132,7 @@ func (pm *MultiPoolerManager) backupLocked(ctx context.Context, forcePrimary boo
 		"--log-level-console=info",
 		"verify")
 
-	verifyOutput, verifyErr := verifyCmd.CombinedOutput()
+	verifyOutput, verifyErr := verifyCmd.CombinedOutput(verifyCtx, executil.DefaultGracePeriod)
 	if verifyErr != nil {
 		return "", mterrors.New(mtrpcpb.Code_INTERNAL,
 			fmt.Sprintf("pgbackrest verify failed for backup %s: %v\nOutput: %s", backupID, verifyErr, string(verifyOutput)))
