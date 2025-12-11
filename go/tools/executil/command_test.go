@@ -298,17 +298,17 @@ func TestCommand_SpanRecordsZeroExitCode(t *testing.T) {
 	assert.NotEqual(t, codes.Error, spans[0].Status().Code)
 }
 
-func TestCommand_DaemonContext_NoSpan(t *testing.T) {
+func TestCommand_StartDaemon_NoSpan(t *testing.T) {
 	sr, cleanup := setupTestTracer(t)
 	defer cleanup()
 
 	cmd := Command("echo", "hello")
-	err := cmd.Start(DaemonContext)
+	err := cmd.StartDaemon(context.Background())
 	require.NoError(t, err)
 	err = cmd.Wait(context.Background())
 	require.NoError(t, err)
 
-	// No span should be created for daemon context
+	// No span should be created for daemon
 	spans := sr.Ended()
 	assert.Empty(t, spans)
 }

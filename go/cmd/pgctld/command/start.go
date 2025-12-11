@@ -262,8 +262,8 @@ func startPostgreSQLWithConfig(logger *slog.Logger, config *pgctld.PostgresCtlCo
 			"-m", "fast",
 		)
 		// Environment variables automatically inherit
-		// Use DaemonContext since this is a long-running background process
-		if err := watchdogCmd.Start(executil.DaemonContext); err != nil {
+		// Use StartDaemon since this is a long-running background process
+		if err := watchdogCmd.StartDaemon(context.TODO()); err != nil {
 			logger.Warn("Failed to start watchdog process", "error", err)
 			// Don't fail the start operation if watchdog fails to start
 		} else {

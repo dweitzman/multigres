@@ -35,13 +35,6 @@ import (
 
 var tracer = otel.Tracer("github.com/multigres/multigres/go/tools/executil")
 
-// DaemonContext signals that a command is a long-running daemon process.
-// When used with Start(), no client span is created (daemons shouldn't have spans).
-// Trace context is still propagated to the subprocess via TRACEPARENT.
-//
-//nolint:gocritic // DaemonContext is an intentional sentinel for long-running processes
-var DaemonContext = context.Background()
-
 // Cmd wraps command configuration and provides safe execution methods.
 // The underlying exec.Cmd is created at execution time, not construction time.
 type Cmd struct {
@@ -190,23 +183,19 @@ func (c *Cmd) buildCmd(ctx context.Context, grace GraceOption) *exec.Cmd {
 }
 
 // prepareExecution sets up tracing and environment for command execution.
-// Returns the context to use (may have span added) and whether a span was created.
-func (c *Cmd) prepareExecution(ctx context.Context) (context.Context, bool) {
-	// Create span for non-daemon commands
-	createSpan := ctx != DaemonContext
-
-	if createSpan {
-		var span trace.Span
-		ctx, span = tracer.Start(ctx, c.name, trace.WithSpanKind(trace.SpanKindClient))
-		c.mu.Lock()
-		c.span = span
-		c.mu.Unlock()
-	}
-
-	// Add traceparent to environment (works for both daemon and non-daemon)
+// Returns the context to use (with span added).
+func (c *Cmd) prepareExecution(ctx context.Context) context.Context {
+	// Add traceparent to environment first (before potentially modifying ctx)
 	c.addTraceparentFromContext(ctx)
 
-	return ctx, createSpan
+	// Create client span for command execution
+	var span trace.Span
+	ctx, span = tracer.Start(ctx, c.name, trace.WithSpanKind(trace.SpanKindClient))
+	c.mu.Lock()
+	c.span = span
+	c.mu.Unlock()
+
+	return ctx
 }
 
 // endSpan ends the span if one was created, recording exit code and error status.
@@ -247,7 +236,7 @@ func (c *Cmd) endSpan(err error) {
 // The context controls when to trigger graceful termination (SIGTERM).
 // The grace option controls how long to wait before SIGKILL.
 func (c *Cmd) Run(ctx context.Context, grace GraceOption) error {
-	ctx, _ = c.prepareExecution(ctx)
+	ctx = c.prepareExecution(ctx)
 
 	c.mu.Lock()
 	c.cmd = c.buildCmd(ctx, grace)
@@ -289,7 +278,7 @@ func (c *Cmd) runWithGraceContext(graceCtx context.Context) error {
 
 // Output runs the command and returns its stdout.
 func (c *Cmd) Output(ctx context.Context, grace GraceOption) ([]byte, error) {
-	ctx, _ = c.prepareExecution(ctx)
+	ctx = c.prepareExecution(ctx)
 
 	c.mu.Lock()
 	c.cmd = c.buildCmd(ctx, grace)
@@ -308,7 +297,7 @@ func (c *Cmd) Output(ctx context.Context, grace GraceOption) ([]byte, error) {
 
 // CombinedOutput runs the command and returns its combined stdout and stderr.
 func (c *Cmd) CombinedOutput(ctx context.Context, grace GraceOption) ([]byte, error) {
-	ctx, _ = c.prepareExecution(ctx)
+	ctx = c.prepareExecution(ctx)
 
 	c.mu.Lock()
 	c.cmd = c.buildCmd(ctx, grace)
@@ -362,7 +351,7 @@ func (c *Cmd) outputWithGraceContext(graceCtx context.Context, combined bool) ([
 // The context controls when to trigger graceful termination (SIGTERM).
 // Call Wait() to wait for completion and specify the grace period before SIGKILL.
 func (c *Cmd) Start(ctx context.Context) error {
-	ctx, _ = c.prepareExecution(ctx)
+	ctx = c.prepareExecution(ctx)
 
 	c.mu.Lock()
 	// For Start(), we use a minimal grace period initially - Wait() will handle the real grace
@@ -379,6 +368,29 @@ func (c *Cmd) Start(ctx context.Context) error {
 	if err != nil {
 		c.endSpan(err)
 	}
+
+	return err
+}
+
+// StartDaemon starts a long-running daemon process.
+// The context is used only for trace propagation (TRACEPARENT) - the daemon's
+// lifecycle is NOT tied to context cancellation. No client span is created.
+// Use TerminatePID or TerminateProcess for graceful daemon shutdown.
+func (c *Cmd) StartDaemon(ctx context.Context) error {
+	// Propagate trace context from the passed context
+	c.addTraceparentFromContext(ctx)
+
+	c.mu.Lock()
+	//nolint:gocritic // Daemon lifecycle must not be tied to context cancellation
+	c.cmd = c.buildCmd(context.Background(), WithGracePeriod(0))
+	c.startCh = make(chan struct{})
+	c.mu.Unlock()
+
+	err := c.cmd.Start()
+
+	c.mu.Lock()
+	close(c.startCh)
+	c.mu.Unlock()
 
 	return err
 }

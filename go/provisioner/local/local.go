@@ -31,22 +31,20 @@ import (
 	"syscall"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"golang.org/x/mod/semver"
+	"gopkg.in/yaml.v3"
+
+	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 
 	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/provisioner"
 	"github.com/multigres/multigres/go/provisioner/local/ports"
+	"github.com/multigres/multigres/go/tools/executil"
 	"github.com/multigres/multigres/go/tools/pathutil"
 	"github.com/multigres/multigres/go/tools/retry"
 	"github.com/multigres/multigres/go/tools/stringutil"
-	"github.com/multigres/multigres/go/tools/telemetry"
-
-	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-
-	"gopkg.in/yaml.v3"
 )
 
 var tracer = otel.Tracer("github.com/multigres/multigres/go/provisioner/local")
@@ -204,16 +202,16 @@ func (p *localProvisioner) provisionEtcd(ctx context.Context, req *provisioner.P
 	}
 
 	// Start etcd process
-	etcdCmd := exec.CommandContext(ctx, etcdBinary, args...)
+	etcdCmd := executil.Command(etcdBinary, args...)
 
 	fmt.Printf("▶️  - Launching etcd on port %d...", port)
 
-	if err := telemetry.StartCmd(ctx, etcdCmd); err != nil {
+	if err := etcdCmd.StartDaemon(ctx); err != nil {
 		return nil, fmt.Errorf("failed to start etcd: %w", err)
 	}
 
 	// Validate process is running
-	if err := p.validateProcessRunning(etcdCmd.Process.Pid); err != nil {
+	if err := p.validateProcessRunning(etcdCmd.Process().Pid); err != nil {
 		return nil, fmt.Errorf("etcd process validation failed: %w", err)
 	}
 
@@ -229,7 +227,7 @@ func (p *localProvisioner) provisionEtcd(ctx context.Context, req *provisioner.P
 	service := &LocalProvisionedService{
 		ID:         serviceID,
 		Service:    "etcd",
-		PID:        etcdCmd.Process.Pid,
+		PID:        etcdCmd.Process().Pid,
 		BinaryPath: etcdBinary,
 		DataDir:    dataDir,
 		Ports:      map[string]int{"tcp": port},
@@ -251,7 +249,7 @@ func (p *localProvisioner) provisionEtcd(ctx context.Context, req *provisioner.P
 		},
 		Metadata: map[string]any{
 			"runtime":     "binary",
-			"pid":         etcdCmd.Process.Pid,
+			"pid":         etcdCmd.Process().Pid,
 			"binary-path": etcdBinary,
 			"data-dir":    dataDir,
 			"service-id":  serviceID,
@@ -291,8 +289,8 @@ func (p *localProvisioner) findBinary(name string, serviceConfig map[string]any)
 // checkEtcdVersion verifies that the etcd binary major version matches expected version
 func (p *localProvisioner) checkEtcdVersion(binaryPath, expectedVersion string) error {
 	// Run etcd --version to get version info
-	cmd := exec.Command(binaryPath, "--version")
-	output, err := cmd.Output()
+	cmd := executil.Command(binaryPath, "--version")
+	output, err := cmd.Output(context.TODO(), executil.DefaultGracePeriod)
 	if err != nil {
 		return fmt.Errorf("failed to get etcd version: %w", err)
 	}
@@ -468,16 +466,16 @@ func (p *localProvisioner) provisionMultigateway(ctx context.Context, req *provi
 	}
 
 	// Start multigateway process
-	multigatewayCmd := exec.CommandContext(ctx, multigatewayBinary, args...)
+	multigatewayCmd := executil.Command(multigatewayBinary, args...)
 
 	fmt.Printf("▶️  - Launching multigateway (HTTP:%d, gRPC:%d, pg:%d)...", httpPort, grpcPort, pgPort)
 
-	if err := telemetry.StartCmd(ctx, multigatewayCmd); err != nil {
+	if err := multigatewayCmd.StartDaemon(ctx); err != nil {
 		return nil, fmt.Errorf("failed to start multigateway: %w", err)
 	}
 
 	// Validate process is running
-	if err := p.validateProcessRunning(multigatewayCmd.Process.Pid); err != nil {
+	if err := p.validateProcessRunning(multigatewayCmd.Process().Pid); err != nil {
 		return nil, fmt.Errorf("multigateway process validation failed: %w", err)
 	}
 
@@ -485,7 +483,7 @@ func (p *localProvisioner) provisionMultigateway(ctx context.Context, req *provi
 	service := &LocalProvisionedService{
 		ID:         serviceID,
 		Service:    "multigateway",
-		PID:        multigatewayCmd.Process.Pid,
+		PID:        multigatewayCmd.Process().Pid,
 		BinaryPath: multigatewayBinary,
 		Ports:      map[string]int{"http_port": httpPort, "grpc_port": grpcPort, "pg_port": pgPort},
 		FQDN:       "localhost",
@@ -603,16 +601,16 @@ func (p *localProvisioner) provisionMultiadmin(ctx context.Context, req *provisi
 	}
 
 	// Start multiadmin process
-	multiadminCmd := exec.CommandContext(ctx, multiadminBinary, args...)
+	multiadminCmd := executil.Command(multiadminBinary, args...)
 
 	fmt.Printf("▶️  - Launching multiadmin (HTTP:%d, gRPC:%d)...", httpPort, grpcPort)
 
-	if err := telemetry.StartCmd(ctx, multiadminCmd); err != nil {
+	if err := multiadminCmd.StartDaemon(ctx); err != nil {
 		return nil, fmt.Errorf("failed to start multiadmin: %w", err)
 	}
 
 	// Validate process is running
-	if err := p.validateProcessRunning(multiadminCmd.Process.Pid); err != nil {
+	if err := p.validateProcessRunning(multiadminCmd.Process().Pid); err != nil {
 		return nil, fmt.Errorf("multiadmin process validation failed: %w", err)
 	}
 
@@ -620,7 +618,7 @@ func (p *localProvisioner) provisionMultiadmin(ctx context.Context, req *provisi
 	service := &LocalProvisionedService{
 		ID:         serviceID,
 		Service:    "multiadmin",
-		PID:        multiadminCmd.Process.Pid,
+		PID:        multiadminCmd.Process().Pid,
 		BinaryPath: multiadminBinary,
 		Ports:      map[string]int{"http_port": httpPort, "grpc_port": grpcPort},
 		FQDN:       "localhost",
@@ -809,16 +807,16 @@ func (p *localProvisioner) provisionMultipooler(ctx context.Context, req *provis
 	args = append(args, "--service-map", "grpc-pooler")
 
 	// Start multipooler process
-	multipoolerCmd := exec.CommandContext(ctx, multipoolerBinary, args...)
+	multipoolerCmd := executil.Command(multipoolerBinary, args...)
 
 	fmt.Printf("▶️  - Launching multipooler (HTTP:%d, gRPC:%d)...", httpPort, grpcPort)
 
-	if err := telemetry.StartCmd(ctx, multipoolerCmd); err != nil {
+	if err := multipoolerCmd.StartDaemon(ctx); err != nil {
 		return nil, fmt.Errorf("failed to start multipooler: %w", err)
 	}
 
 	// Validate process is running
-	if err := p.validateProcessRunning(multipoolerCmd.Process.Pid); err != nil {
+	if err := p.validateProcessRunning(multipoolerCmd.Process().Pid); err != nil {
 		return nil, fmt.Errorf("multipooler process validation failed: %w", err)
 	}
 
@@ -834,7 +832,7 @@ func (p *localProvisioner) provisionMultipooler(ctx context.Context, req *provis
 	service := &LocalProvisionedService{
 		ID:         serviceID,
 		Service:    "multipooler",
-		PID:        multipoolerCmd.Process.Pid,
+		PID:        multipoolerCmd.Process().Pid,
 		BinaryPath: multipoolerBinary,
 		Ports:      map[string]int{"http_port": httpPort, "grpc_port": grpcPort},
 		FQDN:       "localhost",
@@ -968,16 +966,16 @@ func (p *localProvisioner) provisionMultiOrch(ctx context.Context, req *provisio
 	}
 
 	// Start multiorch process
-	multiorchCmd := exec.CommandContext(ctx, multiorchBinary, args...)
+	multiorchCmd := executil.Command(multiorchBinary, args...)
 
 	fmt.Printf("▶️  - Launching multiorch (HTTP:%d, gRPC:%d)...", httpPort, grpcPort)
 
-	if err := telemetry.StartCmd(ctx, multiorchCmd); err != nil {
+	if err := multiorchCmd.StartDaemon(ctx); err != nil {
 		return nil, fmt.Errorf("failed to start multiorch: %w", err)
 	}
 
 	// Validate process is running
-	if err := p.validateProcessRunning(multiorchCmd.Process.Pid); err != nil {
+	if err := p.validateProcessRunning(multiorchCmd.Process().Pid); err != nil {
 		return nil, fmt.Errorf("multiorch process validation failed: %w", err)
 	}
 
@@ -993,7 +991,7 @@ func (p *localProvisioner) provisionMultiOrch(ctx context.Context, req *provisio
 	service := &LocalProvisionedService{
 		ID:         serviceID,
 		Service:    "multiorch",
-		PID:        multiorchCmd.Process.Pid,
+		PID:        multiorchCmd.Process().Pid,
 		BinaryPath: multiorchBinary,
 		Ports:      map[string]int{"http_port": httpPort, "grpc_port": grpcPort},
 		FQDN:       "localhost",
