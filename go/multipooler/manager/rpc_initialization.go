@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -28,6 +27,7 @@ import (
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	pgctldpb "github.com/multigres/multigres/go/pb/pgctldservice"
+	"github.com/multigres/multigres/go/tools/executil"
 	"github.com/multigres/multigres/go/tools/retry"
 )
 
@@ -567,13 +567,13 @@ func (pm *MultiPoolerManager) initializePgBackRestStanza(ctx context.Context) er
 	stanzaCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(stanzaCtx, "pgbackrest",
+	cmd := executil.Command("pgbackrest",
 		"--stanza="+stanzaName,
 		"--config="+configPath,
 		"--repo1-path="+pm.backupLocation,
 		"stanza-create")
 
-	output, err := safeCombinedOutput(cmd)
+	output, err := safeCombinedOutput(stanzaCtx, cmd)
 	if err != nil {
 		return mterrors.New(mtrpcpb.Code_INTERNAL,
 			fmt.Sprintf("failed to create pgbackrest stanza %s: %v\nOutput: %s", stanzaName, err, output))

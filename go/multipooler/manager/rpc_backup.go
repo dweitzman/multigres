@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -233,8 +232,8 @@ func (pm *MultiPoolerManager) executePgBackrestRestore(ctx context.Context, back
 
 	args = append(args, "restore")
 
-	cmd := exec.CommandContext(restoreCtx, "pgbackrest", args...)
-	output, err := safeCombinedOutput(cmd)
+	cmd := executil.Command("pgbackrest", args...)
+	output, err := safeCombinedOutput(restoreCtx, cmd)
 	if err != nil {
 		return mterrors.New(mtrpcpb.Code_INTERNAL,
 			fmt.Sprintf("pgbackrest restore failed: %v\nOutput: %s", err, output))
@@ -341,7 +340,7 @@ func (pm *MultiPoolerManager) listBackups(ctx context.Context) ([]*multipoolerma
 	queryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(queryCtx, "pgbackrest",
+	cmd := executil.Command("pgbackrest",
 		"--stanza="+stanzaName,
 		"--config="+configPath,
 		"--repo1-path="+pm.backupLocation,
@@ -349,7 +348,7 @@ func (pm *MultiPoolerManager) listBackups(ctx context.Context) ([]*multipoolerma
 		"--log-level-console=off", // Override console logging to prevent contaminating JSON output
 		"info")
 
-	output, err := safeCombinedOutput(cmd)
+	output, err := safeCombinedOutput(queryCtx, cmd)
 	if err != nil {
 		// Handle case where stanza doesn't exist yet or config file is missing - return empty list
 		if output == "" || strings.Contains(output, "does not exist") || strings.Contains(output, "unable to open missing file") {
@@ -501,20 +500,15 @@ func (pm *MultiPoolerManager) validateBackupParams(backupType, configPath, stanz
 // safeCombinedOutput executes a command and streams its output to avoid blocking.
 // This prevents deadlocks when commands produce large amounts of output that
 // would fill the internal pipe buffers. Returns combined stdout and stderr.
-func safeCombinedOutput(cmd *exec.Cmd) (string, error) {
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return "", fmt.Errorf("failed to create stdout pipe: %w", err)
-	}
+func safeCombinedOutput(ctx context.Context, cmd *executil.Cmd) (string, error) {
+	cmd.CreateStdoutPipe().CreateStderrPipe()
 
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return "", fmt.Errorf("failed to create stderr pipe: %w", err)
-	}
-
-	if err := cmd.Start(); err != nil {
+	if err := cmd.Start(ctx); err != nil {
 		return "", fmt.Errorf("failed to start command: %w", err)
 	}
+
+	stdout := cmd.StdoutPipe()
+	stderr := cmd.StderrPipe()
 
 	lines := make(chan string, 100)
 	stdoutDone := make(chan struct{})
@@ -547,7 +541,7 @@ func safeCombinedOutput(cmd *exec.Cmd) (string, error) {
 		combinedBuf.WriteString(line)
 	}
 
-	return combinedBuf.String(), cmd.Wait()
+	return combinedBuf.String(), cmd.Wait(ctx)
 }
 
 // findBackupByAnnotations finds a backup by matching multipooler_id and backup_timestamp annotations
@@ -573,7 +567,7 @@ func (pm *MultiPoolerManager) findBackupByAnnotations(
 	infoCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(infoCtx, "pgbackrest",
+	cmd := executil.Command("pgbackrest",
 		"--stanza="+stanzaName,
 		"--config="+configPath,
 		"--repo1-path="+backupLocation,
@@ -581,7 +575,7 @@ func (pm *MultiPoolerManager) findBackupByAnnotations(
 		"--log-level-console=off",
 		"info")
 
-	output, err := safeCombinedOutput(cmd)
+	output, err := safeCombinedOutput(infoCtx, cmd)
 	if err != nil {
 		return "", mterrors.New(mtrpcpb.Code_INTERNAL,
 			fmt.Sprintf("pgbackrest info failed: %v\nOutput: %s", err, output))

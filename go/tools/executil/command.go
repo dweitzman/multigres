@@ -21,6 +21,8 @@ package executil
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"sync"
@@ -46,10 +48,16 @@ type Cmd struct {
 	env      []string // explicit base environment (nil = inherit)
 	extraEnv []string // accumulated via AddEnv()
 
-	// Stdin/Stdout/Stderr
+	// Stdin/Stdout/Stderr (set directly or via Pipe methods)
 	Stdin  any // io.Reader or *os.File
 	Stdout any // io.Writer or *os.File
 	Stderr any // io.Writer or *os.File
+
+	// Pipe configuration and state
+	wantStdoutPipe bool          // set via CreateStdoutPipe(), causes buildCmd to create pipe
+	wantStderrPipe bool          // set via CreateStderrPipe(), causes buildCmd to create pipe
+	stdoutPipe     io.ReadCloser // read end, available after Start() if wantStdoutPipe
+	stderrPipe     io.ReadCloser // read end, available after Start() if wantStderrPipe
 
 	// Runtime state (protected by mu)
 	mu       sync.Mutex
@@ -121,6 +129,36 @@ func (c *Cmd) ProcessState() *os.ProcessState {
 	return c.cmd.ProcessState
 }
 
+// CreateStdoutPipe configures the command to create a stdout pipe when started.
+// Call StdoutPipe() after Start() to get the reader. Must be called before Start().
+func (c *Cmd) CreateStdoutPipe() *Cmd {
+	c.wantStdoutPipe = true
+	return c
+}
+
+// CreateStderrPipe configures the command to create a stderr pipe when started.
+// Call StderrPipe() after Start() to get the reader. Must be called before Start().
+func (c *Cmd) CreateStderrPipe() *Cmd {
+	c.wantStderrPipe = true
+	return c
+}
+
+// StdoutPipe returns the stdout pipe reader after Start() has been called.
+// Returns nil if CreateStdoutPipe() wasn't called or Start() hasn't been called.
+func (c *Cmd) StdoutPipe() io.ReadCloser {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.stdoutPipe
+}
+
+// StderrPipe returns the stderr pipe reader after Start() has been called.
+// Returns nil if CreateStderrPipe() wasn't called or Start() hasn't been called.
+func (c *Cmd) StderrPipe() io.ReadCloser {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.stderrPipe
+}
+
 // Term sends SIGTERM to the process and waits for it to exit.
 // The context deadline/timeout limits how long to wait before sending SIGKILL.
 // Safe to call multiple times - subsequent calls return immediately with the first result.
@@ -167,7 +205,8 @@ func (c *Cmd) addTraceparentFromContext(ctx context.Context) {
 }
 
 // buildCmd creates the underlying exec.Cmd with proper configuration.
-func (c *Cmd) buildCmd(ctx context.Context, grace GraceOption) *exec.Cmd {
+// Returns an error if pipe creation fails.
+func (c *Cmd) buildCmd(ctx context.Context, grace GraceOption) (*exec.Cmd, error) {
 	cmd := exec.CommandContext(ctx, c.name, c.args...)
 	cmd.Dir = c.dir
 	cmd.Env = c.buildEnv()
@@ -198,6 +237,26 @@ func (c *Cmd) buildCmd(ctx context.Context, grace GraceOption) *exec.Cmd {
 		}
 	}
 
+	// Create pipes if requested (must be done before Start)
+	if c.wantStdoutPipe && c.Stdout == nil {
+		pipe, err := cmd.StdoutPipe()
+		if err != nil {
+			return nil, errors.New("executil: failed to create stdout pipe: " + err.Error())
+		}
+		c.mu.Lock()
+		c.stdoutPipe = pipe
+		c.mu.Unlock()
+	}
+	if c.wantStderrPipe && c.Stderr == nil {
+		pipe, err := cmd.StderrPipe()
+		if err != nil {
+			return nil, errors.New("executil: failed to create stderr pipe: " + err.Error())
+		}
+		c.mu.Lock()
+		c.stderrPipe = pipe
+		c.mu.Unlock()
+	}
+
 	// Configure graceful termination: SIGTERM first, then SIGKILL after grace period
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {
@@ -207,7 +266,7 @@ func (c *Cmd) buildCmd(ctx context.Context, grace GraceOption) *exec.Cmd {
 	}
 	cmd.WaitDelay = grace.duration()
 
-	return cmd
+	return cmd, nil
 }
 
 // prepareExecution sets up tracing and environment for command execution.
@@ -267,10 +326,15 @@ func (c *Cmd) Run(ctx context.Context, grace GraceOption) error {
 	ctx = c.prepareExecution(ctx)
 
 	c.mu.Lock()
-	c.cmd = c.buildCmd(ctx, grace)
+	cmd, err := c.buildCmd(ctx, grace)
+	if err != nil {
+		c.mu.Unlock()
+		c.endSpan(err)
+		return err
+	}
+	c.cmd = cmd
 	c.mu.Unlock()
 
-	var err error
 	if grace.isContextBased() {
 		err = c.runWithGraceContext(grace.graceContext())
 	} else {
@@ -309,11 +373,16 @@ func (c *Cmd) Output(ctx context.Context, grace GraceOption) ([]byte, error) {
 	ctx = c.prepareExecution(ctx)
 
 	c.mu.Lock()
-	c.cmd = c.buildCmd(ctx, grace)
+	cmd, err := c.buildCmd(ctx, grace)
+	if err != nil {
+		c.mu.Unlock()
+		c.endSpan(err)
+		return nil, err
+	}
+	c.cmd = cmd
 	c.mu.Unlock()
 
 	var out []byte
-	var err error
 	if grace.isContextBased() {
 		out, err = c.outputWithGraceContext(grace.graceContext(), false)
 	} else {
@@ -328,11 +397,16 @@ func (c *Cmd) CombinedOutput(ctx context.Context, grace GraceOption) ([]byte, er
 	ctx = c.prepareExecution(ctx)
 
 	c.mu.Lock()
-	c.cmd = c.buildCmd(ctx, grace)
+	cmd, err := c.buildCmd(ctx, grace)
+	if err != nil {
+		c.mu.Unlock()
+		c.endSpan(err)
+		return nil, err
+	}
+	c.cmd = cmd
 	c.mu.Unlock()
 
 	var out []byte
-	var err error
 	if grace.isContextBased() {
 		out, err = c.outputWithGraceContext(grace.graceContext(), true)
 	} else {
@@ -386,11 +460,17 @@ func (c *Cmd) Start(ctx context.Context) error {
 	c.mu.Lock()
 	// Use DefaultGracePeriod so processes have time to shut down gracefully
 	// when the context is cancelled (e.g., test completion/timeout)
-	c.cmd = c.buildCmd(ctx, DefaultGracePeriod)
+	cmd, err := c.buildCmd(ctx, DefaultGracePeriod)
+	if err != nil {
+		c.mu.Unlock()
+		c.endSpan(err)
+		return err
+	}
+	c.cmd = cmd
 	c.startCh = make(chan struct{})
 	c.mu.Unlock()
 
-	err := c.cmd.Start()
+	err = c.cmd.Start()
 
 	c.mu.Lock()
 	close(c.startCh)
@@ -413,11 +493,16 @@ func (c *Cmd) StartDaemon(ctx context.Context) error {
 
 	c.mu.Lock()
 	//nolint:gocritic // Daemon lifecycle must not be tied to context cancellation
-	c.cmd = c.buildCmd(context.Background(), WithGracePeriod(0))
+	cmd, err := c.buildCmd(context.Background(), WithGracePeriod(0))
+	if err != nil {
+		c.mu.Unlock()
+		return err
+	}
+	c.cmd = cmd
 	c.startCh = make(chan struct{})
 	c.mu.Unlock()
 
-	err := c.cmd.Start()
+	err = c.cmd.Start()
 
 	c.mu.Lock()
 	close(c.startCh)
