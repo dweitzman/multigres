@@ -31,8 +31,9 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/multigres/multigres/go/tools/telemetry"
 )
 
 var tracer = otel.Tracer("github.com/multigres/multigres/go/tools/executil")
@@ -193,18 +194,8 @@ func (c *Cmd) buildEnv() []string {
 
 // addTraceparentFromContext extracts trace context and adds TRACEPARENT env var.
 func (c *Cmd) addTraceparentFromContext(ctx context.Context) {
-	span := trace.SpanFromContext(ctx)
-	if !span.SpanContext().IsValid() {
-		return
-	}
-
-	// Use the standard W3C trace context propagator
-	carrier := propagation.MapCarrier{}
-	propagator := otel.GetTextMapPropagator()
-	propagator.Inject(ctx, carrier)
-
-	if traceparent, ok := carrier["traceparent"]; ok {
-		c.AddEnv("TRACEPARENT=" + traceparent)
+	if envVar := telemetry.TraceparentEnvVar(ctx); envVar != "" {
+		c.AddEnv(envVar)
 	}
 }
 
