@@ -15,7 +15,6 @@
 package endtoend
 
 import (
-	"context"
 	"fmt"
 	"net"
 	"os"
@@ -1056,10 +1055,12 @@ func TestOrphanDetectionWithRealPostgreSQL(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, pgProcess.Signal(syscall.Signal(0)))
 
-	// Kill the pgctld server subprocess abruptly (0-second grace for immediate SIGKILL)
-	killCtx, killCancel := context.WithTimeout(t.Context(), 0)
-	defer killCancel()
-	require.NoError(t, serverCmd.Term(killCtx))
+	// Kill the pgctld server subprocess abruptly - SIGKILL only (no SIGTERM)
+	// to simulate a crash. SIGTERM would trigger graceful shutdown which stops
+	// postgres, defeating the orphan detection test.
+	//nolint:gocritic // Crash simulation requires direct Kill() without SIGTERM
+	require.NoError(t, serverCmd.Process().Kill())
+	_ = serverCmd.Wait(t.Context())
 
 	// TODO(dweitzman): Start a process using sleep command and use that PID for orphan detection
 
