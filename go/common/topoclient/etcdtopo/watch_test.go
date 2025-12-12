@@ -258,9 +258,10 @@ func TestWatchRecursiveReconnection(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, receiveUpdate("before-disconnect", 5*time.Second))
 
-	// Simulate etcd crash - send SIGINT to allow cleanup trap to run
-	require.NoError(t, etcdServer.Process.Signal(os.Interrupt))
-	_ = etcdServer.Wait() // Ignore error - process was killed
+	// Simulate etcd stopping and restarting
+	termCtx, termCancel := context.WithTimeout(context.Background(), 1*time.Second)
+	_ = etcdServer.Term(termCtx)
+	termCancel()
 
 	// Wait for both ports to be released (client and peer)
 	require.Eventually(t, func() bool {
