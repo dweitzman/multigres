@@ -1,7 +1,7 @@
 # Incremental SCRAM Authentication Implementation Plan for Multigres
 
 **Date:** 2025-12-09
-**Status:** Planning
+**Status:** In Progress
 **Target:** Production-ready SCRAM authentication with incremental, mergeable phases
 
 ## Executive Summary
@@ -64,43 +64,29 @@ This approach minimizes risk and leverages years of community learnings.
 
 **Note on PR Size:** Each phase below can potentially be broken into multiple smaller PRs where the work is naturally divisible. Prefer smaller, focused, easy-to-review PRs over large changes. Only group related changes that genuinely need to be together.
 
-### Phase 1: SCRAM Protocol Foundation
+### Phase 1: SCRAM Protocol Foundation ✅ COMPLETED
 
 **Objective:** Establish tested SCRAM protocol implementation without changing connection behavior
 
-#### Exploration Branch Reference
+**Status:** Merged in [PR #334](https://github.com/multigres/multigres/pull/334) - `feat(pgprotocol): add SCRAM-SHA-256 auth library with passthrough support`
 
-All code for this phase already exists and is well-tested in `dw-auth-exploration` branch. **Recommendation: Port these files directly with minimal changes.** The implementation is RFC-compliant with 69+ passing tests.
+#### What Was Built
 
-#### What Gets Built
+1. SCRAM protocol code ported from exploration branch:
+   - `go/pgprotocol/auth/scram/scram.go` - Message parsing/generation
+   - `go/pgprotocol/auth/scram/crypto.go` - RFC 5802 cryptographic operations
+   - `go/pgprotocol/auth/scram/client.go` - Client-side implementation for passthrough
+   - `go/pgprotocol/auth/scram/server.go` - Server-side authenticator state machine
 
-1. Port SCRAM protocol code from exploration branch:
-   - `go/pgprotocol/auth/scram.go` - Message parsing/generation (WORKING in exploration)
-   - `go/pgprotocol/auth/scram_crypto.go` - RFC 5802 cryptographic operations (WORKING in exploration)
-   - `go/pgprotocol/auth/scram_client.go` - Client-side implementation for passthrough (WORKING in exploration)
-   - `go/pgprotocol/auth/authenticator.go` - Server-side authenticator state machine (WORKING in exploration)
-
-2. Comprehensive test coverage (port from exploration):
-   - Unit tests for all crypto operations with RFC test vectors (69+ tests PASSING in exploration)
+2. Comprehensive test coverage:
+   - Unit tests for all crypto operations with RFC test vectors
    - Protocol parsing tests (client-first, server-first, client-final, server-final messages)
    - SCRAM key extraction and passthrough validation tests
    - Error cases: malformed messages, replay attacks, wrong passwords
 
-#### Testing Approach
+#### Merge Status
 
-- Run existing 69+ unit tests from exploration branch
-- Add fuzz testing for message parsers
-- Security-focused tests: replay attack prevention, nonce validation, proof verification
-
-#### Success Criteria
-
-- All SCRAM protocol tests passing
-- Code review approved with focus on cryptographic correctness
-- No integration with existing services yet (pure library code)
-
-#### Merge Readiness
-
-**Ready to merge immediately** - this is pure library code with no service integration. Existing trust authentication continues to work.
+**MERGED** - Pure library code with no service integration. Existing trust authentication continues to work.
 
 ---
 
@@ -616,10 +602,15 @@ The exploration branch has a failing test for SET ROLE persistence (`TestMultiGa
 
 ## Critical Files for Implementation
 
-### Phase 1-3 (Protocol and Authentication)
+### Phase 1 (Protocol) - COMPLETED
 
-- `go/pgprotocol/auth/scram.go` - Core SCRAM protocol, message parsing
-- `go/pgprotocol/auth/authenticator.go` - Server-side authenticator state machine
+- `go/pgprotocol/auth/scram/scram.go` - Core SCRAM protocol, message parsing
+- `go/pgprotocol/auth/scram/crypto.go` - RFC 5802 cryptographic operations
+- `go/pgprotocol/auth/scram/client.go` - Client-side implementation for passthrough
+- `go/pgprotocol/auth/scram/server.go` - Server-side authenticator state machine
+
+### Phase 2-3 (Credential Fetching and Authentication)
+
 - `go/pgprotocol/server/startup.go` - Connection startup and authentication flow
 - `go/multigateway/auth/credential_cache.go` - Credential caching with TTL
 - `proto/multipoolerservice.proto` - GetAuthCredentials gRPC definition
@@ -744,7 +735,10 @@ The exploration branch has a failing test for SET ROLE persistence (`TestMultiGa
 
 ## Next Steps
 
-1. **Start Phase 1:** Port SCRAM protocol code from exploration branch
-2. **Create feature branch:** `git checkout -b scram-phase-1-protocol`
-3. **Run existing tests:** Verify exploration branch tests still pass
-4. **Code review:** Focus on cryptographic correctness and security
+1. ~~**Phase 1:** Port SCRAM protocol code from exploration branch~~ ✅ **DONE** (PR #334)
+2. **Start Phase 2:** Implement credential fetching infrastructure
+   - Add `GetAuthCredentials` gRPC endpoint to multipooler
+   - Implement credential cache in multigateway
+   - Add protobuf definitions for SCRAM hash responses
+3. **Create feature branch:** `git checkout -b scram-phase-2-credentials`
+4. **Code review:** Focus on secure credential handling and cache behavior
