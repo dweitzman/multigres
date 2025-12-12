@@ -1008,8 +1008,8 @@ func TestOrphanDetectionWithRealPostgreSQL(t *testing.T) {
 		Run(t.Context(), executil.DefaultGracePeriod)
 	require.NoError(t, err)
 
-	// Start pgctld server subprocess with orphan detection enabled
-	// Add endtoend directory to PATH so run_command_if_parent_dies.sh can be found
+	// Start pgctld server subprocess with orphan detection enabled.
+	// Add endtoend directory to PATH so postgres_orphan_watchdog.sh can be found.
 	endtoendDir, err := filepath.Abs(".")
 	require.NoError(t, err)
 

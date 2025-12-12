@@ -252,14 +252,14 @@ func startPostgreSQLWithConfig(logger *slog.Logger, config *pgctld.PostgresCtlCo
 	}
 
 	// If orphan detection environment variables are set, spawn a watchdog process
-	// that will stop postgres if the test parent dies or testdata dir is deleted
+	// that monitors postmaster.pid and kills postgres if the parent dies or testdata
+	// dir is deleted. The watchdog tracks the PID from postmaster.pid continuously,
+	// so it handles postgres restarts and can kill even after datadir deletion.
 	if servenv.IsTestOrphanDetectionEnabled() {
-		logger.Info("Spawning watchdog process for orphan detection")
+		logger.Info("Spawning watchdog process for orphan detection", "dataDir", config.PostgresDataDir)
 		watchdogCmd := executil.Command(
-			"run_command_if_parent_dies.sh",
-			"pg_ctl", "stop",
-			"-D", config.PostgresDataDir,
-			"-m", "fast",
+			"postgres_orphan_watchdog.sh",
+			config.PostgresDataDir,
 		)
 		// Environment variables automatically inherit
 		// Use StartDaemon since this is a long-running background process
