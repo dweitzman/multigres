@@ -25,7 +25,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -117,26 +116,6 @@ func getTestPortConfig(t *testing.T, numZones int) *testPortConfig {
 	return config
 }
 
-// killProcessByPID kills a process by PID using kill -9
-func killProcessByPID(pid int) error {
-	if pid <= 0 {
-		return fmt.Errorf("invalid PID: %d", pid)
-	}
-
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return fmt.Errorf("failed to find process %d: %w", pid, err)
-	}
-
-	// Use kill -9 (SIGKILL) to forcefully terminate
-	err = process.Signal(syscall.SIGKILL)
-	if err != nil {
-		return fmt.Errorf("failed to kill process %d: %w", pid, err)
-	}
-
-	return nil
-}
-
 // cleanupTestProcesses kills all processes that were started during the test
 func cleanupTestProcesses(tempDir string) error {
 	serviceStates, err := getServiceStates(tempDir)
@@ -149,9 +128,12 @@ func cleanupTestProcesses(tempDir string) error {
 	for serviceName, state := range serviceStates {
 		if state.PID > 0 {
 			fmt.Printf("Cleaning up %s process (PID: %d)...\n", serviceName, state.PID)
-			if err := killProcessByPID(state.PID); err != nil {
+			//nolint:gocritic // context.Background is appropriate for cleanup
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if err := executil.TerminatePID(ctx, state.PID); err != nil {
 				errors = append(errors, fmt.Sprintf("failed to kill %s (PID %d): %v", serviceName, state.PID, err))
 			}
+			cancel()
 		}
 	}
 

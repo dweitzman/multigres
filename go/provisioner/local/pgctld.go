@@ -18,15 +18,14 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"time"
 
 	"google.golang.org/grpc"
 
 	pb "github.com/multigres/multigres/go/pb/pgctldservice"
 	"github.com/multigres/multigres/go/provisioner/local/ports"
+	"github.com/multigres/multigres/go/tools/executil"
 	"github.com/multigres/multigres/go/tools/grpccommon"
-	"github.com/multigres/multigres/go/tools/telemetry"
 )
 
 // startPostgreSQLViaPgctld checks PostgreSQL status via pgctld gRPC.
@@ -262,14 +261,15 @@ func (p *localProvisioner) provisionPgctld(ctx context.Context, dbName, tableGro
 		serverArgs = append(serverArgs, "--grpc-socket-file", socketFile)
 	}
 
-	pgctldCmd := exec.CommandContext(ctx, pgctldBinary, serverArgs...)
+	pgctldCmd := executil.Command(pgctldBinary, serverArgs...)
 
-	if err := telemetry.StartCmd(ctx, pgctldCmd); err != nil {
+	// Use StartDaemon so pgctld runs independently of the provisioning context
+	if err := pgctldCmd.StartDaemon(ctx); err != nil {
 		return nil, fmt.Errorf("failed to start pgctld server: %w", err)
 	}
 
 	// Validate process is running
-	if err := p.validateProcessRunning(pgctldCmd.Process.Pid); err != nil {
+	if err := p.validateProcessRunning(pgctldCmd.Process().Pid); err != nil {
 		return nil, fmt.Errorf("pgctld process validation failed: %w", err)
 	}
 
@@ -293,7 +293,7 @@ func (p *localProvisioner) provisionPgctld(ctx context.Context, dbName, tableGro
 	service := &LocalProvisionedService{
 		ID:         pgctldServiceID,
 		Service:    "pgctld",
-		PID:        pgctldCmd.Process.Pid,
+		PID:        pgctldCmd.Process().Pid,
 		BinaryPath: pgctldBinary,
 		Ports:      map[string]int{"grpc_port": grpcPort},
 		FQDN:       "localhost",

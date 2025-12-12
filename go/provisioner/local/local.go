@@ -43,7 +43,6 @@ import (
 	"github.com/multigres/multigres/go/provisioner/local/ports"
 	"github.com/multigres/multigres/go/tools/executil"
 	"github.com/multigres/multigres/go/tools/pathutil"
-	"github.com/multigres/multigres/go/tools/retry"
 	"github.com/multigres/multigres/go/tools/stringutil"
 )
 
@@ -1163,68 +1162,16 @@ func (p *localProvisioner) deprovisionMultipooler(ctx context.Context, req *prov
 	return nil
 }
 
-// stopProcessByPID stops a process by its PID
+// stopProcessByPID stops a process by its PID using graceful termination (SIGTERM → SIGKILL)
 func (p *localProvisioner) stopProcessByPID(ctx context.Context, name string, pid int) error {
 	ctx, span := tracer.Start(ctx, "stopProcessByPID")
 	span.SetAttributes(attribute.String("service", name))
 	defer span.End()
 
-	// Check if process exists
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		// Process not found, assume already cleaned up
-		fmt.Printf("Process %d not found, assuming already stopped\n", pid)
-		return nil
-	}
-
-	// Send SIGTERM to gracefully stop the process
-	if err := process.Signal(syscall.SIGTERM); err != nil {
-		// Process might already be dead, check errno
-		errMsg := err.Error()
-		if strings.Contains(errMsg, "no such process") || strings.Contains(errMsg, "process already finished") {
-			fmt.Printf("Process %d already stopped\n", pid)
-			return nil
-		}
-
-		// If SIGTERM fails for other reasons, try SIGKILL
-		if err := process.Kill(); err != nil {
-			// If kill also fails and it's because process doesn't exist, that's ok
-			errMsg := err.Error()
-			if strings.Contains(errMsg, "no such process") || strings.Contains(errMsg, "process already finished") {
-				fmt.Printf("Process %d already stopped\n", pid)
-				return nil
-			}
-			return fmt.Errorf("failed to kill process %d: %w", pid, err)
-		}
-	}
-
-	// Wait for the process to actually exit
-	p.waitForProcessExit(ctx, process, 2*time.Second)
-
-	return nil
-}
-
-// waitForProcessExit waits for a process to exit by polling with Signal(0)
-func (p *localProvisioner) waitForProcessExit(ctx context.Context, process *os.Process, timeout time.Duration) {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	// Use 2 second grace period for SIGTERM before SIGKILL
+	termCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-
-	r := retry.New(10*time.Millisecond, 1*time.Second)
-	for _, err := range r.Attempts(ctx) {
-		if err != nil {
-			// Timeout reached
-			fmt.Printf("Process %d still running after SIGTERM\n", process.Pid)
-			return
-		}
-
-		// Send null signal to test if process exists
-		err := process.Signal(syscall.Signal(0))
-		if err != nil {
-			fmt.Printf("Process %d stopped successfully\n", process.Pid)
-			// Process has exited or doesn't exist
-			return
-		}
-	}
+	return executil.TerminatePID(termCtx, pid)
 }
 
 // Bootstrap sets up etcd and creates the default database
