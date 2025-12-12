@@ -163,6 +163,7 @@ func (c *Cmd) StderrPipe() io.ReadCloser {
 // The context deadline/timeout limits how long to wait before sending SIGKILL.
 // Safe to call multiple times - subsequent calls return immediately with the first result.
 // Safe to call even if process wasn't started - returns nil.
+// Always returns nil since Wait() guarantees the process terminates (using SIGKILL if needed).
 func (c *Cmd) Term(ctx context.Context) error {
 	proc := c.Process()
 	if proc == nil {
@@ -170,8 +171,11 @@ func (c *Cmd) Term(ctx context.Context) error {
 	}
 	// Send SIGTERM (ignore error - process may have already exited)
 	_ = proc.Signal(syscall.SIGTERM)
-	// Wait for exit with SIGKILL fallback on ctx timeout
-	return c.Wait(ctx)
+	// Wait for exit with SIGKILL fallback on ctx timeout.
+	// Always returns nil since termination was intentional and Wait() guarantees
+	// the process terminates (it sends SIGKILL if ctx expires).
+	_ = c.Wait(ctx)
+	return nil
 }
 
 // buildEnv prepares the final environment for the command.
@@ -243,18 +247,14 @@ func (c *Cmd) buildCmd(ctx context.Context, grace GraceOption) (*exec.Cmd, error
 		if err != nil {
 			return nil, errors.New("executil: failed to create stdout pipe: " + err.Error())
 		}
-		c.mu.Lock()
 		c.stdoutPipe = pipe
-		c.mu.Unlock()
 	}
 	if c.wantStderrPipe && c.Stderr == nil {
 		pipe, err := cmd.StderrPipe()
 		if err != nil {
 			return nil, errors.New("executil: failed to create stderr pipe: " + err.Error())
 		}
-		c.mu.Lock()
 		c.stderrPipe = pipe
-		c.mu.Unlock()
 	}
 
 	// Configure graceful termination: SIGTERM first, then SIGKILL after grace period
