@@ -24,7 +24,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -38,6 +37,7 @@ import (
 
 	"github.com/multigres/multigres/go/common/constants"
 	"github.com/multigres/multigres/go/test/utils"
+	"github.com/multigres/multigres/go/tools/executil"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	"github.com/multigres/multigres/go/pb/multipoolermanagerdata"
@@ -267,7 +267,11 @@ func TestBootstrapInitialization(t *testing.T) {
 
 		// Step 3: Restart multipooler (should auto-restore from backup)
 		serviceID := fmt.Sprintf("%s/%s", env.config.cellName, standbyNode.name)
-		multipoolerCmd := exec.Command("multipooler",
+		mpLogFile := filepath.Join(standbyNode.dataDir, "multipooler-autorestore.log")
+		mpLogF, err := os.Create(mpLogFile)
+		require.NoError(t, err)
+
+		multipoolerCmd := executil.Command("multipooler",
 			"--grpc-port", fmt.Sprintf("%d", standbyNode.grpcPort),
 			"--database", env.config.database,
 			"--table-group", constants.DefaultTableGroup,
@@ -282,14 +286,10 @@ func TestBootstrapInitialization(t *testing.T) {
 			"--cell", env.config.cellName,
 			"--service-id", serviceID,
 			"--pgbackrest-stanza", env.config.stanzaName,
-		)
-		multipoolerCmd.Dir = standbyNode.dataDir
-		mpLogFile := filepath.Join(standbyNode.dataDir, "multipooler-autorestore.log")
-		mpLogF, err := os.Create(mpLogFile)
-		require.NoError(t, err)
+		).Dir(standbyNode.dataDir)
 		multipoolerCmd.Stdout = mpLogF
 		multipoolerCmd.Stderr = mpLogF
-		require.NoError(t, multipoolerCmd.Start())
+		require.NoError(t, multipoolerCmd.Start(t.Context()))
 		standbyNode.multipoolerCmd = multipoolerCmd
 		t.Logf("Restarted multipooler for %s (should auto-restore)", standbyNode.name)
 

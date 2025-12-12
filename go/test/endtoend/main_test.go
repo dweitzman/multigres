@@ -36,6 +36,11 @@ func TestMain(m *testing.M) {
 	// the test process and kill postgres if the test crashes
 	os.Setenv("MULTIGRES_TEST_PARENT_PID", fmt.Sprintf("%d", os.Getpid()))
 
+	// Set PGCONNECT_TIMEOUT to prevent tests from hanging indefinitely
+	// if PostgreSQL is slow to start. This affects pg_isready, psql, and
+	// other libpq-based tools used by pgctld internally.
+	os.Setenv("PGCONNECT_TIMEOUT", "5")
+
 	// Run all tests
 	exitCode := m.Run()
 

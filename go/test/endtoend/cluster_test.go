@@ -42,6 +42,7 @@ import (
 	pb "github.com/multigres/multigres/go/pb/pgctldservice"
 	"github.com/multigres/multigres/go/provisioner/local"
 	"github.com/multigres/multigres/go/test/utils"
+	"github.com/multigres/multigres/go/tools/executil"
 	"github.com/multigres/multigres/go/tools/retry"
 	"github.com/multigres/multigres/go/tools/stringutil"
 
@@ -531,9 +532,9 @@ func queryHeartbeatCount(addr string) (int, error) {
 func executeInitCommand(t *testing.T, args []string) (string, error) {
 	// Prepare the full command: "multigres cluster init <args>"
 	cmdArgs := append([]string{"cluster", "init"}, args...)
-	cmd := exec.Command("multigres", cmdArgs...)
+	cmd := executil.Command("multigres", cmdArgs...)
 
-	output, err := cmd.CombinedOutput()
+	output, err := cmd.CombinedOutput(t.Context(), executil.DefaultGracePeriod)
 	return string(output), err
 }
 
@@ -736,23 +737,16 @@ func TestInitCommandConfigFileAlreadyExists(t *testing.T) {
 func executeStartCommand(t *testing.T, args []string, tempDir string) (string, error) {
 	// Prepare the full command: "multigres cluster start <args>"
 	cmdArgs := append([]string{"cluster", "start"}, args...)
-	cmd := exec.Command("multigres", cmdArgs...)
-
-	// Set MULTIGRES_TESTDATA_DIR for directory-deletion triggered cleanup
-	cmd.Env = append(os.Environ(),
-		"MULTIGRES_TESTDATA_DIR="+tempDir,
-	)
+	cmd := executil.Command("multigres", cmdArgs...).
+		AddEnv("MULTIGRES_TESTDATA_DIR=" + tempDir)
 
 	// On macOS, PostgreSQL 17 requires proper locale settings to avoid
 	// "postmaster became multithreaded during startup" errors.
 	if runtime.GOOS == "darwin" {
-		cmd.Env = append(cmd.Env,
-			"LC_ALL=en_US.UTF-8",
-			"LANG=en_US.UTF-8",
-		)
+		cmd.AddEnv("LC_ALL=en_US.UTF-8", "LANG=en_US.UTF-8")
 	}
 
-	output, err := cmd.CombinedOutput()
+	output, err := cmd.CombinedOutput(t.Context(), executil.DefaultGracePeriod)
 	return string(output), err
 }
 
@@ -760,9 +754,9 @@ func executeStartCommand(t *testing.T, args []string, tempDir string) (string, e
 func executeStopCommand(t *testing.T, args []string) (string, error) {
 	// Prepare the full command: "multigres cluster down <args>"
 	cmdArgs := append([]string{"cluster", "stop"}, args...)
-	cmd := exec.Command("multigres", cmdArgs...)
+	cmd := executil.Command("multigres", cmdArgs...)
 
-	output, err := cmd.CombinedOutput()
+	output, err := cmd.CombinedOutput(t.Context(), executil.DefaultGracePeriod)
 	return string(output), err
 }
 
@@ -784,9 +778,9 @@ func testPostgreSQLConnection(t *testing.T, tempDir string, port int, zone strin
 	t.Logf("Using Unix socket in directory: %s", socketDir)
 
 	// Execute psql command to test connectivity via Unix socket (no password needed)
-	cmd := exec.Command("psql", "-h", socketDir, "-p", fmt.Sprintf("%d", port), "-U", "postgres", "-d", "postgres", "-c", fmt.Sprintf("SELECT 'Zone %s PostgreSQL is working!' as status, version();", zone))
+	cmd := executil.Command("psql", "-h", socketDir, "-p", fmt.Sprintf("%d", port), "-U", "postgres", "-d", "postgres", "-c", fmt.Sprintf("SELECT 'Zone %s PostgreSQL is working!' as status, version();", zone))
 
-	output, err := cmd.CombinedOutput()
+	output, err := cmd.CombinedOutput(t.Context(), executil.DefaultGracePeriod)
 	require.NoError(t, err, "PostgreSQL connection failed on port %d (Zone %s): %s", port, zone, string(output))
 
 	t.Logf("Zone %s PostgreSQL (port %d) is responding correctly", zone, port)
@@ -1116,12 +1110,12 @@ func TestClusterLifecycle(t *testing.T) {
 
 		// Try to run multipooler without --database flag (should fail)
 		t.Log("Testing multipooler without --database flag (should fail)...")
-		cmd := exec.Command("multipooler",
+		cmd := executil.Command("multipooler",
 			"--topo-global-server-addresses", "fake-address",
 			"--topo-global-root", "fake-root",
 			"--topo-implementation", "etcd2",
 		)
-		output, err := cmd.CombinedOutput()
+		output, err := cmd.CombinedOutput(t.Context(), executil.DefaultGracePeriod)
 
 		// Should fail with database flag required error
 		require.Error(t, err, "multipooler should fail when --database flag is missing")
@@ -1131,8 +1125,8 @@ func TestClusterLifecycle(t *testing.T) {
 
 		// Try to run multipooler with --database flag (should succeed with setup)
 		t.Log("Testing multipooler with --database flag (should not show database error)...")
-		cmd = exec.Command("multipooler", "--cell", "testcell", "--database", "testdb", "--help")
-		output, err = cmd.CombinedOutput()
+		output, err = executil.Command("multipooler", "--cell", "testcell", "--database", "testdb", "--help").
+			CombinedOutput(t.Context(), executil.DefaultGracePeriod)
 		require.NoError(t, err)
 
 		// Should not fail due to database flag (may fail for other reasons like missing topo)

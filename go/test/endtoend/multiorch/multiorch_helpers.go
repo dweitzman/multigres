@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -39,6 +38,7 @@ import (
 	"github.com/multigres/multigres/go/common/topoclient/etcdtopo"
 	"github.com/multigres/multigres/go/provisioner/local/pgbackrest"
 	"github.com/multigres/multigres/go/test/utils"
+	"github.com/multigres/multigres/go/tools/executil"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
@@ -52,8 +52,8 @@ type nodeInstance struct {
 	pgPort         int
 	pgctldGrpcPort int
 	dataDir        string
-	pgctldProcess  *exec.Cmd
-	multipoolerCmd *exec.Cmd
+	pgctldProcess  *executil.Cmd
+	multipoolerCmd *executil.Cmd
 }
 
 // testEnvConfig holds configuration options for test environment setup
@@ -76,7 +76,7 @@ type testEnv struct {
 	ts             topoclient.Store
 	backupLocation string
 	nodes          []*nodeInstance
-	multiOrchCmd   *exec.Cmd
+	multiOrchCmd   *executil.Cmd
 }
 
 // setupMultiOrchTestEnv creates a test environment with etcd and topology server
@@ -203,7 +203,7 @@ func (env *testEnv) registerNodes() {
 }
 
 // startMultiOrch starts multiorch with the configured watch targets
-func (env *testEnv) startMultiOrch() *exec.Cmd {
+func (env *testEnv) startMultiOrch() *executil.Cmd {
 	env.t.Helper()
 
 	watchTarget := fmt.Sprintf("%s/%s/%s", env.config.database, env.config.tableGroup, env.config.shardID)
@@ -228,31 +228,32 @@ func createEmptyNode(t *testing.T, baseDir, cell, shard, database string, index 
 
 	// Start pgctld server
 	logFile := filepath.Join(dataDir, "pgctld.log")
-	pgctldCmd := exec.Command("pgctld", "server",
+	pgctldCmd := executil.Command("pgctld", "server",
 		"--pooler-dir", dataDir,
 		"--grpc-port", fmt.Sprintf("%d", pgctldGrpcPort),
 		"--pg-port", fmt.Sprintf("%d", pgPort),
-		"--log-output", logFile)
+		"--log-output", logFile).
+		AddEnv("MULTIGRES_TESTDATA_DIR=" + baseDir)
 
-	// Set MULTIGRES_TESTDATA_DIR for directory-deletion triggered cleanup
-	pgctldCmd.Env = append(os.Environ(),
-		"MULTIGRES_TESTDATA_DIR="+baseDir,
-	)
 	if runtime.GOOS == "darwin" {
 		// On macOS, PostgreSQL 17 requires proper locale settings to avoid
 		// "postmaster became multithreaded during startup" error
-		pgctldCmd.Env = append(pgctldCmd.Env, "LC_ALL=en_US.UTF-8", "LANG=en_US.UTF-8")
+		pgctldCmd = pgctldCmd.AddEnv("LC_ALL=en_US.UTF-8", "LANG=en_US.UTF-8")
 	}
 
-	require.NoError(t, pgctldCmd.Start())
-	t.Logf("Started pgctld for %s (pid: %d, grpc: %d, pg: %d)", name, pgctldCmd.Process.Pid, pgctldGrpcPort, pgPort)
+	require.NoError(t, pgctldCmd.Start(t.Context()))
+	t.Logf("Started pgctld for %s (pid: %d, grpc: %d, pg: %d)", name, pgctldCmd.Process().Pid, pgctldGrpcPort, pgPort)
 
 	// Wait for pgctld to be ready
 	waitForProcessReady(t, "pgctld", pgctldGrpcPort, 10*time.Second)
 
 	// Start multipooler
 	serviceID := fmt.Sprintf("%s/%s", cell, name)
-	multipoolerCmd := exec.Command("multipooler",
+	mpLogFile := filepath.Join(dataDir, "multipooler.log")
+	mpLogF, err := os.Create(mpLogFile)
+	require.NoError(t, err)
+
+	multipoolerCmd := executil.Command("multipooler",
 		"--grpc-port", fmt.Sprintf("%d", grpcPort),
 		"--database", database,
 		"--table-group", constants.DefaultTableGroup,
@@ -267,16 +268,12 @@ func createEmptyNode(t *testing.T, baseDir, cell, shard, database string, index 
 		"--cell", cell,
 		"--service-id", serviceID,
 		"--pgbackrest-stanza", pgBackRestStanza,
-	)
-	multipoolerCmd.Dir = dataDir
-	mpLogFile := filepath.Join(dataDir, "multipooler.log")
-	mpLogF, err := os.Create(mpLogFile)
-	require.NoError(t, err)
+	).Dir(dataDir)
 	multipoolerCmd.Stdout = mpLogF
 	multipoolerCmd.Stderr = mpLogF
 
-	require.NoError(t, multipoolerCmd.Start())
-	t.Logf("Started multipooler for %s (pid: %d, grpc: %d)", name, multipoolerCmd.Process.Pid, grpcPort)
+	require.NoError(t, multipoolerCmd.Start(t.Context()))
+	t.Logf("Started multipooler for %s (pid: %d, grpc: %d)", name, multipoolerCmd.Process().Pid, grpcPort)
 
 	// Wait for multipooler to be ready by polling its status
 	waitForMultipoolerReady(t, grpcPort, 30*time.Second)
@@ -323,49 +320,31 @@ func waitForMultipoolerReady(t *testing.T, grpcPort int, timeout time.Duration) 
 	}, timeout, 200*time.Millisecond, "Multipooler at port %d did not become ready", grpcPort)
 }
 
-// terminateProcess gracefully terminates a process by first sending SIGTERM,
-// waiting for graceful shutdown, and only using SIGKILL if necessary.
-func terminateProcess(t *testing.T, cmd *exec.Cmd, name string, timeout time.Duration) {
+// terminateProcess gracefully terminates a process using executil's Term method.
+func terminateProcess(t *testing.T, cmd *executil.Cmd, name string, timeout time.Duration) {
 	t.Helper()
-	if cmd == nil || cmd.Process == nil {
+	if cmd == nil || cmd.Process() == nil {
 		return
 	}
 
-	// Try graceful shutdown with SIGTERM first
-	if err := cmd.Process.Signal(os.Interrupt); err != nil {
-		t.Logf("Failed to send SIGTERM to %s: %v, forcing kill", name, err)
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		return
-	}
+	// Use executil's Term for graceful shutdown (SIGTERM + wait, SIGKILL on timeout)
+	ctx, cancel := context.WithTimeout(t.Context(), timeout)
+	defer cancel()
 
-	// Wait for graceful shutdown with timeout
-	done := make(chan error, 1)
-	go func() {
-		done <- cmd.Wait()
-	}()
-
-	select {
-	case <-time.After(timeout):
-		t.Logf("%s did not terminate gracefully within %v, forcing kill", name, timeout)
-		_ = cmd.Process.Kill()
-		<-done // Wait for process to actually die
-	case err := <-done:
-		if err != nil {
-			t.Logf("%s terminated with error: %v", name, err)
-		} else {
-			t.Logf("%s terminated gracefully", name)
-		}
+	if err := cmd.Term(ctx); err != nil {
+		t.Logf("%s terminated with error: %v", name, err)
+	} else {
+		t.Logf("%s terminated gracefully", name)
 	}
 }
 
 // cleanupNode stops pgctld and multipooler processes
 func cleanupNode(t *testing.T, node *nodeInstance) {
 	t.Helper()
-	if node.multipoolerCmd != nil && node.multipoolerCmd.Process != nil {
+	if node.multipoolerCmd != nil && node.multipoolerCmd.Process() != nil {
 		terminateProcess(t, node.multipoolerCmd, "multipooler", 2*time.Second)
 	}
-	if node.pgctldProcess != nil && node.pgctldProcess.Process != nil {
+	if node.pgctldProcess != nil && node.pgctldProcess.Process() != nil {
 		terminateProcess(t, node.pgctldProcess, "pgctld", 2*time.Second)
 	}
 }
@@ -520,7 +499,7 @@ func setupPgBackRestForBootstrap(t *testing.T, baseDir string, nodes []*nodeInst
 }
 
 // startMultiOrch starts a multiorch process with the given configuration
-func startMultiOrch(t *testing.T, baseDir, cell string, etcdAddr string, watchTargets []string) *exec.Cmd {
+func startMultiOrch(t *testing.T, baseDir, cell string, etcdAddr string, watchTargets []string) *executil.Cmd {
 	t.Helper()
 
 	orchDataDir := filepath.Join(baseDir, "multiorch")
@@ -529,7 +508,11 @@ func startMultiOrch(t *testing.T, baseDir, cell string, etcdAddr string, watchTa
 	grpcPort := utils.GetFreePort(t)
 	httpPort := utils.GetFreePort(t)
 
-	args := []string{
+	logFile := filepath.Join(orchDataDir, "multiorch.log")
+	logF, err := os.Create(logFile)
+	require.NoError(t, err, "Failed to create multiorch log file")
+
+	multiOrchCmd := executil.Command("multiorch",
 		"--cell", cell,
 		"--watch-targets", strings.Join(watchTargets, ","),
 		"--topo-global-server-addresses", etcdAddr,
@@ -541,20 +524,13 @@ func startMultiOrch(t *testing.T, baseDir, cell string, etcdAddr string, watchTa
 		"--cluster-metadata-refresh-interval", "500ms",
 		"--pooler-health-check-interval", "500ms",
 		"--recovery-cycle-interval", "500ms",
-	}
-
-	multiOrchCmd := exec.Command("multiorch", args...)
-	multiOrchCmd.Dir = orchDataDir
-
-	logFile := filepath.Join(orchDataDir, "multiorch.log")
-	logF, err := os.Create(logFile)
-	require.NoError(t, err, "Failed to create multiorch log file")
+	).Dir(orchDataDir)
 	multiOrchCmd.Stdout = logF
 	multiOrchCmd.Stderr = logF
 
-	require.NoError(t, multiOrchCmd.Start(), "Failed to start multiorch")
+	require.NoError(t, multiOrchCmd.Start(t.Context()), "Failed to start multiorch")
 	t.Logf("Started multiorch (pid: %d, grpc: %d, http: %d, log: %s)",
-		multiOrchCmd.Process.Pid, grpcPort, httpPort, logFile)
+		multiOrchCmd.Process().Pid, grpcPort, httpPort, logFile)
 
 	// Wait for multiorch to be ready
 	waitForProcessReady(t, "multiorch", grpcPort, 15*time.Second)
