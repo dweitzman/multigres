@@ -243,7 +243,9 @@ func TestBootstrapInitialization(t *testing.T) {
 
 		// Step 2: Stop postgres and remove data directory to simulate data loss
 		// First terminate the multipooler
-		terminateProcess(t, standbyNode.multipoolerCmd, "standby-multipooler", 5*time.Second)
+		termCtx, termCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = standbyNode.multipoolerCmd.Term(termCtx)
+		termCancel()
 		standbyNode.multipoolerCmd = nil
 
 		// Stop postgres via pgctld if running

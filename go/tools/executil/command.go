@@ -377,13 +377,16 @@ func (c *Cmd) outputWithGraceContext(graceCtx context.Context, combined bool) ([
 
 // Start starts the command but does not wait for it to complete.
 // The context controls when to trigger graceful termination (SIGTERM).
-// Call Wait() to wait for completion and specify the grace period before SIGKILL.
+// When context is cancelled, the process gets DefaultGracePeriod (5s) to exit before SIGKILL.
+// Note: This grace period only applies to context cancellation. When Term(ctx) is called
+// explicitly, it uses its own context timeout for the grace period.
 func (c *Cmd) Start(ctx context.Context) error {
 	ctx = c.prepareExecution(ctx)
 
 	c.mu.Lock()
-	// For Start(), we use a minimal grace period initially - Wait() will handle the real grace
-	c.cmd = c.buildCmd(ctx, WithGracePeriod(0))
+	// Use DefaultGracePeriod so processes have time to shut down gracefully
+	// when the context is cancelled (e.g., test completion/timeout)
+	c.cmd = c.buildCmd(ctx, DefaultGracePeriod)
 	c.startCh = make(chan struct{})
 	c.mu.Unlock()
 

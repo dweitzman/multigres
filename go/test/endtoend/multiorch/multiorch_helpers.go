@@ -209,7 +209,11 @@ func (env *testEnv) startMultiOrch() *executil.Cmd {
 	watchTarget := fmt.Sprintf("%s/%s/%s", env.config.database, env.config.tableGroup, env.config.shardID)
 	cmd := startMultiOrch(env.t, env.tempDir, env.config.cellName, env.etcdClientAddr, []string{watchTarget})
 	env.multiOrchCmd = cmd
-	env.t.Cleanup(func() { terminateProcess(env.t, cmd, "multiorch", 5*time.Second) })
+	env.t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = cmd.Term(ctx)
+	})
 	return cmd
 }
 
@@ -320,33 +324,16 @@ func waitForMultipoolerReady(t *testing.T, grpcPort int, timeout time.Duration) 
 	}, timeout, 200*time.Millisecond, "Multipooler at port %d did not become ready", grpcPort)
 }
 
-// terminateProcess gracefully terminates a process using executil's Term method.
-func terminateProcess(t *testing.T, cmd *executil.Cmd, name string, timeout time.Duration) {
-	t.Helper()
-	if cmd == nil || cmd.Process() == nil {
-		return
-	}
-
-	// Use executil's Term for graceful shutdown (SIGTERM + wait, SIGKILL on timeout)
-	ctx, cancel := context.WithTimeout(t.Context(), timeout)
-	defer cancel()
-
-	if err := cmd.Term(ctx); err != nil {
-		t.Logf("%s terminated with error: %v", name, err)
-	} else {
-		t.Logf("%s terminated gracefully", name)
-	}
-}
-
 // cleanupNode stops pgctld and multipooler processes
 func cleanupNode(t *testing.T, node *nodeInstance) {
 	t.Helper()
-	if node.multipoolerCmd != nil && node.multipoolerCmd.Process() != nil {
-		terminateProcess(t, node.multipoolerCmd, "multipooler", 2*time.Second)
-	}
-	if node.pgctldProcess != nil && node.pgctldProcess.Process() != nil {
-		terminateProcess(t, node.pgctldProcess, "pgctld", 2*time.Second)
-	}
+	// Use context.Background() instead of t.Context() because cleanup may run
+	// after test timeout when t.Context() is already cancelled.
+	// Term() handles nil processes gracefully.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = node.multipoolerCmd.Term(ctx)
+	_ = node.pgctldProcess.Term(ctx)
 }
 
 // checkInitializationStatus checks the status of a node (which includes initialization info)
