@@ -51,12 +51,19 @@ done
 TEMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TEMP_DIR"' EXIT
 
-# Filter out generated parser code (postgres.y, yaccpar, yacctab) from each input file
-# This avoids issues with go tool cover and potential merge conflicts from yacc-generated code
+# Filter out generated code from each input file:
+# - Parser generated code (postgres.y, yaccpar, yacctab)
+# - Protobuf generated code (go/pb/)
+# This avoids issues with go tool cover and potential merge conflicts from generated code
 FILTERED_INPUTS=()
 for i in "${!INPUTS[@]}"; do
   FILTERED="$TEMP_DIR/filtered-$i.txt"
-  grep -v -e "/go/parser/postgres\.y:" -e "/go/parser/yaccpar:" -e "/go/parser/yacctab:" "${INPUTS[$i]}" >"$FILTERED" || true
+  grep -v \
+    -e "/go/parser/postgres\.y:" \
+    -e "/go/parser/yaccpar:" \
+    -e "/go/parser/yacctab:" \
+    -e "/go/pb/" \
+    "${INPUTS[$i]}" >"$FILTERED" || true
   FILTERED_INPUTS+=("$FILTERED")
 done
 
@@ -67,4 +74,4 @@ if ! go tool gocovmerge "${FILTERED_INPUTS[@]}" >"$OUTPUT"; then
   exit 1
 fi
 
-echo "Successfully merged ${#INPUTS[@]} coverage files into $OUTPUT (excluding generated parser code)"
+echo "Successfully merged ${#INPUTS[@]} coverage files into $OUTPUT (excluding generated code)"
