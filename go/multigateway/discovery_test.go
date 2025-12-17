@@ -27,6 +27,7 @@ import (
 	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/common/topoclient/memorytopo"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	"github.com/multigres/multigres/go/pb/query"
 )
 
 // Test configuration constants
@@ -429,4 +430,156 @@ func TestPoolerDiscovery_ReconnectsAfterWatchClosed(t *testing.T) {
 	names := []string{poolers[0].Id.Name, poolers[1].Id.Name}
 	assert.Contains(t, names, "pooler1")
 	assert.Contains(t, names, "pooler2")
+}
+
+func TestPoolerDiscovery_GetPooler_MatchesTarget(t *testing.T) {
+	ctx := context.Background()
+	store, _ := memorytopo.NewServerAndFactory(ctx, "test-cell")
+	defer store.Close()
+	logger := slog.Default()
+
+	pd := NewPoolerDiscovery(ctx, store, "test-cell", logger)
+
+	// Create poolers with different types
+	primary := createTestPooler("primary1", "test-cell", "primary.example.com", "mydb", "shard-01", clustermetadatapb.PoolerType_PRIMARY)
+	replica := createTestPooler("replica1", "test-cell", "replica.example.com", "mydb", "shard-01", clustermetadatapb.PoolerType_REPLICA)
+
+	require.NoError(t, store.CreateMultiPooler(ctx, primary))
+	require.NoError(t, store.CreateMultiPooler(ctx, replica))
+
+	pd.Start()
+	defer pd.Stop()
+
+	waitForPoolerCount(t, pd, 2)
+
+	// Test: Get PRIMARY pooler
+	target := &query.Target{
+		TableGroup: constants.DefaultTableGroup,
+		Shard:      "shard-01",
+		PoolerType: clustermetadatapb.PoolerType_PRIMARY,
+	}
+	pooler, conn, err := pd.GetPooler(target)
+	require.NoError(t, err)
+	assert.NotNil(t, pooler)
+	assert.NotNil(t, conn, "Connection should be created")
+	assert.Equal(t, "primary.example.com", pooler.Hostname)
+	assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, pooler.Type)
+
+	// Test: Get REPLICA pooler
+	target.PoolerType = clustermetadatapb.PoolerType_REPLICA
+	pooler, conn, err = pd.GetPooler(target)
+	require.NoError(t, err)
+	assert.NotNil(t, pooler)
+	assert.NotNil(t, conn)
+	assert.Equal(t, "replica.example.com", pooler.Hostname)
+	assert.Equal(t, clustermetadatapb.PoolerType_REPLICA, pooler.Type)
+}
+
+func TestPoolerDiscovery_GetPooler_DefaultsToPrimary(t *testing.T) {
+	ctx := context.Background()
+	store, _ := memorytopo.NewServerAndFactory(ctx, "test-cell")
+	defer store.Close()
+	logger := slog.Default()
+
+	pd := NewPoolerDiscovery(ctx, store, "test-cell", logger)
+
+	primary := createTestPooler("primary1", "test-cell", "primary.example.com", "mydb", "shard-01", clustermetadatapb.PoolerType_PRIMARY)
+	require.NoError(t, store.CreateMultiPooler(ctx, primary))
+
+	pd.Start()
+	defer pd.Stop()
+
+	waitForPoolerCount(t, pd, 1)
+
+	// Test: UNKNOWN pooler type defaults to PRIMARY
+	target := &query.Target{
+		TableGroup: constants.DefaultTableGroup,
+		Shard:      "shard-01",
+		PoolerType: clustermetadatapb.PoolerType_UNKNOWN,
+	}
+	pooler, conn, err := pd.GetPooler(target)
+	require.NoError(t, err)
+	assert.NotNil(t, pooler)
+	assert.NotNil(t, conn)
+	assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, pooler.Type)
+}
+
+func TestPoolerDiscovery_GetPooler_NoMatchingPooler(t *testing.T) {
+	ctx := context.Background()
+	store, _ := memorytopo.NewServerAndFactory(ctx, "test-cell")
+	defer store.Close()
+	logger := slog.Default()
+
+	pd := NewPoolerDiscovery(ctx, store, "test-cell", logger)
+
+	primary := createTestPooler("primary1", "test-cell", "primary.example.com", "mydb", "shard-01", clustermetadatapb.PoolerType_PRIMARY)
+	require.NoError(t, store.CreateMultiPooler(ctx, primary))
+
+	pd.Start()
+	defer pd.Stop()
+
+	waitForPoolerCount(t, pd, 1)
+
+	// Test: No matching tablegroup
+	target := &query.Target{
+		TableGroup: "nonexistent",
+		Shard:      "shard-01",
+		PoolerType: clustermetadatapb.PoolerType_PRIMARY,
+	}
+	pooler, conn, err := pd.GetPooler(target)
+	assert.Error(t, err)
+	assert.Nil(t, pooler)
+	assert.Nil(t, conn)
+	assert.Contains(t, err.Error(), "no pooler found")
+
+	// Test: No matching shard
+	target = &query.Target{
+		TableGroup: constants.DefaultTableGroup,
+		Shard:      "nonexistent-shard",
+		PoolerType: clustermetadatapb.PoolerType_PRIMARY,
+	}
+	pooler, conn, err = pd.GetPooler(target)
+	assert.Error(t, err)
+	assert.Nil(t, pooler)
+	assert.Nil(t, conn)
+
+	// Test: No matching pooler type
+	target = &query.Target{
+		TableGroup: constants.DefaultTableGroup,
+		Shard:      "shard-01",
+		PoolerType: clustermetadatapb.PoolerType_REPLICA,
+	}
+	pooler, conn, err = pd.GetPooler(target)
+	assert.Error(t, err)
+	assert.Nil(t, pooler)
+	assert.Nil(t, conn)
+}
+
+func TestPoolerDiscovery_GetPooler_EmptyShardMatchesAny(t *testing.T) {
+	ctx := context.Background()
+	store, _ := memorytopo.NewServerAndFactory(ctx, "test-cell")
+	defer store.Close()
+	logger := slog.Default()
+
+	pd := NewPoolerDiscovery(ctx, store, "test-cell", logger)
+
+	primary := createTestPooler("primary1", "test-cell", "primary.example.com", "mydb", "shard-01", clustermetadatapb.PoolerType_PRIMARY)
+	require.NoError(t, store.CreateMultiPooler(ctx, primary))
+
+	pd.Start()
+	defer pd.Stop()
+
+	waitForPoolerCount(t, pd, 1)
+
+	// Test: Empty shard matches any shard
+	target := &query.Target{
+		TableGroup: constants.DefaultTableGroup,
+		Shard:      "", // Empty shard
+		PoolerType: clustermetadatapb.PoolerType_PRIMARY,
+	}
+	pooler, conn, err := pd.GetPooler(target)
+	require.NoError(t, err)
+	assert.NotNil(t, pooler)
+	assert.NotNil(t, conn)
+	assert.Equal(t, "shard-01", pooler.Shard)
 }

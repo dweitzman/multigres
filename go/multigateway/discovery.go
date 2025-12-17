@@ -16,6 +16,7 @@ package multigateway
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -27,11 +28,21 @@ import (
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/proto"
 )
 
+// PoolerWithConn bundles pooler info with its gRPC connection.
+type PoolerWithConn struct {
+	Pooler  *topoclient.MultiPoolerInfo
+	Conn    *grpc.ClientConn
+	ConnErr error // Error from createConnection if connection failed
+}
+
 // PoolerDiscovery is a discovery service that watches for multipoolers
 // in the topology using topology watches and maintains a list of available poolers.
+// It also manages gRPC connections to poolers.
 type PoolerDiscovery struct {
 	// Configuration
 	topoStore topoclient.Store
@@ -43,9 +54,9 @@ type PoolerDiscovery struct {
 	cancelFunc context.CancelFunc
 	wg         sync.WaitGroup
 
-	// State
+	// State - all poolers we have connections to
 	mu          sync.Mutex
-	poolers     map[string]*topoclient.MultiPoolerInfo // pooler ID -> pooler info
+	poolers     map[string]*PoolerWithConn // pooler ID -> pooler + connection
 	lastRefresh time.Time
 }
 
@@ -59,7 +70,7 @@ func NewPoolerDiscovery(ctx context.Context, topoStore topoclient.Store, cell st
 		logger:     logger,
 		ctx:        discoveryCtx,
 		cancelFunc: cancel,
-		poolers:    make(map[string]*topoclient.MultiPoolerInfo),
+		poolers:    make(map[string]*PoolerWithConn),
 	}
 }
 
@@ -131,10 +142,19 @@ func (pd *PoolerDiscovery) Start() {
 	})
 }
 
-// Stop stops the discovery service.
+// Stop stops the discovery service and closes all connections.
 func (pd *PoolerDiscovery) Stop() {
 	pd.cancelFunc()
 	pd.wg.Wait()
+
+	// Close all connections
+	pd.mu.Lock()
+	defer pd.mu.Unlock()
+	for _, pwc := range pd.poolers {
+		if pwc.Conn != nil {
+			pwc.Conn.Close()
+		}
+	}
 }
 
 // processInitialPoolers processes the initial set of poolers from the watch
@@ -142,8 +162,15 @@ func (pd *PoolerDiscovery) processInitialPoolers(initial []*topoclient.WatchData
 	pd.mu.Lock()
 	defer pd.mu.Unlock()
 
+	// Close existing connections before clearing
+	for _, pwc := range pd.poolers {
+		if pwc.Conn != nil {
+			pwc.Conn.Close()
+		}
+	}
+
 	// Clear existing poolers
-	pd.poolers = make(map[string]*topoclient.MultiPoolerInfo)
+	pd.poolers = make(map[string]*PoolerWithConn)
 
 	// Process initial pooler data
 	for _, watchData := range initial {
@@ -161,14 +188,29 @@ func (pd *PoolerDiscovery) processInitialPoolers(initial []*topoclient.WatchData
 
 		if pooler != nil {
 			poolerID := topoclient.MultiPoolerIDString(pooler.Id)
-			pd.poolers[poolerID] = pooler
+
+			// Create gRPC connection to the pooler
+			conn, connErr := pd.createConnection(pooler)
+			if connErr != nil {
+				pd.logger.Warn("Failed to create connection to pooler",
+					"id", poolerID,
+					"addr", pooler.Addr(),
+					"error", connErr)
+			}
+
+			pd.poolers[poolerID] = &PoolerWithConn{
+				Pooler:  pooler,
+				Conn:    conn,
+				ConnErr: connErr,
+			}
 			pd.logger.Info("Initial pooler discovered",
 				"id", poolerID,
 				"hostname", pooler.Hostname,
 				"addr", pooler.Addr(),
 				"database", pooler.Database,
 				"shard", pooler.Shard,
-				"type", pooler.Type.String())
+				"type", pooler.Type.String(),
+				"connected", conn != nil)
 		}
 	}
 
@@ -199,21 +241,36 @@ func (pd *PoolerDiscovery) processPoolerChange(watchData *topoclient.WatchDataRe
 	// Add or update the pooler
 	poolerID := topoclient.MultiPoolerIDString(pooler.Id)
 
-	// Check if this is a new pooler
-	_, existed := pd.poolers[poolerID]
-	pd.poolers[poolerID] = pooler
-	pd.lastRefresh = time.Now()
+	// Check if this is a new pooler or an update
+	existing, existed := pd.poolers[poolerID]
 
-	if !existed {
-		pd.logger.Info("New pooler discovered",
-			"id", poolerID,
-			"hostname", pooler.Hostname,
-			"addr", pooler.Addr(),
-			"tableGroup", pooler.TableGroup,
-			"database", pooler.Database,
-			"shard", pooler.Shard,
-			"type", pooler.Type.String())
-	} else {
+	if existed {
+		// Update: reuse existing connection if address hasn't changed
+		if existing.Pooler.Addr() == pooler.Addr() {
+			// Address unchanged, reuse connection and error
+			pd.poolers[poolerID] = &PoolerWithConn{
+				Pooler:  pooler,
+				Conn:    existing.Conn,
+				ConnErr: existing.ConnErr,
+			}
+		} else {
+			// Address changed, close old connection and create new one
+			if existing.Conn != nil {
+				existing.Conn.Close()
+			}
+			conn, connErr := pd.createConnection(pooler)
+			if connErr != nil {
+				pd.logger.Warn("Failed to create connection to updated pooler",
+					"id", poolerID,
+					"addr", pooler.Addr(),
+					"error", connErr)
+			}
+			pd.poolers[poolerID] = &PoolerWithConn{
+				Pooler:  pooler,
+				Conn:    conn,
+				ConnErr: connErr,
+			}
+		}
 		pd.logger.Info("Pooler updated",
 			"id", poolerID,
 			"hostname", pooler.Hostname,
@@ -222,7 +279,32 @@ func (pd *PoolerDiscovery) processPoolerChange(watchData *topoclient.WatchDataRe
 			"database", pooler.Database,
 			"shard", pooler.Shard,
 			"type", pooler.Type.String())
+	} else {
+		// New pooler: create connection
+		conn, connErr := pd.createConnection(pooler)
+		if connErr != nil {
+			pd.logger.Warn("Failed to create connection to new pooler",
+				"id", poolerID,
+				"addr", pooler.Addr(),
+				"error", connErr)
+		}
+		pd.poolers[poolerID] = &PoolerWithConn{
+			Pooler:  pooler,
+			Conn:    conn,
+			ConnErr: connErr,
+		}
+		pd.logger.Info("New pooler discovered",
+			"id", poolerID,
+			"hostname", pooler.Hostname,
+			"addr", pooler.Addr(),
+			"tableGroup", pooler.TableGroup,
+			"database", pooler.Database,
+			"shard", pooler.Shard,
+			"type", pooler.Type.String(),
+			"connected", conn != nil)
 	}
+
+	pd.lastRefresh = time.Now()
 }
 
 // GetPoolers returns a list of all discovered poolers.
@@ -231,21 +313,21 @@ func (pd *PoolerDiscovery) GetPoolers() []*clustermetadatapb.MultiPooler {
 	defer pd.mu.Unlock()
 
 	poolers := make([]*clustermetadatapb.MultiPooler, 0, len(pd.poolers))
-	for _, pooler := range pd.poolers {
-		poolers = append(poolers, proto.Clone(pooler.MultiPooler).(*clustermetadatapb.MultiPooler))
+	for _, pwc := range pd.poolers {
+		poolers = append(poolers, proto.Clone(pwc.Pooler.MultiPooler).(*clustermetadatapb.MultiPooler))
 	}
 	return poolers
 }
 
-// GetPooler returns a pooler matching the target specification.
+// GetPooler returns a pooler matching the target specification and its gRPC connection.
 // Target specifies the tablegroup, shard, and pooler type to route to.
-// Returns nil if no matching pooler is found.
+// Returns an error if no matching pooler is found or if the pooler has no connection.
 //
 // Filtering logic:
 // - TableGroup: Required, must match exactly
 // - PoolerType: If not specified (UNKNOWN), defaults to PRIMARY
 // - Shard: If empty, matches any shard; otherwise must match exactly
-func (pd *PoolerDiscovery) GetPooler(target *query.Target) *clustermetadatapb.MultiPooler {
+func (pd *PoolerDiscovery) GetPooler(target *query.Target) (*clustermetadatapb.MultiPooler, *grpc.ClientConn, error) {
 	pd.mu.Lock()
 	defer pd.mu.Unlock()
 
@@ -261,17 +343,18 @@ func (pd *PoolerDiscovery) GetPooler(target *query.Target) *clustermetadatapb.Mu
 		"target_shard", target.Shard,
 		"target_pooler_type", targetType.String(),
 		"total_poolers", len(pd.poolers))
-	for i, pooler := range pd.poolers {
+	for id, pwc := range pd.poolers {
 		pd.logger.Debug("discovered pooler",
-			"index", i,
-			"pooler_id", topoclient.MultiPoolerIDString(pooler.Id),
-			"tablegroup", pooler.TableGroup,
-			"shard", pooler.Shard,
-			"type", pooler.Type.String())
+			"index", id,
+			"pooler_id", topoclient.MultiPoolerIDString(pwc.Pooler.Id),
+			"tablegroup", pwc.Pooler.TableGroup,
+			"shard", pwc.Pooler.Shard,
+			"type", pwc.Pooler.Type.String())
 	}
 
 	// Find matching pooler
-	for _, pooler := range pd.poolers {
+	for _, pwc := range pd.poolers {
+		pooler := pwc.Pooler
 		// TableGroup must match
 		if pooler.TableGroup != target.TableGroup {
 			continue
@@ -293,14 +376,20 @@ func (pd *PoolerDiscovery) GetPooler(target *query.Target) *clustermetadatapb.Mu
 			"pooler_type", pooler.Type.String(),
 			"tablegroup", pooler.TableGroup,
 			"shard", pooler.Shard)
-		return proto.Clone(pooler.MultiPooler).(*clustermetadatapb.MultiPooler)
+
+		if pwc.Conn == nil {
+			return nil, nil, fmt.Errorf("no connection available for pooler %s at %s: %w",
+				topoclient.MultiPoolerIDString(pooler.Id), pooler.Addr(), pwc.ConnErr)
+		}
+		return proto.Clone(pooler.MultiPooler).(*clustermetadatapb.MultiPooler), pwc.Conn, nil
 	}
 
 	pd.logger.Warn("no matching pooler found",
 		"tablegroup", target.TableGroup,
 		"shard", target.Shard,
 		"pooler_type", targetType.String())
-	return nil
+	return nil, nil, fmt.Errorf("no pooler found for target: tablegroup=%s, shard=%s, type=%s",
+		target.TableGroup, target.Shard, targetType.String())
 }
 
 // LastRefresh returns the timestamp of the last successful refresh.
@@ -338,4 +427,16 @@ func (pd *PoolerDiscovery) parsePoolerFromWatchData(watchData *topoclient.WatchD
 	return &topoclient.MultiPoolerInfo{
 		MultiPooler: pooler,
 	}, nil
+}
+
+// createConnection creates a gRPC connection to a pooler.
+func (pd *PoolerDiscovery) createConnection(pooler *topoclient.MultiPoolerInfo) (*grpc.ClientConn, error) {
+	addr := pooler.Addr()
+	conn, err := grpc.NewClient(addr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create gRPC client for %s: %w", addr, err)
+	}
+	return conn, nil
 }
