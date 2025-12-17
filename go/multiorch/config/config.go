@@ -145,6 +145,7 @@ func ParseShardWatchTargets(targets []string) ([]WatchTarget, error) {
 // Config encapsulates all multiorch configuration.
 // This is passed to the recovery engine and other components.
 type Config struct {
+	reg                            *viperutil.Registry
 	cell                           viperutil.Value[string]
 	shardWatchTargets              viperutil.Value[[]string]
 	bookkeepingInterval            viperutil.Value[time.Duration]
@@ -165,6 +166,7 @@ const (
 // NewConfig creates a new Config with all viperutil values configured.
 func NewConfig(reg *viperutil.Registry) *Config {
 	return &Config{
+		reg: reg,
 		cell: viperutil.Configure(reg, "cell", viperutil.Options[string]{
 			Default:  "",
 			FlagName: "cell",
@@ -302,6 +304,13 @@ func (c *Config) RegisterFlags(fs *pflag.FlagSet) {
 		c.poolerHealthCheckInterval,
 		c.healthCheckWorkers,
 		c.recoveryCycleInterval)
+}
+
+// NotifyConfigChange subscribes to config change notifications.
+// When dynamic config values are modified (e.g., via HTTP POST to /config),
+// the provided channel will receive a notification.
+func (c *Config) NotifyConfigChange(ch chan<- struct{}) {
+	viperutil.NotifyConfigReload(c.reg, ch)
 }
 
 // Test helper functions

@@ -39,19 +39,38 @@ func (re *Engine) runRecoveryLoop() {
 
 	re.logger.InfoContext(re.ctx, "recovery loop started", "interval", interval)
 
+	// checkAndUpdateInterval checks if the recovery interval has changed and updates the ticker.
+	// Returns true if the interval changed, false otherwise.
+	checkAndUpdateInterval := func() bool {
+		newInterval := re.config.GetRecoveryCycleInterval()
+		if newInterval != interval {
+			re.logger.InfoContext(re.ctx, "recovery cycle interval changed", "old", interval, "new", newInterval)
+			interval = newInterval
+			ticker.Reset(interval)
+			return true
+		}
+		return false
+	}
+
 	for {
 		select {
 		case <-re.ctx.Done():
 			re.logger.InfoContext(re.ctx, "recovery loop stopped")
 			return
 
+		case <-re.configChangeCh:
+			// Config changed via HTTP POST (e.g., /config endpoint).
+			// Check if recovery interval changed and update ticker if so.
+			// We don't skip or run a cycle here - just update the ticker and continue waiting.
+			checkAndUpdateInterval()
+
 		case <-ticker.C:
-			// Check if interval changed (dynamic config)
-			newInterval := re.config.GetRecoveryCycleInterval()
-			if newInterval != interval {
-				re.logger.InfoContext(re.ctx, "recovery cycle interval changed", "old", interval, "new", newInterval)
-				interval = newInterval
-				ticker.Reset(interval)
+			// Check if interval changed (dynamic config from file reload)
+			if checkAndUpdateInterval() {
+				// Skip this cycle and wait for the new interval to elapse.
+				// This ensures that when the interval is increased (e.g., to pause recovery),
+				// we don't run another recovery cycle before the new interval elapses.
+				continue
 			}
 			runIfNotRunning(re.logger, &re.recoveryLoopInProgress, "recovery_loop", re.performRecoveryCycle)
 		}

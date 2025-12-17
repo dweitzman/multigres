@@ -16,7 +16,11 @@ package endtoend
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"testing"
 	"time"
 
@@ -79,6 +83,12 @@ func TestFixReplication(t *testing.T) {
 	}
 	t.Logf("Identified primary: %s, replica: %s (addr: %s)", primaryAddr, replicaZoneName, replicaAddr)
 
+	// Both multiorchs watch all poolers, so we need to pause both
+	multiorchHTTPPorts := []int{
+		clusterSetup.PortConfig.Zones[0].MultiorchHTTPPort,
+		clusterSetup.PortConfig.Zones[1].MultiorchHTTPPort,
+	}
+
 	// Create test clients for primary and replica
 	primaryClient, err := NewMultiPoolerTestClient(primaryAddr)
 	require.NoError(t, err, "should be able to create primary client")
@@ -97,11 +107,15 @@ func TestFixReplication(t *testing.T) {
 	t.Log("Verifying replication is working before breaking it...")
 	verifyReplicationStreaming(t, replicaAddr)
 
+	// Pause multiorch recovery to prevent it from fixing replication before we can verify it's broken
+	t.Log("Pausing multiorch recovery on all zones...")
+	unpauseRecovery := pauseMultiorchRecovery(t, multiorchHTTPPorts)
+
 	// Break replication using RPC
 	t.Logf("Breaking replication on %s via RPC...", replicaZoneName)
 	breakReplicationViaRPC(t, replicaAddr)
 
-	// Verify replication is broken
+	// Verify replication is broken (safe now since multiorch is paused)
 	t.Log("Verifying replication is broken...")
 	require.Eventually(t, func() bool {
 		return isReplicationBroken(t, replicaAddr)
@@ -117,6 +131,10 @@ func TestFixReplication(t *testing.T) {
 	result, err := replicaClient.ExecuteQuery(context.Background(), "SELECT COUNT(*) FROM fix_replication_test WHERE data = 'inserted_while_broken'", 1)
 	require.NoError(t, err, "should be able to query replica")
 	require.Equal(t, "0", string(result.Rows[0].Values[0]), "data should NOT be visible on replica while replication is broken")
+
+	// Unpause multiorch to let it detect and fix the replication
+	t.Log("Unpausing multiorch recovery...")
+	unpauseRecovery()
 
 	// Wait for multiorch to detect and fix the replication
 	t.Log("Waiting for multiorch to detect and fix replication...")
@@ -146,11 +164,15 @@ func TestFixReplication(t *testing.T) {
 
 	t.Log("First fix completed successfully, breaking replication again...")
 
+	// Pause multiorch recovery again for the second iteration
+	t.Log("Pausing multiorch recovery on all zones (second time)...")
+	unpauseRecovery2 := pauseMultiorchRecovery(t, multiorchHTTPPorts)
+
 	// Break replication a second time to verify multiorch can fix it repeatedly
 	t.Logf("Breaking replication on %s via RPC (second time)...", replicaZoneName)
 	breakReplicationViaRPC(t, replicaAddr)
 
-	// Verify replication is broken again
+	// Verify replication is broken again (safe now since multiorch is paused)
 	t.Log("Verifying replication is broken (second time)...")
 	require.Eventually(t, func() bool {
 		return isReplicationBroken(t, replicaAddr)
@@ -166,6 +188,10 @@ func TestFixReplication(t *testing.T) {
 	result, err = replicaClient.ExecuteQuery(context.Background(), "SELECT COUNT(*) FROM fix_replication_test WHERE data = 'inserted_while_broken_2'", 1)
 	require.NoError(t, err, "should be able to query replica")
 	require.Equal(t, "0", string(result.Rows[0].Values[0]), "new data should NOT be visible on replica while replication is broken")
+
+	// Unpause multiorch to let it detect and fix the replication
+	t.Log("Unpausing multiorch recovery (second time)...")
+	unpauseRecovery2()
 
 	// Wait for multiorch to detect and fix the replication again
 	t.Log("Waiting for multiorch to detect and fix replication (second time)...")
@@ -423,4 +449,78 @@ func waitForReplicationFixed(t *testing.T, multipoolerAddr string, timeout time.
 			resp.Status.PrimaryConnInfo.Host, resp.Status.LastReceiveLsn)
 		return true
 	}, timeout, 2*time.Second, "Multiorch should fix replication within timeout")
+}
+
+// pauseMultiorchRecovery pauses multiorch recovery on all provided HTTP ports
+// by setting a very long recovery-cycle-interval.
+// Returns a cleanup function that restores the original intervals.
+func pauseMultiorchRecovery(t *testing.T, httpPorts []int) func() {
+	t.Helper()
+
+	// Save original intervals before modifying
+	originalIntervals := make(map[int]string)
+	for _, port := range httpPorts {
+		originalIntervals[port] = getMultiorchConfig(t, port, "recovery-cycle-interval")
+		t.Logf("Original recovery-cycle-interval for port %d: %s", port, originalIntervals[port])
+	}
+
+	// Set to a very large interval to effectively pause recovery
+	for _, port := range httpPorts {
+		setMultiorchConfig(t, port, "recovery-cycle-interval", "1h")
+	}
+
+	return func() {
+		for _, port := range httpPorts {
+			setMultiorchConfig(t, port, "recovery-cycle-interval", originalIntervals[port])
+		}
+	}
+}
+
+// getMultiorchConfig gets a config value from multiorch via GET /config
+func getMultiorchConfig(t *testing.T, httpPort int, key string) string {
+	t.Helper()
+
+	configURL := &url.URL{
+		Scheme:   "http",
+		Host:     fmt.Sprintf("localhost:%d", httpPort),
+		Path:     "/config",
+		RawQuery: "format=json",
+	}
+	resp, err := http.Get(configURL.String())
+	require.NoError(t, err, "GET /config should succeed")
+	defer resp.Body.Close()
+
+	var result map[string]any
+	err = json.NewDecoder(resp.Body).Decode(&result)
+	require.NoError(t, err, "should decode JSON response")
+
+	viperConfig, ok := result["viper_config"].(map[string]any)
+	require.True(t, ok, "should have viper_config in response")
+
+	value, ok := viperConfig[key]
+	require.True(t, ok, "should have key %s in viper_config", key)
+
+	return fmt.Sprintf("%v", value)
+}
+
+// setMultiorchConfig sets a config value on multiorch via POST /config
+func setMultiorchConfig(t *testing.T, httpPort int, key, value string) {
+	t.Helper()
+
+	configURL := &url.URL{
+		Scheme: "http",
+		Host:   fmt.Sprintf("localhost:%d", httpPort),
+		Path:   "/config",
+	}
+	resp, err := http.PostForm(configURL.String(), url.Values{
+		"key":   {key},
+		"value": {value},
+	})
+	require.NoError(t, err, "POST to /config should succeed")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("POST to /config failed with status %d: %s", resp.StatusCode, string(body))
+	}
+	t.Logf("Set %s to %s", key, value)
 }

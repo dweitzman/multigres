@@ -265,6 +265,10 @@ type Engine struct {
 
 	// WaitGroup to track goroutines for graceful shutdown
 	wg sync.WaitGroup
+
+	// configChangeCh is notified when dynamic config values change (e.g., via HTTP POST to /config).
+	// Used by the recovery loop to wake up immediately when the interval changes.
+	configChangeCh <-chan struct{}
 }
 
 // NewEngine creates a new RecoveryEngine instance.
@@ -338,6 +342,12 @@ func (re *Engine) Start() error {
 		"pooler_health_check_interval", re.config.GetPoolerHealthCheckInterval(),
 		"health_check_workers", re.config.GetHealthCheckWorkers(),
 	)
+
+	// Subscribe to config change notifications so the recovery loop can respond
+	// immediately when dynamic config values are modified via HTTP POST.
+	configChangeCh := make(chan struct{}, 1)
+	re.config.NotifyConfigChange(configChangeCh)
+	re.configChangeCh = configChangeCh
 
 	// Start health check worker pool
 	re.startHealthCheckWorkers()
