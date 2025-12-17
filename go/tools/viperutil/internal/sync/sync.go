@@ -272,6 +272,18 @@ func (v *Viper) AllSettings() map[string]any {
 	return v.live.AllSettings()
 }
 
+// NotifyConfigChange notifies all subscribers that a config change has occurred.
+// This should be called after programmatically modifying a dynamic config value
+// (e.g., via HTTP POST to /config) to wake up any goroutines waiting for changes.
+func (v *Viper) NotifyConfigChange() {
+	for _, ch := range v.subscribers {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+}
+
 func (v *Viper) loadFromDisk() {
 	v.m.Lock()
 	defer v.m.Unlock()

@@ -32,11 +32,21 @@ import (
 // HandlerFunc returns an http.HandlerFunc that renders the combined config
 // registry (both static and dynamic) for debugging purposes.
 //
-// Example requests:
-//   - GET /debug/config
-//   - GET /debug/config?format=json
-func HandlerFunc(reg *viperutil.Registry) http.HandlerFunc {
+// Example requests (assuming registered at /config):
+//   - GET /config
+//   - GET /config?format=json
+//   - POST /config with form data: key=<config-key>&value=<new-value>
+//
+// The fs parameter is the flag set containing the registered flags, used for
+// type-safe parsing when setting dynamic config values via POST.
+func HandlerFunc(reg *viperutil.Registry, fs *pflag.FlagSet) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Handle POST requests to set dynamic config values
+		if r.Method == http.MethodPost {
+			handleSetConfig(reg, fs, w, r)
+			return
+		}
+
 		v := reg.Combined()
 		format := strings.ToLower(r.URL.Query().Get("format"))
 
@@ -87,5 +97,62 @@ func HandlerFunc(reg *viperutil.Registry) http.HandlerFunc {
 			}
 			return
 		}
+	}
+}
+
+// handleSetConfig handles POST requests to set dynamic config values.
+// It expects form data with "key" and "value" parameters.
+// Only dynamic config values (registered with Dynamic=true) can be modified.
+// The value is parsed using the same logic as command-line flags (via pflag).
+func handleSetConfig(reg *viperutil.Registry, fs *pflag.FlagSet, w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, fmt.Sprintf("failed to parse form: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	key := r.FormValue("key")
+	value := r.FormValue("value")
+
+	if key == "" {
+		http.Error(w, "missing 'key' parameter", http.StatusBadRequest)
+		return
+	}
+
+	// Check if this is a dynamic config value
+	if !reg.IsDynamic(key) {
+		http.Error(w, fmt.Sprintf("key %s is not a dynamic config value (cannot be modified at runtime)", key), http.StatusBadRequest)
+		return
+	}
+
+	// Look up the flag to get proper type parsing
+	flag := fs.Lookup(key)
+	if flag == nil {
+		http.Error(w, fmt.Sprintf("unknown config key: %s (no flag defined)", key), http.StatusBadRequest)
+		return
+	}
+
+	// Use the flag's Value.Set() to parse and update
+	// The viper binding (via BindPFlag) will make this visible through Get()
+	if err := flag.Value.Set(value); err != nil {
+		http.Error(w, fmt.Sprintf("invalid value for %s (%s): %v", key, flag.Value.Type(), err), http.StatusBadRequest)
+		return
+	}
+
+	// Notify subscribers that a config change has occurred.
+	// This wakes up any goroutines waiting for config changes (e.g., recovery loop).
+	reg.NotifyConfigChange()
+
+	// Read back the parsed value to return in response
+	parsedValue := reg.Combined().Get(key)
+
+	w.Header().Set("Content-Type", "application/json")
+	response := map[string]any{
+		"key":   key,
+		"value": parsedValue,
+		"type":  flag.Value.Type(),
+	}
+	encoder := json.NewEncoder(w)
+	if err := encoder.Encode(response); err != nil {
+		http.Error(w, fmt.Sprintf("failed to encode response: %v", err), http.StatusInternalServerError)
 	}
 }

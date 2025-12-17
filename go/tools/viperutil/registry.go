@@ -68,3 +68,17 @@ func (reg *Registry) Combined() *viper.Viper {
 	v.SetConfigFile(reg.static.ConfigFileUsed())
 	return v
 }
+
+// IsDynamic returns true if the given key is registered as a dynamic config value.
+func (reg *Registry) IsDynamic(key string) bool {
+	settings := reg.dynamic.AllSettings()
+	_, exists := settings[key]
+	return exists
+}
+
+// NotifyConfigChange notifies all subscribers that a config change has occurred.
+// This should be called after programmatically modifying a dynamic config value
+// (e.g., via HTTP POST to /config) to wake up any goroutines waiting for changes.
+func (reg *Registry) NotifyConfigChange() {
+	reg.dynamic.NotifyConfigChange()
+}

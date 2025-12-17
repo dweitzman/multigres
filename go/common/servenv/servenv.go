@@ -81,6 +81,10 @@ type ServEnv struct {
 	// service_map command line parameter will alter the map.
 	// Can only be used after servenv.Init has been called.
 	serviceMap map[string]bool
+
+	// flagSet stores the flag set passed to RegisterFlags, used by the /config handler
+	// to look up and modify dynamic config values via HTTP POST.
+	flagSet *pflag.FlagSet
 }
 
 // NewServEnv creates a new ServEnv instance with the given registry
@@ -347,6 +351,8 @@ func (se *ServEnv) RegisterFlagsWithoutLoggerAndConfig(fs *pflag.FlagSet) {
 }
 
 func (se *ServEnv) registerFlags(fs *pflag.FlagSet, includeLoggerAndConfig bool) {
+	se.flagSet = fs
+
 	// Default flags
 	fs.Int("http-port", se.httpPort.Default(), "HTTP port for the server")
 	fs.String("bind-address", se.bindAddress.Default(), "Bind address for the server. If empty, the server will listen on all available unicast and anycast IP addresses of the local system.")
