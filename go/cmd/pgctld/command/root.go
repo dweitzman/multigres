@@ -39,6 +39,7 @@ type PgCtlCommand struct {
 	timeout           viperutil.Value[int]
 	pgPort            viperutil.Value[int]
 	pgListenAddresses viperutil.Value[string]
+	pgPwfile          viperutil.Value[string]
 	vc                *viperutil.ViperConfig
 	lg                *servenv.Logger
 	telemetry         *telemetry.Telemetry
@@ -78,6 +79,11 @@ func GetRootCommand() (*cobra.Command, *PgCtlCommand) {
 		pgListenAddresses: viperutil.Configure(reg, "pg-listen-addresses", viperutil.Options[string]{
 			Default:  "localhost",
 			FlagName: "pg-listen-addresses",
+			Dynamic:  false,
+		}),
+		pgPwfile: viperutil.Configure(reg, "pg-pwfile", viperutil.Options[string]{
+			Default:  "",
+			FlagName: "pg-pwfile",
 			Dynamic:  false,
 		}),
 		vc:        viperutil.NewViperConfig(reg),
@@ -124,6 +130,7 @@ management for PostgreSQL servers.`,
 	root.PersistentFlags().String("pooler-dir", pc.poolerDir.Default(), "The directory to multipooler data")
 	root.PersistentFlags().IntP("pg-port", "p", pc.pgPort.Default(), "PostgreSQL port")
 	root.PersistentFlags().String("pg-listen-addresses", pc.pgListenAddresses.Default(), "PostgreSQL listen addresses")
+	root.PersistentFlags().String("pg-pwfile", pc.pgPwfile.Default(), "PostgreSQL password file path")
 	pc.vc.RegisterFlags(root.PersistentFlags())
 	pc.lg.RegisterFlags(root.PersistentFlags())
 
@@ -134,6 +141,7 @@ management for PostgreSQL servers.`,
 		pc.poolerDir,
 		pc.pgPort,
 		pc.pgListenAddresses,
+		pc.pgPwfile,
 	)
 
 	// Add all subcommands

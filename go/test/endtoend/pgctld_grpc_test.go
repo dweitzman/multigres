@@ -430,6 +430,7 @@ func TestGRPCPortableConfig(t *testing.T) {
 			30,
 			dataDir,
 			"localhost",
+			"",
 		)
 		require.NoError(t, err)
 
@@ -453,10 +454,138 @@ func TestGRPCPortableConfig(t *testing.T) {
 			30,
 			dataDir,
 			"localhost",
+			"",
 		)
 		require.NoError(t, err)
 		assert.NotNil(t, service2, "Should be able to create service with different port for portability")
 	})
+}
+
+// TestInitDataDirPasswordFileFallback tests that InitDataDir falls back to
+// service-configured password file when the request doesn't include one.
+// This is a regression test for the bug where pgctld server wasn't receiving
+// the --pg-pwfile flag, causing password authentication to fail.
+func TestInitDataDirPasswordFileFallback(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping gRPC integration tests in short mode")
+	}
+
+	tempDir, cleanup := testutil.TempDir(t, "pgctld_pwfile_fallback_test")
+	defer cleanup()
+
+	dataDir := filepath.Join(tempDir, "data")
+
+	// Setup mock PostgreSQL binaries
+	binDir := filepath.Join(tempDir, "bin")
+	err := os.MkdirAll(binDir, 0o755)
+	require.NoError(t, err)
+	testutil.CreateMockPostgreSQLBinaries(t, binDir)
+
+	// Create a password file (this is what would be configured in production)
+	pwfile := filepath.Join(tempDir, "pwfile")
+	err = os.WriteFile(pwfile, []byte("testpassword123"), 0o600)
+	require.NoError(t, err)
+
+	t.Run("service_pwfile_used_when_request_empty", func(t *testing.T) {
+		// Create gRPC server with password file configured at service level
+		lis, cleanupServer := createTestGRPCServerWithPwfile(t, dataDir, binDir, pwfile)
+		defer cleanupServer()
+
+		// Connect to the gRPC server
+		conn, err := grpc.NewClient(lis.Addr().String(), grpccommon.LocalClientDialOptions()...)
+		require.NoError(t, err)
+		defer conn.Close()
+
+		client := pb.NewPgCtldClient(conn)
+		ctx := context.Background()
+
+		// Call InitDataDir WITHOUT password file in request
+		// This simulates what multipooler does when calling pgctld
+		initResp, err := client.InitDataDir(ctx, &pb.InitDataDirRequest{
+			PgPwfile: "", // Empty - should fall back to service config
+		})
+		require.NoError(t, err, "InitDataDir should succeed using service-configured password file")
+		assert.Contains(t, initResp.GetMessage(), "initialized successfully")
+	})
+
+	t.Run("request_pwfile_takes_precedence", func(t *testing.T) {
+		// Create a different data dir for this test
+		dataDir2 := filepath.Join(tempDir, "data2")
+
+		// Create another password file for the request
+		pwfile2 := filepath.Join(tempDir, "pwfile2")
+		err := os.WriteFile(pwfile2, []byte("differentpassword"), 0o600)
+		require.NoError(t, err)
+
+		// Create gRPC server with one password file
+		lis, cleanupServer := createTestGRPCServerWithPwfile(t, dataDir2, binDir, pwfile)
+		defer cleanupServer()
+
+		// Connect to the gRPC server
+		conn, err := grpc.NewClient(lis.Addr().String(), grpccommon.LocalClientDialOptions()...)
+		require.NoError(t, err)
+		defer conn.Close()
+
+		client := pb.NewPgCtldClient(conn)
+		ctx := context.Background()
+
+		// Call InitDataDir WITH a different password file in request
+		// Request password file should take precedence over service config
+		initResp, err := client.InitDataDir(ctx, &pb.InitDataDirRequest{
+			PgPwfile: pwfile2, // Explicit - should override service config
+		})
+		require.NoError(t, err, "InitDataDir should succeed with request-provided password file")
+		assert.Contains(t, initResp.GetMessage(), "initialized successfully")
+	})
+}
+
+// createTestGRPCServerWithPwfile creates a gRPC server with a password file configured
+func createTestGRPCServerWithPwfile(t *testing.T, dataDir, binDir, pwfile string) (net.Listener, func()) {
+	t.Helper()
+
+	// Find a free port
+	lis, err := net.Listen("tcp", "localhost:0")
+	require.NoError(t, err)
+
+	// Create gRPC server
+	grpcServer := grpc.NewServer()
+
+	// Create the pgctld service WITH password file configured
+	service, err := command.NewPgCtldService(
+		slog.Default(),
+		5432,
+		"postgres",
+		"postgres",
+		30,
+		dataDir,
+		"localhost",
+		pwfile, // Password file configured at service level
+	)
+
+	require.NoError(t, err)
+	// Set environment variables for the service
+	t.Setenv("PGDATA", dataDir)
+	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+
+	// Register the service
+	pb.RegisterPgCtldServer(grpcServer, service)
+
+	// Start server in background
+	go func() {
+		if err := grpcServer.Serve(lis); err != nil {
+			t.Logf("gRPC server error: %v", err)
+		}
+	}()
+
+	// Give server time to start
+	time.Sleep(100 * time.Millisecond)
+
+	// Return cleanup function
+	cleanup := func() {
+		grpcServer.Stop()
+	}
+
+	return lis, cleanup
 }
 
 // createTestGRPCServer creates and starts a gRPC server for testing
@@ -480,6 +609,7 @@ func createTestGRPCServer(t *testing.T, dataDir, binDir string) (net.Listener, f
 		30,
 		dataDir,
 		"localhost",
+		"",
 	)
 
 	require.NoError(t, err)

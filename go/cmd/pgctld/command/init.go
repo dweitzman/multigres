@@ -22,7 +22,6 @@ import (
 	"strings"
 
 	"github.com/multigres/multigres/go/services/pgctld"
-	"github.com/multigres/multigres/go/tools/viperutil"
 
 	"github.com/spf13/cobra"
 )
@@ -36,18 +35,12 @@ type InitResult struct {
 // PgCtldInitCmd holds the init command configuration
 type PgCtldInitCmd struct {
 	pgCtlCmd *PgCtlCommand
-	pgPwfile viperutil.Value[string]
 }
 
 // AddInitCommand adds the init subcommand to the root command
 func AddInitCommand(root *cobra.Command, pc *PgCtlCommand) {
 	initCmd := &PgCtldInitCmd{
 		pgCtlCmd: pc,
-		pgPwfile: viperutil.Configure(pc.reg, "pg-pwfile", viperutil.Options[string]{
-			Default:  "",
-			FlagName: "pg-pwfile",
-			Dynamic:  false,
-		}),
 	}
 
 	root.AddCommand(initCmd.createCommand())
@@ -79,9 +72,6 @@ Examples:
 		},
 		RunE: i.runInit,
 	}
-
-	cmd.Flags().String("pg-pwfile", i.pgPwfile.Default(), "PostgreSQL password file path")
-	viperutil.BindFlags(cmd.Flags(), i.pgPwfile)
 
 	return cmd
 }
@@ -117,7 +107,7 @@ func InitDataDirWithResult(logger *slog.Logger, poolerDir string, pgPort int, pg
 
 func (i *PgCtldInitCmd) runInit(cmd *cobra.Command, args []string) error {
 	poolerDir := i.pgCtlCmd.GetPoolerDir()
-	result, err := InitDataDirWithResult(i.pgCtlCmd.lg.GetLogger(), poolerDir, i.pgCtlCmd.pgPort.Get(), i.pgCtlCmd.pgUser.Get(), i.pgPwfile.Get())
+	result, err := InitDataDirWithResult(i.pgCtlCmd.lg.GetLogger(), poolerDir, i.pgCtlCmd.pgPort.Get(), i.pgCtlCmd.pgUser.Get(), i.pgCtlCmd.pgPwfile.Get())
 	if err != nil {
 		return err
 	}

@@ -222,6 +222,12 @@ func (p *localProvisioner) provisionPgctld(ctx context.Context, dbName, tableGro
 	}
 	poolerDir = dir
 
+	// Get password file path from config (optional)
+	pgPwfile := ""
+	if pwfile, ok := pgctldConfig["pg_pwfile"].(string); ok && pwfile != "" {
+		pgPwfile = pwfile
+	}
+
 	// Get gRPC socket file if configured
 	socketFile, err := getGRPCSocketFile(pgctldConfig)
 	if err != nil {
@@ -260,6 +266,11 @@ func (p *localProvisioner) provisionPgctld(ctx context.Context, dbName, tableGro
 	// Add socket file if configured
 	if socketFile != "" {
 		serverArgs = append(serverArgs, "--grpc-socket-file", socketFile)
+	}
+
+	// Add password file if configured
+	if pgPwfile != "" {
+		serverArgs = append(serverArgs, "--pg-pwfile", pgPwfile)
 	}
 
 	pgctldCmd := exec.CommandContext(ctx, pgctldBinary, serverArgs...)

@@ -98,7 +98,7 @@ func (s *PgCtldServerCmd) runServer(cmd *cobra.Command, args []string) error {
 
 	// Create and register our service
 	poolerDir := s.pgCtlCmd.GetPoolerDir()
-	pgctldService, err := NewPgCtldService(logger, s.pgCtlCmd.pgPort.Get(), s.pgCtlCmd.pgUser.Get(), s.pgCtlCmd.pgDatabase.Get(), s.pgCtlCmd.timeout.Get(), poolerDir, s.pgCtlCmd.pgListenAddresses.Get())
+	pgctldService, err := NewPgCtldService(logger, s.pgCtlCmd.pgPort.Get(), s.pgCtlCmd.pgUser.Get(), s.pgCtlCmd.pgDatabase.Get(), s.pgCtlCmd.timeout.Get(), poolerDir, s.pgCtlCmd.pgListenAddresses.Get(), s.pgCtlCmd.pgPwfile.Get())
 	if err != nil {
 		return err
 	}
@@ -132,6 +132,7 @@ type PgCtldService struct {
 	pgDatabase string
 	timeout    int
 	poolerDir  string
+	pgPwfile   string
 	config     *pgctld.PostgresCtlConfig
 }
 
@@ -140,7 +141,7 @@ type PgCtldService struct {
 // This makes backups portable across different environments.
 
 // NewPgCtldService creates a new PgCtldService with validation
-func NewPgCtldService(logger *slog.Logger, pgPort int, pgUser string, pgDatabase string, timeout int, poolerDir string, listenAddresses string) (*PgCtldService, error) {
+func NewPgCtldService(logger *slog.Logger, pgPort int, pgUser string, pgDatabase string, timeout int, poolerDir string, listenAddresses string, pgPwfile string) (*PgCtldService, error) {
 	// Validate essential parameters for service creation
 	// Note: We don't validate postgresDataDir or postgresConfigFile existence here
 	// because the server should be able to start even with uninitialized data directory
@@ -186,6 +187,7 @@ func NewPgCtldService(logger *slog.Logger, pgPort int, pgUser string, pgDatabase
 		pgDatabase: pgDatabase,
 		timeout:    timeout,
 		poolerDir:  poolerDir,
+		pgPwfile:   pgPwfile,
 		config:     config,
 	}, nil
 }
@@ -353,8 +355,14 @@ func (s *PgCtldService) Version(ctx context.Context, req *pb.VersionRequest) (*p
 func (s *PgCtldService) InitDataDir(ctx context.Context, req *pb.InitDataDirRequest) (*pb.InitDataDirResponse, error) {
 	s.logger.InfoContext(ctx, "gRPC InitDataDir request")
 
+	// Use request password file if provided, otherwise fall back to service configured password file
+	pgPwfile := req.PgPwfile
+	if pgPwfile == "" {
+		pgPwfile = s.pgPwfile
+	}
+
 	// Use the shared init function with detailed result
-	result, err := InitDataDirWithResult(s.logger, s.poolerDir, s.pgPort, s.pgUser, req.PgPwfile)
+	result, err := InitDataDirWithResult(s.logger, s.poolerDir, s.pgPort, s.pgUser, pgPwfile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize data directory: %w", err)
 	}
