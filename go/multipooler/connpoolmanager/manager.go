@@ -27,6 +27,7 @@ import (
 	"github.com/multigres/multigres/go/multipooler/pools/regular"
 	"github.com/multigres/multigres/go/multipooler/pools/reserved"
 	"github.com/multigres/multigres/go/pgprotocol/client"
+	"github.com/multigres/multigres/go/pgprotocol/scram"
 )
 
 // Manager orchestrates per-user connection pools with a shared admin pool.
@@ -94,6 +95,13 @@ func (m *Manager) Open(ctx context.Context, logger *slog.Logger, connConfig *Con
 		ConnPoolConfig: adminPoolConfig,
 	})
 	m.adminPool.Open(ctx)
+
+	// Bootstrap postgres user if it doesn't exist.
+	// This is idempotent and runs on every startup.
+	if err := m.bootstrapPostgresUser(ctx); err != nil {
+		m.logger.WarnContext(ctx, "failed to bootstrap postgres user", "error", err)
+		// Non-fatal: log warning but don't prevent startup
+	}
 
 	m.logger.InfoContext(ctx, "connection pool manager opened",
 		"admin_user", m.config.AdminUser(),
@@ -195,6 +203,51 @@ func (m *Manager) Close() {
 	}
 
 	m.logger.Info("connection pool manager closed")
+}
+
+// bootstrapPostgresUser creates the postgres user if it doesn't exist.
+// This runs on every multipooler start but is idempotent (IF NOT EXISTS).
+// The postgres user is created with the same password as multigres_admin,
+// then demoted from superuser to a privileged but non-superuser role.
+func (m *Manager) bootstrapPostgresUser(ctx context.Context) error {
+	conn, err := m.adminPool.Get(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get admin connection: %w", err)
+	}
+	defer conn.Recycle()
+
+	// Generate SCRAM hash for postgres user (same password as multigres_admin)
+	hash, err := scram.GenerateScramSHA256Hash(m.config.AdminPassword(), scram.MinIterationCount)
+	if err != nil {
+		return fmt.Errorf("failed to generate SCRAM hash: %w", err)
+	}
+
+	// Idempotent bootstrap SQL:
+	// 1. Create postgres role if it doesn't exist
+	// 2. Transfer database ownership to postgres
+	// 3. Keep postgres as superuser for now (simplifies testing and backwards compatibility)
+	//
+	// TODO: Consider demoting postgres in production deployments:
+	//   ALTER ROLE postgres NOSUPERUSER CREATEDB CREATEROLE LOGIN REPLICATION BYPASSRLS;
+	//   GRANT pg_read_all_settings TO postgres;
+	// This would require tests to use multigres_admin for admin operations.
+	bootstrapSQL := fmt.Sprintf(`
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'postgres') THEN
+    CREATE ROLE postgres SUPERUSER LOGIN PASSWORD '%s';
+    ALTER DATABASE postgres OWNER TO postgres;
+    GRANT ALL ON DATABASE postgres TO postgres;
+  END IF;
+END $$;
+`, hash)
+
+	if err := conn.Conn.Exec(ctx, bootstrapSQL); err != nil {
+		return fmt.Errorf("failed to execute bootstrap SQL: %w", err)
+	}
+
+	m.logger.InfoContext(ctx, "postgres user bootstrap completed")
+	return nil
 }
 
 // --- Admin Pool Operations ---

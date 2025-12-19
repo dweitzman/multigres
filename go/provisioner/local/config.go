@@ -28,6 +28,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// defaultAdminUser is the PostgreSQL superuser created during initdb.
+// This mirrors defaultAdminUser but is defined locally to avoid
+// depguard violations (provisioners should not depend on multigres logic).
+const defaultAdminUser = "multigres_admin"
+
 // CellConfig holds the configuration for a single cell
 type CellConfig struct {
 	Name     string `yaml:"name"`
@@ -263,7 +268,7 @@ func (p *localProvisioner) DefaultConfig(configPaths []string) map[string]any {
 					GRPCSocketFile: filepath.Join(baseDir, "sockets", "pgctld-zone1.sock"),
 					PgPort:         ports.DefaultPostgresPort,
 					PgDatabase:     dbName,
-					PgUser:         "postgres",
+					PgUser:         defaultAdminUser,
 					PgPwfile:       filepath.Join(GeneratePoolerDir(baseDir, serviceIDZone1), "pgpassword.txt"),
 					Timeout:        30,
 					LogLevel:       "info",
@@ -307,7 +312,7 @@ func (p *localProvisioner) DefaultConfig(configPaths []string) map[string]any {
 					GRPCSocketFile: filepath.Join(baseDir, "sockets", "pgctld-zone2.sock"),
 					PgPort:         ports.DefaultPostgresPort + 1,
 					PgDatabase:     dbName,
-					PgUser:         "postgres",
+					PgUser:         defaultAdminUser,
 					PgPwfile:       filepath.Join(GeneratePoolerDir(baseDir, serviceIDZone2), "pgpassword.txt"),
 					Timeout:        30,
 					LogLevel:       "info",
@@ -351,7 +356,7 @@ func (p *localProvisioner) DefaultConfig(configPaths []string) map[string]any {
 					GRPCSocketFile: filepath.Join(baseDir, "sockets", "pgctld-zone3.sock"),
 					PgPort:         ports.DefaultPostgresPort + 2,
 					PgDatabase:     dbName,
-					PgUser:         "postgres",
+					PgUser:         defaultAdminUser,
 					PgPwfile:       filepath.Join(GeneratePoolerDir(baseDir, serviceIDZone3), "pgpassword.txt"),
 					Timeout:        30,
 					LogLevel:       "info",
@@ -538,7 +543,7 @@ func (p *localProvisioner) GeneratePgBackRestConfigs() error {
 			PgDataPath:      filepath.Join(cellServices.Multipooler.PoolerDir, "pg_data"),
 			PgPort:          cellServices.Multipooler.PgPort,
 			PgSocketDir:     filepath.Join(cellServices.Multipooler.PoolerDir, "pg_sockets"),
-			PgUser:          "postgres",
+			PgUser:          defaultAdminUser,
 			PgPassword:      "postgres", // For local development only
 			PgDatabase:      "postgres",
 			AdditionalHosts: additionalHosts,

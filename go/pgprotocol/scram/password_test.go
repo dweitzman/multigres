@@ -218,3 +218,92 @@ func TestIsScramSHA256Hash(t *testing.T) {
 		assert.True(t, IsScramSHA256Hash("SCRAM-SHA-256"))
 	})
 }
+
+func TestGenerateScramSHA256Hash(t *testing.T) {
+	t.Run("generates valid hash format", func(t *testing.T) {
+		hash, err := GenerateScramSHA256Hash("testpassword", 4096)
+		require.NoError(t, err)
+
+		// Should start with SCRAM-SHA-256 prefix
+		assert.True(t, IsScramSHA256Hash(hash))
+
+		// Should be parseable
+		parsed, err := ParseScramSHA256Hash(hash)
+		require.NoError(t, err)
+
+		assert.Equal(t, 4096, parsed.Iterations)
+		assert.Len(t, parsed.Salt, 16)      // We use 16-byte salt
+		assert.Len(t, parsed.StoredKey, 32) // SHA-256 output
+		assert.Len(t, parsed.ServerKey, 32) // SHA-256 output
+	})
+
+	t.Run("different passwords produce different hashes", func(t *testing.T) {
+		hash1, err := GenerateScramSHA256Hash("password1", 4096)
+		require.NoError(t, err)
+
+		hash2, err := GenerateScramSHA256Hash("password2", 4096)
+		require.NoError(t, err)
+
+		assert.NotEqual(t, hash1, hash2)
+	})
+
+	t.Run("same password produces different hashes (random salt)", func(t *testing.T) {
+		hash1, err := GenerateScramSHA256Hash("samepassword", 4096)
+		require.NoError(t, err)
+
+		hash2, err := GenerateScramSHA256Hash("samepassword", 4096)
+		require.NoError(t, err)
+
+		// Hashes should differ due to random salt
+		assert.NotEqual(t, hash1, hash2)
+	})
+
+	t.Run("respects iteration count", func(t *testing.T) {
+		hash, err := GenerateScramSHA256Hash("test", 8192)
+		require.NoError(t, err)
+
+		parsed, err := ParseScramSHA256Hash(hash)
+		require.NoError(t, err)
+
+		assert.Equal(t, 8192, parsed.Iterations)
+	})
+
+	t.Run("rejects iteration count below minimum", func(t *testing.T) {
+		_, err := GenerateScramSHA256Hash("test", 2048)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "below minimum")
+	})
+
+	t.Run("generated hash can verify correct password", func(t *testing.T) {
+		password := "verifyme"
+		hash, err := GenerateScramSHA256Hash(password, 4096)
+		require.NoError(t, err)
+
+		parsed, err := ParseScramSHA256Hash(hash)
+		require.NoError(t, err)
+
+		// Recompute using the parsed salt and iterations
+		saltedPassword := ComputeSaltedPassword(password, parsed.Salt, parsed.Iterations)
+		clientKey := ComputeClientKey(saltedPassword)
+		storedKey := ComputeStoredKey(clientKey)
+		serverKey := ComputeServerKey(saltedPassword)
+
+		assert.Equal(t, parsed.StoredKey, storedKey)
+		assert.Equal(t, parsed.ServerKey, serverKey)
+	})
+
+	t.Run("generated hash rejects wrong password", func(t *testing.T) {
+		hash, err := GenerateScramSHA256Hash("correctpassword", 4096)
+		require.NoError(t, err)
+
+		parsed, err := ParseScramSHA256Hash(hash)
+		require.NoError(t, err)
+
+		// Try with wrong password
+		saltedPassword := ComputeSaltedPassword("wrongpassword", parsed.Salt, parsed.Iterations)
+		clientKey := ComputeClientKey(saltedPassword)
+		storedKey := ComputeStoredKey(clientKey)
+
+		assert.NotEqual(t, parsed.StoredKey, storedKey)
+	})
+}

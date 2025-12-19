@@ -485,7 +485,7 @@ func setupPgBackRestForBootstrap(t *testing.T, baseDir string, nodes []*nodeInst
 					DataPath:  filepath.Join(otherNode.dataDir, "pg_data"),
 					SocketDir: filepath.Join(otherNode.dataDir, "pg_sockets"),
 					Port:      otherNode.pgPort,
-					User:      "postgres",
+					User:      constants.DefaultAdminUser,
 					Database:  "postgres",
 				})
 			}
@@ -501,7 +501,7 @@ func setupPgBackRestForBootstrap(t *testing.T, baseDir string, nodes []*nodeInst
 			PgDataPath:      filepath.Join(node.dataDir, "pg_data"),
 			PgPort:          node.pgPort,
 			PgSocketDir:     filepath.Join(node.dataDir, "pg_sockets"),
-			PgUser:          "postgres",
+			PgUser:          constants.DefaultAdminUser,
 			PgDatabase:      "postgres",
 			AdditionalHosts: additionalHosts,
 			LogPath:         logPath,

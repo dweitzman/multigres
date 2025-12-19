@@ -56,7 +56,7 @@ func GetRootCommand() (*cobra.Command, *PgCtlCommand) {
 			Dynamic:  false,
 		}),
 		pgUser: viperutil.Configure(reg, "pg-user", viperutil.Options[string]{
-			Default:  "postgres",
+			Default:  "multigres_admin",
 			FlagName: "pg-user",
 			Dynamic:  false,
 		}),

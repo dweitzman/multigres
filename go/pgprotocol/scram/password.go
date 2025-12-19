@@ -15,6 +15,7 @@
 package scram
 
 import (
+	"crypto/rand"
 	"encoding/base64"
 	"fmt"
 	"strconv"
@@ -131,4 +132,39 @@ func ParseScramSHA256Hash(hash string) (*ScramHash, error) {
 // This is a quick check based on the prefix; it does not validate the entire format.
 func IsScramSHA256Hash(hash string) bool {
 	return strings.HasPrefix(hash, ScramSHA256Prefix)
+}
+
+// GenerateScramSHA256Hash generates a PostgreSQL SCRAM-SHA-256 password hash.
+// The returned string can be used directly in ALTER USER ... WITH PASSWORD '...'
+// PostgreSQL will detect the SCRAM-SHA-256 prefix and store it directly without re-hashing.
+//
+// Parameters:
+//   - password: The plaintext password to hash
+//   - iterations: The PBKDF2 iteration count (must be >= MinIterationCount)
+//
+// Returns the hash in PostgreSQL format: SCRAM-SHA-256$<iterations>:<salt>$<StoredKey>:<ServerKey>
+func GenerateScramSHA256Hash(password string, iterations int) (string, error) {
+	if iterations < MinIterationCount {
+		return "", fmt.Errorf("iteration count %d below minimum %d", iterations, MinIterationCount)
+	}
+
+	// Generate random salt (16 bytes is standard for PostgreSQL)
+	salt := make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil {
+		return "", fmt.Errorf("failed to generate random salt: %w", err)
+	}
+
+	// Compute SCRAM keys
+	saltedPassword := ComputeSaltedPassword(password, salt, iterations)
+	clientKey := ComputeClientKey(saltedPassword)
+	storedKey := ComputeStoredKey(clientKey)
+	serverKey := ComputeServerKey(saltedPassword)
+
+	// Format as PostgreSQL SCRAM-SHA-256 hash
+	return fmt.Sprintf("%s$%d:%s$%s:%s",
+		ScramSHA256Prefix,
+		iterations,
+		base64.StdEncoding.EncodeToString(salt),
+		base64.StdEncoding.EncodeToString(storedKey),
+		base64.StdEncoding.EncodeToString(serverKey)), nil
 }

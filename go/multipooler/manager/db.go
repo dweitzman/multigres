@@ -22,6 +22,8 @@ import (
 	"strings"
 
 	_ "github.com/lib/pq" // PostgreSQL driver
+
+	"github.com/multigres/multigres/go/common/constants"
 )
 
 // CreateDBConnection establishes a new connection to PostgreSQL using the config
@@ -47,8 +49,8 @@ func CreateDBConnection(logger *slog.Logger, config *Config) (*sql.DB, error) {
 		// enough for Unix socket connections which should be nearly instant.
 		// NOTE: This will be replaced with connection pooling soon, so it's not worth
 		// refactoring to pass in a context parameter at this time.
-		dsn = fmt.Sprintf("user=postgres dbname=%s host=%s port=%s sslmode=disable connect_timeout=2",
-			config.Database, socketDir, port)
+		dsn = fmt.Sprintf("user=%s dbname=%s host=%s port=%s sslmode=disable connect_timeout=2",
+			constants.DefaultAdminUser, config.Database, socketDir, port)
 
 		logger.Info("Unix socket connection via pooler directory",
 			"pooler_dir", config.PoolerDir,
@@ -68,8 +70,8 @@ func CreateDBConnection(logger *slog.Logger, config *Config) (*sql.DB, error) {
 			}
 		}
 
-		dsn = fmt.Sprintf("user=postgres dbname=%s host=%s port=%s sslmode=disable",
-			config.Database, socketDir, port)
+		dsn = fmt.Sprintf("user=%s dbname=%s host=%s port=%s sslmode=disable",
+			constants.DefaultAdminUser, config.Database, socketDir, port)
 
 		logger.Info("Unix socket connection via socket file path (fallback)",
 			"original_socket_path", config.SocketFilePath,
@@ -79,8 +81,8 @@ func CreateDBConnection(logger *slog.Logger, config *Config) (*sql.DB, error) {
 			"dsn", dsn)
 	} else {
 		// Use TCP connection (fallback)
-		dsn = fmt.Sprintf("user=postgres dbname=%s host=localhost port=5432 sslmode=disable",
-			config.Database)
+		dsn = fmt.Sprintf("user=%s dbname=%s host=localhost port=5432 sslmode=disable",
+			constants.DefaultAdminUser, config.Database)
 	}
 
 	db, err := sql.Open("postgres", dsn)

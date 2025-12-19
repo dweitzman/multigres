@@ -243,7 +243,7 @@ func createTestConfigWithPorts(tempDir string, portConfig *testPortConfig) (stri
 				GRPCSocketFile: filepath.Join(tempDir, "sockets", fmt.Sprintf("pgctld-%s.sock", zoneName)),
 				PgPort:         zonePort.PgctldPGPort,
 				PgDatabase:     "postgres",
-				PgUser:         "postgres",
+				PgUser:         "multigres_admin",
 				Timeout:        30,
 				LogLevel:       "info",
 				PoolerDir:      local.GeneratePoolerDir(tempDir, serviceID),
@@ -790,7 +790,8 @@ func testPostgreSQLConnection(t *testing.T, tempDir string, port int, zone strin
 	t.Logf("Using Unix socket in directory: %s", socketDir)
 
 	// Execute psql command to test connectivity via Unix socket (no password needed)
-	cmd := exec.Command("psql", "-h", socketDir, "-p", fmt.Sprintf("%d", port), "-U", "postgres", "-d", "postgres", "-c", fmt.Sprintf("SELECT 'Zone %s PostgreSQL is working!' as status, version();", zone))
+	// Use multigres_admin which is always available after initdb.
+	cmd := exec.Command("psql", "-h", socketDir, "-p", fmt.Sprintf("%d", port), "-U", constants.DefaultAdminUser, "-d", "postgres", "-c", fmt.Sprintf("SELECT 'Zone %s PostgreSQL is working!' as status, version();", zone))
 
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, "PostgreSQL connection failed on port %d (Zone %s): %s", port, zone, string(output))

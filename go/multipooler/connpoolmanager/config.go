@@ -50,7 +50,7 @@ type ConnectionConfig struct {
 // Connections authenticate directly as the user via trust/peer authentication.
 type Config struct {
 	// --- Admin credential settings ---
-	// Admin credentials (postgres superuser) - used by shared AdminPool for kill operations
+	// Admin credentials (multigres_admin superuser) - used by shared AdminPool for control operations
 	adminUser     viperutil.Value[string]
 	adminPassword viperutil.Value[string]
 
@@ -110,7 +110,7 @@ func NewConfig(reg *viperutil.Registry) *Config {
 	return &Config{
 		// Admin credential settings
 		adminUser: viperutil.Configure(reg, "connpool.admin.user", viperutil.Options[string]{
-			Default:  "postgres",
+			Default:  "multigres_admin",
 			FlagName: "connpool-admin-user",
 			EnvVars:  []string{"CONNPOOL_ADMIN_USER"},
 		}),
@@ -183,7 +183,7 @@ func NewConfig(reg *viperutil.Registry) *Config {
 // RegisterFlags registers all connection pool flags with the given FlagSet.
 func (c *Config) RegisterFlags(fs *pflag.FlagSet) {
 	// Admin credential flags
-	fs.String("connpool-admin-user", c.adminUser.Default(), "Admin pool user (PostgreSQL superuser for control operations)")
+	fs.String("connpool-admin-user", c.adminUser.Default(), "Admin pool user (multigres_admin superuser for control operations)")
 	fs.String("connpool-admin-password", c.adminPassword.Default(), "Admin pool password (can also be set via CONNPOOL_ADMIN_PASSWORD env var)")
 
 	// Admin pool flags (shared across all users)

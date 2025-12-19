@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/multigres/multigres/go/pgprotocol/scram"
 	"github.com/multigres/multigres/go/services/pgctld"
 	"github.com/multigres/multigres/go/tools/viperutil"
 
@@ -142,7 +143,7 @@ func initializeDataDir(logger *slog.Logger, dataDir string, pgUser string, pgPwf
 	// pgBackRest will validate checksums for the Postgres cluster it's backing up.
 	// However, pgBackRest merely logs checksum validation errors but does not fail
 	// the backup.
-	cmd := exec.Command("initdb", "-D", dataDir, "--data-checksums", "--auth-local=trust", "--auth-host=md5", "-U", pgUser)
+	cmd := exec.Command("initdb", "-D", dataDir, "--data-checksums", "--auth-local=trust", "--auth-host=scram-sha-256", "-U", pgUser)
 
 	// Capture both stdout and stderr to include in error messages
 	output, err := cmd.CombinedOutput()
@@ -188,11 +189,21 @@ func setPostgresPassword(dataDir string, pgUser string, pgPwfile string) error {
 	if err != nil {
 		return fmt.Errorf("failed to resolve password: %w", err)
 	}
-	// Start PostgreSQL temporarily in single-user mode to set password
-	// Use the configured user in single-user mode with trust auth to set the password
-	// Set password_encryption to scram-sha-256 to ensure SCRAM encoding
-	cmd := exec.Command("postgres", "--single", "-D", dataDir, pgUser)
-	sqlCommands := fmt.Sprintf("SET password_encryption = 'scram-sha-256';\nALTER USER %s WITH PASSWORD '%s';\n", pgUser, effectivePassword)
+
+	// Generate SCRAM-SHA-256 hash - this avoids putting plaintext passwords in SQL
+	// which could be logged. PostgreSQL will detect the SCRAM-SHA-256 prefix and
+	// store the hash directly without re-hashing.
+	passwordHash, err := scram.GenerateScramSHA256Hash(effectivePassword, scram.MinIterationCount)
+	if err != nil {
+		return fmt.Errorf("failed to generate SCRAM hash: %w", err)
+	}
+
+	// Start PostgreSQL temporarily in single-user mode to set password.
+	// The last argument is the database name (always "postgres"), not the username.
+	// We run as the initdb superuser (pgUser) and set their password.
+	cmd := exec.Command("postgres", "--single", "-D", dataDir, "postgres")
+	// Password is already hashed - PostgreSQL will store it directly
+	sqlCommands := fmt.Sprintf("ALTER USER %s WITH PASSWORD '%s';\n", pgUser, passwordHash)
 	cmd.Stdin = strings.NewReader(sqlCommands)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

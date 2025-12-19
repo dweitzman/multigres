@@ -76,6 +76,13 @@ func (c *Conn) ResetSettings(_ context.Context) error {
 
 // --- Admin operations ---
 
+// Exec executes a SQL statement and discards the results.
+// This is useful for DDL and bootstrap operations.
+func (c *Conn) Exec(ctx context.Context, sql string) error {
+	_, err := c.conn.Query(ctx, sql)
+	return err
+}
+
 // TerminateBackend terminates a backend process using pg_terminate_backend().
 // Returns true if the backend was terminated, false if it was not found or
 // the caller lacks permission.

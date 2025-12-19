@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/multigres/multigres/go/common/constants"
 	"github.com/multigres/multigres/go/common/preparedstatement"
 	"github.com/multigres/multigres/go/common/queryservice"
 	"github.com/multigres/multigres/go/multipooler/connpoolmanager"
@@ -422,13 +423,15 @@ func (e *Executor) ensurePrepared(ctx context.Context, conn *regular.Conn, stmt 
 }
 
 // getUserFromOptions extracts the user from ExecuteOptions.
-// Returns "postgres" as default if no user is specified.
+// Returns the default admin user if no user is specified.
 func (e *Executor) getUserFromOptions(options *query.ExecuteOptions) string {
 	if options != nil && options.User != "" {
 		return options.User
 	}
-	// Default to postgres superuser if no user specified
-	return "postgres"
+	// Default to admin user (multigres_admin) which is always available after initdb.
+	// The "postgres" user is created by multipooler bootstrap but may not exist
+	// during early startup or if bootstrap failed.
+	return constants.DefaultAdminUser
 }
 
 // int32ToInt16Slice converts a slice of int32 to int16.

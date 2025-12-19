@@ -24,9 +24,7 @@ import (
 	"time"
 )
 
-const (
-	postgresConfigWaitRetryTime = 100 * time.Millisecond
-)
+const postgresConfigWaitRetryTime = 100 * time.Millisecond
 
 // PostgresServerConfig is a memory structure that contains PostgreSQL server configuration parameters.
 // It can be used to read standard postgresql.conf files and can also be populated from an existing postgresql.conf.

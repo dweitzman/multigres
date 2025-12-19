@@ -529,7 +529,7 @@ func initializePrimary(t *testing.T, baseDir string, pgctld *ProcessInstance, mu
 		PgDataPath:  filepath.Join(pgctld.DataDir, "pg_data"),
 		PgPort:      pgctld.PgPort, // Keep for fallback even though socket-path takes precedence
 		PgSocketDir: filepath.Join(pgctld.DataDir, "pg_sockets"),
-		PgUser:      "postgres",
+		PgUser:      constants.DefaultAdminUser,
 		PgDatabase:  "postgres",
 		// Add standby as pg2 for symmetric configuration
 		AdditionalHosts: []pgbackrest.PgHost{
@@ -537,7 +537,7 @@ func initializePrimary(t *testing.T, baseDir string, pgctld *ProcessInstance, mu
 				DataPath:  filepath.Join(standbyPgctld.DataDir, "pg_data"),
 				SocketDir: filepath.Join(standbyPgctld.DataDir, "pg_sockets"),
 				Port:      standbyPgctld.PgPort,
-				User:      "postgres",
+				User:      "multigres_admin",
 				Database:  "postgres",
 			},
 		},
@@ -703,7 +703,7 @@ func initializeStandby(t *testing.T, baseDir string, primaryPgctld *ProcessInsta
 		PgDataPath:  filepath.Join(standbyPgctld.DataDir, "pg_data"),
 		PgPort:      standbyPgctld.PgPort, // Keep for fallback even though socket-path takes precedence
 		PgSocketDir: filepath.Join(standbyPgctld.DataDir, "pg_sockets"),
-		PgUser:      "postgres",
+		PgUser:      constants.DefaultAdminUser,
 		PgDatabase:  "postgres",
 		// Add primary as pg2 for symmetric configuration
 		AdditionalHosts: []pgbackrest.PgHost{
@@ -711,7 +711,7 @@ func initializeStandby(t *testing.T, baseDir string, primaryPgctld *ProcessInsta
 				DataPath:  filepath.Join(primaryPgctld.DataDir, "pg_data"),
 				SocketDir: filepath.Join(primaryPgctld.DataDir, "pg_sockets"),
 				Port:      primaryPgctld.PgPort,
-				User:      "postgres",
+				User:      "multigres_admin",
 				Database:  "postgres",
 			},
 		},
@@ -1070,7 +1070,7 @@ func setupStandbyReplication(t *testing.T, primaryPgctld *ProcessInstance, stand
 		PgDataPath:  filepath.Join(standbyPgctld.DataDir, "pg_data"),
 		PgPort:      standbyPgctld.PgPort,
 		PgSocketDir: filepath.Join(standbyPgctld.DataDir, "pg_sockets"),
-		PgUser:      "postgres",
+		PgUser:      constants.DefaultAdminUser,
 		PgDatabase:  "postgres",
 		// Add primary as pg2 for symmetric configuration
 		AdditionalHosts: []pgbackrest.PgHost{
@@ -1078,7 +1078,7 @@ func setupStandbyReplication(t *testing.T, primaryPgctld *ProcessInstance, stand
 				DataPath:  filepath.Join(primaryPgctld.DataDir, "pg_data"),
 				SocketDir: filepath.Join(primaryPgctld.DataDir, "pg_sockets"),
 				Port:      primaryPgctld.PgPort,
-				User:      "postgres",
+				User:      "multigres_admin",
 				Database:  "postgres",
 			},
 		},
