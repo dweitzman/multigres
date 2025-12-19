@@ -223,21 +223,24 @@ func (m *Manager) bootstrapPostgresUser(ctx context.Context) error {
 	}
 
 	// Idempotent bootstrap SQL:
-	// 1. Create postgres role if it doesn't exist
+	// 1. Create postgres role if it doesn't exist (as superuser initially for setup)
 	// 2. Transfer database ownership to postgres
-	// 3. Keep postgres as superuser for now (simplifies testing and backwards compatibility)
-	//
-	// TODO: Consider demoting postgres in production deployments:
-	//   ALTER ROLE postgres NOSUPERUSER CREATEDB CREATEROLE LOGIN REPLICATION BYPASSRLS;
-	//   GRANT pg_read_all_settings TO postgres;
-	// This would require tests to use multigres_admin for admin operations.
+	// 3. Demote postgres from superuser (keep useful privileges for operators)
+	// 4. Grant pg_read_all_settings for monitoring/diagnostics access
 	bootstrapSQL := fmt.Sprintf(`
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'postgres') THEN
+    -- Create as superuser initially to allow ownership transfer
     CREATE ROLE postgres SUPERUSER LOGIN PASSWORD '%s';
     ALTER DATABASE postgres OWNER TO postgres;
     GRANT ALL ON DATABASE postgres TO postgres;
+    -- Demote from superuser but keep useful privileges for operators
+    ALTER ROLE postgres NOSUPERUSER CREATEDB CREATEROLE LOGIN REPLICATION BYPASSRLS;
+    -- Grant monitoring access (allows SHOW commands, pg_stat views, etc.)
+    GRANT pg_read_all_settings TO postgres;
+    GRANT pg_read_all_stats TO postgres;
+    GRANT pg_monitor TO postgres;
   END IF;
 END $$;
 `, hash)
