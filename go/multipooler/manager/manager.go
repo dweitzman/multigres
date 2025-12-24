@@ -129,6 +129,10 @@ type MultiPoolerManager struct {
 	// and state-specific handlers (setServing, setServingReadOnly, setNotServing, setDrained)
 	// See design discussion for full details.
 	queryServingState clustermetadatapb.PoolerServingStatus
+
+	// healthStreamer streams health state to subscribers.
+	// Owns all health-related state and provides typed update methods.
+	healthStreamer *healthStreamer
 }
 
 // promotionState tracks which parts of the promotion are complete
@@ -209,10 +213,11 @@ func NewMultiPoolerManagerWithTimeout(logger *slog.Logger, config *Config, loadT
 		pgctldClient:             pgctldClient,
 		connPoolMgr:              connPoolMgr,
 		readyChan:                make(chan struct{}),
+		healthStreamer:           newHealthStreamer(logger, config.ServiceID, config.TableGroup, config.Shard),
 	}
 
 	// Create the query service controller with the pool manager
-	pm.qsc = poolerserver.NewQueryPoolerServer(logger, connPoolMgr)
+	pm.qsc = poolerserver.NewQueryPoolerServer(logger, connPoolMgr, pm)
 
 	return pm, nil
 }
@@ -295,6 +300,10 @@ func (pm *MultiPoolerManager) Open() error {
 
 	pm.isOpen = true
 	pm.logger.Info("MultiPoolerManager opened database connection")
+
+	// Start health heartbeat goroutine and broadcast initial state
+	go pm.runHealthHeartbeat(pm.ctx, defaultHealthHeartbeatInterval)
+	pm.healthStreamer.Broadcast()
 
 	return nil
 }
@@ -719,6 +728,9 @@ func (pm *MultiPoolerManager) loadMultiPoolerFromTopo() {
 		pm.topoLoaded = true
 		pm.mu.Unlock()
 
+		// Update health streamer with newly loaded multipooler type
+		pm.healthStreamer.UpdatePoolerType(mp.Type)
+
 		pm.logger.InfoContext(pm.ctx, "Loaded multipooler record from topology", "service_id", pm.serviceID.String(), "database", mp.Database, "backup_location", shardBackupLocation, "pooler_type", mp.Type.String())
 
 		// Note: restoring from backup (for replicas) happens in a separate goroutine
@@ -940,6 +952,9 @@ func (pm *MultiPoolerManager) setServingReadOnly(ctx context.Context, state *dem
 	pm.queryServingState = clustermetadatapb.PoolerServingStatus_SERVING_RDONLY
 	pm.mu.Unlock()
 
+	// Update health streamer with serving status change
+	pm.healthStreamer.UpdateServingStatus(clustermetadatapb.PoolerServingStatus_SERVING_RDONLY)
+
 	// Stop heartbeat writer
 	if pm.replTracker != nil {
 		pm.logger.InfoContext(ctx, "Stopping heartbeat writer")
@@ -1053,6 +1068,9 @@ func (pm *MultiPoolerManager) updateTopologyAfterDemotion(ctx context.Context, s
 	pm.multipooler.MultiPooler = updatedMultipooler
 	pm.updateCachedMultipooler()
 	pm.mu.Unlock()
+
+	// Update health streamer with pooler type change
+	pm.healthStreamer.UpdatePoolerType(clustermetadatapb.PoolerType_REPLICA)
 
 	pm.logger.InfoContext(ctx, "Topology updated to REPLICA successfully")
 	return nil
@@ -1314,6 +1332,9 @@ func (pm *MultiPoolerManager) updateTopologyAfterPromotion(ctx context.Context, 
 	pm.multipooler.MultiPooler = updatedMultipooler
 	pm.updateCachedMultipooler()
 	pm.mu.Unlock()
+
+	// Update health streamer with pooler type change
+	pm.healthStreamer.UpdatePoolerType(clustermetadatapb.PoolerType_PRIMARY)
 
 	// Update heartbeat tracker to primary mode
 	if pm.replTracker != nil {
