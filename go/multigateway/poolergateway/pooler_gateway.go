@@ -65,6 +65,10 @@ type PoolerGateway struct {
 	// discovery is used to find available poolers
 	discovery PoolerDiscovery
 
+	// loadBalancer manages pooler connections based on discovery events.
+	// This will eventually replace the direct discovery polling approach.
+	loadBalancer *LoadBalancer
+
 	// logger for debugging
 	logger *slog.Logger
 
@@ -92,12 +96,14 @@ type poolerConnection struct {
 // NewPoolerGateway creates a new PoolerGateway.
 func NewPoolerGateway(
 	discovery PoolerDiscovery,
+	loadBalancer *LoadBalancer,
 	logger *slog.Logger,
 ) *PoolerGateway {
 	return &PoolerGateway{
-		discovery:   discovery,
-		logger:      logger,
-		connections: make(map[string]*poolerConnection),
+		discovery:    discovery,
+		loadBalancer: loadBalancer,
+		logger:       logger,
+		connections:  make(map[string]*poolerConnection),
 	}
 }
 
@@ -276,17 +282,17 @@ func (pg *PoolerGateway) Describe(
 
 // Close implements queryservice.QueryService.
 // It closes all connections to poolers.
-func (pg *PoolerGateway) Close(ctx context.Context) error {
+func (pg *PoolerGateway) Close() error {
 	pg.mu.Lock()
 	defer pg.mu.Unlock()
 
-	pg.logger.InfoContext(ctx, "closing all pooler connections", "count", len(pg.connections))
+	pg.logger.Info("closing all pooler connections", "count", len(pg.connections))
 
 	var lastErr error
 	for poolerID, conn := range pg.connections {
-		pg.logger.DebugContext(ctx, "closing connection", "pooler_id", poolerID)
-		if err := conn.queryService.Close(ctx); err != nil {
-			pg.logger.ErrorContext(ctx, "failed to close connection",
+		pg.logger.Debug("closing connection", "pooler_id", poolerID)
+		if err := conn.queryService.Close(); err != nil {
+			pg.logger.Error("failed to close connection",
 				"pooler_id", poolerID,
 				"error", err)
 			lastErr = err
