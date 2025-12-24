@@ -154,7 +154,7 @@ func (mg *MultiGateway) Init() error {
 	logger.Info("LoadBalancer registered with pooler discovery")
 
 	// Initialize PoolerGateway for managing pooler connections
-	mg.poolerGateway = poolergateway.NewPoolerGateway(mg.poolerDiscovery, loadBalancer, logger)
+	mg.poolerGateway = poolergateway.NewPoolerGateway(loadBalancer, logger)
 
 	// Initialize ScatterConn for query coordination
 	mg.scatterConn = scatterconn.NewScatterConn(mg.poolerGateway, logger)

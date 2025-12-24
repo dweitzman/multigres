@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/multigres/multigres/go/common/topoclient"
-	"github.com/multigres/multigres/go/pb/query"
 	"github.com/multigres/multigres/go/tools/retry"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -291,72 +290,6 @@ func (pd *CellPoolerDiscovery) GetPoolersForAdmin() []*clustermetadatapb.MultiPo
 	return poolers
 }
 
-// GetPooler returns a pooler matching the target specification.
-// Target specifies the tablegroup, shard, and pooler type to route to.
-// Returns nil if no matching pooler is found.
-//
-// Filtering logic:
-// - TableGroup: Required, must match exactly
-// - PoolerType: If not specified (UNKNOWN), defaults to PRIMARY
-// - Shard: If empty, matches any shard; otherwise must match exactly
-func (pd *CellPoolerDiscovery) GetPooler(target *query.Target) *clustermetadatapb.MultiPooler {
-	pd.mu.Lock()
-	defer pd.mu.Unlock()
-
-	// Default to PRIMARY if not specified
-	targetType := target.PoolerType
-	if targetType == clustermetadatapb.PoolerType_UNKNOWN {
-		targetType = clustermetadatapb.PoolerType_PRIMARY
-	}
-
-	// Debug: Log all discovered poolers
-	pd.logger.Debug("GetPooler called - listing all discovered poolers",
-		"target_tablegroup", target.TableGroup,
-		"target_shard", target.Shard,
-		"target_pooler_type", targetType.String(),
-		"total_poolers", len(pd.poolers))
-	for i, pooler := range pd.poolers {
-		pd.logger.Debug("discovered pooler",
-			"index", i,
-			"pooler_id", topoclient.MultiPoolerIDString(pooler.Id),
-			"tablegroup", pooler.TableGroup,
-			"shard", pooler.Shard,
-			"type", pooler.Type.String())
-	}
-
-	// Find matching pooler
-	for _, pooler := range pd.poolers {
-		// TableGroup must match
-		if pooler.TableGroup != target.TableGroup {
-			continue
-		}
-
-		// PoolerType must match
-		if pooler.Type != targetType {
-			continue
-		}
-
-		// Shard must match if specified
-		if target.Shard != "" && pooler.Shard != target.Shard {
-			continue
-		}
-
-		// Found a match!
-		pd.logger.Debug("selected pooler for target",
-			"pooler_id", topoclient.MultiPoolerIDString(pooler.Id),
-			"pooler_type", pooler.Type.String(),
-			"tablegroup", pooler.TableGroup,
-			"shard", pooler.Shard)
-		return proto.Clone(pooler.MultiPooler).(*clustermetadatapb.MultiPooler)
-	}
-
-	pd.logger.Warn("no matching pooler found",
-		"tablegroup", target.TableGroup,
-		"shard", target.Shard,
-		"pooler_type", targetType.String())
-	return nil
-}
-
 // LastRefresh returns the timestamp of the last successful refresh.
 func (pd *CellPoolerDiscovery) LastRefresh() time.Time {
 	pd.mu.Lock()
@@ -569,42 +502,6 @@ func (gd *GlobalPoolerDiscovery) notifyPoolerRemoved(pooler *clustermetadatapb.M
 	for _, listener := range listeners {
 		listener.OnPoolerRemoved(pooler)
 	}
-}
-
-// GetPooler returns a pooler matching the target specification.
-// It searches across all cells, preferring the local cell for replicas.
-// For primaries, it will return a primary from any cell.
-func (gd *GlobalPoolerDiscovery) GetPooler(target *query.Target) *clustermetadatapb.MultiPooler {
-	gd.mu.Lock()
-	defer gd.mu.Unlock()
-
-	// Default to PRIMARY if not specified
-	targetType := target.PoolerType
-	if targetType == clustermetadatapb.PoolerType_UNKNOWN {
-		targetType = clustermetadatapb.PoolerType_PRIMARY
-	}
-
-	// For replicas, try local cell first
-	if targetType != clustermetadatapb.PoolerType_PRIMARY {
-		if localWatcher, exists := gd.cellWatchers[gd.localCell]; exists {
-			if pooler := localWatcher.GetPooler(target); pooler != nil {
-				return pooler
-			}
-		}
-	}
-
-	// Search all cells
-	for _, watcher := range gd.cellWatchers {
-		if pooler := watcher.GetPooler(target); pooler != nil {
-			return pooler
-		}
-	}
-
-	gd.logger.Warn("No matching pooler found across all cells",
-		"tablegroup", target.TableGroup,
-		"shard", target.Shard,
-		"pooler_type", targetType.String())
-	return nil
 }
 
 // PoolerCount returns the total number of discovered poolers across all cells.
