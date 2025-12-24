@@ -20,9 +20,12 @@ import (
 	"log/slog"
 
 	"github.com/multigres/multigres/go/common/queryservice"
+	"github.com/multigres/multigres/go/common/rpcclient"
+	"github.com/multigres/multigres/go/common/sqltypes"
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	"github.com/multigres/multigres/go/pb/query"
+	"github.com/multigres/multigres/go/tools/grpccommon"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -62,9 +65,10 @@ func NewPoolerConnection(
 		"addr", addr,
 		"type", pooler.Type.String())
 
-	// Create gRPC connection
-	conn, err := grpc.NewClient(addr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	// Create gRPC connection with telemetry attributes
+	conn, err := grpccommon.NewClient(addr,
+		grpccommon.WithAttributes(rpcclient.PoolerSpanAttributes(pooler.Id)...),
+		grpccommon.WithDialOptions(grpc.WithTransportCredentials(insecure.NewCredentials())),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create gRPC client for pooler %s at %s: %w", poolerID, addr, err)
@@ -113,7 +117,7 @@ func (pc *PoolerConnection) StreamExecute(
 	target *query.Target,
 	sql string,
 	options *query.ExecuteOptions,
-	callback func(context.Context, *query.QueryResult) error,
+	callback func(context.Context, *sqltypes.Result) error,
 ) error {
 	return pc.queryService.StreamExecute(ctx, target, sql, options, callback)
 }
@@ -125,7 +129,7 @@ func (pc *PoolerConnection) ExecuteQuery(
 	target *query.Target,
 	sql string,
 	options *query.ExecuteOptions,
-) (*query.QueryResult, error) {
+) (*sqltypes.Result, error) {
 	return pc.queryService.ExecuteQuery(ctx, target, sql, options)
 }
 
@@ -136,7 +140,7 @@ func (pc *PoolerConnection) PortalStreamExecute(
 	preparedStatement *query.PreparedStatement,
 	portal *query.Portal,
 	options *query.ExecuteOptions,
-	callback func(context.Context, *query.QueryResult) error,
+	callback func(context.Context, *sqltypes.Result) error,
 ) (queryservice.ReservedState, error) {
 	return pc.queryService.PortalStreamExecute(ctx, target, preparedStatement, portal, options, callback)
 }
