@@ -243,13 +243,6 @@ func (pd *CellPoolerDiscovery) processPoolerChange(watchData *topoclient.WatchDa
 
 	poolerID := topoclient.MultiPoolerIDString(pooler.Id)
 
-	// If this is a PRIMARY, evict any other PRIMARY for the same TableGroup/Shard.
-	// This handles the failover case where a new PRIMARY comes up but the old
-	// crashed PRIMARY's record is still present.
-	if pooler.Type == clustermetadatapb.PoolerType_PRIMARY {
-		pd.evictConflictingPrimary(poolerID, pooler.TableGroup, pooler.Shard)
-	}
-
 	// Check if this is a new pooler
 	_, existed := pd.poolers[poolerID]
 	pd.poolers[poolerID] = pooler
@@ -349,31 +342,6 @@ func (pd *CellPoolerDiscovery) extractPoolerIDFromPath(path string) string {
 		return strings.Join(parts[1:len(parts)-1], "/")
 	}
 	return ""
-}
-
-// evictConflictingPrimary removes any existing PRIMARY pooler for the same
-// TableGroup/Shard that has a different pooler ID. This handles the failover
-// case where a new PRIMARY comes up but the old crashed PRIMARY's record is
-// still in the discovery cache.
-// Caller must hold pd.mu.
-func (pd *CellPoolerDiscovery) evictConflictingPrimary(newPoolerID, tableGroup, shard string) {
-	for poolerID, pooler := range pd.poolers {
-		// Skip if it's the same pooler (update case)
-		if poolerID == newPoolerID {
-			continue
-		}
-		// Check if this is a PRIMARY for the same TableGroup/Shard
-		if pooler.Type == clustermetadatapb.PoolerType_PRIMARY &&
-			pooler.TableGroup == tableGroup &&
-			pooler.Shard == shard {
-			delete(pd.poolers, poolerID)
-			pd.logger.Info("Evicted stale PRIMARY pooler",
-				"evicted_id", poolerID,
-				"new_primary_id", newPoolerID,
-				"tableGroup", tableGroup,
-				"shard", shard)
-		}
-	}
 }
 
 // Cell returns the cell this discovery is watching.

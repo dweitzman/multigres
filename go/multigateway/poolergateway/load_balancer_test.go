@@ -22,14 +22,15 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/multigres/multigres/go/common/constants"
-	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	"github.com/multigres/multigres/go/pb/multipoolerservice"
 	"github.com/multigres/multigres/go/pb/query"
 )
 
-// poolerID returns the expected ID format for a pooler
+// poolerID returns the expected ID format for a pooler.
+// Uses the same format as LoadBalancer internally.
 func poolerID(pooler *clustermetadatapb.MultiPooler) string {
-	return topoclient.MultiPoolerIDString(pooler.Id)
+	return poolerIDString(pooler.Id)
 }
 
 func createTestMultiPooler(name, cell, tableGroup, shard string, poolerType clustermetadatapb.PoolerType) *clustermetadatapb.MultiPooler {
@@ -68,11 +69,11 @@ func TestLoadBalancer_AddRemovePooler(t *testing.T) {
 	assert.Equal(t, 1, lb.ConnectionCount())
 
 	// Remove the pooler
-	lb.RemovePooler("zone1/pooler1")
+	lb.RemovePooler(poolerID(pooler))
 	assert.Equal(t, 0, lb.ConnectionCount())
 
 	// Removing non-existent pooler is a no-op
-	lb.RemovePooler("zone1/nonexistent")
+	lb.RemovePooler("multipooler-zone1-nonexistent")
 	assert.Equal(t, 0, lb.ConnectionCount())
 }
 
@@ -246,6 +247,288 @@ func TestLoadBalancer_Close(t *testing.T) {
 // - TestLoadBalancer_ConcurrentAddRemove: Multiple goroutines adding/removing poolers
 // - TestLoadBalancer_ConcurrentGetConnection: GetConnection while poolers are being added/removed
 // - TestLoadBalancer_RemoveWhileInUse: Remove a pooler that's currently being used for a query
+
+// simulateHealthUpdate simulates receiving a health update from the stream.
+// This uses the same code path as real health updates, ensuring any callbacks are triggered.
+func simulateHealthUpdate(conn *PoolerConnection, status clustermetadatapb.PoolerServingStatus, observation *multipoolerservice.PrimaryObservation) {
+	conn.processHealthResponse(&multipoolerservice.StreamPoolerHealthResponse{
+		Target:             nil,
+		PoolerId:           conn.poolerInfo.Id,
+		ServingStatus:      status,
+		PrimaryObservation: observation,
+	})
+}
+
+func TestLoadBalancer_SelectPrimaryByTerm(t *testing.T) {
+	logger := slog.Default()
+	lb := NewLoadBalancer("zone1", logger)
+
+	// Create poolers in the same shard
+	primary1 := createTestMultiPooler("primary1", "zone1", constants.DefaultTableGroup, "0", clustermetadatapb.PoolerType_PRIMARY)
+	primary2 := createTestMultiPooler("primary2", "zone2", constants.DefaultTableGroup, "0", clustermetadatapb.PoolerType_PRIMARY)
+	replica1 := createTestMultiPooler("replica1", "zone1", constants.DefaultTableGroup, "0", clustermetadatapb.PoolerType_REPLICA)
+
+	require.NoError(t, lb.AddPooler(primary1))
+	require.NoError(t, lb.AddPooler(primary2))
+	require.NoError(t, lb.AddPooler(replica1))
+
+	// Get connections to set health
+	lb.mu.RLock()
+	connPrimary1 := lb.connections[poolerID(primary1)]
+	connPrimary2 := lb.connections[poolerID(primary2)]
+	connReplica1 := lb.connections[poolerID(replica1)]
+	lb.mu.RUnlock()
+
+	t.Run("highest term wins", func(t *testing.T) {
+		// primary1 thinks primary1 is leader with term 5
+		simulateHealthUpdate(connPrimary1,
+			clustermetadatapb.PoolerServingStatus_SERVING,
+			&multipoolerservice.PrimaryObservation{
+				PrimaryId: primary1.Id,
+				Term:      5,
+			})
+
+		// primary2 thinks primary2 is leader with term 10 (higher)
+		simulateHealthUpdate(connPrimary2,
+			clustermetadatapb.PoolerServingStatus_SERVING,
+			&multipoolerservice.PrimaryObservation{
+				PrimaryId: primary2.Id,
+				Term:      10,
+			})
+
+		// replica1 also thinks primary2 is leader with term 10
+		simulateHealthUpdate(connReplica1,
+			clustermetadatapb.PoolerServingStatus_SERVING,
+			&multipoolerservice.PrimaryObservation{
+				PrimaryId: primary2.Id,
+				Term:      10,
+			})
+
+		target := &query.Target{
+			TableGroup: constants.DefaultTableGroup,
+			PoolerType: clustermetadatapb.PoolerType_PRIMARY,
+		}
+		conn, err := lb.GetConnection(target, nil)
+		require.NoError(t, err)
+		assert.Equal(t, poolerID(primary2), conn.ID(), "Should select primary with highest term")
+	})
+
+	t.Run("replica reports higher term primary", func(t *testing.T) {
+		// primary1 thinks primary1 is leader with term 15
+		simulateHealthUpdate(connPrimary1,
+			clustermetadatapb.PoolerServingStatus_SERVING,
+			&multipoolerservice.PrimaryObservation{
+				PrimaryId: primary1.Id,
+				Term:      15,
+			})
+
+		// primary2 thinks primary2 is leader with term 12 (stale)
+		simulateHealthUpdate(connPrimary2,
+			clustermetadatapb.PoolerServingStatus_NOT_SERVING,
+			&multipoolerservice.PrimaryObservation{
+				PrimaryId: primary2.Id,
+				Term:      12,
+			})
+
+		// replica1 observed the new leader (primary1) with term 20 (highest)
+		simulateHealthUpdate(connReplica1,
+			clustermetadatapb.PoolerServingStatus_SERVING,
+			&multipoolerservice.PrimaryObservation{
+				PrimaryId: primary1.Id,
+				Term:      20,
+			})
+
+		target := &query.Target{
+			TableGroup: constants.DefaultTableGroup,
+			PoolerType: clustermetadatapb.PoolerType_PRIMARY,
+		}
+		conn, err := lb.GetConnection(target, nil)
+		require.NoError(t, err)
+		assert.Equal(t, poolerID(primary1), conn.ID(), "Should trust replica's observation with highest term")
+	})
+
+	t.Run("no observations falls back to PRIMARY type", func(t *testing.T) {
+		// Clear observations
+		simulateHealthUpdate(connPrimary1,
+			clustermetadatapb.PoolerServingStatus_SERVING,
+			nil)
+		simulateHealthUpdate(connPrimary2,
+			clustermetadatapb.PoolerServingStatus_NOT_SERVING,
+			nil)
+		simulateHealthUpdate(connReplica1,
+			clustermetadatapb.PoolerServingStatus_SERVING,
+			nil)
+
+		target := &query.Target{
+			TableGroup: constants.DefaultTableGroup,
+			PoolerType: clustermetadatapb.PoolerType_PRIMARY,
+		}
+		conn, err := lb.GetConnection(target, nil)
+		require.NoError(t, err)
+		// Should return a PRIMARY type pooler
+		assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, conn.Type(),
+			"Should fall back to PRIMARY type when no observations")
+	})
+
+	t.Run("primary in unwatched cell falls back to observer", func(t *testing.T) {
+		// All poolers observe a primary in zone3 that we don't have a connection to
+		unknownPrimaryID := &clustermetadatapb.ID{
+			Component: clustermetadatapb.ID_MULTIPOOLER,
+			Cell:      "zone3",
+			Name:      "unknown-primary",
+		}
+		simulateHealthUpdate(connPrimary1,
+			clustermetadatapb.PoolerServingStatus_SERVING,
+			&multipoolerservice.PrimaryObservation{
+				PrimaryId: unknownPrimaryID,
+				Term:      100,
+			})
+		simulateHealthUpdate(connPrimary2,
+			clustermetadatapb.PoolerServingStatus_SERVING,
+			&multipoolerservice.PrimaryObservation{
+				PrimaryId: unknownPrimaryID,
+				Term:      100,
+			})
+
+		target := &query.Target{
+			TableGroup: constants.DefaultTableGroup,
+			PoolerType: clustermetadatapb.PoolerType_PRIMARY,
+		}
+		conn, err := lb.GetConnection(target, nil)
+		require.NoError(t, err)
+		// Should fall back to the observer (one of the poolers that reported term 100)
+		assert.Contains(t, []string{poolerID(primary1), poolerID(primary2)}, conn.ID(),
+			"Should fall back to observer when primary not in connections")
+	})
+
+	t.Run("excluded pooler observation still consulted", func(t *testing.T) {
+		// primary1 has the highest term observation pointing to primary2
+		simulateHealthUpdate(connPrimary1,
+			clustermetadatapb.PoolerServingStatus_SERVING,
+			&multipoolerservice.PrimaryObservation{
+				PrimaryId: primary2.Id,
+				Term:      200,
+			})
+		// primary2 has stale observation
+		simulateHealthUpdate(connPrimary2,
+			clustermetadatapb.PoolerServingStatus_SERVING,
+			&multipoolerservice.PrimaryObservation{
+				PrimaryId: primary2.Id,
+				Term:      150,
+			})
+
+		target := &query.Target{
+			TableGroup: constants.DefaultTableGroup,
+			PoolerType: clustermetadatapb.PoolerType_PRIMARY,
+		}
+
+		// Exclude primary1, but its observation should still be used
+		opts := &GetConnectionOptions{
+			ExcludePoolers: []string{poolerID(primary1)},
+		}
+		conn, err := lb.GetConnection(target, opts)
+		require.NoError(t, err)
+		// Should return primary2 (from primary1's observation) even though primary1 is excluded
+		assert.Equal(t, poolerID(primary2), conn.ID(),
+			"Should use excluded pooler's observation to find primary")
+	})
+
+	t.Run("excluded primary falls back to another pooler", func(t *testing.T) {
+		// Both point to primary2 as the highest-term primary
+		simulateHealthUpdate(connPrimary1,
+			clustermetadatapb.PoolerServingStatus_SERVING,
+			&multipoolerservice.PrimaryObservation{
+				PrimaryId: primary2.Id,
+				Term:      300,
+			})
+		simulateHealthUpdate(connPrimary2,
+			clustermetadatapb.PoolerServingStatus_SERVING,
+			&multipoolerservice.PrimaryObservation{
+				PrimaryId: primary2.Id,
+				Term:      300,
+			})
+
+		target := &query.Target{
+			TableGroup: constants.DefaultTableGroup,
+			PoolerType: clustermetadatapb.PoolerType_PRIMARY,
+		}
+
+		// Exclude primary2 (the actual primary) - should fall back to primary1 (observer)
+		opts := &GetConnectionOptions{
+			ExcludePoolers: []string{poolerID(primary2)},
+		}
+		conn, err := lb.GetConnection(target, opts)
+		require.NoError(t, err)
+		assert.Equal(t, poolerID(primary1), conn.ID(),
+			"Should fall back to observer when identified primary is excluded")
+	})
+}
+
+func TestLoadBalancer_SelectReplicaByLocalityAndServingStatus(t *testing.T) {
+	logger := slog.Default()
+	lb := NewLoadBalancer("zone1", logger)
+
+	// Create replicas in different cells
+	localReplica1 := createTestMultiPooler("local-replica1", "zone1", constants.DefaultTableGroup, "0", clustermetadatapb.PoolerType_REPLICA)
+	localReplica2 := createTestMultiPooler("local-replica2", "zone1", constants.DefaultTableGroup, "0", clustermetadatapb.PoolerType_REPLICA)
+	remoteReplica := createTestMultiPooler("remote-replica", "zone2", constants.DefaultTableGroup, "0", clustermetadatapb.PoolerType_REPLICA)
+
+	require.NoError(t, lb.AddPooler(localReplica1))
+	require.NoError(t, lb.AddPooler(localReplica2))
+	require.NoError(t, lb.AddPooler(remoteReplica))
+
+	lb.mu.RLock()
+	connLocal1 := lb.connections[poolerID(localReplica1)]
+	connLocal2 := lb.connections[poolerID(localReplica2)]
+	connRemote := lb.connections[poolerID(remoteReplica)]
+	lb.mu.RUnlock()
+
+	t.Run("prefers local serving over remote serving", func(t *testing.T) {
+		simulateHealthUpdate(connLocal1, clustermetadatapb.PoolerServingStatus_NOT_SERVING, nil)
+		simulateHealthUpdate(connLocal2, clustermetadatapb.PoolerServingStatus_SERVING, nil)
+		simulateHealthUpdate(connRemote, clustermetadatapb.PoolerServingStatus_SERVING, nil)
+
+		target := &query.Target{
+			TableGroup: constants.DefaultTableGroup,
+			PoolerType: clustermetadatapb.PoolerType_REPLICA,
+		}
+		conn, err := lb.GetConnection(target, nil)
+		require.NoError(t, err)
+		assert.Equal(t, poolerID(localReplica2), conn.ID(),
+			"Should prefer local serving replica over remote serving")
+	})
+
+	t.Run("falls back to remote serving when no local serving", func(t *testing.T) {
+		simulateHealthUpdate(connLocal1, clustermetadatapb.PoolerServingStatus_NOT_SERVING, nil)
+		simulateHealthUpdate(connLocal2, clustermetadatapb.PoolerServingStatus_NOT_SERVING, nil)
+		simulateHealthUpdate(connRemote, clustermetadatapb.PoolerServingStatus_SERVING, nil)
+
+		target := &query.Target{
+			TableGroup: constants.DefaultTableGroup,
+			PoolerType: clustermetadatapb.PoolerType_REPLICA,
+		}
+		conn, err := lb.GetConnection(target, nil)
+		require.NoError(t, err)
+		assert.Equal(t, poolerID(remoteReplica), conn.ID(),
+			"Should fall back to remote serving when no local serving")
+	})
+
+	t.Run("falls back to local not-serving when no serving", func(t *testing.T) {
+		simulateHealthUpdate(connLocal1, clustermetadatapb.PoolerServingStatus_NOT_SERVING, nil)
+		simulateHealthUpdate(connLocal2, clustermetadatapb.PoolerServingStatus_DRAINED, nil)
+		simulateHealthUpdate(connRemote, clustermetadatapb.PoolerServingStatus_NOT_SERVING, nil)
+
+		target := &query.Target{
+			TableGroup: constants.DefaultTableGroup,
+			PoolerType: clustermetadatapb.PoolerType_REPLICA,
+		}
+		conn, err := lb.GetConnection(target, nil)
+		require.NoError(t, err)
+		// Should pick one of the local not-serving replicas
+		assert.Equal(t, "zone1", conn.Cell(),
+			"Should fall back to local not-serving when no serving replicas")
+	})
+}
 
 func TestLoadBalancerListener(t *testing.T) {
 	logger := slog.Default()
