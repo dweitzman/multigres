@@ -20,6 +20,10 @@
 // This is analogous to Vitess's TabletGateway component.
 package poolergateway
 
+// TODO: Add PoolerGateway integration tests that verify end-to-end query routing
+// through LoadBalancer to PoolerConnection. Currently the selection logic is
+// tested via LoadBalancer unit tests.
+
 import (
 	"context"
 	"log/slog"
