@@ -664,6 +664,9 @@ func (pm *MultiPoolerManager) changeTypeLocked(ctx context.Context, poolerType c
 	pm.updateCachedMultipooler()
 	pm.mu.Unlock()
 
+	// Update health streamer with pooler type change
+	pm.healthStreamer.UpdatePoolerType(poolerType)
+
 	// Update heartbeat tracker based on new type
 	if pm.replTracker != nil {
 		if poolerType == clustermetadatapb.PoolerType_PRIMARY {
