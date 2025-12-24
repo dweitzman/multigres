@@ -40,6 +40,10 @@ type CellPoolerDiscovery struct {
 	cell      string // The cell this watcher is monitoring
 	logger    *slog.Logger
 
+	// Callbacks for notifying about pooler changes (may be nil)
+	onPoolerChanged func(pooler *clustermetadatapb.MultiPooler)
+	onPoolerRemoved func(pooler *clustermetadatapb.MultiPooler)
+
 	// Control
 	ctx        context.Context
 	cancelFunc context.CancelFunc
@@ -140,7 +144,8 @@ func (pd *CellPoolerDiscovery) processInitialPoolers(initial []*topoclient.Watch
 	pd.mu.Lock()
 	defer pd.mu.Unlock()
 
-	// Clear existing poolers
+	// Save old poolers to detect removals (for watch reconnection)
+	oldPoolers := pd.poolers
 	pd.poolers = make(map[string]*topoclient.MultiPoolerInfo)
 
 	// Process initial pooler data
@@ -160,13 +165,29 @@ func (pd *CellPoolerDiscovery) processInitialPoolers(initial []*topoclient.Watch
 		if pooler != nil {
 			poolerID := topoclient.MultiPoolerIDString(pooler.Id)
 			pd.poolers[poolerID] = pooler
-			pd.logger.Info("Initial pooler discovered",
+			pd.logger.Debug("Initial pooler discovered",
 				"id", poolerID,
 				"hostname", pooler.Hostname,
 				"addr", pooler.Addr(),
 				"database", pooler.Database,
 				"shard", pooler.Shard,
 				"type", pooler.Type.String())
+		}
+	}
+
+	// Notify about removed poolers (existed before but not in new state)
+	if pd.onPoolerRemoved != nil {
+		for poolerID, oldPooler := range oldPoolers {
+			if _, exists := pd.poolers[poolerID]; !exists {
+				pd.onPoolerRemoved(oldPooler.MultiPooler)
+			}
+		}
+	}
+
+	// Notify about all current poolers
+	if pd.onPoolerChanged != nil {
+		for _, pooler := range pd.poolers {
+			pd.onPoolerChanged(pooler.MultiPooler)
 		}
 	}
 
@@ -189,12 +210,15 @@ func (pd *CellPoolerDiscovery) processPoolerChange(watchData *topoclient.WatchDa
 			if strings.HasSuffix(watchData.Path, "/Pooler") {
 				poolerID := pd.extractPoolerIDFromPath(watchData.Path)
 				if poolerID != "" {
-					if _, existed := pd.poolers[poolerID]; existed {
+					if oldPooler, existed := pd.poolers[poolerID]; existed {
 						delete(pd.poolers, poolerID)
 						pd.lastRefresh = time.Now()
 						pd.logger.Info("Pooler removed",
 							"id", poolerID,
 							"path", watchData.Path)
+						if pd.onPoolerRemoved != nil {
+							pd.onPoolerRemoved(oldPooler.MultiPooler)
+						}
 					}
 				}
 			}
@@ -250,6 +274,10 @@ func (pd *CellPoolerDiscovery) processPoolerChange(watchData *topoclient.WatchDa
 			"database", pooler.Database,
 			"shard", pooler.Shard,
 			"type", pooler.Type.String())
+	}
+
+	if pd.onPoolerChanged != nil {
+		pd.onPoolerChanged(pooler.MultiPooler)
 	}
 }
 
@@ -420,6 +448,17 @@ func (pd *CellPoolerDiscovery) Cell() string {
 	return pd.cell
 }
 
+// PoolerChangeListener receives notifications about pooler discovery changes.
+// Implementations can use this to maintain connections to discovered poolers.
+type PoolerChangeListener interface {
+	// OnPoolerChanged is called when a pooler is added or updated.
+	// For new poolers, this creates a connection. For existing poolers,
+	// this may recreate the connection if the address changed.
+	OnPoolerChanged(pooler *clustermetadatapb.MultiPooler)
+	// OnPoolerRemoved is called when a pooler is removed from discovery.
+	OnPoolerRemoved(pooler *clustermetadatapb.MultiPooler)
+}
+
 // GlobalPoolerDiscovery orchestrates multiple CellPoolerDiscovery instances,
 // one per cell. It watches for cell changes from global etcd and creates/removes
 // cell watchers as cells appear/disappear.
@@ -437,6 +476,10 @@ type GlobalPoolerDiscovery struct {
 	// State
 	mu           sync.Mutex
 	cellWatchers map[string]*CellPoolerDiscovery // cell name -> cell watcher
+
+	// Listeners for pooler changes
+	listenersMu sync.Mutex
+	listeners   []PoolerChangeListener
 }
 
 // NewGlobalPoolerDiscovery creates a new global pooler discovery service.
@@ -513,6 +556,8 @@ func (gd *GlobalPoolerDiscovery) startCellWatcher(cell string) {
 	gd.logger.Info("Starting cell watcher", "cell", cell)
 
 	cellWatcher := NewCellPoolerDiscovery(gd.ctx, gd.topoStore, cell, gd.logger)
+	cellWatcher.onPoolerChanged = gd.notifyPoolerChanged
+	cellWatcher.onPoolerRemoved = gd.notifyPoolerRemoved
 	gd.cellWatchers[cell] = cellWatcher
 	cellWatcher.Start()
 }
@@ -529,6 +574,50 @@ func (gd *GlobalPoolerDiscovery) Stop() {
 	gd.mu.Unlock()
 
 	gd.wg.Wait()
+}
+
+// RegisterListener adds a listener for pooler change notifications.
+// The listener will immediately receive OnPoolerChanged for all currently
+// known poolers, then continue to receive updates as poolers change.
+func (gd *GlobalPoolerDiscovery) RegisterListener(listener PoolerChangeListener) {
+	gd.listenersMu.Lock()
+	defer gd.listenersMu.Unlock()
+
+	// Add listener to the list
+	gd.listeners = append(gd.listeners, listener)
+
+	// Replay current state to the new listener
+	gd.mu.Lock()
+	for _, watcher := range gd.cellWatchers {
+		watcher.mu.Lock()
+		for _, pooler := range watcher.poolers {
+			listener.OnPoolerChanged(pooler.MultiPooler)
+		}
+		watcher.mu.Unlock()
+	}
+	gd.mu.Unlock()
+}
+
+// notifyPoolerChanged notifies all listeners that a pooler was added or updated.
+func (gd *GlobalPoolerDiscovery) notifyPoolerChanged(pooler *clustermetadatapb.MultiPooler) {
+	gd.listenersMu.Lock()
+	listeners := gd.listeners
+	gd.listenersMu.Unlock()
+
+	for _, listener := range listeners {
+		listener.OnPoolerChanged(pooler)
+	}
+}
+
+// notifyPoolerRemoved notifies all listeners that a pooler was removed.
+func (gd *GlobalPoolerDiscovery) notifyPoolerRemoved(pooler *clustermetadatapb.MultiPooler) {
+	gd.listenersMu.Lock()
+	listeners := gd.listeners
+	gd.listenersMu.Unlock()
+
+	for _, listener := range listeners {
+		listener.OnPoolerRemoved(pooler)
+	}
 }
 
 // GetPooler returns a pooler matching the target specification.
