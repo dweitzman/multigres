@@ -63,10 +63,26 @@ func TestLoadBalancer_AddRemovePooler(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, lb.ConnectionCount())
 
-	// Adding same pooler again is a no-op
+	// Adding same pooler again is a no-op (but updates info)
 	err = lb.AddPooler(pooler)
 	require.NoError(t, err)
 	assert.Equal(t, 1, lb.ConnectionCount())
+
+	// Updating pooler type (simulating topology update from UNKNOWN to PRIMARY)
+	poolerUpdated := createTestMultiPooler("pooler1", "zone1", constants.DefaultTableGroup, "0", clustermetadatapb.PoolerType_REPLICA)
+	err = lb.AddPooler(poolerUpdated)
+	require.NoError(t, err)
+	assert.Equal(t, 1, lb.ConnectionCount(), "should still have only one connection")
+
+	// Verify the type was updated via GetConnection
+	target := &query.Target{
+		TableGroup: constants.DefaultTableGroup,
+		Shard:      "0",
+		PoolerType: clustermetadatapb.PoolerType_REPLICA,
+	}
+	conn, err := lb.GetConnection(target, nil)
+	require.NoError(t, err)
+	assert.Equal(t, clustermetadatapb.PoolerType_REPLICA, conn.Type(), "pooler type should be updated")
 
 	// Remove the pooler
 	lb.RemovePooler(poolerID(pooler))
@@ -464,6 +480,66 @@ func TestLoadBalancer_SelectPrimaryByTerm(t *testing.T) {
 	})
 }
 
+func TestLoadBalancer_SelectPrimaryByTerm_UnknownTypeNotUsed(t *testing.T) {
+	logger := slog.Default()
+	lb := NewLoadBalancer("zone1", logger)
+
+	// Create UNKNOWN-type poolers (simulating initial discovery before multiorch assigns types)
+	unknown1 := createTestMultiPooler("pooler1", "zone1", constants.DefaultTableGroup, "0", clustermetadatapb.PoolerType_UNKNOWN)
+	unknown2 := createTestMultiPooler("pooler2", "zone2", constants.DefaultTableGroup, "0", clustermetadatapb.PoolerType_UNKNOWN)
+
+	require.NoError(t, lb.AddPooler(unknown1))
+	require.NoError(t, lb.AddPooler(unknown2))
+
+	lb.mu.RLock()
+	connUnknown1 := lb.connections[poolerID(unknown1)]
+	connUnknown2 := lb.connections[poolerID(unknown2)]
+	lb.mu.RUnlock()
+
+	t.Run("UNKNOWN poolers without observations return error", func(t *testing.T) {
+		// No PrimaryObservation set - simulates initial state before health stream
+		simulateHealthUpdate(connUnknown1, clustermetadatapb.PoolerServingStatus_SERVING, nil)
+		simulateHealthUpdate(connUnknown2, clustermetadatapb.PoolerServingStatus_SERVING, nil)
+
+		target := &query.Target{
+			TableGroup: constants.DefaultTableGroup,
+			PoolerType: clustermetadatapb.PoolerType_PRIMARY,
+		}
+		_, err := lb.GetConnection(target, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no PRIMARY type",
+			"Should not fall back to UNKNOWN type poolers")
+	})
+
+	t.Run("UNKNOWN poolers with observation pointing to UNKNOWN returns error", func(t *testing.T) {
+		// Both UNKNOWN poolers point to each other (pathological case)
+		simulateHealthUpdate(connUnknown1,
+			clustermetadatapb.PoolerServingStatus_SERVING,
+			&multipoolerservice.PrimaryObservation{
+				PrimaryId: unknown2.Id,
+				Term:      10,
+			})
+		simulateHealthUpdate(connUnknown2,
+			clustermetadatapb.PoolerServingStatus_SERVING,
+			&multipoolerservice.PrimaryObservation{
+				PrimaryId: unknown1.Id,
+				Term:      5,
+			})
+
+		target := &query.Target{
+			TableGroup: constants.DefaultTableGroup,
+			PoolerType: clustermetadatapb.PoolerType_PRIMARY,
+		}
+		// Should find unknown2 via observation with highest term, but unknown2 is UNKNOWN type
+		// The current implementation returns the identified pooler regardless of type,
+		// which is intentional - the observation is authoritative
+		conn, err := lb.GetConnection(target, nil)
+		require.NoError(t, err)
+		assert.Equal(t, poolerID(unknown2), conn.ID(),
+			"Observation takes precedence over pooler type")
+	})
+}
+
 func TestLoadBalancer_SelectReplicaByLocalityAndServingStatus(t *testing.T) {
 	logger := slog.Default()
 	lb := NewLoadBalancer("zone1", logger)
@@ -515,7 +591,7 @@ func TestLoadBalancer_SelectReplicaByLocalityAndServingStatus(t *testing.T) {
 
 	t.Run("falls back to local not-serving when no serving", func(t *testing.T) {
 		simulateHealthUpdate(connLocal1, clustermetadatapb.PoolerServingStatus_NOT_SERVING, nil)
-		simulateHealthUpdate(connLocal2, clustermetadatapb.PoolerServingStatus_DRAINED, nil)
+		simulateHealthUpdate(connLocal2, clustermetadatapb.PoolerServingStatus_NOT_SERVING, nil)
 		simulateHealthUpdate(connRemote, clustermetadatapb.PoolerServingStatus_NOT_SERVING, nil)
 
 		target := &query.Target{

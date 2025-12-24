@@ -249,6 +249,19 @@ func (pc *PoolerConnection) Type() clustermetadatapb.PoolerType {
 	return pc.poolerInfo.Type
 }
 
+// UpdatePoolerInfo updates the pooler metadata (e.g., when type changes from UNKNOWN to PRIMARY).
+// This is called when topology watch detects updates to the pooler.
+func (pc *PoolerConnection) UpdatePoolerInfo(pooler *clustermetadatapb.MultiPooler) {
+	oldType := pc.poolerInfo.Type
+	pc.poolerInfo = &topoclient.MultiPoolerInfo{MultiPooler: pooler}
+	if oldType != pooler.Type {
+		pc.logger.Info("pooler type updated",
+			"pooler_id", pc.ID(),
+			"old_type", oldType.String(),
+			"new_type", pooler.Type.String())
+	}
+}
+
 // PoolerInfo returns the underlying pooler metadata.
 func (pc *PoolerConnection) PoolerInfo() *topoclient.MultiPoolerInfo {
 	return pc.poolerInfo

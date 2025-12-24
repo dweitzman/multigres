@@ -60,16 +60,17 @@ func NewLoadBalancer(localCell string, logger *slog.Logger) *LoadBalancer {
 }
 
 // AddPooler creates a new PoolerConnection for the given pooler.
-// If a connection already exists for this pooler, it is a no-op.
+// If a connection already exists for this pooler, it updates the pooler info
+// (e.g., when type changes from UNKNOWN to PRIMARY).
 func (lb *LoadBalancer) AddPooler(pooler *clustermetadatapb.MultiPooler) error {
 	poolerID := poolerIDString(pooler.Id)
 
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
 
-	// Check if already exists
-	if _, exists := lb.connections[poolerID]; exists {
-		lb.logger.Debug("pooler connection already exists", "pooler_id", poolerID)
+	// Check if already exists - update info instead of skipping
+	if conn, exists := lb.connections[poolerID]; exists {
+		conn.UpdatePoolerInfo(pooler)
 		return nil
 	}
 
@@ -147,7 +148,7 @@ func (lb *LoadBalancer) GetConnection(target *query.Target, opts *GetConnectionO
 
 		conn := lb.selectPrimaryByTerm(shardPoolers, excludeSet)
 		if conn == nil {
-			return nil, fmt.Errorf("no pooler found for target: tablegroup=%s, shard=%s, type=%s (all excluded)",
+			return nil, fmt.Errorf("no pooler found for target: tablegroup=%s, shard=%s, type=%s (no PRIMARY type)",
 				target.TableGroup, target.Shard, target.PoolerType.String())
 		}
 		return conn, nil
@@ -255,7 +256,10 @@ func (lb *LoadBalancer) selectPrimaryByTerm(shardPoolers []*PoolerConnection, ex
 		}
 	}
 
-	// If no observations found, fall back to any non-excluded PRIMARY-type pooler
+	// If no observations found, fall back to pooler type.
+	// Only return PRIMARY-type poolers - never route PRIMARY requests to UNKNOWN
+	// (uninitialized) poolers since they might be replicas. Multi-cell discovery
+	// will find the PRIMARY when multiorch assigns the type.
 	if bestObservation == nil {
 		for _, conn := range shardPoolers {
 			if excludeSet[conn.ID()] {
@@ -265,13 +269,8 @@ func (lb *LoadBalancer) selectPrimaryByTerm(shardPoolers []*PoolerConnection, ex
 				return conn
 			}
 		}
-		// Last resort: return any non-excluded pooler
-		for _, conn := range shardPoolers {
-			if !excludeSet[conn.ID()] {
-				return conn
-			}
-		}
-		// All poolers excluded - return nil (caller will handle as "no pooler found")
+		// No PRIMARY pooler found - return nil.
+		// Caller will handle as "no pooler found" error.
 		return nil
 	}
 
@@ -296,7 +295,8 @@ func (lb *LoadBalancer) selectPrimaryByTerm(shardPoolers []*PoolerConnection, ex
 		return bestObservation
 	}
 
-	// Observer is excluded too. Find any non-excluded pooler, preferring PRIMARY type.
+	// Observer is excluded too. Find any non-excluded PRIMARY-type pooler.
+	// We only return PRIMARY type - never fall back to other types.
 	for _, conn := range shardPoolers {
 		if excludeSet[conn.ID()] {
 			continue
@@ -305,13 +305,8 @@ func (lb *LoadBalancer) selectPrimaryByTerm(shardPoolers []*PoolerConnection, ex
 			return conn
 		}
 	}
-	for _, conn := range shardPoolers {
-		if !excludeSet[conn.ID()] {
-			return conn
-		}
-	}
 
-	// All poolers excluded
+	// No eligible PRIMARY pooler found
 	return nil
 }
 
