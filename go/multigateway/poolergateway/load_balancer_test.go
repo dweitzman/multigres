@@ -242,6 +242,11 @@ func TestLoadBalancer_Close(t *testing.T) {
 	assert.Equal(t, 0, lb.ConnectionCount())
 }
 
+// TODO: Add concurrent access tests:
+// - TestLoadBalancer_ConcurrentAddRemove: Multiple goroutines adding/removing poolers
+// - TestLoadBalancer_ConcurrentGetConnection: GetConnection while poolers are being added/removed
+// - TestLoadBalancer_RemoveWhileInUse: Remove a pooler that's currently being used for a query
+
 func TestLoadBalancerListener(t *testing.T) {
 	logger := slog.Default()
 	lb := NewLoadBalancer("zone1", logger)

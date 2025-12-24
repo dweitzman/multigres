@@ -14,6 +14,11 @@
 
 package poolergateway
 
+// TODO: Add PoolerConnection tests. This requires either:
+// - A mock queryservice.QueryService implementation for unit tests
+// - Integration tests with a real multipooler instance
+// Tests should cover: connection lifecycle, query delegation, error handling
+
 import (
 	"context"
 	"fmt"
