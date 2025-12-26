@@ -190,25 +190,27 @@ func isProcessGone(err error) bool {
 }
 
 // waitForProcessExit polls until the process exits or context is done.
+// Uses exponential backoff starting at 1ms, doubling up to 100ms max.
 // Returns true if process exited, false if context was cancelled/timed out.
 func waitForProcessExit(ctx context.Context, process *os.Process) bool {
-	// Check immediately before starting the ticker
 	if err := process.Signal(syscall.Signal(0)); err != nil {
 		return true
 	}
 
-	pollInterval := 50 * time.Millisecond
-	ticker := time.NewTicker(pollInterval)
-	defer ticker.Stop()
+	delay, maxDelay := time.Millisecond, 100*time.Millisecond
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return false
-		case <-ticker.C:
+		case <-timer.C:
 			if err := process.Signal(syscall.Signal(0)); err != nil {
 				return true
 			}
+			delay = min(delay*2, maxDelay)
+			timer.Reset(delay)
 		}
 	}
 }
