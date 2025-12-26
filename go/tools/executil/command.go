@@ -193,14 +193,13 @@ func (c *Cmd) Start() error {
 	go func() {
 		select {
 		case <-c.parentCtx.Done():
-			// Parent context cancelled - terminate with default grace period
-			//nolint:gocritic // Fresh context needed; parent context is cancelled
-			termCtx, termCancel := context.WithTimeout(context.Background(), c.defaultGracePeriod)
+			// Parent context cancelled - terminate with default grace period.
+			// Use WithoutCancel to preserve trace context while preventing cancellation.
+			termCtx, termCancel := context.WithTimeout(context.WithoutCancel(c.parentCtx), c.defaultGracePeriod)
 			_, exited := c.Terminate(termCtx)
 			termCancel()
 			if !exited {
-				//nolint:gocritic // Fresh context needed for kill timeout
-				killCtx, killCancel := context.WithTimeout(context.Background(), DefaultKillTimeout)
+				killCtx, killCancel := context.WithTimeout(context.WithoutCancel(c.parentCtx), DefaultKillTimeout)
 				_, _ = c.Kill(killCtx)
 				killCancel()
 			}
@@ -306,8 +305,8 @@ func (c *Cmd) Kill(ctx context.Context) (error, bool) {
 //
 // This is the recommended way to stop a process - always try graceful termination first.
 func (c *Cmd) Stop(gracePeriod, killTimeout time.Duration) (error, bool) {
-	//nolint:gocritic // Fresh context for controlled shutdown
-	termCtx, termCancel := context.WithTimeout(context.Background(), gracePeriod)
+	// Use WithoutCancel to preserve trace context while preventing cancellation.
+	termCtx, termCancel := context.WithTimeout(context.WithoutCancel(c.parentCtx), gracePeriod)
 	exitErr, exited := c.Terminate(termCtx)
 	termCancel()
 
@@ -315,8 +314,7 @@ func (c *Cmd) Stop(gracePeriod, killTimeout time.Duration) (error, bool) {
 		return exitErr, true
 	}
 
-	//nolint:gocritic // Fresh context for kill timeout
-	killCtx, killCancel := context.WithTimeout(context.Background(), killTimeout)
+	killCtx, killCancel := context.WithTimeout(context.WithoutCancel(c.parentCtx), killTimeout)
 	exitErr, killed := c.Kill(killCtx)
 	killCancel()
 
