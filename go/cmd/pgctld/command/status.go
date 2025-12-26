@@ -15,6 +15,7 @@
 package command
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -26,6 +27,10 @@ import (
 
 	"github.com/spf13/cobra"
 )
+
+// versionQueryTimeout is the maximum time to wait for psql to return the server version.
+// This prevents Status() from blocking indefinitely if postgres becomes unresponsive.
+const versionQueryTimeout = 2 * time.Second
 
 // PostgreSQL server status values
 const (
@@ -118,8 +123,10 @@ func GetStatusWithResult(logger *slog.Logger, config *pgctld.PostgresCtlConfig) 
 	// Check if server is accepting connections
 	result.Ready = isServerReadyWithConfig(config)
 
-	// Get server version if possible
-	result.Version = getServerVersionWithConfig(config)
+	// Get server version if possible (only if server is ready to avoid blocking)
+	if result.Ready {
+		result.Version = getServerVersionWithConfig(config)
+	}
 
 	// Get uptime (approximate based on pidfile mtime)
 	pidFile := filepath.Join(config.PostgresDataDir, "postmaster.pid")
@@ -212,9 +219,13 @@ func isServerReadyWithConfig(config *pgctld.PostgresCtlConfig) bool {
 }
 
 func getServerVersionWithConfig(config *pgctld.PostgresCtlConfig) string {
+	// Use a timeout to prevent blocking indefinitely if postgres becomes unresponsive
+	ctx, cancel := context.WithTimeout(context.TODO(), versionQueryTimeout)
+	defer cancel()
+
 	// Use Unix socket connection for psql
 	socketDir := pgctld.PostgresSocketDir(config.PoolerDir)
-	cmd := exec.Command("psql",
+	cmd := exec.CommandContext(ctx, "psql",
 		"-h", socketDir,
 		"-p", fmt.Sprintf("%d", config.Port), // Need port even for socket connections
 		"-U", config.User,
