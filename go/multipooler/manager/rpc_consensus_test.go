@@ -345,8 +345,11 @@ func TestBeginTerm(t *testing.T) {
 			makeFilesystemReadOnly: true,
 			setupMocks: func(m *mock.QueryService) {
 				m.AddQueryPatternOnce("SELECT 1", mock.MakeQueryResult(nil, nil))
-				recentTime := time.Now().Add(-5 * time.Second).Format("2006-01-02 15:04:05.999999-07")
-				m.AddQueryPatternOnce("SELECT last_msg_receipt_time", mock.MakeQueryResult([]string{"last_msg_receipt_time"}, [][]any{{recentTime}}))
+				// BeginTerm calls isPrimary() which queries pg_is_in_recovery (startup already consumed one pattern)
+				// Returns false (PRIMARY) - standbys would get "t" here
+				m.AddQueryPatternOnce("SELECT pg_is_in_recovery", mock.MakeQueryResult([]string{"pg_is_in_recovery"}, [][]any{{"f"}}))
+				// Note: SELECT last_msg_receipt_time is NOT expected - that query only runs for standbys (!wasPrimary)
+				// A PRIMARY with same term skips the standby replication check
 			},
 			expectedError:        true,
 			expectedMemoryTerm:   5,
