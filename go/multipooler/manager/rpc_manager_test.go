@@ -445,7 +445,7 @@ func setupPromoteTestManager(t *testing.T, mockQueryService *mock.QueryService) 
 	pm.qsc = &mockPoolerController{queryService: mockQueryService}
 
 	senv := servenv.NewServEnv(viperutil.NewRegistry())
-	go pm.Start(senv)
+	pm.Start(senv)
 
 	require.Eventually(t, func() bool {
 		return pm.GetState() == ManagerStateReady
@@ -937,10 +937,11 @@ func TestSetPrimaryConnInfo_StoresPrimaryPoolerID(t *testing.T) {
 	mockQueryService.AddQueryPatternOnce("ALTER SYSTEM SET primary_conninfo", mock.MakeQueryResult(nil, nil))
 	// SetPrimaryConnInfo executes pg_reload_conf()
 	mockQueryService.AddQueryPatternOnce("SELECT pg_reload_conf", mock.MakeQueryResult([]string{"pg_reload_conf"}, [][]any{{true}}))
+	// Assign mock pooler controller BEFORE starting the manager to avoid race conditions
 	pm.qsc = &mockPoolerController{queryService: mockQueryService}
 
 	senv := servenv.NewServEnv(viperutil.NewRegistry())
-	go pm.Start(senv)
+	pm.Start(senv)
 	require.Eventually(t, func() bool {
 		return pm.GetState() == ManagerStateReady
 	}, 5*time.Second, 100*time.Millisecond, "Manager should reach Ready state")
@@ -1044,10 +1045,11 @@ func TestReplicationStatus(t *testing.T) {
 		mockQueryService.AddQueryPattern("SHOW synchronous_commit",
 			mock.MakeQueryResult([]string{"synchronous_commit"}, [][]any{{"on"}}))
 
+		// Assign mock pooler controller BEFORE starting the manager to avoid race conditions
 		pm.qsc = &mockPoolerController{queryService: mockQueryService}
 
 		senv := servenv.NewServEnv(viperutil.NewRegistry())
-		go pm.Start(senv)
+		pm.Start(senv)
 
 		require.Eventually(t, func() bool {
 			return pm.GetState() == ManagerStateReady
@@ -1129,10 +1131,11 @@ func TestReplicationStatus(t *testing.T) {
 				},
 				[][]any{{"0/12345600", "0/12345678", "f", "not paused", "2025-01-01 00:00:00", "host=primary port=5432 user=repl application_name=test"}}))
 
+		// Assign mock pooler controller BEFORE starting the manager to avoid race conditions
 		pm.qsc = &mockPoolerController{queryService: mockQueryService}
 
 		senv := servenv.NewServEnv(viperutil.NewRegistry())
-		go pm.Start(senv)
+		pm.Start(senv)
 
 		require.Eventually(t, func() bool {
 			return pm.GetState() == ManagerStateReady
@@ -1209,10 +1212,11 @@ func TestReplicationStatus(t *testing.T) {
 				},
 				[][]any{{"0/12345600", "0/12345678", "f", "not paused", "2025-01-01 00:00:00", "host=primary port=5432 user=repl application_name=test"}}))
 
+		// Assign mock pooler controller BEFORE starting the manager to avoid race conditions
 		pm.qsc = &mockPoolerController{queryService: mockQueryService}
 
 		senv := servenv.NewServEnv(viperutil.NewRegistry())
-		go pm.Start(senv)
+		pm.Start(senv)
 
 		require.Eventually(t, func() bool {
 			return pm.GetState() == ManagerStateReady
@@ -1289,10 +1293,11 @@ func TestReplicationStatus(t *testing.T) {
 		mockQueryService.AddQueryPattern("SHOW synchronous_commit",
 			mock.MakeQueryResult([]string{"synchronous_commit"}, [][]any{{"on"}}))
 
+		// Assign mock pooler controller BEFORE starting the manager to avoid race conditions
 		pm.qsc = &mockPoolerController{queryService: mockQueryService}
 
 		senv := servenv.NewServEnv(viperutil.NewRegistry())
-		go pm.Start(senv)
+		pm.Start(senv)
 
 		require.Eventually(t, func() bool {
 			return pm.GetState() == ManagerStateReady
