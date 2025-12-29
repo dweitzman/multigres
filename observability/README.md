@@ -210,7 +210,19 @@ Exemplars appear as diamond markers on the graph, each linked to a specific trac
 
 - Receives metrics via OTLP push (`--web.enable-otlp-receiver`)
 - Stores exemplars in memory (`--enable-feature=exemplar-storage`)
+- Native histograms enabled (`--enable-feature=native-histograms`)
 - No scrape configuration needed - services push metrics directly
+
+### Native Histograms
+
+The setup uses Prometheus native histograms (exponential bucket histograms) which provide:
+
+- More efficient storage than classic bucket-based histograms
+- Better resolution without pre-defining bucket boundaries
+- Ability to compute any quantile accurately
+
+The helper script configures the OTel SDK to export exponential histograms via:
+`OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION=base2_exponential_bucket_histogram`
 
 ### Grafana Datasources
 

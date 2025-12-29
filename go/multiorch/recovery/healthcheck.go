@@ -19,12 +19,15 @@ import (
 	"fmt"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/pb/clustermetadata"
 	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
+	"github.com/multigres/multigres/go/tools/telemetry"
 )
 
 // pollPooler performs health check on a single pooler instance.
@@ -75,7 +78,7 @@ func (re *Engine) pollPooler(ctx context.Context, poolerID *clustermetadata.ID, 
 
 		// Record poll duration with status
 		re.metrics.poolerPollDuration.Record(
-			re.ctx,
+			re.shutdownCtx,
 			totalLatency.Seconds(),
 			pooler.MultiPooler.Database,
 			pooler.MultiPooler.TableGroup,
@@ -141,7 +144,7 @@ func (re *Engine) pollPooler(ctx context.Context, poolerID *clustermetadata.ID, 
 
 		// Record failure in metrics (the deferred function will record with status)
 		re.metrics.poolerPollDuration.Record(
-			re.ctx,
+			re.shutdownCtx,
 			time.Since(totalStart).Seconds(),
 			pooler.MultiPooler.Database,
 			pooler.MultiPooler.TableGroup,
@@ -333,7 +336,7 @@ func (re *Engine) queuePoolersHealthCheck() {
 func (re *Engine) handlePoolerHealthChecks() {
 	for {
 		// Consume blocks until an item is available or context is cancelled
-		poolerID, release, ok := re.healthCheckQueue.Consume(re.ctx)
+		poolerID, release, ok := re.healthCheckQueue.Consume(re.shutdownCtx)
 		if !ok {
 			// Context cancelled, exit the worker
 			return
@@ -352,8 +355,15 @@ func (re *Engine) handlePoolerHealthChecks() {
 				return
 			}
 
-			// Poll the pooler with engine context (respects shutdown)
-			re.pollPooler(re.ctx, poolerInfo.MultiPooler.Id, poolerInfo, false /* forceDiscovery */)
+			// Create a span for this health check so Status calls appear under it
+			ctx, span := telemetry.Tracer().Start(re.shutdownCtx, "healthcheck/poll",
+				trace.WithAttributes(
+					attribute.String("pooler.id", poolerID),
+				))
+			defer span.End()
+
+			// Poll the pooler with traced context
+			re.pollPooler(ctx, poolerInfo.MultiPooler.Id, poolerInfo, false /* forceDiscovery */)
 		}()
 	}
 }

@@ -43,10 +43,14 @@ export OTEL_TRACES_EXPORTER="otlp"
 export OTEL_METRICS_EXPORTER="otlp"
 export OTEL_TRACES_SAMPLER="always_on"
 
+# Use exponential histograms for native histogram support in Prometheus
+export OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION="base2_exponential_bucket_histogram"
+
 echo "Running multigres with OpenTelemetry enabled:"
 echo "  Traces  -> ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT}"
 echo "  Metrics -> ${OTEL_EXPORTER_OTLP_METRICS_ENDPOINT}"
 echo "  Metric export interval: ${OTEL_METRIC_EXPORT_INTERVAL}ms"
+echo "  Histogram aggregation: exponential (native histograms)"
 echo ""
 
 ./bin/multigres "$@"

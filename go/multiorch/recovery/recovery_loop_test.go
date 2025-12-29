@@ -324,7 +324,7 @@ func TestRecheckProblem_PoolerNotFound(t *testing.T) {
 		Priority:  types.PriorityEmergency,
 	}
 
-	stillExists, err := engine.recheckProblem(problem)
+	stillExists, err := engine.recheckProblem(t.Context(), problem)
 
 	require.Error(t, err, "should return error when pooler not found")
 	assert.False(t, stillExists)
@@ -721,7 +721,7 @@ func TestProcessShardProblems_DependencyEnforcement(t *testing.T) {
 		shardKey := commontypes.ShardKey{Database: "db1", TableGroup: "tg1", Shard: "0"}
 
 		// Call processShardProblems - this exercises the full recovery flow
-		engine.processShardProblems(shardKey, problems)
+		engine.processShardProblems(t.Context(), shardKey, problems)
 
 		// ASSERTION: Replica recovery should be SKIPPED due to dependency check
 		assert.False(t, replicaRecovery.executed,
@@ -794,7 +794,7 @@ func TestProcessShardProblems_DependencyEnforcement(t *testing.T) {
 		shardKey := commontypes.ShardKey{Database: "db1", TableGroup: "tg1", Shard: "0"}
 
 		// Call processShardProblems
-		engine.processShardProblems(shardKey, problems)
+		engine.processShardProblems(t.Context(), shardKey, problems)
 
 		// ASSERTION: Replica recovery should be executed (NOT skipped)
 		// It will still fail validation since the mock analyzer won't re-detect it,
@@ -913,7 +913,7 @@ func TestRecoveryLoop_ValidationPreventsStaleRecovery(t *testing.T) {
 	})
 
 	// Attempt recovery - validation should detect problem no longer exists
-	engine.attemptRecovery(problems[0])
+	engine.attemptRecovery(t.Context(), problems[0])
 
 	// ASSERTION: Recovery should NOT be executed because validation failed
 	assert.False(t, replicaRecovery.executed,
@@ -1092,7 +1092,7 @@ func TestRecoveryLoop_PostRecoveryRefresh(t *testing.T) {
 	})
 
 	// Attempt recovery - should succeed and trigger post-recovery refresh
-	engine.attemptRecovery(problems[0])
+	engine.attemptRecovery(t.Context(), problems[0])
 
 	// ASSERTION: Recovery should be executed
 	assert.True(t, primaryRecovery.executed, "recovery should be executed")
@@ -1431,7 +1431,7 @@ func TestRecoveryLoop_PriorityOrdering(t *testing.T) {
 	shardKey := commontypes.ShardKey{Database: "db1", TableGroup: "tg1", Shard: "0"}
 
 	// Process problems - they should be attempted in priority order
-	engine.processShardProblems(shardKey, problems)
+	engine.processShardProblems(t.Context(), shardKey, problems)
 
 	// ASSERTION: Problems should be attempted in priority order (Emergency > High > Normal)
 	// Note: validation will fail for all since we don't change the state, but we can verify
