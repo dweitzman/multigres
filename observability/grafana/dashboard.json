@@ -21,7 +21,7 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 12,
+        "h": 10,
         "w": 12,
         "x": 0,
         "y": 0
@@ -41,43 +41,7 @@
           "refId": "A"
         }
       ],
-      "title": "HTTP Response Codes Over Time",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "Prometheus"
-      },
-      "description": "gRPC response status codes over time. Status code 0 = OK. Click on data points to view traces in Jaeger.",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "reqps"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 12,
-        "w": 12,
-        "x": 12,
-        "y": 0
-      },
-      "id": 2,
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "Prometheus"
-          },
-          "editorMode": "code",
-          "exemplar": true,
-          "expr": "max by (job, rpc_method, rpc_grpc_status_code) (rate(rpc_server_duration_milliseconds_bucket[$__rate_interval]))",
-          "legendFormat": "{{job}} {{rpc_method}} - {{rpc_grpc_status_code}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "gRPC Response Codes Over Time",
+      "title": "HTTP Response Codes",
       "type": "timeseries"
     },
     {
@@ -93,10 +57,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 12,
+        "h": 10,
         "w": 12,
-        "x": 0,
-        "y": 12
+        "x": 12,
+        "y": 0
       },
       "id": 3,
       "targets": [
@@ -133,7 +97,43 @@
         "type": "prometheus",
         "uid": "Prometheus"
       },
-      "description": "gRPC request latency percentiles. Click on data points to view traces in Jaeger.",
+      "description": "gRPC SERVER response status codes (incoming requests). Status code 0 = OK.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 0,
+        "y": 10
+      },
+      "id": 2,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "editorMode": "code",
+          "exemplar": true,
+          "expr": "max by (job, rpc_method, rpc_grpc_status_code) (rate(rpc_server_duration_milliseconds_bucket[$__rate_interval]))",
+          "legendFormat": "{{job}} {{rpc_method}} - {{rpc_grpc_status_code}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "gRPC Server Response Codes",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "description": "gRPC SERVER request latency percentiles (incoming requests).",
       "fieldConfig": {
         "defaults": {
           "unit": "s"
@@ -141,10 +141,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 12,
+        "h": 10,
         "w": 12,
         "x": 12,
-        "y": 12
+        "y": 10
       },
       "id": 4,
       "targets": [
@@ -173,7 +173,91 @@
           "refId": "B"
         }
       ],
-      "title": "gRPC Latency",
+      "title": "gRPC Server Latency",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "description": "gRPC CLIENT response status codes (outgoing requests). Status code 0 = OK.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 0,
+        "y": 20
+      },
+      "id": 5,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "editorMode": "code",
+          "exemplar": true,
+          "expr": "max by (job, rpc_service, rpc_method, rpc_grpc_status_code) (rate(rpc_client_duration_milliseconds_bucket[$__rate_interval]))",
+          "legendFormat": "{{job}} -> {{rpc_service}}.{{rpc_method}} [{{rpc_grpc_status_code}}]",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "gRPC Client Response Codes",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "description": "gRPC CLIENT request latency percentiles (outgoing requests).",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 12,
+        "y": 20
+      },
+      "id": 6,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "editorMode": "code",
+          "exemplar": true,
+          "expr": "histogram_quantile(0.95, sum by (le, job, rpc_service, rpc_method) (rate(rpc_client_duration_milliseconds_bucket[$__rate_interval]))) / 1000",
+          "legendFormat": "p95 - {{job}} -> {{rpc_service}}.{{rpc_method}}",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "editorMode": "code",
+          "exemplar": true,
+          "expr": "histogram_quantile(0.50, sum by (le, job, rpc_service, rpc_method) (rate(rpc_client_duration_milliseconds_bucket[$__rate_interval]))) / 1000",
+          "legendFormat": "p50 - {{job}} -> {{rpc_service}}.{{rpc_method}}",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "gRPC Client Latency",
       "type": "timeseries"
     }
   ],

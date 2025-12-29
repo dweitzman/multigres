@@ -14,34 +14,39 @@
 
 // Package telemetry can help with annotating and exporting metrics, logs, traces, and exemplars.
 //
-// To start a cluster with the local provisioner configured to export traces and metrics:
+// # Quick Start with Helper Script
 //
-//	OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf" \
-//	  OTEL_METRICS_EXPORTER=otlp \
+// The easiest way to run multigres commands with telemetry enabled is to use the helper script:
+//
+//	# Start the observability stack (Jaeger, Prometheus, Grafana)
+//	docker compose -f docker-compose-observability.yml up -d
+//
+//	# Run any multigres command with telemetry enabled
+//	./observability/multigres-with-telemetry.sh cluster start
+//	./observability/multigres-with-telemetry.sh cluster stop
+//	./observability/multigres-with-telemetry.sh cluster restart
+//
+// The helper script configures OTLP export with a 5-second metric interval (configurable via
+// OTEL_METRIC_EXPORT_INTERVAL environment variable).
+//
+// # Manual Configuration
+//
+// To manually configure telemetry, set these environment variables:
+//
+//	OTEL_EXPORTER_OTLP_TRACES_ENDPOINT="http://localhost:4318/v1/traces" \
 //	  OTEL_EXPORTER_OTLP_METRICS_ENDPOINT="http://localhost:9090/api/v1/otlp/v1/metrics" \
-//	  OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4318" \
-//	  OTEL_TRACES_SAMPLER=always_on \
 //	  OTEL_TRACES_EXPORTER=otlp \
-//	  multigres cluster start --config-path multigres_local
+//	  OTEL_METRICS_EXPORTER=otlp \
+//	  OTEL_TRACES_SAMPLER=always_on \
+//	  OTEL_METRIC_EXPORT_INTERVAL=5000 \
+//	  multigres cluster start
 //
-// To collect traces locally to view at http://localhost:16686/:
+// # Viewing Telemetry Data
 //
-//	$ docker run --rm -it --name jaeger-all-in-one \
-//	    -e COLLECTOR_OTLP_ENABLED=true \
-//	    -e COLLECTOR_OTLP_HTTP_PORT=4318 \
-//	    -p 16686:16686 \
-//	    -p 4318:4318 \
-//	    jaegertracing/all-in-one:latest
-//
-// To collect metrics locally to view at http://localhost:9090/:
-//
-//	$ docker run --rm -it \
-//	    --name prometheus \
-//	    -p 9090:9090 \
-//	    prom/prometheus \
-//	    --config.file=/etc/prometheus/prometheus.yml \
-//	    --web.enable-otlp-receiver \
-//	    --enable-feature=exemplar-storage
+// With the observability stack running:
+//   - Traces: http://localhost:16686/ (Jaeger)
+//   - Metrics: http://localhost:9090/ (Prometheus)
+//   - Dashboards: http://localhost:3000/ (Grafana, user: admin, pass: admin)
 package telemetry
 
 import (

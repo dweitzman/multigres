@@ -11,7 +11,7 @@ This guide demonstrates how to visualize metrics with exemplars in Grafana and u
 
 ```bash
 # From the repository root
-docker-compose -f docker-compose-observability.yml up -d
+docker compose -f docker-compose-observability.yml up -d
 ```
 
 This starts:
@@ -23,19 +23,18 @@ This starts:
 ## Step 2: Start Multigres with Telemetry Enabled
 
 ```bash
-# Start the cluster with OpenTelemetry tracing and metrics
-# Traces go to Jaeger, metrics go to Prometheus's native OTLP endpoint
-# Note: OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative is required
-# because Prometheus only accepts cumulative temporality, but the OTel Go SDK
-# defaults to delta for OTLP exports.
-OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:4318/v1/traces \
-OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=http://localhost:9090/api/v1/otlp/v1/metrics \
-OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative \
-OTEL_TRACES_EXPORTER=otlp \
-OTEL_METRICS_EXPORTER=otlp \
-OTEL_TRACES_SAMPLER=always_on \
-./bin/multigres cluster start
+# Use the helper script to start the cluster with telemetry enabled
+./observability/multigres-with-telemetry.sh cluster start
 ```
+
+The helper script automatically configures:
+
+- Traces exported to Jaeger (http://localhost:4318)
+- Metrics exported to Prometheus via OTLP (http://localhost:9090)
+- 5-second metric export interval for responsive dashboards
+- Cumulative temporality (required by Prometheus)
+
+For manual configuration or customization, see the script for the environment variables used.
 
 ## Step 3: Generate Traffic with Errors
 
@@ -228,11 +227,11 @@ Exemplars appear as diamond markers on the graph, each linked to a specific trac
 ## Cleanup
 
 ```bash
-# Stop observability stack
-docker-compose -f docker-compose-observability.yml down
+# Stop Multigres cluster (with telemetry to capture shutdown spans)
+./observability/multigres-with-telemetry.sh cluster stop
 
-# Stop Multigres cluster
-./bin/multigres cluster stop
+# Stop observability stack
+docker compose -f docker-compose-observability.yml down
 ```
 
 ## Troubleshooting
