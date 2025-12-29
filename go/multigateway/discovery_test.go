@@ -23,8 +23,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/multigres/multigres/go/clustermetadata/topo"
-	"github.com/multigres/multigres/go/clustermetadata/topo/memorytopo"
+	"github.com/multigres/multigres/go/common/constants"
+	"github.com/multigres/multigres/go/common/topoclient"
+	"github.com/multigres/multigres/go/common/topoclient/memorytopo"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 )
 
@@ -51,7 +52,7 @@ func waitForPoolerCount(t *testing.T, pd *PoolerDiscovery, expected int) {
 
 // waitForCondition waits for an arbitrary condition to become true.
 // It fails the test if the timeout is exceeded.
-func waitForCondition(t *testing.T, condition func() bool, msgAndArgs ...interface{}) {
+func waitForCondition(t *testing.T, condition func() bool, msgAndArgs ...any) {
 	t.Helper()
 	require.Eventually(t, condition, testTimeout, testPollInterval, msgAndArgs...)
 }
@@ -68,7 +69,7 @@ func createTestPooler(name, cell, hostname, database, shard string, poolerType c
 		Database:   database,
 		Shard:      shard,
 		Type:       poolerType,
-		TableGroup: "default",
+		TableGroup: constants.DefaultTableGroup,
 		PortMap: map[string]int32{
 			"grpc": 5432,
 		},
@@ -283,7 +284,7 @@ func TestPoolerDiscovery_InvalidDataHandling(t *testing.T) {
 	require.NoError(t, store.CreateMultiPooler(ctx, pooler2))
 
 	// Verify we can read pooler1 data directly to validate the path
-	pooler1Path := "poolers/" + topo.MultiPoolerIDString(pooler1.Id) + "/Pooler"
+	pooler1Path := "poolers/" + topoclient.MultiPoolerIDString(pooler1.Id) + "/Pooler"
 	pooler1Data, _, err := conn.Get(ctx, pooler1Path)
 	require.NoError(t, err, "Should be able to read valid pooler data")
 	require.NotEmpty(t, pooler1Data, "Valid pooler data should not be empty")

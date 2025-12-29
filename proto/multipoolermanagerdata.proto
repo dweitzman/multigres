@@ -40,8 +40,8 @@ message PrimaryConnInfo {
   string raw = 5;
 }
 
-// PostgreSQL replication status information
-message ReplicationStatus {
+// StandbyReplicationStatus PostgreSQL replication status information
+message StandbyReplicationStatus {
   // Last WAL position replayed during recovery (PostgreSQL format: X/XXXXXXXX)
   // Obtained from pg_last_wal_replay_lsn()
   string last_replay_lsn = 1;
@@ -88,23 +88,21 @@ message StartReplicationResponse {
 
 // SetPrimaryConnInfo sets the primary connection info for a standby server
 message SetPrimaryConnInfoRequest {
-  // Primary server hostname
-  string host = 1;
-
-  // Primary server port
-  int32 port = 2;
+  // Primary pooler metadata. Contains id (cell+name), hostname, and port_map.
+  // The postgres port is extracted from port_map["postgres"].
+  clustermetadata.MultiPooler primary = 1;
 
   // Whether to stop replication before making changes
-  bool stop_replication_before = 3;
+  bool stop_replication_before = 2;
 
   // Whether to start replication after making changes
-  bool start_replication_after = 4;
+  bool start_replication_after = 3;
 
   // Current term for consensus (used by MultiOrch during initialization)
-  int64 current_term = 5;
+  int64 current_term = 4;
 
   // Force the operation even if the term doesn't match
-  bool force = 6;
+  bool force = 5;
 }
 
 message SetPrimaryConnInfoResponse {
@@ -123,16 +121,16 @@ message StopReplicationRequest {
 
 message StopReplicationResponse {
   // Replication status when replication was stopped (only populated if wait=true)
-  ReplicationStatus status = 1;
+  StandbyReplicationStatus status = 1;
 }
 
-// ReplicationStatus gets the current replication status
-message ReplicationStatusRequest {
+// StandbyReplicationStatus gets the current replication status of the standby
+message StandbyReplicationStatusRequest {
 }
 
-message ReplicationStatusResponse {
+message StandbyReplicationStatusResponse {
   // Current replication status
-  ReplicationStatus status = 1;
+  StandbyReplicationStatus status = 1;
 }
 
 // Synchronous replication configuration
@@ -183,6 +181,52 @@ message PrimaryPositionRequest {
 message PrimaryPositionResponse {
   // Current primary LSN position
   string lsn_position = 1;
+}
+
+// Status provides unified status information that works for both PRIMARY and REPLICA poolers.
+// This RPC works even when the database connection is unavailable - fields that require
+// database access will be nil/empty in that case.
+message Status {
+  // Pooler type from topology (PRIMARY or REPLICA)
+  clustermetadata.PoolerType pooler_type = 1;
+
+  // Primary status information (only populated if pooler is acting as primary AND db is connected)
+  PrimaryStatus primary_status = 2;
+
+  // Replication status information (only populated if pooler is acting as standby AND db is connected)
+  StandbyReplicationStatus replication_status = 3;
+
+  // === Initialization status fields (always available, even without db connection) ===
+
+  // Whether this pooler has been initialized (has data directory and multigres schema)
+  bool is_initialized = 4;
+
+  // Whether data directory exists
+  bool has_data_directory = 5;
+
+  // Whether PostgreSQL is currently running
+  bool postgres_running = 6;
+
+  // Current postgres-level role from pg_is_in_recovery ("primary", "standby", or "unknown")
+  // This may differ from pooler_type during transitions or failures.
+  string postgres_role = 7;
+
+  // Current WAL position (empty if db not connected)
+  string wal_position = 8;
+
+  // Current consensus term
+  int64 consensus_term = 9;
+
+  // Shard ID that this pooler belongs to
+  string shard_id = 10;
+}
+
+// Status gets unified status that works for both PRIMARY and REPLICA poolers
+message StatusRequest {
+}
+
+message StatusResponse {
+  Status status = 1;
 }
 
 // Replication statistics for a connected follower from pg_stat_replication
@@ -300,7 +344,7 @@ message StopReplicationAndGetStatusRequest {
 
 message StopReplicationAndGetStatusResponse {
   // Replication status after stopping
-  ReplicationStatus status = 1;
+  StandbyReplicationStatus status = 1;
 }
 
 // ChangeType changes the pooler type
@@ -353,7 +397,7 @@ message ResetReplicationRequest {
 
 message ResetReplicationResponse {
   // Replication status when replication was reset
-  ReplicationStatus status = 1;
+  StandbyReplicationStatus status = 1;
 }
 
 // Replication pause mode - defines what aspect of replication to pause
@@ -431,11 +475,11 @@ message ConfigureSynchronousReplicationRequest {
 message ConfigureSynchronousReplicationResponse {
 }
 
-// Status gets the current status of the manager
-message StatusRequest {
+// State gets the current status of the manager
+message StateRequest {
 }
 
-message StatusResponse {
+message StateResponse {
   // Manager state (starting, ready, error)
   string state = 1;
 
@@ -480,8 +524,8 @@ message ConsensusTerm {
   // Term number for this consensus term
   int64 term_number = 1;
 
-  // ID of the pooler this replica accepted as leader
-  clustermetadata.ID accepted_leader = 2;
+  // ID of the coordinator (multiorch) that this node accepted the term from
+  clustermetadata.ID accepted_term_from_coordinator_id = 2;
 
   // Timestamp of the last acceptance
   google.protobuf.Timestamp last_acceptance_time = 3;
@@ -495,6 +539,10 @@ message ConsensusTerm {
 message InitializeEmptyPrimaryRequest {
   // Consensus term to set for this primary
   int64 consensus_term = 1;
+
+  // Optional: Create durability policy after initialization
+  string durability_policy_name = 2;
+  clustermetadata.QuorumRule durability_quorum_rule = 3;
 }
 
 message InitializeEmptyPrimaryResponse {
@@ -503,22 +551,27 @@ message InitializeEmptyPrimaryResponse {
 
   // Error message if initialization failed
   string error_message = 2;
+
+  // Backup ID of the initial backup created during initialization
+  // This can be used by standbys to restore from the same backup
+  string backup_id = 3;
 }
 
 // InitializeAsStandby initializes this pooler as a standby from a primary backup
 // Used during bootstrap initialization of a new shard or when adding a new standby
 message InitializeAsStandbyRequest {
-  // Primary server hostname to backup from
-  string primary_host = 1;
-
-  // Primary server port
-  int32 primary_port = 2;
+  // Primary pooler to replicate from
+  clustermetadata.MultiPooler primary = 1;
 
   // Consensus term to set for this standby
-  int64 consensus_term = 3;
+  int64 consensus_term = 2;
 
   // Whether to force reinitialization (removes existing data directory)
-  bool force = 4;
+  bool force = 3;
+
+  // Optional: Specific backup ID to restore from
+  // If empty, restore from the latest backup
+  string backup_id = 4;
 }
 
 message InitializeAsStandbyResponse {
@@ -532,30 +585,125 @@ message InitializeAsStandbyResponse {
   string final_lsn = 3;
 }
 
-// InitializationStatus returns the initialization status of this pooler
-// Used by multiorch coordinator to determine what initialization scenario to use
-message InitializationStatusRequest {
+// Backup operations
+// All of these RPCs perform backups and restores in the context
+// of the database, table group, and shard this multipooler serves.
+
+// BackupRequest requests a backup
+message BackupRequest {
+  // force_primary should typically be false, because backups should be done on
+  // replicas to reduce load on the primary cluster. This is dangerous.
+  bool force_primary = 1;
+
+  // type indicates the type of backup that should be done. "full", "differential",
+  // and "incremental" are examples that are appropriate for pgBackRest.
+  string type = 2;
+
+  // job_id is an optional tracking ID from MultiAdmin for backup identification.
+  // If provided, stored as annotation on the backup for status queries.
+  // If empty, multipooler generates one using the same format.
+  // Format: YYYYMMDD-HHMMSS.microseconds[_suffix]
+  string job_id = 3;
 }
 
-message InitializationStatusResponse {
-  // Whether this pooler has been initialized (has data directory and multigres schema)
-  bool is_initialized = 1;
+// BackupResponse contains the result of a backup operation
+message BackupResponse {
+  // backup_id uniquely identifies a backup and can be used to restore this
+  // backup in the future.
+  string backup_id = 1;
+}
 
-  // Whether data directory exists
-  bool has_data_directory = 2;
+// RestoreFromBackupRequest requests a restore from a backup
+message RestoreFromBackupRequest {
+  // Backup to restore from. If this is empty, we restore from the latest
+  // backup.
+  string backup_id = 1;
+}
 
-  // Whether PostgreSQL is currently running
-  bool postgres_running = 3;
+// RestoreFromBackupResponse contains the result of a restore operation
+message RestoreFromBackupResponse {
+}
 
-  // Current role of this pooler ("primary", "standby", or "unknown")
-  string role = 4;
+// GetBackupsRequest requests backup information
+message GetBackupsRequest {
+  uint32 limit = 1;
+}
 
-  // Current WAL position (if available)
-  string wal_position = 5;
+// GetBackupsResponse contains the list of backups
+message GetBackupsResponse {
+  repeated BackupMetadata backups = 1;
+}
 
-  // Current consensus term
-  int64 consensus_term = 6;
+// GetBackupByJobIdRequest queries a backup by the job_id annotation.
+message GetBackupByJobIdRequest {
+  // The job_id to search for in backup annotations.
+  string job_id = 1;
+}
 
-  // Shard ID that this pooler belongs to
-  string shard_id = 7;
+// GetBackupByJobIdResponse returns the backup matching the job_id.
+// If no backup is found, backup will be nil.
+message GetBackupByJobIdResponse {
+  // The backup metadata if found, nil if not found.
+  BackupMetadata backup = 1;
+}
+
+// BackupMetadata contains metadata about a backup
+message BackupMetadata {
+  string table_group = 1;
+  string shard = 2;
+  Status status = 3;
+  string backup_id = 4;
+  string final_lsn = 5;  // Final checkpoint LSN (stop LSN) for this backup
+
+  // Job ID annotation if present (for cross-process tracking)
+  string job_id = 6;
+
+  // Size of the backup in bytes (original database size before compression)
+  uint64 backup_size_bytes = 7;
+
+  // Type of backup: "full", "diff", or "incr" (as reported by pgbackrest)
+  string type = 8;
+
+  // Multipooler ID that created this backup (from pgbackrest annotation)
+  string multipooler_id = 9;
+
+  // Pooler type that created this backup (from pgbackrest annotation)
+  clustermetadata.PoolerType pooler_type = 10;
+
+  // Status represents the state of a backup
+  enum Status {
+    UNKNOWN = 0;
+    INCOMPLETE = 1;
+    COMPLETE = 2;
+    // TODO: add VALID/INVALID states
+  }
+}
+
+// =============================================================================
+// Durability Policy APIs
+// =============================================================================
+
+// GetDurabilityPolicyRequest requests the active durability policy
+message GetDurabilityPolicyRequest {
+  // Empty - retrieves the currently active policy
+}
+
+// GetDurabilityPolicyResponse returns the active durability policy
+message GetDurabilityPolicyResponse {
+  // The active durability policy, or null if none is configured
+  clustermetadata.DurabilityPolicy policy = 1;
+}
+
+// CreateDurabilityPolicyRequest creates a new durability policy
+message CreateDurabilityPolicyRequest {
+  // The name of the policy (e.g., "ANY_2", "MULTI_CELL_ANY_2")
+  string policy_name = 1;
+
+  // The quorum rule defining the policy behavior
+  clustermetadata.QuorumRule quorum_rule = 2;
+}
+
+// CreateDurabilityPolicyResponse confirms policy creation
+// Errors are returned via gRPC status codes, not in the response body
+message CreateDurabilityPolicyResponse {
 }

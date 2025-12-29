@@ -17,21 +17,25 @@ docker-compose -f docker-compose-observability.yml up -d
 This starts:
 
 - **Jaeger** (UI: http://localhost:16686) - Distributed tracing backend
-- **Prometheus** (UI: http://localhost:9090) - Metrics scraper and storage
+- **Prometheus** (UI: http://localhost:9090) - Metrics storage (receives via OTLP)
 - **Grafana** (UI: http://localhost:3000) - Visualization dashboard
 
-## Step 2: Start Multigres with Tracing Enabled
+## Step 2: Start Multigres with Telemetry Enabled
 
 ```bash
-# Start the cluster with OpenTelemetry tracing
-OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
+# Start the cluster with OpenTelemetry tracing and metrics
+# Traces go to Jaeger, metrics go to Prometheus's native OTLP endpoint
+# Note: OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative is required
+# because Prometheus only accepts cumulative temporality, but the OTel Go SDK
+# defaults to delta for OTLP exports.
+OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:4318/v1/traces \
+OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=http://localhost:9090/api/v1/otlp/v1/metrics \
+OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative \
 OTEL_TRACES_EXPORTER=otlp \
-OTEL_METRICS_EXPORTER=none \
+OTEL_METRICS_EXPORTER=otlp \
 OTEL_TRACES_SAMPLER=always_on \
 ./bin/multigres cluster start
 ```
-
-The provisioner automatically generates `multigres_local/observability/prometheus.yml` with all service endpoints.
 
 ## Step 3: Generate Traffic with Errors
 
@@ -56,16 +60,31 @@ This creates:
 2. The dashboard "Multigres HTTP Metrics with Exemplars" should load automatically
 3. No login required (anonymous access enabled for demo)
 
+### Verify Data is Showing
+
+Before exploring exemplars, confirm the dashboard has data:
+
+1. **All 4 panels should show data** - if panels are empty, wait 30 seconds and refresh
+2. **Look for colored lines** in the time series charts
+3. If still empty, verify metrics in Prometheus: http://localhost:9090/graph → query `http_server_request_duration_seconds_count`
+
 ### Understanding the Dashboard
 
-The dashboard has 4 panels demonstrating different aspects of exemplars:
+The dashboard has 4 panels, all with exemplars enabled:
 
-#### Panel 1: HTTP Request Rate
+#### Panel 1: HTTP Response Codes Over Time
 
-- Shows requests per second over time
-- No exemplars (counter metric)
+- Shows HTTP request rate grouped by status code (200, 404, etc.)
+- Useful for spotting error spikes
+- **Exemplars enabled** - click data points to see traces
 
-#### Panel 2: HTTP Request Duration (with Exemplars)
+#### Panel 2: gRPC Response Codes Over Time
+
+- Shows gRPC request rate grouped by status code (0 = OK)
+- Useful for monitoring inter-service communication
+- **Exemplars enabled** - click data points to see traces
+
+#### Panel 3: HTTP Latency (with Exemplars)
 
 - **This is the key panel for exemplar demonstration!**
 - Shows p95 and p50 latency percentiles
@@ -78,21 +97,16 @@ The dashboard has 4 panels demonstrating different aspects of exemplars:
 3. **Click on a data point** - a modal appears with "Jaeger" link
 4. **Click the Jaeger link** - Opens the exact trace in Jaeger that contributed to that metric!
 
-#### Panel 3: HTTP Status Codes
+#### Panel 4: gRPC Latency
 
-- Bar gauge showing distribution of 200 vs 404 responses
-- Useful for identifying error rates
-
-#### Panel 4: Individual Request Durations
-
-- Shows each individual request as a point
-- Every point is clickable and links to its trace
-- Great for investigating specific slow requests
+- Shows p95 and p50 latency for gRPC calls
+- Useful for monitoring internal service latencies
+- **Exemplars enabled** - click data points to see traces
 
 ### Visual Exemplar Flow
 
 ```
-1. Notice high latency in Panel 2 (p95 duration spike)
+1. Notice high latency in Panel 3 (HTTP Latency p95 spike)
    ↓
 2. Click on the data point at that time
    ↓
@@ -107,41 +121,35 @@ The dashboard has 4 panels demonstrating different aspects of exemplars:
 
 ## Step 5: Verify Exemplars in Prometheus
 
-You can also see exemplars directly in Prometheus:
+You can also see exemplars directly in the Prometheus UI:
 
-```bash
-# Request metrics in OpenMetrics format (required for exemplars)
-curl -H "Accept: application/openmetrics-text" http://localhost:15100/metrics \
-  | grep '# {trace_id' | head -5
-```
+1. Open http://localhost:9090/graph
+2. Enter a histogram query like: `http_server_request_duration_seconds_bucket`
+3. Click "Execute"
+4. Toggle to "Graph" view
+5. Enable "Show exemplars" checkbox
 
-Example output:
-
-```
-http_server_request_duration_seconds_bucket{...,le="0.005"} 45 # {trace_id="abc123...",span_id="def456..."} 0.002341 1762810234.567
-```
-
-The `# {trace_id="...",span_id="..."}` comment is the exemplar - it links this metric bucket to a specific trace!
+Exemplars appear as diamond markers on the graph, each linked to a specific trace.
 
 ## Step 6: Correlation Demo - From Error Metric to Trace
 
 ### Find 404 Errors in Metrics
 
-1. In Grafana, look at **Panel 3: HTTP Status Codes**
-2. You should see both "200" and "404" bars
-3. Go to **Panel 4: Individual Request Durations**
-4. Click on a red/orange data point (these are errors)
+1. In Grafana, look at **Panel 1: HTTP Response Codes Over Time**
+2. You should see separate lines for status codes 200 and 404
+3. Find a data point on the 404 line
+4. Click on the data point to see the exemplar modal
 5. Click "View Trace in Jaeger"
 6. Jaeger opens showing:
-   - `http.status_code = 404`
-   - `http.target = /does-not-exist`
-   - `http.method = GET`
+   - `http.response.status_code = 404`
+   - `url.path = /does-not-exist`
+   - `http.request.method = GET`
    - Full timing breakdown of the request
 
 ### This demonstrates:
 
-- **Aggregated view** (Panel 3) shows you have 404 errors
-- **Exemplar** (Panel 4) lets you jump to a specific error instance
+- **Aggregated view** (Panel 1) shows you have 404 errors over time
+- **Exemplar** (click data point) lets you jump to a specific error instance
 - **Trace** (Jaeger) shows you exactly what happened in that request
 
 ## How Exemplars Work
@@ -177,40 +185,33 @@ The `# {trace_id="...",span_id="..."}` comment is the exemplar - it links this m
 
 ```
 ┌──────────────┐
-│  Multigres   │  Exports metrics (OpenMetrics format)
+│  Multigres   │  Exports metrics and traces via OTLP
 │  Services    │  with embedded exemplars (trace_id, span_id)
 └──────┬───────┘
        │
-       │ /metrics (OpenMetrics)
+       │ OTLP (metrics + traces)
        ↓
-┌──────────────┐
-│  Prometheus  │  Scrapes metrics every 5s
-│              │  Stores exemplars in memory
-└──────┬───────┘
-       │
-       ↓
-┌──────────────┐
-│   Grafana    │  Queries Prometheus for metrics
-│              │  Displays exemplars as clickable links
-│              │  Links to Jaeger traces
-└──────┬───────┘
-       │
-       ↓
-┌──────────────┐
-│   Jaeger     │  Stores distributed traces
-│              │  Displays trace details
-└──────────────┘
+┌──────────────┐     ┌──────────────┐
+│  Prometheus  │     │    Jaeger    │
+│  (metrics)   │     │   (traces)   │
+└──────┬───────┘     └──────┬───────┘
+       │                    │
+       └────────┬───────────┘
+                ↓
+         ┌──────────────┐
+         │   Grafana    │  Queries Prometheus for metrics
+         │              │  Displays exemplars as clickable links
+         │              │  Links to Jaeger traces
+         └──────────────┘
 ```
 
 ## Configuration Details
 
-### Prometheus (`prometheus.yml`)
+### Prometheus
 
-- **Auto-generated** during `multigres cluster start`
-- Located at `multigres_local/observability/prometheus.yml`
-- Scrapes all Multigres services every 5s
-- **Critical**: Uses `format: ['openmetrics']` to get exemplars
-- Enables `--enable-feature=exemplar-storage` flag
+- Receives metrics via OTLP push (`--web.enable-otlp-receiver`)
+- Stores exemplars in memory (`--enable-feature=exemplar-storage`)
+- No scrape configuration needed - services push metrics directly
 
 ### Grafana Datasources
 
@@ -238,30 +239,19 @@ docker-compose -f docker-compose-observability.yml down
 
 ### No Exemplars Appearing in Grafana
 
-**Check 1: Verify OpenMetrics format**
+**Check 1: Verify metrics are reaching Prometheus**
 
-```bash
-curl -H "Accept: application/openmetrics-text" http://localhost:15100/metrics | grep -c '# {trace_id'
-```
+1. Open http://localhost:9090/graph
+2. Query for `http_server_request_duration_seconds_bucket`
+3. If no results, check that `OTEL_METRICS_EXPORTER=otlp` is set
 
-Should return > 0
+**Check 2: Verify traces are reaching Jaeger**
 
-**Check 2: Check Prometheus is scraping**
+1. Open http://localhost:16686
+2. Search for service "multigateway"
+3. Should see traces
 
-```bash
-# Open http://localhost:9090/targets
-# All targets should be "UP" with green status
-```
-
-**Check 3: Verify traces are reaching Jaeger**
-
-```bash
-# Open http://localhost:16686
-# Search for service "multigateway"
-# Should see traces
-```
-
-**Check 4: Panel configuration**
+**Check 3: Panel configuration**
 
 - Edit panel in Grafana
 - Check "Exemplar" toggle is ON

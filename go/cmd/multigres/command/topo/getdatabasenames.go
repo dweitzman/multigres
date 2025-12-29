@@ -15,37 +15,25 @@
 package topo
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 
 	"github.com/spf13/cobra"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/multigres/multigres/go/cmd/multigres/command/admin"
 	multiadminpb "github.com/multigres/multigres/go/pb/multiadmin"
 )
 
 // runGetDatabaseNames handles the getdatabasenames command
 func runGetDatabaseNames(cmd *cobra.Command, args []string) error {
-	// Get admin server address
-	adminServer, err := getAdminServerAddress(cmd)
+	// Create admin client
+	client, err := admin.NewClient(cmd)
 	if err != nil {
 		return err
 	}
+	defer client.Close()
 
-	// Create gRPC connection
-	conn, err := grpc.NewClient(adminServer, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		return fmt.Errorf("failed to connect to admin server %s: %w", adminServer, err)
-	}
-	defer conn.Close()
-
-	// Create client and make the request
-	client := multiadminpb.NewMultiAdminServiceClient(conn)
-	ctx := context.Background()
-
-	response, err := client.GetDatabaseNames(ctx, &multiadminpb.GetDatabaseNamesRequest{})
+	response, err := client.GetDatabaseNames(cmd.Context(), &multiadminpb.GetDatabaseNamesRequest{})
 	if err != nil {
 		return fmt.Errorf("failed to get database names: %w", err)
 	}

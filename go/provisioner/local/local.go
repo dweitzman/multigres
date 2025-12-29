@@ -16,7 +16,6 @@ package local
 
 import (
 	"context"
-	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,20 +24,20 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
-	"text/template"
 	"time"
 
-	"github.com/multigres/multigres/go/clustermetadata/topo"
+	"golang.org/x/mod/semver"
+
+	"github.com/multigres/multigres/go/common/constants"
+	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/provisioner"
 	"github.com/multigres/multigres/go/provisioner/local/ports"
 	"github.com/multigres/multigres/go/tools/pathutil"
 	"github.com/multigres/multigres/go/tools/retry"
-	"github.com/multigres/multigres/go/tools/semver"
 	"github.com/multigres/multigres/go/tools/stringutil"
 	"github.com/multigres/multigres/go/tools/telemetry"
 
@@ -50,15 +49,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-//go:embed templates/prometheus.yml.template
-var prometheusTemplate string
-
 var tracer = otel.Tracer("github.com/multigres/multigres/go/provisioner/local")
 
 // localProvisioner implements the Provisioner interface for local binary-based provisioning
 type localProvisioner struct {
-	config  *LocalProvisionerConfig
-	dataDir string // Base data directory for this provisioner instance
+	config *LocalProvisionerConfig
 }
 
 // Compile-time check to ensure localProvisioner implements Provisioner
@@ -74,16 +69,30 @@ func (p *localProvisioner) Name() string {
 	return "local"
 }
 
-// createPasswordFileAndDirectories creates the pooler directory structure and password file
-func createPasswordFileAndDirectories(poolerDir, passwordFilePath string) error {
+// createPoolerDirectoryWithPassword creates the pooler directory structure and password file
+// at the conventional location (poolerDir/pgpassword.txt).
+// If sourcePasswordFile is provided and exists, its content is copied; otherwise "postgres" is used.
+func createPoolerDirectoryWithPassword(poolerDir, sourcePasswordFile string) error {
 	// Create the pooler directory structure
 	if err := os.MkdirAll(poolerDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create pooler directory %s: %w", poolerDir, err)
 	}
 
-	// Create the password file with "postgres" password
-	if err := os.WriteFile(passwordFilePath, []byte("postgres"), 0o600); err != nil {
-		return fmt.Errorf("failed to create password file %s: %w", passwordFilePath, err)
+	// Conventional password file location
+	conventionalPwfile := filepath.Join(poolerDir, "pgpassword.txt")
+
+	// Determine password content
+	password := []byte("postgres")
+	if sourcePasswordFile != "" {
+		if content, err := os.ReadFile(sourcePasswordFile); err == nil {
+			password = content
+		}
+		// If source file doesn't exist, fall back to default "postgres"
+	}
+
+	// Create the password file at the conventional location
+	if err := os.WriteFile(conventionalPwfile, password, 0o600); err != nil {
+		return fmt.Errorf("failed to create password file %s: %w", conventionalPwfile, err)
 	}
 
 	return nil
@@ -104,18 +113,13 @@ func (p *localProvisioner) initializePgctldDirectories() error {
 			return fmt.Errorf("pooler-dir not found in config for pgtctld in cell %s", cellName)
 		}
 
-		passwordFile := cellConfig.Pgctld.PgPwfile
-
-		if passwordFile == "" {
-			return fmt.Errorf("pgctld password file not found in config for cell %s", cellName)
-		}
-
-		if err := createPasswordFileAndDirectories(poolerDir, passwordFile); err != nil {
+		if err := createPoolerDirectoryWithPassword(poolerDir, cellConfig.Pgctld.PgPwfile); err != nil {
 			return fmt.Errorf("failed to initialize pgctld directory for cell %s: %w", cellName, err)
 		}
 
+		conventionalPwfile := filepath.Join(poolerDir, "pgpassword.txt")
 		fmt.Printf("✓ Created pooler directory: %s\n", poolerDir)
-		fmt.Printf("✓ Created password file: %s\n", passwordFile)
+		fmt.Printf("✓ Created password file: %s\n", conventionalPwfile)
 	}
 
 	return nil
@@ -155,6 +159,12 @@ func (p *localProvisioner) provisionEtcd(ctx context.Context, req *provisioner.P
 		port = p
 	}
 
+	// Get peer port from config, or default to port + 1
+	peerPort := port + 1
+	if pp, ok := etcdConfig["peer-port"].(int); ok && pp > 0 {
+		peerPort = pp
+	}
+
 	// Find etcd binary (PATH or configured path)
 	etcdBinary, err := p.findBinary("etcd", etcdConfig)
 	if err != nil {
@@ -189,8 +199,6 @@ func (p *localProvisioner) provisionEtcd(ctx context.Context, req *provisioner.P
 	if err != nil {
 		return nil, fmt.Errorf("failed to create log file: %w", err)
 	}
-
-	peerPort := port + 1
 
 	args := []string{
 		"--name", "default",
@@ -378,7 +386,7 @@ func GeneratePoolerDir(baseDir, serviceID string) string {
 // provisionMultigateway provisions multigateway using either binaries or Docker containers
 func (p *localProvisioner) provisionMultigateway(ctx context.Context, req *provisioner.ProvisionRequest) (*provisioner.ProvisionResult, error) {
 	// Sanity check: ensure this method is called for multigateway service
-	if req.Service != "multigateway" {
+	if req.Service != constants.ServiceMultigateway {
 		return nil, fmt.Errorf("provisionMultigateway called for wrong service type: %s", req.Service)
 	}
 
@@ -386,7 +394,7 @@ func (p *localProvisioner) provisionMultigateway(ctx context.Context, req *provi
 	cell := req.Params["cell"].(string)
 
 	// Check if multigateway is already running
-	existingService, err := p.findRunningDbService("multigateway", req.DatabaseName, cell)
+	existingService, err := p.findRunningDbService(constants.ServiceMultigateway, req.DatabaseName, cell)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check for existing multigateway service: %w", err)
 	}
@@ -394,7 +402,7 @@ func (p *localProvisioner) provisionMultigateway(ctx context.Context, req *provi
 	if existingService != nil {
 		fmt.Printf("multigateway is already running (PID %d) ✓\n", existingService.PID)
 		return &provisioner.ProvisionResult{
-			ServiceName: "multigateway",
+			ServiceName: constants.ServiceMultigateway,
 			FQDN:        existingService.FQDN,
 			Ports:       existingService.Ports,
 			Metadata: map[string]any{
@@ -406,11 +414,10 @@ func (p *localProvisioner) provisionMultigateway(ctx context.Context, req *provi
 
 	// Get parameters from request
 	etcdAddress := req.Params["etcd_address"].(string)
-	topoBackend := req.Params["topo_backend"].(string)
 	topoGlobalRoot := req.Params["topo_global_root"].(string)
 
 	// Get cell-specific multigateway config
-	multigatewayConfig, err := p.getCellServiceConfig(cell, "multigateway")
+	multigatewayConfig, err := p.getCellServiceConfig(cell, constants.ServiceMultigateway)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get multigateway config for cell %s: %w", cell, err)
 	}
@@ -440,7 +447,7 @@ func (p *localProvisioner) provisionMultigateway(ctx context.Context, req *provi
 	}
 
 	// Find multigateway binary
-	multigatewayBinary, err := p.findBinary("multigateway", multigatewayConfig)
+	multigatewayBinary, err := p.findBinary(constants.ServiceMultigateway, multigatewayConfig)
 	if err != nil {
 		return nil, fmt.Errorf("multigateway binary not found: %w", err)
 	}
@@ -449,7 +456,7 @@ func (p *localProvisioner) provisionMultigateway(ctx context.Context, req *provi
 	serviceID := stringutil.RandomString(8)
 
 	// Create log file path
-	logFile, err := p.createLogFile("multigateway", serviceID, req.DatabaseName)
+	logFile, err := p.createLogFile(constants.ServiceMultigateway, serviceID, req.DatabaseName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create log file: %w", err)
 	}
@@ -461,7 +468,6 @@ func (p *localProvisioner) provisionMultigateway(ctx context.Context, req *provi
 		"--pg-port", fmt.Sprintf("%d", pgPort),
 		"--topo-global-server-addresses", etcdAddress,
 		"--topo-global-root", topoGlobalRoot,
-		"--topo-implementation", topoBackend,
 		"--cell", cell,
 		"--log-level", logLevel,
 		"--log-output", logFile,
@@ -485,7 +491,7 @@ func (p *localProvisioner) provisionMultigateway(ctx context.Context, req *provi
 	// Create provision state
 	service := &LocalProvisionedService{
 		ID:         serviceID,
-		Service:    "multigateway",
+		Service:    constants.ServiceMultigateway,
 		PID:        multigatewayCmd.Process.Pid,
 		BinaryPath: multigatewayBinary,
 		Ports:      map[string]int{"http_port": httpPort, "grpc_port": grpcPort, "pg_port": pgPort},
@@ -502,14 +508,14 @@ func (p *localProvisioner) provisionMultigateway(ctx context.Context, req *provi
 
 	// Wait for multigateway to be ready
 	servicePorts := map[string]int{"http_port": httpPort, "grpc_port": grpcPort, "pg_port": pgPort}
-	if err := p.waitForServiceReady(ctx, "multigateway", "localhost", servicePorts, 10*time.Second); err != nil {
+	if err := p.waitForServiceReady(ctx, constants.ServiceMultigateway, "localhost", servicePorts, 10*time.Second); err != nil {
 		logs := p.readServiceLogs(logFile, 20)
 		return nil, fmt.Errorf("multigateway readiness check failed: %w\n\nLast 20 lines from multigateway logs:\n%s", err, logs)
 	}
 	fmt.Printf(" ready ✓\n")
 
 	return &provisioner.ProvisionResult{
-		ServiceName: "multigateway",
+		ServiceName: constants.ServiceMultigateway,
 		FQDN:        "localhost",
 		Ports: map[string]int{
 			"http_port": httpPort,
@@ -526,12 +532,12 @@ func (p *localProvisioner) provisionMultigateway(ctx context.Context, req *provi
 // provisionMultiadmin provisions multiadmin using local binary
 func (p *localProvisioner) provisionMultiadmin(ctx context.Context, req *provisioner.ProvisionRequest) (*provisioner.ProvisionResult, error) {
 	// Sanity check: ensure this method is called for multiadmin service
-	if req.Service != "multiadmin" {
+	if req.Service != constants.ServiceMultiadmin {
 		return nil, fmt.Errorf("provisionMultiadmin called for wrong service type: %s", req.Service)
 	}
 
 	// Check if multiadmin is already running
-	existingService, err := p.findRunningService("multiadmin")
+	existingService, err := p.findRunningService(constants.ServiceMultiadmin)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check for existing multiadmin service: %w", err)
 	}
@@ -539,7 +545,7 @@ func (p *localProvisioner) provisionMultiadmin(ctx context.Context, req *provisi
 	if existingService != nil {
 		fmt.Printf("multiadmin is already running (PID %d) ✓\n", existingService.PID)
 		return &provisioner.ProvisionResult{
-			ServiceName: "multiadmin",
+			ServiceName: constants.ServiceMultiadmin,
 			FQDN:        existingService.FQDN,
 			Ports:       existingService.Ports,
 			Metadata: map[string]any{
@@ -550,7 +556,7 @@ func (p *localProvisioner) provisionMultiadmin(ctx context.Context, req *provisi
 	}
 
 	// Get multiadmin config
-	multiadminConfig := p.getServiceConfig("multiadmin")
+	multiadminConfig := p.getServiceConfig(constants.ServiceMultiadmin)
 
 	// Get HTTP port from config
 	httpPort := ports.DefaultMultiadminHTTP
@@ -566,7 +572,6 @@ func (p *localProvisioner) provisionMultiadmin(ctx context.Context, req *provisi
 
 	// Get parameters from request
 	etcdAddress := req.Params["etcd_address"].(string)
-	topoBackend := req.Params["topo_backend"].(string)
 	topoGlobalRoot := req.Params["topo_global_root"].(string)
 
 	// Get log level
@@ -576,7 +581,7 @@ func (p *localProvisioner) provisionMultiadmin(ctx context.Context, req *provisi
 	}
 
 	// Find multiadmin binary
-	multiadminBinary, err := p.findBinary("multiadmin", multiadminConfig)
+	multiadminBinary, err := p.findBinary(constants.ServiceMultiadmin, multiadminConfig)
 	if err != nil {
 		return nil, fmt.Errorf("multiadmin binary not found: %w", err)
 	}
@@ -585,7 +590,7 @@ func (p *localProvisioner) provisionMultiadmin(ctx context.Context, req *provisi
 	serviceID := stringutil.RandomString(8)
 
 	// Create log file path
-	logFile, err := p.createLogFile("multiadmin", serviceID, "")
+	logFile, err := p.createLogFile(constants.ServiceMultiadmin, serviceID, "")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create log file: %w", err)
 	}
@@ -596,7 +601,6 @@ func (p *localProvisioner) provisionMultiadmin(ctx context.Context, req *provisi
 		"--grpc-port", fmt.Sprintf("%d", grpcPort),
 		"--topo-global-server-addresses", etcdAddress,
 		"--topo-global-root", topoGlobalRoot,
-		"--topo-implementation", topoBackend,
 		"--log-level", logLevel,
 		"--log-output", logFile,
 		"--service-map", "grpc-multiadmin",
@@ -620,7 +624,7 @@ func (p *localProvisioner) provisionMultiadmin(ctx context.Context, req *provisi
 	// Create provision state
 	service := &LocalProvisionedService{
 		ID:         serviceID,
-		Service:    "multiadmin",
+		Service:    constants.ServiceMultiadmin,
 		PID:        multiadminCmd.Process.Pid,
 		BinaryPath: multiadminBinary,
 		Ports:      map[string]int{"http_port": httpPort, "grpc_port": grpcPort},
@@ -636,14 +640,14 @@ func (p *localProvisioner) provisionMultiadmin(ctx context.Context, req *provisi
 
 	// Wait for multiadmin to be ready (check HTTP port)
 	servicePorts := map[string]int{"http_port": httpPort, "grpc_port": grpcPort}
-	if err := p.waitForServiceReady(ctx, "multiadmin", "localhost", servicePorts, 10*time.Second); err != nil {
+	if err := p.waitForServiceReady(ctx, constants.ServiceMultiadmin, "localhost", servicePorts, 10*time.Second); err != nil {
 		logs := p.readServiceLogs(logFile, 20)
 		return nil, fmt.Errorf("multiadmin readiness check failed: %w\n\nLast 20 lines from multiadmin logs:\n%s", err, logs)
 	}
 	fmt.Printf(" ready ✓\n")
 
 	return &provisioner.ProvisionResult{
-		ServiceName: "multiadmin",
+		ServiceName: constants.ServiceMultiadmin,
 		FQDN:        "localhost",
 		Ports: map[string]int{
 			"http_port": httpPort,
@@ -659,7 +663,7 @@ func (p *localProvisioner) provisionMultiadmin(ctx context.Context, req *provisi
 // provisionMultipooler provisions multipooler using local binary
 func (p *localProvisioner) provisionMultipooler(ctx context.Context, req *provisioner.ProvisionRequest) (*provisioner.ProvisionResult, error) {
 	// Sanity check: ensure this method is called for multipooler service
-	if req.Service != "multipooler" {
+	if req.Service != constants.ServiceMultipooler {
 		return nil, fmt.Errorf("provisionMultipooler called for wrong service type: %s", req.Service)
 	}
 
@@ -667,14 +671,14 @@ func (p *localProvisioner) provisionMultipooler(ctx context.Context, req *provis
 	cell := req.Params["cell"].(string)
 
 	// Check if multipooler is already running
-	existingService, err := p.findRunningDbService("multipooler", req.DatabaseName, cell)
+	existingService, err := p.findRunningDbService(constants.ServiceMultipooler, req.DatabaseName, cell)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check for existing multipooler service: %w", err)
 	}
 	if existingService != nil {
 		fmt.Printf("multipooler is already running (PID %d) ✓\n", existingService.PID)
 		return &provisioner.ProvisionResult{
-			ServiceName: "multipooler",
+			ServiceName: constants.ServiceMultipooler,
 			FQDN:        existingService.FQDN,
 			Ports:       existingService.Ports,
 			Metadata: map[string]any{
@@ -686,11 +690,10 @@ func (p *localProvisioner) provisionMultipooler(ctx context.Context, req *provis
 
 	// Get parameters from request
 	etcdAddress := req.Params["etcd_address"].(string)
-	topoBackend := req.Params["topo_backend"].(string)
 	topoGlobalRoot := req.Params["topo_global_root"].(string)
 
 	// Get cell-specific multipooler config
-	multipoolerConfig, err := p.getCellServiceConfig(cell, "multipooler")
+	multipoolerConfig, err := p.getCellServiceConfig(cell, constants.ServiceMultipooler)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get multipooler config for cell %s: %w", cell, err)
 	}
@@ -721,6 +724,12 @@ func (p *localProvisioner) provisionMultipooler(ctx context.Context, req *provis
 		tableGroup = tgFromConfig
 	}
 
+	// Get shard from multipooler config, default to "0-inf" if not set
+	shard := "0-inf"
+	if shardFromConfig, ok := multipoolerConfig["shard"].(string); ok && shardFromConfig != "" {
+		shard = shardFromConfig
+	}
+
 	// Get log level
 	logLevel := "info"
 	if level, ok := multipoolerConfig["log_level"].(string); ok {
@@ -734,7 +743,7 @@ func (p *localProvisioner) provisionMultipooler(ctx context.Context, req *provis
 	}
 
 	// Get PostgreSQL port from config or use default
-	pgPort := ports.DefaultPostgresPort
+	pgPort := ports.DefaultLocalPostgresPort
 	if port, ok := multipoolerConfig["pg_port"].(int); ok && port > 0 {
 		pgPort = port
 	}
@@ -749,7 +758,7 @@ func (p *localProvisioner) provisionMultipooler(ctx context.Context, req *provis
 	}
 
 	// Find multipooler binary
-	multipoolerBinary, err := p.findBinary("multipooler", multipoolerConfig)
+	multipoolerBinary, err := p.findBinary(constants.ServiceMultipooler, multipoolerConfig)
 	if err != nil {
 		return nil, fmt.Errorf("multipooler binary not found: %w", err)
 	}
@@ -763,7 +772,7 @@ func (p *localProvisioner) provisionMultipooler(ctx context.Context, req *provis
 	}
 
 	// Create log file path
-	logFile, err := p.createLogFile("multipooler", serviceID, req.DatabaseName)
+	logFile, err := p.createLogFile(constants.ServiceMultipooler, serviceID, req.DatabaseName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create log file: %w", err)
 	}
@@ -774,16 +783,19 @@ func (p *localProvisioner) provisionMultipooler(ctx context.Context, req *provis
 		return nil, fmt.Errorf("failed to provision pgctld for multipooler: %w", err)
 	}
 
+	// Construct the PostgreSQL socket file path: <poolerDir>/pg_sockets/.s.PGSQL.<port>
+	pgSocketFile := filepath.Join(poolerDir, "pg_sockets", fmt.Sprintf(".s.PGSQL.%d", pgPort))
+
 	// Build command arguments with pgctld-addr
 	args := []string{
 		"--http-port", fmt.Sprintf("%d", httpPort),
 		"--grpc-port", fmt.Sprintf("%d", grpcPort),
 		"--topo-global-server-addresses", etcdAddress,
 		"--topo-global-root", topoGlobalRoot,
-		"--topo-implementation", topoBackend,
 		"--cell", cell,
 		"--database", database,
 		"--table-group", tableGroup,
+		"--shard", shard,
 		"--service-id", serviceID,
 		"--pgctld-addr", pgctldResult.Address,
 		"--log-level", logLevel,
@@ -791,6 +803,9 @@ func (p *localProvisioner) provisionMultipooler(ctx context.Context, req *provis
 		"--pooler-dir", poolerDir,
 		"--pg-port", fmt.Sprintf("%d", pgPort),
 		"--hostname", "localhost",
+		"--pgbackrest-stanza", "multigres",
+		"--connpool-admin-password", "postgres", // Password created in initializePgctldDirectories
+		"--socket-file", pgSocketFile, // PostgreSQL Unix socket for trust auth
 	}
 
 	// Add socket file if configured
@@ -817,7 +832,7 @@ func (p *localProvisioner) provisionMultipooler(ctx context.Context, req *provis
 
 	// Wait for multipooler to be ready
 	servicePorts := map[string]int{"http_port": httpPort, "grpc_port": grpcPort}
-	if err := p.waitForServiceReady(ctx, "multipooler", "localhost", servicePorts, 10*time.Second); err != nil {
+	if err := p.waitForServiceReady(ctx, constants.ServiceMultipooler, "localhost", servicePorts, 10*time.Second); err != nil {
 		logs := p.readServiceLogs(logFile, 20)
 		return nil, fmt.Errorf("multipooler readiness check failed: %w\n\nLast 20 lines from multipooler logs:\n%s", err, logs)
 	}
@@ -826,7 +841,7 @@ func (p *localProvisioner) provisionMultipooler(ctx context.Context, req *provis
 	// Create provision state
 	service := &LocalProvisionedService{
 		ID:         serviceID,
-		Service:    "multipooler",
+		Service:    constants.ServiceMultipooler,
 		PID:        multipoolerCmd.Process.Pid,
 		BinaryPath: multipoolerBinary,
 		Ports:      map[string]int{"http_port": httpPort, "grpc_port": grpcPort},
@@ -842,7 +857,7 @@ func (p *localProvisioner) provisionMultipooler(ctx context.Context, req *provis
 	}
 
 	return &provisioner.ProvisionResult{
-		ServiceName: "multipooler",
+		ServiceName: constants.ServiceMultipooler,
 		FQDN:        "localhost",
 		Ports: map[string]int{
 			"http_port": httpPort,
@@ -865,7 +880,7 @@ type PgctldProvisionResult struct {
 // provisionMultiOrch provisions multi-orchestrator using local binary
 func (p *localProvisioner) provisionMultiOrch(ctx context.Context, req *provisioner.ProvisionRequest) (*provisioner.ProvisionResult, error) {
 	// Sanity check: ensure this method is called for multiorch service
-	if req.Service != "multiorch" {
+	if req.Service != constants.ServiceMultiorch {
 		return nil, fmt.Errorf("provisionMultiOrch called for wrong service type: %s", req.Service)
 	}
 
@@ -873,14 +888,14 @@ func (p *localProvisioner) provisionMultiOrch(ctx context.Context, req *provisio
 	cell := req.Params["cell"].(string)
 
 	// Check if multiorch is already running
-	existingService, err := p.findRunningDbService("multiorch", req.DatabaseName, cell)
+	existingService, err := p.findRunningDbService(constants.ServiceMultiorch, req.DatabaseName, cell)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check for existing multiorch service: %w", err)
 	}
 	if existingService != nil {
 		fmt.Printf("multiorch is already running (PID %d) ✓\n", existingService.PID)
 		return &provisioner.ProvisionResult{
-			ServiceName: "multiorch",
+			ServiceName: constants.ServiceMultiorch,
 			FQDN:        existingService.FQDN,
 			Ports:       existingService.Ports,
 			Metadata: map[string]any{
@@ -892,12 +907,11 @@ func (p *localProvisioner) provisionMultiOrch(ctx context.Context, req *provisio
 
 	// Get parameters from request
 	etcdAddress := req.Params["etcd_address"].(string)
-	topoBackend := req.Params["topo_backend"].(string)
 	topoGlobalRoot := req.Params["topo_global_root"].(string)
 	cell = req.Params["cell"].(string)
 
 	// Get cell-specific multiorch config
-	multiorchConfig, err := p.getCellServiceConfig(cell, "multiorch")
+	multiorchConfig, err := p.getCellServiceConfig(cell, constants.ServiceMultiorch)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get multiorch config for cell %s: %w", cell, err)
 	}
@@ -921,7 +935,7 @@ func (p *localProvisioner) provisionMultiOrch(ctx context.Context, req *provisio
 	}
 
 	// Find multiorch binary
-	multiorchBinary, err := p.findBinary("multiorch", multiorchConfig)
+	multiorchBinary, err := p.findBinary(constants.ServiceMultiorch, multiorchConfig)
 	if err != nil {
 		return nil, fmt.Errorf("multiorch binary not found: %w", err)
 	}
@@ -930,7 +944,7 @@ func (p *localProvisioner) provisionMultiOrch(ctx context.Context, req *provisio
 	serviceID := stringutil.RandomString(8)
 
 	// Create log file path
-	logFile, err := p.createLogFile("multiorch", serviceID, req.DatabaseName)
+	logFile, err := p.createLogFile(constants.ServiceMultiorch, serviceID, req.DatabaseName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create log file: %w", err)
 	}
@@ -941,11 +955,22 @@ func (p *localProvisioner) provisionMultiOrch(ctx context.Context, req *provisio
 		"--grpc-port", fmt.Sprintf("%d", grpcPort),
 		"--topo-global-server-addresses", etcdAddress,
 		"--topo-global-root", topoGlobalRoot,
-		"--topo-implementation", topoBackend,
 		"--cell", cell,
+		"--watch-targets", req.DatabaseName,
 		"--log-level", logLevel,
 		"--log-output", logFile,
 		"--hostname", "localhost",
+	}
+
+	// Add optional interval configs if specified
+	if interval, ok := multiorchConfig["cluster_metadata_refresh_interval"].(string); ok && interval != "" {
+		args = append(args, "--cluster-metadata-refresh-interval", interval)
+	}
+	if interval, ok := multiorchConfig["pooler_health_check_interval"].(string); ok && interval != "" {
+		args = append(args, "--pooler-health-check-interval", interval)
+	}
+	if interval, ok := multiorchConfig["recovery_cycle_interval"].(string); ok && interval != "" {
+		args = append(args, "--recovery-cycle-interval", interval)
 	}
 
 	// Start multiorch process
@@ -964,7 +989,7 @@ func (p *localProvisioner) provisionMultiOrch(ctx context.Context, req *provisio
 
 	// Wait for multiorch to be ready
 	servicePorts := map[string]int{"http_port": httpPort, "grpc_port": grpcPort}
-	if err := p.waitForServiceReady(ctx, "multiorch", "localhost", servicePorts, 10*time.Second); err != nil {
+	if err := p.waitForServiceReady(ctx, constants.ServiceMultiorch, "localhost", servicePorts, 10*time.Second); err != nil {
 		logs := p.readServiceLogs(logFile, 20)
 		return nil, fmt.Errorf("multiorch readiness check failed: %w\n\nLast 20 lines from multiorch logs:\n%s", err, logs)
 	}
@@ -973,7 +998,7 @@ func (p *localProvisioner) provisionMultiOrch(ctx context.Context, req *provisio
 	// Create provision state
 	service := &LocalProvisionedService{
 		ID:         serviceID,
-		Service:    "multiorch",
+		Service:    constants.ServiceMultiorch,
 		PID:        multiorchCmd.Process.Pid,
 		BinaryPath: multiorchBinary,
 		Ports:      map[string]int{"http_port": httpPort, "grpc_port": grpcPort},
@@ -989,7 +1014,7 @@ func (p *localProvisioner) provisionMultiOrch(ctx context.Context, req *provisio
 	}
 
 	return &provisioner.ProvisionResult{
-		ServiceName: "multiorch",
+		ServiceName: constants.ServiceMultiorch,
 		FQDN:        "localhost",
 		Ports: map[string]int{
 			"http_port": httpPort,
@@ -1064,15 +1089,16 @@ func (p *localProvisioner) stopService(ctx context.Context, req *provisioner.Dep
 	switch req.Service {
 	case "etcd":
 		fallthrough
-	case "multigateway":
+	case constants.ServiceMultigateway:
 		fallthrough
-	case "multipooler":
+	case constants.ServiceMultiorch:
 		fallthrough
-	case "multiorch":
-		fallthrough
-	case "multiadmin":
+	case constants.ServiceMultiadmin:
 		return p.deprovisionService(ctx, req)
-	case "pgctld":
+	case constants.ServiceMultipooler:
+		// multipooler requires special handling to clean up pgbackrest logs
+		return p.deprovisionMultipooler(ctx, req)
+	case constants.ServicePgctld:
 		// pgctld requires special handling to stop PostgreSQL first
 		service, err := p.loadServiceState(req)
 		if err != nil {
@@ -1124,6 +1150,22 @@ func (p *localProvisioner) deprovisionService(ctx context.Context, req *provisio
 		if err := os.RemoveAll(service.DataDir); err != nil {
 			return fmt.Errorf("failed to remove etcd data directory: %w", err)
 		}
+	}
+
+	return nil
+}
+
+// deprovisionMultipooler stops a multipooler service instance with special cleanup for pgbackrest logs
+func (p *localProvisioner) deprovisionMultipooler(ctx context.Context, req *provisioner.DeprovisionRequest) error {
+	// First, perform standard service deprovisioning
+	if err := p.deprovisionService(ctx, req); err != nil {
+		return err
+	}
+
+	// Clean up pgbackrest logs (specific to multipooler)
+	pgBackRestLogPath := filepath.Join(p.config.RootWorkingDir, "logs", "dbs", "postgres", "pgbackrest")
+	if err := os.RemoveAll(pgBackRestLogPath); err != nil && !os.IsNotExist(err) {
+		fmt.Printf("Warning: failed to clean up pgbackrest logs: %v\n", err)
 	}
 
 	return nil
@@ -1233,6 +1275,13 @@ func (p *localProvisioner) Bootstrap(ctx context.Context) ([]*provisioner.Provis
 	}
 	fmt.Println("")
 
+	// Generate pgBackRest configurations for all poolers
+	fmt.Println("=== Generating pgBackRest configurations ===")
+	if err := p.GeneratePgBackRestConfigs(); err != nil {
+		return nil, fmt.Errorf("failed to generate pgBackRest configurations: %w", err)
+	}
+	fmt.Println("")
+
 	topoConfig, err := p.getTopologyConfig()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get topology config: %w", err)
@@ -1255,10 +1304,9 @@ func (p *localProvisioner) Bootstrap(ctx context.Context) ([]*provisioner.Provis
 	// Provision multiadmin (global admin service)
 	fmt.Println("=== Starting MultiAdmin ===")
 	multiadminReq := &provisioner.ProvisionRequest{
-		Service: "multiadmin",
+		Service: constants.ServiceMultiadmin,
 		Params: map[string]any{
 			"etcd_address":     etcdAddress,
-			"topo_backend":     topoConfig.Backend,
 			"topo_global_root": topoConfig.GlobalRootPath,
 		},
 	}
@@ -1289,66 +1337,7 @@ func (p *localProvisioner) Bootstrap(ctx context.Context) ([]*provisioner.Provis
 
 	allResults = append(allResults, databaseResults...)
 
-	// Generate Prometheus configuration for observability
-	if err := p.generatePrometheusConfig(allResults); err != nil {
-		return nil, fmt.Errorf("failed to generate Prometheus configuration: %w", err)
-	}
-
 	return allResults, nil
-}
-
-// generatePrometheusConfig creates a Prometheus configuration file with all running services
-func (p *localProvisioner) generatePrometheusConfig(results []*provisioner.ProvisionResult) error {
-	// Create observability directory
-	obsDir := p.getObservabilityDir()
-	if err := os.MkdirAll(obsDir, 0o755); err != nil {
-		return fmt.Errorf("failed to create observability directory: %w", err)
-	}
-
-	// Service target for template
-	type ServiceTarget struct {
-		Name string
-		Host string
-		Port int
-	}
-
-	// Collect all services with HTTP ports
-	var services []ServiceTarget
-	for _, result := range results {
-		if httpPort, hasHTTP := result.Ports["http_port"]; hasHTTP {
-			services = append(services, ServiceTarget{
-				Name: result.ServiceName,
-				Host: result.FQDN,
-				Port: httpPort,
-			})
-		}
-	}
-
-	// Parse and execute template
-	tmpl, err := template.New("prometheus").Parse(prometheusTemplate)
-	if err != nil {
-		return fmt.Errorf("failed to parse Prometheus template: %w", err)
-	}
-
-	prometheusPath := filepath.Join(obsDir, "prometheus.yml")
-	f, err := os.Create(prometheusPath)
-	if err != nil {
-		return fmt.Errorf("failed to create Prometheus config file: %w", err)
-	}
-	defer f.Close()
-
-	data := struct {
-		Services []ServiceTarget
-	}{
-		Services: services,
-	}
-
-	if err := tmpl.Execute(f, data); err != nil {
-		return fmt.Errorf("failed to execute Prometheus template: %w", err)
-	}
-
-	fmt.Printf("📊 - Generated Prometheus config: %s\n", prometheusPath)
-	return nil
 }
 
 // Teardown shuts down all services (reverse of Bootstrap)
@@ -1374,9 +1363,9 @@ func (p *localProvisioner) Teardown(ctx context.Context, clean bool) error {
 		fmt.Printf("Warning: failed to load global service states: %v\n", err)
 	} else {
 		for _, service := range globalServices {
-			if service.Service == "multiadmin" {
+			if service.Service == constants.ServiceMultiadmin {
 				req := &provisioner.DeprovisionRequest{
-					Service:      "multiadmin",
+					Service:      constants.ServiceMultiadmin,
 					ServiceID:    service.ID,
 					DatabaseName: "", // multiadmin is a global service
 					Clean:        clean,
@@ -1429,6 +1418,11 @@ func (p *localProvisioner) Teardown(ctx context.Context, clean bool) error {
 		socketsDir := filepath.Join(p.config.RootWorkingDir, "sockets")
 		if err := p.cleanupSocketsDirectory(socketsDir); err != nil {
 			fmt.Printf("Warning: failed to clean up sockets directory: %v\n", err)
+		}
+
+		spoolDir := filepath.Join(p.config.RootWorkingDir, "spool")
+		if err := p.cleanupSpoolDirectory(spoolDir); err != nil {
+			fmt.Printf("Warning: failed to clean up spool directory: %v\n", err)
 		}
 	}
 
@@ -1498,6 +1492,20 @@ func (p *localProvisioner) cleanupSocketsDirectory(socketsDir string) error {
 	return nil
 }
 
+// cleanupSpoolDirectory removes the entire spool directory and all its contents
+func (p *localProvisioner) cleanupSpoolDirectory(spoolDir string) error {
+	if _, err := os.Stat(spoolDir); os.IsNotExist(err) {
+		return nil // Directory doesn't exist, nothing to clean up
+	}
+
+	if err := os.RemoveAll(spoolDir); err != nil {
+		return fmt.Errorf("failed to remove spool directory %s: %w", spoolDir, err)
+	}
+
+	fmt.Printf("Cleaned up spool directory: %s\n", spoolDir)
+	return nil
+}
+
 // getGRPCSocketFile extracts and prepares the gRPC socket file path from a service config.
 // It returns the absolute path to the socket file and ensures the socket directory exists.
 // Returns empty string if no socket file is configured.
@@ -1553,7 +1561,7 @@ func (p *localProvisioner) ProvisionDatabase(ctx context.Context, databaseName s
 	fmt.Println("=== Registering database in topology ===")
 	fmt.Printf("⚙️  - Registering database: %s\n", databaseName)
 
-	ts, err := topo.OpenServer(topoConfig.Backend, topoConfig.GlobalRootPath, []string{etcdAddress})
+	ts, err := topoclient.OpenServer(topoclient.DefaultTopoImplementation, topoConfig.GlobalRootPath, []string{etcdAddress}, topoclient.NewDefaultTopoConfig())
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to topology server: %w", err)
 	}
@@ -1563,14 +1571,14 @@ func (p *localProvisioner) ProvisionDatabase(ctx context.Context, databaseName s
 	_, err = ts.GetDatabase(ctx, databaseName)
 	if err == nil {
 		fmt.Printf("⚙️  - Database \"%s\" detected — reusing existing database ✓\n", databaseName)
-	} else if errors.Is(err, &topo.TopoError{Code: topo.NoNode}) {
+	} else if errors.Is(err, &topoclient.TopoError{Code: topoclient.NoNode}) {
 		// Create the database if it doesn't exist
 		fmt.Printf("⚙️  - Creating database \"%s\" with cells: [%s]...\n", databaseName, strings.Join(cellNames, ", "))
 
 		databaseConfig := &clustermetadatapb.Database{
 			Name:             databaseName,
-			BackupLocation:   "",        // TODO: Configure backup location
-			DurabilityPolicy: "none",    // Default durability policy
+			BackupLocation:   p.config.BackupRepoPath,
+			DurabilityPolicy: "ANY_2",   // Default durability policy for bootstrap
 			Cells:            cellNames, // Register with all cells
 		}
 
@@ -1584,80 +1592,109 @@ func (p *localProvisioner) ProvisionDatabase(ctx context.Context, databaseName s
 	}
 	fmt.Println("")
 
-	var results []*provisioner.ProvisionResult
+	// Provision all services in parallel across all cells.
+	// Multiorch's bootstrap action has a quorum check that will wait for enough
+	// poolers to be available before attempting bootstrap, so strict ordering
+	// is not required.
+	fmt.Println("=== Starting all services in parallel ===")
 
-	// Provision services in each cell
-	for _, cellName := range cellNames {
-		fmt.Printf("=== Provisioning services in cell: %s ===\n", cellName)
-
-		// Provision multigateway
-		fmt.Printf("=== Starting Multigateway in %s ===\n", cellName)
-		multigatewayReq := &provisioner.ProvisionRequest{
-			Service:      "multigateway",
-			DatabaseName: databaseName,
-			Params: map[string]any{
-				"etcd_address":     etcdAddress,
-				"topo_backend":     topoConfig.Backend,
-				"topo_global_root": topoConfig.GlobalRootPath,
-				"cell":             cellName,
-			},
-		}
-
-		multigatewayResult, err := p.provisionMultigateway(ctx, multigatewayReq)
-		if err != nil {
-			return nil, fmt.Errorf("failed to provision multigateway for database %s in cell %s: %w", databaseName, cellName, err)
-		}
-		if httpPort, ok := multigatewayResult.Ports["http_port"]; ok {
-			fmt.Printf("🌐 - Available at: http://%s:%d\n", multigatewayResult.FQDN, httpPort)
-		}
-		results = append(results, multigatewayResult)
-
-		// Provision multipooler
-		fmt.Printf("\n=== Starting Multipooler in %s ===\n", cellName)
-		multipoolerReq := &provisioner.ProvisionRequest{
-			Service:      "multipooler",
-			DatabaseName: databaseName,
-			Params: map[string]any{
-				"etcd_address":     etcdAddress,
-				"topo_backend":     topoConfig.Backend,
-				"topo_global_root": topoConfig.GlobalRootPath,
-				"cell":             cellName,
-			},
-		}
-
-		multipoolerResult, err := p.provisionMultipooler(ctx, multipoolerReq)
-		if err != nil {
-			return nil, fmt.Errorf("failed to provision multipooler for database %s in cell %s: %w", databaseName, cellName, err)
-		}
-		if grpcPort, ok := multipoolerResult.Ports["grpc_port"]; ok {
-			fmt.Printf("🌐 - Available at: %s:%d\n", multipoolerResult.FQDN, grpcPort)
-		}
-		results = append(results, multipoolerResult)
-
-		// Provision multiorch
-		fmt.Printf("\n=== Starting MultiOrchestrator in %s ===\n", cellName)
-		multiorchReq := &provisioner.ProvisionRequest{
-			Service:      "multiorch",
-			DatabaseName: databaseName,
-			Params: map[string]any{
-				"etcd_address":     etcdAddress,
-				"topo_backend":     topoConfig.Backend,
-				"topo_global_root": topoConfig.GlobalRootPath,
-				"cell":             cellName,
-			},
-		}
-
-		multiorchResult, err := p.provisionMultiOrch(ctx, multiorchReq)
-		if err != nil {
-			return nil, fmt.Errorf("failed to provision multiorch for database %s in cell %s: %w", databaseName, cellName, err)
-		}
-		if grpcPort, ok := multiorchResult.Ports["grpc_port"]; ok {
-			fmt.Printf("🌐 - Available at: %s:%d\n", multiorchResult.FQDN, grpcPort)
-		}
-		results = append(results, multiorchResult)
-
-		fmt.Printf("\n✓ Cell %s provisioned successfully\n\n", cellName)
+	type provisionResult struct {
+		result *provisioner.ProvisionResult
+		err    error
 	}
+
+	// Calculate total number of services to provision
+	numServices := len(cellNames) * 3 // multigateway + multipooler + multiorch per cell
+	resultsChan := make(chan provisionResult, numServices)
+
+	// Start all services in parallel
+	for _, cellName := range cellNames {
+		cell := cellName // capture for goroutine
+
+		// Start multigateway
+		go func() {
+			req := &provisioner.ProvisionRequest{
+				Service:      constants.ServiceMultigateway,
+				DatabaseName: databaseName,
+				Params: map[string]any{
+					"etcd_address":     etcdAddress,
+					"topo_global_root": topoConfig.GlobalRootPath,
+					"cell":             cell,
+				},
+			}
+			result, err := p.provisionMultigateway(ctx, req)
+			if err != nil {
+				resultsChan <- provisionResult{err: fmt.Errorf("failed to provision multigateway in cell %s: %w", cell, err)}
+				return
+			}
+			resultsChan <- provisionResult{result: result}
+		}()
+
+		// Start multipooler
+		go func() {
+			req := &provisioner.ProvisionRequest{
+				Service:      constants.ServiceMultipooler,
+				DatabaseName: databaseName,
+				Params: map[string]any{
+					"etcd_address":     etcdAddress,
+					"topo_global_root": topoConfig.GlobalRootPath,
+					"cell":             cell,
+				},
+			}
+			result, err := p.provisionMultipooler(ctx, req)
+			if err != nil {
+				resultsChan <- provisionResult{err: fmt.Errorf("failed to provision multipooler in cell %s: %w", cell, err)}
+				return
+			}
+			resultsChan <- provisionResult{result: result}
+		}()
+
+		// Start multiorch
+		go func() {
+			req := &provisioner.ProvisionRequest{
+				Service:      constants.ServiceMultiorch,
+				DatabaseName: databaseName,
+				Params: map[string]any{
+					"etcd_address":     etcdAddress,
+					"topo_global_root": topoConfig.GlobalRootPath,
+					"cell":             cell,
+				},
+			}
+			result, err := p.provisionMultiOrch(ctx, req)
+			if err != nil {
+				resultsChan <- provisionResult{err: fmt.Errorf("failed to provision multiorch in cell %s: %w", cell, err)}
+				return
+			}
+			resultsChan <- provisionResult{result: result}
+		}()
+	}
+
+	// Collect all results
+	var results []*provisioner.ProvisionResult
+	var provisionErrors []error
+	for range numServices {
+		res := <-resultsChan
+		if res.err != nil {
+			provisionErrors = append(provisionErrors, res.err)
+		} else {
+			results = append(results, res.result)
+		}
+	}
+
+	// Report any errors
+	if len(provisionErrors) > 0 {
+		return nil, fmt.Errorf("failed to provision services: %v", provisionErrors)
+	}
+
+	fmt.Println("")
+	fmt.Printf("✓ All cells provisioned successfully\n\n")
+
+	// Skip pgBackRest stanza initialization during bootstrap
+	// Stanzas should be created after replication is configured between cells
+	// to avoid "more than one primary cluster found" errors
+	// TODO: Initialize stanzas after replication is set up
+	fmt.Println("=== Skipping pgBackRest stanza initialization (will be done after replication setup) ===")
+	fmt.Println("")
 
 	fmt.Printf("Database %s provisioned successfully across %d cells with %d total services\n", databaseName, len(cellNames), len(results))
 	return results, nil
@@ -1673,7 +1710,7 @@ func (p *localProvisioner) setupDefaultCell(ctx context.Context, cellName, etcdA
 	topoConfig := p.config.Topology
 
 	// Create topology store using configured backend
-	ts, err := topo.OpenServer(topoConfig.Backend, topoConfig.GlobalRootPath, []string{etcdAddress})
+	ts, err := topoclient.OpenServer(topoclient.DefaultTopoImplementation, topoConfig.GlobalRootPath, []string{etcdAddress}, topoclient.NewDefaultTopoConfig())
 	if err != nil {
 		return fmt.Errorf("failed to connect to topology server: %w", err)
 	}
@@ -1687,7 +1724,7 @@ func (p *localProvisioner) setupDefaultCell(ctx context.Context, cellName, etcdA
 	}
 
 	// Create the cell if it doesn't exist
-	if errors.Is(err, &topo.TopoError{Code: topo.NoNode}) {
+	if errors.Is(err, &topoclient.TopoError{Code: topoclient.NoNode}) {
 		fmt.Printf("⚙️  - Creating cell \"%s\"...\n", cellName)
 
 		// Get the specific cell config for this cell name
@@ -1790,23 +1827,6 @@ func (p *localProvisioner) getCellNames() ([]string, error) {
 	return names, nil
 }
 
-// getCellIndex returns the index of a cell in the list of cell names (for port calculation)
-func (p *localProvisioner) getCellIndex(cellName string) (int, error) {
-	cells, err := p.getAllCells()
-	if err != nil {
-		return -1, err
-	}
-
-	// Find the cell by name and return its index
-	for i, cell := range cells {
-		if cell.Name == cellName {
-			return i, nil
-		}
-	}
-
-	return -1, fmt.Errorf("cell %s not found", cellName)
-}
-
 // getCellByName returns the cell configuration for a specific cell name
 func (p *localProvisioner) getCellByName(cellName string) (*CellConfig, error) {
 	if p.config == nil {
@@ -1837,13 +1857,6 @@ func (p *localProvisioner) ValidateConfig(config map[string]any) error {
 	}
 	if err := yaml.Unmarshal(yamlData, typedConfig); err != nil {
 		return fmt.Errorf("failed to unmarshal config: %w", err)
-	}
-
-	// Validate topology backend
-	availableBackends := topo.GetAvailableImplementations()
-	validBackend := slices.Contains(availableBackends, typedConfig.Topology.Backend)
-	if !validBackend {
-		return fmt.Errorf("invalid topo backend: %s (available: %v)", typedConfig.Topology.Backend, availableBackends)
 	}
 
 	// Validate required topology fields
@@ -1969,28 +1982,10 @@ func (p *localProvisioner) validateBinaryPaths(config *LocalProvisionerConfig) e
 
 // validateBinaryExists checks if a binary path exists and is executable
 func (p *localProvisioner) validateBinaryExists(binaryPath, serviceName string) error {
-	// Convert to absolute path if it's relative
-	var fullPath string
-	if filepath.IsAbs(binaryPath) {
-		fullPath = binaryPath
-	} else {
-		// Make it relative to current directory
-		fullPath = filepath.Join(".", binaryPath)
-	}
-
-	// Check if the binary exists and is executable
-	info, err := os.Stat(fullPath)
+	// Use exec.LookPath to find and validate the binary
+	_, err := exec.LookPath(binaryPath)
 	if err != nil {
-		return fmt.Errorf("  %s binary not found at %s: %w", serviceName, binaryPath, err)
-	}
-
-	if info.IsDir() {
-		return fmt.Errorf("  %s path is a directory, not a binary: %s", serviceName, binaryPath)
-	}
-
-	// Check if it's executable (on Unix systems)
-	if info.Mode()&0o111 == 0 {
-		return fmt.Errorf("  %s binary is not executable: %s", serviceName, binaryPath)
+		return fmt.Errorf("  %s binary not found: %s: %w", serviceName, binaryPath, err)
 	}
 
 	return nil
@@ -2050,7 +2045,7 @@ func init() {
 	if binDir, err := getExecutablePath(); err == nil {
 		pathutil.PrependPath(binDir)
 	} else {
-		slog.Error(fmt.Sprintf("Local Provisioner failed to get executable path: %v", err))
-		os.Exit(1)
+		slog.Error("local provisioner failed to get executable path", "error", err)
+		panic(fmt.Sprintf("local provisioner failed to get executable path: %v", err))
 	}
 }

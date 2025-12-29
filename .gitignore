@@ -13,9 +13,7 @@ bin/
 
 # Code coverage profiles and other test artifacts
 *.out
-coverage.*
-*.coverprofile
-profile.cov
+/coverage/
 
 # Dependency directories (remove the comment below to include it)
 vendor/
@@ -56,14 +54,16 @@ multigres_local/
 super-linter-output/
 .mypy_cache/
 
-# Claude Code settings
-.claude/
+# Claude Code local settings
+.claude/settings.local.json
+.claude/commands/*.local.md
+CLAUDE.local.md
 
 # expected results of a test
 go/parser/testdata/expected
 
 # files copied from external sources
-go/web/templates/css/pico.*
+go/common/web/templates/css/pico.*
 
 # y.output file
 y.output

@@ -17,6 +17,9 @@ package endtoend
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,10 +27,13 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 
-	"github.com/multigres/multigres/go/grpccommon"
+	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
+	multipoolermanagerpb "github.com/multigres/multigres/go/pb/multipoolermanager"
+	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	multipoolerpb "github.com/multigres/multigres/go/pb/multipoolerservice"
 	querypb "github.com/multigres/multigres/go/pb/query"
+	"github.com/multigres/multigres/go/tools/grpccommon"
 )
 
 // MultiPoolerTestClient wraps the gRPC client for testing
@@ -54,21 +60,6 @@ func NewMultiPoolerTestClient(addr string) (*MultiPoolerTestClient, error) {
 
 	client := multipoolerpb.NewMultiPoolerServiceClient(conn)
 
-	// Test the connection by making a simple RPC call with a short timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	// Try to make a basic ExecuteQuery call to test connectivity
-	_, err = client.ExecuteQuery(ctx, &multipoolerpb.ExecuteQueryRequest{
-		Query: "SELECT 1",
-	})
-	// We expect this to fail for non-existent servers
-	// The specific error doesn't matter, we just want to know if we can connect
-	if err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("failed to connect to multipooler at %s: %w", addr, err)
-	}
-
 	return &MultiPoolerTestClient{
 		conn:   conn,
 		client: client,
@@ -79,8 +70,10 @@ func NewMultiPoolerTestClient(addr string) (*MultiPoolerTestClient, error) {
 // ExecuteQuery executes a SQL query via the multipooler gRPC service
 func (c *MultiPoolerTestClient) ExecuteQuery(ctx context.Context, query string, maxRows uint64) (*querypb.QueryResult, error) {
 	req := &multipoolerpb.ExecuteQueryRequest{
-		Query:   query,
-		MaxRows: maxRows,
+		Query: query,
+		Options: &querypb.ExecuteOptions{
+			MaxRows: maxRows,
+		},
 		CallerId: &mtrpcpb.CallerID{
 			Principal:    "test-user",
 			Component:    "endtoend-test",
@@ -110,11 +103,79 @@ func (c *MultiPoolerTestClient) Address() string {
 	return c.addr
 }
 
+// IsPrimary checks if the multipooler is the primary by calling the Status RPC.
+// Returns true if the pooler is PRIMARY, false otherwise.
+func IsPrimary(addr string) (bool, error) {
+	conn, err := grpc.NewClient(addr, grpccommon.LocalClientDialOptions()...)
+	if err != nil {
+		return false, fmt.Errorf("failed to create client: %w", err)
+	}
+	defer conn.Close()
+
+	client := multipoolermanagerpb.NewMultiPoolerManagerClient(conn)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	resp, err := client.Status(ctx, &multipoolermanagerdatapb.StatusRequest{})
+	if err != nil {
+		return false, fmt.Errorf("Status RPC failed: %w", err)
+	}
+
+	if resp == nil || resp.Status == nil {
+		return false, fmt.Errorf("received nil status response")
+	}
+
+	return resp.Status.PoolerType == clustermetadatapb.PoolerType_PRIMARY, nil
+}
+
+// WaitForPoolerTypeAssigned waits for the pooler type to be assigned (either PRIMARY or REPLICA, not UNKNOWN).
+// This is useful when the test needs to call RPCs that require the pooler type to be known.
+func WaitForPoolerTypeAssigned(t *testing.T, addr string, timeout time.Duration) (clustermetadatapb.PoolerType, error) {
+	t.Helper()
+
+	conn, err := grpc.NewClient(addr, grpccommon.LocalClientDialOptions()...)
+	if err != nil {
+		return clustermetadatapb.PoolerType_UNKNOWN, fmt.Errorf("failed to create client: %w", err)
+	}
+	defer conn.Close()
+
+	client := multipoolermanagerpb.NewMultiPoolerManagerClient(conn)
+
+	var poolerType clustermetadatapb.PoolerType
+	require.Eventually(t, func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		resp, err := client.Status(ctx, &multipoolermanagerdatapb.StatusRequest{})
+		cancel()
+
+		if err != nil {
+			t.Logf("Waiting for pooler type at %s... (Status RPC error: %v)", addr, err)
+			return false
+		}
+
+		if resp == nil || resp.Status == nil {
+			t.Logf("Waiting for pooler type at %s... (nil status response)", addr)
+			return false
+		}
+
+		poolerType = resp.Status.PoolerType
+		if poolerType == clustermetadatapb.PoolerType_UNKNOWN {
+			t.Logf("Waiting for pooler type at %s... (currently UNKNOWN)", addr)
+			return false
+		}
+
+		t.Logf("Pooler type at %s is now %s", addr, poolerType.String())
+		return true
+	}, timeout, 500*time.Millisecond, "pooler type was not assigned within %v", timeout)
+
+	return poolerType, nil
+}
+
 // Test helper functions
 
 // TestBasicSelect tests a basic SELECT query
 func TestBasicSelect(t *testing.T, client *MultiPoolerTestClient) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	t.Helper()
 
@@ -133,7 +194,7 @@ func TestBasicSelect(t *testing.T, client *MultiPoolerTestClient) {
 // TestCreateTable tests creating a table
 func TestCreateTable(t *testing.T, client *MultiPoolerTestClient, tableName string) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 
 	createSQL := fmt.Sprintf(`
@@ -154,9 +215,9 @@ func TestCreateTable(t *testing.T, client *MultiPoolerTestClient, tableName stri
 }
 
 // TestInsertData tests inserting data into a table
-func TestInsertData(t *testing.T, client *MultiPoolerTestClient, tableName string, testData []map[string]interface{}) {
+func TestInsertData(t *testing.T, client *MultiPoolerTestClient, tableName string, testData []map[string]any) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 
 	for i, data := range testData {
@@ -179,7 +240,7 @@ func TestSelectData(t *testing.T, client *MultiPoolerTestClient, tableName strin
 	t.Helper()
 
 	selectSQL := fmt.Sprintf("SELECT id, name, value FROM %s ORDER BY id", tableName)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 
 	result, err := client.ExecuteQuery(ctx, selectSQL, 0)
@@ -204,7 +265,7 @@ func TestSelectData(t *testing.T, client *MultiPoolerTestClient, tableName strin
 // TestQueryLimits tests the max_rows parameter
 func TestQueryLimits(t *testing.T, client *MultiPoolerTestClient, tableName string) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 
 	selectSQL := fmt.Sprintf("SELECT * FROM %s", tableName)
@@ -223,7 +284,7 @@ func TestUpdateData(t *testing.T, client *MultiPoolerTestClient, tableName strin
 
 	updateSQL := fmt.Sprintf("UPDATE %s SET value = value * 2 WHERE id = 1", tableName)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 	result, err := client.ExecuteQuery(ctx, updateSQL, 0)
 	require.NoError(t, err, "UPDATE should succeed")
@@ -240,7 +301,7 @@ func TestDeleteData(t *testing.T, client *MultiPoolerTestClient, tableName strin
 	t.Helper()
 
 	deleteSQL := fmt.Sprintf("DELETE FROM %s WHERE id = 1", tableName)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 
 	result, err := client.ExecuteQuery(ctx, deleteSQL, 0)
@@ -258,7 +319,7 @@ func TestDropTable(t *testing.T, client *MultiPoolerTestClient, tableName string
 	t.Helper()
 
 	dropSQL := fmt.Sprintf("DROP TABLE IF EXISTS %s", tableName)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 
 	result, err := client.ExecuteQuery(ctx, dropSQL, 0)
@@ -295,7 +356,7 @@ func TestDataTypes(t *testing.T, client *MultiPoolerTestClient) {
 		{"UUID", "SELECT gen_random_uuid()", "UUID"},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 
 	for _, tt := range tests {
@@ -315,7 +376,7 @@ func TestMultigresSchemaExists(t *testing.T, client *MultiPoolerTestClient) {
 	t.Helper()
 
 	query := "SELECT nspname::text FROM pg_catalog.pg_namespace WHERE nspname = 'multigres'"
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 
 	result, err := client.ExecuteQuery(ctx, query, 10)
@@ -341,7 +402,7 @@ func TestHeartbeatTableExists(t *testing.T, client *MultiPoolerTestClient) {
 		WHERE n.nspname = 'multigres' AND c.relname = 'heartbeat' AND c.relkind = 'r'
 	`
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 
 	result, err := client.ExecuteQuery(ctx, tableQuery, 10)
@@ -407,7 +468,7 @@ func TestPrimaryDetection(t *testing.T, client *MultiPoolerTestClient) {
 
 	// Query pg_is_in_recovery() to check if connected to primary or standby
 	query := "SELECT pg_is_in_recovery()"
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 
 	result, err := client.ExecuteQuery(ctx, query, 1)
@@ -417,8 +478,118 @@ func TestPrimaryDetection(t *testing.T, client *MultiPoolerTestClient) {
 
 	inRecovery := string(result.Rows[0].Values[0])
 	t.Logf("pg_is_in_recovery() returned: %s", inRecovery)
+	// Note: PostgreSQL wire protocol returns boolean as 't' or 'f' in text format
+	// inRecovery is "f" for primary, "t" for standby/replica
+}
 
-	// In test environments, we're typically connected to a primary
-	// so pg_is_in_recovery() should return false
-	assert.Equal(t, "false", inRecovery, "Test database should be primary (not in recovery)")
+// printServiceLogs prints the last N lines of a service's log file for debugging.
+// If lines is 0, prints all lines.
+// serviceName is the name of the service (e.g., "multiorch", "multipooler").
+// database is the database name (e.g., "postgres") or empty for global services.
+// serviceID is the service identifier used in the log filename (e.g., "zone1-multiorch").
+// If serviceID is empty, prints all log files for the service.
+func printServiceLogs(t *testing.T, configDir, serviceName, database, serviceID string, lines int) {
+	t.Helper()
+
+	var logDir string
+	if database != "" {
+		logDir = filepath.Join(configDir, "logs", "dbs", database, serviceName)
+	} else {
+		logDir = filepath.Join(configDir, "logs", serviceName)
+	}
+
+	// If serviceID is empty, print all log files in the directory
+	if serviceID == "" {
+		files, err := os.ReadDir(logDir)
+		if err != nil {
+			t.Logf("Could not read log directory %s: %v", logDir, err)
+			return
+		}
+		for _, file := range files {
+			if !file.IsDir() && filepath.Ext(file.Name()) == ".log" {
+				sid := strings.TrimSuffix(file.Name(), ".log")
+				printServiceLogs(t, configDir, serviceName, database, sid, lines)
+			}
+		}
+		return
+	}
+
+	logFile := filepath.Join(logDir, serviceID+".log")
+
+	data, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Logf("Could not read log file %s: %v", logFile, err)
+		return
+	}
+
+	logLines := strings.Split(string(data), "\n")
+	startIdx := 0
+	if lines > 0 && len(logLines) > lines {
+		startIdx = len(logLines) - lines
+	}
+
+	if lines == 0 {
+		t.Logf("=== Full contents of %s ===", logFile)
+	} else {
+		t.Logf("=== Last %d lines of %s ===", lines, logFile)
+	}
+	for _, line := range logLines[startIdx:] {
+		if line != "" {
+			t.Log(line)
+		}
+	}
+	t.Logf("=== End of %s ===", logFile)
+}
+
+// WaitForBootstrap waits for multiorch to bootstrap the cluster by polling until
+// the multigres schema exists. Returns an error if bootstrap doesn't complete within timeout.
+// This function handles the case where PostgreSQL hasn't been initialized yet by retrying
+// until the database becomes available.
+// If configDir and database are provided, prints service logs on failure to help debug CI issues.
+func WaitForBootstrap(t *testing.T, addr string, timeout time.Duration, configDir, database string) error {
+	t.Helper()
+
+	// Create gRPC connection directly without testing query
+	// (PostgreSQL may not be initialized yet during bootstrap)
+	conn, err := grpc.NewClient(addr, grpccommon.LocalClientDialOptions()...)
+	if err != nil {
+		return fmt.Errorf("failed to create gRPC connection: %w", err)
+	}
+	defer conn.Close()
+
+	client := multipoolerpb.NewMultiPoolerServiceClient(conn)
+
+	deadline := time.Now().Add(timeout)
+	checkInterval := 500 * time.Millisecond
+	query := "SELECT nspname::text FROM pg_catalog.pg_namespace WHERE nspname = 'multigres'"
+
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		resp, err := client.ExecuteQuery(ctx, &multipoolerpb.ExecuteQueryRequest{
+			Query:   query,
+			MaxRows: 10,
+		})
+		cancel()
+
+		if err == nil && resp != nil && resp.Result != nil && len(resp.Result.Rows) > 0 {
+			t.Log("Bootstrap completed - multigres schema exists")
+			return nil
+		}
+
+		// Log progress with error details
+		if err != nil {
+			t.Logf("Waiting for bootstrap for: %v... (query error: %v)", addr, err)
+		} else {
+			t.Logf("Waiting for bootstrap for: %v... (multigres schema not yet created)", addr)
+		}
+		time.Sleep(checkInterval)
+	}
+
+	// Print logs to help debug CI failures
+	if configDir != "" && database != "" {
+		printServiceLogs(t, configDir, "multiorch", database, "", 0)
+		printServiceLogs(t, configDir, "multipooler", database, "", 100)
+	}
+
+	return fmt.Errorf("bootstrap did not complete within %v", timeout)
 }

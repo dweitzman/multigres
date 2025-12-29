@@ -27,6 +27,7 @@ import (
 
 	"github.com/multigres/multigres/go/test/utils"
 
+	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multipoolermanagerpb "github.com/multigres/multigres/go/pb/multipoolermanager"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
@@ -104,9 +105,17 @@ func TestDemoteAndPromote(t *testing.T) {
 
 		// Now configure the demoted server to replicate from the standby (which will be promoted)
 		t.Log("Configuring demoted primary to replicate from standby...")
+		primary := &clustermetadatapb.MultiPooler{
+			Id: &clustermetadatapb.ID{
+				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Cell:      "test-cell",
+				Name:      setup.StandbyMultipooler.Name,
+			},
+			Hostname: "localhost",
+			PortMap:  map[string]int32{"postgres": int32(setup.StandbyMultipooler.PgPort)},
+		}
 		setPrimaryConnInfoReq := &multipoolermanagerdatapb.SetPrimaryConnInfoRequest{
-			Host:                  "localhost",
-			Port:                  int32(setup.StandbyMultipooler.PgPort),
+			Primary:               primary,
 			StopReplicationBefore: false,
 			StartReplicationAfter: true, // Start replication immediately
 			CurrentTerm:           1,
@@ -136,8 +145,8 @@ func TestDemoteAndPromote(t *testing.T) {
 		require.NoError(t, err, "StopReplication should succeed")
 
 		// Get current LSN
-		statusReq := &multipoolermanagerdatapb.ReplicationStatusRequest{}
-		statusResp, err := standbyManagerClient.ReplicationStatus(utils.WithShortDeadline(t), statusReq)
+		statusReq := &multipoolermanagerdatapb.StandbyReplicationStatusRequest{}
+		statusResp, err := standbyManagerClient.StandbyReplicationStatus(utils.WithShortDeadline(t), statusReq)
 		require.NoError(t, err, "ReplicationStatus should succeed")
 		currentLSN := statusResp.Status.LastReplayLsn
 		t.Logf("Current LSN before promotion: %s", currentLSN)
@@ -201,8 +210,8 @@ func TestDemoteAndPromote(t *testing.T) {
 		require.NoError(t, err, "StopReplication should succeed")
 
 		// Get LSN
-		statusReq2 := &multipoolermanagerdatapb.ReplicationStatusRequest{}
-		statusResp2, err := primaryManagerClient.ReplicationStatus(utils.WithShortDeadline(t), statusReq2)
+		statusReq2 := &multipoolermanagerdatapb.StandbyReplicationStatusRequest{}
+		statusResp2, err := primaryManagerClient.StandbyReplicationStatus(utils.WithShortDeadline(t), statusReq2)
 		require.NoError(t, err, "ReplicationStatus should succeed")
 		currentLSN2 := statusResp2.Status.LastReplayLsn
 
@@ -255,9 +264,17 @@ func TestDemoteAndPromote(t *testing.T) {
 		assert.False(t, demoteResp1.WasAlreadyDemoted)
 
 		// Configure demoted primary to replicate from standby
+		primary := &clustermetadatapb.MultiPooler{
+			Id: &clustermetadatapb.ID{
+				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Cell:      "test-cell",
+				Name:      setup.StandbyMultipooler.Name,
+			},
+			Hostname: "localhost",
+			PortMap:  map[string]int32{"postgres": int32(setup.StandbyMultipooler.PgPort)},
+		}
 		setPrimaryConnInfoReq := &multipoolermanagerdatapb.SetPrimaryConnInfoRequest{
-			Host:                  "localhost",
-			Port:                  int32(setup.StandbyMultipooler.PgPort),
+			Primary:               primary,
 			StopReplicationBefore: false,
 			StartReplicationAfter: true,
 			CurrentTerm:           5,
@@ -278,7 +295,8 @@ func TestDemoteAndPromote(t *testing.T) {
 		setupPoolerTest(t, setup)
 
 		t.Log("Testing Promote idempotency...")
-		// Promote original primary back (it's currently demoted)
+
+		// First demote the primary so we can test promote idempotency
 		setTermReq := &multipoolermanagerdatapb.SetTermRequest{
 			Term: &multipoolermanagerdatapb.ConsensusTerm{
 				TermNumber: 6,
@@ -287,12 +305,41 @@ func TestDemoteAndPromote(t *testing.T) {
 		_, err := primaryManagerClient.SetTerm(utils.WithShortDeadline(t), setTermReq)
 		require.NoError(t, err)
 
+		demoteReq := &multipoolermanagerdatapb.DemoteRequest{
+			ConsensusTerm: 6,
+			DrainTimeout:  nil,
+			Force:         false,
+		}
+		_, err = primaryManagerClient.Demote(utils.WithTimeout(t, 10*time.Second), demoteReq)
+		require.NoError(t, err, "Demote should succeed")
+
+		// Configure demoted primary to replicate from standby
+		primary := &clustermetadatapb.MultiPooler{
+			Id: &clustermetadatapb.ID{
+				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Cell:      "test-cell",
+				Name:      setup.StandbyMultipooler.Name,
+			},
+			Hostname: "localhost",
+			PortMap:  map[string]int32{"postgres": int32(setup.StandbyMultipooler.PgPort)},
+		}
+		setPrimaryConnInfoReq := &multipoolermanagerdatapb.SetPrimaryConnInfoRequest{
+			Primary:               primary,
+			StopReplicationBefore: false,
+			StartReplicationAfter: true,
+			CurrentTerm:           6,
+			Force:                 false,
+		}
+		_, err = primaryManagerClient.SetPrimaryConnInfo(utils.WithShortDeadline(t), setPrimaryConnInfoReq)
+		require.NoError(t, err)
+
+		// Now test promote idempotency
 		stopReq := &multipoolermanagerdatapb.StopReplicationRequest{}
 		_, err = primaryManagerClient.StopReplication(utils.WithShortDeadline(t), stopReq)
 		require.NoError(t, err)
 
-		statusReq := &multipoolermanagerdatapb.ReplicationStatusRequest{}
-		statusResp, err := primaryManagerClient.ReplicationStatus(utils.WithShortDeadline(t), statusReq)
+		statusReq := &multipoolermanagerdatapb.StandbyReplicationStatusRequest{}
+		statusResp, err := primaryManagerClient.StandbyReplicationStatus(utils.WithShortDeadline(t), statusReq)
 		require.NoError(t, err)
 		currentLSN := statusResp.Status.LastReplayLsn
 
@@ -353,7 +400,7 @@ func TestDemoteAndPromote(t *testing.T) {
 
 		t.Log("Testing Promote term validation...")
 
-		// Promote back to restore state
+		// First demote the primary so we can test promote term validation
 		setTermReq := &multipoolermanagerdatapb.SetTermRequest{
 			Term: &multipoolermanagerdatapb.ConsensusTerm{
 				TermNumber: 8,
@@ -362,6 +409,35 @@ func TestDemoteAndPromote(t *testing.T) {
 		_, err := primaryManagerClient.SetTerm(utils.WithShortDeadline(t), setTermReq)
 		require.NoError(t, err)
 
+		demoteReq := &multipoolermanagerdatapb.DemoteRequest{
+			ConsensusTerm: 8,
+			DrainTimeout:  nil,
+			Force:         false,
+		}
+		_, err = primaryManagerClient.Demote(utils.WithTimeout(t, 10*time.Second), demoteReq)
+		require.NoError(t, err, "Demote should succeed")
+
+		// Configure demoted primary to replicate from standby
+		primary := &clustermetadatapb.MultiPooler{
+			Id: &clustermetadatapb.ID{
+				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Cell:      "test-cell",
+				Name:      setup.StandbyMultipooler.Name,
+			},
+			Hostname: "localhost",
+			PortMap:  map[string]int32{"postgres": int32(setup.StandbyMultipooler.PgPort)},
+		}
+		setPrimaryConnInfoReq := &multipoolermanagerdatapb.SetPrimaryConnInfoRequest{
+			Primary:               primary,
+			StopReplicationBefore: false,
+			StartReplicationAfter: true,
+			CurrentTerm:           8,
+			Force:                 false,
+		}
+		_, err = primaryManagerClient.SetPrimaryConnInfo(utils.WithShortDeadline(t), setPrimaryConnInfoReq)
+		require.NoError(t, err)
+
+		// Now test promote term validation
 		stopReq := &multipoolermanagerdatapb.StopReplicationRequest{}
 		_, err = primaryManagerClient.StopReplication(utils.WithShortDeadline(t), stopReq)
 		require.NoError(t, err)
@@ -409,9 +485,17 @@ func TestDemoteAndPromote(t *testing.T) {
 
 		// Configure the demoted server to replicate from the standby
 		t.Log("Configuring demoted primary to replicate from standby...")
+		primary := &clustermetadatapb.MultiPooler{
+			Id: &clustermetadatapb.ID{
+				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Cell:      "test-cell",
+				Name:      setup.StandbyMultipooler.Name,
+			},
+			Hostname: "localhost",
+			PortMap:  map[string]int32{"postgres": int32(setup.StandbyMultipooler.PgPort)},
+		}
 		setPrimaryConnInfoReq := &multipoolermanagerdatapb.SetPrimaryConnInfoRequest{
-			Host:                  "localhost",
-			Port:                  int32(setup.StandbyMultipooler.PgPort),
+			Primary:               primary,
 			StopReplicationBefore: false,
 			StartReplicationAfter: true,
 			CurrentTerm:           9,
@@ -433,8 +517,8 @@ func TestDemoteAndPromote(t *testing.T) {
 		_, err = primaryManagerClient.StopReplication(utils.WithShortDeadline(t), stopReq)
 		require.NoError(t, err)
 
-		statusReq := &multipoolermanagerdatapb.ReplicationStatusRequest{}
-		statusResp, err := primaryManagerClient.ReplicationStatus(utils.WithShortDeadline(t), statusReq)
+		statusReq := &multipoolermanagerdatapb.StandbyReplicationStatusRequest{}
+		statusResp, err := primaryManagerClient.StandbyReplicationStatus(utils.WithShortDeadline(t), statusReq)
 		require.NoError(t, err)
 		currentLSN := statusResp.Status.LastReplayLsn
 
@@ -481,6 +565,4 @@ func TestDemoteAndPromote(t *testing.T) {
 
 		t.Log("Confirmed: Demote correctly rejected on standby")
 	})
-
-	t.Log("=== All Demote/Promote tests passed, servers restored to original state ===")
 }

@@ -38,7 +38,9 @@ package parser
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"unicode"
+	"unicode/utf16"
 	"unicode/utf8"
 )
 
@@ -261,7 +263,8 @@ func (l *Lexer) parseDollarDelimiter() (string, error) {
 		return "", fmt.Errorf("expected '$' at start of dollar delimiter")
 	}
 
-	delimiter := "$"
+	var delimiter strings.Builder
+	delimiter.WriteString("$")
 	ctx.AdvanceBy(1) // Skip initial $
 
 	// Parse optional tag - postgres/src/backend/parser/scan.l:290-303
@@ -269,12 +272,12 @@ func (l *Lexer) parseDollarDelimiter() (string, error) {
 	// dolq_cont: [A-Za-z\200-\377_0-9]
 	if !ctx.AtEOF() && l.isDollarQuoteStartChar(ctx.CurrentChar()) {
 		// Tag starts with valid character
-		delimiter += string(ctx.CurrentChar())
+		delimiter.WriteString(string(ctx.CurrentChar()))
 		ctx.AdvanceBy(1)
 
 		// Continue with valid tag characters
 		for !ctx.AtEOF() && l.isDollarQuoteCont(ctx.CurrentChar()) {
-			delimiter += string(ctx.CurrentChar())
+			delimiter.WriteString(string(ctx.CurrentChar()))
 			ctx.AdvanceBy(1)
 		}
 	}
@@ -284,10 +287,10 @@ func (l *Lexer) parseDollarDelimiter() (string, error) {
 		return "", fmt.Errorf("unterminated dollar-quote delimiter")
 	}
 
-	delimiter += "$"
+	delimiter.WriteString("$")
 	ctx.AdvanceBy(1) // Skip closing $
 
-	return delimiter, nil
+	return delimiter.String(), nil
 }
 
 // isDollarQuoteStartChar checks if character can start a dollar-quote tag
@@ -413,7 +416,7 @@ func (l *Lexer) scanHexEscape() error {
 	value, err := strconv.ParseUint(hexDigits, 16, 8)
 	if err != nil {
 		_ = ctx.AddErrorWithType(InvalidEscape, "invalid hexadecimal escape sequence")
-		return nil
+		return nil //nolint:nilerr // Error is collected via context, not returned
 	}
 
 	ctx.AddLiteral(string(rune(value)))
@@ -446,7 +449,7 @@ func (l *Lexer) scanOctalEscape() error {
 	value, err := strconv.ParseUint(octalDigits, 8, 8)
 	if err != nil {
 		_ = ctx.AddErrorWithType(InvalidEscape, "invalid octal escape sequence")
-		return nil
+		return nil //nolint:nilerr // Error is collected via context, not returned
 	}
 
 	ctx.AddLiteral(string(rune(value)))
@@ -476,10 +479,10 @@ func (l *Lexer) scanUnicodeEscape(digitCount int) error {
 		return nil
 	}
 
-	value, err := strconv.ParseUint(hexDigits, 16, 32)
+	value, err := strconv.ParseUint(hexDigits, 16, 31)
 	if err != nil {
 		_ = ctx.AddErrorWithType(InvalidUnicodeEscape, "invalid Unicode escape sequence")
-		return nil
+		return nil //nolint:nilerr // Error is collected via context, not returned
 	}
 
 	// Check for valid Unicode code point
@@ -802,11 +805,11 @@ func (l *Lexer) scanSurrogatePairSecond() error {
 		return nil
 	}
 
-	secondValue, err := strconv.ParseUint(hexDigits, 16, 32)
+	secondValue, err := strconv.ParseUint(hexDigits, 16, 31)
 	if err != nil {
 		_ = ctx.AddErrorWithType(InvalidUnicodeEscape, "invalid Unicode escape sequence")
 		ctx.SetUTF16FirstPart(0)
-		return nil
+		return nil //nolint:nilerr // Error is collected via context, not returned
 	}
 
 	secondSurrogate := rune(secondValue)
@@ -819,7 +822,7 @@ func (l *Lexer) scanSurrogatePairSecond() error {
 	}
 
 	// Combine surrogates into final code point
-	combinedCodepoint := surrogatePairToCodepoint(ctx.UTF16FirstPart(), secondSurrogate)
+	combinedCodepoint := utf16.DecodeRune(ctx.UTF16FirstPart(), secondSurrogate)
 
 	// Add combined character to literal - equivalent to addunicode() call
 	if utf8.ValidRune(combinedCodepoint) {

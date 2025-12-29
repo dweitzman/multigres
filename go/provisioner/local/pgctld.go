@@ -23,13 +23,16 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/multigres/multigres/go/grpccommon"
+	"github.com/multigres/multigres/go/common/constants"
 	pb "github.com/multigres/multigres/go/pb/pgctldservice"
 	"github.com/multigres/multigres/go/provisioner/local/ports"
+	"github.com/multigres/multigres/go/tools/grpccommon"
 	"github.com/multigres/multigres/go/tools/telemetry"
 )
 
-// startPostgreSQLViaPgctld starts PostgreSQL via pgctld gRPC and verifies it's running
+// startPostgreSQLViaPgctld checks PostgreSQL status via pgctld gRPC.
+// It does NOT auto-initialize PostgreSQL - that's handled by multiorch's bootstrap process.
+// This function only starts PostgreSQL if the data directory is already initialized.
 func (p *localProvisioner) startPostgreSQLViaPgctld(ctx context.Context, address string) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -54,16 +57,14 @@ func (p *localProvisioner) startPostgreSQLViaPgctld(ctx context.Context, address
 		return nil
 	}
 
-	// If not initialized, initialize first
+	// If not initialized, skip starting PostgreSQL.
+	// Multiorch will handle initialization through the bootstrap process.
 	if statusResp.GetStatus() == pb.ServerStatus_NOT_INITIALIZED {
-		fmt.Printf(" initializing...")
-		_, err = client.InitDataDir(ctx, &pb.InitDataDirRequest{})
-		if err != nil {
-			return fmt.Errorf("failed to initialize PostgreSQL data directory: %w", err)
-		}
+		fmt.Printf(" PostgreSQL not initialized (multiorch will bootstrap) ✓")
+		return nil
 	}
 
-	// Start PostgreSQL
+	// Data directory exists but PostgreSQL is not running - start it
 	fmt.Printf(" starting PostgreSQL...")
 	startResp, err := client.Start(ctx, &pb.StartRequest{})
 	if err != nil {
@@ -189,18 +190,18 @@ func (p *localProvisioner) provisionPgctld(ctx context.Context, dbName, tableGro
 	}
 
 	// Get PostgreSQL port from config or use default
-	pgPort := ports.DefaultPostgresPort
+	pgPort := ports.DefaultLocalPostgresPort
 	if port, ok := pgctldConfig["pg_port"].(int); ok && port > 0 {
 		pgPort = port
 	}
 
 	// Get other pgctld configuration values with defaults
-	pgDatabase := "postgres"
+	pgDatabase := constants.DefaultPostgresDatabase
 	if db, ok := pgctldConfig["pg_database"].(string); ok && db != "" {
 		pgDatabase = db
 	}
 
-	pgUser := "postgres"
+	pgUser := constants.DefaultPostgresUser
 	if user, ok := pgctldConfig["pg_user"].(string); ok && user != "" {
 		pgUser = user
 	}
@@ -237,30 +238,10 @@ func (p *localProvisioner) provisionPgctld(ctx context.Context, dbName, tableGro
 		return nil, fmt.Errorf("failed to create pgctld log file: %w", err)
 	}
 
-	// Initialize pgctld data directory
-	fmt.Printf("▶️  - Initializing pgctld for %s/%s/%s...", dbName, tableGroup, serviceID)
-
-	initArgs := []string{
-		"init",
-		"--pooler-dir", poolerDir,
-		"--pg-port", fmt.Sprintf("%d", pgPort),
-		"--pg-database", pgDatabase,
-		"--pg-user", pgUser,
-		"--timeout", fmt.Sprintf("%d", timeout),
-		"--log-level", logLevel,
-	}
-
-	// Add password file if available
-	if pgPwfile, ok := pgctldConfig["pg_pwfile"].(string); ok && pgPwfile != "" {
-		initArgs = append(initArgs, "--pg-pwfile", pgPwfile)
-	}
-
-	initCmd := exec.CommandContext(ctx, pgctldBinary, initArgs...)
-
-	if err := telemetry.RunCmd(ctx, initCmd, true /* clientSpan */); err != nil {
-		return nil, fmt.Errorf("failed to initialize pgctld data directory: %w", err)
-	}
-	fmt.Printf(" initialized ✓\n")
+	// Note: We do NOT run 'pgctld init' here because that would initialize
+	// the PostgreSQL data directory (initdb) before multiorch can bootstrap
+	// the cluster. Multiorch needs to control initialization to properly set up
+	// primary/standby replication across zones.
 
 	// Start pgctld server
 	fmt.Printf("▶️  - Starting pgctld server (gRPC:%d)...", grpcPort)

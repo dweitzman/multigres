@@ -23,12 +23,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/multigres/multigres/go/clustermetadata/topo/memorytopo"
 	"github.com/multigres/multigres/go/cmd/pgctld/testutil"
-	"github.com/multigres/multigres/go/mterrors"
+	"github.com/multigres/multigres/go/common/constants"
+	"github.com/multigres/multigres/go/common/mterrors"
+	"github.com/multigres/multigres/go/common/servenv"
+	"github.com/multigres/multigres/go/common/topoclient"
+	"github.com/multigres/multigres/go/common/topoclient/memorytopo"
+	"github.com/multigres/multigres/go/multipooler/connpoolmanager"
 	"github.com/multigres/multigres/go/multipooler/manager"
-	"github.com/multigres/multigres/go/servenv"
-	"github.com/multigres/multigres/go/viperutil"
+	"github.com/multigres/multigres/go/tools/viperutil"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -37,6 +40,17 @@ import (
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	multipoolermanagerdata "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
+
+func addDatabaseToTopo(t *testing.T, ts topoclient.Store, database string) {
+	t.Helper()
+	ctx := context.Background()
+	err := ts.CreateDatabase(ctx, database, &clustermetadata.Database{
+		Name:             database,
+		BackupLocation:   "/var/backups/pgbackrest",
+		DurabilityPolicy: "ANY_2",
+	})
+	require.NoError(t, err)
+}
 
 func TestManagerServiceMethods_NotImplemented(t *testing.T) {
 	ctx := context.Background()
@@ -47,6 +61,9 @@ func TestManagerServiceMethods_NotImplemented(t *testing.T) {
 	// Start mock pgctld server
 	pgctldAddr, cleanupPgctld := testutil.StartMockPgctldServer(t)
 	defer cleanupPgctld()
+
+	// Create database in topology
+	addDatabaseToTopo(t, ts, "testdb")
 
 	// Create the multipooler in topology so manager can reach ready state
 	serviceID := &clustermetadata.ID{
@@ -61,15 +78,21 @@ func TestManagerServiceMethods_NotImplemented(t *testing.T) {
 		PortMap:       map[string]int32{"grpc": 8080},
 		Type:          clustermetadata.PoolerType_PRIMARY,
 		ServingStatus: clustermetadata.PoolerServingStatus_SERVING,
+		TableGroup:    constants.DefaultTableGroup,
+		Shard:         constants.DefaultShard,
 	}
 	require.NoError(t, ts.CreateMultiPooler(ctx, multipooler))
 
 	config := &manager.Config{
-		TopoClient: ts,
-		ServiceID:  serviceID,
-		PgctldAddr: pgctldAddr,
+		TopoClient:     ts,
+		ServiceID:      serviceID,
+		PgctldAddr:     pgctldAddr,
+		TableGroup:     constants.DefaultTableGroup,
+		Shard:          constants.DefaultShard,
+		ConnPoolConfig: connpoolmanager.NewConfig(viperutil.NewRegistry()),
 	}
-	pm := manager.NewMultiPoolerManager(logger, config)
+	pm, err := manager.NewMultiPoolerManager(logger, config)
+	require.NoError(t, err)
 	defer pm.Close()
 
 	// Start the async loader
@@ -134,10 +157,14 @@ func TestManagerServiceMethods_ManagerNotReady(t *testing.T) {
 	}
 
 	config := &manager.Config{
-		TopoClient: ts,
-		ServiceID:  serviceID,
+		TopoClient:     ts,
+		ServiceID:      serviceID,
+		TableGroup:     constants.DefaultTableGroup,
+		Shard:          constants.DefaultShard,
+		ConnPoolConfig: connpoolmanager.NewConfig(viperutil.NewRegistry()),
 	}
-	pm := manager.NewMultiPoolerManager(logger, config)
+	pm, err := manager.NewMultiPoolerManager(logger, config)
+	require.NoError(t, err)
 	defer pm.Close()
 
 	// Do NOT start the manager - keep it in starting state
@@ -156,8 +183,17 @@ func TestManagerServiceMethods_ManagerNotReady(t *testing.T) {
 			name: "SetPrimaryConnInfo",
 			method: func() error {
 				req := &multipoolermanagerdata.SetPrimaryConnInfoRequest{
-					Host: "primary.example.com",
-					Port: 5432,
+					Primary: &clustermetadata.MultiPooler{
+						Id: &clustermetadata.ID{
+							Component: clustermetadata.ID_MULTIPOOLER,
+							Cell:      "zone1",
+							Name:      "test-primary-id",
+						},
+						Hostname: "primary.example.com",
+						PortMap: map[string]int32{
+							"postgres": 5432,
+						},
+					},
 				}
 				_, err := svc.SetPrimaryConnInfo(ctx, req)
 				return err
@@ -180,10 +216,10 @@ func TestManagerServiceMethods_ManagerNotReady(t *testing.T) {
 			},
 		},
 		{
-			name: "ReplicationStatus",
+			name: "StandbyReplicationStatus",
 			method: func() error {
-				req := &multipoolermanagerdata.ReplicationStatusRequest{}
-				_, err := svc.ReplicationStatus(ctx, req)
+				req := &multipoolermanagerdata.StandbyReplicationStatusRequest{}
+				_, err := svc.StandbyReplicationStatus(ctx, req)
 				return err
 			},
 		},

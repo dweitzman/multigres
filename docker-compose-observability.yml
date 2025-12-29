@@ -1,35 +1,32 @@
-version: "3.8"
-
 services:
-  # Jaeger all-in-one for distributed tracing
+  # Jaeger for distributed tracing (receives traces via OTLP)
   jaeger:
     image: jaegertracing/jaeger:2.3.0
     container_name: multigres-jaeger
     ports:
       - "16686:16686" # Jaeger UI
-      - "4318:4318" # OTLP HTTP
-      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP (traces)
+      - "4317:4317" # OTLP gRPC (traces)
     environment:
       - COLLECTOR_OTLP_ENABLED=true
     networks:
       - multigres-obs
 
-  # Prometheus for metrics collection
+  # Prometheus for metrics (receives metrics via native OTLP receiver)
   prometheus:
     image: prom/prometheus:v3.1.0
     container_name: multigres-prometheus
     ports:
       - "9090:9090"
     volumes:
-      - ./multigres_local/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
       - "--web.console.libraries=/usr/share/prometheus/console_libraries"
       - "--web.console.templates=/usr/share/prometheus/consoles"
-      - "--enable-feature=exemplar-storage" # Enable exemplar storage
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - "--enable-feature=exemplar-storage"
+      - "--web.enable-otlp-receiver"
     networks:
       - multigres-obs
 

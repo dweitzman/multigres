@@ -1,0 +1,7 @@
+# Prometheus config for metrics ingestion
+# Metrics are pushed via remote_write from the OTel Collector
+# Remote write receiver is enabled via --web.enable-remote-write-receiver flag
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s

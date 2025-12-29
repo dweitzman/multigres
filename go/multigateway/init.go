@@ -25,14 +25,16 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
-	"github.com/multigres/multigres/go/clustermetadata/topo"
-	"github.com/multigres/multigres/go/clustermetadata/toporeg"
+	"github.com/multigres/multigres/go/common/constants"
+	"github.com/multigres/multigres/go/common/servenv"
+	"github.com/multigres/multigres/go/common/servenv/toporeg"
+	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/multigateway/executor"
+	"github.com/multigres/multigres/go/multigateway/handler"
 	"github.com/multigres/multigres/go/multigateway/poolergateway"
 	"github.com/multigres/multigres/go/multigateway/scatterconn"
 	"github.com/multigres/multigres/go/pgprotocol/server"
-	"github.com/multigres/multigres/go/servenv"
-	"github.com/multigres/multigres/go/viperutil"
+	"github.com/multigres/multigres/go/tools/viperutil"
 )
 
 type MultiGateway struct {
@@ -56,8 +58,8 @@ type MultiGateway struct {
 	// senv is the serving environment
 	senv *servenv.ServEnv
 	// topoConfig holds topology configuration
-	topoConfig   *topo.TopoConfig
-	ts           topo.Store
+	topoConfig   *topoclient.TopoConfig
+	ts           topoclient.Store
 	tr           *toporeg.TopoReg
 	serverStatus Status
 }
@@ -85,19 +87,28 @@ func NewMultiGateway() *MultiGateway {
 		}),
 		grpcServer: servenv.NewGrpcServer(reg),
 		senv:       servenv.NewServEnv(reg),
-		topoConfig: topo.NewTopoConfig(reg),
+		topoConfig: topoclient.NewTopoConfig(reg),
 		serverStatus: Status{
 			Title: "Multigateway",
 			Links: []Link{
 				{"Config", "Server configuration details", "/config"},
 				{"Live", "URL for liveness check", "/live"},
 				{"Ready", "URL for readiness check", "/ready"},
-				{"Metrics", "Prometheus metrics endpoint", "/metrics"},
 			},
 		},
 	}
 
 	return mg
+}
+
+// Executor returns the query executor for this multigateway.
+func (mg *MultiGateway) Executor() *executor.Executor {
+	return mg.executor
+}
+
+// ServEnv returns the serving environment for this multigateway.
+func (mg *MultiGateway) ServEnv() *servenv.ServEnv {
+	return mg.senv
 }
 
 func (mg *MultiGateway) RegisterFlags(fs *pflag.FlagSet) {
@@ -117,18 +128,24 @@ func (mg *MultiGateway) RegisterFlags(fs *pflag.FlagSet) {
 // Init initializes the multigateway. If any services fail to start,
 // or if some connections fail, it launches goroutines that retry
 // until successful.
-func (mg *MultiGateway) Init() {
-	mg.senv.Init("multigateway")
+func (mg *MultiGateway) Init() error {
+	if err := mg.senv.Init(constants.ServiceMultigateway); err != nil {
+		return fmt.Errorf("servenv init: %w", err)
+	}
 	logger := mg.senv.GetLogger()
 
-	mg.ts = mg.topoConfig.Open()
+	var err error
+	mg.ts, err = mg.topoConfig.Open()
+	if err != nil {
+		return fmt.Errorf("topo open: %w", err)
+	}
 
 	// This doesn't change
 	mg.serverStatus.Cell = mg.cell.Get()
 	mg.serverStatus.ServiceID = mg.serviceID.Get()
 
 	// Start pooler discovery first
-	mg.poolerDiscovery = NewPoolerDiscovery(context.Background(), mg.ts, mg.cell.Get(), logger)
+	mg.poolerDiscovery = NewPoolerDiscovery(context.TODO(), mg.ts, mg.cell.Get(), logger)
 	mg.poolerDiscovery.Start()
 	logger.Info("Pooler discovery started with topology watch", "cell", mg.cell.Get())
 
@@ -143,17 +160,15 @@ func (mg *MultiGateway) Init() {
 	mg.executor = executor.NewExecutor(mg.scatterConn, logger)
 
 	// Create and start PostgreSQL protocol listener
-	pgHandler := NewMultiGatewayHandler(mg)
+	pgHandler := handler.NewMultiGatewayHandler(mg.executor, logger)
 	pgAddr := fmt.Sprintf("localhost:%d", mg.pgPort.Get())
-	var err error
 	mg.pgListener, err = server.NewListener(server.ListenerConfig{
 		Address: pgAddr,
 		Handler: pgHandler,
 		Logger:  logger,
 	})
 	if err != nil {
-		logger.Error("failed to create PostgreSQL listener", "error", err, "port", mg.pgPort.Get())
-		panic(err)
+		return fmt.Errorf("failed to create PostgreSQL listener on port %d: %w", mg.pgPort.Get(), err)
 	}
 
 	// Start the PostgreSQL listener in a goroutine
@@ -173,10 +188,10 @@ func (mg *MultiGateway) Init() {
 	)
 
 	// Create MultiGateway instance for topo registration
-	multigateway := topo.NewMultiGateway(mg.serviceID.Get(), mg.cell.Get(), mg.senv.GetHostname())
+	multigateway := topoclient.NewMultiGateway(mg.serviceID.Get(), mg.cell.Get(), mg.senv.GetHostname())
 	multigateway.PortMap["grpc"] = int32(mg.grpcServer.Port())
 	multigateway.PortMap["http"] = int32(mg.senv.GetHTTPPort())
-	multigateway.PortMap["pg"] = int32(mg.pgPort.Get())
+	multigateway.PortMap["postgres"] = int32(mg.pgPort.Get())
 
 	mg.tr = toporeg.Register(
 		func(ctx context.Context) error { return mg.ts.RegisterMultiGateway(ctx, multigateway, true) },
@@ -194,10 +209,11 @@ func (mg *MultiGateway) Init() {
 	mg.senv.OnClose(func() {
 		mg.Shutdown()
 	})
+	return nil
 }
 
-func (mg *MultiGateway) RunDefault() {
-	mg.senv.RunDefault(mg.grpcServer)
+func (mg *MultiGateway) RunDefault() error {
+	return mg.senv.RunDefault(mg.grpcServer)
 }
 
 func (mg *MultiGateway) CobraPreRunE(cmd *cobra.Command) error {
@@ -218,7 +234,7 @@ func (mg *MultiGateway) Shutdown() {
 
 	// Close pooler gateway connections
 	if mg.poolerGateway != nil {
-		if err := mg.poolerGateway.Close(context.Background()); err != nil {
+		if err := mg.poolerGateway.Close(context.TODO()); err != nil {
 			mg.senv.GetLogger().Error("error closing pooler gateway", "error", err)
 		} else {
 			mg.senv.GetLogger().Info("Pooler gateway closed")

@@ -35,8 +35,8 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "max by (job, `http.response.status_code`) (rate({__name__=~\"http\\\\.server\\\\.request\\\\.duration_seconds_bucket\"}[1m]))",
-          "legendFormat": "{{job}} - HTTP {{http.response.status_code}}",
+          "expr": "max by (job, http_response_status_code) (rate(http_server_request_duration_seconds_bucket[$__rate_interval]))",
+          "legendFormat": "{{job}} - HTTP {{http_response_status_code}}",
           "range": true,
           "refId": "A"
         }
@@ -71,8 +71,8 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "max by (job, `rpc.grpc.status_code`) (rate({__name__=~\"rpc\\\\.server\\\\.duration_milliseconds_bucket\"}[1m]))",
-          "legendFormat": "{{job}} - gRPC {{rpc.grpc.status_code}}",
+          "expr": "max by (job, rpc_grpc_status_code) (rate(rpc_server_duration_milliseconds_bucket[$__rate_interval]))",
+          "legendFormat": "{{job}} - gRPC {{rpc_grpc_status_code}}",
           "range": true,
           "refId": "A"
         }
@@ -107,8 +107,8 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "histogram_quantile(0.95, sum by (le, job, `http.request.method`) (rate({__name__=~\"http\\\\.server\\\\.request\\\\.duration_seconds_bucket\"}[1m])))",
-          "legendFormat": "p95 - {{job}} {{http.request.method}}",
+          "expr": "histogram_quantile(0.95, sum by (le, job, http_request_method) (rate(http_server_request_duration_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "p95 - {{job}} {{http_request_method}}",
           "range": true,
           "refId": "A"
         },
@@ -119,8 +119,8 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "histogram_quantile(0.50, sum by (le, job, `http.request.method`) (rate({__name__=~\"http\\\\.server\\\\.request\\\\.duration_seconds_bucket\"}[1m])))",
-          "legendFormat": "p50 - {{job}} {{http.request.method}}",
+          "expr": "histogram_quantile(0.50, sum by (le, job, http_request_method) (rate(http_server_request_duration_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "p50 - {{job}} {{http_request_method}}",
           "range": true,
           "refId": "B"
         }
@@ -155,8 +155,8 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "histogram_quantile(0.95, sum by (le, job, `rpc.method`) (rate({__name__=~\"rpc\\\\.server\\\\.duration_milliseconds_bucket\"}[1m]))) / 1000",
-          "legendFormat": "p95 - {{job}} {{rpc.method}}",
+          "expr": "histogram_quantile(0.95, sum by (le, job, rpc_method) (rate(rpc_server_duration_milliseconds_bucket[$__rate_interval]))) / 1000",
+          "legendFormat": "p95 - {{job}} {{rpc_method}}",
           "range": true,
           "refId": "A"
         },
@@ -167,8 +167,8 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "histogram_quantile(0.50, sum by (le, job, `rpc.method`) (rate({__name__=~\"rpc\\\\.server\\\\.duration_milliseconds_bucket\"}[1m]))) / 1000",
-          "legendFormat": "p50 - {{job}} {{rpc.method}}",
+          "expr": "histogram_quantile(0.50, sum by (le, job, rpc_method) (rate(rpc_server_duration_milliseconds_bucket[$__rate_interval]))) / 1000",
+          "legendFormat": "p50 - {{job}} {{rpc_method}}",
           "range": true,
           "refId": "B"
         }

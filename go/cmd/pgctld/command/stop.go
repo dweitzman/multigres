@@ -20,8 +20,8 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/multigres/multigres/go/pgctld"
-	"github.com/multigres/multigres/go/viperutil"
+	"github.com/multigres/multigres/go/services/pgctld"
+	"github.com/multigres/multigres/go/tools/viperutil"
 
 	"github.com/spf13/cobra"
 )

@@ -12,6 +12,36 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package telemetry can help with annotating and exporting metrics, logs, traces, and exemplars.
+//
+// To start a cluster with the local provisioner configured to export traces and metrics:
+//
+//	OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf" \
+//	  OTEL_METRICS_EXPORTER=otlp \
+//	  OTEL_EXPORTER_OTLP_METRICS_ENDPOINT="http://localhost:9090/api/v1/otlp/v1/metrics" \
+//	  OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4318" \
+//	  OTEL_TRACES_SAMPLER=always_on \
+//	  OTEL_TRACES_EXPORTER=otlp \
+//	  multigres cluster start --config-path multigres_local
+//
+// To collect traces locally to view at http://localhost:16686/:
+//
+//	$ docker run --rm -it --name jaeger-all-in-one \
+//	    -e COLLECTOR_OTLP_ENABLED=true \
+//	    -e COLLECTOR_OTLP_HTTP_PORT=4318 \
+//	    -p 16686:16686 \
+//	    -p 4318:4318 \
+//	    jaegertracing/all-in-one:latest
+//
+// To collect metrics locally to view at http://localhost:9090/:
+//
+//	$ docker run --rm -it \
+//	    --name prometheus \
+//	    -p 9090:9090 \
+//	    prom/prometheus \
+//	    --config.file=/etc/prometheus/prometheus.yml \
+//	    --web.enable-otlp-receiver \
+//	    --enable-feature=exemplar-storage
 package telemetry
 
 import (
@@ -22,14 +52,11 @@ import (
 	"os"
 	"sync"
 
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/cobra"
 
 	"go.opentelemetry.io/contrib/exporters/autoexport"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
-	otelprom "go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/propagation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -52,11 +79,10 @@ func Tracer() trace.Tracer {
 // Telemetry holds OpenTelemetry configuration and state
 type Telemetry struct {
 	// State
-	mu               sync.Mutex
-	tracerProvider   *sdktrace.TracerProvider
-	meterProvider    *sdkmetric.MeterProvider
-	initialized      bool
-	startupParentCtx context.Context
+	mu             sync.Mutex
+	tracerProvider *sdktrace.TracerProvider
+	meterProvider  *sdkmetric.MeterProvider
+	initialized    bool
 
 	// Test overrides (only used in tests)
 	testSpanExporter sdktrace.SpanExporter
@@ -122,7 +148,7 @@ func (t *Telemetry) InitTelemetry(ctx context.Context, defaultServiceName string
 
 	t.initialized = true
 
-	slog.InfoContext(ctx, "OpenTelemetry initialized", "service", serviceName)
+	slog.DebugContext(ctx, "OpenTelemetry initialized", "service", serviceName)
 
 	return nil
 }
@@ -182,14 +208,8 @@ func (t *Telemetry) initTracing(ctx context.Context, res *resource.Resource) err
 
 // initMetrics initializes the MeterProvider with dual exporters (autoexport + Prometheus)
 func (t *Telemetry) initMetrics(ctx context.Context, res *resource.Resource) error {
-	// Create Prometheus exporter for pull-based metrics (local debugging)
-	// This is always created so we can serve metrics at /metrics endpoint
-	promExporter, err := otelprom.New()
-	if err != nil {
-		return fmt.Errorf("failed to create prometheus exporter: %w", err)
-	}
-
 	var metricReader sdkmetric.Reader
+	var err error
 
 	// Use test metric reader if provided, otherwise use autoexport
 	if t.testMetricReader != nil {
@@ -208,7 +228,7 @@ func (t *Telemetry) initMetrics(ctx context.Context, res *resource.Resource) err
 	}
 
 	t.meterProvider = sdkmetric.NewMeterProvider(
-		sdkmetric.WithReader(promExporter), // Pull-based for local debugging
+		// TODO(dweitzman): Add an additional prometheus exporter that's always at /metrics for debugging
 		sdkmetric.WithResource(res),
 		sdkmetric.WithReader(metricReader), // Configured via env vars or test reader
 	)
@@ -252,31 +272,6 @@ func (t *Telemetry) InitForCommand(cmd *cobra.Command, defaultServiceName string
 	return span, nil
 }
 
-// GetPrometheusHandler returns the HTTP handler for the Prometheus metrics endpoint
-// This handler should be registered at /metrics for local debugging
-func (t *Telemetry) GetPrometheusHandler() http.Handler {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	if !t.initialized {
-		// Return a handler that returns 503 if telemetry is not initialized
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = w.Write([]byte("OpenTelemetry not initialized"))
-		})
-	}
-
-	// The prometheus exporter is automatically registered as a collector with the default registry
-	// Use promhttp.HandlerFor() with OpenMetrics enabled to support exemplars
-	// Exemplars link metrics to traces by embedding trace_id and span_id in metric samples
-	return promhttp.HandlerFor(
-		prometheus.DefaultGatherer,
-		promhttp.HandlerOpts{
-			EnableOpenMetrics: true,
-		},
-	)
-}
-
 // GetTracerProvider returns the configured TracerProvider
 func (t *Telemetry) GetTracerProvider() trace.TracerProvider {
 	t.mu.Lock()
@@ -298,7 +293,7 @@ func (t *Telemetry) ShutdownTelemetry(ctx context.Context) error {
 		return nil
 	}
 
-	slog.InfoContext(ctx, "Shutting down OpenTelemetry")
+	slog.DebugContext(ctx, "Shutting down OpenTelemetry")
 
 	var errs []error
 
@@ -320,7 +315,7 @@ func (t *Telemetry) ShutdownTelemetry(ctx context.Context) error {
 		return fmt.Errorf("errors during telemetry shutdown: %v", errs)
 	}
 
-	slog.InfoContext(ctx, "OpenTelemetry shutdown complete")
+	slog.DebugContext(ctx, "OpenTelemetry shutdown complete")
 	return nil
 }
 

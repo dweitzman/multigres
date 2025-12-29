@@ -20,16 +20,18 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/multigres/multigres/go/common/constants"
 	"github.com/multigres/multigres/go/multiorch"
 
 	"github.com/spf13/cobra"
 )
 
-func main() {
+// CreateMultiOrchCommand creates a cobra command with a MultiOrch instance and registers its flags
+func CreateMultiOrchCommand() (*cobra.Command, *multiorch.MultiOrch) {
 	mo := multiorch.NewMultiOrch()
 
-	main := &cobra.Command{
-		Use:   "multiorch",
+	cmd := &cobra.Command{
+		Use:   constants.ServiceMultiorch,
 		Short: "Multiorch orchestrates cluster operations including consensus protocol management, failover detection and repair, and health monitoring of multipooler instances.",
 		Long:  "Multiorch orchestrates cluster operations including consensus protocol management, failover detection and repair, and health monitoring of multipooler instances.",
 		Args:  cobra.NoArgs,
@@ -41,16 +43,23 @@ func main() {
 		},
 	}
 
-	mo.RegisterFlags(main.Flags())
+	mo.RegisterFlags(cmd.Flags())
 
-	if err := main.Execute(); err != nil {
+	return cmd, mo
+}
+
+func main() {
+	cmd, _ := CreateMultiOrchCommand()
+
+	if err := cmd.Execute(); err != nil {
 		slog.Error(err.Error())
-		os.Exit(1)
+		os.Exit(1) //nolint:forbidigo // main() is allowed to call os.Exit
 	}
 }
 
 func run(cmd *cobra.Command, args []string, mo *multiorch.MultiOrch) error {
-	mo.Init()
-	mo.RunDefault()
-	return nil
+	if err := mo.Init(); err != nil {
+		return err
+	}
+	return mo.RunDefault()
 }

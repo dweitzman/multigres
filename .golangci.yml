@@ -14,27 +14,50 @@
 
 version: "2"
 run:
-  go: "1.24"
+  go: "1.25"
+  build-tags:
+    - ruleguard
 linters:
   default: none
   enable:
     - bodyclose
     - depguard
     - errcheck
-    # - forbidigo
+    - errorlint
+    - forbidigo
+    # TODO: Enable goconst - disabled because it reports different results in CI vs local.
+    # CI (Linux) detects issues that cannot be reproduced locally (macOS) or in Docker (Linux),
+    # even with the same golangci-lint version and config. Until this is resolved, developers
+    # can't validate goconst locally before pushing.
+    # - goconst
+    - gocritic
+    - gosec
     - govet
     - ineffassign
+    - misspell
+    - modernize
+    - nilerr
+    # TODO: Enable noctx - requires fixing ~170 issues where context should be passed
+    # - noctx
     - sloglint
     - staticcheck
+    - unconvert
+    - unused
   settings:
+    # goconst:
+    #   # Minimum length of string to trigger (shorter strings are often not worth extracting)
+    #   min-len: 5
+    #   # Minimum number of occurrences to trigger
+    #   min-occurrences: 3
+    #   # Don't suppress warnings just because a constant with the same value exists.
+    #   # Note: goconst doesn't catch struct literal values, only variable assignments.
+    #   match-constant: false
     forbidigo:
+      # Forbid os.Exit to ensure cleanup hooks can fire before process termination.
+      # Use //nolint:forbidigo in main() or TestMain() where it's allowed.
       forbid:
-        - pattern: ^exec\.CommandContext$
-          msg: Use telemetry.CommandContext
-        - pattern: ^exec\.Command$
-          msg: Use telemetry.Command
-      # Optionally give a message or replacement suggestion
-      exclude_godoc_examples: true
+        - pattern: ^os\.Exit$
+          msg: "os.Exit() prevents cleanup hooks from firing. Return an error instead. Only allowed in main() or TestMain() with //nolint:forbidigo. In init(), use panic() instead."
     depguard:
       rules:
         main:
@@ -44,6 +67,16 @@ linters:
             - github.com/spf13/pflag
             - github.com/spf13/viper
             - github.com/stretchr/testify
+        tools-isolation:
+          files:
+            - "**/go/tools/**/*.go"
+          list-mode: lax
+          deny:
+            - pkg: "github.com/multigres/multigres/go"
+              desc: "tools packages must not depend on internal multigres packages (except other tools)"
+          allow:
+            - $gostd
+            - github.com/multigres/multigres/go/tools
         provisioner:
           files:
             - "!$test"
@@ -55,12 +88,70 @@ linters:
               desc: "provisioners should not depend on multigres logic aside from the topo"
           allow:
             - $gostd
-            - github.com/multigres/multigres/go/clustermetadata/topo
+            - github.com/multigres/multigres/go/common/constants
+            - github.com/multigres/multigres/go/common/topoclient
             - github.com/multigres/multigres/go/tools
             - github.com/multigres/multigres/go/pb
             - github.com/multigres/multigres/go/provisioner
-            - github.com/multigres/multigres/go/provisioner/local
-            - github.com/multigres/multigres/go/grpccommon
+        multiadmin-isolation:
+          files:
+            - "!**/go/services/multiadmin/*.go"
+            - "!**/go/services/multiadmin/**/*.go"
+            - "!**/go/cmd/multiadmin/*.go"
+            - "!**/go/cmd/multiadmin/**/*.go"
+            - "!**/go/test/endtoend/**/*.go"
+            - "**/*.go"
+          list-mode: lax
+          deny:
+            - pkg: "github.com/multigres/multigres/go/services/multiadmin"
+              desc: "multiadmin can only be imported by its own package and cmd"
+        pgctld-isolation:
+          files:
+            - "!**/go/services/pgctld/*.go"
+            - "!**/go/services/pgctld/**/*.go"
+            - "!**/go/cmd/pgctld/*.go"
+            - "!**/go/cmd/pgctld/**/*.go"
+            - "**/*.go"
+          list-mode: lax
+          deny:
+            - pkg: "github.com/multigres/multigres/go/services/pgctld"
+              desc: "pgctld can only be imported by its own package and cmd"
+        # TODO: Move go/multigateway to go/services/multigateway and update paths below
+        multigateway-isolation:
+          files:
+            - "!**/go/multigateway/*.go"
+            - "!**/go/multigateway/**/*.go"
+            - "!**/go/cmd/multigateway/*.go"
+            - "!**/go/cmd/multigateway/**/*.go"
+            - "**/*.go"
+          list-mode: lax
+          deny:
+            - pkg: "github.com/multigres/multigres/go/multigateway"
+              desc: "multigateway can only be imported by its own package and cmd"
+        # TODO: Move go/multiorch to go/services/multiorch and update paths below
+        multiorch-isolation:
+          files:
+            - "!**/go/multiorch/*.go"
+            - "!**/go/multiorch/**/*.go"
+            - "!**/go/cmd/multiorch/*.go"
+            - "!**/go/cmd/multiorch/**/*.go"
+            - "**/*.go"
+          list-mode: lax
+          deny:
+            - pkg: "github.com/multigres/multigres/go/multiorch"
+              desc: "multiorch can only be imported by its own package and cmd"
+        # TODO: Move go/multipooler to go/services/multipooler and update paths below
+        multipooler-isolation:
+          files:
+            - "!**/go/multipooler/*.go"
+            - "!**/go/multipooler/**/*.go"
+            - "!**/go/cmd/multipooler/*.go"
+            - "!**/go/cmd/multipooler/**/*.go"
+            - "**/*.go"
+          list-mode: lax
+          deny:
+            - pkg: "github.com/multigres/multigres/go/multipooler"
+              desc: "multipooler can only be imported by its own package and cmd"
         use_modern_packages:
           list-mode: lax
           deny:
@@ -69,23 +160,118 @@ linters:
     sloglint:
       context: scope
     govet:
-    disable:
-      - nilness
-      - unusedwrite
-      - loopclosure
-  staticcheck:
-    checks:
-      - "all"
-      - "-ST1000"
-      - "-ST1003"
-      - "-ST1005"
-      - "-ST1016"
-      - "-ST1020"
-      - "-ST1021"
-      - "-ST1022"
-      - "-QF1001"
-      - "-QF1005"
-      - "-QF1008"
+      enable:
+        # Check for missing values after append.
+        - appends
+        # Report mismatches between assembly files and Go declarations.
+        - asmdecl
+        # Check for useless assignments.
+        - assign
+        # Check for common mistakes using the sync/atomic package.
+        - atomic
+        # Check for non-64-bits-aligned arguments to sync/atomic functions.
+        - atomicalign
+        # Check for common mistakes involving boolean operators.
+        - bools
+        # Check //go:build and // +build directives.
+        - buildtag
+        # Detect some violations of the cgo pointer passing rules.
+        - cgocall
+        # Check for unkeyed composite literals.
+        - composites
+        # Check for locks erroneously passed by value.
+        - copylocks
+        # Check for calls of reflect.DeepEqual on error values.
+        - deepequalerrors
+        # Report common mistakes in defer statements.
+        - defers
+        # Check Go toolchain directives such as //go:debug.
+        - directive
+        # Report passing non-pointer or non-error values to errors.As.
+        - errorsas
+        # # Find structs that would use less memory if their fields were sorted.
+        # - fieldalignment
+        # Find calls to a particular function.
+        - findcall
+        # Report assembly that clobbers the frame pointer before saving it.
+        - framepointer
+        # Check format of addresses passed to net.Dial.
+        - hostport
+        # Report using Go 1.22 enhanced ServeMux patterns in older Go versions.
+        - httpmux
+        # Check for mistakes using HTTP responses.
+        - httpresponse
+        # Detect impossible interface-to-interface type assertions.
+        - ifaceassert
+        # Check references to loop variables from within nested functions.
+        - loopclosure
+        # Check cancel func returned by context.WithCancel is called.
+        - lostcancel
+        # Check for useless comparisons between functions and nil.
+        - nilfunc
+        # Check for redundant or impossible nil comparisons.
+        - nilness
+        # Check consistency of Printf format strings and arguments.
+        - printf
+        # Check for comparing reflect.Value values with == or reflect.DeepEqual.
+        - reflectvaluecompare
+        # # Check for possible unintended shadowing of variables.
+        # - shadow
+        # Check for shifts that equal or exceed the width of the integer.
+        - shift
+        # Check for unbuffered channel of os.Signal.
+        - sigchanyzer
+        # Check for invalid structured logging calls.
+        - slog
+        # Check the argument type of sort.Slice.
+        - sortslice
+        # Check signature of methods of well-known interfaces.
+        - stdmethods
+        # Report uses of too-new standard library symbols.
+        - stdversion
+        # Check for string(int) conversions.
+        - stringintconv
+        # Check that struct field tags conform to reflect.StructTag.Get.
+        - structtag
+        # Report calls to (*testing.T).Fatal from goroutines started by a test.
+        - testinggoroutine
+        # Check for common mistaken usages of tests and examples.
+        - tests
+        # Check for calls of (time.Time).Format or time.Parse with 2006-02-01.
+        - timeformat
+        # Report passing non-pointer or non-interface values to unmarshal.
+        - unmarshal
+        # Check for unreachable code.
+        - unreachable
+        # Check for invalid conversions of uintptr to unsafe.Pointer.
+        - unsafeptr
+        # Check for unused results of calls to some functions.
+        - unusedresult
+        # Checks for unused writes.
+        - unusedwrite
+        # Check for misuses of sync.WaitGroup.
+        - waitgroup
+    gocritic:
+      # TODO(dweitzman): Re-enable default checks. Some of them seem worthwhile.
+      disable-all: true
+      enabled-checks:
+        - ruleguard
+      settings:
+        ruleguard:
+          rules: "go/tools/ruleguard/rules.go"
+    staticcheck:
+      checks:
+        - "all"
+        - "-ST1000"
+        - "-ST1003"
+        - "-ST1005"
+        - "-ST1016"
+        - "-ST1020"
+        - "-ST1021"
+        - "-ST1022"
+        - "-QF1001"
+        - "-QF1005"
+        - "-QF1008"
   exclusions:
     generated: lax
     presets:
@@ -98,8 +284,32 @@ linters:
           - errcheck
         path: ^proto/
       - linters:
-          - forbidigo
-        path: (.+)_test.go
+          - unused
+        path: ^go/(parser|pgprotocol|tools/ruleguard)
+      # Potentially unsafe integer casts are all over the place (unsigned to signed, 64-bit to 32-bit, etc.)
+      - linters:
+          - gosec
+        text: "G115:"
+      # math/rand is fine for non-crypto uses (jitter, test data, IDs)
+      - linters:
+          - gosec
+        text: "G404:"
+      # File permissions 0644 are fine for config/data files
+      - linters:
+          - gosec
+        text: "G306:"
+      # Subprocess calls with variables are common
+      - linters:
+          - gosec
+        text: "G204:"
+      # mterrors intentionally uses direct error comparisons
+      - linters:
+          - errorlint
+        path: ^go/common/mterrors/
+      # Parser has many unnecessary type conversions
+      - linters:
+          - unconvert
+        path: ^go/parser/
 formatters:
   enable:
     - gofumpt

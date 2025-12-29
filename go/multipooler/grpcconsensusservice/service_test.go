@@ -21,11 +21,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/multigres/multigres/go/clustermetadata/topo/memorytopo"
 	"github.com/multigres/multigres/go/cmd/pgctld/testutil"
+	"github.com/multigres/multigres/go/common/constants"
+	"github.com/multigres/multigres/go/common/servenv"
+	"github.com/multigres/multigres/go/common/topoclient"
+	"github.com/multigres/multigres/go/common/topoclient/memorytopo"
+	"github.com/multigres/multigres/go/multipooler/connpoolmanager"
 	"github.com/multigres/multigres/go/multipooler/manager"
-	"github.com/multigres/multigres/go/servenv"
-	"github.com/multigres/multigres/go/viperutil"
+	"github.com/multigres/multigres/go/tools/viperutil"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -33,6 +36,17 @@ import (
 	clustermetadata "github.com/multigres/multigres/go/pb/clustermetadata"
 	consensusdata "github.com/multigres/multigres/go/pb/consensusdata"
 )
+
+func addDatabaseToTopo(t *testing.T, ts topoclient.Store, database string) {
+	t.Helper()
+	ctx := context.Background()
+	err := ts.CreateDatabase(ctx, database, &clustermetadata.Database{
+		Name:             database,
+		BackupLocation:   "/var/backups/pgbackrest",
+		DurabilityPolicy: "ANY_2",
+	})
+	require.NoError(t, err)
+}
 
 func TestConsensusService_BeginTerm(t *testing.T) {
 	ctx := context.Background()
@@ -43,6 +57,9 @@ func TestConsensusService_BeginTerm(t *testing.T) {
 	// Start mock pgctld server
 	pgctldAddr, cleanupPgctld := testutil.StartMockPgctldServer(t)
 	t.Cleanup(cleanupPgctld)
+
+	// Create database in topology
+	addDatabaseToTopo(t, ts, "testdb")
 
 	// Create the multipooler in topology so manager can reach ready state
 	serviceID := &clustermetadata.ID{
@@ -57,6 +74,8 @@ func TestConsensusService_BeginTerm(t *testing.T) {
 		PortMap:       map[string]int32{"grpc": 8080},
 		Type:          clustermetadata.PoolerType_REPLICA,
 		ServingStatus: clustermetadata.PoolerServingStatus_SERVING,
+		TableGroup:    constants.DefaultTableGroup,
+		Shard:         constants.DefaultShard,
 	}
 	require.NoError(t, ts.CreateMultiPooler(ctx, multipooler))
 
@@ -69,8 +88,18 @@ func TestConsensusService_BeginTerm(t *testing.T) {
 		PgctldAddr:       pgctldAddr,
 		PoolerDir:        tmpDir,
 		ConsensusEnabled: true,
+		TableGroup:       constants.DefaultTableGroup,
+		Shard:            constants.DefaultShard,
+		ConnPoolConfig:   connpoolmanager.NewConfig(viperutil.NewRegistry()),
 	}
-	pm := manager.NewMultiPoolerManager(logger, config)
+	pm, err := manager.NewMultiPoolerManager(logger, config)
+	require.NoError(t, err)
+	// Mark as initialized to skip auto-restore (not testing backup functionality)
+	// Create both PG_VERSION and the marker file since setInitialized() is not exported
+	pgDataDir := tmpDir + "/pg_data"
+	require.NoError(t, os.MkdirAll(pgDataDir, 0o755))
+	require.NoError(t, os.WriteFile(pgDataDir+"/PG_VERSION", []byte("16\n"), 0o644))
+	require.NoError(t, os.WriteFile(pgDataDir+"/MULTIGRES_INITIALIZED", []byte("initialized\n"), 0o644))
 	defer pm.Close()
 
 	// Start the async loader
@@ -116,6 +145,9 @@ func TestConsensusService_Status(t *testing.T) {
 	pgctldAddr, cleanupPgctld := testutil.StartMockPgctldServer(t)
 	t.Cleanup(cleanupPgctld)
 
+	// Create database in topology
+	addDatabaseToTopo(t, ts, "testdb")
+
 	// Create the multipooler in topology
 	serviceID := &clustermetadata.ID{
 		Component: clustermetadata.ID_MULTIPOOLER,
@@ -129,6 +161,8 @@ func TestConsensusService_Status(t *testing.T) {
 		PortMap:       map[string]int32{"grpc": 8080},
 		Type:          clustermetadata.PoolerType_REPLICA,
 		ServingStatus: clustermetadata.PoolerServingStatus_SERVING,
+		TableGroup:    constants.DefaultTableGroup,
+		Shard:         constants.DefaultShard,
 	}
 	require.NoError(t, ts.CreateMultiPooler(ctx, multipooler))
 
@@ -141,8 +175,18 @@ func TestConsensusService_Status(t *testing.T) {
 		PgctldAddr:       pgctldAddr,
 		PoolerDir:        tmpDir,
 		ConsensusEnabled: true,
+		TableGroup:       constants.DefaultTableGroup,
+		Shard:            constants.DefaultShard,
+		ConnPoolConfig:   connpoolmanager.NewConfig(viperutil.NewRegistry()),
 	}
-	pm := manager.NewMultiPoolerManager(logger, config)
+	pm, err := manager.NewMultiPoolerManager(logger, config)
+	require.NoError(t, err)
+	// Mark as initialized to skip auto-restore (not testing backup functionality)
+	// Create both PG_VERSION and the marker file since setInitialized() is not exported
+	pgDataDir := tmpDir + "/pg_data"
+	require.NoError(t, os.MkdirAll(pgDataDir, 0o755))
+	require.NoError(t, os.WriteFile(pgDataDir+"/PG_VERSION", []byte("16\n"), 0o644))
+	require.NoError(t, os.WriteFile(pgDataDir+"/MULTIGRES_INITIALIZED", []byte("initialized\n"), 0o644))
 	defer pm.Close()
 
 	// Start the async loader
@@ -187,6 +231,9 @@ func TestConsensusService_GetLeadershipView(t *testing.T) {
 	pgctldAddr, cleanupPgctld := testutil.StartMockPgctldServer(t)
 	t.Cleanup(cleanupPgctld)
 
+	// Create database in topology
+	addDatabaseToTopo(t, ts, "testdb")
+
 	// Create the multipooler in topology
 	serviceID := &clustermetadata.ID{
 		Component: clustermetadata.ID_MULTIPOOLER,
@@ -200,6 +247,8 @@ func TestConsensusService_GetLeadershipView(t *testing.T) {
 		PortMap:       map[string]int32{"grpc": 8080},
 		Type:          clustermetadata.PoolerType_REPLICA,
 		ServingStatus: clustermetadata.PoolerServingStatus_SERVING,
+		TableGroup:    constants.DefaultTableGroup,
+		Shard:         constants.DefaultShard,
 	}
 	require.NoError(t, ts.CreateMultiPooler(ctx, multipooler))
 
@@ -212,8 +261,18 @@ func TestConsensusService_GetLeadershipView(t *testing.T) {
 		PgctldAddr:       pgctldAddr,
 		PoolerDir:        tmpDir,
 		ConsensusEnabled: true,
+		TableGroup:       constants.DefaultTableGroup,
+		Shard:            constants.DefaultShard,
+		ConnPoolConfig:   connpoolmanager.NewConfig(viperutil.NewRegistry()),
 	}
-	pm := manager.NewMultiPoolerManager(logger, config)
+	pm, err := manager.NewMultiPoolerManager(logger, config)
+	require.NoError(t, err)
+	// Mark as initialized to skip auto-restore (not testing backup functionality)
+	// Create both PG_VERSION and the marker file since setInitialized() is not exported
+	pgDataDir := tmpDir + "/pg_data"
+	require.NoError(t, os.MkdirAll(pgDataDir, 0o755))
+	require.NoError(t, os.WriteFile(pgDataDir+"/PG_VERSION", []byte("16\n"), 0o644))
+	require.NoError(t, os.WriteFile(pgDataDir+"/MULTIGRES_INITIALIZED", []byte("initialized\n"), 0o644))
 	defer pm.Close()
 
 	// Start the async loader
@@ -229,17 +288,17 @@ func TestConsensusService_GetLeadershipView(t *testing.T) {
 		manager: pm,
 	}
 
-	t.Run("GetLeadershipView without replication tracker should fail", func(t *testing.T) {
+	t.Run("GetLeadershipView without a valid database connection should fail", func(t *testing.T) {
 		req := &consensusdata.LeadershipViewRequest{
 			ShardId: "shard-1",
 		}
 
 		resp, err := svc.GetLeadershipView(ctx, req)
 
-		// Should fail because no replication tracker
+		// Should fail because no database to query
 		assert.Error(t, err)
 		assert.Nil(t, resp)
-		assert.Contains(t, err.Error(), "replication tracker not initialized")
+		assert.Contains(t, err.Error(), "failed to connect to")
 	})
 }
 
@@ -252,6 +311,9 @@ func TestConsensusService_CanReachPrimary(t *testing.T) {
 	// Start mock pgctld server
 	pgctldAddr, cleanupPgctld := testutil.StartMockPgctldServer(t)
 	t.Cleanup(cleanupPgctld)
+
+	// Create database in topology
+	addDatabaseToTopo(t, ts, "testdb")
 
 	// Create the multipooler in topology
 	serviceID := &clustermetadata.ID{
@@ -266,6 +328,8 @@ func TestConsensusService_CanReachPrimary(t *testing.T) {
 		PortMap:       map[string]int32{"grpc": 8080},
 		Type:          clustermetadata.PoolerType_REPLICA,
 		ServingStatus: clustermetadata.PoolerServingStatus_SERVING,
+		TableGroup:    constants.DefaultTableGroup,
+		Shard:         constants.DefaultShard,
 	}
 	require.NoError(t, ts.CreateMultiPooler(ctx, multipooler))
 
@@ -278,8 +342,18 @@ func TestConsensusService_CanReachPrimary(t *testing.T) {
 		PgctldAddr:       pgctldAddr,
 		PoolerDir:        tmpDir,
 		ConsensusEnabled: true,
+		TableGroup:       constants.DefaultTableGroup,
+		Shard:            constants.DefaultShard,
+		ConnPoolConfig:   connpoolmanager.NewConfig(viperutil.NewRegistry()),
 	}
-	pm := manager.NewMultiPoolerManager(logger, config)
+	pm, err := manager.NewMultiPoolerManager(logger, config)
+	require.NoError(t, err)
+	// Mark as initialized to skip auto-restore (not testing backup functionality)
+	// Create both PG_VERSION and the marker file since setInitialized() is not exported
+	pgDataDir := tmpDir + "/pg_data"
+	require.NoError(t, os.MkdirAll(pgDataDir, 0o755))
+	require.NoError(t, os.WriteFile(pgDataDir+"/PG_VERSION", []byte("16\n"), 0o644))
+	require.NoError(t, os.WriteFile(pgDataDir+"/MULTIGRES_INITIALIZED", []byte("initialized\n"), 0o644))
 	defer pm.Close()
 
 	// Start the async loader
@@ -321,6 +395,9 @@ func TestConsensusService_AllMethods(t *testing.T) {
 	pgctldAddr, cleanupPgctld := testutil.StartMockPgctldServer(t)
 	t.Cleanup(cleanupPgctld)
 
+	// Create database in topology
+	addDatabaseToTopo(t, ts, "testdb")
+
 	// Create the multipooler in topology
 	serviceID := &clustermetadata.ID{
 		Component: clustermetadata.ID_MULTIPOOLER,
@@ -334,6 +411,8 @@ func TestConsensusService_AllMethods(t *testing.T) {
 		PortMap:       map[string]int32{"grpc": 8080},
 		Type:          clustermetadata.PoolerType_REPLICA,
 		ServingStatus: clustermetadata.PoolerServingStatus_SERVING,
+		TableGroup:    constants.DefaultTableGroup,
+		Shard:         constants.DefaultShard,
 	}
 	require.NoError(t, ts.CreateMultiPooler(ctx, multipooler))
 
@@ -346,8 +425,18 @@ func TestConsensusService_AllMethods(t *testing.T) {
 		PgctldAddr:       pgctldAddr,
 		PoolerDir:        tmpDir,
 		ConsensusEnabled: true,
+		TableGroup:       constants.DefaultTableGroup,
+		Shard:            constants.DefaultShard,
+		ConnPoolConfig:   connpoolmanager.NewConfig(viperutil.NewRegistry()),
 	}
-	pm := manager.NewMultiPoolerManager(logger, config)
+	pm, err := manager.NewMultiPoolerManager(logger, config)
+	require.NoError(t, err)
+	// Mark as initialized to skip auto-restore (not testing backup functionality)
+	// Create both PG_VERSION and the marker file since setInitialized() is not exported
+	pgDataDir := tmpDir + "/pg_data"
+	require.NoError(t, os.MkdirAll(pgDataDir, 0o755))
+	require.NoError(t, os.WriteFile(pgDataDir+"/PG_VERSION", []byte("16\n"), 0o644))
+	require.NoError(t, os.WriteFile(pgDataDir+"/MULTIGRES_INITIALIZED", []byte("initialized\n"), 0o644))
 	defer pm.Close()
 
 	// Start the async loader

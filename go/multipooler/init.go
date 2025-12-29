@@ -17,20 +17,23 @@ package multipooler
 
 import (
 	"context"
-	"os"
+	"errors"
+	"fmt"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
-	"github.com/multigres/multigres/go/clustermetadata/topo"
-	"github.com/multigres/multigres/go/clustermetadata/toporeg"
+	"github.com/multigres/multigres/go/common/constants"
+	"github.com/multigres/multigres/go/common/servenv"
+	"github.com/multigres/multigres/go/common/servenv/toporeg"
+	"github.com/multigres/multigres/go/common/topoclient"
+	"github.com/multigres/multigres/go/multipooler/connpoolmanager"
 	"github.com/multigres/multigres/go/multipooler/grpcconsensusservice"
 	"github.com/multigres/multigres/go/multipooler/grpcmanagerservice"
 	"github.com/multigres/multigres/go/multipooler/grpcpoolerservice"
 	"github.com/multigres/multigres/go/multipooler/manager"
-	"github.com/multigres/multigres/go/servenv"
 	"github.com/multigres/multigres/go/tools/telemetry"
-	"github.com/multigres/multigres/go/viperutil"
+	"github.com/multigres/multigres/go/tools/viperutil"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 )
@@ -41,22 +44,24 @@ type MultiPooler struct {
 	cell                viperutil.Value[string]
 	database            viperutil.Value[string]
 	tableGroup          viperutil.Value[string]
+	shard               viperutil.Value[string]
 	serviceID           viperutil.Value[string]
 	socketFilePath      viperutil.Value[string]
 	poolerDir           viperutil.Value[string]
 	pgPort              viperutil.Value[int]
 	heartbeatIntervalMs viperutil.Value[int]
-	// MultipoolerID stores the ID for deregistration during shutdown
-	multipoolerID *clustermetadatapb.ID
+	pgBackRestStanza    viperutil.Value[string]
 	// GrpcServer is the grpc server
 	grpcServer *servenv.GrpcServer
 	// Senv is the serving environment
 	senv *servenv.ServEnv
 	// TopoConfig holds topology configuration
-	topoConfig *topo.TopoConfig
+	topoConfig *topoclient.TopoConfig
 	telemetry  *telemetry.Telemetry
+	// connPoolConfig holds connection pool configuration (manager created inside MultiPoolerManager)
+	connPoolConfig *connpoolmanager.Config
 
-	ts           topo.Store
+	ts           topoclient.Store
 	tr           *toporeg.TopoReg
 	serverStatus Status
 }
@@ -90,6 +95,11 @@ func NewMultiPooler(telemetry *telemetry.Telemetry) *MultiPooler {
 			FlagName: "table-group",
 			Dynamic:  false,
 		}),
+		shard: viperutil.Configure(reg, "shard", viperutil.Options[string]{
+			Default:  "",
+			FlagName: "shard",
+			Dynamic:  false,
+		}),
 		serviceID: viperutil.Configure(reg, "service-id", viperutil.Options[string]{
 			Default:  "",
 			FlagName: "service-id",
@@ -116,17 +126,22 @@ func NewMultiPooler(telemetry *telemetry.Telemetry) *MultiPooler {
 			FlagName: "heartbeat-interval-milliseconds",
 			Dynamic:  false,
 		}),
-		grpcServer: servenv.NewGrpcServer(reg),
-		senv:       servenv.NewServEnvWithConfig(reg, servenv.NewLogger(reg, telemetry), viperutil.NewViperConfig(reg), telemetry),
-		telemetry:  telemetry,
-		topoConfig: topo.NewTopoConfig(reg),
+		pgBackRestStanza: viperutil.Configure(reg, "pgbackrest-stanza", viperutil.Options[string]{
+			Default:  "",
+			FlagName: "pgbackrest-stanza",
+			Dynamic:  false,
+		}),
+		grpcServer:     servenv.NewGrpcServer(reg),
+		senv:           servenv.NewServEnvWithConfig(reg, servenv.NewLogger(reg, telemetry), viperutil.NewViperConfig(reg), telemetry),
+		telemetry:      telemetry,
+		topoConfig:     topoclient.NewTopoConfig(reg),
+		connPoolConfig: connpoolmanager.NewConfig(reg),
 		serverStatus: Status{
 			Title: "Multipooler",
 			Links: []Link{
 				{"Config", "Server configuration details", "/config"},
 				{"Live", "URL for liveness check", "/live"},
 				{"Ready", "URL for readiness check", "/ready"},
-				{"Metrics", "Prometheus metrics endpoint", "/metrics"},
 			},
 		},
 	}
@@ -142,38 +157,44 @@ func (mp *MultiPooler) RegisterFlags(flags *pflag.FlagSet) {
 	flags.String("cell", mp.cell.Default(), "cell to use")
 	flags.String("database", mp.database.Default(), "database name this multipooler serves (required)")
 	flags.String("table-group", mp.tableGroup.Default(), "table group this multipooler serves (required)")
+	flags.String("shard", mp.shard.Default(), "shard this multipooler serves (required)")
 	flags.String("service-id", mp.serviceID.Default(), "optional service ID (if empty, a random ID will be generated)")
 	flags.String("socket-file", mp.socketFilePath.Default(), "PostgreSQL Unix socket file path (if empty, TCP connection will be used)")
 	flags.String("pooler-dir", mp.poolerDir.Default(), "pooler directory path (if empty, socket-file path will be used as-is)")
 	flags.Int("pg-port", mp.pgPort.Default(), "PostgreSQL port number")
 	flags.Int("heartbeat-interval-milliseconds", mp.heartbeatIntervalMs.Default(), "interval in milliseconds between heartbeat writes")
+	flags.String("pgbackrest-stanza", mp.pgBackRestStanza.Default(), "pgBackRest stanza name (defaults to service ID if empty)")
 
 	viperutil.BindFlags(flags,
 		mp.pgctldAddr,
 		mp.cell,
 		mp.database,
 		mp.tableGroup,
+		mp.shard,
 		mp.serviceID,
 		mp.socketFilePath,
 		mp.poolerDir,
 		mp.pgPort,
 		mp.heartbeatIntervalMs,
+		mp.pgBackRestStanza,
 	)
 
 	mp.grpcServer.RegisterFlags(flags)
 	mp.senv.RegisterFlags(flags)
 	mp.topoConfig.RegisterFlags(flags)
+	mp.connPoolConfig.RegisterFlags(flags)
 }
 
 // Init initializes the multipooler. If any services fail to start,
 // or if some connections fail, it launches goroutines that retry
 // until successful.
-func (mp *MultiPooler) Init(startCtx context.Context) {
+func (mp *MultiPooler) Init(startCtx context.Context) error {
 	startCtx, span := telemetry.Tracer().Start(startCtx, "Init")
 	defer span.End()
 
-	mp.senv.Init("multipooler")
-
+	if err := mp.senv.Init(constants.ServiceMultipooler); err != nil {
+		return fmt.Errorf("servenv init: %w", err)
+	}
 	// Get the configured logger
 	logger := mp.senv.GetLogger()
 
@@ -181,13 +202,18 @@ func (mp *MultiPooler) Init(startCtx context.Context) {
 	// defer that closes the topo runs after cancelling the context.
 	// This ensures that we've properly closed things like the watchers
 	// at that point.
-	mp.ts = mp.topoConfig.Open()
+	var err error
+	mp.ts, err = mp.topoConfig.Open()
+	if err != nil {
+		return fmt.Errorf("topo open: %w", err)
+	}
 
 	logger.InfoContext(startCtx, "multipooler starting up",
 		"pgctld_addr", mp.pgctldAddr.Get(),
 		"cell", mp.cell.Get(),
 		"database", mp.database.Get(),
 		"table_group", mp.tableGroup.Get(),
+		"shard", mp.shard.Get(),
 		"socket_file_path", mp.socketFilePath.Get(),
 		"pooler_dir", mp.poolerDir.Get(),
 		"pg_port", mp.pgPort.Get(),
@@ -196,33 +222,45 @@ func (mp *MultiPooler) Init(startCtx context.Context) {
 	)
 
 	if mp.database.Get() == "" {
-		logger.ErrorContext(startCtx, "database is required")
-		os.Exit(1)
+		return fmt.Errorf("database is required")
 	}
 
 	if mp.tableGroup.Get() == "" {
-		logger.ErrorContext(startCtx, "table group is required")
-		os.Exit(1)
+		return fmt.Errorf("table group is required")
 	}
+
+	if mp.shard.Get() == "" {
+		return fmt.Errorf("shard is required")
+	}
+
 	// Create MultiPooler instance for topo registration
-	multipooler := topo.NewMultiPooler(mp.serviceID.Get(), mp.cell.Get(), mp.senv.GetHostname(), mp.tableGroup.Get())
+	multipooler := topoclient.NewMultiPooler(mp.serviceID.Get(), mp.cell.Get(), mp.senv.GetHostname(), mp.tableGroup.Get())
 	multipooler.PortMap["grpc"] = int32(mp.grpcServer.Port())
 	multipooler.PortMap["http"] = int32(mp.senv.GetHTTPPort())
+	multipooler.PortMap["postgres"] = int32(mp.pgPort.Get())
 	multipooler.Database = mp.database.Get()
+	multipooler.Shard = mp.shard.Get()
 	multipooler.ServingStatus = clustermetadatapb.PoolerServingStatus_NOT_SERVING
 
 	logger.InfoContext(startCtx, "Initializing MultiPoolerManager")
-	poolerManager := manager.NewMultiPoolerManager(logger, &manager.Config{
+	poolerManager, err := manager.NewMultiPoolerManager(logger, &manager.Config{
 		SocketFilePath:      mp.socketFilePath.Get(),
 		PoolerDir:           mp.poolerDir.Get(),
 		PgPort:              mp.pgPort.Get(),
 		Database:            mp.database.Get(),
+		TableGroup:          mp.tableGroup.Get(),
+		Shard:               mp.shard.Get(),
 		TopoClient:          mp.ts,
 		ServiceID:           multipooler.Id,
 		HeartbeatIntervalMs: mp.heartbeatIntervalMs.Get(),
 		PgctldAddr:          mp.pgctldAddr.Get(),
+		PgBackRestStanza:    mp.pgBackRestStanza.Get(),
 		ConsensusEnabled:    mp.grpcServer.CheckServiceMap("consensus", mp.senv),
+		ConnPoolConfig:      mp.connPoolConfig,
 	})
+	if err != nil {
+		return fmt.Errorf("failed to create multipooler: %w", err)
+	}
 
 	// Start the MultiPoolerManager
 	poolerManager.Start(mp.senv)
@@ -233,10 +271,48 @@ func (mp *MultiPooler) Init(startCtx context.Context) {
 	mp.senv.HTTPHandleFunc("/", mp.handleIndex)
 	mp.senv.HTTPHandleFunc("/ready", mp.handleReady)
 
+	// Validate immutable fields if MultiPooler already exists in topology
+	existingMP, err := mp.ts.GetMultiPooler(startCtx, multipooler.Id)
+	if err != nil && !errors.Is(err, &topoclient.TopoError{Code: topoclient.NoNode}) {
+		return fmt.Errorf("failed to get existing multipooler: %w", err)
+	}
+	if existingMP != nil {
+		if existingMP.Database != "" && existingMP.Database != multipooler.Database {
+			logger.ErrorContext(startCtx, "database mismatch: existing value does not match new value (database is immutable after creation)",
+				"existing_database", existingMP.Database,
+				"new_database", multipooler.Database)
+			return fmt.Errorf("database mismatch: existing value does not match new value (database is immutable after creation)")
+		}
+		if existingMP.TableGroup != "" && existingMP.TableGroup != multipooler.TableGroup {
+			logger.ErrorContext(startCtx, "table group mismatch: existing value does not match new value (table group is immutable after creation)",
+				"existing_table_group", existingMP.TableGroup,
+				"new_table_group", multipooler.TableGroup)
+			return fmt.Errorf("table group mismatch: existing value does not match new value (table group is immutable after creation)")
+		}
+		if existingMP.Shard != "" && existingMP.Shard != multipooler.Shard {
+			logger.ErrorContext(startCtx, "shard mismatch: existing value does not match new value (shard is immutable after creation)",
+				"existing_shard", existingMP.Shard,
+				"new_shard", multipooler.Shard)
+			return fmt.Errorf("shard mismatch: existing value does not match new value (shard is immutable after creation)")
+		}
+	}
+
 	mp.senv.OnRun(
 		func() {
 			registerFunc := func(ctx context.Context) error {
-				return mp.ts.RegisterMultiPooler(ctx, multipooler, true /* allowUpdate */)
+				if existingMP == nil {
+					// First time registration - create the multipooler with all fields
+					return mp.ts.RegisterMultiPooler(ctx, multipooler, false /* allowUpdate */)
+				}
+				// Subsequent starts - only update mutable fields (immutable fields already validated above)
+				_, err := mp.ts.UpdateMultiPoolerFields(ctx, multipooler.Id,
+					func(mp *clustermetadatapb.MultiPooler) error {
+						mp.PortMap = multipooler.PortMap
+						mp.Hostname = multipooler.Hostname
+						mp.ServingStatus = multipooler.ServingStatus
+						return nil
+					})
+				return err
 			}
 			// For poolers, we don't un-register them on shutdown (they are persistent component)
 			// If they are actually deleted, they need to be cleaned up outside the lifecycle of starting / stopping.
@@ -264,10 +340,11 @@ func (mp *MultiPooler) Init(startCtx context.Context) {
 	mp.senv.OnClose(func() {
 		mp.Shutdown()
 	})
+	return nil
 }
 
-func (mp *MultiPooler) RunDefault() {
-	mp.senv.RunDefault(mp.grpcServer)
+func (mp *MultiPooler) RunDefault() error {
+	return mp.senv.RunDefault(mp.grpcServer)
 }
 
 func (mp *MultiPooler) Shutdown() {

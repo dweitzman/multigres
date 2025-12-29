@@ -17,65 +17,77 @@ package multiorch
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
-	"github.com/multigres/multigres/go/clustermetadata/topo"
-	"github.com/multigres/multigres/go/clustermetadata/toporeg"
-	"github.com/multigres/multigres/go/servenv"
-	"github.com/multigres/multigres/go/viperutil"
+	"github.com/multigres/multigres/go/common/constants"
+	"github.com/multigres/multigres/go/common/rpcclient"
+	"github.com/multigres/multigres/go/common/servenv"
+	"github.com/multigres/multigres/go/common/servenv/toporeg"
+	"github.com/multigres/multigres/go/common/topoclient"
+	"github.com/multigres/multigres/go/multiorch/config"
+	"github.com/multigres/multigres/go/multiorch/coordinator"
+	"github.com/multigres/multigres/go/multiorch/recovery"
+	"github.com/multigres/multigres/go/tools/viperutil"
 )
 
+// maxPoolerConnections is the maximum number of simultaneous RPC connections
+// to multipooler instances that multiorch will maintain. This limits both the
+// RPC client connection cache capacity and serves as a warning threshold for
+// the number of poolers being monitored.
+const maxPoolerConnections = 1000
+
 type MultiOrch struct {
-	cell viperutil.Value[string]
 	// grpcServer is the grpc server
 	grpcServer *servenv.GrpcServer
 	// senv is the serving environment
 	senv *servenv.ServEnv
 	// topoConfig holds topology configuration
-	topoConfig   *topo.TopoConfig
-	ts           topo.Store
+	topoConfig *topoclient.TopoConfig
+	// connConfig holds multipooler RPC client configuration
+	connConfig   *rpcclient.ConnConfig
+	ts           topoclient.Store
 	tr           *toporeg.TopoReg
 	serverStatus Status
+
+	// Orchestration components
+	cfg            *config.Config
+	recoveryEngine *recovery.Engine
 }
 
 func (mo *MultiOrch) CobraPreRunE(cmd *cobra.Command) error {
 	return mo.senv.CobraPreRunE(cmd)
 }
 
-func (mo *MultiOrch) RunDefault() {
-	mo.senv.RunDefault(mo.grpcServer)
+func (mo *MultiOrch) RunDefault() error {
+	return mo.senv.RunDefault(mo.grpcServer)
 }
 
 // Register flags that are specific to multiorch.
 func (mo *MultiOrch) RegisterFlags(fs *pflag.FlagSet) {
-	fs.String("cell", mo.cell.Default(), "cell to use")
-	viperutil.BindFlags(fs, mo.cell)
+	mo.cfg.RegisterFlags(fs)
 	mo.senv.RegisterFlags(fs)
 	mo.grpcServer.RegisterFlags(fs)
 	mo.topoConfig.RegisterFlags(fs)
+	mo.connConfig.RegisterFlags(fs)
 }
 
 func NewMultiOrch() *MultiOrch {
 	reg := viperutil.NewRegistry()
 	return &MultiOrch{
-		cell: viperutil.Configure(reg, "cell", viperutil.Options[string]{
-			Default:  "",
-			FlagName: "cell",
-			Dynamic:  false,
-			EnvVars:  []string{"MT_CELL"},
-		}),
+		cfg:        config.NewConfig(reg),
 		grpcServer: servenv.NewGrpcServer(reg),
 		senv:       servenv.NewServEnv(reg),
-		topoConfig: topo.NewTopoConfig(reg),
+		topoConfig: topoclient.NewTopoConfig(reg),
+		connConfig: rpcclient.NewConnConfig(reg),
 		serverStatus: Status{
 			Title: "Multiorch",
 			Links: []Link{
 				{"Config", "Server configuration details", "/config"},
 				{"Live", "URL for liveness check", "/live"},
 				{"Ready", "URL for readiness check", "/ready"},
-				{"Metrics", "Prometheus metrics endpoint", "/metrics"},
 			},
 		},
 	}
@@ -84,21 +96,40 @@ func NewMultiOrch() *MultiOrch {
 // Init initializes the multiorch. If any services fail to start,
 // or if some connections fail, it launches goroutines that retry
 // until successful.
-func (mo *MultiOrch) Init() {
-	mo.senv.Init("multiorch")
+func (mo *MultiOrch) Init() error {
+	if err := mo.senv.Init(constants.ServiceMultiorch); err != nil {
+		return fmt.Errorf("servenv init: %w", err)
+	}
 	// Get the configured logger
 	logger := mo.senv.GetLogger()
-	mo.ts = mo.topoConfig.Open()
+
+	var err error
+	mo.ts, err = mo.topoConfig.Open()
+	if err != nil {
+		return fmt.Errorf("topo open: %w", err)
+	}
+
+	// Validate and parse shard watch targets
+	targetsRaw := mo.cfg.GetShardWatchTargets()
+	if len(targetsRaw) == 0 {
+		return fmt.Errorf("watch-targets is required")
+	}
+
+	targets, err := config.ParseShardWatchTargets(targetsRaw)
+	if err != nil {
+		return fmt.Errorf("failed to parse watch-targets: %w", err)
+	}
 
 	logger.Info("multiorch starting up",
-		"cell", mo.cell.Get(),
+		"cell", mo.cfg.GetCell(),
 		"http_port", mo.senv.GetHTTPPort(),
 		"grpc_port", mo.grpcServer.Port(),
+		"watch_targets", targets,
 	)
 
 	// Create MultiOrch instance for topo registration
 	// TODO(sougou): Is serviceID needed? It's sent as empty string for now.
-	multiorch := topo.NewMultiOrch("", mo.cell.Get(), mo.senv.GetHostname())
+	multiorch := topoclient.NewMultiOrch("", mo.cfg.GetCell(), mo.senv.GetHostname())
 	multiorch.PortMap["grpc"] = int32(mo.grpcServer.Port())
 	multiorch.PortMap["http"] = int32(mo.senv.GetHTTPPort())
 
@@ -115,13 +146,37 @@ func (mo *MultiOrch) Init() {
 	mo.senv.HTTPHandleFunc("/", mo.handleIndex)
 	mo.senv.HTTPHandleFunc("/ready", mo.handleReady)
 
+	// Create RPC client for recovery engine health checks
+	rpcClient := rpcclient.NewMultiPoolerClient(maxPoolerConnections)
+
+	// Create coordinator for consensus operations
+	coord := coordinator.NewCoordinator(multiorch.Id, mo.ts, rpcClient, logger)
+
+	// Create and start recovery engine
+	mo.recoveryEngine = recovery.NewEngine(
+		mo.ts,
+		logger,
+		mo.cfg,
+		targets,
+		rpcClient,
+		coord,
+	)
+
+	if err := mo.recoveryEngine.Start(); err != nil {
+		return fmt.Errorf("failed to start recovery engine: %w", err)
+	}
+
 	mo.senv.OnClose(func() {
 		mo.Shutdown()
 	})
+	return nil
 }
 
 func (mo *MultiOrch) Shutdown() {
 	mo.senv.GetLogger().Info("multiorch shutting down")
+	if mo.recoveryEngine != nil {
+		mo.recoveryEngine.Stop()
+	}
 	mo.tr.Unregister()
 	mo.ts.Close()
 }

@@ -24,101 +24,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/multigres/multigres/go/clustermetadata/topo"
-	"github.com/multigres/multigres/go/clustermetadata/topo/memorytopo"
+	"github.com/multigres/multigres/go/common/constants"
+	"github.com/multigres/multigres/go/common/topoclient"
+	"github.com/multigres/multigres/go/common/topoclient/memorytopo"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
-
-func TestInitializationStatus(t *testing.T) {
-	tests := []struct {
-		name                string
-		setupFunc           func(t *testing.T, pm *MultiPoolerManager, poolerDir string)
-		expectedInitialized bool
-		expectedHasDataDir  bool
-		expectedRole        string
-		expectedShardID     string
-	}{
-		{
-			name: "uninitialized pooler",
-			setupFunc: func(t *testing.T, pm *MultiPoolerManager, poolerDir string) {
-				// Don't create anything - pooler is completely uninitialized
-			},
-			expectedInitialized: false,
-			expectedHasDataDir:  false,
-			expectedRole:        "unknown",
-			expectedShardID:     "test-shard-01",
-		},
-		{
-			name: "pooler with data directory but no database",
-			setupFunc: func(t *testing.T, pm *MultiPoolerManager, poolerDir string) {
-				// Create data directory
-				dataDir := filepath.Join(poolerDir, "pg_data")
-				require.NoError(t, os.MkdirAll(dataDir, 0o755))
-			},
-			expectedInitialized: false,
-			expectedHasDataDir:  true,
-			expectedRole:        "unknown",
-			expectedShardID:     "test-shard-01",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
-			poolerDir := t.TempDir()
-
-			// Create test config
-			store, _ := memorytopo.NewServerAndFactory(ctx, "test-cell")
-			defer store.Close()
-
-			serviceID := &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
-				Cell:      "test-cell",
-				Name:      "test-pooler",
-			}
-
-			config := &Config{
-				PoolerDir:  poolerDir,
-				PgPort:     5432,
-				Database:   "postgres",
-				TopoClient: store,
-				ServiceID:  serviceID,
-			}
-
-			logger := slog.Default()
-			pm := NewMultiPoolerManager(logger, config)
-
-			// Create multipooler record in topology
-			multipooler := &clustermetadatapb.MultiPooler{
-				Id:         serviceID,
-				Database:   "testdb",
-				TableGroup: "testgroup",
-				Shard:      tt.expectedShardID,
-			}
-
-			pm.mu.Lock()
-			pm.multipooler = &topo.MultiPoolerInfo{MultiPooler: multipooler}
-			pm.mu.Unlock()
-
-			// Run setup function
-			if tt.setupFunc != nil {
-				tt.setupFunc(t, pm, poolerDir)
-			}
-
-			// Call InitializationStatus
-			resp, err := pm.InitializationStatus(ctx, &multipoolermanagerdatapb.InitializationStatusRequest{})
-			require.NoError(t, err)
-			require.NotNil(t, resp)
-
-			// Verify response
-			assert.Equal(t, tt.expectedInitialized, resp.IsInitialized, "IsInitialized mismatch")
-			assert.Equal(t, tt.expectedHasDataDir, resp.HasDataDirectory, "HasDataDirectory mismatch")
-			assert.Equal(t, tt.expectedRole, resp.Role, "Role mismatch")
-			assert.Equal(t, tt.expectedShardID, resp.ShardId, "ShardId mismatch")
-		})
-	}
-}
 
 func TestInitializeEmptyPrimary(t *testing.T) {
 	tests := []struct {
@@ -171,15 +82,18 @@ func TestInitializeEmptyPrimary(t *testing.T) {
 				Database:   "postgres",
 				TopoClient: store,
 				ServiceID:  serviceID,
+				TableGroup: constants.DefaultTableGroup,
+				Shard:      constants.DefaultShard,
 				// Note: pgctldClient is nil - operations that need it will fail gracefully
 			}
 
 			logger := slog.Default()
-			pm := NewMultiPoolerManager(logger, config)
+			pm, err := NewMultiPoolerManager(logger, config)
+			require.NoError(t, err)
 
 			// Initialize consensus state
 			pm.consensusState = NewConsensusState(poolerDir, serviceID)
-			_, err := pm.consensusState.Load()
+			_, err = pm.consensusState.Load()
 			require.NoError(t, err)
 
 			// Run setup function
@@ -218,8 +132,7 @@ func TestInitializeAsStandby(t *testing.T) {
 	tests := []struct {
 		name          string
 		setupFunc     func(t *testing.T, pm *MultiPoolerManager, poolerDir string)
-		primaryHost   string
-		primaryPort   int32
+		primary       *clustermetadatapb.MultiPooler
 		term          int64
 		force         bool
 		expectError   bool
@@ -230,8 +143,15 @@ func TestInitializeAsStandby(t *testing.T) {
 			setupFunc: func(t *testing.T, pm *MultiPoolerManager, poolerDir string) {
 				// Fresh pooler - no setup needed
 			},
-			primaryHost: "primary-host",
-			primaryPort: 5432,
+			primary: &clustermetadatapb.MultiPooler{
+				Id: &clustermetadatapb.ID{
+					Component: clustermetadatapb.ID_MULTIPOOLER,
+					Cell:      "test-cell",
+					Name:      "primary-pooler",
+				},
+				Hostname: "primary-host",
+				PortMap:  map[string]int32{"postgres": 5432},
+			},
 			term:        1,
 			force:       false,
 			expectError: false,
@@ -239,19 +159,58 @@ func TestInitializeAsStandby(t *testing.T) {
 		{
 			name: "force reinit removes existing data",
 			setupFunc: func(t *testing.T, pm *MultiPoolerManager, poolerDir string) {
-				// Create existing data directory
+				// Create existing data directory with PG_VERSION file
 				dataDir := filepath.Join(poolerDir, "pg_data")
 				require.NoError(t, os.MkdirAll(dataDir, 0o755))
+				pgVersionFile := filepath.Join(dataDir, "PG_VERSION")
+				require.NoError(t, os.WriteFile(pgVersionFile, []byte("16"), 0o644))
 
 				// Create a test file
 				testFile := filepath.Join(dataDir, "test.txt")
 				require.NoError(t, os.WriteFile(testFile, []byte("test"), 0o644))
 			},
-			primaryHost: "primary-host",
-			primaryPort: 5432,
+			primary: &clustermetadatapb.MultiPooler{
+				Id: &clustermetadatapb.ID{
+					Component: clustermetadatapb.ID_MULTIPOOLER,
+					Cell:      "test-cell",
+					Name:      "primary-pooler",
+				},
+				Hostname: "primary-host",
+				PortMap:  map[string]int32{"postgres": 5432},
+			},
 			term:        1,
 			force:       true,
 			expectError: false,
+		},
+		{
+			name: "error when primary is nil",
+			setupFunc: func(t *testing.T, pm *MultiPoolerManager, poolerDir string) {
+				// Fresh pooler - no setup needed
+			},
+			primary:       nil,
+			term:          1,
+			force:         false,
+			expectError:   true,
+			errorContains: "primary is required",
+		},
+		{
+			name: "error when primary has no postgres port",
+			setupFunc: func(t *testing.T, pm *MultiPoolerManager, poolerDir string) {
+				// Fresh pooler - no setup needed
+			},
+			primary: &clustermetadatapb.MultiPooler{
+				Id: &clustermetadatapb.ID{
+					Component: clustermetadatapb.ID_MULTIPOOLER,
+					Cell:      "test-cell",
+					Name:      "primary-pooler",
+				},
+				Hostname: "primary-host",
+				PortMap:  map[string]int32{}, // No postgres port
+			},
+			term:          1,
+			force:         false,
+			expectError:   true,
+			errorContains: "no postgres port configured",
 		},
 	}
 
@@ -275,14 +234,17 @@ func TestInitializeAsStandby(t *testing.T) {
 				Database:   "postgres",
 				TopoClient: store,
 				ServiceID:  serviceID,
+				TableGroup: constants.DefaultTableGroup,
+				Shard:      constants.DefaultShard,
 			}
 
 			logger := slog.Default()
-			pm := NewMultiPoolerManager(logger, config)
+			pm, err := NewMultiPoolerManager(logger, config)
+			require.NoError(t, err)
 
 			// Initialize consensus state
 			pm.consensusState = NewConsensusState(poolerDir, serviceID)
-			_, err := pm.consensusState.Load()
+			_, err = pm.consensusState.Load()
 			require.NoError(t, err)
 
 			// Run setup function
@@ -300,8 +262,7 @@ func TestInitializeAsStandby(t *testing.T) {
 
 			// Call InitializeAsStandby
 			req := &multipoolermanagerdatapb.InitializeAsStandbyRequest{
-				PrimaryHost:   tt.primaryHost,
-				PrimaryPort:   tt.primaryPort,
+				Primary:       tt.primary,
 				ConsensusTerm: tt.term,
 				Force:         tt.force,
 			}
@@ -337,6 +298,75 @@ func TestInitializeAsStandby(t *testing.T) {
 	}
 }
 
+func TestInitializeAsStandbySetsPrimaryPoolerID(t *testing.T) {
+	ctx := context.Background()
+	poolerDir := t.TempDir()
+
+	// Create test config
+	store, _ := memorytopo.NewServerAndFactory(ctx, "test-cell")
+	defer store.Close()
+	serviceID := &clustermetadatapb.ID{
+		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Cell:      "test-cell",
+		Name:      "test-pooler",
+	}
+
+	config := &Config{
+		PoolerDir:  poolerDir,
+		PgPort:     5432,
+		Database:   "postgres",
+		TopoClient: store,
+		ServiceID:  serviceID,
+		TableGroup: constants.DefaultTableGroup,
+		Shard:      constants.DefaultShard,
+	}
+
+	logger := slog.Default()
+	pm, err := NewMultiPoolerManager(logger, config)
+	require.NoError(t, err)
+
+	// Initialize consensus state
+	pm.consensusState = NewConsensusState(poolerDir, serviceID)
+	_, err = pm.consensusState.Load()
+	require.NoError(t, err)
+
+	// Verify primaryPoolerID is initially nil
+	pm.mu.Lock()
+	assert.Nil(t, pm.primaryPoolerID, "primaryPoolerID should be nil initially")
+	pm.mu.Unlock()
+
+	// Create primary MultiPooler
+	primaryID := &clustermetadatapb.ID{
+		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Cell:      "test-cell",
+		Name:      "primary-pooler",
+	}
+	primary := &clustermetadatapb.MultiPooler{
+		Id:       primaryID,
+		Hostname: "primary-host",
+		PortMap:  map[string]int32{"postgres": 5432},
+	}
+
+	// Call InitializeAsStandby with Primary field
+	req := &multipoolermanagerdatapb.InitializeAsStandbyRequest{
+		Primary:       primary,
+		ConsensusTerm: 1,
+		Force:         false,
+	}
+
+	// This will fail early due to missing pgctld/backup, but primaryPoolerID should be set first
+	_, _ = pm.InitializeAsStandby(ctx, req)
+
+	// Verify primaryPoolerID was set (even though the operation failed later)
+	pm.mu.Lock()
+	assert.NotNil(t, pm.primaryPoolerID, "primaryPoolerID should be set from Primary field")
+	if pm.primaryPoolerID != nil {
+		assert.Equal(t, "primary-pooler", pm.primaryPoolerID.Name)
+		assert.Equal(t, "test-cell", pm.primaryPoolerID.Cell)
+	}
+	pm.mu.Unlock()
+}
+
 func TestHelperMethods(t *testing.T) {
 	t.Run("hasDataDirectory", func(t *testing.T) {
 		poolerDir := t.TempDir()
@@ -346,9 +376,11 @@ func TestHelperMethods(t *testing.T) {
 		// Initially no data directory
 		assert.False(t, pm.hasDataDirectory())
 
-		// Create data directory
+		// Create data directory with PG_VERSION file (simulating initialized postgres)
 		dataDir := filepath.Join(poolerDir, "pg_data")
 		require.NoError(t, os.MkdirAll(dataDir, 0o755))
+		pgVersionFile := filepath.Join(dataDir, "PG_VERSION")
+		require.NoError(t, os.WriteFile(pgVersionFile, []byte("16"), 0o644))
 
 		// Now should return true
 		assert.True(t, pm.hasDataDirectory())
@@ -369,7 +401,7 @@ func TestHelperMethods(t *testing.T) {
 		}
 
 		pm := &MultiPoolerManager{
-			multipooler: &topo.MultiPoolerInfo{MultiPooler: multipooler},
+			multipooler: &topoclient.MultiPoolerInfo{MultiPooler: multipooler},
 		}
 
 		assert.Equal(t, "shard-123", pm.getShardID())

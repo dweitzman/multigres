@@ -15,10 +15,14 @@
 package local
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
+	"github.com/multigres/multigres/go/common/constants"
+	"github.com/multigres/multigres/go/provisioner/local/pgbackrest"
 	"github.com/multigres/multigres/go/provisioner/local/ports"
 	"github.com/multigres/multigres/go/tools/stringutil"
 
@@ -33,7 +37,6 @@ type CellConfig struct {
 
 // TopologyConfig holds the configuration for cluster topology
 type TopologyConfig struct {
-	Backend        string       `yaml:"backend"`
 	GlobalRootPath string       `yaml:"global-root-path"`
 	Cells          []CellConfig `yaml:"cells"`
 }
@@ -50,6 +53,7 @@ type CellServicesConfig struct {
 type LocalProvisionerConfig struct {
 	RootWorkingDir string                        `yaml:"root-working-dir"`
 	DefaultDbName  string                        `yaml:"default-db-name"`
+	BackupRepoPath string                        `yaml:"backup-repo-path,omitempty"`
 	Etcd           EtcdConfig                    `yaml:"etcd"`
 	Topology       TopologyConfig                `yaml:"topology"`
 	Multiadmin     MultiadminConfig              `yaml:"multiadmin"`
@@ -58,9 +62,10 @@ type LocalProvisionerConfig struct {
 
 // EtcdConfig holds etcd service configuration
 type EtcdConfig struct {
-	Version string `yaml:"version"`
-	DataDir string `yaml:"data-dir"`
-	Port    int    `yaml:"port"`
+	Version  string `yaml:"version"`
+	DataDir  string `yaml:"data-dir"`
+	Port     int    `yaml:"port"`                // Client port
+	PeerPort int    `yaml:"peer-port,omitempty"` // Optional peer port, defaults to Port+1
 }
 
 // MultigatewayConfig holds multigateway service configuration
@@ -77,9 +82,11 @@ type MultipoolerConfig struct {
 	Path           string `yaml:"path"`
 	Database       string `yaml:"database"`
 	TableGroup     string `yaml:"table-group"`
+	Shard          string `yaml:"shard"`
 	ServiceID      string `yaml:"service-id"`
-	PoolerDir      string `yaml:"pooler-dir"` // Directory path for PostgreSQL socket files
-	PgPort         int    `yaml:"pg-port"`    // PostgreSQL port number (same as pgctld)
+	PoolerDir      string `yaml:"pooler-dir"`  // Directory path for PostgreSQL socket files
+	PgPort         int    `yaml:"pg-port"`     // PostgreSQL port number (same as pgctld)
+	BackupConf     string `yaml:"backup-conf"` // Path to backup configuration file (pgbackrest.conf)
 	HttpPort       int    `yaml:"http-port"`
 	GrpcPort       int    `yaml:"grpc-port"`
 	GRPCSocketFile string `yaml:"grpc-socket-file"` // Unix socket file path for gRPC
@@ -88,10 +95,13 @@ type MultipoolerConfig struct {
 
 // MultiorchConfig holds multiorch service configuration
 type MultiorchConfig struct {
-	Path     string `yaml:"path"`
-	HttpPort int    `yaml:"http-port"`
-	GrpcPort int    `yaml:"grpc-port"`
-	LogLevel string `yaml:"log-level"`
+	Path                           string `yaml:"path"`
+	HttpPort                       int    `yaml:"http-port"`
+	GrpcPort                       int    `yaml:"grpc-port"`
+	LogLevel                       string `yaml:"log-level"`
+	ClusterMetadataRefreshInterval string `yaml:"cluster-metadata-refresh-interval,omitempty"`
+	PoolerHealthCheckInterval      string `yaml:"pooler-health-check-interval,omitempty"`
+	RecoveryCycleInterval          string `yaml:"recovery-cycle-interval,omitempty"`
 }
 
 // MultiadminConfig holds multiadmin service configuration
@@ -111,7 +121,7 @@ type PgctldConfig struct {
 	PgPort         int    `yaml:"pg-port"`          // PostgreSQL port
 	PgDatabase     string `yaml:"pg-database"`      // PostgreSQL database name
 	PgUser         string `yaml:"pg-user"`          // PostgreSQL username
-	PgPwfile       string `yaml:"pg-pwfile"`        // PostgreSQL password file path (optional)
+	PgPwfile       string `yaml:"pg-pwfile"`        // Source password file path; copied to pooler-dir/pgpassword.txt during init
 	Timeout        int    `yaml:"timeout"`          // Operation timeout in seconds
 	LogLevel       string `yaml:"log-level"`        // Log level
 }
@@ -175,20 +185,22 @@ func (p *localProvisioner) DefaultConfig(configPaths []string) map[string]any {
 	// Generate service IDs for each cell using the same method as topo components
 	serviceIDZone1 := stringutil.RandomString(8)
 	serviceIDZone2 := stringutil.RandomString(8)
+	serviceIDZone3 := stringutil.RandomString(8)
 	tableGroup := "default"
-	dbName := "postgres"
+	shard := "0-inf"
+	dbName := constants.DefaultPostgresDatabase
 
 	// Create typed configuration with defaults
 	localConfig := LocalProvisionerConfig{
 		RootWorkingDir: baseDir,
 		DefaultDbName:  dbName,
+		BackupRepoPath: filepath.Join(baseDir, "data", "backups"),
 		Etcd: EtcdConfig{
 			Version: "3.5.9",
 			DataDir: filepath.Join(baseDir, "data", "etcd-data"),
 			Port:    ports.DefaultEtcdPort,
 		},
 		Topology: TopologyConfig{
-			Backend:        "etcd2",
 			GlobalRootPath: "/multigres/global",
 			Cells: []CellConfig{
 				{
@@ -198,6 +210,10 @@ func (p *localProvisioner) DefaultConfig(configPaths []string) map[string]any {
 				{
 					Name:     "zone2",
 					RootPath: "/multigres/zone2",
+				},
+				{
+					Name:     "zone3",
+					RootPath: "/multigres/zone3",
 				},
 			},
 		},
@@ -220,29 +236,33 @@ func (p *localProvisioner) DefaultConfig(configPaths []string) map[string]any {
 					Path:           filepath.Join(binDir, "multipooler"),
 					Database:       dbName,
 					TableGroup:     tableGroup,
+					Shard:          shard,
 					ServiceID:      serviceIDZone1,
 					PoolerDir:      GeneratePoolerDir(baseDir, serviceIDZone1),
-					PgPort:         ports.DefaultPostgresPort, // Same as pgctld for this zone
+					PgPort:         ports.DefaultLocalPostgresPort, // Same as pgctld for this zone
+					BackupConf:     filepath.Join(GeneratePoolerDir(baseDir, serviceIDZone1), "pgbackrest.conf"),
 					HttpPort:       ports.DefaultMultipoolerHTTP,
 					GrpcPort:       ports.DefaultMultipoolerGRPC,
 					GRPCSocketFile: filepath.Join(baseDir, "sockets", "multipooler-zone1.sock"),
 					LogLevel:       "info",
 				},
 				Multiorch: MultiorchConfig{
-					Path:     filepath.Join(binDir, "multiorch"),
-					HttpPort: ports.DefaultMultiorchHTTP,
-					GrpcPort: ports.DefaultMultiorchGRPC,
-					LogLevel: "info",
+					Path:                           filepath.Join(binDir, "multiorch"),
+					HttpPort:                       ports.DefaultMultiorchHTTP,
+					GrpcPort:                       ports.DefaultMultiorchGRPC,
+					LogLevel:                       "info",
+					ClusterMetadataRefreshInterval: "500ms",
+					PoolerHealthCheckInterval:      "500ms",
+					RecoveryCycleInterval:          "500ms",
 				},
 				Pgctld: PgctldConfig{
 					Path:           filepath.Join(binDir, "pgctld"),
 					PoolerDir:      GeneratePoolerDir(baseDir, serviceIDZone1),
 					GrpcPort:       ports.DefaultPgctldGRPC,
 					GRPCSocketFile: filepath.Join(baseDir, "sockets", "pgctld-zone1.sock"),
-					PgPort:         ports.DefaultPostgresPort,
+					PgPort:         ports.DefaultLocalPostgresPort,
 					PgDatabase:     dbName,
-					PgUser:         "postgres",
-					PgPwfile:       filepath.Join(GeneratePoolerDir(baseDir, serviceIDZone1), "pgpassword.txt"),
+					PgUser:         constants.DefaultPostgresUser,
 					Timeout:        30,
 					LogLevel:       "info",
 				},
@@ -252,36 +272,85 @@ func (p *localProvisioner) DefaultConfig(configPaths []string) map[string]any {
 					Path:     filepath.Join(binDir, "multigateway"),
 					HttpPort: ports.DefaultMultigatewayHTTP + 1,
 					GrpcPort: ports.DefaultMultigatewayGRPC + 1,
-					PgPort:   ports.DefaultPostgresPort + 1,
+					PgPort:   ports.DefaultMultigatewayPG + 1,
 					LogLevel: "info",
 				},
 				Multipooler: MultipoolerConfig{
 					Path:           filepath.Join(binDir, "multipooler"),
 					Database:       dbName,
 					TableGroup:     tableGroup,
+					Shard:          shard,
 					ServiceID:      serviceIDZone2,
 					PoolerDir:      GeneratePoolerDir(baseDir, serviceIDZone2),
-					PgPort:         ports.DefaultPostgresPort + 1,
+					PgPort:         ports.DefaultLocalPostgresPort + 1,
+					BackupConf:     filepath.Join(GeneratePoolerDir(baseDir, serviceIDZone2), "pgbackrest.conf"),
 					HttpPort:       ports.DefaultMultipoolerHTTP + 1,
 					GrpcPort:       ports.DefaultMultipoolerGRPC + 1,
 					GRPCSocketFile: filepath.Join(baseDir, "sockets", "multipooler-zone2.sock"),
 					LogLevel:       "info",
 				},
 				Multiorch: MultiorchConfig{
-					Path:     filepath.Join(binDir, "multiorch"),
-					HttpPort: ports.DefaultMultiorchHTTP + 1,
-					GrpcPort: ports.DefaultMultiorchGRPC + 1,
-					LogLevel: "info",
+					Path:                           filepath.Join(binDir, "multiorch"),
+					HttpPort:                       ports.DefaultMultiorchHTTP + 1,
+					GrpcPort:                       ports.DefaultMultiorchGRPC + 1,
+					LogLevel:                       "info",
+					ClusterMetadataRefreshInterval: "500ms",
+					PoolerHealthCheckInterval:      "500ms",
+					RecoveryCycleInterval:          "500ms",
 				},
 				Pgctld: PgctldConfig{
 					Path:           filepath.Join(binDir, "pgctld"),
 					PoolerDir:      GeneratePoolerDir(baseDir, serviceIDZone2),
 					GrpcPort:       ports.DefaultPgctldGRPC + 1,
 					GRPCSocketFile: filepath.Join(baseDir, "sockets", "pgctld-zone2.sock"),
-					PgPort:         ports.DefaultPostgresPort + 1,
+					PgPort:         ports.DefaultLocalPostgresPort + 1,
 					PgDatabase:     dbName,
-					PgUser:         "postgres",
+					PgUser:         constants.DefaultPostgresUser,
 					PgPwfile:       filepath.Join(GeneratePoolerDir(baseDir, serviceIDZone2), "pgpassword.txt"),
+					Timeout:        30,
+					LogLevel:       "info",
+				},
+			},
+			"zone3": {
+				Multigateway: MultigatewayConfig{
+					Path:     filepath.Join(binDir, "multigateway"),
+					HttpPort: ports.DefaultMultigatewayHTTP + 2,
+					GrpcPort: ports.DefaultMultigatewayGRPC + 2,
+					PgPort:   ports.DefaultMultigatewayPG + 2,
+					LogLevel: "info",
+				},
+				Multipooler: MultipoolerConfig{
+					Path:           filepath.Join(binDir, "multipooler"),
+					Database:       dbName,
+					TableGroup:     tableGroup,
+					Shard:          shard,
+					ServiceID:      serviceIDZone3,
+					PoolerDir:      GeneratePoolerDir(baseDir, serviceIDZone3),
+					PgPort:         ports.DefaultLocalPostgresPort + 2,
+					BackupConf:     filepath.Join(GeneratePoolerDir(baseDir, serviceIDZone3), "pgbackrest.conf"),
+					HttpPort:       ports.DefaultMultipoolerHTTP + 2,
+					GrpcPort:       ports.DefaultMultipoolerGRPC + 2,
+					GRPCSocketFile: filepath.Join(baseDir, "sockets", "multipooler-zone3.sock"),
+					LogLevel:       "info",
+				},
+				Multiorch: MultiorchConfig{
+					Path:                           filepath.Join(binDir, "multiorch"),
+					HttpPort:                       ports.DefaultMultiorchHTTP + 2,
+					GrpcPort:                       ports.DefaultMultiorchGRPC + 2,
+					LogLevel:                       "info",
+					ClusterMetadataRefreshInterval: "500ms",
+					PoolerHealthCheckInterval:      "500ms",
+					RecoveryCycleInterval:          "500ms",
+				},
+				Pgctld: PgctldConfig{
+					Path:           filepath.Join(binDir, "pgctld"),
+					PoolerDir:      GeneratePoolerDir(baseDir, serviceIDZone3),
+					GrpcPort:       ports.DefaultPgctldGRPC + 2,
+					GRPCSocketFile: filepath.Join(baseDir, "sockets", "pgctld-zone3.sock"),
+					PgPort:         ports.DefaultLocalPostgresPort + 2,
+					PgDatabase:     dbName,
+					PgUser:         constants.DefaultPostgresUser,
+					PgPwfile:       filepath.Join(GeneratePoolerDir(baseDir, serviceIDZone3), "pgpassword.txt"),
 					Timeout:        30,
 					LogLevel:       "info",
 				},
@@ -312,11 +381,12 @@ func (p *localProvisioner) getServiceConfig(service string) map[string]any {
 	switch service {
 	case "etcd":
 		return map[string]any{
-			"version":  p.config.Etcd.Version,
-			"data-dir": p.config.Etcd.DataDir,
-			"port":     p.config.Etcd.Port,
+			"version":   p.config.Etcd.Version,
+			"data-dir":  p.config.Etcd.DataDir,
+			"port":      p.config.Etcd.Port,
+			"peer-port": p.config.Etcd.PeerPort,
 		}
-	case "multiadmin":
+	case constants.ServiceMultiadmin:
 		return map[string]any{
 			"path":      p.config.Multiadmin.Path,
 			"http_port": p.config.Multiadmin.HttpPort,
@@ -337,7 +407,7 @@ func (p *localProvisioner) getCellServiceConfig(cellName, service string) (map[s
 	}
 
 	switch service {
-	case "multigateway":
+	case constants.ServiceMultigateway:
 		return map[string]any{
 			"path":      cellServices.Multigateway.Path,
 			"http_port": cellServices.Multigateway.HttpPort,
@@ -345,11 +415,12 @@ func (p *localProvisioner) getCellServiceConfig(cellName, service string) (map[s
 			"pg_port":   cellServices.Multigateway.PgPort,
 			"log_level": cellServices.Multigateway.LogLevel,
 		}, nil
-	case "multipooler":
+	case constants.ServiceMultipooler:
 		return map[string]any{
 			"path":             cellServices.Multipooler.Path,
 			"database":         cellServices.Multipooler.Database,
 			"table_group":      cellServices.Multipooler.TableGroup,
+			"shard":            cellServices.Multipooler.Shard,
 			"service-id":       cellServices.Multipooler.ServiceID,
 			"http_port":        cellServices.Multipooler.HttpPort,
 			"grpc_port":        cellServices.Multipooler.GrpcPort,
@@ -357,15 +428,19 @@ func (p *localProvisioner) getCellServiceConfig(cellName, service string) (map[s
 			"log_level":        cellServices.Multipooler.LogLevel,
 			"pooler_dir":       cellServices.Multipooler.PoolerDir,
 			"pg_port":          cellServices.Multipooler.PgPort,
+			"backup_conf":      cellServices.Multipooler.BackupConf,
 		}, nil
-	case "multiorch":
+	case constants.ServiceMultiorch:
 		return map[string]any{
-			"path":      cellServices.Multiorch.Path,
-			"http_port": cellServices.Multiorch.HttpPort,
-			"grpc_port": cellServices.Multiorch.GrpcPort,
-			"log_level": cellServices.Multiorch.LogLevel,
+			"path":                              cellServices.Multiorch.Path,
+			"http_port":                         cellServices.Multiorch.HttpPort,
+			"grpc_port":                         cellServices.Multiorch.GrpcPort,
+			"log_level":                         cellServices.Multiorch.LogLevel,
+			"cluster_metadata_refresh_interval": cellServices.Multiorch.ClusterMetadataRefreshInterval,
+			"pooler_health_check_interval":      cellServices.Multiorch.PoolerHealthCheckInterval,
+			"recovery_cycle_interval":           cellServices.Multiorch.RecoveryCycleInterval,
 		}, nil
-	case "pgctld":
+	case constants.ServicePgctld:
 		return map[string]any{
 			"path":             cellServices.Pgctld.Path,
 			"pooler_dir":       cellServices.Pgctld.PoolerDir,
@@ -374,11 +449,144 @@ func (p *localProvisioner) getCellServiceConfig(cellName, service string) (map[s
 			"pg_port":          cellServices.Pgctld.PgPort,
 			"pg_database":      cellServices.Pgctld.PgDatabase,
 			"pg_user":          cellServices.Pgctld.PgUser,
-			"pg_pwfile":        cellServices.Pgctld.PgPwfile,
 			"timeout":          cellServices.Pgctld.Timeout,
 			"log_level":        cellServices.Pgctld.LogLevel,
 		}, nil
 	default:
 		return nil, fmt.Errorf("unknown service %s", service)
 	}
+}
+
+// GeneratePgBackRestConfigs generates pgBackRest configuration files for all poolers
+// This should be called after the configuration is loaded and before starting services
+func (p *localProvisioner) GeneratePgBackRestConfigs() error {
+	if p.config == nil {
+		return fmt.Errorf("configuration not loaded")
+	}
+
+	// Set default backup repository path if not specified
+	if p.config.BackupRepoPath == "" {
+		p.config.BackupRepoPath = filepath.Join(p.config.RootWorkingDir, "data", "backups")
+	}
+
+	// Create the backup repository directory if it doesn't exist
+	if err := os.MkdirAll(p.config.BackupRepoPath, 0o755); err != nil {
+		return fmt.Errorf("failed to create backup repository directory %s: %w", p.config.BackupRepoPath, err)
+	}
+
+	// Create the pgBackRest log directory if it doesn't exist
+	pgBackRestLogPath := filepath.Join(p.config.RootWorkingDir, "logs", "dbs", "postgres", "pgbackrest")
+	if err := os.MkdirAll(pgBackRestLogPath, 0o755); err != nil {
+		return fmt.Errorf("failed to create pgBackRest log directory %s: %w", pgBackRestLogPath, err)
+	}
+
+	// Get sorted list of all cell names for consistent ordering
+	var allCells []string
+	for cellName := range p.config.Cells {
+		allCells = append(allCells, cellName)
+	}
+	sort.Strings(allCells)
+
+	for _, cellName := range allCells {
+		cellServices := p.config.Cells[cellName]
+
+		// Use default backup config path if not specified in config
+		backupConfPath := cellServices.Multipooler.BackupConf
+		if backupConfPath == "" {
+			backupConfPath = filepath.Join(cellServices.Multipooler.PoolerDir, "pgbackrest.conf")
+		}
+
+		// Build AdditionalHosts with all other clusters
+		// Each cluster treats itself as pg1 and others as pg2, pg3, etc.
+		var additionalHosts []pgbackrest.PgHost
+		for _, otherCellName := range allCells {
+			if otherCellName == cellName {
+				// Skip self - this is pg1
+				continue
+			}
+			otherCellServices := p.config.Cells[otherCellName]
+			additionalHosts = append(additionalHosts, pgbackrest.PgHost{
+				DataPath:  filepath.Join(otherCellServices.Multipooler.PoolerDir, "pg_data"),
+				Host:      "", // Empty for local Unix socket connections
+				Port:      otherCellServices.Multipooler.PgPort,
+				SocketDir: filepath.Join(otherCellServices.Multipooler.PoolerDir, "pg_sockets"),
+				User:      constants.DefaultPostgresUser,
+				Database:  constants.DefaultPostgresDatabase,
+			})
+		}
+
+		// Create per-pooler spool and lock directories inside backup repo
+		// This prevents conflicts when multiple poolers run pgbackrest operations simultaneously
+		poolerID := cellServices.Multipooler.ServiceID
+		pgBackRestSpoolPath := filepath.Join(p.config.BackupRepoPath, "spool", "pooler_"+poolerID)
+		if err := os.MkdirAll(pgBackRestSpoolPath, 0o755); err != nil {
+			return fmt.Errorf("failed to create pgBackRest spool directory %s: %w", pgBackRestSpoolPath, err)
+		}
+
+		pgBackRestLockPath := filepath.Join(p.config.BackupRepoPath, "lock", "pooler_"+poolerID)
+		if err := os.MkdirAll(pgBackRestLockPath, 0o755); err != nil {
+			return fmt.Errorf("failed to create pgBackRest lock directory %s: %w", pgBackRestLockPath, err)
+		}
+
+		// Generate pgBackRest config for this pooler
+		// Use a shared stanza name for all clusters in the HA setup
+		backupCfg := pgbackrest.Config{
+			StanzaName:      "multigres",
+			PgDataPath:      filepath.Join(cellServices.Multipooler.PoolerDir, "pg_data"),
+			PgPort:          cellServices.Multipooler.PgPort,
+			PgSocketDir:     filepath.Join(cellServices.Multipooler.PoolerDir, "pg_sockets"),
+			PgUser:          constants.DefaultPostgresUser,
+			PgPassword:      "postgres", // For local development only
+			PgDatabase:      constants.DefaultPostgresDatabase,
+			AdditionalHosts: additionalHosts,
+			LogPath:         pgBackRestLogPath,
+			SpoolPath:       pgBackRestSpoolPath,
+			LockPath:        pgBackRestLockPath,
+			RetentionFull:   7, // Number of days' worth of full backups to retain
+		}
+
+		// Write the pgBackRest config file
+		if err := pgbackrest.WriteConfigFile(backupConfPath, backupCfg); err != nil {
+			return fmt.Errorf("failed to generate pgBackRest config for cell %s: %w", cellName, err)
+		}
+
+		fmt.Printf("✓ - pgBackRest config created for cell %s\n", cellName)
+	}
+
+	return nil
+}
+
+// InitializePgBackRestStanzas initializes pgBackRest stanzas for all poolers
+// This should be called after PostgreSQL is running in each pooler
+// For HA setups, the shared stanza "multigres" is created from each cluster's perspective
+func (p *localProvisioner) InitializePgBackRestStanzas() error {
+	if p.config == nil {
+		return fmt.Errorf("configuration not loaded")
+	}
+
+	ctx := context.TODO()
+
+	for cellName, cellServices := range p.config.Cells {
+		// Use default backup config path if not specified in config
+		backupConfPath := cellServices.Multipooler.BackupConf
+		if backupConfPath == "" {
+			backupConfPath = filepath.Join(cellServices.Multipooler.PoolerDir, "pgbackrest.conf")
+		}
+
+		// Get backup repository path
+		repoPath := p.config.BackupRepoPath
+		if repoPath == "" {
+			repoPath = filepath.Join(p.config.RootWorkingDir, "data", "backups")
+		}
+
+		// Create the shared stanza for this pooler
+		// Each cluster will attempt to create the stanza from its perspective (with itself as pg1)
+		// This is idempotent - subsequent calls will validate/update the stanza
+		if err := pgbackrest.StanzaCreate(ctx, "multigres", backupConfPath, repoPath); err != nil {
+			return fmt.Errorf("failed to create stanza for cell %s: %w", cellName, err)
+		}
+		fmt.Printf("✓ - pgBackRest stanza initialized for cell %s\n", cellName)
+	}
+
+	return nil
 }

@@ -21,7 +21,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/multigres/multigres/go/clustermetadata/topo"
+	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/pb/query"
 	"github.com/multigres/multigres/go/tools/retry"
 
@@ -34,7 +34,7 @@ import (
 // in the topology using topology watches and maintains a list of available poolers.
 type PoolerDiscovery struct {
 	// Configuration
-	topoStore topo.Store
+	topoStore topoclient.Store
 	cell      string
 	logger    *slog.Logger
 
@@ -45,12 +45,12 @@ type PoolerDiscovery struct {
 
 	// State
 	mu          sync.Mutex
-	poolers     map[string]*topo.MultiPoolerInfo // pooler ID -> pooler info
+	poolers     map[string]*topoclient.MultiPoolerInfo // pooler ID -> pooler info
 	lastRefresh time.Time
 }
 
 // NewPoolerDiscovery creates a new pooler discovery service.
-func NewPoolerDiscovery(ctx context.Context, topoStore topo.Store, cell string, logger *slog.Logger) *PoolerDiscovery {
+func NewPoolerDiscovery(ctx context.Context, topoStore topoclient.Store, cell string, logger *slog.Logger) *PoolerDiscovery {
 	discoveryCtx, cancel := context.WithCancel(ctx)
 
 	return &PoolerDiscovery{
@@ -59,7 +59,7 @@ func NewPoolerDiscovery(ctx context.Context, topoStore topo.Store, cell string, 
 		logger:     logger,
 		ctx:        discoveryCtx,
 		cancelFunc: cancel,
-		poolers:    make(map[string]*topo.MultiPoolerInfo),
+		poolers:    make(map[string]*topoclient.MultiPoolerInfo),
 	}
 }
 
@@ -138,12 +138,12 @@ func (pd *PoolerDiscovery) Stop() {
 }
 
 // processInitialPoolers processes the initial set of poolers from the watch
-func (pd *PoolerDiscovery) processInitialPoolers(initial []*topo.WatchDataRecursive) {
+func (pd *PoolerDiscovery) processInitialPoolers(initial []*topoclient.WatchDataRecursive) {
 	pd.mu.Lock()
 	defer pd.mu.Unlock()
 
 	// Clear existing poolers
-	pd.poolers = make(map[string]*topo.MultiPoolerInfo)
+	pd.poolers = make(map[string]*topoclient.MultiPoolerInfo)
 
 	// Process initial pooler data
 	for _, watchData := range initial {
@@ -160,7 +160,7 @@ func (pd *PoolerDiscovery) processInitialPoolers(initial []*topo.WatchDataRecurs
 		}
 
 		if pooler != nil {
-			poolerID := topo.MultiPoolerIDString(pooler.Id)
+			poolerID := topoclient.MultiPoolerIDString(pooler.Id)
 			pd.poolers[poolerID] = pooler
 			pd.logger.Info("Initial pooler discovered",
 				"id", poolerID,
@@ -179,7 +179,7 @@ func (pd *PoolerDiscovery) processInitialPoolers(initial []*topo.WatchDataRecurs
 }
 
 // processPoolerChange processes a single pooler change from the watch
-func (pd *PoolerDiscovery) processPoolerChange(watchData *topo.WatchDataRecursive) {
+func (pd *PoolerDiscovery) processPoolerChange(watchData *topoclient.WatchDataRecursive) {
 	pd.mu.Lock()
 	defer pd.mu.Unlock()
 
@@ -197,17 +197,12 @@ func (pd *PoolerDiscovery) processPoolerChange(watchData *topo.WatchDataRecursiv
 	}
 
 	// Add or update the pooler
-	poolerID := topo.MultiPoolerIDString(pooler.Id)
+	poolerID := topoclient.MultiPoolerIDString(pooler.Id)
 
 	// Check if this is a new pooler
 	_, existed := pd.poolers[poolerID]
 	pd.poolers[poolerID] = pooler
 	pd.lastRefresh = time.Now()
-	// TODO: Remove this. Currently a hack, poolers not registering as the correct
-	// type in the topo, so making do with this for now.
-	if pooler.Type == clustermetadatapb.PoolerType_UNKNOWN {
-		pooler.Type = clustermetadatapb.PoolerType_PRIMARY
-	}
 
 	if !existed {
 		pd.logger.Info("New pooler discovered",
@@ -260,6 +255,21 @@ func (pd *PoolerDiscovery) GetPooler(target *query.Target) *clustermetadatapb.Mu
 		targetType = clustermetadatapb.PoolerType_PRIMARY
 	}
 
+	// Debug: Log all discovered poolers
+	pd.logger.Debug("GetPooler called - listing all discovered poolers",
+		"target_tablegroup", target.TableGroup,
+		"target_shard", target.Shard,
+		"target_pooler_type", targetType.String(),
+		"total_poolers", len(pd.poolers))
+	for i, pooler := range pd.poolers {
+		pd.logger.Debug("discovered pooler",
+			"index", i,
+			"pooler_id", topoclient.MultiPoolerIDString(pooler.Id),
+			"tablegroup", pooler.TableGroup,
+			"shard", pooler.Shard,
+			"type", pooler.Type.String())
+	}
+
 	// Find matching pooler
 	for _, pooler := range pd.poolers {
 		// TableGroup must match
@@ -278,6 +288,11 @@ func (pd *PoolerDiscovery) GetPooler(target *query.Target) *clustermetadatapb.Mu
 		}
 
 		// Found a match!
+		pd.logger.Debug("selected pooler for target",
+			"pooler_id", topoclient.MultiPoolerIDString(pooler.Id),
+			"pooler_type", pooler.Type.String(),
+			"tablegroup", pooler.TableGroup,
+			"shard", pooler.Shard)
 		return proto.Clone(pooler.MultiPooler).(*clustermetadatapb.MultiPooler)
 	}
 
@@ -303,7 +318,7 @@ func (pd *PoolerDiscovery) PoolerCount() int {
 }
 
 // parsePoolerFromWatchData parses a MultiPooler from watch data
-func (pd *PoolerDiscovery) parsePoolerFromWatchData(watchData *topo.WatchDataRecursive) (*topo.MultiPoolerInfo, error) {
+func (pd *PoolerDiscovery) parsePoolerFromWatchData(watchData *topoclient.WatchDataRecursive) (*topoclient.MultiPoolerInfo, error) {
 	// Only process files that end with "Pooler" (the actual pooler data files)
 	if !strings.HasSuffix(watchData.Path, "/Pooler") {
 		return nil, nil // Not a pooler file, skip
@@ -320,7 +335,7 @@ func (pd *PoolerDiscovery) parsePoolerFromWatchData(watchData *topo.WatchDataRec
 		return nil, err
 	}
 
-	return &topo.MultiPoolerInfo{
+	return &topoclient.MultiPoolerInfo{
 		MultiPooler: pooler,
 	}, nil
 }
