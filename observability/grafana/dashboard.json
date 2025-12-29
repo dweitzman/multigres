@@ -71,8 +71,8 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "max by (job, rpc_grpc_status_code) (rate(rpc_server_duration_milliseconds_bucket[$__rate_interval]))",
-          "legendFormat": "{{job}} - gRPC {{rpc_grpc_status_code}}",
+          "expr": "max by (job, rpc_method, rpc_grpc_status_code) (rate(rpc_server_duration_milliseconds_bucket[$__rate_interval]))",
+          "legendFormat": "{{job}} {{rpc_method}} - {{rpc_grpc_status_code}}",
           "range": true,
           "refId": "A"
         }
