@@ -27,8 +27,16 @@ if [[ $(basename "$PWD") != "kind_demo" ]]; then
   exit 1
 fi
 
-# Initialize the cluster with etcd
-kind create cluster --config=kind.yaml --name=multidemo
+# Check if cluster already exists
+CLUSTER_EXISTS=false
+if kind get clusters 2>/dev/null | grep -q "^multidemo$"; then
+  CLUSTER_EXISTS=true
+  echo "Cluster 'multidemo' already exists - updating..."
+else
+  echo "Creating new cluster 'multidemo'..."
+  kind create cluster --config=kind.yaml --name=multidemo
+fi
+
 kind load docker-image multigres/multigres multigres/pgctld-postgres --name=multidemo
 # This single etcd will be used for both the global topo and cell topo.
 kubectl apply -f k8s-etcd.yaml
@@ -36,7 +44,7 @@ kubectl wait --for=condition=ready pod -l app=etcd --timeout=120s
 
 # Deploy observability stack (Prometheus, Jaeger, Grafana)
 # The otel-config ConfigMap must exist before services that reference it.
-kubectl create configmap grafana-dashboard-multigres --from-file=multigres.json=observability/grafana-dashboard.json --save-config
+kubectl create configmap grafana-dashboard-multigres --from-file=multigres.json=observability/grafana-dashboard.json --save-config --dry-run=client -o yaml | kubectl apply -f -
 kubectl apply -f k8s-observability.yaml
 kubectl wait --for=condition=ready pod -l app=observability --timeout=120s
 
@@ -54,6 +62,13 @@ kubectl apply -f k8s-multipooler-statefulset.yaml
 kubectl apply -f k8s-multiorch.yaml
 kubectl apply -f k8s-multigateway.yaml
 kubectl apply -f k8s-multiadmin.yaml
+
+# Restart services to pick up new images (only needed for existing cluster)
+if [[ "$CLUSTER_EXISTS" == "true" ]]; then
+  kubectl rollout restart deployment/multigateway deployment/multiorch deployment/multiadmin
+  kubectl rollout restart statefulset/multipooler-zone1
+fi
+
 kubectl wait --for=condition=ready pod -l app=multipooler --timeout=180s
 kubectl wait --for=condition=ready pod -l app=multiorch --timeout=120s
 kubectl wait --for=condition=ready pod -l app=multigateway --timeout=120s
@@ -61,7 +76,11 @@ kubectl wait --for=condition=ready pod -l app=multigateway --timeout=120s
 set +x
 echo ""
 echo "========================================="
-echo "Components launched successfully!"
+if [[ "$CLUSTER_EXISTS" == "true" ]]; then
+  echo "Cluster updated successfully!"
+else
+  echo "Cluster launched successfully!"
+fi
 echo "========================================="
 echo ""
 echo "PostgreSQL access:"
