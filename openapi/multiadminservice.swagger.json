@@ -1,0 +1,952 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "multiadminservice.proto",
+    "version": "version not set"
+  },
+  "tags": [
+    {
+      "name": "MultiAdminService"
+    }
+  ],
+  "consumes": [
+    "application/json"
+  ],
+  "produces": [
+    "application/json"
+  ],
+  "paths": {
+    "/v1/backup-jobs/{jobId}": {
+      "get": {
+        "summary": "GetBackupJobStatus checks the status of a backup or restore job",
+        "operationId": "MultiAdminService_GetBackupJobStatus",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/multiadminGetBackupJobStatusResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/googlerpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "jobId",
+            "description": "job_id to query (required)",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "database",
+            "description": "Shard context for fallback lookup via MultiPooler when job is not in memory.\nRequired when job may have been lost due to process restart.",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "tableGroup",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "shard",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "MultiAdminService"
+        ]
+      }
+    },
+    "/v1/backups": {
+      "get": {
+        "summary": "GetBackups lists backup artifacts with optional filtering",
+        "operationId": "MultiAdminService_GetBackups",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/multiadminGetBackupsResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/googlerpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "database",
+            "description": "database name to filter by (optional, empty means all databases)",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "tableGroup",
+            "description": "table_group name to filter by (optional, empty means all table groups)",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "shard",
+            "description": "shard name to filter by (optional, empty means all shards)",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "limit",
+            "description": "limit on number of results (optional, 0 means no limit)",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int64"
+          }
+        ],
+        "tags": [
+          "MultiAdminService"
+        ]
+      },
+      "post": {
+        "summary": "Backup starts an async backup of a specific shard",
+        "operationId": "MultiAdminService_Backup",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/multiadminBackupResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/googlerpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/multiadminBackupRequest"
+            }
+          }
+        ],
+        "tags": [
+          "MultiAdminService"
+        ]
+      }
+    },
+    "/v1/cells": {
+      "get": {
+        "summary": "GetCellNames retrieves all cell names in the cluster",
+        "operationId": "MultiAdminService_GetCellNames",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/multiadminGetCellNamesResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/googlerpcStatus"
+            }
+          }
+        },
+        "tags": [
+          "MultiAdminService"
+        ]
+      }
+    },
+    "/v1/cells/{name}": {
+      "get": {
+        "summary": "GetCell retrieves information about a specific cell",
+        "operationId": "MultiAdminService_GetCell",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/multiadminGetCellResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/googlerpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "name",
+            "description": "name is the name of the cell to retrieve",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "MultiAdminService"
+        ]
+      }
+    },
+    "/v1/databases": {
+      "get": {
+        "summary": "GetDatabaseNames retrieves all database names in the cluster",
+        "operationId": "MultiAdminService_GetDatabaseNames",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/multiadminGetDatabaseNamesResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/googlerpcStatus"
+            }
+          }
+        },
+        "tags": [
+          "MultiAdminService"
+        ]
+      }
+    },
+    "/v1/databases/{name}": {
+      "get": {
+        "summary": "GetDatabase retrieves information about a specific database",
+        "operationId": "MultiAdminService_GetDatabase",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/multiadminGetDatabaseResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/googlerpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "name",
+            "description": "name is the name of the database to retrieve",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "MultiAdminService"
+        ]
+      }
+    },
+    "/v1/gateways": {
+      "get": {
+        "summary": "GetGateways retrieves gateways filtered by cells",
+        "operationId": "MultiAdminService_GetGateways",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/multiadminGetGatewaysResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/googlerpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "cells",
+            "description": "cells is a comma-separated list of cell names to filter by (optional)",
+            "in": "query",
+            "required": false,
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "collectionFormat": "multi"
+          }
+        ],
+        "tags": [
+          "MultiAdminService"
+        ]
+      }
+    },
+    "/v1/orchs": {
+      "get": {
+        "summary": "GetOrchs retrieves orchestrators filtered by cells",
+        "operationId": "MultiAdminService_GetOrchs",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/multiadminGetOrchsResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/googlerpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "cells",
+            "description": "cells is a comma-separated list of cell names to filter by (optional)",
+            "in": "query",
+            "required": false,
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "collectionFormat": "multi"
+          }
+        ],
+        "tags": [
+          "MultiAdminService"
+        ]
+      }
+    },
+    "/v1/poolers": {
+      "get": {
+        "summary": "GetPoolers retrieves poolers filtered by cells and/or database",
+        "operationId": "MultiAdminService_GetPoolers",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/multiadminGetPoolersResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/googlerpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "cells",
+            "description": "cells is a comma-separated list of cell names to filter by (optional)",
+            "in": "query",
+            "required": false,
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "collectionFormat": "multi"
+          },
+          {
+            "name": "database",
+            "description": "database name to filter by (optional)",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "shard",
+            "description": "shard name to filter by (optional)",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "MultiAdminService"
+        ]
+      }
+    },
+    "/v1/restore": {
+      "post": {
+        "summary": "RestoreFromBackup starts an async restore of a specific shard from a backup",
+        "operationId": "MultiAdminService_RestoreFromBackup",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/multiadminRestoreFromBackupResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/googlerpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/multiadminRestoreFromBackupRequest"
+            }
+          }
+        ],
+        "tags": [
+          "MultiAdminService"
+        ]
+      }
+    }
+  },
+  "definitions": {
+    "IDComponentType": {
+      "type": "string",
+      "enum": [
+        "UNKNOWN",
+        "MULTIPOOLER",
+        "MULTIGATEWAY",
+        "MULTIORCH"
+      ],
+      "default": "UNKNOWN",
+      "description": "- UNKNOWN: UNKNOWN represents an unknown or uninitialized component type\n - MULTIPOOLER: MULTIPOOLER represents a multipooler component\n - MULTIGATEWAY: MULTIGATEWAY represents a multigateway component\n - MULTIORCH: MULTIORCH represents a multiorch component",
+      "title": "ComponentType represents the type of Multigres component"
+    },
+    "clustermetadataCell": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "title": "name for this cell"
+        },
+        "serverAddresses": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "server_address is the network address of the cell topology service."
+        },
+        "root": {
+          "type": "string",
+          "description": "root is the namespace or directory path within the topology service\nwhere this cell's metadata is stored. Used only when connecting to server_addresses."
+        }
+      },
+      "description": "Cell describes how to connect to a cell topology.\nThese records are stored in the global topology server."
+    },
+    "clustermetadataDatabase": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "title": "Name of the database"
+        },
+        "backupLocation": {
+          "type": "string",
+          "title": "Backups location"
+        },
+        "durabilityPolicy": {
+          "type": "string",
+          "title": "Durability policy used for consensus"
+        },
+        "cells": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "title": "List of cell identifiers where this database should be deployed"
+        }
+      }
+    },
+    "clustermetadataID": {
+      "type": "object",
+      "properties": {
+        "component": {
+          "$ref": "#/definitions/IDComponentType",
+          "title": "component identifies the type of Multigres component (multipooler, multigateway, or multiorch)"
+        },
+        "cell": {
+          "type": "string",
+          "title": "cell is the Multigres cell where the component is located"
+        },
+        "name": {
+          "type": "string",
+          "description": "name is a unique identifier for the component within the multigres\ncluster."
+        }
+      },
+      "description": "ID is a globally unique pooler identifier."
+    },
+    "clustermetadataKeyRange": {
+      "type": "object",
+      "properties": {
+        "start": {
+          "type": "string",
+          "format": "byte",
+          "title": "start is the start key of the range (inclusive)"
+        },
+        "end": {
+          "type": "string",
+          "format": "byte",
+          "title": "end is the end key of the range (exclusive)"
+        }
+      },
+      "title": "KeyRange represents a range of keys for sharding"
+    },
+    "clustermetadataMultiGateway": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/clustermetadataID",
+          "description": "id is the unique name of the multi gateway in the cluster."
+        },
+        "hostname": {
+          "type": "string",
+          "description": "Fully qualified domain name of the host."
+        },
+        "portMap": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "description": "Map of named ports. Normally this should include postgres and grpc."
+        }
+      },
+      "description": "MultiGateway represents metadata about a running multigateway component instance in the cluster."
+    },
+    "clustermetadataMultiOrch": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/clustermetadataID",
+          "description": "id is the unique name of the MultiOrch in the cluster."
+        },
+        "hostname": {
+          "type": "string",
+          "description": "Fully qualified domain name of the host."
+        },
+        "portMap": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "description": "Map of named ports. These are ports that MultiOrc exposes."
+        }
+      },
+      "description": "MultiOrch represents information about a running instance of multiorch."
+    },
+    "clustermetadataMultiPooler": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/clustermetadataID",
+          "description": "id is the unique identifier of the multipooler in the cluster."
+        },
+        "database": {
+          "type": "string",
+          "description": "Database name."
+        },
+        "tableGroup": {
+          "type": "string",
+          "description": "TableGroup name."
+        },
+        "shard": {
+          "type": "string",
+          "description": "Shard name. If range based sharding is used, it should match\nkey_range."
+        },
+        "keyRange": {
+          "$ref": "#/definitions/clustermetadataKeyRange",
+          "description": "If range based sharding is used, range for the pooler's shard."
+        },
+        "type": {
+          "$ref": "#/definitions/clustermetadataPoolerType",
+          "title": "PoolerType is the kind of pooler: PRIMARY or REPLICA"
+        },
+        "servingStatus": {
+          "$ref": "#/definitions/clustermetadataPoolerServingStatus",
+          "description": "PoolerServingStatus is the current type of the pooler."
+        },
+        "hostname": {
+          "type": "string",
+          "description": "Fully qualified domain name of the host."
+        },
+        "portMap": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "title": "Map of named ports. These are ports that the pooler exposes. Initially, this will only be gRPC"
+        }
+      },
+      "description": "MultiPooler represents metadata about a running multipooler component instance in the cluster."
+    },
+    "clustermetadataPoolerServingStatus": {
+      "type": "string",
+      "enum": [
+        "SERVING",
+        "NOT_SERVING",
+        "BACKUP",
+        "RESTORE",
+        "DRAINED",
+        "SERVING_RDONLY"
+      ],
+      "default": "SERVING",
+      "description": "PoolerServingStatus represents the serving status of the given MultiPooler.\n\n - SERVING: SERVING is the status a server during normal operations when it is serving traffic.\n - NOT_SERVING: NOT_SERVING is the status of a server when it is not serving traffic.\nThis typically occurs during startup, shutdown, or when the server is\nin an error state and cannot accept connections.\n - BACKUP: BACKUP is the status of a server when it is taking a backup. No queries\ncan be served in BACKUP mode.\n - RESTORE: RESTORE is the status a server uses when restoring a backup, at\nstartup time.  No queries can be served in RESTORE mode.\n - DRAINED: DRAINED is the status a server goes into when used by Multigres tools\nto perform an offline action. It is a serving type (as\nthe tools processes may need to run queries), but it's not used\nto route queries from Multigres users. In this state,\nthis multipooler is dedicated to the process that uses it.\n - SERVING_RDONLY: SERVING_RDONLY is the status of a server in read-only mode.\nThis is used during demotion when the server transitions from PRIMARY to REPLICA,\nor for read-only replicas. The server accepts connections but only serves read queries."
+    },
+    "clustermetadataPoolerType": {
+      "type": "string",
+      "enum": [
+        "UNKNOWN",
+        "PRIMARY",
+        "REPLICA"
+      ],
+      "default": "UNKNOWN",
+      "description": "PoolerType represents the type of a given MultiPooler.\n\n - UNKNOWN: UNKNOWN this is not a valid type.\nIt is useful during upgrades to detect when a value is not initialized\n - PRIMARY: PRIMARY is the primary server for the shard. Only PRIMARY allows DMLs.\n - REPLICA: REPLICA replicates from leader. It is used to read only traffic"
+    },
+    "googlerpcStatus": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "message": {
+          "type": "string"
+        },
+        "details": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/protobufAny"
+          }
+        }
+      }
+    },
+    "multiadminBackupInfo": {
+      "type": "object",
+      "properties": {
+        "backupId": {
+          "type": "string",
+          "title": "backup_id uniquely identifies this backup (e.g., \"20250117-123456F\")"
+        },
+        "database": {
+          "type": "string",
+          "title": "database name"
+        },
+        "tableGroup": {
+          "type": "string",
+          "title": "table_group name"
+        },
+        "shard": {
+          "type": "string",
+          "title": "shard name"
+        },
+        "type": {
+          "type": "string",
+          "title": "type of backup: \"full\", \"differential\", or \"incremental\""
+        },
+        "status": {
+          "$ref": "#/definitions/multiadminBackupStatus",
+          "title": "status of the backup"
+        },
+        "backupTime": {
+          "type": "string",
+          "format": "date-time",
+          "title": "backup_time is when the backup was created"
+        },
+        "backupSizeBytes": {
+          "type": "string",
+          "format": "uint64",
+          "title": "backup_size_bytes is the size of the backup in bytes"
+        },
+        "multipoolerServiceId": {
+          "type": "string",
+          "title": "multipooler_service_id is the ID of the multipooler that reported the backup"
+        },
+        "poolerType": {
+          "$ref": "#/definitions/clustermetadataPoolerType",
+          "title": "pooler_type is the type of the multipooler (PRIMARY or REPLICA)"
+        }
+      },
+      "title": "BackupInfo contains information about a single backup artifact"
+    },
+    "multiadminBackupRequest": {
+      "type": "object",
+      "properties": {
+        "database": {
+          "type": "string",
+          "title": "database name (required)"
+        },
+        "tableGroup": {
+          "type": "string",
+          "title": "table_group name (required)"
+        },
+        "shard": {
+          "type": "string",
+          "title": "shard name (required)"
+        },
+        "type": {
+          "type": "string",
+          "title": "type of backup: \"full\", \"differential\", or \"incremental\" (required)"
+        },
+        "forcePrimary": {
+          "type": "boolean",
+          "description": "force_primary forces the backup to run on the primary instead of a replica.\nThis should typically be false because backups on replicas reduce load on the primary."
+        }
+      },
+      "title": "BackupRequest requests an async backup of a specific shard"
+    },
+    "multiadminBackupResponse": {
+      "type": "object",
+      "properties": {
+        "jobId": {
+          "type": "string",
+          "title": "job_id is the unique identifier for tracking this backup job"
+        }
+      },
+      "title": "BackupResponse contains the job ID for tracking the async backup"
+    },
+    "multiadminBackupStatus": {
+      "type": "string",
+      "enum": [
+        "BACKUP_STATUS_UNKNOWN",
+        "BACKUP_STATUS_INCOMPLETE",
+        "BACKUP_STATUS_COMPLETE",
+        "BACKUP_STATUS_FAILED"
+      ],
+      "default": "BACKUP_STATUS_UNKNOWN",
+      "title": "BackupStatus indicates the state of a backup artifact"
+    },
+    "multiadminGetBackupJobStatusResponse": {
+      "type": "object",
+      "properties": {
+        "jobId": {
+          "type": "string",
+          "title": "job_id is the unique identifier for this job"
+        },
+        "jobType": {
+          "$ref": "#/definitions/multiadminJobType",
+          "title": "job_type indicates whether this is a backup or restore job"
+        },
+        "status": {
+          "$ref": "#/definitions/multiadminJobStatus",
+          "title": "status indicates the current state of the job"
+        },
+        "errorMessage": {
+          "type": "string",
+          "title": "error_message contains the error if status is FAILED"
+        },
+        "database": {
+          "type": "string",
+          "title": "Original request context"
+        },
+        "tableGroup": {
+          "type": "string"
+        },
+        "shard": {
+          "type": "string"
+        },
+        "backupType": {
+          "type": "string",
+          "description": "\"full\", \"differential\", \"incremental\"",
+          "title": "For backup jobs"
+        },
+        "requestedBackupId": {
+          "type": "string",
+          "description": "What was requested (may be empty for \"latest\")",
+          "title": "For restore jobs"
+        },
+        "backupId": {
+          "type": "string",
+          "title": "Results (set when status = COMPLETED)\nFor backup: created backup_id\nFor restore: backup_id that was restored"
+        }
+      },
+      "title": "GetBackupJobStatusResponse contains the current status of a backup or restore job"
+    },
+    "multiadminGetBackupsResponse": {
+      "type": "object",
+      "properties": {
+        "backups": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/multiadminBackupInfo"
+          },
+          "title": "backups is the list of backup information"
+        }
+      },
+      "title": "GetBackupsResponse contains the list of backup artifacts"
+    },
+    "multiadminGetCellNamesResponse": {
+      "type": "object",
+      "properties": {
+        "names": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "title": "GetCellNamesResponse contains all cell names"
+    },
+    "multiadminGetCellResponse": {
+      "type": "object",
+      "properties": {
+        "cell": {
+          "$ref": "#/definitions/clustermetadataCell",
+          "title": "cell contains the Cell protobuf object"
+        }
+      },
+      "title": "GetCellResponse contains the cell information"
+    },
+    "multiadminGetDatabaseNamesResponse": {
+      "type": "object",
+      "properties": {
+        "names": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "title": "GetDatabaseNamesResponse contains all database names"
+    },
+    "multiadminGetDatabaseResponse": {
+      "type": "object",
+      "properties": {
+        "database": {
+          "$ref": "#/definitions/clustermetadataDatabase",
+          "title": "database contains the Database protobuf object"
+        }
+      },
+      "title": "GetDatabaseResponse contains the database information"
+    },
+    "multiadminGetGatewaysResponse": {
+      "type": "object",
+      "properties": {
+        "gateways": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/clustermetadataMultiGateway"
+          }
+        }
+      },
+      "title": "GetGatewaysResponse contains the filtered gateways"
+    },
+    "multiadminGetOrchsResponse": {
+      "type": "object",
+      "properties": {
+        "orchs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/clustermetadataMultiOrch"
+          },
+          "title": "protolint:disable:next REPEATED_FIELD_NAMES_PLURALIZED"
+        }
+      },
+      "title": "GetOrchsResponse contains the filtered orchestrators"
+    },
+    "multiadminGetPoolersResponse": {
+      "type": "object",
+      "properties": {
+        "poolers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/clustermetadataMultiPooler"
+          }
+        }
+      },
+      "title": "GetPoolersResponse contains the filtered poolers"
+    },
+    "multiadminJobStatus": {
+      "type": "string",
+      "enum": [
+        "JOB_STATUS_UNKNOWN",
+        "JOB_STATUS_PENDING",
+        "JOB_STATUS_RUNNING",
+        "JOB_STATUS_COMPLETED",
+        "JOB_STATUS_FAILED"
+      ],
+      "default": "JOB_STATUS_UNKNOWN",
+      "title": "JobStatus indicates the current state of an async job"
+    },
+    "multiadminJobType": {
+      "type": "string",
+      "enum": [
+        "JOB_TYPE_UNKNOWN",
+        "JOB_TYPE_BACKUP",
+        "JOB_TYPE_RESTORE"
+      ],
+      "default": "JOB_TYPE_UNKNOWN",
+      "title": "JobType indicates the type of async job"
+    },
+    "multiadminRestoreFromBackupRequest": {
+      "type": "object",
+      "properties": {
+        "database": {
+          "type": "string",
+          "title": "database name (required)"
+        },
+        "tableGroup": {
+          "type": "string",
+          "title": "table_group name (required)"
+        },
+        "shard": {
+          "type": "string",
+          "title": "shard name (required)"
+        },
+        "backupId": {
+          "type": "string",
+          "title": "backup_id to restore from (optional, empty means \"latest backup\")"
+        },
+        "poolerId": {
+          "$ref": "#/definitions/clustermetadataID",
+          "description": "pooler_id identifies which multipooler to restore to (required).\nThis is needed because a cell can have multiple poolers for the same\ndatabase/table_group/shard combination. Restores are only allowed to standbys."
+        }
+      },
+      "title": "RestoreFromBackupRequest requests an async restore of a specific shard"
+    },
+    "multiadminRestoreFromBackupResponse": {
+      "type": "object",
+      "properties": {
+        "jobId": {
+          "type": "string",
+          "title": "job_id is the unique identifier for tracking this restore job"
+        }
+      },
+      "title": "RestoreFromBackupResponse contains the job ID for tracking the async restore"
+    },
+    "protobufAny": {
+      "type": "object",
+      "properties": {
+        "@type": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": {}
+    }
+  }
+}

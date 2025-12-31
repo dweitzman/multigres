@@ -57,10 +57,16 @@ PROTO_GO_OUTS = pb
 proto: tools $(PROTO_GO_OUTS) ## Generate protobuf files.
 
 pb: $(PROTO_SRCS)
+	cd proto && buf export buf.build/googleapis/googleapis --output=$(MTROOT)/dist/googleapis && cd .. && \
 	$(MTROOT)/dist/protoc-$(PROTOC_VER)/bin/protoc \
-	--plugin=$(MTROOT)/bin/protoc-gen-go --go_out=. \
-	--plugin=$(MTROOT)/bin/protoc-gen-go-grpc --go-grpc_out=. \
-		--proto_path=proto $(PROTO_SRCS) && \
+		--plugin=$(MTROOT)/bin/protoc-gen-go --go_out=. \
+		--plugin=$(MTROOT)/bin/protoc-gen-go-grpc --go-grpc_out=. \
+		--plugin=$(MTROOT)/bin/protoc-gen-grpc-gateway --grpc-gateway_out=. \
+		--plugin=$(MTROOT)/bin/protoc-gen-openapiv2 --openapiv2_out=openapi \
+		--proto_path=proto \
+		--proto_path=$(MTROOT)/dist/protoc-$(PROTOC_VER)/include \
+		--proto_path=$(MTROOT)/dist/googleapis \
+		$(PROTO_SRCS) && \
 	mkdir -p go/pb && \
 	cp -Rf github.com/multigres/multigres/go/pb/* go/pb/ && \
 	rm -rf github.com/

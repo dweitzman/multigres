@@ -1,0 +1,12 @@
+version: v2
+plugins:
+  # Use local plugins (installed via setup_build_tools.sh) for correct protoc version headers
+  - local: protoc-gen-go
+    out: ..
+  - local: protoc-gen-go-grpc
+    out: ..
+  # Gateway and OpenAPI for HTTP/REST support
+  - local: protoc-gen-grpc-gateway
+    out: ..
+  - local: protoc-gen-openapiv2
+    out: ../openapi

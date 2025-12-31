@@ -1,0 +1,409 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "multipoolerservice.proto",
+    "version": "version not set"
+  },
+  "tags": [
+    {
+      "name": "MultiPoolerService"
+    }
+  ],
+  "consumes": [
+    "application/json"
+  ],
+  "produces": [
+    "application/json"
+  ],
+  "paths": {},
+  "definitions": {
+    "IDComponentType": {
+      "type": "string",
+      "enum": [
+        "UNKNOWN",
+        "MULTIPOOLER",
+        "MULTIGATEWAY",
+        "MULTIORCH"
+      ],
+      "default": "UNKNOWN",
+      "description": "- UNKNOWN: UNKNOWN represents an unknown or uninitialized component type\n - MULTIPOOLER: MULTIPOOLER represents a multipooler component\n - MULTIGATEWAY: MULTIGATEWAY represents a multigateway component\n - MULTIORCH: MULTIORCH represents a multiorch component",
+      "title": "ComponentType represents the type of Multigres component"
+    },
+    "clustermetadataID": {
+      "type": "object",
+      "properties": {
+        "component": {
+          "$ref": "#/definitions/IDComponentType",
+          "title": "component identifies the type of Multigres component (multipooler, multigateway, or multiorch)"
+        },
+        "cell": {
+          "type": "string",
+          "title": "cell is the Multigres cell where the component is located"
+        },
+        "name": {
+          "type": "string",
+          "description": "name is a unique identifier for the component within the multigres\ncluster."
+        }
+      },
+      "description": "ID is a globally unique pooler identifier."
+    },
+    "clustermetadataPoolerType": {
+      "type": "string",
+      "enum": [
+        "UNKNOWN",
+        "PRIMARY",
+        "REPLICA"
+      ],
+      "default": "UNKNOWN",
+      "description": "PoolerType represents the type of a given MultiPooler.\n\n - UNKNOWN: UNKNOWN this is not a valid type.\nIt is useful during upgrades to detect when a value is not initialized\n - PRIMARY: PRIMARY is the primary server for the shard. Only PRIMARY allows DMLs.\n - REPLICA: REPLICA replicates from leader. It is used to read only traffic"
+    },
+    "googlerpcStatus": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "message": {
+          "type": "string"
+        },
+        "details": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/protobufAny"
+          }
+        }
+      }
+    },
+    "mtrpcCallerID": {
+      "type": "object",
+      "properties": {
+        "principal": {
+          "type": "string",
+          "description": "principal is the effective user identifier. It is usually filled in\nwith whoever made the request to the appserver, if the request\ncame from an automated job or another system component.\nIf the request comes directly from the Internet, or if the Multigres client\ntakes action on its own accord, it is okay for this field to be absent."
+        },
+        "component": {
+          "type": "string",
+          "description": "component describes the running process of the effective caller.\nIt can for instance be the hostname:port of the servlet initiating the\ndatabase call, or the container engine ID used by the servlet."
+        },
+        "subcomponent": {
+          "type": "string",
+          "description": "subcomponent describes a component inside the immediate caller which\nis responsible for generating this request. Suggested values are a\nservlet name or an API endpoint name."
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "set of security groups that should be assigned to this caller."
+        }
+      },
+      "description": "CallerID is passed along RPCs to identify the originating client\nfor a request. It is not meant to be secure, but only\ninformational.  The client can put whatever info they want in these\nfields, and they will be trusted by the servers. The fields will\njust be used for logging purposes, and to easily find a client.\nMultiGateway propagates it to MultiPooler, and MultiPooler may use this\ninformation for monitoring purposes, to display on dashboards, or\nfor denying access to tables during a migration."
+    },
+    "multipoolerserviceDescribeResponse": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "$ref": "#/definitions/queryStatementDescription",
+          "title": "description contains the statement metadata (fields, parameter types, etc.)"
+        }
+      },
+      "title": "DescribeResponse represents the response from describing a statement or portal"
+    },
+    "multipoolerserviceExecuteQueryResponse": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "$ref": "#/definitions/queryQueryResult"
+        }
+      },
+      "title": "ExecuteQueryResponse represents the response from executing a SQL query"
+    },
+    "multipoolerserviceGetAuthCredentialsResponse": {
+      "type": "object",
+      "properties": {
+        "scramHash": {
+          "type": "string",
+          "description": "scram_hash is the stored SCRAM-SHA-256 password hash from pg_authid.\nFormat: SCRAM-SHA-256$\u003citerations\u003e:\u003csalt\u003e$\u003cstored_key\u003e:\u003cserver_key\u003e\nEmpty if user exists but has no password set."
+        }
+      },
+      "description": "GetAuthCredentialsResponse represents the response containing authentication credentials.\nReturns codes.NotFound if the user does not exist."
+    },
+    "multipoolerservicePortalStreamExecuteResponse": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "$ref": "#/definitions/queryQueryResult",
+          "title": "result contains the query result data (rows, fields, etc.)"
+        },
+        "reservedConnectionId": {
+          "type": "string",
+          "format": "uint64",
+          "title": "reserved_connection_id is the ID of the reserved connection\nThis is returned in the first response and should be used for subsequent queries"
+        },
+        "poolerId": {
+          "$ref": "#/definitions/clustermetadataID",
+          "title": "pooler_id identifies which multipooler instance owns the reserved connection"
+        }
+      },
+      "title": "PortalStreamExecuteResponse represents a response in the portal execution stream"
+    },
+    "multipoolerserviceStreamExecuteResponse": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "$ref": "#/definitions/queryQueryResult",
+          "title": "result contains the query result data (rows, fields, etc.)"
+        }
+      },
+      "title": "StreamExecuteResponse represents a single response in the stream of query results"
+    },
+    "protobufAny": {
+      "type": "object",
+      "properties": {
+        "@type": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": {}
+    },
+    "queryExecuteOptions": {
+      "type": "object",
+      "properties": {
+        "sessionSettings": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "session_settings contains session variables (SET commands) that should\nbe applied to the connection before executing the query.\nKey is the variable name, value is the variable value."
+        },
+        "user": {
+          "type": "string",
+          "description": "user is the PostgreSQL user/role identity for query execution.\nThis determines which per-user connection pool to use.\nRequired for per-user pool routing in the multipooler."
+        },
+        "maxRows": {
+          "type": "string",
+          "format": "uint64",
+          "description": "max_rows is the maximum number of rows to return from Execute.\n0 means return all rows. Used by the Execute message in the extended query protocol."
+        },
+        "reservedConnectionId": {
+          "type": "string",
+          "format": "uint64",
+          "description": "reserved_connection_id is the ID of a reserved connection on the multipooler.\nUsed for connection pinning - this tells the multipooler which specific\nconnection to use for executing this query."
+        }
+      },
+      "description": "ExecuteOptions contains execution options for query execution.\nThis includes session state like prepared statements and portals that\nneed to be available on the connection where the query is executed."
+    },
+    "queryField": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "title": "name is the column name"
+        },
+        "type": {
+          "type": "string",
+          "title": "type is a human-readable type name (for logging/debugging)"
+        },
+        "tableOid": {
+          "type": "integer",
+          "format": "int64",
+          "title": "table_oid is the object ID of the table (0 if not a table column)"
+        },
+        "tableAttributeNumber": {
+          "type": "integer",
+          "format": "int32",
+          "title": "table_attribute_number is the column number in the table (0 if not a table column)"
+        },
+        "dataTypeOid": {
+          "type": "integer",
+          "format": "int64",
+          "title": "data_type_oid is the object ID of the data type"
+        },
+        "dataTypeSize": {
+          "type": "integer",
+          "format": "int32",
+          "title": "data_type_size is the size of the data type (-1 for variable length)"
+        },
+        "typeModifier": {
+          "type": "integer",
+          "format": "int32",
+          "title": "type_modifier is the type modifier (-1 for no modifier)"
+        },
+        "format": {
+          "type": "integer",
+          "format": "int32",
+          "title": "format is the format code (0=text, 1=binary)"
+        }
+      },
+      "description": "Field represents metadata about a column in the result set.\nThis includes all PostgreSQL wire protocol metadata needed for RowDescription messages."
+    },
+    "queryParameterDescription": {
+      "type": "object",
+      "properties": {
+        "dataTypeOid": {
+          "type": "integer",
+          "format": "int64",
+          "title": "data_type_oid is the OID of the parameter's data type"
+        }
+      },
+      "description": "ParameterDescription describes a parameter in a prepared statement."
+    },
+    "queryPortal": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "name is the client-provided name for the portal.\nAn empty name indicates the unnamed portal."
+        },
+        "preparedStatementName": {
+          "type": "string",
+          "description": "prepared_statement_name is the name of the prepared statement this portal is bound to."
+        },
+        "paramLengths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "int64"
+          },
+          "description": "param_lengths contains the length of each parameter value.\n-1 means NULL, 0 means empty string, \u003e0 means actual length."
+        },
+        "paramValues": {
+          "type": "string",
+          "format": "byte",
+          "description": "param_values contains all non-null parameter values concatenated together.\nUse param_lengths to split this into individual parameter values."
+        },
+        "paramFormats": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "description": "param_formats specifies the format code for each parameter.\n0 = text, 1 = binary.\nIf empty, all parameters are text format.\nIf a single element, that format applies to all parameters."
+        },
+        "resultFormats": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "description": "result_formats specifies the format code for each result column.\n0 = text, 1 = binary.\nIf empty, all results are text format.\nIf a single element, that format applies to all result columns."
+        }
+      },
+      "description": "Portal represents a bound prepared statement with parameters.\nPortals are created by the Bind message and can be executed via Execute."
+    },
+    "queryPreparedStatement": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "name is the client-provided name for the prepared statement.\nAn empty name indicates the unnamed statement."
+        },
+        "query": {
+          "type": "string",
+          "description": "query is the SQL query string."
+        },
+        "paramTypes": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "description": "param_types contains the OIDs of the parameter types.\nThis is sent by the client in the Parse message."
+        }
+      },
+      "description": "PreparedStatement represents a prepared statement in the extended query protocol.\nPrepared statements are created by the Parse message and can be executed\nmultiple times with different parameter values."
+    },
+    "queryQueryResult": {
+      "type": "object",
+      "properties": {
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/queryField"
+          },
+          "title": "fields describes the columns in the result set (nil if no rows returned)"
+        },
+        "rowsAffected": {
+          "type": "string",
+          "format": "uint64",
+          "title": "rows_affected is the number of rows affected (INSERT, UPDATE, DELETE, etc.)"
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/queryRow"
+          },
+          "title": "rows contains the actual data rows"
+        },
+        "commandTag": {
+          "type": "string",
+          "title": "command_tag is the PostgreSQL command tag for this result set.\nWhen streaming results, this should only be set on the final packet of a result set.\nWhen set, the protocol layer will send CommandComplete and reset state for the next result set.\nExamples: \"SELECT 42\", \"INSERT 0 5\", \"UPDATE 10\", \"DELETE 3\", \"CREATE TABLE\""
+        }
+      },
+      "title": "QueryResult represents the result of executing a query"
+    },
+    "queryRow": {
+      "type": "object",
+      "properties": {
+        "lengths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "int64"
+          },
+          "description": "lengths contains the length of each column value.\n-1 means NULL, 0 means empty string, \u003e0 means actual length."
+        },
+        "values": {
+          "type": "string",
+          "format": "byte",
+          "description": "values contains all non-null values concatenated together.\nUse lengths to split this into individual column values."
+        }
+      },
+      "description": "Row represents a single row of data in the result set."
+    },
+    "queryStatementDescription": {
+      "type": "object",
+      "properties": {
+        "parameters": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/queryParameterDescription"
+          },
+          "description": "parameters describes the parameters of the statement (for statement describe)\nNil for portal describe."
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/queryField"
+          },
+          "description": "fields describes the result columns\nNil if the statement doesn't return rows."
+        }
+      },
+      "description": "StatementDescription describes a prepared statement or portal.\nUsed for the Describe message ('D') response in the extended query protocol."
+    },
+    "queryTarget": {
+      "type": "object",
+      "properties": {
+        "tableGroup": {
+          "type": "string",
+          "title": "table_group is the target tablegroup name"
+        },
+        "shard": {
+          "type": "string",
+          "title": "shard is the target shard name (empty for unsharded or to route to any shard)"
+        },
+        "poolerType": {
+          "$ref": "#/definitions/clustermetadataPoolerType",
+          "title": "pooler_type is the type of pooler to route to (PRIMARY, REPLICA)\nIf not specified (UNKNOWN), defaults to PRIMARY"
+        }
+      },
+      "title": "Target identifies the target for query execution.\nIt specifies which tablegroup, shard, and pooler type to route the query to.\n- Route to PRIMARY for writes\n- Route to REPLICA for reads\n- Route to specific shards (future)"
+    }
+  }
+}

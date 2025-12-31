@@ -1,0 +1,176 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "pgctldservice.proto",
+    "version": "version not set"
+  },
+  "tags": [
+    {
+      "name": "PgCtld"
+    }
+  ],
+  "consumes": [
+    "application/json"
+  ],
+  "produces": [
+    "application/json"
+  ],
+  "paths": {},
+  "definitions": {
+    "googlerpcStatus": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "message": {
+          "type": "string"
+        },
+        "details": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/protobufAny"
+          }
+        }
+      }
+    },
+    "pgctldserviceInitDataDirResponse": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string",
+          "title": "Status message"
+        }
+      }
+    },
+    "pgctldservicePgRewindResponse": {
+      "type": "object"
+    },
+    "pgctldserviceReloadConfigResponse": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string",
+          "title": "Status message"
+        }
+      }
+    },
+    "pgctldserviceRestartResponse": {
+      "type": "object",
+      "properties": {
+        "pid": {
+          "type": "integer",
+          "format": "int32",
+          "title": "Process ID of restarted PostgreSQL server"
+        },
+        "message": {
+          "type": "string",
+          "title": "Status message"
+        }
+      }
+    },
+    "pgctldserviceServerStatus": {
+      "type": "string",
+      "enum": [
+        "UNKNOWN",
+        "STOPPED",
+        "STARTING",
+        "RUNNING",
+        "STOPPING",
+        "NOT_INITIALIZED"
+      ],
+      "default": "UNKNOWN",
+      "title": "Server status enumeration"
+    },
+    "pgctldserviceStartResponse": {
+      "type": "object",
+      "properties": {
+        "pid": {
+          "type": "integer",
+          "format": "int32",
+          "title": "Process ID of started PostgreSQL server"
+        },
+        "message": {
+          "type": "string",
+          "title": "Status message"
+        }
+      }
+    },
+    "pgctldserviceStatusResponse": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "$ref": "#/definitions/pgctldserviceServerStatus",
+          "title": "Server status"
+        },
+        "pid": {
+          "type": "integer",
+          "format": "int32",
+          "title": "Process ID (if running)"
+        },
+        "version": {
+          "type": "string",
+          "title": "Server version (if available)"
+        },
+        "uptime": {
+          "type": "string",
+          "title": "Uptime (if running)"
+        },
+        "dataDir": {
+          "type": "string",
+          "title": "Data directory path"
+        },
+        "port": {
+          "type": "integer",
+          "format": "int32",
+          "title": "Port number"
+        },
+        "host": {
+          "type": "string",
+          "title": "Host address"
+        },
+        "ready": {
+          "type": "boolean",
+          "title": "Is server ready to accept connections"
+        },
+        "message": {
+          "type": "string",
+          "title": "Additional status information"
+        }
+      }
+    },
+    "pgctldserviceStopResponse": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string",
+          "title": "Status message"
+        }
+      }
+    },
+    "pgctldserviceVersionResponse": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "title": "PostgreSQL version string"
+        },
+        "message": {
+          "type": "string",
+          "title": "Status message"
+        }
+      }
+    },
+    "protobufAny": {
+      "type": "object",
+      "properties": {
+        "@type": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": {}
+    }
+  }
+}

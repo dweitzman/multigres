@@ -1,0 +1,190 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "consensusservice.proto",
+    "version": "version not set"
+  },
+  "tags": [
+    {
+      "name": "MultiPoolerConsensus"
+    }
+  ],
+  "consumes": [
+    "application/json"
+  ],
+  "produces": [
+    "application/json"
+  ],
+  "paths": {},
+  "definitions": {
+    "IDComponentType": {
+      "type": "string",
+      "enum": [
+        "UNKNOWN",
+        "MULTIPOOLER",
+        "MULTIGATEWAY",
+        "MULTIORCH"
+      ],
+      "default": "UNKNOWN",
+      "description": "- UNKNOWN: UNKNOWN represents an unknown or uninitialized component type\n - MULTIPOOLER: MULTIPOOLER represents a multipooler component\n - MULTIGATEWAY: MULTIGATEWAY represents a multigateway component\n - MULTIORCH: MULTIORCH represents a multiorch component",
+      "title": "ComponentType represents the type of Multigres component"
+    },
+    "clustermetadataID": {
+      "type": "object",
+      "properties": {
+        "component": {
+          "$ref": "#/definitions/IDComponentType",
+          "title": "component identifies the type of Multigres component (multipooler, multigateway, or multiorch)"
+        },
+        "cell": {
+          "type": "string",
+          "title": "cell is the Multigres cell where the component is located"
+        },
+        "name": {
+          "type": "string",
+          "description": "name is a unique identifier for the component within the multigres\ncluster."
+        }
+      },
+      "description": "ID is a globally unique pooler identifier."
+    },
+    "consensusdataBeginTermResponse": {
+      "type": "object",
+      "properties": {
+        "term": {
+          "type": "string",
+          "format": "int64",
+          "title": "Current term, for candidate to update itself"
+        },
+        "accepted": {
+          "type": "boolean",
+          "title": "True if the term was accepted"
+        },
+        "poolerId": {
+          "type": "string",
+          "title": "ID of the responding pooler"
+        },
+        "demoteLsn": {
+          "type": "string",
+          "description": "If this node was a primary and demoted itself, this contains the final LSN\nbefore demotion. Standbys should replicate up to this point before switching\nto a new primary. Empty if node was not a primary or didn't demote."
+        }
+      }
+    },
+    "consensusdataCanReachPrimaryResponse": {
+      "type": "object",
+      "properties": {
+        "reachable": {
+          "type": "boolean",
+          "title": "Whether primary is reachable"
+        },
+        "errorMessage": {
+          "type": "string",
+          "title": "Error message if not reachable"
+        }
+      }
+    },
+    "consensusdataLeadershipViewResponse": {
+      "type": "object",
+      "properties": {
+        "leaderId": {
+          "type": "string",
+          "title": "ID of the current leader"
+        },
+        "lastHeartbeat": {
+          "type": "string",
+          "format": "date-time",
+          "title": "Last heartbeat timestamp"
+        },
+        "replicationLagNs": {
+          "type": "string",
+          "format": "int64",
+          "title": "Calculated replication lag in nanoseconds"
+        }
+      }
+    },
+    "consensusdataStatusResponse": {
+      "type": "object",
+      "properties": {
+        "poolerId": {
+          "type": "string",
+          "title": "Pooler ID"
+        },
+        "currentTerm": {
+          "type": "string",
+          "format": "int64",
+          "title": "Current term from local file"
+        },
+        "walPosition": {
+          "$ref": "#/definitions/consensusdataWALPosition",
+          "title": "Current WAL position"
+        },
+        "isHealthy": {
+          "type": "boolean",
+          "title": "Whether Postgres is healthy and reachable"
+        },
+        "isEligible": {
+          "type": "boolean",
+          "title": "Whether this pooler is eligible to be a leader"
+        },
+        "cell": {
+          "type": "string",
+          "title": "Cell identifier"
+        },
+        "role": {
+          "type": "string",
+          "title": "Current role (primary/replica)"
+        }
+      }
+    },
+    "consensusdataWALPosition": {
+      "type": "object",
+      "properties": {
+        "currentLsn": {
+          "type": "string",
+          "title": "For primary: current write position from pg_current_wal_lsn()\nFor standby: empty (use last_receive_lsn and last_replay_lsn instead)"
+        },
+        "lastReceiveLsn": {
+          "type": "string",
+          "title": "For standby: last WAL position received from pg_last_wal_receive_lsn()\nFor primary: empty"
+        },
+        "lastReplayLsn": {
+          "type": "string",
+          "title": "For standby: last WAL position replayed from pg_last_wal_replay_lsn()\nFor primary: empty"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "title": "Timestamp when this position was recorded"
+        }
+      },
+      "title": "WAL position for tracking replication state"
+    },
+    "googlerpcStatus": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "message": {
+          "type": "string"
+        },
+        "details": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/protobufAny"
+          }
+        }
+      }
+    },
+    "protobufAny": {
+      "type": "object",
+      "properties": {
+        "@type": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": {}
+    }
+  }
+}

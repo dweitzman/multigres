@@ -1,0 +1,872 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "multipoolermanagerservice.proto",
+    "version": "version not set"
+  },
+  "tags": [
+    {
+      "name": "MultiPoolerManager"
+    }
+  ],
+  "consumes": [
+    "application/json"
+  ],
+  "produces": [
+    "application/json"
+  ],
+  "paths": {},
+  "definitions": {
+    "IDComponentType": {
+      "type": "string",
+      "enum": [
+        "UNKNOWN",
+        "MULTIPOOLER",
+        "MULTIGATEWAY",
+        "MULTIORCH"
+      ],
+      "default": "UNKNOWN",
+      "description": "- UNKNOWN: UNKNOWN represents an unknown or uninitialized component type\n - MULTIPOOLER: MULTIPOOLER represents a multipooler component\n - MULTIGATEWAY: MULTIGATEWAY represents a multigateway component\n - MULTIORCH: MULTIORCH represents a multiorch component",
+      "title": "ComponentType represents the type of Multigres component"
+    },
+    "clustermetadataAsyncReplicationFallbackMode": {
+      "type": "string",
+      "enum": [
+        "ASYNC_REPLICATION_FALLBACK_MODE_UNKNOWN",
+        "ASYNC_REPLICATION_FALLBACK_MODE_ALLOW",
+        "ASYNC_REPLICATION_FALLBACK_MODE_REJECT"
+      ],
+      "default": "ASYNC_REPLICATION_FALLBACK_MODE_UNKNOWN",
+      "description": "- ASYNC_REPLICATION_FALLBACK_MODE_UNKNOWN: ASYNC_REPLICATION_FALLBACK_MODE_UNKNOWN represents an unknown or uninitialized mode\n - ASYNC_REPLICATION_FALLBACK_MODE_ALLOW: ASYNC_REPLICATION_FALLBACK_MODE_ALLOW permits falling back to async replication\nwhen no standby servers are available. This is the default behavior.\n - ASYNC_REPLICATION_FALLBACK_MODE_REJECT: ASYNC_REPLICATION_FALLBACK_MODE_REJECT rejects the leader appointment\nif synchronous replication cannot be established to meet quorum requirements",
+      "title": "AsyncReplicationFallbackMode defines the behavior when insufficient standbys are available\nfor synchronous replication to meet the quorum requirement"
+    },
+    "clustermetadataDurabilityPolicy": {
+      "type": "object",
+      "properties": {
+        "policyName": {
+          "type": "string",
+          "title": "policy_name references Database.durability_policy (e.g., \"any-two\")"
+        },
+        "policyVersion": {
+          "type": "string",
+          "format": "int64",
+          "title": "policy_version allows policy evolution over time"
+        },
+        "quorumRule": {
+          "$ref": "#/definitions/clustermetadataQuorumRule",
+          "title": "quorum_rule defines the actual quorum requirements"
+        },
+        "isActive": {
+          "type": "boolean",
+          "title": "is_active indicates if this is the current active policy"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "title": "Audit timestamps"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "description": "DurabilityPolicy defines consensus quorum rules for a shard.\nThese policies are stored locally in each shard's postgres database\nand replicated via postgres streaming replication."
+    },
+    "clustermetadataID": {
+      "type": "object",
+      "properties": {
+        "component": {
+          "$ref": "#/definitions/IDComponentType",
+          "title": "component identifies the type of Multigres component (multipooler, multigateway, or multiorch)"
+        },
+        "cell": {
+          "type": "string",
+          "title": "cell is the Multigres cell where the component is located"
+        },
+        "name": {
+          "type": "string",
+          "description": "name is a unique identifier for the component within the multigres\ncluster."
+        }
+      },
+      "description": "ID is a globally unique pooler identifier."
+    },
+    "clustermetadataKeyRange": {
+      "type": "object",
+      "properties": {
+        "start": {
+          "type": "string",
+          "format": "byte",
+          "title": "start is the start key of the range (inclusive)"
+        },
+        "end": {
+          "type": "string",
+          "format": "byte",
+          "title": "end is the end key of the range (exclusive)"
+        }
+      },
+      "title": "KeyRange represents a range of keys for sharding"
+    },
+    "clustermetadataMultiPooler": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/clustermetadataID",
+          "description": "id is the unique identifier of the multipooler in the cluster."
+        },
+        "database": {
+          "type": "string",
+          "description": "Database name."
+        },
+        "tableGroup": {
+          "type": "string",
+          "description": "TableGroup name."
+        },
+        "shard": {
+          "type": "string",
+          "description": "Shard name. If range based sharding is used, it should match\nkey_range."
+        },
+        "keyRange": {
+          "$ref": "#/definitions/clustermetadataKeyRange",
+          "description": "If range based sharding is used, range for the pooler's shard."
+        },
+        "type": {
+          "$ref": "#/definitions/clustermetadataPoolerType",
+          "title": "PoolerType is the kind of pooler: PRIMARY or REPLICA"
+        },
+        "servingStatus": {
+          "$ref": "#/definitions/clustermetadataPoolerServingStatus",
+          "description": "PoolerServingStatus is the current type of the pooler."
+        },
+        "hostname": {
+          "type": "string",
+          "description": "Fully qualified domain name of the host."
+        },
+        "portMap": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "title": "Map of named ports. These are ports that the pooler exposes. Initially, this will only be gRPC"
+        }
+      },
+      "description": "MultiPooler represents metadata about a running multipooler component instance in the cluster."
+    },
+    "clustermetadataPoolerServingStatus": {
+      "type": "string",
+      "enum": [
+        "SERVING",
+        "NOT_SERVING",
+        "BACKUP",
+        "RESTORE",
+        "DRAINED",
+        "SERVING_RDONLY"
+      ],
+      "default": "SERVING",
+      "description": "PoolerServingStatus represents the serving status of the given MultiPooler.\n\n - SERVING: SERVING is the status a server during normal operations when it is serving traffic.\n - NOT_SERVING: NOT_SERVING is the status of a server when it is not serving traffic.\nThis typically occurs during startup, shutdown, or when the server is\nin an error state and cannot accept connections.\n - BACKUP: BACKUP is the status of a server when it is taking a backup. No queries\ncan be served in BACKUP mode.\n - RESTORE: RESTORE is the status a server uses when restoring a backup, at\nstartup time.  No queries can be served in RESTORE mode.\n - DRAINED: DRAINED is the status a server goes into when used by Multigres tools\nto perform an offline action. It is a serving type (as\nthe tools processes may need to run queries), but it's not used\nto route queries from Multigres users. In this state,\nthis multipooler is dedicated to the process that uses it.\n - SERVING_RDONLY: SERVING_RDONLY is the status of a server in read-only mode.\nThis is used during demotion when the server transitions from PRIMARY to REPLICA,\nor for read-only replicas. The server accepts connections but only serves read queries."
+    },
+    "clustermetadataPoolerType": {
+      "type": "string",
+      "enum": [
+        "UNKNOWN",
+        "PRIMARY",
+        "REPLICA"
+      ],
+      "default": "UNKNOWN",
+      "description": "PoolerType represents the type of a given MultiPooler.\n\n - UNKNOWN: UNKNOWN this is not a valid type.\nIt is useful during upgrades to detect when a value is not initialized\n - PRIMARY: PRIMARY is the primary server for the shard. Only PRIMARY allows DMLs.\n - REPLICA: REPLICA replicates from leader. It is used to read only traffic"
+    },
+    "clustermetadataQuorumRule": {
+      "type": "object",
+      "properties": {
+        "quorumType": {
+          "$ref": "#/definitions/clustermetadataQuorumType",
+          "title": "quorum_type determines which quorum algorithm to use"
+        },
+        "requiredCount": {
+          "type": "integer",
+          "format": "int32",
+          "title": "required_count: number of nodes/cells required\n- For QUORUM_TYPE_ANY_N: number of nodes required from discovered cohort\n- For QUORUM_TYPE_MULTI_CELL_ANY_N: number of distinct cells required,\n  with at least one node from each cell"
+        },
+        "description": {
+          "type": "string",
+          "title": "Human-readable description"
+        },
+        "asyncFallback": {
+          "$ref": "#/definitions/clustermetadataAsyncReplicationFallbackMode",
+          "description": "async_fallback defines behavior when insufficient standbys are available\nfor synchronous replication. Defaults to ALLOW if unset."
+        }
+      },
+      "title": "QuorumRule defines how many nodes are required for quorum"
+    },
+    "clustermetadataQuorumType": {
+      "type": "string",
+      "enum": [
+        "QUORUM_TYPE_UNKNOWN",
+        "QUORUM_TYPE_ANY_N",
+        "QUORUM_TYPE_MULTI_CELL_ANY_N"
+      ],
+      "default": "QUORUM_TYPE_UNKNOWN",
+      "description": "- QUORUM_TYPE_UNKNOWN: QUORUM_TYPE_UNKNOWN represents an unknown or uninitialized quorum type\n - QUORUM_TYPE_ANY_N: QUORUM_TYPE_ANY_N requires any N nodes from discovered cohort\n - QUORUM_TYPE_MULTI_CELL_ANY_N: QUORUM_TYPE_MULTI_CELL_ANY_N requires nodes from multiple cells (availability zones)\nwith at least one node from each of the required cells",
+      "title": "QuorumType enumerates supported quorum algorithms"
+    },
+    "googlerpcStatus": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "message": {
+          "type": "string"
+        },
+        "details": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/protobufAny"
+          }
+        }
+      }
+    },
+    "multipoolermanagerdataBackupMetadata": {
+      "type": "object",
+      "properties": {
+        "tableGroup": {
+          "type": "string"
+        },
+        "shard": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/definitions/multipoolermanagerdataBackupMetadataStatus"
+        },
+        "backupId": {
+          "type": "string"
+        },
+        "finalLsn": {
+          "type": "string",
+          "title": "Final checkpoint LSN (stop LSN) for this backup"
+        },
+        "jobId": {
+          "type": "string",
+          "title": "Job ID annotation if present (for cross-process tracking)"
+        },
+        "backupSizeBytes": {
+          "type": "string",
+          "format": "uint64",
+          "title": "Size of the backup in bytes (original database size before compression)"
+        },
+        "type": {
+          "type": "string",
+          "title": "Type of backup: \"full\", \"diff\", or \"incr\" (as reported by pgbackrest)"
+        },
+        "multipoolerId": {
+          "type": "string",
+          "title": "Multipooler ID that created this backup (from pgbackrest annotation)"
+        },
+        "poolerType": {
+          "$ref": "#/definitions/clustermetadataPoolerType",
+          "title": "Pooler type that created this backup (from pgbackrest annotation)"
+        }
+      },
+      "title": "BackupMetadata contains metadata about a backup"
+    },
+    "multipoolermanagerdataBackupMetadataStatus": {
+      "type": "string",
+      "enum": [
+        "UNKNOWN",
+        "INCOMPLETE",
+        "COMPLETE"
+      ],
+      "default": "UNKNOWN",
+      "description": "- COMPLETE: TODO: add VALID/INVALID states",
+      "title": "Status represents the state of a backup"
+    },
+    "multipoolermanagerdataBackupResponse": {
+      "type": "object",
+      "properties": {
+        "backupId": {
+          "type": "string",
+          "description": "backup_id uniquely identifies a backup and can be used to restore this\nbackup in the future."
+        }
+      },
+      "title": "BackupResponse contains the result of a backup operation"
+    },
+    "multipoolermanagerdataChangeTypeResponse": {
+      "type": "object"
+    },
+    "multipoolermanagerdataConfigureSynchronousReplicationRequest": {
+      "type": "object",
+      "properties": {
+        "synchronousCommit": {
+          "$ref": "#/definitions/multipoolermanagerdataSynchronousCommitLevel",
+          "title": "Synchronous commit level (synchronous_commit setting)"
+        },
+        "synchronousMethod": {
+          "$ref": "#/definitions/multipoolermanagerdataSynchronousMethod",
+          "title": "Synchronization method (FIRST, ANY)"
+        },
+        "numSync": {
+          "type": "integer",
+          "format": "int32",
+          "title": "Number of standby servers to wait for (quorum count)"
+        },
+        "standbyIds": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/clustermetadataID"
+          },
+          "title": "List of standby multipooler IDs that can participate in synchronous replication\nThe application names will be generated as {cell}_{name} from these IDs"
+        },
+        "reloadConfig": {
+          "type": "boolean",
+          "title": "Whether to reload configuration immediately"
+        }
+      },
+      "title": "ConfigureSynchronousReplication configures PostgreSQL synchronous replication settings"
+    },
+    "multipoolermanagerdataConfigureSynchronousReplicationResponse": {
+      "type": "object"
+    },
+    "multipoolermanagerdataConsensusTerm": {
+      "type": "object",
+      "properties": {
+        "termNumber": {
+          "type": "string",
+          "format": "int64",
+          "title": "Term number for this consensus term"
+        },
+        "acceptedTermFromCoordinatorId": {
+          "$ref": "#/definitions/clustermetadataID",
+          "title": "ID of the coordinator (multiorch) that this node accepted the term from"
+        },
+        "lastAcceptanceTime": {
+          "type": "string",
+          "format": "date-time",
+          "title": "Timestamp of the last acceptance"
+        },
+        "leaderId": {
+          "$ref": "#/definitions/clustermetadataID",
+          "title": "ID of the leader of the current term"
+        }
+      },
+      "title": "ConsensusTerm represents the consensus term information for the pooler\nThis is persisted to disk at $PGDATA/consensus/consensus_term.json"
+    },
+    "multipoolermanagerdataCreateDurabilityPolicyResponse": {
+      "type": "object",
+      "title": "CreateDurabilityPolicyResponse confirms policy creation\nErrors are returned via gRPC status codes, not in the response body"
+    },
+    "multipoolermanagerdataDemoteResponse": {
+      "type": "object",
+      "properties": {
+        "wasAlreadyDemoted": {
+          "type": "boolean",
+          "title": "Whether the pooler was already demoted (idempotent check)"
+        },
+        "consensusTerm": {
+          "type": "string",
+          "format": "int64",
+          "title": "Consensus term at the time of demotion"
+        },
+        "lsnPosition": {
+          "type": "string",
+          "title": "LSN position at the time of demotion (final position as primary)"
+        },
+        "connectionsTerminated": {
+          "type": "integer",
+          "format": "int32",
+          "title": "Number of connections that were terminated"
+        }
+      }
+    },
+    "multipoolermanagerdataFollowerInfo": {
+      "type": "object",
+      "properties": {
+        "followerId": {
+          "$ref": "#/definitions/clustermetadataID",
+          "title": "Cluster ID of the follower from synchronous_standby_names configuration"
+        },
+        "applicationName": {
+          "type": "string",
+          "title": "Application name (format: {cell}_{name})"
+        },
+        "isConnected": {
+          "type": "boolean",
+          "title": "Whether this follower is currently connected to the primary"
+        },
+        "replicationStats": {
+          "$ref": "#/definitions/multipoolermanagerdataReplicationStats",
+          "title": "Replication statistics (only populated if is_connected is true)"
+        }
+      },
+      "description": "Information about a follower that is part of the current cohort (configured in\nsynchronous_standby_names). Includes connection status and replication stats if connected."
+    },
+    "multipoolermanagerdataGetBackupByJobIdResponse": {
+      "type": "object",
+      "properties": {
+        "backup": {
+          "$ref": "#/definitions/multipoolermanagerdataBackupMetadata",
+          "description": "The backup metadata if found, nil if not found."
+        }
+      },
+      "description": "GetBackupByJobIdResponse returns the backup matching the job_id.\nIf no backup is found, backup will be nil."
+    },
+    "multipoolermanagerdataGetBackupsResponse": {
+      "type": "object",
+      "properties": {
+        "backups": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/multipoolermanagerdataBackupMetadata"
+          }
+        }
+      },
+      "title": "GetBackupsResponse contains the list of backups"
+    },
+    "multipoolermanagerdataGetDurabilityPolicyResponse": {
+      "type": "object",
+      "properties": {
+        "policy": {
+          "$ref": "#/definitions/clustermetadataDurabilityPolicy",
+          "title": "The active durability policy, or null if none is configured"
+        }
+      },
+      "title": "GetDurabilityPolicyResponse returns the active durability policy"
+    },
+    "multipoolermanagerdataGetFollowersResponse": {
+      "type": "object",
+      "properties": {
+        "followers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/multipoolermanagerdataFollowerInfo"
+          },
+          "description": "Information about all followers configured in synchronous_standby_names.\nEach entry indicates whether the follower is connected and includes replication\nstatistics if available. This provides a complete view of the expected cohort."
+        },
+        "syncConfig": {
+          "$ref": "#/definitions/multipoolermanagerdataSynchronousReplicationConfiguration",
+          "title": "Current synchronous replication configuration for context"
+        }
+      }
+    },
+    "multipoolermanagerdataInitializeAsStandbyResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "title": "Whether the initialization succeeded"
+        },
+        "errorMessage": {
+          "type": "string",
+          "title": "Error message if initialization failed"
+        },
+        "finalLsn": {
+          "type": "string",
+          "title": "Final LSN position after backup completed"
+        }
+      }
+    },
+    "multipoolermanagerdataInitializeEmptyPrimaryResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "title": "Whether the initialization succeeded"
+        },
+        "errorMessage": {
+          "type": "string",
+          "title": "Error message if initialization failed"
+        },
+        "backupId": {
+          "type": "string",
+          "title": "Backup ID of the initial backup created during initialization\nThis can be used by standbys to restore from the same backup"
+        }
+      }
+    },
+    "multipoolermanagerdataPrimaryConnInfo": {
+      "type": "object",
+      "properties": {
+        "host": {
+          "type": "string",
+          "title": "Primary server hostname"
+        },
+        "port": {
+          "type": "integer",
+          "format": "int32",
+          "title": "Primary server port"
+        },
+        "user": {
+          "type": "string",
+          "title": "Database user for replication connection"
+        },
+        "applicationName": {
+          "type": "string",
+          "title": "Application name for this standby"
+        },
+        "raw": {
+          "type": "string",
+          "title": "Raw connection string (includes all parameters)"
+        }
+      },
+      "title": "Primary connection information parsed from PostgreSQL's primary_conninfo setting"
+    },
+    "multipoolermanagerdataPrimaryPositionResponse": {
+      "type": "object",
+      "properties": {
+        "lsnPosition": {
+          "type": "string",
+          "title": "Current primary LSN position"
+        }
+      }
+    },
+    "multipoolermanagerdataPrimaryStatus": {
+      "type": "object",
+      "properties": {
+        "lsn": {
+          "type": "string",
+          "title": "Current WAL LSN position (PostgreSQL format: X/XXXXXXXX)"
+        },
+        "ready": {
+          "type": "boolean",
+          "title": "Whether server is accepting connections"
+        },
+        "connectedFollowers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/clustermetadataID"
+          },
+          "description": "Follower servers that are currently connected to the primary (parsed from pg_stat_replication).\nThis only includes followers that have an active replication connection, not all configured standbys.\nFor a complete view of all configured standbys (connected and disconnected), use GetFollowers."
+        },
+        "syncReplicationConfig": {
+          "$ref": "#/definitions/multipoolermanagerdataSynchronousReplicationConfiguration",
+          "title": "Synchronous replication configuration (parsed from synchronous_standby_names and synchronous_commit)"
+        }
+      },
+      "title": "PostgreSQL primary server status"
+    },
+    "multipoolermanagerdataPrimaryStatusResponse": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "$ref": "#/definitions/multipoolermanagerdataPrimaryStatus",
+          "title": "Primary server status"
+        }
+      }
+    },
+    "multipoolermanagerdataPromoteResponse": {
+      "type": "object",
+      "properties": {
+        "lsnPosition": {
+          "type": "string",
+          "title": "LSN position after promotion"
+        },
+        "wasAlreadyPrimary": {
+          "type": "boolean",
+          "title": "Whether the pooler was already promoted (idempotent check)"
+        },
+        "consensusTerm": {
+          "type": "string",
+          "format": "int64",
+          "title": "Consensus term at the time of promotion"
+        }
+      }
+    },
+    "multipoolermanagerdataReplicationPauseMode": {
+      "type": "string",
+      "enum": [
+        "REPLICATION_PAUSE_MODE_REPLAY_ONLY",
+        "REPLICATION_PAUSE_MODE_RECEIVER_ONLY",
+        "REPLICATION_PAUSE_MODE_REPLAY_AND_RECEIVER"
+      ],
+      "default": "REPLICATION_PAUSE_MODE_REPLAY_ONLY",
+      "description": "- REPLICATION_PAUSE_MODE_REPLAY_ONLY: PAUSE_REPLAY_ONLY pauses WAL replay only (using pg_wal_replay_pause)\nThe WAL receiver continues to receive data from the primary\n - REPLICATION_PAUSE_MODE_RECEIVER_ONLY: PAUSE_RECEIVER_ONLY stops the WAL receiver by clearing primary_conninfo\nAlready replayed WAL remains, but no new WAL is received\n - REPLICATION_PAUSE_MODE_REPLAY_AND_RECEIVER: PAUSE_REPLAY_AND_RECEIVER pauses both WAL replay and stops the WAL receiver\nThis is the most complete pause - no new WAL is received and nothing is replayed",
+      "title": "Replication pause mode - defines what aspect of replication to pause"
+    },
+    "multipoolermanagerdataReplicationStats": {
+      "type": "object",
+      "properties": {
+        "pid": {
+          "type": "integer",
+          "format": "int32",
+          "title": "PostgreSQL backend process ID for this replication connection"
+        },
+        "clientAddr": {
+          "type": "string",
+          "title": "Client IP address of the follower"
+        },
+        "state": {
+          "type": "string",
+          "title": "Current WAL sender state (startup, catchup, streaming, backup, stopping)"
+        },
+        "syncState": {
+          "type": "string",
+          "title": "Synchronous state (async, potential, sync, quorum)"
+        },
+        "sentLsn": {
+          "type": "string",
+          "title": "LSN of the last WAL location sent to this standby"
+        },
+        "writeLsn": {
+          "type": "string",
+          "title": "LSN of the last WAL location written to disk on this standby"
+        },
+        "flushLsn": {
+          "type": "string",
+          "title": "LSN of the last WAL location flushed to disk on this standby"
+        },
+        "replayLsn": {
+          "type": "string",
+          "title": "LSN of the last WAL location replayed on this standby"
+        },
+        "writeLag": {
+          "type": "string",
+          "title": "Time taken to write recent WAL locally (may be null)"
+        },
+        "flushLag": {
+          "type": "string",
+          "title": "Time taken to flush recent WAL locally (may be null)"
+        },
+        "replayLag": {
+          "type": "string",
+          "title": "Time taken to replay recent WAL on standby (may be null)"
+        }
+      },
+      "title": "Replication statistics for a connected follower from pg_stat_replication"
+    },
+    "multipoolermanagerdataResetReplicationResponse": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "$ref": "#/definitions/multipoolermanagerdataStandbyReplicationStatus",
+          "title": "Replication status when replication was reset"
+        }
+      }
+    },
+    "multipoolermanagerdataRestoreFromBackupResponse": {
+      "type": "object",
+      "title": "RestoreFromBackupResponse contains the result of a restore operation"
+    },
+    "multipoolermanagerdataSetPrimaryConnInfoResponse": {
+      "type": "object"
+    },
+    "multipoolermanagerdataSetTermResponse": {
+      "type": "object"
+    },
+    "multipoolermanagerdataStandbyReplicationStatus": {
+      "type": "object",
+      "properties": {
+        "lastReplayLsn": {
+          "type": "string",
+          "title": "Last WAL position replayed during recovery (PostgreSQL format: X/XXXXXXXX)\nObtained from pg_last_wal_replay_lsn()"
+        },
+        "lastReceiveLsn": {
+          "type": "string",
+          "title": "Last WAL position received and synced to disk by standby (PostgreSQL format: X/XXXXXXXX)\nObtained from pg_last_wal_receive_lsn()"
+        },
+        "isWalReplayPaused": {
+          "type": "boolean",
+          "title": "Result of pg_is_wal_replay_paused()"
+        },
+        "walReplayPauseState": {
+          "type": "string",
+          "title": "Result of pg_get_wal_replay_pause_state()"
+        },
+        "lag": {
+          "type": "string",
+          "title": "Replication lag (optional, may not always be available)"
+        },
+        "lastXactReplayTimestamp": {
+          "type": "string",
+          "title": "Result of pg_last_xact_replay_timestamp()"
+        },
+        "primaryConnInfo": {
+          "$ref": "#/definitions/multipoolermanagerdataPrimaryConnInfo",
+          "title": "Primary connection info parsed from primary_conninfo setting"
+        }
+      },
+      "title": "StandbyReplicationStatus PostgreSQL replication status information"
+    },
+    "multipoolermanagerdataStandbyReplicationStatusResponse": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "$ref": "#/definitions/multipoolermanagerdataStandbyReplicationStatus",
+          "title": "Current replication status"
+        }
+      }
+    },
+    "multipoolermanagerdataStandbyUpdateOperation": {
+      "type": "string",
+      "enum": [
+        "STANDBY_UPDATE_OPERATION_UNSPECIFIED",
+        "STANDBY_UPDATE_OPERATION_ADD",
+        "STANDBY_UPDATE_OPERATION_REMOVE",
+        "STANDBY_UPDATE_OPERATION_REPLACE"
+      ],
+      "default": "STANDBY_UPDATE_OPERATION_UNSPECIFIED",
+      "title": "Enum representing the type of standby list modification"
+    },
+    "multipoolermanagerdataStartReplicationResponse": {
+      "type": "object"
+    },
+    "multipoolermanagerdataStateResponse": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string",
+          "title": "Manager state (starting, ready, error)"
+        },
+        "errorMessage": {
+          "type": "string",
+          "title": "Error message if state is error"
+        }
+      }
+    },
+    "multipoolermanagerdataStatus": {
+      "type": "object",
+      "properties": {
+        "poolerType": {
+          "$ref": "#/definitions/clustermetadataPoolerType",
+          "title": "Pooler type from topology (PRIMARY or REPLICA)"
+        },
+        "primaryStatus": {
+          "$ref": "#/definitions/multipoolermanagerdataPrimaryStatus",
+          "title": "Primary status information (only populated if pooler is acting as primary AND db is connected)"
+        },
+        "replicationStatus": {
+          "$ref": "#/definitions/multipoolermanagerdataStandbyReplicationStatus",
+          "title": "Replication status information (only populated if pooler is acting as standby AND db is connected)"
+        },
+        "isInitialized": {
+          "type": "boolean",
+          "title": "Whether this pooler has been initialized (has data directory and multigres schema)"
+        },
+        "hasDataDirectory": {
+          "type": "boolean",
+          "title": "Whether data directory exists"
+        },
+        "postgresRunning": {
+          "type": "boolean",
+          "title": "Whether PostgreSQL is currently running"
+        },
+        "postgresRole": {
+          "type": "string",
+          "description": "Current postgres-level role from pg_is_in_recovery (\"primary\", \"standby\", or \"unknown\")\nThis may differ from pooler_type during transitions or failures."
+        },
+        "walPosition": {
+          "type": "string",
+          "title": "Current WAL position (empty if db not connected)"
+        },
+        "consensusTerm": {
+          "type": "string",
+          "format": "int64",
+          "title": "Current consensus term"
+        },
+        "shardId": {
+          "type": "string",
+          "title": "Shard ID that this pooler belongs to"
+        }
+      },
+      "description": "Status provides unified status information that works for both PRIMARY and REPLICA poolers.\nThis RPC works even when the database connection is unavailable - fields that require\ndatabase access will be nil/empty in that case."
+    },
+    "multipoolermanagerdataStatusResponse": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "$ref": "#/definitions/multipoolermanagerdataStatus"
+        }
+      }
+    },
+    "multipoolermanagerdataStopReplicationAndGetStatusResponse": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "$ref": "#/definitions/multipoolermanagerdataStandbyReplicationStatus",
+          "title": "Replication status after stopping"
+        }
+      }
+    },
+    "multipoolermanagerdataStopReplicationResponse": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "$ref": "#/definitions/multipoolermanagerdataStandbyReplicationStatus",
+          "title": "Replication status when replication was stopped (only populated if wait=true)"
+        }
+      }
+    },
+    "multipoolermanagerdataSynchronousCommitLevel": {
+      "type": "string",
+      "enum": [
+        "SYNCHRONOUS_COMMIT_OFF",
+        "SYNCHRONOUS_COMMIT_LOCAL",
+        "SYNCHRONOUS_COMMIT_REMOTE_WRITE",
+        "SYNCHRONOUS_COMMIT_ON",
+        "SYNCHRONOUS_COMMIT_REMOTE_APPLY"
+      ],
+      "default": "SYNCHRONOUS_COMMIT_OFF",
+      "description": "- SYNCHRONOUS_COMMIT_OFF: OFF disables synchronous commit\n - SYNCHRONOUS_COMMIT_LOCAL: LOCAL waits for local flush to disk\n - SYNCHRONOUS_COMMIT_REMOTE_WRITE: REMOTE_WRITE waits for standby to receive and write WAL\n - SYNCHRONOUS_COMMIT_ON: ON waits for standby to receive, write, and flush WAL (same as remote_apply in newer versions)\n - SYNCHRONOUS_COMMIT_REMOTE_APPLY: REMOTE_APPLY waits for standby to receive, write, flush, and apply WAL",
+      "title": "Synchronous commit level"
+    },
+    "multipoolermanagerdataSynchronousMethod": {
+      "type": "string",
+      "enum": [
+        "SYNCHRONOUS_METHOD_UNSPECIFIED",
+        "SYNCHRONOUS_METHOD_FIRST",
+        "SYNCHRONOUS_METHOD_ANY"
+      ],
+      "default": "SYNCHRONOUS_METHOD_UNSPECIFIED",
+      "description": "- SYNCHRONOUS_METHOD_UNSPECIFIED: UNSPECIFIED means no synchronous replication (empty synchronous_standby_names)\n - SYNCHRONOUS_METHOD_FIRST: FIRST means wait for the first N standby servers (PostgreSQL default)\n - SYNCHRONOUS_METHOD_ANY: ANY means wait for any N standby servers",
+      "title": "Synchronization method for standby servers"
+    },
+    "multipoolermanagerdataSynchronousReplicationConfiguration": {
+      "type": "object",
+      "properties": {
+        "synchronousCommit": {
+          "$ref": "#/definitions/multipoolermanagerdataSynchronousCommitLevel",
+          "title": "Synchronous commit level"
+        },
+        "synchronousMethod": {
+          "$ref": "#/definitions/multipoolermanagerdataSynchronousMethod",
+          "title": "Synchronous method (FIRST or ANY)"
+        },
+        "numSync": {
+          "type": "integer",
+          "format": "int32",
+          "title": "Number of synchronous standbys"
+        },
+        "standbyIds": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/clustermetadataID"
+          },
+          "title": "List of standby IDs that can participate in synchronous replication"
+        }
+      },
+      "title": "Synchronous replication configuration"
+    },
+    "multipoolermanagerdataUndoDemoteResponse": {
+      "type": "object"
+    },
+    "multipoolermanagerdataUpdateSynchronousStandbyListResponse": {
+      "type": "object"
+    },
+    "multipoolermanagerdataWaitForLSNResponse": {
+      "type": "object"
+    },
+    "protobufAny": {
+      "type": "object",
+      "properties": {
+        "@type": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": {}
+    }
+  }
+}
