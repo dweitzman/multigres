@@ -86,6 +86,9 @@ func (re *Engine) performRecoveryCycle() {
 		}
 	}
 
+	// Update detected problems metric (following vtorc pattern)
+	re.updateDetectedProblems(problems)
+
 	if len(problems) == 0 {
 		return // no problems detected
 	}
@@ -244,7 +247,7 @@ func (re *Engine) attemptRecovery(problem types.Problem) {
 			"pooler_id", poolerIDStr,
 			"error", err,
 		)
-		re.metrics.recoveryActionDuration.Record(re.ctx, durationMs, actionName, string(problem.Code), RecoveryActionStatusFailure)
+		re.metrics.recoveryActionDuration.Record(re.ctx, durationMs, actionName, string(problem.Code), RecoveryActionStatusFailure, problem.ShardKey.Database, problem.ShardKey.Shard)
 		return
 	}
 
@@ -252,7 +255,7 @@ func (re *Engine) attemptRecovery(problem types.Problem) {
 		"problem_code", problem.Code,
 		"pooler_id", poolerIDStr,
 	)
-	re.metrics.recoveryActionDuration.Record(re.ctx, durationMs, actionName, string(problem.Code), RecoveryActionStatusSuccess)
+	re.metrics.recoveryActionDuration.Record(re.ctx, durationMs, actionName, string(problem.Code), RecoveryActionStatusSuccess, problem.ShardKey.Database, problem.ShardKey.Shard)
 
 	// Post-recovery refresh
 	// If we ran a shard-wide recovery, force health check all poolers in the shard
