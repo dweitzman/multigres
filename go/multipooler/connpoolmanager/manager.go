@@ -53,6 +53,7 @@ type Manager struct {
 
 	adminPool     *admin.Pool              // Shared admin pool for kill operations
 	settingsCache *connstate.SettingsCache // Shared settings cache for all users
+	metrics       *Metrics                 // Shared OTel metrics for all pools
 
 	mu        sync.Mutex
 	userPools map[string]*UserPool // Per-user connection pools
@@ -79,13 +80,22 @@ func (m *Manager) Open(ctx context.Context, logger *slog.Logger, connConfig *Con
 	m.settingsCache = connstate.NewSettingsCache(m.config.SettingsCacheSize())
 	m.closed = false
 
+	// Initialize shared OTel metrics for all connection pools
+	metrics, err := NewMetrics()
+	if err != nil {
+		m.logger.WarnContext(ctx, "failed to initialize connection pool metrics", "error", err)
+	}
+	m.metrics = metrics
+
 	// Build admin client config
 	adminClientConfig := m.buildClientConfig(m.config.AdminUser(), m.config.AdminPassword())
 
-	// Build admin pool config
+	// Build admin pool config with shared metrics
 	adminPoolConfig := &connpool.Config{
-		Capacity: m.config.AdminCapacity(),
-		Logger:   m.logger,
+		Capacity:        m.config.AdminCapacity(),
+		Logger:          m.logger,
+		ConnectionCount: m.metrics.ConnectionCount,
+		ConnectionMax:   m.metrics.ConnectionMax,
 	}
 
 	// Create shared admin pool (used by all user pools for kill operations)
@@ -143,23 +153,27 @@ func (m *Manager) getOrCreateUserPool(ctx context.Context, user string) (*UserPo
 		return nil, fmt.Errorf("maximum number of user pools (%d) reached", maxUsers)
 	}
 
-	// Create new user pool
+	// Create new user pool with shared metrics
 	pool := NewUserPool(ctx, &UserPoolConfig{
 		ClientConfig: m.buildClientConfig(user, ""), // Trust auth - no password
 		AdminPool:    m.adminPool,
 		RegularPoolConfig: &connpool.Config{
-			Capacity:     m.config.UserRegularCapacity(),
-			MaxIdleCount: m.config.UserRegularMaxIdle(),
-			IdleTimeout:  m.config.UserRegularIdleTimeout(),
-			MaxLifetime:  m.config.UserRegularMaxLifetime(),
-			Logger:       m.logger,
+			Capacity:        m.config.UserRegularCapacity(),
+			MaxIdleCount:    m.config.UserRegularMaxIdle(),
+			IdleTimeout:     m.config.UserRegularIdleTimeout(),
+			MaxLifetime:     m.config.UserRegularMaxLifetime(),
+			Logger:          m.logger,
+			ConnectionCount: m.metrics.ConnectionCount,
+			ConnectionMax:   m.metrics.ConnectionMax,
 		},
 		ReservedPoolConfig: &connpool.Config{
-			Capacity:     m.config.UserReservedCapacity(),
-			MaxIdleCount: m.config.UserReservedMaxIdle(),
-			IdleTimeout:  m.config.UserReservedIdleTimeout(),
-			MaxLifetime:  m.config.UserReservedMaxLifetime(),
-			Logger:       m.logger,
+			Capacity:        m.config.UserReservedCapacity(),
+			MaxIdleCount:    m.config.UserReservedMaxIdle(),
+			IdleTimeout:     m.config.UserReservedIdleTimeout(),
+			MaxLifetime:     m.config.UserReservedMaxLifetime(),
+			Logger:          m.logger,
+			ConnectionCount: m.metrics.ConnectionCount,
+			ConnectionMax:   m.metrics.ConnectionMax,
 		},
 		ReservedInactivityTimeout: m.config.UserReservedInactivityTimeout(),
 		Logger:                    m.logger,

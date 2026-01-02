@@ -61,6 +61,7 @@ const (
 type MultiPoolerManager struct {
 	logger       *slog.Logger
 	config       *Config
+	metrics      *Metrics
 	topoClient   topoclient.Store
 	serviceID    *clustermetadatapb.ID
 	replTracker  *heartbeat.ReplTracker
@@ -214,6 +215,13 @@ func NewMultiPoolerManagerWithTimeout(logger *slog.Logger, config *Config, loadT
 
 	// Create the query service controller with the pool manager
 	pm.qsc = poolerserver.NewQueryPoolerServer(logger, connPoolMgr)
+
+	// Initialize metrics
+	metrics, err := NewMetrics()
+	if err != nil {
+		logger.ErrorContext(ctx, "failed to initialize metrics", "error", err)
+	}
+	pm.metrics = metrics
 
 	return pm, nil
 }
@@ -1368,6 +1376,9 @@ func (pm *MultiPoolerManager) Start(senv *servenv.ServEnv) {
 		// Don't fail startup if Open fails - will retry on demand
 	}
 
+	// Register metrics callbacks
+	pm.registerMetricsCallbacks()
+
 	// Start loading multipooler record from topology asynchronously
 	go pm.loadMultiPoolerFromTopo()
 	// Start loading consensus term from local disk asynchronously (only if consensus is enabled)
@@ -1399,6 +1410,31 @@ func (pm *MultiPoolerManager) Start(senv *servenv.ServEnv) {
 		pm.logger.Info("MultiPoolerManager gRPC services registered")
 		return nil
 	})
+}
+
+// registerMetricsCallbacks registers callbacks for observable gauge metrics.
+func (pm *MultiPoolerManager) registerMetricsCallbacks() {
+	if pm.metrics == nil {
+		return
+	}
+
+	// Register replication lag callback
+	err := pm.metrics.RegisterReplicationLagCallback(func() (time.Duration, bool, error) {
+		if pm.replTracker == nil {
+			return 0, false, fmt.Errorf("replication tracker not initialized")
+		}
+		isPrimary := pm.replTracker.IsPrimary()
+		if isPrimary {
+			return 0, true, nil
+		}
+		lag, err := pm.replTracker.HeartbeatReader().Status()
+		return lag, false, err
+	})
+	if err != nil {
+		pm.logger.Error("failed to register replication lag callback", "error", err)
+	}
+	// Note: Connection pool metrics (db.client.connection.count, db.client.connection.max)
+	// are handled directly by connpool using dbconv UpDownCounters.
 }
 
 // WaitUntilReady blocks until the manager reaches Ready or Error state, or

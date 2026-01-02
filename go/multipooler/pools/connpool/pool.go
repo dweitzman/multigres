@@ -23,6 +23,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel/semconv/v1.37.0/dbconv"
+
 	"github.com/multigres/multigres/go/multipooler/connstate"
 )
 
@@ -76,6 +78,11 @@ type Config struct {
 	RefreshInterval time.Duration
 	LogWait         func(time.Time)
 	Logger          *slog.Logger
+
+	// OTel metrics instruments (optional, nil-safe).
+	// These are shared across all pools and created by the owner (e.g., connpoolmanager).
+	ConnectionCount *ConnectionCount
+	ConnectionMax   *dbconv.ClientConnectionMax
 }
 
 // stackMask is the number of connection state stacks minus one;
@@ -139,6 +146,10 @@ type Pool[C Connection] struct {
 	Metrics Metrics
 	Name    string
 	logger  *slog.Logger
+
+	// OTel metrics instruments (optional, nil-safe)
+	otelConnectionCount *ConnectionCount
+	otelConnectionMax   *dbconv.ClientConnectionMax
 }
 
 // NewPool creates a new connection pool with the given Config.
@@ -156,6 +167,10 @@ func NewPool[C Connection](config *Config) *Pool[C] {
 		pool.logger = slog.Default()
 	}
 	pool.wait.init()
+
+	// OTel metrics (optional)
+	pool.otelConnectionCount = config.ConnectionCount
+	pool.otelConnectionMax = config.ConnectionMax
 
 	return pool
 }
@@ -197,7 +212,7 @@ func (pool *Pool[C]) open(ctx context.Context) {
 		// Do not allow connections to starve; if there's waiters in the queue
 		// and connections in the stack, it means we could be starving them.
 		// Try getting out a connection and handing it over directly
-		for n := 0; n < maybeStarving && pool.tryReturnAnyConn(); n++ {
+		for n := 0; n < maybeStarving && pool.tryHandoffIdleToWaiter(); n++ {
 		}
 		return true
 	})
@@ -407,7 +422,7 @@ func (pool *Pool[C]) put(conn *Pooled[C]) {
 		var err error
 		conn, err = pool.connNew(pool.ctx)
 		if err != nil {
-			pool.closedConn()
+			pool.releaseUsedSlot(pool.ctx)
 			return
 		}
 	} else {
@@ -418,22 +433,31 @@ func (pool *Pool[C]) put(conn *Pooled[C]) {
 			pool.Metrics.maxLifetimeClosed.Add(1)
 			conn.Close()
 			if err := pool.connReopen(pool.ctx, conn, conn.timeUsed.get()); err != nil {
-				pool.closedConn()
+				pool.releaseUsedSlot(pool.ctx)
 				return
 			}
 		}
 	}
 
-	pool.tryReturnConn(conn)
+	pool.releaseUsedConn(pool.ctx, conn)
 }
 
-func (pool *Pool[C]) tryReturnConn(conn *Pooled[C]) bool {
+// releaseUsedConn returns a used/borrowed connection to the pool or hands it to a waiter.
+// It handles the used→idle transition (or direct handoff to another waiter).
+func (pool *Pool[C]) releaseUsedConn(ctx context.Context, conn *Pooled[C]) {
 	if pool.wait.tryReturnConn(conn) {
-		return true
+		// Direct handoff to waiter - connection stays in "used" state
+		return
 	}
-	if pool.closeOnIdleLimitReached(conn) {
-		return false
+	if pool.closeOnIdleLimitReached(ctx, conn) {
+		// Connection closed due to idle limit - closeOnIdleLimitReached handles all cleanup
+		return
 	}
+
+	// Return to idle: used→idle
+	pool.otelAdd(ctx, dbconv.ClientConnectionStateUsed, -1)
+	pool.otelAdd(ctx, dbconv.ClientConnectionStateIdle, 1)
+
 	connSettings := conn.Conn.Settings()
 	if connSettings == nil || connSettings.IsEmpty() {
 		pool.clean.Push(conn)
@@ -442,7 +466,6 @@ func (pool *Pool[C]) tryReturnConn(conn *Pooled[C]) bool {
 		pool.states[bucket].Push(conn)
 		pool.freshStatesStack.Store(int64(bucket))
 	}
-	return false
 }
 
 func (pool *Pool[C]) pop(stack *connStack[C]) *Pooled[C] {
@@ -461,15 +484,56 @@ func (pool *Pool[C]) pop(stack *connStack[C]) *Pooled[C] {
 	return nil
 }
 
-func (pool *Pool[C]) tryReturnAnyConn() bool {
+// popFromIdle pops a connection from the stack and immediately records the idle→used
+// OTel transition. Returns nil if stack is empty.
+func (pool *Pool[C]) popFromIdle(ctx context.Context, stack *connStack[C]) *Pooled[C] {
+	conn := pool.pop(stack)
+	if conn == nil {
+		return nil
+	}
+	pool.otelAdd(ctx, dbconv.ClientConnectionStateIdle, -1)
+	pool.otelAdd(ctx, dbconv.ClientConnectionStateUsed, 1)
+	return conn
+}
+
+// popFromIdleAnyStack tries all settings stacks starting from the given bucket.
+// Returns nil if all stacks are empty.
+func (pool *Pool[C]) popFromIdleAnyStack(ctx context.Context, startBucket uint32) *Pooled[C] {
+	for i := uint32(0); i <= stackMask; i++ {
+		pos := (i + startBucket) & stackMask
+		if conn := pool.popFromIdle(ctx, &pool.states[pos]); conn != nil {
+			return conn
+		}
+	}
+	return nil
+}
+
+// tryHandoffIdleToWaiter attempts to hand an idle connection to a starving waiter.
+// Returns true if a connection was successfully handed off.
+// Only tracks the idle→used OTel transition when handoff actually succeeds.
+func (pool *Pool[C]) tryHandoffIdleToWaiter() bool {
 	if conn := pool.pop(&pool.clean); conn != nil {
 		conn.timeUsed.update()
-		return pool.tryReturnConn(conn)
+		if pool.wait.tryReturnConn(conn) {
+			// Actually handed off: idle→used
+			pool.otelAdd(pool.ctx, dbconv.ClientConnectionStateIdle, -1)
+			pool.otelAdd(pool.ctx, dbconv.ClientConnectionStateUsed, 1)
+			return true
+		}
+		// No waiter took it - push back (no state change)
+		pool.clean.Push(conn)
+		return false
 	}
 	for u := 0; u <= stackMask; u++ {
 		if conn := pool.pop(&pool.states[u]); conn != nil {
 			conn.timeUsed.update()
-			return pool.tryReturnConn(conn)
+			if pool.wait.tryReturnConn(conn) {
+				pool.otelAdd(pool.ctx, dbconv.ClientConnectionStateIdle, -1)
+				pool.otelAdd(pool.ctx, dbconv.ClientConnectionStateUsed, 1)
+				return true
+			}
+			pool.states[u].Push(conn)
+			return false
 		}
 	}
 	return false
@@ -477,7 +541,8 @@ func (pool *Pool[C]) tryReturnAnyConn() bool {
 
 // closeOnIdleLimitReached closes a connection if the number of idle connections (active - inuse) in the pool
 // exceeds the idleCount limit. It returns true if the connection is closed, false otherwise.
-func (pool *Pool[C]) closeOnIdleLimitReached(conn *Pooled[C]) bool {
+// This handles all cleanup: closing the connection, updating internal metrics, and OTel metrics.
+func (pool *Pool[C]) closeOnIdleLimitReached(ctx context.Context, conn *Pooled[C]) bool {
 	for {
 		open := pool.active.Load()
 		idle := open - pool.borrowed.Load()
@@ -487,6 +552,7 @@ func (pool *Pool[C]) closeOnIdleLimitReached(conn *Pooled[C]) bool {
 		if pool.active.CompareAndSwap(open, open-1) {
 			pool.Metrics.idleClosed.Add(1)
 			conn.Close()
+			pool.otelAdd(ctx, dbconv.ClientConnectionStateUsed, -1)
 			return true
 		}
 	}
@@ -551,8 +617,40 @@ func (pool *Pool[C]) getFromSettingsStack(settings *connstate.Settings) *Pooled[
 	return nil
 }
 
-func (pool *Pool[C]) closedConn() {
-	_ = pool.active.Add(-1)
+// OTel metrics helpers. These are nil-safe - if no instrument is configured, they're no-ops.
+
+// otelAdd records a connection count change for the given state.
+// Use positive delta for connections entering the state, negative for leaving.
+func (pool *Pool[C]) otelAdd(ctx context.Context, state dbconv.ClientConnectionStateAttr, delta int64) {
+	if pool.otelConnectionCount == nil {
+		return
+	}
+	pool.otelConnectionCount.Add(ctx, delta, pool.Name, state)
+}
+
+// connClosed handles cleanup when a connection is closed: decrements active count
+// and updates OTel metrics. Use this as the single chokepoint for connection closes.
+func (pool *Pool[C]) connClosed(ctx context.Context, state dbconv.ClientConnectionStateAttr) {
+	pool.active.Add(-1)
+	pool.otelAdd(ctx, state, -1)
+}
+
+// closeIdleConn closes an idle connection and updates all metrics.
+func (pool *Pool[C]) closeIdleConn(ctx context.Context, conn *Pooled[C]) {
+	conn.Close()
+	pool.connClosed(ctx, dbconv.ClientConnectionStateIdle)
+}
+
+// closeUsedConn closes a used connection and updates all metrics.
+func (pool *Pool[C]) closeUsedConn(ctx context.Context, conn *Pooled[C]) {
+	conn.Close()
+	pool.connClosed(ctx, dbconv.ClientConnectionStateUsed)
+}
+
+// releaseUsedSlot releases a connection slot that was in used state.
+// Use when the connection was already closed elsewhere or creation failed.
+func (pool *Pool[C]) releaseUsedSlot(ctx context.Context) {
+	pool.connClosed(ctx, dbconv.ClientConnectionStateUsed)
 }
 
 func (pool *Pool[C]) getNew(ctx context.Context) (*Pooled[C], error) {
@@ -565,7 +663,7 @@ func (pool *Pool[C]) getNew(ctx context.Context) (*Pooled[C], error) {
 		if pool.active.CompareAndSwap(open, open+1) {
 			conn, err := pool.connNew(ctx)
 			if err != nil {
-				pool.closedConn()
+				pool.active.Add(-1) // Creation failed, un-increment active.
 				return nil, err
 			}
 			return conn, nil
@@ -577,21 +675,29 @@ func (pool *Pool[C]) getNew(ctx context.Context) (*Pooled[C], error) {
 func (pool *Pool[C]) get(ctx context.Context) (*Pooled[C], error) {
 	pool.Metrics.getCount.Add(1)
 
+	var conn *Pooled[C]
+
 	// best case: if there's a connection in the clean stack, return it right away
-	if conn := pool.pop(&pool.clean); conn != nil {
-		pool.borrowed.Add(1)
-		return conn, nil
-	}
+	conn = pool.popFromIdle(ctx, &pool.clean)
 
 	// check if we have enough capacity to open a brand-new connection to return
-	conn, err := pool.getNew(ctx)
-	if err != nil {
-		return nil, err
+	if conn == nil {
+		var err error
+		conn, err = pool.getNew(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if conn != nil {
+			// New connection: ∅→used
+			pool.otelAdd(ctx, dbconv.ClientConnectionStateUsed, 1)
+		}
 	}
+
 	// if we don't have capacity, try popping a connection from any of the settings stacks
 	if conn == nil {
-		conn = pool.getFromSettingsStack(nil)
+		conn = pool.popFromIdleAnyStack(ctx, uint32(pool.freshStatesStack.Load()))
 	}
+
 	// if there are no connections in the settings stacks and we've lent out connections
 	// to other clients, wait until one of the connections is returned
 	if conn == nil {
@@ -599,14 +705,16 @@ func (pool *Pool[C]) get(ctx context.Context) (*Pooled[C], error) {
 		if closeChan == nil {
 			return nil, ErrPoolClosed
 		}
-
 		start := time.Now()
+		var err error
 		conn, err = pool.wait.waitForConn(ctx, nil, *closeChan)
 		if err != nil {
 			return nil, ErrTimeout
 		}
 		pool.recordWait(start)
+		// Waited connection: already "used" from handoff, no OTel change
 	}
+
 	// no connections available and no connections to wait for (pool is closed)
 	if conn == nil {
 		return nil, ErrTimeout
@@ -616,12 +724,11 @@ func (pool *Pool[C]) get(ctx context.Context) (*Pooled[C], error) {
 	if settings := conn.Conn.Settings(); settings != nil && !settings.IsEmpty() {
 		pool.Metrics.resetState.Add(1)
 
-		err = conn.Conn.ResetSettings(ctx)
+		err := conn.Conn.ResetSettings(ctx)
 		if err != nil {
-			conn.Close()
 			err = pool.connReopen(ctx, conn, monotonicNow())
 			if err != nil {
-				pool.closedConn()
+				pool.closeUsedConn(ctx, conn)
 				return nil, err
 			}
 		}
@@ -637,25 +744,35 @@ func (pool *Pool[C]) getWithSettings(ctx context.Context, settings *connstate.Se
 
 	bucket := settings.Bucket() & stackMask
 
-	var err error
+	var conn *Pooled[C]
+
 	// best case: check if there's a connection in the settings stack where our settings belongs
-	conn := pool.pop(&pool.states[bucket])
+	conn = pool.popFromIdle(ctx, &pool.states[bucket])
+
 	// if there's no connection with our settings, try popping a clean connection
 	if conn == nil {
-		conn = pool.pop(&pool.clean)
+		conn = pool.popFromIdle(ctx, &pool.clean)
 	}
+
 	// otherwise try opening a brand new connection and we'll apply the settings to it
 	if conn == nil {
+		var err error
 		conn, err = pool.getNew(ctx)
 		if err != nil {
 			return nil, err
 		}
+		if conn != nil {
+			// New connection: ∅→used
+			pool.otelAdd(ctx, dbconv.ClientConnectionStateUsed, 1)
+		}
 	}
+
 	// try on the _other_ settings stacks, even if we have to reset the settings for the returned
 	// connection
 	if conn == nil {
-		conn = pool.getFromSettingsStack(settings)
+		conn = pool.popFromIdleAnyStack(ctx, bucket)
 	}
+
 	// no connections anywhere in the pool; if we've lent out connections to other clients
 	// wait for one of them
 	if conn == nil {
@@ -663,14 +780,16 @@ func (pool *Pool[C]) getWithSettings(ctx context.Context, settings *connstate.Se
 		if closeChan == nil {
 			return nil, ErrPoolClosed
 		}
-
 		start := time.Now()
+		var err error
 		conn, err = pool.wait.waitForConn(ctx, settings, *closeChan)
 		if err != nil {
 			return nil, ErrTimeout
 		}
 		pool.recordWait(start)
+		// Waited connection: already "used" from handoff, no OTel change
 	}
+
 	// no connections available and no connections to wait for (pool is closed)
 	if conn == nil {
 		return nil, ErrTimeout
@@ -683,12 +802,11 @@ func (pool *Pool[C]) getWithSettings(ctx context.Context, settings *connstate.Se
 		if connSettings != nil && !connSettings.IsEmpty() {
 			pool.Metrics.diffState.Add(1)
 
-			err = conn.Conn.ResetSettings(ctx)
+			err := conn.Conn.ResetSettings(ctx)
 			if err != nil {
-				conn.Close()
 				err = pool.connReopen(ctx, conn, monotonicNow())
 				if err != nil {
-					pool.closedConn()
+					pool.closeUsedConn(ctx, conn)
 					return nil, err
 				}
 			}
@@ -696,8 +814,7 @@ func (pool *Pool[C]) getWithSettings(ctx context.Context, settings *connstate.Se
 		// apply our settings now; if we can't we assume that the conn is broken
 		// and close it without returning to the pool
 		if err := conn.Conn.ApplySettings(ctx, settings); err != nil {
-			conn.Close()
-			pool.closedConn()
+			pool.closeUsedConn(ctx, conn)
 			return nil, err
 		}
 	}
@@ -750,8 +867,7 @@ func (pool *Pool[C]) setCapacity(ctx context.Context, newcap int64) error {
 			time.Sleep(delay)
 			continue
 		}
-		conn.Close()
-		pool.closedConn()
+		pool.closeIdleConn(ctx, conn)
 	}
 
 	return nil
@@ -779,9 +895,7 @@ func (pool *Pool[C]) closeIdleResources(now time.Time) {
 		s.ForEach(func(conn *Pooled[C]) bool {
 			if conn.timeUsed.expired(mono, timeout) {
 				pool.Metrics.idleClosed.Add(1)
-
-				conn.Close()
-				pool.closedConn()
+				pool.closeIdleConn(pool.ctx, conn)
 
 				// Try to open a new connection to replace the closed one
 				c, err := pool.getNew(pool.ctx)
@@ -794,7 +908,9 @@ func (pool *Pool[C]) closeIdleResources(now time.Time) {
 				// so it's possible that we got back `nil` here
 				if c != nil {
 					// Return the new connection to the pool
-					pool.tryReturnConn(c)
+					// New connection transitions: ∅→used→idle
+					pool.otelAdd(pool.ctx, dbconv.ClientConnectionStateUsed, 1)
+					pool.releaseUsedConn(pool.ctx, c)
 				}
 			}
 			return true // continue iteration
