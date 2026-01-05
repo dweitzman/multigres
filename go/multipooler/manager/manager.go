@@ -300,7 +300,6 @@ func (pm *MultiPoolerManager) Open() error {
 	// This ensures the schema exists before queries can be served
 	if pm.replTracker == nil {
 		pm.logger.Info("MultiPoolerManager: Starting database heartbeat")
-		ctx := context.TODO()
 		// TODO: populate shard ID
 		shardID := []byte("0") // default shard ID
 
@@ -310,8 +309,8 @@ func (pm *MultiPoolerManager) Open() error {
 		// Schema creation is now handled by multiorch during bootstrap initialization
 		// Do not auto-create schema when connecting to postgres
 
-		if err := pm.startHeartbeat(ctx, shardID, poolerID); err != nil {
-			pm.logger.ErrorContext(ctx, "Failed to start heartbeat", "error", err)
+		if err := pm.startHeartbeat(pm.ctx, shardID, poolerID); err != nil {
+			pm.logger.ErrorContext(pm.ctx, "Failed to start heartbeat", "error", err)
 			// Don't fail the connection if heartbeat fails
 		}
 	}
