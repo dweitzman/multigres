@@ -120,7 +120,7 @@ func New(t testing.TB) *Server {
 
 	// Create listener on random port.
 	var err error
-	s.listener, err = server.NewListener(server.ListenerConfig{
+	s.listener, err = server.NewListener(t.Context(), server.ListenerConfig{
 		Address: "127.0.0.1:0", // Random available port.
 		Handler: handler,
 		Logger:  slog.Default(),

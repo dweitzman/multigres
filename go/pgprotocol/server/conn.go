@@ -102,7 +102,8 @@ type Conn struct {
 
 // newConn creates a new connection.
 func newConn(netConn net.Conn, listener *Listener, connectionID uint32) *Conn {
-	ctx, cancel := context.WithCancel(context.TODO())
+	// Inherit from listener's context so connections are cancelled when listener closes
+	ctx, cancel := context.WithCancel(listener.ctx)
 
 	c := &Conn{
 		conn:           netConn,

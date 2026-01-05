@@ -79,7 +79,7 @@ func testLogger(t *testing.T) *slog.Logger {
 
 // testListener creates a test listener using NewListener.
 func testListener(t *testing.T) *Listener {
-	listener, err := NewListener(ListenerConfig{
+	listener, err := NewListener(t.Context(), ListenerConfig{
 		Address: "localhost:0", // Use random available port
 		Handler: &mockHandler{},
 		Logger:  testLogger(t),
