@@ -128,8 +128,8 @@ func (mg *MultiGateway) RegisterFlags(fs *pflag.FlagSet) {
 // Init initializes the multigateway. If any services fail to start,
 // or if some connections fail, it launches goroutines that retry
 // until successful.
-func (mg *MultiGateway) Init() error {
-	if err := mg.senv.Init(constants.ServiceMultigateway); err != nil {
+func (mg *MultiGateway) Init(ctx context.Context) error {
+	if err := mg.senv.Init(ctx, constants.ServiceMultigateway); err != nil {
 		return fmt.Errorf("servenv init: %w", err)
 	}
 	logger := mg.senv.GetLogger()
@@ -147,7 +147,7 @@ func (mg *MultiGateway) Init() error {
 	// Start pooler discovery (watches all cells)
 	mg.poolerDiscovery = NewGlobalPoolerDiscovery(context.TODO(), mg.ts, mg.cell.Get(), logger)
 	mg.poolerDiscovery.Start()
-	logger.Info("Global pooler discovery started", "local_cell", mg.cell.Get())
+	logger.InfoContext(ctx, "Global pooler discovery started", "local_cell", mg.cell.Get())
 
 	// Initialize PoolerGateway for managing pooler connections
 	mg.poolerGateway = poolergateway.NewPoolerGateway(mg.poolerDiscovery, logger)
@@ -179,7 +179,7 @@ func (mg *MultiGateway) Init() error {
 		}
 	}()
 
-	logger.Info("multigateway starting up",
+	logger.InfoContext(ctx, "multigateway starting up",
 		"cell", mg.cell.Get(),
 		"service_id", mg.serviceID.Get(),
 		"http_port", mg.senv.GetHTTPPort(),

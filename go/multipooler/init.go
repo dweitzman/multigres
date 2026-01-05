@@ -225,7 +225,7 @@ func (mp *MultiPooler) Init(startCtx context.Context) error {
 	startCtx, span := telemetry.Tracer().Start(startCtx, "Init")
 	defer span.End()
 
-	if err := mp.senv.Init(constants.ServiceMultipooler); err != nil {
+	if err := mp.senv.Init(startCtx, constants.ServiceMultipooler); err != nil {
 		return fmt.Errorf("servenv init: %w", err)
 	}
 	// Get the configured logger

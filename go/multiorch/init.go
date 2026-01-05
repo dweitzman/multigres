@@ -96,8 +96,8 @@ func NewMultiOrch() *MultiOrch {
 // Init initializes the multiorch. If any services fail to start,
 // or if some connections fail, it launches goroutines that retry
 // until successful.
-func (mo *MultiOrch) Init() error {
-	if err := mo.senv.Init(constants.ServiceMultiorch); err != nil {
+func (mo *MultiOrch) Init(ctx context.Context) error {
+	if err := mo.senv.Init(ctx, constants.ServiceMultiorch); err != nil {
 		return fmt.Errorf("servenv init: %w", err)
 	}
 	// Get the configured logger
@@ -120,7 +120,7 @@ func (mo *MultiOrch) Init() error {
 		return fmt.Errorf("failed to parse watch-targets: %w", err)
 	}
 
-	logger.Info("multiorch starting up",
+	logger.InfoContext(ctx, "multiorch starting up",
 		"cell", mo.cfg.GetCell(),
 		"service_id", mo.cfg.GetServiceID(),
 		"http_port", mo.senv.GetHTTPPort(),

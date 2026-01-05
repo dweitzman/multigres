@@ -36,15 +36,15 @@ import (
 )
 
 // Init is the first phase of the server startup.
-func (sv *ServEnv) Init(serviceName string) error {
+func (sv *ServEnv) Init(ctx context.Context, serviceName string) error {
 	sv.mu.Lock()
 	sv.initStartTime = time.Now()
 	sv.mu.Unlock()
 	sv.lg.SetupLogging()
 
 	// Initialize OpenTelemetry
-	if err := sv.telemetry.InitTelemetry(context.TODO(), serviceName); err != nil {
-		slog.Error("Failed to initialize OpenTelemetry", "error", err)
+	if err := sv.telemetry.InitTelemetry(ctx, serviceName); err != nil {
+		slog.ErrorContext(ctx, "Failed to initialize OpenTelemetry", "error", err)
 		// Continue without telemetry rather than crashing
 	}
 
@@ -83,7 +83,7 @@ func (sv *ServEnv) Init(serviceName string) error {
 	// the server.
 	fdLimit := &syscall.Rlimit{}
 	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, fdLimit); err != nil {
-		slog.Error("max-open-fds failed", "err", err)
+		slog.ErrorContext(ctx, "max-open-fds failed", "err", err)
 	}
 
 	// Limit the stack size. We don't need huge stacks and smaller limits mean

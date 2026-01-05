@@ -90,7 +90,7 @@ func (s *PgCtldServerCmd) createCommand() *cobra.Command {
 }
 
 func (s *PgCtldServerCmd) runServer(cmd *cobra.Command, args []string) error {
-	if err := s.senv.Init(constants.ServicePgctld); err != nil {
+	if err := s.senv.Init(cmd.Context(), constants.ServicePgctld); err != nil {
 		return fmt.Errorf("servenv init: %w", err)
 	}
 
