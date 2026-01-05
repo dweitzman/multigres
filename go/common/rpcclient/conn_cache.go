@@ -290,13 +290,13 @@ func (cc *connCache) pollOnce(ctx context.Context, addr string, poolerID *cluste
 //
 // It returns the two-tuple of connection and closer that getOrDial returns.
 func (cc *connCache) newDial(ctx context.Context, addr string, poolerID *clustermetadatapb.ID) (*cachedConn, closeFunc, error) {
-	// Build client options with peer service for telemetry
+	// Build client options with multipooler target for telemetry
 	clientOpts := []grpccommon.ClientOption{
 		grpccommon.WithDialOptions(grpc.WithTransportCredentials(insecure.NewCredentials())),
 	}
 	if poolerID != nil {
 		poolerIDStr := topoclient.MultiPoolerIDString(poolerID)
-		clientOpts = append(clientOpts, grpccommon.WithPeerService(poolerIDStr))
+		clientOpts = append(clientOpts, grpccommon.WithMultipoolerTarget(poolerIDStr))
 	}
 
 	// TODO: Add proper TLS configuration for production

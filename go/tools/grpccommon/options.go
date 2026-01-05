@@ -19,6 +19,7 @@ package grpccommon
 import (
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.opentelemetry.io/otel/attribute"
 	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -85,6 +86,24 @@ func WithPeerService(name string) ClientOption {
 		c.otelOptions = append(c.otelOptions,
 			otelgrpc.WithSpanAttributes(
 				semconv.PeerServiceKey.String(name),
+			),
+		)
+	})
+}
+
+// WithMultipoolerTarget configures OpenTelemetry attributes for gRPC clients
+// connecting to multipooler instances. It sets:
+// - peer.service: "multipooler" (the logical service name per OTel semconv)
+// - multigres.pooler.id: the specific pooler instance identifier
+//
+// This follows OpenTelemetry semantic conventions where peer.service should match
+// the remote service's service.name resource attribute, while custom attributes
+// identify the specific instance within that service.
+func WithMultipoolerTarget(poolerID string) ClientOption {
+	return funcOption(func(c *clientConfig) {
+		c.otelOptions = append(c.otelOptions,
+			otelgrpc.WithSpanAttributes(
+				attribute.String("multigres.pooler.id", poolerID),
 			),
 		)
 	})
