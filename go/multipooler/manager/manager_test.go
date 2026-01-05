@@ -56,7 +56,7 @@ func TestManagerState_InitialState(t *testing.T) {
 		Shard:      constants.DefaultShard,
 	}
 
-	manager, err := NewMultiPoolerManager(logger, config)
+	manager, err := NewMultiPoolerManager(t.Context(), logger, config)
 	require.NoError(t, err)
 	defer manager.Close()
 
@@ -108,7 +108,7 @@ func TestManagerState_SuccessfulLoad(t *testing.T) {
 		Shard:      constants.DefaultShard,
 	}
 
-	manager, err := NewMultiPoolerManager(logger, config)
+	manager, err := NewMultiPoolerManager(t.Context(), logger, config)
 	require.NoError(t, err)
 	defer manager.Close()
 
@@ -153,7 +153,7 @@ func TestManagerState_LoadFailureTimeout(t *testing.T) {
 	}
 
 	// Create manager with a short timeout for testing
-	manager, err := NewMultiPoolerManagerWithTimeout(logger, config, 1*time.Second)
+	manager, err := NewMultiPoolerManagerWithTimeout(t.Context(), logger, config, 1*time.Second)
 	require.NoError(t, err)
 	defer manager.Close()
 
@@ -195,7 +195,7 @@ func TestManagerState_CancellationDuringLoad(t *testing.T) {
 		Shard:      constants.DefaultShard,
 	}
 
-	manager, err := NewMultiPoolerManager(logger, config)
+	manager, err := NewMultiPoolerManager(t.Context(), logger, config)
 	require.NoError(t, err)
 
 	// Start the async loader
@@ -262,7 +262,7 @@ func TestManagerState_RetryUntilSuccess(t *testing.T) {
 		Shard:      constants.DefaultShard,
 	}
 
-	manager, err := NewMultiPoolerManager(logger, config)
+	manager, err := NewMultiPoolerManager(t.Context(), logger, config)
 	require.NoError(t, err)
 	defer manager.Close()
 
@@ -296,7 +296,7 @@ func TestManagerState_NilServiceID(t *testing.T) {
 		Shard:      constants.DefaultShard,
 	}
 
-	manager, err := NewMultiPoolerManager(logger, config)
+	manager, err := NewMultiPoolerManager(t.Context(), logger, config)
 	require.NoError(t, err)
 	defer manager.Close()
 
@@ -421,7 +421,7 @@ func TestValidateAndUpdateTerm(t *testing.T) {
 				TableGroup:       constants.DefaultTableGroup,
 				Shard:            constants.DefaultShard,
 			}
-			manager, err := NewMultiPoolerManager(logger, config)
+			manager, err := NewMultiPoolerManager(t.Context(), logger, config)
 			require.NoError(t, err)
 			defer manager.Close()
 
@@ -488,7 +488,7 @@ func TestGetBackupLocation(t *testing.T) {
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	manager, err := NewMultiPoolerManager(logger, config)
+	manager, err := NewMultiPoolerManager(t.Context(), logger, config)
 	require.NoError(t, err)
 
 	// Set the multipooler to have the database
@@ -520,7 +520,7 @@ func TestWaitUntilReady_Success(t *testing.T) {
 		Shard:            constants.DefaultShard,
 	}
 
-	pm, err := NewMultiPoolerManagerWithTimeout(logger, config, 100*time.Millisecond)
+	pm, err := NewMultiPoolerManagerWithTimeout(t.Context(), logger, config, 100*time.Millisecond)
 	require.NoError(t, err)
 
 	// Simulate immediate ready state
@@ -547,7 +547,7 @@ func TestWaitUntilReady_Error(t *testing.T) {
 		Shard:            constants.DefaultShard,
 	}
 
-	pm, err := NewMultiPoolerManagerWithTimeout(logger, config, 100*time.Millisecond)
+	pm, err := NewMultiPoolerManagerWithTimeout(t.Context(), logger, config, 100*time.Millisecond)
 	require.NoError(t, err)
 
 	// Simulate error state
@@ -575,7 +575,7 @@ func TestWaitUntilReady_Timeout(t *testing.T) {
 		Shard:            constants.DefaultShard,
 	}
 
-	pm, err := NewMultiPoolerManagerWithTimeout(logger, config, 100*time.Millisecond)
+	pm, err := NewMultiPoolerManagerWithTimeout(t.Context(), logger, config, 100*time.Millisecond)
 	require.NoError(t, err)
 
 	// Leave in Starting state - will timeout
@@ -599,7 +599,7 @@ func TestWaitUntilReady_ConcurrentCalls(t *testing.T) {
 		Shard:            constants.DefaultShard,
 	}
 
-	pm, err := NewMultiPoolerManagerWithTimeout(logger, config, 100*time.Millisecond)
+	pm, err := NewMultiPoolerManagerWithTimeout(t.Context(), logger, config, 100*time.Millisecond)
 	require.NoError(t, err)
 
 	// Start multiple goroutines calling WaitUntilReady
@@ -694,7 +694,7 @@ func TestNewMultiPoolerManager_MVPValidation(t *testing.T) {
 				Shard:      tt.shard,
 			}
 
-			manager, err := NewMultiPoolerManager(logger, config)
+			manager, err := NewMultiPoolerManager(t.Context(), logger, config)
 			if tt.wantErr {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.errContains)

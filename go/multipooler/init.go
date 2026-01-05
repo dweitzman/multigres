@@ -278,7 +278,7 @@ func (mp *MultiPooler) Init(startCtx context.Context) error {
 	multipooler.PoolerDir = mp.poolerDir.Get()
 
 	logger.InfoContext(startCtx, "Initializing MultiPoolerManager")
-	poolerManager, err := manager.NewMultiPoolerManager(logger, &manager.Config{
+	poolerManager, err := manager.NewMultiPoolerManager(startCtx, logger, &manager.Config{
 		SocketFilePath:      mp.socketFilePath.Get(),
 		PoolerDir:           mp.poolerDir.Get(),
 		PgPort:              mp.pgPort.Get(),

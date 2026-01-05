@@ -91,7 +91,7 @@ func setupManagerWithMockDB(t *testing.T, mockQueryService *mock.QueryService) (
 		TableGroup: constants.DefaultTableGroup,
 		Shard:      constants.DefaultShard,
 	}
-	pm, err := NewMultiPoolerManager(logger, config)
+	pm, err := NewMultiPoolerManager(t.Context(), logger, config)
 	require.NoError(t, err)
 	t.Cleanup(func() { pm.Close() })
 

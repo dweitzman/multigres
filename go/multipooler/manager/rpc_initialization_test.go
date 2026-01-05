@@ -88,7 +88,7 @@ func TestInitializeEmptyPrimary(t *testing.T) {
 			}
 
 			logger := slog.Default()
-			pm, err := NewMultiPoolerManager(logger, config)
+			pm, err := NewMultiPoolerManager(t.Context(), logger, config)
 			require.NoError(t, err)
 
 			// Initialize consensus state
@@ -239,7 +239,7 @@ func TestInitializeAsStandby(t *testing.T) {
 			}
 
 			logger := slog.Default()
-			pm, err := NewMultiPoolerManager(logger, config)
+			pm, err := NewMultiPoolerManager(t.Context(), logger, config)
 			require.NoError(t, err)
 
 			// Initialize consensus state
@@ -322,7 +322,7 @@ func TestInitializeAsStandbySetsPrimaryPoolerID(t *testing.T) {
 	}
 
 	logger := slog.Default()
-	pm, err := NewMultiPoolerManager(logger, config)
+	pm, err := NewMultiPoolerManager(t.Context(), logger, config)
 	require.NoError(t, err)
 
 	// Initialize consensus state

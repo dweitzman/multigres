@@ -92,7 +92,7 @@ func TestConsensusService_BeginTerm(t *testing.T) {
 		Shard:            constants.DefaultShard,
 		ConnPoolConfig:   connpoolmanager.NewConfig(viperutil.NewRegistry()),
 	}
-	pm, err := manager.NewMultiPoolerManager(logger, config)
+	pm, err := manager.NewMultiPoolerManager(t.Context(), logger, config)
 	require.NoError(t, err)
 	// Mark as initialized to skip auto-restore (not testing backup functionality)
 	// Create both PG_VERSION and the marker file since setInitialized() is not exported
@@ -179,7 +179,7 @@ func TestConsensusService_Status(t *testing.T) {
 		Shard:            constants.DefaultShard,
 		ConnPoolConfig:   connpoolmanager.NewConfig(viperutil.NewRegistry()),
 	}
-	pm, err := manager.NewMultiPoolerManager(logger, config)
+	pm, err := manager.NewMultiPoolerManager(t.Context(), logger, config)
 	require.NoError(t, err)
 	// Mark as initialized to skip auto-restore (not testing backup functionality)
 	// Create both PG_VERSION and the marker file since setInitialized() is not exported
@@ -265,7 +265,7 @@ func TestConsensusService_GetLeadershipView(t *testing.T) {
 		Shard:            constants.DefaultShard,
 		ConnPoolConfig:   connpoolmanager.NewConfig(viperutil.NewRegistry()),
 	}
-	pm, err := manager.NewMultiPoolerManager(logger, config)
+	pm, err := manager.NewMultiPoolerManager(t.Context(), logger, config)
 	require.NoError(t, err)
 	// Mark as initialized to skip auto-restore (not testing backup functionality)
 	// Create both PG_VERSION and the marker file since setInitialized() is not exported
@@ -346,7 +346,7 @@ func TestConsensusService_CanReachPrimary(t *testing.T) {
 		Shard:            constants.DefaultShard,
 		ConnPoolConfig:   connpoolmanager.NewConfig(viperutil.NewRegistry()),
 	}
-	pm, err := manager.NewMultiPoolerManager(logger, config)
+	pm, err := manager.NewMultiPoolerManager(t.Context(), logger, config)
 	require.NoError(t, err)
 	// Mark as initialized to skip auto-restore (not testing backup functionality)
 	// Create both PG_VERSION and the marker file since setInitialized() is not exported
@@ -429,7 +429,7 @@ func TestConsensusService_AllMethods(t *testing.T) {
 		Shard:            constants.DefaultShard,
 		ConnPoolConfig:   connpoolmanager.NewConfig(viperutil.NewRegistry()),
 	}
-	pm, err := manager.NewMultiPoolerManager(logger, config)
+	pm, err := manager.NewMultiPoolerManager(t.Context(), logger, config)
 	require.NoError(t, err)
 	// Mark as initialized to skip auto-restore (not testing backup functionality)
 	// Create both PG_VERSION and the marker file since setInitialized() is not exported

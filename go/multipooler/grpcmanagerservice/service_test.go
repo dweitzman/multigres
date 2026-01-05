@@ -91,7 +91,7 @@ func TestManagerServiceMethods_NotImplemented(t *testing.T) {
 		Shard:          constants.DefaultShard,
 		ConnPoolConfig: connpoolmanager.NewConfig(viperutil.NewRegistry()),
 	}
-	pm, err := manager.NewMultiPoolerManager(logger, config)
+	pm, err := manager.NewMultiPoolerManager(t.Context(), logger, config)
 	require.NoError(t, err)
 	defer pm.Close()
 
@@ -163,7 +163,7 @@ func TestManagerServiceMethods_ManagerNotReady(t *testing.T) {
 		Shard:          constants.DefaultShard,
 		ConnPoolConfig: connpoolmanager.NewConfig(viperutil.NewRegistry()),
 	}
-	pm, err := manager.NewMultiPoolerManager(logger, config)
+	pm, err := manager.NewMultiPoolerManager(t.Context(), logger, config)
 	require.NoError(t, err)
 	defer pm.Close()
 

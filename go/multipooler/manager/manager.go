@@ -32,6 +32,7 @@ import (
 	"github.com/multigres/multigres/go/multipooler/executor"
 	"github.com/multigres/multigres/go/multipooler/heartbeat"
 	"github.com/multigres/multigres/go/multipooler/poolerserver"
+	"github.com/multigres/multigres/go/tools/ctxutil"
 	"github.com/multigres/multigres/go/tools/grpccommon"
 	"github.com/multigres/multigres/go/tools/retry"
 
@@ -157,12 +158,12 @@ type cachedMultiPoolerInfo struct {
 }
 
 // NewMultiPoolerManager creates a new MultiPoolerManager instance
-func NewMultiPoolerManager(logger *slog.Logger, config *Config) (*MultiPoolerManager, error) {
-	return NewMultiPoolerManagerWithTimeout(logger, config, 5*time.Minute)
+func NewMultiPoolerManager(ctx context.Context, logger *slog.Logger, config *Config) (*MultiPoolerManager, error) {
+	return NewMultiPoolerManagerWithTimeout(ctx, logger, config, 5*time.Minute)
 }
 
 // NewMultiPoolerManagerWithTimeout creates a new MultiPoolerManager instance with a custom load timeout
-func NewMultiPoolerManagerWithTimeout(logger *slog.Logger, config *Config, loadTimeout time.Duration) (*MultiPoolerManager, error) {
+func NewMultiPoolerManagerWithTimeout(ctx context.Context, logger *slog.Logger, config *Config, loadTimeout time.Duration) (*MultiPoolerManager, error) {
 	// Validate required config fields
 	if config.TableGroup == "" {
 		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "TableGroup is required")
@@ -176,7 +177,8 @@ func NewMultiPoolerManagerWithTimeout(logger *slog.Logger, config *Config, loadT
 		return nil, mterrors.Wrap(err, "MVP validation failed")
 	}
 
-	ctx, cancel := context.WithCancel(context.TODO())
+	// Detach from parent context to preserve telemetry but control our own lifetime
+	ctx, cancel := context.WithCancel(ctxutil.Detach(ctx))
 
 	// Create pgctld gRPC client
 	var pgctldClient pgctldpb.PgCtldClient

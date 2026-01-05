@@ -116,7 +116,7 @@ func TestPrimaryPosition(t *testing.T) {
 				TableGroup: constants.DefaultTableGroup,
 				Shard:      constants.DefaultShard,
 			}
-			manager, err := NewMultiPoolerManager(logger, config)
+			manager, err := NewMultiPoolerManager(t.Context(), logger, config)
 			require.NoError(t, err)
 			defer manager.Close()
 
@@ -196,7 +196,7 @@ func TestActionLock_MutationMethodsTimeout(t *testing.T) {
 		TableGroup: constants.DefaultTableGroup,
 		Shard:      constants.DefaultShard,
 	}
-	manager, err := NewMultiPoolerManager(logger, config)
+	manager, err := NewMultiPoolerManager(t.Context(), logger, config)
 	require.NoError(t, err)
 	defer manager.Close()
 
@@ -433,7 +433,7 @@ func setupPromoteTestManager(t *testing.T, mockQueryService *mock.QueryService) 
 		TableGroup: constants.DefaultTableGroup,
 		Shard:      constants.DefaultShard,
 	}
-	pm, err := NewMultiPoolerManager(logger, config)
+	pm, err := NewMultiPoolerManager(t.Context(), logger, config)
 	require.NoError(t, err)
 	t.Cleanup(func() { pm.Close() })
 
@@ -1033,7 +1033,7 @@ func TestSetPrimaryConnInfo_StoresPrimaryPoolerID(t *testing.T) {
 		TableGroup: constants.DefaultTableGroup,
 		Shard:      constants.DefaultShard,
 	}
-	pm, err := NewMultiPoolerManager(logger, config)
+	pm, err := NewMultiPoolerManager(t.Context(), logger, config)
 	require.NoError(t, err)
 	defer pm.Close()
 
@@ -1140,7 +1140,7 @@ func TestReplicationStatus(t *testing.T) {
 			TableGroup: constants.DefaultTableGroup,
 			Shard:      constants.DefaultShard,
 		}
-		pm, err := NewMultiPoolerManager(logger, config)
+		pm, err := NewMultiPoolerManager(t.Context(), logger, config)
 		require.NoError(t, err)
 		t.Cleanup(func() { pm.Close() })
 
@@ -1219,7 +1219,7 @@ func TestReplicationStatus(t *testing.T) {
 			TableGroup: constants.DefaultTableGroup,
 			Shard:      constants.DefaultShard,
 		}
-		pm, err := NewMultiPoolerManager(logger, config)
+		pm, err := NewMultiPoolerManager(t.Context(), logger, config)
 		require.NoError(t, err)
 		t.Cleanup(func() { pm.Close() })
 		// Mark as initialized to skip auto-restore (not testing backup functionality)
@@ -1302,7 +1302,7 @@ func TestReplicationStatus(t *testing.T) {
 			TableGroup: constants.DefaultTableGroup,
 			Shard:      constants.DefaultShard,
 		}
-		pm, err := NewMultiPoolerManager(logger, config)
+		pm, err := NewMultiPoolerManager(t.Context(), logger, config)
 		require.NoError(t, err)
 		t.Cleanup(func() { pm.Close() })
 
@@ -1383,7 +1383,7 @@ func TestReplicationStatus(t *testing.T) {
 			TableGroup: constants.DefaultTableGroup,
 			Shard:      constants.DefaultShard,
 		}
-		pm, err := NewMultiPoolerManager(logger, config)
+		pm, err := NewMultiPoolerManager(t.Context(), logger, config)
 		require.NoError(t, err)
 		t.Cleanup(func() { pm.Close() })
 		// Mark as initialized to skip auto-restore (not testing backup functionality)
