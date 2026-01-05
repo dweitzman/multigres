@@ -195,13 +195,13 @@ func TestCloseWhileStuckWriting(t *testing.T) {
 }
 
 // newTestWriter creates a new heartbeat writer for testing.
-func newTestWriter(_ *testing.T, queryService *mock.QueryService, frozenTime *time.Time) *Writer {
+func newTestWriter(t *testing.T, queryService *mock.QueryService, frozenTime *time.Time) *Writer {
 	logger := slog.Default()
 	shardID := []byte("test-shard")
 	poolerID := "test-pooler"
 
 	// Use 250ms interval for tests to oversample our 1s test ticker
-	tw := NewWriter(queryService, logger, shardID, poolerID, 250)
+	tw := NewWriter(t.Context(), queryService, logger, shardID, poolerID, 250)
 
 	if frozenTime != nil {
 		tw.now = func() time.Time {

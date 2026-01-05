@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/multigres/multigres/go/common/servenv"
+	"github.com/multigres/multigres/go/tools/ctxutil"
 	"github.com/multigres/multigres/go/tools/retry"
 )
 
@@ -44,22 +45,26 @@ type TopoReg struct {
 // returns an error, it will be retried with exponential backoff until successful.
 // The alarm will be invoked with the latest error message during retries. If the
 // registration succeeds, the alarm will be invoked with an empty string.
-func Register(register func(ctx context.Context) error, unregister func(ctx context.Context) error, alarm func(string)) *TopoReg {
+//
+// The provided ctx is used to preserve telemetry while the TopoReg
+// manages its own cancellation lifecycle independently.
+func Register(ctx context.Context, register func(ctx context.Context) error, unregister func(ctx context.Context) error, alarm func(string)) *TopoReg {
 	tp := &TopoReg{}
-	tp.ctx, tp.cancel = context.WithCancel(context.TODO())
+	// Detach to preserve telemetry but control our own lifetime.
+	tp.ctx, tp.cancel = context.WithCancel(ctxutil.Detach(ctx))
 	tp.logger = servenv.GetLogger()
 	tp.unregister = unregister
 
 	// Use tp's ctx to abort retries if Unregister gets called.
-	ctx, cancel := context.WithTimeout(tp.ctx, time.Second)
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 
 	if err := register(ctx); err == nil {
-		tp.logger.Info("Successfully registered component with topology")
+		tp.logger.InfoContext(ctx, "Successfully registered component with topology")
 		return tp
 	} else {
 		alarm(fmt.Sprintf("Failed to register component with topology: %v", err))
-		tp.logger.Error("Failed to register component with topology", "error", err)
+		tp.logger.ErrorContext(ctx, "Failed to register component with topology", "error", err)
 	}
 	tp.wg.Go(func() {
 		// We've already tried once. Use WithInitialDelay to wait before retrying.

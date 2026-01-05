@@ -25,6 +25,7 @@ import (
 
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/multipooler/executor"
+	"github.com/multigres/multigres/go/tools/ctxutil"
 	"github.com/multigres/multigres/go/tools/timer"
 )
 
@@ -36,6 +37,7 @@ var (
 // Writer runs on primary databases and writes heartbeats to the heartbeat
 // table at regular intervals.
 type Writer struct {
+	ctx          context.Context
 	queryService executor.InternalQueryService
 	logger       *slog.Logger
 	shardID      []byte
@@ -58,13 +60,16 @@ type Writer struct {
 
 // NewWriter creates a new heartbeat writer.
 //
+// The provided ctx is used to preserve telemetry (tracing) for heartbeat operations.
 // We do not support on-demand or disabled heartbeats at this time.
-func NewWriter(queryService executor.InternalQueryService, logger *slog.Logger, shardID []byte, poolerID string, intervalMs int) *Writer {
+func NewWriter(ctx context.Context, queryService executor.InternalQueryService, logger *slog.Logger, shardID []byte, poolerID string, intervalMs int) *Writer {
 	interval := time.Duration(intervalMs) * time.Millisecond
 	if intervalMs <= 0 {
 		interval = defaultHeartbeatInterval
 	}
 	return &Writer{
+		// TODO: Maybe refactor this to save a cancel() for the context and call that from Close()?...
+		ctx:          ctxutil.Detach(ctx),
 		queryService: queryService,
 		logger:       logger,
 		shardID:      shardID,
@@ -155,7 +160,7 @@ func (w *Writer) writeHeartbeat() {
 
 // write writes a single heartbeat update.
 func (w *Writer) write() error {
-	ctx, cancel := context.WithDeadline(context.TODO(), w.now().Add(w.interval))
+	ctx, cancel := context.WithDeadline(w.ctx, w.now().Add(w.interval))
 
 	// Track this write so it can be canceled
 	w.writeMu.Lock()

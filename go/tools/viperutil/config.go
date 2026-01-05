@@ -28,6 +28,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/multigres/multigres/go/tools/ctxutil"
+
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 
@@ -161,8 +163,11 @@ func (vc *ViperConfig) RegisterFlags(fs *pflag.FlagSet) {
 // A cancel function is returned to stop the re-persistence background thread,
 // if one was started.
 //
+// The provided ctx is used to preserve telemetry (tracing) for config watching
+// operations while allowing LoadConfig to control its own cancellation lifecycle.
+//
 // [1]: https://github.com/spf13/viper#reading-config-files.
-func (vc *ViperConfig) LoadConfig(reg *Registry) (context.CancelFunc, error) {
+func (vc *ViperConfig) LoadConfig(ctx context.Context, reg *Registry) (context.CancelFunc, error) {
 	var err error
 	switch file := vc.configFile.Get(); file {
 	case "":
@@ -194,9 +199,9 @@ func (vc *ViperConfig) LoadConfig(reg *Registry) (context.CancelFunc, error) {
 			case IgnoreConfigFileNotFound:
 				return func() {}, nil
 			case ErrorOnConfigFileNotFound:
-				slog.Error(fmt.Sprintf(msg, reg.static.ConfigFileUsed(), err.Error()))
+				slog.ErrorContext(ctx, fmt.Sprintf(msg, reg.static.ConfigFileUsed(), err.Error()))
 			case ExitOnConfigFileNotFound:
-				slog.Error(fmt.Sprintf(msg, reg.static.ConfigFileUsed(), err.Error()))
+				slog.ErrorContext(ctx, fmt.Sprintf(msg, reg.static.ConfigFileUsed(), err.Error()))
 			}
 		}
 	}
@@ -205,7 +210,9 @@ func (vc *ViperConfig) LoadConfig(reg *Registry) (context.CancelFunc, error) {
 		return nil, err
 	}
 
-	return reg.dynamic.Watch(context.TODO(), reg.static, vc.configPersistenceMinInterval.Get())
+	// TODO: It might feel more clean here if Watch() assumed the caller will cancel the context when
+	// they want the watch to end instead of calling Detach without WithCancel.
+	return reg.dynamic.Watch(ctxutil.Detach(ctx), reg.static, vc.configPersistenceMinInterval.Get())
 }
 
 // isConfigFileNotFoundError checks if the error is caused because the file wasn't found.

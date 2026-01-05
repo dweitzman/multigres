@@ -326,7 +326,7 @@ func (pm *MultiPoolerManager) Open() error {
 // startHeartbeat starts the replication tracker and heartbeat writer if connected to a primary database
 func (pm *MultiPoolerManager) startHeartbeat(ctx context.Context, shardID []byte, poolerID string) error {
 	// Create the replication tracker using the executor's InternalQueryService
-	pm.replTracker = heartbeat.NewReplTracker(pm.qsc.InternalQueryService(), pm.logger, shardID, poolerID, pm.config.HeartbeatIntervalMs)
+	pm.replTracker = heartbeat.NewReplTracker(ctx, pm.qsc.InternalQueryService(), pm.logger, shardID, poolerID, pm.config.HeartbeatIntervalMs)
 
 	// Check if we're connected to a primary
 	isPrimary, err := pm.isPrimary(ctx)

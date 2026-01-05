@@ -316,7 +316,7 @@ func (sv *ServEnv) CobraPreRunE(cmd *cobra.Command) error {
 		}
 	}()
 
-	watchCancel, err := sv.vc.LoadConfig(sv.reg)
+	watchCancel, err := sv.vc.LoadConfig(cmd.Context(), sv.reg)
 	if err != nil {
 		return fmt.Errorf("%s: failed to read in config: %w", cmd.Name(), err)
 	}

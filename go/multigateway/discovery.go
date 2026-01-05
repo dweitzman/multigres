@@ -24,6 +24,7 @@ import (
 
 	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/pb/query"
+	"github.com/multigres/multigres/go/tools/ctxutil"
 	"github.com/multigres/multigres/go/tools/retry"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -378,8 +379,12 @@ type GlobalPoolerDiscovery struct {
 // NewGlobalPoolerDiscovery creates a new global pooler discovery service.
 // The localCell parameter indicates which cell this multigateway is running in,
 // which will be used for cell affinity when selecting poolers.
+//
+// The provided ctx is used to preserve telemetry (tracing) while the discovery
+// service manages its own cancellation lifecycle.
 func NewGlobalPoolerDiscovery(ctx context.Context, topoStore topoclient.Store, localCell string, logger *slog.Logger) *GlobalPoolerDiscovery {
-	discoveryCtx, cancel := context.WithCancel(ctx)
+	// Detach to preserve telemetry but control our own lifetime.
+	discoveryCtx, cancel := context.WithCancel(ctxutil.Detach(ctx))
 
 	return &GlobalPoolerDiscovery{
 		topoStore:    topoStore,

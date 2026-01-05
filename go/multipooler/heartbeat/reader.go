@@ -28,6 +28,7 @@ import (
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/multipooler/executor"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
+	"github.com/multigres/multigres/go/tools/ctxutil"
 	"github.com/multigres/multigres/go/tools/timer"
 )
 
@@ -41,6 +42,7 @@ const (
 // Lag is calculated by comparing the most recent timestamp in the heartbeat
 // table against the current time at read time.
 type Reader struct {
+	ctx          context.Context
 	queryService executor.InternalQueryService
 	logger       *slog.Logger
 	shardID      []byte
@@ -61,8 +63,12 @@ type Reader struct {
 }
 
 // NewReader returns a new heartbeat reader.
-func NewReader(queryService executor.InternalQueryService, logger *slog.Logger, shardID []byte) *Reader {
+//
+// The provided ctx is used to preserve telemetry for heartbeat operations.
+func NewReader(ctx context.Context, queryService executor.InternalQueryService, logger *slog.Logger, shardID []byte) *Reader {
 	return &Reader{
+		// TODO: Maybe refactor this to save a cancel function while detaching and call it from Close()?...
+		ctx:          ctxutil.Detach(ctx),
 		queryService: queryService,
 		logger:       logger,
 		shardID:      shardID,
@@ -127,7 +133,7 @@ func (r *Reader) Status() (time.Duration, error) {
 // readHeartbeat reads from the heartbeat table exactly once, updating
 // the last known lag and/or error, and incrementing counters.
 func (r *Reader) readHeartbeat() {
-	ctx, cancel := context.WithDeadline(context.TODO(), r.now().Add(r.interval))
+	ctx, cancel := context.WithDeadline(r.ctx, r.now().Add(r.interval))
 	defer cancel()
 
 	ts, err := r.fetchMostRecentHeartbeat(ctx)
@@ -199,7 +205,7 @@ type LeadershipView struct {
 
 // GetLeadershipView returns both replication lag and consensus state
 func (r *Reader) GetLeadershipView() (*LeadershipView, error) {
-	ctx, cancel := context.WithTimeout(context.TODO(), r.interval)
+	ctx, cancel := context.WithTimeout(r.ctx, r.interval)
 	defer cancel()
 
 	result, err := r.queryService.QueryArgs(ctx,

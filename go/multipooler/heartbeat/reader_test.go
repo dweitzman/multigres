@@ -149,11 +149,11 @@ func TestReaderStatusNoHeartbeat(t *testing.T) {
 }
 
 // newTestReader creates a new heartbeat reader for testing.
-func newTestReader(_ *testing.T, queryService *mock.QueryService, frozenTime *time.Time) *Reader {
+func newTestReader(t *testing.T, queryService *mock.QueryService, frozenTime *time.Time) *Reader {
 	logger := slog.Default()
 	shardID := []byte("test-shard")
 
-	tr := NewReader(queryService, logger, shardID)
+	tr := NewReader(t.Context(), queryService, logger, shardID)
 	// Use 250ms interval for tests to oversample
 	tr.interval = 250 * time.Millisecond
 	tr.ticks = timer.NewTimer(250 * time.Millisecond)

@@ -33,7 +33,7 @@ func TestReplTrackerMakePrimary(t *testing.T) {
 	shardID := []byte("test-shard")
 	poolerID := "test-pooler"
 
-	rt := NewReplTracker(queryService, logger, shardID, poolerID, 250)
+	rt := NewReplTracker(t.Context(), queryService, logger, shardID, poolerID, 250)
 	defer rt.Close()
 
 	assert.False(t, rt.IsPrimary())
@@ -63,7 +63,7 @@ func TestReplTrackerMakeNonPrimary(t *testing.T) {
 	shardID := []byte("test-shard")
 	poolerID := "test-pooler"
 
-	rt := NewReplTracker(queryService, logger, shardID, poolerID, 250)
+	rt := NewReplTracker(t.Context(), queryService, logger, shardID, poolerID, 250)
 	defer rt.Close()
 
 	rt.MakePrimary()
@@ -95,7 +95,7 @@ func TestReplTrackerEnableHeartbeat(t *testing.T) {
 	shardID := []byte("test-shard")
 	poolerID := "test-pooler"
 
-	rt := NewReplTracker(queryService, logger, shardID, poolerID, 250)
+	rt := NewReplTracker(t.Context(), queryService, logger, shardID, poolerID, 250)
 	defer rt.Close()
 
 	rt.hw.Open()
@@ -140,7 +140,7 @@ func TestReplTrackerMakePrimaryAndNonPrimary(t *testing.T) {
 	shardID := []byte("test-shard")
 	poolerID := "test-pooler"
 
-	rt := NewReplTracker(queryService, logger, shardID, poolerID, 250)
+	rt := NewReplTracker(t.Context(), queryService, logger, shardID, poolerID, 250)
 	defer rt.Close()
 
 	// Use shorter intervals for testing

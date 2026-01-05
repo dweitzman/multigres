@@ -135,6 +135,7 @@ func (mo *MultiOrch) Init(ctx context.Context) error {
 	multiorch.PortMap["http"] = int32(mo.senv.GetHTTPPort())
 
 	mo.tr = toporeg.Register(
+		ctx,
 		func(ctx context.Context) error { return mo.ts.RegisterMultiOrch(ctx, multiorch, true) },
 		func(ctx context.Context) error { return mo.ts.UnregisterMultiOrch(ctx, multiorch.Id) },
 		func(s string) {

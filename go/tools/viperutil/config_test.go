@@ -55,7 +55,7 @@ func TestLoadConfig(t *testing.T) {
 		vc := NewViperConfig(reg)
 		vc.configFile.Set("notfound.yaml")
 		vc.configFileNotFoundHandling.Set(IgnoreConfigFileNotFound)
-		_, err := vc.LoadConfig(reg)
+		_, err := vc.LoadConfig(t.Context(), reg)
 		require.NoError(t, err)
 	})
 
@@ -65,7 +65,7 @@ func TestLoadConfig(t *testing.T) {
 		vc.configFile.Set("")
 		vc.configName.Set("notfound")
 		vc.configFileNotFoundHandling.Set(IgnoreConfigFileNotFound)
-		_, err := vc.LoadConfig(reg)
+		_, err := vc.LoadConfig(t.Context(), reg)
 		require.NoError(t, err)
 	})
 
@@ -74,7 +74,7 @@ func TestLoadConfig(t *testing.T) {
 		vc := NewViperConfig(reg)
 		vc.configFile.Set("notfound.yaml")
 		vc.configFileNotFoundHandling.Set(WarnOnConfigFileNotFound)
-		_, err := vc.LoadConfig(reg)
+		_, err := vc.LoadConfig(t.Context(), reg)
 		require.NoError(t, err)
 	})
 
@@ -84,7 +84,7 @@ func TestLoadConfig(t *testing.T) {
 		vc.configFile.Set("")
 		vc.configName.Set("notfound")
 		vc.configFileNotFoundHandling.Set(WarnOnConfigFileNotFound)
-		_, err := vc.LoadConfig(reg)
+		_, err := vc.LoadConfig(t.Context(), reg)
 		require.NoError(t, err)
 	})
 
@@ -93,7 +93,7 @@ func TestLoadConfig(t *testing.T) {
 		vc := NewViperConfig(reg)
 		vc.configFile.Set("notfound.yaml")
 		vc.configFileNotFoundHandling.Set(ErrorOnConfigFileNotFound)
-		_, err := vc.LoadConfig(reg)
+		_, err := vc.LoadConfig(t.Context(), reg)
 		require.Error(t, err)
 	})
 
@@ -103,7 +103,7 @@ func TestLoadConfig(t *testing.T) {
 		vc.configFile.Set("")
 		vc.configName.Set("notfound")
 		vc.configFileNotFoundHandling.Set(ErrorOnConfigFileNotFound)
-		_, err := vc.LoadConfig(reg)
+		_, err := vc.LoadConfig(t.Context(), reg)
 		require.Error(t, err)
 	})
 }

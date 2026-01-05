@@ -15,6 +15,7 @@
 package heartbeat
 
 import (
+	"context"
 	"log/slog"
 	"sync"
 
@@ -33,10 +34,12 @@ type ReplTracker struct {
 }
 
 // NewReplTracker creates a new ReplTracker.
-func NewReplTracker(queryService executor.InternalQueryService, logger *slog.Logger, shardID []byte, poolerID string, intervalMs int) *ReplTracker {
+//
+// The provided ctx is used to preserve telemetry (tracing) for heartbeat operations.
+func NewReplTracker(ctx context.Context, queryService executor.InternalQueryService, logger *slog.Logger, shardID []byte, poolerID string, intervalMs int) *ReplTracker {
 	return &ReplTracker{
-		hw: NewWriter(queryService, logger, shardID, poolerID, intervalMs),
-		hr: NewReader(queryService, logger, shardID),
+		hw: NewWriter(ctx, queryService, logger, shardID, poolerID, intervalMs),
+		hr: NewReader(ctx, queryService, logger, shardID),
 	}
 }
 

@@ -46,7 +46,7 @@ func TestRegister_SuccessOnFirstTry(t *testing.T) {
 		alarmMessage = msg
 	}
 
-	tr := Register(register, unregister, alarm)
+	tr := Register(t.Context(), register, unregister, alarm)
 	require.NotNil(t, tr)
 
 	assert.True(t, registerCalled, "register function should be called")
@@ -80,7 +80,7 @@ func TestRegister_FailureAndRetry(t *testing.T) {
 		alarmMessages = append(alarmMessages, msg)
 	}
 
-	tr := Register(register, unregister, alarm)
+	tr := Register(t.Context(), register, unregister, alarm)
 	require.NotNil(t, tr)
 
 	assert.Eventually(t, func() bool {
@@ -121,7 +121,7 @@ func TestRegister_ContinuousFailure(t *testing.T) {
 		alarmMessages = append(alarmMessages, msg)
 	}
 
-	tr := Register(register, unregister, alarm)
+	tr := Register(t.Context(), register, unregister, alarm)
 	require.NotNil(t, tr)
 
 	assert.Eventually(t, func() bool {
@@ -167,7 +167,7 @@ func TestUnregister_WithError(t *testing.T) {
 
 	alarm := func(msg string) {}
 
-	tr := Register(register, unregister, alarm)
+	tr := Register(t.Context(), register, unregister, alarm)
 	require.NotNil(t, tr)
 
 	tr.Unregister()
@@ -194,7 +194,7 @@ func TestRegister_AlarmBehavior(t *testing.T) {
 		alarmMessages = append(alarmMessages, msg)
 	}
 
-	tr := Register(register, unregister, alarm)
+	tr := Register(t.Context(), register, unregister, alarm)
 	require.NotNil(t, tr)
 
 	assert.Eventually(t, func() bool {
@@ -223,7 +223,7 @@ func TestRegister_BackoffBehavior(t *testing.T) {
 
 	alarm := func(msg string) {}
 
-	tr := Register(register, unregister, alarm)
+	tr := Register(t.Context(), register, unregister, alarm)
 	require.NotNil(t, tr)
 
 	assert.Eventually(t, func() bool {

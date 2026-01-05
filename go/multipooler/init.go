@@ -365,6 +365,7 @@ func (mp *MultiPooler) Init(startCtx context.Context) error {
 			}
 
 			mp.tr = toporeg.Register(
+				startCtx,
 				registerFunc,
 				unregisterFunc,
 				func(s string) {

@@ -147,7 +147,7 @@ func (mg *MultiGateway) Init(ctx context.Context) error {
 	mg.serverStatus.ServiceID = mg.serviceID.Get()
 
 	// Start pooler discovery (watches all cells)
-	mg.poolerDiscovery = NewGlobalPoolerDiscovery(context.TODO(), mg.ts, mg.cell.Get(), logger)
+	mg.poolerDiscovery = NewGlobalPoolerDiscovery(ctx, mg.ts, mg.cell.Get(), logger)
 	mg.poolerDiscovery.Start()
 	logger.InfoContext(ctx, "Global pooler discovery started", "local_cell", mg.cell.Get())
 
@@ -196,6 +196,7 @@ func (mg *MultiGateway) Init(ctx context.Context) error {
 	multigateway.PortMap["postgres"] = int32(mg.pgPort.Get())
 
 	mg.tr = toporeg.Register(
+		ctx,
 		func(ctx context.Context) error { return mg.ts.RegisterMultiGateway(ctx, multigateway, true) },
 		func(ctx context.Context) error { return mg.ts.UnregisterMultiGateway(ctx, multigateway.Id) },
 		func(s string) {

@@ -77,7 +77,7 @@ Configuration:
 			viper.SetConfigName("multigres")
 
 			// Load config (without the full servenv setup)
-			_, err := mc.vc.LoadConfig(mc.reg)
+			_, err := mc.vc.LoadConfig(cmd.Context(), mc.reg)
 			if err != nil {
 				return err
 			}
