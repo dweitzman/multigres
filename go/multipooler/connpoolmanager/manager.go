@@ -89,11 +89,11 @@ func (m *Manager) Open(ctx context.Context, logger *slog.Logger, connConfig *Con
 	}
 
 	// Create shared admin pool (used by all user pools for kill operations)
-	m.adminPool = admin.NewPool(&admin.PoolConfig{
+	m.adminPool = admin.NewPool(ctx, &admin.PoolConfig{
 		ClientConfig:   adminClientConfig,
 		ConnPoolConfig: adminPoolConfig,
 	})
-	m.adminPool.Open(ctx)
+	m.adminPool.Open()
 
 	m.logger.InfoContext(ctx, "connection pool manager opened",
 		"admin_user", m.config.AdminUser(),
