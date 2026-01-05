@@ -66,6 +66,7 @@ func TestPollPooler_UpdatesStore_Primary(t *testing.T) {
 	})
 
 	re := NewEngine(
+		t.Context(),
 		ts,
 		logger,
 		cfg,
@@ -156,6 +157,7 @@ func TestPollPooler_UpdatesStore_Replica(t *testing.T) {
 	})
 
 	re := NewEngine(
+		t.Context(),
 		ts,
 		logger,
 		cfg,
@@ -239,6 +241,7 @@ func TestPollPooler_RPCFailure(t *testing.T) {
 	}
 
 	re := NewEngine(
+		t.Context(),
 		ts,
 		logger,
 		cfg,
@@ -316,6 +319,7 @@ func TestPollPooler_TypeMismatch(t *testing.T) {
 	})
 
 	re := NewEngine(
+		t.Context(),
 		ts,
 		logger,
 		cfg,

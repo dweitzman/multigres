@@ -29,6 +29,7 @@ import (
 	"github.com/multigres/multigres/go/multiorch/recovery/analysis"
 	"github.com/multigres/multigres/go/multiorch/store"
 	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
+	"github.com/multigres/multigres/go/tools/ctxutil"
 )
 
 // runIfNotRunning executes fn in a goroutine only if inProgress flag is false.
@@ -269,6 +270,7 @@ type Engine struct {
 
 // NewEngine creates a new RecoveryEngine instance.
 func NewEngine(
+	ctx context.Context,
 	ts topoclient.Store,
 	logger *slog.Logger,
 	config *config.Config,
@@ -276,7 +278,8 @@ func NewEngine(
 	rpcClient rpcclient.MultiPoolerClient,
 	coordinator *coordinator.Coordinator,
 ) *Engine {
-	ctx, cancel := context.WithCancel(context.TODO())
+	// Detach from parent context to preserve telemetry but control our own lifetime
+	ctx, cancel := context.WithCancel(ctxutil.Detach(ctx))
 
 	poolerStore := store.NewProtoStore[string, *multiorchdatapb.PoolerHealthState]()
 
@@ -297,7 +300,7 @@ func NewEngine(
 	var err error
 	engine.metrics, err = NewMetrics()
 	if err != nil {
-		logger.Error("failed to initialize recovery metrics", "error", err)
+		logger.ErrorContext(ctx, "failed to initialize recovery metrics", "error", err)
 	}
 
 	// Register callback for pooler store size observable gauge
@@ -305,7 +308,7 @@ func NewEngine(
 		return poolerStore.Len()
 	})
 	if err != nil {
-		logger.Error("failed to monitor pooler store size", "error", err)
+		logger.ErrorContext(ctx, "failed to monitor pooler store size", "error", err)
 	}
 
 	// Create action factory for recovery actions

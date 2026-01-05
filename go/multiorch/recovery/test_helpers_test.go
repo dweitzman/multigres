@@ -73,7 +73,7 @@ func newTestEngine(ctx context.Context, t *testing.T, opts ...TestEngineOption) 
 		Name:      "test-coordinator",
 	}
 	coord := coordinator.NewCoordinator(coordID, ts, options.fakeClient, logger)
-	return NewEngine(ts, logger, cfg, options.watchTargets, options.fakeClient, coord)
+	return NewEngine(t.Context(), ts, logger, cfg, options.watchTargets, options.fakeClient, coord)
 }
 
 // newTestCoordinator creates a coordinator for tests that need one but manage their own Engine creation.

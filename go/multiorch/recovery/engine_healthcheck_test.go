@@ -50,6 +50,7 @@ func TestRecoveryEngine_HealthCheckQueue(t *testing.T) {
 	)
 
 	re := NewEngine(
+		t.Context(),
 		ts,
 		logger,
 		cfg,
@@ -145,6 +146,7 @@ func TestRecoveryEngine_HealthCheckQueueDeduplication(t *testing.T) {
 	)
 
 	re := NewEngine(
+		t.Context(),
 		ts,
 		logger,
 		cfg,
@@ -203,6 +205,7 @@ func TestRecoveryEngine_HealthCheckWorkerPool(t *testing.T) {
 	)
 
 	re := NewEngine(
+		t.Context(),
 		ts,
 		logger,
 		cfg,

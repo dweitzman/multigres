@@ -155,6 +155,7 @@ func (mo *MultiOrch) Init(ctx context.Context) error {
 
 	// Create and start recovery engine
 	mo.recoveryEngine = recovery.NewEngine(
+		ctx,
 		mo.ts,
 		logger,
 		mo.cfg,

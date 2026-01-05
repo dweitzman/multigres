@@ -62,6 +62,7 @@ func TestRecoveryEngine_ConfigReload(t *testing.T) {
 
 	// Create recovery engine
 	re := NewEngine(
+		t.Context(),
 		ts,
 		logger,
 		cfg,
@@ -125,6 +126,7 @@ func TestRecoveryEngine_ConfigReload_NoChange(t *testing.T) {
 	}
 
 	re := NewEngine(
+		t.Context(),
 		ts,
 		logger,
 		cfg,
@@ -177,6 +179,7 @@ func TestRecoveryEngine_ConfigReload_EmptyTargets(t *testing.T) {
 	}
 
 	re := NewEngine(
+		t.Context(),
 		ts,
 		logger,
 		cfg,
@@ -217,6 +220,7 @@ func TestRecoveryEngine_StartStop(t *testing.T) {
 	)
 
 	re := NewEngine(
+		t.Context(),
 		ts,
 		logger,
 		cfg,
@@ -262,6 +266,7 @@ func TestRecoveryEngine_MaintenanceLoop(t *testing.T) {
 	)
 
 	re := NewEngine(
+		t.Context(),
 		ts,
 		logger,
 		cfg,
@@ -319,6 +324,7 @@ func TestRecoveryEngine_ConfigReloadError(t *testing.T) {
 	}
 
 	re := NewEngine(
+		t.Context(),
 		ts,
 		logger,
 		cfg,
@@ -421,6 +427,7 @@ func TestRecoveryEngine_ViperDynamicConfig(t *testing.T) {
 	)
 
 	re := NewEngine(
+		t.Context(),
 		ts,
 		logger,
 		cfg,
@@ -497,6 +504,7 @@ func TestRecoveryEngine_DiscoveryLoop_Integration(t *testing.T) {
 	)
 
 	re := NewEngine(
+		t.Context(),
 		ts,
 		logger,
 		cfg,
@@ -546,6 +554,7 @@ func TestRecoveryEngine_BookkeepingLoop_Integration(t *testing.T) {
 	)
 
 	re := NewEngine(
+		t.Context(),
 		ts,
 		logger,
 		cfg,
@@ -639,6 +648,7 @@ func TestRecoveryEngine_FullIntegration(t *testing.T) {
 	)
 
 	re := NewEngine(
+		t.Context(),
 		ts,
 		logger,
 		cfg,

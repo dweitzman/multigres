@@ -54,6 +54,7 @@ func TestDiscovery_DatabaseLevelWatch(t *testing.T) {
 	)
 
 	engine := NewEngine(
+		t.Context(),
 		ts,
 		slog.Default(),
 		cfg,
@@ -128,6 +129,7 @@ func TestDiscovery_TablegroupLevelWatch(t *testing.T) {
 	)
 
 	engine := NewEngine(
+		t.Context(),
 		ts,
 		slog.Default(),
 		cfg,
@@ -193,6 +195,7 @@ func TestDiscovery_ShardLevelWatch(t *testing.T) {
 	)
 
 	engine := NewEngine(
+		t.Context(),
 		ts,
 		slog.Default(),
 		cfg,
@@ -277,6 +280,7 @@ func TestDiscovery_PreservesTimestamps(t *testing.T) {
 	)
 
 	engine := NewEngine(
+		t.Context(),
 		ts,
 		slog.Default(),
 		cfg,
@@ -348,6 +352,7 @@ func TestDiscovery_MultipleWatchTargets(t *testing.T) {
 	)
 
 	engine := NewEngine(
+		t.Context(),
 		ts,
 		slog.Default(),
 		cfg,
@@ -416,6 +421,7 @@ func TestDiscovery_EmptyTopology(t *testing.T) {
 	)
 
 	engine := NewEngine(
+		t.Context(),
 		ts,
 		slog.Default(),
 		cfg,
@@ -464,6 +470,7 @@ func TestRefreshPoolersForTarget_BasicRefresh(t *testing.T) {
 	require.NoError(t, err)
 
 	engine := NewEngine(
+		t.Context(),
 		ts,
 		logger,
 		cfg,
@@ -517,6 +524,7 @@ func TestRefreshPoolersForTarget_PreservesHealthCheckData(t *testing.T) {
 	require.NoError(t, err)
 
 	engine := NewEngine(
+		t.Context(),
 		ts,
 		logger,
 		cfg,
@@ -601,6 +609,7 @@ func TestRefreshPoolersForTarget_IgnoresPoolers(t *testing.T) {
 	require.NoError(t, err)
 
 	engine := NewEngine(
+		t.Context(),
 		ts,
 		logger,
 		cfg,
@@ -666,6 +675,7 @@ func TestRefreshPoolersForTarget_FiltersToShard(t *testing.T) {
 	require.NoError(t, err)
 
 	engine := NewEngine(
+		t.Context(),
 		ts,
 		logger,
 		cfg,
@@ -713,6 +723,7 @@ func TestRefreshShardMetadata_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	engine := NewEngine(
+		t.Context(),
 		ts,
 		logger,
 		cfg,
@@ -741,6 +752,7 @@ func TestForceHealthCheckShardPoolers_ForcesPolls(t *testing.T) {
 	ts, _ := memorytopo.NewServerAndFactory(ctx, "cell1")
 
 	engine := NewEngine(
+		t.Context(),
 		ts,
 		logger,
 		cfg,
@@ -833,6 +845,7 @@ func TestForceHealthCheckShardPoolers_RespectsIgnoreList(t *testing.T) {
 	ts, _ := memorytopo.NewServerAndFactory(ctx, "cell1")
 
 	engine := NewEngine(
+		t.Context(),
 		ts,
 		logger,
 		cfg,
