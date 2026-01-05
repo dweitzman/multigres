@@ -21,6 +21,7 @@ package multigateway
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -34,6 +35,7 @@ import (
 	"github.com/multigres/multigres/go/multigateway/poolergateway"
 	"github.com/multigres/multigres/go/multigateway/scatterconn"
 	"github.com/multigres/multigres/go/pgprotocol/server"
+	"github.com/multigres/multigres/go/tools/ctxutil"
 	"github.com/multigres/multigres/go/tools/viperutil"
 )
 
@@ -206,8 +208,26 @@ func (mg *MultiGateway) Init(ctx context.Context) error {
 	mg.senv.HTTPHandleFunc("/", mg.handleIndex)
 	mg.senv.HTTPHandleFunc("/ready", mg.handleReady)
 
+	// Graceful shutdown: drain connections before stopping.
+	// OnTermSync runs first (on SIGTERM), giving connections time to finish.
+	// OnClose runs after as a fallback to force-close anything remaining.
+	mg.senv.OnTermSync(func() {
+		if mg.pgListener != nil {
+			// Use Detach to preserve telemetry from init context while controlling timeout.
+			shutdownCtx, cancel := context.WithTimeout(ctxutil.Detach(ctx), 30*time.Second)
+			defer cancel()
+			mg.senv.GetLogger().Info("initiating graceful shutdown of PostgreSQL listener")
+			if err := mg.pgListener.Shutdown(shutdownCtx); err != nil {
+				mg.senv.GetLogger().Error("error during graceful shutdown", "error", err)
+			}
+		}
+	})
+
 	mg.senv.OnClose(func() {
-		mg.Shutdown()
+		// Use Detach to preserve telemetry while controlling timeout for cleanup operations.
+		closeCtx, cancel := context.WithTimeout(ctxutil.Detach(ctx), 10*time.Second)
+		defer cancel()
+		mg.Shutdown(closeCtx)
 	})
 	return nil
 }
@@ -220,31 +240,32 @@ func (mg *MultiGateway) CobraPreRunE(cmd *cobra.Command) error {
 	return mg.senv.CobraPreRunE(cmd)
 }
 
-func (mg *MultiGateway) Shutdown() {
-	mg.senv.GetLogger().Info("multigateway shutting down")
+func (mg *MultiGateway) Shutdown(ctx context.Context) {
+	mg.senv.GetLogger().InfoContext(ctx, "multigateway shutting down")
 
-	// Stop PostgreSQL listener
+	// Shutdown PostgreSQL listener if still open.
+	// Normally OnTermSync handles graceful shutdown, but OnClose can be called
+	// directly (e.g., on startup error) without OnTermSync. Shutdown is
+	// idempotent, so it's safe to call even if already closed.
 	if mg.pgListener != nil {
-		if err := mg.pgListener.Close(); err != nil {
-			mg.senv.GetLogger().Error("error closing PostgreSQL listener", "error", err)
-		} else {
-			mg.senv.GetLogger().Info("PostgreSQL listener stopped")
+		if err := mg.pgListener.Shutdown(ctx); err != nil {
+			mg.senv.GetLogger().ErrorContext(ctx, "error closing PostgreSQL listener", "error", err)
 		}
 	}
 
 	// Close pooler gateway connections
 	if mg.poolerGateway != nil {
-		if err := mg.poolerGateway.Close(context.TODO()); err != nil {
-			mg.senv.GetLogger().Error("error closing pooler gateway", "error", err)
+		if err := mg.poolerGateway.Close(ctx); err != nil {
+			mg.senv.GetLogger().ErrorContext(ctx, "error closing pooler gateway", "error", err)
 		} else {
-			mg.senv.GetLogger().Info("Pooler gateway closed")
+			mg.senv.GetLogger().InfoContext(ctx, "Pooler gateway closed")
 		}
 	}
 
 	// Stop pooler discovery
 	if mg.poolerDiscovery != nil {
 		mg.poolerDiscovery.Stop()
-		mg.senv.GetLogger().Info("Pooler discovery stopped")
+		mg.senv.GetLogger().InfoContext(ctx, "Pooler discovery stopped")
 	}
 
 	mg.tr.Unregister()

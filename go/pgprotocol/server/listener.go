@@ -55,9 +55,18 @@ type Listener struct {
 	// wg tracks active connection handlers.
 	wg sync.WaitGroup
 
-	// ctx is the context for the listener, cancelled when Close is called.
-	ctx    context.Context
-	cancel context.CancelFunc
+	// acceptCtx is cancelled when we stop accepting new connections (shutdown begins).
+	acceptCtx    context.Context
+	acceptCancel context.CancelFunc
+
+	// connCtx is cancelled after the grace period (forces remaining connections to close).
+	// Connections inherit from this context.
+	connCtx    context.Context
+	connCancel context.CancelFunc
+
+	// shutdownOnce ensures Shutdown is idempotent.
+	shutdownOnce sync.Once
+	shutdownErr  error
 }
 
 // ListenerConfig holds configuration for the listener.
@@ -88,15 +97,22 @@ func NewListener(ctx context.Context, config ListenerConfig) (*Listener, error) 
 		logger = slog.Default()
 	}
 
-	// Detach from parent context to preserve telemetry but control our own lifetime
-	ctx, cancel := context.WithCancel(ctxutil.Detach(ctx))
+	// Detach from parent context to preserve telemetry but control our own lifetime.
+	// We create two contexts:
+	// - acceptCtx: cancelled when shutdown begins (stops accepting new connections)
+	// - connCtx: cancelled after grace period (forces connections to end)
+	detachedCtx := ctxutil.Detach(ctx)
+	acceptCtx, acceptCancel := context.WithCancel(detachedCtx)
+	connCtx, connCancel := context.WithCancel(detachedCtx)
 
 	l := &Listener{
-		listener: netListener,
-		handler:  config.Handler,
-		logger:   logger,
-		ctx:      ctx,
-		cancel:   cancel,
+		listener:     netListener,
+		handler:      config.Handler,
+		logger:       logger,
+		acceptCtx:    acceptCtx,
+		acceptCancel: acceptCancel,
+		connCtx:      connCtx,
+		connCancel:   connCancel,
 	}
 
 	// Initialize buffer pools.
@@ -124,8 +140,8 @@ func (l *Listener) Serve() error {
 		netConn, err := l.listener.Accept()
 		if err != nil {
 			select {
-			case <-l.ctx.Done():
-				// Listener was closed.
+			case <-l.acceptCtx.Done():
+				// Listener is shutting down.
 				return nil
 			default:
 				l.logger.Error("failed to accept connection", "error", err)
@@ -173,13 +189,56 @@ func (l *Listener) handleConnection(conn *Conn) {
 	conn.logger.Info("connection closed")
 }
 
-// Close closes the listener and waits for all connections to finish.
-func (l *Listener) Close() error {
-	l.cancel()
-	err := l.listener.Close()
-	l.wg.Wait()
-	l.logger.Info("PostgreSQL listener stopped")
-	return err
+// Shutdown gracefully shuts down the listener. It stops accepting new connections
+// immediately, then waits for existing connections to finish or for the context
+// deadline to expire.
+//
+// Shutdown is idempotent - subsequent calls return immediately with the original error.
+//
+// Graceful shutdown behavior:
+//   - Connections check acceptCtx.Done() between commands (in serve loop)
+//   - Idle connections (not in a transaction) exit gracefully after sending 57P01
+//   - Connections in a transaction wait until the transaction completes
+//   - If ctx deadline expires, connCtx is cancelled and Shutdown returns immediately
+//
+// This matches pgbouncer and supavisor's approach to graceful shutdown.
+//
+// Known limitation: Context cancellation doesn't close network connections.
+// Connections blocked on Read() won't see the cancellation. When the deadline
+// expires, we cancel connCtx but don't wait - the process will exit shortly
+// and the OS will clean up orphaned connections. This matches Vitess behavior.
+//
+// Future enhancement options to force-close blocked connections:
+//   - Per-connection goroutine that watches ctx.Done() and calls SetReadDeadline
+//     to interrupt blocked reads
+//   - Track connections in sync.Map and call Close() on each when force-closing
+func (l *Listener) Shutdown(ctx context.Context) error {
+	l.shutdownOnce.Do(func() {
+		// Stop accepting new connections.
+		l.acceptCancel()
+		l.shutdownErr = l.listener.Close()
+
+		// Wait for either all connections to finish or context deadline.
+		done := make(chan struct{})
+		go func() {
+			l.wg.Wait()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			l.logger.InfoContext(ctx, "PostgreSQL listener stopped gracefully")
+		case <-ctx.Done():
+			// Grace period expired, force-cancel remaining connections.
+			// We don't wait for connections to finish - they may be blocked on network
+			// reads and won't see the context cancellation. The process will exit
+			// shortly and the OS will clean up. This matches Vitess's approach.
+			l.connCancel()
+			l.logger.WarnContext(ctx, "PostgreSQL listener force-closed, some connections may be orphaned")
+		}
+	})
+
+	return l.shutdownErr
 }
 
 // Addr returns the listener's network address.

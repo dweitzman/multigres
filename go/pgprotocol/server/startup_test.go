@@ -86,7 +86,9 @@ func testListener(t *testing.T) *Listener {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		listener.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = listener.Shutdown(ctx)
 	})
 	return listener
 }

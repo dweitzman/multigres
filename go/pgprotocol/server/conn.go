@@ -102,8 +102,10 @@ type Conn struct {
 
 // newConn creates a new connection.
 func newConn(netConn net.Conn, listener *Listener, connectionID uint32) *Conn {
-	// Inherit from listener's context so connections are cancelled when listener closes
-	ctx, cancel := context.WithCancel(listener.ctx)
+	// Inherit from listener's connCtx so connections are cancelled when force-closed.
+	// This allows graceful shutdown: acceptCtx cancels first (stops new connections),
+	// then connCtx cancels after grace period (forces remaining connections to close).
+	ctx, cancel := context.WithCancel(listener.connCtx)
 
 	c := &Conn{
 		conn:           netConn,
@@ -278,6 +280,15 @@ func (c *Conn) serve() error {
 
 	// Main command loop.
 	for {
+		// Force-close check - connCtx cancelled after grace period expires.
+		// Check this first so we can call Close() which sets closed=true.
+		select {
+		case <-c.ctx.Done():
+			c.Close()
+			return nil
+		default:
+		}
+
 		// Check if connection is closed.
 		if c.closed.Load() {
 			return nil
@@ -293,6 +304,25 @@ func (c *Conn) serve() error {
 			}
 			c.logger.Error("error reading message type", "error", err)
 			return err
+		}
+
+		// Graceful shutdown check - only when truly idle (not in a transaction).
+		// We check AFTER reading the message but BEFORE processing it. This way:
+		// - The client's request unblocks us from the read
+		// - We can reject the request with 57P01 before doing any work
+		// - The client gets a clean error and can retry elsewhere
+		if c.txnStatus == protocol.TxnStatusIdle {
+			select {
+			case <-c.listener.acceptCtx.Done():
+				// Send 57P01 admin_shutdown notice to let client react gracefully.
+				// This matches pgbouncer (NOTICE) and supavisor (FATAL) behavior.
+				_ = c.writeErrorResponse("FATAL", "57P01",
+					"terminating connection due to administrator command", "", "")
+				_ = c.flush()
+				c.logger.Debug("listener shutting down, closing idle connection")
+				return nil
+			default:
+			}
 		}
 
 		// Process the message based on type.

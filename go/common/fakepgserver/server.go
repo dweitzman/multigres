@@ -18,6 +18,7 @@
 package fakepgserver
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -27,6 +28,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/multigres/multigres/go/common/sqltypes"
 	"github.com/multigres/multigres/go/pb/query"
@@ -187,7 +189,9 @@ func (s *Server) ClientConfig() *client.Config {
 
 // Close closes the server and stops accepting connections.
 func (s *Server) Close() {
-	if err := s.listener.Close(); err != nil {
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Second)
+	defer cancel()
+	if err := s.listener.Shutdown(ctx); err != nil {
 		s.t.Logf("fakepgserver: close error: %v", err)
 	}
 }
