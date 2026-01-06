@@ -319,7 +319,7 @@ func TestBackup_ForcePrimary(t *testing.T) {
 		req := &multiadminpb.BackupRequest{
 			Database:     "testdb",
 			TableGroup:   "default",
-			Type:         "full",
+			Type:         multiadminpb.BackupType_BACKUP_TYPE_FULL,
 			ForcePrimary: true,
 		}
 
@@ -340,7 +340,7 @@ func TestBackup_ForcePrimary(t *testing.T) {
 		req := &multiadminpb.BackupRequest{
 			Database:     "testdb",
 			TableGroup:   "default",
-			Type:         "full",
+			Type:         multiadminpb.BackupType_BACKUP_TYPE_FULL,
 			ForcePrimary: false,
 		}
 
@@ -380,7 +380,7 @@ func TestBackup_ForcePrimary(t *testing.T) {
 		req := &multiadminpb.BackupRequest{
 			Database:     "testdb",
 			TableGroup:   "default",
-			Type:         "full",
+			Type:         multiadminpb.BackupType_BACKUP_TYPE_FULL,
 			ForcePrimary: false,
 		}
 

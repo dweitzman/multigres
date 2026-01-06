@@ -22,6 +22,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/multigres/multigres/go/cmd/multigres/command/admin"
+	"github.com/multigres/multigres/go/common/backup"
 	"github.com/multigres/multigres/go/common/constants"
 	multiadminpb "github.com/multigres/multigres/go/pb/multiadmin"
 	"github.com/multigres/multigres/go/tools/viperutil"
@@ -88,7 +89,7 @@ func AddBackupCommand(clusterCmd *cobra.Command) {
 
 func (bcmd *backupCmd) runBackup(cmd *cobra.Command, args []string) error {
 	database := bcmd.database.Get()
-	backupType := bcmd.backupType.Get()
+	backupTypeStr := bcmd.backupType.Get()
 	primary := bcmd.primary.Get()
 	timeout := bcmd.timeout.Get()
 
@@ -99,11 +100,17 @@ func (bcmd *backupCmd) runBackup(cmd *cobra.Command, args []string) error {
 	}
 	defer client.Close()
 
+	// Parse backup type
+	backupType := backup.ParsePgBackRestType(backupTypeStr)
+	if backupType == multiadminpb.BackupType_BACKUP_TYPE_UNKNOWN {
+		return fmt.Errorf("invalid backup type: %s (must be full, differential, or incremental)", backupTypeStr)
+	}
+
 	// Start backup
 	if primary {
-		cmd.Printf("Starting backup on PRIMARY for database=%s...\n", database)
+		cmd.Printf("Starting %s backup on PRIMARY for database=%s...\n", backupTypeStr, database)
 	} else {
-		cmd.Printf("Starting backup for database=%s...\n", database)
+		cmd.Printf("Starting %s backup for database=%s...\n", backupTypeStr, database)
 	}
 
 	// Create context with timeout for the initial Backup call

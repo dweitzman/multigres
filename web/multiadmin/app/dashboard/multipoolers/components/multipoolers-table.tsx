@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, ExternalLink } from "lucide-react";
 import { useApi } from "@/lib/api/context";
-import type { MultiPooler } from "@/lib/api/types";
+import type { MultiPooler } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 const BASE_URL =
@@ -89,14 +89,14 @@ export function MultiPoolersTable() {
         pooler.id?.cell || "",
         pooler.id?.name || "",
         pooler.database || "",
-        pooler.table_group || "",
+        pooler.tableGroup || "",
         pooler.shard || "",
         pooler.type || "",
-        pooler.serving_status || "",
+        pooler.servingStatus || "",
         pooler.hostname || "",
-        pooler.port_map?.postgres?.toString() || "",
-        pooler.port_map?.grpc?.toString() || "",
-        pooler.port_map?.http?.toString() || "",
+        pooler.portMap?.postgres?.toString() || "",
+        pooler.portMap?.grpc?.toString() || "",
+        pooler.portMap?.http?.toString() || "",
       ]
         .join(" ")
         .toLowerCase();
@@ -187,7 +187,7 @@ export function MultiPoolersTable() {
                       {pooler.database || "-"}
                     </TableCell>
                     <TableCell className="font-mono text-xs py-3">
-                      {pooler.table_group || "-"}
+                      {pooler.tableGroup || "-"}
                     </TableCell>
                     <TableCell className="font-mono text-xs py-3">
                       {pooler.shard || "-"}
@@ -196,13 +196,13 @@ export function MultiPoolersTable() {
                       <PoolerTypeBadge type={pooler.type} />
                     </TableCell>
                     <TableCell className="text-center py-3">
-                      <ServingStatusBadge status={pooler.serving_status} />
+                      <ServingStatusBadge status={pooler.servingStatus} />
                     </TableCell>
                     <TableCell className="font-mono text-xs py-3">
                       {pooler.hostname || "-"}
                     </TableCell>
                     <TableCell className="text-right font-mono text-xs py-3">
-                      {pooler.port_map?.grpc || "-"}
+                      {pooler.portMap?.grpc || "-"}
                     </TableCell>
                     <TableCell className="pr-6 py-3">
                       <a

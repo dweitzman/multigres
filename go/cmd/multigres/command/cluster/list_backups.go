@@ -23,6 +23,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/multigres/multigres/go/cmd/multigres/command/admin"
+	"github.com/multigres/multigres/go/common/backup"
 	"github.com/multigres/multigres/go/common/constants"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multiadminpb "github.com/multigres/multigres/go/pb/multiadmin"
@@ -100,7 +101,7 @@ func runListBackups(cmd *cobra.Command, args []string) error {
 	for _, b := range resp.Backups {
 		colWidths.backupID = max(colWidths.backupID, len(b.BackupId))
 		colWidths.database = max(colWidths.database, len(b.Database))
-		colWidths.backupType = max(colWidths.backupType, len(b.Type))
+		colWidths.backupType = max(colWidths.backupType, len(backup.TypeToString(b.Type)))
 		colWidths.status = max(colWidths.status, len(backupStatusToString(b.Status)))
 		colWidths.size = max(colWidths.size, len(formatBytes(b.BackupSizeBytes)))
 		colWidths.poolerID = max(colWidths.poolerID, len(b.MultipoolerServiceId))
@@ -126,7 +127,8 @@ func runListBackups(cmd *cobra.Command, args []string) error {
 		status := backupStatusToString(b.Status)
 		size := formatBytes(b.BackupSizeBytes)
 		poolerType := poolerTypeToString(b.PoolerType)
-		cmd.Printf(format, b.BackupId, b.Database, b.Type, status, b.MultipoolerServiceId, poolerType, size)
+		backupType := backup.TypeToString(b.Type)
+		cmd.Printf(format, b.BackupId, b.Database, backupType, status, b.MultipoolerServiceId, poolerType, size)
 	}
 
 	return nil

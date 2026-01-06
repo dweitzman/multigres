@@ -12,7 +12,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Loader2 } from "lucide-react";
 import { useApi } from "@/lib/api/context";
-import type { MultiOrch } from "@/lib/api/types";
+import type { MultiOrch } from "@/lib/api";
 
 export function MultiOrchTable() {
   const api = useApi();
@@ -52,7 +52,7 @@ export function MultiOrchTable() {
         orch.id?.cell || "",
         orch.id?.name || "",
         orch.hostname || "",
-        orch.port_map?.grpc?.toString() || "",
+        orch.portMap?.grpc?.toString() || "",
       ]
         .join(" ")
         .toLowerCase();
@@ -134,7 +134,7 @@ export function MultiOrchTable() {
                     {orch.hostname || "-"}
                   </TableCell>
                   <TableCell className="text-right pr-6 font-mono text-xs py-3">
-                    {orch.port_map?.grpc || "-"}
+                    {orch.portMap?.grpc || "-"}
                   </TableCell>
                 </TableRow>
               ))}

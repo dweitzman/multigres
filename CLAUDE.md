@@ -13,9 +13,10 @@ Multigres is Vitess for PostgreSQL. It provides horizontal scaling, connection p
 ```bash
 make tools      # Install build dependencies (protoc, goyacc, etc.)
 make build      # Build Go binaries to bin/
-make proto      # Generate protobuf files
+make proto      # Generate protobuf files (Go)
+make proto-ts   # Generate TypeScript client from protobuf files
 make parser     # Generate PostgreSQL parser from grammar
-make build-all  # Proto + parser + binaries
+make build-all  # Proto + parser + TypeScript + binaries
 make test       # Run all tests
 make test-short # Run short tests only (skips PostgreSQL integration tests)
 make test-race  # Run tests with race detector
@@ -31,7 +32,9 @@ go test -v ./go/multipooler/...  # Run all tests in a package
 
 ### Development Workflow
 
-- Run `make proto` after modifying `.proto` files
+- Run `make proto` after modifying `.proto` files (generates Go code)
+- Run `make proto-ts` after modifying `.proto` files (generates TypeScript client for web UI)
+- Or run `make build-all` to regenerate everything (recommended)
 - Run `make build` before running integration tests
 
 ## Architecture

@@ -85,7 +85,7 @@ func (s *MultiAdminServer) executeBackup(ctx context.Context, jobID string, pool
 	// Call backup on the pooler using the shared rpcClient
 	// The jobID was generated in Backup() and is passed to pgbackrest as an annotation
 	backupReq := &multipoolermanagerdata.BackupRequest{
-		Type:         req.Type,
+		Type:         backup.PgBackRestType(req.Type),
 		ForcePrimary: req.ForcePrimary,
 		JobId:        jobID,
 	}
@@ -367,7 +367,7 @@ func (s *MultiAdminServer) GetBackups(ctx context.Context, req *multiadminpb.Get
 			Database:             req.Database,
 			TableGroup:           b.TableGroup,
 			Shard:                b.Shard,
-			Type:                 b.Type,
+			Type:                 backup.ParsePgBackRestType(b.Type),
 			Status:               backupStatus,
 			BackupSizeBytes:      b.BackupSizeBytes,
 			MultipoolerServiceId: b.MultipoolerId,

@@ -694,7 +694,7 @@ func TestBackup_MultiAdminAPIs(t *testing.T) {
 			Database:   "postgres",
 			TableGroup: "default",
 			Shard:      "0-inf",
-			Type:       "full",
+			Type:       multiadminpb.BackupType_BACKUP_TYPE_FULL,
 		}
 
 		backupResp, err := adminServer.Backup(t.Context(), backupReq)
@@ -748,7 +748,7 @@ func TestBackup_MultiAdminAPIs(t *testing.T) {
 			Database:   "postgres",
 			TableGroup: "default",
 			Shard:      "0-inf",
-			Type:       "full",
+			Type:       multiadminpb.BackupType_BACKUP_TYPE_FULL,
 		}
 
 		backupResp, err := adminServer.Backup(t.Context(), backupReq)
@@ -869,7 +869,7 @@ func TestBackup_MultiAdminAPIs(t *testing.T) {
 			Database:   "postgres",
 			TableGroup: "default",
 			Shard:      "0-inf",
-			Type:       "full",
+			Type:       multiadminpb.BackupType_BACKUP_TYPE_FULL,
 		}
 
 		backupResp, err := adminServer.Backup(t.Context(), backupReq)

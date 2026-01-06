@@ -39,10 +39,65 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// BackupType indicates the type of backup
+type BackupType int32
+
+const (
+	// BACKUP_TYPE_UNKNOWN represents an uninitialized or unknown backup type
+	BackupType_BACKUP_TYPE_UNKNOWN      BackupType = 0
+	BackupType_BACKUP_TYPE_FULL         BackupType = 1
+	BackupType_BACKUP_TYPE_DIFFERENTIAL BackupType = 2
+	BackupType_BACKUP_TYPE_INCREMENTAL  BackupType = 3
+)
+
+// Enum value maps for BackupType.
+var (
+	BackupType_name = map[int32]string{
+		0: "BACKUP_TYPE_UNKNOWN",
+		1: "BACKUP_TYPE_FULL",
+		2: "BACKUP_TYPE_DIFFERENTIAL",
+		3: "BACKUP_TYPE_INCREMENTAL",
+	}
+	BackupType_value = map[string]int32{
+		"BACKUP_TYPE_UNKNOWN":      0,
+		"BACKUP_TYPE_FULL":         1,
+		"BACKUP_TYPE_DIFFERENTIAL": 2,
+		"BACKUP_TYPE_INCREMENTAL":  3,
+	}
+)
+
+func (x BackupType) Enum() *BackupType {
+	p := new(BackupType)
+	*p = x
+	return p
+}
+
+func (x BackupType) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (BackupType) Descriptor() protoreflect.EnumDescriptor {
+	return file_multiadminservice_proto_enumTypes[0].Descriptor()
+}
+
+func (BackupType) Type() protoreflect.EnumType {
+	return &file_multiadminservice_proto_enumTypes[0]
+}
+
+func (x BackupType) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use BackupType.Descriptor instead.
+func (BackupType) EnumDescriptor() ([]byte, []int) {
+	return file_multiadminservice_proto_rawDescGZIP(), []int{0}
+}
+
 // JobType indicates the type of async job
 type JobType int32
 
 const (
+	// JOB_TYPE_UNKNOWN represents an uninitialized or unknown job type
 	JobType_JOB_TYPE_UNKNOWN JobType = 0
 	JobType_JOB_TYPE_BACKUP  JobType = 1
 	JobType_JOB_TYPE_RESTORE JobType = 2
@@ -73,11 +128,11 @@ func (x JobType) String() string {
 }
 
 func (JobType) Descriptor() protoreflect.EnumDescriptor {
-	return file_multiadminservice_proto_enumTypes[0].Descriptor()
+	return file_multiadminservice_proto_enumTypes[1].Descriptor()
 }
 
 func (JobType) Type() protoreflect.EnumType {
-	return &file_multiadminservice_proto_enumTypes[0]
+	return &file_multiadminservice_proto_enumTypes[1]
 }
 
 func (x JobType) Number() protoreflect.EnumNumber {
@@ -86,13 +141,14 @@ func (x JobType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use JobType.Descriptor instead.
 func (JobType) EnumDescriptor() ([]byte, []int) {
-	return file_multiadminservice_proto_rawDescGZIP(), []int{0}
+	return file_multiadminservice_proto_rawDescGZIP(), []int{1}
 }
 
 // JobStatus indicates the current state of an async job
 type JobStatus int32
 
 const (
+	// JOB_STATUS_UNKNOWN represents an uninitialized or unknown job status
 	JobStatus_JOB_STATUS_UNKNOWN   JobStatus = 0
 	JobStatus_JOB_STATUS_PENDING   JobStatus = 1
 	JobStatus_JOB_STATUS_RUNNING   JobStatus = 2
@@ -129,11 +185,11 @@ func (x JobStatus) String() string {
 }
 
 func (JobStatus) Descriptor() protoreflect.EnumDescriptor {
-	return file_multiadminservice_proto_enumTypes[1].Descriptor()
+	return file_multiadminservice_proto_enumTypes[2].Descriptor()
 }
 
 func (JobStatus) Type() protoreflect.EnumType {
-	return &file_multiadminservice_proto_enumTypes[1]
+	return &file_multiadminservice_proto_enumTypes[2]
 }
 
 func (x JobStatus) Number() protoreflect.EnumNumber {
@@ -142,13 +198,14 @@ func (x JobStatus) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use JobStatus.Descriptor instead.
 func (JobStatus) EnumDescriptor() ([]byte, []int) {
-	return file_multiadminservice_proto_rawDescGZIP(), []int{1}
+	return file_multiadminservice_proto_rawDescGZIP(), []int{2}
 }
 
 // BackupStatus indicates the state of a backup artifact
 type BackupStatus int32
 
 const (
+	// BACKUP_STATUS_UNKNOWN represents an uninitialized or unknown backup status
 	BackupStatus_BACKUP_STATUS_UNKNOWN    BackupStatus = 0
 	BackupStatus_BACKUP_STATUS_INCOMPLETE BackupStatus = 1
 	BackupStatus_BACKUP_STATUS_COMPLETE   BackupStatus = 2
@@ -182,11 +239,11 @@ func (x BackupStatus) String() string {
 }
 
 func (BackupStatus) Descriptor() protoreflect.EnumDescriptor {
-	return file_multiadminservice_proto_enumTypes[2].Descriptor()
+	return file_multiadminservice_proto_enumTypes[3].Descriptor()
 }
 
 func (BackupStatus) Type() protoreflect.EnumType {
-	return &file_multiadminservice_proto_enumTypes[2]
+	return &file_multiadminservice_proto_enumTypes[3]
 }
 
 func (x BackupStatus) Number() protoreflect.EnumNumber {
@@ -195,7 +252,7 @@ func (x BackupStatus) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use BackupStatus.Descriptor instead.
 func (BackupStatus) EnumDescriptor() ([]byte, []int) {
-	return file_multiadminservice_proto_rawDescGZIP(), []int{2}
+	return file_multiadminservice_proto_rawDescGZIP(), []int{3}
 }
 
 // GetCellRequest specifies the cell to retrieve
@@ -847,8 +904,8 @@ type BackupRequest struct {
 	TableGroup string `protobuf:"bytes,2,opt,name=table_group,json=tableGroup,proto3" json:"table_group,omitempty"`
 	// shard name (required)
 	Shard string `protobuf:"bytes,3,opt,name=shard,proto3" json:"shard,omitempty"`
-	// type of backup: "full", "differential", or "incremental" (required)
-	Type string `protobuf:"bytes,4,opt,name=type,proto3" json:"type,omitempty"`
+	// type of backup (required)
+	Type BackupType `protobuf:"varint,4,opt,name=type,proto3,enum=multiadmin.BackupType" json:"type,omitempty"`
 	// force_primary forces the backup to run on the primary instead of a replica.
 	// This should typically be false because backups on replicas reduce load on the primary.
 	ForcePrimary  bool `protobuf:"varint,5,opt,name=force_primary,json=forcePrimary,proto3" json:"force_primary,omitempty"`
@@ -907,11 +964,11 @@ func (x *BackupRequest) GetShard() string {
 	return ""
 }
 
-func (x *BackupRequest) GetType() string {
+func (x *BackupRequest) GetType() BackupType {
 	if x != nil {
 		return x.Type
 	}
-	return ""
+	return BackupType_BACKUP_TYPE_UNKNOWN
 }
 
 func (x *BackupRequest) GetForcePrimary() bool {
@@ -1185,7 +1242,7 @@ type GetBackupJobStatusResponse struct {
 	TableGroup string `protobuf:"bytes,6,opt,name=table_group,json=tableGroup,proto3" json:"table_group,omitempty"`
 	Shard      string `protobuf:"bytes,7,opt,name=shard,proto3" json:"shard,omitempty"`
 	// For backup jobs
-	BackupType string `protobuf:"bytes,8,opt,name=backup_type,json=backupType,proto3" json:"backup_type,omitempty"` // "full", "differential", "incremental"
+	BackupType BackupType `protobuf:"varint,8,opt,name=backup_type,json=backupType,proto3,enum=multiadmin.BackupType" json:"backup_type,omitempty"`
 	// For restore jobs
 	RequestedBackupId string `protobuf:"bytes,10,opt,name=requested_backup_id,json=requestedBackupId,proto3" json:"requested_backup_id,omitempty"` // What was requested (may be empty for "latest")
 	// Results (set when status = COMPLETED)
@@ -1275,11 +1332,11 @@ func (x *GetBackupJobStatusResponse) GetShard() string {
 	return ""
 }
 
-func (x *GetBackupJobStatusResponse) GetBackupType() string {
+func (x *GetBackupJobStatusResponse) GetBackupType() BackupType {
 	if x != nil {
 		return x.BackupType
 	}
-	return ""
+	return BackupType_BACKUP_TYPE_UNKNOWN
 }
 
 func (x *GetBackupJobStatusResponse) GetRequestedBackupId() string {
@@ -1426,8 +1483,8 @@ type BackupInfo struct {
 	TableGroup string `protobuf:"bytes,3,opt,name=table_group,json=tableGroup,proto3" json:"table_group,omitempty"`
 	// shard name
 	Shard string `protobuf:"bytes,4,opt,name=shard,proto3" json:"shard,omitempty"`
-	// type of backup: "full", "differential", or "incremental"
-	Type string `protobuf:"bytes,5,opt,name=type,proto3" json:"type,omitempty"`
+	// type of backup
+	Type BackupType `protobuf:"varint,5,opt,name=type,proto3,enum=multiadmin.BackupType" json:"type,omitempty"`
 	// status of the backup
 	Status BackupStatus `protobuf:"varint,6,opt,name=status,proto3,enum=multiadmin.BackupStatus" json:"status,omitempty"`
 	// backup_time is when the backup was created
@@ -1500,11 +1557,11 @@ func (x *BackupInfo) GetShard() string {
 	return ""
 }
 
-func (x *BackupInfo) GetType() string {
+func (x *BackupInfo) GetType() BackupType {
 	if x != nil {
 		return x.Type
 	}
-	return ""
+	return BackupType_BACKUP_TYPE_UNKNOWN
 }
 
 func (x *BackupInfo) GetStatus() BackupStatus {
@@ -1667,13 +1724,13 @@ const file_multiadminservice_proto_rawDesc = "" +
 	"\x0fGetOrchsRequest\x12\x14\n" +
 	"\x05cells\x18\x01 \x03(\tR\x05cells\"D\n" +
 	"\x10GetOrchsResponse\x120\n" +
-	"\x05orchs\x18\x01 \x03(\v2\x1a.clustermetadata.MultiOrchR\x05orchs\"\x9b\x01\n" +
+	"\x05orchs\x18\x01 \x03(\v2\x1a.clustermetadata.MultiOrchR\x05orchs\"\xb3\x01\n" +
 	"\rBackupRequest\x12\x1a\n" +
 	"\bdatabase\x18\x01 \x01(\tR\bdatabase\x12\x1f\n" +
 	"\vtable_group\x18\x02 \x01(\tR\n" +
 	"tableGroup\x12\x14\n" +
-	"\x05shard\x18\x03 \x01(\tR\x05shard\x12\x12\n" +
-	"\x04type\x18\x04 \x01(\tR\x04type\x12#\n" +
+	"\x05shard\x18\x03 \x01(\tR\x05shard\x12*\n" +
+	"\x04type\x18\x04 \x01(\x0e2\x16.multiadmin.BackupTypeR\x04type\x12#\n" +
 	"\rforce_primary\x18\x05 \x01(\bR\fforcePrimary\"'\n" +
 	"\x0eBackupResponse\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\"\xbc\x01\n" +
@@ -1691,7 +1748,7 @@ const file_multiadminservice_proto_rawDesc = "" +
 	"\bdatabase\x18\x02 \x01(\tR\bdatabase\x12\x1f\n" +
 	"\vtable_group\x18\x03 \x01(\tR\n" +
 	"tableGroup\x12\x14\n" +
-	"\x05shard\x18\x04 \x01(\tR\x05shard\"\xf8\x02\n" +
+	"\x05shard\x18\x04 \x01(\tR\x05shard\"\x90\x03\n" +
 	"\x1aGetBackupJobStatusResponse\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12.\n" +
 	"\bjob_type\x18\x02 \x01(\x0e2\x13.multiadmin.JobTypeR\ajobType\x12-\n" +
@@ -1700,8 +1757,8 @@ const file_multiadminservice_proto_rawDesc = "" +
 	"\bdatabase\x18\x05 \x01(\tR\bdatabase\x12\x1f\n" +
 	"\vtable_group\x18\x06 \x01(\tR\n" +
 	"tableGroup\x12\x14\n" +
-	"\x05shard\x18\a \x01(\tR\x05shard\x12\x1f\n" +
-	"\vbackup_type\x18\b \x01(\tR\n" +
+	"\x05shard\x18\a \x01(\tR\x05shard\x127\n" +
+	"\vbackup_type\x18\b \x01(\x0e2\x16.multiadmin.BackupTypeR\n" +
 	"backupType\x12.\n" +
 	"\x13requested_backup_id\x18\n" +
 	" \x01(\tR\x11requestedBackupId\x12\x1b\n" +
@@ -1713,15 +1770,15 @@ const file_multiadminservice_proto_rawDesc = "" +
 	"\x05shard\x18\x03 \x01(\tR\x05shard\x12\x14\n" +
 	"\x05limit\x18\x04 \x01(\rR\x05limit\"F\n" +
 	"\x12GetBackupsResponse\x120\n" +
-	"\abackups\x18\x01 \x03(\v2\x16.multiadmin.BackupInfoR\abackups\"\x9f\x03\n" +
+	"\abackups\x18\x01 \x03(\v2\x16.multiadmin.BackupInfoR\abackups\"\xb7\x03\n" +
 	"\n" +
 	"BackupInfo\x12\x1b\n" +
 	"\tbackup_id\x18\x01 \x01(\tR\bbackupId\x12\x1a\n" +
 	"\bdatabase\x18\x02 \x01(\tR\bdatabase\x12\x1f\n" +
 	"\vtable_group\x18\x03 \x01(\tR\n" +
 	"tableGroup\x12\x14\n" +
-	"\x05shard\x18\x04 \x01(\tR\x05shard\x12\x12\n" +
-	"\x04type\x18\x05 \x01(\tR\x04type\x120\n" +
+	"\x05shard\x18\x04 \x01(\tR\x05shard\x12*\n" +
+	"\x04type\x18\x05 \x01(\x0e2\x16.multiadmin.BackupTypeR\x04type\x120\n" +
 	"\x06status\x18\x06 \x01(\x0e2\x18.multiadmin.BackupStatusR\x06status\x12;\n" +
 	"\vbackup_time\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"backupTime\x12*\n" +
@@ -1733,7 +1790,13 @@ const file_multiadminservice_proto_rawDesc = "" +
 	"\x16GetPoolerStatusRequest\x120\n" +
 	"\tpooler_id\x18\x01 \x01(\v2\x13.clustermetadata.IDR\bpoolerId\"Q\n" +
 	"\x17GetPoolerStatusResponse\x126\n" +
-	"\x06status\x18\x01 \x01(\v2\x1e.multipoolermanagerdata.StatusR\x06status*J\n" +
+	"\x06status\x18\x01 \x01(\v2\x1e.multipoolermanagerdata.StatusR\x06status*v\n" +
+	"\n" +
+	"BackupType\x12\x17\n" +
+	"\x13BACKUP_TYPE_UNKNOWN\x10\x00\x12\x14\n" +
+	"\x10BACKUP_TYPE_FULL\x10\x01\x12\x1c\n" +
+	"\x18BACKUP_TYPE_DIFFERENTIAL\x10\x02\x12\x1b\n" +
+	"\x17BACKUP_TYPE_INCREMENTAL\x10\x03*J\n" +
 	"\aJobType\x12\x14\n" +
 	"\x10JOB_TYPE_UNKNOWN\x10\x00\x12\x13\n" +
 	"\x0fJOB_TYPE_BACKUP\x10\x01\x12\x14\n" +
@@ -1778,91 +1841,95 @@ func file_multiadminservice_proto_rawDescGZIP() []byte {
 	return file_multiadminservice_proto_rawDescData
 }
 
-var file_multiadminservice_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_multiadminservice_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
 var file_multiadminservice_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
 var file_multiadminservice_proto_goTypes = []any{
-	(JobType)(0),                          // 0: multiadmin.JobType
-	(JobStatus)(0),                        // 1: multiadmin.JobStatus
-	(BackupStatus)(0),                     // 2: multiadmin.BackupStatus
-	(*GetCellRequest)(nil),                // 3: multiadmin.GetCellRequest
-	(*GetCellResponse)(nil),               // 4: multiadmin.GetCellResponse
-	(*GetDatabaseRequest)(nil),            // 5: multiadmin.GetDatabaseRequest
-	(*GetDatabaseResponse)(nil),           // 6: multiadmin.GetDatabaseResponse
-	(*GetCellNamesRequest)(nil),           // 7: multiadmin.GetCellNamesRequest
-	(*GetCellNamesResponse)(nil),          // 8: multiadmin.GetCellNamesResponse
-	(*GetDatabaseNamesRequest)(nil),       // 9: multiadmin.GetDatabaseNamesRequest
-	(*GetDatabaseNamesResponse)(nil),      // 10: multiadmin.GetDatabaseNamesResponse
-	(*GetGatewaysRequest)(nil),            // 11: multiadmin.GetGatewaysRequest
-	(*GetGatewaysResponse)(nil),           // 12: multiadmin.GetGatewaysResponse
-	(*GetPoolersRequest)(nil),             // 13: multiadmin.GetPoolersRequest
-	(*GetPoolersResponse)(nil),            // 14: multiadmin.GetPoolersResponse
-	(*GetOrchsRequest)(nil),               // 15: multiadmin.GetOrchsRequest
-	(*GetOrchsResponse)(nil),              // 16: multiadmin.GetOrchsResponse
-	(*BackupRequest)(nil),                 // 17: multiadmin.BackupRequest
-	(*BackupResponse)(nil),                // 18: multiadmin.BackupResponse
-	(*RestoreFromBackupRequest)(nil),      // 19: multiadmin.RestoreFromBackupRequest
-	(*RestoreFromBackupResponse)(nil),     // 20: multiadmin.RestoreFromBackupResponse
-	(*GetBackupJobStatusRequest)(nil),     // 21: multiadmin.GetBackupJobStatusRequest
-	(*GetBackupJobStatusResponse)(nil),    // 22: multiadmin.GetBackupJobStatusResponse
-	(*GetBackupsRequest)(nil),             // 23: multiadmin.GetBackupsRequest
-	(*GetBackupsResponse)(nil),            // 24: multiadmin.GetBackupsResponse
-	(*BackupInfo)(nil),                    // 25: multiadmin.BackupInfo
-	(*GetPoolerStatusRequest)(nil),        // 26: multiadmin.GetPoolerStatusRequest
-	(*GetPoolerStatusResponse)(nil),       // 27: multiadmin.GetPoolerStatusResponse
-	(*clustermetadata.Cell)(nil),          // 28: clustermetadata.Cell
-	(*clustermetadata.Database)(nil),      // 29: clustermetadata.Database
-	(*clustermetadata.MultiGateway)(nil),  // 30: clustermetadata.MultiGateway
-	(*clustermetadata.MultiPooler)(nil),   // 31: clustermetadata.MultiPooler
-	(*clustermetadata.MultiOrch)(nil),     // 32: clustermetadata.MultiOrch
-	(*clustermetadata.ID)(nil),            // 33: clustermetadata.ID
-	(*timestamppb.Timestamp)(nil),         // 34: google.protobuf.Timestamp
-	(clustermetadata.PoolerType)(0),       // 35: clustermetadata.PoolerType
-	(*multipoolermanagerdata.Status)(nil), // 36: multipoolermanagerdata.Status
+	(BackupType)(0),                       // 0: multiadmin.BackupType
+	(JobType)(0),                          // 1: multiadmin.JobType
+	(JobStatus)(0),                        // 2: multiadmin.JobStatus
+	(BackupStatus)(0),                     // 3: multiadmin.BackupStatus
+	(*GetCellRequest)(nil),                // 4: multiadmin.GetCellRequest
+	(*GetCellResponse)(nil),               // 5: multiadmin.GetCellResponse
+	(*GetDatabaseRequest)(nil),            // 6: multiadmin.GetDatabaseRequest
+	(*GetDatabaseResponse)(nil),           // 7: multiadmin.GetDatabaseResponse
+	(*GetCellNamesRequest)(nil),           // 8: multiadmin.GetCellNamesRequest
+	(*GetCellNamesResponse)(nil),          // 9: multiadmin.GetCellNamesResponse
+	(*GetDatabaseNamesRequest)(nil),       // 10: multiadmin.GetDatabaseNamesRequest
+	(*GetDatabaseNamesResponse)(nil),      // 11: multiadmin.GetDatabaseNamesResponse
+	(*GetGatewaysRequest)(nil),            // 12: multiadmin.GetGatewaysRequest
+	(*GetGatewaysResponse)(nil),           // 13: multiadmin.GetGatewaysResponse
+	(*GetPoolersRequest)(nil),             // 14: multiadmin.GetPoolersRequest
+	(*GetPoolersResponse)(nil),            // 15: multiadmin.GetPoolersResponse
+	(*GetOrchsRequest)(nil),               // 16: multiadmin.GetOrchsRequest
+	(*GetOrchsResponse)(nil),              // 17: multiadmin.GetOrchsResponse
+	(*BackupRequest)(nil),                 // 18: multiadmin.BackupRequest
+	(*BackupResponse)(nil),                // 19: multiadmin.BackupResponse
+	(*RestoreFromBackupRequest)(nil),      // 20: multiadmin.RestoreFromBackupRequest
+	(*RestoreFromBackupResponse)(nil),     // 21: multiadmin.RestoreFromBackupResponse
+	(*GetBackupJobStatusRequest)(nil),     // 22: multiadmin.GetBackupJobStatusRequest
+	(*GetBackupJobStatusResponse)(nil),    // 23: multiadmin.GetBackupJobStatusResponse
+	(*GetBackupsRequest)(nil),             // 24: multiadmin.GetBackupsRequest
+	(*GetBackupsResponse)(nil),            // 25: multiadmin.GetBackupsResponse
+	(*BackupInfo)(nil),                    // 26: multiadmin.BackupInfo
+	(*GetPoolerStatusRequest)(nil),        // 27: multiadmin.GetPoolerStatusRequest
+	(*GetPoolerStatusResponse)(nil),       // 28: multiadmin.GetPoolerStatusResponse
+	(*clustermetadata.Cell)(nil),          // 29: clustermetadata.Cell
+	(*clustermetadata.Database)(nil),      // 30: clustermetadata.Database
+	(*clustermetadata.MultiGateway)(nil),  // 31: clustermetadata.MultiGateway
+	(*clustermetadata.MultiPooler)(nil),   // 32: clustermetadata.MultiPooler
+	(*clustermetadata.MultiOrch)(nil),     // 33: clustermetadata.MultiOrch
+	(*clustermetadata.ID)(nil),            // 34: clustermetadata.ID
+	(*timestamppb.Timestamp)(nil),         // 35: google.protobuf.Timestamp
+	(clustermetadata.PoolerType)(0),       // 36: clustermetadata.PoolerType
+	(*multipoolermanagerdata.Status)(nil), // 37: multipoolermanagerdata.Status
 }
 var file_multiadminservice_proto_depIdxs = []int32{
-	28, // 0: multiadmin.GetCellResponse.cell:type_name -> clustermetadata.Cell
-	29, // 1: multiadmin.GetDatabaseResponse.database:type_name -> clustermetadata.Database
-	30, // 2: multiadmin.GetGatewaysResponse.gateways:type_name -> clustermetadata.MultiGateway
-	31, // 3: multiadmin.GetPoolersResponse.poolers:type_name -> clustermetadata.MultiPooler
-	32, // 4: multiadmin.GetOrchsResponse.orchs:type_name -> clustermetadata.MultiOrch
-	33, // 5: multiadmin.RestoreFromBackupRequest.pooler_id:type_name -> clustermetadata.ID
-	0,  // 6: multiadmin.GetBackupJobStatusResponse.job_type:type_name -> multiadmin.JobType
-	1,  // 7: multiadmin.GetBackupJobStatusResponse.status:type_name -> multiadmin.JobStatus
-	25, // 8: multiadmin.GetBackupsResponse.backups:type_name -> multiadmin.BackupInfo
-	2,  // 9: multiadmin.BackupInfo.status:type_name -> multiadmin.BackupStatus
-	34, // 10: multiadmin.BackupInfo.backup_time:type_name -> google.protobuf.Timestamp
-	35, // 11: multiadmin.BackupInfo.pooler_type:type_name -> clustermetadata.PoolerType
-	33, // 12: multiadmin.GetPoolerStatusRequest.pooler_id:type_name -> clustermetadata.ID
-	36, // 13: multiadmin.GetPoolerStatusResponse.status:type_name -> multipoolermanagerdata.Status
-	3,  // 14: multiadmin.MultiAdminService.GetCell:input_type -> multiadmin.GetCellRequest
-	5,  // 15: multiadmin.MultiAdminService.GetDatabase:input_type -> multiadmin.GetDatabaseRequest
-	7,  // 16: multiadmin.MultiAdminService.GetCellNames:input_type -> multiadmin.GetCellNamesRequest
-	9,  // 17: multiadmin.MultiAdminService.GetDatabaseNames:input_type -> multiadmin.GetDatabaseNamesRequest
-	11, // 18: multiadmin.MultiAdminService.GetGateways:input_type -> multiadmin.GetGatewaysRequest
-	13, // 19: multiadmin.MultiAdminService.GetPoolers:input_type -> multiadmin.GetPoolersRequest
-	15, // 20: multiadmin.MultiAdminService.GetOrchs:input_type -> multiadmin.GetOrchsRequest
-	17, // 21: multiadmin.MultiAdminService.Backup:input_type -> multiadmin.BackupRequest
-	19, // 22: multiadmin.MultiAdminService.RestoreFromBackup:input_type -> multiadmin.RestoreFromBackupRequest
-	21, // 23: multiadmin.MultiAdminService.GetBackupJobStatus:input_type -> multiadmin.GetBackupJobStatusRequest
-	23, // 24: multiadmin.MultiAdminService.GetBackups:input_type -> multiadmin.GetBackupsRequest
-	26, // 25: multiadmin.MultiAdminService.GetPoolerStatus:input_type -> multiadmin.GetPoolerStatusRequest
-	4,  // 26: multiadmin.MultiAdminService.GetCell:output_type -> multiadmin.GetCellResponse
-	6,  // 27: multiadmin.MultiAdminService.GetDatabase:output_type -> multiadmin.GetDatabaseResponse
-	8,  // 28: multiadmin.MultiAdminService.GetCellNames:output_type -> multiadmin.GetCellNamesResponse
-	10, // 29: multiadmin.MultiAdminService.GetDatabaseNames:output_type -> multiadmin.GetDatabaseNamesResponse
-	12, // 30: multiadmin.MultiAdminService.GetGateways:output_type -> multiadmin.GetGatewaysResponse
-	14, // 31: multiadmin.MultiAdminService.GetPoolers:output_type -> multiadmin.GetPoolersResponse
-	16, // 32: multiadmin.MultiAdminService.GetOrchs:output_type -> multiadmin.GetOrchsResponse
-	18, // 33: multiadmin.MultiAdminService.Backup:output_type -> multiadmin.BackupResponse
-	20, // 34: multiadmin.MultiAdminService.RestoreFromBackup:output_type -> multiadmin.RestoreFromBackupResponse
-	22, // 35: multiadmin.MultiAdminService.GetBackupJobStatus:output_type -> multiadmin.GetBackupJobStatusResponse
-	24, // 36: multiadmin.MultiAdminService.GetBackups:output_type -> multiadmin.GetBackupsResponse
-	27, // 37: multiadmin.MultiAdminService.GetPoolerStatus:output_type -> multiadmin.GetPoolerStatusResponse
-	26, // [26:38] is the sub-list for method output_type
-	14, // [14:26] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	29, // 0: multiadmin.GetCellResponse.cell:type_name -> clustermetadata.Cell
+	30, // 1: multiadmin.GetDatabaseResponse.database:type_name -> clustermetadata.Database
+	31, // 2: multiadmin.GetGatewaysResponse.gateways:type_name -> clustermetadata.MultiGateway
+	32, // 3: multiadmin.GetPoolersResponse.poolers:type_name -> clustermetadata.MultiPooler
+	33, // 4: multiadmin.GetOrchsResponse.orchs:type_name -> clustermetadata.MultiOrch
+	0,  // 5: multiadmin.BackupRequest.type:type_name -> multiadmin.BackupType
+	34, // 6: multiadmin.RestoreFromBackupRequest.pooler_id:type_name -> clustermetadata.ID
+	1,  // 7: multiadmin.GetBackupJobStatusResponse.job_type:type_name -> multiadmin.JobType
+	2,  // 8: multiadmin.GetBackupJobStatusResponse.status:type_name -> multiadmin.JobStatus
+	0,  // 9: multiadmin.GetBackupJobStatusResponse.backup_type:type_name -> multiadmin.BackupType
+	26, // 10: multiadmin.GetBackupsResponse.backups:type_name -> multiadmin.BackupInfo
+	0,  // 11: multiadmin.BackupInfo.type:type_name -> multiadmin.BackupType
+	3,  // 12: multiadmin.BackupInfo.status:type_name -> multiadmin.BackupStatus
+	35, // 13: multiadmin.BackupInfo.backup_time:type_name -> google.protobuf.Timestamp
+	36, // 14: multiadmin.BackupInfo.pooler_type:type_name -> clustermetadata.PoolerType
+	34, // 15: multiadmin.GetPoolerStatusRequest.pooler_id:type_name -> clustermetadata.ID
+	37, // 16: multiadmin.GetPoolerStatusResponse.status:type_name -> multipoolermanagerdata.Status
+	4,  // 17: multiadmin.MultiAdminService.GetCell:input_type -> multiadmin.GetCellRequest
+	6,  // 18: multiadmin.MultiAdminService.GetDatabase:input_type -> multiadmin.GetDatabaseRequest
+	8,  // 19: multiadmin.MultiAdminService.GetCellNames:input_type -> multiadmin.GetCellNamesRequest
+	10, // 20: multiadmin.MultiAdminService.GetDatabaseNames:input_type -> multiadmin.GetDatabaseNamesRequest
+	12, // 21: multiadmin.MultiAdminService.GetGateways:input_type -> multiadmin.GetGatewaysRequest
+	14, // 22: multiadmin.MultiAdminService.GetPoolers:input_type -> multiadmin.GetPoolersRequest
+	16, // 23: multiadmin.MultiAdminService.GetOrchs:input_type -> multiadmin.GetOrchsRequest
+	18, // 24: multiadmin.MultiAdminService.Backup:input_type -> multiadmin.BackupRequest
+	20, // 25: multiadmin.MultiAdminService.RestoreFromBackup:input_type -> multiadmin.RestoreFromBackupRequest
+	22, // 26: multiadmin.MultiAdminService.GetBackupJobStatus:input_type -> multiadmin.GetBackupJobStatusRequest
+	24, // 27: multiadmin.MultiAdminService.GetBackups:input_type -> multiadmin.GetBackupsRequest
+	27, // 28: multiadmin.MultiAdminService.GetPoolerStatus:input_type -> multiadmin.GetPoolerStatusRequest
+	5,  // 29: multiadmin.MultiAdminService.GetCell:output_type -> multiadmin.GetCellResponse
+	7,  // 30: multiadmin.MultiAdminService.GetDatabase:output_type -> multiadmin.GetDatabaseResponse
+	9,  // 31: multiadmin.MultiAdminService.GetCellNames:output_type -> multiadmin.GetCellNamesResponse
+	11, // 32: multiadmin.MultiAdminService.GetDatabaseNames:output_type -> multiadmin.GetDatabaseNamesResponse
+	13, // 33: multiadmin.MultiAdminService.GetGateways:output_type -> multiadmin.GetGatewaysResponse
+	15, // 34: multiadmin.MultiAdminService.GetPoolers:output_type -> multiadmin.GetPoolersResponse
+	17, // 35: multiadmin.MultiAdminService.GetOrchs:output_type -> multiadmin.GetOrchsResponse
+	19, // 36: multiadmin.MultiAdminService.Backup:output_type -> multiadmin.BackupResponse
+	21, // 37: multiadmin.MultiAdminService.RestoreFromBackup:output_type -> multiadmin.RestoreFromBackupResponse
+	23, // 38: multiadmin.MultiAdminService.GetBackupJobStatus:output_type -> multiadmin.GetBackupJobStatusResponse
+	25, // 39: multiadmin.MultiAdminService.GetBackups:output_type -> multiadmin.GetBackupsResponse
+	28, // 40: multiadmin.MultiAdminService.GetPoolerStatus:output_type -> multiadmin.GetPoolerStatusResponse
+	29, // [29:41] is the sub-list for method output_type
+	17, // [17:29] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_multiadminservice_proto_init() }
@@ -1875,7 +1942,7 @@ func file_multiadminservice_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_multiadminservice_proto_rawDesc), len(file_multiadminservice_proto_rawDesc)),
-			NumEnums:      3,
+			NumEnums:      4,
 			NumMessages:   25,
 			NumExtensions: 0,
 			NumServices:   1,

@@ -40,7 +40,7 @@ export function DashboardItemsTable() {
         const stats = await getTableGroupStats();
 
         // For single database setup, apply stats to the database
-        const dbInfos: DatabaseInfo[] = names.map((name) => ({
+        const dbInfos: DatabaseInfo[] = (names || []).map((name) => ({
           name,
           tableGroups: stats.tableGroupCount,
           totalShards: stats.shardCount,

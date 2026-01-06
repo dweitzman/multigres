@@ -78,6 +78,10 @@ parser: ## Generate PostgreSQL parser from grammar.
 
 generate: parser ## Alias for parser.
 
+# Generate TypeScript client from proto files
+proto-ts: proto ## Generate TypeScript client from protobuf files.
+	./tools/generate_grpc_gateway_ts.sh
+
 ##@ Build
 
 # Build Go binaries only (debug, with symbols)
@@ -108,7 +112,7 @@ build-release: ## Build Go binaries (release, static, stripped).
 	done
 
 # Build everything (proto + parser + binaries)
-build-all: proto parser build ## Build everything (proto + parser + binaries).
+build-all: proto parser proto-ts build ## Build everything (proto + parser + TypeScript + binaries).
 
 # TODO(sougou): images is a temporary convenience target for a demo.
 # To run it, you need to have Docker installed.

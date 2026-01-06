@@ -1,199 +1,26 @@
-// API client for MultiAdmin service
-// Connects to the multiadmin HTTP/gRPC-gateway endpoints
+// Copyright 2025 Supabase, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
-import type {
-  GetCellNamesResponse,
-  GetCellResponse,
-  GetDatabaseNamesResponse,
-  GetDatabaseResponse,
-  GetGatewaysResponse,
-  GetPoolersResponse,
-  GetOrchsResponse,
-  BackupRequest,
-  BackupResponse,
-  RestoreFromBackupRequest,
-  RestoreFromBackupResponse,
-  GetBackupJobStatusRequest,
-  GetBackupJobStatusResponse,
-  GetBackupsRequest,
-  GetBackupsResponse,
-} from "./types";
+/**
+ * Wrapper around generated MultiAdminService to provide:
+ * 1. Configured base URL for all requests
+ * 2. Better error handling with ApiError class
+ * 3. Instance-based API (instead of static methods)
+ */
 
-export interface ApiClientConfig {
-  baseUrl: string;
-}
-
-export class MultiAdminClient {
-  private baseUrl: string;
-
-  constructor(config: ApiClientConfig) {
-    // Remove trailing slash if present
-    this.baseUrl = config.baseUrl.replace(/\/$/, "");
-  }
-
-  private async fetch<T>(
-    path: string,
-    options?: RequestInit
-  ): Promise<T> {
-    const url = `${this.baseUrl}${path}`;
-    const response = await fetch(url, {
-      ...options,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-      },
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new ApiError(response.status, errorText, url);
-    }
-
-    return response.json();
-  }
-
-  // Cell operations
-
-  async getCellNames(): Promise<GetCellNamesResponse> {
-    return this.fetch<GetCellNamesResponse>("/api/v1/cells");
-  }
-
-  async getCell(name: string): Promise<GetCellResponse> {
-    return this.fetch<GetCellResponse>(
-      `/api/v1/cells/${encodeURIComponent(name)}`
-    );
-  }
-
-  // Database operations
-
-  async getDatabaseNames(): Promise<GetDatabaseNamesResponse> {
-    return this.fetch<GetDatabaseNamesResponse>("/api/v1/databases");
-  }
-
-  async getDatabase(name: string): Promise<GetDatabaseResponse> {
-    return this.fetch<GetDatabaseResponse>(
-      `/api/v1/databases/${encodeURIComponent(name)}`
-    );
-  }
-
-  // Gateway operations
-
-  async getGateways(cells?: string[]): Promise<GetGatewaysResponse> {
-    const params = new URLSearchParams();
-    if (cells && cells.length > 0) {
-      cells.forEach((cell) => params.append("cells", cell));
-    }
-    const query = params.toString();
-    return this.fetch<GetGatewaysResponse>(
-      `/api/v1/gateways${query ? `?${query}` : ""}`
-    );
-  }
-
-  // Pooler operations
-
-  async getPoolers(options?: {
-    cells?: string[];
-    database?: string;
-    shard?: string;
-  }): Promise<GetPoolersResponse> {
-    const params = new URLSearchParams();
-    if (options?.cells && options.cells.length > 0) {
-      options.cells.forEach((cell) => params.append("cells", cell));
-    }
-    if (options?.database) {
-      params.append("database", options.database);
-    }
-    if (options?.shard) {
-      params.append("shard", options.shard);
-    }
-    const query = params.toString();
-    return this.fetch<GetPoolersResponse>(
-      `/api/v1/poolers${query ? `?${query}` : ""}`
-    );
-  }
-
-  // Orchestrator operations
-
-  async getOrchs(cells?: string[]): Promise<GetOrchsResponse> {
-    const params = new URLSearchParams();
-    if (cells && cells.length > 0) {
-      cells.forEach((cell) => params.append("cells", cell));
-    }
-    const query = params.toString();
-    return this.fetch<GetOrchsResponse>(
-      `/api/v1/orchs${query ? `?${query}` : ""}`
-    );
-  }
-
-  // Backup operations
-
-  async backup(request: BackupRequest): Promise<BackupResponse> {
-    return this.fetch<BackupResponse>("/api/v1/backups", {
-      method: "POST",
-      body: JSON.stringify({
-        database: request.database,
-        table_group: request.tableGroup,
-        shard: request.shard,
-        type: request.type,
-        force_primary: request.forcePrimary,
-      }),
-    });
-  }
-
-  async restoreFromBackup(
-    request: RestoreFromBackupRequest
-  ): Promise<RestoreFromBackupResponse> {
-    return this.fetch<RestoreFromBackupResponse>("/api/v1/restores", {
-      method: "POST",
-      body: JSON.stringify({
-        database: request.database,
-        table_group: request.tableGroup,
-        shard: request.shard,
-        backup_id: request.backupId,
-        pooler_id: request.poolerId,
-      }),
-    });
-  }
-
-  async getBackupJobStatus(
-    request: GetBackupJobStatusRequest
-  ): Promise<GetBackupJobStatusResponse> {
-    const params = new URLSearchParams();
-    if (request.database) {
-      params.append("database", request.database);
-    }
-    if (request.tableGroup) {
-      params.append("table_group", request.tableGroup);
-    }
-    if (request.shard) {
-      params.append("shard", request.shard);
-    }
-    const query = params.toString();
-    return this.fetch<GetBackupJobStatusResponse>(
-      `/api/v1/jobs/${encodeURIComponent(request.jobId)}${query ? `?${query}` : ""}`
-    );
-  }
-
-  async getBackups(request?: GetBackupsRequest): Promise<GetBackupsResponse> {
-    const params = new URLSearchParams();
-    if (request?.database) {
-      params.append("database", request.database);
-    }
-    if (request?.tableGroup) {
-      params.append("table_group", request.tableGroup);
-    }
-    if (request?.shard) {
-      params.append("shard", request.shard);
-    }
-    if (request?.limit) {
-      params.append("limit", request.limit.toString());
-    }
-    const query = params.toString();
-    return this.fetch<GetBackupsResponse>(
-      `/api/v1/backups${query ? `?${query}` : ""}`
-    );
-  }
-}
+import { MultiAdminService } from "./generated/multiadminservice.pb";
+import type * as types from "./generated/multiadminservice.pb";
 
 export class ApiError extends Error {
   constructor(
@@ -203,5 +30,78 @@ export class ApiError extends Error {
   ) {
     super(`API error ${status}: ${body}`);
     this.name = "ApiError";
+  }
+}
+
+export interface ApiClientConfig {
+  baseUrl: string;
+}
+
+export class MultiAdminClient {
+  private pathPrefix: string;
+
+  constructor(config: ApiClientConfig) {
+    // Remove trailing slash if present
+    this.pathPrefix = config.baseUrl.replace(/\/$/, "");
+  }
+
+  // Cell operations
+
+  async getCell(req: types.GetCellRequest): Promise<types.GetCellResponse> {
+    return MultiAdminService.GetCell(req, { pathPrefix: this.pathPrefix });
+  }
+
+  async getCellNames(req: types.GetCellNamesRequest = {}): Promise<types.GetCellNamesResponse> {
+    return MultiAdminService.GetCellNames(req, { pathPrefix: this.pathPrefix });
+  }
+
+  // Database operations
+
+  async getDatabase(req: types.GetDatabaseRequest): Promise<types.GetDatabaseResponse> {
+    return MultiAdminService.GetDatabase(req, { pathPrefix: this.pathPrefix });
+  }
+
+  async getDatabaseNames(req: types.GetDatabaseNamesRequest = {}): Promise<types.GetDatabaseNamesResponse> {
+    return MultiAdminService.GetDatabaseNames(req, { pathPrefix: this.pathPrefix });
+  }
+
+  // Gateway operations
+
+  async getGateways(req: types.GetGatewaysRequest = {}): Promise<types.GetGatewaysResponse> {
+    return MultiAdminService.GetGateways(req, { pathPrefix: this.pathPrefix });
+  }
+
+  // Pooler operations
+
+  async getPoolers(req: types.GetPoolersRequest = {}): Promise<types.GetPoolersResponse> {
+    return MultiAdminService.GetPoolers(req, { pathPrefix: this.pathPrefix });
+  }
+
+  // Orchestrator operations
+
+  async getOrchs(req: types.GetOrchsRequest = {}): Promise<types.GetOrchsResponse> {
+    return MultiAdminService.GetOrchs(req, { pathPrefix: this.pathPrefix });
+  }
+
+  // Backup operations
+
+  async backup(req: types.BackupRequest): Promise<types.BackupResponse> {
+    return MultiAdminService.Backup(req, { pathPrefix: this.pathPrefix });
+  }
+
+  async restoreFromBackup(req: types.RestoreFromBackupRequest): Promise<types.RestoreFromBackupResponse> {
+    return MultiAdminService.RestoreFromBackup(req, { pathPrefix: this.pathPrefix });
+  }
+
+  async getBackupJobStatus(req: types.GetBackupJobStatusRequest): Promise<types.GetBackupJobStatusResponse> {
+    return MultiAdminService.GetBackupJobStatus(req, { pathPrefix: this.pathPrefix });
+  }
+
+  async getBackups(req: types.GetBackupsRequest = {}): Promise<types.GetBackupsResponse> {
+    return MultiAdminService.GetBackups(req, { pathPrefix: this.pathPrefix });
+  }
+
+  async getPoolerStatus(req: types.GetPoolerStatusRequest): Promise<types.GetPoolerStatusResponse> {
+    return MultiAdminService.GetPoolerStatus(req, { pathPrefix: this.pathPrefix });
   }
 }

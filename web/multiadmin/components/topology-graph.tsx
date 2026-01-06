@@ -111,7 +111,7 @@ export function TopologyGraph({ heightClass: _heightClass }: { heightClass?: str
     const poolerGroups = new Map<string, { primary?: MultiPooler; replicas: MultiPooler[] }>();
 
     poolers.forEach((pooler) => {
-      const key = `${pooler.database || ""}/${pooler.table_group || "default"}/${pooler.shard || "0-"}`;
+      const key = `${pooler.database || ""}/${pooler.tableGroup || "default"}/${pooler.shard || "0-"}`;
       if (!poolerGroups.has(key)) {
         poolerGroups.set(key, { replicas: [] });
       }

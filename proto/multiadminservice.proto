@@ -177,6 +177,15 @@ message GetOrchsResponse {
 
 // Backup operation messages
 
+// BackupType indicates the type of backup
+enum BackupType {
+  // BACKUP_TYPE_UNKNOWN represents an uninitialized or unknown backup type
+  BACKUP_TYPE_UNKNOWN = 0;
+  BACKUP_TYPE_FULL = 1;
+  BACKUP_TYPE_DIFFERENTIAL = 2;
+  BACKUP_TYPE_INCREMENTAL = 3;
+}
+
 // BackupRequest requests an async backup of a specific shard
 message BackupRequest {
   // database name (required)
@@ -185,8 +194,8 @@ message BackupRequest {
   string table_group = 2;
   // shard name (required)
   string shard = 3;
-  // type of backup: "full", "differential", or "incremental" (required)
-  string type = 4;
+  // type of backup (required)
+  BackupType type = 4;
   // force_primary forces the backup to run on the primary instead of a replica.
   // This should typically be false because backups on replicas reduce load on the primary.
   bool force_primary = 5;
@@ -253,7 +262,7 @@ message GetBackupJobStatusResponse {
   string shard = 7;
 
   // For backup jobs
-  string backup_type = 8; // "full", "differential", "incremental"
+  BackupType backup_type = 8;
 
   // For restore jobs
   string requested_backup_id = 10; // What was requested (may be empty for "latest")
@@ -266,6 +275,7 @@ message GetBackupJobStatusResponse {
 
 // JobType indicates the type of async job
 enum JobType {
+  // JOB_TYPE_UNKNOWN represents an uninitialized or unknown job type
   JOB_TYPE_UNKNOWN = 0;
   JOB_TYPE_BACKUP = 1;
   JOB_TYPE_RESTORE = 2;
@@ -273,6 +283,7 @@ enum JobType {
 
 // JobStatus indicates the current state of an async job
 enum JobStatus {
+  // JOB_STATUS_UNKNOWN represents an uninitialized or unknown job status
   JOB_STATUS_UNKNOWN = 0;
   JOB_STATUS_PENDING = 1;
   JOB_STATUS_RUNNING = 2;
@@ -310,8 +321,8 @@ message BackupInfo {
   string table_group = 3;
   // shard name
   string shard = 4;
-  // type of backup: "full", "differential", or "incremental"
-  string type = 5;
+  // type of backup
+  BackupType type = 5;
   // status of the backup
   BackupStatus status = 6;
   // backup_time is when the backup was created
@@ -326,6 +337,7 @@ message BackupInfo {
 
 // BackupStatus indicates the state of a backup artifact
 enum BackupStatus {
+  // BACKUP_STATUS_UNKNOWN represents an uninitialized or unknown backup status
   BACKUP_STATUS_UNKNOWN = 0;
   BACKUP_STATUS_INCOMPLETE = 1;
   BACKUP_STATUS_COMPLETE = 2;
