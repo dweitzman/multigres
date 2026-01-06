@@ -33,6 +33,7 @@ type PoolConfig struct {
 	ClientConfig *client.Config
 
 	// ConnPoolConfig is the connection pool configuration.
+	// Use ConnPoolConfig.Name to set a custom pool name for metrics (defaults to "regular").
 	ConnPoolConfig *connpool.Config
 
 	// AdminPool is used for kill operations on connections.
@@ -50,8 +51,12 @@ type Pool struct {
 // The context is used for background pool operations and OTel tracking.
 // The pool must be opened with Open() before use.
 func NewPool(ctx context.Context, config *PoolConfig) *Pool {
+	// Set default name if not provided in ConnPoolConfig
+	if config.ConnPoolConfig.Name == "" {
+		config.ConnPoolConfig.Name = "regular"
+	}
+
 	pool := connpool.NewPool[*Conn](ctx, config.ConnPoolConfig)
-	pool.Name = "regular"
 
 	return &Pool{
 		pool:   pool,

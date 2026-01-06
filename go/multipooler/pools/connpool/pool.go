@@ -71,6 +71,10 @@ type RefreshCheck func() (bool, error)
 
 // Config holds configuration for the connection pool.
 type Config struct {
+	// Name is the pool name for logging and metrics (defaults to "" if not set).
+	// The name is used in metrics to distinguish between different pools.
+	Name string
+
 	Capacity        int64
 	MaxIdleCount    int64
 	IdleTimeout     time.Duration
@@ -157,6 +161,7 @@ type Pool[C Connection] struct {
 func NewPool[C Connection](ctx context.Context, config *Config) *Pool[C] {
 	pool := &Pool[C]{}
 	pool.ctx = ctx
+	pool.Name = config.Name
 	pool.config.maxCapacity = config.Capacity
 	pool.config.maxIdleCount = config.MaxIdleCount
 	pool.config.maxLifetime.Store(config.MaxLifetime.Nanoseconds())
