@@ -63,7 +63,7 @@ func TestForgetLongUnseenInstances_NeverSeen(t *testing.T) {
 	oldPooler := &multiorchdatapb.PoolerHealthState{
 		MultiPooler: &clustermetadata.MultiPooler{
 			Id: &clustermetadata.ID{
-				Component: clustermetadata.ID_MULTIPOOLER,
+				Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "old-pooler",
 			},
@@ -80,7 +80,7 @@ func TestForgetLongUnseenInstances_NeverSeen(t *testing.T) {
 	recentPooler := &multiorchdatapb.PoolerHealthState{
 		MultiPooler: &clustermetadata.MultiPooler{
 			Id: &clustermetadata.ID{
-				Component: clustermetadata.ID_MULTIPOOLER,
+				Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "recent-pooler",
 			},
@@ -95,7 +95,7 @@ func TestForgetLongUnseenInstances_NeverSeen(t *testing.T) {
 	noAttempts := &multiorchdatapb.PoolerHealthState{
 		MultiPooler: &clustermetadata.MultiPooler{
 			Id: &clustermetadata.ID{
-				Component: clustermetadata.ID_MULTIPOOLER,
+				Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "no-attempts",
 			},
@@ -136,7 +136,7 @@ func TestForgetLongUnseenInstances_LongUnseen(t *testing.T) {
 	oldHealthyPooler := &multiorchdatapb.PoolerHealthState{
 		MultiPooler: &clustermetadata.MultiPooler{
 			Id: &clustermetadata.ID{
-				Component: clustermetadata.ID_MULTIPOOLER,
+				Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "old-healthy",
 			},
@@ -153,7 +153,7 @@ func TestForgetLongUnseenInstances_LongUnseen(t *testing.T) {
 	recentHealthyPooler := &multiorchdatapb.PoolerHealthState{
 		MultiPooler: &clustermetadata.MultiPooler{
 			Id: &clustermetadata.ID{
-				Component: clustermetadata.ID_MULTIPOOLER,
+				Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "recent-healthy",
 			},
@@ -195,7 +195,7 @@ func TestForgetLongUnseenInstances_MixedScenario(t *testing.T) {
 		"never-seen-old": {
 			MultiPooler: &clustermetadata.MultiPooler{
 				Id: &clustermetadata.ID{
-					Component: clustermetadata.ID_MULTIPOOLER,
+					Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER,
 					Cell:      "zone1",
 					Name:      "never-seen-old",
 				},
@@ -206,7 +206,7 @@ func TestForgetLongUnseenInstances_MixedScenario(t *testing.T) {
 		"never-seen-recent": {
 			MultiPooler: &clustermetadata.MultiPooler{
 				Id: &clustermetadata.ID{
-					Component: clustermetadata.ID_MULTIPOOLER,
+					Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER,
 					Cell:      "zone1",
 					Name:      "never-seen-recent",
 				},
@@ -217,7 +217,7 @@ func TestForgetLongUnseenInstances_MixedScenario(t *testing.T) {
 		"long-unseen": {
 			MultiPooler: &clustermetadata.MultiPooler{
 				Id: &clustermetadata.ID{
-					Component: clustermetadata.ID_MULTIPOOLER,
+					Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER,
 					Cell:      "zone1",
 					Name:      "long-unseen",
 				},
@@ -227,7 +227,7 @@ func TestForgetLongUnseenInstances_MixedScenario(t *testing.T) {
 		"healthy": {
 			MultiPooler: &clustermetadata.MultiPooler{
 				Id: &clustermetadata.ID{
-					Component: clustermetadata.ID_MULTIPOOLER,
+					Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER,
 					Cell:      "zone1",
 					Name:      "healthy",
 				},
@@ -287,7 +287,7 @@ func TestRunBookkeeping(t *testing.T) {
 	oldPooler := &multiorchdatapb.PoolerHealthState{
 		MultiPooler: &clustermetadata.MultiPooler{
 			Id: &clustermetadata.ID{
-				Component: clustermetadata.ID_MULTIPOOLER,
+				Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "old",
 			},

@@ -26,7 +26,7 @@ import (
 func CreateTestGateway(ctx context.Context, ts topoclient.Store, cellName, gatewayName string) error {
 	gateway := &clustermetadatapb.MultiGateway{
 		Id: &clustermetadatapb.ID{
-			Component: clustermetadatapb.ID_MULTIGATEWAY,
+			Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIGATEWAY,
 			Cell:      cellName,
 			Name:      gatewayName,
 		},
@@ -40,7 +40,7 @@ func CreateTestGateway(ctx context.Context, ts topoclient.Store, cellName, gatew
 func CreateTestPooler(ctx context.Context, ts topoclient.Store, cellName, poolerName string, database string) error {
 	pooler := &clustermetadatapb.MultiPooler{
 		Id: &clustermetadatapb.ID{
-			Component: clustermetadatapb.ID_MULTIPOOLER,
+			Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 			Cell:      cellName,
 			Name:      poolerName,
 		},
@@ -55,7 +55,7 @@ func CreateTestPooler(ctx context.Context, ts topoclient.Store, cellName, pooler
 func CreateTestOrchestrator(ctx context.Context, ts topoclient.Store, cellName, orchName string) error {
 	orch := &clustermetadatapb.MultiOrch{
 		Id: &clustermetadatapb.ID{
-			Component: clustermetadatapb.ID_MULTIORCH,
+			Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 			Cell:      cellName,
 			Name:      orchName,
 		},

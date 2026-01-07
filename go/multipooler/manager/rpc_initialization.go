@@ -46,7 +46,7 @@ func (pm *MultiPoolerManager) InitializeEmptyPrimary(ctx context.Context, req *m
 
 	// Validate consensus term must be 1 for new primary
 	if req.ConsensusTerm != 1 {
-		return nil, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT, "consensus term must be 1 for new primary initialization, got %d", req.ConsensusTerm)
+		return nil, mterrors.Errorf(mtrpcpb.Code_CODE_INVALID_ARGUMENT, "consensus term must be 1 for new primary initialization, got %d", req.ConsensusTerm)
 	}
 
 	// Check if already initialized
@@ -60,7 +60,7 @@ func (pm *MultiPoolerManager) InitializeEmptyPrimary(ctx context.Context, req *m
 	if !pm.hasDataDirectory() {
 		pm.logger.InfoContext(ctx, "Initializing data directory", "shard", pm.getShardID())
 		if pm.pgctldClient == nil {
-			return nil, mterrors.New(mtrpcpb.Code_UNAVAILABLE, "pgctld client not available")
+			return nil, mterrors.New(mtrpcpb.Code_CODE_UNAVAILABLE, "pgctld client not available")
 		}
 
 		initReq := &pgctldpb.InitDataDirRequest{}
@@ -80,7 +80,7 @@ func (pm *MultiPoolerManager) InitializeEmptyPrimary(ctx context.Context, req *m
 	if !pm.isPostgresRunning(ctx) {
 		pm.logger.InfoContext(ctx, "Starting PostgreSQL", "shard", pm.getShardID())
 		if pm.pgctldClient == nil {
-			return nil, mterrors.New(mtrpcpb.Code_UNAVAILABLE, "pgctld client not available")
+			return nil, mterrors.New(mtrpcpb.Code_CODE_UNAVAILABLE, "pgctld client not available")
 		}
 
 		startReq := &pgctldpb.StartRequest{}
@@ -118,7 +118,7 @@ func (pm *MultiPoolerManager) InitializeEmptyPrimary(ctx context.Context, req *m
 	}
 
 	// Set pooler type to PRIMARY before creating backup so the backup annotation is correct
-	if err := pm.changeTypeLocked(ctx, clustermetadatapb.PoolerType_PRIMARY); err != nil {
+	if err := pm.changeTypeLocked(ctx, clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY); err != nil {
 		return nil, mterrors.Wrap(err, "failed to set pooler type")
 	}
 
@@ -177,14 +177,14 @@ func (pm *MultiPoolerManager) InitializeEmptyPrimary(ctx context.Context, req *m
 func (pm *MultiPoolerManager) InitializeAsStandby(ctx context.Context, req *multipoolermanagerdatapb.InitializeAsStandbyRequest) (*multipoolermanagerdatapb.InitializeAsStandbyResponse, error) {
 	// Validate primary is provided
 	if req.Primary == nil {
-		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "primary is required")
+		return nil, mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT, "primary is required")
 	}
 
 	// Extract primary connection info
 	primaryHost := req.Primary.Hostname
 	primaryPort, ok := req.Primary.PortMap["postgres"]
 	if !ok {
-		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "primary MultiPooler has no postgres port configured")
+		return nil, mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT, "primary MultiPooler has no postgres port configured")
 	}
 
 	// Store primary pooler ID so we can track which primary we're replicating from
@@ -211,7 +211,7 @@ func (pm *MultiPoolerManager) InitializeAsStandby(ctx context.Context, req *mult
 	// 1. Check for existing data directory
 	if pm.hasDataDirectory() {
 		if !req.Force {
-			return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, "data directory already exists, use force=true to reinitialize")
+			return nil, mterrors.New(mtrpcpb.Code_CODE_FAILED_PRECONDITION, "data directory already exists, use force=true to reinitialize")
 		}
 		// Remove data directory if force
 		pm.logger.InfoContext(ctx, "Force reinit: removing data directory", "shard", pm.getShardID())
@@ -278,7 +278,7 @@ func (pm *MultiPoolerManager) InitializeAsStandby(ctx context.Context, req *mult
 	}
 
 	// 6. Set pooler type to REPLICA
-	if err := pm.changeTypeLocked(ctx, clustermetadatapb.PoolerType_REPLICA); err != nil {
+	if err := pm.changeTypeLocked(ctx, clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA); err != nil {
 		return nil, mterrors.Wrap(err, "failed to set pooler type")
 	}
 
@@ -396,7 +396,7 @@ func (pm *MultiPoolerManager) isPostgresRunning(ctx context.Context) bool {
 		return false
 	}
 
-	return statusResp.Status == pgctldpb.ServerStatus_RUNNING
+	return statusResp.Status == pgctldpb.ServerStatus_SERVER_STATUS_RUNNING
 }
 
 // getRole returns the current role of this pooler ("primary", "standby", or "unknown")
@@ -533,7 +533,7 @@ func (pm *MultiPoolerManager) configureArchiveMode(ctx context.Context) error {
 
 	// Check if pgbackrest config file exists before configuring archive mode
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
+		return mterrors.New(mtrpcpb.Code_CODE_FAILED_PRECONDITION,
 			fmt.Sprintf("pgbackrest config file not found at %s - cannot configure archive mode", configPath))
 	}
 
@@ -589,7 +589,7 @@ func (pm *MultiPoolerManager) initializePgBackRestStanza(ctx context.Context) er
 
 	output, err := safeCombinedOutput(cmd)
 	if err != nil {
-		return mterrors.New(mtrpcpb.Code_INTERNAL,
+		return mterrors.New(mtrpcpb.Code_CODE_INTERNAL,
 			fmt.Sprintf("failed to create pgbackrest stanza %s: %v\nOutput: %s", pm.stanzaName(), err, output))
 	}
 

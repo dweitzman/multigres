@@ -212,7 +212,7 @@ func TestBackup_CreateListAndRestore(t *testing.T) {
 
 			// Verify backup metadata
 			assert.Equal(t, fullBackupID, foundBackup.BackupId, "Backup ID should match")
-			assert.Equal(t, multipoolermanagerdata.BackupMetadata_COMPLETE, foundBackup.Status,
+			assert.Equal(t, multipoolermanagerdata.BackupMetadata_STATUS_COMPLETE, foundBackup.Status,
 				"Backup status should be COMPLETE")
 			assert.NotEmpty(t, foundBackup.FinalLsn, "Backup should have final LSN")
 
@@ -260,7 +260,7 @@ func TestBackup_CreateListAndRestore(t *testing.T) {
 			}
 
 			require.NotNil(t, foundBackup, "Backup should be in standby's list")
-			assert.Equal(t, multipoolermanagerdata.BackupMetadata_COMPLETE, foundBackup.Status,
+			assert.Equal(t, multipoolermanagerdata.BackupMetadata_STATUS_COMPLETE, foundBackup.Status,
 				"Backup status should be COMPLETE")
 			assert.NotEmpty(t, foundBackup.FinalLsn, "Backup should have final LSN")
 			t.Logf("Backup verified in standby's list: ID=%s, Status=%s, FinalLSN=%s",
@@ -305,7 +305,7 @@ func TestBackup_CreateListAndRestore(t *testing.T) {
 			t.Log("Configuring replication after restore...")
 			primary := &clustermetadatapb.MultiPooler{
 				Id: &clustermetadatapb.ID{
-					Component: clustermetadatapb.ID_MULTIPOOLER,
+					Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 					Cell:      "test-cell",
 					Name:      setup.PrimaryMultipooler.Name,
 				},
@@ -634,7 +634,7 @@ func TestBackup_FromStandby(t *testing.T) {
 
 		require.NotNil(t, foundBackup, "Standby backup should be in the list")
 		assert.Equal(t, resp.BackupId, foundBackup.BackupId, "Backup ID should match")
-		assert.Equal(t, multipoolermanagerdata.BackupMetadata_COMPLETE, foundBackup.Status,
+		assert.Equal(t, multipoolermanagerdata.BackupMetadata_STATUS_COMPLETE, foundBackup.Status,
 			"Backup status should be COMPLETE")
 		assert.NotEmpty(t, foundBackup.FinalLsn, "Backup should have final LSN")
 
@@ -818,7 +818,7 @@ func TestBackup_MultiAdminAPIs(t *testing.T) {
 		standbyClient := multipoolermanagerpb.NewMultiPoolerManagerClient(standbyConn)
 		primary := &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "test-cell",
 				Name:      setup.PrimaryMultipooler.Name,
 			},

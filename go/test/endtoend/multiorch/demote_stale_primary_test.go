@@ -199,7 +199,7 @@ func waitForDivergenceRepaired(t *testing.T, setup *shardsetup.ShardSetup, oldPr
 		}
 
 		// Check if it's now a REPLICA and replicating
-		if resp.Status.PoolerType != clustermetadatapb.PoolerType_REPLICA {
+		if resp.Status.PoolerType != clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA {
 			t.Logf("Old primary type is %s, waiting for REPLICA...", resp.Status.PoolerType)
 			return false
 		}

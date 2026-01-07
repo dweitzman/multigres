@@ -33,7 +33,7 @@ import (
 // createMockNode creates a mock node for testing using FakeClient
 func createMockNode(fakeClient *rpcclient.FakeClient, name string, term int64, walPosition string, healthy bool, role string) *multiorchdatapb.PoolerHealthState {
 	poolerID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      name,
 	}
@@ -82,7 +82,7 @@ func TestDiscoverMaxTerm(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	coordID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIORCH,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 		Cell:      "test-cell",
 		Name:      "test-coordinator",
 	}
@@ -131,7 +131,7 @@ func TestDiscoverMaxTerm(t *testing.T) {
 		}
 
 		pooler2ID := &clustermetadatapb.ID{
-			Component: clustermetadatapb.ID_MULTIPOOLER,
+			Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 			Cell:      "zone1",
 			Name:      "mp2",
 		}
@@ -158,7 +158,7 @@ func TestSelectCandidate(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	coordID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIORCH,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 		Cell:      "test-cell",
 		Name:      "test-coordinator",
 	}
@@ -226,7 +226,7 @@ func TestSelectCandidate(t *testing.T) {
 		}
 
 		poolerID := &clustermetadatapb.ID{
-			Component: clustermetadatapb.ID_MULTIPOOLER,
+			Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 			Cell:      "zone1",
 			Name:      "mp1",
 		}
@@ -253,7 +253,7 @@ func TestRecruitNodes(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	coordID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIORCH,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 		Cell:      "test-cell",
 		Name:      "test-coordinator",
 	}
@@ -294,7 +294,7 @@ func TestRecruitNodes(t *testing.T) {
 
 		// mp3 will reject the term (override after creating the node)
 		mp3ID := &clustermetadatapb.ID{
-			Component: clustermetadatapb.ID_MULTIPOOLER,
+			Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 			Cell:      "zone1",
 			Name:      "mp3",
 		}
@@ -310,7 +310,7 @@ func TestBeginTerm(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	coordID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIORCH,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 		Cell:      "test-cell",
 		Name:      "test-coordinator",
 	}
@@ -362,7 +362,7 @@ func TestBeginTerm(t *testing.T) {
 		// Override responses after creating nodes
 		// mp2 rejects the term
 		mp2ID := &clustermetadatapb.ID{
-			Component: clustermetadatapb.ID_MULTIPOOLER,
+			Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 			Cell:      "zone1",
 			Name:      "mp2",
 		}
@@ -370,7 +370,7 @@ func TestBeginTerm(t *testing.T) {
 
 		// mp3 returns an error
 		mp3ID := &clustermetadatapb.ID{
-			Component: clustermetadatapb.ID_MULTIPOOLER,
+			Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 			Cell:      "zone1",
 			Name:      "mp3",
 		}
@@ -396,7 +396,7 @@ func TestPropagate(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	coordID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIORCH,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 		Cell:      "test-cell",
 		Name:      "test-coordinator",
 	}
@@ -454,7 +454,7 @@ func TestPropagate(t *testing.T) {
 
 		// mp3 will fail SetPrimaryConnInfo
 		mp3ID := &clustermetadatapb.ID{
-			Component: clustermetadatapb.ID_MULTIPOOLER,
+			Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 			Cell:      "zone1",
 			Name:      "mp3",
 		}
@@ -500,7 +500,7 @@ func TestEstablishLeader(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	coordID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIORCH,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 		Cell:      "test-cell",
 		Name:      "test-coordinator",
 	}
@@ -529,7 +529,7 @@ func TestEstablishLeader(t *testing.T) {
 
 		// Override the status response to indicate not ready
 		mp1ID := &clustermetadatapb.ID{
-			Component: clustermetadatapb.ID_MULTIPOOLER,
+			Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 			Cell:      "zone1",
 			Name:      "mp1",
 		}
@@ -547,7 +547,7 @@ func TestSelectCandidate_PrefersInitializedNodes(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	coordID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIORCH,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 		Cell:      "test-cell",
 		Name:      "test-coordinator",
 	}
@@ -646,7 +646,7 @@ func TestSelectCandidate_LSNComparison(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	coordID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIORCH,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 		Cell:      "test-cell",
 		Name:      "test-coordinator",
 	}

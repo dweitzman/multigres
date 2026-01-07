@@ -71,7 +71,7 @@ func TestInitializeEmptyPrimary(t *testing.T) {
 			store, _ := memorytopo.NewServerAndFactory(ctx, "test-cell")
 			defer store.Close()
 			serviceID := &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "test-cell",
 				Name:      "test-pooler",
 			}
@@ -145,7 +145,7 @@ func TestInitializeAsStandby(t *testing.T) {
 			},
 			primary: &clustermetadatapb.MultiPooler{
 				Id: &clustermetadatapb.ID{
-					Component: clustermetadatapb.ID_MULTIPOOLER,
+					Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 					Cell:      "test-cell",
 					Name:      "primary-pooler",
 				},
@@ -171,7 +171,7 @@ func TestInitializeAsStandby(t *testing.T) {
 			},
 			primary: &clustermetadatapb.MultiPooler{
 				Id: &clustermetadatapb.ID{
-					Component: clustermetadatapb.ID_MULTIPOOLER,
+					Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 					Cell:      "test-cell",
 					Name:      "primary-pooler",
 				},
@@ -200,7 +200,7 @@ func TestInitializeAsStandby(t *testing.T) {
 			},
 			primary: &clustermetadatapb.MultiPooler{
 				Id: &clustermetadatapb.ID{
-					Component: clustermetadatapb.ID_MULTIPOOLER,
+					Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 					Cell:      "test-cell",
 					Name:      "primary-pooler",
 				},
@@ -223,7 +223,7 @@ func TestInitializeAsStandby(t *testing.T) {
 			store, _ := memorytopo.NewServerAndFactory(ctx, "test-cell")
 			defer store.Close()
 			serviceID := &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "test-cell",
 				Name:      "test-pooler",
 			}
@@ -306,7 +306,7 @@ func TestInitializeAsStandbySetsPrimaryPoolerID(t *testing.T) {
 	store, _ := memorytopo.NewServerAndFactory(ctx, "test-cell")
 	defer store.Close()
 	serviceID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "test-cell",
 		Name:      "test-pooler",
 	}
@@ -337,7 +337,7 @@ func TestInitializeAsStandbySetsPrimaryPoolerID(t *testing.T) {
 
 	// Create primary MultiPooler
 	primaryID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "test-cell",
 		Name:      "primary-pooler",
 	}
@@ -388,7 +388,7 @@ func TestHelperMethods(t *testing.T) {
 
 	t.Run("getShardID", func(t *testing.T) {
 		serviceID := &clustermetadatapb.ID{
-			Component: clustermetadatapb.ID_MULTIPOOLER,
+			Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 			Cell:      "test-cell",
 			Name:      "test-pooler",
 		}

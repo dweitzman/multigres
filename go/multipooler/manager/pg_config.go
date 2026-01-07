@@ -73,12 +73,12 @@ func parseSynchronousStandbyNames(value string) (*SyncStandbyConfig, error) {
 
 	// Handle empty case
 	if value == "" {
-		return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, "synchronous replication not configured")
+		return nil, mterrors.New(mtrpcpb.Code_CODE_FAILED_PRECONDITION, "synchronous replication not configured")
 	}
 
 	// Handle wildcard case - not supported in Multigres context
 	if value == "*" || strings.Contains(value, "(*)") {
-		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
+		return nil, mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT,
 			"wildcard (*) is not supported in Multigres - standby list must be explicit")
 	}
 
@@ -88,14 +88,14 @@ func parseSynchronousStandbyNames(value string) (*SyncStandbyConfig, error) {
 	// for this format here.
 	matches := syncStandbyNamesRegex.FindStringSubmatch(value)
 	if matches == nil {
-		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
+		return nil, mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT,
 			fmt.Sprintf("invalid synchronous_standby_names format: %q", value))
 	}
 
 	methodStr := strings.ToUpper(matches[1]) // Normalize to uppercase
 	numSync, err := strconv.ParseInt(matches[2], 10, 32)
 	if err != nil {
-		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
+		return nil, mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT,
 			fmt.Sprintf("invalid num_sync value in synchronous_standby_names: %q", matches[2]))
 	}
 
@@ -107,14 +107,14 @@ func parseSynchronousStandbyNames(value string) (*SyncStandbyConfig, error) {
 	case "ANY":
 		method = multipoolermanagerdata.SynchronousMethod_SYNCHRONOUS_METHOD_ANY
 	default:
-		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
+		return nil, mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT,
 			fmt.Sprintf("unsupported synchronous method: %q", methodStr))
 	}
 
 	// Parse member list
 	membersStr := strings.TrimSpace(matches[3])
 	if membersStr == "" {
-		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
+		return nil, mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT,
 			"empty member list in synchronous_standby_names")
 	}
 
@@ -136,7 +136,7 @@ func parseSynchronousStandbyNames(value string) (*SyncStandbyConfig, error) {
 	}
 
 	if len(standbyIDs) == 0 {
-		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
+		return nil, mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT,
 			"no valid members found in synchronous_standby_names")
 	}
 

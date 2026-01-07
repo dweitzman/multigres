@@ -60,12 +60,12 @@ func TestRecoveryEngine_HealthCheckQueue(t *testing.T) {
 
 	// Add poolers to topology
 	require.NoError(t, ts.CreateMultiPooler(ctx, &clustermetadata.MultiPooler{
-		Id:       &clustermetadata.ID{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "pooler1"},
+		Id:       &clustermetadata.ID{Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "pooler1"},
 		Database: "mydb", TableGroup: "tg1", Shard: "0",
 		Hostname: "host1",
 	}))
 	require.NoError(t, ts.CreateMultiPooler(ctx, &clustermetadata.MultiPooler{
-		Id:       &clustermetadata.ID{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "pooler2"},
+		Id:       &clustermetadata.ID{Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "pooler2"},
 		Database: "mydb", TableGroup: "tg1", Shard: "1",
 		Hostname: "host2",
 	}))
@@ -155,7 +155,7 @@ func TestRecoveryEngine_HealthCheckQueueDeduplication(t *testing.T) {
 
 	// Add pooler to topology
 	require.NoError(t, ts.CreateMultiPooler(ctx, &clustermetadata.MultiPooler{
-		Id:       &clustermetadata.ID{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "pooler1"},
+		Id:       &clustermetadata.ID{Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "pooler1"},
 		Database: "mydb", TableGroup: "tg1", Shard: "0",
 		Hostname: "host1",
 	}))
@@ -214,7 +214,7 @@ func TestRecoveryEngine_HealthCheckWorkerPool(t *testing.T) {
 	// Add multiple poolers
 	for i := range 20 {
 		require.NoError(t, ts.CreateMultiPooler(ctx, &clustermetadata.MultiPooler{
-			Id:       &clustermetadata.ID{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: fmt.Sprintf("pooler-%d", i)},
+			Id:       &clustermetadata.ID{Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: fmt.Sprintf("pooler-%d", i)},
 			Database: "mydb", TableGroup: "tg1", Shard: "0",
 			Hostname: "host1",
 		}))

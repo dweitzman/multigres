@@ -73,7 +73,7 @@ func TestIsInitialized(t *testing.T) {
 			pooler: &multiorchdata.PoolerHealthState{
 				IsLastCheckValid: true,
 				MultiPooler:      &clustermetadatapb.MultiPooler{},
-				PoolerType:       clustermetadatapb.PoolerType_PRIMARY,
+				PoolerType:       clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 				IsInitialized:    true,
 				PrimaryStatus:    &multipoolermanagerdata.PrimaryStatus{Lsn: "0/1234"},
 			},
@@ -84,7 +84,7 @@ func TestIsInitialized(t *testing.T) {
 			pooler: &multiorchdata.PoolerHealthState{
 				IsLastCheckValid: true,
 				MultiPooler:      &clustermetadatapb.MultiPooler{},
-				PoolerType:       clustermetadatapb.PoolerType_REPLICA,
+				PoolerType:       clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 				IsInitialized:    true,
 				ReplicationStatus: &multipoolermanagerdata.StandbyReplicationStatus{
 					LastReplayLsn: "0/1234",
@@ -97,7 +97,7 @@ func TestIsInitialized(t *testing.T) {
 			pooler: &multiorchdata.PoolerHealthState{
 				IsLastCheckValid: true,
 				MultiPooler:      &clustermetadatapb.MultiPooler{},
-				PoolerType:       clustermetadatapb.PoolerType_REPLICA,
+				PoolerType:       clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 				IsInitialized:    false,
 				ReplicationStatus: &multipoolermanagerdata.StandbyReplicationStatus{
 					LastReplayLsn: "0/1234",

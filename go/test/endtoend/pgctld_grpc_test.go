@@ -69,7 +69,7 @@ func TestGRPCServerIntegration(t *testing.T) {
 		// Step 1: Check initial status
 		statusResp, err := client.Status(ctx, &pb.StatusRequest{})
 		require.NoError(t, err)
-		assert.Equal(t, pb.ServerStatus_NOT_INITIALIZED, statusResp.GetStatus())
+		assert.Equal(t, pb.ServerStatus_SERVER_STATUS_NOT_INITIALIZED, statusResp.GetStatus())
 
 		// Step 2: Initialize data directory
 		_, err = client.InitDataDir(ctx, &pb.InitDataDirRequest{})
@@ -83,7 +83,7 @@ func TestGRPCServerIntegration(t *testing.T) {
 		// Step 4: Check status - should be running
 		statusResp, err = client.Status(ctx, &pb.StatusRequest{})
 		require.NoError(t, err)
-		assert.Equal(t, pb.ServerStatus_RUNNING, statusResp.GetStatus())
+		assert.Equal(t, pb.ServerStatus_SERVER_STATUS_RUNNING, statusResp.GetStatus())
 		assert.NotZero(t, statusResp.GetPid())
 
 		// Step 5: Get version
@@ -104,7 +104,7 @@ func TestGRPCServerIntegration(t *testing.T) {
 		// Step 8: Check status again
 		statusResp, err = client.Status(ctx, &pb.StatusRequest{})
 		require.NoError(t, err)
-		assert.Equal(t, pb.ServerStatus_RUNNING, statusResp.GetStatus())
+		assert.Equal(t, pb.ServerStatus_SERVER_STATUS_RUNNING, statusResp.GetStatus())
 
 		// Step 9: Stop PostgreSQL
 		stopResp, err := client.Stop(ctx, &pb.StopRequest{Mode: "fast"})
@@ -114,7 +114,7 @@ func TestGRPCServerIntegration(t *testing.T) {
 		// Step 10: Final status check
 		statusResp, err = client.Status(ctx, &pb.StatusRequest{})
 		require.NoError(t, err)
-		assert.Equal(t, pb.ServerStatus_STOPPED, statusResp.GetStatus())
+		assert.Equal(t, pb.ServerStatus_SERVER_STATUS_STOPPED, statusResp.GetStatus())
 	})
 }
 
@@ -321,7 +321,7 @@ func TestGRPCWithDifferentConfigurations(t *testing.T) {
 				// Verify stopped
 				statusResp, err := client.Status(ctx, &pb.StatusRequest{})
 				require.NoError(t, err)
-				assert.Equal(t, pb.ServerStatus_STOPPED, statusResp.GetStatus())
+				assert.Equal(t, pb.ServerStatus_SERVER_STATUS_STOPPED, statusResp.GetStatus())
 			})
 		}
 	})
@@ -361,7 +361,7 @@ func TestGRPCUninitializedDatabase(t *testing.T) {
 		// Step 1: Check initial status - should be NOT_INITIALIZED
 		statusResp, err := client.Status(ctx, &pb.StatusRequest{})
 		require.NoError(t, err)
-		assert.Equal(t, pb.ServerStatus_NOT_INITIALIZED, statusResp.GetStatus())
+		assert.Equal(t, pb.ServerStatus_SERVER_STATUS_NOT_INITIALIZED, statusResp.GetStatus())
 		assert.Equal(t, "Data directory is not initialized", statusResp.GetMessage())
 
 		// Step 2: Try to start without initialization - should fail with proper error
@@ -398,7 +398,7 @@ func TestGRPCUninitializedDatabase(t *testing.T) {
 		// Step 7: Status should now show STOPPED
 		statusResp, err = client.Status(ctx, &pb.StatusRequest{})
 		require.NoError(t, err)
-		assert.Equal(t, pb.ServerStatus_STOPPED, statusResp.GetStatus())
+		assert.Equal(t, pb.ServerStatus_SERVER_STATUS_STOPPED, statusResp.GetStatus())
 	})
 }
 

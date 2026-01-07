@@ -476,15 +476,15 @@ func TestRecoveryEngine_DiscoveryLoop_Integration(t *testing.T) {
 
 	// Add poolers to topology BEFORE starting engine
 	require.NoError(t, ts.CreateMultiPooler(ctx, &clustermetadata.MultiPooler{
-		Id:       &clustermetadata.ID{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "pooler1"},
+		Id:       &clustermetadata.ID{Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "pooler1"},
 		Database: "mydb", TableGroup: "tg1", Shard: "0",
 	}))
 	require.NoError(t, ts.CreateMultiPooler(ctx, &clustermetadata.MultiPooler{
-		Id:       &clustermetadata.ID{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "pooler2"},
+		Id:       &clustermetadata.ID{Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "pooler2"},
 		Database: "mydb", TableGroup: "tg1", Shard: "1",
 	}))
 	require.NoError(t, ts.CreateMultiPooler(ctx, &clustermetadata.MultiPooler{
-		Id:       &clustermetadata.ID{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "pooler3"},
+		Id:       &clustermetadata.ID{Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "pooler3"},
 		Database: "mydb", TableGroup: "tg2", Shard: "0",
 	}))
 
@@ -559,7 +559,7 @@ func TestRecoveryEngine_BookkeepingLoop_Integration(t *testing.T) {
 	oldTime := time.Now().Add(-5 * time.Hour) // 5 hours ago (> 4 hour threshold)
 	oldPooler := &multiorchdatapb.PoolerHealthState{
 		MultiPooler: &clustermetadata.MultiPooler{
-			Id:       &clustermetadata.ID{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "old-pooler"},
+			Id:       &clustermetadata.ID{Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "old-pooler"},
 			Database: "mydb", TableGroup: "tg1", Shard: "0",
 		},
 		LastSeen:            timestamppb.New(oldTime),
@@ -572,7 +572,7 @@ func TestRecoveryEngine_BookkeepingLoop_Integration(t *testing.T) {
 
 	neverSeenPooler := &multiorchdatapb.PoolerHealthState{
 		MultiPooler: &clustermetadata.MultiPooler{
-			Id:       &clustermetadata.ID{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "never-seen"},
+			Id:       &clustermetadata.ID{Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "never-seen"},
 			Database: "mydb", TableGroup: "tg1", Shard: "1",
 		},
 		LastCheckAttempted: timestamppb.New(oldTime),
@@ -586,7 +586,7 @@ func TestRecoveryEngine_BookkeepingLoop_Integration(t *testing.T) {
 
 	healthyPooler := &multiorchdatapb.PoolerHealthState{
 		MultiPooler: &clustermetadata.MultiPooler{
-			Id:       &clustermetadata.ID{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "healthy-pooler"},
+			Id:       &clustermetadata.ID{Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "healthy-pooler"},
 			Database: "mydb", TableGroup: "tg1", Shard: "2",
 		},
 		LastSeen:            timestamppb.New(recentTime),
@@ -649,7 +649,7 @@ func TestRecoveryEngine_FullIntegration(t *testing.T) {
 
 	// Add pooler to topology BEFORE starting
 	require.NoError(t, ts.CreateMultiPooler(ctx, &clustermetadata.MultiPooler{
-		Id:       &clustermetadata.ID{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "new-pooler"},
+		Id:       &clustermetadata.ID{Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "new-pooler"},
 		Database: "mydb", TableGroup: "tg1", Shard: "0",
 		Hostname: "host1",
 	}))
@@ -660,7 +660,7 @@ func TestRecoveryEngine_FullIntegration(t *testing.T) {
 
 	oldPooler := &multiorchdatapb.PoolerHealthState{
 		MultiPooler: &clustermetadata.MultiPooler{
-			Id:       &clustermetadata.ID{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "old-pooler"},
+			Id:       &clustermetadata.ID{Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "old-pooler"},
 			Database: "mydb", TableGroup: "tg1", Shard: "1",
 		},
 		LastSeen:            timestamppb.New(oldTime),
@@ -697,7 +697,7 @@ func TestRecoveryEngine_FullIntegration(t *testing.T) {
 
 	// Update topology (change hostname)
 	retrieved, err := ts.GetMultiPooler(ctx, &clustermetadata.ID{
-		Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "new-pooler",
+		Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "new-pooler",
 	})
 	require.NoError(t, err)
 	retrieved.MultiPooler.Hostname = "host2"

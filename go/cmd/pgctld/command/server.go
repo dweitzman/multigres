@@ -293,7 +293,7 @@ func (s *PgCtldService) Status(ctx context.Context, req *pb.StatusRequest) (*pb.
 			return nil, fmt.Errorf("invalid port: %w", err)
 		}
 		return &pb.StatusResponse{
-			Status:  pb.ServerStatus_NOT_INITIALIZED,
+			Status:  pb.ServerStatus_SERVER_STATUS_NOT_INITIALIZED,
 			DataDir: pgctld.PostgresDataDir(s.poolerDir),
 			Port:    port,
 			Message: "Data directory is not initialized",
@@ -310,11 +310,11 @@ func (s *PgCtldService) Status(ctx context.Context, req *pb.StatusRequest) (*pb.
 	var status pb.ServerStatus
 	switch result.Status {
 	case statusStopped:
-		status = pb.ServerStatus_STOPPED
+		status = pb.ServerStatus_SERVER_STATUS_STOPPED
 	case statusRunning:
-		status = pb.ServerStatus_RUNNING
+		status = pb.ServerStatus_SERVER_STATUS_RUNNING
 	default:
-		status = pb.ServerStatus_STOPPED
+		status = pb.ServerStatus_SERVER_STATUS_STOPPED
 	}
 
 	pid, err := intToInt32(result.PID)

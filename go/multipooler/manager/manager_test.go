@@ -48,7 +48,7 @@ func TestManagerState_InitialState(t *testing.T) {
 	config := &Config{
 		TopoClient: ts,
 		ServiceID: &clustermetadatapb.ID{
-			Component: clustermetadatapb.ID_MULTIPOOLER,
+			Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 			Cell:      "zone1",
 			Name:      "test-service",
 		},
@@ -84,7 +84,7 @@ func TestManagerState_SuccessfulLoad(t *testing.T) {
 
 	// Create the multipooler in topology
 	serviceID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-service",
 	}
@@ -93,8 +93,8 @@ func TestManagerState_SuccessfulLoad(t *testing.T) {
 		Database:      database,
 		Hostname:      "localhost",
 		PortMap:       map[string]int32{"grpc": 8080},
-		Type:          clustermetadatapb.PoolerType_PRIMARY,
-		ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
+		Type:          clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
+		ServingStatus: clustermetadatapb.PoolerServingStatus_POOLER_SERVING_STATUS_SERVING,
 		TableGroup:    constants.DefaultTableGroup,
 		Shard:         constants.DefaultShard,
 	}
@@ -138,7 +138,7 @@ func TestManagerState_LoadFailureTimeout(t *testing.T) {
 
 	// Inject error for all Get operations on multipooler
 	serviceID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-service",
 	}
@@ -181,7 +181,7 @@ func TestManagerState_CancellationDuringLoad(t *testing.T) {
 
 	// Inject error to keep it retrying
 	serviceID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-service",
 	}
@@ -233,7 +233,7 @@ func TestManagerState_RetryUntilSuccess(t *testing.T) {
 
 	// Create the multipooler in topology
 	serviceID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-service",
 	}
@@ -242,8 +242,8 @@ func TestManagerState_RetryUntilSuccess(t *testing.T) {
 		Database:      database,
 		Hostname:      "localhost",
 		PortMap:       map[string]int32{"grpc": 8080},
-		Type:          clustermetadatapb.PoolerType_PRIMARY,
-		ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
+		Type:          clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
+		ServingStatus: clustermetadatapb.PoolerServingStatus_POOLER_SERVING_STATUS_SERVING,
 		TableGroup:    constants.DefaultTableGroup,
 		Shard:         constants.DefaultShard,
 	}
@@ -321,7 +321,7 @@ func TestValidateAndUpdateTerm(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	serviceID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-service",
 	}
@@ -355,7 +355,7 @@ func TestValidateAndUpdateTerm(t *testing.T) {
 			requestTerm:   5,
 			force:         false,
 			expectError:   true,
-			expectedCode:  mtrpcpb.Code_FAILED_PRECONDITION,
+			expectedCode:  mtrpcpb.Code_CODE_FAILED_PRECONDITION,
 			errorContains: "consensus term too old",
 		},
 		{
@@ -371,7 +371,7 @@ func TestValidateAndUpdateTerm(t *testing.T) {
 			requestTerm:   5,
 			force:         false,
 			expectError:   true,
-			expectedCode:  mtrpcpb.Code_FAILED_PRECONDITION,
+			expectedCode:  mtrpcpb.Code_CODE_FAILED_PRECONDITION,
 			errorContains: "not initialized",
 		},
 	}
@@ -406,8 +406,8 @@ func TestValidateAndUpdateTerm(t *testing.T) {
 				Database:      database,
 				Hostname:      "localhost",
 				PortMap:       map[string]int32{"grpc": 8080},
-				Type:          clustermetadatapb.PoolerType_PRIMARY,
-				ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
+				Type:          clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
+				ServingStatus: clustermetadatapb.PoolerServingStatus_POOLER_SERVING_STATUS_SERVING,
 				TableGroup:    constants.DefaultTableGroup,
 				Shard:         constants.DefaultShard,
 			}
@@ -474,7 +474,7 @@ func TestGetBackupLocation(t *testing.T) {
 
 	// Create manager config
 	serviceID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-service",
 	}
@@ -637,7 +637,7 @@ func TestNewMultiPoolerManager_MVPValidation(t *testing.T) {
 	defer ts.Close()
 
 	serviceID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-service",
 	}

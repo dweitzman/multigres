@@ -107,7 +107,7 @@ func TestDemoteAndPromote(t *testing.T) {
 		t.Log("Configuring demoted primary to replicate from standby...")
 		primary := &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "test-cell",
 				Name:      setup.StandbyMultipooler.Name,
 			},
@@ -266,7 +266,7 @@ func TestDemoteAndPromote(t *testing.T) {
 		// Configure demoted primary to replicate from standby
 		primary := &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "test-cell",
 				Name:      setup.StandbyMultipooler.Name,
 			},
@@ -316,7 +316,7 @@ func TestDemoteAndPromote(t *testing.T) {
 		// Configure demoted primary to replicate from standby
 		primary := &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "test-cell",
 				Name:      setup.StandbyMultipooler.Name,
 			},
@@ -420,7 +420,7 @@ func TestDemoteAndPromote(t *testing.T) {
 		// Configure demoted primary to replicate from standby
 		primary := &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "test-cell",
 				Name:      setup.StandbyMultipooler.Name,
 			},
@@ -487,7 +487,7 @@ func TestDemoteAndPromote(t *testing.T) {
 		t.Log("Configuring demoted primary to replicate from standby...")
 		primary := &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "test-cell",
 				Name:      setup.StandbyMultipooler.Name,
 			},

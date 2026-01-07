@@ -153,14 +153,14 @@ func TestPoolerStore_FindHealthyPrimary(t *testing.T) {
 		poolers := []*multiorchdatapb.PoolerHealthState{
 			{
 				MultiPooler: &clustermetadatapb.MultiPooler{
-					Id:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "replica"},
-					Type: clustermetadatapb.PoolerType_REPLICA,
+					Id:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "cell1", Name: "replica"},
+					Type: clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 				},
 			},
 			{
 				MultiPooler: &clustermetadatapb.MultiPooler{
-					Id:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary"},
-					Type: clustermetadatapb.PoolerType_PRIMARY,
+					Id:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "cell1", Name: "primary"},
+					Type: clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 				},
 			},
 		}
@@ -178,14 +178,14 @@ func TestPoolerStore_FindHealthyPrimary(t *testing.T) {
 		poolers := []*multiorchdatapb.PoolerHealthState{
 			{
 				MultiPooler: &clustermetadatapb.MultiPooler{
-					Id:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "replica1"},
-					Type: clustermetadatapb.PoolerType_REPLICA,
+					Id:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "cell1", Name: "replica1"},
+					Type: clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 				},
 			},
 			{
 				MultiPooler: &clustermetadatapb.MultiPooler{
-					Id:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "replica2"},
-					Type: clustermetadatapb.PoolerType_REPLICA,
+					Id:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "cell1", Name: "replica2"},
+					Type: clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 				},
 			},
 		}
@@ -214,8 +214,8 @@ func TestPoolerStore_FindHealthyPrimary(t *testing.T) {
 		poolers := []*multiorchdatapb.PoolerHealthState{
 			{
 				MultiPooler: &clustermetadatapb.MultiPooler{
-					Id:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary"},
-					Type: clustermetadatapb.PoolerType_PRIMARY,
+					Id:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "cell1", Name: "primary"},
+					Type: clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 				},
 			},
 		}
@@ -244,14 +244,14 @@ func TestPoolerStore_FindHealthyPrimary(t *testing.T) {
 		poolers := []*multiorchdatapb.PoolerHealthState{
 			{
 				MultiPooler: &clustermetadatapb.MultiPooler{
-					Id:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary1"},
-					Type: clustermetadatapb.PoolerType_PRIMARY,
+					Id:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "cell1", Name: "primary1"},
+					Type: clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 				},
 			},
 			{
 				MultiPooler: &clustermetadatapb.MultiPooler{
-					Id:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell2", Name: "primary2"},
-					Type: clustermetadatapb.PoolerType_PRIMARY,
+					Id:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "cell2", Name: "primary2"},
+					Type: clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 				},
 			},
 		}
@@ -286,14 +286,14 @@ func TestPoolerStore_FindHealthyPrimary(t *testing.T) {
 		poolers := []*multiorchdatapb.PoolerHealthState{
 			{
 				MultiPooler: &clustermetadatapb.MultiPooler{
-					Id:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary1"},
-					Type: clustermetadatapb.PoolerType_PRIMARY,
+					Id:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "cell1", Name: "primary1"},
+					Type: clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 				},
 			},
 			{
 				MultiPooler: &clustermetadatapb.MultiPooler{
-					Id:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell2", Name: "primary2"},
-					Type: clustermetadatapb.PoolerType_PRIMARY,
+					Id:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "cell2", Name: "primary2"},
+					Type: clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 				},
 			},
 		}

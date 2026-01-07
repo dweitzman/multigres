@@ -262,8 +262,8 @@ func (pd *CellPoolerDiscovery) GetPooler(target *query.Target) *clustermetadatap
 
 	// Default to PRIMARY if not specified
 	targetType := target.PoolerType
-	if targetType == clustermetadatapb.PoolerType_UNKNOWN {
-		targetType = clustermetadatapb.PoolerType_PRIMARY
+	if targetType == clustermetadatapb.PoolerType_POOLER_TYPE_UNKNOWN {
+		targetType = clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY
 	}
 
 	// Debug: Log all discovered poolers
@@ -476,12 +476,12 @@ func (gd *GlobalPoolerDiscovery) GetPooler(target *query.Target) *clustermetadat
 
 	// Default to PRIMARY if not specified
 	targetType := target.PoolerType
-	if targetType == clustermetadatapb.PoolerType_UNKNOWN {
-		targetType = clustermetadatapb.PoolerType_PRIMARY
+	if targetType == clustermetadatapb.PoolerType_POOLER_TYPE_UNKNOWN {
+		targetType = clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY
 	}
 
 	// For replicas, try local cell first
-	if targetType != clustermetadatapb.PoolerType_PRIMARY {
+	if targetType != clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY {
 		if localWatcher, exists := gd.cellWatchers[gd.localCell]; exists {
 			if pooler := localWatcher.GetPooler(target); pooler != nil {
 				return pooler

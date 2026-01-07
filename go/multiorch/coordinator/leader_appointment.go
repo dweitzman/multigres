@@ -137,7 +137,7 @@ func (c *Coordinator) discoverMaxTerm(ctx context.Context, cohort []*multiorchda
 
 	// All nodes failed
 	if len(errs) > 0 {
-		return 0, mterrors.Errorf(mtrpcpb.Code_UNAVAILABLE,
+		return 0, mterrors.Errorf(mtrpcpb.Code_CODE_UNAVAILABLE,
 			"failed to query term from any node: %v", errs[0])
 	}
 
@@ -186,7 +186,7 @@ func (c *Coordinator) selectCandidate(ctx context.Context, cohort []*multiorchda
 	}
 
 	if len(statuses) == 0 {
-		return nil, mterrors.New(mtrpcpb.Code_UNAVAILABLE,
+		return nil, mterrors.New(mtrpcpb.Code_CODE_UNAVAILABLE,
 			"no healthy nodes available for candidate selection")
 	}
 
@@ -211,7 +211,7 @@ func (c *Coordinator) selectCandidate(ctx context.Context, cohort []*multiorchda
 		// Parse and validate LSN
 		lsn, err := pglogrepl.ParseLSN(status.walPosition)
 		if err != nil {
-			return nil, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,
+			return nil, mterrors.Errorf(mtrpcpb.Code_CODE_INVALID_ARGUMENT,
 				"invalid LSN format for node %s: %s (error: %v)",
 				status.node.MultiPooler.Id.Name, status.walPosition, err)
 		}
@@ -471,7 +471,7 @@ func (c *Coordinator) EstablishLeader(ctx context.Context, candidate *multiorchd
 	}
 
 	if state.State != "ready" {
-		return mterrors.Errorf(mtrpcpb.Code_INTERNAL,
+		return mterrors.Errorf(mtrpcpb.Code_CODE_INTERNAL,
 			"leader is not in ready state: %s", state.State)
 	}
 

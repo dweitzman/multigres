@@ -40,31 +40,31 @@ const (
 type ServerStatus int32
 
 const (
-	ServerStatus_UNKNOWN         ServerStatus = 0
-	ServerStatus_STOPPED         ServerStatus = 1
-	ServerStatus_STARTING        ServerStatus = 2
-	ServerStatus_RUNNING         ServerStatus = 3
-	ServerStatus_STOPPING        ServerStatus = 4
-	ServerStatus_NOT_INITIALIZED ServerStatus = 5
+	ServerStatus_SERVER_STATUS_UNKNOWN         ServerStatus = 0
+	ServerStatus_SERVER_STATUS_STOPPED         ServerStatus = 1
+	ServerStatus_SERVER_STATUS_STARTING        ServerStatus = 2
+	ServerStatus_SERVER_STATUS_RUNNING         ServerStatus = 3
+	ServerStatus_SERVER_STATUS_STOPPING        ServerStatus = 4
+	ServerStatus_SERVER_STATUS_NOT_INITIALIZED ServerStatus = 5
 )
 
 // Enum value maps for ServerStatus.
 var (
 	ServerStatus_name = map[int32]string{
-		0: "UNKNOWN",
-		1: "STOPPED",
-		2: "STARTING",
-		3: "RUNNING",
-		4: "STOPPING",
-		5: "NOT_INITIALIZED",
+		0: "SERVER_STATUS_UNKNOWN",
+		1: "SERVER_STATUS_STOPPED",
+		2: "SERVER_STATUS_STARTING",
+		3: "SERVER_STATUS_RUNNING",
+		4: "SERVER_STATUS_STOPPING",
+		5: "SERVER_STATUS_NOT_INITIALIZED",
 	}
 	ServerStatus_value = map[string]int32{
-		"UNKNOWN":         0,
-		"STOPPED":         1,
-		"STARTING":        2,
-		"RUNNING":         3,
-		"STOPPING":        4,
-		"NOT_INITIALIZED": 5,
+		"SERVER_STATUS_UNKNOWN":         0,
+		"SERVER_STATUS_STOPPED":         1,
+		"SERVER_STATUS_STARTING":        2,
+		"SERVER_STATUS_RUNNING":         3,
+		"SERVER_STATUS_STOPPING":        4,
+		"SERVER_STATUS_NOT_INITIALIZED": 5,
 	}
 )
 
@@ -616,7 +616,7 @@ func (x *StatusResponse) GetStatus() ServerStatus {
 	if x != nil {
 		return x.Status
 	}
-	return ServerStatus_UNKNOWN
+	return ServerStatus_SERVER_STATUS_UNKNOWN
 }
 
 func (x *StatusResponse) GetPid() int32 {
@@ -1072,14 +1072,14 @@ const file_pgctldservice_proto_rawDesc = "" +
 	"\adry_run\x18\x02 \x01(\bR\x06dryRun\x12\x1d\n" +
 	"\n" +
 	"extra_args\x18\x03 \x03(\tR\textraArgs\"\x12\n" +
-	"\x10PgRewindResponse*f\n" +
-	"\fServerStatus\x12\v\n" +
-	"\aUNKNOWN\x10\x00\x12\v\n" +
-	"\aSTOPPED\x10\x01\x12\f\n" +
-	"\bSTARTING\x10\x02\x12\v\n" +
-	"\aRUNNING\x10\x03\x12\f\n" +
-	"\bSTOPPING\x10\x04\x12\x13\n" +
-	"\x0fNOT_INITIALIZED\x10\x052\xe4\x04\n" +
+	"\x10PgRewindResponse*\xba\x01\n" +
+	"\fServerStatus\x12\x19\n" +
+	"\x15SERVER_STATUS_UNKNOWN\x10\x00\x12\x19\n" +
+	"\x15SERVER_STATUS_STOPPED\x10\x01\x12\x1a\n" +
+	"\x16SERVER_STATUS_STARTING\x10\x02\x12\x19\n" +
+	"\x15SERVER_STATUS_RUNNING\x10\x03\x12\x1a\n" +
+	"\x16SERVER_STATUS_STOPPING\x10\x04\x12!\n" +
+	"\x1dSERVER_STATUS_NOT_INITIALIZED\x10\x052\xe4\x04\n" +
 	"\x06PgCtld\x12B\n" +
 	"\x05Start\x12\x1b.pgctldservice.StartRequest\x1a\x1c.pgctldservice.StartResponse\x12?\n" +
 	"\x04Stop\x12\x1a.pgctldservice.StopRequest\x1a\x1b.pgctldservice.StopResponse\x12H\n" +

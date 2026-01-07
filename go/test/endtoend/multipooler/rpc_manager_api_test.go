@@ -129,7 +129,7 @@ func TestPrimaryStatus(t *testing.T) {
 
 		// Clear any existing sync replication configuration
 		clearReq := &multipoolermanagerdata.ConfigureSynchronousReplicationRequest{
-			SynchronousCommit: multipoolermanagerdata.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+			SynchronousCommit: multipoolermanagerdata.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 			SynchronousMethod: multipoolermanagerdata.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			NumSync:           0,
 			StandbyIds:        []*clustermetadatapb.ID{},
@@ -153,7 +153,7 @@ func TestPrimaryStatus(t *testing.T) {
 
 		// Verify sync replication config is present but with empty standby list
 		require.NotNil(t, statusResp.Status.SyncReplicationConfig, "Sync replication config should be present")
-		assert.Equal(t, multipoolermanagerdata.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+		assert.Equal(t, multipoolermanagerdata.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 			statusResp.Status.SyncReplicationConfig.SynchronousCommit, "Should have synchronous_commit level")
 		assert.Empty(t, statusResp.Status.SyncReplicationConfig.StandbyIds, "StandbyIds should be empty when not configured")
 		assert.Equal(t, int32(0), statusResp.Status.SyncReplicationConfig.NumSync, "NumSync should be 0")
@@ -172,7 +172,7 @@ func TestPrimaryStatus(t *testing.T) {
 			makeMultipoolerID("test-cell", "standby2"),
 		}
 		configReq := &multipoolermanagerdata.ConfigureSynchronousReplicationRequest{
-			SynchronousCommit: multipoolermanagerdata.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_APPLY,
+			SynchronousCommit: multipoolermanagerdata.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_REMOTE_APPLY,
 			SynchronousMethod: multipoolermanagerdata.SynchronousMethod_SYNCHRONOUS_METHOD_ANY,
 			NumSync:           2,
 			StandbyIds:        standbyIDs,
@@ -185,7 +185,7 @@ func TestPrimaryStatus(t *testing.T) {
 		t.Log("Waiting for configuration to converge...")
 		waitForSyncConfigConvergenceWithClient(t, primaryManagerClient, func(config *multipoolermanagerdata.SynchronousReplicationConfiguration) bool {
 			return config != nil &&
-				config.SynchronousCommit == multipoolermanagerdata.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_APPLY &&
+				config.SynchronousCommit == multipoolermanagerdata.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_REMOTE_APPLY &&
 				config.SynchronousMethod == multipoolermanagerdata.SynchronousMethod_SYNCHRONOUS_METHOD_ANY &&
 				config.NumSync == 2 &&
 				len(config.StandbyIds) == 2
@@ -198,7 +198,7 @@ func TestPrimaryStatus(t *testing.T) {
 
 		// Verify sync replication config is present and correct
 		require.NotNil(t, statusResp.Status.SyncReplicationConfig, "Sync replication config should be present")
-		assert.Equal(t, multipoolermanagerdata.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_APPLY,
+		assert.Equal(t, multipoolermanagerdata.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_REMOTE_APPLY,
 			statusResp.Status.SyncReplicationConfig.SynchronousCommit, "Synchronous commit level should match")
 		assert.Equal(t, multipoolermanagerdata.SynchronousMethod_SYNCHRONOUS_METHOD_ANY,
 			statusResp.Status.SyncReplicationConfig.SynchronousMethod, "Synchronous method should match")
@@ -218,7 +218,7 @@ func TestPrimaryStatus(t *testing.T) {
 
 		// Cleanup
 		clearReq := &multipoolermanagerdata.ConfigureSynchronousReplicationRequest{
-			SynchronousCommit: multipoolermanagerdata.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+			SynchronousCommit: multipoolermanagerdata.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 			SynchronousMethod: multipoolermanagerdata.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			NumSync:           0,
 			StandbyIds:        []*clustermetadatapb.ID{},
@@ -236,7 +236,7 @@ func TestPrimaryStatus(t *testing.T) {
 		// Ensure standby is connected and replicating
 		primary := &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "test-cell",
 				Name:      setup.PrimaryMultipooler.Name,
 			},
@@ -346,7 +346,7 @@ func TestGetFollowers(t *testing.T) {
 
 		// Clear any existing sync replication configuration
 		clearReq := &multipoolermanagerdata.ConfigureSynchronousReplicationRequest{
-			SynchronousCommit: multipoolermanagerdata.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+			SynchronousCommit: multipoolermanagerdata.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 			SynchronousMethod: multipoolermanagerdata.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			NumSync:           0,
 			StandbyIds:        []*clustermetadatapb.ID{},
@@ -388,7 +388,7 @@ func TestGetFollowers(t *testing.T) {
 		// Configure synchronous replication with the standby
 		standbyID := makeMultipoolerID("test-cell", setup.StandbyMultipooler.Name)
 		configReq := &multipoolermanagerdata.ConfigureSynchronousReplicationRequest{
-			SynchronousCommit: multipoolermanagerdata.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+			SynchronousCommit: multipoolermanagerdata.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 			SynchronousMethod: multipoolermanagerdata.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			NumSync:           1,
 			StandbyIds:        []*clustermetadatapb.ID{standbyID},
@@ -457,7 +457,7 @@ func TestGetFollowers(t *testing.T) {
 		// Configure synchronous replication with the standby
 		standbyID := makeMultipoolerID("test-cell", setup.StandbyMultipooler.Name)
 		configReq := &multipoolermanagerdata.ConfigureSynchronousReplicationRequest{
-			SynchronousCommit: multipoolermanagerdata.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+			SynchronousCommit: multipoolermanagerdata.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 			SynchronousMethod: multipoolermanagerdata.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			NumSync:           1,
 			StandbyIds:        []*clustermetadatapb.ID{standbyID},
@@ -542,7 +542,7 @@ func TestGetFollowers(t *testing.T) {
 		connectedID := makeMultipoolerID("test-cell", setup.StandbyMultipooler.Name)
 		disconnectedID := makeMultipoolerID("test-cell", "missing-standby")
 		configReq := &multipoolermanagerdata.ConfigureSynchronousReplicationRequest{
-			SynchronousCommit: multipoolermanagerdata.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+			SynchronousCommit: multipoolermanagerdata.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 			SynchronousMethod: multipoolermanagerdata.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			NumSync:           2,
 			StandbyIds:        []*clustermetadatapb.ID{connectedID, disconnectedID},

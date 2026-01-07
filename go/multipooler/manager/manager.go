@@ -165,10 +165,10 @@ func NewMultiPoolerManager(logger *slog.Logger, config *Config) (*MultiPoolerMan
 func NewMultiPoolerManagerWithTimeout(logger *slog.Logger, config *Config, loadTimeout time.Duration) (*MultiPoolerManager, error) {
 	// Validate required config fields
 	if config.TableGroup == "" {
-		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "TableGroup is required")
+		return nil, mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT, "TableGroup is required")
 	}
 	if config.Shard == "" {
-		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "Shard is required")
+		return nil, mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT, "Shard is required")
 	}
 
 	// MVP validation: fail fast if tablegroup/shard are not the MVP defaults
@@ -208,7 +208,7 @@ func NewMultiPoolerManagerWithTimeout(logger *slog.Logger, config *Config, loadT
 		cancel:                   cancel,
 		loadTimeout:              loadTimeout,
 		autoRestoreRetryInterval: 1 * time.Second,
-		queryServingState:        clustermetadatapb.PoolerServingStatus_NOT_SERVING,
+		queryServingState:        clustermetadatapb.PoolerServingStatus_POOLER_SERVING_STATUS_NOT_SERVING,
 		pgctldClient:             pgctldClient,
 		connPoolMgr:              connPoolMgr,
 		readyChan:                make(chan struct{}),
@@ -454,7 +454,7 @@ func (pm *MultiPoolerManager) getPoolerType() clustermetadatapb.PoolerType {
 	if pm.cachedMultipooler.multipooler != nil && pm.cachedMultipooler.multipooler.MultiPooler != nil {
 		return pm.cachedMultipooler.multipooler.Type
 	}
-	return clustermetadatapb.PoolerType_UNKNOWN
+	return clustermetadatapb.PoolerType_POOLER_TYPE_UNKNOWN
 }
 
 // getMultipoolerIDString returns the multipooler ID as a string
@@ -464,7 +464,7 @@ func (pm *MultiPoolerManager) getMultipoolerIDString() (string, error) {
 	if pm.cachedMultipooler.multipooler != nil && pm.cachedMultipooler.multipooler.Id != nil {
 		return topoclient.MultiPoolerIDString(pm.cachedMultipooler.multipooler.Id), nil
 	}
-	return "", mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, "multipooler ID not available")
+	return "", mterrors.New(mtrpcpb.Code_CODE_FAILED_PRECONDITION, "multipooler ID not available")
 }
 
 // getMultipoolerName returns just the name part of the multipooler ID (e.g., "4zrhr2mw").
@@ -474,7 +474,7 @@ func (pm *MultiPoolerManager) getMultipoolerName() (string, error) {
 	if pm.cachedMultipooler.multipooler != nil && pm.cachedMultipooler.multipooler.Id != nil {
 		return pm.cachedMultipooler.multipooler.Id.Name, nil
 	}
-	return "", mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, "multipooler ID not available")
+	return "", mterrors.New(mtrpcpb.Code_CODE_FAILED_PRECONDITION, "multipooler ID not available")
 }
 
 // backupLocationPath returns the full backup location path for a given database, table group,
@@ -513,11 +513,11 @@ func (pm *MultiPoolerManager) checkReady() error {
 	case ManagerStateReady:
 		return nil
 	case ManagerStateStarting:
-		return mterrors.New(mtrpcpb.Code_UNAVAILABLE, "manager is still starting up")
+		return mterrors.New(mtrpcpb.Code_CODE_UNAVAILABLE, "manager is still starting up")
 	case ManagerStateError:
 		return mterrors.Wrap(pm.stateError, "manager is in error state")
 	default:
-		return mterrors.New(mtrpcpb.Code_INTERNAL, fmt.Sprintf("manager is in unknown state: %s", pm.state))
+		return mterrors.New(mtrpcpb.Code_CODE_INTERNAL, fmt.Sprintf("manager is in unknown state: %s", pm.state))
 	}
 }
 
@@ -532,7 +532,7 @@ func (pm *MultiPoolerManager) checkPoolerType(expectedType clustermetadatapb.Poo
 			"service_id", pm.serviceID.String(),
 			"pooler_type", poolerType.String(),
 			"expected_type", expectedType.String())
-		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
+		return mterrors.New(mtrpcpb.Code_CODE_FAILED_PRECONDITION,
 			fmt.Sprintf("operation not allowed: pooler type is %s, must be %s (service_id: %s)",
 				poolerType.String(), expectedType.String(), pm.serviceID.String()))
 	}
@@ -554,7 +554,7 @@ func (pm *MultiPoolerManager) getCurrentTermNumber(ctx context.Context) (int64, 
 // This is a common guardrail for replication-related operations on standby servers
 func (pm *MultiPoolerManager) checkReplicaGuardrails(ctx context.Context) error {
 	// Guardrail: Check pooler type - only REPLICA poolers can perform replication operations
-	if err := pm.checkPoolerType(clustermetadatapb.PoolerType_REPLICA, "Replication operation"); err != nil {
+	if err := pm.checkPoolerType(clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA, "Replication operation"); err != nil {
 		return err
 	}
 
@@ -567,7 +567,7 @@ func (pm *MultiPoolerManager) checkReplicaGuardrails(ctx context.Context) error 
 
 	if !isInRecovery {
 		pm.logger.ErrorContext(ctx, "Replication operation called on non-standby instance", "service_id", pm.serviceID.String())
-		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
+		return mterrors.New(mtrpcpb.Code_CODE_FAILED_PRECONDITION,
 			fmt.Sprintf("operation not allowed: the PostgreSQL instance is not in standby mode (service_id: %s)", pm.serviceID.String()))
 	}
 
@@ -578,7 +578,7 @@ func (pm *MultiPoolerManager) checkReplicaGuardrails(ctx context.Context) error 
 // This is a common guardrail for primary-only operations
 func (pm *MultiPoolerManager) checkPrimaryGuardrails(ctx context.Context) error {
 	// Guardrail: Check pooler type - only PRIMARY poolers can perform primary operations
-	if err := pm.checkPoolerType(clustermetadatapb.PoolerType_PRIMARY, "Primary operation"); err != nil {
+	if err := pm.checkPoolerType(clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY, "Primary operation"); err != nil {
 		return err
 	}
 
@@ -591,7 +591,7 @@ func (pm *MultiPoolerManager) checkPrimaryGuardrails(ctx context.Context) error 
 
 	if isInRecovery {
 		pm.logger.ErrorContext(ctx, "Primary operation called on standby instance", "service_id", pm.serviceID.String())
-		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
+		return mterrors.New(mtrpcpb.Code_CODE_FAILED_PRECONDITION,
 			fmt.Sprintf("operation not allowed: the PostgreSQL instance is in standby mode (service_id: %s)", pm.serviceID.String()))
 	}
 
@@ -734,7 +734,7 @@ func (pm *MultiPoolerManager) validateAndUpdateTerm(ctx context.Context, request
 	if currentTerm == 0 {
 		pm.logger.ErrorContext(ctx, "Consensus term not initialized",
 			"service_id", pm.serviceID.String())
-		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
+		return mterrors.New(mtrpcpb.Code_CODE_FAILED_PRECONDITION,
 			"consensus term not initialized, must be explicitly set via SetTerm (use force=true to bypass)")
 	}
 
@@ -747,7 +747,7 @@ func (pm *MultiPoolerManager) validateAndUpdateTerm(ctx context.Context, request
 			"request_term", requestTerm,
 			"current_term", currentTerm,
 			"service_id", pm.serviceID.String())
-		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
+		return mterrors.New(mtrpcpb.Code_CODE_FAILED_PRECONDITION,
 			fmt.Sprintf("consensus term too old: request term %d is less than current term %d (use force=true to bypass)",
 				requestTerm, currentTerm))
 	} else if requestTerm > currentTerm {
@@ -762,7 +762,7 @@ func (pm *MultiPoolerManager) validateAndUpdateTerm(ctx context.Context, request
 		pm.mu.Unlock()
 
 		if cs == nil {
-			return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, "consensus state not initialized")
+			return mterrors.New(mtrpcpb.Code_CODE_FAILED_PRECONDITION, "consensus state not initialized")
 		}
 
 		// Update term atomically (resets accepted leader)
@@ -795,7 +795,7 @@ func (pm *MultiPoolerManager) validateTerm(ctx context.Context, requestTerm int6
 	if currentTerm == 0 {
 		pm.logger.ErrorContext(ctx, "Consensus term not initialized",
 			"service_id", pm.serviceID.String())
-		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
+		return mterrors.New(mtrpcpb.Code_CODE_FAILED_PRECONDITION,
 			"consensus term not initialized, must be explicitly set via SetTerm (use force=true to bypass)")
 	}
 
@@ -805,7 +805,7 @@ func (pm *MultiPoolerManager) validateTerm(ctx context.Context, requestTerm int6
 			"request_term", requestTerm,
 			"current_term", currentTerm,
 			"service_id", pm.serviceID.String())
-		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
+		return mterrors.New(mtrpcpb.Code_CODE_FAILED_PRECONDITION,
 			fmt.Sprintf("consensus term too old: request term %d is less than current term %d (use force=true to bypass)",
 				requestTerm, currentTerm))
 	}
@@ -833,7 +833,7 @@ func (pm *MultiPoolerManager) updateTermIfNewer(ctx context.Context, requestTerm
 	pm.mu.Unlock()
 
 	if cs == nil {
-		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, "consensus state not initialized")
+		return mterrors.New(mtrpcpb.Code_CODE_FAILED_PRECONDITION, "consensus state not initialized")
 	}
 
 	pm.logger.InfoContext(ctx, "Updating to newer term after successful operation",
@@ -865,7 +865,7 @@ func (pm *MultiPoolerManager) validateTermExactMatch(ctx context.Context, reques
 	if currentTerm == 0 {
 		pm.logger.ErrorContext(ctx, "Consensus term not initialized - node not recruited",
 			"service_id", pm.serviceID.String())
-		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
+		return mterrors.New(mtrpcpb.Code_CODE_FAILED_PRECONDITION,
 			"consensus term not initialized - node must be recruited via SetTerm first")
 	}
 
@@ -875,7 +875,7 @@ func (pm *MultiPoolerManager) validateTermExactMatch(ctx context.Context, reques
 			"request_term", requestTerm,
 			"current_term", currentTerm,
 			"service_id", pm.serviceID.String())
-		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
+		return mterrors.New(mtrpcpb.Code_CODE_FAILED_PRECONDITION,
 			fmt.Sprintf("term mismatch: node not recruited for term %d (current term is %d). "+
 				"Coordinator must call SetTerm first to recruit this node",
 				requestTerm, currentTerm))
@@ -937,8 +937,8 @@ func (pm *MultiPoolerManager) checkDemotionState(ctx context.Context) (*demotion
 	servingStatus := pm.multipooler.ServingStatus
 	pm.mu.Unlock()
 
-	state.isReplicaInTopology = (poolerType == clustermetadatapb.PoolerType_REPLICA)
-	state.isServingReadOnly = (servingStatus == clustermetadatapb.PoolerServingStatus_SERVING_RDONLY)
+	state.isReplicaInTopology = (poolerType == clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA)
+	state.isServingReadOnly = (servingStatus == clustermetadatapb.PoolerServingStatus_POOLER_SERVING_STATUS_SERVING_RDONLY)
 
 	// Check if PostgreSQL is in recovery mode (canonical way to check if read-only)
 	isPrimary, err := pm.isPrimary(ctx)
@@ -985,7 +985,7 @@ func (pm *MultiPoolerManager) setServingReadOnly(ctx context.Context, state *dem
 
 	// Update serving status in topology
 	updatedMultipooler, err := pm.topoClient.UpdateMultiPoolerFields(ctx, pm.serviceID, func(mp *clustermetadatapb.MultiPooler) error {
-		mp.ServingStatus = clustermetadatapb.PoolerServingStatus_SERVING_RDONLY
+		mp.ServingStatus = clustermetadatapb.PoolerServingStatus_POOLER_SERVING_STATUS_SERVING_RDONLY
 		return nil
 	})
 	if err != nil {
@@ -996,7 +996,7 @@ func (pm *MultiPoolerManager) setServingReadOnly(ctx context.Context, state *dem
 	pm.mu.Lock()
 	pm.multipooler.MultiPooler = updatedMultipooler
 	pm.updateCachedMultipooler()
-	pm.queryServingState = clustermetadatapb.PoolerServingStatus_SERVING_RDONLY
+	pm.queryServingState = clustermetadatapb.PoolerServingStatus_POOLER_SERVING_STATUS_SERVING_RDONLY
 	pm.mu.Unlock()
 
 	// Stop heartbeat writer
@@ -1037,7 +1037,7 @@ func (pm *MultiPoolerManager) restartPostgresAsStandby(ctx context.Context, stat
 	}
 
 	if pm.pgctldClient == nil {
-		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, "pgctld client not initialized")
+		return mterrors.New(mtrpcpb.Code_CODE_FAILED_PRECONDITION, "pgctld client not initialized")
 	}
 
 	pm.logger.InfoContext(ctx, "Restarting PostgreSQL as standby")
@@ -1083,7 +1083,7 @@ func (pm *MultiPoolerManager) restartPostgresAsStandby(ctx context.Context, stat
 
 	if !inRecovery {
 		pm.logger.ErrorContext(ctx, "PostgreSQL not in recovery mode after restart")
-		return mterrors.New(mtrpcpb.Code_INTERNAL, "server not in recovery mode after restart as standby")
+		return mterrors.New(mtrpcpb.Code_CODE_INTERNAL, "server not in recovery mode after restart as standby")
 	}
 
 	pm.logger.InfoContext(ctx, "PostgreSQL is now running as a standby")
@@ -1099,7 +1099,7 @@ func (pm *MultiPoolerManager) updateTopologyAfterDemotion(ctx context.Context, s
 
 	pm.logger.InfoContext(ctx, "Updating pooler type in topology to REPLICA")
 	updatedMultipooler, err := pm.topoClient.UpdateMultiPoolerFields(ctx, pm.serviceID, func(mp *clustermetadatapb.MultiPooler) error {
-		mp.Type = clustermetadatapb.PoolerType_REPLICA
+		mp.Type = clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA
 		return nil
 	})
 	if err != nil {
@@ -1278,7 +1278,7 @@ func (pm *MultiPoolerManager) checkPromotionState(ctx context.Context, syncRepli
 	poolerType := pm.multipooler.Type
 	pm.mu.Unlock()
 
-	state.isPrimaryInTopology = (poolerType == clustermetadatapb.PoolerType_PRIMARY)
+	state.isPrimaryInTopology = (poolerType == clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY)
 
 	// Default: if no sync config requested, consider it as matching (no requirements to check)
 	state.syncReplicationMatches = true
@@ -1342,7 +1342,7 @@ func (pm *MultiPoolerManager) waitForPromotionComplete(ctx context.Context) erro
 		select {
 		case <-promotionCtx.Done():
 			pm.logger.ErrorContext(ctx, "Timeout waiting for promotion to complete")
-			return mterrors.New(mtrpcpb.Code_DEADLINE_EXCEEDED,
+			return mterrors.New(mtrpcpb.Code_CODE_DEADLINE_EXCEEDED,
 				fmt.Sprintf("timeout waiting for promotion to complete after %v", promotionTimeout))
 
 		case <-ticker.C:
@@ -1371,7 +1371,7 @@ func (pm *MultiPoolerManager) updateTopologyAfterPromotion(ctx context.Context, 
 	pm.logger.InfoContext(ctx, "Topology update needed")
 	pm.logger.InfoContext(ctx, "Updating pooler type in topology to PRIMARY")
 	updatedMultipooler, err := pm.topoClient.UpdateMultiPoolerFields(ctx, pm.serviceID, func(mp *clustermetadatapb.MultiPooler) error {
-		mp.Type = clustermetadatapb.PoolerType_PRIMARY
+		mp.Type = clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY
 		return nil
 	})
 	if err != nil {
@@ -1429,7 +1429,7 @@ func (pm *MultiPoolerManager) ReplicationLag(ctx context.Context) (time.Duration
 	}
 
 	if pm.replTracker == nil {
-		return 0, mterrors.New(mtrpcpb.Code_UNAVAILABLE, "replication tracker not initialized")
+		return 0, mterrors.New(mtrpcpb.Code_CODE_UNAVAILABLE, "replication tracker not initialized")
 	}
 
 	return pm.replTracker.HeartbeatReader().Status()

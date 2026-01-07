@@ -582,13 +582,13 @@ func TestMultiAdminServerGetPoolerStatus(t *testing.T) {
 
 	t.Run("existing pooler returns status", func(t *testing.T) {
 		// Create a pooler in topology
-		poolerID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "pool1"}
+		poolerID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "cell1", Name: "pool1"}
 		pooler := &clustermetadatapb.MultiPooler{
 			Id:         poolerID,
 			Database:   "db1",
 			TableGroup: "default",
 			Shard:      "0-inf",
-			Type:       clustermetadatapb.PoolerType_PRIMARY,
+			Type:       clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 			Hostname:   "pool1.cell1.svc.cluster.local",
 			PortMap:    map[string]int32{"grpc": 15100},
 		}
@@ -598,7 +598,7 @@ func TestMultiAdminServerGetPoolerStatus(t *testing.T) {
 		// Setup fake response - use the same key format as the rpc client
 		poolerKey := topoclient.MultiPoolerIDString(poolerID)
 		expectedStatus := &multipoolermanagerdatapb.Status{
-			PoolerType:      clustermetadatapb.PoolerType_PRIMARY,
+			PoolerType:      clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 			IsInitialized:   true,
 			PostgresRunning: true,
 			PostgresRole:    "primary",
@@ -618,7 +618,7 @@ func TestMultiAdminServerGetPoolerStatus(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, resp)
 		require.NotNil(t, resp.Status)
-		assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, resp.Status.PoolerType)
+		assert.Equal(t, clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY, resp.Status.PoolerType)
 		assert.True(t, resp.Status.IsInitialized)
 		assert.True(t, resp.Status.PostgresRunning)
 		assert.Equal(t, "primary", resp.Status.PostgresRole)
@@ -628,13 +628,13 @@ func TestMultiAdminServerGetPoolerStatus(t *testing.T) {
 
 	t.Run("rpc error returns Unavailable", func(t *testing.T) {
 		// Create another pooler
-		poolerID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "pool2"}
+		poolerID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "cell1", Name: "pool2"}
 		pooler := &clustermetadatapb.MultiPooler{
 			Id:         poolerID,
 			Database:   "db1",
 			TableGroup: "default",
 			Shard:      "0-inf",
-			Type:       clustermetadatapb.PoolerType_REPLICA,
+			Type:       clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 			Hostname:   "pool2.cell1.svc.cluster.local",
 			PortMap:    map[string]int32{"grpc": 15100},
 		}

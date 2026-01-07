@@ -132,19 +132,19 @@ func TestGroupProblemsByShard(t *testing.T) {
 	engine := NewEngine(ts, logger, cfg, []config.WatchTarget{}, &rpcclient.FakeClient{}, newTestCoordinator(ts, &rpcclient.FakeClient{}, "cell1"))
 
 	poolerID1 := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "pooler1",
 	}
 
 	poolerID2 := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "pooler2",
 	}
 
 	poolerID3 := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "pooler3",
 	}
@@ -183,19 +183,19 @@ func TestGroupProblemsByShard(t *testing.T) {
 
 func TestPrioritySorting(t *testing.T) {
 	poolerID1 := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "primary-pooler",
 	}
 
 	poolerID2 := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "replica-pooler",
 	}
 
 	poolerID3 := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "config-pooler",
 	}
@@ -266,13 +266,13 @@ func TestGroupProblemsByShard_DifferentShards(t *testing.T) {
 	engine := NewEngine(ts, logger, cfg, []config.WatchTarget{}, &rpcclient.FakeClient{}, newTestCoordinator(ts, &rpcclient.FakeClient{}, "cell1"))
 
 	poolerID1 := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "pooler1",
 	}
 
 	poolerID2 := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "pooler2",
 	}
@@ -312,7 +312,7 @@ func TestRecheckProblem_PoolerNotFound(t *testing.T) {
 	engine := NewEngine(ts, logger, cfg, []config.WatchTarget{}, &rpcclient.FakeClient{}, newTestCoordinator(ts, &rpcclient.FakeClient{}, "cell1"))
 
 	poolerID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "pooler1",
 	}
@@ -343,13 +343,13 @@ func TestFilterAndPrioritize_ShardWideOnly(t *testing.T) {
 	engine := NewEngine(ts, logger, cfg, []config.WatchTarget{}, &rpcclient.FakeClient{}, newTestCoordinator(ts, &rpcclient.FakeClient{}, "cell1"))
 
 	poolerID1 := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "primary-pooler",
 	}
 
 	poolerID2 := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "replica-pooler",
 	}
@@ -409,13 +409,13 @@ func TestFilterAndPrioritize_NoShardWide(t *testing.T) {
 	engine := NewEngine(ts, logger, cfg, []config.WatchTarget{}, &rpcclient.FakeClient{}, newTestCoordinator(ts, &rpcclient.FakeClient{}, "cell1"))
 
 	poolerID1 := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "pooler1",
 	}
 
 	poolerID2 := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "pooler2",
 	}
@@ -477,13 +477,13 @@ func TestFilterAndPrioritize_MultipleShardWide(t *testing.T) {
 	engine := NewEngine(ts, logger, cfg, []config.WatchTarget{}, &rpcclient.FakeClient{}, newTestCoordinator(ts, &rpcclient.FakeClient{}, "cell1"))
 
 	poolerID1 := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "primary-pooler",
 	}
 
 	poolerID2 := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "another-primary",
 	}
@@ -594,7 +594,7 @@ func TestProcessShardProblems_DependencyEnforcement(t *testing.T) {
 	fakeClient := rpcclient.NewFakeClient()
 	fakeClient.SetStatusResponse("multipooler-cell1-primary-pooler", &multipoolermanagerdatapb.StatusResponse{
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_PRIMARY,
+			PoolerType: clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 			PrimaryStatus: &multipoolermanagerdatapb.PrimaryStatus{
 				Lsn:   "0/DEADBEEF",
 				Ready: true,
@@ -603,7 +603,7 @@ func TestProcessShardProblems_DependencyEnforcement(t *testing.T) {
 	})
 	fakeClient.SetStatusResponse("multipooler-cell1-replica-pooler", &multipoolermanagerdatapb.StatusResponse{
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_REPLICA,
+			PoolerType: clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 			ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 				LastReplayLsn:           "0/DEADBEEF",
 				LastReceiveLsn:          "0/DEADBEEF",
@@ -622,13 +622,13 @@ func TestProcessShardProblems_DependencyEnforcement(t *testing.T) {
 	engine := NewEngine(ts, logger, cfg, []config.WatchTarget{}, fakeClient, newTestCoordinator(ts, fakeClient, "cell1"))
 
 	primaryID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "primary-pooler",
 	}
 
 	replicaID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "replica-pooler",
 	}
@@ -677,7 +677,7 @@ func TestProcessShardProblems_DependencyEnforcement(t *testing.T) {
 			MultiPooler: &clustermetadatapb.MultiPooler{
 				Id:       primaryID,
 				Database: "db1", TableGroup: "tg1", Shard: "0",
-				Type:     clustermetadatapb.PoolerType_PRIMARY,
+				Type:     clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 				Hostname: "primary-host",
 			},
 			IsLastCheckValid: false,
@@ -690,7 +690,7 @@ func TestProcessShardProblems_DependencyEnforcement(t *testing.T) {
 			MultiPooler: &clustermetadatapb.MultiPooler{
 				Id:       replicaID,
 				Database: "db1", TableGroup: "tg1", Shard: "0",
-				Type:     clustermetadatapb.PoolerType_REPLICA,
+				Type:     clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 				Hostname: "replica-host",
 			},
 			IsLastCheckValid: true,
@@ -749,7 +749,7 @@ func TestProcessShardProblems_DependencyEnforcement(t *testing.T) {
 			MultiPooler: &clustermetadatapb.MultiPooler{
 				Id:       primaryID,
 				Database: "db1", TableGroup: "tg1", Shard: "0",
-				Type:     clustermetadatapb.PoolerType_PRIMARY,
+				Type:     clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 				Hostname: "primary-host",
 			},
 			IsLastCheckValid: true, // Primary is healthy
@@ -762,7 +762,7 @@ func TestProcessShardProblems_DependencyEnforcement(t *testing.T) {
 			MultiPooler: &clustermetadatapb.MultiPooler{
 				Id:       replicaID,
 				Database: "db1", TableGroup: "tg1", Shard: "0",
-				Type:     clustermetadatapb.PoolerType_REPLICA,
+				Type:     clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 				Hostname: "replica-host",
 			},
 			IsLastCheckValid: true,
@@ -818,7 +818,7 @@ func TestRecoveryLoop_ValidationPreventsStaleRecovery(t *testing.T) {
 	fakeClient := rpcclient.NewFakeClient()
 	fakeClient.SetStatusResponse("multipooler-cell1-replica-pooler", &multipoolermanagerdatapb.StatusResponse{
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_REPLICA,
+			PoolerType: clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 			ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 				LastReplayLsn:           "0/DEADBEEF",
 				LastReceiveLsn:          "0/DEADBEEF",
@@ -837,7 +837,7 @@ func TestRecoveryLoop_ValidationPreventsStaleRecovery(t *testing.T) {
 	engine := NewEngine(ts, logger, cfg, []config.WatchTarget{}, fakeClient, newTestCoordinator(ts, fakeClient, "cell1"))
 
 	replicaID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "replica-pooler",
 	}
@@ -866,7 +866,7 @@ func TestRecoveryLoop_ValidationPreventsStaleRecovery(t *testing.T) {
 		MultiPooler: &clustermetadatapb.MultiPooler{
 			Id:       replicaID,
 			Database: "db1", TableGroup: "tg1", Shard: "0",
-			Type:     clustermetadatapb.PoolerType_REPLICA,
+			Type:     clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 			Hostname: "replica-host",
 		},
 		IsLastCheckValid: true,
@@ -898,7 +898,7 @@ func TestRecoveryLoop_ValidationPreventsStaleRecovery(t *testing.T) {
 	// This simulates the problem being transient or fixed by external means
 	fakeClient.SetStatusResponse("multipooler-cell1-replica-pooler", &multipoolermanagerdatapb.StatusResponse{
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_REPLICA,
+			PoolerType: clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 			ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 				LastReplayLsn:           "0/DEADBEEF",
 				LastReceiveLsn:          "0/DEADBEEF",
@@ -934,7 +934,7 @@ func TestRecoveryLoop_PostRecoveryRefresh(t *testing.T) {
 	fakeClient := rpcclient.NewFakeClient()
 	fakeClient.SetStatusResponse("multipooler-cell1-primary-pooler", &multipoolermanagerdatapb.StatusResponse{
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_PRIMARY,
+			PoolerType: clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 			PrimaryStatus: &multipoolermanagerdatapb.PrimaryStatus{
 				Lsn:   "0/DEADBEEF",
 				Ready: true,
@@ -943,7 +943,7 @@ func TestRecoveryLoop_PostRecoveryRefresh(t *testing.T) {
 	})
 	fakeClient.SetStatusResponse("multipooler-cell1-replica1-pooler", &multipoolermanagerdatapb.StatusResponse{
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_REPLICA,
+			PoolerType: clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 			ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 				LastReplayLsn:           "0/DEADBEEF",
 				LastReceiveLsn:          "0/DEADBEEF",
@@ -960,7 +960,7 @@ func TestRecoveryLoop_PostRecoveryRefresh(t *testing.T) {
 	})
 	fakeClient.SetStatusResponse("multipooler-cell1-replica2-pooler", &multipoolermanagerdatapb.StatusResponse{
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_REPLICA,
+			PoolerType: clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 			ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 				LastReplayLsn:           "0/DEADBEEF",
 				LastReceiveLsn:          "0/DEADBEEF",
@@ -979,19 +979,19 @@ func TestRecoveryLoop_PostRecoveryRefresh(t *testing.T) {
 	engine := NewEngine(ts, logger, cfg, []config.WatchTarget{}, fakeClient, newTestCoordinator(ts, fakeClient, "cell1"))
 
 	primaryID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "primary-pooler",
 	}
 
 	replica1ID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "replica1-pooler",
 	}
 
 	replica2ID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "replica2-pooler",
 	}
@@ -1027,7 +1027,7 @@ func TestRecoveryLoop_PostRecoveryRefresh(t *testing.T) {
 		MultiPooler: &clustermetadatapb.MultiPooler{
 			Id:       primaryID,
 			Database: "db1", TableGroup: "tg1", Shard: "0",
-			Type:     clustermetadatapb.PoolerType_PRIMARY,
+			Type:     clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 			Hostname: "primary-host",
 		},
 		IsLastCheckValid:   false, // Primary is dead
@@ -1041,7 +1041,7 @@ func TestRecoveryLoop_PostRecoveryRefresh(t *testing.T) {
 		MultiPooler: &clustermetadatapb.MultiPooler{
 			Id:       replica1ID,
 			Database: "db1", TableGroup: "tg1", Shard: "0",
-			Type:     clustermetadatapb.PoolerType_REPLICA,
+			Type:     clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 			Hostname: "replica1-host",
 		},
 		IsLastCheckValid:   true,
@@ -1055,7 +1055,7 @@ func TestRecoveryLoop_PostRecoveryRefresh(t *testing.T) {
 		MultiPooler: &clustermetadatapb.MultiPooler{
 			Id:       replica2ID,
 			Database: "db1", TableGroup: "tg1", Shard: "0",
-			Type:     clustermetadatapb.PoolerType_REPLICA,
+			Type:     clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 			Hostname: "replica2-host",
 		},
 		IsLastCheckValid:   true,
@@ -1085,7 +1085,7 @@ func TestRecoveryLoop_PostRecoveryRefresh(t *testing.T) {
 	// Now fix the primary in the fake client so validation will pass
 	fakeClient.SetStatusResponse("multipooler-cell1-primary-pooler", &multipoolermanagerdatapb.StatusResponse{
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_PRIMARY,
+			PoolerType: clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 			PrimaryStatus: &multipoolermanagerdatapb.PrimaryStatus{
 				Lsn:   "0/NEWPRIMARY",
 				Ready: true,
@@ -1122,7 +1122,7 @@ func TestRecoveryLoop_FullCycle(t *testing.T) {
 	fakeClient := rpcclient.NewFakeClient()
 	fakeClient.SetStatusResponse("multipooler-cell1-primary-pooler", &multipoolermanagerdatapb.StatusResponse{
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_PRIMARY,
+			PoolerType: clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 			PrimaryStatus: &multipoolermanagerdatapb.PrimaryStatus{
 				Lsn:   "0/DEADBEEF",
 				Ready: true,
@@ -1131,7 +1131,7 @@ func TestRecoveryLoop_FullCycle(t *testing.T) {
 	})
 	fakeClient.SetStatusResponse("multipooler-cell1-replica1-pooler", &multipoolermanagerdatapb.StatusResponse{
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_REPLICA,
+			PoolerType: clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 			ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 				LastReplayLsn:           "0/DEADBEEF",
 				LastReceiveLsn:          "0/DEADBEEF",
@@ -1148,7 +1148,7 @@ func TestRecoveryLoop_FullCycle(t *testing.T) {
 	})
 	fakeClient.SetStatusResponse("multipooler-cell1-replica2-pooler", &multipoolermanagerdatapb.StatusResponse{
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_REPLICA,
+			PoolerType: clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 			ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 				LastReplayLsn:           "0/DEADBEEF",
 				LastReceiveLsn:          "0/DEADBEEF",
@@ -1167,19 +1167,19 @@ func TestRecoveryLoop_FullCycle(t *testing.T) {
 	engine := NewEngine(ts, logger, cfg, []config.WatchTarget{}, fakeClient, newTestCoordinator(ts, fakeClient, "cell1"))
 
 	primaryID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "primary-pooler",
 	}
 
 	replica1ID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "replica1-pooler",
 	}
 
 	replica2ID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "replica2-pooler",
 	}
@@ -1222,7 +1222,7 @@ func TestRecoveryLoop_FullCycle(t *testing.T) {
 		MultiPooler: &clustermetadatapb.MultiPooler{
 			Id:       primaryID,
 			Database: "db1", TableGroup: "tg1", Shard: "0",
-			Type:     clustermetadatapb.PoolerType_PRIMARY,
+			Type:     clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 			Hostname: "primary-host",
 		},
 		IsLastCheckValid: true,
@@ -1235,7 +1235,7 @@ func TestRecoveryLoop_FullCycle(t *testing.T) {
 		MultiPooler: &clustermetadatapb.MultiPooler{
 			Id:       replica1ID,
 			Database: "db1", TableGroup: "tg1", Shard: "0",
-			Type:     clustermetadatapb.PoolerType_REPLICA,
+			Type:     clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 			Hostname: "replica1-host",
 		},
 		IsLastCheckValid: true,
@@ -1251,7 +1251,7 @@ func TestRecoveryLoop_FullCycle(t *testing.T) {
 		MultiPooler: &clustermetadatapb.MultiPooler{
 			Id:       replica2ID,
 			Database: "db1", TableGroup: "tg1", Shard: "0",
-			Type:     clustermetadatapb.PoolerType_REPLICA,
+			Type:     clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 			Hostname: "replica2-host",
 		},
 		IsLastCheckValid: true,
@@ -1282,7 +1282,7 @@ func TestRecoveryLoop_PriorityOrdering(t *testing.T) {
 	fakeClient := rpcclient.NewFakeClient()
 	fakeClient.SetStatusResponse("multipooler-cell1-primary-pooler", &multipoolermanagerdatapb.StatusResponse{
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_PRIMARY,
+			PoolerType: clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 			PrimaryStatus: &multipoolermanagerdatapb.PrimaryStatus{
 				Lsn:   "0/DEADBEEF",
 				Ready: true,
@@ -1291,7 +1291,7 @@ func TestRecoveryLoop_PriorityOrdering(t *testing.T) {
 	})
 	fakeClient.SetStatusResponse("multipooler-cell1-replica-pooler", &multipoolermanagerdatapb.StatusResponse{
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_REPLICA,
+			PoolerType: clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 			ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 				LastReplayLsn:           "0/DEADBEEF",
 				LastReceiveLsn:          "0/DEADBEEF",
@@ -1310,7 +1310,7 @@ func TestRecoveryLoop_PriorityOrdering(t *testing.T) {
 	engine := NewEngine(ts, logger, cfg, []config.WatchTarget{}, fakeClient, newTestCoordinator(ts, fakeClient, "cell1"))
 
 	replicaID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "replica-pooler",
 	}
@@ -1401,7 +1401,7 @@ func TestRecoveryLoop_PriorityOrdering(t *testing.T) {
 		MultiPooler: &clustermetadatapb.MultiPooler{
 			Id:       replicaID,
 			Database: "db1", TableGroup: "tg1", Shard: "0",
-			Type:     clustermetadatapb.PoolerType_REPLICA,
+			Type:     clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 			Hostname: "replica-host",
 		},
 		IsLastCheckValid: true,
@@ -1494,7 +1494,7 @@ func TestRecoveryLoop_TracingSpans(t *testing.T) {
 	}
 
 	replicaID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "replica-pooler",
 	}
@@ -1533,7 +1533,7 @@ func TestRecoveryLoop_TracingSpans(t *testing.T) {
 		MultiPooler: &clustermetadatapb.MultiPooler{
 			Id:       replicaID,
 			Database: "db1", TableGroup: "tg1", Shard: "0",
-			Type:     clustermetadatapb.PoolerType_REPLICA,
+			Type:     clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 			Hostname: "replica-host",
 		},
 		IsLastCheckValid: true,

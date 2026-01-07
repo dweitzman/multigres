@@ -60,7 +60,7 @@ func NewQueryPoolerServer(logger *slog.Logger, poolManager connpoolmanager.PoolM
 		logger:        logger,
 		poolManager:   poolManager,
 		executor:      exec,
-		servingStatus: clustermetadatapb.PoolerServingStatus_NOT_SERVING,
+		servingStatus: clustermetadatapb.PoolerServingStatus_POOLER_SERVING_STATUS_NOT_SERVING,
 	}
 }
 
@@ -87,8 +87,8 @@ func (s *QueryPoolerServer) SetServingType(ctx context.Context, servingStatus cl
 func (s *QueryPoolerServer) IsServing() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.servingStatus == clustermetadatapb.PoolerServingStatus_SERVING ||
-		s.servingStatus == clustermetadatapb.PoolerServingStatus_SERVING_RDONLY
+	return s.servingStatus == clustermetadatapb.PoolerServingStatus_POOLER_SERVING_STATUS_SERVING ||
+		s.servingStatus == clustermetadatapb.PoolerServingStatus_POOLER_SERVING_STATUS_SERVING_RDONLY
 }
 
 // IsHealthy checks if the controller is healthy.
@@ -122,7 +122,7 @@ func (s *QueryPoolerServer) RegisterGRPCServices() {
 func (s *QueryPoolerServer) StartServiceForTests() error {
 	ctx, cancel := context.WithTimeout(context.TODO(), 5*time.Second)
 	defer cancel()
-	return s.SetServingType(ctx, clustermetadatapb.PoolerServingStatus_SERVING)
+	return s.SetServingType(ctx, clustermetadatapb.PoolerServingStatus_POOLER_SERVING_STATUS_SERVING)
 }
 
 // Executor returns the executor instance for use by gRPC service handlers.

@@ -57,7 +57,7 @@ func TestPrimaryPosition(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	serviceID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-service",
 	}
@@ -71,14 +71,14 @@ func TestPrimaryPosition(t *testing.T) {
 	}{
 		{
 			name:          "REPLICA pooler returns FAILED_PRECONDITION",
-			poolerType:    clustermetadatapb.PoolerType_REPLICA,
+			poolerType:    clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 			expectError:   true,
-			expectedCode:  mtrpcpb.Code_FAILED_PRECONDITION,
+			expectedCode:  mtrpcpb.Code_CODE_FAILED_PRECONDITION,
 			errorContains: "pooler type is REPLICA",
 		},
 		{
 			name:          "PRIMARY pooler passes type check",
-			poolerType:    clustermetadatapb.PoolerType_PRIMARY,
+			poolerType:    clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 			expectError:   true,
 			errorContains: "failed to get current WAL LSN", // Will fail on WAL LSN query, not type check
 		},
@@ -103,7 +103,7 @@ func TestPrimaryPosition(t *testing.T) {
 				Hostname:      "localhost",
 				PortMap:       map[string]int32{"grpc": 8080},
 				Type:          tt.poolerType,
-				ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
+				ServingStatus: clustermetadatapb.PoolerServingStatus_POOLER_SERVING_STATUS_SERVING,
 				TableGroup:    constants.DefaultTableGroup,
 				Shard:         constants.DefaultShard,
 			}
@@ -124,7 +124,7 @@ func TestPrimaryPosition(t *testing.T) {
 			mockQueryService := mock.NewQueryService()
 			// PRIMARY: pg_is_in_recovery returns false (not in recovery)
 			// REPLICA: pg_is_in_recovery returns true (in recovery)
-			isReplica := tt.poolerType == clustermetadatapb.PoolerType_REPLICA
+			isReplica := tt.poolerType == clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA
 			mockQueryService.AddQueryPattern("SELECT pg_is_in_recovery", mock.MakeQueryResult([]string{"pg_is_in_recovery"}, [][]any{{isReplica}}))
 			manager.qsc = &mockPoolerController{queryService: mockQueryService}
 
@@ -162,7 +162,7 @@ func TestActionLock_MutationMethodsTimeout(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	serviceID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-service",
 	}
@@ -182,8 +182,8 @@ func TestActionLock_MutationMethodsTimeout(t *testing.T) {
 		Database:      database,
 		Hostname:      "localhost",
 		PortMap:       map[string]int32{"grpc": 8080},
-		Type:          clustermetadatapb.PoolerType_PRIMARY,
-		ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
+		Type:          clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
+		ServingStatus: clustermetadatapb.PoolerServingStatus_POOLER_SERVING_STATUS_SERVING,
 		TableGroup:    constants.DefaultTableGroup,
 		Shard:         constants.DefaultShard,
 	}
@@ -238,11 +238,11 @@ func TestActionLock_MutationMethodsTimeout(t *testing.T) {
 	}{
 		{
 			name:       "SetPrimaryConnInfo times out when lock is held",
-			poolerType: clustermetadatapb.PoolerType_REPLICA,
+			poolerType: clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 			callMethod: func(ctx context.Context) error {
 				primary := &clustermetadatapb.MultiPooler{
 					Id: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIPOOLER,
+						Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 						Cell:      "zone1",
 						Name:      "test-primary",
 					},
@@ -254,32 +254,32 @@ func TestActionLock_MutationMethodsTimeout(t *testing.T) {
 		},
 		{
 			name:       "StartReplication times out when lock is held",
-			poolerType: clustermetadatapb.PoolerType_REPLICA,
+			poolerType: clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 			callMethod: func(ctx context.Context) error {
 				return manager.StartReplication(ctx)
 			},
 		},
 		{
 			name:       "StopReplication times out when lock is held",
-			poolerType: clustermetadatapb.PoolerType_REPLICA,
+			poolerType: clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 			callMethod: func(ctx context.Context) error {
 				return manager.StopReplication(ctx, multipoolermanagerdatapb.ReplicationPauseMode_REPLICATION_PAUSE_MODE_REPLAY_ONLY, true /* wait */)
 			},
 		},
 		{
 			name:       "ResetReplication times out when lock is held",
-			poolerType: clustermetadatapb.PoolerType_REPLICA,
+			poolerType: clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 			callMethod: func(ctx context.Context) error {
 				return manager.ResetReplication(ctx)
 			},
 		},
 		{
 			name:       "ConfigureSynchronousReplication times out when lock is held",
-			poolerType: clustermetadatapb.PoolerType_PRIMARY,
+			poolerType: clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 			callMethod: func(ctx context.Context) error {
 				return manager.ConfigureSynchronousReplication(
 					ctx,
-					multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+					multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 					multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 					1,
 					[]*clustermetadatapb.ID{serviceID},
@@ -289,14 +289,14 @@ func TestActionLock_MutationMethodsTimeout(t *testing.T) {
 		},
 		{
 			name:       "ChangeType times out when lock is held",
-			poolerType: clustermetadatapb.PoolerType_PRIMARY,
+			poolerType: clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 			callMethod: func(ctx context.Context) error {
 				return manager.ChangeType(ctx, "REPLICA")
 			},
 		},
 		{
 			name:       "Demote times out when lock is held",
-			poolerType: clustermetadatapb.PoolerType_PRIMARY,
+			poolerType: clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 			callMethod: func(ctx context.Context) error {
 				_, err := manager.Demote(ctx, 1, 5*time.Second, false)
 				return err
@@ -304,14 +304,14 @@ func TestActionLock_MutationMethodsTimeout(t *testing.T) {
 		},
 		{
 			name:       "UndoDemote times out when lock is held",
-			poolerType: clustermetadatapb.PoolerType_PRIMARY,
+			poolerType: clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 			callMethod: func(ctx context.Context) error {
 				return manager.UndoDemote(ctx)
 			},
 		},
 		{
 			name:       "Promote times out when lock is held",
-			poolerType: clustermetadatapb.PoolerType_REPLICA,
+			poolerType: clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 			callMethod: func(ctx context.Context) error {
 				_, err := manager.Promote(ctx, 1, "", nil, false /* force */, "", "", nil, nil)
 				return err
@@ -319,14 +319,14 @@ func TestActionLock_MutationMethodsTimeout(t *testing.T) {
 		},
 		{
 			name:       "SetTerm times out when lock is held",
-			poolerType: clustermetadatapb.PoolerType_PRIMARY,
+			poolerType: clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 			callMethod: func(ctx context.Context) error {
 				return manager.SetTerm(ctx, &multipoolermanagerdatapb.ConsensusTerm{TermNumber: 5})
 			},
 		},
 		{
 			name:       "UpdateSynchronousStandbyList times out when lock is held",
-			poolerType: clustermetadatapb.PoolerType_PRIMARY,
+			poolerType: clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 			callMethod: func(ctx context.Context) error {
 				return manager.UpdateSynchronousStandbyList(ctx, multipoolermanagerdatapb.StandbyUpdateOperation_STANDBY_UPDATE_OPERATION_ADD, []*clustermetadatapb.ID{serviceID}, true, 0, true)
 			},
@@ -405,7 +405,7 @@ func setupPromoteTestManager(t *testing.T, mockQueryService *mock.QueryService) 
 	addDatabaseToTopo(t, ts, database)
 
 	serviceID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-replica",
 	}
@@ -416,8 +416,8 @@ func setupPromoteTestManager(t *testing.T, mockQueryService *mock.QueryService) 
 		Database:      database,
 		Hostname:      "localhost",
 		PortMap:       map[string]int32{"grpc": 8080},
-		Type:          clustermetadatapb.PoolerType_REPLICA,
-		ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
+		Type:          clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
+		ServingStatus: clustermetadatapb.PoolerServingStatus_POOLER_SERVING_STATUS_SERVING,
 		TableGroup:    constants.DefaultTableGroup,
 		Shard:         constants.DefaultShard,
 	}
@@ -509,7 +509,7 @@ func TestPromoteIdempotency_PostgreSQLPromotedButTopologyNotUpdated(t *testing.T
 
 	// Topology is still REPLICA (this is what the guard rail checks)
 	pm.mu.Lock()
-	pm.multipooler.Type = clustermetadatapb.PoolerType_REPLICA
+	pm.multipooler.Type = clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA
 	pm.mu.Unlock()
 
 	// Call Promote - should detect PG is already promoted and only update topology
@@ -523,7 +523,7 @@ func TestPromoteIdempotency_PostgreSQLPromotedButTopologyNotUpdated(t *testing.T
 
 	// Verify topology was updated
 	pm.mu.Lock()
-	assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, pm.multipooler.Type, "Topology should be updated to PRIMARY")
+	assert.Equal(t, clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY, pm.multipooler.Type, "Topology should be updated to PRIMARY")
 	pm.mu.Unlock()
 	assert.NoError(t, mockQueryService.ExpectationsWereMet())
 }
@@ -558,7 +558,7 @@ func TestPromoteIdempotency_FullyCompleteTopologyPrimary(t *testing.T) {
 
 	// Topology is already PRIMARY
 	pm.mu.Lock()
-	pm.multipooler.Type = clustermetadatapb.PoolerType_PRIMARY
+	pm.multipooler.Type = clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY
 	pm.mu.Unlock()
 
 	// Call Promote - should succeed with WasAlreadyPrimary=true (idempotent)
@@ -593,7 +593,7 @@ func TestPromoteIdempotency_InconsistentStateTopologyPrimaryPgNotPrimary(t *test
 
 	// Topology shows PRIMARY (inconsistent!)
 	pm.mu.Lock()
-	pm.multipooler.Type = clustermetadatapb.PoolerType_PRIMARY
+	pm.multipooler.Type = clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY
 	pm.mu.Unlock()
 
 	// Call Promote without force - should fail with inconsistent state error
@@ -648,7 +648,7 @@ func TestPromoteIdempotency_InconsistentStateFixedWithForce(t *testing.T) {
 
 	// Topology shows PRIMARY (inconsistent!)
 	pm.mu.Lock()
-	pm.multipooler.Type = clustermetadatapb.PoolerType_PRIMARY
+	pm.multipooler.Type = clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY
 	pm.mu.Unlock()
 
 	// Call Promote with force=true - should fix the inconsistency
@@ -707,7 +707,7 @@ func TestPromoteIdempotency_NothingCompleteYet(t *testing.T) {
 
 	// Topology is REPLICA
 	pm.mu.Lock()
-	pm.multipooler.Type = clustermetadatapb.PoolerType_REPLICA
+	pm.multipooler.Type = clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA
 	pm.mu.Unlock()
 
 	// Call Promote - should execute all steps
@@ -720,7 +720,7 @@ func TestPromoteIdempotency_NothingCompleteYet(t *testing.T) {
 
 	// Verify topology was updated
 	pm.mu.Lock()
-	assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, pm.multipooler.Type)
+	assert.Equal(t, clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY, pm.multipooler.Type)
 	pm.mu.Unlock()
 	assert.NoError(t, mockQueryService.ExpectationsWereMet())
 }
@@ -744,7 +744,7 @@ func TestPromoteIdempotency_LSNMismatchBeforePromotion(t *testing.T) {
 	pm, _ := setupPromoteTestManager(t, mockQueryService)
 
 	pm.mu.Lock()
-	pm.multipooler.Type = clustermetadatapb.PoolerType_REPLICA
+	pm.multipooler.Type = clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA
 	pm.mu.Unlock()
 
 	// Call Promote with different expected LSN - should fail
@@ -822,7 +822,7 @@ func TestPromoteIdempotency_SecondCallSucceedsAfterCompletion(t *testing.T) {
 	pm, _ := setupPromoteTestManager(t, mockQueryService)
 
 	pm.mu.Lock()
-	pm.multipooler.Type = clustermetadatapb.PoolerType_REPLICA
+	pm.multipooler.Type = clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA
 	pm.mu.Unlock()
 
 	// First call
@@ -832,7 +832,7 @@ func TestPromoteIdempotency_SecondCallSucceedsAfterCompletion(t *testing.T) {
 
 	// Verify topology was updated to PRIMARY
 	pm.mu.Lock()
-	assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, pm.multipooler.Type)
+	assert.Equal(t, clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY, pm.multipooler.Type)
 	pm.mu.Unlock()
 
 	// Second call should SUCCEED - topology is PRIMARY and everything is consistent (idempotent)
@@ -879,7 +879,7 @@ func TestPromoteIdempotency_EmptyExpectedLSNSkipsValidation(t *testing.T) {
 	pm, _ := setupPromoteTestManager(t, mockQueryService)
 
 	pm.mu.Lock()
-	pm.multipooler.Type = clustermetadatapb.PoolerType_REPLICA
+	pm.multipooler.Type = clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA
 	pm.mu.Unlock()
 
 	// Call Promote with empty expectedLSN - should skip LSN validation
@@ -928,7 +928,7 @@ func TestPromote_WithElectionMetadata(t *testing.T) {
 
 	// Topology is REPLICA
 	pm.mu.Lock()
-	pm.multipooler.Type = clustermetadatapb.PoolerType_REPLICA
+	pm.multipooler.Type = clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA
 	pm.mu.Unlock()
 
 	// Call Promote with election metadata
@@ -947,7 +947,7 @@ func TestPromote_WithElectionMetadata(t *testing.T) {
 
 	// Verify topology was updated
 	pm.mu.Lock()
-	assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, pm.multipooler.Type)
+	assert.Equal(t, clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY, pm.multipooler.Type)
 	pm.mu.Unlock()
 	assert.NoError(t, mockQueryService.ExpectationsWereMet())
 
@@ -990,13 +990,13 @@ func TestPromote_LeadershipHistoryErrorFailsPromotion(t *testing.T) {
 
 	// Mock: insertLeadershipHistory fails with database error (e.g., sync replication timeout)
 	mockQueryService.AddQueryPatternOnceWithError("INSERT INTO multigres.leadership_history",
-		mterrors.New(mtrpcpb.Code_DEADLINE_EXCEEDED, "timeout waiting for synchronous replication"))
+		mterrors.New(mtrpcpb.Code_CODE_DEADLINE_EXCEEDED, "timeout waiting for synchronous replication"))
 
 	pm, _ := setupPromoteTestManager(t, mockQueryService)
 
 	// Topology is REPLICA
 	pm.mu.Lock()
-	pm.multipooler.Type = clustermetadatapb.PoolerType_REPLICA
+	pm.multipooler.Type = clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA
 	pm.mu.Unlock()
 
 	// Call Promote - should FAIL because leadership history insertion fails
@@ -1018,7 +1018,7 @@ func TestSetPrimaryConnInfo_StoresPrimaryPoolerID(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	serviceID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-replica",
 	}
@@ -1039,8 +1039,8 @@ func TestSetPrimaryConnInfo_StoresPrimaryPoolerID(t *testing.T) {
 		Database:      database,
 		Hostname:      "localhost",
 		PortMap:       map[string]int32{"grpc": 8080},
-		Type:          clustermetadatapb.PoolerType_REPLICA,
-		ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
+		Type:          clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
+		ServingStatus: clustermetadatapb.PoolerServingStatus_POOLER_SERVING_STATUS_SERVING,
 		TableGroup:    constants.DefaultTableGroup,
 		Shard:         constants.DefaultShard,
 	}
@@ -1095,7 +1095,7 @@ func TestSetPrimaryConnInfo_StoresPrimaryPoolerID(t *testing.T) {
 
 	// Call SetPrimaryConnInfo with a specific primary MultiPooler
 	testPrimaryID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "primary-pooler-123",
 	}
@@ -1126,7 +1126,7 @@ func TestReplicationStatus(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	serviceID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-service",
 	}
@@ -1148,8 +1148,8 @@ func TestReplicationStatus(t *testing.T) {
 			Database:      database,
 			Hostname:      "localhost",
 			PortMap:       map[string]int32{"grpc": 8080},
-			Type:          clustermetadatapb.PoolerType_PRIMARY,
-			ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
+			Type:          clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
+			ServingStatus: clustermetadatapb.PoolerServingStatus_POOLER_SERVING_STATUS_SERVING,
 			TableGroup:    constants.DefaultTableGroup,
 			Shard:         constants.DefaultShard,
 		}
@@ -1202,7 +1202,7 @@ func TestReplicationStatus(t *testing.T) {
 		require.NotNil(t, status)
 
 		// Verify response structure
-		assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, status.PoolerType)
+		assert.Equal(t, clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY, status.PoolerType)
 		assert.NotNil(t, status.PrimaryStatus, "PrimaryStatus should be populated")
 		assert.Nil(t, status.ReplicationStatus, "ReplicationStatus should be nil for PRIMARY")
 		assert.Equal(t, "0/12345678", status.PrimaryStatus.Lsn)
@@ -1225,8 +1225,8 @@ func TestReplicationStatus(t *testing.T) {
 			Database:      database,
 			Hostname:      "localhost",
 			PortMap:       map[string]int32{"grpc": 8080},
-			Type:          clustermetadatapb.PoolerType_REPLICA,
-			ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
+			Type:          clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
+			ServingStatus: clustermetadatapb.PoolerServingStatus_POOLER_SERVING_STATUS_SERVING,
 			TableGroup:    constants.DefaultTableGroup,
 			Shard:         constants.DefaultShard,
 		}
@@ -1287,7 +1287,7 @@ func TestReplicationStatus(t *testing.T) {
 		require.NotNil(t, status)
 
 		// Verify response structure
-		assert.Equal(t, clustermetadatapb.PoolerType_REPLICA, status.PoolerType)
+		assert.Equal(t, clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA, status.PoolerType)
 		assert.Nil(t, status.PrimaryStatus, "PrimaryStatus should be nil for REPLICA")
 		assert.NotNil(t, status.ReplicationStatus, "ReplicationStatus should be populated")
 		assert.Equal(t, "0/12345600", status.ReplicationStatus.LastReplayLsn)
@@ -1310,8 +1310,8 @@ func TestReplicationStatus(t *testing.T) {
 			Database:      database,
 			Hostname:      "localhost",
 			PortMap:       map[string]int32{"grpc": 8080},
-			Type:          clustermetadatapb.PoolerType_PRIMARY,
-			ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
+			Type:          clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
+			ServingStatus: clustermetadatapb.PoolerServingStatus_POOLER_SERVING_STATUS_SERVING,
 			TableGroup:    constants.DefaultTableGroup,
 			Shard:         constants.DefaultShard,
 		}
@@ -1367,7 +1367,7 @@ func TestReplicationStatus(t *testing.T) {
 		require.NotNil(t, status)
 
 		// PoolerType from topology says PRIMARY, but status shows standby state
-		assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, status.PoolerType)
+		assert.Equal(t, clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY, status.PoolerType)
 		assert.Nil(t, status.PrimaryStatus, "PrimaryStatus should be nil since PostgreSQL is a standby")
 		assert.NotNil(t, status.ReplicationStatus, "ReplicationStatus should be populated since PostgreSQL is a standby")
 	})
@@ -1389,8 +1389,8 @@ func TestReplicationStatus(t *testing.T) {
 			Database:      database,
 			Hostname:      "localhost",
 			PortMap:       map[string]int32{"grpc": 8080},
-			Type:          clustermetadatapb.PoolerType_REPLICA,
-			ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
+			Type:          clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
+			ServingStatus: clustermetadatapb.PoolerServingStatus_POOLER_SERVING_STATUS_SERVING,
 			TableGroup:    constants.DefaultTableGroup,
 			Shard:         constants.DefaultShard,
 		}
@@ -1447,7 +1447,7 @@ func TestReplicationStatus(t *testing.T) {
 		require.NotNil(t, status)
 
 		// PoolerType from topology says REPLICA, but status shows primary state
-		assert.Equal(t, clustermetadatapb.PoolerType_REPLICA, status.PoolerType)
+		assert.Equal(t, clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA, status.PoolerType)
 		assert.NotNil(t, status.PrimaryStatus, "PrimaryStatus should be populated since PostgreSQL is a primary")
 		assert.Nil(t, status.ReplicationStatus, "ReplicationStatus should be nil since PostgreSQL is a primary")
 	})

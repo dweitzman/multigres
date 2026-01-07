@@ -47,7 +47,7 @@ func init() {
 func getMultiGateway(cell string, uid uint32) *clustermetadatapb.MultiGateway {
 	return &clustermetadatapb.MultiGateway{
 		Id: &clustermetadatapb.ID{
-			Component: clustermetadatapb.ID_MULTIGATEWAY,
+			Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIGATEWAY,
 			Cell:      cell,
 			Name:      fmt.Sprintf("%d", uid),
 		},
@@ -98,7 +98,7 @@ func TestServerGetMultiGatewaysByCell(t *testing.T) {
 			expectedMultiGateways: []*clustermetadatapb.MultiGateway{
 				{
 					Id: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIGATEWAY,
+						Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIGATEWAY,
 						Cell:      cell,
 						Name:      "alpha",
 					},
@@ -116,7 +116,7 @@ func TestServerGetMultiGatewaysByCell(t *testing.T) {
 			expectedMultiGateways: []*clustermetadatapb.MultiGateway{
 				{
 					Id: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIGATEWAY,
+						Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIGATEWAY,
 						Cell:      cell,
 						Name:      "beta",
 					},
@@ -128,7 +128,7 @@ func TestServerGetMultiGatewaysByCell(t *testing.T) {
 				},
 				{
 					Id: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIGATEWAY,
+						Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIGATEWAY,
 						Cell:      cell,
 						Name:      "echo",
 					},
@@ -140,7 +140,7 @@ func TestServerGetMultiGatewaysByCell(t *testing.T) {
 				},
 				{
 					Id: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIGATEWAY,
+						Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIGATEWAY,
 						Cell:      cell,
 						Name:      "foxtrot",
 					},
@@ -152,7 +152,7 @@ func TestServerGetMultiGatewaysByCell(t *testing.T) {
 				},
 				{
 					Id: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIGATEWAY,
+						Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIGATEWAY,
 						Cell:      cell,
 						Name:      "golf",
 					},
@@ -180,7 +180,7 @@ func TestServerGetMultiGatewaysByCell(t *testing.T) {
 			for i, expectedMG := range tt.expectedMultiGateways {
 				multigateway := &clustermetadatapb.MultiGateway{
 					Id: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIGATEWAY,
+						Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIGATEWAY,
 						Cell:      cell,
 						Name:      expectedMG.Id.Name,
 					},
@@ -220,17 +220,17 @@ func TestMultiGatewayIDString(t *testing.T) {
 	}{
 		{
 			name:     "simple case",
-			id:       &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIGATEWAY, Cell: "zone1", Name: "100"},
+			id:       &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIGATEWAY, Cell: "zone1", Name: "100"},
 			expected: "multigateway-zone1-100",
 		},
 		{
 			name:     "you can use name as numbers",
-			id:       &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIGATEWAY, Cell: "prod", Name: "0"},
+			id:       &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIGATEWAY, Cell: "prod", Name: "0"},
 			expected: "multigateway-prod-0",
 		},
 		{
 			name:     "funny name",
-			id:       &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIGATEWAY, Cell: "prod", Name: "sleepy"},
+			id:       &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIGATEWAY, Cell: "prod", Name: "sleepy"},
 			expected: "multigateway-prod-sleepy",
 		},
 	}
@@ -257,7 +257,7 @@ func TestMultiGatewayCRUDOperations(t *testing.T) {
 			test: func(t *testing.T, ts topoclient.Store) {
 				multigateway := &clustermetadatapb.MultiGateway{
 					Id: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIGATEWAY,
+						Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIGATEWAY,
 						Cell:      cell,
 						Name:      "november",
 					},
@@ -276,7 +276,7 @@ func TestMultiGatewayCRUDOperations(t *testing.T) {
 		{
 			name: "Get nonexistent MultiGateway",
 			test: func(t *testing.T, ts topoclient.Store) {
-				id := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIGATEWAY, Cell: cell, Name: "999"}
+				id := &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIGATEWAY, Cell: cell, Name: "999"}
 				_, err := ts.GetMultiGateway(ctx, id)
 				require.Error(t, err)
 				require.True(t, errors.Is(err, &topoclient.TopoError{Code: topoclient.NoNode}))
@@ -287,7 +287,7 @@ func TestMultiGatewayCRUDOperations(t *testing.T) {
 			test: func(t *testing.T, ts topoclient.Store) {
 				multigateway := &clustermetadatapb.MultiGateway{
 					Id: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIGATEWAY,
+						Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIGATEWAY,
 						Cell:      cell,
 						Name:      "oscar",
 					},
@@ -307,7 +307,7 @@ func TestMultiGatewayCRUDOperations(t *testing.T) {
 			test: func(t *testing.T, ts topoclient.Store) {
 				multigateway := &clustermetadatapb.MultiGateway{
 					Id: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIGATEWAY,
+						Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIGATEWAY,
 						Cell:      cell,
 						Name:      "papa",
 					},
@@ -339,7 +339,7 @@ func TestMultiGatewayCRUDOperations(t *testing.T) {
 			test: func(t *testing.T, ts topoclient.Store) {
 				multigateway := &clustermetadatapb.MultiGateway{
 					Id: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIGATEWAY,
+						Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIGATEWAY,
 						Cell:      cell,
 						Name:      "quebec",
 					},
@@ -393,7 +393,7 @@ func TestGetMultiGatewayIDsByCell(t *testing.T) {
 				multigateways := []*clustermetadatapb.MultiGateway{
 					{
 						Id: &clustermetadatapb.ID{
-							Component: clustermetadatapb.ID_MULTIGATEWAY,
+							Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIGATEWAY,
 							Cell:      cell1,
 							Name:      "bravo",
 						},
@@ -402,7 +402,7 @@ func TestGetMultiGatewayIDsByCell(t *testing.T) {
 					},
 					{
 						Id: &clustermetadatapb.ID{
-							Component: clustermetadatapb.ID_MULTIGATEWAY,
+							Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIGATEWAY,
 							Cell:      cell1,
 							Name:      "charlie",
 						},
@@ -421,12 +421,12 @@ func TestGetMultiGatewayIDsByCell(t *testing.T) {
 
 				expectedIDs := []*clustermetadatapb.ID{
 					{
-						Component: clustermetadatapb.ID_MULTIGATEWAY,
+						Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIGATEWAY,
 						Cell:      cell1,
 						Name:      "bravo",
 					},
 					{
-						Component: clustermetadatapb.ID_MULTIGATEWAY,
+						Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIGATEWAY,
 						Cell:      cell1,
 						Name:      "charlie",
 					},
@@ -479,7 +479,7 @@ func TestUpdateMultiGatewayFields(t *testing.T) {
 			name: "Successful update",
 			test: func(t *testing.T, ts topoclient.Store) {
 				id := &clustermetadatapb.ID{
-					Component: clustermetadatapb.ID_MULTIGATEWAY,
+					Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIGATEWAY,
 					Cell:      cell,
 					Name:      "tango",
 				}
@@ -509,7 +509,7 @@ func TestUpdateMultiGatewayFields(t *testing.T) {
 			name: "Update function returns error",
 			test: func(t *testing.T, ts topoclient.Store) {
 				id := &clustermetadatapb.ID{
-					Component: clustermetadatapb.ID_MULTIGATEWAY,
+					Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIGATEWAY,
 					Cell:      cell,
 					Name:      "uniform",
 				}
@@ -536,7 +536,7 @@ func TestUpdateMultiGatewayFields(t *testing.T) {
 			name: "NoUpdateNeeded returns nil",
 			test: func(t *testing.T, ts topoclient.Store) {
 				id := &clustermetadatapb.ID{
-					Component: clustermetadatapb.ID_MULTIGATEWAY,
+					Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIGATEWAY,
 					Cell:      cell,
 					Name:      "victor",
 				}
@@ -561,7 +561,7 @@ func TestUpdateMultiGatewayFields(t *testing.T) {
 				defer tsWithFactory.Close()
 
 				id := &clustermetadatapb.ID{
-					Component: clustermetadatapb.ID_MULTIGATEWAY,
+					Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIGATEWAY,
 					Cell:      cell,
 					Name:      "whiskey",
 				}
@@ -616,7 +616,7 @@ func TestInitMultiGateway(t *testing.T) {
 			test: func(t *testing.T, ts topoclient.Store) {
 				multigateway := &clustermetadatapb.MultiGateway{
 					Id: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIGATEWAY,
+						Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIGATEWAY,
 						Cell:      cell,
 						Name:      "zulu",
 					},
@@ -637,7 +637,7 @@ func TestInitMultiGateway(t *testing.T) {
 			test: func(t *testing.T, ts topoclient.Store) {
 				original := &clustermetadatapb.MultiGateway{
 					Id: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIGATEWAY,
+						Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIGATEWAY,
 						Cell:      cell,
 						Name:      "xray",
 					},
@@ -648,7 +648,7 @@ func TestInitMultiGateway(t *testing.T) {
 
 				updated := &clustermetadatapb.MultiGateway{
 					Id: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIGATEWAY,
+						Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIGATEWAY,
 						Cell:      cell,
 						Name:      "xray",
 					},
@@ -669,7 +669,7 @@ func TestInitMultiGateway(t *testing.T) {
 			test: func(t *testing.T, ts topoclient.Store) {
 				original := &clustermetadatapb.MultiGateway{
 					Id: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIGATEWAY,
+						Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIGATEWAY,
 						Cell:      cell,
 						Name:      "whiskey",
 					},
@@ -680,7 +680,7 @@ func TestInitMultiGateway(t *testing.T) {
 
 				updated := &clustermetadatapb.MultiGateway{
 					Id: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIGATEWAY,
+						Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIGATEWAY,
 						Cell:      cell,
 						Name:      "whiskey",
 					},
@@ -768,7 +768,7 @@ func TestNewMultiGateway(t *testing.T) {
 func TestMultiGatewayInfo(t *testing.T) {
 	multigateway := &clustermetadatapb.MultiGateway{
 		Id: &clustermetadatapb.ID{
-			Component: clustermetadatapb.ID_MULTIGATEWAY,
+			Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIGATEWAY,
 			Cell:      "zone1",
 			Name:      "100",
 		},
@@ -802,7 +802,7 @@ func TestMultiGatewayInfo(t *testing.T) {
 	t.Run("Addr method without grpc port", func(t *testing.T) {
 		multigatewayNoGrpc := &clustermetadatapb.MultiGateway{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIGATEWAY,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIGATEWAY,
 				Cell:      "zone1",
 				Name:      "100",
 			},
@@ -909,7 +909,7 @@ func TestGetMultiGatewaysByCell_Comprehensive(t *testing.T) {
 		// Setup: Create multigateways in both cells
 		zone1MultiGateway := &clustermetadatapb.MultiGateway{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIGATEWAY,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIGATEWAY,
 				Cell:      "zone1",
 				Name:      "1",
 			},
@@ -918,7 +918,7 @@ func TestGetMultiGatewaysByCell_Comprehensive(t *testing.T) {
 		}
 		zone2MultiGateway := &clustermetadatapb.MultiGateway{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIGATEWAY,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIGATEWAY,
 				Cell:      "zone2",
 				Name:      "1",
 			},

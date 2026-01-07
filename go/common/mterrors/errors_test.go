@@ -42,8 +42,8 @@ func TestWrap(t *testing.T) {
 		wantMessage string
 		wantCode    mtrpcpb.Code
 	}{
-		{io.EOF, "read error", "read error: EOF", mtrpcpb.Code_UNKNOWN},
-		{New(mtrpcpb.Code_ALREADY_EXISTS, "oops"), "client error", "client error: oops", mtrpcpb.Code_ALREADY_EXISTS},
+		{io.EOF, "read error", "read error: EOF", mtrpcpb.Code_CODE_UNKNOWN},
+		{New(mtrpcpb.Code_CODE_ALREADY_EXISTS, "oops"), "client error", "client error: oops", mtrpcpb.Code_CODE_ALREADY_EXISTS},
 	}
 
 	for _, tt := range tests {
@@ -64,7 +64,7 @@ func TestUnwrap(t *testing.T) {
 	}{
 		{fmt.Errorf("some error: %d", 17), false},
 		{errors.New("some new error"), false},
-		{Errorf(mtrpcpb.Code_INVALID_ARGUMENT, "some msg %d", 19), false},
+		{Errorf(mtrpcpb.Code_CODE_INVALID_ARGUMENT, "some msg %d", 19), false},
 		{Wrapf(errors.New("some wrapped error"), "some msg"), true},
 		{nil, false},
 	}
@@ -94,7 +94,7 @@ func TestUnwrapAll(t *testing.T) {
 	}{
 		{fmt.Errorf("some error: %d", 17)},
 		{errors.New("some new error")},
-		{Errorf(mtrpcpb.Code_INVALID_ARGUMENT, "some msg %d", 19)},
+		{Errorf(mtrpcpb.Code_CODE_INVALID_ARGUMENT, "some msg %d", 19)},
 		{nil},
 	}
 
@@ -123,7 +123,7 @@ type nilError struct{}
 func (nilError) Error() string { return "nil error" }
 
 func TestRootCause(t *testing.T) {
-	x := New(mtrpcpb.Code_FAILED_PRECONDITION, "error")
+	x := New(mtrpcpb.Code_CODE_FAILED_PRECONDITION, "error")
 	tests := []struct {
 		err  error
 		want error
@@ -161,7 +161,7 @@ func TestRootCause(t *testing.T) {
 }
 
 func TestCause(t *testing.T) {
-	x := New(mtrpcpb.Code_FAILED_PRECONDITION, "error")
+	x := New(mtrpcpb.Code_CODE_FAILED_PRECONDITION, "error")
 	tests := []struct {
 		err  error
 		want error
@@ -221,8 +221,8 @@ func TestErrorf(t *testing.T) {
 		err  error
 		want string
 	}{
-		{Errorf(mtrpcpb.Code_DATA_LOSS, "read error without format specifiers"), "read error without format specifiers"},
-		{Errorf(mtrpcpb.Code_DATA_LOSS, "read error with %d format specifier", 1), "read error with 1 format specifier"},
+		{Errorf(mtrpcpb.Code_CODE_DATA_LOSS, "read error without format specifiers"), "read error without format specifiers"},
+		{Errorf(mtrpcpb.Code_CODE_DATA_LOSS, "read error with %d format specifier", 1), "read error with 1 format specifier"},
 	}
 
 	for _, tt := range tests {
@@ -270,8 +270,8 @@ func TestErrorEquality(t *testing.T) {
 		nil,
 		io.EOF,
 		errors.New("EOF"),
-		New(mtrpcpb.Code_ALREADY_EXISTS, "EOF"),
-		Errorf(mtrpcpb.Code_INVALID_ARGUMENT, "EOF"),
+		New(mtrpcpb.Code_CODE_ALREADY_EXISTS, "EOF"),
+		Errorf(mtrpcpb.Code_CODE_INVALID_ARGUMENT, "EOF"),
 		Wrap(io.EOF, "EOF"),
 		Wrapf(io.EOF, "EOF%d", 2),
 	}
@@ -287,11 +287,11 @@ func TestCreation(t *testing.T) {
 	testcases := []struct {
 		in, want mtrpcpb.Code
 	}{{
-		in:   mtrpcpb.Code_CANCELED,
-		want: mtrpcpb.Code_CANCELED,
+		in:   mtrpcpb.Code_CODE_CANCELED,
+		want: mtrpcpb.Code_CODE_CANCELED,
 	}, {
-		in:   mtrpcpb.Code_UNKNOWN,
-		want: mtrpcpb.Code_UNKNOWN,
+		in:   mtrpcpb.Code_CODE_UNKNOWN,
+		want: mtrpcpb.Code_CODE_UNKNOWN,
 	}}
 	for _, tcase := range testcases {
 		if got := Code(New(tcase.in, "")); got != tcase.want {
@@ -309,19 +309,19 @@ func TestCode(t *testing.T) {
 		want mtrpcpb.Code
 	}{{
 		in:   nil,
-		want: mtrpcpb.Code_OK,
+		want: mtrpcpb.Code_CODE_OK,
 	}, {
 		in:   errors.New("generic"),
-		want: mtrpcpb.Code_UNKNOWN,
+		want: mtrpcpb.Code_CODE_UNKNOWN,
 	}, {
-		in:   New(mtrpcpb.Code_CANCELED, "generic"),
-		want: mtrpcpb.Code_CANCELED,
+		in:   New(mtrpcpb.Code_CODE_CANCELED, "generic"),
+		want: mtrpcpb.Code_CODE_CANCELED,
 	}, {
 		in:   context.Canceled,
-		want: mtrpcpb.Code_CANCELED,
+		want: mtrpcpb.Code_CODE_CANCELED,
 	}, {
 		in:   context.DeadlineExceeded,
-		want: mtrpcpb.Code_DEADLINE_EXCEEDED,
+		want: mtrpcpb.Code_CODE_DEADLINE_EXCEEDED,
 	}}
 	for _, tcase := range testcases {
 		if got := Code(tcase.in); got != tcase.want {
@@ -331,7 +331,7 @@ func TestCode(t *testing.T) {
 }
 
 func TestWrapping(t *testing.T) {
-	err1 := Errorf(mtrpcpb.Code_UNAVAILABLE, "foo")
+	err1 := Errorf(mtrpcpb.Code_CODE_UNAVAILABLE, "foo")
 	err2 := Wrapf(err1, "bar")
 	err3 := Wrapf(err2, "baz")
 	errorWithoutStack := fmt.Sprintf("%v", err3)

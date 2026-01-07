@@ -395,7 +395,7 @@ func (re *Engine) findPrimaryInShard(shardKey commontypes.ShardKey) (string, err
 		if poolerHealth.MultiPooler.Database == shardKey.Database &&
 			poolerHealth.MultiPooler.TableGroup == shardKey.TableGroup &&
 			poolerHealth.MultiPooler.Shard == shardKey.Shard &&
-			poolerHealth.MultiPooler.Type == clustermetadatapb.PoolerType_PRIMARY {
+			poolerHealth.MultiPooler.Type == clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY {
 			primaryID = poolerID
 			found = true
 			return false // stop iteration

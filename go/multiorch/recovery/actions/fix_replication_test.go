@@ -78,7 +78,7 @@ func TestFixReplicationAction_ExecuteReplicaNotFound(t *testing.T) {
 			Shard:      "0",
 		},
 		PoolerID: &clustermetadatapb.ID{
-			Component: clustermetadatapb.ID_MULTIPOOLER,
+			Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 			Cell:      "cell1",
 			Name:      "replica1",
 		},
@@ -101,7 +101,7 @@ func TestFixReplicationAction_ExecuteNoPrimary(t *testing.T) {
 
 	// Add only replicas, no primary
 	replicaID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "replica1",
 	}
@@ -111,7 +111,7 @@ func TestFixReplicationAction_ExecuteNoPrimary(t *testing.T) {
 			Database:   "testdb",
 			TableGroup: "default",
 			Shard:      "0",
-			Type:       clustermetadatapb.PoolerType_REPLICA,
+			Type:       clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 		},
 	})
 
@@ -162,7 +162,7 @@ func TestFixReplicationAction_ExecuteUnsupportedProblemCode(t *testing.T) {
 
 	// Add replica and primary
 	replicaID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "replica1",
 	}
@@ -172,20 +172,20 @@ func TestFixReplicationAction_ExecuteUnsupportedProblemCode(t *testing.T) {
 			Database:   "testdb",
 			TableGroup: "default",
 			Shard:      "0",
-			Type:       clustermetadatapb.PoolerType_REPLICA,
+			Type:       clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 		},
 	})
 	protoStore.Set("multipooler-cell1-primary", &multiorchdatapb.PoolerHealthState{
 		MultiPooler: &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "primary",
 			},
 			Database:   "testdb",
 			TableGroup: "default",
 			Shard:      "0",
-			Type:       clustermetadatapb.PoolerType_PRIMARY,
+			Type:       clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 			Hostname:   "primary.example.com",
 			PortMap:    map[string]int32{"postgres": 5432},
 		},
@@ -247,7 +247,7 @@ func TestFixReplicationAction_ExecuteSuccessNotReplicating(t *testing.T) {
 
 	// Add replica and primary
 	replicaID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "replica1",
 	}
@@ -257,20 +257,20 @@ func TestFixReplicationAction_ExecuteSuccessNotReplicating(t *testing.T) {
 			Database:   "testdb",
 			TableGroup: "default",
 			Shard:      "0",
-			Type:       clustermetadatapb.PoolerType_REPLICA,
+			Type:       clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 		},
 	})
 	protoStore.Set("multipooler-cell1-primary", &multiorchdatapb.PoolerHealthState{
 		MultiPooler: &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "primary",
 			},
 			Database:   "testdb",
 			TableGroup: "default",
 			Shard:      "0",
-			Type:       clustermetadatapb.PoolerType_PRIMARY,
+			Type:       clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 			Hostname:   "primary.example.com",
 			PortMap:    map[string]int32{"postgres": 5432},
 		},
@@ -332,7 +332,7 @@ func TestFixReplicationAction_ExecuteAlreadyConfigured(t *testing.T) {
 
 	// Add replica and primary
 	replicaID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "replica1",
 	}
@@ -342,20 +342,20 @@ func TestFixReplicationAction_ExecuteAlreadyConfigured(t *testing.T) {
 			Database:   "testdb",
 			TableGroup: "default",
 			Shard:      "0",
-			Type:       clustermetadatapb.PoolerType_REPLICA,
+			Type:       clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 		},
 	})
 	protoStore.Set("multipooler-cell1-primary", &multiorchdatapb.PoolerHealthState{
 		MultiPooler: &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "primary",
 			},
 			Database:   "testdb",
 			TableGroup: "default",
 			Shard:      "0",
-			Type:       clustermetadatapb.PoolerType_PRIMARY,
+			Type:       clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 			Hostname:   "primary.example.com",
 			PortMap:    map[string]int32{"postgres": 5432},
 		},
@@ -442,7 +442,7 @@ func TestFixReplicationAction_FailsWhenReplicationDoesNotStart(t *testing.T) {
 
 	// Add replica and primary
 	replicaID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "replica1",
 	}
@@ -451,18 +451,18 @@ func TestFixReplicationAction_FailsWhenReplicationDoesNotStart(t *testing.T) {
 		Database:   "testdb",
 		TableGroup: "default",
 		Shard:      "0",
-		Type:       clustermetadatapb.PoolerType_REPLICA,
+		Type:       clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 	}
 	primary := &clustermetadatapb.MultiPooler{
 		Id: &clustermetadatapb.ID{
-			Component: clustermetadatapb.ID_MULTIPOOLER,
+			Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 			Cell:      "cell1",
 			Name:      "primary",
 		},
 		Database:   "testdb",
 		TableGroup: "default",
 		Shard:      "0",
-		Type:       clustermetadatapb.PoolerType_PRIMARY,
+		Type:       clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 		Hostname:   "primary.example.com",
 		PortMap:    map[string]int32{"postgres": 5432},
 	}
@@ -505,5 +505,5 @@ func TestFixReplicationAction_FailsWhenReplicationDoesNotStart(t *testing.T) {
 	// Verify the pooler was marked as DRAINED in topology
 	updatedPooler, err := ts.GetMultiPooler(ctx, replicaID)
 	require.NoError(t, err)
-	assert.Equal(t, clustermetadatapb.PoolerType_DRAINED, updatedPooler.Type)
+	assert.Equal(t, clustermetadatapb.PoolerType_POOLER_TYPE_DRAINED, updatedPooler.Type)
 }

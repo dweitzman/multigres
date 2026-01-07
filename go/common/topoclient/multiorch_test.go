@@ -47,7 +47,7 @@ func init() {
 func getMultiOrch(cell string, uid uint32) *clustermetadatapb.MultiOrch {
 	return &clustermetadatapb.MultiOrch{
 		Id: &clustermetadatapb.ID{
-			Component: clustermetadatapb.ID_MULTIORCH,
+			Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 			Cell:      cell,
 			Name:      fmt.Sprintf("%d", uid),
 		},
@@ -98,7 +98,7 @@ func TestServerGetMultiOrchsByCell(t *testing.T) {
 			expectedMultiOrch: []*clustermetadatapb.MultiOrch{
 				{
 					Id: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIORCH,
+						Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 						Cell:      cell,
 						Name:      "alpha",
 					},
@@ -116,7 +116,7 @@ func TestServerGetMultiOrchsByCell(t *testing.T) {
 			expectedMultiOrch: []*clustermetadatapb.MultiOrch{
 				{
 					Id: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIORCH,
+						Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 						Cell:      cell,
 						Name:      "beta",
 					},
@@ -128,7 +128,7 @@ func TestServerGetMultiOrchsByCell(t *testing.T) {
 				},
 				{
 					Id: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIORCH,
+						Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 						Cell:      cell,
 						Name:      "echo",
 					},
@@ -140,7 +140,7 @@ func TestServerGetMultiOrchsByCell(t *testing.T) {
 				},
 				{
 					Id: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIORCH,
+						Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 						Cell:      cell,
 						Name:      "foxtrot",
 					},
@@ -152,7 +152,7 @@ func TestServerGetMultiOrchsByCell(t *testing.T) {
 				},
 				{
 					Id: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIORCH,
+						Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 						Cell:      cell,
 						Name:      "golf",
 					},
@@ -180,7 +180,7 @@ func TestServerGetMultiOrchsByCell(t *testing.T) {
 			for i, expectedMO := range tt.expectedMultiOrch {
 				multiorch := &clustermetadatapb.MultiOrch{
 					Id: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIORCH,
+						Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 						Cell:      cell,
 						Name:      expectedMO.Id.Name,
 					},
@@ -220,17 +220,17 @@ func TestMultiOrchIDString(t *testing.T) {
 	}{
 		{
 			name:     "simple case",
-			id:       &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIORCH, Cell: "zone1", Name: "100"},
+			id:       &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH, Cell: "zone1", Name: "100"},
 			expected: "multiorch-zone1-100",
 		},
 		{
 			name:     "you can use name as numbers",
-			id:       &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIORCH, Cell: "prod", Name: "0"},
+			id:       &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH, Cell: "prod", Name: "0"},
 			expected: "multiorch-prod-0",
 		},
 		{
 			name:     "funny name",
-			id:       &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIORCH, Cell: "prod", Name: "sleepy"},
+			id:       &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH, Cell: "prod", Name: "sleepy"},
 			expected: "multiorch-prod-sleepy",
 		},
 	}
@@ -257,7 +257,7 @@ func TestMultiOrchCRUDOperations(t *testing.T) {
 			test: func(t *testing.T, ts topoclient.Store) {
 				multiorch := &clustermetadatapb.MultiOrch{
 					Id: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIORCH,
+						Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 						Cell:      cell,
 						Name:      "november",
 					},
@@ -276,7 +276,7 @@ func TestMultiOrchCRUDOperations(t *testing.T) {
 		{
 			name: "Get nonexistent MultiOrch",
 			test: func(t *testing.T, ts topoclient.Store) {
-				id := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIORCH, Cell: cell, Name: "999"}
+				id := &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH, Cell: cell, Name: "999"}
 				_, err := ts.GetMultiOrch(ctx, id)
 				require.Error(t, err)
 				require.True(t, errors.Is(err, &topoclient.TopoError{Code: topoclient.NoNode}))
@@ -287,7 +287,7 @@ func TestMultiOrchCRUDOperations(t *testing.T) {
 			test: func(t *testing.T, ts topoclient.Store) {
 				multiorch := &clustermetadatapb.MultiOrch{
 					Id: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIORCH,
+						Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 						Cell:      cell,
 						Name:      "oscar",
 					},
@@ -307,7 +307,7 @@ func TestMultiOrchCRUDOperations(t *testing.T) {
 			test: func(t *testing.T, ts topoclient.Store) {
 				multiorch := &clustermetadatapb.MultiOrch{
 					Id: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIORCH,
+						Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 						Cell:      cell,
 						Name:      "papa",
 					},
@@ -339,7 +339,7 @@ func TestMultiOrchCRUDOperations(t *testing.T) {
 			test: func(t *testing.T, ts topoclient.Store) {
 				multiorch := &clustermetadatapb.MultiOrch{
 					Id: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIORCH,
+						Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 						Cell:      cell,
 						Name:      "quebec",
 					},
@@ -393,7 +393,7 @@ func TestGetMultiOrchIDsByCell(t *testing.T) {
 				multiorchs := []*clustermetadatapb.MultiOrch{
 					{
 						Id: &clustermetadatapb.ID{
-							Component: clustermetadatapb.ID_MULTIORCH,
+							Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 							Cell:      cell1,
 							Name:      "bravo",
 						},
@@ -402,7 +402,7 @@ func TestGetMultiOrchIDsByCell(t *testing.T) {
 					},
 					{
 						Id: &clustermetadatapb.ID{
-							Component: clustermetadatapb.ID_MULTIORCH,
+							Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 							Cell:      cell1,
 							Name:      "charlie",
 						},
@@ -421,12 +421,12 @@ func TestGetMultiOrchIDsByCell(t *testing.T) {
 
 				expectedIDs := []*clustermetadatapb.ID{
 					{
-						Component: clustermetadatapb.ID_MULTIORCH,
+						Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 						Cell:      cell1,
 						Name:      "bravo",
 					},
 					{
-						Component: clustermetadatapb.ID_MULTIORCH,
+						Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 						Cell:      cell1,
 						Name:      "charlie",
 					},
@@ -479,7 +479,7 @@ func TestUpdateMultiOrchFields(t *testing.T) {
 			name: "Successful update",
 			test: func(t *testing.T, ts topoclient.Store) {
 				id := &clustermetadatapb.ID{
-					Component: clustermetadatapb.ID_MULTIORCH,
+					Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 					Cell:      cell,
 					Name:      "tango",
 				}
@@ -509,7 +509,7 @@ func TestUpdateMultiOrchFields(t *testing.T) {
 			name: "Update function returns error",
 			test: func(t *testing.T, ts topoclient.Store) {
 				id := &clustermetadatapb.ID{
-					Component: clustermetadatapb.ID_MULTIORCH,
+					Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 					Cell:      cell,
 					Name:      "uniform",
 				}
@@ -536,7 +536,7 @@ func TestUpdateMultiOrchFields(t *testing.T) {
 			name: "NoUpdateNeeded returns nil",
 			test: func(t *testing.T, ts topoclient.Store) {
 				id := &clustermetadatapb.ID{
-					Component: clustermetadatapb.ID_MULTIORCH,
+					Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 					Cell:      cell,
 					Name:      "victor",
 				}
@@ -561,7 +561,7 @@ func TestUpdateMultiOrchFields(t *testing.T) {
 				defer tsWithFactory.Close()
 
 				id := &clustermetadatapb.ID{
-					Component: clustermetadatapb.ID_MULTIORCH,
+					Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 					Cell:      cell,
 					Name:      "whiskey",
 				}
@@ -616,7 +616,7 @@ func TestInitMultiOrch(t *testing.T) {
 			test: func(t *testing.T, ts topoclient.Store) {
 				multiorch := &clustermetadatapb.MultiOrch{
 					Id: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIORCH,
+						Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 						Cell:      cell,
 						Name:      "zulu",
 					},
@@ -637,7 +637,7 @@ func TestInitMultiOrch(t *testing.T) {
 			test: func(t *testing.T, ts topoclient.Store) {
 				original := &clustermetadatapb.MultiOrch{
 					Id: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIORCH,
+						Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 						Cell:      cell,
 						Name:      "xray",
 					},
@@ -648,7 +648,7 @@ func TestInitMultiOrch(t *testing.T) {
 
 				updated := &clustermetadatapb.MultiOrch{
 					Id: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIORCH,
+						Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 						Cell:      cell,
 						Name:      "xray",
 					},
@@ -669,7 +669,7 @@ func TestInitMultiOrch(t *testing.T) {
 			test: func(t *testing.T, ts topoclient.Store) {
 				original := &clustermetadatapb.MultiOrch{
 					Id: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIORCH,
+						Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 						Cell:      cell,
 						Name:      "whiskey",
 					},
@@ -680,7 +680,7 @@ func TestInitMultiOrch(t *testing.T) {
 
 				updated := &clustermetadatapb.MultiOrch{
 					Id: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIORCH,
+						Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 						Cell:      cell,
 						Name:      "whiskey",
 					},
@@ -768,7 +768,7 @@ func TestNewMultiOrch(t *testing.T) {
 func TestMultiOrchInfo(t *testing.T) {
 	multiorch := &clustermetadatapb.MultiOrch{
 		Id: &clustermetadatapb.ID{
-			Component: clustermetadatapb.ID_MULTIORCH,
+			Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 			Cell:      "zone1",
 			Name:      "100",
 		},
@@ -802,7 +802,7 @@ func TestMultiOrchInfo(t *testing.T) {
 	t.Run("Addr method without grpc port", func(t *testing.T) {
 		multiorchNoGrpc := &clustermetadatapb.MultiOrch{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIORCH,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 				Cell:      "zone1",
 				Name:      "100",
 			},
@@ -909,7 +909,7 @@ func TestGetMultiOrchsByCell_Comprehensive(t *testing.T) {
 		// Setup: Create multiorchs in both cells
 		zone1MultiOrch := &clustermetadatapb.MultiOrch{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIORCH,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 				Cell:      "zone1",
 				Name:      "1",
 			},
@@ -918,7 +918,7 @@ func TestGetMultiOrchsByCell_Comprehensive(t *testing.T) {
 		}
 		zone2MultiOrch := &clustermetadatapb.MultiOrch{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIORCH,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 				Cell:      "zone2",
 				Name:      "1",
 			},

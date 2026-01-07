@@ -349,7 +349,7 @@ func removeReplicaFromStandbyList(t *testing.T, primaryClient *shardsetup.Multip
 	_, err := primaryClient.Manager.UpdateSynchronousStandbyList(ctx, &multipoolermanagerdatapb.UpdateSynchronousStandbyListRequest{
 		Operation: multipoolermanagerdatapb.StandbyUpdateOperation_STANDBY_UPDATE_OPERATION_REMOVE,
 		StandbyIds: []*clustermetadatapb.ID{{
-			Component: clustermetadatapb.ID_MULTIPOOLER,
+			Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 			Cell:      "test-cell",
 			Name:      replicaName,
 		}},

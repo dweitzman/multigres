@@ -43,32 +43,32 @@ func TestLoadQuorumRule_PrimaryPreference(t *testing.T) {
 		// Create PRIMARY node
 		primaryPooler := &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "primary",
 			},
-			Type: clustermetadatapb.PoolerType_PRIMARY,
+			Type: clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 		}
 		primaryNode := &multiorchdatapb.PoolerHealthState{MultiPooler: primaryPooler}
 
 		// Create REPLICA nodes
 		replica1Pooler := &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "replica1",
 			},
-			Type: clustermetadatapb.PoolerType_REPLICA,
+			Type: clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 		}
 		replica1Node := &multiorchdatapb.PoolerHealthState{MultiPooler: replica1Pooler}
 
 		replica2Pooler := &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "replica2",
 			},
-			Type: clustermetadatapb.PoolerType_REPLICA,
+			Type: clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 		}
 		replica2Node := &multiorchdatapb.PoolerHealthState{MultiPooler: replica2Pooler}
 
@@ -132,32 +132,32 @@ func TestLoadQuorumRule_PrimaryPreference(t *testing.T) {
 		// Create PRIMARY node
 		primaryPooler := &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "primary",
 			},
-			Type: clustermetadatapb.PoolerType_PRIMARY,
+			Type: clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 		}
 		primaryNode := &multiorchdatapb.PoolerHealthState{MultiPooler: primaryPooler}
 
 		// Create REPLICA nodes
 		replica1Pooler := &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "replica1",
 			},
-			Type: clustermetadatapb.PoolerType_REPLICA,
+			Type: clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 		}
 		replica1Node := &multiorchdatapb.PoolerHealthState{MultiPooler: replica1Pooler}
 
 		replica2Pooler := &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "replica2",
 			},
-			Type: clustermetadatapb.PoolerType_REPLICA,
+			Type: clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 		}
 		replica2Node := &multiorchdatapb.PoolerHealthState{MultiPooler: replica2Pooler}
 
@@ -215,31 +215,31 @@ func TestLoadQuorumRule_ParallelReplicaLoading(t *testing.T) {
 		// Create REPLICA nodes only (no PRIMARY)
 		replica1Pooler := &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "replica1",
 			},
-			Type: clustermetadatapb.PoolerType_REPLICA,
+			Type: clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 		}
 		replica1Node := &multiorchdatapb.PoolerHealthState{MultiPooler: replica1Pooler}
 
 		replica2Pooler := &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "replica2",
 			},
-			Type: clustermetadatapb.PoolerType_REPLICA,
+			Type: clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 		}
 		replica2Node := &multiorchdatapb.PoolerHealthState{MultiPooler: replica2Pooler}
 
 		replica3Pooler := &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "replica3",
 			},
-			Type: clustermetadatapb.PoolerType_REPLICA,
+			Type: clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 		}
 		replica3Node := &multiorchdatapb.PoolerHealthState{MultiPooler: replica3Pooler}
 
@@ -302,21 +302,21 @@ func TestLoadQuorumRule_ParallelReplicaLoading(t *testing.T) {
 		// Create REPLICA nodes
 		replica1Pooler := &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "replica1",
 			},
-			Type: clustermetadatapb.PoolerType_REPLICA,
+			Type: clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 		}
 		replica1Node := &multiorchdatapb.PoolerHealthState{MultiPooler: replica1Pooler}
 
 		replica2Pooler := &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "replica2",
 			},
-			Type: clustermetadatapb.PoolerType_REPLICA,
+			Type: clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 		}
 		replica2Node := &multiorchdatapb.PoolerHealthState{MultiPooler: replica2Pooler}
 
@@ -373,11 +373,11 @@ func TestLoadQuorumRule_ResponseWaiting(t *testing.T) {
 		for i := 1; i <= 4; i++ {
 			pooler := &clustermetadatapb.MultiPooler{
 				Id: &clustermetadatapb.ID{
-					Component: clustermetadatapb.ID_MULTIPOOLER,
+					Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 					Cell:      "cell1",
 					Name:      fmt.Sprintf("replica%d", i),
 				},
-				Type: clustermetadatapb.PoolerType_REPLICA,
+				Type: clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 			}
 			node := &multiorchdatapb.PoolerHealthState{MultiPooler: pooler}
 			replicaNodes = append(replicaNodes, node)
@@ -418,31 +418,31 @@ func TestLoadQuorumRule_ResponseWaiting(t *testing.T) {
 		// Create 3 REPLICA nodes
 		replica1Pooler := &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "replica1",
 			},
-			Type: clustermetadatapb.PoolerType_REPLICA,
+			Type: clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 		}
 		replica1Node := &multiorchdatapb.PoolerHealthState{MultiPooler: replica1Pooler}
 
 		replica2Pooler := &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "replica2",
 			},
-			Type: clustermetadatapb.PoolerType_REPLICA,
+			Type: clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 		}
 		replica2Node := &multiorchdatapb.PoolerHealthState{MultiPooler: replica2Pooler}
 
 		replica3Pooler := &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "replica3",
 			},
-			Type: clustermetadatapb.PoolerType_REPLICA,
+			Type: clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 		}
 		replica3Node := &multiorchdatapb.PoolerHealthState{MultiPooler: replica3Pooler}
 
@@ -500,21 +500,21 @@ func TestLoadQuorumRule_FallbackBehaviors(t *testing.T) {
 		// Create REPLICA nodes
 		replica1Pooler := &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "replica1",
 			},
-			Type: clustermetadatapb.PoolerType_REPLICA,
+			Type: clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 		}
 		replica1Node := &multiorchdatapb.PoolerHealthState{MultiPooler: replica1Pooler}
 
 		replica2Pooler := &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "replica2",
 			},
-			Type: clustermetadatapb.PoolerType_REPLICA,
+			Type: clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 		}
 		replica2Node := &multiorchdatapb.PoolerHealthState{MultiPooler: replica2Pooler}
 
@@ -544,11 +544,11 @@ func TestLoadQuorumRule_FallbackBehaviors(t *testing.T) {
 		// Create PRIMARY node that fails
 		primaryPooler := &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "primary",
 			},
-			Type: clustermetadatapb.PoolerType_PRIMARY,
+			Type: clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 		}
 		primaryNode := &multiorchdatapb.PoolerHealthState{MultiPooler: primaryPooler}
 

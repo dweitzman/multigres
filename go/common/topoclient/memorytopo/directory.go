@@ -51,7 +51,7 @@ func (c *conn) ListDir(ctx context.Context, dirPath string, full bool) ([]topocl
 
 	// Check it's a directory.
 	if !n.isDirectory() {
-		return nil, mterrors.Errorf(mtrpc.Code_INVALID_ARGUMENT, "node %v in cell %v is not a directory", dirPath, c.cell)
+		return nil, mterrors.Errorf(mtrpc.Code_CODE_INVALID_ARGUMENT, "node %v in cell %v is not a directory", dirPath, c.cell)
 	}
 
 	result := make([]topoclient.DirEntry, 0, len(n.children))

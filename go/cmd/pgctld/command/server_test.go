@@ -259,7 +259,7 @@ func TestPgCtldServiceStatus(t *testing.T) {
 			setupDataDir: func(baseDir string) string {
 				return testutil.CreateDataDir(t, baseDir, false)
 			},
-			expected: pb.ServerStatus_NOT_INITIALIZED,
+			expected: pb.ServerStatus_SERVER_STATUS_NOT_INITIALIZED,
 		},
 		{
 			name:    "status stopped",
@@ -267,7 +267,7 @@ func TestPgCtldServiceStatus(t *testing.T) {
 			setupDataDir: func(baseDir string) string {
 				return testutil.CreateDataDir(t, baseDir, true)
 			},
-			expected: pb.ServerStatus_STOPPED,
+			expected: pb.ServerStatus_SERVER_STATUS_STOPPED,
 		},
 		{
 			name:    "status running",
@@ -277,7 +277,7 @@ func TestPgCtldServiceStatus(t *testing.T) {
 				testutil.CreatePIDFile(t, dataDir, 12345)
 				return dataDir
 			},
-			expected: pb.ServerStatus_RUNNING,
+			expected: pb.ServerStatus_SERVER_STATUS_RUNNING,
 		},
 	}
 

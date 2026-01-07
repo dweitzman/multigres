@@ -469,7 +469,7 @@ func checkBootstrapStatus(t *testing.T, setup *ShardSetup) (string, bool) {
 		isFullyInitialized := false
 
 		switch status.PoolerType {
-		case clustermetadatapb.PoolerType_PRIMARY:
+		case clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY:
 			// Check that sync replication is configured with expected standbys
 			if status.PrimaryStatus == nil ||
 				status.PrimaryStatus.SyncReplicationConfig == nil ||
@@ -485,7 +485,7 @@ func checkBootstrapStatus(t *testing.T, setup *ShardSetup) (string, bool) {
 				isFullyInitialized = true
 			}
 
-		case clustermetadatapb.PoolerType_REPLICA:
+		case clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA:
 			// Check that primary_conn_info is configured
 			hasReplicationStatus := status.ReplicationStatus != nil
 			hasPrimaryConnInfo := hasReplicationStatus && status.ReplicationStatus.PrimaryConnInfo != nil
@@ -666,7 +666,7 @@ func (s *ShardSetup) ValidateCleanState() error {
 				return fmt.Errorf("%s pg_is_in_recovery=%s (expected f)", name, inRecovery)
 			}
 			// Validate pooler type is PRIMARY
-			if err := ValidatePoolerType(ctx, client.Manager, clustermetadatapb.PoolerType_PRIMARY, name); err != nil {
+			if err := ValidatePoolerType(ctx, client.Manager, clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY, name); err != nil {
 				return err
 			}
 		} else {
@@ -684,7 +684,7 @@ func (s *ShardSetup) ValidateCleanState() error {
 			}
 
 			// Validate pooler type is REPLICA
-			if err := ValidatePoolerType(ctx, client.Manager, clustermetadatapb.PoolerType_REPLICA, name); err != nil {
+			if err := ValidatePoolerType(ctx, client.Manager, clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA, name); err != nil {
 				return err
 			}
 		}
@@ -761,9 +761,9 @@ func (s *ShardSetup) ResetToCleanState(t *testing.T) {
 		}
 
 		// Reset pooler type
-		expectedType := clustermetadatapb.PoolerType_REPLICA
+		expectedType := clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA
 		if isPrimary {
-			expectedType = clustermetadatapb.PoolerType_PRIMARY
+			expectedType = clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY
 		}
 		if err := SetPoolerType(ctx, client.Manager, expectedType); err != nil {
 			t.Logf("Reset: Failed to set pooler type on %s: %v", name, err)
@@ -885,9 +885,9 @@ func (s *ShardSetup) SetupTest(t *testing.T, opts ...SetupTestOption) {
 			}
 
 			// Reset pooler type
-			expectedType := clustermetadatapb.PoolerType_REPLICA
+			expectedType := clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA
 			if isPrimary {
-				expectedType = clustermetadatapb.PoolerType_PRIMARY
+				expectedType = clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY
 			}
 			if err := SetPoolerType(cleanupCtx, client.Manager, expectedType); err != nil {
 				t.Logf("Cleanup: failed to set pooler type on %s: %v", name, err)
@@ -1031,7 +1031,7 @@ func (s *ShardSetup) NewPrimaryClient(t *testing.T) *MultipoolerClient {
 // makeMultipoolerID creates a multipooler ID for testing.
 func makeMultipoolerID(cell, name string) *clustermetadatapb.ID {
 	return &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      cell,
 		Name:      name,
 	}

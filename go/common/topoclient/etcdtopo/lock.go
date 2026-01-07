@@ -102,7 +102,7 @@ func (s *etcdtopo) waitOnLastRev(ctx context.Context, cli *clientv3.Client, node
 	defer cancel()
 	wc := cli.Watch(ctx, key, clientv3.WithRev(revision))
 	if wc == nil {
-		return false, mterrors.Errorf(mtrpc.Code_INTERNAL, "Watch failed")
+		return false, mterrors.Errorf(mtrpc.Code_CODE_INTERNAL, "Watch failed")
 	}
 
 	select {

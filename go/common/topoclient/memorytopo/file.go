@@ -54,7 +54,7 @@ func (c *conn) Create(ctx context.Context, filePath string, contents []byte) (to
 	dir, file := path.Split(filePath)
 	p := c.factory.getOrCreatePath(c.cell, dir)
 	if p == nil {
-		return nil, mterrors.Errorf(mtrpc.Code_INVALID_ARGUMENT, "trying to create file %v in cell %v in a path that contains files", filePath, c.cell)
+		return nil, mterrors.Errorf(mtrpc.Code_CODE_INVALID_ARGUMENT, "trying to create file %v in cell %v in a path that contains files", filePath, c.cell)
 	}
 
 	// Check the file doesn't already exist.
@@ -109,7 +109,7 @@ func (c *conn) Update(ctx context.Context, filePath string, contents []byte, ver
 		}
 		p = c.factory.getOrCreatePath(c.cell, dir)
 		if p == nil {
-			return nil, mterrors.Errorf(mtrpc.Code_FAILED_PRECONDITION, "trying to create file %v in topo %v in a path that contains files", filePath, c.cell)
+			return nil, mterrors.Errorf(mtrpc.Code_CODE_FAILED_PRECONDITION, "trying to create file %v in topo %v in a path that contains files", filePath, c.cell)
 		}
 	}
 
@@ -127,7 +127,7 @@ func (c *conn) Update(ctx context.Context, filePath string, contents []byte, ver
 
 	// Check if it's a directory.
 	if n.isDirectory() {
-		return nil, mterrors.Errorf(mtrpc.Code_INVALID_ARGUMENT, "Update(%v, %v) failed: it's a directory", c.cell, filePath)
+		return nil, mterrors.Errorf(mtrpc.Code_CODE_INVALID_ARGUMENT, "Update(%v, %v) failed: it's a directory", c.cell, filePath)
 	}
 
 	// Check the version.

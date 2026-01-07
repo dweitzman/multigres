@@ -64,7 +64,7 @@ func (c *Coordinator) LoadQuorumRuleFromNode(ctx context.Context, node *multiorc
 // 4. Return the rule with the highest version number
 func (c *Coordinator) LoadQuorumRule(ctx context.Context, cohort []*multiorchdatapb.PoolerHealthState, database string) (*clustermetadatapb.QuorumRule, error) {
 	if len(cohort) == 0 {
-		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "cohort is empty")
+		return nil, mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT, "cohort is empty")
 	}
 
 	// Step 1: Find PRIMARY node
@@ -72,9 +72,9 @@ func (c *Coordinator) LoadQuorumRule(ctx context.Context, cohort []*multiorchdat
 	var replicaNodes []*multiorchdatapb.PoolerHealthState
 	for _, pooler := range cohort {
 		switch pooler.MultiPooler.Type {
-		case clustermetadatapb.PoolerType_PRIMARY:
+		case clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY:
 			primaryNode = pooler
-		case clustermetadatapb.PoolerType_REPLICA:
+		case clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA:
 			replicaNodes = append(replicaNodes, pooler)
 		}
 	}

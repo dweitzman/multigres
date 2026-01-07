@@ -33,14 +33,14 @@ func TestProtoStore_BasicOperations(t *testing.T) {
 	info := &multiorchdatapb.PoolerHealthState{
 		MultiPooler: &clustermetadata.MultiPooler{
 			Id: &clustermetadata.ID{
-				Component: clustermetadata.ID_MULTIPOOLER,
+				Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "multipooler-1",
 			},
 			Database:   "postgres",
 			TableGroup: constants.DefaultTableGroup,
 			Shard:      "-",
-			Type:       clustermetadata.PoolerType_PRIMARY,
+			Type:       clustermetadata.PoolerType_POOLER_TYPE_PRIMARY,
 		},
 		LastSeen:         timestamppb.Now(),
 		IsUpToDate:       true,
@@ -67,7 +67,7 @@ func TestProtoStore_Delete(t *testing.T) {
 	info := &multiorchdatapb.PoolerHealthState{
 		MultiPooler: &clustermetadata.MultiPooler{
 			Id: &clustermetadata.ID{
-				Component: clustermetadata.ID_MULTIPOOLER,
+				Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "test",
 			},
@@ -131,7 +131,7 @@ func TestProtoStore_Range(t *testing.T) {
 	store.Set("key1", &multiorchdatapb.PoolerHealthState{
 		MultiPooler: &clustermetadata.MultiPooler{
 			Id: &clustermetadata.ID{
-				Component: clustermetadata.ID_MULTIPOOLER,
+				Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "pooler1",
 			},
@@ -141,7 +141,7 @@ func TestProtoStore_Range(t *testing.T) {
 	store.Set("key2", &multiorchdatapb.PoolerHealthState{
 		MultiPooler: &clustermetadata.MultiPooler{
 			Id: &clustermetadata.ID{
-				Component: clustermetadata.ID_MULTIPOOLER,
+				Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "pooler2",
 			},
@@ -151,7 +151,7 @@ func TestProtoStore_Range(t *testing.T) {
 	store.Set("key3", &multiorchdatapb.PoolerHealthState{
 		MultiPooler: &clustermetadata.MultiPooler{
 			Id: &clustermetadata.ID{
-				Component: clustermetadata.ID_MULTIPOOLER,
+				Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "pooler3",
 			},
@@ -242,7 +242,7 @@ func TestProtoStore_CloningBehavior(t *testing.T) {
 	original := &multiorchdatapb.PoolerHealthState{
 		MultiPooler: &clustermetadata.MultiPooler{
 			Id: &clustermetadata.ID{
-				Component: clustermetadata.ID_MULTIPOOLER,
+				Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "pooler1",
 			},
@@ -280,7 +280,7 @@ func TestProtoStore_RangeCloningBehavior(t *testing.T) {
 	store.Set("key1", &multiorchdatapb.PoolerHealthState{
 		MultiPooler: &clustermetadata.MultiPooler{
 			Id: &clustermetadata.ID{
-				Component: clustermetadata.ID_MULTIPOOLER,
+				Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "pooler1",
 			},

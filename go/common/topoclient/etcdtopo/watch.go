@@ -69,7 +69,7 @@ func (s *etcdtopo) Watch(ctx context.Context, filePath string) (*topoclient.Watc
 	if watcher == nil {
 		watchCancel()
 		outerCancel()
-		return nil, nil, mterrors.Errorf(mtrpc.Code_INVALID_ARGUMENT, "Watch failed")
+		return nil, nil, mterrors.Errorf(mtrpc.Code_CODE_INVALID_ARGUMENT, "Watch failed")
 	}
 
 	// Create the notifications channel, send updates to it.
@@ -145,7 +145,7 @@ func (s *etcdtopo) Watch(ctx context.Context, filePath string) (*topoclient.Watc
 						return
 					default:
 						notifications <- &topoclient.WatchData{
-							Err: mterrors.Errorf(mtrpc.Code_INTERNAL, "unexpected event received: %v", ev),
+							Err: mterrors.Errorf(mtrpc.Code_CODE_INTERNAL, "unexpected event received: %v", ev),
 						}
 						return
 					}
@@ -193,7 +193,7 @@ func (s *etcdtopo) WatchRecursive(ctx context.Context, dirpath string) ([]*topoc
 	if watcher == nil {
 		watchCancel()
 		outerCancel()
-		return nil, nil, mterrors.Errorf(mtrpc.Code_INVALID_ARGUMENT, "Watch failed")
+		return nil, nil, mterrors.Errorf(mtrpc.Code_CODE_INVALID_ARGUMENT, "Watch failed")
 	}
 
 	// Create the notifications channel, send updates to it.

@@ -168,7 +168,7 @@ func TestGetBackupJobStatus_FallbackToPooler(t *testing.T) {
 	// Create a replica pooler in the topology
 	replicaPooler := &clustermetadatapb.MultiPooler{
 		Id: &clustermetadatapb.ID{
-			Component: clustermetadatapb.ID_MULTIPOOLER,
+			Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 			Cell:      "cell1",
 			Name:      "replica-pooler",
 		},
@@ -176,7 +176,7 @@ func TestGetBackupJobStatus_FallbackToPooler(t *testing.T) {
 		PortMap:    map[string]int32{"grpc": 8081},
 		Database:   "testdb",
 		TableGroup: "default",
-		Type:       clustermetadatapb.PoolerType_REPLICA,
+		Type:       clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 	}
 	require.NoError(t, ts.CreateMultiPooler(ctx, replicaPooler))
 
@@ -187,7 +187,7 @@ func TestGetBackupJobStatus_FallbackToPooler(t *testing.T) {
 	fakeClient.GetBackupByJobIdResponses[poolerKey] = &multipoolermanagerdata.GetBackupByJobIdResponse{
 		Backup: &multipoolermanagerdata.BackupMetadata{
 			BackupId: "20251203-143045F",
-			Status:   multipoolermanagerdata.BackupMetadata_COMPLETE,
+			Status:   multipoolermanagerdata.BackupMetadata_STATUS_COMPLETE,
 			JobId:    "20251203-143045.000000_replica-pooler",
 		},
 	}
@@ -279,7 +279,7 @@ func TestBackup_ForcePrimary(t *testing.T) {
 	// Create both a primary and replica pooler
 	primaryPooler := &clustermetadatapb.MultiPooler{
 		Id: &clustermetadatapb.ID{
-			Component: clustermetadatapb.ID_MULTIPOOLER,
+			Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 			Cell:      "cell1",
 			Name:      "primary-pooler",
 		},
@@ -287,11 +287,11 @@ func TestBackup_ForcePrimary(t *testing.T) {
 		PortMap:    map[string]int32{"grpc": 8081},
 		Database:   "testdb",
 		TableGroup: "default",
-		Type:       clustermetadatapb.PoolerType_PRIMARY,
+		Type:       clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 	}
 	replicaPooler := &clustermetadatapb.MultiPooler{
 		Id: &clustermetadatapb.ID{
-			Component: clustermetadatapb.ID_MULTIPOOLER,
+			Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 			Cell:      "cell1",
 			Name:      "replica-pooler",
 		},
@@ -299,7 +299,7 @@ func TestBackup_ForcePrimary(t *testing.T) {
 		PortMap:    map[string]int32{"grpc": 8081},
 		Database:   "testdb",
 		TableGroup: "default",
-		Type:       clustermetadatapb.PoolerType_REPLICA,
+		Type:       clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 	}
 	require.NoError(t, ts.CreateMultiPooler(ctx, primaryPooler))
 	require.NoError(t, ts.CreateMultiPooler(ctx, replicaPooler))
@@ -365,7 +365,7 @@ func TestBackup_ForcePrimary(t *testing.T) {
 		// Only create a primary pooler (no replica)
 		primaryOnly := &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "cell2",
 				Name:      "primary-only",
 			},
@@ -373,7 +373,7 @@ func TestBackup_ForcePrimary(t *testing.T) {
 			PortMap:    map[string]int32{"grpc": 8081},
 			Database:   "testdb",
 			TableGroup: "default",
-			Type:       clustermetadatapb.PoolerType_PRIMARY,
+			Type:       clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 		}
 		require.NoError(t, ts.CreateMultiPooler(ctx, primaryOnly))
 

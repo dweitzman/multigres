@@ -266,14 +266,14 @@ func (pm *MultiPoolerManager) backupLocked(ctx context.Context, forcePrimary boo
 	// Capture output for logging
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", mterrors.New(mtrpcpb.Code_INTERNAL,
+		return "", mterrors.New(mtrpcpb.Code_CODE_INTERNAL,
 			fmt.Sprintf("pgbackrest backup failed: %v\nOutput: %s", err, string(output)))
 	}
 
 	// Find the backup ID by querying pgbackrest info with our unique annotations
 	foundBackupID, err := pm.findBackupByJobID(ctx, effectiveJobID)
 	if err != nil {
-		return "", mterrors.New(mtrpcpb.Code_INTERNAL,
+		return "", mterrors.New(mtrpcpb.Code_CODE_INTERNAL,
 			fmt.Sprintf("failed to find backup by annotations: %v\nBackup output: %s", err, string(output)))
 	}
 
@@ -289,7 +289,7 @@ func (pm *MultiPoolerManager) backupLocked(ctx context.Context, forcePrimary boo
 
 	verifyOutput, verifyErr := verifyCmd.CombinedOutput()
 	if verifyErr != nil {
-		return "", mterrors.New(mtrpcpb.Code_INTERNAL,
+		return "", mterrors.New(mtrpcpb.Code_CODE_INTERNAL,
 			fmt.Sprintf("pgbackrest verify failed for backup %s: %v\nOutput: %s", foundBackupID, verifyErr, string(verifyOutput)))
 	}
 	// TODO: use `pgbackrest info` to verify that the database pages from the backed up
@@ -335,14 +335,14 @@ func (pm *MultiPoolerManager) restoreFromBackupLocked(ctx context.Context, backu
 
 	// Check that this is a standby, not a primary
 	poolerType := pm.getPoolerType()
-	if poolerType == clustermetadatapb.PoolerType_PRIMARY {
-		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
+	if poolerType == clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY {
+		return mterrors.New(mtrpcpb.Code_CODE_FAILED_PRECONDITION,
 			"cannot restore to a primary pooler; restore is only supported for standby poolers")
 	}
 
 	// Check that PGDATA doesn't exist (caller must remove it before restore)
 	if pm.hasDataDirectory() {
-		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
+		return mterrors.New(mtrpcpb.Code_CODE_FAILED_PRECONDITION,
 			"cannot restore: PGDATA already exists; caller must stop PostgreSQL and remove PGDATA first")
 	}
 
@@ -384,7 +384,7 @@ func (pm *MultiPoolerManager) executePgBackrestRestore(ctx context.Context, back
 	cmd := exec.CommandContext(restoreCtx, "pgbackrest", args...)
 	output, err := safeCombinedOutput(cmd)
 	if err != nil {
-		return mterrors.New(mtrpcpb.Code_INTERNAL,
+		return mterrors.New(mtrpcpb.Code_CODE_INTERNAL,
 			fmt.Sprintf("pgbackrest restore failed: %v\nOutput: %s", err, output))
 	}
 
@@ -394,7 +394,7 @@ func (pm *MultiPoolerManager) executePgBackrestRestore(ctx context.Context, back
 func (pm *MultiPoolerManager) startPostgreSQLAfterRestore(ctx context.Context, backupID string) error {
 	pgctldClient := pm.getPgCtldClient()
 	if pgctldClient == nil {
-		return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "pgctld_client is required")
+		return mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT, "pgctld_client is required")
 	}
 
 	restartCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
@@ -407,7 +407,7 @@ func (pm *MultiPoolerManager) startPostgreSQLAfterRestore(ctx context.Context, b
 		AsStandby: true,
 	})
 	if err != nil {
-		return mterrors.New(mtrpcpb.Code_INTERNAL,
+		return mterrors.New(mtrpcpb.Code_CODE_INTERNAL,
 			fmt.Sprintf("failed to start PostgreSQL after restore: %v", err))
 	}
 
@@ -477,7 +477,7 @@ func (pm *MultiPoolerManager) listBackups(ctx context.Context) ([]*multipoolerma
 	}
 
 	if pm.backupLocation == "" {
-		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "backup_location is required")
+		return nil, mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT, "backup_location is required")
 	}
 
 	// Execute pgbackrest info command with JSON output
@@ -497,14 +497,14 @@ func (pm *MultiPoolerManager) listBackups(ctx context.Context) ([]*multipoolerma
 		if output == "" || strings.Contains(output, "does not exist") || strings.Contains(output, "unable to open missing file") {
 			return []*multipoolermanagerdata.BackupMetadata{}, nil
 		}
-		return nil, mterrors.New(mtrpcpb.Code_INTERNAL,
+		return nil, mterrors.New(mtrpcpb.Code_CODE_INTERNAL,
 			fmt.Sprintf("pgbackrest info failed: %v\nOutput: %s", err, output))
 	}
 
 	// Parse JSON output
 	var infoData []pgBackRestInfo
 	if err := json.Unmarshal([]byte(output), &infoData); err != nil {
-		return nil, mterrors.New(mtrpcpb.Code_INTERNAL,
+		return nil, mterrors.New(mtrpcpb.Code_CODE_INTERNAL,
 			fmt.Sprintf("failed to parse pgbackrest info JSON: %v", err))
 	}
 
@@ -519,9 +519,9 @@ func (pm *MultiPoolerManager) listBackups(ctx context.Context) ([]*multipoolerma
 	// Extract backups from the first stanza (should be the only one)
 	var backups []*multipoolermanagerdata.BackupMetadata
 	for _, pgBackup := range infoData[0].Backup {
-		status := multipoolermanagerdata.BackupMetadata_COMPLETE
+		status := multipoolermanagerdata.BackupMetadata_STATUS_COMPLETE
 		if pgBackup.Error {
-			status = multipoolermanagerdata.BackupMetadata_INCOMPLETE
+			status = multipoolermanagerdata.BackupMetadata_STATUS_INCOMPLETE
 		}
 
 		// Extract table_group, shard, job_id, multipooler_id, and pooler_type from annotations
@@ -529,7 +529,7 @@ func (pm *MultiPoolerManager) listBackups(ctx context.Context) ([]*multipoolerma
 		shard := ""
 		jobID := ""
 		multipoolerID := ""
-		poolerType := clustermetadatapb.PoolerType_UNKNOWN
+		poolerType := clustermetadatapb.PoolerType_POOLER_TYPE_UNKNOWN
 		if pgBackup.Annotation != nil {
 			tableGroup = pgBackup.Annotation["table_group"]
 			shard = pgBackup.Annotation["shard"]
@@ -630,11 +630,11 @@ type pgBackRestLSN struct {
 // allowBackupOnPrimary checks if a backup operation is allowed on a primary pooler
 func (pm *MultiPoolerManager) allowBackupOnPrimary(ctx context.Context, forcePrimary bool) error {
 	poolerType := pm.getPoolerType()
-	isPrimary := (poolerType == clustermetadatapb.PoolerType_PRIMARY)
+	isPrimary := (poolerType == clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY)
 
 	if isPrimary && !forcePrimary {
 		slog.WarnContext(ctx, "Backup requested on primary database without ForcePrimary flag")
-		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
+		return mterrors.New(mtrpcpb.Code_CODE_FAILED_PRECONDITION,
 			"backups from primary databases are not allowed unless ForcePrimary is set")
 	}
 	return nil
@@ -644,7 +644,7 @@ func (pm *MultiPoolerManager) allowBackupOnPrimary(ctx context.Context, forcePri
 func (pm *MultiPoolerManager) validateBackupParams(backupType, configPath string) (pgBackRestType string, err error) {
 	// Validate backup type is provided
 	if backupType == "" {
-		return "", mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "type is required")
+		return "", mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT, "type is required")
 	}
 
 	// Map to pgbackrest types: full, diff, incr
@@ -656,13 +656,13 @@ func (pm *MultiPoolerManager) validateBackupParams(backupType, configPath string
 	case "incremental":
 		pgBackRestType = "incr"
 	default:
-		return "", mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
+		return "", mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT,
 			fmt.Sprintf("invalid backup type '%s': must be one of: full, differential, incremental", backupType))
 	}
 
 	// Validate required backup configuration
 	if configPath == "" {
-		return "", mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "config_path is required")
+		return "", mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT, "config_path is required")
 	}
 
 	return pgBackRestType, nil
@@ -747,20 +747,20 @@ func (pm *MultiPoolerManager) findBackupByJobID(
 
 	output, err := safeCombinedOutput(cmd)
 	if err != nil {
-		return "", mterrors.New(mtrpcpb.Code_INTERNAL,
+		return "", mterrors.New(mtrpcpb.Code_CODE_INTERNAL,
 			fmt.Sprintf("pgbackrest info failed: %v\nOutput: %s", err, output))
 	}
 
 	// Parse JSON output
 	var infoData []pgBackRestInfo
 	if err := json.Unmarshal([]byte(output), &infoData); err != nil {
-		return "", mterrors.New(mtrpcpb.Code_INTERNAL,
+		return "", mterrors.New(mtrpcpb.Code_CODE_INTERNAL,
 			fmt.Sprintf("failed to parse pgbackrest info JSON: %v", err))
 	}
 
 	// Search for backup with matching annotations
 	if len(infoData) == 0 || len(infoData[0].Backup) == 0 {
-		return "", mterrors.New(mtrpcpb.Code_NOT_FOUND,
+		return "", mterrors.New(mtrpcpb.Code_CODE_NOT_FOUND,
 			"no backups found in pgbackrest info output")
 	}
 
@@ -774,12 +774,12 @@ func (pm *MultiPoolerManager) findBackupByJobID(
 	}
 
 	if len(matchedBackups) == 0 {
-		return "", mterrors.New(mtrpcpb.Code_NOT_FOUND,
+		return "", mterrors.New(mtrpcpb.Code_CODE_NOT_FOUND,
 			fmt.Sprintf("no backup found with job_id=%s", jobID))
 	}
 
 	if len(matchedBackups) > 1 {
-		return "", mterrors.New(mtrpcpb.Code_INTERNAL,
+		return "", mterrors.New(mtrpcpb.Code_CODE_INTERNAL,
 			fmt.Sprintf("found %d backups with job_id=%s, expected 1",
 				len(matchedBackups), jobID))
 	}
@@ -828,7 +828,7 @@ func (pm *MultiPoolerManager) tryAutoRestoreFromBackup(ctx context.Context) {
 
 	// Only auto-restore REPLICA poolers - PRIMARY must be explicitly initialized.
 	poolerType := pm.getPoolerType()
-	if poolerType != clustermetadatapb.PoolerType_REPLICA {
+	if poolerType != clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA {
 		pm.logger.InfoContext(ctx, "Auto-restore skipped: only REPLICA poolers auto-restore", "pooler_type", poolerType.String())
 		return
 	}
@@ -895,7 +895,7 @@ func (pm *MultiPoolerManager) tryAutoRestoreOnce(ctx context.Context) (success b
 	// Filter to only complete backups for auto-restore
 	var completeBackups []*multipoolermanagerdata.BackupMetadata
 	for _, b := range backups {
-		if b.Status == multipoolermanagerdata.BackupMetadata_COMPLETE {
+		if b.Status == multipoolermanagerdata.BackupMetadata_STATUS_COMPLETE {
 			completeBackups = append(completeBackups, b)
 		}
 	}
@@ -951,7 +951,7 @@ func (pm *MultiPoolerManager) tryAutoRestoreOnce(ctx context.Context) (success b
 // Returns nil Backup if not found.
 func (pm *MultiPoolerManager) GetBackupByJobId(ctx context.Context, jobID string) (*multipoolermanagerdata.BackupMetadata, error) {
 	if jobID == "" {
-		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "job_id is required")
+		return nil, mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT, "job_id is required")
 	}
 
 	pm.logger.DebugContext(ctx, "Searching for backup by job_id", "job_id", jobID)

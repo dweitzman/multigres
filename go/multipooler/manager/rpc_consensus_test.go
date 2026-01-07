@@ -66,7 +66,7 @@ func setupManagerWithMockDB(t *testing.T, mockQueryService *mock.QueryService) (
 	addDatabaseToTopo(t, ts, database)
 
 	serviceID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-pooler",
 	}
@@ -75,8 +75,8 @@ func setupManagerWithMockDB(t *testing.T, mockQueryService *mock.QueryService) (
 		Database:      database,
 		Hostname:      "localhost",
 		PortMap:       map[string]int32{"grpc": 8080},
-		Type:          clustermetadatapb.PoolerType_PRIMARY,
-		ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
+		Type:          clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
+		ServingStatus: clustermetadatapb.PoolerServingStatus_POOLER_SERVING_STATUS_SERVING,
 		TableGroup:    constants.DefaultTableGroup,
 		Shard:         constants.DefaultShard,
 	}
@@ -142,14 +142,14 @@ func TestBeginTerm(t *testing.T) {
 			initialTerm: &multipoolermanagerdatapb.ConsensusTerm{
 				TermNumber: 5,
 				AcceptedTermFromCoordinatorId: &clustermetadatapb.ID{
-					Component: clustermetadatapb.ID_MULTIPOOLER,
+					Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 					Cell:      "zone1",
 					Name:      "candidate-A",
 				},
 			},
 			requestTerm: 10,
 			requestCandidate: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "candidate-B",
 			},
@@ -168,14 +168,14 @@ func TestBeginTerm(t *testing.T) {
 			initialTerm: &multipoolermanagerdatapb.ConsensusTerm{
 				TermNumber: 5,
 				AcceptedTermFromCoordinatorId: &clustermetadatapb.ID{
-					Component: clustermetadatapb.ID_MULTIPOOLER,
+					Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 					Cell:      "zone1",
 					Name:      "candidate-A",
 				},
 			},
 			requestTerm: 5,
 			requestCandidate: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "candidate-B",
 			},
@@ -192,14 +192,14 @@ func TestBeginTerm(t *testing.T) {
 			initialTerm: &multipoolermanagerdatapb.ConsensusTerm{
 				TermNumber: 5,
 				AcceptedTermFromCoordinatorId: &clustermetadatapb.ID{
-					Component: clustermetadatapb.ID_MULTIPOOLER,
+					Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 					Cell:      "zone1",
 					Name:      "candidate-A",
 				},
 			},
 			requestTerm: 5,
 			requestCandidate: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "candidate-A",
 			},
@@ -220,7 +220,7 @@ func TestBeginTerm(t *testing.T) {
 			},
 			requestTerm: 10,
 			requestCandidate: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "new-candidate",
 			},
@@ -243,7 +243,7 @@ func TestBeginTerm(t *testing.T) {
 			},
 			requestTerm: 10,
 			requestCandidate: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "new-candidate",
 			},
@@ -267,7 +267,7 @@ func TestBeginTerm(t *testing.T) {
 			},
 			requestTerm: 10,
 			requestCandidate: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "new-candidate",
 			},
@@ -294,7 +294,7 @@ func TestBeginTerm(t *testing.T) {
 			},
 			requestTerm: 10,
 			requestCandidate: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "new-candidate",
 			},
@@ -338,7 +338,7 @@ func TestBeginTerm(t *testing.T) {
 			},
 			requestTerm: 5,
 			requestCandidate: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "candidate-B",
 			},
@@ -502,7 +502,7 @@ func TestUpdateTermAndAcceptCandidate(t *testing.T) {
 			initialTerm: 5,
 			newTerm:     10,
 			candidateID: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "candidate-a",
 			},
@@ -515,7 +515,7 @@ func TestUpdateTermAndAcceptCandidate(t *testing.T) {
 			initialTerm: 5,
 			newTerm:     5,
 			candidateID: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "candidate-b",
 			},
@@ -528,7 +528,7 @@ func TestUpdateTermAndAcceptCandidate(t *testing.T) {
 			initialTerm: 10,
 			newTerm:     5,
 			candidateID: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "candidate-c",
 			},
@@ -545,13 +545,13 @@ func TestUpdateTermAndAcceptCandidate(t *testing.T) {
 			name:        "same term same candidate is idempotent",
 			initialTerm: 5,
 			initialAccept: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "candidate-b",
 			},
 			newTerm: 5,
 			candidateID: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "candidate-b",
 			},
@@ -563,13 +563,13 @@ func TestUpdateTermAndAcceptCandidate(t *testing.T) {
 			name:        "same term different candidate rejected",
 			initialTerm: 5,
 			initialAccept: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "candidate-a",
 			},
 			newTerm: 5,
 			candidateID: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "candidate-b",
 			},
@@ -581,7 +581,7 @@ func TestUpdateTermAndAcceptCandidate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			poolerDir := t.TempDir()
 			serviceID := &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "test-cell",
 				Name:      "test-pooler",
 			}

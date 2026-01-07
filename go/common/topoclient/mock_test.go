@@ -50,10 +50,10 @@ func (m *mockConn) checkError() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.shouldFailCalls {
-		return mterrors.Errorf(mtrpc.Code_UNAVAILABLE, "connection error")
+		return mterrors.Errorf(mtrpc.Code_CODE_UNAVAILABLE, "connection error")
 	}
 	if m.closed {
-		return mterrors.Errorf(mtrpc.Code_UNAVAILABLE, "connection closed")
+		return mterrors.Errorf(mtrpc.Code_CODE_UNAVAILABLE, "connection closed")
 	}
 	return nil
 }
@@ -232,7 +232,7 @@ func (f *mockFactory) newConn() (Conn, error) {
 	count := atomic.AddInt32(&f.createCount, 1)
 
 	if f.shouldFail {
-		return nil, mterrors.Errorf(mtrpc.Code_UNAVAILABLE, "factory error")
+		return nil, mterrors.Errorf(mtrpc.Code_CODE_UNAVAILABLE, "factory error")
 	}
 
 	conn := newMockConn(int(count))
@@ -265,7 +265,7 @@ func (f *mockFactoryWithSelectiveFailure) newConn(topoName string) (Conn, error)
 	count := atomic.AddInt32(&f.createCount, 1)
 
 	if topoName == f.failForCell {
-		return nil, mterrors.Errorf(mtrpc.Code_UNAVAILABLE, "factory error")
+		return nil, mterrors.Errorf(mtrpc.Code_CODE_UNAVAILABLE, "factory error")
 	}
 
 	return newMockConn(int(count)), nil

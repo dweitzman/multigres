@@ -449,20 +449,21 @@ enum StandbyUpdateOperation {
 
 // Synchronous commit level
 enum SynchronousCommitLevel {
-  // OFF disables synchronous commit
-  SYNCHRONOUS_COMMIT_OFF = 0;
+  // SYNCHRONOUS_COMMIT_LEVEL_OFF disables synchronous commit
+  SYNCHRONOUS_COMMIT_LEVEL_OFF = 0;
 
-  // LOCAL waits for local flush to disk
-  SYNCHRONOUS_COMMIT_LOCAL = 1;
+  // SYNCHRONOUS_COMMIT_LEVEL_LOCAL waits for local flush to disk
+  SYNCHRONOUS_COMMIT_LEVEL_LOCAL = 1;
 
-  // REMOTE_WRITE waits for standby to receive and write WAL
-  SYNCHRONOUS_COMMIT_REMOTE_WRITE = 2;
+  // SYNCHRONOUS_COMMIT_LEVEL_REMOTE_WRITE waits for standby to receive and write WAL
+  SYNCHRONOUS_COMMIT_LEVEL_REMOTE_WRITE = 2;
 
-  // ON waits for standby to receive, write, and flush WAL (same as remote_apply in newer versions)
-  SYNCHRONOUS_COMMIT_ON = 3;
+  // SYNCHRONOUS_COMMIT_LEVEL_ON waits for standby to receive, write, and flush WAL
+  // (same as remote_apply in newer versions)
+  SYNCHRONOUS_COMMIT_LEVEL_ON = 3;
 
-  // REMOTE_APPLY waits for standby to receive, write, flush, and apply WAL
-  SYNCHRONOUS_COMMIT_REMOTE_APPLY = 4;
+  // SYNCHRONOUS_COMMIT_LEVEL_REMOTE_APPLY waits for standby to receive, write, flush, and apply WAL
+  SYNCHRONOUS_COMMIT_LEVEL_REMOTE_APPLY = 4;
 }
 
 // ConfigureSynchronousReplication configures PostgreSQL synchronous replication settings
@@ -687,9 +688,9 @@ message BackupMetadata {
 
   // Status represents the state of a backup
   enum Status {
-    UNKNOWN = 0;
-    INCOMPLETE = 1;
-    COMPLETE = 2;
+    STATUS_UNKNOWN = 0;
+    STATUS_INCOMPLETE = 1;
+    STATUS_COMPLETE = 2;
     // TODO: add VALID/INVALID states
   }
 }

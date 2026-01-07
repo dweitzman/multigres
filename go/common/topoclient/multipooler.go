@@ -36,7 +36,7 @@ func NewMultiPooler(name string, cell, host, tableGroup string) *clustermetadata
 	}
 	return &clustermetadatapb.MultiPooler{
 		Id: &clustermetadatapb.ID{
-			Component: clustermetadatapb.ID_MULTIPOOLER,
+			Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 			Cell:      cell,
 			Name:      name,
 		},

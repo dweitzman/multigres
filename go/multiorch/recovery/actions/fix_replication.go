@@ -136,7 +136,7 @@ func (a *FixReplicationAction) Execute(ctx context.Context, problem types.Proble
 	//     return a.fixMisconfigured(ctx, replica, primary, currentStatus)
 
 	default:
-		return mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,
+		return mterrors.Errorf(mtrpcpb.Code_CODE_INVALID_ARGUMENT,
 			"unsupported problem code for fix replication: %s", problem.Code)
 	}
 }
@@ -200,7 +200,7 @@ func (a *FixReplicationAction) fixNotReplicating(
 	}
 
 	// Add replica to the primary's synchronous standby list if it's a REPLICA type
-	if replica.MultiPooler.Type == clustermetadatapb.PoolerType_REPLICA {
+	if replica.MultiPooler.Type == clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA {
 		updateReq := &multipoolermanagerdatapb.UpdateSynchronousStandbyListRequest{
 			Operation:     multipoolermanagerdatapb.StandbyUpdateOperation_STANDBY_UPDATE_OPERATION_ADD,
 			StandbyIds:    []*clustermetadatapb.ID{replica.MultiPooler.Id},
@@ -263,7 +263,7 @@ func (a *FixReplicationAction) tryPgRewind(
 		return mterrors.Wrap(err, "pg_rewind RPC failed")
 	}
 	if !rewindResp.Success {
-		return mterrors.Errorf(mtrpcpb.Code_INTERNAL,
+		return mterrors.Errorf(mtrpcpb.Code_CODE_INTERNAL,
 			"pg_rewind failed: %s", rewindResp.ErrorMessage)
 	}
 
@@ -289,7 +289,7 @@ func (a *FixReplicationAction) verifyProblemExists(
 		return a.verifyReplicaNotInStandbyList(ctx, replica, primary)
 
 	default:
-		return false, nil, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,
+		return false, nil, mterrors.Errorf(mtrpcpb.Code_CODE_INVALID_ARGUMENT,
 			"unsupported problem code for verifyProblemExists: %s", problemCode)
 	}
 }
@@ -446,13 +446,13 @@ func (a *FixReplicationAction) verifyReplicationStarted(ctx context.Context, rep
 
 		status := statusResp.Status
 		if status == nil {
-			lastErr = mterrors.Errorf(mtrpcpb.Code_INTERNAL, "no replication status returned")
+			lastErr = mterrors.Errorf(mtrpcpb.Code_CODE_INTERNAL, "no replication status returned")
 			continue
 		}
 
 		// Check that we have a receive LSN (indicates WAL receiver is connected)
 		if status.LastReceiveLsn == "" {
-			lastErr = mterrors.Errorf(mtrpcpb.Code_INTERNAL,
+			lastErr = mterrors.Errorf(mtrpcpb.Code_CODE_INTERNAL,
 				"WAL receiver not streaming (no receive LSN)")
 			continue
 		}
@@ -492,7 +492,7 @@ func (a *FixReplicationAction) Priority() types.Priority {
 func (a *FixReplicationAction) markPoolerDrained(ctx context.Context, pooler *multiorchdatapb.PoolerHealthState) error {
 	a.logger.InfoContext(ctx, "marking pooler as DRAINED", "pooler", pooler.MultiPooler.Id.Name)
 	_, err := a.topoStore.UpdateMultiPoolerFields(ctx, pooler.MultiPooler.Id, func(mp *clustermetadatapb.MultiPooler) error {
-		mp.Type = clustermetadatapb.PoolerType_DRAINED
+		mp.Type = clustermetadatapb.PoolerType_POOLER_TYPE_DRAINED
 		return nil
 	})
 	if err != nil {

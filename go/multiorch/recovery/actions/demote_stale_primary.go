@@ -110,7 +110,7 @@ func (a *DemoteStalePrimaryAction) Execute(ctx context.Context, problem types.Pr
 	// we should skip this attempt and let the next recovery cycle retry once
 	// postgres is ready. This avoids wasting time on RPCs that will fail.
 	if !stalePrimary.IsPostgresRunning {
-		return mterrors.New(mtrpcpb.Code_UNAVAILABLE,
+		return mterrors.New(mtrpcpb.Code_CODE_UNAVAILABLE,
 			fmt.Sprintf("postgres not running on stale primary %s, skipping demote attempt", poolerIDStr))
 	}
 
@@ -186,11 +186,11 @@ func (a *DemoteStalePrimaryAction) findCorrectPrimaryTerm(shardKey commontypes.S
 
 		// Check if this pooler is a PRIMARY
 		poolerType := pooler.PoolerType
-		if poolerType == clustermetadatapb.PoolerType_UNKNOWN && pooler.MultiPooler != nil {
+		if poolerType == clustermetadatapb.PoolerType_POOLER_TYPE_UNKNOWN && pooler.MultiPooler != nil {
 			poolerType = pooler.MultiPooler.Type
 		}
 
-		if poolerType == clustermetadatapb.PoolerType_PRIMARY {
+		if poolerType == clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY {
 			// Get its term
 			if pooler.ConsensusStatus != nil && pooler.ConsensusStatus.CurrentTerm > maxTerm {
 				maxTerm = pooler.ConsensusStatus.CurrentTerm

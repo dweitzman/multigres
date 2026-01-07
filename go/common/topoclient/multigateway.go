@@ -36,7 +36,7 @@ func NewMultiGateway(name string, cell, host string) *clustermetadatapb.MultiGat
 	}
 	return &clustermetadatapb.MultiGateway{
 		Id: &clustermetadatapb.ID{
-			Component: clustermetadatapb.ID_MULTIGATEWAY,
+			Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIGATEWAY,
 			Cell:      cell,
 			Name:      name,
 		},

@@ -95,7 +95,7 @@ func (s *PoolerStore) FindPoolerByID(id *clustermetadatapb.ID) (*multiorchdatapb
 	})
 
 	if found == nil {
-		return nil, mterrors.Errorf(mtrpcpb.Code_NOT_FOUND,
+		return nil, mterrors.Errorf(mtrpcpb.Code_CODE_NOT_FOUND,
 			"pooler %s/%s not found", id.Cell, id.Name)
 	}
 
@@ -113,7 +113,7 @@ func (s *PoolerStore) FindHealthyPrimary(
 
 	for _, pooler := range poolers {
 		if pooler.MultiPooler == nil ||
-			pooler.MultiPooler.Type != clustermetadatapb.PoolerType_PRIMARY {
+			pooler.MultiPooler.Type != clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY {
 			continue
 		}
 
@@ -135,7 +135,7 @@ func (s *PoolerStore) FindHealthyPrimary(
 
 		if statusResp.Status.IsInitialized {
 			if healthyPrimary != nil {
-				return nil, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
+				return nil, mterrors.Errorf(mtrpcpb.Code_CODE_FAILED_PRECONDITION,
 					"multiple primaries found: %s and %s (stale primary needs demotion)",
 					healthyPrimary.MultiPooler.Id.Name, pooler.MultiPooler.Id.Name)
 			}
@@ -144,7 +144,7 @@ func (s *PoolerStore) FindHealthyPrimary(
 	}
 
 	if healthyPrimary == nil {
-		return nil, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
+		return nil, mterrors.Errorf(mtrpcpb.Code_CODE_FAILED_PRECONDITION,
 			"no healthy primary found")
 	}
 

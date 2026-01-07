@@ -72,7 +72,7 @@ func TestShardSetup_ThreeNodeCluster(t *testing.T) {
 	assert.Equal(t, "f", inRecovery, "primary should NOT be in recovery")
 
 	// Verify primary has correct pooler type
-	err = ValidatePoolerType(ctx, primaryClient.Manager, clustermetadatapb.PoolerType_PRIMARY, setup.PrimaryName)
+	err = ValidatePoolerType(ctx, primaryClient.Manager, clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY, setup.PrimaryName)
 	require.NoError(t, err)
 
 	// Verify all standbys are in recovery and replicating
@@ -85,7 +85,7 @@ func TestShardSetup_ThreeNodeCluster(t *testing.T) {
 		assert.Equal(t, "t", inRecovery, "%s should be in recovery", standby.Name)
 
 		// Verify pooler type is REPLICA
-		err = ValidatePoolerType(ctx, standbyClient.Manager, clustermetadatapb.PoolerType_REPLICA, standby.Name)
+		err = ValidatePoolerType(ctx, standbyClient.Manager, clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA, standby.Name)
 		require.NoError(t, err)
 
 		// Verify replication is streaming (SetupTest configures replication)
@@ -138,7 +138,7 @@ func TestShardSetup_DemoteAndReset(t *testing.T) {
 	}, 10*time.Second, 100*time.Millisecond, "primary should be restored to primary state")
 
 	// Verify pooler type is PRIMARY
-	err = ValidatePoolerType(ctx, primaryClient.Manager, clustermetadatapb.PoolerType_PRIMARY, setup.PrimaryName)
+	err = ValidatePoolerType(ctx, primaryClient.Manager, clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY, setup.PrimaryName)
 	require.NoError(t, err)
 
 	// Verify term is reset to 1
@@ -161,7 +161,7 @@ func TestShardSetup_DemoteAndReset(t *testing.T) {
 		require.NoError(t, err)
 
 		// Pooler type should be REPLICA
-		err = ValidatePoolerType(ctx, standbyClient.Manager, clustermetadatapb.PoolerType_REPLICA, standby.Name)
+		err = ValidatePoolerType(ctx, standbyClient.Manager, clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA, standby.Name)
 		require.NoError(t, err)
 
 		standbyClient.Close()

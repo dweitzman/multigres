@@ -78,7 +78,7 @@ func (c *WrapperConn) handleConnectionError(conn Conn, err error) {
 		return
 	}
 	switch mterrors.Code(err) {
-	case mtrpc.Code_UNAVAILABLE, mtrpc.Code_FAILED_PRECONDITION, mtrpc.Code_CLUSTER_EVENT:
+	case mtrpc.Code_CODE_UNAVAILABLE, mtrpc.Code_CODE_FAILED_PRECONDITION, mtrpc.Code_CODE_CLUSTER_EVENT:
 		slog.Error("Connection error, will keep retrying", "err", err)
 		go c.retryConnection(err)
 	}
@@ -171,7 +171,7 @@ func (c *WrapperConn) getConnection() (Conn, error) {
 	defer c.mu.Unlock()
 
 	if c.wrapped == nil {
-		return nil, mterrors.Errorf(mtrpc.Code_UNAVAILABLE, "no connection available")
+		return nil, mterrors.Errorf(mtrpc.Code_CODE_UNAVAILABLE, "no connection available")
 	}
 	return c.wrapped, nil
 }

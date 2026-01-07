@@ -50,14 +50,14 @@ func (p *localProvisioner) startPostgreSQLViaPgctld(ctx context.Context, address
 	}
 
 	// If already running, we're good
-	if statusResp.GetStatus() == pb.ServerStatus_RUNNING {
+	if statusResp.GetStatus() == pb.ServerStatus_SERVER_STATUS_RUNNING {
 		fmt.Printf(" PostgreSQL already running ✓")
 		return nil
 	}
 
 	// If not initialized, skip starting PostgreSQL.
 	// Multiorch will handle initialization through the bootstrap process.
-	if statusResp.GetStatus() == pb.ServerStatus_NOT_INITIALIZED {
+	if statusResp.GetStatus() == pb.ServerStatus_SERVER_STATUS_NOT_INITIALIZED {
 		fmt.Printf(" PostgreSQL not initialized (multiorch will bootstrap) ✓")
 		return nil
 	}
@@ -75,7 +75,7 @@ func (p *localProvisioner) startPostgreSQLViaPgctld(ctx context.Context, address
 		return fmt.Errorf("failed to verify PostgreSQL status after start: %w", err)
 	}
 
-	if statusResp.GetStatus() != pb.ServerStatus_RUNNING {
+	if statusResp.GetStatus() != pb.ServerStatus_SERVER_STATUS_RUNNING {
 		return fmt.Errorf("PostgreSQL failed to start - status: %s, message: %s",
 			statusResp.GetStatus().String(), statusResp.GetMessage())
 	}
@@ -108,7 +108,7 @@ func (p *localProvisioner) stopPostgreSQLViaPgctld(ctx context.Context, address 
 	}
 
 	// If not running, nothing to stop
-	if statusResp.GetStatus() != pb.ServerStatus_RUNNING {
+	if statusResp.GetStatus() != pb.ServerStatus_SERVER_STATUS_RUNNING {
 		fmt.Printf(" PostgreSQL already stopped")
 		return nil
 	}
@@ -126,7 +126,7 @@ func (p *localProvisioner) stopPostgreSQLViaPgctld(ctx context.Context, address 
 		return fmt.Errorf("failed to verify PostgreSQL status after stop: %w", err)
 	}
 
-	if statusResp.GetStatus() != pb.ServerStatus_STOPPED {
+	if statusResp.GetStatus() != pb.ServerStatus_SERVER_STATUS_STOPPED {
 		return fmt.Errorf("PostgreSQL failed to stop - status: %s, message: %s",
 			statusResp.GetStatus().String(), statusResp.GetMessage())
 	}

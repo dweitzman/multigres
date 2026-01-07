@@ -208,7 +208,7 @@ func setupPoolerTest(t *testing.T, setup *MultipoolerTestSetup, opts ...cleanupO
 // makeMultipoolerID creates a multipooler ID for testing.
 func makeMultipoolerID(cell, name string) *clustermetadatapb.ID {
 	return &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      cell,
 		Name:      name,
 	}

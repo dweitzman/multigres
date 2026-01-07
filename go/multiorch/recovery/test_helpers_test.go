@@ -68,7 +68,7 @@ func newTestEngine(ctx context.Context, t *testing.T, opts ...TestEngineOption) 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
 	cfg := config.NewTestConfig(config.WithCell("cell1"))
 	coordID := &clustermetadata.ID{
-		Component: clustermetadata.ID_MULTIORCH,
+		Component: clustermetadata.ID_COMPONENT_TYPE_MULTIORCH,
 		Cell:      "cell1",
 		Name:      "test-coordinator",
 	}
@@ -80,7 +80,7 @@ func newTestEngine(ctx context.Context, t *testing.T, opts ...TestEngineOption) 
 func newTestCoordinator(ts topoclient.Store, rpcClient rpcclient.MultiPoolerClient, cell string) *coordinator.Coordinator {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
 	coordID := &clustermetadata.ID{
-		Component: clustermetadata.ID_MULTIORCH,
+		Component: clustermetadata.ID_COMPONENT_TYPE_MULTIORCH,
 		Cell:      cell,
 		Name:      "test-coordinator",
 	}

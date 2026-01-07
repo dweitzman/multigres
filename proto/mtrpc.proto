@@ -57,54 +57,54 @@ message CallerID {
 //   https://godoc.org/google.golang.org/grpc/codes.
 // 17+ are custom codes
 enum Code {
-  // OK is returned on success.
-  OK = 0;
+  // CODE_OK is returned on success.
+  CODE_OK = 0;
 
-  // CANCELED indicates the operation was cancelled (typically by the caller).
-  CANCELED = 1;
+  // CODE_CANCELED indicates the operation was cancelled (typically by the caller).
+  CODE_CANCELED = 1;
 
-  // UNKNOWN error. An example of where this error may be returned is
+  // CODE_UNKNOWN error. An example of where this error may be returned is
   // if a Status value received from another address space belongs to
   // an error-space that is not known in this address space. Also
   // errors raised by APIs that do not return enough error information
   // may be converted to this error.
-  UNKNOWN = 2;
+  CODE_UNKNOWN = 2;
 
-  // INVALID_ARGUMENT indicates client specified an invalid argument.
+  // CODE_INVALID_ARGUMENT indicates client specified an invalid argument.
   // Note that this differs from FAILED_PRECONDITION. It indicates arguments
   // that are problematic regardless of the state of the system
   // (e.g., a malformed file name).
-  INVALID_ARGUMENT = 3;
+  CODE_INVALID_ARGUMENT = 3;
 
-  // DEADLINE_EXCEEDED means operation expired before completion.
+  // CODE_DEADLINE_EXCEEDED means operation expired before completion.
   // For operations that change the state of the system, this error may be
   // returned even if the operation has completed successfully. For
   // example, a successful response from a server could have been delayed
   // long enough for the deadline to expire.
-  DEADLINE_EXCEEDED = 4;
+  CODE_DEADLINE_EXCEEDED = 4;
 
-  // NOT_FOUND means some requested entity (e.g., file or directory) was
+  // CODE_NOT_FOUND means some requested entity (e.g., file or directory) was
   // not found.
-  NOT_FOUND = 5;
+  CODE_NOT_FOUND = 5;
 
-  // ALREADY_EXISTS means an attempt to create an entity failed because one
+  // CODE_ALREADY_EXISTS means an attempt to create an entity failed because one
   // already exists.
-  ALREADY_EXISTS = 6;
+  CODE_ALREADY_EXISTS = 6;
 
-  // PERMISSION_DENIED indicates the caller does not have permission to
+  // CODE_PERMISSION_DENIED indicates the caller does not have permission to
   // execute the specified operation. It must not be used for rejections
   // caused by exhausting some resource (use RESOURCE_EXHAUSTED
   // instead for those errors).  It must not be
   // used if the caller cannot be identified (use Unauthenticated
   // instead for those errors).
-  PERMISSION_DENIED = 7;
+  CODE_PERMISSION_DENIED = 7;
 
 
-  // RESOURCE_EXHAUSTED indicates some resource has been exhausted, perhaps
+  // CODE_RESOURCE_EXHAUSTED indicates some resource has been exhausted, perhaps
   // a per-user quota, or perhaps the entire file system is out of space.
-  RESOURCE_EXHAUSTED = 8;
+  CODE_RESOURCE_EXHAUSTED = 8;
 
-  // FAILED_PRECONDITION indicates operation was rejected because the
+  // CODE_FAILED_PRECONDITION indicates operation was rejected because the
   // system is not in a state required for the operation's execution.
   // For example, directory to be deleted may be non-empty, an rmdir
   // operation is applied to a non-directory, etc.
@@ -123,17 +123,17 @@ enum Code {
   //      REST Get/Update/Delete on a resource and the resource on the
   //      server does not match the condition. E.g., conflicting
   //      read-modify-write on the same resource.
-  FAILED_PRECONDITION = 9;
+  CODE_FAILED_PRECONDITION = 9;
 
-  // ABORTED indicates the operation was aborted, typically due to a
+  // CODE_ABORTED indicates the operation was aborted, typically due to a
   // concurrency issue like sequencer check failures, transaction aborts,
   // etc.
   //
   // See litmus test above for deciding between FAILED_PRECONDITION,
   // ABORTED, and UNAVAILABLE.
-  ABORTED = 10;
+  CODE_ABORTED = 10;
 
-  // OUT_OF_RANGE means operation was attempted past the valid range.
+  // CODE_OUT_OF_RANGE means operation was attempted past the valid range.
   // E.g., seeking or reading past end of file.
   //
   // Unlike INVALID_ARGUMENT, this error indicates a problem that may
@@ -148,37 +148,37 @@ enum Code {
   // error) when it applies so that callers who are iterating through
   // a space can easily look for an OUT_OF_RANGE error to detect when
   // they are done.
-  OUT_OF_RANGE = 11;
+  CODE_OUT_OF_RANGE = 11;
 
-  // UNIMPLEMENTED indicates operation is not implemented or not
+  // CODE_UNIMPLEMENTED indicates operation is not implemented or not
   // supported/enabled in this service.
-  UNIMPLEMENTED = 12;
+  CODE_UNIMPLEMENTED = 12;
 
-  // INTERNAL errors. Means some invariants expected by underlying
+  // CODE_INTERNAL errors. Means some invariants expected by underlying
   // system has been broken.  If you see one of these errors,
   // something is very broken.
-  INTERNAL = 13;
+  CODE_INTERNAL = 13;
 
-  // UNAVAILABLE indicates the service is currently unavailable.
+  // CODE_UNAVAILABLE indicates the service is currently unavailable.
   // This is a most likely a transient condition and may be corrected
   // by retrying with a backoff.
   //
   // See litmus test above for deciding between FAILED_PRECONDITION,
   // ABORTED, and UNAVAILABLE.
-  UNAVAILABLE = 14;
+  CODE_UNAVAILABLE = 14;
 
-  // DATA_LOSS indicates unrecoverable data loss or corruption.
-  DATA_LOSS = 15;
+  // CODE_DATA_LOSS indicates unrecoverable data loss or corruption.
+  CODE_DATA_LOSS = 15;
 
-  // UNAUTHENTICATED indicates the request does not have valid
+  // CODE_UNAUTHENTICATED indicates the request does not have valid
   // authentication credentials for the operation.
-  UNAUTHENTICATED = 16;
+  CODE_UNAUTHENTICATED = 16;
 
-  // CLUSTER_EVENT indicates that a cluster operation might be in effect
-  CLUSTER_EVENT = 17;
+  // CODE_CLUSTER_EVENT indicates that a cluster operation might be in effect
+  CODE_CLUSTER_EVENT = 17;
 
-  // Topo server connection is read-only
-  READ_ONLY = 18;
+  // CODE_READ_ONLY indicates topo server connection is read-only
+  CODE_READ_ONLY = 18;
 }
 
 // RPCError is an application-level error structure returned by

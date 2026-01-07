@@ -129,7 +129,7 @@ func IsPrimary(addr string) (bool, error) {
 		return false, fmt.Errorf("received nil status response")
 	}
 
-	return resp.Status.PoolerType == clustermetadatapb.PoolerType_PRIMARY, nil
+	return resp.Status.PoolerType == clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY, nil
 }
 
 // WaitForPoolerTypeAssigned waits for the pooler type to be assigned (either PRIMARY or REPLICA, not UNKNOWN).
@@ -139,7 +139,7 @@ func WaitForPoolerTypeAssigned(t *testing.T, addr string, timeout time.Duration)
 
 	conn, err := grpc.NewClient(addr, grpccommon.LocalClientDialOptions()...)
 	if err != nil {
-		return clustermetadatapb.PoolerType_UNKNOWN, fmt.Errorf("failed to create client: %w", err)
+		return clustermetadatapb.PoolerType_POOLER_TYPE_UNKNOWN, fmt.Errorf("failed to create client: %w", err)
 	}
 	defer conn.Close()
 
@@ -162,7 +162,7 @@ func WaitForPoolerTypeAssigned(t *testing.T, addr string, timeout time.Duration)
 		}
 
 		poolerType = resp.Status.PoolerType
-		if poolerType == clustermetadatapb.PoolerType_UNKNOWN {
+		if poolerType == clustermetadatapb.PoolerType_POOLER_TYPE_UNKNOWN {
 			t.Logf("Waiting for pooler type at %s... (currently UNKNOWN)", addr)
 			return false
 		}

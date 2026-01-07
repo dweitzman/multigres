@@ -38,7 +38,7 @@ func TestReplicaNotInStandbyListAnalyzer_Analyze(t *testing.T) {
 	poolerStore := store.NewProtoStore[string, *multiorchdatapb.PoolerHealthState]()
 	rpcClient := &rpcclient.FakeClient{}
 	coordID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIORCH,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 		Cell:      "cell1",
 		Name:      "test-coord",
 	}
@@ -60,12 +60,12 @@ func TestReplicaNotInStandbyListAnalyzer_Analyze(t *testing.T) {
 		{
 			name: "detects replica not in standby list",
 			analysis: &store.ReplicationAnalysis{
-				PoolerID:               &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica1"},
+				PoolerID:               &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "replica1"},
 				ShardKey:               commontypes.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"},
-				PoolerType:             clustermetadatapb.PoolerType_REPLICA,
+				PoolerType:             clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 				IsPrimary:              false,
 				IsInitialized:          true,
-				PrimaryPoolerID:        &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "primary1"},
+				PrimaryPoolerID:        &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "primary1"},
 				PrimaryReachable:       true,
 				PrimaryConnInfoHost:    "primary.example.com",
 				IsInPrimaryStandbyList: false,
@@ -78,12 +78,12 @@ func TestReplicaNotInStandbyListAnalyzer_Analyze(t *testing.T) {
 		{
 			name: "ignores replica already in standby list",
 			analysis: &store.ReplicationAnalysis{
-				PoolerID:               &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica1"},
+				PoolerID:               &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "replica1"},
 				ShardKey:               commontypes.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"},
-				PoolerType:             clustermetadatapb.PoolerType_REPLICA,
+				PoolerType:             clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 				IsPrimary:              false,
 				IsInitialized:          true,
-				PrimaryPoolerID:        &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "primary1"},
+				PrimaryPoolerID:        &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "primary1"},
 				PrimaryReachable:       true,
 				PrimaryConnInfoHost:    "primary.example.com",
 				IsInPrimaryStandbyList: true,
@@ -93,9 +93,9 @@ func TestReplicaNotInStandbyListAnalyzer_Analyze(t *testing.T) {
 		{
 			name: "ignores primary nodes",
 			analysis: &store.ReplicationAnalysis{
-				PoolerID:               &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "primary1"},
+				PoolerID:               &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "primary1"},
 				ShardKey:               commontypes.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"},
-				PoolerType:             clustermetadatapb.PoolerType_PRIMARY,
+				PoolerType:             clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 				IsPrimary:              true,
 				IsInitialized:          true,
 				IsInPrimaryStandbyList: false,
@@ -105,9 +105,9 @@ func TestReplicaNotInStandbyListAnalyzer_Analyze(t *testing.T) {
 		{
 			name: "ignores uninitialized replica",
 			analysis: &store.ReplicationAnalysis{
-				PoolerID:               &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica1"},
+				PoolerID:               &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "replica1"},
 				ShardKey:               commontypes.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"},
-				PoolerType:             clustermetadatapb.PoolerType_REPLICA,
+				PoolerType:             clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 				IsPrimary:              false,
 				IsInitialized:          false,
 				IsInPrimaryStandbyList: false,
@@ -117,12 +117,12 @@ func TestReplicaNotInStandbyListAnalyzer_Analyze(t *testing.T) {
 		{
 			name: "ignores replica when primary is unreachable",
 			analysis: &store.ReplicationAnalysis{
-				PoolerID:               &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica1"},
+				PoolerID:               &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "replica1"},
 				ShardKey:               commontypes.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"},
-				PoolerType:             clustermetadatapb.PoolerType_REPLICA,
+				PoolerType:             clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 				IsPrimary:              false,
 				IsInitialized:          true,
-				PrimaryPoolerID:        &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "primary1"},
+				PrimaryPoolerID:        &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "primary1"},
 				PrimaryReachable:       false,
 				PrimaryConnInfoHost:    "primary.example.com",
 				IsInPrimaryStandbyList: false,
@@ -132,12 +132,12 @@ func TestReplicaNotInStandbyListAnalyzer_Analyze(t *testing.T) {
 		{
 			name: "ignores replica with no replication configured",
 			analysis: &store.ReplicationAnalysis{
-				PoolerID:               &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica1"},
+				PoolerID:               &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "replica1"},
 				ShardKey:               commontypes.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"},
-				PoolerType:             clustermetadatapb.PoolerType_REPLICA,
+				PoolerType:             clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 				IsPrimary:              false,
 				IsInitialized:          true,
-				PrimaryPoolerID:        &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "primary1"},
+				PrimaryPoolerID:        &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "primary1"},
 				PrimaryReachable:       true,
 				PrimaryConnInfoHost:    "",
 				IsInPrimaryStandbyList: false,
@@ -147,12 +147,12 @@ func TestReplicaNotInStandbyListAnalyzer_Analyze(t *testing.T) {
 		{
 			name: "ignores UNKNOWN pooler type",
 			analysis: &store.ReplicationAnalysis{
-				PoolerID:               &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "unknown1"},
+				PoolerID:               &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "unknown1"},
 				ShardKey:               commontypes.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"},
-				PoolerType:             clustermetadatapb.PoolerType_UNKNOWN,
+				PoolerType:             clustermetadatapb.PoolerType_POOLER_TYPE_UNKNOWN,
 				IsPrimary:              false,
 				IsInitialized:          true,
-				PrimaryPoolerID:        &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "primary1"},
+				PrimaryPoolerID:        &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "primary1"},
 				PrimaryReachable:       true,
 				PrimaryConnInfoHost:    "primary.example.com",
 				IsInPrimaryStandbyList: false,
@@ -181,12 +181,12 @@ func TestReplicaNotInStandbyListAnalyzer_Analyze(t *testing.T) {
 	t.Run("returns error when factory is nil", func(t *testing.T) {
 		nilFactoryAnalyzer := &ReplicaNotInStandbyListAnalyzer{factory: nil}
 		analysis := &store.ReplicationAnalysis{
-			PoolerID:               &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica1"},
+			PoolerID:               &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "replica1"},
 			ShardKey:               commontypes.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"},
-			PoolerType:             clustermetadatapb.PoolerType_REPLICA,
+			PoolerType:             clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 			IsPrimary:              false,
 			IsInitialized:          true,
-			PrimaryPoolerID:        &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "primary1"},
+			PrimaryPoolerID:        &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "primary1"},
 			PrimaryReachable:       true,
 			PrimaryConnInfoHost:    "primary.example.com",
 			IsInPrimaryStandbyList: false,

@@ -283,7 +283,7 @@ func createTestPoolerHealth(name, cell string) *multiorchdatapb.PoolerHealthStat
 	return &multiorchdatapb.PoolerHealthState{
 		MultiPooler: &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      cell,
 				Name:      name,
 			},

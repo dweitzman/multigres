@@ -53,13 +53,13 @@ func TestPollPooler_UpdatesStore_Primary(t *testing.T) {
 	fakeClient := rpcclient.NewFakeClient()
 	fakeClient.SetStatusResponse("multipooler-zone1-pooler1", &multipoolermanagerdatapb.StatusResponse{
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadata.PoolerType_PRIMARY,
+			PoolerType: clustermetadata.PoolerType_POOLER_TYPE_PRIMARY,
 			PrimaryStatus: &multipoolermanagerdatapb.PrimaryStatus{
 				Lsn:   "0/123ABC",
 				Ready: true,
 				ConnectedFollowers: []*clustermetadata.ID{
-					{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "replica1"},
-					{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "replica2"},
+					{Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "replica1"},
+					{Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "replica2"},
 				},
 			},
 		},
@@ -76,7 +76,7 @@ func TestPollPooler_UpdatesStore_Primary(t *testing.T) {
 
 	// Add a pooler to the store
 	poolerID := &clustermetadata.ID{
-		Component: clustermetadata.ID_MULTIPOOLER,
+		Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "pooler1",
 	}
@@ -86,7 +86,7 @@ func TestPollPooler_UpdatesStore_Primary(t *testing.T) {
 			Database:   "mydb",
 			TableGroup: "tg1",
 			Shard:      "0",
-			Type:       clustermetadata.PoolerType_PRIMARY,
+			Type:       clustermetadata.PoolerType_POOLER_TYPE_PRIMARY,
 			Hostname:   "host1",
 			PortMap:    map[string]int32{"grpc": 5432},
 		},
@@ -110,7 +110,7 @@ func TestPollPooler_UpdatesStore_Primary(t *testing.T) {
 	require.NotNil(t, updated.LastCheckSuccessful, "LastCheckSuccessful should be set")
 
 	// Check that PRIMARY-specific fields were populated
-	require.Equal(t, clustermetadata.PoolerType_PRIMARY, updated.PoolerType, "should report PRIMARY type")
+	require.Equal(t, clustermetadata.PoolerType_POOLER_TYPE_PRIMARY, updated.PoolerType, "should report PRIMARY type")
 	require.NotNil(t, updated.PrimaryStatus, "PrimaryStatus should be populated")
 	require.Equal(t, "0/123ABC", updated.PrimaryStatus.Lsn, "LSN should match response")
 	require.True(t, updated.PrimaryStatus.Ready, "should be ready")
@@ -139,7 +139,7 @@ func TestPollPooler_UpdatesStore_Replica(t *testing.T) {
 	fakeClient := rpcclient.NewFakeClient()
 	fakeClient.SetStatusResponse("multipooler-zone1-replica1", &multipoolermanagerdatapb.StatusResponse{
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadata.PoolerType_REPLICA,
+			PoolerType: clustermetadata.PoolerType_POOLER_TYPE_REPLICA,
 			ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 				LastReplayLsn:           "0/123ABC",
 				LastReceiveLsn:          "0/123DEF",
@@ -166,7 +166,7 @@ func TestPollPooler_UpdatesStore_Replica(t *testing.T) {
 
 	// Add a replica pooler to the store
 	poolerID := &clustermetadata.ID{
-		Component: clustermetadata.ID_MULTIPOOLER,
+		Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "replica1",
 	}
@@ -176,7 +176,7 @@ func TestPollPooler_UpdatesStore_Replica(t *testing.T) {
 			Database:   "mydb",
 			TableGroup: "tg1",
 			Shard:      "0",
-			Type:       clustermetadata.PoolerType_REPLICA,
+			Type:       clustermetadata.PoolerType_POOLER_TYPE_REPLICA,
 			Hostname:   "replica-host",
 			PortMap:    map[string]int32{"grpc": 5432},
 		},
@@ -200,7 +200,7 @@ func TestPollPooler_UpdatesStore_Replica(t *testing.T) {
 	require.NotNil(t, updated.LastSeen, "LastSeen should be set")
 
 	// Check that REPLICA-specific fields were populated
-	require.Equal(t, clustermetadata.PoolerType_REPLICA, updated.PoolerType, "should report REPLICA type")
+	require.Equal(t, clustermetadata.PoolerType_POOLER_TYPE_REPLICA, updated.PoolerType, "should report REPLICA type")
 	require.NotNil(t, updated.ReplicationStatus, "ReplicationStatus should be populated")
 	require.Equal(t, "0/123ABC", updated.ReplicationStatus.LastReplayLsn, "replay LSN should match response")
 	require.Equal(t, "0/123DEF", updated.ReplicationStatus.LastReceiveLsn, "receive LSN should match response")
@@ -249,7 +249,7 @@ func TestPollPooler_RPCFailure(t *testing.T) {
 
 	// Add a pooler to the store
 	poolerID := &clustermetadata.ID{
-		Component: clustermetadata.ID_MULTIPOOLER,
+		Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "failed-pooler",
 	}
@@ -261,7 +261,7 @@ func TestPollPooler_RPCFailure(t *testing.T) {
 			Database:   "mydb",
 			TableGroup: "tg1",
 			Shard:      "0",
-			Type:       clustermetadata.PoolerType_PRIMARY,
+			Type:       clustermetadata.PoolerType_POOLER_TYPE_PRIMARY,
 			Hostname:   "host1",
 			PortMap:    map[string]int32{"grpc": 5432},
 		},
@@ -307,7 +307,7 @@ func TestPollPooler_TypeMismatch(t *testing.T) {
 	fakeClient := rpcclient.NewFakeClient()
 	fakeClient.SetStatusResponse("multipooler-zone1-confused-pooler", &multipoolermanagerdatapb.StatusResponse{
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadata.PoolerType_PRIMARY, // Reports PRIMARY
+			PoolerType: clustermetadata.PoolerType_POOLER_TYPE_PRIMARY, // Reports PRIMARY
 			PrimaryStatus: &multipoolermanagerdatapb.PrimaryStatus{
 				Lsn:   "0/FFFFFF",
 				Ready: true,
@@ -326,7 +326,7 @@ func TestPollPooler_TypeMismatch(t *testing.T) {
 
 	// Add a pooler with REPLICA type in topology
 	poolerID := &clustermetadata.ID{
-		Component: clustermetadata.ID_MULTIPOOLER,
+		Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "confused-pooler",
 	}
@@ -337,7 +337,7 @@ func TestPollPooler_TypeMismatch(t *testing.T) {
 			Database:   "mydb",
 			TableGroup: "tg1",
 			Shard:      "0",
-			Type:       clustermetadata.PoolerType_REPLICA, // Topology says REPLICA
+			Type:       clustermetadata.PoolerType_POOLER_TYPE_REPLICA, // Topology says REPLICA
 			Hostname:   "host1",
 			PortMap:    map[string]int32{"grpc": 5432},
 		},
@@ -356,9 +356,9 @@ func TestPollPooler_TypeMismatch(t *testing.T) {
 
 	// Check that we captured the type mismatch
 	// Topology type is in MultiPooler.Type
-	require.Equal(t, clustermetadata.PoolerType_REPLICA, updated.MultiPooler.Type, "topology type should remain REPLICA")
+	require.Equal(t, clustermetadata.PoolerType_POOLER_TYPE_REPLICA, updated.MultiPooler.Type, "topology type should remain REPLICA")
 	// Reported type is in PoolerType
-	require.Equal(t, clustermetadata.PoolerType_PRIMARY, updated.PoolerType, "reported type should be PRIMARY")
+	require.Equal(t, clustermetadata.PoolerType_POOLER_TYPE_PRIMARY, updated.PoolerType, "reported type should be PRIMARY")
 
 	// Should have populated PRIMARY fields (what the pooler actually reports)
 	require.NotNil(t, updated.PrimaryStatus, "PrimaryStatus should be populated")

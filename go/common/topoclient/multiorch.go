@@ -36,7 +36,7 @@ func NewMultiOrch(name string, cell, host string) *clustermetadatapb.MultiOrch {
 	}
 	return &clustermetadatapb.MultiOrch{
 		Id: &clustermetadatapb.ID{
-			Component: clustermetadatapb.ID_MULTIORCH,
+			Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 			Cell:      cell,
 			Name:      name,
 		},

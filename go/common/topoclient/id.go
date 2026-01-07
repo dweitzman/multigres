@@ -27,7 +27,10 @@ import (
 func ComponentTypeToString(component clustermetadatapb.ID_ComponentType) string {
 	// Use the generated name map for resilience - this automatically updates when the proto changes
 	if name, exists := clustermetadatapb.ID_ComponentType_name[int32(component)]; exists {
-		// Convert the generated name (e.g., "MULTIPOOLER") to lowercase for consistency
+		// Strip the COMPONENT_TYPE_ prefix for backwards compatibility
+		// (e.g., "COMPONENT_TYPE_MULTIPOOLER" -> "MULTIPOOLER")
+		name = strings.TrimPrefix(name, "COMPONENT_TYPE_")
+		// Convert to lowercase for consistency
 		return strings.ToLower(name)
 	}
 	return "unknown"

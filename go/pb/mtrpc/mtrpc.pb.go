@@ -47,44 +47,44 @@ const (
 type Code int32
 
 const (
-	// OK is returned on success.
-	Code_OK Code = 0
-	// CANCELED indicates the operation was cancelled (typically by the caller).
-	Code_CANCELED Code = 1
-	// UNKNOWN error. An example of where this error may be returned is
+	// CODE_OK is returned on success.
+	Code_CODE_OK Code = 0
+	// CODE_CANCELED indicates the operation was cancelled (typically by the caller).
+	Code_CODE_CANCELED Code = 1
+	// CODE_UNKNOWN error. An example of where this error may be returned is
 	// if a Status value received from another address space belongs to
 	// an error-space that is not known in this address space. Also
 	// errors raised by APIs that do not return enough error information
 	// may be converted to this error.
-	Code_UNKNOWN Code = 2
-	// INVALID_ARGUMENT indicates client specified an invalid argument.
+	Code_CODE_UNKNOWN Code = 2
+	// CODE_INVALID_ARGUMENT indicates client specified an invalid argument.
 	// Note that this differs from FAILED_PRECONDITION. It indicates arguments
 	// that are problematic regardless of the state of the system
 	// (e.g., a malformed file name).
-	Code_INVALID_ARGUMENT Code = 3
-	// DEADLINE_EXCEEDED means operation expired before completion.
+	Code_CODE_INVALID_ARGUMENT Code = 3
+	// CODE_DEADLINE_EXCEEDED means operation expired before completion.
 	// For operations that change the state of the system, this error may be
 	// returned even if the operation has completed successfully. For
 	// example, a successful response from a server could have been delayed
 	// long enough for the deadline to expire.
-	Code_DEADLINE_EXCEEDED Code = 4
-	// NOT_FOUND means some requested entity (e.g., file or directory) was
+	Code_CODE_DEADLINE_EXCEEDED Code = 4
+	// CODE_NOT_FOUND means some requested entity (e.g., file or directory) was
 	// not found.
-	Code_NOT_FOUND Code = 5
-	// ALREADY_EXISTS means an attempt to create an entity failed because one
+	Code_CODE_NOT_FOUND Code = 5
+	// CODE_ALREADY_EXISTS means an attempt to create an entity failed because one
 	// already exists.
-	Code_ALREADY_EXISTS Code = 6
-	// PERMISSION_DENIED indicates the caller does not have permission to
+	Code_CODE_ALREADY_EXISTS Code = 6
+	// CODE_PERMISSION_DENIED indicates the caller does not have permission to
 	// execute the specified operation. It must not be used for rejections
 	// caused by exhausting some resource (use RESOURCE_EXHAUSTED
 	// instead for those errors).  It must not be
 	// used if the caller cannot be identified (use Unauthenticated
 	// instead for those errors).
-	Code_PERMISSION_DENIED Code = 7
-	// RESOURCE_EXHAUSTED indicates some resource has been exhausted, perhaps
+	Code_CODE_PERMISSION_DENIED Code = 7
+	// CODE_RESOURCE_EXHAUSTED indicates some resource has been exhausted, perhaps
 	// a per-user quota, or perhaps the entire file system is out of space.
-	Code_RESOURCE_EXHAUSTED Code = 8
-	// FAILED_PRECONDITION indicates operation was rejected because the
+	Code_CODE_RESOURCE_EXHAUSTED Code = 8
+	// CODE_FAILED_PRECONDITION indicates operation was rejected because the
 	// system is not in a state required for the operation's execution.
 	// For example, directory to be deleted may be non-empty, an rmdir
 	// operation is applied to a non-directory, etc.
@@ -104,15 +104,15 @@ const (
 	//	    REST Get/Update/Delete on a resource and the resource on the
 	//	    server does not match the condition. E.g., conflicting
 	//	    read-modify-write on the same resource.
-	Code_FAILED_PRECONDITION Code = 9
-	// ABORTED indicates the operation was aborted, typically due to a
+	Code_CODE_FAILED_PRECONDITION Code = 9
+	// CODE_ABORTED indicates the operation was aborted, typically due to a
 	// concurrency issue like sequencer check failures, transaction aborts,
 	// etc.
 	//
 	// See litmus test above for deciding between FAILED_PRECONDITION,
 	// ABORTED, and UNAVAILABLE.
-	Code_ABORTED Code = 10
-	// OUT_OF_RANGE means operation was attempted past the valid range.
+	Code_CODE_ABORTED Code = 10
+	// CODE_OUT_OF_RANGE means operation was attempted past the valid range.
 	// E.g., seeking or reading past end of file.
 	//
 	// Unlike INVALID_ARGUMENT, this error indicates a problem that may
@@ -127,75 +127,75 @@ const (
 	// error) when it applies so that callers who are iterating through
 	// a space can easily look for an OUT_OF_RANGE error to detect when
 	// they are done.
-	Code_OUT_OF_RANGE Code = 11
-	// UNIMPLEMENTED indicates operation is not implemented or not
+	Code_CODE_OUT_OF_RANGE Code = 11
+	// CODE_UNIMPLEMENTED indicates operation is not implemented or not
 	// supported/enabled in this service.
-	Code_UNIMPLEMENTED Code = 12
-	// INTERNAL errors. Means some invariants expected by underlying
+	Code_CODE_UNIMPLEMENTED Code = 12
+	// CODE_INTERNAL errors. Means some invariants expected by underlying
 	// system has been broken.  If you see one of these errors,
 	// something is very broken.
-	Code_INTERNAL Code = 13
-	// UNAVAILABLE indicates the service is currently unavailable.
+	Code_CODE_INTERNAL Code = 13
+	// CODE_UNAVAILABLE indicates the service is currently unavailable.
 	// This is a most likely a transient condition and may be corrected
 	// by retrying with a backoff.
 	//
 	// See litmus test above for deciding between FAILED_PRECONDITION,
 	// ABORTED, and UNAVAILABLE.
-	Code_UNAVAILABLE Code = 14
-	// DATA_LOSS indicates unrecoverable data loss or corruption.
-	Code_DATA_LOSS Code = 15
-	// UNAUTHENTICATED indicates the request does not have valid
+	Code_CODE_UNAVAILABLE Code = 14
+	// CODE_DATA_LOSS indicates unrecoverable data loss or corruption.
+	Code_CODE_DATA_LOSS Code = 15
+	// CODE_UNAUTHENTICATED indicates the request does not have valid
 	// authentication credentials for the operation.
-	Code_UNAUTHENTICATED Code = 16
-	// CLUSTER_EVENT indicates that a cluster operation might be in effect
-	Code_CLUSTER_EVENT Code = 17
-	// Topo server connection is read-only
-	Code_READ_ONLY Code = 18
+	Code_CODE_UNAUTHENTICATED Code = 16
+	// CODE_CLUSTER_EVENT indicates that a cluster operation might be in effect
+	Code_CODE_CLUSTER_EVENT Code = 17
+	// CODE_READ_ONLY indicates topo server connection is read-only
+	Code_CODE_READ_ONLY Code = 18
 )
 
 // Enum value maps for Code.
 var (
 	Code_name = map[int32]string{
-		0:  "OK",
-		1:  "CANCELED",
-		2:  "UNKNOWN",
-		3:  "INVALID_ARGUMENT",
-		4:  "DEADLINE_EXCEEDED",
-		5:  "NOT_FOUND",
-		6:  "ALREADY_EXISTS",
-		7:  "PERMISSION_DENIED",
-		8:  "RESOURCE_EXHAUSTED",
-		9:  "FAILED_PRECONDITION",
-		10: "ABORTED",
-		11: "OUT_OF_RANGE",
-		12: "UNIMPLEMENTED",
-		13: "INTERNAL",
-		14: "UNAVAILABLE",
-		15: "DATA_LOSS",
-		16: "UNAUTHENTICATED",
-		17: "CLUSTER_EVENT",
-		18: "READ_ONLY",
+		0:  "CODE_OK",
+		1:  "CODE_CANCELED",
+		2:  "CODE_UNKNOWN",
+		3:  "CODE_INVALID_ARGUMENT",
+		4:  "CODE_DEADLINE_EXCEEDED",
+		5:  "CODE_NOT_FOUND",
+		6:  "CODE_ALREADY_EXISTS",
+		7:  "CODE_PERMISSION_DENIED",
+		8:  "CODE_RESOURCE_EXHAUSTED",
+		9:  "CODE_FAILED_PRECONDITION",
+		10: "CODE_ABORTED",
+		11: "CODE_OUT_OF_RANGE",
+		12: "CODE_UNIMPLEMENTED",
+		13: "CODE_INTERNAL",
+		14: "CODE_UNAVAILABLE",
+		15: "CODE_DATA_LOSS",
+		16: "CODE_UNAUTHENTICATED",
+		17: "CODE_CLUSTER_EVENT",
+		18: "CODE_READ_ONLY",
 	}
 	Code_value = map[string]int32{
-		"OK":                  0,
-		"CANCELED":            1,
-		"UNKNOWN":             2,
-		"INVALID_ARGUMENT":    3,
-		"DEADLINE_EXCEEDED":   4,
-		"NOT_FOUND":           5,
-		"ALREADY_EXISTS":      6,
-		"PERMISSION_DENIED":   7,
-		"RESOURCE_EXHAUSTED":  8,
-		"FAILED_PRECONDITION": 9,
-		"ABORTED":             10,
-		"OUT_OF_RANGE":        11,
-		"UNIMPLEMENTED":       12,
-		"INTERNAL":            13,
-		"UNAVAILABLE":         14,
-		"DATA_LOSS":           15,
-		"UNAUTHENTICATED":     16,
-		"CLUSTER_EVENT":       17,
-		"READ_ONLY":           18,
+		"CODE_OK":                  0,
+		"CODE_CANCELED":            1,
+		"CODE_UNKNOWN":             2,
+		"CODE_INVALID_ARGUMENT":    3,
+		"CODE_DEADLINE_EXCEEDED":   4,
+		"CODE_NOT_FOUND":           5,
+		"CODE_ALREADY_EXISTS":      6,
+		"CODE_PERMISSION_DENIED":   7,
+		"CODE_RESOURCE_EXHAUSTED":  8,
+		"CODE_FAILED_PRECONDITION": 9,
+		"CODE_ABORTED":             10,
+		"CODE_OUT_OF_RANGE":        11,
+		"CODE_UNIMPLEMENTED":       12,
+		"CODE_INTERNAL":            13,
+		"CODE_UNAVAILABLE":         14,
+		"CODE_DATA_LOSS":           15,
+		"CODE_UNAUTHENTICATED":     16,
+		"CODE_CLUSTER_EVENT":       17,
+		"CODE_READ_ONLY":           18,
 	}
 )
 
@@ -367,7 +367,7 @@ func (x *RPCError) GetCode() Code {
 	if x != nil {
 		return x.Code
 	}
-	return Code_OK
+	return Code_CODE_OK
 }
 
 var File_mtrpc_proto protoreflect.FileDescriptor
@@ -382,28 +382,28 @@ const file_mtrpc_proto_rawDesc = "" +
 	"\x06groups\x18\x04 \x03(\tR\x06groups\"E\n" +
 	"\bRPCError\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\x12\x1f\n" +
-	"\x04code\x18\x02 \x01(\x0e2\v.mtrpc.CodeR\x04code*\xd8\x02\n" +
-	"\x04Code\x12\x06\n" +
-	"\x02OK\x10\x00\x12\f\n" +
-	"\bCANCELED\x10\x01\x12\v\n" +
-	"\aUNKNOWN\x10\x02\x12\x14\n" +
-	"\x10INVALID_ARGUMENT\x10\x03\x12\x15\n" +
-	"\x11DEADLINE_EXCEEDED\x10\x04\x12\r\n" +
-	"\tNOT_FOUND\x10\x05\x12\x12\n" +
-	"\x0eALREADY_EXISTS\x10\x06\x12\x15\n" +
-	"\x11PERMISSION_DENIED\x10\a\x12\x16\n" +
-	"\x12RESOURCE_EXHAUSTED\x10\b\x12\x17\n" +
-	"\x13FAILED_PRECONDITION\x10\t\x12\v\n" +
-	"\aABORTED\x10\n" +
-	"\x12\x10\n" +
-	"\fOUT_OF_RANGE\x10\v\x12\x11\n" +
-	"\rUNIMPLEMENTED\x10\f\x12\f\n" +
-	"\bINTERNAL\x10\r\x12\x0f\n" +
-	"\vUNAVAILABLE\x10\x0e\x12\r\n" +
-	"\tDATA_LOSS\x10\x0f\x12\x13\n" +
-	"\x0fUNAUTHENTICATED\x10\x10\x12\x11\n" +
-	"\rCLUSTER_EVENT\x10\x11\x12\r\n" +
-	"\tREAD_ONLY\x10\x12B,Z*github.com/multigres/multigres/go/pb/mtrpcb\x06proto3"
+	"\x04code\x18\x02 \x01(\x0e2\v.mtrpc.CodeR\x04code*\xb7\x03\n" +
+	"\x04Code\x12\v\n" +
+	"\aCODE_OK\x10\x00\x12\x11\n" +
+	"\rCODE_CANCELED\x10\x01\x12\x10\n" +
+	"\fCODE_UNKNOWN\x10\x02\x12\x19\n" +
+	"\x15CODE_INVALID_ARGUMENT\x10\x03\x12\x1a\n" +
+	"\x16CODE_DEADLINE_EXCEEDED\x10\x04\x12\x12\n" +
+	"\x0eCODE_NOT_FOUND\x10\x05\x12\x17\n" +
+	"\x13CODE_ALREADY_EXISTS\x10\x06\x12\x1a\n" +
+	"\x16CODE_PERMISSION_DENIED\x10\a\x12\x1b\n" +
+	"\x17CODE_RESOURCE_EXHAUSTED\x10\b\x12\x1c\n" +
+	"\x18CODE_FAILED_PRECONDITION\x10\t\x12\x10\n" +
+	"\fCODE_ABORTED\x10\n" +
+	"\x12\x15\n" +
+	"\x11CODE_OUT_OF_RANGE\x10\v\x12\x16\n" +
+	"\x12CODE_UNIMPLEMENTED\x10\f\x12\x11\n" +
+	"\rCODE_INTERNAL\x10\r\x12\x14\n" +
+	"\x10CODE_UNAVAILABLE\x10\x0e\x12\x12\n" +
+	"\x0eCODE_DATA_LOSS\x10\x0f\x12\x18\n" +
+	"\x14CODE_UNAUTHENTICATED\x10\x10\x12\x16\n" +
+	"\x12CODE_CLUSTER_EVENT\x10\x11\x12\x12\n" +
+	"\x0eCODE_READ_ONLY\x10\x12B,Z*github.com/multigres/multigres/go/pb/mtrpcb\x06proto3"
 
 var (
 	file_mtrpc_proto_rawDescOnce sync.Once

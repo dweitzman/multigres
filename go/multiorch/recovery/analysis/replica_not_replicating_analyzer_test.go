@@ -39,7 +39,7 @@ func TestReplicaNotReplicatingAnalyzer_Analyze(t *testing.T) {
 	poolerStore := store.NewProtoStore[string, *multiorchdatapb.PoolerHealthState]()
 	rpcClient := &rpcclient.FakeClient{}
 	coordID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIORCH,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 		Cell:      "cell1",
 		Name:      "test-coord",
 	}
@@ -50,11 +50,11 @@ func TestReplicaNotReplicatingAnalyzer_Analyze(t *testing.T) {
 
 	t.Run("detects replica with no primary_conninfo", func(t *testing.T) {
 		analysis := &store.ReplicationAnalysis{
-			PoolerID:            &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica1"},
+			PoolerID:            &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "replica1"},
 			ShardKey:            commontypes.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"},
 			IsPrimary:           false,
 			IsInitialized:       true,
-			PrimaryPoolerID:     &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "primary1"},
+			PrimaryPoolerID:     &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "primary1"},
 			PrimaryReachable:    true,
 			PrimaryConnInfoHost: "", // No primary_conninfo configured
 			ReplicationStopped:  false,
@@ -71,11 +71,11 @@ func TestReplicaNotReplicatingAnalyzer_Analyze(t *testing.T) {
 
 	t.Run("detects replica with replication stopped", func(t *testing.T) {
 		analysis := &store.ReplicationAnalysis{
-			PoolerID:            &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica1"},
+			PoolerID:            &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "replica1"},
 			ShardKey:            commontypes.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"},
 			IsPrimary:           false,
 			IsInitialized:       true,
-			PrimaryPoolerID:     &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "primary1"},
+			PrimaryPoolerID:     &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "primary1"},
 			PrimaryReachable:    true,
 			PrimaryConnInfoHost: "primary.example.com",
 			ReplicationStopped:  true, // Replication stopped
@@ -89,11 +89,11 @@ func TestReplicaNotReplicatingAnalyzer_Analyze(t *testing.T) {
 
 	t.Run("ignores replica with healthy replication", func(t *testing.T) {
 		analysis := &store.ReplicationAnalysis{
-			PoolerID:            &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica1"},
+			PoolerID:            &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "replica1"},
 			ShardKey:            commontypes.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"},
 			IsPrimary:           false,
 			IsInitialized:       true,
-			PrimaryPoolerID:     &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "primary1"},
+			PrimaryPoolerID:     &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "primary1"},
 			PrimaryReachable:    true,
 			PrimaryConnInfoHost: "primary.example.com",
 			ReplicationStopped:  false,
@@ -106,7 +106,7 @@ func TestReplicaNotReplicatingAnalyzer_Analyze(t *testing.T) {
 
 	t.Run("ignores primary nodes", func(t *testing.T) {
 		analysis := &store.ReplicationAnalysis{
-			PoolerID:            &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "primary1"},
+			PoolerID:            &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "primary1"},
 			ShardKey:            commontypes.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"},
 			IsPrimary:           true,
 			IsInitialized:       true,
@@ -120,7 +120,7 @@ func TestReplicaNotReplicatingAnalyzer_Analyze(t *testing.T) {
 
 	t.Run("ignores uninitialized replica", func(t *testing.T) {
 		analysis := &store.ReplicationAnalysis{
-			PoolerID:            &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica1"},
+			PoolerID:            &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "replica1"},
 			ShardKey:            commontypes.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"},
 			IsPrimary:           false,
 			IsInitialized:       false, // Not initialized
@@ -134,11 +134,11 @@ func TestReplicaNotReplicatingAnalyzer_Analyze(t *testing.T) {
 
 	t.Run("ignores replica when primary is unreachable", func(t *testing.T) {
 		analysis := &store.ReplicationAnalysis{
-			PoolerID:            &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica1"},
+			PoolerID:            &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "replica1"},
 			ShardKey:            commontypes.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"},
 			IsPrimary:           false,
 			IsInitialized:       true,
-			PrimaryPoolerID:     &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "primary1"},
+			PrimaryPoolerID:     &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "primary1"},
 			PrimaryReachable:    false, // Primary unreachable - PrimaryIsDead handles this
 			PrimaryConnInfoHost: "",
 		}
@@ -155,11 +155,11 @@ func TestReplicaNotReplicatingAnalyzer_Analyze(t *testing.T) {
 	t.Run("returns error when factory is nil", func(t *testing.T) {
 		nilFactoryAnalyzer := &ReplicaNotReplicatingAnalyzer{factory: nil}
 		analysis := &store.ReplicationAnalysis{
-			PoolerID:            &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica1"},
+			PoolerID:            &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "replica1"},
 			ShardKey:            commontypes.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"},
 			IsPrimary:           false,
 			IsInitialized:       true,
-			PrimaryPoolerID:     &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "primary1"},
+			PrimaryPoolerID:     &clustermetadatapb.ID{Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER, Cell: "zone1", Name: "primary1"},
 			PrimaryReachable:    true,
 			PrimaryConnInfoHost: "",
 		}

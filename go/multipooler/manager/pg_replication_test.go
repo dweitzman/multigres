@@ -352,13 +352,13 @@ func TestSyncReplicationConfigMatches(t *testing.T) {
 		{
 			name: "perfect match",
 			current: &multipoolermanagerdatapb.SynchronousReplicationConfiguration{
-				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync:           2,
 				StandbyIds:        []*clustermetadatapb.ID{standby1, standby2, standby3},
 			},
 			requested: &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
-				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync:           2,
 				StandbyIds:        []*clustermetadatapb.ID{standby1, standby2, standby3},
@@ -368,13 +368,13 @@ func TestSyncReplicationConfigMatches(t *testing.T) {
 		{
 			name: "different synchronous commit level",
 			current: &multipoolermanagerdatapb.SynchronousReplicationConfiguration{
-				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync:           1,
 				StandbyIds:        []*clustermetadatapb.ID{standby1},
 			},
 			requested: &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
-				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_APPLY,
+				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_REMOTE_APPLY,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync:           1,
 				StandbyIds:        []*clustermetadatapb.ID{standby1},
@@ -384,13 +384,13 @@ func TestSyncReplicationConfigMatches(t *testing.T) {
 		{
 			name: "different synchronous method",
 			current: &multipoolermanagerdatapb.SynchronousReplicationConfiguration{
-				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync:           1,
 				StandbyIds:        []*clustermetadatapb.ID{standby1, standby2},
 			},
 			requested: &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
-				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_ANY,
 				NumSync:           1,
 				StandbyIds:        []*clustermetadatapb.ID{standby1, standby2},
@@ -400,13 +400,13 @@ func TestSyncReplicationConfigMatches(t *testing.T) {
 		{
 			name: "different num_sync",
 			current: &multipoolermanagerdatapb.SynchronousReplicationConfiguration{
-				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync:           1,
 				StandbyIds:        []*clustermetadatapb.ID{standby1, standby2},
 			},
 			requested: &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
-				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync:           2,
 				StandbyIds:        []*clustermetadatapb.ID{standby1, standby2},
@@ -416,13 +416,13 @@ func TestSyncReplicationConfigMatches(t *testing.T) {
 		{
 			name: "different standby count",
 			current: &multipoolermanagerdatapb.SynchronousReplicationConfiguration{
-				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync:           1,
 				StandbyIds:        []*clustermetadatapb.ID{standby1, standby2},
 			},
 			requested: &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
-				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync:           1,
 				StandbyIds:        []*clustermetadatapb.ID{standby1, standby2, standby3},
@@ -432,13 +432,13 @@ func TestSyncReplicationConfigMatches(t *testing.T) {
 		{
 			name: "different standbys same count",
 			current: &multipoolermanagerdatapb.SynchronousReplicationConfiguration{
-				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync:           1,
 				StandbyIds:        []*clustermetadatapb.ID{standby1, standby2},
 			},
 			requested: &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
-				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync:           1,
 				StandbyIds:        []*clustermetadatapb.ID{standby1, standby3},
@@ -448,13 +448,13 @@ func TestSyncReplicationConfigMatches(t *testing.T) {
 		{
 			name: "same standbys different order - should match",
 			current: &multipoolermanagerdatapb.SynchronousReplicationConfiguration{
-				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync:           2,
 				StandbyIds:        []*clustermetadatapb.ID{standby1, standby2, standby3},
 			},
 			requested: &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
-				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync:           2,
 				StandbyIds:        []*clustermetadatapb.ID{standby3, standby1, standby2},
@@ -464,13 +464,13 @@ func TestSyncReplicationConfigMatches(t *testing.T) {
 		{
 			name: "empty standbys in both",
 			current: &multipoolermanagerdatapb.SynchronousReplicationConfiguration{
-				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LOCAL,
+				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_LOCAL,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync:           0,
 				StandbyIds:        []*clustermetadatapb.ID{},
 			},
 			requested: &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
-				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LOCAL,
+				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_LOCAL,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync:           0,
 				StandbyIds:        []*clustermetadatapb.ID{},
@@ -480,13 +480,13 @@ func TestSyncReplicationConfigMatches(t *testing.T) {
 		{
 			name: "empty vs non-empty standbys",
 			current: &multipoolermanagerdatapb.SynchronousReplicationConfiguration{
-				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync:           0,
 				StandbyIds:        []*clustermetadatapb.ID{},
 			},
 			requested: &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
-				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+				SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 				SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 				NumSync:           0,
 				StandbyIds:        []*clustermetadatapb.ID{standby1},
@@ -857,7 +857,7 @@ func TestGetSynchronousReplicationConfig(t *testing.T) {
 				assert.Equal(t, multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST, config.SynchronousMethod)
 				assert.Equal(t, int32(2), config.NumSync)
 				assert.Equal(t, 3, len(config.StandbyIds))
-				assert.Equal(t, multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON, config.SynchronousCommit)
+				assert.Equal(t, multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON, config.SynchronousCommit)
 			},
 		},
 		{
@@ -876,7 +876,7 @@ func TestGetSynchronousReplicationConfig(t *testing.T) {
 				assert.Equal(t, 1, len(config.StandbyIds))
 				assert.Equal(t, "zone1", config.StandbyIds[0].Cell)
 				assert.Equal(t, "replica-1", config.StandbyIds[0].Name)
-				assert.Equal(t, multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_APPLY, config.SynchronousCommit)
+				assert.Equal(t, multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_REMOTE_APPLY, config.SynchronousCommit)
 			},
 		},
 		{
@@ -890,7 +890,7 @@ func TestGetSynchronousReplicationConfig(t *testing.T) {
 			expectError: false,
 			validateResult: func(t *testing.T, config *multipoolermanagerdatapb.SynchronousReplicationConfiguration) {
 				assert.Equal(t, 0, len(config.StandbyIds))
-				assert.Equal(t, multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LOCAL, config.SynchronousCommit)
+				assert.Equal(t, multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_LOCAL, config.SynchronousCommit)
 			},
 		},
 		{
@@ -903,7 +903,7 @@ func TestGetSynchronousReplicationConfig(t *testing.T) {
 			},
 			expectError: false,
 			validateResult: func(t *testing.T, config *multipoolermanagerdatapb.SynchronousReplicationConfiguration) {
-				assert.Equal(t, multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_OFF, config.SynchronousCommit)
+				assert.Equal(t, multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_OFF, config.SynchronousCommit)
 			},
 		},
 		{
@@ -916,7 +916,7 @@ func TestGetSynchronousReplicationConfig(t *testing.T) {
 			},
 			expectError: false,
 			validateResult: func(t *testing.T, config *multipoolermanagerdatapb.SynchronousReplicationConfiguration) {
-				assert.Equal(t, multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_WRITE, config.SynchronousCommit)
+				assert.Equal(t, multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_REMOTE_WRITE, config.SynchronousCommit)
 			},
 		},
 		{
@@ -1121,7 +1121,7 @@ func TestValidateSyncReplicationParams(t *testing.T) {
 			numSync: 1,
 			standbyIDs: []*clustermetadatapb.ID{
 				{
-					Component: clustermetadatapb.ID_MULTIPOOLER,
+					Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 					Cell:      "zone1",
 					Name:      "standby1",
 				},
@@ -1133,12 +1133,12 @@ func TestValidateSyncReplicationParams(t *testing.T) {
 			numSync: 2,
 			standbyIDs: []*clustermetadatapb.ID{
 				{
-					Component: clustermetadatapb.ID_MULTIPOOLER,
+					Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 					Cell:      "zone1",
 					Name:      "standby1",
 				},
 				{
-					Component: clustermetadatapb.ID_MULTIPOOLER,
+					Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 					Cell:      "zone1",
 					Name:      "standby2",
 				},
@@ -1169,12 +1169,12 @@ func TestValidateSyncReplicationParams(t *testing.T) {
 			numSync: 3,
 			standbyIDs: []*clustermetadatapb.ID{
 				{
-					Component: clustermetadatapb.ID_MULTIPOOLER,
+					Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 					Cell:      "zone1",
 					Name:      "standby1",
 				},
 				{
-					Component: clustermetadatapb.ID_MULTIPOOLER,
+					Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 					Cell:      "zone1",
 					Name:      "standby2",
 				},
@@ -1187,7 +1187,7 @@ func TestValidateSyncReplicationParams(t *testing.T) {
 			numSync: 1,
 			standbyIDs: []*clustermetadatapb.ID{
 				{
-					Component: clustermetadatapb.ID_MULTIPOOLER,
+					Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 					Cell:      "zone1",
 					Name:      "standby1",
 				},
@@ -1201,7 +1201,7 @@ func TestValidateSyncReplicationParams(t *testing.T) {
 			numSync: 1,
 			standbyIDs: []*clustermetadatapb.ID{
 				{
-					Component: clustermetadatapb.ID_MULTIPOOLER,
+					Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 					Cell:      "",
 					Name:      "standby1",
 				},
@@ -1214,7 +1214,7 @@ func TestValidateSyncReplicationParams(t *testing.T) {
 			numSync: 1,
 			standbyIDs: []*clustermetadatapb.ID{
 				{
-					Component: clustermetadatapb.ID_MULTIPOOLER,
+					Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 					Cell:      "zone1",
 					Name:      "",
 				},
@@ -1232,7 +1232,7 @@ func TestValidateSyncReplicationParams(t *testing.T) {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.errorMsg)
 				code := mterrors.Code(err)
-				assert.Equal(t, mtrpcpb.Code_INVALID_ARGUMENT, code)
+				assert.Equal(t, mtrpcpb.Code_CODE_INVALID_ARGUMENT, code)
 			} else {
 				require.NoError(t, err)
 			}

@@ -132,7 +132,7 @@ func TestDeadPrimaryRecovery(t *testing.T) {
 		resp, err := client.Manager.Status(utils.WithShortDeadline(t), &multipoolermanagerdatapb.StatusRequest{})
 		require.NoError(t, err)
 		require.True(t, resp.Status.IsInitialized, "New primary should be initialized")
-		require.Equal(t, clustermetadatapb.PoolerType_PRIMARY, resp.Status.PoolerType, "New leader should have PRIMARY pooler type")
+		require.Equal(t, clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY, resp.Status.PoolerType, "New leader should have PRIMARY pooler type")
 
 		// Verify we can connect and query
 		socketDir := filepath.Join(newPrimaryInst.Pgctld.DataDir, "pg_sockets")
@@ -286,7 +286,7 @@ func waitForNewPrimary(t *testing.T, setup *shardsetup.ShardSetup, oldPrimaryNam
 				continue
 			}
 
-			if resp.Status.IsInitialized && resp.Status.PoolerType == clustermetadatapb.PoolerType_PRIMARY {
+			if resp.Status.IsInitialized && resp.Status.PoolerType == clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY {
 				t.Logf("New primary elected: %s (pooler_type=%s)", name, resp.Status.PoolerType)
 				return name
 			}
@@ -350,7 +350,7 @@ func TestPoolerDownNoFailover(t *testing.T) {
 
 			require.NoError(t, err)
 			require.True(t, resp.Status.IsInitialized, "Node %s should be initialized", name)
-			require.Equal(t, clustermetadatapb.PoolerType_REPLICA, resp.Status.PoolerType,
+			require.Equal(t, clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA, resp.Status.PoolerType,
 				"Node %s should still be REPLICA (no failover should have occurred)", name)
 			require.NotNil(t, resp.Status.ReplicationStatus, "Standby %s should have replication status", name)
 			require.NotNil(t, resp.Status.ReplicationStatus.PrimaryConnInfo, "Standby %s should have PrimaryConnInfo", name)

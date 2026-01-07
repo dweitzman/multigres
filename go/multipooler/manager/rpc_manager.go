@@ -94,7 +94,7 @@ func (pm *MultiPoolerManager) SetPrimaryConnInfo(ctx context.Context, primary *c
 		var ok bool
 		port, ok = primary.PortMap["postgres"]
 		if !ok {
-			return mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,
+			return mterrors.Errorf(mtrpcpb.Code_CODE_INVALID_ARGUMENT,
 				"primary %s has no postgres port configured", primary.Id.Name)
 		}
 	}
@@ -136,7 +136,7 @@ func (pm *MultiPoolerManager) setPrimaryConnInfoLocked(ctx context.Context, host
 
 	if isPrimary {
 		pm.logger.ErrorContext(ctx, "SetPrimaryConnInfo called on non-standby instance", "service_id", pm.serviceID.String())
-		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
+		return mterrors.New(mtrpcpb.Code_CODE_FAILED_PRECONDITION,
 			fmt.Sprintf("operation not allowed: the PostgreSQL instance is not in standby mode (service_id: %s)", pm.serviceID.String()))
 	}
 
@@ -434,7 +434,7 @@ func (pm *MultiPoolerManager) UpdateSynchronousStandbyList(ctx context.Context, 
 
 	// Validate operation
 	if operation == multipoolermanagerdatapb.StandbyUpdateOperation_STANDBY_UPDATE_OPERATION_UNSPECIFIED {
-		return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "operation must be specified")
+		return mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT, "operation must be specified")
 	}
 
 	// Validate standby IDs using the shared validation function
@@ -458,7 +458,7 @@ func (pm *MultiPoolerManager) UpdateSynchronousStandbyList(ctx context.Context, 
 	// Check if synchronous replication is configured
 	if len(syncConfig.StandbyIds) == 0 {
 		pm.logger.ErrorContext(ctx, "UpdateSynchronousStandbyList requires synchronous replication to be configured")
-		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
+		return mterrors.New(mtrpcpb.Code_CODE_FAILED_PRECONDITION,
 			"synchronous replication is not configured - use ConfigureSynchronousReplication first")
 	}
 
@@ -483,7 +483,7 @@ func (pm *MultiPoolerManager) UpdateSynchronousStandbyList(ctx context.Context, 
 		updatedStandbys = applyReplaceOperation(standbyIDs)
 
 	default:
-		return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
+		return mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT,
 			fmt.Sprintf("unsupported operation: %s", operation.String()))
 	}
 
@@ -497,7 +497,7 @@ func (pm *MultiPoolerManager) UpdateSynchronousStandbyList(ctx context.Context, 
 
 	// Validate that the final list is not empty
 	if len(updatedStandbys) == 0 {
-		return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
+		return mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT,
 			"resulting standby list cannot be empty after operation")
 	}
 
@@ -665,7 +665,7 @@ func (pm *MultiPoolerManager) changeTypeLocked(ctx context.Context, poolerType c
 
 	// Update heartbeat tracker based on new type
 	if pm.replTracker != nil {
-		if poolerType == clustermetadatapb.PoolerType_PRIMARY {
+		if poolerType == clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY {
 			pm.logger.InfoContext(ctx, "Starting heartbeat writer for new primary")
 			pm.replTracker.MakePrimary()
 		} else {
@@ -699,11 +699,11 @@ func (pm *MultiPoolerManager) ChangeType(ctx context.Context, poolerType string)
 	// This would happen organically as part of Promote workflow.
 	switch poolerType {
 	case "PRIMARY":
-		newType = clustermetadatapb.PoolerType_PRIMARY
+		newType = clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY
 	case "REPLICA":
-		newType = clustermetadatapb.PoolerType_REPLICA
+		newType = clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA
 	default:
-		return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
+		return mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT,
 			fmt.Sprintf("invalid pooler type: %s, must be PRIMARY or REPLICA", poolerType))
 	}
 
@@ -946,7 +946,7 @@ func (pm *MultiPoolerManager) UndoDemote(ctx context.Context) error {
 	defer pm.actionLock.Release(ctx)
 
 	pm.logger.InfoContext(ctx, "UndoDemote called")
-	return mterrors.New(mtrpcpb.Code_UNIMPLEMENTED, "method UndoDemote not implemented")
+	return mterrors.New(mtrpcpb.Code_CODE_UNIMPLEMENTED, "method UndoDemote not implemented")
 }
 
 // Promote promotes a standby to primary
@@ -1006,7 +1006,7 @@ func (pm *MultiPoolerManager) Promote(ctx context.Context, consensusTerm int64, 
 
 		if !force {
 			// Without force flag, require manual intervention
-			return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
+			return nil, mterrors.New(mtrpcpb.Code_CODE_FAILED_PRECONDITION,
 				fmt.Sprintf("inconsistent state: topology is PRIMARY but PostgreSQL state doesn't match (pg_primary=%v, sync_matches=%v). Manual intervention required or use force=true.",
 					state.isPrimaryInPostgres, state.syncReplicationMatches))
 		}
@@ -1114,11 +1114,11 @@ func (pm *MultiPoolerManager) createDurabilityPolicyLocked(ctx context.Context, 
 
 	// Validate inputs
 	if policyName == "" {
-		return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "policy_name is required")
+		return mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT, "policy_name is required")
 	}
 
 	if quorumRule == nil {
-		return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "quorum_rule is required")
+		return mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT, "quorum_rule is required")
 	}
 
 	// Marshal the quorum rule to JSON using protojson
@@ -1150,11 +1150,11 @@ func (pm *MultiPoolerManager) CreateDurabilityPolicy(ctx context.Context, req *m
 
 	// Validate inputs
 	if req.PolicyName == "" {
-		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "policy_name is required")
+		return nil, mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT, "policy_name is required")
 	}
 
 	if req.QuorumRule == nil {
-		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "quorum_rule is required")
+		return nil, mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT, "quorum_rule is required")
 	}
 
 	// Marshal the quorum rule to JSON using protojson

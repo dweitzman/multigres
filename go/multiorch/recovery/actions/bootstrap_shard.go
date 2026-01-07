@@ -141,7 +141,7 @@ func (a *BootstrapShardAction) Execute(ctx context.Context, problem types.Proble
 	// Check that enough poolers are reachable to satisfy quorum before attempting bootstrap
 	reachableCount := a.countReachablePoolers(ctx, cohort)
 	if reachableCount < int(quorumRule.RequiredCount) {
-		return mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
+		return mterrors.Errorf(mtrpcpb.Code_CODE_FAILED_PRECONDITION,
 			"insufficient reachable poolers for bootstrap: have %d, need %d for quorum",
 			reachableCount, quorumRule.RequiredCount)
 	}
@@ -192,7 +192,7 @@ func (a *BootstrapShardAction) Execute(ctx context.Context, problem types.Proble
 	}
 
 	if !resp.Success {
-		return mterrors.Errorf(mtrpcpb.Code_INTERNAL,
+		return mterrors.Errorf(mtrpcpb.Code_CODE_INTERNAL,
 			"failed to initialize empty primary on node %s: %s",
 			candidate.MultiPooler.Id.Name, resp.ErrorMessage)
 	}
@@ -278,7 +278,7 @@ func (a *BootstrapShardAction) selectBootstrapCandidate(ctx context.Context, coh
 		return pooler, nil
 	}
 
-	return nil, mterrors.Errorf(mtrpcpb.Code_UNAVAILABLE,
+	return nil, mterrors.Errorf(mtrpcpb.Code_CODE_UNAVAILABLE,
 		"no reachable candidate found for bootstrap")
 }
 
@@ -331,7 +331,7 @@ func (a *BootstrapShardAction) initializeStandbys(ctx context.Context, shardKey 
 	}
 
 	if len(failedNodes) > 0 {
-		return successfulStandbys, mterrors.Errorf(mtrpcpb.Code_INTERNAL,
+		return successfulStandbys, mterrors.Errorf(mtrpcpb.Code_CODE_INTERNAL,
 			"failed to initialize %d standbys: %v", len(failedNodes), failedNodes)
 	}
 
@@ -442,7 +442,7 @@ func (a *BootstrapShardAction) getDurabilityPolicyName(ctx context.Context, data
 	}
 
 	if db.DurabilityPolicy == "" {
-		return "", mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
+		return "", mterrors.Errorf(mtrpcpb.Code_CODE_FAILED_PRECONDITION,
 			"database %s has no durability_policy configured", database)
 	}
 
@@ -451,7 +451,7 @@ func (a *BootstrapShardAction) getDurabilityPolicyName(ctx context.Context, data
 	case "ANY_2", "MULTI_CELL_ANY_2":
 		return db.DurabilityPolicy, nil
 	default:
-		return "", mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,
+		return "", mterrors.Errorf(mtrpcpb.Code_CODE_INVALID_ARGUMENT,
 			"unsupported durability policy: %s (must be ANY_2 or MULTI_CELL_ANY_2)", db.DurabilityPolicy)
 	}
 }
@@ -474,7 +474,7 @@ func (a *BootstrapShardAction) parsePolicy(policyName string) (*clustermetadatap
 		}, nil
 
 	default:
-		return nil, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,
+		return nil, mterrors.Errorf(mtrpcpb.Code_CODE_INVALID_ARGUMENT,
 			"unsupported policy name: %s", policyName)
 	}
 }

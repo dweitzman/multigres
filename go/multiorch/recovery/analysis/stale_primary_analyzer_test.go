@@ -33,7 +33,7 @@ func TestStalePrimaryAnalyzer_Analyze(t *testing.T) {
 		analyzer := &StalePrimaryAnalyzer{factory: factory}
 		analysis := &store.ReplicationAnalysis{
 			PoolerID: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "stale-primary",
 			},
@@ -42,7 +42,7 @@ func TestStalePrimaryAnalyzer_Analyze(t *testing.T) {
 			IsInitialized: true,
 			ConsensusTerm: 5,
 			OtherPrimaryInShard: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "new-primary",
 			},
@@ -64,7 +64,7 @@ func TestStalePrimaryAnalyzer_Analyze(t *testing.T) {
 		analyzer := &StalePrimaryAnalyzer{factory: factory}
 		analysis := &store.ReplicationAnalysis{
 			PoolerID: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "new-primary",
 			},
@@ -73,7 +73,7 @@ func TestStalePrimaryAnalyzer_Analyze(t *testing.T) {
 			IsInitialized: true,
 			ConsensusTerm: 6, // Higher term = this node is NOT stale
 			OtherPrimaryInShard: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "stale-primary",
 			},
@@ -93,7 +93,7 @@ func TestStalePrimaryAnalyzer_Analyze(t *testing.T) {
 		analyzer := &StalePrimaryAnalyzer{factory: factory}
 		analysis := &store.ReplicationAnalysis{
 			PoolerID: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "primary-a",
 			},
@@ -102,7 +102,7 @@ func TestStalePrimaryAnalyzer_Analyze(t *testing.T) {
 			IsInitialized: true,
 			ConsensusTerm: 5,
 			OtherPrimaryInShard: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "primary-b",
 			},
@@ -119,7 +119,7 @@ func TestStalePrimaryAnalyzer_Analyze(t *testing.T) {
 		analyzer := &StalePrimaryAnalyzer{factory: factory}
 		analysis := &store.ReplicationAnalysis{
 			PoolerID: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "replica1",
 			},
@@ -138,7 +138,7 @@ func TestStalePrimaryAnalyzer_Analyze(t *testing.T) {
 		analyzer := &StalePrimaryAnalyzer{factory: factory}
 		analysis := &store.ReplicationAnalysis{
 			PoolerID: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "primary",
 			},
@@ -159,7 +159,7 @@ func TestStalePrimaryAnalyzer_Analyze(t *testing.T) {
 		analyzer := &StalePrimaryAnalyzer{factory: factory}
 		analysis := &store.ReplicationAnalysis{
 			PoolerID: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "primary",
 			},
@@ -167,7 +167,7 @@ func TestStalePrimaryAnalyzer_Analyze(t *testing.T) {
 			IsPrimary:     true,
 			IsInitialized: false, // Not initialized
 			OtherPrimaryInShard: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "other-primary",
 			},

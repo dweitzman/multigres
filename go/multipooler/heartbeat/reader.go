@@ -118,7 +118,7 @@ func (r *Reader) Status() (time.Duration, error) {
 
 	// Return an error if we didn't receive a heartbeat for more than two intervals
 	if !r.lastKnownTime.IsZero() && r.now().Sub(r.lastKnownTime) > 2*r.interval {
-		return 0, mterrors.New(mtrpcpb.Code_UNAVAILABLE, "no heartbeat received in over 2x the heartbeat interval")
+		return 0, mterrors.New(mtrpcpb.Code_CODE_UNAVAILABLE, "no heartbeat received in over 2x the heartbeat interval")
 	}
 
 	return r.lastKnownLag, nil

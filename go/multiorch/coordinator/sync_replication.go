@@ -50,7 +50,7 @@ func BuildSyncReplicationConfig(logger *slog.Logger, quorumRule *clustermetadata
 	// If there are no standbys, check async fallback mode
 	if len(standbys) == 0 {
 		if asyncFallback == clustermetadatapb.AsyncReplicationFallbackMode_ASYNC_REPLICATION_FALLBACK_MODE_REJECT {
-			return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
+			return nil, mterrors.New(mtrpcpb.Code_CODE_FAILED_PRECONDITION,
 				fmt.Sprintf("cannot establish synchronous replication: no standbys available (required %d standbys, async_fallback=REJECT)",
 					requiredCount-1))
 		}
@@ -83,7 +83,7 @@ func BuildSyncReplicationConfig(logger *slog.Logger, quorumRule *clustermetadata
 		// If no eligible standbys remain after filtering, check async fallback mode
 		if len(eligibleStandbys) == 0 {
 			if asyncFallback == clustermetadatapb.AsyncReplicationFallbackMode_ASYNC_REPLICATION_FALLBACK_MODE_REJECT {
-				return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
+				return nil, mterrors.New(mtrpcpb.Code_CODE_FAILED_PRECONDITION,
 					fmt.Sprintf("cannot establish synchronous replication: no eligible standbys in different cells (candidate_cell=%s, async_fallback=REJECT)",
 						candidate.MultiPooler.Id.Cell))
 			}
@@ -101,7 +101,7 @@ func BuildSyncReplicationConfig(logger *slog.Logger, quorumRule *clustermetadata
 	// Check if we have enough standbys to meet the requirement
 	if requiredNumSync > len(eligibleStandbys) {
 		if asyncFallback == clustermetadatapb.AsyncReplicationFallbackMode_ASYNC_REPLICATION_FALLBACK_MODE_REJECT {
-			return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
+			return nil, mterrors.New(mtrpcpb.Code_CODE_FAILED_PRECONDITION,
 				fmt.Sprintf("cannot establish synchronous replication: insufficient standbys (required %d standbys, available %d, async_fallback=REJECT)",
 					requiredNumSync, len(eligibleStandbys)))
 		}
@@ -129,7 +129,7 @@ func BuildSyncReplicationConfig(logger *slog.Logger, quorumRule *clustermetadata
 		"total_standbys", len(eligibleStandbys))
 
 	return &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
-		SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_WRITE,
+		SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_REMOTE_WRITE,
 		SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_ANY,
 		NumSync:           numSync,
 		StandbyIds:        standbyIDs,

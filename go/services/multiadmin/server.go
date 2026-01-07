@@ -346,7 +346,7 @@ func (s *MultiAdminServer) GetPoolerStatus(ctx context.Context, req *multiadminp
 
 	// Create a fully-qualified pooler ID for topology lookup
 	poolerID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      req.PoolerId.Cell,
 		Name:      req.PoolerId.Name,
 	}

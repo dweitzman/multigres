@@ -204,33 +204,33 @@ func (StandbyUpdateOperation) EnumDescriptor() ([]byte, []int) {
 type SynchronousCommitLevel int32
 
 const (
-	// OFF disables synchronous commit
-	SynchronousCommitLevel_SYNCHRONOUS_COMMIT_OFF SynchronousCommitLevel = 0
-	// LOCAL waits for local flush to disk
-	SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LOCAL SynchronousCommitLevel = 1
-	// REMOTE_WRITE waits for standby to receive and write WAL
-	SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_WRITE SynchronousCommitLevel = 2
-	// ON waits for standby to receive, write, and flush WAL (same as remote_apply in newer versions)
-	SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON SynchronousCommitLevel = 3
-	// REMOTE_APPLY waits for standby to receive, write, flush, and apply WAL
-	SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_APPLY SynchronousCommitLevel = 4
+	// SYNCHRONOUS_COMMIT_LEVEL_OFF disables synchronous commit
+	SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_OFF SynchronousCommitLevel = 0
+	// SYNCHRONOUS_COMMIT_LEVEL_LOCAL waits for local flush to disk
+	SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_LOCAL SynchronousCommitLevel = 1
+	// SYNCHRONOUS_COMMIT_LEVEL_REMOTE_WRITE waits for standby to receive and write WAL
+	SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_REMOTE_WRITE SynchronousCommitLevel = 2
+	// SYNCHRONOUS_COMMIT_LEVEL_ON waits for standby to receive, write, and flush WAL (same as remote_apply in newer versions)
+	SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON SynchronousCommitLevel = 3
+	// SYNCHRONOUS_COMMIT_LEVEL_REMOTE_APPLY waits for standby to receive, write, flush, and apply WAL
+	SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_REMOTE_APPLY SynchronousCommitLevel = 4
 )
 
 // Enum value maps for SynchronousCommitLevel.
 var (
 	SynchronousCommitLevel_name = map[int32]string{
-		0: "SYNCHRONOUS_COMMIT_OFF",
-		1: "SYNCHRONOUS_COMMIT_LOCAL",
-		2: "SYNCHRONOUS_COMMIT_REMOTE_WRITE",
-		3: "SYNCHRONOUS_COMMIT_ON",
-		4: "SYNCHRONOUS_COMMIT_REMOTE_APPLY",
+		0: "SYNCHRONOUS_COMMIT_LEVEL_OFF",
+		1: "SYNCHRONOUS_COMMIT_LEVEL_LOCAL",
+		2: "SYNCHRONOUS_COMMIT_LEVEL_REMOTE_WRITE",
+		3: "SYNCHRONOUS_COMMIT_LEVEL_ON",
+		4: "SYNCHRONOUS_COMMIT_LEVEL_REMOTE_APPLY",
 	}
 	SynchronousCommitLevel_value = map[string]int32{
-		"SYNCHRONOUS_COMMIT_OFF":          0,
-		"SYNCHRONOUS_COMMIT_LOCAL":        1,
-		"SYNCHRONOUS_COMMIT_REMOTE_WRITE": 2,
-		"SYNCHRONOUS_COMMIT_ON":           3,
-		"SYNCHRONOUS_COMMIT_REMOTE_APPLY": 4,
+		"SYNCHRONOUS_COMMIT_LEVEL_OFF":          0,
+		"SYNCHRONOUS_COMMIT_LEVEL_LOCAL":        1,
+		"SYNCHRONOUS_COMMIT_LEVEL_REMOTE_WRITE": 2,
+		"SYNCHRONOUS_COMMIT_LEVEL_ON":           3,
+		"SYNCHRONOUS_COMMIT_LEVEL_REMOTE_APPLY": 4,
 	}
 )
 
@@ -265,22 +265,22 @@ func (SynchronousCommitLevel) EnumDescriptor() ([]byte, []int) {
 type BackupMetadata_Status int32
 
 const (
-	BackupMetadata_UNKNOWN    BackupMetadata_Status = 0
-	BackupMetadata_INCOMPLETE BackupMetadata_Status = 1
-	BackupMetadata_COMPLETE   BackupMetadata_Status = 2 // TODO: add VALID/INVALID states
+	BackupMetadata_STATUS_UNKNOWN    BackupMetadata_Status = 0
+	BackupMetadata_STATUS_INCOMPLETE BackupMetadata_Status = 1
+	BackupMetadata_STATUS_COMPLETE   BackupMetadata_Status = 2 // TODO: add VALID/INVALID states
 )
 
 // Enum value maps for BackupMetadata_Status.
 var (
 	BackupMetadata_Status_name = map[int32]string{
-		0: "UNKNOWN",
-		1: "INCOMPLETE",
-		2: "COMPLETE",
+		0: "STATUS_UNKNOWN",
+		1: "STATUS_INCOMPLETE",
+		2: "STATUS_COMPLETE",
 	}
 	BackupMetadata_Status_value = map[string]int32{
-		"UNKNOWN":    0,
-		"INCOMPLETE": 1,
-		"COMPLETE":   2,
+		"STATUS_UNKNOWN":    0,
+		"STATUS_INCOMPLETE": 1,
+		"STATUS_COMPLETE":   2,
 	}
 )
 
@@ -1011,7 +1011,7 @@ func (x *SynchronousReplicationConfiguration) GetSynchronousCommit() Synchronous
 	if x != nil {
 		return x.SynchronousCommit
 	}
-	return SynchronousCommitLevel_SYNCHRONOUS_COMMIT_OFF
+	return SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_OFF
 }
 
 func (x *SynchronousReplicationConfiguration) GetSynchronousMethod() SynchronousMethod {
@@ -2499,7 +2499,7 @@ func (x *ConfigureSynchronousReplicationRequest) GetSynchronousCommit() Synchron
 	if x != nil {
 		return x.SynchronousCommit
 	}
-	return SynchronousCommitLevel_SYNCHRONOUS_COMMIT_OFF
+	return SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_OFF
 }
 
 func (x *ConfigureSynchronousReplicationRequest) GetSynchronousMethod() SynchronousMethod {
@@ -3660,7 +3660,7 @@ func (x *BackupMetadata) GetStatus() BackupMetadata_Status {
 	if x != nil {
 		return x.Status
 	}
-	return BackupMetadata_UNKNOWN
+	return BackupMetadata_STATUS_UNKNOWN
 }
 
 func (x *BackupMetadata) GetBackupId() string {
@@ -4199,7 +4199,7 @@ const file_multipoolermanagerdata_proto_rawDesc = "" +
 	"\x17GetBackupByJobIdRequest\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\"Z\n" +
 	"\x18GetBackupByJobIdResponse\x12>\n" +
-	"\x06backup\x18\x01 \x01(\v2&.multipoolermanagerdata.BackupMetadataR\x06backup\"\xb9\x03\n" +
+	"\x06backup\x18\x01 \x01(\v2&.multipoolermanagerdata.BackupMetadataR\x06backup\"\xce\x03\n" +
 	"\x0eBackupMetadata\x12\x1f\n" +
 	"\vtable_group\x18\x01 \x01(\tR\n" +
 	"tableGroup\x12\x14\n" +
@@ -4213,12 +4213,11 @@ const file_multipoolermanagerdata_proto_rawDesc = "" +
 	"\x0emultipooler_id\x18\t \x01(\tR\rmultipoolerId\x12<\n" +
 	"\vpooler_type\x18\n" +
 	" \x01(\x0e2\x1b.clustermetadata.PoolerTypeR\n" +
-	"poolerType\"3\n" +
-	"\x06Status\x12\v\n" +
-	"\aUNKNOWN\x10\x00\x12\x0e\n" +
-	"\n" +
-	"INCOMPLETE\x10\x01\x12\f\n" +
-	"\bCOMPLETE\x10\x02\"\x1c\n" +
+	"poolerType\"H\n" +
+	"\x06Status\x12\x12\n" +
+	"\x0eSTATUS_UNKNOWN\x10\x00\x12\x15\n" +
+	"\x11STATUS_INCOMPLETE\x10\x01\x12\x13\n" +
+	"\x0fSTATUS_COMPLETE\x10\x02\"\x1c\n" +
 	"\x1aGetDurabilityPolicyRequest\"X\n" +
 	"\x1bGetDurabilityPolicyResponse\x129\n" +
 	"\x06policy\x18\x01 \x01(\v2!.clustermetadata.DurabilityPolicyR\x06policy\"~\n" +
@@ -4246,13 +4245,13 @@ const file_multipoolermanagerdata_proto_rawDesc = "" +
 	"$STANDBY_UPDATE_OPERATION_UNSPECIFIED\x10\x00\x12 \n" +
 	"\x1cSTANDBY_UPDATE_OPERATION_ADD\x10\x01\x12#\n" +
 	"\x1fSTANDBY_UPDATE_OPERATION_REMOVE\x10\x02\x12$\n" +
-	" STANDBY_UPDATE_OPERATION_REPLACE\x10\x03*\xb7\x01\n" +
-	"\x16SynchronousCommitLevel\x12\x1a\n" +
-	"\x16SYNCHRONOUS_COMMIT_OFF\x10\x00\x12\x1c\n" +
-	"\x18SYNCHRONOUS_COMMIT_LOCAL\x10\x01\x12#\n" +
-	"\x1fSYNCHRONOUS_COMMIT_REMOTE_WRITE\x10\x02\x12\x19\n" +
-	"\x15SYNCHRONOUS_COMMIT_ON\x10\x03\x12#\n" +
-	"\x1fSYNCHRONOUS_COMMIT_REMOTE_APPLY\x10\x04B=Z;github.com/multigres/multigres/go/pb/multipoolermanagerdatab\x06proto3"
+	" STANDBY_UPDATE_OPERATION_REPLACE\x10\x03*\xd5\x01\n" +
+	"\x16SynchronousCommitLevel\x12 \n" +
+	"\x1cSYNCHRONOUS_COMMIT_LEVEL_OFF\x10\x00\x12\"\n" +
+	"\x1eSYNCHRONOUS_COMMIT_LEVEL_LOCAL\x10\x01\x12)\n" +
+	"%SYNCHRONOUS_COMMIT_LEVEL_REMOTE_WRITE\x10\x02\x12\x1f\n" +
+	"\x1bSYNCHRONOUS_COMMIT_LEVEL_ON\x10\x03\x12)\n" +
+	"%SYNCHRONOUS_COMMIT_LEVEL_REMOTE_APPLY\x10\x04B=Z;github.com/multigres/multigres/go/pb/multipoolermanagerdatab\x06proto3"
 
 var (
 	file_multipoolermanagerdata_proto_rawDescOnce sync.Once

@@ -48,7 +48,7 @@ type testRPCClient struct {
 // newTestCoordinator creates a mock coordinator for tests
 func newTestCoordinator(ts topoclient.Store, rpcClient rpcclient.MultiPoolerClient, logger *slog.Logger) *coordinator.Coordinator {
 	coordinatorID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIORCH,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 		Cell:      "cell1",
 		Name:      "test-coordinator",
 	}
@@ -148,7 +148,7 @@ func TestBootstrapShardAction_ConcurrentExecutionPrevented(t *testing.T) {
 
 	// Add a pooler to the store so we get past the "no poolers found" check
 	poolerID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "pooler1",
 	}
@@ -243,7 +243,7 @@ func TestBootstrapShardAction_ConfiguresSyncReplication(t *testing.T) {
 	primary := &multiorchdatapb.PoolerHealthState{
 		MultiPooler: &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "pooler1",
 			},
@@ -257,7 +257,7 @@ func TestBootstrapShardAction_ConfiguresSyncReplication(t *testing.T) {
 	standby1 := &multiorchdatapb.PoolerHealthState{
 		MultiPooler: &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "pooler2",
 			},
@@ -271,7 +271,7 @@ func TestBootstrapShardAction_ConfiguresSyncReplication(t *testing.T) {
 	standby2 := &multiorchdatapb.PoolerHealthState{
 		MultiPooler: &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "cell1",
 				Name:      "pooler3",
 			},
@@ -443,12 +443,12 @@ func TestBootstrapShardAction_QuorumCheckFailsWithInsufficientPoolers(t *testing
 
 	// Add two poolers to the store
 	poolerID1 := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "pooler1",
 	}
 	poolerID2 := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "pooler2",
 	}
@@ -543,12 +543,12 @@ func TestBootstrapShardAction_QuorumCheckPassesWithEnoughPoolers(t *testing.T) {
 
 	// Add two poolers to the store
 	poolerID1 := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "pooler1",
 	}
 	poolerID2 := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "pooler2",
 	}
@@ -635,7 +635,7 @@ func TestBootstrapShardAction_FullBootstrapFlow(t *testing.T) {
 	// Add 3 poolers to the store
 	for i, name := range []string{"pooler1", "pooler2", "pooler3"} {
 		poolerID := &clustermetadatapb.ID{
-			Component: clustermetadatapb.ID_MULTIPOOLER,
+			Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 			Cell:      "cell1",
 			Name:      name,
 		}
@@ -718,12 +718,12 @@ func TestBootstrapShardAction_SkipsIfAlreadyInitialized(t *testing.T) {
 
 	// Add two poolers to the store
 	poolerID1 := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "pooler1",
 	}
 	poolerID2 := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "cell1",
 		Name:      "pooler2",
 	}
@@ -795,7 +795,7 @@ func TestBootstrapShardAction_CountReachablePoolers(t *testing.T) {
 		{
 			MultiPooler: &clustermetadatapb.MultiPooler{
 				Id: &clustermetadatapb.ID{
-					Component: clustermetadatapb.ID_MULTIPOOLER,
+					Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 					Cell:      "cell1",
 					Name:      "pooler1",
 				},
@@ -804,7 +804,7 @@ func TestBootstrapShardAction_CountReachablePoolers(t *testing.T) {
 		{
 			MultiPooler: &clustermetadatapb.MultiPooler{
 				Id: &clustermetadatapb.ID{
-					Component: clustermetadatapb.ID_MULTIPOOLER,
+					Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 					Cell:      "cell1",
 					Name:      "pooler2",
 				},
@@ -813,7 +813,7 @@ func TestBootstrapShardAction_CountReachablePoolers(t *testing.T) {
 		{
 			MultiPooler: &clustermetadatapb.MultiPooler{
 				Id: &clustermetadatapb.ID{
-					Component: clustermetadatapb.ID_MULTIPOOLER,
+					Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 					Cell:      "cell1",
 					Name:      "pooler3",
 				},
@@ -850,7 +850,7 @@ func TestBootstrapShardAction_CountReachablePoolersTimeout(t *testing.T) {
 		{
 			MultiPooler: &clustermetadatapb.MultiPooler{
 				Id: &clustermetadatapb.ID{
-					Component: clustermetadatapb.ID_MULTIPOOLER,
+					Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 					Cell:      "cell1",
 					Name:      "pooler1",
 				},
@@ -859,7 +859,7 @@ func TestBootstrapShardAction_CountReachablePoolersTimeout(t *testing.T) {
 		{
 			MultiPooler: &clustermetadatapb.MultiPooler{
 				Id: &clustermetadatapb.ID{
-					Component: clustermetadatapb.ID_MULTIPOOLER,
+					Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 					Cell:      "cell1",
 					Name:      "pooler2",
 				},

@@ -63,7 +63,7 @@ func (c *Coordinator) AppointLeader(ctx context.Context, shardID string, cohort 
 		"cohort_size", len(cohort))
 
 	if len(cohort) == 0 {
-		return mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT, "cohort is empty for shard %s", shardID)
+		return mterrors.Errorf(mtrpcpb.Code_CODE_INVALID_ARGUMENT, "cohort is empty for shard %s", shardID)
 	}
 
 	// Stage 0: Load durability policy from any available node
@@ -143,7 +143,7 @@ func (c *Coordinator) AppointLeader(ctx context.Context, shardID string, cohort 
 func (c *Coordinator) updateTopology(ctx context.Context, candidate *multiorchdatapb.PoolerHealthState, standbys []*multiorchdatapb.PoolerHealthState) error {
 	// Update candidate to PRIMARY type
 	_, err := c.topoStore.UpdateMultiPoolerFields(ctx, candidate.MultiPooler.Id, func(mp *clustermetadatapb.MultiPooler) error {
-		mp.Type = clustermetadatapb.PoolerType_PRIMARY
+		mp.Type = clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY
 		return nil
 	})
 	if err != nil {
@@ -153,7 +153,7 @@ func (c *Coordinator) updateTopology(ctx context.Context, candidate *multiorchda
 	// Update standbys to REPLICA type
 	for _, standby := range standbys {
 		_, err := c.topoStore.UpdateMultiPoolerFields(ctx, standby.MultiPooler.Id, func(mp *clustermetadatapb.MultiPooler) error {
-			mp.Type = clustermetadatapb.PoolerType_REPLICA
+			mp.Type = clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA
 			return nil
 		})
 		if err != nil {
@@ -187,7 +187,7 @@ func (c *Coordinator) GetShardNodes(ctx context.Context, cell string, database s
 	}
 
 	if len(poolers) == 0 {
-		return nil, mterrors.Errorf(mtrpcpb.Code_NOT_FOUND,
+		return nil, mterrors.Errorf(mtrpcpb.Code_CODE_NOT_FOUND,
 			"no multipoolers found for shard %s in cell %s", shardID, cell)
 	}
 

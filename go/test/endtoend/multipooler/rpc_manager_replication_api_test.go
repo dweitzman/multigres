@@ -130,7 +130,7 @@ func TestReplicationAPIs(t *testing.T) {
 
 		primary := &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "test-cell",
 				Name:      setup.PrimaryMultipooler.Name,
 			},
@@ -187,7 +187,7 @@ func TestReplicationAPIs(t *testing.T) {
 		// Try to set primary conn info with stale term (current term is 1, we'll try with 0)
 		primary := &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "test-cell",
 				Name:      setup.PrimaryMultipooler.Name,
 			},
@@ -240,7 +240,7 @@ func TestReplicationAPIs(t *testing.T) {
 		t.Log("Calling SetPrimaryConnInfo with StopReplicationBefore=true, StartReplicationAfter=false...")
 		primary := &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "test-cell",
 				Name:      setup.PrimaryMultipooler.Name,
 			},
@@ -306,7 +306,7 @@ func TestReplicationAPIs(t *testing.T) {
 
 		primary := &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "test-cell",
 				Name:      setup.PrimaryMultipooler.Name,
 			},
@@ -932,7 +932,7 @@ func TestReplicationAPIs(t *testing.T) {
 		require.NoError(t, err, "SetTerm should succeed on standby")
 		primary := &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "test-cell",
 				Name:      setup.PrimaryMultipooler.Name,
 			},
@@ -1006,7 +1006,7 @@ func TestReplicationAPIs(t *testing.T) {
 		t.Log("Re-enabling replication...")
 		primary = &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "test-cell",
 				Name:      setup.PrimaryMultipooler.Name,
 			},
@@ -1145,7 +1145,7 @@ func TestStandbyReplicationStatus(t *testing.T) {
 		t.Log("Configuring replication on standby...")
 		primary := &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "test-cell",
 				Name:      setup.PrimaryMultipooler.Name,
 			},
@@ -1210,7 +1210,7 @@ func TestStandbyReplicationStatus(t *testing.T) {
 
 		primary := &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "test-cell",
 				Name:      setup.PrimaryMultipooler.Name,
 			},
@@ -1321,7 +1321,7 @@ func TestStopReplicationAndGetStatus(t *testing.T) {
 		t.Log("Configuring replication on standby...")
 		primary := &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "test-cell",
 				Name:      setup.PrimaryMultipooler.Name,
 			},
@@ -1490,7 +1490,7 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 
 		// Configure synchronous replication with FIRST method
 		req := &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
-			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 			SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			NumSync:           1,
 			StandbyIds:        []*clustermetadatapb.ID{makeMultipoolerID("test-cell", "test-standby")},
@@ -1505,7 +1505,7 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 		t.Log("Waiting for configuration to converge...")
 		waitForSyncConfigConvergenceWithClient(t, primaryManagerClient, func(config *multipoolermanagerdatapb.SynchronousReplicationConfiguration) bool {
 			return config != nil &&
-				config.SynchronousCommit == multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON &&
+				config.SynchronousCommit == multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON &&
 				config.SynchronousMethod == multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST &&
 				config.NumSync == 1 &&
 				containsStandbyIDInConfig(config, "test-cell", standbyAppName)
@@ -1529,7 +1529,7 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 
 		// Configure synchronous replication with ANY method
 		req := &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
-			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_APPLY,
+			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_REMOTE_APPLY,
 			SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_ANY,
 			NumSync:           1,
 			StandbyIds:        standbyIDs,
@@ -1544,7 +1544,7 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 		t.Log("Waiting for configuration to converge...")
 		waitForSyncConfigConvergenceWithClient(t, primaryManagerClient, func(config *multipoolermanagerdatapb.SynchronousReplicationConfiguration) bool {
 			return config != nil &&
-				config.SynchronousCommit == multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_APPLY &&
+				config.SynchronousCommit == multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_REMOTE_APPLY &&
 				config.SynchronousMethod == multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_ANY &&
 				config.NumSync == 1 &&
 				len(config.StandbyIds) == 2
@@ -1561,19 +1561,19 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 			level multipoolermanagerdatapb.SynchronousCommitLevel
 		}{
 			{
-				level: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_OFF,
+				level: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_OFF,
 			},
 			{
-				level: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LOCAL,
+				level: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_LOCAL,
 			},
 			{
-				level: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_WRITE,
+				level: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_REMOTE_WRITE,
 			},
 			{
-				level: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+				level: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 			},
 			{
-				level: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_APPLY,
+				level: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_REMOTE_APPLY,
 			},
 		}
 
@@ -1703,7 +1703,7 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 				setupPoolerTest(t, setup, WithoutReplication())
 				// Configure with this synchronous method
 				req := &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
-					SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+					SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 					SynchronousMethod: tc.method,
 					NumSync:           tc.numSync,
 					StandbyIds:        tc.standbyIDs,
@@ -1753,7 +1753,7 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 		// Configure synchronous replication on primary with remote_apply and actual standby
 		t.Log("Configuring synchronous replication on primary with remote_apply...")
 		configReq := &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
-			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_APPLY,
+			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_REMOTE_APPLY,
 			SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			NumSync:           1,
 			StandbyIds:        []*clustermetadatapb.ID{standbyID},
@@ -1765,7 +1765,7 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 		// Wait for synchronous replication configuration to take effect
 		waitForSyncConfigConvergenceWithClient(t, primaryManagerClient, func(config *multipoolermanagerdatapb.SynchronousReplicationConfiguration) bool {
 			return config != nil &&
-				config.SynchronousCommit == multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_APPLY &&
+				config.SynchronousCommit == multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_REMOTE_APPLY &&
 				config.SynchronousMethod == multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST &&
 				config.NumSync == 1 &&
 				len(config.StandbyIds) == 1
@@ -1781,7 +1781,7 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 		t.Log("Ensuring standby is connected to primary and replicating...")
 		primary := &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "test-cell",
 				Name:      setup.PrimaryMultipooler.Name,
 			},
@@ -1916,7 +1916,7 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 
 		// First, configure synchronous replication with some standbys
 		configReq := &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
-			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 			SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			NumSync:           1,
 			StandbyIds: []*clustermetadatapb.ID{
@@ -1942,7 +1942,7 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 		// Now clear the configuration by providing empty standby list
 		t.Log("Clearing synchronous_standby_names configuration...")
 		clearReq := &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
-			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 			SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			NumSync:           0,
 			StandbyIds:        []*clustermetadatapb.ID{},
@@ -1971,7 +1971,7 @@ func TestConfigureSynchronousReplication(t *testing.T) {
 		ctx := utils.WithTimeout(t, 1*time.Second)
 
 		req := &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
-			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 			SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			NumSync:           1,
 			StandbyIds: []*clustermetadatapb.ID{
@@ -2024,7 +2024,7 @@ func TestUpdateSynchronousStandbyList(t *testing.T) {
 
 		// First, configure initial synchronous replication with one standby
 		configReq := &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
-			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 			SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			NumSync:           1,
 			StandbyIds:        []*clustermetadatapb.ID{makeMultipoolerID("test-cell", "standby1")},
@@ -2085,7 +2085,7 @@ func TestUpdateSynchronousStandbyList(t *testing.T) {
 
 		// Configure with two standbys
 		configReq := &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
-			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 			SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			NumSync:           1,
 			StandbyIds: []*clustermetadatapb.ID{
@@ -2133,7 +2133,7 @@ func TestUpdateSynchronousStandbyList(t *testing.T) {
 
 		// Configure with two standbys
 		configReq := &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
-			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 			SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			NumSync:           1,
 			StandbyIds: []*clustermetadatapb.ID{
@@ -2183,7 +2183,7 @@ func TestUpdateSynchronousStandbyList(t *testing.T) {
 
 		// Configure with initial standbys
 		configReq := &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
-			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 			SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_ANY,
 			NumSync:           2,
 			StandbyIds: []*clustermetadatapb.ID{
@@ -2261,7 +2261,7 @@ func TestUpdateSynchronousStandbyList(t *testing.T) {
 
 		// Configure with three standbys
 		configReq := &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
-			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 			SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_ANY,
 			NumSync:           2,
 			StandbyIds: []*clustermetadatapb.ID{
@@ -2316,7 +2316,7 @@ func TestUpdateSynchronousStandbyList(t *testing.T) {
 
 		// Configure with two standbys
 		configReq := &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
-			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 			SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			NumSync:           1,
 			StandbyIds: []*clustermetadatapb.ID{
@@ -2368,7 +2368,7 @@ func TestUpdateSynchronousStandbyList(t *testing.T) {
 
 		// Configure initial set
 		configReq := &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
-			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 			SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			NumSync:           1,
 			StandbyIds: []*clustermetadatapb.ID{
@@ -2432,7 +2432,7 @@ func TestUpdateSynchronousStandbyList(t *testing.T) {
 
 		// Ensure synchronous replication is not configured
 		resetReq := &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
-			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+			SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 			SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 			NumSync:           0,
 			StandbyIds:        []*clustermetadatapb.ID{},
@@ -2522,7 +2522,7 @@ func TestReplicationStatus(t *testing.T) {
 		require.NotNil(t, statusResp.Status, "Status should not be nil")
 
 		// Verify pooler type
-		assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, statusResp.Status.PoolerType, "PoolerType should be PRIMARY")
+		assert.Equal(t, clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY, statusResp.Status.PoolerType, "PoolerType should be PRIMARY")
 
 		// Verify PrimaryStatus is populated
 		assert.NotNil(t, statusResp.Status.PrimaryStatus, "PrimaryStatus should be populated for PRIMARY pooler")
@@ -2557,7 +2557,7 @@ func TestReplicationStatus(t *testing.T) {
 		require.NotNil(t, statusResp.Status, "Status should not be nil")
 
 		// Verify pooler type
-		assert.Equal(t, clustermetadatapb.PoolerType_REPLICA, statusResp.Status.PoolerType, "PoolerType should be REPLICA")
+		assert.Equal(t, clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA, statusResp.Status.PoolerType, "PoolerType should be REPLICA")
 
 		// Verify ReplicationStatus is populated
 		assert.Nil(t, statusResp.Status.PrimaryStatus, "PrimaryStatus should be nil for REPLICA pooler")
@@ -2587,11 +2587,11 @@ func TestReplicationStatus(t *testing.T) {
 		require.NoError(t, err, "ReplicationStatus should succeed on REPLICA")
 
 		// Verify each returns the appropriate status
-		assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, primaryStatusResp.Status.PoolerType)
+		assert.Equal(t, clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY, primaryStatusResp.Status.PoolerType)
 		assert.NotNil(t, primaryStatusResp.Status.PrimaryStatus, "PRIMARY should return PrimaryStatus")
 		assert.Nil(t, primaryStatusResp.Status.ReplicationStatus, "PRIMARY should not return ReplicationStatus")
 
-		assert.Equal(t, clustermetadatapb.PoolerType_REPLICA, standbyStatusResp.Status.PoolerType)
+		assert.Equal(t, clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA, standbyStatusResp.Status.PoolerType)
 		assert.Nil(t, standbyStatusResp.Status.PrimaryStatus, "REPLICA should not return PrimaryStatus")
 		assert.NotNil(t, standbyStatusResp.Status.ReplicationStatus, "REPLICA should return ReplicationStatus")
 

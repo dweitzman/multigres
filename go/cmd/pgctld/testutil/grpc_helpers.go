@@ -111,7 +111,7 @@ func (m *MockPgCtldService) Status(ctx context.Context, req *pb.StatusRequest) (
 		return m.StatusResponse, nil
 	}
 	return &pb.StatusResponse{
-		Status:  pb.ServerStatus_RUNNING,
+		Status:  pb.ServerStatus_SERVER_STATUS_RUNNING,
 		Pid:     12345,
 		Version: "PostgreSQL 15.0",
 		DataDir: "/tmp/test",

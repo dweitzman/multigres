@@ -62,7 +62,7 @@ func waitForCondition(t *testing.T, condition func() bool, msgAndArgs ...any) {
 func createTestPooler(name, cell, hostname, database, shard string, poolerType clustermetadatapb.PoolerType) *clustermetadatapb.MultiPooler {
 	return &clustermetadatapb.MultiPooler{
 		Id: &clustermetadatapb.ID{
-			Component: clustermetadatapb.ID_MULTIPOOLER,
+			Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 			Cell:      cell,
 			Name:      name,
 		},
@@ -101,7 +101,7 @@ func TestPoolerDiscovery_StartStop(t *testing.T) {
 	logger := slog.Default()
 
 	// Set up initial poolers BEFORE starting discovery
-	pooler1 := createTestPooler("pooler1", "test-cell", "host1", "db1", "shard1", clustermetadatapb.PoolerType_PRIMARY)
+	pooler1 := createTestPooler("pooler1", "test-cell", "host1", "db1", "shard1", clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY)
 	require.NoError(t, store.CreateMultiPooler(ctx, pooler1))
 
 	pd := NewCellPoolerDiscovery(ctx, store, "test-cell", logger)
@@ -113,7 +113,7 @@ func TestPoolerDiscovery_StartStop(t *testing.T) {
 	waitForPoolerCount(t, pd, 1)
 
 	// Send a change by adding a new pooler
-	pooler2 := createTestPooler("pooler2", "test-cell", "host2", "db2", "shard2", clustermetadatapb.PoolerType_REPLICA)
+	pooler2 := createTestPooler("pooler2", "test-cell", "host2", "db2", "shard2", clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA)
 	require.NoError(t, store.CreateMultiPooler(ctx, pooler2))
 
 	// Wait for change to be processed
@@ -135,8 +135,8 @@ func TestPoolerDiscovery_MultiplePoolerUpdates(t *testing.T) {
 	pd := NewCellPoolerDiscovery(ctx, store, "test-cell", logger)
 
 	// Start with two initial poolers
-	pooler1 := createTestPooler("pooler1", "test-cell", "host1", "db1", "shard1", clustermetadatapb.PoolerType_PRIMARY)
-	pooler2 := createTestPooler("pooler2", "test-cell", "host2", "db2", "shard2", clustermetadatapb.PoolerType_REPLICA)
+	pooler1 := createTestPooler("pooler1", "test-cell", "host1", "db1", "shard1", clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY)
+	pooler2 := createTestPooler("pooler2", "test-cell", "host2", "db2", "shard2", clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA)
 	require.NoError(t, store.CreateMultiPooler(ctx, pooler1))
 	require.NoError(t, store.CreateMultiPooler(ctx, pooler2))
 
@@ -188,7 +188,7 @@ func TestPoolerDiscovery_EmptyInitialState(t *testing.T) {
 	assert.Equal(t, 0, pd.PoolerCount())
 
 	// Now add a pooler via watch
-	pooler1 := createTestPooler("pooler1", "test-cell", "host1", "db1", "shard1", clustermetadatapb.PoolerType_PRIMARY)
+	pooler1 := createTestPooler("pooler1", "test-cell", "host1", "db1", "shard1", clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY)
 	require.NoError(t, store.CreateMultiPooler(ctx, pooler1))
 
 	waitForPoolerCount(t, pd, 1)
@@ -203,8 +203,8 @@ func TestPoolerDiscovery_VerifyPoolerDetails(t *testing.T) {
 	pd := NewCellPoolerDiscovery(ctx, store, "test-cell", logger)
 
 	// Create poolers with specific details
-	pooler1 := createTestPooler("pooler1", "test-cell", "primary.example.com", "mydb", "shard-01", clustermetadatapb.PoolerType_PRIMARY)
-	pooler2 := createTestPooler("pooler2", "test-cell", "replica.example.com", "mydb", "shard-02", clustermetadatapb.PoolerType_REPLICA)
+	pooler1 := createTestPooler("pooler1", "test-cell", "primary.example.com", "mydb", "shard-01", clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY)
+	pooler2 := createTestPooler("pooler2", "test-cell", "replica.example.com", "mydb", "shard-02", clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA)
 
 	require.NoError(t, store.CreateMultiPooler(ctx, pooler1))
 	require.NoError(t, store.CreateMultiPooler(ctx, pooler2))
@@ -226,14 +226,14 @@ func TestPoolerDiscovery_VerifyPoolerDetails(t *testing.T) {
 	assert.Equal(t, "primary.example.com", poolerMap["pooler1"].Hostname)
 	assert.Equal(t, "mydb", poolerMap["pooler1"].Database)
 	assert.Equal(t, "shard-01", poolerMap["pooler1"].Shard)
-	assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, poolerMap["pooler1"].Type)
+	assert.Equal(t, clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY, poolerMap["pooler1"].Type)
 
 	// Verify pooler2
 	require.Contains(t, poolerMap, "pooler2")
 	assert.Equal(t, "replica.example.com", poolerMap["pooler2"].Hostname)
 	assert.Equal(t, "mydb", poolerMap["pooler2"].Database)
 	assert.Equal(t, "shard-02", poolerMap["pooler2"].Shard)
-	assert.Equal(t, clustermetadatapb.PoolerType_REPLICA, poolerMap["pooler2"].Type)
+	assert.Equal(t, clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA, poolerMap["pooler2"].Type)
 }
 
 func TestPoolerDiscovery_GetPoolers_ThreadSafe(t *testing.T) {
@@ -244,7 +244,7 @@ func TestPoolerDiscovery_GetPoolers_ThreadSafe(t *testing.T) {
 
 	pd := NewCellPoolerDiscovery(ctx, store, "test-cell", logger)
 
-	pooler1 := createTestPooler("pooler1", "test-cell", "host1", "db1", "shard1", clustermetadatapb.PoolerType_PRIMARY)
+	pooler1 := createTestPooler("pooler1", "test-cell", "host1", "db1", "shard1", clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY)
 	require.NoError(t, store.CreateMultiPooler(ctx, pooler1))
 
 	pd.Start()
@@ -276,8 +276,8 @@ func TestPoolerDiscovery_InvalidDataHandling(t *testing.T) {
 	require.NoError(t, err)
 
 	// Set up initial data with a mix of valid and invalid poolers
-	pooler1 := createTestPooler("pooler1", "test-cell", "host1", "db1", "shard1", clustermetadatapb.PoolerType_PRIMARY)
-	pooler2 := createTestPooler("pooler2", "test-cell", "host2", "db2", "shard2", clustermetadatapb.PoolerType_REPLICA)
+	pooler1 := createTestPooler("pooler1", "test-cell", "host1", "db1", "shard1", clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY)
+	pooler2 := createTestPooler("pooler2", "test-cell", "host2", "db2", "shard2", clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA)
 
 	// Create valid poolers
 	require.NoError(t, store.CreateMultiPooler(ctx, pooler1))
@@ -331,7 +331,7 @@ func TestPoolerDiscovery_LastRefresh(t *testing.T) {
 	assert.True(t, pd.LastRefresh().IsZero())
 
 	// Create a pooler and start discovery
-	pooler1 := createTestPooler("pooler1", "test-cell", "host1", "db1", "shard1", clustermetadatapb.PoolerType_PRIMARY)
+	pooler1 := createTestPooler("pooler1", "test-cell", "host1", "db1", "shard1", clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY)
 	require.NoError(t, store.CreateMultiPooler(ctx, pooler1))
 
 	before := time.Now()
@@ -357,7 +357,7 @@ func TestPoolerDiscovery_ContextCancellation(t *testing.T) {
 	pd := NewCellPoolerDiscovery(ctx, store, "test-cell", logger)
 
 	// Set up initial poolers
-	pooler1 := createTestPooler("pooler1", "test-cell", "host1", "db1", "shard1", clustermetadatapb.PoolerType_PRIMARY)
+	pooler1 := createTestPooler("pooler1", "test-cell", "host1", "db1", "shard1", clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY)
 	require.NoError(t, store.CreateMultiPooler(ctx, pooler1))
 
 	// Start discovery
@@ -393,7 +393,7 @@ func TestPoolerDiscovery_ReconnectsAfterWatchClosed(t *testing.T) {
 	logger := slog.Default()
 
 	// Create initial pooler
-	pooler1 := createTestPooler("pooler1", "test-cell", "host1", "db1", "shard1", clustermetadatapb.PoolerType_PRIMARY)
+	pooler1 := createTestPooler("pooler1", "test-cell", "host1", "db1", "shard1", clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY)
 	require.NoError(t, store.CreateMultiPooler(ctx, pooler1))
 
 	// Start discovery
@@ -415,7 +415,7 @@ func TestPoolerDiscovery_ReconnectsAfterWatchClosed(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Add a new pooler after watch closure
-	pooler2 := createTestPooler("pooler2", "test-cell", "host2", "db2", "shard2", clustermetadatapb.PoolerType_REPLICA)
+	pooler2 := createTestPooler("pooler2", "test-cell", "host2", "db2", "shard2", clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA)
 	require.NoError(t, store.CreateMultiPooler(ctx, pooler2))
 
 	// Discovery should reconnect and see the new pooler
@@ -465,8 +465,8 @@ func TestGlobalPoolerDiscovery_MultiCell(t *testing.T) {
 	logger := slog.Default()
 
 	// Create poolers in different cells
-	pooler1 := createTestPooler("pooler1", "zone1", "host1", "db1", "shard1", clustermetadatapb.PoolerType_PRIMARY)
-	pooler2 := createTestPooler("pooler2", "zone2", "host2", "db2", "shard1", clustermetadatapb.PoolerType_REPLICA)
+	pooler1 := createTestPooler("pooler1", "zone1", "host1", "db1", "shard1", clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY)
+	pooler2 := createTestPooler("pooler2", "zone2", "host2", "db2", "shard1", clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA)
 	require.NoError(t, store.CreateMultiPooler(ctx, pooler1))
 	require.NoError(t, store.CreateMultiPooler(ctx, pooler2))
 
@@ -487,8 +487,8 @@ func TestGlobalPoolerDiscovery_CellAffinityForReplicas(t *testing.T) {
 	logger := slog.Default()
 
 	// Create replicas in both cells
-	localReplica := createTestPooler("local-replica", "zone1", "host1", "db1", "shard1", clustermetadatapb.PoolerType_REPLICA)
-	remoteReplica := createTestPooler("remote-replica", "zone2", "host2", "db1", "shard1", clustermetadatapb.PoolerType_REPLICA)
+	localReplica := createTestPooler("local-replica", "zone1", "host1", "db1", "shard1", clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA)
+	remoteReplica := createTestPooler("remote-replica", "zone2", "host2", "db1", "shard1", clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA)
 	require.NoError(t, store.CreateMultiPooler(ctx, localReplica))
 	require.NoError(t, store.CreateMultiPooler(ctx, remoteReplica))
 
@@ -502,7 +502,7 @@ func TestGlobalPoolerDiscovery_CellAffinityForReplicas(t *testing.T) {
 	// Request a replica - should prefer local cell
 	target := &query.Target{
 		TableGroup: constants.DefaultTableGroup,
-		PoolerType: clustermetadatapb.PoolerType_REPLICA,
+		PoolerType: clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 	}
 	pooler := gd.GetPooler(target)
 	require.NotNil(t, pooler)
@@ -516,7 +516,7 @@ func TestGlobalPoolerDiscovery_CrossCellPrimary(t *testing.T) {
 	logger := slog.Default()
 
 	// Create primary only in zone2 (not in local cell zone1)
-	remotePrimary := createTestPooler("remote-primary", "zone2", "host2", "db1", "shard1", clustermetadatapb.PoolerType_PRIMARY)
+	remotePrimary := createTestPooler("remote-primary", "zone2", "host2", "db1", "shard1", clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY)
 	require.NoError(t, store.CreateMultiPooler(ctx, remotePrimary))
 
 	// Start global discovery with zone1 as local cell
@@ -529,7 +529,7 @@ func TestGlobalPoolerDiscovery_CrossCellPrimary(t *testing.T) {
 	// Request a primary - should find it in zone2
 	target := &query.Target{
 		TableGroup: constants.DefaultTableGroup,
-		PoolerType: clustermetadatapb.PoolerType_PRIMARY,
+		PoolerType: clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 	}
 	pooler := gd.GetPooler(target)
 	require.NotNil(t, pooler, "Should find primary in remote cell")
@@ -543,8 +543,8 @@ func TestGlobalPoolerDiscovery_GetCellStatusesForAdmin(t *testing.T) {
 	logger := slog.Default()
 
 	// Create poolers in different cells
-	pooler1 := createTestPooler("pooler1", "zone1", "host1", "db1", "shard1", clustermetadatapb.PoolerType_PRIMARY)
-	pooler2 := createTestPooler("pooler2", "zone2", "host2", "db2", "shard1", clustermetadatapb.PoolerType_REPLICA)
+	pooler1 := createTestPooler("pooler1", "zone1", "host1", "db1", "shard1", clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY)
+	pooler2 := createTestPooler("pooler2", "zone2", "host2", "db2", "shard1", clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA)
 	require.NoError(t, store.CreateMultiPooler(ctx, pooler1))
 	require.NoError(t, store.CreateMultiPooler(ctx, pooler2))
 

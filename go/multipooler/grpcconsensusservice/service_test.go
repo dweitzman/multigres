@@ -63,7 +63,7 @@ func TestConsensusService_BeginTerm(t *testing.T) {
 
 	// Create the multipooler in topology so manager can reach ready state
 	serviceID := &clustermetadata.ID{
-		Component: clustermetadata.ID_MULTIPOOLER,
+		Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-service",
 	}
@@ -72,8 +72,8 @@ func TestConsensusService_BeginTerm(t *testing.T) {
 		Database:      "testdb",
 		Hostname:      "localhost",
 		PortMap:       map[string]int32{"grpc": 8080},
-		Type:          clustermetadata.PoolerType_REPLICA,
-		ServingStatus: clustermetadata.PoolerServingStatus_SERVING,
+		Type:          clustermetadata.PoolerType_POOLER_TYPE_REPLICA,
+		ServingStatus: clustermetadata.PoolerServingStatus_POOLER_SERVING_STATUS_SERVING,
 		TableGroup:    constants.DefaultTableGroup,
 		Shard:         constants.DefaultShard,
 	}
@@ -119,7 +119,7 @@ func TestConsensusService_BeginTerm(t *testing.T) {
 		req := &consensusdata.BeginTermRequest{
 			Term: 5,
 			CandidateId: &clustermetadata.ID{
-				Component: clustermetadata.ID_MULTIPOOLER,
+				Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "candidate-1",
 			},
@@ -150,7 +150,7 @@ func TestConsensusService_Status(t *testing.T) {
 
 	// Create the multipooler in topology
 	serviceID := &clustermetadata.ID{
-		Component: clustermetadata.ID_MULTIPOOLER,
+		Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-service",
 	}
@@ -159,8 +159,8 @@ func TestConsensusService_Status(t *testing.T) {
 		Database:      "testdb",
 		Hostname:      "localhost",
 		PortMap:       map[string]int32{"grpc": 8080},
-		Type:          clustermetadata.PoolerType_REPLICA,
-		ServingStatus: clustermetadata.PoolerServingStatus_SERVING,
+		Type:          clustermetadata.PoolerType_POOLER_TYPE_REPLICA,
+		ServingStatus: clustermetadata.PoolerServingStatus_POOLER_SERVING_STATUS_SERVING,
 		TableGroup:    constants.DefaultTableGroup,
 		Shard:         constants.DefaultShard,
 	}
@@ -236,7 +236,7 @@ func TestConsensusService_GetLeadershipView(t *testing.T) {
 
 	// Create the multipooler in topology
 	serviceID := &clustermetadata.ID{
-		Component: clustermetadata.ID_MULTIPOOLER,
+		Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-service",
 	}
@@ -245,8 +245,8 @@ func TestConsensusService_GetLeadershipView(t *testing.T) {
 		Database:      "testdb",
 		Hostname:      "localhost",
 		PortMap:       map[string]int32{"grpc": 8080},
-		Type:          clustermetadata.PoolerType_REPLICA,
-		ServingStatus: clustermetadata.PoolerServingStatus_SERVING,
+		Type:          clustermetadata.PoolerType_POOLER_TYPE_REPLICA,
+		ServingStatus: clustermetadata.PoolerServingStatus_POOLER_SERVING_STATUS_SERVING,
 		TableGroup:    constants.DefaultTableGroup,
 		Shard:         constants.DefaultShard,
 	}
@@ -317,7 +317,7 @@ func TestConsensusService_CanReachPrimary(t *testing.T) {
 
 	// Create the multipooler in topology
 	serviceID := &clustermetadata.ID{
-		Component: clustermetadata.ID_MULTIPOOLER,
+		Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-service",
 	}
@@ -326,8 +326,8 @@ func TestConsensusService_CanReachPrimary(t *testing.T) {
 		Database:      "testdb",
 		Hostname:      "localhost",
 		PortMap:       map[string]int32{"grpc": 8080},
-		Type:          clustermetadata.PoolerType_REPLICA,
-		ServingStatus: clustermetadata.PoolerServingStatus_SERVING,
+		Type:          clustermetadata.PoolerType_POOLER_TYPE_REPLICA,
+		ServingStatus: clustermetadata.PoolerServingStatus_POOLER_SERVING_STATUS_SERVING,
 		TableGroup:    constants.DefaultTableGroup,
 		Shard:         constants.DefaultShard,
 	}
@@ -400,7 +400,7 @@ func TestConsensusService_AllMethods(t *testing.T) {
 
 	// Create the multipooler in topology
 	serviceID := &clustermetadata.ID{
-		Component: clustermetadata.ID_MULTIPOOLER,
+		Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-service",
 	}
@@ -409,8 +409,8 @@ func TestConsensusService_AllMethods(t *testing.T) {
 		Database:      "testdb",
 		Hostname:      "localhost",
 		PortMap:       map[string]int32{"grpc": 8080},
-		Type:          clustermetadata.PoolerType_REPLICA,
-		ServingStatus: clustermetadata.PoolerServingStatus_SERVING,
+		Type:          clustermetadata.PoolerType_POOLER_TYPE_REPLICA,
+		ServingStatus: clustermetadata.PoolerServingStatus_POOLER_SERVING_STATUS_SERVING,
 		TableGroup:    constants.DefaultTableGroup,
 		Shard:         constants.DefaultShard,
 	}
@@ -463,7 +463,7 @@ func TestConsensusService_AllMethods(t *testing.T) {
 				req := &consensusdata.BeginTermRequest{
 					Term: 5,
 					CandidateId: &clustermetadata.ID{
-						Component: clustermetadata.ID_MULTIPOOLER,
+						Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER,
 						Cell:      "zone1",
 						Name:      "candidate-1",
 					},

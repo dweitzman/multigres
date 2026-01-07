@@ -149,9 +149,9 @@ func backupStatusToString(status multiadminpb.BackupStatus) string {
 
 func poolerTypeToString(pt clustermetadatapb.PoolerType) string {
 	switch pt {
-	case clustermetadatapb.PoolerType_PRIMARY:
+	case clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY:
 		return "primary"
-	case clustermetadatapb.PoolerType_REPLICA:
+	case clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA:
 		return "replica"
 	default:
 		return "unknown"

@@ -274,10 +274,10 @@ func (mp *MultiPooler) Init(startCtx context.Context) error {
 	multipooler.PortMap["pgbackrest"] = int32(mp.pgBackRestPort.Get())
 	multipooler.Database = mp.database.Get()
 	multipooler.Shard = mp.shard.Get()
-	multipooler.ServingStatus = clustermetadatapb.PoolerServingStatus_NOT_SERVING
+	multipooler.ServingStatus = clustermetadatapb.PoolerServingStatus_POOLER_SERVING_STATUS_NOT_SERVING
 	multipooler.PoolerDir = mp.poolerDir.Get()
 	// For now, all poolers start as REPLICA
-	multipooler.Type = clustermetadatapb.PoolerType_REPLICA
+	multipooler.Type = clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA
 
 	logger.InfoContext(startCtx, "Initializing MultiPoolerManager")
 	poolerManager, err := manager.NewMultiPoolerManager(logger, &manager.Config{
@@ -360,7 +360,7 @@ func (mp *MultiPooler) Init(startCtx context.Context) error {
 			unregisterFunc := func(ctx context.Context) error {
 				_, err := mp.ts.UpdateMultiPoolerFields(ctx, multipooler.Id,
 					func(mp *clustermetadatapb.MultiPooler) error {
-						mp.ServingStatus = clustermetadatapb.PoolerServingStatus_NOT_SERVING
+						mp.ServingStatus = clustermetadatapb.PoolerServingStatus_POOLER_SERVING_STATUS_NOT_SERVING
 						return nil
 					})
 				return err

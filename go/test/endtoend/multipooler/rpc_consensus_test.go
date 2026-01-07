@@ -167,7 +167,7 @@ func TestConsensus_BeginTerm(t *testing.T) {
 		req := &consensusdatapb.BeginTermRequest{
 			Term: 0,
 			CandidateId: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "test-candidate",
 			},
@@ -193,7 +193,7 @@ func TestConsensus_BeginTerm(t *testing.T) {
 		req := &consensusdatapb.BeginTermRequest{
 			Term: 2,
 			CandidateId: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "new-leader-candidate",
 			},
@@ -221,7 +221,7 @@ func TestConsensus_BeginTerm(t *testing.T) {
 		req := &consensusdatapb.BeginTermRequest{
 			Term: 2,
 			CandidateId: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      "zone1",
 				Name:      "different-candidate",
 			},
@@ -494,7 +494,7 @@ func TestBeginTermDemotesPrimary(t *testing.T) {
 		// Send BeginTerm with a higher term to the primary
 		newTerm := currentTerm + 100 // Use a high term to avoid conflicts with other tests
 		fakeCoordinatorID := &clustermetadatapb.ID{
-			Component: clustermetadatapb.ID_MULTIORCH,
+			Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIORCH,
 			Cell:      "test-cell",
 			Name:      "fake-coordinator-for-demote-test",
 		}
@@ -540,7 +540,7 @@ func TestBeginTermDemotesPrimary(t *testing.T) {
 		// Configure demoted primary to replicate from standby
 		primary := &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 				Cell:      setup.CellName,
 				Name:      setup.StandbyMultipooler.Name,
 			},

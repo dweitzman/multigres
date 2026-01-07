@@ -82,7 +82,7 @@ func (sc *ScatterConn) StreamExecute(
 	// For now, always route to PRIMARY (safe default)
 	target := &query.Target{
 		TableGroup: tableGroup,
-		PoolerType: clustermetadatapb.PoolerType_PRIMARY,
+		PoolerType: clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 		Shard:      shard,
 	}
 
@@ -146,7 +146,7 @@ func (sc *ScatterConn) PortalStreamExecute(
 	// Create target for routing
 	target := &query.Target{
 		TableGroup: tableGroup,
-		PoolerType: clustermetadatapb.PoolerType_PRIMARY,
+		PoolerType: clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 		Shard:      shard,
 	}
 
@@ -214,7 +214,7 @@ func (sc *ScatterConn) Describe(
 	// Create target for routing
 	target := &query.Target{
 		TableGroup: tableGroup,
-		PoolerType: clustermetadatapb.PoolerType_PRIMARY,
+		PoolerType: clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 		Shard:      shard,
 	}
 

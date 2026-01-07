@@ -40,30 +40,30 @@ const (
 type PoolerType int32
 
 const (
-	// UNKNOWN is not a valid type.
+	// POOLER_TYPE_UNKNOWN is not a valid type.
 	// It is useful during upgrades to detect when a value is not initialized
-	PoolerType_UNKNOWN PoolerType = 0
-	// PRIMARY is the primary server for the shard. Only PRIMARY allows DMLs.
-	PoolerType_PRIMARY PoolerType = 1
-	// REPLICA replicates from leader. It is used to read only traffic
-	PoolerType_REPLICA PoolerType = 2
-	// DRAINED is used for poolers that are temporarily removed from serving traffic
-	PoolerType_DRAINED PoolerType = 3
+	PoolerType_POOLER_TYPE_UNKNOWN PoolerType = 0
+	// POOLER_TYPE_PRIMARY is the primary server for the shard. Only PRIMARY allows DMLs.
+	PoolerType_POOLER_TYPE_PRIMARY PoolerType = 1
+	// POOLER_TYPE_REPLICA replicates from leader. It is used to read only traffic
+	PoolerType_POOLER_TYPE_REPLICA PoolerType = 2
+	// POOLER_TYPE_DRAINED is used for poolers that are temporarily removed from serving traffic
+	PoolerType_POOLER_TYPE_DRAINED PoolerType = 3
 )
 
 // Enum value maps for PoolerType.
 var (
 	PoolerType_name = map[int32]string{
-		0: "UNKNOWN",
-		1: "PRIMARY",
-		2: "REPLICA",
-		3: "DRAINED",
+		0: "POOLER_TYPE_UNKNOWN",
+		1: "POOLER_TYPE_PRIMARY",
+		2: "POOLER_TYPE_REPLICA",
+		3: "POOLER_TYPE_DRAINED",
 	}
 	PoolerType_value = map[string]int32{
-		"UNKNOWN": 0,
-		"PRIMARY": 1,
-		"REPLICA": 2,
-		"DRAINED": 3,
+		"POOLER_TYPE_UNKNOWN": 0,
+		"POOLER_TYPE_PRIMARY": 1,
+		"POOLER_TYPE_REPLICA": 2,
+		"POOLER_TYPE_DRAINED": 3,
 	}
 )
 
@@ -98,39 +98,39 @@ func (PoolerType) EnumDescriptor() ([]byte, []int) {
 type PoolerServingStatus int32
 
 const (
-	// SERVING is the status a server during normal operations when it is serving traffic.
-	PoolerServingStatus_SERVING PoolerServingStatus = 0
-	// NOT_SERVING is the status of a server when it is not serving traffic.
+	// POOLER_SERVING_STATUS_SERVING is the status a server during normal operations when it is serving traffic.
+	PoolerServingStatus_POOLER_SERVING_STATUS_SERVING PoolerServingStatus = 0
+	// POOLER_SERVING_STATUS_NOT_SERVING is the status of a server when it is not serving traffic.
 	// This typically occurs during startup, shutdown, or when the server is
 	// in an error state and cannot accept connections.
-	PoolerServingStatus_NOT_SERVING PoolerServingStatus = 1
-	// BACKUP is the status of a server when it is taking a backup. No queries
+	PoolerServingStatus_POOLER_SERVING_STATUS_NOT_SERVING PoolerServingStatus = 1
+	// POOLER_SERVING_STATUS_BACKUP is the status of a server when it is taking a backup. No queries
 	// can be served in BACKUP mode.
-	PoolerServingStatus_BACKUP PoolerServingStatus = 2
-	// RESTORE is the status a server uses when restoring a backup, at
+	PoolerServingStatus_POOLER_SERVING_STATUS_BACKUP PoolerServingStatus = 2
+	// POOLER_SERVING_STATUS_RESTORE is the status a server uses when restoring a backup, at
 	// startup time.  No queries can be served in RESTORE mode.
-	PoolerServingStatus_RESTORE PoolerServingStatus = 3
-	// SERVING_RDONLY is the status of a server in read-only mode.
+	PoolerServingStatus_POOLER_SERVING_STATUS_RESTORE PoolerServingStatus = 3
+	// POOLER_SERVING_STATUS_SERVING_RDONLY is the status of a server in read-only mode.
 	// This is used during demotion when the server transitions from PRIMARY to REPLICA,
 	// or for read-only replicas. The server accepts connections but only serves read queries.
-	PoolerServingStatus_SERVING_RDONLY PoolerServingStatus = 5
+	PoolerServingStatus_POOLER_SERVING_STATUS_SERVING_RDONLY PoolerServingStatus = 5
 )
 
 // Enum value maps for PoolerServingStatus.
 var (
 	PoolerServingStatus_name = map[int32]string{
-		0: "SERVING",
-		1: "NOT_SERVING",
-		2: "BACKUP",
-		3: "RESTORE",
-		5: "SERVING_RDONLY",
+		0: "POOLER_SERVING_STATUS_SERVING",
+		1: "POOLER_SERVING_STATUS_NOT_SERVING",
+		2: "POOLER_SERVING_STATUS_BACKUP",
+		3: "POOLER_SERVING_STATUS_RESTORE",
+		5: "POOLER_SERVING_STATUS_SERVING_RDONLY",
 	}
 	PoolerServingStatus_value = map[string]int32{
-		"SERVING":        0,
-		"NOT_SERVING":    1,
-		"BACKUP":         2,
-		"RESTORE":        3,
-		"SERVING_RDONLY": 5,
+		"POOLER_SERVING_STATUS_SERVING":        0,
+		"POOLER_SERVING_STATUS_NOT_SERVING":    1,
+		"POOLER_SERVING_STATUS_BACKUP":         2,
+		"POOLER_SERVING_STATUS_RESTORE":        3,
+		"POOLER_SERVING_STATUS_SERVING_RDONLY": 5,
 	}
 )
 
@@ -275,29 +275,29 @@ func (AsyncReplicationFallbackMode) EnumDescriptor() ([]byte, []int) {
 type ID_ComponentType int32
 
 const (
-	// UNKNOWN represents an unknown or uninitialized component type
-	ID_UNKNOWN ID_ComponentType = 0
-	// MULTIPOOLER represents a multipooler component
-	ID_MULTIPOOLER ID_ComponentType = 1
-	// MULTIGATEWAY represents a multigateway component
-	ID_MULTIGATEWAY ID_ComponentType = 2
-	// MULTIORCH represents a multiorch component
-	ID_MULTIORCH ID_ComponentType = 3
+	// COMPONENT_TYPE_UNKNOWN represents an unknown or uninitialized component type
+	ID_COMPONENT_TYPE_UNKNOWN ID_ComponentType = 0
+	// COMPONENT_TYPE_MULTIPOOLER represents a multipooler component
+	ID_COMPONENT_TYPE_MULTIPOOLER ID_ComponentType = 1
+	// COMPONENT_TYPE_MULTIGATEWAY represents a multigateway component
+	ID_COMPONENT_TYPE_MULTIGATEWAY ID_ComponentType = 2
+	// COMPONENT_TYPE_MULTIORCH represents a multiorch component
+	ID_COMPONENT_TYPE_MULTIORCH ID_ComponentType = 3
 )
 
 // Enum value maps for ID_ComponentType.
 var (
 	ID_ComponentType_name = map[int32]string{
-		0: "UNKNOWN",
-		1: "MULTIPOOLER",
-		2: "MULTIGATEWAY",
-		3: "MULTIORCH",
+		0: "COMPONENT_TYPE_UNKNOWN",
+		1: "COMPONENT_TYPE_MULTIPOOLER",
+		2: "COMPONENT_TYPE_MULTIGATEWAY",
+		3: "COMPONENT_TYPE_MULTIORCH",
 	}
 	ID_ComponentType_value = map[string]int32{
-		"UNKNOWN":      0,
-		"MULTIPOOLER":  1,
-		"MULTIGATEWAY": 2,
-		"MULTIORCH":    3,
+		"COMPONENT_TYPE_UNKNOWN":      0,
+		"COMPONENT_TYPE_MULTIPOOLER":  1,
+		"COMPONENT_TYPE_MULTIGATEWAY": 2,
+		"COMPONENT_TYPE_MULTIORCH":    3,
 	}
 )
 
@@ -634,14 +634,14 @@ func (x *MultiPooler) GetType() PoolerType {
 	if x != nil {
 		return x.Type
 	}
-	return PoolerType_UNKNOWN
+	return PoolerType_POOLER_TYPE_UNKNOWN
 }
 
 func (x *MultiPooler) GetServingStatus() PoolerServingStatus {
 	if x != nil {
 		return x.ServingStatus
 	}
-	return PoolerServingStatus_SERVING
+	return PoolerServingStatus_POOLER_SERVING_STATUS_SERVING
 }
 
 func (x *MultiPooler) GetHostname() string {
@@ -841,7 +841,7 @@ func (x *ID) GetComponent() ID_ComponentType {
 	if x != nil {
 		return x.Component
 	}
-	return ID_UNKNOWN
+	return ID_COMPONENT_TYPE_UNKNOWN
 }
 
 func (x *ID) GetCell() string {
@@ -1130,16 +1130,16 @@ const file_clustermetadata_proto_rawDesc = "" +
 	"\bport_map\x18\x03 \x03(\v2'.clustermetadata.MultiOrch.PortMapEntryR\aportMap\x1a:\n" +
 	"\fPortMapEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\x05R\x05value:\x028\x01\"\xbd\x01\n" +
+	"\x05value\x18\x02 \x01(\x05R\x05value:\x028\x01\"\xfa\x01\n" +
 	"\x02ID\x12?\n" +
 	"\tcomponent\x18\x01 \x01(\x0e2!.clustermetadata.ID.ComponentTypeR\tcomponent\x12\x12\n" +
 	"\x04cell\x18\x02 \x01(\tR\x04cell\x12\x12\n" +
-	"\x04name\x18\x03 \x01(\tR\x04name\"N\n" +
-	"\rComponentType\x12\v\n" +
-	"\aUNKNOWN\x10\x00\x12\x0f\n" +
-	"\vMULTIPOOLER\x10\x01\x12\x10\n" +
-	"\fMULTIGATEWAY\x10\x02\x12\r\n" +
-	"\tMULTIORCH\x10\x03\"2\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\"\x8a\x01\n" +
+	"\rComponentType\x12\x1a\n" +
+	"\x16COMPONENT_TYPE_UNKNOWN\x10\x00\x12\x1e\n" +
+	"\x1aCOMPONENT_TYPE_MULTIPOOLER\x10\x01\x12\x1f\n" +
+	"\x1bCOMPONENT_TYPE_MULTIGATEWAY\x10\x02\x12\x1c\n" +
+	"\x18COMPONENT_TYPE_MULTIORCH\x10\x03\"2\n" +
 	"\bKeyRange\x12\x14\n" +
 	"\x05start\x18\x01 \x01(\fR\x05start\x12\x10\n" +
 	"\x03end\x18\x02 \x01(\fR\x03end\"\xab\x02\n" +
@@ -1160,20 +1160,19 @@ const file_clustermetadata_proto_rawDesc = "" +
 	"quorumType\x12%\n" +
 	"\x0erequired_count\x18\x02 \x01(\x05R\rrequiredCount\x12 \n" +
 	"\vdescription\x18\x03 \x01(\tR\vdescription\x12T\n" +
-	"\x0easync_fallback\x18\x04 \x01(\x0e2-.clustermetadata.AsyncReplicationFallbackModeR\rasyncFallback*@\n" +
+	"\x0easync_fallback\x18\x04 \x01(\x0e2-.clustermetadata.AsyncReplicationFallbackModeR\rasyncFallback*p\n" +
 	"\n" +
-	"PoolerType\x12\v\n" +
-	"\aUNKNOWN\x10\x00\x12\v\n" +
-	"\aPRIMARY\x10\x01\x12\v\n" +
-	"\aREPLICA\x10\x02\x12\v\n" +
-	"\aDRAINED\x10\x03*f\n" +
-	"\x13PoolerServingStatus\x12\v\n" +
-	"\aSERVING\x10\x00\x12\x0f\n" +
-	"\vNOT_SERVING\x10\x01\x12\n" +
-	"\n" +
-	"\x06BACKUP\x10\x02\x12\v\n" +
-	"\aRESTORE\x10\x03\x12\x12\n" +
-	"\x0eSERVING_RDONLY\x10\x05\"\x04\b\x04\x10\x04*^\n" +
+	"PoolerType\x12\x17\n" +
+	"\x13POOLER_TYPE_UNKNOWN\x10\x00\x12\x17\n" +
+	"\x13POOLER_TYPE_PRIMARY\x10\x01\x12\x17\n" +
+	"\x13POOLER_TYPE_REPLICA\x10\x02\x12\x17\n" +
+	"\x13POOLER_TYPE_DRAINED\x10\x03*\xd4\x01\n" +
+	"\x13PoolerServingStatus\x12!\n" +
+	"\x1dPOOLER_SERVING_STATUS_SERVING\x10\x00\x12%\n" +
+	"!POOLER_SERVING_STATUS_NOT_SERVING\x10\x01\x12 \n" +
+	"\x1cPOOLER_SERVING_STATUS_BACKUP\x10\x02\x12!\n" +
+	"\x1dPOOLER_SERVING_STATUS_RESTORE\x10\x03\x12(\n" +
+	"$POOLER_SERVING_STATUS_SERVING_RDONLY\x10\x05\"\x04\b\x04\x10\x04*^\n" +
 	"\n" +
 	"QuorumType\x12\x17\n" +
 	"\x13QUORUM_TYPE_UNKNOWN\x10\x00\x12\x15\n" +

@@ -107,9 +107,9 @@ func (s *MultiAdminServer) executeBackup(ctx context.Context, jobID string, pool
 // findPoolerForBackup finds a pooler for backup operations.
 // If forcePrimary is true, finds a PRIMARY pooler; otherwise finds a REPLICA.
 func (s *MultiAdminServer) findPoolerForBackup(ctx context.Context, database, tableGroup, shard string, forcePrimary bool) (*clustermetadatapb.MultiPooler, error) {
-	targetType := clustermetadatapb.PoolerType_REPLICA
+	targetType := clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA
 	if forcePrimary {
-		targetType = clustermetadatapb.PoolerType_PRIMARY
+		targetType = clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY
 	}
 
 	// Get all cells
@@ -293,9 +293,9 @@ func (s *MultiAdminServer) getBackupJobStatusFromPooler(ctx context.Context, req
 	// Convert backup metadata to job status
 	var jobStatus multiadminpb.JobStatus
 	switch backupResp.Backup.Status {
-	case multipoolermanagerdata.BackupMetadata_COMPLETE:
+	case multipoolermanagerdata.BackupMetadata_STATUS_COMPLETE:
 		jobStatus = multiadminpb.JobStatus_JOB_STATUS_COMPLETED
-	case multipoolermanagerdata.BackupMetadata_INCOMPLETE:
+	case multipoolermanagerdata.BackupMetadata_STATUS_INCOMPLETE:
 		jobStatus = multiadminpb.JobStatus_JOB_STATUS_FAILED
 	default:
 		jobStatus = multiadminpb.JobStatus_JOB_STATUS_UNKNOWN
@@ -354,9 +354,9 @@ func (s *MultiAdminServer) GetBackups(ctx context.Context, req *multiadminpb.Get
 	for i, b := range resp.Backups {
 		var backupStatus multiadminpb.BackupStatus
 		switch b.Status {
-		case multipoolermanagerdata.BackupMetadata_COMPLETE:
+		case multipoolermanagerdata.BackupMetadata_STATUS_COMPLETE:
 			backupStatus = multiadminpb.BackupStatus_BACKUP_STATUS_COMPLETE
-		case multipoolermanagerdata.BackupMetadata_INCOMPLETE:
+		case multipoolermanagerdata.BackupMetadata_STATUS_INCOMPLETE:
 			backupStatus = multiadminpb.BackupStatus_BACKUP_STATUS_INCOMPLETE
 		default:
 			backupStatus = multiadminpb.BackupStatus_BACKUP_STATUS_UNKNOWN

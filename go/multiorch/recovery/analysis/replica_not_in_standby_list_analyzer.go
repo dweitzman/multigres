@@ -62,8 +62,8 @@ func (a *ReplicaNotInStandbyListAnalyzer) Analyze(poolerAnalysis *store.Replicat
 		return nil, nil
 	}
 
-	// Only check replicas with PoolerType_REPLICA (not UNKNOWN or other types)
-	if poolerAnalysis.PoolerType != clustermetadatapb.PoolerType_REPLICA {
+	// Only check replicas with PoolerType_POOLER_TYPE_REPLICA (not UNKNOWN or other types)
+	if poolerAnalysis.PoolerType != clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA {
 		return nil, nil
 	}
 

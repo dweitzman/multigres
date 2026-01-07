@@ -957,8 +957,8 @@ func TestClusterLifecycle(t *testing.T) {
 		require.NoError(t, err, "zone2 pooler type should be assigned")
 
 		// Verify exactly one PRIMARY and one REPLICA
-		zone1IsPrimary := zone1Type == clustermetadatapb.PoolerType_PRIMARY
-		zone2IsPrimary := zone2Type == clustermetadatapb.PoolerType_PRIMARY
+		zone1IsPrimary := zone1Type == clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY
+		zone2IsPrimary := zone2Type == clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY
 		require.True(t, zone1IsPrimary != zone2IsPrimary, "exactly one zone should be PRIMARY, got zone1=%s zone2=%s", zone1Type, zone2Type)
 		t.Logf("Zone1 type: %s, Zone2 type: %s", zone1Type, zone2Type)
 
@@ -1419,7 +1419,7 @@ func testPgctldGRPC(t *testing.T, addr string) {
 	// Test Status call to verify connectivity
 	statusResp, err := client.Status(ctx, &pb.StatusRequest{})
 	require.NoError(t, err, "Status call failed")
-	assert.Equal(t, pb.ServerStatus_RUNNING, statusResp.GetStatus(), "PostgreSQL should be running")
+	assert.Equal(t, pb.ServerStatus_SERVER_STATUS_RUNNING, statusResp.GetStatus(), "PostgreSQL should be running")
 	assert.NotZero(t, statusResp.GetPid(), "PID should be non-zero")
 
 	t.Logf("Pgctld gRPC test completed successfully for %s", addr)

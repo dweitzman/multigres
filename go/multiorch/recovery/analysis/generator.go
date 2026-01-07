@@ -170,7 +170,7 @@ func (g *AnalysisGenerator) generateAnalysisForPooler(
 	// Nodes are never created with topology type PRIMARY, so health check is authoritative.
 	// Fall back to topology type only if health check type is UNKNOWN.
 	poolerType := pooler.PoolerType
-	if poolerType == clustermetadatapb.PoolerType_UNKNOWN {
+	if poolerType == clustermetadatapb.PoolerType_POOLER_TYPE_UNKNOWN {
 		poolerType = pooler.MultiPooler.Type
 	}
 
@@ -179,7 +179,7 @@ func (g *AnalysisGenerator) generateAnalysisForPooler(
 		ShardKey:             shardKey,
 		PoolerType:           poolerType,
 		CurrentServingStatus: pooler.MultiPooler.ServingStatus,
-		IsPrimary:            poolerType == clustermetadatapb.PoolerType_PRIMARY,
+		IsPrimary:            poolerType == clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 		LastCheckValid:       pooler.IsLastCheckValid,
 		IsInitialized:        store.IsInitialized(pooler),
 		HasDataDirectory:     pooler.HasDataDirectory,
@@ -270,10 +270,10 @@ func (g *AnalysisGenerator) aggregateReplicaStats(
 
 			// Skip if not a replica - check health check type, fall back to topology
 			replicaType := pooler.PoolerType
-			if replicaType == clustermetadatapb.PoolerType_UNKNOWN {
+			if replicaType == clustermetadatapb.PoolerType_POOLER_TYPE_UNKNOWN {
 				replicaType = pooler.MultiPooler.Type
 			}
-			if replicaType != clustermetadatapb.PoolerType_REPLICA {
+			if replicaType != clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA {
 				continue
 			}
 
@@ -347,7 +347,7 @@ func (g *AnalysisGenerator) populatePrimaryInfo(
 
 		// Look for primary in same shard - check health check type
 		// Nodes are never created with topology type PRIMARY
-		if pooler.PoolerType != clustermetadatapb.PoolerType_PRIMARY {
+		if pooler.PoolerType != clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY {
 			continue
 		}
 
@@ -430,10 +430,10 @@ func (g *AnalysisGenerator) allReplicasConnectedToPrimary(
 
 		// Skip non-replicas
 		replicaType := pooler.PoolerType
-		if replicaType == clustermetadatapb.PoolerType_UNKNOWN {
+		if replicaType == clustermetadatapb.PoolerType_POOLER_TYPE_UNKNOWN {
 			replicaType = pooler.MultiPooler.Type
 		}
-		if replicaType != clustermetadatapb.PoolerType_REPLICA {
+		if replicaType != clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA {
 			continue
 		}
 
@@ -519,11 +519,11 @@ func (g *AnalysisGenerator) detectOtherPrimary(
 
 		// Check if this pooler also thinks it's PRIMARY
 		poolerType := pooler.PoolerType
-		if poolerType == clustermetadatapb.PoolerType_UNKNOWN && pooler.MultiPooler != nil {
+		if poolerType == clustermetadatapb.PoolerType_POOLER_TYPE_UNKNOWN && pooler.MultiPooler != nil {
 			poolerType = pooler.MultiPooler.Type
 		}
 
-		if poolerType == clustermetadatapb.PoolerType_PRIMARY {
+		if poolerType == clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY {
 			// Found another PRIMARY - one of them is stale!
 			analysis.OtherPrimaryInShard = pooler.MultiPooler.Id
 			if pooler.ConsensusStatus != nil {

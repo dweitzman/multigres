@@ -78,7 +78,7 @@ func (a *AppointLeaderAction) Execute(ctx context.Context, problem types.Problem
 	// is down, we still need to trigger failover.
 	for _, pooler := range cohort {
 		if pooler.MultiPooler != nil &&
-			pooler.MultiPooler.Type == clustermetadatapb.PoolerType_PRIMARY &&
+			pooler.MultiPooler.Type == clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY &&
 			pooler.IsLastCheckValid &&
 			pooler.IsPostgresRunning {
 			a.logger.InfoContext(ctx, "primary already exists, skipping leader appointment",

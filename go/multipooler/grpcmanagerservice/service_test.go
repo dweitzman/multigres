@@ -67,7 +67,7 @@ func TestManagerServiceMethods_NotImplemented(t *testing.T) {
 
 	// Create the multipooler in topology so manager can reach ready state
 	serviceID := &clustermetadata.ID{
-		Component: clustermetadata.ID_MULTIPOOLER,
+		Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-service",
 	}
@@ -76,8 +76,8 @@ func TestManagerServiceMethods_NotImplemented(t *testing.T) {
 		Database:      "testdb",
 		Hostname:      "localhost",
 		PortMap:       map[string]int32{"grpc": 8080},
-		Type:          clustermetadata.PoolerType_PRIMARY,
-		ServingStatus: clustermetadata.PoolerServingStatus_SERVING,
+		Type:          clustermetadata.PoolerType_POOLER_TYPE_PRIMARY,
+		ServingStatus: clustermetadata.PoolerServingStatus_POOLER_SERVING_STATUS_SERVING,
 		TableGroup:    constants.DefaultTableGroup,
 		Shard:         constants.DefaultShard,
 	}
@@ -134,7 +134,7 @@ func TestManagerServiceMethods_NotImplemented(t *testing.T) {
 			// Convert gRPC error back to mterrors to check the code
 			mterr := mterrors.FromGRPC(err)
 			code := mterrors.Code(mterr)
-			assert.Equal(t, mtrpcpb.Code_UNIMPLEMENTED, code, "Should return Unimplemented code")
+			assert.Equal(t, mtrpcpb.Code_CODE_UNIMPLEMENTED, code, "Should return Unimplemented code")
 			if !strings.Contains(err.Error(), fmt.Sprintf("method %s not implemented", tt.expectedMethod)) {
 				t.Errorf("Error message should include: method %s not implemented, got: %s", tt.expectedMethod, err.Error())
 			}
@@ -151,7 +151,7 @@ func TestManagerServiceMethods_ManagerNotReady(t *testing.T) {
 	// Create manager but DON'T create multipooler in topo and DON'T start it
 	// This keeps the manager in "starting" state
 	serviceID := &clustermetadata.ID{
-		Component: clustermetadata.ID_MULTIPOOLER,
+		Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-service",
 	}
@@ -185,7 +185,7 @@ func TestManagerServiceMethods_ManagerNotReady(t *testing.T) {
 				req := &multipoolermanagerdata.SetPrimaryConnInfoRequest{
 					Primary: &clustermetadata.MultiPooler{
 						Id: &clustermetadata.ID{
-							Component: clustermetadata.ID_MULTIPOOLER,
+							Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER,
 							Cell:      "zone1",
 							Name:      "test-primary-id",
 						},
@@ -235,12 +235,12 @@ func TestManagerServiceMethods_ManagerNotReady(t *testing.T) {
 			name: "ConfigureSynchronousReplication",
 			method: func() error {
 				req := &multipoolermanagerdata.ConfigureSynchronousReplicationRequest{
-					SynchronousCommit: multipoolermanagerdata.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
+					SynchronousCommit: multipoolermanagerdata.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON,
 					SynchronousMethod: multipoolermanagerdata.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 					NumSync:           1,
 					StandbyIds: []*clustermetadata.ID{
 						{
-							Component: clustermetadata.ID_MULTIPOOLER,
+							Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER,
 							Cell:      "zone1",
 							Name:      "standby1",
 						},
@@ -257,7 +257,7 @@ func TestManagerServiceMethods_ManagerNotReady(t *testing.T) {
 					Operation: multipoolermanagerdata.StandbyUpdateOperation_STANDBY_UPDATE_OPERATION_ADD,
 					StandbyIds: []*clustermetadata.ID{
 						{
-							Component: clustermetadata.ID_MULTIPOOLER,
+							Component: clustermetadata.ID_COMPONENT_TYPE_MULTIPOOLER,
 							Cell:      "zone1",
 							Name:      "standby1",
 						},
@@ -293,7 +293,7 @@ func TestManagerServiceMethods_ManagerNotReady(t *testing.T) {
 			name: "ChangeType",
 			method: func() error {
 				req := &multipoolermanagerdata.ChangeTypeRequest{
-					PoolerType: clustermetadata.PoolerType_PRIMARY,
+					PoolerType: clustermetadata.PoolerType_POOLER_TYPE_PRIMARY,
 				}
 				_, err := svc.ChangeType(ctx, req)
 				return err
@@ -342,7 +342,7 @@ func TestManagerServiceMethods_ManagerNotReady(t *testing.T) {
 			mterr := mterrors.FromGRPC(err)
 			code := mterrors.Code(mterr)
 			// Should return UNAVAILABLE when manager is starting
-			assert.Equal(t, mtrpcpb.Code_UNAVAILABLE, code, "Should return UNAVAILABLE code when manager is not ready")
+			assert.Equal(t, mtrpcpb.Code_CODE_UNAVAILABLE, code, "Should return UNAVAILABLE code when manager is not ready")
 			assert.Contains(t, err.Error(), "manager is still starting up", "Error message should indicate manager is starting")
 		})
 	}

@@ -198,7 +198,7 @@ func (f *fundamental) Format(s fmt.State, verb rune) {
 // If err is nil, it returns ok.
 func Code(err error) mtrpcpb.Code {
 	if err == nil {
-		return mtrpcpb.Code_OK
+		return mtrpcpb.Code_CODE_OK
 	}
 	if err, ok := err.(ErrorWithCode); ok {
 		return err.ErrorCode()
@@ -213,11 +213,11 @@ func Code(err error) mtrpcpb.Code {
 	// Handle some special cases.
 	switch err {
 	case context.Canceled:
-		return mtrpcpb.Code_CANCELED
+		return mtrpcpb.Code_CODE_CANCELED
 	case context.DeadlineExceeded:
-		return mtrpcpb.Code_DEADLINE_EXCEEDED
+		return mtrpcpb.Code_CODE_DEADLINE_EXCEEDED
 	}
-	return mtrpcpb.Code_UNKNOWN
+	return mtrpcpb.Code_CODE_UNKNOWN
 }
 
 // ErrState returns the error state if it's a mtError.

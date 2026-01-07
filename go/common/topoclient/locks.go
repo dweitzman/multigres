@@ -249,7 +249,7 @@ func (ts *store) internalLock(ctx context.Context, lt iTopoLock, action string, 
 	defer i.mu.Unlock()
 	// check that we are not already locked
 	if _, ok := i.info[lt.ResourceName()]; ok {
-		return nil, nil, mterrors.Errorf(mtrpc.Code_INTERNAL, "lock for %v %v is already held", lt.Type(), lt.ResourceName())
+		return nil, nil, mterrors.Errorf(mtrpc.Code_CODE_INTERNAL, "lock for %v %v is already held", lt.Type(), lt.ResourceName())
 	}
 
 	// lock it
@@ -271,7 +271,7 @@ func (ts *store) internalLock(ctx context.Context, lt iTopoLock, action string, 
 			if *finalErr != nil {
 				slog.ErrorContext(ctx, "trying to unlock multiple times", "type", lt.Type(), "resource", lt.ResourceName())
 			} else {
-				*finalErr = mterrors.Errorf(mtrpc.Code_INTERNAL, "trying to unlock %v %v multiple times", lt.Type(), lt.ResourceName())
+				*finalErr = mterrors.Errorf(mtrpc.Code_CODE_INTERNAL, "trying to unlock %v %v multiple times", lt.Type(), lt.ResourceName())
 			}
 			return
 		}
@@ -295,7 +295,7 @@ func checkLocked(ctx context.Context, lt iTopoLock) error {
 	// extract the locksInfo pointer
 	i, ok := ctx.Value(locksKey).(*locksInfo)
 	if !ok {
-		return mterrors.Errorf(mtrpc.Code_INTERNAL, "%v %v is not locked (no locksInfo)", lt.Type(), lt.ResourceName())
+		return mterrors.Errorf(mtrpc.Code_CODE_INTERNAL, "%v %v is not locked (no locksInfo)", lt.Type(), lt.ResourceName())
 	}
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -303,7 +303,7 @@ func checkLocked(ctx context.Context, lt iTopoLock) error {
 	// find the individual entry
 	li, ok := i.info[lt.ResourceName()]
 	if !ok {
-		return mterrors.Errorf(mtrpc.Code_INTERNAL, "%v %v is not locked (no lockInfo in map)", lt.Type(), lt.ResourceName())
+		return mterrors.Errorf(mtrpc.Code_CODE_INTERNAL, "%v %v is not locked (no lockInfo in map)", lt.Type(), lt.ResourceName())
 	}
 
 	// Check the lock server implementation still holds the lock.

@@ -238,7 +238,7 @@ func (pm *MultiPoolerManager) waitForReplicationPause(ctx context.Context) (*mul
 		case <-waitCtx.Done():
 			if waitCtx.Err() == context.DeadlineExceeded {
 				pm.logger.ErrorContext(ctx, "Timeout waiting for WAL replay to pause")
-				return nil, mterrors.New(mtrpcpb.Code_DEADLINE_EXCEEDED, "timeout waiting for WAL replay to pause")
+				return nil, mterrors.New(mtrpcpb.Code_CODE_DEADLINE_EXCEEDED, "timeout waiting for WAL replay to pause")
 			}
 			pm.logger.ErrorContext(ctx, "Context cancelled while waiting for WAL replay to pause")
 			return nil, mterrors.Wrap(waitCtx.Err(), "context cancelled while waiting for WAL replay to pause")
@@ -320,7 +320,7 @@ func (pm *MultiPoolerManager) waitForReceiverDisconnect(ctx context.Context) (*m
 		case <-waitCtx.Done():
 			if waitCtx.Err() == context.DeadlineExceeded {
 				pm.logger.ErrorContext(ctx, "Timeout waiting for WAL receiver to disconnect")
-				return nil, mterrors.New(mtrpcpb.Code_DEADLINE_EXCEEDED, "timeout waiting for WAL receiver to disconnect")
+				return nil, mterrors.New(mtrpcpb.Code_CODE_DEADLINE_EXCEEDED, "timeout waiting for WAL receiver to disconnect")
 			}
 			pm.logger.ErrorContext(ctx, "Context cancelled while waiting for WAL receiver to disconnect")
 			return nil, mterrors.Wrap(waitCtx.Err(), "context cancelled while waiting for WAL receiver to disconnect")
@@ -445,7 +445,7 @@ func (pm *MultiPoolerManager) pauseReplication(ctx context.Context, mode multipo
 		return nil, nil
 
 	default:
-		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
+		return nil, mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT,
 			fmt.Sprintf("invalid replication pause mode: %d", mode))
 	}
 }
@@ -515,7 +515,7 @@ func (pm *MultiPoolerManager) validateExpectedLSN(ctx context.Context, expectedL
 		pm.logger.ErrorContext(ctx, "LSN mismatch - node does not have expected durable state",
 			"expected_lsn", expectedLSN,
 			"current_lsn", currentLSN)
-		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
+		return mterrors.New(mtrpcpb.Code_CODE_FAILED_PRECONDITION,
 			fmt.Sprintf("LSN mismatch: expected %s, current %s. "+
 				"This indicates an error in an earlier consensus stage.",
 				expectedLSN, currentLSN))
@@ -536,18 +536,18 @@ func (pm *MultiPoolerManager) setSynchronousCommit(ctx context.Context, synchron
 	// Convert enum to PostgreSQL string value
 	var syncCommitValue string
 	switch synchronousCommit {
-	case multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_OFF:
+	case multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_OFF:
 		syncCommitValue = "off"
-	case multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LOCAL:
+	case multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_LOCAL:
 		syncCommitValue = "local"
-	case multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_WRITE:
+	case multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_REMOTE_WRITE:
 		syncCommitValue = "remote_write"
-	case multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON:
+	case multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON:
 		syncCommitValue = "on"
-	case multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_APPLY:
+	case multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_REMOTE_APPLY:
 		syncCommitValue = "remote_apply"
 	default:
-		return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
+		return mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT,
 			fmt.Sprintf("invalid synchronous_commit level: %s", synchronousCommit.String()))
 	}
 
@@ -580,7 +580,7 @@ func buildSynchronousStandbyNamesValue(method multipoolermanagerdatapb.Synchrono
 	case multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_ANY:
 		methodStr = "ANY"
 	default:
-		return "", mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
+		return "", mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT,
 			fmt.Sprintf("invalid synchronous method: %s, must be FIRST or ANY", method.String()))
 	}
 
@@ -687,17 +687,17 @@ func (pm *MultiPoolerManager) getSynchronousReplicationConfig(ctx context.Contex
 	var syncCommitLevel multipoolermanagerdatapb.SynchronousCommitLevel
 	switch strings.ToLower(syncCommitStr) {
 	case "off":
-		syncCommitLevel = multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_OFF
+		syncCommitLevel = multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_OFF
 	case "local":
-		syncCommitLevel = multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LOCAL
+		syncCommitLevel = multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_LOCAL
 	case "remote_write":
-		syncCommitLevel = multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_WRITE
+		syncCommitLevel = multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_REMOTE_WRITE
 	case "on":
-		syncCommitLevel = multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON
+		syncCommitLevel = multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_ON
 	case "remote_apply":
-		syncCommitLevel = multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_APPLY
+		syncCommitLevel = multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LEVEL_REMOTE_APPLY
 	default:
-		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
+		return nil, mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT,
 			fmt.Sprintf("unknown synchronous_commit value: %q", syncCommitStr))
 	}
 	config.SynchronousCommit = syncCommitLevel
@@ -814,30 +814,30 @@ func (pm *MultiPoolerManager) syncReplicationConfigMatches(current *multipoolerm
 // validateStandbyIDs validates a list of standby IDs
 func validateStandbyIDs(standbyIDs []*clustermetadatapb.ID) error {
 	if len(standbyIDs) == 0 {
-		return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "standby_ids cannot be empty")
+		return mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT, "standby_ids cannot be empty")
 	}
 
 	for i, id := range standbyIDs {
 		if id == nil {
-			return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
+			return mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT,
 				fmt.Sprintf("standby_ids[%d] is nil", i))
 		}
 		if id.Cell == "" {
-			return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
+			return mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT,
 				fmt.Sprintf("standby_ids[%d] has empty cell", i))
 		}
 		if id.Name == "" {
-			return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
+			return mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT,
 				fmt.Sprintf("standby_ids[%d] has empty name", i))
 		}
 		// Underscores are not allowed in Cell or Name because they are used as delimiters
 		// in the application_name format (cell_name). Allowing underscores would break parsing.
 		if strings.Contains(id.Cell, "_") {
-			return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
+			return mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT,
 				fmt.Sprintf("standby_ids[%d] cell contains underscore: %q (underscores not allowed)", i, id.Cell))
 		}
 		if strings.Contains(id.Name, "_") {
-			return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
+			return mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT,
 				fmt.Sprintf("standby_ids[%d] name contains underscore: %q (underscores not allowed)", i, id.Name))
 		}
 	}
@@ -849,7 +849,7 @@ func validateStandbyIDs(standbyIDs []*clustermetadatapb.ID) error {
 func validateSyncReplicationParams(numSync int32, standbyIDs []*clustermetadatapb.ID) error {
 	// Validate numSync is non-negative
 	if numSync < 0 {
-		return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
+		return mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT,
 			fmt.Sprintf("num_sync must be non-negative, got: %d", numSync))
 	}
 
@@ -858,7 +858,7 @@ func validateSyncReplicationParams(numSync int32, standbyIDs []*clustermetadatap
 		// Validate that numSync doesn't exceed the number of standbys (PostgreSQL requirement)
 		// Note: numSync=0 is allowed and will be defaulted to 1 in setSynchronousStandbyNames
 		if numSync > int32(len(standbyIDs)) {
-			return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
+			return mterrors.New(mtrpcpb.Code_CODE_INVALID_ARGUMENT,
 				fmt.Sprintf("num_sync (%d) cannot exceed number of standby_ids (%d)", numSync, len(standbyIDs)))
 		}
 

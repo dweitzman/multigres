@@ -79,7 +79,7 @@ func TestGetConnection_NoConnection(t *testing.T) {
 	assert.Error(t, err, "Expected error when no connection available")
 	assert.Nil(t, conn, "Expected connection to be nil")
 
-	assert.Equal(t, mtrpc.Code_UNAVAILABLE, mterrors.Code(err), "Expected UNAVAILABLE error")
+	assert.Equal(t, mtrpc.Code_CODE_UNAVAILABLE, mterrors.Code(err), "Expected UNAVAILABLE error")
 }
 
 func TestHandleConnectionError_RetriesOnSpecificErrors(t *testing.T) {
@@ -89,23 +89,23 @@ func TestHandleConnectionError_RetriesOnSpecificErrors(t *testing.T) {
 	}{
 		{
 			name: "UNAVAILABLE",
-			err:  mterrors.Errorf(mtrpc.Code_UNAVAILABLE, "test error"),
+			err:  mterrors.Errorf(mtrpc.Code_CODE_UNAVAILABLE, "test error"),
 		},
 		{
 			name: "FAILED_PRECONDITION",
-			err:  mterrors.Errorf(mtrpc.Code_FAILED_PRECONDITION, "test error"),
+			err:  mterrors.Errorf(mtrpc.Code_CODE_FAILED_PRECONDITION, "test error"),
 		},
 		{
 			name: "CLUSTER_EVENT",
-			err:  mterrors.Errorf(mtrpc.Code_CLUSTER_EVENT, "test error"),
+			err:  mterrors.Errorf(mtrpc.Code_CODE_CLUSTER_EVENT, "test error"),
 		},
 		{
 			name: "context deadline exceeded",
-			err:  mterrors.Errorf(mtrpc.Code_INVALID_ARGUMENT, "context deadline exceeded"),
+			err:  mterrors.Errorf(mtrpc.Code_CODE_INVALID_ARGUMENT, "context deadline exceeded"),
 		},
 		{
 			name: "context canceled",
-			err:  mterrors.Errorf(mtrpc.Code_INVALID_ARGUMENT, "context canceled"),
+			err:  mterrors.Errorf(mtrpc.Code_CODE_INVALID_ARGUMENT, "context canceled"),
 		},
 	}
 
@@ -137,7 +137,7 @@ func TestHandleConnectionError_DoesNotRetryOnOtherErrors(t *testing.T) {
 	initialCount := factory.getCreateCount()
 
 	// Non-retriable error
-	err = mterrors.Errorf(mtrpc.Code_INVALID_ARGUMENT, "test error")
+	err = mterrors.Errorf(mtrpc.Code_CODE_INVALID_ARGUMENT, "test error")
 	wrapper.handleConnectionError(conn, err)
 
 	// Wait a bit
@@ -305,7 +305,7 @@ func TestAllMethods_NoConnection(t *testing.T) {
 		t.Run(method.name, func(t *testing.T) {
 			err := method.fn()
 			assert.Error(t, err, "Expected error for %s when no connection", method.name)
-			assert.Equal(t, mtrpc.Code_UNAVAILABLE, mterrors.Code(err), "Expected UNAVAILABLE error for %s", method.name)
+			assert.Equal(t, mtrpc.Code_CODE_UNAVAILABLE, mterrors.Code(err), "Expected UNAVAILABLE error for %s", method.name)
 		})
 	}
 }
@@ -391,7 +391,7 @@ func TestAllMethods_ConnectionError(t *testing.T) {
 			initialCount := factory.getCreateCount()
 			err := method.fn(wrapper)
 			assert.Error(t, err, "Expected error for %s when connection fails", method.name)
-			assert.Equal(t, mtrpc.Code_UNAVAILABLE, mterrors.Code(err), "Expected UNAVAILABLE error for %s", method.name)
+			assert.Equal(t, mtrpc.Code_CODE_UNAVAILABLE, mterrors.Code(err), "Expected UNAVAILABLE error for %s", method.name)
 
 			factory.waitForNewConn(initialCount)
 		})
@@ -466,7 +466,7 @@ func newMockConnWithDelayedFailure(id int, failAfterCalls int32) *mockConnWithDe
 func (m *mockConnWithDelayedFailure) checkErrorWithDelay() error {
 	calls := atomic.AddInt32(&m.callsSoFar, 1)
 	if calls > m.failAfterCalls {
-		return mterrors.Errorf(mtrpc.Code_UNAVAILABLE, "delayed failure")
+		return mterrors.Errorf(mtrpc.Code_CODE_UNAVAILABLE, "delayed failure")
 	}
 	return m.checkError()
 }
@@ -557,7 +557,7 @@ func TestOperationsTriggersHandleConnectionError(t *testing.T) {
 	// Third call should fail and trigger retry
 	_, err = wrapper.ListDir(ctx, "/test", true)
 	assert.Error(t, err, "Third ListDir should fail")
-	assert.Equal(t, mtrpc.Code_UNAVAILABLE, mterrors.Code(err), "Expected UNAVAILABLE error")
+	assert.Equal(t, mtrpc.Code_CODE_UNAVAILABLE, mterrors.Code(err), "Expected UNAVAILABLE error")
 
 	factory.waitForNewConn(initialCount)
 
@@ -605,7 +605,7 @@ func TestMultipleOperationsWithConnectionErrors(t *testing.T) {
 			// Operation should fail and trigger retry
 			err := op.fn(wrapper, ctx)
 			assert.Error(t, err, "Operation %s should fail", op.name)
-			assert.Equal(t, mtrpc.Code_UNAVAILABLE, mterrors.Code(err), "Expected UNAVAILABLE error for %s", op.name)
+			assert.Equal(t, mtrpc.Code_CODE_UNAVAILABLE, mterrors.Code(err), "Expected UNAVAILABLE error for %s", op.name)
 
 			factory.waitForNewConn(initialCount)
 		})
@@ -622,7 +622,7 @@ func TestRetryConnection_PreventsMultipleRetries(t *testing.T) {
 	require.NoError(t, err, "Expected initial connection")
 
 	// Trigger a retry by simulating a connection error
-	wrapper.handleConnectionError(conn, mterrors.Errorf(mtrpc.Code_UNAVAILABLE, "test error"))
+	wrapper.handleConnectionError(conn, mterrors.Errorf(mtrpc.Code_CODE_UNAVAILABLE, "test error"))
 
 	// Wait for retry to start
 	require.Eventually(t, func() bool {
@@ -638,7 +638,7 @@ func TestRetryConnection_PreventsMultipleRetries(t *testing.T) {
 	wrapper.mu.Unlock()
 
 	// Generate another failure to make it try to retry
-	wrapper.handleConnectionError(mockConn, mterrors.Errorf(mtrpc.Code_UNAVAILABLE, "another error"))
+	wrapper.handleConnectionError(mockConn, mterrors.Errorf(mtrpc.Code_CODE_UNAVAILABLE, "another error"))
 
 	// Give time for retry to be invoked.
 	time.Sleep(1 * time.Millisecond)
@@ -659,7 +659,7 @@ func TestRetryConnection_PreventsMultipleRetries(t *testing.T) {
 	// Generate a third failure - this should demonstrate that the bug
 	// is now fixed where the retry flag was getting always reset, even
 	// if it was already on.
-	wrapper.handleConnectionError(thirdMockConn, mterrors.Errorf(mtrpc.Code_UNAVAILABLE, "third error"))
+	wrapper.handleConnectionError(thirdMockConn, mterrors.Errorf(mtrpc.Code_CODE_UNAVAILABLE, "third error"))
 
 	// Give time for the third retry to process
 	time.Sleep(1 * time.Millisecond)
@@ -729,7 +729,7 @@ func TestRetryConnection_TerminatesWhenClosed(t *testing.T) {
 	// Verify wrapper is closed
 	_, err = wrapper.getConnection()
 	assert.Error(t, err, "Expected error after close")
-	assert.Equal(t, mtrpc.Code_UNAVAILABLE, mterrors.Code(err), "Expected UNAVAILABLE error after close")
+	assert.Equal(t, mtrpc.Code_CODE_UNAVAILABLE, mterrors.Code(err), "Expected UNAVAILABLE error after close")
 }
 
 func TestRetryConnection_TerminatesWhenSuccessful(t *testing.T) {

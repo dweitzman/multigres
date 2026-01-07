@@ -55,7 +55,7 @@ func createTestManagerWithBackupLocation(poolerDir, stanzaName, tableGroup, shar
 	}
 
 	multipoolerID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "zone1",
 		Name:      "test-multipooler",
 	}
@@ -241,7 +241,7 @@ exit 1
 
 			// Use separate directory for pooler data
 			poolerDir := t.TempDir()
-			pm := createTestManagerWithBackupLocation(poolerDir, "test-stanza", "test-tg", "0", clustermetadatapb.PoolerType_REPLICA, poolerDir)
+			pm := createTestManagerWithBackupLocation(poolerDir, "test-stanza", "test-tg", "0", clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA, poolerDir)
 
 			ctx := context.Background()
 			backupID, err := pm.findBackupByJobID(ctx, tt.jobID)
@@ -277,7 +277,7 @@ func TestBackup_Validation(t *testing.T) {
 			poolerDir:   "/tmp/test",
 			stanzaName:  "test-stanza",
 			backupType:  "",
-			poolerType:  clustermetadatapb.PoolerType_REPLICA,
+			poolerType:  clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 			expectError: true,
 			errorMsg:    "type is required",
 		},
@@ -286,7 +286,7 @@ func TestBackup_Validation(t *testing.T) {
 			poolerDir:   "/tmp/test",
 			stanzaName:  "test-stanza",
 			backupType:  "invalid",
-			poolerType:  clustermetadatapb.PoolerType_REPLICA,
+			poolerType:  clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 			expectError: true,
 			errorMsg:    "invalid backup type",
 		},
@@ -295,7 +295,7 @@ func TestBackup_Validation(t *testing.T) {
 			poolerDir:    "/tmp/test",
 			stanzaName:   "test-stanza",
 			backupType:   "full",
-			poolerType:   clustermetadatapb.PoolerType_PRIMARY,
+			poolerType:   clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 			forcePrimary: false,
 			expectError:  true,
 			errorMsg:     "not allowed unless ForcePrimary",
@@ -305,7 +305,7 @@ func TestBackup_Validation(t *testing.T) {
 			poolerDir:    "/tmp/test",
 			stanzaName:   "test-stanza",
 			backupType:   "full",
-			poolerType:   clustermetadatapb.PoolerType_PRIMARY,
+			poolerType:   clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 			forcePrimary: true,
 			expectError:  true,                       // Will fail on pgbackrest execution but validation passes
 			errorMsg:     "pgbackrest backup failed", // Execution error, not validation
@@ -315,7 +315,7 @@ func TestBackup_Validation(t *testing.T) {
 			poolerDir:    "/tmp/test",
 			stanzaName:   "test-stanza",
 			backupType:   "full",
-			poolerType:   clustermetadatapb.PoolerType_REPLICA,
+			poolerType:   clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 			forcePrimary: false,
 			expectError:  true, // Will fail on pgbackrest execution
 			errorMsg:     "pgbackrest backup failed",
@@ -375,7 +375,7 @@ func TestGetBackups_Validation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pm := createTestManager(tt.poolerDir, tt.stanzaName, "", "", clustermetadatapb.PoolerType_REPLICA)
+			pm := createTestManager(tt.poolerDir, tt.stanzaName, "", "", clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA)
 
 			result, err := pm.GetBackups(ctx, tt.limit)
 
@@ -404,21 +404,21 @@ func TestGetBackups_StatusMapping(t *testing.T) {
 		{
 			name:           "No error means COMPLETE",
 			errorFlag:      false,
-			expectedStatus: multipoolermanagerdata.BackupMetadata_COMPLETE,
+			expectedStatus: multipoolermanagerdata.BackupMetadata_STATUS_COMPLETE,
 		},
 		{
 			name:           "Error means INCOMPLETE",
 			errorFlag:      true,
-			expectedStatus: multipoolermanagerdata.BackupMetadata_INCOMPLETE,
+			expectedStatus: multipoolermanagerdata.BackupMetadata_STATUS_INCOMPLETE,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// This tests the status mapping logic used in GetBackups
-			status := multipoolermanagerdata.BackupMetadata_COMPLETE
+			status := multipoolermanagerdata.BackupMetadata_STATUS_COMPLETE
 			if tt.errorFlag {
-				status = multipoolermanagerdata.BackupMetadata_INCOMPLETE
+				status = multipoolermanagerdata.BackupMetadata_STATUS_INCOMPLETE
 			}
 
 			assert.Equal(t, tt.expectedStatus, status)
@@ -798,7 +798,7 @@ func TestBackup_ActionLock(t *testing.T) {
 	ctx := t.Context()
 	tmpDir := t.TempDir()
 
-	pm := createTestManagerWithBackupLocation(tmpDir, "test-stanza", "", "", clustermetadatapb.PoolerType_REPLICA, tmpDir)
+	pm := createTestManagerWithBackupLocation(tmpDir, "test-stanza", "", "", clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA, tmpDir)
 
 	// Hold the lock in another goroutine
 	lockCtx, err := pm.actionLock.Acquire(ctx, "test-holder")
@@ -821,7 +821,7 @@ func TestGetBackups_ActionLock(t *testing.T) {
 	ctx := t.Context()
 	tmpDir := t.TempDir()
 
-	pm := createTestManagerWithBackupLocation(tmpDir, "test-stanza", "", "", clustermetadatapb.PoolerType_REPLICA, tmpDir)
+	pm := createTestManagerWithBackupLocation(tmpDir, "test-stanza", "", "", clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA, tmpDir)
 
 	// Hold the lock in another goroutine
 	lockCtx, err := pm.actionLock.Acquire(ctx, "test-holder")
@@ -844,7 +844,7 @@ func TestRestoreFromBackup_ActionLock(t *testing.T) {
 	ctx := t.Context()
 	tmpDir := t.TempDir()
 
-	pm := createTestManagerWithBackupLocation(tmpDir, "test-stanza", "", "", clustermetadatapb.PoolerType_REPLICA, tmpDir)
+	pm := createTestManagerWithBackupLocation(tmpDir, "test-stanza", "", "", clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA, tmpDir)
 
 	// Hold the lock in another goroutine
 	lockCtx, err := pm.actionLock.Acquire(ctx, "test-holder")
@@ -867,7 +867,7 @@ func TestBackup_ActionLockReleased(t *testing.T) {
 	ctx := t.Context()
 	tmpDir := t.TempDir()
 
-	pm := createTestManagerWithBackupLocation(tmpDir, "test-stanza", "", "", clustermetadatapb.PoolerType_REPLICA, tmpDir)
+	pm := createTestManagerWithBackupLocation(tmpDir, "test-stanza", "", "", clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA, tmpDir)
 
 	// Call Backup - it will fail (no pgbackrest), but should release the lock
 	_, _ = pm.Backup(ctx, false, "full", "")
@@ -885,7 +885,7 @@ func TestGetBackups_ActionLockReleased(t *testing.T) {
 	ctx := t.Context()
 	tmpDir := t.TempDir()
 
-	pm := createTestManagerWithBackupLocation(tmpDir, "test-stanza", "", "", clustermetadatapb.PoolerType_REPLICA, tmpDir)
+	pm := createTestManagerWithBackupLocation(tmpDir, "test-stanza", "", "", clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA, tmpDir)
 
 	// Call GetBackups - it may fail or succeed, but should release the lock
 	_, _ = pm.GetBackups(ctx, 10)
@@ -903,7 +903,7 @@ func TestRestoreFromBackup_ActionLockReleased(t *testing.T) {
 	ctx := t.Context()
 	tmpDir := t.TempDir()
 
-	pm := createTestManagerWithBackupLocation(tmpDir, "test-stanza", "", "", clustermetadatapb.PoolerType_REPLICA, tmpDir)
+	pm := createTestManagerWithBackupLocation(tmpDir, "test-stanza", "", "", clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA, tmpDir)
 
 	// Call RestoreFromBackup - it will fail (precondition), but should release the lock
 	_ = pm.RestoreFromBackup(ctx, "test-backup-id")
@@ -966,7 +966,7 @@ func TestTryAutoRestoreFromBackup_SkipsForPrimary(t *testing.T) {
 	// Create temp pooler dir WITHOUT PG_VERSION (uninitialized)
 	poolerDir := t.TempDir()
 
-	pm := createTestManagerForAutoRestore(logger, poolerDir, clustermetadatapb.PoolerType_PRIMARY)
+	pm := createTestManagerForAutoRestore(logger, poolerDir, clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY)
 
 	// Should not attempt restore for PRIMARY even when uninitialized
 	// Function returns immediately without attempting restore
@@ -984,7 +984,7 @@ func TestTryAutoRestoreFromBackup_SkipsForUnknownType(t *testing.T) {
 	poolerDir := t.TempDir()
 
 	// UNKNOWN type is what a fresh multipooler has before SetPoolerType is called
-	pm := createTestManagerForAutoRestore(logger, poolerDir, clustermetadatapb.PoolerType_UNKNOWN)
+	pm := createTestManagerForAutoRestore(logger, poolerDir, clustermetadatapb.PoolerType_POOLER_TYPE_UNKNOWN)
 
 	// Should not attempt restore for UNKNOWN type - only REPLICA should auto-restore
 	// Function returns immediately without attempting restore
@@ -1000,7 +1000,7 @@ func TestListBackups_ReturnsEmptyWhenNoBackups(t *testing.T) {
 
 	poolerDir := t.TempDir()
 
-	pm := createTestManagerForAutoRestore(logger, poolerDir, clustermetadatapb.PoolerType_REPLICA)
+	pm := createTestManagerForAutoRestore(logger, poolerDir, clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA)
 
 	// Should return empty list without error when no backups exist
 	backups, err := pm.listBackups(ctx)
@@ -1017,7 +1017,7 @@ func TestTryAutoRestoreFromBackup_RetriesUntilContextCancelled(t *testing.T) {
 	// Create temp pooler dir WITHOUT PG_VERSION (uninitialized)
 	poolerDir := t.TempDir()
 
-	pm := createTestManagerForAutoRestore(logger, poolerDir, clustermetadatapb.PoolerType_REPLICA)
+	pm := createTestManagerForAutoRestore(logger, poolerDir, clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA)
 
 	// Function should return when context is cancelled (no restore performed)
 	pm.tryAutoRestoreFromBackup(ctx)
@@ -1037,7 +1037,7 @@ func TestLoadMultiPoolerFromTopo_CallsAutoRestore(t *testing.T) {
 
 	poolerDir := t.TempDir()
 
-	pm := createTestManagerForAutoRestore(logger, poolerDir, clustermetadatapb.PoolerType_REPLICA)
+	pm := createTestManagerForAutoRestore(logger, poolerDir, clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA)
 
 	// Verify tryAutoRestoreFromBackup can be called and returns without panic
 	pm.tryAutoRestoreFromBackup(ctx)
@@ -1073,7 +1073,7 @@ func TestGetBackupByJobId_Found(t *testing.T) {
 			BackupId:   "20251203-143045F",
 			TableGroup: "default",
 			Shard:      "0",
-			Status:     multipoolermanagerdata.BackupMetadata_COMPLETE,
+			Status:     multipoolermanagerdata.BackupMetadata_STATUS_COMPLETE,
 			JobId:      "20251203-143045.123456_mp-cell-1",
 		},
 	}
@@ -1122,7 +1122,7 @@ func TestInitPgBackRest(t *testing.T) {
 				"test-stanza",
 				"test-tg",
 				"0",
-				clustermetadatapb.PoolerType_REPLICA,
+				clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 				tt.backupLocation,
 			)
 			pm.config.PgPort = tt.pgPort
@@ -1200,7 +1200,7 @@ func TestInitPgBackRest_Idempotent(t *testing.T) {
 		"test-stanza",
 		"test-tg",
 		"0",
-		clustermetadatapb.PoolerType_REPLICA,
+		clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 		"/tmp/backups",
 	)
 
@@ -1232,7 +1232,7 @@ func TestInitPgBackRest_EarlyReturnWhenConfigExists(t *testing.T) {
 		"test-stanza",
 		"test-tg",
 		"0",
-		clustermetadatapb.PoolerType_REPLICA,
+		clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 		"/tmp/backups",
 	)
 
@@ -1286,7 +1286,7 @@ func TestInitPgBackRest_DirectoryCreation(t *testing.T) {
 		"test-stanza",
 		"test-tg",
 		"0",
-		clustermetadatapb.PoolerType_REPLICA,
+		clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 		"/tmp/backups",
 	)
 
@@ -1325,7 +1325,7 @@ func TestInitPgBackRest_TemplateExecution(t *testing.T) {
 		"test-stanza",
 		"test-tg",
 		"0",
-		clustermetadatapb.PoolerType_REPLICA,
+		clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 		backupLocation,
 	)
 	pm.config.PgPort = pgPort
@@ -1370,7 +1370,7 @@ func TestInitPgBackRest_ConfigFileFormat(t *testing.T) {
 		"test-stanza",
 		"test-tg",
 		"0",
-		clustermetadatapb.PoolerType_REPLICA,
+		clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 		"/tmp/backups",
 	)
 
@@ -1409,7 +1409,7 @@ func TestInitPgBackRest_ForBackupCreatesBackupConfig(t *testing.T) {
 		"test-stanza",
 		"test-tg",
 		"0",
-		clustermetadatapb.PoolerType_REPLICA,
+		clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA,
 		"/tmp/backups",
 	)
 
@@ -1481,7 +1481,7 @@ func TestInitPgBackRest_ForBackupFalseSkipsPg2(t *testing.T) {
 		"test-stanza",
 		"test-tg",
 		"0",
-		clustermetadatapb.PoolerType_REPLICA, // This is a standby
+		clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA, // This is a standby
 		"/tmp/backups",
 	)
 
@@ -1527,13 +1527,13 @@ func TestInitPgBackRest_ForBackupTrueIncludesPg2OnStandby(t *testing.T) {
 		"test-stanza",
 		"test-tg",
 		"0",
-		clustermetadatapb.PoolerType_REPLICA, // This is a standby
+		clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA, // This is a standby
 		"/tmp/backups",
 	)
 
 	// Set up primary pooler info to simulate a standby configuration
 	primaryPoolerID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Component: clustermetadatapb.ID_COMPONENT_TYPE_MULTIPOOLER,
 		Cell:      "zone1", // Same cell as test manager
 		Name:      "primary-pooler",
 	}
@@ -1543,7 +1543,7 @@ func TestInitPgBackRest_ForBackupTrueIncludesPg2OnStandby(t *testing.T) {
 	primaryPoolerDir := "/tmp/primary-pooler-dir"
 	primaryMultiPooler := &clustermetadatapb.MultiPooler{
 		Id:         primaryPoolerID,
-		Type:       clustermetadatapb.PoolerType_PRIMARY,
+		Type:       clustermetadatapb.PoolerType_POOLER_TYPE_PRIMARY,
 		TableGroup: "test-tg",
 		Shard:      "0",
 		Database:   "test-database",

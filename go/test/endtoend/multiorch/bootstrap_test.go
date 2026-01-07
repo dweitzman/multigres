@@ -180,7 +180,7 @@ func TestBootstrapInitialization(t *testing.T) {
 			client.Close()
 
 			require.NoError(t, err)
-			if status.Status.IsInitialized && status.Status.PoolerType == clustermetadatapb.PoolerType_REPLICA {
+			if status.Status.IsInitialized && status.Status.PoolerType == clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA {
 				standbyCount++
 				t.Logf("Standby node: %s (pooler_type=%s)", name, status.Status.PoolerType)
 			}
@@ -305,7 +305,7 @@ func TestBootstrapInitialization(t *testing.T) {
 			status, err := client.Manager.Status(ctx, &multipoolermanagerdatapb.StatusRequest{})
 			client.Close()
 
-			if err == nil && status.Status.IsInitialized && status.Status.PoolerType == clustermetadatapb.PoolerType_REPLICA {
+			if err == nil && status.Status.IsInitialized && status.Status.PoolerType == clustermetadatapb.PoolerType_POOLER_TYPE_REPLICA {
 				standbyName = name
 				standbyInst = inst
 				break
