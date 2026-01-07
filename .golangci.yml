@@ -92,6 +92,22 @@ linters:
             - github.com/multigres/multigres/go/tools
             - github.com/multigres/multigres/go/pb
             - github.com/multigres/multigres/go/provisioner
+        # TODO: Update this when parser moves to go/common/...
+        parser-isolation:
+          files:
+            - "**/go/parser/*.go"
+            - "**/go/parser/**/*.go"
+          list-mode: lax
+          deny:
+            - pkg: "github.com/spf13/pflag"
+              desc: "parser should not depend on CLI flags - keep it library-usable"
+            - pkg: "github.com/spf13/viper"
+              desc: "parser should not depend on configuration - keep it library-usable"
+            - pkg: "github.com/multigres/multigres/go"
+              desc: "parser should not depend on multigres packages except stdlib and parser itself"
+          allow:
+            - $gostd
+            - github.com/multigres/multigres/go/parser
         multiadmin-isolation:
           files:
             - "!**/go/services/multiadmin/*.go"
