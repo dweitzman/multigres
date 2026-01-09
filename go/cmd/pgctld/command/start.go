@@ -28,6 +28,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/servenv"
 	"github.com/multigres/multigres/go/services/pgctld"
 )
@@ -306,12 +307,9 @@ func waitForPostgreSQLWithConfig(logger *slog.Logger, config *pgctld.PostgresCtl
 			if err != nil {
 				// No PID file means PostgreSQL never started or crashed immediately
 				logTail := readLogTail(logPath, 20)
-				logger.Error("PostgreSQL process not running during startup",
+				return mterrors.WrapWithKVs(err, "PostgreSQL process not running during startup",
 					"attempt", i,
-					"error", err,
-					"postgresql_log_tail", logTail,
-				)
-				return fmt.Errorf("PostgreSQL process not running: %w (check postgresql.log)", err)
+					"postgresql_log_tail", logTail)
 			}
 
 			if !isProcessRunning(pid) {

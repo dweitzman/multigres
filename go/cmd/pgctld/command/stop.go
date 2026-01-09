@@ -159,8 +159,7 @@ func StopPostgreSQLWithConfig(logger *slog.Logger, config *pgctld.PostgresCtlCon
 func stopPostgreSQLWithConfig(logger *slog.Logger, config *pgctld.PostgresCtlConfig, mode string) error {
 	// First try using pg_ctl
 	if err := stopWithPgCtlWithConfig(logger, config, mode); err != nil {
-		logger.Error("pg_ctl stop failed,", "error", err)
-		return err
+		return fmt.Errorf("pg_ctl stop failed: %w", err)
 	}
 	return nil
 }

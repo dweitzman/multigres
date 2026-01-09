@@ -73,3 +73,45 @@ func requireGrpcCommonNewClient(m dsl.Matcher) {
 				!m.File().PkgPath.Matches(`/grpccommon$|/test/|/testutil/|testutil$`)).
 		Report("use grpccommon.NewClient() instead of grpc.NewClient() to ensure telemetry instrumentation")
 }
+
+func disallowLogAndReturn(m dsl.Matcher) {
+	// Pattern 1: ErrorContext followed by direct return
+	m.Match(
+		`$logger.ErrorContext($*_, "error", $err, $*_); return $err`,
+		`$logger.ErrorContext($*_, "error", $err, $*_); return $*_, $err`,
+	).Report("logged error with ErrorContext then returned; remove log or handle at decision point")
+
+	// Pattern 2: ErrorContext followed by mterrors.Wrap
+	m.Match(
+		`$logger.ErrorContext($*_, "error", $err, $*_); return mterrors.Wrap($err, $_)`,
+		`$logger.ErrorContext($*_, "error", $err, $*_); return $*_, mterrors.Wrap($err, $_)`,
+		`$logger.ErrorContext($*_, "error", $err, $*_); return mterrors.Wrapf($err, $*_)`,
+		`$logger.ErrorContext($*_, "error", $err, $*_); return $*_, mterrors.Wrapf($err, $*_)`,
+	).Report("logged error with ErrorContext then returned wrapped; remove log or handle at decision point")
+
+	// Pattern 3: ErrorContext followed by fmt.Errorf with %w
+	m.Match(
+		`$logger.ErrorContext($*_, "error", $err, $*_); return fmt.Errorf($fmtstr, $*_, $err)`,
+		`$logger.ErrorContext($*_, "error", $err, $*_); return $*_, fmt.Errorf($fmtstr, $*_, $err)`,
+	).Where(m["fmtstr"].Text.Matches("%w")).
+		Report("logged error with ErrorContext then returned wrapped; remove log or handle at decision point")
+
+	// Pattern 4-6: Same patterns for Error() without context
+	m.Match(
+		`$logger.Error($*_, "error", $err, $*_); return $err`,
+		`$logger.Error($*_, "error", $err, $*_); return $*_, $err`,
+	).Report("logged error with Error then returned; prefer ErrorContext for trace propagation, and remove log or handle at decision point")
+
+	m.Match(
+		`$logger.Error($*_, "error", $err, $*_); return mterrors.Wrap($err, $_)`,
+		`$logger.Error($*_, "error", $err, $*_); return $*_, mterrors.Wrap($err, $_)`,
+		`$logger.Error($*_, "error", $err, $*_); return mterrors.Wrapf($err, $*_)`,
+		`$logger.Error($*_, "error", $err, $*_); return $*_, mterrors.Wrapf($err, $*_)`,
+	).Report("logged error with Error then returned wrapped; prefer ErrorContext for trace propagation, and remove log or handle at decision point")
+
+	m.Match(
+		`$logger.Error($*_, "error", $err, $*_); return fmt.Errorf($fmtstr, $*_, $err)`,
+		`$logger.Error($*_, "error", $err, $*_); return $*_, fmt.Errorf($fmtstr, $*_, $err)`,
+	).Where(m["fmtstr"].Text.Matches("%w")).
+		Report("logged error with Error then returned wrapped; prefer ErrorContext for trace propagation, and remove log or handle at decision point")
+}

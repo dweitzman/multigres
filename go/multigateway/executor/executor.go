@@ -18,6 +18,7 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/preparedstatement"
 	"github.com/multigres/multigres/go/common/sqltypes"
 	"github.com/multigres/multigres/go/multigateway/engine"
@@ -79,10 +80,8 @@ func (e *Executor) StreamExecute(
 	// Step 1: Plan the query
 	plan, err := e.planner.Plan(queryStr, conn)
 	if err != nil {
-		e.logger.ErrorContext(ctx, "query planning failed",
-			"query", queryStr,
-			"error", err)
-		return err
+		return mterrors.WrapWithKVs(err, "query planning failed",
+			"query", queryStr)
 	}
 
 	e.logger.DebugContext(ctx, "query plan created",
@@ -93,11 +92,9 @@ func (e *Executor) StreamExecute(
 	// Pass the IExecute implementation to the plan, which will pass it to the primitive
 	err = plan.StreamExecute(ctx, e.exec, conn, state, callback)
 	if err != nil {
-		e.logger.ErrorContext(ctx, "query execution failed",
+		return mterrors.WrapWithKVs(err, "query execution failed",
 			"query", queryStr,
-			"plan", plan.String(),
-			"error", err)
-		return err
+			"plan", plan.String())
 	}
 
 	e.logger.DebugContext(ctx, "query execution completed",

@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/rand/v2"
 	"strings"
 	"testing"
@@ -362,5 +363,351 @@ func assertContains(t *testing.T, s, substring string, contains bool) {
 func assertEquals(t *testing.T, a, b any) {
 	if a != b {
 		t.Fatalf("expected [%s] to be equal to [%s]", a, b)
+	}
+}
+
+func TestWrapWithAttrs(t *testing.T) {
+	tests := []struct {
+		name        string
+		err         error
+		message     string
+		attrs       []slog.Attr
+		wantMessage string
+		wantAttrs   []slog.Attr
+	}{
+		{
+			name:        "nil error returns nil",
+			err:         nil,
+			message:     "test",
+			attrs:       []slog.Attr{slog.String("key", "value")},
+			wantMessage: "",
+			wantAttrs:   nil,
+		},
+		{
+			name:        "simple key-value pair",
+			err:         io.EOF,
+			message:     "read error",
+			attrs:       []slog.Attr{slog.String("query", "SELECT *")},
+			wantMessage: "read error: EOF",
+			wantAttrs:   []slog.Attr{slog.String("query", "SELECT *")},
+		},
+		{
+			name:    "multiple attributes",
+			err:     errors.New("base error"),
+			message: "operation failed",
+			attrs: []slog.Attr{
+				slog.String("query", "SELECT *"),
+				slog.Int("attempt", 3),
+				slog.Bool("timeout", true),
+			},
+			wantMessage: "operation failed: base error",
+			wantAttrs: []slog.Attr{
+				slog.String("query", "SELECT *"),
+				slog.Int("attempt", 3),
+				slog.Bool("timeout", true),
+			},
+		},
+		{
+			name:        "empty attrs",
+			err:         io.EOF,
+			message:     "test",
+			attrs:       []slog.Attr{},
+			wantMessage: "test: EOF",
+			wantAttrs:   nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := WrapWithAttrs(tt.err, tt.message, tt.attrs...)
+
+			if tt.err == nil {
+				assert.Nil(t, got)
+				return
+			}
+
+			assert.Equal(t, tt.wantMessage, got.Error())
+
+			// Check attributes
+			attrs := Attrs(got)
+			assert.Equal(t, tt.wantAttrs, attrs)
+		})
+	}
+}
+
+func TestWrapWithKVs(t *testing.T) {
+	tests := []struct {
+		name        string
+		err         error
+		message     string
+		kvs         []any
+		wantMessage string
+		wantAttrs   []slog.Attr
+		wantPanic   bool
+	}{
+		{
+			name:        "nil error returns nil",
+			err:         nil,
+			message:     "test",
+			kvs:         []any{"key", "value"},
+			wantMessage: "",
+			wantAttrs:   nil,
+			wantPanic:   false,
+		},
+		{
+			name:        "simple key-value pair",
+			err:         io.EOF,
+			message:     "read error",
+			kvs:         []any{"query", "SELECT *"},
+			wantMessage: "read error: EOF",
+			wantAttrs:   []slog.Attr{slog.Any("query", "SELECT *")},
+			wantPanic:   false,
+		},
+		{
+			name:        "multiple key-value pairs",
+			err:         errors.New("base error"),
+			message:     "operation failed",
+			kvs:         []any{"query", "SELECT *", "attempt", 3, "timeout", true},
+			wantMessage: "operation failed: base error",
+			wantAttrs: []slog.Attr{
+				slog.Any("query", "SELECT *"),
+				slog.Any("attempt", 3),
+				slog.Any("timeout", true),
+			},
+			wantPanic: false,
+		},
+		{
+			name:      "odd number of args panics",
+			err:       io.EOF,
+			message:   "test",
+			kvs:       []any{"key"},
+			wantPanic: true,
+		},
+		{
+			name:      "non-string key panics",
+			err:       io.EOF,
+			message:   "test",
+			kvs:       []any{123, "value"},
+			wantPanic: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.wantPanic {
+				assert.Panics(t, func() {
+					//nolint:errcheck // testing panic, not return value
+					WrapWithKVs(tt.err, tt.message, tt.kvs...)
+				})
+				return
+			}
+
+			got := WrapWithKVs(tt.err, tt.message, tt.kvs...)
+
+			if tt.err == nil {
+				assert.Nil(t, got)
+				return
+			}
+
+			assert.Equal(t, tt.wantMessage, got.Error())
+
+			// Check attributes
+			attrs := Attrs(got)
+			assert.Equal(t, tt.wantAttrs, attrs)
+		})
+	}
+}
+
+func TestAttrs(t *testing.T) {
+	tests := []struct {
+		name      string
+		buildErr  func() error
+		wantAttrs []slog.Attr
+	}{
+		{
+			name:      "nil error returns nil",
+			buildErr:  func() error { return nil },
+			wantAttrs: nil,
+		},
+		{
+			name:      "regular error without attrs",
+			buildErr:  func() error { return errors.New("test") },
+			wantAttrs: nil,
+		},
+		{
+			name: "error with attrs",
+			buildErr: func() error {
+				return WrapWithAttrs(io.EOF, "test", slog.String("key", "value"))
+			},
+			wantAttrs: []slog.Attr{slog.String("key", "value")},
+		},
+		{
+			name: "nested errors collect all attrs",
+			buildErr: func() error {
+				err := io.EOF
+				err = WrapWithAttrs(err, "inner", slog.Int("attempt", 1))
+				err = WrapWithAttrs(err, "outer", slog.String("query", "SELECT *"))
+				return err
+			},
+			wantAttrs: []slog.Attr{
+				slog.String("query", "SELECT *"),
+				slog.Int("attempt", 1),
+			},
+		},
+		{
+			name: "multiple wraps with same keys (outer first)",
+			buildErr: func() error {
+				err := io.EOF
+				err = WrapWithAttrs(err, "inner", slog.String("status", "old"))
+				err = WrapWithAttrs(err, "outer", slog.String("status", "new"))
+				return err
+			},
+			wantAttrs: []slog.Attr{
+				slog.String("status", "new"),
+				slog.String("status", "old"),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.buildErr()
+			attrs := Attrs(err)
+			assert.Equal(t, tt.wantAttrs, attrs)
+		})
+	}
+}
+
+func TestWrapWithAttrsChaining(t *testing.T) {
+	baseErr := errors.New("database connection failed")
+	wrappedOnce := WrapWithAttrs(baseErr, "query failed",
+		slog.String("query", "SELECT * FROM users"))
+	wrappedTwice := WrapWithAttrs(wrappedOnce, "request failed",
+		slog.String("endpoint", "/api/users"),
+		slog.String("method", "GET"))
+
+	// Check error message
+	expected := "request failed: query failed: database connection failed"
+	assert.Equal(t, expected, wrappedTwice.Error())
+
+	// Check all attributes are collected
+	attrs := Attrs(wrappedTwice)
+	expectedAttrs := []slog.Attr{
+		slog.String("endpoint", "/api/users"),
+		slog.String("method", "GET"),
+		slog.String("query", "SELECT * FROM users"),
+	}
+	assert.Equal(t, expectedAttrs, attrs)
+
+	// Check that RootCause still works
+	assert.Equal(t, baseErr, RootCause(wrappedTwice))
+}
+
+func TestLogValueIntegration(t *testing.T) {
+	tests := []struct {
+		name     string
+		buildErr func() error
+		validate func(t *testing.T, value slog.Value)
+	}{
+		{
+			name: "fundamental error with attrs",
+			buildErr: func() error {
+				return NewWithAttrs(mtrpcpb.Code_INVALID_ARGUMENT, "invalid query",
+					slog.String("query", "SELECT *"),
+					slog.Int("line", 42))
+			},
+			validate: func(t *testing.T, value slog.Value) {
+				// Should be a group with message and attributes
+				assert.Equal(t, slog.KindGroup, value.Kind())
+				attrs := value.Group()
+				assert.Len(t, attrs, 3) // message + 2 attrs
+				assert.Equal(t, "message", attrs[0].Key)
+				assert.Equal(t, "invalid query", attrs[0].Value.String())
+				assert.Equal(t, "query", attrs[1].Key)
+				assert.Equal(t, "SELECT *", attrs[1].Value.String())
+				assert.Equal(t, "line", attrs[2].Key)
+				assert.Equal(t, int64(42), attrs[2].Value.Int64())
+			},
+		},
+		{
+			name: "wrapped error with attrs",
+			buildErr: func() error {
+				base := errors.New("connection failed")
+				return WrapWithAttrs(base, "query execution failed",
+					slog.String("query", "SELECT *"),
+					slog.String("database", "postgres"))
+			},
+			validate: func(t *testing.T, value slog.Value) {
+				// Should be a group with message, attributes, and cause
+				assert.Equal(t, slog.KindGroup, value.Kind())
+				attrs := value.Group()
+				assert.Len(t, attrs, 4) // message + 2 attrs + cause
+				assert.Equal(t, "message", attrs[0].Key)
+				assert.Equal(t, "query execution failed", attrs[0].Value.String())
+				assert.Equal(t, "query", attrs[1].Key)
+				assert.Equal(t, "SELECT *", attrs[1].Value.String())
+				assert.Equal(t, "database", attrs[2].Key)
+				assert.Equal(t, "postgres", attrs[2].Value.String())
+				assert.Equal(t, "cause", attrs[3].Key)
+				assert.Equal(t, "connection failed", attrs[3].Value.String())
+			},
+		},
+		{
+			name: "nested wrapped errors with attrs",
+			buildErr: func() error {
+				base := NewWithAttrs(mtrpcpb.Code_UNAVAILABLE, "connection failed",
+					slog.String("host", "localhost"))
+				wrapped := WrapWithAttrs(base, "query failed",
+					slog.String("query", "SELECT *"))
+				return wrapped
+			},
+			validate: func(t *testing.T, value slog.Value) {
+				// Outer error should be a group
+				assert.Equal(t, slog.KindGroup, value.Kind())
+				attrs := value.Group()
+				assert.Len(t, attrs, 3) // message + query + cause
+				assert.Equal(t, "message", attrs[0].Key)
+				assert.Equal(t, "query failed", attrs[0].Value.String())
+				assert.Equal(t, "query", attrs[1].Key)
+				assert.Equal(t, "SELECT *", attrs[1].Value.String())
+				assert.Equal(t, "cause", attrs[2].Key)
+
+				// Cause should also be a group with its own attributes
+				cause := attrs[2].Value
+				assert.Equal(t, slog.KindGroup, cause.Kind())
+				causeAttrs := cause.Group()
+				assert.Len(t, causeAttrs, 2) // message + host
+				assert.Equal(t, "message", causeAttrs[0].Key)
+				assert.Equal(t, "connection failed", causeAttrs[0].Value.String())
+				assert.Equal(t, "host", causeAttrs[1].Key)
+				assert.Equal(t, "localhost", causeAttrs[1].Value.String())
+			},
+		},
+		{
+			name: "error without attrs returns simple string",
+			buildErr: func() error {
+				return New(mtrpcpb.Code_INTERNAL, "simple error")
+			},
+			validate: func(t *testing.T, value slog.Value) {
+				assert.Equal(t, slog.KindString, value.Kind())
+				assert.Equal(t, "simple error", value.String())
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.buildErr()
+
+			// Verify the error implements slog.LogValuer
+			lv, ok := err.(slog.LogValuer)
+			assert.True(t, ok, "error should implement slog.LogValuer")
+
+			// Get the log value
+			value := lv.LogValue()
+
+			// Validate the structure
+			tt.validate(t, value)
+		})
 	}
 }

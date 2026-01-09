@@ -142,8 +142,7 @@ func (pm *MultiPoolerManager) InitializeEmptyPrimary(ctx context.Context, req *m
 	// Get final LSN position for leadership history
 	finalLSN, err := pm.getPrimaryLSN(ctx)
 	if err != nil {
-		pm.logger.ErrorContext(ctx, "Failed to get final LSN", "error", err)
-		return nil, err
+		return nil, mterrors.Wrap(err, "failed to get final LSN")
 	}
 
 	// Write leadership history record for bootstrap

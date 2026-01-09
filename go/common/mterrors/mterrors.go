@@ -91,6 +91,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"sync"
 
 	"github.com/spf13/pflag"
@@ -135,6 +136,47 @@ func New(code mtrpcpb.Code, message string) error {
 	}
 }
 
+// NewWithAttrs returns an error with a message and structured attributes.
+// It also records the stack trace at the point it was called.
+//
+// Example:
+//
+//	return mterrors.NewWithAttrs(mtrpcpb.Code_INVALID_ARGUMENT, "invalid query",
+//	    slog.String("query", queryStr))
+func NewWithAttrs(code mtrpcpb.Code, message string, attrs ...slog.Attr) error {
+	return &fundamental{
+		msg:   message,
+		code:  code,
+		attrs: attrs,
+		stack: callers(),
+	}
+}
+
+// NewWithKVs is a convenience wrapper around NewWithAttrs that accepts
+// alternating key-value pairs and converts them to slog.Attr.
+//
+// Example:
+//
+//	return mterrors.NewWithKVs(mtrpcpb.Code_INVALID_ARGUMENT, "invalid query",
+//	    "query", queryStr,
+//	    "database", dbName)
+func NewWithKVs(code mtrpcpb.Code, message string, keysAndValues ...any) error {
+	if len(keysAndValues)%2 != 0 {
+		panic("NewWithKVs: keysAndValues must be key-value pairs (even number of arguments)")
+	}
+
+	attrs := make([]slog.Attr, 0, len(keysAndValues)/2)
+	for i := 0; i < len(keysAndValues); i += 2 {
+		key, ok := keysAndValues[i].(string)
+		if !ok {
+			panic(fmt.Sprintf("NewWithKVs: key at position %d is not a string: %T", i, keysAndValues[i]))
+		}
+		attrs = append(attrs, slog.Any(key, keysAndValues[i+1]))
+	}
+
+	return NewWithAttrs(code, message, attrs...)
+}
+
 // Errorf formats according to a format specifier and returns the string
 // as a value that satisfies error.
 // Errorf also records the stack trace at the point it was called.
@@ -143,6 +185,37 @@ func Errorf(code mtrpcpb.Code, format string, args ...any) error {
 	return &fundamental{
 		msg:   fmt.Sprintf(format, args...),
 		code:  code,
+		stack: callers(),
+	}
+}
+
+// ErrorfWithKVs formats according to a format specifier and returns an error
+// with structured attributes. It records the stack trace at the point it was called.
+//
+// Example:
+//
+//	return mterrors.ErrorfWithKVs(mtrpcpb.Code_INVALID_ARGUMENT,
+//	    "invalid query on database %s", dbName,
+//	    "query", queryStr,
+//	    "user", userName)
+func ErrorfWithKVs(code mtrpcpb.Code, format string, formatArgs []any, keysAndValues ...any) error {
+	if len(keysAndValues)%2 != 0 {
+		panic("ErrorfWithKVs: keysAndValues must be key-value pairs (even number of arguments)")
+	}
+
+	attrs := make([]slog.Attr, 0, len(keysAndValues)/2)
+	for i := 0; i < len(keysAndValues); i += 2 {
+		key, ok := keysAndValues[i].(string)
+		if !ok {
+			panic(fmt.Sprintf("ErrorfWithKVs: key at position %d is not a string: %T", i, keysAndValues[i]))
+		}
+		attrs = append(attrs, slog.Any(key, keysAndValues[i+1]))
+	}
+
+	return &fundamental{
+		msg:   fmt.Sprintf(format, formatArgs...),
+		code:  code,
+		attrs: attrs,
 		stack: callers(),
 	}
 }
@@ -173,6 +246,7 @@ type fundamental struct {
 	msg   string
 	code  mtrpcpb.Code
 	state State
+	attrs []slog.Attr // structured attributes for logging
 	*stack
 }
 
@@ -260,6 +334,56 @@ func Wrapf(err error, format string, args ...any) error {
 	return Wrap(err, fmt.Sprintf(format, args...))
 }
 
+// WrapWithAttrs returns an error annotating err with a stack trace,
+// a message, and structured attributes.
+// If err is nil, WrapWithAttrs returns nil.
+//
+// Example:
+//
+//	return mterrors.WrapWithAttrs(err, "query failed",
+//	    slog.String("query", queryStr),
+//	    slog.Any("plan", plan))
+func WrapWithAttrs(err error, message string, attrs ...slog.Attr) error {
+	if err == nil {
+		return nil
+	}
+	return &wrapping{
+		cause: err,
+		msg:   message,
+		attrs: attrs,
+		stack: callers(),
+	}
+}
+
+// WrapWithKVs is a convenience wrapper around WrapWithAttrs that accepts
+// alternating key-value pairs and converts them to slog.Attr.
+// Keys must be strings. If err is nil, returns nil.
+//
+// Example:
+//
+//	return mterrors.WrapWithKVs(err, "query failed",
+//	    "query", queryStr,
+//	    "plan", plan.String())
+func WrapWithKVs(err error, message string, keysAndValues ...any) error {
+	if err == nil {
+		return nil
+	}
+	if len(keysAndValues)%2 != 0 {
+		panic("WrapWithKVs: keysAndValues must be key-value pairs (even number of arguments)")
+	}
+
+	attrs := make([]slog.Attr, 0, len(keysAndValues)/2)
+	for i := 0; i < len(keysAndValues); i += 2 {
+		key, ok := keysAndValues[i].(string)
+		if !ok {
+			panic(fmt.Sprintf("WrapWithKVs: key at position %d is not a string: %T", i, keysAndValues[i]))
+		}
+		attrs = append(attrs, slog.Any(key, keysAndValues[i+1]))
+	}
+
+	return WrapWithAttrs(err, message, attrs...)
+}
+
 // Unwrap attempts to return the Cause of the given error, if it is indeed the result of a mterrors.Wrapf()
 // The function indicates whether the error was indeed wrapped. If the error was not wrapped, the function
 // returns the original error.
@@ -283,6 +407,7 @@ func UnwrapAll(err error) error {
 type wrapping struct {
 	cause error
 	msg   string
+	attrs []slog.Attr // structured attributes for logging
 	stack *stack
 }
 
@@ -396,3 +521,90 @@ func TruncateError(oldErr error, max int) error {
 
 func (f *fundamental) ErrorState() State       { return f.state }
 func (f *fundamental) ErrorCode() mtrpcpb.Code { return f.code }
+
+// ErrorWithAttrs is an interface for errors that carry structured attributes
+type ErrorWithAttrs interface {
+	// Attrs returns structured attributes for logging
+	Attrs() []slog.Attr
+}
+
+// Attrs returns the structured attributes from an error if it implements ErrorWithAttrs.
+// It returns all attributes from the error chain, with outer attributes first.
+func Attrs(err error) []slog.Attr {
+	if err == nil {
+		return nil
+	}
+
+	var allAttrs []slog.Attr
+
+	// Walk the error chain and collect attributes
+	for err != nil {
+		if e, ok := err.(ErrorWithAttrs); ok {
+			attrs := e.Attrs()
+			if len(attrs) > 0 {
+				allAttrs = append(allAttrs, attrs...)
+			}
+		}
+
+		// Try to unwrap
+		if causer, ok := err.(interface{ Cause() error }); ok {
+			err = causer.Cause()
+		} else if unwrapper, ok := err.(interface{ Unwrap() error }); ok {
+			err = unwrapper.Unwrap()
+		} else {
+			break
+		}
+	}
+
+	return allAttrs
+}
+
+// Attrs implements ErrorWithAttrs for fundamental
+func (f *fundamental) Attrs() []slog.Attr {
+	return f.attrs
+}
+
+// Attrs implements ErrorWithAttrs for wrapping
+func (w *wrapping) Attrs() []slog.Attr {
+	return w.attrs
+}
+
+// LogValue implements slog.LogValuer for fundamental.
+// When an error with attributes is logged via slog, this allows slog to extract
+// and include the attributes as structured fields.
+func (f *fundamental) LogValue() slog.Value {
+	if len(f.attrs) == 0 {
+		// No attributes, just return the error message
+		return slog.StringValue(f.msg)
+	}
+
+	// Return a group with the error message and all attributes
+	attrs := make([]slog.Attr, 0, len(f.attrs)+1)
+	attrs = append(attrs, slog.String("message", f.msg))
+	attrs = append(attrs, f.attrs...)
+	return slog.GroupValue(attrs...)
+}
+
+// LogValue implements slog.LogValuer for wrapping.
+// When an error with attributes is logged via slog, this allows slog to extract
+// and include the attributes as structured fields.
+func (w *wrapping) LogValue() slog.Value {
+	if len(w.attrs) == 0 {
+		// No attributes, just return the error message
+		return slog.StringValue(w.Error())
+	}
+
+	// Return a group with the error message and all attributes
+	attrs := make([]slog.Attr, 0, len(w.attrs)+1)
+	attrs = append(attrs, slog.String("message", w.msg))
+	attrs = append(attrs, w.attrs...)
+
+	// Include cause if it also has a LogValue implementation
+	if lv, ok := w.cause.(slog.LogValuer); ok {
+		attrs = append(attrs, slog.Any("cause", lv.LogValue()))
+	} else {
+		attrs = append(attrs, slog.String("cause", w.cause.Error()))
+	}
+
+	return slog.GroupValue(attrs...)
+}

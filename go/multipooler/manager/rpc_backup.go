@@ -420,7 +420,6 @@ func (pm *MultiPoolerManager) reopenPoolerManager(ctx context.Context) error {
 	// This is important during auto-restore at startup where the startup flow
 	// is waiting on contexts derived from pm.ctx.
 	if err := pm.reopenConnections(ctx); err != nil {
-		slog.ErrorContext(ctx, "Failed to reopen pooler manager after restore", "error", err)
 		return mterrors.Wrap(err, "failed to reopen pooler manager after restore")
 	}
 	slog.InfoContext(ctx, "Pooler manager reopened successfully after restore")

@@ -290,8 +290,7 @@ func (c *Conn) serve() error {
 				c.logger.Debug("client closed connection")
 				return nil
 			}
-			c.logger.Error("error reading message type", "error", err)
-			return err
+			return fmt.Errorf("error reading message type: %w", err)
 		}
 
 		// Process the message based on type.

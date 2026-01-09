@@ -572,7 +572,6 @@ func (pm *MultiPoolerManager) checkReplicaGuardrails(ctx context.Context) error 
 	// Guardrail: Check if the PostgreSQL instance is in recovery (standby mode)
 	isInRecovery, err := pm.isInRecovery(ctx)
 	if err != nil {
-		pm.logger.ErrorContext(ctx, "Failed to check if instance is in recovery", "error", err)
 		return mterrors.Wrap(err, "failed to check recovery status")
 	}
 
@@ -596,7 +595,6 @@ func (pm *MultiPoolerManager) checkPrimaryGuardrails(ctx context.Context) error 
 	// Guardrail: Check if the PostgreSQL instance is in standby mode
 	isInRecovery, err := pm.isInRecovery(ctx)
 	if err != nil {
-		pm.logger.ErrorContext(ctx, "Failed to check if instance is in recovery", "error", err)
 		return mterrors.Wrap(err, "failed to check recovery status")
 	}
 
@@ -778,7 +776,6 @@ func (pm *MultiPoolerManager) validateAndUpdateTerm(ctx context.Context, request
 
 		// Update term atomically (resets accepted leader)
 		if err := cs.UpdateTermAndSave(ctx, requestTerm); err != nil {
-			pm.logger.ErrorContext(ctx, "Failed to update term", "error", err)
 			return mterrors.Wrap(err, "failed to update consensus term")
 		}
 
@@ -954,7 +951,6 @@ func (pm *MultiPoolerManager) checkDemotionState(ctx context.Context) (*demotion
 	// Check if PostgreSQL is in recovery mode (canonical way to check if read-only)
 	isPrimary, err := pm.isPrimary(ctx)
 	if err != nil {
-		pm.logger.ErrorContext(ctx, "Failed to check recovery status", "error", err)
 		return nil, mterrors.Wrap(err, "failed to check recovery status")
 	}
 	state.isReadOnly = !isPrimary
@@ -962,7 +958,6 @@ func (pm *MultiPoolerManager) checkDemotionState(ctx context.Context) (*demotion
 	// Capture current LSN
 	state.finalLSN, err = pm.getWALPosition(ctx)
 	if err != nil {
-		pm.logger.ErrorContext(ctx, "Failed to get LSN", "error", err)
 		return nil, mterrors.Wrap(err, "failed to get LSN")
 	}
 
@@ -1000,7 +995,6 @@ func (pm *MultiPoolerManager) setServingReadOnly(ctx context.Context, state *dem
 		return nil
 	})
 	if err != nil {
-		pm.logger.ErrorContext(ctx, "Failed to update serving status in topology", "error", err)
 		return mterrors.Wrap(err, "failed to transition to SERVING_RDONLY")
 	}
 
@@ -1071,7 +1065,6 @@ func (pm *MultiPoolerManager) restartPostgresAsStandby(ctx context.Context, stat
 
 	resp, err := pm.pgctldClient.Restart(ctx, req)
 	if err != nil {
-		pm.logger.ErrorContext(ctx, "Failed to restart PostgreSQL as standby", "error", err)
 		return mterrors.Wrap(err, "failed to restart as standby")
 	}
 
@@ -1081,14 +1074,12 @@ func (pm *MultiPoolerManager) restartPostgresAsStandby(ctx context.Context, stat
 
 	// Reopen the manager
 	if err := pm.Open(); err != nil {
-		pm.logger.ErrorContext(ctx, "Failed to reopen query service controller after restart", "error", err)
 		return mterrors.Wrap(err, "failed to reopen query service controller")
 	}
 
 	// Verify server is in recovery mode (standby)
 	inRecovery, err := pm.isInRecovery(ctx)
 	if err != nil {
-		pm.logger.ErrorContext(ctx, "Failed to verify recovery status", "error", err)
 		return mterrors.Wrap(err, "failed to verify standby status")
 	}
 
@@ -1114,7 +1105,6 @@ func (pm *MultiPoolerManager) updateTopologyAfterDemotion(ctx context.Context, s
 		return nil
 	})
 	if err != nil {
-		pm.logger.ErrorContext(ctx, "Failed to update pooler type in topology", "error", err)
 		return mterrors.Wrap(err, "demotion succeeded but failed to update topology")
 	}
 
@@ -1171,7 +1161,6 @@ func (pm *MultiPoolerManager) getActiveWriteConnections(ctx context.Context) ([]
 func (pm *MultiPoolerManager) terminateWriteConnections(ctx context.Context) (int32, error) {
 	pids, err := pm.getActiveWriteConnections(ctx)
 	if err != nil {
-		pm.logger.ErrorContext(ctx, "Failed to get active write connections", "error", err)
 		return 0, mterrors.Wrap(err, "failed to get active write connections")
 	}
 
@@ -1269,7 +1258,6 @@ func (pm *MultiPoolerManager) checkPromotionState(ctx context.Context, syncRepli
 	// Check PostgreSQL promotion state
 	isInRecovery, err := pm.isInRecovery(ctx)
 	if err != nil {
-		pm.logger.ErrorContext(ctx, "Failed to check recovery status", "error", err)
 		return nil, mterrors.Wrap(err, "failed to check recovery status")
 	}
 
@@ -1279,8 +1267,7 @@ func (pm *MultiPoolerManager) checkPromotionState(ctx context.Context, syncRepli
 		// Get current primary LSN
 		state.currentLSN, err = pm.getPrimaryLSN(ctx)
 		if err != nil {
-			pm.logger.ErrorContext(ctx, "Failed to get current LSN", "error", err)
-			return nil, err
+			return nil, mterrors.Wrap(err, "failed to get current LSN")
 		}
 	}
 
@@ -1331,7 +1318,6 @@ func (pm *MultiPoolerManager) promoteStandbyToPrimary(ctx context.Context, state
 	pm.logger.InfoContext(ctx, "PostgreSQL promotion needed")
 	pm.logger.InfoContext(ctx, "Calling pg_promote() to promote standby to primary")
 	if err := pm.exec(ctx, "SELECT pg_promote()"); err != nil {
-		pm.logger.ErrorContext(ctx, "Failed to call pg_promote()", "error", err)
 		return mterrors.Wrap(err, "failed to promote standby")
 	}
 
@@ -1359,7 +1345,6 @@ func (pm *MultiPoolerManager) waitForPromotionComplete(ctx context.Context) erro
 		case <-ticker.C:
 			isInRecovery, err := pm.isInRecovery(promotionCtx)
 			if err != nil {
-				pm.logger.ErrorContext(ctx, "Failed to check recovery status during promotion", "error", err)
 				return mterrors.Wrap(err, "failed to check recovery status")
 			}
 
@@ -1386,7 +1371,6 @@ func (pm *MultiPoolerManager) updateTopologyAfterPromotion(ctx context.Context, 
 		return nil
 	})
 	if err != nil {
-		pm.logger.ErrorContext(ctx, "Failed to update pooler type in topology", "error", err)
 		return mterrors.Wrap(err, "promotion succeeded but failed to update topology")
 	}
 
@@ -1426,7 +1410,6 @@ func (pm *MultiPoolerManager) configureReplicationAfterPromotion(ctx context.Con
 		syncReplicationConfig.StandbyIds,
 		syncReplicationConfig.ReloadConfig)
 	if err != nil {
-		pm.logger.ErrorContext(ctx, "Failed to configure synchronous replication", "error", err)
 		return mterrors.Wrap(err, "promotion succeeded but failed to configure synchronous replication")
 	}
 
@@ -1470,7 +1453,6 @@ func (pm *MultiPoolerManager) Start(senv *servenv.ServEnv) {
 
 		pm.logger.Info("Waiting for manager to reach ready state before registering gRPC services")
 		if err := pm.WaitUntilReady(waitCtx); err != nil {
-			pm.logger.Error("Manager failed to reach ready state during startup", "error", err)
 			return fmt.Errorf("manager failed to reach ready state: %w", err)
 		}
 		pm.logger.Info("Manager reached ready state, will register gRPC services")
@@ -1509,8 +1491,7 @@ func (pm *MultiPoolerManager) WaitUntilReady(ctx context.Context) error {
 			pm.logger.InfoContext(ctx, "Manager is ready")
 			return nil
 		case ManagerStateError:
-			pm.logger.ErrorContext(ctx, "Manager failed to initialize", "error", stateError)
-			return fmt.Errorf("manager is in error state: %w", stateError)
+			return mterrors.Wrap(stateError, "manager is in error state")
 		default:
 			// This shouldn't happen - channel was closed but state isn't terminal
 			return fmt.Errorf("unexpected state after ready signal: %s", state)
