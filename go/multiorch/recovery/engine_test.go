@@ -345,52 +345,6 @@ func TestRecoveryEngine_ConfigReloadError(t *testing.T) {
 	}
 }
 
-func TestRecoveryEngine_GoroutinePileupPrevention(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	var executionCount int32
-	var inProgress atomic.Bool
-
-	// Slow operation: first call proceeds immediately, subsequent calls sleep first
-	slowOperation := func() {
-		// Read current count before incrementing
-		currentCount := atomic.LoadInt32(&executionCount)
-
-		// If count > 0, sleep before incrementing (simulates slow operation)
-		if currentCount > 0 {
-			sleepTime := time.Duration(currentCount*1000) * time.Millisecond
-			select {
-			case <-time.After(sleepTime):
-			case <-ctx.Done():
-				return
-			}
-		}
-
-		// Increment after sleep (or immediately for first call)
-		atomic.AddInt32(&executionCount, 1)
-	}
-
-	// Try to trigger the operation 10 times rapidly
-	for range 10 {
-		runIfNotRunning(logger, &inProgress, "test_operation", slowOperation)
-	}
-
-	// Wait for the first goroutine to complete (it doesn't sleep, so should be fast)
-	// Use Eventually to avoid flakiness while keeping test fast
-	require.Eventually(t, func() bool {
-		return atomic.LoadInt32(&executionCount) == 1
-	}, 100*time.Millisecond, 5*time.Millisecond, "expected exactly 1 execution due to pile-up prevention")
-
-	// Clean up - cancel context to stop the sleeping goroutine
-	cancel()
-
-	// Wait a bit for cleanup
-	time.Sleep(50 * time.Millisecond)
-}
-
 func TestRecoveryEngine_ViperDynamicConfig(t *testing.T) {
 	// Create a test topology store
 	ts := newTestTopoStore()
@@ -725,4 +679,119 @@ func TestRecoveryEngine_FullIntegration(t *testing.T) {
 	// Verify new pooler still exists
 	_, ok = re.poolerStore.Get(keyNew)
 	require.True(t, ok, "new pooler should still exist")
+}
+
+// TestRecoveryEngine_FastStart verifies that Start() returns quickly
+// without blocking on metadata refresh. Poolers appear after the first
+// periodic refresh completes.
+func TestRecoveryEngine_FastStart(t *testing.T) {
+	ctx := context.Background()
+	ts, _ := memorytopo.NewServerAndFactory(ctx, "zone1")
+	defer ts.Close()
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	// Add pooler to topology BEFORE creating engine
+	require.NoError(t, ts.CreateMultiPooler(ctx, &clustermetadata.MultiPooler{
+		Id:       &clustermetadata.ID{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "test-pooler"},
+		Database: "mydb", TableGroup: "tg1", Shard: "0",
+		Hostname: "host1",
+	}))
+
+	// Create engine with short refresh interval for testing
+	cfg := config.NewTestConfig(
+		config.WithCell("zone1"),
+		config.WithClusterMetadataRefreshInterval(50*time.Millisecond), // Fast for testing
+		config.WithClusterMetadataRefreshTimeout(5*time.Second),
+		config.WithHealthCheckWorkers(0), // No health check workers
+	)
+
+	re := NewEngine(
+		ts,
+		logger,
+		cfg,
+		[]config.WatchTarget{{Database: "mydb"}},
+		&rpcclient.FakeClient{},
+		newTestCoordinator(ts, &rpcclient.FakeClient{}, "zone1"),
+	)
+
+	// Pooler should NOT be in store yet
+	key := poolerKey("zone1", "test-pooler")
+	_, ok := re.poolerStore.Get(key)
+	require.False(t, ok, "pooler should not be in store before Start()")
+
+	// Start the engine - should return quickly
+	startTime := time.Now()
+	err := re.Start()
+	require.NoError(t, err, "failed to start recovery engine")
+	defer re.Stop()
+
+	// Verify Start() was fast (< 100ms)
+	require.Less(t, time.Since(startTime), 100*time.Millisecond, "Start() should return quickly without blocking")
+
+	// Pooler should NOT be in store immediately (no synchronous initial refresh)
+	_, ok = re.poolerStore.Get(key)
+	require.False(t, ok, "pooler should not be in store immediately after Start()")
+
+	// Wait for first periodic refresh to discover pooler
+	require.Eventually(t, func() bool {
+		_, ok := re.poolerStore.Get(key)
+		return ok
+	}, 500*time.Millisecond, 10*time.Millisecond, "pooler should be discovered after first refresh")
+}
+
+// TestRecoveryEngine_StopStartRecoveryLoop verifies that StopRecoveryLoop
+// and StartRecoveryLoop work correctly for controlling the recovery loop
+// independently of other engine loops.
+func TestRecoveryEngine_StopStartRecoveryLoop(t *testing.T) {
+	ctx := context.Background()
+	ts, _ := memorytopo.NewServerAndFactory(ctx, "zone1")
+	defer ts.Close()
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	cfg := config.NewTestConfig(
+		config.WithCell("zone1"),
+		config.WithRecoveryCycleInterval(50*time.Millisecond), // Fast cycles for testing
+		config.WithClusterMetadataRefreshInterval(1*time.Minute),
+		config.WithHealthCheckWorkers(0),
+	)
+
+	re := NewEngine(
+		ts,
+		logger,
+		cfg,
+		[]config.WatchTarget{{Database: "mydb"}},
+		&rpcclient.FakeClient{},
+		newTestCoordinator(ts, &rpcclient.FakeClient{}, "zone1"),
+	)
+
+	// Start the engine
+	err := re.Start()
+	require.NoError(t, err)
+	defer re.Stop()
+
+	// Verify recovery runner is running after Start()
+	require.True(t, re.recoveryRunner.Running(), "recovery runner should be running after Start()")
+
+	// Stop the recovery loop
+	re.StopRecoveryLoop()
+
+	// Verify runner stopped
+	require.False(t, re.recoveryRunner.Running(), "recovery runner should stop after StopRecoveryLoop()")
+
+	// Restart the recovery loop
+	re.StartRecoveryLoop()
+
+	// Verify runner restarted
+	require.True(t, re.recoveryRunner.Running(), "recovery runner should restart after StartRecoveryLoop()")
+
+	// Test idempotence - multiple stops/starts should not panic
+	re.StopRecoveryLoop()
+	re.StopRecoveryLoop() // Second stop should be no-op
+	require.False(t, re.recoveryRunner.Running(), "runner should still be stopped")
+
+	re.StartRecoveryLoop()
+	re.StartRecoveryLoop() // Second start should be no-op (idempotent)
+	require.True(t, re.recoveryRunner.Running(), "runner should still be running")
 }

@@ -23,6 +23,23 @@ import (
 	"time"
 )
 
+// timerFactory abstracts timer creation for testing.
+type timerFactory interface {
+	AfterFunc(d time.Duration, f func()) timer
+}
+
+// timer abstracts a scheduled callback.
+type timer interface {
+	Stop() bool
+}
+
+// realTimerFactory uses actual time.AfterFunc.
+type realTimerFactory struct{}
+
+func (realTimerFactory) AfterFunc(d time.Duration, f func()) timer {
+	return time.AfterFunc(d, f)
+}
+
 // PeriodicRunner runs a callback at regular intervals with lifecycle management.
 //
 // Key behaviors:
@@ -40,14 +57,15 @@ import (
 //	// later...
 //	runner.Stop() // waits for any in-flight callback
 type PeriodicRunner struct {
-	parentCtx context.Context
-	interval  time.Duration
+	parentCtx    context.Context
+	interval     time.Duration
+	timerFactory timerFactory
 
 	mu       sync.Mutex
 	running  bool
 	ctx      context.Context // child context, created on Start, cancelled on Stop
 	cancel   context.CancelFunc
-	timer    *time.Timer
+	timer    timer
 	wg       sync.WaitGroup
 	callback func(ctx context.Context)
 }
@@ -58,8 +76,9 @@ type PeriodicRunner struct {
 // the runner being cancelled when request contexts complete.
 func NewPeriodicRunner(ctx context.Context, interval time.Duration) *PeriodicRunner {
 	return &PeriodicRunner{
-		parentCtx: ctx,
-		interval:  interval,
+		parentCtx:    ctx,
+		interval:     interval,
+		timerFactory: realTimerFactory{},
 	}
 }
 
@@ -129,10 +148,29 @@ func (r *PeriodicRunner) Running() bool {
 	return r.running
 }
 
+// SetInterval changes the interval. If the runner is active, the new interval
+// takes effect on the next scheduled execution.
+func (r *PeriodicRunner) SetInterval(interval time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.interval == interval {
+		return
+	}
+
+	r.interval = interval
+
+	// If running, restart timer with new interval
+	if r.running && r.timer != nil {
+		r.timer.Stop()
+		r.scheduleNext()
+	}
+}
+
 // scheduleNext schedules the next callback execution.
 // Must be called while holding r.mu.
 func (r *PeriodicRunner) scheduleNext() {
-	r.timer = time.AfterFunc(r.interval, r.execute)
+	r.timer = r.timerFactory.AfterFunc(r.interval, r.execute)
 }
 
 // execute runs the callback and schedules the next execution.

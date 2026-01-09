@@ -18,6 +18,7 @@ package timer
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -25,6 +26,97 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// fakeTimerFactory creates fake timers that can be triggered manually.
+type fakeTimerFactory struct {
+	mu     sync.Mutex
+	timers []*fakeTimer
+}
+
+func (f *fakeTimerFactory) AfterFunc(d time.Duration, callback func()) timer {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	t := &fakeTimer{
+		duration: d,
+		callback: callback,
+	}
+	f.timers = append(f.timers, t)
+	return t
+}
+
+// assertLatestInterval verifies the most recent timer has the expected duration.
+// If trigger is true, also triggers that timer.
+func (f *fakeTimerFactory) assertLatestInterval(t *testing.T, expected time.Duration, trigger bool) {
+	t.Helper()
+	f.mu.Lock()
+	require.NotEmpty(t, f.timers, "no timers created")
+	latest := f.timers[len(f.timers)-1]
+	assert.Equal(t, expected, latest.duration, "latest timer has wrong interval")
+	f.mu.Unlock()
+
+	if trigger {
+		latest.trigger()
+	}
+}
+
+// assertPreviousTimerStopped verifies that the timer at the given index was stopped.
+func (f *fakeTimerFactory) assertPreviousTimerStopped(t *testing.T, index int) {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	require.Greater(t, len(f.timers), index, "timer index out of range")
+	assert.True(t, f.timers[index].stopped, "timer at index %d should have been stopped", index)
+}
+
+// timerCount returns the number of timers created.
+func (f *fakeTimerFactory) timerCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.timers)
+}
+
+// fakeTimer is a fake timer that can be triggered manually.
+type fakeTimer struct {
+	mu       sync.Mutex
+	duration time.Duration
+	callback func()
+	stopped  bool
+}
+
+func (t *fakeTimer) Stop() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.stopped {
+		return false
+	}
+	t.stopped = true
+	return true
+}
+
+func (t *fakeTimer) trigger() {
+	t.mu.Lock()
+	stopped := t.stopped
+	callback := t.callback
+	t.mu.Unlock()
+
+	if !stopped && callback != nil {
+		callback()
+	}
+}
+
+// newTestRunner creates a PeriodicRunner with a fake timer for testing.
+func newTestRunner(ctx context.Context, interval time.Duration) (*PeriodicRunner, *fakeTimerFactory) {
+	factory := &fakeTimerFactory{}
+	runner := &PeriodicRunner{
+		parentCtx:    ctx,
+		interval:     interval,
+		timerFactory: factory,
+	}
+	return runner, factory
+}
 
 func TestPeriodicRunnerStartStop(t *testing.T) {
 	called := make(chan struct{}, 10)
@@ -352,4 +444,109 @@ func TestPeriodicRunnerOnStartNotCalledWhenAlreadyRunning(t *testing.T) {
 	runner.Stop()
 
 	assert.Equal(t, int32(1), onStartCount.Load(), "onStart should only be called once")
+}
+
+func TestPeriodicRunnerSetIntervalWhenNotRunning(t *testing.T) {
+	runner, factory := newTestRunner(t.Context(), 1*time.Second)
+
+	// SetInterval when not running should update the interval
+	runner.SetInterval(500 * time.Millisecond)
+
+	// Start the runner
+	var calls atomic.Int32
+	runner.Start(func(_ context.Context) {
+		calls.Add(1)
+	}, nil)
+
+	// Verify the timer was created with the new interval and trigger it
+	factory.assertLatestInterval(t, 500*time.Millisecond, true)
+	assert.Equal(t, int32(1), calls.Load())
+
+	runner.Stop()
+}
+
+func TestPeriodicRunnerSetIntervalWhileRunning(t *testing.T) {
+	runner, factory := newTestRunner(t.Context(), 100*time.Millisecond)
+
+	var calls atomic.Int32
+	runner.Start(func(_ context.Context) {
+		calls.Add(1)
+	}, nil)
+
+	// Verify first timer has 100ms interval and trigger it
+	factory.assertLatestInterval(t, 100*time.Millisecond, true)
+	assert.Equal(t, int32(1), calls.Load())
+
+	// At this point, the callback has completed and scheduled the next timer
+	// So we should have 2 timers: the triggered one (index 0) and the next one (index 1)
+	timerBeforeSetInterval := factory.timerCount() - 1
+
+	// Change interval to 50ms while running
+	runner.SetInterval(50 * time.Millisecond)
+
+	// Verify the timer that was active before SetInterval was stopped
+	factory.assertPreviousTimerStopped(t, timerBeforeSetInterval)
+
+	// Verify new timer was created with 50ms interval and trigger it
+	factory.assertLatestInterval(t, 50*time.Millisecond, true)
+	assert.Equal(t, int32(2), calls.Load())
+
+	runner.Stop()
+}
+
+func TestPeriodicRunnerSetIntervalSameValue(t *testing.T) {
+	runner, factory := newTestRunner(t.Context(), 100*time.Millisecond)
+
+	var calls atomic.Int32
+	runner.Start(func(_ context.Context) {
+		calls.Add(1)
+	}, nil)
+
+	// Trigger once
+	factory.assertLatestInterval(t, 100*time.Millisecond, true)
+	assert.Equal(t, int32(1), calls.Load())
+
+	// Count timers before SetInterval
+	timerCountBefore := factory.timerCount()
+
+	// SetInterval with same value should be no-op (won't create new timer)
+	runner.SetInterval(100 * time.Millisecond)
+
+	// Verify no new timer was created
+	assert.Equal(t, timerCountBefore, factory.timerCount(), "should not create new timer for same interval")
+
+	// Should still work - trigger the next scheduled execution
+	factory.assertLatestInterval(t, 100*time.Millisecond, true)
+	assert.Equal(t, int32(2), calls.Load())
+
+	runner.Stop()
+}
+
+func TestPeriodicRunnerSetIntervalAfterStop(t *testing.T) {
+	runner, factory := newTestRunner(t.Context(), 100*time.Millisecond)
+
+	var calls atomic.Int32
+	runner.Start(func(_ context.Context) {
+		calls.Add(1)
+	}, nil)
+
+	factory.assertLatestInterval(t, 100*time.Millisecond, true)
+	assert.Equal(t, int32(1), calls.Load())
+
+	// Stop the runner
+	runner.Stop()
+
+	// SetInterval after stop should not panic and should update interval
+	runner.SetInterval(50 * time.Millisecond)
+
+	// Restart with new interval
+	runner.Start(func(_ context.Context) {
+		calls.Add(1)
+	}, nil)
+
+	// Verify new timer has the updated interval
+	factory.assertLatestInterval(t, 50*time.Millisecond, true)
+	assert.Equal(t, int32(2), calls.Load())
+
+	runner.Stop()
 }

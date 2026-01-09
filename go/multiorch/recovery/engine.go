@@ -19,7 +19,6 @@ import (
 	"log/slog"
 	"slices"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/multigres/multigres/go/common/rpcclient"
@@ -30,20 +29,19 @@ import (
 	"github.com/multigres/multigres/go/multiorch/recovery/types"
 	"github.com/multigres/multigres/go/multiorch/store"
 	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
+	"github.com/multigres/multigres/go/tools/timer"
 )
 
-// runIfNotRunning executes fn in a goroutine only if inProgress flag is false.
-// If the operation is already in progress, it logs a debug message and returns immediately.
-// This prevents pile-up of concurrent operations that may be slow.
-func runIfNotRunning(logger *slog.Logger, inProgress *atomic.Bool, taskName string, fn func()) {
-	if !inProgress.CompareAndSwap(false, true) {
-		logger.Debug("skipping task, previous run still in progress", "task", taskName)
-		return
+// runConcurrently runs the given functions concurrently and waits for all to complete.
+func runConcurrently(fns ...func()) {
+	var wg sync.WaitGroup
+	for _, fn := range fns {
+		wg.Go(
+			func() {
+				fn()
+			})
 	}
-	go func() {
-		defer inProgress.Store(false)
-		fn()
-	}()
+	wg.Wait()
 }
 
 // Engine orchestrates health checking and automated recovery for Multigres poolers.
@@ -244,11 +242,11 @@ type Engine struct {
 	// Config reloader for dynamic updates (only shardWatchTargets is dynamic)
 	reloadConfig func() []string
 
-	// Goroutine management - prevent pile-up of concurrent operations
-	metadataRefreshInProgress atomic.Bool
-	bookkeepingInProgress     atomic.Bool
-	healthCheckInProgress     atomic.Bool
-	recoveryLoopInProgress    atomic.Bool
+	// Periodic runners for lifecycle management
+	recoveryRunner         *timer.PeriodicRunner
+	metadataRefreshRunner  *timer.PeriodicRunner
+	bookkeepingRunner      *timer.PeriodicRunner
+	healthCheckQueueRunner *timer.PeriodicRunner
 
 	// Cache for deduplication (prevents redundant health checks)
 	recentPollCache   map[string]time.Time
@@ -268,8 +266,8 @@ type Engine struct {
 	shutdownCtx context.Context
 	cancel      context.CancelFunc
 
-	// WaitGroup to track goroutines for graceful shutdown
-	wg sync.WaitGroup
+	// WaitGroup for health check worker pool
+	healthCheckWorkersWg sync.WaitGroup
 }
 
 // NewEngine creates a new RecoveryEngine instance.
@@ -331,6 +329,12 @@ func NewEngine(
 		logger,
 	)
 
+	// Create periodic runners (started by their respective loop methods)
+	engine.recoveryRunner = timer.NewPeriodicRunner(ctx, config.GetRecoveryCycleInterval())
+	engine.metadataRefreshRunner = timer.NewPeriodicRunner(ctx, config.GetClusterMetadataRefreshInterval())
+	engine.bookkeepingRunner = timer.NewPeriodicRunner(ctx, config.GetBookkeepingInterval())
+	engine.healthCheckQueueRunner = timer.NewPeriodicRunner(ctx, config.GetPoolerHealthCheckInterval())
+
 	return engine
 }
 
@@ -356,61 +360,78 @@ func (re *Engine) Start() error {
 	// Start health check worker pool
 	re.startHealthCheckWorkers()
 
-	// Start maintenance loop (cluster metadata refresh + bookkeeping)
-	re.wg.Go(func() {
-		re.runMaintenanceLoop()
-	})
+	// Start all periodic runners
+	re.metadataRefreshRunner.Start(func(ctx context.Context) {
+		re.refreshClusterMetadata()
+	}, nil)
 
-	// Start health check ticker loop (queues poolers for health checking)
-	re.wg.Go(func() {
-		re.runHealthCheckTickerLoop()
-	})
+	re.bookkeepingRunner.Start(func(ctx context.Context) {
+		re.runBookkeeping()
+	}, nil)
 
-	// Start recovery loop (problem detection and recovery)
-	re.wg.Go(func() {
-		re.runRecoveryLoop()
-	})
+	re.healthCheckQueueRunner.Start(func(ctx context.Context) {
+		re.queuePoolersHealthCheck()
+	}, nil)
+
+	re.recoveryRunner.Start(func(ctx context.Context) {
+		re.updateRecoveryInterval()
+		re.performRecoveryCycle()
+	}, nil)
 
 	re.logger.Info("recovery engine started successfully")
 	return nil
 }
 
 // Stop gracefully shuts down the RecoveryEngine.
-// It cancels the context and waits for all goroutines to finish.
+// Stops all periodic runners in parallel and waits for in-flight callbacks to complete.
 func (re *Engine) Stop() {
 	re.logger.Info("stopping recovery engine")
+
+	// Cancel context to signal shutdown
 	re.cancel()
-	re.wg.Wait()
+
+	// Stop all runners in parallel for faster shutdown
+	runConcurrently(
+		re.metadataRefreshRunner.Stop,
+		re.bookkeepingRunner.Stop,
+		re.healthCheckQueueRunner.Stop,
+		re.recoveryRunner.Stop,
+	)
+
+	// Wait for health check workers to finish
+	re.healthCheckWorkersWg.Wait()
+
 	re.logger.Info("recovery engine stopped")
 }
 
-// runMaintenanceLoop runs the cluster metadata refresh and bookkeeping tasks.
-// Supports dynamic reloading of shardWatchTargets via SetConfigReloader.
-func (re *Engine) runMaintenanceLoop() {
-	bookkeepingTicker := time.NewTicker(re.config.GetBookkeepingInterval())
-	defer bookkeepingTicker.Stop()
+// StopRecoveryLoop stops the recovery loop.
+// This method blocks until any in-flight recovery cycle completes.
+// Used for testing and future RPC control.
+func (re *Engine) StopRecoveryLoop() {
+	re.recoveryRunner.Stop()
+}
 
-	metadataTicker := time.NewTicker(re.config.GetClusterMetadataRefreshInterval())
-	defer metadataTicker.Stop()
+// StartRecoveryLoop starts the recovery loop.
+// If the loop is already running, this is a no-op.
+// Used for testing and future RPC control.
+func (re *Engine) StartRecoveryLoop() {
+	// Update interval before starting
+	re.updateRecoveryInterval()
 
-	re.logger.Info("maintenance loop started")
+	re.recoveryRunner.Start(func(ctx context.Context) {
+		// Check for interval changes on each cycle (dynamic config)
+		re.updateRecoveryInterval()
+		// Run recovery cycle - PeriodicRunner provides built-in backpressure
+		re.performRecoveryCycle()
+	}, nil)
+}
 
-	// Do initial metadata refresh
-	re.refreshClusterMetadata()
-
-	for {
-		select {
-		case <-re.shutdownCtx.Done():
-			re.logger.Info("maintenance loop stopped")
-			return
-
-		case <-metadataTicker.C:
-			runIfNotRunning(re.logger, &re.metadataRefreshInProgress, "cluster_metadata_refresh", re.refreshClusterMetadata)
-
-		case <-bookkeepingTicker.C:
-			runIfNotRunning(re.logger, &re.bookkeepingInProgress, "bookkeeping", re.runBookkeeping)
-		}
-	}
+// updateRecoveryInterval updates the recovery runner's interval if it has changed.
+// Returns the current interval from config.
+func (re *Engine) updateRecoveryInterval() time.Duration {
+	newInterval := re.config.GetRecoveryCycleInterval()
+	re.recoveryRunner.SetInterval(newInterval)
+	return newInterval
 }
 
 // startHealthCheckWorkers starts the worker pool that consumes from the health check queue.
@@ -418,30 +439,12 @@ func (re *Engine) runMaintenanceLoop() {
 func (re *Engine) startHealthCheckWorkers() {
 	numWorkers := re.config.GetHealthCheckWorkers()
 	for range numWorkers {
-		re.wg.Go(func() {
-			re.handlePoolerHealthChecks()
-		})
+		re.healthCheckWorkersWg.Go(
+			func() {
+				re.handlePoolerHealthChecks()
+			})
 	}
 	re.logger.Info("health check worker pool started", "workers", numWorkers)
-}
-
-// runHealthCheckTickerLoop periodically queues poolers for health checking.
-func (re *Engine) runHealthCheckTickerLoop() {
-	healthCheckTicker := time.NewTicker(re.config.GetPoolerHealthCheckInterval())
-	defer healthCheckTicker.Stop()
-
-	re.logger.Info("health check ticker loop started")
-
-	for {
-		select {
-		case <-re.shutdownCtx.Done():
-			re.logger.Info("health check ticker loop stopped")
-			return
-
-		case <-healthCheckTicker.C:
-			runIfNotRunning(re.logger, &re.healthCheckInProgress, "health_check_queue", re.queuePoolersHealthCheck)
-		}
-	}
 }
 
 // reloadConfigs checks for configuration changes and reloads if necessary.
