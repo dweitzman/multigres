@@ -25,9 +25,28 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 )
+
+// customError is a test helper that implements both error and slog.LogValuer.
+// Used to test wrapping of non-mterrors errors that have LogValuer implementations.
+type customError struct {
+	message string
+	attrs   []slog.Attr
+}
+
+func (e *customError) Error() string {
+	return e.message
+}
+
+func (e *customError) LogValue() slog.Value {
+	attrs := make([]slog.Attr, 0, len(e.attrs)+1)
+	attrs = append(attrs, slog.String("message", e.message))
+	attrs = append(attrs, e.attrs...)
+	return slog.GroupValue(attrs...)
+}
 
 func TestWrapNil(t *testing.T) {
 	got := Wrap(nil, "no error")
@@ -708,6 +727,465 @@ func TestLogValueIntegration(t *testing.T) {
 
 			// Validate the structure
 			tt.validate(t, value)
+		})
+	}
+}
+
+func TestLogValueWithCustomErrorWrapping(t *testing.T) {
+	// Create a custom error with attributes
+	customErr := &customError{
+		message: "connection failed",
+		attrs: []slog.Attr{
+			slog.String("host", "db1.example.com"),
+			slog.Int("port", 5432),
+		},
+	}
+
+	// Wrap it with mterrors adding different attributes
+	wrapped := WrapWithAttrs(customErr, "query failed",
+		slog.String("operation", "connect"),
+		slog.String("timeout", "5s"))
+
+	// Verify the error implements slog.LogValuer
+	lv, ok := wrapped.(slog.LogValuer)
+	assert.True(t, ok, "wrapped error should implement slog.LogValuer")
+
+	// Get the log value
+	value := lv.LogValue()
+
+	// Should be a group with message, attributes, and cause
+	assert.Equal(t, slog.KindGroup, value.Kind())
+	attrs := value.Group()
+	assert.Len(t, attrs, 4) // message + 2 attrs (operation, timeout) + cause
+
+	// Check wrapper's message
+	assert.Equal(t, "message", attrs[0].Key)
+	assert.Equal(t, "query failed", attrs[0].Value.String())
+
+	// Check wrapper's attributes
+	assert.Equal(t, "operation", attrs[1].Key)
+	assert.Equal(t, "connect", attrs[1].Value.String())
+	assert.Equal(t, "timeout", attrs[2].Key)
+	assert.Equal(t, "5s", attrs[2].Value.String())
+
+	// Check cause field
+	assert.Equal(t, "cause", attrs[3].Key)
+
+	// Cause should be a group (from customError's LogValue)
+	cause := attrs[3].Value
+	assert.Equal(t, slog.KindGroup, cause.Kind())
+	causeAttrs := cause.Group()
+	assert.Len(t, causeAttrs, 3) // message + host + port
+
+	// Check custom error's message
+	assert.Equal(t, "message", causeAttrs[0].Key)
+	assert.Equal(t, "connection failed", causeAttrs[0].Value.String())
+
+	// Check custom error's attributes
+	assert.Equal(t, "host", causeAttrs[1].Key)
+	assert.Equal(t, "db1.example.com", causeAttrs[1].Value.String())
+	assert.Equal(t, "port", causeAttrs[2].Key)
+	assert.Equal(t, int64(5432), causeAttrs[2].Value.Int64())
+}
+
+func TestLogValueDeepNesting(t *testing.T) {
+	// Build a 4-level error chain
+	// Level 1: Custom error (base)
+	base := &customError{
+		message: "network error",
+		attrs: []slog.Attr{
+			slog.String("errno", "ECONNREFUSED"),
+		},
+	}
+
+	// Level 2: First mterrors wrap
+	level2 := WrapWithAttrs(base, "connection failed",
+		slog.String("host", "db1.example.com"),
+		slog.Int("port", 5432))
+
+	// Level 3: Second mterrors wrap
+	level3 := WrapWithAttrs(level2, "query execution failed",
+		slog.String("query", "SELECT * FROM users"),
+		slog.Duration("elapsed", 500))
+
+	// Level 4: Third mterrors wrap (outermost)
+	level4 := WrapWithAttrs(level3, "request processing failed",
+		slog.String("request_id", "req-123"),
+		slog.Int("attempt", 3))
+
+	// Verify the error implements slog.LogValuer
+	lv, ok := level4.(slog.LogValuer)
+	assert.True(t, ok, "error should implement slog.LogValuer")
+
+	// Get the log value
+	value := lv.LogValue()
+
+	// Level 4 (outermost): Should be a group with message, attributes, and cause
+	assert.Equal(t, slog.KindGroup, value.Kind())
+	attrs := value.Group()
+	assert.Len(t, attrs, 4) // message + 2 attrs + cause
+	assert.Equal(t, "message", attrs[0].Key)
+	assert.Equal(t, "request processing failed", attrs[0].Value.String())
+	assert.Equal(t, "request_id", attrs[1].Key)
+	assert.Equal(t, "req-123", attrs[1].Value.String())
+	assert.Equal(t, "attempt", attrs[2].Key)
+	assert.Equal(t, int64(3), attrs[2].Value.Int64())
+	assert.Equal(t, "cause", attrs[3].Key)
+
+	// Level 3: Navigate to cause
+	level3Value := attrs[3].Value
+	assert.Equal(t, slog.KindGroup, level3Value.Kind())
+	level3Attrs := level3Value.Group()
+	assert.Len(t, level3Attrs, 4) // message + 2 attrs + cause
+	assert.Equal(t, "message", level3Attrs[0].Key)
+	assert.Equal(t, "query execution failed", level3Attrs[0].Value.String())
+	assert.Equal(t, "query", level3Attrs[1].Key)
+	assert.Equal(t, "SELECT * FROM users", level3Attrs[1].Value.String())
+	assert.Equal(t, "elapsed", level3Attrs[2].Key)
+	assert.Equal(t, "cause", level3Attrs[3].Key)
+
+	// Level 2: Navigate to cause
+	level2Value := level3Attrs[3].Value
+	assert.Equal(t, slog.KindGroup, level2Value.Kind())
+	level2Attrs := level2Value.Group()
+	assert.Len(t, level2Attrs, 4) // message + 2 attrs + cause
+	assert.Equal(t, "message", level2Attrs[0].Key)
+	assert.Equal(t, "connection failed", level2Attrs[0].Value.String())
+	assert.Equal(t, "host", level2Attrs[1].Key)
+	assert.Equal(t, "db1.example.com", level2Attrs[1].Value.String())
+	assert.Equal(t, "port", level2Attrs[2].Key)
+	assert.Equal(t, int64(5432), level2Attrs[2].Value.Int64())
+	assert.Equal(t, "cause", level2Attrs[3].Key)
+
+	// Level 1 (base): Navigate to cause
+	level1Value := level2Attrs[3].Value
+	assert.Equal(t, slog.KindGroup, level1Value.Kind())
+	level1Attrs := level1Value.Group()
+	assert.Len(t, level1Attrs, 2) // message + 1 attr
+	assert.Equal(t, "message", level1Attrs[0].Key)
+	assert.Equal(t, "network error", level1Attrs[0].Value.String())
+	assert.Equal(t, "errno", level1Attrs[1].Key)
+	assert.Equal(t, "ECONNREFUSED", level1Attrs[1].Value.String())
+}
+
+func TestLogValueDuplicateAttributeNames(t *testing.T) {
+	// Create a custom error with a "database" attribute
+	customErr := &customError{
+		message: "connection timeout",
+		attrs: []slog.Attr{
+			slog.String("database", "inner-db"),
+			slog.String("host", "db1.example.com"),
+		},
+	}
+
+	// Wrap with mterrors also adding a "database" attribute
+	wrapped := WrapWithAttrs(customErr, "query failed",
+		slog.String("database", "outer-db"),
+		slog.String("query", "SELECT 1"))
+
+	// Verify the error implements slog.LogValuer
+	lv, ok := wrapped.(slog.LogValuer)
+	assert.True(t, ok, "error should implement slog.LogValuer")
+
+	// Get the log value
+	value := lv.LogValue()
+
+	// Outer group should have the outer "database" value
+	assert.Equal(t, slog.KindGroup, value.Kind())
+	attrs := value.Group()
+	assert.Len(t, attrs, 4) // message + 2 attrs + cause
+	assert.Equal(t, "message", attrs[0].Key)
+	assert.Equal(t, "query failed", attrs[0].Value.String())
+
+	// Outer "database" attribute
+	assert.Equal(t, "database", attrs[1].Key)
+	assert.Equal(t, "outer-db", attrs[1].Value.String())
+
+	assert.Equal(t, "query", attrs[2].Key)
+	assert.Equal(t, "SELECT 1", attrs[2].Value.String())
+	assert.Equal(t, "cause", attrs[3].Key)
+
+	// Inner group (cause) should have the inner "database" value
+	cause := attrs[3].Value
+	assert.Equal(t, slog.KindGroup, cause.Kind())
+	causeAttrs := cause.Group()
+	assert.Len(t, causeAttrs, 3) // message + 2 attrs
+	assert.Equal(t, "message", causeAttrs[0].Key)
+	assert.Equal(t, "connection timeout", causeAttrs[0].Value.String())
+
+	// Inner "database" attribute (different value)
+	assert.Equal(t, "database", causeAttrs[1].Key)
+	assert.Equal(t, "inner-db", causeAttrs[1].Value.String())
+
+	assert.Equal(t, "host", causeAttrs[2].Key)
+	assert.Equal(t, "db1.example.com", causeAttrs[2].Value.String())
+
+	// Both "database" values exist but at different nesting levels
+	// This demonstrates that nesting prevents attribute name collisions
+}
+
+func TestLogValueDuplicateAttributesMultipleLevels(t *testing.T) {
+	// Build a 3-level chain where each level has an "attempt" attribute with different values
+	// Level 1: Base error
+	base := &customError{
+		message: "network error",
+		attrs: []slog.Attr{
+			slog.Int("attempt", 1),
+			slog.String("detail", "base-detail"),
+		},
+	}
+
+	// Level 2: First wrap
+	level2 := WrapWithAttrs(base, "connection failed",
+		slog.Int("attempt", 2),
+		slog.String("detail", "level2-detail"))
+
+	// Level 3: Second wrap (outermost)
+	level3 := WrapWithAttrs(level2, "query failed",
+		slog.Int("attempt", 3),
+		slog.String("detail", "level3-detail"))
+
+	// Verify the error implements slog.LogValuer
+	lv, ok := level3.(slog.LogValuer)
+	assert.True(t, ok, "error should implement slog.LogValuer")
+
+	// Get the log value
+	value := lv.LogValue()
+
+	// Level 3 (outermost): Should have attempt=3
+	assert.Equal(t, slog.KindGroup, value.Kind())
+	level3Attrs := value.Group()
+	assert.Len(t, level3Attrs, 4) // message + 2 attrs + cause
+	assert.Equal(t, "message", level3Attrs[0].Key)
+	assert.Equal(t, "query failed", level3Attrs[0].Value.String())
+	assert.Equal(t, "attempt", level3Attrs[1].Key)
+	assert.Equal(t, int64(3), level3Attrs[1].Value.Int64())
+	assert.Equal(t, "detail", level3Attrs[2].Key)
+	assert.Equal(t, "level3-detail", level3Attrs[2].Value.String())
+	assert.Equal(t, "cause", level3Attrs[3].Key)
+
+	// Level 2: Should have attempt=2
+	level2Value := level3Attrs[3].Value
+	assert.Equal(t, slog.KindGroup, level2Value.Kind())
+	level2Attrs := level2Value.Group()
+	assert.Len(t, level2Attrs, 4) // message + 2 attrs + cause
+	assert.Equal(t, "message", level2Attrs[0].Key)
+	assert.Equal(t, "connection failed", level2Attrs[0].Value.String())
+	assert.Equal(t, "attempt", level2Attrs[1].Key)
+	assert.Equal(t, int64(2), level2Attrs[1].Value.Int64())
+	assert.Equal(t, "detail", level2Attrs[2].Key)
+	assert.Equal(t, "level2-detail", level2Attrs[2].Value.String())
+	assert.Equal(t, "cause", level2Attrs[3].Key)
+
+	// Level 1 (base): Should have attempt=1
+	level1Value := level2Attrs[3].Value
+	assert.Equal(t, slog.KindGroup, level1Value.Kind())
+	level1Attrs := level1Value.Group()
+	assert.Len(t, level1Attrs, 3) // message + 2 attrs
+	assert.Equal(t, "message", level1Attrs[0].Key)
+	assert.Equal(t, "network error", level1Attrs[0].Value.String())
+	assert.Equal(t, "attempt", level1Attrs[1].Key)
+	assert.Equal(t, int64(1), level1Attrs[1].Value.Int64())
+	assert.Equal(t, "detail", level1Attrs[2].Key)
+	assert.Equal(t, "base-detail", level1Attrs[2].Value.String())
+
+	// Each level maintains its own "attempt" value
+	// This demonstrates that duplicate keys across levels don't collide
+}
+
+// testHandler is a slog.Handler implementation that captures logged records for testing.
+type testHandler struct {
+	records []testRecord
+}
+
+type testRecord struct {
+	level slog.Level
+	msg   string
+	attrs []slog.Attr
+}
+
+func (h *testHandler) Enabled(_ context.Context, _ slog.Level) bool {
+	return true
+}
+
+func (h *testHandler) Handle(_ context.Context, r slog.Record) error {
+	record := testRecord{
+		level: r.Level,
+		msg:   r.Message,
+		attrs: make([]slog.Attr, 0, r.NumAttrs()),
+	}
+	r.Attrs(func(a slog.Attr) bool {
+		// Resolve LogValuer values
+		a.Value = a.Value.Resolve()
+		record.attrs = append(record.attrs, a)
+		return true
+	})
+	h.records = append(h.records, record)
+	return nil
+}
+
+func (h *testHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	// For this test, we don't need to implement WithAttrs
+	return h
+}
+
+func (h *testHandler) WithGroup(name string) slog.Handler {
+	// For this test, we don't need to implement WithGroup
+	return h
+}
+
+func TestSlogIntegrationWithCustomErrors(t *testing.T) {
+	tests := []struct {
+		name     string
+		buildErr func() error
+		validate func(t *testing.T, attrs []slog.Attr)
+	}{
+		{
+			name: "custom error wrapped by mterrors",
+			buildErr: func() error {
+				customErr := &customError{
+					message: "connection timeout",
+					attrs: []slog.Attr{
+						slog.String("host", "db1.example.com"),
+						slog.Int("port", 5432),
+					},
+				}
+				return WrapWithAttrs(customErr, "query failed",
+					slog.String("query", "SELECT * FROM users"),
+					slog.Duration("timeout", 5000))
+			},
+			validate: func(t *testing.T, attrs []slog.Attr) {
+				// Should have an "error" attribute
+				require.Len(t, attrs, 1)
+				assert.Equal(t, "error", attrs[0].Key)
+
+				// The error attribute should be a group (from LogValue)
+				errValue := attrs[0].Value
+				assert.Equal(t, slog.KindGroup, errValue.Kind())
+
+				// Check the structure
+				errAttrs := errValue.Group()
+				require.Len(t, errAttrs, 4) // message + 2 attrs + cause
+
+				// Wrapper level
+				assert.Equal(t, "message", errAttrs[0].Key)
+				assert.Equal(t, "query failed", errAttrs[0].Value.String())
+				assert.Equal(t, "query", errAttrs[1].Key)
+				assert.Equal(t, "timeout", errAttrs[2].Key)
+				assert.Equal(t, "cause", errAttrs[3].Key)
+
+				// Cause level (customError)
+				cause := errAttrs[3].Value
+				assert.Equal(t, slog.KindGroup, cause.Kind())
+				causeAttrs := cause.Group()
+				assert.Len(t, causeAttrs, 3) // message + host + port
+				assert.Equal(t, "message", causeAttrs[0].Key)
+				assert.Equal(t, "connection timeout", causeAttrs[0].Value.String())
+				assert.Equal(t, "host", causeAttrs[1].Key)
+				assert.Equal(t, "port", causeAttrs[2].Key)
+			},
+		},
+		{
+			name: "deep nesting (3 levels)",
+			buildErr: func() error {
+				base := &customError{
+					message: "network error",
+					attrs: []slog.Attr{
+						slog.String("errno", "ECONNREFUSED"),
+					},
+				}
+				level2 := WrapWithAttrs(base, "connection failed",
+					slog.String("host", "db1.example.com"))
+				return WrapWithAttrs(level2, "query failed",
+					slog.String("query", "SELECT 1"))
+			},
+			validate: func(t *testing.T, attrs []slog.Attr) {
+				// Navigate through the nested structure
+				require.Len(t, attrs, 1)
+				assert.Equal(t, "error", attrs[0].Key)
+
+				// Level 3 (outermost)
+				level3 := attrs[0].Value
+				assert.Equal(t, slog.KindGroup, level3.Kind())
+				level3Attrs := level3.Group()
+				assert.Len(t, level3Attrs, 3) // message + query + cause
+				assert.Equal(t, "query failed", level3Attrs[0].Value.String())
+				assert.Equal(t, "query", level3Attrs[1].Key)
+
+				// Level 2
+				level2 := level3Attrs[2].Value
+				assert.Equal(t, slog.KindGroup, level2.Kind())
+				level2Attrs := level2.Group()
+				assert.Len(t, level2Attrs, 3) // message + host + cause
+				assert.Equal(t, "connection failed", level2Attrs[0].Value.String())
+				assert.Equal(t, "host", level2Attrs[1].Key)
+
+				// Level 1 (base)
+				level1 := level2Attrs[2].Value
+				assert.Equal(t, slog.KindGroup, level1.Kind())
+				level1Attrs := level1.Group()
+				assert.Len(t, level1Attrs, 2) // message + errno
+				assert.Equal(t, "network error", level1Attrs[0].Value.String())
+				assert.Equal(t, "errno", level1Attrs[1].Key)
+			},
+		},
+		{
+			name: "duplicate attribute names at different levels",
+			buildErr: func() error {
+				customErr := &customError{
+					message: "base error",
+					attrs: []slog.Attr{
+						slog.String("database", "inner-db"),
+					},
+				}
+				return WrapWithAttrs(customErr, "wrapped error",
+					slog.String("database", "outer-db"))
+			},
+			validate: func(t *testing.T, attrs []slog.Attr) {
+				require.Len(t, attrs, 1)
+				assert.Equal(t, "error", attrs[0].Key)
+
+				// Outer level has "outer-db"
+				outer := attrs[0].Value
+				assert.Equal(t, slog.KindGroup, outer.Kind())
+				outerAttrs := outer.Group()
+				assert.Len(t, outerAttrs, 3) // message + database + cause
+				assert.Equal(t, "database", outerAttrs[1].Key)
+				assert.Equal(t, "outer-db", outerAttrs[1].Value.String())
+
+				// Inner level has "inner-db"
+				inner := outerAttrs[2].Value
+				assert.Equal(t, slog.KindGroup, inner.Kind())
+				innerAttrs := inner.Group()
+				assert.Len(t, innerAttrs, 2) // message + database
+				assert.Equal(t, "database", innerAttrs[1].Key)
+				assert.Equal(t, "inner-db", innerAttrs[1].Value.String())
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create test handler
+			handler := &testHandler{}
+			logger := slog.New(handler)
+
+			// Build error
+			err := tt.buildErr()
+
+			// Log the error
+			logger.Error("operation failed", "error", err)
+
+			// Verify we captured one record
+			require.Len(t, handler.records, 1)
+			record := handler.records[0]
+
+			// Verify log level and message
+			assert.Equal(t, slog.LevelError, record.level)
+			assert.Equal(t, "operation failed", record.msg)
+
+			// Validate attributes
+			tt.validate(t, record.attrs)
 		})
 	}
 }
