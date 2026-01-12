@@ -434,7 +434,7 @@ func TestValidateAndUpdateTerm(t *testing.T) {
 
 			// Start and wait for ready
 			senv := servenv.NewServEnv(viperutil.NewRegistry())
-			go manager.Start(senv)
+			go manager.Start(t.Context(), senv)
 			require.Eventually(t, func() bool {
 				return manager.GetState() == ManagerStateReady
 			}, 5*time.Second, 100*time.Millisecond, "Manager should reach Ready state")
@@ -853,7 +853,7 @@ func TestEnableMonitor(t *testing.T) {
 
 	// Initialize the manager context (simulating Open without connecting to DB)
 	manager.mu.Lock()
-	manager.ctx, manager.cancel = context.WithCancel(context.TODO())
+	manager.closeCtx, manager.cancel = context.WithCancel(context.TODO())
 	manager.isOpen = true
 	manager.mu.Unlock()
 	defer manager.cancel()
@@ -900,7 +900,7 @@ func TestEnableMonitor_Idempotent(t *testing.T) {
 
 	// Initialize the manager context (simulating Open without connecting to DB)
 	manager.mu.Lock()
-	manager.ctx, manager.cancel = context.WithCancel(context.TODO())
+	manager.closeCtx, manager.cancel = context.WithCancel(context.TODO())
 	manager.isOpen = true
 	manager.mu.Unlock()
 	defer manager.cancel()
@@ -951,7 +951,7 @@ func TestDisableMonitor(t *testing.T) {
 
 	// Initialize the manager context (simulating Open without connecting to DB)
 	manager.mu.Lock()
-	manager.ctx, manager.cancel = context.WithCancel(context.TODO())
+	manager.closeCtx, manager.cancel = context.WithCancel(context.TODO())
 	manager.isOpen = true
 	manager.mu.Unlock()
 	defer manager.cancel()
@@ -998,7 +998,7 @@ func TestDisableMonitor_Idempotent(t *testing.T) {
 
 	// Initialize the manager context (simulating Open without connecting to DB)
 	manager.mu.Lock()
-	manager.ctx, manager.cancel = context.WithCancel(context.TODO())
+	manager.closeCtx, manager.cancel = context.WithCancel(context.TODO())
 	manager.isOpen = true
 	manager.mu.Unlock()
 	defer manager.cancel()
@@ -1048,7 +1048,7 @@ func TestEnableDisableMonitor_Cycle(t *testing.T) {
 
 	// Initialize the manager context (simulating Open without connecting to DB)
 	manager.mu.Lock()
-	manager.ctx, manager.cancel = context.WithCancel(context.TODO())
+	manager.closeCtx, manager.cancel = context.WithCancel(context.TODO())
 	manager.isOpen = true
 	manager.mu.Unlock()
 	defer manager.cancel()
@@ -1097,7 +1097,7 @@ func TestEnableMonitor_WhenNotOpen(t *testing.T) {
 
 	// Initialize the manager context but don't set isOpen
 	manager.mu.Lock()
-	manager.ctx, manager.cancel = context.WithCancel(context.TODO())
+	manager.closeCtx, manager.cancel = context.WithCancel(context.TODO())
 	// isOpen is false by default
 	manager.mu.Unlock()
 	defer manager.cancel()

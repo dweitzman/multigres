@@ -99,7 +99,7 @@ func setupManagerWithMockDB(t *testing.T, mockQueryService *mock.QueryService) (
 	pm.qsc = &mockPoolerController{queryService: mockQueryService}
 
 	senv := servenv.NewServEnv(viperutil.NewRegistry())
-	pm.Start(senv)
+	pm.Start(t.Context(), senv)
 
 	require.Eventually(t, func() bool {
 		return pm.GetState() == ManagerStateReady

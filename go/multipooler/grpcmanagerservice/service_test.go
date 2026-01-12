@@ -97,7 +97,7 @@ func TestManagerServiceMethods_NotImplemented(t *testing.T) {
 
 	// Start the async loader
 	senv := servenv.NewServEnv(viperutil.NewRegistry())
-	go pm.Start(senv)
+	go pm.Start(t.Context(), senv)
 
 	// Wait for the manager to become ready
 	require.Eventually(t, func() bool {

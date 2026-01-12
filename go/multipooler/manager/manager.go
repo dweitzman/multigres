@@ -34,6 +34,7 @@ import (
 	"github.com/multigres/multigres/go/multipooler/poolerserver"
 	"github.com/multigres/multigres/go/tools/grpccommon"
 	"github.com/multigres/multigres/go/tools/retry"
+	"github.com/multigres/multigres/go/tools/telemetry"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -97,7 +98,7 @@ type MultiPoolerManager struct {
 	consensusState  *ConsensusState
 	topoLoaded      bool
 	consensusLoaded bool
-	ctx             context.Context
+	closeCtx        context.Context
 	cancel          context.CancelFunc
 	loadTimeout     time.Duration
 
@@ -216,8 +217,8 @@ func NewMultiPoolerManagerWithTimeout(logger *slog.Logger, config *Config, loadT
 		readyChan:            make(chan struct{}),
 		// We create a dummy context because some unit tests need them.
 		// These will be overwritten when Open gets called.
-		ctx:    ctx,
-		cancel: cancel,
+		closeCtx: ctx,
+		cancel:   cancel,
 	}
 
 	// Create the query service controller with the pool manager
@@ -289,14 +290,14 @@ func (pm *MultiPoolerManager) Open() error {
 	}
 
 	pm.logger.Info("MultiPoolerManager: opening")
-	pm.ctx, pm.cancel = context.WithCancel(context.TODO())
+	pm.closeCtx, pm.cancel = context.WithCancel(context.TODO())
 
 	if err := pm.openConnectionsLocked(); err != nil {
 		return err
 	}
 
 	// Start background PostgreSQL monitoring and auto-recovery
-	monitorCtx, monitorCancel := context.WithCancel(pm.ctx)
+	monitorCtx, monitorCancel := context.WithCancel(pm.closeCtx)
 	pm.monitorCancel = monitorCancel
 	go pm.MonitorPostgres(monitorCtx)
 
@@ -362,7 +363,7 @@ func (pm *MultiPoolerManager) openConnectionsLocked() error {
 			Port:       pm.config.PgPort,
 			Database:   pm.config.Database,
 		}
-		pm.connPoolMgr.Open(pm.ctx, connConfig)
+		pm.connPoolMgr.Open(pm.closeCtx, connConfig)
 		pm.logger.Info("Connection pool manager opened")
 	}
 
@@ -666,7 +667,7 @@ func (pm *MultiPoolerManager) loadMultiPoolerFromTopo() {
 	}
 
 	// Set timeout for the entire loading process
-	timeoutCtx, timeoutCancel := context.WithTimeout(pm.ctx, pm.loadTimeout)
+	timeoutCtx, timeoutCancel := context.WithTimeout(pm.closeCtx, pm.loadTimeout)
 	defer timeoutCancel()
 
 	r := retry.New(100*time.Millisecond, 30*time.Second)
@@ -680,7 +681,7 @@ func (pm *MultiPoolerManager) loadMultiPoolerFromTopo() {
 			return
 		}
 
-		ctx, cancel := context.WithTimeout(pm.ctx, 5*time.Second)
+		ctx, cancel := context.WithTimeout(pm.closeCtx, 5*time.Second)
 		mp, err := pm.topoClient.GetMultiPooler(ctx, pm.serviceID)
 		cancel()
 
@@ -696,7 +697,7 @@ func (pm *MultiPoolerManager) loadMultiPoolerFromTopo() {
 			return
 		}
 
-		ctx, cancel = context.WithTimeout(pm.ctx, 5*time.Second)
+		ctx, cancel = context.WithTimeout(pm.closeCtx, 5*time.Second)
 		db, err := pm.topoClient.GetDatabase(ctx, database)
 		cancel()
 		if err != nil {
@@ -890,7 +891,7 @@ func (pm *MultiPoolerManager) validateTermExactMatch(ctx context.Context, reques
 // loadConsensusTermFromDisk loads the consensus term from local disk asynchronously
 func (pm *MultiPoolerManager) loadConsensusTermFromDisk() {
 	// Set timeout for the entire loading process
-	timeoutCtx, timeoutCancel := context.WithTimeout(pm.ctx, pm.loadTimeout)
+	timeoutCtx, timeoutCancel := context.WithTimeout(pm.closeCtx, pm.loadTimeout)
 	defer timeoutCancel()
 
 	r := retry.New(100*time.Millisecond, 30*time.Second)
@@ -1442,17 +1443,26 @@ func (pm *MultiPoolerManager) ReplicationLag(ctx context.Context) (time.Duration
 }
 
 // Start initializes the MultiPoolerManager
-func (pm *MultiPoolerManager) Start(senv *servenv.ServEnv) {
+func (pm *MultiPoolerManager) Start(ctx context.Context, senv *servenv.ServEnv) {
+	ctx, span := telemetry.Tracer().Start(ctx, "multipooler/manager/start")
+	defer span.End()
+
+	// Best-effort: ensure postgres is running during initialization (traced)
+	// This handles restore-from-backup and/or starting postgres if needed
+	// If this fails, MonitorPostgres will retry later
+	pm.ensurePostgresRunningDuringInit(ctx)
+
 	// Open the database connections, connection pool manager, and start background operations
 	// TODO: This should be managed by a proper state manager (like tm_state.go)
 	if err := pm.Open(); err != nil {
-		pm.logger.Error("Failed to open manager during startup", "error", err)
+		pm.logger.ErrorContext(ctx, "Failed to open manager during startup", "error", err)
 		// Don't fail startup if Open fails - will retry on demand
 	}
 
 	// Start loading multipooler record from topology asynchronously
 	go pm.loadMultiPoolerFromTopo()
 	// Start loading consensus term from local disk asynchronously (only if consensus is enabled)
+	// This runs AFTER ensurePostgresRunningDuringInit completes, so any restore has finished
 	if pm.config.ConsensusEnabled {
 		go pm.loadConsensusTermFromDisk()
 	}
@@ -1460,7 +1470,7 @@ func (pm *MultiPoolerManager) Start(senv *servenv.ServEnv) {
 	senv.OnRunE(func() error {
 		// Block until manager is ready or error before registering gRPC services
 		// Use load timeout from manager configuration
-		waitCtx, cancel := context.WithTimeout(pm.ctx, pm.loadTimeout)
+		waitCtx, cancel := context.WithTimeout(pm.closeCtx, pm.loadTimeout)
 		defer cancel()
 
 		pm.logger.Info("Waiting for manager to reach ready state before registering gRPC services")
@@ -1511,6 +1521,76 @@ func (pm *MultiPoolerManager) WaitUntilReady(ctx context.Context) error {
 			return fmt.Errorf("unexpected state after ready signal: %s", state)
 		}
 	}
+}
+
+// ensurePostgresRunningDuringInit performs best-effort initialization of PostgreSQL during startup.
+// It checks the current state and takes action if needed (restore from backup, start postgres).
+// This runs synchronously during Start() with the traced context, creating proper parent-child
+// span relationships. Errors are logged but don't fail startup - MonitorPostgres will retry.
+func (pm *MultiPoolerManager) ensurePostgresRunningDuringInit(ctx context.Context) {
+	const (
+		initTimeout   = 10 * time.Second // Maximum time to wait for pgctld during init
+		retryInterval = 2 * time.Second  // Time between retry attempts
+	)
+
+	// Create a time-limited context for initialization attempts
+	initCtx, cancel := context.WithTimeout(ctx, initTimeout)
+	defer cancel()
+
+	// Retry discovery with time limit to give pgctld time to become available
+	r := retry.New(1*time.Millisecond, retryInterval)
+	var currentState postgresState
+	var pgctldBecameAvailable bool
+
+	for attempt, err := range r.Attempts(initCtx) {
+		if err != nil {
+			pm.logger.InfoContext(ctx, "ensurePostgresRunningDuringInit: timeout waiting for pgctld", "attempts", attempt)
+			break
+		}
+
+		currentState = pm.discoverPostgresState(ctx)
+
+		if currentState.pgctldAvailable {
+			pgctldBecameAvailable = true
+			pm.logger.InfoContext(ctx, "ensurePostgresRunningDuringInit: pgctld available", "attempts", attempt+1)
+			break
+		}
+
+		pm.logger.InfoContext(ctx, "ensurePostgresRunningDuringInit: pgctld not yet available, retrying", "attempt", attempt+1)
+	}
+
+	// Pgctld unavailable after timeout: Log and return
+	if !pgctldBecameAvailable {
+		pm.logger.InfoContext(ctx, "ensurePostgresRunningDuringInit: pgctld unavailable after timeout, skipping initialization")
+		return
+	}
+
+	// Postgres is running: Nothing to do
+	if currentState.postgresRunning {
+		pm.logger.InfoContext(ctx, "ensurePostgresRunningDuringInit: PostgreSQL already running")
+		return
+	}
+
+	// Directory initialized but Postgres not running: Start postgres
+	if currentState.dirInitialized {
+		pm.logger.InfoContext(ctx, "ensurePostgresRunningDuringInit: PostgreSQL initialized but not running, starting")
+		if err := pm.startPostgres(ctx); err != nil {
+			pm.logger.WarnContext(ctx, "ensurePostgresRunningDuringInit: failed to start PostgreSQL, will retry later", "error", err)
+		}
+		return
+	}
+
+	// Directory not initialized, backup available: Restore from backup and start
+	if currentState.backupsAvailable {
+		pm.logger.InfoContext(ctx, "ensurePostgresRunningDuringInit: restoring from backup")
+		if err := pm.restoreAndStartPostgres(ctx); err != nil {
+			pm.logger.WarnContext(ctx, "ensurePostgresRunningDuringInit: failed to restore from backup, will retry later", "error", err)
+		}
+		return
+	}
+
+	// Directory not initialized, no backup available: Log and return
+	pm.logger.InfoContext(ctx, "ensurePostgresRunningDuringInit: directory not initialized and no backups available")
 }
 
 // postgresState represents the state of PostgreSQL for monitoring
@@ -1792,7 +1872,7 @@ func (pm *MultiPoolerManager) enableMonitorInternal() error {
 	pm.logger.Info("Enabling MonitorPostgres")
 
 	// Create a new cancelable context for the monitor
-	monitorCtx, monitorCancel := context.WithCancel(pm.ctx)
+	monitorCtx, monitorCancel := context.WithCancel(pm.closeCtx)
 	pm.monitorCancel = monitorCancel
 
 	// Start the monitoring goroutine
