@@ -200,11 +200,19 @@ spec:
             - name: pg-hba-template
               mountPath: /etc/pgctld
               readOnly: true
+            - name: sampling-config
+              mountPath: /etc/otel
+              readOnly: true
           env:
             - name: POD_NAME
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
+            - name: OTEL_SERVICE_NAME
+              value: "pgctld"
+          envFrom:
+            - configMapRef:
+                name: otel-config
 
         - name: pgbackrest-server
           image: docker.io/multigres/multigres:latest
