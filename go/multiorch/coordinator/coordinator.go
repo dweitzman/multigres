@@ -121,7 +121,7 @@ func (c *Coordinator) AppointLeader(ctx context.Context, shardID string, cohort 
 	c.logger.InfoContext(ctx, "EstablishLeader succeeded", "shard", shardID)
 
 	// Update topology to reflect new primary
-	if err := c.updateTopology(ctx, candidate, standbys); err != nil {
+	if err := c.updateTopology(ctx, candidate, standbys, term); err != nil {
 		// Log but don't fail - the leader is established, topology is just metadata
 		c.logger.WarnContext(ctx, "Failed to update topology",
 			"shard", shardID,
@@ -140,20 +140,24 @@ func (c *Coordinator) AppointLeader(ctx context.Context, shardID string, cohort 
 }
 
 // updateTopology updates the topology store to reflect the new primary and standbys.
-func (c *Coordinator) updateTopology(ctx context.Context, candidate *multiorchdatapb.PoolerHealthState, standbys []*multiorchdatapb.PoolerHealthState) error {
-	// Update candidate to PRIMARY type
+// The term is stored in the primary's topology entry to enable CAS semantics:
+// only higher-term multiorch instances can override PRIMARY assignments.
+func (c *Coordinator) updateTopology(ctx context.Context, candidate *multiorchdatapb.PoolerHealthState, standbys []*multiorchdatapb.PoolerHealthState, term int64) error {
+	// Update candidate to PRIMARY type with term
 	_, err := c.topoStore.UpdateMultiPoolerFields(ctx, candidate.MultiPooler.Id, func(mp *clustermetadatapb.MultiPooler) error {
 		mp.Type = clustermetadatapb.PoolerType_PRIMARY
+		mp.PrimaryTerm = term
 		return nil
 	})
 	if err != nil {
 		return mterrors.Wrap(err, "failed to update candidate to PRIMARY")
 	}
 
-	// Update standbys to REPLICA type
+	// Update standbys to REPLICA type (replicas have primary_term = 0)
 	for _, standby := range standbys {
 		_, err := c.topoStore.UpdateMultiPoolerFields(ctx, standby.MultiPooler.Id, func(mp *clustermetadatapb.MultiPooler) error {
 			mp.Type = clustermetadatapb.PoolerType_REPLICA
+			mp.PrimaryTerm = 0
 			return nil
 		})
 		if err != nil {

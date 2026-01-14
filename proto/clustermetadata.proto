@@ -110,6 +110,13 @@ message MultiPooler {
   // PoolerDir is used by pgBackRest to compute the primary's data directory.
   string pooler_dir = 10;
 
+  // primary_term is the consensus term when this pooler became PRIMARY.
+  // Used for compare-and-swap semantics: only update Type to PRIMARY if our term >= stored term.
+  // This prevents lower-term multiorch instances from overwriting decisions made by higher-term instances.
+  // Only meaningful when Type = PRIMARY. Replicas have primary_term = 0.
+  // Similar to Vitess primary_term_start_time, but uses term numbers instead of timestamps for clock-independence.
+  int64 primary_term = 11;
+
 }
 
 // MultiGateway represents metadata about a running multigateway component instance in the cluster.

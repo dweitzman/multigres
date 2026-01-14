@@ -46,6 +46,9 @@ const (
 	ProblemPrimaryMisconfigured      ProblemCode = "PrimaryMisconfigured"
 	ProblemPrimaryIsReadOnly         ProblemCode = "PrimaryIsReadOnly"
 
+	// Topology type mismatch (topology says PRIMARY but postgres is replica, or vice versa).
+	ProblemPrimaryTypeMismatch ProblemCode = "PrimaryTypeMismatch"
+
 	// Replica problems (require healthy primary).
 	ProblemReplicaNotReplicating   ProblemCode = "ReplicaNotReplicating"
 	ProblemReplicaNotInStandbyList ProblemCode = "ReplicaNotInStandbyList"

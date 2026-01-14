@@ -365,7 +365,9 @@ func (mp *MultiPooler) Init(startCtx context.Context) error {
 						mp.Hostname = multipooler.Hostname
 						mp.ServingStatus = multipooler.ServingStatus
 						mp.PoolerDir = multipooler.PoolerDir
-						mp.Type = clustermetadatapb.PoolerType_REPLICA
+						// Note: Type is owned by multiorch and should not be updated here
+						// On first registration (line 294), Type is set to REPLICA
+						// Thereafter, multiorch manages Type changes via recovery actions
 						return nil
 					})
 				return err

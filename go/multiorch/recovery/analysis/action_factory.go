@@ -75,6 +75,11 @@ func (f *RecoveryActionFactory) NewDemoteStalePrimaryAction() types.RecoveryActi
 	return actions.NewDemoteStalePrimaryAction(f.rpcClient, f.poolerStore, f.topoStore, f.logger)
 }
 
+// NewSyncTopologyTypeAction creates an action to sync topology type to match postgres role.
+func (f *RecoveryActionFactory) NewSyncTopologyTypeAction(currentTerm int64) types.RecoveryAction {
+	return actions.NewSyncTopologyTypeAction(f.poolerStore, f.topoStore, f.logger, currentTerm)
+}
+
 // Logger returns the factory's logger for use by analyzers.
 func (f *RecoveryActionFactory) Logger() *slog.Logger {
 	return f.logger

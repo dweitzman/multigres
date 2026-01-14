@@ -560,7 +560,13 @@ type MultiPooler struct {
 	// Map of named ports. These are ports that the pooler exposes. Initially, this will only be gRPC
 	PortMap map[string]int32 `protobuf:"bytes,9,rep,name=port_map,json=portMap,proto3" json:"port_map,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`
 	// PoolerDir is used by pgBackRest to compute the primary's data directory.
-	PoolerDir     string `protobuf:"bytes,10,opt,name=pooler_dir,json=poolerDir,proto3" json:"pooler_dir,omitempty"`
+	PoolerDir string `protobuf:"bytes,10,opt,name=pooler_dir,json=poolerDir,proto3" json:"pooler_dir,omitempty"`
+	// primary_term is the consensus term when this pooler became PRIMARY.
+	// Used for compare-and-swap semantics: only update Type to PRIMARY if our term >= stored term.
+	// This prevents lower-term multiorch instances from overwriting decisions made by higher-term instances.
+	// Only meaningful when Type = PRIMARY. Replicas have primary_term = 0.
+	// Similar to Vitess primary_term_start_time, but uses term numbers instead of timestamps for clock-independence.
+	PrimaryTerm   int64 `protobuf:"varint,11,opt,name=primary_term,json=primaryTerm,proto3" json:"primary_term,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -663,6 +669,13 @@ func (x *MultiPooler) GetPoolerDir() string {
 		return x.PoolerDir
 	}
 	return ""
+}
+
+func (x *MultiPooler) GetPrimaryTerm() int64 {
+	if x != nil {
+		return x.PrimaryTerm
+	}
+	return 0
 }
 
 // MultiGateway represents metadata about a running multigateway component instance in the cluster.
@@ -1099,7 +1112,7 @@ const file_clustermetadata_proto_rawDesc = "" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12'\n" +
 	"\x0fbackup_location\x18\x02 \x01(\tR\x0ebackupLocation\x12+\n" +
 	"\x11durability_policy\x18\x03 \x01(\tR\x10durabilityPolicy\x12\x14\n" +
-	"\x05cells\x18\x04 \x03(\tR\x05cells\"\xf8\x03\n" +
+	"\x05cells\x18\x04 \x03(\tR\x05cells\"\x9b\x04\n" +
 	"\vMultiPooler\x12#\n" +
 	"\x02id\x18\x01 \x01(\v2\x13.clustermetadata.IDR\x02id\x12\x1a\n" +
 	"\bdatabase\x18\x02 \x01(\tR\bdatabase\x12\x1f\n" +
@@ -1113,7 +1126,8 @@ const file_clustermetadata_proto_rawDesc = "" +
 	"\bport_map\x18\t \x03(\v2).clustermetadata.MultiPooler.PortMapEntryR\aportMap\x12\x1d\n" +
 	"\n" +
 	"pooler_dir\x18\n" +
-	" \x01(\tR\tpoolerDir\x1a:\n" +
+	" \x01(\tR\tpoolerDir\x12!\n" +
+	"\fprimary_term\x18\v \x01(\x03R\vprimaryTerm\x1a:\n" +
 	"\fPortMapEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\x05R\x05value:\x028\x01\"\xd2\x01\n" +
