@@ -25,7 +25,7 @@ ETCD_VER = v3.6.4
 export ETCD_VER
 
 # List of all commands to build
-CMDS = multigateway multipooler pgctld multiorch multigres multiadmin
+CMDS = multigateway multipooler pgctld multiorch multigres multiadmin grpcfaultproxy
 BIN_DIR = bin
 
 .PHONY: all build build-all clean images install test test-coverage proto tools parser help
