@@ -1415,7 +1415,7 @@ func (pm *MultiPoolerManager) RewindToSource(ctx context.Context, source *cluste
 	}
 
 	// Reopen the manager
-	if err := pm.Open(); err != nil {
+	if err := pm.openConnections(); err != nil {
 		pm.logger.ErrorContext(ctx, "Failed to reopen query service controller after restart", "error", err)
 		return nil, mterrors.Wrap(err, "failed to reopen query service controller")
 	}

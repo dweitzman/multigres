@@ -34,6 +34,7 @@ import (
 	"github.com/multigres/multigres/go/multipooler/poolerserver"
 	"github.com/multigres/multigres/go/tools/grpccommon"
 	"github.com/multigres/multigres/go/tools/retry"
+	"github.com/multigres/multigres/go/tools/timer"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -55,6 +56,18 @@ const (
 	ManagerStateReady ManagerState = "ready"
 	// ManagerStateError indicates the manager failed to load the multipooler record
 	ManagerStateError ManagerState = "error"
+)
+
+// lifecycleState represents the manager lifecycle state.
+// This is separate from ManagerState which tracks topology loading state.
+type lifecycleState int
+
+const (
+	lifecycleNew      lifecycleState = iota // Created via New(), never started
+	lifecycleStarting                       // Start() in progress
+	lifecycleRunning                        // Fully running (Start() completed)
+	lifecycleStopping                       // Close() in progress
+	lifecycleStopped                        // Closed, terminal state
 )
 
 // MultiPoolerManager manages the pooler lifecycle and PostgreSQL operations
@@ -84,13 +97,15 @@ type MultiPoolerManager struct {
 
 	// mu is the mutex for the manager's state. It must be held for the
 	// following:
-	// - Reading state
-	// - Changing state. This can cause the lock to be held for long periods
+	// - Reading lifecycle state
+	// - Changing lifecycle state
+	// - Reading ManagerState
+	// - Changing ManagerState. This can cause the lock to be held for long periods
 	//   of time, particularly when updating external systems (e.g. the topo)
 	//   to match the manager's state.
 	mu sync.Mutex
 
-	isOpen          bool
+	lifecycle       lifecycleState
 	multipooler     *topoclient.MultiPoolerInfo
 	state           ManagerState
 	stateError      error
@@ -122,9 +137,11 @@ type MultiPoolerManager struct {
 	// Once true, stays true for the lifetime of the manager.
 	initialized bool
 
-	// monitorCancel cancels the MonitorPostgres goroutine.
-	// When nil, MonitorPostgres is not running or has been cancelled.
-	monitorCancel context.CancelFunc
+	// monitorRunner runs the PostgreSQL monitoring task at regular intervals.
+	monitorRunner *timer.PeriodicRunner
+
+	// monitorLastLoggedReason tracks the last logged reason to avoid duplicate logs in monitoring
+	monitorLastLoggedReason string
 
 	// TODO: Implement async query serving state management system
 	// This should include: target state, current state, convergence goroutine,
@@ -216,8 +233,9 @@ func NewMultiPoolerManagerWithTimeout(logger *slog.Logger, config *Config, loadT
 		readyChan:            make(chan struct{}),
 		// We create a dummy context because some unit tests need them.
 		// These will be overwritten when Open gets called.
-		ctx:    ctx,
-		cancel: cancel,
+		ctx:           ctx,
+		cancel:        cancel,
+		monitorRunner: timer.NewPeriodicRunner(context.TODO(), 5*time.Second),
 	}
 
 	// Create the query service controller with the pool manager
@@ -274,49 +292,68 @@ func (pm *MultiPoolerManager) execArgs(ctx context.Context, sql string, args ...
 	return err
 }
 
-// Open opens the database connections and starts background operations.
+// openConnections opens the database connections and starts background operations.
+// Can be called from lifecycleNew, lifecycleStarting, lifecycleRunning, or lifecycleStopped.
+// Used during initial startup and to reopen after operations like pg_rewind that call Close().
 // TODO:
 //   - Replace with proper state manager (like tm_state.go) that orchestrates
-//     state transitions and manages Open/Close lifecycle.
-//   - The replTracker is being Open/Close with a big hammer. A better approach
+//     state transitions and manages openConnections/Close lifecycle.
+//   - The replTracker is being openConnections/Close with a big hammer. A better approach
 //     is to call MakePrimary / MakeNonPrimary during state transitions.
 //     We can do this, once we introduce the proper state manager.
-func (pm *MultiPoolerManager) Open() error {
+func (pm *MultiPoolerManager) openConnections() error {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
-	if pm.isOpen {
-		return nil
+
+	// Don't allow opening while actively stopping
+	if pm.lifecycle == lifecycleStopping {
+		return errors.New("cannot open connections while manager is stopping")
 	}
 
-	pm.logger.Info("MultiPoolerManager: opening")
-	pm.ctx, pm.cancel = context.WithCancel(context.TODO())
+	pm.logger.Info("MultiPoolerManager: opening connections")
+
+	// Create/recreate context if needed (e.g., after Close() during rewind)
+	if pm.ctx == nil || pm.ctx.Err() != nil {
+		pm.ctx, pm.cancel = context.WithCancel(context.TODO())
+	}
 
 	if err := pm.openConnectionsLocked(); err != nil {
 		return err
 	}
 
-	// Start background PostgreSQL monitoring and auto-recovery
-	monitorCtx, monitorCancel := context.WithCancel(pm.ctx)
-	pm.monitorCancel = monitorCancel
-	go pm.MonitorPostgres(monitorCtx)
-
-	pm.isOpen = true
-	pm.logger.Info("MultiPoolerManager opened database connection")
+	pm.logger.Info("MultiPoolerManager opened database connections")
 	return nil
 }
 
 // Close closes the database connection and stops the async loader.
 // Safe to call multiple times and safe to call even if never opened.
+// After Close(), the manager can be reopened via openConnections() (e.g., after pg_rewind).
 func (pm *MultiPoolerManager) Close() error {
+	// Transition to stopping state under lock
 	pm.mu.Lock()
-	defer pm.mu.Unlock()
-	if !pm.isOpen {
-		return nil
+	if pm.lifecycle == lifecycleStopped {
+		pm.mu.Unlock()
+		return nil // Already stopped, idempotent
 	}
+	if pm.lifecycle == lifecycleStopping {
+		pm.mu.Unlock()
+		return nil // Close already in progress, idempotent
+	}
+	pm.lifecycle = lifecycleStopping
+	pm.mu.Unlock()
 
+	// Stop monitoring (blocks until in-flight callbacks complete)
+	// Must be done before closing connections since callbacks may use them
+	// Must be done without holding lock to avoid deadlock if callbacks try to read state
+	pm.monitorRunner.Stop()
+
+	// Now finish closing under lock
+	pm.mu.Lock()
 	pm.closeConnectionsLocked()
 	pm.cancel()
-	pm.isOpen = false
+	pm.lifecycle = lifecycleStopped
+	pm.mu.Unlock()
+
 	pm.logger.Info("MultiPoolerManager: closed")
 	return nil
 }
@@ -1445,9 +1482,14 @@ func (pm *MultiPoolerManager) ReplicationLag(ctx context.Context) (time.Duration
 func (pm *MultiPoolerManager) Start(senv *servenv.ServEnv) {
 	// Open the database connections, connection pool manager, and start background operations
 	// TODO: This should be managed by a proper state manager (like tm_state.go)
-	if err := pm.Open(); err != nil {
+	if err := pm.openConnections(); err != nil {
 		pm.logger.Error("Failed to open manager during startup", "error", err)
 		// Don't fail startup if Open fails - will retry on demand
+	}
+
+	// Start PostgreSQL monitoring (will wait for ready before executing callbacks)
+	if err := pm.enableMonitorInternal(); err != nil {
+		pm.logger.Warn("Failed to enable PostgreSQL monitoring", "error", err)
 	}
 
 	// Start loading multipooler record from topology asynchronously
@@ -1521,43 +1563,21 @@ type postgresState struct {
 	backupsAvailable bool
 }
 
-// MonitorPostgres continuously monitors PostgreSQL status and takes remedial action.
-// This runs as an independent goroutine started by Start().
-// It waits for topo to be loaded, then monitors in a loop until context is cancelled.
-//
-// Monitoring loop:
-// - Discovers PostgreSQL status via pgctld
-// - Takes remedial action based on state
-// - Exits when server is shutting down (context cancelled)
-func (pm *MultiPoolerManager) MonitorPostgres(ctx context.Context) {
-	// Wait for manager to be ready (topo loaded) before monitoring
-	pm.waitForReady(ctx)
-
-	// Check context after waiting
-	if ctx.Err() != nil {
-		pm.logger.InfoContext(ctx, "MonitorPostgres: context cancelled while waiting for topo")
+// monitorPostgresCallback is called periodically by monitorRunner to check PostgreSQL status
+// and take remedial action. This is the callback function for PeriodicRunner.
+// PeriodicRunner guarantees only one callback runs at a time, so monitorLastLoggedReason
+// doesn't need locking.
+func (pm *MultiPoolerManager) monitorPostgresCallback(ctx context.Context) {
+	// Skip monitoring if manager is not ready yet (topology not loaded)
+	if pm.GetState() != ManagerStateReady {
 		return
 	}
 
-	pm.logger.InfoContext(ctx, "MonitorPostgres: starting monitoring loop")
+	// Discover current status
+	currentState := pm.discoverPostgresState(ctx)
 
-	// Track last logged reason to avoid duplicate logs
-	var lastLoggedReason string
-
-	// Use configurable retry interval (same as auto-restore)
-	r := retry.New(pm.monitorRetryInterval, pm.monitorRetryInterval)
-	for attempt, err := range r.Attempts(ctx) {
-		if err != nil {
-			pm.logger.InfoContext(ctx, "MonitorPostgres: context cancelled, exiting monitoring loop", "attempts", attempt)
-			return
-		}
-
-		// Discover current status
-		currentState := pm.discoverPostgresState(ctx)
-
-		// Take remedial action based on state
-		pm.takeRemedialAction(ctx, currentState, &lastLoggedReason)
-	}
+	// Take remedial action based on state
+	pm.takeRemedialAction(ctx, currentState, &pm.monitorLastLoggedReason)
 }
 
 // discoverPostgresState discovers the current state of PostgreSQL
@@ -1772,55 +1792,29 @@ func (pm *MultiPoolerManager) restoreAndStartPostgres(ctx context.Context) error
 	return nil
 }
 
-// enableMonitorInternal starts the PostgreSQL monitoring goroutine if it's not already running.
+// enableMonitorInternal starts the PostgreSQL monitoring task if it's not already running.
 // This method is idempotent - calling it multiple times has no effect if monitoring is already enabled.
 func (pm *MultiPoolerManager) enableMonitorInternal() error {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 
-	// Check if monitor is already running
-	if pm.monitorCancel != nil {
-		pm.logger.Info("MonitorPostgres already enabled, skipping")
-		return nil
-	}
-
-	// Check if the manager is open
 	if !pm.isOpen {
 		return errors.New("manager is not open, cannot enable monitor")
 	}
 
-	pm.logger.Info("Enabling MonitorPostgres")
+	// Start the monitoring runner (idempotent - returns false if already running)
+	if pm.monitorRunner.Start(pm.monitorPostgresCallback, nil) {
+		pm.logger.Info("Enabled PostgreSQL monitoring")
+	}
 
-	// Create a new cancelable context for the monitor
-	monitorCtx, monitorCancel := context.WithCancel(pm.ctx)
-	pm.monitorCancel = monitorCancel
-
-	// Start the monitoring goroutine
-	go pm.MonitorPostgres(monitorCtx)
-
-	pm.logger.Info("MonitorPostgres enabled successfully")
 	return nil
 }
 
-// disableMonitorInternal stops the PostgreSQL monitoring goroutine.
+// disableMonitorInternal stops the PostgreSQL monitoring task.
 // This method is idempotent - calling it multiple times has no effect if monitoring is already disabled.
+// After Stop() returns, no more callbacks will run and any in-flight callback has completed.
 func (pm *MultiPoolerManager) disableMonitorInternal() {
-	pm.mu.Lock()
-	defer pm.mu.Unlock()
-
-	// Check if monitor is already stopped
-	if pm.monitorCancel == nil {
-		pm.logger.Info("MonitorPostgres already disabled, skipping")
-		return
-	}
-
-	pm.logger.Info("Disabling MonitorPostgres")
-
-	// Cancel the monitor context
-	pm.monitorCancel()
-
-	// Set to nil to indicate it's been canceled
-	pm.monitorCancel = nil
-
-	pm.logger.Info("MonitorPostgres disabled successfully")
+	// Stop the monitoring runner (idempotent and blocks until in-flight callbacks complete)
+	pm.monitorRunner.Stop()
+	pm.logger.Info("Disabled PostgreSQL monitoring")
 }

@@ -569,83 +569,12 @@ func TestStartPostgres_StartFails(t *testing.T) {
 	assert.True(t, mockPgctld.startCalled)
 }
 
-// Integration Tests for MonitorPostgres
-
-func TestMonitorPostgres_WaitsForReady(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	readyChan := make(chan struct{})
-
-	pm := &MultiPoolerManager{
-		logger:    slog.Default(),
-		readyChan: readyChan,
-	}
-
-	monitorDone := make(chan struct{})
-	go func() {
-		pm.MonitorPostgres(ctx)
-		close(monitorDone)
-	}()
-
-	// Give it a moment - should be blocked waiting for ready
-	select {
-	case <-monitorDone:
-		t.Fatal("MonitorPostgres should wait for ready")
-	case <-time.After(50 * time.Millisecond):
-		// Good, still waiting
-	}
-
-	// Close readyChan to signal ready
-	close(readyChan)
-
-	// Cancel context to stop monitoring
-	cancel()
-
-	// Should exit now
-	select {
-	case <-monitorDone:
-		// Success
-	case <-time.After(1 * time.Second):
-		t.Fatal("MonitorPostgres should exit after context cancel")
-	}
-}
-
-func TestMonitorPostgres_ExitsOnContextCancel(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-
-	readyChan := make(chan struct{})
-	close(readyChan) // Ready immediately
-
-	pm := &MultiPoolerManager{
-		logger:               slog.Default(),
-		readyChan:            readyChan,
-		monitorRetryInterval: 10 * time.Millisecond,
-		pgctldClient:         nil, // Will cause pgctld unavailable
-	}
-
-	monitorDone := make(chan struct{})
-	go func() {
-		pm.MonitorPostgres(ctx)
-		close(monitorDone)
-	}()
-
-	// Should exit when context is cancelled
-	select {
-	case <-monitorDone:
-		// Success - exited cleanly
-	case <-time.After(1 * time.Second):
-		t.Fatal("MonitorPostgres should exit when context is cancelled")
-	}
-}
+// Tests for MonitorPostgres callback logic
+// Note: With PeriodicRunner migration, these tests now call the callback directly.
+// PeriodicRunner handles retry logic, context cancellation, and backpressure.
 
 func TestMonitorPostgres_HandlesRunningPostgres(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-
-	readyChan := make(chan struct{})
-	close(readyChan)
+	ctx := context.Background()
 
 	mockPgctld := &mockPgctldClient{
 		statusResponse: &pgctldpb.StatusResponse{
@@ -654,36 +583,20 @@ func TestMonitorPostgres_HandlesRunningPostgres(t *testing.T) {
 	}
 
 	pm := &MultiPoolerManager{
-		logger:               slog.Default(),
-		readyChan:            readyChan,
-		monitorRetryInterval: 10 * time.Millisecond,
-		pgctldClient:         mockPgctld,
+		logger:       slog.Default(),
+		pgctldClient: mockPgctld,
+		state:        ManagerStateReady, // Set to ready so callback executes
 	}
 
-	monitorDone := make(chan struct{})
-	go func() {
-		pm.MonitorPostgres(ctx)
-		close(monitorDone)
-	}()
-
-	// Should run until context timeout
-	select {
-	case <-monitorDone:
-		// Success - discovered running state and continued monitoring
-	case <-time.After(1 * time.Second):
-		t.Fatal("MonitorPostgres should complete")
-	}
+	// Call monitoring callback directly
+	pm.monitorPostgresCallback(ctx)
 
 	// Should not have called Start (postgres already running)
 	assert.False(t, mockPgctld.startCalled)
 }
 
 func TestMonitorPostgres_StartsStoppedPostgres(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-
-	readyChan := make(chan struct{})
-	close(readyChan)
+	ctx := context.Background()
 
 	mockPgctld := &mockPgctldClient{
 		statusResponse: &pgctldpb.StatusResponse{
@@ -692,45 +605,16 @@ func TestMonitorPostgres_StartsStoppedPostgres(t *testing.T) {
 	}
 
 	pm := &MultiPoolerManager{
-		logger:               slog.Default(),
-		readyChan:            readyChan,
-		monitorRetryInterval: 10 * time.Millisecond,
-		pgctldClient:         mockPgctld,
+		logger:       slog.Default(),
+		pgctldClient: mockPgctld,
+		state:        ManagerStateReady, // Set to ready so callback executes
 	}
 
-	pm.MonitorPostgres(ctx)
+	// Call monitoring callback directly
+	pm.monitorPostgresCallback(ctx)
 
 	// Should have attempted to start postgres
 	assert.True(t, mockPgctld.startCalled, "Should attempt to start stopped postgres")
-}
-
-func TestMonitorPostgres_RetriesOnStartFailure(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-
-	readyChan := make(chan struct{})
-	close(readyChan)
-
-	mockPgctld := &mockPgctldClientWithCounter{
-		mockPgctldClient: mockPgctldClient{
-			statusResponse: &pgctldpb.StatusResponse{
-				Status: pgctldpb.ServerStatus_STOPPED,
-			},
-			startError: assert.AnError,
-		},
-	}
-
-	pm := &MultiPoolerManager{
-		logger:               slog.Default(),
-		readyChan:            readyChan,
-		monitorRetryInterval: 10 * time.Millisecond,
-		pgctldClient:         mockPgctld,
-	}
-
-	pm.MonitorPostgres(ctx)
-
-	// Should have retried multiple times
-	assert.Greater(t, mockPgctld.startCallCount, 1, "Should retry on start failure")
 }
 
 // Mock pgctld client for testing
