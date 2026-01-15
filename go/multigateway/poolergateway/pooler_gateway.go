@@ -185,9 +185,7 @@ func (pg *PoolerGateway) Close() error {
 // Ensure PoolerGateway implements Gateway
 var _ Gateway = (*PoolerGateway)(nil)
 
-// Stats returns statistics about the gateway.
-func (pg *PoolerGateway) Stats() map[string]any {
-	return map[string]any{
-		"active_connections": pg.loadBalancer.ConnectionCount(),
-	}
+// Stats returns statistics about pooler connections.
+func (pg *PoolerGateway) Stats() LoadBalancerStats {
+	return pg.loadBalancer.Stats()
 }

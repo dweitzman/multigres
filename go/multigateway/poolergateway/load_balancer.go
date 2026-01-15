@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"sync"
 
+	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	"github.com/multigres/multigres/go/pb/query"
 )
@@ -42,11 +43,16 @@ type LoadBalancer struct {
 	// logger for debugging
 	logger *slog.Logger
 
-	// mu protects the connections map
+	// mu protects the connections map and stats
 	mu sync.Mutex
 
 	// connections maps pooler ID to PoolerConnection
 	connections map[string]*PoolerConnection
+
+	// Incremental stats (updated on add/remove for O(1) reads)
+	// These will become OpenTelemetry UpDownCounters when we add metrics
+	countByType map[clustermetadatapb.PoolerType]int
+	countByCell map[string]int
 }
 
 // NewLoadBalancer creates a new LoadBalancer.
@@ -55,6 +61,8 @@ func NewLoadBalancer(localCell string, logger *slog.Logger) *LoadBalancer {
 		localCell:   localCell,
 		logger:      logger,
 		connections: make(map[string]*PoolerConnection),
+		countByType: make(map[clustermetadatapb.PoolerType]int),
+		countByCell: make(map[string]int),
 	}
 }
 
@@ -79,6 +87,11 @@ func (lb *LoadBalancer) AddPooler(pooler *clustermetadatapb.MultiPooler) error {
 	}
 
 	lb.connections[poolerID] = conn
+
+	// Increment stats
+	lb.countByType[conn.Type()]++
+	lb.countByCell[conn.Cell()]++
+
 	lb.logger.Debug("added pooler connection",
 		"pooler_id", poolerID,
 		"type", pooler.Type.String(),
@@ -96,6 +109,11 @@ func (lb *LoadBalancer) RemovePooler(poolerID string) {
 		lb.mu.Unlock()
 		return
 	}
+
+	// Decrement stats
+	lb.countByType[conn.Type()]--
+	lb.countByCell[conn.Cell()]--
+
 	delete(lb.connections, poolerID)
 	lb.mu.Unlock()
 
@@ -220,8 +238,9 @@ func makeExcludeSet(opts *GetConnectionOptions) map[string]bool {
 }
 
 // poolerIDString returns the string ID for a pooler.
+// This must match the format returned by PoolerConnection.ID().
 func poolerIDString(id *clustermetadatapb.ID) string {
-	return fmt.Sprintf("%s/%s", id.GetCell(), id.GetName())
+	return topoclient.MultiPoolerIDString(id)
 }
 
 // ConnectionCount returns the number of active connections.
@@ -231,11 +250,60 @@ func (lb *LoadBalancer) ConnectionCount() int {
 	return len(lb.connections)
 }
 
+// LoadBalancerStats contains statistics about pooler connections.
+type LoadBalancerStats struct {
+	// Total is the total number of active connections.
+	Total int
+
+	// ByType maps pooler type to connection count.
+	// Only includes non-zero counts.
+	ByType map[string]int
+
+	// ByCell maps cell name to connection count.
+	// Only includes non-zero counts.
+	ByCell map[string]int
+}
+
+// Stats returns pre-computed statistics about pooler connections.
+// This is O(1) since stats are maintained incrementally.
+//
+// The returned structure aligns with OpenTelemetry metrics:
+// - Total: will become gauge
+// - ByType: will become UpDownCounter with "type" label
+// - ByCell: will become UpDownCounter with "cell" label
+func (lb *LoadBalancer) Stats() LoadBalancerStats {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+
+	// Copy maps to avoid mutation (small maps, cheap to copy)
+	byType := make(map[string]int, len(lb.countByType))
+	for poolerType, count := range lb.countByType {
+		if count > 0 { // Only include non-zero counts
+			byType[poolerType.String()] = count
+		}
+	}
+
+	byCell := make(map[string]int, len(lb.countByCell))
+	for cell, count := range lb.countByCell {
+		if count > 0 {
+			byCell[cell] = count
+		}
+	}
+
+	return LoadBalancerStats{
+		Total:  len(lb.connections),
+		ByType: byType,
+		ByCell: byCell,
+	}
+}
+
 // Close closes all connections.
 func (lb *LoadBalancer) Close() error {
 	lb.mu.Lock()
 	connections := lb.connections
 	lb.connections = make(map[string]*PoolerConnection)
+	lb.countByType = make(map[clustermetadatapb.PoolerType]int)
+	lb.countByCell = make(map[string]int)
 	lb.mu.Unlock()
 
 	lb.logger.Info("closing all pooler connections", "count", len(connections))

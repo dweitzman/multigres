@@ -73,11 +73,12 @@ func TestLoadBalancer_AddRemovePooler(t *testing.T) {
 	assert.Equal(t, 1, lb.ConnectionCount())
 
 	// Remove the pooler
-	lb.RemovePooler("zone1/pooler1")
+	lb.RemovePooler(poolerID(pooler))
 	assert.Equal(t, 0, lb.ConnectionCount())
 
 	// Removing non-existent pooler is a no-op
-	lb.RemovePooler("zone1/nonexistent")
+	nonExistent := createTestMultiPooler("nonexistent", "zone1", constants.DefaultTableGroup, "0", clustermetadatapb.PoolerType_PRIMARY)
+	lb.RemovePooler(poolerID(nonExistent))
 	assert.Equal(t, 0, lb.ConnectionCount())
 }
 
@@ -275,12 +276,11 @@ func TestLoadBalancer_ConcurrentAddRemove(t *testing.T) {
 				require.NoError(t, err)
 
 				// Spawn goroutine to remove this pooler
-				poolerRemoveID := fmt.Sprintf("zone1/pooler-%d-%d", goroutineID, j)
 				wg.Add(1)
-				go func(id string) {
+				go func(p *clustermetadatapb.MultiPooler) {
 					defer wg.Done()
-					lb.RemovePooler(id)
-				}(poolerRemoveID)
+					lb.RemovePooler(poolerID(p))
+				}(pooler)
 			}
 		}()
 	}
@@ -353,7 +353,7 @@ func TestLoadBalancer_ConcurrentGetConnection(t *testing.T) {
 			_ = lb.AddPooler(pooler)
 			// Small delay to increase chance of concurrent GetConnection calls
 			time.Sleep(time.Millisecond)
-			lb.RemovePooler("zone1/" + poolerName)
+			lb.RemovePooler(poolerID(pooler))
 		}()
 	}
 
@@ -559,4 +559,129 @@ func TestLoadBalancer_GetConnection_MultiplePrimaries(t *testing.T) {
 		poolerID(primary1),
 		poolerID(primary2),
 	}, conn.ID(), "Should return one of the primaries")
+}
+
+func TestLoadBalancer_Stats(t *testing.T) {
+	logger := slog.Default()
+	lb := NewLoadBalancer("zone1", logger)
+
+	// Initially empty
+	stats := lb.Stats()
+	assert.Equal(t, 0, stats.Total)
+	assert.Empty(t, stats.ByType)
+	assert.Empty(t, stats.ByCell)
+
+	// Add a primary in zone1
+	primary1 := createTestMultiPooler("primary1", "zone1", constants.DefaultTableGroup, "0", clustermetadatapb.PoolerType_PRIMARY)
+	require.NoError(t, lb.AddPooler(primary1))
+	stats = lb.Stats()
+	assert.Equal(t, 1, stats.Total)
+	assert.Equal(t, 1, stats.ByType["PRIMARY"])
+	assert.Equal(t, 1, stats.ByCell["zone1"])
+
+	// Add a replica in zone1
+	replica1 := createTestMultiPooler("replica1", "zone1", constants.DefaultTableGroup, "0", clustermetadatapb.PoolerType_REPLICA)
+	require.NoError(t, lb.AddPooler(replica1))
+	stats = lb.Stats()
+	assert.Equal(t, 2, stats.Total)
+	assert.Equal(t, 1, stats.ByType["PRIMARY"])
+	assert.Equal(t, 1, stats.ByType["REPLICA"])
+	assert.Equal(t, 2, stats.ByCell["zone1"])
+
+	// Add a replica in zone2
+	replica2 := createTestMultiPooler("replica2", "zone2", constants.DefaultTableGroup, "0", clustermetadatapb.PoolerType_REPLICA)
+	require.NoError(t, lb.AddPooler(replica2))
+	stats = lb.Stats()
+	assert.Equal(t, 3, stats.Total)
+	assert.Equal(t, 1, stats.ByType["PRIMARY"])
+	assert.Equal(t, 2, stats.ByType["REPLICA"])
+	assert.Equal(t, 2, stats.ByCell["zone1"])
+	assert.Equal(t, 1, stats.ByCell["zone2"])
+
+	// Remove zone1 replica
+	lb.RemovePooler(poolerID(replica1))
+	stats = lb.Stats()
+	assert.Equal(t, 2, stats.Total)
+	assert.Equal(t, 1, stats.ByType["PRIMARY"])
+	assert.Equal(t, 1, stats.ByType["REPLICA"])
+	assert.Equal(t, 1, stats.ByCell["zone1"])
+	assert.Equal(t, 1, stats.ByCell["zone2"])
+
+	// Remove zone2 replica (all replicas gone)
+	lb.RemovePooler(poolerID(replica2))
+	stats = lb.Stats()
+	assert.Equal(t, 1, stats.Total)
+	assert.Equal(t, 1, stats.ByType["PRIMARY"])
+	// REPLICA should not appear in ByType when count is 0
+	assert.NotContains(t, stats.ByType, "REPLICA")
+	assert.Equal(t, 1, stats.ByCell["zone1"])
+	// zone2 should not appear in ByCell when count is 0
+	assert.NotContains(t, stats.ByCell, "zone2")
+
+	// Close should reset stats
+	err := lb.Close()
+	require.NoError(t, err)
+	stats = lb.Stats()
+	assert.Equal(t, 0, stats.Total)
+	assert.Empty(t, stats.ByType)
+	assert.Empty(t, stats.ByCell)
+}
+
+func TestLoadBalancer_Stats_ConcurrentAccess(t *testing.T) {
+	logger := slog.Default()
+	lb := NewLoadBalancer("zone1", logger)
+
+	// Add initial poolers
+	for i := range 5 {
+		pooler := createTestMultiPooler(
+			fmt.Sprintf("pooler-%d", i),
+			"zone1",
+			constants.DefaultTableGroup,
+			"0",
+			clustermetadatapb.PoolerType_REPLICA,
+		)
+		require.NoError(t, lb.AddPooler(pooler))
+	}
+
+	const numReaders = 10
+	const numWriters = 5
+	var wg sync.WaitGroup
+	wg.Add(numReaders + numWriters)
+
+	// Multiple goroutines reading stats
+	for range numReaders {
+		go func() {
+			defer wg.Done()
+			for range 100 {
+				stats := lb.Stats()
+				// Stats should be consistent
+				assert.GreaterOrEqual(t, stats.Total, 0)
+				assert.LessOrEqual(t, stats.Total, 10) // max possible with our test
+			}
+		}()
+	}
+
+	// Multiple goroutines modifying poolers
+	for writerID := range numWriters {
+		go func() {
+			defer wg.Done()
+			poolerName := fmt.Sprintf("dynamic-%d", writerID)
+			pooler := createTestMultiPooler(
+				poolerName,
+				"zone2",
+				constants.DefaultTableGroup,
+				"0",
+				clustermetadatapb.PoolerType_PRIMARY,
+			)
+			_ = lb.AddPooler(pooler)
+			time.Sleep(time.Millisecond)
+			lb.RemovePooler(poolerID(pooler))
+		}()
+	}
+
+	wg.Wait()
+
+	// Final stats should be consistent
+	stats := lb.Stats()
+	assert.Equal(t, 5, stats.Total) // only initial poolers remain
 }
