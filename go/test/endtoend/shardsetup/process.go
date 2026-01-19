@@ -192,6 +192,12 @@ func (p *ProcessInstance) startMultiOrch(t *testing.T) error {
 		p.Process.Dir = p.DataDir
 	}
 
+	// Set environment including per-instance GRPC_PROXY_SOURCE_ID
+	// This allows selective fault injection targeting specific multiorch instances
+	p.Process.Env = append(p.Environment,
+		"GRPC_PROXY_SOURCE_ID="+p.ServiceID, // Use ServiceID as source (e.g., "multiorch", "multiorch-1")
+	)
+
 	// Set up logging like multiorch_helpers.go does
 	if p.LogFile != "" {
 		logF, err := os.Create(p.LogFile)

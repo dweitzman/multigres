@@ -17,7 +17,6 @@ package multiorch
 import (
 	"context"
 	"fmt"
-	"os"
 	"testing"
 	"time"
 
@@ -44,13 +43,8 @@ func TestNetworkPartition_MultiOrchFailover(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	// Set source ID so proxy can identify requests from multiorch
-	os.Setenv("GRPC_PROXY_SOURCE_ID", "multiorch")
-	t.Cleanup(func() {
-		os.Unsetenv("GRPC_PROXY_SOURCE_ID")
-	})
-
 	// Create shard setup with 3 multipoolers and 1 multiorch
+	// Note: GRPC_PROXY_SOURCE_ID is now set per-process in ProcessInstance.startMultiOrch()
 	// The shared setup includes an always-on proxy with no initial faults
 	// This allows failover: primary goes down, multiorch can elect one of the 2 standbys
 	setup := shardsetup.New(t,
