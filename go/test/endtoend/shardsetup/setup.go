@@ -291,6 +291,13 @@ func New(t *testing.T, opts ...SetupOption) *ShardSetup {
 		MultiOrchInstances: make(map[string]*ProcessInstance),
 	}
 
+	// Start gRPC fault injection proxy (always-on for all tests)
+	// Tests can use EnableFaultInjection() to inject faults dynamically
+	t.Logf("Starting gRPC fault injection proxy...")
+	if err := setup.startProxy(t); err != nil {
+		t.Fatalf("failed to start proxy: %v", err)
+	}
+
 	// Create all multipooler instances (but don't start yet)
 	var multipoolerInstances []*MultipoolerInstance
 	for i := 0; i < config.MultipoolerCount; i++ {

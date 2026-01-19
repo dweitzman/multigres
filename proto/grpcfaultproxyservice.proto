@@ -1,0 +1,59 @@
+// Copyright 2025 Supabase, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package grpcfaultproxyservice;
+
+option go_package = "github.com/multigres/multigres/go/pb/grpcfaultproxyservice";
+
+// GrpcFaultProxyService provides control over fault injection for testing.
+// This service is only used in tests and should never be exposed in production.
+service GrpcFaultProxyService {
+  // SetRules replaces all fault injection rules with the provided rules.
+  // Use an empty rules list to disable all fault injection.
+  rpc SetRules(SetRulesRequest) returns (SetRulesResponse);
+
+  // GetRules returns the currently active fault injection rules.
+  rpc GetRules(GetRulesRequest) returns (GetRulesResponse);
+}
+
+// FaultRule defines a single fault injection rule.
+message FaultRule {
+  string name = 1;
+  string source = 2;      // Service name or "*" for all
+  string target = 3;      // Target service or "*" for all
+  string method = 4;      // gRPC method pattern or "*" for all
+  string fault_type = 5;  // "latency", "error", "drop"
+  double probability = 6; // 0.0 to 1.0
+  int32 latency_ms = 7;   // For latency faults
+  int32 error_code = 8;   // gRPC status code for error faults
+  string error_msg = 9;   // Error message for error faults
+}
+
+message SetRulesRequest {
+  repeated FaultRule rules = 1;
+}
+
+message SetRulesResponse {
+  // Number of rules successfully installed
+  int32 rules_count = 1;
+}
+
+message GetRulesRequest {
+}
+
+message GetRulesResponse {
+  repeated FaultRule rules = 1;
+}

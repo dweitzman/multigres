@@ -42,7 +42,7 @@ Services configure the proxy using the HTTPS_PROXY environment variable.`,
 	// Configuration flags
 	var config grpcfaultproxy.Config
 	cmd.Flags().StringVar(&config.HTTPAddr, "http-addr", ":17000",
-		"Address to listen on for HTTP CONNECT requests")
+		"Address to listen on for HTTP CONNECT requests and management gRPC API")
 	cmd.Flags().StringVar(&config.RulesFile, "rules-file", "",
 		"Path to fault injection rules YAML file (optional)")
 

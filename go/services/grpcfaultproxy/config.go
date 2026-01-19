@@ -25,7 +25,11 @@ type Config struct {
 	// HTTPAddr is the address for the HTTP CONNECT server (e.g., ":17000")
 	HTTPAddr string
 
-	// RulesFile is the path to the fault rules YAML file (optional, for Phase 2)
+	// ManagementAddr is the address for the management gRPC API (e.g., ":17001")
+	// Tests use this API to control fault injection dynamically.
+	ManagementAddr string
+
+	// RulesFile is the path to the fault rules YAML file (optional, loaded at startup)
 	RulesFile string
 }
 

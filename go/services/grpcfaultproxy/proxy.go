@@ -21,6 +21,7 @@ package grpcfaultproxy
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
@@ -31,6 +32,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/multigres/multigres/go/common/mterrors"
+	pb "github.com/multigres/multigres/go/pb/grpcfaultproxyservice"
 )
 
 // Proxy is a transparent gRPC proxy with fault injection capabilities.
@@ -47,8 +49,14 @@ type Proxy struct {
 	// httpServer handles HTTP CONNECT requests
 	httpServer *http.Server
 
-	// grpcServer handles gRPC traffic after CONNECT tunneling
+	// grpcServer handles gRPC traffic after CONNECT tunneling (transparent proxy)
 	grpcServer *grpc.Server
+
+	// managementServer is the separate gRPC server for the management API
+	managementServer *grpc.Server
+
+	// managementListener is the TCP listener for the management server
+	managementListener net.Listener
 
 	// conns is a cache of backend gRPC connections (target -> connection)
 	conns  map[string]*grpc.ClientConn
@@ -56,6 +64,9 @@ type Proxy struct {
 
 	// listener is the TCP listener for the HTTP server
 	listener net.Listener
+
+	// engine is the fault injection engine
+	engine *Engine
 }
 
 // New creates a new Proxy instance with the given configuration.
@@ -63,16 +74,33 @@ func New(config Config, logger *slog.Logger) *Proxy {
 	//nolint:gocritic // context.Background() is appropriate for top-level service initialization
 	ctx, cancel := context.WithCancel(context.Background())
 
+	// Load fault rules if configured
+	var rules []FaultRule
+	if config.RulesFile != "" {
+		var err error
+		rules, err = LoadRules(config.RulesFile)
+		if err != nil {
+			logger.Warn("failed to load fault rules, starting without rules",
+				"rules_file", config.RulesFile,
+				"error", err)
+		} else {
+			logger.Info("loaded fault rules",
+				"rules_file", config.RulesFile,
+				"rule_count", len(rules))
+		}
+	}
+
 	return &Proxy{
 		config:     config,
 		logger:     logger,
 		ctx:        ctx,
 		cancelFunc: cancel,
 		conns:      make(map[string]*grpc.ClientConn),
+		engine:     NewEngine(rules),
 	}
 }
 
-// Start starts the proxy server.
+// Start starts the proxy server and management API server.
 func (p *Proxy) Start() error {
 	// Create gRPC server with transparent proxy handler
 	p.grpcServer = grpc.NewServer(
@@ -83,7 +111,7 @@ func (p *Proxy) Start() error {
 
 	p.logger.Info("starting gRPC fault injection proxy", "addr", p.config.HTTPAddr)
 
-	// Create TCP listener
+	// Create TCP listener for proxy traffic
 	listener, err := net.Listen("tcp", p.config.HTTPAddr)
 	if err != nil {
 		return mterrors.Wrapf(err, "failed to listen on %s", p.config.HTTPAddr)
@@ -93,7 +121,7 @@ func (p *Proxy) Start() error {
 	// Create HTTP server for CONNECT handling
 	p.httpServer = p.newHTTPServer(p.config.HTTPAddr, p.grpcServer)
 
-	// Start serving in a goroutine
+	// Start serving proxy traffic in a goroutine
 	go func() {
 		if err := p.httpServer.Serve(p.listener); err != nil && err != http.ErrServerClosed {
 			p.logger.Error("HTTP server error", "error", err)
@@ -101,10 +129,55 @@ func (p *Proxy) Start() error {
 	}()
 
 	p.logger.Info("proxy started", "addr", p.listener.Addr().String())
+
+	// Start management API on separate port if configured
+	if p.config.ManagementAddr != "" {
+		if err := p.startManagementAPI(); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
-// Stop gracefully stops the proxy server.
+// startManagementAPI starts the management gRPC API on a separate port.
+func (p *Proxy) startManagementAPI() error {
+	// Create separate gRPC server for management API
+	p.managementServer = grpc.NewServer(
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
+	)
+
+	// Register management service
+	service := NewService(p)
+	pb.RegisterGrpcFaultProxyServiceServer(p.managementServer, service)
+
+	// Create TCP listener for management API
+	listener, err := net.Listen("tcp", p.config.ManagementAddr)
+	if err != nil {
+		return mterrors.Wrapf(err, "failed to listen on management addr %s", p.config.ManagementAddr)
+	}
+	p.managementListener = listener
+
+	// Create channel to signal when server is ready
+	ready := make(chan struct{})
+
+	// Start serving management API in a goroutine
+	go func() {
+		// Signal that we're about to start serving
+		close(ready)
+		if err := p.managementServer.Serve(p.managementListener); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+			p.logger.Error("management server error", "error", err)
+		}
+	}()
+
+	// Wait for the server goroutine to start
+	<-ready
+
+	p.logger.Info("management API started", "addr", p.managementListener.Addr().String())
+	return nil
+}
+
+// Stop gracefully stops the proxy server and management API.
 func (p *Proxy) Stop() error {
 	p.logger.Info("stopping proxy")
 
@@ -114,6 +187,11 @@ func (p *Proxy) Stop() error {
 	// Stop gRPC server gracefully
 	if p.grpcServer != nil {
 		p.grpcServer.GracefulStop()
+	}
+
+	// Stop management server gracefully
+	if p.managementServer != nil {
+		p.managementServer.GracefulStop()
 	}
 
 	// Stop HTTP server gracefully
@@ -131,13 +209,22 @@ func (p *Proxy) Stop() error {
 	return nil
 }
 
-// Addr returns the address the proxy is listening on.
+// Addr returns the address the proxy is listening on for CONNECT requests.
 // Returns empty string if not started.
 func (p *Proxy) Addr() string {
 	if p.listener == nil {
 		return ""
 	}
 	return p.listener.Addr().String()
+}
+
+// ManagementAddr returns the address the management API is listening on.
+// Returns empty string if management server is not started.
+func (p *Proxy) ManagementAddr() string {
+	if p.managementListener == nil {
+		return ""
+	}
+	return p.managementListener.Addr().String()
 }
 
 // Wait blocks until the proxy context is cancelled.

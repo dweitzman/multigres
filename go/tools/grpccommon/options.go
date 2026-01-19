@@ -17,15 +17,11 @@
 package grpccommon
 
 import (
-	"context"
-	"os"
-
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/metadata"
 )
 
 var (
@@ -106,47 +102,6 @@ func (f funcOption) apply(c *clientConfig) {
 	f(c)
 }
 
-// noopOption is a ClientOption that does nothing.
-type noopOption struct{}
-
-func (noopOption) apply(*clientConfig) {}
-
-// WithSourceID adds x-multigres-source metadata when GRPC_PROXY_SOURCE_ID is set.
-// This is only used for proxy testing - when the environment variable is not set,
-// this option does nothing.
-//
-// The source ID identifies which service is making the gRPC request, allowing
-// the fault injection proxy to apply rules based on the source service.
-func WithSourceID() ClientOption {
-	sourceID := os.Getenv("GRPC_PROXY_SOURCE_ID")
-	if sourceID == "" {
-		return noopOption{}
-	}
-
-	return funcOption(func(c *clientConfig) {
-		c.dialOptions = append(c.dialOptions,
-			grpc.WithUnaryInterceptor(sourceIDUnaryInterceptor(sourceID)),
-			grpc.WithStreamInterceptor(sourceIDStreamInterceptor(sourceID)),
-		)
-	})
-}
-
-// sourceIDUnaryInterceptor injects x-multigres-source metadata for unary RPCs.
-func sourceIDUnaryInterceptor(sourceID string) grpc.UnaryClientInterceptor {
-	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
-		ctx = metadata.AppendToOutgoingContext(ctx, "x-multigres-source", sourceID)
-		return invoker(ctx, method, req, reply, cc, opts...)
-	}
-}
-
-// sourceIDStreamInterceptor injects x-multigres-source metadata for streaming RPCs.
-func sourceIDStreamInterceptor(sourceID string) grpc.StreamClientInterceptor {
-	return func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
-		ctx = metadata.AppendToOutgoingContext(ctx, "x-multigres-source", sourceID)
-		return streamer(ctx, desc, cc, method, opts...)
-	}
-}
-
 // NewClient creates a gRPC client with OpenTelemetry instrumentation.
 // Use WithPeerService to set the remote service identifier in traces.
 // Use WithDialOptions to pass standard gRPC dial options.
@@ -154,11 +109,11 @@ func sourceIDStreamInterceptor(sourceID string) grpc.StreamClientInterceptor {
 // All ClientOptions are used to configure a single stats handler, preventing
 // duplication and ensuring consistent telemetry across the application.
 //
-// The client automatically includes WithSourceID() to support proxy testing
-// when the GRPC_PROXY_SOURCE_ID environment variable is set.
+// The client automatically includes test proxy options when environment
+// variables are set (see test_options.go for details).
 func NewClient(target string, opts ...ClientOption) (*grpc.ClientConn, error) {
-	// Prepend WithSourceID so it's always applied
-	opts = append([]ClientOption{WithSourceID()}, opts...)
+	// Prepend test proxy options if environment variables are set
+	opts = append(withGrpcTestProxyOptions(), opts...)
 
 	cfg := &clientConfig{}
 	for _, opt := range opts {

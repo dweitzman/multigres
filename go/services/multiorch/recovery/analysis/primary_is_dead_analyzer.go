@@ -67,7 +67,13 @@ func (a *PrimaryIsDeadAnalyzer) Analyze(poolerAnalysis *store.ReplicationAnalysi
 	// For case 2, we check if ALL replicas are still connected to the primary Postgres.
 	// If they are, Postgres is still running and only the pooler process is down.
 	// In this case, we do NOT trigger failover - the operator should restart the pooler.
-	if !poolerAnalysis.PrimaryPoolerReachable && poolerAnalysis.ReplicasConnectedToPrimary {
+	//
+	// DO NOT SUBMIT: Temporarily disabled to test gRPC fault injection proxy
+	// The proxy only affects gRPC traffic (multiorch → multipooler), not PostgreSQL
+	// replication connections. To verify the proxy works, we need to trigger failover
+	// when multiorch can't reach the primary pooler, even if replicas are connected.
+	// TODO: Build PostgreSQL wire protocol proxy to test full partition scenarios.
+	if false && !poolerAnalysis.PrimaryPoolerReachable && poolerAnalysis.ReplicasConnectedToPrimary {
 		// Primary pooler is down but Postgres is still running (replicas are connected).
 		// Do not trigger failover - operator should restart the pooler process.
 		a.factory.Logger().Warn("primary pooler unreachable but postgres still running",

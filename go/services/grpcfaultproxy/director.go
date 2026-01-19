@@ -16,14 +16,16 @@ package grpcfaultproxy
 
 import (
 	"context"
+	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 
 	"github.com/multigres/multigres/go/common/mterrors"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
-	"github.com/multigres/multigres/go/tools/grpccommon"
 )
 
 // director is the StreamDirector function that routes gRPC calls to backends.
@@ -48,6 +50,31 @@ func (p *Proxy) director(ctx context.Context, fullMethodName string) (context.Co
 	if req.Target == "" {
 		return ctx, nil, mterrors.Errorf(mtrpcpb.Code_INTERNAL,
 			"missing :authority header in request metadata")
+	}
+
+	// Evaluate fault injection rules
+	if p.engine != nil {
+		if fault := p.engine.Evaluate(ctx, req); fault != nil {
+			p.logger.InfoContext(ctx, "injecting fault",
+				"method", req.Method,
+				"source", req.Source,
+				"target", req.Target,
+				"fault_type", fault.Type,
+				"latency_ms", fault.LatencyMs,
+				"error_code", fault.ErrorCode)
+
+			switch fault.Type {
+			case "latency":
+				// Inject latency before forwarding
+				time.Sleep(time.Duration(fault.LatencyMs) * time.Millisecond)
+			case "error":
+				// Return error instead of forwarding
+				return ctx, nil, status.Error(codes.Code(fault.ErrorCode), fault.ErrorMsg)
+			case "drop":
+				// Drop the connection (return Canceled)
+				return ctx, nil, status.Error(codes.Canceled, "connection dropped by fault injection")
+			}
+		}
 	}
 
 	// Get or create backend connection
@@ -87,9 +114,11 @@ func (p *Proxy) getBackendConn(ctx context.Context, target string) (*grpc.Client
 	p.logger.DebugContext(ctx, "creating new backend connection", "target", target)
 
 	// Create connection with insecure credentials
-	// TODO: Support TLS in future
-	conn, err := grpccommon.NewClient(target,
-		grpccommon.WithDialOptions(grpc.WithTransportCredentials(insecure.NewCredentials())),
+	// IMPORTANT: Use grpc.NewClient() directly, NOT grpccommon.NewClient()
+	// to avoid proxy loop (backend connections must not go through the proxy)
+	//nolint:gocritic // Intentionally bypass proxy to prevent infinite loop
+	conn, err := grpc.NewClient(target,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	if err != nil {
 		return nil, mterrors.Wrapf(err, "failed to dial backend")

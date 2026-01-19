@@ -68,6 +68,10 @@ type ShardSetup struct {
 	// PgBackRestCertPaths stores the paths to pgBackRest TLS certificates
 	PgBackRestCertPaths *local.PgBackRestCertPaths
 
+	// GrpcFaultProxy for fault injection testing (always running)
+	GrpcFaultProxy *ProcessInstance
+	ProxyRulesFile string // Path to the proxy rules file
+
 	// BaselineGucs stores the GUC values captured after bootstrap completes.
 	// These are the "clean state" values that ValidateCleanState checks against
 	// and that cleanup restores to. Structure: node name → GUC name → value.
