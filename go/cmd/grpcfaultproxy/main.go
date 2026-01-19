@@ -30,11 +30,12 @@ import (
 func main() {
 	cmd := &cobra.Command{
 		Use:   "grpcfaultproxy",
-		Short: "Transparent gRPC proxy with fault injection for testing",
-		Long: `grpcfaultproxy is a transparent gRPC proxy that intercepts gRPC traffic
+		Short: "Transparent proxy with fault injection for testing (gRPC and PostgreSQL)",
+		Long: `grpcfaultproxy is a transparent proxy that intercepts gRPC and PostgreSQL traffic
 and allows fault injection (latency, errors, drops) for testing failure scenarios.
 
-Services configure the proxy using the HTTPS_PROXY environment variable.`,
+gRPC services configure the proxy using the HTTPS_PROXY environment variable.
+PostgreSQL replicas configure the proxy using the FORCE_POSTGRES_PROXY environment variable.`,
 		Args: cobra.NoArgs,
 		RunE: run,
 	}
@@ -42,7 +43,11 @@ Services configure the proxy using the HTTPS_PROXY environment variable.`,
 	// Configuration flags
 	var config grpcfaultproxy.Config
 	cmd.Flags().StringVar(&config.HTTPAddr, "http-addr", ":17000",
-		"Address to listen on for HTTP CONNECT requests and management gRPC API")
+		"Address to listen on for HTTP CONNECT requests (gRPC proxy)")
+	cmd.Flags().StringVar(&config.ManagementAddr, "management-addr", ":17001",
+		"Address to listen on for management gRPC API (optional, empty to disable)")
+	cmd.Flags().StringVar(&config.PostgresAddr, "postgres-addr", "",
+		"Address to listen on for PostgreSQL wire protocol proxy (optional, empty to disable)")
 	cmd.Flags().StringVar(&config.RulesFile, "rules-file", "",
 		"Path to fault injection rules YAML file (optional)")
 
@@ -55,11 +60,15 @@ Services configure the proxy using the HTTPS_PROXY environment variable.`,
 func run(cmd *cobra.Command, args []string) error {
 	// Get config from flags
 	httpAddr, _ := cmd.Flags().GetString("http-addr")
+	managementAddr, _ := cmd.Flags().GetString("management-addr")
+	postgresAddr, _ := cmd.Flags().GetString("postgres-addr")
 	rulesFile, _ := cmd.Flags().GetString("rules-file")
 
 	config := grpcfaultproxy.Config{
-		HTTPAddr:  httpAddr,
-		RulesFile: rulesFile,
+		HTTPAddr:       httpAddr,
+		ManagementAddr: managementAddr,
+		PostgresAddr:   postgresAddr,
+		RulesFile:      rulesFile,
 	}
 
 	// Create logger

@@ -34,22 +34,28 @@ import (
 // startProxy starts the gRPC fault injection proxy for the test cluster.
 // The proxy is always running but starts with no fault injection rules.
 // Tests can use EnableFaultInjection() to inject faults dynamically.
+//
+// The proxy supports both gRPC and PostgreSQL wire protocol proxying.
+// PostgreSQL proxy is enabled automatically to allow tests to inject faults
+// for replication connections.
 func (s *ShardSetup) startProxy(t *testing.T) error {
 	t.Helper()
 
-	// Get available ports for proxy and management API
+	// Get available ports for proxy, management API, and PostgreSQL proxy
 	httpPort := utils.GetFreePort(t)
 	managementPort := utils.GetFreePort(t)
+	postgresPort := utils.GetFreePort(t)
 
 	// Create logger
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	}))
 
-	// Create proxy with no initial rules, separate management port
+	// Create proxy with no initial rules, separate management port, and PostgreSQL support
 	config := grpcfaultproxy.Config{
 		HTTPAddr:       fmt.Sprintf("127.0.0.1:%d", httpPort),
 		ManagementAddr: fmt.Sprintf("127.0.0.1:%d", managementPort),
+		PostgresAddr:   fmt.Sprintf("127.0.0.1:%d", postgresPort),
 	}
 
 	proxy := grpcfaultproxy.New(config, logger)
@@ -71,11 +77,19 @@ func (s *ShardSetup) startProxy(t *testing.T) error {
 	// This forces localhost connections through the proxy (see grpccommon/test_options.go)
 	proxyAddr := proxy.Addr()
 	managementAddr := proxy.ManagementAddr()
+	postgresAddr := proxy.PostgresAddr()
 	if err := os.Setenv("FORCE_GRPC_HTTPS_PROXY", proxyAddr); err != nil {
 		return err
 	}
 
-	t.Logf("Started gRPC fault injection proxy at %s (management API at %s)", proxyAddr, managementAddr)
+	// Set FORCE_POSTGRES_PROXY environment variable for PostgreSQL replication
+	// This routes replication connections through the proxy for fault injection
+	if err := os.Setenv("FORCE_POSTGRES_PROXY", postgresAddr); err != nil {
+		return err
+	}
+
+	t.Logf("Started gRPC fault injection proxy at %s (management API at %s, PostgreSQL proxy at %s)",
+		proxyAddr, managementAddr, postgresAddr)
 
 	// Wait for management API to be ready by calling GetRules
 	healthConn, err := grpc.NewClient(managementAddr,
@@ -111,6 +125,7 @@ func (s *ShardSetup) startProxy(t *testing.T) error {
 	// Register cleanup to stop proxy
 	t.Cleanup(func() {
 		_ = os.Unsetenv("FORCE_GRPC_HTTPS_PROXY")
+		_ = os.Unsetenv("FORCE_POSTGRES_PROXY")
 		_ = proxy.Stop()
 	})
 

@@ -65,6 +65,9 @@ type Proxy struct {
 	// listener is the TCP listener for the HTTP server
 	listener net.Listener
 
+	// postgresListener is the TCP listener for the PostgreSQL proxy
+	postgresListener net.Listener
+
 	// engine is the fault injection engine
 	engine *Engine
 }
@@ -137,6 +140,11 @@ func (p *Proxy) Start() error {
 		}
 	}
 
+	// Start PostgreSQL proxy if configured
+	if err := p.StartPostgresProxy(p.ctx); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -202,6 +210,13 @@ func (p *Proxy) Stop() error {
 		}
 	}
 
+	// Stop PostgreSQL proxy listener
+	if p.postgresListener != nil {
+		if err := p.postgresListener.Close(); err != nil {
+			p.logger.Error("failed to close PostgreSQL listener", "error", err)
+		}
+	}
+
 	// Close all backend connections
 	p.closeBackendConns()
 
@@ -225,6 +240,15 @@ func (p *Proxy) ManagementAddr() string {
 		return ""
 	}
 	return p.managementListener.Addr().String()
+}
+
+// PostgresAddr returns the address the PostgreSQL proxy is listening on.
+// Returns empty string if PostgreSQL proxy is not started.
+func (p *Proxy) PostgresAddr() string {
+	if p.postgresListener == nil {
+		return ""
+	}
+	return p.postgresListener.Addr().String()
 }
 
 // Wait blocks until the proxy context is cancelled.

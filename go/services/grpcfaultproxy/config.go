@@ -29,6 +29,10 @@ type Config struct {
 	// Tests use this API to control fault injection dynamically.
 	ManagementAddr string
 
+	// PostgresAddr is the address for the PostgreSQL wire protocol proxy (e.g., ":5433")
+	// If empty, PostgreSQL proxy is disabled.
+	PostgresAddr string
+
 	// RulesFile is the path to the fault rules YAML file (optional, loaded at startup)
 	RulesFile string
 }

@@ -17,6 +17,8 @@ package manager
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -158,8 +160,30 @@ func (pm *MultiPoolerManager) setPrimaryConnInfoLocked(ctx context.Context, host
 
 	// Generate application name using the shared helper
 	appName := generateApplicationName(pm.serviceID)
-	connInfo := fmt.Sprintf("host=%s port=%d user=%s application_name=%s",
-		host, port, database, appName)
+
+	// Check if PostgreSQL proxy is configured (for fault injection testing)
+	// When FORCE_POSTGRES_PROXY is set, route replication traffic through the proxy
+	// by encoding the real target in options and connecting to the proxy instead.
+	var connInfo string
+	if proxyAddr := os.Getenv("FORCE_POSTGRES_PROXY"); proxyAddr != "" {
+		proxyHost, proxyPort, err := parseProxyAddr(proxyAddr)
+		if err != nil {
+			pm.logger.ErrorContext(ctx, "Failed to parse FORCE_POSTGRES_PROXY", "proxy_addr", proxyAddr, "error", err)
+			return mterrors.Wrapf(err, "invalid FORCE_POSTGRES_PROXY address: %s", proxyAddr)
+		}
+
+		pm.logger.InfoContext(ctx, "Using PostgreSQL proxy for replication",
+			"proxy", proxyAddr,
+			"target_host", host,
+			"target_port", port)
+
+		connInfo = fmt.Sprintf("host=%s port=%d user=%s application_name=%s options='-c proxy_target=%s:%d'",
+			proxyHost, proxyPort, database, appName, host, port)
+	} else {
+		// Direct connection (no proxy)
+		connInfo = fmt.Sprintf("host=%s port=%d user=%s application_name=%s",
+			host, port, database, appName)
+	}
 
 	// Set primary_conninfo using ALTER SYSTEM
 	if err = pm.setPrimaryConnInfo(ctx, connInfo); err != nil {
@@ -1547,4 +1571,32 @@ func (pm *MultiPoolerManager) restartAsStandbyAfterRewind(ctx context.Context) e
 		isReadOnly: false, // Postgres was stopped, not in standby mode yet
 	}
 	return pm.restartPostgresAsStandby(ctx, state)
+}
+
+// parseProxyAddr parses a proxy address in "host:port" format.
+// Returns the host and port separately, or an error if the format is invalid.
+func parseProxyAddr(addr string) (string, int32, error) {
+	// Split on last colon to support IPv6 addresses like [::1]:5433
+	lastColon := strings.LastIndex(addr, ":")
+	if lastColon == -1 {
+		return "", 0, fmt.Errorf("proxy address must be in host:port format, got: %s", addr)
+	}
+
+	host := addr[:lastColon]
+	portStr := addr[lastColon+1:]
+
+	// Remove brackets from IPv6 addresses
+	host = strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
+
+	// Parse port
+	port, err := strconv.ParseInt(portStr, 10, 32)
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid port in proxy address %s: %w", addr, err)
+	}
+
+	if port <= 0 || port > 65535 {
+		return "", 0, fmt.Errorf("port out of range in proxy address %s: %d", addr, port)
+	}
+
+	return host, int32(port), nil
 }

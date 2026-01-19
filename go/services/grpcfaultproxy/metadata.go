@@ -28,16 +28,25 @@ const (
 	AuthorityMetadataKey = ":authority"
 )
 
-// RequestInfo contains extracted information about a gRPC request.
+// RequestInfo contains extracted information about a request (gRPC or PostgreSQL).
 type RequestInfo struct {
-	// Source is the source service identifier (from x-multigres-source metadata)
+	// Source is the source service identifier
+	// - gRPC: from x-multigres-source metadata
+	// - PostgreSQL: from application_name connection parameter
 	Source string
 
-	// Target is the target address (from :authority pseudo-header)
+	// Target is the target address (host:port)
+	// - gRPC: from :authority pseudo-header
+	// - PostgreSQL: from proxy_target in options parameter
 	Target string
 
-	// Method is the full gRPC method name (e.g., "/service.Service/Method")
+	// Method is the method/operation identifier
+	// - gRPC: full method name (e.g., "/service.Service/Method")
+	// - PostgreSQL: "postgres:startup" or "postgres:*"
 	Method string
+
+	// Protocol identifies the protocol type: "grpc" or "postgres"
+	Protocol string
 }
 
 // extractSource extracts the source service identifier from metadata.
@@ -64,8 +73,9 @@ func extractAuthority(md metadata.MD) string {
 // ExtractRequestInfo extracts request information from gRPC metadata.
 func ExtractRequestInfo(md metadata.MD, fullMethodName string) RequestInfo {
 	return RequestInfo{
-		Source: extractSource(md),
-		Target: extractAuthority(md),
-		Method: fullMethodName,
+		Source:   extractSource(md),
+		Target:   extractAuthority(md),
+		Method:   fullMethodName,
+		Protocol: "grpc",
 	}
 }
