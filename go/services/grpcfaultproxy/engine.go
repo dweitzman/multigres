@@ -84,7 +84,8 @@ func (e *Engine) matches(rule FaultRule, req RequestInfo) bool {
 }
 
 // matchPattern supports "*" wildcard and exact matching.
-// Also supports prefix matching with "*" at the end (e.g., "multipooler*").
+// Also supports prefix matching with "*" at the end (e.g., "multipooler*")
+// and suffix matching with "*" at the beginning (e.g., "*:8080").
 func matchPattern(pattern, value string) bool {
 	if pattern == "*" {
 		return true
@@ -93,6 +94,11 @@ func matchPattern(pattern, value string) bool {
 	// Prefix matching: "multipooler*" matches "multipooler-zone1-0"
 	if prefix, ok := strings.CutSuffix(pattern, "*"); ok {
 		return strings.HasPrefix(value, prefix)
+	}
+
+	// Suffix matching: "*:8080" matches "localhost:8080"
+	if suffix, ok := strings.CutPrefix(pattern, "*"); ok {
+		return strings.HasSuffix(value, suffix)
 	}
 
 	// Exact matching
