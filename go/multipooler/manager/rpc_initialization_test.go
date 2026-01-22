@@ -369,7 +369,11 @@ func TestTakeRemedialAction_PostgresRunning(t *testing.T) {
 func TestTakeRemedialAction_StartPostgres(t *testing.T) {
 	ctx := context.Background()
 
-	mockPgctld := &mockPgctldClient{}
+	mockPgctld := &mockPgctldClient{
+		statusResponse: &pgctldpb.StatusResponse{
+			Status: pgctldpb.ServerStatus_STOPPED,
+		},
+	}
 
 	pm := &MultiPoolerManager{
 		StateChanger: newStateChanger(mockPgctld),
@@ -394,6 +398,9 @@ func TestTakeRemedialAction_StartPostgresFails(t *testing.T) {
 	ctx := context.Background()
 
 	mockPgctld := &mockPgctldClient{
+		statusResponse: &pgctldpb.StatusResponse{
+			Status: pgctldpb.ServerStatus_STOPPED,
+		},
 		startError: assert.AnError,
 	}
 
@@ -532,58 +539,6 @@ func TestHasCompleteBackups_ActionLockTimeout(t *testing.T) {
 	result := pm.hasCompleteBackups(ctx)
 
 	assert.False(t, result)
-}
-
-func TestStartPostgres_Success(t *testing.T) {
-	ctx := context.Background()
-
-	mockPgctld := &mockPgctldClient{}
-
-	pm := &MultiPoolerManager{
-		StateChanger: newStateChanger(mockPgctld),
-		logger:       slog.Default(),
-		actionLock:   NewActionLock(),
-	}
-
-	err := pm.startPostgres(ctx)
-
-	require.NoError(t, err)
-	assert.True(t, mockPgctld.startCalled)
-}
-
-func TestStartPostgres_PgctldUnavailable(t *testing.T) {
-	ctx := context.Background()
-
-	pm := &MultiPoolerManager{
-		StateChanger: newStateChanger(nil),
-		logger:       slog.Default(),
-		actionLock:   NewActionLock(),
-	}
-
-	err := pm.startPostgres(ctx)
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "pgctld client not available")
-}
-
-func TestStartPostgres_StartFails(t *testing.T) {
-	ctx := context.Background()
-
-	mockPgctld := &mockPgctldClient{
-		startError: assert.AnError,
-	}
-
-	pm := &MultiPoolerManager{
-		StateChanger: newStateChanger(mockPgctld),
-		logger:       slog.Default(),
-		actionLock:   NewActionLock(),
-	}
-
-	err := pm.startPostgres(ctx)
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to start PostgreSQL")
-	assert.True(t, mockPgctld.startCalled)
 }
 
 // Integration Tests for MonitorPostgres

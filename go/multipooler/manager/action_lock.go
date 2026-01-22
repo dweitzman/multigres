@@ -24,6 +24,7 @@ import (
 	"golang.org/x/sync/semaphore"
 
 	"github.com/multigres/multigres/go/common/mterrors"
+	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 )
 
 // actionLockKey is the context key for storing action lock information
@@ -60,10 +61,8 @@ func NewActionLock() *ActionLock {
 // if the provided context already holds the lock.
 func (al *ActionLock) Acquire(ctx context.Context, operation string) (context.Context, error) {
 	// Check if this context already holds the lock
-	if val, ok := ctx.Value(actionLockKey{}).(*actionLockValue); ok {
-		if !val.released.Load() {
-			return ctx, fmt.Errorf("context already holds the action lock (operation: %s)", val.operation)
-		}
+	if err := al.checkNotAlreadyHeld(ctx); err != nil {
+		return ctx, err
 	}
 
 	// Try to acquire the semaphore
@@ -71,6 +70,39 @@ func (al *ActionLock) Acquire(ctx context.Context, operation string) (context.Co
 		return ctx, mterrors.Wrap(err, "failed to acquire action lock")
 	}
 
+	return al.createLockContext(ctx, operation), nil
+}
+
+// TryAcquire attempts to acquire the action lock without blocking.
+// Returns immediately with an error if the lock is not available.
+// The operation string is used for debugging/tracking purposes.
+// Returns an error if the lock cannot be acquired or if the provided context already holds the lock.
+func (al *ActionLock) TryAcquire(ctx context.Context, operation string) (context.Context, error) {
+	// Check if this context already holds the lock
+	if err := al.checkNotAlreadyHeld(ctx); err != nil {
+		return ctx, err
+	}
+
+	// Try to acquire the semaphore without blocking
+	if !al.sema.TryAcquire(1) {
+		return ctx, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, "action lock is held by another operation")
+	}
+
+	return al.createLockContext(ctx, operation), nil
+}
+
+// checkNotAlreadyHeld returns an error if the provided context already holds the lock
+func (al *ActionLock) checkNotAlreadyHeld(ctx context.Context) error {
+	if val, ok := ctx.Value(actionLockKey{}).(*actionLockValue); ok {
+		if !val.released.Load() {
+			return fmt.Errorf("context already holds the action lock (operation: %s)", val.operation)
+		}
+	}
+	return nil
+}
+
+// createLockContext creates a new context with lock ownership information
+func (al *ActionLock) createLockContext(ctx context.Context, operation string) context.Context {
 	// Generate a unique ID for this acquisition
 	al.mu.Lock()
 	lockID := al.nextID
@@ -87,7 +119,7 @@ func (al *ActionLock) Acquire(ctx context.Context, operation string) (context.Co
 	}
 
 	// Return a new context with the lock info
-	return context.WithValue(ctx, actionLockKey{}, val), nil
+	return context.WithValue(ctx, actionLockKey{}, val)
 }
 
 // Release releases the action lock. It validates that the provided context
