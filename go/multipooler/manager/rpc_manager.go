@@ -84,6 +84,16 @@ func (pm *MultiPoolerManager) SetPrimaryConnInfo(ctx context.Context, primary *c
 	}
 	defer pm.actionLock.Release(ctx)
 
+	// Pause the monitor to prevent it from starting PostgreSQL during configuration
+	// This is critical for timeline divergence detection - if MonitorPostgres starts
+	// PostgreSQL before we configure replication, PostgreSQL will connect to the old
+	// primary and update its timeline, making divergence undetectable.
+	resumeMonitor, err := pm.PausePostgresMonitor(ctx)
+	if err != nil {
+		return mterrors.Wrap(err, "failed to pause monitor")
+	}
+	defer resumeMonitor(ctx)
+
 	// Validate and update consensus term following consensus rules
 	if err = pm.validateAndUpdateTerm(ctx, currentTerm, force); err != nil {
 		return err
@@ -1029,7 +1039,7 @@ func (pm *MultiPoolerManager) DemoteStalePrimary(
 		return nil, err
 	}
 
-	if err := pm.stopPostgresIfRunning(ctx); err != nil {
+	if err := pm.stopPostgresFast(ctx); err != nil {
 		return nil, mterrors.Wrap(err, "failed to stop postgres")
 	}
 
@@ -1494,25 +1504,28 @@ func (pm *MultiPoolerManager) SetMonitor(
 // Helper methods for DemoteStalePrimary
 // ====================================================================================
 
-// stopPostgresIfRunning stops postgres if it's currently running.
-func (pm *MultiPoolerManager) stopPostgresIfRunning(ctx context.Context) error {
+// stopPostgresFast stops postgres using "fast" shutdown mode (SIGTERM).
+// This does not drain application connections first - PostgreSQL terminates
+// connections immediately. Use this for emergency operations like split-brain
+// demotion where speed is critical. For graceful shutdowns, consider adding
+// a separate method that drains connections first.
+func (pm *MultiPoolerManager) stopPostgresFast(ctx context.Context) error {
 	if pm.pgctldClient == nil {
 		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, "pgctld client not initialized")
 	}
 
-	pm.logger.InfoContext(ctx, "Stopping postgres if running")
+	pm.logger.InfoContext(ctx, "Stopping postgres with fast shutdown mode")
 
-	// Close manager to release connections
-	if err := pm.Close(); err != nil {
-		pm.logger.WarnContext(ctx, "Failed to close manager", "error", err)
-	}
-
-	// Stop postgres (no-op if already stopped)
+	// Stop postgres directly without closing the manager
+	// Stopping PostgreSQL will terminate all connections anyway,
+	// and calling Close() can block if there are active connections
+	// (e.g., blocked writes waiting for synchronous replication ACKs)
 	stopReq := &pgctldpb.StopRequest{Mode: "fast"}
 	if _, err := pm.pgctldClient.Stop(ctx, stopReq); err != nil {
 		return mterrors.Wrap(err, "failed to stop postgres")
 	}
 
+	pm.logger.InfoContext(ctx, "PostgreSQL stopped successfully")
 	return nil
 }
 

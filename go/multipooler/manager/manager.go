@@ -1657,19 +1657,32 @@ func (pm *MultiPoolerManager) hasCompleteBackups(ctx context.Context) bool {
 	return false
 }
 
-// startPostgres starts PostgreSQL via pgctld
+// startPostgres starts PostgreSQL via pgctld.
+// This acquires the action lock to prevent conflicts with recovery operations
+// (e.g., FixReplicationAction checking for timeline divergence).
 func (pm *MultiPoolerManager) startPostgres(ctx context.Context) error {
 	pm.logger.InfoContext(ctx, "MonitorPostgres: Attempting to restart PostgresSQL")
 	if pm.pgctldClient == nil {
 		return errors.New("pgctld client not available")
 	}
 
-	_, err := pm.pgctldClient.Start(ctx, &pgctldpb.StartRequest{})
+	// Acquire the action lock to serialize with recovery operations
+	// If a recovery action is in progress, we'll skip this iteration
+	lockCtx, err := pm.actionLock.Acquire(ctx, "MonitorPostgres.startPostgres")
+	if err != nil {
+		// Lock busy (recovery action in progress), skip this iteration
+		pm.logger.DebugContext(ctx, "MonitorPostgres: could not acquire action lock, skipping start attempt",
+			"error", err)
+		return fmt.Errorf("could not acquire action lock: %w", err)
+	}
+	defer pm.actionLock.Release(lockCtx)
+
+	_, err = pm.pgctldClient.Start(lockCtx, &pgctldpb.StartRequest{})
 	if err != nil {
 		return fmt.Errorf("MonitorPostgres: failed to start PostgreSQL: %w", err)
 	}
 
-	pm.logger.InfoContext(ctx, "MonitorPostgres: PostgreSQL started successfully")
+	pm.logger.InfoContext(lockCtx, "MonitorPostgres: PostgreSQL started successfully")
 	return nil
 }
 
