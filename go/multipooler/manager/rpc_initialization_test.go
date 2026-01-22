@@ -221,7 +221,7 @@ func TestHelperMethods(t *testing.T) {
 func TestDiscoverPostgresState_PgctldUnavailable(t *testing.T) {
 	ctx := context.Background()
 	pm := &MultiPoolerManager{
-		pgctldClient: nil, // pgctld unavailable
+		StateChanger: newStateChanger(nil), // pgctld unavailable
 	}
 
 	state := pm.discoverPostgresState(ctx)
@@ -243,7 +243,7 @@ func TestDiscoverPostgresState_NotInitialized(t *testing.T) {
 	}
 
 	pm := &MultiPoolerManager{
-		pgctldClient: mockPgctld,
+		StateChanger: newStateChanger(mockPgctld),
 		logger:       slog.Default(),
 		actionLock:   NewActionLock(),
 		config:       &Config{},
@@ -270,7 +270,7 @@ func TestDiscoverPostgresState_InitializedNotRunning(t *testing.T) {
 	}
 
 	pm := &MultiPoolerManager{
-		pgctldClient: mockPgctld,
+		StateChanger: newStateChanger(mockPgctld),
 		logger:       slog.Default(),
 	}
 
@@ -293,7 +293,7 @@ func TestDiscoverPostgresState_Running(t *testing.T) {
 	}
 
 	pm := &MultiPoolerManager{
-		pgctldClient: mockPgctld,
+		StateChanger: newStateChanger(mockPgctld),
 		logger:       slog.Default(),
 	}
 
@@ -313,7 +313,7 @@ func TestDiscoverPostgresState_StatusError(t *testing.T) {
 	}
 
 	pm := &MultiPoolerManager{
-		pgctldClient: mockPgctld,
+		StateChanger: newStateChanger(mockPgctld),
 		logger:       slog.Default(),
 	}
 
@@ -372,8 +372,9 @@ func TestTakeRemedialAction_StartPostgres(t *testing.T) {
 	mockPgctld := &mockPgctldClient{}
 
 	pm := &MultiPoolerManager{
-		pgctldClient: mockPgctld,
+		StateChanger: newStateChanger(mockPgctld),
 		logger:       slog.Default(),
+		actionLock:   NewActionLock(),
 	}
 
 	state := postgresState{
@@ -397,8 +398,9 @@ func TestTakeRemedialAction_StartPostgresFails(t *testing.T) {
 	}
 
 	pm := &MultiPoolerManager{
-		pgctldClient: mockPgctld,
+		StateChanger: newStateChanger(mockPgctld),
 		logger:       slog.Default(),
+		actionLock:   NewActionLock(),
 	}
 
 	state := postgresState{
@@ -538,8 +540,9 @@ func TestStartPostgres_Success(t *testing.T) {
 	mockPgctld := &mockPgctldClient{}
 
 	pm := &MultiPoolerManager{
-		pgctldClient: mockPgctld,
+		StateChanger: newStateChanger(mockPgctld),
 		logger:       slog.Default(),
+		actionLock:   NewActionLock(),
 	}
 
 	err := pm.startPostgres(ctx)
@@ -552,8 +555,9 @@ func TestStartPostgres_PgctldUnavailable(t *testing.T) {
 	ctx := context.Background()
 
 	pm := &MultiPoolerManager{
-		pgctldClient: nil,
+		StateChanger: newStateChanger(nil),
 		logger:       slog.Default(),
+		actionLock:   NewActionLock(),
 	}
 
 	err := pm.startPostgres(ctx)
@@ -570,8 +574,9 @@ func TestStartPostgres_StartFails(t *testing.T) {
 	}
 
 	pm := &MultiPoolerManager{
-		pgctldClient: mockPgctld,
+		StateChanger: newStateChanger(mockPgctld),
 		logger:       slog.Default(),
+		actionLock:   NewActionLock(),
 	}
 
 	err := pm.startPostgres(ctx)
@@ -597,8 +602,9 @@ func TestMonitorPostgres_WaitsForReady(t *testing.T) {
 	pm := &MultiPoolerManager{
 		logger:       slog.Default(),
 		readyChan:    readyChan,
-		pgctldClient: mockPgctld,
+		StateChanger: newStateChanger(mockPgctld),
 		state:        ManagerStateStarting,
+		actionLock:   NewActionLock(),
 	}
 
 	// Call iteration when not ready - should return early without calling pgctld
@@ -631,7 +637,7 @@ func TestMonitorPostgres_HandlesRunningPostgres(t *testing.T) {
 	pm := &MultiPoolerManager{
 		logger:       slog.Default(),
 		readyChan:    readyChan,
-		pgctldClient: mockPgctld,
+		StateChanger: newStateChanger(mockPgctld),
 		state:        ManagerStateReady,
 		actionLock:   NewActionLock(),
 		multipooler: &clustermetadatapb.MultiPooler{
@@ -661,8 +667,9 @@ func TestMonitorPostgres_StartsStoppedPostgres(t *testing.T) {
 	pm := &MultiPoolerManager{
 		logger:       slog.Default(),
 		readyChan:    readyChan,
-		pgctldClient: mockPgctld,
+		StateChanger: newStateChanger(mockPgctld),
 		state:        ManagerStateReady,
+		actionLock:   NewActionLock(),
 	}
 
 	// Call iteration - should discover stopped state and attempt to start
@@ -690,8 +697,9 @@ func TestMonitorPostgres_RetriesOnStartFailure(t *testing.T) {
 	pm := &MultiPoolerManager{
 		logger:       slog.Default(),
 		readyChan:    readyChan,
-		pgctldClient: mockPgctld,
+		StateChanger: newStateChanger(mockPgctld),
 		state:        ManagerStateReady,
+		actionLock:   NewActionLock(),
 	}
 
 	// Call iteration multiple times to simulate retry behavior

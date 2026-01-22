@@ -1302,9 +1302,9 @@ func (pm *MultiPoolerManager) RewindToSource(ctx context.Context, source *cluste
 	}
 	defer resumeMonitor(ctx)
 
-	// Check if pgctld client is available
-	if pm.pgctldClient == nil {
-		return nil, mterrors.Errorf(mtrpcpb.Code_UNAVAILABLE, "pgctld client not available")
+	// Check if StateChanger is available
+	if pm.StateChanger == nil {
+		return nil, mterrors.Errorf(mtrpcpb.Code_UNAVAILABLE, "StateChanger not available")
 	}
 
 	// Close manager and stop PostgreSQL
@@ -1319,7 +1319,7 @@ func (pm *MultiPoolerManager) RewindToSource(ctx context.Context, source *cluste
 	stopReq := &pgctldpb.StopRequest{
 		Mode: "fast",
 	}
-	if _, err := pm.pgctldClient.Stop(ctx, stopReq); err != nil {
+	if _, err := pm.StateChanger.PgctldStop(ctx, stopReq); err != nil {
 		pm.logger.ErrorContext(ctx, "Failed to stop PostgreSQL", "error", err)
 		return nil, mterrors.Wrap(err, "failed to stop PostgreSQL before pg_rewind")
 	}
@@ -1333,7 +1333,7 @@ func (pm *MultiPoolerManager) RewindToSource(ctx context.Context, source *cluste
 		SourcePort: port,
 		DryRun:     true,
 	}
-	dryRunResp, err := pm.pgctldClient.PgRewind(ctx, dryRunReq)
+	dryRunResp, err := pm.StateChanger.PgctldPgRewind(ctx, dryRunReq)
 	if err != nil {
 		pm.logger.ErrorContext(ctx, "pg_rewind dry-run failed, leaving postgres stopped", "error", err)
 		if dryRunResp != nil {
@@ -1355,7 +1355,7 @@ func (pm *MultiPoolerManager) RewindToSource(ctx context.Context, source *cluste
 			SourcePort: port,
 			DryRun:     false,
 		}
-		rewindResp, err := pm.pgctldClient.PgRewind(ctx, rewindReq)
+		rewindResp, err := pm.StateChanger.PgctldPgRewind(ctx, rewindReq)
 		if err != nil {
 			pm.logger.ErrorContext(ctx, "pg_rewind failed, leaving postgres stopped", "error", err)
 			if rewindResp != nil {
@@ -1378,7 +1378,7 @@ func (pm *MultiPoolerManager) RewindToSource(ctx context.Context, source *cluste
 		Mode:      "fast",
 		AsStandby: true,
 	}
-	if _, err := pm.pgctldClient.Restart(ctx, restartReq); err != nil {
+	if _, err := pm.StateChanger.PgctldRestart(ctx, restartReq); err != nil {
 		pm.logger.ErrorContext(ctx, "Failed to restart PostgreSQL as standby", "error", err)
 		return nil, mterrors.Wrap(err, "failed to start PostgreSQL as standby after pg_rewind")
 	}
@@ -1427,9 +1427,11 @@ func (pm *MultiPoolerManager) SetMonitor(
 // ====================================================================================
 
 // stopPostgresIfRunning stops postgres if it's currently running.
+// stopPostgresIfRunning stops PostgreSQL if it's running.
+// Caller must hold the action lock.
 func (pm *MultiPoolerManager) stopPostgresIfRunning(ctx context.Context) error {
-	if pm.pgctldClient == nil {
-		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, "pgctld client not initialized")
+	if pm.StateChanger == nil {
+		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, "StateChanger not initialized")
 	}
 
 	pm.logger.InfoContext(ctx, "Stopping postgres if running")
@@ -1441,7 +1443,7 @@ func (pm *MultiPoolerManager) stopPostgresIfRunning(ctx context.Context) error {
 
 	// Stop postgres (no-op if already stopped)
 	stopReq := &pgctldpb.StopRequest{Mode: "fast"}
-	if _, err := pm.pgctldClient.Stop(ctx, stopReq); err != nil {
+	if _, err := pm.StateChanger.PgctldStop(ctx, stopReq); err != nil {
 		return mterrors.Wrap(err, "failed to stop postgres")
 	}
 
@@ -1450,9 +1452,10 @@ func (pm *MultiPoolerManager) stopPostgresIfRunning(ctx context.Context) error {
 
 // runPgRewind runs pg_rewind to sync with source.
 // Returns true if rewind was performed, false if not needed.
+// Caller must hold the action lock.
 func (pm *MultiPoolerManager) runPgRewind(ctx context.Context, sourceHost string, sourcePort int32) (bool, error) {
-	if pm.pgctldClient == nil {
-		return false, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, "pgctld client not initialized")
+	if pm.StateChanger == nil {
+		return false, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, "StateChanger not initialized")
 	}
 
 	pm.logger.InfoContext(ctx, "Running pg_rewind dry-run", "source_host", sourceHost, "source_port", sourcePort)
@@ -1463,7 +1466,7 @@ func (pm *MultiPoolerManager) runPgRewind(ctx context.Context, sourceHost string
 		SourcePort: sourcePort,
 		DryRun:     true,
 	}
-	dryRunResp, err := pm.pgctldClient.PgRewind(ctx, dryRunReq)
+	dryRunResp, err := pm.StateChanger.PgctldPgRewind(ctx, dryRunReq)
 	if err != nil {
 		if dryRunResp != nil {
 			pm.logger.ErrorContext(ctx, "pg_rewind dry-run failed", "error", err, "output", dryRunResp.Output)
@@ -1480,7 +1483,7 @@ func (pm *MultiPoolerManager) runPgRewind(ctx context.Context, sourceHost string
 			SourcePort: sourcePort,
 			DryRun:     false,
 		}
-		rewindResp, err := pm.pgctldClient.PgRewind(ctx, rewindReq)
+		rewindResp, err := pm.StateChanger.PgctldPgRewind(ctx, rewindReq)
 		if err != nil {
 			if rewindResp != nil {
 				pm.logger.ErrorContext(ctx, "pg_rewind failed", "error", err, "output", rewindResp.Output)

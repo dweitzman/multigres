@@ -70,6 +70,7 @@ func newTestManagerWithMock(tableGroup, shard string) (*MultiPoolerManager, *moc
 		logger:      logger,
 		qsc:         &mockPoolerController{queryService: mockQueryService},
 		topoClient:  topoStore,
+		actionLock:  NewActionLock(),
 		config:      &Config{},
 		multipooler: multiPooler,
 	}
@@ -194,7 +195,11 @@ func TestCreateSidecarSchema(t *testing.T) {
 			tt.setupMock(mockQueryService)
 
 			ctx := context.Background()
-			err := pm.createSidecarSchema(ctx)
+			ctx, err := pm.actionLock.Acquire(ctx, "test")
+			assert.NoError(t, err)
+			defer pm.actionLock.Release(ctx)
+
+			err = pm.createSidecarSchema(ctx)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -265,7 +270,11 @@ func TestInsertDurabilityPolicy(t *testing.T) {
 			tt.setupMock(mockQueryService)
 
 			ctx := context.Background()
-			err := pm.insertDurabilityPolicy(ctx, tt.policyName, tt.quorumRule)
+			ctx, err := pm.actionLock.Acquire(ctx, "test")
+			assert.NoError(t, err)
+			defer pm.actionLock.Release(ctx)
+
+			err = pm.insertDurabilityPolicy(ctx, tt.policyName, tt.quorumRule)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -359,7 +368,11 @@ func TestInitializeMultischemaData(t *testing.T) {
 			tt.setupMock(mockQueryService)
 
 			ctx := context.Background()
-			err := pm.initializeMultischemaData(ctx)
+			ctx, err := pm.actionLock.Acquire(ctx, "test")
+			assert.NoError(t, err)
+			defer pm.actionLock.Release(ctx)
+
+			err = pm.initializeMultischemaData(ctx)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -440,7 +453,11 @@ func TestInsertLeadershipHistory(t *testing.T) {
 			tt.setupMock(mockQueryService)
 
 			ctx := context.Background()
-			err := pm.insertLeadershipHistory(ctx, tt.termNumber, tt.leaderID, tt.coordinatorID,
+			ctx, err := pm.actionLock.Acquire(ctx, "test")
+			assert.NoError(t, err)
+			defer pm.actionLock.Release(ctx)
+
+			err = pm.insertLeadershipHistory(ctx, tt.termNumber, tt.leaderID, tt.coordinatorID,
 				tt.walPosition, tt.reason, tt.cohortMembers, tt.acceptedMembers)
 
 			if tt.expectError {

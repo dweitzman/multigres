@@ -58,14 +58,23 @@ const (
 	ManagerStateError ManagerState = "error"
 )
 
+// QueryIntent indicates whether a query is read-only or modifies state
+type QueryIntent int
+
+const (
+	// QueryIntentReadOnly indicates the query is read-only and doesn't require the action lock
+	QueryIntentReadOnly QueryIntent = iota
+	// QueryIntentStateChange indicates the query modifies PostgreSQL or cluster state and requires the action lock
+	QueryIntentStateChange
+)
+
 // MultiPoolerManager manages the pooler lifecycle and PostgreSQL operations
 type MultiPoolerManager struct {
-	logger       *slog.Logger
-	config       *Config
-	topoClient   topoclient.Store
-	serviceID    *clustermetadatapb.ID
-	replTracker  *heartbeat.ReplTracker
-	pgctldClient pgctldpb.PgCtldClient
+	logger      *slog.Logger
+	config      *Config
+	topoClient  topoclient.Store
+	serviceID   *clustermetadatapb.ID
+	replTracker *heartbeat.ReplTracker
 
 	// connPoolMgr manages all connection pools (admin, regular, reserved)
 	connPoolMgr connpoolmanager.PoolManager
@@ -80,6 +89,11 @@ type MultiPoolerManager struct {
 	// like in the case of a restore. This lock must be obtained
 	// first before other mutexes.
 	actionLock *ActionLock
+
+	// StateChanger is the chokepoint for all state-modifying operations.
+	// All operations that modify PostgreSQL or cluster state must go through StateChanger.
+	// This enforces that the action lock is held, preventing concurrent state modifications.
+	StateChanger *StateChanger
 
 	// Multipooler record from topology and startup state
 
@@ -216,7 +230,6 @@ func NewMultiPoolerManagerWithTimeout(logger *slog.Logger, multiPooler *clusterm
 		loadTimeout:            loadTimeout,
 		pgMonitorRetryInterval: monitorRetryInterval,
 		queryServingState:      clustermetadatapb.PoolerServingStatus_NOT_SERVING,
-		pgctldClient:           pgctldClient,
 		connPoolMgr:            connPoolMgr,
 		readyChan:              make(chan struct{}),
 		pgMonitor:              monitorRunner,
@@ -225,6 +238,12 @@ func NewMultiPoolerManagerWithTimeout(logger *slog.Logger, multiPooler *clusterm
 		ctx:    ctx,
 		cancel: cancel,
 	}
+
+	// Initialize StateChanger with pgctldClient
+	// StateChanger is the chokepoint for all pgctld state-modifying operations.
+	// pgctldClient is now owned by StateChanger to enforce structural lock checks.
+	// For SQL-based state changes, use pm.exec(ctx, sql, QueryIntentStateChange).
+	pm.StateChanger = newStateChanger(pgctldClient)
 
 	// Create the query service controller with the pool manager
 	pm.qsc = poolerserver.NewQueryPoolerServer(logger, connPoolMgr)
@@ -248,7 +267,16 @@ func (pm *MultiPoolerManager) internalQueryService() executor.InternalQueryServi
 
 // query executes a query using the internal query service and returns the result.
 // This is a convenience method for internal manager operations.
-func (pm *MultiPoolerManager) query(ctx context.Context, sql string) (*sqltypes.Result, error) {
+// query executes a SQL query using the internal query service and returns the result.
+// The intent parameter indicates whether this query modifies PostgreSQL or cluster state.
+// Use QueryIntentStateChange for state modifications (requires action lock, enforced by assertion).
+// Use QueryIntentReadOnly for read-only queries.
+func (pm *MultiPoolerManager) query(ctx context.Context, sql string, intent QueryIntent) (*sqltypes.Result, error) {
+	if intent == QueryIntentStateChange {
+		if err := AssertActionLockHeld(ctx); err != nil {
+			return nil, fmt.Errorf("state-changing query requires action lock: %w", err)
+		}
+	}
 	queryService := pm.internalQueryService()
 	if queryService == nil {
 		return nil, errors.New("internal query service not available")
@@ -257,15 +285,25 @@ func (pm *MultiPoolerManager) query(ctx context.Context, sql string) (*sqltypes.
 }
 
 // exec executes a command that doesn't return rows.
-// This is a convenience method for internal manager operations.
-func (pm *MultiPoolerManager) exec(ctx context.Context, sql string) error {
-	_, err := pm.query(ctx, sql)
+// The intent parameter indicates whether this command modifies PostgreSQL or cluster state.
+// Use QueryIntentStateChange for state modifications (requires action lock, enforced by assertion).
+// Use QueryIntentReadOnly for read-only queries.
+func (pm *MultiPoolerManager) exec(ctx context.Context, sql string, intent QueryIntent) error {
+	_, err := pm.query(ctx, sql, intent)
 	return err
 }
 
 // queryArgs executes a parameterized query using the internal query service and returns the result.
 // This is a convenience method for internal manager operations that helps prevent SQL injection.
-func (pm *MultiPoolerManager) queryArgs(ctx context.Context, sql string, args ...any) (*sqltypes.Result, error) {
+// The intent parameter indicates whether this query modifies PostgreSQL or cluster state.
+// Use QueryIntentStateChange for state modifications (requires action lock, enforced by assertion).
+// Use QueryIntentReadOnly for read-only queries.
+func (pm *MultiPoolerManager) queryArgs(ctx context.Context, sql string, intent QueryIntent, args ...any) (*sqltypes.Result, error) {
+	if intent == QueryIntentStateChange {
+		if err := AssertActionLockHeld(ctx); err != nil {
+			return nil, fmt.Errorf("state-changing query requires action lock: %w", err)
+		}
+	}
 	queryService := pm.internalQueryService()
 	if queryService == nil {
 		return nil, errors.New("internal query service not available")
@@ -275,8 +313,11 @@ func (pm *MultiPoolerManager) queryArgs(ctx context.Context, sql string, args ..
 
 // execArgs executes a parameterized command that doesn't return rows.
 // This is a convenience method for internal manager operations that helps prevent SQL injection.
-func (pm *MultiPoolerManager) execArgs(ctx context.Context, sql string, args ...any) error {
-	_, err := pm.queryArgs(ctx, sql, args...)
+// The intent parameter indicates whether this command modifies PostgreSQL or cluster state.
+// Use QueryIntentStateChange for state modifications (requires action lock, enforced by assertion).
+// Use QueryIntentReadOnly for read-only queries.
+func (pm *MultiPoolerManager) execArgs(ctx context.Context, sql string, intent QueryIntent, args ...any) error {
+	_, err := pm.queryArgs(ctx, sql, intent, args...)
 	return err
 }
 
@@ -442,10 +483,6 @@ func (pm *MultiPoolerManager) stanzaName() string {
 	return "multigres"
 }
 
-// getPgCtldClient returns the pgctld gRPC client
-func (pm *MultiPoolerManager) getPgCtldClient() pgctldpb.PgCtldClient {
-	return pm.pgctldClient
-}
 
 // getPoolerType returns the pooler type from the multipooler record
 func (pm *MultiPoolerManager) getPoolerType() clustermetadatapb.PoolerType {
@@ -964,7 +1001,7 @@ func (pm *MultiPoolerManager) runCheckpointAsync(ctx context.Context) chan error
 	checkpointDone := make(chan error, 1)
 	go func() {
 		pm.logger.InfoContext(ctx, "Starting checkpoint")
-		err := pm.exec(ctx, "CHECKPOINT")
+		err := pm.exec(ctx, "CHECKPOINT", QueryIntentReadOnly)
 		if err != nil {
 			pm.logger.WarnContext(ctx, "Checkpoint failed", "error", err)
 			checkpointDone <- err
@@ -984,8 +1021,8 @@ func (pm *MultiPoolerManager) restartPostgresAsStandby(ctx context.Context, stat
 		return nil
 	}
 
-	if pm.pgctldClient == nil {
-		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, "pgctld client not initialized")
+	if pm.StateChanger == nil {
+		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, "StateChanger not initialized")
 	}
 
 	pm.logger.InfoContext(ctx, "Restarting PostgreSQL as standby")
@@ -999,7 +1036,7 @@ func (pm *MultiPoolerManager) restartPostgresAsStandby(ctx context.Context, stat
 		AsStandby: true, // Create standby.signal before restart
 	}
 
-	resp, err := pm.pgctldClient.Restart(ctx, req)
+	resp, err := pm.StateChanger.PgctldRestart(ctx, req)
 	if err != nil {
 		return mterrors.Wrap(err, "failed to restart as standby")
 	}
@@ -1077,7 +1114,7 @@ func (pm *MultiPoolerManager) getActiveWriteConnections(ctx context.Context) ([]
 		  AND query NOT ILIKE 'ROLLBACK%'
 		  AND query != '<IDLE>'`
 
-	result, err := pm.query(ctx, sql)
+	result, err := pm.query(ctx, sql, QueryIntentReadOnly)
 	if err != nil {
 		return nil, err
 	}
@@ -1115,7 +1152,7 @@ func (pm *MultiPoolerManager) terminateWriteConnections(ctx context.Context) (in
 
 	// Terminate each write connection
 	for _, pid := range pids {
-		if err := pm.execArgs(ctx, "SELECT pg_terminate_backend($1)", pid); err != nil {
+		if err := pm.execArgs(ctx, "SELECT pg_terminate_backend($1)", QueryIntentStateChange, pid); err != nil {
 			pm.logger.WarnContext(ctx, "Failed to terminate write connection", "pid", pid, "error", err)
 		}
 	}
@@ -1259,7 +1296,7 @@ func (pm *MultiPoolerManager) promoteStandbyToPrimary(ctx context.Context, state
 	// Call pg_promote() to promote standby to primary
 	pm.logger.InfoContext(ctx, "PostgreSQL promotion needed")
 	pm.logger.InfoContext(ctx, "Calling pg_promote() to promote standby to primary")
-	if err := pm.exec(ctx, "SELECT pg_promote()"); err != nil {
+	if err := pm.exec(ctx, "SELECT pg_promote()", QueryIntentStateChange); err != nil {
 		pm.logger.ErrorContext(ctx, "Failed to call pg_promote()", "error", err)
 		return mterrors.Wrap(err, "failed to promote standby")
 	}
@@ -1485,14 +1522,14 @@ func (pm *MultiPoolerManager) monitorPostgresIteration(ctx context.Context) {
 func (pm *MultiPoolerManager) discoverPostgresState(ctx context.Context) postgresState {
 	state := postgresState{}
 
-	// Check if pgctld client is available
-	if pm.pgctldClient == nil {
+	// Check if StateChanger is available
+	if pm.StateChanger == nil {
 		return state // All fields remain false
 	}
 	state.pgctldAvailable = true
 
-	// Get status from pgctld
-	statusResp, err := pm.pgctldClient.Status(ctx, &pgctldpb.StatusRequest{})
+	// Get status from pgctld (read-only, no lock required)
+	statusResp, err := pm.StateChanger.PgctldStatus(ctx, &pgctldpb.StatusRequest{})
 	if err != nil {
 		// pgctld call failed, treat as unavailable
 		state.pgctldAvailable = false
@@ -1642,14 +1679,25 @@ func (pm *MultiPoolerManager) hasCompleteBackups(ctx context.Context) bool {
 	return false
 }
 
-// startPostgres starts PostgreSQL via pgctld
+// startPostgres starts PostgreSQL via pgctld.
 func (pm *MultiPoolerManager) startPostgres(ctx context.Context) error {
 	pm.logger.InfoContext(ctx, "MonitorPostgres: Attempting to restart PostgresSQL")
-	if pm.pgctldClient == nil {
-		return errors.New("pgctld client not available")
+	if pm.StateChanger == nil {
+		return errors.New("StateChanger not available")
 	}
 
-	_, err := pm.pgctldClient.Start(ctx, &pgctldpb.StartRequest{})
+	// Acquire the action lock to serialize with recovery operations
+	// If a recovery action is in progress, we'll skip this iteration
+	lockCtx, err := pm.actionLock.Acquire(ctx, "MonitorPostgres.startPostgres")
+	if err != nil {
+		// Lock busy (recovery action in progress), skip this iteration
+		pm.logger.DebugContext(ctx, "MonitorPostgres: could not acquire action lock, skipping start attempt",
+			"error", err)
+		return fmt.Errorf("could not acquire action lock: %w", err)
+	}
+	defer pm.actionLock.Release(lockCtx)
+
+	_, err = pm.StateChanger.PgctldStart(lockCtx, &pgctldpb.StartRequest{})
 	if err != nil {
 		return fmt.Errorf("MonitorPostgres: failed to start PostgreSQL: %w", err)
 	}
@@ -1670,8 +1718,8 @@ func (pm *MultiPoolerManager) restoreAndStartPostgres(ctx context.Context) error
 
 	// Re-check status after acquiring lock to ensure conditions haven't changed
 	// (e.g., another process may have initialized or started postgres while we waited)
-	if pm.pgctldClient != nil {
-		statusResp, err := pm.pgctldClient.Status(lockCtx, &pgctldpb.StatusRequest{})
+	if pm.StateChanger != nil {
+		statusResp, err := pm.StateChanger.PgctldStatus(lockCtx, &pgctldpb.StatusRequest{})
 		if err == nil {
 			// If directory is now initialized, skip restore
 			if statusResp.Status != pgctldpb.ServerStatus_NOT_INITIALIZED {

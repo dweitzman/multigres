@@ -1018,7 +1018,11 @@ func TestSetSynchronousStandbyNames(t *testing.T) {
 			tt.setupMock(mockQueryService)
 
 			ctx := context.Background()
-			err := pm.setSynchronousStandbyNames(ctx, tt.synchronousMethod, tt.numSync, tt.standbyIDs)
+			ctx, err := pm.actionLock.Acquire(ctx, "test")
+			require.NoError(t, err)
+			defer pm.actionLock.Release(ctx)
+
+			err = pm.setSynchronousStandbyNames(ctx, tt.synchronousMethod, tt.numSync, tt.standbyIDs)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -1428,6 +1432,10 @@ func TestPauseReplication(t *testing.T) {
 			tt.setupMock(mockQueryService)
 
 			ctx := context.Background()
+			ctx, err := pm.actionLock.Acquire(ctx, "test")
+			require.NoError(t, err)
+			defer pm.actionLock.Release(ctx)
+
 			status, err := pm.pauseReplication(ctx, tt.mode, tt.wait)
 
 			if tt.expectError {
@@ -1493,7 +1501,11 @@ func TestResetPrimaryConnInfo(t *testing.T) {
 			tt.setupMock(mockQueryService)
 
 			ctx := context.Background()
-			err := pm.resetPrimaryConnInfo(ctx)
+			ctx, err := pm.actionLock.Acquire(ctx, "test")
+			require.NoError(t, err)
+			defer pm.actionLock.Release(ctx)
+
+			err = pm.resetPrimaryConnInfo(ctx)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -1549,7 +1561,11 @@ func TestClearSyncReplicationForDemotion(t *testing.T) {
 			tt.setupMock(mockQueryService)
 
 			ctx := context.Background()
-			err := pm.clearSyncReplicationForDemotion(ctx)
+			ctx, err := pm.actionLock.Acquire(ctx, "test")
+			require.NoError(t, err)
+			defer pm.actionLock.Release(ctx)
+
+			err = pm.clearSyncReplicationForDemotion(ctx)
 
 			if tt.expectError {
 				assert.Error(t, err)

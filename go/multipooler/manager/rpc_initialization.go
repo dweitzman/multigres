@@ -73,12 +73,12 @@ func (pm *MultiPoolerManager) InitializeEmptyPrimary(ctx context.Context, req *m
 	// Initialize data directory via pgctld if needed
 	if !pm.hasDataDirectory() {
 		pm.logger.InfoContext(ctx, "Initializing data directory", "shard", pm.getShardID())
-		if pm.pgctldClient == nil {
-			return nil, mterrors.New(mtrpcpb.Code_UNAVAILABLE, "pgctld client not available")
+		if pm.StateChanger == nil {
+			return nil, mterrors.New(mtrpcpb.Code_UNAVAILABLE, "StateChanger not available")
 		}
 
 		initReq := &pgctldpb.InitDataDirRequest{}
-		if _, err := pm.pgctldClient.InitDataDir(ctx, initReq); err != nil {
+		if _, err := pm.StateChanger.PgctldInitDataDir(ctx, initReq); err != nil {
 			return nil, mterrors.Wrap(err, "failed to initialize data directory")
 		}
 
@@ -93,12 +93,12 @@ func (pm *MultiPoolerManager) InitializeEmptyPrimary(ctx context.Context, req *m
 	// Start PostgreSQL if not running
 	if !pm.isPostgresRunning(ctx) {
 		pm.logger.InfoContext(ctx, "Starting PostgreSQL", "shard", pm.getShardID())
-		if pm.pgctldClient == nil {
-			return nil, mterrors.New(mtrpcpb.Code_UNAVAILABLE, "pgctld client not available")
+		if pm.StateChanger == nil {
+			return nil, mterrors.New(mtrpcpb.Code_UNAVAILABLE, "StateChanger not available")
 		}
 
 		startReq := &pgctldpb.StartRequest{}
-		if _, err := pm.pgctldClient.Start(ctx, startReq); err != nil {
+		if _, err := pm.StateChanger.PgctldStart(ctx, startReq); err != nil {
 			return nil, mterrors.Wrap(err, "failed to start PostgreSQL")
 		}
 	}
@@ -276,14 +276,14 @@ func (pm *MultiPoolerManager) hasDataDirectory() bool {
 
 // isPostgresRunning checks if PostgreSQL is currently running
 func (pm *MultiPoolerManager) isPostgresRunning(ctx context.Context) bool {
-	if pm.pgctldClient == nil {
-		// No pgctld client, try a simple query to check if PostgreSQL is responding
-		_, err := pm.query(ctx, "SELECT 1")
+	if pm.StateChanger == nil {
+		// No StateChanger, try a simple query to check if PostgreSQL is responding
+		_, err := pm.query(ctx, "SELECT 1", QueryIntentReadOnly)
 		return err == nil
 	}
 
 	statusReq := &pgctldpb.StatusRequest{}
-	statusResp, err := pm.pgctldClient.Status(ctx, statusReq)
+	statusResp, err := pm.StateChanger.PgctldStatus(ctx, statusReq)
 	if err != nil {
 		return false
 	}
@@ -359,7 +359,7 @@ func (pm *MultiPoolerManager) removeDataDirectory() error {
 // waitForDatabaseConnection waits for the database connection to become available
 func (pm *MultiPoolerManager) waitForDatabaseConnection(ctx context.Context) error {
 	// Test if database is already reachable
-	if _, err := pm.query(ctx, "SELECT 1"); err == nil {
+	if _, err := pm.query(ctx, "SELECT 1", QueryIntentReadOnly); err == nil {
 		// Start heartbeat tracker if not already running
 		if pm.replTracker == nil {
 			shardID := []byte("0") // default shard ID
@@ -389,7 +389,7 @@ func (pm *MultiPoolerManager) waitForDatabaseConnection(ctx context.Context) err
 		}
 
 		// Try to query the database
-		if _, queryErr := pm.query(ctx, "SELECT 1"); queryErr == nil {
+		if _, queryErr := pm.query(ctx, "SELECT 1", QueryIntentReadOnly); queryErr == nil {
 			pm.logger.InfoContext(ctx, "Database connection established successfully", "attempts", attempt)
 
 			// Start heartbeat tracker if not already running

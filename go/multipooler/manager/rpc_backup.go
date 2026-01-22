@@ -431,10 +431,11 @@ func (pm *MultiPoolerManager) executePgBackrestRestore(ctx context.Context, back
 	return nil
 }
 
+// startPostgreSQLAfterRestore starts PostgreSQL as a standby after restore.
+// Caller must hold the action lock.
 func (pm *MultiPoolerManager) startPostgreSQLAfterRestore(ctx context.Context, backupID string) error {
-	pgctldClient := pm.getPgCtldClient()
-	if pgctldClient == nil {
-		return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "pgctld_client is required")
+	if pm.StateChanger == nil {
+		return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "StateChanger is required")
 	}
 
 	restartCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
@@ -443,7 +444,7 @@ func (pm *MultiPoolerManager) startPostgreSQLAfterRestore(ctx context.Context, b
 	slog.InfoContext(ctx, "Starting PostgreSQL after restore",
 		"backup_id", backupID)
 
-	_, err := pgctldClient.Restart(restartCtx, &pgctldpb.RestartRequest{
+	_, err := pm.StateChanger.PgctldRestart(restartCtx, &pgctldpb.RestartRequest{
 		AsStandby: true,
 	})
 	if err != nil {

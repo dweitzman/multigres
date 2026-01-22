@@ -123,7 +123,7 @@ func (pm *MultiPoolerManager) initializeMultischemaData(ctx context.Context) err
 func (pm *MultiPoolerManager) createSchema(ctx context.Context) error {
 	execCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer cancel()
-	if err := pm.exec(execCtx, "CREATE SCHEMA IF NOT EXISTS multigres"); err != nil {
+	if err := pm.exec(execCtx, "CREATE SCHEMA IF NOT EXISTS multigres", QueryIntentStateChange); err != nil {
 		return mterrors.Wrap(err, "failed to create multigres schema")
 	}
 	return nil
@@ -141,7 +141,7 @@ func (pm *MultiPoolerManager) createHeartbeatTable(ctx context.Context) error {
 		shard_id BYTEA PRIMARY KEY,
 		leader_id TEXT NOT NULL,
 		ts BIGINT NOT NULL
-	)`); err != nil {
+	)`, QueryIntentStateChange); err != nil {
 		return mterrors.Wrap(err, "failed to create heartbeat table")
 	}
 	return nil
@@ -163,7 +163,7 @@ func (pm *MultiPoolerManager) createDurabilityPolicyTable(ctx context.Context) e
 		CONSTRAINT quorum_rule_required_count_check CHECK (
 			(quorum_rule->>'required_count')::int >= 1
 		)
-	)`); err != nil {
+	)`, QueryIntentStateChange); err != nil {
 		return mterrors.Wrap(err, "failed to create durability_policy table")
 	}
 	execCtx, cancel = context.WithTimeout(ctx, 500*time.Millisecond)
@@ -171,7 +171,7 @@ func (pm *MultiPoolerManager) createDurabilityPolicyTable(ctx context.Context) e
 	// Create index on is_active for efficient active policy lookups
 	if err := pm.exec(execCtx, `CREATE INDEX IF NOT EXISTS idx_durability_policy_active
 		ON multigres.durability_policy(is_active)
-		WHERE is_active = true`); err != nil {
+		WHERE is_active = true`, QueryIntentStateChange); err != nil {
 		return mterrors.Wrap(err, "failed to create durability_policy index")
 	}
 
@@ -192,14 +192,14 @@ func (pm *MultiPoolerManager) createLeadershipHistoryTable(ctx context.Context) 
 		cohort_members JSONB NOT NULL,
 		accepted_members JSONB NOT NULL,
 		created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-	)`); err != nil {
+	)`, QueryIntentStateChange); err != nil {
 		return mterrors.Wrap(err, "failed to create leadership_history table")
 	}
 
 	execCtx, cancel = context.WithTimeout(ctx, 500*time.Millisecond)
 	defer cancel()
 	if err := pm.exec(execCtx, `CREATE INDEX IF NOT EXISTS idx_leadership_history_term
-		ON multigres.leadership_history(term_number DESC)`); err != nil {
+		ON multigres.leadership_history(term_number DESC)`, QueryIntentStateChange); err != nil {
 		return mterrors.Wrap(err, "failed to create leadership_history index")
 	}
 
@@ -218,7 +218,7 @@ func (pm *MultiPoolerManager) createTablegroup(ctx context.Context) error {
 		oid BIGSERIAL PRIMARY KEY,
 		name TEXT NOT NULL UNIQUE,
 		type TEXT NOT NULL
-	)`); err != nil {
+	)`, QueryIntentStateChange); err != nil {
 		return mterrors.Wrap(err, "failed to create tablegroup table")
 	}
 	return nil
@@ -233,7 +233,7 @@ func (pm *MultiPoolerManager) createTablegroupTable(ctx context.Context) error {
 		tablegroup_oid BIGINT NOT NULL REFERENCES multigres.tablegroup(oid),
 		name TEXT NOT NULL,
 		UNIQUE (tablegroup_oid, name)
-	)`); err != nil {
+	)`, QueryIntentStateChange); err != nil {
 		return mterrors.Wrap(err, "failed to create tablegroup_table table")
 	}
 	return nil
@@ -250,7 +250,7 @@ func (pm *MultiPoolerManager) createShard(ctx context.Context) error {
 		key_range_start BYTEA NULL,
 		key_range_end BYTEA NULL,
 		UNIQUE (tablegroup_oid, shard_name)
-	)`); err != nil {
+	)`, QueryIntentStateChange); err != nil {
 		return mterrors.Wrap(err, "failed to create shard table")
 	}
 	return nil
@@ -269,7 +269,7 @@ func (pm *MultiPoolerManager) insertTablegroup(ctx context.Context, name string)
 	defer cancel()
 	err := pm.execArgs(execCtx, `INSERT INTO multigres.tablegroup (name, type)
 		VALUES ($1, 'unsharded')
-		ON CONFLICT (name) DO NOTHING`, name)
+		ON CONFLICT (name) DO NOTHING`, QueryIntentStateChange, name)
 	if err != nil {
 		return mterrors.Wrap(err, "failed to insert tablegroup")
 	}
@@ -285,7 +285,7 @@ func (pm *MultiPoolerManager) insertShard(ctx context.Context, tablegroupName st
 	// First, fetch the tablegroup oid
 	queryCtx, queryCancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer queryCancel()
-	result, err := pm.queryArgs(queryCtx, "SELECT oid FROM multigres.tablegroup WHERE name = $1", tablegroupName)
+	result, err := pm.queryArgs(queryCtx, "SELECT oid FROM multigres.tablegroup WHERE name = $1", QueryIntentReadOnly, tablegroupName)
 	if err != nil {
 		return mterrors.Wrap(err, "failed to find tablegroup: "+tablegroupName)
 	}
@@ -300,7 +300,7 @@ func (pm *MultiPoolerManager) insertShard(ctx context.Context, tablegroupName st
 	defer execCancel()
 	err = pm.execArgs(execCtx, `INSERT INTO multigres.shard (tablegroup_oid, shard_name)
 		VALUES ($1, $2)
-		ON CONFLICT (tablegroup_oid, shard_name) DO NOTHING`, tablegroupOid, shardName)
+		ON CONFLICT (tablegroup_oid, shard_name) DO NOTHING`, QueryIntentStateChange, tablegroupOid, shardName)
 	if err != nil {
 		return mterrors.Wrap(err, "failed to insert shard")
 	}
@@ -317,7 +317,7 @@ func (pm *MultiPoolerManager) insertDurabilityPolicy(ctx context.Context, policy
 	defer cancel()
 	err := pm.execArgs(execCtx, `INSERT INTO multigres.durability_policy (policy_name, policy_version, quorum_rule, is_active, created_at, updated_at)
 		VALUES ($1, 1, $2::jsonb, true, NOW(), NOW())
-		ON CONFLICT (policy_name, policy_version) DO NOTHING`, policyName, quorumRuleJSON)
+		ON CONFLICT (policy_name, policy_version) DO NOTHING`, QueryIntentStateChange, policyName, quorumRuleJSON)
 	if err != nil {
 		return mterrors.Wrap(err, "failed to insert durability policy")
 	}
@@ -353,7 +353,7 @@ func (pm *MultiPoolerManager) insertLeadershipHistory(ctx context.Context, termN
 	err = pm.execArgs(execCtx, `INSERT INTO multigres.leadership_history
 		(term_number, leader_id, coordinator_id, wal_position, reason, cohort_members, accepted_members)
 		VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb)`,
-		termNumber, leaderID, coordinatorID, walPosition, reason, cohortJSON, acceptedJSON)
+		QueryIntentStateChange, termNumber, leaderID, coordinatorID, walPosition, reason, cohortJSON, acceptedJSON)
 	if err != nil {
 		return mterrors.Wrap(err, "failed to insert leadership history")
 	}

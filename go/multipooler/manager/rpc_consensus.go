@@ -50,7 +50,7 @@ func (pm *MultiPoolerManager) BeginTerm(ctx context.Context, req *consensusdatap
 
 	// CRITICAL: Must be able to reach Postgres to participate in cohort
 	// Test database connectivity with a simple query
-	if _, err = pm.query(ctx, "SELECT 1"); err != nil {
+	if _, err = pm.query(ctx, "SELECT 1", QueryIntentReadOnly); err != nil {
 		return nil, fmt.Errorf("postgres unhealthy, cannot accept new term: %w", err)
 	}
 
@@ -137,7 +137,7 @@ func (pm *MultiPoolerManager) BeginTerm(ctx context.Context, req *consensusdatap
 		// Do this check BEFORE updating term so we can reject early
 		if !wasPrimary {
 			var lastMsgReceiptTime *time.Time
-			result, queryErr := pm.query(ctx, "SELECT last_msg_receipt_time FROM pg_stat_wal_receiver")
+			result, queryErr := pm.query(ctx, "SELECT last_msg_receipt_time FROM pg_stat_wal_receiver", QueryIntentReadOnly)
 			if queryErr != nil {
 				// No WAL receiver (disconnected standby) - this is EXPECTED during failover
 				// when the primary just died. Don't reject - proceed with acceptance.
@@ -226,7 +226,7 @@ func (pm *MultiPoolerManager) ConsensusStatus(ctx context.Context, req *consensu
 	}
 
 	// Check if database is healthy by attempting a simple query
-	_, healthErr := pm.query(ctx, "SELECT 1")
+	_, healthErr := pm.query(ctx, "SELECT 1", QueryIntentReadOnly)
 	isHealthy := healthErr == nil
 
 	// Get WAL position and determine role (primary/replica)
@@ -306,7 +306,7 @@ func (pm *MultiPoolerManager) GetLeadershipView(ctx context.Context, req *consen
 // and verifying it's connected to the expected primary host/port
 func (pm *MultiPoolerManager) CanReachPrimary(ctx context.Context, req *consensusdatapb.CanReachPrimaryRequest) (*consensusdatapb.CanReachPrimaryResponse, error) {
 	// Query pg_stat_wal_receiver to check if we can reach the primary
-	result, err := pm.query(ctx, "SELECT status, conninfo FROM pg_stat_wal_receiver")
+	result, err := pm.query(ctx, "SELECT status, conninfo FROM pg_stat_wal_receiver", QueryIntentReadOnly)
 	if err != nil {
 		//nolint:nilerr // Error is communicated via response struct, not error return
 		return &consensusdatapb.CanReachPrimaryResponse{
