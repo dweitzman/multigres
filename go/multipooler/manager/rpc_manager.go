@@ -795,13 +795,6 @@ func (pm *MultiPoolerManager) Demote(ctx context.Context, consensusTerm int64, d
 	}
 	defer pm.actionLock.Release(ctx)
 
-	// Pause monitoring during this operation to prevent interference
-	resumeMonitor, err := pm.PausePostgresMonitor(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer resumeMonitor(ctx)
-
 	// Validate the term but DON'T update yet. We only update the term AFTER
 	// successful demotion to avoid a race where a failed demote (e.g., postgres
 	// not ready) updates the term, causing subsequent detection to see equal
@@ -990,13 +983,6 @@ func (pm *MultiPoolerManager) DemoteStalePrimary(
 		return nil, mterrors.Wrap(err, "failed to acquire action lock")
 	}
 	defer pm.actionLock.Release(ctx)
-
-	// Pause monitoring during this operation to prevent interference
-	resumeMonitor, err := pm.PausePostgresMonitor(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer resumeMonitor(ctx)
 
 	// Validate the term
 	if err := pm.validateTerm(ctx, consensusTerm, force); err != nil {
@@ -1294,13 +1280,6 @@ func (pm *MultiPoolerManager) RewindToSource(ctx context.Context, source *cluste
 		return nil, mterrors.Wrap(err, "failed to acquire action lock")
 	}
 	defer pm.actionLock.Release(ctx)
-
-	// Pause monitoring during this operation to prevent interference
-	resumeMonitor, err := pm.PausePostgresMonitor(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer resumeMonitor(ctx)
 
 	// Check if StateChanger is available
 	if pm.StateChanger == nil {
