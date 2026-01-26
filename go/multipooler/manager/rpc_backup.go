@@ -101,6 +101,15 @@ func (pm *MultiPoolerManager) initPgBackRest(ctx context.Context, mode PgBackRes
 		return "", errors.New("backup location not set; topology may not be loaded yet")
 	}
 
+	// Create backup repository directory for this shard if it doesn't exist
+	// Only applies to local filesystem paths - remote storage (s3://, azure://, etc.)
+	// doesn't require directory creation (keys/blobs are created automatically)
+	if !strings.Contains(pm.backupLocation, "://") {
+		if err := os.MkdirAll(pm.backupLocation, 0o755); err != nil {
+			return "", fmt.Errorf("failed to create backup location directory %s: %w", pm.backupLocation, err)
+		}
+	}
+
 	// Generate pgbackrest config file from template
 	tmpl, err := template.New("pgbackrest").Parse(config.PgBackRestConfigTmpl)
 	if err != nil {

@@ -38,9 +38,11 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/reflection"
+	"google.golang.org/grpc/status"
 )
 
 // This file handles gRPC server, on its own port.
@@ -360,9 +362,65 @@ func (g *GrpcServer) Create() error {
 	return nil
 }
 
+// errorLoggingUnaryInterceptor logs non-client errors (server-side errors) before returning them.
+// This ensures visibility into RPC failures even if the caller doesn't log them or the process
+// dies before logging.
+//
+// Logs errors with codes: INTERNAL, UNAVAILABLE, DATA_LOSS, UNKNOWN
+// Does not log client errors: INVALID_ARGUMENT, NOT_FOUND, ALREADY_EXISTS, etc.
+func errorLoggingUnaryInterceptor(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+	resp, err := handler(ctx, req)
+	if err != nil {
+		// Check gRPC status code to determine if this is a server-side error
+		st := status.Convert(err)
+		code := st.Code()
+
+		// Log server-side errors (not client errors like INVALID_ARGUMENT, NOT_FOUND)
+		switch code {
+		case codes.Internal,
+			codes.Unavailable,
+			codes.DataLoss,
+			codes.Unknown:
+			slog.ErrorContext(ctx, "gRPC handler returned server error",
+				"method", info.FullMethod,
+				"code", code.String(),
+				"error", st.Message())
+		}
+	}
+	return resp, err
+}
+
+// errorLoggingStreamInterceptor logs non-client errors for streaming RPCs.
+func errorLoggingStreamInterceptor(srv any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	err := handler(srv, stream)
+	if err != nil {
+		st := status.Convert(err)
+		code := st.Code()
+
+		// Log server-side errors
+		switch code {
+		case codes.Internal,
+			codes.Unavailable,
+			codes.DataLoss,
+			codes.Unknown:
+			slog.ErrorContext(stream.Context(), "gRPC stream handler returned server error",
+				"method", info.FullMethod,
+				"code", code.String(),
+				"error", st.Message())
+		}
+	}
+	return err
+}
+
 // interceptors builds the list of interceptors for the gRPC server
 func (g *GrpcServer) interceptors() ([]grpc.ServerOption, error) {
 	interceptors := &serverInterceptorBuilder{}
+
+	// Add error logging interceptor (runs after handler, logs server-side errors)
+	interceptors.Add(
+		errorLoggingStreamInterceptor,
+		errorLoggingUnaryInterceptor,
+	)
 
 	if g.auth.Get() != "" {
 		slog.Info("enabling auth plugin", "plugin", g.auth.Get())

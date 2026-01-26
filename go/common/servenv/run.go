@@ -69,7 +69,8 @@ func (sv *ServEnv) Run(bindAddress string, port int, grpcServer *GrpcServer) err
 	signal.Notify(sv.exitChan, syscall.SIGTERM, syscall.SIGINT)
 	slog.Info("service successfully started", "port", port)
 	// Wait for signal
-	<-sv.exitChan
+	sig := <-sv.exitChan
+	slog.Info("received shutdown signal", "signal", sig.String())
 
 	startTime := time.Now()
 	slog.Info("entering lameduck mode", "period", sv.lameduckPeriod.Get())
