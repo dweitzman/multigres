@@ -72,6 +72,7 @@ func newTestManagerWithMock(tableGroup, shard string) (*MultiPoolerManager, *moc
 		topoClient:  topoStore,
 		config:      &Config{},
 		multipooler: multiPooler,
+		actionLock:  NewActionLock(),
 	}
 
 	return pm, mockQueryService
@@ -194,7 +195,15 @@ func TestCreateSidecarSchema(t *testing.T) {
 			tt.setupMock(mockQueryService)
 
 			ctx := context.Background()
-			err := pm.createSidecarSchema(ctx)
+			// Acquire action lock for state-changing operations
+			lockCtx, err := pm.actionLock.Acquire(ctx, "test")
+			if err != nil {
+				t.Fatalf("failed to acquire action lock: %v", err)
+			}
+
+			err = pm.createSidecarSchema(lockCtx)
+
+			pm.actionLock.Release(lockCtx)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -265,7 +274,14 @@ func TestInsertDurabilityPolicy(t *testing.T) {
 			tt.setupMock(mockQueryService)
 
 			ctx := context.Background()
-			err := pm.insertDurabilityPolicy(ctx, tt.policyName, tt.quorumRule)
+			// Acquire action lock for state-changing operations
+			lockCtx, err := pm.actionLock.Acquire(ctx, "test")
+			if err != nil {
+				t.Fatalf("failed to acquire action lock: %v", err)
+			}
+
+			err = pm.insertDurabilityPolicy(lockCtx, tt.policyName, tt.quorumRule)
+			pm.actionLock.Release(lockCtx)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -359,7 +375,14 @@ func TestInitializeMultischemaData(t *testing.T) {
 			tt.setupMock(mockQueryService)
 
 			ctx := context.Background()
-			err := pm.initializeMultischemaData(ctx)
+			// Acquire action lock for state-changing operations
+			lockCtx, err := pm.actionLock.Acquire(ctx, "test")
+			if err != nil {
+				t.Fatalf("failed to acquire action lock: %v", err)
+			}
+
+			err = pm.initializeMultischemaData(lockCtx)
+			pm.actionLock.Release(lockCtx)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -440,8 +463,15 @@ func TestInsertLeadershipHistory(t *testing.T) {
 			tt.setupMock(mockQueryService)
 
 			ctx := context.Background()
-			err := pm.insertLeadershipHistory(ctx, tt.termNumber, tt.leaderID, tt.coordinatorID,
+			// Acquire action lock for state-changing operations
+			lockCtx, err := pm.actionLock.Acquire(ctx, "test")
+			if err != nil {
+				t.Fatalf("failed to acquire action lock: %v", err)
+			}
+
+			err = pm.insertLeadershipHistory(lockCtx, tt.termNumber, tt.leaderID, tt.coordinatorID,
 				tt.walPosition, tt.reason, tt.cohortMembers, tt.acceptedMembers)
+			pm.actionLock.Release(lockCtx)
 
 			if tt.expectError {
 				assert.Error(t, err)

@@ -1018,7 +1018,15 @@ func TestSetSynchronousStandbyNames(t *testing.T) {
 			tt.setupMock(mockQueryService)
 
 			ctx := context.Background()
-			err := pm.setSynchronousStandbyNames(ctx, tt.synchronousMethod, tt.numSync, tt.standbyIDs)
+			// Acquire action lock for state-changing operations
+			lockCtx, err := pm.actionLock.Acquire(ctx, "test")
+			if err != nil {
+				t.Fatalf("failed to acquire action lock: %v", err)
+			}
+
+			err = pm.setSynchronousStandbyNames(lockCtx, tt.synchronousMethod, tt.numSync, tt.standbyIDs)
+
+			pm.actionLock.Release(lockCtx)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -1428,7 +1436,14 @@ func TestPauseReplication(t *testing.T) {
 			tt.setupMock(mockQueryService)
 
 			ctx := context.Background()
-			status, err := pm.pauseReplication(ctx, tt.mode, tt.wait)
+			// Acquire action lock for state-changing operations
+			lockCtx, err := pm.actionLock.Acquire(ctx, "test")
+			if err != nil {
+				t.Fatalf("failed to acquire action lock: %v", err)
+			}
+			defer pm.actionLock.Release(lockCtx)
+
+			status, err := pm.pauseReplication(lockCtx, tt.mode, tt.wait)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -1493,7 +1508,14 @@ func TestResetPrimaryConnInfo(t *testing.T) {
 			tt.setupMock(mockQueryService)
 
 			ctx := context.Background()
-			err := pm.resetPrimaryConnInfo(ctx)
+			// Acquire action lock for state-changing operations
+			lockCtx, err := pm.actionLock.Acquire(ctx, "test")
+			if err != nil {
+				t.Fatalf("failed to acquire action lock: %v", err)
+			}
+			defer pm.actionLock.Release(lockCtx)
+
+			err = pm.resetPrimaryConnInfo(lockCtx)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -1549,7 +1571,14 @@ func TestClearSyncReplicationForDemotion(t *testing.T) {
 			tt.setupMock(mockQueryService)
 
 			ctx := context.Background()
-			err := pm.clearSyncReplicationForDemotion(ctx)
+			// Acquire action lock for state-changing operations
+			lockCtx, err := pm.actionLock.Acquire(ctx, "test")
+			if err != nil {
+				t.Fatalf("failed to acquire action lock: %v", err)
+			}
+			defer pm.actionLock.Release(lockCtx)
+
+			err = pm.clearSyncReplicationForDemotion(lockCtx)
 
 			if tt.expectError {
 				assert.Error(t, err)

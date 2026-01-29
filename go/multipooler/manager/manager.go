@@ -248,7 +248,15 @@ func (pm *MultiPoolerManager) internalQueryService() executor.InternalQueryServi
 
 // query executes a query using the internal query service and returns the result.
 // This is a convenience method for internal manager operations.
-func (pm *MultiPoolerManager) query(ctx context.Context, sql string) (*sqltypes.Result, error) {
+// The intent parameter indicates whether this query modifies PostgreSQL or cluster state.
+// Use QueryIntentStateChange for state modifications (requires action lock, enforced by assertion).
+// Use QueryIntentReadOnly for read-only queries.
+func (pm *MultiPoolerManager) query(ctx context.Context, intent QueryIntent, sql string) (*sqltypes.Result, error) {
+	if intent == QueryIntentStateChange {
+		if err := AssertActionLockHeld(ctx); err != nil {
+			return nil, fmt.Errorf("state-changing query requires action lock: %w", err)
+		}
+	}
 	queryService := pm.internalQueryService()
 	if queryService == nil {
 		return nil, errors.New("internal query service not available")
@@ -258,14 +266,22 @@ func (pm *MultiPoolerManager) query(ctx context.Context, sql string) (*sqltypes.
 
 // exec executes a command that doesn't return rows.
 // This is a convenience method for internal manager operations.
-func (pm *MultiPoolerManager) exec(ctx context.Context, sql string) error {
-	_, err := pm.query(ctx, sql)
+// The intent parameter indicates whether this command modifies PostgreSQL or cluster state.
+// Use QueryIntentStateChange for state modifications (requires action lock, enforced by assertion).
+// Use QueryIntentReadOnly for read-only queries.
+func (pm *MultiPoolerManager) exec(ctx context.Context, intent QueryIntent, sql string) error {
+	_, err := pm.query(ctx, intent, sql)
 	return err
 }
 
 // queryArgs executes a parameterized query using the internal query service and returns the result.
 // This is a convenience method for internal manager operations that helps prevent SQL injection.
-func (pm *MultiPoolerManager) queryArgs(ctx context.Context, sql string, args ...any) (*sqltypes.Result, error) {
+func (pm *MultiPoolerManager) queryArgs(ctx context.Context, intent QueryIntent, sql string, args ...any) (*sqltypes.Result, error) {
+	if intent == QueryIntentStateChange {
+		if err := AssertActionLockHeld(ctx); err != nil {
+			return nil, fmt.Errorf("state-changing query requires action lock: %w", err)
+		}
+	}
 	queryService := pm.internalQueryService()
 	if queryService == nil {
 		return nil, errors.New("internal query service not available")
@@ -275,8 +291,8 @@ func (pm *MultiPoolerManager) queryArgs(ctx context.Context, sql string, args ..
 
 // execArgs executes a parameterized command that doesn't return rows.
 // This is a convenience method for internal manager operations that helps prevent SQL injection.
-func (pm *MultiPoolerManager) execArgs(ctx context.Context, sql string, args ...any) error {
-	_, err := pm.queryArgs(ctx, sql, args...)
+func (pm *MultiPoolerManager) execArgs(ctx context.Context, intent QueryIntent, sql string, args ...any) error {
+	_, err := pm.queryArgs(ctx, intent, sql, args...)
 	return err
 }
 
@@ -964,7 +980,7 @@ func (pm *MultiPoolerManager) runCheckpointAsync(ctx context.Context) chan error
 	checkpointDone := make(chan error, 1)
 	go func() {
 		pm.logger.InfoContext(ctx, "Starting checkpoint")
-		err := pm.exec(ctx, "CHECKPOINT")
+		err := pm.exec(ctx, QueryIntentStateChange, "CHECKPOINT")
 		if err != nil {
 			pm.logger.WarnContext(ctx, "Checkpoint failed", "error", err)
 			checkpointDone <- err
@@ -1077,7 +1093,7 @@ func (pm *MultiPoolerManager) getActiveWriteConnections(ctx context.Context) ([]
 		  AND query NOT ILIKE 'ROLLBACK%'
 		  AND query != '<IDLE>'`
 
-	result, err := pm.query(ctx, sql)
+	result, err := pm.query(ctx, QueryIntentReadOnly, sql)
 	if err != nil {
 		return nil, err
 	}
@@ -1115,7 +1131,7 @@ func (pm *MultiPoolerManager) terminateWriteConnections(ctx context.Context) (in
 
 	// Terminate each write connection
 	for _, pid := range pids {
-		if err := pm.execArgs(ctx, "SELECT pg_terminate_backend($1)", pid); err != nil {
+		if err := pm.execArgs(ctx, QueryIntentStateChange, "SELECT pg_terminate_backend($1)", pid); err != nil {
 			pm.logger.WarnContext(ctx, "Failed to terminate write connection", "pid", pid, "error", err)
 		}
 	}
@@ -1259,7 +1275,7 @@ func (pm *MultiPoolerManager) promoteStandbyToPrimary(ctx context.Context, state
 	// Call pg_promote() to promote standby to primary
 	pm.logger.InfoContext(ctx, "PostgreSQL promotion needed")
 	pm.logger.InfoContext(ctx, "Calling pg_promote() to promote standby to primary")
-	if err := pm.exec(ctx, "SELECT pg_promote()"); err != nil {
+	if err := pm.exec(ctx, QueryIntentStateChange, "SELECT pg_promote()"); err != nil {
 		pm.logger.ErrorContext(ctx, "Failed to call pg_promote()", "error", err)
 		return mterrors.Wrap(err, "failed to promote standby")
 	}

@@ -278,7 +278,7 @@ func (pm *MultiPoolerManager) hasDataDirectory() bool {
 func (pm *MultiPoolerManager) isPostgresRunning(ctx context.Context) bool {
 	if pm.pgctldClient == nil {
 		// No pgctld client, try a simple query to check if PostgreSQL is responding
-		_, err := pm.query(ctx, "SELECT 1")
+		_, err := pm.query(ctx, QueryIntentReadOnly, "SELECT 1")
 		return err == nil
 	}
 
@@ -359,7 +359,7 @@ func (pm *MultiPoolerManager) removeDataDirectory() error {
 // waitForDatabaseConnection waits for the database connection to become available
 func (pm *MultiPoolerManager) waitForDatabaseConnection(ctx context.Context) error {
 	// Test if database is already reachable
-	if _, err := pm.query(ctx, "SELECT 1"); err == nil {
+	if _, err := pm.query(ctx, QueryIntentReadOnly, "SELECT 1"); err == nil {
 		// Start heartbeat tracker if not already running
 		if pm.replTracker == nil {
 			shardID := []byte("0") // default shard ID
@@ -389,7 +389,7 @@ func (pm *MultiPoolerManager) waitForDatabaseConnection(ctx context.Context) err
 		}
 
 		// Try to query the database
-		if _, queryErr := pm.query(ctx, "SELECT 1"); queryErr == nil {
+		if _, queryErr := pm.query(ctx, QueryIntentReadOnly, "SELECT 1"); queryErr == nil {
 			pm.logger.InfoContext(ctx, "Database connection established successfully", "attempts", attempt)
 
 			// Start heartbeat tracker if not already running
