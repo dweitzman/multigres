@@ -33,36 +33,9 @@ import (
 	"github.com/multigres/multigres/go/tools/telemetry"
 )
 
-// runRecoveryLoop is the main recovery loop that detects and fixes problems.
-func (re *Engine) runRecoveryLoop() {
-	interval := re.config.GetRecoveryCycleInterval()
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	re.logger.InfoContext(re.shutdownCtx, "recovery loop started", "interval", interval)
-
-	for {
-		select {
-		case <-re.shutdownCtx.Done():
-			re.logger.InfoContext(re.shutdownCtx, "recovery loop stopped")
-			return
-
-		case <-ticker.C:
-			// Check if interval changed (dynamic config)
-			newInterval := re.config.GetRecoveryCycleInterval()
-			if newInterval != interval {
-				re.logger.InfoContext(re.shutdownCtx, "recovery cycle interval changed", "old", interval, "new", newInterval)
-				interval = newInterval
-				ticker.Reset(interval)
-			}
-			runIfNotRunning(re.logger, &re.recoveryLoopInProgress, "recovery_loop", re.performRecoveryCycle)
-		}
-	}
-}
-
 // performRecoveryCycle runs one cycle of problem detection and recovery.
-func (re *Engine) performRecoveryCycle() {
-	ctx, span := telemetry.Tracer().Start(re.shutdownCtx, "recovery/cycle")
+func (re *Engine) performRecoveryCycle(ctx context.Context) {
+	ctx, span := telemetry.Tracer().Start(ctx, "recovery/cycle")
 	defer span.End()
 
 	// Create generator - this builds the poolersByTG map once
@@ -123,6 +96,10 @@ func (re *Engine) performRecoveryCycle() {
 		}(shardKey, shardProblems)
 	}
 	wg.Wait()
+
+	// Check for dynamic interval changes
+	newInterval := re.config.GetRecoveryCycleInterval()
+	re.recoveryRunner.UpdateInterval(newInterval)
 }
 
 // groupProblemsByShard groups problems by their shard.

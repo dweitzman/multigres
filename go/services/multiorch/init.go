@@ -178,6 +178,14 @@ func (mo *MultiOrch) Init() error {
 		return fmt.Errorf("failed to start recovery engine: %w", err)
 	}
 
+	// Register multiorch gRPC service
+	// Note: HTTP/REST gateway registration is deferred for future work
+	mo.senv.OnRun(func() {
+		orchServer := NewMultiOrchServer(mo)
+		orchServer.RegisterWithGRPCServer(mo.grpcServer.Server)
+		logger.Info("MultiOrch gRPC service registered")
+	})
+
 	mo.senv.OnClose(func() {
 		mo.Shutdown()
 	})

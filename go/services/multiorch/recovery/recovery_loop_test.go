@@ -1313,7 +1313,7 @@ func TestRecoveryLoop_FullCycle(t *testing.T) {
 	engine.poolerStore.Set("multipooler-cell1-replica2-pooler", replica2Pooler)
 
 	// Run full recovery cycle
-	engine.performRecoveryCycle()
+	engine.performRecoveryCycle(context.Background())
 
 	// ASSERTION: Both recovery actions should be executed (no shard-wide problems)
 	assert.True(t, replica1Recovery.executed || replica2Recovery.executed,
@@ -1616,7 +1616,7 @@ func TestRecoveryLoop_TracingSpans(t *testing.T) {
 	engine.poolerStore.Set("multipooler-zone1-replica-pooler", replicaPooler)
 
 	// Run a recovery cycle - this should create spans
-	engine.performRecoveryCycle()
+	engine.performRecoveryCycle(context.Background())
 
 	// Flush spans to the exporter
 	err = setup.ForceFlush(ctx)
@@ -1796,12 +1796,12 @@ func TestRecoveryLoop_GracePeriodIntegration(t *testing.T) {
 	t.Cleanup(analysis.ResetAnalyzers)
 
 	// Problem detected, grace period starts
-	engine.performRecoveryCycle()
+	engine.performRecoveryCycle(context.Background())
 	require.False(t, mockAction.executed, "action should not execute immediately - grace period active")
 
 	// Wait for grace period to expire and action to execute
 	require.Eventually(t, func() bool {
-		engine.performRecoveryCycle()
+		engine.performRecoveryCycle(context.Background())
 		return mockAction.executed
 	}, 500*time.Millisecond, 10*time.Millisecond, "action should execute after grace period expires")
 }
@@ -1921,7 +1921,7 @@ func TestRecoveryLoop_DeadlineResetAfterSuccess(t *testing.T) {
 	t.Cleanup(analysis.ResetAnalyzers)
 
 	// Problem detected, grace period starts
-	engine.performRecoveryCycle()
+	engine.performRecoveryCycle(context.Background())
 
 	mu.Lock()
 	count1 := executionCount
@@ -1939,7 +1939,7 @@ func TestRecoveryLoop_DeadlineResetAfterSuccess(t *testing.T) {
 
 	// Wait for grace period to expire and action to execute
 	require.Eventually(t, func() bool {
-		engine.performRecoveryCycle()
+		engine.performRecoveryCycle(context.Background())
 		mu.Lock()
 		defer mu.Unlock()
 		return executionCount == 1
@@ -1948,7 +1948,7 @@ func TestRecoveryLoop_DeadlineResetAfterSuccess(t *testing.T) {
 	// Problem is resolved, analyzer returns nil, deadline should reset
 	problemDetected = false
 
-	engine.performRecoveryCycle()
+	engine.performRecoveryCycle(context.Background())
 
 	// Verify deadline was reset (should be different from initial)
 	engine.recoveryGracePeriodTracker.mu.Lock()
@@ -1964,7 +1964,7 @@ func TestRecoveryLoop_DeadlineResetAfterSuccess(t *testing.T) {
 
 	problemDetected = true
 
-	engine.performRecoveryCycle()
+	engine.performRecoveryCycle(context.Background())
 
 	// Should NOT execute immediately (deadline from previous cycle still active)
 	mu.Lock()
@@ -1987,7 +1987,7 @@ func TestRecoveryLoop_DeadlineResetAfterSuccess(t *testing.T) {
 
 	// Wait for new grace period to expire and action to execute again
 	require.Eventually(t, func() bool {
-		engine.performRecoveryCycle()
+		engine.performRecoveryCycle(context.Background())
 		mu.Lock()
 		defer mu.Unlock()
 		return executionCount == 2
@@ -2123,7 +2123,7 @@ func TestRecoveryLoop_PerPoolerGracePeriod(t *testing.T) {
 	t.Cleanup(analysis.ResetAnalyzers)
 
 	// Problems detected for both replicas, grace periods start independently
-	engine.performRecoveryCycle()
+	engine.performRecoveryCycle(context.Background())
 
 	mu.Lock()
 	replica1Executed := executedPoolers["multipooler-cell1-replica1-pooler"]
@@ -2135,7 +2135,7 @@ func TestRecoveryLoop_PerPoolerGracePeriod(t *testing.T) {
 
 	// Wait for grace periods to expire and both actions to execute
 	require.Eventually(t, func() bool {
-		engine.performRecoveryCycle()
+		engine.performRecoveryCycle(context.Background())
 		mu.Lock()
 		defer mu.Unlock()
 		r1 := executedPoolers["multipooler-cell1-replica1-pooler"]

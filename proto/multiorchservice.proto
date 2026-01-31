@@ -1,0 +1,107 @@
+// Copyright 2026 Supabase, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package multiorch;
+
+import "google/api/annotations.proto";
+
+option go_package = "github.com/multigres/multigres/go/pb/multiorch";
+
+// MultiOrchService provides APIs for controlling multiorch behavior.
+// This includes recovery control for testing and future operational features
+// like forced failovers and chaos testing.
+service MultiOrchService {
+  // DisableRecovery stops the recovery engine from automatically repairing issues.
+  // This is intended for testing scenarios where manual control over recovery is needed.
+  // When this returns, no recovery actions are in-flight (strong synchronization guarantee).
+  rpc DisableRecovery(DisableRecoveryRequest) returns (DisableRecoveryResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/recovery/disable"
+      body: "*"
+    };
+  }
+
+  // EnableRecovery resumes the recovery engine's automatic repair operations.
+  rpc EnableRecovery(EnableRecoveryRequest) returns (EnableRecoveryResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/recovery/enable"
+      body: "*"
+    };
+  }
+
+  // GetRecoveryStatus returns whether recovery is currently enabled or disabled.
+  rpc GetRecoveryStatus(GetRecoveryStatusRequest) returns (GetRecoveryStatusResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/recovery/status"
+    };
+  }
+
+  // TriggerRecoveryNow immediately executes recovery operations and blocks until
+  // either no problems remain or the request context times out.
+  // This is intended for testing scenarios requiring deterministic recovery execution.
+  //
+  // Behavior:
+  // - Re-polls all poolers to get fresh health state
+  // - Runs recovery cycles repeatedly until no problems are detected
+  // - Returns when either: (1) no problems remain, or (2) context times out
+  // - If recovery is disabled, this temporarily enables it during this operation
+  rpc TriggerRecoveryNow(TriggerRecoveryNowRequest) returns (TriggerRecoveryNowResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/recovery/trigger"
+      body: "*"
+    };
+  }
+}
+
+message DisableRecoveryRequest {
+  // Empty - no parameters needed
+}
+
+message DisableRecoveryResponse {
+  // success indicates whether recovery was disabled
+  bool success = 1;
+  // message provides additional context
+  string message = 2;
+}
+
+message EnableRecoveryRequest {
+  // Empty - no parameters needed
+}
+
+message EnableRecoveryResponse {
+  // success indicates whether recovery was enabled
+  bool success = 1;
+  // message provides additional context
+  string message = 2;
+}
+
+message GetRecoveryStatusRequest {
+  // Empty - no parameters needed
+}
+
+message GetRecoveryStatusResponse {
+  // enabled indicates whether recovery is currently active
+  bool enabled = 1;
+}
+
+message TriggerRecoveryNowRequest {
+  // Empty - timeout controlled by gRPC request deadline
+}
+
+message TriggerRecoveryNowResponse {
+  // remaining_problem_codes lists problem codes still detected (e.g., "REPLICA_NOT_REPLICATING")
+  repeated string remaining_problem_codes = 4;
+}
