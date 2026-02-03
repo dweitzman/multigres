@@ -153,38 +153,26 @@ func waitForDivergenceRepaired(t *testing.T, setup *shardsetup.ShardSetup, oldPr
 	oldPrimary := setup.GetMultipoolerInstance(oldPrimaryName)
 	require.NotNil(t, oldPrimary, "old primary instance should exist")
 
-	require.Eventually(t, func() bool {
-		client, err := shardsetup.NewMultipoolerClient(oldPrimary.Multipooler.GrpcPort)
-		if err != nil {
-			t.Logf("Cannot connect to old primary: %v", err)
-			return false
-		}
-		defer client.Close()
+	// Trigger recovery and wait for it to complete
+	t.Log("Triggering recovery to detect and repair stale primary...")
+	setup.TriggerRecoveryNow(t, "multiorch", timeout)
 
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+	// Verify old primary is now a replica
+	client, err := shardsetup.NewMultipoolerClient(oldPrimary.Multipooler.GrpcPort)
+	require.NoError(t, err, "should connect to old primary")
+	defer client.Close()
 
-		resp, err := client.Manager.Status(ctx, &multipoolermanagerdatapb.StatusRequest{})
-		if err != nil {
-			t.Logf("Status call failed: %v", err)
-			return false
-		}
+	statusCtx, statusCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer statusCancel()
 
-		// Check if it's now a REPLICA and replicating
-		if resp.Status.PoolerType != clustermetadatapb.PoolerType_REPLICA {
-			t.Logf("Old primary type is %s, waiting for REPLICA...", resp.Status.PoolerType)
-			return false
-		}
+	statusResp, err := client.Manager.Status(statusCtx, &multipoolermanagerdatapb.StatusRequest{})
+	require.NoError(t, err, "should get status from old primary")
+	require.Equal(t, clustermetadatapb.PoolerType_REPLICA, statusResp.Status.PoolerType, "old primary should now be REPLICA")
+	require.NotNil(t, statusResp.Status.ReplicationStatus, "replication status should exist")
+	require.NotNil(t, statusResp.Status.ReplicationStatus.PrimaryConnInfo, "primary conninfo should exist")
 
-		if resp.Status.ReplicationStatus == nil || resp.Status.ReplicationStatus.PrimaryConnInfo == nil {
-			t.Logf("Old primary not yet configured for replication")
-			return false
-		}
-
-		t.Logf("Old primary is now REPLICA, replicating from %s",
-			resp.Status.ReplicationStatus.PrimaryConnInfo.Host)
-		return true
-	}, timeout, 2*time.Second, "old primary should become replica after pg_rewind")
+	t.Logf("Old primary is now REPLICA, replicating from %s",
+		statusResp.Status.ReplicationStatus.PrimaryConnInfo.Host)
 }
 
 // verifyReplicaReplicating verifies the replica is actively streaming from the new primary
