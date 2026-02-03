@@ -82,7 +82,7 @@ func (s *etcdtopo) Watch(ctx context.Context, filePath string) (*topoclient.Watc
 		var watchRetries int
 		for {
 			select {
-			case <-s.running:
+			case <-s.done:
 				return
 			case <-watchCtx.Done():
 				// This includes context cancellation errors.
@@ -97,7 +97,7 @@ func (s *etcdtopo) Watch(ctx context.Context, filePath string) (*topoclient.Watc
 						select {
 						case <-t.C:
 							t.Stop()
-						case <-s.running:
+						case <-s.done:
 							t.Stop()
 							continue
 						case <-watchCtx.Done():
@@ -206,7 +206,7 @@ func (s *etcdtopo) WatchRecursive(ctx context.Context, dirpath string) ([]*topoc
 		var watchRetries int
 		for {
 			select {
-			case <-s.running:
+			case <-s.done:
 				return
 			case <-watchCtx.Done():
 				// This includes context cancellation errors.
@@ -219,7 +219,7 @@ func (s *etcdtopo) WatchRecursive(ctx context.Context, dirpath string) ([]*topoc
 					if watchRetries > 10 {
 						select {
 						case <-time.After(time.Duration(watchRetries) * time.Second):
-						case <-s.running:
+						case <-s.done:
 							continue
 						case <-watchCtx.Done():
 							continue

@@ -45,8 +45,9 @@ type BackupJobTracker struct {
 	expiration time.Duration
 
 	// Shutdown-related channels
-	stop chan struct{}
-	done chan struct{}
+	stop     chan struct{}
+	stopOnce sync.Once
+	done     chan struct{}
 }
 
 // NewBackupJobTracker creates a new backup job tracker with default expiration (24 hours)
@@ -95,9 +96,12 @@ func (jt *BackupJobTracker) removeExpiredJobs() {
 	}
 }
 
-// Stop stops the background cleanup goroutine
+// Stop stops the background cleanup goroutine.
+// It is safe to call Stop multiple times.
 func (jt *BackupJobTracker) Stop() {
-	close(jt.stop)
+	jt.stopOnce.Do(func() {
+		close(jt.stop)
+	})
 	<-jt.done
 }
 

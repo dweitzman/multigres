@@ -108,6 +108,7 @@ type MultiPoolerManager struct {
 	// Unbuffered is safe here because we only close() the channel (which never blocks
 	// and broadcasts to all receivers) rather than sending to it.
 	readyChan chan struct{}
+	readyOnce sync.Once
 
 	// Cached backup location from the database topology record.
 	// This is loaded once during startup and cached for fast access.
@@ -579,12 +580,9 @@ func (pm *MultiPoolerManager) setStateError(err error) {
 	pm.logger.Error("Manager state changed", "state", ManagerStateError, "error", err.Error())
 
 	// Signal that we've reached a terminal state
-	select {
-	case <-pm.readyChan:
-		// Already closed
-	default:
+	pm.readyOnce.Do(func() {
 		close(pm.readyChan)
-	}
+	})
 }
 
 // checkAndSetReady checks if all required resources are loaded and sets state to ready if so
@@ -600,12 +598,9 @@ func (pm *MultiPoolerManager) checkAndSetReady() {
 		pm.logger.Info("Manager state changed", "state", ManagerStateReady, "service_id", pm.serviceID.String())
 
 		// Signal that we've reached ready state
-		select {
-		case <-pm.readyChan:
-			// Already closed
-		default:
+		pm.readyOnce.Do(func() {
 			close(pm.readyChan)
-		}
+		})
 	}
 }
 

@@ -82,9 +82,9 @@ func TestWatchTopoVersion(t *testing.T) {
 	require.NoError(t, err)
 	serverRunningCh := make(chan struct{})
 	server := &etcdtopo{
-		cli:     client,
-		root:    root,
-		running: serverRunningCh,
+		cli:  client,
+		root: root,
+		done: serverRunningCh,
 	}
 	defer server.Close()
 
@@ -218,9 +218,9 @@ func TestWatchRecursiveReconnection(t *testing.T) {
 
 	serverRunningCh := make(chan struct{})
 	server := &etcdtopo{
-		cli:     client,
-		root:    root,
-		running: serverRunningCh,
+		cli:  client,
+		root: root,
+		done: serverRunningCh,
 	}
 	defer server.Close()
 
@@ -320,9 +320,9 @@ func TestWatchRecursiveCompaction(t *testing.T) {
 
 	serverRunningCh := make(chan struct{})
 	server := &etcdtopo{
-		cli:     client,
-		root:    root,
-		running: serverRunningCh,
+		cli:  client,
+		root: root,
+		done: serverRunningCh,
 	}
 	defer server.Close()
 
@@ -364,4 +364,42 @@ func TestWatchRecursiveCompaction(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("timeout waiting for watch response after compaction")
 	}
+}
+
+// TestStoreDoubleClose verifies that calling Close() multiple times doesn't panic.
+func TestStoreDoubleClose(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	etcdServerAddr, _ := StartEtcd(t)
+	root := "/multigres/test"
+
+	client, err := clientv3.New(clientv3.Config{
+		Endpoints:   []string{etcdServerAddr},
+		DialTimeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+
+	store := &etcdtopo{
+		cli:  client,
+		root: root,
+		done: make(chan struct{}),
+	}
+
+	// First close should succeed
+	err = store.Close()
+	require.NoError(t, err)
+
+	// Second close should not panic (protected by sync.Once)
+	err = store.Close()
+	// We still expect an error from cli.Close() since the client is already closed,
+	// but the important thing is that close(s.done) doesn't panic
+	if err != nil {
+		// This is expected - the etcd client will error on double close
+		t.Logf("Expected error on second close: %v", err)
+	}
+
+	// Third close for good measure
+	_ = store.Close()
 }

@@ -34,6 +34,7 @@ package etcdtopo
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"sync"
 	"time"
 
 	"github.com/spf13/pflag"
@@ -79,7 +80,9 @@ type etcdtopo struct {
 	// root is the root path for this client.
 	root string
 
-	running chan struct{}
+	// done is closed when the store is closing to signal goroutines to stop.
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 func init() {
@@ -94,15 +97,17 @@ func registerEtcdTopoFlags(fs *pflag.FlagSet) {
 }
 
 // Close implements topoclient.Conn.Close.
-// It will nil out the global and cells fields, so any attempt to
-// re-use this server will panic.
+// It is safe to call Close multiple times.
 func (s *etcdtopo) Close() error {
-	close(s.running)
-	if err := s.cli.Close(); err != nil {
-		return err
-	}
-	s.cli = nil
-	return nil
+	var closeErr error
+	s.closeOnce.Do(func() {
+		close(s.done)
+		if err := s.cli.Close(); err != nil {
+			closeErr = err
+		}
+		s.cli = nil
+	})
+	return closeErr
 }
 
 func newTLSConfig(certPath, keyPath, caPath string) (*tls.Config, error) {
@@ -161,9 +166,9 @@ func NewServerWithOpts(serverAddrs []string, root, certPath, keyPath, caPath str
 	}
 
 	return &etcdtopo{
-		cli:     cli,
-		root:    root,
-		running: make(chan struct{}),
+		cli:  cli,
+		root: root,
+		done: make(chan struct{}),
 	}, nil
 }
 
