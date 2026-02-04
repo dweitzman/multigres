@@ -198,6 +198,17 @@ func (pm *MultiPoolerManager) executeRevoke(ctx context.Context, term int64, res
 		// TODO: Implement graceful (non-emergency) demote for planned failovers.
 		// This emergency demote path will remain for BeginTerm REVOKE actions.
 		pm.logger.InfoContext(ctx, "Revoking primary", "term", term)
+
+		// Clear primary_term since primaryship is being revoked.
+		// This must happen before emergencyDemoteLocked so that if postgres restarts
+		// and comes up as PRIMARY (from on-disk config), the monitor will detect
+		// primary_term=0 and trigger emergency self-demotion.
+		if pm.consensusState != nil {
+			if err := pm.consensusState.SetPrimaryTerm(ctx, 0, false /* force */); err != nil {
+				return mterrors.Wrap(err, "failed to clear primary term during revoke")
+			}
+		}
+
 		drainTimeout := 5 * time.Second
 		demoteResp, err := pm.emergencyDemoteLocked(ctx, term, drainTimeout)
 		if err != nil {

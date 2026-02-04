@@ -1589,6 +1589,8 @@ func (pm *MultiPoolerManager) determineRemedialAction(currentState postgresState
 	// Postgres is running: Check if pooler type needs adjustment
 	if currentState.postgresRunning {
 		if currentState.isPrimary && pm.getPoolerType() != clustermetadatapb.PoolerType_PRIMARY {
+			// Postgres is PRIMARY but topology says not PRIMARY.
+			// We'll check if primary_term is cleared in takeRemedialAction (with lock held).
 			return remedialActionAdjustTypeToPrimary
 		}
 		if !currentState.isPrimary && pm.getPoolerType() == clustermetadatapb.PoolerType_PRIMARY {
@@ -1633,6 +1635,26 @@ func (pm *MultiPoolerManager) takeRemedialAction(ctx context.Context, action rem
 	case remedialActionAdjustTypeToPrimary:
 		pm.setMonitorReason(ctx, reasonPostgresRunning, "MonitorPostgres: PostgreSQL is running")
 		pm.logger.InfoContext(ctx, "MonitorPostgres: PostgreSQL is running and primary")
+
+		// Before adjusting topology to PRIMARY, verify our primary_term is still valid.
+		// If primary_term is cleared (0), our primaryship has been revoked and we need
+		// emergency demotion instead.
+		if pm.consensusState != nil {
+			term, err := pm.consensusState.GetTerm(ctx)
+			if err == nil && term != nil && term.GetPrimaryTerm() == 0 {
+				pm.logger.WarnContext(ctx, "MonitorPostgres: PostgreSQL is PRIMARY but primary_term is cleared, performing emergency demotion")
+
+				// Use a short drain timeout for monitor-initiated emergency demote
+				// since this postgres likely has no active connections (just came back online)
+				drainTimeout := 5 * time.Second
+				_, err := pm.emergencyDemoteLocked(ctx, term.GetTermNumber(), drainTimeout)
+				if err != nil {
+					pm.logger.ErrorContext(ctx, "MonitorPostgres: emergency demotion failed", "error", err)
+				}
+				return
+			}
+		}
+
 		pm.logger.InfoContext(ctx, "MonitorPostgres: Changing pooler type to primary")
 		if err := pm.changeTypeLocked(ctx, clustermetadatapb.PoolerType_PRIMARY); err != nil {
 			pm.logger.ErrorContext(ctx, "MonitorPostgres: failed to change pooler type to primary", "error", err)

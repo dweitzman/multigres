@@ -861,6 +861,16 @@ func (pm *MultiPoolerManager) emergencyDemoteLocked(ctx context.Context, consens
 		return nil, err
 	}
 
+	// Guard rail: Verify primary_term has been cleared before emergency demotion.
+	// The caller (BeginTerm REVOKE or monitor emergency demote) must clear primary_term
+	// before calling this function. This ensures term revocation happens before demotion.
+	if pm.consensusState != nil {
+		term, err := pm.consensusState.GetTerm(ctx)
+		if err == nil && term != nil && term.GetPrimaryTerm() != 0 {
+			return nil, fmt.Errorf("cannot emergency demote: primary_term is still set (%d), caller must clear primary_term first", term.GetPrimaryTerm())
+		}
+	}
+
 	// Check current demotion state
 	state, err := pm.checkDemotionState(ctx)
 	if err != nil {
