@@ -49,6 +49,14 @@ service PgCtld {
   // PgRewind rewinds a PostgreSQL data directory to an earlier point in the timeline
   // This is used to resynchronize a server that diverged from the primary after a failback
   rpc PgRewind(PgRewindRequest) returns (PgRewindResponse);
+
+  // Crash recovery methods
+
+  // Check if PostgreSQL needs crash recovery (pg_controldata check)
+  rpc NeedsCrashRecovery(NeedsCrashRecoveryRequest) returns (NeedsCrashRecoveryResponse);
+
+  // Run crash recovery using postgres --single mode
+  rpc RunCrashRecovery(RunCrashRecoveryRequest) returns (RunCrashRecoveryResponse);
 }
 
 // Start PostgreSQL server
@@ -97,6 +105,10 @@ message RestartRequest {
 
   // If true, creates standby.signal before restart (for demotion to standby)
   bool as_standby = 5;
+
+  // If true, skip waiting for PostgreSQL to be ready after restart.
+  // Used when postgres needs crash recovery or external configuration before accepting connections.
+  bool skip_wait = 6;
 }
 
 message RestartResponse {
@@ -159,6 +171,18 @@ enum ServerStatus {
   NOT_INITIALIZED = 5;
 }
 
+// Database cluster state from pg_controldata
+// Maps to "Database cluster state" field in pg_controldata output
+enum DatabaseClusterState {
+  STATE_UNKNOWN = 0;
+  SHUT_DOWN = 1;                    // shut down
+  SHUT_DOWN_IN_RECOVERY = 2;        // shut down in recovery
+  SHUTTING_DOWN = 3;                // shutting down
+  IN_CRASH_RECOVERY = 4;            // in crash recovery
+  IN_ARCHIVE_RECOVERY = 5;          // in archive recovery
+  IN_PRODUCTION = 6;                // in production
+}
+
 // Get server version information
 message VersionRequest {
   // Override default connection parameters
@@ -211,5 +235,37 @@ message PgRewindRequest {
 message PgRewindResponse {
   // Status message
   string message = 1;
+  string output = 2;
+}
+
+// Crash recovery methods
+
+// Check if PostgreSQL needs crash recovery
+message NeedsCrashRecoveryRequest {
+}
+
+message NeedsCrashRecoveryResponse {
+  // True if crash recovery is needed
+  bool needs_recovery = 1;
+
+  // Database cluster state from pg_controldata
+  DatabaseClusterState cluster_state = 2;
+
+  // Raw pg_controldata output for debugging
+  string pg_controldata_output = 3;
+
+  // Status message
+  string message = 4;
+}
+
+// Run crash recovery using postgres --single mode
+message RunCrashRecoveryRequest {
+}
+
+message RunCrashRecoveryResponse {
+  // Status message
+  string message = 1;
+
+  // Output from postgres --single
   string output = 2;
 }
