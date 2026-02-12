@@ -101,3 +101,11 @@ func (p *protectedPgctldClient) Status(ctx context.Context, req *pgctldpb.Status
 func (p *protectedPgctldClient) Version(ctx context.Context, req *pgctldpb.VersionRequest, opts ...grpc.CallOption) (*pgctldpb.VersionResponse, error) {
 	return p.client.Version(ctx, req, opts...)
 }
+
+// CrashRecovery performs crash recovery if needed. Requires action lock to be held by caller.
+func (p *protectedPgctldClient) CrashRecovery(ctx context.Context, req *pgctldpb.CrashRecoveryRequest, opts ...grpc.CallOption) (*pgctldpb.CrashRecoveryResponse, error) {
+	if err := AssertActionLockHeld(ctx); err != nil {
+		return nil, fmt.Errorf("CrashRecovery requires action lock to be held: %w", err)
+	}
+	return p.client.CrashRecovery(ctx, req, opts...)
+}

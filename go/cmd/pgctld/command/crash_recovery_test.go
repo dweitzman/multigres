@@ -33,7 +33,7 @@ func TestExtractClusterState(t *testing.T) {
 Catalog version number:               202107181
 Database cluster state:               in production
 Latest checkpoint's TimeLineID:       1`,
-			expectedState: pgctldpb.DatabaseClusterState_IN_PRODUCTION,
+			expectedState: pgctldpb.DatabaseClusterState_DATABASE_CLUSTER_STATE_IN_PRODUCTION,
 			expectError:   false,
 		},
 		{
@@ -42,7 +42,7 @@ Latest checkpoint's TimeLineID:       1`,
 Catalog version number:               202107181
 Database cluster state:               shut down
 Latest checkpoint's TimeLineID:       1`,
-			expectedState: pgctldpb.DatabaseClusterState_SHUT_DOWN,
+			expectedState: pgctldpb.DatabaseClusterState_DATABASE_CLUSTER_STATE_SHUT_DOWN,
 			expectError:   false,
 		},
 		{
@@ -51,7 +51,7 @@ Latest checkpoint's TimeLineID:       1`,
 Catalog version number:               202107181
 Database cluster state:               shut down in recovery
 Latest checkpoint's TimeLineID:       1`,
-			expectedState: pgctldpb.DatabaseClusterState_SHUT_DOWN_IN_RECOVERY,
+			expectedState: pgctldpb.DatabaseClusterState_DATABASE_CLUSTER_STATE_SHUT_DOWN_IN_RECOVERY,
 			expectError:   false,
 		},
 		{
@@ -60,16 +60,7 @@ Latest checkpoint's TimeLineID:       1`,
 Catalog version number:               202107181
 Database cluster state:               in crash recovery
 Latest checkpoint's TimeLineID:       1`,
-			expectedState: pgctldpb.DatabaseClusterState_IN_CRASH_RECOVERY,
-			expectError:   false,
-		},
-		{
-			name: "in archive recovery",
-			output: `pg_control version number:            1300
-Catalog version number:               202107181
-Database cluster state:               in archive recovery
-Latest checkpoint's TimeLineID:       1`,
-			expectedState: pgctldpb.DatabaseClusterState_IN_ARCHIVE_RECOVERY,
+			expectedState: pgctldpb.DatabaseClusterState_DATABASE_CLUSTER_STATE_IN_CRASH_RECOVERY,
 			expectError:   false,
 		},
 		{
@@ -78,7 +69,7 @@ Latest checkpoint's TimeLineID:       1`,
 Catalog version number:               202107181
 Database cluster state:               shutting down
 Latest checkpoint's TimeLineID:       1`,
-			expectedState: pgctldpb.DatabaseClusterState_SHUTTING_DOWN,
+			expectedState: pgctldpb.DatabaseClusterState_DATABASE_CLUSTER_STATE_SHUTTING_DOWN,
 			expectError:   false,
 		},
 		{
@@ -86,7 +77,7 @@ Latest checkpoint's TimeLineID:       1`,
 			output: `pg_control version number:            1300
 Catalog version number:               202107181
 Latest checkpoint's TimeLineID:       1`,
-			expectedState: pgctldpb.DatabaseClusterState_STATE_UNKNOWN,
+			expectedState: pgctldpb.DatabaseClusterState_DATABASE_CLUSTER_STATE_UNKNOWN,
 			expectError:   true,
 		},
 		{
@@ -95,13 +86,13 @@ Latest checkpoint's TimeLineID:       1`,
 Catalog version number:               202107181
 Database cluster state:               unknown state value
 Latest checkpoint's TimeLineID:       1`,
-			expectedState: pgctldpb.DatabaseClusterState_STATE_UNKNOWN,
+			expectedState: pgctldpb.DatabaseClusterState_DATABASE_CLUSTER_STATE_UNKNOWN,
 			expectError:   false,
 		},
 		{
 			name:          "empty output",
 			output:        "",
-			expectedState: pgctldpb.DatabaseClusterState_STATE_UNKNOWN,
+			expectedState: pgctldpb.DatabaseClusterState_DATABASE_CLUSTER_STATE_UNKNOWN,
 			expectError:   true,
 		},
 	}
@@ -127,15 +118,14 @@ func TestStringToClusterState(t *testing.T) {
 		input    string
 		expected pgctldpb.DatabaseClusterState
 	}{
-		{"in production", pgctldpb.DatabaseClusterState_IN_PRODUCTION},
-		{"shut down", pgctldpb.DatabaseClusterState_SHUT_DOWN},
-		{"shut down in recovery", pgctldpb.DatabaseClusterState_SHUT_DOWN_IN_RECOVERY},
-		{"shutting down", pgctldpb.DatabaseClusterState_SHUTTING_DOWN},
-		{"in crash recovery", pgctldpb.DatabaseClusterState_IN_CRASH_RECOVERY},
-		{"in archive recovery", pgctldpb.DatabaseClusterState_IN_ARCHIVE_RECOVERY},
-		{"unknown", pgctldpb.DatabaseClusterState_STATE_UNKNOWN},
-		{"", pgctldpb.DatabaseClusterState_STATE_UNKNOWN},
-		{"garbage", pgctldpb.DatabaseClusterState_STATE_UNKNOWN},
+		{"in production", pgctldpb.DatabaseClusterState_DATABASE_CLUSTER_STATE_IN_PRODUCTION},
+		{"shut down", pgctldpb.DatabaseClusterState_DATABASE_CLUSTER_STATE_SHUT_DOWN},
+		{"shut down in recovery", pgctldpb.DatabaseClusterState_DATABASE_CLUSTER_STATE_SHUT_DOWN_IN_RECOVERY},
+		{"shutting down", pgctldpb.DatabaseClusterState_DATABASE_CLUSTER_STATE_SHUTTING_DOWN},
+		{"in crash recovery", pgctldpb.DatabaseClusterState_DATABASE_CLUSTER_STATE_IN_CRASH_RECOVERY},
+		{"unknown", pgctldpb.DatabaseClusterState_DATABASE_CLUSTER_STATE_UNKNOWN},
+		{"", pgctldpb.DatabaseClusterState_DATABASE_CLUSTER_STATE_UNKNOWN},
+		{"garbage", pgctldpb.DatabaseClusterState_DATABASE_CLUSTER_STATE_UNKNOWN},
 	}
 
 	for _, tt := range tests {
@@ -155,38 +145,33 @@ func TestNeedsCrashRecovery(t *testing.T) {
 		expectRecovery bool
 	}{
 		{
-			name:           "in crash recovery",
-			clusterState:   pgctldpb.DatabaseClusterState_IN_CRASH_RECOVERY,
+			name:           "in crash recovery - recovery needed",
+			clusterState:   pgctldpb.DatabaseClusterState_DATABASE_CLUSTER_STATE_IN_CRASH_RECOVERY,
+			expectRecovery: true,
+		},
+		{
+			name:           "in production - recovery needed (was running when killed)",
+			clusterState:   pgctldpb.DatabaseClusterState_DATABASE_CLUSTER_STATE_IN_PRODUCTION,
+			expectRecovery: true,
+		},
+		{
+			name:           "shutting down - recovery needed (was shutting down when killed)",
+			clusterState:   pgctldpb.DatabaseClusterState_DATABASE_CLUSTER_STATE_SHUTTING_DOWN,
 			expectRecovery: true,
 		},
 		{
 			name:           "shut down - no recovery needed",
-			clusterState:   pgctldpb.DatabaseClusterState_SHUT_DOWN,
+			clusterState:   pgctldpb.DatabaseClusterState_DATABASE_CLUSTER_STATE_SHUT_DOWN,
 			expectRecovery: false,
 		},
 		{
 			name:           "shut down in recovery - no recovery needed",
-			clusterState:   pgctldpb.DatabaseClusterState_SHUT_DOWN_IN_RECOVERY,
-			expectRecovery: false,
-		},
-		{
-			name:           "in production - no recovery needed",
-			clusterState:   pgctldpb.DatabaseClusterState_IN_PRODUCTION,
-			expectRecovery: false,
-		},
-		{
-			name:           "in archive recovery - no recovery needed",
-			clusterState:   pgctldpb.DatabaseClusterState_IN_ARCHIVE_RECOVERY,
-			expectRecovery: false,
-		},
-		{
-			name:           "shutting down - no recovery needed",
-			clusterState:   pgctldpb.DatabaseClusterState_SHUTTING_DOWN,
+			clusterState:   pgctldpb.DatabaseClusterState_DATABASE_CLUSTER_STATE_SHUT_DOWN_IN_RECOVERY,
 			expectRecovery: false,
 		},
 		{
 			name:           "unknown state - no recovery needed",
-			clusterState:   pgctldpb.DatabaseClusterState_STATE_UNKNOWN,
+			clusterState:   pgctldpb.DatabaseClusterState_DATABASE_CLUSTER_STATE_UNKNOWN,
 			expectRecovery: false,
 		},
 	}

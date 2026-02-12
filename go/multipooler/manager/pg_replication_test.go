@@ -1677,3 +1677,119 @@ func TestQueryReplicationStatus(t *testing.T) {
 		})
 	}
 }
+
+func TestWritePrimaryConnInfoToFile(t *testing.T) {
+	tests := []struct {
+		name          string
+		connInfo      string
+		setupDir      func(t *testing.T) string // returns pooler dir path
+		expectError   bool
+		errorContains string
+		validateFile  func(t *testing.T, poolerDir string)
+	}{
+		{
+			name:     "successful write to postgresql.auto.conf",
+			connInfo: "host=primary-host port=5432 user=postgres",
+			setupDir: func(t *testing.T) string {
+				poolerDir := t.TempDir()
+				// Create pg_data subdirectory
+				require.NoError(t, os.MkdirAll(poolerDir+"/pg_data", 0o755))
+				return poolerDir
+			},
+			expectError: false,
+			validateFile: func(t *testing.T, poolerDir string) {
+				content, err := os.ReadFile(poolerDir + "/pg_data/postgresql.auto.conf")
+				require.NoError(t, err)
+				assert.Contains(t, string(content), "primary_conninfo")
+				assert.Contains(t, string(content), "primary-host")
+				assert.Contains(t, string(content), "5432")
+			},
+		},
+		{
+			name:     "write with different port",
+			connInfo: "host=test-primary port=5433 user=postgres",
+			setupDir: func(t *testing.T) string {
+				poolerDir := t.TempDir()
+				// Create pg_data subdirectory
+				require.NoError(t, os.MkdirAll(poolerDir+"/pg_data", 0o755))
+				return poolerDir
+			},
+			expectError: false,
+			validateFile: func(t *testing.T, poolerDir string) {
+				content, err := os.ReadFile(poolerDir + "/pg_data/postgresql.auto.conf")
+				require.NoError(t, err)
+				assert.Contains(t, string(content), "test-primary")
+				assert.Contains(t, string(content), "5433")
+			},
+		},
+		{
+			name:     "replace existing primary_conninfo",
+			connInfo: "host=new-primary port=5432 user=postgres",
+			setupDir: func(t *testing.T) string {
+				poolerDir := t.TempDir()
+				// Create pg_data subdirectory
+				require.NoError(t, os.MkdirAll(poolerDir+"/pg_data", 0o755))
+				// Write existing config with old primary_conninfo
+				existingConfig := `# PostgreSQL configuration
+primary_conninfo = 'host=old-primary port=5432 user=postgres'
+max_connections = 100
+`
+				require.NoError(t, os.WriteFile(poolerDir+"/pg_data/postgresql.auto.conf", []byte(existingConfig), 0o644))
+				return poolerDir
+			},
+			expectError: false,
+			validateFile: func(t *testing.T, poolerDir string) {
+				content, err := os.ReadFile(poolerDir + "/pg_data/postgresql.auto.conf")
+				require.NoError(t, err)
+				contentStr := string(content)
+				// Should contain new primary_conninfo
+				assert.Contains(t, contentStr, "new-primary")
+				// Should NOT contain old primary_conninfo
+				assert.NotContains(t, contentStr, "old-primary")
+				// Should preserve other settings
+				assert.Contains(t, contentStr, "max_connections")
+			},
+		},
+		{
+			name:     "invalid pooler directory",
+			connInfo: "host=primary port=5432 user=postgres",
+			setupDir: func(t *testing.T) string {
+				return "/nonexistent/directory/that/does/not/exist"
+			},
+			expectError:   true,
+			errorContains: "failed to write",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			poolerDir := tt.setupDir(t)
+
+			// Create a minimal PoolerManager
+			pm := &MultiPoolerManager{
+				logger: slog.Default(),
+				multipooler: &clustermetadatapb.MultiPooler{
+					Id: &clustermetadatapb.ID{
+						Component: clustermetadatapb.ID_MULTIPOOLER,
+						Name:      "test-pooler",
+					},
+				},
+			}
+
+			ctx := context.Background()
+			err := pm.writePrimaryConnInfoToFile(ctx, poolerDir, tt.connInfo)
+
+			if tt.expectError {
+				require.Error(t, err)
+				if tt.errorContains != "" {
+					assert.Contains(t, err.Error(), tt.errorContains)
+				}
+			} else {
+				require.NoError(t, err)
+				if tt.validateFile != nil {
+					tt.validateFile(t, poolerDir)
+				}
+			}
+		})
+	}
+}

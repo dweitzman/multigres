@@ -27,9 +27,16 @@ import (
 )
 
 // needsCrashRecovery checks if the given cluster state indicates crash recovery is needed.
-// Only IN_CRASH_RECOVERY state requires running crash recovery via postgres --single.
+// For PostgreSQL, check database cluster state.
+// States that indicate need for crash recovery:
+// - "in production" - was running when killed
+// - "shutting down" - was shutting down when killed
+// - "in crash recovery" - already in crash recovery
+// Clean states: "shut down", "shut down in recovery"
 func needsCrashRecovery(state pgctldpb.DatabaseClusterState) bool {
-	return state == pgctldpb.DatabaseClusterState_IN_CRASH_RECOVERY
+	return state == pgctldpb.DatabaseClusterState_DATABASE_CLUSTER_STATE_IN_PRODUCTION ||
+		state == pgctldpb.DatabaseClusterState_DATABASE_CLUSTER_STATE_SHUTTING_DOWN ||
+		state == pgctldpb.DatabaseClusterState_DATABASE_CLUSTER_STATE_IN_CRASH_RECOVERY
 }
 
 // extractClusterState parses pg_controldata output and extracts the database cluster state.
@@ -47,26 +54,24 @@ func extractClusterState(pgControldataOutput string) (pgctldpb.DatabaseClusterSt
 		}
 	}
 
-	return pgctldpb.DatabaseClusterState_STATE_UNKNOWN, errors.New("Database cluster state not found in pg_controldata output")
+	return pgctldpb.DatabaseClusterState_DATABASE_CLUSTER_STATE_UNKNOWN, errors.New("Database cluster state not found in pg_controldata output")
 }
 
 // stringToClusterState converts a pg_controldata cluster state string to the enum value.
 func stringToClusterState(state string) pgctldpb.DatabaseClusterState {
 	switch state {
-	case "in production":
-		return pgctldpb.DatabaseClusterState_IN_PRODUCTION
 	case "shut down":
-		return pgctldpb.DatabaseClusterState_SHUT_DOWN
+		return pgctldpb.DatabaseClusterState_DATABASE_CLUSTER_STATE_SHUT_DOWN
 	case "shut down in recovery":
-		return pgctldpb.DatabaseClusterState_SHUT_DOWN_IN_RECOVERY
+		return pgctldpb.DatabaseClusterState_DATABASE_CLUSTER_STATE_SHUT_DOWN_IN_RECOVERY
+	case "in production":
+		return pgctldpb.DatabaseClusterState_DATABASE_CLUSTER_STATE_IN_PRODUCTION
 	case "shutting down":
-		return pgctldpb.DatabaseClusterState_SHUTTING_DOWN
+		return pgctldpb.DatabaseClusterState_DATABASE_CLUSTER_STATE_SHUTTING_DOWN
 	case "in crash recovery":
-		return pgctldpb.DatabaseClusterState_IN_CRASH_RECOVERY
-	case "in archive recovery":
-		return pgctldpb.DatabaseClusterState_IN_ARCHIVE_RECOVERY
+		return pgctldpb.DatabaseClusterState_DATABASE_CLUSTER_STATE_IN_CRASH_RECOVERY
 	default:
-		return pgctldpb.DatabaseClusterState_STATE_UNKNOWN
+		return pgctldpb.DatabaseClusterState_DATABASE_CLUSTER_STATE_UNKNOWN
 	}
 }
 

@@ -432,48 +432,62 @@ func (s *PgCtldService) PgRewind(ctx context.Context, req *pb.PgRewindRequest) (
 	}, nil
 }
 
-func (s *PgCtldService) NeedsCrashRecovery(ctx context.Context, req *pb.NeedsCrashRecoveryRequest) (*pb.NeedsCrashRecoveryResponse, error) {
-	s.logger.InfoContext(ctx, "gRPC NeedsCrashRecovery request")
+func (s *PgCtldService) CrashRecovery(ctx context.Context, req *pb.CrashRecoveryRequest) (*pb.CrashRecoveryResponse, error) {
+	s.logger.InfoContext(ctx, "gRPC CrashRecovery request - checking if crash recovery needed")
 
-	// Run pg_controldata to get cluster state
+	// Run pg_controldata to get cluster state BEFORE recovery
 	output, err := s.runPgControldata(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to run pg_controldata: %w", err)
 	}
 
 	// Parse the cluster state
-	clusterState, err := extractClusterState(output)
+	stateBefore, err := extractClusterState(output)
 	if err != nil {
 		return nil, fmt.Errorf("failed to extract cluster state: %w", err)
 	}
 
 	// Check if crash recovery is needed
-	needsRecovery := needsCrashRecovery(clusterState)
+	recoveryNeeded := needsCrashRecovery(stateBefore)
 
-	message := "Crash recovery not needed"
-	if needsRecovery {
-		message = "Crash recovery needed"
+	if !recoveryNeeded {
+		s.logger.InfoContext(ctx, "No crash recovery needed, database already clean",
+			"cluster_state", stateBefore.String())
+		return &pb.CrashRecoveryResponse{
+			RecoveryPerformed: false,
+			StateBefore:       stateBefore,
+			StateAfter:        stateBefore,
+			Message:           "No crash recovery needed, database in clean state",
+		}, nil
 	}
 
-	return &pb.NeedsCrashRecoveryResponse{
-		NeedsRecovery:       needsRecovery,
-		ClusterState:        clusterState,
-		PgControldataOutput: output,
-		Message:             message,
-	}, nil
-}
+	// Perform crash recovery
+	s.logger.InfoContext(ctx, "Crash recovery needed, running postgres --single",
+		"cluster_state", stateBefore.String())
 
-func (s *PgCtldService) RunCrashRecovery(ctx context.Context, req *pb.RunCrashRecoveryRequest) (*pb.RunCrashRecoveryResponse, error) {
-	s.logger.InfoContext(ctx, "gRPC RunCrashRecovery request")
-
-	// Run postgres --single to complete crash recovery
-	output, err := s.runCrashRecovery(ctx)
-	if err != nil {
+	if _, err := s.runCrashRecovery(ctx); err != nil {
 		return nil, fmt.Errorf("failed to run crash recovery: %w", err)
 	}
 
-	return &pb.RunCrashRecoveryResponse{
-		Message: "Crash recovery completed successfully",
-		Output:  output,
+	// Check state AFTER recovery
+	outputAfter, err := s.runPgControldata(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to run pg_controldata after recovery: %w", err)
+	}
+
+	stateAfter, err := extractClusterState(outputAfter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract cluster state after recovery: %w", err)
+	}
+
+	s.logger.InfoContext(ctx, "Crash recovery completed",
+		"state_before", stateBefore.String(),
+		"state_after", stateAfter.String())
+
+	return &pb.CrashRecoveryResponse{
+		RecoveryPerformed: true,
+		StateBefore:       stateBefore,
+		StateAfter:        stateAfter,
+		Message:           "Crash recovery completed successfully",
 	}, nil
 }

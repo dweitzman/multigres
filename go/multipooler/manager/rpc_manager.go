@@ -1034,6 +1034,38 @@ func (pm *MultiPoolerManager) DemoteStalePrimary(
 		return nil, mterrors.Wrap(err, "pg_rewind failed")
 	}
 
+	// Configure primary_conninfo BEFORE restarting postgres
+	// After pg_rewind, postgres needs to stream WAL from the primary to reach consistent
+	// recovery state. If we try to configure primary_conninfo AFTER starting postgres,
+	// we hit a chicken-and-egg problem: postgres won't accept connections until it
+	// reaches consistent state, but it can't reach consistent state without streaming
+	// WAL, which requires primary_conninfo to be configured.
+	//
+	// Solution: Write primary_conninfo directly to postgresql.auto.conf before starting postgres.
+	pm.logger.InfoContext(ctx, "Configuring replication to source primary before restart",
+		"source", source.Id.Name,
+		"source_host", source.Hostname,
+		"source_port", port)
+
+	pm.mu.Lock()
+	database := pm.multipooler.Database
+	poolerDir := pm.multipooler.PoolerDir
+	pm.primaryPoolerID = source.Id
+	pm.primaryHost = source.Hostname
+	pm.primaryPort = port
+	pm.mu.Unlock()
+
+	appName := generateApplicationName(pm.serviceID)
+	connInfo := fmt.Sprintf("host=%s port=%d user=%s application_name=%s",
+		source.Hostname, port, database, appName)
+
+	// Write primary_conninfo directly to postgresql.auto.conf
+	if err := pm.writePrimaryConnInfoToFile(ctx, poolerDir, connInfo); err != nil {
+		return nil, mterrors.Wrap(err, "failed to write primary_conninfo to file")
+	}
+
+	// Now restart postgres - it will read primary_conninfo from postgresql.auto.conf
+	// and immediately start streaming WAL from the primary
 	if err := pm.restartAsStandbyAfterRewind(ctx); err != nil {
 		return nil, mterrors.Wrap(err, "failed to restart as standby")
 	}
@@ -1041,18 +1073,6 @@ func (pm *MultiPoolerManager) DemoteStalePrimary(
 	if err := pm.resetSynchronousReplication(ctx); err != nil {
 		pm.logger.WarnContext(ctx, "Failed to reset synchronous replication", "error", err)
 	}
-
-	pm.logger.InfoContext(ctx, "Configuring replication to source primary",
-		"source", source.Id.Name,
-		"source_host", source.Hostname,
-		"source_port", port)
-
-	// Store primary pooler ID for tracking
-	pm.mu.Lock()
-	pm.primaryPoolerID = source.Id
-	pm.primaryHost = source.Hostname
-	pm.primaryPort = port
-	pm.mu.Unlock()
 
 	// Call the locked version directly since we already hold the action lock
 	// (calling SetPrimaryConnInfo would deadlock trying to acquire the same lock)
@@ -1514,6 +1534,23 @@ func (pm *MultiPoolerManager) stopPostgresIfRunning(ctx context.Context) error {
 func (pm *MultiPoolerManager) runPgRewind(ctx context.Context, sourceHost string, sourcePort int32) (bool, error) {
 	if pm.pgctldClient == nil {
 		return false, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, "pgctld client not initialized")
+	}
+
+	// Run crash recovery if needed before pg_rewind
+	pm.logger.InfoContext(ctx, "Checking if crash recovery needed before pg_rewind")
+	crashRecoveryResp, err := pm.pgctldClient.CrashRecovery(ctx, &pgctldpb.CrashRecoveryRequest{})
+	if err != nil {
+		pm.logger.ErrorContext(ctx, "Crash recovery check failed", "error", err)
+		return false, mterrors.Wrap(err, "crash recovery check failed")
+	}
+
+	if crashRecoveryResp.RecoveryPerformed {
+		pm.logger.InfoContext(ctx, "Crash recovery performed successfully",
+			"state_before", crashRecoveryResp.StateBefore.String(),
+			"state_after", crashRecoveryResp.StateAfter.String())
+	} else {
+		pm.logger.InfoContext(ctx, "No crash recovery needed, database already clean",
+			"state", crashRecoveryResp.StateBefore.String())
 	}
 
 	pm.logger.InfoContext(ctx, "Running pg_rewind dry-run", "source_host", sourceHost, "source_port", sourcePort)

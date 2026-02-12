@@ -52,11 +52,9 @@ service PgCtld {
 
   // Crash recovery methods
 
-  // Check if PostgreSQL needs crash recovery (pg_controldata check)
-  rpc NeedsCrashRecovery(NeedsCrashRecoveryRequest) returns (NeedsCrashRecoveryResponse);
-
-  // Run crash recovery using postgres --single mode
-  rpc RunCrashRecovery(RunCrashRecoveryRequest) returns (RunCrashRecoveryResponse);
+  // CrashRecovery performs crash recovery in single-user mode if needed
+  // This is used before pg_rewind when PostgreSQL was killed uncleanly (e.g., SIGKILL)
+  rpc CrashRecovery(CrashRecoveryRequest) returns (CrashRecoveryResponse);
 }
 
 // Start PostgreSQL server
@@ -174,13 +172,13 @@ enum ServerStatus {
 // Database cluster state from pg_controldata
 // Maps to "Database cluster state" field in pg_controldata output
 enum DatabaseClusterState {
-  STATE_UNKNOWN = 0;
-  SHUT_DOWN = 1;                    // shut down
-  SHUT_DOWN_IN_RECOVERY = 2;        // shut down in recovery
-  SHUTTING_DOWN = 3;                // shutting down
-  IN_CRASH_RECOVERY = 4;            // in crash recovery
-  IN_ARCHIVE_RECOVERY = 5;          // in archive recovery
-  IN_PRODUCTION = 6;                // in production
+  DATABASE_CLUSTER_STATE_UNSPECIFIED = 0;
+  DATABASE_CLUSTER_STATE_UNKNOWN = 1;
+  DATABASE_CLUSTER_STATE_SHUT_DOWN = 2;                    // shut down
+  DATABASE_CLUSTER_STATE_SHUT_DOWN_IN_RECOVERY = 3;        // shut down in recovery
+  DATABASE_CLUSTER_STATE_IN_PRODUCTION = 4;                // in production
+  DATABASE_CLUSTER_STATE_SHUTTING_DOWN = 5;                // shutting down
+  DATABASE_CLUSTER_STATE_IN_CRASH_RECOVERY = 6;            // in crash recovery
 }
 
 // Get server version information
@@ -240,32 +238,21 @@ message PgRewindResponse {
 
 // Crash recovery methods
 
-// Check if PostgreSQL needs crash recovery
-message NeedsCrashRecoveryRequest {
+// CrashRecovery performs single-user crash recovery if database is in unclean state
+message CrashRecoveryRequest {
+  // No parameters needed - operates on the configured data directory
 }
 
-message NeedsCrashRecoveryResponse {
-  // True if crash recovery is needed
-  bool needs_recovery = 1;
+message CrashRecoveryResponse {
+  // Whether recovery was needed and performed
+  bool recovery_performed = 1;
 
-  // Database cluster state from pg_controldata
-  DatabaseClusterState cluster_state = 2;
+  // Database cluster state before recovery
+  DatabaseClusterState state_before = 2;
 
-  // Raw pg_controldata output for debugging
-  string pg_controldata_output = 3;
+  // Database cluster state after recovery (should be shut down)
+  DatabaseClusterState state_after = 3;
 
   // Status message
   string message = 4;
-}
-
-// Run crash recovery using postgres --single mode
-message RunCrashRecoveryRequest {
-}
-
-message RunCrashRecoveryResponse {
-  // Status message
-  string message = 1;
-
-  // Output from postgres --single
-  string output = 2;
 }
