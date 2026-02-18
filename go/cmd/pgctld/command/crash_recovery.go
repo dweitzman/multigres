@@ -29,7 +29,23 @@ import (
 // needsCrashRecovery checks if PostgreSQL requires crash recovery.
 // Returns (needsRecovery bool, clusterState enum, error)
 func needsCrashRecovery(ctx context.Context, logger *slog.Logger, poolerDir string) (bool, pb.DatabaseClusterState, error) {
-	cmd := exec.CommandContext(ctx, "pg_controldata", poolerDir+"/pg_data")
+	pgDataDir := poolerDir + "/pg_data"
+
+	hasPostmasterPID := false
+	// Check postmaster.pid first for quick state determination
+	if pid, err := readPostmasterPID(pgDataDir); err == nil {
+		hasPostmasterPID = true
+		// PID file exists - check if process is running
+		if isProcessRunning(pid) {
+			// Postgres is actually running - no recovery needed
+			// Return early without calling pg_controldata
+			return false, pb.DatabaseClusterState_DATABASE_CLUSTER_STATE_IN_PRODUCTION, nil
+		}
+		// Stale PID file - strong indicator of crash
+	}
+
+	// Call pg_controldata to determine exact database state
+	cmd := exec.CommandContext(ctx, "pg_controldata", pgDataDir)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return false, pb.DatabaseClusterState_DATABASE_CLUSTER_STATE_UNKNOWN, fmt.Errorf("pg_controldata failed: %w (output: %s)", err, string(output))
@@ -62,8 +78,13 @@ func needsCrashRecovery(ctx context.Context, logger *slog.Logger, poolerDir stri
 		logger.InfoContext(ctx, "Database cluster state indicates crash recovery needed",
 			"cluster_state", clusterState.String())
 	} else {
-		logger.InfoContext(ctx, "Database cluster state is clean",
-			"cluster_state", clusterState.String())
+		if hasPostmasterPID {
+			logger.InfoContext(ctx, "Database cluster state is clean, although postmaster.pid is stale",
+				"cluster_state", clusterState.String())
+		} else {
+			logger.InfoContext(ctx, "Database cluster state is clean",
+				"cluster_state", clusterState.String())
+		}
 	}
 
 	return needsRecovery, clusterState, nil
