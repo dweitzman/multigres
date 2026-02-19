@@ -15,6 +15,7 @@
 package command
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -230,6 +231,18 @@ func isPostgreSQLRunning(dataDir string) bool {
 }
 
 func startPostgreSQLWithConfig(logger *slog.Logger, config *pgctld.PostgresCtlConfig) error {
+	// IMPORTANT: Defense-in-depth check for crash recovery at the lowest level
+	// This prevents starting PostgreSQL in an inconsistent state after ungraceful shutdown.
+	// Check happens right before pg_ctl start - impossible to bypass.
+	poolerDir := filepath.Dir(config.PostgresDataDir)
+	needsRecovery, state, err := needsCrashRecovery(context.TODO(), logger, poolerDir)
+	if err != nil {
+		return fmt.Errorf("failed to check crash recovery status: %w", err)
+	}
+	if needsRecovery {
+		return &CrashRecoveryNeededError{ClusterState: state}
+	}
+
 	// Use pg_ctl to start PostgreSQL properly as a daemon
 	// Pass port, listen_addresses, and unix_socket_directories as command-line parameters for portability
 	postgresOpts := fmt.Sprintf("-c config_file=%s -c port=%d -c listen_addresses=%s -c unix_socket_directories=%s",

@@ -26,6 +26,18 @@ import (
 	pb "github.com/multigres/multigres/go/pb/pgctldservice"
 )
 
+// CrashRecoveryNeededError is returned when attempting to start PostgreSQL
+// but crash recovery is required first. This allows callers to type-check
+// for this specific error condition.
+type CrashRecoveryNeededError struct {
+	ClusterState pb.DatabaseClusterState
+}
+
+func (e *CrashRecoveryNeededError) Error() string {
+	return fmt.Sprintf("database requires crash recovery (cluster state: %s). Run crash recovery first, then retry start",
+		e.ClusterState.String())
+}
+
 // needsCrashRecovery checks if PostgreSQL requires crash recovery.
 // Returns (needsRecovery bool, clusterState enum, error)
 func needsCrashRecovery(ctx context.Context, logger *slog.Logger, poolerDir string) (bool, pb.DatabaseClusterState, error) {
@@ -64,15 +76,12 @@ func needsCrashRecovery(ctx context.Context, logger *slog.Logger, poolerDir stri
 	}
 
 	// For PostgreSQL 17+, check database cluster state
-	// States that indicate need for crash recovery:
-	// - "in production" - was running when killed
-	// - "shutting down" - was shutting down when killed
-	// - "in crash recovery" - already in crash recovery
 	// Clean states: "shut down", "shut down in recovery"
+	// Anything else means Postgres isn't aware it was stopped.
 
-	needsRecovery := clusterState == pb.DatabaseClusterState_DATABASE_CLUSTER_STATE_IN_PRODUCTION ||
-		clusterState == pb.DatabaseClusterState_DATABASE_CLUSTER_STATE_SHUTTING_DOWN ||
-		clusterState == pb.DatabaseClusterState_DATABASE_CLUSTER_STATE_IN_CRASH_RECOVERY
+	cleanShutdown := clusterState == pb.DatabaseClusterState_DATABASE_CLUSTER_STATE_SHUT_DOWN ||
+		clusterState == pb.DatabaseClusterState_DATABASE_CLUSTER_STATE_SHUT_DOWN_IN_RECOVERY
+	needsRecovery := !cleanShutdown
 
 	if needsRecovery {
 		logger.InfoContext(ctx, "Database cluster state indicates crash recovery needed",
