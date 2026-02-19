@@ -511,6 +511,194 @@ This will print all log files to stdout after the test fails, making them visibl
 
 ---
 
+## Running Tests with OpenTelemetry (OTEL)
+
+For debugging slow tests or investigating performance issues, you can run tests with OpenTelemetry tracing enabled to collect telemetry data like traces, metrics, and logs.
+
+### Setup
+
+First, start the observability infrastructure:
+
+```bash
+./demo/local/run-observability.sh
+```
+
+This starts:
+
+- **Grafana** (http://localhost:3000) - Visualization and dashboards
+- **Tempo** - Distributed tracing backend
+- **Loki** - Log aggregation
+- **Prometheus** - Metrics storage
+- **OTEL Collector** - Receives and routes telemetry data
+
+### Running Tests with OTEL
+
+Use the `run-with-otel.sh` wrapper script to run any test command with OTEL environment variables configured:
+
+```bash
+# Run specific integration test with tracing
+./demo/local/run-with-otel.sh go test -count=1 -v -run TestBootstrap ./go/test/endtoend/multiorch/...
+
+# Run unit test with tracing
+./demo/local/run-with-otel.sh go test -v -run TestConnectionPool ./go/multipooler/...
+
+# Run with race detector and tracing
+./demo/local/run-with-otel.sh go test -race -v ./go/multigateway/...
+```
+
+### Sampling Configuration
+
+By default, traces use the `multigres_custom` sampler configured in `demo/observability/sampling-config.yaml`. To capture all traces during testing:
+
+```bash
+# Always sample - captures every trace (useful for debugging)
+OTEL_TRACES_SAMPLER=always_on ./demo/local/run-with-otel.sh go test -run TestName ./go/...
+
+# Never sample - disables tracing
+OTEL_TRACES_SAMPLER=always_off ./demo/local/run-with-otel.sh go test ...
+
+# Parent-based sampling - follows parent span's sampling decision
+OTEL_TRACES_SAMPLER=parentbased_always_on ./demo/local/run-with-otel.sh go test ...
+```
+
+**Note**: The `always_on` sampler can generate significant trace volume. Use it selectively for focused debugging rather than running full test suites.
+
+### Customizing OTEL Configuration
+
+Override other OTEL environment variables:
+
+```bash
+# Increase metric export frequency (default: 5000ms)
+OTEL_METRIC_EXPORT_INTERVAL=1000 ./demo/local/run-with-otel.sh go test ...
+
+# Use different OTLP endpoint
+OTEL_EXPORTER_OTLP_ENDPOINT=http://other-collector:4318 ./demo/local/run-with-otel.sh go test ...
+```
+
+### Viewing Telemetry Data
+
+After running tests with OTEL, you can view traces, logs, and metrics in Grafana or query them directly via API.
+
+**Quick Access:**
+
+- **Grafana Dashboard**: http://localhost:3000/d/multigres-overview
+- **Grafana Explore**: http://localhost:3000/explore
+- **Prometheus UI**: http://localhost:9090
+
+**Service Names for Queries:**
+
+- `pgctld` - PostgreSQL control daemon
+- `multipooler` - Connection pooler
+- `multigateway` - Gateway/proxy
+- `multiorch` - Orchestration service
+- `multiadmin` - Admin service
+
+**Quick Trace Query:**
+
+```bash
+# List recent traces for a service (last 5 minutes)
+SERVICE="pgctld"
+curl -s "http://localhost:3000/api/datasources/proxy/uid/tempo/api/search?tags=service.name%3D${SERVICE}&limit=20" | \
+  jq -r '.traces[] | "\(.traceID) \(.rootTraceName) \(.durationMs)ms"'
+```
+
+**Example output:**
+
+```
+5ac964581fd49e437fdb2212a03e9b25 pgctldservice.PgCtld/Start 1037ms
+d4a45e75f385c8e6944cdc198026a982 pgctldservice.PgCtld/InitDataDir 15ms
+f75010b2dc1dde15e2b2dece56b67f1c init 479ms
+```
+
+**Detailed Trace Query with Time Range:**
+
+```bash
+SERVICE="pgctld"
+START=$(($(date +%s) - 300))  # 5 minutes ago
+END=$(date +%s)
+curl -s "http://localhost:3000/api/datasources/proxy/uid/tempo/api/search?tags=service.name%3D${SERVICE}&limit=50&start=${START}&end=${END}" | \
+  jq '.traces[]'
+```
+
+**Open Grafana Explore:**
+
+```bash
+# macOS
+open "http://localhost:3000/explore?left=%7B%22datasource%22%3A%22tempo%22%7D"
+
+# Linux
+xdg-open "http://localhost:3000/explore?left=%7B%22datasource%22%3A%22tempo%22%7D"
+```
+
+### Use Cases
+
+**Debugging Slow Tests:**
+
+```bash
+# Run slow test with tracing to see where time is spent
+./demo/local/run-with-otel.sh go test -v -run TestOrphanDetection ./go/test/endtoend/pgctld/...
+```
+
+Then view the trace in Grafana to identify bottlenecks.
+
+**Important caveat for unit tests**: Unit test code itself is not automatically instrumented. OTEL tracing only captures spans from:
+
+- Production code that has instrumentation (gRPC calls, database operations, etc.)
+- Services started by integration tests (pgctld, multipooler, multigateway, etc.)
+
+For slow unit tests without existing instrumentation, you can temporarily add tracing to the test:
+
+```go
+import "go.opentelemetry.io/otel"
+
+func TestSlow(t *testing.T) {
+    ctx := utils.WithShortDeadline(t)
+    tracer := otel.Tracer("test")
+
+    ctx, span := tracer.Start(ctx, "setup phase")
+    // ... setup code ...
+    span.End()
+
+    ctx, span = tracer.Start(ctx, "execution phase")
+    // ... test execution ...
+    span.End()
+}
+```
+
+Integration tests naturally capture more traces since they start instrumented services.
+
+**Investigating Flaky Tests:**
+
+```bash
+# Run flaky test multiple times with tracing
+./demo/local/run-with-otel.sh go test -count=10 -run TestFlaky ./go/...
+```
+
+Compare traces from passing vs failing runs to identify timing issues.
+
+**Performance Analysis:**
+
+```bash
+# Run integration test and analyze metrics
+./demo/local/run-with-otel.sh go test -v ./go/test/endtoend/queryserving/...
+```
+
+View metrics in Grafana to see query latencies, connection counts, etc.
+
+### OTEL Environment Variables
+
+The `run-with-otel.sh` script automatically sets these variables:
+
+- `OTEL_EXPORTER_OTLP_ENDPOINT` - OTLP endpoint (default: http://localhost:4318)
+- `OTEL_TRACES_SAMPLER` - Sampling strategy (default: multigres_custom)
+- `OTEL_TRACES_EXPORTER` - Trace exporter (default: otlp)
+- `OTEL_METRICS_EXPORTER` - Metric exporter (default: otlp)
+- `OTEL_LOGS_EXPORTER` - Log exporter (default: otlp)
+
+See `demo/local/run-with-otel.sh` for full configuration details.
+
+---
+
 ## Implementation Notes for Claude
 
 ### Argument Parsing Logic
