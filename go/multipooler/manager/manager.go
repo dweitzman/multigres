@@ -1404,6 +1404,7 @@ func (pm *MultiPoolerManager) WaitUntilReady(ctx context.Context) error {
 
 // postgresState represents the state of PostgreSQL for monitoring
 type postgresState struct {
+	managerOpen      bool
 	pgctldAvailable  bool
 	dirInitialized   bool
 	postgresRunning  bool
@@ -1416,6 +1417,7 @@ type remedialAction int
 
 const (
 	remedialActionNone remedialAction = iota
+	remedialActionReopenManager
 	remedialActionStartPostgres
 	remedialActionRestoreFromBackup
 	remedialActionAdjustTypeToPrimary
@@ -1478,6 +1480,11 @@ func (pm *MultiPoolerManager) monitorPostgresIteration(ctx context.Context) {
 func (pm *MultiPoolerManager) discoverPostgresState(ctx context.Context) postgresState {
 	state := postgresState{}
 
+	// Check if manager is open
+	pm.mu.Lock()
+	state.managerOpen = pm.isOpen
+	pm.mu.Unlock()
+
 	// Check if pgctld client is available
 	if pm.pgctldClient == nil {
 		return state // All fields remain false
@@ -1525,6 +1532,13 @@ func (pm *MultiPoolerManager) setMonitorReason(ctx context.Context, reason, mess
 // determineRemedialAction decides what action to take based on discovered state.
 // This is pure decision logic with no side effects.
 func (pm *MultiPoolerManager) determineRemedialAction(currentState postgresState) remedialAction {
+	// Manager is closed but PostgreSQL is running: Reopen manager
+	// This handles cases where recovery operations close the manager but fail
+	// partway through, leaving the manager closed even though PostgreSQL is healthy.
+	if !currentState.managerOpen && currentState.pgctldAvailable && currentState.postgresRunning {
+		return remedialActionReopenManager
+	}
+
 	// Pgctld unavailable: No action possible
 	if !currentState.pgctldAvailable {
 		return remedialActionNone
@@ -1564,6 +1578,7 @@ func (pm *MultiPoolerManager) takeRemedialAction(ctx context.Context, action rem
 	}
 
 	const (
+		reasonManagerClosed       = "manager_closed"
 		reasonPostgresRunning     = "postgres_running"
 		reasonStartingPostgres    = "starting_postgres"
 		reasonRestoringFromBackup = "restoring_from_backup"
@@ -1572,6 +1587,14 @@ func (pm *MultiPoolerManager) takeRemedialAction(ctx context.Context, action rem
 	switch action {
 	case remedialActionNone:
 		// No action to take
+
+	case remedialActionReopenManager:
+		pm.setMonitorReason(ctx, reasonManagerClosed, "MonitorPostgres: manager is closed but PostgreSQL is running, reopening manager")
+		if err := pm.Open(); err != nil {
+			pm.logger.ErrorContext(ctx, "MonitorPostgres: failed to reopen manager", "error", err)
+			return
+		}
+		pm.logger.InfoContext(ctx, "MonitorPostgres: successfully reopened manager")
 		return
 
 	case remedialActionAdjustTypeToPrimary:
