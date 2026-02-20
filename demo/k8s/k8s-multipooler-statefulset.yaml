@@ -96,6 +96,9 @@ spec:
               cp /certs-secret/* /certs/
               chmod 600 /certs/*.key
               chmod 644 /certs/*.crt
+              # Create symlinks for pgBackRest expected names
+              ln -sf tls.crt /certs/pgbackrest.crt
+              ln -sf tls.key /certs/pgbackrest.key
           volumeMounts:
             - name: certs-secret
               mountPath: /certs-secret
@@ -123,8 +126,8 @@ spec:
             - --socket-file=/data/pg_sockets/.s.PGSQL.5432
             - --grpc-socket-file=/data/multipooler.sock
             - --service-map=grpc-pooler
-            - --pgbackrest-cert-file=/certs/tls.crt
-            - --pgbackrest-key-file=/certs/tls.key
+            - --pgbackrest-cert-file=/certs/pgbackrest.crt
+            - --pgbackrest-key-file=/certs/pgbackrest.key
             - --pgbackrest-ca-file=/certs/ca.crt
             - --pgbackrest-port=8432
             - --pprof-http=true
@@ -180,9 +183,13 @@ spec:
             - server
             - --pooler-dir=/data
             - --grpc-port=16200
+            - --backup-type=filesystem
+            - --backup-path=/backups
             - --pg-port=5432
             - --grpc-socket-file=/data/pgctld.sock
             - --pg-hba-template=/etc/pgctld/pg_hba_template.conf
+            - --pgbackrest-cert-dir=/certs
+            - --pgbackrest-port=8432
             - --pprof-http=true
           ports:
             - containerPort: 16200
