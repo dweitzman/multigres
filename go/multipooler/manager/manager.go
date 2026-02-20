@@ -127,6 +127,17 @@ type MultiPoolerManager struct {
 	// pgMonitorLastLoggedReason tracks the last logged reason in the monitor to avoid duplicate logs.
 	pgMonitorLastLoggedReason string
 
+	// pgMonitorMetrics holds OpenTelemetry metrics for PostgreSQL monitoring.
+	pgMonitorMetrics *PostgresMonitorMetrics
+
+	// currentProblems tracks current problem state for metrics (to know when to increment/decrement)
+	currentProblems struct {
+		sync.Mutex
+		managerClosed     bool
+		postgressStopped  bool
+		pgctldUnavailable bool
+	}
+
 	// TODO: Implement async query serving state management system
 	// This should include: target state, current state, convergence goroutine,
 	// and state-specific handlers (setServing, setServingReadOnly, setNotServing, setDrained)
@@ -226,6 +237,14 @@ func NewMultiPoolerManagerWithTimeout(logger *slog.Logger, multiPooler *clusterm
 		ctx:    ctx,
 		cancel: cancel,
 	}
+
+	// Initialize PostgreSQL monitor metrics
+	metrics, err := NewPostgresMonitorMetrics()
+	if err != nil {
+		// Log error but don't fail initialization - metrics use noop fallbacks
+		logger.WarnContext(ctx, "Failed to initialize PostgreSQL monitor metrics", "error", err)
+	}
+	pm.pgMonitorMetrics = metrics
 
 	// Consensus state is always available; it will be loaded when needed.
 	pm.consensusState = NewConsensusState(pm.multipooler.PoolerDir, pm.serviceID)
@@ -1442,6 +1461,43 @@ func (pm *MultiPoolerManager) monitorPostgresIteration(ctx context.Context) {
 	// Discover current state
 	currentState := pm.discoverPostgresState(ctx)
 
+	// Update metrics for detected problems by comparing with previous state
+	poolerID := pm.serviceID.Name
+
+	pm.currentProblems.Lock()
+
+	// Manager closed problem
+	managerClosedNow := !currentState.managerOpen && currentState.pgctldAvailable && currentState.postgresRunning
+	if managerClosedNow && !pm.currentProblems.managerClosed {
+		pm.pgMonitorMetrics.detectedProblems.Add(ctx, 1, "manager_closed", poolerID)
+		pm.currentProblems.managerClosed = true
+	} else if !managerClosedNow && pm.currentProblems.managerClosed {
+		pm.pgMonitorMetrics.detectedProblems.Add(ctx, -1, "manager_closed", poolerID)
+		pm.currentProblems.managerClosed = false
+	}
+
+	// PostgreSQL stopped problem
+	postgresStoppedNow := currentState.pgctldAvailable && !currentState.postgresRunning
+	if postgresStoppedNow && !pm.currentProblems.postgressStopped {
+		pm.pgMonitorMetrics.detectedProblems.Add(ctx, 1, "postgres_stopped", poolerID)
+		pm.currentProblems.postgressStopped = true
+	} else if !postgresStoppedNow && pm.currentProblems.postgressStopped {
+		pm.pgMonitorMetrics.detectedProblems.Add(ctx, -1, "postgres_stopped", poolerID)
+		pm.currentProblems.postgressStopped = false
+	}
+
+	// pgctld unavailable problem
+	pgctldUnavailableNow := !currentState.pgctldAvailable
+	if pgctldUnavailableNow && !pm.currentProblems.pgctldUnavailable {
+		pm.pgMonitorMetrics.detectedProblems.Add(ctx, 1, "pgctld_unavailable", poolerID)
+		pm.currentProblems.pgctldUnavailable = true
+	} else if !pgctldUnavailableNow && pm.currentProblems.pgctldUnavailable {
+		pm.pgMonitorMetrics.detectedProblems.Add(ctx, -1, "pgctld_unavailable", poolerID)
+		pm.currentProblems.pgctldUnavailable = false
+	}
+
+	pm.currentProblems.Unlock()
+
 	// Determine what remediation is needed
 	action := pm.determineRemedialAction(currentState)
 	if action == remedialActionNone {
@@ -1571,6 +1627,9 @@ func (pm *MultiPoolerManager) determineRemedialAction(currentState postgresState
 // takeRemedialAction executes the specified remedial action.
 // Caller must hold the action lock.
 func (pm *MultiPoolerManager) takeRemedialAction(ctx context.Context, action remedialAction) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	// Assert that the action lock is held
 	if err := AssertActionLockHeld(ctx); err != nil {
 		pm.logger.ErrorContext(ctx, "takeRemedialAction called without action lock", "error", err)
@@ -1584,6 +1643,7 @@ func (pm *MultiPoolerManager) takeRemedialAction(ctx context.Context, action rem
 		reasonRestoringFromBackup = "restoring_from_backup"
 	)
 
+	startTime := time.Now()
 	switch action {
 	case remedialActionNone:
 		// No action to take
@@ -1605,7 +1665,10 @@ func (pm *MultiPoolerManager) takeRemedialAction(ctx context.Context, action rem
 		pm.logger.InfoContext(ctx, "MonitorPostgres: Changing pooler type to primary")
 		if err := pm.changeTypeLocked(ctx, clustermetadatapb.PoolerType_PRIMARY); err != nil {
 			pm.logger.ErrorContext(ctx, "MonitorPostgres: failed to change pooler type to primary", "error", err)
+			pm.pgMonitorMetrics.remedialActionDuration.Record(ctx, time.Since(startTime).Seconds(), RemedialActionAdjustTypeToPrimary, RemedialActionStatusFailure)
+			return
 		}
+		pm.pgMonitorMetrics.remedialActionDuration.Record(ctx, time.Since(startTime).Seconds(), RemedialActionAdjustTypeToPrimary, RemedialActionStatusSuccess)
 
 	case remedialActionAdjustTypeToReplica:
 		pm.setMonitorReason(ctx, reasonPostgresRunning, "MonitorPostgres: PostgreSQL is running")
@@ -1613,19 +1676,28 @@ func (pm *MultiPoolerManager) takeRemedialAction(ctx context.Context, action rem
 		pm.logger.InfoContext(ctx, "MonitorPostgres: Changing pooler type to replica")
 		if err := pm.changeTypeLocked(ctx, clustermetadatapb.PoolerType_REPLICA); err != nil {
 			pm.logger.ErrorContext(ctx, "MonitorPostgres: failed to change pooler type to replica", "error", err)
+			pm.pgMonitorMetrics.remedialActionDuration.Record(ctx, time.Since(startTime).Seconds(), RemedialActionAdjustTypeToReplica, RemedialActionStatusFailure)
+			return
 		}
+		pm.pgMonitorMetrics.remedialActionDuration.Record(ctx, time.Since(startTime).Seconds(), RemedialActionAdjustTypeToReplica, RemedialActionStatusSuccess)
 
 	case remedialActionStartPostgres:
 		pm.setMonitorReason(ctx, reasonStartingPostgres, "MonitorPostgres: PostgreSQL initialized but not running, starting PostgreSQL")
 		if err := pm.startPostgres(ctx); err != nil {
 			pm.logger.ErrorContext(ctx, "MonitorPostgres: failed to start PostgreSQL, will retry", "error", err)
+			pm.pgMonitorMetrics.remedialActionDuration.Record(ctx, time.Since(startTime).Seconds(), RemedialActionStartPostgres, RemedialActionStatusFailure)
+			return
 		}
+		pm.pgMonitorMetrics.remedialActionDuration.Record(ctx, time.Since(startTime).Seconds(), RemedialActionStartPostgres, RemedialActionStatusSuccess)
 
 	case remedialActionRestoreFromBackup:
 		pm.setMonitorReason(ctx, reasonRestoringFromBackup, "MonitorPostgres: directory not initialized but backups available, restoring from backup")
 		if err := pm.restoreAndStartPostgres(ctx); err != nil {
 			pm.logger.ErrorContext(ctx, "MonitorPostgres: failed to restore from backup, will retry", "error", err)
+			pm.pgMonitorMetrics.remedialActionDuration.Record(ctx, time.Since(startTime).Seconds(), RemedialActionRestoreFromBackup, RemedialActionStatusFailure)
+			return
 		}
+		pm.pgMonitorMetrics.remedialActionDuration.Record(ctx, time.Since(startTime).Seconds(), RemedialActionRestoreFromBackup, RemedialActionStatusSuccess)
 	}
 }
 
@@ -1753,6 +1825,24 @@ func (pm *MultiPoolerManager) enableMonitorInternal() error {
 func (pm *MultiPoolerManager) disableMonitorInternal() {
 	// Stop the monitor runner (idempotent)
 	pm.pgMonitor.Stop()
+
+	// Clear any active problem metrics when monitor stops
+	poolerID := pm.serviceID.Name
+	pm.currentProblems.Lock()
+	if pm.currentProblems.managerClosed {
+		pm.pgMonitorMetrics.detectedProblems.Add(pm.ctx, -1, "manager_closed", poolerID)
+		pm.currentProblems.managerClosed = false
+	}
+	if pm.currentProblems.postgressStopped {
+		pm.pgMonitorMetrics.detectedProblems.Add(pm.ctx, -1, "postgres_stopped", poolerID)
+		pm.currentProblems.postgressStopped = false
+	}
+	if pm.currentProblems.pgctldUnavailable {
+		pm.pgMonitorMetrics.detectedProblems.Add(pm.ctx, -1, "pgctld_unavailable", poolerID)
+		pm.currentProblems.pgctldUnavailable = false
+	}
+	pm.currentProblems.Unlock()
+
 	pm.logger.InfoContext(pm.ctx, "MonitorPostgres disabled successfully")
 }
 
