@@ -21,32 +21,223 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
+	"strings"
 )
 
-// TickHandler is called at each tick to drive the simulation
-// It typically delivers tick indicators to nodes and processes their responses
-type TickHandler[I any, R any, ID comparable] interface {
-	// OnTick is called at the start of each tick during RunUntil
-	OnTick(sim *Simulator[I, R, ID], tick int64)
-}
-
+// IndicatorDelivery represents an indicator to be delivered to a target node
 // RequestHandler processes requests emitted by nodes
 // It typically delivers requests to target nodes (with optional delays/transformations)
 type RequestHandler[I any, R any, ID comparable] interface {
 	// ProcessRequests is called after a node emits requests
-	ProcessRequests(sim *Simulator[I, R, ID], fromNode ID, requests []R)
+	// Returns a map of target nodes to indicators that should be delivered
+	ProcessRequests(sim *Simulator[I, R, ID], fromNode ID, requests []R) map[ID][]I
 }
 
-// MessageInterceptor can delay or drop messages to simulate network chaos
-// This is test-only - production event loops should not use interceptors
-type MessageInterceptor[I any, R any, ID comparable] interface {
-	// InterceptIndicator is called before delivering an indicator to a node
-	// Returns the delay in ticks (0 = immediate, positive = delayed, -1 = dropped)
-	InterceptIndicator(currentTick int64, target ID, indicator I) int64
+// IndicatorDeliveryPolicy determines when and if indicators are delivered
+// This models network behavior: latency, packet loss, and (future) retries/duplicates
+type IndicatorDeliveryPolicy[I any, ID comparable] interface {
+	// ScheduleDelivery is called when an indicator is enqueued for delivery
+	// Parameters:
+	//   - currentTick: the current simulator tick
+	//   - fromNode: the node sending the indicator (may be zero value if unknown)
+	//   - target: the node receiving the indicator
+	//   - indicator: the message being delivered
+	//
+	// Returns:
+	//   - delivered: false if message is dropped, true if it should be delivered
+	//   - delayTicks: must be >= 1 if delivered=true (enforced by simulator)
+	//
+	// Future: Could return []int64 to support multiple deliveries (retries/duplicates)
+	ScheduleDelivery(currentTick int64, fromNode ID, target ID, indicator I) (delivered bool, delayTicks int64)
+}
 
-	// InterceptRequest is called before scheduling a request's delivery
-	// Returns the delay in ticks (0 = immediate, positive = delayed, -1 = dropped)
-	InterceptRequest(currentTick int64, from ID, request R) int64
+// FastNetwork simulates a fast, reliable network (e.g., local datacenter, loopback)
+// with minimal latency (1 tick) and no packet loss
+type FastNetwork[I any, ID comparable] struct{}
+
+func (p *FastNetwork[I, ID]) ScheduleDelivery(currentTick int64, fromNode ID, target ID, indicator I) (bool, int64) {
+	return true, 1 // Always deliver at next tick
+}
+
+// UnreliableNetwork simulates a chaotic network with random delays and packet loss
+type UnreliableNetwork[I any, ID comparable] struct {
+	MaxDelay int64      // Maximum delay in ticks (>= 1)
+	DropRate float64    // Probability of dropping message (0.0 - 1.0)
+	Rng      *rand.Rand // Random number generator (must be provided)
+}
+
+func (p *UnreliableNetwork[I, ID]) ScheduleDelivery(currentTick int64, fromNode ID, target ID, indicator I) (bool, int64) {
+	// Check if message should be dropped
+	if p.Rng.Float64() < p.DropRate {
+		return false, 0 // Message dropped
+	}
+
+	// Random delay between 1 and MaxDelay (inclusive)
+	delay := int64(1)
+	if p.MaxDelay > 1 {
+		delay = 1 + p.Rng.Int64N(p.MaxDelay)
+	}
+	return true, delay
+}
+
+// UntilPolicy uses InitialPolicy until a condition becomes true, then permanently switches to AfterPolicy
+// This is a "latching" policy - once switched, it never switches back
+type UntilPolicy[I any, R any, ID comparable] struct {
+	UntilCondition Condition[I, R, ID]            // When this becomes true, switch to AfterPolicy
+	InitialPolicy  IndicatorDeliveryPolicy[I, ID] // Policy to use before condition is true
+	AfterPolicy    IndicatorDeliveryPolicy[I, ID] // Policy to use after condition becomes true (permanent)
+	Sim            *Simulator[I, R, ID]           // Reference to simulator for condition evaluation
+	hasSwitched    bool                           // Track whether we've switched (latching)
+}
+
+func (p *UntilPolicy[I, R, ID]) ScheduleDelivery(currentTick int64, fromNode ID, target ID, indicator I) (bool, int64) {
+	// Check if we should switch (only check if we haven't switched yet)
+	if !p.hasSwitched && p.UntilCondition.Eval(p.Sim) {
+		p.hasSwitched = true
+	}
+
+	// Use appropriate policy
+	if p.hasSwitched {
+		return p.AfterPolicy.ScheduleDelivery(currentTick, fromNode, target, indicator)
+	}
+	return p.InitialPolicy.ScheduleDelivery(currentTick, fromNode, target, indicator)
+}
+
+// PolicySequence manages a sequence of delivery policies with observable transitions
+// Each stage has a policy and a condition for when to advance to the next stage
+// Stages can be queried to check if they're active, enabling assertions about policy state
+type PolicySequence[I any, R any, ID comparable] struct {
+	stages            []policyStage[I, R, ID]
+	currentStageIndex int
+	sim               *Simulator[I, R, ID]
+}
+
+type policyStage[I any, R any, ID comparable] struct {
+	policy         IndicatorDeliveryPolicy[I, ID]
+	advanceWhen    Condition[I, R, ID] // When to advance to next stage (nil for final stage)
+	stageCondition *StageActiveCondition[I, R, ID]
+}
+
+// StageActiveCondition is a Condition that's true when a specific stage is active
+type StageActiveCondition[I any, R any, ID comparable] struct {
+	seq        *PolicySequence[I, R, ID]
+	stageIndex int
+	stageName  string
+}
+
+func (c *StageActiveCondition[I, R, ID]) Eval(sim *Simulator[I, R, ID]) bool {
+	return c.seq.currentStageIndex == c.stageIndex
+}
+
+func (c *StageActiveCondition[I, R, ID]) Name() string {
+	return c.stageName
+}
+
+func (c *StageActiveCondition[I, R, ID]) Describe(sim *Simulator[I, R, ID]) string {
+	return fmt.Sprintf("policy stage '%s' is active (stage %d of %d)", c.stageName, c.stageIndex+1, len(c.seq.stages))
+}
+
+// NewPolicySequence creates a new policy sequence starting with the given initial policy
+func NewPolicySequence[I any, R any, ID comparable](sim *Simulator[I, R, ID], initialPolicy IndicatorDeliveryPolicy[I, ID], stageName string) *PolicySequence[I, R, ID] {
+	seq := &PolicySequence[I, R, ID]{
+		stages:            make([]policyStage[I, R, ID], 0),
+		currentStageIndex: 0,
+		sim:               sim,
+	}
+
+	// Create condition for initial stage
+	stageCondition := &StageActiveCondition[I, R, ID]{
+		seq:        seq,
+		stageIndex: 0,
+		stageName:  stageName,
+	}
+
+	// Add initial stage
+	seq.stages = append(seq.stages, policyStage[I, R, ID]{
+		policy:         initialPolicy,
+		advanceWhen:    nil, // Will be set when next stage is added
+		stageCondition: stageCondition,
+	})
+
+	return seq
+}
+
+// AppendPolicy adds a new stage to the sequence
+// The sequence will advance from the current last stage to this new stage when advanceWhen becomes true
+// Returns a Condition that's true when this stage is active (can be used in assertions)
+func (seq *PolicySequence[I, R, ID]) AppendPolicy(policy IndicatorDeliveryPolicy[I, ID], advanceWhen Condition[I, R, ID], stageName string) Condition[I, R, ID] {
+	// Set the advance condition for the previous stage
+	if len(seq.stages) > 0 {
+		seq.stages[len(seq.stages)-1].advanceWhen = advanceWhen
+	}
+
+	// Create condition for this stage
+	stageIndex := len(seq.stages)
+	stageCondition := &StageActiveCondition[I, R, ID]{
+		seq:        seq,
+		stageIndex: stageIndex,
+		stageName:  stageName,
+	}
+
+	// Add new stage
+	seq.stages = append(seq.stages, policyStage[I, R, ID]{
+		policy:         policy,
+		advanceWhen:    nil, // Will be set when next stage is added (or remain nil if final)
+		stageCondition: stageCondition,
+	})
+
+	return stageCondition
+}
+
+// ScheduleDelivery implements IndicatorDeliveryPolicy
+func (seq *PolicySequence[I, R, ID]) ScheduleDelivery(currentTick int64, fromNode ID, target ID, indicator I) (bool, int64) {
+	// Check if we should advance to next stage
+	if seq.currentStageIndex < len(seq.stages)-1 {
+		currentStage := seq.stages[seq.currentStageIndex]
+		if currentStage.advanceWhen != nil && currentStage.advanceWhen.Eval(seq.sim) {
+			oldIndex := seq.currentStageIndex
+			seq.currentStageIndex++
+			// Log stage transition if debug logging is enabled
+			if seq.sim.debugLogWriter != nil {
+				fmt.Fprintf(seq.sim.debugLogWriter, "[PolicySequence] Tick %d: Advanced from stage %d (%s) to stage %d (%s)\n",
+					currentTick, oldIndex, seq.stages[oldIndex].stageCondition.stageName,
+					seq.currentStageIndex, seq.stages[seq.currentStageIndex].stageCondition.stageName)
+			}
+		}
+	}
+
+	// Use current stage's policy
+	return seq.stages[seq.currentStageIndex].policy.ScheduleDelivery(currentTick, fromNode, target, indicator)
+}
+
+// And combines multiple conditions - true only if all are true
+type And[I any, R any, ID comparable] struct {
+	Conditions []Condition[I, R, ID]
+}
+
+func (c *And[I, R, ID]) Eval(sim *Simulator[I, R, ID]) bool {
+	for _, cond := range c.Conditions {
+		if !cond.Eval(sim) {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *And[I, R, ID]) Name() string {
+	names := make([]string, len(c.Conditions))
+	for i, cond := range c.Conditions {
+		names[i] = cond.Name()
+	}
+	return fmt.Sprintf("and(%s)", strings.Join(names, ", "))
+}
+
+func (c *And[I, R, ID]) Describe(sim *Simulator[I, R, ID]) string {
+	descriptions := make([]string, len(c.Conditions))
+	for i, cond := range c.Conditions {
+		descriptions[i] = cond.Describe(sim)
+	}
+	return fmt.Sprintf("all of: [%s]", strings.Join(descriptions, ", "))
 }
 
 // TraceEvent records a simulation event
@@ -69,13 +260,14 @@ type Simulator[I any, R any, ID comparable] struct {
 	currentTick int64
 	rng         *rand.Rand
 	assertions  []Assertion[I, R, ID]
-	interceptor MessageInterceptor[I, R, ID]
 
 	// Debug logging
 	debugLogWriter io.Writer
 
-	// Pluggable handlers for driving simulation
-	tickHandler    TickHandler[I, R, ID]
+	// Delivery policy for network simulation
+	indicatorDeliveryPolicy IndicatorDeliveryPolicy[I, ID]
+
+	// Pluggable handler for converting node requests to indicators
 	requestHandler RequestHandler[I, R, ID]
 
 	// Track which "Sometimes" conditions have been satisfied
@@ -85,8 +277,8 @@ type Simulator[I any, R any, ID comparable] struct {
 	eventuallyAlwaysBecameTrue map[string]int64 // tick when condition first became true
 	eventuallyAlwaysViolated   map[string]bool  // whether condition became false after being true
 
-	// Scheduled actions (ticks when to inject indicators)
-	scheduledActions map[int64][]func()
+	// Scheduled indicator deliveries (tick -> nodeID -> indicators)
+	scheduledDeliveries map[int64]map[ID][]I
 
 	// Trace of all events
 	trace []TraceEvent[I, R, ID]
@@ -126,11 +318,12 @@ func NewSimulator[I, R any, ID comparable](opts SimulatorOptions) *Simulator[I, 
 		currentTick:                initialTick,
 		rng:                        rng,
 		debugLogWriter:             opts.DebugLogWriter,
+		indicatorDeliveryPolicy:    &FastNetwork[I, ID]{}, // Default: fast network with 1-tick latency
 		assertions:                 make([]Assertion[I, R, ID], 0),
 		sometimesSatisfied:         make(map[string]bool),
 		eventuallyAlwaysBecameTrue: make(map[string]int64),
 		eventuallyAlwaysViolated:   make(map[string]bool),
-		scheduledActions:           make(map[int64][]func()),
+		scheduledDeliveries:        make(map[int64]map[ID][]I),
 		trace:                      make([]TraceEvent[I, R, ID], 0),
 	}
 }
@@ -138,6 +331,16 @@ func NewSimulator[I, R any, ID comparable](opts SimulatorOptions) *Simulator[I, 
 // RegisterNode adds a node to the simulation
 func (s *Simulator[I, R, ID]) RegisterNode(n Node[I, R, ID]) {
 	s.nodes[n.ID()] = n
+}
+
+// SetDeliveryPolicy sets the indicator delivery policy for network simulation
+func (s *Simulator[I, R, ID]) SetDeliveryPolicy(policy IndicatorDeliveryPolicy[I, ID]) {
+	s.indicatorDeliveryPolicy = policy
+}
+
+// CurrentTick returns the current simulation tick
+func (s *Simulator[I, R, ID]) CurrentTick() int64 {
+	return s.currentTick
 }
 
 // AddAssertion registers an assertion with a temporal quantifier
@@ -170,16 +373,7 @@ func (s *Simulator[I, R, ID]) EventuallyAlways(cond Condition[I, R, ID]) {
 	s.AddAssertion(Assertion[I, R, ID]{Condition: cond, Quantifier: EventuallyAlways})
 }
 
-// SetInterceptor sets the message interceptor for chaos testing
-func (s *Simulator[I, R, ID]) SetInterceptor(interceptor MessageInterceptor[I, R, ID]) {
-	s.interceptor = interceptor
-}
-
 // SetTickHandler sets the handler that will be called at each tick
-func (s *Simulator[I, R, ID]) SetTickHandler(handler TickHandler[I, R, ID]) {
-	s.tickHandler = handler
-}
-
 // SetRequestHandler sets the handler that will process node requests
 func (s *Simulator[I, R, ID]) SetRequestHandler(handler RequestHandler[I, R, ID]) {
 	s.requestHandler = handler
@@ -187,61 +381,35 @@ func (s *Simulator[I, R, ID]) SetRequestHandler(handler RequestHandler[I, R, ID]
 
 // ScheduleIn schedules an action to run after a delay (in ticks) from now
 // delay must be >= 0 (use 0 for immediate execution on next tick processing)
-func (s *Simulator[I, R, ID]) ScheduleIn(delay int64, fn func()) {
-	deliverAt := s.currentTick + delay
-	s.scheduledActions[deliverAt] = append(s.scheduledActions[deliverAt], fn)
-}
+// scheduleIndicator schedules an indicator for delivery to a target node via the delivery policy
+// The policy determines when/if the indicator is delivered (enforces minimum 1-tick delay)
+// This is an internal method - external callers should use RequestHandler.ProcessRequests
+func (s *Simulator[I, R, ID]) scheduleIndicator(fromNode ID, targetNode ID, ind I) {
+	// Use delivery policy to determine when/if to deliver
+	delivered, delayTicks := s.indicatorDeliveryPolicy.ScheduleDelivery(s.currentTick, fromNode, targetNode, ind)
 
-// DeliverIndicator delivers an indicator to a specific node
-// If an interceptor is set, it may delay or drop the indicator
-func (s *Simulator[I, R, ID]) DeliverIndicator(nodeID ID, ind I) []R {
-	// Check interceptor
-	if s.interceptor != nil {
-		delay := s.interceptor.InterceptIndicator(s.currentTick, nodeID, ind)
-		if delay == -1 {
-			// Dropped
-			return nil
-		}
-		if delay > 0 {
-			// Delayed - schedule for later, bypass interceptor on delivery
-			s.ScheduleIn(delay, func() {
-				s.deliverIndicatorInternal(nodeID, ind)
-			})
-			return nil
-		}
-		// delay == 0, deliver immediately (fall through)
+	// Message dropped by policy
+	if !delivered {
+		// TODO: Log dropped indicator for debugging if needed
+		return
 	}
 
-	return s.deliverIndicatorInternal(nodeID, ind)
-}
-
-// deliverIndicatorInternal delivers without going through interceptor
-func (s *Simulator[I, R, ID]) deliverIndicatorInternal(nodeID ID, ind I) []R {
-	node, exists := s.nodes[nodeID]
-	if !exists {
-		return nil
+	// Enforce realistic latency: delay must be at least 1 tick
+	// No exceptions - messages cannot be delivered in the same tick they're generated
+	if delayTicks < 1 {
+		panic(fmt.Sprintf("IndicatorDeliveryPolicy returned invalid delay: %d (must be >= 1, no exceptions)", delayTicks))
 	}
 
-	requests := node.Step(ind)
-
-	// Record in trace
-	s.trace = append(s.trace, TraceEvent[I, R, ID]{
-		Tick:      s.currentTick,
-		NodeID:    nodeID,
-		Indicator: &ind,
-		Requests:  requests,
-	})
-
-	// Collect for debug logging (will be logged at end of tick)
-	if s.currentTickLog != nil {
-		s.currentTickLog.indicators = append(s.currentTickLog.indicators, tickIndicatorDelivery[I, R, ID]{
-			nodeID:    nodeID,
-			indicator: ind,
-			requests:  requests,
-		})
+	// Schedule indicator for delivery at future tick
+	if _, exists := s.nodes[targetNode]; !exists {
+		panic(fmt.Sprintf("cannot schedule indicator for non-existent node %v (check RequestHandler output)", targetNode))
 	}
 
-	return requests
+	deliverAt := s.currentTick + delayTicks
+	if s.scheduledDeliveries[deliverAt] == nil {
+		s.scheduledDeliveries[deliverAt] = make(map[ID][]I)
+	}
+	s.scheduledDeliveries[deliverAt][targetNode] = append(s.scheduledDeliveries[deliverAt][targetNode], ind)
 }
 
 // Trace returns the complete event trace
@@ -302,17 +470,47 @@ func (s *Simulator[I, R, ID]) RunUntil(maxTick int64) error {
 			}
 		}
 
-		// Call tick handler if set (drives the simulation)
-		if s.tickHandler != nil {
-			s.tickHandler.OnTick(s, s.currentTick)
-		}
+		// Get scheduled indicator deliveries for this tick (local variable - no simulator state)
+		tickIndicators := s.scheduledDeliveries[s.currentTick]
+		delete(s.scheduledDeliveries, s.currentTick)
 
-		// Execute scheduled actions for this tick
-		if actions, exists := s.scheduledActions[s.currentTick]; exists {
-			for _, action := range actions {
-				action()
+		// Process all nodes for this tick by calling Step() once per node
+		// All nodes must be called every tick (even with empty indicators) so they can process time-based logic
+		for nodeID, node := range s.nodes {
+			indicators := tickIndicators[nodeID] // nil slice if no indicators
+			requests := node.Step(s.currentTick, indicators)
+
+			// Record in trace
+			for _, ind := range indicators {
+				s.trace = append(s.trace, TraceEvent[I, R, ID]{
+					Tick:      s.currentTick,
+					NodeID:    nodeID,
+					Indicator: &ind,
+					Requests:  requests,
+				})
 			}
-			delete(s.scheduledActions, s.currentTick)
+
+			// Collect for debug logging (will be logged at end of tick)
+			if s.currentTickLog != nil {
+				for _, ind := range indicators {
+					s.currentTickLog.indicators = append(s.currentTickLog.indicators, tickIndicatorDelivery[I, R, ID]{
+						nodeID:    nodeID,
+						indicator: ind,
+						requests:  requests,
+					})
+				}
+			}
+
+			// Process requests from the node - convert to indicators
+			if s.requestHandler != nil && len(requests) > 0 {
+				indicatorsToDeliver := s.requestHandler.ProcessRequests(s, nodeID, requests)
+				// Schedule all indicators through the delivery policy
+				for targetID, indicators := range indicatorsToDeliver {
+					for _, ind := range indicators {
+						s.scheduleIndicator(nodeID, targetID, ind)
+					}
+				}
+			}
 		}
 
 		// Check assertions
@@ -452,11 +650,6 @@ func (s *Simulator[I, R, ID]) checkDeferredProperties() error {
 	}
 
 	return nil
-}
-
-// CurrentTick returns the current simulation tick
-func (s *Simulator[I, R, ID]) CurrentTick() int64 {
-	return s.currentTick
 }
 
 // Nodes returns all registered nodes

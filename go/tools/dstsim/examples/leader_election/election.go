@@ -57,13 +57,6 @@ type Indicator interface {
 	isIndicator()
 }
 
-// TickIndicator signals time passing
-type TickIndicator struct {
-	CurrentTick int64
-}
-
-func (TickIndicator) isIndicator() {}
-
 // VoteRequestIndicator is a vote request from a candidate
 type VoteRequestIndicator struct {
 	From NodeID
@@ -221,28 +214,34 @@ func (n *ElectionNode) GetDebugState() any {
 	}
 }
 
-// Step processes an indicator and returns requests
-func (n *ElectionNode) Step(ind Indicator) []Request {
-	switch i := ind.(type) {
-	case TickIndicator:
-		n.currentTick = i.CurrentTick
-		return n.handleTick()
+// Step processes all indicators that arrived this tick and returns requests
+func (n *ElectionNode) Step(tick int64, indicators []Indicator) []Request {
+	n.currentTick = tick
 
-	case VoteRequestIndicator:
-		return n.handleVoteRequest(i)
+	// Handle time-based logic first (election timeouts, heartbeats)
+	// This happens every tick regardless of incoming indicators
+	allRequests := n.handleTick()
 
-	case VoteResponseIndicator:
-		return n.handleVoteResponse(i)
+	// Then process incoming indicators
+	for _, ind := range indicators {
+		var requests []Request
+		switch i := ind.(type) {
+		case VoteRequestIndicator:
+			requests = n.handleVoteRequest(i)
 
-	case HeartbeatIndicator:
-		return n.handleHeartbeat(i)
+		case VoteResponseIndicator:
+			requests = n.handleVoteResponse(i)
 
-	case StepDownRequestIndicator:
-		return n.handleStepDownRequest(i)
+		case HeartbeatIndicator:
+			requests = n.handleHeartbeat(i)
 
-	default:
-		return nil
+		case StepDownRequestIndicator:
+			requests = n.handleStepDownRequest(i)
+		}
+		allRequests = append(allRequests, requests...)
 	}
+
+	return allRequests
 }
 
 // GetState returns the current state (for testing/inspection)
@@ -531,20 +530,27 @@ func (o *TermLimitEnforcerNode) GetDebugState() any {
 	}
 }
 
-// Step processes an indicator and returns requests
-func (o *TermLimitEnforcerNode) Step(ind Indicator) []Request {
-	switch i := ind.(type) {
-	case TickIndicator:
-		o.currentTick = i.CurrentTick
-		return o.checkLeaderTenure()
+// Step processes all indicators that arrived this tick and returns requests
+func (o *TermLimitEnforcerNode) Step(tick int64, indicators []Indicator) []Request {
+	o.currentTick = tick
 
-	case HeartbeatIndicator:
-		return o.observeHeartbeat(i)
+	// Check leader tenure every tick (time-based logic)
+	allRequests := o.checkLeaderTenure()
 
-	default:
-		// Observer doesn't care about votes or step-down requests
-		return nil
+	// Process incoming indicators
+	for _, ind := range indicators {
+		var requests []Request
+		switch i := ind.(type) {
+		case HeartbeatIndicator:
+			requests = o.observeHeartbeat(i)
+
+		default:
+			// Observer doesn't care about votes or step-down requests
+		}
+		allRequests = append(allRequests, requests...)
 	}
+
+	return allRequests
 }
 
 func (o *TermLimitEnforcerNode) observeHeartbeat(ind HeartbeatIndicator) []Request {

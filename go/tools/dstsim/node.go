@@ -20,14 +20,17 @@ package dstsim
 // ID = Node identifier type (must be comparable for use as map key)
 //
 // Production code implements this interface. The event loop:
-// - Delivers indicators (clock ticks, incoming RPCs, etc.) by calling Step()
+// - Accumulates indicators that arrived during a time slice
+// - Calls Step() once per time slice with the tick number and all indicators
 // - Processes returned requests (outgoing RPCs, timers, etc.)
 // - Maintains no mutable state in the event loop itself
 //
 // For testing, the Simulator provides deterministic execution and chaos injection.
 type Node[I any, R any, ID comparable] interface {
-	// Step processes an indicator and returns requests (no side effects)
-	Step(indicator I) []R
+	// Step processes all indicators that arrived this tick and returns requests (no side effects)
+	// The tick parameter represents the current logical time
+	// The indicators parameter contains all messages/events that arrived during this tick
+	Step(tick int64, indicators []I) []R
 
 	// ID returns the unique identifier for this node
 	ID() ID
