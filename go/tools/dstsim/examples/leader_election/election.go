@@ -289,6 +289,18 @@ func (n *ElectionNode) startElection() []Request {
 		Message: fmt.Sprintf("[%s] Starting election for term %d at tick %d", n.id, n.term, n.currentTick),
 	})
 
+	// BUG: Sometimes become leader immediately without waiting for votes (99% chance)
+	// This simulates a quorum-checking bug where the node counts only its own vote
+	if n.buggyQuorum && n.rng.Float64() < 0.10 {
+		requests = append(requests, LogRequest{
+			Level:   "error",
+			Message: fmt.Sprintf("[%s] BUG TRIGGERED: Becoming leader with only self-vote (votes=%d/%d)", n.id, len(n.votesGranted), (len(n.peers)+1)/2+1),
+		})
+		leaderRequests := n.becomeLeader()
+		requests = append(requests, leaderRequests...)
+		return requests
+	}
+
 	// Request votes from all peers
 	for _, peer := range n.peers {
 		requests = append(requests, VoteRequest{
@@ -357,12 +369,6 @@ func (n *ElectionNode) handleVoteResponse(ind VoteResponseIndicator) []Request {
 
 	if ind.Granted {
 		n.votesGranted[ind.From] = true
-
-		// BUG: Sometimes become leader without quorum (99% chance for testing)
-		// In real code this would be 5%, but we make it high to ensure the test catches it
-		if n.buggyQuorum && n.rng.Float64() < 0.99 {
-			return n.becomeLeader()
-		}
 
 		// Check if we have majority
 		majority := (len(n.peers)+1)/2 + 1

@@ -16,7 +16,9 @@ package leader_election
 
 import (
 	"fmt"
+	"io"
 	"math/rand/v2"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -295,8 +297,9 @@ func TestLeaderElection_Standard(t *testing.T) {
 		buggyHeartbeats       bool
 		electionTimeout       int64
 		heartbeatInterval     int64
-		expectViolation       bool   // true if we expect an assertion violation
-		expectedViolationName string // name of assertion that should violate
+		expectViolation       bool                                              // true if we expect an assertion violation
+		expectedViolationName string                                            // name of assertion that should violate
+		deliveryPolicy        dstsim.IndicatorDeliveryPolicy[Indicator, NodeID] // optional custom delivery policy
 	}
 
 	tests := []testCase{
@@ -343,13 +346,23 @@ func TestLeaderElection_Standard(t *testing.T) {
 			heartbeatInterval:     10,
 			expectViolation:       true,
 			expectedViolationName: "multiple_leaders_exist",
+			deliveryPolicy: &dstsim.UnreliableNetwork[Indicator, NodeID]{
+				MaxDelay: 5,
+				DropRate: 0.5, // 50% packet loss - causes split elections
+				Rng:      rand.New(rand.NewPCG(uint64(12345), uint64(12345))),
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			var debugLog io.Writer
+			if tt.name == "BuggyQuorumCausesSplitBrain" && testing.Verbose() {
+				debugLog = os.Stdout
+			}
 			sim := dstsim.NewSimulator[Indicator, Request, NodeID](dstsim.SimulatorOptions{
-				Seed: tt.seed,
+				Seed:           tt.seed,
+				DebugLogWriter: debugLog,
 			})
 
 			// Create nodes
@@ -377,6 +390,11 @@ func TestLeaderElection_Standard(t *testing.T) {
 			// Setup handlers
 			reqHandler := setupStandardHandlers(nil)
 			sim.SetRequestHandler(reqHandler)
+
+			// Set delivery policy if specified
+			if tt.deliveryPolicy != nil {
+				sim.SetDeliveryPolicy(tt.deliveryPolicy)
+			}
 
 			// Run simulation
 			initialTick := sim.CurrentTick()
@@ -607,9 +625,10 @@ func TestLeaderElection_PartitionRecovery(t *testing.T) {
 	sim.SetRequestHandler(reqHandler)
 
 	// Create policy sequence with observable stages:
-	// 1. FastNetwork until leader exists (initial election)
-	// 2. 100% packet loss until no leaders (partition)
-	// 3. FastNetwork (recovery)
+	// Stage 1: Normal network until leader exists
+	// Stage 2: Normal network for a bit longer (so we can inject step-down)
+	// Stage 3: Complete partition (all messages dropped)
+	// Stage 4: Recovery (normal network again)
 
 	policySeq := dstsim.NewPolicySequence[Indicator, Request, NodeID](
 		sim,
@@ -617,48 +636,58 @@ func TestLeaderElection_PartitionRecovery(t *testing.T) {
 		"initial_election",
 	)
 
+	// Stage 2: Wait for leader to exist (orchestrator will inject step-down during this stage)
+	awaitStepDown := policySeq.AppendPolicy(
+		&dstsim.FastNetwork[Indicator, NodeID]{},
+		&LeaderExists{}, // Advance when leader exists
+		"await_step_down",
+	)
+
+	// Stage 3: Partition - high packet loss to simulate network failure
+	// Activates 50 ticks after stage 2 starts (time for step-down to take effect)
 	partitionActive := policySeq.AppendPolicy(
 		&dstsim.UnreliableNetwork[Indicator, NodeID]{
-			MaxDelay: 1,
-			DropRate: 1.0, // 100% packet loss - complete partition
+			MaxDelay: 5,
+			DropRate: 0.95, // 95% packet loss - severe but not complete
 			Rng:      rand.New(rand.NewPCG(uint64(seed+2), uint64(seed+2))),
 		},
-		&LeaderExists{}, // Advance to partition when leader exists
+		dstsim.TickCondition[Indicator, Request, NodeID](50), // 50 ticks after stage 2 starts
 		"partition",
 	)
 
+	// Stage 4: Recovery
+	// Activates 200 ticks after stage 3 starts (partition lasts 200 ticks - long enough for leader to timeout)
 	recoveryActive := policySeq.AppendPolicy(
 		&dstsim.FastNetwork[Indicator, NodeID]{},
-		&NoLeadersExist{}, // Advance to recovery when no leaders
+		dstsim.TickCondition[Indicator, Request, NodeID](200), // 200 ticks after stage 3 starts
 		"recovery",
 	)
 
 	sim.SetDeliveryPolicy(policySeq)
 
-	// Create test orchestrator node to inject step-down when partition activates
+	// Create test orchestrator node to inject step-down when stage 2 is active
 	orchestrator := &TestOrchestratorNode{
 		id:              "test-orchestrator",
 		sim:             sim,
 		nodes:           nodes,
-		partitionActive: partitionActive,
+		partitionActive: awaitStepDown, // Inject when stage 2 is active
+		stepDownSent:    false,
 	}
 	sim.RegisterNode(orchestrator)
 
-	// Add assertions - now we can assert about policy state!
-	sim.Never(&MultipleLeadersExist{}) // Safety: never split-brain
-	sim.Sometimes(partitionActive)     // Partition stage activates
-	sim.Sometimes(&NoLeadersExist{})   // Leader steps down
-	sim.Sometimes(recoveryActive)      // Recovery stage activates
-	sim.Finally(&LeaderExists{})       // Eventually a leader exists
+	// Add assertions
+	sim.Never(&MultipleLeadersExist{})                            // Safety: never split-brain
+	sim.Sometimes(awaitStepDown)                                  // Stage 2 activates (leader exists, orchestrator can inject)
+	sim.Sometimes(partitionActive)                                // Partition stage activates
+	sim.Sometimes(dstsim.And(partitionActive, &NoLeadersExist{})) // During partition, no leader exists
+	sim.Sometimes(recoveryActive)                                 // Recovery stage activates
+	sim.Sometimes(dstsim.And(recoveryActive, &LeaderExists{}))    // During recovery, leader elected
+	sim.Finally(&LeaderExists{})                                  // Eventually a leader exists again
 
-	// Run simulation long enough for:
-	// - Initial leader election (~100 ticks)
-	// - Partition period (until leader steps down via timeout ~50 ticks)
-	// - Recovery and new election (~100 ticks)
-	// Total: ~300 ticks should be sufficient, use 1000 for safety margin
+	// Run simulation long enough for all stages (leader election + 50 ticks stage 2 + 200 ticks stage 3 + recovery time)
 	initialTick := sim.CurrentTick()
-	err := sim.RunUntil(initialTick + 1000)
-	require.NoError(t, err, "protocol should recover from complete network partition")
+	err := sim.RunUntil(initialTick + 500)
+	require.NoError(t, err, "protocol should recover from network partition")
 }
 
 // StandardRequestHandler processes requests by delivering them to target nodes
