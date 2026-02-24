@@ -211,11 +211,11 @@ func (seq *PolicySequence[I, R, ID]) ScheduleDelivery(currentTick int64, fromNod
 }
 
 // And combines multiple conditions - true only if all are true
-type And[I any, R any, ID comparable] struct {
+type AndCombinator[I any, R any, ID comparable] struct {
 	Conditions []Condition[I, R, ID]
 }
 
-func (c *And[I, R, ID]) Eval(sim *Simulator[I, R, ID]) bool {
+func (c *AndCombinator[I, R, ID]) Eval(sim *Simulator[I, R, ID]) bool {
 	for _, cond := range c.Conditions {
 		if !cond.Eval(sim) {
 			return false
@@ -224,7 +224,7 @@ func (c *And[I, R, ID]) Eval(sim *Simulator[I, R, ID]) bool {
 	return true
 }
 
-func (c *And[I, R, ID]) Name() string {
+func (c *AndCombinator[I, R, ID]) Name() string {
 	names := make([]string, len(c.Conditions))
 	for i, cond := range c.Conditions {
 		names[i] = cond.Name()
@@ -232,12 +232,54 @@ func (c *And[I, R, ID]) Name() string {
 	return fmt.Sprintf("and(%s)", strings.Join(names, ", "))
 }
 
-func (c *And[I, R, ID]) Describe(sim *Simulator[I, R, ID]) string {
+func (c *AndCombinator[I, R, ID]) Describe(sim *Simulator[I, R, ID]) string {
 	descriptions := make([]string, len(c.Conditions))
 	for i, cond := range c.Conditions {
 		descriptions[i] = cond.Describe(sim)
 	}
 	return fmt.Sprintf("all of: [%s]", strings.Join(descriptions, ", "))
+}
+
+// And creates a new And condition that evaluates to true when all sub-conditions are true
+func And[I any, R any, ID comparable](conditions ...Condition[I, R, ID]) *AndCombinator[I, R, ID] {
+	return &AndCombinator[I, R, ID]{Conditions: conditions}
+}
+
+// RelativeTickCondition evaluates to true after N ticks have elapsed since first evaluation
+// This is useful for stage transitions: "advance to next stage after 100 ticks in current stage"
+type RelativeTickCondition[I any, R any, ID comparable] struct {
+	ticksToWait   int64
+	firstEvalTick int64
+	hasBeenCalled bool
+}
+
+func (c *RelativeTickCondition[I, R, ID]) Eval(sim *Simulator[I, R, ID]) bool {
+	if !c.hasBeenCalled {
+		c.firstEvalTick = sim.CurrentTick()
+		c.hasBeenCalled = true
+		return false // First call always returns false (0 ticks elapsed)
+	}
+	return sim.CurrentTick() >= c.firstEvalTick+c.ticksToWait
+}
+
+func (c *RelativeTickCondition[I, R, ID]) Name() string {
+	if !c.hasBeenCalled {
+		return fmt.Sprintf("after_%d_ticks", c.ticksToWait)
+	}
+	return fmt.Sprintf("after_%d_ticks_from_%d", c.ticksToWait, c.firstEvalTick)
+}
+
+func (c *RelativeTickCondition[I, R, ID]) Describe(sim *Simulator[I, R, ID]) string {
+	if !c.hasBeenCalled {
+		return fmt.Sprintf("after %d ticks (not yet started)", c.ticksToWait)
+	}
+	elapsed := sim.CurrentTick() - c.firstEvalTick
+	return fmt.Sprintf("after %d ticks (elapsed: %d)", c.ticksToWait, elapsed)
+}
+
+// TickCondition creates a condition that becomes true N ticks after first evaluation
+func TickCondition[I any, R any, ID comparable](ticksToWait int64) *RelativeTickCondition[I, R, ID] {
+	return &RelativeTickCondition[I, R, ID]{ticksToWait: ticksToWait}
 }
 
 // TraceEvent records a simulation event
@@ -390,7 +432,13 @@ func (s *Simulator[I, R, ID]) scheduleIndicator(fromNode ID, targetNode ID, ind 
 
 	// Message dropped by policy
 	if !delivered {
-		// TODO: Log dropped indicator for debugging if needed
+		if s.currentTickLog != nil {
+			s.currentTickLog.indicators = append(s.currentTickLog.indicators, tickIndicatorDelivery[I, R, ID]{
+				nodeID:    targetNode,
+				indicator: ind,
+				requests:  nil, // No requests since it was dropped
+			})
+		}
 		return
 	}
 
@@ -448,11 +496,16 @@ func (s *Simulator[I, R, ID]) logTickSummary(log *tickLog[I, R, ID]) {
 
 	// Log all indicator deliveries
 	if len(log.indicators) > 0 {
-		fmt.Fprintf(s.debugLogWriter, "Indicators delivered:\n")
+		fmt.Fprintf(s.debugLogWriter, "Indicators:\n")
 		for _, delivery := range log.indicators {
-			fmt.Fprintf(s.debugLogWriter, "  %v <- %T %+v\n", delivery.nodeID, delivery.indicator, delivery.indicator)
-			if len(delivery.requests) > 0 {
-				fmt.Fprintf(s.debugLogWriter, "    -> %d requests: %+v\n", len(delivery.requests), delivery.requests)
+			if delivery.requests == nil {
+				// Dropped by delivery policy
+				fmt.Fprintf(s.debugLogWriter, "  %v <- %T %+v [DROPPED]\n", delivery.nodeID, delivery.indicator, delivery.indicator)
+			} else {
+				fmt.Fprintf(s.debugLogWriter, "  %v <- %T %+v\n", delivery.nodeID, delivery.indicator, delivery.indicator)
+				if len(delivery.requests) > 0 {
+					fmt.Fprintf(s.debugLogWriter, "    -> %d requests: %+v\n", len(delivery.requests), delivery.requests)
+				}
 			}
 		}
 	}
