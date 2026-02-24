@@ -155,6 +155,7 @@ type ElectionNode struct {
 	heartbeatIntervalTicks int64
 	electionDeadlineTick   int64
 	nextHeartbeatTick      int64
+	initialized            bool // Whether tick-based timeouts have been initialized
 
 	// Configuration
 	rng             *rand.Rand
@@ -178,7 +179,6 @@ type NodeConfig struct {
 // NewElectionNode creates a new election node
 func NewElectionNode(cfg NodeConfig) *ElectionNode {
 	rng := rand.New(rand.NewPCG(uint64(cfg.Seed), uint64(cfg.Seed)))
-	jitter := rng.Int64N(cfg.ElectionTimeoutTicks / 2)
 
 	return &ElectionNode{
 		id:                     cfg.ID,
@@ -190,8 +190,9 @@ func NewElectionNode(cfg NodeConfig) *ElectionNode {
 		votesGranted:           make(map[NodeID]bool),
 		electionTimeoutTicks:   cfg.ElectionTimeoutTicks,
 		heartbeatIntervalTicks: cfg.HeartbeatIntervalTicks,
-		electionDeadlineTick:   cfg.ElectionTimeoutTicks + jitter,
+		electionDeadlineTick:   0, // Will be initialized on first Step()
 		nextHeartbeatTick:      0,
+		initialized:            false,
 		rng:                    rng,
 		buggyVotes:             cfg.BuggyVotes,
 		buggyQuorum:            cfg.BuggyQuorum,
@@ -217,6 +218,13 @@ func (n *ElectionNode) GetDebugState() any {
 // Step processes all indicators that arrived this tick and returns requests
 func (n *ElectionNode) Step(tick int64, indicators []Indicator) []Request {
 	n.currentTick = tick
+
+	// Initialize timeouts on first call (relative to actual simulation start tick)
+	if !n.initialized {
+		jitter := n.rng.Int64N(n.electionTimeoutTicks / 2)
+		n.electionDeadlineTick = tick + n.electionTimeoutTicks + jitter
+		n.initialized = true
+	}
 
 	// Handle time-based logic first (election timeouts, heartbeats)
 	// This happens every tick regardless of incoming indicators

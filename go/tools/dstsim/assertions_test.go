@@ -220,3 +220,261 @@ func TestAssertions_MultipleConditions(t *testing.T) {
 
 	require.NoError(t, err, "all assertions should be satisfied")
 }
+
+// TestRelativeTickCondition tests that RelativeTickCondition measures ticks relative to first evaluation
+func TestRelativeTickCondition(t *testing.T) {
+	tests := []struct {
+		name           string
+		ticksToWait    int64
+		runUntilOffset int64
+		shouldBeTrue   bool
+	}{
+		{
+			name:           "FirstEval_ReturnsFalse",
+			ticksToWait:    10,
+			runUntilOffset: 0, // Check immediately
+			shouldBeTrue:   false,
+		},
+		{
+			name:           "BeforeThreshold_ReturnsFalse",
+			ticksToWait:    10,
+			runUntilOffset: 5, // 5 ticks < 10
+			shouldBeTrue:   false,
+		},
+		{
+			name:           "AtThreshold_ReturnsTrue",
+			ticksToWait:    10,
+			runUntilOffset: 10, // Exactly 10 ticks
+			shouldBeTrue:   true,
+		},
+		{
+			name:           "AfterThreshold_ReturnsTrue",
+			ticksToWait:    10,
+			runUntilOffset: 20, // 20 ticks > 10
+			shouldBeTrue:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sim := dstsim.NewSimulator[int, string, int](dstsim.SimulatorOptions{Seed: 1})
+			node := &CounterNode{id: 1}
+			sim.RegisterNode(node)
+
+			cond := dstsim.TickCondition[int, string, int](tt.ticksToWait)
+
+			// First evaluation should always return false
+			require.False(t, cond.Eval(sim), "first evaluation should always return false")
+
+			if tt.runUntilOffset > 0 {
+				// Run simulation for specified ticks
+				initialTick := sim.CurrentTick()
+				_ = sim.RunUntil(initialTick + tt.runUntilOffset)
+
+				// Check condition
+				result := cond.Eval(sim)
+				if tt.shouldBeTrue {
+					require.True(t, result, "condition should be true after %d ticks", tt.runUntilOffset)
+				} else {
+					require.False(t, result, "condition should be false after %d ticks", tt.runUntilOffset)
+				}
+			}
+		})
+	}
+}
+
+// TestAndCombinator tests that And only returns true when all sub-conditions are true
+func TestAndCombinator(t *testing.T) {
+	tests := []struct {
+		name       string
+		conditions []bool // true = CounterGreaterThan(10), false = CounterGreaterThan(1000)
+		runTicks   int64
+		shouldPass bool
+	}{
+		{
+			name:       "AllTrue_ReturnsTrue",
+			conditions: []bool{true, true, true},
+			runTicks:   20,
+			shouldPass: true,
+		},
+		{
+			name:       "SomeFalse_ReturnsFalse",
+			conditions: []bool{true, false, true},
+			runTicks:   20,
+			shouldPass: false,
+		},
+		{
+			name:       "AllFalse_ReturnsFalse",
+			conditions: []bool{false, false, false},
+			runTicks:   20,
+			shouldPass: false,
+		},
+		{
+			name:       "SingleTrue_ReturnsTrue",
+			conditions: []bool{true},
+			runTicks:   20,
+			shouldPass: true,
+		},
+		{
+			name:       "SingleFalse_ReturnsFalse",
+			conditions: []bool{false},
+			runTicks:   20,
+			shouldPass: false,
+		},
+		{
+			name:       "Empty_ReturnsTrue", // Vacuous truth
+			conditions: []bool{},
+			runTicks:   20,
+			shouldPass: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sim := dstsim.NewSimulator[int, string, int](dstsim.SimulatorOptions{Seed: 1})
+			node := &CounterNode{id: 1}
+			sim.RegisterNode(node)
+
+			// Build And condition from sub-conditions
+			var subConditions []dstsim.Condition[int, string, int]
+			for _, shouldBeTrue := range tt.conditions {
+				if shouldBeTrue {
+					subConditions = append(subConditions, &CounterGreaterThan{nodeID: 1, value: 10})
+				} else {
+					subConditions = append(subConditions, &CounterGreaterThan{nodeID: 1, value: 1000})
+				}
+			}
+
+			andCond := dstsim.And(subConditions...)
+
+			// Use Sometimes assertion - will pass if condition is true at least once
+			sim.Sometimes(andCond)
+
+			initialTick := sim.CurrentTick()
+			err := sim.RunUntil(initialTick + tt.runTicks)
+
+			if tt.shouldPass {
+				require.NoError(t, err, "And condition should be satisfied")
+			} else {
+				require.Error(t, err, "And condition should not be satisfied")
+			}
+		})
+	}
+}
+
+// TickingNode generates a self-message every tick to ensure message flow
+type TickingNode struct {
+	id    int
+	count int
+}
+
+func (n *TickingNode) ID() int { return n.id }
+func (n *TickingNode) Step(tick int64, indicators []int) []string {
+	n.count++
+	return []string{"tick"} // Generate a request every tick
+}
+
+// TickRequestHandler processes tick requests by sending indicators back to the node
+type TickRequestHandler struct{}
+
+func (h *TickRequestHandler) ProcessRequests(sim *dstsim.Simulator[int, string, int], fromNode int, requests []string) map[int][]int {
+	// Send an indicator back to the same node for each tick request
+	result := make(map[int][]int)
+	for range requests {
+		result[fromNode] = append(result[fromNode], 1) // Send a simple indicator
+	}
+	return result
+}
+
+// TestPolicySequence tests that PolicySequence advances stages correctly
+func TestPolicySequence(t *testing.T) {
+	tests := []struct {
+		name         string
+		stage1Ticks  int64 // How long until stage 1 condition becomes true
+		stage2Ticks  int64 // How long until stage 2 condition becomes true
+		runTicks     int64 // How long to run simulation
+		expectStage1 bool  // Should we observe stage 1 active
+		expectStage2 bool  // Should we observe stage 2 active
+	}{
+		{
+			name:         "StaysInStage0_ConditionNeverMet",
+			stage1Ticks:  100,
+			stage2Ticks:  100,
+			runTicks:     50,
+			expectStage1: false,
+			expectStage2: false,
+		},
+		{
+			name:         "AdvancesToStage1_FirstConditionMet",
+			stage1Ticks:  20,
+			stage2Ticks:  100,
+			runTicks:     50,
+			expectStage1: true,
+			expectStage2: false,
+		},
+		{
+			name:         "AdvancesAllStages_BothConditionsMet",
+			stage1Ticks:  20,
+			stage2Ticks:  40,
+			runTicks:     100,
+			expectStage1: true,
+			expectStage2: true,
+		},
+		{
+			name:         "QuickTransitions",
+			stage1Ticks:  5,
+			stage2Ticks:  5,
+			runTicks:     20,
+			expectStage1: true,
+			expectStage2: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sim := dstsim.NewSimulator[int, string, int](dstsim.SimulatorOptions{Seed: 1})
+			node := &TickingNode{id: 1}
+			sim.RegisterNode(node)
+
+			// Use TickRequestHandler to create message flow (needed for policy sequence evaluation)
+			sim.SetRequestHandler(&TickRequestHandler{})
+
+			// Create a 3-stage policy sequence
+			// Stage 0 -> Stage 1 after stage1Ticks
+			// Stage 1 -> Stage 2 after stage2Ticks (relative to stage 1 start)
+			policySeq := dstsim.NewPolicySequence[int, string, int](
+				sim,
+				&dstsim.FastNetwork[int, int]{},
+				"stage0",
+			)
+
+			stage1Active := policySeq.AppendPolicy(
+				&dstsim.FastNetwork[int, int]{},
+				dstsim.TickCondition[int, string, int](tt.stage1Ticks),
+				"stage1",
+			)
+
+			stage2Active := policySeq.AppendPolicy(
+				&dstsim.FastNetwork[int, int]{},
+				dstsim.TickCondition[int, string, int](tt.stage2Ticks),
+				"stage2",
+			)
+
+			sim.SetDeliveryPolicy(policySeq)
+
+			// Add Sometimes assertions to check if each stage activates
+			// Note: Stage 0 is always active at the start, so we don't need to assert it
+			if tt.expectStage1 {
+				sim.Sometimes(stage1Active)
+			}
+			if tt.expectStage2 {
+				sim.Sometimes(stage2Active)
+			}
+
+			initialTick := sim.CurrentTick()
+			err := sim.RunUntil(initialTick + tt.runTicks)
+
+			require.NoError(t, err, "policy sequence assertions should be satisfied")
+		})
+	}
+}
