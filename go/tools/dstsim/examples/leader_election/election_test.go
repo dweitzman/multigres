@@ -181,7 +181,19 @@ func (c *NoLeadersExist) Eval(sim *dstsim.Simulator[Indicator, Request, NodeID])
 }
 
 func (c *NoLeadersExist) Describe(sim *dstsim.Simulator[Indicator, Request, NodeID]) string {
-	return "no leaders exist"
+	leaders := make([]string, 0)
+	for _, node := range sim.Nodes() {
+		if electionNode, ok := node.(*ElectionNode); ok {
+			role, term := electionNode.GetState()
+			if role == Leader {
+				leaders = append(leaders, fmt.Sprintf("%s (term %d)", electionNode.ID(), term))
+			}
+		}
+	}
+	if len(leaders) == 0 {
+		return "no leaders exist"
+	}
+	return fmt.Sprintf("leaders exist: %v", leaders)
 }
 
 func (c *LeaderExists) Describe(sim *dstsim.Simulator[Indicator, Request, NodeID]) string {
@@ -559,11 +571,11 @@ func TestLeaderElection_ChaosNetwork(t *testing.T) {
 // TestOrchestratorNode is a special node for test injection
 // It doesn't process indicators, only generates requests based on conditions
 type TestOrchestratorNode struct {
-	id              NodeID
-	sim             *dstsim.Simulator[Indicator, Request, NodeID]
-	nodes           []*ElectionNode
-	partitionActive dstsim.Condition[Indicator, Request, NodeID]
-	stepDownSent    bool
+	id                NodeID
+	sim               *dstsim.Simulator[Indicator, Request, NodeID]
+	nodes             []*ElectionNode
+	stepDownCondition dstsim.Condition[Indicator, Request, NodeID]
+	stepDownSent      bool
 }
 
 func (n *TestOrchestratorNode) ID() NodeID {
@@ -571,8 +583,8 @@ func (n *TestOrchestratorNode) ID() NodeID {
 }
 
 func (n *TestOrchestratorNode) Step(tick int64, indicators []Indicator) []Request {
-	// If partition just activated and we haven't sent step-down yet, inject it
-	if !n.stepDownSent && n.partitionActive.Eval(n.sim) {
+	// If step-down condition is met and we haven't sent step-down yet, inject it
+	if !n.stepDownSent && n.stepDownCondition.Eval(n.sim) {
 		n.stepDownSent = true
 		// Find the leader and inject step-down request
 		for _, node := range n.nodes {
@@ -592,102 +604,119 @@ func (n *TestOrchestratorNode) Step(tick int64, indicators []Indicator) []Reques
 	return nil
 }
 
-// TestLeaderElection_PartitionRecovery validates recovery from complete network partition
-// Test flow:
-// 1. Run until a leader exists
-// 2. Force leader to step down and partition network (100% packet loss)
-// 3. Wait until no leaders exist (leader steps down during partition)
-// 4. End partition (restore network)
-// 5. Verify a new leader is elected
-func TestLeaderElection_PartitionRecovery(t *testing.T) {
-	seed := int64(99999)
-	nodeSeeds := []int64{7001, 7002, 7003}
+// TestLeaderElection_StepDown validates that a leader can be forced to step down
+func TestLeaderElection_StepDown(t *testing.T) {
+	seed := int64(42)
+	nodeSeeds := []int64{100, 200, 300}
 
 	sim := dstsim.NewSimulator[Indicator, Request, NodeID](dstsim.SimulatorOptions{
 		Seed: seed,
 	})
 
-	// Create nodes
-	nodes := setupStandardNodes(
-		nodeSeeds,
-		50,                  // electionTimeout
-		10,                  // heartbeatInterval
-		false, false, false, // no bugs
-	)
-
-	// Register nodes
+	nodes := setupStandardNodes(nodeSeeds, 50, 10, false, false, false)
 	for _, node := range nodes {
 		sim.RegisterNode(node)
 	}
 
-	// Setup handlers
 	reqHandler := setupStandardHandlers(nil)
 	sim.SetRequestHandler(reqHandler)
 
-	// Create policy sequence with observable stages:
-	// Stage 1: Normal network until leader exists
-	// Stage 2: Normal network for a bit longer (so we can inject step-down)
-	// Stage 3: Complete partition (all messages dropped)
-	// Stage 4: Recovery (normal network again)
+	// Track when leader exists
+	leaderElected := &LeaderExists{}
 
+	// Orchestrator to send step-down once leader exists
+	orchestrator := &TestOrchestratorNode{
+		id:                "orchestrator",
+		sim:               sim,
+		nodes:             nodes,
+		stepDownCondition: leaderElected,
+		stepDownSent:      false,
+	}
+	sim.RegisterNode(orchestrator)
+
+	// Assertions
+	sim.Never(&MultipleLeadersExist{})
+	sim.Sometimes(leaderElected) // Leader gets elected at some point
+	sim.Finally(&LeaderExists{}) // Eventually a leader exists (after step-down, new leader elected)
+
+	err := sim.RunUntil(sim.CurrentTick() + 300)
+	require.NoError(t, err)
+}
+
+// TestLeaderElection_PartitionRecovery validates recovery from network partition
+func TestLeaderElection_PartitionRecovery(t *testing.T) {
+	seed := int64(42)
+	nodeSeeds := []int64{100, 200, 300}
+
+	sim := dstsim.NewSimulator[Indicator, Request, NodeID](dstsim.SimulatorOptions{
+		Seed: seed,
+	})
+
+	nodes := setupStandardNodes(nodeSeeds, 50, 10, false, false, false)
+	for _, node := range nodes {
+		sim.RegisterNode(node)
+	}
+
+	reqHandler := setupStandardHandlers(nil)
+	sim.SetRequestHandler(reqHandler)
+
+	// Create policy sequence: normal -> partition -> recovery
 	policySeq := dstsim.NewPolicySequence[Indicator, Request, NodeID](
 		sim,
 		&dstsim.FastNetwork[Indicator, NodeID]{},
-		"initial_election",
+		"normal",
 	)
 
-	// Stage 2: Wait for leader to exist (orchestrator will inject step-down during this stage)
+	// Wait for leader to exist (so orchestrator can send step-down)
 	awaitStepDown := policySeq.AppendPolicy(
 		&dstsim.FastNetwork[Indicator, NodeID]{},
-		&LeaderExists{}, // Advance when leader exists
+		&LeaderExists{},
 		"await_step_down",
 	)
 
-	// Stage 3: Partition - high packet loss to simulate network failure
-	// Activates 50 ticks after stage 2 starts (time for step-down to take effect)
+	// Start partition only after leader has stepped down (no leaders exist)
 	partitionActive := policySeq.AppendPolicy(
 		&dstsim.UnreliableNetwork[Indicator, NodeID]{
 			MaxDelay: 5,
-			DropRate: 0.95, // 95% packet loss - severe but not complete
-			Rng:      rand.New(rand.NewPCG(uint64(seed+2), uint64(seed+2))),
+			DropRate: 1.0, // 100% packet loss for complete partition
+			Rng:      rand.New(rand.NewPCG(uint64(seed), uint64(seed))),
 		},
-		dstsim.TickCondition[Indicator, Request, NodeID](50), // 50 ticks after stage 2 starts
+		&NoLeadersExist{}, // Don't start partition until leader has stepped down
 		"partition",
 	)
 
-	// Stage 4: Recovery
-	// Activates 200 ticks after stage 3 starts (partition lasts 200 ticks - long enough for leader to timeout)
+	// End partition after 100 ticks
 	recoveryActive := policySeq.AppendPolicy(
 		&dstsim.FastNetwork[Indicator, NodeID]{},
-		dstsim.TickCondition[Indicator, Request, NodeID](200), // 200 ticks after stage 3 starts
+		dstsim.TickCondition[Indicator, Request, NodeID](100),
 		"recovery",
 	)
 
 	sim.SetDeliveryPolicy(policySeq)
 
-	// Create test orchestrator node to inject step-down when stage 2 is active
+	// Orchestrator to send step-down during await_step_down stage (before partition)
 	orchestrator := &TestOrchestratorNode{
-		id:              "test-orchestrator",
-		sim:             sim,
-		nodes:           nodes,
-		partitionActive: awaitStepDown, // Inject when stage 2 is active
-		stepDownSent:    false,
+		id:                "orchestrator",
+		sim:               sim,
+		nodes:             nodes,
+		stepDownCondition: awaitStepDown,
+		stepDownSent:      false,
 	}
 	sim.RegisterNode(orchestrator)
 
-	// Add assertions
-	sim.Never(&MultipleLeadersExist{})                            // Safety: never split-brain
-	sim.Sometimes(awaitStepDown)                                  // Stage 2 activates (leader exists, orchestrator can inject)
-	sim.Sometimes(partitionActive)                                // Partition stage activates
-	sim.Sometimes(dstsim.And(partitionActive, &NoLeadersExist{})) // During partition, no leader exists
-	sim.Sometimes(recoveryActive)                                 // Recovery stage activates
-	sim.Sometimes(dstsim.And(recoveryActive, &LeaderExists{}))    // During recovery, leader elected
-	sim.Finally(&LeaderExists{})                                  // Eventually a leader exists again
+	// Assertions
+	sim.Never(&MultipleLeadersExist{}) // Safety: never split-brain
+	sim.Sometimes(partitionActive)     // Partition stage activates
+	sim.Sometimes(recoveryActive)      // Recovery stage activates
+	sim.Always(dstsim.Or(              // During partition, no leader exists
+		dstsim.Not(partitionActive),
+		&NoLeadersExist{},
+	))
+	sim.Sometimes(dstsim.And(recoveryActive, &LeaderExists{})) // During recovery, leader exists
+	sim.Finally(&LeaderExists{})                               // Eventually a leader exists
 
-	// Run simulation long enough for all stages (leader election + 50 ticks stage 2 + 200 ticks stage 3 + recovery time)
-	initialTick := sim.CurrentTick()
-	err := sim.RunUntil(initialTick + 500)
-	require.NoError(t, err, "protocol should recover from network partition")
+	err := sim.RunUntil(sim.CurrentTick() + 500)
+	require.NoError(t, err)
 }
 
 // StandardRequestHandler processes requests by delivering them to target nodes

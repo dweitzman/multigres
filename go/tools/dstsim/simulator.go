@@ -245,6 +245,63 @@ func And[I any, R any, ID comparable](conditions ...Condition[I, R, ID]) *AndCom
 	return &AndCombinator[I, R, ID]{Conditions: conditions}
 }
 
+// OrCombinator combines multiple conditions - true if any are true
+type OrCombinator[I any, R any, ID comparable] struct {
+	Conditions []Condition[I, R, ID]
+}
+
+func (c *OrCombinator[I, R, ID]) Eval(sim *Simulator[I, R, ID]) bool {
+	for _, cond := range c.Conditions {
+		if cond.Eval(sim) {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *OrCombinator[I, R, ID]) Name() string {
+	names := make([]string, len(c.Conditions))
+	for i, cond := range c.Conditions {
+		names[i] = cond.Name()
+	}
+	return fmt.Sprintf("or(%s)", strings.Join(names, ", "))
+}
+
+func (c *OrCombinator[I, R, ID]) Describe(sim *Simulator[I, R, ID]) string {
+	descriptions := make([]string, len(c.Conditions))
+	for i, cond := range c.Conditions {
+		descriptions[i] = cond.Describe(sim)
+	}
+	return fmt.Sprintf("any of: [%s]", strings.Join(descriptions, ", "))
+}
+
+// Or creates a new Or condition that evaluates to true when any sub-condition is true
+func Or[I any, R any, ID comparable](conditions ...Condition[I, R, ID]) *OrCombinator[I, R, ID] {
+	return &OrCombinator[I, R, ID]{Conditions: conditions}
+}
+
+// NotCombinator negates a condition
+type NotCombinator[I any, R any, ID comparable] struct {
+	Condition Condition[I, R, ID]
+}
+
+func (c *NotCombinator[I, R, ID]) Eval(sim *Simulator[I, R, ID]) bool {
+	return !c.Condition.Eval(sim)
+}
+
+func (c *NotCombinator[I, R, ID]) Name() string {
+	return fmt.Sprintf("not(%s)", c.Condition.Name())
+}
+
+func (c *NotCombinator[I, R, ID]) Describe(sim *Simulator[I, R, ID]) string {
+	return "not: " + c.Condition.Describe(sim)
+}
+
+// Not creates a new Not condition that negates the given condition
+func Not[I any, R any, ID comparable](condition Condition[I, R, ID]) *NotCombinator[I, R, ID] {
+	return &NotCombinator[I, R, ID]{Condition: condition}
+}
+
 // RelativeTickCondition evaluates to true after N ticks have elapsed since first evaluation
 // This is useful for stage transitions: "advance to next stage after 100 ticks in current stage"
 type RelativeTickCondition[I any, R any, ID comparable] struct {
