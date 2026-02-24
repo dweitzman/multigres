@@ -20,6 +20,7 @@ import (
 
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/rpcclient"
+	"github.com/multigres/multigres/go/common/ticks"
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
@@ -88,7 +89,9 @@ func (c *Coordinator) AppointLeader(ctx context.Context, shardID string, cohort 
 	proposedTerm := maxTerm + 1
 
 	// PreVote - validate that leadership change is likely to succeed
-	canProceed, preVoteReason := c.preVote(ctx, cohort, quorumRule, proposedTerm)
+	// TODO: currentTick should come from a coordinator tick counter, not synthesized from wall-clock
+	currentTick := ticks.ToTick(0) // Placeholder: treat "now" as tick 0 for timestamp comparisons
+	canProceed, preVoteReason := c.preVote(ctx, currentTick, cohort, quorumRule, proposedTerm)
 	if !canProceed {
 		return mterrors.Errorf(mtrpcpb.Code_UNAVAILABLE,
 			"pre-vote failed for shard %s: %s", shardID, preVoteReason)

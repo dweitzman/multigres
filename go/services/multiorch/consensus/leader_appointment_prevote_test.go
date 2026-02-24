@@ -25,6 +25,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/multigres/multigres/go/common/rpcclient"
+	"github.com/multigres/multigres/go/common/ticks"
 	"github.com/multigres/multigres/go/common/topoclient"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -119,7 +120,8 @@ func TestPreVote(t *testing.T) {
 		}
 		proposedTerm := int64(6)
 
-		canProceed, reason := coord.preVote(ctx, cohort, quorumRule, proposedTerm)
+		currentTick := ticks.ToTick(0) // Placeholder tick for test
+		canProceed, reason := coord.preVote(ctx, currentTick, cohort, quorumRule, proposedTerm)
 
 		require.True(t, canProceed, "should allow election when no recent acceptances")
 		require.Empty(t, reason)
@@ -153,7 +155,8 @@ func TestPreVote(t *testing.T) {
 		}
 		proposedTerm := int64(11)
 
-		canProceed, reason := coord.preVote(ctx, cohort, quorumRule, proposedTerm)
+		currentTick := ticks.ToTick(0) // Placeholder tick for test
+		canProceed, reason := coord.preVote(ctx, currentTick, cohort, quorumRule, proposedTerm)
 
 		require.False(t, canProceed, "should back off when recent acceptance detected")
 		require.Contains(t, reason, "another coordinator started election recently")
@@ -180,7 +183,8 @@ func TestPreVote(t *testing.T) {
 		}
 		proposedTerm := int64(6)
 
-		canProceed, reason := coord.preVote(ctx, cohort, quorumRule, proposedTerm)
+		currentTick := ticks.ToTick(0) // Placeholder tick for test
+		canProceed, reason := coord.preVote(ctx, currentTick, cohort, quorumRule, proposedTerm)
 
 		require.False(t, canProceed, "should fail when insufficient healthy poolers")
 		require.Contains(t, reason, "insufficient healthy initialized poolers for quorum")
@@ -207,7 +211,8 @@ func TestPreVote(t *testing.T) {
 		}
 		proposedTerm := int64(1)
 
-		canProceed, reason := coord.preVote(ctx, cohort, quorumRule, proposedTerm)
+		currentTick := ticks.ToTick(0) // Placeholder tick for test
+		canProceed, reason := coord.preVote(ctx, currentTick, cohort, quorumRule, proposedTerm)
 
 		require.False(t, canProceed, "should block election for uninitialized poolers")
 		require.Contains(t, reason, "insufficient healthy initialized poolers for quorum")
@@ -241,7 +246,8 @@ func TestPreVote(t *testing.T) {
 		}
 		proposedTerm := int64(6)
 
-		canProceed, reason := coord.preVote(ctx, cohort, quorumRule, proposedTerm)
+		currentTick := ticks.ToTick(0) // Placeholder tick for test
+		canProceed, reason := coord.preVote(ctx, currentTick, cohort, quorumRule, proposedTerm)
 
 		require.True(t, canProceed, "should ignore unhealthy poolers with recent acceptances")
 		require.Empty(t, reason)
@@ -262,7 +268,8 @@ func TestPreVote(t *testing.T) {
 		}
 		proposedTerm := int64(6)
 
-		canProceed, reason := coord.preVote(ctx, cohort, quorumRule, proposedTerm)
+		currentTick := ticks.ToTick(0) // Placeholder tick for test
+		canProceed, reason := coord.preVote(ctx, currentTick, cohort, quorumRule, proposedTerm)
 
 		require.True(t, canProceed, "should proceed with valid quorum rule")
 		require.Empty(t, reason)
@@ -294,7 +301,8 @@ func TestPreVote(t *testing.T) {
 		}
 		proposedTerm := int64(6)
 
-		canProceed, reason := coord.preVote(ctx, cohort, quorumRule, proposedTerm)
+		currentTick := ticks.ToTick(0) // Placeholder tick for test
+		canProceed, reason := coord.preVote(ctx, currentTick, cohort, quorumRule, proposedTerm)
 
 		require.False(t, canProceed, "should fail when insufficient poolers have postgres running")
 		require.Contains(t, reason, "insufficient healthy initialized poolers for quorum")

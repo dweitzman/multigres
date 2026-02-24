@@ -23,6 +23,7 @@ import (
 	"github.com/jackc/pglogrepl"
 
 	"github.com/multigres/multigres/go/common/mterrors"
+	"github.com/multigres/multigres/go/common/ticks"
 	"github.com/multigres/multigres/go/common/timeouts"
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -484,12 +485,11 @@ func (c *Coordinator) EstablishLeadership(
 // preVote performs a pre-election check to determine if an election is likely to succeed.
 // This prevents disruptive elections that would fail due to:
 // 1. Insufficient healthy poolers to form a quorum (based on durability policy)
-// 2. Another coordinator recently started an election (within last 10 seconds)
+// 2. Another coordinator recently started an election (within last 4 seconds)
 //
 // Returns (canProceed, reason) where canProceed indicates if election should proceed.
-func (c *Coordinator) preVote(ctx context.Context, cohort []*multiorchdatapb.PoolerHealthState, quorumRule *clustermetadatapb.QuorumRule, proposedTerm int64) (bool, string) {
-	now := time.Now()
-	const recentAcceptanceWindow = 4 * time.Second
+func (c *Coordinator) preVote(ctx context.Context, currentTick ticks.Tick, cohort []*multiorchdatapb.PoolerHealthState, quorumRule *clustermetadatapb.QuorumRule, proposedTerm int64) (bool, string) {
+	recentAcceptanceWindow := ticks.DurationToTicks(4 * time.Second)
 
 	// Check 1: Verify we have enough healthy initialized poolers with consensus term data
 	// PreVote is conservative and doesn't handle bootstrap - if poolers lack consensus
@@ -516,25 +516,29 @@ func (c *Coordinator) preVote(ctx context.Context, cohort []*multiorchdatapb.Poo
 	}
 
 	// Check 2: Has another coordinator recently started an election?
-	// If we detect a recent term acceptance (within the last 10 seconds), back off
+	// If we detect a recent term acceptance (within the last 4 seconds), back off
 	// to give the other coordinator a chance to complete their election.
 	for _, pooler := range healthyInitializedPoolers {
 		// Check if this pooler recently accepted a term from another coordinator
 		if pooler.ConsensusTerm.LastAcceptanceTime != nil {
 			lastAcceptanceTime := pooler.ConsensusTerm.LastAcceptanceTime.AsTime()
-			timeSinceAcceptance := now.Sub(lastAcceptanceTime)
+
+			// TODO: This timestamp-to-tick conversion should be pushed to the RPC glue layer
+			// For now, we convert here: assume tick 0 = current wall-clock time - currentTick ticks
+			timeSinceAcceptance := time.Since(lastAcceptanceTime)
+			ticksSinceAcceptance := ticks.DurationToTicks(timeSinceAcceptance)
 
 			// If the acceptance was recent (within our window), back off
-			if timeSinceAcceptance < recentAcceptanceWindow && timeSinceAcceptance >= 0 {
+			if ticksSinceAcceptance < recentAcceptanceWindow && ticksSinceAcceptance >= 0 {
 				c.logger.InfoContext(ctx, "detected recent term acceptance, backing off to avoid disruption",
 					"pooler", pooler.MultiPooler.Id.Name,
 					"accepted_term", pooler.ConsensusTerm.TermNumber,
 					"accepted_from", pooler.ConsensusTerm.AcceptedTermFromCoordinatorId,
-					"time_since_acceptance", timeSinceAcceptance,
-					"backoff_window", recentAcceptanceWindow)
+					"ticks_since_acceptance", ticksSinceAcceptance,
+					"backoff_window_ticks", recentAcceptanceWindow)
 
-				return false, fmt.Sprintf("another coordinator started election recently (%v ago), backing off to avoid disruption",
-					timeSinceAcceptance.Round(time.Millisecond))
+				return false, fmt.Sprintf("another coordinator started election recently (%d ticks ago), backing off to avoid disruption",
+					ticksSinceAcceptance)
 			}
 		}
 	}
