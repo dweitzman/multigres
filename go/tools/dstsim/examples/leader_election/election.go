@@ -211,6 +211,16 @@ func (n *ElectionNode) ID() NodeID {
 	return n.id
 }
 
+// GetDebugState returns the node's internal state for debugging
+func (n *ElectionNode) GetDebugState() any {
+	return map[string]any{
+		"role":        n.role.String(),
+		"term":        n.term,
+		"votedFor":    n.votedFor,
+		"currentTick": n.currentTick,
+	}
+}
+
 // Step processes an indicator and returns requests
 func (n *ElectionNode) Step(ind Indicator) []Request {
 	switch i := ind.(type) {
@@ -510,6 +520,17 @@ func (o *TermLimitEnforcerNode) ID() NodeID {
 	return o.id
 }
 
+// GetDebugState returns the enforcer's internal state for debugging
+func (o *TermLimitEnforcerNode) GetDebugState() any {
+	return map[string]any{
+		"currentLeader":        o.currentLeader,
+		"leaderSince":          o.leaderSince,
+		"observedTerm":         o.observedTerm,
+		"effectiveTenureLimit": o.effectiveTenureLimit,
+		"currentTick":          o.currentTick,
+	}
+}
+
 // Step processes an indicator and returns requests
 func (o *TermLimitEnforcerNode) Step(ind Indicator) []Request {
 	switch i := ind.(type) {
@@ -527,8 +548,6 @@ func (o *TermLimitEnforcerNode) Step(ind Indicator) []Request {
 }
 
 func (o *TermLimitEnforcerNode) observeHeartbeat(ind HeartbeatIndicator) []Request {
-	var requests []Request
-
 	// Track the term from heartbeats
 	o.observedTerm = ind.Term
 
@@ -541,20 +560,9 @@ func (o *TermLimitEnforcerNode) observeHeartbeat(ind HeartbeatIndicator) []Reque
 		// Apply jitter once when leader is detected
 		jitter := o.rng.Int64N(5) // 0-4 ticks of jitter
 		o.effectiveTenureLimit = o.leaderTenureLimit + jitter
-
-		requests = append(requests, LogRequest{
-			Level:   "info",
-			Message: fmt.Sprintf("[Enforcer %s] New leader detected: %s (term %d) at tick %d (tenure limit: %d)", o.id, ind.From, ind.Term, o.currentTick, o.effectiveTenureLimit),
-		})
-	} else {
-		// Same leader, log heartbeat received (debug)
-		requests = append(requests, LogRequest{
-			Level:   "debug",
-			Message: fmt.Sprintf("[Enforcer %s] Heartbeat from %s (term %d) at tick %d (tenure: %d/%d)", o.id, ind.From, ind.Term, o.currentTick, o.currentTick-o.leaderSince, o.effectiveTenureLimit),
-		})
 	}
 
-	return requests
+	return nil
 }
 
 func (o *TermLimitEnforcerNode) checkLeaderTenure() []Request {
@@ -583,10 +591,6 @@ func (o *TermLimitEnforcerNode) checkLeaderTenure() []Request {
 				To:            o.currentLeader,
 				Reason:        fmt.Sprintf("leader tenure exceeded %d ticks (current: %d)", o.effectiveTenureLimit, tenure),
 				SuggestedTerm: o.observedTerm,
-			},
-			LogRequest{
-				Level:   "info",
-				Message: fmt.Sprintf("[Enforcer %s] Requesting %s to step down after %d ticks (limit: %d, term: %d)", o.id, o.currentLeader, tenure, o.effectiveTenureLimit, o.observedTerm),
 			},
 		}
 	}

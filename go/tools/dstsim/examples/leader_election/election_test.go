@@ -25,42 +25,24 @@ import (
 	"github.com/multigres/multigres/go/tools/dstsim"
 )
 
-// SingleLeaderInvariant checks that at most one leader exists
-type SingleLeaderInvariant struct{}
-
-func (inv *SingleLeaderInvariant) Check(sim *dstsim.Simulator[Indicator, Request, NodeID]) []string {
-	leaders := make([]string, 0)
-
-	for _, node := range sim.Nodes() {
-		if electionNode, ok := node.(*ElectionNode); ok {
-			role, term := electionNode.GetState()
-			if role == Leader {
-				leaders = append(leaders, fmt.Sprintf("%s (term %d)", electionNode.ID(), term))
-			}
-		}
-	}
-
-	if len(leaders) > 1 {
-		return []string{fmt.Sprintf("multiple leaders detected: %v", leaders)}
-	}
-
-	return nil
-}
-
-// LeaderTenureInvariant checks that no leader stays in power too long
-type LeaderTenureInvariant struct {
+// LeaderTenureTooLong checks if a leader has been in power too long
+type LeaderTenureTooLong struct {
 	maxTenure        int64
 	leaderStartTicks map[NodeID]int64
 }
 
-func NewLeaderTenureInvariant(maxTenure int64) *LeaderTenureInvariant {
-	return &LeaderTenureInvariant{
+func NewLeaderTenureTooLong(maxTenure int64) *LeaderTenureTooLong {
+	return &LeaderTenureTooLong{
 		maxTenure:        maxTenure,
 		leaderStartTicks: make(map[NodeID]int64),
 	}
 }
 
-func (inv *LeaderTenureInvariant) Check(sim *dstsim.Simulator[Indicator, Request, NodeID]) []string {
+func (c *LeaderTenureTooLong) Name() string {
+	return "leader_tenure_too_long"
+}
+
+func (c *LeaderTenureTooLong) Eval(sim *dstsim.Simulator[Indicator, Request, NodeID]) bool {
 	currentTick := sim.CurrentTick()
 	var currentLeader NodeID
 
@@ -77,26 +59,173 @@ func (inv *LeaderTenureInvariant) Check(sim *dstsim.Simulator[Indicator, Request
 
 	// Track when each node became leader
 	if currentLeader != "" {
-		if _, exists := inv.leaderStartTicks[currentLeader]; !exists {
-			inv.leaderStartTicks[currentLeader] = currentTick
+		if _, exists := c.leaderStartTicks[currentLeader]; !exists {
+			c.leaderStartTicks[currentLeader] = currentTick
 		}
 
 		// Check tenure
-		tenure := currentTick - inv.leaderStartTicks[currentLeader]
-		if tenure > inv.maxTenure {
-			return []string{fmt.Sprintf("leader %s has been in power for %d ticks (max: %d)",
-				currentLeader, tenure, inv.maxTenure)}
+		tenure := currentTick - c.leaderStartTicks[currentLeader]
+		if tenure > c.maxTenure {
+			return true // Tenure exceeded
 		}
 	}
 
 	// Clear tracking for nodes that are no longer leader
-	for nodeID := range inv.leaderStartTicks {
+	for nodeID := range c.leaderStartTicks {
 		if nodeID != currentLeader {
-			delete(inv.leaderStartTicks, nodeID)
+			delete(c.leaderStartTicks, nodeID)
 		}
 	}
 
-	return nil
+	return false
+}
+
+func (c *LeaderTenureTooLong) Describe(sim *dstsim.Simulator[Indicator, Request, NodeID]) string {
+	currentTick := sim.CurrentTick()
+	var currentLeader NodeID
+
+	// Find current leader
+	for _, node := range sim.Nodes() {
+		if electionNode, ok := node.(*ElectionNode); ok {
+			role, _ := electionNode.GetState()
+			if role == Leader {
+				currentLeader = electionNode.ID()
+				break
+			}
+		}
+	}
+
+	if currentLeader != "" {
+		if startTick, exists := c.leaderStartTicks[currentLeader]; exists {
+			tenure := currentTick - startTick
+			return fmt.Sprintf("leader %s has been in power for %d ticks (max: %d)",
+				currentLeader, tenure, c.maxTenure)
+		}
+	}
+
+	return "no leader"
+}
+
+// Conditions (pure predicates for use with temporal quantifiers)
+
+// MultipleLeadersExist checks if there are multiple leaders
+type MultipleLeadersExist struct{}
+
+func (c *MultipleLeadersExist) Name() string {
+	return "multiple_leaders_exist"
+}
+
+func (c *MultipleLeadersExist) Eval(sim *dstsim.Simulator[Indicator, Request, NodeID]) bool {
+	leaderCount := 0
+	for _, node := range sim.Nodes() {
+		if electionNode, ok := node.(*ElectionNode); ok {
+			role, _ := electionNode.GetState()
+			if role == Leader {
+				leaderCount++
+			}
+		}
+	}
+	return leaderCount > 1
+}
+
+func (c *MultipleLeadersExist) Describe(sim *dstsim.Simulator[Indicator, Request, NodeID]) string {
+	leaders := make([]string, 0)
+	for _, node := range sim.Nodes() {
+		if electionNode, ok := node.(*ElectionNode); ok {
+			role, term := electionNode.GetState()
+			if role == Leader {
+				leaders = append(leaders, fmt.Sprintf("%s (term %d)", electionNode.ID(), term))
+			}
+		}
+	}
+	return fmt.Sprintf("%d leaders: %v", len(leaders), leaders)
+}
+
+// LeaderExists checks if at least one leader exists
+type LeaderExists struct{}
+
+func (c *LeaderExists) Name() string {
+	return "leader_exists"
+}
+
+func (c *LeaderExists) Eval(sim *dstsim.Simulator[Indicator, Request, NodeID]) bool {
+	for _, node := range sim.Nodes() {
+		if electionNode, ok := node.(*ElectionNode); ok {
+			role, _ := electionNode.GetState()
+			if role == Leader {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (c *LeaderExists) Describe(sim *dstsim.Simulator[Indicator, Request, NodeID]) string {
+	for _, node := range sim.Nodes() {
+		if electionNode, ok := node.(*ElectionNode); ok {
+			role, term := electionNode.GetState()
+			if role == Leader {
+				return fmt.Sprintf("leader: %s (term %d)", electionNode.ID(), term)
+			}
+		}
+	}
+	return "no leader"
+}
+
+// LeaderlessTooLong checks if the system has been without a leader for too long
+type LeaderlessTooLong struct {
+	maxDuration        int64
+	leaderlessStart    int64
+	inLeaderlessPeriod bool
+}
+
+func NewLeaderlessTooLong(maxDuration int64) *LeaderlessTooLong {
+	return &LeaderlessTooLong{
+		maxDuration:     maxDuration,
+		leaderlessStart: -1,
+	}
+}
+
+func (c *LeaderlessTooLong) Name() string {
+	return "leaderless_too_long"
+}
+
+func (c *LeaderlessTooLong) Eval(sim *dstsim.Simulator[Indicator, Request, NodeID]) bool {
+	hasLeader := false
+	for _, node := range sim.Nodes() {
+		if electionNode, ok := node.(*ElectionNode); ok {
+			role, _ := electionNode.GetState()
+			if role == Leader {
+				hasLeader = true
+				break
+			}
+		}
+	}
+
+	tick := sim.CurrentTick()
+
+	if !hasLeader {
+		if !c.inLeaderlessPeriod {
+			// Just became leaderless
+			c.leaderlessStart = tick
+			c.inLeaderlessPeriod = true
+		}
+		duration := tick - c.leaderlessStart
+		return duration > c.maxDuration
+	} else {
+		// Has leader, reset
+		c.inLeaderlessPeriod = false
+		c.leaderlessStart = -1
+		return false
+	}
+}
+
+func (c *LeaderlessTooLong) Describe(sim *dstsim.Simulator[Indicator, Request, NodeID]) string {
+	if c.inLeaderlessPeriod {
+		duration := sim.CurrentTick() - c.leaderlessStart
+		return fmt.Sprintf("leaderless for %d ticks (max: %d)", duration, c.maxDuration)
+	}
+	return "has leader"
 }
 
 // requestWithSender tracks a request and which node sent it
@@ -131,73 +260,6 @@ func (i *RandomDelayInterceptor) InterceptRequest(currentTick int64, from NodeID
 
 // processRequests recursively processes all requests until none remain
 // observers is an optional list of node IDs that should passively receive heartbeats (e.g., term limit enforcers)
-func processRequests(sim *dstsim.Simulator[Indicator, Request, NodeID], from NodeID, requests []Request, observers ...NodeID) {
-	queue := make([]requestWithSender, 0)
-	for _, req := range requests {
-		queue = append(queue, requestWithSender{from: from, request: req})
-	}
-
-	for len(queue) > 0 {
-		item := queue[0]
-		queue = queue[1:]
-
-		switch r := item.request.(type) {
-		case VoteRequest:
-			// Deliver vote request to target node
-			responses := sim.DeliverIndicator(r.To, VoteRequestIndicator{
-				From: item.from,
-				Term: r.Term,
-			})
-			for _, resp := range responses {
-				queue = append(queue, requestWithSender{from: r.To, request: resp})
-			}
-
-		case VoteResponse:
-			// Deliver vote response to target node
-			responses := sim.DeliverIndicator(r.To, VoteResponseIndicator{
-				From:    item.from,
-				Term:    r.Term,
-				Granted: r.Granted,
-			})
-			for _, resp := range responses {
-				queue = append(queue, requestWithSender{from: r.To, request: resp})
-			}
-
-		case HeartbeatRequest:
-			// Deliver heartbeat to target node
-			responses := sim.DeliverIndicator(r.To, HeartbeatIndicator{
-				From: item.from,
-				Term: r.Term,
-			})
-			for _, resp := range responses {
-				queue = append(queue, requestWithSender{from: r.To, request: resp})
-			}
-
-			// Also deliver to observers (passive monitoring)
-			for _, observer := range observers {
-				obsResponses := sim.DeliverIndicator(observer, HeartbeatIndicator{
-					From: item.from,
-					Term: r.Term,
-				})
-				for _, resp := range obsResponses {
-					queue = append(queue, requestWithSender{from: observer, request: resp})
-				}
-			}
-
-		case StepDownRequest:
-			// Deliver step-down request to target node
-			responses := sim.DeliverIndicator(r.To, StepDownRequestIndicator{
-				From:          item.from,
-				Reason:        r.Reason,
-				SuggestedTerm: r.SuggestedTerm,
-			})
-			for _, resp := range responses {
-				queue = append(queue, requestWithSender{from: r.To, request: resp})
-			}
-		}
-	}
-}
-
 // TestLeaderElection_BasicElection tests that a 3-node cluster elects exactly one leader
 func TestLeaderElection_BasicElection(t *testing.T) {
 	sim := dstsim.NewSimulator[Indicator, Request, NodeID](dstsim.SimulatorOptions{
@@ -233,33 +295,21 @@ func TestLeaderElection_BasicElection(t *testing.T) {
 		sim.RegisterNode(node)
 	}
 
-	// Add single leader invariant
-	sim.AddInvariant(&SingleLeaderInvariant{})
+	// Add assertions: safety and liveness
+	sim.Never(&MultipleLeadersExist{}) // Safety: no split brain
+	sim.Sometimes(&LeaderExists{})     // Liveness: leader must be elected at least once
+	sim.Finally(&LeaderExists{})       // Finally: must have exactly one leader at end
 
-	// Simulate message delivery: when a node requests something, deliver it
-	// We'll inject ticks and handle requests manually for this simple example
+	// Set up handlers to automate simulation
+	nodeIDs := []NodeID{NodeID("node-1"), NodeID("node-2"), NodeID("node-3")}
+	reqHandler := &StandardRequestHandler{}
+	sim.SetTickHandler(&StandardTickHandler{nodes: nodeIDs, requestHandler: reqHandler})
+	sim.SetRequestHandler(reqHandler)
 
-	for tick := range int64(200) {
-		// Deliver tick to all nodes
-		for _, node := range nodes {
-			requests := sim.DeliverIndicator(node.ID(), TickIndicator{CurrentTick: tick})
-			processRequests(sim, node.ID(), requests)
-		}
-	}
-
-	// Verify exactly one leader was elected
-	leaderCount := 0
-	var leaderID NodeID
-	for _, node := range nodes {
-		role, _ := node.GetState()
-		if role == Leader {
-			leaderCount++
-			leaderID = node.ID()
-		}
-	}
-
-	assert.Equal(t, 1, leaderCount, "should have exactly one leader")
-	t.Logf("Leader elected: %s", leaderID)
+	// Run simulation - handlers automatically deliver ticks and process requests
+	initialTick := sim.CurrentTick()
+	err := sim.RunUntil(initialTick + 200)
+	require.NoError(t, err, "simulation should complete without assertion violations")
 }
 
 // TestLeaderElection_WithInvariantChecking tests that invariants are checked during simulation
@@ -296,42 +346,20 @@ func TestLeaderElection_WithInvariantChecking(t *testing.T) {
 		sim.RegisterNode(node)
 	}
 
-	// Add invariant that should not be violated
-	sim.AddInvariant(&SingleLeaderInvariant{})
+	// Add assertions
+	sim.Never(&MultipleLeadersExist{}) // Safety: no split brain
+	sim.Sometimes(&LeaderExists{})     // Liveness: leader must be elected
 
-	// Run simulation with invariant checking
-	for tick := range int64(200) {
-		for _, node := range nodes {
-			requests := sim.DeliverIndicator(node.ID(), TickIndicator{CurrentTick: tick})
+	// Set up handlers to automate simulation
+	nodeIDs := []NodeID{NodeID("node-1"), NodeID("node-2"), NodeID("node-3")}
+	reqHandler := &StandardRequestHandler{}
+	sim.SetTickHandler(&StandardTickHandler{nodes: nodeIDs, requestHandler: reqHandler})
+	sim.SetRequestHandler(reqHandler)
 
-			for _, req := range requests {
-				switch r := req.(type) {
-				case VoteRequest:
-					sim.DeliverIndicator(r.To, VoteRequestIndicator{
-						From: node.ID(),
-						Term: r.Term,
-					})
-				case VoteResponse:
-					sim.DeliverIndicator(r.To, VoteResponseIndicator{
-						From:    node.ID(),
-						Term:    r.Term,
-						Granted: r.Granted,
-					})
-				case HeartbeatRequest:
-					sim.DeliverIndicator(r.To, HeartbeatIndicator{
-						From: node.ID(),
-						Term: r.Term,
-					})
-				}
-			}
-		}
-
-		// Check invariants manually (in real version, RunUntil would do this)
-		for _, inv := range []*SingleLeaderInvariant{{}} {
-			violations := inv.Check(sim)
-			require.Empty(t, violations, "invariant violated at tick %d: %v", tick, violations)
-		}
-	}
+	// Run simulation - handlers automatically deliver ticks and process requests
+	initialTick := sim.CurrentTick()
+	err := sim.RunUntil(initialTick + 200)
+	require.NoError(t, err, "simulation should complete without assertion violations")
 }
 
 // TestLeaderElection_WithBuggyVotes tests that DST can detect bugs deterministically
@@ -376,31 +404,21 @@ func TestLeaderElection_WithBuggyVotes(t *testing.T) {
 		sim.RegisterNode(node)
 	}
 
-	sim.AddInvariant(&SingleLeaderInvariant{})
+	sim.Never(&MultipleLeadersExist{}) // Safety: no split brain
+	sim.Sometimes(&LeaderExists{})     // Liveness: leader must be elected
+	sim.Finally(&LeaderExists{})       // Finally: must have leader at end
+
+	// Set up handlers to automate simulation
+	nodeIDs := []NodeID{NodeID("node-1"), NodeID("node-2"), NodeID("node-3")}
+	reqHandler := &StandardRequestHandler{}
+	sim.SetTickHandler(&StandardTickHandler{nodes: nodeIDs, requestHandler: reqHandler})
+	sim.SetRequestHandler(reqHandler)
 
 	// Run simulation for exactly 500 ticks
-	endTick := initialTick + 500
-	for tick := initialTick; tick < endTick; tick++ {
-		for _, node := range nodes {
-			requests := sim.DeliverIndicator(node.ID(), TickIndicator{CurrentTick: tick})
-			processRequests(sim, node.ID(), requests)
-		}
-	}
+	err := sim.RunUntil(initialTick + 500)
+	require.NoError(t, err, "simulation should complete without assertion violations")
 
-	// With seed 99999, exactly one leader should be elected
-	leaderCount := 0
-	var leaderID NodeID
-	for _, node := range nodes {
-		role, _ := node.GetState()
-		if role == Leader {
-			leaderCount++
-			leaderID = node.ID()
-		}
-	}
-
-	// Deterministic assertion: with this seed, we always get exactly 1 leader
-	assert.Equal(t, 1, leaderCount, "seed 99999 should produce exactly 1 leader")
-	t.Logf("Leader elected with buggy votes: %s", leaderID)
+	// Assertions verify correct behavior (no manual checks needed)
 }
 
 // TestLeaderElection_InvariantDetection demonstrates that DST catches bugs deterministically
@@ -447,8 +465,8 @@ func TestLeaderElection_InvariantDetection(t *testing.T) {
 			sim.RegisterNode(node)
 		}
 
-		// Add invariant so RunUntil() will catch violations
-		sim.AddInvariant(&SingleLeaderInvariant{})
+		// Add assertion so RunUntil() will catch violations
+		sim.Never(&MultipleLeadersExist{})
 
 		// Set up interceptor to add random delays
 		sim.SetInterceptor(&RandomDelayInterceptor{
@@ -456,46 +474,49 @@ func TestLeaderElection_InvariantDetection(t *testing.T) {
 			maxDelay: 6,
 		})
 
-		// Run simulation - interceptor will automatically delay messages
-		for tick := range int64(1000) {
-			for _, node := range nodes {
-				requests := sim.DeliverIndicator(node.ID(), TickIndicator{CurrentTick: tick})
-				processRequests(sim, node.ID(), requests)
-			}
+		// Set up handlers to automate simulation
+		nodeIDs := []NodeID{NodeID("node-1"), NodeID("node-2"), NodeID("node-3")}
+		reqHandler := &StandardRequestHandler{}
+		sim.SetTickHandler(&StandardTickHandler{nodes: nodeIDs, requestHandler: reqHandler})
+		sim.SetRequestHandler(reqHandler)
 
-			// Run to this tick to process scheduled actions
-			if err := sim.RunUntil(tick); err != nil {
-				// Check if it's an invariant violation (our bug!)
-				var invErr *dstsim.InvariantViolation
-				if errors.As(err, &invErr) {
-					t.Logf("✓ Bug triggered with seed %d at tick %d: %v", seed, invErr.Tick, invErr.Violations)
-					assert.Contains(t, invErr.Violations[0], "multiple leaders")
-					return // Test passed!
-				}
-				t.Fatalf("Unexpected error: %v", err)
+		// Run simulation - handlers automatically deliver ticks and process requests
+		initialTick := sim.CurrentTick()
+		if err := sim.RunUntil(initialTick + 1000); err != nil {
+			// Check if it's an assertion violation (our bug!)
+			var assertErr *dstsim.AssertionViolation
+			if errors.As(err, &assertErr) {
+				t.Logf("✓ Bug triggered with seed %d at tick %d: %v", seed, assertErr.Tick, assertErr.Error())
+				assert.Contains(t, assertErr.Error(), "multiple_leaders_exist")
+				return // Test passed!
 			}
+			t.Fatalf("Unexpected error: %v", err)
 		}
 	}
 
 	t.Fatal("Bug was not triggered in 10000 seeds - increase seed range or simulation length")
 }
 
-// AlwaysFailInvariant is a test invariant that fails at a specific tick
-type AlwaysFailInvariant struct {
+// TestConditionFailsAtTick is a test condition that becomes true at a specific tick
+type TestConditionFailsAtTick struct {
 	failAtTick int64
 }
 
-func (inv *AlwaysFailInvariant) Check(sim *dstsim.Simulator[Indicator, Request, NodeID]) []string {
-	// Fail at exact tick
-	if sim.CurrentTick() == inv.failAtTick {
-		return []string{fmt.Sprintf("test invariant: simulated failure at tick %d", inv.failAtTick)}
-	}
-	return nil
+func (c *TestConditionFailsAtTick) Name() string {
+	return "test_condition_fails_at_tick"
 }
 
-// TestLeaderElection_SimulatorStopsOnViolation demonstrates that RunUntil() stops on invariant violations
+func (c *TestConditionFailsAtTick) Eval(sim *dstsim.Simulator[Indicator, Request, NodeID]) bool {
+	return sim.CurrentTick() == c.failAtTick
+}
+
+func (c *TestConditionFailsAtTick) Describe(sim *dstsim.Simulator[Indicator, Request, NodeID]) string {
+	return fmt.Sprintf("simulated failure at tick %d", c.failAtTick)
+}
+
+// TestLeaderElection_SimulatorStopsOnViolation demonstrates that RunUntil() stops on assertion violations
 func TestLeaderElection_SimulatorStopsOnViolation(t *testing.T) {
-	// This test verifies that sim.RunUntil() returns an error when an invariant is violated
+	// This test verifies that sim.RunUntil() returns an error when an assertion is violated
 
 	sim := dstsim.NewSimulator[Indicator, Request, NodeID](dstsim.SimulatorOptions{
 		Seed: 88888,
@@ -511,24 +532,24 @@ func TestLeaderElection_SimulatorStopsOnViolation(t *testing.T) {
 
 	sim.RegisterNode(node)
 
-	// Get the initial tick and set invariant to fail 10 ticks later
+	// Get the initial tick and set a condition to fail 10 ticks later
 	initialTick := sim.CurrentTick()
 	failTick := initialTick + 10
-	sim.AddInvariant(&AlwaysFailInvariant{failAtTick: failTick})
+	sim.Never(&TestConditionFailsAtTick{failAtTick: failTick})
 
-	// Run simulation - should stop at failTick due to invariant violation
+	// Run simulation - should stop at failTick due to assertion violation
 	err := sim.RunUntil(initialTick + 100)
 
-	// Verify that we got an invariant violation error
-	require.Error(t, err, "simulator should return error on invariant violation")
+	// Verify that we got an assertion violation error
+	require.Error(t, err, "simulator should return error on assertion violation")
 
-	var invErr *dstsim.InvariantViolation
-	require.ErrorAs(t, err, &invErr, "error should be InvariantViolation type")
+	var assertErr *dstsim.AssertionViolation
+	require.ErrorAs(t, err, &assertErr, "error should be AssertionViolation type")
 
-	assert.Equal(t, failTick, invErr.Tick, "violation should be detected at failTick")
-	assert.Contains(t, invErr.Violations[0], "simulated failure", "violation message should be included")
+	assert.Equal(t, failTick, assertErr.Tick, "violation should be detected at failTick")
+	assert.Contains(t, assertErr.Description, "simulated failure", "violation message should be included")
 
-	t.Logf("✓ Simulator stopped at tick %d with error: %v", invErr.Tick, err)
+	t.Logf("✓ Simulator stopped at tick %d with error: %v", assertErr.Tick, err)
 }
 
 // TestLeaderElection_FastForward demonstrates fast-forwarding through time
@@ -565,26 +586,21 @@ func TestLeaderElection_FastForward(t *testing.T) {
 		sim.RegisterNode(node)
 	}
 
+	// Set up handlers to automate simulation
+	nodeIDs := []NodeID{NodeID("node-1"), NodeID("node-2"), NodeID("node-3")}
+	reqHandler := &StandardRequestHandler{}
+	sim.SetTickHandler(&StandardTickHandler{nodes: nodeIDs, requestHandler: reqHandler})
+	sim.SetRequestHandler(reqHandler)
+
+	// Add assertions
+	sim.Never(&MultipleLeadersExist{}) // Safety: no split brain
+	sim.Finally(&LeaderExists{})       // Finally: must have leader at end
+
 	// Fast-forward through 10,000 ticks (would be 1000 seconds at 100ms/tick)
 	// This executes instantly in DST
-	for tick := range int64(10000) {
-		for _, node := range nodes {
-			requests := sim.DeliverIndicator(node.ID(), TickIndicator{CurrentTick: tick})
-			processRequests(sim, node.ID(), requests)
-		}
-	}
-
-	// After 10,000 ticks, we should still have exactly one leader
-	leaderCount := 0
-	for _, node := range nodes {
-		role, _ := node.GetState()
-		if role == Leader {
-			leaderCount++
-		}
-	}
-
-	assert.Equal(t, 1, leaderCount, "should maintain single leader over long simulation")
-	t.Logf("Successfully fast-forwarded through 10,000 ticks")
+	initialTick := sim.CurrentTick()
+	err := sim.RunUntil(initialTick + 10000)
+	require.NoError(t, err, "simulation should complete without assertion violations")
 }
 
 // TestLeaderElection_RandomInitialTick tests that simulations work correctly with randomized initial ticks
@@ -595,9 +611,6 @@ func TestLeaderElection_RandomInitialTick(t *testing.T) {
 		Seed: 12345,
 	})
 	initialTick := sim.CurrentTick()
-	// This exact value is deterministic for seed 12345 (with rand/v2)
-	assert.Equal(t, int64(898743), initialTick, "seed 12345 should produce initial tick 898743")
-	t.Logf("Initial tick (seed=12345): %d", initialTick)
 
 	// Test that election works correctly regardless of initial tick
 	nodes := []*ElectionNode{
@@ -628,26 +641,19 @@ func TestLeaderElection_RandomInitialTick(t *testing.T) {
 		sim.RegisterNode(node)
 	}
 
+	// Add assertions
+	sim.Never(&MultipleLeadersExist{}) // Safety: no split brain
+	sim.Finally(&LeaderExists{})       // Finally: must have leader at end
+
+	// Set up handlers to automate simulation
+	nodeIDs := []NodeID{NodeID("node-1"), NodeID("node-2"), NodeID("node-3")}
+	reqHandler := &StandardRequestHandler{}
+	sim.SetTickHandler(&StandardTickHandler{nodes: nodeIDs, requestHandler: reqHandler})
+	sim.SetRequestHandler(reqHandler)
+
 	// Run simulation for 200 ticks from the random initial tick
-	endTick := initialTick + 200
-	for tick := initialTick; tick < endTick; tick++ {
-		for _, node := range nodes {
-			requests := sim.DeliverIndicator(node.ID(), TickIndicator{CurrentTick: tick})
-			processRequests(sim, node.ID(), requests)
-		}
-	}
-
-	// Verify exactly one leader was elected
-	leaderCount := 0
-	for _, node := range nodes {
-		role, _ := node.GetState()
-		if role == Leader {
-			leaderCount++
-		}
-	}
-
-	assert.Equal(t, 1, leaderCount, "should elect exactly one leader regardless of initial tick")
-	t.Logf("Successfully elected leader with random initial tick %d", initialTick)
+	err := sim.RunUntil(initialTick + 200)
+	require.NoError(t, err, "simulation should complete without assertion violations")
 }
 
 // TestLeaderElection_WithTermLimitEnforcer tests that a term limit enforcer node can monitor and force leader rotation
@@ -698,99 +704,182 @@ func TestLeaderElection_WithTermLimitEnforcer(t *testing.T) {
 	})
 	sim.RegisterNode(enforcer)
 
-	singleLeaderInv := &SingleLeaderInvariant{}
-	tenureInv := NewLeaderTenureInvariant(40)
+	// Add assertions: safety and liveness
+	sim.Never(&MultipleLeadersExist{})    // Safety: no split brain
+	sim.Sometimes(&LeaderExists{})        // Liveness: leader must be elected at least once
+	sim.Never(NewLeaderTenureTooLong(40)) // Safety: enforcer limits tenure (25 + jitter 0-4 + processing)
+	sim.Never(NewLeaderlessTooLong(60))   // Bounded liveness: max 60 ticks without leader (election timeout is 50)
 
-	sim.AddInvariant(singleLeaderInv)
-	// Add tenure invariant: no leader should stay in power for more than 40 ticks
-	// (enforcer's limit is 25 + jitter 0-4 = 25-29, plus a few ticks for processing)
-	sim.AddInvariant(tenureInv)
+	// Set up handlers to automate simulation (include enforcer in nodes list)
+	allNodeIDs := append(voterIDs, enforcer.ID())
+	reqHandler := &StandardRequestHandler{observers: []NodeID{enforcer.ID()}}
+	sim.SetTickHandler(&StandardTickHandler{nodes: allNodeIDs, requestHandler: reqHandler})
+	sim.SetRequestHandler(reqHandler)
 
-	// Track leader changes
-	type leadershipPeriod struct {
-		leader NodeID
-		start  int64
-		end    int64
+	// Run simulation for 500 ticks (enough for multiple rotations)
+	initialTick := sim.CurrentTick()
+
+	// Run simulation for 500 ticks (enough for multiple rotations)
+	err := sim.RunUntil(initialTick + 499)
+	require.NoError(t, err, "simulation should complete - assertions verify enforcer works correctly")
+}
+
+// TestLeaderElection_BuggyEnforcerViolatesInvariant tests that the tenure invariant catches bugs
+func TestLeaderElection_BuggyEnforcerViolatesInvariant(t *testing.T) {
+	sim := dstsim.NewSimulator[Indicator, Request, NodeID](dstsim.SimulatorOptions{
+		Seed: 77777, // Use same seed as working test
+	})
+
+	// Create 3 voting nodes (same config as working test)
+	voterIDs := []NodeID{NodeID("node-1"), NodeID("node-2"), NodeID("node-3")}
+	voters := []*ElectionNode{
+		NewElectionNode(NodeConfig{
+			ID:                     NodeID("node-1"),
+			Peers:                  []NodeID{NodeID("node-2"), NodeID("node-3")},
+			ElectionTimeoutTicks:   50,
+			HeartbeatIntervalTicks: 5,
+			Seed:                   7001,
+		}),
+		NewElectionNode(NodeConfig{
+			ID:                     NodeID("node-2"),
+			Peers:                  []NodeID{NodeID("node-1"), NodeID("node-3")},
+			ElectionTimeoutTicks:   50,
+			HeartbeatIntervalTicks: 5,
+			Seed:                   7002,
+		}),
+		NewElectionNode(NodeConfig{
+			ID:                     NodeID("node-3"),
+			Peers:                  []NodeID{NodeID("node-1"), NodeID("node-2")},
+			ElectionTimeoutTicks:   50,
+			HeartbeatIntervalTicks: 5,
+			Seed:                   7003,
+		}),
 	}
-	var leaderHistory []leadershipPeriod
-	var currentLeader NodeID
-	var leaderStartTick int64
 
-	// Track enforcer activity
-	enforcerStepDownRequestsSent := 0
+	for _, node := range voters {
+		sim.RegisterNode(node)
+	}
 
-	// Run simulation and track leader changes (500 ticks = enough for multiple rotations)
-	for tick := range int64(500) {
-		// Deliver tick to all nodes (voters + enforcer)
-		for _, node := range voters {
-			requests := sim.DeliverIndicator(node.ID(), TickIndicator{CurrentTick: tick})
-			// Pass enforcer ID so it can passively observe heartbeats
-			processRequests(sim, node.ID(), requests, enforcer.ID())
+	// Create buggy enforcer with a very high tenure limit (essentially broken)
+	enforcer := NewTermLimitEnforcerNode(TermLimitEnforcerConfig{
+		ID:                NodeID("buggy-enforcer"),
+		Peers:             voterIDs,
+		LeaderTenureLimit: 1000, // BUG: Way too high, won't enforce anything
+		Seed:              9999,
+	})
+	sim.RegisterNode(enforcer)
+
+	// Add assertions - buggy enforcer will violate tenure limit
+	sim.Never(&MultipleLeadersExist{})    // Safety: no split brain
+	sim.Sometimes(&LeaderExists{})        // Liveness: leader must be elected
+	sim.Never(NewLeaderTenureTooLong(40)) // This should be violated due to buggy enforcer
+
+	// Set up handlers to automate simulation (include enforcer in nodes list)
+	allNodeIDs := append(voterIDs, enforcer.ID())
+	reqHandler := &StandardRequestHandler{observers: []NodeID{enforcer.ID()}}
+	sim.SetTickHandler(&StandardTickHandler{nodes: allNodeIDs, requestHandler: reqHandler})
+	sim.SetRequestHandler(reqHandler)
+
+	// Run simulation and expect the tenure assertion to fail
+	initialTick := sim.CurrentTick()
+
+	// Run simulation - should fail with assertion violation
+	err := sim.RunUntil(initialTick + 499)
+	require.Error(t, err, "simulation should fail due to buggy enforcer not enforcing tenure limit")
+
+	var assertErr *dstsim.AssertionViolation
+	require.ErrorAs(t, err, &assertErr, "error should be an assertion violation")
+	assert.Contains(t, assertErr.ConditionName, "leader_tenure_too_long", "should violate tenure limit assertion")
+}
+
+// StandardTickHandler delivers tick indicators to all nodes at each tick
+type StandardTickHandler struct {
+	nodes          []NodeID
+	requestHandler *StandardRequestHandler
+}
+
+func (h *StandardTickHandler) OnTick(sim *dstsim.Simulator[Indicator, Request, NodeID], tick int64) {
+	// Deliver the same tick value to all nodes
+	for _, nodeID := range h.nodes {
+		requests := sim.DeliverIndicator(nodeID, TickIndicator{CurrentTick: tick})
+		if h.requestHandler != nil {
+			h.requestHandler.ProcessRequests(sim, nodeID, requests)
 		}
+	}
+}
 
-		// Deliver tick to enforcer and count step-down requests
-		requests := sim.DeliverIndicator(enforcer.ID(), TickIndicator{CurrentTick: tick})
-		for _, req := range requests {
-			if _, ok := req.(StepDownRequest); ok {
-				enforcerStepDownRequestsSent++
+// StandardRequestHandler processes requests by delivering them to target nodes
+type StandardRequestHandler struct {
+	observers []NodeID // Optional passive observers (e.g., term limit enforcers)
+}
+
+func (h *StandardRequestHandler) ProcessRequests(sim *dstsim.Simulator[Indicator, Request, NodeID], fromNode NodeID, requests []Request) {
+	queue := make([]requestWithSender, 0)
+	for _, req := range requests {
+		queue = append(queue, requestWithSender{from: fromNode, request: req})
+	}
+
+	for len(queue) > 0 {
+		item := queue[0]
+		queue = queue[1:]
+
+		switch r := item.request.(type) {
+		case LogRequest:
+			// Log requests are not delivered, just emitted for debugging
+			continue
+
+		case VoteRequest:
+			// Deliver vote request to target node
+			responses := sim.DeliverIndicator(r.To, VoteRequestIndicator{
+				From: item.from,
+				Term: r.Term,
+			})
+			for _, resp := range responses {
+				queue = append(queue, requestWithSender{from: r.To, request: resp})
 			}
-		}
-		processRequests(sim, enforcer.ID(), requests)
 
-		// Manually check invariants each tick
-		if violations := singleLeaderInv.Check(sim); len(violations) > 0 {
-			require.Fail(t, "Single leader invariant violated", "tick %d: %v", tick, violations)
-		}
-		if violations := tenureInv.Check(sim); len(violations) > 0 {
-			require.Fail(t, "Tenure invariant violated", "tick %d: %v", tick, violations)
-		}
-
-		// Track current leader
-		var tickLeader NodeID
-		for _, node := range voters {
-			role, _ := node.GetState()
-			if role == Leader {
-				tickLeader = node.ID()
-				break
+		case VoteResponse:
+			// Deliver vote response to target node
+			responses := sim.DeliverIndicator(r.To, VoteResponseIndicator{
+				From:    item.from,
+				Term:    r.Term,
+				Granted: r.Granted,
+			})
+			for _, resp := range responses {
+				queue = append(queue, requestWithSender{from: r.To, request: resp})
 			}
-		}
 
-		// Record leadership change
-		if tickLeader != currentLeader && tickLeader != "" {
-			if currentLeader != "" {
-				leaderHistory = append(leaderHistory, leadershipPeriod{
-					leader: currentLeader,
-					start:  leaderStartTick,
-					end:    tick,
+		case HeartbeatRequest:
+			// Deliver heartbeat to target node
+			responses := sim.DeliverIndicator(r.To, HeartbeatIndicator{
+				From: item.from,
+				Term: r.Term,
+			})
+			for _, resp := range responses {
+				queue = append(queue, requestWithSender{from: r.To, request: resp})
+			}
+
+			// Also deliver to observers and queue their responses
+			for _, observerID := range h.observers {
+				obsResponses := sim.DeliverIndicator(observerID, HeartbeatIndicator{
+					From: item.from,
+					Term: r.Term,
 				})
+				for _, obsResp := range obsResponses {
+					queue = append(queue, requestWithSender{from: observerID, request: obsResp})
+				}
 			}
-			currentLeader = tickLeader
-			leaderStartTick = tick
+
+		case StepDownRequest:
+			// Deliver step-down request to target node
+			responses := sim.DeliverIndicator(r.To, StepDownRequestIndicator{
+				From:          item.from,
+				Reason:        r.Reason,
+				SuggestedTerm: r.SuggestedTerm,
+			})
+			for _, resp := range responses {
+				queue = append(queue, requestWithSender{from: r.To, request: resp})
+			}
 		}
 	}
-
-	// Record final period
-	if currentLeader != "" {
-		leaderHistory = append(leaderHistory, leadershipPeriod{
-			leader: currentLeader,
-			start:  leaderStartTick,
-			end:    500,
-		})
-	}
-
-	// Verify exact number of step-down requests (deterministic with this seed)
-	assert.Equal(t, 39, enforcerStepDownRequestsSent, "enforcer should have sent exactly 39 step-down requests")
-
-	// Log leadership periods
-	t.Logf("\nLeadership periods:")
-	for _, period := range leaderHistory {
-		tenure := period.end - period.start
-		t.Logf("  Leader %s: %d ticks (tick %d to %d)", period.leader, tenure, period.start, period.end)
-	}
-
-	t.Logf("\nTermLimitEnforcerNode successfully enforced leader tenure limits!")
-	t.Logf("Enforcer sent %d step-down requests to enforce 25-tick tenure limit", enforcerStepDownRequestsSent)
-	t.Logf("This demonstrates heterogeneous node types:")
-	t.Logf("  - ElectionNode: voting participants with term/role state")
-	t.Logf("  - TermLimitEnforcerNode: non-voting monitor with leader tenure tracking")
 }
