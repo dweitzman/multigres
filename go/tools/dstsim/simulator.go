@@ -94,9 +94,11 @@ func (s *Simulator[I, R, ID]) SetInterceptor(interceptor MessageInterceptor[I, R
 	s.interceptor = interceptor
 }
 
-// AtTick schedules an action to run at a specific tick
-func (s *Simulator[I, R, ID]) AtTick(tick int64, fn func()) {
-	s.scheduledActions[tick] = append(s.scheduledActions[tick], fn)
+// ScheduleIn schedules an action to run after a delay (in ticks) from now
+// delay must be >= 0 (use 0 for immediate execution on next tick processing)
+func (s *Simulator[I, R, ID]) ScheduleIn(delay int64, fn func()) {
+	deliverAt := s.currentTick + delay
+	s.scheduledActions[deliverAt] = append(s.scheduledActions[deliverAt], fn)
 }
 
 // DeliverIndicator delivers an indicator to a specific node
@@ -111,8 +113,7 @@ func (s *Simulator[I, R, ID]) DeliverIndicator(nodeID ID, ind I) []R {
 		}
 		if delay > 0 {
 			// Delayed - schedule for later, bypass interceptor on delivery
-			deliverAt := s.currentTick + delay
-			s.AtTick(deliverAt, func() {
+			s.ScheduleIn(delay, func() {
 				s.deliverIndicatorInternal(nodeID, ind)
 			})
 			return nil

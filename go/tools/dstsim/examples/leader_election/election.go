@@ -89,6 +89,15 @@ type HeartbeatIndicator struct {
 
 func (HeartbeatIndicator) isIndicator() {}
 
+// StepDownRequestIndicator is a request from an enforcer for a node to step down
+type StepDownRequestIndicator struct {
+	From          NodeID
+	Reason        string
+	SuggestedTerm int64 // Term the requester has observed
+}
+
+func (StepDownRequestIndicator) isIndicator() {}
+
 // Request is an outgoing desire for I/O
 type Request interface {
 	isRequest()
@@ -126,6 +135,15 @@ type LogRequest struct {
 }
 
 func (LogRequest) isRequest() {}
+
+// StepDownRequest requests a node to step down
+type StepDownRequest struct {
+	To            NodeID
+	Reason        string
+	SuggestedTerm int64 // Term the requester has observed; node should step down to at least this + 1
+}
+
+func (StepDownRequest) isRequest() {}
 
 // ElectionNode implements a simple leader election protocol
 type ElectionNode struct {
@@ -208,6 +226,9 @@ func (n *ElectionNode) Step(ind Indicator) []Request {
 
 	case HeartbeatIndicator:
 		return n.handleHeartbeat(i)
+
+	case StepDownRequestIndicator:
+		return n.handleStepDownRequest(i)
 
 	default:
 		return nil
@@ -413,4 +434,162 @@ func (n *ElectionNode) stepDown(newTerm int64) {
 	n.term = newTerm
 	n.votedFor = ""
 	n.votesGranted = make(map[NodeID]bool)
+}
+
+func (n *ElectionNode) handleStepDownRequest(ind StepDownRequestIndicator) []Request {
+	// Ignore stale requests (requester's view is behind our current state)
+	if ind.SuggestedTerm < n.term {
+		return nil
+	}
+
+	// If we're a leader, step down
+	if n.role == Leader {
+		// Step down to at least the suggested term + 1
+		// This gives other nodes a chance to become leader
+		newTerm := ind.SuggestedTerm + 1
+		if newTerm <= n.term {
+			newTerm = n.term + 1
+		}
+		n.stepDown(newTerm)
+		return []Request{
+			LogRequest{
+				Level:   "info",
+				Message: fmt.Sprintf("[%s] Stepping down as leader (term %d -> %d) due to request from %s: %s", n.id, n.term, newTerm, ind.From, ind.Reason),
+			},
+		}
+	}
+	return nil
+}
+
+// TermLimitEnforcerNode monitors leader tenure and requests step-downs after a timeout
+type TermLimitEnforcerNode struct {
+	id    NodeID
+	peers []NodeID
+
+	// State - completely different from ElectionNode!
+	currentTick          int64
+	currentLeader        NodeID
+	leaderSince          int64
+	observedTerm         int64            // Last term observed from heartbeats
+	effectiveTenureLimit int64            // Tenure limit with jitter applied when leader was detected
+	leaderTenureLimit    int64            // Base tenure limit
+	stepDownRequestsSent map[NodeID]int64 // track when we last sent a request
+
+	// Configuration
+	rng *rand.Rand
+}
+
+// TermLimitEnforcerConfig configures a term limit enforcer node
+type TermLimitEnforcerConfig struct {
+	ID                NodeID
+	Peers             []NodeID
+	LeaderTenureLimit int64 // Max ticks a leader should serve
+	Seed              int64
+}
+
+// NewTermLimitEnforcerNode creates a new term limit enforcer node
+func NewTermLimitEnforcerNode(cfg TermLimitEnforcerConfig) *TermLimitEnforcerNode {
+	rng := rand.New(rand.NewPCG(uint64(cfg.Seed), uint64(cfg.Seed)))
+
+	return &TermLimitEnforcerNode{
+		id:                   cfg.ID,
+		peers:                cfg.Peers,
+		currentTick:          0,
+		currentLeader:        "",
+		leaderSince:          0,
+		observedTerm:         0,
+		effectiveTenureLimit: 0, // Will be set when leader is detected
+		leaderTenureLimit:    cfg.LeaderTenureLimit,
+		stepDownRequestsSent: make(map[NodeID]int64),
+		rng:                  rng,
+	}
+}
+
+// ID returns the enforcer's unique identifier
+func (o *TermLimitEnforcerNode) ID() NodeID {
+	return o.id
+}
+
+// Step processes an indicator and returns requests
+func (o *TermLimitEnforcerNode) Step(ind Indicator) []Request {
+	switch i := ind.(type) {
+	case TickIndicator:
+		o.currentTick = i.CurrentTick
+		return o.checkLeaderTenure()
+
+	case HeartbeatIndicator:
+		return o.observeHeartbeat(i)
+
+	default:
+		// Observer doesn't care about votes or step-down requests
+		return nil
+	}
+}
+
+func (o *TermLimitEnforcerNode) observeHeartbeat(ind HeartbeatIndicator) []Request {
+	var requests []Request
+
+	// Track the term from heartbeats
+	o.observedTerm = ind.Term
+
+	// Track current leader
+	if ind.From != o.currentLeader {
+		// New leader detected
+		o.currentLeader = ind.From
+		o.leaderSince = o.currentTick
+
+		// Apply jitter once when leader is detected
+		jitter := o.rng.Int64N(5) // 0-4 ticks of jitter
+		o.effectiveTenureLimit = o.leaderTenureLimit + jitter
+
+		requests = append(requests, LogRequest{
+			Level:   "info",
+			Message: fmt.Sprintf("[Enforcer %s] New leader detected: %s (term %d) at tick %d (tenure limit: %d)", o.id, ind.From, ind.Term, o.currentTick, o.effectiveTenureLimit),
+		})
+	} else {
+		// Same leader, log heartbeat received (debug)
+		requests = append(requests, LogRequest{
+			Level:   "debug",
+			Message: fmt.Sprintf("[Enforcer %s] Heartbeat from %s (term %d) at tick %d (tenure: %d/%d)", o.id, ind.From, ind.Term, o.currentTick, o.currentTick-o.leaderSince, o.effectiveTenureLimit),
+		})
+	}
+
+	return requests
+}
+
+func (o *TermLimitEnforcerNode) checkLeaderTenure() []Request {
+	// No current leader
+	if o.currentLeader == "" {
+		return nil
+	}
+
+	// Calculate tenure
+	tenure := o.currentTick - o.leaderSince
+
+	// Check if leader has served too long
+	if tenure >= o.effectiveTenureLimit {
+		// Check if we've already sent a request recently (avoid spam)
+		lastSent, exists := o.stepDownRequestsSent[o.currentLeader]
+		if exists && o.currentTick-lastSent < 10 {
+			// Sent a request within last 10 ticks, don't spam
+			return nil
+		}
+
+		// Send step-down request with the observed term
+		o.stepDownRequestsSent[o.currentLeader] = o.currentTick
+
+		return []Request{
+			StepDownRequest{
+				To:            o.currentLeader,
+				Reason:        fmt.Sprintf("leader tenure exceeded %d ticks (current: %d)", o.effectiveTenureLimit, tenure),
+				SuggestedTerm: o.observedTerm,
+			},
+			LogRequest{
+				Level:   "info",
+				Message: fmt.Sprintf("[Enforcer %s] Requesting %s to step down after %d ticks (limit: %d, term: %d)", o.id, o.currentLeader, tenure, o.effectiveTenureLimit, o.observedTerm),
+			},
+		}
+	}
+
+	return nil
 }

@@ -47,6 +47,58 @@ func (inv *SingleLeaderInvariant) Check(sim *dstsim.Simulator[Indicator, Request
 	return nil
 }
 
+// LeaderTenureInvariant checks that no leader stays in power too long
+type LeaderTenureInvariant struct {
+	maxTenure        int64
+	leaderStartTicks map[NodeID]int64
+}
+
+func NewLeaderTenureInvariant(maxTenure int64) *LeaderTenureInvariant {
+	return &LeaderTenureInvariant{
+		maxTenure:        maxTenure,
+		leaderStartTicks: make(map[NodeID]int64),
+	}
+}
+
+func (inv *LeaderTenureInvariant) Check(sim *dstsim.Simulator[Indicator, Request, NodeID]) []string {
+	currentTick := sim.CurrentTick()
+	var currentLeader NodeID
+
+	// Find current leader
+	for _, node := range sim.Nodes() {
+		if electionNode, ok := node.(*ElectionNode); ok {
+			role, _ := electionNode.GetState()
+			if role == Leader {
+				currentLeader = electionNode.ID()
+				break
+			}
+		}
+	}
+
+	// Track when each node became leader
+	if currentLeader != "" {
+		if _, exists := inv.leaderStartTicks[currentLeader]; !exists {
+			inv.leaderStartTicks[currentLeader] = currentTick
+		}
+
+		// Check tenure
+		tenure := currentTick - inv.leaderStartTicks[currentLeader]
+		if tenure > inv.maxTenure {
+			return []string{fmt.Sprintf("leader %s has been in power for %d ticks (max: %d)",
+				currentLeader, tenure, inv.maxTenure)}
+		}
+	}
+
+	// Clear tracking for nodes that are no longer leader
+	for nodeID := range inv.leaderStartTicks {
+		if nodeID != currentLeader {
+			delete(inv.leaderStartTicks, nodeID)
+		}
+	}
+
+	return nil
+}
+
 // requestWithSender tracks a request and which node sent it
 type requestWithSender struct {
 	from    NodeID
@@ -78,7 +130,8 @@ func (i *RandomDelayInterceptor) InterceptRequest(currentTick int64, from NodeID
 }
 
 // processRequests recursively processes all requests until none remain
-func processRequests(sim *dstsim.Simulator[Indicator, Request, NodeID], from NodeID, requests []Request) {
+// observers is an optional list of node IDs that should passively receive heartbeats (e.g., term limit enforcers)
+func processRequests(sim *dstsim.Simulator[Indicator, Request, NodeID], from NodeID, requests []Request, observers ...NodeID) {
 	queue := make([]requestWithSender, 0)
 	for _, req := range requests {
 		queue = append(queue, requestWithSender{from: from, request: req})
@@ -115,6 +168,28 @@ func processRequests(sim *dstsim.Simulator[Indicator, Request, NodeID], from Nod
 			responses := sim.DeliverIndicator(r.To, HeartbeatIndicator{
 				From: item.from,
 				Term: r.Term,
+			})
+			for _, resp := range responses {
+				queue = append(queue, requestWithSender{from: r.To, request: resp})
+			}
+
+			// Also deliver to observers (passive monitoring)
+			for _, observer := range observers {
+				obsResponses := sim.DeliverIndicator(observer, HeartbeatIndicator{
+					From: item.from,
+					Term: r.Term,
+				})
+				for _, resp := range obsResponses {
+					queue = append(queue, requestWithSender{from: observer, request: resp})
+				}
+			}
+
+		case StepDownRequest:
+			// Deliver step-down request to target node
+			responses := sim.DeliverIndicator(r.To, StepDownRequestIndicator{
+				From:          item.from,
+				Reason:        r.Reason,
+				SuggestedTerm: r.SuggestedTerm,
 			})
 			for _, resp := range responses {
 				queue = append(queue, requestWithSender{from: r.To, request: resp})
@@ -573,4 +648,149 @@ func TestLeaderElection_RandomInitialTick(t *testing.T) {
 
 	assert.Equal(t, 1, leaderCount, "should elect exactly one leader regardless of initial tick")
 	t.Logf("Successfully elected leader with random initial tick %d", initialTick)
+}
+
+// TestLeaderElection_WithTermLimitEnforcer tests that a term limit enforcer node can monitor and force leader rotation
+func TestLeaderElection_WithTermLimitEnforcer(t *testing.T) {
+	sim := dstsim.NewSimulator[Indicator, Request, NodeID](dstsim.SimulatorOptions{
+		Seed: 77777,
+	})
+
+	// Create 3 voting nodes
+	// Use normal election timeout (50 ticks) to get initial leader
+	// The observer (with 25-tick tenure limit) will force step-downs faster than
+	// natural re-elections would occur
+	voterIDs := []NodeID{NodeID("node-1"), NodeID("node-2"), NodeID("node-3")}
+	voters := []*ElectionNode{
+		NewElectionNode(NodeConfig{
+			ID:                     NodeID("node-1"),
+			Peers:                  []NodeID{NodeID("node-2"), NodeID("node-3")},
+			ElectionTimeoutTicks:   50,
+			HeartbeatIntervalTicks: 5, // Faster heartbeats so observer sees leader quickly
+			Seed:                   7001,
+		}),
+		NewElectionNode(NodeConfig{
+			ID:                     NodeID("node-2"),
+			Peers:                  []NodeID{NodeID("node-1"), NodeID("node-3")},
+			ElectionTimeoutTicks:   50,
+			HeartbeatIntervalTicks: 5,
+			Seed:                   7002,
+		}),
+		NewElectionNode(NodeConfig{
+			ID:                     NodeID("node-3"),
+			Peers:                  []NodeID{NodeID("node-1"), NodeID("node-2")},
+			ElectionTimeoutTicks:   50,
+			HeartbeatIntervalTicks: 5,
+			Seed:                   7003,
+		}),
+	}
+
+	for _, node := range voters {
+		sim.RegisterNode(node)
+	}
+
+	// Create term limit enforcer node (non-voting, different state)
+	enforcer := NewTermLimitEnforcerNode(TermLimitEnforcerConfig{
+		ID:                NodeID("observer-1"),
+		Peers:             voterIDs,
+		LeaderTenureLimit: 25, // Force rotation after 25 ticks
+		Seed:              8888,
+	})
+	sim.RegisterNode(enforcer)
+
+	singleLeaderInv := &SingleLeaderInvariant{}
+	tenureInv := NewLeaderTenureInvariant(40)
+
+	sim.AddInvariant(singleLeaderInv)
+	// Add tenure invariant: no leader should stay in power for more than 40 ticks
+	// (enforcer's limit is 25 + jitter 0-4 = 25-29, plus a few ticks for processing)
+	sim.AddInvariant(tenureInv)
+
+	// Track leader changes
+	type leadershipPeriod struct {
+		leader NodeID
+		start  int64
+		end    int64
+	}
+	var leaderHistory []leadershipPeriod
+	var currentLeader NodeID
+	var leaderStartTick int64
+
+	// Track enforcer activity
+	enforcerStepDownRequestsSent := 0
+
+	// Run simulation and track leader changes (500 ticks = enough for multiple rotations)
+	for tick := range int64(500) {
+		// Deliver tick to all nodes (voters + enforcer)
+		for _, node := range voters {
+			requests := sim.DeliverIndicator(node.ID(), TickIndicator{CurrentTick: tick})
+			// Pass enforcer ID so it can passively observe heartbeats
+			processRequests(sim, node.ID(), requests, enforcer.ID())
+		}
+
+		// Deliver tick to enforcer and count step-down requests
+		requests := sim.DeliverIndicator(enforcer.ID(), TickIndicator{CurrentTick: tick})
+		for _, req := range requests {
+			if _, ok := req.(StepDownRequest); ok {
+				enforcerStepDownRequestsSent++
+			}
+		}
+		processRequests(sim, enforcer.ID(), requests)
+
+		// Manually check invariants each tick
+		if violations := singleLeaderInv.Check(sim); len(violations) > 0 {
+			require.Fail(t, "Single leader invariant violated", "tick %d: %v", tick, violations)
+		}
+		if violations := tenureInv.Check(sim); len(violations) > 0 {
+			require.Fail(t, "Tenure invariant violated", "tick %d: %v", tick, violations)
+		}
+
+		// Track current leader
+		var tickLeader NodeID
+		for _, node := range voters {
+			role, _ := node.GetState()
+			if role == Leader {
+				tickLeader = node.ID()
+				break
+			}
+		}
+
+		// Record leadership change
+		if tickLeader != currentLeader && tickLeader != "" {
+			if currentLeader != "" {
+				leaderHistory = append(leaderHistory, leadershipPeriod{
+					leader: currentLeader,
+					start:  leaderStartTick,
+					end:    tick,
+				})
+			}
+			currentLeader = tickLeader
+			leaderStartTick = tick
+		}
+	}
+
+	// Record final period
+	if currentLeader != "" {
+		leaderHistory = append(leaderHistory, leadershipPeriod{
+			leader: currentLeader,
+			start:  leaderStartTick,
+			end:    500,
+		})
+	}
+
+	// Verify exact number of step-down requests (deterministic with this seed)
+	assert.Equal(t, 39, enforcerStepDownRequestsSent, "enforcer should have sent exactly 39 step-down requests")
+
+	// Log leadership periods
+	t.Logf("\nLeadership periods:")
+	for _, period := range leaderHistory {
+		tenure := period.end - period.start
+		t.Logf("  Leader %s: %d ticks (tick %d to %d)", period.leader, tenure, period.start, period.end)
+	}
+
+	t.Logf("\nTermLimitEnforcerNode successfully enforced leader tenure limits!")
+	t.Logf("Enforcer sent %d step-down requests to enforce 25-tick tenure limit", enforcerStepDownRequestsSent)
+	t.Logf("This demonstrates heterogeneous node types:")
+	t.Logf("  - ElectionNode: voting participants with term/role state")
+	t.Logf("  - TermLimitEnforcerNode: non-voting monitor with leader tenure tracking")
 }
