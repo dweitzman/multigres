@@ -30,7 +30,7 @@ type CounterNode struct {
 }
 
 func (n *CounterNode) ID() int { return n.id }
-func (n *CounterNode) Step(tick int) []string {
+func (n *CounterNode) Step(tick int64, indicators []int) []string {
 	n.count++
 	return nil
 }
@@ -117,16 +117,6 @@ func (c *CounterLessOrEqual) Describe(sim *dstsim.Simulator[int, string, int]) s
 }
 
 // Simple tick handler that delivers ticks to all nodes
-type SimpleTickHandler struct {
-	nodes []int
-}
-
-func (h *SimpleTickHandler) OnTick(sim *dstsim.Simulator[int, string, int], tick int64) {
-	for _, nodeID := range h.nodes {
-		sim.DeliverIndicator(nodeID, int(tick))
-	}
-}
-
 // Condition type enum for table-driven tests
 type ConditionType int
 
@@ -199,8 +189,6 @@ func TestAssertions_Comprehensive(t *testing.T) {
 				sim.EventuallyAlways(cond)
 			}
 
-			sim.SetTickHandler(&SimpleTickHandler{nodes: []int{1}})
-
 			initialTick := sim.CurrentTick()
 			err := sim.RunUntil(initialTick + int64(tt.numTicks))
 
@@ -226,8 +214,6 @@ func TestAssertions_MultipleConditions(t *testing.T) {
 	sim.Never(&CounterGreaterThan{nodeID: 1, value: 100})  // Should never exceed 100
 	sim.Sometimes(&CounterEquals{nodeID: 1, value: 25})    // Should hit 25 at some point
 	sim.Finally(&CounterGreaterThan{nodeID: 1, value: 40}) // Should be > 40 at end
-
-	sim.SetTickHandler(&SimpleTickHandler{nodes: []int{1}})
 
 	initialTick := sim.CurrentTick()
 	err := sim.RunUntil(initialTick + 50)

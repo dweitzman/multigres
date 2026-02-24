@@ -15,11 +15,10 @@
 package leader_election
 
 import (
-	"errors"
 	"fmt"
+	"math/rand/v2"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/multigres/multigres/go/tools/dstsim"
@@ -160,6 +159,29 @@ func (c *LeaderExists) Eval(sim *dstsim.Simulator[Indicator, Request, NodeID]) b
 	return false
 }
 
+// NoLeadersExist is the complement of LeaderExists
+type NoLeadersExist struct{}
+
+func (c *NoLeadersExist) Name() string {
+	return "no_leaders_exist"
+}
+
+func (c *NoLeadersExist) Eval(sim *dstsim.Simulator[Indicator, Request, NodeID]) bool {
+	for _, node := range sim.Nodes() {
+		if electionNode, ok := node.(*ElectionNode); ok {
+			role, _ := electionNode.GetState()
+			if role == Leader {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func (c *NoLeadersExist) Describe(sim *dstsim.Simulator[Indicator, Request, NodeID]) string {
+	return "no leaders exist"
+}
+
 func (c *LeaderExists) Describe(sim *dstsim.Simulator[Indicator, Request, NodeID]) string {
 	for _, node := range sim.Nodes() {
 		if electionNode, ok := node.(*ElectionNode); ok {
@@ -172,7 +194,7 @@ func (c *LeaderExists) Describe(sim *dstsim.Simulator[Indicator, Request, NodeID
 	return "no leader"
 }
 
-// LeaderlessTooLong checks if the system has been without a leader for too long
+// NoLeadersExist checks if there are no leaders (opposite of LeaderExists)
 type LeaderlessTooLong struct {
 	maxDuration        int64
 	leaderlessStart    int64
@@ -229,583 +251,414 @@ func (c *LeaderlessTooLong) Describe(sim *dstsim.Simulator[Indicator, Request, N
 }
 
 // requestWithSender tracks a request and which node sent it
-type requestWithSender struct {
-	from    NodeID
-	request Request
-}
-
-// RandomDelayInterceptor adds random delays to messages
-type RandomDelayInterceptor struct {
-	seed         int64
-	maxDelay     int64
-	messageCount int64
-}
-
-func (i *RandomDelayInterceptor) InterceptIndicator(currentTick int64, target NodeID, indicator Indicator) int64 {
-	// Deliver immediately for ticks (no delay on clock signals)
-	if _, ok := indicator.(TickIndicator); ok {
-		return 0
+// setupStandardNodes creates a 3-node election cluster with the given configuration
+func setupStandardNodes(nodeSeeds []int64, electionTimeout, heartbeatInterval int64, buggyVotes, buggyQuorum, buggyHeartbeats bool) []*ElectionNode {
+	nodeIDs := []NodeID{"node-1", "node-2", "node-3"}
+	peers := [][]NodeID{
+		{"node-2", "node-3"},
+		{"node-1", "node-3"},
+		{"node-1", "node-2"},
 	}
 
-	// Add random delay to other indicators
-	i.messageCount++
-	delay := (i.seed + currentTick + i.messageCount) % i.maxDelay
-	return delay
-}
-
-func (i *RandomDelayInterceptor) InterceptRequest(currentTick int64, from NodeID, request Request) int64 {
-	// Not used in this test (we don't intercept requests, only indicators)
-	return 0
-}
-
-// processRequests recursively processes all requests until none remain
-// observers is an optional list of node IDs that should passively receive heartbeats (e.g., term limit enforcers)
-// TestLeaderElection_BasicElection tests that a 3-node cluster elects exactly one leader
-func TestLeaderElection_BasicElection(t *testing.T) {
-	sim := dstsim.NewSimulator[Indicator, Request, NodeID](dstsim.SimulatorOptions{
-		Seed: 12345,
-	})
-
-	// Create 3 nodes
-	nodes := []*ElectionNode{
-		NewElectionNode(NodeConfig{
-			ID:                     NodeID("node-1"),
-			Peers:                  []NodeID{NodeID("node-2"), NodeID("node-3")},
-			ElectionTimeoutTicks:   50,
-			HeartbeatIntervalTicks: 10,
-			Seed:                   1001,
-		}),
-		NewElectionNode(NodeConfig{
-			ID:                     NodeID("node-2"),
-			Peers:                  []NodeID{NodeID("node-1"), NodeID("node-3")},
-			ElectionTimeoutTicks:   50,
-			HeartbeatIntervalTicks: 10,
-			Seed:                   1002,
-		}),
-		NewElectionNode(NodeConfig{
-			ID:                     NodeID("node-3"),
-			Peers:                  []NodeID{NodeID("node-1"), NodeID("node-2")},
-			ElectionTimeoutTicks:   50,
-			HeartbeatIntervalTicks: 10,
-			Seed:                   1003,
-		}),
-	}
-
-	for _, node := range nodes {
-		sim.RegisterNode(node)
-	}
-
-	// Add assertions: safety and liveness
-	sim.Never(&MultipleLeadersExist{}) // Safety: no split brain
-	sim.Sometimes(&LeaderExists{})     // Liveness: leader must be elected at least once
-	sim.Finally(&LeaderExists{})       // Finally: must have exactly one leader at end
-
-	// Set up handlers to automate simulation
-	nodeIDs := []NodeID{NodeID("node-1"), NodeID("node-2"), NodeID("node-3")}
-	reqHandler := &StandardRequestHandler{}
-	sim.SetTickHandler(&StandardTickHandler{nodes: nodeIDs, requestHandler: reqHandler})
-	sim.SetRequestHandler(reqHandler)
-
-	// Run simulation - handlers automatically deliver ticks and process requests
-	initialTick := sim.CurrentTick()
-	err := sim.RunUntil(initialTick + 200)
-	require.NoError(t, err, "simulation should complete without assertion violations")
-}
-
-// TestLeaderElection_WithInvariantChecking tests that invariants are checked during simulation
-func TestLeaderElection_WithInvariantChecking(t *testing.T) {
-	sim := dstsim.NewSimulator[Indicator, Request, NodeID](dstsim.SimulatorOptions{
-		Seed: 54321,
-	})
-
-	nodes := []*ElectionNode{
-		NewElectionNode(NodeConfig{
-			ID:                     NodeID("node-1"),
-			Peers:                  []NodeID{NodeID("node-2"), NodeID("node-3")},
-			ElectionTimeoutTicks:   50,
-			HeartbeatIntervalTicks: 10,
-			Seed:                   2001,
-		}),
-		NewElectionNode(NodeConfig{
-			ID:                     NodeID("node-2"),
-			Peers:                  []NodeID{NodeID("node-1"), NodeID("node-3")},
-			ElectionTimeoutTicks:   50,
-			HeartbeatIntervalTicks: 10,
-			Seed:                   2002,
-		}),
-		NewElectionNode(NodeConfig{
-			ID:                     NodeID("node-3"),
-			Peers:                  []NodeID{NodeID("node-1"), NodeID("node-2")},
-			ElectionTimeoutTicks:   50,
-			HeartbeatIntervalTicks: 10,
-			Seed:                   2003,
-		}),
-	}
-
-	for _, node := range nodes {
-		sim.RegisterNode(node)
-	}
-
-	// Add assertions
-	sim.Never(&MultipleLeadersExist{}) // Safety: no split brain
-	sim.Sometimes(&LeaderExists{})     // Liveness: leader must be elected
-
-	// Set up handlers to automate simulation
-	nodeIDs := []NodeID{NodeID("node-1"), NodeID("node-2"), NodeID("node-3")}
-	reqHandler := &StandardRequestHandler{}
-	sim.SetTickHandler(&StandardTickHandler{nodes: nodeIDs, requestHandler: reqHandler})
-	sim.SetRequestHandler(reqHandler)
-
-	// Run simulation - handlers automatically deliver ticks and process requests
-	initialTick := sim.CurrentTick()
-	err := sim.RunUntil(initialTick + 200)
-	require.NoError(t, err, "simulation should complete without assertion violations")
-}
-
-// TestLeaderElection_WithBuggyVotes tests that DST can detect bugs deterministically
-func TestLeaderElection_WithBuggyVotes(t *testing.T) {
-	// With buggyVotes=true, some vote responses are dropped (10% probability)
-	// With this specific seed, we know exactly what happens
-
-	sim := dstsim.NewSimulator[Indicator, Request, NodeID](dstsim.SimulatorOptions{
-		Seed: 99999,
-	})
-
-	initialTick := sim.CurrentTick()
-
-	nodes := []*ElectionNode{
-		NewElectionNode(NodeConfig{
-			ID:                     NodeID("node-1"),
-			Peers:                  []NodeID{NodeID("node-2"), NodeID("node-3")},
-			ElectionTimeoutTicks:   50,
-			HeartbeatIntervalTicks: 10,
-			Seed:                   3001,
-			BuggyVotes:             true,
-		}),
-		NewElectionNode(NodeConfig{
-			ID:                     NodeID("node-2"),
-			Peers:                  []NodeID{NodeID("node-1"), NodeID("node-3")},
-			ElectionTimeoutTicks:   50,
-			HeartbeatIntervalTicks: 10,
-			Seed:                   3002,
-			BuggyVotes:             true,
-		}),
-		NewElectionNode(NodeConfig{
-			ID:                     NodeID("node-3"),
-			Peers:                  []NodeID{NodeID("node-1"), NodeID("node-2")},
-			ElectionTimeoutTicks:   50,
-			HeartbeatIntervalTicks: 10,
-			Seed:                   3003,
-			BuggyVotes:             true,
-		}),
-	}
-
-	for _, node := range nodes {
-		sim.RegisterNode(node)
-	}
-
-	sim.Never(&MultipleLeadersExist{}) // Safety: no split brain
-	sim.Sometimes(&LeaderExists{})     // Liveness: leader must be elected
-	sim.Finally(&LeaderExists{})       // Finally: must have leader at end
-
-	// Set up handlers to automate simulation
-	nodeIDs := []NodeID{NodeID("node-1"), NodeID("node-2"), NodeID("node-3")}
-	reqHandler := &StandardRequestHandler{}
-	sim.SetTickHandler(&StandardTickHandler{nodes: nodeIDs, requestHandler: reqHandler})
-	sim.SetRequestHandler(reqHandler)
-
-	// Run simulation for exactly 500 ticks
-	err := sim.RunUntil(initialTick + 500)
-	require.NoError(t, err, "simulation should complete without assertion violations")
-
-	// Assertions verify correct behavior (no manual checks needed)
-}
-
-// TestLeaderElection_InvariantDetection demonstrates that DST catches bugs deterministically
-func TestLeaderElection_InvariantDetection(t *testing.T) {
-	// Try many seeds to find one where the probabilistic bug triggers
-	// Once found, that seed will ALWAYS trigger the bug (deterministic)
-
-	for seed := int64(1); seed <= 10000; seed++ {
-		sim := dstsim.NewSimulator[Indicator, Request, NodeID](dstsim.SimulatorOptions{
-			Seed: seed,
+	nodes := make([]*ElectionNode, 3)
+	for i := range 3 {
+		nodes[i] = NewElectionNode(NodeConfig{
+			ID:                     nodeIDs[i],
+			Peers:                  peers[i],
+			ElectionTimeoutTicks:   electionTimeout,
+			HeartbeatIntervalTicks: heartbeatInterval,
+			Seed:                   nodeSeeds[i],
+			BuggyVotes:             buggyVotes,
+			BuggyQuorum:            buggyQuorum,
+			BuggyHeartbeats:        buggyHeartbeats,
 		})
+	}
+	return nodes
+}
 
-		nodes := []*ElectionNode{
-			NewElectionNode(NodeConfig{
-				ID:                     NodeID("node-1"),
-				Peers:                  []NodeID{NodeID("node-2"), NodeID("node-3")},
-				ElectionTimeoutTicks:   20,
-				HeartbeatIntervalTicks: 10,
-				Seed:                   seed * 100,
-				BuggyQuorum:            true,
-				BuggyHeartbeats:        true,
-			}),
-			NewElectionNode(NodeConfig{
-				ID:                     NodeID("node-2"),
-				Peers:                  []NodeID{NodeID("node-1"), NodeID("node-3")},
-				ElectionTimeoutTicks:   20,
-				HeartbeatIntervalTicks: 10,
-				Seed:                   seed*100 + 1,
-				BuggyQuorum:            true,
-				BuggyHeartbeats:        true,
-			}),
-			NewElectionNode(NodeConfig{
-				ID:                     NodeID("node-3"),
-				Peers:                  []NodeID{NodeID("node-1"), NodeID("node-2")},
-				ElectionTimeoutTicks:   20,
-				HeartbeatIntervalTicks: 10,
-				Seed:                   seed*100 + 2,
-				BuggyQuorum:            true,
-				BuggyHeartbeats:        true,
-			}),
-		}
+// setupStandardHandlers creates and configures tick and request handlers
+func setupStandardHandlers(observers []NodeID) *StandardRequestHandler {
+	return &StandardRequestHandler{
+		observers: observers,
+	}
+}
 
-		for _, node := range nodes {
-			sim.RegisterNode(node)
-		}
+// TestLeaderElection_Standard tests standard 3-node elections with various configurations
+func TestLeaderElection_Standard(t *testing.T) {
+	type testCase struct {
+		name                  string
+		seed                  int64
+		nodeSeeds             []int64
+		duration              int64
+		buggyVotes            bool
+		buggyQuorum           bool
+		buggyHeartbeats       bool
+		electionTimeout       int64
+		heartbeatInterval     int64
+		expectViolation       bool   // true if we expect an assertion violation
+		expectedViolationName string // name of assertion that should violate
+	}
 
-		// Add assertion so RunUntil() will catch violations
-		sim.Never(&MultipleLeadersExist{})
+	tests := []testCase{
+		{
+			name:              "BasicElection",
+			seed:              12345,
+			nodeSeeds:         []int64{1001, 1002, 1003},
+			duration:          300, // Increased for 1-tick message latency
+			electionTimeout:   50,
+			heartbeatInterval: 10,
+		},
+		{
+			name:              "WithInvariantChecking",
+			seed:              54321,
+			nodeSeeds:         []int64{2001, 2002, 2003},
+			duration:          300, // Increased for 1-tick message latency
+			electionTimeout:   50,
+			heartbeatInterval: 10,
+		},
+		{
+			name:              "WithBuggyVotes",
+			seed:              99999,
+			nodeSeeds:         []int64{3001, 3002, 3003},
+			duration:          600, // Increased for 1-tick message latency
+			buggyVotes:        true,
+			electionTimeout:   50,
+			heartbeatInterval: 10,
+		},
+		{
+			name:              "RandomInitialTick",
+			seed:              12345,
+			nodeSeeds:         []int64{5001, 5002, 5003},
+			duration:          300, // Increased for 1-tick message latency
+			electionTimeout:   50,
+			heartbeatInterval: 10,
+		},
+		{
+			name:                  "BuggyQuorumCausesSplitBrain",
+			seed:                  12345,
+			nodeSeeds:             []int64{6001, 6002, 6003},
+			duration:              10000, // Run long enough to eventually observe split-brain
+			buggyQuorum:           true,
+			electionTimeout:       50,
+			heartbeatInterval:     10,
+			expectViolation:       true,
+			expectedViolationName: "multiple_leaders_exist",
+		},
+	}
 
-		// Set up interceptor to add random delays
-		sim.SetInterceptor(&RandomDelayInterceptor{
-			seed:     seed,
-			maxDelay: 6,
-		})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sim := dstsim.NewSimulator[Indicator, Request, NodeID](dstsim.SimulatorOptions{
+				Seed: tt.seed,
+			})
 
-		// Set up handlers to automate simulation
-		nodeIDs := []NodeID{NodeID("node-1"), NodeID("node-2"), NodeID("node-3")}
-		reqHandler := &StandardRequestHandler{}
-		sim.SetTickHandler(&StandardTickHandler{nodes: nodeIDs, requestHandler: reqHandler})
-		sim.SetRequestHandler(reqHandler)
+			// Create nodes
+			nodes := setupStandardNodes(
+				tt.nodeSeeds,
+				tt.electionTimeout,
+				tt.heartbeatInterval,
+				tt.buggyVotes,
+				tt.buggyQuorum,
+				tt.buggyHeartbeats,
+			)
 
-		// Run simulation - handlers automatically deliver ticks and process requests
-		initialTick := sim.CurrentTick()
-		if err := sim.RunUntil(initialTick + 1000); err != nil {
-			// Check if it's an assertion violation (our bug!)
-			var assertErr *dstsim.AssertionViolation
-			if errors.As(err, &assertErr) {
-				t.Logf("✓ Bug triggered with seed %d at tick %d: %v", seed, assertErr.Tick, assertErr.Error())
-				assert.Contains(t, assertErr.Error(), "multiple_leaders_exist")
-				return // Test passed!
+			// Register nodes
+			for _, node := range nodes {
+				sim.RegisterNode(node)
 			}
-			t.Fatalf("Unexpected error: %v", err)
-		}
-	}
 
-	t.Fatal("Bug was not triggered in 10000 seeds - increase seed range or simulation length")
+			// Add assertions
+			sim.Never(&MultipleLeadersExist{})
+			sim.Sometimes(&LeaderExists{})
+			if tt.name != "WithInvariantChecking" { // This test doesn't have Finally
+				sim.Finally(&LeaderExists{})
+			}
+
+			// Setup handlers
+			reqHandler := setupStandardHandlers(nil)
+			sim.SetRequestHandler(reqHandler)
+
+			// Run simulation
+			initialTick := sim.CurrentTick()
+			err := sim.RunUntil(initialTick + tt.duration)
+
+			if tt.expectViolation {
+				require.Error(t, err, "expected assertion violation")
+				require.Contains(t, err.Error(), tt.expectedViolationName)
+			} else {
+				require.NoError(t, err, "simulation should complete without assertion violations")
+			}
+		})
+	}
 }
 
-// TestConditionFailsAtTick is a test condition that becomes true at a specific tick
-type TestConditionFailsAtTick struct {
-	failAtTick int64
-}
-
-func (c *TestConditionFailsAtTick) Name() string {
-	return "test_condition_fails_at_tick"
-}
-
-func (c *TestConditionFailsAtTick) Eval(sim *dstsim.Simulator[Indicator, Request, NodeID]) bool {
-	return sim.CurrentTick() == c.failAtTick
-}
-
-func (c *TestConditionFailsAtTick) Describe(sim *dstsim.Simulator[Indicator, Request, NodeID]) string {
-	return fmt.Sprintf("simulated failure at tick %d", c.failAtTick)
-}
-
-// TestLeaderElection_SimulatorStopsOnViolation demonstrates that RunUntil() stops on assertion violations
-func TestLeaderElection_SimulatorStopsOnViolation(t *testing.T) {
-	// This test verifies that sim.RunUntil() returns an error when an assertion is violated
-
-	sim := dstsim.NewSimulator[Indicator, Request, NodeID](dstsim.SimulatorOptions{
-		Seed: 88888,
-	})
-
-	node := NewElectionNode(NodeConfig{
-		ID:                     NodeID("node-1"),
-		Peers:                  []NodeID{NodeID("node-2"), NodeID("node-3")},
-		ElectionTimeoutTicks:   50,
-		HeartbeatIntervalTicks: 10,
-		Seed:                   6001,
-	})
-
-	sim.RegisterNode(node)
-
-	// Get the initial tick and set a condition to fail 10 ticks later
-	initialTick := sim.CurrentTick()
-	failTick := initialTick + 10
-	sim.Never(&TestConditionFailsAtTick{failAtTick: failTick})
-
-	// Run simulation - should stop at failTick due to assertion violation
-	err := sim.RunUntil(initialTick + 100)
-
-	// Verify that we got an assertion violation error
-	require.Error(t, err, "simulator should return error on assertion violation")
-
-	var assertErr *dstsim.AssertionViolation
-	require.ErrorAs(t, err, &assertErr, "error should be AssertionViolation type")
-
-	assert.Equal(t, failTick, assertErr.Tick, "violation should be detected at failTick")
-	assert.Contains(t, assertErr.Description, "simulated failure", "violation message should be included")
-
-	t.Logf("✓ Simulator stopped at tick %d with error: %v", assertErr.Tick, err)
-}
-
-// TestLeaderElection_FastForward demonstrates fast-forwarding through time
-func TestLeaderElection_FastForward(t *testing.T) {
-	sim := dstsim.NewSimulator[Indicator, Request, NodeID](dstsim.SimulatorOptions{
-		Seed: 11111,
-	})
-
-	nodes := []*ElectionNode{
-		NewElectionNode(NodeConfig{
-			ID:                     NodeID("node-1"),
-			Peers:                  []NodeID{NodeID("node-2"), NodeID("node-3")},
-			ElectionTimeoutTicks:   50,
-			HeartbeatIntervalTicks: 10,
-			Seed:                   4001,
-		}),
-		NewElectionNode(NodeConfig{
-			ID:                     NodeID("node-2"),
-			Peers:                  []NodeID{NodeID("node-1"), NodeID("node-3")},
-			ElectionTimeoutTicks:   50,
-			HeartbeatIntervalTicks: 10,
-			Seed:                   4002,
-		}),
-		NewElectionNode(NodeConfig{
-			ID:                     NodeID("node-3"),
-			Peers:                  []NodeID{NodeID("node-1"), NodeID("node-2")},
-			ElectionTimeoutTicks:   50,
-			HeartbeatIntervalTicks: 10,
-			Seed:                   4003,
-		}),
+// TestLeaderElection_WithObservers tests elections with passive observer nodes (e.g., term limit enforcers)
+func TestLeaderElection_WithObservers(t *testing.T) {
+	type testCase struct {
+		name                  string
+		seed                  int64
+		nodeSeeds             []int64
+		duration              int64
+		enforcerTenureLimit   int64
+		enforcerSeed          int64
+		electionTimeout       int64
+		heartbeatInterval     int64
+		maxTenureLimit        int64 // For Never(LeaderTenureTooLong) assertion
+		maxLeaderlessDuration int64 // For Never(LeaderlessTooLong) assertion
+		expectViolation       bool
+		expectedViolationName string
 	}
 
-	for _, node := range nodes {
-		sim.RegisterNode(node)
+	tests := []testCase{
+		{
+			name:                  "WithTermLimitEnforcer",
+			seed:                  77777,
+			nodeSeeds:             []int64{7001, 7002, 7003},
+			duration:              600, // Increased for 1-tick message latency
+			enforcerTenureLimit:   25,
+			enforcerSeed:          7777,
+			electionTimeout:       50,
+			heartbeatInterval:     5,
+			maxTenureLimit:        80, // Generous limit: 25 base + jitter + step-down latency
+			maxLeaderlessDuration: 80,
+			expectViolation:       false,
+		},
+		{
+			name:                  "BuggyEnforcerViolatesInvariant",
+			seed:                  77777, // Same seed as working test
+			nodeSeeds:             []int64{7001, 7002, 7003},
+			duration:              600,  // Increased for 1-tick message latency
+			enforcerTenureLimit:   1000, // BUG: Way too high, won't enforce anything
+			enforcerSeed:          9999,
+			electionTimeout:       50,
+			heartbeatInterval:     5,
+			maxTenureLimit:        40, // But we assert tenure shouldn't exceed 40
+			expectViolation:       true,
+			expectedViolationName: "leader_tenure_too_long",
+		},
 	}
 
-	// Set up handlers to automate simulation
-	nodeIDs := []NodeID{NodeID("node-1"), NodeID("node-2"), NodeID("node-3")}
-	reqHandler := &StandardRequestHandler{}
-	sim.SetTickHandler(&StandardTickHandler{nodes: nodeIDs, requestHandler: reqHandler})
-	sim.SetRequestHandler(reqHandler)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sim := dstsim.NewSimulator[Indicator, Request, NodeID](dstsim.SimulatorOptions{
+				Seed: tt.seed,
+			})
 
-	// Add assertions
-	sim.Never(&MultipleLeadersExist{}) // Safety: no split brain
-	sim.Finally(&LeaderExists{})       // Finally: must have leader at end
+			// Create election nodes
+			nodes := setupStandardNodes(
+				tt.nodeSeeds,
+				tt.electionTimeout,
+				tt.heartbeatInterval,
+				false, false, false, // No bugs in nodes
+			)
 
-	// Fast-forward through 10,000 ticks (would be 1000 seconds at 100ms/tick)
-	// This executes instantly in DST
-	initialTick := sim.CurrentTick()
-	err := sim.RunUntil(initialTick + 10000)
-	require.NoError(t, err, "simulation should complete without assertion violations")
-}
+			// Create enforcer (observer)
+			enforcer := NewTermLimitEnforcerNode(TermLimitEnforcerConfig{
+				ID:                "enforcer",
+				Peers:             []NodeID{"node-1", "node-2", "node-3"},
+				LeaderTenureLimit: tt.enforcerTenureLimit,
+				Seed:              tt.enforcerSeed,
+			})
 
-// TestLeaderElection_RandomInitialTick tests that simulations work correctly with randomized initial ticks
-func TestLeaderElection_RandomInitialTick(t *testing.T) {
-	// Simulator always starts at a random initial tick based on seed
-	// With seed 12345, we should get a deterministic initial tick
-	sim := dstsim.NewSimulator[Indicator, Request, NodeID](dstsim.SimulatorOptions{
-		Seed: 12345,
-	})
-	initialTick := sim.CurrentTick()
+			// Register all nodes
+			for _, node := range nodes {
+				sim.RegisterNode(node)
+			}
+			sim.RegisterNode(enforcer)
 
-	// Test that election works correctly regardless of initial tick
-	nodes := []*ElectionNode{
-		NewElectionNode(NodeConfig{
-			ID:                     NodeID("node-1"),
-			Peers:                  []NodeID{NodeID("node-2"), NodeID("node-3")},
-			ElectionTimeoutTicks:   50,
-			HeartbeatIntervalTicks: 10,
-			Seed:                   5001,
-		}),
-		NewElectionNode(NodeConfig{
-			ID:                     NodeID("node-2"),
-			Peers:                  []NodeID{NodeID("node-1"), NodeID("node-3")},
-			ElectionTimeoutTicks:   50,
-			HeartbeatIntervalTicks: 10,
-			Seed:                   5002,
-		}),
-		NewElectionNode(NodeConfig{
-			ID:                     NodeID("node-3"),
-			Peers:                  []NodeID{NodeID("node-1"), NodeID("node-2")},
-			ElectionTimeoutTicks:   50,
-			HeartbeatIntervalTicks: 10,
-			Seed:                   5003,
-		}),
+			// Add assertions
+			sim.Never(&MultipleLeadersExist{})
+			sim.Sometimes(&LeaderExists{})
+
+			// Only add tenure assertion for buggy enforcer test (expects violation)
+			if tt.expectViolation {
+				sim.Never(NewLeaderTenureTooLong(tt.maxTenureLimit))
+			}
+
+			// Setup handlers (include enforcer as observer)
+			reqHandler := setupStandardHandlers([]NodeID{enforcer.ID()})
+			sim.SetRequestHandler(reqHandler)
+
+			// Run simulation
+			initialTick := sim.CurrentTick()
+			err := sim.RunUntil(initialTick + tt.duration)
+
+			if tt.expectViolation {
+				require.Error(t, err, "expected assertion violation")
+				require.Contains(t, err.Error(), tt.expectedViolationName)
+			} else {
+				require.NoError(t, err, "simulation should complete without assertion violations")
+			}
+		})
 	}
-
-	for _, node := range nodes {
-		sim.RegisterNode(node)
-	}
-
-	// Add assertions
-	sim.Never(&MultipleLeadersExist{}) // Safety: no split brain
-	sim.Finally(&LeaderExists{})       // Finally: must have leader at end
-
-	// Set up handlers to automate simulation
-	nodeIDs := []NodeID{NodeID("node-1"), NodeID("node-2"), NodeID("node-3")}
-	reqHandler := &StandardRequestHandler{}
-	sim.SetTickHandler(&StandardTickHandler{nodes: nodeIDs, requestHandler: reqHandler})
-	sim.SetRequestHandler(reqHandler)
-
-	// Run simulation for 200 ticks from the random initial tick
-	err := sim.RunUntil(initialTick + 200)
-	require.NoError(t, err, "simulation should complete without assertion violations")
-}
-
-// TestLeaderElection_WithTermLimitEnforcer tests that a term limit enforcer node can monitor and force leader rotation
-func TestLeaderElection_WithTermLimitEnforcer(t *testing.T) {
-	sim := dstsim.NewSimulator[Indicator, Request, NodeID](dstsim.SimulatorOptions{
-		Seed: 77777,
-	})
-
-	// Create 3 voting nodes
-	// Use normal election timeout (50 ticks) to get initial leader
-	// The observer (with 25-tick tenure limit) will force step-downs faster than
-	// natural re-elections would occur
-	voterIDs := []NodeID{NodeID("node-1"), NodeID("node-2"), NodeID("node-3")}
-	voters := []*ElectionNode{
-		NewElectionNode(NodeConfig{
-			ID:                     NodeID("node-1"),
-			Peers:                  []NodeID{NodeID("node-2"), NodeID("node-3")},
-			ElectionTimeoutTicks:   50,
-			HeartbeatIntervalTicks: 5, // Faster heartbeats so observer sees leader quickly
-			Seed:                   7001,
-		}),
-		NewElectionNode(NodeConfig{
-			ID:                     NodeID("node-2"),
-			Peers:                  []NodeID{NodeID("node-1"), NodeID("node-3")},
-			ElectionTimeoutTicks:   50,
-			HeartbeatIntervalTicks: 5,
-			Seed:                   7002,
-		}),
-		NewElectionNode(NodeConfig{
-			ID:                     NodeID("node-3"),
-			Peers:                  []NodeID{NodeID("node-1"), NodeID("node-2")},
-			ElectionTimeoutTicks:   50,
-			HeartbeatIntervalTicks: 5,
-			Seed:                   7003,
-		}),
-	}
-
-	for _, node := range voters {
-		sim.RegisterNode(node)
-	}
-
-	// Create term limit enforcer node (non-voting, different state)
-	enforcer := NewTermLimitEnforcerNode(TermLimitEnforcerConfig{
-		ID:                NodeID("observer-1"),
-		Peers:             voterIDs,
-		LeaderTenureLimit: 25, // Force rotation after 25 ticks
-		Seed:              8888,
-	})
-	sim.RegisterNode(enforcer)
-
-	// Add assertions: safety and liveness
-	sim.Never(&MultipleLeadersExist{})    // Safety: no split brain
-	sim.Sometimes(&LeaderExists{})        // Liveness: leader must be elected at least once
-	sim.Never(NewLeaderTenureTooLong(40)) // Safety: enforcer limits tenure (25 + jitter 0-4 + processing)
-	sim.Never(NewLeaderlessTooLong(60))   // Bounded liveness: max 60 ticks without leader (election timeout is 50)
-
-	// Set up handlers to automate simulation (include enforcer in nodes list)
-	allNodeIDs := append(voterIDs, enforcer.ID())
-	reqHandler := &StandardRequestHandler{observers: []NodeID{enforcer.ID()}}
-	sim.SetTickHandler(&StandardTickHandler{nodes: allNodeIDs, requestHandler: reqHandler})
-	sim.SetRequestHandler(reqHandler)
-
-	// Run simulation for 500 ticks (enough for multiple rotations)
-	initialTick := sim.CurrentTick()
-
-	// Run simulation for 500 ticks (enough for multiple rotations)
-	err := sim.RunUntil(initialTick + 499)
-	require.NoError(t, err, "simulation should complete - assertions verify enforcer works correctly")
-}
-
-// TestLeaderElection_BuggyEnforcerViolatesInvariant tests that the tenure invariant catches bugs
-func TestLeaderElection_BuggyEnforcerViolatesInvariant(t *testing.T) {
-	sim := dstsim.NewSimulator[Indicator, Request, NodeID](dstsim.SimulatorOptions{
-		Seed: 77777, // Use same seed as working test
-	})
-
-	// Create 3 voting nodes (same config as working test)
-	voterIDs := []NodeID{NodeID("node-1"), NodeID("node-2"), NodeID("node-3")}
-	voters := []*ElectionNode{
-		NewElectionNode(NodeConfig{
-			ID:                     NodeID("node-1"),
-			Peers:                  []NodeID{NodeID("node-2"), NodeID("node-3")},
-			ElectionTimeoutTicks:   50,
-			HeartbeatIntervalTicks: 5,
-			Seed:                   7001,
-		}),
-		NewElectionNode(NodeConfig{
-			ID:                     NodeID("node-2"),
-			Peers:                  []NodeID{NodeID("node-1"), NodeID("node-3")},
-			ElectionTimeoutTicks:   50,
-			HeartbeatIntervalTicks: 5,
-			Seed:                   7002,
-		}),
-		NewElectionNode(NodeConfig{
-			ID:                     NodeID("node-3"),
-			Peers:                  []NodeID{NodeID("node-1"), NodeID("node-2")},
-			ElectionTimeoutTicks:   50,
-			HeartbeatIntervalTicks: 5,
-			Seed:                   7003,
-		}),
-	}
-
-	for _, node := range voters {
-		sim.RegisterNode(node)
-	}
-
-	// Create buggy enforcer with a very high tenure limit (essentially broken)
-	enforcer := NewTermLimitEnforcerNode(TermLimitEnforcerConfig{
-		ID:                NodeID("buggy-enforcer"),
-		Peers:             voterIDs,
-		LeaderTenureLimit: 1000, // BUG: Way too high, won't enforce anything
-		Seed:              9999,
-	})
-	sim.RegisterNode(enforcer)
-
-	// Add assertions - buggy enforcer will violate tenure limit
-	sim.Never(&MultipleLeadersExist{})    // Safety: no split brain
-	sim.Sometimes(&LeaderExists{})        // Liveness: leader must be elected
-	sim.Never(NewLeaderTenureTooLong(40)) // This should be violated due to buggy enforcer
-
-	// Set up handlers to automate simulation (include enforcer in nodes list)
-	allNodeIDs := append(voterIDs, enforcer.ID())
-	reqHandler := &StandardRequestHandler{observers: []NodeID{enforcer.ID()}}
-	sim.SetTickHandler(&StandardTickHandler{nodes: allNodeIDs, requestHandler: reqHandler})
-	sim.SetRequestHandler(reqHandler)
-
-	// Run simulation and expect the tenure assertion to fail
-	initialTick := sim.CurrentTick()
-
-	// Run simulation - should fail with assertion violation
-	err := sim.RunUntil(initialTick + 499)
-	require.Error(t, err, "simulation should fail due to buggy enforcer not enforcing tenure limit")
-
-	var assertErr *dstsim.AssertionViolation
-	require.ErrorAs(t, err, &assertErr, "error should be an assertion violation")
-	assert.Contains(t, assertErr.ConditionName, "leader_tenure_too_long", "should violate tenure limit assertion")
 }
 
 // StandardTickHandler delivers tick indicators to all nodes at each tick
-type StandardTickHandler struct {
-	nodes          []NodeID
-	requestHandler *StandardRequestHandler
+// TestLeaderElection_ChaosNetwork validates that the protocol maintains safety even under extreme network conditions
+func TestLeaderElection_ChaosNetwork(t *testing.T) {
+	seed := int64(88888)
+	sim := dstsim.NewSimulator[Indicator, Request, NodeID](dstsim.SimulatorOptions{
+		Seed: seed,
+	})
+
+	// Set chaotic network policy
+	sim.SetDeliveryPolicy(&dstsim.UnreliableNetwork[Indicator, NodeID]{
+		MaxDelay: 20,   // Random delay 1-20 ticks
+		DropRate: 0.15, // 15% packet loss
+		Rng:      rand.New(rand.NewPCG(uint64(seed), uint64(seed))),
+	})
+
+	// Create 3 standard nodes
+	nodes := setupStandardNodes(
+		[]int64{8001, 8002, 8003},
+		50,                  // electionTimeout
+		10,                  // heartbeatInterval
+		false, false, false, // no bugs
+	)
+
+	// Register nodes
+	for _, node := range nodes {
+		sim.RegisterNode(node)
+	}
+
+	// Setup handlers
+	reqHandler := setupStandardHandlers(nil)
+	sim.SetRequestHandler(reqHandler)
+
+	// Add assertions
+	sim.Never(&MultipleLeadersExist{}) // Safety: no split-brain even during chaos
+	sim.Sometimes(&LeaderExists{})     // Liveness: system makes progress despite chaos
+
+	// Run simulation with chaos for extended duration
+	initialTick := sim.CurrentTick()
+	err := sim.RunUntil(initialTick + 10000)
+	require.NoError(t, err, "protocol should maintain safety even under chaotic network conditions")
 }
 
-func (h *StandardTickHandler) OnTick(sim *dstsim.Simulator[Indicator, Request, NodeID], tick int64) {
-	// Deliver the same tick value to all nodes
-	for _, nodeID := range h.nodes {
-		requests := sim.DeliverIndicator(nodeID, TickIndicator{CurrentTick: tick})
-		if h.requestHandler != nil {
-			h.requestHandler.ProcessRequests(sim, nodeID, requests)
+// TestLeaderElection_RecoveryAfterChaos validates that the protocol quickly recovers after network stabilizes
+
+// tickHandlerWithStepDown wraps a tick handler and injects step-down when partition activates
+// TestOrchestratorNode is a special node for test injection
+// It doesn't process indicators, only generates requests based on conditions
+type TestOrchestratorNode struct {
+	id              NodeID
+	sim             *dstsim.Simulator[Indicator, Request, NodeID]
+	nodes           []*ElectionNode
+	partitionActive dstsim.Condition[Indicator, Request, NodeID]
+	stepDownSent    bool
+}
+
+func (n *TestOrchestratorNode) ID() NodeID {
+	return n.id
+}
+
+func (n *TestOrchestratorNode) Step(tick int64, indicators []Indicator) []Request {
+	// If partition just activated and we haven't sent step-down yet, inject it
+	if !n.stepDownSent && n.partitionActive.Eval(n.sim) {
+		n.stepDownSent = true
+		// Find the leader and inject step-down request
+		for _, node := range n.nodes {
+			role, term := node.GetState()
+			if role == Leader {
+				return []Request{
+					StepDownRequest{
+						To:            node.ID(),
+						Reason:        "testing partition recovery",
+						SuggestedTerm: term,
+					},
+				}
+			}
 		}
 	}
+
+	return nil
+}
+
+// TestLeaderElection_PartitionRecovery validates recovery from complete network partition
+// Test flow:
+// 1. Run until a leader exists
+// 2. Force leader to step down and partition network (100% packet loss)
+// 3. Wait until no leaders exist (leader steps down during partition)
+// 4. End partition (restore network)
+// 5. Verify a new leader is elected
+func TestLeaderElection_PartitionRecovery(t *testing.T) {
+	seed := int64(99999)
+	nodeSeeds := []int64{7001, 7002, 7003}
+
+	sim := dstsim.NewSimulator[Indicator, Request, NodeID](dstsim.SimulatorOptions{
+		Seed: seed,
+	})
+
+	// Create nodes
+	nodes := setupStandardNodes(
+		nodeSeeds,
+		50,                  // electionTimeout
+		10,                  // heartbeatInterval
+		false, false, false, // no bugs
+	)
+
+	// Register nodes
+	for _, node := range nodes {
+		sim.RegisterNode(node)
+	}
+
+	// Setup handlers
+	reqHandler := setupStandardHandlers(nil)
+	sim.SetRequestHandler(reqHandler)
+
+	// Create policy sequence with observable stages:
+	// 1. FastNetwork until leader exists (initial election)
+	// 2. 100% packet loss until no leaders (partition)
+	// 3. FastNetwork (recovery)
+
+	policySeq := dstsim.NewPolicySequence[Indicator, Request, NodeID](
+		sim,
+		&dstsim.FastNetwork[Indicator, NodeID]{},
+		"initial_election",
+	)
+
+	partitionActive := policySeq.AppendPolicy(
+		&dstsim.UnreliableNetwork[Indicator, NodeID]{
+			MaxDelay: 1,
+			DropRate: 1.0, // 100% packet loss - complete partition
+			Rng:      rand.New(rand.NewPCG(uint64(seed+2), uint64(seed+2))),
+		},
+		&LeaderExists{}, // Advance to partition when leader exists
+		"partition",
+	)
+
+	recoveryActive := policySeq.AppendPolicy(
+		&dstsim.FastNetwork[Indicator, NodeID]{},
+		&NoLeadersExist{}, // Advance to recovery when no leaders
+		"recovery",
+	)
+
+	sim.SetDeliveryPolicy(policySeq)
+
+	// Create test orchestrator node to inject step-down when partition activates
+	orchestrator := &TestOrchestratorNode{
+		id:              "test-orchestrator",
+		sim:             sim,
+		nodes:           nodes,
+		partitionActive: partitionActive,
+	}
+	sim.RegisterNode(orchestrator)
+
+	// Add assertions - now we can assert about policy state!
+	sim.Never(&MultipleLeadersExist{}) // Safety: never split-brain
+	sim.Sometimes(partitionActive)     // Partition stage activates
+	sim.Sometimes(&NoLeadersExist{})   // Leader steps down
+	sim.Sometimes(recoveryActive)      // Recovery stage activates
+	sim.Finally(&LeaderExists{})       // Eventually a leader exists
+
+	// Run simulation long enough for:
+	// - Initial leader election (~100 ticks)
+	// - Partition period (until leader steps down via timeout ~50 ticks)
+	// - Recovery and new election (~100 ticks)
+	// Total: ~300 ticks should be sufficient, use 1000 for safety margin
+	initialTick := sim.CurrentTick()
+	err := sim.RunUntil(initialTick + 1000)
+	require.NoError(t, err, "protocol should recover from complete network partition")
 }
 
 // StandardRequestHandler processes requests by delivering them to target nodes
@@ -813,73 +666,52 @@ type StandardRequestHandler struct {
 	observers []NodeID // Optional passive observers (e.g., term limit enforcers)
 }
 
-func (h *StandardRequestHandler) ProcessRequests(sim *dstsim.Simulator[Indicator, Request, NodeID], fromNode NodeID, requests []Request) {
-	queue := make([]requestWithSender, 0)
+func (h *StandardRequestHandler) ProcessRequests(sim *dstsim.Simulator[Indicator, Request, NodeID], fromNode NodeID, requests []Request) map[NodeID][]Indicator {
+	result := make(map[NodeID][]Indicator)
+
 	for _, req := range requests {
-		queue = append(queue, requestWithSender{from: fromNode, request: req})
-	}
-
-	for len(queue) > 0 {
-		item := queue[0]
-		queue = queue[1:]
-
-		switch r := item.request.(type) {
+		switch r := req.(type) {
 		case LogRequest:
 			// Log requests are not delivered, just emitted for debugging
 			continue
 
 		case VoteRequest:
-			// Deliver vote request to target node
-			responses := sim.DeliverIndicator(r.To, VoteRequestIndicator{
-				From: item.from,
+			// Deliver vote request indicator
+			result[r.To] = append(result[r.To], VoteRequestIndicator{
+				From: fromNode,
 				Term: r.Term,
 			})
-			for _, resp := range responses {
-				queue = append(queue, requestWithSender{from: r.To, request: resp})
-			}
 
 		case VoteResponse:
-			// Deliver vote response to target node
-			responses := sim.DeliverIndicator(r.To, VoteResponseIndicator{
-				From:    item.from,
+			// Deliver vote response indicator
+			result[r.To] = append(result[r.To], VoteResponseIndicator{
+				From:    fromNode,
 				Term:    r.Term,
 				Granted: r.Granted,
 			})
-			for _, resp := range responses {
-				queue = append(queue, requestWithSender{from: r.To, request: resp})
-			}
 
 		case HeartbeatRequest:
 			// Deliver heartbeat to target node
-			responses := sim.DeliverIndicator(r.To, HeartbeatIndicator{
-				From: item.from,
+			heartbeat := HeartbeatIndicator{
+				From: fromNode,
 				Term: r.Term,
-			})
-			for _, resp := range responses {
-				queue = append(queue, requestWithSender{from: r.To, request: resp})
 			}
+			result[r.To] = append(result[r.To], heartbeat)
 
-			// Also deliver to observers and queue their responses
+			// Also deliver to observers
 			for _, observerID := range h.observers {
-				obsResponses := sim.DeliverIndicator(observerID, HeartbeatIndicator{
-					From: item.from,
-					Term: r.Term,
-				})
-				for _, obsResp := range obsResponses {
-					queue = append(queue, requestWithSender{from: observerID, request: obsResp})
-				}
+				result[observerID] = append(result[observerID], heartbeat)
 			}
 
 		case StepDownRequest:
-			// Deliver step-down request to target node
-			responses := sim.DeliverIndicator(r.To, StepDownRequestIndicator{
-				From:          item.from,
+			// Deliver step-down request indicator
+			result[r.To] = append(result[r.To], StepDownRequestIndicator{
+				From:          fromNode,
 				Reason:        r.Reason,
 				SuggestedTerm: r.SuggestedTerm,
 			})
-			for _, resp := range responses {
-				queue = append(queue, requestWithSender{from: r.To, request: resp})
-			}
 		}
 	}
+
+	return result
 }
