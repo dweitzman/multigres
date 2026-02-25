@@ -18,11 +18,37 @@ package dstsim
 // Production code should only depend on node.go for the Node interface.
 //
 // TODO: Add crash/restart simulation capabilities for testing fault tolerance.
-// Many distributed systems bugs involve crashes - nodes need to be able to:
-// - Crash at arbitrary ticks (lose in-memory state)
-// - Restart at arbitrary ticks (reload persistent state)
-// - Have separate persistent vs ephemeral state
-// This would enable testing crash recovery, leader election during crashes, etc.
+//
+// Research into TigerBeetle, FoundationDB, etcd-raft, and Jepsen suggests three approaches:
+//
+// RECOMMENDED: Storage-Based (etcd-raft inspired) - matches dstsim's explicit philosophy
+// - Add CrashableNode[I, R, ID, S] interface extending Node with:
+//   - GetPersistentState() S - returns state that survives crashes
+//   - LoadPersistentState(state S) - restores state after restart
+// - Add simulator methods: CrashNode(id), RestartNode(id), IsNodeCrashed(id)
+// - No breaking changes (optional interface, existing nodes work unchanged)
+// - Type-safe (generic S for persistent state), explicit state boundaries
+// - Example: type RaftPersistentState struct { Term int64; VotedFor NodeID; Log []LogEntry }
+//
+// Alternative: Policy-Based (FoundationDB/Jepsen inspired)
+// - Add CrashPolicy interface (like IndicatorDeliveryPolicy but for lifecycle)
+// - Automatic crash injection via policy (probabilistic or condition-based)
+// - Pro: Declarative, matches existing patterns
+// - Con: Requires implicit state serialization (not Go-idiomatic)
+//
+// Alternative: Hybrid (explicit state + optional policy)
+// - Combine CrashableNode interface with optional CrashPolicy
+// - Supports both precise manual crashes and automatic chaos injection
+// - Pro: Flexible, gradual adoption
+// - Con: Larger API surface, potential confusion
+//
+// Implementation notes for Storage-Based approach:
+// - Phase 1: Add CrashableNode interface, CrashNode/RestartNode methods
+// - Phase 2: Solve node factory problem (how to instantiate on restart)
+//   - Option A: RegisterCrashableNode(node, factory func)
+//   - Option B: Node provides Restart(state S) method
+// - Phase 3: Add crash-aware conditions (NodeCrashed, AllNodesOperational)
+// - Phase 4: Update leader_election example with crash scenarios
 //
 // TODO: Review API for footguns and add factory methods where needed:
 // - UntilPolicy requires manual Sim reference (easy to forget, nil panic)
