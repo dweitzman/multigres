@@ -16,7 +16,6 @@ package dstsim_test
 
 import (
 	"bytes"
-	"fmt"
 	"regexp"
 	"testing"
 
@@ -178,11 +177,9 @@ func TestDumpRecentTraceFormatting(t *testing.T) {
 	err := sim.RunFor(3)
 	require.NoError(t, err)
 
-	// Get the last 2 tick numbers for assertion
+	// Get the trace to verify tick numbers
 	trace := sim.Trace()
 	require.Equal(t, 3, len(trace), "should have exactly 3 ticks in trace (ran for 3 ticks)")
-	tick1 := trace[1].Tick
-	tick2 := trace[2].Tick
 
 	// Dump the last 2 ticks
 	var buf bytes.Buffer
@@ -190,18 +187,18 @@ func TestDumpRecentTraceFormatting(t *testing.T) {
 
 	output := buf.String()
 
-	// Assert exact expected output with actual tick numbers
-	expected := fmt.Sprintf(`
-=== Recent Trace (last 2 ticks, %d-%d) ===
+	// With seed 42, simulator starts at tick 619289, so last 2 ticks are 619290-619291
+	expected := `
+=== Recent Trace (last 2 ticks, 619290-619291) ===
 
---- Tick %d ---
+--- Tick 619290 ---
 Node activity:
   1 received 1 indicators
     <- int 1
   1 generated 1 requests
     -> string tick
 
---- Tick %d ---
+--- Tick 619291 ---
 Node activity:
   1 received 1 indicators
     <- int 1
@@ -209,7 +206,65 @@ Node activity:
     -> string tick
 
 === End of Trace ===
-`, tick1, tick2, tick1, tick2)
+`
 
-	require.Equal(t, expected, output, "trace output should match expected format exactly")
+	require.Equal(t, expected, output, "trace output should match expected format with actual tick numbers")
+}
+
+// FixedDelayPolicy delivers all indicators with a fixed delay
+type FixedDelayPolicy struct {
+	Delay int64
+}
+
+func (p *FixedDelayPolicy) ScheduleDelivery(currentTick int64, fromNode int, target int, indicator int) (bool, int64) {
+	return true, p.Delay
+}
+
+// TestEmptyTicksAreSkipped verifies that ticks with no activity are not included in the trace
+func TestEmptyTicksAreSkipped(t *testing.T) {
+	// Use a 2-tick delivery delay policy
+	deliveryPolicy := &FixedDelayPolicy{Delay: 2}
+
+	sim := dstsim.NewSimulator[int, string, int](dstsim.SimulatorOptions{
+		Seed:           123,
+		TraceRetention: 10,
+	})
+
+	// Set delivery policy after creation
+	sim.SetDeliveryPolicy(deliveryPolicy)
+
+	// Create a node that generates activity when it receives indicators (or on first step)
+	node := &TickingNode{id: 1}
+	sim.RegisterNode(node)
+
+	// Handler that sends indicators back to the node
+	handler := &TickRequestHandler{}
+	sim.SetRequestHandler(handler)
+
+	// Run for 5 ticks total:
+	// Tick 0: node's first step generates request "tick" (has activity) -> delivery scheduled for tick 2
+	// Tick 1: empty (no activity, should be skipped)
+	// Tick 2: indicator delivered, node generates request (has activity) -> delivery scheduled for tick 4
+	// Tick 3: empty (no activity, should be skipped)
+	// Tick 4: indicator delivered, node generates request (has activity)
+	err := sim.RunFor(5)
+	require.NoError(t, err)
+
+	// Trace should have 3 entries (ticks 0, 2, 4) - ticks 1 and 3 should be skipped
+	trace := sim.Trace()
+	require.Equal(t, 3, len(trace), "should have 3 ticks in trace (empty ticks 1 and 3 are skipped)")
+
+	// Verify tick numbers are 2 apart (with seed 123, simulator starts at tick 852296)
+	tick0 := trace[0].Tick
+	tick2 := trace[1].Tick
+	tick4 := trace[2].Tick
+
+	require.Equal(t, tick0+2, tick2, "second trace entry should be 2 ticks after first (tick 1 skipped)")
+	require.Equal(t, tick0+4, tick4, "third trace entry should be 4 ticks after first (tick 3 skipped)")
+
+	// Verify each recorded tick has activity
+	for i, tickTrace := range trace {
+		require.Equal(t, 1, len(tickTrace.NodeSteps), "tick %d should have node activity", i)
+		require.Contains(t, tickTrace.NodeSteps, 1, "tick %d should have node 1 step", i)
+	}
 }
