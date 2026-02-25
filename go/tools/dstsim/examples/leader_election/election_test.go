@@ -16,9 +16,7 @@ package leader_election
 
 import (
 	"fmt"
-	"io"
 	"math/rand/v2"
-	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -368,13 +366,8 @@ func TestLeaderElection_Standard(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var debugLog io.Writer
-			if tt.name == "BuggyQuorumCausesSplitBrain" && testing.Verbose() {
-				debugLog = os.Stdout
-			}
 			sim := dstsim.NewSimulator[Indicator, Request, NodeID](dstsim.SimulatorOptions{
-				Seed:           tt.seed,
-				DebugLogWriter: debugLog,
+				Seed: tt.seed,
 			})
 
 			// Create nodes
