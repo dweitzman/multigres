@@ -409,8 +409,8 @@ func TestLeaderElection_Standard(t *testing.T) {
 			}
 
 			// Run simulation
-			initialTick := sim.CurrentTick()
-			err := sim.RunUntil(initialTick + tt.duration)
+
+			err := sim.RunFor(tt.duration)
 
 			if tt.expectViolation {
 				require.Error(t, err, "expected assertion violation")
@@ -510,8 +510,8 @@ func TestLeaderElection_WithObservers(t *testing.T) {
 			sim.SetRequestHandler(reqHandler)
 
 			// Run simulation
-			initialTick := sim.CurrentTick()
-			err := sim.RunUntil(initialTick + tt.duration)
+
+			err := sim.RunFor(tt.duration)
 
 			if tt.expectViolation {
 				require.Error(t, err, "expected assertion violation")
@@ -560,8 +560,8 @@ func TestLeaderElection_ChaosNetwork(t *testing.T) {
 	sim.Sometimes(&LeaderExists{})     // Liveness: system makes progress despite chaos
 
 	// Run simulation with chaos for extended duration
-	initialTick := sim.CurrentTick()
-	err := sim.RunUntil(initialTick + 10000)
+
+	err := sim.RunFor(10000)
 	require.NoError(t, err, "protocol should maintain safety even under chaotic network conditions")
 }
 
@@ -636,11 +636,10 @@ func TestLeaderElection_StepDown(t *testing.T) {
 
 	// Assertions
 	sim.Never(&MultipleLeadersExist{})
-	sim.Sometimes(leaderElected) // Leader gets elected at some point
-	sim.Finally(&LeaderExists{}) // Eventually a leader exists (after step-down, new leader elected)
 
-	err := sim.RunUntil(sim.CurrentTick() + 300)
-	require.NoError(t, err)
+	// Run until a leader is re-elected after step-down (or timeout after 300 ticks)
+	err := sim.RunUntil(&LeaderExists{}, 300)
+	require.NoError(t, err, "leader should be re-elected after step-down within 300 ticks")
 }
 
 // TestLeaderElection_PartitionRecovery validates recovery from network partition
@@ -715,7 +714,7 @@ func TestLeaderElection_PartitionRecovery(t *testing.T) {
 	sim.Sometimes(dstsim.And(recoveryActive, &LeaderExists{})) // During recovery, leader exists
 	sim.Finally(&LeaderExists{})                               // Eventually a leader exists
 
-	err := sim.RunUntil(sim.CurrentTick() + 500)
+	err := sim.RunFor(500)
 	require.NoError(t, err)
 }
 

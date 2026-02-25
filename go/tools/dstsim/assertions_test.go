@@ -189,8 +189,7 @@ func TestAssertions_Comprehensive(t *testing.T) {
 				sim.EventuallyAlways(cond)
 			}
 
-			initialTick := sim.CurrentTick()
-			err := sim.RunUntil(initialTick + int64(tt.numTicks))
+			err := sim.RunFor(int64(tt.numTicks))
 
 			if tt.shouldPass {
 				require.NoError(t, err, "assertion should be satisfied")
@@ -215,8 +214,7 @@ func TestAssertions_MultipleConditions(t *testing.T) {
 	sim.Sometimes(&CounterEquals{nodeID: 1, value: 25})    // Should hit 25 at some point
 	sim.Finally(&CounterGreaterThan{nodeID: 1, value: 40}) // Should be > 40 at end
 
-	initialTick := sim.CurrentTick()
-	err := sim.RunUntil(initialTick + 50)
+	err := sim.RunFor(50)
 
 	require.NoError(t, err, "all assertions should be satisfied")
 }
@@ -268,8 +266,8 @@ func TestRelativeTickCondition(t *testing.T) {
 
 			if tt.runUntilOffset > 0 {
 				// Run simulation for specified ticks
-				initialTick := sim.CurrentTick()
-				_ = sim.RunUntil(initialTick + tt.runUntilOffset)
+
+				_ = sim.RunFor(tt.runUntilOffset)
 
 				// Check condition
 				result := cond.Eval(sim)
@@ -350,8 +348,7 @@ func TestAndCombinator(t *testing.T) {
 			// Use Sometimes assertion - will pass if condition is true at least once
 			sim.Sometimes(andCond)
 
-			initialTick := sim.CurrentTick()
-			err := sim.RunUntil(initialTick + tt.runTicks)
+			err := sim.RunFor(tt.runTicks)
 
 			if tt.shouldPass {
 				require.NoError(t, err, "And condition should be satisfied")
@@ -471,8 +468,7 @@ func TestPolicySequence(t *testing.T) {
 				sim.Sometimes(stage2Active)
 			}
 
-			initialTick := sim.CurrentTick()
-			err := sim.RunUntil(initialTick + tt.runTicks)
+			err := sim.RunFor(tt.runTicks)
 
 			require.NoError(t, err, "policy sequence assertions should be satisfied")
 		})

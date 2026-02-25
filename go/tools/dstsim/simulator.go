@@ -568,9 +568,21 @@ func (s *Simulator[I, R, ID]) logTickSummary(log *tickLog[I, R, ID]) {
 	}
 }
 
-// RunUntil runs the simulation until the specified tick
-func (s *Simulator[I, R, ID]) RunUntil(maxTick int64) error {
-	for s.currentTick <= maxTick {
+// RunUntil runs the simulation until the condition becomes true, or maxTicks have elapsed
+// Returns an error if maxTicks is reached without the condition becoming true
+// Set maxTicks to 0 for unlimited ticks
+func (s *Simulator[I, R, ID]) RunUntil(stopCondition Condition[I, R, ID], maxTicks int64) error {
+	startTick := s.currentTick
+	for {
+		// Check if we should stop before processing this tick
+		if stopCondition.Eval(s) {
+			return s.checkDeferredProperties()
+		}
+
+		// Check if we've exceeded max ticks
+		if maxTicks > 0 && (s.currentTick-startTick) >= maxTicks {
+			return fmt.Errorf("simulation reached max ticks (%d) without condition '%s' becoming true", maxTicks, stopCondition.Name())
+		}
 		// Initialize tick log if debug logging is enabled
 		if s.debugLogWriter != nil {
 			s.currentTickLog = &tickLog[I, R, ID]{
@@ -705,9 +717,33 @@ func (s *Simulator[I, R, ID]) RunUntil(maxTick int64) error {
 
 		s.currentTick++
 	}
+}
 
-	// After simulation ends, check "Sometimes" and "Eventually" properties
-	return s.checkDeferredProperties()
+// RunFor is a convenience helper that runs the simulation for exactly N more ticks
+func (s *Simulator[I, R, ID]) RunFor(ticks int64) error {
+	return s.RunUntil(TickCondition[I, R, ID](ticks), ticks)
+}
+
+// AbsoluteTickReached is a condition that becomes true when the current tick reaches a specific value
+type AbsoluteTickReached[I any, R any, ID comparable] struct {
+	targetTick int64
+}
+
+func (c *AbsoluteTickReached[I, R, ID]) Eval(sim *Simulator[I, R, ID]) bool {
+	return sim.CurrentTick() >= c.targetTick
+}
+
+func (c *AbsoluteTickReached[I, R, ID]) Name() string {
+	return fmt.Sprintf("tick_reached_%d", c.targetTick)
+}
+
+func (c *AbsoluteTickReached[I, R, ID]) Describe(sim *Simulator[I, R, ID]) string {
+	return fmt.Sprintf("current tick: %d, target: %d", sim.CurrentTick(), c.targetTick)
+}
+
+// AbsoluteTick creates a condition that becomes true when the simulation reaches a specific tick
+func AbsoluteTick[I any, R any, ID comparable](tick int64) *AbsoluteTickReached[I, R, ID] {
+	return &AbsoluteTickReached[I, R, ID]{targetTick: tick}
 }
 
 // checkDeferredProperties checks assertions that are evaluated at the end of simulation
