@@ -14,6 +14,15 @@
 
 package dstsim
 
+// Restartable is an optional interface nodes can implement to simulate crash-restart behavior.
+// If a node implements Restartable, the simulator calls Restart() when RestartNode() is called,
+// giving the node an opportunity to clear ephemeral state as if recovering from a crash while
+// keeping any state that would survive a real restart (e.g., data written to disk).
+// Nodes that do not implement Restartable are simply resumed with their state intact (pause semantics).
+type Restartable interface {
+	Restart()
+}
+
 // Node is a pure state machine for distributed protocols
 // I = Indicator type (protocol-specific, what the node observes)
 // R = Request type (protocol-specific, what the node wants to do)

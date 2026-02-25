@@ -17,38 +17,11 @@ package dstsim
 // This file contains test-only simulation infrastructure.
 // Production code should only depend on node.go for the Node interface.
 //
-// TODO: Add crash/restart simulation capabilities for testing fault tolerance.
-//
-// Research into TigerBeetle, FoundationDB, etcd-raft, and Jepsen suggests three approaches:
-//
-// RECOMMENDED: Storage-Based (etcd-raft inspired) - matches dstsim's explicit philosophy
-// - Add CrashableNode[I, R, ID, S] interface extending Node with:
-//   - GetPersistentState() S - returns state that survives crashes
-//   - LoadPersistentState(state S) - restores state after restart
-// - Add simulator methods: CrashNode(id), RestartNode(id), IsNodeCrashed(id)
-// - No breaking changes (optional interface, existing nodes work unchanged)
-// - Type-safe (generic S for persistent state), explicit state boundaries
-// - Example: type RaftPersistentState struct { Term int64; VotedFor NodeID; Log []LogEntry }
-//
-// Alternative: Policy-Based (FoundationDB/Jepsen inspired)
-// - Add CrashPolicy interface (like IndicatorDeliveryPolicy but for lifecycle)
-// - Automatic crash injection via policy (probabilistic or condition-based)
-// - Pro: Declarative, matches existing patterns
-// - Con: Requires implicit state serialization (not Go-idiomatic)
-//
-// Alternative: Hybrid (explicit state + optional policy)
-// - Combine CrashableNode interface with optional CrashPolicy
-// - Supports both precise manual crashes and automatic chaos injection
-// - Pro: Flexible, gradual adoption
-// - Con: Larger API surface, potential confusion
-//
-// Implementation notes for Storage-Based approach:
-// - Phase 1: Add CrashableNode interface, CrashNode/RestartNode methods
-// - Phase 2: Solve node factory problem (how to instantiate on restart)
-//   - Option A: RegisterCrashableNode(node, factory func)
-//   - Option B: Node provides Restart(state S) method
-// - Phase 3: Add crash-aware conditions (NodeCrashed, AllNodesOperational)
-// - Phase 4: Update leader_election example with crash scenarios
+// Crash simulation is supported via StopNode/ResumeNode/RestartNode primitives.
+// Nodes are never removed from the simulator; stopping is a state change.
+// Stopped nodes do not receive Step() calls and indicators addressed to them
+// are dropped. If a node implements the Restartable interface, RestartNode
+// calls Restart() before resuming it, allowing it to clear ephemeral state.
 //
 // TODO: Review API for footguns and add factory methods where needed:
 // - UntilPolicy requires manual Sim reference (easy to forget, nil panic)
@@ -98,6 +71,18 @@ type Simulator[I any, R any, ID comparable] struct {
 	// Current tick's trace (accumulated during tick processing)
 	// Used for both trace storage and debug logging
 	currentTickTrace *TickTrace[I, R, ID]
+
+	// stoppedIDs tracks which registered nodes are currently stopped.
+	// Stopped nodes remain in the nodes map but do not receive Step() calls,
+	// and indicators addressed to them are dropped and recorded in the trace.
+	// Use StopNode/ResumeNode/RestartNode to change a node's stopped state.
+	stoppedIDs map[ID]bool
+
+	// inTick is true while the step loop is running.
+	// Lifecycle changes requested during a tick are collected in pendingChanges
+	// and applied at the end of the tick to avoid mutating state mid-loop.
+	inTick         bool
+	pendingChanges []func()
 }
 
 // SimulatorOptions configures the simulator
@@ -124,6 +109,7 @@ func NewSimulator[I, R any, ID comparable](opts SimulatorOptions) *Simulator[I, 
 		eventuallyAlwaysViolated:   make(map[string]bool),
 		scheduledDeliveries:        make(map[int64]map[ID][]I),
 		traceBuffer:                NewTraceBuffer[I, R, ID](opts.TraceRetention),
+		stoppedIDs:                 make(map[ID]bool),
 	}
 }
 
@@ -169,6 +155,17 @@ func (s *Simulator[I, R, ID]) scheduleIndicator(fromNode ID, targetNode ID, ind 
 	// No exceptions - messages cannot be delivered in the same tick they're generated
 	if delayTicks < 1 {
 		return fmt.Errorf("IndicatorDeliveryPolicy returned invalid delay %d (must be >= 1) at tick %d", delayTicks, s.currentTick)
+	}
+
+	// Drop indicators addressed to stopped nodes — they can't receive messages.
+	if s.stoppedIDs[targetNode] {
+		if s.currentTickTrace != nil {
+			s.currentTickTrace.DroppedIndicators = append(s.currentTickTrace.DroppedIndicators, DroppedIndicator[I, ID]{
+				TargetNode: targetNode,
+				Indicator:  ind,
+			})
+		}
+		return nil
 	}
 
 	// Schedule indicator for delivery at future tick
@@ -218,33 +215,59 @@ func (s *Simulator[I, R, ID]) RunUntil(stopCondition Condition[I, R, ID], maxTic
 		tickIndicators := s.scheduledDeliveries[s.currentTick]
 		delete(s.scheduledDeliveries, s.currentTick)
 
-		// Process all nodes for this tick by calling Step() once per node
-		// All nodes must be called every tick (even with empty indicators) so they can process time-based logic
-		for nodeID, node := range s.nodes {
-			indicators := tickIndicators[nodeID] // nil slice if no indicators
-			requests := node.Step(s.currentTick, indicators)
+		// Process all nodes for this tick by calling Step() once per non-stopped node.
+		// All active nodes are called every tick (even with empty indicators) so they can process time-based logic.
+		// An anonymous function with defer ensures inTick is always cleared, even on early return.
+		// Snapshot the active node IDs before iterating so StopNode/ResumeNode/RestartNode calls from
+		// within a RequestHandler (which are deferred) don't interfere with the current loop.
+		if err := func() error {
+			s.inTick = true
+			defer func() { s.inTick = false }()
 
-			// Record in trace - accumulate this node's activity
-			if len(indicators) > 0 || len(requests) > 0 {
-				s.currentTickTrace.NodeSteps[nodeID] = NodeStepTrace[I, R]{
-					Indicators: indicators,
-					Requests:   requests,
-				}
+			nodeIDs := make([]ID, 0, len(s.nodes))
+			for id := range s.nodes {
+				nodeIDs = append(nodeIDs, id)
 			}
+			for _, nodeID := range nodeIDs {
+				node, stillActive := s.nodes[nodeID]
+				if !stillActive {
+					continue
+				}
+				// Skip stopped nodes — they don't receive Step() calls.
+				if s.stoppedIDs[nodeID] {
+					continue
+				}
+				indicators := tickIndicators[nodeID] // nil slice if no indicators
+				requests := node.Step(s.currentTick, indicators)
 
-			// Process requests from the node - convert to indicators
-			if s.requestHandler != nil && len(requests) > 0 {
-				indicatorsToDeliver := s.requestHandler.ProcessRequests(s, nodeID, requests)
-				// Schedule all indicators through the delivery policy
-				for targetID, indicators := range indicatorsToDeliver {
-					for _, ind := range indicators {
-						if err := s.scheduleIndicator(nodeID, targetID, ind); err != nil {
-							return err
+				// Record in trace - accumulate this node's activity
+				if len(indicators) > 0 || len(requests) > 0 {
+					s.currentTickTrace.NodeSteps[nodeID] = NodeStepTrace[I, R]{
+						Indicators: indicators,
+						Requests:   requests,
+					}
+				}
+
+				// Process requests from the node - convert to indicators
+				if s.requestHandler != nil && len(requests) > 0 {
+					indicatorsToDeliver := s.requestHandler.ProcessRequests(s, nodeID, requests)
+					for targetID, inds := range indicatorsToDeliver {
+						for _, ind := range inds {
+							if err := s.scheduleIndicator(nodeID, targetID, ind); err != nil {
+								return err
+							}
 						}
 					}
 				}
 			}
+			return nil
+		}(); err != nil {
+			return err
 		}
+
+		// Apply any deferred node additions/removals before checking assertions,
+		// so assertions see the updated node set.
+		s.applyPendingNodeChanges()
 
 		// Check assertions
 		var firstViolation *AssertionViolation
@@ -319,7 +342,7 @@ func (s *Simulator[I, R, ID]) RunUntil(stopCondition Condition[I, R, ID], maxTic
 		// Save tick trace to history
 		if s.currentTickTrace != nil {
 			// Only save non-empty ticks to trace
-			if len(s.currentTickTrace.NodeSteps) > 0 || len(s.currentTickTrace.DroppedIndicators) > 0 || len(s.currentTickTrace.AssertionViolations) > 0 {
+			if len(s.currentTickTrace.NodeSteps) > 0 || len(s.currentTickTrace.DroppedIndicators) > 0 || len(s.currentTickTrace.AssertionViolations) > 0 || len(s.currentTickTrace.NodeChanges) > 0 {
 				s.traceBuffer.Append(*s.currentTickTrace)
 			}
 
@@ -339,11 +362,92 @@ func (s *Simulator[I, R, ID]) RunFor(ticks int64) error {
 	return s.RunUntil(TickCondition[I, R, ID](ticks), ticks)
 }
 
-// Nodes returns all registered nodes
+// Nodes returns all registered nodes, including any that are currently stopped.
 func (s *Simulator[I, R, ID]) Nodes() []Node[I, R, ID] {
 	nodes := make([]Node[I, R, ID], 0, len(s.nodes))
 	for _, n := range s.nodes {
 		nodes = append(nodes, n)
 	}
 	return nodes
+}
+
+// afterTick runs fn immediately if called outside a tick, or defers it to
+// the end of the current tick if called from within the step loop.
+func (s *Simulator[I, R, ID]) afterTick(fn func()) {
+	if s.inTick {
+		s.pendingChanges = append(s.pendingChanges, fn)
+	} else {
+		fn()
+	}
+}
+
+// StopNode stops a node: it will no longer receive Step() calls and any indicators
+// addressed to it are dropped (recorded in the trace). The node remains registered.
+//
+// If called during a tick (e.g., from inside a RequestHandler), the change is deferred
+// to the end of the current tick. If called outside a tick, it is immediate.
+func (s *Simulator[I, R, ID]) StopNode(id ID) {
+	if _, exists := s.nodes[id]; !exists {
+		panic(fmt.Sprintf("cannot stop unknown node %v", id))
+	}
+	s.afterTick(func() {
+		s.stoppedIDs[id] = true
+		if s.currentTickTrace != nil {
+			s.currentTickTrace.NodeChanges = append(s.currentTickTrace.NodeChanges,
+				fmt.Sprintf("stopped: %v", id))
+		}
+	})
+}
+
+// ResumeNode resumes a stopped node so it receives Step() calls again.
+//
+// If called during a tick, the change is deferred to end of tick.
+func (s *Simulator[I, R, ID]) ResumeNode(id ID) {
+	if _, exists := s.nodes[id]; !exists {
+		panic(fmt.Sprintf("cannot resume unknown node %v", id))
+	}
+	s.afterTick(func() {
+		delete(s.stoppedIDs, id)
+		if s.currentTickTrace != nil {
+			s.currentTickTrace.NodeChanges = append(s.currentTickTrace.NodeChanges,
+				fmt.Sprintf("resumed: %v", id))
+		}
+	})
+}
+
+// RestartNode simulates a crash-restart of a stopped node.
+// If the node implements the Restartable interface, Restart() is called so the
+// node can clear ephemeral state while retaining durable state (e.g., disk data).
+// The node is then resumed and will receive Step() calls starting next tick.
+//
+// Panics if the node does not exist. If called during a tick, the restart is
+// deferred to end of tick.
+func (s *Simulator[I, R, ID]) RestartNode(id ID) {
+	if _, exists := s.nodes[id]; !exists {
+		panic(fmt.Sprintf("cannot restart unknown node %v", id))
+	}
+	s.afterTick(func() {
+		if r, ok := s.nodes[id].(Restartable); ok {
+			r.Restart()
+		}
+		delete(s.stoppedIDs, id)
+		if s.currentTickTrace != nil {
+			s.currentTickTrace.NodeChanges = append(s.currentTickTrace.NodeChanges,
+				fmt.Sprintf("restarted: %v", id))
+		}
+	})
+}
+
+// IsNodeStopped reports whether the node with the given ID is currently stopped.
+func (s *Simulator[I, R, ID]) IsNodeStopped(id ID) bool {
+	return s.stoppedIDs[id]
+}
+
+// applyPendingNodeChanges runs any node lifecycle changes deferred during the tick.
+// Called at the end of each tick, before assertion checking.
+func (s *Simulator[I, R, ID]) applyPendingNodeChanges() {
+	for _, fn := range s.pendingChanges {
+		fn()
+	}
+	s.pendingChanges = s.pendingChanges[:0]
 }

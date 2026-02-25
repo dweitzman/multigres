@@ -66,6 +66,73 @@ func (p *UnreliableNetwork[I, ID]) ScheduleDelivery(currentTick int64, fromNode 
 	return true, delay
 }
 
+// PerSourcePolicy dispatches to different delivery policies based on which node sent
+// the indicator. This lets callers give some sources (e.g. a discovery/etcd node)
+// a reliable ordered delivery while applying chaos to all other traffic.
+//
+// Example:
+//
+//	sim.SetDeliveryPolicy(&dstsim.PerSourcePolicy[Ind, NodeID]{
+//	    Default:   &dstsim.UnreliableNetwork[Ind, NodeID]{MaxDelay: 5, DropRate: 0.1, Rng: rng},
+//	    Overrides: map[NodeID]dstsim.IndicatorDeliveryPolicy[Ind, NodeID]{
+//	        "discovery": dstsim.NewOrderedReliableNetwork[Ind, NodeID](3, rng),
+//	    },
+//	})
+type PerSourcePolicy[I any, ID comparable] struct {
+	Default   IndicatorDeliveryPolicy[I, ID]
+	Overrides map[ID]IndicatorDeliveryPolicy[I, ID]
+}
+
+func (p *PerSourcePolicy[I, ID]) ScheduleDelivery(currentTick int64, fromNode ID, target ID, indicator I) (bool, int64) {
+	if override, ok := p.Overrides[fromNode]; ok {
+		return override.ScheduleDelivery(currentTick, fromNode, target, indicator)
+	}
+	return p.Default.ScheduleDelivery(currentTick, fromNode, target, indicator)
+}
+
+// orderedChannel is the key for tracking per-channel delivery state in OrderedReliableNetwork.
+type orderedChannel[ID comparable] struct{ from, to ID }
+
+// OrderedReliableNetwork delivers all messages reliably (no drops) with variable delay,
+// but guarantees that messages from the same source to the same target arrive in the
+// order they were sent. This models a reliable ordered transport such as a TCP connection
+// or an etcd watch stream.
+//
+// Use this policy (via PerSourcePolicy) for sources like a discovery node whose messages
+// must never be lost or reordered, while normal orch↔pooler traffic uses chaos.
+type OrderedReliableNetwork[I any, ID comparable] struct {
+	MaxDelay     int64                        // Maximum additional delay beyond the mandatory 1-tick minimum
+	Rng          *rand.Rand                   // Must be provided
+	lastDelivery map[orderedChannel[ID]]int64 // last scheduled delivery tick per (from, to) channel
+}
+
+// NewOrderedReliableNetwork creates an OrderedReliableNetwork with the given max delay.
+func NewOrderedReliableNetwork[I any, ID comparable](maxDelay int64, rng *rand.Rand) *OrderedReliableNetwork[I, ID] {
+	return &OrderedReliableNetwork[I, ID]{
+		MaxDelay:     maxDelay,
+		Rng:          rng,
+		lastDelivery: make(map[orderedChannel[ID]]int64),
+	}
+}
+
+func (p *OrderedReliableNetwork[I, ID]) ScheduleDelivery(currentTick int64, fromNode ID, target ID, indicator I) (bool, int64) {
+	delay := int64(1)
+	if p.MaxDelay > 0 {
+		delay = 1 + p.Rng.Int64N(p.MaxDelay)
+	}
+	deliverAt := currentTick + delay
+
+	// Enforce ordering: this message must arrive strictly after the previous one
+	// on the same (from, to) channel.
+	ch := orderedChannel[ID]{from: fromNode, to: target}
+	if last, ok := p.lastDelivery[ch]; ok && deliverAt <= last {
+		deliverAt = last + 1
+	}
+	p.lastDelivery[ch] = deliverAt
+
+	return true, deliverAt - currentTick
+}
+
 // UntilPolicy uses InitialPolicy until a condition becomes true, then permanently switches to AfterPolicy
 // This is a "latching" policy - once switched, it never switches back
 type UntilPolicy[I any, R any, ID comparable] struct {

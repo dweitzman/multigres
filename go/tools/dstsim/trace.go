@@ -97,6 +97,7 @@ type TickTrace[I any, R any, ID comparable] struct {
 	NodeSteps           map[ID]NodeStepTrace[I, R] // Activity for each node during this tick
 	DroppedIndicators   []DroppedIndicator[I, ID]  // Indicators that were dropped by delivery policy
 	AssertionViolations []string                   // Assertion violations that occurred this tick
+	NodeChanges         []string                   // Node additions/removals (e.g., "removed: pooler-a")
 }
 
 // NodeStepTrace represents a single node's inputs and outputs for one tick
@@ -173,6 +174,14 @@ func (s *Simulator[I, R, ID]) DumpRecentTrace(w io.Writer, numTicks int) {
 			fmt.Fprintf(w, "Dropped indicators:\n")
 			for _, dropped := range tickTrace.DroppedIndicators {
 				fmt.Fprintf(w, "  %v <- %T %+v [DROPPED]\n", dropped.TargetNode, dropped.Indicator, dropped.Indicator)
+			}
+		}
+
+		// Show node changes (additions/removals)
+		if len(tickTrace.NodeChanges) > 0 {
+			fmt.Fprintf(w, "Node changes:\n")
+			for _, change := range tickTrace.NodeChanges {
+				fmt.Fprintf(w, "  %s\n", change)
 			}
 		}
 	}
