@@ -16,6 +16,18 @@ package dstsim
 
 // This file contains test-only simulation infrastructure.
 // Production code should only depend on node.go for the Node interface.
+//
+// TODO: Add crash/restart simulation capabilities for testing fault tolerance.
+// Many distributed systems bugs involve crashes - nodes need to be able to:
+// - Crash at arbitrary ticks (lose in-memory state)
+// - Restart at arbitrary ticks (reload persistent state)
+// - Have separate persistent vs ephemeral state
+// This would enable testing crash recovery, leader election during crashes, etc.
+//
+// TODO: Review API for footguns and add factory methods where needed:
+// - UntilPolicy requires manual Sim reference (easy to forget, nil panic)
+// - PolicySequence construction is verbose
+// - Consider adding sim.NewUntilPolicy(), sim.NewPolicySequence() factory methods
 
 import (
 	"fmt"
