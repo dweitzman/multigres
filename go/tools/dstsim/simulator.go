@@ -572,16 +572,23 @@ func (s *Simulator[I, R, ID]) logTickSummary(log *tickLog[I, R, ID]) {
 // Returns an error if maxTicks is reached without the condition becoming true
 // Set maxTicks to 0 for unlimited ticks
 func (s *Simulator[I, R, ID]) RunUntil(stopCondition Condition[I, R, ID], maxTicks int64) error {
-	startTick := s.currentTick
+	// Compose the stop condition: user condition OR max ticks reached
+	var finalCondition Condition[I, R, ID]
+	if maxTicks > 0 {
+		finalCondition = Or(stopCondition, TickCondition[I, R, ID](maxTicks))
+	} else {
+		finalCondition = stopCondition
+	}
+
 	for {
 		// Check if we should stop before processing this tick
-		if stopCondition.Eval(s) {
+		if finalCondition.Eval(s) {
+			// Determine if we stopped due to condition or timeout
+			if maxTicks > 0 && !stopCondition.Eval(s) {
+				// Timeout: max ticks reached but user condition not satisfied
+				return fmt.Errorf("simulation reached max ticks (%d) without condition '%s' becoming true", maxTicks, stopCondition.Name())
+			}
 			return s.checkDeferredProperties()
-		}
-
-		// Check if we've exceeded max ticks
-		if maxTicks > 0 && (s.currentTick-startTick) >= maxTicks {
-			return fmt.Errorf("simulation reached max ticks (%d) without condition '%s' becoming true", maxTicks, stopCondition.Name())
 		}
 		// Initialize tick log if debug logging is enabled
 		if s.debugLogWriter != nil {
