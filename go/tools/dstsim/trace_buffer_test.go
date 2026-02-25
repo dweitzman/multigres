@@ -28,7 +28,7 @@ func TestTraceBuffer(t *testing.T) {
 		tb := dstsim.NewTraceBuffer[int, string, int](5)
 
 		// Add 3 items (less than capacity)
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			tb.Append(dstsim.TickTrace[int, string, int]{Tick: int64(i)})
 		}
 
@@ -44,7 +44,7 @@ func TestTraceBuffer(t *testing.T) {
 		tb := dstsim.NewTraceBuffer[int, string, int](3)
 
 		// Add 5 items (more than capacity of 3)
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			tb.Append(dstsim.TickTrace[int, string, int]{Tick: int64(i)})
 		}
 
@@ -62,7 +62,7 @@ func TestTraceBuffer(t *testing.T) {
 		tb := dstsim.NewTraceBuffer[int, string, int](10)
 
 		// Add 7 items
-		for i := 0; i < 7; i++ {
+		for i := range 7 {
 			tb.Append(dstsim.TickTrace[int, string, int]{Tick: int64(i)})
 		}
 
@@ -75,7 +75,7 @@ func TestTraceBuffer(t *testing.T) {
 	t.Run("RecentAll", func(t *testing.T) {
 		tb := dstsim.NewTraceBuffer[int, string, int](10)
 
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			tb.Append(dstsim.TickTrace[int, string, int]{Tick: int64(i)})
 		}
 
@@ -88,7 +88,7 @@ func TestTraceBuffer(t *testing.T) {
 		tb := dstsim.NewTraceBuffer[int, string, int](3)
 
 		// Add 10 items to force multiple wraps
-		for i := 0; i < 10; i++ {
+		for i := range 10 {
 			tb.Append(dstsim.TickTrace[int, string, int]{Tick: int64(i)})
 		}
 

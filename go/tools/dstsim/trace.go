@@ -114,21 +114,6 @@ type DroppedIndicator[I any, ID comparable] struct {
 	Indicator  I  // The indicator that was dropped
 }
 
-// TraceEvent is deprecated - use TickTrace instead
-// TODO: Remove this type in next major version
-type TraceEvent[I any, R any, ID comparable] struct {
-	Tick      int64
-	NodeID    ID
-	Indicator *I
-	Requests  []R
-}
-
-// StateProvider is an optional interface that nodes can implement to expose internal state for debugging
-// The returned value should be a simple map or struct that can be easily logged
-type StateProvider interface {
-	GetDebugState() any
-}
-
 // Trace returns the complete event trace organized by tick
 // Note: Due to trace retention policy, this may not include all ticks from the start of simulation
 func (s *Simulator[I, R, ID]) Trace() []TickTrace[I, R, ID] {

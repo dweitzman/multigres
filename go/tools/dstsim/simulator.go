@@ -116,14 +116,11 @@ func (s *Simulator[I, R, ID]) CurrentTick() int64 {
 	return s.currentTick
 }
 
-// SetTickHandler sets the handler that will be called at each tick
 // SetRequestHandler sets the handler that will process node requests
 func (s *Simulator[I, R, ID]) SetRequestHandler(handler RequestHandler[I, R, ID]) {
 	s.requestHandler = handler
 }
 
-// ScheduleIn schedules an action to run after a delay (in ticks) from now
-// delay must be >= 0 (use 0 for immediate execution on next tick processing)
 // scheduleIndicator schedules an indicator for delivery to a target node via the delivery policy
 // The policy determines when/if the indicator is delivered (enforces minimum 1-tick delay)
 // This is an internal method - external callers should use RequestHandler.ProcessRequests

@@ -38,7 +38,6 @@ type Assertion[I any, R any, ID comparable] struct {
 
 // AssertionViolation is returned when an assertion is violated
 type AssertionViolation struct {
-	AssertionName string
 	ConditionName string
 	Quantifier    TemporalQuantifier
 	Tick          int64
@@ -62,7 +61,7 @@ func (e *AssertionViolation) Error() string {
 	case EventuallyAlways:
 		return "assertion violated: " + e.Description
 	default:
-		return fmt.Sprintf("assertion '%s' violated", e.AssertionName)
+		return fmt.Sprintf("assertion violated at tick %d: %s", e.Tick, e.Description)
 	}
 }
 
