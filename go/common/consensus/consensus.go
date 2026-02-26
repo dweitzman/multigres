@@ -35,46 +35,122 @@ package consensus
 type NodeID string
 
 // PoolerRole is the role a pooler currently holds in the cluster.
+// Primary is the read/write leader. Replica is any other pooler known to the orch,
+// whether or not it is currently in the synchronous-replication quorum.
+// The SyncReplicas field in ConsensusState identifies which replicas must acknowledge
+// writes; that is the sync-quorum membership, separate from the role itself.
 type PoolerRole int8
 
 const (
 	RoleUnknown PoolerRole = 0
 	RolePrimary PoolerRole = 1
 	RoleReplica PoolerRole = 2
-	RoleStandby PoolerRole = 3 // known to orch but not in the sync-replica set
 )
 
-// ConsensusState is the complete cluster configuration at a given term and sequence.
-// Orch broadcasts this; poolers vote to accept or reject it.
+func (r PoolerRole) String() string {
+	switch r {
+	case RolePrimary:
+		return "primary"
+	case RoleReplica:
+		return "replica"
+	default:
+		return "unknown"
+	}
+}
+
+// PostgresStatus is the operational state of a pooler's PostgreSQL instance.
+// It is ephemeral (not persisted to disk) and is reported alongside the
+// committed consensus state so the orch knows whether the pooler can apply changes.
+type PostgresStatus int8
+
+const (
+	PostgresUnknown PostgresStatus = 0 // not yet reported; orch treats as potentially running
+	PostgresRunning PostgresStatus = 1 // postgres is up; pooler can apply replication changes
+	PostgresStopped PostgresStatus = 2 // postgres is down (e.g., received SIGTERM)
+)
+
+func (s PostgresStatus) String() string {
+	switch s {
+	case PostgresRunning:
+		return "running"
+	case PostgresStopped:
+		return "stopped"
+	default:
+		return "unknown"
+	}
+}
+
+// ConsensusPhase is the stage of the three-phase consensus protocol for a given
+// voting term. Orch cycles through Begin → Revoke → Establish within a single term.
+//
+//   - Begin: establish this orch as the coordinator for the term; no topology change yet.
+//   - Revoke: revoke the current primary (set PrimaryTerm=0, Primary=""); poolers must
+//     apply this before establishment can proceed.
+//   - Establish: appoint the new primary and sync-replica set.
+type ConsensusPhase int8
+
+const (
+	PhaseBegin     ConsensusPhase = 1
+	PhaseRevoke    ConsensusPhase = 2
+	PhaseEstablish ConsensusPhase = 3
+)
+
+func (p ConsensusPhase) String() string {
+	switch p {
+	case PhaseBegin:
+		return "begin"
+	case PhaseRevoke:
+		return "revoke"
+	case PhaseEstablish:
+		return "establish"
+	default:
+		return "unknown"
+	}
+}
+
+// ConsensusState is the complete cluster configuration at a given term, sequence,
+// and phase. Orch broadcasts this; poolers vote to accept or reject it.
 type ConsensusState struct {
-	VotingTerm   int64    // monotonically increasing; owned by the proposing coordinator
-	CoordID      NodeID   // which orch owns this voting term
-	SeqNum       int64    // orders states within a term
+	VotingTerm   int64  // monotonically increasing; owned by the proposing coordinator
+	CoordID      NodeID // which orch owns this voting term
+	SeqNum       int64  // orders states within a term (1=begin, 2=revoke, 3=establish)
+	Phase        ConsensusPhase
 	PrimaryTerm  int64    // voting term when the current primary was established (0 = no primary)
 	Primary      NodeID   // zero value means no primary appointed; check PrimaryTerm > 0
 	SyncReplicas []NodeID // poolers that must acknowledge writes to the primary
 }
 
 // StateID identifies a specific ConsensusState proposal by its term + sequence number.
-// Because orch may issue multiple proposals within a single VotingTerm (e.g. term 5
-// seq 1 = revoke primary, term 5 seq 2 = appoint new primary), the sequence number
-// is needed alongside the term to unambiguously identify which state was committed
-// or applied.
 type StateID struct {
 	VotingTerm int64
 	SeqNum     int64
 }
 
 // PoolerPersistentState is the durable state a PoolerNode writes to storage.
-// It survives process restarts and is loaded on startup via PoolerStorage.Load.
+// It survives process restarts and is loaded on startup via LoadCommittedState.
+//
+// Two invariants must hold at all times:
+//
+//  1. A committed state change must be remembered across crashes: the node must
+//     persist this struct to stable storage (via PoolerStorage.Save) before
+//     acknowledging any proposal. Consensus safety depends on committed votes
+//     surviving restarts.
+//
+//  2. Once Applied=true is persisted, it must never be silently reverted: applied
+//     state represents replication configuration written to disk (e.g.
+//     primary_conninfo in postgresql.conf). That configuration survives process
+//     restarts and is the ground truth for what role this node will take on next
+//     start. Only a new accepted proposal (writing a new PoolerPersistentState
+//     with its own Applied value) may supersede it.
 type PoolerPersistentState struct {
 	VotedTerm    int64  // highest VotingTerm this pooler has accepted
 	VotedSeqNum  int64  // SeqNum within VotedTerm of the last accepted proposal
 	VotedCoord   NodeID // coordinator that owns VotedTerm
-	PrimaryTerm  int64  // VotingTerm at which this pooler was promoted (0 = not primary)
+	PrimaryTerm  int64  // VotingTerm at which the current primary was established (0 = none)
 	Primary      NodeID // who is primary (may be a different node)
 	Role         PoolerRole
 	SyncReplicas []NodeID
+	Applied      bool // true if the committed role change has been operationally executed
 }
 
 // VotedStateID returns the StateID of the last accepted proposal.

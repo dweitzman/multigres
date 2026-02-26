@@ -41,8 +41,7 @@ func (BroadcastStateRequest) consensusRequest() {}
 //
 // TODO: Consider adding SeqNum (the sequence number from the OrchStateIndicator being
 // responded to) so the orch can correlate responses to a specific proposal and discard
-// late responses from earlier rounds. Currently the orch uses term numbers for this,
-// but SeqNum would allow finer-grained correlation within a term.
+// late responses from earlier rounds.
 type PoolerResponseRequest struct {
 	ToOrch       NodeID
 	Accepted     bool
@@ -52,7 +51,19 @@ type PoolerResponseRequest struct {
 
 func (PoolerResponseRequest) consensusRequest() {}
 
-// --- Requests from the discovery node (simulation only) ---
+// PoolerStatusUpdateRequest is emitted by a PoolerNode whenever its status changes
+// (e.g., after committing a new state, after applying a role change, or after receiving
+// a TerminateIndicator). The RequestHandler delivers this to all known orch nodes as
+// a PoolerStatusIndicator so the orch can track applied state and postgres health.
+type PoolerStatusUpdateRequest struct {
+	Applied        bool
+	PostgresStatus PostgresStatus
+	State          PoolerPersistentState // the committed state this status applies to
+}
+
+func (PoolerStatusUpdateRequest) consensusRequest() {}
+
+// --- Requests from test/driver nodes (simulation only) ---
 
 // PoolerMembershipRequest is emitted by the discovery node when the set of registered
 // poolers changes. The RequestHandler converts this into PoolerDiscoveredIndicator and
@@ -66,3 +77,12 @@ type PoolerMembershipRequest struct {
 }
 
 func (PoolerMembershipRequest) consensusRequest() {}
+
+// TerminateRequest is emitted by a driver/test node to request that a specific pooler
+// shuts down gracefully. The RequestHandler converts this to a TerminateIndicator
+// delivered to the target. In production, this corresponds to a SIGTERM signal.
+type TerminateRequest struct {
+	Target NodeID
+}
+
+func (TerminateRequest) consensusRequest() {}

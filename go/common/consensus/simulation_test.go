@@ -16,6 +16,7 @@ package consensus_test
 
 import (
 	"fmt"
+	"math/rand/v2"
 	"testing"
 
 	"github.com/multigres/multigres/go/common/consensus"
@@ -36,7 +37,8 @@ func (s *memStorage) Save(state consensus.PoolerPersistentState) error {
 // It also handles PoolerMembershipRequest from the discovery node by broadcasting
 // PoolerDiscoveredIndicator / PoolerRemovedIndicator to all registered OrchNodes.
 type consensusHandler struct {
-	sim *dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID]
+	sim          *dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID]
+	statusSeqMap map[consensus.NodeID]int64 // monotonically increasing per pooler
 }
 
 func (h *consensusHandler) orchIDs() []consensus.NodeID {
@@ -86,6 +88,20 @@ func (h *consensusHandler) ProcessRequests(
 				KnownTerm:    r.KnownTerm,
 				KnownCoordID: r.KnownCoordID,
 			})
+		case consensus.PoolerStatusUpdateRequest:
+			h.statusSeqMap[fromNode]++
+			seq := h.statusSeqMap[fromNode]
+			for _, oid := range h.orchIDs() {
+				result[oid] = append(result[oid], consensus.PoolerStatusIndicator{
+					PoolerID:       fromNode,
+					StatusSeq:      seq,
+					State:          r.State,
+					Applied:        r.Applied,
+					PostgresStatus: r.PostgresStatus,
+				})
+			}
+		case consensus.TerminateRequest:
+			result[r.Target] = append(result[r.Target], consensus.TerminateIndicator{})
 		case consensus.PoolerMembershipRequest:
 			for _, oid := range h.orchIDs() {
 				for _, pid := range r.Discovered {
@@ -100,34 +116,20 @@ func (h *consensusHandler) ProcessRequests(
 	return result
 }
 
-// --- Conditions ---
-
-// primaryExists is true when any PoolerNode reports role=Primary.
-type primaryExists struct{}
-
-func (c *primaryExists) Name() string { return "primary_exists" }
-func (c *primaryExists) Eval(sim *dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID]) bool {
-	for _, node := range sim.Nodes() {
-		if p, ok := node.(*consensus.PoolerNode); ok {
-			if p.CommittedState().Role == consensus.RolePrimary {
-				return true
-			}
-		}
+// --- Standard invariants ---
+//
+// standardInvariants returns the invariants that should hold in every simulation.
+// Register them with sim.Always() at the start of each test.
+func standardInvariants() []dstsim.Condition[consensus.Indicator, consensus.Request, consensus.NodeID] {
+	return []dstsim.Condition[consensus.Indicator, consensus.Request, consensus.NodeID]{
+		&atMostOnePrimary{},
+		&appliedMonotonicity{},
 	}
-	return false
 }
 
-func (c *primaryExists) Describe(sim *dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID]) string {
-	for _, node := range sim.Nodes() {
-		if p, ok := node.(*consensus.PoolerNode); ok {
-			s := p.CommittedState()
-			return fmt.Sprintf("node %v role=%v primaryTerm=%d", node.ID(), s.Role, s.PrimaryTerm)
-		}
-	}
-	return "no poolers"
-}
-
-// atMostOnePrimary is an invariant: no two PoolerNodes may simultaneously have role=Primary.
+// atMostOnePrimary is a safety invariant: no two PoolerNodes may simultaneously
+// have committed Role=Primary. A stronger write-quorum invariant (checking that
+// at most one primary has enough active sync replicas) can be layered on top.
 type atMostOnePrimary struct{}
 
 func (c *atMostOnePrimary) Name() string { return "at_most_one_primary" }
@@ -152,7 +154,87 @@ func (c *atMostOnePrimary) Describe(sim *dstsim.Simulator[consensus.Indicator, c
 			}
 		}
 	}
-	return fmt.Sprintf("primaries: %v", primaries)
+	return fmt.Sprintf("nodes with committed primary role: %v", primaries)
+}
+
+// appliedMonotonicity is a safety invariant: once a pooler persists Applied=true
+// for a given proposal (identified by VotedTerm+VotedSeqNum), Applied must never
+// revert to false for that same proposal. Applied may only be false on a new
+// proposal (higher term or higher seqnum within the same term).
+type appliedMonotonicity struct {
+	prev map[consensus.NodeID]consensus.PoolerPersistentState
+}
+
+func (c *appliedMonotonicity) Name() string { return "applied_monotonicity" }
+
+func (c *appliedMonotonicity) Eval(sim *dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID]) bool {
+	if c.prev == nil {
+		c.prev = make(map[consensus.NodeID]consensus.PoolerPersistentState)
+	}
+	for _, node := range sim.Nodes() {
+		p, ok := node.(*consensus.PoolerNode)
+		if !ok {
+			continue
+		}
+		curr := p.CommittedState()
+		prev, hasPrev := c.prev[p.ID()]
+		if hasPrev && prev.Applied && !curr.Applied {
+			// Applied reverted — only acceptable if the proposal advanced.
+			advanced := curr.VotedTerm > prev.VotedTerm ||
+				(curr.VotedTerm == prev.VotedTerm && curr.VotedSeqNum > prev.VotedSeqNum)
+			if !advanced {
+				return false
+			}
+		}
+		c.prev[p.ID()] = curr
+	}
+	return true
+}
+
+func (c *appliedMonotonicity) Describe(sim *dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID]) string {
+	var violations []string
+	for _, node := range sim.Nodes() {
+		p, ok := node.(*consensus.PoolerNode)
+		if !ok {
+			continue
+		}
+		curr := p.CommittedState()
+		prev := c.prev[p.ID()]
+		if prev.Applied && !curr.Applied {
+			violations = append(violations, fmt.Sprintf(
+				"node %v: Applied reverted without proposal advance (term=%d seq=%d → term=%d seq=%d)",
+				p.ID(), prev.VotedTerm, prev.VotedSeqNum, curr.VotedTerm, curr.VotedSeqNum,
+			))
+		}
+	}
+	return fmt.Sprintf("applied monotonicity violations: %v", violations)
+}
+
+// --- Liveness conditions ---
+
+// activePrimaryExists is true when any PoolerNode is an active primary:
+// committed to the primary role, applied, and postgres is running.
+type activePrimaryExists struct{}
+
+func (c *activePrimaryExists) Name() string { return "active_primary_exists" }
+func (c *activePrimaryExists) Eval(sim *dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID]) bool {
+	for _, node := range sim.Nodes() {
+		if p, ok := node.(*consensus.PoolerNode); ok && p.IsActivePrimary() {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *activePrimaryExists) Describe(sim *dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID]) string {
+	for _, node := range sim.Nodes() {
+		if p, ok := node.(*consensus.PoolerNode); ok {
+			s := p.CommittedState()
+			return fmt.Sprintf("node %v role=%v applied=%v postgres=%v",
+				node.ID(), s.Role, s.Applied, p.PostgresStatus())
+		}
+	}
+	return "no poolers"
 }
 
 // --- Test IDs ---
@@ -178,19 +260,20 @@ func newHappyPathSim(t *testing.T, seed int64) (
 		dstsim.SimulatorOptions{Seed: seed},
 	)
 
-	handler := &consensusHandler{sim: sim}
+	handler := &consensusHandler{sim: sim, statusSeqMap: make(map[consensus.NodeID]int64)}
 	sim.SetRequestHandler(handler)
 
-	// Register orch nodes
-	sim.RegisterNode(consensus.NewOrchNode(orchA))
-	sim.RegisterNode(consensus.NewOrchNode(orchB))
+	// Register orch nodes, each with a deterministically seeded RNG so tests are
+	// reproducible yet the two orchs have different jitter values.
+	sim.RegisterNode(consensus.NewOrchNode(orchA, rand.New(rand.NewPCG(uint64(seed), 0))))
+	sim.RegisterNode(consensus.NewOrchNode(orchB, rand.New(rand.NewPCG(uint64(seed+1), 0))))
 
 	// Register pooler nodes with in-memory storage
 	stores := make(map[consensus.NodeID]*memStorage)
 	for _, id := range []consensus.NodeID{pooler1, pooler2, pooler3} {
 		store := &memStorage{}
 		stores[id] = store
-		sim.RegisterNode(consensus.NewPoolerNode(id, store))
+		sim.RegisterNode(consensus.NewPoolerNode(id, store, nil))
 	}
 
 	// Register the discovery node — it will detect poolers on its first tick
@@ -203,11 +286,13 @@ func newHappyPathSim(t *testing.T, seed int64) (
 // --- Tests ---
 
 // TestHappyPath_PrimaryElected verifies that under a reliable fast network,
-// a primary is eventually appointed and the split-brain invariant is never violated.
+// a primary is eventually appointed and the split-brain invariants are never violated.
 func TestHappyPath_PrimaryElected(t *testing.T) {
 	sim, _ := newHappyPathSim(t, 42)
-	sim.Always(&atMostOnePrimary{})
+	for _, inv := range standardInvariants() {
+		sim.Always(inv)
+	}
 
 	h := dstsim.NewSimulationTestHelper(t, sim)
-	h.RequireRunUntil(&primaryExists{}, 200)
+	h.RequireRunUntil(&activePrimaryExists{}, 200)
 }

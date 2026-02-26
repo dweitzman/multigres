@@ -36,22 +36,24 @@ type PoolerRemovedIndicator struct {
 
 func (PoolerRemovedIndicator) consensusIndicator() {}
 
-// PoolerStatusIndicator is delivered to OrchNode from the periodic health-check agent.
-// It carries the pooler's full last-committed state so a new orch can reconstruct the
-// cluster view without requiring a separate quorum read round.
+// PoolerStatusIndicator is delivered to OrchNode when a pooler broadcasts its status.
+// It carries the pooler's committed state, whether it has been applied, and the
+// current PostgreSQL operational status so the orch can make informed decisions.
 type PoolerStatusIndicator struct {
-	PoolerID  NodeID
-	StatusSeq int64                 // sequence number; orch discards updates older than the last seen seq
-	State     PoolerPersistentState // full committed state at time of health check
+	PoolerID       NodeID
+	StatusSeq      int64 // monotonically increasing; orch discards stale updates
+	State          PoolerPersistentState
+	Applied        bool           // true if the committed state has been operationally executed
+	PostgresStatus PostgresStatus // current postgres operational status
 }
 
 func (PoolerStatusIndicator) consensusIndicator() {}
 
-// PoolerResponseIndicator is delivered to OrchNode when a pooler responds to a broadcast.
+// PoolerResponseIndicator is delivered to OrchNode when a pooler votes on a proposal.
 type PoolerResponseIndicator struct {
 	FromPooler   NodeID
 	Accepted     bool
-	KnownTerm    int64  // if rejected: the term the pooler is currently on (orch can escalate)
+	KnownTerm    int64  // if rejected: the term the pooler is currently on
 	KnownCoordID NodeID // if rejected at the same term: which coordinator won that term
 }
 
@@ -69,3 +71,10 @@ type OrchStateIndicator struct {
 }
 
 func (OrchStateIndicator) consensusIndicator() {}
+
+// TerminateIndicator is delivered to a PoolerNode to request graceful shutdown.
+// The pooler sets its PostgresStatus to Stopped and stops applying replication-role
+// changes. In production this corresponds to a SIGTERM sent to the multipooler process.
+type TerminateIndicator struct{}
+
+func (TerminateIndicator) consensusIndicator() {}
