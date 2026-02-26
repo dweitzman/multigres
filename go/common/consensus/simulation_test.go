@@ -24,6 +24,9 @@ import (
 )
 
 // memStorage is an in-memory PoolerStorage implementation for tests.
+// It simulates durable storage: Save writes to the struct field and Load reads
+// it back, so a simulated crash-restart (which calls Restart() → storage.Load())
+// correctly restores the last saved state just as reading from disk would.
 type memStorage struct {
 	state consensus.PoolerPersistentState
 }
@@ -31,6 +34,24 @@ type memStorage struct {
 func (s *memStorage) Save(state consensus.PoolerPersistentState) error {
 	s.state = state
 	return nil
+}
+
+func (s *memStorage) Load() (consensus.PoolerPersistentState, error) {
+	return s.state, nil
+}
+
+// flakyApplier is a RoleApplier that fails at a configurable rate, simulating
+// a slow or unreliable postgres apply (e.g. pg_ctl promote taking multiple ticks).
+// Used in crash and chaos tests; see newFlakyApplierSim.
+type flakyApplier struct {
+	rng      *rand.Rand
+	failRate float64 // probability (0.0–1.0) of returning false each tick
+}
+
+var _ consensus.RoleApplier = (*flakyApplier)(nil)
+
+func (a *flakyApplier) Apply(_ consensus.PoolerPersistentState) bool {
+	return a.rng.Float64() >= a.failRate
 }
 
 // consensusHandler converts consensus Requests into Indicators and routes them.

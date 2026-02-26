@@ -159,8 +159,24 @@ func (s PoolerPersistentState) VotedStateID() StateID {
 }
 
 // PoolerStorage is implemented by anything that durably persists PoolerPersistentState.
-// In simulation it writes to an in-memory struct; in production it uses atomic fsync.
+// In simulation it reads and writes an in-memory struct; in production it uses
+// atomic write-rename+fsync to ensure committed votes survive crashes.
+//
 // PoolerNode calls Save synchronously within Step() before emitting any response.
+// Load is called by NewPoolerNode (initial startup) and Restart() (crash recovery)
+// to restore the last persisted state from durable storage.
 type PoolerStorage interface {
 	Save(state PoolerPersistentState) error
+	Load() (PoolerPersistentState, error)
+}
+
+// RoleApplier executes the operational part of a committed role change on behalf of
+// a PoolerNode. Apply is called on each tick when committed state has not been applied
+// and postgres is running. It returns true if the role change completed successfully
+// this tick, false to signal a transient failure—the pooler will retry next tick.
+//
+// In simulation, use a fake implementation with a configurable failure rate.
+// In production, implement with real pg_ctl calls and postgresql.conf updates.
+type RoleApplier interface {
+	Apply(state PoolerPersistentState) bool
 }
