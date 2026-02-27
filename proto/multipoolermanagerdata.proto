@@ -706,6 +706,14 @@ message BackupMetadata {
   // Pooler type that created this backup (from pgbackrest annotation)
   clustermetadata.PoolerType pooler_type = 10;
 
+  // Consensus term at the time this backup was taken.
+  // Used to prefer backups from later terms when selecting the best backup to restore.
+  // TODO: ideally this would be the primary_term rather than the consensus term,
+  // since primary_term advances with each promotion and more directly identifies which
+  // backup belongs to the current primary. Replicas do not currently track primary_term,
+  // which is why we use consensus_term for now.
+  int64 consensus_term = 11;
+
   // Status represents the state of a backup
   enum Status {
     UNKNOWN = 0;

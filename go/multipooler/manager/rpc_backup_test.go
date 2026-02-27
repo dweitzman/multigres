@@ -95,15 +95,16 @@ func createTestManagerWithBackupLocation(poolerDir, tableGroup, shard string, po
 	monitorRunner := timer.NewPeriodicRunner(context.TODO(), 10*time.Second)
 
 	pm := &MultiPoolerManager{
-		config:       &Config{},
-		serviceID:    multipoolerID,
-		topoClient:   topoClient,
-		multipooler:  multipoolerProto,
-		state:        ManagerStateReady,
-		backupConfig: backupConfig,
-		actionLock:   NewActionLock(),
-		logger:       slog.Default(),
-		pgMonitor:    monitorRunner,
+		config:         &Config{},
+		serviceID:      multipoolerID,
+		topoClient:     topoClient,
+		multipooler:    multipoolerProto,
+		state:          ManagerStateReady,
+		backupConfig:   backupConfig,
+		actionLock:     NewActionLock(),
+		logger:         slog.Default(),
+		pgMonitor:      monitorRunner,
+		consensusState: NewConsensusState(poolerDir, multipoolerID),
 	}
 	return pm
 }
@@ -1277,6 +1278,211 @@ func TestGetPrimaryAsPg2Args(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestSelectBestBackup verifies that selectBestBackup returns the backup with the
+// highest consensus term, using LSN as a tiebreaker within the same term.
+func TestSelectBestBackup(t *testing.T) {
+	tests := []struct {
+		name    string
+		backups []*multipoolermanagerdata.BackupMetadata
+		wantID  string
+		wantNil bool
+	}{
+		{
+			name:    "returns nil for empty list",
+			backups: nil,
+			wantNil: true,
+		},
+		{
+			name: "single backup is returned",
+			backups: []*multipoolermanagerdata.BackupMetadata{
+				{BackupId: "backup-a", ConsensusTerm: 1, FinalLsn: "0/5000000"},
+			},
+			wantID: "backup-a",
+		},
+		{
+			name: "prefers higher term over newer wall-clock order",
+			backups: []*multipoolermanagerdata.BackupMetadata{
+				// Ordered oldest-first (as pgBackRest returns them)
+				{BackupId: "term1-backup", ConsensusTerm: 1, FinalLsn: "0/5000000"},
+				{BackupId: "term2-backup", ConsensusTerm: 2, FinalLsn: "0/3000000"},
+			},
+			// term2-backup wins even though it has a lower LSN — term takes priority
+			wantID: "term2-backup",
+		},
+		{
+			name: "within same term, prefers higher LSN",
+			backups: []*multipoolermanagerdata.BackupMetadata{
+				{BackupId: "earlier", ConsensusTerm: 2, FinalLsn: "0/3000000"},
+				{BackupId: "later", ConsensusTerm: 2, FinalLsn: "0/5000000"},
+			},
+			wantID: "later",
+		},
+		{
+			name: "late-arriving stale bootstrap backup does not win over higher-term backup",
+			backups: []*multipoolermanagerdata.BackupMetadata{
+				// A backup from a losing bootstrap pooler that finished last (wall-clock newest)
+				{BackupId: "stale-bootstrap", ConsensusTerm: 1, FinalLsn: "0/6000000"},
+				// The canonical primary's post-election backup (term 2, older by wall-clock)
+				{BackupId: "canonical", ConsensusTerm: 2, FinalLsn: "0/4000000"},
+			},
+			wantID: "canonical",
+		},
+		{
+			name: "LSN segment/offset comparison is numeric not lexicographic",
+			backups: []*multipoolermanagerdata.BackupMetadata{
+				// "0/9000000" would sort BEFORE "0/10000000" lexicographically but AFTER numerically
+				{BackupId: "smaller-lsn", ConsensusTerm: 1, FinalLsn: "0/9000000"},
+				{BackupId: "larger-lsn", ConsensusTerm: 1, FinalLsn: "0/10000000"},
+			},
+			wantID: "larger-lsn",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := selectBestBackup(tt.backups)
+			if tt.wantNil {
+				assert.Nil(t, got)
+			} else {
+				require.NotNil(t, got)
+				assert.Equal(t, tt.wantID, got.BackupId)
+			}
+		})
+	}
+}
+
+// TestListBackups_ParsesConsensusTerm verifies that listBackups correctly extracts
+// the consensus_term annotation from pgbackrest info output.
+func TestListBackups_ParsesConsensusTerm(t *testing.T) {
+	tests := []struct {
+		name       string
+		jsonOutput string
+		wantTerm   int64
+	}{
+		{
+			name: "parses consensus_term from annotation",
+			jsonOutput: `[{
+				"backup": [{
+					"label": "20250104-100000F",
+					"error": false,
+					"annotation": {
+						"table_group": "default",
+						"shard": "0",
+						"multipooler_id": "zone1-pooler1",
+						"pooler_type": "PRIMARY",
+						"job_id": "test-job",
+						"consensus_term": "3"
+					},
+					"lsn": {"start": "0/3000000", "stop": "0/5000000"},
+					"info": {"size": 1024}
+				}]
+			}]`,
+			wantTerm: 3,
+		},
+		{
+			name: "missing consensus_term annotation defaults to zero",
+			jsonOutput: `[{
+				"backup": [{
+					"label": "20250104-100000F",
+					"error": false,
+					"annotation": {
+						"table_group": "default",
+						"shard": "0",
+						"multipooler_id": "zone1-pooler1",
+						"pooler_type": "PRIMARY",
+						"job_id": "test-job"
+					},
+					"lsn": {"start": "0/3000000", "stop": "0/5000000"},
+					"info": {"size": 1024}
+				}]
+			}]`,
+			wantTerm: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			binDir := t.TempDir()
+			mockScript := "#!/bin/bash\nif [[ \"$*\" == *\"info\"* ]]; then\n    cat << 'JSONEOF'\n" + tt.jsonOutput + "\nJSONEOF\n    exit 0\nfi\nexit 1\n"
+			pgbackrestPath := binDir + "/pgbackrest"
+			err := os.WriteFile(pgbackrestPath, []byte(mockScript), 0o755)
+			require.NoError(t, err)
+			t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+
+			poolerDir := t.TempDir()
+			configPath := setupMockPgBackRestConfig(t, poolerDir)
+			pm := createTestManagerWithBackupLocation(poolerDir, "default", "0", clustermetadatapb.PoolerType_PRIMARY, poolerDir)
+			pm.pgBackRestConfigPath = configPath
+
+			backups, err := pm.listBackups(context.Background())
+			require.NoError(t, err)
+			require.Len(t, backups, 1)
+			assert.Equal(t, tt.wantTerm, backups[0].ConsensusTerm)
+		})
+	}
+}
+
+// TestBackup_AnnotatesConsensusTerm verifies that backupLocked passes the current
+// consensus term as an annotation to pgbackrest.
+func TestBackup_AnnotatesConsensusTerm(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+
+	binDir := filepath.Join(tmpDir, "bin")
+	require.NoError(t, os.MkdirAll(binDir, 0o755))
+
+	argsFile := filepath.Join(tmpDir, "captured_args.txt")
+	mockScript := `#!/bin/bash
+if [[ "$*" == *"backup"* && "$*" != *"info"* ]]; then
+    echo "$@" > ` + argsFile + `
+fi
+if [[ "$*" == *"info"* ]]; then
+    cat << 'JSONEOF'
+[{"backup": [{"label": "20250104-100000F", "annotation": {"multipooler_id": "test-pooler", "job_id": "test-job-id"}}]}]
+JSONEOF
+fi
+exit 0
+`
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "pgbackrest"), []byte(mockScript), 0o755))
+	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+
+	poolerDir := filepath.Join(tmpDir, "pooler")
+	require.NoError(t, os.MkdirAll(poolerDir, 0o755))
+
+	pgbackrestDir := filepath.Join(poolerDir, "pgbackrest")
+	require.NoError(t, os.MkdirAll(pgbackrestDir, 0o755))
+	configPath := filepath.Join(pgbackrestDir, "pgbackrest.conf")
+	require.NoError(t, os.WriteFile(configPath, []byte("[global]\nlog-path=/tmp\n[multigres]\nrepo1-path=/tmp\npg1-path=/tmp\n"), 0o600))
+
+	pm := createTestManagerWithBackupLocation(poolerDir, "", "", clustermetadatapb.PoolerType_PRIMARY, tmpDir)
+	pm.pgBackRestConfigPath = configPath
+	pm.primaryHost = "primary.local"
+	pm.primaryPort = 5432
+
+	// Set up consensus state with a known term.
+	// UpdateTermAndSave requires: (1) action lock in ctx, (2) pg_data/PG_VERSION for isDataDirInitialized.
+	pgDataDir := filepath.Join(poolerDir, "pg_data")
+	require.NoError(t, os.MkdirAll(pgDataDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pgDataDir, "PG_VERSION"), []byte("17"), 0o644))
+
+	pm.consensusState = NewConsensusState(poolerDir, pm.multipooler.Id)
+	setupCtx, err := pm.actionLock.Acquire(ctx, "test-setup")
+	require.NoError(t, err)
+	require.NoError(t, pm.consensusState.UpdateTermAndSave(setupCtx, 5))
+	pm.actionLock.Release(setupCtx)
+
+	primaryDataPath := filepath.Join(poolerDir, "pg_data")
+	_, err = pm.Backup(ctx, true, "full", "test-job-id", map[string]string{
+		"pg2_path": primaryDataPath,
+	})
+	require.NoError(t, err)
+
+	capturedArgs, err := os.ReadFile(argsFile)
+	require.NoError(t, err)
+	assert.Contains(t, string(capturedArgs), "--annotation=consensus_term=5",
+		"backupLocked should annotate the backup with the current consensus term")
 }
 
 func TestGetPrimaryAsPg2Args_WithOverrides(t *testing.T) {
