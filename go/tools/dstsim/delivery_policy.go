@@ -45,17 +45,61 @@ func (p *FastNetwork[I, ID]) ScheduleDelivery(currentTick int64, fromNode ID, ta
 	return true, 1 // Always deliver at next tick
 }
 
-// UnreliableNetwork simulates a chaotic network with random delays and packet loss
+// UnreliableNetwork simulates a chaotic network with random delays, packet loss,
+// and optional network partitions.
+//
+// When PartitionRate > 0, the network periodically splits into two groups: messages
+// between nodes in different groups are dropped for the partition's duration. Node
+// group assignment is lazy — the first time a node ID is seen during a partition it
+// is assigned randomly (50/50), and that assignment persists for the rest of that
+// partition. This correctly handles nodes that first communicate after a partition
+// has already started.
+//
+// In the future, partition semantics could be extended to model zone/cell topology,
+// where the split always follows datacenter region boundaries.
 type UnreliableNetwork[I any, ID comparable] struct {
-	MaxDelay int64      // Maximum delay in ticks (>= 1)
-	DropRate float64    // Probability of dropping message (0.0 - 1.0)
-	Rng      *rand.Rand // Random number generator (must be provided)
+	MaxDelay             int64      // Maximum delay in ticks (>= 1)
+	DropRate             float64    // Probability of dropping message (0.0 - 1.0)
+	PartitionRate        float64    // Probability per tick that a network partition starts (0 = disabled)
+	MaxPartitionDuration int64      // Maximum partition length in ticks (used when PartitionRate > 0)
+	Rng                  *rand.Rand // Must be provided
+
+	// partition state (used when PartitionRate > 0)
+	//
+	// groupAssignment: key present + true → group A; key present + false → group B;
+	// key absent → not yet seen this partition (assigned lazily on first encounter).
+	// nil between partitions.
+	groupAssignment map[ID]bool
+	partitionEnd    int64 // tick when current partition ends; 0 = no partition active
+	lastTick        int64 // last tick for which partition state was advanced
+	initialized     bool  // true after first ScheduleDelivery call; needed to handle tick 0
+}
+
+// IsPartitioned reports whether a network partition is currently active.
+func (p *UnreliableNetwork[I, ID]) IsPartitioned() bool {
+	return p.partitionEnd > 0
 }
 
 func (p *UnreliableNetwork[I, ID]) ScheduleDelivery(currentTick int64, fromNode ID, target ID, indicator I) (bool, int64) {
-	// Check if message should be dropped
+	// Advance partition state exactly once per tick (when PartitionRate is configured).
+	// The `initialized` flag handles the edge case where the simulator starts at tick 0:
+	// on the very first call, `!initialized` is true regardless of currentTick value.
+	if p.PartitionRate > 0 && (!p.initialized || currentTick > p.lastTick) {
+		p.initialized = true
+		p.advancePartition(currentTick)
+		p.lastTick = currentTick
+	}
+
+	// During a partition, drop messages between the two groups.
+	if p.partitionEnd > 0 {
+		if p.groupOf(fromNode) != p.groupOf(target) {
+			return false, 0
+		}
+	}
+
+	// Check if message should be dropped by normal packet loss.
 	if p.Rng.Float64() < p.DropRate {
-		return false, 0 // Message dropped
+		return false, 0
 	}
 
 	// Random delay between 1 and MaxDelay (inclusive)
@@ -64,6 +108,124 @@ func (p *UnreliableNetwork[I, ID]) ScheduleDelivery(currentTick int64, fromNode 
 		delay = 1 + p.Rng.Int64N(p.MaxDelay)
 	}
 	return true, delay
+}
+
+// groupOf returns which group (true=A, false=B) the node belongs to in the current
+// partition, lazily assigning it on first encounter.
+func (p *UnreliableNetwork[I, ID]) groupOf(id ID) bool {
+	if inA, assigned := p.groupAssignment[id]; assigned {
+		return inA
+	}
+	inA := p.Rng.Float64() < 0.5
+	p.groupAssignment[id] = inA
+	return inA
+}
+
+// advancePartition ends any expired partition and possibly starts a new one.
+func (p *UnreliableNetwork[I, ID]) advancePartition(currentTick int64) {
+	if p.partitionEnd > 0 && currentTick >= p.partitionEnd {
+		p.partitionEnd = 0
+		p.groupAssignment = nil
+	}
+	if p.partitionEnd == 0 && p.Rng.Float64() < p.PartitionRate {
+		duration := int64(1)
+		if p.MaxPartitionDuration > 1 {
+			duration = 1 + p.Rng.Int64N(p.MaxPartitionDuration)
+		}
+		p.partitionEnd = currentTick + duration
+		p.groupAssignment = make(map[ID]bool)
+	}
+}
+
+// PartitionedNetwork wraps any base delivery policy and adds random network partitions
+// on top of it. Use this when you want partition behaviour combined with a policy that
+// does not natively support it (e.g. FastNetwork). When using UnreliableNetwork,
+// prefer its built-in PartitionRate/MaxPartitionDuration fields instead.
+//
+// During a partition, nodes are split into two groups and messages between them are
+// dropped. Node group assignment is lazy (see UnreliableNetwork for the same logic).
+//
+// In the future this could be extended to model zone/cell topology, where the split
+// always separates known datacenter regions rather than choosing randomly.
+type PartitionedNetwork[I any, ID comparable] struct {
+	Base          IndicatorDeliveryPolicy[I, ID]
+	PartitionRate float64    // probability per tick that a new partition starts (0–1)
+	MaxDuration   int64      // maximum partition length in ticks
+	Rng           *rand.Rand // must be provided
+
+	// groupAssignment holds each node's group for the current partition:
+	//   key present, value true  → group A
+	//   key present, value false → group B
+	//   key absent               → not yet seen this partition (assigned lazily)
+	// nil between partitions.
+	groupAssignment map[ID]bool
+	partitionEnd    int64 // tick when the current partition ends; 0 = no partition
+	lastTick        int64 // last tick for which partition state was advanced
+}
+
+// NewPartitionedNetwork creates a PartitionedNetwork wrapping the given base policy.
+func NewPartitionedNetwork[I any, ID comparable](
+	base IndicatorDeliveryPolicy[I, ID],
+	partitionRate float64,
+	maxDuration int64,
+	rng *rand.Rand,
+) *PartitionedNetwork[I, ID] {
+	return &PartitionedNetwork[I, ID]{
+		Base:          base,
+		PartitionRate: partitionRate,
+		MaxDuration:   maxDuration,
+		Rng:           rng,
+		lastTick:      -1, // ensure advancePartition runs on tick 0
+	}
+}
+
+// IsPartitioned reports whether a network partition is currently active.
+func (p *PartitionedNetwork[I, ID]) IsPartitioned() bool {
+	return p.partitionEnd > 0
+}
+
+func (p *PartitionedNetwork[I, ID]) ScheduleDelivery(currentTick int64, fromNode ID, target ID, indicator I) (bool, int64) {
+	// Advance partition state exactly once per tick.
+	if currentTick > p.lastTick {
+		p.advancePartition(currentTick)
+		p.lastTick = currentTick
+	}
+
+	// During a partition, drop messages between the two groups.
+	if p.partitionEnd > 0 {
+		if p.groupOf(fromNode) != p.groupOf(target) {
+			return false, 0
+		}
+	}
+
+	return p.Base.ScheduleDelivery(currentTick, fromNode, target, indicator)
+}
+
+// groupOf returns which group (true=A, false=B) the given node belongs to during
+// the current partition, assigning it randomly on first encounter.
+func (p *PartitionedNetwork[I, ID]) groupOf(id ID) bool {
+	if inA, assigned := p.groupAssignment[id]; assigned {
+		return inA
+	}
+	inA := p.Rng.Float64() < 0.5
+	p.groupAssignment[id] = inA
+	return inA
+}
+
+// advancePartition ends any expired partition and possibly starts a new one.
+func (p *PartitionedNetwork[I, ID]) advancePartition(currentTick int64) {
+	if p.partitionEnd > 0 && currentTick >= p.partitionEnd {
+		p.partitionEnd = 0
+		p.groupAssignment = nil
+	}
+	if p.partitionEnd == 0 && p.Rng.Float64() < p.PartitionRate {
+		duration := int64(1)
+		if p.MaxDuration > 1 {
+			duration = 1 + p.Rng.Int64N(p.MaxDuration)
+		}
+		p.partitionEnd = currentTick + duration
+		p.groupAssignment = make(map[ID]bool)
+	}
 }
 
 // PerSourcePolicy dispatches to different delivery policies based on which node sent

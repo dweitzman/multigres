@@ -603,16 +603,21 @@ func (p *consensusChaosPolicy) ScheduleDelivery(
 }
 
 func newConsensusChaosPolicyFromSeed(seed int64) *consensusChaosPolicy {
-	// Two independent RNG streams derived from the same seed: one for chaos traffic,
-	// one for ordered-reliable traffic. The streams are independent (different sequence
-	// parameter) so their randomness does not interfere.
-	rng1 := rand.New(rand.NewPCG(uint64(seed), 42))
-	rng2 := rand.New(rand.NewPCG(uint64(seed), 43))
+	// Two independent RNG streams (different sequence parameters) so chaos traffic
+	// and ordered-reliable traffic do not interfere with each other.
+	rng1 := rand.New(rand.NewPCG(uint64(seed), 42)) // chaos: drops, delays, partitions
+	rng2 := rand.New(rand.NewPCG(uint64(seed), 43)) // ordered reliable (discovery)
 	return &consensusChaosPolicy{
+		// UnreliableNetwork with built-in partition support: 3% chance of a partition
+		// starting on any given tick, lasting up to 30 ticks. TerminateIndicators
+		// bypass this layer (handled in ScheduleDelivery before chaosPolicy is reached),
+		// so crashes remain reliable regardless of partition state.
 		chaosPolicy: &dstsim.UnreliableNetwork[consensus.Indicator, consensus.NodeID]{
-			MaxDelay: 5,
-			DropRate: 0.1,
-			Rng:      rng1,
+			MaxDelay:             5,
+			DropRate:             0.1,
+			PartitionRate:        0.03,
+			MaxPartitionDuration: 30,
+			Rng:                  rng1,
 		},
 		orderedPolicy: dstsim.NewOrderedReliableNetwork[consensus.Indicator, consensus.NodeID](5, rng2),
 	}

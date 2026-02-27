@@ -277,6 +277,147 @@ func TestPolicySequence(t *testing.T) {
 	}
 }
 
+// TestPartitionedNetwork verifies PartitionedNetwork partition correctness.
+func TestPartitionedNetwork(t *testing.T) {
+	t.Run("consistent_within_partition", func(t *testing.T) {
+		// A single long-lived partition assigns each node pair exactly once.
+		// All 50 messages between nodes 1 and 2 must either all pass or all be dropped.
+		rng := rand.New(rand.NewPCG(42, 0))
+		policy := dstsim.NewPartitionedNetwork(
+			&dstsim.FastNetwork[int, int]{},
+			1.0,  // start immediately
+			1000, // lasts longer than the test
+			rng,
+		)
+		delivered := 0
+		for tick := range int64(50) {
+			ok, delay := policy.ScheduleDelivery(tick, 1, 2, 0)
+			if ok {
+				require.GreaterOrEqual(t, delay, int64(1))
+				delivered++
+			}
+		}
+		require.True(t, delivered == 0 || delivered == 50,
+			"group assignment must be stable for the duration of one partition")
+	})
+
+	t.Run("lazy_assignment_is_consistent", func(t *testing.T) {
+		// Nodes that first appear mid-partition get a lazily assigned group that
+		// stays stable for the rest of the partition.
+		rng := rand.New(rand.NewPCG(99, 0))
+		policy := dstsim.NewPartitionedNetwork(&dstsim.FastNetwork[int, int]{}, 1.0, 1000, rng)
+
+		ok1, _ := policy.ScheduleDelivery(5, 10, 20, 0) // both nodes new to this partition
+		ok2, _ := policy.ScheduleDelivery(5, 10, 20, 0) // same tick, same result expected
+		ok3, _ := policy.ScheduleDelivery(6, 10, 20, 0) // later tick, same partition
+		require.Equal(t, ok1, ok2, "group assignment must be stable within the same tick")
+		require.Equal(t, ok1, ok3, "group assignment must be stable across ticks in the same partition")
+	})
+
+	t.Run("new_partition_reshuffles_groups", func(t *testing.T) {
+		// With 1-tick partitions, each tick has a fresh independent group assignment.
+		// Over 200 ticks roughly half should pass and half should be dropped.
+		rng := rand.New(rand.NewPCG(7, 0))
+		policy := dstsim.NewPartitionedNetwork(&dstsim.FastNetwork[int, int]{}, 1.0, 1, rng)
+		passed, dropped := 0, 0
+		for tick := range int64(200) {
+			ok, _ := policy.ScheduleDelivery(tick, 1, 2, 0)
+			if ok {
+				passed++
+			} else {
+				dropped++
+			}
+		}
+		require.Greater(t, passed, 0, "some ticks should have nodes in the same group")
+		require.Greater(t, dropped, 0, "some ticks should have nodes in different groups")
+	})
+
+	t.Run("no_partition_when_rate_zero", func(t *testing.T) {
+		rng := rand.New(rand.NewPCG(1, 0))
+		policy := dstsim.NewPartitionedNetwork(&dstsim.FastNetwork[int, int]{}, 0.0, 100, rng)
+		for tick := range int64(50) {
+			ok, delay := policy.ScheduleDelivery(tick, 1, 2, 0)
+			require.True(t, ok)
+			require.Equal(t, int64(1), delay)
+		}
+	})
+}
+
+// TestUnreliableNetworkPartitions verifies that UnreliableNetwork's built-in partition
+// settings behave correctly.
+func TestUnreliableNetworkPartitions(t *testing.T) {
+	t.Run("consistent_within_partition", func(t *testing.T) {
+		policy := &dstsim.UnreliableNetwork[int, int]{
+			MaxDelay:             1,
+			DropRate:             0.0,
+			PartitionRate:        1.0,
+			MaxPartitionDuration: 1000,
+			Rng:                  rand.New(rand.NewPCG(42, 0)),
+		}
+		delivered := 0
+		for tick := range int64(50) {
+			ok, delay := policy.ScheduleDelivery(tick, 1, 2, 0)
+			if ok {
+				require.GreaterOrEqual(t, delay, int64(1))
+				delivered++
+			}
+		}
+		require.True(t, delivered == 0 || delivered == 50,
+			"group assignment must be stable for the duration of one partition")
+	})
+
+	t.Run("lazy_assignment_is_consistent", func(t *testing.T) {
+		policy := &dstsim.UnreliableNetwork[int, int]{
+			MaxDelay:             1,
+			DropRate:             0.0,
+			PartitionRate:        1.0,
+			MaxPartitionDuration: 1000,
+			Rng:                  rand.New(rand.NewPCG(99, 0)),
+		}
+		ok1, _ := policy.ScheduleDelivery(5, 10, 20, 0)
+		ok2, _ := policy.ScheduleDelivery(5, 10, 20, 0)
+		ok3, _ := policy.ScheduleDelivery(6, 10, 20, 0)
+		require.Equal(t, ok1, ok2, "group assignment must be stable within the same tick")
+		require.Equal(t, ok1, ok3, "group assignment must be stable across ticks in the same partition")
+	})
+
+	t.Run("new_partition_reshuffles_groups", func(t *testing.T) {
+		policy := &dstsim.UnreliableNetwork[int, int]{
+			MaxDelay:             1,
+			DropRate:             0.0,
+			PartitionRate:        1.0,
+			MaxPartitionDuration: 1,
+			Rng:                  rand.New(rand.NewPCG(7, 0)),
+		}
+		passed, dropped := 0, 0
+		for tick := range int64(200) {
+			ok, _ := policy.ScheduleDelivery(tick, 1, 2, 0)
+			if ok {
+				passed++
+			} else {
+				dropped++
+			}
+		}
+		require.Greater(t, passed, 0, "some ticks should have nodes in the same group")
+		require.Greater(t, dropped, 0, "some ticks should have nodes in different groups")
+	})
+
+	t.Run("no_partition_when_rate_zero", func(t *testing.T) {
+		policy := &dstsim.UnreliableNetwork[int, int]{
+			MaxDelay:             1,
+			DropRate:             0.0,
+			PartitionRate:        0.0,
+			MaxPartitionDuration: 100,
+			Rng:                  rand.New(rand.NewPCG(1, 0)),
+		}
+		for tick := range int64(50) {
+			ok, delay := policy.ScheduleDelivery(tick, 1, 2, 0)
+			require.True(t, ok)
+			require.Equal(t, int64(1), delay)
+		}
+	})
+}
+
 // TestMinimumDelayEnforcement tests that simulator returns error if policy returns delay < 1
 func TestMinimumDelayEnforcement(t *testing.T) {
 	sim := dstsim.NewSimulator[int, string, int](dstsim.SimulatorOptions{Seed: 1})
