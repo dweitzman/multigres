@@ -560,6 +560,90 @@ func newFlakyApplierCrashSim(t *testing.T, seed int64, failRate float64) (
 	return sim, stores, appliers
 }
 
+// --- Chaos delivery policy ---
+
+// consensusChaosPolicy is a network delivery policy tailored for consensus simulation.
+// It applies different delivery semantics to each traffic class:
+//
+//   - TerminateIndicators are always delivered within 1 tick (reliable, like a SIGTERM).
+//     This ensures the pooler records postgres=stopped and emits a status update before
+//     StopNode takes effect, so the orch learns about the crash via normal status flow.
+//
+//   - Indicators from the discovery node are delivered reliably and in order, but with
+//     variable delay (models an etcd watch stream: ordered, no drops).
+//
+//   - All other orch↔pooler indicators (state proposals, pooler responses, pooler status
+//     updates) are subject to random delay, reordering, and drops, modeling the
+//     unreliable gRPC calls between orch and multipooler in production.
+//
+// This setup motivates the orch's election timeout and term-escalation mechanism:
+// when proposals or responses are dropped, the orch waits up to electionTimeoutTicks
+// before declaring a phase failed and bumping the term to start a fresh round.
+type consensusChaosPolicy struct {
+	chaosPolicy   dstsim.IndicatorDeliveryPolicy[consensus.Indicator, consensus.NodeID]
+	orderedPolicy dstsim.IndicatorDeliveryPolicy[consensus.Indicator, consensus.NodeID]
+}
+
+func (p *consensusChaosPolicy) ScheduleDelivery(
+	currentTick int64,
+	fromNode consensus.NodeID,
+	target consensus.NodeID,
+	indicator consensus.Indicator,
+) (bool, int64) {
+	// TerminateIndicators model a SIGTERM: always delivered, 1-tick latency.
+	if _, ok := indicator.(consensus.TerminateIndicator); ok {
+		return true, 1
+	}
+	// Discovery traffic models an etcd watch stream: ordered and reliable.
+	if fromNode == discoveryID {
+		return p.orderedPolicy.ScheduleDelivery(currentTick, fromNode, target, indicator)
+	}
+	// All other orch↔pooler traffic (state proposals, responses, status updates): chaos.
+	return p.chaosPolicy.ScheduleDelivery(currentTick, fromNode, target, indicator)
+}
+
+func newConsensusChaosPolicyFromSeed(seed int64) *consensusChaosPolicy {
+	// Two independent RNG streams derived from the same seed: one for chaos traffic,
+	// one for ordered-reliable traffic. The streams are independent (different sequence
+	// parameter) so their randomness does not interfere.
+	rng1 := rand.New(rand.NewPCG(uint64(seed), 42))
+	rng2 := rand.New(rand.NewPCG(uint64(seed), 43))
+	return &consensusChaosPolicy{
+		chaosPolicy: &dstsim.UnreliableNetwork[consensus.Indicator, consensus.NodeID]{
+			MaxDelay: 5,
+			DropRate: 0.1,
+			Rng:      rng1,
+		},
+		orderedPolicy: dstsim.NewOrderedReliableNetwork[consensus.Indicator, consensus.NodeID](5, rng2),
+	}
+}
+
+// newChaosSim creates a simulator identical to newHappyPathSim but with the
+// consensusChaosPolicy delivery policy. Tests using this simulator exercise the
+// orch's timeout and term-escalation code paths that activate when proposals or
+// responses are dropped.
+func newChaosSim(t *testing.T, seed int64) (
+	*dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID],
+	map[consensus.NodeID]*memStorage,
+) {
+	t.Helper()
+	sim, stores := newHappyPathSim(t, seed)
+	sim.SetDeliveryPolicy(newConsensusChaosPolicyFromSeed(seed + 5000))
+	return sim, stores
+}
+
+// newChaosDriverSim creates a simulator with the chaos delivery policy and an
+// autonomous crashDriverNode, combining network faults with primary crashes.
+func newChaosDriverSim(t *testing.T, seed int64) (
+	*dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID],
+	map[consensus.NodeID]*memStorage,
+) {
+	t.Helper()
+	sim, stores := newCrashDriverSim(t, seed)
+	sim.SetDeliveryPolicy(newConsensusChaosPolicyFromSeed(seed + 5000))
+	return sim, stores
+}
+
 // --- Tests ---
 
 // TestHappyPath_PrimaryElected verifies that under a reliable fast network,
@@ -610,5 +694,38 @@ func TestPrimaryPooler_1000Crashes(t *testing.T) {
 	h.RequireRunUntil(
 		dstsim.NewAtLeastNTimes(1000, dstsim.NewInOrder(&noPrimaryActive{}, &activePrimaryExists{})),
 		200_000,
+	)
+}
+
+// TestChaosNetwork_PrimaryElected verifies that even under a chaotic network (10%
+// drop rate, up to 5-tick delay, implicit reordering), the cluster eventually elects
+// an active primary. This exercises the orch's election-timeout and term-escalation
+// path: dropped proposals or responses cause a phase to time out after
+// electionTimeoutTicks, at which point the orch increments the term and retries
+// from the beginning.
+func TestChaosNetwork_PrimaryElected(t *testing.T) {
+	sim, _ := newChaosSim(t, 42)
+	for _, inv := range standardInvariants() {
+		sim.Always(inv)
+	}
+	h := dstsim.NewSimulationTestHelper(t, sim)
+	h.RequireRunUntil(&activePrimaryExists{}, 5_000)
+}
+
+// TestChaosNetwork_1000Crashes verifies that at least 1000 crash→recovery cycles
+// complete under a chaotic network, exercising both the crash-recovery path and the
+// orch's timeout/term-escalation path together. TerminateIndicators are always
+// delivered (1-tick), so the pooler reliably notifies orchs of its stopped status
+// before being physically stopped; all other orch↔pooler traffic is subject to
+// random delay, reordering, and drops.
+func TestChaosNetwork_1000Crashes(t *testing.T) {
+	sim, _ := newChaosDriverSim(t, 42)
+	for _, inv := range standardInvariants() {
+		sim.Always(inv)
+	}
+	h := dstsim.NewSimulationTestHelper(t, sim)
+	h.RequireRunUntil(
+		dstsim.NewAtLeastNTimes(1000, dstsim.NewInOrder(&noPrimaryActive{}, &activePrimaryExists{})),
+		500_000,
 	)
 }
