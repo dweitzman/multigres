@@ -183,3 +183,86 @@ func (c *AbsoluteTickReached[I, R, ID]) Describe(sim *Simulator[I, R, ID]) strin
 func AbsoluteTick[I any, R any, ID comparable](tick int64) *AbsoluteTickReached[I, R, ID] {
 	return &AbsoluteTickReached[I, R, ID]{targetTick: tick}
 }
+
+// InOrder tracks a multi-phase sequence tick by tick: each condition must become
+// true in the given order. When the last condition fires after all previous ones
+// have been satisfied in sequence, InOrder returns true for that tick and
+// immediately resets — ready to detect the next cycle. This single-fire-per-cycle
+// behavior makes it suitable for composition with AtLeastNTimes.
+//
+// Example: NewInOrder(faultCondition, recoveryCondition) fires once each time
+// a fault is observed followed by a recovery.
+type InOrder[I any, R any, ID comparable] struct {
+	conditions []Condition[I, R, ID]
+	current    int // index of the condition currently being waited for
+}
+
+func (c *InOrder[I, R, ID]) Name() string {
+	names := make([]string, len(c.conditions))
+	for i, cond := range c.conditions {
+		names[i] = cond.Name()
+	}
+	return fmt.Sprintf("in_order(%s)", strings.Join(names, ", "))
+}
+
+func (c *InOrder[I, R, ID]) Eval(sim *Simulator[I, R, ID]) bool {
+	if len(c.conditions) == 0 {
+		return false
+	}
+	if c.conditions[c.current].Eval(sim) {
+		c.current++
+		if c.current == len(c.conditions) {
+			c.current = 0 // reset for next cycle
+			return true
+		}
+	}
+	return false
+}
+
+func (c *InOrder[I, R, ID]) Describe(sim *Simulator[I, R, ID]) string {
+	if len(c.conditions) == 0 {
+		return "in_order: no conditions"
+	}
+	return fmt.Sprintf("waiting for condition %d/%d: %s",
+		c.current+1, len(c.conditions), c.conditions[c.current].Describe(sim))
+}
+
+// NewInOrder returns a condition that fires (returns true) once per complete
+// ordered sequence. Each condition must become true on a separate tick, in the
+// given order. Use it with NewAtLeastNTimes to assert that a multi-phase scenario
+// (e.g. fault → detection → recovery) repeats N times.
+func NewInOrder[I any, R any, ID comparable](conditions ...Condition[I, R, ID]) *InOrder[I, R, ID] {
+	return &InOrder[I, R, ID]{conditions: conditions}
+}
+
+// AtLeastNTimes wraps an inner condition and counts how many ticks it returns true.
+// It becomes satisfied (Eval returns true) once the count reaches the required number.
+// Compose with NewInOrder to assert that a fault→recovery cycle happens N times:
+//
+//	NewAtLeastNTimes(1000, NewInOrder(faultCondition, recoveryCondition))
+type AtLeastNTimes[I any, R any, ID comparable] struct {
+	required int
+	inner    Condition[I, R, ID]
+	count    int
+}
+
+func (c *AtLeastNTimes[I, R, ID]) Name() string {
+	return fmt.Sprintf("at_least_%d_times(%s)", c.required, c.inner.Name())
+}
+
+func (c *AtLeastNTimes[I, R, ID]) Eval(sim *Simulator[I, R, ID]) bool {
+	if c.inner.Eval(sim) {
+		c.count++
+	}
+	return c.count >= c.required
+}
+
+func (c *AtLeastNTimes[I, R, ID]) Describe(sim *Simulator[I, R, ID]) string {
+	return fmt.Sprintf("observed %d/%d times: %s", c.count, c.required, c.inner.Describe(sim))
+}
+
+// NewAtLeastNTimes returns a condition satisfied after inner has returned true at least
+// n times. Typically composed with NewInOrder to require N fault→recovery cycles.
+func NewAtLeastNTimes[I any, R any, ID comparable](n int, inner Condition[I, R, ID]) *AtLeastNTimes[I, R, ID] {
+	return &AtLeastNTimes[I, R, ID]{required: n, inner: inner}
+}

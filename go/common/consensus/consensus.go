@@ -175,8 +175,30 @@ type PoolerStorage interface {
 // and postgres is running. It returns true if the role change completed successfully
 // this tick, false to signal a transient failure—the pooler will retry next tick.
 //
+// In production, implementing Apply for a replica means writing primary_conninfo to
+// postgresql.conf (or ALTER SYSTEM SET), ensuring standby.signal exists, and calling
+// pg_reload_conf() to reconnect streaming replication without a full restart.
+// Implementing Apply for a primary means setting synchronous_standby_names and calling
+// pg_ctl promote (or SELECT pg_promote()) to exit standby mode.
+//
 // In simulation, use a fake implementation with a configurable failure rate.
-// In production, implement with real pg_ctl calls and postgresql.conf updates.
+//
+// TODO: Consider binding replica replication configuration to a specific
+// (NodeID, PrimaryTerm) pair rather than just NodeID — e.g. by using a
+// term-specific replication password. This would prevent a replica that was
+// configured for node X at term 5 from inadvertently participating in a quorum
+// if node X is elected at a later term with different sync-replica membership.
+// Implementation requires an invasive postgres change (term-keyed credentials)
+// and is deferred until the benefit is better understood.
 type RoleApplier interface {
+	// Apply executes the committed role change. Returns true on success, false for
+	// a transient failure (PoolerNode retries on the next tick while postgres is running).
 	Apply(state PoolerPersistentState) bool
+
+	// AppliedState returns the postgres configuration currently in effect on disk —
+	// the last state for which Apply() returned true. In production this is read from
+	// postgresql.conf / standby.signal (the postgres GUC files), which survive crashes
+	// and are therefore recoverable on restart without re-running Apply().
+	// Returns false if no role change has been applied yet (clean first-start).
+	AppliedState() (PoolerPersistentState, bool)
 }

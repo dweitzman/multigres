@@ -45,6 +45,9 @@ type PoolerStatusIndicator struct {
 	State          PoolerPersistentState
 	Applied        bool           // true if the committed state has been operationally executed
 	PostgresStatus PostgresStatus // current postgres operational status
+	// LastApplied is the postgres configuration currently in effect on disk.
+	// Zero value (Role==RoleUnknown) means nothing has been applied yet.
+	LastApplied PoolerPersistentState
 }
 
 func (PoolerStatusIndicator) consensusIndicator() {}

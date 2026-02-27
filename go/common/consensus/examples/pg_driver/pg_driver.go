@@ -160,6 +160,24 @@ func (a *PostgresApplier) Apply(state consensus.PoolerPersistentState) bool {
 	}
 }
 
+// AppliedState returns the replication configuration currently in effect on disk
+// by reading the postgres GUC settings. This is recoverable after a crash because
+// postgresql.conf / standby.signal survive process restarts.
+//
+// In production, derive the PoolerPersistentState by reading:
+//   - Whether standby.signal exists → Role = RoleReplica; absent → Role = RolePrimary.
+//   - primary_conninfo (from postgresql.auto.conf) → Primary field.
+//   - synchronous_standby_names (from postgresql.auto.conf) → SyncReplicas field.
+//
+// Returns false if no role change has been applied yet (clean first-start, config
+// files contain only defaults).
+func (a *PostgresApplier) AppliedState() (consensus.PoolerPersistentState, bool) {
+	// TODO: Read postgresql.conf / standby.signal to recover applied state.
+	// For now returns false (no applied state known), which causes PoolerNode to
+	// fall back to the committed state on restart.
+	return consensus.PoolerPersistentState{}, false
+}
+
 // ── OrchDriver ───────────────────────────────────────────────────────────────
 
 // OrchDriver runs an OrchNode state machine at a fixed tick rate. On each tick it

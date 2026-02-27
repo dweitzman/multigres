@@ -329,6 +329,99 @@ func TestNestedCombinators(t *testing.T) {
 	require.NoError(t, err, "complex nested condition should be satisfied")
 }
 
+// TestInOrder verifies that InOrder fires once per ordered-sequence completion
+// and resets correctly for the next cycle.
+func TestInOrder(t *testing.T) {
+	t.Run("fires when problem then resolution", func(t *testing.T) {
+		sim := dstsim.NewSimulator[int, string, int](dstsim.SimulatorOptions{Seed: 1})
+		node := &CounterNode{id: 1}
+		sim.RegisterNode(node)
+
+		// Problem: counter reaches exactly 5. Resolution: counter reaches exactly 10.
+		// InOrder should fire once when counter hits 10 (after having seen 5).
+		inOrder := dstsim.NewInOrder(
+			&CounterEquals{nodeID: 1, value: 5},
+			&CounterEquals{nodeID: 1, value: 10},
+		)
+		wrapped := dstsim.NewAtLeastNTimes(1, inOrder)
+		err := sim.RunUntil(wrapped, 30)
+		require.NoError(t, err, "should fire when counter goes 5 then 10")
+	})
+
+	t.Run("does not fire when resolution precedes problem", func(t *testing.T) {
+		sim := dstsim.NewSimulator[int, string, int](dstsim.SimulatorOptions{Seed: 1})
+		node := &CounterNode{id: 1}
+		sim.RegisterNode(node)
+
+		// Problem at counter==10, resolution at counter==5. Since the counter is
+		// monotonically increasing, the resolution (==5) never occurs after the
+		// problem (==10), so InOrder never fires.
+		inOrder := dstsim.NewInOrder(
+			&CounterEquals{nodeID: 1, value: 10},
+			&CounterEquals{nodeID: 1, value: 5},
+		)
+		wrapped := dstsim.NewAtLeastNTimes(1, inOrder)
+		err := sim.RunUntil(wrapped, 20)
+		require.Error(t, err, "should not fire when resolution never follows problem")
+	})
+
+	t.Run("three-phase sequence fires in order", func(t *testing.T) {
+		sim := dstsim.NewSimulator[int, string, int](dstsim.SimulatorOptions{Seed: 1})
+		node := &CounterNode{id: 1}
+		sim.RegisterNode(node)
+
+		// Three-phase: counter reaches 3, then 6, then 9.
+		inOrder := dstsim.NewInOrder(
+			&CounterEquals{nodeID: 1, value: 3},
+			&CounterEquals{nodeID: 1, value: 6},
+			&CounterEquals{nodeID: 1, value: 9},
+		)
+		wrapped := dstsim.NewAtLeastNTimes(1, inOrder)
+		err := sim.RunUntil(wrapped, 30)
+		require.NoError(t, err, "should fire after all three phases complete in order")
+	})
+}
+
+// TestAtLeastNTimes verifies that AtLeastNTimes counts inner fires and becomes
+// satisfied only after the required number of occurrences.
+func TestAtLeastNTimes(t *testing.T) {
+	t.Run("satisfied when inner fires enough times", func(t *testing.T) {
+		sim := dstsim.NewSimulator[int, string, int](dstsim.SimulatorOptions{Seed: 1})
+		node := &CounterNode{id: 1}
+		sim.RegisterNode(node)
+
+		// CounterGreaterThan(3) fires every tick once counter > 3.
+		// AtLeastNTimes(5) requires 5 fires, so it should satisfy quickly.
+		cond := dstsim.NewAtLeastNTimes(5, &CounterGreaterThan{nodeID: 1, value: 3})
+		err := sim.RunUntil(cond, 30)
+		require.NoError(t, err, "should be satisfied after 5+ ticks with counter > 3")
+	})
+
+	t.Run("not satisfied when inner never fires", func(t *testing.T) {
+		sim := dstsim.NewSimulator[int, string, int](dstsim.SimulatorOptions{Seed: 1})
+		node := &CounterNode{id: 1}
+		sim.RegisterNode(node)
+
+		cond := dstsim.NewAtLeastNTimes(5, &CounterGreaterThan{nodeID: 1, value: 1000})
+		err := sim.RunUntil(cond, 20)
+		require.Error(t, err, "should not be satisfied if inner never fires")
+	})
+
+	t.Run("composition AtLeastNTimes(InOrder) counts recovery cycles", func(t *testing.T) {
+		sim := dstsim.NewSimulator[int, string, int](dstsim.SimulatorOptions{Seed: 1})
+		node := &CounterNode{id: 1}
+		sim.RegisterNode(node)
+
+		// InOrder fires once (when counter goes 5 then 10), so AtLeastNTimes(1) satisfies.
+		cond := dstsim.NewAtLeastNTimes(1, dstsim.NewInOrder(
+			&CounterEquals{nodeID: 1, value: 5},
+			&CounterEquals{nodeID: 1, value: 10},
+		))
+		err := sim.RunUntil(cond, 30)
+		require.NoError(t, err, "should satisfy once the single InOrder cycle completes")
+	})
+}
+
 // TestStageActiveCondition tests the StageActiveCondition directly
 func TestStageActiveCondition(t *testing.T) {
 	sim := dstsim.NewSimulator[int, string, int](dstsim.SimulatorOptions{Seed: 1})

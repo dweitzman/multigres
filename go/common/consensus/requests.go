@@ -58,7 +58,13 @@ func (PoolerResponseRequest) consensusRequest() {}
 type PoolerStatusUpdateRequest struct {
 	Applied        bool
 	PostgresStatus PostgresStatus
-	State          PoolerPersistentState // the committed state this status applies to
+	State          PoolerPersistentState // the committed (goal) state
+	// LastApplied is the postgres configuration currently in effect on disk —
+	// the last state for which Apply() succeeded. When Applied=false, this
+	// differs from State and tells the orch what role postgres is actually
+	// running right now (recoverable from postgresql.conf / standby.signal).
+	// Zero value (Role==RoleUnknown) means nothing has been applied yet.
+	LastApplied PoolerPersistentState
 }
 
 func (PoolerStatusUpdateRequest) consensusRequest() {}
