@@ -25,10 +25,13 @@ package consensus
 //     with Applied=false; the apply step is always a separate operation.
 //
 //  2. Apply (operational): the pooler executes the role change — pg_ctl promote,
-//     reconfigure recovery settings, update routing. Tracked by committed.Applied.
-//     Applied requires postgres to be running. If postgres was stopped when a
-//     proposal was committed, or if the RoleApplier reports a transient failure,
-//     the pooler retries on each subsequent Step while postgres is running.
+//     reconfigure recovery settings, update routing. Signalled by an incoming
+//     ApplySucceededIndicator from the local postgres apply loop. The apply loop
+//     runs asynchronously (goroutine in production, driver node in simulation) and
+//     delivers the indicator once the role change is complete.
+//     Once PoolerNode receives ApplySucceededIndicator, it persists Applied=true to
+//     storage before advertising the state change to orchs, so the orch only sees
+//     Applied=true after it is durably stored.
 //
 // Both committed state and applied status are persisted via storage.Save before
 // being reported. PostgresStatus is ephemeral (not persisted). On a crash-restart,
@@ -37,12 +40,12 @@ package consensus
 //
 // The lastApplied state tracks the postgres configuration actually in effect on disk
 // (what postgresql.conf / standby.signal currently contain). It differs from committed
-// when a new proposal has been committed but not yet applied. On crash-restart, the
-// RoleApplier.AppliedState() recovers lastApplied by reading the postgres GUC files.
+// when a new proposal has been committed but not yet applied. On crash-restart, if
+// the last committed state was successfully applied (Applied=true in storage), it is
+// restored as lastApplied; otherwise the apply loop re-applies after restart.
 type PoolerNode struct {
 	id      NodeID
 	storage PoolerStorage
-	applier RoleApplier
 
 	// committed is the last state successfully persisted via storage.Save.
 	// committed.Applied records whether the role change has been executed on disk.
@@ -50,10 +53,11 @@ type PoolerNode struct {
 
 	// lastApplied is the most recently applied PoolerPersistentState — the
 	// configuration that postgres is actually running with right now. It is set
-	// whenever committed.Applied transitions to true (Apply() returns true).
-	// On crash-restart it is recovered via RoleApplier.AppliedState(), which reads
-	// the postgres GUC files (postgresql.conf / standby.signal) from disk.
-	// hasLastApplied is false only before the very first successful Apply() call.
+	// whenever committed.Applied transitions to true (via ApplySucceededIndicator).
+	// On crash-restart it is recovered from committed.Applied in storage: if the
+	// last committed state was applied before the crash, committed.Applied=true and
+	// lastApplied is restored to committed; otherwise the apply loop re-applies.
+	// hasLastApplied is false only before the very first successful apply.
 	lastApplied    PoolerPersistentState
 	hasLastApplied bool
 
@@ -66,17 +70,16 @@ type PoolerNode struct {
 	needsStatusBroadcast bool
 }
 
-// NewPoolerNode creates a new pooler node with the given identity, storage, and applier.
-// It calls storage.Load() to restore any previously committed state — on first run with
-// an empty storage this is a no-op (zero PoolerPersistentState). If the applier is
-// non-nil, it also calls applier.AppliedState() to recover the last-applied postgres
-// configuration (equivalent to reading postgresql.conf / standby.signal on disk).
-// Pass nil for applier to apply immediately every tick (useful in simulation).
-func NewPoolerNode(id NodeID, storage PoolerStorage, applier RoleApplier) *PoolerNode {
+// NewPoolerNode creates a new pooler node with the given identity and storage.
+// It calls storage.Load() to restore any previously committed state — on first run
+// with an empty storage this is a no-op (zero PoolerPersistentState). If the loaded
+// committed state has Applied=true (the role change completed before the last crash),
+// lastApplied is initialised to that state so EffectiveState() and PossibleStates()
+// immediately reflect the correct on-disk configuration.
+func NewPoolerNode(id NodeID, storage PoolerStorage) *PoolerNode {
 	n := &PoolerNode{
 		id:             id,
 		storage:        storage,
-		applier:        applier,
 		postgresStatus: PostgresRunning,
 	}
 	if state, err := storage.Load(); err == nil {
@@ -103,26 +106,16 @@ func (n *PoolerNode) Restart() {
 	if state, err := n.storage.Load(); err == nil {
 		n.committed = state
 	}
-	// Recover the actual postgres configuration from the applier. In production
-	// this reads postgresql.conf / standby.signal from disk; it is recoverable
-	// even after a crash because the postgres GUC files survive process restarts.
 	n.recoverLastApplied()
 	n.postgresStatus = PostgresRunning
 	n.needsStatusBroadcast = true
 }
 
-// recoverLastApplied sets lastApplied from the applier (in production: reads GUC
-// files). With a nil applier, apply is always immediate so committed.Applied=true
-// implies the committed state IS the last-applied state.
+// recoverLastApplied sets lastApplied from the committed state loaded from storage.
+// If the committed state was successfully applied before the last crash (Applied=true
+// in storage), the committed state IS the last-applied state and postgres is running
+// with that configuration. If Applied=false the apply loop will re-apply after startup.
 func (n *PoolerNode) recoverLastApplied() {
-	if n.applier != nil {
-		if state, ok := n.applier.AppliedState(); ok {
-			n.lastApplied = state
-			n.hasLastApplied = true
-		}
-		return
-	}
-	// nil applier: apply is immediate, so if committed is applied it IS the last-applied state.
 	if n.committed.Applied {
 		n.lastApplied = n.committed
 		n.hasLastApplied = true
@@ -202,28 +195,21 @@ func (n *PoolerNode) Step(tick int64, indicators []Indicator) []Request {
 				n.postgresStatus = PostgresStopped
 				changed = true
 			}
-		}
-	}
-
-	// If we have committed-but-unapplied state and postgres is now running, ask the
-	// RoleApplier to execute the role change. In production this corresponds to the
-	// startup sequence: postgres has restarted with the previous on-disk configuration,
-	// and the pooler now completes the role change (e.g. pg_ctl promote, updating
-	// postgresql.conf). The applier may return false for transient failures; the
-	// pooler retries on each subsequent tick until it succeeds.
-	//
-	// TODO: Evaluate whether calling Apply() on every tick until success is the
-	// right model for the real postgres case, or whether Apply() should be called
-	// once and multipooler should push an indicator when the role change completes
-	// (e.g. after pg_ctl promote finishes or streaming replication reconnects).
-	if !n.committed.Applied && n.postgresStatus == PostgresRunning && n.applyThisTick() {
-		updated := n.committed
-		updated.Applied = true
-		if err := n.storage.Save(updated); err == nil {
-			n.committed = updated
-			n.lastApplied = updated
-			n.hasLastApplied = true
-			changed = true
+		case ApplySucceededIndicator:
+			// The local postgres apply loop has completed the committed role change.
+			// Only accept if term+seq match the current committed state (the proposal may
+			// have advanced since the apply started). Persist Applied=true before
+			// advertising — the orch only sees this after it is durably stored.
+			if v.VotedTerm == n.committed.VotedTerm && v.VotedSeqNum == n.committed.VotedSeqNum && !n.committed.Applied {
+				updated := n.committed
+				updated.Applied = true
+				if err := n.storage.Save(updated); err == nil {
+					n.committed = updated
+					n.lastApplied = updated
+					n.hasLastApplied = true
+					changed = true
+				}
+			}
 		}
 	}
 
@@ -233,16 +219,6 @@ func (n *PoolerNode) Step(tick int64, indicators []Indicator) []Request {
 	}
 
 	return requests
-}
-
-// applyThisTick reports whether the role change should be applied this tick.
-// With no applier (nil) it always returns true. Otherwise it delegates to the
-// RoleApplier, which may return false to simulate a transient failure.
-func (n *PoolerNode) applyThisTick() bool {
-	if n.applier == nil {
-		return true
-	}
-	return n.applier.Apply(n.committed)
 }
 
 func (n *PoolerNode) handleOrchState(ind OrchStateIndicator) ([]Request, bool) {
@@ -274,6 +250,23 @@ func (n *PoolerNode) handleOrchState(ind OrchStateIndicator) ([]Request, bool) {
 		}}, false
 	}
 
+	// Reject if same term, same coordinator, but seq number goes backwards.
+	// Under a chaotic network, a stale out-of-order proposal (e.g., a Begin at seq=1)
+	// could arrive after a Revoke at seq=2 was already committed and applied, regressing
+	// the Applied flag. The orch has already advanced past this seq, so reject it.
+	if state.VotingTerm == n.committed.VotedTerm &&
+		n.committed.VotedCoord != "" &&
+		state.CoordID == n.committed.VotedCoord &&
+		state.SeqNum < n.committed.VotedSeqNum {
+		return []Request{PoolerResponseRequest{
+			ToOrch:     ind.FromOrch,
+			VotingTerm: state.VotingTerm,
+			SeqNum:     state.SeqNum,
+			Accepted:   false,
+			KnownTerm:  n.committed.VotedTerm,
+		}}, false
+	}
+
 	// Reject if the orch's expected primary term does not match ours (stale cluster view).
 	if ind.ExpectedPrimaryTerm > 0 && ind.ExpectedPrimaryTerm != n.committed.PrimaryTerm {
 		return []Request{PoolerResponseRequest{
@@ -292,8 +285,8 @@ func (n *PoolerNode) handleOrchState(ind OrchStateIndicator) ([]Request, bool) {
 	}
 
 	// Always commit with Applied=false. The apply step (pg_ctl, postgresql.conf, etc.)
-	// is always a separate operation: the retry loop in Step() calls the RoleApplier
-	// once postgres is running and the applier signals success.
+	// is always a separate operation: the apply loop delivers ApplySucceededIndicator
+	// once postgres is running and the role change completes.
 	newState := PoolerPersistentState{
 		VotedTerm:    state.VotingTerm,
 		VotedSeqNum:  state.SeqNum,

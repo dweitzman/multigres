@@ -99,3 +99,17 @@ type TerminateRequest struct {
 }
 
 func (TerminateRequest) consensusRequest() {}
+
+// ApplySucceededRequest is emitted by an applyDriverNode (simulation only) when the
+// postgres apply loop for a specific pooler succeeds. The RequestHandler converts this
+// to an ApplySucceededIndicator delivered to the target pooler.
+//
+// In production the apply goroutine runs within the multipooler process and writes
+// ApplySucceededIndicator directly onto the incoming channel — no request routing needed.
+type ApplySucceededRequest struct {
+	Target      NodeID
+	VotedTerm   int64
+	VotedSeqNum int64
+}
+
+func (ApplySucceededRequest) consensusRequest() {}

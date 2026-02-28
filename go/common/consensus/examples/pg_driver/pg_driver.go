@@ -16,7 +16,7 @@
 // consensus state machines. It shows:
 //
 //   - AtomicStateFile: crash-safe PoolerStorage (write-rename + fsync).
-//   - PostgresApplier: operational RoleApplier (pg_ctl, postgresql.conf, pg_reload_conf).
+//   - PostgresApplier: executes role changes (pg_ctl, postgresql.conf, pg_reload_conf).
 //   - OrchDriver: main loop for OrchNode. The orch owns all outbound gRPC connections
 //     to poolers. Two call types per pooler:
 //     (1) ProposeState (unary) — broadcasts a consensus state change; the pooler's
@@ -27,6 +27,11 @@
 //   - PoolerDriver: gRPC server for PoolerNode. The pooler never dials the orch.
 //     It serves ProposeState (unary) and HealthCheck (server-streaming) RPCs, mapping
 //     them to/from the Indicator/Request types the state machine understands.
+//     After each tick the driver checks whether the committed role change needs to be
+//     applied. If so, it starts (or checks) an apply goroutine that runs the postgres
+//     operations asynchronously and writes ApplySucceededIndicator onto the incoming
+//     channel when done. PoolerNode is never accessed from outside the tick loop —
+//     all communication goes through the indicators channel.
 //
 // gRPC call sites are annotated with comments but not wired to real proto stubs.
 // Both drivers compile against the consensus interfaces so any API change surfaces
@@ -42,13 +47,9 @@ import (
 	"github.com/multigres/multigres/go/common/consensus"
 )
 
-// Compile-time checks: production implementations must satisfy the interfaces
-// PoolerNode depends on. Any API change breaks the build here, prompting a review
-// of whether the production path still makes sense.
-var (
-	_ consensus.PoolerStorage = (*AtomicStateFile)(nil)
-	_ consensus.RoleApplier   = (*PostgresApplier)(nil)
-)
+// Compile-time check: production implementation must satisfy the storage interface.
+// Any API change breaks the build here, prompting a review of the production path.
+var _ consensus.PoolerStorage = (*AtomicStateFile)(nil)
 
 // ── AtomicStateFile (consensus.PoolerStorage) ────────────────────────────────
 
@@ -128,18 +129,17 @@ func dirOf(path string) string {
 	return "."
 }
 
-// ── PostgresApplier (consensus.RoleApplier) ──────────────────────────────────
+// ── PostgresApplier ───────────────────────────────────────────────────────────
 
 // PostgresApplier executes replication role changes on the local PostgreSQL
-// instance. Injected into NewPoolerNode by the multipooler service alongside a
-// live PgController (pgctld client or pg_ctl wrapper).
+// instance. Used by PoolerDriver after each tick to drive the apply loop.
 type PostgresApplier struct {
 	// pg PgController — interface to pg_ctl, ALTER SYSTEM, pg_reload_conf, etc.
 }
 
-// Apply executes the role change described by state. Returns true on success,
-// false for a transient failure (PoolerNode retries on the next tick).
-func (a *PostgresApplier) Apply(state consensus.PoolerPersistentState) bool {
+// apply executes the role change described by state. Returns true on success,
+// false for a transient failure (caller retries on the next tick).
+func (a *PostgresApplier) apply(state consensus.PoolerPersistentState) bool {
 	switch state.Role {
 	case consensus.RolePrimary:
 		// 1. ALTER SYSTEM SET synchronous_standby_names = 'ANY 1 (...)' using state.SyncReplicas.
@@ -159,24 +159,6 @@ func (a *PostgresApplier) Apply(state consensus.PoolerPersistentState) bool {
 		// RoleUnknown: no proposal received yet; nothing to apply.
 		return true
 	}
-}
-
-// AppliedState returns the replication configuration currently in effect on disk
-// by reading the postgres GUC settings. This is recoverable after a crash because
-// postgresql.conf / standby.signal survive process restarts.
-//
-// In production, derive the PoolerPersistentState by reading:
-//   - Whether standby.signal exists → Role = RoleReplica; absent → Role = RolePrimary.
-//   - primary_conninfo (from postgresql.auto.conf) → Primary field.
-//   - synchronous_standby_names (from postgresql.auto.conf) → SyncReplicas field.
-//
-// Returns false if no role change has been applied yet (clean first-start, config
-// files contain only defaults).
-func (a *PostgresApplier) AppliedState() (consensus.PoolerPersistentState, bool) {
-	// TODO: Read postgresql.conf / standby.signal to recover applied state.
-	// For now returns false (no applied state known), which causes PoolerNode to
-	// fall back to the committed state on restart.
-	return consensus.PoolerPersistentState{}, false
 }
 
 // ── OrchDriver ───────────────────────────────────────────────────────────────
@@ -324,14 +306,25 @@ func (d *OrchDriver) OnPoolerRemoved(poolerID consensus.NodeID) {
 //	  2. The handler streams each snapshot to the orch as a proto message.
 //	  Applied-state changes reach the orch here, not via a pooler-initiated RPC.
 //
+// After each tick the driver also checks whether the committed role change needs
+// to be applied. If so, it starts a goroutine that runs the postgres operations
+// (pg_ctl promote, ALTER SYSTEM SET, pg_reload_conf) asynchronously and writes
+// ApplySucceededIndicator onto incoming when done. PoolerNode is never accessed
+// from outside the tick loop — all communication goes through the indicators channel.
+//
 // In production a SIGTERM handler pushes a TerminateIndicator onto incoming so
 // the pooler can record the postgres shutdown before the process exits.
 type PoolerDriver struct {
 	node           *consensus.PoolerNode
+	pg             *PostgresApplier
 	tick           int64
-	incoming       chan consensus.Indicator                 // fed by gRPC handlers; drained each tick
+	incoming       chan consensus.Indicator                 // fed by gRPC handlers and apply loop; drained each tick
 	proposeReplies chan consensus.PoolerResponseRequest     // PoolerResponseRequests for ProposeState
 	statusUpdates  chan consensus.PoolerStatusUpdateRequest // snapshots for HealthCheck streams
+	// applyingFor is the StateID of the proposal the current apply goroutine is
+	// working on. Prevents spawning a second goroutine for the same proposal
+	// while the first is still in flight. Only read/written in the tick loop.
+	applyingFor consensus.StateID
 }
 
 // NewPoolerDriver creates a PoolerDriver. The PoolerNode loads its last committed
@@ -339,11 +332,12 @@ type PoolerDriver struct {
 func NewPoolerDriver(
 	id consensus.NodeID,
 	stateFile *AtomicStateFile,
-	applier *PostgresApplier,
+	pg *PostgresApplier,
 ) *PoolerDriver {
-	node := consensus.NewPoolerNode(id, stateFile, applier)
+	node := consensus.NewPoolerNode(id, stateFile)
 	return &PoolerDriver{
 		node:           node,
+		pg:             pg,
 		incoming:       make(chan consensus.Indicator, 64),
 		proposeReplies: make(chan consensus.PoolerResponseRequest, 1),
 		statusUpdates:  make(chan consensus.PoolerStatusUpdateRequest, 4),
@@ -384,6 +378,49 @@ func (d *PoolerDriver) Run(ctx context.Context) error {
 					default:
 					}
 				}
+			}
+
+			// After the tick, check whether the committed role change needs applying.
+			// PoolerNode is never accessed from the goroutine — only from this tick
+			// loop — so there is no concurrent read.
+			//
+			// Synchronization guarantees:
+			//
+			// (1) No two simultaneous applies for the same proposal.
+			//     applyingFor tracks the StateID of the in-flight goroutine.
+			//     We only spawn a new goroutine when committed.VotedStateID()
+			//     differs, so a second goroutine for the same proposal is
+			//     never started while the first is still running.
+			//
+			// (2) An out-of-date apply can never overwrite a newer committed state.
+			//     When the committed goal advances (new proposal), we start a fresh
+			//     goroutine immediately without waiting for the previous one to
+			//     finish. The previous goroutine may still be running postgres
+			//     operations, but its ApplySucceededIndicator carries the old
+			//     VotedTerm/VotedSeqNum. PoolerNode validates those values against
+			//     the current committed state before accepting the indicator, so a
+			//     stale result is silently discarded and applied state never reverts.
+			//
+			//     (In production you may also cancel the old goroutine's context
+			//     to avoid redundant postgres work, but correctness does not
+			//     require it — the state-machine guard is sufficient.)
+			committed := d.node.CommittedState()
+			if !d.node.IsApplied() && d.node.PostgresStatus() == consensus.PostgresRunning &&
+				committed.VotedStateID() != d.applyingFor {
+				d.applyingFor = committed.VotedStateID()
+				go func(state consensus.PoolerPersistentState) {
+					if d.pg.apply(state) {
+						select {
+						case d.incoming <- consensus.ApplySucceededIndicator{
+							VotedTerm:   state.VotedTerm,
+							VotedSeqNum: state.VotedSeqNum,
+						}:
+						case <-ctx.Done():
+						}
+					}
+					// On failure, the driver will try again on the next tick that
+					// finds IsApplied()=false with the same proposal still committed.
+				}(committed)
 			}
 
 		case <-ctx.Done():

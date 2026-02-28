@@ -42,39 +42,73 @@ func (s *memStorage) Load() (consensus.PoolerPersistentState, error) {
 	return s.state, nil
 }
 
-// flakyApplier is a RoleApplier that fails at a configurable rate, simulating
-// a slow or unreliable postgres apply (e.g. pg_ctl promote taking multiple ticks).
-// It tracks how many times Apply returned false so tests can assert that the
-// failure scenario actually occurred (not that we passed trivially with no failures).
+// applyDriverNode is a simulation-only driver node that models the postgres apply
+// loop. On each tick it polls the target PoolerNode: if the committed role change
+// has not been applied and postgres is running, it emits an ApplySucceededRequest
+// (converted by consensusHandler to an ApplySucceededIndicator for the pooler).
 //
-// lastApplied mirrors the postgres GUC files in production: it holds the last state
-// for which Apply() returned true and persists across simulated crash-restarts
-// (the flakyApplier instance itself is not restarted, only the PoolerNode is).
-type flakyApplier struct {
-	rng         *rand.Rand
-	failRate    float64 // probability (0.0–1.0) of returning false each tick
-	failures    int     // number of times Apply returned false
-	lastApplied consensus.PoolerPersistentState
-	hasApplied  bool
+// failRate controls how often the apply is skipped for that tick (simulating a slow
+// or unreliable pg_ctl / postgres reconfiguration). failures tracks how many times
+// it failed so tests can assert the retry path was actually exercised.
+//
+// The driver persists across pooler crash-restarts (the node is never stopped),
+// matching production: the apply goroutine is independent of individual postgres
+// restarts and simply re-attempts whenever committed.Applied is false and postgres
+// is running.
+type applyDriverNode struct {
+	id       consensus.NodeID
+	poolerID consensus.NodeID
+	sim      *dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID]
+	rng      *rand.Rand
+	failRate float64
+	failures int
 }
 
-var _ consensus.RoleApplier = (*flakyApplier)(nil)
-
-func (a *flakyApplier) Apply(state consensus.PoolerPersistentState) bool {
-	if a.rng.Float64() < a.failRate {
-		a.failures++
-		return false
+func newApplyDriverNode(
+	poolerID consensus.NodeID,
+	sim *dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID],
+	failRate float64,
+	rng *rand.Rand,
+) *applyDriverNode {
+	return &applyDriverNode{
+		id:       applyDriverID(poolerID),
+		poolerID: poolerID,
+		sim:      sim,
+		failRate: failRate,
+		rng:      rng,
 	}
-	a.lastApplied = state
-	a.hasApplied = true
-	return true
 }
 
-// AppliedState returns the last state successfully applied, analogous to reading
-// postgresql.conf / standby.signal from disk in production. It persists across
-// PoolerNode.Restart() calls because the applier instance is not restarted.
-func (a *flakyApplier) AppliedState() (consensus.PoolerPersistentState, bool) {
-	return a.lastApplied, a.hasApplied
+func applyDriverID(poolerID consensus.NodeID) consensus.NodeID {
+	return consensus.NodeID("apply-driver-" + string(poolerID))
+}
+
+func (n *applyDriverNode) ID() consensus.NodeID { return n.id }
+
+func (n *applyDriverNode) Step(_ int64, _ []consensus.Indicator) []consensus.Request {
+	if n.sim.IsNodeStopped(n.poolerID) {
+		return nil
+	}
+	var pooler *consensus.PoolerNode
+	for _, node := range n.sim.Nodes() {
+		if p, ok := node.(*consensus.PoolerNode); ok && p.ID() == n.poolerID {
+			pooler = p
+			break
+		}
+	}
+	if pooler == nil || pooler.IsApplied() || pooler.PostgresStatus() != consensus.PostgresRunning {
+		return nil
+	}
+	if n.rng.Float64() < n.failRate {
+		n.failures++
+		return nil
+	}
+	committed := pooler.CommittedState()
+	return []consensus.Request{consensus.ApplySucceededRequest{
+		Target:      n.poolerID,
+		VotedTerm:   committed.VotedTerm,
+		VotedSeqNum: committed.VotedSeqNum,
+	}}
 }
 
 // consensusHandler converts consensus Requests into Indicators and routes them.
@@ -149,6 +183,11 @@ func (h *consensusHandler) ProcessRequests(
 			}
 		case consensus.TerminateRequest:
 			result[r.Target] = append(result[r.Target], consensus.TerminateIndicator{})
+		case consensus.ApplySucceededRequest:
+			result[r.Target] = append(result[r.Target], consensus.ApplySucceededIndicator{
+				VotedTerm:   r.VotedTerm,
+				VotedSeqNum: r.VotedSeqNum,
+			})
 		case consensus.PoolerMembershipRequest:
 			orchsToNotify := h.orchIDs()
 			if r.TargetOrch != "" {
@@ -409,11 +448,11 @@ func (c *noPrimaryActive) Describe(sim *dstsim.Simulator[consensus.Indicator, co
 	return fmt.Sprintf("no active primary; poolers: %v", states)
 }
 
-// minTotalApplyFailures is true when the total flakyApplier failure count across all
-// poolers reaches at least min. Use it to assert the retry path was actually exercised.
+// minTotalApplyFailures is true when the total apply failure count across all
+// applyDriverNodes reaches at least min. Use it to assert the retry path was actually exercised.
 type minTotalApplyFailures struct {
-	appliers map[consensus.NodeID]*flakyApplier
-	min      int
+	drivers map[consensus.NodeID]*applyDriverNode
+	min     int
 }
 
 func (c *minTotalApplyFailures) Name() string {
@@ -422,16 +461,16 @@ func (c *minTotalApplyFailures) Name() string {
 
 func (c *minTotalApplyFailures) Eval(_ *dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID]) bool {
 	total := 0
-	for _, a := range sortedmaps.Values(c.appliers) {
-		total += a.failures
+	for _, d := range sortedmaps.Values(c.drivers) {
+		total += d.failures
 	}
 	return total >= c.min
 }
 
 func (c *minTotalApplyFailures) Describe(_ *dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID]) string {
 	total := 0
-	for _, a := range sortedmaps.Values(c.appliers) {
-		total += a.failures
+	for _, d := range sortedmaps.Values(c.drivers) {
+		total += d.failures
 	}
 	return fmt.Sprintf("total apply failures: %d (need >= %d)", total, c.min)
 }
@@ -470,12 +509,14 @@ func newHappyPathSim(t *testing.T, seed int64, policy consensus.DurabilityPolicy
 	sim.RegisterNode(consensus.NewOrchNode(orchA, policy, bootstrapPolicy, rand.New(rand.NewPCG(uint64(seed), 0))))
 	sim.RegisterNode(consensus.NewOrchNode(orchB, policy, bootstrapPolicy, rand.New(rand.NewPCG(uint64(seed+1), 0))))
 
-	// Register pooler nodes with in-memory storage
+	// Register pooler nodes with in-memory storage and their apply driver nodes.
 	stores := make(map[consensus.NodeID]*memStorage)
-	for _, id := range []consensus.NodeID{pooler1, pooler2, pooler3} {
+	for i, id := range []consensus.NodeID{pooler1, pooler2, pooler3} {
 		store := &memStorage{}
 		stores[id] = store
-		sim.RegisterNode(consensus.NewPoolerNode(id, store, nil))
+		sim.RegisterNode(consensus.NewPoolerNode(id, store))
+		rng := rand.New(rand.NewPCG(uint64(seed+int64(i)+10), 0))
+		sim.RegisterNode(newApplyDriverNode(id, sim, 0.0, rng))
 	}
 
 	// Register the discovery node — it will detect poolers on its first tick
@@ -488,12 +529,12 @@ func newHappyPathSim(t *testing.T, seed int64, policy consensus.DurabilityPolicy
 // --- Tests ---
 
 // newFlakyApplierSim creates a simulator identical to newHappyPathSim except
-// each pooler is given a flakyApplier at failRate (0.0–1.0) per tick.
-// The returned appliers map lets callers inspect failure counts after the test.
+// each pooler's apply driver has a configurable failRate (0.0–1.0) per tick.
+// The returned drivers map lets callers inspect failure counts after the test.
 func newFlakyApplierSim(t *testing.T, seed int64, policy consensus.DurabilityPolicy, failRate float64) (
 	*dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID],
 	map[consensus.NodeID]*memStorage,
-	map[consensus.NodeID]*flakyApplier,
+	map[consensus.NodeID]*applyDriverNode,
 ) {
 	t.Helper()
 	sim := dstsim.NewSimulator[consensus.Indicator, consensus.Request, consensus.NodeID](
@@ -508,20 +549,19 @@ func newFlakyApplierSim(t *testing.T, seed int64, policy consensus.DurabilityPol
 	sim.RegisterNode(consensus.NewOrchNode(orchB, policy, bootstrapPolicy, rand.New(rand.NewPCG(uint64(seed+1), 0))))
 
 	stores := make(map[consensus.NodeID]*memStorage)
-	appliers := make(map[consensus.NodeID]*flakyApplier)
+	drivers := make(map[consensus.NodeID]*applyDriverNode)
 	for i, id := range []consensus.NodeID{pooler1, pooler2, pooler3} {
 		store := &memStorage{}
 		stores[id] = store
-		applier := &flakyApplier{
-			rng:      rand.New(rand.NewPCG(uint64(seed+int64(i)+10), 0)),
-			failRate: failRate,
-		}
-		appliers[id] = applier
-		sim.RegisterNode(consensus.NewPoolerNode(id, store, applier))
+		sim.RegisterNode(consensus.NewPoolerNode(id, store))
+		rng := rand.New(rand.NewPCG(uint64(seed+int64(i)+10), 0))
+		driver := newApplyDriverNode(id, sim, failRate, rng)
+		drivers[id] = driver
+		sim.RegisterNode(driver)
 	}
 
 	sim.RegisterNode(newDiscoveryNode(discoveryID, sim))
-	return sim, stores, appliers
+	return sim, stores, drivers
 }
 
 // --- Crash driver ---
@@ -660,17 +700,17 @@ func newCrashDriverSim(t *testing.T, seed int64, policy consensus.DurabilityPoli
 	return sim, stores
 }
 
-// newFlakyApplierCrashSim creates a simulator with flaky appliers and a crash driver.
+// newFlakyApplierCrashSim creates a simulator with flaky apply drivers and a crash driver.
 func newFlakyApplierCrashSim(t *testing.T, seed int64, policy consensus.DurabilityPolicy, failRate float64) (
 	*dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID],
 	map[consensus.NodeID]*memStorage,
-	map[consensus.NodeID]*flakyApplier,
+	map[consensus.NodeID]*applyDriverNode,
 ) {
 	t.Helper()
-	sim, stores, appliers := newFlakyApplierSim(t, seed, policy, failRate)
+	sim, stores, drivers := newFlakyApplierSim(t, seed, policy, failRate)
 	rng := rand.New(rand.NewPCG(uint64(seed), 44))
 	sim.RegisterNode(newCrashDriverNode(crashDriverID, sim, 5, rng, false))
-	return sim, stores, appliers
+	return sim, stores, drivers
 }
 
 // --- Chaos delivery policy ---
@@ -700,6 +740,11 @@ type consensusChaosPolicy struct {
 func (p *consensusChaosPolicy) ScheduleDelivery(args dstsim.DeliveryArgs[consensus.Indicator, consensus.NodeID]) (bool, int64, []string) {
 	// TerminateIndicators model a SIGTERM: always delivered, 1-tick latency.
 	if _, ok := args.Indicator.(consensus.TerminateIndicator); ok {
+		return true, 1, nil
+	}
+	// ApplySucceededIndicators come from the local apply loop (same process in production):
+	// no network involved, always delivered with 1-tick latency.
+	if _, ok := args.Indicator.(consensus.ApplySucceededIndicator); ok {
 		return true, 1, nil
 	}
 	// Discovery traffic models an etcd watch stream: ordered and reliable.
@@ -830,7 +875,7 @@ func TestHappyPath_PrimaryElected(t *testing.T) {
 //   - at least 1 apply failure observed (confirming the flaky retry path was hit)
 func TestFlakyApply_1000Failovers(t *testing.T) {
 	policy := consensus.AnyNPolicy(1)
-	sim, _, appliers := newFlakyApplierCrashSim(t, 42, policy, 0.5)
+	sim, _, drivers := newFlakyApplierCrashSim(t, 42, policy, 0.5)
 	for _, inv := range standardInvariants(policy) {
 		sim.Always(inv)
 	}
@@ -838,7 +883,7 @@ func TestFlakyApply_1000Failovers(t *testing.T) {
 	h.RequireRunUntil(
 		dstsim.And(
 			dstsim.NewAtLeastNTimes(1000, dstsim.NewInOrder(&noPrimaryActive{}, &activePrimaryExists{})),
-			&minTotalApplyFailures{appliers: appliers, min: 1},
+			&minTotalApplyFailures{drivers: drivers, min: 1},
 		),
 		200_000,
 	)

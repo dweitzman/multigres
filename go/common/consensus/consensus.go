@@ -148,12 +148,21 @@ type StateID struct {
 //     start. Only a new accepted proposal (writing a new PoolerPersistentState
 //     with its own Applied value) may supersede it.
 type PoolerPersistentState struct {
-	VotedTerm    int64  // highest VotingTerm this pooler has accepted
-	VotedSeqNum  int64  // SeqNum within VotedTerm of the last accepted proposal
-	VotedCoord   NodeID // coordinator that owns VotedTerm
-	PrimaryTerm  int64  // VotingTerm at which the current primary was established (0 = none)
-	Primary      NodeID // who is primary (may be a different node)
-	Role         PoolerRole
+	VotedTerm   int64  // highest VotingTerm this pooler has accepted
+	VotedSeqNum int64  // SeqNum within VotedTerm of the last accepted proposal
+	VotedCoord  NodeID // coordinator that owns VotedTerm
+	PrimaryTerm int64  // VotingTerm at which the current primary was established (0 = none)
+	Primary     NodeID // who is primary (may be a different node)
+	Role        PoolerRole
+	// SyncReplicas are the poolers that must acknowledge writes to the primary.
+	//
+	// TODO: Consider binding replica replication configuration to a specific
+	// (NodeID, PrimaryTerm) pair rather than just NodeID — e.g. by using a
+	// term-specific replication password. This would prevent a replica that was
+	// configured for node X at term 5 from inadvertently participating in a quorum
+	// if node X is elected at a later term with different sync-replica membership.
+	// Implementation requires an invasive postgres change (term-keyed credentials)
+	// and is deferred until the benefit is better understood.
 	SyncReplicas []NodeID
 	Applied      bool // true if the committed role change has been operationally executed
 	// QuorumSpec is the serialized DurabilityPolicy quorum from the Establish proposal.
@@ -176,37 +185,4 @@ func (s PoolerPersistentState) VotedStateID() StateID {
 type PoolerStorage interface {
 	Save(state PoolerPersistentState) error
 	Load() (PoolerPersistentState, error)
-}
-
-// RoleApplier executes the operational part of a committed role change on behalf of
-// a PoolerNode. Apply is called on each tick when committed state has not been applied
-// and postgres is running. It returns true if the role change completed successfully
-// this tick, false to signal a transient failure—the pooler will retry next tick.
-//
-// In production, implementing Apply for a replica means writing primary_conninfo to
-// postgresql.conf (or ALTER SYSTEM SET), ensuring standby.signal exists, and calling
-// pg_reload_conf() to reconnect streaming replication without a full restart.
-// Implementing Apply for a primary means setting synchronous_standby_names and calling
-// pg_ctl promote (or SELECT pg_promote()) to exit standby mode.
-//
-// In simulation, use a fake implementation with a configurable failure rate.
-//
-// TODO: Consider binding replica replication configuration to a specific
-// (NodeID, PrimaryTerm) pair rather than just NodeID — e.g. by using a
-// term-specific replication password. This would prevent a replica that was
-// configured for node X at term 5 from inadvertently participating in a quorum
-// if node X is elected at a later term with different sync-replica membership.
-// Implementation requires an invasive postgres change (term-keyed credentials)
-// and is deferred until the benefit is better understood.
-type RoleApplier interface {
-	// Apply executes the committed role change. Returns true on success, false for
-	// a transient failure (PoolerNode retries on the next tick while postgres is running).
-	Apply(state PoolerPersistentState) bool
-
-	// AppliedState returns the postgres configuration currently in effect on disk —
-	// the last state for which Apply() returned true. In production this is read from
-	// postgresql.conf / standby.signal (the postgres GUC files), which survive crashes
-	// and are therefore recoverable on restart without re-running Apply().
-	// Returns false if no role change has been applied yet (clean first-start).
-	AppliedState() (PoolerPersistentState, bool)
 }

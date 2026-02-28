@@ -83,3 +83,20 @@ func (OrchStateIndicator) consensusIndicator() {}
 type TerminateIndicator struct{}
 
 func (TerminateIndicator) consensusIndicator() {}
+
+// ApplySucceededIndicator is delivered to a PoolerNode when the local postgres apply
+// loop successfully executes the committed role change (e.g. pg_ctl promote, updating
+// postgresql.conf and standby.signal). The term and sequence number identify which
+// proposal was applied; PoolerNode ignores the indicator if the current committed state
+// has since advanced to a newer term or sequence number.
+//
+// In production, the apply loop runs as a goroutine within the multipooler process and
+// writes this indicator onto the incoming channel after the role change completes.
+// In simulation, an applyDriverNode returns ApplySucceededRequest which the handler
+// converts to this indicator.
+type ApplySucceededIndicator struct {
+	VotedTerm   int64
+	VotedSeqNum int64
+}
+
+func (ApplySucceededIndicator) consensusIndicator() {}
