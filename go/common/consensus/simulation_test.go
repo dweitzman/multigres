@@ -150,7 +150,11 @@ func (h *consensusHandler) ProcessRequests(
 		case consensus.TerminateRequest:
 			result[r.Target] = append(result[r.Target], consensus.TerminateIndicator{})
 		case consensus.PoolerMembershipRequest:
-			for _, oid := range h.orchIDs() {
+			orchsToNotify := h.orchIDs()
+			if r.TargetOrch != "" {
+				orchsToNotify = []consensus.NodeID{r.TargetOrch}
+			}
+			for _, oid := range orchsToNotify {
 				for _, pid := range r.Discovered {
 					result[oid] = append(result[oid], consensus.PoolerDiscoveredIndicator{PoolerID: pid})
 				}
@@ -187,7 +191,7 @@ func standardInvariants(policy consensus.DurabilityPolicy) []dstsim.Condition[co
 // the last-applied state when a committed change is pending, or the committed
 // state when Applied=true. This is the correct check because:
 //   - A replica only ACKs writes to the primary named in its effective state.
-//   - Two committed primaries is normal during re-election; what matters is
+//   - Two committed primaries is normal during a re-appointment; what matters is
 //     whether two primaries can simultaneously get ACKs.
 //
 // Note: it is valid for two nodes to have committed.Role=Primary simultaneously
@@ -409,7 +413,7 @@ func newHappyPathSim(t *testing.T, seed int64, policy consensus.DurabilityPolicy
 	// Register orch nodes, each with a deterministically seeded RNG so tests are
 	// reproducible yet the two orchs have different jitter values.
 	// Bootstrap policy: majority of the 3-pooler cluster (any 2 must accept the
-	// new coordinator before a fresh election can proceed).
+	// new coordinator before a fresh appointment can proceed).
 	bootstrapPolicy := consensus.AnyNPolicy(2)
 	sim.RegisterNode(consensus.NewOrchNode(orchA, policy, bootstrapPolicy, rand.New(rand.NewPCG(uint64(seed), 0))))
 	sim.RegisterNode(consensus.NewOrchNode(orchB, policy, bootstrapPolicy, rand.New(rand.NewPCG(uint64(seed+1), 0))))
@@ -473,19 +477,19 @@ func newFlakyApplierSim(t *testing.T, seed int64, policy consensus.DurabilityPol
 const crashDriverID consensus.NodeID = "crash-driver"
 
 // crashDriverNode is a simulation test node that autonomously drives crash+restart
-// cycles across pooler nodes. On each tick it:
+// cycles across pooler nodes and optionally orch nodes. On each tick it:
 //  1. Stops any pooler that received a TerminateRequest the previous tick (so the
 //     TerminateIndicator is processed by the pooler before it is stopped).
-//  2. Restarts any stopped pooler whose downTicks timer has elapsed.
-//  3. Picks one currently-running pooler at random and sends it a TerminateRequest.
+//  2. Restarts any stopped node whose downTicks timer has elapsed.
+//  3. Picks one currently-running node at random and crashes it.
 //
-// Any running pooler is a valid target—not just the active primary—so nodes with
-// stale committed state also get crashed, preventing the simulation from getting
-// stuck in a single-target loop.
+// Any running pooler is a valid target. When crashOrch is true, running orchs are
+// also eligible, provided at least one other orch remains running.
 //
-// TODO: extend to also crash orch nodes. Crashing orch requires arranging for the
-// discovery node to redeliver discovery state during orch's Restart(), since orch's
-// in-memory view of the cluster is built from discovery events.
+// Poolers crash gracefully: a TerminateRequest is sent first so the pooler emits a
+// final status update before being stopped. Orchs crash immediately (StopNode without
+// a prior signal) since orch state is fully ephemeral; the discoveryNode will naturally
+// re-deliver missing poolers to a restarted orch by reading its empty KnownPoolerIDs().
 //
 // Pair with RequireRunUntil(NewAtLeastNTimes(N, NewInOrder(noPrimaryActive, activePrimaryExists)))
 // to drive N crash→recovery cycles.
@@ -495,7 +499,8 @@ type crashDriverNode struct {
 	downTicks int64
 	rng       *rand.Rand
 	stopped   map[consensus.NodeID]int64 // node → tick when it should restart
-	pending   []consensus.NodeID         // nodes that received TerminateRequest last tick; StopNode this tick
+	pending   []consensus.NodeID         // poolers that received TerminateRequest last tick; StopNode this tick
+	crashOrch bool                       // if true, orchs are included as crash candidates
 }
 
 func newCrashDriverNode(
@@ -503,6 +508,7 @@ func newCrashDriverNode(
 	sim *dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID],
 	downTicks int64,
 	rng *rand.Rand,
+	crashOrch bool,
 ) *crashDriverNode {
 	return &crashDriverNode{
 		id:        id,
@@ -510,13 +516,14 @@ func newCrashDriverNode(
 		downTicks: downTicks,
 		rng:       rng,
 		stopped:   make(map[consensus.NodeID]int64),
+		crashOrch: crashOrch,
 	}
 }
 
 func (n *crashDriverNode) ID() consensus.NodeID { return n.id }
 
 func (n *crashDriverNode) Step(tick int64, _ []consensus.Indicator) []consensus.Request {
-	// Stop nodes that received TerminateRequest last tick.
+	// Stop poolers that received TerminateRequest last tick.
 	for _, id := range n.pending {
 		n.sim.StopNode(id)
 		n.stopped[id] = tick + n.downTicks
@@ -531,28 +538,58 @@ func (n *crashDriverNode) Step(tick int64, _ []consensus.Indicator) []consensus.
 		}
 	}
 
-	// Only crash one node at a time: if any node is still stopped, wait for it to
-	// restart before targeting a new one. This ensures at least N-1 poolers are
-	// always available so the orch can form a majority and complete elections.
+	// Only crash one node at a time: wait for any stopped node to restart before
+	// targeting a new one. This ensures at least N-1 poolers are always available.
 	if len(n.stopped) > 0 {
 		return nil
 	}
 
-	// Collect all running poolers as crash candidates.
+	// Collect crash candidates: all running poolers, plus running orchs when
+	// crashOrch is enabled and more than one orch is running.
 	var candidates []consensus.NodeID
+	runningOrchCount := 0
 	for _, node := range n.sim.Nodes() {
-		p, ok := node.(*consensus.PoolerNode)
-		if !ok {
+		if _, ok := node.(*consensus.OrchNode); ok && !n.sim.IsNodeStopped(node.ID()) {
+			runningOrchCount++
+		}
+	}
+	for _, node := range n.sim.Nodes() {
+		id := node.ID()
+		if n.sim.IsNodeStopped(id) {
 			continue
 		}
-		candidates = append(candidates, p.ID())
+		switch node.(type) {
+		case *consensus.PoolerNode:
+			candidates = append(candidates, id)
+		case *consensus.OrchNode:
+			if n.crashOrch && runningOrchCount > 1 {
+				candidates = append(candidates, id)
+			}
+		}
 	}
 
-	// Crash a randomly chosen candidate.
 	if len(candidates) == 0 {
 		return nil
 	}
 	target := candidates[n.rng.IntN(len(candidates))]
+
+	// Determine crash behaviour based on node type.
+	for _, node := range n.sim.Nodes() {
+		if node.ID() != target {
+			continue
+		}
+		if _, ok := node.(*consensus.OrchNode); ok {
+			// Orch crash: immediate kill (no graceful shutdown signal needed since
+			// orch state is fully ephemeral — it re-learns everything on restart).
+			n.sim.StopNode(target)
+			n.stopped[target] = tick + n.downTicks
+			return nil
+		}
+		break
+	}
+
+	// Pooler crash: graceful shutdown via TerminateRequest so the pooler emits a
+	// final status update before being stopped.
 	n.pending = append(n.pending, target)
 	return []consensus.Request{consensus.TerminateRequest{Target: target}}
 }
@@ -567,7 +604,7 @@ func newCrashDriverSim(t *testing.T, seed int64, policy consensus.DurabilityPoli
 	t.Helper()
 	sim, stores := newHappyPathSim(t, seed, policy)
 	rng := rand.New(rand.NewPCG(uint64(seed), 44))
-	sim.RegisterNode(newCrashDriverNode(crashDriverID, sim, 5, rng))
+	sim.RegisterNode(newCrashDriverNode(crashDriverID, sim, 5, rng, false))
 	return sim, stores
 }
 
@@ -580,7 +617,7 @@ func newFlakyApplierCrashSim(t *testing.T, seed int64, policy consensus.Durabili
 	t.Helper()
 	sim, stores, appliers := newFlakyApplierSim(t, seed, policy, failRate)
 	rng := rand.New(rand.NewPCG(uint64(seed), 44))
-	sim.RegisterNode(newCrashDriverNode(crashDriverID, sim, 5, rng))
+	sim.RegisterNode(newCrashDriverNode(crashDriverID, sim, 5, rng, false))
 	return sim, stores, appliers
 }
 
@@ -600,9 +637,9 @@ func newFlakyApplierCrashSim(t *testing.T, seed int64, policy consensus.Durabili
 //     updates) are subject to random delay, reordering, and drops, modeling the
 //     unreliable gRPC calls between orch and multipooler in production.
 //
-// This setup motivates the orch's election timeout and term-escalation mechanism:
-// when proposals or responses are dropped, the orch waits up to electionTimeoutTicks
-// before declaring a phase failed and bumping the term to start a fresh round.
+// This setup motivates the orch's appointment phase timeout and term-escalation mechanism:
+// when proposals or responses are dropped, the orch waits up to appointmentPhaseTimeoutTicks
+// before declaring a phase failed and bumping the voting term to start a fresh appointment.
 type consensusChaosPolicy struct {
 	chaosPolicy   dstsim.IndicatorDeliveryPolicy[consensus.Indicator, consensus.NodeID]
 	orderedPolicy dstsim.IndicatorDeliveryPolicy[consensus.Indicator, consensus.NodeID]
@@ -668,6 +705,80 @@ func newChaosDriverSim(t *testing.T, seed int64, policy consensus.DurabilityPoli
 	return sim, stores
 }
 
+// newOrchCrashDriverSim creates a simulator with a crashDriverNode that crashes both
+// poolers and orchs. After an orch restarts, the discoveryNode re-delivers pooler
+// membership by reading the orch's empty KnownPoolerIDs() — no special reset needed.
+func newOrchCrashDriverSim(t *testing.T, seed int64, policy consensus.DurabilityPolicy) (
+	*dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID],
+	map[consensus.NodeID]*memStorage,
+) {
+	t.Helper()
+	sim, stores := newHappyPathSim(t, seed, policy)
+	rng := rand.New(rand.NewPCG(uint64(seed), 44))
+	sim.RegisterNode(newCrashDriverNode(crashDriverID, sim, 5, rng, true))
+	return sim, stores
+}
+
+// --- Conditions ---
+
+// preEstablishOrchCrashCondition counts the number of times an orch was stopped while
+// mid-appointment — i.e. it won the coordinator vote (Begin complete) but had not yet
+// appointed a primary (Establish not complete). Fires when the count reaches min.
+//
+// Detection works by observing the "just stopped" transition each tick: when an orch
+// moves from running to stopped, StopNode preserves its internal state (Restart() is
+// only called by RestartNode), so AppointmentStageComplete reflects the pre-crash phase.
+//
+// TODO: replace with a generic dstsim.PerNodeCondition combinator that auto-instantiates
+// a condition per matching node and tracks each independently, enabling cleaner composition
+// like: PerNodeCondition(isOrch, And(JustStopped(), AppointmentStageComplete(Begin), Not(AppointmentStageComplete(Establish)))).
+type preEstablishOrchCrashCondition struct {
+	prevStopped map[consensus.NodeID]bool
+	count       int
+	min         int
+}
+
+func (c *preEstablishOrchCrashCondition) Name() string {
+	return fmt.Sprintf("pre_establish_orch_crashes_%d", c.min)
+}
+
+func (c *preEstablishOrchCrashCondition) Eval(sim *dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID]) bool {
+	if c.prevStopped == nil {
+		c.prevStopped = make(map[consensus.NodeID]bool)
+	}
+
+	currentStopped := make(map[consensus.NodeID]bool)
+	for _, node := range sim.Nodes() {
+		if _, ok := node.(*consensus.OrchNode); ok {
+			currentStopped[node.ID()] = sim.IsNodeStopped(node.ID())
+		}
+	}
+
+	// An orch that just became stopped (was running last tick) and is mid-appointment
+	// counts as a pre-establish crash. StopNode preserves internal state, so
+	// AppointmentStageComplete still reflects the phase at the moment of the crash.
+	for _, node := range sim.Nodes() {
+		orch, ok := node.(*consensus.OrchNode)
+		if !ok {
+			continue
+		}
+		orchID := node.ID()
+		justStopped := currentStopped[orchID] && !c.prevStopped[orchID]
+		if justStopped &&
+			orch.AppointmentStageComplete(consensus.PhaseBegin) &&
+			!orch.AppointmentStageComplete(consensus.PhaseEstablish) {
+			c.count++
+		}
+	}
+
+	c.prevStopped = currentStopped
+	return c.count >= c.min
+}
+
+func (c *preEstablishOrchCrashCondition) Describe(_ *dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID]) string {
+	return fmt.Sprintf("pre-establish orch crashes: %d (need >= %d)", c.count, c.min)
+}
+
 // --- Tests ---
 
 // TestHappyPath_PrimaryElected verifies that under a reliable fast network,
@@ -688,7 +799,7 @@ func TestHappyPath_PrimaryElected(t *testing.T) {
 // The crashDriverNode drives the crashes autonomously. All assertions are expressed
 // as conditions passed to RequireRunUntil, which dumps recent trace on failure:
 //   - 1000 complete noPrimaryActive→activePrimaryExists cycles
-//   - at least 1000 distinct voting terms exercised (one per re-election)
+//   - at least 1000 distinct voting terms exercised (one per appointment attempt)
 //   - at least 1 apply failure observed (confirming the flaky retry path was hit)
 func TestFlakyApply_1000Failovers(t *testing.T) {
 	policy := consensus.AnyNPolicy(1)
@@ -726,10 +837,10 @@ func TestPrimaryPooler_1000Crashes(t *testing.T) {
 
 // TestChaosNetwork_PrimaryElected verifies that even under a chaotic network (10%
 // drop rate, up to 5-tick delay, implicit reordering), the cluster eventually elects
-// an active primary. This exercises the orch's election-timeout and term-escalation
+// an active primary. This exercises the orch's appointment phase timeout and term-escalation
 // path: dropped proposals or responses cause a phase to time out after
-// electionTimeoutTicks, at which point the orch increments the term and retries
-// from the beginning.
+// appointmentPhaseTimeoutTicks, at which point the orch increments the voting term and retries
+// the appointment from Begin.
 func TestChaosNetwork_PrimaryElected(t *testing.T) {
 	policy := consensus.AnyNPolicy(1)
 	sim, _ := newChaosSim(t, 42, policy)
@@ -755,6 +866,30 @@ func TestChaosNetwork_1000Crashes(t *testing.T) {
 	h := dstsim.NewSimulationTestHelper(t, sim)
 	h.RequireRunUntil(
 		dstsim.NewAtLeastNTimes(1000, dstsim.NewInOrder(&noPrimaryActive{}, &activePrimaryExists{})),
+		500_000,
+	)
+}
+
+// TestOrchCrash_1000PreEstablishCrashes verifies that:
+//   - At least 1000 orch crashes occur while the orch is mid-appointment (Begin won,
+//     Establish not yet complete), exercising the path where a coordinator is killed
+//     before it can appoint a primary and the competing orch (or the same orch after
+//     restart) must recover and complete the appointment.
+//   - At least 100 complete noPrimaryActive→activePrimaryExists recovery cycles happen,
+//     proving the cluster always recovers despite frequent orch crashes.
+//   - Safety invariants (atMostOneQuorum, appliedMonotonicity) hold throughout.
+func TestOrchCrash_1000PreEstablishCrashes(t *testing.T) {
+	policy := consensus.AnyNPolicy(1)
+	sim, _ := newOrchCrashDriverSim(t, 42, policy)
+	for _, inv := range standardInvariants(policy) {
+		sim.Always(inv)
+	}
+	h := dstsim.NewSimulationTestHelper(t, sim)
+	h.RequireRunUntil(
+		dstsim.And(
+			&preEstablishOrchCrashCondition{min: 1000},
+			dstsim.NewAtLeastNTimes(100, dstsim.NewInOrder(&noPrimaryActive{}, &activePrimaryExists{})),
+		),
 		500_000,
 	)
 }

@@ -1,6 +1,14 @@
 # consensus
 
-Pure state machine library for distributed primary selection in a Multigres PostgreSQL cluster.
+Pure state machine library for safely driving appointment and re-appointment of write quorums in a
+Multigres PostgreSQL cluster.
+
+`OrchNode` executes the three-phase protocol that appoints a primary and sync-replica set. A related
+but distinct concern is _deciding when re-appointment is needed_ — for example, determining that the
+current primary is unhealthy or that the write quorum is no longer satisfiable. That decision
+involves cluster-health evaluation that is not inherently a consensus decision and should be kept as
+separate as practical from the appointment protocol itself. The goal is that both concerns can be
+reasoned about and simulated independently.
 
 The two node types — `OrchNode` and `PoolerNode` — implement the `dstsim.Node` interface, so they
 can be registered in the same simulator and exercised under deterministic, reproducible chaos
@@ -27,8 +35,8 @@ Begin → Revoke → Establish
    sync-replica set. Establishment is complete when the quorum reports `IsEstablished=true`:
    the new primary and enough sync replicas have all reported `Applied=true`.
 
-If any phase fails to achieve quorum within `electionTimeoutTicks`, the orch escalates the term
-and restarts from Begin. When an orch discovers a competing coordinator has a higher term, it backs
+If any phase fails to achieve quorum within `appointmentPhaseTimeoutTicks`, the orch escalates the voting term
+and restarts the appointment from Begin. When an orch discovers a competing coordinator has a higher term, it backs
 off for a jittered interval before retrying, giving the winning coordinator time to finish.
 
 A **pooler** commits each accepted proposal to durable storage _before_ responding (safety: votes
@@ -85,13 +93,14 @@ The trace shows, for each non-empty tick:
 
 ## Simulation scenarios
 
-| Test                              | Delivery policy                                        | Fault injection                                        | Goal                                                    |
-| --------------------------------- | ------------------------------------------------------ | ------------------------------------------------------ | ------------------------------------------------------- |
-| `TestHappyPath_PrimaryElected`    | Fast (1-tick, reliable)                                | None                                                   | A primary is elected within 200 ticks                   |
-| `TestPrimaryPooler_1000Crashes`   | Fast                                                   | Primary crash+restart (random target, 5-tick downtime) | 1000 crash→recovery cycles without safety violations    |
-| `TestFlakyApply_1000Failovers`    | Fast                                                   | Crash + 50% apply failure rate                         | 1000 cycles; confirms the apply-retry path is exercised |
-| `TestChaosNetwork_PrimaryElected` | Unreliable (10% drop, 5-tick delay, 3% partition rate) | None                                                   | A primary is elected within 5000 ticks despite chaos    |
-| `TestChaosNetwork_1000Crashes`    | Unreliable                                             | Crash+restart                                          | 1000 cycles under combined network chaos + crashes      |
+| Test                                    | Delivery policy                                        | Fault injection                                        | Goal                                                        |
+| --------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------ | ----------------------------------------------------------- |
+| `TestHappyPath_PrimaryElected`          | Fast (1-tick, reliable)                                | None                                                   | A primary is appointed within 200 ticks                     |
+| `TestPrimaryPooler_1000Crashes`         | Fast                                                   | Primary crash+restart (random target, 5-tick downtime) | 1000 crash→recovery cycles without safety violations        |
+| `TestFlakyApply_1000Failovers`          | Fast                                                   | Crash + 50% apply failure rate                         | 1000 cycles; confirms the apply-retry path is exercised     |
+| `TestChaosNetwork_PrimaryElected`       | Unreliable (10% drop, 5-tick delay, 3% partition rate) | None                                                   | A primary is appointed within 5000 ticks despite chaos      |
+| `TestChaosNetwork_1000Crashes`          | Unreliable                                             | Crash+restart                                          | 1000 cycles under combined network chaos + crashes          |
+| `TestOrchCrash_1000PreEstablishCrashes` | Fast                                                   | Orch crash between Begin and Establish                 | 1000 mid-appointment orch crashes without safety violations |
 
 All tests register the **standard invariants** via `sim.Always()`:
 
@@ -154,9 +163,11 @@ Small improvements that make the existing code more correct and configurable:
   `Quorum.IsWriteQuorum` via `DurabilityPolicy.ReconstructQuorum`.
 - ✅ **Late-response filtering** — `PoolerResponseRequest` and `PoolerResponseIndicator` now carry
   `VotingTerm` + `SeqNum`; orch discards responses that don't match the current proposal.
-- **Crash orch nodes in simulation** — the crash driver currently only targets poolers. Extend it
-  to also crash orch nodes; extend `DiscoveryNode` to re-deliver discovery events to a restarted
-  orch (since orch state is ephemeral).
+- ✅ **Crash orch nodes in simulation** — the crash driver crashes both poolers and orchs.
+  `OrchNode.Restart()` clears all ephemeral state; `discoveryNode` detects the gap by diffing
+  `KnownPoolerIDs()` against the live pooler set and re-delivers membership events through the
+  normal ordered delivery path. `TestOrchCrash_1000PreEstablishCrashes` asserts 1000 mid-appointment
+  orch crashes (after Begin, before Establish) without safety violations.
 - **Strengthen `atMostOneQuorum`** — also check whether any pooler with a pending-but-unapplied
   state could form a second write quorum if it applied now.
 - **Wire up `PostgresApplier`** — fill in `Apply()` (ALTER SYSTEM, pg_ctl promote / standby
@@ -172,7 +183,7 @@ Small improvements that make the existing code more correct and configurable:
 Safely initialize a fresh cluster. Bootstrap eligibility is an external constraint (e.g. a
 Kubernetes label declaring "at most N nodes are bootstrap-eligible") — it is not persisted inside
 the consensus state machine. Multiple orchs can attempt bootstrap simultaneously; they compete via
-normal term election (first to win a Begin quorum proceeds, losers back off). After Establish,
+normal coordinator vote (first to win a Begin quorum proceeds, losers back off). After Establish,
 new poolers join the voting cohort by being written into the postgres database, which replicates
 the admission record to sync replicas. Before the next Begin term, each cohort member waits until
 it has applied WAL through the admission record so it knows the full cohort and can compute quorum
@@ -198,7 +209,7 @@ avoid split-brain with any ghost processes from the old cluster.
 
 Replace the primary without an availability gap — either because the current primary wants to step
 down (planned maintenance) or because an operator wants to promote a specific replica. The
-stepping-down pooler emits a `StepDownRequest`; orch immediately starts a new election without
+stepping-down pooler emits a `StepDownRequest`; orch immediately starts a new appointment without
 waiting for a timeout. A `PromoteRequest` sets a `preferredPrimary` hint that biases
 `selectPrimary()` toward the target, then follows normal Revoke → Establish.
 

@@ -74,11 +74,17 @@ func (PoolerStatusUpdateRequest) consensusRequest() {}
 
 // PoolerMembershipRequest is emitted by the discovery node when the set of registered
 // poolers changes. The RequestHandler converts this into PoolerDiscoveredIndicator and
-// PoolerRemovedIndicator messages delivered to all known orch nodes.
+// PoolerRemovedIndicator messages delivered to orch nodes.
 //
 // In production the equivalent information is delivered via an etcd watch; this request
 // type exists only in simulation to drive orch discovery without a real etcd connection.
+//
+// TargetOrch, if non-empty, restricts delivery to a single orch. This supports
+// per-orch discovery tracking: each orch gets its own independent stream of events
+// (with independent delivery delays) rather than a single broadcast. The zero value
+// (empty string) broadcasts to all orchs, preserving backwards compatibility.
 type PoolerMembershipRequest struct {
+	TargetOrch NodeID   // if non-empty, deliver only to this orch; empty = all orchs
 	Discovered []NodeID // poolers that newly appeared
 	Removed    []NodeID // poolers that departed
 }

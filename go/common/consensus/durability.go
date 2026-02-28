@@ -21,7 +21,7 @@ import (
 )
 
 // QuorumCandidate carries the information the DurabilityPolicy needs to select
-// a primary and sync replicas for a given election.
+// a primary and sync replicas for a given appointment.
 type QuorumCandidate struct {
 	ID      NodeID
 	Healthy bool   // postgres is running and reachable
@@ -78,7 +78,7 @@ type DurabilityPolicy interface {
 	ProposeQuorum(candidates []QuorumCandidate, preferred NodeID) (Quorum, bool)
 
 	// ReconstructQuorum creates a Quorum for a previously committed
-	// (primary, syncReplicas) pair without re-running the election logic.
+	// (primary, syncReplicas) pair without re-running the appointment logic.
 	// Used by OrchNode.learnEstablishedPrimary and safety invariants to evaluate
 	// historical quorums using the original sync-replica set.
 	ReconstructQuorum(primary NodeID, syncReplicas []NodeID) Quorum

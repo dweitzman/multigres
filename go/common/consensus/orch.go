@@ -20,7 +20,10 @@ import (
 	"github.com/multigres/multigres/go/tools/dstsim/sortedmaps"
 )
 
-// orchPhase is the current stage of the three-phase election state machine.
+// orchPhase is the current stage of the three-phase coordinator state machine.
+// The orch wins the coordinator role via the Begin vote, then appoints a primary
+// through Revoke and Establish. "Election" refers specifically to the Begin vote;
+// the broader process is called the orch's appointment or coordinator tenure.
 type orchPhase int
 
 const (
@@ -47,10 +50,14 @@ type poolerKnowledge struct {
 	postgresStatus PostgresStatus
 }
 
-// OrchNode is the coordinator state machine. It discovers poolers via etcd indicators,
-// runs the three-phase protocol (Begin → Revoke → Establish), and confirms the
-// appointment once both the new primary and enough sync replicas have applied the
-// Establish proposal.
+// OrchNode is the coordinator state machine responsible for safely driving appointment
+// and re-appointment of write quorums. It discovers poolers via etcd indicators, runs
+// the three-phase protocol (Begin → Revoke → Establish), and confirms the appointment
+// once the new primary and enough sync replicas have applied the Establish proposal.
+//
+// OrchNode concerns itself with executing the appointment protocol correctly; deciding
+// whether re-appointment is needed (cluster-health evaluation) is a separate concern
+// that should be kept as distinct as practical.
 //
 // All state is ephemeral: if an orch crashes and restarts it simply begins a new term,
 // learning cluster state from pooler status indicators before making any proposal.
@@ -68,12 +75,12 @@ type OrchNode struct {
 
 	// appointed is true once an Establish phase has achieved quorum.
 	// It is cleared when the confirmed primary reports PostgresStopped so a new
-	// election begins. confirmedState and confirmedQuorum are preserved for
+	// appointment begins. confirmedState and confirmedQuorum are preserved for
 	// revocation computation in the next round.
 	appointed bool
 
 	// confirmedState is the last ConsensusState that achieved Establish quorum.
-	// nil until the first successful appointment. Preserved across re-elections so
+	// nil until the first successful appointment. Preserved across re-appointments so
 	// that the revocation quorum can be computed for the new round.
 	confirmedState *ConsensusState
 
@@ -81,7 +88,7 @@ type OrchNode struct {
 	// revocation: whether the old primary can still collect write acks.
 	confirmedQuorum Quorum
 
-	// backoffUntil is the tick before which this orch will not start a new election.
+	// backoffUntil is the tick before which this orch will not start a new appointment.
 	// Set when we discover our view is stale (we were trying to act and learned about
 	// a higher term, meaning another coordinator is actively working). The jittered
 	// pause gives the winning coordinator time to complete before we compete again.
@@ -105,7 +112,7 @@ type OrchNode struct {
 // quorum to revoke (cluster bootstrap). In production this is typically configured
 // separately from the write policy — e.g. via etcd or a command-line flag — to
 // express the minimum number of poolers that must accept the new coordinator before
-// a fresh election can proceed.
+// a fresh appointment can proceed.
 func NewOrchNode(id NodeID, policy DurabilityPolicy, bootstrapPolicy DurabilityPolicy, rng *rand.Rand) *OrchNode {
 	return &OrchNode{
 		id:              id,
@@ -121,7 +128,61 @@ func (n *OrchNode) ID() NodeID {
 	return n.id
 }
 
-// Step processes all indicators and drives the election state machine forward.
+// Restart is called by the simulator when simulating a crash-restart. It clears all
+// ephemeral orch state so the node starts fresh. Unlike PoolerNode, orch has no durable
+// state: it re-learns cluster topology from pooler status indicators and discovery events
+// before making any new proposals.
+func (n *OrchNode) Restart() {
+	n.term = 0
+	n.seqNum = 0
+	n.phase = phaseIdle
+	n.progress = nil
+	n.appointed = false
+	n.confirmedState = nil
+	n.confirmedQuorum = nil
+	n.backoffUntil = 0
+	n.pendingBackoff = false
+	n.knownPoolers = make(map[NodeID]poolerKnowledge)
+}
+
+// KnownPoolerIDs returns the IDs of all poolers this orch currently knows about,
+// in sorted order. Used by the simulation discovery node to detect gaps in the
+// orch's membership view (e.g., after a crash-restart clears knownPoolers) and
+// deliver the missing poolers via the normal discovery path.
+func (n *OrchNode) KnownPoolerIDs() []NodeID {
+	return sortedmaps.Keys(n.knownPoolers)
+}
+
+// AppointmentStageComplete reports whether this orch has completed the given phase
+// in its current primary appointment — the process (Begin → Revoke → Establish) by
+// which an orch wins the coordinator role and appoints a new primary.
+//
+// Returns false for ALL phases when this orch is not actively running an appointment:
+// when idle before winning the Begin vote, still in the Begin phase gathering votes,
+// or after Restart() clears all state.
+//
+//   - PhaseBegin:     orch won the Begin vote (a quorum accepted it as coordinator).
+//     True while in Revoke or Establish, or after Establish completes.
+//   - PhaseRevoke:    Revoke completed or was skipped (true while in Establish or after).
+//   - PhaseEstablish: Establish quorum met — a primary has been appointed.
+//
+// Example: AppointmentStageComplete(PhaseBegin) && !AppointmentStageComplete(PhaseEstablish)
+// identifies an orch that won the coordinator vote but has not yet appointed a primary.
+// Useful in simulation conditions that count pre-establish orch crashes.
+func (n *OrchNode) AppointmentStageComplete(phase ConsensusPhase) bool {
+	switch phase {
+	case PhaseBegin:
+		return n.phase == phaseRevoke || n.phase == phaseEstablish || n.appointed
+	case PhaseRevoke:
+		return n.phase == phaseEstablish || n.appointed
+	case PhaseEstablish:
+		return n.appointed
+	default:
+		return false
+	}
+}
+
+// Step processes all indicators and drives the coordinator state machine forward.
 func (n *OrchNode) Step(tick int64, indicators []Indicator) []Request {
 	for _, ind := range indicators {
 		switch v := ind.(type) {
@@ -136,8 +197,8 @@ func (n *OrchNode) Step(tick int64, indicators []Indicator) []Request {
 		}
 	}
 
-	// If the confirmed primary has stopped, clear the appointment so we re-elect.
-	// We preserve confirmedState and confirmedQuorum for revocation computation.
+	// If the confirmed primary has stopped, clear the appointment so we begin
+	// a new appointment. We preserve confirmedState and confirmedQuorum for revocation computation.
 	if n.appointed && n.confirmedPrimaryIsStopped() {
 		n.appointed = false
 	}
@@ -182,7 +243,7 @@ func (n *OrchNode) handlePoolerStatus(ind PoolerStatusIndicator) {
 		n.term = ind.State.VotedTerm
 		if n.phase != phaseIdle {
 			// We were trying to act on out-of-date information. Abandon the current
-			// election attempt and back off so a competing coordinator can make progress.
+			// appointment attempt and back off so a competing coordinator can make progress.
 			n.pendingBackoff = true
 			n.phase = phaseIdle
 			n.progress = nil
@@ -213,7 +274,7 @@ func (n *OrchNode) handlePoolerResponse(ind PoolerResponseIndicator) {
 	}
 	// Rejection: adopt the higher term or escalate on same-term coordinator conflict.
 	// In either case we learned that another coordinator is actively working, so we
-	// signal a backoff: our view was stale when we started this election attempt.
+	// signal a backoff: our view was stale when we started this appointment attempt.
 	if ind.KnownTerm > n.term {
 		n.term = ind.KnownTerm
 		n.pendingBackoff = true
@@ -236,7 +297,7 @@ func (n *OrchNode) advance(tick int64) []Request {
 	switch n.phase {
 	case phaseIdle:
 		if !n.appointed {
-			// Before starting a new election, check whether another coordinator has
+			// Before starting a new appointment, check whether another coordinator has
 			// already established a primary. If so, adopt that state so we don't
 			// compete unnecessarily.
 			if n.learnEstablishedPrimary() {
@@ -296,7 +357,7 @@ func (n *OrchNode) startBegin(tick int64) []Request {
 		proposal:    proposal,
 		confirmers:  make(map[NodeID]bool),
 		appliers:    make(map[NodeID]bool),
-		timeoutTick: tick + electionTimeoutTicks,
+		timeoutTick: tick + appointmentPhaseTimeoutTicks,
 	}
 	return []Request{BroadcastStateRequest{State: proposal}}
 }
@@ -327,7 +388,7 @@ func (n *OrchNode) startRevoke(tick int64) []Request {
 		proposal:    proposal,
 		confirmers:  make(map[NodeID]bool),
 		appliers:    make(map[NodeID]bool),
-		timeoutTick: tick + electionTimeoutTicks,
+		timeoutTick: tick + appointmentPhaseTimeoutTicks,
 	}
 	return []Request{BroadcastStateRequest{
 		State:               proposal,
@@ -366,7 +427,7 @@ func (n *OrchNode) startEstablish(tick int64) []Request {
 		quorum:      quorum,
 		confirmers:  make(map[NodeID]bool),
 		appliers:    make(map[NodeID]bool),
-		timeoutTick: tick + electionTimeoutTicks,
+		timeoutTick: tick + appointmentPhaseTimeoutTicks,
 	}
 	return []Request{BroadcastStateRequest{State: proposal}}
 }
@@ -466,15 +527,15 @@ func (n *OrchNode) nextSeqNum() int64 {
 	return n.seqNum
 }
 
-// jitterTicks returns a backoff duration in [electionTimeoutTicks, 2*electionTimeoutTicks).
+// jitterTicks returns a backoff duration in [appointmentPhaseTimeoutTicks, 2*appointmentPhaseTimeoutTicks).
 // The jitter breaks symmetry between orchs that discover a conflict at the same tick.
 func (n *OrchNode) jitterTicks() int64 {
-	return electionTimeoutTicks + n.rng.Int64N(electionTimeoutTicks)
+	return appointmentPhaseTimeoutTicks + n.rng.Int64N(appointmentPhaseTimeoutTicks)
 }
 
 // learnEstablishedPrimary checks whether the pooler status reports already show
 // that an Establish quorum has been satisfied (another coordinator completed an
-// election). If so, it adopts the confirmed state so we don't compete unnecessarily.
+// appointment). If so, it adopts the confirmed state so we don't compete unnecessarily.
 func (n *OrchNode) learnEstablishedPrimary() bool {
 	for primaryID, primaryInfo := range sortedmaps.All(n.knownPoolers) {
 		if !primaryInfo.applied || primaryInfo.postgresStatus == PostgresStopped {
@@ -518,5 +579,6 @@ func (n *OrchNode) learnEstablishedPrimary() bool {
 	return false
 }
 
-// electionTimeoutTicks is how long an orch waits for phase quorum before escalating the term.
-const electionTimeoutTicks = 10
+// appointmentPhaseTimeoutTicks is how long an orch waits for a phase to achieve quorum
+// before escalating the voting term and restarting the appointment from Begin.
+const appointmentPhaseTimeoutTicks = 10

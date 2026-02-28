@@ -120,7 +120,7 @@ type ConsensusState struct {
 	SyncReplicas []NodeID // poolers that must acknowledge writes to the primary
 	// QuorumSpec is the serialized DurabilityPolicy quorum for this Establish proposal.
 	// Forwarded verbatim to poolers so they can persist it and reconstruct the Quorum
-	// on orch restart without re-running the election. Populated by DurabilityPolicy
+	// on orch restart without re-running the appointment. Populated by DurabilityPolicy
 	// deserialization; currently nil.
 	QuorumSpec []byte
 }

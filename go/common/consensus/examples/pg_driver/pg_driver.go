@@ -251,7 +251,7 @@ func (d *OrchDriver) Run(ctx context.Context) error {
 					//               ExpectedPrimaryTerm: r.ExpectedPrimaryTerm,
 					//           })
 					//           if err != nil {
-					//               return // pooler unreachable; orch will retry on election timeout
+					//               return // pooler unreachable; orch will retry on appointment phase timeout
 					//           }
 					//           d.indicators <- consensus.PoolerResponseIndicator{
 					//               FromPooler:   id,
