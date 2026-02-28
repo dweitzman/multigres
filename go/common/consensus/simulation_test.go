@@ -210,49 +210,101 @@ type atMostOneQuorum struct {
 func (c *atMostOneQuorum) Name() string { return "at_most_one_quorum" }
 
 func (c *atMostOneQuorum) Eval(sim *dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID]) bool {
-	type poolerInfo struct {
-		id        consensus.NodeID
-		effective consensus.PoolerPersistentState
+	type poolerPossible struct {
+		id     consensus.NodeID
+		states []consensus.PoolerPersistentState // PossibleStates(): len==1 if applied, len==2 if pending
 	}
-	var poolers []poolerInfo
+	var poolers []poolerPossible
 	for _, node := range sim.Nodes() {
 		if p, ok := node.(*consensus.PoolerNode); ok {
-			poolers = append(poolers, poolerInfo{id: p.ID(), effective: p.EffectiveState()})
+			poolers = append(poolers, poolerPossible{id: p.ID(), states: p.PossibleStates()})
 		}
 	}
 
-	quorumCount := 0
-	for _, pi := range poolers {
-		if pi.effective.Role != consensus.RolePrimary {
-			continue
-		}
-		// Reconstruct the quorum from the committed SyncReplicas (not what the
-		// policy would propose today) so IsWriteQuorum uses the original members.
-		q := c.policy.ReconstructQuorum(pi.id, pi.effective.SyncReplicas)
-		var streaming []consensus.NodeID
-		for _, rp := range poolers {
-			if rp.id != pi.id && rp.effective.Primary == pi.id {
-				streaming = append(streaming, rp.id)
+	// checkAssignment returns false (violated) if the given per-pooler state
+	// assignment results in more than one primary holding a write quorum.
+	checkAssignment := func(assignment []consensus.PoolerPersistentState) bool {
+		quorumCount := 0
+		for i, pi := range poolers {
+			if assignment[i].Role != consensus.RolePrimary {
+				continue
+			}
+			// Reconstruct the quorum from the committed SyncReplicas (not what
+			// the policy would propose today) so IsWriteQuorum uses the original members.
+			q := c.policy.ReconstructQuorum(pi.id, assignment[i].SyncReplicas)
+			var streaming []consensus.NodeID
+			for j, rj := range poolers {
+				if j != i && assignment[j].Primary == pi.id {
+					streaming = append(streaming, rj.id)
+				}
+			}
+			if q.IsWriteQuorum(streaming) {
+				quorumCount++
 			}
 		}
-		if q.IsWriteQuorum(streaming) {
-			quorumCount++
+		return quorumCount <= 1
+	}
+
+	// Count nodes with more than one possible state (committed ≠ last-applied,
+	// meaning a role change is committed but not yet operationally executed).
+	ambiguous := 0
+	for _, p := range poolers {
+		if len(p.states) > 1 {
+			ambiguous++
 		}
 	}
-	return quorumCount <= 1
+
+	// If there are too many ambiguous nodes to enumerate exhaustively, fall back
+	// to the effective-state check (what postgres is running right now).
+	const maxAmbiguous = 5
+	if ambiguous > maxAmbiguous {
+		assignment := make([]consensus.PoolerPersistentState, len(poolers))
+		for i, p := range poolers {
+			assignment[i] = p.states[len(p.states)-1] // last entry = effective (lastApplied or committed)
+		}
+		return checkAssignment(assignment)
+	}
+
+	// Enumerate all 2^ambiguous state combinations. For each combination, each
+	// ambiguous node independently picks either its committed (goal) state or its
+	// last-applied (current) state. The invariant must hold for every combination,
+	// not just the currently-effective one.
+	for combo := range 1 << ambiguous {
+		assignment := make([]consensus.PoolerPersistentState, len(poolers))
+		bit := 0
+		for i, p := range poolers {
+			if len(p.states) == 1 {
+				assignment[i] = p.states[0]
+			} else {
+				assignment[i] = p.states[(combo>>bit)&1]
+				bit++
+			}
+		}
+		if !checkAssignment(assignment) {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *atMostOneQuorum) Describe(sim *dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID]) string {
 	var lines []string
 	for _, node := range sim.Nodes() {
 		if p, ok := node.(*consensus.PoolerNode); ok {
-			eff := p.EffectiveState()
-			committed := p.CommittedState()
-			lines = append(lines, fmt.Sprintf("%v: effective(role=%v primary=%v syncReplicas=%v) committed(role=%v applied=%v)",
-				node.ID(), eff.Role, eff.Primary, eff.SyncReplicas, committed.Role, committed.Applied))
+			states := p.PossibleStates()
+			committed := states[0]
+			if len(states) == 1 {
+				lines = append(lines, fmt.Sprintf("%v: committed(role=%v primary=%v syncReplicas=%v applied=%v)",
+					node.ID(), committed.Role, committed.Primary, committed.SyncReplicas, committed.Applied))
+			} else {
+				lastApplied := states[1]
+				lines = append(lines, fmt.Sprintf("%v: committed(role=%v primary=%v syncReplicas=%v applied=%v) lastApplied(role=%v primary=%v)",
+					node.ID(), committed.Role, committed.Primary, committed.SyncReplicas, committed.Applied,
+					lastApplied.Role, lastApplied.Primary))
+			}
 		}
 	}
-	return "effective states:\n  " + strings.Join(lines, "\n  ")
+	return "pooler states:\n  " + strings.Join(lines, "\n  ")
 }
 
 // appliedMonotonicity is a safety invariant: once a pooler persists Applied=true

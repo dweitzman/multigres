@@ -168,8 +168,10 @@ Small improvements that make the existing code more correct and configurable:
   `KnownPoolerIDs()` against the live pooler set and re-delivers membership events through the
   normal ordered delivery path. `TestOrchCrash_1000PreEstablishCrashes` asserts 1000 mid-appointment
   orch crashes (after Begin, before Establish) without safety violations.
-- **Strengthen `atMostOneQuorum`** — also check whether any pooler with a pending-but-unapplied
-  state could form a second write quorum if it applied now.
+- ✅ **Strengthen `atMostOneQuorum`** — enumerates all 2^k state combinations across poolers
+  with a pending unapplied change (k = number of such nodes, capped at 5 before falling back
+  to the effective-state check). Each node independently picks its committed (goal) or
+  last-applied (current) state; the invariant must hold for every combination.
 - **Wire up `PostgresApplier`** — fill in `Apply()` (ALTER SYSTEM, pg_ctl promote / standby
   reconfigure, pg_reload_conf) and `AppliedState()` (read postgresql.conf / standby.signal) in
   `examples/pg_driver/`.
