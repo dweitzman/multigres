@@ -721,62 +721,37 @@ func newOrchCrashDriverSim(t *testing.T, seed int64, policy consensus.Durability
 
 // --- Conditions ---
 
-// preEstablishOrchCrashCondition counts the number of times an orch was stopped while
-// mid-appointment — i.e. it won the coordinator vote (Begin complete) but had not yet
-// appointed a primary (Establish not complete). Fires when the count reaches min.
+// orchNodeCond is the NodeCondition type for *consensus.OrchNode in this simulator,
+// used as a type alias to avoid repeating the four type parameters.
+type orchNodeCond = dstsim.NodeCondition[*consensus.OrchNode, consensus.Indicator, consensus.Request, consensus.NodeID]
+
+func orchJustStopped() orchNodeCond {
+	return dstsim.JustStopped[*consensus.OrchNode, consensus.Indicator, consensus.Request, consensus.NodeID]()
+}
+
+func orchStagePredicate(phase consensus.ConsensusPhase) orchNodeCond {
+	return dstsim.NodeConditionFunc[*consensus.OrchNode, consensus.Indicator, consensus.Request, consensus.NodeID](
+		func(o *consensus.OrchNode, _ *dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID]) bool {
+			return o.AppointmentStageComplete(phase)
+		},
+	)
+}
+
+// preEstablishOrchCrashes returns a condition that fires each time an orch crashes while
+// mid-appointment — it won the coordinator vote (Begin complete) but had not yet appointed
+// a primary (Establish not complete).
 //
-// Detection works by observing the "just stopped" transition each tick: when an orch
-// moves from running to stopped, StopNode preserves its internal state (Restart() is
-// only called by RestartNode), so AppointmentStageComplete reflects the pre-crash phase.
-//
-// TODO: replace with a generic dstsim.PerNodeCondition combinator that auto-instantiates
-// a condition per matching node and tracks each independently, enabling cleaner composition
-// like: PerNodeCondition(isOrch, And(JustStopped(), AppointmentStageComplete(Begin), Not(AppointmentStageComplete(Establish)))).
-type preEstablishOrchCrashCondition struct {
-	prevStopped map[consensus.NodeID]bool
-	count       int
-	min         int
-}
-
-func (c *preEstablishOrchCrashCondition) Name() string {
-	return fmt.Sprintf("pre_establish_orch_crashes_%d", c.min)
-}
-
-func (c *preEstablishOrchCrashCondition) Eval(sim *dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID]) bool {
-	if c.prevStopped == nil {
-		c.prevStopped = make(map[consensus.NodeID]bool)
-	}
-
-	currentStopped := make(map[consensus.NodeID]bool)
-	for _, node := range sim.Nodes() {
-		if _, ok := node.(*consensus.OrchNode); ok {
-			currentStopped[node.ID()] = sim.IsNodeStopped(node.ID())
-		}
-	}
-
-	// An orch that just became stopped (was running last tick) and is mid-appointment
-	// counts as a pre-establish crash. StopNode preserves internal state, so
-	// AppointmentStageComplete still reflects the phase at the moment of the crash.
-	for _, node := range sim.Nodes() {
-		orch, ok := node.(*consensus.OrchNode)
-		if !ok {
-			continue
-		}
-		orchID := node.ID()
-		justStopped := currentStopped[orchID] && !c.prevStopped[orchID]
-		if justStopped &&
-			orch.AppointmentStageComplete(consensus.PhaseBegin) &&
-			!orch.AppointmentStageComplete(consensus.PhaseEstablish) {
-			c.count++
-		}
-	}
-
-	c.prevStopped = currentStopped
-	return c.count >= c.min
-}
-
-func (c *preEstablishOrchCrashCondition) Describe(_ *dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID]) string {
-	return fmt.Sprintf("pre-establish orch crashes: %d (need >= %d)", c.count, c.min)
+// Detection relies on the "just stopped" transition: StopNode preserves internal state
+// (Restart() is only called by RestartNode), so AppointmentStageComplete reflects the
+// phase at the moment of the crash. Compose with AtLeastNTimes to assert N crashes.
+func preEstablishOrchCrashes() dstsim.Condition[consensus.Indicator, consensus.Request, consensus.NodeID] {
+	return dstsim.PerNodeCondition(func() orchNodeCond {
+		return dstsim.NodeAnd(
+			orchJustStopped(),
+			orchStagePredicate(consensus.PhaseBegin),
+			dstsim.NodeNot(orchStagePredicate(consensus.PhaseEstablish)),
+		)
+	})
 }
 
 // --- Tests ---
@@ -887,7 +862,7 @@ func TestOrchCrash_1000PreEstablishCrashes(t *testing.T) {
 	h := dstsim.NewSimulationTestHelper(t, sim)
 	h.RequireRunUntil(
 		dstsim.And(
-			&preEstablishOrchCrashCondition{min: 1000},
+			dstsim.NewAtLeastNTimes(1000, preEstablishOrchCrashes()),
 			dstsim.NewAtLeastNTimes(100, dstsim.NewInOrder(&noPrimaryActive{}, &activePrimaryExists{})),
 		),
 		500_000,
