@@ -55,9 +55,10 @@ type poolerKnowledge struct {
 // All state is ephemeral: if an orch crashes and restarts it simply begins a new term,
 // learning cluster state from pooler status indicators before making any proposal.
 type OrchNode struct {
-	id           NodeID
-	policy       DurabilityPolicy
-	knownPoolers map[NodeID]poolerKnowledge
+	id              NodeID
+	policy          DurabilityPolicy
+	bootstrapPolicy DurabilityPolicy
+	knownPoolers    map[NodeID]poolerKnowledge
 
 	term   int64
 	seqNum int64
@@ -93,14 +94,25 @@ type OrchNode struct {
 }
 
 // NewOrchNode creates a new coordinator node with the given identity and durability
-// policy. rng is used to jitter backoff durations when the orch discovers a competing
+// policies. rng is used to jitter backoff durations when the orch discovers a competing
 // coordinator; pass a seeded *rand.Rand so tests remain fully deterministic.
-func NewOrchNode(id NodeID, policy DurabilityPolicy, rng *rand.Rand) *OrchNode {
+//
+// policy governs write-quorum decisions (Revoke and Establish phases). It is also
+// used to evaluate whether the previous write quorum has been broken when checking
+// Begin-phase quorum.
+//
+// bootstrapPolicy governs the Begin-phase quorum when there is no previous write
+// quorum to revoke (cluster bootstrap). In production this is typically configured
+// separately from the write policy — e.g. via etcd or a command-line flag — to
+// express the minimum number of poolers that must accept the new coordinator before
+// a fresh election can proceed.
+func NewOrchNode(id NodeID, policy DurabilityPolicy, bootstrapPolicy DurabilityPolicy, rng *rand.Rand) *OrchNode {
 	return &OrchNode{
-		id:           id,
-		policy:       policy,
-		knownPoolers: make(map[NodeID]poolerKnowledge),
-		rng:          rng,
+		id:              id,
+		policy:          policy,
+		bootstrapPolicy: bootstrapPolicy,
+		knownPoolers:    make(map[NodeID]poolerKnowledge),
+		rng:             rng,
 	}
 }
 
@@ -359,16 +371,25 @@ func (n *OrchNode) startEstablish(tick int64) []Request {
 	return []Request{BroadcastStateRequest{State: proposal}}
 }
 
-// beginQuorumMet returns true when a simple majority of known poolers have voted
-// for this orch as coordinator at the current term.
+// beginQuorumMet returns true when enough poolers have committed to the new term
+// that the previous write quorum can no longer form.
+//
+// When there is a previous write quorum (confirmedQuorum != nil), a pooler that
+// commits a higher voting term stops acknowledging writes for the old primary term,
+// so IsRevoked(confirmers) is the right condition: can the old primary still collect
+// N acks from its sync replicas?
+//
+// On bootstrap (confirmedQuorum == nil), the bootstrapPolicy is asked to reconstruct
+// a quorum over all currently known poolers; IsRevoked then checks whether the
+// confirmer set satisfies that policy's threshold. Once learnEstablishedPrimary()
+// sets confirmedQuorum (because the orch contacted poolers already in an established
+// cohort), this bootstrap path is never taken again for the lifetime of the orch.
 func (n *OrchNode) beginQuorumMet() bool {
-	count := 0
-	for _, id := range sortedmaps.Keys(n.progress.confirmers) {
-		if _, exists := n.knownPoolers[id]; exists {
-			count++
-		}
+	if n.confirmedQuorum != nil {
+		return n.confirmedQuorum.IsRevoked(n.progress.confirmers)
 	}
-	return count > len(n.knownPoolers)/2
+	q := n.bootstrapPolicy.ReconstructQuorum("", sortedmaps.Keys(n.knownPoolers))
+	return q.IsRevoked(n.progress.confirmers)
 }
 
 // revokeQuorumMet returns true when the confirmed quorum reports that the old

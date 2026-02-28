@@ -162,6 +162,11 @@ Small improvements that make the existing code more correct and configurable:
 - **Wire up `PostgresApplier`** — fill in `Apply()` (ALTER SYSTEM, pg_ctl promote / standby
   reconfigure, pg_reload_conf) and `AppliedState()` (read postgresql.conf / standby.signal) in
   `examples/pg_driver/`.
+- **Realistic gRPC wiring in `pg_driver.go`** — update the production sketch to reflect the actual
+  gRPC topology: the orch holds a streaming health gRPC to each pooler (pooler status flows back as
+  streaming responses, not outbound pooler RPCs); the pooler's `PoolerResponseRequest` is a reply on
+  the incoming `ProposeState` RPC stream rather than a separate outbound call; and the pooler never
+  initiates connections to the orch.
 
 ### Stage 2 — Bootstrapping
 
@@ -173,6 +178,16 @@ new poolers join the voting cohort by being written into the postgres database, 
 the admission record to sync replicas. Before the next Begin term, each cohort member waits until
 it has applied WAL through the admission record so it knows the full cohort and can compute quorum
 correctly.
+
+Key design item for bootstrap safety: add a `Bootstrap bool` field to `ConsensusState`. The orch
+sets it when using the bootstrap policy (no confirmed quorum). A pooler that has already applied an
+Establish proposal (committed `Role = Primary/Replica` with `Applied = true`) must reject any
+proposal with `Bootstrap = true`. This prevents a new or partitioned orch that hasn't yet discovered
+an existing cohort from accidentally bootstrapping over a healthy cluster. The term number alone is
+not sufficient protection: bootstrap terms could keep incrementing (due to racing orchs or pod
+churn) and a high bootstrap term number must never override an already-established cohort.
+Bootstrap-eligible poolers are those with no applied cohort state; once a pooler has applied an
+Establish it is no longer bootstrap-eligible for the lifetime of that cohort.
 
 ### Stage 3 — Re-bootstrapping
 

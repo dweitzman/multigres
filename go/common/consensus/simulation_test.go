@@ -408,8 +408,11 @@ func newHappyPathSim(t *testing.T, seed int64, policy consensus.DurabilityPolicy
 
 	// Register orch nodes, each with a deterministically seeded RNG so tests are
 	// reproducible yet the two orchs have different jitter values.
-	sim.RegisterNode(consensus.NewOrchNode(orchA, policy, rand.New(rand.NewPCG(uint64(seed), 0))))
-	sim.RegisterNode(consensus.NewOrchNode(orchB, policy, rand.New(rand.NewPCG(uint64(seed+1), 0))))
+	// Bootstrap policy: majority of the 3-pooler cluster (any 2 must accept the
+	// new coordinator before a fresh election can proceed).
+	bootstrapPolicy := consensus.AnyNPolicy(2)
+	sim.RegisterNode(consensus.NewOrchNode(orchA, policy, bootstrapPolicy, rand.New(rand.NewPCG(uint64(seed), 0))))
+	sim.RegisterNode(consensus.NewOrchNode(orchB, policy, bootstrapPolicy, rand.New(rand.NewPCG(uint64(seed+1), 0))))
 
 	// Register pooler nodes with in-memory storage
 	stores := make(map[consensus.NodeID]*memStorage)
@@ -444,8 +447,9 @@ func newFlakyApplierSim(t *testing.T, seed int64, policy consensus.DurabilityPol
 	handler := &consensusHandler{sim: sim, statusSeqMap: make(map[consensus.NodeID]int64)}
 	sim.SetRequestHandler(handler)
 
-	sim.RegisterNode(consensus.NewOrchNode(orchA, policy, rand.New(rand.NewPCG(uint64(seed), 0))))
-	sim.RegisterNode(consensus.NewOrchNode(orchB, policy, rand.New(rand.NewPCG(uint64(seed+1), 0))))
+	bootstrapPolicy := consensus.AnyNPolicy(2)
+	sim.RegisterNode(consensus.NewOrchNode(orchA, policy, bootstrapPolicy, rand.New(rand.NewPCG(uint64(seed), 0))))
+	sim.RegisterNode(consensus.NewOrchNode(orchB, policy, bootstrapPolicy, rand.New(rand.NewPCG(uint64(seed+1), 0))))
 
 	stores := make(map[consensus.NodeID]*memStorage)
 	appliers := make(map[consensus.NodeID]*flakyApplier)
