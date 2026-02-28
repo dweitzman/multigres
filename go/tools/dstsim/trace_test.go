@@ -216,8 +216,8 @@ type FixedDelayPolicy struct {
 	Delay int64
 }
 
-func (p *FixedDelayPolicy) ScheduleDelivery(currentTick int64, fromNode int, target int, indicator int) (bool, int64) {
-	return true, p.Delay
+func (p *FixedDelayPolicy) ScheduleDelivery(args dstsim.DeliveryArgs[int, int]) (bool, int64, []string) {
+	return true, p.Delay, nil
 }
 
 // TestEmptyTicksAreSkipped verifies that ticks with no activity are not included in the trace
@@ -267,4 +267,71 @@ func TestEmptyTicksAreSkipped(t *testing.T) {
 		require.Equal(t, 1, len(tickTrace.NodeSteps), "tick %d should have node activity", i)
 		require.Contains(t, tickTrace.NodeSteps, 1, "tick %d should have node 1 step", i)
 	}
+}
+
+// TestFormatTrace tests the FormatTrace function with hand-crafted traces covering
+// all trace sections: network events, node activity, dropped indicators, in-flight
+// indicators, assertion violations, and node changes.
+func TestFormatTrace(t *testing.T) {
+	traces := []dstsim.TickTrace[int, string, int]{
+		{
+			Tick: 100,
+			PolicyTransitions: []string{
+				"partition started (ends at tick 105): group A=[1 2], group B=[3]",
+			},
+		},
+		{
+			Tick: 101,
+			NodeSteps: map[int]dstsim.NodeStepTrace[int, string]{
+				2: {
+					Indicators: []int{42},
+					Requests:   []string{"ping", "pong"},
+				},
+			},
+			DroppedIndicators: []dstsim.DroppedIndicator[int, int]{
+				{FromNode: 1, TargetNode: 3, Indicator: 99},
+			},
+			DelayedIndicators: []dstsim.DelayedIndicator[int, int]{
+				{FromNode: 2, TargetNode: 3, Indicator: 77, DeliverAt: 104},
+			},
+		},
+		{
+			Tick:                102,
+			AssertionViolations: []string{"Always(foo): bar baz"},
+			NodeChanges:         []string{"stopped: 3"},
+		},
+	}
+
+	var buf bytes.Buffer
+	dstsim.FormatTrace(&buf, traces)
+	output := buf.String()
+
+	expected := `
+=== Recent Trace (last 3 ticks, 100-102) ===
+
+--- Tick 100 ---
+Network events:
+  partition started (ends at tick 105): group A=[1 2], group B=[3]
+
+--- Tick 101 ---
+Node activity:
+  2 received 1 indicators
+    <- int 42
+  2 generated 2 requests
+    -> string ping
+    -> string pong
+Dropped:
+  3 <- int 99 (from 1)
+In-flight:
+  3 <- int 77 (from 2, +3 ticks, arrives tick 104)
+
+--- Tick 102 ---
+⚠️  ASSERTION VIOLATIONS:
+    Always(foo): bar baz
+Node changes:
+  stopped: 3
+
+=== End of Trace ===
+`
+	require.Equal(t, expected, output)
 }

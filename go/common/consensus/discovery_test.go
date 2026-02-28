@@ -17,6 +17,7 @@ package consensus_test
 import (
 	"github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/tools/dstsim"
+	"github.com/multigres/multigres/go/tools/dstsim/sortedmaps"
 )
 
 // discoveryNode simulates the etcd watcher that runs alongside each orch process.
@@ -58,12 +59,12 @@ func (d *discoveryNode) Step(tick int64, indicators []consensus.Indicator) []con
 	}
 
 	var discovered, removed []consensus.NodeID
-	for id := range current {
+	for _, id := range sortedmaps.Keys(current) {
 		if !d.lastKnown[id] {
 			discovered = append(discovered, id)
 		}
 	}
-	for id := range d.lastKnown {
+	for _, id := range sortedmaps.Keys(d.lastKnown) {
 		if !current[id] {
 			removed = append(removed, id)
 		}

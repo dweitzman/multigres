@@ -16,6 +16,8 @@ package dstsim
 
 import (
 	"bytes"
+	"os"
+	"strconv"
 	"testing"
 )
 
@@ -47,6 +49,10 @@ func (h *SimulationTestHelper[I, R, ID]) RequireRunUntilWithTrace(condition Cond
 		h.t.Logf("Simulation failed: %v", err)
 		h.dumpTrace(dumpTicks)
 		h.t.FailNow()
+		return
+	}
+	if n := traceEnvDumpCount(); n > 0 {
+		h.dumpTrace(n)
 	}
 }
 
@@ -65,6 +71,10 @@ func (h *SimulationTestHelper[I, R, ID]) RequireRunForWithTrace(ticks int64, dum
 		h.t.Logf("Simulation failed: %v", err)
 		h.dumpTrace(dumpTicks)
 		h.t.FailNow()
+		return
+	}
+	if n := traceEnvDumpCount(); n > 0 {
+		h.dumpTrace(n)
 	}
 }
 
@@ -88,6 +98,9 @@ func (h *SimulationTestHelper[I, R, ID]) AssertRunUntilWithTrace(condition Condi
 		h.dumpTrace(dumpTicks)
 		h.t.Fail()
 		return false
+	}
+	if n := traceEnvDumpCount(); n > 0 {
+		h.dumpTrace(n)
 	}
 	return true
 }
@@ -113,6 +126,9 @@ func (h *SimulationTestHelper[I, R, ID]) AssertRunForWithTrace(ticks int64, dump
 		h.t.Fail()
 		return false
 	}
+	if n := traceEnvDumpCount(); n > 0 {
+		h.dumpTrace(n)
+	}
 	return true
 }
 
@@ -122,4 +138,20 @@ func (h *SimulationTestHelper[I, R, ID]) dumpTrace(numTicks int) {
 	var buf bytes.Buffer
 	h.sim.DumpRecentTrace(&buf, numTicks)
 	h.t.Log(buf.String())
+}
+
+// traceEnvDumpCount returns the number of trace ticks to dump on success,
+// as specified by the DSTSIM_TRACE environment variable.
+// Set DSTSIM_TRACE=500 to print the last 500 ticks of trace even on success.
+// Returns 0 if the env var is not set or not a positive integer.
+func traceEnvDumpCount() int {
+	v := os.Getenv("DSTSIM_TRACE")
+	if v == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
 }

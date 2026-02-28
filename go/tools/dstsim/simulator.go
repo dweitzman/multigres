@@ -44,10 +44,11 @@ type RequestHandler[I any, R any, ID comparable] interface {
 
 // Simulator executes a distributed protocol deterministically
 type Simulator[I any, R any, ID comparable] struct {
-	nodes       map[ID]Node[I, R, ID]
-	currentTick int64
-	rng         *rand.Rand
-	assertions  []Assertion[I, R, ID]
+	nodes           map[ID]Node[I, R, ID]
+	registeredOrder []ID // node IDs in registration order, for deterministic iteration
+	currentTick     int64
+	rng             *rand.Rand
+	assertions      []Assertion[I, R, ID]
 
 	// Delivery policy for network simulation
 	indicatorDeliveryPolicy IndicatorDeliveryPolicy[I, ID]
@@ -100,6 +101,7 @@ func NewSimulator[I, R any, ID comparable](opts SimulatorOptions) *Simulator[I, 
 
 	return &Simulator[I, R, ID]{
 		nodes:                      make(map[ID]Node[I, R, ID]),
+		registeredOrder:            make([]ID, 0),
 		currentTick:                initialTick,
 		rng:                        rng,
 		indicatorDeliveryPolicy:    &FastNetwork[I, ID]{}, // Default: fast network with 1-tick latency
@@ -116,6 +118,7 @@ func NewSimulator[I, R any, ID comparable](opts SimulatorOptions) *Simulator[I, 
 // RegisterNode adds a node to the simulation
 func (s *Simulator[I, R, ID]) RegisterNode(n Node[I, R, ID]) {
 	s.nodes[n.ID()] = n
+	s.registeredOrder = append(s.registeredOrder, n.ID())
 }
 
 // SetDeliveryPolicy sets the indicator delivery policy for network simulation
@@ -137,13 +140,25 @@ func (s *Simulator[I, R, ID]) SetRequestHandler(handler RequestHandler[I, R, ID]
 // The policy determines when/if the indicator is delivered (enforces minimum 1-tick delay)
 // This is an internal method - external callers should use RequestHandler.ProcessRequests
 func (s *Simulator[I, R, ID]) scheduleIndicator(fromNode ID, targetNode ID, ind I) error {
-	// Use delivery policy to determine when/if to deliver
-	delivered, delayTicks := s.indicatorDeliveryPolicy.ScheduleDelivery(s.currentTick, fromNode, targetNode, ind)
+	args := DeliveryArgs[I, ID]{
+		CurrentTick: s.currentTick,
+		FromNode:    fromNode,
+		Target:      targetNode,
+		Indicator:   ind,
+		AllNodes:    s.registeredOrder,
+	}
+	delivered, delayTicks, events := s.indicatorDeliveryPolicy.ScheduleDelivery(args)
+
+	// Collect policy events (e.g. partition start/end) into the current tick trace
+	if len(events) > 0 && s.currentTickTrace != nil {
+		s.currentTickTrace.PolicyTransitions = append(s.currentTickTrace.PolicyTransitions, events...)
+	}
 
 	// Message dropped by policy
 	if !delivered {
 		if s.currentTickTrace != nil {
 			s.currentTickTrace.DroppedIndicators = append(s.currentTickTrace.DroppedIndicators, DroppedIndicator[I, ID]{
+				FromNode:   fromNode,
 				TargetNode: targetNode,
 				Indicator:  ind,
 			})
@@ -161,6 +176,7 @@ func (s *Simulator[I, R, ID]) scheduleIndicator(fromNode ID, targetNode ID, ind 
 	if s.stoppedIDs[targetNode] {
 		if s.currentTickTrace != nil {
 			s.currentTickTrace.DroppedIndicators = append(s.currentTickTrace.DroppedIndicators, DroppedIndicator[I, ID]{
+				FromNode:   fromNode,
 				TargetNode: targetNode,
 				Indicator:  ind,
 			})
@@ -178,6 +194,17 @@ func (s *Simulator[I, R, ID]) scheduleIndicator(fromNode ID, targetNode ID, ind 
 		s.scheduledDeliveries[deliverAt] = make(map[ID][]I)
 	}
 	s.scheduledDeliveries[deliverAt][targetNode] = append(s.scheduledDeliveries[deliverAt][targetNode], ind)
+
+	// Record in-flight indicators for delays > 1 tick so the trace shows what's pending
+	if delayTicks > 1 && s.currentTickTrace != nil {
+		s.currentTickTrace.DelayedIndicators = append(s.currentTickTrace.DelayedIndicators, DelayedIndicator[I, ID]{
+			FromNode:   fromNode,
+			TargetNode: targetNode,
+			Indicator:  ind,
+			DeliverAt:  deliverAt,
+		})
+	}
+
 	return nil
 }
 
@@ -199,7 +226,8 @@ func (s *Simulator[I, R, ID]) RunUntil(stopCondition Condition[I, R, ID], maxTic
 			// Determine if we stopped due to condition or timeout
 			if maxTicks > 0 && !stopCondition.Eval(s) {
 				// Timeout: max ticks reached but user condition not satisfied
-				return fmt.Errorf("simulation reached max ticks (%d) without condition '%s' becoming true", maxTicks, stopCondition.Name())
+				return fmt.Errorf("simulation reached max ticks (%d) without condition '%s' becoming true\ncondition state: %s",
+					maxTicks, stopCondition.Name(), stopCondition.Describe(s))
 			}
 			return s.checkDeferredProperties()
 		}
@@ -208,6 +236,8 @@ func (s *Simulator[I, R, ID]) RunUntil(stopCondition Condition[I, R, ID], maxTic
 			Tick:                s.currentTick,
 			NodeSteps:           make(map[ID]NodeStepTrace[I, R]),
 			DroppedIndicators:   make([]DroppedIndicator[I, ID], 0),
+			DelayedIndicators:   make([]DelayedIndicator[I, ID], 0),
+			PolicyTransitions:   make([]string, 0),
 			AssertionViolations: make([]string, 0),
 		}
 
@@ -218,16 +248,16 @@ func (s *Simulator[I, R, ID]) RunUntil(stopCondition Condition[I, R, ID], maxTic
 		// Process all nodes for this tick by calling Step() once per non-stopped node.
 		// All active nodes are called every tick (even with empty indicators) so they can process time-based logic.
 		// An anonymous function with defer ensures inTick is always cleared, even on early return.
-		// Snapshot the active node IDs before iterating so StopNode/ResumeNode/RestartNode calls from
-		// within a RequestHandler (which are deferred) don't interfere with the current loop.
+		// Snapshot the active node IDs before iterating in registration order so:
+		//   1. StopNode/ResumeNode/RestartNode calls (deferred) don't interfere with the current loop
+		//   2. Node processing order is deterministic across runs
 		if err := func() error {
 			s.inTick = true
 			defer func() { s.inTick = false }()
 
-			nodeIDs := make([]ID, 0, len(s.nodes))
-			for id := range s.nodes {
-				nodeIDs = append(nodeIDs, id)
-			}
+			nodeIDs := make([]ID, len(s.registeredOrder))
+			copy(nodeIDs, s.registeredOrder)
+
 			for _, nodeID := range nodeIDs {
 				node, stillActive := s.nodes[nodeID]
 				if !stillActive {
@@ -251,7 +281,12 @@ func (s *Simulator[I, R, ID]) RunUntil(stopCondition Condition[I, R, ID], maxTic
 				// Process requests from the node - convert to indicators
 				if s.requestHandler != nil && len(requests) > 0 {
 					indicatorsToDeliver := s.requestHandler.ProcessRequests(s, nodeID, requests)
-					for targetID, inds := range indicatorsToDeliver {
+					// Iterate in registration order for deterministic RNG consumption
+					for _, targetID := range s.registeredOrder {
+						inds, ok := indicatorsToDeliver[targetID]
+						if !ok {
+							continue
+						}
 						for _, ind := range inds {
 							if err := s.scheduleIndicator(nodeID, targetID, ind); err != nil {
 								return err
@@ -342,7 +377,12 @@ func (s *Simulator[I, R, ID]) RunUntil(stopCondition Condition[I, R, ID], maxTic
 		// Save tick trace to history
 		if s.currentTickTrace != nil {
 			// Only save non-empty ticks to trace
-			if len(s.currentTickTrace.NodeSteps) > 0 || len(s.currentTickTrace.DroppedIndicators) > 0 || len(s.currentTickTrace.AssertionViolations) > 0 || len(s.currentTickTrace.NodeChanges) > 0 {
+			if len(s.currentTickTrace.NodeSteps) > 0 ||
+				len(s.currentTickTrace.DroppedIndicators) > 0 ||
+				len(s.currentTickTrace.AssertionViolations) > 0 ||
+				len(s.currentTickTrace.NodeChanges) > 0 ||
+				len(s.currentTickTrace.PolicyTransitions) > 0 ||
+				len(s.currentTickTrace.DelayedIndicators) > 0 {
 				s.traceBuffer.Append(*s.currentTickTrace)
 			}
 
@@ -362,11 +402,11 @@ func (s *Simulator[I, R, ID]) RunFor(ticks int64) error {
 	return s.RunUntil(TickCondition[I, R, ID](ticks), ticks)
 }
 
-// Nodes returns all registered nodes, including any that are currently stopped.
+// Nodes returns all registered nodes in registration order, including any that are currently stopped.
 func (s *Simulator[I, R, ID]) Nodes() []Node[I, R, ID] {
-	nodes := make([]Node[I, R, ID], 0, len(s.nodes))
-	for _, n := range s.nodes {
-		nodes = append(nodes, n)
+	nodes := make([]Node[I, R, ID], 0, len(s.registeredOrder))
+	for _, id := range s.registeredOrder {
+		nodes = append(nodes, s.nodes[id])
 	}
 	return nodes
 }

@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/multigres/multigres/go/tools/dstsim"
+	"github.com/multigres/multigres/go/tools/dstsim/sortedmaps"
 )
 
 // LeaderTenureTooLong checks if a leader has been in power too long
@@ -70,7 +71,7 @@ func (c *LeaderTenureTooLong) Eval(sim *dstsim.Simulator[Indicator, Request, Nod
 	}
 
 	// Clear tracking for nodes that are no longer leader
-	for nodeID := range c.leaderStartTicks {
+	for _, nodeID := range sortedmaps.Keys(c.leaderStartTicks) {
 		if nodeID != currentLeader {
 			delete(c.leaderStartTicks, nodeID)
 		}

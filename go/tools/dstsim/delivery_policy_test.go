@@ -291,7 +291,7 @@ func TestPartitionedNetwork(t *testing.T) {
 		)
 		delivered := 0
 		for tick := range int64(50) {
-			ok, delay := policy.ScheduleDelivery(tick, 1, 2, 0)
+			ok, delay, _ := policy.ScheduleDelivery(dstsim.DeliveryArgs[int, int]{CurrentTick: tick, FromNode: 1, Target: 2, Indicator: 0})
 			if ok {
 				require.GreaterOrEqual(t, delay, int64(1))
 				delivered++
@@ -307,9 +307,9 @@ func TestPartitionedNetwork(t *testing.T) {
 		rng := rand.New(rand.NewPCG(99, 0))
 		policy := dstsim.NewPartitionedNetwork(&dstsim.FastNetwork[int, int]{}, 1.0, 1000, rng)
 
-		ok1, _ := policy.ScheduleDelivery(5, 10, 20, 0) // both nodes new to this partition
-		ok2, _ := policy.ScheduleDelivery(5, 10, 20, 0) // same tick, same result expected
-		ok3, _ := policy.ScheduleDelivery(6, 10, 20, 0) // later tick, same partition
+		ok1, _, _ := policy.ScheduleDelivery(dstsim.DeliveryArgs[int, int]{CurrentTick: 5, FromNode: 10, Target: 20, Indicator: 0}) // both nodes new to this partition
+		ok2, _, _ := policy.ScheduleDelivery(dstsim.DeliveryArgs[int, int]{CurrentTick: 5, FromNode: 10, Target: 20, Indicator: 0}) // same tick, same result expected
+		ok3, _, _ := policy.ScheduleDelivery(dstsim.DeliveryArgs[int, int]{CurrentTick: 6, FromNode: 10, Target: 20, Indicator: 0}) // later tick, same partition
 		require.Equal(t, ok1, ok2, "group assignment must be stable within the same tick")
 		require.Equal(t, ok1, ok3, "group assignment must be stable across ticks in the same partition")
 	})
@@ -321,7 +321,7 @@ func TestPartitionedNetwork(t *testing.T) {
 		policy := dstsim.NewPartitionedNetwork(&dstsim.FastNetwork[int, int]{}, 1.0, 1, rng)
 		passed, dropped := 0, 0
 		for tick := range int64(200) {
-			ok, _ := policy.ScheduleDelivery(tick, 1, 2, 0)
+			ok, _, _ := policy.ScheduleDelivery(dstsim.DeliveryArgs[int, int]{CurrentTick: tick, FromNode: 1, Target: 2, Indicator: 0})
 			if ok {
 				passed++
 			} else {
@@ -336,7 +336,7 @@ func TestPartitionedNetwork(t *testing.T) {
 		rng := rand.New(rand.NewPCG(1, 0))
 		policy := dstsim.NewPartitionedNetwork(&dstsim.FastNetwork[int, int]{}, 0.0, 100, rng)
 		for tick := range int64(50) {
-			ok, delay := policy.ScheduleDelivery(tick, 1, 2, 0)
+			ok, delay, _ := policy.ScheduleDelivery(dstsim.DeliveryArgs[int, int]{CurrentTick: tick, FromNode: 1, Target: 2, Indicator: 0})
 			require.True(t, ok)
 			require.Equal(t, int64(1), delay)
 		}
@@ -356,7 +356,7 @@ func TestUnreliableNetworkPartitions(t *testing.T) {
 		}
 		delivered := 0
 		for tick := range int64(50) {
-			ok, delay := policy.ScheduleDelivery(tick, 1, 2, 0)
+			ok, delay, _ := policy.ScheduleDelivery(dstsim.DeliveryArgs[int, int]{CurrentTick: tick, FromNode: 1, Target: 2, Indicator: 0})
 			if ok {
 				require.GreaterOrEqual(t, delay, int64(1))
 				delivered++
@@ -374,9 +374,9 @@ func TestUnreliableNetworkPartitions(t *testing.T) {
 			MaxPartitionDuration: 1000,
 			Rng:                  rand.New(rand.NewPCG(99, 0)),
 		}
-		ok1, _ := policy.ScheduleDelivery(5, 10, 20, 0)
-		ok2, _ := policy.ScheduleDelivery(5, 10, 20, 0)
-		ok3, _ := policy.ScheduleDelivery(6, 10, 20, 0)
+		ok1, _, _ := policy.ScheduleDelivery(dstsim.DeliveryArgs[int, int]{CurrentTick: 5, FromNode: 10, Target: 20, Indicator: 0})
+		ok2, _, _ := policy.ScheduleDelivery(dstsim.DeliveryArgs[int, int]{CurrentTick: 5, FromNode: 10, Target: 20, Indicator: 0})
+		ok3, _, _ := policy.ScheduleDelivery(dstsim.DeliveryArgs[int, int]{CurrentTick: 6, FromNode: 10, Target: 20, Indicator: 0})
 		require.Equal(t, ok1, ok2, "group assignment must be stable within the same tick")
 		require.Equal(t, ok1, ok3, "group assignment must be stable across ticks in the same partition")
 	})
@@ -391,7 +391,7 @@ func TestUnreliableNetworkPartitions(t *testing.T) {
 		}
 		passed, dropped := 0, 0
 		for tick := range int64(200) {
-			ok, _ := policy.ScheduleDelivery(tick, 1, 2, 0)
+			ok, _, _ := policy.ScheduleDelivery(dstsim.DeliveryArgs[int, int]{CurrentTick: tick, FromNode: 1, Target: 2, Indicator: 0})
 			if ok {
 				passed++
 			} else {
@@ -411,7 +411,7 @@ func TestUnreliableNetworkPartitions(t *testing.T) {
 			Rng:                  rand.New(rand.NewPCG(1, 0)),
 		}
 		for tick := range int64(50) {
-			ok, delay := policy.ScheduleDelivery(tick, 1, 2, 0)
+			ok, delay, _ := policy.ScheduleDelivery(dstsim.DeliveryArgs[int, int]{CurrentTick: tick, FromNode: 1, Target: 2, Indicator: 0})
 			require.True(t, ok)
 			require.Equal(t, int64(1), delay)
 		}

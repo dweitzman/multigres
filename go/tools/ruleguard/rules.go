@@ -73,3 +73,34 @@ func requireGrpcCommonNewClient(m dsl.Matcher) {
 				!m.File().PkgPath.Matches(`/grpccommon$|/test/|/testutil/|testutil$`)).
 		Report("use grpccommon.NewClient() instead of grpc.NewClient() to ensure telemetry instrumentation")
 }
+
+// requireSortedMapIteration flags direct map range loops in the dstsim and
+// consensus packages. In simulation and consensus code, non-deterministic map
+// iteration order can cause tests to pass or fail differently across Go runs,
+// making failures hard to reproduce. Use sortedmaps.All/Keys/Values instead.
+func requireSortedMapIteration(m dsl.Matcher) {
+	m.Match(
+		`for $k, $v := range $x { $*_ }`,
+		`for $k := range $x { $*_ }`,
+	).Where(
+		m["x"].Type.Is("map[$_]$_") &&
+			m.File().PkgPath.Matches(`(tools/dstsim|common/consensus)`) &&
+			!m.File().PkgPath.Matches(`/sortedmaps$`)).
+		Report("map iteration is non-deterministic across Go runs; use sortedmaps.All/Keys/Values for deterministic iteration")
+}
+
+// requireSortedMapsOverStdlibMaps flags calls to stdlib maps.Keys/Values/All in
+// the dstsim and consensus packages. These functions return elements in
+// non-deterministic order; use sortedmaps.Keys/Values/All instead.
+func requireSortedMapsOverStdlibMaps(m dsl.Matcher) {
+	m.Import("maps")
+
+	m.Match(
+		`maps.Keys($x)`,
+		`maps.Values($x)`,
+		`maps.All($x)`,
+	).Where(
+		m.File().PkgPath.Matches(`(tools/dstsim|common/consensus)`) &&
+			!m.File().PkgPath.Matches(`/sortedmaps$`)).
+		Report("maps.Keys/Values/All iterate in non-deterministic order; use sortedmaps.Keys/Values/All instead")
+}

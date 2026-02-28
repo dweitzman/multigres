@@ -169,14 +169,14 @@ type testTrackingPolicy[I any, ID comparable] struct {
 	delay   int64
 }
 
-func (p *testTrackingPolicy[I, ID]) ScheduleDelivery(currentTick int64, fromNode ID, target ID, indicator I) (bool, int64) {
+func (p *testTrackingPolicy[I, ID]) ScheduleDelivery(args dstsim.DeliveryArgs[I, ID]) (bool, int64, []string) {
 	*p.usedPtr = true
-	return true, p.delay
+	return true, p.delay, nil
 }
 
 // testInvalidDelayPolicy returns invalid delay (0) to test panic
 type testInvalidDelayPolicy[I any, ID comparable] struct{}
 
-func (p *testInvalidDelayPolicy[I, ID]) ScheduleDelivery(currentTick int64, fromNode ID, target ID, indicator I) (bool, int64) {
-	return true, 0 // Invalid: delay must be >= 1
+func (p *testInvalidDelayPolicy[I, ID]) ScheduleDelivery(args dstsim.DeliveryArgs[I, ID]) (bool, int64, []string) {
+	return true, 0, nil // Invalid: delay must be >= 1
 }

@@ -17,6 +17,8 @@ package consensus
 import (
 	"math/rand/v2"
 	"slices"
+
+	"github.com/multigres/multigres/go/tools/dstsim/sortedmaps"
 )
 
 // syncReplicaQuorum is the number of sync replicas that must acknowledge a write for it
@@ -323,7 +325,7 @@ func (n *OrchNode) startEstablish(tick int64) []Request {
 
 	// SyncReplicas: all available (non-stopped) non-primary poolers.
 	var syncReplicas []NodeID
-	for id, info := range n.knownPoolers {
+	for id, info := range sortedmaps.All(n.knownPoolers) {
 		if id != primary && info.postgresStatus != PostgresStopped {
 			syncReplicas = append(syncReplicas, id)
 		}
@@ -354,7 +356,7 @@ func (n *OrchNode) startEstablish(tick int64) []Request {
 // for this orch as coordinator at the current term.
 func (n *OrchNode) beginQuorumMet() bool {
 	count := 0
-	for id := range n.progress.confirmers {
+	for _, id := range sortedmaps.Keys(n.progress.confirmers) {
 		if _, exists := n.knownPoolers[id]; exists {
 			count++
 		}
@@ -428,7 +430,7 @@ func revocationSets(state ConsensusState) [][]NodeID {
 // Unknown-status poolers are included (treated as potentially running).
 func (n *OrchNode) selectPrimary() NodeID {
 	var primary NodeID
-	for id, info := range n.knownPoolers {
+	for id, info := range sortedmaps.All(n.knownPoolers) {
 		if info.postgresStatus != PostgresStopped {
 			if primary == "" || id < primary {
 				primary = id
@@ -440,7 +442,7 @@ func (n *OrchNode) selectPrimary() NodeID {
 
 // hasAvailablePoolers returns true if at least one known pooler is not stopped.
 func (n *OrchNode) hasAvailablePoolers() bool {
-	for _, info := range n.knownPoolers {
+	for _, info := range sortedmaps.Values(n.knownPoolers) {
 		if info.postgresStatus != PostgresStopped {
 			return true
 		}
@@ -477,7 +479,7 @@ func (n *OrchNode) jitterTicks() int64 {
 // election). If so, it adopts the confirmed state and marks this orch as appointed,
 // avoiding an unnecessary competing election.
 func (n *OrchNode) learnEstablishedPrimary() bool {
-	for primaryID, primaryInfo := range n.knownPoolers {
+	for primaryID, primaryInfo := range sortedmaps.All(n.knownPoolers) {
 		if !primaryInfo.applied || primaryInfo.postgresStatus == PostgresStopped {
 			continue
 		}

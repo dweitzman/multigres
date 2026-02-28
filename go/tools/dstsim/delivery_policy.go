@@ -19,41 +19,57 @@ import (
 	"math/rand/v2"
 )
 
-// IndicatorDeliveryPolicy determines when and if indicators are delivered
-// This models network behavior: latency, packet loss, and (future) retries/duplicates
+// DeliveryArgs holds the parameters for a single delivery decision.
+// Using a struct makes adding new fields non-breaking for all implementations.
+type DeliveryArgs[I any, ID comparable] struct {
+	CurrentTick int64
+	FromNode    ID
+	Target      ID
+	Indicator   I
+	// AllNodes lists all node IDs currently registered in the simulator, in
+	// registration order. Partition policies use this to eagerly assign all
+	// nodes to groups when a partition starts, enabling a single consolidated
+	// trace event instead of per-node events spread across ticks. May be nil
+	// in tests that call ScheduleDelivery directly; assignment falls back to
+	// lazy per-node assignment in that case.
+	AllNodes []ID
+}
+
+// IndicatorDeliveryPolicy determines when and if indicators are delivered.
+// This models network behavior: latency, packet loss, partitions, etc.
 type IndicatorDeliveryPolicy[I any, ID comparable] interface {
-	// ScheduleDelivery is called when an indicator is enqueued for delivery
-	// Parameters:
-	//   - currentTick: the current simulator tick
-	//   - fromNode: the node sending the indicator (may be zero value if unknown)
-	//   - target: the node receiving the indicator
-	//   - indicator: the message being delivered
+	// ScheduleDelivery is called when an indicator is enqueued for delivery.
 	//
 	// Returns:
 	//   - delivered: false if message is dropped, true if it should be delivered
 	//   - delayTicks: must be >= 1 if delivered=true (enforced by simulator)
+	//   - events: optional trace events for this delivery decision (e.g. "partition
+	//     started"). May be nil. The simulator appends these to the current tick's
+	//     PolicyTransitions trace field.
 	//
 	// Future: Could return []int64 to support multiple deliveries (retries/duplicates)
-	ScheduleDelivery(currentTick int64, fromNode ID, target ID, indicator I) (delivered bool, delayTicks int64)
+	ScheduleDelivery(args DeliveryArgs[I, ID]) (delivered bool, delayTicks int64, events []string)
 }
 
 // FastNetwork simulates a fast, reliable network (e.g., local datacenter, loopback)
 // with minimal latency (1 tick) and no packet loss
 type FastNetwork[I any, ID comparable] struct{}
 
-func (p *FastNetwork[I, ID]) ScheduleDelivery(currentTick int64, fromNode ID, target ID, indicator I) (bool, int64) {
-	return true, 1 // Always deliver at next tick
+func (p *FastNetwork[I, ID]) ScheduleDelivery(args DeliveryArgs[I, ID]) (bool, int64, []string) {
+	return true, 1, nil // Always deliver at next tick
 }
 
 // UnreliableNetwork simulates a chaotic network with random delays, packet loss,
 // and optional network partitions.
 //
 // When PartitionRate > 0, the network periodically splits into two groups: messages
-// between nodes in different groups are dropped for the partition's duration. Node
-// group assignment is lazy — the first time a node ID is seen during a partition it
-// is assigned randomly (50/50), and that assignment persists for the rest of that
-// partition. This correctly handles nodes that first communicate after a partition
-// has already started.
+// between nodes in different groups are dropped for the partition's duration.
+//
+// When args.AllNodes is provided (as it is when called from the simulator), all
+// nodes are eagerly assigned to groups when a partition starts and a single
+// "partition started: group A=[...], group B=[...]" trace event is emitted.
+// When args.AllNodes is nil (e.g. in direct test calls), assignment falls back to
+// lazy per-node assignment the first time each node is seen, with a per-node event.
 //
 // In the future, partition semantics could be extended to model zone/cell topology,
 // where the split always follows datacenter region boundaries.
@@ -80,26 +96,32 @@ func (p *UnreliableNetwork[I, ID]) IsPartitioned() bool {
 	return p.partitionEnd > 0
 }
 
-func (p *UnreliableNetwork[I, ID]) ScheduleDelivery(currentTick int64, fromNode ID, target ID, indicator I) (bool, int64) {
+func (p *UnreliableNetwork[I, ID]) ScheduleDelivery(args DeliveryArgs[I, ID]) (bool, int64, []string) {
+	var events []string
+
 	// Advance partition state exactly once per tick (when PartitionRate is configured).
 	// The `initialized` flag handles the edge case where the simulator starts at tick 0:
 	// on the very first call, `!initialized` is true regardless of currentTick value.
-	if p.PartitionRate > 0 && (!p.initialized || currentTick > p.lastTick) {
+	if p.PartitionRate > 0 && (!p.initialized || args.CurrentTick > p.lastTick) {
 		p.initialized = true
-		p.advancePartition(currentTick)
-		p.lastTick = currentTick
+		events = append(events, p.advancePartition(args.CurrentTick, args.AllNodes)...)
+		p.lastTick = args.CurrentTick
 	}
 
 	// During a partition, drop messages between the two groups.
 	if p.partitionEnd > 0 {
-		if p.groupOf(fromNode) != p.groupOf(target) {
-			return false, 0
+		fromGroup, fromEvents := p.groupOf(args.FromNode)
+		events = append(events, fromEvents...)
+		targetGroup, targetEvents := p.groupOf(args.Target)
+		events = append(events, targetEvents...)
+		if fromGroup != targetGroup {
+			return false, 0, events
 		}
 	}
 
 	// Check if message should be dropped by normal packet loss.
 	if p.Rng.Float64() < p.DropRate {
-		return false, 0
+		return false, 0, events
 	}
 
 	// Random delay between 1 and MaxDelay (inclusive)
@@ -107,23 +129,34 @@ func (p *UnreliableNetwork[I, ID]) ScheduleDelivery(currentTick int64, fromNode 
 	if p.MaxDelay > 1 {
 		delay = 1 + p.Rng.Int64N(p.MaxDelay)
 	}
-	return true, delay
+	return true, delay, events
 }
 
 // groupOf returns which group (true=A, false=B) the node belongs to in the current
-// partition, lazily assigning it on first encounter.
-func (p *UnreliableNetwork[I, ID]) groupOf(id ID) bool {
+// partition, lazily assigning it on first encounter. Returns the group and a trace
+// event if a new assignment was made (used for nodes that join mid-partition or when
+// args.AllNodes was nil at partition start).
+func (p *UnreliableNetwork[I, ID]) groupOf(id ID) (bool, []string) {
 	if inA, assigned := p.groupAssignment[id]; assigned {
-		return inA
+		return inA, nil
 	}
 	inA := p.Rng.Float64() < 0.5
 	p.groupAssignment[id] = inA
-	return inA
+	group := "B"
+	if inA {
+		group = "A"
+	}
+	return inA, []string{fmt.Sprintf("node %v assigned to partition group %s", id, group)}
 }
 
 // advancePartition ends any expired partition and possibly starts a new one.
-func (p *UnreliableNetwork[I, ID]) advancePartition(currentTick int64) {
+// If a new partition starts and allNodes is provided, all nodes are eagerly assigned
+// to groups and a single consolidated event is returned. Otherwise only the
+// "partition started" event is returned (nodes are assigned lazily via groupOf).
+func (p *UnreliableNetwork[I, ID]) advancePartition(currentTick int64, allNodes []ID) []string {
+	var events []string
 	if p.partitionEnd > 0 && currentTick >= p.partitionEnd {
+		events = append(events, "partition ended")
 		p.partitionEnd = 0
 		p.groupAssignment = nil
 	}
@@ -134,7 +167,24 @@ func (p *UnreliableNetwork[I, ID]) advancePartition(currentTick int64) {
 		}
 		p.partitionEnd = currentTick + duration
 		p.groupAssignment = make(map[ID]bool)
+		if len(allNodes) > 0 {
+			// Eagerly assign all known nodes to groups and emit a single consolidated event.
+			var groupA, groupB []ID
+			for _, id := range allNodes {
+				if p.Rng.Float64() < 0.5 {
+					p.groupAssignment[id] = true
+					groupA = append(groupA, id)
+				} else {
+					p.groupAssignment[id] = false
+					groupB = append(groupB, id)
+				}
+			}
+			events = append(events, fmt.Sprintf("partition started (ends at tick %d): group A=%v, group B=%v", p.partitionEnd, groupA, groupB))
+		} else {
+			events = append(events, fmt.Sprintf("partition started (ends at tick %d)", p.partitionEnd))
+		}
 	}
+	return events
 }
 
 // PartitionedNetwork wraps any base delivery policy and adds random network partitions
@@ -143,7 +193,8 @@ func (p *UnreliableNetwork[I, ID]) advancePartition(currentTick int64) {
 // prefer its built-in PartitionRate/MaxPartitionDuration fields instead.
 //
 // During a partition, nodes are split into two groups and messages between them are
-// dropped. Node group assignment is lazy (see UnreliableNetwork for the same logic).
+// dropped. Node group assignment follows the same eager/lazy logic as UnreliableNetwork
+// (see that type's documentation).
 //
 // In the future this could be extended to model zone/cell topology, where the split
 // always separates known datacenter regions rather than choosing randomly.
@@ -184,37 +235,51 @@ func (p *PartitionedNetwork[I, ID]) IsPartitioned() bool {
 	return p.partitionEnd > 0
 }
 
-func (p *PartitionedNetwork[I, ID]) ScheduleDelivery(currentTick int64, fromNode ID, target ID, indicator I) (bool, int64) {
+func (p *PartitionedNetwork[I, ID]) ScheduleDelivery(args DeliveryArgs[I, ID]) (bool, int64, []string) {
+	var events []string
+
 	// Advance partition state exactly once per tick.
-	if currentTick > p.lastTick {
-		p.advancePartition(currentTick)
-		p.lastTick = currentTick
+	if args.CurrentTick > p.lastTick {
+		events = append(events, p.advancePartition(args.CurrentTick, args.AllNodes)...)
+		p.lastTick = args.CurrentTick
 	}
 
 	// During a partition, drop messages between the two groups.
 	if p.partitionEnd > 0 {
-		if p.groupOf(fromNode) != p.groupOf(target) {
-			return false, 0
+		fromGroup, fromEvents := p.groupOf(args.FromNode)
+		events = append(events, fromEvents...)
+		targetGroup, targetEvents := p.groupOf(args.Target)
+		events = append(events, targetEvents...)
+		if fromGroup != targetGroup {
+			return false, 0, events
 		}
 	}
 
-	return p.Base.ScheduleDelivery(currentTick, fromNode, target, indicator)
+	delivered, delay, baseEvents := p.Base.ScheduleDelivery(args)
+	events = append(events, baseEvents...)
+	return delivered, delay, events
 }
 
 // groupOf returns which group (true=A, false=B) the given node belongs to during
 // the current partition, assigning it randomly on first encounter.
-func (p *PartitionedNetwork[I, ID]) groupOf(id ID) bool {
+func (p *PartitionedNetwork[I, ID]) groupOf(id ID) (bool, []string) {
 	if inA, assigned := p.groupAssignment[id]; assigned {
-		return inA
+		return inA, nil
 	}
 	inA := p.Rng.Float64() < 0.5
 	p.groupAssignment[id] = inA
-	return inA
+	group := "B"
+	if inA {
+		group = "A"
+	}
+	return inA, []string{fmt.Sprintf("node %v assigned to partition group %s", id, group)}
 }
 
 // advancePartition ends any expired partition and possibly starts a new one.
-func (p *PartitionedNetwork[I, ID]) advancePartition(currentTick int64) {
+func (p *PartitionedNetwork[I, ID]) advancePartition(currentTick int64, allNodes []ID) []string {
+	var events []string
 	if p.partitionEnd > 0 && currentTick >= p.partitionEnd {
+		events = append(events, "partition ended")
 		p.partitionEnd = 0
 		p.groupAssignment = nil
 	}
@@ -225,7 +290,23 @@ func (p *PartitionedNetwork[I, ID]) advancePartition(currentTick int64) {
 		}
 		p.partitionEnd = currentTick + duration
 		p.groupAssignment = make(map[ID]bool)
+		if len(allNodes) > 0 {
+			var groupA, groupB []ID
+			for _, id := range allNodes {
+				if p.Rng.Float64() < 0.5 {
+					p.groupAssignment[id] = true
+					groupA = append(groupA, id)
+				} else {
+					p.groupAssignment[id] = false
+					groupB = append(groupB, id)
+				}
+			}
+			events = append(events, fmt.Sprintf("partition started (ends at tick %d): group A=%v, group B=%v", p.partitionEnd, groupA, groupB))
+		} else {
+			events = append(events, fmt.Sprintf("partition started (ends at tick %d)", p.partitionEnd))
+		}
 	}
+	return events
 }
 
 // PerSourcePolicy dispatches to different delivery policies based on which node sent
@@ -245,11 +326,11 @@ type PerSourcePolicy[I any, ID comparable] struct {
 	Overrides map[ID]IndicatorDeliveryPolicy[I, ID]
 }
 
-func (p *PerSourcePolicy[I, ID]) ScheduleDelivery(currentTick int64, fromNode ID, target ID, indicator I) (bool, int64) {
-	if override, ok := p.Overrides[fromNode]; ok {
-		return override.ScheduleDelivery(currentTick, fromNode, target, indicator)
+func (p *PerSourcePolicy[I, ID]) ScheduleDelivery(args DeliveryArgs[I, ID]) (bool, int64, []string) {
+	if override, ok := p.Overrides[args.FromNode]; ok {
+		return override.ScheduleDelivery(args)
 	}
-	return p.Default.ScheduleDelivery(currentTick, fromNode, target, indicator)
+	return p.Default.ScheduleDelivery(args)
 }
 
 // orderedChannel is the key for tracking per-channel delivery state in OrderedReliableNetwork.
@@ -277,22 +358,22 @@ func NewOrderedReliableNetwork[I any, ID comparable](maxDelay int64, rng *rand.R
 	}
 }
 
-func (p *OrderedReliableNetwork[I, ID]) ScheduleDelivery(currentTick int64, fromNode ID, target ID, indicator I) (bool, int64) {
+func (p *OrderedReliableNetwork[I, ID]) ScheduleDelivery(args DeliveryArgs[I, ID]) (bool, int64, []string) {
 	delay := int64(1)
 	if p.MaxDelay > 0 {
 		delay = 1 + p.Rng.Int64N(p.MaxDelay)
 	}
-	deliverAt := currentTick + delay
+	deliverAt := args.CurrentTick + delay
 
 	// Enforce ordering: this message must arrive strictly after the previous one
 	// on the same (from, to) channel.
-	ch := orderedChannel[ID]{from: fromNode, to: target}
+	ch := orderedChannel[ID]{from: args.FromNode, to: args.Target}
 	if last, ok := p.lastDelivery[ch]; ok && deliverAt <= last {
 		deliverAt = last + 1
 	}
 	p.lastDelivery[ch] = deliverAt
 
-	return true, deliverAt - currentTick
+	return true, deliverAt - args.CurrentTick, nil
 }
 
 // UntilPolicy uses InitialPolicy until a condition becomes true, then permanently switches to AfterPolicy
@@ -305,7 +386,7 @@ type UntilPolicy[I any, R any, ID comparable] struct {
 	hasSwitched    bool                           // Track whether we've switched (latching)
 }
 
-func (p *UntilPolicy[I, R, ID]) ScheduleDelivery(currentTick int64, fromNode ID, target ID, indicator I) (bool, int64) {
+func (p *UntilPolicy[I, R, ID]) ScheduleDelivery(args DeliveryArgs[I, ID]) (bool, int64, []string) {
 	// Check if we should switch (only check if we haven't switched yet)
 	if !p.hasSwitched && p.UntilCondition.Eval(p.Sim) {
 		p.hasSwitched = true
@@ -313,9 +394,9 @@ func (p *UntilPolicy[I, R, ID]) ScheduleDelivery(currentTick int64, fromNode ID,
 
 	// Use appropriate policy
 	if p.hasSwitched {
-		return p.AfterPolicy.ScheduleDelivery(currentTick, fromNode, target, indicator)
+		return p.AfterPolicy.ScheduleDelivery(args)
 	}
-	return p.InitialPolicy.ScheduleDelivery(currentTick, fromNode, target, indicator)
+	return p.InitialPolicy.ScheduleDelivery(args)
 }
 
 // PolicySequence manages a sequence of delivery policies with observable transitions
@@ -405,7 +486,7 @@ func (seq *PolicySequence[I, R, ID]) AppendPolicy(policy IndicatorDeliveryPolicy
 }
 
 // ScheduleDelivery implements IndicatorDeliveryPolicy
-func (seq *PolicySequence[I, R, ID]) ScheduleDelivery(currentTick int64, fromNode ID, target ID, indicator I) (bool, int64) {
+func (seq *PolicySequence[I, R, ID]) ScheduleDelivery(args DeliveryArgs[I, ID]) (bool, int64, []string) {
 	// Check if we should advance to next stage
 	if seq.currentStageIndex < len(seq.stages)-1 {
 		currentStage := seq.stages[seq.currentStageIndex]
@@ -415,5 +496,5 @@ func (seq *PolicySequence[I, R, ID]) ScheduleDelivery(currentTick int64, fromNod
 	}
 
 	// Use current stage's policy
-	return seq.stages[seq.currentStageIndex].policy.ScheduleDelivery(currentTick, fromNode, target, indicator)
+	return seq.stages[seq.currentStageIndex].policy.ScheduleDelivery(args)
 }
