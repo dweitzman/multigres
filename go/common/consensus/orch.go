@@ -16,17 +16,9 @@ package consensus
 
 import (
 	"math/rand/v2"
-	"slices"
 
 	"github.com/multigres/multigres/go/tools/dstsim/sortedmaps"
 )
-
-// syncReplicaQuorum is the number of sync replicas that must acknowledge a write for it
-// to be committed. This corresponds to PostgreSQL's "ANY k" in synchronous_standby_names.
-// Revocation blocking sets are derived from this value.
-//
-// TODO: make this a configurable field on OrchNode to support different topologies.
-const syncReplicaQuorum = 1
 
 // orchPhase is the current stage of the three-phase election state machine.
 type orchPhase int
@@ -41,6 +33,7 @@ const (
 // phaseProgress tracks the in-flight proposal state within a phase.
 type phaseProgress struct {
 	proposal    ConsensusState
+	quorum      Quorum          // proposed quorum (set during phaseEstablish)
 	confirmers  map[NodeID]bool // poolers that voted YES for this proposal
 	appliers    map[NodeID]bool // poolers that have applied this proposal
 	timeoutTick int64
@@ -63,6 +56,7 @@ type poolerKnowledge struct {
 // learning cluster state from pooler status indicators before making any proposal.
 type OrchNode struct {
 	id           NodeID
+	policy       DurabilityPolicy
 	knownPoolers map[NodeID]poolerKnowledge
 
 	term   int64
@@ -73,13 +67,18 @@ type OrchNode struct {
 
 	// appointed is true once an Establish phase has achieved quorum.
 	// It is cleared when the confirmed primary reports PostgresStopped so a new
-	// election begins. confirmedState is preserved for revocation set computation.
+	// election begins. confirmedState and confirmedQuorum are preserved for
+	// revocation computation in the next round.
 	appointed bool
 
 	// confirmedState is the last ConsensusState that achieved Establish quorum.
 	// nil until the first successful appointment. Preserved across re-elections so
-	// that revocationSets can be computed for the new round.
+	// that the revocation quorum can be computed for the new round.
 	confirmedState *ConsensusState
+
+	// confirmedQuorum is the Quorum for confirmedState. It knows how to evaluate
+	// revocation: whether the old primary can still collect write acks.
+	confirmedQuorum Quorum
 
 	// backoffUntil is the tick before which this orch will not start a new election.
 	// Set when we discover our view is stale (we were trying to act and learned about
@@ -93,12 +92,13 @@ type OrchNode struct {
 	rng *rand.Rand
 }
 
-// NewOrchNode creates a new coordinator node with the given identity.
-// rng is used to jitter backoff durations when the orch discovers a competing
+// NewOrchNode creates a new coordinator node with the given identity and durability
+// policy. rng is used to jitter backoff durations when the orch discovers a competing
 // coordinator; pass a seeded *rand.Rand so tests remain fully deterministic.
-func NewOrchNode(id NodeID, rng *rand.Rand) *OrchNode {
+func NewOrchNode(id NodeID, policy DurabilityPolicy, rng *rand.Rand) *OrchNode {
 	return &OrchNode{
 		id:           id,
+		policy:       policy,
 		knownPoolers: make(map[NodeID]poolerKnowledge),
 		rng:          rng,
 	}
@@ -125,7 +125,7 @@ func (n *OrchNode) Step(tick int64, indicators []Indicator) []Request {
 	}
 
 	// If the confirmed primary has stopped, clear the appointment so we re-elect.
-	// We preserve confirmedState for revocation set computation in the next round.
+	// We preserve confirmedState and confirmedQuorum for revocation computation.
 	if n.appointed && n.confirmedPrimaryIsStopped() {
 		n.appointed = false
 	}
@@ -252,6 +252,7 @@ func (n *OrchNode) advance(tick int64) []Request {
 		if n.establishQuorumMet() {
 			proposalCopy := n.progress.proposal
 			n.confirmedState = &proposalCopy
+			n.confirmedQuorum = n.progress.quorum
 			n.appointed = true
 			n.phase = phaseIdle
 			n.progress = nil
@@ -323,20 +324,19 @@ func (n *OrchNode) startRevoke(tick int64) []Request {
 }
 
 func (n *OrchNode) startEstablish(tick int64) []Request {
-	primary := n.selectPrimary()
-	if primary == "" {
-		// No available candidate yet; remain in current phase until one appears or timeout.
+	candidates := n.buildCandidates()
+
+	// If the current primary is still healthy, prefer it to avoid unnecessary failover.
+	// If it crashed (or there is none), pass "" so the policy selects the best available
+	// candidate — eventually by highest LSN once that data flows through pooler status.
+	preferred := n.healthyConfirmedPrimary()
+
+	quorum, ok := n.policy.ProposeQuorum(candidates, preferred)
+	if !ok {
+		// No valid quorum possible yet (e.g., insufficient healthy candidates).
+		// Remain in the current phase until candidates appear or a timeout occurs.
 		return nil
 	}
-
-	// SyncReplicas: all available (non-stopped) non-primary poolers.
-	var syncReplicas []NodeID
-	for id, info := range sortedmaps.All(n.knownPoolers) {
-		if id != primary && info.postgresStatus != PostgresStopped {
-			syncReplicas = append(syncReplicas, id)
-		}
-	}
-	slices.Sort(syncReplicas)
 
 	proposal := ConsensusState{
 		VotingTerm:   n.term,
@@ -344,13 +344,14 @@ func (n *OrchNode) startEstablish(tick int64) []Request {
 		SeqNum:       n.nextSeqNum(),
 		Phase:        PhaseEstablish,
 		PrimaryTerm:  n.term,
-		Primary:      primary,
-		SyncReplicas: syncReplicas,
+		Primary:      quorum.Primary(),
+		SyncReplicas: quorum.SyncReplicas(),
 	}
 
 	n.phase = phaseEstablish
 	n.progress = &phaseProgress{
 		proposal:    proposal,
+		quorum:      quorum,
 		confirmers:  make(map[NodeID]bool),
 		appliers:    make(map[NodeID]bool),
 		timeoutTick: tick + electionTimeoutTicks,
@@ -370,80 +371,50 @@ func (n *OrchNode) beginQuorumMet() bool {
 	return count > len(n.knownPoolers)/2
 }
 
-// revokeQuorumMet returns true when at least one complete revocation set has all
-// members reporting applied=true for the current revoke proposal.
+// revokeQuorumMet returns true when the confirmed quorum reports that the old
+// primary can no longer collect enough write acknowledgements.
 func (n *OrchNode) revokeQuorumMet() bool {
-	if n.confirmedState == nil {
+	if n.confirmedState == nil || n.confirmedQuorum == nil {
 		return true
 	}
-	for _, set := range revocationSets(*n.confirmedState) {
-		allApplied := true
-		for _, id := range set {
-			if !n.progress.appliers[id] {
-				allApplied = false
-				break
-			}
-		}
-		if allApplied {
-			return true
-		}
-	}
-	return false
+	return n.confirmedQuorum.IsRevoked(n.progress.appliers)
 }
 
-// establishQuorumMet returns true when the new primary and at least syncReplicaQuorum
-// sync replicas have all applied the Establish proposal.
+// establishQuorumMet returns true when the proposed quorum reports that the new
+// primary and enough sync replicas have applied the Establish proposal.
 func (n *OrchNode) establishQuorumMet() bool {
-	primary := n.progress.proposal.Primary
-	if !n.progress.appliers[primary] {
+	if n.progress.quorum == nil {
 		return false
 	}
-	applied := 0
-	for _, id := range n.progress.proposal.SyncReplicas {
-		if n.progress.appliers[id] {
-			applied++
-		}
-	}
-	return applied >= syncReplicaQuorum
+	return n.progress.quorum.IsEstablished(n.progress.appliers)
 }
 
-// revocationSets returns the minimal sets of poolers whose collective acceptance of
-// the Revoke proposal guarantees the old primary can no longer commit writes.
-//
-// For a topology where writes require primary + ANY k of n sync replicas, a set S is
-// a revocation set iff S intersects every possible write quorum. The minimal sets are:
-//   - {primary}: present in every write quorum; its withdrawal alone suffices.
-//   - {all n sync replicas}: ensures no replica quorum can form (for k=1, need all n).
-//
-// TODO: generalise for k > 1 (ANY k quorums produce smaller replica blocking sets).
-func revocationSets(state ConsensusState) [][]NodeID {
-	if state.Primary == "" {
-		return nil
-	}
-	if len(state.SyncReplicas) == 0 {
-		// No sync replicas: only the primary forms write quorums.
-		return [][]NodeID{{state.Primary}}
-	}
-	allReplicas := make([]NodeID, len(state.SyncReplicas))
-	copy(allReplicas, state.SyncReplicas)
-	return [][]NodeID{
-		{state.Primary},
-		allReplicas,
-	}
-}
-
-// selectPrimary returns the lowest-ID pooler that is not PostgresStopped.
-// Unknown-status poolers are included (treated as potentially running).
-func (n *OrchNode) selectPrimary() NodeID {
-	var primary NodeID
+// buildCandidates converts the known pooler map into QuorumCandidates for the
+// DurabilityPolicy. A pooler is healthy when postgres is not stopped; unknown
+// status (not yet reported) is treated as healthy (potentially running).
+func (n *OrchNode) buildCandidates() []QuorumCandidate {
+	candidates := make([]QuorumCandidate, 0, len(n.knownPoolers))
 	for id, info := range sortedmaps.All(n.knownPoolers) {
-		if info.postgresStatus != PostgresStopped {
-			if primary == "" || id < primary {
-				primary = id
-			}
-		}
+		candidates = append(candidates, QuorumCandidate{
+			ID:      id,
+			Healthy: info.postgresStatus != PostgresStopped,
+		})
 	}
-	return primary
+	return candidates
+}
+
+// healthyConfirmedPrimary returns the current confirmed primary's ID if it is
+// still healthy (not stopped), or "" if it has crashed or there is no confirmed
+// primary. Used as a hint to the DurabilityPolicy to avoid unnecessary failovers.
+func (n *OrchNode) healthyConfirmedPrimary() NodeID {
+	if n.confirmedState == nil || n.confirmedState.Primary == "" {
+		return ""
+	}
+	info, exists := n.knownPoolers[n.confirmedState.Primary]
+	if !exists || info.postgresStatus == PostgresStopped {
+		return "" // primary gone; let the policy pick the best available
+	}
+	return n.confirmedState.Primary
 }
 
 // hasAvailablePoolers returns true if at least one known pooler is not stopped.
@@ -482,8 +453,7 @@ func (n *OrchNode) jitterTicks() int64 {
 
 // learnEstablishedPrimary checks whether the pooler status reports already show
 // that an Establish quorum has been satisfied (another coordinator completed an
-// election). If so, it adopts the confirmed state and marks this orch as appointed,
-// avoiding an unnecessary competing election.
+// election). If so, it adopts the confirmed state so we don't compete unnecessarily.
 func (n *OrchNode) learnEstablishedPrimary() bool {
 	for primaryID, primaryInfo := range sortedmaps.All(n.knownPoolers) {
 		if !primaryInfo.applied || primaryInfo.postgresStatus == PostgresStopped {
@@ -492,15 +462,23 @@ func (n *OrchNode) learnEstablishedPrimary() bool {
 		if primaryInfo.state.Role != RolePrimary {
 			continue
 		}
-		// Count applied sync replicas that still point to this primary.
-		applied := 0
-		for _, replicaID := range primaryInfo.state.SyncReplicas {
-			ri, exists := n.knownPoolers[replicaID]
-			if exists && ri.applied && ri.state.Primary == primaryID {
-				applied++
+
+		// Reconstruct the quorum from the primary's committed sync-replica set so
+		// IsEstablished checks the historically committed quorum members, not what
+		// the policy would propose today.
+		quorum := n.policy.ReconstructQuorum(primaryID, primaryInfo.state.SyncReplicas)
+
+		// Build appliers: nodes that applied the same proposal as the primary.
+		appliers := make(map[NodeID]bool)
+		for id, info := range sortedmaps.All(n.knownPoolers) {
+			if info.applied &&
+				info.state.VotedTerm == primaryInfo.state.VotedTerm &&
+				info.state.VotedSeqNum == primaryInfo.state.VotedSeqNum {
+				appliers[id] = true
 			}
 		}
-		if applied >= syncReplicaQuorum {
+
+		if quorum.IsEstablished(appliers) {
 			confirmed := ConsensusState{
 				VotingTerm:   primaryInfo.state.PrimaryTerm,
 				CoordID:      primaryInfo.state.VotedCoord,
@@ -511,6 +489,7 @@ func (n *OrchNode) learnEstablishedPrimary() bool {
 				SyncReplicas: primaryInfo.state.SyncReplicas,
 			}
 			n.confirmedState = &confirmed
+			n.confirmedQuorum = quorum
 			n.appointed = true
 			return true
 		}

@@ -19,13 +19,13 @@ Begin → Revoke → Establish
    given term and rejects any later one.
 
 2. **Revoke** — the orch revokes the previous primary by broadcasting `PrimaryTerm=0, Primary=""`.
-   Revocation is complete when at least one _revocation set_ has all members reporting `Applied=true`.
-   A revocation set is any pooler subset whose acceptance guarantees the old primary can no longer
-   commit writes (the primary itself, or the full set of sync replicas).
+   Revocation is complete when the `DurabilityPolicy` quorum reports `IsRevoked=true`: either the
+   old primary applied the revoke, or so many of its sync replicas applied it that the required
+   number of write acks is no longer achievable.
 
-3. **Establish** — the orch appoints a new primary and sync-replica set. Establishment is complete
-   when the new primary and at least `syncReplicaQuorum` sync replicas have all reported
-   `Applied=true`.
+3. **Establish** — the orch calls `DurabilityPolicy.ProposeQuorum` to select a new primary and
+   sync-replica set. Establishment is complete when the quorum reports `IsEstablished=true`:
+   the new primary and enough sync replicas have all reported `Applied=true`.
 
 If any phase fails to achieve quorum within `electionTimeoutTicks`, the orch escalates the term
 and restarts from Begin. When an orch discovers a competing coordinator has a higher term, it backs
@@ -44,6 +44,9 @@ tracked independently so a crash between the two phases is safe to resume.
 | `PoolerNode`            | Pooler state machine. Committed state is persisted via `PoolerStorage`; applied state is recovered via `RoleApplier.AppliedState()`.        |
 | `ConsensusState`        | The complete cluster configuration at a given term+seq+phase (primary, sync replicas, coordinator). Broadcast by orch, voted on by poolers. |
 | `PoolerPersistentState` | Durable pooler state: voted term, role, applied flag, current primary. Saved to disk before any acknowledgement.                            |
+| `DurabilityPolicy`      | Selects a write quorum given full cluster context (health, LSN, zone). Returns a `Quorum` the orch treats as opaque.                        |
+| `Quorum`                | Self-contained quorum snapshot: knows its primary, sync replicas, and how to evaluate `IsEstablished`, `IsRevoked`, `IsWriteQuorum`.        |
+| `QuorumCandidate`       | Per-node input to `DurabilityPolicy.ProposeQuorum`: ID, health, LSN, and zone.                                                              |
 | `PoolerStorage`         | Interface for durable persistence. Simulation uses `memStorage`; production uses `AtomicStateFile` (write-rename + fsync).                  |
 | `RoleApplier`           | Interface for operational role execution. Simulation uses `flakyApplier`; production uses `PostgresApplier` (pg_ctl, ALTER SYSTEM, etc.).   |
 
@@ -94,9 +97,10 @@ All tests register the **standard invariants** via `sim.Always()`:
 
 - **`atMostOneQuorum`** — the core safety property. Checks _effective state_ (what postgres is
   actually running with on disk right now): at most one primary may simultaneously hold a write
-  quorum (primary + at least `syncReplicaQuorum` sync replicas configured to stream from it).
-  It is valid for two nodes to have `committed.Role=Primary` simultaneously (a stale primary
-  that hasn't received Revoke yet) as long as only one has replicas streaming to it.
+  quorum. Uses `DurabilityPolicy.ReconstructQuorum` + `Quorum.IsWriteQuorum` to evaluate the
+  historical committed sync-replica set, not what the policy would propose today. It is valid for
+  two nodes to have `committed.Role=Primary` simultaneously (a stale primary that hasn't received
+  Revoke yet) as long as only one has replicas satisfying `IsWriteQuorum`.
 
 - **`appliedMonotonicity`** — once `Applied=true` is persisted for a proposal (`VotedTerm` +
   `VotedSeqNum`), it must never revert to false for that same proposal. A new (higher) proposal
@@ -144,10 +148,12 @@ See `examples/pg_driver/` for the production integration sketch:
 
 Small improvements that make the existing code more correct and configurable:
 
-- **Configurable quorum** — `syncReplicaQuorum` is hardcoded to `1` in `orch.go`. Make it a
-  field on `OrchNode` and generalize `revocationSets()` for k > 1 sync-replica quorums.
-- **Late-response filtering** — `PoolerResponseRequest` lacks a `SeqNum`, so orch can't tell if a
-  response is for the current proposal or a stale one. Add `SeqNum`; orch ignores mismatches.
+- ✅ **Configurable quorum** — `DurabilityPolicy` interface replaces the hardcoded `syncReplicaQuorum=1`.
+  `AnyNPolicy(n)` implements "any N of the sync replicas must ACK". Revocation and establishment
+  are delegated to `Quorum.IsRevoked` / `Quorum.IsEstablished`; safety invariants use
+  `Quorum.IsWriteQuorum` via `DurabilityPolicy.ReconstructQuorum`.
+- ✅ **Late-response filtering** — `PoolerResponseRequest` and `PoolerResponseIndicator` now carry
+  `VotingTerm` + `SeqNum`; orch discards responses that don't match the current proposal.
 - **Crash orch nodes in simulation** — the crash driver currently only targets poolers. Extend it
   to also crash orch nodes; extend `DiscoveryNode` to re-deliver discovery events to a restarted
   orch (since orch state is ephemeral).
@@ -182,17 +188,18 @@ stepping-down pooler emits a `StepDownRequest`; orch immediately starts a new el
 waiting for a timeout. A `PromoteRequest` sets a `preferredPrimary` hint that biases
 `selectPrimary()` toward the target, then follows normal Revoke → Establish.
 
-### Stage 5 — Custom durability policies
+### Stage 5 — Additional durability policies and quorum spec serialization
 
-A `DurabilityPolicy` interface takes the full set of cluster nodes (with metadata such as
-zone/region) and returns the set of valid write quorums. The orch uses the active policy when
-computing `revocationSets()` and `establishQuorumMet()`. Built-in policies:
+The `DurabilityPolicy` / `Quorum` interface is already wired into the orch (Stage 1). Stage 5
+adds:
 
-- `AnyNPolicy(n)` — any N replicas must ACK (maps to `synchronous_standby_names = 'ANY N (...)'`)
-- `ZoneAwarePolicy` — at least one ACK from the same zone and one from a different zone
-
-The `atMostOneQuorum` invariant is strengthened to use the policy's notion of a valid quorum
-rather than the hardcoded ANY-1 check.
+- **Quorum spec serialization** — populate `ConsensusState.QuorumSpec` / `PoolerPersistentState.QuorumSpec`
+  with serialized quorum bytes so a restarted orch can reconstruct the exact historical quorum
+  without re-running `ProposeQuorum`. Requires a type registry (similar to Vitess's
+  `RegisterDurability`) so the deserializer knows which concrete type to decode.
+- **`ZoneAwarePolicy`** — at least one ACK from the same zone and one from a different zone
+  (conjunctive requirement that `AnyNPolicy` cannot express)
+- Additional policies as operational needs evolve
 
 ### Stage 6 — Timeline / WAL support (deferred)
 

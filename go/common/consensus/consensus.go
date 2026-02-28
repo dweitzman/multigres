@@ -118,6 +118,11 @@ type ConsensusState struct {
 	PrimaryTerm  int64    // voting term when the current primary was established (0 = no primary)
 	Primary      NodeID   // zero value means no primary appointed; check PrimaryTerm > 0
 	SyncReplicas []NodeID // poolers that must acknowledge writes to the primary
+	// QuorumSpec is the serialized DurabilityPolicy quorum for this Establish proposal.
+	// Forwarded verbatim to poolers so they can persist it and reconstruct the Quorum
+	// on orch restart without re-running the election. Populated by DurabilityPolicy
+	// deserialization; currently nil.
+	QuorumSpec []byte
 }
 
 // StateID identifies a specific ConsensusState proposal by its term + sequence number.
@@ -151,6 +156,9 @@ type PoolerPersistentState struct {
 	Role         PoolerRole
 	SyncReplicas []NodeID
 	Applied      bool // true if the committed role change has been operationally executed
+	// QuorumSpec is the serialized DurabilityPolicy quorum from the Establish proposal.
+	// Persisted so the quorum can be reconstructed on orch restart. See ConsensusState.QuorumSpec.
+	QuorumSpec []byte
 }
 
 // VotedStateID returns the StateID of the last accepted proposal.

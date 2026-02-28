@@ -167,9 +167,11 @@ func (h *consensusHandler) ProcessRequests(
 //
 // standardInvariants returns the invariants that should hold in every simulation.
 // Register them with sim.Always() at the start of each test.
-func standardInvariants() []dstsim.Condition[consensus.Indicator, consensus.Request, consensus.NodeID] {
+// policy is used by atMostOneQuorum to evaluate write-quorum conditions using the
+// same semantics as the orch: ReconstructQuorum + IsWriteQuorum.
+func standardInvariants(policy consensus.DurabilityPolicy) []dstsim.Condition[consensus.Indicator, consensus.Request, consensus.NodeID] {
 	return []dstsim.Condition[consensus.Indicator, consensus.Request, consensus.NodeID]{
-		&atMostOneQuorum{},
+		&atMostOneQuorum{policy: policy},
 		&appliedMonotonicity{},
 	}
 }
@@ -197,7 +199,9 @@ func standardInvariants() []dstsim.Condition[consensus.Indicator, consensus.Requ
 // create a second quorum. If transitioning any node to its committed state immediately
 // would yield two simultaneous primaries with quorum, the protocol has made a mistake
 // that will become visible soon — detecting it early produces clearer failures.
-type atMostOneQuorum struct{}
+type atMostOneQuorum struct {
+	policy consensus.DurabilityPolicy
+}
 
 func (c *atMostOneQuorum) Name() string { return "at_most_one_quorum" }
 
@@ -218,18 +222,16 @@ func (c *atMostOneQuorum) Eval(sim *dstsim.Simulator[consensus.Indicator, consen
 		if pi.effective.Role != consensus.RolePrimary {
 			continue
 		}
-		// Count how many of this primary's required sync replicas are effectively
-		// streaming to it (i.e. have primary_conninfo pointing at this node).
-		streaming := 0
-		for _, srID := range pi.effective.SyncReplicas {
-			for _, rp := range poolers {
-				if rp.id == srID && rp.effective.Primary == pi.id {
-					streaming++
-					break
-				}
+		// Reconstruct the quorum from the committed SyncReplicas (not what the
+		// policy would propose today) so IsWriteQuorum uses the original members.
+		q := c.policy.ReconstructQuorum(pi.id, pi.effective.SyncReplicas)
+		var streaming []consensus.NodeID
+		for _, rp := range poolers {
+			if rp.id != pi.id && rp.effective.Primary == pi.id {
+				streaming = append(streaming, rp.id)
 			}
 		}
-		if streaming >= 1 { // syncReplicaQuorum = 1
+		if q.IsWriteQuorum(streaming) {
 			quorumCount++
 		}
 	}
@@ -392,7 +394,7 @@ const (
 )
 
 // newHappyPathSim creates a simulator with 2 orchs, 3 poolers, and a discovery node.
-func newHappyPathSim(t *testing.T, seed int64) (
+func newHappyPathSim(t *testing.T, seed int64, policy consensus.DurabilityPolicy) (
 	*dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID],
 	map[consensus.NodeID]*memStorage,
 ) {
@@ -406,8 +408,8 @@ func newHappyPathSim(t *testing.T, seed int64) (
 
 	// Register orch nodes, each with a deterministically seeded RNG so tests are
 	// reproducible yet the two orchs have different jitter values.
-	sim.RegisterNode(consensus.NewOrchNode(orchA, rand.New(rand.NewPCG(uint64(seed), 0))))
-	sim.RegisterNode(consensus.NewOrchNode(orchB, rand.New(rand.NewPCG(uint64(seed+1), 0))))
+	sim.RegisterNode(consensus.NewOrchNode(orchA, policy, rand.New(rand.NewPCG(uint64(seed), 0))))
+	sim.RegisterNode(consensus.NewOrchNode(orchB, policy, rand.New(rand.NewPCG(uint64(seed+1), 0))))
 
 	// Register pooler nodes with in-memory storage
 	stores := make(map[consensus.NodeID]*memStorage)
@@ -429,7 +431,7 @@ func newHappyPathSim(t *testing.T, seed int64) (
 // newFlakyApplierSim creates a simulator identical to newHappyPathSim except
 // each pooler is given a flakyApplier at failRate (0.0–1.0) per tick.
 // The returned appliers map lets callers inspect failure counts after the test.
-func newFlakyApplierSim(t *testing.T, seed int64, failRate float64) (
+func newFlakyApplierSim(t *testing.T, seed int64, policy consensus.DurabilityPolicy, failRate float64) (
 	*dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID],
 	map[consensus.NodeID]*memStorage,
 	map[consensus.NodeID]*flakyApplier,
@@ -442,8 +444,8 @@ func newFlakyApplierSim(t *testing.T, seed int64, failRate float64) (
 	handler := &consensusHandler{sim: sim, statusSeqMap: make(map[consensus.NodeID]int64)}
 	sim.SetRequestHandler(handler)
 
-	sim.RegisterNode(consensus.NewOrchNode(orchA, rand.New(rand.NewPCG(uint64(seed), 0))))
-	sim.RegisterNode(consensus.NewOrchNode(orchB, rand.New(rand.NewPCG(uint64(seed+1), 0))))
+	sim.RegisterNode(consensus.NewOrchNode(orchA, policy, rand.New(rand.NewPCG(uint64(seed), 0))))
+	sim.RegisterNode(consensus.NewOrchNode(orchB, policy, rand.New(rand.NewPCG(uint64(seed+1), 0))))
 
 	stores := make(map[consensus.NodeID]*memStorage)
 	appliers := make(map[consensus.NodeID]*flakyApplier)
@@ -554,25 +556,25 @@ func (n *crashDriverNode) Step(tick int64, _ []consensus.Indicator) []consensus.
 // newCrashDriverSim creates a simulator identical to newHappyPathSim with an
 // autonomous crashDriverNode registered. The driver continuously crashes and
 // restarts the active primary, driving crash→recovery cycles for crash tests.
-func newCrashDriverSim(t *testing.T, seed int64) (
+func newCrashDriverSim(t *testing.T, seed int64, policy consensus.DurabilityPolicy) (
 	*dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID],
 	map[consensus.NodeID]*memStorage,
 ) {
 	t.Helper()
-	sim, stores := newHappyPathSim(t, seed)
+	sim, stores := newHappyPathSim(t, seed, policy)
 	rng := rand.New(rand.NewPCG(uint64(seed), 44))
 	sim.RegisterNode(newCrashDriverNode(crashDriverID, sim, 5, rng))
 	return sim, stores
 }
 
 // newFlakyApplierCrashSim creates a simulator with flaky appliers and a crash driver.
-func newFlakyApplierCrashSim(t *testing.T, seed int64, failRate float64) (
+func newFlakyApplierCrashSim(t *testing.T, seed int64, policy consensus.DurabilityPolicy, failRate float64) (
 	*dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID],
 	map[consensus.NodeID]*memStorage,
 	map[consensus.NodeID]*flakyApplier,
 ) {
 	t.Helper()
-	sim, stores, appliers := newFlakyApplierSim(t, seed, failRate)
+	sim, stores, appliers := newFlakyApplierSim(t, seed, policy, failRate)
 	rng := rand.New(rand.NewPCG(uint64(seed), 44))
 	sim.RegisterNode(newCrashDriverNode(crashDriverID, sim, 5, rng))
 	return sim, stores, appliers
@@ -640,24 +642,24 @@ func newConsensusChaosPolicyFromSeed(seed int64) *consensusChaosPolicy {
 // consensusChaosPolicy delivery policy. Tests using this simulator exercise the
 // orch's timeout and term-escalation code paths that activate when proposals or
 // responses are dropped.
-func newChaosSim(t *testing.T, seed int64) (
+func newChaosSim(t *testing.T, seed int64, policy consensus.DurabilityPolicy) (
 	*dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID],
 	map[consensus.NodeID]*memStorage,
 ) {
 	t.Helper()
-	sim, stores := newHappyPathSim(t, seed)
+	sim, stores := newHappyPathSim(t, seed, policy)
 	sim.SetDeliveryPolicy(newConsensusChaosPolicyFromSeed(seed + 5000))
 	return sim, stores
 }
 
 // newChaosDriverSim creates a simulator with the chaos delivery policy and an
 // autonomous crashDriverNode, combining network faults with primary crashes.
-func newChaosDriverSim(t *testing.T, seed int64) (
+func newChaosDriverSim(t *testing.T, seed int64, policy consensus.DurabilityPolicy) (
 	*dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID],
 	map[consensus.NodeID]*memStorage,
 ) {
 	t.Helper()
-	sim, stores := newCrashDriverSim(t, seed)
+	sim, stores := newCrashDriverSim(t, seed, policy)
 	sim.SetDeliveryPolicy(newConsensusChaosPolicyFromSeed(seed + 5000))
 	return sim, stores
 }
@@ -667,8 +669,9 @@ func newChaosDriverSim(t *testing.T, seed int64) (
 // TestHappyPath_PrimaryElected verifies that under a reliable fast network,
 // a primary is eventually appointed and the split-brain invariants are never violated.
 func TestHappyPath_PrimaryElected(t *testing.T) {
-	sim, _ := newHappyPathSim(t, 42)
-	for _, inv := range standardInvariants() {
+	policy := consensus.AnyNPolicy(1)
+	sim, _ := newHappyPathSim(t, 42, policy)
+	for _, inv := range standardInvariants(policy) {
 		sim.Always(inv)
 	}
 
@@ -684,8 +687,9 @@ func TestHappyPath_PrimaryElected(t *testing.T) {
 //   - at least 1000 distinct voting terms exercised (one per re-election)
 //   - at least 1 apply failure observed (confirming the flaky retry path was hit)
 func TestFlakyApply_1000Failovers(t *testing.T) {
-	sim, _, appliers := newFlakyApplierCrashSim(t, 42, 0.5)
-	for _, inv := range standardInvariants() {
+	policy := consensus.AnyNPolicy(1)
+	sim, _, appliers := newFlakyApplierCrashSim(t, 42, policy, 0.5)
+	for _, inv := range standardInvariants(policy) {
 		sim.Always(inv)
 	}
 	h := dstsim.NewSimulationTestHelper(t, sim)
@@ -704,8 +708,9 @@ func TestFlakyApply_1000Failovers(t *testing.T) {
 // state and restores committed state from durable storage. The crashDriverNode drives
 // the crashes autonomously; all assertions are conditions passed to RequireRunUntil.
 func TestPrimaryPooler_1000Crashes(t *testing.T) {
-	sim, _ := newCrashDriverSim(t, 42)
-	for _, inv := range standardInvariants() {
+	policy := consensus.AnyNPolicy(1)
+	sim, _ := newCrashDriverSim(t, 42, policy)
+	for _, inv := range standardInvariants(policy) {
 		sim.Always(inv)
 	}
 	h := dstsim.NewSimulationTestHelper(t, sim)
@@ -722,8 +727,9 @@ func TestPrimaryPooler_1000Crashes(t *testing.T) {
 // electionTimeoutTicks, at which point the orch increments the term and retries
 // from the beginning.
 func TestChaosNetwork_PrimaryElected(t *testing.T) {
-	sim, _ := newChaosSim(t, 42)
-	for _, inv := range standardInvariants() {
+	policy := consensus.AnyNPolicy(1)
+	sim, _ := newChaosSim(t, 42, policy)
+	for _, inv := range standardInvariants(policy) {
 		sim.Always(inv)
 	}
 	h := dstsim.NewSimulationTestHelper(t, sim)
@@ -737,8 +743,9 @@ func TestChaosNetwork_PrimaryElected(t *testing.T) {
 // before being physically stopped; all other orch↔pooler traffic is subject to
 // random delay, reordering, and drops.
 func TestChaosNetwork_1000Crashes(t *testing.T) {
-	sim, _ := newChaosDriverSim(t, 42)
-	for _, inv := range standardInvariants() {
+	policy := consensus.AnyNPolicy(1)
+	sim, _ := newChaosDriverSim(t, 42, policy)
+	for _, inv := range standardInvariants(policy) {
 		sim.Always(inv)
 	}
 	h := dstsim.NewSimulationTestHelper(t, sim)

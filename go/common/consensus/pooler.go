@@ -303,6 +303,7 @@ func (n *PoolerNode) handleOrchState(ind OrchStateIndicator) ([]Request, bool) {
 		Role:         newRole,
 		SyncReplicas: state.SyncReplicas,
 		Applied:      false,
+		QuorumSpec:   state.QuorumSpec,
 	}
 
 	// Persist before responding. If storage fails, do not respond.
