@@ -17,15 +17,16 @@
 //
 //   - AtomicStateFile: crash-safe PoolerStorage (write-rename + fsync).
 //   - PostgresApplier: operational RoleApplier (pg_ctl, postgresql.conf, pg_reload_conf).
-//   - OrchDriver: main loop for OrchNode — ticks every 100 ms, translates
-//     BroadcastStateRequests into gRPC calls, feeds gRPC responses back as Indicators.
-//   - PoolerDriver: main loop for PoolerNode — ticks every 100 ms, translates
-//     PoolerResponseRequests and PoolerStatusUpdateRequests into gRPC calls to orchs.
-//     Startup automatically restores committed state from AtomicStateFile.
-//
-// The orch emits only BroadcastStateRequest; the pooler emits PoolerResponseRequest
-// and PoolerStatusUpdateRequest. TerminateRequest is simulation-only: in production
-// the equivalent is a SIGTERM delivered outside the consensus request system.
+//   - OrchDriver: main loop for OrchNode. The orch owns all outbound gRPC connections
+//     to poolers. Two call types per pooler:
+//     (1) ProposeState (unary) — broadcasts a consensus state change; the pooler's
+//     accept/reject reply feeds back as a PoolerResponseIndicator.
+//     (2) HealthCheck (server-streaming) — a long-lived stream; the pooler pushes
+//     status snapshots (committed state, applied flag, postgres health) as they
+//     change, feeding PoolerStatusIndicators. Applied-state transitions arrive here.
+//   - PoolerDriver: gRPC server for PoolerNode. The pooler never dials the orch.
+//     It serves ProposeState (unary) and HealthCheck (server-streaming) RPCs, mapping
+//     them to/from the Indicator/Request types the state machine understands.
 //
 // gRPC call sites are annotated with comments but not wired to real proto stubs.
 // Both drivers compile against the consensus interfaces so any API change surfaces
@@ -180,20 +181,47 @@ func (a *PostgresApplier) AppliedState() (consensus.PoolerPersistentState, bool)
 
 // ── OrchDriver ───────────────────────────────────────────────────────────────
 
-// OrchDriver runs an OrchNode state machine at a fixed tick rate. On each tick it
-// calls node.Step(), then translates the returned BroadcastStateRequests into gRPC
-// calls to poolers. Incoming gRPC responses (PoolerResponseIndicator,
-// PoolerStatusIndicator) and etcd-watch events (PoolerDiscoveredIndicator,
-// PoolerRemovedIndicator) are pushed onto the indicators channel by their respective
-// handlers and buffered here for the next tick.
+// OrchDriver runs an OrchNode state machine at a fixed tick rate.
+// The orch owns all outbound gRPC connections to poolers; a pooler never dials
+// the orch. Two call types are made per discovered pooler:
+//
+//   - ProposeState (unary): called for each BroadcastStateRequest. A goroutine
+//     per pooler calls ProposeState and pushes the reply back onto indicators as
+//     a PoolerResponseIndicator.
+//
+//   - Health updates: the orch periodically fetches (or subscribes to) pooler
+//     status — committed state, applied flag, postgres health. Each update is
+//     pushed onto indicators as a PoolerStatusIndicator. This is the only source
+//     of applied-state updates; the pooler never initiates an outbound call.
+//
+// Both flows push onto the same indicators channel, which is drained at each tick.
+// Callers notify the driver of pooler membership changes via OnPoolerDiscovered /
+// OnPoolerRemoved (e.g. driven by an etcd watch or service-discovery callback).
 type OrchDriver struct {
-	node *consensus.OrchNode
-	tick int64
+	node       *consensus.OrchNode
+	tick       int64
+	indicators chan consensus.Indicator
 	// poolerClients map[consensus.NodeID]pb.PoolerServiceClient
 }
 
+// NewOrchDriver creates an OrchDriver for the given node.
+func NewOrchDriver(node *consensus.OrchNode) *OrchDriver {
+	return &OrchDriver{
+		node:       node,
+		indicators: make(chan consensus.Indicator, 64),
+	}
+}
+
+// Indicators returns the channel onto which all inbound events should be pushed.
+// The etcd watch goroutine writes PoolerDiscoveredIndicator/PoolerRemovedIndicator
+// here. Health stream goroutines (started by OnPoolerDiscovered) write
+// PoolerStatusIndicator here.
+func (d *OrchDriver) Indicators() chan<- consensus.Indicator {
+	return d.indicators
+}
+
 // Run starts the orch tick loop. It returns when ctx is cancelled.
-func (d *OrchDriver) Run(ctx context.Context, indicators <-chan consensus.Indicator) error {
+func (d *OrchDriver) Run(ctx context.Context) error {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -201,11 +229,7 @@ func (d *OrchDriver) Run(ctx context.Context, indicators <-chan consensus.Indica
 
 	for {
 		select {
-		case ind := <-indicators:
-			// Buffer incoming indicators for the next tick. Sources:
-			//   - gRPC PoolerResponse handler → PoolerResponseIndicator
-			//   - gRPC PoolerStatus handler   → PoolerStatusIndicator
-			//   - etcd watch on pooler keys   → PoolerDiscoveredIndicator / PoolerRemovedIndicator
+		case ind := <-d.indicators:
 			pending = append(pending, ind)
 
 		case <-ticker.C:
@@ -216,16 +240,29 @@ func (d *OrchDriver) Run(ctx context.Context, indicators <-chan consensus.Indica
 			for _, req := range requests {
 				switch r := req.(type) {
 				case consensus.BroadcastStateRequest:
-					// Send an OrchStateIndicator to each target pooler via gRPC:
-					//   targets := r.Targets  // nil means all known poolers
-					//   for _, id := range targets {
-					//       poolerClients[id].ProposeState(ctx, &pb.ProposeStateRequest{
-					//           State:               protoFromConsensusState(r.State),
-					//           ExpectedPrimaryTerm: r.ExpectedPrimaryTerm,
-					//       })
+					// For each target pooler, call ProposeState (unary) in a goroutine.
+					// The goroutine converts the response to a PoolerResponseIndicator
+					// and pushes it onto d.indicators for the next tick.
+					//
+					//   for _, poolerID := range resolveTargets(r.Targets) {
+					//       go func(id consensus.NodeID) {
+					//           resp, err := d.poolerClients[id].ProposeState(ctx, &pb.ProposeStateRequest{
+					//               State:               protoFromConsensusState(r.State),
+					//               ExpectedPrimaryTerm: r.ExpectedPrimaryTerm,
+					//           })
+					//           if err != nil {
+					//               return // pooler unreachable; orch will retry on election timeout
+					//           }
+					//           d.indicators <- consensus.PoolerResponseIndicator{
+					//               FromPooler:   id,
+					//               VotingTerm:   consensus.Term(resp.VotingTerm),
+					//               SeqNum:       resp.SeqNum,
+					//               Accepted:     resp.Accepted,
+					//               KnownTerm:    consensus.Term(resp.KnownTerm),
+					//               KnownCoordID: consensus.NodeID(resp.KnownCoordId),
+					//           }
+					//       }(poolerID)
 					//   }
-					// The pooler gRPC handler converts the response to a
-					// PoolerResponseIndicator and pushes it back to this indicators channel.
 					_ = r
 				}
 			}
@@ -236,19 +273,65 @@ func (d *OrchDriver) Run(ctx context.Context, indicators <-chan consensus.Indica
 	}
 }
 
+// OnPoolerDiscovered should be called (e.g. from a service-discovery callback)
+// when a new pooler becomes known. It pushes a PoolerDiscoveredIndicator so
+// OrchNode learns about the pooler, then begins fetching health updates.
+// Run this in a goroutine; it exits when ctx is cancelled or the pooler is removed.
+func (d *OrchDriver) OnPoolerDiscovered(ctx context.Context, poolerID consensus.NodeID) {
+	// Notify OrchNode that this pooler exists.
+	//   d.indicators <- consensus.PoolerDiscoveredIndicator{PoolerID: poolerID}
+
+	// Begin health updates. Each snapshot becomes a PoolerStatusIndicator.
+	// Whether this is implemented as polling or a streaming RPC is an internal
+	// detail; the indicator shape is the same either way.
+	//
+	//   for ctx.Err() == nil {
+	//       snap, err := d.poolerClients[poolerID].GetStatus(ctx, &pb.StatusRequest{})
+	//       if err != nil { <backoff>; continue }
+	//       d.indicators <- consensus.PoolerStatusIndicator{
+	//           PoolerID:       poolerID,
+	//           StatusSeq:      snap.StatusSeq,
+	//           State:          consensusStateFromProto(snap.CommittedState),
+	//           Applied:        snap.Applied,
+	//           PostgresStatus: postgresStatusFromProto(snap.PostgresStatus),
+	//       }
+	//       <wait for next tick or stream event>
+	//   }
+}
+
+// OnPoolerRemoved should be called when a pooler is no longer reachable or has
+// been deregistered. It cancels the health-update goroutine (via ctx) and notifies
+// OrchNode.
+func (d *OrchDriver) OnPoolerRemoved(poolerID consensus.NodeID) {
+	//   d.indicators <- consensus.PoolerRemovedIndicator{PoolerID: poolerID}
+}
+
 // ── PoolerDriver ─────────────────────────────────────────────────────────────
 
-// PoolerDriver runs a PoolerNode state machine at a fixed tick rate. It is
-// constructed with an AtomicStateFile and a PostgresApplier; NewPoolerNode
-// automatically loads any previously committed state from the file on startup,
-// so crash recovery requires no additional calls.
+// PoolerDriver runs a PoolerNode state machine and implements the gRPC server
+// that orchs connect to. The pooler never dials the orch; all gRPC connections
+// are inbound.
 //
-// In production, a SIGTERM handler pushes a TerminateIndicator onto the indicators
-// channel so the pooler can record the postgres shutdown in its next Step() call.
+// Two RPCs are served (see handler stubs at the bottom of this file):
+//
+//	ProposeState (unary) — the orch sends a consensus state change proposal:
+//	  1. The handler converts it to an OrchStateIndicator and queues it on incoming.
+//	  2. The tick loop processes it and emits a PoolerResponseRequest.
+//	  3. The handler reads from proposeReplies and returns the accept/reject response.
+//
+//	HealthCheck (server-streaming) — the orch subscribes to pooler status:
+//	  1. After each tick the loop fans PoolerStatusUpdateRequests onto statusUpdates.
+//	  2. The handler streams each snapshot to the orch as a proto message.
+//	  Applied-state changes reach the orch here, not via a pooler-initiated RPC.
+//
+// In production a SIGTERM handler pushes a TerminateIndicator onto incoming so
+// the pooler can record the postgres shutdown before the process exits.
 type PoolerDriver struct {
-	node *consensus.PoolerNode
-	tick int64
-	// orchClients map[consensus.NodeID]pb.OrchServiceClient
+	node           *consensus.PoolerNode
+	tick           int64
+	incoming       chan consensus.Indicator                 // fed by gRPC handlers; drained each tick
+	proposeReplies chan consensus.PoolerResponseRequest     // PoolerResponseRequests for ProposeState
+	statusUpdates  chan consensus.PoolerStatusUpdateRequest // snapshots for HealthCheck streams
 }
 
 // NewPoolerDriver creates a PoolerDriver. The PoolerNode loads its last committed
@@ -259,11 +342,18 @@ func NewPoolerDriver(
 	applier *PostgresApplier,
 ) *PoolerDriver {
 	node := consensus.NewPoolerNode(id, stateFile, applier)
-	return &PoolerDriver{node: node}
+	return &PoolerDriver{
+		node:           node,
+		incoming:       make(chan consensus.Indicator, 64),
+		proposeReplies: make(chan consensus.PoolerResponseRequest, 1),
+		statusUpdates:  make(chan consensus.PoolerStatusUpdateRequest, 4),
+	}
 }
 
 // Run starts the pooler tick loop. It returns when ctx is cancelled.
-func (d *PoolerDriver) Run(ctx context.Context, indicators <-chan consensus.Indicator) error {
+// The gRPC server must be started separately; the two gRPC handlers below
+// communicate with this loop via the incoming / proposeReplies / statusUpdates channels.
+func (d *PoolerDriver) Run(ctx context.Context) error {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -271,10 +361,7 @@ func (d *PoolerDriver) Run(ctx context.Context, indicators <-chan consensus.Indi
 
 	for {
 		select {
-		case ind := <-indicators:
-			// Buffer incoming indicators for the next tick. Sources:
-			//   - gRPC ProposeState handler → OrchStateIndicator
-			//   - SIGTERM signal handler    → TerminateIndicator
+		case ind := <-d.incoming:
 			pending = append(pending, ind)
 
 		case <-ticker.C:
@@ -285,24 +372,17 @@ func (d *PoolerDriver) Run(ctx context.Context, indicators <-chan consensus.Indi
 			for _, req := range requests {
 				switch r := req.(type) {
 				case consensus.PoolerResponseRequest:
-					// Reply to the orch that proposed the state:
-					//   orchClients[r.ToOrch].PoolerResponse(ctx, &pb.PoolerResponseRequest{
-					//       Accepted:     r.Accepted,
-					//       KnownTerm:    r.KnownTerm,
-					//       KnownCoordId: string(r.KnownCoordID),
-					//   })
-					_ = r
-
+					// Route the accept/reject to the ProposeState handler waiting for it.
+					select {
+					case d.proposeReplies <- r:
+					default:
+					}
 				case consensus.PoolerStatusUpdateRequest:
-					// Broadcast committed state + postgres status to all known orchs:
-					//   for _, client := range orchClients {
-					//       client.PoolerStatus(ctx, &pb.PoolerStatusRequest{
-					//           Applied:        r.Applied,
-					//           PostgresStatus: protoFromPostgresStatus(r.PostgresStatus),
-					//           State:          protoFromPersistentState(r.State),
-					//       })
-					//   }
-					_ = r
+					// Fan the status snapshot to the active HealthCheck stream handler.
+					select {
+					case d.statusUpdates <- r:
+					default:
+					}
 				}
 			}
 
@@ -311,3 +391,51 @@ func (d *PoolerDriver) Run(ctx context.Context, indicators <-chan consensus.Indi
 		}
 	}
 }
+
+// ProposeState is the unary gRPC handler called by the orch to propose a consensus
+// state change. It queues the request as an OrchStateIndicator for the next tick
+// and waits for the PoolerResponseRequest the tick loop emits in reply.
+//
+// Sketch of the production implementation (not wired to real proto stubs):
+//
+//	func (d *PoolerDriver) ProposeState(ctx context.Context, req *pb.ProposeStateRequest) (*pb.ProposeStateResponse, error) {
+//	    d.incoming <- consensus.OrchStateIndicator{
+//	        CoordID:             consensus.NodeID(req.State.CoordId),
+//	        PoolerID:            d.node.ID(),
+//	        State:               consensusStateFromProto(req.State),
+//	        ExpectedPrimaryTerm: consensus.Term(req.ExpectedPrimaryTerm),
+//	    }
+//	    select {
+//	    case r := <-d.proposeReplies:
+//	        return &pb.ProposeStateResponse{
+//	            Accepted:     r.Accepted,
+//	            VotingTerm:   int64(r.VotingTerm),
+//	            SeqNum:       r.SeqNum,
+//	            KnownTerm:    int64(r.KnownTerm),
+//	            KnownCoordId: string(r.KnownCoordID),
+//	        }, nil
+//	    case <-ctx.Done():
+//	        return nil, ctx.Err()
+//	    }
+//	}
+
+// GetStatus is the gRPC handler called by the orch to poll (or subscribe to)
+// pooler status. It reads a PoolerStatusUpdateRequest snapshot produced by the
+// most recent tick and returns it as a proto response. For a streaming variant
+// this handler would loop, sending each new snapshot as it arrives.
+// This is the only channel through which the orch learns about applied-state changes.
+//
+// Sketch of the production implementation (not wired to real proto stubs):
+//
+//	func (d *PoolerDriver) GetStatus(ctx context.Context, req *pb.StatusRequest) (*pb.PoolerStatusSnapshot, error) {
+//	    select {
+//	    case snap := <-d.statusUpdates:
+//	        return &pb.PoolerStatusSnapshot{
+//	            CommittedState:  protoFromPersistentState(snap.State),
+//	            Applied:         snap.Applied,
+//	            PostgresStatus:  protoFromPostgresStatus(snap.PostgresStatus),
+//	        }, nil
+//	    case <-ctx.Done():
+//	        return nil, ctx.Err()
+//	    }
+//	}
