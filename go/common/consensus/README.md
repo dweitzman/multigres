@@ -162,17 +162,10 @@ Small improvements that make the existing code more correct and configurable:
 - **Wire up `PostgresApplier`** — fill in `Apply()` (ALTER SYSTEM, pg_ctl promote / standby
   reconfigure, pg_reload_conf) and `AppliedState()` (read postgresql.conf / standby.signal) in
   `examples/pg_driver/`.
-- **Realistic gRPC wiring in `pg_driver.go`** — update the production sketch to reflect the actual
-  gRPC topology. The orch owns all outbound connections; the pooler never dials the orch. Two
-  distinct orch→pooler call types:
-  - `ProposeState` (unary): orch sends a consensus state change; pooler commits to disk and replies
-    with accept/reject → feeds `PoolerResponseIndicator` back to the orch.
-  - `HealthCheck` (server-streaming, long-lived): orch opens one stream per pooler; the pooler
-    pushes status snapshots (committed state, applied flag, postgres health) as they change →
-    feeds `PoolerStatusIndicator` back to the orch. Applied-state transitions arrive here, not via
-    a pooler-initiated RPC.
-    The current sketch incorrectly shows `PoolerStatusUpdateRequest` as a pooler-initiated broadcast
-    to all orchs.
+- ✅ **Realistic gRPC wiring in `pg_driver.go`** — the production sketch now shows the correct
+  topology: orch owns all outbound connections (pooler never dials orch); `ProposeState` (unary)
+  carries state changes with an accept/reject reply; health updates (poll or stream) carry committed
+  state, applied flag, and postgres health back to the orch.
 
 ### Stage 2 — Bootstrapping
 
