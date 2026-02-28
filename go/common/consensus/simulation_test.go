@@ -128,6 +128,8 @@ func (h *consensusHandler) ProcessRequests(
 		case consensus.PoolerResponseRequest:
 			result[r.ToOrch] = append(result[r.ToOrch], consensus.PoolerResponseIndicator{
 				FromPooler:   fromNode,
+				VotingTerm:   r.VotingTerm,
+				SeqNum:       r.SeqNum,
 				Accepted:     r.Accepted,
 				KnownTerm:    r.KnownTerm,
 				KnownCoordID: r.KnownCoordID,

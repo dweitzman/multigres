@@ -39,11 +39,12 @@ func (BroadcastStateRequest) consensusRequest() {}
 // PoolerResponseRequest asks the RequestHandler to deliver the pooler's vote/rejection
 // back to the originating orch as a PoolerResponseIndicator.
 //
-// TODO: Consider adding SeqNum (the sequence number from the OrchStateIndicator being
-// responded to) so the orch can correlate responses to a specific proposal and discard
-// late responses from earlier rounds.
+// VotingTerm and SeqNum echo back the proposal being responded to so the orch can
+// discard late responses from earlier rounds or terms.
 type PoolerResponseRequest struct {
 	ToOrch       NodeID
+	VotingTerm   int64 // term of the proposal being responded to
+	SeqNum       int64 // seq num of the proposal being responded to
 	Accepted     bool
 	KnownTerm    int64  // if rejected: the term the pooler is currently on
 	KnownCoordID NodeID // if rejected at the same term: which coord won it

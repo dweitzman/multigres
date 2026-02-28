@@ -252,6 +252,8 @@ func (n *PoolerNode) handleOrchState(ind OrchStateIndicator) ([]Request, bool) {
 	if state.VotingTerm < n.committed.VotedTerm {
 		return []Request{PoolerResponseRequest{
 			ToOrch:       ind.FromOrch,
+			VotingTerm:   state.VotingTerm,
+			SeqNum:       state.SeqNum,
 			Accepted:     false,
 			KnownTerm:    n.committed.VotedTerm,
 			KnownCoordID: n.committed.VotedCoord,
@@ -264,6 +266,8 @@ func (n *PoolerNode) handleOrchState(ind OrchStateIndicator) ([]Request, bool) {
 		state.CoordID != n.committed.VotedCoord {
 		return []Request{PoolerResponseRequest{
 			ToOrch:       ind.FromOrch,
+			VotingTerm:   state.VotingTerm,
+			SeqNum:       state.SeqNum,
 			Accepted:     false,
 			KnownTerm:    n.committed.VotedTerm,
 			KnownCoordID: n.committed.VotedCoord,
@@ -273,9 +277,11 @@ func (n *PoolerNode) handleOrchState(ind OrchStateIndicator) ([]Request, bool) {
 	// Reject if the orch's expected primary term does not match ours (stale cluster view).
 	if ind.ExpectedPrimaryTerm > 0 && ind.ExpectedPrimaryTerm != n.committed.PrimaryTerm {
 		return []Request{PoolerResponseRequest{
-			ToOrch:    ind.FromOrch,
-			Accepted:  false,
-			KnownTerm: n.committed.VotedTerm,
+			ToOrch:     ind.FromOrch,
+			VotingTerm: state.VotingTerm,
+			SeqNum:     state.SeqNum,
+			Accepted:   false,
+			KnownTerm:  n.committed.VotedTerm,
 		}}, false
 	}
 
@@ -306,7 +312,12 @@ func (n *PoolerNode) handleOrchState(ind OrchStateIndicator) ([]Request, bool) {
 	n.committed = newState
 
 	return []Request{
-		PoolerResponseRequest{ToOrch: ind.FromOrch, Accepted: true},
+		PoolerResponseRequest{
+			ToOrch:     ind.FromOrch,
+			VotingTerm: state.VotingTerm,
+			SeqNum:     state.SeqNum,
+			Accepted:   true,
+		},
 	}, true
 }
 

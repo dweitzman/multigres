@@ -189,6 +189,12 @@ func (n *OrchNode) handlePoolerResponse(ind PoolerResponseIndicator) {
 	if n.progress == nil {
 		return
 	}
+	// Discard responses that do not match the current proposal: they are late
+	// deliveries from a previous round (different term or seq num).
+	if ind.VotingTerm != n.progress.proposal.VotingTerm ||
+		ind.SeqNum != n.progress.proposal.SeqNum {
+		return
+	}
 	if ind.Accepted {
 		n.progress.confirmers[ind.FromPooler] = true
 		return

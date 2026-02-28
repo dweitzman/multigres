@@ -55,6 +55,8 @@ func (PoolerStatusIndicator) consensusIndicator() {}
 // PoolerResponseIndicator is delivered to OrchNode when a pooler votes on a proposal.
 type PoolerResponseIndicator struct {
 	FromPooler   NodeID
+	VotingTerm   int64 // term of the proposal being responded to
+	SeqNum       int64 // seq num of the proposal being responded to
 	Accepted     bool
 	KnownTerm    int64  // if rejected: the term the pooler is currently on
 	KnownCoordID NodeID // if rejected at the same term: which coordinator won that term
