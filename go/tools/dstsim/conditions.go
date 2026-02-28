@@ -56,11 +56,11 @@ func (c *AndCombinator[I, R, ID]) Name() string {
 }
 
 func (c *AndCombinator[I, R, ID]) Describe(sim *Simulator[I, R, ID]) string {
-	descriptions := make([]string, len(c.Conditions))
+	parts := make([]string, len(c.Conditions))
 	for i, cond := range c.Conditions {
-		descriptions[i] = cond.Describe(sim)
+		parts[i] = fmt.Sprintf("  [%d/%d] %s", i+1, len(c.Conditions), cond.Describe(sim))
 	}
-	return fmt.Sprintf("all of: [%s]", strings.Join(descriptions, ", "))
+	return "all of:\n" + strings.Join(parts, "\n")
 }
 
 // And creates a new And condition that evaluates to true when all sub-conditions are true

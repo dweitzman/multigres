@@ -22,6 +22,7 @@ import (
 
 	"github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/tools/dstsim"
+	"github.com/multigres/multigres/go/tools/dstsim/sortedmaps"
 )
 
 // memStorage is an in-memory PoolerStorage implementation for tests.
@@ -361,7 +362,7 @@ func (c *minTotalApplyFailures) Name() string {
 
 func (c *minTotalApplyFailures) Eval(_ *dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID]) bool {
 	total := 0
-	for _, a := range c.appliers {
+	for _, a := range sortedmaps.Values(c.appliers) {
 		total += a.failures
 	}
 	return total >= c.min
@@ -369,7 +370,7 @@ func (c *minTotalApplyFailures) Eval(_ *dstsim.Simulator[consensus.Indicator, co
 
 func (c *minTotalApplyFailures) Describe(_ *dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID]) string {
 	total := 0
-	for _, a := range c.appliers {
+	for _, a := range sortedmaps.Values(c.appliers) {
 		total += a.failures
 	}
 	return fmt.Sprintf("total apply failures: %d (need >= %d)", total, c.min)
@@ -459,80 +460,93 @@ func newFlakyApplierSim(t *testing.T, seed int64, failRate float64) (
 	return sim, stores, appliers
 }
 
-// activePrimaryID returns the NodeID of the current active primary, or "" if none.
-func activePrimaryID(sim *dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID]) consensus.NodeID {
-	for _, node := range sim.Nodes() {
-		if p, ok := node.(*consensus.PoolerNode); ok && p.IsActivePrimary() {
-			return p.ID()
-		}
-	}
-	return ""
-}
-
 // --- Crash driver ---
 
 const crashDriverID consensus.NodeID = "crash-driver"
 
-// crashPhase is the crash driver's state machine.
-type crashPhase int
-
-const (
-	crashPhaseIdle        crashPhase = iota // waiting for an active primary to crash
-	crashPhaseTerminating                   // TerminateRequest sent; stopping node next tick
-	crashPhaseDown                          // node stopped; counting down to restart
-)
-
-// crashDriverNode is a simulation test node that autonomously drives the primary
-// crash+restart cycle. On each iteration it:
-//  1. Finds the active primary and sends a TerminateRequest, so the orch receives a
-//     PostgresStopped status — triggering re-election and term advancement.
-//  2. Stops the primary node one tick later, after the TerminateIndicator has been
-//     delivered and processed (pooler reports postgresStatus=Stopped to all orchs).
-//  3. Restarts it after downTicks ticks.
+// crashDriverNode is a simulation test node that autonomously drives crash+restart
+// cycles across pooler nodes. On each tick it:
+//  1. Stops any pooler that received a TerminateRequest the previous tick (so the
+//     TerminateIndicator is processed by the pooler before it is stopped).
+//  2. Restarts any stopped pooler whose downTicks timer has elapsed.
+//  3. Picks one currently-running pooler at random and sends it a TerminateRequest.
+//
+// Any running pooler is a valid target—not just the active primary—so nodes with
+// stale committed state also get crashed, preventing the simulation from getting
+// stuck in a single-target loop.
+//
+// TODO: extend to also crash orch nodes. Crashing orch requires arranging for the
+// discovery node to redeliver discovery state during orch's Restart(), since orch's
+// in-memory view of the cluster is built from discovery events.
 //
 // Pair with RequireRunUntil(NewAtLeastNTimes(N, NewInOrder(noPrimaryActive, activePrimaryExists)))
 // to drive N crash→recovery cycles.
 type crashDriverNode struct {
-	id         consensus.NodeID
-	sim        *dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID]
-	phase      crashPhase
-	target     consensus.NodeID
-	resumeTick int64
-	downTicks  int64
+	id        consensus.NodeID
+	sim       *dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID]
+	downTicks int64
+	rng       *rand.Rand
+	stopped   map[consensus.NodeID]int64 // node → tick when it should restart
+	pending   []consensus.NodeID         // nodes that received TerminateRequest last tick; StopNode this tick
 }
 
 func newCrashDriverNode(
 	id consensus.NodeID,
 	sim *dstsim.Simulator[consensus.Indicator, consensus.Request, consensus.NodeID],
 	downTicks int64,
+	rng *rand.Rand,
 ) *crashDriverNode {
-	return &crashDriverNode{id: id, sim: sim, downTicks: downTicks}
+	return &crashDriverNode{
+		id:        id,
+		sim:       sim,
+		downTicks: downTicks,
+		rng:       rng,
+		stopped:   make(map[consensus.NodeID]int64),
+	}
 }
 
 func (n *crashDriverNode) ID() consensus.NodeID { return n.id }
 
 func (n *crashDriverNode) Step(tick int64, _ []consensus.Indicator) []consensus.Request {
-	switch n.phase {
-	case crashPhaseIdle:
-		if primaryID := activePrimaryID(n.sim); primaryID != "" {
-			n.target = primaryID
-			n.phase = crashPhaseTerminating
-			return []consensus.Request{consensus.TerminateRequest{Target: primaryID}}
-		}
-	case crashPhaseTerminating:
-		// TerminateIndicator was scheduled last tick and delivered this tick. Stop the node
-		// now; StopNode is deferred to end of tick (after all nodes have stepped), so the
-		// pooler processes the TerminateIndicator before being stopped.
-		n.sim.StopNode(n.target)
-		n.resumeTick = tick + n.downTicks
-		n.phase = crashPhaseDown
-	case crashPhaseDown:
-		if tick >= n.resumeTick {
-			n.sim.RestartNode(n.target)
-			n.phase = crashPhaseIdle
+	// Stop nodes that received TerminateRequest last tick.
+	for _, id := range n.pending {
+		n.sim.StopNode(id)
+		n.stopped[id] = tick + n.downTicks
+	}
+	n.pending = n.pending[:0]
+
+	// Restart nodes whose down-timer has elapsed.
+	for _, id := range sortedmaps.Keys(n.stopped) {
+		if tick >= n.stopped[id] {
+			n.sim.RestartNode(id)
+			delete(n.stopped, id)
 		}
 	}
-	return nil
+
+	// Only crash one node at a time: if any node is still stopped, wait for it to
+	// restart before targeting a new one. This ensures at least N-1 poolers are
+	// always available so the orch can form a majority and complete elections.
+	if len(n.stopped) > 0 {
+		return nil
+	}
+
+	// Collect all running poolers as crash candidates.
+	var candidates []consensus.NodeID
+	for _, node := range n.sim.Nodes() {
+		p, ok := node.(*consensus.PoolerNode)
+		if !ok {
+			continue
+		}
+		candidates = append(candidates, p.ID())
+	}
+
+	// Crash a randomly chosen candidate.
+	if len(candidates) == 0 {
+		return nil
+	}
+	target := candidates[n.rng.IntN(len(candidates))]
+	n.pending = append(n.pending, target)
+	return []consensus.Request{consensus.TerminateRequest{Target: target}}
 }
 
 // newCrashDriverSim creates a simulator identical to newHappyPathSim with an
@@ -544,7 +558,8 @@ func newCrashDriverSim(t *testing.T, seed int64) (
 ) {
 	t.Helper()
 	sim, stores := newHappyPathSim(t, seed)
-	sim.RegisterNode(newCrashDriverNode(crashDriverID, sim, 5))
+	rng := rand.New(rand.NewPCG(uint64(seed), 44))
+	sim.RegisterNode(newCrashDriverNode(crashDriverID, sim, 5, rng))
 	return sim, stores
 }
 
@@ -556,7 +571,8 @@ func newFlakyApplierCrashSim(t *testing.T, seed int64, failRate float64) (
 ) {
 	t.Helper()
 	sim, stores, appliers := newFlakyApplierSim(t, seed, failRate)
-	sim.RegisterNode(newCrashDriverNode(crashDriverID, sim, 5))
+	rng := rand.New(rand.NewPCG(uint64(seed), 44))
+	sim.RegisterNode(newCrashDriverNode(crashDriverID, sim, 5, rng))
 	return sim, stores, appliers
 }
 
@@ -584,22 +600,17 @@ type consensusChaosPolicy struct {
 	orderedPolicy dstsim.IndicatorDeliveryPolicy[consensus.Indicator, consensus.NodeID]
 }
 
-func (p *consensusChaosPolicy) ScheduleDelivery(
-	currentTick int64,
-	fromNode consensus.NodeID,
-	target consensus.NodeID,
-	indicator consensus.Indicator,
-) (bool, int64) {
+func (p *consensusChaosPolicy) ScheduleDelivery(args dstsim.DeliveryArgs[consensus.Indicator, consensus.NodeID]) (bool, int64, []string) {
 	// TerminateIndicators model a SIGTERM: always delivered, 1-tick latency.
-	if _, ok := indicator.(consensus.TerminateIndicator); ok {
-		return true, 1
+	if _, ok := args.Indicator.(consensus.TerminateIndicator); ok {
+		return true, 1, nil
 	}
 	// Discovery traffic models an etcd watch stream: ordered and reliable.
-	if fromNode == discoveryID {
-		return p.orderedPolicy.ScheduleDelivery(currentTick, fromNode, target, indicator)
+	if args.FromNode == discoveryID {
+		return p.orderedPolicy.ScheduleDelivery(args)
 	}
 	// All other orch↔pooler traffic (state proposals, responses, status updates): chaos.
-	return p.chaosPolicy.ScheduleDelivery(currentTick, fromNode, target, indicator)
+	return p.chaosPolicy.ScheduleDelivery(args)
 }
 
 func newConsensusChaosPolicyFromSeed(seed int64) *consensusChaosPolicy {
