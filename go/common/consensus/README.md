@@ -41,11 +41,10 @@ and restarts the appointment from Begin.
 **Term vocabulary.** The protocol uses two distinct term numbers that serve different purposes and
 must not be confused:
 
-- **Coordinator term** (currently named `VotingTerm` / `VotedTerm` in code — planned rename) — the
-  orch's election counter. It increments on every Begin attempt: retries, orch restarts, and
-  competing coordinators all advance it. All three phases of a single appointment cycle share the
-  same coordinator term. A high coordinator term means many election rounds have happened; it says
-  nothing by itself about the state of postgres replication.
+- **Coordinator term** (`CoordTerm`) — the orch's election counter. It increments on every Begin
+  attempt: retries, orch restarts, and competing coordinators all advance it. All three phases of a
+  single appointment cycle share the same coordinator term. A high coordinator term means many
+  election rounds have happened; it says nothing by itself about the state of postgres replication.
 - **Primary term (`PrimaryTerm`)** — the replication quorum epoch. It is set to the coordinator
   term at which the current primary was _successfully established_ via the Establish phase. It only
   advances when a new primary is appointed. Multiple coordinator-term increments (Begin retries,
@@ -144,8 +143,8 @@ All tests register the **standard invariants** via `sim.Always()`:
   two nodes to have `committed.Role=Primary` simultaneously (a stale primary that hasn't received
   Revoke yet) as long as only one has replicas satisfying `IsWriteQuorum`.
 
-- **`appliedMonotonicity`** — once `Applied=true` is persisted for a proposal (`VotedTerm` +
-  `VotedSeqNum`), it must never revert to false for that same proposal. A new (higher) proposal
+- **`appliedMonotonicity`** — once `Applied=true` is persisted for a proposal (`CoordTerm` +
+  `SeqNum`), it must never revert to false for that same proposal. A new (higher) proposal
   superseding it is the only valid transition.
 
 ## Simulation architecture
@@ -201,7 +200,7 @@ Small improvements that make the existing code more correct and configurable:
   are delegated to `Quorum.IsRevoked` / `Quorum.IsEstablished`; safety invariants use
   `Quorum.IsWriteQuorum` via `DurabilityPolicy.ReconstructQuorum`.
 - ✅ **Late-response filtering** — `PoolerResponseRequest` and `PoolerResponseIndicator` now carry
-  `VotingTerm` + `SeqNum`; orch discards responses that don't match the current proposal.
+  `CoordTerm` + `SeqNum`; orch discards responses that don't match the current proposal.
 - ✅ **Crash orch nodes in simulation** — the crash driver crashes both poolers and orchs.
   `OrchNode.Restart()` clears all ephemeral state; `discoveryNode` detects the gap by diffing
   `KnownPoolerIDs()` against the live pooler set and re-delivers membership events through the
@@ -213,7 +212,7 @@ Small improvements that make the existing code more correct and configurable:
   last-applied (current) state; the invariant must hold for every combination.
 - ✅ **Indicator-driven apply loop** — removed `RoleApplier` interface; apply is now driven
   externally. The apply goroutine (production) or `applyDriverNode` (simulation) delivers
-  `ApplySucceededIndicator{VotedTerm, VotedSeqNum}` on success; `PoolerNode` persists
+  `ApplySucceededIndicator{CoordTerm, SeqNum}` on success; `PoolerNode` persists
   `Applied=true` before broadcasting. Crash recovery reads `committed.Applied` from storage
   directly — no separate `AppliedState()` needed.
 - ✅ **Realistic gRPC wiring in `pg_driver.go`** — the production sketch shows the correct
@@ -222,12 +221,15 @@ Small improvements that make the existing code more correct and configurable:
   state, applied flag, and postgres health back to the orch.
 - **Wire up `PostgresApplier`** — fill in `apply()` (ALTER SYSTEM, pg_ctl promote / standby
   reconfigure, pg_reload_conf) in `examples/pg_driver/`.
-- **TODO: rename `VotingTerm`/`VotedTerm` → `CoordTerm`** throughout the code to match the
-  "coordinator term" vocabulary above and distinguish it clearly from `PrimaryTerm`.
-- **TODO: rename and reframe `CohortMember`** — see Stage 2 for the full rationale.
+- ✅ **Renamed `VotingTerm`/`VotedTerm` → `CoordTerm`** throughout the code to match the
+  "coordinator term" vocabulary above and distinguish it clearly from `PrimaryTerm`. The
+  `ProposalID{CoordTerm, CoordID, SeqNum}` struct bundles the three fields that always travel
+  together; `ConsensusState` embeds it, and `PoolerPersistentState` holds a `Committed ProposalID`.
+- **TODO: redesign `CohortMember`** — see Stage 2 for the current implementation and open design
+  directions.
 - **TODO: fix `learnEstablishedQuorum` grouping key** — currently groups poolers by their current
-  `(VotedTerm, VotedSeqNum)`, which reflects the most-recently voted proposal (possibly a Begin at
-  a higher term). After a Begin-only cycle (no Establish), poolers advance `VotedTerm` but
+  `(CoordTerm, SeqNum)`, which reflects the most-recently voted proposal (possibly a Begin at
+  a higher term). After a Begin-only cycle (no Establish), poolers advance `CoordTerm` but
   `QuorumSpec` and `Applied=true` remain from the old Establish. The correct grouping key is
   `PrimaryTerm` (the voting term at which the Establish ran), combined with `Applied=true` on all
   poolers sharing that `PrimaryTerm`. Until fixed, `learnEstablishedQuorum` may fail to recognise
@@ -272,19 +274,35 @@ No explicit `Bootstrap bool` flag is needed: the absence of the pooler's own ID 
 sufficient protection because bootstrap terms could keep incrementing and a high term must never
 override an already-established cohort.
 
-**TODO: reframe and rename `CohortMember`.** The name implies general cohort membership tracking,
-but its actual and intended purpose is narrower: **bootstrap protection**. The field records
-"this pooler has witnessed a successful Establish and knows a real cluster exists; it must not
-silently participate in a fresh bootstrap that would overwrite that cluster." A clearer name
-(e.g. `Bootstrapped`) would make this intent obvious and avoid scope creep into cohort admission
-protocols that aren't needed for the protection to work. Under the cleaner framing:
+**Open design directions for `CohortMember`:**
 
-- A node sets the flag as soon as it observes any successful Establish (not just one that lists
-  its own ID) — this is the "viral" property: once any node in the cluster knows the cluster
-  exists, it will refuse naive bootstrap attempts.
-- A node leaving the cohort does _not_ need to unset the flag: the flag means "I know this
-  cluster exists", not "I am currently a voting member". That distinction collapses the
-  complexity in Stage 2.5's removal protocol.
+**Direction A — `BootstrapEligible` (inverted flag).** Instead of recording whether a pooler _has
+joined_ the cohort, record whether it is _willing to participate in a fresh bootstrap_. A fresh
+node would have `BootstrapEligible=true`; once it has committed an Establish it flips to `false`.
+Semantics: "I am willing to be part of a bootstrap" vs. "I know a real cluster exists and will
+not participate in a naive bootstrap that would overwrite it." The flag starts `true` and only
+ever moves to `false`, so it never needs to be reset.
+
+**Direction B — Term-associated cohort membership.** Rather than a plain boolean, record _which
+coordinator term_ inducted this pooler into the cohort. Poolers report their cohort term in their
+status updates, and the orch re-learns cohort composition from status on restart (the same
+mechanism it already uses for quorum state). Under this design, `CohortMember bool` becomes
+something like `CohortTerm int64` — the `CoordTerm` of the Establish that inducted this pooler
+(zero means not yet inducted).
+
+The validation during `Begin` serves two distinct cases that the orch handles differently:
+
+- **Orch has out-of-date cohort knowledge** — it sent a `CohortMembers` list that omits some
+  existing members. The rejecting poolers return `FreshStatus`; the orch must update its view and
+  retry Begin with the correct full cohort before it can proceed.
+- **Pooler has out-of-date cohort knowledge** — a pooler that is behind on replication may not
+  yet know about recently-admitted cohort members, and so rejects a Begin whose `CohortMembers`
+  includes nodes it hasn't seen. The orch may still win the term from the nodes that _do_ accept
+  (the ones with up-to-date knowledge). Once it has collected enough acceptances, it sets an
+  "I won this term" flag on subsequent Revoke/Establish broadcasts (a field on the existing
+  proposal, not a separate indicator). A pooler that sees this flag knows the coordinator proved
+  cohort knowledge to enough peers and can accept the proposal even if its own local view was
+  stale — the quorum of accepting peers acts as the authoritative cohort witness.
 
 **Cohort admission** (tracked below in the roadmap) is a separate concern: once the cluster is
 bootstrapped, admitting new nodes to the _voting_ cohort must itself be a consensus decision.
@@ -316,7 +334,7 @@ consensus decision. The designed protocol for cohort changes:
 The same voting protocol applies, but the `Establish` proposal omits the departing node from
 `CohortMembers`. Normally a pooler with `CohortMember=true` rejects proposals that exclude it
 (bootstrap protection). For intentional removal, this stickiness is relaxed: a pooler that already
-voted for `Begin` at the same `VotingTerm` and `CoordID` as the arriving `Establish` knows the
+voted for `Begin` at the same `CoordTerm` and `CoordID` as the arriving `Establish` knows the
 orch proved cohort knowledge at `Begin` time, so it accepts the `Establish` even if it is excluded.
 This is the signal that the orch is intentionally shrinking the cohort rather than bypassing it.
 

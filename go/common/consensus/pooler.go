@@ -202,7 +202,7 @@ func (n *PoolerNode) Step(tick int64, indicators []Indicator) []Request {
 			// Only accept if term+seq match the current committed state (the proposal may
 			// have advanced since the apply started). Persist Applied=true before
 			// advertising — the orch only sees this after it is durably stored.
-			if v.VotedTerm == n.committed.VotedTerm && v.VotedSeqNum == n.committed.VotedSeqNum && !n.committed.Applied {
+			if v.CoordTerm == n.committed.Committed.CoordTerm && v.SeqNum == n.committed.Committed.SeqNum && !n.committed.Applied {
 				updated := n.committed
 				updated.Applied = true
 				if err := n.storage.Save(updated); err == nil {
@@ -228,32 +228,32 @@ func (n *PoolerNode) handleOrchState(ind OrchStateIndicator) ([]Request, bool) {
 
 	// Reject if the proposal is stale (term is behind what we've already voted for).
 	// Piggyback fresh status: the orch is behind and our committed state
-	// (CohortMember, PrimaryTerm, QuorumSpec) helps it advance to the correct term.
-	if state.VotingTerm < n.committed.VotedTerm {
+	// (Bootstrapped, PrimaryTerm, QuorumSpec) helps it advance to the correct term.
+	if state.CoordTerm < n.committed.Committed.CoordTerm {
 		s := n.statusUpdate()
 		return []Request{PoolerResponseRequest{
 			ToOrch:       ind.FromOrch,
-			VotingTerm:   state.VotingTerm,
+			CoordTerm:    state.CoordTerm,
 			SeqNum:       state.SeqNum,
 			Accepted:     false,
-			KnownTerm:    n.committed.VotedTerm,
-			KnownCoordID: n.committed.VotedCoord,
+			KnownTerm:    n.committed.Committed.CoordTerm,
+			KnownCoordID: n.committed.Committed.CoordID,
 			Reason:       RejectionReasonStaleTerm,
 			FreshStatus:  &s,
 		}}, false
 	}
 
 	// Reject if same term but a different coordinator already won it (safety invariant).
-	if state.VotingTerm == n.committed.VotedTerm &&
-		n.committed.VotedCoord != "" &&
-		state.CoordID != n.committed.VotedCoord {
+	if state.CoordTerm == n.committed.Committed.CoordTerm &&
+		n.committed.Committed.CoordID != "" &&
+		state.CoordID != n.committed.Committed.CoordID {
 		return []Request{PoolerResponseRequest{
 			ToOrch:       ind.FromOrch,
-			VotingTerm:   state.VotingTerm,
+			CoordTerm:    state.CoordTerm,
 			SeqNum:       state.SeqNum,
 			Accepted:     false,
-			KnownTerm:    n.committed.VotedTerm,
-			KnownCoordID: n.committed.VotedCoord,
+			KnownTerm:    n.committed.Committed.CoordTerm,
+			KnownCoordID: n.committed.Committed.CoordID,
 			Reason:       RejectionReasonCoordConflict,
 		}}, false
 	}
@@ -262,17 +262,17 @@ func (n *PoolerNode) handleOrchState(ind OrchStateIndicator) ([]Request, bool) {
 	// Under a chaotic network, a stale out-of-order proposal (e.g., a Begin at seq=1)
 	// could arrive after a Revoke at seq=2 was already committed and applied, regressing
 	// the Applied flag. The orch has already advanced past this seq, so reject it.
-	if state.VotingTerm == n.committed.VotedTerm &&
-		n.committed.VotedCoord != "" &&
-		state.CoordID == n.committed.VotedCoord &&
-		state.SeqNum < n.committed.VotedSeqNum {
+	if state.CoordTerm == n.committed.Committed.CoordTerm &&
+		n.committed.Committed.CoordID != "" &&
+		state.CoordID == n.committed.Committed.CoordID &&
+		state.SeqNum < n.committed.Committed.SeqNum {
 		return []Request{PoolerResponseRequest{
-			ToOrch:     ind.FromOrch,
-			VotingTerm: state.VotingTerm,
-			SeqNum:     state.SeqNum,
-			Accepted:   false,
-			KnownTerm:  n.committed.VotedTerm,
-			Reason:     RejectionReasonStaleSeqNum,
+			ToOrch:    ind.FromOrch,
+			CoordTerm: state.CoordTerm,
+			SeqNum:    state.SeqNum,
+			Accepted:  false,
+			KnownTerm: n.committed.Committed.CoordTerm,
+			Reason:    RejectionReasonStaleSeqNum,
 		}}, false
 	}
 
@@ -283,10 +283,10 @@ func (n *PoolerNode) handleOrchState(ind OrchStateIndicator) ([]Request, bool) {
 		s := n.statusUpdate()
 		return []Request{PoolerResponseRequest{
 			ToOrch:      ind.FromOrch,
-			VotingTerm:  state.VotingTerm,
+			CoordTerm:   state.CoordTerm,
 			SeqNum:      state.SeqNum,
 			Accepted:    false,
-			KnownTerm:   n.committed.VotedTerm,
+			KnownTerm:   n.committed.Committed.CoordTerm,
 			Reason:      RejectionReasonPrimaryTermMismatch,
 			FreshStatus: &s,
 		}}, false
@@ -302,10 +302,10 @@ func (n *PoolerNode) handleOrchState(ind OrchStateIndicator) ([]Request, bool) {
 		s := n.statusUpdate()
 		return []Request{PoolerResponseRequest{
 			ToOrch:      ind.FromOrch,
-			VotingTerm:  state.VotingTerm,
+			CoordTerm:   state.CoordTerm,
 			SeqNum:      state.SeqNum,
 			Accepted:    false,
-			KnownTerm:   n.committed.VotedTerm,
+			KnownTerm:   n.committed.Committed.CoordTerm,
 			Reason:      RejectionReasonCohortMembership,
 			FreshStatus: &s,
 		}}, false
@@ -325,9 +325,11 @@ func (n *PoolerNode) handleOrchState(ind OrchStateIndicator) ([]Request, bool) {
 	// is always a separate operation: the apply loop delivers ApplySucceededIndicator
 	// once postgres is running and the role change completes.
 	newState := PoolerPersistentState{
-		VotedTerm:    state.VotingTerm,
-		VotedSeqNum:  state.SeqNum,
-		VotedCoord:   state.CoordID,
+		Committed: ProposalID{
+			CoordTerm: state.CoordTerm,
+			CoordID:   state.CoordID,
+			SeqNum:    state.SeqNum,
+		},
 		PrimaryTerm:  state.PrimaryTerm,
 		Primary:      state.Primary,
 		Role:         newRole,
@@ -344,10 +346,10 @@ func (n *PoolerNode) handleOrchState(ind OrchStateIndicator) ([]Request, bool) {
 
 	return []Request{
 		PoolerResponseRequest{
-			ToOrch:     ind.FromOrch,
-			VotingTerm: state.VotingTerm,
-			SeqNum:     state.SeqNum,
-			Accepted:   true,
+			ToOrch:    ind.FromOrch,
+			CoordTerm: state.CoordTerm,
+			SeqNum:    state.SeqNum,
+			Accepted:  true,
 		},
 	}, true
 }

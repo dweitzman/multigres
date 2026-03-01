@@ -239,10 +239,10 @@ func (d *OrchDriver) Run(ctx context.Context) error {
 					//           }
 					//           d.indicators <- consensus.PoolerResponseIndicator{
 					//               FromPooler:   id,
-					//               VotingTerm:   consensus.Term(resp.VotingTerm),
+					//               CoordTerm:    resp.CoordTerm,
 					//               SeqNum:       resp.SeqNum,
 					//               Accepted:     resp.Accepted,
-					//               KnownTerm:    consensus.Term(resp.KnownTerm),
+					//               KnownTerm:    resp.KnownTerm,
 					//               KnownCoordID: consensus.NodeID(resp.KnownCoordId),
 					//           }
 					//       }(poolerID)
@@ -408,14 +408,14 @@ func (d *PoolerDriver) Run(ctx context.Context) error {
 			//     require it — the state-machine guard is sufficient.)
 			committed := d.node.CommittedState()
 			if !d.node.IsApplied() && d.node.PostgresStatus() == consensus.PostgresRunning &&
-				committed.VotedStateID() != d.applyingFor {
-				d.applyingFor = committed.VotedStateID()
+				committed.CommittedStateID() != d.applyingFor {
+				d.applyingFor = committed.CommittedStateID()
 				go func(state consensus.PoolerPersistentState) {
 					if d.pg.apply(state) {
 						select {
 						case d.incoming <- consensus.ApplySucceededIndicator{
-							VotedTerm:   state.VotedTerm,
-							VotedSeqNum: state.VotedSeqNum,
+							CoordTerm: state.Committed.CoordTerm,
+							SeqNum:    state.Committed.SeqNum,
 						}:
 						case <-ctx.Done():
 						}

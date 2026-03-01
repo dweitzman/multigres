@@ -25,7 +25,7 @@
 // in the same Simulator for deterministic testing with chaos injection.
 //
 // Safety invariant: at most one coordinator may successfully commit a state at any
-// given VotingTerm. A pooler that has voted for term T under coordinator C1 will
+// given CoordTerm. A pooler that has voted for term T under coordinator C1 will
 // reject any proposal at term T from a different coordinator C2, reporting C1 as
 // the winner so C2 can escalate to term T+1.
 package consensus
@@ -106,14 +106,22 @@ func (p ConsensusPhase) String() string {
 	}
 }
 
+// ProposalID uniquely identifies a consensus proposal.
+// CoordTerm is the coordinator term (monotonically increasing per election round).
+// CoordID is the orch node that owns this coordinator term.
+// SeqNum orders proposals within a term (1=begin, 2=revoke, 3=establish).
+type ProposalID struct {
+	CoordTerm int64
+	CoordID   NodeID
+	SeqNum    int64
+}
+
 // ConsensusState is the complete cluster configuration at a given term, sequence,
 // and phase. Orch broadcasts this; poolers vote to accept or reject it.
 type ConsensusState struct {
-	VotingTerm  int64  // monotonically increasing; owned by the proposing coordinator
-	CoordID     NodeID // which orch owns this voting term
-	SeqNum      int64  // orders states within a term (1=begin, 2=revoke, 3=establish)
+	ProposalID  // embedded: CoordTerm, CoordID, SeqNum
 	Phase       ConsensusPhase
-	PrimaryTerm int64  // voting term when the current primary was established (0 = no primary)
+	PrimaryTerm int64  // CoordTerm when the current primary was established (0 = no primary)
 	Primary     NodeID // zero value means no primary appointed; check PrimaryTerm > 0
 
 	// QuorumSpec is the serialized Quorum for this Establish proposal, produced by
@@ -141,10 +149,10 @@ type ConsensusState struct {
 	CohortMembers []NodeID
 }
 
-// StateID identifies a specific ConsensusState proposal by its term + sequence number.
+// StateID identifies a specific ConsensusState proposal by its coordinator term + sequence number.
 type StateID struct {
-	VotingTerm int64
-	SeqNum     int64
+	CoordTerm int64
+	SeqNum    int64
 }
 
 // PoolerPersistentState is the durable state a PoolerNode writes to storage.
@@ -164,10 +172,9 @@ type StateID struct {
 //     start. Only a new accepted proposal (writing a new PoolerPersistentState
 //     with its own Applied value) may supersede it.
 type PoolerPersistentState struct {
-	VotedTerm   int64  // highest VotingTerm this pooler has accepted
-	VotedSeqNum int64  // SeqNum within VotedTerm of the last accepted proposal
-	VotedCoord  NodeID // coordinator that owns VotedTerm
-	PrimaryTerm int64  // VotingTerm at which the current primary was established (0 = none)
+	// Committed is the proposal identity of the last accepted proposal.
+	Committed   ProposalID
+	PrimaryTerm int64  // CoordTerm at which the current primary was established (0 = none)
 	Primary     NodeID // who is primary (may be a different node)
 	Role        PoolerRole
 	Applied     bool // true if the committed role change has been operationally executed
@@ -191,10 +198,10 @@ const (
 	// RejectionReasonUnknown is the zero value; used when the response is an
 	// acceptance or when no specific reason is provided.
 	RejectionReasonUnknown RejectionReason = 0
-	// RejectionReasonStaleTerm: the orch's VotingTerm is behind the pooler's
-	// VotedTerm. KnownTerm and KnownCoordID in the response identify the winner.
+	// RejectionReasonStaleTerm: the orch's CoordTerm is behind the pooler's
+	// committed CoordTerm. KnownTerm and KnownCoordID in the response identify the winner.
 	RejectionReasonStaleTerm RejectionReason = 1
-	// RejectionReasonCoordConflict: same VotingTerm but a different coordinator
+	// RejectionReasonCoordConflict: same CoordTerm but a different coordinator
 	// already won it. KnownCoordID in the response identifies the winner.
 	RejectionReasonCoordConflict RejectionReason = 2
 	// RejectionReasonStaleSeqNum: SeqNum goes backwards within the same term
@@ -228,9 +235,9 @@ func (r RejectionReason) String() string {
 	}
 }
 
-// VotedStateID returns the StateID of the last accepted proposal.
-func (s PoolerPersistentState) VotedStateID() StateID {
-	return StateID{VotingTerm: s.VotedTerm, SeqNum: s.VotedSeqNum}
+// CommittedStateID returns the StateID of the last accepted proposal.
+func (s PoolerPersistentState) CommittedStateID() StateID {
+	return StateID{CoordTerm: s.Committed.CoordTerm, SeqNum: s.Committed.SeqNum}
 }
 
 // PoolerStorage is implemented by anything that durably persists PoolerPersistentState.

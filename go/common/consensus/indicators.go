@@ -55,10 +55,10 @@ func (PoolerStatusIndicator) consensusIndicator() {}
 // PoolerResponseIndicator is delivered to OrchNode when a pooler votes on a proposal.
 type PoolerResponseIndicator struct {
 	FromPooler   NodeID
-	VotingTerm   int64 // term of the proposal being responded to
+	CoordTerm    int64 // coordinator term of the proposal being responded to
 	SeqNum       int64 // seq num of the proposal being responded to
 	Accepted     bool
-	KnownTerm    int64           // if rejected: the term the pooler is currently on
+	KnownTerm    int64           // if rejected: the coord term the pooler is currently on
 	KnownCoordID NodeID          // if rejected at the same term: which coordinator won that term
 	Reason       RejectionReason // best-effort hint; zero when Accepted=true
 	// FreshStatus is an optional piggybacked status snapshot from the pooler,
@@ -92,17 +92,17 @@ func (TerminateIndicator) consensusIndicator() {}
 
 // ApplySucceededIndicator is delivered to a PoolerNode when the local postgres apply
 // loop successfully executes the committed role change (e.g. pg_ctl promote, updating
-// postgresql.conf and standby.signal). The term and sequence number identify which
-// proposal was applied; PoolerNode ignores the indicator if the current committed state
-// has since advanced to a newer term or sequence number.
+// postgresql.conf and standby.signal). The coordinator term and sequence number identify
+// which proposal was applied; PoolerNode ignores the indicator if the current committed
+// state has since advanced to a newer term or sequence number.
 //
 // In production, the apply loop runs as a goroutine within the multipooler process and
 // writes this indicator onto the incoming channel after the role change completes.
 // In simulation, an applyDriverNode returns ApplySucceededRequest which the handler
 // converts to this indicator.
 type ApplySucceededIndicator struct {
-	VotedTerm   int64
-	VotedSeqNum int64
+	CoordTerm int64
+	SeqNum    int64
 }
 
 func (ApplySucceededIndicator) consensusIndicator() {}

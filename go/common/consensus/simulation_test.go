@@ -105,9 +105,9 @@ func (n *applyDriverNode) Step(_ int64, _ []consensus.Indicator) []consensus.Req
 	}
 	committed := pooler.CommittedState()
 	return []consensus.Request{consensus.ApplySucceededRequest{
-		Target:      n.poolerID,
-		VotedTerm:   committed.VotedTerm,
-		VotedSeqNum: committed.VotedSeqNum,
+		Target:    n.poolerID,
+		CoordTerm: committed.Committed.CoordTerm,
+		SeqNum:    committed.Committed.SeqNum,
 	}}
 }
 
@@ -162,7 +162,7 @@ func (h *consensusHandler) ProcessRequests(
 		case consensus.PoolerResponseRequest:
 			ind := consensus.PoolerResponseIndicator{
 				FromPooler:   fromNode,
-				VotingTerm:   r.VotingTerm,
+				CoordTerm:    r.CoordTerm,
 				SeqNum:       r.SeqNum,
 				Accepted:     r.Accepted,
 				KnownTerm:    r.KnownTerm,
@@ -202,8 +202,8 @@ func (h *consensusHandler) ProcessRequests(
 			result[r.Target] = append(result[r.Target], consensus.TerminateIndicator{})
 		case consensus.ApplySucceededRequest:
 			result[r.Target] = append(result[r.Target], consensus.ApplySucceededIndicator{
-				VotedTerm:   r.VotedTerm,
-				VotedSeqNum: r.VotedSeqNum,
+				CoordTerm: r.CoordTerm,
+				SeqNum:    r.SeqNum,
 			})
 		case consensus.PoolerMembershipRequest:
 			orchsToNotify := h.orchIDs()
@@ -392,8 +392,8 @@ func (c *appliedMonotonicity) Eval(sim *dstsim.Simulator[consensus.Indicator, co
 		prev, hasPrev := c.prev[p.ID()]
 		if hasPrev && prev.Applied && !curr.Applied {
 			// Applied reverted — only acceptable if the proposal advanced.
-			advanced := curr.VotedTerm > prev.VotedTerm ||
-				(curr.VotedTerm == prev.VotedTerm && curr.VotedSeqNum > prev.VotedSeqNum)
+			advanced := curr.Committed.CoordTerm > prev.Committed.CoordTerm ||
+				(curr.Committed.CoordTerm == prev.Committed.CoordTerm && curr.Committed.SeqNum > prev.Committed.SeqNum)
 			if !advanced {
 				return false
 			}
@@ -415,7 +415,7 @@ func (c *appliedMonotonicity) Describe(sim *dstsim.Simulator[consensus.Indicator
 		if prev.Applied && !curr.Applied {
 			violations = append(violations, fmt.Sprintf(
 				"node %v: Applied reverted without proposal advance (term=%d seq=%d → term=%d seq=%d)",
-				p.ID(), prev.VotedTerm, prev.VotedSeqNum, curr.VotedTerm, curr.VotedSeqNum,
+				p.ID(), prev.Committed.CoordTerm, prev.Committed.SeqNum, curr.Committed.CoordTerm, curr.Committed.SeqNum,
 			))
 		}
 	}

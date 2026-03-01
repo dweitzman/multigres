@@ -240,8 +240,8 @@ func (n *OrchNode) handlePoolerStatus(ind PoolerStatusIndicator) {
 	}
 
 	// If this pooler reports a higher term than we knew about, our view was stale.
-	if ind.State.VotedTerm > n.term {
-		n.term = ind.State.VotedTerm
+	if ind.State.Committed.CoordTerm > n.term {
+		n.term = ind.State.Committed.CoordTerm
 		if n.phase != phaseIdle {
 			// We were trying to act on out-of-date information. Abandon the current
 			// appointment attempt and back off so a competing coordinator can make progress.
@@ -253,8 +253,8 @@ func (n *OrchNode) handlePoolerStatus(ind PoolerStatusIndicator) {
 
 	// Record applied status for the current in-flight proposal.
 	if n.progress != nil && ind.Applied &&
-		ind.State.VotedTerm == n.progress.proposal.VotingTerm &&
-		ind.State.VotedSeqNum == n.progress.proposal.SeqNum {
+		ind.State.Committed.CoordTerm == n.progress.proposal.CoordTerm &&
+		ind.State.Committed.SeqNum == n.progress.proposal.SeqNum {
 		n.progress.appliers[ind.PoolerID] = true
 	}
 }
@@ -265,7 +265,7 @@ func (n *OrchNode) handlePoolerResponse(ind PoolerResponseIndicator) {
 	}
 	// Discard responses that do not match the current proposal: they are late
 	// deliveries from a previous round (different term or seq num).
-	if ind.VotingTerm != n.progress.proposal.VotingTerm ||
+	if ind.CoordTerm != n.progress.proposal.CoordTerm ||
 		ind.SeqNum != n.progress.proposal.SeqNum {
 		return
 	}
@@ -356,9 +356,11 @@ func (n *OrchNode) startBegin(tick int64) []Request {
 	// Carry forward the last confirmed topology so poolers know the coordinator
 	// is changing, not the primary (that change comes in Revoke/Establish).
 	proposal := ConsensusState{
-		VotingTerm:    n.term,
-		CoordID:       n.id,
-		SeqNum:        n.nextSeqNum(),
+		ProposalID: ProposalID{
+			CoordTerm: n.term,
+			CoordID:   n.id,
+			SeqNum:    n.nextSeqNum(),
+		},
 		Phase:         PhaseBegin,
 		CohortMembers: n.cohortMembersFromStatus(),
 	}
@@ -391,9 +393,11 @@ func (n *OrchNode) startRevoke(tick int64) []Request {
 	oldPrimaryTerm := n.confirmedState.PrimaryTerm
 
 	proposal := ConsensusState{
-		VotingTerm:    n.term,
-		CoordID:       n.id,
-		SeqNum:        n.nextSeqNum(),
+		ProposalID: ProposalID{
+			CoordTerm: n.term,
+			CoordID:   n.id,
+			SeqNum:    n.nextSeqNum(),
+		},
 		Phase:         PhaseRevoke,
 		CohortMembers: n.cohortMembersFromStatus(),
 		// PrimaryTerm=0 and Primary="" signal no primary is currently appointed.
@@ -434,9 +438,11 @@ func (n *OrchNode) startEstablish(tick int64) []Request {
 	}
 
 	proposal := ConsensusState{
-		VotingTerm:    n.term,
-		CoordID:       n.id,
-		SeqNum:        n.nextSeqNum(),
+		ProposalID: ProposalID{
+			CoordTerm: n.term,
+			CoordID:   n.id,
+			SeqNum:    n.nextSeqNum(),
+		},
 		Phase:         PhaseEstablish,
 		PrimaryTerm:   n.term,
 		Primary:       quorum.Primary(),
@@ -555,12 +561,12 @@ func (n *OrchNode) jitterTicks() int64 {
 }
 
 // proposalKey uniquely identifies an Establish proposal across the cluster.
-// For Establish proposals VotingTerm == PrimaryTerm, so VotedTerm is sufficient
+// For Establish proposals CoordTerm == PrimaryTerm, so CoordTerm alone is sufficient
 // to identify the term at which a primary was appointed.
 type proposalKey struct {
-	votedTerm   int64
-	votedSeqNum int64
-	votedCoord  NodeID
+	coordTerm int64
+	seqNum    int64
+	coordID   NodeID
 }
 
 // learnEstablishedQuorum checks whether the pooler status reports already show
@@ -610,9 +616,9 @@ func (n *OrchNode) learnEstablishedQuorum() {
 			continue
 		}
 		key := proposalKey{
-			votedTerm:   info.state.VotedTerm,
-			votedSeqNum: info.state.VotedSeqNum,
-			votedCoord:  info.state.VotedCoord,
+			coordTerm: info.state.Committed.CoordTerm,
+			seqNum:    info.state.Committed.SeqNum,
+			coordID:   info.state.Committed.CoordID,
 		}
 		c, ok := candidates[key]
 		if !ok {
@@ -632,24 +638,24 @@ func (n *OrchNode) learnEstablishedQuorum() {
 		return
 	}
 
-	// Sort candidates by VotedTerm descending so we adopt the most recent quorum.
+	// Sort candidates by CoordTerm descending so we adopt the most recent quorum.
 	slices.SortFunc(keys, func(a, b proposalKey) int {
-		if a.votedTerm != b.votedTerm {
-			if a.votedTerm > b.votedTerm {
+		if a.coordTerm != b.coordTerm {
+			if a.coordTerm > b.coordTerm {
 				return -1
 			}
 			return 1
 		}
-		if a.votedSeqNum != b.votedSeqNum {
-			if a.votedSeqNum > b.votedSeqNum {
+		if a.seqNum != b.seqNum {
+			if a.seqNum > b.seqNum {
 				return -1
 			}
 			return 1
 		}
-		if a.votedCoord < b.votedCoord {
+		if a.coordID < b.coordID {
 			return -1
 		}
-		if a.votedCoord > b.votedCoord {
+		if a.coordID > b.coordID {
 			return 1
 		}
 		return 0
@@ -677,11 +683,13 @@ func (n *OrchNode) learnEstablishedQuorum() {
 		// phase carries the correct PrimaryTerm/Primary and uses the right revocation
 		// quorum even if a fresh appointment turns out to be needed.
 		confirmed := ConsensusState{
-			VotingTerm:  key.votedTerm,
-			CoordID:     key.votedCoord,
-			SeqNum:      key.votedSeqNum,
+			ProposalID: ProposalID{
+				CoordTerm: key.coordTerm,
+				CoordID:   key.coordID,
+				SeqNum:    key.seqNum,
+			},
 			Phase:       PhaseEstablish,
-			PrimaryTerm: key.votedTerm,
+			PrimaryTerm: key.coordTerm,
 			Primary:     quorum.Primary(),
 			QuorumSpec:  c.quorumSpec,
 		}

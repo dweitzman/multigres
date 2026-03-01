@@ -64,12 +64,14 @@ func TestBootstrap_CohortRejectionBlocksBootstrapOrch(t *testing.T) {
 	// Create a pooler that is already an established cohort member.
 	store := &memStorage{state: consensus.PoolerPersistentState{
 		CohortMember: true,
-		VotedTerm:    5,
-		VotedSeqNum:  3,
-		VotedCoord:   orchA,
-		Role:         consensus.RoleReplica,
-		Primary:      pooler1,
-		PrimaryTerm:  5,
+		Committed: consensus.ProposalID{
+			CoordTerm: 5,
+			SeqNum:    3,
+			CoordID:   orchA,
+		},
+		Role:        consensus.RoleReplica,
+		Primary:     pooler1,
+		PrimaryTerm: 5,
 	}}
 	p := consensus.NewPoolerNode(pooler2, store)
 
@@ -78,10 +80,12 @@ func TestBootstrap_CohortRejectionBlocksBootstrapOrch(t *testing.T) {
 	bootstrapBegin := consensus.OrchStateIndicator{
 		FromOrch: orchB,
 		State: consensus.ConsensusState{
-			VotingTerm: 10, // higher term than any committed
-			CoordID:    orchB,
-			SeqNum:     1,
-			Phase:      consensus.PhaseBegin,
+			ProposalID: consensus.ProposalID{
+				CoordTerm: 10, // higher term than any committed
+				CoordID:   orchB,
+				SeqNum:    1,
+			},
+			Phase: consensus.PhaseBegin,
 			// CohortMembers intentionally empty: orch has no knowledge of existing cohort
 		},
 	}
@@ -103,12 +107,14 @@ func TestBootstrap_CohortRejectionBlocksBootstrapOrch(t *testing.T) {
 func TestBootstrap_CohortRejectionDoesNotBlockKnownCohort(t *testing.T) {
 	store := &memStorage{state: consensus.PoolerPersistentState{
 		CohortMember: true,
-		VotedTerm:    5,
-		VotedSeqNum:  3,
-		VotedCoord:   orchA,
-		Role:         consensus.RoleReplica,
-		Primary:      pooler1,
-		PrimaryTerm:  5,
+		Committed: consensus.ProposalID{
+			CoordTerm: 5,
+			SeqNum:    3,
+			CoordID:   orchA,
+		},
+		Role:        consensus.RoleReplica,
+		Primary:     pooler1,
+		PrimaryTerm: 5,
 	}}
 	p := consensus.NewPoolerNode(pooler2, store)
 
@@ -116,9 +122,11 @@ func TestBootstrap_CohortRejectionDoesNotBlockKnownCohort(t *testing.T) {
 	reappointBegin := consensus.OrchStateIndicator{
 		FromOrch: orchB,
 		State: consensus.ConsensusState{
-			VotingTerm:    10,
-			CoordID:       orchB,
-			SeqNum:        1,
+			ProposalID: consensus.ProposalID{
+				CoordTerm: 10,
+				CoordID:   orchB,
+				SeqNum:    1,
+			},
 			Phase:         consensus.PhaseBegin,
 			Primary:       pooler1,
 			PrimaryTerm:   5,
