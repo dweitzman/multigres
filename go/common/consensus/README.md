@@ -36,7 +36,24 @@ Begin → Revoke → Establish
    the new primary and enough sync replicas have all reported `Applied=true`.
 
 If any phase fails to achieve quorum within `appointmentPhaseTimeoutTicks`, the orch escalates the voting term
-and restarts the appointment from Begin. When an orch discovers a competing coordinator has a higher term, it backs
+and restarts the appointment from Begin.
+
+**Term vocabulary.** The protocol uses two distinct term numbers that serve different purposes and
+must not be confused:
+
+- **Coordinator term** (currently named `VotingTerm` / `VotedTerm` in code — planned rename) — the
+  orch's election counter. It increments on every Begin attempt: retries, orch restarts, and
+  competing coordinators all advance it. All three phases of a single appointment cycle share the
+  same coordinator term. A high coordinator term means many election rounds have happened; it says
+  nothing by itself about the state of postgres replication.
+- **Primary term (`PrimaryTerm`)** — the replication quorum epoch. It is set to the coordinator
+  term at which the current primary was _successfully established_ via the Establish phase. It only
+  advances when a new primary is appointed. Multiple coordinator-term increments (Begin retries,
+  orch crashes) can occur without changing the primary term or touching postgres replication at all.
+
+This distinction is critical in `learnEstablishedQuorum` and anywhere the code reasons about
+whether a replication quorum is still intact: that is a question about `PrimaryTerm`, not the
+coordinator term. When an orch discovers a competing coordinator has a higher term, it backs
 off for a jittered interval before retrying, giving the winning coordinator time to finish.
 
 **Rejection signals and stale-view recovery.** When a pooler rejects a proposal it includes a
@@ -205,6 +222,17 @@ Small improvements that make the existing code more correct and configurable:
   state, applied flag, and postgres health back to the orch.
 - **Wire up `PostgresApplier`** — fill in `apply()` (ALTER SYSTEM, pg_ctl promote / standby
   reconfigure, pg_reload_conf) in `examples/pg_driver/`.
+- **TODO: rename `VotingTerm`/`VotedTerm` → `CoordTerm`** throughout the code to match the
+  "coordinator term" vocabulary above and distinguish it clearly from `PrimaryTerm`.
+- **TODO: rename and reframe `CohortMember`** — see Stage 2 for the full rationale.
+- **TODO: fix `learnEstablishedQuorum` grouping key** — currently groups poolers by their current
+  `(VotedTerm, VotedSeqNum)`, which reflects the most-recently voted proposal (possibly a Begin at
+  a higher term). After a Begin-only cycle (no Establish), poolers advance `VotedTerm` but
+  `QuorumSpec` and `Applied=true` remain from the old Establish. The correct grouping key is
+  `PrimaryTerm` (the voting term at which the Establish ran), combined with `Applied=true` on all
+  poolers sharing that `PrimaryTerm`. Until fixed, `learnEstablishedQuorum` may fail to recognise
+  a still-intact replication quorum after multiple Begin-only cycles, causing an unnecessary
+  re-appointment instead of simply tracking the already-appointed primary.
 - ✅ **Bootstrap safety via `CohortMembers`** — see Stage 2 below.
 
 ### Stage 2 — Bootstrapping
@@ -226,33 +254,78 @@ and `CohortMember bool` in `PoolerPersistentState`:
   and receive pooler status updates before it will include the full cohort in its proposals.
 
 No explicit `Bootstrap bool` flag is needed: the absence of the pooler's own ID from
-`CohortMembers` is a sufficient and reliable signal. A high term number alone is not sufficient
-protection because bootstrap terms could keep incrementing and a high term must never override an
-already-established cohort.
+`CohortMembers` is a sufficient and reliable signal. A high coordinator term alone is not
+sufficient protection because bootstrap terms could keep incrementing and a high term must never
+override an already-established cohort.
+
+**TODO: reframe and rename `CohortMember`.** The name implies general cohort membership tracking,
+but its actual and intended purpose is narrower: **bootstrap protection**. The field records
+"this pooler has witnessed a successful Establish and knows a real cluster exists; it must not
+silently participate in a fresh bootstrap that would overwrite that cluster." A clearer name
+(e.g. `Bootstrapped`) would make this intent obvious and avoid scope creep into cohort admission
+protocols that aren't needed for the protection to work. Under the cleaner framing:
+
+- A node sets the flag as soon as it observes any successful Establish (not just one that lists
+  its own ID) — this is the "viral" property: once any node in the cluster knows the cluster
+  exists, it will refuse naive bootstrap attempts.
+- A node leaving the cohort does _not_ need to unset the flag: the flag means "I know this
+  cluster exists", not "I am currently a voting member". That distinction collapses the
+  complexity in Stage 2.5's removal protocol.
 
 **Cohort admission** (tracked below in the roadmap) is a separate concern: once the cluster is
 bootstrapped, admitting new nodes to the _voting_ cohort must itself be a consensus decision.
 Until that is implemented, nodes are added directly in simulation and the orch accepts them
 without a cohort-admission round.
 
-### Stage 2.5 — Cohort admission
+### Stage 2.5 — Cohort membership changes
 
-Once a cluster is bootstrapped, adding new nodes to the _voting_ cohort must be a consensus
-decision, not just an orch-side discovery event. The orch drives the process by asking the primary
-to persist a cohort-membership record; that record replicates to sync replicas via normal WAL
-streaming, so all cohort members learn about the new participant. Before any future Begin term, a
-newly admitted node waits until it has applied WAL through its admission record so it knows the
-full cohort and can compute quorum correctly.
+Once a cluster is bootstrapped, adding or removing nodes from the _voting_ cohort is itself a
+consensus decision. The designed protocol for cohort changes:
 
-Note that being a _replicating_ node and being a _voting_ cohort member are distinct: a newly
-discovered pooler may begin streaming WAL from the current primary immediately, but it does not
-participate in voting (and does not count toward quorum) until it has been formally admitted.
-Whether a node _wants_ to join the voting cohort (vs. remaining a non-voting replica) is a policy
-decision outside the consensus state machine.
+**Adding a node:**
 
-Currently simulation adds nodes directly and the orch accepts them without a cohort-admission
-round; that shortcut is fine for testing the appointment protocol but must be addressed before
-production use.
+1. The orch starts a new voting term. The `Begin` proposal carries the current cohort in
+   `CohortMembers` (proof that the orch knows the existing membership). Existing cohort members
+   will reject proposals that omit them, so this proof is mandatory.
+2. If the write quorum is still satisfiable without revoking (e.g., adding a replica when the
+   existing sync-replica set remains intact), the orch may skip the Revoke phase entirely.
+3. The `Establish` proposal lists the updated `CohortMembers` including the new node. Poolers that
+   see their own ID in this list set `CohortMember=true` (sticky).
+4. **Postgres-backed durability:** the new cohort membership is durably committed when the primary
+   writes the cohort record to postgres and that write streams to a quorum of sync replicas via
+   WAL. The primary sets `Applied=true` only after the cohort WAL record has been received and
+   acknowledged by the required sync replicas. This means the cohort change survives a primary
+   crash: the next orch restart will learn the new cohort from the replica status reports.
+
+**Removing a node:**
+
+The same voting protocol applies, but the `Establish` proposal omits the departing node from
+`CohortMembers`. Normally a pooler with `CohortMember=true` rejects proposals that exclude it
+(bootstrap protection). For intentional removal, this stickiness is relaxed: a pooler that already
+voted for `Begin` at the same `VotingTerm` and `CoordID` as the arriving `Establish` knows the
+orch proved cohort knowledge at `Begin` time, so it accepts the `Establish` even if it is excluded.
+This is the signal that the orch is intentionally shrinking the cohort rather than bypassing it.
+
+**What changes — and what doesn't:**
+
+Cohort membership changes use the normal three-phase protocol with the same safety guarantees.
+However, if the quorum composition (primary, sync-replica set, ack threshold) is unchanged, the
+`QuorumSpec` in `Establish` remains the same and postgres replication settings do not need to be
+reconfigured. The primary still marks `Applied=true` only after the cohort WAL record reaches sync
+durability — even if no postgres role change is needed.
+
+**Relationship between replication and voting:**
+
+Being a _replicating_ node and being a _voting_ cohort member are distinct. A newly discovered
+pooler may begin streaming WAL from the current primary immediately, but it does not participate
+in voting (and does not count toward quorum) until it has been formally admitted via an `Establish`
+that lists it in `CohortMembers`. Whether a node should join the voting cohort (vs. remaining a
+non-voting replica) is a policy decision outside the consensus state machine.
+
+**Current status:** simulation adds nodes directly and the orch accepts them without a
+cohort-admission round; that shortcut is fine for testing the appointment protocol but must be
+addressed before production use. The CohortMember stickiness relaxation for intentional removal
+is designed but not yet implemented in `PoolerNode`.
 
 ### Stage 3 — Re-bootstrapping
 

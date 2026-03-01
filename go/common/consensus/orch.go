@@ -16,6 +16,7 @@ package consensus
 
 import (
 	"math/rand/v2"
+	"slices"
 
 	"github.com/multigres/multigres/go/tools/dstsim/sortedmaps"
 )
@@ -313,7 +314,8 @@ func (n *OrchNode) advance(tick int64) []Request {
 			// Before starting a new appointment, check whether another coordinator has
 			// already established a primary. If so, adopt that state so we don't
 			// compete unnecessarily.
-			if n.learnEstablishedQuorum() {
+			n.learnEstablishedQuorum()
+			if n.appointed {
 				return nil
 			}
 			if tick < n.backoffUntil {
@@ -552,60 +554,150 @@ func (n *OrchNode) jitterTicks() int64 {
 	return appointmentPhaseTimeoutTicks + n.rng.Int64N(appointmentPhaseTimeoutTicks)
 }
 
+// proposalKey uniquely identifies an Establish proposal across the cluster.
+// For Establish proposals VotingTerm == PrimaryTerm, so VotedTerm is sufficient
+// to identify the term at which a primary was appointed.
+type proposalKey struct {
+	votedTerm   int64
+	votedSeqNum int64
+	votedCoord  NodeID
+}
+
 // learnEstablishedQuorum checks whether the pooler status reports already show
 // that an Establish quorum has been satisfied (another coordinator completed an
-// appointment). If so, it adopts the confirmed state so we don't compete unnecessarily.
+// appointment). It updates confirmedState and confirmedQuorum when an established
+// quorum is found, and sets n.appointed = true when the primary is currently running.
+//
+// Unlike the naive approach of only examining poolers with Role=Primary, this
+// groups ALL poolers that have a persisted QuorumSpec by their proposal identity.
+// A pooler that applied (Applied=true) and then stopped is still evidence that the
+// quorum was established; excluding stopped primaries would prevent learning the
+// quorum after a crash, which is precisely when learning it matters most.
+//
+// If the primary is stopped, confirmedState and confirmedQuorum are still recorded
+// (for accurate revocation computation in the upcoming Begin) but n.appointed is
+// left false so advance() proceeds to startBegin().
 //
 // This is a best-effort reconciliation of potentially stale, inconsistent status
 // signals: it resolves what the quorum demonstrably agreed on, but the result may
 // be out of date by the time Begin is sent. That's fine — Begin rejections from
 // poolers with higher terms will surface any gaps and force a retry with fresher data.
-func (n *OrchNode) learnEstablishedQuorum() bool {
-	for primaryID, primaryInfo := range sortedmaps.All(n.knownPoolers) {
-		if !primaryInfo.applied || primaryInfo.postgresStatus == PostgresStopped {
-			continue
-		}
-		if primaryInfo.state.Role != RolePrimary {
-			continue
-		}
-		if len(primaryInfo.state.QuorumSpec) == 0 {
-			continue // no quorum spec persisted; can't reconstruct the historical quorum
-		}
+func (n *OrchNode) learnEstablishedQuorum() {
+	// Collect candidates: any pooler that persisted a QuorumSpec from an Establish
+	// proposal. Group by the proposal's unique identity.
+	//
+	// NOTE(correctness gap): we group by the pooler's current (VotedTerm, VotedSeqNum),
+	// not by the primary term at which the Establish actually ran. After a Begin-only cycle
+	// (orch increments VotingTerm without completing a new Establish), poolers advance
+	// VotedTerm but QuorumSpec and Applied=true remain from the old Establish. The result:
+	// we build a candidate keyed to the Begin proposal, find no appliers (Applied=false for
+	// Begin since there is no role change), and incorrectly skip a still-intact quorum.
+	//
+	// The correct fix is to group by PrimaryTerm (the voting term at which the Establish ran,
+	// preserved through subsequent Begin/Revoke proposals) and match poolers by Applied=true
+	// AND PrimaryTerm == group.PrimaryTerm. Tracked in README Stage 1 TODO.
+	type candidate struct {
+		quorumSpec []byte
+		appliers   map[NodeID]bool
+	}
+	candidates := make(map[proposalKey]*candidate)
+	// keys is built alongside candidates to avoid a separate non-deterministic
+	// map range when collecting keys for sorting.
+	var keys []proposalKey
 
-		// Deserialise the quorum from the persisted QuorumSpec so IsEstablished
-		// uses the historically committed membership, not what the policy would propose today.
-		quorum, err := n.policy.DeserializeQuorum(primaryInfo.state.QuorumSpec)
+	for id, info := range sortedmaps.All(n.knownPoolers) {
+		if len(info.state.QuorumSpec) == 0 {
+			continue
+		}
+		key := proposalKey{
+			votedTerm:   info.state.VotedTerm,
+			votedSeqNum: info.state.VotedSeqNum,
+			votedCoord:  info.state.VotedCoord,
+		}
+		c, ok := candidates[key]
+		if !ok {
+			c = &candidate{
+				quorumSpec: info.state.QuorumSpec,
+				appliers:   make(map[NodeID]bool),
+			}
+			candidates[key] = c
+			keys = append(keys, key)
+		}
+		if info.applied {
+			c.appliers[id] = true
+		}
+	}
+
+	if len(keys) == 0 {
+		return
+	}
+
+	// Sort candidates by VotedTerm descending so we adopt the most recent quorum.
+	slices.SortFunc(keys, func(a, b proposalKey) int {
+		if a.votedTerm != b.votedTerm {
+			if a.votedTerm > b.votedTerm {
+				return -1
+			}
+			return 1
+		}
+		if a.votedSeqNum != b.votedSeqNum {
+			if a.votedSeqNum > b.votedSeqNum {
+				return -1
+			}
+			return 1
+		}
+		if a.votedCoord < b.votedCoord {
+			return -1
+		}
+		if a.votedCoord > b.votedCoord {
+			return 1
+		}
+		return 0
+	})
+
+	for _, key := range keys {
+		c := candidates[key]
+
+		// Deserialise the quorum so IsEstablished uses the historically committed
+		// membership, not what the policy would propose today.
+		quorum, err := n.policy.DeserializeQuorum(c.quorumSpec)
 		if err != nil {
 			continue
 		}
 
-		// Build appliers: nodes that applied the same proposal as the primary.
-		appliers := make(map[NodeID]bool)
-		for id, info := range sortedmaps.All(n.knownPoolers) {
-			if info.applied &&
-				info.state.VotedTerm == primaryInfo.state.VotedTerm &&
-				info.state.VotedSeqNum == primaryInfo.state.VotedSeqNum {
-				appliers[id] = true
-			}
+		// IsEstablished requires both the primary and enough sync replicas to have
+		// applied the proposal. We do not infer establishment from replicas alone —
+		// without the primary's confirmation we cannot rule out that a higher-term
+		// appointment was made and we simply haven't seen it yet.
+		if !quorum.IsEstablished(c.appliers) {
+			continue
 		}
 
-		if quorum.IsEstablished(appliers) {
-			confirmed := ConsensusState{
-				VotingTerm:  primaryInfo.state.PrimaryTerm,
-				CoordID:     primaryInfo.state.VotedCoord,
-				SeqNum:      primaryInfo.state.VotedSeqNum,
-				Phase:       PhaseEstablish,
-				PrimaryTerm: primaryInfo.state.PrimaryTerm,
-				Primary:     primaryID,
-				QuorumSpec:  primaryInfo.state.QuorumSpec,
-			}
-			n.confirmedState = &confirmed
-			n.confirmedQuorum = quorum
-			n.appointed = true
-			return true
+		// Adopt this quorum: record confirmedState and confirmedQuorum so the Begin
+		// phase carries the correct PrimaryTerm/Primary and uses the right revocation
+		// quorum even if a fresh appointment turns out to be needed.
+		confirmed := ConsensusState{
+			VotingTerm:  key.votedTerm,
+			CoordID:     key.votedCoord,
+			SeqNum:      key.votedSeqNum,
+			Phase:       PhaseEstablish,
+			PrimaryTerm: key.votedTerm,
+			Primary:     quorum.Primary(),
+			QuorumSpec:  c.quorumSpec,
 		}
+		n.confirmedState = &confirmed
+		n.confirmedQuorum = quorum
+
+		// If the primary is currently stopped, consensus is still intact but the
+		// cluster needs a new appointment. Record the quorum (above) so the upcoming
+		// Begin has accurate revocation data, but leave n.appointed false so
+		// advance() proceeds to startBegin().
+		if pi, ok := n.knownPoolers[quorum.Primary()]; ok && pi.postgresStatus == PostgresStopped {
+			return
+		}
+		n.appointed = true
+		return
 	}
-	return false
 }
 
 // cohortMembersFromStatus returns the IDs of all known poolers that have reported
