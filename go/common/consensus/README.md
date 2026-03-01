@@ -355,7 +355,35 @@ Stage 5 adds:
   or adding a separate type-tagged JSON format.
 - Additional policies as operational needs evolve
 
-### Stage 6 — Timeline / WAL support (deferred)
+### Stage 6 — Metrics and observability
+
+The protocol produces a rich stream of events (appointment started, term escalated, phase timed
+out, quorum met, primary stopped, etc.) that are valuable both for production monitoring and for
+simulation assertions. The open design question is where metrics support lives:
+
+**Option A — Client-side only.** `OrchNode` and `PoolerNode` remain pure state machines with no
+metrics hooks; callers instrument what they care about by inspecting the indicators they deliver
+and the requests they receive. Clean separation of concerns; `dstsim` stays a generic library.
+
+**Option B — Native event emission in `dstsim`/`consensus`.** The simulator (or the nodes
+themselves) emit structured events alongside normal request/indicator flow. This enables:
+
+- The simulator tracking metrics across a full run (appointment latency, timeout counts,
+  failover reasons, term escalation rates) without requiring each test to instrument manually.
+- Simulation conditions and `sim.Always()` assertions that reference metrics (e.g. "at most N
+  term escalations per 100 ticks", "appointments always complete within K ticks").
+- Visualising simulation traces by metric rather than raw tick-by-tick output.
+- Catching "should be impossible" situations (e.g. simultaneous primaries lasting > 1 tick)
+  as metric-threshold assertions rather than boolean invariants.
+
+The argument for Option B is that the simulator is already the natural place to aggregate
+cross-node, cross-tick state; adding a lightweight structured event channel doesn't violate
+the pure-state-machine property of the nodes themselves (events are emitted as an output, like
+requests). A minimal first step would be a `sim.Metrics()` accessor that exposes per-node
+counters the simulator collects passively from the request stream, without requiring node code
+changes.
+
+### Stage 7 — Timeline / WAL support (deferred)
 
 Handle WAL timelines safely in emergency failovers: no committed writes lost, minimal pg_rewind,
 safe promotion rules when multiple orchs compete. Do not start until Stages 1–5 are solid.
