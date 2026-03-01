@@ -160,14 +160,31 @@ func (h *consensusHandler) ProcessRequests(
 				})
 			}
 		case consensus.PoolerResponseRequest:
-			result[r.ToOrch] = append(result[r.ToOrch], consensus.PoolerResponseIndicator{
+			ind := consensus.PoolerResponseIndicator{
 				FromPooler:   fromNode,
 				VotingTerm:   r.VotingTerm,
 				SeqNum:       r.SeqNum,
 				Accepted:     r.Accepted,
 				KnownTerm:    r.KnownTerm,
 				KnownCoordID: r.KnownCoordID,
-			})
+				Reason:       r.Reason,
+			}
+			if r.FreshStatus != nil {
+				// Assign a StatusSeq and embed as a PoolerStatusIndicator so the orch
+				// can process it via handlePoolerStatus with correct ordering semantics.
+				h.statusSeqMap[fromNode]++
+				seq := h.statusSeqMap[fromNode]
+				freshInd := consensus.PoolerStatusIndicator{
+					PoolerID:       fromNode,
+					StatusSeq:      seq,
+					State:          r.FreshStatus.State,
+					Applied:        r.FreshStatus.Applied,
+					PostgresStatus: r.FreshStatus.PostgresStatus,
+					LastApplied:    r.FreshStatus.LastApplied,
+				}
+				ind.FreshStatus = &freshInd
+			}
+			result[r.ToOrch] = append(result[r.ToOrch], ind)
 		case consensus.PoolerStatusUpdateRequest:
 			h.statusSeqMap[fromNode]++
 			seq := h.statusSeqMap[fromNode]
@@ -268,9 +285,15 @@ func (c *atMostOneQuorum) Eval(sim *dstsim.Simulator[consensus.Indicator, consen
 			if assignment[i].Role != consensus.RolePrimary {
 				continue
 			}
-			// Reconstruct the quorum from the committed SyncReplicas (not what
-			// the policy would propose today) so IsWriteQuorum uses the original members.
-			q := c.policy.ReconstructQuorum(pi.id, assignment[i].SyncReplicas)
+			if len(assignment[i].QuorumSpec) == 0 {
+				continue // no quorum spec yet; can't evaluate write quorum
+			}
+			// Deserialise the historical quorum (not what the policy would propose
+			// today) so IsWriteQuorum uses the originally committed members.
+			q, err := c.policy.DeserializeQuorum(assignment[i].QuorumSpec)
+			if err != nil {
+				continue
+			}
 			var streaming []consensus.NodeID
 			for j, rj := range poolers {
 				if j != i && assignment[j].Primary == pi.id {
@@ -333,12 +356,12 @@ func (c *atMostOneQuorum) Describe(sim *dstsim.Simulator[consensus.Indicator, co
 			states := p.PossibleStates()
 			committed := states[0]
 			if len(states) == 1 {
-				lines = append(lines, fmt.Sprintf("%v: committed(role=%v primary=%v syncReplicas=%v applied=%v)",
-					node.ID(), committed.Role, committed.Primary, committed.SyncReplicas, committed.Applied))
+				lines = append(lines, fmt.Sprintf("%v: committed(role=%v primary=%v cohortMember=%v applied=%v)",
+					node.ID(), committed.Role, committed.Primary, committed.CohortMember, committed.Applied))
 			} else {
 				lastApplied := states[1]
-				lines = append(lines, fmt.Sprintf("%v: committed(role=%v primary=%v syncReplicas=%v applied=%v) lastApplied(role=%v primary=%v)",
-					node.ID(), committed.Role, committed.Primary, committed.SyncReplicas, committed.Applied,
+				lines = append(lines, fmt.Sprintf("%v: committed(role=%v primary=%v cohortMember=%v applied=%v) lastApplied(role=%v primary=%v)",
+					node.ID(), committed.Role, committed.Primary, committed.CohortMember, committed.Applied,
 					lastApplied.Role, lastApplied.Primary))
 			}
 		}

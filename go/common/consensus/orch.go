@@ -284,6 +284,19 @@ func (n *OrchNode) handlePoolerResponse(ind PoolerResponseIndicator) {
 	}
 	n.phase = phaseIdle
 	n.progress = nil
+
+	// Process any piggybacked fresh status now that we are back in idle, so
+	// knownPoolers is up to date for the next advance() cycle.
+	if ind.FreshStatus != nil {
+		n.handlePoolerStatus(*ind.FreshStatus)
+	}
+
+	// TODO(retry): When the rejection was due to a stale view (StaleTerm,
+	// PrimaryTermMismatch, CohortMembership) and the piggybacked fresh status shows
+	// no competing coordinator is active at the higher term, we could skip the backoff
+	// and retry immediately with our updated knowledge. Currently we always backoff,
+	// which is safe but adds latency. Implementing this requires distinguishing
+	// "stale view, no active competitor" from "lost a race with another orch."
 }
 
 // advance transitions the phase state machine and emits proposals as needed.
@@ -300,7 +313,7 @@ func (n *OrchNode) advance(tick int64) []Request {
 			// Before starting a new appointment, check whether another coordinator has
 			// already established a primary. If so, adopt that state so we don't
 			// compete unnecessarily.
-			if n.learnEstablishedPrimary() {
+			if n.learnEstablishedQuorum() {
 				return nil
 			}
 			if tick < n.backoffUntil {
@@ -341,15 +354,15 @@ func (n *OrchNode) startBegin(tick int64) []Request {
 	// Carry forward the last confirmed topology so poolers know the coordinator
 	// is changing, not the primary (that change comes in Revoke/Establish).
 	proposal := ConsensusState{
-		VotingTerm: n.term,
-		CoordID:    n.id,
-		SeqNum:     n.nextSeqNum(),
-		Phase:      PhaseBegin,
+		VotingTerm:    n.term,
+		CoordID:       n.id,
+		SeqNum:        n.nextSeqNum(),
+		Phase:         PhaseBegin,
+		CohortMembers: n.cohortMembersFromStatus(),
 	}
 	if n.confirmedState != nil {
 		proposal.PrimaryTerm = n.confirmedState.PrimaryTerm
 		proposal.Primary = n.confirmedState.Primary
-		proposal.SyncReplicas = n.confirmedState.SyncReplicas
 	}
 
 	n.phase = phaseBegin
@@ -376,10 +389,11 @@ func (n *OrchNode) startRevoke(tick int64) []Request {
 	oldPrimaryTerm := n.confirmedState.PrimaryTerm
 
 	proposal := ConsensusState{
-		VotingTerm: n.term,
-		CoordID:    n.id,
-		SeqNum:     n.nextSeqNum(),
-		Phase:      PhaseRevoke,
+		VotingTerm:    n.term,
+		CoordID:       n.id,
+		SeqNum:        n.nextSeqNum(),
+		Phase:         PhaseRevoke,
+		CohortMembers: n.cohortMembersFromStatus(),
 		// PrimaryTerm=0 and Primary="" signal no primary is currently appointed.
 	}
 
@@ -411,14 +425,21 @@ func (n *OrchNode) startEstablish(tick int64) []Request {
 		return nil
 	}
 
+	spec, err := quorum.Serialize()
+	if err != nil {
+		// Serialization failure is a programming error; treat it as no quorum available.
+		return nil
+	}
+
 	proposal := ConsensusState{
-		VotingTerm:   n.term,
-		CoordID:      n.id,
-		SeqNum:       n.nextSeqNum(),
-		Phase:        PhaseEstablish,
-		PrimaryTerm:  n.term,
-		Primary:      quorum.Primary(),
-		SyncReplicas: quorum.SyncReplicas(),
+		VotingTerm:    n.term,
+		CoordID:       n.id,
+		SeqNum:        n.nextSeqNum(),
+		Phase:         PhaseEstablish,
+		PrimaryTerm:   n.term,
+		Primary:       quorum.Primary(),
+		QuorumSpec:    spec,
+		CohortMembers: sortedmaps.Keys(n.knownPoolers),
 	}
 
 	n.phase = phaseEstablish
@@ -440,17 +461,15 @@ func (n *OrchNode) startEstablish(tick int64) []Request {
 // so IsRevoked(confirmers) is the right condition: can the old primary still collect
 // N acks from its sync replicas?
 //
-// On bootstrap (confirmedQuorum == nil), the bootstrapPolicy is asked to reconstruct
-// a quorum over all currently known poolers; IsRevoked then checks whether the
-// confirmer set satisfies that policy's threshold. Once learnEstablishedPrimary()
-// sets confirmedQuorum (because the orch contacted poolers already in an established
-// cohort), this bootstrap path is never taken again for the lifetime of the orch.
+// On bootstrap (confirmedQuorum == nil), the bootstrapPolicy is asked whether the
+// confirmer set satisfies the bootstrap threshold over all known poolers. Once
+// learnEstablishedQuorum() sets confirmedQuorum (because the orch contacted poolers
+// already in an established cohort), this bootstrap path is never taken again.
 func (n *OrchNode) beginQuorumMet() bool {
 	if n.confirmedQuorum != nil {
 		return n.confirmedQuorum.IsRevoked(n.progress.confirmers)
 	}
-	q := n.bootstrapPolicy.ReconstructQuorum("", sortedmaps.Keys(n.knownPoolers))
-	return q.IsRevoked(n.progress.confirmers)
+	return n.bootstrapPolicy.CheckBootstrapQuorum(sortedmaps.Keys(n.knownPoolers), n.progress.confirmers)
 }
 
 // revokeQuorumMet returns true when the confirmed quorum reports that the old
@@ -533,10 +552,15 @@ func (n *OrchNode) jitterTicks() int64 {
 	return appointmentPhaseTimeoutTicks + n.rng.Int64N(appointmentPhaseTimeoutTicks)
 }
 
-// learnEstablishedPrimary checks whether the pooler status reports already show
+// learnEstablishedQuorum checks whether the pooler status reports already show
 // that an Establish quorum has been satisfied (another coordinator completed an
 // appointment). If so, it adopts the confirmed state so we don't compete unnecessarily.
-func (n *OrchNode) learnEstablishedPrimary() bool {
+//
+// This is a best-effort reconciliation of potentially stale, inconsistent status
+// signals: it resolves what the quorum demonstrably agreed on, but the result may
+// be out of date by the time Begin is sent. That's fine — Begin rejections from
+// poolers with higher terms will surface any gaps and force a retry with fresher data.
+func (n *OrchNode) learnEstablishedQuorum() bool {
 	for primaryID, primaryInfo := range sortedmaps.All(n.knownPoolers) {
 		if !primaryInfo.applied || primaryInfo.postgresStatus == PostgresStopped {
 			continue
@@ -544,11 +568,16 @@ func (n *OrchNode) learnEstablishedPrimary() bool {
 		if primaryInfo.state.Role != RolePrimary {
 			continue
 		}
+		if len(primaryInfo.state.QuorumSpec) == 0 {
+			continue // no quorum spec persisted; can't reconstruct the historical quorum
+		}
 
-		// Reconstruct the quorum from the primary's committed sync-replica set so
-		// IsEstablished checks the historically committed quorum members, not what
-		// the policy would propose today.
-		quorum := n.policy.ReconstructQuorum(primaryID, primaryInfo.state.SyncReplicas)
+		// Deserialise the quorum from the persisted QuorumSpec so IsEstablished
+		// uses the historically committed membership, not what the policy would propose today.
+		quorum, err := n.policy.DeserializeQuorum(primaryInfo.state.QuorumSpec)
+		if err != nil {
+			continue
+		}
 
 		// Build appliers: nodes that applied the same proposal as the primary.
 		appliers := make(map[NodeID]bool)
@@ -562,13 +591,13 @@ func (n *OrchNode) learnEstablishedPrimary() bool {
 
 		if quorum.IsEstablished(appliers) {
 			confirmed := ConsensusState{
-				VotingTerm:   primaryInfo.state.PrimaryTerm,
-				CoordID:      primaryInfo.state.VotedCoord,
-				SeqNum:       primaryInfo.state.VotedSeqNum,
-				Phase:        PhaseEstablish,
-				PrimaryTerm:  primaryInfo.state.PrimaryTerm,
-				Primary:      primaryID,
-				SyncReplicas: primaryInfo.state.SyncReplicas,
+				VotingTerm:  primaryInfo.state.PrimaryTerm,
+				CoordID:     primaryInfo.state.VotedCoord,
+				SeqNum:      primaryInfo.state.VotedSeqNum,
+				Phase:       PhaseEstablish,
+				PrimaryTerm: primaryInfo.state.PrimaryTerm,
+				Primary:     primaryID,
+				QuorumSpec:  primaryInfo.state.QuorumSpec,
 			}
 			n.confirmedState = &confirmed
 			n.confirmedQuorum = quorum
@@ -577,6 +606,21 @@ func (n *OrchNode) learnEstablishedPrimary() bool {
 		}
 	}
 	return false
+}
+
+// cohortMembersFromStatus returns the IDs of all known poolers that have reported
+// CohortMember=true in their status. Used to populate CohortMembers on Begin and
+// Revoke proposals so that established poolers can verify they belong to the cohort
+// the orch is acting on. An empty result signals to established poolers that this
+// orch is performing a bootstrap (it has not yet learned the existing cohort).
+func (n *OrchNode) cohortMembersFromStatus() []NodeID {
+	var members []NodeID
+	for id, info := range sortedmaps.All(n.knownPoolers) {
+		if info.state.CohortMember {
+			members = append(members, id)
+		}
+	}
+	return members
 }
 
 // appointmentPhaseTimeoutTicks is how long an orch waits for a phase to achieve quorum

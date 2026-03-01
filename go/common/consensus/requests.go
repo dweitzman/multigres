@@ -46,8 +46,16 @@ type PoolerResponseRequest struct {
 	VotingTerm   int64 // term of the proposal being responded to
 	SeqNum       int64 // seq num of the proposal being responded to
 	Accepted     bool
-	KnownTerm    int64  // if rejected: the term the pooler is currently on
-	KnownCoordID NodeID // if rejected at the same term: which coord won it
+	KnownTerm    int64           // if rejected: the term the pooler is currently on
+	KnownCoordID NodeID          // if rejected at the same term: which coord won it
+	Reason       RejectionReason // best-effort hint; zero when Accepted=true
+	// FreshStatus is an optional snapshot of the pooler's current committed state,
+	// piggybacked on rejections where the orch likely has a stale view (stale term,
+	// primary term mismatch, cohort membership). The routing layer assigns a StatusSeq
+	// and delivers this to the orch as part of the same response, allowing the orch to
+	// update its knowledge atomically with processing the rejection — without needing a
+	// separate round-trip to receive a status broadcast.
+	FreshStatus *PoolerStatusUpdateRequest
 }
 
 func (PoolerResponseRequest) consensusRequest() {}

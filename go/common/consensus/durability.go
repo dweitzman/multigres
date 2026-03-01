@@ -15,6 +15,7 @@
 package consensus
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -29,11 +30,10 @@ type QuorumCandidate struct {
 	Zone    string // availability zone or cell (empty = unknown)
 }
 
-// Quorum is an opaque self-contained object created by DurabilityPolicy.ProposeQuorum
-// or DurabilityPolicy.ReconstructQuorum. It captures a specific primary +
-// sync-replica assignment and knows how to evaluate its own establish and
-// revocation conditions without the consensus algorithm needing to understand
-// quorum internals.
+// Quorum is an opaque self-contained object created by DurabilityPolicy.ProposeQuorum.
+// It captures a specific primary + sync-replica assignment and knows how to evaluate
+// its own establish and revocation conditions without the consensus algorithm needing
+// to understand quorum internals.
 type Quorum interface {
 	// Primary returns the node ID of the proposed primary.
 	Primary() NodeID
@@ -62,6 +62,13 @@ type Quorum interface {
 	// to set on the primary, e.g. "ANY 1 (pooler-2,pooler-3)".
 	// An empty string means no synchronous replication is required.
 	PostgresConfig() string
+
+	// Serialize encodes this quorum into a self-describing byte slice that can
+	// be stored in ConsensusState.QuorumSpec and later decoded by
+	// DurabilityPolicy.DeserializeQuorum. The encoded form includes all fields
+	// required to recreate the quorum (primary, sync replicas, ack threshold)
+	// so reconstruction is correct even if the policy configuration changes.
+	Serialize() ([]byte, error)
 }
 
 // DurabilityPolicy is invoked by OrchNode to propose and reconstruct quorums.
@@ -77,11 +84,18 @@ type DurabilityPolicy interface {
 	// healthy candidates).
 	ProposeQuorum(candidates []QuorumCandidate, preferred NodeID) (Quorum, bool)
 
-	// ReconstructQuorum creates a Quorum for a previously committed
-	// (primary, syncReplicas) pair without re-running the appointment logic.
-	// Used by OrchNode.learnEstablishedPrimary and safety invariants to evaluate
-	// historical quorums using the original sync-replica set.
-	ReconstructQuorum(primary NodeID, syncReplicas []NodeID) Quorum
+	// DeserializeQuorum reconstructs a Quorum from a byte slice previously
+	// produced by Quorum.Serialize(). Used by OrchNode.learnEstablishedQuorum
+	// and safety invariants to evaluate historical quorums. The encoded form is
+	// self-describing (includes the ack threshold) so the result is correct even
+	// if the policy configuration has changed since the quorum was established.
+	DeserializeQuorum(spec []byte) (Quorum, error)
+
+	// CheckBootstrapQuorum reports whether the confirmer set is sufficient to
+	// proceed with the first appointment on a fresh cluster (no prior write
+	// quorum to revoke). members is the full set of known poolers; confirmers
+	// is the set that has responded positively to the Begin proposal.
+	CheckBootstrapQuorum(members []NodeID, confirmers map[NodeID]bool) bool
 }
 
 // AnyNPolicy returns a DurabilityPolicy requiring any N synchronous
@@ -143,8 +157,34 @@ func (p *anyNPolicy) ProposeQuorum(candidates []QuorumCandidate, preferred NodeI
 	return &anyNQuorum{primary: primary, syncReplicas: syncReplicas, n: p.n}, true
 }
 
-func (p *anyNPolicy) ReconstructQuorum(primary NodeID, syncReplicas []NodeID) Quorum {
-	return &anyNQuorum{primary: primary, syncReplicas: syncReplicas, n: p.n}
+// anyNQuorumSpec is the JSON representation of an anyNQuorum used for serialization.
+// It is self-describing: the n field captures the ack threshold at establishment
+// time so deserialization is correct even if the policy's n changes later.
+type anyNQuorumSpec struct {
+	N            int      `json:"n"`
+	Primary      NodeID   `json:"primary"`
+	SyncReplicas []NodeID `json:"sync_replicas"`
+}
+
+func (p *anyNPolicy) DeserializeQuorum(spec []byte) (Quorum, error) {
+	var s anyNQuorumSpec
+	if err := json.Unmarshal(spec, &s); err != nil {
+		return nil, err
+	}
+	return &anyNQuorum{primary: s.Primary, syncReplicas: s.SyncReplicas, n: s.N}, nil
+}
+
+func (p *anyNPolicy) CheckBootstrapQuorum(members []NodeID, confirmers map[NodeID]bool) bool {
+	// Bootstrap quorum is met when fewer than n members have not yet confirmed —
+	// i.e. at least (len(members) - n + 1) members have confirmed. This mirrors
+	// IsRevoked with an empty primary and all members as sync replicas.
+	remaining := 0
+	for _, id := range members {
+		if !confirmers[id] {
+			remaining++
+		}
+	}
+	return remaining < p.n
 }
 
 type anyNQuorum struct {
@@ -217,4 +257,16 @@ func (q *anyNQuorum) PostgresConfig() string {
 		names[i] = string(id)
 	}
 	return fmt.Sprintf("ANY %d (%s)", q.n, strings.Join(names, ","))
+}
+
+// Serialize encodes the quorum as a self-describing JSON blob including the ack
+// threshold (n), primary, and sync-replica set. The encoded n is the value in
+// effect at establishment time, so deserialization is correct even if the policy
+// configuration changes later.
+func (q *anyNQuorum) Serialize() ([]byte, error) {
+	return json.Marshal(anyNQuorumSpec{
+		N:            q.n,
+		Primary:      q.primary,
+		SyncReplicas: q.syncReplicas,
+	})
 }

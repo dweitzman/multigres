@@ -37,8 +37,6 @@ type NodeID string
 // PoolerRole is the role a pooler currently holds in the cluster.
 // Primary is the read/write leader. Replica is any other pooler known to the orch,
 // whether or not it is currently in the synchronous-replication quorum.
-// The SyncReplicas field in ConsensusState identifies which replicas must acknowledge
-// writes; that is the sync-quorum membership, separate from the role itself.
 type PoolerRole int8
 
 const (
@@ -111,18 +109,36 @@ func (p ConsensusPhase) String() string {
 // ConsensusState is the complete cluster configuration at a given term, sequence,
 // and phase. Orch broadcasts this; poolers vote to accept or reject it.
 type ConsensusState struct {
-	VotingTerm   int64  // monotonically increasing; owned by the proposing coordinator
-	CoordID      NodeID // which orch owns this voting term
-	SeqNum       int64  // orders states within a term (1=begin, 2=revoke, 3=establish)
-	Phase        ConsensusPhase
-	PrimaryTerm  int64    // voting term when the current primary was established (0 = no primary)
-	Primary      NodeID   // zero value means no primary appointed; check PrimaryTerm > 0
-	SyncReplicas []NodeID // poolers that must acknowledge writes to the primary
-	// QuorumSpec is the serialized DurabilityPolicy quorum for this Establish proposal.
-	// Forwarded verbatim to poolers so they can persist it and reconstruct the Quorum
-	// on orch restart without re-running the appointment. Populated by DurabilityPolicy
-	// deserialization; currently nil.
+	VotingTerm  int64  // monotonically increasing; owned by the proposing coordinator
+	CoordID     NodeID // which orch owns this voting term
+	SeqNum      int64  // orders states within a term (1=begin, 2=revoke, 3=establish)
+	Phase       ConsensusPhase
+	PrimaryTerm int64  // voting term when the current primary was established (0 = no primary)
+	Primary     NodeID // zero value means no primary appointed; check PrimaryTerm > 0
+
+	// QuorumSpec is the serialized Quorum for this Establish proposal, produced by
+	// Quorum.Serialize(). Forwarded verbatim to poolers so they can persist it and
+	// reconstruct the historical Quorum on orch restart. Non-nil only on PhaseEstablish.
 	QuorumSpec []byte
+
+	// CohortMembers is the voting cohort as known to the orch at proposal time.
+	//
+	// On Begin and Revoke proposals, CohortMembers contains all poolers that have
+	// already reported CohortMember=true in their status — i.e. the set of nodes
+	// that participated in a previous successful Establish. An empty list signals
+	// that the orch has no confirmed cohort, which is the case on a fresh cluster
+	// bootstrap or on a restarted orch that has not yet received pooler status updates.
+	//
+	// On Establish proposals, CohortMembers contains all currently known poolers,
+	// admitting them into the voting cohort. A pooler sets its persistent CohortMember
+	// flag when it commits an Establish that lists its own ID here.
+	//
+	// Safety: a pooler with CohortMember=true rejects any proposal that does not
+	// include its own ID in CohortMembers. This prevents a new or partitioned orch
+	// that hasn't discovered the existing cohort from bootstrapping over a healthy
+	// cluster — such an orch will send an empty CohortMembers list until it receives
+	// pooler status updates and calls learnEstablishedQuorum.
+	CohortMembers []NodeID
 }
 
 // StateID identifies a specific ConsensusState proposal by its term + sequence number.
@@ -154,20 +170,62 @@ type PoolerPersistentState struct {
 	PrimaryTerm int64  // VotingTerm at which the current primary was established (0 = none)
 	Primary     NodeID // who is primary (may be a different node)
 	Role        PoolerRole
-	// SyncReplicas are the poolers that must acknowledge writes to the primary.
-	//
-	// TODO: Consider binding replica replication configuration to a specific
-	// (NodeID, PrimaryTerm) pair rather than just NodeID — e.g. by using a
-	// term-specific replication password. This would prevent a replica that was
-	// configured for node X at term 5 from inadvertently participating in a quorum
-	// if node X is elected at a later term with different sync-replica membership.
-	// Implementation requires an invasive postgres change (term-keyed credentials)
-	// and is deferred until the benefit is better understood.
-	SyncReplicas []NodeID
-	Applied      bool // true if the committed role change has been operationally executed
-	// QuorumSpec is the serialized DurabilityPolicy quorum from the Establish proposal.
-	// Persisted so the quorum can be reconstructed on orch restart. See ConsensusState.QuorumSpec.
+	Applied     bool // true if the committed role change has been operationally executed
+	// QuorumSpec is the serialized Quorum from the Establish proposal. Persisted so the
+	// write quorum can be reconstructed on orch restart. See ConsensusState.QuorumSpec.
 	QuorumSpec []byte
+	// CohortMember is true once this pooler has committed an Establish proposal that
+	// listed its own ID in CohortMembers. It is sticky: once set it is never cleared by
+	// subsequent proposals. A pooler with CohortMember=true rejects any proposal that
+	// does not include its ID in CohortMembers (see ConsensusState.CohortMembers).
+	CohortMember bool
+}
+
+// RejectionReason is a best-effort hint carried in a rejection response indicating
+// why a pooler rejected a proposal. The orch must not rely on this for correctness —
+// message loss or reordering means it may never arrive — but it can act on it to
+// recover more quickly (e.g. re-fetching status before the next retry).
+type RejectionReason int8
+
+const (
+	// RejectionReasonUnknown is the zero value; used when the response is an
+	// acceptance or when no specific reason is provided.
+	RejectionReasonUnknown RejectionReason = 0
+	// RejectionReasonStaleTerm: the orch's VotingTerm is behind the pooler's
+	// VotedTerm. KnownTerm and KnownCoordID in the response identify the winner.
+	RejectionReasonStaleTerm RejectionReason = 1
+	// RejectionReasonCoordConflict: same VotingTerm but a different coordinator
+	// already won it. KnownCoordID in the response identifies the winner.
+	RejectionReasonCoordConflict RejectionReason = 2
+	// RejectionReasonStaleSeqNum: SeqNum goes backwards within the same term
+	// and coordinator — the proposal is an out-of-order duplicate.
+	RejectionReasonStaleSeqNum RejectionReason = 3
+	// RejectionReasonPrimaryTermMismatch: the orch's ExpectedPrimaryTerm does
+	// not match the pooler's committed PrimaryTerm. The orch is acting on a
+	// stale cluster view; the piggybacked status update carries the fresh state.
+	RejectionReasonPrimaryTermMismatch RejectionReason = 4
+	// RejectionReasonCohortMembership: the pooler is a cohort member but the
+	// orch did not list it in CohortMembers, indicating the orch has not yet
+	// discovered the full cohort. The piggybacked status update carries the
+	// fresh state so the orch can include this pooler on its next attempt.
+	RejectionReasonCohortMembership RejectionReason = 5
+)
+
+func (r RejectionReason) String() string {
+	switch r {
+	case RejectionReasonStaleTerm:
+		return "stale_term"
+	case RejectionReasonCoordConflict:
+		return "coord_conflict"
+	case RejectionReasonStaleSeqNum:
+		return "stale_seq_num"
+	case RejectionReasonPrimaryTermMismatch:
+		return "primary_term_mismatch"
+	case RejectionReasonCohortMembership:
+		return "cohort_membership"
+	default:
+		return "unknown"
+	}
 }
 
 // VotedStateID returns the StateID of the last accepted proposal.

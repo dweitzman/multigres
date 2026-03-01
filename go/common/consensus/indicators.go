@@ -58,8 +58,14 @@ type PoolerResponseIndicator struct {
 	VotingTerm   int64 // term of the proposal being responded to
 	SeqNum       int64 // seq num of the proposal being responded to
 	Accepted     bool
-	KnownTerm    int64  // if rejected: the term the pooler is currently on
-	KnownCoordID NodeID // if rejected at the same term: which coordinator won that term
+	KnownTerm    int64           // if rejected: the term the pooler is currently on
+	KnownCoordID NodeID          // if rejected at the same term: which coordinator won that term
+	Reason       RejectionReason // best-effort hint; zero when Accepted=true
+	// FreshStatus is an optional piggybacked status snapshot from the pooler,
+	// present when the rejection implies the orch has a stale view. The orch
+	// should process this before acting on the rejection so its knowledge is
+	// immediately up to date for the next advance() cycle.
+	FreshStatus *PoolerStatusIndicator
 }
 
 func (PoolerResponseIndicator) consensusIndicator() {}

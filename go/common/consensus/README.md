@@ -39,6 +39,20 @@ If any phase fails to achieve quorum within `appointmentPhaseTimeoutTicks`, the 
 and restarts the appointment from Begin. When an orch discovers a competing coordinator has a higher term, it backs
 off for a jittered interval before retrying, giving the winning coordinator time to finish.
 
+**Rejection signals and stale-view recovery.** When a pooler rejects a proposal it includes a
+`RejectionReason` hint and, for rejections that imply the orch has a stale view (`StaleTerm`,
+`PrimaryTermMismatch`, `CohortMembership`), a piggybacked `FreshStatus` snapshot of its current
+committed state. The orch processes the fresh status atomically with the rejection so its
+`knownPoolers` view is updated before the next appointment cycle begins, without requiring an
+extra round-trip to receive a separate status broadcast.
+
+**TODO(retry):** Currently the orch always backs off after a rejection, even when the reason was a
+correctable stale view rather than a race with a competing coordinator. An improvement would be to
+skip the backoff when: (a) the rejection reason is `StaleTerm`, `PrimaryTermMismatch`, or
+`CohortMembership`; and (b) the piggybacked fresh status shows no competing coordinator is active
+at the higher term. This would allow the orch to retry the appointment immediately with up-to-date
+information, reducing recovery latency in the common "orch just restarted" case.
+
 A **pooler** commits each accepted proposal to durable storage _before_ responding (safety: votes
 survive crashes). The role change (pg_ctl promote, reconfigure standby) is applied separately by
 an external apply loop, which delivers an `ApplySucceededIndicator` when the postgres operation
@@ -52,8 +66,8 @@ are tracked independently so a crash between the two phases is safe to resume.
 | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
 | `OrchNode`                | Coordinator state machine. All state is ephemeral — a restarted orch re-learns the cluster from pooler status updates.                        |
 | `PoolerNode`              | Pooler state machine. Committed state is persisted via `PoolerStorage`; `Applied=true` is persisted when the apply loop signals completion.   |
-| `ConsensusState`          | The complete cluster configuration at a given term+seq+phase (primary, sync replicas, coordinator). Broadcast by orch, voted on by poolers.   |
-| `PoolerPersistentState`   | Durable pooler state: voted term, role, applied flag, current primary. Saved to disk before any acknowledgement.                              |
+| `ConsensusState`          | The complete cluster configuration at a given term+seq+phase (primary, quorum spec, cohort members, coordinator). Broadcast by orch.          |
+| `PoolerPersistentState`   | Durable pooler state: voted term, role, applied flag, quorum spec, cohort membership. Saved to disk before any acknowledgement.               |
 | `DurabilityPolicy`        | Selects a write quorum given full cluster context (health, LSN, zone). Returns a `Quorum` the orch treats as opaque.                          |
 | `Quorum`                  | Self-contained quorum snapshot: knows its primary, sync replicas, and how to evaluate `IsEstablished`, `IsRevoked`, `IsWriteQuorum`.          |
 | `QuorumCandidate`         | Per-node input to `DurabilityPolicy.ProposeQuorum`: ID, health, LSN, and zone.                                                                |
@@ -191,35 +205,30 @@ Small improvements that make the existing code more correct and configurable:
   state, applied flag, and postgres health back to the orch.
 - **Wire up `PostgresApplier`** — fill in `apply()` (ALTER SYSTEM, pg_ctl promote / standby
   reconfigure, pg_reload_conf) in `examples/pg_driver/`.
+- ✅ **Bootstrap safety via `CohortMembers`** — see Stage 2 below.
 
 ### Stage 2 — Bootstrapping
 
-Safely initialize a fresh cluster. Bootstrap eligibility is an external constraint (e.g. a
-Kubernetes label declaring "at most N nodes are bootstrap-eligible") — it is not persisted inside
-the consensus state machine. Multiple orchs can attempt bootstrap simultaneously; they compete via
-normal coordinator vote (first to win a Begin quorum proceeds, losers back off). After Establish,
-new poolers join the voting cohort by being written into the postgres database, which replicates
-the admission record to sync replicas. Before the next Begin term, each cohort member waits until
-it has applied WAL through the admission record so it knows the full cohort and can compute quorum
-correctly.
+✅ Bootstrap safety is implemented. The mechanism relies on `CohortMembers` in `ConsensusState`
+and `CohortMember bool` in `PoolerPersistentState`:
 
-Key design item for bootstrap safety: add a `Bootstrap bool` field to `ConsensusState`. The orch
-sets it on all three phases when using the bootstrap policy (i.e. `confirmedQuorum == nil`). A
-pooler that has already applied an Establish proposal must reject any proposal with
-`Bootstrap = true`. This prevents a new or partitioned orch that hasn't yet discovered an existing
-cohort from accidentally bootstrapping over a healthy cluster. The term number alone is not
-sufficient protection: bootstrap terms could keep incrementing (due to racing orchs or pod churn)
-and a high bootstrap term number must never override an already-established cohort.
+- On **Establish** proposals the orch lists all currently known poolers in `CohortMembers`. A
+  pooler that receives this proposal and finds its own ID in the list sets `CohortMember=true` in
+  its durable state (sticky — never cleared).
 
-The **Establish phase** (not Revoke) is the correct trigger for bootstrap ineligibility. A pooler
-becomes bootstrap-ineligible as soon as it applies an Establish (`Applied=true` with
-`Role=Primary` or `Role=Replica`). This is deliberate: in future optimisations the orch may send
-a Revoke _before_ it has confirmed full Begin-quorum (e.g. if it is confident the primary is
-dead and wants to move quickly). A received Revoke is therefore not proof that Begin won a vote.
-However, the orch never starts Establish until Revoke has achieved quorum, which in turn
-requires Begin to have achieved quorum. So an applied Establish is always reliable evidence that
-the pooler participated in a successful consensus round and must never be treated as
-bootstrap-eligible again.
+- On **Begin** and **Revoke** proposals the orch populates `CohortMembers` from the poolers that
+  have already reported `CohortMember=true` in their status. A fresh bootstrap orch (no prior
+  confirmed quorum) has not yet received these status updates, so it sends an empty list.
+
+- A pooler with `CohortMember=true` **rejects any proposal** whose `CohortMembers` list does not
+  include its own ID. An empty list is the signal that the orch is performing a bootstrap (it
+  hasn't discovered the existing cohort yet). The orch must first call `learnEstablishedQuorum`
+  and receive pooler status updates before it will include the full cohort in its proposals.
+
+No explicit `Bootstrap bool` flag is needed: the absence of the pooler's own ID from
+`CohortMembers` is a sufficient and reliable signal. A high term number alone is not sufficient
+protection because bootstrap terms could keep incrementing and a high term must never override an
+already-established cohort.
 
 **Cohort admission** (tracked below in the roadmap) is a separate concern: once the cluster is
 bootstrapped, admitting new nodes to the _voting_ cohort must itself be a consensus decision.
@@ -259,17 +268,18 @@ stepping-down pooler emits a `StepDownRequest`; orch immediately starts a new ap
 waiting for a timeout. A `PromoteRequest` sets a `preferredPrimary` hint that biases
 `selectPrimary()` toward the target, then follows normal Revoke → Establish.
 
-### Stage 5 — Additional durability policies and quorum spec serialization
+### Stage 5 — Additional durability policies
 
-The `DurabilityPolicy` / `Quorum` interface is already wired into the orch (Stage 1). Stage 5
-adds:
+The `DurabilityPolicy` / `Quorum` interface is fully wired (Stage 1) and `QuorumSpec`
+serialization is implemented (`Quorum.Serialize` / `DurabilityPolicy.DeserializeQuorum`).
+`SyncReplicas` has been removed from both `ConsensusState` and `PoolerPersistentState`; postgres
+`synchronous_standby_names` is derived via `policy.DeserializeQuorum(committed.QuorumSpec).PostgresConfig()`.
 
-- **Quorum spec serialization** — populate `ConsensusState.QuorumSpec` / `PoolerPersistentState.QuorumSpec`
-  with serialized quorum bytes so a restarted orch can reconstruct the exact historical quorum
-  without re-running `ProposeQuorum`. Requires a type registry (similar to Vitess's
-  `RegisterDurability`) so the deserializer knows which concrete type to decode.
+Stage 5 adds:
+
 - **`ZoneAwarePolicy`** — at least one ACK from the same zone and one from a different zone
-  (conjunctive requirement that `AnyNPolicy` cannot express)
+  (conjunctive requirement that `AnyNPolicy` cannot express). Requires extending `anyNQuorumSpec`
+  or adding a separate type-tagged JSON format.
 - Additional policies as operational needs evolve
 
 ### Stage 6 — Timeline / WAL support (deferred)

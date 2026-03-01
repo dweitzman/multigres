@@ -14,6 +14,8 @@
 
 package consensus
 
+import "slices"
+
 // PoolerNode is the pooler state machine. It receives ConsensusState proposals from
 // orch and votes to accept or reject them according to the safety invariant.
 //
@@ -225,7 +227,10 @@ func (n *PoolerNode) handleOrchState(ind OrchStateIndicator) ([]Request, bool) {
 	state := ind.State
 
 	// Reject if the proposal is stale (term is behind what we've already voted for).
+	// Piggyback fresh status: the orch is behind and our committed state
+	// (CohortMember, PrimaryTerm, QuorumSpec) helps it advance to the correct term.
 	if state.VotingTerm < n.committed.VotedTerm {
+		s := n.statusUpdate()
 		return []Request{PoolerResponseRequest{
 			ToOrch:       ind.FromOrch,
 			VotingTerm:   state.VotingTerm,
@@ -233,6 +238,8 @@ func (n *PoolerNode) handleOrchState(ind OrchStateIndicator) ([]Request, bool) {
 			Accepted:     false,
 			KnownTerm:    n.committed.VotedTerm,
 			KnownCoordID: n.committed.VotedCoord,
+			Reason:       RejectionReasonStaleTerm,
+			FreshStatus:  &s,
 		}}, false
 	}
 
@@ -247,6 +254,7 @@ func (n *PoolerNode) handleOrchState(ind OrchStateIndicator) ([]Request, bool) {
 			Accepted:     false,
 			KnownTerm:    n.committed.VotedTerm,
 			KnownCoordID: n.committed.VotedCoord,
+			Reason:       RejectionReasonCoordConflict,
 		}}, false
 	}
 
@@ -264,17 +272,42 @@ func (n *PoolerNode) handleOrchState(ind OrchStateIndicator) ([]Request, bool) {
 			SeqNum:     state.SeqNum,
 			Accepted:   false,
 			KnownTerm:  n.committed.VotedTerm,
+			Reason:     RejectionReasonStaleSeqNum,
 		}}, false
 	}
 
 	// Reject if the orch's expected primary term does not match ours (stale cluster view).
+	// Piggyback fresh status so the orch can correct its primary term view atomically
+	// with processing the rejection.
 	if ind.ExpectedPrimaryTerm > 0 && ind.ExpectedPrimaryTerm != n.committed.PrimaryTerm {
+		s := n.statusUpdate()
 		return []Request{PoolerResponseRequest{
-			ToOrch:     ind.FromOrch,
-			VotingTerm: state.VotingTerm,
-			SeqNum:     state.SeqNum,
-			Accepted:   false,
-			KnownTerm:  n.committed.VotedTerm,
+			ToOrch:      ind.FromOrch,
+			VotingTerm:  state.VotingTerm,
+			SeqNum:      state.SeqNum,
+			Accepted:    false,
+			KnownTerm:   n.committed.VotedTerm,
+			Reason:      RejectionReasonPrimaryTermMismatch,
+			FreshStatus: &s,
+		}}, false
+	}
+
+	// Reject if this pooler is an established cohort member but the proposal does not
+	// list it in CohortMembers. An empty or absent CohortMembers list means the orch
+	// has not yet discovered the existing cohort (bootstrap or stale view). Accepting
+	// such a proposal could allow a new orch to bootstrap over a healthy cluster.
+	// Piggyback fresh status so the orch learns our cohort membership atomically and
+	// can include us in its next attempt without an extra round-trip.
+	if n.committed.CohortMember && !containsNodeID(state.CohortMembers, n.id) {
+		s := n.statusUpdate()
+		return []Request{PoolerResponseRequest{
+			ToOrch:      ind.FromOrch,
+			VotingTerm:  state.VotingTerm,
+			SeqNum:      state.SeqNum,
+			Accepted:    false,
+			KnownTerm:   n.committed.VotedTerm,
+			Reason:      RejectionReasonCohortMembership,
+			FreshStatus: &s,
 		}}, false
 	}
 
@@ -283,6 +316,10 @@ func (n *PoolerNode) handleOrchState(ind OrchStateIndicator) ([]Request, bool) {
 	if state.Primary == n.id {
 		newRole = RolePrimary
 	}
+
+	// CohortMember is sticky: set it if this pooler is listed in the Establish proposal's
+	// CohortMembers. Once true it is never cleared by subsequent proposals.
+	newCohortMember := n.committed.CohortMember || containsNodeID(state.CohortMembers, n.id)
 
 	// Always commit with Applied=false. The apply step (pg_ctl, postgresql.conf, etc.)
 	// is always a separate operation: the apply loop delivers ApplySucceededIndicator
@@ -294,9 +331,9 @@ func (n *PoolerNode) handleOrchState(ind OrchStateIndicator) ([]Request, bool) {
 		PrimaryTerm:  state.PrimaryTerm,
 		Primary:      state.Primary,
 		Role:         newRole,
-		SyncReplicas: state.SyncReplicas,
 		Applied:      false,
 		QuorumSpec:   state.QuorumSpec,
+		CohortMember: newCohortMember,
 	}
 
 	// Persist before responding. If storage fails, do not respond.
@@ -322,4 +359,8 @@ func (n *PoolerNode) statusUpdate() PoolerStatusUpdateRequest {
 		State:          n.committed,
 		LastApplied:    n.lastApplied,
 	}
+}
+
+func containsNodeID(ids []NodeID, id NodeID) bool {
+	return slices.Contains(ids, id)
 }

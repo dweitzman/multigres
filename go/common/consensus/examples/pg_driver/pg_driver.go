@@ -142,7 +142,9 @@ type PostgresApplier struct {
 func (a *PostgresApplier) apply(state consensus.PoolerPersistentState) bool {
 	switch state.Role {
 	case consensus.RolePrimary:
-		// 1. ALTER SYSTEM SET synchronous_standby_names = 'ANY 1 (...)' using state.SyncReplicas.
+		// 1. Deserialise state.QuorumSpec via the DurabilityPolicy to get the Quorum,
+		//    then call quorum.PostgresConfig() to get the synchronous_standby_names value.
+		//    ALTER SYSTEM SET synchronous_standby_names = quorum.PostgresConfig().
 		// 2. pg_ctl promote (or SELECT pg_promote()) if currently in standby mode.
 		// 3. SELECT pg_reload_conf() so the new synchronous_standby_names takes effect.
 		// 4. Poll pg_is_in_recovery() until false; return false if it times out (retry next tick).
