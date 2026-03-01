@@ -233,6 +233,20 @@ Small improvements that make the existing code more correct and configurable:
   poolers sharing that `PrimaryTerm`. Until fixed, `learnEstablishedQuorum` may fail to recognise
   a still-intact replication quorum after multiple Begin-only cycles, causing an unnecessary
   re-appointment instead of simply tracking the already-appointed primary.
+  **This is a liveness gap, not a safety gap** — see the cohort-change safety invariant in Stage
+  2.5 for why learning potentially-stale quorum state from replicas is safe: the CohortMembers
+  validation in Begin prevents any orch with stale cohort knowledge from successfully changing the
+  cluster topology, so an unnecessary re-appointment at worst causes a brief extra failover cycle.
+- **TODO: add simulation test for bootstrap from scratch** — run 1000 rounds with different seeds
+  under chaos. Assert that bootstrap always eventually completes as long as a quorum of
+  bootstrap-eligible nodes is sometimes reachable, even if some are stopped and replaced before
+  bootstrap finishes.
+- **TODO: add simulation test for second orch joining an established cluster** — assert that
+  a newly-started orch correctly learns the existing quorum without disturbing it, and that chaos
+  (delayed status updates, partitions) does not cause it to incorrectly compete.
+- **TODO: add simulation test demonstrating the `learnEstablishedQuorum` liveness gap** — start
+  orch with an unreachable primary and confirm that it correctly falls back to a new appointment
+  rather than hanging indefinitely.
 - ✅ **Bootstrap safety via `CohortMembers`** — see Stage 2 below.
 
 ### Stage 2 — Bootstrapping
@@ -321,6 +335,44 @@ pooler may begin streaming WAL from the current primary immediately, but it does
 in voting (and does not count toward quorum) until it has been formally admitted via an `Establish`
 that lists it in `CohortMembers`. Whether a node should join the voting cohort (vs. remaining a
 non-voting replica) is a policy decision outside the consensus state machine.
+
+**Key safety invariant — cohort changes require existing-quorum consent:**
+
+A cohort membership change (adding or removing a node) can only happen through an Establish that
+was preceded by a Begin listing the _current_ cohort in `CohortMembers`. Because existing cohort
+members reject any Begin that omits them, no orch can change the cohort without first proving
+knowledge of the existing membership to every current member.
+
+Consequence: **if an orch can reach a quorum of the existing cohort members, their reported
+cohort view is authoritative**, even if the primary is unreachable. No other orch could have
+silently added new members or moved the primary to a different cohort without those survivors
+knowing — such a change would have required them to vote on it. The orch can therefore safely
+Begin+Revoke using just the reachable surviving members, relying on the Begin validation for
+safety rather than needing to verify the quorum directly from the primary.
+
+This is also why `learnEstablishedQuorum`'s correctness gap is a _liveness_ problem rather than
+a _safety_ problem. An orch that can't confirm the current quorum from the primary will fall back
+to a new appointment — which may be unnecessary, but cannot result in split-brain: the CohortMembers
+check at Begin time ensures the orch cannot proceed unless it has proved knowledge of the full
+current cohort.
+
+**Cohort changes must be separate from replication-topology changes:**
+
+A cohort membership change and a replication-topology change (e.g. promoting a new primary) must
+not happen in the same coordinator term. The Establish that changes `CohortMembers` must use a
+`QuorumSpec` that reflects the _pre-existing_ replication topology. A subsequent term then makes
+any needed replication change using the updated cohort. This two-step requirement ensures that
+every cohort member always has a consistent view of both membership and replication state —
+you never need to reason about partial visibility of a combined change.
+
+**Future idea — revoked-quorum cutoff in Establish proposals:**
+
+An orch completing an Establish at coordinator term T implicitly revokes all primary terms before
+T. It could optionally broadcast this fact explicitly (e.g. a `RevokedUpToTerm` field in
+`ConsensusState`), letting newly-started orchs quickly determine which quorum state is definitively
+stale without needing to reason from pooler status alone. This is not required for correctness
+given the cohort-consent invariant above, but could simplify diagnostics and speed up orch restart
+in clusters with a long coordinator-term history.
 
 **Current status:** simulation adds nodes directly and the orch accepts them without a
 cohort-admission round; that shortcut is fine for testing the appointment protocol but must be
