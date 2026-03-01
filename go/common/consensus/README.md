@@ -40,23 +40,25 @@ and restarts the appointment from Begin. When an orch discovers a competing coor
 off for a jittered interval before retrying, giving the winning coordinator time to finish.
 
 A **pooler** commits each accepted proposal to durable storage _before_ responding (safety: votes
-survive crashes). The role change (pg_ctl promote, reconfigure standby) is applied separately,
-on each tick, until the `RoleApplier` reports success. Committed state and applied state are
-tracked independently so a crash between the two phases is safe to resume.
+survive crashes). The role change (pg_ctl promote, reconfigure standby) is applied separately by
+an external apply loop, which delivers an `ApplySucceededIndicator` when the postgres operation
+completes. The state machine persists `Applied=true` before broadcasting the status change to orchs,
+so the orch only sees `Applied=true` after it is durably stored. Committed state and applied state
+are tracked independently so a crash between the two phases is safe to resume.
 
 ## Key types
 
-| Type                    | Description                                                                                                                                 |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `OrchNode`              | Coordinator state machine. All state is ephemeral — a restarted orch re-learns the cluster from pooler status updates.                      |
-| `PoolerNode`            | Pooler state machine. Committed state is persisted via `PoolerStorage`; applied state is recovered via `RoleApplier.AppliedState()`.        |
-| `ConsensusState`        | The complete cluster configuration at a given term+seq+phase (primary, sync replicas, coordinator). Broadcast by orch, voted on by poolers. |
-| `PoolerPersistentState` | Durable pooler state: voted term, role, applied flag, current primary. Saved to disk before any acknowledgement.                            |
-| `DurabilityPolicy`      | Selects a write quorum given full cluster context (health, LSN, zone). Returns a `Quorum` the orch treats as opaque.                        |
-| `Quorum`                | Self-contained quorum snapshot: knows its primary, sync replicas, and how to evaluate `IsEstablished`, `IsRevoked`, `IsWriteQuorum`.        |
-| `QuorumCandidate`       | Per-node input to `DurabilityPolicy.ProposeQuorum`: ID, health, LSN, and zone.                                                              |
-| `PoolerStorage`         | Interface for durable persistence. Simulation uses `memStorage`; production uses `AtomicStateFile` (write-rename + fsync).                  |
-| `RoleApplier`           | Interface for operational role execution. Simulation uses `flakyApplier`; production uses `PostgresApplier` (pg_ctl, ALTER SYSTEM, etc.).   |
+| Type                      | Description                                                                                                                                   |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OrchNode`                | Coordinator state machine. All state is ephemeral — a restarted orch re-learns the cluster from pooler status updates.                        |
+| `PoolerNode`              | Pooler state machine. Committed state is persisted via `PoolerStorage`; `Applied=true` is persisted when the apply loop signals completion.   |
+| `ConsensusState`          | The complete cluster configuration at a given term+seq+phase (primary, sync replicas, coordinator). Broadcast by orch, voted on by poolers.   |
+| `PoolerPersistentState`   | Durable pooler state: voted term, role, applied flag, current primary. Saved to disk before any acknowledgement.                              |
+| `DurabilityPolicy`        | Selects a write quorum given full cluster context (health, LSN, zone). Returns a `Quorum` the orch treats as opaque.                          |
+| `Quorum`                  | Self-contained quorum snapshot: knows its primary, sync replicas, and how to evaluate `IsEstablished`, `IsRevoked`, `IsWriteQuorum`.          |
+| `QuorumCandidate`         | Per-node input to `DurabilityPolicy.ProposeQuorum`: ID, health, LSN, and zone.                                                                |
+| `PoolerStorage`           | Interface for durable persistence. Simulation uses `memStorage`; production uses `AtomicStateFile` (write-rename + fsync).                    |
+| `ApplySucceededIndicator` | Delivered to `PoolerNode` by the apply loop (goroutine in production, `applyDriverNode` in simulation) when a postgres role change completes. |
 
 ## Running the simulation tests
 
@@ -118,14 +120,15 @@ All tests register the **standard invariants** via `sim.Always()`:
 ## Simulation architecture
 
 ```
-  DiscoveryNode          OrchNode(s)           PoolerNode(s)
-      │                      │                      │
-      │ PoolerDiscovered ───▶│                      │
-      │                      │ BroadcastState ─────▶│
-      │                      │◀─── PoolerResponse ──│
-      │                      │◀─── PoolerStatus ────│
-      │                      │                      │
-      └──── all routed via consensusHandler (RequestHandler) ────┘
+  DiscoveryNode    ApplyDriverNode(s)    OrchNode(s)           PoolerNode(s)
+      │                   │                  │                      │
+      │ PoolerDiscovered ─┼─────────────────▶│                      │
+      │                   │                  │ BroadcastState ─────▶│
+      │                   │                  │◀─── PoolerResponse ──│
+      │                   │                  │◀─── PoolerStatus ────│
+      │                   │ ApplySucceeded ──┼──────────────────────▶│  (local, bypasses chaos)
+      │                   │                  │                      │
+      └─────────────────────── all routed via consensusHandler (RequestHandler) ──────────────┘
 ```
 
 The `consensusHandler` (in `simulation_test.go`) converts requests to indicators:
@@ -134,12 +137,14 @@ The `consensusHandler` (in `simulation_test.go`) converts requests to indicators
 - `PoolerResponseRequest` → `PoolerResponseIndicator` to the target orch
 - `PoolerStatusUpdateRequest` → `PoolerStatusIndicator` to all orchs
 - `PoolerMembershipRequest` → `PoolerDiscoveredIndicator`/`PoolerRemovedIndicator` to all orchs
+- `ApplySucceededRequest` → `ApplySucceededIndicator` to the target pooler
 
 All message delivery goes through the active `IndicatorDeliveryPolicy` — the default is
 `FastNetwork` (reliable, 1-tick latency). Tests that exercise the chaos path use
 `consensusChaosPolicy` which applies different policies per traffic class:
 
-- TerminateIndicators: always delivered, 1-tick latency
+- `TerminateIndicator`: always delivered, 1-tick latency (models SIGTERM)
+- `ApplySucceededIndicator`: always delivered, 1-tick latency (local: same process in production)
 - Discovery traffic: ordered+reliable, up to 5-tick delay (models etcd watch stream)
 - Orch↔pooler traffic: `UnreliableNetwork` with drops, delays, and random partitions
 
@@ -148,8 +153,11 @@ All message delivery goes through the active `IndicatorDeliveryPolicy` — the d
 See `examples/pg_driver/` for the production integration sketch:
 
 - `AtomicStateFile` — crash-safe `PoolerStorage` using write-rename + fsync
-- `PostgresApplier` — `RoleApplier` skeleton (apply steps are documented but not yet wired)
-- `OrchDriver` / `PoolerDriver` — 100ms tick loops that buffer gRPC events and call `Node.Step()`
+- `PostgresApplier` — skeleton with documented apply steps (ALTER SYSTEM, pg_ctl promote / standby
+  reconfigure, pg_reload_conf); not yet wired to real postgres
+- `OrchDriver` / `PoolerDriver` — 100ms tick loops that buffer gRPC events and call `Node.Step()`.
+  After each tick, `PoolerDriver` checks whether the committed role change needs applying and spawns
+  an apply goroutine that writes `ApplySucceededIndicator` onto the incoming channel when done.
 
 ## What's next
 
@@ -172,13 +180,17 @@ Small improvements that make the existing code more correct and configurable:
   with a pending unapplied change (k = number of such nodes, capped at 5 before falling back
   to the effective-state check). Each node independently picks its committed (goal) or
   last-applied (current) state; the invariant must hold for every combination.
-- **Wire up `PostgresApplier`** — fill in `Apply()` (ALTER SYSTEM, pg_ctl promote / standby
-  reconfigure, pg_reload_conf) and `AppliedState()` (read postgresql.conf / standby.signal) in
-  `examples/pg_driver/`.
-- ✅ **Realistic gRPC wiring in `pg_driver.go`** — the production sketch now shows the correct
+- ✅ **Indicator-driven apply loop** — removed `RoleApplier` interface; apply is now driven
+  externally. The apply goroutine (production) or `applyDriverNode` (simulation) delivers
+  `ApplySucceededIndicator{VotedTerm, VotedSeqNum}` on success; `PoolerNode` persists
+  `Applied=true` before broadcasting. Crash recovery reads `committed.Applied` from storage
+  directly — no separate `AppliedState()` needed.
+- ✅ **Realistic gRPC wiring in `pg_driver.go`** — the production sketch shows the correct
   topology: orch owns all outbound connections (pooler never dials orch); `ProposeState` (unary)
   carries state changes with an accept/reject reply; health updates (poll or stream) carry committed
   state, applied flag, and postgres health back to the orch.
+- **Wire up `PostgresApplier`** — fill in `apply()` (ALTER SYSTEM, pg_ctl promote / standby
+  reconfigure, pg_reload_conf) in `examples/pg_driver/`.
 
 ### Stage 2 — Bootstrapping
 
@@ -192,14 +204,46 @@ it has applied WAL through the admission record so it knows the full cohort and 
 correctly.
 
 Key design item for bootstrap safety: add a `Bootstrap bool` field to `ConsensusState`. The orch
-sets it when using the bootstrap policy (no confirmed quorum). A pooler that has already applied an
-Establish proposal (committed `Role = Primary/Replica` with `Applied = true`) must reject any
-proposal with `Bootstrap = true`. This prevents a new or partitioned orch that hasn't yet discovered
-an existing cohort from accidentally bootstrapping over a healthy cluster. The term number alone is
-not sufficient protection: bootstrap terms could keep incrementing (due to racing orchs or pod
-churn) and a high bootstrap term number must never override an already-established cohort.
-Bootstrap-eligible poolers are those with no applied cohort state; once a pooler has applied an
-Establish it is no longer bootstrap-eligible for the lifetime of that cohort.
+sets it on all three phases when using the bootstrap policy (i.e. `confirmedQuorum == nil`). A
+pooler that has already applied an Establish proposal must reject any proposal with
+`Bootstrap = true`. This prevents a new or partitioned orch that hasn't yet discovered an existing
+cohort from accidentally bootstrapping over a healthy cluster. The term number alone is not
+sufficient protection: bootstrap terms could keep incrementing (due to racing orchs or pod churn)
+and a high bootstrap term number must never override an already-established cohort.
+
+The **Establish phase** (not Revoke) is the correct trigger for bootstrap ineligibility. A pooler
+becomes bootstrap-ineligible as soon as it applies an Establish (`Applied=true` with
+`Role=Primary` or `Role=Replica`). This is deliberate: in future optimisations the orch may send
+a Revoke _before_ it has confirmed full Begin-quorum (e.g. if it is confident the primary is
+dead and wants to move quickly). A received Revoke is therefore not proof that Begin won a vote.
+However, the orch never starts Establish until Revoke has achieved quorum, which in turn
+requires Begin to have achieved quorum. So an applied Establish is always reliable evidence that
+the pooler participated in a successful consensus round and must never be treated as
+bootstrap-eligible again.
+
+**Cohort admission** (tracked below in the roadmap) is a separate concern: once the cluster is
+bootstrapped, admitting new nodes to the _voting_ cohort must itself be a consensus decision.
+Until that is implemented, nodes are added directly in simulation and the orch accepts them
+without a cohort-admission round.
+
+### Stage 2.5 — Cohort admission
+
+Once a cluster is bootstrapped, adding new nodes to the _voting_ cohort must be a consensus
+decision, not just an orch-side discovery event. The orch drives the process by asking the primary
+to persist a cohort-membership record; that record replicates to sync replicas via normal WAL
+streaming, so all cohort members learn about the new participant. Before any future Begin term, a
+newly admitted node waits until it has applied WAL through its admission record so it knows the
+full cohort and can compute quorum correctly.
+
+Note that being a _replicating_ node and being a _voting_ cohort member are distinct: a newly
+discovered pooler may begin streaming WAL from the current primary immediately, but it does not
+participate in voting (and does not count toward quorum) until it has been formally admitted.
+Whether a node _wants_ to join the voting cohort (vs. remaining a non-voting replica) is a policy
+decision outside the consensus state machine.
+
+Currently simulation adds nodes directly and the orch accepts them without a cohort-admission
+round; that shortcut is fine for testing the appointment protocol but must be addressed before
+production use.
 
 ### Stage 3 — Re-bootstrapping
 
