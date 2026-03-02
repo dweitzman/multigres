@@ -76,6 +76,32 @@ completes. The state machine persists `Applied=true` before broadcasting the sta
 so the orch only sees `Applied=true` after it is durably stored. Committed state and applied state
 are tracked independently so a crash between the two phases is safe to resume.
 
+**Safety from voting, not pre-loaded orch knowledge.** An orch can start with a stale or
+incomplete view of the cluster. This is acceptable because safety is enforced by the poolers,
+not assumed by the orch: a BeginTerm request must demonstrate awareness of the quorum the
+pooler currently belongs to, and a pooler rejects any request whose quorum information is
+stale, piggybacking a fresh status snapshot in the rejection. The orch updates its view and
+retries. This rejection-and-retry cycle converges to an accurate view without any special
+startup procedure — the orch simply begins, and pooler feedback corrects any stale assumptions
+before any topology change can take effect.
+
+**Graceful vs. emergency revoke.** When the primary is reachable, revocation is _graceful_: the
+primary writes a WAL record acknowledging the demote before orch broadcasts Revoke. The
+revocation is therefore durable and discoverable via either the primary or any replica that
+streamed the WAL entry — a useful property for Stage 7 timeline handling. When the primary is
+crashed or unreachable, orch performs an _emergency_ revoke by contacting the replicas directly.
+Emergency revoke does not produce a WAL record, which is why additional timeline/LSN handling
+is required in Stage 7 for this path.
+
+**Re-revoking at a higher coordinator term is safe and intentional.** If an orch crashes after
+completing Revoke but before completing Establish, a new orch at a higher coordinator term
+can re-revoke the same primary term. Poolers accept this because revoke is idempotent: a
+pooler that already revoked primary term T agrees to revoke it again at a higher coordinator
+term, provided no higher-term Establish has occurred (which the pooler enforces). Re-revoking
+is not wasted work — it gives the new orch clean certainty ("I have revoke consensus at my
+coordinator term") without requiring it to reason about what a previous orch may have
+partially completed.
+
 ## Key types
 
 | Type                      | Description                                                                                                                                   |
@@ -227,6 +253,48 @@ Small improvements that make the existing code more correct and configurable:
   together; `ConsensusState` embeds it, and `PoolerPersistentState` holds a `Committed ProposalID`.
 - **TODO: redesign `CohortMember`** — see Stage 2 for the current implementation and open design
   directions.
+- **TODO: separate term number allocation from beginning a term; make `CoordID` monitoring-only**
+  — the current protocol fuses two concerns in the Begin phase: (1) allocating a unique
+  coordinator term number and (2) broadcasting that term to poolers to revoke previous primaries.
+  Separating them opens a cleaner design.
+
+  **Term number allocation as a distinct step.** Require a majority quorum of cohort members to
+  grant a term number before the orch is allowed to use it. Because any two majorities must
+  overlap, two orchs can never simultaneously hold the same term — uniqueness is guaranteed by
+  the protocol rather than detected and rejected after the fact. Majority quorum is the simplest
+  self-contained approach for now; other mechanisms (etcd distributed lock, timestamp +
+  coordinator ID) can be substituted as long as they guarantee uniqueness.
+
+  **Solves the Begin-quorum / write-quorum intersection requirement.** With majority-quorum term
+  number allocation, any subsequent Begin broadcast is already backed by a majority that covers
+  the write quorum of any previous term — provided the write quorum is itself at least a
+  majority. That constraint (write quorum size ≥ ⌈n/2⌉) is simple and well-understood; it
+  replaces the current implicit coupling between `DurabilityPolicy` write quorum size and Begin
+  quorum size.
+
+  **`CoordID` becomes monitoring-only.** Once term uniqueness is enforced at allocation time,
+  the coordinator identity in `ProposalID.CoordID` is no longer needed for correctness — two
+  poolers cannot hold the same term from different coordinators. `CoordID` can be kept for
+  observability (tracing which orch ran which term) but removed from safety-critical comparisons
+  such as `RejectionReasonCoordConflict`.
+
+  **Trade-off: two sets of votes before Begin.** Splitting term number allocation from the Begin
+  broadcast means an orch needs majority quorum twice before it can proceed to Revoke/Establish:
+  once to allocate a term number, once to broadcast it. The current design fuses these into a
+  single Begin round. Additionally, majority quorum for allocation may be a stricter bar than
+  some future operations require. These costs are worth accepting for now: the resulting protocol
+  is simpler to reason about and its correctness properties are easier to verify. Optimizations
+  that collapse round-trips or relax quorum requirements for specific phases can be layered on
+  once the baseline is solid.
+
+- **TODO: explicitly model two change types** — the current Establish phase conflates two kinds
+  of consensus decisions: (1) _primary term changes_ — appointing a new primary and write
+  quorum, which requires revoking the previous primary term first; and (2) _consensus rules
+  changes_ — updating cohort membership or the durability policy, which does not necessarily
+  require a primary change. Making these distinct operation types clarifies which invariants
+  apply to each and prevents accidentally mixing them. As a hard constraint: a single
+  coordinator term must make at most one type of change — primary term changes and consensus
+  rules changes must happen in separate coordinator terms.
 - **TODO: fix `learnEstablishedQuorum` grouping key** — currently groups poolers by their current
   `(CoordTerm, SeqNum)`, which reflects the most-recently voted proposal (possibly a Begin at
   a higher term). After a Begin-only cycle (no Establish), poolers advance `CoordTerm` but
@@ -308,6 +376,29 @@ The validation during `Begin` serves two distinct cases that the orch handles di
 bootstrapped, admitting new nodes to the _voting_ cohort must itself be a consensus decision.
 Until that is implemented, nodes are added directly in simulation and the orch accepts them
 without a cohort-admission round.
+
+**Proposed bootstrap simplification — 1-node cohort first.** Rather than requiring a multi-node
+quorum for initial bootstrap (which immediately raises the BeginTerm / write-quorum intersection
+problem), an alternative is to identify a single bootstrap-eligible pooler by operator
+configuration. The coordinator allocates a term, starts that term with the one eligible node,
+and establishes it as primary in a 1-node cohort with no sync ACKs required. Subsequent
+coordinator terms then use normal consensus rules changes (Stage 2.5) to add replicas and
+upgrade the durability policy.
+
+Benefits of this approach:
+
+- **Eliminates the bootstrap quorum intersection problem** — a 1-node cohort has no inter-node
+  quorum, so there is no BeginTerm / write-quorum intersection to satisfy at bootstrap time.
+- **Reuses the cohort modification protocol** — adding nodes to the initial cluster is just a
+  consensus rules change, not a special bootstrap path.
+- **Simplifies `CohortMember` semantics** — `BootstrapEligible=true` on a fresh node is the
+  only signal needed; there is no longer a need to track which multi-node quorum was the
+  "bootstrap quorum."
+
+The acknowledged trade-off: there is a brief vulnerability window between establishing the
+1-node primary and completing the first cohort expansion. If the sole node is lost during
+this window, manual intervention is needed to recover. This window is short (assuming the
+orch proceeds immediately) and the risk is acceptable for an initial cluster bring-up.
 
 ### Stage 2.5 — Cohort membership changes
 
