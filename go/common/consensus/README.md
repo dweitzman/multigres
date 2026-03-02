@@ -295,6 +295,42 @@ Small improvements that make the existing code more correct and configurable:
   apply to each and prevents accidentally mixing them. As a hard constraint: a single
   coordinator term must make at most one type of change — primary term changes and consensus
   rules changes must happen in separate coordinator terms.
+- **TODO: full-coverage revoke before Establish** — the current Revoke phase
+  completes when the `DurabilityPolicy` quorum reports `IsRevoked=true` for the
+  _known_ previous primary term. That is sufficient to prevent the old primary
+  from accepting writes, but it does not prevent a _competing coordinator_ —
+  one operating under a different network partition with different information —
+  from establishing a subsequent primary term that we are unaware of. Before we
+  can safely establish a new primary term we must revoke _all possible_ quorums
+  that might exist, not only the one we know about.
+
+  The coverage requirement is determined by the durability policy. Consider a
+  30-node cluster where any node may be primary and a write quorum requires
+  acknowledgement from any two of the remaining nodes. A competing coordinator
+  could establish a quorum by reaching any 2-node subset. To guarantee we have
+  blocked every such combination we must reach all but one node in the cluster:
+  if we left any two nodes uncontacted, those two could together form a valid
+  write-quorum we have not revoked.
+
+  The durability policy can make full-coverage revoke significantly less
+  onerous by constraining which combinations are valid quorums:
+  - **Restricting eligible primaries.** If only 15 of the 30 nodes may ever be
+    primary, reaching all 15 potential primaries may be sufficient, since a
+    quorum cannot form without one of them.
+  - **Fixed replication groups.** If the cluster is partitioned into 10
+    independent groups of 3 (one eligible leader, two designated replicas)
+    where quorums can only form within a group, revoking every group requires
+    either the group's leader or both of its replicas. Reaching all 20 replicas
+    is then sufficient to revoke all 10 possible quorums.
+  - **Cross-zone ACK requirements.** If every valid quorum must include at
+    least one ACK from a replica in a different availability zone, then the
+    in-zone replicas alone are insufficient to sustain a quorum in that zone.
+    Reaching the reachable-zone nodes may be enough to ensure the cross-zone
+    requirement cannot be met for any competing candidacy.
+
+  Until this is addressed the Revoke phase provides only best-effort coverage
+  against racing coordinators.
+
 - **TODO: fix `learnEstablishedQuorum` grouping key** — currently groups poolers by their current
   `(CoordTerm, SeqNum)`, which reflects the most-recently voted proposal (possibly a Begin at
   a higher term). After a Begin-only cycle (no Establish), poolers advance `CoordTerm` but
