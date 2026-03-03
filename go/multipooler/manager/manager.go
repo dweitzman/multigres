@@ -1710,9 +1710,8 @@ func (pm *MultiPoolerManager) restoreAndStartPostgres(ctx context.Context) error
 		return errors.New("no complete backups available")
 	}
 
-	// Select the best backup by (consensus_term DESC, LSN DESC) to avoid
-	// restoring a stale bootstrap backup from a competing pooler.
-	latestBackup := selectBestBackup(completeBackups)
+	// Use the latest complete backup (last in the list)
+	latestBackup := completeBackups[len(completeBackups)-1]
 
 	pm.logger.InfoContext(ctx, "MonitorPostgres: restoring from backup",
 		"backup_id", latestBackup.BackupId)

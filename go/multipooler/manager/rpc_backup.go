@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
-	"strconv"
 	"strings"
 	"time"
 
@@ -134,11 +133,6 @@ func (pm *MultiPoolerManager) backupLocked(ctx context.Context, forcePrimary boo
 	poolerType := pm.getPoolerType()
 	args = append(args, "--annotation=pooler_type="+poolerType.String())
 	args = append(args, "--annotation=job_id="+effectiveJobID)
-
-	// Annotate the consensus term so replicas can prefer higher-term backups when restoring.
-	if term, termErr := pm.consensusState.GetCurrentTermNumber(ctx); termErr == nil {
-		args = append(args, "--annotation=consensus_term="+strconv.FormatInt(term, 10))
-	}
 
 	args = append(args, "backup")
 
@@ -391,62 +385,6 @@ func (pm *MultiPoolerManager) getBackupsLocked(ctx context.Context, limit uint32
 	return backups, nil
 }
 
-// selectBestBackup returns the backup that should be preferred for restore.
-// Priority: highest consensus_term first, then highest LSN as a tiebreaker.
-// This ensures a late-arriving stale bootstrap backup (low term, high wall-clock time)
-// never wins over the canonical primary's backup (higher term).
-// Returns nil if backups is empty.
-func selectBestBackup(backups []*multipoolermanagerdata.BackupMetadata) *multipoolermanagerdata.BackupMetadata {
-	if len(backups) == 0 {
-		return nil
-	}
-	best := backups[0]
-	for _, b := range backups[1:] {
-		if b.ConsensusTerm > best.ConsensusTerm {
-			best = b
-		} else if b.ConsensusTerm == best.ConsensusTerm && compareLSN(b.FinalLsn, best.FinalLsn) > 0 {
-			best = b
-		}
-	}
-	return best
-}
-
-// compareLSN compares two PostgreSQL LSN strings (format: "A/BBBBBBBB" in hex).
-// Returns -1 if a < b, 0 if a == b, 1 if a > b.
-// Returns 0 for any malformed input, falling back to other selection criteria.
-func compareLSN(a, b string) int {
-	aSeg, aOff := parseLSN(a)
-	bSeg, bOff := parseLSN(b)
-	if aSeg != bSeg {
-		if aSeg < bSeg {
-			return -1
-		}
-		return 1
-	}
-	if aOff < bOff {
-		return -1
-	}
-	if aOff > bOff {
-		return 1
-	}
-	return 0
-}
-
-// parseLSN parses a PostgreSQL LSN string into (segment, offset) as uint64.
-// Returns (0, 0) on parse error.
-func parseLSN(lsn string) (uint64, uint64) {
-	parts := strings.SplitN(lsn, "/", 2)
-	if len(parts) != 2 {
-		return 0, 0
-	}
-	seg, err1 := strconv.ParseUint(parts[0], 16, 64)
-	off, err2 := strconv.ParseUint(parts[1], 16, 64)
-	if err1 != nil || err2 != nil {
-		return 0, 0
-	}
-	return seg, off
-}
-
 // listBackups retrieves backup metadata from pgbackrest.
 // Caller must hold the action lock.
 // pm.mu is NOT required because this function only reads config fields
@@ -506,13 +444,12 @@ func (pm *MultiPoolerManager) listBackups(ctx context.Context) ([]*multipoolerma
 			status = multipoolermanagerdata.BackupMetadata_INCOMPLETE
 		}
 
-		// Extract table_group, shard, job_id, multipooler_id, pooler_type, and consensus_term from annotations
+		// Extract table_group, shard, job_id, multipooler_id, and pooler_type from annotations
 		tableGroup := ""
 		shard := ""
 		jobID := ""
 		multipoolerID := ""
 		poolerType := clustermetadatapb.PoolerType_UNKNOWN
-		var consensusTerm int64
 		if pgBackup.Annotation != nil {
 			tableGroup = pgBackup.Annotation["table_group"]
 			shard = pgBackup.Annotation["shard"]
@@ -520,11 +457,6 @@ func (pm *MultiPoolerManager) listBackups(ctx context.Context) ([]*multipoolerma
 			multipoolerID = pgBackup.Annotation["multipooler_id"]
 			if pt, ok := clustermetadatapb.PoolerType_value[pgBackup.Annotation["pooler_type"]]; ok {
 				poolerType = clustermetadatapb.PoolerType(pt)
-			}
-			if termStr := pgBackup.Annotation["consensus_term"]; termStr != "" {
-				if t, parseErr := strconv.ParseInt(termStr, 10, 64); parseErr == nil {
-					consensusTerm = t
-				}
 			}
 		}
 
@@ -569,7 +501,6 @@ func (pm *MultiPoolerManager) listBackups(ctx context.Context) ([]*multipoolerma
 			Type:            pgBackup.Type,
 			MultipoolerId:   multipoolerID,
 			PoolerType:      poolerType,
-			ConsensusTerm:   consensusTerm,
 		})
 	}
 
