@@ -154,6 +154,16 @@ type GlobalStore interface {
 	// it will proceed even if references exist, potentially leaving the system
 	// in an inconsistent state.
 	DeleteDatabase(ctx context.Context, database string, force bool) error
+
+	// ClaimInitialBackup atomically registers the canonical bootstrap backup for
+	// a shard using a create-if-not-exists operation. Returns (true, nil) if this
+	// caller won the race, (false, nil) if another pooler already claimed the key
+	// (NodeExists). Returns a non-nil error for all other failures.
+	ClaimInitialBackup(ctx context.Context, shardKey types.ShardKey, backupID string) (bool, error)
+
+	// GetInitialBackup returns the canonical bootstrap backup for a shard, or
+	// nil if no claim has been registered yet.
+	GetInitialBackup(ctx context.Context, shardKey types.ShardKey) (*clustermetadatapb.InitialBackup, error)
 }
 
 // CellStore defines APIs for cell-level dynamic metadata.
