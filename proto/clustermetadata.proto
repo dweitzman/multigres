@@ -337,3 +337,14 @@ enum AsyncReplicationFallbackMode {
   // if synchronous replication cannot be established to meet quorum requirements
   ASYNC_REPLICATION_FALLBACK_MODE_REJECT = 2;
 }
+
+// InitialBackup records the canonical bootstrap backup for a shard.
+// Written atomically (create-if-not-exists) in etcd by the first pooler to
+// complete primary initialization. Replicas consult this record before
+// restoring a bootstrap-annotated backup to ensure they use the canonical copy.
+// pgBackRest backup IDs are unique within a stanza, so backup_id alone is
+// sufficient to identify the canonical backup.
+message InitialBackup {
+  // pgBackRest backup label, e.g. "20250104-100000F".
+  string backup_id = 1;
+}

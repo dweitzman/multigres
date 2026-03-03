@@ -709,6 +709,11 @@ message BackupMetadata {
   // Pooler type that created this backup (from pgbackrest annotation)
   clustermetadata.PoolerType pooler_type = 10;
 
+  // True if this is the initial bootstrap backup for the shard.
+  // Replicas consult etcd (InitialBackup key) before restoring a bootstrap-
+  // annotated backup to ensure they restore the canonical copy.
+  bool is_bootstrap = 11;
+
   // Status represents the state of a backup
   enum Status {
     UNKNOWN = 0;

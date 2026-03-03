@@ -3589,7 +3589,11 @@ type BackupMetadata struct {
 	// Multipooler ID that created this backup (from pgbackrest annotation)
 	MultipoolerId string `protobuf:"bytes,9,opt,name=multipooler_id,json=multipoolerId,proto3" json:"multipooler_id,omitempty"`
 	// Pooler type that created this backup (from pgbackrest annotation)
-	PoolerType    clustermetadata.PoolerType `protobuf:"varint,10,opt,name=pooler_type,json=poolerType,proto3,enum=clustermetadata.PoolerType" json:"pooler_type,omitempty"`
+	PoolerType clustermetadata.PoolerType `protobuf:"varint,10,opt,name=pooler_type,json=poolerType,proto3,enum=clustermetadata.PoolerType" json:"pooler_type,omitempty"`
+	// True if this is the initial bootstrap backup for the shard.
+	// Replicas consult etcd (InitialBackup key) before restoring a bootstrap-
+	// annotated backup to ensure they restore the canonical copy.
+	IsBootstrap   bool `protobuf:"varint,11,opt,name=is_bootstrap,json=isBootstrap,proto3" json:"is_bootstrap,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3692,6 +3696,13 @@ func (x *BackupMetadata) GetPoolerType() clustermetadata.PoolerType {
 		return x.PoolerType
 	}
 	return clustermetadata.PoolerType(0)
+}
+
+func (x *BackupMetadata) GetIsBootstrap() bool {
+	if x != nil {
+		return x.IsBootstrap
+	}
+	return false
 }
 
 // GetDurabilityPolicyRequest requests the active durability policy
@@ -4277,7 +4288,7 @@ const file_multipoolermanagerdata_proto_rawDesc = "" +
 	"\x17GetBackupByJobIdRequest\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\"Z\n" +
 	"\x18GetBackupByJobIdResponse\x12>\n" +
-	"\x06backup\x18\x01 \x01(\v2&.multipoolermanagerdata.BackupMetadataR\x06backup\"\xb9\x03\n" +
+	"\x06backup\x18\x01 \x01(\v2&.multipoolermanagerdata.BackupMetadataR\x06backup\"\xdc\x03\n" +
 	"\x0eBackupMetadata\x12\x1f\n" +
 	"\vtable_group\x18\x01 \x01(\tR\n" +
 	"tableGroup\x12\x14\n" +
@@ -4291,7 +4302,8 @@ const file_multipoolermanagerdata_proto_rawDesc = "" +
 	"\x0emultipooler_id\x18\t \x01(\tR\rmultipoolerId\x12<\n" +
 	"\vpooler_type\x18\n" +
 	" \x01(\x0e2\x1b.clustermetadata.PoolerTypeR\n" +
-	"poolerType\"3\n" +
+	"poolerType\x12!\n" +
+	"\fis_bootstrap\x18\v \x01(\bR\visBootstrap\"3\n" +
 	"\x06Status\x12\v\n" +
 	"\aUNKNOWN\x10\x00\x12\x0e\n" +
 	"\n" +

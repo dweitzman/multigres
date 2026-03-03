@@ -1300,6 +1300,57 @@ func (x *QuorumRule) GetAsyncFallback() AsyncReplicationFallbackMode {
 	return AsyncReplicationFallbackMode_ASYNC_REPLICATION_FALLBACK_MODE_UNKNOWN
 }
 
+// InitialBackup records the canonical bootstrap backup for a shard.
+// Written atomically (create-if-not-exists) in etcd by the first pooler to
+// complete primary initialization. Replicas consult this record before
+// restoring a bootstrap-annotated backup to ensure they use the canonical copy.
+// pgBackRest backup IDs are unique within a stanza, so backup_id alone is
+// sufficient to identify the canonical backup.
+type InitialBackup struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// pgBackRest backup label, e.g. "20250104-100000F".
+	BackupId      string `protobuf:"bytes,1,opt,name=backup_id,json=backupId,proto3" json:"backup_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *InitialBackup) Reset() {
+	*x = InitialBackup{}
+	mi := &file_clustermetadata_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InitialBackup) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InitialBackup) ProtoMessage() {}
+
+func (x *InitialBackup) ProtoReflect() protoreflect.Message {
+	mi := &file_clustermetadata_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InitialBackup.ProtoReflect.Descriptor instead.
+func (*InitialBackup) Descriptor() ([]byte, []int) {
+	return file_clustermetadata_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *InitialBackup) GetBackupId() string {
+	if x != nil {
+		return x.BackupId
+	}
+	return ""
+}
+
 var File_clustermetadata_proto protoreflect.FileDescriptor
 
 const file_clustermetadata_proto_rawDesc = "" +
@@ -1394,7 +1445,9 @@ const file_clustermetadata_proto_rawDesc = "" +
 	"quorumType\x12%\n" +
 	"\x0erequired_count\x18\x02 \x01(\x05R\rrequiredCount\x12 \n" +
 	"\vdescription\x18\x03 \x01(\tR\vdescription\x12T\n" +
-	"\x0easync_fallback\x18\x04 \x01(\x0e2-.clustermetadata.AsyncReplicationFallbackModeR\rasyncFallback*@\n" +
+	"\x0easync_fallback\x18\x04 \x01(\x0e2-.clustermetadata.AsyncReplicationFallbackModeR\rasyncFallback\",\n" +
+	"\rInitialBackup\x12\x1b\n" +
+	"\tbackup_id\x18\x01 \x01(\tR\bbackupId*@\n" +
 	"\n" +
 	"PoolerType\x12\v\n" +
 	"\aUNKNOWN\x10\x00\x12\v\n" +
@@ -1431,7 +1484,7 @@ func file_clustermetadata_proto_rawDescGZIP() []byte {
 }
 
 var file_clustermetadata_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_clustermetadata_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_clustermetadata_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_clustermetadata_proto_goTypes = []any{
 	(PoolerType)(0),                   // 0: clustermetadata.PoolerType
 	(PoolerServingStatus)(0),          // 1: clustermetadata.PoolerServingStatus
@@ -1451,10 +1504,11 @@ var file_clustermetadata_proto_goTypes = []any{
 	(*KeyRange)(nil),                  // 15: clustermetadata.KeyRange
 	(*DurabilityPolicy)(nil),          // 16: clustermetadata.DurabilityPolicy
 	(*QuorumRule)(nil),                // 17: clustermetadata.QuorumRule
-	nil,                               // 18: clustermetadata.MultiPooler.PortMapEntry
-	nil,                               // 19: clustermetadata.MultiGateway.PortMapEntry
-	nil,                               // 20: clustermetadata.MultiOrch.PortMapEntry
-	(*timestamppb.Timestamp)(nil),     // 21: google.protobuf.Timestamp
+	(*InitialBackup)(nil),             // 18: clustermetadata.InitialBackup
+	nil,                               // 19: clustermetadata.MultiPooler.PortMapEntry
+	nil,                               // 20: clustermetadata.MultiGateway.PortMapEntry
+	nil,                               // 21: clustermetadata.MultiOrch.PortMapEntry
+	(*timestamppb.Timestamp)(nil),     // 22: google.protobuf.Timestamp
 }
 var file_clustermetadata_proto_depIdxs = []int32{
 	8,  // 0: clustermetadata.Database.backup_location:type_name -> clustermetadata.BackupLocation
@@ -1464,15 +1518,15 @@ var file_clustermetadata_proto_depIdxs = []int32{
 	15, // 4: clustermetadata.MultiPooler.key_range:type_name -> clustermetadata.KeyRange
 	0,  // 5: clustermetadata.MultiPooler.type:type_name -> clustermetadata.PoolerType
 	1,  // 6: clustermetadata.MultiPooler.serving_status:type_name -> clustermetadata.PoolerServingStatus
-	18, // 7: clustermetadata.MultiPooler.port_map:type_name -> clustermetadata.MultiPooler.PortMapEntry
+	19, // 7: clustermetadata.MultiPooler.port_map:type_name -> clustermetadata.MultiPooler.PortMapEntry
 	14, // 8: clustermetadata.MultiGateway.id:type_name -> clustermetadata.ID
-	19, // 9: clustermetadata.MultiGateway.port_map:type_name -> clustermetadata.MultiGateway.PortMapEntry
+	20, // 9: clustermetadata.MultiGateway.port_map:type_name -> clustermetadata.MultiGateway.PortMapEntry
 	14, // 10: clustermetadata.MultiOrch.id:type_name -> clustermetadata.ID
-	20, // 11: clustermetadata.MultiOrch.port_map:type_name -> clustermetadata.MultiOrch.PortMapEntry
+	21, // 11: clustermetadata.MultiOrch.port_map:type_name -> clustermetadata.MultiOrch.PortMapEntry
 	4,  // 12: clustermetadata.ID.component:type_name -> clustermetadata.ID.ComponentType
 	17, // 13: clustermetadata.DurabilityPolicy.quorum_rule:type_name -> clustermetadata.QuorumRule
-	21, // 14: clustermetadata.DurabilityPolicy.created_at:type_name -> google.protobuf.Timestamp
-	21, // 15: clustermetadata.DurabilityPolicy.updated_at:type_name -> google.protobuf.Timestamp
+	22, // 14: clustermetadata.DurabilityPolicy.created_at:type_name -> google.protobuf.Timestamp
+	22, // 15: clustermetadata.DurabilityPolicy.updated_at:type_name -> google.protobuf.Timestamp
 	2,  // 16: clustermetadata.QuorumRule.quorum_type:type_name -> clustermetadata.QuorumType
 	3,  // 17: clustermetadata.QuorumRule.async_fallback:type_name -> clustermetadata.AsyncReplicationFallbackMode
 	18, // [18:18] is the sub-list for method output_type
@@ -1497,7 +1551,7 @@ func file_clustermetadata_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_clustermetadata_proto_rawDesc), len(file_clustermetadata_proto_rawDesc)),
 			NumEnums:      5,
-			NumMessages:   16,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
