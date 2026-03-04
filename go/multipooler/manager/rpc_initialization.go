@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/multigres/multigres/go/common/mterrors"
+	"github.com/multigres/multigres/go/common/types"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
@@ -63,11 +64,33 @@ func (pm *MultiPoolerManager) InitializeEmptyPrimary(ctx context.Context, req *m
 		return nil, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT, "consensus term must be 1 for new primary initialization, got %d", req.ConsensusTerm)
 	}
 
-	// Check if already initialized
+	// Check if already initialized (marker file present = full init completed)
 	if pm.hasBackup(ctx) {
 		pm.logger.InfoContext(ctx, "Pooler already initialized", "shard", pm.getShardID())
 		// Note: backup_id will be empty for idempotent case since we didn't create a new backup
 		return &multipoolermanagerdatapb.InitializeEmptyPrimaryResponse{Success: true}, nil
+	}
+
+	shardKey := types.ShardKey{
+		Database:   pm.multipooler.Database,
+		TableGroup: pm.multipooler.TableGroup,
+		Shard:      pm.multipooler.Shard,
+	}
+
+	// Check etcd for an existing canonical backup claim.
+	// This handles two cases:
+	//   1. Crash after CAS claim but before markHasBackup: canonicalBackupID != "" → call finishPrimaryInit directly.
+	//   2. Another pooler already bootstrapped: error returned.
+	canonicalBackupID, err := pm.checkBootstrapClaim(ctx, shardKey)
+	if err != nil {
+		return nil, err
+	}
+	if canonicalBackupID != "" {
+		// Crash-recovery path: a canonical backup is claimed in etcd and postgres is still
+		// running, meaning we crashed after claiming etcd but before writing the marker file.
+		pm.logger.InfoContext(ctx, "Recovering from crash after CAS claim; skipping backup",
+			"canonical_backup_id", canonicalBackupID)
+		return pm.finishPrimaryInit(ctx, req, canonicalBackupID)
 	}
 
 	// Initialize data directory via pgctld if needed
@@ -145,12 +168,30 @@ func (pm *MultiPoolerManager) InitializeEmptyPrimary(ctx context.Context, req *m
 
 	// Create initial backup for standby initialization
 	pm.logger.InfoContext(ctx, "Creating initial backup for standby initialization", "shard", pm.getShardID())
-	backupID, err := pm.backupLocked(ctx, true, "full", "", nil)
+	backupID, err := pm.backupLocked(ctx, true, "full", "", nil, true)
 	if err != nil {
 		return nil, mterrors.Wrap(err, "failed to create initial backup")
 	}
 	pm.logger.InfoContext(ctx, "Initial backup created", "backup_id", backupID)
 
+	// Atomically register this backup as the canonical bootstrap backup in etcd.
+	// create-if-not-exists semantics: only the first caller wins.
+	won, err := pm.topoClient.ClaimInitialBackup(ctx, shardKey, backupID)
+	if err != nil {
+		return nil, mterrors.Wrap(err, "failed to claim initial backup in etcd")
+	}
+	if !won {
+		return nil, mterrors.New(mtrpcpb.Code_ALREADY_EXISTS,
+			"lost bootstrap CAS race: another pooler already claimed the canonical backup")
+	}
+
+	return pm.finishPrimaryInit(ctx, req, backupID)
+}
+
+// finishPrimaryInit completes the final steps of primary initialization after the
+// bootstrap backup has been taken and claimed in etcd. Called from both the normal
+// path and the crash-recovery path (CAS written but markHasBackup not yet called).
+func (pm *MultiPoolerManager) finishPrimaryInit(ctx context.Context, req *multipoolermanagerdatapb.InitializeEmptyPrimaryRequest, backupID string) (*multipoolermanagerdatapb.InitializeEmptyPrimaryResponse, error) {
 	// Create durability policy if requested
 	if req.DurabilityPolicyName != "" && req.DurabilityQuorumRule != nil {
 		if err := pm.createDurabilityPolicyLocked(ctx, req.DurabilityPolicyName, req.DurabilityQuorumRule); err != nil {
@@ -201,6 +242,63 @@ func (pm *MultiPoolerManager) InitializeEmptyPrimary(ctx context.Context, req *m
 		Success:  true,
 		BackupId: backupID,
 	}, nil
+}
+
+// checkBootstrapClaim checks etcd for an existing canonical bootstrap backup claim.
+//
+// The etcd claim stores only the backup ID — it does not record which specific pooler
+// instance made the claim. We therefore cannot use the backup's multipooler_id annotation
+// as proof of ownership: a fresh pod rescheduled with the same name would have the same
+// multipooler_id but must NOT enter crash-recovery.
+//
+// The reliable signal is whether postgres is still running. If we crashed after claiming
+// etcd but before markHasBackup, pgctld will have kept postgres alive. A fresh pod
+// (data dir wiped) will have postgres stopped.
+//
+// Returns:
+//   - ("", nil)          — no claim yet; caller should proceed with full init
+//   - (backupID, nil)    — canonical backup is in stanza and postgres is running (crash-recovery)
+//   - ("", error)        — shard already bootstrapped (postgres not running), or unexpected error
+func (pm *MultiPoolerManager) checkBootstrapClaim(ctx context.Context, shardKey types.ShardKey) (string, error) {
+	canonical, err := pm.topoClient.GetInitialBackup(ctx, shardKey)
+	if err != nil {
+		return "", mterrors.Wrap(err, "failed to check canonical backup in etcd")
+	}
+	if canonical == nil {
+		return "", nil // no claim yet, proceed with full init
+	}
+
+	// A claim exists. Check if the canonical backup is in our stanza.
+	backups, err := pm.listBackups(ctx)
+	if err != nil {
+		return "", mterrors.Wrap(err, "failed to list backups while checking bootstrap claim")
+	}
+
+	backupInStanza := false
+	for _, b := range backups {
+		if b.BackupId == canonical.BackupId {
+			backupInStanza = true
+			break
+		}
+	}
+
+	if !backupInStanza {
+		return "", mterrors.Errorf(mtrpcpb.Code_ALREADY_EXISTS,
+			"shard already bootstrapped but canonical backup %s not available locally", canonical.BackupId)
+	}
+
+	// The canonical backup is in our stanza. Determine if this is crash-recovery.
+	// Crash-recovery requires postgres to still be running from our previous bootstrap
+	// attempt. A fresh pod (e.g. rescheduled after the previous pod completed bootstrap)
+	// will not have postgres running.
+	if !pm.isPostgresRunning(ctx) {
+		return "", mterrors.Errorf(mtrpcpb.Code_ALREADY_EXISTS,
+			"shard already bootstrapped but postgres is not running; another instance completed bootstrap (canonical backup %s)", canonical.BackupId)
+	}
+
+	// Postgres is running and the canonical backup is in our stanza: crash-recovery path.
+	// We registered this backup but crashed before markHasBackup completed.
+	return canonical.BackupId, nil
 }
 
 // Helper methods

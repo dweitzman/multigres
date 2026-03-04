@@ -63,11 +63,12 @@ func (pm *MultiPoolerManager) Backup(ctx context.Context, forcePrimary bool, bac
 	}
 	defer pm.actionLock.Release(ctx)
 
-	return pm.backupLocked(ctx, forcePrimary, backupType, jobID, overrides)
+	return pm.backupLocked(ctx, forcePrimary, backupType, jobID, overrides, false)
 }
 
 // backupLocked performs a backup. Caller must hold the action lock.
-func (pm *MultiPoolerManager) backupLocked(ctx context.Context, forcePrimary bool, backupType string, jobID string, overrides map[string]string) (string, error) {
+// isBootstrap should be true when this backup is the initial bootstrap backup for the shard.
+func (pm *MultiPoolerManager) backupLocked(ctx context.Context, forcePrimary bool, backupType string, jobID string, overrides map[string]string, isBootstrap bool) (string, error) {
 	if err := AssertActionLockHeld(ctx); err != nil {
 		return "", err
 	}
@@ -133,6 +134,10 @@ func (pm *MultiPoolerManager) backupLocked(ctx context.Context, forcePrimary boo
 	poolerType := pm.getPoolerType()
 	args = append(args, "--annotation=pooler_type="+poolerType.String())
 	args = append(args, "--annotation=job_id="+effectiveJobID)
+
+	if isBootstrap {
+		args = append(args, "--annotation=is_bootstrap=true")
+	}
 
 	args = append(args, "backup")
 
@@ -444,12 +449,13 @@ func (pm *MultiPoolerManager) listBackups(ctx context.Context) ([]*multipoolerma
 			status = multipoolermanagerdata.BackupMetadata_INCOMPLETE
 		}
 
-		// Extract table_group, shard, job_id, multipooler_id, and pooler_type from annotations
+		// Extract table_group, shard, job_id, multipooler_id, pooler_type, and is_bootstrap from annotations
 		tableGroup := ""
 		shard := ""
 		jobID := ""
 		multipoolerID := ""
 		poolerType := clustermetadatapb.PoolerType_UNKNOWN
+		isBootstrap := false
 		if pgBackup.Annotation != nil {
 			tableGroup = pgBackup.Annotation["table_group"]
 			shard = pgBackup.Annotation["shard"]
@@ -458,6 +464,7 @@ func (pm *MultiPoolerManager) listBackups(ctx context.Context) ([]*multipoolerma
 			if pt, ok := clustermetadatapb.PoolerType_value[pgBackup.Annotation["pooler_type"]]; ok {
 				poolerType = clustermetadatapb.PoolerType(pt)
 			}
+			isBootstrap = pgBackup.Annotation["is_bootstrap"] == "true"
 		}
 
 		// Defense-in-depth: skip backups that don't match this pooler's shard.
@@ -501,6 +508,7 @@ func (pm *MultiPoolerManager) listBackups(ctx context.Context) ([]*multipoolerma
 			Type:            pgBackup.Type,
 			MultipoolerId:   multipoolerID,
 			PoolerType:      poolerType,
+			IsBootstrap:     isBootstrap,
 		})
 	}
 

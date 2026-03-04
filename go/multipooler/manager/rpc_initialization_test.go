@@ -30,6 +30,7 @@ import (
 	"github.com/multigres/multigres/go/common/constants"
 	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/common/topoclient/memorytopo"
+	"github.com/multigres/multigres/go/common/types"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
@@ -172,8 +173,9 @@ func TestInitializeEmptyPrimary(t *testing.T) {
 // created before the backup is taken, so using it would return true prematurely
 // on a crash-restart between schema creation and backup completion.
 //
-// TODO: once etcd gating is added to InitializeEmptyPrimary, add a test that
-// verifies hasBackup() returns false after backup but before the etcd CAS write.
+// Note: hasBackup() itself has no etcd awareness — it only checks the marker file.
+// The etcd CAS gate lives in InitializeEmptyPrimary (checkBootstrapClaim + ClaimInitialBackup).
+// See TestCheckBootstrapClaim for coverage of that logic.
 func TestHasBackup(t *testing.T) {
 	ctx := context.Background()
 
@@ -962,4 +964,352 @@ type mockPgctldClientWithCounter struct {
 func (m *mockPgctldClientWithCounter) Start(ctx context.Context, req *pgctldpb.StartRequest, opts ...grpc.CallOption) (*pgctldpb.StartResponse, error) {
 	m.startCallCount++
 	return m.mockPgctldClient.Start(ctx, req, opts...)
+}
+
+// setupMockPgbackrestForInitTest creates a mock pgbackrest in a temp bin dir and
+// prepends it to PATH. The mock returns the provided JSON for "info" commands.
+// Returns the pgbackrest.conf path and a cleanup function.
+func setupMockPgbackrestForInitTest(t *testing.T, poolerDir string, infoJSON string) string {
+	t.Helper()
+
+	binDir := filepath.Join(poolerDir, "bin")
+	require.NoError(t, os.MkdirAll(binDir, 0o755))
+
+	script := `#!/bin/bash
+if [[ "$*" == *"info"* ]]; then
+    cat << 'JSONEOF'
+` + infoJSON + `
+JSONEOF
+fi
+exit 0
+`
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "pgbackrest"), []byte(script), 0o755))
+	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+
+	pgbackrestDir := filepath.Join(poolerDir, "pgbackrest")
+	require.NoError(t, os.MkdirAll(pgbackrestDir, 0o755))
+	configPath := filepath.Join(pgbackrestDir, "pgbackrest.conf")
+	require.NoError(t, os.WriteFile(configPath, []byte("[multigres]\nrepo1-path=/tmp/backups\n"), 0o600))
+	return configPath
+}
+
+func TestSelectRestoreBackup(t *testing.T) {
+	const (
+		testDatabase   = "test-database"
+		testTableGroup = "default"
+		testShard      = "0"
+		bootstrapID    = "20250104-100000F"
+		regularID      = "20250105-120000F"
+	)
+
+	shardKey := types.ShardKey{
+		Database:   testDatabase,
+		TableGroup: testTableGroup,
+		Shard:      testShard,
+	}
+
+	makeBackup := func(id string, isBootstrap bool) *multipoolermanagerdatapb.BackupMetadata {
+		return &multipoolermanagerdatapb.BackupMetadata{
+			BackupId:    id,
+			Status:      multipoolermanagerdatapb.BackupMetadata_COMPLETE,
+			IsBootstrap: isBootstrap,
+		}
+	}
+
+	t.Run("uses regular backup when present, no etcd check needed", func(t *testing.T) {
+		ctx := context.Background()
+		ts, _ := memorytopo.NewServerAndFactory(ctx, "zone1")
+		defer ts.Close()
+		require.NoError(t, ts.CreateDatabase(ctx, testDatabase, &clustermetadatapb.Database{
+			Name: testDatabase, BackupLocation: utils.FilesystemBackupLocation("/tmp/backups"),
+		}))
+		pm := &MultiPoolerManager{
+			logger:      slog.Default(),
+			config:      &Config{},
+			topoClient:  ts,
+			multipooler: &clustermetadatapb.MultiPooler{Database: testDatabase, TableGroup: testTableGroup, Shard: testShard},
+		}
+
+		backups := []*multipoolermanagerdatapb.BackupMetadata{
+			makeBackup(bootstrapID, true),
+			makeBackup(regularID, false),
+		}
+		id, err := pm.selectRestoreBackup(ctx, backups)
+		require.NoError(t, err)
+		assert.Equal(t, regularID, id, "should select the regular (non-bootstrap) backup")
+	})
+
+	t.Run("backward compat: old backup without is_bootstrap flag treated as regular", func(t *testing.T) {
+		ctx := context.Background()
+		ts, _ := memorytopo.NewServerAndFactory(ctx, "zone1")
+		defer ts.Close()
+		require.NoError(t, ts.CreateDatabase(ctx, testDatabase, &clustermetadatapb.Database{
+			Name: testDatabase, BackupLocation: utils.FilesystemBackupLocation("/tmp/backups"),
+		}))
+		pm := &MultiPoolerManager{
+			logger:      slog.Default(),
+			config:      &Config{},
+			topoClient:  ts,
+			multipooler: &clustermetadatapb.MultiPooler{Database: testDatabase, TableGroup: testTableGroup, Shard: testShard},
+		}
+
+		// Old backup: IsBootstrap=false (zero value)
+		backups := []*multipoolermanagerdatapb.BackupMetadata{
+			makeBackup("20250103-080000F", false),
+		}
+		id, err := pm.selectRestoreBackup(ctx, backups)
+		require.NoError(t, err)
+		assert.Equal(t, "20250103-080000F", id, "old backup should be treated as regular")
+	})
+
+	t.Run("returns error when no complete backups available", func(t *testing.T) {
+		ctx := context.Background()
+		pm := &MultiPoolerManager{
+			logger:      slog.Default(),
+			config:      &Config{},
+			multipooler: &clustermetadatapb.MultiPooler{Database: testDatabase, TableGroup: testTableGroup, Shard: testShard},
+		}
+		_, err := pm.selectRestoreBackup(ctx, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no complete backups")
+	})
+
+	t.Run("uses canonical bootstrap backup from etcd when only bootstrap backups exist", func(t *testing.T) {
+		ctx := context.Background()
+		ts, _ := memorytopo.NewServerAndFactory(ctx, "zone1")
+		defer ts.Close()
+		require.NoError(t, ts.CreateDatabase(ctx, testDatabase, &clustermetadatapb.Database{
+			Name: testDatabase, BackupLocation: utils.FilesystemBackupLocation("/tmp/backups"),
+		}))
+		won, err := ts.ClaimInitialBackup(ctx, shardKey, bootstrapID)
+		require.NoError(t, err)
+		require.True(t, won)
+
+		pm := &MultiPoolerManager{
+			logger:      slog.Default(),
+			config:      &Config{},
+			topoClient:  ts,
+			multipooler: &clustermetadatapb.MultiPooler{Database: testDatabase, TableGroup: testTableGroup, Shard: testShard},
+		}
+
+		backups := []*multipoolermanagerdatapb.BackupMetadata{
+			makeBackup(bootstrapID, true),
+		}
+		id, err := pm.selectRestoreBackup(ctx, backups)
+		require.NoError(t, err)
+		assert.Equal(t, bootstrapID, id, "should select the canonical bootstrap backup from etcd")
+	})
+
+	t.Run("returns retry error when only bootstrap backups but etcd has no canonical yet", func(t *testing.T) {
+		ctx := context.Background()
+		ts, _ := memorytopo.NewServerAndFactory(ctx, "zone1")
+		defer ts.Close()
+		require.NoError(t, ts.CreateDatabase(ctx, testDatabase, &clustermetadatapb.Database{
+			Name: testDatabase, BackupLocation: utils.FilesystemBackupLocation("/tmp/backups"),
+		}))
+
+		pm := &MultiPoolerManager{
+			logger:      slog.Default(),
+			config:      &Config{},
+			topoClient:  ts,
+			multipooler: &clustermetadatapb.MultiPooler{Database: testDatabase, TableGroup: testTableGroup, Shard: testShard},
+		}
+
+		backups := []*multipoolermanagerdatapb.BackupMetadata{
+			makeBackup(bootstrapID, true),
+		}
+		_, err := pm.selectRestoreBackup(ctx, backups)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "canonical bootstrap backup")
+	})
+
+	t.Run("returns retry error when canonical backup not yet in stanza", func(t *testing.T) {
+		ctx := context.Background()
+		ts, _ := memorytopo.NewServerAndFactory(ctx, "zone1")
+		defer ts.Close()
+		require.NoError(t, ts.CreateDatabase(ctx, testDatabase, &clustermetadatapb.Database{
+			Name: testDatabase, BackupLocation: utils.FilesystemBackupLocation("/tmp/backups"),
+		}))
+		// Etcd has canonical, but it's a different backup not in our stanza.
+		won, err := ts.ClaimInitialBackup(ctx, shardKey, "20250104-999999F")
+		require.NoError(t, err)
+		require.True(t, won)
+
+		pm := &MultiPoolerManager{
+			logger:      slog.Default(),
+			config:      &Config{},
+			topoClient:  ts,
+			multipooler: &clustermetadatapb.MultiPooler{Database: testDatabase, TableGroup: testTableGroup, Shard: testShard},
+		}
+
+		backups := []*multipoolermanagerdatapb.BackupMetadata{
+			makeBackup(bootstrapID, true), // different ID than what etcd says
+		}
+		_, err = pm.selectRestoreBackup(ctx, backups)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "canonical bootstrap backup")
+	})
+}
+
+func TestCheckBootstrapClaim(t *testing.T) {
+	const (
+		testDatabase   = "test-database"
+		testTableGroup = "default"
+		testShard      = "0"
+		testPoolerName = "test-multipooler"
+		otherPooler    = "other-pooler"
+		canonicalID    = "20250104-100000F"
+	)
+
+	shardKey := types.ShardKey{
+		Database:   testDatabase,
+		TableGroup: testTableGroup,
+		Shard:      testShard,
+	}
+
+	makeManager := func(t *testing.T, ts topoclient.Store, poolerDir string) *MultiPoolerManager {
+		t.Helper()
+		backupConfig, err := backup.NewConfig(utils.FilesystemBackupLocation("/tmp/backups"))
+		require.NoError(t, err)
+		pm := createTestManagerWithBackupLocation(poolerDir, testTableGroup, testShard, clustermetadatapb.PoolerType_PRIMARY, "/tmp/backups")
+		pm.topoClient = ts
+		pm.backupConfig = backupConfig
+		return pm
+	}
+
+	t.Run("returns empty string when no etcd claim exists", func(t *testing.T) {
+		ctx := context.Background()
+		poolerDir := t.TempDir()
+		ts, _ := memorytopo.NewServerAndFactory(ctx, "zone1")
+		defer ts.Close()
+		require.NoError(t, ts.CreateDatabase(ctx, testDatabase, &clustermetadatapb.Database{
+			Name: testDatabase, BackupLocation: utils.FilesystemBackupLocation("/tmp/backups"),
+		}))
+
+		pm := makeManager(t, ts, poolerDir)
+		pm.pgBackRestConfigPath = setupMockPgbackrestForInitTest(t, poolerDir, `[{"backup":[]}]`)
+
+		id, err := pm.checkBootstrapClaim(ctx, shardKey)
+		require.NoError(t, err)
+		assert.Empty(t, id, "no claim → should return empty string")
+	})
+
+	t.Run("returns error when canonical backup exists but postgres is not running", func(t *testing.T) {
+		ctx := context.Background()
+		poolerDir := t.TempDir()
+		ts, _ := memorytopo.NewServerAndFactory(ctx, "zone1")
+		defer ts.Close()
+		require.NoError(t, ts.CreateDatabase(ctx, testDatabase, &clustermetadatapb.Database{
+			Name: testDatabase, BackupLocation: utils.FilesystemBackupLocation("/tmp/backups"),
+		}))
+
+		// Someone already claimed the backup in etcd.
+		won, err := ts.ClaimInitialBackup(ctx, shardKey, canonicalID)
+		require.NoError(t, err)
+		require.True(t, won)
+
+		// The canonical backup IS in the stanza (any pooler id), but postgres is not running.
+		// This means bootstrap was completed by another instance or pod, so we must not proceed.
+		infoJSON := `[{"backup":[{
+			"label":"` + canonicalID + `","type":"full","error":false,
+			"annotation":{"table_group":"` + testTableGroup + `","shard":"` + testShard + `",
+				"multipooler_id":"` + otherPooler + `","job_id":"job1","pooler_type":"PRIMARY"}
+		}]}]`
+		pm := makeManager(t, ts, poolerDir)
+		pm.pgBackRestConfigPath = setupMockPgbackrestForInitTest(t, poolerDir, infoJSON)
+		// pgctldClient is nil → isPostgresRunning falls back to SELECT 1 → fails → not running
+
+		_, err = pm.checkBootstrapClaim(ctx, shardKey)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "already bootstrapped")
+	})
+
+	t.Run("returns error when same-name pooler claimed bootstrap but postgres is not running (stale pod)", func(t *testing.T) {
+		// This is the key correctness test: a previous pod with the SAME name completed bootstrap
+		// (etcd claim exists, backup in stanza with our MultipoolerId), but we are a fresh pod
+		// (data dir wiped, postgres never started). We must NOT enter crash-recovery.
+		// Old bug: MultipoolerId == ourName → wrongly returned crash-recovery backup ID.
+		// New fix: isPostgresRunning == false → correctly returns ALREADY_EXISTS.
+		ctx := context.Background()
+		poolerDir := t.TempDir()
+		ts, _ := memorytopo.NewServerAndFactory(ctx, "zone1")
+		defer ts.Close()
+		require.NoError(t, ts.CreateDatabase(ctx, testDatabase, &clustermetadatapb.Database{
+			Name: testDatabase, BackupLocation: utils.FilesystemBackupLocation("/tmp/backups"),
+		}))
+
+		// A previous pod with our name claimed the canonical backup.
+		won, err := ts.ClaimInitialBackup(ctx, shardKey, canonicalID)
+		require.NoError(t, err)
+		require.True(t, won)
+
+		// The backup annotation shows OUR pooler name (previous pod, same name).
+		infoJSON := `[{"backup":[{
+			"label":"` + canonicalID + `","type":"full","error":false,
+			"annotation":{"table_group":"` + testTableGroup + `","shard":"` + testShard + `",
+				"multipooler_id":"` + testPoolerName + `","job_id":"job1","pooler_type":"PRIMARY"}
+		}]}]`
+		pm := makeManager(t, ts, poolerDir)
+		pm.pgBackRestConfigPath = setupMockPgbackrestForInitTest(t, poolerDir, infoJSON)
+		// pgctldClient is nil and no postgres socket → isPostgresRunning returns false
+		pm.pgctldClient = &mockPgctldClient{
+			statusResponse: &pgctldpb.StatusResponse{Status: pgctldpb.ServerStatus_STOPPED},
+		}
+
+		_, err = pm.checkBootstrapClaim(ctx, shardKey)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "already bootstrapped")
+	})
+
+	t.Run("returns canonical backup id when canonical backup exists and postgres is running (crash-recovery)", func(t *testing.T) {
+		ctx := context.Background()
+		poolerDir := t.TempDir()
+		ts, _ := memorytopo.NewServerAndFactory(ctx, "zone1")
+		defer ts.Close()
+		require.NoError(t, ts.CreateDatabase(ctx, testDatabase, &clustermetadatapb.Database{
+			Name: testDatabase, BackupLocation: utils.FilesystemBackupLocation("/tmp/backups"),
+		}))
+
+		// This pooler claimed the backup and postgres is still running (crash mid-finishPrimaryInit).
+		won, err := ts.ClaimInitialBackup(ctx, shardKey, canonicalID)
+		require.NoError(t, err)
+		require.True(t, won)
+
+		// The canonical backup is in the stanza. MultipoolerId is not used for this decision.
+		infoJSON := `[{"backup":[{
+			"label":"` + canonicalID + `","type":"full","error":false,
+			"annotation":{"table_group":"` + testTableGroup + `","shard":"` + testShard + `",
+				"multipooler_id":"` + testPoolerName + `","job_id":"job1","pooler_type":"PRIMARY"}
+		}]}]`
+		pm := makeManager(t, ts, poolerDir)
+		pm.pgBackRestConfigPath = setupMockPgbackrestForInitTest(t, poolerDir, infoJSON)
+		// Simulate postgres running (as it would be if we crashed mid-finishPrimaryInit).
+		pm.pgctldClient = &mockPgctldClient{}
+
+		id, err := pm.checkBootstrapClaim(ctx, shardKey)
+		require.NoError(t, err)
+		assert.Equal(t, canonicalID, id, "should return canonical backup id for crash recovery")
+	})
+
+	t.Run("returns error when canonical backup not found in stanza", func(t *testing.T) {
+		ctx := context.Background()
+		poolerDir := t.TempDir()
+		ts, _ := memorytopo.NewServerAndFactory(ctx, "zone1")
+		defer ts.Close()
+		require.NoError(t, ts.CreateDatabase(ctx, testDatabase, &clustermetadatapb.Database{
+			Name: testDatabase, BackupLocation: utils.FilesystemBackupLocation("/tmp/backups"),
+		}))
+
+		// Another pooler claimed, but the backup is not in the stanza.
+		won, err := ts.ClaimInitialBackup(ctx, shardKey, canonicalID)
+		require.NoError(t, err)
+		require.True(t, won)
+
+		pm := makeManager(t, ts, poolerDir)
+		pm.pgBackRestConfigPath = setupMockPgbackrestForInitTest(t, poolerDir, `[{"backup":[]}]`)
+
+		_, err = pm.checkBootstrapClaim(ctx, shardKey)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "already bootstrapped")
+	})
 }

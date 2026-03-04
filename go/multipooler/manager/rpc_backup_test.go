@@ -1134,6 +1134,194 @@ pg1-path=/tmp/pg_data
 	}
 }
 
+func TestBackup_IsBootstrapAnnotation(t *testing.T) {
+	// Test that backupLocked() adds --annotation=is_bootstrap=true when isBootstrap=true,
+	// and omits the annotation when isBootstrap=false.
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+
+	// Create mock pgbackrest binary that captures command-line arguments
+	binDir := filepath.Join(tmpDir, "bin")
+	err := os.MkdirAll(binDir, 0o755)
+	require.NoError(t, err)
+
+	argsFile := filepath.Join(tmpDir, "captured_args.txt")
+	mockScript := `#!/bin/bash
+# Capture all arguments to a file for backup command
+if [[ "$*" == *"backup"* && "$*" != *"info"* && "$*" != *"verify"* ]]; then
+    echo "$@" > ` + argsFile + `
+fi
+# Handle info command to return mock backup info
+if [[ "$*" == *"info"* ]]; then
+    cat << 'JSONEOF'
+[{
+    "backup": [{
+        "label": "20250104-100000F",
+        "annotation": {
+            "table_group": "test-tg",
+            "shard": "0",
+            "multipooler_id": "test-pooler",
+            "job_id": "test-job-id",
+            "pooler_type": "PRIMARY"
+        }
+    }]
+}]
+JSONEOF
+fi
+# Handle verify command with success
+if [[ "$*" == *"verify"* ]]; then
+    exit 0
+fi
+exit 0
+`
+	pgbackrestPath := filepath.Join(binDir, "pgbackrest")
+	err = os.WriteFile(pgbackrestPath, []byte(mockScript), 0o755)
+	require.NoError(t, err)
+	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+
+	poolerDir := filepath.Join(tmpDir, "pooler")
+	err = os.MkdirAll(poolerDir, 0o755)
+	require.NoError(t, err)
+
+	pgbackrestDir := filepath.Join(poolerDir, "pgbackrest")
+	err = os.MkdirAll(pgbackrestDir, 0o755)
+	require.NoError(t, err)
+
+	pgctldConfigPath := filepath.Join(pgbackrestDir, "pgbackrest.conf")
+	pgctldConfig := `[global]
+log-path=/tmp/pgbackrest/logs
+[multigres]
+repo1-path=/tmp/backups
+pg1-path=/tmp/pg_data
+`
+	err = os.WriteFile(pgctldConfigPath, []byte(pgctldConfig), 0o600)
+	require.NoError(t, err)
+
+	setupManagerForBootstrapTest := func(t *testing.T) *MultiPoolerManager {
+		t.Helper()
+		pm := createTestManagerWithBackupLocation(poolerDir, "test-tg", "0", clustermetadatapb.PoolerType_PRIMARY, tmpDir)
+		pm.pgBackRestConfigPath = pgctldConfigPath
+		return pm
+	}
+
+	t.Run("is_bootstrap=true annotation included when isBootstrap=true", func(t *testing.T) {
+		_ = os.Remove(argsFile)
+		pm := setupManagerForBootstrapTest(t)
+
+		lockCtx, err := pm.actionLock.Acquire(ctx, "test")
+		require.NoError(t, err)
+		defer pm.actionLock.Release(lockCtx)
+		_, err = pm.backupLocked(lockCtx, true, "full", "test-job-id", nil, true)
+		require.NoError(t, err)
+
+		capturedArgs, err := os.ReadFile(argsFile)
+		require.NoError(t, err)
+		assert.Contains(t, string(capturedArgs), "--annotation=is_bootstrap=true",
+			"bootstrap backup should include is_bootstrap=true annotation")
+	})
+
+	t.Run("is_bootstrap annotation absent when isBootstrap=false", func(t *testing.T) {
+		_ = os.Remove(argsFile)
+		pm := setupManagerForBootstrapTest(t)
+
+		lockCtx, err := pm.actionLock.Acquire(ctx, "test")
+		require.NoError(t, err)
+		defer pm.actionLock.Release(lockCtx)
+		_, err = pm.backupLocked(lockCtx, true, "full", "test-job-id", nil, false)
+		require.NoError(t, err)
+
+		capturedArgs, err := os.ReadFile(argsFile)
+		require.NoError(t, err)
+		assert.NotContains(t, string(capturedArgs), "is_bootstrap",
+			"non-bootstrap backup should not include is_bootstrap annotation")
+	})
+}
+
+func TestListBackups_ParsesIsBootstrap(t *testing.T) {
+	// Test that listBackups() correctly parses is_bootstrap=true from backup annotations.
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+
+	binDir := filepath.Join(tmpDir, "bin")
+	err := os.MkdirAll(binDir, 0o755)
+	require.NoError(t, err)
+
+	mockScript := `#!/bin/bash
+if [[ "$*" == *"info"* ]]; then
+    cat << 'JSONEOF'
+[{
+    "backup": [
+        {
+            "label": "20250104-100000F",
+            "type": "full",
+            "error": false,
+            "annotation": {
+                "table_group": "test-tg",
+                "shard": "0",
+                "multipooler_id": "test-pooler",
+                "job_id": "job-bootstrap",
+                "pooler_type": "PRIMARY",
+                "is_bootstrap": "true"
+            },
+            "lsn": {"stop": "0/2000000"},
+            "info": {"size": 12345}
+        },
+        {
+            "label": "20250105-120000F",
+            "type": "full",
+            "error": false,
+            "annotation": {
+                "table_group": "test-tg",
+                "shard": "0",
+                "multipooler_id": "test-pooler",
+                "job_id": "job-regular",
+                "pooler_type": "PRIMARY"
+            },
+            "lsn": {"stop": "0/3000000"},
+            "info": {"size": 23456}
+        }
+    ]
+}]
+JSONEOF
+fi
+exit 0
+`
+	pgbackrestPath := filepath.Join(binDir, "pgbackrest")
+	err = os.WriteFile(pgbackrestPath, []byte(mockScript), 0o755)
+	require.NoError(t, err)
+	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+
+	poolerDir := filepath.Join(tmpDir, "pooler")
+	err = os.MkdirAll(poolerDir, 0o755)
+	require.NoError(t, err)
+
+	pgbackrestDir := filepath.Join(poolerDir, "pgbackrest")
+	err = os.MkdirAll(pgbackrestDir, 0o755)
+	require.NoError(t, err)
+
+	pgctldConfigPath := filepath.Join(pgbackrestDir, "pgbackrest.conf")
+	err = os.WriteFile(pgctldConfigPath, []byte(`[multigres]
+repo1-path=/tmp/backups
+pg1-path=/tmp/pg_data
+`), 0o600)
+	require.NoError(t, err)
+
+	pm := createTestManagerWithBackupLocation(poolerDir, "test-tg", "0", clustermetadatapb.PoolerType_PRIMARY, tmpDir)
+	pm.pgBackRestConfigPath = pgctldConfigPath
+
+	backups, err := pm.listBackups(ctx)
+	require.NoError(t, err)
+	require.Len(t, backups, 2)
+
+	// First backup has is_bootstrap=true
+	assert.Equal(t, "20250104-100000F", backups[0].BackupId)
+	assert.True(t, backups[0].IsBootstrap, "first backup should have IsBootstrap=true")
+
+	// Second backup has no is_bootstrap annotation
+	assert.Equal(t, "20250105-120000F", backups[1].BackupId)
+	assert.False(t, backups[1].IsBootstrap, "second backup should have IsBootstrap=false")
+}
+
 func TestGetPrimaryAsPg2Args(t *testing.T) {
 	tests := []struct {
 		name                    string

@@ -29,6 +29,7 @@ import (
 	"github.com/multigres/multigres/go/common/servenv"
 	"github.com/multigres/multigres/go/common/sqltypes"
 	"github.com/multigres/multigres/go/common/topoclient"
+	"github.com/multigres/multigres/go/common/types"
 	"github.com/multigres/multigres/go/multipooler/connpoolmanager"
 	"github.com/multigres/multigres/go/multipooler/executor"
 	"github.com/multigres/multigres/go/multipooler/heartbeat"
@@ -1707,27 +1708,75 @@ func (pm *MultiPoolerManager) restoreAndStartPostgres(ctx context.Context) error
 		}
 	}
 
-	if len(completeBackups) == 0 {
-		return errors.New("no complete backups available")
+	backupID, err := pm.selectRestoreBackup(ctx, completeBackups)
+	if err != nil {
+		return err
 	}
 
-	// Use the latest complete backup (last in the list)
-	latestBackup := completeBackups[len(completeBackups)-1]
-
-	pm.logger.InfoContext(ctx, "MonitorPostgres: restoring from backup",
-		"backup_id", latestBackup.BackupId)
+	pm.logger.InfoContext(ctx, "MonitorPostgres: restoring from backup", "backup_id", backupID)
 
 	// Perform the restore
-	if err := pm.restoreFromBackupLocked(ctx, latestBackup.BackupId); err != nil {
+	if err := pm.restoreFromBackupLocked(ctx, backupID); err != nil {
 		return fmt.Errorf("failed to restore from backup: %w", err)
 	}
 
 	pm.logger.InfoContext(ctx, "MonitorPostgres: successfully restored from backup",
-		"backup_id", latestBackup.BackupId,
+		"backup_id", backupID,
 		"shard", pm.getShardID(),
 		"term", pm.consensusState.term.TermNumber)
 
 	return nil
+}
+
+// selectRestoreBackup returns the backup ID to restore from.
+//
+// If regular (non-bootstrap) complete backups exist, the latest one is used directly.
+// If only bootstrap-annotated backups are present, etcd is consulted to determine the
+// canonical one — preventing replicas from restoring from a non-canonical bootstrap backup
+// created by a pooler that lost a restart race.
+//
+// Backward compatibility: old backups without the is_bootstrap annotation have
+// IsBootstrap=false and are treated as regular backups, so this logic is a no-op for them.
+func (pm *MultiPoolerManager) selectRestoreBackup(ctx context.Context, completeBackups []*multipoolermanagerdatapb.BackupMetadata) (string, error) {
+	var regularBackups, bootstrapBackups []*multipoolermanagerdatapb.BackupMetadata
+	for _, b := range completeBackups {
+		if b.IsBootstrap {
+			bootstrapBackups = append(bootstrapBackups, b)
+		} else {
+			regularBackups = append(regularBackups, b)
+		}
+	}
+
+	// Regular backups take precedence — no etcd check needed.
+	if len(regularBackups) > 0 {
+		return regularBackups[len(regularBackups)-1].BackupId, nil
+	}
+
+	if len(bootstrapBackups) == 0 {
+		return "", errors.New("no complete backups available")
+	}
+
+	// Only bootstrap backups: must confirm which one is canonical via etcd.
+	shardKey := types.ShardKey{
+		Database:   pm.multipooler.Database,
+		TableGroup: pm.multipooler.TableGroup,
+		Shard:      pm.multipooler.Shard,
+	}
+	canonical, err := pm.topoClient.GetInitialBackup(ctx, shardKey)
+	if err != nil {
+		return "", fmt.Errorf("failed to get canonical bootstrap backup from etcd: %w", err)
+	}
+	if canonical == nil {
+		return "", errors.New("no canonical bootstrap backup registered in etcd yet; will retry")
+	}
+
+	for _, b := range bootstrapBackups {
+		if b.BackupId == canonical.BackupId {
+			return b.BackupId, nil
+		}
+	}
+
+	return "", fmt.Errorf("canonical bootstrap backup %s not yet in stanza; will retry", canonical.BackupId)
 }
 
 // enableMonitorInternal starts the PostgreSQL monitoring if not already running.
