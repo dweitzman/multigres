@@ -133,8 +133,6 @@ func TestPoolerWatcher_NewPoolerAddedAfterStart(t *testing.T) {
 	watcher.Start()
 	defer watcher.Stop()
 
-	// Sync to confirm watcher started and processed initial (empty) topology
-	require.NoError(t, watcher.Sync(ctx))
 	assert.Equal(t, 0, poolerStore.Len())
 
 	// Add a pooler after the watcher has started
@@ -271,8 +269,7 @@ func TestPoolerWatcher_WatchTargetFiltering(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	// Sync to ensure all events (including filtered ones) have been processed
-	require.NoError(t, watcher.Sync(ctx))
+	// Filtering is permanent: after the positive condition above, no filtered pooler can appear.
 	assert.Equal(t, 1, poolerStore.Len(), "only the watched pooler should be in the store")
 	_, exists := poolerStore.Get(poolerKey("zone1", "watched"))
 	assert.True(t, exists)
@@ -369,7 +366,8 @@ func TestPoolerWatcher_PoolerDeletedFromTopology(t *testing.T) {
 	}))
 
 	// The pooler should NOT be removed from the store — bookkeeping handles that.
-	require.NoError(t, watcher.Sync(ctx))
-	assert.Equal(t, 1, poolerStore.Len(),
+	// onDeleted is intentionally a no-op; the count should never drop.
+	require.Never(t, func() bool { return poolerStore.Len() < 1 },
+		200*time.Millisecond, 10*time.Millisecond,
 		"deleted pooler should remain in store until bookkeeping removes it")
 }
