@@ -363,6 +363,84 @@ func TestLoadBalancerListener(t *testing.T) {
 	assert.Equal(t, 0, lb.ConnectionCount())
 }
 
+// TestLoadBalancerListener_NewPrimaryEvictsOldPrimary tests that when a new PRIMARY
+// arrives via OnPoolerChanged, any existing PRIMARY for the same TableGroup/Shard
+// is evicted. This handles failover where the old crashed PRIMARY's record lingers.
+func TestLoadBalancerListener_NewPrimaryEvictsOldPrimary(t *testing.T) {
+	logger := slog.Default()
+	lb := NewLoadBalancer("zone1", logger)
+	listener := NewLoadBalancerListener(lb)
+
+	oldPrimary := createTestMultiPooler("old-primary", "zone1", constants.DefaultTableGroup, constants.DefaultShard, clustermetadatapb.PoolerType_PRIMARY)
+	listener.OnPoolerChanged(oldPrimary)
+	require.Equal(t, 1, lb.ConnectionCount())
+
+	newPrimary := createTestMultiPooler("new-primary", "zone1", constants.DefaultTableGroup, constants.DefaultShard, clustermetadatapb.PoolerType_PRIMARY)
+	listener.OnPoolerChanged(newPrimary)
+
+	// Old primary evicted, new primary added — still 1 connection
+	assert.Equal(t, 1, lb.ConnectionCount())
+
+	conn, err := lb.GetConnectionByID(newPrimary.Id)
+	require.NoError(t, err)
+	assert.Equal(t, poolerID(newPrimary), conn.ID())
+
+	_, err = lb.GetConnectionByID(oldPrimary.Id)
+	require.Error(t, err, "old primary should have been evicted")
+}
+
+// TestLoadBalancerListener_EvictionOnlyAffectsSameShard tests that PRIMARY eviction
+// only targets poolers on the same TableGroup/Shard combination.
+func TestLoadBalancerListener_EvictionOnlyAffectsSameShard(t *testing.T) {
+	logger := slog.Default()
+	lb := NewLoadBalancer("zone1", logger)
+	listener := NewLoadBalancerListener(lb)
+
+	primaryShard0 := createTestMultiPooler("primary-shard0", "zone1", constants.DefaultTableGroup, constants.DefaultShard, clustermetadatapb.PoolerType_PRIMARY)
+	primaryShard1 := createTestMultiPooler("primary-shard1", "zone1", constants.DefaultTableGroup, "1", clustermetadatapb.PoolerType_PRIMARY)
+	listener.OnPoolerChanged(primaryShard0)
+	listener.OnPoolerChanged(primaryShard1)
+	require.Equal(t, 2, lb.ConnectionCount())
+
+	// New primary for shard0 only — should evict primary-shard0, keep primary-shard1
+	newPrimaryShard0 := createTestMultiPooler("new-primary-shard0", "zone1", constants.DefaultTableGroup, constants.DefaultShard, clustermetadatapb.PoolerType_PRIMARY)
+	listener.OnPoolerChanged(newPrimaryShard0)
+
+	assert.Equal(t, 2, lb.ConnectionCount())
+
+	_, err := lb.GetConnectionByID(primaryShard0.Id)
+	require.Error(t, err, "old primary for shard0 should be evicted")
+
+	conn, err := lb.GetConnectionByID(primaryShard1.Id)
+	require.NoError(t, err, "primary for shard1 should still be present")
+	assert.Equal(t, poolerID(primaryShard1), conn.ID())
+
+	conn, err = lb.GetConnectionByID(newPrimaryShard0.Id)
+	require.NoError(t, err)
+	assert.Equal(t, poolerID(newPrimaryShard0), conn.ID())
+}
+
+// TestLoadBalancerListener_ReplicaDoesNotEvict tests that adding a REPLICA
+// does not evict an existing PRIMARY.
+func TestLoadBalancerListener_ReplicaDoesNotEvict(t *testing.T) {
+	logger := slog.Default()
+	lb := NewLoadBalancer("zone1", logger)
+	listener := NewLoadBalancerListener(lb)
+
+	primary := createTestMultiPooler("primary", "zone1", constants.DefaultTableGroup, constants.DefaultShard, clustermetadatapb.PoolerType_PRIMARY)
+	listener.OnPoolerChanged(primary)
+	require.Equal(t, 1, lb.ConnectionCount())
+
+	replica := createTestMultiPooler("replica", "zone1", constants.DefaultTableGroup, constants.DefaultShard, clustermetadatapb.PoolerType_REPLICA)
+	listener.OnPoolerChanged(replica)
+
+	// Both should be present — replica does not evict primary
+	assert.Equal(t, 2, lb.ConnectionCount())
+
+	_, err := lb.GetConnectionByID(primary.Id)
+	require.NoError(t, err, "primary should still be present after replica added")
+}
+
 func TestLoadBalancer_GetConnection_MultipleReplicasSameCell(t *testing.T) {
 	logger := slog.Default()
 	lb := NewLoadBalancer("zone1", logger)
