@@ -34,15 +34,15 @@ func NewSimulationTestHelper[I any, R any, ID comparable](t *testing.T, sim *Sim
 	return &SimulationTestHelper[I, R, ID]{t: t, sim: sim}
 }
 
-// RequireRunUntil runs the simulation until the condition is met or maxTicks is reached
+// RequireWithinTicks runs the simulation until the condition is met or maxTicks is reached
 // If the condition is not met within maxTicks, dumps the last 20 ticks of trace and fails the test
-func (h *SimulationTestHelper[I, R, ID]) RequireRunUntil(condition Condition[I, R, ID], maxTicks int64) {
-	h.RequireRunUntilWithTrace(condition, maxTicks, 20)
+func (h *SimulationTestHelper[I, R, ID]) RequireWithinTicks(condition Condition[I, R, ID], maxTicks int64) {
+	h.RequireWithinTicksWithTrace(condition, maxTicks, 20)
 }
 
-// RequireRunUntilWithTrace runs the simulation until the condition is met or maxTicks is reached
+// RequireWithinTicksWithTrace runs the simulation until the condition is met or maxTicks is reached
 // If the condition is not met within maxTicks, dumps the last dumpTicks ticks of trace and fails the test
-func (h *SimulationTestHelper[I, R, ID]) RequireRunUntilWithTrace(condition Condition[I, R, ID], maxTicks int64, dumpTicks int) {
+func (h *SimulationTestHelper[I, R, ID]) RequireWithinTicksWithTrace(condition Condition[I, R, ID], maxTicks int64, dumpTicks int) {
 	h.t.Helper()
 	err := h.sim.RunUntil(condition, maxTicks)
 	if err != nil {
@@ -56,9 +56,9 @@ func (h *SimulationTestHelper[I, R, ID]) RequireRunUntilWithTrace(condition Cond
 	}
 }
 
-// RequireRunFor runs the simulation for the specified number of ticks
+// RequireAdvance runs the simulation for the specified number of ticks
 // If any assertion violations occur, dumps the last 20 ticks of trace and fails the test
-func (h *SimulationTestHelper[I, R, ID]) RequireRunFor(ticks int64) {
+func (h *SimulationTestHelper[I, R, ID]) RequireAdvance(ticks int64) {
 	h.RequireRunForWithTrace(ticks, 20)
 }
 

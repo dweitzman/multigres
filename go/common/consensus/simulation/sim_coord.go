@@ -20,23 +20,21 @@ import (
 )
 
 // SimCoordNode wraps a CoordNode and simulates its etcd watch stream for
-// pooler membership. Each tick it reconciles the coordinator's known-pooler
-// list against a desired membership set, injecting PoolerDiscoveredIndicator
-// and PoolerRemovedIndicator events until the coordinator's view converges.
-//
-// This mirrors how each real coordinator maintains an independent etcd watch
-// stream: different SimCoordNodes can discover poolers at different ticks,
-// simulating realistic watch stream latency between coordinators.
+// pooler membership. Each tick it discovers all SimPoolers registered in the
+// simulator and reconciles the coordinator's known-pooler list against that
+// set, injecting PoolerDiscoveredIndicator and PoolerRemovedIndicator events
+// until the coordinator's view converges.
 type SimCoordNode struct {
-	node    *consensus.CoordNode
-	desired map[consensus.NodeID]bool
+	node *consensus.CoordNode
+	sim  *simType
 }
 
 // NewSimCoordNode creates a SimCoordNode wrapping the given CoordNode.
-func NewSimCoordNode(node *consensus.CoordNode) *SimCoordNode {
+// sim is used each tick to discover registered SimPoolers.
+func NewSimCoordNode(node *consensus.CoordNode, sim *simType) *SimCoordNode {
 	return &SimCoordNode{
-		node:    node,
-		desired: make(map[consensus.NodeID]bool),
+		node: node,
+		sim:  sim,
 	}
 }
 
@@ -50,38 +48,31 @@ func (s *SimCoordNode) ID() consensus.NodeID {
 	return s.node.ID()
 }
 
-// AddPooler adds poolerID to the desired membership set. The coordinator will
-// receive PoolerDiscoveredIndicator for this pooler on the next Step call (and
-// on every subsequent tick until its known-pooler list reflects it).
-func (s *SimCoordNode) AddPooler(id consensus.NodeID) {
-	s.desired[id] = true
-}
-
-// RemovePooler removes poolerID from the desired membership set. The
-// coordinator will receive PoolerRemovedIndicator until its known list no
-// longer includes it.
-func (s *SimCoordNode) RemovePooler(id consensus.NodeID) {
-	delete(s.desired, id)
-}
-
-// Step reconciles the coordinator's known-pooler list against the desired set,
-// injects any necessary membership indicators, then calls CoordNode.Step.
-// Implements dstsim.Node.
+// Step discovers all SimPoolers registered in the simulator, reconciles that
+// set against the coordinator's known-pooler list, injects any necessary
+// membership indicators, then calls CoordNode.Step. Implements dstsim.Node.
 func (s *SimCoordNode) Step(tick int64, inds []consensus.Indicator) []consensus.Request {
-	// Compute membership indicators from the difference between desired and known.
+	// Build desired set from all SimPoolers registered in the simulator.
+	desired := make(map[consensus.NodeID]bool)
+	for _, n := range s.sim.Nodes() {
+		if sp, ok := n.(*SimPooler); ok {
+			desired[sp.ID()] = true
+		}
+	}
+
 	known := make(map[consensus.NodeID]bool)
 	for _, id := range s.node.KnownPoolerIDs() {
 		known[id] = true
 	}
 
 	var membershipInds []consensus.Indicator
-	for _, id := range sortedmaps.Keys(s.desired) {
+	for _, id := range sortedmaps.Keys(desired) {
 		if !known[id] {
 			membershipInds = append(membershipInds, consensus.PoolerDiscoveredIndicator{PoolerID: id})
 		}
 	}
 	for _, id := range sortedmaps.Keys(known) {
-		if !s.desired[id] {
+		if !desired[id] {
 			membershipInds = append(membershipInds, consensus.PoolerRemovedIndicator{PoolerID: id})
 		}
 	}

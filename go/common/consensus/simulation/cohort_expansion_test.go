@@ -239,9 +239,8 @@ func TestCohortExpansion(t *testing.T) {
 	sim.RegisterNode(pooler1)
 
 	// Coordinator targets AnyN(2) so it upgrades the durability policy as nodes join.
-	coord := NewSimCoordNode(consensus.NewCoordNode(coordID, consensus.AnyNPolicy(2)))
+	coord := NewSimCoordNode(consensus.NewCoordNode(coordID, consensus.AnyNPolicy(2)), sim)
 	sim.RegisterNode(coord)
-	coord.AddPooler(node1ID)
 
 	// Safety invariant: every sync standby must be actively streaming from the primary.
 	// Violated if the primary requires ACKs from a node that isn't replicating from it.
@@ -250,14 +249,13 @@ func TestCohortExpansion(t *testing.T) {
 	th := dstsim.NewSimulationTestHelper(t, sim)
 
 	// Stage 1: single-node cluster — verify stability before expansion begins.
-	th.RequireRunFor(10)
+	th.RequireAdvance(10)
 
 	// Stage 2: node2 joins as an observer streaming from node1.
 	// Coordinator writes a new policy adding node2 to the cohort.
 	pooler2 := newReplicaPooler(node2ID, node1ID, sim)
 	sim.RegisterNode(pooler2)
-	coord.AddPooler(node2ID)
-	th.RequireRunUntil(&allHaveAppliedPolicy{
+	th.RequireWithinTicks(&allHaveAppliedPolicy{
 		poolers:  []*SimPooler{pooler1, pooler2},
 		members:  []consensus.NodeID{node1ID, node2ID},
 		wantAnyN: 1,
@@ -266,8 +264,7 @@ func TestCohortExpansion(t *testing.T) {
 	// Stage 3: node3 joins; the coordinator upgrades the policy to AnyN(2).
 	pooler3 := newReplicaPooler(node3ID, node1ID, sim)
 	sim.RegisterNode(pooler3)
-	coord.AddPooler(node3ID)
-	th.RequireRunUntil(&allHaveAppliedPolicy{
+	th.RequireWithinTicks(&allHaveAppliedPolicy{
 		poolers:  []*SimPooler{pooler1, pooler2, pooler3},
 		members:  []consensus.NodeID{node1ID, node2ID, node3ID},
 		wantAnyN: 2,
@@ -277,8 +274,7 @@ func TestCohortExpansion(t *testing.T) {
 	// policy stays AnyN(2) while the cohort grows to include node4.
 	pooler4 := newReplicaPooler(node4ID, node1ID, sim)
 	sim.RegisterNode(pooler4)
-	coord.AddPooler(node4ID)
-	th.RequireRunUntil(&allHaveAppliedPolicy{
+	th.RequireWithinTicks(&allHaveAppliedPolicy{
 		poolers:  []*SimPooler{pooler1, pooler2, pooler3, pooler4},
 		members:  []consensus.NodeID{node1ID, node2ID, node3ID, node4ID},
 		wantAnyN: 2,
