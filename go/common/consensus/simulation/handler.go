@@ -1,0 +1,96 @@
+// Copyright 2026 Supabase, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package simulation
+
+import (
+	"github.com/multigres/multigres/go/common/consensus"
+)
+
+// Handler implements dstsim.RequestHandler by routing consensus Requests to
+// the appropriate Indicators for their target nodes.
+//
+// Status broadcasts (PoolerStatusUpdateRequest) are delivered to all
+// coordinator nodes. The handler discovers coordinator IDs by inspecting the
+// simulator's registered nodes at routing time.
+type Handler struct {
+	// coordIDs lists the node IDs that should receive PoolerStatusIndicator
+	// broadcasts. Set this to all coordinator IDs before running the simulation.
+	coordIDs []consensus.NodeID
+}
+
+// NewHandler creates a Handler that broadcasts pooler status to the given
+// coordinator IDs.
+func NewHandler(coordIDs ...consensus.NodeID) *Handler {
+	return &Handler{coordIDs: coordIDs}
+}
+
+// AddCoordID adds a coordinator ID to the broadcast list.
+func (h *Handler) AddCoordID(id consensus.NodeID) {
+	h.coordIDs = append(h.coordIDs, id)
+}
+
+// ProcessRequests converts each Request into Indicators and returns a map of
+// target node ID → indicators to deliver. Implements
+// dstsim.RequestHandler[consensus.Indicator, consensus.Request, consensus.NodeID].
+func (h *Handler) ProcessRequests(
+	_ *simType,
+	fromNode consensus.NodeID,
+	requests []consensus.Request,
+) map[consensus.NodeID][]consensus.Indicator {
+	result := make(map[consensus.NodeID][]consensus.Indicator)
+
+	for _, req := range requests {
+		switch r := req.(type) {
+		case consensus.WritePolicyRequest:
+			result[r.TargetPooler] = append(result[r.TargetPooler], consensus.WritePolicyIndicator{
+				FromCoord: r.FromCoord,
+				Record:    r.Record,
+			})
+
+		case consensus.WritePolicyResponseRequest:
+			result[r.ToCoord] = append(result[r.ToCoord], consensus.WritePolicyResponseIndicator{
+				FromPooler: fromNode,
+				Accepted:   r.Accepted,
+				CurrentID:  r.CurrentID,
+			})
+
+		case consensus.PoolerStatusUpdateRequest:
+			for _, coordID := range h.coordIDs {
+				result[coordID] = append(result[coordID], consensus.PoolerStatusIndicator{
+					PoolerID:       fromNode,
+					State:          r.State,
+					PostgresStatus: r.PostgresStatus,
+				})
+			}
+
+		case consensus.TerminateRequest:
+			result[r.Target] = append(result[r.Target], consensus.TerminateIndicator{})
+
+		case consensus.PoolerMembershipRequest:
+			for _, coordID := range h.coordIDs {
+				if r.TargetCoord != "" && r.TargetCoord != coordID {
+					continue
+				}
+				for _, id := range r.Discovered {
+					result[coordID] = append(result[coordID], consensus.PoolerDiscoveredIndicator{PoolerID: id})
+				}
+				for _, id := range r.Removed {
+					result[coordID] = append(result[coordID], consensus.PoolerRemovedIndicator{PoolerID: id})
+				}
+			}
+		}
+	}
+	return result
+}

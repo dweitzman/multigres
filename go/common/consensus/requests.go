@@ -14,110 +14,94 @@
 
 package consensus
 
-// Request is implemented by all outgoing desires emitted by consensus nodes.
+// Request is implemented by all outgoing messages emitted by consensus nodes.
 // The RequestHandler converts Requests into Indicators delivered to target nodes.
 type Request interface {
 	consensusRequest()
 }
 
-// --- Requests from OrchNode ---
+// --- Requests from CoordNode ---
 
-// BroadcastStateRequest asks the RequestHandler to deliver the given ConsensusState
-// to each target pooler as an OrchStateIndicator.
-// Targets is the list of pooler NodeIDs to address; nil means all known poolers.
-// ExpectedPrimaryTerm is forwarded verbatim into each OrchStateIndicator.
-type BroadcastStateRequest struct {
-	State               ConsensusState
-	ExpectedPrimaryTerm int64    // forwarded to poolers for CAS validation
-	Targets             []NodeID // nil = all known poolers
+// WritePolicyRequest asks the RequestHandler to deliver a DurabilityPolicyRecord
+// write to the target pooler (which must be the current primary). The primary
+// validates the compare-and-swap: Record.PreviousID must match its current
+// Policy.ID. If it does not match, the write is rejected and the primary returns
+// its current ID so the coord can retry with the correct PreviousID.
+type WritePolicyRequest struct {
+	TargetPooler NodeID
+	FromCoord    NodeID
+	Record       DurabilityPolicyRecord // Record.PreviousID is the CAS key
 }
 
-func (BroadcastStateRequest) consensusRequest() {}
+func (WritePolicyRequest) consensusRequest() {}
 
 // --- Requests from PoolerNode ---
 
-// PoolerResponseRequest asks the RequestHandler to deliver the pooler's vote/rejection
-// back to the originating orch as a PoolerResponseIndicator.
+// PolicyRecordApplyRequest is emitted by the primary PoolerNode when it needs
+// the local postgres driver to apply a DurabilityPolicyRecord change. The
+// driver is responsible for the full apply sequence: updating
+// synchronous_standby_names and then committing the SQL transaction. If the
+// transaction fails, the driver must roll back the replication settings change
+// and deliver a failure indicator.
 //
-// CoordTerm and SeqNum echo back the proposal being responded to so the orch can
-// discard late responses from earlier rounds or terms.
-type PoolerResponseRequest struct {
-	ToOrch       NodeID
-	CoordTerm    int64 // coordinator term of the proposal being responded to
-	SeqNum       int64 // seq num of the proposal being responded to
-	Accepted     bool
-	KnownTerm    int64           // if rejected: the coord term the pooler is currently on
-	KnownCoordID NodeID          // if rejected at the same term: which coord won it
-	Reason       RejectionReason // best-effort hint; zero when Accepted=true
-	// FreshStatus is an optional snapshot of the pooler's current committed state,
-	// piggybacked on rejections where the orch likely has a stale view (stale term,
-	// primary term mismatch, cohort membership). The routing layer assigns a StatusSeq
-	// and delivers this to the orch as part of the same response, allowing the orch to
-	// update its knowledge atomically with processing the rejection — without needing a
-	// separate round-trip to receive a status broadcast.
-	FreshStatus *PoolerStatusUpdateRequest
+// In production, the local driver goroutine handles this and delivers a
+// PolicyRecordAppliedIndicator back to the PoolerNode on success.
+// In simulation, the simPooler wrapper intercepts this request (before it
+// reaches the RequestHandler), simulates the apply, and queues the result
+// indicator for the next tick.
+type PolicyRecordApplyRequest struct {
+	Record DurabilityPolicyRecord
 }
 
-func (PoolerResponseRequest) consensusRequest() {}
+func (PolicyRecordApplyRequest) consensusRequest() {}
 
-// PoolerStatusUpdateRequest is emitted by a PoolerNode whenever its status changes
-// (e.g., after committing a new state, after applying a role change, or after receiving
-// a TerminateIndicator). The RequestHandler delivers this to all known orch nodes as
-// a PoolerStatusIndicator so the orch can track applied state and postgres health.
+// WritePolicyResponseRequest is emitted by a PoolerNode in response to a
+// WritePolicyIndicator, after the local postgres write has either succeeded or
+// failed. Accepted is true if the record was durably committed. When false,
+// CurrentID carries the primary's actual current policy version so the coord
+// can correct its PreviousID on retry without a separate status round-trip.
+type WritePolicyResponseRequest struct {
+	ToCoord   NodeID
+	Accepted  bool
+	CurrentID PolicyID // primary's current policy version when Accepted=false
+}
+
+func (WritePolicyResponseRequest) consensusRequest() {}
+
+// PoolerStatusUpdateRequest is emitted by a PoolerNode whenever its committed
+// state changes (policy write committed, WAL record applied, postgres stopped,
+// or after a crash-restart). The RequestHandler delivers it to all known
+// CoordNodes as a PoolerStatusIndicator so the coord can track cluster state.
 type PoolerStatusUpdateRequest struct {
-	Applied        bool
+	State          PoolerPersistentState
 	PostgresStatus PostgresStatus
-	State          PoolerPersistentState // the committed (goal) state
-	// LastApplied is the postgres configuration currently in effect on disk —
-	// the last state for which Apply() succeeded. When Applied=false, this
-	// differs from State and tells the orch what role postgres is actually
-	// running right now (recoverable from postgresql.conf / standby.signal).
-	// Zero value (Role==RoleUnknown) means nothing has been applied yet.
-	LastApplied PoolerPersistentState
 }
 
 func (PoolerStatusUpdateRequest) consensusRequest() {}
 
-// --- Requests from test/driver nodes (simulation only) ---
+// --- Requests from driver/simulation nodes ---
 
-// PoolerMembershipRequest is emitted by the discovery node when the set of registered
-// poolers changes. The RequestHandler converts this into PoolerDiscoveredIndicator and
-// PoolerRemovedIndicator messages delivered to orch nodes.
-//
-// In production the equivalent information is delivered via an etcd watch; this request
-// type exists only in simulation to drive orch discovery without a real etcd connection.
-//
-// TargetOrch, if non-empty, restricts delivery to a single orch. This supports
-// per-orch discovery tracking: each orch gets its own independent stream of events
-// (with independent delivery delays) rather than a single broadcast. The zero value
-// (empty string) broadcasts to all orchs, preserving backwards compatibility.
-type PoolerMembershipRequest struct {
-	TargetOrch NodeID   // if non-empty, deliver only to this orch; empty = all orchs
-	Discovered []NodeID // poolers that newly appeared
-	Removed    []NodeID // poolers that departed
-}
-
-func (PoolerMembershipRequest) consensusRequest() {}
-
-// TerminateRequest is emitted by a driver/test node to request that a specific pooler
-// shuts down gracefully. The RequestHandler converts this to a TerminateIndicator
-// delivered to the target. In production, this corresponds to a SIGTERM signal.
+// TerminateRequest is emitted by a driver node to signal graceful shutdown of
+// a specific pooler. The RequestHandler converts it to a TerminateIndicator
+// delivered to the target. In production this corresponds to a SIGTERM signal.
 type TerminateRequest struct {
 	Target NodeID
 }
 
 func (TerminateRequest) consensusRequest() {}
 
-// ApplySucceededRequest is emitted by an applyDriverNode (simulation only) when the
-// postgres apply loop for a specific pooler succeeds. The RequestHandler converts this
-// to an ApplySucceededIndicator delivered to the target pooler.
+// PoolerMembershipRequest is emitted by the discovery node when the set of
+// registered poolers changes. The RequestHandler converts it into
+// PoolerDiscoveredIndicator and PoolerRemovedIndicator messages delivered to
+// CoordNodes. In production this is driven by an etcd watch stream.
 //
-// In production the apply goroutine runs within the multipooler process and writes
-// ApplySucceededIndicator directly onto the incoming channel — no request routing needed.
-type ApplySucceededRequest struct {
-	Target    NodeID
-	CoordTerm int64
-	SeqNum    int64
+// TargetCoord, if non-empty, restricts delivery to a single coord. This allows
+// each coord to get an independent stream (with independent delivery delays)
+// rather than a single broadcast.
+type PoolerMembershipRequest struct {
+	TargetCoord NodeID   // empty = all coords
+	Discovered  []NodeID // poolers that newly appeared
+	Removed     []NodeID // poolers that departed
 }
 
-func (ApplySucceededRequest) consensusRequest() {}
+func (PoolerMembershipRequest) consensusRequest() {}

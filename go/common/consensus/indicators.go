@@ -15,94 +15,89 @@
 package consensus
 
 // Indicator is implemented by all incoming events in the consensus protocol.
-// OrchNode and PoolerNode both receive Indicator values in their Step() calls.
+// CoordNode and PoolerNode both receive Indicator values in their Step() calls.
 type Indicator interface {
 	consensusIndicator()
 }
 
-// --- Indicators for OrchNode (from local etcd watcher — reliable, ordered) ---
+// --- Indicators for PoolerNode ---
 
-// PoolerDiscoveredIndicator is delivered to OrchNode when a new pooler registers in etcd.
+// WritePolicyIndicator is delivered to the primary PoolerNode when a CoordNode
+// requests a DurabilityPolicyRecord change. The primary validates the CAS
+// (Record.PreviousID must equal its current Policy.ID); if valid, it emits a
+// PolicyRecordApplyRequest to the local postgres driver.
+type WritePolicyIndicator struct {
+	FromCoord NodeID
+	Record    DurabilityPolicyRecord // Record.PreviousID is the CAS key
+}
+
+func (WritePolicyIndicator) consensusIndicator() {}
+
+// PolicyRecordAppliedIndicator is delivered to a PoolerNode when the local
+// postgres changes needed for a DurabilityPolicyRecord have been completed:
+//
+//   - Primary path: the local driver updated synchronous_standby_names and
+//     committed the SQL transaction that writes the record. The transaction
+//     generates a WAL entry that propagates to replicas.
+//
+//   - Replica path: the WAL watcher detected the policy record in the replica's
+//     WAL stream and the replica's local postgres state is now up to date.
+//
+// In both cases, the PoolerNode responds by persisting the updated policy and
+// emitting a status broadcast. PolicyID identifies which record was applied so
+// the PoolerNode can discard stale indicators if the committed state advanced.
+type PolicyRecordAppliedIndicator struct {
+	PolicyID PolicyID
+	Record   DurabilityPolicyRecord
+}
+
+func (PolicyRecordAppliedIndicator) consensusIndicator() {}
+
+// TerminateIndicator is delivered to a PoolerNode to signal graceful shutdown.
+// The pooler records PostgresStopped and emits a final status update.
+// In production this corresponds to a SIGTERM sent to the multipooler process.
+type TerminateIndicator struct{}
+
+func (TerminateIndicator) consensusIndicator() {}
+
+// --- Indicators for CoordNode ---
+
+// WritePolicyResponseIndicator is delivered to a CoordNode when the target
+// primary has completed handling a WritePolicyIndicator. Accepted=true means
+// the record was committed and is propagating via WAL. When false, CurrentID
+// carries the primary's actual current policy version so the coord can correct
+// its PreviousID on retry without a separate round-trip.
+type WritePolicyResponseIndicator struct {
+	FromPooler NodeID
+	Accepted   bool
+	CurrentID  PolicyID // set when Accepted=false
+}
+
+func (WritePolicyResponseIndicator) consensusIndicator() {}
+
+// PoolerStatusIndicator is delivered to CoordNode when a pooler broadcasts its
+// status. It carries the pooler's full committed state (including the current
+// DurabilityPolicyRecord) and postgres operational status.
+type PoolerStatusIndicator struct {
+	PoolerID       NodeID
+	State          PoolerPersistentState
+	PostgresStatus PostgresStatus
+}
+
+func (PoolerStatusIndicator) consensusIndicator() {}
+
+// PoolerDiscoveredIndicator is delivered to CoordNode when a new pooler
+// registers in etcd (or is otherwise discovered by the provisioner).
 type PoolerDiscoveredIndicator struct {
 	PoolerID NodeID
 }
 
 func (PoolerDiscoveredIndicator) consensusIndicator() {}
 
-// PoolerRemovedIndicator is delivered to OrchNode when a pooler deregisters from etcd.
+// PoolerRemovedIndicator is delivered to CoordNode when a pooler deregisters
+// from etcd.
 type PoolerRemovedIndicator struct {
 	PoolerID NodeID
 }
 
 func (PoolerRemovedIndicator) consensusIndicator() {}
-
-// PoolerStatusIndicator is delivered to OrchNode when a pooler broadcasts its status.
-// It carries the pooler's committed state, whether it has been applied, and the
-// current PostgreSQL operational status so the orch can make informed decisions.
-type PoolerStatusIndicator struct {
-	PoolerID       NodeID
-	StatusSeq      int64 // monotonically increasing; orch discards stale updates
-	State          PoolerPersistentState
-	Applied        bool           // true if the committed state has been operationally executed
-	PostgresStatus PostgresStatus // current postgres operational status
-	// LastApplied is the postgres configuration currently in effect on disk.
-	// Zero value (Role==RoleUnknown) means nothing has been applied yet.
-	LastApplied PoolerPersistentState
-}
-
-func (PoolerStatusIndicator) consensusIndicator() {}
-
-// PoolerResponseIndicator is delivered to OrchNode when a pooler votes on a proposal.
-type PoolerResponseIndicator struct {
-	FromPooler   NodeID
-	CoordTerm    int64 // coordinator term of the proposal being responded to
-	SeqNum       int64 // seq num of the proposal being responded to
-	Accepted     bool
-	KnownTerm    int64           // if rejected: the coord term the pooler is currently on
-	KnownCoordID NodeID          // if rejected at the same term: which coordinator won that term
-	Reason       RejectionReason // best-effort hint; zero when Accepted=true
-	// FreshStatus is an optional piggybacked status snapshot from the pooler,
-	// present when the rejection implies the orch has a stale view. The orch
-	// should process this before acting on the rejection so its knowledge is
-	// immediately up to date for the next advance() cycle.
-	FreshStatus *PoolerStatusIndicator
-}
-
-func (PoolerResponseIndicator) consensusIndicator() {}
-
-// --- Indicators for PoolerNode (from orch over the network — unreliable) ---
-
-// OrchStateIndicator is delivered to PoolerNode when orch broadcasts a ConsensusState.
-// ExpectedPrimaryTerm is a CAS check: if > 0 the pooler rejects the state unless its
-// current PrimaryTerm matches, protecting against an orch acting on stale cluster info.
-type OrchStateIndicator struct {
-	FromOrch            NodeID
-	State               ConsensusState
-	ExpectedPrimaryTerm int64
-}
-
-func (OrchStateIndicator) consensusIndicator() {}
-
-// TerminateIndicator is delivered to a PoolerNode to request graceful shutdown.
-// The pooler sets its PostgresStatus to Stopped and stops applying replication-role
-// changes. In production this corresponds to a SIGTERM sent to the multipooler process.
-type TerminateIndicator struct{}
-
-func (TerminateIndicator) consensusIndicator() {}
-
-// ApplySucceededIndicator is delivered to a PoolerNode when the local postgres apply
-// loop successfully executes the committed role change (e.g. pg_ctl promote, updating
-// postgresql.conf and standby.signal). The coordinator term and sequence number identify
-// which proposal was applied; PoolerNode ignores the indicator if the current committed
-// state has since advanced to a newer term or sequence number.
-//
-// In production, the apply loop runs as a goroutine within the multipooler process and
-// writes this indicator onto the incoming channel after the role change completes.
-// In simulation, an applyDriverNode returns ApplySucceededRequest which the handler
-// converts to this indicator.
-type ApplySucceededIndicator struct {
-	CoordTerm int64
-	SeqNum    int64
-}
-
-func (ApplySucceededIndicator) consensusIndicator() {}
