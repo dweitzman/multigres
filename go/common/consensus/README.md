@@ -58,9 +58,11 @@ go/common/consensus/
   requests.go          — request types emitted by nodes
   indicators.go        — indicator types consumed by nodes
   simulation/          — simulation-only code; not imported by production paths
-    wal_sim.go         — WAL ring buffer, LSN tracking, replica apply loop
+    sim_pooler.go      — WAL buffer, LSN tracking, write-quorum enforcement, replica pull loop
+    sim_coord.go       — SimCoordNode wrapping CoordNode; reconciles discovery state each tick
+    handler.go         — routes requests to the correct node as indicators
     mem_storage.go     — in-memory PoolerStorage for tests
-    harness.go         — test harness wiring (request→indicator routing)
+    types.go           — simType alias (dstsim.Simulator parameterised with consensus types)
     *_test.go          — simulation tests
 ```
 
@@ -69,26 +71,29 @@ Simulation-only code lives in `simulation/` and is not imported by anything outs
 
 ## WAL simulation model
 
-Rather than routing WAL as indicators through the dstsim delivery pipeline, WAL is modelled as
-a **ring buffer per replication slot** that is advanced by a separate simulation loop. This keeps
-WAL simulation close to how real postgres streaming replication works and avoids cluttering the
-consensus indicator types with WAL protocol details.
+WAL is modelled as a **grow-only buffer per primary** that replicas pull from each tick. This
+mirrors how real postgres streaming replication works (each replica maintains its own
+`primary_conninfo` connection) and avoids cluttering the consensus indicator types with WAL
+details.
 
-Each `simPooler` has:
+Each `SimPooler` has:
 
-- A **write buffer** (primary only): uncommitted WAL entries, flushed when acks arrive
-- A **receive buffer** (replica): entries received from the primary but not yet applied
-- An **apply pointer**: the LSN up to which entries have been applied to the in-memory state
+- A **WAL buffer** (primary only): append-only slice of `walEntry{pos lsn, record *DurabilityPolicyRecord}`.
+  User transactions (`record == nil`) advance the LSN without affecting policy state.
+- A **received LSN** (replica): the highest LSN pulled from the primary. On graceful switchover
+  this is preserved — the replica resumes from where it left off against the new primary.
+- A **replica ACK map** (primary only): tracks the highest LSN each sync standby has received,
+  used to evaluate write quorum.
+- A **pending apply** (primary only): the policy record written to WAL but not yet durable.
+  Becomes durable when `syncPolicy.IsWriteQuorum(ackingReplicas)` returns true.
 
-The simulation loop, driven by the dstsim tick, copies entries from the primary's write buffer
-to each replica's receive buffer through a configurable delivery policy (same
-`IndicatorDeliveryPolicy` used for consensus messages: reliable fast delivery or unreliable
-chaos). Entries in a replica's receive buffer are applied on the same tick they arrive (or on
-the next tick under the chaos policy).
+Each replica calls `pullWAL()` at the start of its own `Step()`, reading new entries directly
+from the primary's buffer. This means ACKs flow back to the primary within the same tick, so
+write quorum can be satisfied on the tick immediately after the replica pulls.
 
-LSN is an integer that increments monotonically with each WAL entry. Replicas report their
-applied LSN in status updates; the coordinator uses this to decide which replicas are eligible
-candidates for promotion.
+`SimPooler` intercepts `PolicyRecordApplyRequest` (emitted by `PoolerNode`) before it reaches
+the `Handler`, simulates the postgres SQL transaction and sync-settings update, and queues a
+`PolicyRecordAppliedIndicator` for the next `PoolerNode.Step` call once write quorum is met.
 
 ## Key types
 
@@ -122,28 +127,24 @@ Set `DSTSIM_TRACE=1` to dump a per-tick trace to stderr when a test fails.
 
 ## What's next
 
-### Stage 1 — Normal path: cohort expansion via WAL (current focus)
+### Stage 1 — Normal path: cohort expansion via WAL ✅ implemented
 
-The first simulation models the coordinator driving cohort expansion without any coordinator
+`TestCohortExpansion` models the coordinator driving cohort expansion without any coordinator
 election, using only WAL-driven `DurabilityPolicyRecord` compare-and-swap writes.
 
-**Setup:** one node pre-initialized as primary with policy `{ID: "v1", Cohort: [node1], Policy: AnyN(0)}`.
+**Setup:** one node pre-initialized as primary with policy `{ID: "v0", Cohort: [node1], Policy: AnyN(0)}`.
 
-**Test:** `TestCohortExpansion`
+The test expands the cohort from 1 to 4 nodes in three stages (→2, →3, →4). At each stage it
+asserts that every pooler has:
 
-1. Coordinator discovers node2 as an observer (replicating from node1 but not in cohort)
-2. Coordinator writes `{ID: "v2", PreviousID: "v1", Cohort: [node1, node2], Policy: AnyN(1)}` to primary
-3. Primary commits and propagates WAL to node2
-4. node2 applies WAL; reports `PolicyVersion: "v2"` in status
-5. Coordinator sees node2 reporting v2 — expansion complete; repeats for node3
+- Committed the expected policy with the correct `AnyN(k)` ack threshold
+- For the primary: `syncStandbys` = cohort minus self, `syncPolicy` = `AnyN(k)`
+- For each replica: `primaryConnInfo` = the committed primary
 
-**Invariant checked on every tick:**
+**Safety invariant checked on every tick:**
 
-- At most one node has `Role=Primary` with `applied=true` and a write quorum satisfied
-- Primary's effective `synchronous_standby_names` never requires acks from a set that cannot
-  satisfy both the old and new `AckPolicy`
-
-This test runs under both fast delivery and chaos (unreliable network + node crashes).
+- For each primary: every node in `syncStandbys` must be a known replica currently
+  streaming from that primary (no phantom sync requirements).
 
 ### Stage 2 — Bootstrap
 
