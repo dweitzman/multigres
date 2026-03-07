@@ -56,14 +56,14 @@ func (h *Handler) ProcessRequests(
 		case consensus.WritePolicyRequest:
 			result[r.TargetPooler] = append(result[r.TargetPooler], consensus.WritePolicyIndicator{
 				FromCoord: r.FromCoord,
-				Record:    r.Record,
+				Rules:     r.Rules,
 			})
 
 		case consensus.WritePolicyResponseRequest:
 			result[r.ToCoord] = append(result[r.ToCoord], consensus.WritePolicyResponseIndicator{
 				FromPooler: fromNode,
 				Accepted:   r.Accepted,
-				CurrentID:  r.CurrentID,
+				CurrentSeq: r.CurrentSeq,
 			})
 
 		case consensus.PoolerStatusUpdateRequest:
@@ -72,6 +72,7 @@ func (h *Handler) ProcessRequests(
 					PoolerID:       fromNode,
 					State:          r.State,
 					PostgresStatus: r.PostgresStatus,
+					Properties:     r.Properties,
 				})
 			}
 

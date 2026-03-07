@@ -22,15 +22,15 @@ type Request interface {
 
 // --- Requests from CoordNode ---
 
-// WritePolicyRequest asks the RequestHandler to deliver a DurabilityPolicyRecord
-// write to the target pooler (which must be the current primary). The primary
-// validates the compare-and-swap: Record.PreviousID must match its current
-// Policy.ID. If it does not match, the write is rejected and the primary returns
-// its current ID so the coord can retry with the correct PreviousID.
+// WritePolicyRequest asks the RequestHandler to deliver a DurabilityRules write
+// to the target pooler (which must be the current primary). The primary validates
+// the compare-and-swap: Rules.Seq must equal its current PolicySeq + 1. If it does
+// not, the write is rejected and the primary returns its current seq so the coord
+// can retry with the correct next seq.
 type WritePolicyRequest struct {
 	TargetPooler NodeID
 	FromCoord    NodeID
-	Record       DurabilityPolicyRecord // Record.PreviousID is the CAS key
+	Rules        DurabilityRules // Rules.Seq is the CAS key (must be currentSeq+1)
 }
 
 func (WritePolicyRequest) consensusRequest() {}
@@ -38,19 +38,18 @@ func (WritePolicyRequest) consensusRequest() {}
 // --- Requests from PoolerNode ---
 
 // PolicyRecordApplyRequest is emitted by the primary PoolerNode when it needs
-// the local postgres driver to apply a DurabilityPolicyRecord change. The
-// driver is responsible for the full apply sequence: updating
-// synchronous_standby_names and then committing the SQL transaction. If the
-// transaction fails, the driver must roll back the replication settings change
-// and deliver a failure indicator.
+// the local postgres driver to apply a DurabilityRules change. The driver is
+// responsible for the full apply sequence: updating synchronous_standby_names
+// and then committing the SQL transaction. If the transaction fails, the driver
+// must roll back the replication settings change and deliver a failure indicator.
 //
 // In production, the local driver goroutine handles this and delivers a
 // PolicyRecordAppliedIndicator back to the PoolerNode on success.
-// In simulation, the simPooler wrapper intercepts this request (before it
+// In simulation, the SimPooler wrapper intercepts this request (before it
 // reaches the RequestHandler), simulates the apply, and queues the result
 // indicator for the next tick.
 type PolicyRecordApplyRequest struct {
-	Record DurabilityPolicyRecord
+	Rules DurabilityRules
 }
 
 func (PolicyRecordApplyRequest) consensusRequest() {}
@@ -58,23 +57,24 @@ func (PolicyRecordApplyRequest) consensusRequest() {}
 // WritePolicyResponseRequest is emitted by a PoolerNode in response to a
 // WritePolicyIndicator, after the local postgres write has either succeeded or
 // failed. Accepted is true if the record was durably committed. When false,
-// CurrentID carries the primary's actual current policy version so the coord
-// can correct its PreviousID on retry without a separate status round-trip.
+// CurrentSeq carries the primary's actual current policy seq so the coord can
+// correct its next seq on retry without a separate status round-trip.
 type WritePolicyResponseRequest struct {
-	ToCoord   NodeID
-	Accepted  bool
-	CurrentID PolicyID // primary's current policy version when Accepted=false
+	ToCoord    NodeID
+	Accepted   bool
+	CurrentSeq int64 // primary's current policy seq when Accepted=false
 }
 
 func (WritePolicyResponseRequest) consensusRequest() {}
 
 // PoolerStatusUpdateRequest is emitted by a PoolerNode whenever its committed
-// state changes (policy write committed, WAL record applied, postgres stopped,
+// state changes (rules write committed, WAL record applied, postgres stopped,
 // or after a crash-restart). The RequestHandler delivers it to all known
 // CoordNodes as a PoolerStatusIndicator so the coord can track cluster state.
 type PoolerStatusUpdateRequest struct {
 	State          PoolerPersistentState
 	PostgresStatus PostgresStatus
+	Properties     NodeProperties
 }
 
 func (PoolerStatusUpdateRequest) consensusRequest() {}

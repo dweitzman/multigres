@@ -28,7 +28,7 @@ import (
 
 // anyNThreshold returns the ack threshold of an AnyN policy via a structural
 // interface cast. Returns (0, false) if the policy does not expose AckThreshold.
-func anyNThreshold(p consensus.DurabilityPolicy) (int, bool) {
+func anyNThreshold(p consensus.AckPolicy) (int, bool) {
 	type ackThresholder interface {
 		AckThreshold() int
 	}
@@ -51,38 +51,45 @@ func simPoolerByID(sim *simType, id consensus.NodeID) *SimPooler {
 
 // --- Conditions ---
 
-// allHaveAppliedPolicy is true when every pooler in the set satisfies all of:
+// allHaveAppliedRules is true when every pooler in the set satisfies all of:
 //
-//  1. Committed policy has exactly the expected cohort members (any order).
-//  2. Committed policy is an AnyN(wantAnyN) policy.
+//  1. Committed rules have exactly the expected cohort members (any order).
+//  2. Committed rules use an AnyN(wantAnyN) policy.
 //  3. For the primary: syncStandbys equals cohort minus self, and syncPolicy is AnyN(wantAnyN).
 //  4. For replicas: primaryConnInfo matches the committed primary.
 //
-// This checks not only that the policy was written and persisted, but that the
+// This checks not only that the rules were written and persisted, but that the
 // corresponding replication settings were applied consistently.
-type allHaveAppliedPolicy struct {
+type allHaveAppliedRules struct {
 	poolers  []*SimPooler
 	members  []consensus.NodeID
 	wantAnyN int
 }
 
-func (c *allHaveAppliedPolicy) Name() string {
-	return fmt.Sprintf("all_have_applied_policy{cohort=%v anyN=%d}", c.members, c.wantAnyN)
+func (c *allHaveAppliedRules) Name() string {
+	return fmt.Sprintf("all_have_applied_rules{cohort=%v anyN=%d}", c.members, c.wantAnyN)
 }
 
-func (c *allHaveAppliedPolicy) Eval(_ *simType) bool {
+func (c *allHaveAppliedRules) Eval(_ *simType) bool {
 	for _, sp := range c.poolers {
 		state := sp.Node().CommittedState()
-		policy := state.Policy
-		if policy == nil || len(policy.CohortMembers) != len(c.members) {
+		rules := state.Rules
+		if rules == nil || len(rules.Members) != len(c.members) {
 			return false
 		}
-		for _, id := range c.members {
-			if !slices.Contains(policy.CohortMembers, id) {
+		for _, wantID := range c.members {
+			found := false
+			for _, m := range rules.Members {
+				if m.ID == wantID {
+					found = true
+					break
+				}
+			}
+			if !found {
 				return false
 			}
 		}
-		n, ok := anyNThreshold(policy.Policy)
+		n, ok := anyNThreshold(rules.Policy)
 		if !ok || n != c.wantAnyN {
 			return false
 		}
@@ -96,7 +103,10 @@ func (c *allHaveAppliedPolicy) Eval(_ *simType) bool {
 					expectedStandbys = append(expectedStandbys, id)
 				}
 			}
-			gotStandbys := slices.Clone(sp.syncStandbys)
+			gotStandbys := make([]consensus.NodeID, len(sp.syncStandbys))
+			for i, m := range sp.syncStandbys {
+				gotStandbys[i] = m.ID
+			}
 			slices.Sort(gotStandbys)
 			slices.Sort(expectedStandbys)
 			if !slices.Equal(gotStandbys, expectedStandbys) {
@@ -116,21 +126,29 @@ func (c *allHaveAppliedPolicy) Eval(_ *simType) bool {
 	return true
 }
 
-func (c *allHaveAppliedPolicy) Describe(_ *simType) string {
+func (c *allHaveAppliedRules) Describe(_ *simType) string {
 	var lines []string
 	for _, sp := range c.poolers {
 		state := sp.Node().CommittedState()
-		policy := state.Policy
-		var policyStr string
-		if policy == nil {
-			policyStr = "no policy"
+		rules := state.Rules
+		var rulesStr string
+		if rules == nil {
+			rulesStr = "no rules"
 		} else {
-			policyStr = fmt.Sprintf("cohort=%v policy=%T", policy.CohortMembers, policy.Policy)
+			memberIDs := make([]consensus.NodeID, len(rules.Members))
+			for i, m := range rules.Members {
+				memberIDs[i] = m.ID
+			}
+			rulesStr = fmt.Sprintf("seq=%d cohort=%v policy=%T", rules.Seq, memberIDs, rules.Policy)
+		}
+		standbyIDs := make([]consensus.NodeID, len(sp.syncStandbys))
+		for i, m := range sp.syncStandbys {
+			standbyIDs[i] = m.ID
 		}
 		replicationStr := fmt.Sprintf("primaryConnInfo=%v syncStandbys=%v syncPolicy=%T",
-			sp.primaryConnInfo, sp.syncStandbys, sp.syncPolicy)
+			sp.primaryConnInfo, standbyIDs, sp.syncPolicy)
 		lines = append(lines, fmt.Sprintf("  %v(role=%v): %v | %v",
-			sp.ID(), state.Role, policyStr, replicationStr))
+			sp.ID(), state.Role, rulesStr, replicationStr))
 	}
 	return "pooler state:\n" + strings.Join(lines, "\n")
 }
@@ -149,9 +167,9 @@ func (c *syncStandbysAreReplicas) Eval(sim *simType) bool {
 		if !ok || sp.Node().CommittedState().Role != consensus.RolePrimary {
 			continue
 		}
-		for _, standbyID := range sp.syncStandbys {
-			standby := simPoolerByID(sim, standbyID)
-			if standby == nil || standby.primaryConnInfo != sp.ID() {
+		for _, standby := range sp.syncStandbys {
+			standbyNode := simPoolerByID(sim, standby.ID)
+			if standbyNode == nil || standbyNode.primaryConnInfo != sp.ID() {
 				return false
 			}
 		}
@@ -167,8 +185,12 @@ func (c *syncStandbysAreReplicas) Describe(sim *simType) string {
 			continue
 		}
 		state := sp.Node().CommittedState()
+		standbyIDs := make([]consensus.NodeID, len(sp.syncStandbys))
+		for i, m := range sp.syncStandbys {
+			standbyIDs[i] = m.ID
+		}
 		lines = append(lines, fmt.Sprintf("  %v: role=%v syncStandbys=%v primaryConnInfo=%v",
-			sp.ID(), state.Role, sp.syncStandbys, sp.primaryConnInfo))
+			sp.ID(), state.Role, standbyIDs, sp.primaryConnInfo))
 	}
 	return "node sync state:\n" + strings.Join(lines, "\n")
 }
@@ -176,16 +198,16 @@ func (c *syncStandbysAreReplicas) Describe(sim *simType) string {
 // --- Test helpers ---
 
 // newPrimaryPooler creates a SimPooler pre-initialized as the cluster primary.
-// seedPolicy is written to storage before NewPoolerNode loads it, so the node
-// starts in the primary role with the given policy already committed.
-func newPrimaryPooler(id consensus.NodeID, seedPolicy *consensus.DurabilityPolicyRecord, sim *simType) *SimPooler {
+// seedRules is written to storage before NewPoolerNode loads it, so the node
+// starts in the primary role with the given rules already committed.
+func newPrimaryPooler(id consensus.NodeID, seedRules *consensus.DurabilityRules, sim *simType) *SimPooler {
 	store := &MemStorage{}
 	store.state = consensus.PoolerPersistentState{
 		Role:    consensus.RolePrimary,
 		Primary: id,
-		Policy:  seedPolicy,
+		Rules:   seedRules,
 	}
-	return NewSimPooler(consensus.NewPoolerNode(id, store), sim)
+	return NewSimPooler(consensus.NewPoolerNode(id, store, consensus.NodeProperties{}), sim)
 }
 
 // newReplicaPooler creates a SimPooler pre-initialized as a replica streaming from
@@ -197,7 +219,7 @@ func newReplicaPooler(id, primaryID consensus.NodeID, sim *simType) *SimPooler {
 		Role:    consensus.RoleReplica,
 		Primary: primaryID,
 	}
-	return NewSimPooler(consensus.NewPoolerNode(id, store), sim)
+	return NewSimPooler(consensus.NewPoolerNode(id, store, consensus.NodeProperties{}), sim)
 }
 
 // --- Tests ---
@@ -206,14 +228,13 @@ func newReplicaPooler(id, primaryID consensus.NodeID, sim *simType) *SimPooler {
 // coordinator incrementally adds observer replicas to the cohort and upgrades
 // the durability policy as the cluster grows, without coordinator elections.
 //
-// Setup: node1 is pre-initialized as a 1-node primary with AnyN(0) policy.
+// Setup: node1 is pre-initialized as a 1-node primary with AnyN(0) rules.
 // The coordinator targets AnyN(2), upgrading the policy as the cohort grows.
 //
 // Stages:
-//  1. 1-node cluster: verify stability before expansion begins.
-//  2. node2 joins: coordinator expands cohort to [node1, node2], policy → AnyN(1).
-//  3. node3 joins: coordinator expands cohort to [node1, node2, node3], policy → AnyN(2).
-//  4. node4 joins: target policy is already satisfied with 3 nodes; cohort expands
+//  1. node2 joins: coordinator expands cohort to [node1, node2], policy → AnyN(1).
+//  2. node3 joins: coordinator expands cohort to [node1, node2, node3], policy → AnyN(2).
+//  3. node4 joins: target policy is already satisfied with 3 nodes; cohort expands
 //     to [node1..node4] but policy stays AnyN(2).
 func TestCohortExpansion(t *testing.T) {
 	const (
@@ -230,12 +251,12 @@ func TestCohortExpansion(t *testing.T) {
 	sim.SetRequestHandler(NewHandler(coordID))
 
 	// Pre-initialize node1 as a primary with a single-node bootstrap policy.
-	seedPolicy := &consensus.DurabilityPolicyRecord{
-		ID:            "v0",
-		CohortMembers: []consensus.NodeID{node1ID},
-		Policy:        consensus.AnyNPolicy(0),
+	seedRules := &consensus.DurabilityRules{
+		Seq:     1,
+		Members: []consensus.CohortMember{{ID: node1ID}},
+		Policy:  consensus.AnyNPolicy(0),
 	}
-	pooler1 := newPrimaryPooler(node1ID, seedPolicy, sim)
+	pooler1 := newPrimaryPooler(node1ID, seedRules, sim)
 	sim.RegisterNode(pooler1)
 
 	// Coordinator targets AnyN(2) so it upgrades the durability policy as nodes join.
@@ -248,33 +269,30 @@ func TestCohortExpansion(t *testing.T) {
 
 	th := dstsim.NewSimulationTestHelper(t, sim)
 
-	// Stage 1: single-node cluster — verify stability before expansion begins.
-	th.RequireAdvance(10)
-
-	// Stage 2: node2 joins as an observer streaming from node1.
-	// Coordinator writes a new policy adding node2 to the cohort.
+	// Stage 1: node2 joins as an observer streaming from node1.
+	// Coordinator writes new rules adding node2 to the cohort.
 	pooler2 := newReplicaPooler(node2ID, node1ID, sim)
 	sim.RegisterNode(pooler2)
-	th.RequireWithinTicks(&allHaveAppliedPolicy{
+	th.RequireWithinTicks(&allHaveAppliedRules{
 		poolers:  []*SimPooler{pooler1, pooler2},
 		members:  []consensus.NodeID{node1ID, node2ID},
 		wantAnyN: 1,
 	}, 200)
 
-	// Stage 3: node3 joins; the coordinator upgrades the policy to AnyN(2).
+	// Stage 2: node3 joins; the coordinator upgrades the policy to AnyN(2).
 	pooler3 := newReplicaPooler(node3ID, node1ID, sim)
 	sim.RegisterNode(pooler3)
-	th.RequireWithinTicks(&allHaveAppliedPolicy{
+	th.RequireWithinTicks(&allHaveAppliedRules{
 		poolers:  []*SimPooler{pooler1, pooler2, pooler3},
 		members:  []consensus.NodeID{node1ID, node2ID, node3ID},
 		wantAnyN: 2,
 	}, 200)
 
-	// Stage 4: node4 joins; AnyN(2) is already achievable with 3 nodes so the
+	// Stage 3: node4 joins; AnyN(2) is already achievable with 3 nodes so the
 	// policy stays AnyN(2) while the cohort grows to include node4.
 	pooler4 := newReplicaPooler(node4ID, node1ID, sim)
 	sim.RegisterNode(pooler4)
-	th.RequireWithinTicks(&allHaveAppliedPolicy{
+	th.RequireWithinTicks(&allHaveAppliedRules{
 		poolers:  []*SimPooler{pooler1, pooler2, pooler3, pooler4},
 		members:  []consensus.NodeID{node1ID, node2ID, node3ID, node4ID},
 		wantAnyN: 2,

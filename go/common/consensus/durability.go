@@ -14,10 +14,10 @@
 
 package consensus
 
-// AnyNPolicy returns a DurabilityPolicy that considers a write durable when at
-// least n sync replicas have acknowledged it. AnyNPolicy(0) means no replicas are
+// AnyNPolicy returns an AckPolicy that considers a write durable when at least
+// n sync replicas have acknowledged it. AnyNPolicy(0) means no replicas are
 // required — suitable for a 1-node bootstrap cluster with no HA guarantees.
-func AnyNPolicy(n int) DurabilityPolicy {
+func AnyNPolicy(n int) AckPolicy {
 	return &anyNPolicy{n: n}
 }
 
@@ -26,16 +26,17 @@ type anyNPolicy struct {
 }
 
 // IsWriteQuorum returns true if the number of acknowledging replicas meets the threshold.
-func (p *anyNPolicy) IsWriteQuorum(ackingReplicas []NodeID) bool {
+func (p *anyNPolicy) IsWriteQuorum(ackingReplicas []CohortMember) bool {
 	return len(ackingReplicas) >= p.n
 }
 
-// IsAchievable returns true if this policy can be satisfied with the given cohort size.
+// IsAchievable returns true if this policy can be satisfied with the given cohort.
 // AnyNPolicy(n) requires at least n+1 members (one primary plus n sync replicas).
-func (p *anyNPolicy) IsAchievable(numCohortMembers int) bool {
-	return numCohortMembers >= p.n+1
+func (p *anyNPolicy) IsAchievable(cohort []CohortMember) bool {
+	return len(cohort) >= p.n+1
 }
 
+// AckThreshold returns the minimum number of replica ACKs required.
 func (p *anyNPolicy) AckThreshold() int {
 	return p.n
 }

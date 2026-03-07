@@ -15,7 +15,6 @@
 package consensus
 
 import (
-	"fmt"
 	"slices"
 
 	"github.com/multigres/multigres/go/tools/dstsim/sortedmaps"
@@ -27,11 +26,11 @@ import (
 //
 // The coordinator monitors pooler statuses, identifies observers (poolers that
 // are replicating but not yet in the cohort), and expands the cohort by writing
-// DurabilityPolicyRecord updates to the primary via compare-and-swap.
+// DurabilityRules updates to the primary via compare-and-swap.
 //
 // Adds and removes are always separate writes. This is required because the
-// correct ordering of synchronous_standby_names changes relative to the policy
-// record write differs between the two cases:
+// correct ordering of synchronous_standby_names changes relative to the rules
+// write differs between the two cases:
 //   - Adding cohort members: update sync settings AFTER the write (new replicas
 //     don't need to ack the write that adds them).
 //   - Removing cohort members: update sync settings BEFORE the write (must not
@@ -48,7 +47,7 @@ import (
 // processing PoolerStatusIndicator and PoolerDiscoveredIndicator updates.
 type CoordNode struct {
 	id           NodeID
-	targetPolicy DurabilityPolicy
+	targetPolicy AckPolicy
 
 	// known tracks each pooler the coord has been told about. Values are
 	// updated each time a PoolerStatusIndicator arrives.
@@ -58,25 +57,23 @@ type CoordNode struct {
 	// are waiting for a WritePolicyResponseIndicator. Only one write is in
 	// flight at a time.
 	pendingWrite *pendingPolicyWrite
-
-	// nextPolicySeq is a monotonic counter used to generate unique PolicyIDs.
-	nextPolicySeq int64
 }
 
 type knownPooler struct {
-	state    PoolerPersistentState
-	pgStatus PostgresStatus
+	state      PoolerPersistentState
+	pgStatus   PostgresStatus
+	properties NodeProperties
 }
 
 type pendingPolicyWrite struct {
 	target NodeID
-	record DurabilityPolicyRecord
+	rules  DurabilityRules
 }
 
 // NewCoordNode creates a coordinator node.
-// targetPolicy is the desired DurabilityPolicy to work toward as the cohort
+// targetPolicy is the desired AckPolicy to work toward as the cohort
 // grows (e.g. AnyNPolicy(2) for a 3-node HA cluster).
-func NewCoordNode(id NodeID, targetPolicy DurabilityPolicy) *CoordNode {
+func NewCoordNode(id NodeID, targetPolicy AckPolicy) *CoordNode {
 	return &CoordNode{
 		id:           id,
 		targetPolicy: targetPolicy,
@@ -109,6 +106,7 @@ func (c *CoordNode) Step(_ int64, indicators []Indicator) []Request {
 			if p, ok := c.known[v.PoolerID]; ok {
 				p.state = v.State
 				p.pgStatus = v.PostgresStatus
+				p.properties = v.Properties
 			}
 		case WritePolicyResponseIndicator:
 			c.handleWriteResponse(v)
@@ -125,25 +123,25 @@ func (c *CoordNode) handleWriteResponse(ind WritePolicyResponseIndicator) {
 	}
 
 	if ind.Accepted {
-		// The write succeeded. Update our cached view of the primary's policy
-		// so the next write uses the correct PreviousID without waiting for a
-		// status broadcast.
+		// The write succeeded. Update our cached view of the primary's rules
+		// so the next write uses the correct Seq without waiting for a status
+		// broadcast.
 		if p, ok := c.known[ind.FromPooler]; ok {
-			record := c.pendingWrite.record
-			p.state.Policy = &record
+			rules := c.pendingWrite.rules
+			p.state.Rules = &rules
 		}
 	} else {
-		// CAS mismatch: the primary's current policy is ind.CurrentID, not what
+		// CAS mismatch: the primary's current seq is ind.CurrentSeq, not what
 		// we thought. Only update our cache if we don't already have a fresher
-		// view from an out-of-band status update (which would have a matching ID).
+		// view from an out-of-band status update (which would have a matching seq).
 		if p, ok := c.known[ind.FromPooler]; ok {
-			if p.state.Policy == nil || p.state.Policy.ID != ind.CurrentID {
-				// We don't have the full record for ind.CurrentID yet. Clear our
-				// cached policy and wait for a PoolerStatusIndicator that carries
+			if p.state.Rules == nil || p.state.Rules.Seq != ind.CurrentSeq {
+				// We don't have the full rules for ind.CurrentSeq yet. Clear our
+				// cached rules and wait for a PoolerStatusIndicator that carries
 				// the full record before retrying.
-				p.state.Policy = nil
+				p.state.Rules = nil
 			}
-			// If p.state.Policy.ID == ind.CurrentID we already have up-to-date
+			// If p.state.Rules.Seq == ind.CurrentSeq we already have up-to-date
 			// information and can retry on the next advance() call.
 		}
 	}
@@ -162,52 +160,45 @@ func (c *CoordNode) advance() []Request {
 		return nil
 	}
 
-	currentPolicy := primaryKnown.state.Policy
-	if currentPolicy == nil {
-		return nil // primary has no policy yet; wait for status
+	currentRules := primaryKnown.state.Rules
+	if currentRules == nil {
+		return nil // primary has no rules yet; wait for status
 	}
 
 	// Decide on one type of change per write: adds or removes (not both).
 	// For Stage 1 we only handle adds. Removes are a TODO.
-	observers := c.observers(currentPolicy.CohortMembers)
+	observers := c.observers(currentRules)
 	if len(observers) == 0 {
 		return nil // cohort is already up to date
 	}
 
 	// Add all observers in one write.
-	newCohort := append(slices.Clone(currentPolicy.CohortMembers), observers...)
-	newPolicy := c.policyForSize(len(newCohort))
-
-	c.nextPolicySeq++
-	newRecord := DurabilityPolicyRecord{
-		ID:            PolicyID(fmt.Sprintf("policy-%d", c.nextPolicySeq)),
-		PreviousID:    currentPolicy.ID,
-		CohortMembers: newCohort,
-		Policy:        newPolicy,
+	newMembers := append(slices.Clone(currentRules.Members), observers...)
+	newRules := DurabilityRules{
+		Seq:     currentRules.Seq + 1,
+		Members: newMembers,
+		Policy:  c.policyForMembers(newMembers),
 	}
 
 	c.pendingWrite = &pendingPolicyWrite{
 		target: primaryID,
-		record: newRecord,
+		rules:  newRules,
 	}
 
 	return []Request{WritePolicyRequest{
 		TargetPooler: primaryID,
 		FromCoord:    c.id,
-		Record:       newRecord,
+		Rules:        newRules,
 	}}
 }
 
 // findPrimary returns the NodeID and knownPooler for the active primary, or the
 // zero ID and nil if none is found.
 //
-// TODO(stage3): strengthen this. Ideally we find a pooler whose current policy
-// record satisfies its own durability requirements (i.e. the write quorum of
-// the policy is met by the replicas currently known to be streaming), which is
-// strong evidence of a working quorum. If the primary is unreachable but a
-// validating quorum of replicas agree on its identity and show successful
-// replication, that is also good signal. For now, a simple role+health check
-// suffices.
+// TODO(stage3): strengthen this. Ideally we find a pooler whose current rules
+// satisfy its own durability requirements (i.e. the write quorum of the policy is
+// met by the replicas currently known to be streaming), which is strong evidence of
+// a working quorum. For now, a simple role+health check suffices.
 func (c *CoordNode) findPrimary() (NodeID, *knownPooler) {
 	for id, p := range sortedmaps.All(c.known) {
 		if p.state.Role == RolePrimary && p.pgStatus == PostgresRunning {
@@ -217,24 +208,33 @@ func (c *CoordNode) findPrimary() (NodeID, *knownPooler) {
 	return "", nil
 }
 
-// observers returns known poolers not listed in the current cohort, sorted
-// for deterministic output.
-func (c *CoordNode) observers(cohort []NodeID) []NodeID {
-	var result []NodeID
+// observers returns known poolers not listed in the current cohort as
+// CohortMembers (with their cached properties), sorted for deterministic output.
+func (c *CoordNode) observers(currentRules *DurabilityRules) []CohortMember {
+	inCohort := make(map[NodeID]bool)
+	for _, m := range currentRules.Members {
+		inCohort[m.ID] = true
+	}
+
+	var result []CohortMember
 	for _, id := range sortedmaps.Keys(c.known) {
-		if !slices.Contains(cohort, id) {
-			result = append(result, id)
+		if !inCohort[id] {
+			p := c.known[id]
+			result = append(result, CohortMember{
+				ID:         id,
+				Properties: p.properties,
+			})
 		}
 	}
 	return result
 }
 
-// policyForSize returns the best achievable policy for the given cohort size,
-// capped at the configured target policy. Uses AnyNPolicy(cohortSize-1) as the
-// intermediate policy when the target is not yet achievable.
-func (c *CoordNode) policyForSize(cohortSize int) DurabilityPolicy {
-	if c.targetPolicy.IsAchievable(cohortSize) {
+// policyForMembers returns the best achievable policy for the given cohort,
+// capped at the configured target policy. Uses AnyNPolicy(len(members)-1) as
+// the intermediate policy when the target is not yet achievable.
+func (c *CoordNode) policyForMembers(members []CohortMember) AckPolicy {
+	if c.targetPolicy.IsAchievable(members) {
 		return c.targetPolicy
 	}
-	return AnyNPolicy(cohortSize - 1)
+	return AnyNPolicy(len(members) - 1)
 }

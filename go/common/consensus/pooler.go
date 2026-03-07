@@ -16,27 +16,29 @@ package consensus
 
 // PoolerNode is the pooler state machine.
 //
-// # Normal path — WAL-driven policy changes
+// # Normal path — WAL-driven rules changes
 //
 // Primary: PoolerNode receives WritePolicyIndicator, validates the CAS
-// (Record.PreviousID == current Policy.ID), and emits PolicyRecordApplyRequest
+// (Rules.Seq == committed.PolicySeq() + 1), and emits PolicyRecordApplyRequest
 // to the local postgres driver. The driver updates synchronous_standby_names
 // and commits the SQL transaction; on success it delivers
 // PolicyRecordAppliedIndicator back to the PoolerNode. The PoolerNode then
-// persists the new policy record and responds to the coordinator.
+// persists the new rules and responds to the coordinator.
 //
-// Replica: the local WAL watcher detects the policy record in the WAL stream
+// Replica: the local WAL watcher detects the rules record in the WAL stream
 // and delivers PolicyRecordAppliedIndicator to the PoolerNode. The PoolerNode
-// persists the updated policy and broadcasts a status update.
+// persists the updated rules and broadcasts a status update.
 //
 // # Crash recovery
 //
-// On crash-restart, Restart() clears all in-memory state and reloads committed
-// state from durable storage — exactly the production startup sequence.
-// A pending in-flight apply is abandoned; the coordinator will retry.
+// On crash-restart, Restart() clears all in-memory state (including any
+// pending apply) and reloads committed state from durable storage — exactly
+// the production startup sequence. A pending in-flight apply is abandoned;
+// the coordinator will retry.
 type PoolerNode struct {
-	id      NodeID
-	storage PoolerStorage
+	id         NodeID
+	storage    PoolerStorage
+	properties NodeProperties
 
 	// committed is the last state successfully persisted via storage.Save.
 	committed PoolerPersistentState
@@ -45,25 +47,27 @@ type PoolerNode struct {
 	// starts as Running, set to Stopped on TerminateIndicator, reset by Restart().
 	pgStatus PostgresStatus
 
-	// needsBroadcast is set when state changes via needsBroadcast so the node
-	// emits a status update on the next Step(). Set by Restart() to signal to
-	// coordinators that the node is back up.
+	// needsBroadcast is set when state changes so the node emits a status
+	// update on the next Step(). Set by Restart() to signal to coordinators
+	// that the node is back up.
 	needsBroadcast bool
 
 	// pendingApply tracks an in-flight PolicyRecordApplyRequest that has been
 	// emitted to the local driver but not yet acknowledged. Only one apply may
 	// be in flight at a time. On crash-restart this is cleared; the coordinator
 	// will retry.
-	pendingApply    *DurabilityPolicyRecord
+	pendingApply    *DurabilityRules
 	pendingApplyFor NodeID // coordinator that sent the write request
 }
 
-// NewPoolerNode creates a pooler node with the given identity and storage.
-// It calls storage.Load() to restore any previously committed state.
-func NewPoolerNode(id NodeID, storage PoolerStorage) *PoolerNode {
+// NewPoolerNode creates a pooler node with the given identity, storage, and
+// static node properties. It calls storage.Load() to restore any previously
+// committed state.
+func NewPoolerNode(id NodeID, storage PoolerStorage, properties NodeProperties) *PoolerNode {
 	n := &PoolerNode{
 		id:             id,
 		storage:        storage,
+		properties:     properties,
 		pgStatus:       PostgresRunning,
 		needsBroadcast: true, // announce state on first Step so coordinators learn it
 	}
@@ -141,15 +145,15 @@ func (n *PoolerNode) Step(_ int64, indicators []Indicator) []Request {
 }
 
 // handleWritePolicy processes a WritePolicyIndicator from a coord.
-// Only primaries accept direct writes; replicas receive policy changes via WAL.
-// Validates the CAS (Record.PreviousID must match current PolicyVersion).
+// Only primaries accept direct writes; replicas receive rules changes via WAL.
+// Validates the CAS (Rules.Seq must equal committed.PolicySeq() + 1).
 // On success, emits PolicyRecordApplyRequest to the local postgres driver.
 func (n *PoolerNode) handleWritePolicy(ind WritePolicyIndicator) ([]Request, bool) {
 	reject := func() ([]Request, bool) {
 		return []Request{WritePolicyResponseRequest{
-			ToCoord:   ind.FromCoord,
-			Accepted:  false,
-			CurrentID: n.committed.PolicyVersion(),
+			ToCoord:    ind.FromCoord,
+			Accepted:   false,
+			CurrentSeq: n.committed.PolicySeq(),
 		}}, false
 	}
 
@@ -160,30 +164,26 @@ func (n *PoolerNode) handleWritePolicy(ind WritePolicyIndicator) ([]Request, boo
 	if n.pendingApply != nil {
 		return reject()
 	}
-	if ind.Record.PreviousID != n.committed.PolicyVersion() {
+	// CAS: incoming rules must be exactly the next seq.
+	if ind.Rules.Seq != n.committed.PolicySeq()+1 {
 		return reject()
 	}
 
-	record := ind.Record
-	n.pendingApply = &record
+	rules := ind.Rules
+	n.pendingApply = &rules
 	n.pendingApplyFor = ind.FromCoord
 
-	return []Request{PolicyRecordApplyRequest{Record: record}}, false
+	return []Request{PolicyRecordApplyRequest{Rules: rules}}, false
 }
 
 // handlePolicyApplied processes a PolicyRecordAppliedIndicator delivered by
 // either the primary's local driver (after SQL commit) or the replica's WAL
-// watcher (after WAL entry arrival). Persists the new policy and, for the
+// watcher (after WAL entry arrival). Persists the new rules and, for the
 // primary, responds to the waiting coordinator.
 func (n *PoolerNode) handlePolicyApplied(ind PolicyRecordAppliedIndicator) ([]Request, bool) {
-	// Discard stale indicators (in-flight state was cleared by a crash-restart).
-	if ind.PolicyID != ind.Record.ID {
-		return nil, false
-	}
-
 	// Primary path: clear the pending apply and respond to the coordinator.
 	var extraReqs []Request
-	if n.pendingApply != nil && n.pendingApply.ID == ind.PolicyID {
+	if n.pendingApply != nil && n.pendingApply.Seq == ind.Rules.Seq {
 		extraReqs = []Request{WritePolicyResponseRequest{
 			ToCoord:  n.pendingApplyFor,
 			Accepted: true,
@@ -193,7 +193,7 @@ func (n *PoolerNode) handlePolicyApplied(ind PolicyRecordAppliedIndicator) ([]Re
 	}
 
 	newState := n.committed
-	newState.Policy = &ind.Record
+	newState.Rules = &ind.Rules
 	if err := n.storage.Save(newState); err != nil {
 		return nil, false
 	}
@@ -206,5 +206,6 @@ func (n *PoolerNode) statusUpdate() PoolerStatusUpdateRequest {
 	return PoolerStatusUpdateRequest{
 		State:          n.committed,
 		PostgresStatus: n.pgStatus,
+		Properties:     n.properties,
 	}
 }

@@ -19,12 +19,12 @@
 //
 //   - PoolerNode: manages a single PostgreSQL instance. Persists its committed state
 //     durably via PoolerStorage. The primary PoolerNode is the source of truth for the
-//     cluster's DurabilityPolicyRecord (cohort membership and ack policy); replicas learn
-//     about policy changes via simulated WAL replication.
+//     cluster's DurabilityRules (cohort membership and ack policy); replicas learn
+//     about rule changes via simulated WAL replication.
 //
 //   - CoordNode: coordinator (orch service). Stateless across restarts. Watches pooler
 //     status, discovers observers (non-cohort poolers), and drives cohort expansion and
-//     durability policy upgrades by writing DurabilityPolicyRecord updates to the primary.
+//     durability policy upgrades by writing DurabilityRules updates to the primary.
 //     Uses emergency failover (coordinator elections) only when the primary is unreachable.
 //
 // Both implement dstsim.Node[Indicator, Request, NodeID] and can run in the same
@@ -33,7 +33,7 @@
 // Normal path — cohort and policy changes via WAL:
 //
 //	CoordNode sees observer → sends WritePolicyRequest to primary → primary commits and
-//	propagates WAL → replicas apply WAL and update their Policy → CoordNode observes
+//	propagates WAL → replicas apply WAL and update their Rules → CoordNode observes
 //	updated status.
 //
 // Emergency path (not yet implemented) — coordinator elections:
@@ -87,45 +87,57 @@ func (s PostgresStatus) String() string {
 	}
 }
 
-// PolicyID uniquely identifies a version of the cluster's DurabilityPolicyRecord.
-// The zero value means no policy has been established yet.
-type PolicyID string
-
-// DurabilityPolicy determines when writes are considered durable.
-// It is stored in a DurabilityPolicyRecord alongside the cohort membership.
-type DurabilityPolicy interface {
-	// IsWriteQuorum returns true if the set of acknowledging sync replicas is
-	// sufficient to consider a write durable under this policy.
-	IsWriteQuorum(ackingReplicas []NodeID) bool
-
-	// IsAchievable returns true if this policy can be satisfied with the given
-	// total number of cohort members (including the primary).
-	IsAchievable(numCohortMembers int) bool
+// NodeProperties holds static attributes of a pooler node that remain fixed for the
+// lifetime of that node ID. Provided at startup (e.g. command-line flags) and used
+// by AckPolicy implementations for zone-aware or topology-aware quorum decisions.
+type NodeProperties struct {
+	Zone string
 }
 
-// DurabilityPolicyRecord is a versioned record of the cluster's durability configuration.
-// It is written to the primary as a postgres transaction and propagated to replicas via
-// WAL replication. All changes to cohort membership or the ack policy go through this
-// mechanism rather than coordinator elections.
+// CohortMember pairs a pooler's identity with its static properties. Storing both
+// together in DurabilityRules.Members means AckPolicy implementations always have
+// all the information they need without a separate property lookup.
+type CohortMember struct {
+	ID         NodeID
+	Properties NodeProperties
+}
+
+// AckPolicy determines when writes are considered durable.
+// It is stored in DurabilityRules alongside the cohort membership.
+type AckPolicy interface {
+	// IsWriteQuorum returns true if the set of acknowledging sync replicas is
+	// sufficient to consider a write durable under this policy.
+	IsWriteQuorum(ackingReplicas []CohortMember) bool
+
+	// IsAchievable returns true if this policy can be satisfied with the given
+	// cohort. Implementations may use member properties (e.g. zone distribution)
+	// as needed.
+	IsAchievable(cohort []CohortMember) bool
+}
+
+// DurabilityRules is a versioned record of the cluster's durability configuration.
+// It is written to the primary as a postgres transaction and propagated to replicas
+// via WAL replication. All changes to cohort membership or the ack policy go through
+// this mechanism rather than coordinator elections.
 //
-// Writes are compare-and-swap: the writer must supply the ID of the policy it believes is
-// currently active (PreviousID). If PreviousID does not match the primary's current policy,
-// the write is rejected and the writer must refresh its view before retrying.
-type DurabilityPolicyRecord struct {
-	// ID uniquely identifies this version of the policy.
-	ID PolicyID
+// Writes are compare-and-swap: the primary accepts a write only if the incoming Seq
+// is exactly its current Seq + 1. This prevents stale coordinators from overwriting
+// a more recent configuration. Seq 0 is reserved for the "no rules yet" zero value;
+// the first real rules record always has Seq 1.
+//
+// A higher Seq always means more recent rules, enabling any node to determine which
+// of two rule sets is current without external context.
+type DurabilityRules struct {
+	// Seq is a monotonically increasing sequence number.
+	Seq int64
 
-	// PreviousID is the ID of the policy this record supersedes. The zero value
-	// means this is the initial policy (the cluster's first policy write).
-	PreviousID PolicyID
-
-	// CohortMembers is the ordered list of pooler IDs that may participate in
-	// coordinator votes. Only poolers listed here are required to participate in
-	// an emergency failover vote.
-	CohortMembers []NodeID
+	// Members is the full list of pooler IDs and their static properties that
+	// may participate in coordinator votes. Only members listed here are required
+	// to participate in an emergency failover vote.
+	Members []CohortMember
 
 	// Policy determines how many sync-replica ACKs are required for durability.
-	Policy DurabilityPolicy
+	Policy AckPolicy
 }
 
 // PoolerPersistentState is the durable state a PoolerNode writes to storage.
@@ -142,19 +154,19 @@ type PoolerPersistentState struct {
 	// this is itself. For replicas, this is the node they stream WAL from.
 	Primary NodeID
 
-	// Policy is the most recent DurabilityPolicyRecord this pooler has committed
-	// (primary) or applied from WAL replication (replica). Nil means no policy has
-	// been seen yet.
-	Policy *DurabilityPolicyRecord
+	// Rules is the most recent DurabilityRules this pooler has committed (primary)
+	// or applied from WAL replication (replica). Nil means no rules have been
+	// seen yet.
+	Rules *DurabilityRules
 }
 
-// PolicyVersion returns the ID of the current policy record, or the zero value
-// if no policy has been applied yet.
-func (s PoolerPersistentState) PolicyVersion() PolicyID {
-	if s.Policy == nil {
-		return ""
+// PolicySeq returns the sequence number of the current rules, or 0 if no rules
+// have been applied yet.
+func (s PoolerPersistentState) PolicySeq() int64 {
+	if s.Rules == nil {
+		return 0
 	}
-	return s.Policy.ID
+	return s.Rules.Seq
 }
 
 // PoolerStorage is implemented by anything that durably persists PoolerPersistentState.

@@ -25,7 +25,7 @@ type lsn int64
 
 // walEntry is one record in the simulated WAL buffer. Each entry either
 // represents a user transaction (record == nil, just advances the LSN) or a
-// DurabilityPolicyRecord change.
+// DurabilityRules change.
 //
 // TODO(failover): research why replication is expected to fail in postgres if a
 // replica and primary have diverging transactions (e.g. after a split-brain or
@@ -41,7 +41,7 @@ type lsn int64
 // all cohort members have applied past it. For now the buffer grows unboundedly.
 type walEntry struct {
 	pos    lsn
-	record *consensus.DurabilityPolicyRecord // nil = user transaction
+	record *consensus.DurabilityRules // nil = user transaction
 }
 
 // SimPooler wraps a PoolerNode and acts as the local postgres driver in
@@ -54,7 +54,7 @@ type walEntry struct {
 //   - Replica mode: pulls WAL entries directly from its configured primary
 //     each tick (analogous to postgres's primary_conninfo), tracks the
 //     highest LSN received, and delivers PolicyRecordAppliedIndicators to the
-//     wrapped PoolerNode when policy records arrive.
+//     wrapped PoolerNode when rules records arrive.
 //
 // WAL replication is handled within Step() — each replica looks up its
 // primary's SimPooler and reads new entries directly, mirroring how each
@@ -78,17 +78,17 @@ type SimPooler struct {
 	// syncStandbys is the set of replicas listed in synchronous_standby_names
 	// (primary only). Write quorum is determined by checking how many of these
 	// nodes have ACKed the write LSN using syncPolicy.IsWriteQuorum.
-	syncStandbys []consensus.NodeID
-	syncPolicy   consensus.DurabilityPolicy // nil = AnyN(0), no ACKs required
+	syncStandbys []consensus.CohortMember
+	syncPolicy   consensus.AckPolicy // nil = AnyN(0), no ACKs required
 
 	// replicaACK tracks the highest WAL position each replica has confirmed
 	// receiving (primary only). Updated by pullWAL calls from replicas.
 	replicaACK map[consensus.NodeID]lsn
 
-	// pendingApply is a policy record appended to the WAL but not yet durable
-	// (primary only): waiting for writeQuorumMet. At most one policy write can
+	// pendingApply is a rules record appended to the WAL but not yet durable
+	// (primary only): waiting for writeQuorumMet. At most one rules write can
 	// be pending at a time (PoolerNode serialises writes).
-	pendingApply    *consensus.DurabilityPolicyRecord
+	pendingApply    *consensus.DurabilityRules
 	pendingApplyPos lsn
 
 	// receivedLSN is the highest WAL position this node has received from the
@@ -130,9 +130,9 @@ func (s *SimPooler) ID() consensus.NodeID {
 	return s.node.ID()
 }
 
-// AppendUserTx simulates a user (non-policy) transaction on the primary,
+// AppendUserTx simulates a user (non-rules) transaction on the primary,
 // advancing the WAL LSN. Useful in tests for verifying replica lag tracking
-// or creating WAL gaps between policy entries.
+// or creating WAL gaps between rules entries.
 func (s *SimPooler) AppendUserTx() {
 	s.nextPos++
 	s.wal = append(s.wal, walEntry{pos: s.nextPos})
@@ -140,8 +140,8 @@ func (s *SimPooler) AppendUserTx() {
 
 // SyncStandbys returns the current simulated synchronous_standby_names set.
 // Useful in tests for asserting that sync settings are updated correctly.
-func (s *SimPooler) SyncStandbys() []consensus.NodeID {
-	result := make([]consensus.NodeID, len(s.syncStandbys))
+func (s *SimPooler) SyncStandbys() []consensus.CohortMember {
+	result := make([]consensus.CohortMember, len(s.syncStandbys))
 	copy(result, s.syncStandbys)
 	return result
 }
@@ -170,8 +170,7 @@ func (s *SimPooler) Step(tick int64, externalInds []consensus.Indicator) []conse
 	// Primary path: check if a pending write has reached write quorum.
 	if s.pendingApply != nil && s.writeQuorumMet(s.pendingApplyPos) {
 		inds = append(inds, consensus.PolicyRecordAppliedIndicator{
-			PolicyID: s.pendingApply.ID,
-			Record:   *s.pendingApply,
+			Rules: *s.pendingApply,
 		})
 		s.applySyncSettings(s.pendingApply)
 		s.pendingApply = nil
@@ -181,8 +180,7 @@ func (s *SimPooler) Step(tick int64, externalInds []consensus.Indicator) []conse
 	for _, e := range s.pendingWAL {
 		if e.record != nil {
 			inds = append(inds, consensus.PolicyRecordAppliedIndicator{
-				PolicyID: e.record.ID,
-				Record:   *e.record,
+				Rules: *e.record,
 			})
 		}
 	}
@@ -244,9 +242,9 @@ func (s *SimPooler) findSimPooler(id consensus.NodeID) *SimPooler {
 	return nil
 }
 
-// handleApply simulates the local postgres driver applying a DurabilityPolicyRecord.
+// handleApply simulates the local postgres driver applying a DurabilityRules change.
 //
-//  1. Validates the CAS (PreviousID must match the latest policy in this node's WAL).
+//  1. Validates the CAS (Rules.Seq must equal latestWALPolicySeq() + 1).
 //  2. Appends a new WAL entry at the next LSN.
 //  3. If the write is immediately durable under current sync settings, queues
 //     PolicyRecordAppliedIndicator for the next Step call and updates sync settings.
@@ -259,17 +257,17 @@ func (s *SimPooler) handleApply(req consensus.PolicyRecordApplyRequest) {
 	// CAS validation against the SimPooler's WAL state. The PoolerNode has
 	// already validated against its committed state; this catches divergence
 	// between the two views.
-	currentID := s.latestWALPolicyID()
-	if req.Record.PreviousID != currentID {
-		panic(fmt.Sprintf("SimPooler CAS mismatch on %s: Record.PreviousID=%q, latest WAL policy=%q",
-			s.node.ID(), req.Record.PreviousID, currentID))
+	currentSeq := s.latestWALPolicySeq()
+	if req.Rules.Seq != currentSeq+1 {
+		panic(fmt.Sprintf("SimPooler CAS mismatch on %s: Rules.Seq=%d, expected %d",
+			s.node.ID(), req.Rules.Seq, currentSeq+1))
 	}
 
-	record := req.Record
+	rules := req.Rules
 	s.nextPos++
-	s.wal = append(s.wal, walEntry{pos: s.nextPos, record: &record})
+	s.wal = append(s.wal, walEntry{pos: s.nextPos, record: &rules})
 
-	s.pendingApply = &record
+	s.pendingApply = &rules
 	s.pendingApplyPos = s.nextPos
 
 	// If write quorum is already met (e.g. no sync standbys required), the
@@ -278,10 +276,9 @@ func (s *SimPooler) handleApply(req consensus.PolicyRecordApplyRequest) {
 	// call is a no-op.
 	if s.writeQuorumMet(s.nextPos) {
 		s.queuedIndicators = append(s.queuedIndicators, consensus.PolicyRecordAppliedIndicator{
-			PolicyID: record.ID,
-			Record:   record,
+			Rules: rules,
 		})
-		s.applySyncSettings(&record)
+		s.applySyncSettings(&rules)
 		s.pendingApply = nil
 	}
 }
@@ -293,9 +290,9 @@ func (s *SimPooler) writeQuorumMet(pos lsn) bool {
 	if s.syncPolicy == nil {
 		return true
 	}
-	var acking []consensus.NodeID
+	var acking []consensus.CohortMember
 	for _, standby := range s.syncStandbys {
-		if s.replicaACK[standby] >= pos {
+		if s.replicaACK[standby.ID] >= pos {
 			acking = append(acking, standby)
 		}
 	}
@@ -303,30 +300,30 @@ func (s *SimPooler) writeQuorumMet(pos lsn) bool {
 }
 
 // applySyncSettings updates the simulated synchronous_standby_names from a
-// newly applied DurabilityPolicyRecord. Sync standbys are all cohort members
+// newly applied DurabilityRules. Sync standbys are all cohort members
 // except this node itself.
-func (s *SimPooler) applySyncSettings(record *consensus.DurabilityPolicyRecord) {
-	var standbys []consensus.NodeID
-	for _, id := range record.CohortMembers {
-		if id != s.node.ID() {
-			standbys = append(standbys, id)
+func (s *SimPooler) applySyncSettings(rules *consensus.DurabilityRules) {
+	var standbys []consensus.CohortMember
+	for _, m := range rules.Members {
+		if m.ID != s.node.ID() {
+			standbys = append(standbys, m)
 		}
 	}
 	s.syncStandbys = standbys
-	s.syncPolicy = record.Policy
+	s.syncPolicy = rules.Policy
 }
 
-// latestWALPolicyID returns the ID of the most recently appended policy record
-// in this node's WAL. If the WAL contains no policy entries yet, it falls back
+// latestWALPolicySeq returns the Seq of the most recently appended rules record
+// in this node's WAL. If the WAL contains no rules entries yet, it falls back
 // to the PoolerNode's committed state (handles pre-initialized nodes whose WAL
 // buffer is empty but committed state was loaded from storage).
-func (s *SimPooler) latestWALPolicyID() consensus.PolicyID {
+func (s *SimPooler) latestWALPolicySeq() int64 {
 	for i := len(s.wal) - 1; i >= 0; i-- {
 		if s.wal[i].record != nil {
-			return s.wal[i].record.ID
+			return s.wal[i].record.Seq
 		}
 	}
-	return s.node.CommittedState().PolicyVersion()
+	return s.node.CommittedState().PolicySeq()
 }
 
 // walEntriesSince returns all WAL entries with position > after.
