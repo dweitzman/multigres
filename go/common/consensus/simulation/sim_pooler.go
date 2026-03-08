@@ -171,11 +171,17 @@ type SimPooler struct {
 	// nextPos is the next LSN to assign when appending a new entry (primary only).
 	nextPos lsn
 
-	// syncStandbys is the set of replicas listed in synchronous_standby_names
-	// (primary only). Write quorum is determined by checking how many of these
-	// nodes have ACKed the write LSN using syncPolicy.IsWriteQuorum.
-	syncStandbys []consensus.CohortMember
-	syncPolicy   consensus.AckPolicy // nil = AnyN(0), no ACKs required
+	// gucSyncStandbys is the simulated synchronous_standby_names GUC (primary
+	// only). Write quorum is determined by checking how many of these nodes
+	// have ACKed the write LSN using gucSyncPolicy.IsWriteQuorum.
+	gucSyncStandbys []consensus.CohortMember
+	gucSyncPolicy   consensus.AckPolicy // nil = AnyN(0), no ACKs required
+
+	// gucWALReceiveEnabled is the simulated GUC that controls whether this
+	// replica pulls WAL from the primary (analogous to recovery_target_action or
+	// standby_mode). Set to false when the sidecar revokes WAL receive; restored
+	// when new rules are applied. Ignored for primaries (which never pull WAL).
+	gucWALReceiveEnabled bool
 
 	// replicaACK tracks the highest WAL position each replica has confirmed
 	// receiving (primary only). Updated by pullWAL calls from replicas.
@@ -208,17 +214,38 @@ type SimPooler struct {
 	// the matching WritePolicyResponseRequest is emitted. Entries are removed
 	// after the callback fires.
 	responseCallbacks map[string]func(consensus.WritePolicyResponseRequest)
+
+	// recruitResponseCallbacks maps a correlation ID to a callback invoked once
+	// when the matching RecruitResponseRequest is emitted. Entries are removed
+	// after the callback fires.
+	recruitResponseCallbacks map[string]func(consensus.RecruitResponseRequest)
+
+	// pendingRevokeCorrelationID is set when a RevokeParticipationRequest has
+	// been received but the sidecar has not yet completed revoking. On the next
+	// advancePendingRevoke call the revocation completes and
+	// RevokeParticipationResponseIndicator is queued.
+	pendingRevokeCorrelationID string
 }
 
 // NewSimPooler creates a SimPooler wrapping the given PoolerNode. sim is the
 // simulator used to look up peer SimPoolers for WAL replication each tick.
 func NewSimPooler(node *consensus.PoolerNode, sim *simType) *SimPooler {
 	return &SimPooler{
-		node:              node,
-		sim:               sim,
-		replicaACK:        make(map[consensus.NodeID]lsn),
-		responseCallbacks: make(map[string]func(consensus.WritePolicyResponseRequest)),
+		node:                     node,
+		sim:                      sim,
+		replicaACK:               make(map[consensus.NodeID]lsn),
+		responseCallbacks:        make(map[string]func(consensus.WritePolicyResponseRequest)),
+		recruitResponseCallbacks: make(map[string]func(consensus.RecruitResponseRequest)),
+		gucWALReceiveEnabled:     node.CommittedState().Commitment == nil,
 	}
+}
+
+// isRevoked returns true when the sidecar has revoked this node's participation
+// in write quorum. Derived from gucWALReceiveEnabled: the sidecar sets it false
+// for both replicas (stop ACKing) and primaries (read-only mode) on revocation,
+// and restores it to true when new rules are applied.
+func (s *SimPooler) isRevoked() bool {
+	return !s.gucWALReceiveEnabled
 }
 
 // Node returns the wrapped PoolerNode.
@@ -242,8 +269,8 @@ func (s *SimPooler) AppendUserTx() {
 // SyncStandbys returns the current simulated synchronous_standby_names set.
 // Useful in tests for asserting that sync settings are updated correctly.
 func (s *SimPooler) SyncStandbys() []consensus.CohortMember {
-	result := make([]consensus.CohortMember, len(s.syncStandbys))
-	copy(result, s.syncStandbys)
+	result := make([]consensus.CohortMember, len(s.gucSyncStandbys))
+	copy(result, s.gucSyncStandbys)
 	return result
 }
 
@@ -266,18 +293,96 @@ func (s *SimPooler) SendWritePolicyIndicator(ind consensus.WritePolicyIndicator,
 	}
 }
 
+// SendRecruitIndicator queues a RecruitIndicator and registers a callback to
+// be invoked once the correlated RecruitResponseRequest is emitted by the
+// wrapped PoolerNode. The callback fires exactly once.
+func (s *SimPooler) SendRecruitIndicator(ind consensus.RecruitIndicator, callback func(consensus.RecruitResponseRequest)) {
+	s.queuedIndicators = append(s.queuedIndicators, ind)
+	if ind.CorrelationID != "" && callback != nil {
+		s.recruitResponseCallbacks[ind.CorrelationID] = callback
+	}
+}
+
+// applyRevokedGUC simulates the postgres GUC changes that take effect when
+// this node stops participating in write quorum. Sets gucWALReceiveEnabled=false
+// (making isRevoked() return true). Role-specific behaviour:
+//
+// Primary: clears sync standbys/policy and drops any pending WAL entries that
+// did not reach write quorum. This mirrors postgres crash-recovery: WAL that
+// never received sufficient replica ACKs is truncated, and any in-flight write
+// pipeline is aborted with ApplyRulesResponseIndicator{Accepted:false}.
+//
+// Replica: stops pulling WAL by clearing primaryConnInfo and gucWALReceiveEnabled.
+// The primary is left stuck in awaitQuorum if it was waiting for this replica's ACK.
+func (s *SimPooler) applyRevokedGUC() {
+	if s.node.CommittedState().Role == consensus.RolePrimary {
+		s.gucSyncStandbys = nil
+		s.gucSyncPolicy = nil
+		if s.pendingChange != nil {
+			// Truncate WAL entries that were appended but never reached quorum.
+			if s.pendingChange.walPos > 0 {
+				s.truncateWALAfter(s.pendingChange.walPos - 1)
+			}
+			s.queuedIndicators = append(s.queuedIndicators, consensus.ApplyRulesResponseIndicator{
+				Rules:    s.pendingChange.rules,
+				Accepted: false,
+			})
+			s.pendingChange = nil
+		}
+	}
+	s.gucWALReceiveEnabled = false
+	s.primaryConnInfo = ""
+}
+
+// truncateWALAfter removes all WAL entries with position > after and resets
+// nextPos to after. This simulates crash recovery rolling back uncommitted writes.
+func (s *SimPooler) truncateWALAfter(after lsn) {
+	n := 0
+	for _, e := range s.wal {
+		if e.pos <= after {
+			s.wal[n] = e
+			n++
+		}
+	}
+	s.wal = s.wal[:n]
+	if s.nextPos > after {
+		s.nextPos = after
+	}
+}
+
+// advancePendingRevoke completes a sidecar revocation that was initiated on a
+// prior tick. Applies revoked GUC settings and queues
+// RevokeParticipationResponseIndicator for the wrapped PoolerNode. This models
+// the at-least-one-tick latency of the real sidecar stopping ACKs (for a
+// replica) or switching to read-only mode (for a primary).
+func (s *SimPooler) advancePendingRevoke() {
+	if s.pendingRevokeCorrelationID == "" {
+		return
+	}
+	correlationID := s.pendingRevokeCorrelationID
+	s.pendingRevokeCorrelationID = ""
+	s.applyRevokedGUC()
+	s.queuedIndicators = append(s.queuedIndicators, consensus.RevokeParticipationResponseIndicator{
+		CorrelationID: correlationID,
+	})
+}
+
 // Step processes indicators and advances the SimPooler state machine one tick.
 //
 // The method:
-//  1. Pulls new WAL from the configured primary if this node is a replica.
-//     Doing this first lets replicas registered before the primary in the
-//     simulator step order feed ACKs to the primary within the same tick.
-//  2. Advances the pending rules-apply pipeline (primary path).
-//  3. Calls PoolerNode.Step with all accumulated indicators.
-//  4. Intercepts PolicyRecordApplyRequest from PoolerNode output.
+//  1. Completes any pending sidecar revocation (from a prior tick).
+//  2. Pulls new WAL from the configured primary if this node is a replica.
+//     Doing this after revocation means a newly-revoked node skips ACKs.
+//  3. Advances the pending rules-apply pipeline (primary path).
+//  4. Calls PoolerNode.Step with all accumulated indicators.
+//  5. Intercepts PolicyRecordApplyRequest and RevokeParticipationRequest from output.
 //
 // Returns the subset of requests to pass to the RequestHandler.
 func (s *SimPooler) Step(tick int64, externalInds []consensus.Indicator) []consensus.Request {
+	// Complete any in-flight sidecar revocation before pulling WAL so that a
+	// newly-revoked node skips ACKing on this tick.
+	s.advancePendingRevoke()
+
 	// Replica path: pull WAL from the configured primary.
 	s.pullWAL()
 
@@ -306,16 +411,26 @@ func (s *SimPooler) Step(tick int64, externalInds []consensus.Indicator) []conse
 	// Step the wrapped PoolerNode with all accumulated indicators.
 	reqs := s.node.Step(tick, inds)
 
-	// Intercept PolicyRecordApplyRequest before forwarding to the RequestHandler.
-	// Invoke registered response callbacks for WritePolicyResponseRequests.
+	// Intercept PolicyRecordApplyRequest and RevokeParticipationRequest before
+	// forwarding to the RequestHandler. Invoke registered response callbacks.
 	var forwarded []consensus.Request
 	for _, req := range reqs {
 		switch r := req.(type) {
 		case consensus.PolicyRecordApplyRequest:
 			s.handleApply(r)
+		case consensus.RevokeParticipationRequest:
+			// Sidecar intercept: start revocation. Will complete on the next tick
+			// via advancePendingRevoke, modelling at-least-one-tick sidecar latency.
+			s.pendingRevokeCorrelationID = r.CorrelationID
 		case consensus.WritePolicyResponseRequest:
 			if cb := s.responseCallbacks[r.CorrelationID]; cb != nil {
 				delete(s.responseCallbacks, r.CorrelationID)
+				cb(r)
+			}
+			forwarded = append(forwarded, req)
+		case consensus.RecruitResponseRequest:
+			if cb := s.recruitResponseCallbacks[r.CorrelationID]; cb != nil {
+				delete(s.recruitResponseCallbacks, r.CorrelationID)
 				cb(r)
 			}
 			forwarded = append(forwarded, req)
@@ -342,6 +457,9 @@ func (s *SimPooler) pullWAL() {
 	state := s.node.CommittedState()
 	if state.Role != consensus.RoleReplica || state.Primary == "" {
 		return
+	}
+	if !s.gucWALReceiveEnabled {
+		return // sidecar has revoked WAL receive; replica is disconnected
 	}
 
 	// Track primary_conninfo changes so we can detect reconnections.
@@ -390,6 +508,15 @@ func (s *SimPooler) handleApply(req consensus.PolicyRecordApplyRequest) {
 		})
 		return
 	}
+	// A revoked primary has been placed in read-only mode by the sidecar and
+	// cannot commit new WAL entries.
+	if s.isRevoked() {
+		s.queuedIndicators = append(s.queuedIndicators, consensus.ApplyRulesResponseIndicator{
+			Rules:    req.Rules,
+			Accepted: false,
+		})
+		return
+	}
 
 	// Early CAS check: validates that this SimPooler's WAL is consistent with
 	// the PoolerNode's committed state at the time of the request. A failure
@@ -403,9 +530,9 @@ func (s *SimPooler) handleApply(req consensus.PolicyRecordApplyRequest) {
 	rules := req.Rules
 
 	// Capture original GUC settings for potential rollback in writeWAL.
-	originalStandbys := make([]consensus.CohortMember, len(s.syncStandbys))
-	copy(originalStandbys, s.syncStandbys)
-	originalPolicy := s.syncPolicy
+	originalStandbys := make([]consensus.CohortMember, len(s.gucSyncStandbys))
+	copy(originalStandbys, s.gucSyncStandbys)
+	originalPolicy := s.gucSyncPolicy
 
 	// Compute final GUC: all new cohort members except this node (the primary).
 	var finalStandbys []consensus.CohortMember
@@ -458,8 +585,8 @@ func (s *SimPooler) advancePendingChange() {
 	switch c.phase {
 	case ruleChangePhaseCombinedGUC:
 		// Apply combined GUC: union of old+new standbys, bothPolicy.
-		s.syncStandbys = c.combinedStandbys
-		s.syncPolicy = c.combinedPolicy
+		s.gucSyncStandbys = c.combinedStandbys
+		s.gucSyncPolicy = c.combinedPolicy
 		c.phase = ruleChangePhaseWriteWAL
 
 	case ruleChangePhaseWriteWAL:
@@ -467,8 +594,8 @@ func (s *SimPooler) advancePendingChange() {
 		// system another write could have landed in the WAL during that time.
 		if s.latestWALPolicySeq() != c.rules.Seq-1 {
 			// CAS failed: restore original GUC settings and report failure.
-			s.syncStandbys = c.originalStandbys
-			s.syncPolicy = c.originalPolicy
+			s.gucSyncStandbys = c.originalStandbys
+			s.gucSyncPolicy = c.originalPolicy
 			s.queuedIndicators = append(s.queuedIndicators, consensus.ApplyRulesResponseIndicator{
 				Rules:    c.rules,
 				Accepted: false,
@@ -490,8 +617,11 @@ func (s *SimPooler) advancePendingChange() {
 
 	case ruleChangePhaseFinalGUC:
 		// Apply final GUC: only the new standbys and new policy.
-		s.syncStandbys = c.finalStandbys
-		s.syncPolicy = c.finalPolicy
+		// Restore gucWALReceiveEnabled so isRevoked() returns false — new rules
+		// supersede any prior commitment range and the node resumes participation.
+		s.gucSyncStandbys = c.finalStandbys
+		s.gucSyncPolicy = c.finalPolicy
+		s.gucWALReceiveEnabled = true
 		c.phase = ruleChangePhaseSendIndicator
 
 	case ruleChangePhaseSendIndicator:
@@ -508,16 +638,16 @@ func (s *SimPooler) advancePendingChange() {
 // a write at the given WAL position. A nil syncPolicy (no policy applied yet)
 // is treated as AnyN(0): no ACKs required.
 func (s *SimPooler) writeQuorumMet(pos lsn) bool {
-	if s.syncPolicy == nil {
+	if s.gucSyncPolicy == nil {
 		return true
 	}
 	var acking []consensus.CohortMember
-	for _, standby := range s.syncStandbys {
+	for _, standby := range s.gucSyncStandbys {
 		if s.replicaACK[standby.ID] >= pos {
 			acking = append(acking, standby)
 		}
 	}
-	return s.syncPolicy.IsWriteQuorum(acking)
+	return s.gucSyncPolicy.IsWriteQuorum(acking)
 }
 
 // latestWALPolicySeq returns the Seq of the most recently appended rules record

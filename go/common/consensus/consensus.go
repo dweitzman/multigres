@@ -160,6 +160,24 @@ type DurabilityRules struct {
 	Policy AckPolicy
 }
 
+// RecruitmentCommitment is the durable record of a pooler's commitment to a
+// coordinator-led rule change. Once persisted, the pooler will not participate
+// in write quorum for any rule version within the committed range, and will not
+// accept instructions from a different coordinator for any overlapping range.
+//
+// The commitment survives crashes: a restarted pooler loads it from storage
+// and honours it before accepting any new instructions.
+type RecruitmentCommitment struct {
+	// CoordID is the coordinator this pooler is committed to.
+	CoordID NodeID
+
+	// AtRulesSeq is the base rule seq the coordinator is working from (N in N→N+X).
+	AtRulesSeq int64
+
+	// ProposedSeq is the highest target rule seq this pooler has committed to (N+X).
+	ProposedSeq int64
+}
+
 // PoolerPersistentState is the durable state a PoolerNode writes to storage.
 // It survives process restarts and is loaded on startup via PoolerStorage.Load.
 //
@@ -178,6 +196,10 @@ type PoolerPersistentState struct {
 	// or applied from WAL replication (replica). Nil means no rules have been
 	// seen yet.
 	Rules *DurabilityRules
+
+	// Commitment is non-nil when this pooler has been recruited by a coordinator.
+	// It records the coordinator and rule version range the pooler has committed to.
+	Commitment *RecruitmentCommitment
 }
 
 // PolicySeq returns the sequence number of the current rules, or 0 if no rules
@@ -187,6 +209,15 @@ func (s PoolerPersistentState) PolicySeq() int64 {
 		return 0
 	}
 	return s.Rules.Seq
+}
+
+// CommitmentEndSeq returns the ProposedSeq of the current commitment, or 0 if
+// no commitment has been recorded.
+func (s PoolerPersistentState) CommitmentEndSeq() int64 {
+	if s.Commitment == nil {
+		return 0
+	}
+	return s.Commitment.ProposedSeq
 }
 
 // PoolerStorage is implemented by anything that durably persists PoolerPersistentState.

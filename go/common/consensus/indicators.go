@@ -52,6 +52,30 @@ type ApplyRulesResponseIndicator struct {
 
 func (ApplyRulesResponseIndicator) consensusIndicator() {}
 
+// RecruitIndicator is delivered to a PoolerNode by a coordinator to recruit
+// it into a coordinator-led rule change covering the range AtRulesSeq→ProposedSeq.
+//
+// The pooler validates the request against any existing commitment and its
+// current rules, then durably persists the new commitment and stops participating
+// in write quorum before responding.
+type RecruitIndicator struct {
+	CorrelationID string
+	CoordID       NodeID
+	AtRulesSeq    int64
+	ProposedSeq   int64
+}
+
+func (RecruitIndicator) consensusIndicator() {}
+
+// RevokeParticipationResponseIndicator is delivered to a PoolerNode by its
+// local sidecar once it has stopped this node from participating in write quorum
+// under the current rules (replica: stopped ACKing; primary: read-only).
+type RevokeParticipationResponseIndicator struct {
+	CorrelationID string
+}
+
+func (RevokeParticipationResponseIndicator) consensusIndicator() {}
+
 // TerminateIndicator is delivered to a PoolerNode to signal graceful shutdown.
 // The pooler records PostgresStopped and emits a final status update.
 // In production this corresponds to a SIGTERM sent to the multipooler process.

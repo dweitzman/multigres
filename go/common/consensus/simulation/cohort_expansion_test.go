@@ -103,8 +103,8 @@ func (c *allHaveAppliedRules) Eval(_ *simType) bool {
 					expectedStandbys = append(expectedStandbys, id)
 				}
 			}
-			gotStandbys := make([]consensus.NodeID, len(sp.syncStandbys))
-			for i, m := range sp.syncStandbys {
+			gotStandbys := make([]consensus.NodeID, len(sp.gucSyncStandbys))
+			for i, m := range sp.gucSyncStandbys {
 				gotStandbys[i] = m.ID
 			}
 			slices.Sort(gotStandbys)
@@ -112,7 +112,7 @@ func (c *allHaveAppliedRules) Eval(_ *simType) bool {
 			if !slices.Equal(gotStandbys, expectedStandbys) {
 				return false
 			}
-			sn, sok := anyNThreshold(sp.syncPolicy)
+			sn, sok := anyNThreshold(sp.gucSyncPolicy)
 			if !sok || sn != c.wantAnyN {
 				return false
 			}
@@ -141,12 +141,12 @@ func (c *allHaveAppliedRules) Describe(_ *simType) string {
 			}
 			rulesStr = fmt.Sprintf("seq=%d cohort=%v policy=%T", rules.Seq, memberIDs, rules.Policy)
 		}
-		standbyIDs := make([]consensus.NodeID, len(sp.syncStandbys))
-		for i, m := range sp.syncStandbys {
+		standbyIDs := make([]consensus.NodeID, len(sp.gucSyncStandbys))
+		for i, m := range sp.gucSyncStandbys {
 			standbyIDs[i] = m.ID
 		}
 		replicationStr := fmt.Sprintf("primaryConnInfo=%v syncStandbys=%v syncPolicy=%T",
-			sp.primaryConnInfo, standbyIDs, sp.syncPolicy)
+			sp.primaryConnInfo, standbyIDs, sp.gucSyncPolicy)
 		lines = append(lines, fmt.Sprintf("  %v(role=%v): %v | %v",
 			sp.ID(), state.Role, rulesStr, replicationStr))
 	}
@@ -167,7 +167,7 @@ func (c *syncStandbysAreReplicas) Eval(sim *simType) bool {
 		if !ok || sp.Node().CommittedState().Role != consensus.RolePrimary {
 			continue
 		}
-		for _, standby := range sp.syncStandbys {
+		for _, standby := range sp.gucSyncStandbys {
 			standbyNode := simPoolerByID(sim, standby.ID)
 			if standbyNode == nil || standbyNode.primaryConnInfo != sp.ID() {
 				return false
@@ -185,8 +185,8 @@ func (c *syncStandbysAreReplicas) Describe(sim *simType) string {
 			continue
 		}
 		state := sp.Node().CommittedState()
-		standbyIDs := make([]consensus.NodeID, len(sp.syncStandbys))
-		for i, m := range sp.syncStandbys {
+		standbyIDs := make([]consensus.NodeID, len(sp.gucSyncStandbys))
+		for i, m := range sp.gucSyncStandbys {
 			standbyIDs[i] = m.ID
 		}
 		lines = append(lines, fmt.Sprintf("  %v: role=%v syncStandbys=%v primaryConnInfo=%v",

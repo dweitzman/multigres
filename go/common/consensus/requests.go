@@ -83,6 +83,32 @@ type WritePolicyResponseRequest struct {
 
 func (WritePolicyResponseRequest) consensusRequest() {}
 
+// RevokeParticipationRequest is emitted by PoolerNode to its local sidecar
+// asking it to stop this node from participating in write quorum under the
+// current rules. The sidecar responds with RevokeParticipationResponseIndicator
+// once the revocation is in effect.
+//
+// For a replica sidecar: stop forwarding WAL ACKs to the primary.
+// For a primary sidecar: become read-only (reject new write transactions).
+//
+// In simulation, SimPooler intercepts this before RequestHandler sees it.
+type RevokeParticipationRequest struct {
+	RequestCorrelation
+}
+
+func (RevokeParticipationRequest) consensusRequest() {}
+
+// RecruitResponseRequest is the pooler's response to a RecruitIndicator.
+// Rules carries the pooler's committed DurabilityRules so the coordinator can
+// discover any successor WAL entries it has not yet seen.
+type RecruitResponseRequest struct {
+	RequestCorrelation
+	Accepted bool
+	Rules    *DurabilityRules // nil when Accepted=false and no rules have been committed
+}
+
+func (RecruitResponseRequest) consensusRequest() {}
+
 // PoolerStatusUpdateRequest is emitted by a PoolerNode whenever its committed
 // state changes (rules write committed, WAL record applied, postgres stopped,
 // or after a crash-restart). The RequestHandler delivers it to all known

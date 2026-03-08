@@ -58,6 +58,11 @@ type PoolerNode struct {
 	// will retry.
 	pendingApply         *DurabilityRules
 	pendingCorrelationID string // correlation ID from the WritePolicyIndicator
+
+	// pendingRecruitCorrelationID is set when a RecruitIndicator has been accepted
+	// and a RevokeParticipationRequest has been sent to the sidecar but the response
+	// has not yet been received. Cleared once the sidecar responds.
+	pendingRecruitCorrelationID string
 }
 
 // NewPoolerNode creates a pooler node with the given identity, storage, and
@@ -106,6 +111,7 @@ func (n *PoolerNode) Restart() {
 	n.pgStatus = PostgresRunning
 	n.pendingApply = nil
 	n.pendingCorrelationID = ""
+	n.pendingRecruitCorrelationID = ""
 	if state, err := n.storage.Load(); err == nil {
 		n.committed = state
 	}
@@ -128,6 +134,12 @@ func (n *PoolerNode) Step(_ int64, indicators []Indicator) []Request {
 			reqs, c := n.handleApplyResponse(v)
 			requests = append(requests, reqs...)
 			changed = changed || c
+		case RecruitIndicator:
+			reqs, c := n.handleRecruit(v)
+			requests = append(requests, reqs...)
+			changed = changed || c
+		case RevokeParticipationResponseIndicator:
+			requests = append(requests, n.handleRevokeParticipationResponse(v)...)
 		case TerminateIndicator:
 			if n.pgStatus != PostgresStopped {
 				n.pgStatus = PostgresStopped
@@ -222,6 +234,83 @@ func (n *PoolerNode) handleApplyResponse(ind ApplyRulesResponseIndicator) ([]Req
 	n.committed = newState
 
 	return extraReqs, true
+}
+
+// handleRecruit processes a RecruitIndicator from a coordinator.
+//
+// Acceptance criteria — reject unless ALL of the following hold:
+//  1. ind.AtRulesSeq >= committed.PolicySeq(): coordinator knows the current rules.
+//  2. No existing commitment, OR the proposal supersedes the existing one:
+//     - ind.ProposedSeq > committed.Commitment.ProposedSeq (any coordinator), OR
+//     - ind.CoordID == committed.Commitment.CoordID AND ind.ProposedSeq >= committed.Commitment.ProposedSeq
+//     (same coordinator re-requesting — idempotent).
+//
+// On the idempotent fast path (same coordinator, same-or-higher target, commitment
+// already persisted), the method responds immediately without a sidecar round-trip.
+//
+// On a new or superseding acceptance, the commitment is saved to storage and a
+// RevokeParticipationRequest is sent to the sidecar.
+func (n *PoolerNode) handleRecruit(ind RecruitIndicator) ([]Request, bool) {
+	reject := func() ([]Request, bool) {
+		return []Request{RecruitResponseRequest{
+			RequestCorrelation: RequestCorrelation{CorrelationID: ind.CorrelationID},
+			Accepted:           false,
+			Rules:              n.committed.Rules,
+		}}, false
+	}
+
+	// Check 1: coordinator must know the current rules (not stale).
+	if ind.AtRulesSeq < n.committed.PolicySeq() {
+		return reject()
+	}
+
+	c := n.committed.Commitment
+	switch {
+	case c == nil:
+		// No existing commitment: accept.
+	case ind.CoordID == c.CoordID && ind.ProposedSeq == c.ProposedSeq:
+		// Same coordinator, same target: idempotent — respond immediately.
+		return []Request{RecruitResponseRequest{
+			RequestCorrelation: RequestCorrelation{CorrelationID: ind.CorrelationID},
+			Accepted:           true,
+			Rules:              n.committed.Rules,
+		}}, false
+	case ind.ProposedSeq > c.ProposedSeq:
+		// Different coordinator (or same with strictly higher target): supersedes.
+	default:
+		return reject()
+	}
+
+	newState := n.committed
+	newState.Commitment = &RecruitmentCommitment{
+		CoordID:     ind.CoordID,
+		AtRulesSeq:  ind.AtRulesSeq,
+		ProposedSeq: ind.ProposedSeq,
+	}
+	if err := n.storage.Save(newState); err != nil {
+		return reject()
+	}
+	n.committed = newState
+	n.pendingRecruitCorrelationID = ind.CorrelationID
+
+	return []Request{RevokeParticipationRequest{
+		RequestCorrelation: RequestCorrelation{CorrelationID: ind.CorrelationID},
+	}}, true
+}
+
+// handleRevokeParticipationResponse processes the sidecar's confirmation that
+// this node has stopped participating in write quorum. Responds to the original
+// coordinator with Accepted=true.
+func (n *PoolerNode) handleRevokeParticipationResponse(ind RevokeParticipationResponseIndicator) []Request {
+	if ind.CorrelationID != n.pendingRecruitCorrelationID {
+		return nil // stale or spurious
+	}
+	n.pendingRecruitCorrelationID = ""
+	return []Request{RecruitResponseRequest{
+		RequestCorrelation: RequestCorrelation(ind),
+		Accepted:           true,
+		Rules:              n.committed.Rules,
+	}}
 }
 
 func (n *PoolerNode) statusUpdate() PoolerStatusUpdateRequest {
