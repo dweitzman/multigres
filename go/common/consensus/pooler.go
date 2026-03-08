@@ -21,12 +21,12 @@ package consensus
 // Primary: PoolerNode receives WritePolicyIndicator, validates the CAS
 // (Rules.Seq == committed.PolicySeq() + 1), and emits PolicyRecordApplyRequest
 // to the local postgres driver. The driver updates synchronous_standby_names
-// and commits the SQL transaction; on success it delivers
-// PolicyRecordAppliedIndicator back to the PoolerNode. The PoolerNode then
+// and commits the SQL transaction; on completion it delivers
+// ApplyRulesResponseIndicator back to the PoolerNode. The PoolerNode then
 // persists the new rules and responds to the coordinator.
 //
 // Replica: the local WAL watcher detects the rules record in the WAL stream
-// and delivers PolicyRecordAppliedIndicator to the PoolerNode. The PoolerNode
+// and delivers ApplyRulesResponseIndicator to the PoolerNode. The PoolerNode
 // persists the updated rules and broadcasts a status update.
 //
 // # Crash recovery
@@ -56,8 +56,8 @@ type PoolerNode struct {
 	// emitted to the local driver but not yet acknowledged. Only one apply may
 	// be in flight at a time. On crash-restart this is cleared; the coordinator
 	// will retry.
-	pendingApply    *DurabilityRules
-	pendingApplyFor NodeID // coordinator that sent the write request
+	pendingApply         *DurabilityRules
+	pendingCorrelationID string // correlation ID from the WritePolicyIndicator
 }
 
 // NewPoolerNode creates a pooler node with the given identity, storage, and
@@ -105,7 +105,7 @@ func (n *PoolerNode) Restart() {
 	n.committed = PoolerPersistentState{}
 	n.pgStatus = PostgresRunning
 	n.pendingApply = nil
-	n.pendingApplyFor = ""
+	n.pendingCorrelationID = ""
 	if state, err := n.storage.Load(); err == nil {
 		n.committed = state
 	}
@@ -124,8 +124,8 @@ func (n *PoolerNode) Step(_ int64, indicators []Indicator) []Request {
 			reqs, c := n.handleWritePolicy(v)
 			requests = append(requests, reqs...)
 			changed = changed || c
-		case PolicyRecordAppliedIndicator:
-			reqs, c := n.handlePolicyApplied(v)
+		case ApplyRulesResponseIndicator:
+			reqs, c := n.handleApplyResponse(v)
 			requests = append(requests, reqs...)
 			changed = changed || c
 		case TerminateIndicator:
@@ -151,9 +151,9 @@ func (n *PoolerNode) Step(_ int64, indicators []Indicator) []Request {
 func (n *PoolerNode) handleWritePolicy(ind WritePolicyIndicator) ([]Request, bool) {
 	reject := func() ([]Request, bool) {
 		return []Request{WritePolicyResponseRequest{
-			ToCoord:    ind.FromCoord,
-			Accepted:   false,
-			CurrentSeq: n.committed.PolicySeq(),
+			RequestCorrelation: RequestCorrelation{CorrelationID: ind.CorrelationID},
+			Accepted:           false,
+			CurrentSeq:         n.committed.PolicySeq(),
 		}}, false
 	}
 
@@ -168,28 +168,50 @@ func (n *PoolerNode) handleWritePolicy(ind WritePolicyIndicator) ([]Request, boo
 	if ind.Rules.Seq != n.committed.PolicySeq()+1 {
 		return reject()
 	}
+	// Reject if the proposed policy cannot be satisfied by the proposed members.
+	if ind.Rules.Policy != nil && !ind.Rules.Policy.IsAchievable(ind.Rules.Members) {
+		return reject()
+	}
 
 	rules := ind.Rules
 	n.pendingApply = &rules
-	n.pendingApplyFor = ind.FromCoord
+	n.pendingCorrelationID = ind.CorrelationID
 
 	return []Request{PolicyRecordApplyRequest{Rules: rules}}, false
 }
 
-// handlePolicyApplied processes a PolicyRecordAppliedIndicator delivered by
+// handleApplyResponse processes an ApplyRulesResponseIndicator delivered by
 // either the primary's local driver (after SQL commit) or the replica's WAL
 // watcher (after WAL entry arrival). Persists the new rules and, for the
 // primary, responds to the waiting coordinator.
-func (n *PoolerNode) handlePolicyApplied(ind PolicyRecordAppliedIndicator) ([]Request, bool) {
+//
+// Accepted=false means the driver failed to commit the write (e.g. a
+// compare-and-swap race in the multi-tick pipeline). The pending apply is
+// cleared and a rejection response is sent back to the coordinator.
+func (n *PoolerNode) handleApplyResponse(ind ApplyRulesResponseIndicator) ([]Request, bool) {
+	if !ind.Accepted {
+		if n.pendingApply == nil || n.pendingApply.Seq != ind.Rules.Seq {
+			return nil, false
+		}
+		reqs := []Request{WritePolicyResponseRequest{
+			RequestCorrelation: RequestCorrelation{CorrelationID: n.pendingCorrelationID},
+			Accepted:           false,
+			CurrentSeq:         n.committed.PolicySeq(),
+		}}
+		n.pendingApply = nil
+		n.pendingCorrelationID = ""
+		return reqs, false
+	}
+
 	// Primary path: clear the pending apply and respond to the coordinator.
 	var extraReqs []Request
 	if n.pendingApply != nil && n.pendingApply.Seq == ind.Rules.Seq {
 		extraReqs = []Request{WritePolicyResponseRequest{
-			ToCoord:  n.pendingApplyFor,
-			Accepted: true,
+			RequestCorrelation: RequestCorrelation{CorrelationID: n.pendingCorrelationID},
+			Accepted:           true,
 		}}
 		n.pendingApply = nil
-		n.pendingApplyFor = ""
+		n.pendingCorrelationID = ""
 	}
 
 	newState := n.committed

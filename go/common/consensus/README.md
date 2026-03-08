@@ -92,8 +92,8 @@ from the primary's buffer. This means ACKs flow back to the primary within the s
 write quorum can be satisfied on the tick immediately after the replica pulls.
 
 `SimPooler` intercepts `PolicyRecordApplyRequest` (emitted by `PoolerNode`) before it reaches
-the `Handler`, simulates the postgres SQL transaction and sync-settings update, and queues a
-`PolicyRecordAppliedIndicator` for the next `PoolerNode.Step` call once write quorum is met.
+the `Handler`, simulates the postgres SQL transaction and sync-settings update, and queues an
+`ApplyRulesResponseIndicator` for the next `PoolerNode.Step` call once write quorum is met.
 
 ## Key types
 

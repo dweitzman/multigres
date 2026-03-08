@@ -20,6 +20,14 @@ type Request interface {
 	consensusRequest()
 }
 
+// RequestCorrelation can be embedded in any Request to associate an opaque
+// correlation token with the exchange. The RequestHandler uses it to route the
+// eventual response Request back to the node that originated the exchange
+// without requiring production code to carry an explicit return address.
+type RequestCorrelation struct {
+	CorrelationID string // empty = no response routing needed
+}
+
 // --- Requests from CoordNode ---
 
 // WritePolicyRequest asks the RequestHandler to deliver a DurabilityRules write
@@ -27,6 +35,10 @@ type Request interface {
 // the compare-and-swap: Rules.Seq must equal its current PolicySeq + 1. If it does
 // not, the write is rejected and the primary returns its current seq so the coord
 // can retry with the correct next seq.
+//
+// The RequestHandler auto-generates a correlation ID for each request and uses
+// it to route the eventual WritePolicyResponseRequest back to FromCoord without
+// requiring any extra routing state in production code.
 type WritePolicyRequest struct {
 	TargetPooler NodeID
 	FromCoord    NodeID
@@ -43,8 +55,8 @@ func (WritePolicyRequest) consensusRequest() {}
 // and then committing the SQL transaction. If the transaction fails, the driver
 // must roll back the replication settings change and deliver a failure indicator.
 //
-// In production, the local driver goroutine handles this and delivers a
-// PolicyRecordAppliedIndicator back to the PoolerNode on success.
+// In production, the local driver goroutine handles this and delivers an
+// ApplyRulesResponseIndicator back to the PoolerNode on completion.
 // In simulation, the SimPooler wrapper intercepts this request (before it
 // reaches the RequestHandler), simulates the apply, and queues the result
 // indicator for the next tick.
@@ -59,8 +71,12 @@ func (PolicyRecordApplyRequest) consensusRequest() {}
 // failed. Accepted is true if the record was durably committed. When false,
 // CurrentSeq carries the primary's actual current policy seq so the coord can
 // correct its next seq on retry without a separate status round-trip.
+//
+// CorrelationID is echoed from the WritePolicyIndicator that triggered this
+// response. The RequestHandler uses it to route the response back to the
+// originating node.
 type WritePolicyResponseRequest struct {
-	ToCoord    NodeID
+	RequestCorrelation
 	Accepted   bool
 	CurrentSeq int64 // primary's current policy seq when Accepted=false
 }

@@ -36,10 +36,15 @@ import (
 //   - Removing cohort members: update sync settings BEFORE the write (must not
 //     relax the quorum before the removal is durable).
 //
+// # Manual mode
+//
+// When targetPolicy is nil the coordinator operates in manual mode: it never
+// autonomously adds observed replicas to the cohort.
+//
 // # Emergency path (not yet implemented — Stage 3)
 //
-// When the primary becomes unreachable the coordinator will run a three-phase
-// election (Begin → Revoke → Establish) to appoint a new primary.
+// When the primary becomes unreachable the coordinator will run a two-phase
+// election (Revoke → Establish) to appoint a new primary.
 //
 // # State
 //
@@ -47,7 +52,7 @@ import (
 // processing PoolerStatusIndicator and PoolerDiscoveredIndicator updates.
 type CoordNode struct {
 	id           NodeID
-	targetPolicy AckPolicy
+	targetPolicy AckPolicy // nil = manual mode
 
 	// known tracks each pooler the coord has been told about. Values are
 	// updated each time a PoolerStatusIndicator arrives.
@@ -119,7 +124,7 @@ func (c *CoordNode) Step(_ int64, indicators []Indicator) []Request {
 // handleWriteResponse processes the primary's response to a WritePolicyRequest.
 func (c *CoordNode) handleWriteResponse(ind WritePolicyResponseIndicator) {
 	if c.pendingWrite == nil || ind.FromPooler != c.pendingWrite.target {
-		return
+		return // stale or unexpected response
 	}
 
 	if ind.Accepted {
@@ -165,8 +170,12 @@ func (c *CoordNode) advance() []Request {
 		return nil // primary has no rules yet; wait for status
 	}
 
-	// Decide on one type of change per write: adds or removes (not both).
-	// For Stage 1 we only handle adds. Removes are a TODO.
+	// Manual mode: never auto-add observers.
+	if c.targetPolicy == nil {
+		return nil
+	}
+
+	// Autonomous expansion: add all observed replicas not yet in the cohort.
 	observers := c.observers(currentRules)
 	if len(observers) == 0 {
 		return nil // cohort is already up to date

@@ -44,6 +44,85 @@ type walEntry struct {
 	record *consensus.DurabilityRules // nil = user transaction
 }
 
+// ruleChangePhase tracks which step of the multi-tick rules-apply pipeline the
+// primary is currently executing. Splitting the pipeline across ticks models
+// the non-atomic relationship between postgres GUC changes (synchronous_standby_names)
+// and the SQL transaction that writes the rules record to the WAL.
+type ruleChangePhase int
+
+const (
+	// ruleChangePhaseCombinedGUC: set synchronous_standby_names to the union of
+	// old and new standbys and syncPolicy to bothPolicy, ensuring that both the
+	// old and new durability guarantees must be satisfied before the write is
+	// considered durable.
+	ruleChangePhaseCombinedGUC ruleChangePhase = iota
+
+	// ruleChangePhaseWriteWAL: re-validate the compare-and-swap and append the
+	// rules record to the WAL. The CAS is re-checked because the combined-GUC
+	// tick may have been interleaved with another write in a real system; if the
+	// check fails the GUC is rolled back to the original settings.
+	ruleChangePhaseWriteWAL
+
+	// ruleChangePhaseAwaitQuorum: wait until writeQuorumMet returns true for the
+	// WAL position of the rules record.
+	ruleChangePhaseAwaitQuorum
+
+	// ruleChangePhaseFinalGUC: set synchronous_standby_names to only the new
+	// standbys and syncPolicy to the new policy.
+	ruleChangePhaseFinalGUC
+
+	// ruleChangePhaseSendIndicator: queue ApplyRulesResponseIndicator for
+	// delivery to the wrapped PoolerNode on this tick, then clear pendingChange.
+	ruleChangePhaseSendIndicator
+)
+
+// pendingRuleChange tracks an in-flight rules-apply pipeline on the primary.
+type pendingRuleChange struct {
+	rules consensus.DurabilityRules
+	phase ruleChangePhase
+
+	// walPos is set in the writeWAL phase once the record has been appended.
+	walPos lsn
+
+	// originalStandbys and originalPolicy are the GUC settings in effect
+	// before the pipeline began. Saved so they can be restored if the CAS
+	// fails in the writeWAL phase.
+	originalStandbys []consensus.CohortMember
+	originalPolicy   consensus.AckPolicy
+
+	// combinedStandbys and combinedPolicy are used during the combinedGUC and
+	// awaitQuorum phases: union of old+new standbys, conjunctive bothPolicy.
+	combinedStandbys []consensus.CohortMember
+	combinedPolicy   consensus.AckPolicy
+
+	// finalStandbys and finalPolicy are applied in the finalGUC phase: the new
+	// standbys and new policy from the incoming rules.
+	finalStandbys []consensus.CohortMember
+	finalPolicy   consensus.AckPolicy
+}
+
+// bothPolicy is a conjunctive AckPolicy used during cohort transitions.
+// A write is considered durable only when the old policy is satisfied among
+// the old standbys AND the new policy is satisfied among the new standbys.
+// IsWriteQuorum filters the acking set through each policy's standby scope
+// independently via memberIntersect.
+type bothPolicy struct {
+	oldPolicy   consensus.AckPolicy
+	oldStandbys []consensus.CohortMember
+	newPolicy   consensus.AckPolicy
+	newStandbys []consensus.CohortMember
+}
+
+func (b *bothPolicy) IsWriteQuorum(acking []consensus.CohortMember) bool {
+	return b.oldPolicy.IsWriteQuorum(memberIntersect(acking, b.oldStandbys)) &&
+		b.newPolicy.IsWriteQuorum(memberIntersect(acking, b.newStandbys))
+}
+
+func (b *bothPolicy) IsAchievable(members []consensus.CohortMember) bool {
+	return b.oldPolicy.IsAchievable(memberIntersect(members, b.oldStandbys)) &&
+		b.newPolicy.IsAchievable(memberIntersect(members, b.newStandbys))
+}
+
 // SimPooler wraps a PoolerNode and acts as the local postgres driver in
 // simulation. It models a postgres instance that can operate in two modes:
 //
@@ -53,7 +132,7 @@ type walEntry struct {
 //
 //   - Replica mode: pulls WAL entries directly from its configured primary
 //     each tick (analogous to postgres's primary_conninfo), tracks the
-//     highest LSN received, and delivers PolicyRecordAppliedIndicators to the
+//     highest LSN received, and delivers ApplyRulesResponseIndicators to the
 //     wrapped PoolerNode when rules records arrive.
 //
 // WAL replication is handled within Step() — each replica looks up its
@@ -61,9 +140,9 @@ type walEntry struct {
 // postgres instance manages its own replication connection.
 //
 // SimPooler intercepts PolicyRecordApplyRequest before it reaches the
-// RequestHandler, simulates the postgres SQL transaction and replication
-// settings update, then queues PolicyRecordAppliedIndicator for the next
-// PoolerNode.Step call.
+// RequestHandler, runs the multi-tick pipeline that models the non-atomic
+// relationship between GUC changes and WAL writes, then queues
+// ApplyRulesResponseIndicator once the write is durable.
 type SimPooler struct {
 	node *consensus.PoolerNode
 	sim  *simType
@@ -85,11 +164,9 @@ type SimPooler struct {
 	// receiving (primary only). Updated by pullWAL calls from replicas.
 	replicaACK map[consensus.NodeID]lsn
 
-	// pendingApply is a rules record appended to the WAL but not yet durable
-	// (primary only): waiting for writeQuorumMet. At most one rules write can
-	// be pending at a time (PoolerNode serialises writes).
-	pendingApply    *consensus.DurabilityRules
-	pendingApplyPos lsn
+	// pendingChange is the active rules-apply pipeline (primary only). At most
+	// one pipeline can be in flight at a time; PoolerNode serialises writes.
+	pendingChange *pendingRuleChange
 
 	// receivedLSN is the highest WAL position this node has received from the
 	// primary (replica only). On graceful switchover the WAL timeline is
@@ -106,17 +183,24 @@ type SimPooler struct {
 	pendingWAL []walEntry
 
 	// queuedIndicators holds indicators to deliver to the wrapped PoolerNode on
-	// the next Step call (e.g. PolicyRecordAppliedIndicator once a write is durable).
+	// the next Step call. Used both internally (e.g. ApplyRulesResponseIndicator
+	// once a write is durable) and externally via EnqueueIndicator.
 	queuedIndicators []consensus.Indicator
+
+	// responseCallbacks maps a correlation ID to a callback invoked once when
+	// the matching WritePolicyResponseRequest is emitted. Entries are removed
+	// after the callback fires.
+	responseCallbacks map[string]func(consensus.WritePolicyResponseRequest)
 }
 
 // NewSimPooler creates a SimPooler wrapping the given PoolerNode. sim is the
 // simulator used to look up peer SimPoolers for WAL replication each tick.
 func NewSimPooler(node *consensus.PoolerNode, sim *simType) *SimPooler {
 	return &SimPooler{
-		node:       node,
-		sim:        sim,
-		replicaACK: make(map[consensus.NodeID]lsn),
+		node:              node,
+		sim:               sim,
+		replicaACK:        make(map[consensus.NodeID]lsn),
+		responseCallbacks: make(map[string]func(consensus.WritePolicyResponseRequest)),
 	}
 }
 
@@ -146,41 +230,57 @@ func (s *SimPooler) SyncStandbys() []consensus.CohortMember {
 	return result
 }
 
+// EnqueueIndicator queues an indicator to be delivered to the wrapped
+// PoolerNode on its next Step() call. Use this in tests to inject explicit
+// events (e.g. WritePolicyIndicator) between RequireWithinTicks calls.
+func (s *SimPooler) EnqueueIndicator(ind consensus.Indicator) {
+	s.queuedIndicators = append(s.queuedIndicators, ind)
+}
+
+// SendWritePolicyIndicator queues a WritePolicyIndicator and registers a
+// callback to be invoked once the correlated WritePolicyResponseRequest is
+// emitted by the wrapped PoolerNode. The callback fires exactly once and is
+// removed from the registry after firing. The correlation ID in ind must be
+// non-empty for the callback to be registered.
+func (s *SimPooler) SendWritePolicyIndicator(ind consensus.WritePolicyIndicator, callback func(consensus.WritePolicyResponseRequest)) {
+	s.queuedIndicators = append(s.queuedIndicators, ind)
+	if ind.CorrelationID != "" && callback != nil {
+		s.responseCallbacks[ind.CorrelationID] = callback
+	}
+}
+
 // Step processes indicators and advances the SimPooler state machine one tick.
 //
 // The method:
 //  1. Pulls new WAL from the configured primary if this node is a replica.
 //     Doing this first lets replicas registered before the primary in the
 //     simulator step order feed ACKs to the primary within the same tick.
-//  2. Checks if a pending primary write has reached write quorum (primary path).
-//  3. Processes incoming WAL entries (replica path).
-//  4. Calls PoolerNode.Step with all accumulated indicators.
-//  5. Intercepts PolicyRecordApplyRequest from PoolerNode output.
+//  2. Advances the pending rules-apply pipeline (primary path).
+//  3. Calls PoolerNode.Step with all accumulated indicators.
+//  4. Intercepts PolicyRecordApplyRequest from PoolerNode output.
 //
 // Returns the subset of requests to pass to the RequestHandler.
 func (s *SimPooler) Step(tick int64, externalInds []consensus.Indicator) []consensus.Request {
 	// Replica path: pull WAL from the configured primary.
 	s.pullWAL()
 
+	// Primary path: advance the rules-apply pipeline. This may append to
+	// queuedIndicators (e.g. ApplyRulesResponseIndicator in the sendIndicator
+	// phase), which are then drained into inds below so PoolerNode sees them
+	// in the same tick.
+	s.advancePendingChange()
+
 	inds := make([]consensus.Indicator, 0, len(s.queuedIndicators)+len(externalInds)+len(s.pendingWAL))
 	inds = append(inds, s.queuedIndicators...)
 	inds = append(inds, externalInds...)
 	s.queuedIndicators = nil
 
-	// Primary path: check if a pending write has reached write quorum.
-	if s.pendingApply != nil && s.writeQuorumMet(s.pendingApplyPos) {
-		inds = append(inds, consensus.PolicyRecordAppliedIndicator{
-			Rules: *s.pendingApply,
-		})
-		s.applySyncSettings(s.pendingApply)
-		s.pendingApply = nil
-	}
-
 	// Replica path: process WAL entries received from the primary.
 	for _, e := range s.pendingWAL {
 		if e.record != nil {
-			inds = append(inds, consensus.PolicyRecordAppliedIndicator{
-				Rules: *e.record,
+			inds = append(inds, consensus.ApplyRulesResponseIndicator{
+				Rules:    *e.record,
+				Accepted: true,
 			})
 		}
 	}
@@ -190,11 +290,19 @@ func (s *SimPooler) Step(tick int64, externalInds []consensus.Indicator) []conse
 	reqs := s.node.Step(tick, inds)
 
 	// Intercept PolicyRecordApplyRequest before forwarding to the RequestHandler.
+	// Invoke registered response callbacks for WritePolicyResponseRequests.
 	var forwarded []consensus.Request
 	for _, req := range reqs {
-		if apply, ok := req.(consensus.PolicyRecordApplyRequest); ok {
-			s.handleApply(apply)
-		} else {
+		switch r := req.(type) {
+		case consensus.PolicyRecordApplyRequest:
+			s.handleApply(r)
+		case consensus.WritePolicyResponseRequest:
+			if cb := s.responseCallbacks[r.CorrelationID]; cb != nil {
+				delete(s.responseCallbacks, r.CorrelationID)
+				cb(r)
+			}
+			forwarded = append(forwarded, req)
+		default:
 			forwarded = append(forwarded, req)
 		}
 	}
@@ -242,21 +350,33 @@ func (s *SimPooler) findSimPooler(id consensus.NodeID) *SimPooler {
 	return nil
 }
 
-// handleApply simulates the local postgres driver applying a DurabilityRules change.
+// handleApply is called when the PoolerNode emits a PolicyRecordApplyRequest,
+// simulating the postgres driver receiving the instruction to apply new rules.
+// It validates the CAS, computes the transition GUC settings, and initialises
+// the multi-tick pipeline in the combinedGUC phase.
 //
-//  1. Validates the CAS (Rules.Seq must equal latestWALPolicySeq() + 1).
-//  2. Appends a new WAL entry at the next LSN.
-//  3. If the write is immediately durable under current sync settings, queues
-//     PolicyRecordAppliedIndicator for the next Step call and updates sync settings.
-//  4. Otherwise, sets pendingApply to wait for replica ACKs.
+// The pipeline models the non-atomic relationship between the GUC update
+// (synchronous_standby_names) and the SQL transaction that writes the rules
+// record to the WAL:
 //
-// For cohort additions: sync settings are updated AFTER the write is durable
-// under the old settings, so new replicas are not required to ACK the write
-// that adds them.
+//  1. combinedGUC: set standbys to union(old, new) and policy to bothPolicy.
+//  2. writeWAL:    re-validate CAS; on failure roll back GUC and abort.
+//  3. awaitQuorum: wait for writeQuorumMet at the rules record's WAL position.
+//  4. finalGUC:    set standbys and policy to the new values.
+//  5. sendIndicator: queue ApplyRulesResponseIndicator for PoolerNode.
 func (s *SimPooler) handleApply(req consensus.PolicyRecordApplyRequest) {
-	// CAS validation against the SimPooler's WAL state. The PoolerNode has
-	// already validated against its committed state; this catches divergence
-	// between the two views.
+	// Replicas do not maintain a writable WAL; reject the apply immediately.
+	if s.node.CommittedState().Role != consensus.RolePrimary {
+		s.queuedIndicators = append(s.queuedIndicators, consensus.ApplyRulesResponseIndicator{
+			Rules:    req.Rules,
+			Accepted: false,
+		})
+		return
+	}
+
+	// Early CAS check: validates that this SimPooler's WAL is consistent with
+	// the PoolerNode's committed state at the time of the request. A failure
+	// here indicates a bug in the state machine, not a normal race condition.
 	currentSeq := s.latestWALPolicySeq()
 	if req.Rules.Seq != currentSeq+1 {
 		panic(fmt.Sprintf("SimPooler CAS mismatch on %s: Rules.Seq=%d, expected %d",
@@ -264,22 +384,106 @@ func (s *SimPooler) handleApply(req consensus.PolicyRecordApplyRequest) {
 	}
 
 	rules := req.Rules
-	s.nextPos++
-	s.wal = append(s.wal, walEntry{pos: s.nextPos, record: &rules})
 
-	s.pendingApply = &rules
-	s.pendingApplyPos = s.nextPos
+	// Capture original GUC settings for potential rollback in writeWAL.
+	originalStandbys := make([]consensus.CohortMember, len(s.syncStandbys))
+	copy(originalStandbys, s.syncStandbys)
+	originalPolicy := s.syncPolicy
 
-	// If write quorum is already met (e.g. no sync standbys required), the
-	// write is immediately durable. Queue the indicator and update sync settings;
-	// pendingApply is cleared so the quorum check at the top of the next Step
-	// call is a no-op.
-	if s.writeQuorumMet(s.nextPos) {
-		s.queuedIndicators = append(s.queuedIndicators, consensus.PolicyRecordAppliedIndicator{
-			Rules: rules,
+	// Compute final GUC: all new cohort members except this node (the primary).
+	var finalStandbys []consensus.CohortMember
+	for _, m := range rules.Members {
+		if m.ID != s.node.ID() {
+			finalStandbys = append(finalStandbys, m)
+		}
+	}
+	finalPolicy := rules.Policy
+
+	// Compute combined GUC: union of old+new standbys.
+	combinedStandbys := unionMembers(originalStandbys, finalStandbys)
+
+	// Compute combined policy: must satisfy BOTH old and new simultaneously.
+	// If there is no old policy (nil = AnyN(0)), the combined policy just needs
+	// to satisfy the new policy since the old quorum requirement is zero.
+	var combinedPolicy consensus.AckPolicy
+	if originalPolicy == nil {
+		combinedPolicy = finalPolicy
+	} else {
+		combinedPolicy = &bothPolicy{
+			oldPolicy:   originalPolicy,
+			oldStandbys: originalStandbys,
+			newPolicy:   finalPolicy,
+			newStandbys: finalStandbys,
+		}
+	}
+
+	s.pendingChange = &pendingRuleChange{
+		rules:            rules,
+		phase:            ruleChangePhaseCombinedGUC,
+		originalStandbys: originalStandbys,
+		originalPolicy:   originalPolicy,
+		combinedStandbys: combinedStandbys,
+		combinedPolicy:   combinedPolicy,
+		finalStandbys:    finalStandbys,
+		finalPolicy:      finalPolicy,
+	}
+}
+
+// advancePendingChange advances the rules-apply pipeline by one phase per tick.
+// It is called at the start of Step, before draining queuedIndicators, so that
+// ApplyRulesResponseIndicator queued in the sendIndicator phase is delivered
+// to the wrapped PoolerNode within the same tick.
+func (s *SimPooler) advancePendingChange() {
+	if s.pendingChange == nil {
+		return
+	}
+	c := s.pendingChange
+	switch c.phase {
+	case ruleChangePhaseCombinedGUC:
+		// Apply combined GUC: union of old+new standbys, bothPolicy.
+		s.syncStandbys = c.combinedStandbys
+		s.syncPolicy = c.combinedPolicy
+		c.phase = ruleChangePhaseWriteWAL
+
+	case ruleChangePhaseWriteWAL:
+		// Re-validate CAS. The combined-GUC phase consumed a tick; in a real
+		// system another write could have landed in the WAL during that time.
+		if s.latestWALPolicySeq() != c.rules.Seq-1 {
+			// CAS failed: restore original GUC settings and report failure.
+			s.syncStandbys = c.originalStandbys
+			s.syncPolicy = c.originalPolicy
+			s.queuedIndicators = append(s.queuedIndicators, consensus.ApplyRulesResponseIndicator{
+				Rules:    c.rules,
+				Accepted: false,
+			})
+			s.pendingChange = nil
+			return
+		}
+		// Append the rules record to the WAL.
+		s.nextPos++
+		rules := c.rules
+		s.wal = append(s.wal, walEntry{pos: s.nextPos, record: &rules})
+		c.walPos = s.nextPos
+		c.phase = ruleChangePhaseAwaitQuorum
+
+	case ruleChangePhaseAwaitQuorum:
+		if s.writeQuorumMet(c.walPos) {
+			c.phase = ruleChangePhaseFinalGUC
+		}
+
+	case ruleChangePhaseFinalGUC:
+		// Apply final GUC: only the new standbys and new policy.
+		s.syncStandbys = c.finalStandbys
+		s.syncPolicy = c.finalPolicy
+		c.phase = ruleChangePhaseSendIndicator
+
+	case ruleChangePhaseSendIndicator:
+		// Queue the indicator so PoolerNode persists and responds in this tick.
+		s.queuedIndicators = append(s.queuedIndicators, consensus.ApplyRulesResponseIndicator{
+			Rules:    c.rules,
+			Accepted: true,
 		})
-		s.applySyncSettings(&rules)
-		s.pendingApply = nil
+		s.pendingChange = nil
 	}
 }
 
@@ -297,20 +501,6 @@ func (s *SimPooler) writeQuorumMet(pos lsn) bool {
 		}
 	}
 	return s.syncPolicy.IsWriteQuorum(acking)
-}
-
-// applySyncSettings updates the simulated synchronous_standby_names from a
-// newly applied DurabilityRules. Sync standbys are all cohort members
-// except this node itself.
-func (s *SimPooler) applySyncSettings(rules *consensus.DurabilityRules) {
-	var standbys []consensus.CohortMember
-	for _, m := range rules.Members {
-		if m.ID != s.node.ID() {
-			standbys = append(standbys, m)
-		}
-	}
-	s.syncStandbys = standbys
-	s.syncPolicy = rules.Policy
 }
 
 // latestWALPolicySeq returns the Seq of the most recently appended rules record
@@ -353,4 +543,39 @@ func (s *SimPooler) receiveWAL(entries []walEntry) {
 			s.pendingWAL = append(s.pendingWAL, e)
 		}
 	}
+}
+
+// memberIntersect returns the members from members whose ID appears in scope.
+func memberIntersect(members []consensus.CohortMember, scope []consensus.CohortMember) []consensus.CohortMember {
+	if len(scope) == 0 {
+		return nil
+	}
+	scopeIDs := make(map[consensus.NodeID]bool, len(scope))
+	for _, m := range scope {
+		scopeIDs[m.ID] = true
+	}
+	var result []consensus.CohortMember
+	for _, m := range members {
+		if scopeIDs[m.ID] {
+			result = append(result, m)
+		}
+	}
+	return result
+}
+
+// unionMembers returns the union of two CohortMember slices, preserving order.
+// Elements from a appear first, followed by elements from b not already in a.
+func unionMembers(a, b []consensus.CohortMember) []consensus.CohortMember {
+	seen := make(map[consensus.NodeID]bool, len(a))
+	var result []consensus.CohortMember
+	for _, m := range a {
+		seen[m.ID] = true
+		result = append(result, m)
+	}
+	for _, m := range b {
+		if !seen[m.ID] {
+			result = append(result, m)
+		}
+	}
+	return result
 }

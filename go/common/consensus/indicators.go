@@ -26,30 +26,31 @@ type Indicator interface {
 // requests a DurabilityRules change. The primary validates the CAS (Rules.Seq
 // must equal its current PolicySeq + 1); if valid, it emits a
 // PolicyRecordApplyRequest to the local postgres driver.
+//
+// CorrelationID is set by the RequestHandler (or by tests injecting indicators
+// directly). The primary echoes it back in WritePolicyResponseRequest so the
+// handler can route the response to the originating coordinator.
 type WritePolicyIndicator struct {
-	FromCoord NodeID
-	Rules     DurabilityRules // Rules.Seq is the CAS key (must be currentSeq+1)
+	CorrelationID string
+	Rules         DurabilityRules // Rules.Seq is the CAS key (must be currentSeq+1)
 }
 
 func (WritePolicyIndicator) consensusIndicator() {}
 
-// PolicyRecordAppliedIndicator is delivered to a PoolerNode when the local
-// postgres changes needed for a DurabilityRules update have been completed:
+// ApplyRulesResponseIndicator is delivered to a PoolerNode by the local
+// postgres driver after attempting to apply a DurabilityRules change.
+// Accepted=true means the record was committed and is propagating via WAL;
+// Accepted=false means the transaction failed (e.g. compare-and-swap mismatch)
+// and the pending apply should be aborted.
 //
-//   - Primary path: the local driver updated synchronous_standby_names and
-//     committed the SQL transaction that writes the record. The transaction
-//     generates a WAL entry that propagates to replicas.
-//
-//   - Replica path: the WAL watcher detected the rules record in the replica's
-//     WAL stream and the replica's local postgres state is now up to date.
-//
-// In both cases, the PoolerNode responds by persisting the updated rules and
-// emitting a status broadcast.
-type PolicyRecordAppliedIndicator struct {
-	Rules DurabilityRules
+// On the replica path the WAL watcher always delivers Accepted=true since the
+// record it is reporting has already been durably committed by the primary.
+type ApplyRulesResponseIndicator struct {
+	Rules    DurabilityRules
+	Accepted bool
 }
 
-func (PolicyRecordAppliedIndicator) consensusIndicator() {}
+func (ApplyRulesResponseIndicator) consensusIndicator() {}
 
 // TerminateIndicator is delivered to a PoolerNode to signal graceful shutdown.
 // The pooler records PostgresStopped and emits a final status update.
@@ -65,10 +66,13 @@ func (TerminateIndicator) consensusIndicator() {}
 // the record was committed and is propagating via WAL. When false, CurrentSeq
 // carries the primary's actual current policy seq so the coord can compute the
 // correct next seq on retry without a separate round-trip.
+//
+// CorrelationID is echoed from the corresponding WritePolicyIndicator.
 type WritePolicyResponseIndicator struct {
-	FromPooler NodeID
-	Accepted   bool
-	CurrentSeq int64 // set when Accepted=false
+	CorrelationID string
+	FromPooler    NodeID
+	Accepted      bool
+	CurrentSeq    int64 // set when Accepted=false
 }
 
 func (WritePolicyResponseIndicator) consensusIndicator() {}

@@ -15,6 +15,8 @@
 package simulation
 
 import (
+	"fmt"
+
 	"github.com/multigres/multigres/go/common/consensus"
 )
 
@@ -24,16 +26,33 @@ import (
 // Status broadcasts (PoolerStatusUpdateRequest) are delivered to all
 // coordinator nodes. The handler discovers coordinator IDs by inspecting the
 // simulator's registered nodes at routing time.
+//
+// The handler models gRPC-style request/response pairs for WritePolicyRequest:
+// when routing a WritePolicyRequest to a WritePolicyIndicator, it auto-generates
+// a correlation ID and records the originating node. When the pooler emits a
+// WritePolicyResponseRequest with that correlation ID, the handler routes the
+// response back to the origin and cleans up the entry.
 type Handler struct {
 	// coordIDs lists the node IDs that should receive PoolerStatusIndicator
 	// broadcasts. Set this to all coordinator IDs before running the simulation.
 	coordIDs []consensus.NodeID
+
+	// correlationReturnTo maps a correlation ID to the node that should receive
+	// the corresponding WritePolicyResponseRequest. Entries are removed once
+	// the response is delivered.
+	correlationReturnTo map[string]consensus.NodeID
+
+	// nextCorrSeq is a monotone counter for generating unique correlation IDs.
+	nextCorrSeq int
 }
 
 // NewHandler creates a Handler that broadcasts pooler status to the given
 // coordinator IDs.
 func NewHandler(coordIDs ...consensus.NodeID) *Handler {
-	return &Handler{coordIDs: coordIDs}
+	return &Handler{
+		coordIDs:            coordIDs,
+		correlationReturnTo: make(map[string]consensus.NodeID),
+	}
 }
 
 // AddCoordID adds a coordinator ID to the broadcast list.
@@ -54,17 +73,25 @@ func (h *Handler) ProcessRequests(
 	for _, req := range requests {
 		switch r := req.(type) {
 		case consensus.WritePolicyRequest:
+			h.nextCorrSeq++
+			corrID := fmt.Sprintf("%s/%d", fromNode, h.nextCorrSeq)
+			h.correlationReturnTo[corrID] = fromNode
 			result[r.TargetPooler] = append(result[r.TargetPooler], consensus.WritePolicyIndicator{
-				FromCoord: r.FromCoord,
-				Rules:     r.Rules,
+				CorrelationID: corrID,
+				Rules:         r.Rules,
 			})
 
 		case consensus.WritePolicyResponseRequest:
-			result[r.ToCoord] = append(result[r.ToCoord], consensus.WritePolicyResponseIndicator{
-				FromPooler: fromNode,
-				Accepted:   r.Accepted,
-				CurrentSeq: r.CurrentSeq,
-			})
+			dest := h.correlationReturnTo[r.CorrelationID]
+			delete(h.correlationReturnTo, r.CorrelationID)
+			if dest != "" {
+				result[dest] = append(result[dest], consensus.WritePolicyResponseIndicator{
+					CorrelationID: r.CorrelationID,
+					FromPooler:    fromNode,
+					Accepted:      r.Accepted,
+					CurrentSeq:    r.CurrentSeq,
+				})
+			}
 
 		case consensus.PoolerStatusUpdateRequest:
 			for _, coordID := range h.coordIDs {
