@@ -113,6 +113,22 @@ type AckPolicy interface {
 	// cohort. Implementations may use member properties (e.g. zone distribution)
 	// as needed.
 	IsAchievable(cohort []CohortMember) bool
+
+	// IsRevoked returns true when every leader in leaders has had its
+	// leadership revoked by the recruited set.
+	//
+	// A leader's leadership is considered revoked when either:
+	//   - the leader is in recruited (it has committed to the coordinator
+	//     and will not write unilaterally), or
+	//   - no subset of non-recruited replicas (allMembers \ {leader} \
+	//     recruited) can satisfy this policy (so no durable write is
+	//     possible without the coordinator's knowledge).
+	//
+	// Pass a single known primary to check one specific leadership.
+	// Pass all cohort members as leaders to check whether all possible
+	// leaderships are revoked (used during emergency failover when the
+	// true primary is unknown).
+	IsRevoked(allMembers, recruited, leaders []CohortMember) bool
 }
 
 // DurabilityRules is a versioned record of the cluster's durability configuration.
@@ -130,6 +146,10 @@ type AckPolicy interface {
 type DurabilityRules struct {
 	// Seq is a monotonically increasing sequence number.
 	Seq int64
+
+	// Primary is the NodeID of the postgres primary for this shard at this
+	// rule version. Every write to the WAL must flow through this node.
+	Primary NodeID
 
 	// Members is the full list of pooler IDs and their static properties that
 	// may participate in coordinator votes. Only members listed here are required

@@ -36,6 +36,29 @@ func (p *anyNPolicy) IsAchievable(cohort []CohortMember) bool {
 	return len(cohort) >= p.n+1
 }
 
+// IsRevoked returns true when every leader in leaders has had its leadership
+// revoked by the recruited set. See AckPolicy.IsRevoked for the full contract.
+//
+// For AnyN(n) with a cohort of size C, a leader is revoked when either the
+// leader itself is recruited, or at least C-n of its replicas are recruited
+// (leaving fewer than n non-recruited replicas, so no quorum is achievable).
+func (p *anyNPolicy) IsRevoked(allMembers, recruited, leaders []CohortMember) bool {
+	recruitedIDs := make(map[NodeID]bool, len(recruited))
+	for _, m := range recruited {
+		recruitedIDs[m.ID] = true
+	}
+	nonRecruitedCount := len(allMembers) - len(recruited)
+	for _, leader := range leaders {
+		if recruitedIDs[leader.ID] {
+			continue // leader is recruited, it can block all writes
+		}
+		if nonRecruitedCount >= p.n {
+			return false // enough non-recruited replicas remain to form a quorum
+		}
+	}
+	return true
+}
+
 // AckThreshold returns the minimum number of replica ACKs required.
 func (p *anyNPolicy) AckThreshold() int {
 	return p.n

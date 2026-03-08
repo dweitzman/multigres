@@ -185,6 +185,7 @@ func (c *CoordNode) advance() []Request {
 	newMembers := append(slices.Clone(currentRules.Members), observers...)
 	newRules := DurabilityRules{
 		Seq:     currentRules.Seq + 1,
+		Primary: primaryID,
 		Members: newMembers,
 		Policy:  c.policyForMembers(newMembers),
 	}

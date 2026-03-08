@@ -253,6 +253,7 @@ func TestCohortExpansion(t *testing.T) {
 	// Pre-initialize node1 as a primary with a single-node bootstrap policy.
 	seedRules := &consensus.DurabilityRules{
 		Seq:     1,
+		Primary: node1ID,
 		Members: []consensus.CohortMember{{ID: node1ID}},
 		Policy:  consensus.AnyNPolicy(0),
 	}

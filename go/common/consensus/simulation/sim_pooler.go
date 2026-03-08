@@ -123,6 +123,23 @@ func (b *bothPolicy) IsAchievable(members []consensus.CohortMember) bool {
 		b.newPolicy.IsAchievable(memberIntersect(members, b.newStandbys))
 }
 
+// IsRevoked checks each sub-policy against its own standby scope. Both must be
+// independently revoked because a bothPolicy write requires both sub-quorums;
+// a coordinator must cover enough members in each cohort to be certain no
+// durable write slipped through on either side of the transition.
+func (b *bothPolicy) IsRevoked(allMembers, recruited, leaders []consensus.CohortMember) bool {
+	oldAll := memberIntersect(allMembers, b.oldStandbys)
+	oldRecruited := memberIntersect(recruited, b.oldStandbys)
+	oldLeaders := memberIntersect(leaders, b.oldStandbys)
+
+	newAll := memberIntersect(allMembers, b.newStandbys)
+	newRecruited := memberIntersect(recruited, b.newStandbys)
+	newLeaders := memberIntersect(leaders, b.newStandbys)
+
+	return b.oldPolicy.IsRevoked(oldAll, oldRecruited, oldLeaders) &&
+		b.newPolicy.IsRevoked(newAll, newRecruited, newLeaders)
+}
+
 // SimPooler wraps a PoolerNode and acts as the local postgres driver in
 // simulation. It models a postgres instance that can operate in two modes:
 //
