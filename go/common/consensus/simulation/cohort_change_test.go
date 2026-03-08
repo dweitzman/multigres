@@ -93,10 +93,7 @@ func TestCohortChange(t *testing.T) {
 		node3ID consensus.NodeID = "node-3"
 	)
 
-	sim := dstsim.NewSimulator[consensus.Indicator, consensus.Request, consensus.NodeID](
-		dstsim.SimulatorOptions{Seed: 42},
-	)
-	sim.SetRequestHandler(NewHandler(coordID))
+	sim := newTestSim(coordID)
 
 	// Pre-initialize node1 as primary with a 1-node bootstrap policy.
 	seedRules := &consensus.DurabilityRules{
@@ -117,9 +114,6 @@ func TestCohortChange(t *testing.T) {
 	pooler3 := newReplicaPooler(node3ID, node1ID, sim)
 	sim.RegisterNode(pooler2)
 	sim.RegisterNode(pooler3)
-
-	// Safety invariant: every sync standby must be actively streaming from the primary.
-	sim.Always(&syncStandbysAreReplicas{})
 
 	th := dstsim.NewSimulationTestHelper(t, sim)
 
@@ -174,10 +168,7 @@ func TestPolicyWriteRejection(t *testing.T) {
 		node2ID consensus.NodeID = "node-2"
 	)
 
-	sim := dstsim.NewSimulator[consensus.Indicator, consensus.Request, consensus.NodeID](
-		dstsim.SimulatorOptions{Seed: 42},
-	)
-	sim.SetRequestHandler(NewHandler(coordID))
+	sim := newTestSim(coordID)
 
 	seedRules := &consensus.DurabilityRules{
 		Seq:     1,

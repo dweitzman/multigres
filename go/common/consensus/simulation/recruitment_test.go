@@ -82,10 +82,7 @@ func TestRecruitRejection(t *testing.T) {
 		node1ID  consensus.NodeID = "node-1"
 	)
 
-	sim := dstsim.NewSimulator[consensus.Indicator, consensus.Request, consensus.NodeID](
-		dstsim.SimulatorOptions{Seed: 42},
-	)
-	sim.SetRequestHandler(NewHandler(coordID))
+	sim := newTestSim(coordID)
 
 	seedRules := &consensus.DurabilityRules{
 		Seq:     1,
@@ -144,10 +141,7 @@ func TestRecruitIdempotent(t *testing.T) {
 		node1ID  consensus.NodeID = "node-1"
 	)
 
-	sim := dstsim.NewSimulator[consensus.Indicator, consensus.Request, consensus.NodeID](
-		dstsim.SimulatorOptions{Seed: 42},
-	)
-	sim.SetRequestHandler(NewHandler(coordID))
+	sim := newTestSim(coordID)
 
 	seedRules := &consensus.DurabilityRules{
 		Seq:     1,
@@ -216,10 +210,7 @@ func TestRecruitRevokesParticipation(t *testing.T) {
 		node2ID consensus.NodeID = "node-2"
 	)
 
-	sim := dstsim.NewSimulator[consensus.Indicator, consensus.Request, consensus.NodeID](
-		dstsim.SimulatorOptions{Seed: 42},
-	)
-	sim.SetRequestHandler(NewHandler(coordID))
+	sim := newTestSim(coordID)
 
 	seedRules := &consensus.DurabilityRules{
 		Seq:     1,
