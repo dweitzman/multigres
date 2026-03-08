@@ -298,17 +298,17 @@ func (n *PoolerNode) handleRecruit(ind RecruitIndicator) ([]Request, bool) {
 	}}, true
 }
 
-// handleRevokeParticipationResponse processes the sidecar's confirmation that
-// this node has stopped participating in write quorum. Responds to the original
-// coordinator with Accepted=true.
+// handleRevokeParticipationResponse processes the sidecar's result for stopping
+// this node from participating in write quorum. Forwards the outcome to the
+// coordinator as a RecruitResponseRequest.
 func (n *PoolerNode) handleRevokeParticipationResponse(ind RevokeParticipationResponseIndicator) []Request {
 	if ind.CorrelationID != n.pendingRecruitCorrelationID {
 		return nil // stale or spurious
 	}
 	n.pendingRecruitCorrelationID = ""
 	return []Request{RecruitResponseRequest{
-		RequestCorrelation: RequestCorrelation(ind),
-		Accepted:           true,
+		RequestCorrelation: RequestCorrelation{CorrelationID: ind.CorrelationID},
+		Accepted:           ind.Accepted,
 		Rules:              n.committed.Rules,
 	}}
 }

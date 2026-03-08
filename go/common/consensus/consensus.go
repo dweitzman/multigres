@@ -46,6 +46,12 @@ package consensus
 // Using a single ID type lets all node kinds live in one dstsim.Simulator instance.
 type NodeID string
 
+// LSN is a Log Sequence Number: a monotonically increasing position in the
+// PostgreSQL WAL. In production this maps to the uint64 value underlying
+// postgres's pg_lsn type (e.g. the result of pg_lsn_to_uint64(pg_current_wal_lsn())).
+// In simulation it is a simple counter. The zero value means "no LSN known".
+type LSN int64
+
 // PoolerRole is the role a pooler currently holds in the cluster.
 type PoolerRole int8
 

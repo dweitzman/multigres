@@ -364,6 +364,7 @@ func (s *SimPooler) advancePendingRevoke() {
 	s.applyRevokedGUC()
 	s.queuedIndicators = append(s.queuedIndicators, consensus.RevokeParticipationResponseIndicator{
 		CorrelationID: correlationID,
+		Accepted:      true,
 	})
 }
 

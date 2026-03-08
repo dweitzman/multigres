@@ -68,10 +68,28 @@ type RecruitIndicator struct {
 func (RecruitIndicator) consensusIndicator() {}
 
 // RevokeParticipationResponseIndicator is delivered to a PoolerNode by its
-// local sidecar once it has stopped this node from participating in write quorum
-// under the current rules (replica: stopped ACKing; primary: read-only).
+// local sidecar once it has attempted to stop this node from participating in
+// write quorum under the current rules.
+//
+// Accepted is true if the sidecar successfully stopped quorum participation
+// (replica: WAL receiver disconnected; primary: read-only mode active).
+// Accepted is false if the operation failed (e.g. postgres unreachable);
+// the PoolerNode will forward the failure to the coordinator as a rejected
+// RecruitResponseRequest.
+//
+// When Accepted is true, LSN and RulesSeq carry the node's WAL position at the
+// moment revocation completed. The coordinator uses these to rank candidates and
+// pick the most up-to-date node as the new primary during emergency failover:
+//   - For a replica: LSN is the last_replay_lsn once WAL replay has stabilised
+//     (stopped advancing), and RulesSeq is the seq of the last rules record
+//     the replica has replayed.
+//   - For a primary: LSN is the last committed WAL position after any pending
+//     write has been aborted, and RulesSeq is the primary's current rules seq.
 type RevokeParticipationResponseIndicator struct {
 	CorrelationID string
+	Accepted      bool
+	LSN           LSN   // last committed/replayed WAL position at revocation time
+	RulesSeq      int64 // seq of most recently applied DurabilityRules
 }
 
 func (RevokeParticipationResponseIndicator) consensusIndicator() {}
