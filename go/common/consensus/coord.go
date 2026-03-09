@@ -62,12 +62,19 @@ type CoordNode struct {
 	// are waiting for a WritePolicyResponseIndicator. Only one write is in
 	// flight at a time.
 	pendingWrite *pendingPolicyWrite
+
+	// healthTimeoutTicks is the number of ticks without a PoolerStatusIndicator
+	// before a pooler is considered unreachable. Zero disables timeout-based
+	// staleness checking (suitable for simulation tests where poolers only
+	// broadcast on state change).
+	healthTimeoutTicks int64
 }
 
 type knownPooler struct {
-	state      PoolerPersistentState
-	pgStatus   PostgresStatus
-	properties NodeProperties
+	state          PoolerPersistentState
+	pgStatus       PostgresStatus
+	properties     NodeProperties
+	lastStatusTick int64 // tick at which the last PoolerStatusIndicator was received
 }
 
 type pendingPolicyWrite struct {
@@ -86,6 +93,150 @@ func NewCoordNode(id NodeID, targetPolicy AckPolicy) *CoordNode {
 	}
 }
 
+// SetHealthTimeout configures a staleness threshold: if a pooler has not sent
+// a status update within ticks ticks, it is considered unreachable.
+// Zero disables timeout-based staleness (the default).
+func (c *CoordNode) SetHealthTimeout(ticks int64) {
+	c.healthTimeoutTicks = ticks
+}
+
+// ClusterView is the coordinator's current best-known state of the cluster,
+// computed from accumulated PoolerStatusIndicators.
+type ClusterView struct {
+	// HighestQuorumRules is the highest-Seq DurabilityRules for which the
+	// coordinator has confirmed a write quorum: enough non-primary cohort
+	// members have reported applying this version (or a later one) to satisfy
+	// the rules' AckPolicy. This is the last known-good state of the cluster.
+	// Nil if no version has confirmed quorum.
+	HighestQuorumRules *DurabilityRules
+
+	// HighestSeenRules is the highest-Seq DurabilityRules reported by any
+	// known pooler, regardless of quorum. Nil if no rules have been seen.
+	// If HighestSeenRules.Seq > HighestQuorumRules.Seq, a partial leader-driven
+	// rule change exists and must be propagated before establishing a new primary.
+	HighestSeenRules *DurabilityRules
+
+	// PrimaryHealthy is true when the best-known primary is currently reachable.
+	// The "best-known" primary is HighestQuorumRules.Primary when a quorum-confirmed
+	// version exists, falling back to HighestSeenRules.Primary otherwise. The
+	// primary is considered reachable when postgres is running and its last status
+	// is within the configured health timeout.
+	//
+	// This is the key flag for deciding between the normal path (PrimaryHealthy=true)
+	// and the emergency failover path (PrimaryHealthy=false).
+	PrimaryHealthy bool
+}
+
+// ClusterView returns the coordinator's current cluster state assessment.
+// tick is used for health-staleness checks when a health timeout is configured.
+func (c *CoordNode) ClusterView(tick int64) ClusterView {
+	highestSeen, highestQuorum := c.computeRulesVersions()
+
+	// Identify the best-known primary: prefer the quorum-confirmed version,
+	// fall back to the highest seen when quorum is not yet confirmed.
+	var primaryID NodeID
+	if highestQuorum != nil {
+		primaryID = highestQuorum.Primary
+	} else if highestSeen != nil {
+		primaryID = highestSeen.Primary
+	}
+
+	var primaryHealthy bool
+	if primaryID != "" {
+		if p, ok := c.known[primaryID]; ok {
+			primaryHealthy = c.isHealthy(p, tick)
+		}
+	}
+	return ClusterView{
+		HighestSeenRules:   highestSeen,
+		HighestQuorumRules: highestQuorum,
+		PrimaryHealthy:     primaryHealthy,
+	}
+}
+
+// computeRulesVersions scans all known poolers and computes the two key
+// DurabilityRules views: the highest-Seq version seen from any pooler, and the
+// highest-Seq version for which write quorum is confirmed.
+func (c *CoordNode) computeRulesVersions() (highestSeen, highestQuorum *DurabilityRules) {
+	// Build a map from Seq → rules record using the rules reported by each pooler.
+	// All poolers with the same Seq hold the same immutable record.
+	rulesBySeq := make(map[int64]*DurabilityRules)
+	for _, p := range sortedmaps.Values(c.known) {
+		r := p.state.Rules
+		if r == nil {
+			continue
+		}
+		if _, exists := rulesBySeq[r.Seq]; !exists {
+			rulesBySeq[r.Seq] = r
+		}
+		if highestSeen == nil || r.Seq > highestSeen.Seq {
+			highestSeen = r
+		}
+	}
+	if highestSeen == nil {
+		return nil, nil
+	}
+
+	// Walk versions from highest to lowest, returning the first with confirmed quorum.
+	for seq := highestSeen.Seq; seq >= 1; seq-- {
+		r, ok := rulesBySeq[seq]
+		if !ok {
+			continue // coordinator has not seen this version
+		}
+		if c.hasWriteQuorum(r) {
+			highestQuorum = r
+			break
+		}
+	}
+	return highestSeen, highestQuorum
+}
+
+// hasWriteQuorum returns true if enough non-primary cohort members have reported
+// applying rules.Seq (or a later version) to satisfy rules.Policy.IsWriteQuorum.
+// A version is provably durable when enough replicas have confirmed receiving it,
+// mirroring the write-quorum check the primary uses when committing WAL entries.
+//
+// Note: for a 1-node cluster with AnyN(0), no replicas exist and supporting
+// will be empty; AnyNPolicy(0).IsWriteQuorum(nil) returns true (0 >= 0) as
+// expected — no acks are needed for AnyN(0).
+//
+// TODO: revisit AckPolicy interface to thread primary confirmation through quorum
+// checks. For coordinator-led rule changes the primary must also have the write;
+// for AnyN(0) the primary alone constitutes quorum. IsWriteQuorum currently only
+// counts replicas, which is correct for the normal write path but not for the
+// coordinator's view of coordinator-issued rule writes. A clean solution may be
+// passing a primaryHasWrite bool into IsWriteQuorum, or using a separate pre-check.
+func (c *CoordNode) hasWriteQuorum(rules *DurabilityRules) bool {
+	if rules.Policy == nil {
+		return true // nil policy = AnyN(0): no replica acks needed
+	}
+	var supporting []CohortMember
+	for _, m := range rules.Members {
+		if m.ID == rules.Primary {
+			continue // primary does not self-ack as a replica
+		}
+		p, ok := c.known[m.ID]
+		if !ok || p.state.Rules == nil || p.state.Rules.Seq < rules.Seq {
+			continue
+		}
+		supporting = append(supporting, m)
+	}
+	return rules.Policy.IsWriteQuorum(supporting)
+}
+
+// isHealthy returns true if a pooler is currently considered reachable.
+// A pooler is unhealthy when its postgres is stopped or (if a health timeout
+// is configured) when it has not sent a status update within the timeout window.
+func (c *CoordNode) isHealthy(p *knownPooler, tick int64) bool {
+	if p.pgStatus == PostgresStopped {
+		return false
+	}
+	if c.healthTimeoutTicks > 0 && p.lastStatusTick > 0 && tick-p.lastStatusTick > c.healthTimeoutTicks {
+		return false
+	}
+	return true
+}
+
 // ID returns the coordinator node's unique identifier.
 func (c *CoordNode) ID() NodeID {
 	return c.id
@@ -98,7 +249,7 @@ func (c *CoordNode) KnownPoolerIDs() []NodeID {
 }
 
 // Step processes all indicators that arrived this tick and returns requests.
-func (c *CoordNode) Step(_ int64, indicators []Indicator) []Request {
+func (c *CoordNode) Step(tick int64, indicators []Indicator) []Request {
 	for _, ind := range indicators {
 		switch v := ind.(type) {
 		case PoolerDiscoveredIndicator:
@@ -112,6 +263,7 @@ func (c *CoordNode) Step(_ int64, indicators []Indicator) []Request {
 				p.state = v.State
 				p.pgStatus = v.PostgresStatus
 				p.properties = v.Properties
+				p.lastStatusTick = tick
 			}
 		case WritePolicyResponseIndicator:
 			c.handleWriteResponse(v)

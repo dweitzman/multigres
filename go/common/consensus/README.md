@@ -338,9 +338,34 @@ committed to.
 
 For the coordinator to act quickly during emergency failover it needs a continuously maintained
 view of the cluster: which poolers exist, which are healthy, what rule version each is on, and
-which is currently primary. This requires a discovery and health-monitoring mechanism so the
-coordinator arrives at a failover decision with enough information already cached, rather than
-needing to re-query the entire cohort under time pressure.
+which is currently primary.
+
+The coordinator tracks two complementary views of the cluster's durability state:
+
+- **Highest quorum rules** (`ClusterView.HighestQuorumRules`): the highest `DurabilityRules.Seq`
+  for which the coordinator has confirmed a write quorum. Quorum is confirmed when enough
+  non-primary cohort members have reported applying that Seq (or a later one) to satisfy the
+  rules' `AckPolicy.IsWriteQuorum` check. This is the last known-good state of the cluster.
+
+- **Highest seen rules** (`ClusterView.HighestSeenRules`): the highest `DurabilityRules.Seq`
+  reported by any pooler, regardless of whether it reached write quorum. This may be higher than
+  `HighestQuorumRules` if a leader-driven rule change was in progress when the primary went down.
+
+When `HighestSeenRules.Seq > HighestQuorumRules.Seq`, the coordinator knows a partial rule
+change exists and must propagate it to quorum before establishing a new primary. When the two
+are equal, the cluster is in a clean state and the coordinator can elect a new primary within
+the existing cohort without propagating any partial write.
+
+`ClusterView` also carries `PrimaryHealthy`: true when the primary identified by
+`HighestSeenRules.Primary` is currently reachable (postgres running, and not stale under the
+configured health timeout). A coordinator uses this to decide whether to enter the emergency
+path: normal writes proceed when `PrimaryHealthy` is true; emergency failover begins when it
+is false.
+
+**Health timeout**: the coordinator can be configured with a `healthTimeoutTicks` value. If a
+pooler has not sent a status update within that many ticks, it is considered unreachable even
+if its last known `pgStatus` was `Running`. Zero (the default) disables timeout-based staleness —
+suitable for simulation tests where poolers only broadcast on state change.
 
 ### Stage 4 — Graceful primary replacement
 

@@ -1,0 +1,247 @@
+// Copyright 2026 Supabase, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package simulation
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/multigres/multigres/go/common/consensus"
+)
+
+// makeRules is a convenience function for building a DurabilityRules value in tests.
+func makeRules(seq int64, primary consensus.NodeID, members []consensus.NodeID, anyN int) *consensus.DurabilityRules {
+	cohort := make([]consensus.CohortMember, len(members))
+	for i, id := range members {
+		cohort[i] = consensus.CohortMember{ID: id}
+	}
+	return &consensus.DurabilityRules{
+		Seq:     seq,
+		Primary: primary,
+		Members: cohort,
+		Policy:  consensus.AnyNPolicy(anyN),
+	}
+}
+
+// statusInd builds a PoolerStatusIndicator for use in coordinator Step() calls.
+func statusInd(id consensus.NodeID, role consensus.PoolerRole, primary consensus.NodeID,
+	rules *consensus.DurabilityRules, pgStatus consensus.PostgresStatus,
+) consensus.PoolerStatusIndicator {
+	return consensus.PoolerStatusIndicator{
+		PoolerID: id,
+		State: consensus.PoolerPersistentState{
+			Role:    role,
+			Primary: primary,
+			Rules:   rules,
+		},
+		PostgresStatus: pgStatus,
+	}
+}
+
+// stepWithDiscoveryAndStatus is a helper that discovers the given pooler IDs
+// and delivers the given status indicators in a single Step call.
+func stepWithDiscoveryAndStatus(coord *consensus.CoordNode, tick int64, ids []consensus.NodeID, statuses []consensus.PoolerStatusIndicator) {
+	inds := make([]consensus.Indicator, 0, len(ids)+len(statuses))
+	for _, id := range ids {
+		inds = append(inds, consensus.PoolerDiscoveredIndicator{PoolerID: id})
+	}
+	for _, s := range statuses {
+		inds = append(inds, s)
+	}
+	coord.Step(tick, inds)
+}
+
+// TestCoordClusterViewQuorumConfirmed verifies that when all cohort members have
+// applied the same rules version, the coordinator considers it quorum-confirmed.
+//
+// Setup: 3 nodes (1 primary, 2 replicas) all reporting the same Seq=3 rules
+// with AnyN(2) policy. AnyN(2) requires 2 replica acks; both replicas confirm
+// Seq=3, so the write is provably durable.
+func TestCoordClusterViewQuorumConfirmed(t *testing.T) {
+	const (
+		node1 consensus.NodeID = "node-1"
+		node2 consensus.NodeID = "node-2"
+		node3 consensus.NodeID = "node-3"
+	)
+	coord := consensus.NewCoordNode("coord-1", consensus.AnyNPolicy(2))
+
+	rules := makeRules(3, node1, []consensus.NodeID{node1, node2, node3}, 2)
+
+	stepWithDiscoveryAndStatus(coord, 1,
+		[]consensus.NodeID{node1, node2, node3},
+		[]consensus.PoolerStatusIndicator{
+			statusInd(node1, consensus.RolePrimary, node1, rules, consensus.PostgresRunning),
+			statusInd(node2, consensus.RoleReplica, node1, rules, consensus.PostgresRunning),
+			statusInd(node3, consensus.RoleReplica, node1, rules, consensus.PostgresRunning),
+		},
+	)
+
+	view := coord.ClusterView(1)
+	require.NotNil(t, view.HighestSeenRules, "should have seen rules")
+	require.NotNil(t, view.HighestQuorumRules, "AnyN(2) quorum is met by node2+node3")
+	assert.Equal(t, int64(3), view.HighestSeenRules.Seq)
+	assert.Equal(t, int64(3), view.HighestQuorumRules.Seq)
+	assert.Equal(t, node1, view.HighestQuorumRules.Primary)
+}
+
+// TestCoordClusterViewPartialChange verifies the "partial leader-led change" case:
+// the primary has applied Seq=4 but only one replica confirms it, so quorum for
+// Seq=4 is not met under AnyN(2). The prior Seq=3 version does have quorum.
+//
+// This is the key signal for emergency failover: HighestSeenRules.Seq >
+// HighestQuorumRules.Seq means a rule change was started but not completed.
+func TestCoordClusterViewPartialChange(t *testing.T) {
+	const (
+		node1 consensus.NodeID = "node-1"
+		node2 consensus.NodeID = "node-2"
+		node3 consensus.NodeID = "node-3"
+	)
+	coord := consensus.NewCoordNode("coord-1", consensus.AnyNPolicy(2))
+
+	rules3 := makeRules(3, node1, []consensus.NodeID{node1, node2, node3}, 2)
+	rules4 := makeRules(4, node1, []consensus.NodeID{node1, node2, node3}, 2)
+
+	// node1 (primary) and node2 have Seq=4; node3 is still at Seq=3.
+	stepWithDiscoveryAndStatus(coord, 1,
+		[]consensus.NodeID{node1, node2, node3},
+		[]consensus.PoolerStatusIndicator{
+			statusInd(node1, consensus.RolePrimary, node1, rules4, consensus.PostgresRunning),
+			statusInd(node2, consensus.RoleReplica, node1, rules4, consensus.PostgresRunning),
+			statusInd(node3, consensus.RoleReplica, node1, rules3, consensus.PostgresRunning),
+		},
+	)
+
+	view := coord.ClusterView(1)
+	require.NotNil(t, view.HighestSeenRules)
+	require.NotNil(t, view.HighestQuorumRules)
+	// Seen the Seq=4 record (from node1 and node2).
+	assert.Equal(t, int64(4), view.HighestSeenRules.Seq, "highest seen should be Seq=4")
+	// Quorum only confirmed for Seq=3 (node2+node3 both reported >= 3; only node2 reported >= 4).
+	assert.Equal(t, int64(3), view.HighestQuorumRules.Seq, "quorum only confirmed for Seq=3")
+}
+
+// TestCoordClusterViewSingleNodeAnyN0 verifies that a 1-node cluster with
+// AnyN(0) always has quorum confirmed (no replica acks are needed).
+func TestCoordClusterViewSingleNodeAnyN0(t *testing.T) {
+	const node1 consensus.NodeID = "node-1"
+	coord := consensus.NewCoordNode("coord-1", nil) // manual mode: no auto-expansion
+
+	rules := makeRules(1, node1, []consensus.NodeID{node1}, 0)
+
+	stepWithDiscoveryAndStatus(coord, 1,
+		[]consensus.NodeID{node1},
+		[]consensus.PoolerStatusIndicator{
+			statusInd(node1, consensus.RolePrimary, node1, rules, consensus.PostgresRunning),
+		},
+	)
+
+	view := coord.ClusterView(1)
+	require.NotNil(t, view.HighestSeenRules)
+	require.NotNil(t, view.HighestQuorumRules, "AnyN(0) always has quorum (no replicas needed)")
+	assert.Equal(t, int64(1), view.HighestQuorumRules.Seq)
+	assert.Equal(t, node1, view.HighestQuorumRules.Primary)
+}
+
+// TestCoordClusterViewNoRules verifies the coordinator's view when no pooler
+// has reported any rules yet.
+func TestCoordClusterViewNoRules(t *testing.T) {
+	coord := consensus.NewCoordNode("coord-1", consensus.AnyNPolicy(2))
+
+	coord.Step(1, []consensus.Indicator{
+		consensus.PoolerDiscoveredIndicator{PoolerID: "node-1"},
+		consensus.PoolerStatusIndicator{
+			PoolerID: "node-1",
+			State: consensus.PoolerPersistentState{
+				Role: consensus.RolePrimary, Primary: "node-1",
+			},
+			PostgresStatus: consensus.PostgresRunning,
+		},
+	})
+
+	view := coord.ClusterView(1)
+	assert.Nil(t, view.HighestSeenRules, "no rules have been reported yet")
+	assert.Nil(t, view.HighestQuorumRules, "no quorum without any rules")
+}
+
+// TestCoordClusterViewPrimaryUnhealthy verifies that a stopped primary appears
+// in the ClusterView but the coordinator does not consider it a healthy primary.
+// Health tracking feeds into the emergency-failover decision.
+func TestCoordClusterViewPrimaryUnhealthy(t *testing.T) {
+	const (
+		node1 consensus.NodeID = "node-1"
+		node2 consensus.NodeID = "node-2"
+		node3 consensus.NodeID = "node-3"
+	)
+	coord := consensus.NewCoordNode("coord-1", consensus.AnyNPolicy(2))
+
+	rules := makeRules(3, node1, []consensus.NodeID{node1, node2, node3}, 2)
+
+	// node1 (primary) is stopped; replicas are running.
+	stepWithDiscoveryAndStatus(coord, 1,
+		[]consensus.NodeID{node1, node2, node3},
+		[]consensus.PoolerStatusIndicator{
+			statusInd(node1, consensus.RolePrimary, node1, rules, consensus.PostgresStopped),
+			statusInd(node2, consensus.RoleReplica, node1, rules, consensus.PostgresRunning),
+			statusInd(node3, consensus.RoleReplica, node1, rules, consensus.PostgresRunning),
+		},
+	)
+
+	view := coord.ClusterView(1)
+	// Rules are still quorum-verified (replicas confirmed Seq=3 even if primary is down).
+	require.NotNil(t, view.HighestQuorumRules)
+	assert.Equal(t, int64(3), view.HighestQuorumRules.Seq)
+	// But the identified primary is unhealthy.
+	assert.False(t, view.PrimaryHealthy, "stopped primary should not be considered healthy")
+}
+
+// TestCoordClusterViewHealthTimeout verifies that a primary that has stopped
+// sending status updates is eventually marked unhealthy once the health timeout
+// is exceeded.
+func TestCoordClusterViewHealthTimeout(t *testing.T) {
+	const (
+		node1 consensus.NodeID = "node-1"
+		node2 consensus.NodeID = "node-2"
+		node3 consensus.NodeID = "node-3"
+	)
+	coord := consensus.NewCoordNode("coord-1", consensus.AnyNPolicy(2))
+	coord.SetHealthTimeout(5) // mark primary stale after 5 ticks without status
+
+	rules := makeRules(3, node1, []consensus.NodeID{node1, node2, node3}, 2)
+
+	// Tick 1: all three nodes report healthy status.
+	stepWithDiscoveryAndStatus(coord, 1,
+		[]consensus.NodeID{node1, node2, node3},
+		[]consensus.PoolerStatusIndicator{
+			statusInd(node1, consensus.RolePrimary, node1, rules, consensus.PostgresRunning),
+			statusInd(node2, consensus.RoleReplica, node1, rules, consensus.PostgresRunning),
+			statusInd(node3, consensus.RoleReplica, node1, rules, consensus.PostgresRunning),
+		},
+	)
+
+	view := coord.ClusterView(1)
+	assert.True(t, view.PrimaryHealthy, "primary just reported at tick 1, should be healthy at tick 1")
+
+	// Tick 5: still within timeout window (5 ticks since tick 1).
+	coord.Step(5, nil)
+	view = coord.ClusterView(5)
+	assert.True(t, view.PrimaryHealthy, "within timeout at tick 5")
+
+	// Tick 7: 6 ticks since last primary status (tick 1) — exceeds timeout of 5.
+	coord.Step(7, nil)
+	view = coord.ClusterView(7)
+	assert.False(t, view.PrimaryHealthy, "6 ticks since last status, exceeds timeout of 5")
+}
