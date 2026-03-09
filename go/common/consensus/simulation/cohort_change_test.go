@@ -60,7 +60,7 @@ func policyWriteCondition(
 	cond := &policyWriteResponse{seq: seq, wantAccepted: wantAccepted}
 	pooler.SendWritePolicyIndicator(consensus.WritePolicyIndicator{
 		CorrelationID: fmt.Sprintf("write-seq-%d", seq),
-		Rules: consensus.DurabilityRules{
+		Term: consensus.Term{
 			Seq:     seq,
 			Primary: primary,
 			Members: members,
@@ -96,13 +96,13 @@ func TestCohortChange(t *testing.T) {
 	sim := newTestSim(coordID)
 
 	// Pre-initialize node1 as primary with a 1-node bootstrap policy.
-	seedRules := &consensus.DurabilityRules{
+	seedTerm := &consensus.Term{
 		Seq:     1,
 		Primary: node1ID,
 		Members: []consensus.CohortMember{{ID: node1ID}},
 		Policy:  consensus.AtLeastPolicy(1),
 	}
-	pooler1 := newPrimaryPooler(node1ID, seedRules, sim)
+	pooler1 := newPrimaryPooler(node1ID, seedTerm, sim)
 	sim.RegisterNode(pooler1)
 
 	// Coordinator in manual mode (nil targetPolicy): never auto-adds observers.
@@ -150,7 +150,7 @@ func TestCohortChange(t *testing.T) {
 	// standbys and new members) before the write so removed nodes cannot ack
 	// their own removal. Since effective policy is AtLeast(1), the write is
 	// immediately durable. node2 and node3 continue streaming WAL and apply
-	// the removal record, updating their committed rules to the 1-node cohort.
+	// the removal record, updating their committed term to the 1-node cohort.
 	th.RequireWithinTicks(dstsim.And(
 		&allHaveAppliedRules{poolers: allPoolers, members: []consensus.NodeID{node1ID}, wantAtLeast: 1},
 		policyWriteCondition(pooler1, 5, node1ID, []consensus.CohortMember{{ID: node1ID}}, consensus.AtLeastPolicy(1), true),
@@ -170,13 +170,13 @@ func TestPolicyWriteRejection(t *testing.T) {
 
 	sim := newTestSim(coordID)
 
-	seedRules := &consensus.DurabilityRules{
+	seedTerm := &consensus.Term{
 		Seq:     1,
 		Primary: node1ID,
 		Members: []consensus.CohortMember{{ID: node1ID}},
 		Policy:  consensus.AtLeastPolicy(1),
 	}
-	pooler1 := newPrimaryPooler(node1ID, seedRules, sim)
+	pooler1 := newPrimaryPooler(node1ID, seedTerm, sim)
 	pooler2 := newReplicaPooler(node2ID, node1ID, sim)
 	sim.RegisterNode(pooler1)
 	sim.RegisterNode(pooler2)
@@ -197,7 +197,7 @@ func TestPolicyWriteRejection(t *testing.T) {
 		policyWriteCondition(pooler2, 2, node1ID, []consensus.CohortMember{{ID: node1ID}}, consensus.AtLeastPolicy(1), false),
 		10,
 	)
-	require.Nil(t, pooler2.Node().CommittedState().Rules,
+	require.Nil(t, pooler2.Node().CommittedState().Term,
 		"replica state must not change after write rejection")
 
 	// Case 3: unachievable policy — AtLeast(4) requires 4 nodes, but cohort has 1.

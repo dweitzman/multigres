@@ -31,7 +31,7 @@ import (
 //
 // Three inbound RPCs are served (see handler stubs at the bottom of this file):
 //
-//   - WritePolicy (unary): coordinator sends a DurabilityRules write to the primary.
+//   - WritePolicy (unary): coordinator sends a Term write to the primary.
 //     The handler converts it to a WritePolicyIndicator and waits for the
 //     WritePolicyResponseRequest that the tick loop emits in reply.
 //
@@ -111,11 +111,11 @@ func (d *PoolerDriver) Run(ctx context.Context) error {
 				switch r := req.(type) {
 				case consensus.PolicyRecordApplyRequest:
 					// Intercept before RequestHandler: run the GUC/WAL pipeline.
-					// Capture committed rules now (in the tick loop) before handing
+					// Capture committed term now (in the tick loop) before handing
 					// off to the goroutine — PoolerNode must not be accessed
 					// concurrently.
-					currentRules := d.node.CommittedState().Rules
-					go d.applyPolicyRecord(ctx, r, currentRules)
+					currentTerm := d.node.CommittedState().Term
+					go d.applyPolicyRecord(ctx, r, currentTerm)
 
 				case consensus.RevokeParticipationRequest:
 					// Intercept before RequestHandler: stop quorum participation.
@@ -161,44 +161,44 @@ func (d *PoolerDriver) Run(ctx context.Context) error {
 // correct ordering of the GUC update relative to the WAL record commit:
 //
 //   - Removing members: update synchronous_standby_names FIRST (stop waiting
-//     for removed nodes' ACKs), then INSERT the rules record. If we crash
-//     between the two steps, the GUC reverts to the old rules on restart
+//     for removed nodes' ACKs), then INSERT the term record. If we crash
+//     between the two steps, the GUC reverts to the old term on restart
 //     (storage file not yet updated) and the coordinator retries the write —
 //     safe because no write was ever stalled waiting for the removed node.
 //
-//   - Adding members: INSERT the rules record FIRST (WAL propagates to new
+//   - Adding members: INSERT the term record FIRST (WAL propagates to new
 //     members), then update synchronous_standby_names. If we crash between the
-//     two steps, the GUC is re-applied on restart from the newly committed rules
+//     two steps, the GUC is re-applied on restart from the newly committed term
 //     (storage.Save happens when ApplyRulesResponseIndicator is processed by
 //     PoolerNode) — safe because new members do not need to ACK the write that
 //     adds them.
 func (d *PoolerDriver) applyPolicyRecord(
 	ctx context.Context,
 	req consensus.PolicyRecordApplyRequest,
-	currentRules *consensus.DurabilityRules,
+	currentTerm *consensus.Term,
 ) {
-	added, removed := diffCohort(currentRules, &req.Rules)
+	added, removed := diffCohort(currentTerm, &req.Term)
 
 	if len(added) > 0 && len(removed) > 0 {
 		// The coordinator must never issue a simultaneous add+remove. Reject
 		// loudly rather than silently applying in an arbitrary order.
-		d.deliverApplyResult(ctx, req.Rules, false)
+		d.deliverApplyResult(ctx, req.Term, false)
 		return
 	}
 
 	if len(removed) > 0 {
 		// Remove path: update GUC first so the primary stops waiting for ACKs
 		// from nodes that are being removed.
-		if err := d.pg.updateSyncStandbyNames(ctx, req.Rules); err != nil {
-			d.deliverApplyResult(ctx, req.Rules, false)
+		if err := d.pg.updateSyncStandbyNames(ctx, req.Term); err != nil {
+			d.deliverApplyResult(ctx, req.Term, false)
 			return
 		}
 	}
 
-	// Commit the rules record as a WAL entry. Replicas will learn about the
+	// Commit the term record as a WAL entry. Replicas will learn about the
 	// change when the coordinator notifies them via PushRules.
-	if err := d.pg.insertRulesRecord(ctx, req.Rules); err != nil {
-		d.deliverApplyResult(ctx, req.Rules, false)
+	if err := d.pg.insertRulesRecord(ctx, req.Term); err != nil {
+		d.deliverApplyResult(ctx, req.Term, false)
 		return
 	}
 
@@ -206,8 +206,8 @@ func (d *PoolerDriver) applyPolicyRecord(
 		// Add path (or no-op membership change): update GUC after the WAL record
 		// so new members are already receiving WAL before we require their ACKs.
 		// A crash here is safe: the GUC is re-applied on restart because
-		// storage.Load returns the freshly committed rules.
-		if err := d.pg.updateSyncStandbyNames(ctx, req.Rules); err != nil {
+		// storage.Load returns the freshly committed term.
+		if err := d.pg.updateSyncStandbyNames(ctx, req.Term); err != nil {
 			// Non-fatal: WAL record is already committed and durable. Log the error
 			// and return success; the GUC will be re-applied on next restart.
 			//   log.Printf("warning: GUC update after add failed: %v; will re-apply on restart", err)
@@ -215,12 +215,12 @@ func (d *PoolerDriver) applyPolicyRecord(
 		}
 	}
 
-	d.deliverApplyResult(ctx, req.Rules, true)
+	d.deliverApplyResult(ctx, req.Term, true)
 }
 
-func (d *PoolerDriver) deliverApplyResult(ctx context.Context, rules consensus.DurabilityRules, accepted bool) {
+func (d *PoolerDriver) deliverApplyResult(ctx context.Context, term consensus.Term, accepted bool) {
 	select {
-	case d.incoming <- consensus.ApplyRulesResponseIndicator{Rules: rules, Accepted: accepted}:
+	case d.incoming <- consensus.ApplyRulesResponseIndicator{Term: term, Accepted: accepted}:
 	case <-ctx.Done():
 	}
 }
@@ -312,7 +312,7 @@ func (d *PoolerDriver) revokeParticipation(
 		CorrelationID: req.CorrelationID,
 		Accepted:      accepted,
 		LSN:           lsn,
-		RulesSeq:      rulesSeq,
+		TermSeq:       rulesSeq,
 	}:
 	case <-ctx.Done():
 	}
@@ -320,19 +320,19 @@ func (d *PoolerDriver) revokeParticipation(
 
 // ── gRPC handlers (inbound from coordinator) ─────────────────────────────────
 
-// WritePolicy is the unary gRPC handler called by the coordinator to write new
-// DurabilityRules to this primary. It queues a WritePolicyIndicator for the next
+// WritePolicy is the unary gRPC handler called by the coordinator to write a
+// new Term to this primary. It queues a WritePolicyIndicator for the next
 // tick and blocks until the tick loop emits a WritePolicyResponseRequest in reply.
 //
 // Production implementation sketch:
 //
 //	func (d *PoolerDriver) WritePolicy(ctx context.Context, req *pb.WritePolicyRequest) (*pb.WritePolicyResponse, error) {
-//	    rules, err := rulesFromProto(req.Rules)
+//	    term, err := termFromProto(req.Term)
 //	    if err != nil { return nil, err }
 //	    select {
 //	    case d.incoming <- consensus.WritePolicyIndicator{
 //	        CorrelationID: req.CorrelationId,
-//	        Rules:         rules,
+//	        Term:          term,
 //	    }:
 //	    case <-ctx.Done():
 //	        return nil, ctx.Err()
@@ -346,17 +346,17 @@ func (d *PoolerDriver) revokeParticipation(
 //	}
 
 // PushRules is the unary gRPC handler called by the coordinator to notify this
-// node (typically a replica) that new rules have been committed to the WAL.
+// node (typically a replica) that a new term has been committed to the WAL.
 // Delivers an ApplyRulesResponseIndicator directly into the tick loop. The
 // coordinator calls this on all known replicas after a WritePolicy succeeds.
 //
 // Production implementation sketch:
 //
 //	func (d *PoolerDriver) PushRules(ctx context.Context, req *pb.PushRulesRequest) (*pb.PushRulesResponse, error) {
-//	    rules, err := rulesFromProto(req.Rules)
+//	    term, err := termFromProto(req.Term)
 //	    if err != nil { return nil, err }
 //	    select {
-//	    case d.incoming <- consensus.ApplyRulesResponseIndicator{Rules: rules, Accepted: true}:
+//	    case d.incoming <- consensus.ApplyRulesResponseIndicator{Term: term, Accepted: true}:
 //	    case <-ctx.Done():
 //	        return nil, ctx.Err()
 //	    }
@@ -364,7 +364,7 @@ func (d *PoolerDriver) revokeParticipation(
 //	}
 
 // Recruit is the unary gRPC handler called by the coordinator to recruit this
-// node into a rule-change range. Queues a RecruitIndicator for the next tick
+// node into a term-change range. Queues a RecruitIndicator for the next tick
 // and blocks until the tick loop emits a RecruitResponseRequest.
 //
 // Production implementation sketch:
@@ -374,7 +374,7 @@ func (d *PoolerDriver) revokeParticipation(
 //	    case d.incoming <- consensus.RecruitIndicator{
 //	        CorrelationID: req.CorrelationId,
 //	        CoordID:       consensus.NodeID(req.CoordId),
-//	        AtRulesSeq:    req.AtRulesSeq,
+//	        AtTermSeq:     req.AtTermSeq,
 //	        ProposedSeq:   req.ProposedSeq,
 //	    }:
 //	    case <-ctx.Done():
@@ -384,7 +384,7 @@ func (d *PoolerDriver) revokeParticipation(
 //	    case r := <-d.recruitResponses:
 //	        return &pb.RecruitResponse{
 //	            Accepted: r.Accepted,
-//	            Rules:    rulesToProto(r.Rules), // may be nil
+//	            Term:     termToProto(r.Term), // may be nil
 //	        }, nil
 //	    case <-ctx.Done():
 //	        return nil, ctx.Err()
@@ -428,7 +428,7 @@ type PostgresApplier struct {
 //
 // AtLeast(1) or an empty standby list produces “” (no synchronous replication).
 // AtLeast(n+1) with standbys produces 'ANY n (node1,node2,...)'.
-func (pg *PostgresApplier) updateSyncStandbyNames(ctx context.Context, rules consensus.DurabilityRules) error {
+func (pg *PostgresApplier) updateSyncStandbyNames(ctx context.Context, rules consensus.Term) error {
 	val, err := syncStandbyNamesValue(rules)
 	if err != nil {
 		return err
@@ -447,12 +447,12 @@ func (pg *PostgresApplier) updateSyncStandbyNames(ctx context.Context, rules con
 	return nil
 }
 
-// insertRulesRecord commits the new DurabilityRules as a row in the
+// insertRulesRecord commits a new Term as a row in the
 // consensus_durability_rules table, creating a WAL entry that propagates to
 // replicas. The INSERT uses ON CONFLICT DO NOTHING so it is idempotent —
 // retrying after a crash before the response was delivered is safe.
-func (pg *PostgresApplier) insertRulesRecord(ctx context.Context, rules consensus.DurabilityRules) error {
-	// data, err := json.Marshal(rulesJSON from rules)
+func (pg *PostgresApplier) insertRulesRecord(ctx context.Context, rules consensus.Term) error {
+	// data, err := json.Marshal(termJSON from rules)
 	// if err != nil { return err }
 	//
 	// _, err = pg.db.ExecContext(ctx,
@@ -471,10 +471,10 @@ func (pg *PostgresApplier) insertRulesRecord(ctx context.Context, rules consensu
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 // syncStandbyNamesValue returns the postgres synchronous_standby_names value for
-// the given rules. Assumes AtLeastPolicy; returns an error for unsupported types.
+// the given term. Assumes AtLeastPolicy; returns an error for unsupported types.
 // The postgres ANY N value equals AtLeastThreshold()-1 because postgres counts
 // replica ACKs while AtLeastPolicy counts total node ACKs (primary + replicas).
-func syncStandbyNamesValue(rules consensus.DurabilityRules) (string, error) {
+func syncStandbyNamesValue(rules consensus.Term) (string, error) {
 	at, ok := rules.Policy.(atLeastThresholder)
 	if !ok {
 		return "", fmt.Errorf("unsupported DurabilityPolicy type %T", rules.Policy)
@@ -498,7 +498,7 @@ func syncStandbyNamesValue(rules consensus.DurabilityRules) (string, error) {
 // diffCohort returns the node IDs added and removed when moving from before to
 // after. Both slices are nil if membership is unchanged.
 // Iterates over the input slices (not maps) to preserve deterministic order.
-func diffCohort(before, after *consensus.DurabilityRules) (added, removed []consensus.NodeID) {
+func diffCohort(before, after *consensus.Term) (added, removed []consensus.NodeID) {
 	beforeSet := make(map[consensus.NodeID]bool)
 	if before != nil {
 		for _, m := range before.Members {

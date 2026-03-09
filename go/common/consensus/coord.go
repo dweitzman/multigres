@@ -26,7 +26,7 @@ import (
 //
 // The coordinator monitors pooler statuses, identifies observers (poolers that
 // are replicating but not yet in the cohort), and expands the cohort by writing
-// DurabilityRules updates to the primary via compare-and-swap.
+// Term updates to the primary via compare-and-swap.
 //
 // Adds and removes are always separate writes. This is required because the
 // correct ordering of synchronous_standby_names changes relative to the rules
@@ -79,7 +79,7 @@ type knownPooler struct {
 
 type pendingPolicyWrite struct {
 	target NodeID
-	rules  DurabilityRules
+	term   Term
 }
 
 // NewCoordNode creates a coordinator node.
@@ -103,22 +103,22 @@ func (c *CoordNode) SetHealthTimeout(ticks int64) {
 // ClusterView is the coordinator's current best-known state of the cluster,
 // computed from accumulated PoolerStatusIndicators.
 type ClusterView struct {
-	// HighestQuorumRules is the highest-Seq DurabilityRules for which the
-	// coordinator has confirmed a write quorum: enough cohort members have
-	// reported applying this version (or a later one) to satisfy the rules'
-	// DurabilityPolicy. This is the last known-good state of the cluster.
+	// HighestQuorumTerm is the highest-Seq Term for which the coordinator has
+	// confirmed a write quorum: enough cohort members have reported applying
+	// this version (or a later one) to satisfy the term's DurabilityPolicy.
+	// This is the last known-good state of the cluster.
 	// Nil if no version has confirmed quorum.
-	HighestQuorumRules *DurabilityRules
+	HighestQuorumTerm *Term
 
-	// HighestSeenRules is the highest-Seq DurabilityRules reported by any
-	// known pooler, regardless of quorum. Nil if no rules have been seen.
-	// If HighestSeenRules.Seq > HighestQuorumRules.Seq, a partial leader-driven
-	// rule change exists and must be propagated before establishing a new primary.
-	HighestSeenRules *DurabilityRules
+	// HighestSeenTerm is the highest-Seq Term reported by any known pooler,
+	// regardless of quorum. Nil if no term has been seen.
+	// If HighestSeenTerm.Seq > HighestQuorumTerm.Seq, a partial leader-driven
+	// term change exists and must be propagated before establishing a new primary.
+	HighestSeenTerm *Term
 
 	// PrimaryHealthy is true when the best-known primary is currently reachable.
-	// The "best-known" primary is HighestQuorumRules.Primary when a quorum-confirmed
-	// version exists, falling back to HighestSeenRules.Primary otherwise. The
+	// The "best-known" primary is HighestQuorumTerm.Primary when a quorum-confirmed
+	// version exists, falling back to HighestSeenTerm.Primary otherwise. The
 	// primary is considered reachable when postgres is running and its last status
 	// is within the configured health timeout.
 	//
@@ -130,7 +130,7 @@ type ClusterView struct {
 // ClusterView returns the coordinator's current cluster state assessment.
 // tick is used for health-staleness checks when a health timeout is configured.
 func (c *CoordNode) ClusterView(tick int64) ClusterView {
-	highestSeen, highestQuorum := c.computeRulesVersions()
+	highestSeen, highestQuorum := c.computeTermVersions()
 
 	// Identify the best-known primary: prefer the quorum-confirmed version,
 	// fall back to the highest seen when quorum is not yet confirmed.
@@ -148,26 +148,26 @@ func (c *CoordNode) ClusterView(tick int64) ClusterView {
 		}
 	}
 	return ClusterView{
-		HighestSeenRules:   highestSeen,
-		HighestQuorumRules: highestQuorum,
-		PrimaryHealthy:     primaryHealthy,
+		HighestSeenTerm:   highestSeen,
+		HighestQuorumTerm: highestQuorum,
+		PrimaryHealthy:    primaryHealthy,
 	}
 }
 
-// computeRulesVersions scans all known poolers and computes the two key
-// DurabilityRules views: the highest-Seq version seen from any pooler, and the
-// highest-Seq version for which write quorum is confirmed.
-func (c *CoordNode) computeRulesVersions() (highestSeen, highestQuorum *DurabilityRules) {
-	// Build a map from Seq → rules record using the rules reported by each pooler.
+// computeTermVersions scans all known poolers and computes the two key Term
+// views: the highest-Seq version seen from any pooler, and the highest-Seq
+// version for which write quorum is confirmed.
+func (c *CoordNode) computeTermVersions() (highestSeen, highestQuorum *Term) {
+	// Build a map from Seq → term record using the term reported by each pooler.
 	// All poolers with the same Seq hold the same immutable record.
-	rulesBySeq := make(map[int64]*DurabilityRules)
+	termsBySeq := make(map[int64]*Term)
 	for _, p := range sortedmaps.Values(c.known) {
-		r := p.state.Rules
+		r := p.state.Term
 		if r == nil {
 			continue
 		}
-		if _, exists := rulesBySeq[r.Seq]; !exists {
-			rulesBySeq[r.Seq] = r
+		if _, exists := termsBySeq[r.Seq]; !exists {
+			termsBySeq[r.Seq] = r
 		}
 		if highestSeen == nil || r.Seq > highestSeen.Seq {
 			highestSeen = r
@@ -179,7 +179,7 @@ func (c *CoordNode) computeRulesVersions() (highestSeen, highestQuorum *Durabili
 
 	// Walk versions from highest to lowest, returning the first with confirmed quorum.
 	for seq := highestSeen.Seq; seq >= 1; seq-- {
-		r, ok := rulesBySeq[seq]
+		r, ok := termsBySeq[seq]
 		if !ok {
 			continue // coordinator has not seen this version
 		}
@@ -192,22 +192,22 @@ func (c *CoordNode) computeRulesVersions() (highestSeen, highestQuorum *Durabili
 }
 
 // isDurable returns true if enough cohort members have reported applying
-// rules.Seq (or a later version) to satisfy rules.Policy.IsDurable. The primary
-// is included in the acking set since it commits locally before propagating via
+// t.Seq (or a later version) to satisfy t.Policy.IsDurable. The primary is
+// included in the acking set since it commits locally before propagating via
 // WAL — this correctly handles AtLeast(1) where the primary alone is sufficient.
-func (c *CoordNode) isDurable(rules *DurabilityRules) bool {
-	if rules.Policy == nil {
+func (c *CoordNode) isDurable(t *Term) bool {
+	if t.Policy == nil {
 		return true // nil policy: no acks needed
 	}
 	var acking []CohortMember
-	for _, m := range rules.Members {
+	for _, m := range t.Members {
 		p, ok := c.known[m.ID]
-		if !ok || p.state.Rules == nil || p.state.Rules.Seq < rules.Seq {
+		if !ok || p.state.Term == nil || p.state.Term.Seq < t.Seq {
 			continue
 		}
 		acking = append(acking, m)
 	}
-	return rules.Policy.IsDurable(rules.Members, acking)
+	return t.Policy.IsDurable(t.Members, acking)
 }
 
 // isHealthy returns true if a pooler is currently considered reachable.
@@ -266,25 +266,25 @@ func (c *CoordNode) handleWriteResponse(ind WritePolicyResponseIndicator) {
 	}
 
 	if ind.Accepted {
-		// The write succeeded. Update our cached view of the primary's rules
+		// The write succeeded. Update our cached view of the primary's term
 		// so the next write uses the correct Seq without waiting for a status
 		// broadcast.
 		if p, ok := c.known[ind.FromPooler]; ok {
-			rules := c.pendingWrite.rules
-			p.state.Rules = &rules
+			term := c.pendingWrite.term
+			p.state.Term = &term
 		}
 	} else {
 		// CAS mismatch: the primary's current seq is ind.CurrentSeq, not what
 		// we thought. Only update our cache if we don't already have a fresher
 		// view from an out-of-band status update (which would have a matching seq).
 		if p, ok := c.known[ind.FromPooler]; ok {
-			if p.state.Rules == nil || p.state.Rules.Seq != ind.CurrentSeq {
-				// We don't have the full rules for ind.CurrentSeq yet. Clear our
-				// cached rules and wait for a PoolerStatusIndicator that carries
+			if p.state.Term == nil || p.state.Term.Seq != ind.CurrentSeq {
+				// We don't have the full term for ind.CurrentSeq yet. Clear our
+				// cached term and wait for a PoolerStatusIndicator that carries
 				// the full record before retrying.
-				p.state.Rules = nil
+				p.state.Term = nil
 			}
-			// If p.state.Rules.Seq == ind.CurrentSeq we already have up-to-date
+			// If p.state.Term.Seq == ind.CurrentSeq we already have up-to-date
 			// information and can retry on the next advance() call.
 		}
 	}
@@ -303,9 +303,9 @@ func (c *CoordNode) advance() []Request {
 		return nil
 	}
 
-	currentRules := primaryKnown.state.Rules
-	if currentRules == nil {
-		return nil // primary has no rules yet; wait for status
+	currentTerm := primaryKnown.state.Term
+	if currentTerm == nil {
+		return nil // primary has no term yet; wait for status
 	}
 
 	// Manual mode: never auto-add observers.
@@ -314,15 +314,15 @@ func (c *CoordNode) advance() []Request {
 	}
 
 	// Autonomous expansion: add all observed replicas not yet in the cohort.
-	observers := c.observers(currentRules)
+	observers := c.observers(currentTerm)
 	if len(observers) == 0 {
 		return nil // cohort is already up to date
 	}
 
 	// Add all observers in one write.
-	newMembers := append(slices.Clone(currentRules.Members), observers...)
-	newRules := DurabilityRules{
-		Seq:     currentRules.Seq + 1,
+	newMembers := append(slices.Clone(currentTerm.Members), observers...)
+	newTerm := Term{
+		Seq:     currentTerm.Seq + 1,
 		Primary: primaryID,
 		Members: newMembers,
 		Policy:  c.policyForMembers(newMembers),
@@ -330,13 +330,13 @@ func (c *CoordNode) advance() []Request {
 
 	c.pendingWrite = &pendingPolicyWrite{
 		target: primaryID,
-		rules:  newRules,
+		term:   newTerm,
 	}
 
 	return []Request{WritePolicyRequest{
 		TargetPooler: primaryID,
 		FromCoord:    c.id,
-		Rules:        newRules,
+		Term:         newTerm,
 	}}
 }
 
@@ -358,9 +358,9 @@ func (c *CoordNode) findPrimary() (NodeID, *knownPooler) {
 
 // observers returns known poolers not listed in the current cohort as
 // CohortMembers (with their cached properties), sorted for deterministic output.
-func (c *CoordNode) observers(currentRules *DurabilityRules) []CohortMember {
+func (c *CoordNode) observers(currentTerm *Term) []CohortMember {
 	inCohort := make(map[NodeID]bool)
-	for _, m := range currentRules.Members {
+	for _, m := range currentTerm.Members {
 		inCohort[m.ID] = true
 	}
 

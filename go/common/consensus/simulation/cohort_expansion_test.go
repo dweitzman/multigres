@@ -25,7 +25,7 @@ import (
 // coordinator incrementally adds observer replicas to the cohort and upgrades
 // the durability policy as the cluster grows, without coordinator elections.
 //
-// Setup: node1 is pre-initialized as a 1-node primary with AtLeast(1) rules.
+// Setup: node1 is pre-initialized as a 1-node primary with AtLeast(1) term.
 // The coordinator targets AtLeast(3), upgrading the policy as the cohort grows.
 //
 // Stages:
@@ -45,13 +45,13 @@ func TestCohortExpansion(t *testing.T) {
 	sim := newTestSim(coordID)
 
 	// Pre-initialize node1 as a primary with a single-node bootstrap policy.
-	seedRules := &consensus.DurabilityRules{
+	seedTerm := &consensus.Term{
 		Seq:     1,
 		Primary: node1ID,
 		Members: []consensus.CohortMember{{ID: node1ID}},
 		Policy:  consensus.AtLeastPolicy(1),
 	}
-	pooler1 := newPrimaryPooler(node1ID, seedRules, sim)
+	pooler1 := newPrimaryPooler(node1ID, seedTerm, sim)
 	sim.RegisterNode(pooler1)
 
 	// Coordinator targets AtLeast(3) so it upgrades the durability policy as nodes join.
@@ -61,7 +61,7 @@ func TestCohortExpansion(t *testing.T) {
 	th := dstsim.NewSimulationTestHelper(t, sim)
 
 	// Stage 1: node2 joins as an observer streaming from node1.
-	// Coordinator writes new rules adding node2 to the cohort.
+	// Coordinator writes new term adding node2 to the cohort.
 	pooler2 := newReplicaPooler(node2ID, node1ID, sim)
 	sim.RegisterNode(pooler2)
 	th.RequireWithinTicks(&allHaveAppliedRules{

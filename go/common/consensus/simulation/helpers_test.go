@@ -43,14 +43,14 @@ func newTestSim(coordID consensus.NodeID) *simType {
 // --- Node factories ---
 
 // newPrimaryPooler creates a SimPooler pre-initialized as the cluster primary.
-// seedRules is written to storage before NewPoolerNode loads it, so the node
+// seedTerm is written to storage before NewPoolerNode loads it, so the node
 // starts in the primary role with the given rules already committed.
-func newPrimaryPooler(id consensus.NodeID, seedRules *consensus.DurabilityRules, sim *simType) *SimPooler {
+func newPrimaryPooler(id consensus.NodeID, seedTerm *consensus.Term, sim *simType) *SimPooler {
 	store := &MemStorage{}
 	store.state = consensus.PoolerPersistentState{
 		Role:    consensus.RolePrimary,
 		Primary: id,
-		Rules:   seedRules,
+		Term:    seedTerm,
 	}
 	return NewSimPooler(consensus.NewPoolerNode(id, store, consensus.NodeProperties{}), sim)
 }
@@ -117,13 +117,13 @@ func (c *allHaveAppliedRules) Name() string {
 func (c *allHaveAppliedRules) Eval(_ *simType) bool {
 	for _, sp := range c.poolers {
 		state := sp.Node().CommittedState()
-		rules := state.Rules
-		if rules == nil || len(rules.Members) != len(c.members) {
+		term := state.Term
+		if term == nil || len(term.Members) != len(c.members) {
 			return false
 		}
 		for _, wantID := range c.members {
 			found := false
-			for _, m := range rules.Members {
+			for _, m := range term.Members {
 				if m.ID == wantID {
 					found = true
 					break
@@ -133,7 +133,7 @@ func (c *allHaveAppliedRules) Eval(_ *simType) bool {
 				return false
 			}
 		}
-		n, ok := atLeastThreshold(rules.Policy)
+		n, ok := atLeastThreshold(term.Policy)
 		if !ok || n != c.wantAtLeast {
 			return false
 		}
@@ -174,16 +174,16 @@ func (c *allHaveAppliedRules) Describe(_ *simType) string {
 	var lines []string
 	for _, sp := range c.poolers {
 		state := sp.Node().CommittedState()
-		rules := state.Rules
+		term := state.Term
 		var rulesStr string
-		if rules == nil {
+		if term == nil {
 			rulesStr = "no rules"
 		} else {
-			memberIDs := make([]consensus.NodeID, len(rules.Members))
-			for i, m := range rules.Members {
+			memberIDs := make([]consensus.NodeID, len(term.Members))
+			for i, m := range term.Members {
 				memberIDs[i] = m.ID
 			}
-			rulesStr = fmt.Sprintf("seq=%d cohort=%v policy=%T", rules.Seq, memberIDs, rules.Policy)
+			rulesStr = fmt.Sprintf("seq=%d cohort=%v policy=%T", term.Seq, memberIDs, term.Policy)
 		}
 		standbyIDs := make([]consensus.NodeID, len(sp.gucSyncStandbys))
 		for i, m := range sp.gucSyncStandbys {

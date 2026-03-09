@@ -25,7 +25,7 @@ type lsn int64
 
 // walEntry is one record in the simulated WAL buffer. Each entry either
 // represents a user transaction (record == nil, just advances the LSN) or a
-// DurabilityRules change.
+// Term change.
 //
 // TODO(failover): research why replication is expected to fail in postgres if a
 // replica and primary have diverging transactions (e.g. after a split-brain or
@@ -41,7 +41,7 @@ type lsn int64
 // all cohort members have applied past it. For now the buffer grows unboundedly.
 type walEntry struct {
 	pos    lsn
-	record *consensus.DurabilityRules // nil = user transaction
+	record *consensus.Term // nil = user transaction
 }
 
 // ruleChangePhase tracks which step of the multi-tick rules-apply pipeline the
@@ -76,9 +76,9 @@ const (
 	ruleChangePhaseSendIndicator
 )
 
-// pendingRuleChange tracks an in-flight rules-apply pipeline on the primary.
+// pendingRuleChange tracks an in-flight term-apply pipeline on the primary.
 type pendingRuleChange struct {
-	rules consensus.DurabilityRules
+	term  consensus.Term
 	phase ruleChangePhase
 
 	// walPos is set in the writeWAL phase once the record has been appended.
@@ -325,7 +325,7 @@ func (s *SimPooler) applyRevokedGUC() {
 				s.truncateWALAfter(s.pendingChange.walPos - 1)
 			}
 			s.queuedIndicators = append(s.queuedIndicators, consensus.ApplyRulesResponseIndicator{
-				Rules:    s.pendingChange.rules,
+				Term:     s.pendingChange.term,
 				Accepted: false,
 			})
 			s.pendingChange = nil
@@ -403,7 +403,7 @@ func (s *SimPooler) Step(tick int64, externalInds []consensus.Indicator) []conse
 	for _, e := range s.pendingWAL {
 		if e.record != nil {
 			inds = append(inds, consensus.ApplyRulesResponseIndicator{
-				Rules:    *e.record,
+				Term:     *e.record,
 				Accepted: true,
 			})
 		}
@@ -505,7 +505,7 @@ func (s *SimPooler) handleApply(req consensus.PolicyRecordApplyRequest) {
 	// Replicas do not maintain a writable WAL; reject the apply immediately.
 	if s.node.CommittedState().Role != consensus.RolePrimary {
 		s.queuedIndicators = append(s.queuedIndicators, consensus.ApplyRulesResponseIndicator{
-			Rules:    req.Rules,
+			Term:     req.Term,
 			Accepted: false,
 		})
 		return
@@ -514,7 +514,7 @@ func (s *SimPooler) handleApply(req consensus.PolicyRecordApplyRequest) {
 	// cannot commit new WAL entries.
 	if s.isRevoked() {
 		s.queuedIndicators = append(s.queuedIndicators, consensus.ApplyRulesResponseIndicator{
-			Rules:    req.Rules,
+			Term:     req.Term,
 			Accepted: false,
 		})
 		return
@@ -524,12 +524,12 @@ func (s *SimPooler) handleApply(req consensus.PolicyRecordApplyRequest) {
 	// the PoolerNode's committed state at the time of the request. A failure
 	// here indicates a bug in the state machine, not a normal race condition.
 	currentSeq := s.latestWALPolicySeq()
-	if req.Rules.Seq != currentSeq+1 {
-		panic(fmt.Sprintf("SimPooler CAS mismatch on %s: Rules.Seq=%d, expected %d",
-			s.node.ID(), req.Rules.Seq, currentSeq+1))
+	if req.Term.Seq != currentSeq+1 {
+		panic(fmt.Sprintf("SimPooler CAS mismatch on %s: Term.Seq=%d, expected %d",
+			s.node.ID(), req.Term.Seq, currentSeq+1))
 	}
 
-	rules := req.Rules
+	term := req.Term
 
 	// Capture original GUC settings for potential rollback in writeWAL.
 	originalStandbys := make([]consensus.CohortMember, len(s.gucSyncStandbys))
@@ -538,12 +538,12 @@ func (s *SimPooler) handleApply(req consensus.PolicyRecordApplyRequest) {
 
 	// Compute final GUC: all new cohort members except this node (the primary).
 	var finalStandbys []consensus.CohortMember
-	for _, m := range rules.Members {
+	for _, m := range term.Members {
 		if m.ID != s.node.ID() {
 			finalStandbys = append(finalStandbys, m)
 		}
 	}
-	finalPolicy := rules.Policy
+	finalPolicy := term.Policy
 
 	// Compute combined GUC: union of old+new standbys.
 	combinedStandbys := unionMembers(originalStandbys, finalStandbys)
@@ -566,7 +566,7 @@ func (s *SimPooler) handleApply(req consensus.PolicyRecordApplyRequest) {
 	}
 
 	s.pendingChange = &pendingRuleChange{
-		rules:            rules,
+		term:             term,
 		phase:            ruleChangePhaseCombinedGUC,
 		originalStandbys: originalStandbys,
 		originalPolicy:   originalPolicy,
@@ -596,12 +596,12 @@ func (s *SimPooler) advancePendingChange() {
 	case ruleChangePhaseWriteWAL:
 		// Re-validate CAS. The combined-GUC phase consumed a tick; in a real
 		// system another write could have landed in the WAL during that time.
-		if s.latestWALPolicySeq() != c.rules.Seq-1 {
+		if s.latestWALPolicySeq() != c.term.Seq-1 {
 			// CAS failed: restore original GUC settings and report failure.
 			s.gucSyncStandbys = c.originalStandbys
 			s.gucSyncPolicy = c.originalPolicy
 			s.queuedIndicators = append(s.queuedIndicators, consensus.ApplyRulesResponseIndicator{
-				Rules:    c.rules,
+				Term:     c.term,
 				Accepted: false,
 			})
 			s.pendingChange = nil
@@ -609,8 +609,8 @@ func (s *SimPooler) advancePendingChange() {
 		}
 		// Append the rules record to the WAL.
 		s.nextPos++
-		rules := c.rules
-		s.wal = append(s.wal, walEntry{pos: s.nextPos, record: &rules})
+		term := c.term
+		s.wal = append(s.wal, walEntry{pos: s.nextPos, record: &term})
 		c.walPos = s.nextPos
 		c.phase = ruleChangePhaseAwaitQuorum
 
@@ -631,7 +631,7 @@ func (s *SimPooler) advancePendingChange() {
 	case ruleChangePhaseSendIndicator:
 		// Queue the indicator so PoolerNode persists and responds in this tick.
 		s.queuedIndicators = append(s.queuedIndicators, consensus.ApplyRulesResponseIndicator{
-			Rules:    c.rules,
+			Term:     c.term,
 			Accepted: true,
 		})
 		s.pendingChange = nil

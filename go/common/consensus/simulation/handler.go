@@ -78,7 +78,7 @@ func (h *Handler) ProcessRequests(
 			h.correlationReturnTo[corrID] = fromNode
 			result[r.TargetPooler] = append(result[r.TargetPooler], consensus.WritePolicyIndicator{
 				CorrelationID: corrID,
-				Rules:         r.Rules,
+				Term:          r.Term,
 			})
 
 		case consensus.WritePolicyResponseRequest:

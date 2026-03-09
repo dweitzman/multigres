@@ -19,12 +19,12 @@
 //
 //   - PoolerNode: manages a single PostgreSQL instance. Persists its committed state
 //     durably via PoolerStorage. The primary PoolerNode is the source of truth for the
-//     cluster's DurabilityRules (cohort membership and ack policy); replicas learn
-//     about rule changes via simulated WAL replication.
+//     cluster's Term (cohort membership and ack policy); replicas learn
+//     about term changes via simulated WAL replication.
 //
 //   - CoordNode: coordinator (orch service). Stateless across restarts. Watches pooler
 //     status, discovers observers (non-cohort poolers), and drives cohort expansion and
-//     durability policy upgrades by writing DurabilityRules updates to the primary.
+//     durability policy upgrades by writing Term updates to the primary.
 //     Uses emergency failover (coordinator elections) only when the primary is unreachable.
 //
 // Both implement dstsim.Node[Indicator, Request, NodeID] and can run in the same
@@ -33,7 +33,7 @@
 // Normal path — cohort and policy changes via WAL:
 //
 //	CoordNode sees observer → sends WritePolicyRequest to primary → primary commits and
-//	propagates WAL → replicas apply WAL and update their Rules → CoordNode observes
+//	propagates WAL → replicas apply WAL and update their Term → CoordNode observes
 //	updated status.
 //
 // Emergency path (not yet implemented) — coordinator elections:
@@ -101,7 +101,7 @@ type NodeProperties struct {
 }
 
 // CohortMember pairs a pooler's identity with its static properties. Storing both
-// together in DurabilityRules.Members means DurabilityPolicy implementations always
+// together in Term.Members means DurabilityPolicy implementations always
 // have all the information they need without a separate property lookup.
 type CohortMember struct {
 	ID         NodeID
@@ -145,10 +145,10 @@ type DurabilityPolicy interface {
 	// proposed cohort. Implementations may use member properties (e.g. zone
 	// distribution) as needed.
 	//
-	// The coordinator calls IsAchievable before writing new DurabilityRules to
-	// avoid committing a configuration the cluster can never satisfy. For
-	// example, AtLeast(3) with only 2 proposed members would never reach quorum —
-	// writing such rules would leave the cluster permanently stuck waiting for an
+	// The coordinator calls IsAchievable before writing a new Term to avoid
+	// committing a configuration the cluster can never satisfy. For example,
+	// AtLeast(3) with only 2 proposed members would never reach quorum —
+	// writing such a term would leave the cluster permanently stuck waiting for an
 	// ack that can never arrive.
 	//
 	// Example:
@@ -218,19 +218,19 @@ type DurabilityPolicy interface {
 	RevokesAndSamplesAllRevocationSets(cohortMembers, recruitedMembers []CohortMember, primary CohortMember) bool
 }
 
-// DurabilityRules is a versioned record of the cluster's durability configuration.
+// Term is a versioned record of the cluster's durability configuration.
 // It is written to the primary as a postgres transaction and propagated to replicas
-// via WAL replication. All changes to cohort membership or the ack policy go through
-// this mechanism rather than coordinator elections.
+// via WAL replication. All changes to cohort membership or the durability policy go
+// through this mechanism rather than coordinator elections.
 //
 // Writes are compare-and-swap: the primary accepts a write only if the incoming Seq
 // is exactly its current Seq + 1. This prevents stale coordinators from overwriting
-// a more recent configuration. Seq 0 is reserved for the "no rules yet" zero value;
-// the first real rules record always has Seq 1.
+// a more recent configuration. Seq 0 is reserved for the "no term yet" zero value;
+// the first real term record always has Seq 1.
 //
-// A higher Seq always means more recent rules, enabling any node to determine which
-// of two rule sets is current without external context.
-type DurabilityRules struct {
+// A higher Seq always means a more recent term, enabling any node to determine which
+// of two terms is current without external context.
+type Term struct {
 	// Seq is a monotonically increasing sequence number.
 	Seq int64
 
@@ -248,8 +248,8 @@ type DurabilityRules struct {
 }
 
 // RecruitmentCommitment is the durable record of a pooler's commitment to a
-// coordinator-led rule change. Once persisted, the pooler will not participate
-// in write quorum for any rule version within the committed range, and will not
+// coordinator-led term change. Once persisted, the pooler will not participate
+// in write quorum for any term version within the committed range, and will not
 // accept instructions from a different coordinator for any overlapping range.
 //
 // The commitment survives crashes: a restarted pooler loads it from storage
@@ -258,10 +258,10 @@ type RecruitmentCommitment struct {
 	// CoordID is the coordinator this pooler is committed to.
 	CoordID NodeID
 
-	// AtRulesSeq is the base rule seq the coordinator is working from (N in N→N+X).
-	AtRulesSeq int64
+	// AtTermSeq is the base term seq the coordinator is working from (N in N→N+X).
+	AtTermSeq int64
 
-	// ProposedSeq is the highest target rule seq this pooler has committed to (N+X).
+	// ProposedSeq is the highest target term seq this pooler has committed to (N+X).
 	ProposedSeq int64
 }
 
@@ -279,10 +279,10 @@ type PoolerPersistentState struct {
 	// this is itself. For replicas, this is the node they stream WAL from.
 	Primary NodeID
 
-	// Rules is the most recent DurabilityRules this pooler has committed (primary)
-	// or applied from WAL replication (replica). Nil means no rules have been
+	// Term is the most recent Term this pooler has committed (primary)
+	// or applied from WAL replication (replica). Nil means no term has been
 	// seen yet.
-	Rules *DurabilityRules
+	Term *Term
 
 	// Commitment is non-nil when this pooler has been recruited by a coordinator.
 	// It records the coordinator and rule version range the pooler has committed to.
@@ -292,10 +292,10 @@ type PoolerPersistentState struct {
 // PolicySeq returns the sequence number of the current rules, or 0 if no rules
 // have been applied yet.
 func (s PoolerPersistentState) PolicySeq() int64 {
-	if s.Rules == nil {
+	if s.Term == nil {
 		return 0
 	}
-	return s.Rules.Seq
+	return s.Term.Seq
 }
 
 // CommitmentEndSeq returns the ProposedSeq of the current commitment, or 0 if

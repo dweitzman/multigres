@@ -23,22 +23,22 @@ type Indicator interface {
 // --- Indicators for PoolerNode ---
 
 // WritePolicyIndicator is delivered to the primary PoolerNode when a CoordNode
-// requests a DurabilityRules change. The primary validates the CAS (Rules.Seq
-// must equal its current PolicySeq + 1); if valid, it emits a
-// PolicyRecordApplyRequest to the local postgres driver.
+// requests a Term change. The primary validates the CAS (Term.Seq must equal
+// its current PolicySeq + 1); if valid, it emits a PolicyRecordApplyRequest
+// to the local postgres driver.
 //
 // CorrelationID is set by the RequestHandler (or by tests injecting indicators
 // directly). The primary echoes it back in WritePolicyResponseRequest so the
 // handler can route the response to the originating coordinator.
 type WritePolicyIndicator struct {
 	CorrelationID string
-	Rules         DurabilityRules // Rules.Seq is the CAS key (must be currentSeq+1)
+	Term          Term // Term.Seq is the CAS key (must be currentSeq+1)
 }
 
 func (WritePolicyIndicator) consensusIndicator() {}
 
 // ApplyRulesResponseIndicator is delivered to a PoolerNode by the local
-// postgres driver after attempting to apply a DurabilityRules change.
+// postgres driver after attempting to apply a Term change.
 // Accepted=true means the record was committed and is propagating via WAL;
 // Accepted=false means the transaction failed (e.g. compare-and-swap mismatch)
 // and the pending apply should be aborted.
@@ -46,22 +46,22 @@ func (WritePolicyIndicator) consensusIndicator() {}
 // On the replica path the WAL watcher always delivers Accepted=true since the
 // record it is reporting has already been durably committed by the primary.
 type ApplyRulesResponseIndicator struct {
-	Rules    DurabilityRules
+	Term     Term
 	Accepted bool
 }
 
 func (ApplyRulesResponseIndicator) consensusIndicator() {}
 
 // RecruitIndicator is delivered to a PoolerNode by a coordinator to recruit
-// it into a coordinator-led rule change covering the range AtRulesSeq→ProposedSeq.
+// it into a coordinator-led term change covering the range AtTermSeq→ProposedSeq.
 //
 // The pooler validates the request against any existing commitment and its
-// current rules, then durably persists the new commitment and stops participating
+// current term, then durably persists the new commitment and stops participating
 // in write quorum before responding.
 type RecruitIndicator struct {
 	CorrelationID string
 	CoordID       NodeID
-	AtRulesSeq    int64
+	AtTermSeq     int64
 	ProposedSeq   int64
 }
 
@@ -77,19 +77,19 @@ func (RecruitIndicator) consensusIndicator() {}
 // the PoolerNode will forward the failure to the coordinator as a rejected
 // RecruitResponseRequest.
 //
-// When Accepted is true, LSN and RulesSeq carry the node's WAL position at the
+// When Accepted is true, LSN and TermSeq carry the node's WAL position at the
 // moment revocation completed. The coordinator uses these to rank candidates and
 // pick the most up-to-date node as the new primary during emergency failover:
 //   - For a replica: LSN is the last_replay_lsn once WAL replay has stabilised
-//     (stopped advancing), and RulesSeq is the seq of the last rules record
+//     (stopped advancing), and TermSeq is the seq of the last term record
 //     the replica has replayed.
 //   - For a primary: LSN is the last committed WAL position after any pending
-//     write has been aborted, and RulesSeq is the primary's current rules seq.
+//     write has been aborted, and TermSeq is the primary's current term seq.
 type RevokeParticipationResponseIndicator struct {
 	CorrelationID string
 	Accepted      bool
 	LSN           LSN   // last committed/replayed WAL position at revocation time
-	RulesSeq      int64 // seq of most recently applied DurabilityRules
+	TermSeq       int64 // seq of most recently applied Term
 }
 
 func (RevokeParticipationResponseIndicator) consensusIndicator() {}
@@ -121,7 +121,7 @@ func (WritePolicyResponseIndicator) consensusIndicator() {}
 
 // PoolerStatusIndicator is delivered to CoordNode when a pooler broadcasts its
 // status. It carries the pooler's full committed state (including the current
-// DurabilityRules), postgres operational status, and static node properties.
+// Term), postgres operational status, and static node properties.
 type PoolerStatusIndicator struct {
 	PoolerID       NodeID
 	State          PoolerPersistentState

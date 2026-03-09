@@ -51,7 +51,7 @@ func (c *recruitResponse) Describe(_ *simType) string {
 func recruitCondition(
 	pooler *SimPooler,
 	coordID consensus.NodeID,
-	atRulesSeq, proposedSeq int64,
+	atTermSeq, proposedSeq int64,
 	correlationID string,
 	wantAccepted bool,
 ) *recruitResponse {
@@ -59,7 +59,7 @@ func recruitCondition(
 	pooler.SendRecruitIndicator(consensus.RecruitIndicator{
 		CorrelationID: correlationID,
 		CoordID:       coordID,
-		AtRulesSeq:    atRulesSeq,
+		AtTermSeq:     atTermSeq,
 		ProposedSeq:   proposedSeq,
 	}, func(resp consensus.RecruitResponseRequest) {
 		if resp.Accepted == wantAccepted {
@@ -72,7 +72,7 @@ func recruitCondition(
 // TestRecruitRejection verifies that RecruitIndicator is rejected with
 // Accepted=false in three cases:
 //
-//  1. Stale base: AtRulesSeq < committed.PolicySeq().
+//  1. Stale base: AtTermSeq < committed.PolicySeq().
 //  2. Different coordinator with the same ProposedSeq as the existing commitment.
 //  3. Any coordinator with a lower ProposedSeq than the existing commitment.
 func TestRecruitRejection(t *testing.T) {
@@ -84,19 +84,19 @@ func TestRecruitRejection(t *testing.T) {
 
 	sim := newTestSim(coordID)
 
-	seedRules := &consensus.DurabilityRules{
+	seedTerm := &consensus.Term{
 		Seq:     1,
 		Primary: node1ID,
 		Members: []consensus.CohortMember{{ID: node1ID}},
 		Policy:  consensus.AtLeastPolicy(1),
 	}
-	pooler1 := newPrimaryPooler(node1ID, seedRules, sim)
+	pooler1 := newPrimaryPooler(node1ID, seedTerm, sim)
 	sim.RegisterNode(pooler1)
 	sim.RegisterNode(NewSimCoordNode(consensus.NewCoordNode(coordID, nil), sim))
 
 	th := dstsim.NewSimulationTestHelper(t, sim)
 
-	// Case 1: stale base — AtRulesSeq=0 when primary is at PolicySeq=1.
+	// Case 1: stale base — AtTermSeq=0 when primary is at PolicySeq=1.
 	th.RequireWithinTicks(
 		recruitCondition(pooler1, coordID, 0, 2, "reject-stale", false),
 		10,
@@ -143,13 +143,13 @@ func TestRecruitIdempotent(t *testing.T) {
 
 	sim := newTestSim(coordID)
 
-	seedRules := &consensus.DurabilityRules{
+	seedTerm := &consensus.Term{
 		Seq:     1,
 		Primary: node1ID,
 		Members: []consensus.CohortMember{{ID: node1ID}},
 		Policy:  consensus.AtLeastPolicy(1),
 	}
-	pooler1 := newPrimaryPooler(node1ID, seedRules, sim)
+	pooler1 := newPrimaryPooler(node1ID, seedTerm, sim)
 	sim.RegisterNode(pooler1)
 	sim.RegisterNode(NewSimCoordNode(consensus.NewCoordNode(coordID, nil), sim))
 
@@ -162,7 +162,7 @@ func TestRecruitIdempotent(t *testing.T) {
 	)
 	require.Equal(t, &consensus.RecruitmentCommitment{
 		CoordID:     coordID,
-		AtRulesSeq:  1,
+		AtTermSeq:   1,
 		ProposedSeq: 3,
 	}, pooler1.Node().CommittedState().Commitment)
 	require.True(t, pooler1.isRevoked())
@@ -212,13 +212,13 @@ func TestRecruitRevokesParticipation(t *testing.T) {
 
 	sim := newTestSim(coordID)
 
-	seedRules := &consensus.DurabilityRules{
+	seedTerm := &consensus.Term{
 		Seq:     1,
 		Primary: node1ID,
 		Members: []consensus.CohortMember{{ID: node1ID}},
 		Policy:  consensus.AtLeastPolicy(1),
 	}
-	pooler1 := newPrimaryPooler(node1ID, seedRules, sim)
+	pooler1 := newPrimaryPooler(node1ID, seedTerm, sim)
 	pooler2 := newReplicaPooler(node2ID, node1ID, sim)
 	sim.RegisterNode(pooler1)
 	sim.RegisterNode(pooler2)
@@ -234,7 +234,7 @@ func TestRecruitRevokesParticipation(t *testing.T) {
 		members:     []consensus.NodeID{node1ID, node2ID},
 		wantAtLeast: 2,
 	}, 200)
-	// After expansion the committed rules are at Seq=2.
+	// After expansion the committed term is at Seq=2.
 	require.Equal(t, int64(2), pooler1.Node().CommittedState().PolicySeq())
 
 	// Recruit node2 (replica): it will stop ACKing WAL after its sidecar revokes.
@@ -249,7 +249,7 @@ func TestRecruitRevokesParticipation(t *testing.T) {
 	var writeCallbackCalled bool
 	pooler1.SendWritePolicyIndicator(consensus.WritePolicyIndicator{
 		CorrelationID: "stuck-write",
-		Rules: consensus.DurabilityRules{
+		Term: consensus.Term{
 			Seq:     3,
 			Primary: node1ID,
 			Members: []consensus.CohortMember{{ID: node1ID}, {ID: node2ID}},

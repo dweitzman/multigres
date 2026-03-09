@@ -111,19 +111,19 @@ func (f *AtomicStateFile) Load() (consensus.PoolerPersistentState, error) {
 
 // ── JSON encoding ─────────────────────────────────────────────────────────────
 //
-// DurabilityRules embeds DurabilityPolicy, which is an interface. We flatten it for
-// JSON: the production code only uses AtLeastPolicy so we store the threshold
-// directly. If a non-AtLeast policy is ever encountered, Save returns an error to
-// surface the gap rather than silently losing policy information.
+// Term embeds DurabilityPolicy, which is an interface. We flatten it for JSON:
+// the production code only uses AtLeastPolicy so we store the threshold directly.
+// If a non-AtLeast policy is ever encountered, Save returns an error to surface
+// the gap rather than silently losing policy information.
 
 type stateJSON struct {
 	Role       consensus.PoolerRole             `json:"role"`
 	Primary    consensus.NodeID                 `json:"primary"`
-	Rules      *rulesJSON                       `json:"rules,omitempty"`
+	Term       *termJSON                        `json:"term,omitempty"`
 	Commitment *consensus.RecruitmentCommitment `json:"commitment,omitempty"`
 }
 
-type rulesJSON struct {
+type termJSON struct {
 	Seq     int64                    `json:"seq"`
 	Primary consensus.NodeID         `json:"primary"`
 	Members []consensus.CohortMember `json:"members"`
@@ -143,15 +143,15 @@ func marshalState(state consensus.PoolerPersistentState) ([]byte, error) {
 		Primary:    state.Primary,
 		Commitment: state.Commitment,
 	}
-	if state.Rules != nil {
-		at, ok := state.Rules.Policy.(atLeastThresholder)
+	if state.Term != nil {
+		at, ok := state.Term.Policy.(atLeastThresholder)
 		if !ok {
-			return nil, fmt.Errorf("unsupported DurabilityPolicy type %T: only AtLeastPolicy is supported in production", state.Rules.Policy)
+			return nil, fmt.Errorf("unsupported DurabilityPolicy type %T: only AtLeastPolicy is supported in production", state.Term.Policy)
 		}
-		js.Rules = &rulesJSON{
-			Seq:     state.Rules.Seq,
-			Primary: state.Rules.Primary,
-			Members: state.Rules.Members,
+		js.Term = &termJSON{
+			Seq:     state.Term.Seq,
+			Primary: state.Term.Primary,
+			Members: state.Term.Members,
 			AtLeast: at.AtLeastThreshold(),
 		}
 	}
@@ -168,12 +168,12 @@ func unmarshalState(data []byte) (consensus.PoolerPersistentState, error) {
 		Primary:    js.Primary,
 		Commitment: js.Commitment,
 	}
-	if js.Rules != nil {
-		state.Rules = &consensus.DurabilityRules{
-			Seq:     js.Rules.Seq,
-			Primary: js.Rules.Primary,
-			Members: js.Rules.Members,
-			Policy:  consensus.AtLeastPolicy(js.Rules.AtLeast),
+	if js.Term != nil {
+		state.Term = &consensus.Term{
+			Seq:     js.Term.Seq,
+			Primary: js.Term.Primary,
+			Members: js.Term.Members,
+			Policy:  consensus.AtLeastPolicy(js.Term.AtLeast),
 		}
 	}
 	return state, nil

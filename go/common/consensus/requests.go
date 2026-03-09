@@ -30,9 +30,9 @@ type RequestCorrelation struct {
 
 // --- Requests from CoordNode ---
 
-// WritePolicyRequest asks the RequestHandler to deliver a DurabilityRules write
-// to the target pooler (which must be the current primary). The primary validates
-// the compare-and-swap: Rules.Seq must equal its current PolicySeq + 1. If it does
+// WritePolicyRequest asks the RequestHandler to deliver a Term write to the
+// target pooler (which must be the current primary). The primary validates the
+// compare-and-swap: Term.Seq must equal its current PolicySeq + 1. If it does
 // not, the write is rejected and the primary returns its current seq so the coord
 // can retry with the correct next seq.
 //
@@ -42,7 +42,7 @@ type RequestCorrelation struct {
 type WritePolicyRequest struct {
 	TargetPooler NodeID
 	FromCoord    NodeID
-	Rules        DurabilityRules // Rules.Seq is the CAS key (must be currentSeq+1)
+	Term         Term // Term.Seq is the CAS key (must be currentSeq+1)
 }
 
 func (WritePolicyRequest) consensusRequest() {}
@@ -50,10 +50,10 @@ func (WritePolicyRequest) consensusRequest() {}
 // --- Requests from PoolerNode ---
 
 // PolicyRecordApplyRequest is emitted by the primary PoolerNode when it needs
-// the local postgres driver to apply a DurabilityRules change. The driver is
-// responsible for the full apply sequence: updating synchronous_standby_names
-// and then committing the SQL transaction. If the transaction fails, the driver
-// must roll back the replication settings change and deliver a failure indicator.
+// the local postgres driver to apply a Term change. The driver is responsible
+// for the full apply sequence: updating synchronous_standby_names and then
+// committing the SQL transaction. If the transaction fails, the driver must
+// roll back the replication settings change and deliver a failure indicator.
 //
 // In production, the local driver goroutine handles this and delivers an
 // ApplyRulesResponseIndicator back to the PoolerNode on completion.
@@ -61,7 +61,7 @@ func (WritePolicyRequest) consensusRequest() {}
 // reaches the RequestHandler), simulates the apply, and queues the result
 // indicator for the next tick.
 type PolicyRecordApplyRequest struct {
-	Rules DurabilityRules
+	Term Term
 }
 
 func (PolicyRecordApplyRequest) consensusRequest() {}
@@ -99,12 +99,12 @@ type RevokeParticipationRequest struct {
 func (RevokeParticipationRequest) consensusRequest() {}
 
 // RecruitResponseRequest is the pooler's response to a RecruitIndicator.
-// Rules carries the pooler's committed DurabilityRules so the coordinator can
-// discover any successor WAL entries it has not yet seen.
+// Term carries the pooler's committed Term so the coordinator can discover any
+// successor WAL entries it has not yet seen.
 type RecruitResponseRequest struct {
 	RequestCorrelation
 	Accepted bool
-	Rules    *DurabilityRules // nil when Accepted=false and no rules have been committed
+	Term     *Term // nil when Accepted=false and no term has been committed
 }
 
 func (RecruitResponseRequest) consensusRequest() {}

@@ -9,24 +9,24 @@ Two node types participate:
 
 - **PoolerNode** — manages a single PostgreSQL instance. Persists its committed state durably via
   `PoolerStorage`. The primary `PoolerNode` is the source of truth for the cluster's
-  `DurabilityRules`; replicas learn about rule changes via WAL replication.
+  `Term`; replicas learn about rule changes via WAL replication.
 
 - **CoordNode** — coordinator (orchestration service). Stateless across restarts. Watches pooler
   status, discovers observer replicas (non-cohort poolers), and drives durability rule changes by
-  writing `DurabilityRules` updates to the primary. Uses emergency failover only when the primary
+  writing `Term` updates to the primary. Uses emergency failover only when the primary
   is unreachable.
 
-The consensus system is responsible for one thing: keeping a **`DurabilityRules` record** that
+The consensus system is responsible for one thing: keeping a **`Term` record** that
 defines exactly which postgres instance is primary, which nodes form the cohort, and how many
 sync-replica ACKs constitute a durable write — and transitioning safely between successive records.
 
-## DurabilityRules
+## Term
 
-`DurabilityRules` is the unit of configuration. Every change to cohort membership, ack policy, or
-primary identity is expressed as a new `DurabilityRules` record written to the WAL:
+`Term` is the unit of configuration. Every change to cohort membership, ack policy, or
+primary identity is expressed as a new `Term` record written to the WAL:
 
 ```go
-type DurabilityRules struct {
+type Term struct {
     Seq     int64          // monotonically increasing; serves as logical clock
     Primary NodeID         // the postgres primary for this shard at this rule version
     Members []CohortMember // full cohort; each member carries its static NodeProperties
@@ -69,7 +69,7 @@ When the primary is reachable, all rule changes flow through it as ordinary post
 
 **Protocol:**
 
-1. A write request is submitted to the primary specifying new `DurabilityRules`
+1. A write request is submitted to the primary specifying new `Term`
    (with `Seq = committed.Seq + 1`).
 2. The primary validates:
    - **CAS**: `incoming.Seq == committed.Seq + 1` — rejects stale coordinator writes.
@@ -94,7 +94,7 @@ the postgres execution environment.
 
 ```
 CoordNode sees observer
-  → writes DurabilityRules to primary (Seq = current.Seq + 1)
+  → writes Term to primary (Seq = current.Seq + 1)
   → PoolerNode emits PolicyRecordApplyRequest
   → SimPooler/driver writes WAL entry; enforces both-policy quorum
   → ApplyRulesResponseIndicator delivered once durable
@@ -210,7 +210,7 @@ Once both quorums are satisfied and no unknown successor exists:
 ```
 go/common/consensus/
   consensus.go         — shared types (NodeID, NodeProperties, CohortMember, AckPolicy,
-                         DurabilityRules, PoolerPersistentState, PoolerStorage)
+                         Term, PoolerPersistentState, PoolerStorage)
   durability.go        — AnyNPolicy implementation
   pooler.go            — PoolerNode state machine (production-compatible)
   coord.go             — CoordNode state machine (production-compatible)
@@ -237,7 +237,7 @@ details.
 
 Each `SimPooler` has:
 
-- A **WAL buffer** (primary only): append-only slice of `walEntry{pos lsn, record *DurabilityRules}`.
+- A **WAL buffer** (primary only): append-only slice of `walEntry{pos lsn, record *Term}`.
   User transactions (`record == nil`) advance the LSN without affecting policy state.
 - A **received LSN** (replica): the highest LSN pulled from the primary. On graceful switchover
   this is preserved — the replica resumes from where it left off against the new primary.
@@ -258,12 +258,12 @@ the `Handler`, simulates the postgres SQL transaction and sync-settings update, 
 
 | Type                    | Description                                                                                                       |
 | ----------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `NodeProperties`        | Static per-node attributes (e.g. zone). Frozen into `DurabilityRules.Members` at write time.                      |
+| `NodeProperties`        | Static per-node attributes (e.g. zone). Frozen into `Term.Members` at write time.                                 |
 | `CohortMember`          | `{ID NodeID, Properties NodeProperties}`. Bundles identity and properties so policy evaluation is self-contained. |
-| `DurabilityRules`       | Versioned WAL record: `{Seq, Primary, Members, Policy}`. CAS on monotonic `Seq`.                                  |
+| `Term`                  | Versioned WAL record: `{Seq, Primary, Members, Policy}`. CAS on monotonic `Seq`.                                  |
 | `AckPolicy`             | Interface: `IsWriteQuorum`, `IsAchievable`, `IsRevoked`.                                                          |
 | `AnyNPolicy`            | `AckPolicy` implementation: write is durable when at least N sync replicas have ACK'd.                            |
-| `PoolerPersistentState` | Durable pooler state: `{Role, Primary, Rules *DurabilityRules}`. Saved before any ack.                            |
+| `PoolerPersistentState` | Durable pooler state: `{Role, Primary, Term *Term}`. Saved before any ack.                                        |
 | `PoolerStorage`         | Durable storage interface. Simulation uses `MemStorage`; production uses atomic write-rename + fsync.             |
 | `PoolerNode`            | Pooler state machine. Handles WAL-driven policy updates and emergency failover ballots.                           |
 | `CoordNode`             | Coordinator state machine. Drives WAL writes for normal changes; runs elections for emergency failover.           |
@@ -290,7 +290,7 @@ Set `DSTSIM_TRACE=1` to dump a per-tick trace to stderr when a test fails.
 ### Stage 1 — Normal path: cohort expansion via WAL ✅ implemented
 
 `TestCohortExpansion` and `TestCohortChange` model the coordinator driving cohort expansion and
-policy changes without any coordinator election, using only WAL-driven `DurabilityRules`
+policy changes without any coordinator election, using only WAL-driven `Term`
 compare-and-swap writes.
 
 **Setup:** one node pre-initialized as primary with rules `{Seq: 1, Primary: node1, Members: [node1], Policy: AnyN(0)}`.
@@ -329,8 +329,8 @@ write WAL while postgres is stopped.
 After establishment, normal WAL-driven operations resume.
 
 **Durable state required:** `PoolerPersistentState` needs a commitment field —
-`EstablishmentGrant{AtRulesSeq int64, CoordID NodeID, ProposedSeq int64}` — so a restarted node
-honours its prior commitments to coordinators. The `AtRulesSeq` field captures "I participated
+`EstablishmentGrant{AtTermSeq int64, CoordID NodeID, ProposedSeq int64}` — so a restarted node
+honours its prior commitments to coordinators. The `AtTermSeq` field captures "I participated
 in revoking rules through N", and `ProposedSeq` records the highest target this node has already
 committed to.
 
@@ -342,22 +342,22 @@ which is currently primary.
 
 The coordinator tracks two complementary views of the cluster's durability state:
 
-- **Highest quorum rules** (`ClusterView.HighestQuorumRules`): the highest `DurabilityRules.Seq`
+- **Highest quorum rules** (`ClusterView.HighestQuorumTerm`): the highest `Term.Seq`
   for which the coordinator has confirmed a write quorum. Quorum is confirmed when enough
   non-primary cohort members have reported applying that Seq (or a later one) to satisfy the
   rules' `AckPolicy.IsWriteQuorum` check. This is the last known-good state of the cluster.
 
-- **Highest seen rules** (`ClusterView.HighestSeenRules`): the highest `DurabilityRules.Seq`
+- **Highest seen rules** (`ClusterView.HighestSeenTerm`): the highest `Term.Seq`
   reported by any pooler, regardless of whether it reached write quorum. This may be higher than
-  `HighestQuorumRules` if a leader-driven rule change was in progress when the primary went down.
+  `HighestQuorumTerm` if a leader-driven rule change was in progress when the primary went down.
 
-When `HighestSeenRules.Seq > HighestQuorumRules.Seq`, the coordinator knows a partial rule
+When `HighestSeenTerm.Seq > HighestQuorumTerm.Seq`, the coordinator knows a partial rule
 change exists and must propagate it to quorum before establishing a new primary. When the two
 are equal, the cluster is in a clean state and the coordinator can elect a new primary within
 the existing cohort without propagating any partial write.
 
 `ClusterView` also carries `PrimaryHealthy`: true when the primary identified by
-`HighestSeenRules.Primary` is currently reachable (postgres running, and not stale under the
+`HighestSeenTerm.Primary` is currently reachable (postgres running, and not stale under the
 configured health timeout). A coordinator uses this to decide whether to enter the emergency
 path: normal writes proceed when `PrimaryHealthy` is true; emergency failover begins when it
 is false.
@@ -369,7 +369,7 @@ suitable for simulation tests where poolers only broadcast on state change.
 
 ### Stage 4 — Graceful primary replacement
 
-Planned maintenance: the stepping-down primary writes a `DurabilityRules` updating `Primary`
+Planned maintenance: the stepping-down primary writes a `Term` updating `Primary`
 before shutdown, eliminating the need for emergency failover and reducing the switchover window
 to near zero.
 

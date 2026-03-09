@@ -28,7 +28,7 @@ import (
 //
 // The coordinator interacts with poolers via three outbound gRPC calls:
 //
-//   - WritePolicy (unary): sends DurabilityRules to the primary and waits for
+//   - WritePolicy (unary): sends a Term to the primary and waits for
 //     accept/reject. On accept it also calls PushRules on all known replicas so
 //     they learn about the change without polling.
 //
@@ -111,7 +111,7 @@ func (d *CoordDriver) sendWritePolicy(ctx context.Context, req consensus.WritePo
 	//
 	//   resp, err := d.poolerClients[req.TargetPooler].WritePolicy(ctx, &pb.WritePolicyRequest{
 	//       CorrelationId: generateCorrelationID(),
-	//       Rules:         rulesToProto(req.Rules),
+	//       Term:          termToProto(req.Term),
 	//   })
 	//   if err != nil {
 	//       return // primary unreachable; CoordNode will time out and retry
@@ -137,7 +137,7 @@ func (d *CoordDriver) sendWritePolicy(ctx context.Context, req consensus.WritePo
 	//       }
 	//       go func(poolerID consensus.NodeID) {
 	//           _, _ = d.poolerClients[poolerID].PushRules(ctx, &pb.PushRulesRequest{
-	//               Rules: rulesToProto(req.Rules),
+	//               Term: termToProto(req.Term),
 	//           })
 	//       }(id)
 	//   }

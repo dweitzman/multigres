@@ -56,7 +56,7 @@ type PoolerNode struct {
 	// emitted to the local driver but not yet acknowledged. Only one apply may
 	// be in flight at a time. On crash-restart this is cleared; the coordinator
 	// will retry.
-	pendingApply         *DurabilityRules
+	pendingApply         *Term
 	pendingCorrelationID string // correlation ID from the WritePolicyIndicator
 
 	// pendingRecruitCorrelationID is set when a RecruitIndicator has been accepted
@@ -157,8 +157,8 @@ func (n *PoolerNode) Step(_ int64, indicators []Indicator) []Request {
 }
 
 // handleWritePolicy processes a WritePolicyIndicator from a coord.
-// Only primaries accept direct writes; replicas receive rules changes via WAL.
-// Validates the CAS (Rules.Seq must equal committed.PolicySeq() + 1).
+// Only primaries accept direct writes; replicas receive term changes via WAL.
+// Validates the CAS (Term.Seq must equal committed.PolicySeq() + 1).
 // On success, emits PolicyRecordApplyRequest to the local postgres driver.
 func (n *PoolerNode) handleWritePolicy(ind WritePolicyIndicator) ([]Request, bool) {
 	reject := func() ([]Request, bool) {
@@ -176,20 +176,20 @@ func (n *PoolerNode) handleWritePolicy(ind WritePolicyIndicator) ([]Request, boo
 	if n.pendingApply != nil {
 		return reject()
 	}
-	// CAS: incoming rules must be exactly the next seq.
-	if ind.Rules.Seq != n.committed.PolicySeq()+1 {
+	// CAS: incoming term must be exactly the next seq.
+	if ind.Term.Seq != n.committed.PolicySeq()+1 {
 		return reject()
 	}
 	// Reject if the proposed policy cannot be satisfied by the proposed members.
-	if ind.Rules.Policy != nil && !ind.Rules.Policy.IsAchievable(ind.Rules.Members) {
+	if ind.Term.Policy != nil && !ind.Term.Policy.IsAchievable(ind.Term.Members) {
 		return reject()
 	}
 
-	rules := ind.Rules
-	n.pendingApply = &rules
+	term := ind.Term
+	n.pendingApply = &term
 	n.pendingCorrelationID = ind.CorrelationID
 
-	return []Request{PolicyRecordApplyRequest{Rules: rules}}, false
+	return []Request{PolicyRecordApplyRequest{Term: term}}, false
 }
 
 // handleApplyResponse processes an ApplyRulesResponseIndicator delivered by
@@ -202,7 +202,7 @@ func (n *PoolerNode) handleWritePolicy(ind WritePolicyIndicator) ([]Request, boo
 // cleared and a rejection response is sent back to the coordinator.
 func (n *PoolerNode) handleApplyResponse(ind ApplyRulesResponseIndicator) ([]Request, bool) {
 	if !ind.Accepted {
-		if n.pendingApply == nil || n.pendingApply.Seq != ind.Rules.Seq {
+		if n.pendingApply == nil || n.pendingApply.Seq != ind.Term.Seq {
 			return nil, false
 		}
 		reqs := []Request{WritePolicyResponseRequest{
@@ -217,7 +217,7 @@ func (n *PoolerNode) handleApplyResponse(ind ApplyRulesResponseIndicator) ([]Req
 
 	// Primary path: clear the pending apply and respond to the coordinator.
 	var extraReqs []Request
-	if n.pendingApply != nil && n.pendingApply.Seq == ind.Rules.Seq {
+	if n.pendingApply != nil && n.pendingApply.Seq == ind.Term.Seq {
 		extraReqs = []Request{WritePolicyResponseRequest{
 			RequestCorrelation: RequestCorrelation{CorrelationID: n.pendingCorrelationID},
 			Accepted:           true,
@@ -227,7 +227,7 @@ func (n *PoolerNode) handleApplyResponse(ind ApplyRulesResponseIndicator) ([]Req
 	}
 
 	newState := n.committed
-	newState.Rules = &ind.Rules
+	newState.Term = &ind.Term
 	if err := n.storage.Save(newState); err != nil {
 		return nil, false
 	}
@@ -239,7 +239,7 @@ func (n *PoolerNode) handleApplyResponse(ind ApplyRulesResponseIndicator) ([]Req
 // handleRecruit processes a RecruitIndicator from a coordinator.
 //
 // Acceptance criteria — reject unless ALL of the following hold:
-//  1. ind.AtRulesSeq >= committed.PolicySeq(): coordinator knows the current rules.
+//  1. ind.AtTermSeq >= committed.PolicySeq(): coordinator knows the current term.
 //  2. No existing commitment, OR the proposal supersedes the existing one:
 //     - ind.ProposedSeq > committed.Commitment.ProposedSeq (any coordinator), OR
 //     - ind.CoordID == committed.Commitment.CoordID AND ind.ProposedSeq >= committed.Commitment.ProposedSeq
@@ -255,12 +255,12 @@ func (n *PoolerNode) handleRecruit(ind RecruitIndicator) ([]Request, bool) {
 		return []Request{RecruitResponseRequest{
 			RequestCorrelation: RequestCorrelation{CorrelationID: ind.CorrelationID},
 			Accepted:           false,
-			Rules:              n.committed.Rules,
+			Term:               n.committed.Term,
 		}}, false
 	}
 
-	// Check 1: coordinator must know the current rules (not stale).
-	if ind.AtRulesSeq < n.committed.PolicySeq() {
+	// Check 1: coordinator must know the current term (not stale).
+	if ind.AtTermSeq < n.committed.PolicySeq() {
 		return reject()
 	}
 
@@ -273,7 +273,7 @@ func (n *PoolerNode) handleRecruit(ind RecruitIndicator) ([]Request, bool) {
 		return []Request{RecruitResponseRequest{
 			RequestCorrelation: RequestCorrelation{CorrelationID: ind.CorrelationID},
 			Accepted:           true,
-			Rules:              n.committed.Rules,
+			Term:               n.committed.Term,
 		}}, false
 	case ind.ProposedSeq > c.ProposedSeq:
 		// Different coordinator (or same with strictly higher target): supersedes.
@@ -284,7 +284,7 @@ func (n *PoolerNode) handleRecruit(ind RecruitIndicator) ([]Request, bool) {
 	newState := n.committed
 	newState.Commitment = &RecruitmentCommitment{
 		CoordID:     ind.CoordID,
-		AtRulesSeq:  ind.AtRulesSeq,
+		AtTermSeq:   ind.AtTermSeq,
 		ProposedSeq: ind.ProposedSeq,
 	}
 	if err := n.storage.Save(newState); err != nil {
@@ -309,7 +309,7 @@ func (n *PoolerNode) handleRevokeParticipationResponse(ind RevokeParticipationRe
 	return []Request{RecruitResponseRequest{
 		RequestCorrelation: RequestCorrelation{CorrelationID: ind.CorrelationID},
 		Accepted:           ind.Accepted,
-		Rules:              n.committed.Rules,
+		Term:               n.committed.Term,
 	}}
 }
 
