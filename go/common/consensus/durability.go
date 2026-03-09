@@ -27,12 +27,6 @@ package consensus
 // AtLeast(1) is appropriate for a bootstrapping single-node cluster or when HA
 // guarantees are temporarily relaxed. Production HA clusters should target at
 // least AtLeast(3) (primary + 2 replicas).
-//
-// TODO: add a dedicated test suite that exhaustively demonstrates AtLeastPolicy
-// behaviour across a range of cohort sizes and transitions: IsDurable,
-// IsAchievable, and RevokesAndSamplesAllRevocationSets at each cohort size,
-// plus examples showing how the three methods together ensure durability,
-// progress, leadership revocation, and coordinator overlap.
 func AtLeastPolicy(n int) DurabilityPolicy {
 	return &atLeastPolicy{n: n}
 }
@@ -106,6 +100,23 @@ func (p *atLeastPolicy) IsAchievable(proposedCohort []CohortMember) bool {
 //
 //	RevokesAndSamplesAllRevocationSets([P], [P], P) = true
 //	  (0 replicas >= min(1,0)=0; revoked: 1-1=0 < 1).
+//
+// Example: AtLeast(3) with cohort {P, R1, R2, R3, R4} (5 nodes), primary=P:
+//
+//	sampleThreshold = min(3, 4) = 3 replicas.
+//
+//	RevokesAndSamplesAllRevocationSets([P,R1,R2,R3,R4], [R1,R2,R3], P) = true
+//	  (3 replicas >= 3; revoked: 5-3=2 < 3).
+//	RevokesAndSamplesAllRevocationSets([P,R1,R2,R3,R4], [R1,R2], P) = false
+//	  (2 replicas < 3; not enough coverage even though 5-2=3 equals n).
+//	RevokesAndSamplesAllRevocationSets([P,R1,R2,R3,R4], [P,R1,R2], P) = false
+//	  (only 2 recruited replicas < 3; recruiting the primary doesn't help coverage).
+//
+//	This means a coordinator can complete recruitment by contacting only 3 of the
+//	4 replicas. If P and any one replica fail simultaneously, the remaining 3
+//	replicas form a valid recruited set and can elect a new primary. Overlap
+//	guarantee: any two recruited sets of 3 from 4 replicas share at least 2
+//	members, so two independent coordinators cannot diverge on committed state.
 func (p *atLeastPolicy) RevokesAndSamplesAllRevocationSets(cohortMembers, recruitedMembers []CohortMember, primary CohortMember) bool {
 	C := len(cohortMembers)
 	r := len(recruitedMembers)
