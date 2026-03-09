@@ -52,7 +52,7 @@ import (
 // processing PoolerStatusIndicator and PoolerDiscoveredIndicator updates.
 type CoordNode struct {
 	id           NodeID
-	targetPolicy AckPolicy // nil = manual mode
+	targetPolicy DurabilityPolicy // nil = manual mode
 
 	// known tracks each pooler the coord has been told about. Values are
 	// updated each time a PoolerStatusIndicator arrives.
@@ -83,9 +83,9 @@ type pendingPolicyWrite struct {
 }
 
 // NewCoordNode creates a coordinator node.
-// targetPolicy is the desired AckPolicy to work toward as the cohort
-// grows (e.g. AnyNPolicy(2) for a 3-node HA cluster).
-func NewCoordNode(id NodeID, targetPolicy AckPolicy) *CoordNode {
+// targetPolicy is the desired DurabilityPolicy to work toward as the cohort
+// grows (e.g. AtLeastPolicy(3) for a 3-node HA cluster).
+func NewCoordNode(id NodeID, targetPolicy DurabilityPolicy) *CoordNode {
 	return &CoordNode{
 		id:           id,
 		targetPolicy: targetPolicy,
@@ -104,9 +104,9 @@ func (c *CoordNode) SetHealthTimeout(ticks int64) {
 // computed from accumulated PoolerStatusIndicators.
 type ClusterView struct {
 	// HighestQuorumRules is the highest-Seq DurabilityRules for which the
-	// coordinator has confirmed a write quorum: enough non-primary cohort
-	// members have reported applying this version (or a later one) to satisfy
-	// the rules' AckPolicy. This is the last known-good state of the cluster.
+	// coordinator has confirmed a write quorum: enough cohort members have
+	// reported applying this version (or a later one) to satisfy the rules'
+	// DurabilityPolicy. This is the last known-good state of the cluster.
 	// Nil if no version has confirmed quorum.
 	HighestQuorumRules *DurabilityRules
 
@@ -183,7 +183,7 @@ func (c *CoordNode) computeRulesVersions() (highestSeen, highestQuorum *Durabili
 		if !ok {
 			continue // coordinator has not seen this version
 		}
-		if c.hasWriteQuorum(r) {
+		if c.isDurable(r) {
 			highestQuorum = r
 			break
 		}
@@ -191,37 +191,23 @@ func (c *CoordNode) computeRulesVersions() (highestSeen, highestQuorum *Durabili
 	return highestSeen, highestQuorum
 }
 
-// hasWriteQuorum returns true if enough non-primary cohort members have reported
-// applying rules.Seq (or a later version) to satisfy rules.Policy.IsWriteQuorum.
-// A version is provably durable when enough replicas have confirmed receiving it,
-// mirroring the write-quorum check the primary uses when committing WAL entries.
-//
-// Note: for a 1-node cluster with AnyN(0), no replicas exist and supporting
-// will be empty; AnyNPolicy(0).IsWriteQuorum(nil) returns true (0 >= 0) as
-// expected — no acks are needed for AnyN(0).
-//
-// TODO: revisit AckPolicy interface to thread primary confirmation through quorum
-// checks. For coordinator-led rule changes the primary must also have the write;
-// for AnyN(0) the primary alone constitutes quorum. IsWriteQuorum currently only
-// counts replicas, which is correct for the normal write path but not for the
-// coordinator's view of coordinator-issued rule writes. A clean solution may be
-// passing a primaryHasWrite bool into IsWriteQuorum, or using a separate pre-check.
-func (c *CoordNode) hasWriteQuorum(rules *DurabilityRules) bool {
+// isDurable returns true if enough cohort members have reported applying
+// rules.Seq (or a later version) to satisfy rules.Policy.IsDurable. The primary
+// is included in the acking set since it commits locally before propagating via
+// WAL — this correctly handles AtLeast(1) where the primary alone is sufficient.
+func (c *CoordNode) isDurable(rules *DurabilityRules) bool {
 	if rules.Policy == nil {
-		return true // nil policy = AnyN(0): no replica acks needed
+		return true // nil policy: no acks needed
 	}
-	var supporting []CohortMember
+	var acking []CohortMember
 	for _, m := range rules.Members {
-		if m.ID == rules.Primary {
-			continue // primary does not self-ack as a replica
-		}
 		p, ok := c.known[m.ID]
 		if !ok || p.state.Rules == nil || p.state.Rules.Seq < rules.Seq {
 			continue
 		}
-		supporting = append(supporting, m)
+		acking = append(acking, m)
 	}
-	return rules.Policy.IsWriteQuorum(supporting)
+	return rules.Policy.IsDurable(rules.Members, acking)
 }
 
 // isHealthy returns true if a pooler is currently considered reachable.
@@ -392,11 +378,13 @@ func (c *CoordNode) observers(currentRules *DurabilityRules) []CohortMember {
 }
 
 // policyForMembers returns the best achievable policy for the given cohort,
-// capped at the configured target policy. Uses AnyNPolicy(len(members)-1) as
-// the intermediate policy when the target is not yet achievable.
-func (c *CoordNode) policyForMembers(members []CohortMember) AckPolicy {
+// capped at the configured target policy. Uses AtLeastPolicy(len(members)) as
+// the intermediate policy when the target is not yet achievable: it requires
+// all current members to ack, providing the strongest guarantee possible until
+// the target policy becomes achievable.
+func (c *CoordNode) policyForMembers(members []CohortMember) DurabilityPolicy {
 	if c.targetPolicy.IsAchievable(members) {
 		return c.targetPolicy
 	}
-	return AnyNPolicy(len(members) - 1)
+	return AtLeastPolicy(len(members))
 }

@@ -424,10 +424,10 @@ type PostgresApplier struct {
 
 // updateSyncStandbyNames updates synchronous_standby_names and reloads postgres
 // to reflect the new cohort and policy. The value uses the postgres 'ANY n (...)'
-// syntax that AnyNPolicy maps to naturally.
+// syntax that AtLeastPolicy maps to naturally (ANY n = AtLeastThreshold()-1).
 //
-// AnyN(0) or an empty standby list produces ” (no synchronous replication).
-// AnyN(n) with standbys produces 'ANY n (node1,node2,...)'.
+// AtLeast(1) or an empty standby list produces “” (no synchronous replication).
+// AtLeast(n+1) with standbys produces 'ANY n (node1,node2,...)'.
 func (pg *PostgresApplier) updateSyncStandbyNames(ctx context.Context, rules consensus.DurabilityRules) error {
 	val, err := syncStandbyNamesValue(rules)
 	if err != nil {
@@ -471,13 +471,16 @@ func (pg *PostgresApplier) insertRulesRecord(ctx context.Context, rules consensu
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 // syncStandbyNamesValue returns the postgres synchronous_standby_names value for
-// the given rules. Assumes AnyN policy; returns an error for unsupported types.
+// the given rules. Assumes AtLeastPolicy; returns an error for unsupported types.
+// The postgres ANY N value equals AtLeastThreshold()-1 because postgres counts
+// replica ACKs while AtLeastPolicy counts total node ACKs (primary + replicas).
 func syncStandbyNamesValue(rules consensus.DurabilityRules) (string, error) {
-	at, ok := rules.Policy.(ackThresholder)
+	at, ok := rules.Policy.(atLeastThresholder)
 	if !ok {
-		return "", fmt.Errorf("unsupported AckPolicy type %T", rules.Policy)
+		return "", fmt.Errorf("unsupported DurabilityPolicy type %T", rules.Policy)
 	}
-	n := at.AckThreshold()
+	// AtLeastThreshold includes the primary; postgres ANY N counts only replicas.
+	n := at.AtLeastThreshold() - 1
 
 	var standbys []string
 	for _, m := range rules.Members {

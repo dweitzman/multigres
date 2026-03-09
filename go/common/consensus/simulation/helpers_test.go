@@ -69,17 +69,18 @@ func newReplicaPooler(id, primaryID consensus.NodeID, sim *simType) *SimPooler {
 
 // --- Helpers ---
 
-// anyNThreshold returns the ack threshold of an AnyN policy via a structural
-// interface cast. Returns (0, false) if the policy does not expose AckThreshold.
-func anyNThreshold(p consensus.AckPolicy) (int, bool) {
-	type ackThresholder interface {
-		AckThreshold() int
+// atLeastThreshold returns the AtLeast threshold of an AtLeastPolicy via a
+// structural interface cast. Returns (0, false) if the policy does not expose
+// AtLeastThreshold.
+func atLeastThreshold(p consensus.DurabilityPolicy) (int, bool) {
+	type atLeastThresholder interface {
+		AtLeastThreshold() int
 	}
-	a, ok := p.(ackThresholder)
+	a, ok := p.(atLeastThresholder)
 	if !ok {
 		return 0, false
 	}
-	return a.AckThreshold(), true
+	return a.AtLeastThreshold(), true
 }
 
 // simPoolerByID looks up a SimPooler by node ID in the simulator.
@@ -97,20 +98,20 @@ func simPoolerByID(sim *simType, id consensus.NodeID) *SimPooler {
 // allHaveAppliedRules is true when every pooler in the set satisfies all of:
 //
 //  1. Committed rules have exactly the expected cohort members (any order).
-//  2. Committed rules use an AnyN(wantAnyN) policy.
-//  3. For the primary: syncStandbys equals cohort minus self, and syncPolicy is AnyN(wantAnyN).
+//  2. Committed rules use an AtLeast(wantAtLeast) policy.
+//  3. For the primary: syncStandbys equals cohort minus self, and syncPolicy is AtLeast(wantAtLeast).
 //  4. For replicas: primaryConnInfo matches the committed primary.
 //
 // This checks not only that the rules were written and persisted, but that the
 // corresponding replication settings were applied consistently.
 type allHaveAppliedRules struct {
-	poolers  []*SimPooler
-	members  []consensus.NodeID
-	wantAnyN int
+	poolers     []*SimPooler
+	members     []consensus.NodeID
+	wantAtLeast int
 }
 
 func (c *allHaveAppliedRules) Name() string {
-	return fmt.Sprintf("all_have_applied_rules{cohort=%v anyN=%d}", c.members, c.wantAnyN)
+	return fmt.Sprintf("all_have_applied_rules{cohort=%v atLeast=%d}", c.members, c.wantAtLeast)
 }
 
 func (c *allHaveAppliedRules) Eval(_ *simType) bool {
@@ -132,8 +133,8 @@ func (c *allHaveAppliedRules) Eval(_ *simType) bool {
 				return false
 			}
 		}
-		n, ok := anyNThreshold(rules.Policy)
-		if !ok || n != c.wantAnyN {
+		n, ok := atLeastThreshold(rules.Policy)
+		if !ok || n != c.wantAtLeast {
 			return false
 		}
 
@@ -155,8 +156,8 @@ func (c *allHaveAppliedRules) Eval(_ *simType) bool {
 			if !slices.Equal(gotStandbys, expectedStandbys) {
 				return false
 			}
-			sn, sok := anyNThreshold(sp.gucSyncPolicy)
-			if !sok || sn != c.wantAnyN {
+			sn, sok := atLeastThreshold(sp.gucSyncPolicy)
+			if !sok || sn != c.wantAtLeast {
 				return false
 			}
 		case consensus.RoleReplica:

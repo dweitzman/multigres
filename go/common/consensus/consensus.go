@@ -95,46 +95,127 @@ func (s PostgresStatus) String() string {
 
 // NodeProperties holds static attributes of a pooler node that remain fixed for the
 // lifetime of that node ID. Provided at startup (e.g. command-line flags) and used
-// by AckPolicy implementations for zone-aware or topology-aware quorum decisions.
+// by DurabilityPolicy implementations for zone-aware or topology-aware quorum decisions.
 type NodeProperties struct {
 	Zone string
 }
 
 // CohortMember pairs a pooler's identity with its static properties. Storing both
-// together in DurabilityRules.Members means AckPolicy implementations always have
-// all the information they need without a separate property lookup.
+// together in DurabilityRules.Members means DurabilityPolicy implementations always
+// have all the information they need without a separate property lookup.
 type CohortMember struct {
 	ID         NodeID
 	Properties NodeProperties
 }
 
-// AckPolicy determines when writes are considered durable.
-// It is stored in DurabilityRules alongside the cohort membership.
-type AckPolicy interface {
-	// IsWriteQuorum returns true if the set of acknowledging sync replicas is
+// DurabilityPolicy determines when transactions are considered durable, when a policy
+// change is achievable, and when a coordinator's recruitment of nodes is sufficient
+// to both revoke leadership and guarantee overlap with any competing coordinator.
+//
+// The three methods each serve a distinct purpose in the consensus protocol:
+//
+//   - IsDurable: used by the primary (or coordinator) to evaluate whether a transaction
+//     has received enough acknowledgements from the cohort.
+//   - IsAchievable: used by the coordinator before issuing a rule change to verify
+//     the proposed cohort can satisfy the policy, preventing an impossible rule change
+//     from hanging forever.
+//   - RevokesAndSamplesAllRevocationSets: used during coordinator-led rule changes to determine
+//     whether enough nodes have been recruited to both revoke the current primary's write
+//     ability and guarantee that any two coordinators satisfying this property share at
+//     least one recruited node (enabling sequencing of competing coordinator elections).
+type DurabilityPolicy interface {
+	// IsDurable returns true if the set of acknowledging cohort members is
 	// sufficient to consider a write durable under this policy.
-	IsWriteQuorum(ackingReplicas []CohortMember) bool
-
-	// IsAchievable returns true if this policy can be satisfied with the given
-	// cohort. Implementations may use member properties (e.g. zone distribution)
-	// as needed.
-	IsAchievable(cohort []CohortMember) bool
-
-	// IsRevoked returns true when every leader in leaders has had its
-	// leadership revoked by the recruited set.
 	//
-	// A leader's leadership is considered revoked when either:
-	//   - the leader is in recruited (it has committed to the coordinator
-	//     and will not write unilaterally), or
-	//   - no subset of non-recruited replicas (allMembers \ {leader} \
-	//     recruited) can satisfy this policy (so no durable write is
-	//     possible without the coordinator's knowledge).
+	// ackingMembers should include every cohort member that has confirmed the
+	// write: both the primary (which always commits locally before acking) and
+	// any replicas that have streamed and applied the WAL entry. Including the
+	// primary enables policies that count the primary as part of the quorum
+	// (e.g. AtLeast(1): any single node having the write is sufficient).
 	//
-	// Pass a single known primary to check one specific leadership.
-	// Pass all cohort members as leaders to check whether all possible
-	// leaderships are revoked (used during emergency failover when the
-	// true primary is unknown).
-	IsRevoked(allMembers, recruited, leaders []CohortMember) bool
+	// Examples for a 3-node cohort {primary, R1, R2}:
+	//   AtLeast(1): IsDurable([P,R1,R2], [P]) = true  (primary alone is enough)
+	//   AtLeast(2): IsDurable([P,R1,R2], [P]) = false (need primary + one replica)
+	//   AtLeast(2): IsDurable([P,R1,R2], [R1,R2]) = true (stale primary + two replicas is durable -- this could happen after a primary crash or during coordinator-led rule propagation if the primary is unreachable)
+	//   AtLeast(2): IsDurable([P,R1,R2], [P,R1]) = true
+	//   AtLeast(3): IsDurable([P,R1,R2], [P,R1]) = false (all three required)
+	IsDurable(cohortMembers, ackingMembers []CohortMember) bool
+
+	// IsAchievable returns true if this policy can ever be satisfied with the
+	// proposed cohort. Implementations may use member properties (e.g. zone
+	// distribution) as needed.
+	//
+	// The coordinator calls IsAchievable before writing new DurabilityRules to
+	// avoid committing a configuration the cluster can never satisfy. For
+	// example, AtLeast(3) with only 2 proposed members would never reach quorum —
+	// writing such rules would leave the cluster permanently stuck waiting for an
+	// ack that can never arrive.
+	//
+	// Example:
+	//   AtLeast(3).IsAchievable([P, R1]) = false  (only 2 members; need 3)
+	//   AtLeast(3).IsAchievable([P, R1, R2]) = true
+	IsAchievable(proposedCohort []CohortMember) bool
+
+	// RevokesAndSamplesAllRevocationSets returns true when the recruited set
+	// simultaneously satisfies two properties required for safe emergency failover:
+	//
+	//  1. Revocation: the primary can no longer form a durable write, because even
+	//     if every non-recruited cohort member acks, IsDurable is not satisfied.
+	//     Formally: !IsDurable(cohort, cohort \ recruited).
+	//
+	//  2. Coverage: the recruited set samples at least one node from every minimal
+	//     revocation set — the smallest subsets of the cohort that, when recruited,
+	//     achieve revocation — excluding the primary-only minimal revocation set
+	//     (see convention below). This guarantees that any two coordinators that
+	//     both satisfy RevokesAndSamplesAllRevocationSets must have recruited at
+	//     least one replica in common, enabling the cluster to sequence competing
+	//     coordinators (the one whose recruitment the shared replica accepted first
+	//     wins).
+	//
+	// Why both properties are needed:
+	//
+	// Revocation alone is insufficient: two coordinators could each recruit a
+	// disjoint set of nodes that individually revokes the primary, but the
+	// coordinators would have no shared node to establish ordering. Example for
+	// AtLeast(3) with cohort {P, R1, R2}: recruiting either {R1} or {R2} revokes P
+	// (leaving only 2 acking nodes, fewer than 3). Two coordinators could revoke P
+	// independently without ever visiting the same node, making it impossible to
+	// determine which coordinator's proposed rules should win.
+	//
+	// Coverage alone is insufficient: it does not guarantee the primary is actually
+	// unable to write.
+	//
+	// Convention — primary excluded from coverage:
+	//
+	// Emergency failover is triggered precisely because the primary is unreachable.
+	// Technically, recruiting only the primary would revoke its write ability
+	// (it stops accepting writes), but if the primary alone constitutes a valid
+	// coverage set, two coordinators would be required to contact the primary
+	// to touch overlapping node during revocation — yet neither could reach it in
+	// the first place.
+	// By convention, only replicas (non-primary cohort members) are counted when
+	// evaluating the coverage criterion. This ensures two valid recruited sets must
+	// share at least one reachable replica, providing a meaningful ordering anchor.
+	//
+	// The primary parameter identifies which cohort member is the current primary
+	// so that it can be excluded from the coverage check.
+	//
+	// Example for AtLeast(3), cohort {P, R1, R2} (3 nodes, need all 3 to ack):
+	//   Minimal revocation sets: {P}, {R1}, {R2} (each singleton revokes).
+	//   {P} is excluded from coverage (primary-only set, per convention above).
+	//   RevokesAndSamplesAllRevocationSets([P,R1,R2], [R1], P) = false
+	//     (R1 alone revokes P, but does not cover {R2}).
+	//   RevokesAndSamplesAllRevocationSets([P,R1,R2], [R1,R2], P) = true
+	//     (both replicas recruited — revoked and all non-primary sets covered).
+	//
+	// Example for AtLeast(2), cohort {P, R1, R2} (3 nodes, need any 2 to ack):
+	//   Minimal revocation sets: {P,R1}, {P,R2}, {R1,R2} (size-2 subsets).
+	//   None are primary-only, so all three must be covered.
+	//   RevokesAndSamplesAllRevocationSets([P,R1,R2], [R1], P) = false
+	//     (P+R2 can still ack — not revoked).
+	//   RevokesAndSamplesAllRevocationSets([P,R1,R2], [R1,R2], P) = true
+	//     (both replicas recruited — revoked and all minimal sets covered via replicas).
+	RevokesAndSamplesAllRevocationSets(cohortMembers, recruitedMembers []CohortMember, primary CohortMember) bool
 }
 
 // DurabilityRules is a versioned record of the cluster's durability configuration.
@@ -162,8 +243,8 @@ type DurabilityRules struct {
 	// to participate in an emergency failover vote.
 	Members []CohortMember
 
-	// Policy determines how many sync-replica ACKs are required for durability.
-	Policy AckPolicy
+	// Policy determines the durability requirements for writes and failover.
+	Policy DurabilityPolicy
 }
 
 // RecruitmentCommitment is the durable record of a pooler's commitment to a

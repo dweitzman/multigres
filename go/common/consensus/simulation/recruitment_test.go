@@ -88,7 +88,7 @@ func TestRecruitRejection(t *testing.T) {
 		Seq:     1,
 		Primary: node1ID,
 		Members: []consensus.CohortMember{{ID: node1ID}},
-		Policy:  consensus.AnyNPolicy(0),
+		Policy:  consensus.AtLeastPolicy(1),
 	}
 	pooler1 := newPrimaryPooler(node1ID, seedRules, sim)
 	sim.RegisterNode(pooler1)
@@ -147,7 +147,7 @@ func TestRecruitIdempotent(t *testing.T) {
 		Seq:     1,
 		Primary: node1ID,
 		Members: []consensus.CohortMember{{ID: node1ID}},
-		Policy:  consensus.AnyNPolicy(0),
+		Policy:  consensus.AtLeastPolicy(1),
 	}
 	pooler1 := newPrimaryPooler(node1ID, seedRules, sim)
 	sim.RegisterNode(pooler1)
@@ -216,23 +216,23 @@ func TestRecruitRevokesParticipation(t *testing.T) {
 		Seq:     1,
 		Primary: node1ID,
 		Members: []consensus.CohortMember{{ID: node1ID}},
-		Policy:  consensus.AnyNPolicy(0),
+		Policy:  consensus.AtLeastPolicy(1),
 	}
 	pooler1 := newPrimaryPooler(node1ID, seedRules, sim)
 	pooler2 := newReplicaPooler(node2ID, node1ID, sim)
 	sim.RegisterNode(pooler1)
 	sim.RegisterNode(pooler2)
-	// Coordinator with AnyN(1) target expands the cohort automatically.
-	coord := NewSimCoordNode(consensus.NewCoordNode(coordID, consensus.AnyNPolicy(1)), sim)
+	// Coordinator with AtLeast(2) target expands the cohort automatically.
+	coord := NewSimCoordNode(consensus.NewCoordNode(coordID, consensus.AtLeastPolicy(2)), sim)
 	sim.RegisterNode(coord)
 
 	th := dstsim.NewSimulationTestHelper(t, sim)
 
-	// Expand to a two-node AnyN(1) cohort first so the primary requires node2's ACK.
+	// Expand to a two-node AtLeast(2) cohort first so the primary requires node2's ACK.
 	th.RequireWithinTicks(&allHaveAppliedRules{
-		poolers:  []*SimPooler{pooler1, pooler2},
-		members:  []consensus.NodeID{node1ID, node2ID},
-		wantAnyN: 1,
+		poolers:     []*SimPooler{pooler1, pooler2},
+		members:     []consensus.NodeID{node1ID, node2ID},
+		wantAtLeast: 2,
 	}, 200)
 	// After expansion the committed rules are at Seq=2.
 	require.Equal(t, int64(2), pooler1.Node().CommittedState().PolicySeq())
@@ -253,7 +253,7 @@ func TestRecruitRevokesParticipation(t *testing.T) {
 			Seq:     3,
 			Primary: node1ID,
 			Members: []consensus.CohortMember{{ID: node1ID}, {ID: node2ID}},
-			Policy:  consensus.AnyNPolicy(1),
+			Policy:  consensus.AtLeastPolicy(2),
 		},
 	}, func(_ consensus.WritePolicyResponseRequest) {
 		writeCallbackCalled = true

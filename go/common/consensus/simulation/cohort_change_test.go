@@ -54,7 +54,7 @@ func policyWriteCondition(
 	seq int64,
 	primary consensus.NodeID,
 	members []consensus.CohortMember,
-	policy consensus.AckPolicy,
+	policy consensus.DurabilityPolicy,
 	wantAccepted bool,
 ) *policyWriteResponse {
 	cond := &policyWriteResponse{seq: seq, wantAccepted: wantAccepted}
@@ -81,9 +81,9 @@ func policyWriteCondition(
 // test itself.
 //
 // Stages:
-//  1. Expand: add node2 and node3 simultaneously with AnyN(0).
-//  2. Policy upgrade: change to AnyN(1).
-//  3. Policy downgrade: change back to AnyN(0).
+//  1. Expand: add node2 and node3 simultaneously with AtLeast(1).
+//  2. Policy upgrade: change to AtLeast(2).
+//  3. Policy downgrade: change back to AtLeast(1).
 //  4. Shrink: remove node2 and node3, returning to a 1-node cohort.
 func TestCohortChange(t *testing.T) {
 	const (
@@ -100,7 +100,7 @@ func TestCohortChange(t *testing.T) {
 		Seq:     1,
 		Primary: node1ID,
 		Members: []consensus.CohortMember{{ID: node1ID}},
-		Policy:  consensus.AnyNPolicy(0),
+		Policy:  consensus.AtLeastPolicy(1),
 	}
 	pooler1 := newPrimaryPooler(node1ID, seedRules, sim)
 	sim.RegisterNode(pooler1)
@@ -125,35 +125,35 @@ func TestCohortChange(t *testing.T) {
 		{ID: node3ID},
 	}
 
-	// Stage 1: add node2 and node3 simultaneously with AnyN(0).
+	// Stage 1: add node2 and node3 simultaneously with AtLeast(1).
 	th.RequireWithinTicks(dstsim.And(
-		&allHaveAppliedRules{poolers: allPoolers, members: allMembers, wantAnyN: 0},
-		policyWriteCondition(pooler1, 2, node1ID, allMembersFull, consensus.AnyNPolicy(0), true),
+		&allHaveAppliedRules{poolers: allPoolers, members: allMembers, wantAtLeast: 1},
+		policyWriteCondition(pooler1, 2, node1ID, allMembersFull, consensus.AtLeastPolicy(1), true),
 	), 200)
 
-	// Stage 2: upgrade durability policy to AnyN(1).
+	// Stage 2: upgrade durability policy to AtLeast(2).
 	th.RequireWithinTicks(dstsim.And(
-		&allHaveAppliedRules{poolers: allPoolers, members: allMembers, wantAnyN: 1},
-		policyWriteCondition(pooler1, 3, node1ID, allMembersFull, consensus.AnyNPolicy(1), true),
+		&allHaveAppliedRules{poolers: allPoolers, members: allMembers, wantAtLeast: 2},
+		policyWriteCondition(pooler1, 3, node1ID, allMembersFull, consensus.AtLeastPolicy(2), true),
 	), 200)
 
-	// Stage 3: downgrade policy back to AnyN(0).
+	// Stage 3: downgrade policy back to AtLeast(1).
 	// The effective sync settings approach ensures the write uses the old
-	// AnyN(1) quorum before relaxing to AnyN(0).
+	// AtLeast(2) quorum before relaxing to AtLeast(1).
 	th.RequireWithinTicks(dstsim.And(
-		&allHaveAppliedRules{poolers: allPoolers, members: allMembers, wantAnyN: 0},
-		policyWriteCondition(pooler1, 4, node1ID, allMembersFull, consensus.AnyNPolicy(0), true),
+		&allHaveAppliedRules{poolers: allPoolers, members: allMembers, wantAtLeast: 1},
+		policyWriteCondition(pooler1, 4, node1ID, allMembersFull, consensus.AtLeastPolicy(1), true),
 	), 200)
 
 	// Stage 4: shrink cohort to just node1, removing node2 and node3.
 	// The primary applies effective sync settings (empty intersection of current
 	// standbys and new members) before the write so removed nodes cannot ack
-	// their own removal. Since effective policy is AnyN(0), the write is
+	// their own removal. Since effective policy is AtLeast(1), the write is
 	// immediately durable. node2 and node3 continue streaming WAL and apply
 	// the removal record, updating their committed rules to the 1-node cohort.
 	th.RequireWithinTicks(dstsim.And(
-		&allHaveAppliedRules{poolers: allPoolers, members: []consensus.NodeID{node1ID}, wantAnyN: 0},
-		policyWriteCondition(pooler1, 5, node1ID, []consensus.CohortMember{{ID: node1ID}}, consensus.AnyNPolicy(0), true),
+		&allHaveAppliedRules{poolers: allPoolers, members: []consensus.NodeID{node1ID}, wantAtLeast: 1},
+		policyWriteCondition(pooler1, 5, node1ID, []consensus.CohortMember{{ID: node1ID}}, consensus.AtLeastPolicy(1), true),
 	), 200)
 }
 
@@ -174,7 +174,7 @@ func TestPolicyWriteRejection(t *testing.T) {
 		Seq:     1,
 		Primary: node1ID,
 		Members: []consensus.CohortMember{{ID: node1ID}},
-		Policy:  consensus.AnyNPolicy(0),
+		Policy:  consensus.AtLeastPolicy(1),
 	}
 	pooler1 := newPrimaryPooler(node1ID, seedRules, sim)
 	pooler2 := newReplicaPooler(node2ID, node1ID, sim)
@@ -186,7 +186,7 @@ func TestPolicyWriteRejection(t *testing.T) {
 
 	// Case 1: CAS mismatch — seq=99 when primary expects seq=2.
 	th.RequireWithinTicks(
-		policyWriteCondition(pooler1, 99, node1ID, []consensus.CohortMember{{ID: node1ID}}, consensus.AnyNPolicy(0), false),
+		policyWriteCondition(pooler1, 99, node1ID, []consensus.CohortMember{{ID: node1ID}}, consensus.AtLeastPolicy(1), false),
 		10,
 	)
 	require.Equal(t, int64(1), pooler1.Node().CommittedState().PolicySeq(),
@@ -194,15 +194,15 @@ func TestPolicyWriteRejection(t *testing.T) {
 
 	// Case 2: write to a replica — replicas reject direct WAL writes.
 	th.RequireWithinTicks(
-		policyWriteCondition(pooler2, 2, node1ID, []consensus.CohortMember{{ID: node1ID}}, consensus.AnyNPolicy(0), false),
+		policyWriteCondition(pooler2, 2, node1ID, []consensus.CohortMember{{ID: node1ID}}, consensus.AtLeastPolicy(1), false),
 		10,
 	)
 	require.Nil(t, pooler2.Node().CommittedState().Rules,
 		"replica state must not change after write rejection")
 
-	// Case 3: unachievable policy — AnyN(3) requires 4 nodes, but cohort has 1.
+	// Case 3: unachievable policy — AtLeast(4) requires 4 nodes, but cohort has 1.
 	th.RequireWithinTicks(
-		policyWriteCondition(pooler1, 2, node1ID, []consensus.CohortMember{{ID: node1ID}}, consensus.AnyNPolicy(3), false),
+		policyWriteCondition(pooler1, 2, node1ID, []consensus.CohortMember{{ID: node1ID}}, consensus.AtLeastPolicy(4), false),
 		10,
 	)
 	require.Equal(t, int64(1), pooler1.Node().CommittedState().PolicySeq(),

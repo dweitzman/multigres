@@ -111,9 +111,9 @@ func (f *AtomicStateFile) Load() (consensus.PoolerPersistentState, error) {
 
 // ── JSON encoding ─────────────────────────────────────────────────────────────
 //
-// DurabilityRules embeds AckPolicy, which is an interface. We flatten it for
-// JSON: the production code only uses AnyNPolicy so we store the threshold
-// directly. If a non-AnyN policy is ever encountered, Save returns an error to
+// DurabilityRules embeds DurabilityPolicy, which is an interface. We flatten it for
+// JSON: the production code only uses AtLeastPolicy so we store the threshold
+// directly. If a non-AtLeast policy is ever encountered, Save returns an error to
 // surface the gap rather than silently losing policy information.
 
 type stateJSON struct {
@@ -127,13 +127,14 @@ type rulesJSON struct {
 	Seq     int64                    `json:"seq"`
 	Primary consensus.NodeID         `json:"primary"`
 	Members []consensus.CohortMember `json:"members"`
-	// AnyN is the AckThreshold for the AnyN policy. Only AnyN is supported in
-	// production; if we ever need other policy shapes, add a discriminant here.
-	AnyN int `json:"any_n"`
+	// AtLeast is the AtLeastThreshold for the AtLeast policy. Only AtLeastPolicy
+	// is supported in production; if we ever need other policy shapes, add a
+	// discriminant here.
+	AtLeast int `json:"at_least"`
 }
 
-type ackThresholder interface {
-	AckThreshold() int
+type atLeastThresholder interface {
+	AtLeastThreshold() int
 }
 
 func marshalState(state consensus.PoolerPersistentState) ([]byte, error) {
@@ -143,15 +144,15 @@ func marshalState(state consensus.PoolerPersistentState) ([]byte, error) {
 		Commitment: state.Commitment,
 	}
 	if state.Rules != nil {
-		at, ok := state.Rules.Policy.(ackThresholder)
+		at, ok := state.Rules.Policy.(atLeastThresholder)
 		if !ok {
-			return nil, fmt.Errorf("unsupported AckPolicy type %T: only AnyNPolicy is supported in production", state.Rules.Policy)
+			return nil, fmt.Errorf("unsupported DurabilityPolicy type %T: only AtLeastPolicy is supported in production", state.Rules.Policy)
 		}
 		js.Rules = &rulesJSON{
 			Seq:     state.Rules.Seq,
 			Primary: state.Rules.Primary,
 			Members: state.Rules.Members,
-			AnyN:    at.AckThreshold(),
+			AtLeast: at.AtLeastThreshold(),
 		}
 	}
 	return json.Marshal(js)
@@ -172,7 +173,7 @@ func unmarshalState(data []byte) (consensus.PoolerPersistentState, error) {
 			Seq:     js.Rules.Seq,
 			Primary: js.Rules.Primary,
 			Members: js.Rules.Members,
-			Policy:  consensus.AnyNPolicy(js.Rules.AnyN),
+			Policy:  consensus.AtLeastPolicy(js.Rules.AtLeast),
 		}
 	}
 	return state, nil

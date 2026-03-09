@@ -88,56 +88,57 @@ type pendingRuleChange struct {
 	// before the pipeline began. Saved so they can be restored if the CAS
 	// fails in the writeWAL phase.
 	originalStandbys []consensus.CohortMember
-	originalPolicy   consensus.AckPolicy
+	originalPolicy   consensus.DurabilityPolicy
 
 	// combinedStandbys and combinedPolicy are used during the combinedGUC and
 	// awaitQuorum phases: union of old+new standbys, conjunctive bothPolicy.
 	combinedStandbys []consensus.CohortMember
-	combinedPolicy   consensus.AckPolicy
+	combinedPolicy   consensus.DurabilityPolicy
 
 	// finalStandbys and finalPolicy are applied in the finalGUC phase: the new
 	// standbys and new policy from the incoming rules.
 	finalStandbys []consensus.CohortMember
-	finalPolicy   consensus.AckPolicy
+	finalPolicy   consensus.DurabilityPolicy
 }
 
-// bothPolicy is a conjunctive AckPolicy used during cohort transitions.
+// bothPolicy is a conjunctive DurabilityPolicy used during cohort transitions.
 // A write is considered durable only when the old policy is satisfied among
-// the old standbys AND the new policy is satisfied among the new standbys.
-// IsWriteQuorum filters the acking set through each policy's standby scope
+// the old cohort AND the new policy is satisfied among the new cohort.
+// IsDurable filters the acking set through each policy's cohort scope
 // independently via memberIntersect.
 type bothPolicy struct {
-	oldPolicy   consensus.AckPolicy
+	primary     consensus.CohortMember
+	oldPolicy   consensus.DurabilityPolicy
 	oldStandbys []consensus.CohortMember
-	newPolicy   consensus.AckPolicy
+	newPolicy   consensus.DurabilityPolicy
 	newStandbys []consensus.CohortMember
 }
 
-func (b *bothPolicy) IsWriteQuorum(acking []consensus.CohortMember) bool {
-	return b.oldPolicy.IsWriteQuorum(memberIntersect(acking, b.oldStandbys)) &&
-		b.newPolicy.IsWriteQuorum(memberIntersect(acking, b.newStandbys))
+func (b *bothPolicy) IsDurable(cohortMembers, ackingMembers []consensus.CohortMember) bool {
+	// Build each sub-cohort as primary + standbys.
+	oldCohort := append([]consensus.CohortMember{b.primary}, b.oldStandbys...)
+	newCohort := append([]consensus.CohortMember{b.primary}, b.newStandbys...)
+	return b.oldPolicy.IsDurable(oldCohort, memberIntersect(ackingMembers, oldCohort)) &&
+		b.newPolicy.IsDurable(newCohort, memberIntersect(ackingMembers, newCohort))
 }
 
 func (b *bothPolicy) IsAchievable(members []consensus.CohortMember) bool {
-	return b.oldPolicy.IsAchievable(memberIntersect(members, b.oldStandbys)) &&
-		b.newPolicy.IsAchievable(memberIntersect(members, b.newStandbys))
+	oldCohort := append([]consensus.CohortMember{b.primary}, b.oldStandbys...)
+	newCohort := append([]consensus.CohortMember{b.primary}, b.newStandbys...)
+	return b.oldPolicy.IsAchievable(memberIntersect(members, oldCohort)) &&
+		b.newPolicy.IsAchievable(memberIntersect(members, newCohort))
 }
 
-// IsRevoked checks each sub-policy against its own standby scope. Both must be
-// independently revoked because a bothPolicy write requires both sub-quorums;
-// a coordinator must cover enough members in each cohort to be certain no
-// durable write slipped through on either side of the transition.
-func (b *bothPolicy) IsRevoked(allMembers, recruited, leaders []consensus.CohortMember) bool {
-	oldAll := memberIntersect(allMembers, b.oldStandbys)
-	oldRecruited := memberIntersect(recruited, b.oldStandbys)
-	oldLeaders := memberIntersect(leaders, b.oldStandbys)
-
-	newAll := memberIntersect(allMembers, b.newStandbys)
-	newRecruited := memberIntersect(recruited, b.newStandbys)
-	newLeaders := memberIntersect(leaders, b.newStandbys)
-
-	return b.oldPolicy.IsRevoked(oldAll, oldRecruited, oldLeaders) &&
-		b.newPolicy.IsRevoked(newAll, newRecruited, newLeaders)
+// RevokesAndSamplesAllRevocationSets checks each sub-policy against its own
+// cohort scope. Both must be independently satisfied because a bothPolicy write
+// requires both sub-quorums; a coordinator must cover enough members in each
+// cohort to be certain no durable write slipped through on either side of the
+// transition.
+func (b *bothPolicy) RevokesAndSamplesAllRevocationSets(cohortMembers, recruitedMembers []consensus.CohortMember, primary consensus.CohortMember) bool {
+	oldCohort := append([]consensus.CohortMember{b.primary}, b.oldStandbys...)
+	newCohort := append([]consensus.CohortMember{b.primary}, b.newStandbys...)
+	return b.oldPolicy.RevokesAndSamplesAllRevocationSets(oldCohort, memberIntersect(recruitedMembers, oldCohort), primary) &&
+		b.newPolicy.RevokesAndSamplesAllRevocationSets(newCohort, memberIntersect(recruitedMembers, newCohort), primary)
 }
 
 // SimPooler wraps a PoolerNode and acts as the local postgres driver in
@@ -175,7 +176,7 @@ type SimPooler struct {
 	// only). Write quorum is determined by checking how many of these nodes
 	// have ACKed the write LSN using gucSyncPolicy.IsWriteQuorum.
 	gucSyncStandbys []consensus.CohortMember
-	gucSyncPolicy   consensus.AckPolicy // nil = AnyN(0), no ACKs required
+	gucSyncPolicy   consensus.DurabilityPolicy // nil = AtLeast(1), no replicas required
 
 	// gucWALReceiveEnabled is the simulated GUC that controls whether this
 	// replica pulls WAL from the primary (analogous to recovery_target_action or
@@ -548,13 +549,15 @@ func (s *SimPooler) handleApply(req consensus.PolicyRecordApplyRequest) {
 	combinedStandbys := unionMembers(originalStandbys, finalStandbys)
 
 	// Compute combined policy: must satisfy BOTH old and new simultaneously.
-	// If there is no old policy (nil = AnyN(0)), the combined policy just needs
-	// to satisfy the new policy since the old quorum requirement is zero.
-	var combinedPolicy consensus.AckPolicy
+	// If there is no old policy (nil = no acks required), the combined policy
+	// just needs to satisfy the new policy.
+	primary := consensus.CohortMember{ID: s.node.ID()}
+	var combinedPolicy consensus.DurabilityPolicy
 	if originalPolicy == nil {
 		combinedPolicy = finalPolicy
 	} else {
 		combinedPolicy = &bothPolicy{
+			primary:     primary,
 			oldPolicy:   originalPolicy,
 			oldStandbys: originalStandbys,
 			newPolicy:   finalPolicy,
@@ -637,18 +640,21 @@ func (s *SimPooler) advancePendingChange() {
 
 // writeQuorumMet returns true if the current sync settings are satisfied for
 // a write at the given WAL position. A nil syncPolicy (no policy applied yet)
-// is treated as AnyN(0): no ACKs required.
+// means no ACKs required. The primary is always included in both cohort and
+// acking since it commits locally before propagating via WAL.
 func (s *SimPooler) writeQuorumMet(pos lsn) bool {
 	if s.gucSyncPolicy == nil {
 		return true
 	}
-	var acking []consensus.CohortMember
+	primary := consensus.CohortMember{ID: s.node.ID()}
+	cohort := append([]consensus.CohortMember{primary}, s.gucSyncStandbys...)
+	acking := []consensus.CohortMember{primary} // primary always has the write
 	for _, standby := range s.gucSyncStandbys {
 		if s.replicaACK[standby.ID] >= pos {
 			acking = append(acking, standby)
 		}
 	}
-	return s.gucSyncPolicy.IsWriteQuorum(acking)
+	return s.gucSyncPolicy.IsDurable(cohort, acking)
 }
 
 // latestWALPolicySeq returns the Seq of the most recently appended rules record

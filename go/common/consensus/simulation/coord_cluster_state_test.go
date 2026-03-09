@@ -24,7 +24,7 @@ import (
 )
 
 // makeRules is a convenience function for building a DurabilityRules value in tests.
-func makeRules(seq int64, primary consensus.NodeID, members []consensus.NodeID, anyN int) *consensus.DurabilityRules {
+func makeRules(seq int64, primary consensus.NodeID, members []consensus.NodeID, atLeast int) *consensus.DurabilityRules {
 	cohort := make([]consensus.CohortMember, len(members))
 	for i, id := range members {
 		cohort[i] = consensus.CohortMember{ID: id}
@@ -33,7 +33,7 @@ func makeRules(seq int64, primary consensus.NodeID, members []consensus.NodeID, 
 		Seq:     seq,
 		Primary: primary,
 		Members: cohort,
-		Policy:  consensus.AnyNPolicy(anyN),
+		Policy:  consensus.AtLeastPolicy(atLeast),
 	}
 }
 
@@ -69,7 +69,7 @@ func stepWithDiscoveryAndStatus(coord *consensus.CoordNode, tick int64, ids []co
 // applied the same rules version, the coordinator considers it quorum-confirmed.
 //
 // Setup: 3 nodes (1 primary, 2 replicas) all reporting the same Seq=3 rules
-// with AnyN(2) policy. AnyN(2) requires 2 replica acks; both replicas confirm
+// with AtLeast(3) policy. AtLeast(3) requires primary + 2 replica acks; both replicas confirm
 // Seq=3, so the write is provably durable.
 func TestCoordClusterViewQuorumConfirmed(t *testing.T) {
 	const (
@@ -77,9 +77,9 @@ func TestCoordClusterViewQuorumConfirmed(t *testing.T) {
 		node2 consensus.NodeID = "node-2"
 		node3 consensus.NodeID = "node-3"
 	)
-	coord := consensus.NewCoordNode("coord-1", consensus.AnyNPolicy(2))
+	coord := consensus.NewCoordNode("coord-1", consensus.AtLeastPolicy(3))
 
-	rules := makeRules(3, node1, []consensus.NodeID{node1, node2, node3}, 2)
+	rules := makeRules(3, node1, []consensus.NodeID{node1, node2, node3}, 3)
 
 	stepWithDiscoveryAndStatus(coord, 1,
 		[]consensus.NodeID{node1, node2, node3},
@@ -92,7 +92,7 @@ func TestCoordClusterViewQuorumConfirmed(t *testing.T) {
 
 	view := coord.ClusterView(1)
 	require.NotNil(t, view.HighestSeenRules, "should have seen rules")
-	require.NotNil(t, view.HighestQuorumRules, "AnyN(2) quorum is met by node2+node3")
+	require.NotNil(t, view.HighestQuorumRules, "AtLeast(3) quorum is met by primary+node2+node3")
 	assert.Equal(t, int64(3), view.HighestSeenRules.Seq)
 	assert.Equal(t, int64(3), view.HighestQuorumRules.Seq)
 	assert.Equal(t, node1, view.HighestQuorumRules.Primary)
@@ -100,7 +100,7 @@ func TestCoordClusterViewQuorumConfirmed(t *testing.T) {
 
 // TestCoordClusterViewPartialChange verifies the "partial leader-led change" case:
 // the primary has applied Seq=4 but only one replica confirms it, so quorum for
-// Seq=4 is not met under AnyN(2). The prior Seq=3 version does have quorum.
+// Seq=4 is not met under AtLeast(3). The prior Seq=3 version does have quorum.
 //
 // This is the key signal for emergency failover: HighestSeenRules.Seq >
 // HighestQuorumRules.Seq means a rule change was started but not completed.
@@ -110,10 +110,10 @@ func TestCoordClusterViewPartialChange(t *testing.T) {
 		node2 consensus.NodeID = "node-2"
 		node3 consensus.NodeID = "node-3"
 	)
-	coord := consensus.NewCoordNode("coord-1", consensus.AnyNPolicy(2))
+	coord := consensus.NewCoordNode("coord-1", consensus.AtLeastPolicy(3))
 
-	rules3 := makeRules(3, node1, []consensus.NodeID{node1, node2, node3}, 2)
-	rules4 := makeRules(4, node1, []consensus.NodeID{node1, node2, node3}, 2)
+	rules3 := makeRules(3, node1, []consensus.NodeID{node1, node2, node3}, 3)
+	rules4 := makeRules(4, node1, []consensus.NodeID{node1, node2, node3}, 3)
 
 	// node1 (primary) and node2 have Seq=4; node3 is still at Seq=3.
 	stepWithDiscoveryAndStatus(coord, 1,
@@ -134,13 +134,13 @@ func TestCoordClusterViewPartialChange(t *testing.T) {
 	assert.Equal(t, int64(3), view.HighestQuorumRules.Seq, "quorum only confirmed for Seq=3")
 }
 
-// TestCoordClusterViewSingleNodeAnyN0 verifies that a 1-node cluster with
-// AnyN(0) always has quorum confirmed (no replica acks are needed).
-func TestCoordClusterViewSingleNodeAnyN0(t *testing.T) {
+// TestCoordClusterViewSingleNodeAtLeast1 verifies that a 1-node cluster with
+// AtLeast(1) always has quorum confirmed (the primary alone is sufficient).
+func TestCoordClusterViewSingleNodeAtLeast1(t *testing.T) {
 	const node1 consensus.NodeID = "node-1"
 	coord := consensus.NewCoordNode("coord-1", nil) // manual mode: no auto-expansion
 
-	rules := makeRules(1, node1, []consensus.NodeID{node1}, 0)
+	rules := makeRules(1, node1, []consensus.NodeID{node1}, 1)
 
 	stepWithDiscoveryAndStatus(coord, 1,
 		[]consensus.NodeID{node1},
@@ -151,7 +151,7 @@ func TestCoordClusterViewSingleNodeAnyN0(t *testing.T) {
 
 	view := coord.ClusterView(1)
 	require.NotNil(t, view.HighestSeenRules)
-	require.NotNil(t, view.HighestQuorumRules, "AnyN(0) always has quorum (no replicas needed)")
+	require.NotNil(t, view.HighestQuorumRules, "AtLeast(1) always has quorum (primary alone is sufficient)")
 	assert.Equal(t, int64(1), view.HighestQuorumRules.Seq)
 	assert.Equal(t, node1, view.HighestQuorumRules.Primary)
 }
@@ -159,7 +159,7 @@ func TestCoordClusterViewSingleNodeAnyN0(t *testing.T) {
 // TestCoordClusterViewNoRules verifies the coordinator's view when no pooler
 // has reported any rules yet.
 func TestCoordClusterViewNoRules(t *testing.T) {
-	coord := consensus.NewCoordNode("coord-1", consensus.AnyNPolicy(2))
+	coord := consensus.NewCoordNode("coord-1", consensus.AtLeastPolicy(3))
 
 	coord.Step(1, []consensus.Indicator{
 		consensus.PoolerDiscoveredIndicator{PoolerID: "node-1"},
@@ -186,9 +186,9 @@ func TestCoordClusterViewPrimaryUnhealthy(t *testing.T) {
 		node2 consensus.NodeID = "node-2"
 		node3 consensus.NodeID = "node-3"
 	)
-	coord := consensus.NewCoordNode("coord-1", consensus.AnyNPolicy(2))
+	coord := consensus.NewCoordNode("coord-1", consensus.AtLeastPolicy(3))
 
-	rules := makeRules(3, node1, []consensus.NodeID{node1, node2, node3}, 2)
+	rules := makeRules(3, node1, []consensus.NodeID{node1, node2, node3}, 3)
 
 	// node1 (primary) is stopped; replicas are running.
 	stepWithDiscoveryAndStatus(coord, 1,
@@ -217,10 +217,10 @@ func TestCoordClusterViewHealthTimeout(t *testing.T) {
 		node2 consensus.NodeID = "node-2"
 		node3 consensus.NodeID = "node-3"
 	)
-	coord := consensus.NewCoordNode("coord-1", consensus.AnyNPolicy(2))
+	coord := consensus.NewCoordNode("coord-1", consensus.AtLeastPolicy(3))
 	coord.SetHealthTimeout(5) // mark primary stale after 5 ticks without status
 
-	rules := makeRules(3, node1, []consensus.NodeID{node1, node2, node3}, 2)
+	rules := makeRules(3, node1, []consensus.NodeID{node1, node2, node3}, 3)
 
 	// Tick 1: all three nodes report healthy status.
 	stepWithDiscoveryAndStatus(coord, 1,
