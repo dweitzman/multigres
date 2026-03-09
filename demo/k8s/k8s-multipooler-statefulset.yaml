@@ -75,7 +75,7 @@ metadata:
     cell: zone1
 spec:
   serviceName: multipooler-zone1
-  replicas: 3
+  replicas: 1
   selector:
     matchLabels:
       app: multipooler
