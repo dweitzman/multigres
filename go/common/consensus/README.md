@@ -27,41 +27,41 @@ primary identity is expressed as a new `Term` record written to the WAL:
 
 ```go
 type Term struct {
-    Seq     int64          // monotonically increasing; serves as logical clock
-    Primary NodeID         // the postgres primary for this shard at this rule version
-    Members []CohortMember // full cohort; each member carries its static NodeProperties
-    Policy  AckPolicy      // determines how many sync-replica ACKs constitute a durable write
+    Seq     int64            // monotonically increasing; serves as logical clock
+    Primary NodeID           // the postgres primary for this shard at this term
+    Members []CohortMember   // full cohort; each member carries its static NodeProperties
+    Policy  DurabilityPolicy // determines how many sync-replica ACKs constitute a durable write
 }
 ```
 
 Writes are **compare-and-swap on `Seq`**: the primary accepts a write only if
-`incoming.Seq == committed.Seq + 1`. `Seq 0` is reserved for the zero value ("no rules yet");
-the first real record always has `Seq 1`. A higher `Seq` always means more recent rules.
+`incoming.Seq == committed.Seq + 1`. `Seq 0` is reserved for the zero value ("no term yet");
+the first real record always has `Seq 1`. A higher `Seq` always means a more recent term.
 
-## AckPolicy
+## DurabilityPolicy
 
 ```go
-type AckPolicy interface {
-    // IsWriteQuorum returns true if the acknowledging replicas satisfy this policy.
-    IsWriteQuorum(ackingReplicas []CohortMember) bool
+type DurabilityPolicy interface {
+    // IsDurable returns true if the acknowledging cohort members constitute a
+    // durable write quorum under this policy.
+    IsDurable(cohortMembers, ackingMembers []CohortMember) bool
 
-    // IsAchievable returns true if this policy can be satisfied with the given cohort.
-    IsAchievable(cohort []CohortMember) bool
+    // IsAchievable returns true if this policy can ever be satisfied with the
+    // proposed cohort.
+    IsAchievable(proposedCohort []CohortMember) bool
 
-    // IsRevoked returns true when every leader in leaders has had its leadership
-    // revoked by the recruited set. Pass a single leader to check one specific
-    // leadership; pass all cohort members to check all possible leaderships.
-    //
-    // A leader's leadership is revoked when either:
-    //   - the leader is in recruited (it will not write unilaterally), or
-    //   - no subset of non-recruited replicas can satisfy this policy (making
-    //     a durable write impossible without the coordinator's knowledge).
-    IsRevoked(allMembers, recruited, leaders []CohortMember) bool
+    // RevokesAndSamplesAllRevocationSets returns true when the recruited set
+    // both revokes all possible write quorums (no non-recruited subset can
+    // satisfy IsDurable) and samples at least one member from every minimal
+    // quorum (so no durable write could have occurred without the coordinator
+    // learning about it from some recruited node).
+    RevokesAndSamplesAllRevocationSets(cohortMembers, recruitedMembers []CohortMember, primary CohortMember) bool
 }
 ```
 
-`AnyNPolicy(n)` is the only implementation today. A write is durable when at least `n` sync
-replicas have ACK'd it. `AnyN(0)` requires no replicas — suitable for a 1-node bootstrap cluster.
+`AtLeastPolicy(n)` is the only implementation today. A write is durable when at least `n`
+cohort members have ACK'd it (primary counts as one ACK). `AtLeast(1)` requires no replicas —
+suitable for a 1-node bootstrap cluster.
 
 ## Normal path — leader-driven rule change
 
@@ -78,11 +78,11 @@ When the primary is reachable, all rule changes flow through it as ordinary post
    - **No prior commitment**: the primary has not already committed to a coordinator for any rule
      range overlapping the proposed `Seq`. (This check is a no-op today; it becomes meaningful
      once the emergency path is implemented.)
-3. The primary writes a single WAL entry encoding the new rules. **This WAL entry must be
-   durable under both the outgoing and incoming `AckPolicy` before the transition is complete.**
-   This is the fundamental safety invariant of every rule transition: a write that changes the
-   rules must itself be witnessed by enough replicas that neither the old nor the new policy can
-   be violated.
+3. The primary writes a single WAL entry encoding the new term. **This WAL entry must be
+   durable under both the outgoing and incoming `DurabilityPolicy` before the transition is
+   complete.** This is the fundamental safety invariant of every term transition: a write that
+   changes the term must itself be witnessed by enough replicas that neither the old nor the new
+   policy can be violated.
 4. Once durable under both policies, all subsequent WAL entries are governed solely by the new
    rules.
 
@@ -99,7 +99,7 @@ CoordNode sees observer
   → SimPooler/driver writes WAL entry; enforces both-policy quorum
   → ApplyRulesResponseIndicator delivered once durable
   → PoolerNode commits; WAL propagates to replicas
-  → replicas apply WAL, update committed Rules
+  → replicas apply WAL, update committed Term
   → CoordNode observes updated status; expansion complete
 ```
 
@@ -157,9 +157,9 @@ for a pooler committed to `(N, N+X)`:
 The coordinator must recruit enough poolers to satisfy two independent quorums:
 
 1. **Revocation quorum**: enough nodes have been recruited that the current ack policy for rule N
-   can no longer be satisfied by any non-recruited nodes. `AckPolicy.IsRevoked` captures this
-   check — it returns true when the policy can no longer be satisfied without the coordinator's
-   knowledge.
+   can no longer be satisfied by any non-recruited nodes. `DurabilityPolicy.RevokesAndSamplesAllRevocationSets`
+   captures this check — it returns true when the policy can no longer be satisfied without the
+   coordinator's knowledge.
 
 2. **Discovery quorum**: enough nodes have been recruited that no other coordinator could have
    established a different rule version (`N+1`, `N+2`, …) without this coordinator learning about
@@ -191,8 +191,8 @@ change is `Primary` — cohort membership and ack policy remain identical to rul
 As a consequence, a coordinator racing against another coordinator that also found no successor
 knows that any rule version the other coordinator could have established must involve the same
 cohort and ack policy. The coordinator can enumerate all possible primaries within the known
-cohort and attempt to form a revocation set for each, letting `AckPolicy.IsRevoked` guide
-whether a sufficient set has been recruited for each candidate.
+cohort and attempt to form a revocation set for each, letting `DurabilityPolicy.RevokesAndSamplesAllRevocationSets`
+guide whether a sufficient set has been recruited for each candidate.
 
 ### Establishing the new rule
 
@@ -209,9 +209,9 @@ Once both quorums are satisfied and no unknown successor exists:
 
 ```
 go/common/consensus/
-  consensus.go         — shared types (NodeID, NodeProperties, CohortMember, AckPolicy,
+  consensus.go         — shared types (NodeID, NodeProperties, CohortMember, DurabilityPolicy,
                          Term, PoolerPersistentState, PoolerStorage)
-  durability.go        — AnyNPolicy implementation
+  durability.go        — AtLeastPolicy implementation
   pooler.go            — PoolerNode state machine (production-compatible)
   coord.go             — CoordNode state machine (production-compatible)
   requests.go          — request types emitted by nodes
@@ -244,7 +244,7 @@ Each `SimPooler` has:
 - A **replica ACK map** (primary only): tracks the highest LSN each sync standby has received,
   used to evaluate write quorum.
 - A **pending apply** (primary only): the policy record written to WAL but not yet durable.
-  Becomes durable when `syncPolicy.IsWriteQuorum(ackingReplicas)` returns true.
+  Becomes durable when `syncPolicy.IsDurable(cohortMembers, ackingReplicas)` returns true.
 
 Each replica calls `pullWAL()` at the start of its own `Step()`, reading new entries directly
 from the primary's buffer. This means ACKs flow back to the primary within the same tick, so
@@ -261,9 +261,9 @@ the `Handler`, simulates the postgres SQL transaction and sync-settings update, 
 | `NodeProperties`        | Static per-node attributes (e.g. zone). Frozen into `Term.Members` at write time.                                 |
 | `CohortMember`          | `{ID NodeID, Properties NodeProperties}`. Bundles identity and properties so policy evaluation is self-contained. |
 | `Term`                  | Versioned WAL record: `{Seq, Primary, Members, Policy}`. CAS on monotonic `Seq`.                                  |
-| `AckPolicy`             | Interface: `IsWriteQuorum`, `IsAchievable`, `IsRevoked`.                                                          |
-| `AnyNPolicy`            | `AckPolicy` implementation: write is durable when at least N sync replicas have ACK'd.                            |
-| `PoolerPersistentState` | Durable pooler state: `{Role, Primary, Term *Term}`. Saved before any ack.                                        |
+| `DurabilityPolicy`      | Interface: `IsDurable`, `IsAchievable`, `RevokesAndSamplesAllRevocationSets`.                                     |
+| `AtLeastPolicy`         | `DurabilityPolicy` implementation: write is durable when at least N cohort members have ACK'd.                    |
+| `PoolerPersistentState` | Durable pooler state: `{Role, Primary, Term *Term, Commitment *RecruitmentCommitment}`. Saved before any ack.     |
 | `PoolerStorage`         | Durable storage interface. Simulation uses `MemStorage`; production uses atomic write-rename + fsync.             |
 | `PoolerNode`            | Pooler state machine. Handles WAL-driven policy updates and emergency failover ballots.                           |
 | `CoordNode`             | Coordinator state machine. Drives WAL writes for normal changes; runs elections for emergency failover.           |
@@ -293,13 +293,13 @@ Set `DSTSIM_TRACE=1` to dump a per-tick trace to stderr when a test fails.
 policy changes without any coordinator election, using only WAL-driven `Term`
 compare-and-swap writes.
 
-**Setup:** one node pre-initialized as primary with rules `{Seq: 1, Primary: node1, Members: [node1], Policy: AnyN(0)}`.
+**Setup:** one node pre-initialized as primary with rules `{Seq: 1, Primary: node1, Members: [node1], Policy: AtLeast(1)}`.
 
 `TestCohortExpansion` expands the cohort from 1 to 4 nodes in three stages (→2, →3, →4). At each
 stage it asserts that every pooler has:
 
-- Committed the expected rules with the correct `AnyN(k)` ack threshold
-- For the primary: `syncStandbys` = cohort minus self, `syncPolicy` = `AnyN(k)`
+- Committed the expected rules with the correct `AtLeast(k)` ack threshold
+- For the primary: `syncStandbys` = cohort minus self, `syncPolicy` = `AtLeast(k)`
 - For each replica: `primaryConnInfo` = the committed primary
 
 **Safety invariant checked on every tick:**
@@ -310,8 +310,8 @@ stage it asserts that every pooler has:
 ### Stage 2 — Bootstrap
 
 Initialize a cluster from scratch. The provisioner designates a single bootstrap-eligible node;
-the coordinator establishes it as primary in a 1-node cohort with `AnyN(0)`. No election needed
-for bootstrap — a single node always forms a valid quorum with `AnyN(0)`. Subsequent cohort
+the coordinator establishes it as primary in a 1-node cohort with `AtLeast(1)`. No election needed
+for bootstrap — a single node always forms a valid quorum with `AtLeast(1)`. Subsequent cohort
 expansion uses Stage 1.
 
 ### Stage 3 — Emergency failover
@@ -322,17 +322,24 @@ If a partial leader-led change is discovered in WAL, the coordinator propagates 
 (which may include cohort or policy changes). If no partial change exists, the coordinator
 initiates a fresh rule change updating only `Primary`.
 
-A coordinator-initiated leader change likely requires that the newly-established quorum immediately write a rule change entry before
-the leader change is considered finished, since coordinators can't easily
-write WAL while postgres is stopped.
+A coordinator-initiated leader change requires that the newly-established quorum immediately
+write a new Term entry before the failover is considered complete, since the coordinator
+cannot append to postgres WAL while postgres is stopped.
 
-After establishment, normal WAL-driven operations resume.
+**Shadow WAL:** Because postgres is stopped during emergency failover, the coordinator cannot
+append to the real WAL. Instead, term transition commitments are recorded in a per-node
+_commitment file_ — essentially a shadow WAL narrow enough to fsync safely without a running
+postgres. The commitment file is written before the node acks the recruiter, so the coordinator
+only learns of the commitment after it is durable. Once the new primary is promoted, it copies
+shadow WAL entries directly into real postgres WAL before accepting any other transactions,
+making the real and shadow WAL consistent representations of the same ground truth.
 
-**Durable state required:** `PoolerPersistentState` needs a commitment field —
-`EstablishmentGrant{AtTermSeq int64, CoordID NodeID, ProposedSeq int64}` — so a restarted node
-honours its prior commitments to coordinators. The `AtTermSeq` field captures "I participated
-in revoking rules through N", and `ProposedSeq` records the highest target this node has already
-committed to.
+After establishment and shadow-WAL migration, normal WAL-driven operations resume.
+
+**Durable state required:** `PoolerPersistentState.Commitment` (`RecruitmentCommitment{AtTermSeq,
+CoordID, ProposedSeq}`) — so a restarted node honours its prior commitments to coordinators.
+The `AtTermSeq` field captures "I participated in revoking from term N", and `ProposedSeq`
+records the highest target this node has already committed to. This field is already implemented.
 
 ### Stage 3.5 — Coordinator cluster state tracking
 
@@ -345,7 +352,7 @@ The coordinator tracks two complementary views of the cluster's durability state
 - **Highest quorum rules** (`ClusterView.HighestQuorumTerm`): the highest `Term.Seq`
   for which the coordinator has confirmed a write quorum. Quorum is confirmed when enough
   non-primary cohort members have reported applying that Seq (or a later one) to satisfy the
-  rules' `AckPolicy.IsWriteQuorum` check. This is the last known-good state of the cluster.
+  term's `DurabilityPolicy.IsDurable` check. This is the last known-good state of the cluster.
 
 - **Highest seen rules** (`ClusterView.HighestSeenTerm`): the highest `Term.Seq`
   reported by any pooler, regardless of whether it reached write quorum. This may be higher than
@@ -376,7 +383,7 @@ to near zero.
 ### Stage 5 — Additional durability policies
 
 `ZoneAwarePolicy` — conjunctive requirement: at least one ACK from the same zone and one from a
-different zone. `AnyNPolicy` cannot express this; requires a new `AckPolicy` implementation.
+different zone. `AtLeastPolicy` cannot express this; requires a new `DurabilityPolicy` implementation.
 
 ### Stage 6 — Metrics and observability
 
