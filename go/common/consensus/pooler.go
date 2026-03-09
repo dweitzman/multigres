@@ -227,7 +227,7 @@ func (n *PoolerNode) handleApplyResponse(ind ApplyRulesResponseIndicator) ([]Req
 	}
 
 	newState := n.committed
-	newState.Term = &ind.Term
+	newState.CachedTerm = &ind.Term
 	if err := n.storage.Save(newState); err != nil {
 		return nil, false
 	}
@@ -240,22 +240,22 @@ func (n *PoolerNode) handleApplyResponse(ind ApplyRulesResponseIndicator) ([]Req
 //
 // Acceptance criteria — reject unless ALL of the following hold:
 //  1. ind.AtTermSeq >= committed.PolicySeq(): coordinator knows the current term.
-//  2. No existing commitment, OR the proposal supersedes the existing one:
-//     - ind.ProposedSeq > committed.Commitment.ProposedSeq (any coordinator), OR
-//     - ind.CoordID == committed.Commitment.CoordID AND ind.ProposedSeq >= committed.Commitment.ProposedSeq
-//     (same coordinator re-requesting — idempotent).
+//  2. ind.ProposedSeq > ind.AtTermSeq: proposal advances the term.
+//  3. No commitment exists, OR the proposal is accepted via one of:
+//     a. existing == proposed (same coordinator, same seqs) — idempotent fast path.
+//     b. existing.IsRevokedBy(proposed) — higher AtTermSeq or higher ProposedSeq.
 //
-// On the idempotent fast path (same coordinator, same-or-higher target, commitment
-// already persisted), the method responds immediately without a sidecar round-trip.
+// On the idempotent fast path the method responds immediately without a sidecar
+// round-trip (the commitment is already persisted and the sidecar already revoked).
 //
-// On a new or superseding acceptance, the commitment is saved to storage and a
-// RevokeParticipationRequest is sent to the sidecar.
+// On a new or superseding acceptance, the commitment is replaced, saved to
+// storage, and a RevokeParticipationRequest is sent to the sidecar.
 func (n *PoolerNode) handleRecruit(ind RecruitIndicator) ([]Request, bool) {
 	reject := func() ([]Request, bool) {
 		return []Request{RecruitResponseRequest{
 			RequestCorrelation: RequestCorrelation{CorrelationID: ind.CorrelationID},
 			Accepted:           false,
-			Term:               n.committed.Term,
+			Term:               n.committed.CachedTerm,
 		}}, false
 	}
 
@@ -263,30 +263,35 @@ func (n *PoolerNode) handleRecruit(ind RecruitIndicator) ([]Request, bool) {
 	if ind.AtTermSeq < n.committed.PolicySeq() {
 		return reject()
 	}
+	// Check 2: proposal must advance the term.
+	if ind.ProposedSeq <= ind.AtTermSeq {
+		return reject()
+	}
 
-	c := n.committed.Commitment
+	proposed := RecruitmentCommitment{
+		CoordID:     ind.CoordID,
+		AtTermSeq:   ind.AtTermSeq,
+		ProposedSeq: ind.ProposedSeq,
+	}
+	existing := n.committed.Commitment
 	switch {
-	case c == nil:
+	case existing == nil:
 		// No existing commitment: accept.
-	case ind.CoordID == c.CoordID && ind.ProposedSeq == c.ProposedSeq:
-		// Same coordinator, same target: idempotent — respond immediately.
+	case *existing == proposed:
+		// Same coordinator, same parameters: idempotent fast path.
 		return []Request{RecruitResponseRequest{
 			RequestCorrelation: RequestCorrelation{CorrelationID: ind.CorrelationID},
 			Accepted:           true,
-			Term:               n.committed.Term,
+			Term:               n.committed.CachedTerm,
 		}}, false
-	case ind.ProposedSeq > c.ProposedSeq:
-		// Different coordinator (or same with strictly higher target): supersedes.
+	case existing.IsRevokedBy(proposed):
+		// Proposal has higher authority (lexicographic on AtTermSeq, ProposedSeq): supersede.
 	default:
 		return reject()
 	}
 
 	newState := n.committed
-	newState.Commitment = &RecruitmentCommitment{
-		CoordID:     ind.CoordID,
-		AtTermSeq:   ind.AtTermSeq,
-		ProposedSeq: ind.ProposedSeq,
-	}
+	newState.Commitment = &proposed
 	if err := n.storage.Save(newState); err != nil {
 		return reject()
 	}
@@ -309,7 +314,7 @@ func (n *PoolerNode) handleRevokeParticipationResponse(ind RevokeParticipationRe
 	return []Request{RecruitResponseRequest{
 		RequestCorrelation: RequestCorrelation{CorrelationID: ind.CorrelationID},
 		Accepted:           ind.Accepted,
-		Term:               n.committed.Term,
+		Term:               n.committed.CachedTerm,
 	}}
 }
 

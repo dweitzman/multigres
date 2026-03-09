@@ -102,14 +102,14 @@ func TestRecruitRejection(t *testing.T) {
 		10,
 	)
 	require.Nil(t, pooler1.Node().CommittedState().Commitment,
-		"commitment must not be set after stale-base rejection")
+		"commitment must be nil after stale-base rejection")
 
 	// Establish a valid commitment so cases 2 and 3 have something to compete with.
 	th.RequireWithinTicks(
 		recruitCondition(pooler1, coordID, 1, 3, "accept-coord1", true),
 		20,
 	)
-	require.Equal(t, int64(3), pooler1.Node().CommittedState().Commitment.ProposedSeq)
+	require.Equal(t, int64(3), pooler1.Node().CommittedState().CommitmentEndSeq())
 
 	// Case 2: different coordinator, same ProposedSeq — not strictly higher, not idempotent.
 	th.RequireWithinTicks(
@@ -124,7 +124,7 @@ func TestRecruitRejection(t *testing.T) {
 		recruitCondition(pooler1, coord2ID, 1, 2, "reject-lower", false),
 		10,
 	)
-	require.Equal(t, int64(3), pooler1.Node().CommittedState().Commitment.ProposedSeq,
+	require.Equal(t, int64(3), pooler1.Node().CommittedState().CommitmentEndSeq(),
 		"commitment ProposedSeq must not decrease after lower-target rejection")
 }
 
@@ -160,11 +160,11 @@ func TestRecruitIdempotent(t *testing.T) {
 		recruitCondition(pooler1, coordID, 1, 3, "accept-1", true),
 		20,
 	)
-	require.Equal(t, &consensus.RecruitmentCommitment{
+	require.Equal(t, consensus.RecruitmentCommitment{
 		CoordID:     coordID,
 		AtTermSeq:   1,
 		ProposedSeq: 3,
-	}, pooler1.Node().CommittedState().Commitment)
+	}, *pooler1.Node().CommittedState().Commitment)
 	require.True(t, pooler1.isRevoked())
 
 	// Idempotent fast path: same coordinator, same ProposedSeq responds immediately
@@ -173,15 +173,15 @@ func TestRecruitIdempotent(t *testing.T) {
 		recruitCondition(pooler1, coordID, 1, 3, "accept-idempotent", true),
 		5,
 	)
-	require.Equal(t, int64(3), pooler1.Node().CommittedState().Commitment.ProposedSeq,
-		"commitment must be unchanged after idempotent re-request")
+	require.Equal(t, int64(3), pooler1.Node().CommittedState().CommitmentEndSeq(),
+		"commitment ProposedSeq must be unchanged after idempotent re-request")
 
 	// Supersede: same coordinator, strictly higher ProposedSeq.
 	th.RequireWithinTicks(
 		recruitCondition(pooler1, coordID, 1, 4, "accept-higher", true),
 		20,
 	)
-	require.Equal(t, int64(4), pooler1.Node().CommittedState().Commitment.ProposedSeq,
+	require.Equal(t, int64(4), pooler1.Node().CommittedState().CommitmentEndSeq(),
 		"commitment ProposedSeq must be updated to 4")
 	require.True(t, pooler1.isRevoked())
 
@@ -192,7 +192,7 @@ func TestRecruitIdempotent(t *testing.T) {
 	)
 	require.Equal(t, coord2ID, pooler1.Node().CommittedState().Commitment.CoordID,
 		"commitment coordinator must be updated to coord-2")
-	require.Equal(t, int64(5), pooler1.Node().CommittedState().Commitment.ProposedSeq)
+	require.Equal(t, int64(5), pooler1.Node().CommittedState().CommitmentEndSeq())
 	require.True(t, pooler1.isRevoked())
 }
 

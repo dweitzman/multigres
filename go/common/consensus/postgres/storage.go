@@ -117,10 +117,17 @@ func (f *AtomicStateFile) Load() (consensus.PoolerPersistentState, error) {
 // the gap rather than silently losing policy information.
 
 type stateJSON struct {
-	Role       consensus.PoolerRole             `json:"role"`
-	Primary    consensus.NodeID                 `json:"primary"`
-	Term       *termJSON                        `json:"term,omitempty"`
-	Commitment *consensus.RecruitmentCommitment `json:"commitment,omitempty"`
+	Role       consensus.PoolerRole `json:"role"`
+	Primary    consensus.NodeID     `json:"primary"`
+	Term       *termJSON            `json:"term,omitempty"`
+	Commitment *commitmentJSON      `json:"commitment,omitempty"`
+	ShadowWAL  []termJSON           `json:"shadow_wal,omitempty"`
+}
+
+type commitmentJSON struct {
+	CoordID     consensus.NodeID `json:"coord_id"`
+	AtTermSeq   int64            `json:"at_term_seq"`
+	ProposedSeq int64            `json:"proposed_seq"`
 }
 
 type termJSON struct {
@@ -137,23 +144,53 @@ type atLeastThresholder interface {
 	AtLeastThreshold() int
 }
 
+func marshalTerm(t *consensus.Term) (*termJSON, error) {
+	at, ok := t.Policy.(atLeastThresholder)
+	if !ok {
+		return nil, fmt.Errorf("unsupported DurabilityPolicy type %T: only AtLeastPolicy is supported in production", t.Policy)
+	}
+	return &termJSON{
+		Seq:     t.Seq,
+		Primary: t.Primary,
+		Members: t.Members,
+		AtLeast: at.AtLeastThreshold(),
+	}, nil
+}
+
+func unmarshalTerm(j *termJSON) *consensus.Term {
+	return &consensus.Term{
+		Seq:     j.Seq,
+		Primary: j.Primary,
+		Members: j.Members,
+		Policy:  consensus.AtLeastPolicy(j.AtLeast),
+	}
+}
+
 func marshalState(state consensus.PoolerPersistentState) ([]byte, error) {
 	js := stateJSON{
-		Role:       state.Role,
-		Primary:    state.Primary,
-		Commitment: state.Commitment,
+		Role:    state.Role,
+		Primary: state.Primary,
 	}
-	if state.Term != nil {
-		at, ok := state.Term.Policy.(atLeastThresholder)
-		if !ok {
-			return nil, fmt.Errorf("unsupported DurabilityPolicy type %T: only AtLeastPolicy is supported in production", state.Term.Policy)
+	if state.CachedTerm != nil {
+		t, err := marshalTerm(state.CachedTerm)
+		if err != nil {
+			return nil, err
 		}
-		js.Term = &termJSON{
-			Seq:     state.Term.Seq,
-			Primary: state.Term.Primary,
-			Members: state.Term.Members,
-			AtLeast: at.AtLeastThreshold(),
+		js.Term = t
+	}
+	if state.Commitment != nil {
+		js.Commitment = &commitmentJSON{
+			CoordID:     state.Commitment.CoordID,
+			AtTermSeq:   state.Commitment.AtTermSeq,
+			ProposedSeq: state.Commitment.ProposedSeq,
 		}
+	}
+	for _, term := range state.ShadowWAL {
+		t, err := marshalTerm(term)
+		if err != nil {
+			return nil, err
+		}
+		js.ShadowWAL = append(js.ShadowWAL, *t)
 	}
 	return json.Marshal(js)
 }
@@ -164,17 +201,21 @@ func unmarshalState(data []byte) (consensus.PoolerPersistentState, error) {
 		return consensus.PoolerPersistentState{}, err
 	}
 	state := consensus.PoolerPersistentState{
-		Role:       js.Role,
-		Primary:    js.Primary,
-		Commitment: js.Commitment,
+		Role:    js.Role,
+		Primary: js.Primary,
 	}
 	if js.Term != nil {
-		state.Term = &consensus.Term{
-			Seq:     js.Term.Seq,
-			Primary: js.Term.Primary,
-			Members: js.Term.Members,
-			Policy:  consensus.AtLeastPolicy(js.Term.AtLeast),
+		state.CachedTerm = unmarshalTerm(js.Term)
+	}
+	if js.Commitment != nil {
+		state.Commitment = &consensus.RecruitmentCommitment{
+			CoordID:     js.Commitment.CoordID,
+			AtTermSeq:   js.Commitment.AtTermSeq,
+			ProposedSeq: js.Commitment.ProposedSeq,
 		}
+	}
+	for i := range js.ShadowWAL {
+		state.ShadowWAL = append(state.ShadowWAL, unmarshalTerm(&js.ShadowWAL[i]))
 	}
 	return state, nil
 }

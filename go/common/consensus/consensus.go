@@ -247,22 +247,48 @@ type Term struct {
 	Policy DurabilityPolicy
 }
 
-// RecruitmentCommitment is the durable record of a pooler's commitment to a
-// coordinator-led term change. Once persisted, the pooler will not participate
-// in write quorum for any term version within the committed range, and will not
-// accept instructions from a different coordinator for any overlapping range.
+// RecruitmentCommitment records that this pooler has granted a coordinator
+// exclusive authority to append term changes to the shadow WAL in the range
+// (AtTermSeq, ProposedSeq]. It is purely an authorization token — it does not
+// carry the content of any term change.
+//
+// While a commitment is held, the pooler withdraws from write quorum for the
+// active term so that the coordinator can safely reorganise the cluster. Only
+// one coordinator may hold authority at a time; a new commitment with a higher
+// ProposedSeq supersedes any previous one.
 //
 // The commitment survives crashes: a restarted pooler loads it from storage
 // and honours it before accepting any new instructions.
 type RecruitmentCommitment struct {
-	// CoordID is the coordinator this pooler is committed to.
+	// CoordID is the coordinator that holds authority.
 	CoordID NodeID
 
-	// AtTermSeq is the base term seq the coordinator is working from (N in N→N+X).
+	// AtTermSeq is the base term seq the coordinator is building from (the last
+	// term this pooler had applied when the commitment was granted).
 	AtTermSeq int64
 
-	// ProposedSeq is the highest target term seq this pooler has committed to (N+X).
+	// ProposedSeq is the highest term seq the coordinator is authorised to write
+	// to the shadow WAL.
 	ProposedSeq int64
+}
+
+// IsRevokedBy reports whether proposed should replace r as the active
+// commitment. The ordering is lexicographic on (AtTermSeq, ProposedSeq):
+//   - A higher AtTermSeq always wins: the proposing coordinator has more
+//     up-to-date base knowledge, so its authority takes precedence.
+//   - When AtTermSeq values are equal, a higher ProposedSeq wins.
+//   - A lower AtTermSeq never revokes regardless of ProposedSeq: a coordinator
+//     with stale base knowledge cannot displace one that knows more.
+//   - Equal (AtTermSeq, ProposedSeq) does NOT revoke — first-write-wins
+//     regardless of coordinator identity.
+//
+// The idempotent case (same coordinator, same parameters) is handled by Go
+// struct equality (r == proposed).
+func (r RecruitmentCommitment) IsRevokedBy(proposed RecruitmentCommitment) bool {
+	if proposed.AtTermSeq != r.AtTermSeq {
+		return proposed.AtTermSeq > r.AtTermSeq
+	}
+	return proposed.ProposedSeq > r.ProposedSeq
 }
 
 // PoolerPersistentState is the durable state a PoolerNode writes to storage.
@@ -272,6 +298,12 @@ type RecruitmentCommitment struct {
 // recoverable from postgres itself (e.g. SELECT pg_last_wal_replay_lsn()). It
 // is reported in status indicators but is not part of the consensus persistent state.
 type PoolerPersistentState struct {
+	// TODO: Role and Primary are derivable from the node's own ID and CachedTerm
+	// (Role = primary iff nodeID == CachedTerm.Primary; Primary = CachedTerm.Primary).
+	// They are kept here as a bootstrap convenience for nodes that have not yet
+	// received their first term. Remove them once startup always provides an
+	// initial term.
+
 	// Role is the pooler's current role (primary or replica).
 	Role PoolerRole
 
@@ -279,27 +311,49 @@ type PoolerPersistentState struct {
 	// this is itself. For replicas, this is the node they stream WAL from.
 	Primary NodeID
 
-	// Term is the most recent Term this pooler has committed (primary)
-	// or applied from WAL replication (replica). Nil means no term has been
-	// seen yet.
-	Term *Term
+	// CachedTerm is a cached copy of the most recently applied Term — the term
+	// this pooler last committed to postgres WAL (primary) or received via WAL
+	// replication (replica). Nil means no term has been seen yet.
+	//
+	// This is a cache: in principle it can be re-read from postgres on startup
+	// (e.g. by querying the consensus state table). It is persisted here to
+	// avoid a postgres round-trip on every coordinator status check.
+	// TODO: evaluate whether this needs to be persisted separately, or whether
+	// it can always be refreshed from postgres when postgres is available.
+	CachedTerm *Term
 
-	// Commitment is non-nil when this pooler has been recruited by a coordinator.
-	// It records the coordinator and rule version range the pooler has committed to.
+	// Commitment grants one coordinator exclusive authority to append term
+	// changes to the shadow WAL in the range (AtTermSeq, ProposedSeq]. A new
+	// commitment with a higher ProposedSeq supersedes any previous one.
+	// Nil means no coordinator currently holds authority.
 	Commitment *RecruitmentCommitment
+
+	// ShadowWAL is the append-only log of Term changes written by the
+	// authorised coordinator while postgres is stopped. Like real WAL, entries
+	// are ordered by Seq and must satisfy the same invariants as a normal term
+	// write (sequential seqs, achievable policy, valid cohort). Unlike
+	// CachedTerm, this cannot be recovered from postgres — it is the source of
+	// truth for term transitions that occurred while postgres was stopped.
+	//
+	// Entries are pruned once real postgres WAL confirms the corresponding
+	// transitions.
+	// TODO: add shadow WAL truncation for coordinator-directed pg_rewind
+	// (non-durable divergent timeline recovery).
+	ShadowWAL []*Term
 }
 
 // PolicySeq returns the sequence number of the current rules, or 0 if no rules
 // have been applied yet.
 func (s PoolerPersistentState) PolicySeq() int64 {
-	if s.Term == nil {
+	if s.CachedTerm == nil {
 		return 0
 	}
-	return s.Term.Seq
+	return s.CachedTerm.Seq
 }
 
-// CommitmentEndSeq returns the ProposedSeq of the current commitment, or 0 if
-// no commitment has been recorded.
+// CommitmentEndSeq returns the ProposedSeq of the current commitment (the
+// highest term seq the authorised coordinator may write), or 0 if no
+// commitment exists.
 func (s PoolerPersistentState) CommitmentEndSeq() int64 {
 	if s.Commitment == nil {
 		return 0

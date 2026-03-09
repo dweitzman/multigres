@@ -162,7 +162,7 @@ func (c *CoordNode) computeTermVersions() (highestSeen, highestQuorum *Term) {
 	// All poolers with the same Seq hold the same immutable record.
 	termsBySeq := make(map[int64]*Term)
 	for _, p := range sortedmaps.Values(c.known) {
-		r := p.state.Term
+		r := p.state.CachedTerm
 		if r == nil {
 			continue
 		}
@@ -202,7 +202,7 @@ func (c *CoordNode) isDurable(t *Term) bool {
 	var acking []CohortMember
 	for _, m := range t.Members {
 		p, ok := c.known[m.ID]
-		if !ok || p.state.Term == nil || p.state.Term.Seq < t.Seq {
+		if !ok || p.state.CachedTerm == nil || p.state.CachedTerm.Seq < t.Seq {
 			continue
 		}
 		acking = append(acking, m)
@@ -271,20 +271,20 @@ func (c *CoordNode) handleWriteResponse(ind WritePolicyResponseIndicator) {
 		// broadcast.
 		if p, ok := c.known[ind.FromPooler]; ok {
 			term := c.pendingWrite.term
-			p.state.Term = &term
+			p.state.CachedTerm = &term
 		}
 	} else {
 		// CAS mismatch: the primary's current seq is ind.CurrentSeq, not what
 		// we thought. Only update our cache if we don't already have a fresher
 		// view from an out-of-band status update (which would have a matching seq).
 		if p, ok := c.known[ind.FromPooler]; ok {
-			if p.state.Term == nil || p.state.Term.Seq != ind.CurrentSeq {
+			if p.state.CachedTerm == nil || p.state.CachedTerm.Seq != ind.CurrentSeq {
 				// We don't have the full term for ind.CurrentSeq yet. Clear our
 				// cached term and wait for a PoolerStatusIndicator that carries
 				// the full record before retrying.
-				p.state.Term = nil
+				p.state.CachedTerm = nil
 			}
-			// If p.state.Term.Seq == ind.CurrentSeq we already have up-to-date
+			// If p.state.CachedTerm.Seq == ind.CurrentSeq we already have up-to-date
 			// information and can retry on the next advance() call.
 		}
 	}
@@ -303,7 +303,7 @@ func (c *CoordNode) advance() []Request {
 		return nil
 	}
 
-	currentTerm := primaryKnown.state.Term
+	currentTerm := primaryKnown.state.CachedTerm
 	if currentTerm == nil {
 		return nil // primary has no term yet; wait for status
 	}

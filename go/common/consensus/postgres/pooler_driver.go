@@ -114,7 +114,7 @@ func (d *PoolerDriver) Run(ctx context.Context) error {
 					// Capture committed term now (in the tick loop) before handing
 					// off to the goroutine — PoolerNode must not be accessed
 					// concurrently.
-					currentTerm := d.node.CommittedState().Term
+					currentTerm := d.node.CommittedState().CachedTerm
 					go d.applyPolicyRecord(ctx, r, currentTerm)
 
 				case consensus.RevokeParticipationRequest:

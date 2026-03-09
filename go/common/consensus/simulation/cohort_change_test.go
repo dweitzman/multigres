@@ -197,7 +197,7 @@ func TestPolicyWriteRejection(t *testing.T) {
 		policyWriteCondition(pooler2, 2, node1ID, []consensus.CohortMember{{ID: node1ID}}, consensus.AtLeastPolicy(1), false),
 		10,
 	)
-	require.Nil(t, pooler2.Node().CommittedState().Term,
+	require.Nil(t, pooler2.Node().CommittedState().CachedTerm,
 		"replica state must not change after write rejection")
 
 	// Case 3: unachievable policy — AtLeast(4) requires 4 nodes, but cohort has 1.

@@ -48,9 +48,9 @@ func newTestSim(coordID consensus.NodeID) *simType {
 func newPrimaryPooler(id consensus.NodeID, seedTerm *consensus.Term, sim *simType) *SimPooler {
 	store := &MemStorage{}
 	store.state = consensus.PoolerPersistentState{
-		Role:    consensus.RolePrimary,
-		Primary: id,
-		Term:    seedTerm,
+		Role:       consensus.RolePrimary,
+		Primary:    id,
+		CachedTerm: seedTerm,
 	}
 	return NewSimPooler(consensus.NewPoolerNode(id, store, consensus.NodeProperties{}), sim)
 }
@@ -117,7 +117,7 @@ func (c *allHaveAppliedRules) Name() string {
 func (c *allHaveAppliedRules) Eval(_ *simType) bool {
 	for _, sp := range c.poolers {
 		state := sp.Node().CommittedState()
-		term := state.Term
+		term := state.CachedTerm
 		if term == nil || len(term.Members) != len(c.members) {
 			return false
 		}
@@ -174,7 +174,7 @@ func (c *allHaveAppliedRules) Describe(_ *simType) string {
 	var lines []string
 	for _, sp := range c.poolers {
 		state := sp.Node().CommittedState()
-		term := state.Term
+		term := state.CachedTerm
 		var rulesStr string
 		if term == nil {
 			rulesStr = "no rules"

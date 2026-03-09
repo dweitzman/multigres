@@ -44,9 +44,9 @@ func statusInd(id consensus.NodeID, role consensus.PoolerRole, primary consensus
 	return consensus.PoolerStatusIndicator{
 		PoolerID: id,
 		State: consensus.PoolerPersistentState{
-			Role:    role,
-			Primary: primary,
-			Term:    term,
+			Role:       role,
+			Primary:    primary,
+			CachedTerm: term,
 		},
 		PostgresStatus: pgStatus,
 	}
