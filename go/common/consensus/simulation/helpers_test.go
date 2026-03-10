@@ -15,6 +15,7 @@
 package simulation
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
 	"strings"
@@ -111,6 +112,68 @@ func simPoolerByID(sim *simType, id consensus.NodeID) *SimPooler {
 		}
 	}
 	return nil
+}
+
+// --- Generic value-tracking conditions ---
+
+// valueNeverDecreases is a safety invariant: the value returned by getValue
+// must be monotonically non-decreasing across ticks. Tracks the maximum ever
+// seen; returns false if the current value drops below that maximum.
+// Register with sim.Always to assert this holds for the entire simulation.
+type valueNeverDecreases[T cmp.Ordered] struct {
+	name     string
+	getValue func(*simType) T
+	max      T
+	hasMax   bool
+}
+
+func (c *valueNeverDecreases[T]) Name() string { return c.name }
+
+func (c *valueNeverDecreases[T]) Eval(sim *simType) bool {
+	v := c.getValue(sim)
+	if c.hasMax && v < c.max {
+		return false // dropped below previously seen maximum
+	}
+	if !c.hasMax || v > c.max {
+		c.max = v
+		c.hasMax = true
+	}
+	return true
+}
+
+func (c *valueNeverDecreases[T]) Describe(sim *simType) string {
+	return fmt.Sprintf("%s: max_seen=%v, current=%v", c.name, c.max, c.getValue(sim))
+}
+
+// valueNewMax fires whenever getValue(sim) strictly exceeds the maximum value
+// seen so far. Drops below the previous maximum (e.g. a coordinator view
+// resetting to 0 after a crash) are ignored. Use with dstsim.NewAtLeastNTimes
+// to count genuine upward progress events rather than oscillations.
+type valueNewMax[T cmp.Ordered] struct {
+	name     string
+	getValue func(*simType) T
+	max      T
+	hasMax   bool
+}
+
+func (c *valueNewMax[T]) Name() string { return c.name }
+
+func (c *valueNewMax[T]) Eval(sim *simType) bool {
+	v := c.getValue(sim)
+	if !c.hasMax {
+		c.max = v
+		c.hasMax = true
+		return false // first evaluation: establish baseline, don't fire
+	}
+	if v > c.max {
+		c.max = v
+		return true
+	}
+	return false
+}
+
+func (c *valueNewMax[T]) Describe(_ *simType) string {
+	return fmt.Sprintf("%s: max_seen=%v", c.name, c.max)
 }
 
 // --- Conditions ---
