@@ -100,6 +100,13 @@ func (c *CoordNode) SetHealthTimeout(ticks int64) {
 	c.healthTimeoutTicks = ticks
 }
 
+// Restart clears all ephemeral coordinator state. The coordinator re-learns
+// the cluster by processing PoolerStatusIndicator updates on subsequent ticks.
+func (c *CoordNode) Restart() {
+	c.known = make(map[NodeID]*knownPooler)
+	c.pendingWrite = nil
+}
+
 // ClusterView is the coordinator's current best-known state of the cluster,
 // computed from accumulated PoolerStatusIndicators.
 type ClusterView struct {

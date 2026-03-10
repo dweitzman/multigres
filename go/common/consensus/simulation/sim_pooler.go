@@ -20,6 +20,24 @@ import (
 	"github.com/multigres/multigres/go/common/consensus"
 )
 
+// postgresMode indicates whether the simulated postgres instance is in
+// read-write primary mode or hot-standby mode, mirroring the postgres concept
+// of recovery mode (pg_is_in_recovery()).
+type postgresMode int8
+
+const (
+	// postgresHotStandby represents a postgres that has not been promoted:
+	// it can stream WAL from a primary (if a replica) but cannot commit new
+	// writes. All nodes start in this mode; promotion to postgresPrimary
+	// requires a committed term designating the node as the current primary.
+	postgresHotStandby postgresMode = iota
+
+	// postgresPrimary represents a promoted, writable postgres instance.
+	// The node has a committed term designating it as primary, and
+	// synchronous_standby_names is set to enforce the term's durability policy.
+	postgresPrimary
+)
+
 // lsn is a Log Sequence Number, a monotonically increasing position in the WAL.
 type lsn int64
 
@@ -142,19 +160,20 @@ func (b *bothPolicy) RevokesAndSamplesAllRevocationSets(cohortMembers, recruited
 }
 
 // SimPooler wraps a PoolerNode and acts as the local postgres driver in
-// simulation. It models a postgres instance that can operate in two modes:
+// simulation. The simulated postgres can run in two modes (postgresMode):
 //
-//   - Primary mode: maintains the authoritative WAL, tracks which replicas
+//   - postgresPrimary: maintains the authoritative WAL, tracks which replicas
 //     have received each LSN, and enforces write quorum via simulated
 //     synchronous_standby_names before considering a write durable.
 //
-//   - Replica mode: pulls WAL entries directly from its configured primary
-//     each tick (analogous to postgres's primary_conninfo), tracks the
-//     highest LSN received, and delivers ApplyRulesResponseIndicators to the
-//     wrapped PoolerNode when rules records arrive.
+//   - postgresHotStandby: pulls WAL entries from its configured primary each
+//     tick (analogous to postgres primary_conninfo), tracks the highest LSN
+//     received, and delivers ApplyRulesResponseIndicators to the wrapped
+//     PoolerNode when rules records arrive. This covers both replica nodes
+//     and primary nodes that are temporarily in standby during a transition.
 //
-// WAL replication is handled within Step() — each replica looks up its
-// primary's SimPooler and reads new entries directly, mirroring how each
+// WAL replication is handled within Step() — each hot-standby node looks up
+// its primary's SimPooler and reads new entries directly, mirroring how each
 // postgres instance manages its own replication connection.
 //
 // SimPooler intercepts PolicyRecordApplyRequest before it reaches the
@@ -164,6 +183,15 @@ func (b *bothPolicy) RevokesAndSamplesAllRevocationSets(cohortMembers, recruited
 type SimPooler struct {
 	node *consensus.PoolerNode
 	sim  *simType
+
+	// mode is the current postgres operational mode. Nodes always start in
+	// postgresHotStandby and transition to postgresPrimary only when a
+	// committed term designates the node as primary with a valid cohort and
+	// durability policy. When a primary is revoked by a coordinator, its
+	// postgres is restarted in hot-standby mode (mode = postgresHotStandby),
+	// mirroring real postgres where there is no way to halt all writes without
+	// a restart.
+	mode postgresMode
 
 	// wal is the WAL buffer. Primary appends entries here; replicas receive
 	// entries via pullWAL. Each entry's pos is strictly increasing.
@@ -178,10 +206,11 @@ type SimPooler struct {
 	gucSyncStandbys []consensus.CohortMember
 	gucSyncPolicy   consensus.DurabilityPolicy // nil = AtLeast(1), no replicas required
 
-	// gucWALReceiveEnabled is the simulated GUC that controls whether this
-	// replica pulls WAL from the primary (analogous to recovery_target_action or
-	// standby_mode). Set to false when the sidecar revokes WAL receive; restored
-	// when new rules are applied. Ignored for primaries (which never pull WAL).
+	// gucWALReceiveEnabled tracks whether this replica is participating in
+	// write quorum (analogous to streaming replication being active). Set to
+	// false when the sidecar revokes WAL receive on behalf of the coordinator
+	// (recruitment for a rule change); restored when new rules are applied.
+	// Only meaningful for hot-standby nodes pulling WAL; ignored for primaries.
 	gucWALReceiveEnabled bool
 
 	// replicaACK tracks the highest WAL position each replica has confirmed
@@ -193,13 +222,12 @@ type SimPooler struct {
 	pendingChange *pendingRuleChange
 
 	// receivedLSN is the highest WAL position this node has received from the
-	// primary (replica only). On graceful switchover the WAL timeline is
+	// primary (hot-standby only). On graceful switchover the WAL timeline is
 	// compatible so this position remains valid against the new primary.
 	receivedLSN lsn
 
 	// primaryConnInfo is the primary this node is currently configured to
-	// replicate from, analogous to postgres's primary_conninfo setting. Tracked
-	// to detect when the replication target changes.
+	// replicate from, analogous to postgres's primary_conninfo setting.
 	primaryConnInfo consensus.NodeID
 
 	// pendingWAL holds entries received from the primary that have not yet
@@ -230,21 +258,120 @@ type SimPooler struct {
 
 // NewSimPooler creates a SimPooler wrapping the given PoolerNode. sim is the
 // simulator used to look up peer SimPoolers for WAL replication each tick.
-func NewSimPooler(node *consensus.PoolerNode, sim *simType) *SimPooler {
-	return &SimPooler{
+//
+// initialTerm, if non-nil, starts the node in postgresPrimary mode with the
+// given term's cohort as synchronous_standby_names. This is the bootstrap
+// assumption: production bootstrap (initial term write + basebackup for
+// replicas) must complete before starting the consensus algorithm, so primary
+// nodes always start with a committed term.
+//
+// Pass nil for initialTerm to start the node in postgresHotStandby mode
+// (the default for replicas and any node whose bootstrap is not yet complete).
+//
+// TODO(bootstrap): add bootstrap support to the deterministic simulation so
+// tests can exercise the full startup sequence rather than relying on seeding
+// nodes with pre-committed state.
+func NewSimPooler(node *consensus.PoolerNode, sim *simType, initialTerm *consensus.Term) *SimPooler {
+	s := &SimPooler{
 		node:                     node,
 		sim:                      sim,
 		replicaACK:               make(map[consensus.NodeID]lsn),
 		responseCallbacks:        make(map[string]func(consensus.WritePolicyResponseRequest)),
 		recruitResponseCallbacks: make(map[string]func(consensus.RecruitResponseRequest)),
-		gucWALReceiveEnabled:     node.CommittedState().Commitment == nil,
+	}
+	if initialTerm != nil {
+		s.mode = postgresPrimary
+		s.gucWALReceiveEnabled = true
+		for _, m := range initialTerm.Members {
+			if m.ID != node.ID() {
+				s.gucSyncStandbys = append(s.gucSyncStandbys, m)
+			}
+		}
+		s.gucSyncPolicy = initialTerm.Policy
+	} else {
+		// Hot standby: replicas start pulling WAL immediately (gucWALReceiveEnabled=true)
+		// unless this node has an active coordinator commitment (revoked from quorum).
+		s.mode = postgresHotStandby
+		state := node.CommittedState()
+		s.gucWALReceiveEnabled = state.Commitment == nil
+		s.primaryConnInfo = state.Primary
+	}
+	return s
+}
+
+// reinitGUC re-derives all simulated GUC settings from the node's current
+// committed state, mirroring what postgres does on startup or after applying a
+// new term from WAL. Called after Restart and whenever the node's role changes
+// (e.g. graceful primary switchover).
+//
+// A node is promoted to postgresPrimary only when it has a committed term
+// designating it as the current primary with a valid cohort and policy. In all
+// other cases (pre-bootstrap, replica, revoked) it runs as postgresHotStandby.
+func (s *SimPooler) reinitGUC() {
+	state := s.node.CommittedState()
+	switch state.Role {
+	case consensus.RolePrimary:
+		s.primaryConnInfo = ""
+		s.gucSyncStandbys = nil
+		s.gucSyncPolicy = nil
+		if state.CachedTerm != nil && state.Commitment == nil {
+			// Bootstrap complete and not revoked: promote to primary write mode.
+			s.mode = postgresPrimary
+			s.gucWALReceiveEnabled = true
+			for _, m := range state.CachedTerm.Members {
+				if m.ID != s.node.ID() {
+					s.gucSyncStandbys = append(s.gucSyncStandbys, m)
+				}
+			}
+			s.gucSyncPolicy = state.CachedTerm.Policy
+		} else {
+			// No committed term (pre-bootstrap) or recruited by coordinator:
+			// postgres is in hot-standby mode, not yet writable.
+			s.mode = postgresHotStandby
+			s.gucWALReceiveEnabled = false
+		}
+	case consensus.RoleReplica:
+		s.mode = postgresHotStandby
+		s.primaryConnInfo = state.Primary
+		s.gucSyncStandbys = nil
+		s.gucSyncPolicy = nil
+		s.gucWALReceiveEnabled = state.Commitment == nil
+	default:
+		// Role unknown: conservative non-writable standby.
+		s.mode = postgresHotStandby
+		s.primaryConnInfo = ""
+		s.gucSyncStandbys = nil
+		s.gucSyncPolicy = nil
+		s.gucWALReceiveEnabled = false
 	}
 }
 
+// Restart simulates a crash-restart: clears all ephemeral sidecar state,
+// calls PoolerNode.Restart to reload committed state from storage, and
+// re-initializes GUC settings via reinitGUC. This mirrors postgres crash
+// recovery: the process reloads its last-checkpointed state and reapplies
+// synchronous_standby_names / primary_conninfo from the committed term on disk.
+//
+// The WAL buffer (wal, nextPos, receivedLSN) is preserved — WAL is durable
+// storage that survives crashes. Pending in-flight pipelines and queued
+// indicators are cleared (lost like in-memory postgres state on crash).
+// Implements dstsim.Restartable.
+func (s *SimPooler) Restart() {
+	s.node.Restart()
+	s.replicaACK = make(map[consensus.NodeID]lsn)
+	s.pendingChange = nil
+	s.pendingWAL = nil
+	s.queuedIndicators = nil
+	s.pendingRevokeCorrelationID = ""
+	s.responseCallbacks = make(map[string]func(consensus.WritePolicyResponseRequest))
+	s.recruitResponseCallbacks = make(map[string]func(consensus.RecruitResponseRequest))
+	s.reinitGUC()
+}
+
 // isRevoked returns true when the sidecar has revoked this node's participation
-// in write quorum. Derived from gucWALReceiveEnabled: the sidecar sets it false
-// for both replicas (stop ACKing) and primaries (read-only mode) on revocation,
-// and restores it to true when new rules are applied.
+// in write quorum on behalf of a coordinator (recruitment for a rule change).
+// For replicas this means stopping WAL ACKs; for primaries it means postgres
+// has been restarted in hot-standby mode (mode = postgresHotStandby).
 func (s *SimPooler) isRevoked() bool {
 	return !s.gucWALReceiveEnabled
 }
@@ -304,19 +431,22 @@ func (s *SimPooler) SendRecruitIndicator(ind consensus.RecruitIndicator, callbac
 	}
 }
 
-// applyRevokedGUC simulates the postgres GUC changes that take effect when
-// this node stops participating in write quorum. Sets gucWALReceiveEnabled=false
-// (making isRevoked() return true). Role-specific behaviour:
+// applyRevokedGUC simulates the sidecar completing a coordinator-requested
+// revocation. Sets gucWALReceiveEnabled=false (making isRevoked() return true).
 //
-// Primary: clears sync standbys/policy and drops any pending WAL entries that
-// did not reach write quorum. This mirrors postgres crash-recovery: WAL that
-// never received sufficient replica ACKs is truncated, and any in-flight write
-// pipeline is aborted with ApplyRulesResponseIndicator{Accepted:false}.
+// For primaries, revocation simulates restarting postgres in hot-standby mode:
+// there is no way to halt all writes in postgres without a restart, so we model
+// this by transitioning mode to postgresHotStandby. Any in-flight write pipeline
+// is aborted (WAL entries that never reached quorum are truncated, mirroring
+// crash recovery rolling back uncommitted writes).
 //
-// Replica: stops pulling WAL by clearing primaryConnInfo and gucWALReceiveEnabled.
-// The primary is left stuck in awaitQuorum if it was waiting for this replica's ACK.
+// For replicas, stops pulling WAL (clears gucWALReceiveEnabled and
+// primaryConnInfo). The primary is left stuck in awaitQuorum if it was waiting
+// for this replica's ACK.
 func (s *SimPooler) applyRevokedGUC() {
 	if s.node.CommittedState().Role == consensus.RolePrimary {
+		// Restart postgres in hot-standby mode (cannot stop writes without restart).
+		s.mode = postgresHotStandby
 		s.gucSyncStandbys = nil
 		s.gucSyncPolicy = nil
 		if s.pendingChange != nil {
@@ -351,6 +481,60 @@ func (s *SimPooler) truncateWALAfter(after lsn) {
 	}
 }
 
+// applyGUCForTerm updates the simulated postgres GUC settings for a term
+// received via WAL replication, mirroring what the sidecar would do when it
+// discovers a new term in the WAL stream and reconfigures postgres accordingly.
+//
+// If this node is the primary in the new term it transitions to postgresPrimary
+// mode and sets synchronous_standby_names to the new cohort (minus self).
+// Otherwise it remains in postgresHotStandby and updates primaryConnInfo to
+// the term's primary. In both cases any prior recruitment commitment is
+// considered resolved by the new term.
+func (s *SimPooler) applyGUCForTerm(term *consensus.Term) {
+	// Applying new rules resolves any prior recruitment commitment.
+	s.gucWALReceiveEnabled = true
+	if term.Primary == s.node.ID() {
+		// This node is the primary in the new term: promote to write mode.
+		s.mode = postgresPrimary
+		s.primaryConnInfo = ""
+		s.gucSyncStandbys = nil
+		for _, m := range term.Members {
+			if m.ID != s.node.ID() {
+				s.gucSyncStandbys = append(s.gucSyncStandbys, m)
+			}
+		}
+		s.gucSyncPolicy = term.Policy
+	} else {
+		// This node is a replica in the new term: stay in hot-standby mode.
+		s.mode = postgresHotStandby
+		s.primaryConnInfo = term.Primary
+		s.gucSyncStandbys = nil
+		s.gucSyncPolicy = nil
+	}
+}
+
+// advancePendingWAL processes WAL entries that were received from the primary
+// in a previous tick. For each term record found, it applies GUC settings via
+// applyGUCForTerm and then queues an ApplyRulesResponseIndicator so the wrapped
+// PoolerNode can persist the new committed state.
+//
+// The one-tick delay between receiving a WAL entry and processing it here
+// models the latency of the real postgres WAL receiver + sidecar: the sidecar
+// must first apply the GUC change (synchronous_standby_names / primary_conninfo)
+// and only then informs the consensus state machine that the term was applied.
+func (s *SimPooler) advancePendingWAL() {
+	for _, e := range s.pendingWAL {
+		if e.record != nil {
+			s.applyGUCForTerm(e.record)
+			s.queuedIndicators = append(s.queuedIndicators, consensus.ApplyRulesResponseIndicator{
+				Term:     *e.record,
+				Accepted: true,
+			})
+		}
+	}
+	s.pendingWAL = nil
+}
+
 // advancePendingRevoke completes a sidecar revocation that was initiated on a
 // prior tick. Applies revoked GUC settings and queues
 // RevokeParticipationResponseIndicator for the wrapped PoolerNode. This models
@@ -373,19 +557,29 @@ func (s *SimPooler) advancePendingRevoke() {
 //
 // The method:
 //  1. Completes any pending sidecar revocation (from a prior tick).
-//  2. Pulls new WAL from the configured primary if this node is a replica.
-//     Doing this after revocation means a newly-revoked node skips ACKs.
-//  3. Advances the pending rules-apply pipeline (primary path).
-//  4. Calls PoolerNode.Step with all accumulated indicators.
-//  5. Intercepts PolicyRecordApplyRequest and RevokeParticipationRequest from output.
+//  2. Processes WAL entries received in previous ticks: applies GUC changes and
+//     queues ApplyRulesResponseIndicators. This models the sidecar latency between
+//     receiving a WAL entry and reconfiguring postgres + notifying consensus.
+//  3. Pulls new WAL from the configured primary (stored for next tick's processing).
+//  4. Advances the pending rules-apply pipeline (primary path).
+//  5. Calls PoolerNode.Step with all accumulated indicators.
+//  6. Intercepts PolicyRecordApplyRequest and RevokeParticipationRequest from output.
 //
 // Returns the subset of requests to pass to the RequestHandler.
 func (s *SimPooler) Step(tick int64, externalInds []consensus.Indicator) []consensus.Request {
-	// Complete any in-flight sidecar revocation before pulling WAL so that a
-	// newly-revoked node skips ACKing on this tick.
+	// Complete any in-flight sidecar revocation before processing WAL so that
+	// a newly-revoked node skips ACKing on this tick.
 	s.advancePendingRevoke()
 
-	// Replica path: pull WAL from the configured primary.
+	// Replica path: process WAL entries received in previous ticks. This
+	// applies GUC changes (via applyGUCForTerm) and queues
+	// ApplyRulesResponseIndicators for the wrapped PoolerNode. Done before
+	// pullWAL so that newly-pulled entries are not processed until next tick,
+	// modelling the at-least-one-tick sidecar latency.
+	s.advancePendingWAL()
+
+	// Replica path: pull new WAL from the configured primary. Entries are
+	// stored in pendingWAL and will be processed in the next tick.
 	s.pullWAL()
 
 	// Primary path: advance the rules-apply pipeline. This may append to
@@ -394,21 +588,10 @@ func (s *SimPooler) Step(tick int64, externalInds []consensus.Indicator) []conse
 	// in the same tick.
 	s.advancePendingChange()
 
-	inds := make([]consensus.Indicator, 0, len(s.queuedIndicators)+len(externalInds)+len(s.pendingWAL))
+	inds := make([]consensus.Indicator, 0, len(s.queuedIndicators)+len(externalInds))
 	inds = append(inds, s.queuedIndicators...)
 	inds = append(inds, externalInds...)
 	s.queuedIndicators = nil
-
-	// Replica path: process WAL entries received from the primary.
-	for _, e := range s.pendingWAL {
-		if e.record != nil {
-			inds = append(inds, consensus.ApplyRulesResponseIndicator{
-				Term:     *e.record,
-				Accepted: true,
-			})
-		}
-	}
-	s.pendingWAL = nil
 
 	// Step the wrapped PoolerNode with all accumulated indicators.
 	reqs := s.node.Step(tick, inds)
@@ -502,17 +685,13 @@ func (s *SimPooler) findSimPooler(id consensus.NodeID) *SimPooler {
 //  4. finalGUC:    set standbys and policy to the new values.
 //  5. sendIndicator: queue ApplyRulesResponseIndicator for PoolerNode.
 func (s *SimPooler) handleApply(req consensus.PolicyRecordApplyRequest) {
-	// Replicas do not maintain a writable WAL; reject the apply immediately.
-	if s.node.CommittedState().Role != consensus.RolePrimary {
-		s.queuedIndicators = append(s.queuedIndicators, consensus.ApplyRulesResponseIndicator{
-			Term:     req.Term,
-			Accepted: false,
-		})
-		return
-	}
-	// A revoked primary has been placed in read-only mode by the sidecar and
-	// cannot commit new WAL entries.
-	if s.isRevoked() {
+	// Only a postgres in primary write mode can commit new WAL entries.
+	// mode == postgresPrimary implies: the committed term designates this node
+	// as primary, bootstrap is complete, and the node has not been revoked by
+	// a coordinator (which restarts postgres in hot-standby mode).
+	// Hot-standby nodes (replicas, pre-bootstrap primaries, revoked primaries)
+	// reject the apply.
+	if s.mode != postgresPrimary {
 		s.queuedIndicators = append(s.queuedIndicators, consensus.ApplyRulesResponseIndicator{
 			Term:     req.Term,
 			Accepted: false,
@@ -620,12 +799,22 @@ func (s *SimPooler) advancePendingChange() {
 		}
 
 	case ruleChangePhaseFinalGUC:
-		// Apply final GUC: only the new standbys and new policy.
-		// Restore gucWALReceiveEnabled so isRevoked() returns false — new rules
-		// supersede any prior commitment range and the node resumes participation.
-		s.gucSyncStandbys = c.finalStandbys
-		s.gucSyncPolicy = c.finalPolicy
+		// Apply final GUC. New rules supersede any prior commitment.
 		s.gucWALReceiveEnabled = true
+		if c.term.Primary == s.node.ID() {
+			// This node remains primary under the new term.
+			s.gucSyncStandbys = c.finalStandbys
+			s.gucSyncPolicy = c.finalPolicy
+			s.mode = postgresPrimary
+		} else {
+			// This node is being demoted (graceful switchover). Transition to
+			// hot-standby mode and point at the new primary. The new primary
+			// will begin its own pipeline when it processes the WAL entry.
+			s.mode = postgresHotStandby
+			s.gucSyncStandbys = nil
+			s.gucSyncPolicy = nil
+			s.primaryConnInfo = c.term.Primary
+		}
 		c.phase = ruleChangePhaseSendIndicator
 
 	case ruleChangePhaseSendIndicator:

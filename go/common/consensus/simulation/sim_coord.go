@@ -48,6 +48,13 @@ func (s *SimCoordNode) ID() consensus.NodeID {
 	return s.node.ID()
 }
 
+// Restart clears all ephemeral coordinator state. The coordinator will
+// re-discover poolers and re-learn cluster state on subsequent ticks.
+// Implements dstsim.Restartable.
+func (s *SimCoordNode) Restart() {
+	s.node.Restart()
+}
+
 // Step discovers all SimPoolers registered in the simulator, reconciles that
 // set against the coordinator's known-pooler list, injects any necessary
 // membership indicators, then calls CoordNode.Step. Implements dstsim.Node.

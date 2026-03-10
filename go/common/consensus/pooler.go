@@ -228,6 +228,12 @@ func (n *PoolerNode) handleApplyResponse(ind ApplyRulesResponseIndicator) ([]Req
 
 	newState := n.committed
 	newState.CachedTerm = &ind.Term
+	newState.Primary = ind.Term.Primary
+	if ind.Term.Primary == n.id {
+		newState.Role = RolePrimary
+	} else {
+		newState.Role = RoleReplica
+	}
 	if err := n.storage.Save(newState); err != nil {
 		return nil, false
 	}

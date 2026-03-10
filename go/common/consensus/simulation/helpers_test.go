@@ -52,7 +52,7 @@ func newPrimaryPooler(id consensus.NodeID, seedTerm *consensus.Term, sim *simTyp
 		Primary:    id,
 		CachedTerm: seedTerm,
 	}
-	return NewSimPooler(consensus.NewPoolerNode(id, store, consensus.NodeProperties{}), sim)
+	return NewSimPooler(consensus.NewPoolerNode(id, store, consensus.NodeProperties{}), sim, seedTerm)
 }
 
 // newReplicaPooler creates a SimPooler pre-initialized as a replica streaming from
@@ -64,7 +64,7 @@ func newReplicaPooler(id, primaryID consensus.NodeID, sim *simType) *SimPooler {
 		Role:    consensus.RoleReplica,
 		Primary: primaryID,
 	}
-	return NewSimPooler(consensus.NewPoolerNode(id, store, consensus.NodeProperties{}), sim)
+	return NewSimPooler(consensus.NewPoolerNode(id, store, consensus.NodeProperties{}), sim, nil)
 }
 
 // --- Helpers ---
