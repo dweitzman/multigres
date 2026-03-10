@@ -23,6 +23,26 @@ import (
 	"github.com/multigres/multigres/go/tools/dstsim"
 )
 
+// --- Delivery manager helpers ---
+
+// reliableMembership wraps inner with a PerSourceDeliveryManager that routes
+// discoverySourceID traffic through a zero-chaos (reliable) delivery manager.
+// All other traffic goes through inner unchanged.
+//
+// Use this whenever applying a chaos delivery manager to the simulation: it
+// ensures that coordinator membership events (PoolerDiscoveredIndicator /
+// PoolerRemovedIndicator) are never dropped, delayed, or duplicated regardless
+// of the chaos settings in inner, keeping membership convergence decoupled from
+// network chaos.
+func reliableMembership(inner dstsim.IndicatorDeliveryManager[consensus.Indicator, consensus.NodeID]) dstsim.IndicatorDeliveryManager[consensus.Indicator, consensus.NodeID] {
+	return &dstsim.PerSourceDeliveryManager[consensus.Indicator, consensus.NodeID]{
+		Default: inner,
+		Overrides: map[consensus.NodeID]dstsim.IndicatorDeliveryManager[consensus.Indicator, consensus.NodeID]{
+			discoverySourceID: &dstsim.ChaosDeliveryManager[consensus.Indicator, consensus.NodeID]{},
+		},
+	}
+}
+
 // --- Simulator factory ---
 
 // newTestSim creates a Simulator pre-configured for consensus simulation tests:

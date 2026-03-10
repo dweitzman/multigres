@@ -165,13 +165,13 @@ func TestCohortExpansionUnreliableNetwork(t *testing.T) {
 	rng := rand.New(rand.NewPCG(seed, 0))
 
 	sim := newTestSim(coordID)
-	sim.SetDeliveryManager(&dstsim.ChaosDeliveryManager[consensus.Indicator, consensus.NodeID]{
+	sim.SetDeliveryManager(reliableMembership(&dstsim.ChaosDeliveryManager[consensus.Indicator, consensus.NodeID]{
 		Chaos: dstsim.ChaosParams{
 			MaxDelay: 5,
 			DropRate: 0.1,
 			Rng:      rng,
 		},
-	})
+	}))
 
 	seedTerm := &consensus.Term{
 		Seq:     1,
@@ -228,13 +228,13 @@ func TestCohortExpansionCoordinatorCrashes(t *testing.T) {
 	rng := rand.New(rand.NewPCG(seed, 0))
 
 	sim := newTestSim(coordID)
-	sim.SetDeliveryManager(&dstsim.ChaosDeliveryManager[consensus.Indicator, consensus.NodeID]{
+	sim.SetDeliveryManager(reliableMembership(&dstsim.ChaosDeliveryManager[consensus.Indicator, consensus.NodeID]{
 		Chaos: dstsim.ChaosParams{
 			MaxDelay: 5,
 			DropRate: 0.1,
 			Rng:      rng,
 		},
-	})
+	}))
 
 	seedTerm := &consensus.Term{
 		Seq:     1,

@@ -132,6 +132,16 @@ func (s *Simulator[I, R, ID]) SetRequestHandler(handler RequestHandler[I, R, ID]
 	s.requestHandler = handler
 }
 
+// EnqueueDirect submits an indicator directly into the delivery pipeline,
+// bypassing the request handler. The indicator is subject to the configured
+// delivery manager's chaos, delay, and drop settings. Use this from within a
+// node's Step() implementation to inject self-generated events (e.g. a
+// coordinator injecting its own membership discovery events) so they appear
+// in the trace.
+func (s *Simulator[I, R, ID]) EnqueueDirect(from, to ID, ind I) {
+	s.enqueueIndicator(from, to, ind)
+}
+
 // enqueueIndicator submits an indicator to the delivery manager and records any trace events.
 func (s *Simulator[I, R, ID]) enqueueIndicator(fromNode ID, targetNode ID, ind I) {
 	if _, exists := s.nodes[targetNode]; !exists {
