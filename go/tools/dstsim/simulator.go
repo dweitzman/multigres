@@ -24,9 +24,9 @@ package dstsim
 // calls Restart() before resuming it, allowing it to clear ephemeral state.
 //
 // TODO: Review API for footguns and add factory methods where needed:
-// - UntilPolicy requires manual Sim reference (easy to forget, nil panic)
-// - PolicySequence construction is verbose
-// - Consider adding sim.NewUntilPolicy(), sim.NewPolicySequence() factory methods
+// - UntilDeliveryManager requires manual Sim reference (easy to forget, nil panic)
+// - SequenceDeliveryManager construction is verbose
+// - Consider adding sim.NewUntilDeliveryManager(), sim.NewSequenceDeliveryManager() factory methods
 
 import (
 	"fmt"
@@ -50,8 +50,8 @@ type Simulator[I any, R any, ID comparable] struct {
 	rng             *rand.Rand
 	assertions      []Assertion[I, R, ID]
 
-	// Delivery policy for network simulation
-	indicatorDeliveryPolicy IndicatorDeliveryPolicy[I, ID]
+	// Delivery manager for network simulation
+	deliveryManager IndicatorDeliveryManager[I, ID]
 
 	// Pluggable handler for converting node requests to indicators
 	requestHandler RequestHandler[I, R, ID]
@@ -62,9 +62,6 @@ type Simulator[I any, R any, ID comparable] struct {
 	// Track EventuallyAlways: when condition became true and if it stayed true
 	eventuallyAlwaysBecameTrue map[string]int64 // tick when condition first became true
 	eventuallyAlwaysViolated   map[string]bool  // whether condition became false after being true
-
-	// Scheduled indicator deliveries (tick -> nodeID -> indicators)
-	scheduledDeliveries map[int64]map[ID][]I
 
 	// Trace buffer for storing tick traces
 	traceBuffer *TraceBuffer[I, R, ID]
@@ -104,12 +101,11 @@ func NewSimulator[I, R any, ID comparable](opts SimulatorOptions) *Simulator[I, 
 		registeredOrder:            make([]ID, 0),
 		currentTick:                initialTick,
 		rng:                        rng,
-		indicatorDeliveryPolicy:    &FastNetwork[I, ID]{}, // Default: fast network with 1-tick latency
+		deliveryManager:            &ChaosDeliveryManager[I, ID]{}, // Default: reliable 1-tick delivery
 		assertions:                 make([]Assertion[I, R, ID], 0),
 		sometimesSatisfied:         make(map[string]bool),
 		eventuallyAlwaysBecameTrue: make(map[string]int64),
 		eventuallyAlwaysViolated:   make(map[string]bool),
-		scheduledDeliveries:        make(map[int64]map[ID][]I),
 		traceBuffer:                NewTraceBuffer[I, R, ID](opts.TraceRetention),
 		stoppedIDs:                 make(map[ID]bool),
 	}
@@ -121,9 +117,9 @@ func (s *Simulator[I, R, ID]) RegisterNode(n Node[I, R, ID]) {
 	s.registeredOrder = append(s.registeredOrder, n.ID())
 }
 
-// SetDeliveryPolicy sets the indicator delivery policy for network simulation
-func (s *Simulator[I, R, ID]) SetDeliveryPolicy(policy IndicatorDeliveryPolicy[I, ID]) {
-	s.indicatorDeliveryPolicy = policy
+// SetDeliveryManager sets the delivery manager for network simulation
+func (s *Simulator[I, R, ID]) SetDeliveryManager(manager IndicatorDeliveryManager[I, ID]) {
+	s.deliveryManager = manager
 }
 
 // CurrentTick returns the current simulation tick
@@ -136,76 +132,22 @@ func (s *Simulator[I, R, ID]) SetRequestHandler(handler RequestHandler[I, R, ID]
 	s.requestHandler = handler
 }
 
-// scheduleIndicator schedules an indicator for delivery to a target node via the delivery policy
-// The policy determines when/if the indicator is delivered (enforces minimum 1-tick delay)
-// This is an internal method - external callers should use RequestHandler.ProcessRequests
-func (s *Simulator[I, R, ID]) scheduleIndicator(fromNode ID, targetNode ID, ind I) error {
-	args := DeliveryArgs[I, ID]{
-		CurrentTick: s.currentTick,
-		FromNode:    fromNode,
-		Target:      targetNode,
-		Indicator:   ind,
-		AllNodes:    s.registeredOrder,
+// enqueueIndicator submits an indicator to the delivery manager and records any trace events.
+func (s *Simulator[I, R, ID]) enqueueIndicator(fromNode ID, targetNode ID, ind I) {
+	if _, exists := s.nodes[targetNode]; !exists {
+		panic(fmt.Sprintf("cannot enqueue indicator for non-existent node %v (check RequestHandler output)", targetNode))
 	}
-	delivered, delayTicks, events := s.indicatorDeliveryPolicy.ScheduleDelivery(args)
-
-	// Collect policy events (e.g. partition start/end) into the current tick trace
+	dropped, events := s.deliveryManager.Enqueue(s.currentTick, fromNode, targetNode, ind)
 	if len(events) > 0 && s.currentTickTrace != nil {
 		s.currentTickTrace.PolicyTransitions = append(s.currentTickTrace.PolicyTransitions, events...)
 	}
-
-	// Message dropped by policy
-	if !delivered {
-		if s.currentTickTrace != nil {
-			s.currentTickTrace.DroppedIndicators = append(s.currentTickTrace.DroppedIndicators, DroppedIndicator[I, ID]{
-				FromNode:   fromNode,
-				TargetNode: targetNode,
-				Indicator:  ind,
-			})
-		}
-		return nil
-	}
-
-	// Enforce realistic latency: delay must be at least 1 tick
-	// No exceptions - messages cannot be delivered in the same tick they're generated
-	if delayTicks < 1 {
-		return fmt.Errorf("IndicatorDeliveryPolicy returned invalid delay %d (must be >= 1) at tick %d", delayTicks, s.currentTick)
-	}
-
-	// Drop indicators addressed to stopped nodes — they can't receive messages.
-	if s.stoppedIDs[targetNode] {
-		if s.currentTickTrace != nil {
-			s.currentTickTrace.DroppedIndicators = append(s.currentTickTrace.DroppedIndicators, DroppedIndicator[I, ID]{
-				FromNode:   fromNode,
-				TargetNode: targetNode,
-				Indicator:  ind,
-			})
-		}
-		return nil
-	}
-
-	// Schedule indicator for delivery at future tick
-	if _, exists := s.nodes[targetNode]; !exists {
-		panic(fmt.Sprintf("cannot schedule indicator for non-existent node %v (check RequestHandler output)", targetNode))
-	}
-
-	deliverAt := s.currentTick + delayTicks
-	if s.scheduledDeliveries[deliverAt] == nil {
-		s.scheduledDeliveries[deliverAt] = make(map[ID][]I)
-	}
-	s.scheduledDeliveries[deliverAt][targetNode] = append(s.scheduledDeliveries[deliverAt][targetNode], ind)
-
-	// Record in-flight indicators for delays > 1 tick so the trace shows what's pending
-	if delayTicks > 1 && s.currentTickTrace != nil {
-		s.currentTickTrace.DelayedIndicators = append(s.currentTickTrace.DelayedIndicators, DelayedIndicator[I, ID]{
+	if dropped && s.currentTickTrace != nil {
+		s.currentTickTrace.DroppedIndicators = append(s.currentTickTrace.DroppedIndicators, DroppedIndicator[I, ID]{
 			FromNode:   fromNode,
 			TargetNode: targetNode,
 			Indicator:  ind,
-			DeliverAt:  deliverAt,
 		})
 	}
-
-	return nil
 }
 
 // RunUntil runs the simulation until the condition becomes true, or maxTicks have elapsed
@@ -241,9 +183,36 @@ func (s *Simulator[I, R, ID]) RunUntil(stopCondition Condition[I, R, ID], maxTic
 			AssertionViolations: make([]string, 0),
 		}
 
-		// Get scheduled indicator deliveries for this tick (local variable - no simulator state)
-		tickIndicators := s.scheduledDeliveries[s.currentTick]
-		delete(s.scheduledDeliveries, s.currentTick)
+		// Deliver indicators that are ready this tick.
+		// Stopped nodes are checked at delivery time: a node stopped mid-flight still drops messages.
+		delivered, droppedAtDelivery, dmEvents := s.deliveryManager.Deliver(s.currentTick, s.registeredOrder)
+		if len(dmEvents) > 0 && s.currentTickTrace != nil {
+			s.currentTickTrace.PolicyTransitions = append(s.currentTickTrace.PolicyTransitions, dmEvents...)
+		}
+		for _, pd := range droppedAtDelivery {
+			if s.currentTickTrace != nil {
+				s.currentTickTrace.DroppedIndicators = append(s.currentTickTrace.DroppedIndicators, DroppedIndicator[I, ID]{
+					FromNode:   pd.From,
+					TargetNode: pd.To,
+					Indicator:  pd.Ind,
+				})
+			}
+		}
+		tickIndicators := make(map[ID][]I)
+		for _, pd := range delivered {
+			// Drop indicators addressed to stopped nodes.
+			if s.stoppedIDs[pd.To] {
+				if s.currentTickTrace != nil {
+					s.currentTickTrace.DroppedIndicators = append(s.currentTickTrace.DroppedIndicators, DroppedIndicator[I, ID]{
+						FromNode:   pd.From,
+						TargetNode: pd.To,
+						Indicator:  pd.Ind,
+					})
+				}
+				continue
+			}
+			tickIndicators[pd.To] = append(tickIndicators[pd.To], pd.Ind)
+		}
 
 		// Process all nodes for this tick by calling Step() once per non-stopped node.
 		// All active nodes are called every tick (even with empty indicators) so they can process time-based logic.
@@ -288,9 +257,7 @@ func (s *Simulator[I, R, ID]) RunUntil(stopCondition Condition[I, R, ID], maxTic
 							continue
 						}
 						for _, ind := range inds {
-							if err := s.scheduleIndicator(nodeID, targetID, ind); err != nil {
-								return err
-							}
+							s.enqueueIndicator(nodeID, targetID, ind)
 						}
 					}
 				}

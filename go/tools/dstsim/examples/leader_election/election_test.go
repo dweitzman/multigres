@@ -308,9 +308,9 @@ func TestLeaderElection_Standard(t *testing.T) {
 		buggyHeartbeats       bool
 		electionTimeout       int64
 		heartbeatInterval     int64
-		expectViolation       bool                                              // true if we expect an assertion violation
-		expectedViolationName string                                            // name of assertion that should violate
-		deliveryPolicy        dstsim.IndicatorDeliveryPolicy[Indicator, NodeID] // optional custom delivery policy
+		expectViolation       bool                                               // true if we expect an assertion violation
+		expectedViolationName string                                             // name of assertion that should violate
+		deliveryManager       dstsim.IndicatorDeliveryManager[Indicator, NodeID] // optional custom delivery manager
 	}
 
 	tests := []testCase{
@@ -357,10 +357,12 @@ func TestLeaderElection_Standard(t *testing.T) {
 			heartbeatInterval:     10,
 			expectViolation:       true,
 			expectedViolationName: "multiple_leaders_exist",
-			deliveryPolicy: &dstsim.UnreliableNetwork[Indicator, NodeID]{
-				MaxDelay: 5,
-				DropRate: 0.5, // 50% packet loss - causes split elections
-				Rng:      rand.New(rand.NewPCG(uint64(12345), uint64(12345))),
+			deliveryManager: &dstsim.ChaosDeliveryManager[Indicator, NodeID]{
+				Chaos: dstsim.ChaosParams{
+					MaxDelay: 5,
+					DropRate: 0.5, // 50% packet loss - causes split elections
+					Rng:      rand.New(rand.NewPCG(uint64(12345), uint64(12345))),
+				},
 			},
 		},
 	}
@@ -397,9 +399,9 @@ func TestLeaderElection_Standard(t *testing.T) {
 			reqHandler := setupStandardHandlers(nil)
 			sim.SetRequestHandler(reqHandler)
 
-			// Set delivery policy if specified
-			if tt.deliveryPolicy != nil {
-				sim.SetDeliveryPolicy(tt.deliveryPolicy)
+			// Set delivery manager if specified
+			if tt.deliveryManager != nil {
+				sim.SetDeliveryManager(tt.deliveryManager)
 			}
 
 			// Run simulation
@@ -525,11 +527,13 @@ func TestLeaderElection_ChaosNetwork(t *testing.T) {
 		Seed: seed,
 	})
 
-	// Set chaotic network policy
-	sim.SetDeliveryPolicy(&dstsim.UnreliableNetwork[Indicator, NodeID]{
-		MaxDelay: 20,   // Random delay 1-20 ticks
-		DropRate: 0.15, // 15% packet loss
-		Rng:      rand.New(rand.NewPCG(uint64(seed), uint64(seed))),
+	// Set chaotic network delivery manager
+	sim.SetDeliveryManager(&dstsim.ChaosDeliveryManager[Indicator, NodeID]{
+		Chaos: dstsim.ChaosParams{
+			MaxDelay: 20,   // Random delay 1-20 ticks
+			DropRate: 0.15, // 15% packet loss
+			Rng:      rand.New(rand.NewPCG(uint64(seed), uint64(seed))),
+		},
 	})
 
 	// Create 3 standard nodes
@@ -653,39 +657,41 @@ func TestLeaderElection_PartitionRecovery(t *testing.T) {
 	reqHandler := setupStandardHandlers(nil)
 	sim.SetRequestHandler(reqHandler)
 
-	// Create policy sequence: normal -> partition -> recovery
-	policySeq := dstsim.NewPolicySequence[Indicator, Request, NodeID](
+	// Create delivery sequence: normal -> await_step_down -> partition -> recovery
+	deliverySeq := dstsim.NewSequenceDeliveryManager[Indicator, Request, NodeID](
 		sim,
-		&dstsim.FastNetwork[Indicator, NodeID]{},
+		&dstsim.ChaosDeliveryManager[Indicator, NodeID]{},
 		"normal",
 	)
 
 	// Wait for leader to exist (so orchestrator can send step-down)
-	awaitStepDown := policySeq.AppendPolicy(
-		&dstsim.FastNetwork[Indicator, NodeID]{},
+	awaitStepDown := deliverySeq.AppendStage(
+		&dstsim.ChaosDeliveryManager[Indicator, NodeID]{},
 		&LeaderExists{},
 		"await_step_down",
 	)
 
 	// Start partition only after leader has stepped down (no leaders exist)
-	partitionActive := policySeq.AppendPolicy(
-		&dstsim.UnreliableNetwork[Indicator, NodeID]{
-			MaxDelay: 5,
-			DropRate: 1.0, // 100% packet loss for complete partition
-			Rng:      rand.New(rand.NewPCG(uint64(seed), uint64(seed))),
+	partitionActive := deliverySeq.AppendStage(
+		&dstsim.ChaosDeliveryManager[Indicator, NodeID]{
+			Chaos: dstsim.ChaosParams{
+				MaxDelay: 5,
+				DropRate: 1.0, // 100% packet loss for complete partition
+				Rng:      rand.New(rand.NewPCG(uint64(seed), uint64(seed))),
+			},
 		},
 		&NoLeadersExist{}, // Don't start partition until leader has stepped down
 		"partition",
 	)
 
 	// End partition after 100 ticks
-	recoveryActive := policySeq.AppendPolicy(
-		&dstsim.FastNetwork[Indicator, NodeID]{},
+	recoveryActive := deliverySeq.AppendStage(
+		&dstsim.ChaosDeliveryManager[Indicator, NodeID]{},
 		dstsim.TickCondition[Indicator, Request, NodeID](100),
 		"recovery",
 	)
 
-	sim.SetDeliveryPolicy(policySeq)
+	sim.SetDeliveryManager(deliverySeq)
 
 	// Orchestrator to send step-down during await_step_down stage (before partition)
 	orchestrator := &TestOrchestratorNode{

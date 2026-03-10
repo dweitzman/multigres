@@ -65,9 +65,13 @@ type CoordNode struct {
 
 	// healthTimeoutTicks is the number of ticks without a PoolerStatusIndicator
 	// before a pooler is considered unreachable. Zero disables timeout-based
-	// staleness checking (suitable for simulation tests where poolers only
-	// broadcast on state change).
+	// staleness checking.
 	healthTimeoutTicks int64
+
+	// writeTimeoutTicks is the number of ticks to wait for a WritePolicyResponse
+	// before abandoning the in-flight write and retrying. Zero disables the
+	// timeout (suitable when the network is reliable and drops are impossible).
+	writeTimeoutTicks int64
 }
 
 type knownPooler struct {
@@ -80,6 +84,7 @@ type knownPooler struct {
 type pendingPolicyWrite struct {
 	target NodeID
 	term   Term
+	since  int64 // tick at which the write was dispatched
 }
 
 // NewCoordNode creates a coordinator node.
@@ -87,9 +92,10 @@ type pendingPolicyWrite struct {
 // grows (e.g. AtLeastPolicy(3) for a 3-node HA cluster).
 func NewCoordNode(id NodeID, targetPolicy DurabilityPolicy) *CoordNode {
 	return &CoordNode{
-		id:           id,
-		targetPolicy: targetPolicy,
-		known:        make(map[NodeID]*knownPooler),
+		id:                id,
+		targetPolicy:      targetPolicy,
+		known:             make(map[NodeID]*knownPooler),
+		writeTimeoutTicks: 150,
 	}
 }
 
@@ -98,6 +104,13 @@ func NewCoordNode(id NodeID, targetPolicy DurabilityPolicy) *CoordNode {
 // Zero disables timeout-based staleness (the default).
 func (c *CoordNode) SetHealthTimeout(ticks int64) {
 	c.healthTimeoutTicks = ticks
+}
+
+// SetWriteTimeout configures how long the coordinator waits for a
+// WritePolicyResponse before abandoning the in-flight write and retrying.
+// Zero disables the timeout.
+func (c *CoordNode) SetWriteTimeout(ticks int64) {
+	c.writeTimeoutTicks = ticks
 }
 
 // Restart clears all ephemeral coordinator state. The coordinator re-learns
@@ -263,7 +276,7 @@ func (c *CoordNode) Step(tick int64, indicators []Indicator) []Request {
 		}
 	}
 
-	return c.advance()
+	return c.advance(tick)
 }
 
 // handleWriteResponse processes the primary's response to a WritePolicyRequest.
@@ -300,9 +313,13 @@ func (c *CoordNode) handleWriteResponse(ind WritePolicyResponseIndicator) {
 
 // advance decides whether to emit a WritePolicyRequest. Called at the end of
 // every Step() after all indicators have been processed.
-func (c *CoordNode) advance() []Request {
+func (c *CoordNode) advance(tick int64) []Request {
 	if c.pendingWrite != nil {
-		return nil // write in flight; wait for response
+		if c.writeTimeoutTicks > 0 && tick-c.pendingWrite.since >= c.writeTimeoutTicks {
+			c.pendingWrite = nil // timed out; retry below
+		} else {
+			return nil // write in flight; wait for response
+		}
 	}
 
 	primaryID, primaryKnown := c.findPrimary()
@@ -338,6 +355,7 @@ func (c *CoordNode) advance() []Request {
 	c.pendingWrite = &pendingPolicyWrite{
 		target: primaryID,
 		term:   newTerm,
+		since:  tick,
 	}
 
 	return []Request{WritePolicyRequest{

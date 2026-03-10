@@ -163,20 +163,27 @@ func (h *multiIndicatorHandler) ProcessRequests(sim *dstsim.Simulator[int, strin
 	return result
 }
 
-// testTrackingPolicy tracks whether it was used
-type testTrackingPolicy[I any, ID comparable] struct {
+// testTrackingManager implements IndicatorDeliveryManager and records whether it was used.
+// Messages are buffered on Enqueue and returned on the next Deliver call (1-tick delay).
+type testTrackingManager[I any, ID comparable] struct {
 	usedPtr *bool
-	delay   int64
+	buf     []dstsim.PendingDelivery[I, ID]
 }
 
-func (p *testTrackingPolicy[I, ID]) ScheduleDelivery(args dstsim.DeliveryArgs[I, ID]) (bool, int64, []string) {
-	*p.usedPtr = true
-	return true, p.delay, nil
+func (m *testTrackingManager[I, ID]) Enqueue(tick int64, from, to ID, ind I) (bool, []string) {
+	*m.usedPtr = true
+	m.buf = append(m.buf, dstsim.PendingDelivery[I, ID]{From: from, To: to, Ind: ind})
+	return false, nil
 }
 
-// testInvalidDelayPolicy returns invalid delay (0) to test panic
-type testInvalidDelayPolicy[I any, ID comparable] struct{}
+func (m *testTrackingManager[I, ID]) Deliver(tick int64, allNodes []ID) ([]dstsim.PendingDelivery[I, ID], []dstsim.PendingDelivery[I, ID], []string) {
+	out := m.buf
+	m.buf = nil
+	return out, nil, nil
+}
 
-func (p *testInvalidDelayPolicy[I, ID]) ScheduleDelivery(args dstsim.DeliveryArgs[I, ID]) (bool, int64, []string) {
-	return true, 0, nil // Invalid: delay must be >= 1
+func (m *testTrackingManager[I, ID]) Drain() []dstsim.PendingDelivery[I, ID] {
+	out := m.buf
+	m.buf = nil
+	return out
 }

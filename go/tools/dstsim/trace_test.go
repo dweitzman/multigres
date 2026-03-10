@@ -211,27 +211,20 @@ Node activity:
 	require.Equal(t, expected, output, "trace output should match expected format with actual tick numbers")
 }
 
-// FixedDelayPolicy delivers all indicators with a fixed delay
-type FixedDelayPolicy struct {
-	Delay int64
-}
-
-func (p *FixedDelayPolicy) ScheduleDelivery(args dstsim.DeliveryArgs[int, int]) (bool, int64, []string) {
-	return true, p.Delay, nil
-}
-
 // TestEmptyTicksAreSkipped verifies that ticks with no activity are not included in the trace
 func TestEmptyTicksAreSkipped(t *testing.T) {
-	// Use a 2-tick delivery delay policy
-	deliveryPolicy := &FixedDelayPolicy{Delay: 2}
+	// Use a fixed 2-tick delivery delay (MinDelay=MaxDelay=2, no Rng needed).
+	deliveryManager := &dstsim.ChaosDeliveryManager[int, int]{
+		Chaos: dstsim.ChaosParams{MinDelay: 2, MaxDelay: 2},
+	}
 
 	sim := dstsim.NewSimulator[int, string, int](dstsim.SimulatorOptions{
 		Seed:           123,
 		TraceRetention: 10,
 	})
 
-	// Set delivery policy after creation
-	sim.SetDeliveryPolicy(deliveryPolicy)
+	// Set delivery manager after creation
+	sim.SetDeliveryManager(deliveryManager)
 
 	// Create a node that generates activity when it receives indicators (or on first step)
 	node := &TickingNode{id: 1}

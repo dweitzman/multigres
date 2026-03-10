@@ -37,7 +37,7 @@ func (n *AlwaysGeneratingNode) Step(tick int64, indicators []int) []string {
 	return []string{"tick"}
 }
 
-// TestUnreliableNetwork tests that UnreliableNetwork drops and delays messages
+// TestUnreliableNetwork tests that ChaosDeliveryManager drops and delays messages
 func TestUnreliableNetwork(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -77,11 +77,12 @@ func TestUnreliableNetwork(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			sim := dstsim.NewSimulator[int, string, int](dstsim.SimulatorOptions{Seed: tt.seed})
 
-			// Set delivery policy after construction
-			sim.SetDeliveryPolicy(&dstsim.UnreliableNetwork[int, int]{
-				MaxDelay: tt.maxDelay,
-				DropRate: tt.dropRate,
-				Rng:      rand.New(rand.NewPCG(uint64(tt.seed), uint64(tt.seed))),
+			sim.SetDeliveryManager(&dstsim.ChaosDeliveryManager[int, int]{
+				Chaos: dstsim.ChaosParams{
+					MaxDelay: tt.maxDelay,
+					DropRate: tt.dropRate,
+					Rng:      rand.New(rand.NewPCG(uint64(tt.seed), uint64(tt.seed))),
+				},
 			})
 
 			// Use AlwaysGeneratingNode that generates requests every tick
@@ -110,8 +111,8 @@ func TestUnreliableNetwork(t *testing.T) {
 	}
 }
 
-// TestUntilPolicy tests that UntilPolicy switches permanently when condition becomes true
-func TestUntilPolicy(t *testing.T) {
+// TestUntilDeliveryManager tests that UntilDeliveryManager switches permanently when condition becomes true
+func TestUntilDeliveryManager(t *testing.T) {
 	tests := []struct {
 		name         string
 		switchAtTick int64
@@ -128,7 +129,7 @@ func TestUntilPolicy(t *testing.T) {
 			name:         "switch at end of simulation",
 			switchAtTick: 20,
 			runTicks:     20,
-			expectSwitch: false, // Condition becomes true exactly when sim ends, so AfterPolicy never used
+			expectSwitch: false, // Condition becomes true exactly when sim ends, so AfterManager never used
 		},
 		{
 			name:         "no switch - condition never true",
@@ -142,29 +143,21 @@ func TestUntilPolicy(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			sim := dstsim.NewSimulator[int, string, int](dstsim.SimulatorOptions{Seed: 1})
 
-			// Track whether each policy was used
-			initialPolicyUsed := false
-			afterPolicyUsed := false
+			// Track whether each manager was used
+			initialManagerUsed := false
+			afterManagerUsed := false
 
-			// Create tracking policies
-			initialPolicy := &testTrackingPolicy[int, int]{
-				usedPtr: &initialPolicyUsed,
-				delay:   1,
-			}
-			afterPolicy := &testTrackingPolicy[int, int]{
-				usedPtr: &afterPolicyUsed,
-				delay:   1,
-			}
+			initialManager := &testTrackingManager[int, int]{usedPtr: &initialManagerUsed}
+			afterManager := &testTrackingManager[int, int]{usedPtr: &afterManagerUsed}
 
-			// Create UntilPolicy that switches after N ticks (relative, not absolute)
-			untilPolicy := &dstsim.UntilPolicy[int, string, int]{
+			untilManager := &dstsim.UntilDeliveryManager[int, string, int]{
 				UntilCondition: dstsim.TickCondition[int, string, int](tt.switchAtTick),
-				InitialPolicy:  initialPolicy,
-				AfterPolicy:    afterPolicy,
-				Sim:            sim, // Required for condition evaluation
+				InitialManager: initialManager,
+				AfterManager:   afterManager,
+				Sim:            sim,
 			}
 
-			sim.SetDeliveryPolicy(untilPolicy)
+			sim.SetDeliveryManager(untilManager)
 
 			node := &AlwaysGeneratingNode{id: 1}
 			sim.RegisterNode(node)
@@ -173,20 +166,20 @@ func TestUntilPolicy(t *testing.T) {
 			err := sim.RunFor(tt.runTicks)
 			require.NoError(t, err)
 
-			// Verify policy usage
+			// Verify manager usage
 			if tt.expectSwitch {
-				require.True(t, initialPolicyUsed, "initial policy should be used before switch")
-				require.True(t, afterPolicyUsed, "after policy should be used after switch")
+				require.True(t, initialManagerUsed, "initial manager should be used before switch")
+				require.True(t, afterManagerUsed, "after manager should be used after switch")
 			} else {
-				require.True(t, initialPolicyUsed, "initial policy should be used")
-				require.False(t, afterPolicyUsed, "after policy should not be used if condition never true")
+				require.True(t, initialManagerUsed, "initial manager should be used")
+				require.False(t, afterManagerUsed, "after manager should not be used if condition never true")
 			}
 		})
 	}
 }
 
-// TestPolicySequence tests that PolicySequence advances stages correctly
-func TestPolicySequence(t *testing.T) {
+// TestSequenceDeliveryManager tests that SequenceDeliveryManager advances stages correctly
+func TestSequenceDeliveryManager(t *testing.T) {
 	tests := []struct {
 		name         string
 		stage1Ticks  int64 // How long until stage 1 condition becomes true
@@ -235,34 +228,30 @@ func TestPolicySequence(t *testing.T) {
 			node := &TickingNode{id: 1}
 			sim.RegisterNode(node)
 
-			// Use TickRequestHandler to create message flow (needed for policy sequence evaluation)
+			// Use TickRequestHandler to create message flow
 			sim.SetRequestHandler(&TickRequestHandler{})
 
-			// Create a 3-stage policy sequence
-			// Stage 0 -> Stage 1 after stage1Ticks
-			// Stage 1 -> Stage 2 after stage2Ticks (relative to stage 1 start)
-			policySeq := dstsim.NewPolicySequence[int, string, int](
+			// Create a 3-stage sequence: stage0 -> stage1 -> stage2
+			seq := dstsim.NewSequenceDeliveryManager[int, string, int](
 				sim,
-				&dstsim.FastNetwork[int, int]{},
+				&dstsim.ChaosDeliveryManager[int, int]{},
 				"stage0",
 			)
 
-			stage1Active := policySeq.AppendPolicy(
-				&dstsim.FastNetwork[int, int]{},
+			stage1Active := seq.AppendStage(
+				&dstsim.ChaosDeliveryManager[int, int]{},
 				dstsim.TickCondition[int, string, int](tt.stage1Ticks),
 				"stage1",
 			)
 
-			stage2Active := policySeq.AppendPolicy(
-				&dstsim.FastNetwork[int, int]{},
+			stage2Active := seq.AppendStage(
+				&dstsim.ChaosDeliveryManager[int, int]{},
 				dstsim.TickCondition[int, string, int](tt.stage2Ticks),
 				"stage2",
 			)
 
-			sim.SetDeliveryPolicy(policySeq)
+			sim.SetDeliveryManager(seq)
 
-			// Add Sometimes assertions to check if each stage activates
-			// Note: Stage 0 is always active at the start, so we don't need to assert it
 			if tt.expectStage1 {
 				sim.Sometimes(stage1Active)
 			}
@@ -271,166 +260,109 @@ func TestPolicySequence(t *testing.T) {
 			}
 
 			err := sim.RunFor(tt.runTicks)
-
-			require.NoError(t, err, "policy sequence assertions should be satisfied")
+			require.NoError(t, err, "sequence delivery manager assertions should be satisfied")
 		})
 	}
 }
 
-// TestPartitionedNetwork verifies PartitionedNetwork partition correctness.
-func TestPartitionedNetwork(t *testing.T) {
+// TestChaosDeliveryManagerPartitions verifies ChaosDeliveryManager partition correctness.
+// Partition groups are assigned at Deliver time; messages in-flight when a partition starts
+// may be dropped if they cross partition boundaries.
+func TestChaosDeliveryManagerPartitions(t *testing.T) {
 	t.Run("consistent_within_partition", func(t *testing.T) {
 		// A single long-lived partition assigns each node pair exactly once.
-		// All 50 messages between nodes 1 and 2 must either all pass or all be dropped.
+		// All messages between nodes 1 and 2 must either all pass or all be dropped.
 		rng := rand.New(rand.NewPCG(42, 0))
-		policy := dstsim.NewPartitionedNetwork(
-			&dstsim.FastNetwork[int, int]{},
-			1.0,  // start immediately
-			1000, // lasts longer than the test
-			rng,
-		)
-		delivered := 0
-		for tick := range int64(50) {
-			ok, delay, _ := policy.ScheduleDelivery(dstsim.DeliveryArgs[int, int]{CurrentTick: tick, FromNode: 1, Target: 2, Indicator: 0})
-			if ok {
-				require.GreaterOrEqual(t, delay, int64(1))
-				delivered++
-			}
+		manager := &dstsim.ChaosDeliveryManager[int, int]{
+			Chaos:                dstsim.ChaosParams{Rng: rng},
+			PartitionRate:        1.0,
+			MaxPartitionDuration: 10000, // much longer than the test
 		}
-		require.True(t, delivered == 0 || delivered == 50,
-			"group assignment must be stable for the duration of one partition")
+		allNodes := []int{1, 2}
+		delivered, dropped := 0, 0
+		for tick := range int64(50) {
+			manager.Enqueue(tick, 1, 2, 0)
+			pds, drops, _ := manager.Deliver(tick, allNodes)
+			delivered += len(pds)
+			dropped += len(drops)
+		}
+		// 49 messages are checked (tick-49 message still in flight).
+		// Within a single partition, group assignment is stable: either all pass or all drop.
+		require.True(t, delivered == 0 || dropped == 0,
+			"group assignment must be stable for the duration of one partition: got %d delivered, %d dropped", delivered, dropped)
 	})
 
 	t.Run("lazy_assignment_is_consistent", func(t *testing.T) {
 		// Nodes that first appear mid-partition get a lazily assigned group that
 		// stays stable for the rest of the partition.
 		rng := rand.New(rand.NewPCG(99, 0))
-		policy := dstsim.NewPartitionedNetwork(&dstsim.FastNetwork[int, int]{}, 1.0, 1000, rng)
+		manager := &dstsim.ChaosDeliveryManager[int, int]{
+			Chaos:                dstsim.ChaosParams{Rng: rng},
+			PartitionRate:        1.0,
+			MaxPartitionDuration: 10000,
+		}
+		// Start partition without eagerly assigning groups (no allNodes provided).
+		manager.Deliver(0, nil)
 
-		ok1, _, _ := policy.ScheduleDelivery(dstsim.DeliveryArgs[int, int]{CurrentTick: 5, FromNode: 10, Target: 20, Indicator: 0}) // both nodes new to this partition
-		ok2, _, _ := policy.ScheduleDelivery(dstsim.DeliveryArgs[int, int]{CurrentTick: 5, FromNode: 10, Target: 20, Indicator: 0}) // same tick, same result expected
-		ok3, _, _ := policy.ScheduleDelivery(dstsim.DeliveryArgs[int, int]{CurrentTick: 6, FromNode: 10, Target: 20, Indicator: 0}) // later tick, same partition
-		require.Equal(t, ok1, ok2, "group assignment must be stable within the same tick")
-		require.Equal(t, ok1, ok3, "group assignment must be stable across ticks in the same partition")
+		// Enqueue two messages at the same tick and one at a later tick;
+		// nodes 10 and 20 are new to this partition.
+		manager.Enqueue(5, 10, 20, 0)
+		manager.Enqueue(5, 10, 20, 0)
+		manager.Enqueue(6, 10, 20, 0)
+
+		pds1, drops1, _ := manager.Deliver(6, nil) // delivers tick-5 messages (deliverAt=6)
+		pds2, drops2, _ := manager.Deliver(7, nil) // delivers tick-6 message (deliverAt=7)
+
+		// Both tick-5 messages must have identical fate (same group assignment for the pair).
+		require.True(t, len(pds1) == 0 || len(pds1) == 2,
+			"both messages from same tick must have consistent fate: got %d delivered, %d dropped",
+			len(pds1), len(drops1))
+
+		// Tick-6 message must have the same fate as tick-5 messages (same partition, same groups).
+		if len(pds1) > 0 {
+			require.Equal(t, 1, len(pds2), "tick-6 message should be delivered (same partition group)")
+			require.Empty(t, drops2)
+		} else {
+			require.Equal(t, 1, len(drops2), "tick-6 message should be dropped (same partition group)")
+			require.Empty(t, pds2)
+		}
 	})
 
 	t.Run("new_partition_reshuffles_groups", func(t *testing.T) {
 		// With 1-tick partitions, each tick has a fresh independent group assignment.
 		// Over 200 ticks roughly half should pass and half should be dropped.
 		rng := rand.New(rand.NewPCG(7, 0))
-		policy := dstsim.NewPartitionedNetwork(&dstsim.FastNetwork[int, int]{}, 1.0, 1, rng)
-		passed, dropped := 0, 0
-		for tick := range int64(200) {
-			ok, _, _ := policy.ScheduleDelivery(dstsim.DeliveryArgs[int, int]{CurrentTick: tick, FromNode: 1, Target: 2, Indicator: 0})
-			if ok {
-				passed++
-			} else {
-				dropped++
-			}
-		}
-		require.Greater(t, passed, 0, "some ticks should have nodes in the same group")
-		require.Greater(t, dropped, 0, "some ticks should have nodes in different groups")
-	})
-
-	t.Run("no_partition_when_rate_zero", func(t *testing.T) {
-		rng := rand.New(rand.NewPCG(1, 0))
-		policy := dstsim.NewPartitionedNetwork(&dstsim.FastNetwork[int, int]{}, 0.0, 100, rng)
-		for tick := range int64(50) {
-			ok, delay, _ := policy.ScheduleDelivery(dstsim.DeliveryArgs[int, int]{CurrentTick: tick, FromNode: 1, Target: 2, Indicator: 0})
-			require.True(t, ok)
-			require.Equal(t, int64(1), delay)
-		}
-	})
-}
-
-// TestUnreliableNetworkPartitions verifies that UnreliableNetwork's built-in partition
-// settings behave correctly.
-func TestUnreliableNetworkPartitions(t *testing.T) {
-	t.Run("consistent_within_partition", func(t *testing.T) {
-		policy := &dstsim.UnreliableNetwork[int, int]{
-			MaxDelay:             1,
-			DropRate:             0.0,
-			PartitionRate:        1.0,
-			MaxPartitionDuration: 1000,
-			Rng:                  rand.New(rand.NewPCG(42, 0)),
-		}
-		delivered := 0
-		for tick := range int64(50) {
-			ok, delay, _ := policy.ScheduleDelivery(dstsim.DeliveryArgs[int, int]{CurrentTick: tick, FromNode: 1, Target: 2, Indicator: 0})
-			if ok {
-				require.GreaterOrEqual(t, delay, int64(1))
-				delivered++
-			}
-		}
-		require.True(t, delivered == 0 || delivered == 50,
-			"group assignment must be stable for the duration of one partition")
-	})
-
-	t.Run("lazy_assignment_is_consistent", func(t *testing.T) {
-		policy := &dstsim.UnreliableNetwork[int, int]{
-			MaxDelay:             1,
-			DropRate:             0.0,
-			PartitionRate:        1.0,
-			MaxPartitionDuration: 1000,
-			Rng:                  rand.New(rand.NewPCG(99, 0)),
-		}
-		ok1, _, _ := policy.ScheduleDelivery(dstsim.DeliveryArgs[int, int]{CurrentTick: 5, FromNode: 10, Target: 20, Indicator: 0})
-		ok2, _, _ := policy.ScheduleDelivery(dstsim.DeliveryArgs[int, int]{CurrentTick: 5, FromNode: 10, Target: 20, Indicator: 0})
-		ok3, _, _ := policy.ScheduleDelivery(dstsim.DeliveryArgs[int, int]{CurrentTick: 6, FromNode: 10, Target: 20, Indicator: 0})
-		require.Equal(t, ok1, ok2, "group assignment must be stable within the same tick")
-		require.Equal(t, ok1, ok3, "group assignment must be stable across ticks in the same partition")
-	})
-
-	t.Run("new_partition_reshuffles_groups", func(t *testing.T) {
-		policy := &dstsim.UnreliableNetwork[int, int]{
-			MaxDelay:             1,
-			DropRate:             0.0,
+		manager := &dstsim.ChaosDeliveryManager[int, int]{
+			Chaos:                dstsim.ChaosParams{Rng: rng},
 			PartitionRate:        1.0,
 			MaxPartitionDuration: 1,
-			Rng:                  rand.New(rand.NewPCG(7, 0)),
 		}
+		allNodes := []int{1, 2}
 		passed, dropped := 0, 0
 		for tick := range int64(200) {
-			ok, _, _ := policy.ScheduleDelivery(dstsim.DeliveryArgs[int, int]{CurrentTick: tick, FromNode: 1, Target: 2, Indicator: 0})
-			if ok {
-				passed++
-			} else {
-				dropped++
-			}
+			manager.Enqueue(tick, 1, 2, 0)
+			pds, drops, _ := manager.Deliver(tick, allNodes)
+			passed += len(pds)
+			dropped += len(drops)
 		}
 		require.Greater(t, passed, 0, "some ticks should have nodes in the same group")
 		require.Greater(t, dropped, 0, "some ticks should have nodes in different groups")
 	})
 
 	t.Run("no_partition_when_rate_zero", func(t *testing.T) {
-		policy := &dstsim.UnreliableNetwork[int, int]{
-			MaxDelay:             1,
-			DropRate:             0.0,
+		manager := &dstsim.ChaosDeliveryManager[int, int]{
 			PartitionRate:        0.0,
 			MaxPartitionDuration: 100,
-			Rng:                  rand.New(rand.NewPCG(1, 0)),
 		}
+		allNodes := []int{1, 2}
+		passed := 0
 		for tick := range int64(50) {
-			ok, delay, _ := policy.ScheduleDelivery(dstsim.DeliveryArgs[int, int]{CurrentTick: tick, FromNode: 1, Target: 2, Indicator: 0})
-			require.True(t, ok)
-			require.Equal(t, int64(1), delay)
+			manager.Enqueue(tick, 1, 2, 0)
+			pds, drops, _ := manager.Deliver(tick, allNodes)
+			passed += len(pds)
+			require.Empty(t, drops)
 		}
+		// 49 messages delivered (tick-49's message has deliverAt=50, still in flight)
+		require.Equal(t, 49, passed)
 	})
-}
-
-// TestMinimumDelayEnforcement tests that simulator returns error if policy returns delay < 1
-func TestMinimumDelayEnforcement(t *testing.T) {
-	sim := dstsim.NewSimulator[int, string, int](dstsim.SimulatorOptions{Seed: 1})
-
-	// Set invalid delivery policy
-	sim.SetDeliveryPolicy(&testInvalidDelayPolicy[int, int]{})
-
-	node := &AlwaysGeneratingNode{id: 1}
-	sim.RegisterNode(node)
-	sim.SetRequestHandler(&TickRequestHandler{})
-
-	// This should return an error because the policy returns delay = 0
-	err := sim.RunFor(1)
-	require.Error(t, err, "should return error for invalid delay")
-	require.Contains(t, err.Error(), "must be >= 1", "error should mention minimum delay requirement")
 }

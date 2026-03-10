@@ -16,6 +16,13 @@ package consensus
 
 // PoolerNode is the pooler state machine.
 //
+// # Periodic heartbeat
+//
+// When heartbeatInterval > 0, the node emits a PoolerStatusUpdateRequest at
+// least once every heartbeatInterval ticks even if its state has not changed.
+// This lets coordinators re-learn cluster state after a crash without waiting
+// for a state-changing event.
+//
 // # Normal path — WAL-driven rules changes
 //
 // Primary: PoolerNode receives WritePolicyIndicator, validates the CAS
@@ -63,6 +70,13 @@ type PoolerNode struct {
 	// and a RevokeParticipationRequest has been sent to the sidecar but the response
 	// has not yet been received. Cleared once the sidecar responds.
 	pendingRecruitCorrelationID string
+
+	// heartbeatInterval is the maximum number of ticks that may elapse between
+	// status broadcasts. Zero disables periodic heartbeats.
+	heartbeatInterval int64
+
+	// lastBroadcastTick is the tick at which the most recent status update was sent.
+	lastBroadcastTick int64
 }
 
 // NewPoolerNode creates a pooler node with the given identity, storage, and
@@ -70,11 +84,12 @@ type PoolerNode struct {
 // committed state.
 func NewPoolerNode(id NodeID, storage PoolerStorage, properties NodeProperties) *PoolerNode {
 	n := &PoolerNode{
-		id:             id,
-		storage:        storage,
-		properties:     properties,
-		pgStatus:       PostgresRunning,
-		needsBroadcast: true, // announce state on first Step so coordinators learn it
+		id:                id,
+		storage:           storage,
+		properties:        properties,
+		pgStatus:          PostgresRunning,
+		needsBroadcast:    true, // announce state on first Step so coordinators learn it
+		heartbeatInterval: 300,
 	}
 	if state, err := storage.Load(); err == nil {
 		n.committed = state
@@ -85,6 +100,13 @@ func NewPoolerNode(id NodeID, storage PoolerStorage, properties NodeProperties) 
 // ID returns the pooler node's unique identifier.
 func (n *PoolerNode) ID() NodeID {
 	return n.id
+}
+
+// SetHeartbeatInterval configures a periodic status broadcast: the node will
+// emit a PoolerStatusUpdateRequest at least once every ticks ticks, even when
+// its state has not changed. Zero disables periodic heartbeats (the default).
+func (n *PoolerNode) SetHeartbeatInterval(ticks int64) {
+	n.heartbeatInterval = ticks
 }
 
 // CommittedState returns the current committed state.
@@ -120,7 +142,7 @@ func (n *PoolerNode) Restart() {
 
 // Step processes all indicators that arrived this tick and returns requests.
 // Persistence via storage.Save is called synchronously before any response is emitted.
-func (n *PoolerNode) Step(_ int64, indicators []Indicator) []Request {
+func (n *PoolerNode) Step(tick int64, indicators []Indicator) []Request {
 	var requests []Request
 	changed := false
 
@@ -148,8 +170,10 @@ func (n *PoolerNode) Step(_ int64, indicators []Indicator) []Request {
 		}
 	}
 
-	if changed || n.needsBroadcast {
+	heartbeat := n.heartbeatInterval > 0 && tick-n.lastBroadcastTick >= n.heartbeatInterval
+	if changed || n.needsBroadcast || heartbeat {
 		n.needsBroadcast = false
+		n.lastBroadcastTick = tick
 		requests = append(requests, n.statusUpdate())
 	}
 

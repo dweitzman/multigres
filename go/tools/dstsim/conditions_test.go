@@ -429,16 +429,16 @@ func TestStageActiveCondition(t *testing.T) {
 	node := &CounterNode{id: 1}
 	sim.RegisterNode(node)
 
-	// Create a PolicySequence
-	policySeq := dstsim.NewPolicySequence(sim, &dstsim.FastNetwork[int, int]{}, "initial")
+	// Create a SequenceDeliveryManager
+	policySeq := dstsim.NewSequenceDeliveryManager[int, string, int](sim, &dstsim.ChaosDeliveryManager[int, int]{}, "initial")
 
-	stage1Active := policySeq.AppendPolicy(
-		&dstsim.FastNetwork[int, int]{},
+	stage1Active := policySeq.AppendStage(
+		&dstsim.ChaosDeliveryManager[int, int]{},
 		dstsim.TickCondition[int, string, int](5),
 		"stage1",
 	)
 
-	sim.SetDeliveryPolicy(policySeq)
+	sim.SetDeliveryManager(policySeq)
 
 	// Initially, stage1 should not be active
 	require.False(t, stage1Active.Eval(sim), "stage1 should not be active initially")
