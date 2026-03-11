@@ -94,6 +94,45 @@ type RevokeParticipationResponseIndicator struct {
 
 func (RevokeParticipationResponseIndicator) consensusIndicator() {}
 
+// WriteShadowWALIndicator is delivered to a recruited PoolerNode by a
+// coordinator after reaching recruitment quorum. It instructs the node to
+// persist the new term to shadow WAL, and optionally apply GUC settings
+// immediately (primary_conninfo / synchronous_standby_names) so the node can
+// resume replication or be promoted to primary without a separate message.
+// The node must hold a RecruitmentCommitment that authorises Term.Seq.
+//
+// CorrelationID is echoed back in PropagateTermAckedRequest so the coordinator
+// can track which nodes have durably persisted the shadow WAL entry.
+//
+// BaseLSN anchors the shadow entry to the real WAL timeline: the node must
+// have receivedLSN >= BaseLSN before appending, ensuring all recruited nodes
+// place the shadow entry at the same epoch in the WAL history. The coordinator
+// computes BaseLSN as the maximum LSN across all recruited nodes' responses.
+//
+// ApplyNow, when true, asks the sidecar to apply the term's GUC settings
+// immediately in addition to writing the shadow WAL. This allows a coordinator
+// to complete a term change in a single round-trip rather than two.
+type WriteShadowWALIndicator struct {
+	CorrelationID string
+	Term          Term
+	BaseLSN       LSN
+	ApplyNow      bool
+}
+
+func (WriteShadowWALIndicator) consensusIndicator() {}
+
+// WriteShadowWALAckedIndicator is delivered to a CoordNode when a pooler has
+// durably persisted a WriteShadowWALIndicator to its shadow WAL. Accepted=true
+// means the shadow WAL write succeeded and the coordinator may count this
+// node toward the propagation quorum.
+type WriteShadowWALAckedIndicator struct {
+	CorrelationID string
+	FromPooler    NodeID
+	Accepted      bool
+}
+
+func (WriteShadowWALAckedIndicator) consensusIndicator() {}
+
 // TerminateIndicator is delivered to a PoolerNode to signal graceful shutdown.
 // The pooler records PostgresStopped and emits a final status update.
 // In production this corresponds to a SIGTERM sent to the multipooler process.
@@ -118,6 +157,21 @@ type WritePolicyResponseIndicator struct {
 }
 
 func (WritePolicyResponseIndicator) consensusIndicator() {}
+
+// RecruitResponseIndicator is delivered to a CoordNode when a pooler has
+// responded to a RecruitIndicator. Term carries the pooler's committed term so
+// the coordinator can identify the best candidate for promotion. LSN reports
+// the node's WAL position at revocation time; the coordinator uses the maximum
+// LSN across all recruited nodes as the BaseLSN for shadow WAL writes.
+type RecruitResponseIndicator struct {
+	CorrelationID string
+	FromPooler    NodeID
+	Accepted      bool
+	Term          *Term // pooler's committed term at the time of response
+	LSN           LSN   // WAL position at revocation time; zero when Accepted=false
+}
+
+func (RecruitResponseIndicator) consensusIndicator() {}
 
 // PoolerStatusIndicator is delivered to CoordNode when a pooler broadcasts its
 // status. It carries the pooler's full committed state (including the current

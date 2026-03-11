@@ -14,6 +14,37 @@
 
 package dstsim
 
+// ChaosQueue is an exported optionally-chaotic FIFO delivery queue.
+// The zero value is ready to use: items are delivered in push order with a
+// 1-tick delay and no drops or duplicates. Use SetChaos to inject randomness.
+type ChaosQueue[T any] struct {
+	q chaosQueue[T]
+}
+
+// SetChaos configures the chaos parameters for the queue. The rng field in p
+// enables random delays, drops, and duplicates. With rng nil (the default) the
+// queue delivers items reliably in FIFO order after max(1, MinDelay) ticks.
+func (c *ChaosQueue[T]) SetChaos(p ChaosParams) {
+	c.q.chaos = p
+}
+
+// Push enqueues item at tick. Returns false if the item was dropped by chaos;
+// true if it was enqueued (and possibly duplicated).
+func (c *ChaosQueue[T]) Push(item T, tick int64) bool {
+	return c.q.push(item, tick)
+}
+
+// Pull removes and returns all items whose scheduled delivery tick is <= tick.
+func (c *ChaosQueue[T]) Pull(tick int64) []T {
+	return c.q.pull(tick)
+}
+
+// Drain removes and returns all buffered items regardless of delivery tick.
+// Use during restart or teardown to clear in-flight items.
+func (c *ChaosQueue[T]) Drain() []T {
+	return c.q.drain()
+}
+
 // chaosEntry holds a buffered item and its scheduled delivery tick.
 type chaosEntry[T any] struct {
 	item      T

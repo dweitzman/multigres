@@ -363,11 +363,12 @@ change exists and must propagate it to quorum before establishing a new primary.
 are equal, the cluster is in a clean state and the coordinator can elect a new primary within
 the existing cohort without propagating any partial write.
 
-`ClusterView` also carries `PrimaryHealthy`: true when the primary identified by
-`HighestSeenTerm.Primary` is currently reachable (postgres running, and not stale under the
-configured health timeout). A coordinator uses this to decide whether to enter the emergency
-path: normal writes proceed when `PrimaryHealthy` is true; emergency failover begins when it
-is false.
+`ClusterView` also carries `PrimaryHealthy`: true when the primary is currently reachable
+(postgres running, and not stale under the configured health timeout). The "best-known" primary
+is `HighestQuorumTerm.Primary` when a quorum-confirmed version exists, falling back to
+`HighestSeenTerm.Primary` otherwise. A coordinator uses this to decide whether to enter the
+emergency path: normal writes proceed when `PrimaryHealthy` is true; emergency failover begins
+when it is false.
 
 **Health timeout**: the coordinator can be configured with a `healthTimeoutTicks` value. If a
 pooler has not sent a status update within that many ticks, it is considered unreachable even
@@ -389,3 +390,33 @@ different zone. `AtLeastPolicy` cannot express this; requires a new `DurabilityP
 
 Structured event emission from `CoordNode` and `PoolerNode`, aggregated by the simulator for
 per-tick assertions: appointment latency, term escalation rate, failover counts.
+
+## Open design questions
+
+### Naming: leader-driven vs coordinator-driven request types
+
+The normal-path request types (`WritePolicyRequest`, `WritePolicyResponseIndicator`, etc.) do
+not have a distinguishing prefix, while the emergency-path types (`RecruitRequest`,
+`WriteShadowWALRequest`, etc.) do. Consider adding a "leader" or "primary" prefix to the
+normal-path types so the origin of each message is self-evident at the call site
+(e.g. `LeaderWritePolicyRequest`).
+
+### Abandoned operation follow-up
+
+Several operations can be abandoned mid-flight, each requiring different cleanup:
+
+- **Timed-out leader-driven write**: if a `WritePolicyRequest` is abandoned due to timeout,
+  the coordinator should consider whether the primary is in fact unreachable and retry via the
+  coordinator-led emergency path rather than waiting indefinitely for a status update.
+
+- **Coordinator-led failover abandoned early**: if the coordinator decides to stop before
+  completing the shadow WAL phase (e.g. it discovers the primary is healthy again), it should
+  release recruited nodes by sending a "release" message so they can resume normal quorum
+  participation. Without a release, recruited nodes stay withdrawn from write quorum until they
+  are recruited again or restart.
+
+- **Divergent timeline recovery**: if a recruited node is found to have a WAL timeline that
+  diverged from the current primary (e.g. it was a primary that accepted writes after quorum was
+  lost), it cannot simply resume streaming. The coordinator should direct it to either
+  `pg_rewind` back to the current primary's timeline or reconnect to a known-good base. This
+  requires a new indicator type and pooler handling ("rejoin primary" / "rewind to primary").

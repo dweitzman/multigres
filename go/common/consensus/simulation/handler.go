@@ -72,6 +72,52 @@ func (h *Handler) ProcessRequests(
 
 	for _, req := range requests {
 		switch r := req.(type) {
+		case consensus.RecruitRequest:
+			h.nextCorrSeq++
+			corrID := fmt.Sprintf("%s/%d", fromNode, h.nextCorrSeq)
+			h.correlationReturnTo[corrID] = fromNode
+			result[r.TargetPooler] = append(result[r.TargetPooler], consensus.RecruitIndicator{
+				CorrelationID: corrID,
+				CoordID:       fromNode,
+				AtTermSeq:     r.AtTermSeq,
+				ProposedSeq:   r.ProposedSeq,
+			})
+
+		case consensus.RecruitResponseRequest:
+			dest := h.correlationReturnTo[r.CorrelationID]
+			delete(h.correlationReturnTo, r.CorrelationID)
+			if dest != "" {
+				result[dest] = append(result[dest], consensus.RecruitResponseIndicator{
+					CorrelationID: r.CorrelationID,
+					FromPooler:    fromNode,
+					Accepted:      r.Accepted,
+					Term:          r.Term,
+					LSN:           r.LSN,
+				})
+			}
+
+		case consensus.WriteShadowWALRequest:
+			h.nextCorrSeq++
+			corrID := fmt.Sprintf("%s/%d", fromNode, h.nextCorrSeq)
+			h.correlationReturnTo[corrID] = fromNode
+			result[r.TargetPooler] = append(result[r.TargetPooler], consensus.WriteShadowWALIndicator{
+				CorrelationID: corrID,
+				Term:          r.Term,
+				BaseLSN:       r.BaseLSN,
+				ApplyNow:      r.ApplyNow,
+			})
+
+		case consensus.WriteShadowWALAckedRequest:
+			dest := h.correlationReturnTo[r.CorrelationID]
+			delete(h.correlationReturnTo, r.CorrelationID)
+			if dest != "" {
+				result[dest] = append(result[dest], consensus.WriteShadowWALAckedIndicator{
+					CorrelationID: r.CorrelationID,
+					FromPooler:    fromNode,
+					Accepted:      r.Accepted,
+				})
+			}
+
 		case consensus.WritePolicyRequest:
 			h.nextCorrSeq++
 			corrID := fmt.Sprintf("%s/%d", fromNode, h.nextCorrSeq)

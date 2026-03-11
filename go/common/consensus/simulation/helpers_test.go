@@ -176,6 +176,37 @@ func (c *valueNewMax[T]) Describe(_ *simType) string {
 	return fmt.Sprintf("%s: max_seen=%v", c.name, c.max)
 }
 
+// quorumLeaderChanged fires on each tick where the quorum-confirmed primary
+// transitions from one non-empty NodeID to a different non-empty NodeID.
+// Transitions through nil (e.g. after a coordinator crash resets its view) are
+// not counted — only genuine seq-increasing leader replacements are.
+// Use with dstsim.NewAtLeastNTimes to assert N distinct leader changes.
+type quorumLeaderChanged struct {
+	getQuorumTerm func(*simType) *consensus.Term
+	lastPrimary   consensus.NodeID
+	lastSeq       int64
+}
+
+func (c *quorumLeaderChanged) Name() string { return "quorum_leader_changed" }
+
+func (c *quorumLeaderChanged) Eval(sim *simType) bool {
+	term := c.getQuorumTerm(sim)
+	if term == nil {
+		return false
+	}
+	if term.Seq > c.lastSeq {
+		changed := c.lastPrimary != "" && term.Primary != c.lastPrimary
+		c.lastSeq = term.Seq
+		c.lastPrimary = term.Primary
+		return changed
+	}
+	return false
+}
+
+func (c *quorumLeaderChanged) Describe(_ *simType) string {
+	return fmt.Sprintf("quorum leader changed (last: %s at seq %d)", c.lastPrimary, c.lastSeq)
+}
+
 // --- Conditions ---
 
 // allHaveAppliedRules is true when every pooler in the set satisfies all of:
@@ -304,6 +335,15 @@ func (c *nonRevokedSyncStandbysAreReplicas) Eval(sim *simType) bool {
 		for _, standby := range sp.gucSyncStandbys {
 			standbyNode := simPoolerByID(sim, standby.ID)
 			if standbyNode == nil || standbyNode.isRevoked() {
+				continue
+			}
+			// Only enforce replication for standbys whose committed term
+			// designates this node as their primary. A standby that hasn't
+			// yet received and applied the current primary's term is still
+			// transitioning (e.g. waiting for shadow WAL retry) and its
+			// primaryConnInfo may point to an older primary.
+			standbyTerm := standbyNode.Node().CommittedState().CachedTerm
+			if standbyTerm == nil || standbyTerm.Primary != sp.ID() {
 				continue
 			}
 			if standbyNode.primaryConnInfo != sp.ID() {

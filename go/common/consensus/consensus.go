@@ -291,6 +291,13 @@ func (r RecruitmentCommitment) IsRevokedBy(proposed RecruitmentCommitment) bool 
 	return proposed.ProposedSeq > r.ProposedSeq
 }
 
+// AllowsTermChange reports whether this commitment authorises the holder to
+// write a term at termSeq. The write is authorised when it advances the term
+// (termSeq > AtTermSeq) and falls within the authorised range (termSeq <= ProposedSeq).
+func (r RecruitmentCommitment) AllowsTermChange(termSeq int64) bool {
+	return termSeq > r.AtTermSeq && termSeq <= r.ProposedSeq
+}
+
 // PoolerPersistentState is the durable state a PoolerNode writes to storage.
 // It survives process restarts and is loaded on startup via PoolerStorage.Load.
 //

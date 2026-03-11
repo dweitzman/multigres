@@ -22,6 +22,115 @@ import (
 	"github.com/multigres/multigres/go/tools/dstsim"
 )
 
+// TestLeaderTurnover verifies that the cluster performs repeated leader changes
+// under continuous chaos: both the coordinator and all poolers crash
+// periodically. It asserts:
+//
+//  1. The maximum committed PolicySeq across all poolers never decreases
+//     (safety invariant — durable state must be monotone).
+//
+//  2. The quorum-confirmed primary changes to a different node at least twice
+//     in sequence (requires Stage 3 emergency failover).
+//     TODO(stage3): raise the AtLeastNTimes threshold from 2 to 1000.
+func TestLeaderTurnover(t *testing.T) {
+	const (
+		coordID         consensus.NodeID = "coord-1"
+		coordCrasherID  consensus.NodeID = "coord-crasher"
+		poolerCrasherID consensus.NodeID = "pooler-crasher"
+		node1ID         consensus.NodeID = "node-1"
+		node2ID         consensus.NodeID = "node-2"
+		node3ID         consensus.NodeID = "node-3"
+	)
+
+	seed := uint64(42)
+	t.Logf("Chaos seed: %d", seed)
+	rng := rand.New(rand.NewPCG(seed, 0))
+
+	sim := newTestSim(coordID)
+	sim.SetDeliveryManager(reliableMembership(&dstsim.ChaosDeliveryManager[consensus.Indicator, consensus.NodeID]{
+		Chaos: dstsim.ChaosParams{
+			MaxDelay: 10,
+			DropRate: 0.1,
+			Rng:      rng,
+		},
+	}))
+
+	seedTerm := &consensus.Term{
+		Seq:     1,
+		Primary: node1ID,
+		Members: []consensus.CohortMember{{ID: node1ID}},
+		Policy:  consensus.AtLeastPolicy(1),
+	}
+	pooler1 := newPrimaryPooler(node1ID, seedTerm, sim)
+	sim.RegisterNode(pooler1)
+
+	// Configure a health timeout so the coordinator detects a crashed primary
+	// and initiates failover (Stage 3 emergency path).
+	coordNode := consensus.NewCoordNode(coordID, consensus.AtLeastPolicy(2))
+	coordNode.SetHealthTimeout(40)
+	coord := NewSimCoordNode(coordNode, sim)
+	sim.RegisterNode(coord)
+
+	pooler2 := newReplicaPooler(node2ID, node1ID, sim)
+	pooler3 := newReplicaPooler(node3ID, node1ID, sim)
+	sim.RegisterNode(pooler2)
+	sim.RegisterNode(pooler3)
+
+	allPoolers := []*SimPooler{pooler1, pooler2, pooler3}
+
+	// Coordinator crashes roughly every 400 ticks, staying down for 30 ticks.
+	coordCrasher := newChaosCrasher(
+		coordCrasherID, sim, rand.New(rand.NewPCG(seed, 1)),
+		[]consensus.NodeID{coordID}, 400, 30,
+	)
+	sim.RegisterNode(coordCrasher)
+
+	// Each pooler crashes roughly every 300 ticks, staying down for 150 ticks.
+	// Down time (150) exceeds detection + failover time (~100 ticks), so the
+	// coordinator completes failover before the crashed primary recovers.
+	poolerCrasher := newChaosCrasher(
+		poolerCrasherID, sim, rand.New(rand.NewPCG(seed, 2)),
+		[]consensus.NodeID{node1ID, node2ID, node3ID}, 300, 150,
+	)
+	sim.RegisterNode(poolerCrasher)
+
+	// maxCommittedSeq returns the highest PolicySeq committed to durable storage
+	// across all poolers. Each term write (expansion or failover) increments this.
+	maxCommittedSeq := func(*simType) int64 {
+		var max int64
+		for _, sp := range allPoolers {
+			if seq := sp.Node().CommittedState().PolicySeq(); seq > max {
+				max = seq
+			}
+		}
+		return max
+	}
+
+	// Safety invariant: durable committed state must never decrease.
+	sim.Always(&valueNeverDecreases[int64]{
+		name:     "max_committed_seq_monotone",
+		getValue: maxCommittedSeq,
+	})
+
+	// quorumLeaderChange fires each time the coordinator's highest quorum-confirmed
+	// primary transitions to a different node. Coordinator crash resets (nil view)
+	// are not counted.
+	quorumLeaderChange := &quorumLeaderChanged{
+		getQuorumTerm: func(sim *simType) *consensus.Term {
+			return coord.Node().ClusterView(sim.CurrentTick()).HighestQuorumTerm
+		},
+	}
+
+	th := dstsim.NewSimulationTestHelper(t, sim)
+
+	// TODO(stage3): raise threshold to 1000 once emergency failover is implemented.
+	th.RequireWithinTicks(dstsim.And(
+		dstsim.NewAtLeastNTimes(2, quorumLeaderChange),
+		coordCrasher.minCrashes(1),
+		poolerCrasher.minCrashes(1),
+	), 10_000)
+}
+
 // TestCohortExpansionUnreliableNetwork verifies that cohort expansion converges
 // under unreliable network conditions (random delays and packet drops). The
 // coordinator operates autonomously, adding observed replicas to the cohort.

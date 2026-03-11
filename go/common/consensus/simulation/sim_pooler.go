@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/multigres/multigres/go/common/consensus"
+	"github.com/multigres/multigres/go/tools/dstsim"
 )
 
 // postgresMode indicates whether the simulated postgres instance is in
@@ -254,6 +255,12 @@ type SimPooler struct {
 	// advancePendingRevoke call the revocation completes and
 	// RevokeParticipationResponseIndicator is queued.
 	pendingRevokeCorrelationID string
+
+	// applyWALQueue buffers incoming ApplyWALTermRequests. The queue introduces
+	// at least one tick of delay before calling applyGUCForTerm, modelling the
+	// sidecar acquiring an exclusive lock before reconfiguring GUC settings.
+	// Use SetApplyWALChaos to inject random delays for chaos testing.
+	applyWALQueue dstsim.ChaosQueue[consensus.Term]
 }
 
 // NewSimPooler creates a SimPooler wrapping the given PoolerNode. sim is the
@@ -363,6 +370,7 @@ func (s *SimPooler) Restart() {
 	s.pendingWAL = nil
 	s.queuedIndicators = nil
 	s.pendingRevokeCorrelationID = ""
+	s.applyWALQueue.Drain()
 	s.responseCallbacks = make(map[string]func(consensus.WritePolicyResponseRequest))
 	s.recruitResponseCallbacks = make(map[string]func(consensus.RecruitResponseRequest))
 	s.reinitGUC()
@@ -400,6 +408,14 @@ func (s *SimPooler) SyncStandbys() []consensus.CohortMember {
 	result := make([]consensus.CohortMember, len(s.gucSyncStandbys))
 	copy(result, s.gucSyncStandbys)
 	return result
+}
+
+// SetApplyWALChaos configures chaos parameters for the ApplyWALTermRequest
+// delivery queue. Use this in tests to inject random delays in sidecar GUC
+// application, simulating variance in the time between the coordinator writing
+// a shadow WAL entry and the node actually reconfiguring postgres.
+func (s *SimPooler) SetApplyWALChaos(p dstsim.ChaosParams) {
+	s.applyWALQueue.SetChaos(p)
 }
 
 // EnqueueIndicator queues an indicator to be delivered to the wrapped
@@ -550,7 +566,30 @@ func (s *SimPooler) advancePendingRevoke() {
 	s.queuedIndicators = append(s.queuedIndicators, consensus.RevokeParticipationResponseIndicator{
 		CorrelationID: correlationID,
 		Accepted:      true,
+		LSN:           consensus.LSN(s.receivedLSN),
 	})
+}
+
+// advancePendingApplyWAL pulls ready terms from the applyWALQueue (delivered
+// with at least one tick of delay, modelling sidecar GUC-apply latency) and
+// applies each via applyGUCForTerm. For emergency promotions — when a node
+// transitions from hot-standby to primary via a coordinator-written shadow WAL
+// — nextPos is initialised from receivedLSN so that replicas can reconnect
+// starting from the last position this node received from the old primary.
+func (s *SimPooler) advancePendingApplyWAL(tick int64) {
+	terms := s.applyWALQueue.Pull(tick)
+	for _, term := range terms {
+		if term.Primary == s.node.ID() && s.mode == postgresHotStandby {
+			// Emergency promotion: seed the WAL position from the last real
+			// WAL position received. Replicas will connect and stream from here.
+			s.nextPos = s.receivedLSN
+		}
+		s.applyGUCForTerm(&term)
+		s.queuedIndicators = append(s.queuedIndicators, consensus.ApplyRulesResponseIndicator{
+			Term:     term,
+			Accepted: true,
+		})
+	}
 }
 
 // Step processes indicators and advances the SimPooler state machine one tick.
@@ -578,6 +617,11 @@ func (s *SimPooler) Step(tick int64, externalInds []consensus.Indicator) []conse
 	// modelling the at-least-one-tick sidecar latency.
 	s.advancePendingWAL()
 
+	// Process any ApplyWALTermRequest items whose delivery delay has elapsed.
+	// These come from WriteShadowWALIndicator with ApplyNow=true and model the
+	// sidecar acquiring an exclusive lock before reconfiguring GUC settings.
+	s.advancePendingApplyWAL(tick)
+
 	// Replica path: pull new WAL from the configured primary. Entries are
 	// stored in pendingWAL and will be processed in the next tick.
 	s.pullWAL()
@@ -596,13 +640,17 @@ func (s *SimPooler) Step(tick int64, externalInds []consensus.Indicator) []conse
 	// Step the wrapped PoolerNode with all accumulated indicators.
 	reqs := s.node.Step(tick, inds)
 
-	// Intercept PolicyRecordApplyRequest and RevokeParticipationRequest before
-	// forwarding to the RequestHandler. Invoke registered response callbacks.
+	// Intercept sidecar-bound requests before forwarding to the RequestHandler.
+	// Invoke registered response callbacks for correlated responses.
 	var forwarded []consensus.Request
 	for _, req := range reqs {
 		switch r := req.(type) {
 		case consensus.PolicyRecordApplyRequest:
 			s.handleApply(r)
+		case consensus.ApplyWALTermRequest:
+			// Sidecar intercept: push to queue with a minimum 1-tick delay
+			// modelling the sidecar acquiring an exclusive lock before GUC apply.
+			s.applyWALQueue.Push(r.Term, tick)
 		case consensus.RevokeParticipationRequest:
 			// Sidecar intercept: start revocation. Will complete on the next tick
 			// via advancePendingRevoke, modelling at-least-one-tick sidecar latency.

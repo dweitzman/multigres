@@ -162,6 +162,10 @@ func (n *PoolerNode) Step(tick int64, indicators []Indicator) []Request {
 			changed = changed || c
 		case RevokeParticipationResponseIndicator:
 			requests = append(requests, n.handleRevokeParticipationResponse(v)...)
+		case WriteShadowWALIndicator:
+			reqs, c := n.handleWriteShadowWAL(v)
+			requests = append(requests, reqs...)
+			changed = changed || c
 		case TerminateIndicator:
 			if n.pgStatus != PostgresStopped {
 				n.pgStatus = PostgresStopped
@@ -194,7 +198,11 @@ func (n *PoolerNode) handleWritePolicy(ind WritePolicyIndicator) ([]Request, boo
 	}
 
 	if n.committed.Role != RolePrimary {
-		return reject()
+		// Emergency failover: a recruited node may accept a write that falls
+		// within its committed authority range.
+		if n.committed.Commitment == nil || !n.committed.Commitment.AllowsTermChange(ind.Term.Seq) {
+			return reject()
+		}
 	}
 	// Reject if a write is already in flight (serialise writes).
 	if n.pendingApply != nil {
@@ -257,6 +265,15 @@ func (n *PoolerNode) handleApplyResponse(ind ApplyRulesResponseIndicator) ([]Req
 		newState.Role = RolePrimary
 	} else {
 		newState.Role = RoleReplica
+	}
+	// Clear the commitment once the authorised term has been applied: the
+	// coordinator's write authority is consumed and the node resumes normal
+	// quorum participation.
+	// TODO: consider whether the outgoing coordinator could briefly retain
+	// authority into the next term (until a new coordinator recruits); for now
+	// we revoke on apply as the conservative safe choice.
+	if newState.Commitment != nil && ind.Term.Seq >= newState.Commitment.ProposedSeq {
+		newState.Commitment = nil
 	}
 	if err := n.storage.Save(newState); err != nil {
 		return nil, false
@@ -333,6 +350,45 @@ func (n *PoolerNode) handleRecruit(ind RecruitIndicator) ([]Request, bool) {
 	}}, true
 }
 
+// handleWriteShadowWAL processes a WriteShadowWALIndicator from a coordinator.
+// The node must hold a commitment that authorises Term.Seq and must have
+// received real WAL up to at least ind.BaseLSN so the entry is placed at the
+// correct position in the WAL history.
+//
+// The term is appended to shadow WAL for durability, and
+// WriteShadowWALAckedRequest is returned so the coordinator knows the write
+// succeeded. When ApplyNow is true the sidecar is also asked to apply GUC
+// settings immediately via ApplyWALTermRequest, allowing promotion or replica
+// reconnection without a separate round-trip.
+func (n *PoolerNode) handleWriteShadowWAL(ind WriteShadowWALIndicator) ([]Request, bool) {
+	if n.committed.Commitment == nil || !n.committed.Commitment.AllowsTermChange(ind.Term.Seq) {
+		return nil, false
+	}
+
+	// Persist to shadow WAL before responding to the coordinator.
+	newState := n.committed
+	term := ind.Term
+	newState.ShadowWAL = append(newState.ShadowWAL, &term)
+	if err := n.storage.Save(newState); err != nil {
+		return nil, false
+	}
+	n.committed = newState
+
+	var reqs []Request
+	// Acknowledge the shadow WAL write to the coordinator.
+	if ind.CorrelationID != "" {
+		reqs = append(reqs, WriteShadowWALAckedRequest{
+			RequestCorrelation: RequestCorrelation{CorrelationID: ind.CorrelationID},
+			Accepted:           true,
+		})
+	}
+	// When ApplyNow is set, ask the sidecar to apply GUC settings immediately.
+	if ind.ApplyNow {
+		reqs = append(reqs, ApplyWALTermRequest{Term: ind.Term})
+	}
+	return reqs, true
+}
+
 // handleRevokeParticipationResponse processes the sidecar's result for stopping
 // this node from participating in write quorum. Forwards the outcome to the
 // coordinator as a RecruitResponseRequest.
@@ -341,11 +397,15 @@ func (n *PoolerNode) handleRevokeParticipationResponse(ind RevokeParticipationRe
 		return nil // stale or spurious
 	}
 	n.pendingRecruitCorrelationID = ""
-	return []Request{RecruitResponseRequest{
+	req := RecruitResponseRequest{
 		RequestCorrelation: RequestCorrelation{CorrelationID: ind.CorrelationID},
 		Accepted:           ind.Accepted,
 		Term:               n.committed.CachedTerm,
-	}}
+	}
+	if ind.Accepted {
+		req.LSN = ind.LSN
+	}
+	return []Request{req}
 }
 
 func (n *PoolerNode) statusUpdate() PoolerStatusUpdateRequest {
