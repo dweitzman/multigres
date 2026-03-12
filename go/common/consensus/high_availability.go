@@ -53,6 +53,18 @@ type HighAvailabilityStrategy interface {
 	// NeedsLeaderFailover returns true when the coordinator should initiate a
 	// coordinator-led term change to replace the current primary.
 	NeedsLeaderFailover(status ShardStatus) bool
+
+	// CanAttemptFailover returns true when the coordinator has enough healthy
+	// nodes to satisfy the effective post-failover durability policy. If
+	// HighestSeenTerm.Seq > HighestQuorumTerm.Seq, a partial leader-driven
+	// change exists and the coordinator will be obligated to propagate it;
+	// HighestSeenTerm's policy governs. Otherwise HighestQuorumTerm's policy
+	// governs. The policy is checked against only the cohort members that are
+	// currently healthy and reachable.
+	//
+	// This is checked before starting a new recruitment to avoid premature
+	// quorum revocation when there is no realistic path to completion.
+	CanAttemptFailover(status ShardStatus) bool
 }
 
 // DefaultHighAvailability returns the standard HA policy: initiate a failover
@@ -81,11 +93,42 @@ func (defaultHA) NeedsLeaderFailover(status ShardStatus) bool {
 	return !isNodeHealthy(health, status.Tick)
 }
 
+func (defaultHA) CanAttemptFailover(status ShardStatus) bool {
+	// Use the highest-seq term the coordinator has seen. If HighestSeenTerm is
+	// ahead of HighestQuorumTerm, a partial leader-driven change exists and the
+	// coordinator will be obligated to propagate it; that term's policy governs.
+	// Otherwise fall back to HighestQuorumTerm.
+	effectiveTerm := status.HighestSeenTerm
+	if effectiveTerm == nil || (status.HighestQuorumTerm != nil && status.HighestSeenTerm.Seq <= status.HighestQuorumTerm.Seq) {
+		effectiveTerm = status.HighestQuorumTerm
+	}
+	if effectiveTerm == nil {
+		return false // no known cluster state; cannot safely attempt failover
+	}
+	if effectiveTerm.Policy == nil {
+		return true // nil policy: no durability requirement
+	}
+	var healthy []CohortMember
+	for _, m := range effectiveTerm.Members {
+		if h, ok := status.NodeHealth[m.ID]; ok && isNodeHealthy(h, status.Tick) {
+			healthy = append(healthy, m)
+		}
+	}
+	return effectiveTerm.Policy.IsAchievable(healthy)
+}
+
 // NeedsLeaderFailover is a package-level convenience function that applies the
 // default HA policy to the given ShardStatus. It is equivalent to
 // DefaultHighAvailability().NeedsLeaderFailover(status).
 func NeedsLeaderFailover(status ShardStatus) bool {
 	return defaultHA{}.NeedsLeaderFailover(status)
+}
+
+// CanAttemptFailover is a package-level convenience function that applies the
+// default HA policy to the given ShardStatus. It is equivalent to
+// DefaultHighAvailability().CanAttemptFailover(status).
+func CanAttemptFailover(status ShardStatus) bool {
+	return defaultHA{}.CanAttemptFailover(status)
 }
 
 // isNodeHealthy returns true when the given node is considered reachable.

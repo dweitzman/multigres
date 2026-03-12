@@ -455,6 +455,13 @@ func (c *CoordNode) advance(tick int64) []Request {
 		// Primary is unreachable: abort any in-flight leader-led write and run
 		// the coordinator-led term change protocol.
 		c.pendingWrite = nil
+		// Only start a new recruitment when we have enough healthy nodes to
+		// satisfy the post-failover durability policy. If we can't, recruiting
+		// would revoke quorum participation with no path to completion, leaving
+		// the shard worse off. An already-in-progress recruitment continues.
+		if c.pendingRecruitment == nil && !c.ha.CanAttemptFailover(status) {
+			return nil
+		}
 		return c.advanceCoordLedChange(tick, status)
 	}
 

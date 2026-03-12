@@ -20,6 +20,101 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestCanAttemptFailover(t *testing.T) {
+	const (
+		primary     NodeID = "node-1"
+		replica2    NodeID = "node-2"
+		replica3    NodeID = "node-3"
+		currentTick int64  = 1000
+	)
+
+	const (
+		stale = currentTick - HealthTimeoutTicks - 1
+	)
+
+	members3 := []CohortMember{{ID: primary}, {ID: replica2}, {ID: replica3}}
+
+	healthyNH := NodeHealth{PostgresStatus: PostgresRunning, LastHeardTick: currentTick}
+	stoppedNH := NodeHealth{PostgresStatus: PostgresStopped, LastHeardTick: currentTick}
+	staleNH := NodeHealth{PostgresStatus: PostgresRunning, LastHeardTick: stale}
+
+	t.Run("no cluster state known — cannot attempt failover", func(t *testing.T) {
+		status := ShardStatus{Tick: currentTick, NodeHealth: map[NodeID]NodeHealth{}}
+		assert.False(t, CanAttemptFailover(status))
+	})
+
+	t.Run("AtLeast(1) single-node cluster: the one node is unhealthy — false", func(t *testing.T) {
+		term := &Term{Seq: 1, Primary: primary, Members: []CohortMember{{ID: primary}}, Policy: AtLeastPolicy(1)}
+		status := ShardStatus{
+			Tick:              currentTick,
+			HighestQuorumTerm: term,
+			NodeHealth:        map[NodeID]NodeHealth{primary: stoppedNH},
+		}
+		assert.False(t, CanAttemptFailover(status), "no healthy node to promote")
+	})
+
+	t.Run("AtLeast(1) two-node cluster: primary unhealthy, replica healthy — true", func(t *testing.T) {
+		term := &Term{Seq: 1, Primary: primary, Members: []CohortMember{{ID: primary}, {ID: replica2}}, Policy: AtLeastPolicy(1)}
+		status := ShardStatus{
+			Tick:              currentTick,
+			HighestQuorumTerm: term,
+			NodeHealth:        map[NodeID]NodeHealth{primary: stoppedNH, replica2: healthyNH},
+		}
+		assert.True(t, CanAttemptFailover(status))
+	})
+
+	t.Run("AtLeast(2) three-node cluster: primary down, only one replica healthy — false", func(t *testing.T) {
+		term := &Term{Seq: 1, Primary: primary, Members: members3, Policy: AtLeastPolicy(2)}
+		status := ShardStatus{
+			Tick:              currentTick,
+			HighestQuorumTerm: term,
+			NodeHealth: map[NodeID]NodeHealth{
+				primary:  stoppedNH,
+				replica2: healthyNH,
+				replica3: staleNH,
+			},
+		}
+		assert.False(t, CanAttemptFailover(status), "only one healthy node; AtLeast(2) requires two")
+	})
+
+	t.Run("AtLeast(2) three-node cluster: primary down, both replicas healthy — true", func(t *testing.T) {
+		term := &Term{Seq: 1, Primary: primary, Members: members3, Policy: AtLeastPolicy(2)}
+		status := ShardStatus{
+			Tick:              currentTick,
+			HighestQuorumTerm: term,
+			NodeHealth:        map[NodeID]NodeHealth{primary: stoppedNH, replica2: healthyNH, replica3: healthyNH},
+		}
+		assert.True(t, CanAttemptFailover(status))
+	})
+
+	t.Run("uses HighestSeenTerm policy when it is ahead of HighestQuorumTerm", func(t *testing.T) {
+		// HighestSeenTerm has AtLeast(3), requiring all three nodes healthy.
+		// Only two are healthy, so CanAttemptFailover must return false even
+		// though HighestQuorumTerm uses AtLeast(2) which would be achievable.
+		quorumTerm := &Term{Seq: 2, Primary: primary, Members: members3, Policy: AtLeastPolicy(2)}
+		seenTerm := &Term{Seq: 3, Primary: primary, Members: members3, Policy: AtLeastPolicy(3)}
+		status := ShardStatus{
+			Tick:              currentTick,
+			HighestQuorumTerm: quorumTerm,
+			HighestSeenTerm:   seenTerm,
+			NodeHealth:        map[NodeID]NodeHealth{primary: stoppedNH, replica2: healthyNH, replica3: healthyNH},
+		}
+		assert.False(t, CanAttemptFailover(status), "seen term requires AtLeast(3); only two nodes are healthy")
+	})
+
+	t.Run("falls back to HighestQuorumTerm when seen term is not ahead", func(t *testing.T) {
+		quorumTerm := &Term{Seq: 3, Primary: primary, Members: members3, Policy: AtLeastPolicy(2)}
+		seenTerm := &Term{Seq: 3, Primary: primary, Members: members3, Policy: AtLeastPolicy(3)}
+		status := ShardStatus{
+			Tick:              currentTick,
+			HighestQuorumTerm: quorumTerm,
+			HighestSeenTerm:   seenTerm, // same Seq, not ahead
+			NodeHealth:        map[NodeID]NodeHealth{primary: stoppedNH, replica2: healthyNH, replica3: healthyNH},
+		}
+		assert.True(t, CanAttemptFailover(status), "quorum term governs (Seq equal); AtLeast(2) with two healthy replicas is achievable")
+	})
+}
+
 func TestNeedsLeaderFailover(t *testing.T) {
 	const (
 		primary     NodeID = "node-1"

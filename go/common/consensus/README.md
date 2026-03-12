@@ -647,6 +647,17 @@ Several operations can be abandoned mid-flight, each requiring different cleanup
   `pg_rewind` back to the current primary's timeline or reconnect to a known-good base. This
   requires a new indicator type and pooler handling ("rejoin primary" / "rewind to primary").
 
+### Unnecessary Resume messages to the primary
+
+The coordinator currently sends `ResumeRequest` to the primary whenever its `CachedTerm.Seq` is
+below the quorum term. In practice, the primary's first status broadcast arrives before its
+`PoolerDiscoveredIndicator` (because the `PerSourceDeliveryManager` delivers status indicators
+before discovery indicators), so the primary's `CachedTerm` in the coordinator's view is
+momentarily `nil`. This triggers a spurious Resume that is harmless but generates noise in the
+trace. The coordinator should skip Resume for the primary (or at least for nodes whose
+`CachedTerm` is nil because their status was not yet processed), since the primary drives term
+changes through `WritePolicyRequest` rather than waiting for a Resume.
+
 ### Resume message for stuck nodes
 
 A node may be stuck and unable to make progress without the coordinator telling it the current
@@ -678,28 +689,29 @@ postgres state (e.g. `PolicyRecordApplyRequest`, `ApplyWALTermRequest`,
 in-flight state-change request — would be cleaner than relying on the sidecar (`SimPooler`) to
 enforce exclusion implicitly.
 
-### Pre-flight feasibility check before coordinator-led term change
+### Pre-flight feasibility check before coordinator-led term change ✅ implemented
 
 Before starting recruitment (which revokes quorum participation from nodes), the coordinator
-should verify that it has enough confidence to complete the failover. Revoking nodes that turn
+verifies that it has enough healthy nodes to complete the failover. Revoking nodes that turn
 out to be reachable can make the cluster temporarily worse than it already was.
 
-Two checks should be performed:
+`CanAttemptFailover(status ShardStatus) bool` in `HighAvailabilityStrategy` performs two checks:
 
 1. **Determine the effective post-failover durability policy.** If `HighestSeenTerm.Seq >
 HighestQuorumTerm.Seq`, a partial leader-led change exists: the coordinator will be obligated
    to propagate it to quorum, which means the post-failover policy is `HighestSeenTerm.Policy`.
    Otherwise the post-failover policy is `HighestQuorumTerm.Policy`.
 
-2. **Check achievability against currently healthy nodes.** Call
+2. **Check achievability against currently healthy nodes.** Calls
    `policy.IsAchievable(healthyNodes)` where `healthyNodes` is the subset of the post-failover
    cohort whose `NodeHealth` the coordinator considers reachable. If the policy cannot be
-   satisfied by the known-healthy nodes alone, the coordinator should not begin recruitment —
+   satisfied by the known-healthy nodes alone, the coordinator skips recruitment —
    it has no evidence that the failover can succeed, and premature revocation could prevent
    the cluster from recovering on its own once connectivity is restored.
 
-This check belongs in `HighAvailabilityStrategy` alongside `NeedsLeaderFailover`, so that the
-feasibility logic is pluggable and testable independently of the consensus state machine.
+`TestCoordDoesNotRecruitWhenFailoverIsInfeasible` exercises this path: a network partition
+isolates {node1, node2} from {node3, coord}. The coordinator can only see node3 — one node
+short of `AtLeast(2)` — and correctly refrains from recruiting.
 
 ### LSN visibility in simulation traces
 
