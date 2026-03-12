@@ -555,6 +555,69 @@ different zone. `AtLeastPolicy` cannot express this; requires a new `DurabilityP
 Structured event emission from `CoordNode` and `PoolerNode`, aggregated by the simulator for
 per-tick assertions: appointment latency, term escalation rate, failover counts.
 
+### Stage 7 — Unsafe term changes
+
+**Scenario:** Too many cohort members have been lost simultaneously, making it impossible to form a
+write quorum under the previous term's ack policy. For example, with `AtLeast(3)` and five nodes,
+if three nodes are permanently unavailable, no set of survivors can satisfy the outgoing policy, so
+the normal coordinator-led protocol cannot safely proceed.
+
+**Protocol:** The coordinator is given an explicit operator override specifying:
+
+- The term to transition off (`AtTermSeq`)
+- A declared quorum — a subset of surviving cohort members that the operator asserts is sufficient
+  to represent the outgoing write quorum for this specific transition
+
+The coordinator uses this declared set in place of the policy's normal `RevokesAndSamplesAllRevocationSets`
+check when verifying the revocation set. The operator is taking explicit responsibility for data loss
+if the declared members do not in fact cover all committed writes.
+
+**Recovery paths — operator's choice:**
+
+1. **Preserve durability (safest):** Add new poolers to the cohort and keep the original ack policy.
+   The new cohort members bring the term back to the original quorum requirement automatically as
+   they join and start ACKing.
+
+2. **Restore availability at lower durability:** Reduce the ack policy to match the surviving cohort
+   size (e.g., `AtLeast(2)` instead of `AtLeast(3)`). The coordinator can be configured with a
+   `targetPolicy` — once enough cohort members are available again, the coordinator automatically
+   escalates the policy back to the target without further operator action. The reduced policy is a
+   temporary concession, not a permanent downgrade.
+
+Unsafe term changes require explicit operator authorisation and should be logged prominently, since
+they are inherently lossy when the unavailable nodes held committed writes not covered by the
+declared quorum.
+
+### Stage 8 — Provisioning lineage
+
+**Scenario:** Scaling a shard to zero — or replacing the entire cohort — requires a clean handoff
+between two independent generations of provisioning. Without lineage tracking, a stale provisioner
+from a previous generation could instruct a new cohort to replicate from an incompatible base backup.
+
+**Scale down:** The current provisioner revokes write access via the coordinator-led protocol and takes
+an up-to-date backup at a known LSN. This backup LSN becomes the _handoff LSN_ — the minimum safe
+base for any future cohort.
+
+**Scale up:** A new provisioner must either:
+
+- Start all nodes from a backup at or beyond the handoff LSN, so they can stream WAL from the new
+  primary and converge to a consistent state, or
+- Run `initdb` on all nodes (valid when no prior data needs to be carried forward — essentially a
+  fresh cluster).
+
+The resource/pod provisioner is the only entity that knows which path is required and what the
+minimum safe backup LSN is. This cannot be encoded safely in the consensus term alone.
+
+**Proposal:** Each provisioner generates a random _provisioning ID_ at startup and stamps it on all
+policy instructions it issues — for example, "observers joining this cohort must restore from a
+backup at least as new as LSN X." Poolers validate the provisioning ID before accepting such advice,
+ignoring instructions from a different generation. A new provisioner explicitly supersedes the
+previous one by committing a term update that installs the new provisioning ID, revoking the
+previous generation's authority.
+
+This bounds the blast radius of a stale or restarted provisioner: its instructions are ignored by
+any pooler that has already enrolled in the new generation.
+
 ## Open design questions
 
 ### Naming: leader-driven vs coordinator-driven request types
