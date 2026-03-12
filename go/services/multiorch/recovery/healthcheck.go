@@ -89,7 +89,7 @@ func (re *Engine) pollPooler(ctx context.Context, poolerID *clustermetadata.ID, 
 	// (Similar to recentDiscoveryOperationKeys in Vitess)
 	// Skip cache check if forceDiscovery is true
 	if !forceDiscovery {
-		if re.existsInCache(poolerIDStr) {
+		if re.poolerStore.WasRecentlyPolled(poolerIDStr, re.config.GetPoolerHealthCheckInterval()) {
 			// Recently polled, skip
 			re.logger.DebugContext(ctx, "skipping poll - recently checked",
 				"pooler_id", poolerIDStr,
@@ -99,8 +99,8 @@ func (re *Engine) pollPooler(ctx context.Context, poolerID *clustermetadata.ID, 
 		}
 	}
 
-	// Add to cache
-	re.addToCache(poolerIDStr)
+	// Record poll attempt
+	re.poolerStore.RecordPollAttempt(poolerIDStr)
 
 	// Quick check: if up-to-date and valid, skip (unless forceDiscovery)
 	if !forceDiscovery && pooler.IsUpToDate && pooler.IsLastCheckValid {
@@ -268,41 +268,6 @@ func (re *Engine) fetchConsensusStatus(ctx context.Context, poolerID *clustermet
 	)
 
 	return resp
-}
-
-// existsInCache checks if a pooler ID was recently polled.
-func (re *Engine) existsInCache(poolerID string) bool {
-	re.recentPollCacheMu.Lock()
-	defer re.recentPollCacheMu.Unlock()
-
-	if lastPoll, ok := re.recentPollCache[poolerID]; ok {
-		// Check if entry is still valid
-		if time.Since(lastPoll) < re.config.GetPoolerHealthCheckInterval() {
-			return true
-		}
-		// Entry expired, remove it
-		delete(re.recentPollCache, poolerID)
-	}
-	return false
-}
-
-// addToCache adds a pooler ID to the recent poll cache.
-func (re *Engine) addToCache(poolerID string) {
-	re.recentPollCacheMu.Lock()
-	defer re.recentPollCacheMu.Unlock()
-
-	re.recentPollCache[poolerID] = time.Now()
-
-	// Cleanup old entries periodically (simple approach)
-	if len(re.recentPollCache) > 10000 {
-		// Remove entries older than 2x poll interval
-		cutoff := time.Now().Add(-2 * re.config.GetPoolerHealthCheckInterval())
-		for id, lastPoll := range re.recentPollCache {
-			if lastPoll.Before(cutoff) {
-				delete(re.recentPollCache, id)
-			}
-		}
-	}
 }
 
 // queuePoolersHealthCheck identifies poolers that need health checking and pushes them to the queue.

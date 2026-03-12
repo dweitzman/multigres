@@ -17,6 +17,8 @@ package store
 import (
 	"context"
 	"log/slog"
+	"sync"
+	"time"
 
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/rpcclient"
@@ -28,11 +30,20 @@ import (
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
 
-// PoolerStore extends PoolerHealthStore with RPC-based domain queries.
-// It is used where both health state and live RPC calls are needed.
-// For components that only need health state, prefer passing .Health() directly.
+// poolerOpState holds per-pooler operational metadata that is tracked in memory
+// alongside health state but is not part of the persisted proto.
+type poolerOpState struct {
+	lastPollAttempt time.Time
+}
+
+// PoolerStore extends PoolerHealthStore with RPC-based domain queries and
+// per-pooler operational state. It is used where both health state and live
+// RPC calls are needed. For components that only need health state, prefer
+// passing .Health() directly.
 type PoolerStore struct {
 	health    *PoolerHealthStore
+	opState   map[string]*poolerOpState
+	opStateMu sync.Mutex
 	rpcClient rpcclient.MultiPoolerClient
 	logger    *slog.Logger
 }
@@ -43,6 +54,7 @@ type PoolerStore struct {
 func NewPoolerStore(rpcClient rpcclient.MultiPoolerClient, logger *slog.Logger) *PoolerStore {
 	return &PoolerStore{
 		health:    NewPoolerHealthStore(),
+		opState:   make(map[string]*poolerOpState),
 		rpcClient: rpcClient,
 		logger:    logger,
 	}
@@ -65,9 +77,36 @@ func (s *PoolerStore) Set(poolerID string, state *multiorchdatapb.PoolerHealthSt
 	s.health.set(poolerID, state)
 }
 
-// Delete removes a pooler from the store. Returns true if the pooler existed.
+// Delete removes a pooler from the store, including its operational state.
+// Returns true if the pooler existed.
 func (s *PoolerStore) Delete(poolerID string) bool {
+	s.opStateMu.Lock()
+	delete(s.opState, poolerID)
+	s.opStateMu.Unlock()
 	return s.health.delete(poolerID)
+}
+
+// RecordPollAttempt records that a health poll was attempted for this pooler right now.
+func (s *PoolerStore) RecordPollAttempt(poolerID string) {
+	s.opStateMu.Lock()
+	defer s.opStateMu.Unlock()
+	op := s.opState[poolerID]
+	if op == nil {
+		op = &poolerOpState{}
+		s.opState[poolerID] = op
+	}
+	op.lastPollAttempt = time.Now()
+}
+
+// WasRecentlyPolled returns true if a poll attempt was recorded for this pooler
+// within the given interval.
+func (s *PoolerStore) WasRecentlyPolled(poolerID string, interval time.Duration) bool {
+	s.opStateMu.Lock()
+	defer s.opStateMu.Unlock()
+	if op, ok := s.opState[poolerID]; ok {
+		return time.Since(op.lastPollAttempt) < interval
+	}
+	return false
 }
 
 // Len returns the number of poolers in the store.

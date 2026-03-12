@@ -19,7 +19,6 @@ import (
 	"log/slog"
 	"slices"
 	"sync"
-	"time"
 
 	"github.com/multigres/multigres/go/common/rpcclient"
 	"github.com/multigres/multigres/go/common/topoclient"
@@ -236,10 +235,6 @@ type Engine struct {
 	metadataRefreshRunner  *timer.PeriodicRunner
 	healthCheckQueueRunner *timer.PeriodicRunner
 
-	// Cache for deduplication (prevents redundant health checks)
-	recentPollCache   map[string]time.Time
-	recentPollCacheMu sync.Mutex
-
 	// Detected problems tracking (replaced each cycle)
 	detectedProblemsMu sync.Mutex
 	detectedProblems   []types.Problem // For metrics and gRPC diagnostics
@@ -282,7 +277,6 @@ func NewEngine(
 		poolerStore:            poolerStore,
 		healthCheckQueue:       NewQueue(logger, config),
 		shardWatchTargets:      shardWatchTargets,
-		recentPollCache:        make(map[string]time.Time),
 		shutdownCtx:            ctx,
 		cancel:                 cancel,
 		bookkeepingRunner:      timer.NewPeriodicRunner(ctx, config.GetBookkeepingInterval()),
