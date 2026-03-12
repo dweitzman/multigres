@@ -22,11 +22,10 @@ import (
 	"github.com/multigres/multigres/go/tools/dstsim"
 )
 
-// TestResumeMessageNeeded demonstrates that the current implementation leaves
-// nodes stuck with a stale term after a coordinator-led primary failover. It is
-// a TDD test that is expected to FAIL until the coordinator sends a "resume"
-// message (see the TODO in coord.go) pointing stale nodes at the current
-// primary.
+// TestResumeMessageNeeded verifies that nodes do not get stuck with a stale
+// term after a coordinator-led primary failover. The coordinator sends
+// ResumeRequests to stale nodes (CoordNode.advanceResume) to bring them up to
+// the quorum-confirmed term without a full term-change round-trip.
 //
 // Setup:
 //   - 4-node cluster: node1 starts as primary; node2–4 start as replicas.

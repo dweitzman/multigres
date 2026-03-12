@@ -66,19 +66,9 @@ import (
 // TODO: add a "release" message for the coordinator to signal recruited nodes
 // that no term change was needed and they may resume normal quorum participation.
 //
-// TODO: add a "resume" message covering at least three cases where a node may
-// be stuck and needs the coordinator to tell it the current quorum term so it
-// can apply and start or resume replication:
-//
-//	(a) node was recruited but never received a propose (stuck in stopped state);
-//	(b) node was recruited but no propose is needed — a previously-started proposal
-//	    already satisfies the quorum, so only resumption is required;
-//	(c) node was never recruited (not reachable during revocation) and has since
-//	    lost its connection to the primary, so it is neither getting WAL nor term
-//	    updates and needs to be pointed at the current primary.
-//
-// The resume message should include the current quorum term so the node can
-// validate and update its primary_conninfo if necessary.
+// The coordinator also sends ResumeRequests to stale nodes — nodes whose
+// committed term is behind the quorum-confirmed term — so they can apply the
+// current term and resume replication without a full term-change round-trip.
 //
 // # State
 //
@@ -938,7 +928,7 @@ func (c *CoordNode) pickBestCandidate(pr *pendingRecruitment) NodeID {
 // findPrimary returns the NodeID and knownPooler for the active primary, or the
 // zero ID and nil if none is found.
 //
-// TODO(stage3): strengthen this. Ideally we find a pooler whose current rules
+// TODO: strengthen this. Ideally we find a pooler whose current rules
 // satisfy its own durability requirements (i.e. the write quorum of the policy is
 // met by the replicas currently known to be streaming), which is strong evidence of
 // a working quorum. For now, a simple role+health check suffices.
