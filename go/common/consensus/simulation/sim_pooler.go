@@ -718,8 +718,9 @@ func (s *SimPooler) advancePendingRevoke() {
 // the same tick when this returns true, modelling the real sidecar's exclusive
 // lock: GUC reconfiguration and WAL streaming cannot run concurrently.
 func (s *SimPooler) advancePendingApplyWAL(tick int64) bool {
-	terms := s.applyWALQueue.Pull(tick)
-	for _, term := range terms {
+	pulled := s.applyWALQueue.Pull(tick)
+	for _, d := range pulled {
+		term := d.Item
 		if term.Primary == s.node.ID() && s.mode == postgresHotStandby {
 			// Coordinator-led promotion: seed the WAL position from the last real
 			// WAL position received. Replicas will connect and stream from here.
@@ -740,7 +741,7 @@ func (s *SimPooler) advancePendingApplyWAL(tick int64) bool {
 			Accepted: true,
 		})
 	}
-	return len(terms) > 0
+	return len(pulled) > 0
 }
 
 // Step processes indicators and advances the SimPooler state machine one tick.

@@ -95,7 +95,7 @@ func (m *ChaosDeliveryManager[I, ID]) channel(from, to ID) *chaosQueue[PendingDe
 func (m *ChaosDeliveryManager[I, ID]) Enqueue(tick int64, from, to ID, ind I) (dropped bool, events []string) {
 	pd := PendingDelivery[I, ID]{From: from, To: to, Ind: ind}
 	if !m.channel(from, to).push(pd, tick) {
-		return true, nil
+		return true, []string{fmt.Sprintf("chaos drop: %v → %v %T", from, to, ind)}
 	}
 	return false, nil
 }
@@ -105,7 +105,11 @@ func (m *ChaosDeliveryManager[I, ID]) Deliver(tick int64, allNodes []ID) (delive
 		events = append(events, m.advancePartition(tick, allNodes)...)
 	}
 	for _, q := range sortedmaps.ByStr(m.channels) {
-		for _, pd := range q.pull(tick) {
+		for _, e := range q.pull(tick) {
+			pd := e.item
+			if e.isDuplicate {
+				events = append(events, fmt.Sprintf("chaos dup: %v → %v %T (pushed at tick %d)", pd.From, pd.To, pd.Ind, e.pushedAt))
+			}
 			if m.partitionEnd > 0 {
 				fromGroup, ev := m.groupOf(pd.From)
 				events = append(events, ev...)

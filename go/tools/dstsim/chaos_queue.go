@@ -14,6 +14,15 @@
 
 package dstsim
 
+// ChaosDelivery is the result of a single Pull from a ChaosQueue. It carries
+// the delivered item, the tick it was originally pushed, and a flag indicating
+// whether this delivery is a chaos-generated duplicate of an earlier push.
+type ChaosDelivery[T any] struct {
+	Item        T
+	PushedAt    int64 // tick when Push was called for this item
+	IsDuplicate bool  // true if this is a chaos-injected duplicate
+}
+
 // ChaosQueue is an exported optionally-chaotic FIFO delivery queue.
 // The zero value is ready to use: items are delivered in push order with a
 // 1-tick delay and no drops or duplicates. Use SetChaos to inject randomness.
@@ -35,8 +44,17 @@ func (c *ChaosQueue[T]) Push(item T, tick int64) bool {
 }
 
 // Pull removes and returns all items whose scheduled delivery tick is <= tick.
-func (c *ChaosQueue[T]) Pull(tick int64) []T {
-	return c.q.pull(tick)
+// Each result carries the original push tick and a duplicate flag.
+func (c *ChaosQueue[T]) Pull(tick int64) []ChaosDelivery[T] {
+	entries := c.q.pull(tick)
+	if len(entries) == 0 {
+		return nil
+	}
+	result := make([]ChaosDelivery[T], len(entries))
+	for i, e := range entries {
+		result[i] = ChaosDelivery[T]{Item: e.item, PushedAt: e.pushedAt, IsDuplicate: e.isDuplicate}
+	}
+	return result
 }
 
 // Drain removes and returns all buffered items regardless of delivery tick.
@@ -47,8 +65,10 @@ func (c *ChaosQueue[T]) Drain() []T {
 
 // chaosEntry holds a buffered item and its scheduled delivery tick.
 type chaosEntry[T any] struct {
-	item      T
-	deliverAt int64
+	item        T
+	deliverAt   int64
+	pushedAt    int64 // tick when the item was originally pushed
+	isDuplicate bool  // true if this entry is a chaos-generated duplicate
 }
 
 // chaosQueue is an optionally-chaotic delivery buffer for a single channel.
@@ -83,9 +103,9 @@ func (q *chaosQueue[T]) push(item T, tick int64) bool {
 		}
 		q.lastAt = at
 	}
-	q.buf = append(q.buf, chaosEntry[T]{item: item, deliverAt: at})
+	q.buf = append(q.buf, chaosEntry[T]{item: item, deliverAt: at, pushedAt: tick})
 	if dup {
-		q.buf = append(q.buf, chaosEntry[T]{item: item, deliverAt: at})
+		q.buf = append(q.buf, chaosEntry[T]{item: item, deliverAt: at, pushedAt: tick, isDuplicate: true})
 	}
 	return true
 }
@@ -95,7 +115,7 @@ func (q *chaosQueue[T]) push(item T, tick int64) bool {
 // When Reorder is false the buffer is sorted by deliverAt (non-decreasing),
 // so pull stops at the first unready item. When Reorder is true, pull must
 // scan the full buffer.
-func (q *chaosQueue[T]) pull(tick int64) []T {
+func (q *chaosQueue[T]) pull(tick int64) []chaosEntry[T] {
 	if len(q.buf) == 0 {
 		return nil
 	}
@@ -108,19 +128,17 @@ func (q *chaosQueue[T]) pull(tick int64) []T {
 		if cut == 0 {
 			return nil
 		}
-		out := make([]T, cut)
-		for i, e := range q.buf[:cut] {
-			out[i] = e.item
-		}
+		out := make([]chaosEntry[T], cut)
+		copy(out, q.buf[:cut])
 		q.buf = q.buf[cut:]
 		return out
 	}
 	// Reorder=true: scan full buffer, partition in place.
-	var out []T
+	var out []chaosEntry[T]
 	n := 0
 	for _, e := range q.buf {
 		if e.deliverAt <= tick {
-			out = append(out, e.item)
+			out = append(out, e)
 		} else {
 			q.buf[n] = e
 			n++

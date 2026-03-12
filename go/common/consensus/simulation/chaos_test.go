@@ -51,6 +51,8 @@ func TestCoordLedTermChange(t *testing.T) {
 		Chaos: dstsim.ChaosParams{
 			MaxDelay: 10,
 			DropRate: 0.1,
+			Reorder:  true,
+			DupRate:  0.05,
 			Rng:      rng,
 		},
 	}))
