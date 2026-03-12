@@ -150,37 +150,46 @@ func (n *PoolerNode) Step(tick int64, indicators []Indicator) []Request {
 
 	for _, ind := range indicators {
 		switch v := ind.(type) {
+		// Leader-led term change request
 		case WritePolicyIndicator:
 			reqs, c := n.handleWritePolicy(v)
 			requests = append(requests, reqs...)
 			changed = changed || c
-		case ApplyRulesResponseIndicator:
-			reqs, c := n.handleApplyResponse(v)
-			requests = append(requests, reqs...)
-			changed = changed || c
+		// Coordinator's revoke request
 		case RecruitIndicator:
 			reqs, c := n.handleRecruit(v)
 			requests = append(requests, reqs...)
 			changed = changed || c
-		case RevokeParticipationResponseIndicator:
-			requests = append(requests, n.handleRevokeParticipationResponse(v)...)
-		case WriteShadowWALIndicator:
-			reqs, c := n.handleWriteShadowWAL(v)
-			requests = append(requests, reqs...)
-			changed = changed || c
+		// Propagate WAL from another pooler
 		case PropagatePositionIndicator:
 			reqs, c := n.handlePropagatePosition(v)
 			requests = append(requests, reqs...)
 			changed = changed || c
+		// Coordinator writing a rule ("establish")
+		case WriteShadowWALIndicator:
+			reqs, c := n.handleWriteShadowWAL(v)
+			requests = append(requests, reqs...)
+			changed = changed || c
+		// Coordinator informing a stale pooler of how to rejoin the current primary
 		case ResumeIndicator:
 			reqs, c := n.handleResume(v)
 			requests = append(requests, reqs...)
 			changed = changed || c
+		// k8s pod is shutting down
 		case TerminateIndicator:
 			if n.pgStatus != PostgresStopped {
 				n.pgStatus = PostgresStopped
 				changed = true
 			}
+
+		// Did we successfully apply a leader-led rule change at the postgres level (write WAL + update GUC in the correct order)?
+		case ApplyRulesResponseIndicator:
+			reqs, c := n.handleApplyResponse(v)
+			requests = append(requests, reqs...)
+			changed = changed || c
+		// Did we successfully revoke the previous leadership (change GUC)?
+		case RevokeParticipationResponseIndicator:
+			requests = append(requests, n.handleRevokeParticipationResponse(v)...)
 		}
 	}
 

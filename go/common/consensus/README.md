@@ -268,6 +268,176 @@ the `Handler`, simulates the postgres SQL transaction and sync-settings update, 
 | `PoolerNode`            | Pooler state machine. Handles WAL-driven policy updates and coordinator-led term changes.                                           |
 | `CoordNode`             | Coordinator state machine. Drives WAL writes for normal changes; runs coordinator-led term changes when the primary is unreachable. |
 
+## Message reference
+
+The consensus protocol uses a **request → indicator** split: nodes emit `Request` values from `Step()`, and the `RequestHandler` converts them to `Indicator` values delivered to the target node's next `Step()` call.
+
+Two communication boundaries exist:
+
+- **Network** — messages crossing process boundaries between `PoolerNode` and `CoordNode` instances.
+- **Sidecar** — messages staying within a single pooler host, between `PoolerNode` and its local postgres driver (`SimPooler` in tests; a driver goroutine in production).
+
+---
+
+### Network messages — Pooler ↔ Coordinator
+
+#### Write term (normal path): `WritePolicyRequest` / `WritePolicyResponseRequest`
+
+Coordinator requests a new `Term` write on the primary. The primary validates the CAS and responds once the WAL entry is durable.
+
+| Direction      | Request type                 | Indicator type                 | Can fail?                                                  |
+| -------------- | ---------------------------- | ------------------------------ | ---------------------------------------------------------- |
+| Coord → Pooler | `WritePolicyRequest`         | `WritePolicyIndicator`         | Yes — `FromSeq` mismatch or primary has a prior commitment |
+| Pooler → Coord | `WritePolicyResponseRequest` | `WritePolicyResponseIndicator` | —                                                          |
+
+`WritePolicyResponseIndicator`: `Accepted=true` once durable; `Accepted=false` with `CurrentSeq` so the coord can retry with the correct seq.
+
+In production: a SQL transaction written by multiorch on the primary postgres instance via the multipooler API.
+
+---
+
+#### Recruit pooler (coordinator-led path): `RecruitRequest` / `RecruitResponseRequest`
+
+Coordinator recruits a pooler into a coordinator-led term change covering `(AtTermSeq, ProposedSeq)`. The pooler durably persists its commitment and revokes quorum participation before responding.
+
+| Direction      | Request type             | Indicator type             | Can fail?                                               |
+| -------------- | ------------------------ | -------------------------- | ------------------------------------------------------- |
+| Coord → Pooler | `RecruitRequest`         | `RecruitIndicator`         | Yes — stale base or superseded by competing coordinator |
+| Pooler → Coord | `RecruitResponseRequest` | `RecruitResponseIndicator` | —                                                       |
+
+`RecruitResponseIndicator`: `Accepted=true` with `Position` (LSN + TermSeq at revocation); `Accepted=false` if rejected. Both carry `Commitment` so the coordinator can detect competing coordinators and bump its `ProposedSeq` if needed.
+
+In production: a gRPC call from multiorch to multipooler.
+
+---
+
+#### Write shadow WAL (propose phase): `WriteShadowWALRequest` / `WriteShadowWALAckedRequest`
+
+After reaching revocation quorum, the coordinator asks each recruited pooler to persist the new `Term` to shadow WAL. `BaseLSN` anchors the entry to the real WAL timeline. `ApplyNow=true` collapses this and the subsequent GUC-apply step into a single round-trip.
+
+| Direction      | Request type                 | Indicator type                 | Can fail?                                              |
+| -------------- | ---------------------------- | ------------------------------ | ------------------------------------------------------ |
+| Coord → Pooler | `WriteShadowWALRequest`      | `WriteShadowWALIndicator`      | Yes — `receivedLSN < BaseLSN` or commitment superseded |
+| Pooler → Coord | `WriteShadowWALAckedRequest` | `WriteShadowWALAckedIndicator` | —                                                      |
+
+`WriteShadowWALAckedIndicator`: `Accepted=true` once the shadow WAL entry is durably fsynced.
+
+In production: fsync of the pooler's commitment file; the response is sent over the same gRPC connection.
+
+---
+
+#### Propagate history from another node: `PropagatePositionRequest` / `PropagatePositionAckedRequest`
+
+Coordinator instructs a pooler to replicate `SourceNode`'s committed history up through `TargetPosition`, replacing its own divergent history. Used when a recruited node has fallen behind the promotion candidate.
+
+| Direction      | Request type                    | Indicator type                    | Can fail?                                    |
+| -------------- | ------------------------------- | --------------------------------- | -------------------------------------------- |
+| Coord → Pooler | `PropagatePositionRequest`      | `PropagatePositionIndicator`      | Yes — `SourceNode` unreachable or copy fails |
+| Pooler → Coord | `PropagatePositionAckedRequest` | `PropagatePositionAckedIndicator` | —                                            |
+
+`PropagatePositionAckedIndicator`: `Accepted=true` once durably applied.
+
+In production: `pg_rewind` followed by WAL streaming from `SourceNode`; in simulation the sidecar copies the WAL buffer directly.
+
+---
+
+#### Resume stale node: `ResumeRequest`
+
+Coordinator brings a stuck or stale node up to the quorum-confirmed term. Fire-and-forget: no ack.
+
+| Direction      | Request type    | Indicator type    | Notes       |
+| -------------- | --------------- | ----------------- | ----------- |
+| Coord → Pooler | `ResumeRequest` | `ResumeIndicator` | No response |
+
+Used when a node missed the propose phase or was unreachable during recruitment and needs to catch up without a full term-change round. In production: a best-effort gRPC call from multiorch; delivery is not confirmed.
+
+---
+
+#### Pooler status broadcast: `PoolerStatusUpdateRequest`
+
+Pooler broadcasts its full state to all coordinators whenever committed state changes (rules write, WAL apply, postgres stop, restart). No response expected.
+
+| Direction      | Request type                | Indicator type          | Notes       |
+| -------------- | --------------------------- | ----------------------- | ----------- |
+| Pooler → Coord | `PoolerStatusUpdateRequest` | `PoolerStatusIndicator` | No response |
+
+Carries `PoolerPersistentState`, `PostgresStatus`, and `NodeProperties`. In production: a push update on the existing multipooler → multiorch gRPC stream.
+
+---
+
+#### Discovery updates: `PoolerMembershipRequest`
+
+Discovery driver notifies coordinators when poolers register or deregister.
+
+| Direction      | Request type              | Indicator type                                         | Notes       |
+| -------------- | ------------------------- | ------------------------------------------------------ | ----------- |
+| Driver → Coord | `PoolerMembershipRequest` | `PoolerDiscoveredIndicator` / `PoolerRemovedIndicator` | No response |
+
+In production: driven by an etcd watch stream in multiorch.
+
+---
+
+### Local messages — Pooler ↔ Sidecar
+
+`PoolerNode` emits these to its local sidecar. `SimPooler` intercepts them before they reach the `RequestHandler` and queues a response indicator for the next tick. In production a dedicated driver goroutine handles them.
+
+---
+
+#### Apply term record (normal path): `PolicyRecordApplyRequest`
+
+Primary asks the sidecar to commit the new `Term` SQL transaction and update `synchronous_standby_names`. `FromSeq` guards against stale applies.
+
+| Direction        | Type                          | Can fail?                                            |
+| ---------------- | ----------------------------- | ---------------------------------------------------- |
+| Pooler → Sidecar | `PolicyRecordApplyRequest`    | Yes — WAL already has a term at or beyond `Term.Seq` |
+| Sidecar → Pooler | `ApplyRulesResponseIndicator` | —                                                    |
+
+`ApplyRulesResponseIndicator`: `Accepted=true` once durable under both old and new policies; `Accepted=false` if the SQL transaction failed. The same indicator type is also delivered by the WAL watcher on replicas (always `Accepted=true`).
+
+In production: a goroutine that executes the SQL transaction and waits for WAL confirmation from sync standbys.
+
+---
+
+#### Apply GUC for shadow WAL term: `ApplyWALTermRequest`
+
+When a `WriteShadowWALIndicator` arrives with `ApplyNow=true`, the pooler asks the sidecar to apply the `Term`'s GUC settings as though the term had arrived via the real WAL stream. Allows the coordinator to complete shadow-write + GUC-apply in a single round-trip.
+
+| Direction        | Type                          | Can fail?                        |
+| ---------------- | ----------------------------- | -------------------------------- |
+| Pooler → Sidecar | `ApplyWALTermRequest`         | Yes — if postgres is unreachable |
+| Sidecar → Pooler | `ApplyRulesResponseIndicator` | —                                |
+
+In production: `ALTER SYSTEM SET ...` + `pg_reload_conf()`.
+
+---
+
+#### Revoke quorum participation: `RevokeParticipationRequest`
+
+Pooler asks the sidecar to withdraw this node from write quorum. Emitted after accepting a `RecruitIndicator`, before responding to the coordinator.
+
+| Direction        | Type                                   | Can fail?                        |
+| ---------------- | -------------------------------------- | -------------------------------- |
+| Pooler → Sidecar | `RevokeParticipationRequest`           | Yes — if postgres is unreachable |
+| Sidecar → Pooler | `RevokeParticipationResponseIndicator` | —                                |
+
+`RevokeParticipationResponseIndicator`: `Accepted=true` with `LSN` and `TermSeq` captured at the moment of revocation; `Accepted=false` if postgres cannot be put into the required state.
+
+Replica sidecar: stops forwarding WAL ACKs to the primary. Primary sidecar: sets `default_transaction_read_only = on`.
+
+---
+
+#### Graceful shutdown: `TerminateRequest`
+
+Driver signals a pooler to shut down gracefully. The pooler records `PostgresStopped` and emits a final status update.
+
+| Direction       | Request type       | Indicator type       | Notes       |
+| --------------- | ------------------ | -------------------- | ----------- |
+| Driver → Pooler | `TerminateRequest` | `TerminateIndicator` | No response |
+
+In production: SIGTERM delivered to the multipooler process.
+
+---
+
 ## Running the simulation tests
 
 ```bash
