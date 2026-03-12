@@ -578,6 +578,11 @@ func (n *PoolerNode) handleResume(ind ResumeIndicator) ([]Request, bool) {
 		}
 		n.committed = newState
 	}
+	// TODO: in production, if this node's WAL has diverged from the new
+	// primary the sidecar must run pg_rewind before applying GUC settings.
+	// After pg_rewind the sidecar should also truncate shadow WAL entries
+	// whose BaseLSN is past the rewind point, save the updated state to
+	// storage, and only then deliver ApplyRulesResponseIndicator.
 	return []Request{ApplyWALTermRequest{Term: ind.Term}}, false
 }
 

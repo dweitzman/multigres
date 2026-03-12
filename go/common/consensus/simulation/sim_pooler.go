@@ -641,6 +641,13 @@ func (s *SimPooler) handlePropagatePosition(ind consensus.PropagatePositionIndic
 	sourceState := source.node.CommittedState()
 	newState := s.node.CommittedState()
 	newState.CachedTerm = sourceState.CachedTerm
+	// Replace the target's shadow WAL with the source's: the source holds
+	// the authoritative history; any entries the target accumulated during a
+	// divergent timeline are discarded. In simulation this is a direct copy;
+	// in production the sidecar must write the same replacement after
+	// pg_rewind completes so PoolerNode reloads consistent state.
+	// TODO: verify this in production (pg_rewind rewrites WAL but the saved
+	// ShadowWAL also needs replacing so no divergent entries survive restart).
 	newState.ShadowWAL = sourceState.ShadowWAL
 	if sourceState.CachedTerm != nil {
 		newState.Primary = sourceState.CachedTerm.Primary

@@ -393,7 +393,7 @@ type PoolerPersistentState struct {
 	Commitment *RecruitmentCommitment
 
 	// ShadowWAL is the append-only log of Term changes written by the
-	// authorised coordinator while postgres is stopped. Like real WAL, entries
+	// authorized coordinator while postgres is stopped. Like real WAL, entries
 	// are ordered by Seq and must satisfy the same invariants as a normal term
 	// write (sequential seqs, achievable policy, valid cohort). Unlike
 	// CachedTerm, this cannot be recovered from postgres — it is the source of
@@ -401,8 +401,6 @@ type PoolerPersistentState struct {
 	//
 	// Entries are pruned once real postgres WAL confirms the corresponding
 	// transitions.
-	// TODO: add shadow WAL truncation for coordinator-directed pg_rewind
-	// (non-durable divergent timeline recovery).
 	ShadowWAL []*Term
 }
 
