@@ -350,7 +350,7 @@ func (c *nodeHasStaleTerm) Name() string {
 }
 
 func (c *nodeHasStaleTerm) Eval(sim *simType) bool {
-	quorumTerm := c.coord.Node().ClusterView(sim.CurrentTick()).HighestQuorumTerm
+	quorumTerm := c.coord.Node().ShardStatus(sim.CurrentTick()).HighestQuorumTerm
 	if quorumTerm == nil {
 		return false // no quorum established yet
 	}
@@ -358,7 +358,7 @@ func (c *nodeHasStaleTerm) Eval(sim *simType) bool {
 }
 
 func (c *nodeHasStaleTerm) Describe(sim *simType) string {
-	quorumTerm := c.coord.Node().ClusterView(sim.CurrentTick()).HighestQuorumTerm
+	quorumTerm := c.coord.Node().ShardStatus(sim.CurrentTick()).HighestQuorumTerm
 	nodeSeq := c.sp.Node().CommittedState().PolicySeq()
 	var quorumSeq int64
 	if quorumTerm != nil {

@@ -68,7 +68,7 @@ func TestCoordLedTermChange(t *testing.T) {
 
 	// The coordinator detects a crashed primary and initiates a
 	// coordinator-led term change.
-	coordNode := consensus.NewCoordNode(coordID, consensus.AtLeastPolicy(2), nil)
+	coordNode := consensus.NewCoordNode(coordID, consensus.AtLeastPolicy(2), nil, nil)
 	coord := NewSimCoordNode(coordNode, sim)
 	sim.RegisterNode(coord)
 
@@ -130,7 +130,7 @@ func TestCoordLedTermChange(t *testing.T) {
 	// are not counted.
 	quorumLeaderChange := &quorumLeaderChanged{
 		getQuorumTerm: func(sim *simType) *consensus.Term {
-			return coord.Node().ClusterView(sim.CurrentTick()).HighestQuorumTerm
+			return coord.Node().ShardStatus(sim.CurrentTick()).HighestQuorumTerm
 		},
 	}
 
@@ -176,7 +176,7 @@ func TestCohortExpansionUnreliableNetwork(t *testing.T) {
 	pooler1 := newPrimaryPooler(node1ID, seedTerm, sim)
 	sim.RegisterNode(pooler1)
 
-	coord := NewSimCoordNode(consensus.NewCoordNode(coordID, consensus.AtLeastPolicy(2), nil), sim)
+	coord := NewSimCoordNode(consensus.NewCoordNode(coordID, consensus.AtLeastPolicy(2), nil, nil), sim)
 	sim.RegisterNode(coord)
 
 	pooler2 := newReplicaPooler(node2ID, node1ID, sim)
@@ -239,7 +239,7 @@ func TestCohortExpansionCoordinatorCrashes(t *testing.T) {
 	pooler1 := newPrimaryPooler(node1ID, seedTerm, sim)
 	sim.RegisterNode(pooler1)
 
-	coord := NewSimCoordNode(consensus.NewCoordNode(coordID, consensus.AtLeastPolicy(2), nil), sim)
+	coord := NewSimCoordNode(consensus.NewCoordNode(coordID, consensus.AtLeastPolicy(2), nil, nil), sim)
 	sim.RegisterNode(coord)
 
 	pooler2 := newReplicaPooler(node2ID, node1ID, sim)
@@ -273,11 +273,11 @@ func TestCohortExpansionCoordinatorCrashes(t *testing.T) {
 	// has confirmed write quorum. After a crash and Restart(), the coordinator's
 	// known-pooler map is cleared and this returns 0 until it re-learns the state.
 	coordQuorumSeq := func(sim *simType) int64 {
-		view := coord.Node().ClusterView(sim.CurrentTick())
-		if view.HighestQuorumTerm == nil {
+		status := coord.Node().ShardStatus(sim.CurrentTick())
+		if status.HighestQuorumTerm == nil {
 			return 0
 		}
-		return view.HighestQuorumTerm.Seq
+		return status.HighestQuorumTerm.Seq
 	}
 
 	// Safety invariant: durable committed state must never decrease.

@@ -77,7 +77,8 @@ import (
 type CoordNode struct {
 	id           NodeID
 	targetPolicy DurabilityPolicy // nil = manual mode
-	rng          *rand.Rand       // used for random tiebreaking in candidate selection
+	ha           HighAvailabilityStrategy
+	rng          *rand.Rand // used for random tiebreaking in candidate selection
 
 	// known tracks each pooler the coord has been told about. Values are
 	// updated each time a PoolerStatusIndicator arrives.
@@ -189,13 +190,19 @@ type recruitedResp struct {
 // NewCoordNode creates a coordinator node.
 // targetPolicy is the desired DurabilityPolicy to work toward as the cohort
 // grows (e.g. AtLeastPolicy(3) for a 3-node HA cluster).
+// ha provides the high-availability policy that decides when to initiate a
+// coordinator-led term change. Pass nil to use DefaultHighAvailability().
 // rng is used to break ties randomly when multiple candidates are equally
 // eligible for promotion during a coordinator-led term change. Pass nil to use a default
 // global source (non-deterministic; avoid in tests).
-func NewCoordNode(id NodeID, targetPolicy DurabilityPolicy, rng *rand.Rand) *CoordNode {
+func NewCoordNode(id NodeID, targetPolicy DurabilityPolicy, ha HighAvailabilityStrategy, rng *rand.Rand) *CoordNode {
+	if ha == nil {
+		ha = DefaultHighAvailability()
+	}
 	return &CoordNode{
 		id:                      id,
 		targetPolicy:            targetPolicy,
+		ha:                      ha,
 		rng:                     rng,
 		known:                   make(map[NodeID]*knownPooler),
 		highestKnownCommitments: make(map[int64]*RecruitmentCommitment),
@@ -212,60 +219,6 @@ func (c *CoordNode) Restart() {
 	c.highestKnownCommitments = make(map[int64]*RecruitmentCommitment)
 	c.resumeSentTicks = make(map[NodeID]int64)
 	c.stuckRevokedSince = 0
-}
-
-// ClusterView is the coordinator's current best-known state of the cluster,
-// computed from accumulated PoolerStatusIndicators.
-type ClusterView struct {
-	// HighestQuorumTerm is the highest-Seq Term for which the coordinator has
-	// confirmed a write quorum: enough cohort members have reported applying
-	// this version (or a later one) to satisfy the term's DurabilityPolicy.
-	// This is the last known-good state of the cluster.
-	// Nil if no version has confirmed quorum.
-	HighestQuorumTerm *Term
-
-	// HighestSeenTerm is the highest-Seq Term reported by any known pooler,
-	// regardless of quorum. Nil if no term has been seen.
-	// If HighestSeenTerm.Seq > HighestQuorumTerm.Seq, a partial leader-driven
-	// term change exists and must be propagated before establishing a new primary.
-	HighestSeenTerm *Term
-
-	// PrimaryHealthy is true when the best-known primary is currently reachable.
-	// The "best-known" primary is HighestQuorumTerm.Primary when a quorum-confirmed
-	// version exists, falling back to HighestSeenTerm.Primary otherwise. The
-	// primary is considered reachable when postgres is running and its last status
-	// is within the configured health timeout.
-	//
-	// This is the key flag for deciding between the normal path (PrimaryHealthy=true)
-	// and the coordinator-led term change path (PrimaryHealthy=false).
-	PrimaryHealthy bool
-}
-
-// ClusterView returns the coordinator's current cluster state assessment.
-// tick is used for health-staleness checks when a health timeout is configured.
-func (c *CoordNode) ClusterView(tick int64) ClusterView {
-	highestSeen, highestQuorum := c.computeTermVersions()
-
-	// Identify the best-known primary: prefer the quorum-confirmed version,
-	// fall back to the highest seen when quorum is not yet confirmed.
-	var primaryID NodeID
-	if highestQuorum != nil {
-		primaryID = highestQuorum.Primary
-	} else if highestSeen != nil {
-		primaryID = highestSeen.Primary
-	}
-
-	var primaryHealthy bool
-	if primaryID != "" {
-		if p, ok := c.known[primaryID]; ok {
-			primaryHealthy = c.isHealthy(p, tick)
-		}
-	}
-	return ClusterView{
-		HighestSeenTerm:   highestSeen,
-		HighestQuorumTerm: highestQuorum,
-		PrimaryHealthy:    primaryHealthy,
-	}
 }
 
 // computeTermVersions scans all known poolers and computes the two key Term
@@ -335,17 +288,24 @@ func isTermDurable(t *Term, nodeTerms map[NodeID]*Term) bool {
 	return t.Policy.IsDurable(t.Members, acking)
 }
 
-// isHealthy returns true if a pooler is currently considered reachable.
-// A pooler is unhealthy when its postgres is stopped or (if a health timeout
-// is configured) when it has not sent a status update within the timeout window.
-func (c *CoordNode) isHealthy(p *knownPooler, tick int64) bool {
-	if p.pgStatus == PostgresStopped {
-		return false
+// ShardStatus constructs the coordinator's current view of the cluster from
+// accumulated PoolerStatusIndicators. It is the bridge between the coordinator's
+// internal state and the pure HA policy functions in high_availability.go.
+func (c *CoordNode) ShardStatus(tick int64) ShardStatus {
+	highestSeen, highestQuorum := c.computeTermVersions()
+	health := make(map[NodeID]NodeHealth, len(c.known))
+	for id, p := range sortedmaps.All(c.known) {
+		health[id] = NodeHealth{
+			PostgresStatus: p.pgStatus,
+			LastHeardTick:  p.lastStatusTick,
+		}
 	}
-	if p.lastStatusTick > 0 && tick-p.lastStatusTick > HealthTimeoutTicks {
-		return false
+	return ShardStatus{
+		Tick:              tick,
+		HighestSeenTerm:   highestSeen,
+		HighestQuorumTerm: highestQuorum,
+		NodeHealth:        health,
 	}
-	return true
 }
 
 // ID returns the coordinator node's unique identifier.
@@ -490,19 +450,19 @@ func (c *CoordNode) advance(tick int64) []Request {
 		}
 	}
 
-	view := c.ClusterView(tick)
-	if !view.PrimaryHealthy {
+	status := c.ShardStatus(tick)
+	if c.ha.NeedsLeaderFailover(status) {
 		// Primary is unreachable: abort any in-flight leader-led write and run
 		// the coordinator-led term change protocol.
 		c.pendingWrite = nil
-		return c.advanceCoordLedChange(tick, view)
+		return c.advanceCoordLedChange(tick, status)
 	}
 
 	// Primary is healthy: abort any in-flight coordinator-led term change.
 	c.pendingRecruitment = nil
 
 	// Send Resume to any stale nodes so they can catch up to the quorum term.
-	reqs := c.advanceResume(tick, view.HighestQuorumTerm)
+	reqs := c.advanceResume(tick, status.HighestQuorumTerm)
 
 	// Wait for any in-flight leader-led write to complete.
 	if c.pendingWrite != nil {
@@ -526,7 +486,7 @@ func (c *CoordNode) advance(tick int64) []Request {
 
 	// Check for stuck-revoked nodes whose PolicySeq exceeds the quorum term,
 	// making standard resumes ineffective. A seq-bump term write unblocks them.
-	stuckSeq := c.maxStuckRevokedSeq(view.HighestQuorumTerm)
+	stuckSeq := c.maxStuckRevokedSeq(status.HighestQuorumTerm)
 
 	// Autonomous expansion: add all observed replicas not yet in the cohort.
 	observers := c.observers(currentTerm)
@@ -648,10 +608,10 @@ func (c *CoordNode) maxStuckRevokedSeq(quorumTerm *Term) int64 {
 
 // advanceCoordLedChange drives the coordinator-led term change protocol
 // through its Recruit → [Propagate →] Propose phases.
-func (c *CoordNode) advanceCoordLedChange(tick int64, view ClusterView) []Request {
-	base := view.HighestSeenTerm
+func (c *CoordNode) advanceCoordLedChange(tick int64, status ShardStatus) []Request {
+	base := status.HighestSeenTerm
 	if base == nil {
-		base = view.HighestQuorumTerm
+		base = status.HighestQuorumTerm
 	}
 	if base == nil {
 		return nil // no known cluster state; cannot safely failover

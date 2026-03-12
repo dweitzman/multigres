@@ -55,7 +55,7 @@ func TestCohortExpansion(t *testing.T) {
 	sim.RegisterNode(pooler1)
 
 	// Coordinator targets AtLeast(3) so it upgrades the durability policy as nodes join.
-	coord := NewSimCoordNode(consensus.NewCoordNode(coordID, consensus.AtLeastPolicy(3), nil), sim)
+	coord := NewSimCoordNode(consensus.NewCoordNode(coordID, consensus.AtLeastPolicy(3), nil, nil), sim)
 	sim.RegisterNode(coord)
 
 	th := dstsim.NewSimulationTestHelper(t, sim)

@@ -87,7 +87,7 @@ func TestResumeMessageNeeded(t *testing.T) {
 
 	// The coordinator detects an unhealthy primary and initiates a
 	// coordinator-led term change.
-	coordNode := consensus.NewCoordNode(coordID, consensus.AtLeastPolicy(2), nil)
+	coordNode := consensus.NewCoordNode(coordID, consensus.AtLeastPolicy(2), nil, nil)
 	coord := NewSimCoordNode(coordNode, sim)
 	sim.RegisterNode(coord)
 
@@ -116,7 +116,7 @@ func TestResumeMessageNeeded(t *testing.T) {
 	// primary transitions to a different node.
 	quorumLeaderChange := &quorumLeaderChanged{
 		getQuorumTerm: func(sim *simType) *consensus.Term {
-			return coord.Node().ClusterView(sim.CurrentTick()).HighestQuorumTerm
+			return coord.Node().ShardStatus(sim.CurrentTick()).HighestQuorumTerm
 		},
 	}
 

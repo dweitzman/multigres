@@ -65,19 +65,19 @@ func stepWithDiscoveryAndStatus(coord *consensus.CoordNode, tick int64, ids []co
 	coord.Step(tick, inds)
 }
 
-// TestCoordClusterViewQuorumConfirmed verifies that when all cohort members have
+// TestCoordShardStatusQuorumConfirmed verifies that when all cohort members have
 // applied the same rules version, the coordinator considers it quorum-confirmed.
 //
 // Setup: 3 nodes (1 primary, 2 replicas) all reporting the same Seq=3 rules
 // with AtLeast(3) policy. AtLeast(3) requires primary + 2 replica acks; both replicas confirm
 // Seq=3, so the write is provably durable.
-func TestCoordClusterViewQuorumConfirmed(t *testing.T) {
+func TestCoordShardStatusQuorumConfirmed(t *testing.T) {
 	const (
 		node1 consensus.NodeID = "node-1"
 		node2 consensus.NodeID = "node-2"
 		node3 consensus.NodeID = "node-3"
 	)
-	coord := consensus.NewCoordNode("coord-1", consensus.AtLeastPolicy(3), nil)
+	coord := consensus.NewCoordNode("coord-1", consensus.AtLeastPolicy(3), nil, nil)
 
 	rules := makeTerm(3, node1, []consensus.NodeID{node1, node2, node3}, 3)
 
@@ -90,27 +90,27 @@ func TestCoordClusterViewQuorumConfirmed(t *testing.T) {
 		},
 	)
 
-	view := coord.ClusterView(1)
-	require.NotNil(t, view.HighestSeenTerm, "should have seen rules")
-	require.NotNil(t, view.HighestQuorumTerm, "AtLeast(3) quorum is met by primary+node2+node3")
-	assert.Equal(t, int64(3), view.HighestSeenTerm.Seq)
-	assert.Equal(t, int64(3), view.HighestQuorumTerm.Seq)
-	assert.Equal(t, node1, view.HighestQuorumTerm.Primary)
+	status := coord.ShardStatus(1)
+	require.NotNil(t, status.HighestSeenTerm, "should have seen rules")
+	require.NotNil(t, status.HighestQuorumTerm, "AtLeast(3) quorum is met by primary+node2+node3")
+	assert.Equal(t, int64(3), status.HighestSeenTerm.Seq)
+	assert.Equal(t, int64(3), status.HighestQuorumTerm.Seq)
+	assert.Equal(t, node1, status.HighestQuorumTerm.Primary)
 }
 
-// TestCoordClusterViewPartialChange verifies the "partial leader-led change" case:
+// TestCoordShardStatusPartialChange verifies the "partial leader-led change" case:
 // the primary has applied Seq=4 but only one replica confirms it, so quorum for
 // Seq=4 is not met under AtLeast(3). The prior Seq=3 version does have quorum.
 //
 // This is the key signal for a coordinator-led term change: HighestSeenTerm.Seq >
 // HighestQuorumTerm.Seq means a term change was started but not completed.
-func TestCoordClusterViewPartialChange(t *testing.T) {
+func TestCoordShardStatusPartialChange(t *testing.T) {
 	const (
 		node1 consensus.NodeID = "node-1"
 		node2 consensus.NodeID = "node-2"
 		node3 consensus.NodeID = "node-3"
 	)
-	coord := consensus.NewCoordNode("coord-1", consensus.AtLeastPolicy(3), nil)
+	coord := consensus.NewCoordNode("coord-1", consensus.AtLeastPolicy(3), nil, nil)
 
 	rules3 := makeTerm(3, node1, []consensus.NodeID{node1, node2, node3}, 3)
 	rules4 := makeTerm(4, node1, []consensus.NodeID{node1, node2, node3}, 3)
@@ -125,20 +125,20 @@ func TestCoordClusterViewPartialChange(t *testing.T) {
 		},
 	)
 
-	view := coord.ClusterView(1)
-	require.NotNil(t, view.HighestSeenTerm)
-	require.NotNil(t, view.HighestQuorumTerm)
+	status := coord.ShardStatus(1)
+	require.NotNil(t, status.HighestSeenTerm)
+	require.NotNil(t, status.HighestQuorumTerm)
 	// Seen the Seq=4 record (from node1 and node2).
-	assert.Equal(t, int64(4), view.HighestSeenTerm.Seq, "highest seen should be Seq=4")
+	assert.Equal(t, int64(4), status.HighestSeenTerm.Seq, "highest seen should be Seq=4")
 	// Quorum only confirmed for Seq=3 (node2+node3 both reported >= 3; only node2 reported >= 4).
-	assert.Equal(t, int64(3), view.HighestQuorumTerm.Seq, "quorum only confirmed for Seq=3")
+	assert.Equal(t, int64(3), status.HighestQuorumTerm.Seq, "quorum only confirmed for Seq=3")
 }
 
-// TestCoordClusterViewSingleNodeAtLeast1 verifies that a 1-node cluster with
+// TestCoordShardStatusSingleNodeAtLeast1 verifies that a 1-node cluster with
 // AtLeast(1) always has quorum confirmed (the primary alone is sufficient).
-func TestCoordClusterViewSingleNodeAtLeast1(t *testing.T) {
+func TestCoordShardStatusSingleNodeAtLeast1(t *testing.T) {
 	const node1 consensus.NodeID = "node-1"
-	coord := consensus.NewCoordNode("coord-1", nil, nil) // manual mode: no auto-expansion
+	coord := consensus.NewCoordNode("coord-1", nil, nil, nil) // manual mode: no auto-expansion
 
 	rules := makeTerm(1, node1, []consensus.NodeID{node1}, 1)
 
@@ -149,17 +149,17 @@ func TestCoordClusterViewSingleNodeAtLeast1(t *testing.T) {
 		},
 	)
 
-	view := coord.ClusterView(1)
-	require.NotNil(t, view.HighestSeenTerm)
-	require.NotNil(t, view.HighestQuorumTerm, "AtLeast(1) always has quorum (primary alone is sufficient)")
-	assert.Equal(t, int64(1), view.HighestQuorumTerm.Seq)
-	assert.Equal(t, node1, view.HighestQuorumTerm.Primary)
+	status := coord.ShardStatus(1)
+	require.NotNil(t, status.HighestSeenTerm)
+	require.NotNil(t, status.HighestQuorumTerm, "AtLeast(1) always has quorum (primary alone is sufficient)")
+	assert.Equal(t, int64(1), status.HighestQuorumTerm.Seq)
+	assert.Equal(t, node1, status.HighestQuorumTerm.Primary)
 }
 
-// TestCoordClusterViewNoTerm verifies the coordinator's view when no pooler
+// TestCoordShardStatusNoTerm verifies the coordinator's view when no pooler
 // has reported any term yet.
-func TestCoordClusterViewNoTerm(t *testing.T) {
-	coord := consensus.NewCoordNode("coord-1", consensus.AtLeastPolicy(3), nil)
+func TestCoordShardStatusNoTerm(t *testing.T) {
+	coord := consensus.NewCoordNode("coord-1", consensus.AtLeastPolicy(3), nil, nil)
 
 	coord.Step(1, []consensus.Indicator{
 		consensus.PoolerDiscoveredIndicator{PoolerID: "node-1"},
@@ -172,21 +172,21 @@ func TestCoordClusterViewNoTerm(t *testing.T) {
 		},
 	})
 
-	view := coord.ClusterView(1)
-	assert.Nil(t, view.HighestSeenTerm, "no term has been reported yet")
-	assert.Nil(t, view.HighestQuorumTerm, "no quorum without any term")
+	status := coord.ShardStatus(1)
+	assert.Nil(t, status.HighestSeenTerm, "no term has been reported yet")
+	assert.Nil(t, status.HighestQuorumTerm, "no quorum without any term")
 }
 
-// TestCoordClusterViewPrimaryUnhealthy verifies that a stopped primary appears
-// in the ClusterView but the coordinator does not consider it a healthy primary.
+// TestCoordShardStatusPrimaryUnhealthy verifies that a stopped primary is
+// correctly identified as needing failover by NeedsLeaderFailover.
 // Health tracking feeds into the coordinator-led term change decision.
-func TestCoordClusterViewPrimaryUnhealthy(t *testing.T) {
+func TestCoordShardStatusPrimaryUnhealthy(t *testing.T) {
 	const (
 		node1 consensus.NodeID = "node-1"
 		node2 consensus.NodeID = "node-2"
 		node3 consensus.NodeID = "node-3"
 	)
-	coord := consensus.NewCoordNode("coord-1", consensus.AtLeastPolicy(3), nil)
+	coord := consensus.NewCoordNode("coord-1", consensus.AtLeastPolicy(3), nil, nil)
 
 	rules := makeTerm(3, node1, []consensus.NodeID{node1, node2, node3}, 3)
 
@@ -200,24 +200,24 @@ func TestCoordClusterViewPrimaryUnhealthy(t *testing.T) {
 		},
 	)
 
-	view := coord.ClusterView(1)
+	status := coord.ShardStatus(1)
 	// Term is still quorum-verified (replicas confirmed Seq=3 even if primary is down).
-	require.NotNil(t, view.HighestQuorumTerm)
-	assert.Equal(t, int64(3), view.HighestQuorumTerm.Seq)
-	// But the identified primary is unhealthy.
-	assert.False(t, view.PrimaryHealthy, "stopped primary should not be considered healthy")
+	require.NotNil(t, status.HighestQuorumTerm)
+	assert.Equal(t, int64(3), status.HighestQuorumTerm.Seq)
+	// But the identified primary needs failover.
+	assert.True(t, consensus.NeedsLeaderFailover(status), "stopped primary should trigger failover")
 }
 
-// TestCoordClusterViewHealthTimeout verifies that a primary that has stopped
-// sending status updates is eventually marked unhealthy once the health timeout
-// is exceeded.
-func TestCoordClusterViewHealthTimeout(t *testing.T) {
+// TestCoordShardStatusHealthTimeout verifies that a primary that has stopped
+// sending status updates is eventually flagged by NeedsLeaderFailover once the
+// health timeout is exceeded.
+func TestCoordShardStatusHealthTimeout(t *testing.T) {
 	const (
 		node1 consensus.NodeID = "node-1"
 		node2 consensus.NodeID = "node-2"
 		node3 consensus.NodeID = "node-3"
 	)
-	coord := consensus.NewCoordNode("coord-1", consensus.AtLeastPolicy(3), nil)
+	coord := consensus.NewCoordNode("coord-1", consensus.AtLeastPolicy(3), nil, nil)
 
 	rules := makeTerm(3, node1, []consensus.NodeID{node1, node2, node3}, 3)
 
@@ -231,18 +231,18 @@ func TestCoordClusterViewHealthTimeout(t *testing.T) {
 		},
 	)
 
-	view := coord.ClusterView(1)
-	assert.True(t, view.PrimaryHealthy, "primary just reported at tick 1, should be healthy at tick 1")
+	status := coord.ShardStatus(1)
+	assert.False(t, consensus.NeedsLeaderFailover(status), "primary just reported at tick 1, should be healthy")
 
 	// At 1+HealthTimeoutTicks: exactly at the boundary — still healthy.
 	atBoundary := int64(1) + consensus.HealthTimeoutTicks
 	coord.Step(atBoundary, nil)
-	view = coord.ClusterView(atBoundary)
-	assert.True(t, view.PrimaryHealthy, "exactly at timeout boundary, should still be healthy")
+	status = coord.ShardStatus(atBoundary)
+	assert.False(t, consensus.NeedsLeaderFailover(status), "exactly at timeout boundary, should still be healthy")
 
-	// One tick past the boundary — now unhealthy.
+	// One tick past the boundary — now needs failover.
 	pastBoundary := atBoundary + 1
 	coord.Step(pastBoundary, nil)
-	view = coord.ClusterView(pastBoundary)
-	assert.False(t, view.PrimaryHealthy, "one tick past boundary, should be unhealthy")
+	status = coord.ShardStatus(pastBoundary)
+	assert.True(t, consensus.NeedsLeaderFailover(status), "one tick past boundary, should need failover")
 }
