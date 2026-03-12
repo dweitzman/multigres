@@ -76,8 +76,7 @@ When the primary is reachable, all rule changes flow through it as ordinary post
    - **Achievability**: `incoming.Policy.IsAchievable(incoming.Members)` — rejects policies that
      cannot be satisfied by the proposed cohort.
    - **No prior commitment**: the primary has not already committed to a coordinator for any rule
-     range overlapping the proposed `Seq`. (This check is a no-op today; it becomes meaningful
-     once the emergency path is implemented.)
+     range overlapping the proposed `Seq`.
 3. The primary writes a single WAL entry encoding the new term. **This WAL entry must be
    durable under both the outgoing and incoming `DurabilityPolicy` before the transition is
    complete.** This is the fundamental safety invariant of every term transition: a write that
@@ -256,17 +255,17 @@ the `Handler`, simulates the postgres SQL transaction and sync-settings update, 
 
 ## Key types
 
-| Type                    | Description                                                                                                                         |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `NodeProperties`        | Static per-node attributes (e.g. zone). Frozen into `Term.Members` at write time.                                                   |
-| `CohortMember`          | `{ID NodeID, Properties NodeProperties}`. Bundles identity and properties so policy evaluation is self-contained.                   |
-| `Term`                  | Versioned WAL record: `{Seq, Primary, Members, Policy}`. CAS on monotonic `Seq`.                                                    |
-| `DurabilityPolicy`      | Interface: `IsDurable`, `IsAchievable`, `RevokesAndSamplesAllRevocationSets`.                                                       |
-| `AtLeastPolicy`         | `DurabilityPolicy` implementation: write is durable when at least N cohort members have ACK'd.                                      |
-| `PoolerPersistentState` | Durable pooler state: `{Role, Primary, Term *Term, Commitment *RecruitmentCommitment}`. Saved before any ack.                       |
-| `PoolerStorage`         | Durable storage interface. Simulation uses `MemStorage`; production uses atomic write-rename + fsync.                               |
-| `PoolerNode`            | Pooler state machine. Handles WAL-driven policy updates and coordinator-led term changes.                                           |
-| `CoordNode`             | Coordinator state machine. Drives WAL writes for normal changes; runs coordinator-led term changes when the primary is unreachable. |
+| Type                    | Description                                                                                                                            |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `NodeProperties`        | Static per-node attributes (e.g. zone). Frozen into `Term.Members` at write time.                                                      |
+| `CohortMember`          | `{ID NodeID, Properties NodeProperties}`. Bundles identity and properties so policy evaluation is self-contained.                      |
+| `Term`                  | Versioned WAL record: `{Seq, Primary, Members, Policy}`. CAS on monotonic `Seq`.                                                       |
+| `DurabilityPolicy`      | Interface: `IsDurable`, `IsAchievable`, `RevokesAndSamplesAllRevocationSets`.                                                          |
+| `AtLeastPolicy`         | `DurabilityPolicy` implementation: write is durable when at least N cohort members have ACK'd.                                         |
+| `PoolerPersistentState` | Durable pooler state: `{Role, Primary, CachedTerm *Term, Commitment *RecruitmentCommitment, ShadowWAL []*Term}`. Saved before any ack. |
+| `PoolerStorage`         | Durable storage interface. Simulation uses `MemStorage`; production uses atomic write-rename + fsync.                                  |
+| `PoolerNode`            | Pooler state machine. Handles WAL-driven policy updates and coordinator-led term changes.                                              |
+| `CoordNode`             | Coordinator state machine. Drives WAL writes for normal changes; runs coordinator-led term changes when the primary is unreachable.    |
 
 ## Message reference
 
@@ -484,7 +483,7 @@ the coordinator establishes it as primary in a 1-node cohort with `AtLeast(1)`. 
 for bootstrap — a single node always forms a valid quorum with `AtLeast(1)`. Subsequent cohort
 expansion uses Stage 1.
 
-### Stage 3 — Coordinator-led term change
+### Stage 3 — Coordinator-led term change ✅ implemented
 
 When the primary is unreachable, the coordinator runs the recruitment + two-quorum protocol
 described in the [Coordinator-led term change](#coordinator-led-term-change) section above.
@@ -492,26 +491,21 @@ If a partial leader-led change is discovered in WAL, the coordinator propagates 
 (which may include cohort or policy changes). If no partial change exists, the coordinator
 initiates a fresh rule change updating only `Primary`.
 
-A coordinator-initiated leader change requires that the newly-established quorum immediately
-write a new Term entry before the failover is considered complete, since the coordinator
-cannot append to postgres WAL while postgres is stopped.
-
-**Shadow WAL:** Because postgres is stopped during coordinator-led term change, the coordinator cannot
-append to the real WAL. Instead, term transition commitments are recorded in a per-node
-_commitment file_ — essentially a shadow WAL narrow enough to fsync safely without a running
-postgres. The commitment file is written before the node acks the recruiter, so the coordinator
-only learns of the commitment after it is durable. Once the new primary is promoted, it copies
-shadow WAL entries directly into real postgres WAL before accepting any other transactions,
+**Shadow WAL:** Because postgres is stopped during coordinator-led term change, the coordinator
+cannot append to the real WAL. Instead, term transition commitments are recorded per node in
+`PoolerPersistentState.ShadowWAL` — a narrow append-only log that can be fsynced safely
+without a running postgres. The shadow WAL entry is written before the node acks the recruiter,
+so the coordinator only learns of the commitment after it is durable. Once the new primary is
+promoted, it copies shadow WAL entries into real postgres WAL before accepting any transactions,
 making the real and shadow WAL consistent representations of the same ground truth.
 
 After establishment and shadow-WAL migration, normal WAL-driven operations resume.
 
-**Durable state required:** `PoolerPersistentState.Commitment` (`RecruitmentCommitment{AtTermSeq,
-CoordID, ProposedSeq}`) — so a restarted node honours its prior commitments to coordinators.
-The `AtTermSeq` field captures "I participated in revoking from term N", and `ProposedSeq`
-records the highest target this node has already committed to. This field is already implemented.
+`TestCoordLedTermChange` verifies the full protocol under continuous chaos (crashes, drops,
+duplicates, reordering). It asserts that the maximum committed `PolicySeq` across all poolers
+never decreases and that the coordinator completes at least 500 primary changes.
 
-### Stage 3.5 — Coordinator cluster state tracking
+### Stage 3.5 — Coordinator cluster state tracking ✅ implemented
 
 For the coordinator to act quickly during coordinator-led term change it needs a continuously maintained
 view of the cluster: which poolers exist, which are healthy, what rule version each is on, and
