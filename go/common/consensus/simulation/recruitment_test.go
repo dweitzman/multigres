@@ -92,7 +92,6 @@ func TestRecruitRejection(t *testing.T) {
 	}
 	pooler1 := newPrimaryPooler(node1ID, seedTerm, sim)
 	sim.RegisterNode(pooler1)
-	sim.RegisterNode(NewSimCoordNode(consensus.NewCoordNode(coordID, nil, nil), sim))
 
 	th := dstsim.NewSimulationTestHelper(t, sim)
 
@@ -151,7 +150,6 @@ func TestRecruitIdempotent(t *testing.T) {
 	}
 	pooler1 := newPrimaryPooler(node1ID, seedTerm, sim)
 	sim.RegisterNode(pooler1)
-	sim.RegisterNode(NewSimCoordNode(consensus.NewCoordNode(coordID, nil, nil), sim))
 
 	th := dstsim.NewSimulationTestHelper(t, sim)
 
@@ -212,30 +210,20 @@ func TestRecruitRevokesParticipation(t *testing.T) {
 
 	sim := newTestSim(coordID)
 
+	// Start with a pre-expanded two-node AtLeast(2) seed term so the primary
+	// already requires node2's ACK. No coordinator needed.
 	seedTerm := &consensus.Term{
-		Seq:     1,
+		Seq:     2,
 		Primary: node1ID,
-		Members: []consensus.CohortMember{{ID: node1ID}},
-		Policy:  consensus.AtLeastPolicy(1),
+		Members: []consensus.CohortMember{{ID: node1ID}, {ID: node2ID}},
+		Policy:  consensus.AtLeastPolicy(2),
 	}
 	pooler1 := newPrimaryPooler(node1ID, seedTerm, sim)
 	pooler2 := newReplicaPooler(node2ID, node1ID, sim)
 	sim.RegisterNode(pooler1)
 	sim.RegisterNode(pooler2)
-	// Coordinator with AtLeast(2) target expands the cohort automatically.
-	coord := NewSimCoordNode(consensus.NewCoordNode(coordID, consensus.AtLeastPolicy(2), nil), sim)
-	sim.RegisterNode(coord)
 
 	th := dstsim.NewSimulationTestHelper(t, sim)
-
-	// Expand to a two-node AtLeast(2) cohort first so the primary requires node2's ACK.
-	th.RequireWithinTicks(&allHaveAppliedRules{
-		poolers:     []*SimPooler{pooler1, pooler2},
-		members:     []consensus.NodeID{node1ID, node2ID},
-		wantAtLeast: 2,
-	}, 200)
-	// After expansion the committed term is at Seq=2.
-	require.Equal(t, int64(2), pooler1.Node().CommittedState().PolicySeq())
 
 	// Recruit node2 (replica): it will stop ACKing WAL after its sidecar revokes.
 	th.RequireWithinTicks(
@@ -249,6 +237,7 @@ func TestRecruitRevokesParticipation(t *testing.T) {
 	var writeCallbackCalled bool
 	pooler1.SendWritePolicyIndicator(consensus.WritePolicyIndicator{
 		CorrelationID: "stuck-write",
+		FromSeq:       2,
 		Term: consensus.Term{
 			Seq:     3,
 			Primary: node1ID,

@@ -277,6 +277,21 @@ func (s *Simulator[I, R, ID]) RunUntil(stopCondition Condition[I, R, ID], maxTic
 			return err
 		}
 
+		// Capture state snapshots from nodes that implement NodeStateSnapshot.
+		// These are stored in the trace for display at the start/end of trace dumps.
+		for _, nodeID := range s.registeredOrder {
+			node, exists := s.nodes[nodeID]
+			if !exists {
+				continue
+			}
+			if snapper, ok := node.(NodeStateSnapshot); ok {
+				if s.currentTickTrace.NodeSnapshots == nil {
+					s.currentTickTrace.NodeSnapshots = make(map[ID]string)
+				}
+				s.currentTickTrace.NodeSnapshots[nodeID] = snapper.StateSnapshot()
+			}
+		}
+
 		// Apply any deferred node additions/removals before checking assertions,
 		// so assertions see the updated node set.
 		s.applyPendingNodeChanges()

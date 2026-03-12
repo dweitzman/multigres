@@ -42,6 +42,8 @@
 //	to shadow WAL → nodes apply term and resume replication.
 package consensus
 
+import "fmt"
+
 // NodeID identifies any node in the simulation: both coordinator nodes and pooler nodes.
 // Using a single ID type lets all node kinds live in one dstsim.Simulator instance.
 type NodeID string
@@ -289,6 +291,11 @@ type Term struct {
 	Policy DurabilityPolicy
 }
 
+// String returns a compact representation suitable for trace output.
+func (t Term) String() string {
+	return fmt.Sprintf("seq=%d/prim=%v", t.Seq, t.Primary)
+}
+
 // RecruitmentCommitment records that this pooler has granted a coordinator
 // exclusive authority to append term changes to the shadow WAL in the range
 // (AtTermSeq, ProposedSeq]. It is purely an authorization token — it does not
@@ -312,6 +319,14 @@ type RecruitmentCommitment struct {
 	// ProposedSeq is the highest term seq the coordinator is authorised to write
 	// to the shadow WAL.
 	ProposedSeq int64
+}
+
+// String returns a compact representation suitable for trace output.
+func (r *RecruitmentCommitment) String() string {
+	if r == nil {
+		return "nil"
+	}
+	return fmt.Sprintf("%v(at=%d→%d)", r.CoordID, r.AtTermSeq, r.ProposedSeq)
 }
 
 // IsRevokedBy reports whether proposed should replace r as the active

@@ -49,8 +49,14 @@ func (c *policyWriteResponse) Describe(_ *simType) string {
 // policyWriteCondition delivers a WritePolicyIndicator directly to the primary
 // pooler and returns a condition that becomes true once the correlated response
 // arrives with the given Accepted value.
+//
+// fromSeq is the CAS base: the primary's committed.PolicySeq() must equal this
+// for the write to be accepted. For normal sequential writes pass seq-1; for
+// stale-base rejection tests pass any value that does not match the primary's
+// current PolicySeq.
 func policyWriteCondition(
 	pooler *SimPooler,
+	fromSeq int64,
 	seq int64,
 	primary consensus.NodeID,
 	members []consensus.CohortMember,
@@ -60,6 +66,7 @@ func policyWriteCondition(
 	cond := &policyWriteResponse{seq: seq, wantAccepted: wantAccepted}
 	pooler.SendWritePolicyIndicator(consensus.WritePolicyIndicator{
 		CorrelationID: fmt.Sprintf("write-seq-%d", seq),
+		FromSeq:       fromSeq,
 		Term: consensus.Term{
 			Seq:     seq,
 			Primary: primary,
@@ -128,13 +135,13 @@ func TestCohortChange(t *testing.T) {
 	// Stage 1: add node2 and node3 simultaneously with AtLeast(1).
 	th.RequireWithinTicks(dstsim.And(
 		&allHaveAppliedRules{poolers: allPoolers, members: allMembers, wantAtLeast: 1},
-		policyWriteCondition(pooler1, 2, node1ID, allMembersFull, consensus.AtLeastPolicy(1), true),
+		policyWriteCondition(pooler1, 1, 2, node1ID, allMembersFull, consensus.AtLeastPolicy(1), true),
 	), 200)
 
 	// Stage 2: upgrade durability policy to AtLeast(2).
 	th.RequireWithinTicks(dstsim.And(
 		&allHaveAppliedRules{poolers: allPoolers, members: allMembers, wantAtLeast: 2},
-		policyWriteCondition(pooler1, 3, node1ID, allMembersFull, consensus.AtLeastPolicy(2), true),
+		policyWriteCondition(pooler1, 2, 3, node1ID, allMembersFull, consensus.AtLeastPolicy(2), true),
 	), 200)
 
 	// Stage 3: downgrade policy back to AtLeast(1).
@@ -142,7 +149,7 @@ func TestCohortChange(t *testing.T) {
 	// AtLeast(2) quorum before relaxing to AtLeast(1).
 	th.RequireWithinTicks(dstsim.And(
 		&allHaveAppliedRules{poolers: allPoolers, members: allMembers, wantAtLeast: 1},
-		policyWriteCondition(pooler1, 4, node1ID, allMembersFull, consensus.AtLeastPolicy(1), true),
+		policyWriteCondition(pooler1, 3, 4, node1ID, allMembersFull, consensus.AtLeastPolicy(1), true),
 	), 200)
 
 	// Stage 4: shrink cohort to just node1, removing node2 and node3.
@@ -153,14 +160,15 @@ func TestCohortChange(t *testing.T) {
 	// the removal record, updating their committed term to the 1-node cohort.
 	th.RequireWithinTicks(dstsim.And(
 		&allHaveAppliedRules{poolers: allPoolers, members: []consensus.NodeID{node1ID}, wantAtLeast: 1},
-		policyWriteCondition(pooler1, 5, node1ID, []consensus.CohortMember{{ID: node1ID}}, consensus.AtLeastPolicy(1), true),
+		policyWriteCondition(pooler1, 4, 5, node1ID, []consensus.CohortMember{{ID: node1ID}}, consensus.AtLeastPolicy(1), true),
 	), 200)
 }
 
 // TestPolicyWriteRejection verifies that WritePolicyIndicator is rejected with
-// Accepted=false in two cases:
-//  1. CAS mismatch: the incoming Seq does not equal committed.PolicySeq()+1.
+// Accepted=false in three cases:
+//  1. CAS mismatch: fromSeq does not match committed.PolicySeq().
 //  2. Write to replica: replicas reject direct WAL writes and respond immediately.
+//  3. Unachievable policy: AtLeast(N) with fewer than N members.
 func TestPolicyWriteRejection(t *testing.T) {
 	const (
 		coordID consensus.NodeID = "coord-1"
@@ -184,9 +192,10 @@ func TestPolicyWriteRejection(t *testing.T) {
 
 	th := dstsim.NewSimulationTestHelper(t, sim)
 
-	// Case 1: CAS mismatch — seq=99 when primary expects seq=2.
+	// Case 1: CAS mismatch — fromSeq=99 but primary's PolicySeq is 1.
+	// A stale coordinator that believes the primary is at seq=99 is rejected.
 	th.RequireWithinTicks(
-		policyWriteCondition(pooler1, 99, node1ID, []consensus.CohortMember{{ID: node1ID}}, consensus.AtLeastPolicy(1), false),
+		policyWriteCondition(pooler1, 99, 100, node1ID, []consensus.CohortMember{{ID: node1ID}}, consensus.AtLeastPolicy(1), false),
 		10,
 	)
 	require.Equal(t, int64(1), pooler1.Node().CommittedState().PolicySeq(),
@@ -194,15 +203,15 @@ func TestPolicyWriteRejection(t *testing.T) {
 
 	// Case 2: write to a replica — replicas reject direct WAL writes.
 	th.RequireWithinTicks(
-		policyWriteCondition(pooler2, 2, node1ID, []consensus.CohortMember{{ID: node1ID}}, consensus.AtLeastPolicy(1), false),
+		policyWriteCondition(pooler2, 1, 2, node1ID, []consensus.CohortMember{{ID: node1ID}}, consensus.AtLeastPolicy(1), false),
 		10,
 	)
-	require.Nil(t, pooler2.Node().CommittedState().CachedTerm,
+	require.Equal(t, int64(1), pooler2.Node().CommittedState().PolicySeq(),
 		"replica state must not change after write rejection")
 
 	// Case 3: unachievable policy — AtLeast(4) requires 4 nodes, but cohort has 1.
 	th.RequireWithinTicks(
-		policyWriteCondition(pooler1, 2, node1ID, []consensus.CohortMember{{ID: node1ID}}, consensus.AtLeastPolicy(4), false),
+		policyWriteCondition(pooler1, 1, 2, node1ID, []consensus.CohortMember{{ID: node1ID}}, consensus.AtLeastPolicy(4), false),
 		10,
 	)
 	require.Equal(t, int64(1), pooler1.Node().CommittedState().PolicySeq(),

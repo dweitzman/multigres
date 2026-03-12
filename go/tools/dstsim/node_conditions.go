@@ -128,6 +128,33 @@ func (c *perNodeCondition[N, I, R, ID]) Describe(sim *Simulator[I, R, ID]) strin
 	return fmt.Sprintf("per-node condition (%d/%d matching nodes tracked)", len(c.perNode), matching)
 }
 
+// nodeIsRunning is a Condition that is true when a specific node (identified by
+// ID) is not stopped in the simulator.
+type nodeIsRunning[I any, R any, ID comparable] struct {
+	id ID
+}
+
+func (c *nodeIsRunning[I, R, ID]) Name() string {
+	return fmt.Sprintf("node_is_running(%v)", c.id)
+}
+
+func (c *nodeIsRunning[I, R, ID]) Eval(sim *Simulator[I, R, ID]) bool {
+	return !sim.IsNodeStopped(c.id)
+}
+
+func (c *nodeIsRunning[I, R, ID]) Describe(sim *Simulator[I, R, ID]) string {
+	return fmt.Sprintf("node %v running=%v", c.id, !sim.IsNodeStopped(c.id))
+}
+
+// NodeIsRunning returns a Condition that is true when the node with the given ID
+// is not stopped in the simulator. Combine with AtLeastNTicks to check whether
+// a node has been continuously running for a minimum number of ticks:
+//
+//	dstsim.AtLeastNTicks(300, dstsim.NodeIsRunning[...](nodeID))
+func NodeIsRunning[I any, R any, ID comparable](id ID) Condition[I, R, ID] {
+	return &nodeIsRunning[I, R, ID]{id: id}
+}
+
 // PerNodeCondition returns a Condition that evaluates a per-node condition against
 // every node of type N in the simulator. It returns true if any node's condition fires.
 //

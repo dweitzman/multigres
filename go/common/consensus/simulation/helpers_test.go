@@ -311,6 +311,120 @@ func (c *allHaveAppliedRules) Describe(_ *simType) string {
 	return "pooler state:\n" + strings.Join(lines, "\n")
 }
 
+// nodeHasStaleTerm is true when the given pooler's committed term seq is strictly
+// less than the coordinator's quorum-confirmed term seq. This applies to any node
+// — old primary, replica, or demoted primary — that hasn't yet received and applied
+// the current quorum term. Use with dstsim.AtLeastNTicks and sim.Never to assert
+// that no node remains stale for more than N ticks while continuously running:
+//
+//	sim.Never(dstsim.And(
+//	    dstsim.AtLeastNTicks(300, dstsim.NodeIsRunning[...](sp.ID())),
+//	    &nodeHasStaleTerm{sp: sp, coord: coord},
+//	))
+type nodeHasStaleTerm struct {
+	sp    *SimPooler
+	coord *SimCoordNode
+}
+
+func (c *nodeHasStaleTerm) Name() string {
+	return fmt.Sprintf("node_has_stale_term(%v)", c.sp.ID())
+}
+
+func (c *nodeHasStaleTerm) Eval(sim *simType) bool {
+	quorumTerm := c.coord.Node().ClusterView(sim.CurrentTick()).HighestQuorumTerm
+	if quorumTerm == nil {
+		return false // no quorum established yet
+	}
+	return c.sp.Node().CommittedState().PolicySeq() < quorumTerm.Seq
+}
+
+func (c *nodeHasStaleTerm) Describe(sim *simType) string {
+	quorumTerm := c.coord.Node().ClusterView(sim.CurrentTick()).HighestQuorumTerm
+	nodeSeq := c.sp.Node().CommittedState().PolicySeq()
+	var quorumSeq int64
+	if quorumTerm != nil {
+		quorumSeq = quorumTerm.Seq
+	}
+	return fmt.Sprintf("node %v: committed_seq=%d quorum_seq=%d",
+		c.sp.ID(), nodeSeq, quorumSeq)
+}
+
+// nodeIsParticipating is true when the given pooler is actively replicating
+// in a way that is consistent with its committed term. Revoked nodes are
+// excluded — stopping replication is intentional during a coordinator-led term
+// change and should not trigger this condition.
+//
+// For a replica: participating means gucWALReceiveEnabled is true and
+// primaryConnInfo equals the committed term's primary.
+// For a primary: participating means postgres is in read-write mode (not
+// hot-standby) and gucSyncStandbys/gucSyncPolicy match the committed term.
+//
+// Use with dstsim.AtLeastNTicks and sim.Never to assert that no non-revoked
+// node holds a committed term whose replication settings haven't been applied:
+//
+//	sim.Never(dstsim.And(
+//	    dstsim.AtLeastNTicks(50, dstsim.NodeIsRunning[...](sp.ID())),
+//	    dstsim.Not(&nodeIsParticipating{sp: sp}),
+//	))
+type nodeIsParticipating struct {
+	sp *SimPooler
+}
+
+func (c *nodeIsParticipating) Name() string {
+	return fmt.Sprintf("node_is_participating(%v)", c.sp.ID())
+}
+
+func (c *nodeIsParticipating) Eval(_ *simType) bool {
+	if c.sp.isRevoked() {
+		return false // replication is off, so not participating
+	}
+	committedTerm := c.sp.Node().CommittedState().CachedTerm
+	if committedTerm == nil {
+		return false // no term yet, not participating
+	}
+	switch c.sp.Node().CommittedState().Role {
+	case consensus.RoleReplica:
+		return c.sp.primaryConnInfo == committedTerm.Primary
+	case consensus.RolePrimary:
+		if c.sp.mode != postgresPrimary {
+			return false
+		}
+		expectedStandbys := make([]consensus.NodeID, 0, len(committedTerm.Members)-1)
+		for _, m := range committedTerm.Members {
+			if m.ID != c.sp.ID() {
+				expectedStandbys = append(expectedStandbys, m.ID)
+			}
+		}
+		gotStandbys := make([]consensus.NodeID, len(c.sp.gucSyncStandbys))
+		for i, m := range c.sp.gucSyncStandbys {
+			gotStandbys[i] = m.ID
+		}
+		slices.Sort(gotStandbys)
+		slices.Sort(expectedStandbys)
+		if !slices.Equal(gotStandbys, expectedStandbys) {
+			return false
+		}
+		sn, sok := atLeastThreshold(c.sp.gucSyncPolicy)
+		wn, wok := atLeastThreshold(committedTerm.Policy)
+		return sok && wok && sn == wn
+	}
+	return true
+}
+
+func (c *nodeIsParticipating) Describe(_ *simType) string {
+	committedTerm := c.sp.Node().CommittedState().CachedTerm
+	standbyIDs := make([]consensus.NodeID, len(c.sp.gucSyncStandbys))
+	for i, m := range c.sp.gucSyncStandbys {
+		standbyIDs[i] = m.ID
+	}
+	var wantPrimary consensus.NodeID
+	if committedTerm != nil {
+		wantPrimary = committedTerm.Primary
+	}
+	return fmt.Sprintf("node %v: revoked=%v primaryConnInfo=%v wantPrimary=%v mode=%v gucStandbys=%v",
+		c.sp.ID(), c.sp.isRevoked(), c.sp.primaryConnInfo, wantPrimary, c.sp.mode, standbyIDs)
+}
+
 // nonRevokedSyncStandbysAreReplicas is a safety invariant: every non-revoked
 // node in the primary's sync standbys list must be configured to replicate from
 // that primary (primaryConnInfo equals the primary's ID). A violation means the

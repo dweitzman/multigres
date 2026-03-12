@@ -31,7 +31,7 @@ type chaosCrasher struct {
 	id                     consensus.NodeID
 	sim                    *simType
 	rng                    *rand.Rand
-	targets                []consensus.NodeID
+	targets                func() []consensus.NodeID
 	avgTicksBetweenCrashes int64 // expected ticks between successive crashes
 	downTicks              int64 // number of ticks to keep a crashed node down
 	downUntil              map[consensus.NodeID]int64
@@ -42,7 +42,7 @@ func newChaosCrasher(
 	id consensus.NodeID,
 	sim *simType,
 	rng *rand.Rand,
-	targets []consensus.NodeID,
+	targets func() []consensus.NodeID,
 	avgTicksBetweenCrashes int64,
 	downTicks int64,
 ) *chaosCrasher {
@@ -61,14 +61,20 @@ func newChaosCrasher(
 func (c *chaosCrasher) ID() consensus.NodeID { return c.id }
 
 func (c *chaosCrasher) Step(tick int64, _ []consensus.Indicator) []consensus.Request {
+	// Restart any previously-crashed node whose downtime has elapsed, even if
+	// it is no longer in the current targets() list. This is necessary when
+	// targets() is dynamic (e.g. "crash the current quorum primary"): once the
+	// quorum shifts away from a node, it would otherwise stay stopped forever.
+	for target, downUntil := range sortedmaps.All(c.downUntil) {
+		if downUntil > 0 && tick >= downUntil {
+			c.sim.RestartNode(target)
+			c.downUntil[target] = 0
+		}
+	}
+
 	crashProb := 1.0 / float64(c.avgTicksBetweenCrashes)
-	for _, target := range c.targets {
-		if until := c.downUntil[target]; until > 0 {
-			if tick >= until {
-				c.sim.RestartNode(target)
-				c.downUntil[target] = 0
-			}
-		} else if c.rng.Float64() < crashProb {
+	for _, target := range c.targets() {
+		if c.downUntil[target] == 0 && c.rng.Float64() < crashProb {
 			c.crashes[target]++
 			c.downUntil[target] = tick + c.downTicks
 			c.sim.StopNode(target)

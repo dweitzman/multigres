@@ -124,6 +124,7 @@ func (h *Handler) ProcessRequests(
 			h.correlationReturnTo[corrID] = fromNode
 			result[r.TargetPooler] = append(result[r.TargetPooler], consensus.WritePolicyIndicator{
 				CorrelationID: corrID,
+				FromSeq:       r.FromSeq,
 				Term:          r.Term,
 			})
 
@@ -169,6 +170,12 @@ func (h *Handler) ProcessRequests(
 					Accepted:      r.Accepted,
 				})
 			}
+
+		case consensus.ResumeRequest:
+			result[r.TargetPooler] = append(result[r.TargetPooler], consensus.ResumeIndicator{
+				FromCoord: fromNode,
+				Term:      r.Term,
+			})
 
 		case consensus.TerminateRequest:
 			result[r.Target] = append(result[r.Target], consensus.TerminateIndicator{})

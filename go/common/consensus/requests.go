@@ -79,9 +79,13 @@ func (RecruitRequest) consensusRequest() {}
 
 // WritePolicyRequest asks the RequestHandler to deliver a Term write to the
 // target pooler (which must be the current primary). The primary validates the
-// compare-and-swap: Term.Seq must equal its current PolicySeq + 1. If it does
-// not, the write is rejected and the primary returns its current seq so the coord
+// compare-and-swap: committed.PolicySeq() must equal FromSeq. If it does not,
+// the write is rejected and the primary returns its current seq so the coord
 // can retry with the correct next seq.
+//
+// The coordinator sets FromSeq to the base seq it is writing from. For a
+// normal sequential write this is currentTerm.Seq; for a seq-bump write it
+// is the current quorum term's seq, with Term.Seq jumping further ahead.
 //
 // The RequestHandler auto-generates a correlation ID for each request and uses
 // it to route the eventual WritePolicyResponseRequest back to FromCoord without
@@ -89,7 +93,8 @@ func (RecruitRequest) consensusRequest() {}
 type WritePolicyRequest struct {
 	TargetPooler NodeID
 	FromCoord    NodeID
-	Term         Term // Term.Seq is the CAS key (must be currentSeq+1)
+	FromSeq      int64 // CAS base: primary's committed.PolicySeq() must equal this
+	Term         Term
 }
 
 func (WritePolicyRequest) consensusRequest() {}
@@ -102,13 +107,19 @@ func (WritePolicyRequest) consensusRequest() {}
 // committing the SQL transaction. If the transaction fails, the driver must
 // roll back the replication settings change and deliver a failure indicator.
 //
+// FromSeq is the CAS base: the driver must reject the apply if the WAL already
+// contains a term record at or beyond Term.Seq (i.e. latestWALPolicySeq !=
+// FromSeq). This guards against a stale apply request landing after a
+// concurrent write has already advanced the WAL.
+//
 // In production, the local driver goroutine handles this and delivers an
 // ApplyRulesResponseIndicator back to the PoolerNode on completion.
 // In simulation, the SimPooler wrapper intercepts this request (before it
 // reaches the RequestHandler), simulates the apply, and queues the result
 // indicator for the next tick.
 type PolicyRecordApplyRequest struct {
-	Term Term
+	FromSeq int64 // CAS base: latestWALPolicySeq must equal this
+	Term    Term
 }
 
 func (PolicyRecordApplyRequest) consensusRequest() {}
@@ -227,6 +238,18 @@ type PropagatePositionAckedRequest struct {
 }
 
 func (PropagatePositionAckedRequest) consensusRequest() {}
+
+// ResumeRequest asks the handler to deliver a ResumeIndicator to the target
+// pooler. The coordinator sends this to bring stale nodes up to the
+// quorum-confirmed term without running a new full term-change protocol.
+// Fire-and-forget: no correlation ID, no ack expected.
+type ResumeRequest struct {
+	TargetPooler NodeID
+	FromCoord    NodeID
+	Term         Term // the quorum-confirmed term to apply
+}
+
+func (ResumeRequest) consensusRequest() {}
 
 // PoolerMembershipRequest is emitted by the discovery node when the set of
 // registered poolers changes. The RequestHandler converts it into

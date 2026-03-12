@@ -218,7 +218,6 @@ func TestCoordClusterViewHealthTimeout(t *testing.T) {
 		node3 consensus.NodeID = "node-3"
 	)
 	coord := consensus.NewCoordNode("coord-1", consensus.AtLeastPolicy(3), nil)
-	coord.SetHealthTimeout(5) // mark primary stale after 5 ticks without status
 
 	rules := makeTerm(3, node1, []consensus.NodeID{node1, node2, node3}, 3)
 
@@ -235,13 +234,15 @@ func TestCoordClusterViewHealthTimeout(t *testing.T) {
 	view := coord.ClusterView(1)
 	assert.True(t, view.PrimaryHealthy, "primary just reported at tick 1, should be healthy at tick 1")
 
-	// Tick 5: still within timeout window (5 ticks since tick 1).
-	coord.Step(5, nil)
-	view = coord.ClusterView(5)
-	assert.True(t, view.PrimaryHealthy, "within timeout at tick 5")
+	// At 1+HealthTimeoutTicks: exactly at the boundary — still healthy.
+	atBoundary := int64(1) + consensus.HealthTimeoutTicks
+	coord.Step(atBoundary, nil)
+	view = coord.ClusterView(atBoundary)
+	assert.True(t, view.PrimaryHealthy, "exactly at timeout boundary, should still be healthy")
 
-	// Tick 7: 6 ticks since last primary status (tick 1) — exceeds timeout of 5.
-	coord.Step(7, nil)
-	view = coord.ClusterView(7)
-	assert.False(t, view.PrimaryHealthy, "6 ticks since last status, exceeds timeout of 5")
+	// One tick past the boundary — now unhealthy.
+	pastBoundary := atBoundary + 1
+	coord.Step(pastBoundary, nil)
+	view = coord.ClusterView(pastBoundary)
+	assert.False(t, view.PrimaryHealthy, "one tick past boundary, should be unhealthy")
 }

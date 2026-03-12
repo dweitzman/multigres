@@ -98,20 +98,16 @@ type CoordNode struct {
 	// flight at a time.
 	pendingWrite *pendingPolicyWrite
 
-	// healthTimeoutTicks is the number of ticks without a PoolerStatusIndicator
-	// before a pooler is considered unreachable. Zero disables timeout-based
-	// staleness checking.
-	healthTimeoutTicks int64
-
-	// writeTimeoutTicks is the number of ticks to wait for a WritePolicyResponse
-	// before abandoning the in-flight write and retrying. Zero disables the
-	// timeout (suitable when the network is reliable and drops are impossible).
-	writeTimeoutTicks int64
-
 	// pendingRecruitment is set while a coordinator-led term change is in
 	// progress. Cleared once all recruited nodes have acked the new term, or
 	// on Restart.
 	pendingRecruitment *pendingRecruitment
+
+	// resumeSentTicks records the last tick at which a ResumeRequest was sent
+	// to each pooler. Used to rate-limit sends: a Resume is not re-sent to the
+	// same node until at least PhaseRetryTicks ticks have elapsed, preventing
+	// message floods when nodes are slow to catch up.
+	resumeSentTicks map[NodeID]int64
 
 	// highestKnownCommitments maps atTermSeq to the highest-ProposedSeq
 	// RecruitmentCommitment seen for that base term, learned from rejected
@@ -127,6 +123,13 @@ type CoordNode struct {
 	// anchored to an earlier seq can never be acted upon, so keeping those entries
 	// only wastes memory.
 	highestKnownCommitments map[int64]*RecruitmentCommitment
+
+	// stuckRevokedSince is the tick at which stuck-revoked nodes were first
+	// detected while the primary was healthy. Used to implement a grace period
+	// before writing a seq-bump term: we wait HealthTimeoutTicks to confirm the
+	// lower-seq quorum is still valid before concluding the higher-seq node is
+	// definitively stuck.
+	stuckRevokedSince int64
 }
 
 type knownPooler struct {
@@ -161,11 +164,6 @@ const (
 	// transitions to its new role. The term is established once all nodes ack.
 	recruitPhasePropose
 )
-
-// phaseRetryTicks is the number of ticks to wait for responses in post-recruit
-// phases before re-sending to unacked nodes. This handles the case where a
-// recruited node crashes mid-phase and needs to be retried after it restarts.
-const phaseRetryTicks int64 = 50
 
 // pendingRecruitment tracks an in-flight coordinator-led term change.
 type pendingRecruitment struct {
@@ -210,23 +208,9 @@ func NewCoordNode(id NodeID, targetPolicy DurabilityPolicy, rng *rand.Rand) *Coo
 		targetPolicy:            targetPolicy,
 		rng:                     rng,
 		known:                   make(map[NodeID]*knownPooler),
-		writeTimeoutTicks:       150,
 		highestKnownCommitments: make(map[int64]*RecruitmentCommitment),
+		resumeSentTicks:         make(map[NodeID]int64),
 	}
-}
-
-// SetHealthTimeout configures a staleness threshold: if a pooler has not sent
-// a status update within ticks ticks, it is considered unreachable.
-// Zero disables timeout-based staleness (the default).
-func (c *CoordNode) SetHealthTimeout(ticks int64) {
-	c.healthTimeoutTicks = ticks
-}
-
-// SetWriteTimeout configures how long the coordinator waits for a
-// WritePolicyResponse before abandoning the in-flight write and retrying.
-// Zero disables the timeout.
-func (c *CoordNode) SetWriteTimeout(ticks int64) {
-	c.writeTimeoutTicks = ticks
 }
 
 // Restart clears all ephemeral coordinator state. The coordinator re-learns
@@ -236,6 +220,8 @@ func (c *CoordNode) Restart() {
 	c.pendingWrite = nil
 	c.pendingRecruitment = nil
 	c.highestKnownCommitments = make(map[int64]*RecruitmentCommitment)
+	c.resumeSentTicks = make(map[NodeID]int64)
+	c.stuckRevokedSince = 0
 }
 
 // ClusterView is the coordinator's current best-known state of the cluster,
@@ -296,11 +282,22 @@ func (c *CoordNode) ClusterView(tick int64) ClusterView {
 // views: the highest-Seq version seen from any pooler, and the highest-Seq
 // version for which write quorum is confirmed.
 func (c *CoordNode) computeTermVersions() (highestSeen, highestQuorum *Term) {
-	// Build a map from Seq → term record using the term reported by each pooler.
-	// All poolers with the same Seq hold the same immutable record.
+	nodeTerms := make(map[NodeID]*Term, len(c.known))
+	for id, p := range sortedmaps.All(c.known) {
+		nodeTerms[id] = p.state.CachedTerm
+	}
+	return HighestTermVersions(nodeTerms)
+}
+
+// HighestTermVersions computes two Term views from a map of node ID → committed
+// term: the highest-Seq term seen across any node, and the highest-Seq term for
+// which write quorum is confirmed according to each term's own DurabilityPolicy.
+//
+// This is the same computation CoordNode uses internally and is exported so
+// tests and tools can determine cluster quorum state without a live CoordNode.
+func HighestTermVersions(nodeTerms map[NodeID]*Term) (highestSeen, highestQuorum *Term) {
 	termsBySeq := make(map[int64]*Term)
-	for _, p := range sortedmaps.Values(c.known) {
-		r := p.state.CachedTerm
+	for _, r := range sortedmaps.Values(nodeTerms) {
 		if r == nil {
 			continue
 		}
@@ -315,13 +312,13 @@ func (c *CoordNode) computeTermVersions() (highestSeen, highestQuorum *Term) {
 		return nil, nil
 	}
 
-	// Walk versions from highest to lowest, returning the first with confirmed quorum.
-	for seq := highestSeen.Seq; seq >= 1; seq-- {
-		r, ok := termsBySeq[seq]
-		if !ok {
-			continue // coordinator has not seen this version
-		}
-		if c.isDurable(r) {
+	// Sort descending so we only visit term versions that at least one node
+	// has committed (avoids scanning every seq from highestSeen down to 1).
+	seqs := sortedmaps.Keys(termsBySeq) // ascending
+	slices.Reverse(seqs)                // now descending
+	for _, seq := range seqs {
+		r := termsBySeq[seq]
+		if isTermDurable(r, nodeTerms) {
 			highestQuorum = r
 			break
 		}
@@ -329,18 +326,18 @@ func (c *CoordNode) computeTermVersions() (highestSeen, highestQuorum *Term) {
 	return highestSeen, highestQuorum
 }
 
-// isDurable returns true if enough cohort members have reported applying
-// t.Seq (or a later version) to satisfy t.Policy.IsDurable. The primary is
+// isTermDurable returns true if the given term has achieved write quorum
+// according to the provided map of node ID → committed term. The primary is
 // included in the acking set since it commits locally before propagating via
 // WAL — this correctly handles AtLeast(1) where the primary alone is sufficient.
-func (c *CoordNode) isDurable(t *Term) bool {
+func isTermDurable(t *Term, nodeTerms map[NodeID]*Term) bool {
 	if t.Policy == nil {
 		return true // nil policy: no acks needed
 	}
 	var acking []CohortMember
 	for _, m := range t.Members {
-		p, ok := c.known[m.ID]
-		if !ok || p.state.CachedTerm == nil || p.state.CachedTerm.Seq < t.Seq {
+		r, ok := nodeTerms[m.ID]
+		if !ok || r == nil || r.Seq < t.Seq {
 			continue
 		}
 		acking = append(acking, m)
@@ -355,7 +352,7 @@ func (c *CoordNode) isHealthy(p *knownPooler, tick int64) bool {
 	if p.pgStatus == PostgresStopped {
 		return false
 	}
-	if c.healthTimeoutTicks > 0 && p.lastStatusTick > 0 && tick-p.lastStatusTick > c.healthTimeoutTicks {
+	if p.lastStatusTick > 0 && tick-p.lastStatusTick > HealthTimeoutTicks {
 		return false
 	}
 	return true
@@ -496,7 +493,7 @@ func (c *CoordNode) handlePropagatePositionAcked(ind PropagatePositionAckedIndic
 func (c *CoordNode) advance(tick int64) []Request {
 	// Expire timed-out in-flight writes.
 	if c.pendingWrite != nil {
-		if c.writeTimeoutTicks > 0 && tick-c.pendingWrite.since >= c.writeTimeoutTicks {
+		if tick-c.pendingWrite.since >= WriteTimeoutTicks {
 			c.pendingWrite = nil
 			// TODO: Should we mark the primary as unhealthy and try again as a coordinator-initiated
 			// term change?...
@@ -514,36 +511,74 @@ func (c *CoordNode) advance(tick int64) []Request {
 	// Primary is healthy: abort any in-flight coordinator-led term change.
 	c.pendingRecruitment = nil
 
+	// Send Resume to any stale nodes so they can catch up to the quorum term.
+	reqs := c.advanceResume(tick, view.HighestQuorumTerm)
+
 	// Wait for any in-flight leader-led write to complete.
 	if c.pendingWrite != nil {
-		return nil
+		return reqs
 	}
 
 	primaryID, primaryKnown := c.findPrimary()
 	if primaryKnown == nil {
-		return nil
+		return reqs
 	}
 
 	currentTerm := primaryKnown.state.CachedTerm
 	if currentTerm == nil {
-		return nil // primary has no term yet; wait for status
+		return reqs // primary has no term yet; wait for status
 	}
 
 	// Manual mode: never auto-add observers.
 	if c.targetPolicy == nil {
-		return nil
+		return reqs
 	}
+
+	// Check for stuck-revoked nodes whose PolicySeq exceeds the quorum term,
+	// making standard resumes ineffective. A seq-bump term write unblocks them.
+	stuckSeq := c.maxStuckRevokedSeq(view.HighestQuorumTerm)
 
 	// Autonomous expansion: add all observed replicas not yet in the cohort.
 	observers := c.observers(currentTerm)
-	if len(observers) == 0 {
-		return nil // cohort is already up to date
+	switch {
+	case len(observers) == 0 && stuckSeq == 0:
+		// Nothing to do: cohort is current and no stuck-revoked nodes.
+		c.stuckRevokedSince = 0
+		return reqs
+
+	case len(observers) == 0:
+		// No expansion needed, but stuck-revoked nodes need a seq-bump write.
+		// Apply a grace period before writing to avoid reactive writes during
+		// transient states and to confirm the lower-seq quorum is still valid.
+		if c.stuckRevokedSince == 0 {
+			c.stuckRevokedSince = tick
+		}
+		if tick-c.stuckRevokedSince < HealthTimeoutTicks {
+			return reqs
+		}
+		c.stuckRevokedSince = 0 // reset so we don't write again immediately
+
+	default: // len(observers) > 0
+		c.stuckRevokedSince = 0 // expansion in progress; reset grace period
 	}
 
-	// Add all observers in one write.
-	newMembers := append(slices.Clone(currentTerm.Members), observers...)
+	// Determine new members: expand if observers exist, otherwise keep current cohort.
+	var newMembers []CohortMember
+	if len(observers) > 0 {
+		newMembers = append(slices.Clone(currentTerm.Members), observers...)
+	} else {
+		newMembers = slices.Clone(currentTerm.Members)
+	}
+
+	// Determine new seq: at minimum the next increment; jump further if needed
+	// to unblock stuck-revoked nodes so their resumes are no longer stale.
+	newSeq := currentTerm.Seq + 1
+	if stuckSeq >= newSeq {
+		newSeq = stuckSeq + 1
+	}
+
 	newTerm := Term{
-		Seq:     currentTerm.Seq + 1,
+		Seq:     newSeq,
 		Primary: primaryID,
 		Members: newMembers,
 		Policy:  c.policyForMembers(newMembers),
@@ -555,11 +590,70 @@ func (c *CoordNode) advance(tick int64) []Request {
 		since:  tick,
 	}
 
-	return []Request{WritePolicyRequest{
+	return append(reqs, WritePolicyRequest{
 		TargetPooler: primaryID,
 		FromCoord:    c.id,
+		FromSeq:      currentTerm.Seq, // CAS base: primary must still be at this seq
 		Term:         newTerm,
-	}}
+	})
+}
+
+// advanceResume sends ResumeRequests to known poolers whose committed term is
+// behind the quorum-confirmed term, so they can apply the current term and
+// resume replication. Rate-limited to at most one message per node per
+// PhaseRetryTicks ticks to avoid flooding nodes that are slow to respond.
+func (c *CoordNode) advanceResume(tick int64, quorumTerm *Term) []Request {
+	if quorumTerm == nil {
+		return nil
+	}
+	var reqs []Request
+	for id, p := range sortedmaps.All(c.known) {
+		if p.state.CachedTerm != nil && p.state.CachedTerm.Seq >= quorumTerm.Seq && p.state.Commitment == nil {
+			continue // already up to date and not revoked
+		}
+		lastSent := c.resumeSentTicks[id]
+		if lastSent > 0 && tick-lastSent < PhaseRetryTicks {
+			continue // rate-limit: too soon to resend
+		}
+		c.resumeSentTicks[id] = tick
+		reqs = append(reqs, ResumeRequest{
+			TargetPooler: id,
+			FromCoord:    c.id,
+			Term:         *quorumTerm,
+		})
+	}
+	return reqs
+}
+
+// maxStuckRevokedSeq returns the highest CachedTerm.Seq among known poolers
+// whose seq exceeds the quorum seq. Such nodes reject Resume messages (which
+// use the quorum term) as stale, so a seq-bump write is required to advance
+// the quorum seq past them before Resumes can take effect.
+//
+// This covers two cases:
+//   - Stuck-revoked nodes: Commitment != nil AND CachedTerm.Seq > quorumTerm.Seq
+//   - Zombie primaries: Commitment == nil AND CachedTerm.Seq > quorumTerm.Seq
+//     (e.g. a node that completed a non-quorum write when the primary role was
+//     about to switch; it will reject Resume for the lower quorum term).
+//
+// Returns 0 if no such nodes are found.
+func (c *CoordNode) maxStuckRevokedSeq(quorumTerm *Term) int64 {
+	if quorumTerm == nil {
+		return 0
+	}
+	var max int64
+	for _, p := range sortedmaps.Values(c.known) {
+		if p.state.CachedTerm == nil {
+			continue
+		}
+		if p.state.CachedTerm.Seq <= quorumTerm.Seq {
+			continue // standard Resume would work; not stuck
+		}
+		if p.state.CachedTerm.Seq > max {
+			max = p.state.CachedTerm.Seq
+		}
+	}
+	return max
 }
 
 // advanceCoordLedChange drives the coordinator-led term change protocol
@@ -611,6 +705,18 @@ func (c *CoordNode) advanceCoordLedChange(tick int64, view ClusterView) []Reques
 // satisfied.
 func (c *CoordNode) advanceRecruitingPhase(pr *pendingRecruitment, tick int64) []Request {
 	var reqs []Request
+
+	// Retry: re-send to nodes that haven't responded after a timeout.
+	// This recovers from nodes that were down when recruitment started and
+	// whose initial RecruitRequest was dropped.
+	if tick-pr.recruitSince >= PhaseRetryTicks {
+		for _, nodeID := range sortedmaps.Keys(pr.recruitSent) {
+			if _, hasResponse := pr.recruitResponses[nodeID]; !hasResponse {
+				delete(pr.recruitSent, nodeID)
+			}
+		}
+		pr.recruitSince = tick
+	}
 
 	for _, m := range pr.cohort {
 		if m.ID == pr.failedPrimary.ID {
@@ -676,7 +782,7 @@ func (c *CoordNode) advanceRecruitingPhase(pr *pendingRecruitment, tick int64) [
 // nodes to the best candidate's WAL position, then transitions to propose.
 func (c *CoordNode) advancePropagatePhase(pr *pendingRecruitment, tick int64) []Request {
 	// Retry if timed out: clear sent flags for unacked nodes so they are re-sent.
-	if tick-pr.phaseSince >= phaseRetryTicks {
+	if tick-pr.phaseSince >= PhaseRetryTicks {
 		for _, nodeID := range sortedmaps.Keys(pr.propagateSent) {
 			if !pr.propagateAcks[nodeID] {
 				delete(pr.propagateSent, nodeID)
@@ -726,7 +832,7 @@ func (c *CoordNode) advancePropagatePhase(pr *pendingRecruitment, tick int64) []
 // single round-trip, completing the term change.
 func (c *CoordNode) advanceProposePhase(pr *pendingRecruitment, tick int64) []Request {
 	// Retry if timed out: clear sent flags for unacked nodes so they are re-sent.
-	if tick-pr.phaseSince >= phaseRetryTicks {
+	if tick-pr.phaseSince >= PhaseRetryTicks {
 		for _, nodeID := range sortedmaps.Keys(pr.proposeSent) {
 			if !pr.proposeAcks[nodeID] {
 				delete(pr.proposeSent, nodeID)
@@ -748,10 +854,23 @@ func (c *CoordNode) advanceProposePhase(pr *pendingRecruitment, tick int64) []Re
 	}
 
 	// All acks received: update our cached view and consider the term established.
-	if p, ok := c.known[pr.newTerm.Primary]; ok {
-		newTerm := *pr.newTerm
-		p.state.CachedTerm = &newTerm
-		p.state.Role = RolePrimary
+	// Update ALL recruited nodes so that isDurable() immediately confirms quorum
+	// at the new term seq, preventing the coordinator from treating the just-completed
+	// failover as an incomplete one and kicking off a spurious follow-on recruitment.
+	// Clear Commitment because the propose phase fulfilled it: the nodes will clear
+	// their own commitments in handleApplyRulesResponse, and the coordinator's view
+	// must reflect that to avoid spurious resume traffic.
+	newTerm := *pr.newTerm
+	for _, nodeID := range sortedmaps.Keys(pr.recruitResponses) {
+		if p, ok := c.known[nodeID]; ok {
+			p.state.CachedTerm = &newTerm
+			p.state.Commitment = nil
+			if nodeID == pr.newTerm.Primary {
+				p.state.Role = RolePrimary
+			} else {
+				p.state.Role = RoleReplica
+			}
+		}
 	}
 	c.pendingRecruitment = nil
 	return reqs

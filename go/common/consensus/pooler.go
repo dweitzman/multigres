@@ -18,8 +18,8 @@ package consensus
 //
 // # Periodic heartbeat
 //
-// When heartbeatInterval > 0, the node emits a PoolerStatusUpdateRequest at
-// least once every heartbeatInterval ticks even if its state has not changed.
+// The node emits a PoolerStatusUpdateRequest at least once every
+// PoolerHeartbeatIntervalTicks ticks even when its state has not changed.
 // This lets coordinators re-learn cluster state after a crash without waiting
 // for a state-changing event.
 //
@@ -78,10 +78,6 @@ type PoolerNode struct {
 	// has not yet been received. Cleared once the sidecar responds.
 	pendingRecruitCorrelationID string
 
-	// heartbeatInterval is the maximum number of ticks that may elapse between
-	// status broadcasts. Zero disables periodic heartbeats.
-	heartbeatInterval int64
-
 	// lastBroadcastTick is the tick at which the most recent status update was sent.
 	lastBroadcastTick int64
 }
@@ -91,12 +87,11 @@ type PoolerNode struct {
 // committed state.
 func NewPoolerNode(id NodeID, storage PoolerStorage, properties NodeProperties) *PoolerNode {
 	n := &PoolerNode{
-		id:                id,
-		storage:           storage,
-		properties:        properties,
-		pgStatus:          PostgresRunning,
-		needsBroadcast:    true, // announce state on first Step so coordinators learn it
-		heartbeatInterval: 300,
+		id:             id,
+		storage:        storage,
+		properties:     properties,
+		pgStatus:       PostgresRunning,
+		needsBroadcast: true, // announce state on first Step so coordinators learn it
 	}
 	if state, err := storage.Load(); err == nil {
 		n.committed = state
@@ -107,13 +102,6 @@ func NewPoolerNode(id NodeID, storage PoolerStorage, properties NodeProperties) 
 // ID returns the pooler node's unique identifier.
 func (n *PoolerNode) ID() NodeID {
 	return n.id
-}
-
-// SetHeartbeatInterval configures a periodic status broadcast: the node will
-// emit a PoolerStatusUpdateRequest at least once every ticks ticks, even when
-// its state has not changed. Zero disables periodic heartbeats (the default).
-func (n *PoolerNode) SetHeartbeatInterval(ticks int64) {
-	n.heartbeatInterval = ticks
 }
 
 // CommittedState returns the current committed state.
@@ -184,6 +172,10 @@ func (n *PoolerNode) Step(tick int64, indicators []Indicator) []Request {
 			reqs, c := n.handlePropagatePosition(v)
 			requests = append(requests, reqs...)
 			changed = changed || c
+		case ResumeIndicator:
+			reqs, c := n.handleResume(v)
+			requests = append(requests, reqs...)
+			changed = changed || c
 		case TerminateIndicator:
 			if n.pgStatus != PostgresStopped {
 				n.pgStatus = PostgresStopped
@@ -192,7 +184,7 @@ func (n *PoolerNode) Step(tick int64, indicators []Indicator) []Request {
 		}
 	}
 
-	heartbeat := n.heartbeatInterval > 0 && tick-n.lastBroadcastTick >= n.heartbeatInterval
+	heartbeat := tick-n.lastBroadcastTick >= PoolerHeartbeatIntervalTicks
 	if changed || n.needsBroadcast || heartbeat {
 		n.needsBroadcast = false
 		n.lastBroadcastTick = tick
@@ -204,7 +196,7 @@ func (n *PoolerNode) Step(tick int64, indicators []Indicator) []Request {
 
 // handleWritePolicy processes a WritePolicyIndicator from a coord.
 // Only primaries accept direct writes; replicas receive term changes via WAL.
-// Validates the CAS (Term.Seq must equal committed.PolicySeq() + 1).
+// Validates the CAS (committed.PolicySeq() must equal ind.FromSeq).
 // On success, emits PolicyRecordApplyRequest to the local postgres driver.
 func (n *PoolerNode) handleWritePolicy(ind WritePolicyIndicator) ([]Request, bool) {
 	reject := func() ([]Request, bool) {
@@ -226,8 +218,9 @@ func (n *PoolerNode) handleWritePolicy(ind WritePolicyIndicator) ([]Request, boo
 	if n.pendingApply != nil {
 		return reject()
 	}
-	// CAS: incoming term must be exactly the next seq.
-	if ind.Term.Seq != n.committed.PolicySeq()+1 {
+	// CAS: committed.PolicySeq() must match the coordinator's expected base seq.
+	// The new term's seq must also advance past the current seq.
+	if n.committed.PolicySeq() != ind.FromSeq || ind.Term.Seq <= ind.FromSeq {
 		return reject()
 	}
 	// Reject if the proposed policy cannot be satisfied by the proposed members.
@@ -239,7 +232,7 @@ func (n *PoolerNode) handleWritePolicy(ind WritePolicyIndicator) ([]Request, boo
 	n.pendingApply = &term
 	n.pendingCorrelationID = ind.CorrelationID
 
-	return []Request{PolicyRecordApplyRequest{Term: term}}, false
+	return []Request{PolicyRecordApplyRequest{FromSeq: ind.FromSeq, Term: term}}, false
 }
 
 // handleApplyResponse processes an ApplyRulesResponseIndicator delivered by
@@ -540,6 +533,43 @@ func (n *PoolerNode) handleRevokeParticipationResponse(ind RevokeParticipationRe
 		}
 	}
 	return []Request{req}
+}
+
+// handleResume processes a ResumeIndicator from a coordinator. The coordinator
+// sends this when a node is stale: it was recruited but missed the propose
+// phase, or was unreachable during recruitment and fell behind. Resume asks
+// the sidecar to apply the current quorum-confirmed term's GUC settings so the
+// node can reconnect to the correct primary, adopt the correct
+// synchronous_standby_names, or switch roles if needed.
+//
+// Resume also handles the case where a node was recruited but the failover was
+// subsequently abandoned (the primary recovered). In that case the node is stuck
+// revoked with a commitment even though it is already at the quorum term seq.
+// The coordinator sends a resume at the current quorum term to release the
+// commitment and restore normal participation.
+//
+// The sidecar responds with ApplyRulesResponseIndicator; handleApplyResponse
+// then updates the committed state exactly as it does for the WAL-driven path.
+func (n *PoolerNode) handleResume(ind ResumeIndicator) ([]Request, bool) {
+	revoked := n.committed.Commitment != nil
+	if !revoked && ind.Term.Seq <= n.committed.PolicySeq() {
+		return nil, false // already at or past this term and not revoked; no-op
+	}
+	if ind.Term.Seq < n.committed.PolicySeq() {
+		return nil, false // stale resume; the node has already advanced past it
+	}
+	// Resume is the explicit mechanism to clear a commitment. Clear it from
+	// persistent storage so the node stays unrevoked through a crash-restart.
+	// (Normal term applies only clear a commitment once ProposedSeq is reached.)
+	if revoked {
+		newState := n.committed
+		newState.Commitment = nil
+		if err := n.storage.Save(newState); err != nil {
+			return nil, false
+		}
+		n.committed = newState
+	}
+	return []Request{ApplyWALTermRequest{Term: ind.Term}}, false
 }
 
 func (n *PoolerNode) statusUpdate() PoolerStatusUpdateRequest {

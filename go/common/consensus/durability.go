@@ -14,6 +14,8 @@
 
 package consensus
 
+import "fmt"
+
 // AtLeastPolicy returns a DurabilityPolicy that requires at least n cohort
 // members — including the primary — to have acknowledged a write before it is
 // considered durable.
@@ -33,6 +35,10 @@ func AtLeastPolicy(n int) DurabilityPolicy {
 
 type atLeastPolicy struct {
 	n int
+}
+
+func (p *atLeastPolicy) String() string {
+	return fmt.Sprintf("AtLeast(%d)", p.n)
 }
 
 // IsDurable returns true if at least n cohort members have confirmed the write.

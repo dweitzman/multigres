@@ -266,3 +266,41 @@ func (c *AtLeastNTimes[I, R, ID]) Describe(sim *Simulator[I, R, ID]) string {
 func NewAtLeastNTimes[I any, R any, ID comparable](n int, inner Condition[I, R, ID]) *AtLeastNTimes[I, R, ID] {
 	return &AtLeastNTimes[I, R, ID]{required: n, inner: inner}
 }
+
+// AtLeastNTicksTrue wraps an inner condition and tracks consecutive true evaluations.
+// It returns true on every tick where inner has been continuously true for at least n
+// consecutive ticks. The counter resets to zero whenever inner returns false. Use
+// AtLeastNTicksTrue as a building block for liveness assertions — for example, compose
+// with sim.Never to assert that no node remains in a bad state for more than n ticks:
+//
+//	sim.Never(dstsim.And(AtLeastNTicksTrue(300, nodeIsRunning), replicaHasStaleRules))
+type AtLeastNTicksTrue[I any, R any, ID comparable] struct {
+	n     int64
+	inner Condition[I, R, ID]
+	count int64
+}
+
+func (c *AtLeastNTicksTrue[I, R, ID]) Name() string {
+	return fmt.Sprintf("at_least_%d_ticks_true(%s)", c.n, c.inner.Name())
+}
+
+func (c *AtLeastNTicksTrue[I, R, ID]) Eval(sim *Simulator[I, R, ID]) bool {
+	if c.inner.Eval(sim) {
+		c.count++
+	} else {
+		c.count = 0
+	}
+	return c.count >= c.n
+}
+
+func (c *AtLeastNTicksTrue[I, R, ID]) Describe(sim *Simulator[I, R, ID]) string {
+	return fmt.Sprintf("%s: consecutive_ticks=%d/%d, inner=[%s]",
+		c.Name(), c.count, c.n, c.inner.Describe(sim))
+}
+
+// AtLeastNTicks returns a condition that becomes true when inner has been
+// continuously true for at least n consecutive ticks. The counter resets
+// whenever inner returns false.
+func AtLeastNTicks[I any, R any, ID comparable](n int64, inner Condition[I, R, ID]) *AtLeastNTicksTrue[I, R, ID] {
+	return &AtLeastNTicksTrue[I, R, ID]{n: n, inner: inner}
+}

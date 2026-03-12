@@ -29,7 +29,7 @@ import (
 //  1. The maximum committed PolicySeq across all poolers never decreases
 //     (safety invariant — durable state must be monotone).
 //
-//  2. The quorum-confirmed primary changes to a different node at least 1000
+//  2. The quorum-confirmed primary changes to a different node at least 500
 //     times (the coordinator detects the unhealthy primary via the health
 //     timeout and completes the coordinator-led term change each time).
 func TestCoordLedTermChange(t *testing.T) {
@@ -64,10 +64,9 @@ func TestCoordLedTermChange(t *testing.T) {
 	pooler1 := newPrimaryPooler(node1ID, seedTerm, sim)
 	sim.RegisterNode(pooler1)
 
-	// Configure a health timeout so the coordinator detects a crashed primary
-	// and initiates a coordinator-led term change.
+	// The coordinator detects a crashed primary and initiates a
+	// coordinator-led term change.
 	coordNode := consensus.NewCoordNode(coordID, consensus.AtLeastPolicy(2), nil)
-	coordNode.SetHealthTimeout(40)
 	coord := NewSimCoordNode(coordNode, sim)
 	sim.RegisterNode(coord)
 
@@ -81,16 +80,28 @@ func TestCoordLedTermChange(t *testing.T) {
 	// Coordinator crashes roughly every 400 ticks, staying down for 30 ticks.
 	coordCrasher := newChaosCrasher(
 		coordCrasherID, sim, rand.New(rand.NewPCG(seed, 1)),
-		[]consensus.NodeID{coordID}, 400, 30,
+		func() []consensus.NodeID { return []consensus.NodeID{coordID} }, 400, 30,
 	)
 	sim.RegisterNode(coordCrasher)
 
-	// Each pooler crashes roughly every 300 ticks, staying down for 150 ticks.
-	// Down time (150) exceeds detection + failover time (~100 ticks), so the
-	// coordinator completes failover before the crashed primary recovers.
+	// Each pooler crashes roughly every 800 ticks, staying down for 400 ticks.
+	// Down time (400) exceeds the health timeout (HealthTimeoutTicks=300) so
+	// the coordinator detects the crash and initiates a coordinator-led term
+	// change before the node recovers. The 100-tick window between detection
+	// (tick 300) and recovery (tick 400) is sufficient to complete the failover.
+	// The target function returns the current quorum primary so we specifically
+	// crash whichever node is currently acting as primary, maximising the
+	// number of coordinator-led failovers per unit of simulation time.
 	poolerCrasher := newChaosCrasher(
 		poolerCrasherID, sim, rand.New(rand.NewPCG(seed, 2)),
-		[]consensus.NodeID{node1ID, node2ID, node3ID}, 300, 150,
+		func() []consensus.NodeID {
+			for _, pooler := range allPoolers {
+				if pooler.IsConsensusPrimary() {
+					return []consensus.NodeID{pooler.ID()}
+				}
+			}
+			return nil
+		}, 800, 400,
 	)
 	sim.RegisterNode(poolerCrasher)
 
@@ -124,7 +135,7 @@ func TestCoordLedTermChange(t *testing.T) {
 	th := dstsim.NewSimulationTestHelper(t, sim)
 
 	th.RequireWithinTicks(dstsim.And(
-		dstsim.NewAtLeastNTimes(1000, quorumLeaderChange),
+		dstsim.NewAtLeastNTimes(500, quorumLeaderChange),
 		coordCrasher.minCrashes(1),
 		poolerCrasher.minCrashes(1),
 	), 2_000_000)
@@ -238,7 +249,7 @@ func TestCohortExpansionCoordinatorCrashes(t *testing.T) {
 	// per minute), keeping it down for 20 ticks before restarting. A separate
 	// rng stream ensures the crash schedule is independent of the network chaos rng.
 	crashRng := rand.New(rand.NewPCG(seed, 1))
-	crasher := newChaosCrasher(crasherID, sim, crashRng, []consensus.NodeID{coordID}, 600, 20)
+	crasher := newChaosCrasher(crasherID, sim, crashRng, func() []consensus.NodeID { return []consensus.NodeID{coordID} }, 600, 50)
 	sim.RegisterNode(crasher)
 
 	allPoolers := []*SimPooler{pooler1, pooler2, pooler3}
@@ -297,5 +308,5 @@ func TestCohortExpansionCoordinatorCrashes(t *testing.T) {
 		},
 		dstsim.NewAtLeastNTimes(1, coordQuorumSeqNewMax),
 		crasher.minCrashes(5),
-	), 3000)
+	), 5000)
 }

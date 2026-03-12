@@ -23,16 +23,21 @@ type Indicator interface {
 // --- Indicators for PoolerNode ---
 
 // WritePolicyIndicator is delivered to the primary PoolerNode when a CoordNode
-// requests a Term change. The primary validates the CAS (Term.Seq must equal
-// its current PolicySeq + 1); if valid, it emits a PolicyRecordApplyRequest
-// to the local postgres driver.
+// requests a Term change. The primary validates the CAS (committed.PolicySeq()
+// must equal FromSeq); if valid, it emits a PolicyRecordApplyRequest to the
+// local postgres driver.
+//
+// Using an explicit FromSeq rather than requiring Term.Seq == PolicySeq+1
+// allows coordinators to write seq-bump terms (jumping more than one seq at a
+// time) to unblock nodes stuck on a higher term without a commitment.
 //
 // CorrelationID is set by the RequestHandler (or by tests injecting indicators
 // directly). The primary echoes it back in WritePolicyResponseRequest so the
 // handler can route the response to the originating coordinator.
 type WritePolicyIndicator struct {
 	CorrelationID string
-	Term          Term // Term.Seq is the CAS key (must be currentSeq+1)
+	FromSeq       int64 // CAS base: committed.PolicySeq() must equal this
+	Term          Term
 }
 
 func (WritePolicyIndicator) consensusIndicator() {}
@@ -234,3 +239,23 @@ type PropagatePositionAckedIndicator struct {
 }
 
 func (PropagatePositionAckedIndicator) consensusIndicator() {}
+
+// ResumeIndicator is delivered to a PoolerNode by a coordinator to bring it
+// up to the current quorum-confirmed term. Used when a node is stuck: it was
+// recruited during a coordinator-led term change but missed the propose phase,
+// or was unreachable during recruitment and has since fallen behind.
+//
+// On receipt the node updates its committed term, updates GUC settings
+// (primary_conninfo / synchronous_standby_names), and resumes replication.
+// If the node's WAL has diverged from the term's primary it should first
+// attempt to reconnect to the leader; if streaming is blocked it may run
+// pg_rewind to catch up. This is safe because the term was already established
+// without this node's participation, so any divergent transactions on this
+// node are not required to satisfy the durability policy.
+// Fire-and-forget: no ack is returned to the coordinator.
+type ResumeIndicator struct {
+	FromCoord NodeID
+	Term      Term // the quorum-confirmed term to apply
+}
+
+func (ResumeIndicator) consensusIndicator() {}

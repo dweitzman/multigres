@@ -16,6 +16,7 @@ package simulation
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/tools/dstsim"
@@ -263,6 +264,20 @@ type SimPooler struct {
 	applyWALQueue dstsim.ChaosQueue[consensus.Term]
 }
 
+// IsConsensusPrimary returns true if this node is the primary of the
+// highest quorum-confirmed term across all poolers currently known to the
+// simulator. It uses the same durability computation as CoordNode.
+func (s *SimPooler) IsConsensusPrimary() bool {
+	nodeTerms := make(map[consensus.NodeID]*consensus.Term)
+	for _, n := range s.sim.Nodes() {
+		if sp, ok := n.(*SimPooler); ok {
+			nodeTerms[sp.ID()] = sp.node.CommittedState().CachedTerm
+		}
+	}
+	_, quorum := consensus.HighestTermVersions(nodeTerms)
+	return quorum != nil && quorum.Primary == s.node.ID()
+}
+
 // NewSimPooler creates a SimPooler wrapping the given PoolerNode. sim is the
 // simulator used to look up peer SimPoolers for WAL replication each tick.
 //
@@ -295,6 +310,12 @@ func NewSimPooler(node *consensus.PoolerNode, sim *simType, initialTerm *consens
 			}
 		}
 		s.gucSyncPolicy = initialTerm.Policy
+		// Seed the WAL with the initial term so replicas can stream it.
+		// The seeded term was "written" to the shadow WAL at bootstrap, so the
+		// WAL position starts at the term's seq. Replicas starting at receivedLSN=0
+		// will pull this entry and apply the committed term via normal WAL streaming.
+		s.nextPos = lsn(initialTerm.Seq)
+		s.wal = append(s.wal, walEntry{pos: s.nextPos, record: initialTerm})
 	} else {
 		// Hot standby: replicas start pulling WAL immediately (gucWALReceiveEnabled=true)
 		// unless this node has an active coordinator commitment (revoked from quorum).
@@ -392,6 +413,56 @@ func (s *SimPooler) Node() *consensus.PoolerNode {
 // ID returns the node's identifier.
 func (s *SimPooler) ID() consensus.NodeID {
 	return s.node.ID()
+}
+
+// StateSnapshot implements dstsim.NodeStateSnapshot to provide a human-readable
+// summary of this node's current state for trace debugging.
+func (s *SimPooler) StateSnapshot() string {
+	state := s.node.CommittedState()
+
+	var parts []string
+
+	if s.mode == postgresPrimary {
+		parts = append(parts, "mode=primary")
+	} else {
+		parts = append(parts, "mode=standby")
+	}
+
+	if state.CachedTerm == nil {
+		parts = append(parts, "term=none")
+	} else {
+		parts = append(parts, fmt.Sprintf("term=seq%d/prim=%v", state.CachedTerm.Seq, state.CachedTerm.Primary))
+	}
+
+	switch state.Role {
+	case consensus.RolePrimary:
+		standbys := make([]string, len(s.gucSyncStandbys))
+		for i, m := range s.gucSyncStandbys {
+			standbys[i] = string(m.ID)
+		}
+		type atLeastThresholder interface{ AtLeastThreshold() int }
+		if a, ok := s.gucSyncPolicy.(atLeastThresholder); ok {
+			parts = append(parts, fmt.Sprintf("guc=AtLeast(%d)%v", a.AtLeastThreshold(), standbys))
+		} else {
+			parts = append(parts, fmt.Sprintf("guc=nil%v", standbys))
+		}
+		parts = append(parts, fmt.Sprintf("walLen=%d nextLSN=%d", len(s.wal), int64(s.nextPos)))
+	case consensus.RoleReplica:
+		parts = append(parts, fmt.Sprintf("streaming=%v recvLSN=%d", s.primaryConnInfo, int64(s.receivedLSN)))
+	}
+
+	if s.isRevoked() {
+		parts = append(parts, "revoked")
+	}
+	if state.Commitment != nil {
+		c := state.Commitment
+		parts = append(parts, fmt.Sprintf("commit=%v(at=%d→%d)", c.CoordID, c.AtTermSeq, c.ProposedSeq))
+	}
+	if s.pendingChange != nil {
+		parts = append(parts, fmt.Sprintf("pendingChange=phase%d", s.pendingChange.phase))
+	}
+
+	return strings.Join(parts, " ")
 }
 
 // AppendUserTx simulates a user (non-rules) transaction on the primary,
@@ -507,8 +578,14 @@ func (s *SimPooler) truncateWALAfter(after lsn) {
 // the term's primary. In both cases any prior recruitment commitment is
 // considered resolved by the new term.
 func (s *SimPooler) applyGUCForTerm(term *consensus.Term) {
-	// Applying new rules resolves any prior recruitment commitment.
-	s.gucWALReceiveEnabled = true
+	// Applying new rules resolves any prior recruitment commitment, but only
+	// when the applied term reaches the committed ProposedSeq. If an older
+	// WAL entry arrives while the node is revoked (e.g. a streamed entry
+	// buffered before revocation), preserve the revoked state.
+	commitment := s.node.CommittedState().Commitment
+	if commitment == nil || term.Seq >= commitment.ProposedSeq {
+		s.gucWALReceiveEnabled = true
+	}
 	if term.Primary == s.node.ID() {
 		// This node is the primary in the new term: promote to write mode.
 		s.mode = postgresPrimary
@@ -587,8 +664,15 @@ func (s *SimPooler) handlePropagatePosition(ind consensus.PropagatePositionIndic
 // must first apply the GUC change (synchronous_standby_names / primary_conninfo)
 // and only then informs the consensus state machine that the term was applied.
 func (s *SimPooler) advancePendingWAL() {
+	committedSeq := s.node.CommittedState().PolicySeq()
 	for _, e := range s.pendingWAL {
 		if e.record != nil {
+			// Skip term records older than our committed term. If the coordinator
+			// has already sent a Resume for a newer term, we should replicate
+			// toward that term rather than reverting GUC settings to an older one.
+			if e.record.Seq < committedSeq {
+				continue
+			}
 			s.applyGUCForTerm(e.record)
 			s.queuedIndicators = append(s.queuedIndicators, consensus.ApplyRulesResponseIndicator{
 				Term:     *e.record,
@@ -620,10 +704,15 @@ func (s *SimPooler) advancePendingRevoke() {
 
 // advancePendingApplyWAL pulls ready terms from the applyWALQueue (delivered
 // with at least one tick of delay, modelling sidecar GUC-apply latency) and
-// applies each via applyGUCForTerm. For coordinator-led promotions — when a
-// node transitions from hot-standby to primary via a coordinator-written shadow
-// WAL — nextPos is initialised from receivedLSN so that replicas can reconnect
-// starting from the last position this node received from the old primary.
+// applies each via applyGUCForTerm. Two WAL-position adjustments are made:
+//
+//   - Coordinator-led promotion (hot-standby → primary): nextPos is seeded from
+//     receivedLSN so replicas can connect and stream from this node.
+//   - Coordinator-led demotion (primary → replica, e.g. via Resume): receivedLSN
+//     is advanced to nextPos so the node does not re-stream WAL entries it already
+//     committed as primary. Without this, the node would pull entries it wrote
+//     (e.g. the seed term at pos=1) from the new primary and incorrectly apply
+//     an older term on top of the newer one learned via Resume.
 //
 // Returns true if any terms were applied. The caller should skip pullWAL in
 // the same tick when this returns true, modelling the real sidecar's exclusive
@@ -635,6 +724,15 @@ func (s *SimPooler) advancePendingApplyWAL(tick int64) bool {
 			// Coordinator-led promotion: seed the WAL position from the last real
 			// WAL position received. Replicas will connect and stream from here.
 			s.nextPos = s.receivedLSN
+		} else if term.Primary != s.node.ID() && s.mode == postgresPrimary {
+			// Coordinator-led demotion: advance receivedLSN to nextPos so that
+			// when this node reconnects as a replica it streams only new entries,
+			// not the WAL entries it already wrote as primary.
+			s.receivedLSN = s.nextPos
+			// Cancel any in-flight primary pipeline: the Resume supersedes whatever
+			// policy write was in progress and advancePendingChange must not
+			// re-promote this node during the same tick.
+			s.pendingChange = nil
 		}
 		s.applyGUCForTerm(&term)
 		s.queuedIndicators = append(s.queuedIndicators, consensus.ApplyRulesResponseIndicator{
@@ -812,13 +910,14 @@ func (s *SimPooler) handleApply(req consensus.PolicyRecordApplyRequest) {
 		return
 	}
 
-	// Early CAS check: validates that this SimPooler's WAL is consistent with
-	// the PoolerNode's committed state at the time of the request. A failure
-	// here indicates a bug in the state machine, not a normal race condition.
-	currentSeq := s.latestWALPolicySeq()
-	if req.Term.Seq != currentSeq+1 {
-		panic(fmt.Sprintf("SimPooler CAS mismatch on %s: Term.Seq=%d, expected %d",
-			s.node.ID(), req.Term.Seq, currentSeq+1))
+	// CAS check: latestWALPolicySeq must equal FromSeq. This rejects stale
+	// apply requests that arrive after a concurrent write has advanced the WAL.
+	if s.latestWALPolicySeq() != req.FromSeq {
+		s.queuedIndicators = append(s.queuedIndicators, consensus.ApplyRulesResponseIndicator{
+			Term:     req.Term,
+			Accepted: false,
+		})
+		return
 	}
 
 	term := req.Term
@@ -888,7 +987,7 @@ func (s *SimPooler) advancePendingChange() {
 	case ruleChangePhaseWriteWAL:
 		// Re-validate CAS. The combined-GUC phase consumed a tick; in a real
 		// system another write could have landed in the WAL during that time.
-		if s.latestWALPolicySeq() != c.term.Seq-1 {
+		if s.latestWALPolicySeq() >= c.term.Seq {
 			// CAS failed: restore original GUC settings and report failure.
 			s.gucSyncStandbys = c.originalStandbys
 			s.gucSyncPolicy = c.originalPolicy
@@ -916,6 +1015,7 @@ func (s *SimPooler) advancePendingChange() {
 		s.gucWALReceiveEnabled = true
 		if c.term.Primary == s.node.ID() {
 			// This node remains primary under the new term.
+			s.primaryConnInfo = ""
 			s.gucSyncStandbys = c.finalStandbys
 			s.gucSyncPolicy = c.finalPolicy
 			s.mode = postgresPrimary
