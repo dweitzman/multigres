@@ -58,6 +58,25 @@ func newTestSim(coordID consensus.NodeID) *simType {
 	)
 	sim.SetRequestHandler(NewHandler(coordID))
 	sim.Always(&nonRevokedSyncStandbysAreReplicas{})
+
+	// TODO: assert that no committed write is ever rolled back. Once a term
+	// reaches write quorum (PolicySeq acknowledged by enough nodes), that seq
+	// must never decrease on any node that stays running continuously. This is
+	// the core durability invariant: what quorum promised, quorum must keep.
+
+	// TODO: assert that at most one node is writable at any given tick. If a
+	// node is in primary mode (mode==postgresPrimary and not revoked), its GUC
+	// settings must match the quorum-confirmed term: syncStandbys must equal
+	// the quorum term's member list minus itself, and primaryConnInfo must be
+	// empty. Any second node simultaneously in primary mode is a split-brain
+	// violation.
+
+	// TODO: assert that the primary and all non-revoked cohort replicas agree
+	// on the current term (same Seq). A replica continuously running for more
+	// than ~HealthTimeoutTicks ticks should have the same committed term seq as
+	// the primary; if it does not, it is either stuck (a resume was missed) or
+	// streaming from the wrong primary.
+
 	return sim
 }
 
