@@ -513,12 +513,12 @@ which is currently primary.
 
 The coordinator tracks two complementary views of the cluster's durability state:
 
-- **Highest quorum rules** (`ClusterView.HighestQuorumTerm`): the highest `Term.Seq`
+- **Highest quorum rules** (`ShardStatus.HighestQuorumTerm`): the highest `Term.Seq`
   for which the coordinator has confirmed a write quorum. Quorum is confirmed when enough
   non-primary cohort members have reported applying that Seq (or a later one) to satisfy the
   term's `DurabilityPolicy.IsDurable` check. This is the last known-good state of the cluster.
 
-- **Highest seen rules** (`ClusterView.HighestSeenTerm`): the highest `Term.Seq`
+- **Highest seen rules** (`ShardStatus.HighestSeenTerm`): the highest `Term.Seq`
   reported by any pooler, regardless of whether it reached write quorum. This may be higher than
   `HighestQuorumTerm` if a leader-driven rule change was in progress when the primary went down.
 
@@ -527,12 +527,11 @@ change exists and must propagate it to quorum before establishing a new primary.
 are equal, the cluster is in a clean state and the coordinator can elect a new primary within
 the existing cohort without propagating any partial write.
 
-`ClusterView` also carries `PrimaryHealthy`: true when the primary is currently reachable
-(postgres running, and not stale under the configured health timeout). The "best-known" primary
-is `HighestQuorumTerm.Primary` when a quorum-confirmed version exists, falling back to
-`HighestSeenTerm.Primary` otherwise. A coordinator uses this to decide whether to enter the
-emergency path: normal writes proceed when `PrimaryHealthy` is true; coordinator-led term change begins
-when it is false.
+`ShardStatus` also carries per-node `NodeHealth`. The "best-known" primary is
+`HighestQuorumTerm.Primary` when a quorum-confirmed version exists, falling back to
+`HighestSeenTerm.Primary` otherwise. A coordinator uses `NeedsLeaderFailover(status)` to
+decide whether to enter the emergency path: normal writes proceed when the primary is healthy;
+coordinator-led term change begins when it is not.
 
 **Health timeout**: the coordinator can be configured with a `healthTimeoutTicks` value. If a
 pooler has not sent a status update within that many ticks, it is considered unreachable even
@@ -678,6 +677,29 @@ postgres state (e.g. `PolicyRecordApplyRequest`, `ApplyWALTermRequest`,
 `RevokeParticipationRequest`). Serialising these at the `PoolerNode` level — tracking a single
 in-flight state-change request — would be cleaner than relying on the sidecar (`SimPooler`) to
 enforce exclusion implicitly.
+
+### Pre-flight feasibility check before coordinator-led term change
+
+Before starting recruitment (which revokes quorum participation from nodes), the coordinator
+should verify that it has enough confidence to complete the failover. Revoking nodes that turn
+out to be reachable can make the cluster temporarily worse than it already was.
+
+Two checks should be performed:
+
+1. **Determine the effective post-failover durability policy.** If `HighestSeenTerm.Seq >
+HighestQuorumTerm.Seq`, a partial leader-led change exists: the coordinator will be obligated
+   to propagate it to quorum, which means the post-failover policy is `HighestSeenTerm.Policy`.
+   Otherwise the post-failover policy is `HighestQuorumTerm.Policy`.
+
+2. **Check achievability against currently healthy nodes.** Call
+   `policy.IsAchievable(healthyNodes)` where `healthyNodes` is the subset of the post-failover
+   cohort whose `NodeHealth` the coordinator considers reachable. If the policy cannot be
+   satisfied by the known-healthy nodes alone, the coordinator should not begin recruitment —
+   it has no evidence that the failover can succeed, and premature revocation could prevent
+   the cluster from recovering on its own once connectivity is restored.
+
+This check belongs in `HighAvailabilityStrategy` alongside `NeedsLeaderFailover`, so that the
+feasibility logic is pluggable and testable independently of the consensus state machine.
 
 ### LSN visibility in simulation traces
 
