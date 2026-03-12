@@ -71,7 +71,7 @@ func TestAtLeastPolicyIsDurable(t *testing.T) {
 			name:   "AtLeast1/replica_only",
 			policy: consensus.AtLeastPolicy(1),
 			cohort: members(p, r1),
-			// This can happen during emergency failover
+			// This can happen during a coordinator-led term change
 			acking: members(r1),
 			want:   true,
 		},

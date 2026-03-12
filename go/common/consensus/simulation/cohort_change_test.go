@@ -106,7 +106,7 @@ func TestCohortChange(t *testing.T) {
 	sim.RegisterNode(pooler1)
 
 	// Coordinator in manual mode (nil targetPolicy): never auto-adds observers.
-	coord := NewSimCoordNode(consensus.NewCoordNode(coordID, nil), sim)
+	coord := NewSimCoordNode(consensus.NewCoordNode(coordID, nil, nil), sim)
 	sim.RegisterNode(coord)
 
 	// node2 and node3 join as replicas streaming from node1.
@@ -180,7 +180,7 @@ func TestPolicyWriteRejection(t *testing.T) {
 	pooler2 := newReplicaPooler(node2ID, node1ID, sim)
 	sim.RegisterNode(pooler1)
 	sim.RegisterNode(pooler2)
-	sim.RegisterNode(NewSimCoordNode(consensus.NewCoordNode(coordID, nil), sim))
+	sim.RegisterNode(NewSimCoordNode(consensus.NewCoordNode(coordID, nil, nil), sim))
 
 	th := dstsim.NewSimulationTestHelper(t, sim)
 

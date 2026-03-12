@@ -92,7 +92,7 @@ func TestRecruitRejection(t *testing.T) {
 	}
 	pooler1 := newPrimaryPooler(node1ID, seedTerm, sim)
 	sim.RegisterNode(pooler1)
-	sim.RegisterNode(NewSimCoordNode(consensus.NewCoordNode(coordID, nil), sim))
+	sim.RegisterNode(NewSimCoordNode(consensus.NewCoordNode(coordID, nil, nil), sim))
 
 	th := dstsim.NewSimulationTestHelper(t, sim)
 
@@ -151,7 +151,7 @@ func TestRecruitIdempotent(t *testing.T) {
 	}
 	pooler1 := newPrimaryPooler(node1ID, seedTerm, sim)
 	sim.RegisterNode(pooler1)
-	sim.RegisterNode(NewSimCoordNode(consensus.NewCoordNode(coordID, nil), sim))
+	sim.RegisterNode(NewSimCoordNode(consensus.NewCoordNode(coordID, nil, nil), sim))
 
 	th := dstsim.NewSimulationTestHelper(t, sim)
 
@@ -223,7 +223,7 @@ func TestRecruitRevokesParticipation(t *testing.T) {
 	sim.RegisterNode(pooler1)
 	sim.RegisterNode(pooler2)
 	// Coordinator with AtLeast(2) target expands the cohort automatically.
-	coord := NewSimCoordNode(consensus.NewCoordNode(coordID, consensus.AtLeastPolicy(2)), sim)
+	coord := NewSimCoordNode(consensus.NewCoordNode(coordID, consensus.AtLeastPolicy(2), nil), sim)
 	sim.RegisterNode(coord)
 
 	th := dstsim.NewSimulationTestHelper(t, sim)

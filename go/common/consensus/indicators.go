@@ -79,7 +79,7 @@ func (RecruitIndicator) consensusIndicator() {}
 //
 // When Accepted is true, LSN and TermSeq carry the node's WAL position at the
 // moment revocation completed. The coordinator uses these to rank candidates and
-// pick the most up-to-date node as the new primary during emergency failover:
+// pick the most up-to-date node as the new primary during a coordinator-led term change:
 //   - For a replica: LSN is the last_replay_lsn once WAL replay has stabilised
 //     (stopped advancing), and TermSeq is the seq of the last term record
 //     the replica has replayed.
@@ -159,16 +159,21 @@ type WritePolicyResponseIndicator struct {
 func (WritePolicyResponseIndicator) consensusIndicator() {}
 
 // RecruitResponseIndicator is delivered to a CoordNode when a pooler has
-// responded to a RecruitIndicator. Term carries the pooler's committed term so
-// the coordinator can identify the best candidate for promotion. LSN reports
-// the node's WAL position at revocation time; the coordinator uses the maximum
-// LSN across all recruited nodes as the BaseLSN for shadow WAL writes.
+// responded to a RecruitIndicator. When Accepted is true, Position carries the
+// pooler's NodePosition at revocation time: Position.Term is the highest-Seq
+// accepted term (from shadow WAL if one exists, otherwise the committed
+// real-WAL term) and Position.LSN is the real WAL position. The coordinator
+// uses these to detect work started by a previous coordinator
+// (Position.Term.Seq == proposedSeq) and to pick the best promotion candidate.
+//
+// Commitment mirrors RecruitResponseRequest.Commitment: the node's current
+// durable commitment if still relevant, or nil.
 type RecruitResponseIndicator struct {
 	CorrelationID string
 	FromPooler    NodeID
 	Accepted      bool
-	Term          *Term // pooler's committed term at the time of response
-	LSN           LSN   // WAL position at revocation time; zero when Accepted=false
+	Position      NodePosition           // zero when Accepted=false
+	Commitment    *RecruitmentCommitment // non-nil if node holds a current commitment
 }
 
 func (RecruitResponseIndicator) consensusIndicator() {}
@@ -200,3 +205,32 @@ type PoolerRemovedIndicator struct {
 }
 
 func (PoolerRemovedIndicator) consensusIndicator() {}
+
+// PropagatePositionIndicator is delivered to a recruited PoolerNode after the
+// local sidecar has completed copying history from SourceNode. The sidecar
+// first writes the new committed state to durable storage (CachedTerm +
+// ShadowWAL from SourceNode, up through TargetPosition), then this indicator
+// signals PoolerNode to reload its committed state from storage and ack.
+//
+// In simulation SimPooler intercepts this indicator, performs the WAL copy
+// directly (by reading SourceNode's WAL buffer), calls SaveCommittedState on
+// the PoolerNode so the reloaded state reflects the copy, then lets the
+// indicator reach PoolerNode normally. In production the sidecar does
+// pg_rewind + WAL streaming and writes the result to storage before delivery.
+type PropagatePositionIndicator struct {
+	CorrelationID  string
+	SourceNode     NodeID
+	TargetPosition NodePosition
+}
+
+func (PropagatePositionIndicator) consensusIndicator() {}
+
+// PropagatePositionAckedIndicator is delivered to a CoordNode when a pooler
+// has durably applied a PropagatePositionIndicator.
+type PropagatePositionAckedIndicator struct {
+	CorrelationID string
+	FromPooler    NodeID
+	Accepted      bool
+}
+
+func (PropagatePositionAckedIndicator) consensusIndicator() {}

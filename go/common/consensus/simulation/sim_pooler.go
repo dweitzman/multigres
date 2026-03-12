@@ -50,7 +50,7 @@ type lsn int64
 // replica and primary have diverging transactions (e.g. after a split-brain or
 // a failed failover), and try to simulate something similar to what postgres
 // does. In a graceful switchover the WAL timeline is compatible and replication
-// continues from the new primary without gap. In emergency failover there may
+// continues from the new primary without gap. In a coordinator-led term change there may
 // be timeline divergence that requires something like pg_rewind before the
 // stale node can resume replication. For Stage 1 (cohort expansion, no
 // failover) the current representation is sufficient.
@@ -529,6 +529,54 @@ func (s *SimPooler) applyGUCForTerm(term *consensus.Term) {
 	}
 }
 
+// handlePropagatePosition performs the simulation-level history copy for a
+// PropagatePositionIndicator before PoolerNode sees the event.
+//
+// It copies the source node's WAL buffer (entries up to TargetPosition.LSN)
+// and saves the source's committed state (CachedTerm + ShadowWAL) into this
+// node's storage while preserving this node's own Commitment. PoolerNode's
+// handlePropagatePosition then reloads from storage and acks the coordinator.
+func (s *SimPooler) handlePropagatePosition(ind consensus.PropagatePositionIndicator) {
+	source := s.findSimPooler(ind.SourceNode)
+	if source == nil {
+		return
+	}
+
+	// Copy WAL entries from source up through TargetPosition.LSN. A zero LSN
+	// means copy everything.
+	targetLSN := lsn(ind.TargetPosition.LSN)
+	var newWAL []walEntry
+	for _, e := range source.wal {
+		if targetLSN == 0 || e.pos <= targetLSN {
+			newWAL = append(newWAL, e)
+		}
+	}
+	s.wal = newWAL
+	if targetLSN > 0 && source.receivedLSN > targetLSN {
+		s.receivedLSN = targetLSN
+	} else {
+		s.receivedLSN = source.receivedLSN
+	}
+
+	// Build the new committed state: CachedTerm and ShadowWAL come from the
+	// source; Commitment is preserved so subsequent shadow WAL writes are
+	// still authorised; Role/Primary are re-derived from the new CachedTerm.
+	sourceState := source.node.CommittedState()
+	newState := s.node.CommittedState()
+	newState.CachedTerm = sourceState.CachedTerm
+	newState.ShadowWAL = sourceState.ShadowWAL
+	if sourceState.CachedTerm != nil {
+		newState.Primary = sourceState.CachedTerm.Primary
+		if sourceState.CachedTerm.Primary == s.node.ID() {
+			newState.Role = consensus.RolePrimary
+		} else {
+			newState.Role = consensus.RoleReplica
+		}
+	}
+	// Save so PoolerNode.handlePropagatePosition can reload it.
+	_ = s.node.Storage().Save(newState)
+}
+
 // advancePendingWAL processes WAL entries that were received from the primary
 // in a previous tick. For each term record found, it applies GUC settings via
 // applyGUCForTerm and then queues an ApplyRulesResponseIndicator so the wrapped
@@ -572,15 +620,19 @@ func (s *SimPooler) advancePendingRevoke() {
 
 // advancePendingApplyWAL pulls ready terms from the applyWALQueue (delivered
 // with at least one tick of delay, modelling sidecar GUC-apply latency) and
-// applies each via applyGUCForTerm. For emergency promotions — when a node
-// transitions from hot-standby to primary via a coordinator-written shadow WAL
-// — nextPos is initialised from receivedLSN so that replicas can reconnect
+// applies each via applyGUCForTerm. For coordinator-led promotions — when a
+// node transitions from hot-standby to primary via a coordinator-written shadow
+// WAL — nextPos is initialised from receivedLSN so that replicas can reconnect
 // starting from the last position this node received from the old primary.
-func (s *SimPooler) advancePendingApplyWAL(tick int64) {
+//
+// Returns true if any terms were applied. The caller should skip pullWAL in
+// the same tick when this returns true, modelling the real sidecar's exclusive
+// lock: GUC reconfiguration and WAL streaming cannot run concurrently.
+func (s *SimPooler) advancePendingApplyWAL(tick int64) bool {
 	terms := s.applyWALQueue.Pull(tick)
 	for _, term := range terms {
 		if term.Primary == s.node.ID() && s.mode == postgresHotStandby {
-			// Emergency promotion: seed the WAL position from the last real
+			// Coordinator-led promotion: seed the WAL position from the last real
 			// WAL position received. Replicas will connect and stream from here.
 			s.nextPos = s.receivedLSN
 		}
@@ -590,6 +642,7 @@ func (s *SimPooler) advancePendingApplyWAL(tick int64) {
 			Accepted: true,
 		})
 	}
+	return len(terms) > 0
 }
 
 // Step processes indicators and advances the SimPooler state machine one tick.
@@ -620,11 +673,13 @@ func (s *SimPooler) Step(tick int64, externalInds []consensus.Indicator) []conse
 	// Process any ApplyWALTermRequest items whose delivery delay has elapsed.
 	// These come from WriteShadowWALIndicator with ApplyNow=true and model the
 	// sidecar acquiring an exclusive lock before reconfiguring GUC settings.
-	s.advancePendingApplyWAL(tick)
-
-	// Replica path: pull new WAL from the configured primary. Entries are
-	// stored in pendingWAL and will be processed in the next tick.
-	s.pullWAL()
+	// If GUC reconfiguration ran this tick, skip WAL pulling: the sidecar lock
+	// prevents concurrent reconfigure and streaming (modelling a fair mutex).
+	if !s.advancePendingApplyWAL(tick) {
+		// Replica path: pull new WAL from the configured primary. Entries are
+		// stored in pendingWAL and will be processed in the next tick.
+		s.pullWAL()
+	}
 
 	// Primary path: advance the rules-apply pipeline. This may append to
 	// queuedIndicators (e.g. ApplyRulesResponseIndicator in the sendIndicator
@@ -634,8 +689,16 @@ func (s *SimPooler) Step(tick int64, externalInds []consensus.Indicator) []conse
 
 	inds := make([]consensus.Indicator, 0, len(s.queuedIndicators)+len(externalInds))
 	inds = append(inds, s.queuedIndicators...)
-	inds = append(inds, externalInds...)
 	s.queuedIndicators = nil
+
+	// Process external indicators; intercept PropagatePositionIndicator to
+	// perform the simulation-level WAL copy before PoolerNode sees the event.
+	for _, ind := range externalInds {
+		if v, ok := ind.(consensus.PropagatePositionIndicator); ok {
+			s.handlePropagatePosition(v)
+		}
+		inds = append(inds, ind)
+	}
 
 	// Step the wrapped PoolerNode with all accumulated indicators.
 	reqs := s.node.Step(tick, inds)
@@ -667,6 +730,8 @@ func (s *SimPooler) Step(tick int64, externalInds []consensus.Indicator) []conse
 				cb(r)
 			}
 			forwarded = append(forwarded, req)
+		case consensus.PropagatePositionAckedRequest:
+			forwarded = append(forwarded, req)
 		default:
 			forwarded = append(forwarded, req)
 		}
@@ -684,7 +749,7 @@ func (s *SimPooler) Step(tick int64, externalInds []consensus.Indicator) []conse
 //
 // On graceful switchover the WAL timeline remains compatible and receivedLSN is
 // preserved — the replica resumes from where it left off against the new
-// primary. Emergency failover with timeline divergence may require additional
+// primary. A coordinator-led term change with timeline divergence may require additional
 // handling (see walEntry TODO).
 func (s *SimPooler) pullWAL() {
 	state := s.node.CommittedState()

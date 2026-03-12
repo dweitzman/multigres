@@ -25,7 +25,7 @@
 //   - CoordNode: coordinator (orch service). Stateless across restarts. Watches pooler
 //     status, discovers observers (non-cohort poolers), and drives cohort expansion and
 //     durability policy upgrades by writing Term updates to the primary.
-//     Uses emergency failover (coordinator elections) only when the primary is unreachable.
+//     Uses coordinator-led term changes when the primary is unreachable.
 //
 // Both implement dstsim.Node[Indicator, Request, NodeID] and can run in the same
 // deterministic simulator.
@@ -36,10 +36,10 @@
 //	propagates WAL → replicas apply WAL and update their Term → CoordNode observes
 //	updated status.
 //
-// Emergency path (not yet implemented) — coordinator elections:
+// Coordinator-led path — term change without a running primary:
 //
-//	CoordNode detects unreachable primary → runs Begin → Revoke → Establish to appoint
-//	a new primary, then returns to the normal path.
+//	CoordNode detects unreachable primary → recruits cohort members → writes new term
+//	to shadow WAL → nodes apply term and resume replication.
 package consensus
 
 // NodeID identifies any node in the simulation: both coordinator nodes and pooler nodes.
@@ -51,6 +51,48 @@ type NodeID string
 // postgres's pg_lsn type (e.g. the result of pg_lsn_to_uint64(pg_current_wal_lsn())).
 // In simulation it is a simple counter. The zero value means "no LSN known".
 type LSN int64
+
+// NodePosition describes a node's current position in the WAL timeline,
+// combining its real WAL progress with the most recent durability term it has
+// accepted (which may come from either real WAL or shadow WAL). The Term and
+// LSN together give a coordinator everything it needs to rank candidates during
+// coordinator-led term change: pick the node with the highest real WAL position, breaking
+// ties by term Seq (a higher Seq means the node has already committed to a later
+// rule change).
+//
+// NOTE: each coordinator proposes exactly one shadow WAL term per ProposedSeq,
+// but racing coordinators can leave shadow WAL entries at non-consecutive Seqs.
+// After uses only the highest accepted Term.Seq as a tiebreaker, which is
+// sufficient today. If the protocol later allows multiple shadow WAL entries at
+// the same Seq (e.g. incremental membership changes), After must also account
+// for the count of shadow WAL entries to rank candidates correctly.
+type NodePosition struct {
+	// Term is the most recently accepted term — applied from real WAL or
+	// durably written to shadow WAL by a coordinator. Nil if no term known.
+	Term *Term
+	// LSN is the node's real WAL position at the time this snapshot was taken.
+	// The coordinator uses the maximum LSN across all recruited nodes as
+	// BaseLSN for shadow WAL writes, ensuring a safe promotion point.
+	LSN LSN
+}
+
+// After reports whether p is strictly more advanced than other.
+// A node at a higher real WAL position is always preferred; at equal WAL
+// positions, the node that has accepted a higher term Seq wins (having
+// committed to a further rule change already).
+func (p NodePosition) After(other NodePosition) bool {
+	if p.LSN != other.LSN {
+		return p.LSN > other.LSN
+	}
+	var ps, os int64
+	if p.Term != nil {
+		ps = p.Term.Seq
+	}
+	if other.Term != nil {
+		os = other.Term.Seq
+	}
+	return ps > os
+}
 
 // PoolerRole is the role a pooler currently holds in the cluster.
 type PoolerRole int8
@@ -157,7 +199,7 @@ type DurabilityPolicy interface {
 	IsAchievable(proposedCohort []CohortMember) bool
 
 	// RevokesAndSamplesAllRevocationSets returns true when the recruited set
-	// simultaneously satisfies two properties required for safe emergency failover:
+	// simultaneously satisfies two properties required for safe coordinator-led term change:
 	//
 	//  1. Revocation: the primary can no longer form a durable write, because even
 	//     if every non-recruited cohort member acks, IsDurable is not satisfied.
@@ -240,7 +282,7 @@ type Term struct {
 
 	// Members is the full list of pooler IDs and their static properties that
 	// may participate in coordinator votes. Only members listed here are required
-	// to participate in an emergency failover vote.
+	// to participate in an coordinator-led term change vote.
 	Members []CohortMember
 
 	// Policy determines the durability requirements for writes and failover.

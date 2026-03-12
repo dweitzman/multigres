@@ -15,6 +15,7 @@
 package consensus
 
 import (
+	"math/rand/v2"
 	"slices"
 
 	"github.com/multigres/multigres/go/tools/dstsim/sortedmaps"
@@ -41,24 +42,43 @@ import (
 // When targetPolicy is nil the coordinator operates in manual mode: it never
 // autonomously adds observed replicas to the cohort.
 //
-// # Emergency path — coordinator-led term change (Stage 3)
+// # Coordinator-led term change (Stage 3)
 //
-// When the primary becomes unreachable the coordinator runs a two-phase protocol:
+// When the primary becomes unreachable (or for a planned switchover) the coordinator
+// runs a multi-phase protocol:
 //
 //  1. Recruit: send RecruitRequest to all cohort members. Each recruited node
 //     durably commits to this coordinator's authority range and withdraws from
 //     write quorum for the old primary (stopping WAL ACKs or entering read-only).
 //     Recruitment continues until RevokesAndSamplesAllRevocationSets is satisfied.
 //
-//  2. Establish: write a new Term to the best available candidate (chosen by
-//     highest committed PolicySeq). On success, propagate the new Term to all
-//     other recruited members so they can update their committed state and
-//     reconnect to the new primary.
+//  2. Propagate (optional): if recruited nodes have unequal WAL positions, send
+//     PropagatePositionRequests to bring them all to the best candidate's position.
+//     Skipped when all nodes are already at the target position.
+//
+//  3. Propose: write the new Term to shadow WAL on all recruited nodes with
+//     ApplyNow=true so each node simultaneously persists the term and transitions
+//     to its new role (primary or replica). The term is established once all
+//     recruited nodes ack.
 //
 // Note: the coordinator may also discover mid-recruitment that the primary has
 // recovered or that another coordinator has already completed a valid term change.
 // TODO: add a "release" message for the coordinator to signal recruited nodes
 // that no term change was needed and they may resume normal quorum participation.
+//
+// TODO: add a "resume" message covering at least three cases where a node may
+// be stuck and needs the coordinator to tell it the current quorum term so it
+// can apply and start or resume replication:
+//
+//	(a) node was recruited but never received a propose (stuck in stopped state);
+//	(b) node was recruited but no propose is needed — a previously-started proposal
+//	    already satisfies the quorum, so only resumption is required;
+//	(c) node was never recruited (not reachable during revocation) and has since
+//	    lost its connection to the primary, so it is neither getting WAL nor term
+//	    updates and needs to be pointed at the current primary.
+//
+// The resume message should include the current quorum term so the node can
+// validate and update its primary_conninfo if necessary.
 //
 // # State
 //
@@ -67,6 +87,7 @@ import (
 type CoordNode struct {
 	id           NodeID
 	targetPolicy DurabilityPolicy // nil = manual mode
+	rng          *rand.Rand       // used for random tiebreaking in candidate selection
 
 	// known tracks each pooler the coord has been told about. Values are
 	// updated each time a PoolerStatusIndicator arrives.
@@ -87,10 +108,25 @@ type CoordNode struct {
 	// timeout (suitable when the network is reliable and drops are impossible).
 	writeTimeoutTicks int64
 
-	// pendingRecruitment is set while the coordinator is in the recruitment
-	// phase of emergency failover. Cleared once enough nodes are recruited and
-	// the establishing write is dispatched, or on Restart.
+	// pendingRecruitment is set while a coordinator-led term change is in
+	// progress. Cleared once all recruited nodes have acked the new term, or
+	// on Restart.
 	pendingRecruitment *pendingRecruitment
+
+	// highestKnownCommitments maps atTermSeq to the highest-ProposedSeq
+	// RecruitmentCommitment seen for that base term, learned from rejected
+	// recruit responses and PoolerStatusIndicator broadcasts. Two uses:
+	//   1. When starting a new recruitment for atTermSeq, initialize proposedSeq
+	//      to highestKnownCommitments[atTermSeq].ProposedSeq+1 so we don't need
+	//      a rejection round-trip to learn about competing coordinators.
+	//   2. Mid-recruitment: bump proposedSeq when the known highest exceeds it.
+	// Cleared on Restart since all coordinator state is ephemeral.
+	//
+	// TODO: prune entries whose atTermSeq is strictly below the highest quorum-
+	// confirmed term seq. Once a term has reached write quorum, any commitment
+	// anchored to an earlier seq can never be acted upon, so keeping those entries
+	// only wastes memory.
+	highestKnownCommitments map[int64]*RecruitmentCommitment
 }
 
 type knownPooler struct {
@@ -106,7 +142,7 @@ type pendingPolicyWrite struct {
 	since  int64 // tick at which the write was dispatched
 }
 
-// recruitmentPhase tracks which step of the emergency failover protocol is active.
+// recruitmentPhase tracks which step of the coordinator-led term change protocol is active.
 type recruitmentPhase int
 
 const (
@@ -114,49 +150,68 @@ const (
 	// until RevokesAndSamplesAllRevocationSets is satisfied.
 	recruitPhaseRecruiting recruitmentPhase = iota
 
-	// recruitPhaseShadowWAL: sending WriteShadowWALRequests to all recruited
-	// nodes and waiting for WriteShadowWALAckedIndicators.
-	recruitPhaseShadowWAL
+	// recruitPhasePropagate: syncing WAL positions across recruited nodes by
+	// sending PropagatePositionRequests. All recruited nodes are brought to the
+	// best candidate's WAL position before the new term is written. After all
+	// PropagatePositionAcked responses arrive, transitions to recruitPhasePropose.
+	recruitPhasePropagate
+
+	// recruitPhasePropose: writing the new term to shadow WAL on all recruited
+	// nodes with ApplyNow=true so each node simultaneously persists the term and
+	// transitions to its new role. The term is established once all nodes ack.
+	recruitPhasePropose
 )
 
-// shadowWALRetryTicks is the number of ticks to wait for a WriteShadowWALAcked
-// response before re-sending to unacked nodes. This handles the case where a
+// phaseRetryTicks is the number of ticks to wait for responses in post-recruit
+// phases before re-sending to unacked nodes. This handles the case where a
 // recruited node crashes mid-phase and needs to be retried after it restarts.
-const shadowWALRetryTicks int64 = 50
+const phaseRetryTicks int64 = 50
 
-// pendingRecruitment tracks an in-flight emergency recruitment phase.
+// pendingRecruitment tracks an in-flight coordinator-led term change.
 type pendingRecruitment struct {
-	atTermSeq     int64                    // base term seq the coordinator is working from
-	proposedSeq   int64                    // seq that will be written on success
-	baseTerm      *Term                    // term at the time recruitment started
-	cohort        []CohortMember           // cohort members to recruit
-	failedPrimary CohortMember             // the unreachable primary (excluded from candidacy)
-	sentTo        map[NodeID]bool          // members we have sent RecruitRequests to
-	responses     map[NodeID]recruitedResp // accepted responses keyed by pooler ID
-	since         int64                    // tick when recruitment started (for timeout)
+	atTermSeq     int64          // base term seq the coordinator is working from
+	proposedSeq   int64          // seq that will be written on success
+	baseTerm      *Term          // term at the time recruitment started
+	cohort        []CohortMember // cohort members to recruit
+	failedPrimary CohortMember   // the unreachable primary (excluded from candidacy)
 
-	// Shadow WAL phase fields (set when entering recruitPhaseShadowWAL).
-	phase          recruitmentPhase
-	newTerm        *Term           // the new term to write to shadow WAL on all recruited nodes
-	propagateSent  map[NodeID]bool // nodes to which WriteShadowWALRequest has been sent
-	propagateAcks  map[NodeID]bool // nodes that have acked the shadow WAL write
-	shadowWALSince int64           // tick when shadow WAL phase started or last retried
+	// Per-phase message tracking: separate sent/acks maps per phase so each
+	// phase's progress is unambiguous and late responses from earlier phases
+	// don't corrupt later ones.
+	recruitSince     int64                    // tick when recruitment started
+	recruitSent      map[NodeID]bool          // RecruitRequests sent
+	recruitResponses map[NodeID]recruitedResp // accepted RecruitResponse keyed by pooler ID
+
+	phase         recruitmentPhase
+	bestCandidate NodeID // selected new primary (set when entering propagate or propose)
+	newTerm       *Term  // the new term to write to shadow WAL
+	phaseSince    int64  // tick when the current post-recruit phase started or was last retried
+
+	propagateSent map[NodeID]bool // PropagatePositionRequest sent
+	propagateAcks map[NodeID]bool // PropagatePositionAcked received
+
+	proposeSent map[NodeID]bool // WriteShadowWALRequest(ApplyNow=true) sent
+	proposeAcks map[NodeID]bool // WriteShadowWALAcked for propose received
 }
 
 type recruitedResp struct {
-	term *Term // committed term from the pooler's response
-	lsn  LSN   // WAL position at revocation time
+	position NodePosition // WAL position and highest accepted term at revocation time
 }
 
 // NewCoordNode creates a coordinator node.
 // targetPolicy is the desired DurabilityPolicy to work toward as the cohort
 // grows (e.g. AtLeastPolicy(3) for a 3-node HA cluster).
-func NewCoordNode(id NodeID, targetPolicy DurabilityPolicy) *CoordNode {
+// rng is used to break ties randomly when multiple candidates are equally
+// eligible for promotion during a coordinator-led term change. Pass nil to use a default
+// global source (non-deterministic; avoid in tests).
+func NewCoordNode(id NodeID, targetPolicy DurabilityPolicy, rng *rand.Rand) *CoordNode {
 	return &CoordNode{
-		id:                id,
-		targetPolicy:      targetPolicy,
-		known:             make(map[NodeID]*knownPooler),
-		writeTimeoutTicks: 150,
+		id:                      id,
+		targetPolicy:            targetPolicy,
+		rng:                     rng,
+		known:                   make(map[NodeID]*knownPooler),
+		writeTimeoutTicks:       150,
+		highestKnownCommitments: make(map[int64]*RecruitmentCommitment),
 	}
 }
 
@@ -180,6 +235,7 @@ func (c *CoordNode) Restart() {
 	c.known = make(map[NodeID]*knownPooler)
 	c.pendingWrite = nil
 	c.pendingRecruitment = nil
+	c.highestKnownCommitments = make(map[int64]*RecruitmentCommitment)
 }
 
 // ClusterView is the coordinator's current best-known state of the cluster,
@@ -205,7 +261,7 @@ type ClusterView struct {
 	// is within the configured health timeout.
 	//
 	// This is the key flag for deciding between the normal path (PrimaryHealthy=true)
-	// and the emergency failover path (PrimaryHealthy=false).
+	// and the coordinator-led term change path (PrimaryHealthy=false).
 	PrimaryHealthy bool
 }
 
@@ -334,12 +390,17 @@ func (c *CoordNode) Step(tick int64, indicators []Indicator) []Request {
 				p.properties = v.Properties
 				p.lastStatusTick = tick
 			}
+			// Proactively learn about existing commitments from status broadcasts
+			// so we start recruitment with an informed proposedSeq.
+			c.observeCommitment(v.State.Commitment)
 		case WritePolicyResponseIndicator:
 			reqs = append(reqs, c.handleWriteResponse(v)...)
 		case RecruitResponseIndicator:
 			c.handleRecruitResponse(v)
 		case WriteShadowWALAckedIndicator:
 			c.handleWriteShadowWALAcked(v)
+		case PropagatePositionAckedIndicator:
+			c.handlePropagatePositionAcked(v)
 		}
 	}
 
@@ -376,25 +437,51 @@ func (c *CoordNode) handleWriteResponse(ind WritePolicyResponseIndicator) []Requ
 	return nil
 }
 
+// observeCommitment records a commitment in highestKnownCommitments if it
+// carries higher authority (greater ProposedSeq) than what we have already
+// seen for the same AtTermSeq. Called from both status broadcasts and
+// rejected recruit responses so we always have the most informed view.
+func (c *CoordNode) observeCommitment(commitment *RecruitmentCommitment) {
+	if commitment == nil {
+		return
+	}
+	existing := c.highestKnownCommitments[commitment.AtTermSeq]
+	if existing == nil || commitment.ProposedSeq > existing.ProposedSeq {
+		c.highestKnownCommitments[commitment.AtTermSeq] = commitment
+	}
+}
+
 // handleRecruitResponse records an accepted RecruitResponseIndicator during
-// the recruiting phase of emergency failover.
+// the recruiting phase. On rejection, records any commitment the pooler
+// reported so we can bump proposedSeq if needed.
 func (c *CoordNode) handleRecruitResponse(ind RecruitResponseIndicator) {
+	// Always learn from the commitment field, regardless of acceptance.
+	c.observeCommitment(ind.Commitment)
+
 	if c.pendingRecruitment == nil || c.pendingRecruitment.phase != recruitPhaseRecruiting {
 		return
 	}
 	if !ind.Accepted {
 		return
 	}
-	c.pendingRecruitment.responses[ind.FromPooler] = recruitedResp{
-		term: ind.Term,
-		lsn:  ind.LSN,
+	c.pendingRecruitment.recruitResponses[ind.FromPooler] = recruitedResp{
+		position: ind.Position,
 	}
 }
 
-// handleWriteShadowWALAcked records an ack from a pooler in the shadow WAL
-// phase of emergency failover.
+// handleWriteShadowWALAcked records an ack from a pooler in the propose phase.
 func (c *CoordNode) handleWriteShadowWALAcked(ind WriteShadowWALAckedIndicator) {
-	if c.pendingRecruitment == nil || c.pendingRecruitment.phase != recruitPhaseShadowWAL {
+	if c.pendingRecruitment == nil || c.pendingRecruitment.phase != recruitPhasePropose {
+		return
+	}
+	if ind.Accepted {
+		c.pendingRecruitment.proposeAcks[ind.FromPooler] = true
+	}
+}
+
+// handlePropagatePositionAcked records an ack from a pooler in the propagate phase.
+func (c *CoordNode) handlePropagatePositionAcked(ind PropagatePositionAckedIndicator) {
+	if c.pendingRecruitment == nil || c.pendingRecruitment.phase != recruitPhasePropagate {
 		return
 	}
 	if ind.Accepted {
@@ -404,8 +491,8 @@ func (c *CoordNode) handleWriteShadowWALAcked(ind WriteShadowWALAckedIndicator) 
 
 // advance decides the next action for this tick. If the primary is healthy it
 // drives the normal leader-led cohort expansion path; otherwise it delegates to
-// advanceEmergency for coordinator-led failover. Called at the end of every
-// Step() after all indicators have been processed.
+// advanceCoordLedChange. Called at the end of every Step() after all indicators
+// have been processed.
 func (c *CoordNode) advance(tick int64) []Request {
 	// Expire timed-out in-flight writes.
 	if c.pendingWrite != nil {
@@ -419,12 +506,12 @@ func (c *CoordNode) advance(tick int64) []Request {
 	view := c.ClusterView(tick)
 	if !view.PrimaryHealthy {
 		// Primary is unreachable: abort any in-flight leader-led write and run
-		// the coordinator-led emergency failover protocol.
+		// the coordinator-led term change protocol.
 		c.pendingWrite = nil
-		return c.advanceEmergency(tick, view)
+		return c.advanceCoordLedChange(tick, view)
 	}
 
-	// Primary is healthy: abort any in-flight emergency recruitment.
+	// Primary is healthy: abort any in-flight coordinator-led term change.
 	c.pendingRecruitment = nil
 
 	// Wait for any in-flight leader-led write to complete.
@@ -475,12 +562,9 @@ func (c *CoordNode) advance(tick int64) []Request {
 	}}
 }
 
-// advanceEmergency drives the two-phase coordinator-led emergency failover:
-//  1. Recruiting: send RecruitRequests to all cohort members and collect acks
-//     until RevokesAndSamplesAllRevocationSets is satisfied.
-//  2. Shadow WAL: send WriteShadowWALRequests to all recruited nodes and wait
-//     for WriteShadowWALAckedIndicators; term is established when all ack.
-func (c *CoordNode) advanceEmergency(tick int64, view ClusterView) []Request {
+// advanceCoordLedChange drives the coordinator-led term change protocol
+// through its Recruit → [Propagate →] Propose phases.
+func (c *CoordNode) advanceCoordLedChange(tick int64, view ClusterView) []Request {
 	base := view.HighestSeenTerm
 	if base == nil {
 		base = view.HighestQuorumTerm
@@ -498,15 +582,15 @@ func (c *CoordNode) advanceEmergency(tick int64, view ClusterView) []Request {
 			}
 		}
 		c.pendingRecruitment = &pendingRecruitment{
-			atTermSeq:     base.Seq,
-			proposedSeq:   base.Seq + 1,
-			baseTerm:      base,
-			cohort:        base.Members,
-			failedPrimary: failedPrimary,
-			sentTo:        make(map[NodeID]bool),
-			responses:     make(map[NodeID]recruitedResp),
-			since:         tick,
-			phase:         recruitPhaseRecruiting,
+			atTermSeq:        base.Seq,
+			proposedSeq:      base.Seq + 1,
+			baseTerm:         base,
+			cohort:           base.Members,
+			failedPrimary:    failedPrimary,
+			recruitSent:      make(map[NodeID]bool),
+			recruitResponses: make(map[NodeID]recruitedResp),
+			recruitSince:     tick,
+			phase:            recruitPhaseRecruiting,
 		}
 	}
 
@@ -514,15 +598,17 @@ func (c *CoordNode) advanceEmergency(tick int64, view ClusterView) []Request {
 	switch pr.phase {
 	case recruitPhaseRecruiting:
 		return c.advanceRecruitingPhase(pr, tick)
-	case recruitPhaseShadowWAL:
-		return c.advanceShadowWALPhase(pr, tick)
+	case recruitPhasePropagate:
+		return c.advancePropagatePhase(pr, tick)
+	case recruitPhasePropose:
+		return c.advanceProposePhase(pr, tick)
 	}
 	return nil
 }
 
 // advanceRecruitingPhase sends RecruitRequests to unsent cohort members and
-// transitions to the shadow WAL phase once RevokesAndSamplesAllRevocationSets
-// is satisfied.
+// transitions to the propose phase once RevokesAndSamplesAllRevocationSets is
+// satisfied.
 func (c *CoordNode) advanceRecruitingPhase(pr *pendingRecruitment, tick int64) []Request {
 	var reqs []Request
 
@@ -530,8 +616,8 @@ func (c *CoordNode) advanceRecruitingPhase(pr *pendingRecruitment, tick int64) [
 		if m.ID == pr.failedPrimary.ID {
 			continue // don't contact the unreachable primary
 		}
-		if !pr.sentTo[m.ID] {
-			pr.sentTo[m.ID] = true
+		if !pr.recruitSent[m.ID] {
+			pr.recruitSent[m.ID] = true
 			reqs = append(reqs, RecruitRequest{
 				TargetPooler: m.ID,
 				FromCoord:    c.id,
@@ -544,7 +630,7 @@ func (c *CoordNode) advanceRecruitingPhase(pr *pendingRecruitment, tick int64) [
 	// Build the set of recruited members from accepted responses.
 	var recruitedMembers []CohortMember
 	for _, m := range pr.cohort {
-		if _, ok := pr.responses[m.ID]; ok {
+		if _, ok := pr.recruitResponses[m.ID]; ok {
 			recruitedMembers = append(recruitedMembers, m)
 		}
 	}
@@ -575,39 +661,88 @@ func (c *CoordNode) advanceRecruitingPhase(pr *pendingRecruitment, tick int64) [
 		Policy:  baseTerm.Policy,
 	}
 
-	pr.phase = recruitPhaseShadowWAL
+	pr.phase = recruitPhasePropose
+	pr.bestCandidate = candidate
 	pr.newTerm = &newTerm
-	pr.propagateSent = make(map[NodeID]bool)
-	pr.propagateAcks = make(map[NodeID]bool)
-	pr.shadowWALSince = tick
+	pr.proposeSent = make(map[NodeID]bool)
+	pr.proposeAcks = make(map[NodeID]bool)
+	pr.phaseSince = tick
 
-	reqs = append(reqs, c.sendWriteShadowWALRequests(pr)...)
+	reqs = append(reqs, c.sendProposeRequests(pr)...)
 	return reqs
 }
 
-// advanceShadowWALPhase sends any outstanding WriteShadowWALRequests and clears
-// pendingRecruitment once all recruited nodes have acked.
-func (c *CoordNode) advanceShadowWALPhase(pr *pendingRecruitment, tick int64) []Request {
-	// Retry: if enough ticks have elapsed since the last send, re-queue any
-	// unacked nodes so sendWriteShadowWALRequests will re-send to them. This
-	// handles nodes that crashed between receiving the request and sending the ack.
-	if tick-pr.shadowWALSince >= shadowWALRetryTicks {
+// advancePropagatePhase sends PropagatePositionRequests to bring all recruited
+// nodes to the best candidate's WAL position, then transitions to propose.
+func (c *CoordNode) advancePropagatePhase(pr *pendingRecruitment, tick int64) []Request {
+	// Retry if timed out: clear sent flags for unacked nodes so they are re-sent.
+	if tick-pr.phaseSince >= phaseRetryTicks {
 		for _, nodeID := range sortedmaps.Keys(pr.propagateSent) {
 			if !pr.propagateAcks[nodeID] {
 				delete(pr.propagateSent, nodeID)
 			}
 		}
-		pr.shadowWALSince = tick
+		pr.phaseSince = tick
 	}
 
-	reqs := c.sendWriteShadowWALRequests(pr)
+	bestPos := pr.recruitResponses[pr.bestCandidate].position
+	var reqs []Request
+	for _, nodeID := range sortedmaps.Keys(pr.recruitResponses) {
+		if nodeID == pr.bestCandidate {
+			// Best candidate already has the target position.
+			pr.propagateAcks[nodeID] = true
+			continue
+		}
+		if !pr.propagateSent[nodeID] {
+			pr.propagateSent[nodeID] = true
+			reqs = append(reqs, PropagatePositionRequest{
+				TargetPooler:   nodeID,
+				FromCoord:      c.id,
+				SourceNode:     pr.bestCandidate,
+				TargetPosition: bestPos,
+			})
+		}
+	}
+
+	// Check whether all recruited nodes have acked.
+	for _, nodeID := range sortedmaps.Keys(pr.recruitResponses) {
+		if !pr.propagateAcks[nodeID] {
+			return reqs
+		}
+	}
+
+	// All propagated — transition to propose phase.
+	pr.phase = recruitPhasePropose
+	pr.proposeSent = make(map[NodeID]bool)
+	pr.proposeAcks = make(map[NodeID]bool)
+	pr.phaseSince = tick
+	reqs = append(reqs, c.sendProposeRequests(pr)...)
+	return reqs
+}
+
+// advanceProposePhase sends WriteShadowWALRequests (ApplyNow=true) to all
+// recruited nodes and clears pendingRecruitment once all have acked. Using
+// ApplyNow=true writes the shadow WAL entry and activates GUC settings in a
+// single round-trip, completing the term change.
+func (c *CoordNode) advanceProposePhase(pr *pendingRecruitment, tick int64) []Request {
+	// Retry if timed out: clear sent flags for unacked nodes so they are re-sent.
+	if tick-pr.phaseSince >= phaseRetryTicks {
+		for _, nodeID := range sortedmaps.Keys(pr.proposeSent) {
+			if !pr.proposeAcks[nodeID] {
+				delete(pr.proposeSent, nodeID)
+			}
+		}
+		pr.phaseSince = tick
+	}
+
+	reqs := c.sendProposeRequests(pr)
 
 	// Check whether all nodes we sent to have acked.
-	if len(pr.propagateSent) == 0 {
+	if len(pr.proposeSent) == 0 {
 		return reqs
 	}
-	for _, nodeID := range sortedmaps.Keys(pr.propagateSent) {
-		if !pr.propagateAcks[nodeID] {
+	for _, nodeID := range sortedmaps.Keys(pr.proposeSent) {
+		if !pr.proposeAcks[nodeID] {
 			return reqs // still waiting
 		}
 	}
@@ -622,23 +757,23 @@ func (c *CoordNode) advanceShadowWALPhase(pr *pendingRecruitment, tick int64) []
 	return reqs
 }
 
-// sendWriteShadowWALRequests emits WriteShadowWALRequests to any recruited node
-// that has not yet been sent one.
-func (c *CoordNode) sendWriteShadowWALRequests(pr *pendingRecruitment) []Request {
+// sendProposeRequests emits WriteShadowWALRequests (ApplyNow=true) to any
+// recruited node that has not yet been sent one.
+func (c *CoordNode) sendProposeRequests(pr *pendingRecruitment) []Request {
 	if pr.newTerm == nil {
 		return nil
 	}
-	// Compute BaseLSN as the maximum WAL position reported by recruited nodes.
+	// Compute BaseLSN as the maximum real WAL position reported by recruited nodes.
 	var baseLSN LSN
-	for _, resp := range sortedmaps.Values(pr.responses) {
-		if resp.lsn > baseLSN {
-			baseLSN = resp.lsn
+	for _, resp := range sortedmaps.Values(pr.recruitResponses) {
+		if resp.position.LSN > baseLSN {
+			baseLSN = resp.position.LSN
 		}
 	}
 	var reqs []Request
-	for _, nodeID := range sortedmaps.Keys(pr.responses) {
-		if !pr.propagateSent[nodeID] {
-			pr.propagateSent[nodeID] = true
+	for _, nodeID := range sortedmaps.Keys(pr.recruitResponses) {
+		if !pr.proposeSent[nodeID] {
+			pr.proposeSent[nodeID] = true
 			reqs = append(reqs, WriteShadowWALRequest{
 				TargetPooler: nodeID,
 				FromCoord:    c.id,
@@ -651,26 +786,34 @@ func (c *CoordNode) sendWriteShadowWALRequests(pr *pendingRecruitment) []Request
 	return reqs
 }
 
-// pickBestCandidate returns the NodeID of the recruited node with the highest
-// committed term seq (most up-to-date WAL), excluding the failed primary.
-// Ties are broken deterministically by NodeID (lexicographic ascending).
+// pickBestCandidate returns the NodeID of the recruited node with the most
+// advanced NodePosition (highest real WAL position, tiebroken by term Seq),
+// excluding the failed primary. When multiple nodes share the best position,
+// one is chosen at random using c.rng so that primary load is distributed
+// evenly across failovers.
 func (c *CoordNode) pickBestCandidate(pr *pendingRecruitment) NodeID {
-	var bestID NodeID
-	var bestSeq int64
-	for nodeID, resp := range sortedmaps.All(pr.responses) {
+	// Collect all candidates that are strictly tied for best position.
+	var bestPos NodePosition
+	var bestCandidates []NodeID
+	for nodeID, resp := range sortedmaps.All(pr.recruitResponses) {
 		if nodeID == pr.failedPrimary.ID {
 			continue
 		}
-		var seq int64
-		if resp.term != nil {
-			seq = resp.term.Seq
-		}
-		if bestID == "" || seq > bestSeq || (seq == bestSeq && nodeID < bestID) {
-			bestSeq = seq
-			bestID = nodeID
+		switch {
+		case len(bestCandidates) == 0 || resp.position.After(bestPos):
+			bestPos = resp.position
+			bestCandidates = []NodeID{nodeID}
+		case !bestPos.After(resp.position): // equal
+			bestCandidates = append(bestCandidates, nodeID)
 		}
 	}
-	return bestID
+	if len(bestCandidates) == 0 {
+		return ""
+	}
+	if len(bestCandidates) == 1 || c.rng == nil {
+		return bestCandidates[0]
+	}
+	return bestCandidates[c.rng.IntN(len(bestCandidates))]
 }
 
 // findPrimary returns the NodeID and knownPooler for the active primary, or the

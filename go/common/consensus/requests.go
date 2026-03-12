@@ -157,15 +157,22 @@ type RevokeParticipationRequest struct {
 func (RevokeParticipationRequest) consensusRequest() {}
 
 // RecruitResponseRequest is the pooler's response to a RecruitIndicator.
-// Term carries the pooler's committed Term so the coordinator can discover any
-// successor WAL entries it has not yet seen. LSN reports this node's WAL
-// position at the time revocation completed, which the coordinator uses to
-// compute the BaseLSN for shadow WAL writes (max LSN across all recruited nodes).
+// When Accepted is true, Position carries the pooler's NodePosition at the
+// time revocation completed: Position.Term is the highest-Seq accepted term
+// (from shadow WAL if one exists, otherwise the committed real-WAL term) and
+// Position.LSN is the real WAL position. The coordinator uses these to detect
+// work started by a previous coordinator (Position.Term.Seq == proposedSeq)
+// and to pick the best promotion candidate.
+//
+// Commitment is the node's current durable commitment, if any and still
+// relevant (AtTermSeq >= the node's committed policy seq). It is included on
+// both accepted and rejected responses. On a rejection, the coordinator uses
+// it to detect competing coordinators and bump its proposedSeq if needed.
 type RecruitResponseRequest struct {
 	RequestCorrelation
-	Accepted bool
-	Term     *Term // nil when Accepted=false and no term has been committed
-	LSN      LSN   // WAL position at revocation time; zero when Accepted=false
+	Accepted   bool
+	Position   NodePosition           // zero when Accepted=false
+	Commitment *RecruitmentCommitment // non-nil if node holds a current commitment
 }
 
 func (RecruitResponseRequest) consensusRequest() {}
@@ -192,6 +199,34 @@ type TerminateRequest struct {
 }
 
 func (TerminateRequest) consensusRequest() {}
+
+// PropagatePositionRequest asks the handler to deliver a history-copy
+// instruction to a recruited pooler. The pooler (via its sidecar) must
+// replicate SourceNode's committed history (CachedTerm + ShadowWAL) up
+// through TargetPosition, replacing its own history. In production this
+// corresponds to pg_rewind followed by WAL streaming from SourceNode; in
+// simulation the sidecar copies state directly.
+//
+// The handler auto-generates a correlation ID so the eventual
+// PropagatePositionAckedRequest is routed back to the originating coord.
+type PropagatePositionRequest struct {
+	TargetPooler   NodeID
+	FromCoord      NodeID
+	SourceNode     NodeID       // node whose history to replicate
+	TargetPosition NodePosition // copy history up through this position
+}
+
+func (PropagatePositionRequest) consensusRequest() {}
+
+// PropagatePositionAckedRequest is emitted by a PoolerNode after it has
+// durably applied the propagated history. The handler routes it back to the
+// coordinator that sent the PropagatePositionRequest.
+type PropagatePositionAckedRequest struct {
+	RequestCorrelation
+	Accepted bool
+}
+
+func (PropagatePositionAckedRequest) consensusRequest() {}
 
 // PoolerMembershipRequest is emitted by the discovery node when the set of
 // registered poolers changes. The RequestHandler converts it into

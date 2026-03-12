@@ -91,8 +91,8 @@ func (h *Handler) ProcessRequests(
 					CorrelationID: r.CorrelationID,
 					FromPooler:    fromNode,
 					Accepted:      r.Accepted,
-					Term:          r.Term,
-					LSN:           r.LSN,
+					Position:      r.Position,
+					Commitment:    r.Commitment,
 				})
 			}
 
@@ -146,6 +146,27 @@ func (h *Handler) ProcessRequests(
 					State:          r.State,
 					PostgresStatus: r.PostgresStatus,
 					Properties:     r.Properties,
+				})
+			}
+
+		case consensus.PropagatePositionRequest:
+			h.nextCorrSeq++
+			corrID := fmt.Sprintf("%s/%d", fromNode, h.nextCorrSeq)
+			h.correlationReturnTo[corrID] = fromNode
+			result[r.TargetPooler] = append(result[r.TargetPooler], consensus.PropagatePositionIndicator{
+				CorrelationID:  corrID,
+				SourceNode:     r.SourceNode,
+				TargetPosition: r.TargetPosition,
+			})
+
+		case consensus.PropagatePositionAckedRequest:
+			dest := h.correlationReturnTo[r.CorrelationID]
+			delete(h.correlationReturnTo, r.CorrelationID)
+			if dest != "" {
+				result[dest] = append(result[dest], consensus.PropagatePositionAckedIndicator{
+					CorrelationID: r.CorrelationID,
+					FromPooler:    fromNode,
+					Accepted:      r.Accepted,
 				})
 			}
 

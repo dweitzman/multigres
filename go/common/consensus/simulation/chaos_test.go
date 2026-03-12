@@ -22,17 +22,17 @@ import (
 	"github.com/multigres/multigres/go/tools/dstsim"
 )
 
-// TestLeaderTurnover verifies that the cluster performs repeated leader changes
-// under continuous chaos: both the coordinator and all poolers crash
-// periodically. It asserts:
+// TestCoordLedTermChange verifies that the cluster performs repeated
+// coordinator-led term changes under continuous chaos: both the coordinator and
+// all poolers crash periodically. It asserts:
 //
 //  1. The maximum committed PolicySeq across all poolers never decreases
 //     (safety invariant — durable state must be monotone).
 //
-//  2. The quorum-confirmed primary changes to a different node at least twice
-//     in sequence (requires Stage 3 emergency failover).
-//     TODO(stage3): raise the AtLeastNTimes threshold from 2 to 1000.
-func TestLeaderTurnover(t *testing.T) {
+//  2. The quorum-confirmed primary changes to a different node at least 1000
+//     times (the coordinator detects the unhealthy primary via the health
+//     timeout and completes the coordinator-led term change each time).
+func TestCoordLedTermChange(t *testing.T) {
 	const (
 		coordID         consensus.NodeID = "coord-1"
 		coordCrasherID  consensus.NodeID = "coord-crasher"
@@ -65,8 +65,8 @@ func TestLeaderTurnover(t *testing.T) {
 	sim.RegisterNode(pooler1)
 
 	// Configure a health timeout so the coordinator detects a crashed primary
-	// and initiates failover (Stage 3 emergency path).
-	coordNode := consensus.NewCoordNode(coordID, consensus.AtLeastPolicy(2))
+	// and initiates a coordinator-led term change.
+	coordNode := consensus.NewCoordNode(coordID, consensus.AtLeastPolicy(2), nil)
 	coordNode.SetHealthTimeout(40)
 	coord := NewSimCoordNode(coordNode, sim)
 	sim.RegisterNode(coord)
@@ -123,12 +123,11 @@ func TestLeaderTurnover(t *testing.T) {
 
 	th := dstsim.NewSimulationTestHelper(t, sim)
 
-	// TODO(stage3): raise threshold to 1000 once emergency failover is implemented.
 	th.RequireWithinTicks(dstsim.And(
-		dstsim.NewAtLeastNTimes(2, quorumLeaderChange),
+		dstsim.NewAtLeastNTimes(1000, quorumLeaderChange),
 		coordCrasher.minCrashes(1),
 		poolerCrasher.minCrashes(1),
-	), 10_000)
+	), 2_000_000)
 }
 
 // TestCohortExpansionUnreliableNetwork verifies that cohort expansion converges
@@ -164,7 +163,7 @@ func TestCohortExpansionUnreliableNetwork(t *testing.T) {
 	pooler1 := newPrimaryPooler(node1ID, seedTerm, sim)
 	sim.RegisterNode(pooler1)
 
-	coord := NewSimCoordNode(consensus.NewCoordNode(coordID, consensus.AtLeastPolicy(2)), sim)
+	coord := NewSimCoordNode(consensus.NewCoordNode(coordID, consensus.AtLeastPolicy(2), nil), sim)
 	sim.RegisterNode(coord)
 
 	pooler2 := newReplicaPooler(node2ID, node1ID, sim)
@@ -227,7 +226,7 @@ func TestCohortExpansionCoordinatorCrashes(t *testing.T) {
 	pooler1 := newPrimaryPooler(node1ID, seedTerm, sim)
 	sim.RegisterNode(pooler1)
 
-	coord := NewSimCoordNode(consensus.NewCoordNode(coordID, consensus.AtLeastPolicy(2)), sim)
+	coord := NewSimCoordNode(consensus.NewCoordNode(coordID, consensus.AtLeastPolicy(2), nil), sim)
 	sim.RegisterNode(coord)
 
 	pooler2 := newReplicaPooler(node2ID, node1ID, sim)

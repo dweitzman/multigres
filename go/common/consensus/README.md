@@ -13,8 +13,8 @@ Two node types participate:
 
 - **CoordNode** — coordinator (orchestration service). Stateless across restarts. Watches pooler
   status, discovers observer replicas (non-cohort poolers), and drives durability rule changes by
-  writing `Term` updates to the primary. Uses emergency failover only when the primary
-  is unreachable.
+  writing `Term` updates to the primary. Uses a coordinator-led term change when the primary
+  is unreachable (or for a planned primary replacement).
 
 The consensus system is responsible for one thing: keeping a **`Term` record** that
 defines exactly which postgres instance is primary, which nodes form the cohort, and how many
@@ -103,10 +103,10 @@ CoordNode sees observer
   → CoordNode observes updated status; expansion complete
 ```
 
-## Emergency path — coordinator-led rule change
+## Coordinator-led term change
 
-When the primary is unreachable, a coordinator can drive a rule change without the primary's
-participation. The challenge is **staleness and concurrent coordinators**: multiple coordinators
+When the primary is unreachable (or for a planned replacement), a coordinator can drive a term
+change without the primary's participation. The challenge is **staleness and concurrent coordinators**: multiple coordinators
 may attempt the same failover without knowing about each other.
 
 A coordinator-led change has two modes depending on what is discovered during recruitment:
@@ -256,17 +256,17 @@ the `Handler`, simulates the postgres SQL transaction and sync-settings update, 
 
 ## Key types
 
-| Type                    | Description                                                                                                       |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `NodeProperties`        | Static per-node attributes (e.g. zone). Frozen into `Term.Members` at write time.                                 |
-| `CohortMember`          | `{ID NodeID, Properties NodeProperties}`. Bundles identity and properties so policy evaluation is self-contained. |
-| `Term`                  | Versioned WAL record: `{Seq, Primary, Members, Policy}`. CAS on monotonic `Seq`.                                  |
-| `DurabilityPolicy`      | Interface: `IsDurable`, `IsAchievable`, `RevokesAndSamplesAllRevocationSets`.                                     |
-| `AtLeastPolicy`         | `DurabilityPolicy` implementation: write is durable when at least N cohort members have ACK'd.                    |
-| `PoolerPersistentState` | Durable pooler state: `{Role, Primary, Term *Term, Commitment *RecruitmentCommitment}`. Saved before any ack.     |
-| `PoolerStorage`         | Durable storage interface. Simulation uses `MemStorage`; production uses atomic write-rename + fsync.             |
-| `PoolerNode`            | Pooler state machine. Handles WAL-driven policy updates and emergency failover ballots.                           |
-| `CoordNode`             | Coordinator state machine. Drives WAL writes for normal changes; runs elections for emergency failover.           |
+| Type                    | Description                                                                                                                         |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `NodeProperties`        | Static per-node attributes (e.g. zone). Frozen into `Term.Members` at write time.                                                   |
+| `CohortMember`          | `{ID NodeID, Properties NodeProperties}`. Bundles identity and properties so policy evaluation is self-contained.                   |
+| `Term`                  | Versioned WAL record: `{Seq, Primary, Members, Policy}`. CAS on monotonic `Seq`.                                                    |
+| `DurabilityPolicy`      | Interface: `IsDurable`, `IsAchievable`, `RevokesAndSamplesAllRevocationSets`.                                                       |
+| `AtLeastPolicy`         | `DurabilityPolicy` implementation: write is durable when at least N cohort members have ACK'd.                                      |
+| `PoolerPersistentState` | Durable pooler state: `{Role, Primary, Term *Term, Commitment *RecruitmentCommitment}`. Saved before any ack.                       |
+| `PoolerStorage`         | Durable storage interface. Simulation uses `MemStorage`; production uses atomic write-rename + fsync.                               |
+| `PoolerNode`            | Pooler state machine. Handles WAL-driven policy updates and coordinator-led term changes.                                           |
+| `CoordNode`             | Coordinator state machine. Drives WAL writes for normal changes; runs coordinator-led term changes when the primary is unreachable. |
 
 ## Running the simulation tests
 
@@ -314,10 +314,10 @@ the coordinator establishes it as primary in a 1-node cohort with `AtLeast(1)`. 
 for bootstrap — a single node always forms a valid quorum with `AtLeast(1)`. Subsequent cohort
 expansion uses Stage 1.
 
-### Stage 3 — Emergency failover
+### Stage 3 — Coordinator-led term change
 
 When the primary is unreachable, the coordinator runs the recruitment + two-quorum protocol
-described in the [Emergency path](#emergency-path--coordinator-led-rule-change) section above.
+described in the [Coordinator-led term change](#coordinator-led-term-change) section above.
 If a partial leader-led change is discovered in WAL, the coordinator propagates it to quorum
 (which may include cohort or policy changes). If no partial change exists, the coordinator
 initiates a fresh rule change updating only `Primary`.
@@ -326,7 +326,7 @@ A coordinator-initiated leader change requires that the newly-established quorum
 write a new Term entry before the failover is considered complete, since the coordinator
 cannot append to postgres WAL while postgres is stopped.
 
-**Shadow WAL:** Because postgres is stopped during emergency failover, the coordinator cannot
+**Shadow WAL:** Because postgres is stopped during coordinator-led term change, the coordinator cannot
 append to the real WAL. Instead, term transition commitments are recorded in a per-node
 _commitment file_ — essentially a shadow WAL narrow enough to fsync safely without a running
 postgres. The commitment file is written before the node acks the recruiter, so the coordinator
@@ -343,7 +343,7 @@ records the highest target this node has already committed to. This field is alr
 
 ### Stage 3.5 — Coordinator cluster state tracking
 
-For the coordinator to act quickly during emergency failover it needs a continuously maintained
+For the coordinator to act quickly during coordinator-led term change it needs a continuously maintained
 view of the cluster: which poolers exist, which are healthy, what rule version each is on, and
 which is currently primary.
 
@@ -367,7 +367,7 @@ the existing cohort without propagating any partial write.
 (postgres running, and not stale under the configured health timeout). The "best-known" primary
 is `HighestQuorumTerm.Primary` when a quorum-confirmed version exists, falling back to
 `HighestSeenTerm.Primary` otherwise. A coordinator uses this to decide whether to enter the
-emergency path: normal writes proceed when `PrimaryHealthy` is true; emergency failover begins
+emergency path: normal writes proceed when `PrimaryHealthy` is true; coordinator-led term change begins
 when it is false.
 
 **Health timeout**: the coordinator can be configured with a `healthTimeoutTicks` value. If a
@@ -378,7 +378,7 @@ suitable for simulation tests where poolers only broadcast on state change.
 ### Stage 4 — Graceful primary replacement
 
 Planned maintenance: the stepping-down primary writes a `Term` updating `Primary`
-before shutdown, eliminating the need for emergency failover and reducing the switchover window
+before shutdown, eliminating the need for coordinator-led term change and reducing the switchover window
 to near zero.
 
 ### Stage 5 — Additional durability policies
@@ -396,7 +396,7 @@ per-tick assertions: appointment latency, term escalation rate, failover counts.
 ### Naming: leader-driven vs coordinator-driven request types
 
 The normal-path request types (`WritePolicyRequest`, `WritePolicyResponseIndicator`, etc.) do
-not have a distinguishing prefix, while the emergency-path types (`RecruitRequest`,
+not have a distinguishing prefix, while the coordinator-led-path types (`RecruitRequest`,
 `WriteShadowWALRequest`, etc.) do. Consider adding a "leader" or "primary" prefix to the
 normal-path types so the origin of each message is self-evident at the call site
 (e.g. `LeaderWritePolicyRequest`).
@@ -407,10 +407,10 @@ Several operations can be abandoned mid-flight, each requiring different cleanup
 
 - **Timed-out leader-driven write**: if a `WritePolicyRequest` is abandoned due to timeout,
   the coordinator should consider whether the primary is in fact unreachable and retry via the
-  coordinator-led emergency path rather than waiting indefinitely for a status update.
+  coordinator-led path rather than waiting indefinitely for a status update.
 
-- **Coordinator-led failover abandoned early**: if the coordinator decides to stop before
-  completing the shadow WAL phase (e.g. it discovers the primary is healthy again), it should
+- **Coordinator-led change abandoned early**: if the coordinator decides to stop before
+  completing the propose phase (e.g. it discovers the primary is healthy again), it should
   release recruited nodes by sending a "release" message so they can resume normal quorum
   participation. Without a release, recruited nodes stay withdrawn from write quorum until they
   are recruited again or restart.
@@ -420,3 +420,40 @@ Several operations can be abandoned mid-flight, each requiring different cleanup
   lost), it cannot simply resume streaming. The coordinator should direct it to either
   `pg_rewind` back to the current primary's timeline or reconnect to a known-good base. This
   requires a new indicator type and pooler handling ("rejoin primary" / "rewind to primary").
+
+### Resume message for stuck nodes
+
+A node may be stuck and unable to make progress without the coordinator telling it the current
+quorum term. At least three cases need a "resume" message:
+
+1. **Recruited but no propose received**: the node completed revocation and is waiting in stopped
+   state, but the propose phase message never arrived (coordinator crashed or message dropped).
+2. **Recruited but no new propose needed**: during the propagate phase the coordinator discovers
+   that a previously-started proposal already satisfies the quorum. No fresh propose is required;
+   the node just needs to be told the current term so it can apply and resume replication.
+3. **Never recruited, lost primary connection**: a node that was not reachable during revocation
+   (and so was never recruited) may have lost its connection to the primary in the meantime. It
+   is neither receiving WAL nor term updates and needs to be pointed at the current primary.
+
+The resume message should carry the current quorum term so the node can validate and update
+`primary_conninfo` if necessary.
+
+### Pruning stale commitment observations
+
+`CoordNode.highestKnownCommitments` accumulates entries for each `atTermSeq` seen. Entries whose
+`atTermSeq` is strictly below the highest quorum-confirmed term can never be acted upon and should
+be pruned to bound memory growth.
+
+### In-flight postgres state changes
+
+`PoolerNode` currently has no mechanism to prevent multiple concurrent requests that change
+postgres state (e.g. `PolicyRecordApplyRequest`, `ApplyWALTermRequest`,
+`RevokeParticipationRequest`). Serialising these at the `PoolerNode` level — tracking a single
+in-flight state-change request — would be cleaner than relying on the sidecar (`SimPooler`) to
+enforce exclusion implicitly.
+
+### LSN visibility in simulation traces
+
+When `DSTSIM_TRACE=1` is set, node state dumps do not include the current WAL LSN. Adding the
+LSN (and received LSN for replicas) to the trace output would make it easier to diagnose
+replication lag and coordinator-led term change correctness in failing tests.

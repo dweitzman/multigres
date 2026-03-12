@@ -77,7 +77,7 @@ func TestCoordClusterViewQuorumConfirmed(t *testing.T) {
 		node2 consensus.NodeID = "node-2"
 		node3 consensus.NodeID = "node-3"
 	)
-	coord := consensus.NewCoordNode("coord-1", consensus.AtLeastPolicy(3))
+	coord := consensus.NewCoordNode("coord-1", consensus.AtLeastPolicy(3), nil)
 
 	rules := makeTerm(3, node1, []consensus.NodeID{node1, node2, node3}, 3)
 
@@ -102,7 +102,7 @@ func TestCoordClusterViewQuorumConfirmed(t *testing.T) {
 // the primary has applied Seq=4 but only one replica confirms it, so quorum for
 // Seq=4 is not met under AtLeast(3). The prior Seq=3 version does have quorum.
 //
-// This is the key signal for emergency failover: HighestSeenTerm.Seq >
+// This is the key signal for a coordinator-led term change: HighestSeenTerm.Seq >
 // HighestQuorumTerm.Seq means a term change was started but not completed.
 func TestCoordClusterViewPartialChange(t *testing.T) {
 	const (
@@ -110,7 +110,7 @@ func TestCoordClusterViewPartialChange(t *testing.T) {
 		node2 consensus.NodeID = "node-2"
 		node3 consensus.NodeID = "node-3"
 	)
-	coord := consensus.NewCoordNode("coord-1", consensus.AtLeastPolicy(3))
+	coord := consensus.NewCoordNode("coord-1", consensus.AtLeastPolicy(3), nil)
 
 	rules3 := makeTerm(3, node1, []consensus.NodeID{node1, node2, node3}, 3)
 	rules4 := makeTerm(4, node1, []consensus.NodeID{node1, node2, node3}, 3)
@@ -138,7 +138,7 @@ func TestCoordClusterViewPartialChange(t *testing.T) {
 // AtLeast(1) always has quorum confirmed (the primary alone is sufficient).
 func TestCoordClusterViewSingleNodeAtLeast1(t *testing.T) {
 	const node1 consensus.NodeID = "node-1"
-	coord := consensus.NewCoordNode("coord-1", nil) // manual mode: no auto-expansion
+	coord := consensus.NewCoordNode("coord-1", nil, nil) // manual mode: no auto-expansion
 
 	rules := makeTerm(1, node1, []consensus.NodeID{node1}, 1)
 
@@ -159,7 +159,7 @@ func TestCoordClusterViewSingleNodeAtLeast1(t *testing.T) {
 // TestCoordClusterViewNoTerm verifies the coordinator's view when no pooler
 // has reported any term yet.
 func TestCoordClusterViewNoTerm(t *testing.T) {
-	coord := consensus.NewCoordNode("coord-1", consensus.AtLeastPolicy(3))
+	coord := consensus.NewCoordNode("coord-1", consensus.AtLeastPolicy(3), nil)
 
 	coord.Step(1, []consensus.Indicator{
 		consensus.PoolerDiscoveredIndicator{PoolerID: "node-1"},
@@ -179,14 +179,14 @@ func TestCoordClusterViewNoTerm(t *testing.T) {
 
 // TestCoordClusterViewPrimaryUnhealthy verifies that a stopped primary appears
 // in the ClusterView but the coordinator does not consider it a healthy primary.
-// Health tracking feeds into the emergency-failover decision.
+// Health tracking feeds into the coordinator-led term change decision.
 func TestCoordClusterViewPrimaryUnhealthy(t *testing.T) {
 	const (
 		node1 consensus.NodeID = "node-1"
 		node2 consensus.NodeID = "node-2"
 		node3 consensus.NodeID = "node-3"
 	)
-	coord := consensus.NewCoordNode("coord-1", consensus.AtLeastPolicy(3))
+	coord := consensus.NewCoordNode("coord-1", consensus.AtLeastPolicy(3), nil)
 
 	rules := makeTerm(3, node1, []consensus.NodeID{node1, node2, node3}, 3)
 
@@ -217,7 +217,7 @@ func TestCoordClusterViewHealthTimeout(t *testing.T) {
 		node2 consensus.NodeID = "node-2"
 		node3 consensus.NodeID = "node-3"
 	)
-	coord := consensus.NewCoordNode("coord-1", consensus.AtLeastPolicy(3))
+	coord := consensus.NewCoordNode("coord-1", consensus.AtLeastPolicy(3), nil)
 	coord.SetHealthTimeout(5) // mark primary stale after 5 ticks without status
 
 	rules := makeTerm(3, node1, []consensus.NodeID{node1, node2, node3}, 3)

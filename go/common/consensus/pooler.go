@@ -66,6 +66,13 @@ type PoolerNode struct {
 	pendingApply         *Term
 	pendingCorrelationID string // correlation ID from the WritePolicyIndicator
 
+	// TODO: track all in-flight requests that ask the sidecar (postgres driver)
+	// to change postgres state (e.g. PolicyRecordApplyRequest, ApplyWALTermRequest,
+	// RevokeParticipationRequest). Only one such request should be in flight at a
+	// time to avoid conflicting concurrent state changes. Currently the SimPooler
+	// handles some of this via the applyWALQueue and the sidecar-mutex approach in
+	// Step(), but the serialization should ideally be enforced at the PoolerNode level.
+
 	// pendingRecruitCorrelationID is set when a RecruitIndicator has been accepted
 	// and a RevokeParticipationRequest has been sent to the sidecar but the response
 	// has not yet been received. Cleared once the sidecar responds.
@@ -112,6 +119,13 @@ func (n *PoolerNode) SetHeartbeatInterval(ticks int64) {
 // CommittedState returns the current committed state.
 func (n *PoolerNode) CommittedState() PoolerPersistentState {
 	return n.committed
+}
+
+// Storage returns the durable storage backend. The local sidecar may call
+// Storage().Save() before delivering a PropagatePositionIndicator so that
+// PoolerNode.handlePropagatePosition can reload the updated state.
+func (n *PoolerNode) Storage() PoolerStorage {
+	return n.storage
 }
 
 // PostgresStatus returns the current postgres operational status.
@@ -166,6 +180,10 @@ func (n *PoolerNode) Step(tick int64, indicators []Indicator) []Request {
 			reqs, c := n.handleWriteShadowWAL(v)
 			requests = append(requests, reqs...)
 			changed = changed || c
+		case PropagatePositionIndicator:
+			reqs, c := n.handlePropagatePosition(v)
+			requests = append(requests, reqs...)
+			changed = changed || c
 		case TerminateIndicator:
 			if n.pgStatus != PostgresStopped {
 				n.pgStatus = PostgresStopped
@@ -198,8 +216,8 @@ func (n *PoolerNode) handleWritePolicy(ind WritePolicyIndicator) ([]Request, boo
 	}
 
 	if n.committed.Role != RolePrimary {
-		// Emergency failover: a recruited node may accept a write that falls
-		// within its committed authority range.
+		// Coordinator-led term change: a recruited node may accept a write that
+		// falls within its committed authority range.
 		if n.committed.Commitment == nil || !n.committed.Commitment.AllowsTermChange(ind.Term.Seq) {
 			return reject()
 		}
@@ -275,12 +293,39 @@ func (n *PoolerNode) handleApplyResponse(ind ApplyRulesResponseIndicator) ([]Req
 	if newState.Commitment != nil && ind.Term.Seq >= newState.Commitment.ProposedSeq {
 		newState.Commitment = nil
 	}
+	// Clear shadow WAL entries whose term has now been committed to real WAL.
+	// A primary clears entries up to its new term seq when promoted; a replica
+	// clears them when it reconnects at a term that supersedes the shadow entry.
+	var remainingShadow []*Term
+	for _, t := range newState.ShadowWAL {
+		if t.Seq > ind.Term.Seq {
+			remainingShadow = append(remainingShadow, t)
+		}
+	}
+	newState.ShadowWAL = remainingShadow
 	if err := n.storage.Save(newState); err != nil {
 		return nil, false
 	}
 	n.committed = newState
 
 	return extraReqs, true
+}
+
+// currentCommitment returns the node's commitment if it is still relevant
+// (AtTermSeq has not been superseded by an already-applied real-WAL term),
+// or nil otherwise. Included in recruit responses so coordinators can detect
+// competing commitments without waiting for a separate status broadcast.
+func (n *PoolerNode) currentCommitment() *RecruitmentCommitment {
+	c := n.committed.Commitment
+	if c == nil {
+		return nil
+	}
+	// A commitment whose AtTermSeq is below the currently committed policy seq
+	// is stale: the real WAL has advanced past the term the commitment covers.
+	if c.AtTermSeq < n.committed.PolicySeq() {
+		return nil
+	}
+	return c
 }
 
 // handleRecruit processes a RecruitIndicator from a coordinator.
@@ -299,10 +344,14 @@ func (n *PoolerNode) handleApplyResponse(ind ApplyRulesResponseIndicator) ([]Req
 // storage, and a RevokeParticipationRequest is sent to the sidecar.
 func (n *PoolerNode) handleRecruit(ind RecruitIndicator) ([]Request, bool) {
 	reject := func() ([]Request, bool) {
+		// TODO: consider returning more information here — the pooler's current
+		// committed term and its LSN — so the
+		// coordinator can learn about the cluster state from rejection responses
+		// and make better decisions without a separate status round-trip.
 		return []Request{RecruitResponseRequest{
 			RequestCorrelation: RequestCorrelation{CorrelationID: ind.CorrelationID},
 			Accepted:           false,
-			Term:               n.committed.CachedTerm,
+			Commitment:         n.currentCommitment(),
 		}}, false
 	}
 
@@ -326,10 +375,14 @@ func (n *PoolerNode) handleRecruit(ind RecruitIndicator) ([]Request, bool) {
 		// No existing commitment: accept.
 	case *existing == proposed:
 		// Same coordinator, same parameters: idempotent fast path.
+		// Return position with best-effort Term (includes any shadow WAL term);
+		// LSN is unknown here since we skipped the sidecar round-trip, so it
+		// is reported as zero and won't influence BaseLSN selection.
 		return []Request{RecruitResponseRequest{
 			RequestCorrelation: RequestCorrelation{CorrelationID: ind.CorrelationID},
 			Accepted:           true,
-			Term:               n.committed.CachedTerm,
+			Position:           NodePosition{Term: n.highestAcceptedTerm()},
+			Commitment:         n.currentCommitment(),
 		}}, false
 	case existing.IsRevokedBy(proposed):
 		// Proposal has higher authority (lexicographic on AtTermSeq, ProposedSeq): supersede.
@@ -365,6 +418,27 @@ func (n *PoolerNode) handleWriteShadowWAL(ind WriteShadowWALIndicator) ([]Reques
 		return nil, false
 	}
 
+	// Deduplicate by Seq: if the shadow WAL already holds an entry at this Seq,
+	// re-ack idempotently without persisting a conflicting candidate. This
+	// assumes each coordinator issues at most one shadow WAL write per term
+	// sequence (the current protocol invariant). If a future protocol revision
+	// needs multiple writes at the same Seq, this guard must be revisited.
+	for _, existing := range n.committed.ShadowWAL {
+		if existing.Seq == ind.Term.Seq {
+			var reqs []Request
+			if ind.CorrelationID != "" {
+				reqs = append(reqs, WriteShadowWALAckedRequest{
+					RequestCorrelation: RequestCorrelation{CorrelationID: ind.CorrelationID},
+					Accepted:           true,
+				})
+			}
+			if ind.ApplyNow {
+				reqs = append(reqs, ApplyWALTermRequest{Term: *existing})
+			}
+			return reqs, false
+		}
+	}
+
 	// Persist to shadow WAL before responding to the coordinator.
 	newState := n.committed
 	term := ind.Term
@@ -389,6 +463,59 @@ func (n *PoolerNode) handleWriteShadowWAL(ind WriteShadowWALIndicator) ([]Reques
 	return reqs, true
 }
 
+// highestAcceptedTerm returns the most recently accepted term: the highest-Seq
+// shadow WAL entry if one exists (a coordinator wrote it but it has not yet
+// been replicated to real WAL), otherwise the committed real-WAL term.
+func (n *PoolerNode) highestAcceptedTerm() *Term {
+	var best *Term
+	for _, t := range n.committed.ShadowWAL {
+		if best == nil || t.Seq > best.Seq {
+			best = t
+		}
+	}
+	if best != nil {
+		return best
+	}
+	return n.committed.CachedTerm
+}
+
+// handlePropagatePosition processes a PropagatePositionIndicator after the
+// sidecar has already completed the history copy and written the new state to
+// storage. This method reloads committed state from storage to reflect the
+// sidecar's write, verifies the loaded position matches the requested
+// TargetPosition, then acks the coordinator.
+func (n *PoolerNode) handlePropagatePosition(ind PropagatePositionIndicator) ([]Request, bool) {
+	reject := func() ([]Request, bool) {
+		return []Request{PropagatePositionAckedRequest{
+			RequestCorrelation: RequestCorrelation{CorrelationID: ind.CorrelationID},
+			Accepted:           false,
+		}}, false
+	}
+
+	if n.committed.Commitment == nil {
+		return reject()
+	}
+	state, err := n.storage.Load()
+	if err != nil {
+		return nil, false
+	}
+	n.committed = state
+
+	// Verify the sidecar wrote the expected history: the highest accepted term
+	// should match the requested TargetPosition.Term.
+	if ind.TargetPosition.Term != nil {
+		loaded := n.highestAcceptedTerm()
+		if loaded == nil || loaded.Seq != ind.TargetPosition.Term.Seq {
+			return reject()
+		}
+	}
+
+	return []Request{PropagatePositionAckedRequest{
+		RequestCorrelation: RequestCorrelation{CorrelationID: ind.CorrelationID},
+		Accepted:           true,
+	}}, true
+}
+
 // handleRevokeParticipationResponse processes the sidecar's result for stopping
 // this node from participating in write quorum. Forwards the outcome to the
 // coordinator as a RecruitResponseRequest.
@@ -400,10 +527,17 @@ func (n *PoolerNode) handleRevokeParticipationResponse(ind RevokeParticipationRe
 	req := RecruitResponseRequest{
 		RequestCorrelation: RequestCorrelation{CorrelationID: ind.CorrelationID},
 		Accepted:           ind.Accepted,
-		Term:               n.committed.CachedTerm,
+		Commitment:         n.currentCommitment(),
 	}
 	if ind.Accepted {
-		req.LSN = ind.LSN
+		// Report the highest-Seq accepted term (shadow WAL if present, real WAL
+		// otherwise) and the real WAL position. The coordinator uses Term.Seq to
+		// detect work from a previous coordinator (Seq == proposedSeq) and LSN
+		// to compute the BaseLSN for shadow WAL writes.
+		req.Position = NodePosition{
+			Term: n.highestAcceptedTerm(),
+			LSN:  ind.LSN,
+		}
 	}
 	return []Request{req}
 }

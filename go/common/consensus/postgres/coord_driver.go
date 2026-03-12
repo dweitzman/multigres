@@ -32,8 +32,8 @@ import (
 //     accept/reject. On accept it also calls PushRules on all known replicas so
 //     they learn about the change without polling.
 //
-//   - Recruit (unary): recruits a node into a coordinator-led rule-change range
-//     (emergency failover path, Stage 3).
+//   - Recruit (unary): recruits a node into a coordinator-led term change
+//     (Stage 3).
 //
 //   - WatchStatus (server-streaming): subscribes to a pooler's status stream.
 //     Each received snapshot becomes a PoolerStatusIndicator for the CoordNode.
