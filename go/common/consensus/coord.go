@@ -681,7 +681,7 @@ func (c *CoordNode) advanceCoordLedChange(tick int64, status ShardStatus) []Requ
 }
 
 // advanceRecruitingPhase sends RecruitRequests to unsent cohort members and
-// transitions to the propose phase once RevokesAndSamplesAllRevocationSets is
+// transitions to the propagate phase once RevokesAndSamplesAllRevocationSets is
 // satisfied.
 func (c *CoordNode) advanceRecruitingPhase(pr *pendingRecruitment, tick int64) []Request {
 	var reqs []Request
@@ -747,19 +747,25 @@ func (c *CoordNode) advanceRecruitingPhase(pr *pendingRecruitment, tick int64) [
 		Policy:  baseTerm.Policy,
 	}
 
-	pr.phase = recruitPhasePropose
+	pr.phase = recruitPhasePropagate
 	pr.bestCandidate = candidate
 	pr.newTerm = &newTerm
-	pr.proposeSent = make(map[NodeID]bool)
-	pr.proposeAcks = make(map[NodeID]bool)
+	pr.propagateSent = make(map[NodeID]bool)
+	pr.propagateAcks = make(map[NodeID]bool)
 	pr.phaseSince = tick
 
-	reqs = append(reqs, c.sendProposeRequests(pr)...)
+	reqs = append(reqs, c.advancePropagatePhase(pr, tick)...)
 	return reqs
 }
 
-// advancePropagatePhase sends PropagatePositionRequests to bring all recruited
-// nodes to the best candidate's WAL position, then transitions to propose.
+// advancePropagatePhase sends PropagatePositionRequests to bring recruited
+// nodes to the best candidate's WAL position, then transitions to propose once
+// enough nodes have propagated to satisfy the propose quorum.
+//
+// Nodes already at or beyond the target position are auto-acked without a
+// network round-trip. PropagatePositionRequests are sent eagerly to all lagging
+// nodes. The phase advances to propose as soon as canAdvanceToPropose is true —
+// without waiting for every node to propagate.
 func (c *CoordNode) advancePropagatePhase(pr *pendingRecruitment, tick int64) []Request {
 	// Retry if timed out: clear sent flags for unacked nodes so they are re-sent.
 	if tick-pr.phaseSince >= PhaseRetryTicks {
@@ -774,8 +780,9 @@ func (c *CoordNode) advancePropagatePhase(pr *pendingRecruitment, tick int64) []
 	bestPos := pr.recruitResponses[pr.bestCandidate].position
 	var reqs []Request
 	for _, nodeID := range sortedmaps.Keys(pr.recruitResponses) {
-		if nodeID == pr.bestCandidate {
-			// Best candidate already has the target position.
+		// Auto-ack nodes already at or beyond the target position (including the
+		// best candidate itself, and any ties).
+		if pr.recruitResponses[nodeID].position.LSN >= bestPos.LSN {
 			pr.propagateAcks[nodeID] = true
 			continue
 		}
@@ -790,20 +797,102 @@ func (c *CoordNode) advancePropagatePhase(pr *pendingRecruitment, tick int64) []
 		}
 	}
 
-	// Check whether all recruited nodes have acked.
-	for _, nodeID := range sortedmaps.Keys(pr.recruitResponses) {
-		if !pr.propagateAcks[nodeID] {
-			return reqs
-		}
+	// Advance to propose once enough nodes have propagated to satisfy the
+	// propose quorum (both the best candidate's existing term policy and the
+	// newly-proposed term policy must be satisfied).
+	if !c.canAdvanceToPropose(pr) {
+		return reqs
 	}
 
-	// All propagated — transition to propose phase.
 	pr.phase = recruitPhasePropose
 	pr.proposeSent = make(map[NodeID]bool)
 	pr.proposeAcks = make(map[NodeID]bool)
 	pr.phaseSince = tick
-	reqs = append(reqs, c.sendProposeRequests(pr)...)
+	reqs = append(reqs, c.advanceProposePhase(pr, tick)...)
 	return reqs
+}
+
+// canAdvanceToPropose returns true when the propagated nodes satisfy the
+// propose quorum.
+func (c *CoordNode) canAdvanceToPropose(pr *pendingRecruitment) bool {
+	return c.hasBothPolicyQuorum(pr, pr.propagateAcks)
+}
+
+// hasBothPolicyQuorum returns true when the given acking set satisfies both
+// the best candidate's existing term policy and the newly-proposed term policy.
+// Used by both the propagate phase (to decide when to advance to propose) and
+// the propose phase (to decide when the propose is durably complete).
+//
+// Using BothPolicy ensures correctness even when the two policies differ.
+func (c *CoordNode) hasBothPolicyQuorum(pr *pendingRecruitment, acks map[NodeID]bool) bool {
+	// Build a lookup for cohort CohortMembers.
+	memberByID := make(map[NodeID]CohortMember, len(pr.cohort))
+	for _, m := range pr.cohort {
+		memberByID[m.ID] = m
+	}
+
+	var ackingMembers []CohortMember
+	for _, nodeID := range sortedmaps.Keys(acks) {
+		if m, ok := memberByID[nodeID]; ok {
+			ackingMembers = append(ackingMembers, m)
+		}
+	}
+
+	bestMember, ok := memberByID[pr.bestCandidate]
+	if !ok {
+		return false
+	}
+
+	// Use the best candidate's existing term as the old policy baseline.
+	// This reflects the quorum requirements that were in effect on the candidate
+	// before the failover. Fall back to baseTerm if no existing term is known.
+	var oldPolicy DurabilityPolicy
+	var oldMembers []CohortMember
+	candidateTerm := pr.recruitResponses[pr.bestCandidate].position.Term
+	if candidateTerm != nil {
+		oldPolicy = candidateTerm.Policy
+		oldMembers = candidateTerm.Members
+	}
+	if oldPolicy == nil {
+		oldPolicy = pr.baseTerm.Policy
+		oldMembers = pr.baseTerm.Members
+	}
+
+	newPolicy := pr.newTerm.Policy
+	newMembers := pr.newTerm.Members
+
+	// nil policy = no acks required; satisfied as soon as any node has acked.
+	if oldPolicy == nil && newPolicy == nil {
+		return len(ackingMembers) > 0
+	}
+	if oldPolicy == nil {
+		return newPolicy.IsDurable(newMembers, memberIntersect(ackingMembers, newMembers))
+	}
+	if newPolicy == nil {
+		return oldPolicy.IsDurable(oldMembers, memberIntersect(ackingMembers, oldMembers))
+	}
+
+	var oldStandbys []CohortMember
+	for _, m := range oldMembers {
+		if m.ID != pr.bestCandidate {
+			oldStandbys = append(oldStandbys, m)
+		}
+	}
+	var newStandbys []CohortMember
+	for _, m := range newMembers {
+		if m.ID != pr.bestCandidate {
+			newStandbys = append(newStandbys, m)
+		}
+	}
+
+	bp := &BothPolicy{
+		Primary:     bestMember,
+		OldPolicy:   oldPolicy,
+		OldStandbys: oldStandbys,
+		NewPolicy:   newPolicy,
+		NewStandbys: newStandbys,
+	}
+	return bp.IsDurable(nil, ackingMembers)
 }
 
 // advanceProposePhase sends ProposeRequests (ApplyNow=true) to all
@@ -823,25 +912,24 @@ func (c *CoordNode) advanceProposePhase(pr *pendingRecruitment, tick int64) []Re
 
 	reqs := c.sendProposeRequests(pr)
 
-	// Check whether all nodes we sent to have acked.
-	if len(pr.proposeSent) == 0 {
+	// Advance once the propose acks satisfy the BothPolicy quorum: both the
+	// best candidate's existing term policy and the newly-proposed term policy.
+	// This mirrors the propagate-phase quorum check and ensures the new term
+	// is durable even when the two policies differ.
+	if !c.hasBothPolicyQuorum(pr, pr.proposeAcks) {
 		return reqs
 	}
-	for _, nodeID := range sortedmaps.Keys(pr.proposeSent) {
-		if !pr.proposeAcks[nodeID] {
-			return reqs // still waiting
-		}
-	}
 
-	// All acks received: update our cached view and consider the term established.
-	// Update ALL recruited nodes so that isDurable() immediately confirms quorum
-	// at the new term seq, preventing the coordinator from treating the just-completed
-	// failover as an incomplete one and kicking off a spurious follow-on recruitment.
-	// Clear Commitment because the propose phase fulfilled it: the nodes will clear
-	// their own commitments in handleApplyResponse, and the coordinator's view
-	// must reflect that to avoid spurious resume traffic.
+	// Quorum reached: update the cached view for nodes that acked the propose.
+	// The BothPolicy quorum check guarantees isTermDurable() is satisfied by
+	// this set, so the coordinator will not spuriously kick off a follow-on
+	// recruitment.
+	// Non-participants (nodes that did not propagate or ack) will catch up via
+	// Resume. Clear Commitment because the propose phase fulfilled it: the nodes
+	// will clear their own commitments in handleApplyResponse, and the
+	// coordinator's view must reflect that to avoid spurious resume traffic.
 	newTerm := *pr.newTerm
-	for _, nodeID := range sortedmaps.Keys(pr.recruitResponses) {
+	for _, nodeID := range sortedmaps.Keys(pr.proposeAcks) {
 		if p, ok := c.known[nodeID]; ok {
 			p.state.CachedTerm = &newTerm
 			p.state.Commitment = nil
@@ -856,8 +944,9 @@ func (c *CoordNode) advanceProposePhase(pr *pendingRecruitment, tick int64) []Re
 	return reqs
 }
 
-// sendProposeRequests emits ProposeRequests (ApplyNow=true) to any
-// recruited node that has not yet been sent one.
+// sendProposeRequests emits ProposeRequests (ApplyNow=true) to propagated nodes
+// that have not yet been sent one. Only nodes in propagateAcks are eligible:
+// non-propagated nodes are too far behind and will catch up via Resume.
 func (c *CoordNode) sendProposeRequests(pr *pendingRecruitment) []Request {
 	if pr.newTerm == nil {
 		return nil
@@ -870,7 +959,7 @@ func (c *CoordNode) sendProposeRequests(pr *pendingRecruitment) []Request {
 		}
 	}
 	var reqs []Request
-	for _, nodeID := range sortedmaps.Keys(pr.recruitResponses) {
+	for _, nodeID := range sortedmaps.Keys(pr.propagateAcks) {
 		if !pr.proposeSent[nodeID] {
 			pr.proposeSent[nodeID] = true
 			reqs = append(reqs, ProposeRequest{

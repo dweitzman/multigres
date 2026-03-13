@@ -150,3 +150,64 @@ func (p *atLeastPolicy) RevokesAndSamplesAllRevocationSets(cohortMembers, recrui
 func (p *atLeastPolicy) AtLeastThreshold() int {
 	return p.n
 }
+
+// BothPolicy is a conjunctive DurabilityPolicy used during cohort transitions.
+// A write is considered durable only when OldPolicy is satisfied among the old
+// cohort AND NewPolicy is satisfied among the new cohort. Each policy is
+// evaluated against its own cohort scope independently via memberIntersect.
+//
+// BothPolicy is used by the leader and coordinator paths when transitioning
+// between terms: both the outgoing and incoming quorum requirements must be
+// met simultaneously so that no previously-durable write under the old policy
+// can be lost, and the new term is durable under the incoming policy.
+type BothPolicy struct {
+	Primary     CohortMember
+	OldPolicy   DurabilityPolicy
+	OldStandbys []CohortMember
+	NewPolicy   DurabilityPolicy
+	NewStandbys []CohortMember
+}
+
+func (b *BothPolicy) IsDurable(_ []CohortMember, ackingMembers []CohortMember) bool {
+	oldCohort := append([]CohortMember{b.Primary}, b.OldStandbys...)
+	newCohort := append([]CohortMember{b.Primary}, b.NewStandbys...)
+	return b.OldPolicy.IsDurable(oldCohort, memberIntersect(ackingMembers, oldCohort)) &&
+		b.NewPolicy.IsDurable(newCohort, memberIntersect(ackingMembers, newCohort))
+}
+
+func (b *BothPolicy) IsAchievable(members []CohortMember) bool {
+	oldCohort := append([]CohortMember{b.Primary}, b.OldStandbys...)
+	newCohort := append([]CohortMember{b.Primary}, b.NewStandbys...)
+	return b.OldPolicy.IsAchievable(memberIntersect(members, oldCohort)) &&
+		b.NewPolicy.IsAchievable(memberIntersect(members, newCohort))
+}
+
+// RevokesAndSamplesAllRevocationSets checks each sub-policy against its own
+// cohort scope. Both must be independently satisfied because a BothPolicy write
+// requires both sub-quorums; a coordinator must cover enough members in each
+// cohort to be certain no durable write slipped through on either side of the
+// transition.
+func (b *BothPolicy) RevokesAndSamplesAllRevocationSets(cohortMembers, recruitedMembers []CohortMember, primary CohortMember) bool {
+	oldCohort := append([]CohortMember{b.Primary}, b.OldStandbys...)
+	newCohort := append([]CohortMember{b.Primary}, b.NewStandbys...)
+	return b.OldPolicy.RevokesAndSamplesAllRevocationSets(oldCohort, memberIntersect(recruitedMembers, oldCohort), primary) &&
+		b.NewPolicy.RevokesAndSamplesAllRevocationSets(newCohort, memberIntersect(recruitedMembers, newCohort), primary)
+}
+
+// memberIntersect returns the members from members whose ID appears in scope.
+func memberIntersect(members, scope []CohortMember) []CohortMember {
+	if len(scope) == 0 {
+		return nil
+	}
+	scopeIDs := make(map[NodeID]bool, len(scope))
+	for _, m := range scope {
+		scopeIDs[m.ID] = true
+	}
+	var result []CohortMember
+	for _, m := range members {
+		if scopeIDs[m.ID] {
+			result = append(result, m)
+		}
+	}
+	return result
+}

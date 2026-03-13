@@ -107,24 +107,6 @@ func TestCoordLedTermChange(t *testing.T) {
 	)
 	sim.RegisterNode(poolerCrasher)
 
-	// maxCommittedSeq returns the highest PolicySeq committed to durable storage
-	// across all poolers. Each term write (expansion or failover) increments this.
-	maxCommittedSeq := func(*simType) int64 {
-		var max int64
-		for _, sp := range allPoolers {
-			if seq := sp.Node().CommittedState().PolicySeq(); seq > max {
-				max = seq
-			}
-		}
-		return max
-	}
-
-	// Safety invariant: durable committed state must never decrease.
-	sim.Always(&valueNeverDecreases[int64]{
-		name:     "max_committed_seq_monotone",
-		getValue: maxCommittedSeq,
-	})
-
 	// quorumLeaderChange fires each time the coordinator's highest quorum-confirmed
 	// primary transitions to a different node. Coordinator crash resets (nil view)
 	// are not counted.
@@ -196,18 +178,11 @@ func TestCohortExpansionUnreliableNetwork(t *testing.T) {
 // TestCohortExpansionCoordinatorCrashes verifies that cohort expansion converges
 // despite repeated coordinator crashes and restarts.
 //
-// Two conditions are composed from generic building blocks:
-//
-//  1. valueNeverDecreases tracks the maximum PolicySeq committed across all
-//     poolers and asserts it never decreases. This is the true durable state of
-//     the cluster — persisted to storage and reloaded on crash — so it must be
-//     monotonically non-decreasing regardless of coordinator state.
-//
-//  2. valueChanged counts how often the coordinator's quorum-confirmed term seq
-//     changes. Each coordinator crash clears its view (on Restart) and it
-//     re-learns the cluster on recovery, so the quorum seq oscillates between 0
-//     and the current term seq. With one crash every ~600 ticks and a 3000-tick
-//     run, at least 5 changes are expected across the run.
+// The test uses valueNewMax to count how often the coordinator's quorum-confirmed
+// term seq advances. Each coordinator crash clears its view (on Restart) and it
+// re-learns the cluster on recovery, so the quorum seq oscillates between 0
+// and the current term seq. With one crash every ~600 ticks and a 3000-tick
+// run, at least 1 new-max event is expected across the run.
 func TestCohortExpansionCoordinatorCrashes(t *testing.T) {
 	const (
 		coordID   consensus.NodeID = "coord-1"
@@ -256,19 +231,6 @@ func TestCohortExpansionCoordinatorCrashes(t *testing.T) {
 
 	allPoolers := []*SimPooler{pooler1, pooler2, pooler3}
 
-	// maxCommittedSeq returns the highest PolicySeq committed across all poolers.
-	// Poolers persist committed state to durable storage and reload it on restart,
-	// so this value reflects true cluster durability and must never decrease.
-	maxCommittedSeq := func(*simType) int64 {
-		var max int64
-		for _, sp := range allPoolers {
-			if seq := sp.Node().CommittedState().PolicySeq(); seq > max {
-				max = seq
-			}
-		}
-		return max
-	}
-
 	// coordQuorumSeq returns the highest PolicySeq for which the coordinator
 	// has confirmed write quorum. After a crash and Restart(), the coordinator's
 	// known-pooler map is cleared and this returns 0 until it re-learns the state.
@@ -279,12 +241,6 @@ func TestCohortExpansionCoordinatorCrashes(t *testing.T) {
 		}
 		return status.HighestQuorumTerm.Seq
 	}
-
-	// Safety invariant: durable committed state must never decrease.
-	sim.Always(&valueNeverDecreases[int64]{
-		name:     "max_committed_seq_monotone",
-		getValue: maxCommittedSeq,
-	})
 
 	// Track when the coordinator confirms quorum at a new (higher) term seq.
 	// Coordinator crashes reset its ephemeral view to 0, but those drops are

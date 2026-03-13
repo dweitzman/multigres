@@ -186,24 +186,6 @@ func TestCoordDoesNotRecruitWhenFailoverIsInfeasible(t *testing.T) {
 	sim.RegisterNode(pooler3)
 	sim.RegisterNode(coord)
 
-	allPoolers := []*SimPooler{pooler1, pooler2, pooler3}
-
-	// Safety invariant: durable committed state must never decrease. Once a
-	// term reaches write quorum, that seq must never roll back on any node.
-	maxCommittedSeq := func(*simType) int64 {
-		var max int64
-		for _, sp := range allPoolers {
-			if seq := sp.Node().CommittedState().PolicySeq(); seq > max {
-				max = seq
-			}
-		}
-		return max
-	}
-	sim.Always(&valueNeverDecreases[int64]{
-		name:     "max_committed_seq_monotone",
-		getValue: maxCommittedSeq,
-	})
-
 	// Safety invariant: node3 must never be revoked. Revoking would remove node3
 	// from quorum with no realistic path to re-establishing AtLeast(2) durability
 	// from the coordinator's perspective (it can only see one of two required

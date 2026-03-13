@@ -121,46 +121,6 @@ type pendingRuleChange struct {
 	finalPolicy   consensus.DurabilityPolicy
 }
 
-// bothPolicy is a conjunctive DurabilityPolicy used during cohort transitions.
-// A write is considered durable only when the old policy is satisfied among
-// the old cohort AND the new policy is satisfied among the new cohort.
-// IsDurable filters the acking set through each policy's cohort scope
-// independently via memberIntersect.
-type bothPolicy struct {
-	primary     consensus.CohortMember
-	oldPolicy   consensus.DurabilityPolicy
-	oldStandbys []consensus.CohortMember
-	newPolicy   consensus.DurabilityPolicy
-	newStandbys []consensus.CohortMember
-}
-
-func (b *bothPolicy) IsDurable(cohortMembers, ackingMembers []consensus.CohortMember) bool {
-	// Build each sub-cohort as primary + standbys.
-	oldCohort := append([]consensus.CohortMember{b.primary}, b.oldStandbys...)
-	newCohort := append([]consensus.CohortMember{b.primary}, b.newStandbys...)
-	return b.oldPolicy.IsDurable(oldCohort, memberIntersect(ackingMembers, oldCohort)) &&
-		b.newPolicy.IsDurable(newCohort, memberIntersect(ackingMembers, newCohort))
-}
-
-func (b *bothPolicy) IsAchievable(members []consensus.CohortMember) bool {
-	oldCohort := append([]consensus.CohortMember{b.primary}, b.oldStandbys...)
-	newCohort := append([]consensus.CohortMember{b.primary}, b.newStandbys...)
-	return b.oldPolicy.IsAchievable(memberIntersect(members, oldCohort)) &&
-		b.newPolicy.IsAchievable(memberIntersect(members, newCohort))
-}
-
-// RevokesAndSamplesAllRevocationSets checks each sub-policy against its own
-// cohort scope. Both must be independently satisfied because a bothPolicy write
-// requires both sub-quorums; a coordinator must cover enough members in each
-// cohort to be certain no durable write slipped through on either side of the
-// transition.
-func (b *bothPolicy) RevokesAndSamplesAllRevocationSets(cohortMembers, recruitedMembers []consensus.CohortMember, primary consensus.CohortMember) bool {
-	oldCohort := append([]consensus.CohortMember{b.primary}, b.oldStandbys...)
-	newCohort := append([]consensus.CohortMember{b.primary}, b.newStandbys...)
-	return b.oldPolicy.RevokesAndSamplesAllRevocationSets(oldCohort, memberIntersect(recruitedMembers, oldCohort), primary) &&
-		b.newPolicy.RevokesAndSamplesAllRevocationSets(newCohort, memberIntersect(recruitedMembers, newCohort), primary)
-}
-
 // SimPooler wraps a PoolerNode and acts as the local postgres driver in
 // simulation. The simulated postgres can run in two modes (postgresMode):
 //
@@ -955,12 +915,12 @@ func (s *SimPooler) handleApply(req consensus.SidecarApplyLeaderPolicyRequest) {
 	if originalPolicy == nil {
 		combinedPolicy = finalPolicy
 	} else {
-		combinedPolicy = &bothPolicy{
-			primary:     primary,
-			oldPolicy:   originalPolicy,
-			oldStandbys: originalStandbys,
-			newPolicy:   finalPolicy,
-			newStandbys: finalStandbys,
+		combinedPolicy = &consensus.BothPolicy{
+			Primary:     primary,
+			OldPolicy:   originalPolicy,
+			OldStandbys: originalStandbys,
+			NewPolicy:   finalPolicy,
+			NewStandbys: finalStandbys,
 		}
 	}
 
@@ -1107,24 +1067,6 @@ func (s *SimPooler) receiveWAL(entries []walEntry) {
 			s.pendingWAL = append(s.pendingWAL, e)
 		}
 	}
-}
-
-// memberIntersect returns the members from members whose ID appears in scope.
-func memberIntersect(members []consensus.CohortMember, scope []consensus.CohortMember) []consensus.CohortMember {
-	if len(scope) == 0 {
-		return nil
-	}
-	scopeIDs := make(map[consensus.NodeID]bool, len(scope))
-	for _, m := range scope {
-		scopeIDs[m.ID] = true
-	}
-	var result []consensus.CohortMember
-	for _, m := range members {
-		if scopeIDs[m.ID] {
-			result = append(result, m)
-		}
-	}
-	return result
 }
 
 // unionMembers returns the union of two CohortMember slices, preserving order.
