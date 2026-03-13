@@ -284,8 +284,8 @@ Two communication boundaries exist:
 
 Coordinator requests a new `Term` write on the primary. The primary validates the CAS and responds once the WAL entry is durable.
 
-| Direction      | Request type                 | Indicator type                 | Can fail?                                                  |
-| -------------- | ---------------------------- | ------------------------------ | ---------------------------------------------------------- |
+| Direction      | Request type                       | Indicator type                       | Can fail?                                                  |
+| -------------- | ---------------------------------- | ------------------------------------ | ---------------------------------------------------------- |
 | Coord → Pooler | `LeaderWritePolicyRequest`         | `LeaderWritePolicyIndicator`         | Yes — `FromSeq` mismatch or primary has a prior commitment |
 | Pooler → Coord | `LeaderWritePolicyResponseRequest` | `LeaderWritePolicyResponseIndicator` | —                                                          |
 
@@ -314,8 +314,8 @@ In production: a gRPC call from multiorch to multipooler.
 
 After reaching revocation quorum, the coordinator asks each recruited pooler to persist the new `Term` to shadow WAL. `BaseLSN` anchors the entry to the real WAL timeline. `ApplyNow=true` collapses this and the subsequent GUC-apply step into a single round-trip.
 
-| Direction      | Request type                 | Indicator type                 | Can fail?                                              |
-| -------------- | ---------------------------- | ------------------------------ | ------------------------------------------------------ |
+| Direction      | Request type          | Indicator type          | Can fail?                                              |
+| -------------- | --------------------- | ----------------------- | ------------------------------------------------------ |
 | Coord → Pooler | `ProposeRequest`      | `ProposeIndicator`      | Yes — `receivedLSN < BaseLSN` or commitment superseded |
 | Pooler → Coord | `ProposeAckedRequest` | `ProposeAckedIndicator` | —                                                      |
 
@@ -386,10 +386,10 @@ In production: driven by an etcd watch stream in multiorch.
 
 Primary asks the sidecar to commit the new `Term` SQL transaction and update `synchronous_standby_names`. `FromSeq` guards against stale applies.
 
-| Direction        | Type                          | Can fail?                                            |
-| ---------------- | ----------------------------- | ---------------------------------------------------- |
-| Pooler → Sidecar | `SidecarApplyLeaderPolicyRequest`    | Yes — WAL already has a term at or beyond `Term.Seq` |
-| Sidecar → Pooler | `SidecarApplyResponseIndicator` | —                                                    |
+| Direction        | Type                              | Can fail?                                            |
+| ---------------- | --------------------------------- | ---------------------------------------------------- |
+| Pooler → Sidecar | `SidecarApplyLeaderPolicyRequest` | Yes — WAL already has a term at or beyond `Term.Seq` |
+| Sidecar → Pooler | `SidecarApplyResponseIndicator`   | —                                                    |
 
 `SidecarApplyResponseIndicator`: `Accepted=true` once durable under both old and new policies; `Accepted=false` if the SQL transaction failed. The same indicator type is also delivered by the WAL watcher on replicas (always `Accepted=true`).
 
@@ -401,10 +401,10 @@ In production: a goroutine that executes the SQL transaction and waits for WAL c
 
 When a `ProposeIndicator` arrives with `ApplyNow=true`, the pooler asks the sidecar to apply the `Term`'s GUC settings as though the term had arrived via the real WAL stream. Allows the coordinator to complete shadow-write + GUC-apply in a single round-trip.
 
-| Direction        | Type                          | Can fail?                        |
-| ---------------- | ----------------------------- | -------------------------------- |
-| Pooler → Sidecar | `SidecarApplyTermSettingsRequest`         | Yes — if postgres is unreachable |
-| Sidecar → Pooler | `SidecarApplyResponseIndicator` | —                                |
+| Direction        | Type                              | Can fail?                        |
+| ---------------- | --------------------------------- | -------------------------------- |
+| Pooler → Sidecar | `SidecarApplyTermSettingsRequest` | Yes — if postgres is unreachable |
+| Sidecar → Pooler | `SidecarApplyResponseIndicator`   | —                                |
 
 In production: `ALTER SYSTEM SET ...` + `pg_reload_conf()`.
 
@@ -414,10 +414,10 @@ In production: `ALTER SYSTEM SET ...` + `pg_reload_conf()`.
 
 Pooler asks the sidecar to withdraw this node from write quorum. Emitted after accepting a `RecruitIndicator`, before responding to the coordinator.
 
-| Direction        | Type                                   | Can fail?                        |
-| ---------------- | -------------------------------------- | -------------------------------- |
-| Pooler → Sidecar | `SidecarRevokeParticipationRequest`           | Yes — if postgres is unreachable |
-| Sidecar → Pooler | `SidecarRevokeResponseIndicator` | —                                |
+| Direction        | Type                                | Can fail?                        |
+| ---------------- | ----------------------------------- | -------------------------------- |
+| Pooler → Sidecar | `SidecarRevokeParticipationRequest` | Yes — if postgres is unreachable |
+| Sidecar → Pooler | `SidecarRevokeResponseIndicator`    | —                                |
 
 `SidecarRevokeResponseIndicator`: `Accepted=true` with `LSN` and `TermSeq` captured at the moment of revocation; `Accepted=false` if postgres cannot be put into the required state.
 
@@ -693,6 +693,40 @@ HighestQuorumTerm.Seq`, a partial leader-led change exists: the coordinator will
 `TestCoordDoesNotRecruitWhenFailoverIsInfeasible` exercises this path: a network partition
 isolates {node1, node2} from {node3, coord}. The coordinator can only see node3 — one node
 short of `AtLeast(2)` — and correctly refrains from recruiting.
+
+### Highest durable position and simulation safety invariants
+
+The strongest simulation safety invariant — "committed data is never rolled back as consensus
+advances" — requires a notion of the **highest durable position**: the most-advanced WAL position
+whose data has been replicated to a write quorum.
+
+**Proposed algorithm:** each node has a current `NodePosition` = `{LSN: currentWAL, Term:
+lastCommittedTerm}`. Sort all node positions by `NodePosition.After` (LSN-first). Work backwards
+from most advanced to least advanced. The first position P where enough cohort members have
+positions ≥ P to satisfy P's term's durability policy is the highest durable position.
+
+**Full correctness requires several additions:**
+
+1. **Shadow WAL entries**: if the most-advanced position is a shadow WAL entry (a rule-change
+   record written to WAL by the leader or coordinator), the position's term seq acts as a fine-
+   grained tiebreaker at equal LSNs. The invariant triple is `(LSN, termSeq)` — equivalent to
+   `NodePosition.After`.
+
+2. **BothPolicy for in-flight rule changes**: if the last-written transaction on a node is a
+   shadow WAL entry (a rule change), that entry must satisfy _both_ the previous term's policy
+   _and_ the proposed new term's policy before it is considered durable. This mirrors the
+   `BothPolicy` quorum check already used by the coordinator during the propose phase.
+
+3. **ShardStatus integration**: `CoordNode.ShardStatus` currently reports only `HighestQuorumTerm`
+   (term-level quorum) and `HighestSeenTerm`. Exposing the highest durable position (LSN + term
+   seq) would allow coordinators and monitoring tools to track the exact commit horizon, not just
+   the most recent quorum-confirmed rule change.
+
+**Current state:** `newTestSim` registers `atMostOnePrimary` and `nonRevokedSyncStandbysAreReplicas`
+as global invariants. The `nodeHasStaleTerm` and `nodeIsParticipating` condition types in
+`helpers_test.go` can be combined with `sim.Never` and `dstsim.AtLeastNTicks` to add per-test
+convergence and participation invariants. The full highest-durable-position invariant is left as
+future work pending the BothPolicy and ShardStatus additions above.
 
 ### LSN visibility in simulation traces
 
