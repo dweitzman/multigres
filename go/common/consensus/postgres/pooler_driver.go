@@ -33,7 +33,7 @@ import (
 //
 //   - WritePolicy (unary): coordinator sends a Term write to the primary.
 //     The handler converts it to a WritePolicyIndicator and waits for the
-//     WritePolicyResponseRequest that the tick loop emits in reply.
+//     LeaderWritePolicyResponseRequest that the tick loop emits in reply.
 //
 //   - Recruit (unary): coordinator recruits this node into a rule-change range.
 //     The handler converts it to a RecruitIndicator and waits for the
@@ -42,7 +42,7 @@ import (
 //   - PushRules (unary): coordinator pushes already-committed rules to this node
 //     (primary path: rules committed via WAL; replica path: coordinator notifies
 //     the replica directly rather than relying on WAL polling). The handler
-//     delivers an ApplyRulesResponseIndicator to the tick loop.
+//     delivers an SidecarApplyResponseIndicator to the tick loop.
 //     TODO: on replicas, consider also polling consensus_durability_rules to pick
 //     up rule changes even when the coordinator is temporarily unreachable.
 //
@@ -51,8 +51,8 @@ import (
 //
 // After each tick the driver also intercepts local requests from the state machine:
 //
-//   - PolicyRecordApplyRequest: drives the GUC/WAL pipeline (see applyPolicyRecord).
-//   - RevokeParticipationRequest: stops quorum participation (see revokeParticipation).
+//   - SidecarApplyLeaderPolicyRequest: drives the GUC/WAL pipeline (see applyPolicyRecord).
+//   - SidecarRevokeParticipationRequest: stops quorum participation (see revokeParticipation).
 //
 // In production a SIGTERM handler pushes TerminateIndicator onto incoming so
 // the pooler records the postgres shutdown before the process exits.
@@ -64,7 +64,7 @@ type PoolerDriver struct {
 	incoming chan consensus.Indicator
 
 	// Channels through which the tick loop delivers responses to gRPC handlers.
-	writePolicyReplies chan consensus.WritePolicyResponseRequest
+	writePolicyReplies chan consensus.LeaderWritePolicyResponseRequest
 	recruitResponses   chan consensus.RecruitResponseRequest
 	statusUpdates      chan consensus.PoolerStatusUpdateRequest
 }
@@ -82,7 +82,7 @@ func NewPoolerDriver(
 		node:               node,
 		pg:                 pg,
 		incoming:           make(chan consensus.Indicator, 64),
-		writePolicyReplies: make(chan consensus.WritePolicyResponseRequest, 1),
+		writePolicyReplies: make(chan consensus.LeaderWritePolicyResponseRequest, 1),
 		recruitResponses:   make(chan consensus.RecruitResponseRequest, 1),
 		statusUpdates:      make(chan consensus.PoolerStatusUpdateRequest, 4),
 	}
@@ -109,7 +109,7 @@ func (d *PoolerDriver) Run(ctx context.Context) error {
 
 			for _, req := range requests {
 				switch r := req.(type) {
-				case consensus.PolicyRecordApplyRequest:
+				case consensus.SidecarApplyLeaderPolicyRequest:
 					// Intercept before RequestHandler: run the GUC/WAL pipeline.
 					// Capture committed term now (in the tick loop) before handing
 					// off to the goroutine — PoolerNode must not be accessed
@@ -117,12 +117,12 @@ func (d *PoolerDriver) Run(ctx context.Context) error {
 					currentTerm := d.node.CommittedState().CachedTerm
 					go d.applyPolicyRecord(ctx, r, currentTerm)
 
-				case consensus.RevokeParticipationRequest:
+				case consensus.SidecarRevokeParticipationRequest:
 					// Intercept before RequestHandler: stop quorum participation.
 					role := d.node.CommittedState().Role
 					go d.revokeParticipation(ctx, r, role)
 
-				case consensus.WritePolicyResponseRequest:
+				case consensus.LeaderWritePolicyResponseRequest:
 					// Route to the WritePolicy gRPC handler waiting for the reply.
 					select {
 					case d.writePolicyReplies <- r:
@@ -153,8 +153,8 @@ func (d *PoolerDriver) Run(ctx context.Context) error {
 
 // ── GUC/WAL apply pipeline ────────────────────────────────────────────────────
 
-// applyPolicyRecord executes the GUC/WAL pipeline for a PolicyRecordApplyRequest.
-// Called in a goroutine; delivers ApplyRulesResponseIndicator via d.incoming.
+// applyPolicyRecord executes the GUC/WAL pipeline for a SidecarApplyLeaderPolicyRequest.
+// Called in a goroutine; delivers SidecarApplyResponseIndicator via d.incoming.
 //
 // The coordinator always separates adds and removes into distinct writes (see
 // CoordNode.advance). We enforce this invariant and use it to determine the
@@ -169,12 +169,12 @@ func (d *PoolerDriver) Run(ctx context.Context) error {
 //   - Adding members: INSERT the term record FIRST (WAL propagates to new
 //     members), then update synchronous_standby_names. If we crash between the
 //     two steps, the GUC is re-applied on restart from the newly committed term
-//     (storage.Save happens when ApplyRulesResponseIndicator is processed by
+//     (storage.Save happens when SidecarApplyResponseIndicator is processed by
 //     PoolerNode) — safe because new members do not need to ACK the write that
 //     adds them.
 func (d *PoolerDriver) applyPolicyRecord(
 	ctx context.Context,
-	req consensus.PolicyRecordApplyRequest,
+	req consensus.SidecarApplyLeaderPolicyRequest,
 	currentTerm *consensus.Term,
 ) {
 	added, removed := diffCohort(currentTerm, &req.Term)
@@ -220,16 +220,16 @@ func (d *PoolerDriver) applyPolicyRecord(
 
 func (d *PoolerDriver) deliverApplyResult(ctx context.Context, term consensus.Term, accepted bool) {
 	select {
-	case d.incoming <- consensus.ApplyRulesResponseIndicator{Term: term, Accepted: accepted}:
+	case d.incoming <- consensus.SidecarApplyResponseIndicator{Term: term, Accepted: accepted}:
 	case <-ctx.Done():
 	}
 }
 
 // ── Revocation sidecar ────────────────────────────────────────────────────────
 
-// revokeParticipation implements the RevokeParticipationRequest: stops this node
+// revokeParticipation implements the SidecarRevokeParticipationRequest: stops this node
 // from participating in write quorum under the current rules.
-// Called in a goroutine; delivers RevokeParticipationResponseIndicator via d.incoming.
+// Called in a goroutine; delivers SidecarRevokeResponseIndicator via d.incoming.
 //
 // On success the indicator carries the node's final LSN and rules seq so the
 // coordinator can rank candidates by WAL progress when choosing a new primary.
@@ -254,7 +254,7 @@ func (d *PoolerDriver) deliverApplyResult(ctx context.Context, term consensus.Te
 //  3. Report pg_current_wal_lsn() and the current rules seq.
 func (d *PoolerDriver) revokeParticipation(
 	ctx context.Context,
-	req consensus.RevokeParticipationRequest,
+	req consensus.SidecarRevokeParticipationRequest,
 	role consensus.PoolerRole,
 ) {
 	var lsn consensus.LSN
@@ -308,7 +308,7 @@ func (d *PoolerDriver) revokeParticipation(
 	}
 
 	select {
-	case d.incoming <- consensus.RevokeParticipationResponseIndicator{
+	case d.incoming <- consensus.SidecarRevokeResponseIndicator{
 		CorrelationID: req.CorrelationID,
 		Accepted:      accepted,
 		LSN:           lsn,
@@ -322,7 +322,7 @@ func (d *PoolerDriver) revokeParticipation(
 
 // WritePolicy is the unary gRPC handler called by the coordinator to write a
 // new Term to this primary. It queues a WritePolicyIndicator for the next
-// tick and blocks until the tick loop emits a WritePolicyResponseRequest in reply.
+// tick and blocks until the tick loop emits a LeaderWritePolicyResponseRequest in reply.
 //
 // Production implementation sketch:
 //
@@ -347,7 +347,7 @@ func (d *PoolerDriver) revokeParticipation(
 
 // PushRules is the unary gRPC handler called by the coordinator to notify this
 // node (typically a replica) that a new term has been committed to the WAL.
-// Delivers an ApplyRulesResponseIndicator directly into the tick loop. The
+// Delivers an SidecarApplyResponseIndicator directly into the tick loop. The
 // coordinator calls this on all known replicas after a WritePolicy succeeds.
 //
 // Production implementation sketch:
@@ -356,7 +356,7 @@ func (d *PoolerDriver) revokeParticipation(
 //	    term, err := termFromProto(req.Term)
 //	    if err != nil { return nil, err }
 //	    select {
-//	    case d.incoming <- consensus.ApplyRulesResponseIndicator{Term: term, Accepted: true}:
+//	    case d.incoming <- consensus.SidecarApplyResponseIndicator{Term: term, Accepted: true}:
 //	    case <-ctx.Done():
 //	        return nil, ctx.Err()
 //	    }

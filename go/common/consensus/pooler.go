@@ -25,15 +25,15 @@ package consensus
 //
 // # Normal path — WAL-driven rules changes
 //
-// Primary: PoolerNode receives WritePolicyIndicator, validates the CAS
-// (Rules.Seq == committed.PolicySeq() + 1), and emits PolicyRecordApplyRequest
+// Primary: PoolerNode receives LeaderWritePolicyIndicator, validates the CAS
+// (Rules.Seq == committed.PolicySeq() + 1), and emits SidecarApplyLeaderPolicyRequest
 // to the local postgres driver. The driver updates synchronous_standby_names
 // and commits the SQL transaction; on completion it delivers
-// ApplyRulesResponseIndicator back to the PoolerNode. The PoolerNode then
+// SidecarApplyResponseIndicator back to the PoolerNode. The PoolerNode then
 // persists the new rules and responds to the coordinator.
 //
 // Replica: the local WAL watcher detects the rules record in the WAL stream
-// and delivers ApplyRulesResponseIndicator to the PoolerNode. The PoolerNode
+// and delivers SidecarApplyResponseIndicator to the PoolerNode. The PoolerNode
 // persists the updated rules and broadcasts a status update.
 //
 // # Crash recovery
@@ -59,22 +59,22 @@ type PoolerNode struct {
 	// that the node is back up.
 	needsBroadcast bool
 
-	// pendingApply tracks an in-flight PolicyRecordApplyRequest that has been
+	// pendingApply tracks an in-flight SidecarApplyLeaderPolicyRequest that has been
 	// emitted to the local driver but not yet acknowledged. Only one apply may
 	// be in flight at a time. On crash-restart this is cleared; the coordinator
 	// will retry.
 	pendingApply         *Term
-	pendingCorrelationID string // correlation ID from the WritePolicyIndicator
+	pendingCorrelationID string // correlation ID from the LeaderWritePolicyIndicator
 
 	// TODO: track all in-flight requests that ask the sidecar (postgres driver)
-	// to change postgres state (e.g. PolicyRecordApplyRequest, ApplyWALTermRequest,
-	// RevokeParticipationRequest). Only one such request should be in flight at a
+	// to change postgres state (e.g. SidecarApplyLeaderPolicyRequest, SidecarApplyTermSettingsRequest,
+	// SidecarRevokeParticipationRequest). Only one such request should be in flight at a
 	// time to avoid conflicting concurrent state changes. Currently the SimPooler
 	// handles some of this via the applyWALQueue and the sidecar-mutex approach in
 	// Step(), but the serialization should ideally be enforced at the PoolerNode level.
 
 	// pendingRecruitCorrelationID is set when a RecruitIndicator has been accepted
-	// and a RevokeParticipationRequest has been sent to the sidecar but the response
+	// and a SidecarRevokeParticipationRequest has been sent to the sidecar but the response
 	// has not yet been received. Cleared once the sidecar responds.
 	pendingRecruitCorrelationID string
 
@@ -151,8 +151,8 @@ func (n *PoolerNode) Step(tick int64, indicators []Indicator) []Request {
 	for _, ind := range indicators {
 		switch v := ind.(type) {
 		// Leader-led term change request
-		case WritePolicyIndicator:
-			reqs, c := n.handleWritePolicy(v)
+		case LeaderWritePolicyIndicator:
+			reqs, c := n.handleLeaderWritePolicy(v)
 			requests = append(requests, reqs...)
 			changed = changed || c
 		// Coordinator's revoke request
@@ -166,8 +166,8 @@ func (n *PoolerNode) Step(tick int64, indicators []Indicator) []Request {
 			requests = append(requests, reqs...)
 			changed = changed || c
 		// Coordinator writing a rule ("establish")
-		case WriteShadowWALIndicator:
-			reqs, c := n.handleWriteShadowWAL(v)
+		case ProposeIndicator:
+			reqs, c := n.handlePropose(v)
 			requests = append(requests, reqs...)
 			changed = changed || c
 		// Coordinator informing a stale pooler of how to rejoin the current primary
@@ -183,12 +183,12 @@ func (n *PoolerNode) Step(tick int64, indicators []Indicator) []Request {
 			}
 
 		// Did we successfully apply a leader-led rule change at the postgres level (write WAL + update GUC in the correct order)?
-		case ApplyRulesResponseIndicator:
+		case SidecarApplyResponseIndicator:
 			reqs, c := n.handleApplyResponse(v)
 			requests = append(requests, reqs...)
 			changed = changed || c
 		// Did we successfully revoke the previous leadership (change GUC)?
-		case RevokeParticipationResponseIndicator:
+		case SidecarRevokeResponseIndicator:
 			requests = append(requests, n.handleRevokeParticipationResponse(v)...)
 		}
 	}
@@ -203,13 +203,13 @@ func (n *PoolerNode) Step(tick int64, indicators []Indicator) []Request {
 	return requests
 }
 
-// handleWritePolicy processes a WritePolicyIndicator from a coord.
+// handleLeaderWritePolicy processes a LeaderWritePolicyIndicator from a coord.
 // Only primaries accept direct writes; replicas receive term changes via WAL.
 // Validates the CAS (committed.PolicySeq() must equal ind.FromSeq).
-// On success, emits PolicyRecordApplyRequest to the local postgres driver.
-func (n *PoolerNode) handleWritePolicy(ind WritePolicyIndicator) ([]Request, bool) {
+// On success, emits SidecarApplyLeaderPolicyRequest to the local postgres driver.
+func (n *PoolerNode) handleLeaderWritePolicy(ind LeaderWritePolicyIndicator) ([]Request, bool) {
 	reject := func() ([]Request, bool) {
-		return []Request{WritePolicyResponseRequest{
+		return []Request{LeaderWritePolicyResponseRequest{
 			RequestCorrelation: RequestCorrelation{CorrelationID: ind.CorrelationID},
 			Accepted:           false,
 			CurrentSeq:         n.committed.PolicySeq(),
@@ -241,10 +241,10 @@ func (n *PoolerNode) handleWritePolicy(ind WritePolicyIndicator) ([]Request, boo
 	n.pendingApply = &term
 	n.pendingCorrelationID = ind.CorrelationID
 
-	return []Request{PolicyRecordApplyRequest{FromSeq: ind.FromSeq, Term: term}}, false
+	return []Request{SidecarApplyLeaderPolicyRequest{FromSeq: ind.FromSeq, Term: term}}, false
 }
 
-// handleApplyResponse processes an ApplyRulesResponseIndicator delivered by
+// handleApplyResponse processes an SidecarApplyResponseIndicator delivered by
 // either the primary's local driver (after SQL commit) or the replica's WAL
 // watcher (after WAL entry arrival). Persists the new rules and, for the
 // primary, responds to the waiting coordinator.
@@ -252,12 +252,12 @@ func (n *PoolerNode) handleWritePolicy(ind WritePolicyIndicator) ([]Request, boo
 // Accepted=false means the driver failed to commit the write (e.g. a
 // compare-and-swap race in the multi-tick pipeline). The pending apply is
 // cleared and a rejection response is sent back to the coordinator.
-func (n *PoolerNode) handleApplyResponse(ind ApplyRulesResponseIndicator) ([]Request, bool) {
+func (n *PoolerNode) handleApplyResponse(ind SidecarApplyResponseIndicator) ([]Request, bool) {
 	if !ind.Accepted {
 		if n.pendingApply == nil || n.pendingApply.Seq != ind.Term.Seq {
 			return nil, false
 		}
-		reqs := []Request{WritePolicyResponseRequest{
+		reqs := []Request{LeaderWritePolicyResponseRequest{
 			RequestCorrelation: RequestCorrelation{CorrelationID: n.pendingCorrelationID},
 			Accepted:           false,
 			CurrentSeq:         n.committed.PolicySeq(),
@@ -270,7 +270,7 @@ func (n *PoolerNode) handleApplyResponse(ind ApplyRulesResponseIndicator) ([]Req
 	// Primary path: clear the pending apply and respond to the coordinator.
 	var extraReqs []Request
 	if n.pendingApply != nil && n.pendingApply.Seq == ind.Term.Seq {
-		extraReqs = []Request{WritePolicyResponseRequest{
+		extraReqs = []Request{LeaderWritePolicyResponseRequest{
 			RequestCorrelation: RequestCorrelation{CorrelationID: n.pendingCorrelationID},
 			Accepted:           true,
 		}}
@@ -343,7 +343,7 @@ func (n *PoolerNode) currentCommitment() *RecruitmentCommitment {
 // round-trip (the commitment is already persisted and the sidecar already revoked).
 //
 // On a new or superseding acceptance, the commitment is replaced, saved to
-// storage, and a RevokeParticipationRequest is sent to the sidecar.
+// storage, and a SidecarRevokeParticipationRequest is sent to the sidecar.
 func (n *PoolerNode) handleRecruit(ind RecruitIndicator) ([]Request, bool) {
 	reject := func() ([]Request, bool) {
 		// TODO: consider returning more information here — the pooler's current
@@ -400,22 +400,22 @@ func (n *PoolerNode) handleRecruit(ind RecruitIndicator) ([]Request, bool) {
 	n.committed = newState
 	n.pendingRecruitCorrelationID = ind.CorrelationID
 
-	return []Request{RevokeParticipationRequest{
+	return []Request{SidecarRevokeParticipationRequest{
 		RequestCorrelation: RequestCorrelation{CorrelationID: ind.CorrelationID},
 	}}, true
 }
 
-// handleWriteShadowWAL processes a WriteShadowWALIndicator from a coordinator.
+// handlePropose processes a ProposeIndicator from a coordinator.
 // The node must hold a commitment that authorises Term.Seq and must have
 // received real WAL up to at least ind.BaseLSN so the entry is placed at the
 // correct position in the WAL history.
 //
 // The term is appended to shadow WAL for durability, and
-// WriteShadowWALAckedRequest is returned so the coordinator knows the write
+// ProposeAckedRequest is returned so the coordinator knows the write
 // succeeded. When ApplyNow is true the sidecar is also asked to apply GUC
-// settings immediately via ApplyWALTermRequest, allowing promotion or replica
+// settings immediately via SidecarApplyTermSettingsRequest, allowing promotion or replica
 // reconnection without a separate round-trip.
-func (n *PoolerNode) handleWriteShadowWAL(ind WriteShadowWALIndicator) ([]Request, bool) {
+func (n *PoolerNode) handlePropose(ind ProposeIndicator) ([]Request, bool) {
 	if n.committed.Commitment == nil || !n.committed.Commitment.AllowsTermChange(ind.Term.Seq) {
 		return nil, false
 	}
@@ -429,13 +429,13 @@ func (n *PoolerNode) handleWriteShadowWAL(ind WriteShadowWALIndicator) ([]Reques
 		if existing.Seq == ind.Term.Seq {
 			var reqs []Request
 			if ind.CorrelationID != "" {
-				reqs = append(reqs, WriteShadowWALAckedRequest{
+				reqs = append(reqs, ProposeAckedRequest{
 					RequestCorrelation: RequestCorrelation{CorrelationID: ind.CorrelationID},
 					Accepted:           true,
 				})
 			}
 			if ind.ApplyNow {
-				reqs = append(reqs, ApplyWALTermRequest{Term: *existing})
+				reqs = append(reqs, SidecarApplyTermSettingsRequest{Term: *existing})
 			}
 			return reqs, false
 		}
@@ -453,14 +453,14 @@ func (n *PoolerNode) handleWriteShadowWAL(ind WriteShadowWALIndicator) ([]Reques
 	var reqs []Request
 	// Acknowledge the shadow WAL write to the coordinator.
 	if ind.CorrelationID != "" {
-		reqs = append(reqs, WriteShadowWALAckedRequest{
+		reqs = append(reqs, ProposeAckedRequest{
 			RequestCorrelation: RequestCorrelation{CorrelationID: ind.CorrelationID},
 			Accepted:           true,
 		})
 	}
 	// When ApplyNow is set, ask the sidecar to apply GUC settings immediately.
 	if ind.ApplyNow {
-		reqs = append(reqs, ApplyWALTermRequest{Term: ind.Term})
+		reqs = append(reqs, SidecarApplyTermSettingsRequest{Term: ind.Term})
 	}
 	return reqs, true
 }
@@ -521,7 +521,7 @@ func (n *PoolerNode) handlePropagatePosition(ind PropagatePositionIndicator) ([]
 // handleRevokeParticipationResponse processes the sidecar's result for stopping
 // this node from participating in write quorum. Forwards the outcome to the
 // coordinator as a RecruitResponseRequest.
-func (n *PoolerNode) handleRevokeParticipationResponse(ind RevokeParticipationResponseIndicator) []Request {
+func (n *PoolerNode) handleRevokeParticipationResponse(ind SidecarRevokeResponseIndicator) []Request {
 	if ind.CorrelationID != n.pendingRecruitCorrelationID {
 		return nil // stale or spurious
 	}
@@ -557,7 +557,7 @@ func (n *PoolerNode) handleRevokeParticipationResponse(ind RevokeParticipationRe
 // The coordinator sends a resume at the current quorum term to release the
 // commitment and restore normal participation.
 //
-// The sidecar responds with ApplyRulesResponseIndicator; handleApplyResponse
+// The sidecar responds with SidecarApplyResponseIndicator; handleApplyResponse
 // then updates the committed state exactly as it does for the WAL-driven path.
 func (n *PoolerNode) handleResume(ind ResumeIndicator) ([]Request, bool) {
 	revoked := n.committed.Commitment != nil
@@ -582,8 +582,8 @@ func (n *PoolerNode) handleResume(ind ResumeIndicator) ([]Request, bool) {
 	// primary the sidecar must run pg_rewind before applying GUC settings.
 	// After pg_rewind the sidecar should also truncate shadow WAL entries
 	// whose BaseLSN is past the rewind point, save the updated state to
-	// storage, and only then deliver ApplyRulesResponseIndicator.
-	return []Request{ApplyWALTermRequest{Term: ind.Term}}, false
+	// storage, and only then deliver SidecarApplyResponseIndicator.
+	return []Request{SidecarApplyTermSettingsRequest{Term: ind.Term}}, false
 }
 
 func (n *PoolerNode) statusUpdate() PoolerStatusUpdateRequest {

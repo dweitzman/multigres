@@ -244,7 +244,7 @@ type SimPooler struct {
 	// responseCallbacks maps a correlation ID to a callback invoked once when
 	// the matching WritePolicyResponseRequest is emitted. Entries are removed
 	// after the callback fires.
-	responseCallbacks map[string]func(consensus.WritePolicyResponseRequest)
+	responseCallbacks map[string]func(consensus.LeaderWritePolicyResponseRequest)
 
 	// recruitResponseCallbacks maps a correlation ID to a callback invoked once
 	// when the matching RecruitResponseRequest is emitted. Entries are removed
@@ -298,7 +298,7 @@ func NewSimPooler(node *consensus.PoolerNode, sim *simType, initialTerm *consens
 		node:                     node,
 		sim:                      sim,
 		replicaACK:               make(map[consensus.NodeID]lsn),
-		responseCallbacks:        make(map[string]func(consensus.WritePolicyResponseRequest)),
+		responseCallbacks:        make(map[string]func(consensus.LeaderWritePolicyResponseRequest)),
 		recruitResponseCallbacks: make(map[string]func(consensus.RecruitResponseRequest)),
 	}
 	if initialTerm != nil {
@@ -392,7 +392,7 @@ func (s *SimPooler) Restart() {
 	s.queuedIndicators = nil
 	s.pendingRevokeCorrelationID = ""
 	s.applyWALQueue.Drain()
-	s.responseCallbacks = make(map[string]func(consensus.WritePolicyResponseRequest))
+	s.responseCallbacks = make(map[string]func(consensus.LeaderWritePolicyResponseRequest))
 	s.recruitResponseCallbacks = make(map[string]func(consensus.RecruitResponseRequest))
 	s.reinitGUC()
 }
@@ -501,7 +501,7 @@ func (s *SimPooler) EnqueueIndicator(ind consensus.Indicator) {
 // emitted by the wrapped PoolerNode. The callback fires exactly once and is
 // removed from the registry after firing. The correlation ID in ind must be
 // non-empty for the callback to be registered.
-func (s *SimPooler) SendWritePolicyIndicator(ind consensus.WritePolicyIndicator, callback func(consensus.WritePolicyResponseRequest)) {
+func (s *SimPooler) SendWritePolicyIndicator(ind consensus.LeaderWritePolicyIndicator, callback func(consensus.LeaderWritePolicyResponseRequest)) {
 	s.queuedIndicators = append(s.queuedIndicators, ind)
 	if ind.CorrelationID != "" && callback != nil {
 		s.responseCallbacks[ind.CorrelationID] = callback
@@ -541,7 +541,7 @@ func (s *SimPooler) applyRevokedGUC() {
 			if s.pendingChange.walPos > 0 {
 				s.truncateWALAfter(s.pendingChange.walPos - 1)
 			}
-			s.queuedIndicators = append(s.queuedIndicators, consensus.ApplyRulesResponseIndicator{
+			s.queuedIndicators = append(s.queuedIndicators, consensus.SidecarApplyResponseIndicator{
 				Term:     s.pendingChange.term,
 				Accepted: false,
 			})
@@ -681,7 +681,7 @@ func (s *SimPooler) advancePendingWAL() {
 				continue
 			}
 			s.applyGUCForTerm(e.record)
-			s.queuedIndicators = append(s.queuedIndicators, consensus.ApplyRulesResponseIndicator{
+			s.queuedIndicators = append(s.queuedIndicators, consensus.SidecarApplyResponseIndicator{
 				Term:     *e.record,
 				Accepted: true,
 			})
@@ -702,7 +702,7 @@ func (s *SimPooler) advancePendingRevoke() {
 	correlationID := s.pendingRevokeCorrelationID
 	s.pendingRevokeCorrelationID = ""
 	s.applyRevokedGUC()
-	s.queuedIndicators = append(s.queuedIndicators, consensus.RevokeParticipationResponseIndicator{
+	s.queuedIndicators = append(s.queuedIndicators, consensus.SidecarRevokeResponseIndicator{
 		CorrelationID: correlationID,
 		Accepted:      true,
 		LSN:           consensus.LSN(s.receivedLSN),
@@ -743,7 +743,7 @@ func (s *SimPooler) advancePendingApplyWAL(tick int64) bool {
 			s.pendingChange = nil
 		}
 		s.applyGUCForTerm(&term)
-		s.queuedIndicators = append(s.queuedIndicators, consensus.ApplyRulesResponseIndicator{
+		s.queuedIndicators = append(s.queuedIndicators, consensus.SidecarApplyResponseIndicator{
 			Term:     term,
 			Accepted: true,
 		})
@@ -814,17 +814,17 @@ func (s *SimPooler) Step(tick int64, externalInds []consensus.Indicator) []conse
 	var forwarded []consensus.Request
 	for _, req := range reqs {
 		switch r := req.(type) {
-		case consensus.PolicyRecordApplyRequest:
+		case consensus.SidecarApplyLeaderPolicyRequest:
 			s.handleApply(r)
-		case consensus.ApplyWALTermRequest:
+		case consensus.SidecarApplyTermSettingsRequest:
 			// Sidecar intercept: push to queue with a minimum 1-tick delay
 			// modelling the sidecar acquiring an exclusive lock before GUC apply.
 			s.applyWALQueue.Push(r.Term, tick)
-		case consensus.RevokeParticipationRequest:
+		case consensus.SidecarRevokeParticipationRequest:
 			// Sidecar intercept: start revocation. Will complete on the next tick
 			// via advancePendingRevoke, modelling at-least-one-tick sidecar latency.
 			s.pendingRevokeCorrelationID = r.CorrelationID
-		case consensus.WritePolicyResponseRequest:
+		case consensus.LeaderWritePolicyResponseRequest:
 			if cb := s.responseCallbacks[r.CorrelationID]; cb != nil {
 				delete(s.responseCallbacks, r.CorrelationID)
 				cb(r)
@@ -903,7 +903,7 @@ func (s *SimPooler) findSimPooler(id consensus.NodeID) *SimPooler {
 //  3. awaitQuorum: wait for writeQuorumMet at the rules record's WAL position.
 //  4. finalGUC:    set standbys and policy to the new values.
 //  5. sendIndicator: queue ApplyRulesResponseIndicator for PoolerNode.
-func (s *SimPooler) handleApply(req consensus.PolicyRecordApplyRequest) {
+func (s *SimPooler) handleApply(req consensus.SidecarApplyLeaderPolicyRequest) {
 	// Only a postgres in primary write mode can commit new WAL entries.
 	// mode == postgresPrimary implies: the committed term designates this node
 	// as primary, bootstrap is complete, and the node has not been revoked by
@@ -911,7 +911,7 @@ func (s *SimPooler) handleApply(req consensus.PolicyRecordApplyRequest) {
 	// Hot-standby nodes (replicas, pre-bootstrap primaries, revoked primaries)
 	// reject the apply.
 	if s.mode != postgresPrimary {
-		s.queuedIndicators = append(s.queuedIndicators, consensus.ApplyRulesResponseIndicator{
+		s.queuedIndicators = append(s.queuedIndicators, consensus.SidecarApplyResponseIndicator{
 			Term:     req.Term,
 			Accepted: false,
 		})
@@ -921,7 +921,7 @@ func (s *SimPooler) handleApply(req consensus.PolicyRecordApplyRequest) {
 	// CAS check: latestWALPolicySeq must equal FromSeq. This rejects stale
 	// apply requests that arrive after a concurrent write has advanced the WAL.
 	if s.latestWALPolicySeq() != req.FromSeq {
-		s.queuedIndicators = append(s.queuedIndicators, consensus.ApplyRulesResponseIndicator{
+		s.queuedIndicators = append(s.queuedIndicators, consensus.SidecarApplyResponseIndicator{
 			Term:     req.Term,
 			Accepted: false,
 		})
@@ -999,7 +999,7 @@ func (s *SimPooler) advancePendingChange() {
 			// CAS failed: restore original GUC settings and report failure.
 			s.gucSyncStandbys = c.originalStandbys
 			s.gucSyncPolicy = c.originalPolicy
-			s.queuedIndicators = append(s.queuedIndicators, consensus.ApplyRulesResponseIndicator{
+			s.queuedIndicators = append(s.queuedIndicators, consensus.SidecarApplyResponseIndicator{
 				Term:     c.term,
 				Accepted: false,
 			})
@@ -1040,7 +1040,7 @@ func (s *SimPooler) advancePendingChange() {
 
 	case ruleChangePhaseSendIndicator:
 		// Queue the indicator so PoolerNode persists and responds in this tick.
-		s.queuedIndicators = append(s.queuedIndicators, consensus.ApplyRulesResponseIndicator{
+		s.queuedIndicators = append(s.queuedIndicators, consensus.SidecarApplyResponseIndicator{
 			Term:     c.term,
 			Accepted: true,
 		})

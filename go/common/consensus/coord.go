@@ -84,10 +84,10 @@ type CoordNode struct {
 	// updated each time a PoolerStatusIndicator arrives.
 	known map[NodeID]*knownPooler
 
-	// pendingWrite is set when a WritePolicyRequest has been emitted and we
-	// are waiting for a WritePolicyResponseIndicator. Only one write is in
+	// pendingLeaderWrite is set when a LeaderWritePolicyRequest has been emitted and we
+	// are waiting for a LeaderWritePolicyResponseIndicator. Only one write is in
 	// flight at a time.
-	pendingWrite *pendingPolicyWrite
+	pendingLeaderWrite *pendingLeaderWrite
 
 	// pendingRecruitment is set while a coordinator-led term change is in
 	// progress. Cleared once all recruited nodes have acked the new term, or
@@ -132,7 +132,7 @@ type knownPooler struct {
 	lastStatusTick int64 // tick at which the last PoolerStatusIndicator was received
 }
 
-type pendingPolicyWrite struct {
+type pendingLeaderWrite struct {
 	target NodeID
 	term   Term
 	since  int64 // tick at which the write was dispatched
@@ -181,8 +181,8 @@ type pendingRecruitment struct {
 	propagateSent map[NodeID]bool // PropagatePositionRequest sent
 	propagateAcks map[NodeID]bool // PropagatePositionAcked received
 
-	proposeSent map[NodeID]bool // WriteShadowWALRequest(ApplyNow=true) sent
-	proposeAcks map[NodeID]bool // WriteShadowWALAcked for propose received
+	proposeSent map[NodeID]bool // ProposeRequest(ApplyNow=true) sent
+	proposeAcks map[NodeID]bool // ProposeAcked responses received
 }
 
 type recruitedResp struct {
@@ -216,7 +216,7 @@ func NewCoordNode(id NodeID, targetPolicy DurabilityPolicy, ha HighAvailabilityS
 // the cluster by processing PoolerStatusIndicator updates on subsequent ticks.
 func (c *CoordNode) Restart() {
 	c.known = make(map[NodeID]*knownPooler)
-	c.pendingWrite = nil
+	c.pendingLeaderWrite = nil
 	c.pendingRecruitment = nil
 	c.highestKnownCommitments = make(map[int64]*RecruitmentCommitment)
 	c.resumeSentTicks = make(map[NodeID]int64)
@@ -342,12 +342,12 @@ func (c *CoordNode) Step(tick int64, indicators []Indicator) []Request {
 			// Proactively learn about existing commitments from status broadcasts
 			// so we start recruitment with an informed proposedSeq.
 			c.observeCommitment(v.State.Commitment)
-		case WritePolicyResponseIndicator:
-			reqs = append(reqs, c.handleWriteResponse(v)...)
+		case LeaderWritePolicyResponseIndicator:
+			reqs = append(reqs, c.handleLeaderWriteResponse(v)...)
 		case RecruitResponseIndicator:
 			c.handleRecruitResponse(v)
-		case WriteShadowWALAckedIndicator:
-			c.handleWriteShadowWALAcked(v)
+		case ProposeAckedIndicator:
+			c.handleProposeAcked(v)
 		case PropagatePositionAckedIndicator:
 			c.handlePropagatePositionAcked(v)
 		}
@@ -357,11 +357,11 @@ func (c *CoordNode) Step(tick int64, indicators []Indicator) []Request {
 	return reqs
 }
 
-// handleWriteResponse processes the primary's response to a WritePolicyRequest
+// handleLeaderWriteResponse processes the primary's response to a LeaderWritePolicyRequest
 // on the leader-led path. Updates the coordinator's cached view of the primary's
 // term so the next write uses the correct Seq without waiting for a status broadcast.
-func (c *CoordNode) handleWriteResponse(ind WritePolicyResponseIndicator) []Request {
-	if c.pendingWrite == nil || ind.FromPooler != c.pendingWrite.target {
+func (c *CoordNode) handleLeaderWriteResponse(ind LeaderWritePolicyResponseIndicator) []Request {
+	if c.pendingLeaderWrite == nil || ind.FromPooler != c.pendingLeaderWrite.target {
 		return nil // stale or unexpected response
 	}
 
@@ -370,7 +370,7 @@ func (c *CoordNode) handleWriteResponse(ind WritePolicyResponseIndicator) []Requ
 		// so the next write uses the correct Seq without waiting for a status
 		// broadcast.
 		if p, ok := c.known[ind.FromPooler]; ok {
-			term := c.pendingWrite.term
+			term := c.pendingLeaderWrite.term
 			p.state.CachedTerm = &term
 		}
 	} else {
@@ -382,7 +382,7 @@ func (c *CoordNode) handleWriteResponse(ind WritePolicyResponseIndicator) []Requ
 			}
 		}
 	}
-	c.pendingWrite = nil
+	c.pendingLeaderWrite = nil
 	return nil
 }
 
@@ -418,8 +418,8 @@ func (c *CoordNode) handleRecruitResponse(ind RecruitResponseIndicator) {
 	}
 }
 
-// handleWriteShadowWALAcked records an ack from a pooler in the propose phase.
-func (c *CoordNode) handleWriteShadowWALAcked(ind WriteShadowWALAckedIndicator) {
+// handleProposeAcked records an ack from a pooler in the propose phase.
+func (c *CoordNode) handleProposeAcked(ind ProposeAckedIndicator) {
 	if c.pendingRecruitment == nil || c.pendingRecruitment.phase != recruitPhasePropose {
 		return
 	}
@@ -444,9 +444,9 @@ func (c *CoordNode) handlePropagatePositionAcked(ind PropagatePositionAckedIndic
 // have been processed.
 func (c *CoordNode) advance(tick int64) []Request {
 	// Expire timed-out in-flight writes.
-	if c.pendingWrite != nil {
-		if tick-c.pendingWrite.since >= WriteTimeoutTicks {
-			c.pendingWrite = nil
+	if c.pendingLeaderWrite != nil {
+		if tick-c.pendingLeaderWrite.since >= WriteTimeoutTicks {
+			c.pendingLeaderWrite = nil
 			// TODO: Should we mark the primary as unhealthy and try again as a coordinator-initiated
 			// term change?...
 		}
@@ -456,7 +456,7 @@ func (c *CoordNode) advance(tick int64) []Request {
 	if c.ha.NeedsLeaderFailover(status) {
 		// Primary is unreachable: abort any in-flight leader-led write and run
 		// the coordinator-led term change protocol.
-		c.pendingWrite = nil
+		c.pendingLeaderWrite = nil
 		// Only start a new recruitment when we have enough healthy nodes to
 		// satisfy the post-failover durability policy. If we can't, recruiting
 		// would revoke quorum participation with no path to completion, leaving
@@ -474,7 +474,7 @@ func (c *CoordNode) advance(tick int64) []Request {
 	reqs := c.advanceResume(tick, status.HighestQuorumTerm)
 
 	// Wait for any in-flight leader-led write to complete.
-	if c.pendingWrite != nil {
+	if c.pendingLeaderWrite != nil {
 		return reqs
 	}
 
@@ -543,13 +543,13 @@ func (c *CoordNode) advance(tick int64) []Request {
 		Policy:  c.policyForMembers(newMembers),
 	}
 
-	c.pendingWrite = &pendingPolicyWrite{
+	c.pendingLeaderWrite = &pendingLeaderWrite{
 		target: primaryID,
 		term:   newTerm,
 		since:  tick,
 	}
 
-	return append(reqs, WritePolicyRequest{
+	return append(reqs, LeaderWritePolicyRequest{
 		TargetPooler: primaryID,
 		FromCoord:    c.id,
 		FromSeq:      currentTerm.Seq, // CAS base: primary must still be at this seq
@@ -806,7 +806,7 @@ func (c *CoordNode) advancePropagatePhase(pr *pendingRecruitment, tick int64) []
 	return reqs
 }
 
-// advanceProposePhase sends WriteShadowWALRequests (ApplyNow=true) to all
+// advanceProposePhase sends ProposeRequests (ApplyNow=true) to all
 // recruited nodes and clears pendingRecruitment once all have acked. Using
 // ApplyNow=true writes the shadow WAL entry and activates GUC settings in a
 // single round-trip, completing the term change.
@@ -838,7 +838,7 @@ func (c *CoordNode) advanceProposePhase(pr *pendingRecruitment, tick int64) []Re
 	// at the new term seq, preventing the coordinator from treating the just-completed
 	// failover as an incomplete one and kicking off a spurious follow-on recruitment.
 	// Clear Commitment because the propose phase fulfilled it: the nodes will clear
-	// their own commitments in handleApplyRulesResponse, and the coordinator's view
+	// their own commitments in handleApplyResponse, and the coordinator's view
 	// must reflect that to avoid spurious resume traffic.
 	newTerm := *pr.newTerm
 	for _, nodeID := range sortedmaps.Keys(pr.recruitResponses) {
@@ -856,7 +856,7 @@ func (c *CoordNode) advanceProposePhase(pr *pendingRecruitment, tick int64) []Re
 	return reqs
 }
 
-// sendProposeRequests emits WriteShadowWALRequests (ApplyNow=true) to any
+// sendProposeRequests emits ProposeRequests (ApplyNow=true) to any
 // recruited node that has not yet been sent one.
 func (c *CoordNode) sendProposeRequests(pr *pendingRecruitment) []Request {
 	if pr.newTerm == nil {
@@ -873,7 +873,7 @@ func (c *CoordNode) sendProposeRequests(pr *pendingRecruitment) []Request {
 	for _, nodeID := range sortedmaps.Keys(pr.recruitResponses) {
 		if !pr.proposeSent[nodeID] {
 			pr.proposeSent[nodeID] = true
-			reqs = append(reqs, WriteShadowWALRequest{
+			reqs = append(reqs, ProposeRequest{
 				TargetPooler: nodeID,
 				FromCoord:    c.id,
 				Term:         *pr.newTerm,

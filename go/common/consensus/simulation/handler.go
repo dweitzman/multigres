@@ -27,10 +27,10 @@ import (
 // coordinator nodes. The handler discovers coordinator IDs by inspecting the
 // simulator's registered nodes at routing time.
 //
-// The handler models gRPC-style request/response pairs for WritePolicyRequest:
-// when routing a WritePolicyRequest to a WritePolicyIndicator, it auto-generates
+// The handler models gRPC-style request/response pairs for LeaderWritePolicyRequest:
+// when routing a LeaderWritePolicyRequest to a LeaderWritePolicyIndicator, it auto-generates
 // a correlation ID and records the originating node. When the pooler emits a
-// WritePolicyResponseRequest with that correlation ID, the handler routes the
+// LeaderWritePolicyResponseRequest with that correlation ID, the handler routes the
 // response back to the origin and cleans up the entry.
 type Handler struct {
 	// coordIDs lists the node IDs that should receive PoolerStatusIndicator
@@ -38,7 +38,7 @@ type Handler struct {
 	coordIDs []consensus.NodeID
 
 	// correlationReturnTo maps a correlation ID to the node that should receive
-	// the corresponding WritePolicyResponseRequest. Entries are removed once
+	// the corresponding LeaderWritePolicyResponseRequest. Entries are removed once
 	// the response is delivered.
 	correlationReturnTo map[string]consensus.NodeID
 
@@ -96,43 +96,43 @@ func (h *Handler) ProcessRequests(
 				})
 			}
 
-		case consensus.WriteShadowWALRequest:
+		case consensus.ProposeRequest:
 			h.nextCorrSeq++
 			corrID := fmt.Sprintf("%s/%d", fromNode, h.nextCorrSeq)
 			h.correlationReturnTo[corrID] = fromNode
-			result[r.TargetPooler] = append(result[r.TargetPooler], consensus.WriteShadowWALIndicator{
+			result[r.TargetPooler] = append(result[r.TargetPooler], consensus.ProposeIndicator{
 				CorrelationID: corrID,
 				Term:          r.Term,
 				BaseLSN:       r.BaseLSN,
 				ApplyNow:      r.ApplyNow,
 			})
 
-		case consensus.WriteShadowWALAckedRequest:
+		case consensus.ProposeAckedRequest:
 			dest := h.correlationReturnTo[r.CorrelationID]
 			delete(h.correlationReturnTo, r.CorrelationID)
 			if dest != "" {
-				result[dest] = append(result[dest], consensus.WriteShadowWALAckedIndicator{
+				result[dest] = append(result[dest], consensus.ProposeAckedIndicator{
 					CorrelationID: r.CorrelationID,
 					FromPooler:    fromNode,
 					Accepted:      r.Accepted,
 				})
 			}
 
-		case consensus.WritePolicyRequest:
+		case consensus.LeaderWritePolicyRequest:
 			h.nextCorrSeq++
 			corrID := fmt.Sprintf("%s/%d", fromNode, h.nextCorrSeq)
 			h.correlationReturnTo[corrID] = fromNode
-			result[r.TargetPooler] = append(result[r.TargetPooler], consensus.WritePolicyIndicator{
+			result[r.TargetPooler] = append(result[r.TargetPooler], consensus.LeaderWritePolicyIndicator{
 				CorrelationID: corrID,
 				FromSeq:       r.FromSeq,
 				Term:          r.Term,
 			})
 
-		case consensus.WritePolicyResponseRequest:
+		case consensus.LeaderWritePolicyResponseRequest:
 			dest := h.correlationReturnTo[r.CorrelationID]
 			delete(h.correlationReturnTo, r.CorrelationID)
 			if dest != "" {
-				result[dest] = append(result[dest], consensus.WritePolicyResponseIndicator{
+				result[dest] = append(result[dest], consensus.LeaderWritePolicyResponseIndicator{
 					CorrelationID: r.CorrelationID,
 					FromPooler:    fromNode,
 					Accepted:      r.Accepted,

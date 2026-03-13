@@ -85,18 +85,18 @@ When the primary is reachable, all rule changes flow through it as ordinary post
 4. Once durable under both policies, all subsequent WAL entries are governed solely by the new
    rules.
 
-**Sidecar abstraction:** `PoolerNode` emits a `PolicyRecordApplyRequest` when it is ready to
+**Sidecar abstraction:** `PoolerNode` emits a `SidecarApplyLeaderPolicyRequest` when it is ready to
 write a rule transition. The sidecar (`SimPooler` in simulation, the real postgres driver in
 production) performs the actual SQL and GUC work and responds with an
-`ApplyRulesResponseIndicator` once the write is durable. This decouples the state machine from
+`SidecarApplyResponseIndicator` once the write is durable. This decouples the state machine from
 the postgres execution environment.
 
 ```
 CoordNode sees observer
   → writes Term to primary (Seq = current.Seq + 1)
-  → PoolerNode emits PolicyRecordApplyRequest
+  → PoolerNode emits SidecarApplyLeaderPolicyRequest
   → SimPooler/driver writes WAL entry; enforces both-policy quorum
-  → ApplyRulesResponseIndicator delivered once durable
+  → SidecarApplyResponseIndicator delivered once durable
   → PoolerNode commits; WAL propagates to replicas
   → replicas apply WAL, update committed Term
   → CoordNode observes updated status; expansion complete
@@ -249,9 +249,9 @@ Each replica calls `pullWAL()` at the start of its own `Step()`, reading new ent
 from the primary's buffer. This means ACKs flow back to the primary within the same tick, so
 write quorum can be satisfied on the tick immediately after the replica pulls.
 
-`SimPooler` intercepts `PolicyRecordApplyRequest` (emitted by `PoolerNode`) before it reaches
+`SimPooler` intercepts `SidecarApplyLeaderPolicyRequest` (emitted by `PoolerNode`) before it reaches
 the `Handler`, simulates the postgres SQL transaction and sync-settings update, and queues an
-`ApplyRulesResponseIndicator` for the next `PoolerNode.Step` call once write quorum is met.
+`SidecarApplyResponseIndicator` for the next `PoolerNode.Step` call once write quorum is met.
 
 ## Key types
 
@@ -280,16 +280,16 @@ Two communication boundaries exist:
 
 ### Network messages — Pooler ↔ Coordinator
 
-#### Write term (normal path): `WritePolicyRequest` / `WritePolicyResponseRequest`
+#### Write term (normal path): `LeaderWritePolicyRequest` / `LeaderWritePolicyResponseRequest`
 
 Coordinator requests a new `Term` write on the primary. The primary validates the CAS and responds once the WAL entry is durable.
 
 | Direction      | Request type                 | Indicator type                 | Can fail?                                                  |
 | -------------- | ---------------------------- | ------------------------------ | ---------------------------------------------------------- |
-| Coord → Pooler | `WritePolicyRequest`         | `WritePolicyIndicator`         | Yes — `FromSeq` mismatch or primary has a prior commitment |
-| Pooler → Coord | `WritePolicyResponseRequest` | `WritePolicyResponseIndicator` | —                                                          |
+| Coord → Pooler | `LeaderWritePolicyRequest`         | `LeaderWritePolicyIndicator`         | Yes — `FromSeq` mismatch or primary has a prior commitment |
+| Pooler → Coord | `LeaderWritePolicyResponseRequest` | `LeaderWritePolicyResponseIndicator` | —                                                          |
 
-`WritePolicyResponseIndicator`: `Accepted=true` once durable; `Accepted=false` with `CurrentSeq` so the coord can retry with the correct seq.
+`LeaderWritePolicyResponseIndicator`: `Accepted=true` once durable; `Accepted=false` with `CurrentSeq` so the coord can retry with the correct seq.
 
 In production: a SQL transaction written by multiorch on the primary postgres instance via the multipooler API.
 
@@ -310,16 +310,16 @@ In production: a gRPC call from multiorch to multipooler.
 
 ---
 
-#### Write shadow WAL (propose phase): `WriteShadowWALRequest` / `WriteShadowWALAckedRequest`
+#### Propose (write shadow WAL): `ProposeRequest` / `ProposeAckedRequest`
 
 After reaching revocation quorum, the coordinator asks each recruited pooler to persist the new `Term` to shadow WAL. `BaseLSN` anchors the entry to the real WAL timeline. `ApplyNow=true` collapses this and the subsequent GUC-apply step into a single round-trip.
 
 | Direction      | Request type                 | Indicator type                 | Can fail?                                              |
 | -------------- | ---------------------------- | ------------------------------ | ------------------------------------------------------ |
-| Coord → Pooler | `WriteShadowWALRequest`      | `WriteShadowWALIndicator`      | Yes — `receivedLSN < BaseLSN` or commitment superseded |
-| Pooler → Coord | `WriteShadowWALAckedRequest` | `WriteShadowWALAckedIndicator` | —                                                      |
+| Coord → Pooler | `ProposeRequest`      | `ProposeIndicator`      | Yes — `receivedLSN < BaseLSN` or commitment superseded |
+| Pooler → Coord | `ProposeAckedRequest` | `ProposeAckedIndicator` | —                                                      |
 
-`WriteShadowWALAckedIndicator`: `Accepted=true` once the shadow WAL entry is durably fsynced.
+`ProposeAckedIndicator`: `Accepted=true` once the shadow WAL entry is durably fsynced.
 
 In production: fsync of the pooler's commitment file; the response is sent over the same gRPC connection.
 
@@ -382,44 +382,44 @@ In production: driven by an etcd watch stream in multiorch.
 
 ---
 
-#### Apply term record (normal path): `PolicyRecordApplyRequest`
+#### Apply leader policy (normal path): `SidecarApplyLeaderPolicyRequest`
 
 Primary asks the sidecar to commit the new `Term` SQL transaction and update `synchronous_standby_names`. `FromSeq` guards against stale applies.
 
 | Direction        | Type                          | Can fail?                                            |
 | ---------------- | ----------------------------- | ---------------------------------------------------- |
-| Pooler → Sidecar | `PolicyRecordApplyRequest`    | Yes — WAL already has a term at or beyond `Term.Seq` |
-| Sidecar → Pooler | `ApplyRulesResponseIndicator` | —                                                    |
+| Pooler → Sidecar | `SidecarApplyLeaderPolicyRequest`    | Yes — WAL already has a term at or beyond `Term.Seq` |
+| Sidecar → Pooler | `SidecarApplyResponseIndicator` | —                                                    |
 
-`ApplyRulesResponseIndicator`: `Accepted=true` once durable under both old and new policies; `Accepted=false` if the SQL transaction failed. The same indicator type is also delivered by the WAL watcher on replicas (always `Accepted=true`).
+`SidecarApplyResponseIndicator`: `Accepted=true` once durable under both old and new policies; `Accepted=false` if the SQL transaction failed. The same indicator type is also delivered by the WAL watcher on replicas (always `Accepted=true`).
 
 In production: a goroutine that executes the SQL transaction and waits for WAL confirmation from sync standbys.
 
 ---
 
-#### Apply GUC for shadow WAL term: `ApplyWALTermRequest`
+#### Apply term settings (coordinator path): `SidecarApplyTermSettingsRequest`
 
-When a `WriteShadowWALIndicator` arrives with `ApplyNow=true`, the pooler asks the sidecar to apply the `Term`'s GUC settings as though the term had arrived via the real WAL stream. Allows the coordinator to complete shadow-write + GUC-apply in a single round-trip.
+When a `ProposeIndicator` arrives with `ApplyNow=true`, the pooler asks the sidecar to apply the `Term`'s GUC settings as though the term had arrived via the real WAL stream. Allows the coordinator to complete shadow-write + GUC-apply in a single round-trip.
 
 | Direction        | Type                          | Can fail?                        |
 | ---------------- | ----------------------------- | -------------------------------- |
-| Pooler → Sidecar | `ApplyWALTermRequest`         | Yes — if postgres is unreachable |
-| Sidecar → Pooler | `ApplyRulesResponseIndicator` | —                                |
+| Pooler → Sidecar | `SidecarApplyTermSettingsRequest`         | Yes — if postgres is unreachable |
+| Sidecar → Pooler | `SidecarApplyResponseIndicator` | —                                |
 
 In production: `ALTER SYSTEM SET ...` + `pg_reload_conf()`.
 
 ---
 
-#### Revoke quorum participation: `RevokeParticipationRequest`
+#### Revoke quorum participation (sidecar): `SidecarRevokeParticipationRequest`
 
 Pooler asks the sidecar to withdraw this node from write quorum. Emitted after accepting a `RecruitIndicator`, before responding to the coordinator.
 
 | Direction        | Type                                   | Can fail?                        |
 | ---------------- | -------------------------------------- | -------------------------------- |
-| Pooler → Sidecar | `RevokeParticipationRequest`           | Yes — if postgres is unreachable |
-| Sidecar → Pooler | `RevokeParticipationResponseIndicator` | —                                |
+| Pooler → Sidecar | `SidecarRevokeParticipationRequest`           | Yes — if postgres is unreachable |
+| Sidecar → Pooler | `SidecarRevokeResponseIndicator` | —                                |
 
-`RevokeParticipationResponseIndicator`: `Accepted=true` with `LSN` and `TermSeq` captured at the moment of revocation; `Accepted=false` if postgres cannot be put into the required state.
+`SidecarRevokeResponseIndicator`: `Accepted=true` with `LSN` and `TermSeq` captured at the moment of revocation; `Accepted=false` if postgres cannot be put into the required state.
 
 Replica sidecar: stops forwarding WAL ACKs to the primary. Primary sidecar: sets `default_transaction_read_only = on`.
 
@@ -619,19 +619,11 @@ any pooler that has already enrolled in the new generation.
 
 ## Open design questions
 
-### Naming: leader-driven vs coordinator-driven request types
-
-The normal-path request types (`WritePolicyRequest`, `WritePolicyResponseIndicator`, etc.) do
-not have a distinguishing prefix, while the coordinator-led-path types (`RecruitRequest`,
-`WriteShadowWALRequest`, etc.) do. Consider adding a "leader" or "primary" prefix to the
-normal-path types so the origin of each message is self-evident at the call site
-(e.g. `LeaderWritePolicyRequest`).
-
 ### Abandoned operation follow-up
 
 Several operations can be abandoned mid-flight, each requiring different cleanup:
 
-- **Timed-out leader-driven write**: if a `WritePolicyRequest` is abandoned due to timeout,
+- **Timed-out leader-driven write**: if a `LeaderWritePolicyRequest` is abandoned due to timeout,
   the coordinator should consider whether the primary is in fact unreachable and retry via the
   coordinator-led path rather than waiting indefinitely for a status update.
 
@@ -673,8 +665,8 @@ be pruned to bound memory growth.
 ### In-flight postgres state changes
 
 `PoolerNode` currently has no mechanism to prevent multiple concurrent requests that change
-postgres state (e.g. `PolicyRecordApplyRequest`, `ApplyWALTermRequest`,
-`RevokeParticipationRequest`). Serialising these at the `PoolerNode` level — tracking a single
+postgres state (e.g. `SidecarApplyLeaderPolicyRequest`, `SidecarApplyTermSettingsRequest`,
+`SidecarRevokeParticipationRequest`). Serialising these at the `PoolerNode` level — tracking a single
 in-flight state-change request — would be cleaner than relying on the sidecar (`SimPooler`) to
 enforce exclusion implicitly.
 

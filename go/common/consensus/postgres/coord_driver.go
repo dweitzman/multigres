@@ -88,7 +88,7 @@ func (d *CoordDriver) Run(ctx context.Context) error {
 
 			for _, req := range requests {
 				switch r := req.(type) {
-				case consensus.WritePolicyRequest:
+				case consensus.LeaderWritePolicyRequest:
 					// Send the rules write to the target primary, then broadcast
 					// to replicas on success so they don't have to poll.
 					knownPoolerIDs := d.node.KnownPoolerIDs()
@@ -103,20 +103,20 @@ func (d *CoordDriver) Run(ctx context.Context) error {
 }
 
 // sendWritePolicy calls WritePolicy on the target primary pooler and feeds the
-// response back as a WritePolicyResponseIndicator. On success it also calls
+// response back as a LeaderWritePolicyResponseIndicator. On success it also calls
 // PushRules on all known replicas so they learn about the new rules without
 // having to poll the consensus table.
-func (d *CoordDriver) sendWritePolicy(ctx context.Context, req consensus.WritePolicyRequest, knownPoolerIDs []consensus.NodeID) {
+func (d *CoordDriver) sendWritePolicy(ctx context.Context, req consensus.LeaderWritePolicyRequest, knownPoolerIDs []consensus.NodeID) {
 	// Call WritePolicy on the primary.
 	//
-	//   resp, err := d.poolerClients[req.TargetPooler].WritePolicy(ctx, &pb.WritePolicyRequest{
+	//   resp, err := d.poolerClients[req.TargetPooler].WritePolicy(ctx, &pb.LeaderWritePolicyRequest{
 	//       CorrelationId: generateCorrelationID(),
 	//       Term:          termToProto(req.Term),
 	//   })
 	//   if err != nil {
 	//       return // primary unreachable; CoordNode will time out and retry
 	//   }
-	//   d.incoming <- consensus.WritePolicyResponseIndicator{
+	//   d.incoming <- consensus.LeaderWritePolicyResponseIndicator{
 	//       CorrelationID: resp.CorrelationId,
 	//       FromPooler:    req.TargetPooler,
 	//       Accepted:      resp.Accepted,

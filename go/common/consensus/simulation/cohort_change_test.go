@@ -64,7 +64,7 @@ func policyWriteCondition(
 	wantAccepted bool,
 ) *policyWriteResponse {
 	cond := &policyWriteResponse{seq: seq, wantAccepted: wantAccepted}
-	pooler.SendWritePolicyIndicator(consensus.WritePolicyIndicator{
+	pooler.SendWritePolicyIndicator(consensus.LeaderWritePolicyIndicator{
 		CorrelationID: fmt.Sprintf("write-seq-%d", seq),
 		FromSeq:       fromSeq,
 		Term: consensus.Term{
@@ -73,7 +73,7 @@ func policyWriteCondition(
 			Members: members,
 			Policy:  policy,
 		},
-	}, func(resp consensus.WritePolicyResponseRequest) {
+	}, func(resp consensus.LeaderWritePolicyResponseRequest) {
 		if resp.Accepted == wantAccepted {
 			cond.received = true
 		}

@@ -235,7 +235,7 @@ func TestRecruitRevokesParticipation(t *testing.T) {
 	// Attempt a write that requires node2's ACK. With node2 revoked the primary
 	// will be stuck in awaitQuorum indefinitely.
 	var writeCallbackCalled bool
-	pooler1.SendWritePolicyIndicator(consensus.WritePolicyIndicator{
+	pooler1.SendWritePolicyIndicator(consensus.LeaderWritePolicyIndicator{
 		CorrelationID: "stuck-write",
 		FromSeq:       2,
 		Term: consensus.Term{
@@ -244,7 +244,7 @@ func TestRecruitRevokesParticipation(t *testing.T) {
 			Members: []consensus.CohortMember{{ID: node1ID}, {ID: node2ID}},
 			Policy:  consensus.AtLeastPolicy(2),
 		},
-	}, func(_ consensus.WritePolicyResponseRequest) {
+	}, func(_ consensus.LeaderWritePolicyResponseRequest) {
 		writeCallbackCalled = true
 	})
 	th.RequireAdvance(30)
