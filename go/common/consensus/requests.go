@@ -51,6 +51,7 @@ type WriteShadowWALRequest struct {
 	Term         Term
 	BaseLSN      LSN
 	ApplyNow     bool
+	TraceCtx     SpanContext // propagation token from the coordinator's propose span
 }
 
 func (WriteShadowWALRequest) consensusRequest() {}
@@ -73,6 +74,7 @@ type RecruitRequest struct {
 	FromCoord    NodeID
 	AtTermSeq    int64
 	ProposedSeq  int64
+	TraceCtx     SpanContext // propagation token from the coordinator's failover span
 }
 
 func (RecruitRequest) consensusRequest() {}
@@ -225,6 +227,7 @@ type PropagatePositionRequest struct {
 	FromCoord      NodeID
 	SourceNode     NodeID       // node whose history to replicate
 	TargetPosition NodePosition // copy history up through this position
+	TraceCtx       SpanContext  // propagation token from the coordinator's failover span
 }
 
 func (PropagatePositionRequest) consensusRequest() {}
@@ -246,7 +249,8 @@ func (PropagatePositionAckedRequest) consensusRequest() {}
 type ResumeRequest struct {
 	TargetPooler NodeID
 	FromCoord    NodeID
-	Term         Term // the quorum-confirmed term to apply
+	Term         Term        // the quorum-confirmed term to apply
+	TraceCtx     SpanContext // propagation token; zero if no active coordinator span
 }
 
 func (ResumeRequest) consensusRequest() {}

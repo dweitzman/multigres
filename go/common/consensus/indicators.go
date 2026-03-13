@@ -68,6 +68,7 @@ type RecruitIndicator struct {
 	CoordID       NodeID
 	AtTermSeq     int64
 	ProposedSeq   int64
+	TraceCtx      SpanContext // propagation token from the coordinator's failover span
 }
 
 func (RecruitIndicator) consensusIndicator() {}
@@ -122,6 +123,7 @@ type WriteShadowWALIndicator struct {
 	Term          Term
 	BaseLSN       LSN
 	ApplyNow      bool
+	TraceCtx      SpanContext // propagation token from the coordinator's propose span
 }
 
 func (WriteShadowWALIndicator) consensusIndicator() {}
@@ -226,6 +228,7 @@ type PropagatePositionIndicator struct {
 	CorrelationID  string
 	SourceNode     NodeID
 	TargetPosition NodePosition
+	TraceCtx       SpanContext // propagation token from the coordinator's failover span
 }
 
 func (PropagatePositionIndicator) consensusIndicator() {}
@@ -255,7 +258,8 @@ func (PropagatePositionAckedIndicator) consensusIndicator() {}
 // Fire-and-forget: no ack is returned to the coordinator.
 type ResumeIndicator struct {
 	FromCoord NodeID
-	Term      Term // the quorum-confirmed term to apply
+	Term      Term        // the quorum-confirmed term to apply
+	TraceCtx  SpanContext // propagation token from the coordinator's active span
 }
 
 func (ResumeIndicator) consensusIndicator() {}

@@ -123,6 +123,27 @@ type CoordNode struct {
 	// lower-seq quorum is still valid before concluding the higher-seq node is
 	// definitively stuck.
 	stuckRevokedSince int64
+
+	// tracer creates spans for coordinator operations. Nil = no-op.
+	tracer CoordTracer
+	// metrics holds observable quantities for this coordinator. Zero = no-ops.
+	metrics CoordMetrics
+
+	// Active spans across multi-tick operations. Nil when not in that phase.
+	failoverSpan Span
+	recruitSpan  Span
+	proposeSpan  Span
+
+	// failoverStartTick is the tick at which the current failover span was opened.
+	// Used to compute FailoverDurationTicks when the failover completes.
+	failoverStartTick int64
+
+	// lastTick is the most recent tick passed to Step, used to end spans on Restart.
+	lastTick int64
+
+	// lastReportedQuorumSeq tracks the quorum term seq last reported to
+	// TermChangesTotal so increments fire exactly once per advance.
+	lastReportedQuorumSeq int64
 }
 
 type knownPooler struct {
@@ -197,7 +218,9 @@ type recruitedResp struct {
 // rng is used to break ties randomly when multiple candidates are equally
 // eligible for promotion during a coordinator-led term change. Pass nil to use a default
 // global source (non-deterministic; avoid in tests).
-func NewCoordNode(id NodeID, targetPolicy DurabilityPolicy, ha HighAvailabilityStrategy, rng *rand.Rand) *CoordNode {
+// tracer creates spans for coordinator operations; pass nil for no-op tracing.
+// metrics holds observable quantities; the zero value is safe (all no-ops).
+func NewCoordNode(id NodeID, targetPolicy DurabilityPolicy, ha HighAvailabilityStrategy, rng *rand.Rand, tracer CoordTracer, metrics CoordMetrics) *CoordNode {
 	if ha == nil {
 		ha = DefaultHighAvailability()
 	}
@@ -209,6 +232,8 @@ func NewCoordNode(id NodeID, targetPolicy DurabilityPolicy, ha HighAvailabilityS
 		known:                   make(map[NodeID]*knownPooler),
 		highestKnownCommitments: make(map[int64]*RecruitmentCommitment),
 		resumeSentTicks:         make(map[NodeID]int64),
+		tracer:                  tracer,
+		metrics:                 metrics,
 	}
 }
 
