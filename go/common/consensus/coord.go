@@ -95,10 +95,12 @@ type CoordNode struct {
 	pendingRecruitment *pendingRecruitment
 
 	// resumeSentTicks records the last tick at which a ResumeRequest was sent
-	// to each pooler. Used to rate-limit sends: a Resume is not re-sent to the
-	// same node until at least PhaseRetryTicks ticks have elapsed, preventing
-	// message floods when nodes are slow to catch up.
-	resumeSentTicks map[NodeID]int64
+	// to each pooler. Used to enforce a cooldown: a Resume is not re-sent to
+	// the same node until at least PhaseRetryTicks ticks have elapsed after
+	// the previous send. Reset whenever the quorum term seq advances so that
+	// nodes are immediately eligible to receive Resume for the new term.
+	resumeSentTicks     map[NodeID]int64
+	resumeQuorumTermSeq int64 // quorum term seq for which resumeSentTicks was last reset
 
 	// highestKnownCommitments maps atTermSeq to the highest-ProposedSeq
 	// RecruitmentCommitment seen for that base term, learned from rejected
@@ -555,22 +557,43 @@ func (c *CoordNode) advance(tick int64) []Request {
 	})
 }
 
-// advanceResume sends ResumeRequests to known poolers whose committed term is
-// behind the quorum-confirmed term, so they can apply the current term and
-// resume replication. Rate-limited to at most one message per node per
-// PhaseRetryTicks ticks to avoid flooding nodes that are slow to respond.
+// advanceResume sends ResumeRequests to known poolers that are believed to be
+// on a term at or below the quorum-confirmed term and therefore need to catch
+// up. Two conditions must both hold before sending:
+//  1. The coordinator has received at least one status from the node, giving it
+//     a concrete belief about the node's current term.
+//  2. The node's reported term seq is at or below the quorum term seq (a node
+//     ahead of the quorum term would reject Resume as stale; the seq-bump
+//     logic in advanceCoordLedChange handles that case instead).
+//
+// After sending to a node, a PhaseRetryTicks cooldown prevents resending until
+// the node has had time to apply the term. The cooldown resets whenever the
+// quorum term seq advances, making nodes immediately eligible for the new term.
 func (c *CoordNode) advanceResume(tick int64, quorumTerm *Term) []Request {
 	if quorumTerm == nil {
 		return nil
 	}
+	// When the quorum term advances, old cooldown timers are stale. Reset them
+	// so nodes become eligible to receive Resume for the new term immediately.
+	if quorumTerm.Seq != c.resumeQuorumTermSeq {
+		c.resumeSentTicks = make(map[NodeID]int64)
+		c.resumeQuorumTermSeq = quorumTerm.Seq
+	}
 	var reqs []Request
 	for id, p := range sortedmaps.All(c.known) {
-		if p.state.CachedTerm != nil && p.state.CachedTerm.Seq >= quorumTerm.Seq && p.state.Commitment == nil {
-			continue // already up to date and not revoked
+		if p.lastStatusTick == 0 {
+			continue // no status yet; we have no basis for believing the node needs to catch up
+		}
+		ct := p.state.CachedTerm
+		if ct != nil && ct.Seq > quorumTerm.Seq {
+			continue // node's term is ahead of the quorum term; Resume would arrive stale
+		}
+		if ct != nil && ct.Seq == quorumTerm.Seq && p.state.Commitment == nil {
+			continue // already at the quorum term and not revoked
 		}
 		lastSent := c.resumeSentTicks[id]
 		if lastSent > 0 && tick-lastSent < PhaseRetryTicks {
-			continue // rate-limit: too soon to resend
+			continue // cooldown: too soon to resend
 		}
 		c.resumeSentTicks[id] = tick
 		reqs = append(reqs, ResumeRequest{

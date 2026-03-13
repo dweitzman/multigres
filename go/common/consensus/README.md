@@ -647,17 +647,6 @@ Several operations can be abandoned mid-flight, each requiring different cleanup
   `pg_rewind` back to the current primary's timeline or reconnect to a known-good base. This
   requires a new indicator type and pooler handling ("rejoin primary" / "rewind to primary").
 
-### Unnecessary Resume messages to the primary
-
-The coordinator currently sends `ResumeRequest` to the primary whenever its `CachedTerm.Seq` is
-below the quorum term. In practice, the primary's first status broadcast arrives before its
-`PoolerDiscoveredIndicator` (because the `PerSourceDeliveryManager` delivers status indicators
-before discovery indicators), so the primary's `CachedTerm` in the coordinator's view is
-momentarily `nil`. This triggers a spurious Resume that is harmless but generates noise in the
-trace. The coordinator should skip Resume for the primary (or at least for nodes whose
-`CachedTerm` is nil because their status was not yet processed), since the primary drives term
-changes through `WritePolicyRequest` rather than waiting for a Resume.
-
 ### Resume message for stuck nodes
 
 A node may be stuck and unable to make progress without the coordinator telling it the current
