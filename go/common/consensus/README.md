@@ -562,8 +562,12 @@ overlapping revocation sets. A term's designated primary may, however, be in one
   cohorts are only permitted transiently during initial bootstrap; after that, the cluster either
   maintains `writePolicy`-level redundancy or stops accepting writes and waits for manual
   intervention or an explicit `writePolicy` change.
-- **Self-revoked**: the primary has stopped postgres and broadcast its final LSN. The coordinator
-  uses this to initiate promotion without waiting for a health timeout.
+- **Self-committed**: the primary has written a `RecruitmentCommitment` to its own storage
+  (revoking its own quorum participation), stopped postgres, and broadcast a status update
+  carrying the commitment. This is mechanically identical to being recruited by a coordinator —
+  the commitment records the position at revocation and is visible in the next status broadcast.
+  Any coordinator that sees the commitment can proceed without sending a `RecruitRequest` or
+  waiting for a health timeout.
 
 #### Three-phase graceful shutdown
 
@@ -579,13 +583,13 @@ the best-positioned replica; if it completes within the grace period, write unav
 minimal. The primary contributes by broadcasting at high frequency so the coordinator has
 current replica-position data.
 
-**Phase 2 — Self-revocation (time nearly exhausted):**
+**Phase 2 — Self-commitment (time nearly exhausted):**
 If the coordinator has not completed a term change before the grace period is nearly exhausted,
-the primary stops postgres and broadcasts a final status with `SelfRevoked=true` and the LSN at
-which postgres stopped. This is equivalent to a proactive crash report. The coordinator uses the
-self-revoked LSN to skip position-discovery for the former primary during coordinator-led
-failover. If postgres is blocked — hung waiting for sync standby ACKs — the primary force-stops
-postgres immediately rather than waiting further.
+the primary writes a self-commitment to storage (revoking its own quorum participation), stops
+postgres, and broadcasts a status update. A coordinator that sees the commitment in the status
+can treat the primary as already recruited — skipping the `RecruitRequest` round-trip — and
+proceed directly to position propagation. If postgres is blocked (hung waiting for sync standby
+ACKs), the primary force-stops postgres immediately rather than waiting further.
 
 **Phase 3 — Unclean termination (SIGKILL):**
 If the pod is killed before Phase 2 completes, the coordinator detects the health timeout and
@@ -595,9 +599,9 @@ identical to an unplanned failure.
 **When the remaining cohort cannot satisfy the write policy:**
 If no subset of the available nodes satisfies the write policy without the primary (too few
 replicas, or replicas too far behind), Phase 1 cannot produce a safe successor regardless of how
-long the coordinator waits. The primary should still proceed through Phase 2 — stopping postgres
-and broadcasting its final LSN — but manual intervention will be required to restore write
-availability after it stops.
+long the coordinator waits. The primary should still proceed through Phase 2 — writing a self-commitment and stopping
+postgres — but manual intervention will be required to restore write availability after it
+stops.
 
 **Note on leader-led primary transfer:** A pure leader-led approach — writing a new term naming a
 specific replica as the successor primary — is not safe without an additional propagation step.
