@@ -49,7 +49,14 @@ func reliableMembership(inner dstsim.IndicatorDeliveryManager[consensus.Indicato
 // newTestSim creates a Simulator pre-configured for consensus simulation tests:
 //   - Seed 42 for deterministic randomness
 //   - request routing via NewHandler(coordID)
-//   - nonRevokedSyncStandbysAreReplicas registered as a safety invariant
+//   - atMostOnePrimary and nonRevokedSyncStandbysAreReplicas registered as
+//     safety invariants
+//
+// Additional per-test invariants can be layered on using sim.Always and
+// sim.Never with the condition types in this file (nodeHasStaleTerm,
+// nodeIsParticipating). The full "highest durable position is non-decreasing"
+// invariant is tracked as future work; see the README "Highest durable
+// position" section for the design.
 //
 // Register nodes on the returned simulator, then create a SimulationTestHelper.
 func newTestSim(coordID consensus.NodeID) *simType {
@@ -57,19 +64,13 @@ func newTestSim(coordID consensus.NodeID) *simType {
 		dstsim.SimulatorOptions{Seed: 42},
 	)
 	sim.SetRequestHandler(NewHandler(coordID))
+	sim.Always(&atMostOnePrimaryWithSupportingReplicas{})
 	sim.Always(&nonRevokedSyncStandbysAreReplicas{})
 
 	// TODO: assert that no committed write is ever rolled back. Once a term
 	// reaches write quorum (PolicySeq acknowledged by enough nodes), that seq
 	// must never decrease on any node that stays running continuously. This is
 	// the core durability invariant: what quorum promised, quorum must keep.
-
-	// TODO: assert that at most one node is writable at any given tick. If a
-	// node is in primary mode (mode==postgresPrimary and not revoked), its GUC
-	// settings must match the quorum-confirmed term: syncStandbys must equal
-	// the quorum term's member list minus itself, and primaryConnInfo must be
-	// empty. Any second node simultaneously in primary mode is a split-brain
-	// violation.
 
 	// TODO: assert that the primary and all non-revoked cohort replicas agree
 	// on the current term (same Seq). A replica continuously running for more
@@ -413,6 +414,64 @@ func (c *nodeIsParticipating) Describe(_ *simType) string {
 	}
 	return fmt.Sprintf("node %v: revoked=%v primaryConnInfo=%v wantPrimary=%v mode=%v gucStandbys=%v",
 		c.sp.ID(), c.sp.isRevoked(), c.sp.primaryConnInfo, wantPrimary, c.sp.mode, standbyIDs)
+}
+
+// atMostOnePrimaryWithSupportingReplicas is a safety invariant: at most one
+// node may be capable of committing writes at any tick.
+//
+// A primary is "capable of committing" only if enough of its configured sync
+// standbys are actively streaming from it to make the policy achievable. A
+// standby actively streams from a primary when its primaryConnInfo points at
+// that primary. This filters out zombie primaries — nodes left in primary mode
+// after a coordinator-led term change whose former standbys have already
+// switched to the new primary and will no longer ACK to the old one.
+type atMostOnePrimaryWithSupportingReplicas struct{}
+
+func (c *atMostOnePrimaryWithSupportingReplicas) Name() string { return "at_most_one_primary" }
+
+func (c *atMostOnePrimaryWithSupportingReplicas) Eval(sim *simType) bool {
+	count := 0
+	for _, node := range sim.Nodes() {
+		sp, ok := node.(*SimPooler)
+		if !ok || sp.mode != postgresPrimary {
+			continue
+		}
+		if primaryCanCommitWrites(sim, sp) {
+			count++
+		}
+	}
+	return count <= 1
+}
+
+// primaryCanCommitWrites returns true if sp has enough supporting replicas
+// to potentially satisfy its durability policy. A nil policy means the
+// primary alone suffices (single-node mode).
+func primaryCanCommitWrites(sim *simType, sp *SimPooler) bool {
+	if sp.gucSyncPolicy == nil {
+		return true // no policy: primary alone can commit
+	}
+	// Build the effective cohort: primary plus only the standbys that currently
+	// point back at this primary (primaryConnInfo == sp.ID()).
+	cohort := []consensus.CohortMember{{ID: sp.ID()}}
+	for _, standby := range sp.gucSyncStandbys {
+		standbyNode := simPoolerByID(sim, standby.ID)
+		if standbyNode != nil && standbyNode.primaryConnInfo == sp.ID() {
+			cohort = append(cohort, standby)
+		}
+	}
+	return sp.gucSyncPolicy.IsAchievable(cohort)
+}
+
+func (c *atMostOnePrimaryWithSupportingReplicas) Describe(sim *simType) string {
+	var lines []string
+	for _, node := range sim.Nodes() {
+		sp, ok := node.(*SimPooler)
+		if !ok || sp.mode != postgresPrimary {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("  %v: can_commit=%v", sp.ID(), primaryCanCommitWrites(sim, sp)))
+	}
+	return "nodes in primary mode:\n" + strings.Join(lines, "\n")
 }
 
 // nonRevokedSyncStandbysAreReplicas is a safety invariant: every non-revoked
