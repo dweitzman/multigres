@@ -51,8 +51,21 @@ type PoolerNode struct {
 	committed PoolerPersistentState
 
 	// pgStatus is the operational state of the postgres instance. Ephemeral:
-	// starts as Running, set to Stopped on TerminateIndicator, reset by Restart().
+	// reset to Running by Restart(). Set to Stopped by the sidecar when postgres
+	// actually stops (not by TerminateIndicator — see shuttingDown).
 	pgStatus PostgresStatus
+
+	// shuttingDown is set on TerminateIndicator (SIGTERM) and causes subsequent
+	// status broadcasts to carry ShutdownIntent=true. The node keeps postgres
+	// running so the coordinator can complete a term change before the process
+	// is killed. Cleared by Restart().
+	//
+	// TODO: consider generalising to a "draining" state — a node may want to
+	// signal to the coordinator that it should be replaced as primary without
+	// necessarily shutting down (e.g. maintenance mode, zone rebalancing).
+	// ShutdownIntent and draining have the same coordinator-side semantics
+	// (trigger a proactive term change) but different post-failover outcomes.
+	shuttingDown bool
 
 	// needsBroadcast is set when state changes so the node emits a status
 	// update on the next Step(). Set by Restart() to signal to coordinators
@@ -133,6 +146,7 @@ func (n *PoolerNode) IsActivePrimary() bool {
 func (n *PoolerNode) Restart() {
 	n.committed = PoolerPersistentState{}
 	n.pgStatus = PostgresRunning
+	n.shuttingDown = false
 	n.pendingApply = nil
 	n.pendingCorrelationID = ""
 	n.pendingRecruitCorrelationID = ""
@@ -175,10 +189,11 @@ func (n *PoolerNode) Step(tick int64, indicators []Indicator) []Request {
 			reqs, c := n.handleResume(v)
 			requests = append(requests, reqs...)
 			changed = changed || c
-		// k8s pod is shutting down
+		// k8s pod is shutting down (SIGTERM): signal intent, keep postgres running
+		// so the coordinator can complete a term change before the process is killed.
 		case TerminateIndicator:
-			if n.pgStatus != PostgresStopped {
-				n.pgStatus = PostgresStopped
+			if !n.shuttingDown {
+				n.shuttingDown = true
 				changed = true
 			}
 
@@ -591,5 +606,6 @@ func (n *PoolerNode) statusUpdate() PoolerStatusUpdateRequest {
 		State:          n.committed,
 		PostgresStatus: n.pgStatus,
 		Properties:     n.properties,
+		ShutdownIntent: n.shuttingDown,
 	}
 }

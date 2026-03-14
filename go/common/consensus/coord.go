@@ -129,6 +129,7 @@ type knownPooler struct {
 	state          PoolerPersistentState
 	pgStatus       PostgresStatus
 	properties     NodeProperties
+	shutdownIntent bool
 	lastStatusTick int64 // tick at which the last PoolerStatusIndicator was received
 }
 
@@ -299,6 +300,7 @@ func (c *CoordNode) ShardStatus(tick int64) ShardStatus {
 	for id, p := range sortedmaps.All(c.known) {
 		health[id] = NodeHealth{
 			PostgresStatus: p.pgStatus,
+			ShutdownIntent: p.shutdownIntent,
 			LastHeardTick:  p.lastStatusTick,
 		}
 	}
@@ -337,6 +339,7 @@ func (c *CoordNode) Step(tick int64, indicators []Indicator) []Request {
 				p.state = v.State
 				p.pgStatus = v.PostgresStatus
 				p.properties = v.Properties
+				p.shutdownIntent = v.ShutdownIntent
 				p.lastStatusTick = tick
 			}
 			// Proactively learn about existing commitments from status broadcasts

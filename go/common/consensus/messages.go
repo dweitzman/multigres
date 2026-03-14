@@ -480,6 +480,11 @@ type PoolerStatusUpdateRequest struct {
 	State          PoolerPersistentState
 	PostgresStatus PostgresStatus
 	Properties     NodeProperties
+	// ShutdownIntent signals that this node intends to stop soon (e.g. SIGTERM
+	// received). Coordinators that see this on the current primary should
+	// initiate a coordinator-led term change proactively, while the primary is
+	// still cooperative, rather than waiting for a health timeout.
+	ShutdownIntent bool
 }
 
 func (PoolerStatusUpdateRequest) consensusRequest() {}
@@ -492,6 +497,7 @@ type PoolerStatusIndicator struct {
 	State          PoolerPersistentState
 	PostgresStatus PostgresStatus
 	Properties     NodeProperties
+	ShutdownIntent bool
 }
 
 func (PoolerStatusIndicator) consensusIndicator() {}

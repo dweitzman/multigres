@@ -147,6 +147,7 @@ func (h *Handler) ProcessRequests(
 					State:          r.State,
 					PostgresStatus: r.PostgresStatus,
 					Properties:     r.Properties,
+					ShutdownIntent: r.ShutdownIntent,
 				})
 			}
 

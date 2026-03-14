@@ -18,6 +18,11 @@ package consensus
 type NodeHealth struct {
 	PostgresStatus PostgresStatus
 	LastHeardTick  int64 // 0 = never heard from
+	// ShutdownIntent is true when the node has signalled that it intends to
+	// stop soon (SIGTERM received). Treated as unhealthy for HA decisions so
+	// the coordinator initiates a proactive term change while the node is still
+	// cooperative, rather than waiting for PostgresStopped or a health timeout.
+	ShutdownIntent bool
 }
 
 // ShardStatus is a snapshot of the coordinator's complete view of the cluster —
@@ -131,11 +136,15 @@ func CanAttemptFailover(status ShardStatus) bool {
 	return defaultHA{}.CanAttemptFailover(status)
 }
 
-// isNodeHealthy returns true when the given node is considered reachable.
-// A node is unhealthy when its postgres is stopped or when it has not sent a
-// status update within HealthTimeoutTicks.
+// isNodeHealthy returns true when the given node is considered reachable and
+// willing to serve writes. A node is unhealthy when its postgres is stopped,
+// when it has signalled shutdown intent, or when it has not sent a status
+// update within HealthTimeoutTicks.
 func isNodeHealthy(health NodeHealth, tick int64) bool {
 	if health.PostgresStatus == PostgresStopped {
+		return false
+	}
+	if health.ShutdownIntent {
 		return false
 	}
 	if health.LastHeardTick > 0 && tick-health.LastHeardTick > HealthTimeoutTicks {
