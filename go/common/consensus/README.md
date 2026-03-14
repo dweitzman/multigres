@@ -793,6 +793,22 @@ as global invariants. The `nodeHasStaleTerm` and `nodeIsParticipating` condition
 convergence and participation invariants. The full highest-durable-position invariant is left as
 future work pending the BothPolicy and ShardStatus additions above.
 
+### Fast recovery simulation tests
+
+A valuable class of tests to grow: start a cluster in a specific broken or degraded state (crashed
+primary, stale replica, graceful shutdown in progress, etc.) and assert that write quorum is
+restored within the **minimum** number of ticks needed for all messages to propagate under a
+reliable (1-tick delivery) network. Setting tight tick budgets serves two purposes:
+
+1. **Regression guard** — a change that adds an unnecessary round-trip causes the test to fail
+   immediately, rather than silently increasing recovery latency.
+2. **Living documentation** — the budget makes the expected convergence time for each scenario
+   explicit and reviewable.
+
+`TestGracefulPrimaryShutdown` in `graceful_shutdown_test.go` is the first test in this style. Its
+budget (`HealthTimeoutTicks/2 = 150 ticks`) proves that a proactive `ShutdownIntent`-driven
+failover completes orders of magnitude faster than the health-timeout path.
+
 ### LSN visibility in simulation traces
 
 When `DSTSIM_TRACE=1` is set, node state dumps do not include the current WAL LSN. Adding the
