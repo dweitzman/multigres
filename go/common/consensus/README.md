@@ -538,11 +538,72 @@ pooler has not sent a status update within that many ticks, it is considered unr
 if its last known `pgStatus` was `Running`. Zero (the default) disables timeout-based staleness —
 suitable for simulation tests where poolers only broadcast on state change.
 
-### Stage 4 — Graceful primary replacement
+### Stage 4 — Graceful primary shutdown
 
-Planned maintenance: the stepping-down primary writes a `Term` updating `Primary`
-before shutdown, eliminating the need for coordinator-led term change and reducing the switchover window
-to near zero.
+#### Write policy and primary state model
+
+The coordinator enforces a **write policy** (`writePolicy`): the `DurabilityPolicy` that must be
+satisfied before user writes are accepted. It is an enforced gate, not a background goal. If the
+current cohort cannot satisfy `writePolicy`, user writes do not proceed — the cluster waits for
+nodes to recover or for an operator to explicitly lower `writePolicy` to match what is achievable.
+Changing `writePolicy` is always an explicit operator action; there is no automatic escalation or
+de-escalation.
+
+Every `Term` always carries a non-empty `Primary` field. There are no "leaderless terms"
+(`Primary = nil`). This invariant ensures the coordinator's `RevokesAndSamplesAllRevocationSets`
+check always has a well-defined primary anchor, allowing racing coordinators to correctly compute
+overlapping revocation sets. A term's designated primary may, however, be in one of three states:
+
+- **Active**: the cohort satisfies `writePolicy` and the term's ack policy; the node is running
+  postgres in primary mode and accepting user writes.
+- **Pre-revoked** (bootstrap only): the term's cohort cannot yet satisfy `writePolicy` — the
+  designated primary never enters postgres primary mode. The coordinator is working to staff the
+  cohort. Once `writePolicy` is achievable, the primary starts normally. Sub-`writePolicy`
+  cohorts are only permitted transiently during initial bootstrap; after that, the cluster either
+  maintains `writePolicy`-level redundancy or stops accepting writes and waits for manual
+  intervention or an explicit `writePolicy` change.
+- **Self-revoked**: the primary has stopped postgres and broadcast its final LSN. The coordinator
+  uses this to initiate promotion without waiting for a health timeout.
+
+#### Three-phase graceful shutdown
+
+When a primary receives SIGTERM it follows an escalating three-phase protocol, spending as much of
+its grace period as possible in the earlier (cheaper) phases:
+
+**Phase 1 — Early warning (on SIGTERM):**
+The primary immediately broadcasts a status update with a `ShutdownIntent` flag. The coordinator,
+which receives status updates over a streaming gRPC connection, reacts within milliseconds.
+If the remaining cohort without the primary can satisfy the write policy, the coordinator starts a
+coordinator-led term change to elect a replacement. This is the optimal path: the coordinator picks
+the best-positioned replica; if it completes within the grace period, write unavailability is
+minimal. The primary contributes by broadcasting at high frequency so the coordinator has
+current replica-position data.
+
+**Phase 2 — Self-revocation (time nearly exhausted):**
+If the coordinator has not completed a term change before the grace period is nearly exhausted,
+the primary stops postgres and broadcasts a final status with `SelfRevoked=true` and the LSN at
+which postgres stopped. This is equivalent to a proactive crash report. The coordinator uses the
+self-revoked LSN to skip position-discovery for the former primary during coordinator-led
+failover. If postgres is blocked — hung waiting for sync standby ACKs — the primary force-stops
+postgres immediately rather than waiting further.
+
+**Phase 3 — Unclean termination (SIGKILL):**
+If the pod is killed before Phase 2 completes, the coordinator detects the health timeout and
+initiates standard coordinator-led failover without the self-revoked LSN hint. This is
+identical to an unplanned failure.
+
+**When the remaining cohort cannot satisfy the write policy:**
+If no subset of the available nodes satisfies the write policy without the primary (too few
+replicas, or replicas too far behind), Phase 1 cannot produce a safe successor regardless of how
+long the coordinator waits. The primary should still proceed through Phase 2 — stopping postgres
+and broadcasting its final LSN — but manual intervention will be required to restore write
+availability after it stops.
+
+**Note on leader-led primary transfer:** A pure leader-led approach — writing a new term naming a
+specific replica as the successor primary — is not safe without an additional propagation step.
+PostgreSQL's `ANY N` sync-standby policy cannot guarantee that a specifically-named replica has
+ACK'd the transfer write, so the named successor might not have received it. The coordinator-led
+path (Phase 1) handles this correctly via the propagate-position step.
 
 ### Stage 5 — Additional durability policies
 
@@ -577,11 +638,11 @@ if the declared members do not in fact cover all committed writes.
    The new cohort members bring the term back to the original quorum requirement automatically as
    they join and start ACKing.
 
-2. **Restore availability at lower durability:** Reduce the ack policy to match the surviving cohort
-   size (e.g., `AtLeast(2)` instead of `AtLeast(3)`). The coordinator can be configured with a
-   `targetPolicy` — once enough cohort members are available again, the coordinator automatically
-   escalates the policy back to the target without further operator action. The reduced policy is a
-   temporary concession, not a permanent downgrade.
+2. **Restore availability at lower durability:** Explicitly lower `writePolicy` to match the
+   surviving cohort size (e.g., `AtLeast(2)` instead of `AtLeast(3)`). The coordinator can then
+   publish a new term the surviving nodes can satisfy, unblocking writes. Returning to the original
+   durability level requires an explicit operator action when sufficient nodes are available again —
+   there is no automatic escalation.
 
 Unsafe term changes require explicit operator authorisation and should be logged prominently, since
 they are inherently lossy when the unavailable nodes held committed writes not covered by the
