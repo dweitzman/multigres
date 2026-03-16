@@ -649,9 +649,82 @@ func TestTakeRemedialAction_LogDeduplication(t *testing.T) {
 	assert.Equal(t, "restoring_from_backup", pm.pgMonitorLastLoggedReason)
 }
 
-// Note: Type adjustment action execution (AdjustTypeToPrimary, AdjustTypeToReplica) is tested in
-// integration tests because it requires topoClient and full infrastructure.
-// The decision logic for type adjustment is tested in TestDetermineRemedialAction above.
+// TestTakeRemedialAction_AdjustTypeToReplica_ClearsPrimaryTerm verifies that when the postgres
+// monitor demotes a PRIMARY pooler to REPLICA (remedialActionAdjustTypeToReplica), the
+// primary_term in consensus state is cleared to 0.
+//
+// Invariant: primary_term == 0 for all REPLICA nodes.
+//
+// This test demonstrates MUL-246: the monitor path calls changeTypeLocked(REPLICA) but does not
+// call SetPrimaryTerm(0), leaving a stale primary_term on the demoted node.
+func TestTakeRemedialAction_AdjustTypeToReplica_ClearsPrimaryTerm(t *testing.T) {
+	ctx := t.Context()
+
+	ts, _ := memorytopo.NewServerAndFactory(ctx, "zone1")
+	t.Cleanup(func() { ts.Close() })
+
+	database := "testdb"
+	addDatabaseToTopo(t, ts, database)
+
+	tmpDir := t.TempDir()
+	serviceID := &clustermetadatapb.ID{
+		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Cell:      "zone1",
+		Name:      "test-pooler",
+	}
+	multipooler := &clustermetadatapb.MultiPooler{
+		Id:            serviceID,
+		Database:      database,
+		Hostname:      "localhost",
+		PortMap:       map[string]int32{"grpc": 8080},
+		Type:          clustermetadatapb.PoolerType_PRIMARY,
+		ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
+		TableGroup:    constants.DefaultTableGroup,
+		Shard:         constants.DefaultShard,
+		PoolerDir:     tmpDir,
+	}
+	require.NoError(t, ts.CreateMultiPooler(ctx, multipooler))
+
+	// Create the manager but do NOT call Start(), which avoids opening DB connections
+	// and the background heartbeat goroutine that would try to query postgres.
+	pm, err := NewMultiPoolerManager(slog.Default(), multipooler, &Config{TopoClient: ts})
+	require.NoError(t, err)
+	t.Cleanup(func() { pm.Shutdown() })
+
+	// Create the pg_data directory with PG_VERSION to mark it as initialized.
+	// This is required by setConsensusTerm's data directory validation.
+	pgDataDir := filepath.Join(tmpDir, "pg_data")
+	require.NoError(t, os.MkdirAll(pgDataDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pgDataDir, "PG_VERSION"), []byte("17\n"), 0o644))
+
+	// Write a consensus term with primary_term=1 to simulate a promoted primary node.
+	setTermForTest(t, tmpDir, &multipoolermanagerdatapb.ConsensusTerm{
+		TermNumber:  1,
+		PrimaryTerm: 1,
+	})
+	_, err = pm.consensusState.Load()
+	require.NoError(t, err)
+
+	lockCtx, err := pm.actionLock.Acquire(ctx, "test")
+	require.NoError(t, err)
+	defer pm.actionLock.Release(lockCtx)
+
+	initialTerm, err := pm.consensusState.GetTerm(lockCtx)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), initialTerm.GetPrimaryTerm(), "setup: primary_term should be 1 initially")
+
+	// Simulate the monitor detecting postgres is running in recovery mode while topology says PRIMARY.
+	pm.takeRemedialAction(lockCtx, remedialActionAdjustTypeToReplica)
+
+	require.Equal(t, clustermetadatapb.PoolerType_REPLICA, pm.getPoolerType(),
+		"pooler type should be updated to REPLICA")
+
+	// primary_term must be cleared when transitioning to REPLICA via the monitor path (MUL-246).
+	term, err := pm.consensusState.GetTerm(lockCtx)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), term.GetPrimaryTerm(),
+		"primary_term must be cleared to 0 when monitor demotes PRIMARY to REPLICA")
+}
 
 func TestHasCompleteBackups_WithCompleteBackup(t *testing.T) {
 	ctx := context.Background()

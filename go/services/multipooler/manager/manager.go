@@ -1679,6 +1679,14 @@ func (pm *MultiPoolerManager) takeRemedialAction(ctx context.Context, action rem
 		pm.logger.InfoContext(ctx, "MonitorPostgres: Changing pooler type to replica")
 		if err := pm.changeTypeLocked(ctx, clustermetadatapb.PoolerType_REPLICA); err != nil {
 			pm.logger.ErrorContext(ctx, "MonitorPostgres: failed to change pooler type to replica", "error", err)
+			break
+		}
+		// Clear primary_term to maintain the invariant: primary_term == 0 for REPLICA nodes.
+		// This node is no longer acting as primary, so stale authority metadata must be removed.
+		if pm.consensusState != nil {
+			if err := pm.consensusState.SetPrimaryTerm(ctx, 0, false /* force */); err != nil {
+				pm.logger.ErrorContext(ctx, "MonitorPostgres: failed to clear primary term after type change to replica", "error", err)
+			}
 		}
 
 	case remedialActionStartPostgres:
