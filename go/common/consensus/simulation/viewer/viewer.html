@@ -1,0 +1,79 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Consensus Viewer</title>
+
+    <style>
+      body {
+        font-family: sans-serif;
+      }
+
+      #controls {
+        margin-bottom: 10px;
+      }
+
+      .log-entry {
+        fill: white;
+        stroke: black;
+      }
+
+      .log-entry.committed {
+        fill: #9be79b;
+      }
+
+      .log-entry.diverged {
+        fill: #ffb3b3;
+      }
+
+      /* Term rule-change entries — distinct from user data transactions */
+      .log-entry.rule {
+        fill: #ddd8ff;
+        stroke: #7766cc;
+      }
+
+      .log-entry.rule.committed {
+        fill: #bcb0ff;
+      }
+
+      .message {
+        stroke: red;
+        stroke-width: 2;
+        fill: none;
+      }
+
+      .message.dropped {
+        stroke: #bbb;
+        stroke-dasharray: 5, 5;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="controls">
+      <select id="exampleSelect" onchange="loadExample(this.value)"></select>
+
+      <button onclick="prevTick()">◀</button>
+      <button onclick="togglePlay()">▶</button>
+      <button onclick="nextTick()">▶</button>
+
+      Tick: <span id="tickLabel"></span>
+    </div>
+
+    <svg id="canvas" width="1100" height="700"></svg>
+
+    <div
+      id="legend"
+      style="
+        margin-top: 16px;
+        font-size: 13px;
+        font-family: monospace;
+        max-width: 900px;
+      "
+    ></div>
+
+    <script src="examples/shard_initialization.js"></script>
+    <script src="examples/phantom_transaction_recovery.js"></script>
+    <script src="viewer.js"></script>
+  </body>
+</html>
