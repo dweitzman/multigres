@@ -476,12 +476,114 @@ stage it asserts that every pooler has:
 - For each primary: every node in `syncStandbys` must be a known replica currently
   streaming from that primary (no phantom sync requirements).
 
-### Stage 2 — Bootstrap
+### Stage 2 — Bootstrap and scale-to-zero
 
-Initialize a cluster from scratch. The provisioner designates a single bootstrap-eligible node;
-the coordinator establishes it as primary in a 1-node cohort with `AtLeast(1)`. No election needed
-for bootstrap — a single node always forms a valid quorum with `AtLeast(1)`. Subsequent cohort
-expansion uses Stage 1.
+Bootstrap is the process of establishing a new cohort with authority granted from outside the
+running consensus protocol. It is structurally identical to a coordinator-led term change whose
+revocation step was completed externally rather than via the recruit/propagate protocol. The
+coordinator proceeds directly to the establish phase — the same phase used after any term change.
+
+#### Bootstrap grant
+
+Every bootstrap starts with a **bootstrap grant**: an external promise asserting that all writes
+under any previous term have been irrevocably revoked up to a known LSN, and that the grantee has
+authority to establish the next term with a specified cohort and designated primary.
+
+The grant is the tuple `(revoked_at_LSN, old_term_seq, designated_primary, new_cohort)`. The
+coordinator validates that the grant is structurally sound (seq advances monotonically, LSN is
+non-decreasing) and proceeds to the establish phase; no recruitment round-trip is needed because
+the provisioner has already guaranteed revocation.
+
+#### Restoring from the grant
+
+Each node in the new cohort must reach a state consistent with `revoked_at_LSN` before the
+designated primary is promoted. "Restore to LSN N" means:
+
+- **`N = 0`** — run `initdb`. The empty database _is_ the backup at LSN 0. There is no prior
+  data to carry forward and nothing to revoke. This is not a special case in the protocol; it is
+  simply a grant for a universe where no writes have ever existed.
+- **`N > 0`** — restore from a backup taken at `revoked_at_LSN` and stream WAL from the
+  designated primary to converge.
+
+A node already at LSN > `revoked_at_LSN` has writes that were never part of the new cohort's
+lineage and constitute a competing timeline. It must `pg_rewind` to `revoked_at_LSN` before
+joining, but only on explicit operator instruction — **poolers do not auto-rewind**. Refusing to
+rewind automatically is also what makes stale bootstrap grants safe: a provisioner presenting a
+stale `revoked_at_LSN` will have its `InitializeCohort` rejected by any pooler whose committed
+state has already advanced past that point. The LSN is the authority token; no separate
+provisioning ID is needed.
+
+#### Staffing the cohort before user writes begin
+
+The operator configures a `writePolicy` for user transaction writes (e.g. `AtLeast(3)`). A
+freshly bootstrapped cohort may start smaller than `writePolicy` requires — for example, a single
+node — while additional replicas are provisioned and brought up to speed.
+
+During this staffing window:
+
+- All nodes run postgres in **standby mode** (hot standby, not writable). The designated primary
+  is held in the pre-revoked state described in Stage 4 and is never promoted until `writePolicy`
+  is achievable. User writes are physically blocked.
+- **Shadow WAL rule-change writes are permitted** under whatever quorum the current cohort can
+  form. This allows cohort expansion rules (adding new members, updating the term) to make
+  progress even before the target durability level is met.
+
+The risk during the staffing window is intentionally bounded: the only writes that can occur are
+shadow WAL entries recording cohort membership changes. These are safe to lose because they carry
+no user data and the operation is idempotent — if the cluster goes down before `writePolicy` is
+met, `InitializeCohort` can simply be re-run and cohort expansion retried from scratch.
+
+Once the cohort reaches `writePolicy`, the designated primary is promoted and user writes begin.
+Subsequent cohort changes use the Stage 1 normal path.
+
+#### Scale-to-zero and the shutdown term
+
+Scaling a shard to zero is the inverse of bootstrap. The goal is to produce a bootstrap grant that
+a future provisioner can use to restart the shard, while ensuring that no normal coordinator
+operation (failover, cohort expansion, emergency recovery) can inadvertently bring the shard back
+up in the meantime.
+
+**Shutdown term:** The scale-to-zero coordinator establishes a special terminal term — the
+**shutdown term** — via the normal recruit/propagate/establish protocol. The shutdown term carries
+a `Shutdown=true` flag alongside the `backup_ref` of a consistent backup taken at
+`revoked_at_LSN`. The backup and the reported LSN must correspond exactly: the backup is taken
+_after_ all cohort members have been revoked at that LSN, so the backup reflects the complete
+final state. Once the shutdown term is committed:
+
+- No normal coordinator operation is permitted. Any coordinator that reads the shutdown term from
+  a cohort member's committed state must refuse to proceed with failover, cohort expansion, or
+  any other operation. The only legal operation is `InitializeCohort`.
+- The shutdown state is **durable through backup/restore**. Because the shutdown term is part of
+  each node's committed persistent state, a freshly-restored node comes up already holding the
+  shutdown flag. A stale coordinator that connects to it sees the flag and stops — this prevents
+  the race condition where one orchestrator is scaling down while another is trying to keep the
+  shard alive.
+
+**Shutdown record:** The coordinator publishes a **shutdown record** —
+`(revoked_at_LSN, shutdown_term_seq, backup_ref)` — after the shutdown term reaches quorum. This
+is the bootstrap grant for the next scale-up: it asserts that all writes under all previous terms
+are revoked at `revoked_at_LSN` and that `backup_ref` is the consistent starting point for a
+future cohort.
+
+#### InitializeCohort
+
+`InitializeCohort` is the operation that transitions a shard out of shutdown state. It consumes
+the shutdown record and presents the new cohort:
+
+```
+InitializeCohort(revoked_at_LSN, shutdown_term_seq, backup_ref, designated_primary, new_cohort)
+```
+
+The coordinator verifies that `shutdown_term_seq` matches the shutdown term stored in the cohort
+members' committed state (confirming the caller has acknowledged the correct shutdown snapshot),
+then establishes term `shutdown_term_seq + 1` with the new cohort and designated primary. Nodes
+restore from `backup_ref` (or run `initdb` if `revoked_at_LSN = 0`) and the staffing window
+begins as described above.
+
+For a fresh cluster there is no prior shutdown record. The implicit grant is
+`(revoked_at_LSN=0, shutdown_term_seq=0)`, which is vacuously valid: there is nothing to revoke
+and no competing timeline can exist. `InitializeCohort` with this implicit grant establishes term 1
+and the designated primary runs `initdb`.
 
 ### Stage 3 — Coordinator-led term change ✅ implemented
 
@@ -654,33 +756,18 @@ declared quorum.
 
 ### Stage 8 — Provisioning lineage
 
-**Scenario:** Scaling a shard to zero — or replacing the entire cohort — requires a clean handoff
-between two independent generations of provisioning. Without lineage tracking, a stale provisioner
-from a previous generation could instruct a new cohort to replicate from an incompatible base backup.
+The original motivation for a separate provisioning ID was to prevent a stale or restarted
+provisioner from a previous generation from instructing a new cohort to restore from an
+incompatible base backup. The bootstrap grant design in Stage 2 addresses this at the protocol
+level: a stale `InitializeCohort` carrying an old `revoked_at_LSN` is rejected by any pooler
+whose committed state has already advanced past that point, and poolers do not auto-rewind.
+The LSN check is the authority token.
 
-**Scale down:** The current provisioner revokes write access via the coordinator-led protocol and takes
-an up-to-date backup at a known LSN. This backup LSN becomes the _handoff LSN_ — the minimum safe
-base for any future cohort.
-
-**Scale up:** A new provisioner must either:
-
-- Start all nodes from a backup at or beyond the handoff LSN, so they can stream WAL from the new
-  primary and converge to a consistent state, or
-- Run `initdb` on all nodes (valid when no prior data needs to be carried forward — essentially a
-  fresh cluster).
-
-The resource/pod provisioner is the only entity that knows which path is required and what the
-minimum safe backup LSN is. This cannot be encoded safely in the consensus term alone.
-
-**Proposal:** Each provisioner generates a random _provisioning ID_ at startup and stamps it on all
-policy instructions it issues — for example, "observers joining this cohort must restore from a
-backup at least as new as LSN X." Poolers validate the provisioning ID before accepting such advice,
-ignoring instructions from a different generation. A new provisioner explicitly supersedes the
-previous one by committing a term update that installs the new provisioning ID, revoking the
-previous generation's authority.
-
-This bounds the blast radius of a stale or restarted provisioner: its instructions are ignored by
-any pooler that has already enrolled in the new generation.
+Whether a separate provisioning ID is still needed for narrower cases — for example, preventing a
+stale provisioner from adding observers to a running cohort via normal Stage 1 expansion — is an
+open question. The Stage 1 path already requires coordinator involvement, which validates the
+current term, so it is not obvious that a stale provisioner could inject nodes through that path
+either.
 
 ## Open design questions
 
