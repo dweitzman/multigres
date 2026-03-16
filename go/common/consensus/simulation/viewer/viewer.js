@@ -414,6 +414,12 @@ function nextTick() {
   }
 }
 
+function resetTick() {
+  tickIndex = 0
+  renderTick()
+  updateHash()
+}
+
 function prevTick() {
   if (tickIndex > 0) {
     tickIndex--
@@ -424,6 +430,7 @@ function prevTick() {
 
 function togglePlay() {
   playing = !playing
+  document.getElementById("btnPlay").textContent = playing ? "⏸" : "▶"
   if (playing) playLoop()
 }
 
@@ -433,6 +440,7 @@ async function playLoop() {
     await new Promise(r => setTimeout(r, 600))
   }
   playing = false
+  document.getElementById("btnPlay").textContent = "▶"
   updateHash()
 }
 

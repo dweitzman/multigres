@@ -11,6 +11,21 @@
 
       #controls {
         margin-bottom: 10px;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+
+      #controls button {
+        width: 32px;
+        height: 28px;
+        font-size: 14px;
+        line-height: 1;
+        padding: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        vertical-align: middle;
       }
 
       .log-entry {
@@ -53,9 +68,10 @@
     <div id="controls">
       <select id="exampleSelect" onchange="loadExample(this.value)"></select>
 
-      <button onclick="prevTick()">◀</button>
-      <button onclick="togglePlay()">▶</button>
-      <button onclick="nextTick()">▶</button>
+      <button id="btnReset" onclick="resetTick()">↺</button>
+      <button id="btnPrev" onclick="prevTick()">⏮</button>
+      <button id="btnPlay" onclick="togglePlay()">▶</button>
+      <button id="btnNext" onclick="nextTick()">⏭</button>
 
       Tick: <span id="tickLabel"></span>
     </div>
