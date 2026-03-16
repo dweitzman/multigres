@@ -19,6 +19,7 @@
 
 window.EXAMPLES = window.EXAMPLES || {}
 window.EXAMPLES["Phantom transaction recovery"] = {
+  _sourceFile: "examples/phantom_transaction_recovery.js",
   term_details: {
     "R(2)": "term=2: leader=node-1, cohort=[node-1,node-2,node-3,node-4], policy≥3",
     "R(4)": "term=4: leader=node-3, cohort=[node-1,node-2,node-3,node-4], policy≥3"

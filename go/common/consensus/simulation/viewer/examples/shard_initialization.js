@@ -1,5 +1,6 @@
 window.EXAMPLES = window.EXAMPLES || {}
 window.EXAMPLES["Shard initialization"] = {
+  _sourceFile: "examples/shard_initialization.js",
   term_details: {
     "R(1)": "term=1: leader=node-1, cohort=[node-1]",
     "R(2)": "term=2: leader=node-1, cohort=[node-1, node-2, node-3]"

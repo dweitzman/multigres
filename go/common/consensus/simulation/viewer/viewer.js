@@ -59,6 +59,10 @@ function loadExample(name, tick = 0) {
   updateHash()
   renderTick()
   renderLegend()
+  const link = document.getElementById("sourceLink")
+  const file = trace._sourceFile || ""
+  link.href = file
+  link.textContent = file
 }
 
 async function init() {
