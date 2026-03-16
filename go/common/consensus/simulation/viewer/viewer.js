@@ -7,12 +7,13 @@ state, WAL log contents, and message traffic between nodes.
 See README.md for the trace format and usage instructions.
 
 Design principles:
-  - Nodes never move between frames (deterministic layout).
+  - Node columns are recomputed each tick; nodes animate to their new position.
   - Plain HTML + SVG + JavaScript, no build step, no dependencies.
   - The viewer only visualises the trace; it never computes consensus logic.
 */
 
 let trace
+let traceName = ""
 let tickIndex = 0
 let playing = false
 
@@ -28,6 +29,7 @@ const columnX = {
 }
 
 const nodePositions = {}
+let prevNodePositions = {}
 
 const nodeWidth = 180
 const nodeHeight = 100
@@ -45,10 +47,16 @@ const roleColors = {
   candidate:     "#fff3cd",
 }
 
-function loadExample(name) {
+function updateHash() {
+  location.hash = encodeURIComponent(traceName) + "/" + (tickIndex + 1)
+}
+
+function loadExample(name, tick = 0) {
   trace = window.EXAMPLES[name]
-  tickIndex = 0
-  location.hash = encodeURIComponent(name)
+  traceName = name
+  tickIndex = tick
+  prevNodePositions = {}
+  updateHash()
   renderTick()
   renderLegend()
 }
@@ -62,11 +70,16 @@ async function init() {
     sel.appendChild(opt)
   }
 
-  const fromHash = decodeURIComponent(location.hash.slice(1))
-  const start = (fromHash && window.EXAMPLES[fromHash]) ? fromHash : sel.options[0]?.value
+  const hash = decodeURIComponent(location.hash.slice(1))
+  const slash = hash.lastIndexOf("/")
+  const exName = slash >= 0 ? hash.slice(0, slash) : hash
+  const tickNum = slash >= 0 ? parseInt(hash.slice(slash + 1), 10) : 1
+
+  const start = (exName && window.EXAMPLES[exName]) ? exName : sel.options[0]?.value
   if (start) {
     sel.value = start
-    loadExample(start)
+    const tick = (window.EXAMPLES[exName] && tickNum >= 1) ? tickNum - 1 : 0
+    loadExample(start, tick)
   }
 }
 
@@ -105,6 +118,26 @@ function computeNodeLayout(nodes) {
   }
 }
 
+function animateNodeMove(g, nodeId) {
+  const prev = prevNodePositions[nodeId]
+  const curr = nodePositions[nodeId]
+  if (!prev || !curr || (prev.x === curr.x && prev.y === curr.y)) return
+
+  const anim = svgElem("animateTransform")
+  anim.setAttribute("attributeName",  "transform")
+  anim.setAttribute("attributeType",  "XML")
+  anim.setAttribute("type",           "translate")
+  anim.setAttribute("from",           `${prev.x - curr.x} ${prev.y - curr.y}`)
+  anim.setAttribute("to",             "0 0")
+  anim.setAttribute("dur",            "0.4s")
+  anim.setAttribute("begin",          "indefinite")
+  anim.setAttribute("calcMode",       "spline")
+  anim.setAttribute("keySplines",     "0.25 0.1 0.25 1")
+  anim.setAttribute("fill",           "freeze")
+  g.appendChild(anim)
+  anim.beginElement()
+}
+
 function clearCanvas() {
   while (svg.firstChild) svg.removeChild(svg.firstChild)
 }
@@ -115,6 +148,7 @@ function renderTick() {
   document.getElementById("tickLabel").textContent =
     `${tickIndex + 1} / ${trace.ticks.length}`
 
+  prevNodePositions = {...nodePositions}
   computeNodeLayout(tick.nodes)
   clearCanvas()
   addArrowheadDefs()
@@ -174,6 +208,7 @@ function renderCoordinator(node) {
   }
 
   svg.appendChild(g)
+  animateNodeMove(g, node.id)
 }
 
 function renderPooler(node) {
@@ -206,6 +241,7 @@ function renderPooler(node) {
 
   renderLog(g, node, pos, contentY + 4)
   svg.appendChild(g)
+  animateNodeMove(g, node.id)
 }
 
 function renderLog(g, node, pos, logStartY) {
@@ -374,6 +410,7 @@ function nextTick() {
   if (tickIndex < trace.ticks.length - 1) {
     tickIndex++
     renderTick()
+    updateHash()
   }
 }
 
@@ -381,6 +418,7 @@ function prevTick() {
   if (tickIndex > 0) {
     tickIndex--
     renderTick()
+    updateHash()
   }
 }
 
@@ -395,6 +433,7 @@ async function playLoop() {
     await new Promise(r => setTimeout(r, 600))
   }
   playing = false
+  updateHash()
 }
 
 function renderLegend() {
