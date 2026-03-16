@@ -154,6 +154,10 @@ function renderTick() {
 
   prevNodePositions = {...nodePositions}
   computeNodeLayout(tick.nodes)
+
+  const maxY = Math.max(...Object.values(nodePositions).map(p => p.y)) + nodeHeight + 20
+  svg.setAttribute("height", maxY)
+
   clearCanvas()
   addArrowheadDefs()
 
