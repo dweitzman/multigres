@@ -12,8 +12,15 @@
       #controls {
         margin-bottom: 10px;
         display: flex;
+        flex-wrap: wrap;
         align-items: center;
         gap: 4px;
+      }
+
+      #tick-row {
+        width: 100%;
+        font-size: 13px;
+        margin-top: 4px;
       }
 
       #controls button {
@@ -66,20 +73,28 @@
 
   <body>
     <div id="controls">
-      <select id="exampleSelect" onchange="loadExample(this.value)"></select>
+      <div style="width: 100%">
+        <label for="exampleSelect">Example:</label>
+        <select id="exampleSelect" onchange="loadExample(this.value)"></select>
+      </div>
 
       <button id="btnReset" onclick="resetTick()">↺</button>
       <button id="btnPrev" onclick="prevTick()">⏮</button>
       <button id="btnPlay" onclick="togglePlay()">▶</button>
       <button id="btnNext" onclick="nextTick()">⏭</button>
 
-      Tick: <span id="tickLabel"></span> &nbsp;
-      <a
-        id="sourceLink"
-        href=""
-        target="_blank"
-        style="font-size: 12px; color: #888"
-      ></a>
+      <label for="speedSelect" style="margin-left: 8px">Playback speed:</label>
+      <select id="speedSelect">
+        <option value="6000">0.5×</option>
+        <option value="3000" selected>1×</option>
+        <option value="1500">2×</option>
+        <option value="750">4×</option>
+      </select>
+
+      <div id="tick-row">
+        Tick: <span id="tickLabel"></span> &nbsp;
+        <a id="sourceLink" href="" target="_blank" style="color: #888"></a>
+      </div>
     </div>
 
     <svg id="canvas" width="1100" height="700"></svg>

@@ -441,7 +441,8 @@ function togglePlay() {
 async function playLoop() {
   while (playing && tickIndex < trace.ticks.length - 1) {
     nextTick()
-    await new Promise(r => setTimeout(r, 600))
+    const delay = parseInt(document.getElementById("speedSelect").value, 10)
+    await new Promise(r => setTimeout(r, delay))
   }
   playing = false
   document.getElementById("btnPlay").textContent = "▶"
