@@ -481,10 +481,15 @@ func (c *CoordNode) advance(tick int64) []Request {
 		return reqs
 	}
 
-	primaryID, primaryKnown := c.findPrimary()
-	if primaryKnown == nil {
+	quorumTerm := status.HighestQuorumTerm
+	if quorumTerm == nil {
 		return reqs
 	}
+	primaryKnown := c.known[quorumTerm.Primary]
+	if primaryKnown == nil || primaryKnown.pgStatus != PostgresRunning {
+		return reqs
+	}
+	primaryID := quorumTerm.Primary
 
 	currentTerm := primaryKnown.state.CachedTerm
 	if currentTerm == nil {
@@ -1005,22 +1010,6 @@ func (c *CoordNode) pickBestCandidate(pr *pendingRecruitment) NodeID {
 		return bestCandidates[0]
 	}
 	return bestCandidates[c.rng.IntN(len(bestCandidates))]
-}
-
-// findPrimary returns the NodeID and knownPooler for the active primary, or the
-// zero ID and nil if none is found.
-//
-// TODO: strengthen this. Ideally we find a pooler whose current rules
-// satisfy its own durability requirements (i.e. the write quorum of the policy is
-// met by the replicas currently known to be streaming), which is strong evidence of
-// a working quorum. For now, a simple role+health check suffices.
-func (c *CoordNode) findPrimary() (NodeID, *knownPooler) {
-	for id, p := range sortedmaps.All(c.known) {
-		if p.state.Role == RolePrimary && p.pgStatus == PostgresRunning {
-			return id, p
-		}
-	}
-	return "", nil
 }
 
 // observers returns known poolers not listed in the current cohort as
