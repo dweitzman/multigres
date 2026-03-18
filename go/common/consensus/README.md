@@ -60,8 +60,7 @@ type DurabilityPolicy interface {
 ```
 
 `AtLeastPolicy(n)` is the only implementation today. A write is durable when at least `n`
-cohort members have ACK'd it (primary counts as one ACK). `AtLeast(1)` requires no replicas —
-suitable for a 1-node bootstrap cluster.
+cohort members have ACK'd it (primary counts as one ACK). `AtLeast(1)` requires no replicas.
 
 ## Normal path — leader-driven rule change
 
@@ -496,45 +495,37 @@ the provisioner has already guaranteed revocation.
 
 #### Restoring from the grant
 
-Each node in the new cohort must reach a state consistent with `revoked_at_LSN` before the
-designated primary is promoted. "Restore to LSN N" means:
-
-- **`N = 0`** — run `initdb`. The empty database _is_ the backup at LSN 0. There is no prior
-  data to carry forward and nothing to revoke. This is not a special case in the protocol; it is
-  simply a grant for a universe where no writes have ever existed.
-- **`N > 0`** — restore from a backup taken at `revoked_at_LSN` and stream WAL from the
-  designated primary to converge.
-
-A node already at LSN > `revoked_at_LSN` has writes that were never part of the new cohort's
-lineage and constitute a competing timeline. It must `pg_rewind` to `revoked_at_LSN` before
+The unprovisioned-to-observer transition is where `revoked_at_LSN` is enforced as the minimum
+restore target. Each intended cohort member restores from `backup_ref` — landing at exactly
+`revoked_at_LSN` — before participating in `InitializeCohort`. A node presenting an older backup
+would be missing committed writes and is rejected. A node already running postgres at an LSN
+above `revoked_at_LSN` holds writes from a competing timeline and must `pg_rewind` before
 joining, but only on explicit operator instruction — **poolers do not auto-rewind**. Refusing to
 rewind automatically is also what makes stale bootstrap grants safe: a provisioner presenting a
 stale `revoked_at_LSN` will have its `InitializeCohort` rejected by any pooler whose committed
 state has already advanced past that point. The LSN is the authority token; no separate
 provisioning ID is needed.
 
-#### Staffing the cohort before user writes begin
+#### Establishing the initial term before user writes begin
 
-The operator configures a `writePolicy` for user transaction writes (e.g. `AtLeast(3)`). A
-freshly bootstrapped cohort may start smaller than `writePolicy` requires — for example, a single
-node — while additional replicas are provisioned and brought up to speed.
+Before `InitializeCohort` is called, each intended cohort member must already be an **observer**:
+restored from the base backup to `revoked_at_LSN` and running postgres in hot-standby (or ready
+to do so). This restore step is handled outside the consensus protocol — by the provisioner —
+and applies identically whether the shard is brand new or resuming after a scale-to-zero.
 
-During this staffing window:
+`InitializeCohort` accepts the full intended cohort and durability policy up front (e.g. three
+nodes with `AtLeast(3)`). The coordinator uses the standard recruit/propose protocol to write
+term 1 — carrying all cohort members and the target policy — to each observer's shadow WAL.
 
-- All nodes run postgres in **standby mode** (hot standby, not writable). The designated primary
-  is held in the pre-revoked state described in Stage 4 and is never promoted until `writePolicy`
-  is achievable. User writes are physically blocked.
-- **Shadow WAL rule-change writes are permitted** under whatever quorum the current cohort can
-  form. This allows cohort expansion rules (adding new members, updating the term) to make
-  progress even before the target durability level is met.
+Once term 1 is committed across the cohort:
 
-The risk during the staffing window is intentionally bounded: the only writes that can occur are
-shadow WAL entries recording cohort membership changes. These are safe to lose because they carry
-no user data and the operation is idempotent — if the cluster goes down before `writePolicy` is
-met, `InitializeCohort` can simply be re-run and cohort expansion retried from scratch.
+1. Replication GUCs are configured according to the committed term.
+2. Replica observers start streaming from the designated primary.
+3. The designated primary promotes and begins accepting user writes.
 
-Once the cohort reaches `writePolicy`, the designated primary is promoted and user writes begin.
-Subsequent cohort changes use the Stage 1 normal path.
+The full cohort and target policy are in place from the very first term, so there is no
+incremental staffing window and no sub-policy intermediate state. If the cluster goes down before
+promotion, `InitializeCohort` can be re-run from scratch.
 
 #### Scale-to-zero and the shutdown term
 
@@ -562,8 +553,15 @@ final state. Once the shutdown term is committed:
 **Shutdown record:** The coordinator publishes a **shutdown record** —
 `(revoked_at_LSN, shutdown_term_seq, backup_ref)` — after the shutdown term reaches quorum. This
 is the bootstrap grant for the next scale-up: it asserts that all writes under all previous terms
-are revoked at `revoked_at_LSN` and that `backup_ref` is the consistent starting point for a
-future cohort.
+are revoked at `revoked_at_LSN` and that `backup_ref` is a consistent backup taken at exactly
+that LSN.
+
+`revoked_at_LSN` is the **minimum LSN** any node must reach before it can become an observer.
+This is the critical constraint for the unprovisioned-to-observer transition: a node restoring
+from `backup_ref` lands exactly at `revoked_at_LSN`, and a node presenting an older backup
+would be missing committed writes and cannot join. A node already running postgres at an LSN
+_above_ `revoked_at_LSN` holds writes from a competing timeline and must `pg_rewind` before
+joining — but only on explicit operator instruction; poolers do not auto-rewind.
 
 #### InitializeCohort
 
@@ -574,16 +572,12 @@ the shutdown record and presents the new cohort:
 InitializeCohort(revoked_at_LSN, shutdown_term_seq, backup_ref, designated_primary, new_cohort)
 ```
 
+The pre-condition is that all intended cohort members are already observers: each has restored
+from `backup_ref` (landing at `revoked_at_LSN`) and is ready to receive shadow WAL writes.
 The coordinator verifies that `shutdown_term_seq` matches the shutdown term stored in the cohort
-members' committed state (confirming the caller has acknowledged the correct shutdown snapshot),
-then establishes term `shutdown_term_seq + 1` with the new cohort and designated primary. Nodes
-restore from `backup_ref` (or run `initdb` if `revoked_at_LSN = 0`) and the staffing window
-begins as described above.
-
-For a fresh cluster there is no prior shutdown record. The implicit grant is
-`(revoked_at_LSN=0, shutdown_term_seq=0)`, which is vacuously valid: there is nothing to revoke
-and no competing timeline can exist. `InitializeCohort` with this implicit grant establishes term 1
-and the designated primary runs `initdb`.
+members' committed state, then proceeds as described in "Establishing the initial term before
+user writes begin" above: shadow WAL commits the new term across the cohort and the designated
+primary promotes once replication is configured.
 
 ### Stage 3 — Coordinator-led term change ✅ implemented
 
@@ -642,28 +636,22 @@ suitable for simulation tests where poolers only broadcast on state change.
 
 ### Stage 4 — Graceful primary shutdown
 
-#### Write policy and primary state model
+#### Primary state model
 
-The coordinator enforces a **write policy** (`writePolicy`): the `DurabilityPolicy` that must be
-satisfied before user writes are accepted. It is an enforced gate, not a background goal. If the
-current cohort cannot satisfy `writePolicy`, user writes do not proceed — the cluster waits for
-nodes to recover or for an operator to explicitly lower `writePolicy` to match what is achievable.
-Changing `writePolicy` is always an explicit operator action; there is no automatic escalation or
-de-escalation.
+The term's `Policy` field is the durability gate for user writes — it is an enforced invariant,
+not a background goal. The cohort is always sized to satisfy the policy from the very first term.
+If the current cohort cannot satisfy the term's policy (e.g. after a node failure), user writes
+do not proceed — the cluster waits for nodes to recover or for an operator to explicitly write a
+new term with a lower policy. Policy changes are always explicit operator actions; there is no
+automatic escalation or de-escalation.
 
 Every `Term` always carries a non-empty `Primary` field. There are no "leaderless terms"
 (`Primary = nil`). This invariant ensures the coordinator's `RevokesAndSamplesAllRevocationSets`
 check always has a well-defined primary anchor, allowing racing coordinators to correctly compute
-overlapping revocation sets. A term's designated primary may, however, be in one of three states:
+overlapping revocation sets. A term's designated primary may, however, be in one of two states:
 
-- **Active**: the cohort satisfies `writePolicy` and the term's ack policy; the node is running
-  postgres in primary mode and accepting user writes.
-- **Pre-revoked** (bootstrap only): the term's cohort cannot yet satisfy `writePolicy` — the
-  designated primary never enters postgres primary mode. The coordinator is working to staff the
-  cohort. Once `writePolicy` is achievable, the primary starts normally. Sub-`writePolicy`
-  cohorts are only permitted transiently during initial bootstrap; after that, the cluster either
-  maintains `writePolicy`-level redundancy or stops accepting writes and waits for manual
-  intervention or an explicit `writePolicy` change.
+- **Active**: the term's policy is satisfied; the node is running postgres in primary mode and
+  accepting user writes.
 - **Self-committed**: the primary has written a `RecruitmentCommitment` to its own storage
   (revoking its own quorum participation), stopped postgres, and broadcast a status update
   carrying the commitment. This is mechanically identical to being recruited by a coordinator —
@@ -679,7 +667,7 @@ its grace period as possible in the earlier (cheaper) phases:
 **Phase 1 — Early warning (on SIGTERM):**
 The primary immediately broadcasts a status update with a `ShutdownIntent` flag. The coordinator,
 which receives status updates over a streaming gRPC connection, reacts within milliseconds.
-If the remaining cohort without the primary can satisfy the write policy, the coordinator starts a
+If the remaining cohort without the primary can satisfy the term's durability policy, the coordinator starts a
 coordinator-led term change to elect a replacement. This is the optimal path: the coordinator picks
 the best-positioned replica; if it completes within the grace period, write unavailability is
 minimal. The primary contributes by broadcasting at high frequency so the coordinator has
@@ -698,12 +686,12 @@ If the pod is killed before Phase 2 completes, the coordinator detects the healt
 initiates standard coordinator-led failover without the self-revoked LSN hint. This is
 identical to an unplanned failure.
 
-**When the remaining cohort cannot satisfy the write policy:**
-If no subset of the available nodes satisfies the write policy without the primary (too few
+**When the remaining cohort cannot satisfy the term's durability policy:**
+If no subset of the available nodes satisfies the term's policy without the primary (too few
 replicas, or replicas too far behind), Phase 1 cannot produce a safe successor regardless of how
-long the coordinator waits. The primary should still proceed through Phase 2 — writing a self-commitment and stopping
-postgres — but manual intervention will be required to restore write availability after it
-stops.
+long the coordinator waits. The primary should still proceed through Phase 2 — writing a
+self-commitment and stopping postgres — but manual intervention will be required to restore
+write availability after it stops.
 
 **Note on leader-led primary transfer:** A pure leader-led approach — writing a new term naming a
 specific replica as the successor primary — is not safe without an additional propagation step.
@@ -744,7 +732,7 @@ if the declared members do not in fact cover all committed writes.
    The new cohort members bring the term back to the original quorum requirement automatically as
    they join and start ACKing.
 
-2. **Restore availability at lower durability:** Explicitly lower `writePolicy` to match the
+2. **Restore availability at lower durability:** Explicitly write a new term lowering the policy to match the
    surviving cohort size (e.g., `AtLeast(2)` instead of `AtLeast(3)`). The coordinator can then
    publish a new term the surviving nodes can satisfy, unblocking writes. Returning to the original
    durability level requires an explicit operator action when sufficient nodes are available again —
@@ -768,6 +756,51 @@ stale provisioner from adding observers to a running cohort via normal Stage 1 e
 open question. The Stage 1 path already requires coordinator involvement, which validates the
 current term, so it is not obvious that a stale provisioner could inject nodes through that path
 either.
+
+### Stage 9 — Shard restore from backup
+
+Restoring an entire shard from a point-in-time backup (PITR) is a special case of
+coordinator-led emergency failover, not `InitializeCohort`. No explicit shutdown or
+force-initialization of the old term is required.
+
+#### The shadow WAL trick
+
+The restore target backup is augmented with a **shadow WAL entry carrying a term seq higher than
+any previously committed seq** in the cluster. When nodes restore from this backup, they discover
+the new term in their shadow WAL and treat it as the authoritative current term — even though the
+backup's real WAL LSN may be lower than the cluster's pre-restore state. Term seq dominates LSN
+as the authority signal: a higher seq always wins.
+
+From that point the normal coordinator-led consensus protocol takes over:
+
+1. The coordinator observes that restored nodes hold the new high-seq term.
+2. Standard quorum confirmation proceeds among the restored nodes.
+3. The designated primary promotes and user writes resume.
+
+This avoids `InitializeCohort` entirely; the "trick" is that the backup itself carries the term
+transition. Using restore rather than `pg_rewind` is also often preferable for reliability: a
+full restore from a consistent backup is simpler to reason about than rewinding WAL on nodes
+that may have diverged significantly.
+
+#### Minimum backup LSN and term ordering
+
+Observers normally enforce a minimum LSN before loading a backup (the `revoked_at_LSN` floor).
+After a shard restore, the authoritative backup may have a **lower LSN than the previous cluster
+state**, so observers that cached the old minimum would incorrectly reject it.
+
+The minimum acceptable backup should therefore be expressed as a **(term seq, LSN)** pair: a
+backup from a higher term seq is always acceptable regardless of its LSN, because the higher seq
+proves it supersedes all earlier state. This allows observers to accept the restored (lower-LSN)
+backup without being blocked by a stale LSN floor.
+
+A related invariant: the pgbackrest repository should never move **backward** in (term seq, LSN)
+order. Uploading a backup at a lower (seq, LSN) than the repository head could cause observers
+to load a stale snapshot. Enforcing this ordering likely requires a coordinator-held write lock
+on the repository during backup upload.
+
+> **Note:** The detailed protocol, edge cases (concurrent restores, partial revocation), and
+> pgbackrest locking integration are not yet worked out. This section records the design intent
+> and known open questions.
 
 ## Open design questions
 
