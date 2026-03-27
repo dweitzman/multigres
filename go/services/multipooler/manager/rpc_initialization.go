@@ -150,16 +150,9 @@ func (pm *MultiPoolerManager) InitializeEmptyPrimary(ctx context.Context, req *m
 		return nil, mterrors.Wrap(err, "failed to set pooler type")
 	}
 
-	// Set primary term during bootstrap initialization
-	if pm.consensusState != nil {
-		if err := pm.consensusState.SetPrimaryTerm(ctx, req.ConsensusTerm, false /* force */); err != nil {
-			return nil, mterrors.Wrap(err, "failed to set primary term")
-		}
-	}
-
+	// TODO: populate RuleNumber once CatchUpTarget is implemented.
 	pm.healthStreamer.UpdatePrimaryObservation(&poolerserver.PrimaryObservation{
-		PrimaryID:   pm.serviceID,
-		PrimaryTerm: req.ConsensusTerm,
+		PrimaryID: pm.serviceID,
 	})
 
 	// Create durability policy if requested

@@ -25,7 +25,8 @@ option go_package = "github.com/multigres/multigres/go/pb/consensusdata";
 message WALPosition {
   // For primary: current write position from pg_current_wal_lsn()
   // For standby: empty (use last_receive_lsn and last_replay_lsn instead)
-  string current_lsn = 1;
+  // Deprecated: use node_position.lsn instead.
+  string current_lsn = 1 [deprecated = true];
 
   // For standby: last WAL position received from pg_last_wal_receive_lsn()
   // For primary: empty
@@ -70,6 +71,12 @@ message BeginTermRequest {
   // Action type for this BeginTerm operation
   // Indicates what scenario triggered this term change
   BeginTermAction action = 5;
+
+  // The highest rule the coordinator knows about at the time of this request.
+  // Pooler rejects if its current node_position.rule is strictly greater — this indicates
+  // the coordinator has a stale view of the cluster and should re-observe before proceeding.
+  // Zero value means the coordinator has no prior knowledge (e.g., first bootstrap).
+  clustermetadata.RuleNumber coordinator_rule = 6;
 }
 
 message BeginTermResponse {
@@ -83,7 +90,6 @@ message BeginTermResponse {
   string pooler_id = 3;
 
   // WAL position for candidate selection.
-  // Deprecated: use node_position.lsn instead.
   WALPosition wal_position = 4;
 
   // The node's position when it accepted/rejected the term.
@@ -134,8 +140,8 @@ message StatusResponse {
   // Preserved when consensus term increases (new elections).
   // Cleared to 0 when demoted (DemoteStalePrimary) or restored from backup.
   // 0 if never primary. For current primaries, must be non-zero.
-  // Deprecated: use node_position.rule.rule_number instead.
-  int64 primary_term = 11;
+  // Deprecated: use node_position.rule instead.
+  int64 primary_term = 11 [deprecated = true];
 
   // The node's current position: highest known shard rule + current WAL LSN,
   // read atomically within a single transaction. Zero-value if postgres is unreachable.

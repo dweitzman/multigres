@@ -647,15 +647,12 @@ func (pm *MultiPoolerManager) checkAndSetReady() {
 			close(pm.readyChan)
 		}
 
-		// Set initial primary observation from loaded consensus state.
-		// Use GetInconsistentTerm (safe without action lock) to read the term.
-		if pm.consensusState != nil {
-			if term, _ := pm.consensusState.GetInconsistentTerm(); term != nil && term.GetPrimaryTerm() > 0 {
-				pm.healthStreamer.UpdatePrimaryObservation(&poolerserver.PrimaryObservation{
-					PrimaryID:   pm.serviceID,
-					PrimaryTerm: term.GetPrimaryTerm(),
-				})
-			}
+		// Set initial primary observation if this pooler considers itself primary.
+		// TODO: populate RuleNumber here using node_position.rule once CatchUpTarget is implemented.
+		if isPrimary, err := pm.isPrimary(context.Background()); err == nil && isPrimary {
+			pm.healthStreamer.UpdatePrimaryObservation(&poolerserver.PrimaryObservation{
+				PrimaryID: pm.serviceID,
+			})
 		}
 	}
 }

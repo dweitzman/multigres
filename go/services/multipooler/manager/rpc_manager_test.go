@@ -1184,82 +1184,11 @@ func TestPromote_TopologyUpdateFailureDoesNotFailPromotion(t *testing.T) {
 	healthState := pm.healthStreamer.getState()
 	require.NotNil(t, healthState.PrimaryObservation, "health streamer should have primary observation after Promote")
 	assert.Equal(t, serviceID, healthState.PrimaryObservation.PrimaryID, "primary observation should point to self")
-	assert.Equal(t, int64(10), healthState.PrimaryObservation.PrimaryTerm, "primary observation term should match consensus term")
+	assert.NotNil(t, healthState.PrimaryObservation.RuleNumber, "primary observation should have rule number after Promote")
 
 	assert.NoError(t, mockQueryService.ExpectationsWereMet())
 }
 
-func TestSetPrimaryTerm_InvariantValidation(t *testing.T) {
-	ctx := context.Background()
-	tmpDir := t.TempDir()
-
-	// Create pg_data directory structure
-	createPgDataDir(t, tmpDir)
-
-	serviceID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
-		Cell:      "zone1",
-		Name:      "test-pooler",
-	}
-
-	// Create consensus state and set initial term to 5
-	consensusState := NewConsensusState(tmpDir, serviceID)
-	initialTerm := &multipoolermanagerdatapb.ConsensusTerm{
-		TermNumber:  5,
-		PrimaryTerm: 0,
-	}
-	setTermForTest(t, tmpDir, initialTerm)
-	_, err := consensusState.Load()
-	require.NoError(t, err)
-
-	// Create action lock and acquire it
-	actionLock := NewActionLock()
-	lockCtx, err := actionLock.Acquire(ctx, "test-primary-term")
-	require.NoError(t, err)
-	defer actionLock.Release(lockCtx)
-
-	// Setting primary_term to match current term should succeed
-	err = consensusState.SetPrimaryTerm(lockCtx, 5, false /* force */)
-	require.NoError(t, err, "Should be able to set primary_term to current term value")
-
-	term, err := consensusState.GetInconsistentTerm()
-	require.NoError(t, err)
-	assert.Equal(t, int64(5), term.GetPrimaryTerm(), "primary_term should be set to 5")
-
-	// Setting primary_term to a different value should fail (invariant violation)
-	err = consensusState.SetPrimaryTerm(lockCtx, 7, false /* force */)
-	require.Error(t, err, "Should fail when primary_term doesn't match current term")
-
-	// Verify primary_term was not changed
-	term, err = consensusState.GetInconsistentTerm()
-	require.NoError(t, err)
-	assert.Equal(t, int64(5), term.GetPrimaryTerm(), "primary_term should still be 5")
-
-	// But with force=true, setting a mismatched term should succeed
-	err = consensusState.SetPrimaryTerm(lockCtx, 7, true /* force */)
-	require.NoError(t, err, "Should succeed with force=true even when terms don't match")
-
-	term, err = consensusState.GetInconsistentTerm()
-	require.NoError(t, err)
-	assert.Equal(t, int64(7), term.GetPrimaryTerm(), "primary_term should be updated to 7 with force")
-
-	// Clearing primary_term to 0 should always succeed (exception to invariant)
-	err = consensusState.SetPrimaryTerm(lockCtx, 0, false /* force */)
-	require.NoError(t, err, "Should be able to clear primary_term to 0 regardless of current term")
-
-	term, err = consensusState.GetInconsistentTerm()
-	require.NoError(t, err)
-	assert.Equal(t, int64(0), term.GetPrimaryTerm(), "primary_term should be cleared to 0")
-
-	// Negative primary_term should fail even with force
-	err = consensusState.SetPrimaryTerm(lockCtx, -1, false /* force */)
-	require.Error(t, err, "Should fail with negative primary_term")
-	assert.Contains(t, err.Error(), "primary_term cannot be negative")
-
-	err = consensusState.SetPrimaryTerm(lockCtx, -1, true /* force */)
-	require.Error(t, err, "Should fail with negative primary_term even with force=true")
-	assert.Contains(t, err.Error(), "primary_term cannot be negative")
-}
 
 func TestSetPrimaryConnInfo_StoresPrimaryPoolerID(t *testing.T) {
 	ctx := context.Background()

@@ -85,8 +85,10 @@ type PoolerHealthState struct {
 	ConsensusTerm *multipoolermanagerdata.ConsensusTerm `protobuf:"bytes,13,opt,name=consensus_term,json=consensusTerm,proto3" json:"consensus_term,omitempty"`
 	// Consensus status from ConsensusStatus RPC (for divergence detection)
 	ConsensusStatus *consensusdata.StatusResponse `protobuf:"bytes,14,opt,name=consensus_status,json=consensusStatus,proto3" json:"consensus_status,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Most recent rule + LSN
+	NodePosition  *clustermetadata.NodePosition `protobuf:"bytes,15,opt,name=node_position,json=nodePosition,proto3" json:"node_position,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PoolerHealthState) Reset() {
@@ -217,11 +219,18 @@ func (x *PoolerHealthState) GetConsensusStatus() *consensusdata.StatusResponse {
 	return nil
 }
 
+func (x *PoolerHealthState) GetNodePosition() *clustermetadata.NodePosition {
+	if x != nil {
+		return x.NodePosition
+	}
+	return nil
+}
+
 var File_multiorchdata_proto protoreflect.FileDescriptor
 
 const file_multiorchdata_proto_rawDesc = "" +
 	"\n" +
-	"\x13multiorchdata.proto\x12\rmultiorchdata\x1a\x15clustermetadata.proto\x1a\x13consensusdata.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1cmultipoolermanagerdata.proto\"\x87\a\n" +
+	"\x13multiorchdata.proto\x12\rmultiorchdata\x1a\x15clustermetadata.proto\x1a\x13consensusdata.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1cmultipoolermanagerdata.proto\"\xcb\a\n" +
 	"\x11PoolerHealthState\x12?\n" +
 	"\fmulti_pooler\x18\x01 \x01(\v2\x1c.clustermetadata.MultiPoolerR\vmultiPooler\x12!\n" +
 	"\ris_up_to_date\x18\x02 \x01(\bR\n" +
@@ -239,7 +248,8 @@ const file_multiorchdata_proto_rawDesc = "" +
 	"\x0eis_initialized\x18\v \x01(\bR\risInitialized\x12,\n" +
 	"\x12has_data_directory\x18\f \x01(\bR\x10hasDataDirectory\x12L\n" +
 	"\x0econsensus_term\x18\r \x01(\v2%.multipoolermanagerdata.ConsensusTermR\rconsensusTerm\x12H\n" +
-	"\x10consensus_status\x18\x0e \x01(\v2\x1d.consensusdata.StatusResponseR\x0fconsensusStatusB4Z2github.com/multigres/multigres/go/pb/multiorchdatab\x06proto3"
+	"\x10consensus_status\x18\x0e \x01(\v2\x1d.consensusdata.StatusResponseR\x0fconsensusStatus\x12B\n" +
+	"\rnode_position\x18\x0f \x01(\v2\x1d.clustermetadata.NodePositionR\fnodePositionB4Z2github.com/multigres/multigres/go/pb/multiorchdatab\x06proto3"
 
 var (
 	file_multiorchdata_proto_rawDescOnce sync.Once
@@ -263,22 +273,24 @@ var file_multiorchdata_proto_goTypes = []any{
 	(*multipoolermanagerdata.StandbyReplicationStatus)(nil), // 5: multipoolermanagerdata.StandbyReplicationStatus
 	(*multipoolermanagerdata.ConsensusTerm)(nil),            // 6: multipoolermanagerdata.ConsensusTerm
 	(*consensusdata.StatusResponse)(nil),                    // 7: consensusdata.StatusResponse
+	(*clustermetadata.NodePosition)(nil),                    // 8: clustermetadata.NodePosition
 }
 var file_multiorchdata_proto_depIdxs = []int32{
-	1, // 0: multiorchdata.PoolerHealthState.multi_pooler:type_name -> clustermetadata.MultiPooler
-	2, // 1: multiorchdata.PoolerHealthState.last_check_attempted:type_name -> google.protobuf.Timestamp
-	2, // 2: multiorchdata.PoolerHealthState.last_check_successful:type_name -> google.protobuf.Timestamp
-	2, // 3: multiorchdata.PoolerHealthState.last_seen:type_name -> google.protobuf.Timestamp
-	3, // 4: multiorchdata.PoolerHealthState.pooler_type:type_name -> clustermetadata.PoolerType
-	4, // 5: multiorchdata.PoolerHealthState.primary_status:type_name -> multipoolermanagerdata.PrimaryStatus
-	5, // 6: multiorchdata.PoolerHealthState.replication_status:type_name -> multipoolermanagerdata.StandbyReplicationStatus
-	6, // 7: multiorchdata.PoolerHealthState.consensus_term:type_name -> multipoolermanagerdata.ConsensusTerm
-	7, // 8: multiorchdata.PoolerHealthState.consensus_status:type_name -> consensusdata.StatusResponse
-	9, // [9:9] is the sub-list for method output_type
-	9, // [9:9] is the sub-list for method input_type
-	9, // [9:9] is the sub-list for extension type_name
-	9, // [9:9] is the sub-list for extension extendee
-	0, // [0:9] is the sub-list for field type_name
+	1,  // 0: multiorchdata.PoolerHealthState.multi_pooler:type_name -> clustermetadata.MultiPooler
+	2,  // 1: multiorchdata.PoolerHealthState.last_check_attempted:type_name -> google.protobuf.Timestamp
+	2,  // 2: multiorchdata.PoolerHealthState.last_check_successful:type_name -> google.protobuf.Timestamp
+	2,  // 3: multiorchdata.PoolerHealthState.last_seen:type_name -> google.protobuf.Timestamp
+	3,  // 4: multiorchdata.PoolerHealthState.pooler_type:type_name -> clustermetadata.PoolerType
+	4,  // 5: multiorchdata.PoolerHealthState.primary_status:type_name -> multipoolermanagerdata.PrimaryStatus
+	5,  // 6: multiorchdata.PoolerHealthState.replication_status:type_name -> multipoolermanagerdata.StandbyReplicationStatus
+	6,  // 7: multiorchdata.PoolerHealthState.consensus_term:type_name -> multipoolermanagerdata.ConsensusTerm
+	7,  // 8: multiorchdata.PoolerHealthState.consensus_status:type_name -> consensusdata.StatusResponse
+	8,  // 9: multiorchdata.PoolerHealthState.node_position:type_name -> clustermetadata.NodePosition
+	10, // [10:10] is the sub-list for method output_type
+	10, // [10:10] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_multiorchdata_proto_init() }

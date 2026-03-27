@@ -49,10 +49,9 @@ type PrimaryObservation struct {
 	// May be this pooler's own ID if it believes itself to be primary.
 	PrimaryID *clustermetadatapb.ID
 
-	// PrimaryTerm is the primary term at which this observation was made.
-	// The primary never changes within a primary term. Higher values indicate
-	// more recent primary appointments.
-	PrimaryTerm int64
+	// RuleNumber is the rule number at which this node was observed as the most
+	// up-to-date primary.
+	RuleNumber *clustermetadatapb.RuleNumber
 }
 
 // HealthProvider provides health information for the pooler.

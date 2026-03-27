@@ -733,12 +733,19 @@ type SetPrimaryConnInfoRequest struct {
 	StopReplicationBefore bool `protobuf:"varint,2,opt,name=stop_replication_before,json=stopReplicationBefore,proto3" json:"stop_replication_before,omitempty"`
 	// Whether to start replication after making changes
 	StartReplicationAfter bool `protobuf:"varint,3,opt,name=start_replication_after,json=startReplicationAfter,proto3" json:"start_replication_after,omitempty"`
-	// Current term for consensus (used by MultiOrch during initialization)
+	// Current term for consensus (used by MultiOrch during initialization).
+	// Deprecated: use coordinator_rule instead.
+	//
+	// Deprecated: Marked as deprecated in multipoolermanagerdata.proto.
 	CurrentTerm int64 `protobuf:"varint,4,opt,name=current_term,json=currentTerm,proto3" json:"current_term,omitempty"`
-	// Force the operation even if the term doesn't match
-	Force         bool `protobuf:"varint,5,opt,name=force,proto3" json:"force,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// Force the operation even if rule validation fails.
+	Force bool `protobuf:"varint,5,opt,name=force,proto3" json:"force,omitempty"`
+	// The coordinator's current known rule. Pooler rejects SetPrimaryConnInfo if its
+	// node_position.rule is strictly greater — coordinator has a stale view.
+	// Zero value disables rule validation.
+	CoordinatorRule *clustermetadata.RuleNumber `protobuf:"bytes,6,opt,name=coordinator_rule,json=coordinatorRule,proto3" json:"coordinator_rule,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *SetPrimaryConnInfoRequest) Reset() {
@@ -792,6 +799,7 @@ func (x *SetPrimaryConnInfoRequest) GetStartReplicationAfter() bool {
 	return false
 }
 
+// Deprecated: Marked as deprecated in multipoolermanagerdata.proto.
 func (x *SetPrimaryConnInfoRequest) GetCurrentTerm() int64 {
 	if x != nil {
 		return x.CurrentTerm
@@ -804,6 +812,13 @@ func (x *SetPrimaryConnInfoRequest) GetForce() bool {
 		return x.Force
 	}
 	return false
+}
+
+func (x *SetPrimaryConnInfoRequest) GetCoordinatorRule() *clustermetadata.RuleNumber {
+	if x != nil {
+		return x.CoordinatorRule
+	}
+	return nil
 }
 
 type SetPrimaryConnInfoResponse struct {
@@ -1123,7 +1138,9 @@ type PrimaryStatus struct {
 	// Synchronous replication configuration (parsed from synchronous_standby_names and synchronous_commit)
 	SyncReplicationConfig *SynchronousReplicationConfiguration `protobuf:"bytes,4,opt,name=sync_replication_config,json=syncReplicationConfig,proto3" json:"sync_replication_config,omitempty"`
 	// Reflects the coordinator promise term at promotion time (from on-disk ConsensusTerm).
-	// Deprecated: use the primary's node_position.rule.rule_number (from Status) instead.
+	// Deprecated: use the primary's node_position.rule (from Status RPC) instead.
+	//
+	// Deprecated: Marked as deprecated in multipoolermanagerdata.proto.
 	PrimaryTerm   int64 `protobuf:"varint,5,opt,name=primary_term,json=primaryTerm,proto3" json:"primary_term,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1187,6 +1204,7 @@ func (x *PrimaryStatus) GetSyncReplicationConfig() *SynchronousReplicationConfig
 	return nil
 }
 
+// Deprecated: Marked as deprecated in multipoolermanagerdata.proto.
 func (x *PrimaryStatus) GetPrimaryTerm() int64 {
 	if x != nil {
 		return x.PrimaryTerm
@@ -1908,15 +1926,21 @@ func (x *GetFollowersResponse) GetSyncConfig() *SynchronousReplicationConfigurat
 // transition a primary to read-only mode and prevent it from making further progress.
 type EmergencyDemoteRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Consensus term for this demotion operation
-	// When force=true, this field is ignored and should be passed as 0
+	// Consensus term for this demotion operation.
+	// Deprecated: use coordinator_rule instead.
+	//
+	// Deprecated: Marked as deprecated in multipoolermanagerdata.proto.
 	ConsensusTerm int64 `protobuf:"varint,1,opt,name=consensus_term,json=consensusTerm,proto3" json:"consensus_term,omitempty"`
 	// Drain timeout - how long to wait for in-flight queries (default: 5s)
 	DrainTimeout *durationpb.Duration `protobuf:"bytes,2,opt,name=drain_timeout,json=drainTimeout,proto3" json:"drain_timeout,omitempty"`
-	// Force the operation even if term validation fails
-	Force         bool `protobuf:"varint,3,opt,name=force,proto3" json:"force,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// Force the operation even if rule validation fails.
+	Force bool `protobuf:"varint,3,opt,name=force,proto3" json:"force,omitempty"`
+	// The highest rule the coordinator knows about. Pooler rejects if its current
+	// node_position.rule is strictly greater — stale coordinator view.
+	// Zero value disables rule validation (for direct/manual calls).
+	CoordinatorRule *clustermetadata.RuleNumber `protobuf:"bytes,4,opt,name=coordinator_rule,json=coordinatorRule,proto3" json:"coordinator_rule,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *EmergencyDemoteRequest) Reset() {
@@ -1949,6 +1973,7 @@ func (*EmergencyDemoteRequest) Descriptor() ([]byte, []int) {
 	return file_multipoolermanagerdata_proto_rawDescGZIP(), []int{25}
 }
 
+// Deprecated: Marked as deprecated in multipoolermanagerdata.proto.
 func (x *EmergencyDemoteRequest) GetConsensusTerm() int64 {
 	if x != nil {
 		return x.ConsensusTerm
@@ -1970,15 +1995,26 @@ func (x *EmergencyDemoteRequest) GetForce() bool {
 	return false
 }
 
+func (x *EmergencyDemoteRequest) GetCoordinatorRule() *clustermetadata.RuleNumber {
+	if x != nil {
+		return x.CoordinatorRule
+	}
+	return nil
+}
+
 type EmergencyDemoteResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Whether the pooler was already demoted (idempotent check)
 	WasAlreadyDemoted bool `protobuf:"varint,1,opt,name=was_already_demoted,json=wasAlreadyDemoted,proto3" json:"was_already_demoted,omitempty"`
 	// Coordinator promise term at the time of demotion.
 	// Deprecated: use node_position instead.
+	//
+	// Deprecated: Marked as deprecated in multipoolermanagerdata.proto.
 	ConsensusTerm int64 `protobuf:"varint,2,opt,name=consensus_term,json=consensusTerm,proto3" json:"consensus_term,omitempty"`
 	// LSN position at the time of demotion (final position as primary).
 	// Deprecated: use node_position.lsn instead.
+	//
+	// Deprecated: Marked as deprecated in multipoolermanagerdata.proto.
 	LsnPosition string `protobuf:"bytes,3,opt,name=lsn_position,json=lsnPosition,proto3" json:"lsn_position,omitempty"`
 	// Number of connections that were terminated
 	ConnectionsTerminated int32 `protobuf:"varint,4,opt,name=connections_terminated,json=connectionsTerminated,proto3" json:"connections_terminated,omitempty"`
@@ -2026,6 +2062,7 @@ func (x *EmergencyDemoteResponse) GetWasAlreadyDemoted() bool {
 	return false
 }
 
+// Deprecated: Marked as deprecated in multipoolermanagerdata.proto.
 func (x *EmergencyDemoteResponse) GetConsensusTerm() int64 {
 	if x != nil {
 		return x.ConsensusTerm
@@ -2033,6 +2070,7 @@ func (x *EmergencyDemoteResponse) GetConsensusTerm() int64 {
 	return 0
 }
 
+// Deprecated: Marked as deprecated in multipoolermanagerdata.proto.
 func (x *EmergencyDemoteResponse) GetLsnPosition() string {
 	if x != nil {
 		return x.LsnPosition
@@ -2065,12 +2103,19 @@ type DemoteStalePrimaryRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Source multipooler (the correct primary) to rewind to
 	Source *clustermetadata.MultiPooler `protobuf:"bytes,1,opt,name=source,proto3" json:"source,omitempty"`
-	// Consensus term from the correct primary
+	// Consensus term from the correct primary.
+	// Deprecated: use coordinator_rule instead.
+	//
+	// Deprecated: Marked as deprecated in multipoolermanagerdata.proto.
 	ConsensusTerm int64 `protobuf:"varint,2,opt,name=consensus_term,json=consensusTerm,proto3" json:"consensus_term,omitempty"`
-	// Force the operation even if term validation fails
-	Force         bool `protobuf:"varint,3,opt,name=force,proto3" json:"force,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// Force the operation even if rule validation fails.
+	Force bool `protobuf:"varint,3,opt,name=force,proto3" json:"force,omitempty"`
+	// The rule established by the correct primary. Pooler rejects if its current
+	// node_position.rule is strictly greater — the coordinator has a stale view.
+	// Zero value disables rule validation.
+	CoordinatorRule *clustermetadata.RuleNumber `protobuf:"bytes,4,opt,name=coordinator_rule,json=coordinatorRule,proto3" json:"coordinator_rule,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *DemoteStalePrimaryRequest) Reset() {
@@ -2110,6 +2155,7 @@ func (x *DemoteStalePrimaryRequest) GetSource() *clustermetadata.MultiPooler {
 	return nil
 }
 
+// Deprecated: Marked as deprecated in multipoolermanagerdata.proto.
 func (x *DemoteStalePrimaryRequest) GetConsensusTerm() int64 {
 	if x != nil {
 		return x.ConsensusTerm
@@ -2122,6 +2168,13 @@ func (x *DemoteStalePrimaryRequest) GetForce() bool {
 		return x.Force
 	}
 	return false
+}
+
+func (x *DemoteStalePrimaryRequest) GetCoordinatorRule() *clustermetadata.RuleNumber {
+	if x != nil {
+		return x.CoordinatorRule
+	}
+	return nil
 }
 
 type DemoteStalePrimaryResponse struct {
@@ -2568,14 +2621,17 @@ type PromoteResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// LSN position after promotion.
 	// Deprecated: use node_position.lsn instead.
+	//
+	// Deprecated: Marked as deprecated in multipoolermanagerdata.proto.
 	LsnPosition string `protobuf:"bytes,1,opt,name=lsn_position,json=lsnPosition,proto3" json:"lsn_position,omitempty"`
 	// Whether the pooler was already promoted (idempotent check)
 	WasAlreadyPrimary bool `protobuf:"varint,2,opt,name=was_already_primary,json=wasAlreadyPrimary,proto3" json:"was_already_primary,omitempty"`
 	// Coordinator promise term at the time of promotion.
 	// Deprecated: use node_position instead.
+	//
+	// Deprecated: Marked as deprecated in multipoolermanagerdata.proto.
 	ConsensusTerm int64 `protobuf:"varint,3,opt,name=consensus_term,json=consensusTerm,proto3" json:"consensus_term,omitempty"`
 	// Position of this node at the time of promotion.
-	// Preferred over consensus_term + lsn_position for comparisons once rule_history is populated.
 	NodePosition  *clustermetadata.NodePosition `protobuf:"bytes,4,opt,name=node_position,json=nodePosition,proto3" json:"node_position,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2611,6 +2667,7 @@ func (*PromoteResponse) Descriptor() ([]byte, []int) {
 	return file_multipoolermanagerdata_proto_rawDescGZIP(), []int{36}
 }
 
+// Deprecated: Marked as deprecated in multipoolermanagerdata.proto.
 func (x *PromoteResponse) GetLsnPosition() string {
 	if x != nil {
 		return x.LsnPosition
@@ -2625,6 +2682,7 @@ func (x *PromoteResponse) GetWasAlreadyPrimary() bool {
 	return false
 }
 
+// Deprecated: Marked as deprecated in multipoolermanagerdata.proto.
 func (x *PromoteResponse) GetConsensusTerm() int64 {
 	if x != nil {
 		return x.ConsensusTerm
@@ -2961,14 +3019,21 @@ type UpdateSynchronousStandbyListRequest struct {
 	StandbyIds []*clustermetadata.ID `protobuf:"bytes,2,rep,name=standby_ids,json=standbyIds,proto3" json:"standby_ids,omitempty"`
 	// Whether to reload configuration immediately
 	ReloadConfig bool `protobuf:"varint,3,opt,name=reload_config,json=reloadConfig,proto3" json:"reload_config,omitempty"`
-	// Consensus term (used by MultiOrch for term validation)
+	// Consensus term (used by MultiOrch for term validation).
+	// Deprecated: use coordinator_rule instead.
+	//
+	// Deprecated: Marked as deprecated in multipoolermanagerdata.proto.
 	ConsensusTerm int64 `protobuf:"varint,4,opt,name=consensus_term,json=consensusTerm,proto3" json:"consensus_term,omitempty"`
-	// Force the operation even if the term doesn't match
+	// Force the operation even if rule validation fails.
 	Force bool `protobuf:"varint,5,opt,name=force,proto3" json:"force,omitempty"`
 	// Coordinator ID that initiated this operation (for audit trail)
 	CoordinatorId *clustermetadata.ID `protobuf:"bytes,6,opt,name=coordinator_id,json=coordinatorId,proto3" json:"coordinator_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// The coordinator's current known rule. Pooler rejects if its node_position.rule
+	// is strictly greater — coordinator has a stale view.
+	// Zero value disables rule validation.
+	CoordinatorRule *clustermetadata.RuleNumber `protobuf:"bytes,7,opt,name=coordinator_rule,json=coordinatorRule,proto3" json:"coordinator_rule,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *UpdateSynchronousStandbyListRequest) Reset() {
@@ -3022,6 +3087,7 @@ func (x *UpdateSynchronousStandbyListRequest) GetReloadConfig() bool {
 	return false
 }
 
+// Deprecated: Marked as deprecated in multipoolermanagerdata.proto.
 func (x *UpdateSynchronousStandbyListRequest) GetConsensusTerm() int64 {
 	if x != nil {
 		return x.ConsensusTerm
@@ -3039,6 +3105,13 @@ func (x *UpdateSynchronousStandbyListRequest) GetForce() bool {
 func (x *UpdateSynchronousStandbyListRequest) GetCoordinatorId() *clustermetadata.ID {
 	if x != nil {
 		return x.CoordinatorId
+	}
+	return nil
+}
+
+func (x *UpdateSynchronousStandbyListRequest) GetCoordinatorRule() *clustermetadata.RuleNumber {
+	if x != nil {
+		return x.CoordinatorRule
 	}
 	return nil
 }
@@ -3098,13 +3171,16 @@ type ConsensusTerm struct {
 	AcceptedTermFromCoordinatorId *clustermetadata.ID `protobuf:"bytes,2,opt,name=accepted_term_from_coordinator_id,json=acceptedTermFromCoordinatorId,proto3" json:"accepted_term_from_coordinator_id,omitempty"`
 	// Timestamp of the last acceptance
 	LastAcceptanceTime *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=last_acceptance_time,json=lastAcceptanceTime,proto3" json:"last_acceptance_time,omitempty"`
-	// ID of the leader of the current term
+	// ID of the leader of the current term.
+	// Deprecated: primary identity is now authoritative in rule_history (leadership_history table).
+	//
+	// Deprecated: Marked as deprecated in multipoolermanagerdata.proto.
 	LeaderId *clustermetadata.ID `protobuf:"bytes,4,opt,name=leader_id,json=leaderId,proto3" json:"leader_id,omitempty"`
 	// The term for which this pooler was promoted to primary.
-	// Set during promotion (InitializeEmptyPrimary or Promote).
-	// Preserved when consensus term increases (new elections).
-	// Cleared to 0 when demoted (DemoteStalePrimary) or restored from backup.
-	// 0 if never primary.
+	// Deprecated: use the primary's node_position.rule.term_number (from Status RPC) instead.
+	// The authoritative promotion record lives in rule_history.
+	//
+	// Deprecated: Marked as deprecated in multipoolermanagerdata.proto.
 	PrimaryTerm   int64 `protobuf:"varint,5,opt,name=primary_term,json=primaryTerm,proto3" json:"primary_term,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3161,6 +3237,7 @@ func (x *ConsensusTerm) GetLastAcceptanceTime() *timestamppb.Timestamp {
 	return nil
 }
 
+// Deprecated: Marked as deprecated in multipoolermanagerdata.proto.
 func (x *ConsensusTerm) GetLeaderId() *clustermetadata.ID {
 	if x != nil {
 		return x.LeaderId
@@ -3168,6 +3245,7 @@ func (x *ConsensusTerm) GetLeaderId() *clustermetadata.ID {
 	return nil
 }
 
+// Deprecated: Marked as deprecated in multipoolermanagerdata.proto.
 func (x *ConsensusTerm) GetPrimaryTerm() int64 {
 	if x != nil {
 		return x.PrimaryTerm
@@ -4228,13 +4306,14 @@ const file_multipoolermanagerdata_proto_rawDesc = "" +
 	"\atimeout\x18\x02 \x01(\v2\x19.google.protobuf.DurationR\atimeout\"\x14\n" +
 	"\x12WaitForLSNResponse\"\x19\n" +
 	"\x17StartReplicationRequest\"\x1a\n" +
-	"\x18StartReplicationResponse\"\xfc\x01\n" +
+	"\x18StartReplicationResponse\"\xc8\x02\n" +
 	"\x19SetPrimaryConnInfoRequest\x126\n" +
 	"\aprimary\x18\x01 \x01(\v2\x1c.clustermetadata.MultiPoolerR\aprimary\x126\n" +
 	"\x17stop_replication_before\x18\x02 \x01(\bR\x15stopReplicationBefore\x126\n" +
-	"\x17start_replication_after\x18\x03 \x01(\bR\x15startReplicationAfter\x12!\n" +
-	"\fcurrent_term\x18\x04 \x01(\x03R\vcurrentTerm\x12\x14\n" +
-	"\x05force\x18\x05 \x01(\bR\x05force\"\x1c\n" +
+	"\x17start_replication_after\x18\x03 \x01(\bR\x15startReplicationAfter\x12%\n" +
+	"\fcurrent_term\x18\x04 \x01(\x03B\x02\x18\x01R\vcurrentTerm\x12\x14\n" +
+	"\x05force\x18\x05 \x01(\bR\x05force\x12F\n" +
+	"\x10coordinator_rule\x18\x06 \x01(\v2\x1b.clustermetadata.RuleNumberR\x0fcoordinatorRule\"\x1c\n" +
 	"\x1aSetPrimaryConnInfoResponse\"n\n" +
 	"\x16StopReplicationRequest\x12@\n" +
 	"\x04mode\x18\x01 \x01(\x0e2,.multipoolermanagerdata.ReplicationPauseModeR\x04mode\x12\x12\n" +
@@ -4250,13 +4329,13 @@ const file_multipoolermanagerdata_proto_rawDesc = "" +
 	"\bnum_sync\x18\x03 \x01(\x05R\anumSync\x124\n" +
 	"\vstandby_ids\x18\x04 \x03(\v2\x13.clustermetadata.IDR\n" +
 	"standbyIds\x12:\n" +
-	"\x19standby_application_names\x18\x05 \x03(\tR\x17standbyApplicationNames\"\x95\x02\n" +
+	"\x19standby_application_names\x18\x05 \x03(\tR\x17standbyApplicationNames\"\x99\x02\n" +
 	"\rPrimaryStatus\x12\x10\n" +
 	"\x03lsn\x18\x01 \x01(\tR\x03lsn\x12\x14\n" +
 	"\x05ready\x18\x02 \x01(\bR\x05ready\x12D\n" +
 	"\x13connected_followers\x18\x03 \x03(\v2\x13.clustermetadata.IDR\x12connectedFollowers\x12s\n" +
-	"\x17sync_replication_config\x18\x04 \x01(\v2;.multipoolermanagerdata.SynchronousReplicationConfigurationR\x15syncReplicationConfig\x12!\n" +
-	"\fprimary_term\x18\x05 \x01(\x03R\vprimaryTerm\"\x16\n" +
+	"\x17sync_replication_config\x18\x04 \x01(\v2;.multipoolermanagerdata.SynchronousReplicationConfigurationR\x15syncReplicationConfig\x12%\n" +
+	"\fprimary_term\x18\x05 \x01(\x03B\x02\x18\x01R\vprimaryTerm\"\x16\n" +
 	"\x14PrimaryStatusRequest\"V\n" +
 	"\x15PrimaryStatusResponse\x12=\n" +
 	"\x06status\x18\x01 \x01(\v2%.multipoolermanagerdata.PrimaryStatusR\x06status\"\x18\n" +
@@ -4309,21 +4388,23 @@ const file_multipoolermanagerdata_proto_rawDesc = "" +
 	"\x14GetFollowersResponse\x12B\n" +
 	"\tfollowers\x18\x01 \x03(\v2$.multipoolermanagerdata.FollowerInfoR\tfollowers\x12\\\n" +
 	"\vsync_config\x18\x02 \x01(\v2;.multipoolermanagerdata.SynchronousReplicationConfigurationR\n" +
-	"syncConfig\"\x95\x01\n" +
-	"\x16EmergencyDemoteRequest\x12%\n" +
-	"\x0econsensus_term\x18\x01 \x01(\x03R\rconsensusTerm\x12>\n" +
+	"syncConfig\"\xe1\x01\n" +
+	"\x16EmergencyDemoteRequest\x12)\n" +
+	"\x0econsensus_term\x18\x01 \x01(\x03B\x02\x18\x01R\rconsensusTerm\x12>\n" +
 	"\rdrain_timeout\x18\x02 \x01(\v2\x19.google.protobuf.DurationR\fdrainTimeout\x12\x14\n" +
-	"\x05force\x18\x03 \x01(\bR\x05force\"\x8e\x02\n" +
+	"\x05force\x18\x03 \x01(\bR\x05force\x12F\n" +
+	"\x10coordinator_rule\x18\x04 \x01(\v2\x1b.clustermetadata.RuleNumberR\x0fcoordinatorRule\"\x96\x02\n" +
 	"\x17EmergencyDemoteResponse\x12.\n" +
-	"\x13was_already_demoted\x18\x01 \x01(\bR\x11wasAlreadyDemoted\x12%\n" +
-	"\x0econsensus_term\x18\x02 \x01(\x03R\rconsensusTerm\x12!\n" +
-	"\flsn_position\x18\x03 \x01(\tR\vlsnPosition\x125\n" +
+	"\x13was_already_demoted\x18\x01 \x01(\bR\x11wasAlreadyDemoted\x12)\n" +
+	"\x0econsensus_term\x18\x02 \x01(\x03B\x02\x18\x01R\rconsensusTerm\x12%\n" +
+	"\flsn_position\x18\x03 \x01(\tB\x02\x18\x01R\vlsnPosition\x125\n" +
 	"\x16connections_terminated\x18\x04 \x01(\x05R\x15connectionsTerminated\x12B\n" +
-	"\rnode_position\x18\x05 \x01(\v2\x1d.clustermetadata.NodePositionR\fnodePosition\"\x8e\x01\n" +
+	"\rnode_position\x18\x05 \x01(\v2\x1d.clustermetadata.NodePositionR\fnodePosition\"\xda\x01\n" +
 	"\x19DemoteStalePrimaryRequest\x124\n" +
-	"\x06source\x18\x01 \x01(\v2\x1c.clustermetadata.MultiPoolerR\x06source\x12%\n" +
-	"\x0econsensus_term\x18\x02 \x01(\x03R\rconsensusTerm\x12\x14\n" +
-	"\x05force\x18\x03 \x01(\bR\x05force\"\x84\x01\n" +
+	"\x06source\x18\x01 \x01(\v2\x1c.clustermetadata.MultiPoolerR\x06source\x12)\n" +
+	"\x0econsensus_term\x18\x02 \x01(\x03B\x02\x18\x01R\rconsensusTerm\x12\x14\n" +
+	"\x05force\x18\x03 \x01(\bR\x05force\x12F\n" +
+	"\x10coordinator_rule\x18\x04 \x01(\v2\x1b.clustermetadata.RuleNumberR\x0fcoordinatorRule\"\x84\x01\n" +
 	"\x1aDemoteStalePrimaryResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12)\n" +
 	"\x10rewind_performed\x18\x02 \x01(\bR\x0frewindPerformed\x12!\n" +
@@ -4347,11 +4428,11 @@ const file_multipoolermanagerdata_proto_rawDesc = "" +
 	"\x06reason\x18\x05 \x01(\tR\x06reason\x12:\n" +
 	"\x0ecoordinator_id\x18\x06 \x01(\v2\x13.clustermetadata.IDR\rcoordinatorId\x12:\n" +
 	"\x0ecohort_members\x18\a \x03(\v2\x13.clustermetadata.IDR\rcohortMembers\x12>\n" +
-	"\x10accepted_members\x18\b \x03(\v2\x13.clustermetadata.IDR\x0facceptedMembers\"\xcf\x01\n" +
-	"\x0fPromoteResponse\x12!\n" +
-	"\flsn_position\x18\x01 \x01(\tR\vlsnPosition\x12.\n" +
-	"\x13was_already_primary\x18\x02 \x01(\bR\x11wasAlreadyPrimary\x12%\n" +
-	"\x0econsensus_term\x18\x03 \x01(\x03R\rconsensusTerm\x12B\n" +
+	"\x10accepted_members\x18\b \x03(\v2\x13.clustermetadata.IDR\x0facceptedMembers\"\xd7\x01\n" +
+	"\x0fPromoteResponse\x12%\n" +
+	"\flsn_position\x18\x01 \x01(\tB\x02\x18\x01R\vlsnPosition\x12.\n" +
+	"\x13was_already_primary\x18\x02 \x01(\bR\x11wasAlreadyPrimary\x12)\n" +
+	"\x0econsensus_term\x18\x03 \x01(\x03B\x02\x18\x01R\rconsensusTerm\x12B\n" +
 	"\rnode_position\x18\x04 \x01(\v2\x1d.clustermetadata.NodePositionR\fnodePosition\"\x19\n" +
 	"\x17ResetReplicationRequest\"d\n" +
 	"\x18ResetReplicationResponse\x12H\n" +
@@ -4369,24 +4450,25 @@ const file_multipoolermanagerdata_proto_rawDesc = "" +
 	"\fStateRequest\"J\n" +
 	"\rStateResponse\x12\x14\n" +
 	"\x05state\x18\x01 \x01(\tR\x05state\x12#\n" +
-	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\"\xc7\x02\n" +
+	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\"\x93\x03\n" +
 	"#UpdateSynchronousStandbyListRequest\x12L\n" +
 	"\toperation\x18\x01 \x01(\x0e2..multipoolermanagerdata.StandbyUpdateOperationR\toperation\x124\n" +
 	"\vstandby_ids\x18\x02 \x03(\v2\x13.clustermetadata.IDR\n" +
 	"standbyIds\x12#\n" +
-	"\rreload_config\x18\x03 \x01(\bR\freloadConfig\x12%\n" +
-	"\x0econsensus_term\x18\x04 \x01(\x03R\rconsensusTerm\x12\x14\n" +
+	"\rreload_config\x18\x03 \x01(\bR\freloadConfig\x12)\n" +
+	"\x0econsensus_term\x18\x04 \x01(\x03B\x02\x18\x01R\rconsensusTerm\x12\x14\n" +
 	"\x05force\x18\x05 \x01(\bR\x05force\x12:\n" +
-	"\x0ecoordinator_id\x18\x06 \x01(\v2\x13.clustermetadata.IDR\rcoordinatorId\"j\n" +
+	"\x0ecoordinator_id\x18\x06 \x01(\v2\x13.clustermetadata.IDR\rcoordinatorId\x12F\n" +
+	"\x10coordinator_rule\x18\a \x01(\v2\x1b.clustermetadata.RuleNumberR\x0fcoordinatorRule\"j\n" +
 	"$UpdateSynchronousStandbyListResponse\x12B\n" +
-	"\rnode_position\x18\x01 \x01(\v2\x1d.clustermetadata.NodePositionR\fnodePosition\"\xb2\x02\n" +
+	"\rnode_position\x18\x01 \x01(\v2\x1d.clustermetadata.NodePositionR\fnodePosition\"\xba\x02\n" +
 	"\rConsensusTerm\x12\x1f\n" +
 	"\vterm_number\x18\x01 \x01(\x03R\n" +
 	"termNumber\x12]\n" +
 	"!accepted_term_from_coordinator_id\x18\x02 \x01(\v2\x13.clustermetadata.IDR\x1dacceptedTermFromCoordinatorId\x12L\n" +
-	"\x14last_acceptance_time\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x12lastAcceptanceTime\x120\n" +
-	"\tleader_id\x18\x04 \x01(\v2\x13.clustermetadata.IDR\bleaderId\x12!\n" +
-	"\fprimary_term\x18\x05 \x01(\x03R\vprimaryTerm\"\x8b\x02\n" +
+	"\x14last_acceptance_time\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x12lastAcceptanceTime\x124\n" +
+	"\tleader_id\x18\x04 \x01(\v2\x13.clustermetadata.IDB\x02\x18\x01R\bleaderId\x12%\n" +
+	"\fprimary_term\x18\x05 \x01(\x03B\x02\x18\x01R\vprimaryTerm\"\x8b\x02\n" +
 	"\x1dInitializeEmptyPrimaryRequest\x12%\n" +
 	"\x0econsensus_term\x18\x01 \x01(\x03R\rconsensusTerm\x124\n" +
 	"\x16durability_policy_name\x18\x02 \x01(\tR\x14durabilityPolicyName\x12Q\n" +
@@ -4568,80 +4650,85 @@ var file_multipoolermanagerdata_proto_goTypes = []any{
 	nil,                                             // 71: multipoolermanagerdata.BackupRequest.OverridesEntry
 	(*durationpb.Duration)(nil),                     // 72: google.protobuf.Duration
 	(*clustermetadata.MultiPooler)(nil),             // 73: clustermetadata.MultiPooler
-	(*clustermetadata.ID)(nil),                      // 74: clustermetadata.ID
-	(clustermetadata.PoolerType)(0),                 // 75: clustermetadata.PoolerType
-	(*clustermetadata.NodePosition)(nil),            // 76: clustermetadata.NodePosition
-	(*timestamppb.Timestamp)(nil),                   // 77: google.protobuf.Timestamp
-	(*clustermetadata.QuorumRule)(nil),              // 78: clustermetadata.QuorumRule
-	(*clustermetadata.DurabilityPolicy)(nil),        // 79: clustermetadata.DurabilityPolicy
+	(*clustermetadata.RuleNumber)(nil),              // 74: clustermetadata.RuleNumber
+	(*clustermetadata.ID)(nil),                      // 75: clustermetadata.ID
+	(clustermetadata.PoolerType)(0),                 // 76: clustermetadata.PoolerType
+	(*clustermetadata.NodePosition)(nil),            // 77: clustermetadata.NodePosition
+	(*timestamppb.Timestamp)(nil),                   // 78: google.protobuf.Timestamp
+	(*clustermetadata.QuorumRule)(nil),              // 79: clustermetadata.QuorumRule
+	(*clustermetadata.DurabilityPolicy)(nil),        // 80: clustermetadata.DurabilityPolicy
 }
 var file_multipoolermanagerdata_proto_depIdxs = []int32{
 	72, // 0: multipoolermanagerdata.StandbyReplicationStatus.lag:type_name -> google.protobuf.Duration
 	6,  // 1: multipoolermanagerdata.StandbyReplicationStatus.primary_conn_info:type_name -> multipoolermanagerdata.PrimaryConnInfo
 	72, // 2: multipoolermanagerdata.WaitForLSNRequest.timeout:type_name -> google.protobuf.Duration
 	73, // 3: multipoolermanagerdata.SetPrimaryConnInfoRequest.primary:type_name -> clustermetadata.MultiPooler
-	1,  // 4: multipoolermanagerdata.StopReplicationRequest.mode:type_name -> multipoolermanagerdata.ReplicationPauseMode
-	7,  // 5: multipoolermanagerdata.StopReplicationResponse.status:type_name -> multipoolermanagerdata.StandbyReplicationStatus
-	7,  // 6: multipoolermanagerdata.StandbyReplicationStatusResponse.status:type_name -> multipoolermanagerdata.StandbyReplicationStatus
-	4,  // 7: multipoolermanagerdata.SynchronousReplicationConfiguration.synchronous_commit:type_name -> multipoolermanagerdata.SynchronousCommitLevel
-	2,  // 8: multipoolermanagerdata.SynchronousReplicationConfiguration.synchronous_method:type_name -> multipoolermanagerdata.SynchronousMethod
-	74, // 9: multipoolermanagerdata.SynchronousReplicationConfiguration.standby_ids:type_name -> clustermetadata.ID
-	74, // 10: multipoolermanagerdata.PrimaryStatus.connected_followers:type_name -> clustermetadata.ID
-	18, // 11: multipoolermanagerdata.PrimaryStatus.sync_replication_config:type_name -> multipoolermanagerdata.SynchronousReplicationConfiguration
-	19, // 12: multipoolermanagerdata.PrimaryStatusResponse.status:type_name -> multipoolermanagerdata.PrimaryStatus
-	75, // 13: multipoolermanagerdata.Status.pooler_type:type_name -> clustermetadata.PoolerType
-	19, // 14: multipoolermanagerdata.Status.primary_status:type_name -> multipoolermanagerdata.PrimaryStatus
-	7,  // 15: multipoolermanagerdata.Status.replication_status:type_name -> multipoolermanagerdata.StandbyReplicationStatus
-	51, // 16: multipoolermanagerdata.Status.consensus_term:type_name -> multipoolermanagerdata.ConsensusTerm
-	0,  // 17: multipoolermanagerdata.Status.postgres_action:type_name -> multipoolermanagerdata.PostgresAction
-	72, // 18: multipoolermanagerdata.Status.postgres_action_duration:type_name -> google.protobuf.Duration
-	76, // 19: multipoolermanagerdata.Status.node_position:type_name -> clustermetadata.NodePosition
-	24, // 20: multipoolermanagerdata.StatusResponse.status:type_name -> multipoolermanagerdata.Status
-	72, // 21: multipoolermanagerdata.ReplicationStats.write_lag:type_name -> google.protobuf.Duration
-	72, // 22: multipoolermanagerdata.ReplicationStats.flush_lag:type_name -> google.protobuf.Duration
-	72, // 23: multipoolermanagerdata.ReplicationStats.replay_lag:type_name -> google.protobuf.Duration
-	74, // 24: multipoolermanagerdata.FollowerInfo.follower_id:type_name -> clustermetadata.ID
-	27, // 25: multipoolermanagerdata.FollowerInfo.replication_stats:type_name -> multipoolermanagerdata.ReplicationStats
-	28, // 26: multipoolermanagerdata.GetFollowersResponse.followers:type_name -> multipoolermanagerdata.FollowerInfo
-	18, // 27: multipoolermanagerdata.GetFollowersResponse.sync_config:type_name -> multipoolermanagerdata.SynchronousReplicationConfiguration
-	72, // 28: multipoolermanagerdata.EmergencyDemoteRequest.drain_timeout:type_name -> google.protobuf.Duration
-	76, // 29: multipoolermanagerdata.EmergencyDemoteResponse.node_position:type_name -> clustermetadata.NodePosition
-	73, // 30: multipoolermanagerdata.DemoteStalePrimaryRequest.source:type_name -> clustermetadata.MultiPooler
-	1,  // 31: multipoolermanagerdata.StopReplicationAndGetStatusRequest.mode:type_name -> multipoolermanagerdata.ReplicationPauseMode
-	7,  // 32: multipoolermanagerdata.StopReplicationAndGetStatusResponse.status:type_name -> multipoolermanagerdata.StandbyReplicationStatus
-	75, // 33: multipoolermanagerdata.ChangeTypeRequest.pooler_type:type_name -> clustermetadata.PoolerType
-	45, // 34: multipoolermanagerdata.PromoteRequest.sync_replication_config:type_name -> multipoolermanagerdata.ConfigureSynchronousReplicationRequest
-	74, // 35: multipoolermanagerdata.PromoteRequest.coordinator_id:type_name -> clustermetadata.ID
-	74, // 36: multipoolermanagerdata.PromoteRequest.cohort_members:type_name -> clustermetadata.ID
-	74, // 37: multipoolermanagerdata.PromoteRequest.accepted_members:type_name -> clustermetadata.ID
-	76, // 38: multipoolermanagerdata.PromoteResponse.node_position:type_name -> clustermetadata.NodePosition
-	7,  // 39: multipoolermanagerdata.ResetReplicationResponse.status:type_name -> multipoolermanagerdata.StandbyReplicationStatus
-	4,  // 40: multipoolermanagerdata.ConfigureSynchronousReplicationRequest.synchronous_commit:type_name -> multipoolermanagerdata.SynchronousCommitLevel
-	2,  // 41: multipoolermanagerdata.ConfigureSynchronousReplicationRequest.synchronous_method:type_name -> multipoolermanagerdata.SynchronousMethod
-	74, // 42: multipoolermanagerdata.ConfigureSynchronousReplicationRequest.standby_ids:type_name -> clustermetadata.ID
-	76, // 43: multipoolermanagerdata.ConfigureSynchronousReplicationResponse.node_position:type_name -> clustermetadata.NodePosition
-	3,  // 44: multipoolermanagerdata.UpdateSynchronousStandbyListRequest.operation:type_name -> multipoolermanagerdata.StandbyUpdateOperation
-	74, // 45: multipoolermanagerdata.UpdateSynchronousStandbyListRequest.standby_ids:type_name -> clustermetadata.ID
-	74, // 46: multipoolermanagerdata.UpdateSynchronousStandbyListRequest.coordinator_id:type_name -> clustermetadata.ID
-	76, // 47: multipoolermanagerdata.UpdateSynchronousStandbyListResponse.node_position:type_name -> clustermetadata.NodePosition
-	74, // 48: multipoolermanagerdata.ConsensusTerm.accepted_term_from_coordinator_id:type_name -> clustermetadata.ID
-	77, // 49: multipoolermanagerdata.ConsensusTerm.last_acceptance_time:type_name -> google.protobuf.Timestamp
-	74, // 50: multipoolermanagerdata.ConsensusTerm.leader_id:type_name -> clustermetadata.ID
-	78, // 51: multipoolermanagerdata.InitializeEmptyPrimaryRequest.durability_quorum_rule:type_name -> clustermetadata.QuorumRule
-	74, // 52: multipoolermanagerdata.InitializeEmptyPrimaryRequest.coordinator_id:type_name -> clustermetadata.ID
-	71, // 53: multipoolermanagerdata.BackupRequest.overrides:type_name -> multipoolermanagerdata.BackupRequest.OverridesEntry
-	62, // 54: multipoolermanagerdata.GetBackupsResponse.backups:type_name -> multipoolermanagerdata.BackupMetadata
-	62, // 55: multipoolermanagerdata.GetBackupByJobIdResponse.backup:type_name -> multipoolermanagerdata.BackupMetadata
-	5,  // 56: multipoolermanagerdata.BackupMetadata.status:type_name -> multipoolermanagerdata.BackupMetadata.Status
-	75, // 57: multipoolermanagerdata.BackupMetadata.pooler_type:type_name -> clustermetadata.PoolerType
-	79, // 58: multipoolermanagerdata.GetDurabilityPolicyResponse.policy:type_name -> clustermetadata.DurabilityPolicy
-	78, // 59: multipoolermanagerdata.CreateDurabilityPolicyRequest.quorum_rule:type_name -> clustermetadata.QuorumRule
-	73, // 60: multipoolermanagerdata.RewindToSourceRequest.source:type_name -> clustermetadata.MultiPooler
-	61, // [61:61] is the sub-list for method output_type
-	61, // [61:61] is the sub-list for method input_type
-	61, // [61:61] is the sub-list for extension type_name
-	61, // [61:61] is the sub-list for extension extendee
-	0,  // [0:61] is the sub-list for field type_name
+	74, // 4: multipoolermanagerdata.SetPrimaryConnInfoRequest.coordinator_rule:type_name -> clustermetadata.RuleNumber
+	1,  // 5: multipoolermanagerdata.StopReplicationRequest.mode:type_name -> multipoolermanagerdata.ReplicationPauseMode
+	7,  // 6: multipoolermanagerdata.StopReplicationResponse.status:type_name -> multipoolermanagerdata.StandbyReplicationStatus
+	7,  // 7: multipoolermanagerdata.StandbyReplicationStatusResponse.status:type_name -> multipoolermanagerdata.StandbyReplicationStatus
+	4,  // 8: multipoolermanagerdata.SynchronousReplicationConfiguration.synchronous_commit:type_name -> multipoolermanagerdata.SynchronousCommitLevel
+	2,  // 9: multipoolermanagerdata.SynchronousReplicationConfiguration.synchronous_method:type_name -> multipoolermanagerdata.SynchronousMethod
+	75, // 10: multipoolermanagerdata.SynchronousReplicationConfiguration.standby_ids:type_name -> clustermetadata.ID
+	75, // 11: multipoolermanagerdata.PrimaryStatus.connected_followers:type_name -> clustermetadata.ID
+	18, // 12: multipoolermanagerdata.PrimaryStatus.sync_replication_config:type_name -> multipoolermanagerdata.SynchronousReplicationConfiguration
+	19, // 13: multipoolermanagerdata.PrimaryStatusResponse.status:type_name -> multipoolermanagerdata.PrimaryStatus
+	76, // 14: multipoolermanagerdata.Status.pooler_type:type_name -> clustermetadata.PoolerType
+	19, // 15: multipoolermanagerdata.Status.primary_status:type_name -> multipoolermanagerdata.PrimaryStatus
+	7,  // 16: multipoolermanagerdata.Status.replication_status:type_name -> multipoolermanagerdata.StandbyReplicationStatus
+	51, // 17: multipoolermanagerdata.Status.consensus_term:type_name -> multipoolermanagerdata.ConsensusTerm
+	0,  // 18: multipoolermanagerdata.Status.postgres_action:type_name -> multipoolermanagerdata.PostgresAction
+	72, // 19: multipoolermanagerdata.Status.postgres_action_duration:type_name -> google.protobuf.Duration
+	77, // 20: multipoolermanagerdata.Status.node_position:type_name -> clustermetadata.NodePosition
+	24, // 21: multipoolermanagerdata.StatusResponse.status:type_name -> multipoolermanagerdata.Status
+	72, // 22: multipoolermanagerdata.ReplicationStats.write_lag:type_name -> google.protobuf.Duration
+	72, // 23: multipoolermanagerdata.ReplicationStats.flush_lag:type_name -> google.protobuf.Duration
+	72, // 24: multipoolermanagerdata.ReplicationStats.replay_lag:type_name -> google.protobuf.Duration
+	75, // 25: multipoolermanagerdata.FollowerInfo.follower_id:type_name -> clustermetadata.ID
+	27, // 26: multipoolermanagerdata.FollowerInfo.replication_stats:type_name -> multipoolermanagerdata.ReplicationStats
+	28, // 27: multipoolermanagerdata.GetFollowersResponse.followers:type_name -> multipoolermanagerdata.FollowerInfo
+	18, // 28: multipoolermanagerdata.GetFollowersResponse.sync_config:type_name -> multipoolermanagerdata.SynchronousReplicationConfiguration
+	72, // 29: multipoolermanagerdata.EmergencyDemoteRequest.drain_timeout:type_name -> google.protobuf.Duration
+	74, // 30: multipoolermanagerdata.EmergencyDemoteRequest.coordinator_rule:type_name -> clustermetadata.RuleNumber
+	77, // 31: multipoolermanagerdata.EmergencyDemoteResponse.node_position:type_name -> clustermetadata.NodePosition
+	73, // 32: multipoolermanagerdata.DemoteStalePrimaryRequest.source:type_name -> clustermetadata.MultiPooler
+	74, // 33: multipoolermanagerdata.DemoteStalePrimaryRequest.coordinator_rule:type_name -> clustermetadata.RuleNumber
+	1,  // 34: multipoolermanagerdata.StopReplicationAndGetStatusRequest.mode:type_name -> multipoolermanagerdata.ReplicationPauseMode
+	7,  // 35: multipoolermanagerdata.StopReplicationAndGetStatusResponse.status:type_name -> multipoolermanagerdata.StandbyReplicationStatus
+	76, // 36: multipoolermanagerdata.ChangeTypeRequest.pooler_type:type_name -> clustermetadata.PoolerType
+	45, // 37: multipoolermanagerdata.PromoteRequest.sync_replication_config:type_name -> multipoolermanagerdata.ConfigureSynchronousReplicationRequest
+	75, // 38: multipoolermanagerdata.PromoteRequest.coordinator_id:type_name -> clustermetadata.ID
+	75, // 39: multipoolermanagerdata.PromoteRequest.cohort_members:type_name -> clustermetadata.ID
+	75, // 40: multipoolermanagerdata.PromoteRequest.accepted_members:type_name -> clustermetadata.ID
+	77, // 41: multipoolermanagerdata.PromoteResponse.node_position:type_name -> clustermetadata.NodePosition
+	7,  // 42: multipoolermanagerdata.ResetReplicationResponse.status:type_name -> multipoolermanagerdata.StandbyReplicationStatus
+	4,  // 43: multipoolermanagerdata.ConfigureSynchronousReplicationRequest.synchronous_commit:type_name -> multipoolermanagerdata.SynchronousCommitLevel
+	2,  // 44: multipoolermanagerdata.ConfigureSynchronousReplicationRequest.synchronous_method:type_name -> multipoolermanagerdata.SynchronousMethod
+	75, // 45: multipoolermanagerdata.ConfigureSynchronousReplicationRequest.standby_ids:type_name -> clustermetadata.ID
+	77, // 46: multipoolermanagerdata.ConfigureSynchronousReplicationResponse.node_position:type_name -> clustermetadata.NodePosition
+	3,  // 47: multipoolermanagerdata.UpdateSynchronousStandbyListRequest.operation:type_name -> multipoolermanagerdata.StandbyUpdateOperation
+	75, // 48: multipoolermanagerdata.UpdateSynchronousStandbyListRequest.standby_ids:type_name -> clustermetadata.ID
+	75, // 49: multipoolermanagerdata.UpdateSynchronousStandbyListRequest.coordinator_id:type_name -> clustermetadata.ID
+	74, // 50: multipoolermanagerdata.UpdateSynchronousStandbyListRequest.coordinator_rule:type_name -> clustermetadata.RuleNumber
+	77, // 51: multipoolermanagerdata.UpdateSynchronousStandbyListResponse.node_position:type_name -> clustermetadata.NodePosition
+	75, // 52: multipoolermanagerdata.ConsensusTerm.accepted_term_from_coordinator_id:type_name -> clustermetadata.ID
+	78, // 53: multipoolermanagerdata.ConsensusTerm.last_acceptance_time:type_name -> google.protobuf.Timestamp
+	75, // 54: multipoolermanagerdata.ConsensusTerm.leader_id:type_name -> clustermetadata.ID
+	79, // 55: multipoolermanagerdata.InitializeEmptyPrimaryRequest.durability_quorum_rule:type_name -> clustermetadata.QuorumRule
+	75, // 56: multipoolermanagerdata.InitializeEmptyPrimaryRequest.coordinator_id:type_name -> clustermetadata.ID
+	71, // 57: multipoolermanagerdata.BackupRequest.overrides:type_name -> multipoolermanagerdata.BackupRequest.OverridesEntry
+	62, // 58: multipoolermanagerdata.GetBackupsResponse.backups:type_name -> multipoolermanagerdata.BackupMetadata
+	62, // 59: multipoolermanagerdata.GetBackupByJobIdResponse.backup:type_name -> multipoolermanagerdata.BackupMetadata
+	5,  // 60: multipoolermanagerdata.BackupMetadata.status:type_name -> multipoolermanagerdata.BackupMetadata.Status
+	76, // 61: multipoolermanagerdata.BackupMetadata.pooler_type:type_name -> clustermetadata.PoolerType
+	80, // 62: multipoolermanagerdata.GetDurabilityPolicyResponse.policy:type_name -> clustermetadata.DurabilityPolicy
+	79, // 63: multipoolermanagerdata.CreateDurabilityPolicyRequest.quorum_rule:type_name -> clustermetadata.QuorumRule
+	73, // 64: multipoolermanagerdata.RewindToSourceRequest.source:type_name -> clustermetadata.MultiPooler
+	65, // [65:65] is the sub-list for method output_type
+	65, // [65:65] is the sub-list for method input_type
+	65, // [65:65] is the sub-list for extension type_name
+	65, // [65:65] is the sub-list for extension extendee
+	0,  // [0:65] is the sub-list for field type_name
 }
 
 func init() { file_multipoolermanagerdata_proto_init() }

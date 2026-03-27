@@ -78,4 +78,7 @@ message PoolerHealthState {
 
   // Consensus status from ConsensusStatus RPC (for divergence detection)
   consensusdata.StatusResponse consensus_status = 14;
+
+  // Most recent rule + LSN
+  clustermetadata.NodePosition node_position = 15;
 }

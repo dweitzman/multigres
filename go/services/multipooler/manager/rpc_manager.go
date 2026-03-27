@@ -419,7 +419,7 @@ func (pm *MultiPoolerManager) ConfigureSynchronousReplication(ctx context.Contex
 		return nil, mterrors.Wrap(err, "failed to get consensus term")
 	}
 	nodePos, err := pm.insertHistoryRecord(ctx,
-		term.GetPrimaryTerm(),
+		term.GetTermNumber(),
 		"replication_config",
 		pm.servicePoolerID, nil, "", // leaderID, coordinatorID, walPosition
 		"configure",
@@ -653,18 +653,6 @@ func (pm *MultiPoolerManager) getPrimaryStatusInternal(ctx context.Context) (*mu
 		return nil, err
 	}
 	status.SyncReplicationConfig = syncConfig
-
-	// Include primary term from consensus state.
-	if pm.consensusState == nil {
-		return nil, mterrors.New(mtrpcpb.Code_INTERNAL, "consensus state not initialized")
-	}
-	term, err := pm.consensusState.GetInconsistentTerm()
-	if err != nil {
-		return nil, err
-	}
-	if term != nil {
-		status.PrimaryTerm = term.GetPrimaryTerm()
-	}
 
 	return status, nil
 }
@@ -968,8 +956,6 @@ func (pm *MultiPoolerManager) emergencyDemoteLocked(ctx context.Context, consens
 	if state.isNotServing && state.isReplicaInTopology && state.isReadOnly {
 		return &multipoolermanagerdatapb.EmergencyDemoteResponse{
 			WasAlreadyDemoted:     true,
-			ConsensusTerm:         consensusTerm,
-			LsnPosition:           state.finalLSN,
 			ConnectionsTerminated: 0,
 		}, nil
 	}
@@ -1014,8 +1000,6 @@ func (pm *MultiPoolerManager) emergencyDemoteLocked(ctx context.Context, consens
 
 	return &multipoolermanagerdatapb.EmergencyDemoteResponse{
 		WasAlreadyDemoted:     false,
-		ConsensusTerm:         consensusTerm,
-		LsnPosition:           finalLSN,
 		NodePosition:          nodePos,
 		ConnectionsTerminated: connectionsTerminated,
 	}, nil
@@ -1074,27 +1058,13 @@ func (pm *MultiPoolerManager) DemoteStalePrimary(
 	}
 	defer pm.actionLock.Release(ctx)
 
-	// Check if already demoted by reading primary_term from disk.
-	// Invariant: primary_term > 0 if and only if postgres is (or was) in primary state.
-	// We set primary_term before promotion and clear it after demotion.
-	// If primary_term is 0, this node was already demoted (either by a previous call
-	// or by another multiorch instance). Return early to avoid redundant work.
-	// TODO (@rafael): This information should come from pooler state, instead of checking this
-	// invariant.
-	term, err := pm.consensusState.GetTerm(ctx)
-	if err != nil {
-		return nil, mterrors.Wrap(err, "failed to get current term")
-	}
-	if term.GetPrimaryTerm() == 0 {
-		pm.logger.InfoContext(ctx, "Pooler already demoted, skipping DemoteStalePrimary")
-		// Return success with rewind_performed=false since node is already in correct state
-		finalLSN := ""
-		if lsn, err := pm.getStandbyReplayLSN(ctx); err == nil {
-			finalLSN = lsn
-		}
+	// Check if already demoted: if Postgres is accessible and running as standby,
+	// this node is already in the correct state. Proceed with demotion if Postgres is
+	// primary or unreachable (stopped).
+	if isPrimary, err := pm.isPrimary(ctx); err == nil && !isPrimary {
+		pm.logger.InfoContext(ctx, "Pooler already in standby mode, skipping DemoteStalePrimary")
 		return &multipoolermanagerdatapb.DemoteStalePrimaryResponse{
 			RewindPerformed: false,
-			LsnPosition:     finalLSN,
 		}, nil
 	}
 
@@ -1156,16 +1126,10 @@ func (pm *MultiPoolerManager) DemoteStalePrimary(
 		return nil, mterrors.Wrap(err, "failed to configure replication to source primary")
 	}
 
-	// Clear primary_term since this node is no longer primary for any term.
-	// Note: consensusState can't be nil here because validateTerm passed.
-	if err := pm.consensusState.SetPrimaryTerm(ctx, 0, false /* force */); err != nil {
-		return nil, mterrors.Wrap(err, "failed to clear primary term")
-	}
-
 	// Report the new primary (source) so the gateway can use this observation.
+	// TODO: set RuleNumber from CatchUpTarget once that mechanism is implemented.
 	pm.healthStreamer.UpdatePrimaryObservation(&poolerserver.PrimaryObservation{
-		PrimaryID:   source.Id,
-		PrimaryTerm: consensusTerm,
+		PrimaryID: source.Id,
 	})
 
 	// Update consensus term to match the correct primary's term after successful demotion
@@ -1255,10 +1219,10 @@ func (pm *MultiPoolerManager) Promote(ctx context.Context, consensusTerm int64, 
 			// Everything is consistent and complete - idempotent success
 			pm.logger.InfoContext(ctx, "Promotion already complete and consistent (idempotent)",
 				"lsn", state.currentLSN)
+			nodePos, _ := pm.getCurrentNodePosition(ctx)
 			return &multipoolermanagerdatapb.PromoteResponse{
-				LsnPosition:       state.currentLSN,
 				WasAlreadyPrimary: true,
-				ConsensusTerm:     consensusTerm,
+				NodePosition:      nodePos,
 			}, nil
 		}
 
@@ -1311,24 +1275,6 @@ func (pm *MultiPoolerManager) Promote(ctx context.Context, consensusTerm int64, 
 		return nil, err
 	}
 
-	// ORDERING: Set primary_term BEFORE writing to history table.
-	// This ordering is intentional to avoid an inconsistent state:
-	// - If we set primary_term then history write fails: promotion fails, but primary_term is set.
-	//   This only means this primary doesn't have any committed transactions yet. On retry,
-	//   setting primary_term is idempotent and history write will succeed. This is safe.
-	// - On the contrary, if we write history then primary_term fails: history transaction is COMMITTED AND REPLICATED,
-	//   but the node doesn't know it's primary for this term. This creates inconsistent state with
-	//   a committed transaction that can't be easily rolled back.
-	// Therefore, we persist primary_term first, then commit the transaction.
-	if err := pm.consensusState.SetPrimaryTerm(ctx, consensusTerm, force); err != nil {
-		return nil, mterrors.Wrap(err, "failed to set primary term")
-	}
-
-	pm.healthStreamer.UpdatePrimaryObservation(&poolerserver.PrimaryObservation{
-		PrimaryID:   pm.serviceID,
-		PrimaryTerm: consensusTerm,
-	})
-
 	// Write leadership history record - this validates that sync replication is working.
 	// If this fails (typically due to timeout waiting for standby acknowledgment), we fail
 	// the promotion. It's better to have no primary than one that can't satisfy durability.
@@ -1353,6 +1299,12 @@ func (pm *MultiPoolerManager) Promote(ctx context.Context, consensusTerm int64, 
 		return nil, mterrors.Wrap(err, "promotion failed: could not write leadership history (sync replication may not be functioning)")
 	}
 
+	// Notify health streamer after history is durably committed and replicated.
+	pm.healthStreamer.UpdatePrimaryObservation(&poolerserver.PrimaryObservation{
+		PrimaryID:  pm.serviceID,
+		RuleNumber: nodePos.GetRule().GetRuleNumber(),
+	})
+
 	// Update topology and notify all components (best-effort, don't fail promotion)
 	if err := pm.updateTopologyAfterPromotion(ctx, state); err != nil {
 		pm.logger.WarnContext(ctx, "Failed to update topology after promotion", "error", err)
@@ -1364,10 +1316,8 @@ func (pm *MultiPoolerManager) Promote(ctx context.Context, consensusTerm int64, 
 		"was_already_primary", state.isPrimaryInPostgres)
 
 	return &multipoolermanagerdatapb.PromoteResponse{
-		LsnPosition:       nodePos.GetLsn(),
 		NodePosition:      nodePos,
 		WasAlreadyPrimary: state.isPrimaryInPostgres && state.isPrimaryInTopology && state.syncReplicationMatches,
-		ConsensusTerm:     consensusTerm,
 	}, nil
 }
 

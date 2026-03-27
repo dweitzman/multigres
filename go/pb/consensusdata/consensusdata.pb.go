@@ -97,6 +97,9 @@ type WALPosition struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// For primary: current write position from pg_current_wal_lsn()
 	// For standby: empty (use last_receive_lsn and last_replay_lsn instead)
+	// Deprecated: use node_position.lsn instead.
+	//
+	// Deprecated: Marked as deprecated in consensusdata.proto.
 	CurrentLsn string `protobuf:"bytes,1,opt,name=current_lsn,json=currentLsn,proto3" json:"current_lsn,omitempty"`
 	// For standby: last WAL position received from pg_last_wal_receive_lsn()
 	// For primary: empty
@@ -140,6 +143,7 @@ func (*WALPosition) Descriptor() ([]byte, []int) {
 	return file_consensusdata_proto_rawDescGZIP(), []int{0}
 }
 
+// Deprecated: Marked as deprecated in consensusdata.proto.
 func (x *WALPosition) GetCurrentLsn() string {
 	if x != nil {
 		return x.CurrentLsn
@@ -181,9 +185,14 @@ type BeginTermRequest struct {
 	PolicyVersion int64 `protobuf:"varint,4,opt,name=policy_version,json=policyVersion,proto3" json:"policy_version,omitempty"`
 	// Action type for this BeginTerm operation
 	// Indicates what scenario triggered this term change
-	Action        BeginTermAction `protobuf:"varint,5,opt,name=action,proto3,enum=consensusdata.BeginTermAction" json:"action,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Action BeginTermAction `protobuf:"varint,5,opt,name=action,proto3,enum=consensusdata.BeginTermAction" json:"action,omitempty"`
+	// The highest rule the coordinator knows about at the time of this request.
+	// Pooler rejects if its current node_position.rule is strictly greater — this indicates
+	// the coordinator has a stale view of the cluster and should re-observe before proceeding.
+	// Zero value means the coordinator has no prior knowledge (e.g., first bootstrap).
+	CoordinatorRule *clustermetadata.RuleNumber `protobuf:"bytes,6,opt,name=coordinator_rule,json=coordinatorRule,proto3" json:"coordinator_rule,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *BeginTermRequest) Reset() {
@@ -251,6 +260,13 @@ func (x *BeginTermRequest) GetAction() BeginTermAction {
 	return BeginTermAction_BEGIN_TERM_ACTION_UNSPECIFIED
 }
 
+func (x *BeginTermRequest) GetCoordinatorRule() *clustermetadata.RuleNumber {
+	if x != nil {
+		return x.CoordinatorRule
+	}
+	return nil
+}
+
 type BeginTermResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Current term, for candidate to update itself
@@ -260,7 +276,6 @@ type BeginTermResponse struct {
 	// ID of the responding pooler
 	PoolerId string `protobuf:"bytes,3,opt,name=pooler_id,json=poolerId,proto3" json:"pooler_id,omitempty"`
 	// WAL position for candidate selection.
-	// Deprecated: use node_position.lsn instead.
 	WalPosition *WALPosition `protobuf:"bytes,4,opt,name=wal_position,json=walPosition,proto3" json:"wal_position,omitempty"`
 	// The node's position when it accepted/rejected the term.
 	// Used by coordinator to determine most-advanced node when electing a new primary.
@@ -422,7 +437,9 @@ type StatusResponse struct {
 	// Preserved when consensus term increases (new elections).
 	// Cleared to 0 when demoted (DemoteStalePrimary) or restored from backup.
 	// 0 if never primary. For current primaries, must be non-zero.
-	// Deprecated: use node_position.rule.rule_number instead.
+	// Deprecated: use node_position.rule instead.
+	//
+	// Deprecated: Marked as deprecated in consensusdata.proto.
 	PrimaryTerm int64 `protobuf:"varint,11,opt,name=primary_term,json=primaryTerm,proto3" json:"primary_term,omitempty"`
 	// The node's current position: highest known shard rule + current WAL LSN,
 	// read atomically within a single transaction. Zero-value if postgres is unreachable.
@@ -517,6 +534,7 @@ func (x *StatusResponse) GetTimelineInfo() *TimelineInfo {
 	return nil
 }
 
+// Deprecated: Marked as deprecated in consensusdata.proto.
 func (x *StatusResponse) GetPrimaryTerm() int64 {
 	if x != nil {
 		return x.PrimaryTerm
@@ -799,19 +817,20 @@ var File_consensusdata_proto protoreflect.FileDescriptor
 
 const file_consensusdata_proto_rawDesc = "" +
 	"\n" +
-	"\x13consensusdata.proto\x12\rconsensusdata\x1a\x15clustermetadata.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xba\x01\n" +
-	"\vWALPosition\x12\x1f\n" +
-	"\vcurrent_lsn\x18\x01 \x01(\tR\n" +
+	"\x13consensusdata.proto\x12\rconsensusdata\x1a\x15clustermetadata.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xbe\x01\n" +
+	"\vWALPosition\x12#\n" +
+	"\vcurrent_lsn\x18\x01 \x01(\tB\x02\x18\x01R\n" +
 	"currentLsn\x12(\n" +
 	"\x10last_receive_lsn\x18\x02 \x01(\tR\x0elastReceiveLsn\x12&\n" +
 	"\x0flast_replay_lsn\x18\x03 \x01(\tR\rlastReplayLsn\x128\n" +
-	"\ttimestamp\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"\xd8\x01\n" +
+	"\ttimestamp\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"\xa0\x02\n" +
 	"\x10BeginTermRequest\x12\x12\n" +
 	"\x04term\x18\x01 \x01(\x03R\x04term\x126\n" +
 	"\fcandidate_id\x18\x02 \x01(\v2\x13.clustermetadata.IDR\vcandidateId\x12\x19\n" +
 	"\bshard_id\x18\x03 \x01(\tR\ashardId\x12%\n" +
 	"\x0epolicy_version\x18\x04 \x01(\x03R\rpolicyVersion\x126\n" +
-	"\x06action\x18\x05 \x01(\x0e2\x1e.consensusdata.BeginTermActionR\x06action\"\x8e\x02\n" +
+	"\x06action\x18\x05 \x01(\x0e2\x1e.consensusdata.BeginTermActionR\x06action\x12F\n" +
+	"\x10coordinator_rule\x18\x06 \x01(\v2\x1b.clustermetadata.RuleNumberR\x0fcoordinatorRule\"\x8e\x02\n" +
 	"\x11BeginTermResponse\x12\x12\n" +
 	"\x04term\x18\x01 \x01(\x03R\x04term\x12\x1a\n" +
 	"\baccepted\x18\x02 \x01(\bR\baccepted\x12\x1b\n" +
@@ -821,7 +840,7 @@ const file_consensusdata_proto_rawDesc = "" +
 	"\x10rejection_reason\x18\x06 \x01(\tR\x0frejectionReason\">\n" +
 	"\rStatusRequest\x12\x12\n" +
 	"\x04term\x18\x01 \x01(\x03R\x04term\x12\x19\n" +
-	"\bshard_id\x18\x02 \x01(\tR\ashardId\"\xa0\x03\n" +
+	"\bshard_id\x18\x02 \x01(\tR\ashardId\"\xa4\x03\n" +
 	"\x0eStatusResponse\x12\x1b\n" +
 	"\tpooler_id\x18\x01 \x01(\tR\bpoolerId\x12!\n" +
 	"\fcurrent_term\x18\x02 \x01(\x03R\vcurrentTerm\x12=\n" +
@@ -833,8 +852,8 @@ const file_consensusdata_proto_rawDesc = "" +
 	"\x04cell\x18\a \x01(\tR\x04cell\x12\x12\n" +
 	"\x04role\x18\t \x01(\tR\x04role\x12@\n" +
 	"\rtimeline_info\x18\n" +
-	" \x01(\v2\x1b.consensusdata.TimelineInfoR\ftimelineInfo\x12!\n" +
-	"\fprimary_term\x18\v \x01(\x03R\vprimaryTerm\x12B\n" +
+	" \x01(\v2\x1b.consensusdata.TimelineInfoR\ftimelineInfo\x12%\n" +
+	"\fprimary_term\x18\v \x01(\x03B\x02\x18\x01R\vprimaryTerm\x12B\n" +
 	"\rnode_position\x18\f \x01(\v2\x1d.clustermetadata.NodePositionR\fnodePosition\"2\n" +
 	"\x15LeadershipViewRequest\x12\x19\n" +
 	"\bshard_id\x18\x01 \x01(\tR\ashardId\"\xa6\x01\n" +
@@ -884,23 +903,25 @@ var file_consensusdata_proto_goTypes = []any{
 	(*TimelineInfo)(nil),                 // 10: consensusdata.TimelineInfo
 	(*timestamppb.Timestamp)(nil),        // 11: google.protobuf.Timestamp
 	(*clustermetadata.ID)(nil),           // 12: clustermetadata.ID
-	(*clustermetadata.NodePosition)(nil), // 13: clustermetadata.NodePosition
+	(*clustermetadata.RuleNumber)(nil),   // 13: clustermetadata.RuleNumber
+	(*clustermetadata.NodePosition)(nil), // 14: clustermetadata.NodePosition
 }
 var file_consensusdata_proto_depIdxs = []int32{
 	11, // 0: consensusdata.WALPosition.timestamp:type_name -> google.protobuf.Timestamp
 	12, // 1: consensusdata.BeginTermRequest.candidate_id:type_name -> clustermetadata.ID
 	0,  // 2: consensusdata.BeginTermRequest.action:type_name -> consensusdata.BeginTermAction
-	1,  // 3: consensusdata.BeginTermResponse.wal_position:type_name -> consensusdata.WALPosition
-	13, // 4: consensusdata.BeginTermResponse.node_position:type_name -> clustermetadata.NodePosition
-	1,  // 5: consensusdata.StatusResponse.wal_position:type_name -> consensusdata.WALPosition
-	10, // 6: consensusdata.StatusResponse.timeline_info:type_name -> consensusdata.TimelineInfo
-	13, // 7: consensusdata.StatusResponse.node_position:type_name -> clustermetadata.NodePosition
-	11, // 8: consensusdata.LeadershipViewResponse.last_heartbeat:type_name -> google.protobuf.Timestamp
-	9,  // [9:9] is the sub-list for method output_type
-	9,  // [9:9] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	13, // 3: consensusdata.BeginTermRequest.coordinator_rule:type_name -> clustermetadata.RuleNumber
+	1,  // 4: consensusdata.BeginTermResponse.wal_position:type_name -> consensusdata.WALPosition
+	14, // 5: consensusdata.BeginTermResponse.node_position:type_name -> clustermetadata.NodePosition
+	1,  // 6: consensusdata.StatusResponse.wal_position:type_name -> consensusdata.WALPosition
+	10, // 7: consensusdata.StatusResponse.timeline_info:type_name -> consensusdata.TimelineInfo
+	14, // 8: consensusdata.StatusResponse.node_position:type_name -> clustermetadata.NodePosition
+	11, // 9: consensusdata.LeadershipViewResponse.last_heartbeat:type_name -> google.protobuf.Timestamp
+	10, // [10:10] is the sub-list for method output_type
+	10, // [10:10] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_consensusdata_proto_init() }

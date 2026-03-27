@@ -102,11 +102,17 @@ message SetPrimaryConnInfoRequest {
   // Whether to start replication after making changes
   bool start_replication_after = 3;
 
-  // Current term for consensus (used by MultiOrch during initialization)
-  int64 current_term = 4;
+  // Current term for consensus (used by MultiOrch during initialization).
+  // Deprecated: use coordinator_rule instead.
+  int64 current_term = 4 [deprecated = true];
 
-  // Force the operation even if the term doesn't match
+  // Force the operation even if rule validation fails.
   bool force = 5;
+
+  // The coordinator's current known rule. Pooler rejects SetPrimaryConnInfo if its
+  // node_position.rule is strictly greater — coordinator has a stale view.
+  // Zero value disables rule validation.
+  clustermetadata.RuleNumber coordinator_rule = 6;
 }
 
 message SetPrimaryConnInfoResponse {
@@ -173,8 +179,8 @@ message PrimaryStatus {
   SynchronousReplicationConfiguration sync_replication_config = 4;
 
   // Reflects the coordinator promise term at promotion time (from on-disk ConsensusTerm).
-  // Deprecated: use the primary's node_position.rule.rule_number (from Status) instead.
-  int64 primary_term = 5;
+  // Deprecated: use the primary's node_position.rule (from Status RPC) instead.
+  int64 primary_term = 5 [deprecated = true];
 }
 
 // PrimaryStatus gets the status of the primary server
@@ -334,15 +340,20 @@ message GetFollowersResponse {
 // This is called during the Revocation stage of generalized consensus to safely
 // transition a primary to read-only mode and prevent it from making further progress.
 message EmergencyDemoteRequest {
-  // Consensus term for this demotion operation
-  // When force=true, this field is ignored and should be passed as 0
-  int64 consensus_term = 1;
+  // Consensus term for this demotion operation.
+  // Deprecated: use coordinator_rule instead.
+  int64 consensus_term = 1 [deprecated = true];
 
   // Drain timeout - how long to wait for in-flight queries (default: 5s)
   google.protobuf.Duration drain_timeout = 2;
 
-  // Force the operation even if term validation fails
+  // Force the operation even if rule validation fails.
   bool force = 3;
+
+  // The highest rule the coordinator knows about. Pooler rejects if its current
+  // node_position.rule is strictly greater — stale coordinator view.
+  // Zero value disables rule validation (for direct/manual calls).
+  clustermetadata.RuleNumber coordinator_rule = 4;
 }
 
 message EmergencyDemoteResponse {
@@ -351,11 +362,11 @@ message EmergencyDemoteResponse {
 
   // Coordinator promise term at the time of demotion.
   // Deprecated: use node_position instead.
-  int64 consensus_term = 2;
+  int64 consensus_term = 2 [deprecated = true];
 
   // LSN position at the time of demotion (final position as primary).
   // Deprecated: use node_position.lsn instead.
-  string lsn_position = 3;
+  string lsn_position = 3 [deprecated = true];
 
   // Number of connections that were terminated
   int32 connections_terminated = 4;
@@ -376,11 +387,17 @@ message DemoteStalePrimaryRequest {
   // Source multipooler (the correct primary) to rewind to
   clustermetadata.MultiPooler source = 1;
 
-  // Consensus term from the correct primary
-  int64 consensus_term = 2;
+  // Consensus term from the correct primary.
+  // Deprecated: use coordinator_rule instead.
+  int64 consensus_term = 2 [deprecated = true];
 
-  // Force the operation even if term validation fails
+  // Force the operation even if rule validation fails.
   bool force = 3;
+
+  // The rule established by the correct primary. Pooler rejects if its current
+  // node_position.rule is strictly greater — the coordinator has a stale view.
+  // Zero value disables rule validation.
+  clustermetadata.RuleNumber coordinator_rule = 4;
 }
 
 message DemoteStalePrimaryResponse {
@@ -467,15 +484,14 @@ message PromoteRequest {
 message PromoteResponse {
   // LSN position after promotion.
   // Deprecated: use node_position.lsn instead.
-  string lsn_position = 1;
+  string lsn_position = 1 [deprecated = true];
   // Whether the pooler was already promoted (idempotent check)
   bool was_already_primary = 2;
 
   // Coordinator promise term at the time of promotion.
   // Deprecated: use node_position instead.
-  int64 consensus_term = 3;
+  int64 consensus_term = 3 [deprecated = true];
   // Position of this node at the time of promotion.
-  // Preferred over consensus_term + lsn_position for comparisons once rule_history is populated.
   clustermetadata.NodePosition node_position = 4;
 }
 
@@ -594,14 +610,20 @@ message UpdateSynchronousStandbyListRequest {
   // Whether to reload configuration immediately
   bool reload_config = 3;
 
-  // Consensus term (used by MultiOrch for term validation)
-  int64 consensus_term = 4;
+  // Consensus term (used by MultiOrch for term validation).
+  // Deprecated: use coordinator_rule instead.
+  int64 consensus_term = 4 [deprecated = true];
 
-  // Force the operation even if the term doesn't match
+  // Force the operation even if rule validation fails.
   bool force = 5;
 
   // Coordinator ID that initiated this operation (for audit trail)
   clustermetadata.ID coordinator_id = 6;
+
+  // The coordinator's current known rule. Pooler rejects if its node_position.rule
+  // is strictly greater — coordinator has a stale view.
+  // Zero value disables rule validation.
+  clustermetadata.RuleNumber coordinator_rule = 7;
 }
 
 message UpdateSynchronousStandbyListResponse {
@@ -621,15 +643,14 @@ message ConsensusTerm {
   // Timestamp of the last acceptance
   google.protobuf.Timestamp last_acceptance_time = 3;
 
-  // ID of the leader of the current term
-  clustermetadata.ID leader_id = 4;
+  // ID of the leader of the current term.
+  // Deprecated: primary identity is now authoritative in rule_history (leadership_history table).
+  clustermetadata.ID leader_id = 4 [deprecated = true];
 
   // The term for which this pooler was promoted to primary.
-  // Set during promotion (InitializeEmptyPrimary or Promote).
-  // Preserved when consensus term increases (new elections).
-  // Cleared to 0 when demoted (DemoteStalePrimary) or restored from backup.
-  // 0 if never primary.
-  int64 primary_term = 5;
+  // Deprecated: use the primary's node_position.rule.term_number (from Status RPC) instead.
+  // The authoritative promotion record lives in rule_history.
+  int64 primary_term = 5 [deprecated = true];
 }
 
 // InitializeEmptyPrimary initializes this pooler as an empty primary

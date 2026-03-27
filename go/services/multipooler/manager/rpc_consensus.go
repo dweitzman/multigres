@@ -22,8 +22,10 @@ import (
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/eventlog"
 	"github.com/multigres/multigres/go/common/mterrors"
+	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
@@ -89,6 +91,35 @@ func (pm *MultiPoolerManager) BeginTerm(ctx context.Context, req *consensusdatap
 	if err != nil {
 		return nil, fmt.Errorf("failed to get current term: %w", err)
 	}
+
+	// If the coordinator sent a rule, reject if our current rule is strictly newer.
+	// A coordinator with a lower rule than our current position has missed recent
+	// cluster state changes and must re-observe before proceeding.
+	if !consensus.RuleNumberIsZero(req.CoordinatorRule) {
+		nodePos, posErr := pm.getCurrentNodePosition(ctx)
+		if posErr == nil && !consensus.RuleNumberIsZero(nodePos.GetRule().GetRuleNumber()) {
+			ourRule := nodePos.GetRule().GetRuleNumber()
+			if consensus.CompareRuleNumbers(ourRule, req.CoordinatorRule) > 0 {
+				pm.logger.WarnContext(ctx, "BeginTerm rejected: stale coordinator rule",
+					"our_rule", consensus.RuleNumberString(ourRule),
+					"coordinator_rule", consensus.RuleNumberString(req.CoordinatorRule))
+				return &consensusdatapb.BeginTermResponse{
+					Term:            currentTerm,
+					Accepted:        false,
+					PoolerId:        pm.serviceID.GetName(),
+					NodePosition:    nodePos,
+					RejectionReason: fmt.Sprintf("stale coordinator: pooler rule %s > coordinator rule %s", consensus.RuleNumberString(ourRule), consensus.RuleNumberString(req.CoordinatorRule)),
+				}, nil
+			}
+		}
+	}
+
+	// TODO: if it looks like a potentially valid consensus term the coordinator is operating with
+	// non-stale information, we should try pausing replication before we accept the term.
+	// If after revoking we check the NodePosition and it's still no newer than the coordiantor's, we
+	// can proceed with updating the consensus term on disk. If after revoking we see that we're already
+	// aware of a newer Rule than the coordinator, we can un-revoke and reject the coordinator's BeginTerm
+	// request.
 
 	// Atomically update term and accept candidate
 	// This handles all consensus rules: term validation, duplicate check, etc.
@@ -200,9 +231,8 @@ func (pm *MultiPoolerManager) executeRevoke(ctx context.Context, term int64, res
 		if err != nil {
 			return mterrors.Wrap(err, "failed to demote primary during revoke")
 		}
-		response.WalPosition.CurrentLsn = demoteResp.LsnPosition
 		response.NodePosition = demoteResp.NodePosition
-		pm.logger.InfoContext(ctx, "Primary demoted", "lsn", demoteResp.LsnPosition, "term", term)
+		pm.logger.InfoContext(ctx, "Primary demoted", "lsn", demoteResp.NodePosition.GetLsn(), "term", term)
 	} else {
 		// Revoke standby: stop receiver and wait for replay to catch up
 		pm.logger.InfoContext(ctx, "Revoking standby", "term", term)
@@ -254,10 +284,6 @@ func (pm *MultiPoolerManager) ConsensusStatus(ctx context.Context, req *consensu
 	if term != nil {
 		localCurrentTerm = term.GetTermNumber()
 	}
-	localPrimaryTerm := int64(0)
-	if term != nil {
-		localPrimaryTerm = term.GetPrimaryTerm()
-	}
 
 	// Check if database is healthy by attempting a simple query
 	_, healthErr := pm.query(ctx, "SELECT 1")
@@ -269,16 +295,15 @@ func (pm *MultiPoolerManager) ConsensusStatus(ctx context.Context, req *consensu
 	}
 	role := "unknown"
 
+	var nodePosition *clustermetadatapb.NodePosition
 	if isHealthy {
 		// Check role and get appropriate WAL position
 		isPrimary, err := pm.isPrimary(ctx)
 		if err == nil {
 			if isPrimary {
-				// On primary: get current write position
 				role = "primary"
-				currentLsn, err := pm.getPrimaryLSN(ctx)
-				if err == nil {
-					walPosition.CurrentLsn = currentLsn
+				if np, err := pm.getCurrentNodePosition(ctx); err == nil {
+					nodePosition = np
 				}
 			} else {
 				role = "replica"
@@ -287,6 +312,9 @@ func (pm *MultiPoolerManager) ConsensusStatus(ctx context.Context, req *consensu
 				if err == nil {
 					walPosition.LastReceiveLsn = status.LastReceiveLsn
 					walPosition.LastReplayLsn = status.LastReplayLsn
+				}
+				if np, err := pm.getCurrentNodePosition(ctx); err == nil {
+					nodePosition = np
 				}
 			}
 		}
@@ -313,7 +341,7 @@ func (pm *MultiPoolerManager) ConsensusStatus(ctx context.Context, req *consensu
 		Cell:         pm.serviceID.GetCell(),
 		Role:         role,
 		TimelineInfo: timelineInfo,
-		PrimaryTerm:  localPrimaryTerm,
+		NodePosition: nodePosition,
 	}, nil
 }
 

@@ -1379,8 +1379,6 @@ func TestDemoteStalePrimary_UpdatesConsensusTerm(t *testing.T) {
 					"health streamer should have primary observation pointing to new primary after DemoteStalePrimary")
 				assert.Equal(t, sourcePooler.Id, healthState.PrimaryObservation.PrimaryID,
 					"primary observation should point to the source (new primary)")
-				assert.Equal(t, tt.requestTerm, healthState.PrimaryObservation.PrimaryTerm,
-					"primary observation term should match the consensus term from the request")
 			}
 
 			assert.NoError(t, mockQueryService.ExpectationsWereMet())
