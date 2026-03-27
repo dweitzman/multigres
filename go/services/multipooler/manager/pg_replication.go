@@ -102,6 +102,15 @@ func poolerIDsToAppNames(ids []poolerID) []string {
 	return strs
 }
 
+// poolerIDsToIDs extracts the underlying cluster IDs from a slice of poolerIDs.
+func poolerIDsToIDs(ids []poolerID) []*clustermetadatapb.ID {
+	result := make([]*clustermetadatapb.ID, len(ids))
+	for i, p := range ids {
+		result[i] = p.id
+	}
+	return result
+}
+
 // formatStandbyList formats a list of pooler IDs as a comma-separated list of quoted application names.
 func formatStandbyList(ids []poolerID) string {
 	quoted := make([]string, len(ids))
@@ -375,7 +384,7 @@ func (pm *MultiPoolerManager) resetPrimaryConnInfo(ctx context.Context) error {
 //
 // WARNING: This function is not perfect and has some theoretical limitations.
 // See decision: 2026-02-12-wait-for-replay-stabilize-during-revoke.md for more context.
-func (pm *MultiPoolerManager) waitForReplayStabilize(ctx context.Context) (*multipoolermanagerdatapb.StandbyReplicationStatus, error) {
+func (pm *MultiPoolerManager) waitForReplayStabilize(ctx context.Context) (*multipoolermanagerdatapb.StandbyReplicationStatus, *clustermetadatapb.NodePosition, error) {
 	waitCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
@@ -392,18 +401,18 @@ func (pm *MultiPoolerManager) waitForReplayStabilize(ctx context.Context) (*mult
 		select {
 		case <-waitCtx.Done():
 			if waitCtx.Err() == context.DeadlineExceeded {
-				return nil, mterrors.New(mtrpcpb.Code_DEADLINE_EXCEEDED, "timeout waiting for WAL replay to stabilize")
+				return nil, nil, mterrors.New(mtrpcpb.Code_DEADLINE_EXCEEDED, "timeout waiting for WAL replay to stabilize")
 			}
-			return nil, mterrors.Wrap(waitCtx.Err(), "context cancelled while waiting for replay to stabilize")
+			return nil, nil, mterrors.Wrap(waitCtx.Err(), "context cancelled while waiting for replay to stabilize")
 
 		case <-ticker.C:
 			replayLsn, isPaused, err := pm.queryReplayState(waitCtx)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 
 			if isPaused {
-				return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
+				return nil, nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
 					"WAL replay is paused during revoke — unexpected state")
 			}
 
@@ -420,9 +429,13 @@ func (pm *MultiPoolerManager) waitForReplayStabilize(ctx context.Context) (*mult
 
 				status, err := pm.queryReplicationStatus(waitCtx)
 				if err != nil {
-					return nil, err
+					return nil, nil, err
 				}
-				return status, nil
+				nodePos, err := pm.getCurrentNodePosition(ctx)
+				if err != nil {
+					return nil, nil, err
+				}
+				return status, nodePos, nil
 			}
 		}
 	}

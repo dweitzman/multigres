@@ -148,6 +148,10 @@ func (pm *MultiPoolerManager) BeginTerm(ctx context.Context, req *consensusdatap
 
 	switch req.Action {
 	case consensusdatapb.BeginTermAction_BEGIN_TERM_ACTION_NO_ACTION:
+		// Best-effort: populate node position for the coordinator's reference.
+		if nodePos, err := pm.getCurrentNodePosition(ctx); err == nil {
+			response.NodePosition = nodePos
+		}
 		return response, nil
 
 	case consensusdatapb.BeginTermAction_BEGIN_TERM_ACTION_REVOKE:
@@ -197,6 +201,7 @@ func (pm *MultiPoolerManager) executeRevoke(ctx context.Context, term int64, res
 			return mterrors.Wrap(err, "failed to demote primary during revoke")
 		}
 		response.WalPosition.CurrentLsn = demoteResp.LsnPosition
+		response.NodePosition = demoteResp.NodePosition
 		pm.logger.InfoContext(ctx, "Primary demoted", "lsn", demoteResp.LsnPosition, "term", term)
 	} else {
 		// Revoke standby: stop receiver and wait for replay to catch up
@@ -212,13 +217,14 @@ func (pm *MultiPoolerManager) executeRevoke(ctx context.Context, term int64, res
 		}
 
 		// Wait for replay to finish processing all WAL that is on disk
-		status, err := pm.waitForReplayStabilize(ctx)
+		status, nodePos, err := pm.waitForReplayStabilize(ctx)
 		if err != nil {
 			return mterrors.Wrap(err, "failed waiting for replay to stabilize during revoke")
 		}
 
 		response.WalPosition.LastReceiveLsn = status.LastReceiveLsn
 		response.WalPosition.LastReplayLsn = status.LastReplayLsn
+		response.NodePosition = nodePos
 		pm.logger.InfoContext(ctx, "Standby revoke complete",
 			"term", term,
 			"last_receive_lsn", status.LastReceiveLsn,

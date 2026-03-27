@@ -1037,25 +1037,31 @@ func (pm *MultiPoolerManager) setNotServing(ctx context.Context, state *demotion
 // stopPostgresForEmergencyDemote stops PostgreSQL during emergency demotion without restarting.
 // This is used when a primary needs to step down immediately during consensus term changes.
 // The node will be left in a stopped state and will require pg_rewind to rejoin the cluster.
-func (pm *MultiPoolerManager) stopPostgresForEmergencyDemote(ctx context.Context, state *demotionState) error {
+func (pm *MultiPoolerManager) stopPostgresForEmergencyDemote(ctx context.Context, state *demotionState) (*clustermetadatapb.NodePosition, error) {
 	if state.isReadOnly {
-		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, "unexpected state: PostgreSQL already in standby mode during emergency demotion")
+		return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, "unexpected state: PostgreSQL already in standby mode during emergency demotion")
 	}
 
 	if pm.pgctldClient == nil {
-		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, "pgctld client not initialized")
+		return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, "pgctld client not initialized")
+	}
+
+	// Capture node position before stopping postgres (postgres must be running to query it).
+	nodePos, err := pm.getCurrentNodePosition(ctx)
+	if err != nil {
+		pm.logger.WarnContext(ctx, "Failed to get current node position during emergency demotion", "error", err)
 	}
 
 	stopReq := &pgctldpb.StopRequest{
 		Mode: "fast",
 	}
 	if _, err := pm.pgctldClient.Stop(ctx, stopReq); err != nil {
-		return mterrors.Wrap(err, "failed to stop PostgreSQL during emergency demotion")
+		return nil, mterrors.Wrap(err, "failed to stop PostgreSQL during emergency demotion")
 	}
 
 	pm.logger.InfoContext(ctx, "PostgreSQL stopped for emergency demotion")
 
-	return nil
+	return nodePos, nil
 }
 
 // restartPostgresAsStandby restarts PostgreSQL as a standby server
@@ -1372,8 +1378,8 @@ func (pm *MultiPoolerManager) updateTopologyAfterPromotion(ctx context.Context, 
 }
 
 // configureReplicationAfterPromotion applies synchronous replication configuration
-func (pm *MultiPoolerManager) configureReplicationAfterPromotion(ctx context.Context, state *promotionState, syncReplicationConfig *multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest) error {
-	if syncReplicationConfig == nil {
+func (pm *MultiPoolerManager) configureReplicationAfterPromotion(ctx context.Context, state *promotionState, synchronousCommit multipoolermanagerdatapb.SynchronousCommitLevel, synchronousMethod multipoolermanagerdatapb.SynchronousMethod, numSync int32, standbyNames []poolerID, reloadConfig bool) error {
+	if len(standbyNames) == 0 {
 		return nil // No configuration requested
 	}
 
@@ -1383,17 +1389,10 @@ func (pm *MultiPoolerManager) configureReplicationAfterPromotion(ctx context.Con
 		return nil
 	}
 
-	pm.logger.InfoContext(ctx, "Sync replication configuration needed")
 	pm.logger.InfoContext(ctx, "Configuring synchronous replication for new cohort")
-	// Use the locked version since we're already holding the action lock from Promote
-	err := pm.configureSynchronousReplicationLocked(ctx,
-		syncReplicationConfig.SynchronousCommit,
-		syncReplicationConfig.SynchronousMethod,
-		syncReplicationConfig.NumSync,
-		syncReplicationConfig.StandbyIds,
-		syncReplicationConfig.ReloadConfig,
-		syncReplicationConfig.Force)
-	if err != nil {
+	// Use the locked version since we're already holding the action lock from Promote.
+	// History is written separately by Promote with the full promotion context.
+	if err := pm.configureSynchronousReplicationLocked(ctx, synchronousCommit, synchronousMethod, numSync, standbyNames, reloadConfig); err != nil {
 		pm.logger.ErrorContext(ctx, "Failed to configure synchronous replication", "error", err)
 		return mterrors.Wrap(err, "promotion succeeded but failed to configure synchronous replication")
 	}

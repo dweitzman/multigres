@@ -275,58 +275,51 @@ func TestBootstrapInitialization(t *testing.T) {
 
 		ctx := t.Context()
 
-		// Query leadership_history table
+		// After bootstrap, there should be exactly two records in leadership_history.
+		// The current two-record design is a legacy artifact of the separate InitializeEmptyPrimary
+		// and ConfigureSynchronousReplication calls; see bootstrap_shard.go for the TODO to
+		// consolidate these into a single Promote call in the future.
 		resp, err := primaryClient.Pooler.ExecuteQuery(ctx, `
-			SELECT term_number, leader_id, coordinator_id, wal_position, reason,
+			SELECT event_type, leader_id, coordinator_id, wal_position, reason,
 			       cohort_members, accepted_members
 			FROM multigres.leadership_history
-			ORDER BY term_number DESC
-			LIMIT 1
+			ORDER BY term_number ASC, rule_subterm ASC
 		`, 7)
 		require.NoError(t, err, "should query leadership_history")
-		require.Len(t, resp.Rows, 1, "should have exactly one leadership history record")
+		require.Len(t, resp.Rows, 2, "should have exactly two records (promotion + replication_config) after bootstrap")
 
-		row := resp.Rows[0]
-		termNumber := string(row.Values[0])
-		leaderID := string(row.Values[1])
-		coordinatorID := string(row.Values[2])
-		walPosition := string(row.Values[3])
-		reason := string(row.Values[4])
-		cohortMembersJSON := string(row.Values[5])
-		acceptedMembersJSON := string(row.Values[6])
-
-		// Verify term_number is 1
-		assert.Equal(t, "1", termNumber, "term_number should be 1 for initial bootstrap")
-
-		// Verify leader_id matches primary name (format: cell_name)
 		expectedLeaderID := fmt.Sprintf("%s_%s", setup.CellName, setup.PrimaryName)
-		assert.Equal(t, expectedLeaderID, leaderID, "leader_id should match primary")
 
-		// Verify coordinator_id matches the multiorch's cell_name format
-		// The coordinator ID uses ClusterIDString which returns cell_name format
-		expectedCoordinatorID := setup.CellName + "_test-multiorch"
-		assert.Equal(t, expectedCoordinatorID, coordinatorID, "coordinator_id should match multiorch's cell_name format")
+		// First record (rule_subterm=0): promotion written by InitializeEmptyPrimary
+		promotionRow := resp.Rows[0]
+		assert.Equal(t, "promotion", string(promotionRow.Values[0]))
+		assert.Equal(t, expectedLeaderID, string(promotionRow.Values[1]), "promotion leader_id should match primary")
+		assert.Equal(t, setup.CellName+"_test-multiorch", string(promotionRow.Values[2]), "promotion coordinator_id should be multiorch")
+		assert.NotEmpty(t, string(promotionRow.Values[3]), "promotion wal_position should be non-empty")
+		assert.Equal(t, "ShardNeedsBootstrap", string(promotionRow.Values[4]))
+		var promotionCohort, promotionAccepted []string
+		require.NoError(t, json.Unmarshal([]byte(promotionRow.Values[5]), &promotionCohort))
+		require.NoError(t, json.Unmarshal([]byte(promotionRow.Values[6]), &promotionAccepted))
+		assert.Contains(t, promotionCohort, expectedLeaderID, "promotion cohort_members should contain leader")
+		assert.Contains(t, promotionAccepted, expectedLeaderID, "promotion accepted_members should contain leader")
 
-		// Verify WAL position is non-empty
-		assert.NotEmpty(t, walPosition, "wal_position should be non-empty")
+		// Second record (rule_subterm=1): replication_config written by ConfigureSynchronousReplication
+		replRow := resp.Rows[1]
+		assert.Equal(t, "replication_config", string(replRow.Values[0]))
+		assert.Equal(t, expectedLeaderID, string(replRow.Values[1]), "replication_config leader_id should match primary")
+		assert.Empty(t, string(replRow.Values[2]), "replication_config coordinator_id should be empty")
+		assert.Equal(t, "ConfigureSynchronousReplication called", string(replRow.Values[4]))
+		var replCohort []string
+		require.NoError(t, json.Unmarshal([]byte(replRow.Values[5]), &replCohort))
+		for name := range setup.Multipoolers {
+			if name != setup.PrimaryName {
+				assert.Contains(t, replCohort, fmt.Sprintf("%s_%s", setup.CellName, name),
+					"replication_config cohort_members should contain standby %s", name)
+			}
+		}
 
-		// Verify reason is ShardNeedsBootstrap
-		assert.Equal(t, "ShardNeedsBootstrap", reason, "reason should be 'ShardNeedsBootstrap'")
-
-		// Parse and verify cohort_members is a valid JSON array
-		var cohortMembers []string
-		err = json.Unmarshal([]byte(cohortMembersJSON), &cohortMembers)
-		require.NoError(t, err, "cohort_members should be valid JSON array")
-		assert.Contains(t, cohortMembers, expectedLeaderID, "cohort_members should contain leader")
-
-		// Parse and verify accepted_members is a valid JSON array
-		var acceptedMembers []string
-		err = json.Unmarshal([]byte(acceptedMembersJSON), &acceptedMembers)
-		require.NoError(t, err, "accepted_members should be valid JSON array")
-		assert.Contains(t, acceptedMembers, expectedLeaderID, "accepted_members should contain leader")
-
-		t.Logf("Leadership history verified: term=%s, leader=%s, coordinator=%s, reason=%s",
-			termNumber, leaderID, coordinatorID, reason)
+		t.Logf("Leadership history verified: promotion leader=%s coordinator=%s; replication_config standbys=%v",
+			expectedLeaderID, setup.CellName+"_test-multiorch", replCohort)
 	})
 
 	t.Run("verify sync replication configured", func(t *testing.T) {

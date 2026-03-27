@@ -118,7 +118,7 @@ func (s *managerService) ResetReplication(ctx context.Context, req *multipoolerm
 
 // ConfigureSynchronousReplication configures PostgreSQL synchronous replication settings
 func (s *managerService) ConfigureSynchronousReplication(ctx context.Context, req *multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest) (*multipoolermanagerdatapb.ConfigureSynchronousReplicationResponse, error) {
-	err := s.manager.ConfigureSynchronousReplication(ctx,
+	nodePos, err := s.manager.ConfigureSynchronousReplication(ctx,
 		req.SynchronousCommit,
 		req.SynchronousMethod,
 		req.NumSync,
@@ -128,12 +128,12 @@ func (s *managerService) ConfigureSynchronousReplication(ctx context.Context, re
 	if err != nil {
 		return nil, mterrors.ToGRPC(err)
 	}
-	return &multipoolermanagerdatapb.ConfigureSynchronousReplicationResponse{}, nil
+	return &multipoolermanagerdatapb.ConfigureSynchronousReplicationResponse{NodePosition: nodePos}, nil
 }
 
 // UpdateSynchronousStandbyList updates the synchronous standby list
 func (s *managerService) UpdateSynchronousStandbyList(ctx context.Context, req *multipoolermanagerdatapb.UpdateSynchronousStandbyListRequest) (*multipoolermanagerdatapb.UpdateSynchronousStandbyListResponse, error) {
-	err := s.manager.UpdateSynchronousStandbyList(ctx,
+	nodePos, err := s.manager.UpdateSynchronousStandbyList(ctx,
 		req.Operation,
 		req.StandbyIds,
 		req.ReloadConfig,
@@ -143,7 +143,7 @@ func (s *managerService) UpdateSynchronousStandbyList(ctx context.Context, req *
 	if err != nil {
 		return nil, mterrors.ToGRPC(err)
 	}
-	return &multipoolermanagerdatapb.UpdateSynchronousStandbyListResponse{}, nil
+	return &multipoolermanagerdatapb.UpdateSynchronousStandbyListResponse{NodePosition: nodePos}, nil
 }
 
 // PrimaryStatus gets the status of the leader server

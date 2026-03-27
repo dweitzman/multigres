@@ -104,7 +104,6 @@ func TestCreateSidecarSchema(t *testing.T) {
 				m.AddQueryPatternOnce("CREATE TABLE IF NOT EXISTS multigres.durability_policy", mock.MakeQueryResult(nil, nil))
 				m.AddQueryPatternOnce("CREATE INDEX IF NOT EXISTS idx_durability_policy_active", mock.MakeQueryResult(nil, nil))
 				m.AddQueryPatternOnce("CREATE TABLE IF NOT EXISTS multigres.leadership_history", mock.MakeQueryResult(nil, nil))
-				m.AddQueryPatternOnce("CREATE INDEX IF NOT EXISTS idx_leadership_history_term_event", mock.MakeQueryResult(nil, nil))
 				m.AddQueryPatternOnce("CREATE TABLE IF NOT EXISTS multigres.tablegroup", mock.MakeQueryResult(nil, nil))
 				m.AddQueryPatternOnce("CREATE TABLE IF NOT EXISTS multigres.tablegroup_table", mock.MakeQueryResult(nil, nil))
 				m.AddQueryPatternOnce("CREATE TABLE IF NOT EXISTS multigres.shard", mock.MakeQueryResult(nil, nil))
@@ -167,20 +166,6 @@ func TestCreateSidecarSchema(t *testing.T) {
 			errorContains: "failed to create leadership_history table",
 		},
 		{
-			name:       "leadership_history index creation fails",
-			tableGroup: constants.DefaultTableGroup,
-			setupMock: func(m *mock.QueryService) {
-				m.AddQueryPatternOnce("CREATE SCHEMA IF NOT EXISTS multigres", mock.MakeQueryResult(nil, nil))
-				m.AddQueryPatternOnce("CREATE TABLE IF NOT EXISTS multigres.heartbeat", mock.MakeQueryResult(nil, nil))
-				m.AddQueryPatternOnce("CREATE TABLE IF NOT EXISTS multigres.durability_policy", mock.MakeQueryResult(nil, nil))
-				m.AddQueryPatternOnce("CREATE INDEX IF NOT EXISTS idx_durability_policy_active", mock.MakeQueryResult(nil, nil))
-				m.AddQueryPatternOnce("CREATE TABLE IF NOT EXISTS multigres.leadership_history", mock.MakeQueryResult(nil, nil))
-				m.AddQueryPatternOnceWithError("CREATE INDEX IF NOT EXISTS idx_leadership_history_term_event", errors.New("index creation failed"))
-			},
-			expectError:   true,
-			errorContains: "failed to create leadership_history index",
-		},
-		{
 			name:       "tablegroup table creation fails",
 			tableGroup: constants.DefaultTableGroup,
 			setupMock: func(m *mock.QueryService) {
@@ -189,7 +174,6 @@ func TestCreateSidecarSchema(t *testing.T) {
 				m.AddQueryPatternOnce("CREATE TABLE IF NOT EXISTS multigres.durability_policy", mock.MakeQueryResult(nil, nil))
 				m.AddQueryPatternOnce("CREATE INDEX IF NOT EXISTS idx_durability_policy_active", mock.MakeQueryResult(nil, nil))
 				m.AddQueryPatternOnce("CREATE TABLE IF NOT EXISTS multigres.leadership_history", mock.MakeQueryResult(nil, nil))
-				m.AddQueryPatternOnce("CREATE INDEX IF NOT EXISTS idx_leadership_history_term", mock.MakeQueryResult(nil, nil))
 				m.AddQueryPatternOnceWithError("CREATE TABLE IF NOT EXISTS multigres.tablegroup", errors.New("table creation failed"))
 			},
 			expectError:   true,
@@ -394,19 +378,20 @@ func mustPoolerID(cell, name string) poolerID {
 
 func TestInsertLeadershipHistory(t *testing.T) {
 	tests := []struct {
-		name            string
-		termNumber      int64
-		leaderID        poolerID
-		coordinatorID   *clustermetadatapb.ID
-		walPosition     string
-		operation       string
-		reason          string
-		cohortMembers   []poolerID
-		acceptedMembers []poolerID
-		force           bool
-		setupMock       func(m *mock.QueryService)
-		expectError     bool
-		errorContains   string
+		name               string
+		termNumber         int64
+		leaderID           poolerID
+		coordinatorID      *clustermetadatapb.ID
+		walPosition        string
+		operation          string
+		reason             string
+		cohortMembers      []poolerID
+		acceptedMembers    []poolerID
+		force              bool
+		setupMock          func(m *mock.QueryService)
+		expectError        bool
+		errorContains      string
+		expectNodePosition *clustermetadatapb.NodePosition
 	}{
 		{
 			name:            "successful insert",
@@ -419,9 +404,25 @@ func TestInsertLeadershipHistory(t *testing.T) {
 			cohortMembers:   []poolerID{mustPoolerID("zone1", "member-1"), mustPoolerID("zone1", "member-2"), mustPoolerID("zone1", "member-3")},
 			acceptedMembers: []poolerID{mustPoolerID("zone1", "member-1"), mustPoolerID("zone1", "member-2")},
 			setupMock: func(m *mock.QueryService) {
-				m.AddQueryPatternOnce("INSERT INTO multigres.leadership_history", mock.MakeQueryResult(nil, nil))
+				m.AddQueryPatternOnce("INSERT INTO multigres.leadership_history",
+					mock.MakeQueryResult(
+						[]string{"term_number", "rule_subterm", "pg_current_wal_lsn"},
+						[][]any{{int64(1), int64(0), "0/ABCDEF"}},
+					))
 			},
 			expectError: false,
+			expectNodePosition: &clustermetadatapb.NodePosition{
+				Rule: &clustermetadatapb.ShardRule{
+					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1, RuleSubterm: 0},
+					PrimaryId:  &clustermetadatapb.ID{Cell: "zone1", Name: "leader-1"},
+					CohortMembers: []*clustermetadatapb.ID{
+						{Cell: "zone1", Name: "member-1"},
+						{Cell: "zone1", Name: "member-2"},
+						{Cell: "zone1", Name: "member-3"},
+					},
+				},
+				Lsn: "0/ABCDEF",
+			},
 		},
 		{
 			name:            "insert fails with database error",
@@ -440,7 +441,7 @@ func TestInsertLeadershipHistory(t *testing.T) {
 			errorContains: "failed to insert history record",
 		},
 		{
-			name:            "force mode skips insert entirely",
+			name:            "force mode skips insert, returns current position",
 			termNumber:      2,
 			leaderID:        mustPoolerID("zone1", "leader-2"),
 			coordinatorID:   &clustermetadatapb.ID{Cell: "zone1", Name: "coordinator-2"},
@@ -451,9 +452,19 @@ func TestInsertLeadershipHistory(t *testing.T) {
 			acceptedMembers: []poolerID{mustPoolerID("zone1", "member-1")},
 			force:           true,
 			setupMock: func(m *mock.QueryService) {
-				// No mock needed - force mode skips the insert entirely
+				// No history yet, so getCurrentNodePosition falls back to COALESCE query
+				m.AddQueryPatternOnce("SELECT term_number, rule_subterm, leader_id, cohort_members",
+					mock.MakeQueryResult(nil, nil)) // 0 rows
+				m.AddQueryPatternOnce("SELECT COALESCE",
+					mock.MakeQueryResult([]string{"coalesce"}, [][]any{{"0/FORCE00"}}))
 			},
 			expectError: false,
+			expectNodePosition: &clustermetadatapb.NodePosition{
+				Rule: &clustermetadatapb.ShardRule{
+					RuleNumber: &clustermetadatapb.RuleNumber{},
+				},
+				Lsn: "0/FORCE00",
+			},
 		},
 		{
 			name:            "insert with empty cohort and accepted members arrays",
@@ -466,9 +477,21 @@ func TestInsertLeadershipHistory(t *testing.T) {
 			cohortMembers:   []poolerID{},
 			acceptedMembers: []poolerID{},
 			setupMock: func(m *mock.QueryService) {
-				m.AddQueryPatternOnce("INSERT INTO multigres.leadership_history", mock.MakeQueryResult(nil, nil))
+				m.AddQueryPatternOnce("INSERT INTO multigres.leadership_history",
+					mock.MakeQueryResult(
+						[]string{"term_number", "rule_subterm", "pg_current_wal_lsn"},
+						[][]any{{int64(3), int64(0), "0/CCCCCC"}},
+					))
 			},
 			expectError: false,
+			expectNodePosition: &clustermetadatapb.NodePosition{
+				Rule: &clustermetadatapb.ShardRule{
+					RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 3, RuleSubterm: 0},
+					PrimaryId:     &clustermetadatapb.ID{Cell: "zone1", Name: "leader-3"},
+					CohortMembers: []*clustermetadatapb.ID{},
+				},
+				Lsn: "0/CCCCCC",
+			},
 		},
 	}
 
@@ -478,7 +501,7 @@ func TestInsertLeadershipHistory(t *testing.T) {
 
 			tt.setupMock(mockQueryService)
 
-			err := pm.insertHistoryRecord(t.Context(), tt.termNumber, "promotion", tt.leaderID, tt.coordinatorID,
+			nodePos, err := pm.insertHistoryRecord(t.Context(), tt.termNumber, "promotion", tt.leaderID, tt.coordinatorID,
 				tt.walPosition, tt.operation, tt.reason, tt.cohortMembers, tt.acceptedMembers, tt.force)
 
 			if tt.expectError {
@@ -488,6 +511,7 @@ func TestInsertLeadershipHistory(t *testing.T) {
 				}
 			} else {
 				assert.NoError(t, err)
+				assert.Equal(t, nodePos, tt.expectNodePosition)
 			}
 			assert.NoError(t, mockQueryService.ExpectationsWereMet())
 		})
@@ -496,14 +520,15 @@ func TestInsertLeadershipHistory(t *testing.T) {
 
 func TestInsertReplicationConfigHistory(t *testing.T) {
 	tests := []struct {
-		name          string
-		termNumber    int64
-		operation     string
-		reason        string
-		standbyIDs    []*clustermetadatapb.ID
-		setupMock     func(m *mock.QueryService)
-		expectError   bool
-		errorContains string
+		name               string
+		termNumber         int64
+		operation          string
+		reason             string
+		standbyIDs         []*clustermetadatapb.ID
+		setupMock          func(m *mock.QueryService)
+		expectError        bool
+		errorContains      string
+		expectNodePosition *clustermetadatapb.NodePosition
 	}{
 		{
 			name:       "successful insert with configure operation",
@@ -515,9 +540,24 @@ func TestInsertReplicationConfigHistory(t *testing.T) {
 				{Cell: "us-west", Name: "replica-2"},
 			},
 			setupMock: func(m *mock.QueryService) {
-				m.AddQueryPatternOnce("INSERT INTO multigres.leadership_history", mock.MakeQueryResult(nil, nil))
+				m.AddQueryPatternOnce("INSERT INTO multigres.leadership_history",
+					mock.MakeQueryResult(
+						[]string{"term_number", "rule_subterm", "pg_current_wal_lsn"},
+						[][]any{{int64(1), int64(0), "0/AAAAAA"}},
+					))
 			},
 			expectError: false,
+			expectNodePosition: &clustermetadatapb.NodePosition{
+				Rule: &clustermetadatapb.ShardRule{
+					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1, RuleSubterm: 0},
+					PrimaryId:  &clustermetadatapb.ID{Cell: "test-cell", Name: "test-pooler"},
+					CohortMembers: []*clustermetadatapb.ID{
+						{Cell: "us-west", Name: "replica-1"},
+						{Cell: "us-west", Name: "replica-2"},
+					},
+				},
+				Lsn: "0/AAAAAA",
+			},
 		},
 		{
 			name:       "successful insert with add operation",
@@ -528,9 +568,21 @@ func TestInsertReplicationConfigHistory(t *testing.T) {
 				{Cell: "us-west", Name: "replica-3"},
 			},
 			setupMock: func(m *mock.QueryService) {
-				m.AddQueryPatternOnce("INSERT INTO multigres.leadership_history", mock.MakeQueryResult(nil, nil))
+				m.AddQueryPatternOnce("INSERT INTO multigres.leadership_history",
+					mock.MakeQueryResult(
+						[]string{"term_number", "rule_subterm", "pg_current_wal_lsn"},
+						[][]any{{int64(2), int64(0), "0/BBBBBB"}},
+					))
 			},
 			expectError: false,
+			expectNodePosition: &clustermetadatapb.NodePosition{
+				Rule: &clustermetadatapb.ShardRule{
+					RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 2, RuleSubterm: 0},
+					PrimaryId:     &clustermetadatapb.ID{Cell: "test-cell", Name: "test-pooler"},
+					CohortMembers: []*clustermetadatapb.ID{{Cell: "us-west", Name: "replica-3"}},
+				},
+				Lsn: "0/BBBBBB",
+			},
 		},
 		{
 			name:       "insert fails with database error",
@@ -553,9 +605,21 @@ func TestInsertReplicationConfigHistory(t *testing.T) {
 			reason:     "ConfigureSynchronousReplication called",
 			standbyIDs: []*clustermetadatapb.ID{},
 			setupMock: func(m *mock.QueryService) {
-				m.AddQueryPatternOnce("INSERT INTO multigres.leadership_history", mock.MakeQueryResult(nil, nil))
+				m.AddQueryPatternOnce("INSERT INTO multigres.leadership_history",
+					mock.MakeQueryResult(
+						[]string{"term_number", "rule_subterm", "pg_current_wal_lsn"},
+						[][]any{{int64(4), int64(0), "0/DDDDDD"}},
+					))
 			},
 			expectError: false,
+			expectNodePosition: &clustermetadatapb.NodePosition{
+				Rule: &clustermetadatapb.ShardRule{
+					RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 4, RuleSubterm: 0},
+					PrimaryId:     &clustermetadatapb.ID{Cell: "test-cell", Name: "test-pooler"},
+					CohortMembers: []*clustermetadatapb.ID{},
+				},
+				Lsn: "0/DDDDDD",
+			},
 		},
 	}
 
@@ -571,7 +635,7 @@ func TestInsertReplicationConfigHistory(t *testing.T) {
 			standbyPoolerIDs, err := toPoolerIDs(tt.standbyIDs)
 			require.NoError(t, err)
 
-			err = pm.insertHistoryRecord(ctx, tt.termNumber, "replication_config", pm.servicePoolerID, nil, "", tt.operation, tt.reason, standbyPoolerIDs, nil, false /* force */)
+			nodePos, err := pm.insertHistoryRecord(ctx, tt.termNumber, "replication_config", pm.servicePoolerID, nil, "", tt.operation, tt.reason, standbyPoolerIDs, nil, false /* force */)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -580,6 +644,7 @@ func TestInsertReplicationConfigHistory(t *testing.T) {
 				}
 			} else {
 				assert.NoError(t, err)
+				assert.Equal(t, tt.expectNodePosition, nodePos)
 			}
 			assert.NoError(t, mockQueryService.ExpectationsWereMet())
 		})

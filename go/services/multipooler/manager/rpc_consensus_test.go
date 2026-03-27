@@ -30,6 +30,7 @@ import (
 	"github.com/multigres/multigres/go/common/servenv"
 	"github.com/multigres/multigres/go/common/topoclient/memorytopo"
 	"github.com/multigres/multigres/go/services/multipooler/executor/mock"
+	"github.com/multigres/multigres/go/tools/prototest"
 	"github.com/multigres/multigres/go/tools/viperutil"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -37,6 +38,27 @@ import (
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	pgctldpb "github.com/multigres/multigres/go/pb/pgctldservice"
 )
+
+// standbyRevokeNodePosition returns the expected NodePosition for a standby revoke, matching
+// the mock data set up by expectStandbyRevokeMocks (term=5, leader=zone1/test-pooler).
+func standbyRevokeNodePosition(lsn string) *clustermetadatapb.NodePosition {
+	return &clustermetadatapb.NodePosition{
+		Rule: &clustermetadatapb.ShardRule{
+			RuleNumber: &clustermetadatapb.RuleNumber{
+				CoordinatorTerm: 5,
+				RuleSubterm:     0,
+			},
+			PrimaryId: &clustermetadatapb.ID{
+				Cell: "zone1",
+				Name: "test-pooler",
+			},
+			CohortMembers: []*clustermetadatapb.ID{
+				{Cell: "zone1", Name: "test-pooler"},
+			},
+		},
+		Lsn: lsn,
+	}
+}
 
 // expectStandbyRevokeMocks sets up mock expectations for the standby revoke path:
 // receiver disconnect, wait for disconnect, and replay stabilization.
@@ -67,6 +89,13 @@ func expectStandbyRevokeMocks(m *mock.QueryService, lsn string) {
 	m.AddQueryPatternOnce("^SELECT pg_last_wal_replay_lsn", mock.MakeQueryResult(replayStateCols, replayStateRow))
 	// Final queryReplicationStatus after stability confirmed
 	m.AddQueryPatternOnce("pg_last_wal_replay_lsn", mock.MakeQueryResult(replStatusCols, replStatusRow))
+	// getCurrentNodePosition (called inside waitForReplayStabilize): returns history row with rule data.
+	// Uses term=5 and leader=zone1/test-pooler matching setupManagerWithMockDB's service ID.
+	m.AddQueryPatternOnce("SELECT term_number, rule_subterm, leader_id, cohort_members",
+		mock.MakeQueryResult(
+			[]string{"term_number", "rule_subterm", "leader_id", "cohort_members", "coalesce"},
+			[][]any{{int64(5), int64(0), "zone1_test-pooler", `["zone1_test-pooler"]`, lsn}},
+		))
 }
 
 func setupManagerWithMockDB(t *testing.T, mockQueryService *mock.QueryService) (*MultiPoolerManager, string) {
@@ -151,7 +180,8 @@ func TestBeginTerm(t *testing.T) {
 		expectedAccepted                    bool
 		expectedTerm                        int64
 		expectedAcceptedTermFromCoordinator string
-		expectedWalPosition                 *consensusdatapb.WALPosition // nil means don't check
+		expectedWalPosition                 *consensusdatapb.WALPosition    // nil means don't check
+		expectedNodePosition                *clustermetadatapb.NodePosition // nil means don't check
 		description                         string
 	}{
 		{
@@ -178,6 +208,7 @@ func TestBeginTerm(t *testing.T) {
 			expectedTerm:                        10,
 			expectedAcceptedTermFromCoordinator: "candidate-B",
 			expectedWalPosition:                 &consensusdatapb.WALPosition{LastReceiveLsn: "0/2000000", LastReplayLsn: "0/2000000"},
+			expectedNodePosition:                standbyRevokeNodePosition("0/2000000"),
 			description:                         "Acceptance should succeed when request term is newer than current term, even if already accepted leader in older term",
 		},
 		{
@@ -229,6 +260,7 @@ func TestBeginTerm(t *testing.T) {
 			expectedTerm:                        5,
 			expectedAcceptedTermFromCoordinator: "candidate-A",
 			expectedWalPosition:                 &consensusdatapb.WALPosition{LastReceiveLsn: "0/3000000", LastReplayLsn: "0/3000000"},
+			expectedNodePosition:                standbyRevokeNodePosition("0/3000000"),
 			description:                         "Acceptance should succeed when already accepted same candidate in same term (idempotent)",
 		},
 		{
@@ -278,6 +310,7 @@ func TestBeginTerm(t *testing.T) {
 			expectedTerm:                        10,
 			expectedAcceptedTermFromCoordinator: "new-candidate",
 			expectedWalPosition:                 &consensusdatapb.WALPosition{LastReceiveLsn: "0/4000000", LastReplayLsn: "0/4000000"},
+			expectedNodePosition:                standbyRevokeNodePosition("0/4000000"),
 			description:                         "Primary should accept term after successful demotion (idempotent case - already demoted)",
 		},
 		{
@@ -300,6 +333,7 @@ func TestBeginTerm(t *testing.T) {
 			expectedTerm:                        10,
 			expectedAcceptedTermFromCoordinator: "new-candidate",
 			expectedWalPosition:                 &consensusdatapb.WALPosition{LastReceiveLsn: "0/5000000", LastReplayLsn: "0/5000000"},
+			expectedNodePosition:                standbyRevokeNodePosition("0/5000000"),
 			description:                         "Standby accepts term with REVOKE action and pauses replication",
 		},
 		{
@@ -321,6 +355,7 @@ func TestBeginTerm(t *testing.T) {
 			expectedTerm:                        10,
 			expectedAcceptedTermFromCoordinator: "new-candidate",
 			expectedWalPosition:                 &consensusdatapb.WALPosition{LastReceiveLsn: "0/6000000", LastReplayLsn: "0/6000000"},
+			expectedNodePosition:                standbyRevokeNodePosition("0/6000000"),
 			description:                         "Standby should pause replication when accepting new term",
 		},
 		{
@@ -522,6 +557,10 @@ func TestBeginTerm(t *testing.T) {
 					assert.Equal(t, tt.expectedWalPosition.CurrentLsn, resp.WalPosition.CurrentLsn)
 					assert.Equal(t, tt.expectedWalPosition.LastReceiveLsn, resp.WalPosition.LastReceiveLsn)
 					assert.Equal(t, tt.expectedWalPosition.LastReplayLsn, resp.WalPosition.LastReplayLsn)
+				}
+				if tt.expectedNodePosition != nil {
+					require.NotNil(t, resp.NodePosition, "NodePosition should be set")
+					prototest.AssertEqual(t, tt.expectedNodePosition, resp.NodePosition)
 				}
 			}
 

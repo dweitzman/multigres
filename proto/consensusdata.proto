@@ -82,8 +82,17 @@ message BeginTermResponse {
   // ID of the responding pooler
   string pooler_id = 3;
 
-  // WAL position for candidate selection
+  // WAL position for candidate selection.
+  // Deprecated: use node_position.lsn instead.
   WALPosition wal_position = 4;
+
+  // The node's position when it accepted/rejected the term.
+  // Used by coordinator to determine most-advanced node when electing a new primary.
+  // Preferred over wal_position for comparisons once rule_history is populated.
+  clustermetadata.NodePosition node_position = 5;
+
+  // Non-empty when accepted=false.
+  string rejection_reason = 6;
 }
 
 // Status returns the current status of a node
@@ -120,12 +129,17 @@ message StatusResponse {
   // Timeline information for divergence detection
   TimelineInfo timeline_info = 10;
 
-  // The term for which this multipooler was promoted to primary.
+  // Coordinator promise term at which this node was promoted to primary.
   // Set during promotion (InitializeEmptyPrimary or Promote).
   // Preserved when consensus term increases (new elections).
   // Cleared to 0 when demoted (DemoteStalePrimary) or restored from backup.
   // 0 if never primary. For current primaries, must be non-zero.
+  // Deprecated: use node_position.rule.rule_number instead.
   int64 primary_term = 11;
+
+  // The node's current position: highest known shard rule + current WAL LSN,
+  // read atomically within a single transaction. Zero-value if postgres is unreachable.
+  clustermetadata.NodePosition node_position = 12;
 }
 
 // GetLeadershipView returns leadership information from the heartbeat table

@@ -261,6 +261,47 @@ enum PoolerServingStatus {
 }
 
 // =============================================================================
+// Rule Number
+// =============================================================================
+
+// RuleNumber uniquely identifies a shard rule.
+// Compared lexicographically: higher coordinator_term takes precedence;
+// within the same coordinator_term, higher rule_subterm takes precedence.
+// rule_subterm resets to 0 when coordinator_term increases, making it
+// clear that subterms alone are not globally unique.
+message RuleNumber {
+  int64 coordinator_term = 1;
+  int64 rule_subterm = 2;
+}
+
+// ShardRule is the complete, authoritative description of shard state at a
+// specific rule number. Primary identity, cohort membership, and durability
+// policy are only meaningful together and relative to the rule that established
+// them.
+message ShardRule {
+  RuleNumber rule_number = 1;
+  ID primary_id = 2;
+  repeated ID cohort_members = 3;
+  DurabilityPolicy durability_policy = 4;
+}
+
+// NodePosition describes where a node is in logical and physical time.
+// Used in Status, BeginTerm, EmergencyDemote, and Promote responses so the
+// coordinator can determine which node is most advanced.
+//
+// Comparison: prefer the node with the higher rule (coordinator_term first,
+// then rule_subterm within rule.rule_number). Break ties by LSN.
+message NodePosition {
+  // The highest shard rule known by this node at the time of the observation.
+  // Contains the full topology (primary_id, cohort, durability_policy) as well
+  // as the rule_number for ordering comparisons.
+  ShardRule rule = 1;
+
+  // The WAL position at the time of the observation.
+  string lsn = 2;
+}
+
+// =============================================================================
 // Durability Policy
 // =============================================================================
 

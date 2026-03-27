@@ -245,6 +245,15 @@ func (a *BootstrapShardAction) executeInner(ctx context.Context, problem types.P
 	// Configure synchronous replication. We still add the standby nodes, even if they are not wired up yet,
 	// because synchronous replication requires at least one standby configured.
 	// MultiOrch will wire them up later, so including them during bootstrap is fine.
+	//
+	// TODO: Consolidate bootstrap into a single leadership_history rule.
+	// Currently bootstrap writes two records: one from InitializeEmptyPrimary (promotion) and one from
+	// ConfigureSynchronousReplication (replication_config). These could be merged into a single Promote
+	// call that includes the cohort and sync-replication config together, once we separate initdb from
+	// InitializeEmptyPrimary. The approach: run initdb on an unprovisioned non-cohort node, wait for
+	// enough replicas to restore the backup, then issue a single force-Promote with the full cohort
+	// (pointing standbys at the initial primary first). This would write a single authoritative rule
+	// for the initial term instead of two.
 
 	standbys := make([]*multiorchdatapb.PoolerHealthState, 0, len(cohort)-1)
 	for _, pooler := range cohort {

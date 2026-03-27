@@ -183,13 +183,17 @@ func (pm *MultiPoolerManager) createDurabilityPolicyTable(ctx context.Context) e
 	return nil
 }
 
-// createLeadershipHistoryTable creates the leadership_history table and its indexes
+// createLeadershipHistoryTable creates the leadership_history table.
+// (term_number, rule_subterm) is the composite primary key: term_number is the
+// coordinator election term and rule_subterm auto-increments within each term for
+// every cluster state change (promotions, cohort changes). Together they form a
+// RuleNumber that uniquely and lexicographically orders all history entries.
 func (pm *MultiPoolerManager) createLeadershipHistoryTable(ctx context.Context) error {
 	execCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer cancel()
 	if err := pm.exec(execCtx, `CREATE TABLE IF NOT EXISTS multigres.leadership_history (
-		id BIGSERIAL PRIMARY KEY,
 		term_number BIGINT NOT NULL,
+		rule_subterm BIGINT NOT NULL DEFAULT 0,
 		event_type TEXT NOT NULL,
 		leader_id TEXT,
 		coordinator_id TEXT,
@@ -198,16 +202,10 @@ func (pm *MultiPoolerManager) createLeadershipHistoryTable(ctx context.Context) 
 		reason TEXT NOT NULL,
 		cohort_members JSONB NOT NULL,
 		operation TEXT,
-		created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+		PRIMARY KEY (term_number, rule_subterm)
 	)`); err != nil {
 		return mterrors.Wrap(err, "failed to create leadership_history table")
-	}
-
-	execCtx, cancel = context.WithTimeout(ctx, 500*time.Millisecond)
-	defer cancel()
-	if err := pm.exec(execCtx, `CREATE INDEX IF NOT EXISTS idx_leadership_history_term_event
-		ON multigres.leadership_history(term_number DESC, event_type)`); err != nil {
-		return mterrors.Wrap(err, "failed to create leadership_history index")
 	}
 
 	return nil
@@ -333,11 +331,17 @@ func (pm *MultiPoolerManager) insertDurabilityPolicy(ctx context.Context, policy
 	return nil
 }
 
-// insertHistoryRecord inserts a record into the leadership_history table.
-// This is used for both promotion events and replication config changes.
-// This operation uses the remote-operation-timeout and will fail if it cannot complete within
-// that time. A timeout typically indicates that synchronous replication is not functioning.
-func (pm *MultiPoolerManager) insertHistoryRecord(ctx context.Context, termNumber int64, eventType string, leaderID poolerID, coordinatorID *clustermetadatapb.ID, walPosition, operation, reason string, cohortMembers, acceptedMembers []poolerID, force bool) error {
+// insertHistoryRecord inserts a record into the leadership_history table and returns the
+// resulting NodePosition: the rule number assigned to this entry (coordinator_term +
+// auto-incremented rule_subterm) combined with the WAL LSN at the time of the write.
+//
+// rule_subterm is computed atomically via a CTE so that concurrent inserts within the
+// same term produce distinct, monotonically increasing subterms.
+//
+// This operation uses the remote-operation-timeout and will fail if it cannot complete
+// within that time. A timeout typically indicates that synchronous replication is not
+// functioning. Returns (nil, nil) when force=true (history is skipped).
+func (pm *MultiPoolerManager) insertHistoryRecord(ctx context.Context, termNumber int64, eventType string, leaderID poolerID, coordinatorID *clustermetadatapb.ID, walPosition, operation, reason string, cohortMembers, acceptedMembers []poolerID, force bool) (*clustermetadatapb.NodePosition, error) {
 	if force {
 		// Force mode skips history recording entirely. Force operations are emergency
 		// operations that must configure replication GUCs regardless. The INSERT would
@@ -347,17 +351,18 @@ func (pm *MultiPoolerManager) insertHistoryRecord(ctx context.Context, termNumbe
 			"term_number", termNumber,
 			"event_type", eventType,
 			"operation", operation)
-		return nil
+		// Still return the current node position so callers have a meaningful LSN.
+		return pm.getCurrentNodePosition(ctx)
 	}
 
 	cohortJSON, err := json.Marshal(poolerIDsToAppNames(cohortMembers))
 	if err != nil {
-		return mterrors.Wrap(err, "failed to marshal cohort_members")
+		return nil, mterrors.Wrap(err, "failed to marshal cohort_members")
 	}
 
 	acceptedJSON, err := json.Marshal(poolerIDsToAppNames(acceptedMembers))
 	if err != nil {
-		return mterrors.Wrap(err, "failed to marshal accepted_members")
+		return nil, mterrors.Wrap(err, "failed to marshal accepted_members")
 	}
 
 	// Use the remote operation timeout for history writes. This write validates that synchronous
@@ -365,9 +370,18 @@ func (pm *MultiPoolerManager) insertHistoryRecord(ctx context.Context, termNumbe
 	execCtx, cancel := context.WithTimeout(ctx, timeouts.RemoteOperationTimeout)
 	defer cancel()
 
-	insert := fmt.Sprintf(`INSERT INTO multigres.leadership_history
-	(term_number, event_type, leader_id, coordinator_id, wal_position, operation, reason, cohort_members, accepted_members)
-	VALUES (%d, %s, NULLIF(%s, ''), NULLIF(%s, ''), NULLIF(%s, ''), NULLIF(%s, ''), %s, %s::jsonb, %s::jsonb)`,
+	insert := fmt.Sprintf(`
+WITH next_sub AS (
+	SELECT COALESCE(MAX(rule_subterm) + 1, 0) AS subterm
+	FROM multigres.leadership_history
+	WHERE term_number = %d
+)
+INSERT INTO multigres.leadership_history
+	(term_number, rule_subterm, event_type, leader_id, coordinator_id, wal_position, operation, reason, cohort_members, accepted_members)
+SELECT %d, next_sub.subterm, %s, NULLIF(%s, ''), NULLIF(%s, ''), NULLIF(%s, ''), NULLIF(%s, ''), %s, %s::jsonb, %s::jsonb
+FROM next_sub
+RETURNING term_number, rule_subterm, pg_current_wal_lsn()::text`,
+		termNumber,
 		termNumber,
 		ast.QuoteStringLiteral(eventType),
 		ast.QuoteStringLiteral(leaderID.appName),
@@ -379,9 +393,109 @@ func (pm *MultiPoolerManager) insertHistoryRecord(ctx context.Context, termNumbe
 		ast.QuoteStringLiteral(string(acceptedJSON)),
 	)
 
-	if err := pm.exec(execCtx, insert); err != nil {
-		return mterrors.Wrap(err, "failed to insert history record")
+	result, err := pm.query(execCtx, insert)
+	if err != nil {
+		return nil, mterrors.Wrap(err, "failed to insert history record")
 	}
 
-	return nil
+	var retTerm, retSubterm int64
+	var retLSN string
+	if err := executor.ScanSingleRow(result, &retTerm, &retSubterm, &retLSN); err != nil {
+		return nil, mterrors.Wrap(err, "failed to read history record after insert")
+	}
+
+	return &clustermetadatapb.NodePosition{
+		Rule: &clustermetadatapb.ShardRule{
+			RuleNumber: &clustermetadatapb.RuleNumber{
+				CoordinatorTerm: retTerm,
+				RuleSubterm:     retSubterm,
+			},
+			PrimaryId:     leaderID.id,
+			CohortMembers: poolerIDsToIDs(cohortMembers),
+		},
+		Lsn: retLSN,
+	}, nil
+}
+
+// getCurrentNodePosition reads the most recent rule from leadership_history and returns
+// the corresponding NodePosition. The LSN is fetched atomically in the same query using
+// COALESCE(pg_last_wal_replay_lsn(), pg_current_wal_lsn()), which works on both a primary
+// (replay LSN is NULL, falls back to current WAL LSN) and a standby (uses replay LSN).
+// When no history exists yet, a follow-up query fetches the LSN and returns an empty rule at term 0.
+func (pm *MultiPoolerManager) getCurrentNodePosition(ctx context.Context) (*clustermetadatapb.NodePosition, error) {
+	queryCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+
+	result, err := pm.query(queryCtx, `
+SELECT term_number, rule_subterm, leader_id, cohort_members,
+       COALESCE(pg_last_wal_replay_lsn(), pg_current_wal_lsn())::text
+FROM multigres.leadership_history
+ORDER BY term_number DESC, rule_subterm DESC
+LIMIT 1`)
+	if err != nil {
+		return nil, mterrors.Wrap(err, "failed to query current node position")
+	}
+
+	if len(result.Rows) == 0 {
+		// No history yet: fetch current LSN via a follow-up query and return term-0 position.
+		lsnQueryCtx, lsnCancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		defer lsnCancel()
+		lsnResult, err := pm.query(lsnQueryCtx, "SELECT COALESCE(pg_last_wal_replay_lsn(), pg_current_wal_lsn())::text")
+		if err != nil {
+			return nil, mterrors.Wrap(err, "failed to get current WAL LSN for empty node position")
+		}
+		var lsn string
+		if err := executor.ScanSingleRow(lsnResult, &lsn); err != nil {
+			return nil, mterrors.Wrap(err, "failed to scan WAL LSN for empty node position")
+		}
+		return &clustermetadatapb.NodePosition{
+			Rule: &clustermetadatapb.ShardRule{
+				RuleNumber: &clustermetadatapb.RuleNumber{},
+			},
+			Lsn: lsn,
+		}, nil
+	}
+
+	var termNumber, ruleSubterm int64
+	var leaderIDStr, cohortMembersJSON *string
+	var lsn string
+	if err := executor.ScanRow(result.Rows[0], &termNumber, &ruleSubterm, &leaderIDStr, &cohortMembersJSON, &lsn); err != nil {
+		return nil, mterrors.Wrap(err, "failed to scan node position row")
+	}
+
+	var primaryID *clustermetadatapb.ID
+	if leaderIDStr != nil {
+		primaryID, err = parseApplicationName(*leaderIDStr)
+		if err != nil {
+			return nil, mterrors.Wrapf(err, "failed to parse leader_id %q", *leaderIDStr)
+		}
+	}
+
+	var cohortMembers []*clustermetadatapb.ID
+	if cohortMembersJSON != nil {
+		var appNames []string
+		if err := json.Unmarshal([]byte(*cohortMembersJSON), &appNames); err != nil {
+			return nil, mterrors.Wrap(err, "failed to parse cohort_members JSON")
+		}
+		cohortMembers = make([]*clustermetadatapb.ID, 0, len(appNames))
+		for _, appName := range appNames {
+			id, err := parseApplicationName(appName)
+			if err != nil {
+				return nil, mterrors.Wrapf(err, "failed to parse cohort member %q", appName)
+			}
+			cohortMembers = append(cohortMembers, id)
+		}
+	}
+
+	return &clustermetadatapb.NodePosition{
+		Rule: &clustermetadatapb.ShardRule{
+			RuleNumber: &clustermetadatapb.RuleNumber{
+				CoordinatorTerm: termNumber,
+				RuleSubterm:     ruleSubterm,
+			},
+			PrimaryId:     primaryID,
+			CohortMembers: cohortMembers,
+		},
+		Lsn: lsn,
+	}, nil
 }

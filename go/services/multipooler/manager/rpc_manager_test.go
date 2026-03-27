@@ -35,6 +35,7 @@ import (
 	"github.com/multigres/multigres/go/common/topoclient/memorytopo"
 	"github.com/multigres/multigres/go/services/multipooler/executor/mock"
 	"github.com/multigres/multigres/go/test/utils"
+	"github.com/multigres/multigres/go/tools/prototest"
 	"github.com/multigres/multigres/go/tools/viperutil"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -285,7 +286,7 @@ func TestActionLock_MutationMethodsTimeout(t *testing.T) {
 			name:       "ConfigureSynchronousReplication times out when lock is held",
 			poolerType: clustermetadatapb.PoolerType_PRIMARY,
 			callMethod: func(ctx context.Context) error {
-				return manager.ConfigureSynchronousReplication(
+				_, err := manager.ConfigureSynchronousReplication(
 					ctx,
 					multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 					multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
@@ -294,6 +295,7 @@ func TestActionLock_MutationMethodsTimeout(t *testing.T) {
 					true,  // reloadConfig
 					false, // force
 				)
+				return err
 			},
 		},
 		{
@@ -330,7 +332,8 @@ func TestActionLock_MutationMethodsTimeout(t *testing.T) {
 			name:       "UpdateSynchronousStandbyList times out when lock is held",
 			poolerType: clustermetadatapb.PoolerType_PRIMARY,
 			callMethod: func(ctx context.Context) error {
-				return manager.UpdateSynchronousStandbyList(ctx, multipoolermanagerdatapb.StandbyUpdateOperation_STANDBY_UPDATE_OPERATION_ADD, []*clustermetadatapb.ID{serviceID}, true, 0, true, nil)
+				_, err := manager.UpdateSynchronousStandbyList(ctx, multipoolermanagerdatapb.StandbyUpdateOperation_STANDBY_UPDATE_OPERATION_ADD, []*clustermetadatapb.ID{serviceID}, true, 0, true, nil)
+				return err
 			},
 		},
 	}
@@ -369,7 +372,53 @@ func TestActionLock_MutationMethodsTimeout(t *testing.T) {
 // expectLeadershipHistoryInsert adds a mock expectation for successful leadership history insertion.
 // This is required for Promote to succeed since leadership history insertion failure now fails the promotion.
 func expectLeadershipHistoryInsert(m *mock.QueryService) {
-	m.AddQueryPatternOnce("INSERT INTO multigres.leadership_history", mock.MakeQueryResult(nil, nil))
+	m.AddQueryPatternOnce("INSERT INTO multigres.leadership_history",
+		mock.MakeQueryResult(
+			[]string{"term_number", "rule_subterm", "pg_current_wal_lsn"},
+			[][]any{{int64(1), int64(0), "0/AABBCC"}},
+		))
+}
+
+// promoteNodePosition returns the expected NodePosition after a successful Promote,
+// matching the mock data from expectLeadershipHistoryInsert and setupPromoteTestManager's service ID.
+// cohortMembers may be nil for calls with no cohort.
+func promoteNodePosition(cohortMembers []*clustermetadatapb.ID) *clustermetadatapb.NodePosition {
+	return &clustermetadatapb.NodePosition{
+		Rule: &clustermetadatapb.ShardRule{
+			RuleNumber: &clustermetadatapb.RuleNumber{
+				CoordinatorTerm: 1,
+				RuleSubterm:     0,
+			},
+			PrimaryId: &clustermetadatapb.ID{
+				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Cell:      "zone1",
+				Name:      "test-replica",
+			},
+			CohortMembers: cohortMembers,
+		},
+		Lsn: "0/AABBCC",
+	}
+}
+
+// statusNodePosition returns the expected NodePosition for Status/stopPostgresForEmergencyDemote tests,
+// matching the mock history data for serviceID zone1/test-service.
+func statusNodePosition(lsn string) *clustermetadatapb.NodePosition {
+	return &clustermetadatapb.NodePosition{
+		Rule: &clustermetadatapb.ShardRule{
+			RuleNumber: &clustermetadatapb.RuleNumber{
+				CoordinatorTerm: 5,
+				RuleSubterm:     0,
+			},
+			PrimaryId: &clustermetadatapb.ID{
+				Cell: "zone1",
+				Name: "test-service",
+			},
+			CohortMembers: []*clustermetadatapb.ID{
+				{Cell: "zone1", Name: "test-service"},
+			},
+		},
+		Lsn: lsn,
+	}
 }
 
 // createPgDataDir creates the pg_data directory with PG_VERSION file.
@@ -480,9 +529,7 @@ func TestPromoteIdempotency_PostgreSQLPromotedButTopologyNotUpdated(t *testing.T
 	mockQueryService.AddQueryPatternOnce("SELECT pg_is_in_recovery",
 		mock.MakeQueryResult([]string{"pg_is_in_recovery"}, [][]any{{"f"}}))
 
-	// Mock: Since already promoted, get current LSN (called twice - during processing and for final response)
-	mockQueryService.AddQueryPatternOnce("SELECT pg_current_wal_lsn",
-		mock.MakeQueryResult([]string{"pg_current_wal_lsn"}, [][]any{{"0/ABCDEF0"}}))
+	// Mock: Since already promoted, get current LSN for checkPromotionState
 	mockQueryService.AddQueryPatternOnce("SELECT pg_current_wal_lsn",
 		mock.MakeQueryResult([]string{"pg_current_wal_lsn"}, [][]any{{"0/ABCDEF0"}}))
 
@@ -503,7 +550,8 @@ func TestPromoteIdempotency_PostgreSQLPromotedButTopologyNotUpdated(t *testing.T
 
 	assert.False(t, resp.WasAlreadyPrimary, "Should not report as fully complete since topology wasn't updated")
 	assert.Equal(t, int64(10), resp.ConsensusTerm)
-	assert.Equal(t, "0/ABCDEF0", resp.LsnPosition)
+	assert.Equal(t, "0/AABBCC", resp.LsnPosition)
+	prototest.AssertEqual(t, promoteNodePosition(nil), resp.NodePosition)
 
 	// Verify topology was updated
 	pm.mu.Lock()
@@ -617,9 +665,12 @@ func TestPromoteIdempotency_InconsistentStateFixedWithForce(t *testing.T) {
 	mockQueryService.AddQueryPatternOnce("SELECT pg_reload_conf",
 		mock.MakeQueryResult(nil, nil))
 
-	// Mock: Get final LSN
-	mockQueryService.AddQueryPatternOnce("SELECT pg_current_wal_lsn",
-		mock.MakeQueryResult([]string{"pg_current_wal_lsn"}, [][]any{{"0/FEDCBA0"}}))
+	// Mock: force=true skips INSERT but calls getCurrentNodePosition to get a meaningful LSN.
+	// No history exists yet, so it falls back to COALESCE query.
+	mockQueryService.AddQueryPatternOnce("SELECT term_number, rule_subterm, leader_id, cohort_members",
+		mock.MakeQueryResult(nil, nil)) // returns 0 rows → triggers COALESCE fallback
+	mockQueryService.AddQueryPatternOnce("SELECT COALESCE",
+		mock.MakeQueryResult([]string{"coalesce"}, [][]any{{"0/FEDCBA0"}}))
 
 	pm, _ := setupPromoteTestManager(t, mockQueryService)
 
@@ -637,6 +688,12 @@ func TestPromoteIdempotency_InconsistentStateFixedWithForce(t *testing.T) {
 	assert.False(t, resp.WasAlreadyPrimary)
 	assert.Equal(t, int64(10), resp.ConsensusTerm)
 	assert.Equal(t, "0/FEDCBA0", resp.LsnPosition)
+	prototest.AssertEqual(t, &clustermetadatapb.NodePosition{
+		Rule: &clustermetadatapb.ShardRule{
+			RuleNumber: &clustermetadatapb.RuleNumber{},
+		},
+		Lsn: "0/FEDCBA0",
+	}, resp.NodePosition)
 	assert.NoError(t, mockQueryService.ExpectationsWereMet())
 }
 
@@ -675,10 +732,6 @@ func TestPromoteIdempotency_NothingCompleteYet(t *testing.T) {
 	mockQueryService.AddQueryPatternOnce("SELECT pg_reload_conf",
 		mock.MakeQueryResult(nil, nil))
 
-	// Mock: Get final LSN
-	mockQueryService.AddQueryPatternOnce("SELECT pg_current_wal_lsn",
-		mock.MakeQueryResult([]string{"pg_current_wal_lsn"}, [][]any{{"0/5678ABC"}}))
-
 	// Mock: insertLeadershipHistory - required for promotion success
 	expectLeadershipHistoryInsert(mockQueryService)
 
@@ -696,6 +749,7 @@ func TestPromoteIdempotency_NothingCompleteYet(t *testing.T) {
 
 	assert.False(t, resp.WasAlreadyPrimary)
 	assert.Equal(t, int64(10), resp.ConsensusTerm)
+	prototest.AssertEqual(t, promoteNodePosition(nil), resp.NodePosition)
 
 	// Verify topology was updated
 	pm.mu.Lock()
@@ -786,9 +840,7 @@ func TestPromoteIdempotency_SecondCallSucceedsAfterCompletion(t *testing.T) {
 	mockQueryService.AddQueryPatternOnce("SELECT pg_reload_conf",
 		mock.MakeQueryResult(nil, nil))
 
-	// Mock: Get current LSN (called twice - once after first promote, once in second call)
-	mockQueryService.AddQueryPatternOnce("SELECT pg_current_wal_lsn",
-		mock.MakeQueryResult([]string{"pg_current_wal_lsn"}, [][]any{{"0/AAA1111"}}))
+	// Mock: Get current LSN for second Promote call's checkPromotionState (PG already primary)
 	mockQueryService.AddQueryPatternOnce("SELECT pg_current_wal_lsn",
 		mock.MakeQueryResult([]string{"pg_current_wal_lsn"}, [][]any{{"0/AAA1111"}}))
 
@@ -806,6 +858,7 @@ func TestPromoteIdempotency_SecondCallSucceedsAfterCompletion(t *testing.T) {
 	resp1, err := pm.Promote(ctx, 10, "0/AAA1111", nil, false /* force */, "", nil, nil, nil)
 	require.NoError(t, err)
 	assert.False(t, resp1.WasAlreadyPrimary)
+	prototest.AssertEqual(t, promoteNodePosition(nil), resp1.NodePosition)
 
 	// Verify topology was updated to PRIMARY
 	pm.mu.Lock()
@@ -847,10 +900,6 @@ func TestPromoteIdempotency_EmptyExpectedLSNSkipsValidation(t *testing.T) {
 	mockQueryService.AddQueryPatternOnce("SELECT pg_reload_conf",
 		mock.MakeQueryResult(nil, nil))
 
-	// Mock: Get final LSN
-	mockQueryService.AddQueryPatternOnce("SELECT pg_current_wal_lsn",
-		mock.MakeQueryResult([]string{"pg_current_wal_lsn"}, [][]any{{"0/BBBBBBB"}}))
-
 	// Mock: insertLeadershipHistory - required for promotion success
 	expectLeadershipHistoryInsert(mockQueryService)
 
@@ -866,7 +915,8 @@ func TestPromoteIdempotency_EmptyExpectedLSNSkipsValidation(t *testing.T) {
 	require.NotNil(t, resp)
 
 	assert.False(t, resp.WasAlreadyPrimary)
-	assert.Equal(t, "0/BBBBBBB", resp.LsnPosition)
+	assert.Equal(t, "0/AABBCC", resp.LsnPosition)
+	prototest.AssertEqual(t, promoteNodePosition(nil), resp.NodePosition)
 	assert.NoError(t, mockQueryService.ExpectationsWereMet())
 }
 
@@ -892,18 +942,14 @@ func TestPromote_WithElectionMetadata(t *testing.T) {
 	mockQueryService.AddQueryPatternOnce("SELECT pg_promote",
 		mock.MakeQueryResult(nil, nil))
 
-	// Mock: Get final LSN
-	mockQueryService.AddQueryPatternOnce("SELECT pg_current_wal_lsn",
-		mock.MakeQueryResult([]string{"pg_current_wal_lsn"}, [][]any{{"0/1234567"}}))
-
-	// Mock: insertLeadershipHistory - required for promotion success
-	expectLeadershipHistoryInsert(mockQueryService)
-
 	// Mock: Clear primary_conninfo after promotion
 	mockQueryService.AddQueryPatternOnce("ALTER SYSTEM RESET primary_conninfo",
 		mock.MakeQueryResult(nil, nil))
 	mockQueryService.AddQueryPatternOnce("SELECT pg_reload_conf",
 		mock.MakeQueryResult(nil, nil))
+
+	// Mock: insertLeadershipHistory - required for promotion success
+	expectLeadershipHistoryInsert(mockQueryService)
 
 	pm, _ := setupPromoteTestManager(t, mockQueryService)
 
@@ -931,7 +977,12 @@ func TestPromote_WithElectionMetadata(t *testing.T) {
 
 	assert.False(t, resp.WasAlreadyPrimary)
 	assert.Equal(t, int64(10), resp.ConsensusTerm)
-	assert.Equal(t, "0/1234567", resp.LsnPosition)
+	assert.Equal(t, "0/AABBCC", resp.LsnPosition)
+	prototest.AssertEqual(t, promoteNodePosition([]*clustermetadatapb.ID{
+		{Cell: "zone1", Name: "pooler-1"},
+		{Cell: "zone1", Name: "pooler-2"},
+		{Cell: "zone1", Name: "pooler-3"},
+	}), resp.NodePosition)
 
 	// Verify topology was updated
 	pm.mu.Lock()
@@ -968,10 +1019,6 @@ func TestPromote_LeadershipHistoryErrorFailsPromotion(t *testing.T) {
 	// Mock: pg_promote() call
 	mockQueryService.AddQueryPatternOnce("SELECT pg_promote",
 		mock.MakeQueryResult(nil, nil))
-
-	// Mock: Get final LSN
-	mockQueryService.AddQueryPatternOnce("SELECT pg_current_wal_lsn",
-		mock.MakeQueryResult([]string{"pg_current_wal_lsn"}, [][]any{{"0/9876543"}}))
 
 	// Mock: Clear primary_conninfo after promotion (executed before insertLeadershipHistory)
 	mockQueryService.AddQueryPatternOnce("ALTER SYSTEM RESET primary_conninfo",
@@ -1046,10 +1093,6 @@ func TestPromote_TopologyUpdateFailureDoesNotFailPromotion(t *testing.T) {
 		mock.MakeQueryResult(nil, nil))
 	mockQueryService.AddQueryPatternOnce("SELECT pg_reload_conf",
 		mock.MakeQueryResult(nil, nil))
-
-	// Get final LSN
-	mockQueryService.AddQueryPatternOnce("SELECT pg_current_wal_lsn",
-		mock.MakeQueryResult([]string{"pg_current_wal_lsn"}, [][]any{{"0/ABCDEF0"}}))
 
 	// insertLeadershipHistory
 	expectLeadershipHistoryInsert(mockQueryService)
@@ -1129,7 +1172,8 @@ func TestPromote_TopologyUpdateFailureDoesNotFailPromotion(t *testing.T) {
 
 	assert.False(t, resp.WasAlreadyPrimary)
 	assert.Equal(t, int64(10), resp.ConsensusTerm)
-	assert.Equal(t, "0/ABCDEF0", resp.LsnPosition)
+	assert.Equal(t, "0/AABBCC", resp.LsnPosition)
+	prototest.AssertEqual(t, promoteNodePosition(nil), resp.NodePosition)
 
 	// Local state should still be updated to PRIMARY
 	pm.mu.Lock()
@@ -1386,6 +1430,12 @@ func TestReplicationStatus(t *testing.T) {
 			mock.MakeQueryResult([]string{"synchronous_standby_names"}, [][]any{{""}}))
 		mockQueryService.AddQueryPattern("SHOW synchronous_commit",
 			mock.MakeQueryResult([]string{"synchronous_commit"}, [][]any{{"on"}}))
+		// getCurrentNodePosition() - called best-effort in Status
+		mockQueryService.AddQueryPattern("SELECT term_number, rule_subterm, leader_id, cohort_members",
+			mock.MakeQueryResult(
+				[]string{"term_number", "rule_subterm", "leader_id", "cohort_members", "coalesce"},
+				[][]any{{int64(5), int64(0), "zone1_test-service", `["zone1_test-service"]`, "0/12345678"}},
+			))
 
 		pm.qsc = &mockPoolerController{queryService: mockQueryService}
 
@@ -1406,6 +1456,7 @@ func TestReplicationStatus(t *testing.T) {
 		assert.NotNil(t, status.PrimaryStatus, "PrimaryStatus should be populated")
 		assert.Nil(t, status.ReplicationStatus, "ReplicationStatus should be nil for PRIMARY")
 		assert.Equal(t, "0/12345678", status.PrimaryStatus.Lsn)
+		prototest.AssertEqual(t, statusNodePosition("0/12345678"), status.NodePosition)
 	})
 
 	t.Run("REPLICA_pooler_returns_replication_status", func(t *testing.T) {
@@ -1470,6 +1521,12 @@ func TestReplicationStatus(t *testing.T) {
 					"wal_receiver_status",
 				},
 				[][]any{{"0/12345600", "0/12345678", "f", "not paused", "2025-01-01 00:00:00", "host=primary port=5432 user=repl application_name=test", "streaming"}}))
+		// getCurrentNodePosition() - called best-effort in Status
+		mockQueryService.AddQueryPattern("SELECT term_number, rule_subterm, leader_id, cohort_members",
+			mock.MakeQueryResult(
+				[]string{"term_number", "rule_subterm", "leader_id", "cohort_members", "coalesce"},
+				[][]any{{int64(5), int64(0), "zone1_test-service", `["zone1_test-service"]`, "0/12345600"}},
+			))
 
 		pm.qsc = &mockPoolerController{queryService: mockQueryService}
 
@@ -1490,6 +1547,7 @@ func TestReplicationStatus(t *testing.T) {
 		assert.Nil(t, status.PrimaryStatus, "PrimaryStatus should be nil for REPLICA")
 		assert.NotNil(t, status.ReplicationStatus, "ReplicationStatus should be populated")
 		assert.Equal(t, "0/12345600", status.ReplicationStatus.LastReplayLsn)
+		prototest.AssertEqual(t, statusNodePosition("0/12345600"), status.NodePosition)
 	})
 
 	t.Run("Mismatch_PRIMARY_topology_but_standby_postgres", func(t *testing.T) {
@@ -1549,6 +1607,12 @@ func TestReplicationStatus(t *testing.T) {
 					"wal_receiver_status",
 				},
 				[][]any{{"0/12345600", "0/12345678", "f", "not paused", "2025-01-01 00:00:00", "host=primary port=5432 user=repl application_name=test", "streaming"}}))
+		// getCurrentNodePosition() - called best-effort in Status
+		mockQueryService.AddQueryPattern("SELECT term_number, rule_subterm, leader_id, cohort_members",
+			mock.MakeQueryResult(
+				[]string{"term_number", "rule_subterm", "leader_id", "cohort_members", "coalesce"},
+				[][]any{{int64(5), int64(0), "zone1_test-service", `["zone1_test-service"]`, "0/12345600"}},
+			))
 
 		pm.qsc = &mockPoolerController{queryService: mockQueryService}
 
@@ -1568,6 +1632,7 @@ func TestReplicationStatus(t *testing.T) {
 		assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, status.PoolerType)
 		assert.Nil(t, status.PrimaryStatus, "PrimaryStatus should be nil since PostgreSQL is a standby")
 		assert.NotNil(t, status.ReplicationStatus, "ReplicationStatus should be populated since PostgreSQL is a standby")
+		prototest.AssertEqual(t, statusNodePosition("0/12345600"), status.NodePosition)
 	})
 
 	t.Run("Mismatch_REPLICA_topology_but_primary_postgres", func(t *testing.T) {
@@ -1627,6 +1692,12 @@ func TestReplicationStatus(t *testing.T) {
 			mock.MakeQueryResult([]string{"synchronous_standby_names"}, [][]any{{""}}))
 		mockQueryService.AddQueryPattern("SHOW synchronous_commit",
 			mock.MakeQueryResult([]string{"synchronous_commit"}, [][]any{{"on"}}))
+		// getCurrentNodePosition() - called best-effort in Status
+		mockQueryService.AddQueryPattern("SELECT term_number, rule_subterm, leader_id, cohort_members",
+			mock.MakeQueryResult(
+				[]string{"term_number", "rule_subterm", "leader_id", "cohort_members", "coalesce"},
+				[][]any{{int64(5), int64(0), "zone1_test-service", `["zone1_test-service"]`, "0/12345678"}},
+			))
 
 		pm.qsc = &mockPoolerController{queryService: mockQueryService}
 
@@ -1646,6 +1717,7 @@ func TestReplicationStatus(t *testing.T) {
 		assert.Equal(t, clustermetadatapb.PoolerType_REPLICA, status.PoolerType)
 		assert.NotNil(t, status.PrimaryStatus, "PrimaryStatus should be populated since PostgreSQL is a primary")
 		assert.Nil(t, status.ReplicationStatus, "ReplicationStatus should be nil since PostgreSQL is a primary")
+		prototest.AssertEqual(t, statusNodePosition("0/12345678"), status.NodePosition)
 	})
 }
 
@@ -1877,6 +1949,11 @@ func TestStopPostgresForEmergencyDemote(t *testing.T) {
 		mockQueryService := mock.NewQueryService()
 		mockQueryService.AddQueryPattern("SELECT pg_is_in_recovery",
 			mock.MakeQueryResult([]string{"pg_is_in_recovery"}, [][]any{{"f"}}))
+		mockQueryService.AddQueryPatternOnce("SELECT term_number, rule_subterm, leader_id, cohort_members",
+			mock.MakeQueryResult(
+				[]string{"term_number", "rule_subterm", "leader_id", "cohort_members", "coalesce"},
+				[][]any{{int64(5), int64(0), "zone1_test-service", `["zone1_test-service"]`, "0/ABCDEF0"}},
+			))
 		pm.qsc = &mockPoolerController{queryService: mockQueryService}
 
 		senv := servenv.NewServEnv(viperutil.NewRegistry())
@@ -1900,8 +1977,9 @@ func TestStopPostgresForEmergencyDemote(t *testing.T) {
 		defer pm.actionLock.Release(lockCtx)
 
 		// Call stopPostgresForEmergencyDemote - should succeed
-		err = pm.stopPostgresForEmergencyDemote(lockCtx, state)
+		nodePos, err := pm.stopPostgresForEmergencyDemote(lockCtx, state)
 		require.NoError(t, err, "Should successfully stop postgres for emergency demotion")
+		prototest.AssertEqual(t, statusNodePosition("0/ABCDEF0"), nodePos)
 
 		// Verify monitoring remains enabled after emergency demotion to allow node to detect changes and rejoin
 		require.True(t, pm.pgMonitor.Running(), "Monitor should remain running after emergency demotion to allow node to rejoin")
@@ -1962,7 +2040,7 @@ func TestStopPostgresForEmergencyDemote(t *testing.T) {
 		}
 
 		// Call stopPostgresForEmergencyDemote - should fail with unexpected state error
-		err = pm.stopPostgresForEmergencyDemote(ctx, state)
+		_, err = pm.stopPostgresForEmergencyDemote(ctx, state)
 		require.Error(t, err, "Should fail when postgres is already in standby mode")
 		assert.Contains(t, err.Error(), "unexpected state")
 		assert.Contains(t, err.Error(), "standby mode")
@@ -2009,7 +2087,7 @@ func TestStopPostgresForEmergencyDemote(t *testing.T) {
 		}
 
 		// Call stopPostgresForEmergencyDemote - should fail because pgctld client is nil
-		err = pm.stopPostgresForEmergencyDemote(ctx, state)
+		_, err = pm.stopPostgresForEmergencyDemote(ctx, state)
 		require.Error(t, err, "Should fail when pgctld client is not initialized")
 		assert.Contains(t, err.Error(), "pgctld client not initialized")
 
@@ -2246,7 +2324,7 @@ func TestConfigureSynchronousReplication_HistoryFailurePreventGUCUpdates(t *test
 		{Cell: "zone1", Name: "replica-2"},
 	}
 
-	err = manager.ConfigureSynchronousReplication(
+	_, err = manager.ConfigureSynchronousReplication(
 		ctx,
 		multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_WRITE,
 		multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
@@ -2359,7 +2437,7 @@ func TestUpdateSynchronousStandbyList_HistoryFailurePreventsGUCUpdate(t *testing
 	// Call UpdateSynchronousStandbyList to add a new standby
 	newStandby := &clustermetadatapb.ID{Cell: "zone1", Name: "replica-3"}
 
-	err = manager.UpdateSynchronousStandbyList(
+	_, err = manager.UpdateSynchronousStandbyList(
 		ctx,
 		multipoolermanagerdatapb.StandbyUpdateOperation_STANDBY_UPDATE_OPERATION_ADD,
 		[]*clustermetadatapb.ID{newStandby},

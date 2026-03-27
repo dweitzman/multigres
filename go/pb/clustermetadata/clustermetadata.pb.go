@@ -1153,6 +1153,197 @@ func (x *KeyRange) GetEnd() []byte {
 	return nil
 }
 
+// RuleNumber uniquely identifies a shard rule.
+// Compared lexicographically: higher coordinator_term takes precedence;
+// within the same coordinator_term, higher rule_subterm takes precedence.
+// rule_subterm resets to 0 when coordinator_term increases, making it
+// clear that subterms alone are not globally unique.
+type RuleNumber struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	CoordinatorTerm int64                  `protobuf:"varint,1,opt,name=coordinator_term,json=coordinatorTerm,proto3" json:"coordinator_term,omitempty"`
+	RuleSubterm     int64                  `protobuf:"varint,2,opt,name=rule_subterm,json=ruleSubterm,proto3" json:"rule_subterm,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *RuleNumber) Reset() {
+	*x = RuleNumber{}
+	mi := &file_clustermetadata_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RuleNumber) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RuleNumber) ProtoMessage() {}
+
+func (x *RuleNumber) ProtoReflect() protoreflect.Message {
+	mi := &file_clustermetadata_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RuleNumber.ProtoReflect.Descriptor instead.
+func (*RuleNumber) Descriptor() ([]byte, []int) {
+	return file_clustermetadata_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *RuleNumber) GetCoordinatorTerm() int64 {
+	if x != nil {
+		return x.CoordinatorTerm
+	}
+	return 0
+}
+
+func (x *RuleNumber) GetRuleSubterm() int64 {
+	if x != nil {
+		return x.RuleSubterm
+	}
+	return 0
+}
+
+// ShardRule is the complete, authoritative description of shard state at a
+// specific rule number. Primary identity, cohort membership, and durability
+// policy are only meaningful together and relative to the rule that established
+// them.
+type ShardRule struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	RuleNumber       *RuleNumber            `protobuf:"bytes,1,opt,name=rule_number,json=ruleNumber,proto3" json:"rule_number,omitempty"`
+	PrimaryId        *ID                    `protobuf:"bytes,2,opt,name=primary_id,json=primaryId,proto3" json:"primary_id,omitempty"`
+	CohortMembers    []*ID                  `protobuf:"bytes,3,rep,name=cohort_members,json=cohortMembers,proto3" json:"cohort_members,omitempty"`
+	DurabilityPolicy *DurabilityPolicy      `protobuf:"bytes,4,opt,name=durability_policy,json=durabilityPolicy,proto3" json:"durability_policy,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *ShardRule) Reset() {
+	*x = ShardRule{}
+	mi := &file_clustermetadata_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ShardRule) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ShardRule) ProtoMessage() {}
+
+func (x *ShardRule) ProtoReflect() protoreflect.Message {
+	mi := &file_clustermetadata_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ShardRule.ProtoReflect.Descriptor instead.
+func (*ShardRule) Descriptor() ([]byte, []int) {
+	return file_clustermetadata_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *ShardRule) GetRuleNumber() *RuleNumber {
+	if x != nil {
+		return x.RuleNumber
+	}
+	return nil
+}
+
+func (x *ShardRule) GetPrimaryId() *ID {
+	if x != nil {
+		return x.PrimaryId
+	}
+	return nil
+}
+
+func (x *ShardRule) GetCohortMembers() []*ID {
+	if x != nil {
+		return x.CohortMembers
+	}
+	return nil
+}
+
+func (x *ShardRule) GetDurabilityPolicy() *DurabilityPolicy {
+	if x != nil {
+		return x.DurabilityPolicy
+	}
+	return nil
+}
+
+// NodePosition describes where a node is in logical and physical time.
+// Used in Status, BeginTerm, EmergencyDemote, and Promote responses so the
+// coordinator can determine which node is most advanced.
+//
+// Comparison: prefer the node with the higher rule (coordinator_term first,
+// then rule_subterm within rule.rule_number). Break ties by LSN.
+type NodePosition struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The highest shard rule known by this node at the time of the observation.
+	// Contains the full topology (primary_id, cohort, durability_policy) as well
+	// as the rule_number for ordering comparisons.
+	Rule *ShardRule `protobuf:"bytes,1,opt,name=rule,proto3" json:"rule,omitempty"`
+	// The WAL position at the time of the observation.
+	Lsn           string `protobuf:"bytes,2,opt,name=lsn,proto3" json:"lsn,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NodePosition) Reset() {
+	*x = NodePosition{}
+	mi := &file_clustermetadata_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NodePosition) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NodePosition) ProtoMessage() {}
+
+func (x *NodePosition) ProtoReflect() protoreflect.Message {
+	mi := &file_clustermetadata_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NodePosition.ProtoReflect.Descriptor instead.
+func (*NodePosition) Descriptor() ([]byte, []int) {
+	return file_clustermetadata_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *NodePosition) GetRule() *ShardRule {
+	if x != nil {
+		return x.Rule
+	}
+	return nil
+}
+
+func (x *NodePosition) GetLsn() string {
+	if x != nil {
+		return x.Lsn
+	}
+	return ""
+}
+
 // DurabilityPolicy defines consensus quorum rules for a shard.
 // These policies are stored locally in each shard's postgres database
 // and replicated via postgres streaming replication.
@@ -1175,7 +1366,7 @@ type DurabilityPolicy struct {
 
 func (x *DurabilityPolicy) Reset() {
 	*x = DurabilityPolicy{}
-	mi := &file_clustermetadata_proto_msgTypes[11]
+	mi := &file_clustermetadata_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1187,7 +1378,7 @@ func (x *DurabilityPolicy) String() string {
 func (*DurabilityPolicy) ProtoMessage() {}
 
 func (x *DurabilityPolicy) ProtoReflect() protoreflect.Message {
-	mi := &file_clustermetadata_proto_msgTypes[11]
+	mi := &file_clustermetadata_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1200,7 +1391,7 @@ func (x *DurabilityPolicy) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DurabilityPolicy.ProtoReflect.Descriptor instead.
 func (*DurabilityPolicy) Descriptor() ([]byte, []int) {
-	return file_clustermetadata_proto_rawDescGZIP(), []int{11}
+	return file_clustermetadata_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *DurabilityPolicy) GetPolicyName() string {
@@ -1266,7 +1457,7 @@ type QuorumRule struct {
 
 func (x *QuorumRule) Reset() {
 	*x = QuorumRule{}
-	mi := &file_clustermetadata_proto_msgTypes[12]
+	mi := &file_clustermetadata_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1278,7 +1469,7 @@ func (x *QuorumRule) String() string {
 func (*QuorumRule) ProtoMessage() {}
 
 func (x *QuorumRule) ProtoReflect() protoreflect.Message {
-	mi := &file_clustermetadata_proto_msgTypes[12]
+	mi := &file_clustermetadata_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1291,7 +1482,7 @@ func (x *QuorumRule) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QuorumRule.ProtoReflect.Descriptor instead.
 func (*QuorumRule) Descriptor() ([]byte, []int) {
-	return file_clustermetadata_proto_rawDescGZIP(), []int{12}
+	return file_clustermetadata_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *QuorumRule) GetQuorumType() QuorumType {
@@ -1401,7 +1592,21 @@ const file_clustermetadata_proto_rawDesc = "" +
 	"\tMULTIORCH\x10\x03\"2\n" +
 	"\bKeyRange\x12\x14\n" +
 	"\x05start\x18\x01 \x01(\fR\x05start\x12\x10\n" +
-	"\x03end\x18\x02 \x01(\fR\x03end\"\xab\x02\n" +
+	"\x03end\x18\x02 \x01(\fR\x03end\"Z\n" +
+	"\n" +
+	"RuleNumber\x12)\n" +
+	"\x10coordinator_term\x18\x01 \x01(\x03R\x0fcoordinatorTerm\x12!\n" +
+	"\frule_subterm\x18\x02 \x01(\x03R\vruleSubterm\"\x89\x02\n" +
+	"\tShardRule\x12<\n" +
+	"\vrule_number\x18\x01 \x01(\v2\x1b.clustermetadata.RuleNumberR\n" +
+	"ruleNumber\x122\n" +
+	"\n" +
+	"primary_id\x18\x02 \x01(\v2\x13.clustermetadata.IDR\tprimaryId\x12:\n" +
+	"\x0ecohort_members\x18\x03 \x03(\v2\x13.clustermetadata.IDR\rcohortMembers\x12N\n" +
+	"\x11durability_policy\x18\x04 \x01(\v2!.clustermetadata.DurabilityPolicyR\x10durabilityPolicy\"P\n" +
+	"\fNodePosition\x12.\n" +
+	"\x04rule\x18\x01 \x01(\v2\x1a.clustermetadata.ShardRuleR\x04rule\x12\x10\n" +
+	"\x03lsn\x18\x02 \x01(\tR\x03lsn\"\xab\x02\n" +
 	"\x10DurabilityPolicy\x12\x1f\n" +
 	"\vpolicy_name\x18\x01 \x01(\tR\n" +
 	"policyName\x12%\n" +
@@ -1457,7 +1662,7 @@ func file_clustermetadata_proto_rawDescGZIP() []byte {
 }
 
 var file_clustermetadata_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_clustermetadata_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_clustermetadata_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
 var file_clustermetadata_proto_goTypes = []any{
 	(PoolerType)(0),                   // 0: clustermetadata.PoolerType
 	(PoolerServingStatus)(0),          // 1: clustermetadata.PoolerServingStatus
@@ -1475,12 +1680,15 @@ var file_clustermetadata_proto_goTypes = []any{
 	(*MultiOrch)(nil),                 // 13: clustermetadata.MultiOrch
 	(*ID)(nil),                        // 14: clustermetadata.ID
 	(*KeyRange)(nil),                  // 15: clustermetadata.KeyRange
-	(*DurabilityPolicy)(nil),          // 16: clustermetadata.DurabilityPolicy
-	(*QuorumRule)(nil),                // 17: clustermetadata.QuorumRule
-	nil,                               // 18: clustermetadata.MultiPooler.PortMapEntry
-	nil,                               // 19: clustermetadata.MultiGateway.PortMapEntry
-	nil,                               // 20: clustermetadata.MultiOrch.PortMapEntry
-	(*timestamppb.Timestamp)(nil),     // 21: google.protobuf.Timestamp
+	(*RuleNumber)(nil),                // 16: clustermetadata.RuleNumber
+	(*ShardRule)(nil),                 // 17: clustermetadata.ShardRule
+	(*NodePosition)(nil),              // 18: clustermetadata.NodePosition
+	(*DurabilityPolicy)(nil),          // 19: clustermetadata.DurabilityPolicy
+	(*QuorumRule)(nil),                // 20: clustermetadata.QuorumRule
+	nil,                               // 21: clustermetadata.MultiPooler.PortMapEntry
+	nil,                               // 22: clustermetadata.MultiGateway.PortMapEntry
+	nil,                               // 23: clustermetadata.MultiOrch.PortMapEntry
+	(*timestamppb.Timestamp)(nil),     // 24: google.protobuf.Timestamp
 }
 var file_clustermetadata_proto_depIdxs = []int32{
 	8,  // 0: clustermetadata.Database.backup_location:type_name -> clustermetadata.BackupLocation
@@ -1490,22 +1698,27 @@ var file_clustermetadata_proto_depIdxs = []int32{
 	15, // 4: clustermetadata.MultiPooler.key_range:type_name -> clustermetadata.KeyRange
 	0,  // 5: clustermetadata.MultiPooler.type:type_name -> clustermetadata.PoolerType
 	1,  // 6: clustermetadata.MultiPooler.serving_status:type_name -> clustermetadata.PoolerServingStatus
-	18, // 7: clustermetadata.MultiPooler.port_map:type_name -> clustermetadata.MultiPooler.PortMapEntry
+	21, // 7: clustermetadata.MultiPooler.port_map:type_name -> clustermetadata.MultiPooler.PortMapEntry
 	14, // 8: clustermetadata.MultiGateway.id:type_name -> clustermetadata.ID
-	19, // 9: clustermetadata.MultiGateway.port_map:type_name -> clustermetadata.MultiGateway.PortMapEntry
+	22, // 9: clustermetadata.MultiGateway.port_map:type_name -> clustermetadata.MultiGateway.PortMapEntry
 	14, // 10: clustermetadata.MultiOrch.id:type_name -> clustermetadata.ID
-	20, // 11: clustermetadata.MultiOrch.port_map:type_name -> clustermetadata.MultiOrch.PortMapEntry
+	23, // 11: clustermetadata.MultiOrch.port_map:type_name -> clustermetadata.MultiOrch.PortMapEntry
 	4,  // 12: clustermetadata.ID.component:type_name -> clustermetadata.ID.ComponentType
-	17, // 13: clustermetadata.DurabilityPolicy.quorum_rule:type_name -> clustermetadata.QuorumRule
-	21, // 14: clustermetadata.DurabilityPolicy.created_at:type_name -> google.protobuf.Timestamp
-	21, // 15: clustermetadata.DurabilityPolicy.updated_at:type_name -> google.protobuf.Timestamp
-	2,  // 16: clustermetadata.QuorumRule.quorum_type:type_name -> clustermetadata.QuorumType
-	3,  // 17: clustermetadata.QuorumRule.async_fallback:type_name -> clustermetadata.AsyncReplicationFallbackMode
-	18, // [18:18] is the sub-list for method output_type
-	18, // [18:18] is the sub-list for method input_type
-	18, // [18:18] is the sub-list for extension type_name
-	18, // [18:18] is the sub-list for extension extendee
-	0,  // [0:18] is the sub-list for field type_name
+	16, // 13: clustermetadata.ShardRule.rule_number:type_name -> clustermetadata.RuleNumber
+	14, // 14: clustermetadata.ShardRule.primary_id:type_name -> clustermetadata.ID
+	14, // 15: clustermetadata.ShardRule.cohort_members:type_name -> clustermetadata.ID
+	19, // 16: clustermetadata.ShardRule.durability_policy:type_name -> clustermetadata.DurabilityPolicy
+	17, // 17: clustermetadata.NodePosition.rule:type_name -> clustermetadata.ShardRule
+	20, // 18: clustermetadata.DurabilityPolicy.quorum_rule:type_name -> clustermetadata.QuorumRule
+	24, // 19: clustermetadata.DurabilityPolicy.created_at:type_name -> google.protobuf.Timestamp
+	24, // 20: clustermetadata.DurabilityPolicy.updated_at:type_name -> google.protobuf.Timestamp
+	2,  // 21: clustermetadata.QuorumRule.quorum_type:type_name -> clustermetadata.QuorumType
+	3,  // 22: clustermetadata.QuorumRule.async_fallback:type_name -> clustermetadata.AsyncReplicationFallbackMode
+	23, // [23:23] is the sub-list for method output_type
+	23, // [23:23] is the sub-list for method input_type
+	23, // [23:23] is the sub-list for extension type_name
+	23, // [23:23] is the sub-list for extension extendee
+	0,  // [0:23] is the sub-list for field type_name
 }
 
 func init() { file_clustermetadata_proto_init() }
@@ -1523,7 +1736,7 @@ func file_clustermetadata_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_clustermetadata_proto_rawDesc), len(file_clustermetadata_proto_rawDesc)),
 			NumEnums:      5,
-			NumMessages:   16,
+			NumMessages:   19,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

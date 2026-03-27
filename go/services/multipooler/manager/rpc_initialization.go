@@ -182,7 +182,7 @@ func (pm *MultiPoolerManager) InitializeEmptyPrimary(ctx context.Context, req *m
 	cohortMembers := []poolerID{leaderID} // Only the initial primary during bootstrap
 	acceptedMembers := []poolerID{leaderID}
 
-	if err := pm.insertHistoryRecord(ctx,
+	if _, err := pm.insertHistoryRecord(ctx,
 		req.ConsensusTerm,
 		"promotion",
 		leaderID,
