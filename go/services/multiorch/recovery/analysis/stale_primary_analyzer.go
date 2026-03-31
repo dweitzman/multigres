@@ -19,24 +19,12 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
-	"github.com/multigres/multigres/go/services/multiorch/store"
-
-	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 )
 
-// StalePrimaryAnalyzer detects stale primaries that came back online after failover.
-// This happens when an old primary restarts without being properly demoted.
-// The analyzer identifies the stale primary (lower PrimaryTerm) and triggers demotion.
-//
-// The analyzer detects stale primaries from both perspectives:
-// - When THIS pooler is stale (lower PrimaryTerm): reports itself for demotion
-// - When OTHER primary is stale (this pooler has higher PrimaryTerm): reports the other for demotion
-//
-// This allows the correct primary to proactively demote stale primaries, which is important
-// because the stale primary may not be running multiorch yet or may not be healthy enough
-// to detect and demote itself.
+// StalePrimaryAnalyzer detects when multiple poolers in a shard claim to be primary.
+// This happens when a demoted primary restarts without being properly reset. The analyzer
+// identifies the stale primary (lower PrimaryTerm) and triggers demotion.
 //
 // Note: This is NOT true split-brain. True split-brain means both primaries can accept
 // writes. In this scenario, the new primary cannot accept writes because it cannot
@@ -57,79 +45,85 @@ func (a *StalePrimaryAnalyzer) RecoveryAction() types.RecoveryAction {
 	return a.factory.NewDemoteStalePrimaryAction()
 }
 
-func (a *StalePrimaryAnalyzer) Analyze(poolerAnalysis *store.ReplicationAnalysis) (*types.Problem, error) {
+func (a *StalePrimaryAnalyzer) Analyze(shard *ShardAnalysis) ([]*types.Problem, error) {
 	if a.factory == nil {
 		return nil, errors.New("recovery action factory not initialized")
 	}
 
-	// Only analyze primaries - stale primary is detected from the PRIMARY's perspective
-	if !poolerAnalysis.IsPrimary {
+	// Collect all reachable, initialized primaries with a valid PrimaryTerm.
+	var primaries []*PoolerState
+	for _, ps := range shard.Poolers {
+		if !ps.IsPrimary || !ps.IsInitialized || !ps.LastCheckValid {
+			continue
+		}
+		// Invariant: initialized PRIMARY poolers must have PrimaryTerm>0.
+		// PrimaryTerm is set during promotion and only cleared during demotion.
+		if ps.PrimaryTerm == 0 {
+			continue
+		}
+		primaries = append(primaries, ps)
+	}
+
+	if len(primaries) < 2 {
+		return nil, nil // no conflict
+	}
+
+	// Find the most advanced primary (highest PrimaryTerm).
+	mostAdvanced := findHighestTermPrimary(primaries)
+	if mostAdvanced == nil {
+		// Tie in PrimaryTerm — consensus bug, requires manual intervention.
+		// Skip automatic demotion to avoid making the situation worse.
 		return nil, nil
 	}
 
-	// Skip if not initialized
-	if !poolerAnalysis.IsInitialized {
-		return nil, nil
+	// Return one problem per stale primary. Any primary with a lower PrimaryTerm than
+	// the most advanced is stale and should be demoted.
+	var problems []*types.Problem
+	for _, ps := range primaries {
+		if ps.ID.Cell == mostAdvanced.ID.Cell && ps.ID.Name == mostAdvanced.ID.Name {
+			continue // this is the most advanced primary, skip
+		}
+		problems = append(problems, &types.Problem{
+			Code:      types.ProblemStalePrimary,
+			CheckName: "StalePrimary",
+			PoolerID:  ps.ID,
+			ShardKey:  shard.ShardKey,
+			Description: fmt.Sprintf("Stale primary detected: %s (primary_term=%d) is stale, most advanced is %s (primary_term=%d)",
+				ps.ID.Name, ps.PrimaryTerm,
+				mostAdvanced.ID.Name, mostAdvanced.PrimaryTerm),
+			Priority:       types.PriorityEmergency,
+			Scope:          types.ScopeShard,
+			DetectedAt:     time.Now(),
+			RecoveryAction: a.factory.NewDemoteStalePrimaryAction(),
+		})
+	}
+	return problems, nil
+}
+
+// findHighestTermPrimary returns the primary with the highest PrimaryTerm.
+// Returns nil if there is a tie (same PrimaryTerm on two or more primaries), which
+// indicates a consensus bug — PrimaryTerm should be unique per promotion.
+//
+// Invariant: In a properly initialized shard, PrimaryTerm is always >0 for PRIMARY poolers.
+// This function is defensive and returns nil if all primaries have PrimaryTerm=0.
+func findHighestTermPrimary(primaries []*PoolerState) *PoolerState {
+	var mostAdvanced *PoolerState
+	var maxTerm int64
+	tieDetected := false
+
+	for _, ps := range primaries {
+		switch {
+		case ps.PrimaryTerm > maxTerm:
+			maxTerm = ps.PrimaryTerm
+			mostAdvanced = ps
+			tieDetected = false
+		case ps.PrimaryTerm == maxTerm && ps.PrimaryTerm > 0:
+			tieDetected = true
+		}
 	}
 
-	// Invariant: initialized PRIMARY poolers must have PrimaryTerm>0
-	// PrimaryTerm is set during promotion and only cleared during demotion
-	if poolerAnalysis.PrimaryTerm == 0 {
-		return nil, nil
+	if maxTerm == 0 || tieDetected {
+		return nil
 	}
-
-	// Skip if no other primaries detected
-	if len(poolerAnalysis.OtherPrimariesInShard) == 0 {
-		return nil, nil
-	}
-
-	// Skip if no most advanced primary identified (tie in PrimaryTerm).
-	// A tie indicates a consensus bug - PrimaryTerm should be unique per primary.
-	// Skip automatic demotion and require manual intervention to avoid making it worse.
-	if poolerAnalysis.HighestTermPrimary == nil {
-		return nil, nil
-	}
-
-	// Multiple primaries detected! Determine which one is stale.
-	// The primary with the highest PrimaryTerm is the most advanced (correct) primary.
-	// All others should be demoted.
-
-	thisPoolerIDStr := topoclient.MultiPoolerIDString(poolerAnalysis.PoolerID)
-	mostAdvancedIDStr := topoclient.MultiPoolerIDString(poolerAnalysis.HighestTermPrimary.ID)
-
-	var stalePrimaryID *clustermetadatapb.ID
-	var stalePrimaryTerm int64
-	var mostAdvancedPrimaryName string
-	var mostAdvancedPrimaryTerm int64
-
-	if thisPoolerIDStr == mostAdvancedIDStr {
-		// This pooler is the most advanced - demote first other primary
-		stalePrimaryID = poolerAnalysis.OtherPrimariesInShard[0].ID
-		stalePrimaryTerm = poolerAnalysis.OtherPrimariesInShard[0].PrimaryTerm
-		mostAdvancedPrimaryName = poolerAnalysis.PoolerID.Name
-		mostAdvancedPrimaryTerm = poolerAnalysis.HighestTermPrimary.PrimaryTerm
-	} else {
-		// This pooler is stale
-		stalePrimaryID = poolerAnalysis.PoolerID
-		stalePrimaryTerm = poolerAnalysis.PrimaryTerm
-		mostAdvancedPrimaryName = poolerAnalysis.HighestTermPrimary.ID.Name
-		mostAdvancedPrimaryTerm = poolerAnalysis.HighestTermPrimary.PrimaryTerm
-	}
-
-	// Report the stale primary for demotion
-	return &types.Problem{
-		Code:      types.ProblemStalePrimary,
-		CheckName: "StalePrimary",
-		PoolerID:  stalePrimaryID,
-		ShardKey:  poolerAnalysis.ShardKey,
-		Description: fmt.Sprintf("Stale primary detected: %s (stale_primary_term %d) is stale, most advanced primary %s (most_advanced_primary_term %d)",
-			stalePrimaryID.Name,
-			stalePrimaryTerm,
-			mostAdvancedPrimaryName,
-			mostAdvancedPrimaryTerm),
-		Priority:       types.PriorityEmergency,
-		Scope:          types.ScopeShard,
-		DetectedAt:     time.Now(),
-		RecoveryAction: a.factory.NewDemoteStalePrimaryAction(),
-	}, nil
+	return mostAdvanced
 }

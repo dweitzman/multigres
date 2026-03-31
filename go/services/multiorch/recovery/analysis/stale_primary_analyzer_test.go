@@ -29,309 +29,256 @@ import (
 
 func TestStalePrimaryAnalyzer_Analyze(t *testing.T) {
 	factory := &RecoveryActionFactory{poolerStore: store.NewPoolerStore(nil, slog.Default())}
+	shardKey := commontypes.ShardKey{Database: "db", TableGroup: "default", Shard: "0"}
 
-	t.Run("detects stale primary when this pooler has lower primary_term", func(t *testing.T) {
+	t.Run("detects stale primary when it has lower primary_term", func(t *testing.T) {
 		analyzer := &StalePrimaryAnalyzer{factory: factory}
-		analysis := &store.ReplicationAnalysis{
-			PoolerID: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
-				Cell:      "cell1",
-				Name:      "stale-primary",
-			},
-			ShardKey:      commontypes.ShardKey{Database: "db", TableGroup: "default", Shard: "0"},
-			IsPrimary:     true,
-			IsInitialized: true,
-			PrimaryTerm:   5,
-			ConsensusTerm: 10,
-			OtherPrimariesInShard: []*store.PrimaryInfo{
+		shard := &ShardAnalysis{
+			ShardKey: shardKey,
+			Poolers: []*PoolerState{
 				{
-					ID: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIPOOLER,
-						Cell:      "cell1",
-						Name:      "new-primary",
-					},
-					ConsensusTerm: 11,
-					PrimaryTerm:   6,
+					ID:             &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "stale-primary"},
+					IsPrimary:      true,
+					IsInitialized:  true,
+					LastCheckValid: true,
+					PrimaryTerm:    5,
 				},
-			},
-			HighestTermPrimary: &store.PrimaryInfo{
-				ID: &clustermetadatapb.ID{
-					Component: clustermetadatapb.ID_MULTIPOOLER,
-					Cell:      "cell1",
-					Name:      "new-primary",
+				{
+					ID:             &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "new-primary"},
+					IsPrimary:      true,
+					IsInitialized:  true,
+					LastCheckValid: true,
+					PrimaryTerm:    6,
 				},
-				ConsensusTerm: 11,
-				PrimaryTerm:   6,
 			},
 		}
 
-		problem, err := analyzer.Analyze(analysis)
+		problems, err := analyzer.Analyze(shard)
 
 		require.NoError(t, err)
-		require.NotNil(t, problem)
-		assert.Equal(t, types.ProblemStalePrimary, problem.Code)
-		assert.Equal(t, types.ScopeShard, problem.Scope)
-		assert.Equal(t, types.PriorityEmergency, problem.Priority)
-		assert.Contains(t, problem.Description, "stale-primary")
-		assert.Contains(t, problem.Description, "stale_primary_term 5")
-		assert.Contains(t, problem.Description, "most_advanced_primary_term 6")
+		require.Len(t, problems, 1)
+		assert.Equal(t, types.ProblemStalePrimary, problems[0].Code)
+		assert.Equal(t, types.ScopeShard, problems[0].Scope)
+		assert.Equal(t, types.PriorityEmergency, problems[0].Priority)
+		assert.Equal(t, "stale-primary", problems[0].PoolerID.Name)
+		assert.Contains(t, problems[0].Description, "stale-primary")
+		assert.Contains(t, problems[0].Description, "primary_term=5")
+		assert.Contains(t, problems[0].Description, "primary_term=6")
 	})
 
-	t.Run("detects other primary as stale when this pooler has higher primary_term", func(t *testing.T) {
+	t.Run("detects stale primary regardless of iteration order", func(t *testing.T) {
+		// The analyzer should detect the lower-term primary as stale regardless
+		// of which primary appears first in the Poolers slice.
 		analyzer := &StalePrimaryAnalyzer{factory: factory}
-		analysis := &store.ReplicationAnalysis{
-			PoolerID: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
-				Cell:      "cell1",
-				Name:      "new-primary",
-			},
-			ShardKey:      commontypes.ShardKey{Database: "db", TableGroup: "default", Shard: "0"},
-			IsPrimary:     true,
-			IsInitialized: true,
-			PrimaryTerm:   6,
-			ConsensusTerm: 11,
-			OtherPrimariesInShard: []*store.PrimaryInfo{
+		shard := &ShardAnalysis{
+			ShardKey: shardKey,
+			Poolers: []*PoolerState{
 				{
-					ID: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIPOOLER,
-						Cell:      "cell1",
-						Name:      "stale-primary",
-					},
-					ConsensusTerm: 10,
-					PrimaryTerm:   5,
+					ID:             &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "new-primary"},
+					IsPrimary:      true,
+					IsInitialized:  true,
+					LastCheckValid: true,
+					PrimaryTerm:    6,
 				},
-			},
-			HighestTermPrimary: &store.PrimaryInfo{
-				ID: &clustermetadatapb.ID{
-					Component: clustermetadatapb.ID_MULTIPOOLER,
-					Cell:      "cell1",
-					Name:      "new-primary",
+				{
+					ID:             &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "stale-primary"},
+					IsPrimary:      true,
+					IsInitialized:  true,
+					LastCheckValid: true,
+					PrimaryTerm:    5,
 				},
-				ConsensusTerm: 11,
-				PrimaryTerm:   6,
 			},
 		}
 
-		problem, err := analyzer.Analyze(analysis)
+		problems, err := analyzer.Analyze(shard)
 
 		require.NoError(t, err)
-		require.NotNil(t, problem, "should detect other primary as stale")
-		assert.Equal(t, types.ProblemStalePrimary, problem.Code)
-		assert.Equal(t, "stale-primary", problem.PoolerID.Name, "should report the stale primary")
-		assert.Contains(t, problem.Description, "stale-primary (stale_primary_term 5) is stale")
-		assert.Contains(t, problem.Description, "new-primary (most_advanced_primary_term 6)")
+		require.Len(t, problems, 1, "should detect stale primary regardless of order")
+		assert.Equal(t, "stale-primary", problems[0].PoolerID.Name, "should report the lower-term primary as stale")
 	})
 
 	t.Run("does not demote when primary_terms are equal (consensus bug)", func(t *testing.T) {
 		// When primary_terms are equal, this indicates a consensus bug (PrimaryTerm should be
 		// unique per primary). We skip automatic demotion to avoid making the situation worse.
-		// See generator.go findMostAdvancedPrimary() for details and potential future solutions.
 		analyzer := &StalePrimaryAnalyzer{factory: factory}
-		analysis := &store.ReplicationAnalysis{
-			PoolerID: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
-				Cell:      "cell1",
-				Name:      "primary-a",
-			},
-			ShardKey:      commontypes.ShardKey{Database: "db", TableGroup: "default", Shard: "0"},
-			IsPrimary:     true,
-			IsInitialized: true,
-			PrimaryTerm:   5,
-			ConsensusTerm: 10,
-			OtherPrimariesInShard: []*store.PrimaryInfo{
+		shard := &ShardAnalysis{
+			ShardKey: shardKey,
+			Poolers: []*PoolerState{
 				{
-					ID: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIPOOLER,
-						Cell:      "cell1",
-						Name:      "primary-b",
-					},
-					ConsensusTerm: 10,
-					PrimaryTerm:   5,
+					ID:             &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary-a"},
+					IsPrimary:      true,
+					IsInitialized:  true,
+					LastCheckValid: true,
+					PrimaryTerm:    5,
+				},
+				{
+					ID:             &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary-b"},
+					IsPrimary:      true,
+					IsInitialized:  true,
+					LastCheckValid: true,
+					PrimaryTerm:    5,
 				},
 			},
-			HighestTermPrimary: nil, // Tie detected, so nil
 		}
 
-		problem, err := analyzer.Analyze(analysis)
+		problems, err := analyzer.Analyze(shard)
 
 		require.NoError(t, err)
-		require.Nil(t, problem, "should NOT demote when primary_terms are equal to prevent double demotion")
+		require.Empty(t, problems, "should NOT demote when primary_terms are equal to prevent double demotion")
 	})
 
 	t.Run("ignores replicas", func(t *testing.T) {
 		analyzer := &StalePrimaryAnalyzer{factory: factory}
-		analysis := &store.ReplicationAnalysis{
-			PoolerID: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
-				Cell:      "cell1",
-				Name:      "replica1",
-			},
-			ShardKey:      commontypes.ShardKey{Database: "db", TableGroup: "default", Shard: "0"},
-			IsPrimary:     false,
-			IsInitialized: true,
-		}
-
-		problem, err := analyzer.Analyze(analysis)
-
-		require.NoError(t, err)
-		require.Nil(t, problem)
-	})
-
-	t.Run("ignores when no other primary detected", func(t *testing.T) {
-		analyzer := &StalePrimaryAnalyzer{factory: factory}
-		analysis := &store.ReplicationAnalysis{
-			PoolerID: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
-				Cell:      "cell1",
-				Name:      "primary",
-			},
-			ShardKey:              commontypes.ShardKey{Database: "db", TableGroup: "default", Shard: "0"},
-			IsPrimary:             true,
-			IsInitialized:         true,
-			PrimaryTerm:           5,
-			ConsensusTerm:         10,
-			OtherPrimariesInShard: nil, // No other primaries
-		}
-
-		problem, err := analyzer.Analyze(analysis)
-
-		require.NoError(t, err)
-		require.Nil(t, problem)
-	})
-
-	t.Run("ignores uninitialized primary", func(t *testing.T) {
-		analyzer := &StalePrimaryAnalyzer{factory: factory}
-		analysis := &store.ReplicationAnalysis{
-			PoolerID: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
-				Cell:      "cell1",
-				Name:      "primary",
-			},
-			ShardKey:      commontypes.ShardKey{Database: "db", TableGroup: "default", Shard: "0"},
-			IsPrimary:     true,
-			IsInitialized: false, // Not initialized
-			OtherPrimariesInShard: []*store.PrimaryInfo{
+		shard := &ShardAnalysis{
+			ShardKey: shardKey,
+			Poolers: []*PoolerState{
 				{
-					ID: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIPOOLER,
-						Cell:      "cell1",
-						Name:      "other-primary",
-					},
-					ConsensusTerm: 10,
-					PrimaryTerm:   5,
+					ID:             &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "replica1"},
+					IsPrimary:      false,
+					IsInitialized:  true,
+					LastCheckValid: true,
 				},
 			},
 		}
 
-		problem, err := analyzer.Analyze(analysis)
+		problems, err := analyzer.Analyze(shard)
 
 		require.NoError(t, err)
-		require.Nil(t, problem)
+		require.Empty(t, problems)
+	})
+
+	t.Run("ignores when only one primary exists", func(t *testing.T) {
+		analyzer := &StalePrimaryAnalyzer{factory: factory}
+		shard := &ShardAnalysis{
+			ShardKey: shardKey,
+			Poolers: []*PoolerState{
+				{
+					ID:             &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary"},
+					IsPrimary:      true,
+					IsInitialized:  true,
+					LastCheckValid: true,
+					PrimaryTerm:    5,
+				},
+			},
+		}
+
+		problems, err := analyzer.Analyze(shard)
+
+		require.NoError(t, err)
+		require.Empty(t, problems)
+	})
+
+	t.Run("ignores uninitialized primary", func(t *testing.T) {
+		// An uninitialized primary is excluded from the eligible set. With only one
+		// remaining eligible primary, there's no conflict to resolve.
+		analyzer := &StalePrimaryAnalyzer{factory: factory}
+		shard := &ShardAnalysis{
+			ShardKey: shardKey,
+			Poolers: []*PoolerState{
+				{
+					ID:             &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary"},
+					IsPrimary:      true,
+					IsInitialized:  false, // Not initialized - excluded from conflict detection
+					LastCheckValid: true,
+					PrimaryTerm:    5,
+				},
+				{
+					ID:             &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "other-primary"},
+					IsPrimary:      true,
+					IsInitialized:  true,
+					LastCheckValid: true,
+					PrimaryTerm:    6,
+				},
+			},
+		}
+
+		problems, err := analyzer.Analyze(shard)
+
+		require.NoError(t, err)
+		require.Empty(t, problems, "uninitialized primary is not eligible for conflict detection")
 	})
 
 	t.Run("returns error when factory is nil", func(t *testing.T) {
 		analyzer := &StalePrimaryAnalyzer{factory: nil}
-		analysis := &store.ReplicationAnalysis{IsPrimary: true}
+		shard := &ShardAnalysis{ShardKey: shardKey}
 
-		_, err := analyzer.Analyze(analysis)
+		_, err := analyzer.Analyze(shard)
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "factory not initialized")
 	})
 
-	t.Run("handles multiple other primaries", func(t *testing.T) {
+	t.Run("detects all stale primaries when multiple exist", func(t *testing.T) {
+		// When three primaries exist, the two with lower terms are both stale
+		// and should both be reported so they can each be demoted.
 		analyzer := &StalePrimaryAnalyzer{factory: factory}
-		analysis := &store.ReplicationAnalysis{
-			PoolerID: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
-				Cell:      "cell1",
-				Name:      "new-primary",
-			},
-			ShardKey:      commontypes.ShardKey{Database: "db", TableGroup: "default", Shard: "0"},
-			IsPrimary:     true,
-			IsInitialized: true,
-			PrimaryTerm:   6,
-			ConsensusTerm: 11,
-			OtherPrimariesInShard: []*store.PrimaryInfo{
+		shard := &ShardAnalysis{
+			ShardKey: shardKey,
+			Poolers: []*PoolerState{
 				{
-					ID: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIPOOLER,
-						Cell:      "cell1",
-						Name:      "stale-primary-1",
-					},
-					ConsensusTerm: 9,
-					PrimaryTerm:   4,
+					ID:             &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "new-primary"},
+					IsPrimary:      true,
+					IsInitialized:  true,
+					LastCheckValid: true,
+					PrimaryTerm:    6,
 				},
 				{
-					ID: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIPOOLER,
-						Cell:      "cell1",
-						Name:      "stale-primary-2",
-					},
-					ConsensusTerm: 10,
-					PrimaryTerm:   5,
+					ID:             &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "stale-primary-1"},
+					IsPrimary:      true,
+					IsInitialized:  true,
+					LastCheckValid: true,
+					PrimaryTerm:    4,
 				},
-			},
-			HighestTermPrimary: &store.PrimaryInfo{
-				ID: &clustermetadatapb.ID{
-					Component: clustermetadatapb.ID_MULTIPOOLER,
-					Cell:      "cell1",
-					Name:      "new-primary",
+				{
+					ID:             &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "stale-primary-2"},
+					IsPrimary:      true,
+					IsInitialized:  true,
+					LastCheckValid: true,
+					PrimaryTerm:    5,
 				},
-				ConsensusTerm: 11,
-				PrimaryTerm:   6,
 			},
 		}
 
-		problem, err := analyzer.Analyze(analysis)
+		problems, err := analyzer.Analyze(shard)
 
 		require.NoError(t, err)
-		require.NotNil(t, problem)
-		// Should report first stale primary (they'll be demoted one at a time)
-		assert.Equal(t, "stale-primary-1", problem.PoolerID.Name)
+		require.Len(t, problems, 2, "should detect all stale primaries")
+		staleNames := make(map[string]bool)
+		for _, p := range problems {
+			staleNames[p.PoolerID.Name] = true
+		}
+		assert.True(t, staleNames["stale-primary-1"])
+		assert.True(t, staleNames["stale-primary-2"])
 	})
 
-	t.Run("skips when this pooler has primary_term zero (invalid state)", func(t *testing.T) {
-		// Note: This tests the invariant check. In a properly initialized shard,
-		// PRIMARY poolers should never have PrimaryTerm=0.
+	t.Run("skips primary with primary_term zero (invalid state)", func(t *testing.T) {
+		// Initialized PRIMARY poolers should never have PrimaryTerm=0. If they do, they're
+		// excluded from conflict detection to avoid acting on bad data.
 		analyzer := &StalePrimaryAnalyzer{factory: factory}
-		analysis := &store.ReplicationAnalysis{
-			PoolerID: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
-				Cell:      "cell1",
-				Name:      "primary-a",
-			},
-			ShardKey:      commontypes.ShardKey{Database: "db", TableGroup: "default", Shard: "0"},
-			IsPrimary:     true,
-			IsInitialized: true,
-			PrimaryTerm:   0, // Invalid: initialized PRIMARY should never have PrimaryTerm=0
-			ConsensusTerm: 10,
-			OtherPrimariesInShard: []*store.PrimaryInfo{
+		shard := &ShardAnalysis{
+			ShardKey: shardKey,
+			Poolers: []*PoolerState{
 				{
-					ID: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIPOOLER,
-						Cell:      "cell1",
-						Name:      "primary-b",
-					},
-					ConsensusTerm: 10,
-					PrimaryTerm:   5,
+					ID:             &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary-a"},
+					IsPrimary:      true,
+					IsInitialized:  true,
+					LastCheckValid: true,
+					PrimaryTerm:    0, // Invalid
 				},
-			},
-			HighestTermPrimary: &store.PrimaryInfo{
-				ID: &clustermetadatapb.ID{
-					Component: clustermetadatapb.ID_MULTIPOOLER,
-					Cell:      "cell1",
-					Name:      "primary-b",
+				{
+					ID:             &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary-b"},
+					IsPrimary:      true,
+					IsInitialized:  true,
+					LastCheckValid: true,
+					PrimaryTerm:    5,
 				},
-				ConsensusTerm: 10,
-				PrimaryTerm:   5,
 			},
 		}
 
-		problem, err := analyzer.Analyze(analysis)
+		problems, err := analyzer.Analyze(shard)
 
 		require.NoError(t, err)
-		require.Nil(t, problem, "should skip when this pooler's PrimaryTerm=0 (invalid state)")
+		require.Empty(t, problems, "primary-a is excluded due to PrimaryTerm=0, leaving only 1 eligible primary")
 	})
 
 	t.Run("analyzer name is correct", func(t *testing.T) {

@@ -25,6 +25,8 @@ import (
 	"github.com/multigres/multigres/go/common/topoclient/memorytopo"
 	commontypes "github.com/multigres/multigres/go/common/types"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
+	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	"github.com/multigres/multigres/go/services/multiorch/consensus"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
 	"github.com/multigres/multigres/go/services/multiorch/store"
@@ -45,155 +47,202 @@ func TestReplicaNotInStandbyListAnalyzer_Analyze(t *testing.T) {
 	factory := NewRecoveryActionFactory(nil, poolerStore, rpcClient, ts, coord, slog.Default())
 
 	analyzer := &ReplicaNotInStandbyListAnalyzer{factory: factory}
+	shardKey := commontypes.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"}
 
 	require.Equal(t, types.CheckName("ReplicaNotInStandbyList"), analyzer.Name())
 
+	primaryID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "primary1"}
+	replica1ID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica1"}
+
+	// makeReplicaState creates a REPLICA pooler state with primary_conninfo set.
+	makeReplicaState := func(id *clustermetadatapb.ID) *PoolerState {
+		return &PoolerState{
+			ID:             id,
+			IsPrimary:      false,
+			IsInitialized:  true,
+			LastCheckValid: true,
+			Type:           clustermetadatapb.PoolerType_REPLICA,
+			Health: &multiorchdatapb.PoolerHealthState{
+				ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
+					PrimaryConnInfo: &multipoolermanagerdatapb.PrimaryConnInfo{
+						Host: "primary.example.com",
+					},
+				},
+			},
+		}
+	}
+
+	// makePrimaryState creates a reachable primary with the given standby list.
+	makePrimaryState := func(standbyIDs []*clustermetadatapb.ID) *PoolerState {
+		return &PoolerState{
+			ID:             primaryID,
+			IsPrimary:      true,
+			IsInitialized:  true,
+			LastCheckValid: true,
+			Health: &multiorchdatapb.PoolerHealthState{
+				IsPostgresRunning: true,
+				PrimaryStatus: &multipoolermanagerdatapb.PrimaryStatus{
+					SyncReplicationConfig: &multipoolermanagerdatapb.SynchronousReplicationConfiguration{
+						StandbyIds: standbyIDs,
+					},
+				},
+			},
+		}
+	}
+
 	tests := []struct {
 		name          string
-		analysis      *store.ReplicationAnalysis
-		expectProblem bool
+		poolers       []*PoolerState
+		expectCount   int
 		expectedCode  types.ProblemCode
 		expectedScope types.ProblemScope
 		expectedPrio  types.Priority
 	}{
 		{
 			name: "detects replica not in standby list",
-			analysis: &store.ReplicationAnalysis{
-				PoolerID:               &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica1"},
-				ShardKey:               commontypes.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"},
-				PoolerType:             clustermetadatapb.PoolerType_REPLICA,
-				IsPrimary:              false,
-				IsInitialized:          true,
-				PrimaryPoolerID:        &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "primary1"},
-				PrimaryReachable:       true,
-				PrimaryConnInfoHost:    "primary.example.com",
-				IsInPrimaryStandbyList: false,
+			poolers: []*PoolerState{
+				makePrimaryState(nil), // Empty standby list
+				makeReplicaState(replica1ID),
 			},
-			expectProblem: true,
+			expectCount:   1,
 			expectedCode:  types.ProblemReplicaNotInStandbyList,
 			expectedScope: types.ScopePooler,
 			expectedPrio:  types.PriorityNormal,
 		},
 		{
 			name: "ignores replica already in standby list",
-			analysis: &store.ReplicationAnalysis{
-				PoolerID:               &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica1"},
-				ShardKey:               commontypes.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"},
-				PoolerType:             clustermetadatapb.PoolerType_REPLICA,
-				IsPrimary:              false,
-				IsInitialized:          true,
-				PrimaryPoolerID:        &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "primary1"},
-				PrimaryReachable:       true,
-				PrimaryConnInfoHost:    "primary.example.com",
-				IsInPrimaryStandbyList: true,
+			poolers: []*PoolerState{
+				makePrimaryState([]*clustermetadatapb.ID{replica1ID}),
+				makeReplicaState(replica1ID),
 			},
-			expectProblem: false,
+			expectCount: 0,
 		},
 		{
 			name: "ignores primary nodes",
-			analysis: &store.ReplicationAnalysis{
-				PoolerID:               &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "primary1"},
-				ShardKey:               commontypes.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"},
-				PoolerType:             clustermetadatapb.PoolerType_PRIMARY,
-				IsPrimary:              true,
-				IsInitialized:          true,
-				IsInPrimaryStandbyList: false,
+			poolers: []*PoolerState{
+				{
+					ID:             primaryID,
+					IsPrimary:      true,
+					IsInitialized:  true,
+					LastCheckValid: true,
+					Type:           clustermetadatapb.PoolerType_PRIMARY,
+					Health: &multiorchdatapb.PoolerHealthState{
+						IsPostgresRunning: true,
+					},
+				},
 			},
-			expectProblem: false,
+			expectCount: 0,
 		},
 		{
 			name: "ignores uninitialized replica",
-			analysis: &store.ReplicationAnalysis{
-				PoolerID:               &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica1"},
-				ShardKey:               commontypes.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"},
-				PoolerType:             clustermetadatapb.PoolerType_REPLICA,
-				IsPrimary:              false,
-				IsInitialized:          false,
-				IsInPrimaryStandbyList: false,
+			poolers: []*PoolerState{
+				makePrimaryState(nil),
+				{
+					ID:            replica1ID,
+					IsPrimary:     false,
+					IsInitialized: false, // Not initialized
+					Type:          clustermetadatapb.PoolerType_REPLICA,
+					Health: &multiorchdatapb.PoolerHealthState{
+						ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
+							PrimaryConnInfo: &multipoolermanagerdatapb.PrimaryConnInfo{Host: "primary.example.com"},
+						},
+					},
+				},
 			},
-			expectProblem: false,
+			expectCount: 0,
 		},
 		{
 			name: "ignores replica when primary is unreachable",
-			analysis: &store.ReplicationAnalysis{
-				PoolerID:               &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica1"},
-				ShardKey:               commontypes.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"},
-				PoolerType:             clustermetadatapb.PoolerType_REPLICA,
-				IsPrimary:              false,
-				IsInitialized:          true,
-				PrimaryPoolerID:        &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "primary1"},
-				PrimaryReachable:       false,
-				PrimaryConnInfoHost:    "primary.example.com",
-				IsInPrimaryStandbyList: false,
+			poolers: []*PoolerState{
+				{
+					ID:             primaryID,
+					IsPrimary:      true,
+					IsInitialized:  true,
+					LastCheckValid: false, // Unreachable
+					Health:         &multiorchdatapb.PoolerHealthState{},
+				},
+				makeReplicaState(replica1ID),
 			},
-			expectProblem: false,
+			expectCount: 0,
 		},
 		{
 			name: "ignores replica with no replication configured",
-			analysis: &store.ReplicationAnalysis{
-				PoolerID:               &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica1"},
-				ShardKey:               commontypes.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"},
-				PoolerType:             clustermetadatapb.PoolerType_REPLICA,
-				IsPrimary:              false,
-				IsInitialized:          true,
-				PrimaryPoolerID:        &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "primary1"},
-				PrimaryReachable:       true,
-				PrimaryConnInfoHost:    "",
-				IsInPrimaryStandbyList: false,
+			poolers: []*PoolerState{
+				makePrimaryState(nil),
+				{
+					ID:            replica1ID,
+					IsPrimary:     false,
+					IsInitialized: true,
+					Type:          clustermetadatapb.PoolerType_REPLICA,
+					Health: &multiorchdatapb.PoolerHealthState{
+						ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
+							PrimaryConnInfo: &multipoolermanagerdatapb.PrimaryConnInfo{Host: ""}, // No conninfo
+						},
+					},
+				},
 			},
-			expectProblem: false,
+			expectCount: 0,
 		},
 		{
 			name: "ignores UNKNOWN pooler type",
-			analysis: &store.ReplicationAnalysis{
-				PoolerID:               &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "unknown1"},
-				ShardKey:               commontypes.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"},
-				PoolerType:             clustermetadatapb.PoolerType_UNKNOWN,
-				IsPrimary:              false,
-				IsInitialized:          true,
-				PrimaryPoolerID:        &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "primary1"},
-				PrimaryReachable:       true,
-				PrimaryConnInfoHost:    "primary.example.com",
-				IsInPrimaryStandbyList: false,
+			poolers: []*PoolerState{
+				makePrimaryState(nil),
+				{
+					ID:            replica1ID,
+					IsPrimary:     false,
+					IsInitialized: true,
+					Type:          clustermetadatapb.PoolerType_UNKNOWN, // Unknown type
+					Health: &multiorchdatapb.PoolerHealthState{
+						ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
+							PrimaryConnInfo: &multipoolermanagerdatapb.PrimaryConnInfo{Host: "primary.example.com"},
+						},
+					},
+				},
 			},
-			expectProblem: false,
+			expectCount: 0,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			problem, err := analyzer.Analyze(tt.analysis)
+			shard := &ShardAnalysis{ShardKey: shardKey, Poolers: tt.poolers}
+			problems, err := analyzer.Analyze(shard)
 			require.NoError(t, err)
 
-			if tt.expectProblem {
-				require.NotNil(t, problem)
-				require.Equal(t, tt.expectedCode, problem.Code)
-				require.Equal(t, tt.expectedScope, problem.Scope)
-				require.Equal(t, tt.expectedPrio, problem.Priority)
-				require.NotNil(t, problem.RecoveryAction)
+			if tt.expectCount > 0 {
+				require.Len(t, problems, tt.expectCount)
+				require.Equal(t, tt.expectedCode, problems[0].Code)
+				require.Equal(t, tt.expectedScope, problems[0].Scope)
+				require.Equal(t, tt.expectedPrio, problems[0].Priority)
+				require.NotNil(t, problems[0].RecoveryAction)
 			} else {
-				require.Nil(t, problem)
+				require.Empty(t, problems)
 			}
 		})
 	}
 
-	t.Run("returns error when factory is nil", func(t *testing.T) {
-		nilFactoryAnalyzer := &ReplicaNotInStandbyListAnalyzer{factory: nil}
-		analysis := &store.ReplicationAnalysis{
-			PoolerID:               &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica1"},
-			ShardKey:               commontypes.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"},
-			PoolerType:             clustermetadatapb.PoolerType_REPLICA,
-			IsPrimary:              false,
-			IsInitialized:          true,
-			PrimaryPoolerID:        &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "primary1"},
-			PrimaryReachable:       true,
-			PrimaryConnInfoHost:    "primary.example.com",
-			IsInPrimaryStandbyList: false,
+	t.Run("detects multiple replicas not in standby list", func(t *testing.T) {
+		replica2ID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica2"}
+		shard := &ShardAnalysis{
+			ShardKey: shardKey,
+			Poolers: []*PoolerState{
+				makePrimaryState(nil), // Neither replica in standby list
+				makeReplicaState(replica1ID),
+				makeReplicaState(replica2ID),
+			},
 		}
 
-		problem, err := nilFactoryAnalyzer.Analyze(analysis)
+		problems, err := analyzer.Analyze(shard)
+		require.NoError(t, err)
+		require.Len(t, problems, 2, "should detect both replicas missing from standby list")
+	})
+
+	t.Run("returns error when factory is nil", func(t *testing.T) {
+		nilFactoryAnalyzer := &ReplicaNotInStandbyListAnalyzer{factory: nil}
+		shard := &ShardAnalysis{ShardKey: shardKey}
+
+		_, err := nilFactoryAnalyzer.Analyze(shard)
 		require.Error(t, err)
-		require.Nil(t, problem)
 		require.Contains(t, err.Error(), "factory not initialized")
 	})
 }

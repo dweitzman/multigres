@@ -35,7 +35,6 @@ import (
 	"github.com/multigres/multigres/go/services/multiorch/config"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/analysis"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
-	"github.com/multigres/multigres/go/services/multiorch/store"
 	"github.com/multigres/multigres/go/tools/telemetry"
 
 	commontypes "github.com/multigres/multigres/go/common/types"
@@ -47,7 +46,7 @@ import (
 
 // customAnalyzer is a test analyzer that can use a custom analyze function.
 type customAnalyzer struct {
-	analyzeFn      func(*store.ReplicationAnalysis) *types.Problem
+	analyzeFn      func(*analysis.ShardAnalysis) []*types.Problem
 	name           string
 	problemCode    types.ProblemCode
 	recoveryAction types.RecoveryAction
@@ -65,8 +64,8 @@ func (c *customAnalyzer) RecoveryAction() types.RecoveryAction {
 	return c.recoveryAction
 }
 
-func (c *customAnalyzer) Analyze(a *store.ReplicationAnalysis) (*types.Problem, error) {
-	return c.analyzeFn(a), nil
+func (c *customAnalyzer) Analyze(shard *analysis.ShardAnalysis) ([]*types.Problem, error) {
+	return c.analyzeFn(shard), nil
 }
 
 // trackingRecoveryAction is a test recovery action that tracks execution order.
@@ -356,7 +355,7 @@ func TestRecheckProblem_PoolerNotFound(t *testing.T) {
 
 	require.Error(t, err, "should return error when pooler not found")
 	assert.False(t, stillExists)
-	assert.Contains(t, err.Error(), "pooler not found in store")
+	assert.Contains(t, err.Error(), "shard not found")
 }
 
 // TestFilterAndPrioritize_ShardWideOnly tests that when shard-wide problems exist,
@@ -566,20 +565,21 @@ func (m *mockPrimaryDeadAnalyzer) RecoveryAction() types.RecoveryAction {
 	return m.recoveryAction
 }
 
-func (m *mockPrimaryDeadAnalyzer) Analyze(a *store.ReplicationAnalysis) (*types.Problem, error) {
-	// Detect if this is a primary that is unreachable
-	if a.IsPrimary && !a.LastCheckValid {
-		return &types.Problem{
-			Code:           types.ProblemPrimaryIsDead,
-			CheckName:      m.Name(),
-			PoolerID:       a.PoolerID,
-			ShardKey:       a.ShardKey,
-			Priority:       types.PriorityEmergency,
-			Scope:          types.ScopeShard,
-			RecoveryAction: m.recoveryAction,
-			DetectedAt:     time.Now(),
-			Description:    "Primary is unreachable",
-		}, nil
+func (m *mockPrimaryDeadAnalyzer) Analyze(shard *analysis.ShardAnalysis) ([]*types.Problem, error) {
+	for _, ps := range shard.Poolers {
+		if ps.IsPrimary && !ps.LastCheckValid {
+			return []*types.Problem{{
+				Code:           types.ProblemPrimaryIsDead,
+				CheckName:      m.Name(),
+				PoolerID:       ps.ID,
+				ShardKey:       shard.ShardKey,
+				Priority:       types.PriorityEmergency,
+				Scope:          types.ScopeShard,
+				RecoveryAction: m.recoveryAction,
+				DetectedAt:     time.Now(),
+				Description:    "Primary is unreachable",
+			}}, nil
+		}
 	}
 	return nil, nil
 }
@@ -601,22 +601,24 @@ func (m *mockReplicaNotReplicatingAnalyzer) RecoveryAction() types.RecoveryActio
 	return m.recoveryAction
 }
 
-func (m *mockReplicaNotReplicatingAnalyzer) Analyze(a *store.ReplicationAnalysis) (*types.Problem, error) {
-	// Detect if this is a replica with replication stopped
-	if !a.IsPrimary && a.IsWalReplayPaused {
-		return &types.Problem{
-			Code:           types.ProblemReplicaNotReplicating,
-			CheckName:      m.Name(),
-			PoolerID:       a.PoolerID,
-			ShardKey:       a.ShardKey,
-			Priority:       types.PriorityHigh,
-			Scope:          types.ScopePooler,
-			RecoveryAction: m.recoveryAction,
-			DetectedAt:     time.Now(),
-			Description:    "Replica replication is paused",
-		}, nil
+func (m *mockReplicaNotReplicatingAnalyzer) Analyze(shard *analysis.ShardAnalysis) ([]*types.Problem, error) {
+	var problems []*types.Problem
+	for _, ps := range shard.Poolers {
+		if !ps.IsPrimary && ps.Health != nil && ps.Health.ReplicationStatus != nil && ps.Health.ReplicationStatus.IsWalReplayPaused {
+			problems = append(problems, &types.Problem{
+				Code:           types.ProblemReplicaNotReplicating,
+				CheckName:      m.Name(),
+				PoolerID:       ps.ID,
+				ShardKey:       shard.ShardKey,
+				Priority:       types.PriorityHigh,
+				Scope:          types.ScopePooler,
+				RecoveryAction: m.recoveryAction,
+				DetectedAt:     time.Now(),
+				Description:    "Replica replication is paused",
+			})
+		}
 	}
-	return nil, nil
+	return problems, nil
 }
 
 // TestProcessShardProblems_DependencyEnforcement tests the full flow of
@@ -742,17 +744,17 @@ func TestProcessShardProblems_DependencyEnforcement(t *testing.T) {
 
 		// Generate analyses from the store
 		generator := analysis.NewAnalysisGenerator(engine.poolerStore)
-		analyses := generator.GenerateAnalyses()
+		analyses := generator.GenerateShardAnalyses()
 
 		// Run analyzers to detect problems
 		var problems []types.Problem
 		analyzers := analysis.DefaultAnalyzers(engine.actionFactory)
-		for _, poolerAnalysis := range analyses {
+		for _, shardAnalysis := range analyses {
 			for _, analyzer := range analyzers {
-				problem, err := analyzer.Analyze(poolerAnalysis)
+				detected, err := analyzer.Analyze(shardAnalysis)
 				require.NoError(t, err)
-				if problem != nil {
-					problems = append(problems, *problem)
+				for _, p := range detected {
+					problems = append(problems, *p)
 				}
 			}
 		}
@@ -816,17 +818,17 @@ func TestProcessShardProblems_DependencyEnforcement(t *testing.T) {
 
 		// Generate analyses from the store
 		generator := analysis.NewAnalysisGenerator(engine.poolerStore)
-		analyses := generator.GenerateAnalyses()
+		analyses := generator.GenerateShardAnalyses()
 
 		// Run analyzers to detect problems
 		var problems []types.Problem
 		analyzers := analysis.DefaultAnalyzers(engine.actionFactory)
-		for _, poolerAnalysis := range analyses {
+		for _, shardAnalysis := range analyses {
 			for _, analyzer := range analyzers {
-				problem, err := analyzer.Analyze(poolerAnalysis)
+				detected, err := analyzer.Analyze(shardAnalysis)
 				require.NoError(t, err)
-				if problem != nil {
-					problems = append(problems, *problem)
+				for _, p := range detected {
+					problems = append(problems, *p)
 				}
 			}
 		}
@@ -922,16 +924,16 @@ func TestRecoveryLoop_ValidationPreventsStaleRecovery(t *testing.T) {
 
 	// Generate initial analysis - problem should be detected
 	generator := analysis.NewAnalysisGenerator(engine.poolerStore)
-	analyses := generator.GenerateAnalyses()
+	analyses := generator.GenerateShardAnalyses()
 
 	var problems []types.Problem
 	analyzers := analysis.DefaultAnalyzers(engine.actionFactory)
-	for _, poolerAnalysis := range analyses {
+	for _, shardAnalysis := range analyses {
 		for _, analyzer := range analyzers {
-			problem, err := analyzer.Analyze(poolerAnalysis)
+			detected, err := analyzer.Analyze(shardAnalysis)
 			require.NoError(t, err)
-			if problem != nil {
-				problems = append(problems, *problem)
+			for _, p := range detected {
+				problems = append(problems, *p)
 			}
 		}
 	}
@@ -1111,16 +1113,16 @@ func TestRecoveryLoop_PostRecoveryRefresh(t *testing.T) {
 
 	// Generate analysis and detect problem
 	generator := analysis.NewAnalysisGenerator(engine.poolerStore)
-	analyses := generator.GenerateAnalyses()
+	analyses := generator.GenerateShardAnalyses()
 
 	var problems []types.Problem
 	analyzers := analysis.DefaultAnalyzers(engine.actionFactory)
-	for _, poolerAnalysis := range analyses {
+	for _, shardAnalysis := range analyses {
 		for _, analyzer := range analyzers {
-			problem, err := analyzer.Analyze(poolerAnalysis)
+			detected, err := analyzer.Analyze(shardAnalysis)
 			require.NoError(t, err)
-			if problem != nil {
-				problems = append(problems, *problem)
+			for _, p := range detected {
+				problems = append(problems, *p)
 			}
 		}
 	}
@@ -1394,22 +1396,32 @@ func TestRecoveryLoop_PriorityOrdering(t *testing.T) {
 	}
 
 	// Create three separate analyzers, each detecting a problem with different priority
-	normalAnalyzer := &customAnalyzer{
-		analyzeFn: func(a *store.ReplicationAnalysis) *types.Problem {
-			if !a.IsPrimary && a.IsWalReplayPaused {
-				return &types.Problem{
-					Code:           types.ProblemReplicaNotReplicating,
-					CheckName:      "NormalPriorityAnalyzer",
-					PoolerID:       a.PoolerID,
-					ShardKey:       a.ShardKey,
-					Priority:       types.PriorityNormal,
-					Scope:          types.ScopePooler,
-					RecoveryAction: normalRecovery,
-					DetectedAt:     time.Now(),
-					Description:    "Normal priority problem",
-				}
+	walReplayPausedReplica := func(shard *analysis.ShardAnalysis) *analysis.PoolerState {
+		for _, ps := range shard.Poolers {
+			if !ps.IsPrimary && ps.Health != nil && ps.Health.ReplicationStatus != nil && ps.Health.ReplicationStatus.IsWalReplayPaused {
+				return ps
 			}
-			return nil
+		}
+		return nil
+	}
+
+	normalAnalyzer := &customAnalyzer{
+		analyzeFn: func(shard *analysis.ShardAnalysis) []*types.Problem {
+			ps := walReplayPausedReplica(shard)
+			if ps == nil {
+				return nil
+			}
+			return []*types.Problem{{
+				Code:           types.ProblemReplicaNotReplicating,
+				CheckName:      "NormalPriorityAnalyzer",
+				PoolerID:       ps.ID,
+				ShardKey:       shard.ShardKey,
+				Priority:       types.PriorityNormal,
+				Scope:          types.ScopePooler,
+				RecoveryAction: normalRecovery,
+				DetectedAt:     time.Now(),
+				Description:    "Normal priority problem",
+			}}
 		},
 		name:           "NormalPriorityAnalyzer",
 		problemCode:    types.ProblemReplicaNotReplicating,
@@ -1417,21 +1429,22 @@ func TestRecoveryLoop_PriorityOrdering(t *testing.T) {
 	}
 
 	emergencyAnalyzer := &customAnalyzer{
-		analyzeFn: func(a *store.ReplicationAnalysis) *types.Problem {
-			if !a.IsPrimary && a.IsWalReplayPaused {
-				return &types.Problem{
-					Code:           types.ProblemReplicaNotReplicating,
-					CheckName:      "EmergencyPriorityAnalyzer",
-					PoolerID:       a.PoolerID,
-					ShardKey:       a.ShardKey,
-					Priority:       types.PriorityEmergency,
-					Scope:          types.ScopePooler,
-					RecoveryAction: emergencyRecovery,
-					DetectedAt:     time.Now(),
-					Description:    "Emergency priority problem",
-				}
+		analyzeFn: func(shard *analysis.ShardAnalysis) []*types.Problem {
+			ps := walReplayPausedReplica(shard)
+			if ps == nil {
+				return nil
 			}
-			return nil
+			return []*types.Problem{{
+				Code:           types.ProblemReplicaNotReplicating,
+				CheckName:      "EmergencyPriorityAnalyzer",
+				PoolerID:       ps.ID,
+				ShardKey:       shard.ShardKey,
+				Priority:       types.PriorityEmergency,
+				Scope:          types.ScopePooler,
+				RecoveryAction: emergencyRecovery,
+				DetectedAt:     time.Now(),
+				Description:    "Emergency priority problem",
+			}}
 		},
 		name:           "EmergencyPriorityAnalyzer",
 		problemCode:    types.ProblemReplicaNotReplicating,
@@ -1439,21 +1452,22 @@ func TestRecoveryLoop_PriorityOrdering(t *testing.T) {
 	}
 
 	highAnalyzer := &customAnalyzer{
-		analyzeFn: func(a *store.ReplicationAnalysis) *types.Problem {
-			if !a.IsPrimary && a.IsWalReplayPaused {
-				return &types.Problem{
-					Code:           types.ProblemReplicaNotReplicating,
-					CheckName:      "HighPriorityAnalyzer",
-					PoolerID:       a.PoolerID,
-					ShardKey:       a.ShardKey,
-					Priority:       types.PriorityHigh,
-					Scope:          types.ScopePooler,
-					RecoveryAction: highRecovery,
-					DetectedAt:     time.Now(),
-					Description:    "High priority problem",
-				}
+		analyzeFn: func(shard *analysis.ShardAnalysis) []*types.Problem {
+			ps := walReplayPausedReplica(shard)
+			if ps == nil {
+				return nil
 			}
-			return nil
+			return []*types.Problem{{
+				Code:           types.ProblemReplicaNotReplicating,
+				CheckName:      "HighPriorityAnalyzer",
+				PoolerID:       ps.ID,
+				ShardKey:       shard.ShardKey,
+				Priority:       types.PriorityHigh,
+				Scope:          types.ScopePooler,
+				RecoveryAction: highRecovery,
+				DetectedAt:     time.Now(),
+				Description:    "High priority problem",
+			}}
 		},
 		name:           "HighPriorityAnalyzer",
 		problemCode:    types.ProblemReplicaNotReplicating,
@@ -1483,16 +1497,16 @@ func TestRecoveryLoop_PriorityOrdering(t *testing.T) {
 
 	// Generate problems
 	generator := analysis.NewAnalysisGenerator(engine.poolerStore)
-	analyses := generator.GenerateAnalyses()
+	analyses := generator.GenerateShardAnalyses()
 
 	var problems []types.Problem
 	analyzers := analysis.DefaultAnalyzers(engine.actionFactory)
-	for _, poolerAnalysis := range analyses {
+	for _, shardAnalysis := range analyses {
 		for _, analyzer := range analyzers {
-			problem, err := analyzer.Analyze(poolerAnalysis)
+			detected, err := analyzer.Analyze(shardAnalysis)
 			require.NoError(t, err)
-			if problem != nil {
-				problems = append(problems, *problem)
+			for _, p := range detected {
+				problems = append(problems, *p)
 			}
 		}
 	}
@@ -1567,19 +1581,20 @@ func TestRecoveryLoop_TracingSpans(t *testing.T) {
 		Name:      "replica-pooler",
 	}
 
-	analyzeFunc := func(a *store.ReplicationAnalysis) *types.Problem {
-		// Detect replica with paused WAL replay
-		if !a.IsPrimary && a.IsWalReplayPaused {
-			return &types.Problem{
-				Code:           types.ProblemReplicaNotReplicating,
-				CheckName:      "TracingTestAnalyzer",
-				PoolerID:       a.PoolerID,
-				ShardKey:       a.ShardKey,
-				Scope:          types.ScopePooler,
-				Priority:       types.PriorityHigh,
-				RecoveryAction: successAction,
-				DetectedAt:     time.Now(),
-				Description:    "Test problem for span verification",
+	analyzeFunc := func(shard *analysis.ShardAnalysis) []*types.Problem {
+		for _, ps := range shard.Poolers {
+			if !ps.IsPrimary && ps.Health != nil && ps.Health.ReplicationStatus != nil && ps.Health.ReplicationStatus.IsWalReplayPaused {
+				return []*types.Problem{{
+					Code:           types.ProblemReplicaNotReplicating,
+					CheckName:      "TracingTestAnalyzer",
+					PoolerID:       ps.ID,
+					ShardKey:       shard.ShardKey,
+					Scope:          types.ScopePooler,
+					Priority:       types.PriorityHigh,
+					RecoveryAction: successAction,
+					DetectedAt:     time.Now(),
+					Description:    "Test problem for span verification",
+				}}
 			}
 		}
 		return nil
@@ -1766,24 +1781,23 @@ func TestRecoveryLoop_GracePeriodIntegration(t *testing.T) {
 	// This tests that observing works correctly even when different poolers
 	// in the same shard return different results
 	analyzer := &customAnalyzer{
-		analyzeFn: func(a *store.ReplicationAnalysis) *types.Problem {
-			// Only detect problem for replica (not primary)
-			// This simulates realistic scenario where problem detection
-			// varies by pooler but should still trigger grace period
-			if a.PoolerID != nil && a.PoolerID.Name == "replica-pooler" {
-				return &types.Problem{
-					Code:           testProblemCode,
-					CheckName:      "TestGracePeriodAnalyzer",
-					PoolerID:       a.PoolerID,
-					ShardKey:       a.ShardKey,
-					Priority:       types.PriorityEmergency,
-					Scope:          types.ScopeShard,
-					RecoveryAction: mockAction,
-					DetectedAt:     time.Now(),
-					Description:    "Test problem for grace period",
+		analyzeFn: func(shard *analysis.ShardAnalysis) []*types.Problem {
+			for _, ps := range shard.Poolers {
+				if ps.ID != nil && ps.ID.Name == "replica-pooler" {
+					return []*types.Problem{{
+						Code:           testProblemCode,
+						CheckName:      "TestGracePeriodAnalyzer",
+						PoolerID:       ps.ID,
+						ShardKey:       shard.ShardKey,
+						Priority:       types.PriorityEmergency,
+						Scope:          types.ScopeShard,
+						RecoveryAction: mockAction,
+						DetectedAt:     time.Now(),
+						Description:    "Test problem for grace period",
+					}}
 				}
 			}
-			return nil // Primary doesn't detect the problem
+			return nil
 		},
 		name:           "TestGracePeriodAnalyzer",
 		problemCode:    testProblemCode,
@@ -1894,18 +1908,23 @@ func TestRecoveryLoop_DeadlineResetAfterSuccess(t *testing.T) {
 
 	// Create custom analyzer that can toggle problem detection
 	analyzer := &customAnalyzer{
-		analyzeFn: func(a *store.ReplicationAnalysis) *types.Problem {
-			if a.PoolerID != nil && a.PoolerID.Name == "replica-pooler" && problemDetected {
-				return &types.Problem{
-					Code:           testProblemCode,
-					CheckName:      "TestDeadlineResetAnalyzer",
-					PoolerID:       a.PoolerID,
-					ShardKey:       a.ShardKey,
-					Priority:       types.PriorityNormal,
-					Scope:          types.ScopePooler,
-					RecoveryAction: mockAction,
-					DetectedAt:     time.Now(),
-					Description:    "Test problem for deadline reset after success",
+		analyzeFn: func(shard *analysis.ShardAnalysis) []*types.Problem {
+			if !problemDetected {
+				return nil
+			}
+			for _, ps := range shard.Poolers {
+				if ps.ID != nil && ps.ID.Name == "replica-pooler" {
+					return []*types.Problem{{
+						Code:           testProblemCode,
+						CheckName:      "TestDeadlineResetAnalyzer",
+						PoolerID:       ps.ID,
+						ShardKey:       shard.ShardKey,
+						Priority:       types.PriorityNormal,
+						Scope:          types.ScopePooler,
+						RecoveryAction: mockAction,
+						DetectedAt:     time.Now(),
+						Description:    "Test problem for deadline reset after success",
+					}}
 				}
 			}
 			return nil
@@ -2095,22 +2114,24 @@ func TestRecoveryLoop_PerPoolerGracePeriod(t *testing.T) {
 
 	// Create custom analyzer that detects the problem for both replicas
 	analyzer := &customAnalyzer{
-		analyzeFn: func(a *store.ReplicationAnalysis) *types.Problem {
-			// Detect problem for both replicas (not primary)
-			if a.PoolerID != nil && (a.PoolerID.Name == "replica1-pooler" || a.PoolerID.Name == "replica2-pooler") {
-				return &types.Problem{
-					Code:           testProblemCode,
-					CheckName:      "TestPerPoolerGracePeriodAnalyzer",
-					PoolerID:       a.PoolerID,
-					ShardKey:       a.ShardKey,
-					Priority:       types.PriorityNormal,
-					Scope:          types.ScopePooler, // Pooler-specific problem
-					RecoveryAction: mockAction,
-					DetectedAt:     time.Now(),
-					Description:    "Test problem for per-pooler grace period",
+		analyzeFn: func(shard *analysis.ShardAnalysis) []*types.Problem {
+			var problems []*types.Problem
+			for _, ps := range shard.Poolers {
+				if ps.ID != nil && (ps.ID.Name == "replica1-pooler" || ps.ID.Name == "replica2-pooler") {
+					problems = append(problems, &types.Problem{
+						Code:           testProblemCode,
+						CheckName:      "TestPerPoolerGracePeriodAnalyzer",
+						PoolerID:       ps.ID,
+						ShardKey:       shard.ShardKey,
+						Priority:       types.PriorityNormal,
+						Scope:          types.ScopePooler,
+						RecoveryAction: mockAction,
+						DetectedAt:     time.Now(),
+						Description:    "Test problem for per-pooler grace period",
+					})
 				}
 			}
-			return nil // Primary doesn't detect the problem
+			return problems
 		},
 		name:           "TestPerPoolerGracePeriodAnalyzer",
 		problemCode:    testProblemCode,

@@ -20,12 +20,11 @@ import (
 	"time"
 
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
-	"github.com/multigres/multigres/go/services/multiorch/store"
 )
 
-// ShardNeedsBootstrapAnalyzer detects when all nodes in a shard are uninitialized.
-// This is a per-pooler analyzer that returns a shard-wide problem.
-// The recovery loop's filterAndPrioritize() will deduplicate multiple instances.
+// ShardNeedsBootstrapAnalyzer detects when a shard has no initialized nodes and no primary.
+// This is a shard-scoped analyzer: it evaluates the full shard once and returns at most
+// one problem. PoolerID is nil because the problem belongs to the shard as a whole.
 type ShardNeedsBootstrapAnalyzer struct {
 	factory *RecoveryActionFactory
 }
@@ -42,59 +41,46 @@ func (a *ShardNeedsBootstrapAnalyzer) RecoveryAction() types.RecoveryAction {
 	return a.factory.NewBootstrapShardAction()
 }
 
-func (a *ShardNeedsBootstrapAnalyzer) Analyze(poolerAnalysis *store.ReplicationAnalysis) (*types.Problem, error) {
-	// Skip unreachable nodes - we can't determine their true initialization state.
-	// An unreachable node might be perfectly initialized but just temporarily down.
-	// PrimaryIsDead analyzer will handle dead primaries.
-	if !poolerAnalysis.LastCheckValid {
+func (a *ShardNeedsBootstrapAnalyzer) Analyze(shard *ShardAnalysis) ([]*types.Problem, error) {
+	if a.factory == nil {
+		return nil, errors.New("recovery action factory not initialized")
+	}
+
+	// If the shard has a primary, bootstrap is not needed.
+	// A dead primary is handled by PrimaryIsDead; a crashed primary's postgres
+	// appearing as IsPrimary=true / IsInitialized=false is not a bootstrap case.
+	if shard.FindPrimary() != nil {
 		return nil, nil
 	}
 
-	// Skip primary nodes - they don't have a PrimaryPoolerID by design (they ARE the primary).
-	// A dead primary should be handled by PrimaryIsDead (detected by replicas), not by
-	// ShardNeedsBootstrap. When a primary's postgres dies, it appears as:
-	// - IsPrimary = true (it's the primary)
-	// - IsInitialized = false (postgres down, can't get LSN)
-	// - PrimaryPoolerID = nil (it's the primary itself)
-	// This would incorrectly trigger ShardNeedsBootstrap if we don't skip it.
-	// Always skip primary nodes regardless of initialization state - if a primary's postgres
-	// crashes, PrimaryIsDead will handle it (detected by replicas).
-	if poolerAnalysis.IsPrimary {
-		return nil, nil
-	}
-
-	// Skip if node has a data directory - it was initialized at some point.
-	// HasDataDirectory (presence of PG_VERSION file) is the canonical signal for
-	// "was ever initialized", regardless of pooler type.
-	// This allows poolers to start as REPLICA type while still detecting
-	// fresh poolers that need bootstrap.
-	if poolerAnalysis.HasDataDirectory {
-		return nil, nil
-	}
-
-	// Only analyze if this pooler is uninitialized
-	if poolerAnalysis.IsInitialized {
-		return nil, nil
-	}
-
-	// If this pooler is uninitialized AND there's no primary in the shard,
-	// then the whole shard likely needs bootstrap
-	if poolerAnalysis.PrimaryPoolerID == nil {
-		if a.factory == nil {
-			return nil, errors.New("recovery action factory not initialized")
+	// Check whether any reachable replica needs bootstrap. A replica needs bootstrap when:
+	// - Its health check is valid (we can trust what it reports)
+	// - It has no data directory (PG_VERSION absent — never been initialized)
+	// - It is not initialized (postgres not running and reporting state)
+	//
+	// HasDataDirectory is the canonical "was ever initialized" signal regardless of
+	// pooler type, so we skip replicas that have data even if IsInitialized is false.
+	for _, ps := range shard.Poolers {
+		if ps.IsPrimary {
+			continue
 		}
-
-		return &types.Problem{
+		if !ps.LastCheckValid {
+			continue // can't trust the state of unreachable nodes
+		}
+		if ps.HasDataDirectory || ps.IsInitialized {
+			continue
+		}
+		return []*types.Problem{{
 			Code:           types.ProblemShardNeedsBootstrap,
 			CheckName:      "ShardNeedsBootstrap",
-			PoolerID:       poolerAnalysis.PoolerID,
-			ShardKey:       poolerAnalysis.ShardKey,
-			Description:    fmt.Sprintf("Shard %s has no initialized nodes and needs bootstrap", poolerAnalysis.ShardKey),
+			PoolerID:       nil, // shard-scoped: no single pooler owns this problem
+			ShardKey:       shard.ShardKey,
+			Description:    fmt.Sprintf("Shard %s has no initialized nodes and needs bootstrap", shard.ShardKey),
 			Priority:       types.PriorityShardBootstrap,
 			Scope:          types.ScopeShard,
 			DetectedAt:     time.Now(),
 			RecoveryAction: a.factory.NewBootstrapShardAction(),
-		}, nil
+		}}, nil
 	}
 
 	return nil, nil

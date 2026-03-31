@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/multigres/multigres/go/common/topoclient"
 	commontypes "github.com/multigres/multigres/go/common/types"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
@@ -48,10 +47,11 @@ func NewAnalysisGenerator(poolerStore *store.PoolerStore) *AnalysisGenerator {
 	return g
 }
 
-// GenerateAnalyses creates one ReplicationAnalysis per pooler in the store.
-// This examines the current state and computes derived fields.
-func (g *AnalysisGenerator) GenerateAnalyses() []*store.ReplicationAnalysis {
-	analyses := []*store.ReplicationAnalysis{}
+// GenerateShardAnalyses creates one ShardAnalysis per shard in the store.
+// Each ShardAnalysis contains the full state of all poolers in that shard.
+// Analyzers receive this and compute whatever cross-pooler aggregation they need.
+func (g *AnalysisGenerator) GenerateShardAnalyses() []*ShardAnalysis {
+	var shardAnalyses []*ShardAnalysis
 
 	for database, tableGroups := range g.poolersByShard {
 		for tableGroup, shards := range tableGroups {
@@ -61,15 +61,40 @@ func (g *AnalysisGenerator) GenerateAnalyses() []*store.ReplicationAnalysis {
 					TableGroup: tableGroup,
 					Shard:      shard,
 				}
-				for _, pooler := range poolers {
-					analysis := g.generateAnalysisForPooler(pooler, shardKey)
-					analyses = append(analyses, analysis)
-				}
+				shardAnalyses = append(shardAnalyses, g.buildShardAnalysis(shardKey, poolers))
 			}
 		}
 	}
 
-	return analyses
+	return shardAnalyses
+}
+
+// GenerateShardAnalysis creates a ShardAnalysis for a specific shard.
+// Used for targeted re-analysis (e.g., in recheckProblem) after re-polling poolers.
+func (g *AnalysisGenerator) GenerateShardAnalysis(shardKey commontypes.ShardKey) (*ShardAnalysis, error) {
+	poolers, ok := g.poolersByShard[shardKey.Database][shardKey.TableGroup][shardKey.Shard]
+	if !ok {
+		return nil, fmt.Errorf("shard not found: %s", shardKey)
+	}
+	return g.buildShardAnalysis(shardKey, poolers), nil
+}
+
+// buildShardAnalysis constructs a ShardAnalysis from a map of pooler health states.
+func (g *AnalysisGenerator) buildShardAnalysis(
+	shardKey commontypes.ShardKey,
+	poolers map[string]*multiorchdatapb.PoolerHealthState,
+) *ShardAnalysis {
+	shard := &ShardAnalysis{
+		ShardKey:   shardKey,
+		AnalyzedAt: time.Now(),
+	}
+	for _, pooler := range poolers {
+		if pooler == nil || pooler.MultiPooler == nil || pooler.MultiPooler.Id == nil {
+			continue
+		}
+		shard.Poolers = append(shard.Poolers, buildPoolerState(pooler))
+	}
+	return shard
 }
 
 // buildPoolersByShard creates a structured map by iterating the store once.
@@ -105,511 +130,34 @@ func (g *AnalysisGenerator) buildPoolersByShard() PoolersByShard {
 	return poolersByShard
 }
 
-// GetPoolersInShard returns all pooler IDs in the same shard as the given pooler.
-// Uses the cached poolersByShard for efficient lookup.
-func (g *AnalysisGenerator) GetPoolersInShard(poolerIDStr string) ([]string, error) {
-	// Get pooler from store to determine its shard
-	pooler, ok := g.poolerStore.Get(poolerIDStr)
-	if !ok {
-		return nil, fmt.Errorf("pooler not found in store: %s", poolerIDStr)
-	}
-
-	if pooler == nil || pooler.MultiPooler == nil || pooler.MultiPooler.Id == nil {
-		return nil, fmt.Errorf("pooler or ID is nil: %s", poolerIDStr)
-	}
-
-	database := pooler.MultiPooler.Database
-	tableGroup := pooler.MultiPooler.TableGroup
-	shard := pooler.MultiPooler.Shard
-
-	// Use cached poolersByShard for efficient lookup
-	poolers, ok := g.poolersByShard[database][tableGroup][shard]
-	if !ok {
-		return []string{}, nil
-	}
-
-	poolerIDs := make([]string, 0, len(poolers))
-	for id := range poolers {
-		poolerIDs = append(poolerIDs, id)
-	}
-
-	return poolerIDs, nil
-}
-
-// GenerateAnalysisForPooler generates analysis for a single pooler using the cached poolersByShard.
-// If fresh data is needed (e.g., after re-polling the store), create a new AnalysisGenerator.
-func (g *AnalysisGenerator) GenerateAnalysisForPooler(poolerIDStr string) (*store.ReplicationAnalysis, error) {
-	// Get pooler from store
-	pooler, ok := g.poolerStore.Get(poolerIDStr)
-	if !ok {
-		return nil, fmt.Errorf("pooler not found in store: %s", poolerIDStr)
-	}
-
-	if pooler == nil || pooler.MultiPooler == nil || pooler.MultiPooler.Id == nil {
-		return nil, fmt.Errorf("pooler or ID is nil: %s", poolerIDStr)
-	}
-
-	// Generate analysis for this specific pooler using the cached poolersByShard.
-	// Note: If fresh data is needed (e.g., after re-polling), create a new AnalysisGenerator.
-	shardKey := commontypes.ShardKey{
-		Database:   pooler.MultiPooler.Database,
-		TableGroup: pooler.MultiPooler.TableGroup,
-		Shard:      pooler.MultiPooler.Shard,
-	}
-	analysis := g.generateAnalysisForPooler(pooler, shardKey)
-
-	return analysis, nil
-}
-
-// generateAnalysisForPooler creates a ReplicationAnalysis for a single pooler.
-func (g *AnalysisGenerator) generateAnalysisForPooler(
-	pooler *multiorchdatapb.PoolerHealthState,
-	shardKey commontypes.ShardKey,
-) *store.ReplicationAnalysis {
-	// Determine pooler type from health check (PoolerType).
-	// Nodes are never created with topology type PRIMARY, so health check is authoritative.
-	// Fall back to topology type only if health check type is UNKNOWN.
+// buildPoolerState constructs a PoolerState from a raw health state.
+// Resolves the pooler type (health check authoritative, topology as fallback) and
+// pre-populates lightweight computed fields to avoid duplication across analyzers.
+func buildPoolerState(pooler *multiorchdatapb.PoolerHealthState) *PoolerState {
+	// Determine pooler type: health check is authoritative since nodes report their
+	// actual running state. Fall back to topology type if health check is UNKNOWN.
 	poolerType := pooler.PoolerType
 	if poolerType == clustermetadatapb.PoolerType_UNKNOWN {
 		poolerType = pooler.MultiPooler.Type
 	}
 
-	analysis := &store.ReplicationAnalysis{
-		PoolerID:             pooler.MultiPooler.Id,
-		ShardKey:             shardKey,
-		PoolerType:           poolerType,
-		CurrentServingStatus: pooler.MultiPooler.ServingStatus,
-		IsPrimary:            poolerType == clustermetadatapb.PoolerType_PRIMARY,
-		LastCheckValid:       pooler.IsLastCheckValid,
-		IsInitialized:        store.IsInitialized(pooler),
-		HasDataDirectory:     pooler.HasDataDirectory,
-		AnalyzedAt:           time.Now(),
+	ps := &PoolerState{
+		Health:           pooler,
+		ID:               pooler.MultiPooler.Id,
+		Type:             poolerType,
+		IsPrimary:        poolerType == clustermetadatapb.PoolerType_PRIMARY,
+		LastCheckValid:   pooler.IsLastCheckValid,
+		IsStale:          !pooler.IsUpToDate,
+		IsInitialized:    store.IsInitialized(pooler),
+		HasDataDirectory: pooler.HasDataDirectory,
 	}
 
-	// Compute staleness
-	analysis.IsStale = !pooler.IsUpToDate
-
-	// Store consensus term for stale primary detection
 	if pooler.ConsensusStatus != nil {
-		analysis.ConsensusTerm = pooler.ConsensusStatus.CurrentTerm
+		ps.ConsensusTerm = pooler.ConsensusStatus.CurrentTerm
 	}
-
-	// Store primary term (term when this pooler was promoted to primary)
 	if pooler.ConsensusTerm != nil {
-		analysis.PrimaryTerm = pooler.ConsensusTerm.PrimaryTerm
+		ps.PrimaryTerm = pooler.ConsensusTerm.PrimaryTerm
 	}
 
-	// If this is a PRIMARY, populate primary-specific fields and aggregate replica stats
-	if analysis.IsPrimary {
-		if pooler.PrimaryStatus != nil {
-			analysis.PrimaryLSN = pooler.PrimaryStatus.Lsn
-			analysis.ReadOnly = !pooler.PrimaryStatus.Ready // Primary not ready = read-only
-		}
-
-		// Aggregate replica stats
-		g.aggregateReplicaStats(pooler, analysis, shardKey)
-
-		// Check for stale primary: look for other PRIMARYs in the same shard
-		g.detectOtherPrimary(analysis, shardKey, pooler)
-	}
-
-	// If this is a REPLICA, populate replica-specific fields
-	if !analysis.IsPrimary {
-		if pooler.ReplicationStatus != nil {
-			rs := pooler.ReplicationStatus
-			analysis.ReplicationStopped = rs.IsWalReplayPaused
-			analysis.IsLagging = rs.Lag != nil && rs.Lag.AsDuration() > DefaultReplicaLagThreshold
-			if rs.Lag != nil {
-				analysis.ReplicaLagMillis = rs.Lag.AsDuration().Milliseconds()
-			}
-			analysis.ReplicaReplayLSN = rs.LastReplayLsn
-			analysis.ReplicaReceiveLSN = rs.LastReceiveLsn
-			analysis.IsWalReplayPaused = rs.IsWalReplayPaused
-			analysis.WalReplayPauseState = rs.WalReplayPauseState
-
-			// Extract primary connection info
-			if rs.PrimaryConnInfo != nil {
-				analysis.PrimaryConnInfoHost = rs.PrimaryConnInfo.Host
-				analysis.PrimaryConnInfoPort = rs.PrimaryConnInfo.Port
-			}
-		}
-
-		// Lookup primary info
-		g.populatePrimaryInfo(analysis, shardKey)
-	}
-
-	return analysis
-}
-
-// aggregateReplicaStats counts replicas pointing to this primary.
-func (g *AnalysisGenerator) aggregateReplicaStats(
-	primary *multiorchdatapb.PoolerHealthState,
-	analysis *store.ReplicationAnalysis,
-	shardKey commontypes.ShardKey,
-) {
-	var countReplicas uint
-	var countReachable uint
-	var countReplicating uint
-	var countLagging uint
-
-	primaryIDStr := topoclient.MultiPoolerIDString(primary.MultiPooler.Id)
-
-	// Get connected followers from primary status
-	var connectedFollowers []*clustermetadatapb.ID
-	if primary.PrimaryStatus != nil {
-		connectedFollowers = primary.PrimaryStatus.ConnectedFollowers
-	}
-
-	// Iterate only over poolers in the same shard (efficient lookup)
-	if poolers, ok := g.poolersByShard[shardKey.Database][shardKey.TableGroup][shardKey.Shard]; ok {
-		for poolerID, pooler := range poolers {
-			if pooler == nil || pooler.MultiPooler == nil || pooler.MultiPooler.Id == nil {
-				continue
-			}
-
-			// Skip the primary itself
-			if poolerID == primaryIDStr {
-				continue
-			}
-
-			// Skip if not a replica - check health check type, fall back to topology
-			replicaType := pooler.PoolerType
-			if replicaType == clustermetadatapb.PoolerType_UNKNOWN {
-				replicaType = pooler.MultiPooler.Type
-			}
-			if replicaType != clustermetadatapb.PoolerType_REPLICA {
-				continue
-			}
-
-			// Check if this replica is pointing to our primary
-			// We do this by checking if primary is in the replica's connected followers
-			// OR by checking primary_conninfo host/port match
-			isPointingToPrimary := false
-			for _, followerID := range connectedFollowers {
-				if topoclient.MultiPoolerIDString(followerID) == poolerID {
-					isPointingToPrimary = true
-					break
-				}
-			}
-
-			// Also check via primary_conninfo if we didn't find it in connected followers
-			if !isPointingToPrimary && pooler.ReplicationStatus != nil && pooler.ReplicationStatus.PrimaryConnInfo != nil {
-				connInfo := pooler.ReplicationStatus.PrimaryConnInfo
-				primaryPort := primary.MultiPooler.PortMap["postgres"]
-				if connInfo.Host == primary.MultiPooler.Hostname && connInfo.Port == primaryPort {
-					isPointingToPrimary = true
-				}
-			}
-
-			if !isPointingToPrimary {
-				continue // not pointing to this primary
-			}
-
-			countReplicas++
-
-			if pooler.IsLastCheckValid {
-				countReachable++
-			}
-
-			// Check if actively replicating (not paused and lag is reasonable)
-			if pooler.IsLastCheckValid && pooler.ReplicationStatus != nil && !pooler.ReplicationStatus.IsWalReplayPaused {
-				countReplicating++
-			}
-
-			// Check if lagging
-			if pooler.ReplicationStatus != nil && pooler.ReplicationStatus.Lag != nil {
-				if pooler.ReplicationStatus.Lag.AsDuration() > DefaultReplicaLagThreshold {
-					countLagging++
-				}
-			}
-		}
-	}
-
-	analysis.CountReplicas = countReplicas
-	analysis.CountReachableReplicas = countReachable
-	analysis.CountReplicatingReplicas = countReplicating
-	analysis.CountLaggingReplicas = countLagging
-}
-
-// populatePrimaryInfo looks up the primary this replica is replicating from.
-func (g *AnalysisGenerator) populatePrimaryInfo(
-	analysis *store.ReplicationAnalysis,
-	shardKey commontypes.ShardKey,
-) {
-	poolers, ok := g.poolersByShard[shardKey.Database][shardKey.TableGroup][shardKey.Shard]
-	if !ok {
-		return
-	}
-
-	// Find the primary with the highest PrimaryTerm in the same shard.
-	// During a failover, two primaries may transiently coexist: the stale old primary
-	// (postgres dead) and the newly elected one (postgres running). Selecting by
-	// PrimaryTerm ensures we always use the most recently elected primary, preventing
-	// PrimaryIsDeadAnalyzer from falsely triggering on the stale one.
-	var primary *multiorchdatapb.PoolerHealthState
-	var highestPrimaryTerm int64
-	for _, pooler := range poolers {
-		if pooler == nil || pooler.MultiPooler == nil || pooler.MultiPooler.Id == nil {
-			continue
-		}
-
-		if pooler.PoolerType != clustermetadatapb.PoolerType_PRIMARY {
-			continue
-		}
-
-		var primaryTerm int64
-		if pooler.ConsensusTerm != nil {
-			primaryTerm = pooler.ConsensusTerm.PrimaryTerm
-		}
-		if primary == nil || primaryTerm > highestPrimaryTerm {
-			primary = pooler
-			highestPrimaryTerm = primaryTerm
-		}
-	}
-
-	if primary == nil {
-		return // no primary found
-	}
-
-	// Found the primary - populate basic fields
-	analysis.PrimaryPoolerID = primary.MultiPooler.Id
-	if primary.LastSeen != nil {
-		analysis.PrimaryTimestamp = primary.LastSeen.AsTime()
-	}
-
-	// Track primary health details separately (for distinguishing pooler-down vs postgres-down)
-	analysis.PrimaryPoolerReachable = primary.IsLastCheckValid
-	analysis.PrimaryPostgresRunning = primary.IsPostgresRunning
-
-	// Primary is reachable only if both pooler is reachable AND Postgres is running
-	analysis.PrimaryReachable = analysis.PrimaryPoolerReachable && analysis.PrimaryPostgresRunning
-
-	// Check if this replica is in the primary's synchronous standby list
-	analysis.IsInPrimaryStandbyList = g.isInStandbyList(analysis.PoolerID, primary)
-
-	// Compute ReplicasConnectedToPrimary: true only if ALL replicas are connected to primary.
-	// When the primary pooler is down but Postgres is still running, replicas remain connected
-	// and we should NOT trigger failover. Instead, the operator should restart the pooler process.
-	analysis.ReplicasConnectedToPrimary = g.allReplicasConnectedToPrimary(primary, poolers)
-}
-
-// isInStandbyList checks if the given pooler ID is in the primary's synchronous standby list.
-func (g *AnalysisGenerator) isInStandbyList(
-	replicaID *clustermetadatapb.ID,
-	primary *multiorchdatapb.PoolerHealthState,
-) bool {
-	if primary.PrimaryStatus == nil || primary.PrimaryStatus.SyncReplicationConfig == nil {
-		return false
-	}
-
-	for _, standbyID := range primary.PrimaryStatus.SyncReplicationConfig.StandbyIds {
-		if standbyID.Cell == replicaID.Cell && standbyID.Name == replicaID.Name {
-			return true
-		}
-	}
-
-	return false
-}
-
-// allReplicasConnectedToPrimary checks if ALL replicas in the shard are connected to the primary.
-// A replica is considered connected if:
-// 1. Its health check is valid (IsLastCheckValid)
-// 2. It has PrimaryConnInfo configured pointing to this primary
-// 3. It has received WAL (LastReceiveLsn is not empty)
-//
-// Returns true only if all replicas meet these criteria.
-// Returns false if there are no replicas or any replica is disconnected.
-func (g *AnalysisGenerator) allReplicasConnectedToPrimary(
-	primary *multiorchdatapb.PoolerHealthState,
-	poolers map[string]*multiorchdatapb.PoolerHealthState,
-) bool {
-	primaryIDStr := topoclient.MultiPoolerIDString(primary.MultiPooler.Id)
-	primaryHost := primary.MultiPooler.Hostname
-	primaryPort := primary.MultiPooler.PortMap["postgres"]
-
-	replicaCount := 0
-	connectedCount := 0
-
-	for poolerID, pooler := range poolers {
-		if pooler == nil || pooler.MultiPooler == nil || pooler.MultiPooler.Id == nil {
-			continue
-		}
-
-		// Skip the primary itself
-		if poolerID == primaryIDStr {
-			continue
-		}
-
-		// Skip non-replicas
-		replicaType := pooler.PoolerType
-		if replicaType == clustermetadatapb.PoolerType_UNKNOWN {
-			replicaType = pooler.MultiPooler.Type
-		}
-		if replicaType != clustermetadatapb.PoolerType_REPLICA {
-			continue
-		}
-
-		replicaCount++
-
-		// Check if replica is connected to the primary
-		if !g.isReplicaConnectedToPrimary(pooler, primaryHost, primaryPort) {
-			continue
-		}
-
-		connectedCount++
-	}
-
-	// All replicas must be connected (and there must be at least one replica)
-	return replicaCount > 0 && connectedCount == replicaCount
-}
-
-// isReplicaConnectedToPrimary checks if a single replica is connected to the primary.
-//
-// TODO: Check heartbeat data timestamp to verify writes are actively flowing through replication.
-// The multigres.heartbeat table is updated periodically on the primary, so checking if the
-// replica's heartbeat timestamp is recent would prove the replication connection is active.
-// Currently we check that LastReceiveLsn is non-empty, but this doesn't prove active connectivity.
-func (g *AnalysisGenerator) isReplicaConnectedToPrimary(
-	replica *multiorchdatapb.PoolerHealthState,
-	primaryHost string,
-	primaryPort int32,
-) bool {
-	// Replica must be reachable
-	if !replica.IsLastCheckValid {
-		return false
-	}
-
-	// Replica must have replication status
-	if replica.ReplicationStatus == nil {
-		return false
-	}
-
-	// Replica must have PrimaryConnInfo pointing to the primary
-	connInfo := replica.ReplicationStatus.PrimaryConnInfo
-	if connInfo == nil || connInfo.Host == "" {
-		return false
-	}
-
-	// Verify the replica is pointing to the correct primary
-	if connInfo.Host != primaryHost || connInfo.Port != primaryPort {
-		return false
-	}
-
-	// Replica must have received WAL (indicates connection was established)
-	if replica.ReplicationStatus.LastReceiveLsn == "" {
-		return false
-	}
-
-	return true
-}
-
-// detectOtherPrimary checks for all other PRIMARYs in the same shard.
-// Populates OtherPrimariesInShard and determines HighestTermPrimary based on PrimaryTerm.
-// This is used to detect stale primaries that came back online after failover.
-func (g *AnalysisGenerator) detectOtherPrimary(
-	analysis *store.ReplicationAnalysis,
-	shardKey commontypes.ShardKey,
-	thisPooler *multiorchdatapb.PoolerHealthState,
-) {
-	poolers, ok := g.poolersByShard[shardKey.Database][shardKey.TableGroup][shardKey.Shard]
-	if !ok {
-		return
-	}
-
-	thisIDStr := topoclient.MultiPoolerIDString(thisPooler.MultiPooler.Id)
-	var otherPrimaries []*store.PrimaryInfo
-
-	// Collect ALL other primaries (not just first one)
-	for poolerID, pooler := range poolers {
-		// Skip self
-		if poolerID == thisIDStr {
-			continue
-		}
-
-		// Skip if not reachable (can't trust stale data)
-		if !pooler.IsLastCheckValid {
-			continue
-		}
-
-		// Check if this pooler also thinks it's PRIMARY
-		poolerType := pooler.PoolerType
-		if poolerType == clustermetadatapb.PoolerType_UNKNOWN && pooler.MultiPooler != nil {
-			poolerType = pooler.MultiPooler.Type
-		}
-
-		if poolerType == clustermetadatapb.PoolerType_PRIMARY {
-			// Extract consensus term and primary term
-			var consensusTerm, primaryTerm int64
-			if pooler.ConsensusStatus != nil {
-				consensusTerm = pooler.ConsensusStatus.CurrentTerm
-			}
-			if pooler.ConsensusTerm != nil {
-				primaryTerm = pooler.ConsensusTerm.PrimaryTerm
-			}
-
-			otherPrimaries = append(otherPrimaries, &store.PrimaryInfo{
-				ID:            pooler.MultiPooler.Id,
-				ConsensusTerm: consensusTerm,
-				PrimaryTerm:   primaryTerm,
-			})
-		}
-	}
-
-	// Populate other primaries list (empty if none detected)
-	analysis.OtherPrimariesInShard = otherPrimaries
-
-	// Find most advanced primary (include THIS pooler in comparison)
-	// This should always be set for PRIMARY poolers, even if there are no other primaries
-	allPrimaries := []*store.PrimaryInfo{
-		{
-			ID:            thisPooler.MultiPooler.Id,
-			ConsensusTerm: analysis.ConsensusTerm,
-			PrimaryTerm:   analysis.PrimaryTerm,
-		},
-	}
-	allPrimaries = append(allPrimaries, otherPrimaries...)
-	analysis.HighestTermPrimary = findHighestTermPrimary(allPrimaries)
-}
-
-// findHighestTermPrimary returns the primary with the highest PrimaryTerm.
-// Returns nil if there's a tie between primaries with the same highest PrimaryTerm.
-//
-// Invariant: In a properly initialized shard, PrimaryTerm is always >0 for PRIMARY poolers.
-// PrimaryTerm is set during promotion and only cleared during demotion. This function
-// is defensive and returns nil if all primaries have PrimaryTerm=0, but this should
-// never happen in a properly initialized shard.
-func findHighestTermPrimary(primaries []*store.PrimaryInfo) *store.PrimaryInfo {
-	var mostAdvanced *store.PrimaryInfo
-	maxPrimaryTerm := int64(0)
-	tieDetected := false
-
-	for _, p := range primaries {
-		if p.PrimaryTerm > maxPrimaryTerm {
-			maxPrimaryTerm = p.PrimaryTerm
-			mostAdvanced = p
-			tieDetected = false
-		} else if p.PrimaryTerm == maxPrimaryTerm && p.PrimaryTerm > 0 {
-			tieDetected = true
-		}
-	}
-
-	// Defensive: should not happen in initialized shards, but guard against invalid state
-	if maxPrimaryTerm == 0 {
-		return nil
-	}
-
-	// Tie detected: multiple primaries with same PrimaryTerm indicates a consensus bug.
-	// PrimaryTerm should be unique per primary and monotonically increasing. If two primaries
-	// claim the same PrimaryTerm, something went wrong in the consensus protocol (bug in
-	// promotion logic, data corruption, or split-brain).
-	//
-	// TODO: Rather than requiring manual intervention, multiorch could automatically resolve
-	// this by starting a new term and reappointing one of the primaries, which would update
-	// its primary_term and make the others stale. For now, we skip automatic demotion to
-	// avoid making the situation worse without understanding the root cause.
-	if tieDetected {
-		return nil
-	}
-
-	return mostAdvanced
+	return ps
 }

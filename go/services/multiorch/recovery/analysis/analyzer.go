@@ -16,23 +16,25 @@ package analysis
 
 import (
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
-	"github.com/multigres/multigres/go/services/multiorch/store"
 )
 
-// Analyzer analyzes ReplicationAnalysis and detects problems.
+// Analyzer analyzes the full state of a shard and detects problems.
 type Analyzer interface {
 	// Name returns the unique name of this analyzer.
 	Name() types.CheckName
 
 	// ProblemCode returns the problem code this analyzer detects.
+	// Used by the grace period tracker to observe healthy/unhealthy state per entity.
 	ProblemCode() types.ProblemCode
 
 	// RecoveryAction returns the action to take when this problem is detected.
+	// Used by the grace period tracker to determine grace period configuration.
 	RecoveryAction() types.RecoveryAction
 
-	// Analyze examines the ReplicationAnalysis and returns a detected problem or nil if healthy.
+	// Analyze examines the full shard state and returns any detected problems.
+	// Returns an empty slice (not nil) if no problems are detected.
 	// Returns an error if the analyzer cannot perform its analysis (e.g., missing dependencies).
-	Analyze(analysis *store.ReplicationAnalysis) (*types.Problem, error)
+	Analyze(shard *ShardAnalysis) ([]*types.Problem, error)
 }
 
 // defaultAnalyzers holds the global list of analyzers.

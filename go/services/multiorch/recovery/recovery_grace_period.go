@@ -21,7 +21,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/services/multiorch/config"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
 )
@@ -159,22 +158,16 @@ func (dt *RecoveryGracePeriodTracker) ShouldExecute(problem types.Problem) bool 
 		return true
 	}
 
-	// Use pooler ID from the problem to look up the deadline
-	if problem.PoolerID == nil {
-		dt.logger.WarnContext(dt.ctx, "Cannot check grace period: problem missing pooler ID",
-			"problem_code", problem.Code)
-		return false
-	}
-	poolerID := topoclient.MultiPoolerIDString(problem.PoolerID)
-
-	key := gracePeriodKey{code: problem.Code, poolerID: poolerID}
+	// Use the entity ID (pooler ID, or shard key for problems with no specific pooler).
+	entityID := problemEntityID(&problem)
+	key := gracePeriodKey{code: problem.Code, poolerID: entityID}
 	deadline, exists := dt.deadlines[key]
 	if !exists {
 		// Problem has grace period but no deadline - this is unexpected
 		// Observe() should have been called before ShouldExecute()
 		dt.logger.WarnContext(dt.ctx, "Grace period deadline not found, skipping recovery",
 			"problem_code", problem.Code,
-			"pooler_id", poolerID)
+			"entity_id", entityID)
 		return false
 	}
 

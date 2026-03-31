@@ -21,7 +21,6 @@ import (
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
-	"github.com/multigres/multigres/go/services/multiorch/store"
 )
 
 // ReplicaNotInStandbyListAnalyzer detects when a replica is not in the primary's
@@ -45,50 +44,66 @@ func (a *ReplicaNotInStandbyListAnalyzer) RecoveryAction() types.RecoveryAction 
 	return a.factory.NewFixReplicationAction()
 }
 
-func (a *ReplicaNotInStandbyListAnalyzer) Analyze(poolerAnalysis *store.ReplicationAnalysis) (*types.Problem, error) {
+func (a *ReplicaNotInStandbyListAnalyzer) Analyze(shard *ShardAnalysis) ([]*types.Problem, error) {
 	if a.factory == nil {
 		return nil, errors.New("recovery action factory not initialized")
 	}
 
-	// Only analyze replicas
-	if poolerAnalysis.IsPrimary {
-		return nil, nil
-	}
+	primary := shard.FindPrimary()
+	primaryReachable := primary != nil &&
+		primary.LastCheckValid &&
+		primary.Health != nil && primary.Health.IsPostgresRunning
 
-	// Skip if replica is not initialized
-	if !poolerAnalysis.IsInitialized {
-		return nil, nil
+	var problems []*types.Problem
+	for _, ps := range shard.Poolers {
+		if ps.IsPrimary {
+			continue
+		}
+		if !ps.IsInitialized {
+			continue
+		}
+		// Can't update standby list if primary is unreachable
+		if primary != nil && !primaryReachable {
+			continue
+		}
+		// Only fully-typed REPLICA poolers (not UNKNOWN)
+		if ps.Type != clustermetadatapb.PoolerType_REPLICA {
+			continue
+		}
+		// ReplicaNotReplicating handles replicas with no primary_conninfo
+		if ps.Health == nil || ps.Health.ReplicationStatus == nil ||
+			ps.Health.ReplicationStatus.PrimaryConnInfo == nil ||
+			ps.Health.ReplicationStatus.PrimaryConnInfo.Host == "" {
+			continue
+		}
+		if primary != nil && isInStandbyList(ps, primary) {
+			continue
+		}
+		problems = append(problems, &types.Problem{
+			Code:           types.ProblemReplicaNotInStandbyList,
+			CheckName:      "ReplicaNotInStandbyList",
+			PoolerID:       ps.ID,
+			ShardKey:       shard.ShardKey,
+			Description:    fmt.Sprintf("Replica %s is not in primary's synchronous standby list", ps.ID.Name),
+			Priority:       types.PriorityNormal,
+			Scope:          types.ScopePooler,
+			DetectedAt:     time.Now(),
+			RecoveryAction: a.factory.NewFixReplicationAction(),
+		})
 	}
+	return problems, nil
+}
 
-	// Skip if primary is unreachable (can't update standby list anyway)
-	if poolerAnalysis.PrimaryPoolerID != nil && !poolerAnalysis.PrimaryReachable {
-		return nil, nil
+// isInStandbyList checks if the replica is in the primary's synchronous standby list.
+func isInStandbyList(replica *PoolerState, primary *PoolerState) bool {
+	if primary.Health == nil || primary.Health.PrimaryStatus == nil ||
+		primary.Health.PrimaryStatus.SyncReplicationConfig == nil {
+		return false
 	}
-
-	// Skip if replication is not configured (ReplicaNotReplicating handles that)
-	if poolerAnalysis.PrimaryConnInfoHost == "" {
-		return nil, nil
+	for _, standbyID := range primary.Health.PrimaryStatus.SyncReplicationConfig.StandbyIds {
+		if standbyID.Cell == replica.ID.Cell && standbyID.Name == replica.ID.Name {
+			return true
+		}
 	}
-
-	// Only check replicas with PoolerType_REPLICA (not UNKNOWN or other types)
-	if poolerAnalysis.PoolerType != clustermetadatapb.PoolerType_REPLICA {
-		return nil, nil
-	}
-
-	// Check if replica is already in the standby list
-	if poolerAnalysis.IsInPrimaryStandbyList {
-		return nil, nil
-	}
-
-	return &types.Problem{
-		Code:           types.ProblemReplicaNotInStandbyList,
-		CheckName:      "ReplicaNotInStandbyList",
-		PoolerID:       poolerAnalysis.PoolerID,
-		ShardKey:       poolerAnalysis.ShardKey,
-		Description:    fmt.Sprintf("Replica %s is not in primary's synchronous standby list", poolerAnalysis.PoolerID.Name),
-		Priority:       types.PriorityNormal,
-		Scope:          types.ScopePooler,
-		DetectedAt:     time.Now(),
-		RecoveryAction: a.factory.NewFixReplicationAction(),
-	}, nil
+	return false
 }

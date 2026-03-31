@@ -20,11 +20,10 @@ import (
 	"time"
 
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
-	"github.com/multigres/multigres/go/services/multiorch/store"
 )
 
-// ReplicaNotReplicatingAnalyzer detects when a replica has no replication configured.
-// This happens when primary_conninfo is not set or replication is stopped.
+// ReplicaNotReplicatingAnalyzer detects replicas that have no replication configured
+// or have replication explicitly stopped.
 type ReplicaNotReplicatingAnalyzer struct {
 	factory *RecoveryActionFactory
 }
@@ -41,55 +40,55 @@ func (a *ReplicaNotReplicatingAnalyzer) RecoveryAction() types.RecoveryAction {
 	return a.factory.NewFixReplicationAction()
 }
 
-func (a *ReplicaNotReplicatingAnalyzer) Analyze(poolerAnalysis *store.ReplicationAnalysis) (*types.Problem, error) {
+func (a *ReplicaNotReplicatingAnalyzer) Analyze(shard *ShardAnalysis) ([]*types.Problem, error) {
 	if a.factory == nil {
 		return nil, errors.New("recovery action factory not initialized")
 	}
 
-	// Only analyze replicas
-	if poolerAnalysis.IsPrimary {
-		return nil, nil
-	}
+	primary := shard.FindPrimary()
+	primaryReachable := primary != nil &&
+		primary.LastCheckValid &&
+		primary.Health != nil && primary.Health.IsPostgresRunning
 
-	// Skip if replica is not initialized (ShardNeedsBootstrap handles that)
-	if !poolerAnalysis.IsInitialized {
-		return nil, nil
+	var problems []*types.Problem
+	for _, ps := range shard.Poolers {
+		if ps.IsPrimary {
+			continue
+		}
+		// ShardNeedsBootstrap handles uninitialized replicas
+		if !ps.IsInitialized {
+			continue
+		}
+		// PrimaryIsDead handles replicas when the primary is unreachable
+		if primary != nil && !primaryReachable {
+			continue
+		}
+		if !needsReplicationFix(ps) {
+			continue
+		}
+		problems = append(problems, &types.Problem{
+			Code:           types.ProblemReplicaNotReplicating,
+			CheckName:      "ReplicaNotReplicating",
+			PoolerID:       ps.ID,
+			ShardKey:       shard.ShardKey,
+			Description:    fmt.Sprintf("Replica %s has no replication configured", ps.ID.Name),
+			Priority:       types.PriorityHigh,
+			Scope:          types.ScopePooler,
+			DetectedAt:     time.Now(),
+			RecoveryAction: a.factory.NewFixReplicationAction(),
+		})
 	}
-
-	// Skip if primary is unreachable (PrimaryIsDead handles that)
-	if poolerAnalysis.PrimaryPoolerID != nil && !poolerAnalysis.PrimaryReachable {
-		return nil, nil
-	}
-
-	// Check if replication is not configured or stopped
-	if !a.needsReplicationFix(poolerAnalysis) {
-		return nil, nil
-	}
-
-	return &types.Problem{
-		Code:           types.ProblemReplicaNotReplicating,
-		CheckName:      "ReplicaNotReplicating",
-		PoolerID:       poolerAnalysis.PoolerID,
-		ShardKey:       poolerAnalysis.ShardKey,
-		Description:    fmt.Sprintf("Replica %s has no replication configured", poolerAnalysis.PoolerID.Name),
-		Priority:       types.PriorityHigh,
-		Scope:          types.ScopePooler,
-		DetectedAt:     time.Now(),
-		RecoveryAction: a.factory.NewFixReplicationAction(),
-	}, nil
+	return problems, nil
 }
 
 // needsReplicationFix returns true if replication is not configured or stopped.
-func (a *ReplicaNotReplicatingAnalyzer) needsReplicationFix(analysis *store.ReplicationAnalysis) bool {
-	// No primary_conninfo configured
-	if analysis.PrimaryConnInfoHost == "" {
-		return true
+func needsReplicationFix(ps *PoolerState) bool {
+	if ps.Health == nil || ps.Health.ReplicationStatus == nil {
+		return true // no replication status at all
 	}
-
-	// Replication explicitly stopped
-	if analysis.ReplicationStopped {
-		return true
+	rs := ps.Health.ReplicationStatus
+	if rs.PrimaryConnInfo == nil || rs.PrimaryConnInfo.Host == "" {
+		return true // primary_conninfo not configured
 	}
-
-	return false
+	return rs.IsWalReplayPaused // replication explicitly stopped
 }
