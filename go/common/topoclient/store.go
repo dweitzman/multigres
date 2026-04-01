@@ -92,11 +92,12 @@ const (
 
 // Filenames for all object types.
 const (
-	CellFile     = "Cell"
-	DatabaseFile = "Database"
-	GatewayFile  = "Gateway"
-	PoolerFile   = "Pooler"
-	OrchFile     = "Orch"
+	CellFile          = "Cell"
+	DatabaseFile      = "Database"
+	GatewayFile       = "Gateway"
+	PoolerFile        = "Pooler"
+	OrchFile          = "Orch"
+	InitialCohortFile = "InitialCohort"
 )
 
 // Paths for all object types in the topology hierarchy.
@@ -227,6 +228,13 @@ type Store interface {
 	// WithStolenBackupLease acquires a backup lease (stealing if necessary), runs fn, and releases.
 	// See backup_lock.go for full documentation.
 	WithStolenBackupLease(ctx context.Context, shardKey types.ShardKey, stealerID string, operation string, logger *slog.Logger, fn func(ctx context.Context) error) error
+
+	// ClaimInitialCohort atomically records the initial cohort pooler IDs for a shard.
+	// The first caller to win the race creates the record and gets back its proposed IDs.
+	// Any subsequent caller (including after a crash) reads the already-committed record
+	// and gets back those IDs instead of its own proposal.
+	// Callers must use the returned IDs — not their proposed list — to establish the cohort.
+	ClaimInitialCohort(ctx context.Context, shardKey types.ShardKey, proposedIDs []string) (committedIDs []string, err error)
 
 	// GetRemoteOperationTimeout returns the configured timeout for remote operations.
 	// This should be used for RPCs and database operations that should use a shorter timeout than the parent context.

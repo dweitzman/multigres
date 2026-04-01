@@ -22,6 +22,7 @@ import (
 
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/rpcclient"
+	"github.com/multigres/multigres/go/common/topoclient"
 	commontypes "github.com/multigres/multigres/go/common/types"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
@@ -51,6 +52,7 @@ type InitialCohortAction struct {
 	coordinator *consensus.Coordinator
 	poolerStore *store.PoolerStore
 	rpcClient   rpcclient.MultiPoolerClient
+	topoStore   topoclient.Store
 	logger      *slog.Logger
 }
 
@@ -60,6 +62,7 @@ func NewInitialCohortAction(
 	coordinator *consensus.Coordinator,
 	poolerStore *store.PoolerStore,
 	rpcClient rpcclient.MultiPoolerClient,
+	topoStore topoclient.Store,
 	logger *slog.Logger,
 ) *InitialCohortAction {
 	return &InitialCohortAction{
@@ -67,6 +70,7 @@ func NewInitialCohortAction(
 		coordinator: coordinator,
 		poolerStore: poolerStore,
 		rpcClient:   rpcClient,
+		topoStore:   topoStore,
 		logger:      logger,
 	}
 }
@@ -99,8 +103,8 @@ func (a *InitialCohortAction) Execute(ctx context.Context, problem types.Problem
 	// Re-verify via fresh RPCs: check each reachable pooler's status.
 	// We need to confirm:
 	//  1. No pooler has an established cohort (cohort members would mean Phase 2 already ran).
-	//  2. At least some poolers are initialized (have completed Phase 1 backup+restore).
-	initializedCount := 0
+	//  2. Enough poolers are initialized (Phase 1 complete) to satisfy the durability policy.
+	var initializedCohort []*multiorchdatapb.PoolerHealthState
 	for _, pooler := range cohort {
 		resp, err := a.rpcClient.Status(ctx, pooler.MultiPooler, &multipoolermanagerdatapb.StatusRequest{})
 		if err != nil {
@@ -120,21 +124,72 @@ func (a *InitialCohortAction) Execute(ctx context.Context, problem types.Problem
 		}
 
 		if resp.Status.IsInitialized {
-			initializedCount++
+			initializedCohort = append(initializedCohort, pooler)
 		}
 	}
 
-	if initializedCount == 0 {
+	if len(initializedCohort) == 0 {
 		return mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
 			"no initialized poolers found for shard %s — Phase 1 may not have completed", problem.ShardKey)
 	}
 
+	// Ensure the initialized poolers satisfy the durability policy before
+	// committing them as the initial cohort. Proceeding with too few nodes
+	// would establish an under-replicated cluster from the start.
+	quorumRule, err := a.coordinator.LoadQuorumRule(ctx, initializedCohort, problem.ShardKey.Database)
+	if err != nil {
+		return mterrors.Wrap(err, "failed to load durability policy")
+	}
+	if int32(len(initializedCohort)) < quorumRule.RequiredCount {
+		return mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
+			"only %d initialized poolers for shard %s, need at least %d to satisfy durability policy %q — waiting for more poolers to complete Phase 1",
+			len(initializedCohort), problem.ShardKey, quorumRule.RequiredCount, quorumRule.Description)
+	}
+
+	// Collect the IDs of initialized poolers as the proposed initial cohort.
+	var proposedIDs []string
+	for _, pooler := range initializedCohort {
+		proposedIDs = append(proposedIDs, topoclient.MultiPoolerIDString(pooler.MultiPooler.Id))
+	}
+
+	// CAS: atomically claim the initial cohort in topology. The first orch to
+	// win writes the list; subsequent orchs (including retries after a crash)
+	// read back what the winner wrote. All participants then use that committed
+	// list — not their local view — so different orchs with different knowledge
+	// of which poolers exist always agree on the same initial cohort.
+	committedIDs, err := a.topoStore.ClaimInitialCohort(ctx, problem.ShardKey, proposedIDs)
+	if err != nil {
+		return mterrors.Wrap(err, "failed to claim initial cohort")
+	}
+
+	// Build the set of committed IDs for fast lookup.
+	committedSet := make(map[string]struct{}, len(committedIDs))
+	for _, id := range committedIDs {
+		committedSet[id] = struct{}{}
+	}
+
+	// Filter the initialized cohort to only the poolers in the committed list.
+	// If another orch won the race, we use its list (which may differ from ours
+	// if it saw different poolers when it ran).
+	var committedCohort []*multiorchdatapb.PoolerHealthState
+	for _, pooler := range initializedCohort {
+		if _, ok := committedSet[topoclient.MultiPoolerIDString(pooler.MultiPooler.Id)]; ok {
+			committedCohort = append(committedCohort, pooler)
+		}
+	}
+
+	if len(committedCohort) == 0 {
+		return mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
+			"committed cohort IDs %v not found in local pooler state for shard %s — waiting for poolers to register",
+			committedIDs, problem.ShardKey)
+	}
+
 	a.logger.InfoContext(ctx, "re-verified shard needs initial cohort, proceeding",
 		"shard_key", problem.ShardKey.String(),
-		"initialized_count", initializedCount,
-		"cohort_size", len(cohort))
+		"initialized_count", len(initializedCohort),
+		"committed_cohort", committedIDs)
 
-	return a.coordinator.AppointInitialLeader(ctx, problem.ShardKey.Shard, cohort, problem.ShardKey.Database)
+	return a.coordinator.AppointInitialLeader(ctx, problem.ShardKey.Shard, committedCohort, problem.ShardKey.Database)
 }
 
 // getCohort fetches all poolers in the shard from the pooler store.
