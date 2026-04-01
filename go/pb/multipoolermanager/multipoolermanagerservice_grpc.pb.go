@@ -122,8 +122,8 @@ type MultiPoolerManagerClient interface {
 	Promote(ctx context.Context, in *multipoolermanagerdata.PromoteRequest, opts ...grpc.CallOption) (*multipoolermanagerdata.PromoteResponse, error)
 	// State gets the current status of the manager
 	State(ctx context.Context, in *multipoolermanagerdata.StateRequest, opts ...grpc.CallOption) (*multipoolermanagerdata.StateResponse, error)
-	// InitializeEmptyPrimary initializes this pooler as an empty primary
-	// Used during bootstrap initialization of a new shard
+	// Deprecated: Do not use.
+	// InitializeEmptyPrimary is deprecated; shard bootstrap is now handled by the multipooler startup loop.
 	InitializeEmptyPrimary(ctx context.Context, in *multipoolermanagerdata.InitializeEmptyPrimaryRequest, opts ...grpc.CallOption) (*multipoolermanagerdata.InitializeEmptyPrimaryResponse, error)
 	// Backup performs a backup
 	Backup(ctx context.Context, in *multipoolermanagerdata.BackupRequest, opts ...grpc.CallOption) (*multipoolermanagerdata.BackupResponse, error)
@@ -360,6 +360,7 @@ func (c *multiPoolerManagerClient) State(ctx context.Context, in *multipoolerman
 	return out, nil
 }
 
+// Deprecated: Do not use.
 func (c *multiPoolerManagerClient) InitializeEmptyPrimary(ctx context.Context, in *multipoolermanagerdata.InitializeEmptyPrimaryRequest, opts ...grpc.CallOption) (*multipoolermanagerdata.InitializeEmptyPrimaryResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(multipoolermanagerdata.InitializeEmptyPrimaryResponse)
@@ -488,8 +489,8 @@ type MultiPoolerManagerServer interface {
 	Promote(context.Context, *multipoolermanagerdata.PromoteRequest) (*multipoolermanagerdata.PromoteResponse, error)
 	// State gets the current status of the manager
 	State(context.Context, *multipoolermanagerdata.StateRequest) (*multipoolermanagerdata.StateResponse, error)
-	// InitializeEmptyPrimary initializes this pooler as an empty primary
-	// Used during bootstrap initialization of a new shard
+	// Deprecated: Do not use.
+	// InitializeEmptyPrimary is deprecated; shard bootstrap is now handled by the multipooler startup loop.
 	InitializeEmptyPrimary(context.Context, *multipoolermanagerdata.InitializeEmptyPrimaryRequest) (*multipoolermanagerdata.InitializeEmptyPrimaryResponse, error)
 	// Backup performs a backup
 	Backup(context.Context, *multipoolermanagerdata.BackupRequest) (*multipoolermanagerdata.BackupResponse, error)

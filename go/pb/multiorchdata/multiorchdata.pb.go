@@ -85,8 +85,12 @@ type PoolerHealthState struct {
 	ConsensusTerm *multipoolermanagerdata.ConsensusTerm `protobuf:"bytes,13,opt,name=consensus_term,json=consensusTerm,proto3" json:"consensus_term,omitempty"`
 	// Consensus status from ConsensusStatus RPC (for divergence detection)
 	ConsensusStatus *consensusdata.StatusResponse `protobuf:"bytes,14,opt,name=consensus_status,json=consensusStatus,proto3" json:"consensus_status,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Cohort members from the most recent multigres.leadership_history record,
+	// populated from the Status RPC response. An empty list (not nil) on an
+	// initialized pooler signals the shard needs its initial cohort established.
+	CohortMembers []string `protobuf:"bytes,15,rep,name=cohort_members,json=cohortMembers,proto3" json:"cohort_members,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PoolerHealthState) Reset() {
@@ -217,11 +221,18 @@ func (x *PoolerHealthState) GetConsensusStatus() *consensusdata.StatusResponse {
 	return nil
 }
 
+func (x *PoolerHealthState) GetCohortMembers() []string {
+	if x != nil {
+		return x.CohortMembers
+	}
+	return nil
+}
+
 var File_multiorchdata_proto protoreflect.FileDescriptor
 
 const file_multiorchdata_proto_rawDesc = "" +
 	"\n" +
-	"\x13multiorchdata.proto\x12\rmultiorchdata\x1a\x15clustermetadata.proto\x1a\x13consensusdata.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1cmultipoolermanagerdata.proto\"\x87\a\n" +
+	"\x13multiorchdata.proto\x12\rmultiorchdata\x1a\x15clustermetadata.proto\x1a\x13consensusdata.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1cmultipoolermanagerdata.proto\"\xae\a\n" +
 	"\x11PoolerHealthState\x12?\n" +
 	"\fmulti_pooler\x18\x01 \x01(\v2\x1c.clustermetadata.MultiPoolerR\vmultiPooler\x12!\n" +
 	"\ris_up_to_date\x18\x02 \x01(\bR\n" +
@@ -239,7 +250,8 @@ const file_multiorchdata_proto_rawDesc = "" +
 	"\x0eis_initialized\x18\v \x01(\bR\risInitialized\x12,\n" +
 	"\x12has_data_directory\x18\f \x01(\bR\x10hasDataDirectory\x12L\n" +
 	"\x0econsensus_term\x18\r \x01(\v2%.multipoolermanagerdata.ConsensusTermR\rconsensusTerm\x12H\n" +
-	"\x10consensus_status\x18\x0e \x01(\v2\x1d.consensusdata.StatusResponseR\x0fconsensusStatusB4Z2github.com/multigres/multigres/go/pb/multiorchdatab\x06proto3"
+	"\x10consensus_status\x18\x0e \x01(\v2\x1d.consensusdata.StatusResponseR\x0fconsensusStatus\x12%\n" +
+	"\x0ecohort_members\x18\x0f \x03(\tR\rcohortMembersB4Z2github.com/multigres/multigres/go/pb/multiorchdatab\x06proto3"
 
 var (
 	file_multiorchdata_proto_rawDescOnce sync.Once

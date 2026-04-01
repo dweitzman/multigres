@@ -47,7 +47,12 @@ type ReplicationAnalysis struct {
 	IsStale          bool
 	IsInitialized    bool // Whether this pooler is fully initialized and ready to join the cohort
 	HasDataDirectory bool // Whether this pooler has a PostgreSQL data directory (PG_VERSION exists)
-	AnalyzedAt       time.Time
+	// CohortMembers are the application-name strings from the most recent
+	// multigres.leadership_history record. Nil or empty both indicate no cohort has
+	// been established (proto round-trip collapses empty slice to nil). When
+	// IsInitialized=true, a nil/empty list means the 0-member bootstrap record is present.
+	CohortMembers []string
+	AnalyzedAt    time.Time
 
 	// Primary-specific fields
 	PrimaryLSN               string

@@ -34,7 +34,7 @@ type ProblemCode string
 
 const (
 	// Shard bootstrap problems (highest priority - shard cannot function at all).
-	ProblemShardNeedsBootstrap ProblemCode = "ShardNeedsBootstrap"
+	ProblemShardNeedsInitialCohort ProblemCode = "ShardNeedsInitialCohort"
 
 	// Primary problems (catastrophic - block everything else).
 	ProblemPrimaryIsDead      ProblemCode = "PrimaryIsDead"
@@ -72,7 +72,7 @@ const (
 type Priority int
 
 const (
-	// PriorityShardBootstrap is for shard-wide bootstrap issues like no primary exists.
+	// PriorityShardBootstrap is for shard-wide initialization issues like establishing the initial cohort.
 	// This is the highest priority - the shard cannot function at all.
 	// Arbitrarily high priority, to leave room for other priorities.
 	PriorityShardBootstrap Priority = 10000

@@ -48,6 +48,8 @@ const (
 	PostgresAction_POSTGRES_ACTION_STARTING PostgresAction = 1
 	// A pgBackRest restore is running to initialize the data directory.
 	PostgresAction_POSTGRES_ACTION_RESTORING_FROM_BACKUP PostgresAction = 2
+	// No backup exists yet; running initdb and creating the first pgBackRest backup.
+	PostgresAction_POSTGRES_ACTION_CREATING_FIRST_BACKUP PostgresAction = 3
 )
 
 // Enum value maps for PostgresAction.
@@ -56,11 +58,13 @@ var (
 		0: "POSTGRES_ACTION_UNSPECIFIED",
 		1: "POSTGRES_ACTION_STARTING",
 		2: "POSTGRES_ACTION_RESTORING_FROM_BACKUP",
+		3: "POSTGRES_ACTION_CREATING_FIRST_BACKUP",
 	}
 	PostgresAction_value = map[string]int32{
 		"POSTGRES_ACTION_UNSPECIFIED":           0,
 		"POSTGRES_ACTION_STARTING":              1,
 		"POSTGRES_ACTION_RESTORING_FROM_BACKUP": 2,
+		"POSTGRES_ACTION_CREATING_FIRST_BACKUP": 3,
 	}
 )
 
@@ -1390,8 +1394,14 @@ type Status struct {
 	// How long the current action has been running.
 	// Only meaningful when postgres_action != UNSPECIFIED.
 	PostgresActionDuration *durationpb.Duration `protobuf:"bytes,12,opt,name=postgres_action_duration,json=postgresActionDuration,proto3" json:"postgres_action_duration,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// Cohort members from the most recent multigres.leadership_history record
+	// (application-name strings, same encoding as the table's cohort_members JSONB
+	// column). Empty if the table has no records or the database is unreachable.
+	// A record with an empty list (written during first-backup creation) signals
+	// that the shard has been initialized but not yet had its cohort established.
+	CohortMembers []string `protobuf:"bytes,13,rep,name=cohort_members,json=cohortMembers,proto3" json:"cohort_members,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Status) Reset() {
@@ -1504,6 +1514,13 @@ func (x *Status) GetPostgresAction() PostgresAction {
 func (x *Status) GetPostgresActionDuration() *durationpb.Duration {
 	if x != nil {
 		return x.PostgresActionDuration
+	}
+	return nil
+}
+
+func (x *Status) GetCohortMembers() []string {
+	if x != nil {
+		return x.CohortMembers
 	}
 	return nil
 }
@@ -3123,7 +3140,9 @@ func (x *ConsensusTerm) GetPrimaryTerm() int64 {
 }
 
 // InitializeEmptyPrimary initializes this pooler as an empty primary
-// Used during bootstrap initialization of a new shard
+// Deprecated: shard bootstrap is now handled by the multipooler startup loop.
+//
+// Deprecated: Marked as deprecated in multipoolermanagerdata.proto.
 type InitializeEmptyPrimaryRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Consensus term to set for this primary
@@ -3195,6 +3214,9 @@ func (x *InitializeEmptyPrimaryRequest) GetCoordinatorId() *clustermetadata.ID {
 	return nil
 }
 
+// Deprecated: shard bootstrap is now handled by the multipooler startup loop.
+//
+// Deprecated: Marked as deprecated in multipoolermanagerdata.proto.
 type InitializeEmptyPrimaryResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Whether the initialization succeeded
@@ -4209,7 +4231,7 @@ const file_multipoolermanagerdata_proto_rawDesc = "" +
 	"\x06status\x18\x01 \x01(\v2%.multipoolermanagerdata.PrimaryStatusR\x06status\"\x18\n" +
 	"\x16PrimaryPositionRequest\"<\n" +
 	"\x17PrimaryPositionResponse\x12!\n" +
-	"\flsn_position\x18\x01 \x01(\tR\vlsnPosition\"\xcc\x05\n" +
+	"\flsn_position\x18\x01 \x01(\tR\vlsnPosition\"\xf3\x05\n" +
 	"\x06Status\x12<\n" +
 	"\vpooler_type\x18\x01 \x01(\x0e2\x1b.clustermetadata.PoolerTypeR\n" +
 	"poolerType\x12L\n" +
@@ -4224,7 +4246,8 @@ const file_multipoolermanagerdata_proto_rawDesc = "" +
 	"\bshard_id\x18\n" +
 	" \x01(\tR\ashardId\x12O\n" +
 	"\x0fpostgres_action\x18\v \x01(\x0e2&.multipoolermanagerdata.PostgresActionR\x0epostgresAction\x12S\n" +
-	"\x18postgres_action_duration\x18\f \x01(\v2\x19.google.protobuf.DurationR\x16postgresActionDuration\"\x0f\n" +
+	"\x18postgres_action_duration\x18\f \x01(\v2\x19.google.protobuf.DurationR\x16postgresActionDuration\x12%\n" +
+	"\x0ecohort_members\x18\r \x03(\tR\rcohortMembers\"\x0f\n" +
 	"\rStatusRequest\"H\n" +
 	"\x0eStatusResponse\x126\n" +
 	"\x06status\x18\x01 \x01(\v2\x1e.multipoolermanagerdata.StatusR\x06status\"\x98\x03\n" +
@@ -4328,16 +4351,16 @@ const file_multipoolermanagerdata_proto_rawDesc = "" +
 	"!accepted_term_from_coordinator_id\x18\x02 \x01(\v2\x13.clustermetadata.IDR\x1dacceptedTermFromCoordinatorId\x12L\n" +
 	"\x14last_acceptance_time\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x12lastAcceptanceTime\x120\n" +
 	"\tleader_id\x18\x04 \x01(\v2\x13.clustermetadata.IDR\bleaderId\x12!\n" +
-	"\fprimary_term\x18\x05 \x01(\x03R\vprimaryTerm\"\x8b\x02\n" +
+	"\fprimary_term\x18\x05 \x01(\x03R\vprimaryTerm\"\x8f\x02\n" +
 	"\x1dInitializeEmptyPrimaryRequest\x12%\n" +
 	"\x0econsensus_term\x18\x01 \x01(\x03R\rconsensusTerm\x124\n" +
 	"\x16durability_policy_name\x18\x02 \x01(\tR\x14durabilityPolicyName\x12Q\n" +
 	"\x16durability_quorum_rule\x18\x03 \x01(\v2\x1b.clustermetadata.QuorumRuleR\x14durabilityQuorumRule\x12:\n" +
-	"\x0ecoordinator_id\x18\x04 \x01(\v2\x13.clustermetadata.IDR\rcoordinatorId\"|\n" +
+	"\x0ecoordinator_id\x18\x04 \x01(\v2\x13.clustermetadata.IDR\rcoordinatorId:\x02\x18\x01\"\x80\x01\n" +
 	"\x1eInitializeEmptyPrimaryResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12#\n" +
 	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\x12\x1b\n" +
-	"\tbackup_id\x18\x03 \x01(\tR\bbackupId\"\xf1\x01\n" +
+	"\tbackup_id\x18\x03 \x01(\tR\bbackupId:\x02\x18\x01\"\xf1\x01\n" +
 	"\rBackupRequest\x12#\n" +
 	"\rforce_primary\x18\x01 \x01(\bR\fforcePrimary\x12\x12\n" +
 	"\x04type\x18\x02 \x01(\tR\x04type\x12\x15\n" +
@@ -4396,11 +4419,12 @@ const file_multipoolermanagerdata_proto_rawDesc = "" +
 	"\x10rewind_performed\x18\x03 \x01(\bR\x0frewindPerformed\"-\n" +
 	"\x11SetMonitorRequest\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\"\x14\n" +
-	"\x12SetMonitorResponse*z\n" +
+	"\x12SetMonitorResponse*\xa5\x01\n" +
 	"\x0ePostgresAction\x12\x1f\n" +
 	"\x1bPOSTGRES_ACTION_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18POSTGRES_ACTION_STARTING\x10\x01\x12)\n" +
-	"%POSTGRES_ACTION_RESTORING_FROM_BACKUP\x10\x02*\x98\x01\n" +
+	"%POSTGRES_ACTION_RESTORING_FROM_BACKUP\x10\x02\x12)\n" +
+	"%POSTGRES_ACTION_CREATING_FIRST_BACKUP\x10\x03*\x98\x01\n" +
 	"\x14ReplicationPauseMode\x12&\n" +
 	"\"REPLICATION_PAUSE_MODE_REPLAY_ONLY\x10\x00\x12(\n" +
 	"$REPLICATION_PAUSE_MODE_RECEIVER_ONLY\x10\x01\x12.\n" +

@@ -148,6 +148,71 @@ func (c *Coordinator) AppointLeader(ctx context.Context, shardID string, cohort 
 	return nil
 }
 
+// AppointInitialLeader establishes leadership for a freshly bootstrapped shard where all
+// nodes are initialized but no cohort has been established yet (0-member leadership_history
+// record). Unlike AppointLeader, this skips term discovery (all nodes start at term 0 after
+// Phase 1 bootstrap) and calls BeginTerm directly with term=1.
+func (c *Coordinator) AppointInitialLeader(ctx context.Context, shardID string, cohort []*multiorchdatapb.PoolerHealthState, database string) (retErr error) {
+	c.logger.InfoContext(ctx, "Starting initial leader appointment",
+		"shard", shardID,
+		"database", database,
+		"cohort_size", len(cohort))
+
+	if len(cohort) == 0 {
+		return mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT, "cohort is empty for shard %s", shardID)
+	}
+
+	quorumRule, err := c.LoadQuorumRule(ctx, cohort, database)
+	if err != nil {
+		return mterrors.Wrap(err, "failed to load durability policy")
+	}
+
+	const initialTerm = 1
+
+	canProceed, preVoteReason := c.preVote(ctx, cohort, quorumRule, initialTerm)
+	if !canProceed {
+		return mterrors.Errorf(mtrpcpb.Code_UNAVAILABLE,
+			"pre-vote failed for shard %s: %s", shardID, preVoteReason)
+	}
+
+	candidate, standbys, term, err := c.BeginTerm(ctx, shardID, cohort, quorumRule, initialTerm)
+	if err != nil {
+		return mterrors.Wrap(err, "BeginTerm failed")
+	}
+
+	c.logger.InfoContext(ctx, "Recruitment succeeded",
+		"shard", shardID,
+		"term", term,
+		"candidate", candidate.MultiPooler.Id.Name,
+		"standbys", len(standbys))
+
+	eventlog.Emit(ctx, c.logger, eventlog.Started, eventlog.PrimaryPromotion{
+		NewPrimary: candidate.MultiPooler.Id.Name,
+	})
+	defer func() {
+		if retErr == nil {
+			eventlog.Emit(ctx, c.logger, eventlog.Success, eventlog.PrimaryPromotion{
+				NewPrimary: candidate.MultiPooler.Id.Name,
+			})
+		} else {
+			eventlog.Emit(ctx, c.logger, eventlog.Failed, eventlog.PrimaryPromotion{
+				NewPrimary: candidate.MultiPooler.Id.Name,
+			}, "error", retErr)
+		}
+	}()
+
+	recruited := make([]*multiorchdatapb.PoolerHealthState, 0, len(standbys)+1)
+	recruited = append(recruited, candidate)
+	recruited = append(recruited, standbys...)
+
+	if err := c.EstablishLeadership(ctx, candidate, standbys, term, quorumRule, "InitialCohort", cohort, recruited); err != nil {
+		return mterrors.Wrap(err, "EstablishLeadership failed")
+	}
+
+	c.logger.InfoContext(ctx, "Initial leadership established", "shard", shardID)
+	return nil
+}
+
 // GetCoordinatorID returns the coordinator's ID.
 func (c *Coordinator) GetCoordinatorID() *clustermetadatapb.ID {
 	return c.coordinatorID

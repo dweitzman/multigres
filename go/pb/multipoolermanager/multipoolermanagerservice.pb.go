@@ -39,7 +39,7 @@ var File_multipoolermanagerservice_proto protoreflect.FileDescriptor
 
 const file_multipoolermanagerservice_proto_rawDesc = "" +
 	"\n" +
-	"\x1fmultipoolermanagerservice.proto\x12\x12multipoolermanager\x1a\x1cmultipoolermanagerdata.proto2\xee\x19\n" +
+	"\x1fmultipoolermanagerservice.proto\x12\x12multipoolermanager\x1a\x1cmultipoolermanagerdata.proto2\xf3\x19\n" +
 	"\x12MultiPoolerManager\x12c\n" +
 	"\n" +
 	"WaitForLSN\x12).multipoolermanagerdata.WaitForLSNRequest\x1a*.multipoolermanagerdata.WaitForLSNResponse\x12{\n" +
@@ -64,8 +64,8 @@ const file_multipoolermanagerservice_proto_rawDesc = "" +
 	"UndoDemote\x12).multipoolermanagerdata.UndoDemoteRequest\x1a*.multipoolermanagerdata.UndoDemoteResponse\x12{\n" +
 	"\x12DemoteStalePrimary\x121.multipoolermanagerdata.DemoteStalePrimaryRequest\x1a2.multipoolermanagerdata.DemoteStalePrimaryResponse\x12Z\n" +
 	"\aPromote\x12&.multipoolermanagerdata.PromoteRequest\x1a'.multipoolermanagerdata.PromoteResponse\x12T\n" +
-	"\x05State\x12$.multipoolermanagerdata.StateRequest\x1a%.multipoolermanagerdata.StateResponse\x12\x87\x01\n" +
-	"\x16InitializeEmptyPrimary\x125.multipoolermanagerdata.InitializeEmptyPrimaryRequest\x1a6.multipoolermanagerdata.InitializeEmptyPrimaryResponse\x12W\n" +
+	"\x05State\x12$.multipoolermanagerdata.StateRequest\x1a%.multipoolermanagerdata.StateResponse\x12\x8c\x01\n" +
+	"\x16InitializeEmptyPrimary\x125.multipoolermanagerdata.InitializeEmptyPrimaryRequest\x1a6.multipoolermanagerdata.InitializeEmptyPrimaryResponse\"\x03\x88\x02\x01\x12W\n" +
 	"\x06Backup\x12%.multipoolermanagerdata.BackupRequest\x1a&.multipoolermanagerdata.BackupResponse\x12x\n" +
 	"\x11RestoreFromBackup\x120.multipoolermanagerdata.RestoreFromBackupRequest\x1a1.multipoolermanagerdata.RestoreFromBackupResponse\x12c\n" +
 	"\n" +

@@ -184,6 +184,7 @@ func (g *AnalysisGenerator) generateAnalysisForPooler(
 		IsInitialized:        store.IsInitialized(pooler),
 		HasDataDirectory:     pooler.HasDataDirectory,
 		AnalyzedAt:           time.Now(),
+		CohortMembers:        pooler.CohortMembers,
 	}
 
 	// Compute staleness
