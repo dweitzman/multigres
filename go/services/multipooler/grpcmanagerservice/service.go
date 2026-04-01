@@ -21,7 +21,6 @@ import (
 
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/servenv"
-	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	multipoolermanagerpb "github.com/multigres/multigres/go/pb/multipoolermanager"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	"github.com/multigres/multigres/go/services/multipooler/manager"
@@ -300,12 +299,6 @@ func (s *managerService) GetBackupByJobId(ctx context.Context, req *multipoolerm
 	return &multipoolermanagerdatapb.GetBackupByJobIdResponse{
 		Backup: backup,
 	}, nil
-}
-
-// InitializeEmptyPrimary is no longer supported. Shard bootstrap is now handled
-// autonomously by the multipooler startup loop.
-func (s *managerService) InitializeEmptyPrimary(_ context.Context, _ *multipoolermanagerdatapb.InitializeEmptyPrimaryRequest) (*multipoolermanagerdatapb.InitializeEmptyPrimaryResponse, error) { //nolint:staticcheck // implementing deprecated RPC for backwards compatibility
-	return nil, mterrors.ToGRPC(mterrors.New(mtrpcpb.Code_UNIMPLEMENTED, "InitializeEmptyPrimary is no longer supported; shard bootstrap is now handled by the multipooler startup loop"))
 }
 
 // CreateDurabilityPolicy creates a new durability policy in the local database

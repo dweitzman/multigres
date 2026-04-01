@@ -608,29 +608,3 @@ func TestGetFollowers(t *testing.T) {
 		t.Log("Confirmed: GetFollowers correctly rejected on REPLICA pooler")
 	})
 }
-
-// TestInitializeEmptyPrimary verifies that the deprecated InitializeEmptyPrimary RPC
-// returns UNIMPLEMENTED. Shard bootstrap is now handled autonomously by the multipooler
-// startup loop (Phase 1) and multiorch (Phase 2).
-func TestInitializeEmptyPrimary(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping end-to-end tests in short mode")
-	}
-
-	setup := getSharedTestSetup(t)
-	waitForManagerReady(t, setup, setup.PrimaryMultipooler)
-
-	primaryClient, err := shardsetup.NewMultipoolerClient(setup.PrimaryMultipooler.GrpcPort)
-	require.NoError(t, err)
-	t.Cleanup(func() { primaryClient.Close() })
-
-	t.Run("ReturnsUnimplemented", func(t *testing.T) {
-		_, err := primaryClient.Manager.InitializeEmptyPrimary( //nolint:staticcheck // testing deprecated RPC returns UNIMPLEMENTED
-			utils.WithShortDeadline(t),
-			&multipoolermanagerdata.InitializeEmptyPrimaryRequest{ConsensusTerm: 1}, //nolint:staticcheck // testing deprecated type
-		)
-		require.Error(t, err, "InitializeEmptyPrimary should return an error")
-		assert.Contains(t, err.Error(), "no longer supported",
-			"should indicate the RPC is no longer supported")
-	})
-}

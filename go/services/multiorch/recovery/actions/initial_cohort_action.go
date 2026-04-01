@@ -136,9 +136,14 @@ func (a *InitialCohortAction) Execute(ctx context.Context, problem types.Problem
 	// Ensure the initialized poolers satisfy the durability policy before
 	// committing them as the initial cohort. Proceeding with too few nodes
 	// would establish an under-replicated cluster from the start.
-	quorumRule, err := a.coordinator.LoadQuorumRule(ctx, initializedCohort, problem.ShardKey.Database)
+	//
+	// We load the policy from the topology database record rather than from
+	// the pooler nodes: during bootstrap all poolers have type UNKNOWN, so
+	// LoadQuorumRule would fall back to a majority default (RequiredCount=1
+	// for a single node) and allow an under-replicated cohort to be claimed.
+	quorumRule, err := a.coordinator.LoadQuorumRuleFromTopology(ctx, problem.ShardKey.Database)
 	if err != nil {
-		return mterrors.Wrap(err, "failed to load durability policy")
+		return mterrors.Wrap(err, "failed to load durability policy from topology")
 	}
 	if int32(len(initializedCohort)) < quorumRule.RequiredCount {
 		return mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
