@@ -125,17 +125,6 @@ service MultiPoolerManager {
     returns (multipoolermanagerdata.StateResponse);
 
   //
-  // Shard Initialization APIs
-  // The following methods are used by MultiOrch to bootstrap new shards
-  //
-
-  // InitializeEmptyPrimary is deprecated; shard bootstrap is now handled by the multipooler startup loop.
-  rpc InitializeEmptyPrimary(multipoolermanagerdata.InitializeEmptyPrimaryRequest)
-    returns (multipoolermanagerdata.InitializeEmptyPrimaryResponse) {
-    option deprecated = true;
-  }
-
-  //
   // Backup and Restore
   // All of these RPCs perform backups and restores in the context
   // of the database, table group and shard this multipooler serves.

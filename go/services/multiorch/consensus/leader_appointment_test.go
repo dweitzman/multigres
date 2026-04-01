@@ -393,6 +393,46 @@ func TestSelectCandidate(t *testing.T) {
 		require.Contains(t, err.Error(), "no valid candidate found")
 	})
 
+	t.Run("uses LastReplayLsn when receive LSN is empty (bootstrap standby)", func(t *testing.T) {
+		// Standbys restored from backup with no active streaming have
+		// pg_last_wal_receive_lsn()=NULL but pg_last_wal_replay_lsn() set.
+		c := &Coordinator{
+			coordinatorID: coordID,
+			logger:        logger,
+		}
+
+		recruited := []recruitmentResult{
+			{
+				pooler: &multiorchdatapb.PoolerHealthState{
+					MultiPooler: &clustermetadatapb.MultiPooler{
+						Id: &clustermetadatapb.ID{Name: "mp1"},
+					},
+				},
+				walPosition: &consensusdatapb.WALPosition{LastReplayLsn: "0/2000000"},
+			},
+			{
+				pooler: &multiorchdatapb.PoolerHealthState{
+					MultiPooler: &clustermetadatapb.MultiPooler{
+						Id: &clustermetadatapb.ID{Name: "mp2"},
+					},
+				},
+				walPosition: &consensusdatapb.WALPosition{LastReplayLsn: "0/3000000"}, // Highest
+			},
+			{
+				pooler: &multiorchdatapb.PoolerHealthState{
+					MultiPooler: &clustermetadatapb.MultiPooler{
+						Id: &clustermetadatapb.ID{Name: "mp3"},
+					},
+				},
+				walPosition: &consensusdatapb.WALPosition{LastReplayLsn: "0/1000000"},
+			},
+		}
+
+		candidate, err := c.selectCandidate(ctx, recruited)
+		require.NoError(t, err)
+		require.Equal(t, "mp2", candidate.MultiPooler.Id.Name)
+	})
+
 	t.Run("selects primary with highest CurrentLsn among multiple primaries", func(t *testing.T) {
 		c := &Coordinator{
 			coordinatorID: coordID,

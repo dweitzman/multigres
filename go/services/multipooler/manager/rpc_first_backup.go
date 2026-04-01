@@ -80,6 +80,26 @@ func (pm *MultiPoolerManager) createFirstBackupLocked(ctx context.Context) error
 		return mterrors.Wrap(err, "failed to initialize data directory")
 	}
 
+	// On any failure after initdb, remove the data directory so the next monitor
+	// iteration sees a clean slate and retries from the beginning.
+	//
+	// For the success path, the data directory is explicitly removed below (before
+	// this defer runs). The skipDeferCleanup flag prevents a redundant remove.
+	skipDeferCleanup := false
+	defer func() {
+		if skipDeferCleanup {
+			return
+		}
+		// Stop postgres before removing the data directory (ignore errors — postgres
+		// may already be stopped if the failure occurred before Start).
+		if _, err := pm.pgctldClient.Stop(ctx, &pgctldpb.StopRequest{Mode: "fast"}); err != nil {
+			pm.logger.WarnContext(ctx, "Failed to stop PostgreSQL during first backup cleanup", "error", err)
+		}
+		if err := pm.removeDataDirectory(); err != nil {
+			pm.logger.WarnContext(ctx, "Failed to remove data directory during first backup cleanup", "error", err)
+		}
+	}()
+
 	// Configure archive_mode before starting PostgreSQL.
 	if err := pm.configureArchiveMode(ctx); err != nil {
 		return mterrors.Wrap(err, "failed to configure archive mode")
@@ -89,18 +109,6 @@ func (pm *MultiPoolerManager) createFirstBackupLocked(ctx context.Context) error
 	if _, err := pm.pgctldClient.Start(ctx, &pgctldpb.StartRequest{}); err != nil {
 		return mterrors.Wrap(err, "failed to start PostgreSQL")
 	}
-
-	// Stop PostgreSQL on exit. For the success path we stop explicitly before
-	// removing the data directory (below); this defer handles error paths.
-	skipDeferStop := false
-	defer func() {
-		if skipDeferStop {
-			return
-		}
-		if _, err := pm.pgctldClient.Stop(ctx, &pgctldpb.StopRequest{Mode: "fast"}); err != nil {
-			pm.logger.WarnContext(ctx, "Failed to stop PostgreSQL during first backup cleanup", "error", err)
-		}
-	}()
 
 	if err := pm.waitForDatabaseConnection(ctx); err != nil {
 		return mterrors.Wrap(err, "failed to connect to database")
@@ -157,7 +165,8 @@ func (pm *MultiPoolerManager) createFirstBackupLocked(ctx context.Context) error
 	}
 
 	// Stop PostgreSQL before removing the data directory.
-	skipDeferStop = true
+	// Suppress the cleanup defer — we do both steps explicitly here on the success path.
+	skipDeferCleanup = true
 	if _, err := pm.pgctldClient.Stop(ctx, &pgctldpb.StopRequest{Mode: "fast"}); err != nil {
 		pm.logger.WarnContext(ctx, "Failed to stop PostgreSQL cleanly before removing data directory; proceeding anyway — postgres will stop once the data directory is gone", "error", err)
 	}

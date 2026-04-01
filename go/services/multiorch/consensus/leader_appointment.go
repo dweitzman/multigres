@@ -126,24 +126,29 @@ func (c *Coordinator) discoverMaxTerm(cohort []*multiorchdatapb.PoolerHealthStat
 }
 
 // walPositionLSN extracts and parses the most relevant LSN from a WALPosition.
-// For a primary node CurrentLsn is used; for a standby, LastReceiveLsn.
-// Returns (0, false) when pos is nil, both LSN fields are empty, or the string
+// For a primary node CurrentLsn is used; for a standby, LastReceiveLsn; and
+// as a final fallback, LastReplayLsn. The LastReplayLsn fallback handles the
+// bootstrap case where a standby was restored from backup but has not yet
+// connected to a primary (pg_last_wal_receive_lsn() returns NULL but
+// pg_last_wal_replay_lsn() reflects the backup restore point).
+// Returns (0, false) when pos is nil, all LSN fields are empty, or the string
 // cannot be parsed.
 func walPositionLSN(pos *consensusdatapb.WALPosition) (pglogrepl.LSN, bool) {
 	if pos == nil {
 		return 0, false
 	}
 
-	// Get either the CurrentLsn (for primaries) or LastReceiveLsn (for
-	// standbys). Both field may be empty if the server is not a primary or
-	// standby, or if the pooler hasn't fully initialized and fetched WAL
-	// position yet.
+	// Prefer CurrentLsn (primary), then LastReceiveLsn (streaming standby),
+	// then LastReplayLsn (standby restored from backup with no active streaming).
 	lsnStr := pos.CurrentLsn
 	if lsnStr == "" {
 		lsnStr = pos.LastReceiveLsn
 	}
+	if lsnStr == "" {
+		lsnStr = pos.LastReplayLsn
+	}
 
-	// If both LSN fields are empty, we consider the WAL position invalid for
+	// If all LSN fields are empty, we consider the WAL position invalid for
 	// selection purposes.
 	if lsnStr == "" {
 		return 0, false

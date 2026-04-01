@@ -622,37 +622,6 @@ message ConsensusTerm {
   int64 primary_term = 5;
 }
 
-// InitializeEmptyPrimary initializes this pooler as an empty primary
-// Deprecated: shard bootstrap is now handled by the multipooler startup loop.
-message InitializeEmptyPrimaryRequest {
-  option deprecated = true; 
-
-  // Consensus term to set for this primary
-  int64 consensus_term = 1;
-
-  // Optional: Create durability policy after initialization
-  string durability_policy_name = 2;
-  clustermetadata.QuorumRule durability_quorum_rule = 3;
-
-  // ID of the multiorch coordinator performing the bootstrap
-  clustermetadata.ID coordinator_id = 4;
-}
-
-// Deprecated: shard bootstrap is now handled by the multipooler startup loop.
-message InitializeEmptyPrimaryResponse {
-  option deprecated = true; 
-
-  // Whether the initialization succeeded
-  bool success = 1;
-
-  // Error message if initialization failed
-  string error_message = 2;
-
-  // Backup ID of the initial backup created during initialization
-  // This can be used by standbys to restore from the same backup
-  string backup_id = 3;
-}
-
 // Backup operations
 // All of these RPCs perform backups and restores in the context
 // of the database, table group, and shard this multipooler serves.

@@ -55,8 +55,9 @@ func TestBootstrapInitialization(t *testing.T) {
 	)
 	defer cleanup()
 
-	// Verify nodes are completely uninitialized (no data directory, no postgres running)
-	// Multiorch will detect these as needing bootstrap and call InitializeEmptyPrimary
+	// Nodes should automatically negotiate among themselves to create the initial backup, so
+	// they should all end up running as hot standbys with the same base backup.
+	// Then once multiorch starts, it should appoint a primary.
 	for name, inst := range setup.Multipoolers {
 		func() {
 			client, err := shardsetup.NewMultipoolerClient(inst.Multipooler.GrpcPort)
@@ -79,6 +80,52 @@ func TestBootstrapInitialization(t *testing.T) {
 		}()
 	}
 
+	// Before starting multiorch, wait for Phase 1 to complete: all poolers should
+	// have self-organized to restore from the initial backup and be running as
+	// hot standbys. None should be writable; none should be primary.
+	var allInstances []*shardsetup.MultipoolerInstance
+	for _, inst := range setup.Multipoolers {
+		allInstances = append(allInstances, inst)
+	}
+	shardsetup.EventuallyPoolerCondition(t, allInstances, 60*time.Second, 2*time.Second,
+		func(name string, s *multipoolermanagerdatapb.Status) (bool, string) {
+			if !s.IsInitialized {
+				return false, "not yet initialized"
+			}
+			if s.PostgresRole != "standby" {
+				return false, fmt.Sprintf("expected postgres_role=standby, got %q", s.PostgresRole)
+			}
+			return true, ""
+		},
+		"all poolers should be initialized and running as hot standbys before multiorch starts",
+	)
+
+	// With all poolers confirmed as standbys, verify they all share the same
+	// system_identifier — the fingerprint of the PostgreSQL cluster created by
+	// initdb. Equal identifiers prove every node restored from the same backup
+	// rather than running an independent initdb.
+	t.Run("verify pre-bootstrap standby state", func(t *testing.T) {
+		var firstSysID string
+		for name, inst := range setup.Multipoolers {
+			client, err := shardsetup.NewMultipoolerClient(inst.Multipooler.GrpcPort)
+			require.NoError(t, err, "should connect to %s", name)
+
+			ctx := utils.WithShortDeadline(t)
+			sysID, err := shardsetup.QueryStringValue(ctx, client.Pooler,
+				"SELECT system_identifier::text FROM pg_control_system()")
+			client.Close()
+			require.NoError(t, err, "%s: failed to query system_identifier", name)
+
+			if firstSysID == "" {
+				firstSysID = sysID
+			} else {
+				assert.Equal(t, firstSysID, sysID,
+					"%s has a different system_identifier — nodes did not restore from the same backup", name)
+			}
+		}
+		t.Logf("All nodes share system_identifier=%s and are running as hot standbys", firstSysID)
+	})
+
 	// Create and start multiorch to trigger bootstrap
 	watchTargets := []string{"postgres/default/0-inf"}
 	config := &shardsetup.SetupConfig{CellName: setup.CellName}
@@ -97,31 +144,46 @@ func TestBootstrapInitialization(t *testing.T) {
 	primary := setup.GetMultipoolerInstance(setup.PrimaryName)
 	require.NotNil(t, primary, "Primary instance should exist")
 
-	// Verify lifecycle events were emitted during bootstrap
-	t.Run("verify primary.init and backup.attempt events", func(t *testing.T) {
+	// Verify lifecycle events were emitted during bootstrap.
+	// In the two-phase bootstrap, one pooler (the backup lease winner) creates the
+	// initial backup; then all poolers restore from it. Check all logs for backup events.
+	t.Run("verify backup.attempt events in pooler logs", func(t *testing.T) {
+		var backupStarted, backupSuccess bool
+		for _, inst := range setup.Multipoolers {
+			data, err := os.ReadFile(inst.Multipooler.LogFile)
+			require.NoError(t, err)
+			events := shardsetup.ParseEvents(t, bytes.NewReader(data))
+			if shardsetup.HasEvent(events, "backup.attempt", "started") {
+				backupStarted = true
+			}
+			if shardsetup.HasEvent(events, "backup.attempt", "success") {
+				backupSuccess = true
+			}
+		}
+		assert.True(t, backupStarted, "expected backup.attempt started in at least one pooler log")
+		assert.True(t, backupSuccess, "expected backup.attempt success in at least one pooler log")
+
+		// term.begin IS emitted in the elected primary's log: AppointInitialLeader calls
+		// BeginTerm, which triggers the BeginTerm RPC on the candidate pooler.
 		data, err := os.ReadFile(primary.Multipooler.LogFile)
 		require.NoError(t, err)
 		events := shardsetup.ParseEvents(t, bytes.NewReader(data))
-		assert.True(t, shardsetup.HasEvent(events, "primary.init", "started"))
-		assert.True(t, shardsetup.HasEvent(events, "primary.init", "success"))
-		assert.True(t, shardsetup.HasEvent(events, "backup.attempt", "started"))
-		assert.True(t, shardsetup.HasEvent(events, "backup.attempt", "success"))
-		// Note: term.begin is NOT emitted during initial bootstrap because multiorch uses
-		// InitializeEmptyPrimary which sets the consensus term directly without going through
-		// the BeginTerm RPC. term.begin is only emitted during failover (AppointLeaderAction).
+		assert.True(t, shardsetup.HasEvent(events, "term.begin", "started"),
+			"expected term.begin started in primary log")
+		assert.True(t, shardsetup.HasEvent(events, "term.begin", "success"),
+			"expected term.begin success in primary log")
 	})
 
-	t.Run("verify restore.attempt events in standby logs", func(t *testing.T) {
+	t.Run("verify restore.attempt events in all pooler logs", func(t *testing.T) {
+		// All poolers restore from the initial backup: Phase 1 runner deletes its
+		// data directory after backup, so everyone (primary included) restores.
 		for name, inst := range setup.Multipoolers {
-			if name == setup.PrimaryName {
-				continue
-			}
 			// WaitForEvent handles the timing race: isInitialized() can return true
 			// before restoreFromBackupLocked emits its success event.
 			events := shardsetup.WaitForEvent(t, inst.Multipooler.LogFile,
 				"restore.attempt", "success", 30*time.Second)
 			assert.True(t, shardsetup.HasEvent(events, "restore.attempt", "started"),
-				"expected restore.attempt started in standby %s log", name)
+				"expected restore.attempt started in %s log", name)
 		}
 	})
 
@@ -238,6 +300,31 @@ func TestBootstrapInitialization(t *testing.T) {
 		assert.GreaterOrEqual(t, standbyCount, 1, "Should have at least one standby")
 	})
 
+	t.Run("verify all nodes share the same base backup", func(t *testing.T) {
+		// All poolers restore from the same initial backup, so pg_control_system()
+		// must report the same system_identifier on every node.
+		var firstSysID string
+		for name, inst := range setup.Multipoolers {
+			client, err := shardsetup.NewMultipoolerClient(inst.Multipooler.GrpcPort)
+			require.NoError(t, err, "should connect to %s", name)
+
+			ctx := utils.WithTimeout(t, 5*time.Second)
+			sysID, err := shardsetup.QueryStringValue(ctx, client.Pooler,
+				"SELECT system_identifier::text FROM pg_control_system()")
+			client.Close()
+			require.NoError(t, err, "should query system_identifier on %s", name)
+			require.NotEmpty(t, sysID, "system_identifier should be non-empty on %s", name)
+
+			if firstSysID == "" {
+				firstSysID = sysID
+			} else {
+				assert.Equal(t, firstSysID, sysID,
+					"node %s should share the same system_identifier as the first node", name)
+			}
+		}
+		t.Logf("All nodes share system_identifier=%s", firstSysID)
+	})
+
 	t.Run("verify multigres internal tables exist", func(t *testing.T) {
 		// Verify tables exist on all initialized nodes
 		for name, inst := range setup.Multipoolers {
@@ -310,8 +397,8 @@ func TestBootstrapInitialization(t *testing.T) {
 		// Verify WAL position is non-empty
 		assert.NotEmpty(t, walPosition, "wal_position should be non-empty")
 
-		// Verify reason is ShardNeedsBootstrap
-		assert.Equal(t, "ShardNeedsBootstrap", reason, "reason should be 'ShardNeedsBootstrap'")
+		// Verify reason is InitialCohort (set by InitialCohortAction via AppointInitialLeader)
+		assert.Equal(t, "InitialCohort", reason, "reason should be 'InitialCohort'")
 
 		// Parse and verify cohort_members is a valid JSON array
 		var cohortMembers []string
