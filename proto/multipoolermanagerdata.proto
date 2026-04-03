@@ -325,9 +325,14 @@ message GetFollowersResponse {
   SynchronousReplicationConfiguration sync_config = 2;
 }
 
-// EmergencyDemote demotes the current leader server
-// This is called during the Revocation stage of generalized consensus to safely
-// transition a primary to read-only mode and prevent it from making further progress.
+// EmergencyDemote demotes the current leader server.
+//
+// TODO: clarify the intended purpose of this RPC. It was originally described
+// as part of the Revocation stage of generalized consensus, but it is not
+// currently called anywhere in production. It may be intended for graceful
+// node deprovisioning (e.g. a Kubernetes pod receiving SIGTERM), in which case
+// the design should include streaming a status update to multiorch so failover
+// can begin immediately rather than waiting for a heartbeat timeout.
 message EmergencyDemoteRequest {
   // Consensus term for this demotion operation
   // When force=true, this field is ignored and should be passed as 0
