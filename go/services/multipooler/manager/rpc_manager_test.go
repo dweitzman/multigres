@@ -34,6 +34,7 @@ import (
 	"github.com/multigres/multigres/go/common/topoclient/memorytopo"
 	"github.com/multigres/multigres/go/services/multipooler/executor/mock"
 	"github.com/multigres/multigres/go/test/utils"
+	"github.com/multigres/multigres/go/tools/prototest"
 	"github.com/multigres/multigres/go/tools/viperutil"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -361,6 +362,24 @@ func TestActionLock_MutationMethodsTimeout(t *testing.T) {
 
 // expectLeadershipHistoryInsert adds a mock expectation for successful rule history insertion.
 // This is required for Promote to succeed since history insertion failure now fails the promotion.
+// expectCurrentRuleQuery adds a mock for the currentRuleRecord SELECT used by
+// buildConsensusStatus (10 columns, read-only path).
+func expectCurrentRuleQuery(m *mock.QueryService, coordinatorTerm int64, leaderAppName string, cohortAppNames string, lsn string) {
+	cols := []string{
+		"coordinator_term", "rule_subterm", "leader_id", "coordinator_id", "cohort_members",
+		"durability_policy_name", "durability_quorum_type", "durability_required_count",
+		"durability_async_fallback", "created_at",
+	}
+	m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(cols, [][]any{
+		{
+			coordinatorTerm, int64(0), leaderAppName, "zone1_test-coordinator", "{" + cohortAppNames + "}",
+			nil, nil, nil, nil, "2026-01-01 00:00:00",
+		},
+	}))
+	m.AddQueryPatternOnce("COALESCE.pg_last_wal_receive_lsn",
+		mock.MakeQueryResult([]string{"lsn"}, [][]any{{lsn}}))
+}
+
 func expectLeadershipHistoryInsert(m *mock.QueryService) {
 	returnCols := []string{
 		"coordinator_term", "rule_subterm", "event_type", "leader_id", "coordinator_id",
@@ -541,6 +560,9 @@ func TestPromoteIdempotency_FullyCompleteTopologyPrimary(t *testing.T) {
 	mockQueryService.AddQueryPatternOnce("SELECT pg_current_wal_lsn",
 		mock.MakeQueryResult([]string{"pg_current_wal_lsn"}, [][]any{{"0/FEDCBA0"}}))
 
+	// Mock: getConsensusStatus queries current_rule + WAL position (idempotent path has no ruleRec)
+	expectCurrentRuleQuery(mockQueryService, 10, "zone1_test-replica", "zone1_test-replica", "0/FEDCBA0")
+
 	pm, _ := setupPromoteTestManager(t, mockQueryService)
 
 	// Topology is already PRIMARY
@@ -556,6 +578,19 @@ func TestPromoteIdempotency_FullyCompleteTopologyPrimary(t *testing.T) {
 	assert.True(t, resp.WasAlreadyPrimary, "Should report as already primary")
 	assert.Equal(t, int64(10), resp.ConsensusTerm)
 	assert.Equal(t, "0/FEDCBA0", resp.LsnPosition)
+	prototest.RequireEqual(t, &clustermetadatapb.ConsensusStatus{
+		Promise: &clustermetadatapb.HighestCoordinatorPromise{
+			TermNumber: 10,
+		},
+		CurrentPosition: &clustermetadatapb.NodePosition{
+			Rule: &clustermetadatapb.ShardRule{
+				RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 10},
+				PrimaryId:     &clustermetadatapb.ID{Cell: "zone1", Name: "test-replica"},
+				CohortMembers: []*clustermetadatapb.ID{{Cell: "zone1", Name: "test-replica"}},
+			},
+			Lsn: "0/FEDCBA0",
+		},
+	}, resp.ConsensusStatus)
 	assert.NoError(t, mockQueryService.ExpectationsWereMet())
 }
 
@@ -690,6 +725,11 @@ func TestPromoteIdempotency_NothingCompleteYet(t *testing.T) {
 	// Mock: insertLeadershipHistory - required for promotion success
 	expectLeadershipHistoryInsert(mockQueryService)
 
+	// Mock: buildConsensusStatus LSN query — uses the ruleRec returned by updateRule
+	// so no second current_rule fetch is needed, only the WAL position query.
+	mockQueryService.AddQueryPatternOnce("COALESCE.pg_last_wal_receive_lsn",
+		mock.MakeQueryResult([]string{"lsn"}, [][]any{{"0/5678ABC"}}))
+
 	pm, _ := setupPromoteTestManager(t, mockQueryService)
 
 	// Topology is REPLICA
@@ -704,6 +744,23 @@ func TestPromoteIdempotency_NothingCompleteYet(t *testing.T) {
 
 	assert.False(t, resp.WasAlreadyPrimary)
 	assert.Equal(t, int64(10), resp.ConsensusTerm)
+
+	// Verify ConsensusStatus reflects the rule written during promotion.
+	// The rule data comes from expectLeadershipHistoryInsert's mock (coordinator_term=1,
+	// leader=zone1_test-pooler). The promise term matches the consensus term (10).
+	prototest.RequireEqual(t, &clustermetadatapb.ConsensusStatus{
+		Promise: &clustermetadatapb.HighestCoordinatorPromise{
+			TermNumber: 10,
+		},
+		CurrentPosition: &clustermetadatapb.NodePosition{
+			Rule: &clustermetadatapb.ShardRule{
+				RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
+				PrimaryId:     &clustermetadatapb.ID{Cell: "zone1", Name: "test-pooler"},
+				CohortMembers: []*clustermetadatapb.ID{{Cell: "zone1", Name: "test-pooler"}},
+			},
+			Lsn: "0/5678ABC",
+		},
+	}, resp.ConsensusStatus)
 
 	// Verify topology was updated
 	pm.mu.Lock()

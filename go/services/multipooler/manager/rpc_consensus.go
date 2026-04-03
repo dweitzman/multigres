@@ -298,7 +298,7 @@ func (pm *MultiPoolerManager) getInconsistentConsensusStatus(ctx context.Context
 	if cs != nil {
 		term, _ = cs.GetInconsistentTerm()
 	}
-	return pm.buildConsensusStatus(ctx, term)
+	return pm.buildConsensusStatus(ctx, term, nil)
 }
 
 // getConsensusStatus builds a ConsensusStatus snapshot while holding the action lock.
@@ -318,18 +318,22 @@ func (pm *MultiPoolerManager) getConsensusStatus(ctx context.Context) (*clusterm
 			return nil, fmt.Errorf("failed to read consensus term: %w", err)
 		}
 	}
-	return pm.buildConsensusStatus(ctx, term)
+	return pm.buildConsensusStatus(ctx, term, nil)
 }
 
 // buildConsensusStatus constructs a ConsensusStatus from a pre-fetched consensus term
 // and the current postgres state (rule record + WAL position).
+//
+// If prefetchedRec is non-nil it is used directly, avoiding a redundant DB round-trip
+// when the caller already has the current rule (e.g. from updateRule's return value).
+// If nil, the record is fetched from postgres.
 //
 // Returns an error if postgres is unreachable, since a partial status (promise
 // without current_position) could mislead callers about this node's rule position.
 //
 // The highest_known_rule field is not yet populated; it will be added once
 // the pooler tracks forward rule knowledge from the coordinator.
-func (pm *MultiPoolerManager) buildConsensusStatus(ctx context.Context, term *multipoolermanagerdatapb.ConsensusTerm) (*clustermetadatapb.ConsensusStatus, error) {
+func (pm *MultiPoolerManager) buildConsensusStatus(ctx context.Context, term *multipoolermanagerdatapb.ConsensusTerm, prefetchedRec *ruleHistoryRecord) (*clustermetadatapb.ConsensusStatus, error) {
 	status := &clustermetadatapb.ConsensusStatus{}
 
 	if term != nil {
@@ -342,9 +346,15 @@ func (pm *MultiPoolerManager) buildConsensusStatus(ctx context.Context, term *mu
 	}
 
 	// Populate current_position from current_rule and the current WAL position.
-	rec, err := pm.currentRuleRecord(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read current rule: %w", err)
+	var rec *ruleHistoryRecord
+	if prefetchedRec != nil {
+		rec = prefetchedRec
+	} else {
+		var err error
+		rec, err = pm.currentRuleRecord(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read current rule: %w", err)
+		}
 	}
 	if rec != nil {
 		ruleNumber := &clustermetadatapb.RuleNumber{

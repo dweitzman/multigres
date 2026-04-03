@@ -467,6 +467,11 @@ message PromoteResponse {
 
   // Consensus term at the time of promotion
   int64 consensus_term = 3;
+
+  // The node's consensus status after promotion, reflecting the rule written
+  // by this promote. May be nil if postgres returned an error or if the
+  // operation was forced (which skips the rule write).
+  clustermetadata.ConsensusStatus consensus_status = 4;
 }
 
 // ResetReplication resets the standby's connection to its primary
