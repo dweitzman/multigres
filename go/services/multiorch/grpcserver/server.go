@@ -15,10 +15,12 @@
 package grpcserver
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"google.golang.org/grpc"
@@ -181,6 +183,20 @@ func (s *MultiOrchServer) buildPoolerHealthList(req *multiorchpb.ShardStatusRequ
 			LastCheck:       p.LastCheckAttempted,
 		})
 	}
+
+	slices.SortFunc(healthList, func(p1, p2 *multiorchpb.PoolerHealth) int {
+		c1, n1, c2, n2 := "", "", "", ""
+		if p1.PoolerId != nil {
+			c1, n1 = p1.PoolerId.Cell, p1.PoolerId.Name
+		}
+		if p2.PoolerId != nil {
+			c2, n2 = p2.PoolerId.Cell, p2.PoolerId.Name
+		}
+		if c1 != c2 {
+			return cmp.Compare(c1, c2)
+		}
+		return cmp.Compare(n1, n2)
+	})
 
 	return healthList
 }

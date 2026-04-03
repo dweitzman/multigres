@@ -18,10 +18,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -872,7 +874,8 @@ func checkBootstrapStatus(ctx context.Context, t *testing.T, setup *ShardSetup) 
 	// Build human-readable status for each pooler
 	poolerStatuses := make([]string, 0, len(setup.Multipoolers))
 
-	for name, inst := range setup.Multipoolers {
+	for _, name := range slices.Sorted(maps.Keys(setup.Multipoolers)) {
+		inst := setup.Multipoolers[name]
 		client, err := NewMultipoolerClient(inst.Multipooler.GrpcPort)
 		if err != nil {
 			t.Logf("checkBootstrapStatus: failed to connect to %s: %v", name, err)
