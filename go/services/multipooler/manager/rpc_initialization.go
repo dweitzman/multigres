@@ -169,24 +169,19 @@ func (pm *MultiPoolerManager) InitializeEmptyPrimary(ctx context.Context, req *m
 		return nil, err
 	}
 
-	// Write leadership history record for bootstrap
-	reason := "ShardNeedsBootstrap"
-	cohortMembers := []poolerID{leaderID} // Only the initial primary during bootstrap
-	acceptedMembers := []poolerID{leaderID}
-
-	if err := pm.insertHistoryRecord(ctx,
+	// Write rule history record for bootstrap
+	if _, err := pm.updateRule(ctx, newRuleUpdate(
 		req.ConsensusTerm,
-		"promotion",
-		leaderID,
 		req.CoordinatorId,
-		finalLSN,
-		"bootstrap", // operation
-		reason,
-		cohortMembers,
-		acceptedMembers,
-		false /* force */); err != nil {
+		"promotion",
+		"ShardNeedsBootstrap").
+		withLeader(leaderID.id).
+		withCohort([]*clustermetadatapb.ID{leaderID.id}).
+		withAcceptedMembers([]*clustermetadatapb.ID{leaderID.id}).
+		withOperation("bootstrap").
+		withWALPosition(finalLSN)); err != nil {
 		// Log but don't fail - history is for audit, not correctness
-		pm.logger.WarnContext(ctx, "Failed to insert leadership history",
+		pm.logger.WarnContext(ctx, "Failed to write rule history",
 			"term", req.ConsensusTerm,
 			"error", err)
 	}

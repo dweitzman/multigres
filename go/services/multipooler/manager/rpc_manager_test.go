@@ -359,10 +359,23 @@ func TestActionLock_MutationMethodsTimeout(t *testing.T) {
 	}
 }
 
-// expectLeadershipHistoryInsert adds a mock expectation for successful leadership history insertion.
-// This is required for Promote to succeed since leadership history insertion failure now fails the promotion.
+// expectLeadershipHistoryInsert adds a mock expectation for successful rule history insertion.
+// This is required for Promote to succeed since history insertion failure now fails the promotion.
 func expectLeadershipHistoryInsert(m *mock.QueryService) {
-	m.AddQueryPatternOnce("INSERT INTO multigres.leadership_history", mock.MakeQueryResult(nil, nil))
+	returnCols := []string{
+		"coordinator_term", "rule_subterm", "event_type", "leader_id", "coordinator_id",
+		"wal_position", "operation", "reason", "cohort_members", "accepted_members",
+		"durability_policy_name", "durability_quorum_type", "durability_required_count",
+		"durability_async_fallback", "created_at",
+	}
+	m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(returnCols, [][]any{
+		{
+			int64(1), int64(0), "promotion", "zone1_test-pooler", "zone1_test-coordinator",
+			"0/ABCDEF0", nil, "test reason",
+			"{zone1_test-pooler}", "{}",
+			nil, nil, nil, nil, "2026-03-24 09:00:17.000000+00",
+		},
+	}))
 }
 
 // createPgDataDir creates the pg_data directory with PG_VERSION file.
@@ -974,8 +987,8 @@ func TestPromote_LeadershipHistoryErrorFailsPromotion(t *testing.T) {
 	mockQueryService.AddQueryPatternOnce("SELECT pg_reload_conf",
 		mock.MakeQueryResult(nil, nil))
 
-	// Mock: insertLeadershipHistory fails with database error (e.g., sync replication timeout)
-	mockQueryService.AddQueryPatternOnceWithError("INSERT INTO multigres.leadership_history",
+	// Mock: history write fails with database error (e.g., sync replication timeout)
+	mockQueryService.AddQueryPatternOnceWithError("FROM multigres.current_rule",
 		mterrors.New(mtrpcpb.Code_DEADLINE_EXCEEDED, "timeout waiting for synchronous replication"))
 
 	pm, _ := setupPromoteTestManager(t, mockQueryService)
@@ -990,13 +1003,13 @@ func TestPromote_LeadershipHistoryErrorFailsPromotion(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(0), term.GetPrimaryTerm(), "primary_term should be 0 before promotion")
 
-	// Call Promote - should FAIL because leadership history insertion fails
+	// Call Promote - should FAIL because rule history write fails
 	resp, err := pm.Promote(ctx, 10, "0/9876543", nil, false /* force */, "test_reason", nil, nil, nil)
-	require.Error(t, err, "Promote should fail when leadership history insertion fails")
+	require.Error(t, err, "Promote should fail when rule history write fails")
 	require.Nil(t, resp)
 
-	// Error message should indicate the leadership history failure
-	assert.Contains(t, err.Error(), "leadership history")
+	// Error message should indicate the rule history failure
+	assert.Contains(t, err.Error(), "rule history")
 
 	// CRITICAL: Verify that primary_term WAS set even though promotion failed.
 	// This is intentional - we set primary_term (local state) before writing to history table
@@ -2227,10 +2240,10 @@ func TestConfigureSynchronousReplication_HistoryFailurePreventGUCUpdates(t *test
 		return manager.GetState() == ManagerStateReady
 	}, 5*time.Second, 100*time.Millisecond)
 
-	// CRITICAL: Mock the INSERT INTO leadership_history to FAIL
+	// CRITICAL: Mock the rule update CTE to FAIL
 	// This should prevent any subsequent GUC updates from happening
 	mockQueryService.AddQueryPatternOnceWithError(
-		"INSERT INTO multigres.leadership_history",
+		"FROM multigres.current_rule",
 		mterrors.New(mtrpcpb.Code_DEADLINE_EXCEEDED, "timeout waiting for sync replication"))
 
 	// We do NOT add expectations for ALTER SYSTEM SET queries
@@ -2344,9 +2357,9 @@ func TestUpdateSynchronousStandbyList_HistoryFailurePreventsGUCUpdate(t *testing
 	mockQueryService.AddQueryPattern("SHOW synchronous_commit",
 		mock.MakeQueryResult([]string{"synchronous_commit"}, [][]any{{"remote_write"}}))
 
-	// CRITICAL: Mock the INSERT INTO leadership_history to FAIL
+	// CRITICAL: Mock the rule update CTE to FAIL
 	mockQueryService.AddQueryPatternOnceWithError(
-		"INSERT INTO multigres.leadership_history",
+		"FROM multigres.current_rule",
 		mterrors.New(mtrpcpb.Code_DEADLINE_EXCEEDED, "timeout waiting for sync replication"))
 
 	// We do NOT add expectations for ALTER SYSTEM SET synchronous_standby_names

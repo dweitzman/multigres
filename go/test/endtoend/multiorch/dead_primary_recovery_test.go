@@ -21,7 +21,6 @@ package multiorch
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -31,6 +30,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/multigres/multigres/go/common/sqltypes"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
@@ -338,8 +338,8 @@ func TestDeadPrimaryRecovery(t *testing.T) {
 		assert.Equal(t, "on", syncCommit, "synchronous_commit should be 'on' after failover")
 	})
 
-	// Verify leadership_history records all failovers
-	t.Run("verify leadership_history after failovers", func(t *testing.T) {
+	// Verify rule_history records all failovers
+	t.Run("verify rule_history after failovers", func(t *testing.T) {
 		finalPrimaryName := setup.PrimaryName
 		finalPrimaryInst := setup.GetMultipoolerInstance(finalPrimaryName)
 		require.NotNil(t, finalPrimaryInst, "final primary instance should exist")
@@ -348,24 +348,24 @@ func TestDeadPrimaryRecovery(t *testing.T) {
 		db := connectToPostgres(t, socketDir, finalPrimaryInst.Pgctld.PgPort)
 		defer db.Close()
 
-		// Query the leadership_history table for the latest record
-		query := `SELECT term_number, leader_id, coordinator_id, wal_position, reason,
+		// Query the rule_history table for the latest record
+		query := `SELECT coordinator_term, leader_id, coordinator_id, wal_position, reason,
 				  cohort_members, accepted_members, created_at
-				  FROM multigres.leadership_history
-				  ORDER BY term_number DESC
+				  FROM multigres.rule_history
+				  ORDER BY coordinator_term DESC, rule_subterm DESC
 				  LIMIT 1`
 
-		var termNumber int64
+		var coordinatorTerm int64
 		var leaderID, coordinatorID, walPosition, reason string
-		var cohortMembersJSON, acceptedMembersJSON string
+		var cohortMembersArr, acceptedMembersArr string
 		var createdAt time.Time
 
-		err := db.QueryRow(query).Scan(&termNumber, &leaderID, &coordinatorID, &walPosition,
-			&reason, &cohortMembersJSON, &acceptedMembersJSON, &createdAt)
-		require.NoError(t, err, "Should be able to query leadership_history")
+		err := db.QueryRow(query).Scan(&coordinatorTerm, &leaderID, &coordinatorID, &walPosition,
+			&reason, &cohortMembersArr, &acceptedMembersArr, &createdAt)
+		require.NoError(t, err, "Should be able to query rule_history")
 
-		// Assertions - after 3 failovers, term_number should be >= 3
-		assert.GreaterOrEqual(t, termNumber, int64(3), "term_number should be >= 3 after 3 failovers")
+		// Assertions - after 3 failovers, coordinator_term should be >= 3
+		assert.GreaterOrEqual(t, coordinatorTerm, int64(3), "coordinator_term should be >= 3 after 3 failovers")
 		assert.Contains(t, leaderID, finalPrimaryName, "leader_id should contain final primary name")
 		// Verify coordinator_id matches the multiorch's cell_name format (with multiple multiorchs, any could be coordinator)
 		expectedCoordinatorPrefix := setup.CellName + "_multiorch"
@@ -373,20 +373,19 @@ func TestDeadPrimaryRecovery(t *testing.T) {
 		assert.NotEmpty(t, walPosition, "wal_position should not be empty")
 		assert.Contains(t, reason, "PrimaryIsDead", "reason should indicate primary failure")
 
-		// Verify cohort_members and accepted_members are valid JSON arrays
-		var cohortMembers, acceptedMembers []string
-		err = json.Unmarshal([]byte(cohortMembersJSON), &cohortMembers)
-		require.NoError(t, err, "cohort_members should be valid JSON array")
-		err = json.Unmarshal([]byte(acceptedMembersJSON), &acceptedMembers)
-		require.NoError(t, err, "accepted_members should be valid JSON array")
+		// Parse and verify cohort_members and accepted_members are valid TEXT[] values
+		cohortMembers, err := sqltypes.ParseTextArray(cohortMembersArr)
+		require.NoError(t, err, "cohort_members should be a valid PostgreSQL text array")
+		acceptedMembers, err := sqltypes.ParseTextArray(acceptedMembersArr)
+		require.NoError(t, err, "accepted_members should be a valid PostgreSQL text array")
 
 		assert.NotEmpty(t, cohortMembers, "cohort_members should not be empty")
 		assert.NotEmpty(t, acceptedMembers, "accepted_members should not be empty")
 		assert.LessOrEqual(t, len(acceptedMembers), len(cohortMembers),
 			"accepted_members should not exceed cohort_members")
 
-		t.Logf("Leadership history verified: term=%d, leader=%s, coordinator=%s, reason=%s",
-			termNumber, leaderID, coordinatorID, reason)
+		t.Logf("Rule history verified: term=%d, leader=%s, coordinator=%s, reason=%s",
+			coordinatorTerm, leaderID, coordinatorID, reason)
 	})
 
 	// Verify all successful writes are present on all multipoolers (all should be healthy now)

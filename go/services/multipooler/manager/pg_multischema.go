@@ -16,13 +16,11 @@ package manager
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/multigres/multigres/go/common/constants"
 	"github.com/multigres/multigres/go/common/mterrors"
-	"github.com/multigres/multigres/go/common/parser/ast"
 	"github.com/multigres/multigres/go/common/timeouts"
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -60,7 +58,15 @@ func (pm *MultiPoolerManager) createSidecarSchema(ctx context.Context) error {
 		return err
 	}
 
-	if err := pm.createLeadershipHistoryTable(ctx); err != nil {
+	if err := pm.createCurrentRuleTable(ctx); err != nil {
+		return err
+	}
+
+	if err := pm.initializeCurrentRule(ctx); err != nil {
+		return err
+	}
+
+	if err := pm.createRuleHistoryTable(ctx); err != nil {
 		return err
 	}
 
@@ -134,6 +140,58 @@ func (pm *MultiPoolerManager) createSchema(ctx context.Context) error {
 // Table Creation
 // ----------------------------------------------------------------------------
 
+// createCurrentRuleTable creates the current_rule table.
+// This table holds a single row per shard representing the current cluster rule.
+// It is used as a locking target (SELECT FOR UPDATE) and a fast read path for
+// current state, while rule_history provides the append-only audit log.
+//
+// Non-essential audit fields (event_type, wal_position, accepted_members, reason,
+// operation) are stored only in rule_history to keep this table focused on
+// operational state.
+//
+// created_at records when this particular rule was written, matching the
+// corresponding rule_history.created_at for the same (coordinator_term, rule_subterm).
+func (pm *MultiPoolerManager) createCurrentRuleTable(ctx context.Context) error {
+	execCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	if err := pm.exec(execCtx, `CREATE TABLE IF NOT EXISTS multigres.current_rule (
+		shard_id                  BYTEA PRIMARY KEY,
+		coordinator_term          BIGINT NOT NULL,
+		rule_subterm              BIGINT NOT NULL,
+		leader_id                 TEXT,
+		coordinator_id            TEXT,
+		cohort_members            TEXT[] NOT NULL,
+		durability_policy_name    TEXT,
+		durability_quorum_type    TEXT,
+		durability_required_count INT,
+		durability_async_fallback TEXT,
+		created_at                TIMESTAMPTZ NOT NULL
+	)`); err != nil {
+		return mterrors.Wrap(err, "failed to create current_rule table")
+	}
+	return nil
+}
+
+// initializeCurrentRule inserts the zero-state sentinel row for the default shard.
+// This row must exist before any rule is written so that insertHistoryRecord can
+// SELECT FOR UPDATE on it to serialise concurrent writes.
+// coordinator_term=0 means no rule has been applied yet.
+// Uses ON CONFLICT DO NOTHING so it is safe to call multiple times.
+func (pm *MultiPoolerManager) initializeCurrentRule(ctx context.Context) error {
+	execCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	err := pm.execArgs(execCtx, `
+		INSERT INTO multigres.current_rule
+		  (shard_id, coordinator_term, rule_subterm, cohort_members, created_at)
+		VALUES ($1, 0, 0, '{}', now())
+		ON CONFLICT (shard_id) DO NOTHING`,
+		[]byte("0"))
+	if err != nil {
+		return mterrors.Wrap(err, "failed to initialize current_rule")
+	}
+	return nil
+}
+
 // createHeartbeatTable creates the heartbeat table for leader election
 func (pm *MultiPoolerManager) createHeartbeatTable(ctx context.Context) error {
 	execCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
@@ -148,31 +206,32 @@ func (pm *MultiPoolerManager) createHeartbeatTable(ctx context.Context) error {
 	return nil
 }
 
-// createLeadershipHistoryTable creates the leadership_history table and its indexes
-func (pm *MultiPoolerManager) createLeadershipHistoryTable(ctx context.Context) error {
+// createRuleHistoryTable creates the rule_history table.
+// Each row records a cluster state change (promotion, cohort membership, durability policy).
+// The composite primary key (coordinator_term, rule_subterm) uniquely identifies each rule;
+// rule_subterm is assigned by the application as MAX(rule_subterm)+1 within a coordinator_term.
+func (pm *MultiPoolerManager) createRuleHistoryTable(ctx context.Context) error {
 	execCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer cancel()
-	if err := pm.exec(execCtx, `CREATE TABLE IF NOT EXISTS multigres.leadership_history (
-		id BIGSERIAL PRIMARY KEY,
-		term_number BIGINT NOT NULL,
-		event_type TEXT NOT NULL,
-		leader_id TEXT,
-		coordinator_id TEXT,
-		wal_position TEXT,
-		accepted_members JSONB,
-		reason TEXT NOT NULL,
-		cohort_members JSONB NOT NULL,
-		operation TEXT,
-		created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+	if err := pm.exec(execCtx, `CREATE TABLE IF NOT EXISTS multigres.rule_history (
+		coordinator_term          BIGINT NOT NULL,
+		rule_subterm              BIGINT NOT NULL,
+		event_type                TEXT NOT NULL,
+		leader_id                 TEXT,
+		coordinator_id            TEXT,
+		wal_position              TEXT,
+		accepted_members          TEXT[],
+		reason                    TEXT NOT NULL,
+		cohort_members            TEXT[] NOT NULL,
+		durability_policy_name    TEXT,
+		durability_quorum_type    TEXT,
+		durability_required_count INT,
+		durability_async_fallback TEXT,
+		operation                 TEXT,
+		created_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+		PRIMARY KEY (coordinator_term, rule_subterm)
 	)`); err != nil {
-		return mterrors.Wrap(err, "failed to create leadership_history table")
-	}
-
-	execCtx, cancel = context.WithTimeout(ctx, 500*time.Millisecond)
-	defer cancel()
-	if err := pm.exec(execCtx, `CREATE INDEX IF NOT EXISTS idx_leadership_history_term_event
-		ON multigres.leadership_history(term_number DESC, event_type)`); err != nil {
-		return mterrors.Wrap(err, "failed to create leadership_history index")
+		return mterrors.Wrap(err, "failed to create rule_history table")
 	}
 
 	return nil
@@ -280,137 +339,379 @@ func (pm *MultiPoolerManager) insertShard(ctx context.Context, tablegroupName st
 	return nil
 }
 
-// LeadershipHistoryRecord represents a row in the multigres.leadership_history table.
-type LeadershipHistoryRecord struct {
-	ID              int64
-	TermNumber      int64
-	EventType       string
-	LeaderID        *string
-	CoordinatorID   *string
-	WALPosition     *string
-	Operation       *string
-	Reason          string
-	CohortMembers   []string
-	AcceptedMembers []string
-	CreatedAt       time.Time
+// ruleHistoryRecord represents a row from multigres.rule_history or multigres.current_rule.
+type ruleHistoryRecord struct {
+	CoordinatorTerm         int64
+	RuleSubterm             int64
+	EventType               string
+	LeaderID                *poolerID // nil if not set
+	CoordinatorID           *string   // informational only; component type is not stored
+	WALPosition             *string
+	Operation               *string
+	Reason                  string
+	CohortMembers           []poolerID
+	AcceptedMembers         []poolerID
+	DurabilityPolicyName    *string
+	DurabilityQuorumType    *string
+	DurabilityRequiredCount *int32
+	DurabilityAsyncFallback *string
+	CreatedAt               time.Time
 }
 
-// queryLeadershipHistory returns the most recent leadership history records ordered
-// by term number descending (newest first). limit controls the maximum number of
-// records returned.
-func (pm *MultiPoolerManager) queryLeadershipHistory(ctx context.Context, limit int) ([]LeadershipHistoryRecord, error) {
+// ruleUpdateBuilder constructs the parameters for updateRule.
+// Coordinator ID, event type, and reason are always required.
+// Fields not set via builder methods retain their current value in current_rule.
+type ruleUpdateBuilder struct {
+	// required
+	termNumber    int64
+	coordinatorID *clustermetadatapb.ID
+	eventType     string
+	reason        string
+
+	// optional; nil means keep the existing value in current_rule
+	leaderID      *clustermetadatapb.ID
+	cohortMembers []*clustermetadatapb.ID
+
+	// history-only optional fields
+	walPosition     string
+	operation       string
+	acceptedMembers []*clustermetadatapb.ID
+
+	force bool
+}
+
+func newRuleUpdate(termNumber int64, coordinatorID *clustermetadatapb.ID, eventType, reason string) *ruleUpdateBuilder {
+	return &ruleUpdateBuilder{
+		termNumber:    termNumber,
+		coordinatorID: coordinatorID,
+		eventType:     eventType,
+		reason:        reason,
+	}
+}
+
+func (b *ruleUpdateBuilder) withLeader(id *clustermetadatapb.ID) *ruleUpdateBuilder {
+	b.leaderID = id
+	return b
+}
+
+func (b *ruleUpdateBuilder) withCohort(members []*clustermetadatapb.ID) *ruleUpdateBuilder {
+	b.cohortMembers = members
+	return b
+}
+
+func (b *ruleUpdateBuilder) withWALPosition(pos string) *ruleUpdateBuilder {
+	b.walPosition = pos
+	return b
+}
+
+func (b *ruleUpdateBuilder) withOperation(op string) *ruleUpdateBuilder {
+	b.operation = op
+	return b
+}
+
+func (b *ruleUpdateBuilder) withAcceptedMembers(members []*clustermetadatapb.ID) *ruleUpdateBuilder {
+	b.acceptedMembers = members
+	return b
+}
+
+func (b *ruleUpdateBuilder) withForce() *ruleUpdateBuilder {
+	b.force = true
+	return b
+}
+
+// parsePoolerIDStrings converts a slice of "cell_name" app name strings into poolerIDs.
+// Returns nil for nil input, preserving the distinction between "not set" and "empty".
+func parsePoolerIDStrings(names []string) ([]poolerID, error) {
+	if names == nil {
+		return nil, nil
+	}
+	result := make([]poolerID, 0, len(names))
+	for _, s := range names {
+		id, err := parseApplicationName(s)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, poolerID{id: id, appName: s})
+	}
+	return result, nil
+}
+
+// scanRuleHistoryRow scans string-typed DB columns into a ruleHistoryRecord,
+// parsing leader_id, cohort_members, and accepted_members into poolerIDs.
+// leaderIDStr, cohortNames, and acceptedNames are intermediary scan targets.
+func scanRuleHistoryRow(rec *ruleHistoryRecord, leaderIDStr *string, cohortNames, acceptedNames []string) error {
+	if leaderIDStr != nil {
+		id, err := parseApplicationName(*leaderIDStr)
+		if err != nil {
+			return fmt.Errorf("failed to parse leader_id %q: %w", *leaderIDStr, err)
+		}
+		p := poolerID{id: id, appName: *leaderIDStr}
+		rec.LeaderID = &p
+	}
+	cohort, err := parsePoolerIDStrings(cohortNames)
+	if err != nil {
+		return fmt.Errorf("failed to parse cohort_members: %w", err)
+	}
+	rec.CohortMembers = cohort
+
+	accepted, err := parsePoolerIDStrings(acceptedNames)
+	if err != nil {
+		return fmt.Errorf("failed to parse accepted_members: %w", err)
+	}
+	rec.AcceptedMembers = accepted
+	return nil
+}
+
+// queryRuleHistory returns the most recent rule_history records ordered by
+// (coordinator_term DESC, rule_subterm DESC). limit controls the maximum number
+// of records returned.
+func (pm *MultiPoolerManager) queryRuleHistory(ctx context.Context, limit int) ([]ruleHistoryRecord, error) {
 	queryCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer cancel()
 
 	result, err := pm.queryArgs(queryCtx, `
-		SELECT id, term_number, event_type, leader_id, coordinator_id,
-		       wal_position, operation, reason, cohort_members, accepted_members, created_at
-		FROM multigres.leadership_history
-		ORDER BY term_number DESC, id DESC
+		SELECT coordinator_term, rule_subterm, event_type, leader_id, coordinator_id,
+		       wal_position, operation, reason, cohort_members, accepted_members,
+		       durability_policy_name, durability_quorum_type, durability_required_count,
+		       durability_async_fallback, created_at
+		FROM multigres.rule_history
+		ORDER BY coordinator_term DESC, rule_subterm DESC
 		LIMIT $1`, limit)
 	if err != nil {
-		return nil, mterrors.Wrap(err, "failed to query leadership history")
+		return nil, mterrors.Wrap(err, "failed to query rule_history")
 	}
 
-	records := make([]LeadershipHistoryRecord, 0, len(result.Rows))
+	records := make([]ruleHistoryRecord, 0, len(result.Rows))
 	for _, row := range result.Rows {
-		var rec LeadershipHistoryRecord
-		var cohortJSON string
-		var acceptedJSONPtr *string
+		var rec ruleHistoryRecord
+		var leaderIDStr *string
+		var cohortNames, acceptedNames []string
 		if err := executor.ScanRow(row,
-			&rec.ID,
-			&rec.TermNumber,
+			&rec.CoordinatorTerm,
+			&rec.RuleSubterm,
 			&rec.EventType,
-			&rec.LeaderID,
+			&leaderIDStr,
 			&rec.CoordinatorID,
 			&rec.WALPosition,
 			&rec.Operation,
 			&rec.Reason,
-			&cohortJSON,
-			&acceptedJSONPtr,
+			&cohortNames,
+			&acceptedNames,
+			&rec.DurabilityPolicyName,
+			&rec.DurabilityQuorumType,
+			&rec.DurabilityRequiredCount,
+			&rec.DurabilityAsyncFallback,
 			&rec.CreatedAt,
 		); err != nil {
-			return nil, mterrors.Wrap(err, "failed to scan leadership history row")
+			return nil, mterrors.Wrap(err, "failed to scan rule_history row")
 		}
-
-		if err := json.Unmarshal([]byte(cohortJSON), &rec.CohortMembers); err != nil {
-			return nil, mterrors.Wrap(err, "failed to unmarshal cohort_members")
+		if err := scanRuleHistoryRow(&rec, leaderIDStr, cohortNames, acceptedNames); err != nil {
+			return nil, mterrors.Wrap(err, "failed to parse rule_history row")
 		}
-		if acceptedJSONPtr != nil {
-			if err := json.Unmarshal([]byte(*acceptedJSONPtr), &rec.AcceptedMembers); err != nil {
-				return nil, mterrors.Wrap(err, "failed to unmarshal accepted_members")
-			}
-		}
-
 		records = append(records, rec)
 	}
 
 	return records, nil
 }
 
-// currentLeadershipRecord returns the single most recent record in
-// multigres.leadership_history, determined by the highest term_number.
-// Returns nil if the table is empty.
-func (pm *MultiPoolerManager) currentLeadershipRecord(ctx context.Context) (*LeadershipHistoryRecord, error) {
-	records, err := pm.queryLeadershipHistory(ctx, 1)
+// currentRuleRecord returns the current rule from multigres.current_rule.
+// Returns nil if no rule has been applied yet (coordinator_term = 0).
+func (pm *MultiPoolerManager) currentRuleRecord(ctx context.Context) (*ruleHistoryRecord, error) {
+	queryCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+
+	result, err := pm.queryArgs(queryCtx, `
+		SELECT coordinator_term, rule_subterm, leader_id, coordinator_id, cohort_members,
+		       durability_policy_name, durability_quorum_type, durability_required_count,
+		       durability_async_fallback, created_at
+		FROM multigres.current_rule
+		WHERE shard_id = $1`, []byte("0"))
 	if err != nil {
-		return nil, err
+		return nil, mterrors.Wrap(err, "failed to query current_rule")
 	}
-	if len(records) == 0 {
+	if len(result.Rows) == 0 {
 		return nil, nil
 	}
-	return &records[0], nil
+
+	var rec ruleHistoryRecord
+	var leaderIDStr *string
+	var cohortNames []string
+	if err := executor.ScanRow(result.Rows[0],
+		&rec.CoordinatorTerm,
+		&rec.RuleSubterm,
+		&leaderIDStr,
+		&rec.CoordinatorID,
+		&cohortNames,
+		&rec.DurabilityPolicyName,
+		&rec.DurabilityQuorumType,
+		&rec.DurabilityRequiredCount,
+		&rec.DurabilityAsyncFallback,
+		&rec.CreatedAt,
+	); err != nil {
+		return nil, mterrors.Wrap(err, "failed to scan current_rule row")
+	}
+	if err := scanRuleHistoryRow(&rec, leaderIDStr, cohortNames, nil); err != nil {
+		return nil, mterrors.Wrap(err, "failed to parse current_rule row")
+	}
+
+	// coordinator_term=0 is the sentinel initial state; no rule has been applied yet.
+	if rec.CoordinatorTerm == 0 {
+		return nil, nil
+	}
+	return &rec, nil
 }
 
-// insertHistoryRecord inserts a record into the leadership_history table.
-// This is used for both promotion events and replication config changes.
-// This operation uses the remote-operation-timeout and will fail if it cannot complete within
-// that time. A timeout typically indicates that synchronous replication is not functioning.
-func (pm *MultiPoolerManager) insertHistoryRecord(ctx context.Context, termNumber int64, eventType string, leaderID poolerID, coordinatorID *clustermetadatapb.ID, walPosition, operation, reason string, cohortMembers, acceptedMembers []poolerID, force bool) error {
-	if force {
+// updateRule atomically writes a new rule by updating multigres.current_rule and
+// appending to multigres.rule_history in a single CTE statement.
+//
+// The rule_subterm is assigned as:
+//   - 0 if termNumber is greater than the current coordinator_term (new term)
+//   - current rule_subterm + 1 if termNumber equals the current coordinator_term
+//
+// Fields not set via the builder (leaderID, cohortMembers) retain their current
+// values in current_rule. All provided values are written to rule_history.
+//
+// current_rule is locked with SELECT FOR UPDATE before the update, serialising
+// concurrent writes at the database level in addition to the caller's action lock.
+//
+// Returns the written record, or nil if force mode skipped the write.
+//
+// This operation uses the remote-operation-timeout and will fail if it cannot
+// complete within that time. A timeout typically indicates that synchronous
+// replication is not functioning.
+func (pm *MultiPoolerManager) updateRule(ctx context.Context, update *ruleUpdateBuilder) (*ruleHistoryRecord, error) {
+	if update.force {
 		// Force mode skips history recording entirely. Force operations are emergency
-		// operations that must configure replication GUCs regardless. The INSERT would
+		// operations that must configure replication GUCs regardless. The write would
 		// block on sync replication with unreachable standbys, consuming the parent
 		// context's deadline and causing subsequent GUC changes to fail.
-		pm.logger.InfoContext(ctx, "Skipping history record in force mode",
-			"term_number", termNumber,
-			"event_type", eventType,
-			"operation", operation)
-		return nil
+		pm.logger.InfoContext(ctx, "Skipping rule update in force mode",
+			"coordinator_term", update.termNumber,
+			"event_type", update.eventType)
+		return nil, nil
 	}
 
-	cohortJSON, err := json.Marshal(poolerIDsToAppNames(cohortMembers))
-	if err != nil {
-		return mterrors.Wrap(err, "failed to marshal cohort_members")
+	// Convert optional leader ID; empty string causes NULLIF→COALESCE to keep existing.
+	var leaderStr string
+	if update.leaderID != nil {
+		pid, err := newPoolerID(update.leaderID)
+		if err != nil {
+			return nil, mterrors.Wrap(err, "invalid leader ID")
+		}
+		leaderStr = pid.appName
 	}
 
-	acceptedJSON, err := json.Marshal(poolerIDsToAppNames(acceptedMembers))
-	if err != nil {
-		return mterrors.Wrap(err, "failed to marshal accepted_members")
+	// Convert optional cohort; nil slice becomes SQL NULL, triggering COALESCE to keep existing.
+	var cohortParam []string
+	if update.cohortMembers != nil {
+		pids, err := toPoolerIDs(update.cohortMembers)
+		if err != nil {
+			return nil, mterrors.Wrap(err, "invalid cohort member ID")
+		}
+		cohortParam = poolerIDsToAppNames(pids)
 	}
+
+	var acceptedParam []string
+	if len(update.acceptedMembers) > 0 {
+		pids, err := toPoolerIDs(update.acceptedMembers)
+		if err != nil {
+			return nil, mterrors.Wrap(err, "invalid accepted member ID")
+		}
+		acceptedParam = poolerIDsToAppNames(pids)
+	}
+
+	coordinatorIDStr := topoclient.ClusterIDString(update.coordinatorID)
 
 	// Use the remote operation timeout for history writes. This write validates that synchronous
 	// replication is functioning - it must wait long enough for standbys to connect and acknowledge.
 	execCtx, cancel := context.WithTimeout(ctx, timeouts.RemoteOperationTimeout)
 	defer cancel()
 
-	insert := fmt.Sprintf(`INSERT INTO multigres.leadership_history
-	(term_number, event_type, leader_id, coordinator_id, wal_position, operation, reason, cohort_members, accepted_members)
-	VALUES (%d, %s, NULLIF(%s, ''), NULLIF(%s, ''), NULLIF(%s, ''), NULLIF(%s, ''), %s, %s::jsonb, %s::jsonb)`,
-		termNumber,
-		ast.QuoteStringLiteral(eventType),
-		ast.QuoteStringLiteral(leaderID.appName),
-		ast.QuoteStringLiteral(topoclient.ClusterIDString(coordinatorID)),
-		ast.QuoteStringLiteral(walPosition),
-		ast.QuoteStringLiteral(operation),
-		ast.QuoteStringLiteral(reason),
-		ast.QuoteStringLiteral(string(cohortJSON)),
-		ast.QuoteStringLiteral(string(acceptedJSON)),
+	result, err := pm.queryArgs(execCtx, `
+		WITH
+		  locked AS (
+		    SELECT coordinator_term, rule_subterm, leader_id, cohort_members
+		    FROM multigres.current_rule
+		    WHERE shard_id = $1
+		    FOR UPDATE
+		  ),
+		  next_sub AS (
+		    SELECT CASE
+		      WHEN $2 > locked.coordinator_term THEN 0
+		      ELSE locked.rule_subterm + 1
+		    END AS value
+		    FROM locked
+		  ),
+		  updated AS (
+		    UPDATE multigres.current_rule
+		    SET coordinator_term = $2,
+		        rule_subterm     = next_sub.value,
+		        leader_id        = COALESCE(NULLIF($4, ''), locked.leader_id),
+		        coordinator_id   = NULLIF($5, ''),
+		        cohort_members   = COALESCE($9, locked.cohort_members),
+		        created_at       = now()
+		    FROM next_sub, locked
+		    WHERE shard_id = $1
+		    RETURNING coordinator_term, rule_subterm
+		  )
+		INSERT INTO multigres.rule_history
+		  (coordinator_term, rule_subterm, event_type, leader_id, coordinator_id,
+		   wal_position, operation, reason, cohort_members, accepted_members)
+		SELECT updated.coordinator_term, updated.rule_subterm,
+		       $3,
+		       COALESCE(NULLIF($4, ''), locked.leader_id),
+		       NULLIF($5, ''),
+		       NULLIF($6, ''), NULLIF($7, ''), $8,
+		       COALESCE($9, locked.cohort_members),
+		       $10
+		FROM updated, locked
+		RETURNING coordinator_term, rule_subterm, event_type, leader_id, coordinator_id,
+		          wal_position, operation, reason, cohort_members, accepted_members,
+		          NULL::text AS durability_policy_name,
+		          NULL::text AS durability_quorum_type,
+		          NULL::int  AS durability_required_count,
+		          NULL::text AS durability_async_fallback,
+		          created_at`,
+		[]byte("0"),
+		update.termNumber,
+		update.eventType,
+		leaderStr,
+		coordinatorIDStr,
+		update.walPosition,
+		update.operation,
+		update.reason,
+		cohortParam,
+		acceptedParam,
 	)
-
-	if err := pm.exec(execCtx, insert); err != nil {
-		return mterrors.Wrap(err, "failed to insert history record")
+	if err != nil {
+		return nil, mterrors.Wrap(err, "failed to write rule history record")
 	}
 
-	return nil
+	var rec ruleHistoryRecord
+	var leaderIDStr *string
+	var cohortNames, acceptedNames []string
+	if err := executor.ScanSingleRow(result,
+		&rec.CoordinatorTerm,
+		&rec.RuleSubterm,
+		&rec.EventType,
+		&leaderIDStr,
+		&rec.CoordinatorID,
+		&rec.WALPosition,
+		&rec.Operation,
+		&rec.Reason,
+		&cohortNames,
+		&acceptedNames,
+		&rec.DurabilityPolicyName,
+		&rec.DurabilityQuorumType,
+		&rec.DurabilityRequiredCount,
+		&rec.DurabilityAsyncFallback,
+		&rec.CreatedAt,
+	); err != nil {
+		return nil, mterrors.Wrap(err, "failed to scan written rule history record")
+	}
+	if err := scanRuleHistoryRow(&rec, leaderIDStr, cohortNames, acceptedNames); err != nil {
+		return nil, mterrors.Wrap(err, "failed to parse written rule history record")
+	}
+
+	return &rec, nil
 }

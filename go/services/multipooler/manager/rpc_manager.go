@@ -367,7 +367,11 @@ func (pm *MultiPoolerManager) ResetReplication(ctx context.Context) error {
 	return nil
 }
 
-// ConfigureSynchronousReplication configures PostgreSQL synchronous replication settings
+// ConfigureSynchronousReplication configures PostgreSQL synchronous replication settings.
+//
+// TODO: This RPC is currently only called during bootstrap. Once bootstrap configures
+// replication the same way as failover (via Promote/UpdateSynchronousStandbyList),
+// this RPC can be removed.
 func (pm *MultiPoolerManager) ConfigureSynchronousReplication(ctx context.Context, synchronousCommit multipoolermanagerdatapb.SynchronousCommitLevel, synchronousMethod multipoolermanagerdatapb.SynchronousMethod, numSync int32, standbyIDs []*clustermetadatapb.ID, reloadConfig bool, force bool) error {
 	if err := pm.checkReady(); err != nil {
 		return err
@@ -412,15 +416,17 @@ func (pm *MultiPoolerManager) configureSynchronousReplicationLocked(ctx context.
 	if err != nil {
 		return mterrors.Wrap(err, "failed to get consensus term")
 	}
-	if err := pm.insertHistoryRecord(ctx,
+	update := newRuleUpdate(
 		term.GetPrimaryTerm(),
+		pm.serviceID,
 		"replication_config",
-		pm.servicePoolerID, nil, "", // leaderID, coordinatorID, walPosition
-		"configure",
-		"ConfigureSynchronousReplication called",
-		standbyNames,
-		nil, // acceptedMembers
-		force); err != nil {
+		"ConfigureSynchronousReplication called").
+		withCohort(standbyIDs).
+		withOperation("configure")
+	if force {
+		update.withForce()
+	}
+	if _, err := pm.updateRule(ctx, update); err != nil {
 		return mterrors.Wrap(err, "failed to record replication config history")
 	}
 
@@ -562,17 +568,26 @@ func (pm *MultiPoolerManager) UpdateSynchronousStandbyList(ctx context.Context, 
 	// before this primary can accept ACKs from it.
 	// This is for safe replica joining of the cluster.
 	// It will ensure multiorch can discover the new cohort during a failure.
-	if err := pm.insertHistoryRecord(ctx,
+	coordID := coordinatorID
+	if coordID == nil {
+		coordID = pm.serviceID
+	}
+	updatedStandbyIDs := make([]*clustermetadatapb.ID, len(updatedStandbys))
+	for i, p := range updatedStandbys {
+		updatedStandbyIDs[i] = p.id
+	}
+	standbyUpdate := newRuleUpdate(
 		consensusTerm,
+		coordID,
 		"replication_config",
-		leaderID,
-		coordinatorID,
-		"", // walPosition (not applicable for replication config changes)
-		operationName,
-		"UpdateSynchronousStandbyList: "+operationName,
-		updatedStandbys, // This is what we care in this update
-		nil,             // acceptedMembers
-		force); err != nil {
+		"UpdateSynchronousStandbyList: "+operationName).
+		withLeader(leaderID.id).
+		withCohort(updatedStandbyIDs).
+		withOperation(operationName)
+	if force {
+		standbyUpdate.withForce()
+	}
+	if _, err := pm.updateRule(ctx, standbyUpdate); err != nil {
 		return mterrors.Wrap(err, "failed to record replication config history")
 	}
 
@@ -1180,19 +1195,8 @@ func (pm *MultiPoolerManager) Promote(ctx context.Context, consensusTerm int64, 
 		return nil, err
 	}
 
-	// Pre-compute names before acquiring the lock, so we fail fast on bad arguments.
-	leaderID := pm.servicePoolerID
-	cohortMembers, err := toPoolerIDs(cohortMemberIDs)
-	if err != nil {
-		return nil, err
-	}
-	acceptedMembers, err := toPoolerIDs(acceptedMemberIDs)
-	if err != nil {
-		return nil, err
-	}
-
 	// Acquire the action lock to ensure only one mutation runs at a time
-	ctx, err = pm.actionLock.Acquire(ctx, "Promote")
+	ctx, err := pm.actionLock.Acquire(ctx, "Promote")
 	if err != nil {
 		return nil, err
 	}
@@ -1201,7 +1205,7 @@ func (pm *MultiPoolerManager) Promote(ctx context.Context, consensusTerm int64, 
 	// Validation & Readiness
 
 	// Validate term - strict equality, no automatic updates
-	if err = pm.validateTermExactMatch(ctx, consensusTerm, force); err != nil {
+	if err := pm.validateTermExactMatch(ctx, consensusTerm, force); err != nil {
 		return nil, err
 	}
 
@@ -1288,27 +1292,33 @@ func (pm *MultiPoolerManager) Promote(ctx context.Context, consensusTerm int64, 
 		PrimaryTerm: consensusTerm,
 	})
 
-	// Write leadership history record - this validates that sync replication is working.
+	// Write rule history record - this validates that sync replication is working.
 	// If this fails (typically due to timeout waiting for standby acknowledgment), we fail
 	// the promotion. It's better to have no primary than one that can't satisfy durability.
 	if reason == "" {
 		reason = "unknown"
 	}
-	if err := pm.insertHistoryRecord(ctx,
+	promoteCoordID := coordinatorID
+	if promoteCoordID == nil {
+		promoteCoordID = pm.serviceID
+	}
+	promoteUpdate := newRuleUpdate(
 		consensusTerm,
+		promoteCoordID,
 		"promotion",
-		leaderID,
-		coordinatorID,
-		finalLSN,
-		"", // operation
-		reason,
-		cohortMembers,
-		acceptedMembers,
-		force); err != nil {
-		pm.logger.ErrorContext(ctx, "Failed to insert leadership history - promotion failed",
+		reason).
+		withLeader(pm.serviceID).
+		withCohort(cohortMemberIDs).
+		withAcceptedMembers(acceptedMemberIDs).
+		withWALPosition(finalLSN)
+	if force {
+		promoteUpdate.withForce()
+	}
+	if _, err := pm.updateRule(ctx, promoteUpdate); err != nil {
+		pm.logger.ErrorContext(ctx, "Failed to write rule history - promotion failed",
 			"term", consensusTerm,
 			"error", err)
-		return nil, mterrors.Wrap(err, "promotion failed: could not write leadership history (sync replication may not be functioning)")
+		return nil, mterrors.Wrap(err, "promotion failed: could not write rule history (sync replication may not be functioning)")
 	}
 
 	// Update topology and notify all components (best-effort, don't fail promotion)

@@ -21,7 +21,6 @@ package multiorch
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -32,6 +31,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/multigres/multigres/go/common/sqltypes"
 	"github.com/multigres/multigres/go/test/endtoend/shardsetup"
 	"github.com/multigres/multigres/go/test/utils"
 
@@ -220,34 +220,33 @@ func TestBootstrapInitialization(t *testing.T) {
 		)
 	})
 
-	t.Run("verify leadership history", func(t *testing.T) {
+	t.Run("verify rule history", func(t *testing.T) {
 		primaryClient := setup.NewPrimaryClient(t)
 		defer primaryClient.Close()
 
 		ctx := t.Context()
 
-		// Query leadership_history table
+		// Query the bootstrap record specifically (first record: coordinator_term=1, rule_subterm=0)
 		resp, err := primaryClient.Pooler.ExecuteQuery(ctx, `
-			SELECT term_number, leader_id, coordinator_id, wal_position, reason,
+			SELECT coordinator_term, leader_id, coordinator_id, wal_position, reason,
 			       cohort_members, accepted_members
-			FROM multigres.leadership_history
-			ORDER BY term_number DESC
-			LIMIT 1
+			FROM multigres.rule_history
+			WHERE coordinator_term = 1 AND rule_subterm = 0
 		`, 7)
-		require.NoError(t, err, "should query leadership_history")
-		require.Len(t, resp.Rows, 1, "should have exactly one leadership history record")
+		require.NoError(t, err, "should query rule_history")
+		require.Len(t, resp.Rows, 1, "should have exactly one bootstrap rule history record")
 
 		row := resp.Rows[0]
-		termNumber := string(row.Values[0])
+		coordinatorTerm := string(row.Values[0])
 		leaderID := string(row.Values[1])
 		coordinatorID := string(row.Values[2])
 		walPosition := string(row.Values[3])
 		reason := string(row.Values[4])
-		cohortMembersJSON := string(row.Values[5])
-		acceptedMembersJSON := string(row.Values[6])
+		cohortMembersArr := string(row.Values[5])
+		acceptedMembersArr := string(row.Values[6])
 
-		// Verify term_number is 1
-		assert.Equal(t, "1", termNumber, "term_number should be 1 for initial bootstrap")
+		// Verify coordinator_term is 1
+		assert.Equal(t, "1", coordinatorTerm, "coordinator_term should be 1 for initial bootstrap")
 
 		// Verify leader_id matches primary name (format: cell_name)
 		expectedLeaderID := fmt.Sprintf("%s_%s", setup.CellName, setup.PrimaryName)
@@ -264,20 +263,18 @@ func TestBootstrapInitialization(t *testing.T) {
 		// Verify reason is ShardNeedsBootstrap
 		assert.Equal(t, "ShardNeedsBootstrap", reason, "reason should be 'ShardNeedsBootstrap'")
 
-		// Parse and verify cohort_members is a valid JSON array
-		var cohortMembers []string
-		err = json.Unmarshal([]byte(cohortMembersJSON), &cohortMembers)
-		require.NoError(t, err, "cohort_members should be valid JSON array")
+		// Parse and verify cohort_members is a valid TEXT[] value (e.g. {elem1,elem2})
+		cohortMembers, err := sqltypes.ParseTextArray(cohortMembersArr)
+		require.NoError(t, err, "cohort_members should be a valid PostgreSQL text array")
 		assert.Contains(t, cohortMembers, expectedLeaderID, "cohort_members should contain leader")
 
-		// Parse and verify accepted_members is a valid JSON array
-		var acceptedMembers []string
-		err = json.Unmarshal([]byte(acceptedMembersJSON), &acceptedMembers)
-		require.NoError(t, err, "accepted_members should be valid JSON array")
+		// Parse and verify accepted_members is a valid TEXT[] value
+		acceptedMembers, err := sqltypes.ParseTextArray(acceptedMembersArr)
+		require.NoError(t, err, "accepted_members should be a valid PostgreSQL text array")
 		assert.Contains(t, acceptedMembers, expectedLeaderID, "accepted_members should contain leader")
 
-		t.Logf("Leadership history verified: term=%s, leader=%s, coordinator=%s, reason=%s",
-			termNumber, leaderID, coordinatorID, reason)
+		t.Logf("Rule history verified: term=%s, leader=%s, coordinator=%s, reason=%s",
+			coordinatorTerm, leaderID, coordinatorID, reason)
 	})
 
 	t.Run("verify sync replication configured", func(t *testing.T) {
