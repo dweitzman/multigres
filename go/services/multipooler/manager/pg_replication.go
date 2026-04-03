@@ -68,28 +68,37 @@ func newPoolerID(id *clustermetadatapb.ID) (poolerID, error) {
 	if id == nil {
 		return poolerID{}, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "nil")
 	}
+	cell := id.Cell
+	if cell == "" {
+		cell = "unknown"
+	}
+	name := id.Name
+	if name == "" {
+		name = "unknown"
+	}
+	appName := fmt.Sprintf("%s_%s", cell, name)
+	pid := poolerID{id: id, appName: appName}
 	if id.Cell == "" {
-		return poolerID{}, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "empty cell")
+		return pid, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "empty cell")
 	}
 	if id.Name == "" {
-		return poolerID{}, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "empty name")
+		return pid, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "empty name")
 	}
 	// Underscores are not allowed in Cell or Name because they are used as delimiters
 	// in the application_name format (cell_name). Allowing underscores would break parsing.
 	if strings.Contains(id.Cell, "_") {
-		return poolerID{}, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,
+		return pid, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,
 			"cell contains underscore: %q (underscores not allowed)", id.Cell)
 	}
 	if strings.Contains(id.Name, "_") {
-		return poolerID{}, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,
+		return pid, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,
 			"name contains underscore: %q (underscores not allowed)", id.Name)
 	}
-	name := fmt.Sprintf("%s_%s", id.Cell, id.Name)
-	if len(name) > maxApplicationNameLength {
-		return poolerID{}, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,
-			"application name %q exceeds maximum length of %d characters", name, maxApplicationNameLength)
+	if len(appName) > maxApplicationNameLength {
+		return pid, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,
+			"application name %q exceeds maximum length of %d characters", appName, maxApplicationNameLength)
 	}
-	return poolerID{id: id, appName: name}, nil
+	return pid, nil
 }
 
 // poolerIDsToAppNames converts a slice of poolerID to their application name strings for use in APIs

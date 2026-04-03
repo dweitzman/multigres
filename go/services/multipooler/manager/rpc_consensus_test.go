@@ -142,6 +142,18 @@ func setupManagerWithMockDB(t *testing.T, mockQueryService *mock.QueryService) (
 // ============================================================================
 
 func TestBeginTerm(t *testing.T) {
+	// Columns returned by currentRuleRecord (SELECT from multigres.current_rule).
+	currentRuleCols := []string{
+		"coordinator_term", "rule_subterm", "leader_id", "coordinator_id", "cohort_members",
+		"durability_policy_name", "durability_quorum_type", "durability_required_count",
+		"durability_async_fallback", "created_at",
+	}
+	// A representative current_rule row used in cases that assert on ConsensusStatus.
+	currentRuleRow := [][]any{{
+		int64(1), int64(0), "zone1_test-pooler", "zone1_test-coord",
+		"{zone1_test-pooler}", nil, nil, nil, nil, "2026-01-01 00:00:00",
+	}}
+
 	tests := []struct {
 		name                                string
 		initialTerm                         *multipoolermanagerdatapb.ConsensusTerm
@@ -154,6 +166,7 @@ func TestBeginTerm(t *testing.T) {
 		expectedTerm                        int64
 		expectedAcceptedTermFromCoordinator string
 		expectedWalPosition                 *consensusdatapb.WALPosition // nil means don't check
+		expectedConsensusStatus             *clustermetadatapb.ConsensusStatus
 		description                         string
 	}{
 		{
@@ -200,12 +213,32 @@ func TestBeginTerm(t *testing.T) {
 			},
 			action: consensusdatapb.BeginTermAction_BEGIN_TERM_ACTION_REVOKE,
 			setupMocks: func(m *mock.QueryService) {
-				// Term not accepted - Phase 2 never runs, no queries expected
+				// Term rejected: getConsensusStatus still runs to give coordinator fresh state
+				m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(currentRuleCols, currentRuleRow))
+				m.AddQueryPatternOnce("COALESCE.pg_last_wal_receive_lsn", mock.MakeQueryResult([]string{"lsn"}, [][]any{{"0/5000000"}}))
 			},
 			expectedAccepted:                    false,
 			expectedTerm:                        5,
 			expectedAcceptedTermFromCoordinator: "candidate-A",
-			description:                         "Acceptance should be rejected when already accepted different candidate in same term",
+			expectedConsensusStatus: &clustermetadatapb.ConsensusStatus{
+				Promise: &clustermetadatapb.HighestCoordinatorPromise{
+					TermNumber: 5,
+					AcceptedCoordinatorId: &clustermetadatapb.ID{
+						Component: clustermetadatapb.ID_MULTIPOOLER,
+						Cell:      "zone1",
+						Name:      "candidate-A",
+					},
+				},
+				CurrentPosition: &clustermetadatapb.NodePosition{
+					Rule: &clustermetadatapb.ShardRule{
+						RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 1, RuleSubterm: 0},
+						PrimaryId:     &clustermetadatapb.ID{Cell: "zone1", Name: "test-pooler"},
+						CohortMembers: []*clustermetadatapb.ID{{Cell: "zone1", Name: "test-pooler"}},
+					},
+					Lsn: "0/5000000",
+				},
+			},
+			description: "Acceptance should be rejected when already accepted different candidate in same term",
 		},
 		{
 			name:   "AlreadyAcceptedSameCandidateInSameTerm",
@@ -296,13 +329,34 @@ func TestBeginTerm(t *testing.T) {
 			},
 			setupMocks: func(m *mock.QueryService) {
 				expectStandbyRevokeMocks(m, "0/5000000")
+				// getConsensusStatus after revoke
+				m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(currentRuleCols, currentRuleRow))
+				m.AddQueryPatternOnce("COALESCE.pg_last_wal_receive_lsn", mock.MakeQueryResult([]string{"lsn"}, [][]any{{"0/5000000"}}))
 			},
 			expectedError:                       false,
 			expectedAccepted:                    true,
 			expectedTerm:                        10,
 			expectedAcceptedTermFromCoordinator: "new-candidate",
 			expectedWalPosition:                 &consensusdatapb.WALPosition{LastReceiveLsn: "0/5000000", LastReplayLsn: "0/5000000"},
-			description:                         "Standby accepts term with REVOKE action and pauses replication",
+			expectedConsensusStatus: &clustermetadatapb.ConsensusStatus{
+				Promise: &clustermetadatapb.HighestCoordinatorPromise{
+					TermNumber: 10,
+					AcceptedCoordinatorId: &clustermetadatapb.ID{
+						Component: clustermetadatapb.ID_MULTIPOOLER,
+						Cell:      "zone1",
+						Name:      "new-candidate",
+					},
+				},
+				CurrentPosition: &clustermetadatapb.NodePosition{
+					Rule: &clustermetadatapb.ShardRule{
+						RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 1, RuleSubterm: 0},
+						PrimaryId:     &clustermetadatapb.ID{Cell: "zone1", Name: "test-pooler"},
+						CohortMembers: []*clustermetadatapb.ID{{Cell: "zone1", Name: "test-pooler"}},
+					},
+					Lsn: "0/5000000",
+				},
+			},
+			description: "Standby accepts term with REVOKE action and pauses replication",
 		},
 		{
 			name:   "StandbyPausesReplicationWhenAcceptingNewTerm",
@@ -338,13 +392,33 @@ func TestBeginTerm(t *testing.T) {
 			},
 			action: consensusdatapb.BeginTermAction_BEGIN_TERM_ACTION_NO_ACTION,
 			setupMocks: func(m *mock.QueryService) {
-				// NO_ACTION: No queries should be executed
+				// getConsensusStatus after acceptance
+				m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(currentRuleCols, currentRuleRow))
+				m.AddQueryPatternOnce("COALESCE.pg_last_wal_receive_lsn", mock.MakeQueryResult([]string{"lsn"}, [][]any{{"0/8000000"}}))
 			},
 			expectedError:                       false,
 			expectedAccepted:                    true,
 			expectedTerm:                        10,
 			expectedAcceptedTermFromCoordinator: "new-candidate",
-			description:                         "NO_ACTION accepts term without executing revoke",
+			expectedConsensusStatus: &clustermetadatapb.ConsensusStatus{
+				Promise: &clustermetadatapb.HighestCoordinatorPromise{
+					TermNumber: 10,
+					AcceptedCoordinatorId: &clustermetadatapb.ID{
+						Component: clustermetadatapb.ID_MULTIPOOLER,
+						Cell:      "zone1",
+						Name:      "new-candidate",
+					},
+				},
+				CurrentPosition: &clustermetadatapb.NodePosition{
+					Rule: &clustermetadatapb.ShardRule{
+						RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 1, RuleSubterm: 0},
+						PrimaryId:     &clustermetadatapb.ID{Cell: "zone1", Name: "test-pooler"},
+						CohortMembers: []*clustermetadatapb.ID{{Cell: "zone1", Name: "test-pooler"}},
+					},
+					Lsn: "0/8000000",
+				},
+			},
+			description: "NO_ACTION accepts term without executing revoke",
 		},
 		{
 			name: "NoAction_AcceptsTermEvenWhenPostgresDown",
@@ -524,6 +598,9 @@ func TestBeginTerm(t *testing.T) {
 					assert.Equal(t, tt.expectedWalPosition.CurrentLsn, resp.WalPosition.CurrentLsn)
 					assert.Equal(t, tt.expectedWalPosition.LastReceiveLsn, resp.WalPosition.LastReceiveLsn)
 					assert.Equal(t, tt.expectedWalPosition.LastReplayLsn, resp.WalPosition.LastReplayLsn)
+				}
+				if tt.expectedConsensusStatus != nil {
+					prototest.RequireEqual(t, tt.expectedConsensusStatus, resp.ConsensusStatus)
 				}
 			}
 

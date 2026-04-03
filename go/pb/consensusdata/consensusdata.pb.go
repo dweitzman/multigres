@@ -297,9 +297,13 @@ type BeginTermResponse struct {
 	// ID of the responding pooler
 	PoolerId string `protobuf:"bytes,3,opt,name=pooler_id,json=poolerId,proto3" json:"pooler_id,omitempty"`
 	// WAL position for candidate selection
-	WalPosition   *WALPosition `protobuf:"bytes,4,opt,name=wal_position,json=walPosition,proto3" json:"wal_position,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	WalPosition *WALPosition `protobuf:"bytes,4,opt,name=wal_position,json=walPosition,proto3" json:"wal_position,omitempty"`
+	// The node's consensus status at the time of the response.
+	// For REVOKE actions, captured after WAL positions are frozen (post-revoke
+	// snapshot). May be nil if postgres is unreachable.
+	ConsensusStatus *clustermetadata.ConsensusStatus `protobuf:"bytes,5,opt,name=consensus_status,json=consensusStatus,proto3" json:"consensus_status,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *BeginTermResponse) Reset() {
@@ -356,6 +360,13 @@ func (x *BeginTermResponse) GetPoolerId() string {
 func (x *BeginTermResponse) GetWalPosition() *WALPosition {
 	if x != nil {
 		return x.WalPosition
+	}
+	return nil
+}
+
+func (x *BeginTermResponse) GetConsensusStatus() *clustermetadata.ConsensusStatus {
+	if x != nil {
+		return x.ConsensusStatus
 	}
 	return nil
 }
@@ -831,12 +842,13 @@ const file_consensusdata_proto_rawDesc = "" +
 	"\fcandidate_id\x18\x02 \x01(\v2\x13.clustermetadata.IDR\vcandidateId\x12\x19\n" +
 	"\bshard_id\x18\x03 \x01(\tR\ashardId\x12%\n" +
 	"\x0epolicy_version\x18\x04 \x01(\x03R\rpolicyVersion\x126\n" +
-	"\x06action\x18\x05 \x01(\x0e2\x1e.consensusdata.BeginTermActionR\x06action\"\x9f\x01\n" +
+	"\x06action\x18\x05 \x01(\x0e2\x1e.consensusdata.BeginTermActionR\x06action\"\xec\x01\n" +
 	"\x11BeginTermResponse\x12\x12\n" +
 	"\x04term\x18\x01 \x01(\x03R\x04term\x12\x1a\n" +
 	"\baccepted\x18\x02 \x01(\bR\baccepted\x12\x1b\n" +
 	"\tpooler_id\x18\x03 \x01(\tR\bpoolerId\x12=\n" +
-	"\fwal_position\x18\x04 \x01(\v2\x1a.consensusdata.WALPositionR\vwalPosition\">\n" +
+	"\fwal_position\x18\x04 \x01(\v2\x1a.consensusdata.WALPositionR\vwalPosition\x12K\n" +
+	"\x10consensus_status\x18\x05 \x01(\v2 .clustermetadata.ConsensusStatusR\x0fconsensusStatus\">\n" +
 	"\rStatusRequest\x12\x12\n" +
 	"\x04term\x18\x01 \x01(\x03R\x04term\x12\x19\n" +
 	"\bshard_id\x18\x02 \x01(\tR\ashardId\"\xa9\x03\n" +
@@ -909,15 +921,16 @@ var file_consensusdata_proto_depIdxs = []int32{
 	12, // 1: consensusdata.BeginTermRequest.candidate_id:type_name -> clustermetadata.ID
 	0,  // 2: consensusdata.BeginTermRequest.action:type_name -> consensusdata.BeginTermAction
 	1,  // 3: consensusdata.BeginTermResponse.wal_position:type_name -> consensusdata.WALPosition
-	1,  // 4: consensusdata.StatusResponse.wal_position:type_name -> consensusdata.WALPosition
-	10, // 5: consensusdata.StatusResponse.timeline_info:type_name -> consensusdata.TimelineInfo
-	13, // 6: consensusdata.StatusResponse.consensus_status:type_name -> clustermetadata.ConsensusStatus
-	11, // 7: consensusdata.LeadershipViewResponse.last_heartbeat:type_name -> google.protobuf.Timestamp
-	8,  // [8:8] is the sub-list for method output_type
-	8,  // [8:8] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	13, // 4: consensusdata.BeginTermResponse.consensus_status:type_name -> clustermetadata.ConsensusStatus
+	1,  // 5: consensusdata.StatusResponse.wal_position:type_name -> consensusdata.WALPosition
+	10, // 6: consensusdata.StatusResponse.timeline_info:type_name -> consensusdata.TimelineInfo
+	13, // 7: consensusdata.StatusResponse.consensus_status:type_name -> clustermetadata.ConsensusStatus
+	11, // 8: consensusdata.LeadershipViewResponse.last_heartbeat:type_name -> google.protobuf.Timestamp
+	9,  // [9:9] is the sub-list for method output_type
+	9,  // [9:9] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_consensusdata_proto_init() }

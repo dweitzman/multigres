@@ -103,6 +103,11 @@ message BeginTermResponse {
 
   // WAL position for candidate selection
   WALPosition wal_position = 4;
+
+  // The node's consensus status at the time of the response.
+  // For REVOKE actions, captured after WAL positions are frozen (post-revoke
+  // snapshot). May be nil if postgres is unreachable.
+  clustermetadata.ConsensusStatus consensus_status = 5;
 }
 
 // Status returns the current status of a node

@@ -95,15 +95,21 @@ func (pm *MultiPoolerManager) BeginTerm(ctx context.Context, req *consensusdatap
 	// This handles all consensus rules: term validation, duplicate check, etc.
 	err = cs.UpdateTermAndAcceptCandidate(ctx, req.Term, req.CandidateId)
 	if err != nil {
-		// Term not accepted - return rejection
+		// Term not accepted - return rejection with current consensus status so
+		// the coordinator gains up-to-date node state even from rejections.
 		pm.logger.InfoContext(ctx, "Term not accepted",
 			"request_term", req.Term,
 			"current_term", currentTerm,
 			"error", err)
+		consensusStatus, statusErr := pm.getConsensusStatus(ctx)
+		if statusErr != nil {
+			pm.logger.WarnContext(ctx, "Failed to build consensus status for rejection response", "error", statusErr)
+		}
 		return &consensusdatapb.BeginTermResponse{
-			Term:     currentTerm,
-			Accepted: false,
-			PoolerId: pm.serviceID.GetName(),
+			Term:            currentTerm,
+			Accepted:        false,
+			PoolerId:        pm.serviceID.GetName(),
+			ConsensusStatus: consensusStatus,
 		}, nil
 	}
 
@@ -149,6 +155,11 @@ func (pm *MultiPoolerManager) BeginTerm(ctx context.Context, req *consensusdatap
 
 	switch req.Action {
 	case consensusdatapb.BeginTermAction_BEGIN_TERM_ACTION_NO_ACTION:
+		consensusStatus, statusErr := pm.getConsensusStatus(ctx)
+		if statusErr != nil {
+			pm.logger.WarnContext(ctx, "Failed to build consensus status", "error", statusErr)
+		}
+		response.ConsensusStatus = consensusStatus
 		return response, nil
 
 	case consensusdatapb.BeginTermAction_BEGIN_TERM_ACTION_REVOKE:
@@ -238,20 +249,34 @@ func (pm *MultiPoolerManager) executeRevoke(ctx context.Context, term int64, res
 			"term", term, "timeline_id", timelineID)
 	}
 
-	// Capture the highest consensus term replicated to this node, plus the cohort
-	// that was active at that point. The coordinator uses leadership_term as
-	// the primary criterion: a node that has seen a higher term has applied more
-	// of the agreed WAL history (the history write uses RemoteOperationTimeout,
-	// so sync standbys are guaranteed to have acknowledged it).
-	if rec, err := pm.currentRuleRecord(ctx); err != nil {
-		pm.logger.WarnContext(ctx, "Failed to get rule history during revoke; candidate selection may be suboptimal",
-			"term", term, "error", err)
-	} else if rec != nil {
-		response.WalPosition.LeadershipTerm = rec.CoordinatorTerm
-		response.WalPosition.CohortMembers = poolerIDsToAppNames(rec.CohortMembers)
+	// Capture consensus status after WAL positions are frozen (post-revoke snapshot).
+	// Also extract leadership_term and cohort_members for WAL position candidate
+	// selection: a node that has seen a higher coordinator term has applied more of
+	// the agreed WAL history, so this is the primary criterion (LSN is a tiebreaker).
+	consensusStatus, statusErr := pm.getConsensusStatus(ctx)
+	if statusErr != nil {
+		pm.logger.WarnContext(ctx, "Failed to build consensus status during revoke; candidate selection may be suboptimal", "error", statusErr)
+	} else if pos := consensusStatus.GetCurrentPosition(); pos != nil {
+		ruleNumber := pos.GetRule().GetRuleNumber()
+		response.WalPosition.LeadershipTerm = ruleNumber.GetCoordinatorTerm()
+		cohortIDs := pos.GetRule().GetCohortMembers()
+		appNames := make([]string, 0, len(cohortIDs))
+		var firstIDErr error
+		for _, id := range cohortIDs {
+			pid, err := newPoolerID(id)
+			if err != nil && firstIDErr == nil {
+				firstIDErr = err
+			}
+			appNames = append(appNames, pid.appName)
+		}
+		if firstIDErr != nil {
+			pm.logger.WarnContext(ctx, "Some cohort member IDs were invalid during revoke", "error", firstIDErr)
+		}
+		response.WalPosition.CohortMembers = appNames
 		pm.logger.InfoContext(ctx, "Captured coordinator term for candidate selection",
-			"term", term, "coordinator_term", rec.CoordinatorTerm)
+			"term", term, "coordinator_term", ruleNumber.GetCoordinatorTerm())
 	}
+	response.ConsensusStatus = consensusStatus
 
 	return nil
 }
@@ -264,28 +289,59 @@ func (pm *MultiPoolerManager) executeRevoke(ctx context.Context, term int64, res
 //
 // Returns an error if postgres is unreachable, since a partial status (promise
 // without current_position) could mislead callers about this node's rule position.
-//
-// The highest_known_rule field is not yet populated; it will be added once
-// the pooler tracks forward rule knowledge from the coordinator.
 func (pm *MultiPoolerManager) getInconsistentConsensusStatus(ctx context.Context) (*clustermetadatapb.ConsensusStatus, error) {
-	status := &clustermetadatapb.ConsensusStatus{}
-
-	// Populate promise from in-memory consensus state (disk-backed, no DB needed).
 	pm.mu.Lock()
 	cs := pm.consensusState
 	pm.mu.Unlock()
+
+	var term *multipoolermanagerdatapb.ConsensusTerm
 	if cs != nil {
-		if term, err := cs.GetInconsistentTerm(); err == nil && term != nil {
-			status.Promise = &clustermetadatapb.HighestCoordinatorPromise{
-				TermNumber:            term.TermNumber,
-				AcceptedCoordinatorId: term.AcceptedTermFromCoordinatorId,
-				// TODO: populate CoordinatorInitiatedAt once BeginTermRequest carries
-				// the coordinator's initiation timestamp and ConsensusTerm persists it.
-			}
+		term, _ = cs.GetInconsistentTerm()
+	}
+	return pm.buildConsensusStatus(ctx, term)
+}
+
+// getConsensusStatus builds a ConsensusStatus snapshot while holding the action lock.
+// Callers must hold the action lock (i.e. ctx must have been acquired via actionLock.Acquire).
+// Use this inside consensus operations (BeginTerm, executeRevoke) where a consistent
+// term read is both safe and appropriate.
+func (pm *MultiPoolerManager) getConsensusStatus(ctx context.Context) (*clustermetadatapb.ConsensusStatus, error) {
+	pm.mu.Lock()
+	cs := pm.consensusState
+	pm.mu.Unlock()
+
+	var term *multipoolermanagerdatapb.ConsensusTerm
+	if cs != nil {
+		var err error
+		term, err = cs.GetTerm(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read consensus term: %w", err)
+		}
+	}
+	return pm.buildConsensusStatus(ctx, term)
+}
+
+// buildConsensusStatus constructs a ConsensusStatus from a pre-fetched consensus term
+// and the current postgres state (rule record + WAL position).
+//
+// Returns an error if postgres is unreachable, since a partial status (promise
+// without current_position) could mislead callers about this node's rule position.
+//
+// The highest_known_rule field is not yet populated; it will be added once
+// the pooler tracks forward rule knowledge from the coordinator.
+func (pm *MultiPoolerManager) buildConsensusStatus(ctx context.Context, term *multipoolermanagerdatapb.ConsensusTerm) (*clustermetadatapb.ConsensusStatus, error) {
+	status := &clustermetadatapb.ConsensusStatus{}
+
+	if term != nil {
+		status.Promise = &clustermetadatapb.HighestCoordinatorPromise{
+			TermNumber:            term.TermNumber,
+			AcceptedCoordinatorId: term.AcceptedTermFromCoordinatorId,
+			// TODO: populate CoordinatorInitiatedAt once BeginTermRequest carries
+			// the coordinator's initiation timestamp and ConsensusTerm persists it.
 		}
 	}
 
-	// Populate current_position from rule_history and the current WAL position.
+	// Populate current_position from current_rule and the current WAL position.
 	rec, err := pm.currentRuleRecord(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read current rule: %w", err)

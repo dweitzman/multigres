@@ -95,12 +95,53 @@ func TestNewPoolerID(t *testing.T) {
 			expectedAppName: "us-east-1a_" + strings.Repeat("x", 52),
 		},
 		{
-			name: "exceeds 63 characters",
+			name: "exceeds 63 characters — still returns appName for best-effort use",
 			id: &clustermetadatapb.ID{
 				Cell: "us-east-1a",
 				Name: strings.Repeat("x", 53), // "us-east-1a_" (11) + 53 = 64
 			},
-			expectError: true,
+			expectedAppName: "us-east-1a_" + strings.Repeat("x", 53),
+			expectError:     true,
+		},
+		{
+			name: "underscore in cell — still returns appName for best-effort use",
+			id: &clustermetadatapb.ID{
+				Cell: "us_east",
+				Name: "replica-1",
+			},
+			expectedAppName: "us_east_replica-1",
+			expectError:     true,
+		},
+		{
+			name: "underscore in name — still returns appName for best-effort use",
+			id: &clustermetadatapb.ID{
+				Cell: "zone1",
+				Name: "replica_1",
+			},
+			expectedAppName: "zone1_replica_1",
+			expectError:     true,
+		},
+		{
+			name: "empty cell — uses 'unknown' placeholder in appName",
+			id: &clustermetadatapb.ID{
+				Name: "replica-1",
+			},
+			expectedAppName: "unknown_replica-1",
+			expectError:     true,
+		},
+		{
+			name: "empty name — uses 'unknown' placeholder in appName",
+			id: &clustermetadatapb.ID{
+				Cell: "zone1",
+			},
+			expectedAppName: "zone1_unknown",
+			expectError:     true,
+		},
+		{
+			name:            "nil ID — returns empty poolerID",
+			id:              nil,
+			expectedAppName: "",
+			expectError:     true,
 		},
 	}
 
@@ -112,7 +153,9 @@ func TestNewPoolerID(t *testing.T) {
 				assert.Equal(t, mtrpcpb.Code_INVALID_ARGUMENT, mterrors.Code(err))
 			} else {
 				require.NoError(t, err)
-				assert.Equal(t, tt.expectedAppName, result.appName)
+			}
+			assert.Equal(t, tt.expectedAppName, result.appName)
+			if tt.id != nil {
 				assert.Equal(t, tt.id, result.id)
 			}
 		})
