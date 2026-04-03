@@ -339,6 +339,11 @@ func argToParam(arg any) ([]byte, error) {
 		return []byte(strconv.FormatInt(int64(v), 10)), nil
 	case int64:
 		return []byte(strconv.FormatInt(v, 10)), nil
+	case *int64:
+		if v == nil {
+			return nil, nil // NULL
+		}
+		return []byte(strconv.FormatInt(*v, 10)), nil
 	case uint32:
 		return []byte(strconv.FormatUint(uint64(v), 10)), nil
 	case uint64:
