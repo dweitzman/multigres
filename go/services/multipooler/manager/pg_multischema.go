@@ -16,6 +16,7 @@ package manager
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -26,6 +27,10 @@ import (
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	"github.com/multigres/multigres/go/services/multipooler/executor"
 )
+
+// errRuleConflict is returned by updateRule when a withPreviousRule compare-and-swap
+// check fails: the current rule's term/subterm did not match the expected values.
+var errRuleConflict = errors.New("rule conflict: current rule version mismatch")
 
 // ============================================================================
 // Multigres Schema Operations
@@ -358,6 +363,12 @@ type ruleHistoryRecord struct {
 	CreatedAt               time.Time
 }
 
+// ruleNumber identifies a specific rule version by coordinator term and subterm.
+type ruleNumber struct {
+	coordinatorTerm int64
+	ruleSubterm     int64
+}
+
 // ruleUpdateBuilder constructs the parameters for updateRule.
 // Coordinator ID, event type, and reason are always required.
 // Fields not set via builder methods retain their current value in current_rule.
@@ -377,7 +388,8 @@ type ruleUpdateBuilder struct {
 	operation       string
 	acceptedMembers []*clustermetadatapb.ID
 
-	force bool
+	force        bool
+	previousRule *ruleNumber // for compare-and-swap; nil means no check
 }
 
 func newRuleUpdate(termNumber int64, coordinatorID *clustermetadatapb.ID, eventType, reason string) *ruleUpdateBuilder {
@@ -416,6 +428,13 @@ func (b *ruleUpdateBuilder) withAcceptedMembers(members []*clustermetadatapb.ID)
 
 func (b *ruleUpdateBuilder) withForce() *ruleUpdateBuilder {
 	b.force = true
+	return b
+}
+
+// withPreviousRule adds a compare-and-swap check: the update only proceeds if the
+// current rule matches the given coordinator term and subterm.
+func (b *ruleUpdateBuilder) withPreviousRule(coordinatorTerm, ruleSubterm int64) *ruleUpdateBuilder {
+	b.previousRule = &ruleNumber{coordinatorTerm: coordinatorTerm, ruleSubterm: ruleSubterm}
 	return b
 }
 
@@ -622,6 +641,14 @@ func (pm *MultiPoolerManager) updateRule(ctx context.Context, update *ruleUpdate
 
 	coordinatorIDStr := topoclient.ClusterIDString(update.coordinatorID)
 
+	// For compare-and-swap: pass the expected term/subterm as SQL parameters.
+	// NULL causes the WHERE clause to skip the check, allowing any current state.
+	var previousTerm, previousSubterm *int64
+	if update.previousRule != nil {
+		previousTerm = &update.previousRule.coordinatorTerm
+		previousSubterm = &update.previousRule.ruleSubterm
+	}
+
 	// Use the remote operation timeout for history writes. This write validates that synchronous
 	// replication is functioning - it must wait long enough for standbys to connect and acknowledge.
 	execCtx, cancel := context.WithTimeout(ctx, timeouts.RemoteOperationTimeout)
@@ -633,6 +660,7 @@ func (pm *MultiPoolerManager) updateRule(ctx context.Context, update *ruleUpdate
 		    SELECT coordinator_term, rule_subterm, leader_id, cohort_members
 		    FROM multigres.current_rule
 		    WHERE shard_id = $1
+		      AND ($11::bigint IS NULL OR (coordinator_term = $11 AND rule_subterm = $12))
 		    FOR UPDATE
 		  ),
 		  next_sub AS (
@@ -682,9 +710,16 @@ func (pm *MultiPoolerManager) updateRule(ctx context.Context, update *ruleUpdate
 		update.reason,
 		cohortParam,
 		acceptedParam,
+		previousTerm,
+		previousSubterm,
 	)
 	if err != nil {
 		return nil, mterrors.Wrap(err, "failed to write rule history record")
+	}
+
+	// If the CAS check failed, the UPDATE matched 0 rows and RETURNING is empty.
+	if len(result.Rows) == 0 && update.previousRule != nil {
+		return nil, errRuleConflict
 	}
 
 	var rec ruleHistoryRecord

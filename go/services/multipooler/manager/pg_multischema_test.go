@@ -465,6 +465,40 @@ func TestUpdateRule(t *testing.T) {
 			expectError:   true,
 			errorContains: "invalid accepted member ID",
 		},
+		{
+			name: "CAS succeeds when previous rule term and subterm match",
+			buildUpdate: func(pm *MultiPoolerManager) *ruleUpdateBuilder {
+				return newRuleUpdate(2, &clustermetadatapb.ID{Cell: "zone1", Name: "coordinator-2"}, "promotion", "failover").
+					withLeader(&clustermetadatapb.ID{Cell: "zone1", Name: "new-leader"}).
+					withPreviousRule(1, 3) // expects term=1, subterm=3 in current_rule
+			},
+			setupMock: func(m *mock.QueryService) {
+				// DB returns the row: CAS check passed, update succeeded
+				m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(returnCols, [][]any{
+					{
+						int64(2), int64(0), "promotion", "zone1_new-leader", "zone1_coordinator-2",
+						nil, nil, "failover",
+						"{zone1_pooler-1}", nil,
+						nil, nil, nil, nil, "2026-03-24 09:00:17.000000+00",
+					},
+				}))
+			},
+			expectError: false,
+		},
+		{
+			name: "CAS fails when previous rule does not match current state",
+			buildUpdate: func(pm *MultiPoolerManager) *ruleUpdateBuilder {
+				return newRuleUpdate(2, &clustermetadatapb.ID{Cell: "zone1", Name: "coordinator-2"}, "promotion", "failover").
+					withLeader(&clustermetadatapb.ID{Cell: "zone1", Name: "new-leader"}).
+					withPreviousRule(1, 2) // expects term=1, subterm=2 but current is term=1, subterm=3
+			},
+			setupMock: func(m *mock.QueryService) {
+				// DB returns 0 rows: WHERE clause didn't match, CAS check failed
+				m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(returnCols, [][]any{}))
+			},
+			expectError:   true,
+			errorContains: "rule conflict: current rule version mismatch",
+		},
 	}
 
 	for _, tt := range tests {
@@ -485,6 +519,30 @@ func TestUpdateRule(t *testing.T) {
 			assert.NoError(t, mockQueryService.ExpectationsWereMet())
 		})
 	}
+}
+
+func TestUpdateRuleConflictSentinel(t *testing.T) {
+	// Verify that the CAS failure returns exactly errRuleConflict so callers
+	// can check it with errors.Is rather than string-matching.
+	returnCols := []string{
+		"coordinator_term", "rule_subterm", "event_type", "leader_id", "coordinator_id",
+		"wal_position", "operation", "reason", "cohort_members", "accepted_members",
+		"durability_policy_name", "durability_quorum_type", "durability_required_count",
+		"durability_async_fallback", "created_at",
+	}
+
+	pm, mockQueryService := newTestManagerWithMock(constants.DefaultTableGroup, constants.DefaultShard)
+	mockQueryService.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(returnCols, [][]any{}))
+
+	_, err := pm.updateRule(t.Context(),
+		newRuleUpdate(2, &clustermetadatapb.ID{Cell: "zone1", Name: "coordinator-2"}, "promotion", "failover").
+			withLeader(&clustermetadatapb.ID{Cell: "zone1", Name: "new-leader"}).
+			withPreviousRule(1, 2),
+	)
+
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, errRuleConflict), "expected errRuleConflict sentinel, got: %v", err)
+	assert.NoError(t, mockQueryService.ExpectationsWereMet())
 }
 
 func TestQueryRuleHistory(t *testing.T) {
