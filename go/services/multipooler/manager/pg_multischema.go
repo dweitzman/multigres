@@ -652,7 +652,7 @@ func (pm *MultiPoolerManager) updateRule(ctx context.Context, update *ruleUpdate
 		        created_at       = now()
 		    FROM next_sub, locked
 		    WHERE shard_id = $1
-		    RETURNING coordinator_term, rule_subterm
+		    RETURNING current_rule.coordinator_term, current_rule.rule_subterm
 		  )
 		INSERT INTO multigres.rule_history
 		  (coordinator_term, rule_subterm, event_type, leader_id, coordinator_id,
