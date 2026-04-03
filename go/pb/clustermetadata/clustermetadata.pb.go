@@ -1551,10 +1551,14 @@ type HighestCoordinatorPromise struct {
 	// re-accept. If a different coordinator asks for a promise at the same term
 	// number, a pooler will refuse.
 	AcceptedCoordinatorId *ID `protobuf:"bytes,2,opt,name=accepted_coordinator_id,json=acceptedCoordinatorId,proto3" json:"accepted_coordinator_id,omitempty"`
-	// When this promise was last recorded.
-	LastAcceptanceTime *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=last_acceptance_time,json=lastAcceptanceTime,proto3" json:"last_acceptance_time,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// When the coordinator created this term, set by the coordinator before
+	// recruiting promises. All poolers that accept the same recruitment will
+	// store the same value. If a coordinator restarts, loses in-memory state,
+	// and recruits again for the same term, poolers can detect this mismatch
+	// and reject the stale coordinator instance.
+	CoordinatorInitiatedAt *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=coordinator_initiated_at,json=coordinatorInitiatedAt,proto3" json:"coordinator_initiated_at,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *HighestCoordinatorPromise) Reset() {
@@ -1601,9 +1605,9 @@ func (x *HighestCoordinatorPromise) GetAcceptedCoordinatorId() *ID {
 	return nil
 }
 
-func (x *HighestCoordinatorPromise) GetLastAcceptanceTime() *timestamppb.Timestamp {
+func (x *HighestCoordinatorPromise) GetCoordinatorInitiatedAt() *timestamppb.Timestamp {
 	if x != nil {
-		return x.LastAcceptanceTime
+		return x.CoordinatorInitiatedAt
 	}
 	return nil
 }
@@ -1620,6 +1624,8 @@ type ConsensusStatus struct {
 	// highest_known_rule is the most recent rule this node is aware of. May be
 	// ahead of current_position when the node has forward knowledge of an
 	// upcoming rule that has not yet been replicated or written.
+	// This could represent a decision from WAL or intent to propose a decision
+	// from a coordinator that has negotiated exclusive rights to this rule number.
 	HighestKnownRule *HighestKnownRule `protobuf:"bytes,3,opt,name=highest_known_rule,json=highestKnownRule,proto3" json:"highest_known_rule,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
@@ -1782,12 +1788,12 @@ const file_clustermetadata_proto_rawDesc = "" +
 	"\x04rule\x18\x01 \x01(\v2\x1a.clustermetadata.ShardRuleR\x04rule\x12\x10\n" +
 	"\x03lsn\x18\x02 \x01(\tR\x03lsn\"B\n" +
 	"\x10HighestKnownRule\x12.\n" +
-	"\x04rule\x18\x01 \x01(\v2\x1a.clustermetadata.ShardRuleR\x04rule\"\xd7\x01\n" +
+	"\x04rule\x18\x01 \x01(\v2\x1a.clustermetadata.ShardRuleR\x04rule\"\xdf\x01\n" +
 	"\x19HighestCoordinatorPromise\x12\x1f\n" +
 	"\vterm_number\x18\x01 \x01(\x03R\n" +
 	"termNumber\x12K\n" +
-	"\x17accepted_coordinator_id\x18\x02 \x01(\v2\x13.clustermetadata.IDR\x15acceptedCoordinatorId\x12L\n" +
-	"\x14last_acceptance_time\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x12lastAcceptanceTime\"\xf2\x01\n" +
+	"\x17accepted_coordinator_id\x18\x02 \x01(\v2\x13.clustermetadata.IDR\x15acceptedCoordinatorId\x12T\n" +
+	"\x18coordinator_initiated_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x16coordinatorInitiatedAt\"\xf2\x01\n" +
 	"\x0fConsensusStatus\x12D\n" +
 	"\apromise\x18\x01 \x01(\v2*.clustermetadata.HighestCoordinatorPromiseR\apromise\x12H\n" +
 	"\x10current_position\x18\x02 \x01(\v2\x1d.clustermetadata.NodePositionR\x0fcurrentPosition\x12O\n" +
@@ -1885,7 +1891,7 @@ var file_clustermetadata_proto_depIdxs = []int32{
 	18, // 22: clustermetadata.NodePosition.rule:type_name -> clustermetadata.ShardRule
 	18, // 23: clustermetadata.HighestKnownRule.rule:type_name -> clustermetadata.ShardRule
 	14, // 24: clustermetadata.HighestCoordinatorPromise.accepted_coordinator_id:type_name -> clustermetadata.ID
-	26, // 25: clustermetadata.HighestCoordinatorPromise.last_acceptance_time:type_name -> google.protobuf.Timestamp
+	26, // 25: clustermetadata.HighestCoordinatorPromise.coordinator_initiated_at:type_name -> google.protobuf.Timestamp
 	21, // 26: clustermetadata.ConsensusStatus.promise:type_name -> clustermetadata.HighestCoordinatorPromise
 	19, // 27: clustermetadata.ConsensusStatus.current_position:type_name -> clustermetadata.NodePosition
 	20, // 28: clustermetadata.ConsensusStatus.highest_known_rule:type_name -> clustermetadata.HighestKnownRule

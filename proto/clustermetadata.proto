@@ -428,8 +428,12 @@ message HighestCoordinatorPromise {
   // number, a pooler will refuse.
   ID accepted_coordinator_id = 2;
 
-  // When this promise was last recorded.
-  google.protobuf.Timestamp last_acceptance_time = 3;
+  // When the coordinator created this term, set by the coordinator before
+  // recruiting promises. All poolers that accept the same recruitment will
+  // store the same value. If a coordinator restarts, loses in-memory state,
+  // and recruits again for the same term, poolers can detect this mismatch
+  // and reject the stale coordinator instance.
+  google.protobuf.Timestamp coordinator_initiated_at = 3;
 }
 
 // ConsensusStatus is a node's complete view of its position in the distributed
@@ -445,5 +449,7 @@ message ConsensusStatus {
   // highest_known_rule is the most recent rule this node is aware of. May be
   // ahead of current_position when the node has forward knowledge of an
   // upcoming rule that has not yet been replicated or written.
+  // This could represent a decision from WAL or intent to propose a decision
+  // from a coordinator that has negotiated exclusive rights to this rule number.
   HighestKnownRule highest_known_rule = 3;
 }

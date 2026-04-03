@@ -24,6 +24,7 @@ import (
 
 	"github.com/multigres/multigres/go/common/eventlog"
 	"github.com/multigres/multigres/go/common/mterrors"
+	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
@@ -255,6 +256,86 @@ func (pm *MultiPoolerManager) executeRevoke(ctx context.Context, term int64, res
 	return nil
 }
 
+// getInconsistentConsensusStatus builds a ConsensusStatus snapshot of this node
+// without holding the action lock. Like GetInconsistentTerm, it may observe a
+// partially-updated state if a concurrent operation is in progress, so it is
+// suitable for observability (StatusResponse) but not for decisions that require
+// a consistent view.
+//
+// Returns an error if postgres is unreachable, since a partial status (promise
+// without current_position) could mislead callers about this node's rule position.
+//
+// The highest_known_rule field is not yet populated; it will be added once
+// the pooler tracks forward rule knowledge from the coordinator.
+func (pm *MultiPoolerManager) getInconsistentConsensusStatus(ctx context.Context) (*clustermetadatapb.ConsensusStatus, error) {
+	status := &clustermetadatapb.ConsensusStatus{}
+
+	// Populate promise from in-memory consensus state (disk-backed, no DB needed).
+	pm.mu.Lock()
+	cs := pm.consensusState
+	pm.mu.Unlock()
+	if cs != nil {
+		if term, err := cs.GetInconsistentTerm(); err == nil && term != nil {
+			status.Promise = &clustermetadatapb.HighestCoordinatorPromise{
+				TermNumber:            term.TermNumber,
+				AcceptedCoordinatorId: term.AcceptedTermFromCoordinatorId,
+				// TODO: populate CoordinatorInitiatedAt once BeginTermRequest carries
+				// the coordinator's initiation timestamp and ConsensusTerm persists it.
+			}
+		}
+	}
+
+	// Populate current_position from rule_history and the current WAL position.
+	rec, err := pm.currentRuleRecord(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read current rule: %w", err)
+	}
+	if rec != nil {
+		ruleNumber := &clustermetadatapb.RuleNumber{
+			CoordinatorTerm: rec.CoordinatorTerm,
+			RuleSubterm:     rec.RuleSubterm,
+		}
+		var primaryID *clustermetadatapb.ID
+		if rec.LeaderID != nil {
+			primaryID = rec.LeaderID.id
+		}
+		cohortIDs := make([]*clustermetadatapb.ID, 0, len(rec.CohortMembers))
+		for _, m := range rec.CohortMembers {
+			cohortIDs = append(cohortIDs, m.id)
+		}
+
+		// LSN semantics by role:
+		//   primary  → pg_current_wal_lsn() (last committed write position)
+		//   standby  → pg_last_wal_receive_lsn() (flushed to disk, ahead of replay)
+		//   restored standby with no WAL received yet → pg_last_wal_replay_lsn() (backup LSN)
+		lsnCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		defer cancel()
+		lsnResult, lsnErr := pm.query(lsnCtx, `
+			SELECT CASE
+			  WHEN pg_is_in_recovery()
+			    THEN COALESCE(pg_last_wal_receive_lsn(), pg_last_wal_replay_lsn())
+			  ELSE pg_current_wal_lsn()
+			END::text`)
+		if lsnErr != nil {
+			return nil, fmt.Errorf("failed to read WAL position: %w", lsnErr)
+		}
+		var lsn string
+		if err := executor.ScanSingleRow(lsnResult, &lsn); err != nil {
+			return nil, fmt.Errorf("failed to scan WAL position: %w", err)
+		}
+
+		status.CurrentPosition = &clustermetadatapb.NodePosition{
+			Rule: &clustermetadatapb.ShardRule{
+				RuleNumber:    ruleNumber,
+				PrimaryId:     primaryID,
+				CohortMembers: cohortIDs,
+			},
+			Lsn: lsn,
+		}
+	}
+	return status, nil
+}
+
 // ConsensusStatus returns the current status of this node for consensus
 func (pm *MultiPoolerManager) ConsensusStatus(ctx context.Context, req *consensusdatapb.StatusRequest) (*consensusdatapb.StatusResponse, error) {
 	// Get consensus state
@@ -325,16 +406,22 @@ func (pm *MultiPoolerManager) ConsensusStatus(ctx context.Context, req *consensu
 		}
 	}
 
+	consensusStatus, statusErr := pm.getInconsistentConsensusStatus(ctx)
+	if statusErr != nil {
+		pm.logger.WarnContext(ctx, "Failed to build consensus status", "error", statusErr)
+	}
+
 	return &consensusdatapb.StatusResponse{
-		PoolerId:     pm.serviceID.GetName(),
-		CurrentTerm:  localCurrentTerm,
-		WalPosition:  walPosition,
-		IsHealthy:    isHealthy,
-		IsEligible:   true, // TODO: implement eligibility logic based on policy
-		Cell:         pm.serviceID.GetCell(),
-		Role:         role,
-		TimelineInfo: timelineInfo,
-		PrimaryTerm:  localPrimaryTerm,
+		PoolerId:        pm.serviceID.GetName(),
+		CurrentTerm:     localCurrentTerm,
+		WalPosition:     walPosition,
+		IsHealthy:       isHealthy,
+		IsEligible:      true, // TODO: implement eligibility logic based on policy
+		Cell:            pm.serviceID.GetCell(),
+		Role:            role,
+		TimelineInfo:    timelineInfo,
+		PrimaryTerm:     localPrimaryTerm,
+		ConsensusStatus: consensusStatus,
 	}, nil
 }
 

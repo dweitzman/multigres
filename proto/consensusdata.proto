@@ -145,6 +145,11 @@ message StatusResponse {
   // Cleared to 0 when demoted (DemoteStalePrimary) or restored from backup.
   // 0 if never primary. For current primaries, must be non-zero.
   int64 primary_term = 11;
+
+  // The node's current consensus status: its coordinator promise, committed
+  // rule position, and highest known rule. This is the authoritative view of
+  // where this node stands in the distributed system.
+  clustermetadata.ConsensusStatus consensus_status = 12;
 }
 
 // GetLeadershipView returns leadership information from the heartbeat table
