@@ -107,8 +107,9 @@ func TestCreateSidecarSchema(t *testing.T) {
 			setupMock: func(m *mock.QueryService) {
 				m.AddQueryPatternOnce("CREATE SCHEMA IF NOT EXISTS multigres", mock.MakeQueryResult(nil, nil))
 				m.AddQueryPatternOnce("CREATE TABLE IF NOT EXISTS multigres.heartbeat", mock.MakeQueryResult(nil, nil))
-				m.AddQueryPatternOnce("CREATE TABLE IF NOT EXISTS multigres.leadership_history", mock.MakeQueryResult(nil, nil))
-				m.AddQueryPatternOnce("CREATE INDEX IF NOT EXISTS idx_leadership_history_term_event", mock.MakeQueryResult(nil, nil))
+				m.AddQueryPatternOnce("CREATE TABLE IF NOT EXISTS multigres.current_rule", mock.MakeQueryResult(nil, nil))
+				m.AddQueryPatternOnce("INSERT INTO multigres.current_rule", mock.MakeQueryResult(nil, nil))
+				m.AddQueryPatternOnce("CREATE TABLE IF NOT EXISTS multigres.rule_history", mock.MakeQueryResult(nil, nil))
 				m.AddQueryPatternOnce("CREATE TABLE IF NOT EXISTS multigres.tablegroup", mock.MakeQueryResult(nil, nil))
 				m.AddQueryPatternOnce("CREATE TABLE IF NOT EXISTS multigres.tablegroup_table", mock.MakeQueryResult(nil, nil))
 				m.AddQueryPatternOnce("CREATE TABLE IF NOT EXISTS multigres.shard", mock.MakeQueryResult(nil, nil))
@@ -135,27 +136,40 @@ func TestCreateSidecarSchema(t *testing.T) {
 			errorContains: "failed to create heartbeat table",
 		},
 		{
-			name:       "leadership_history table creation fails",
+			name:       "current_rule table creation fails",
 			tableGroup: constants.DefaultTableGroup,
 			setupMock: func(m *mock.QueryService) {
 				m.AddQueryPatternOnce("CREATE SCHEMA IF NOT EXISTS multigres", mock.MakeQueryResult(nil, nil))
 				m.AddQueryPatternOnce("CREATE TABLE IF NOT EXISTS multigres.heartbeat", mock.MakeQueryResult(nil, nil))
-				m.AddQueryPatternOnceWithError("CREATE TABLE IF NOT EXISTS multigres.leadership_history", errors.New("table creation failed"))
+				m.AddQueryPatternOnceWithError("CREATE TABLE IF NOT EXISTS multigres.current_rule", errors.New("table creation failed"))
 			},
 			expectError:   true,
-			errorContains: "failed to create leadership_history table",
+			errorContains: "failed to create current_rule table",
 		},
 		{
-			name:       "leadership_history index creation fails",
+			name:       "current_rule initialization fails",
 			tableGroup: constants.DefaultTableGroup,
 			setupMock: func(m *mock.QueryService) {
 				m.AddQueryPatternOnce("CREATE SCHEMA IF NOT EXISTS multigres", mock.MakeQueryResult(nil, nil))
 				m.AddQueryPatternOnce("CREATE TABLE IF NOT EXISTS multigres.heartbeat", mock.MakeQueryResult(nil, nil))
-				m.AddQueryPatternOnce("CREATE TABLE IF NOT EXISTS multigres.leadership_history", mock.MakeQueryResult(nil, nil))
-				m.AddQueryPatternOnceWithError("CREATE INDEX IF NOT EXISTS idx_leadership_history_term_event", errors.New("index creation failed"))
+				m.AddQueryPatternOnce("CREATE TABLE IF NOT EXISTS multigres.current_rule", mock.MakeQueryResult(nil, nil))
+				m.AddQueryPatternOnceWithError("INSERT INTO multigres.current_rule", errors.New("insert failed"))
 			},
 			expectError:   true,
-			errorContains: "failed to create leadership_history index",
+			errorContains: "failed to initialize current_rule",
+		},
+		{
+			name:       "rule_history table creation fails",
+			tableGroup: constants.DefaultTableGroup,
+			setupMock: func(m *mock.QueryService) {
+				m.AddQueryPatternOnce("CREATE SCHEMA IF NOT EXISTS multigres", mock.MakeQueryResult(nil, nil))
+				m.AddQueryPatternOnce("CREATE TABLE IF NOT EXISTS multigres.heartbeat", mock.MakeQueryResult(nil, nil))
+				m.AddQueryPatternOnce("CREATE TABLE IF NOT EXISTS multigres.current_rule", mock.MakeQueryResult(nil, nil))
+				m.AddQueryPatternOnce("INSERT INTO multigres.current_rule", mock.MakeQueryResult(nil, nil))
+				m.AddQueryPatternOnceWithError("CREATE TABLE IF NOT EXISTS multigres.rule_history", errors.New("table creation failed"))
+			},
+			expectError:   true,
+			errorContains: "failed to create rule_history table",
 		},
 		{
 			name:       "tablegroup table creation fails",
@@ -163,8 +177,9 @@ func TestCreateSidecarSchema(t *testing.T) {
 			setupMock: func(m *mock.QueryService) {
 				m.AddQueryPatternOnce("CREATE SCHEMA IF NOT EXISTS multigres", mock.MakeQueryResult(nil, nil))
 				m.AddQueryPatternOnce("CREATE TABLE IF NOT EXISTS multigres.heartbeat", mock.MakeQueryResult(nil, nil))
-				m.AddQueryPatternOnce("CREATE TABLE IF NOT EXISTS multigres.leadership_history", mock.MakeQueryResult(nil, nil))
-				m.AddQueryPatternOnce("CREATE INDEX IF NOT EXISTS idx_leadership_history_term", mock.MakeQueryResult(nil, nil))
+				m.AddQueryPatternOnce("CREATE TABLE IF NOT EXISTS multigres.current_rule", mock.MakeQueryResult(nil, nil))
+				m.AddQueryPatternOnce("INSERT INTO multigres.current_rule", mock.MakeQueryResult(nil, nil))
+				m.AddQueryPatternOnce("CREATE TABLE IF NOT EXISTS multigres.rule_history", mock.MakeQueryResult(nil, nil))
 				m.AddQueryPatternOnceWithError("CREATE TABLE IF NOT EXISTS multigres.tablegroup", errors.New("table creation failed"))
 			},
 			expectError:   true,
@@ -288,102 +303,210 @@ func TestInitializeMultischemaData(t *testing.T) {
 	}
 }
 
-func mustPoolerID(cell, name string) poolerID {
-	pid, err := newPoolerID(&clustermetadatapb.ID{Cell: cell, Name: name})
-	if err != nil {
-		panic(err)
+func TestUpdateRule(t *testing.T) {
+	returnCols := []string{
+		"coordinator_term", "rule_subterm", "event_type", "leader_id", "coordinator_id",
+		"wal_position", "operation", "reason", "cohort_members", "accepted_members",
+		"durability_policy_name", "durability_quorum_type", "durability_required_count",
+		"durability_async_fallback", "created_at",
 	}
-	return pid
-}
 
-func TestInsertLeadershipHistory(t *testing.T) {
 	tests := []struct {
-		name            string
-		termNumber      int64
-		leaderID        poolerID
-		coordinatorID   *clustermetadatapb.ID
-		walPosition     string
-		operation       string
-		reason          string
-		cohortMembers   []poolerID
-		acceptedMembers []poolerID
-		force           bool
-		setupMock       func(m *mock.QueryService)
-		expectError     bool
-		errorContains   string
+		name          string
+		buildUpdate   func(pm *MultiPoolerManager) *ruleUpdateBuilder
+		setupMock     func(m *mock.QueryService)
+		expectError   bool
+		errorContains string
 	}{
 		{
-			name:            "successful insert",
-			termNumber:      1,
-			leaderID:        mustPoolerID("zone1", "leader-1"),
-			coordinatorID:   &clustermetadatapb.ID{Cell: "zone1", Name: "coordinator-1"},
-			walPosition:     "0/1234567",
-			operation:       "promotion",
-			reason:          "Leadership changed due to manual promotion",
-			cohortMembers:   []poolerID{mustPoolerID("zone1", "member-1"), mustPoolerID("zone1", "member-2"), mustPoolerID("zone1", "member-3")},
-			acceptedMembers: []poolerID{mustPoolerID("zone1", "member-1"), mustPoolerID("zone1", "member-2")},
+			name: "successful update with all fields",
+			buildUpdate: func(pm *MultiPoolerManager) *ruleUpdateBuilder {
+				return newRuleUpdate(1, &clustermetadatapb.ID{Cell: "zone1", Name: "coordinator-1"}, "promotion", "Leadership changed due to manual promotion").
+					withLeader(&clustermetadatapb.ID{Cell: "zone1", Name: "leader-1"}).
+					withCohort([]*clustermetadatapb.ID{
+						{Cell: "zone1", Name: "member-1"},
+						{Cell: "zone1", Name: "member-2"},
+						{Cell: "zone1", Name: "member-3"},
+					}).
+					withAcceptedMembers([]*clustermetadatapb.ID{
+						{Cell: "zone1", Name: "member-1"},
+						{Cell: "zone1", Name: "member-2"},
+					}).
+					withWALPosition("0/1234567").
+					withOperation("promotion")
+			},
 			setupMock: func(m *mock.QueryService) {
-				m.AddQueryPatternOnce("INSERT INTO multigres.leadership_history", mock.MakeQueryResult(nil, nil))
+				m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(returnCols, [][]any{
+					{
+						int64(1), int64(0), "promotion", "zone1_leader-1", "zone1_coordinator-1",
+						"0/1234567", "promotion", "Leadership changed due to manual promotion",
+						"{zone1_member-1,zone1_member-2,zone1_member-3}", "{zone1_member-1,zone1_member-2}",
+						nil, nil, nil, nil, "2026-03-24 09:00:17.000000+00",
+					},
+				}))
 			},
 			expectError: false,
 		},
 		{
-			name:            "insert fails with database error",
-			termNumber:      2,
-			leaderID:        mustPoolerID("zone1", "leader-2"),
-			coordinatorID:   &clustermetadatapb.ID{Cell: "zone1", Name: "coordinator-2"},
-			walPosition:     "0/2345678",
-			operation:       "failover",
-			reason:          "Leadership changed due to failover",
-			cohortMembers:   []poolerID{mustPoolerID("zone1", "member-1"), mustPoolerID("zone1", "member-2")},
-			acceptedMembers: []poolerID{mustPoolerID("zone1", "member-1")},
+			name: "partial update: cohort only, leader kept from current_rule",
+			buildUpdate: func(pm *MultiPoolerManager) *ruleUpdateBuilder {
+				return newRuleUpdate(2, &clustermetadatapb.ID{Cell: "zone1", Name: "coordinator-2"}, "replication_config", "standby added").
+					withCohort([]*clustermetadatapb.ID{
+						{Cell: "zone1", Name: "member-1"},
+						{Cell: "zone1", Name: "member-2"},
+					}).
+					withOperation("add")
+			},
 			setupMock: func(m *mock.QueryService) {
-				m.AddQueryPatternOnceWithError("INSERT INTO multigres.leadership_history", errors.New("connection refused"))
+				m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(returnCols, [][]any{
+					{
+						int64(2), int64(0), "replication_config", "zone1_leader-1", "zone1_coordinator-2",
+						nil, "add", "standby added",
+						"{zone1_member-1,zone1_member-2}", nil,
+						nil, nil, nil, nil, "2026-03-24 09:00:17.000000+00",
+					},
+				}))
+			},
+			expectError: false,
+		},
+		{
+			name: "write fails with database error",
+			buildUpdate: func(pm *MultiPoolerManager) *ruleUpdateBuilder {
+				return newRuleUpdate(2, &clustermetadatapb.ID{Cell: "zone1", Name: "coordinator-2"}, "promotion", "Leadership changed due to failover").
+					withLeader(&clustermetadatapb.ID{Cell: "zone1", Name: "leader-2"}).
+					withCohort([]*clustermetadatapb.ID{{Cell: "zone1", Name: "member-1"}})
+			},
+			setupMock: func(m *mock.QueryService) {
+				m.AddQueryPatternOnceWithError("FROM multigres.current_rule", errors.New("connection refused"))
 			},
 			expectError:   true,
-			errorContains: "failed to insert history record",
+			errorContains: "failed to write rule history record",
 		},
 		{
-			name:            "force mode skips insert entirely",
-			termNumber:      2,
-			leaderID:        mustPoolerID("zone1", "leader-2"),
-			coordinatorID:   &clustermetadatapb.ID{Cell: "zone1", Name: "coordinator-2"},
-			walPosition:     "0/2345678",
-			operation:       "configure",
-			reason:          "Emergency replication GUC change",
-			cohortMembers:   []poolerID{mustPoolerID("zone1", "member-1"), mustPoolerID("zone1", "member-2")},
-			acceptedMembers: []poolerID{mustPoolerID("zone1", "member-1")},
-			force:           true,
+			name: "force mode skips write entirely",
+			buildUpdate: func(pm *MultiPoolerManager) *ruleUpdateBuilder {
+				return newRuleUpdate(2, &clustermetadatapb.ID{Cell: "zone1", Name: "coordinator-2"}, "replication_config", "Emergency replication GUC change").
+					withCohort([]*clustermetadatapb.ID{{Cell: "zone1", Name: "member-1"}}).
+					withForce()
+			},
+			setupMock:   func(m *mock.QueryService) {},
+			expectError: false,
+		},
+		{
+			name: "update with empty cohort",
+			buildUpdate: func(pm *MultiPoolerManager) *ruleUpdateBuilder {
+				return newRuleUpdate(3, &clustermetadatapb.ID{Cell: "zone1", Name: "coordinator-3"}, "promotion", "Initial cluster bootstrap").
+					withLeader(&clustermetadatapb.ID{Cell: "zone1", Name: "leader-3"}).
+					withCohort([]*clustermetadatapb.ID{}).
+					withWALPosition("0/3456789").
+					withOperation("bootstrap")
+			},
 			setupMock: func(m *mock.QueryService) {
-				// No mock needed - force mode skips the insert entirely
+				m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(returnCols, [][]any{
+					{
+						int64(3), int64(0), "promotion", "zone1_leader-3", "zone1_coordinator-3",
+						"0/3456789", "bootstrap", "Initial cluster bootstrap",
+						"{}", "{}",
+						nil, nil, nil, nil, "2026-03-24 09:00:17.000000+00",
+					},
+				}))
 			},
 			expectError: false,
 		},
 		{
-			name:            "insert with empty cohort and accepted members arrays",
-			termNumber:      3,
-			leaderID:        mustPoolerID("zone1", "leader-3"),
-			coordinatorID:   &clustermetadatapb.ID{Cell: "zone1", Name: "coordinator-3"},
-			walPosition:     "0/3456789",
-			operation:       "bootstrap",
-			reason:          "Initial cluster bootstrap",
-			cohortMembers:   []poolerID{},
-			acceptedMembers: []poolerID{},
+			name: "partial update: leader only, cohort kept from current_rule",
+			buildUpdate: func(pm *MultiPoolerManager) *ruleUpdateBuilder {
+				// No withCohort call — cohort_members retains its existing value via COALESCE
+				return newRuleUpdate(4, &clustermetadatapb.ID{Cell: "zone1", Name: "coordinator-4"}, "promotion", "failover").
+					withLeader(&clustermetadatapb.ID{Cell: "zone1", Name: "new-leader"})
+			},
 			setupMock: func(m *mock.QueryService) {
-				m.AddQueryPatternOnce("INSERT INTO multigres.leadership_history", mock.MakeQueryResult(nil, nil))
+				m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(returnCols, [][]any{
+					{
+						int64(4), int64(0), "promotion", "zone1_new-leader", "zone1_coordinator-4",
+						nil, nil, "failover",
+						"{zone1_pooler-1,zone1_pooler-2}", nil,
+						nil, nil, nil, nil, "2026-03-24 09:00:17.000000+00",
+					},
+				}))
 			},
 			expectError: false,
+		},
+		{
+			name: "returns error for leader ID with underscore in cell",
+			buildUpdate: func(pm *MultiPoolerManager) *ruleUpdateBuilder {
+				return newRuleUpdate(5, &clustermetadatapb.ID{Cell: "zone1", Name: "coordinator-5"}, "promotion", "reason").
+					withLeader(&clustermetadatapb.ID{Cell: "zone_1", Name: "leader"}) // underscore in cell is invalid
+			},
+			setupMock:     func(m *mock.QueryService) {},
+			expectError:   true,
+			errorContains: "invalid leader ID",
+		},
+		{
+			name: "returns error for cohort member with underscore in name",
+			buildUpdate: func(pm *MultiPoolerManager) *ruleUpdateBuilder {
+				return newRuleUpdate(5, &clustermetadatapb.ID{Cell: "zone1", Name: "coordinator-5"}, "promotion", "reason").
+					withCohort([]*clustermetadatapb.ID{
+						{Cell: "zone1", Name: "pooler-1"},
+						{Cell: "zone1", Name: "pooler_bad"}, // underscore in name is invalid
+					})
+			},
+			setupMock:     func(m *mock.QueryService) {},
+			expectError:   true,
+			errorContains: "invalid cohort member ID",
+		},
+		{
+			name: "returns error for accepted member with empty cell",
+			buildUpdate: func(pm *MultiPoolerManager) *ruleUpdateBuilder {
+				return newRuleUpdate(5, &clustermetadatapb.ID{Cell: "zone1", Name: "coordinator-5"}, "promotion", "reason").
+					withAcceptedMembers([]*clustermetadatapb.ID{{Cell: "", Name: "pooler-1"}})
+			},
+			setupMock:     func(m *mock.QueryService) {},
+			expectError:   true,
+			errorContains: "invalid accepted member ID",
+		},
+		{
+			name: "CAS succeeds when previous rule term and subterm match",
+			buildUpdate: func(pm *MultiPoolerManager) *ruleUpdateBuilder {
+				return newRuleUpdate(2, &clustermetadatapb.ID{Cell: "zone1", Name: "coordinator-2"}, "promotion", "failover").
+					withLeader(&clustermetadatapb.ID{Cell: "zone1", Name: "new-leader"}).
+					withPreviousRule(1, 3) // expects term=1, subterm=3 in current_rule
+			},
+			setupMock: func(m *mock.QueryService) {
+				// DB returns the row: CAS check passed, update succeeded
+				m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(returnCols, [][]any{
+					{
+						int64(2), int64(0), "promotion", "zone1_new-leader", "zone1_coordinator-2",
+						nil, nil, "failover",
+						"{zone1_pooler-1}", nil,
+						nil, nil, nil, nil, "2026-03-24 09:00:17.000000+00",
+					},
+				}))
+			},
+			expectError: false,
+		},
+		{
+			name: "CAS fails when previous rule does not match current state",
+			buildUpdate: func(pm *MultiPoolerManager) *ruleUpdateBuilder {
+				return newRuleUpdate(2, &clustermetadatapb.ID{Cell: "zone1", Name: "coordinator-2"}, "promotion", "failover").
+					withLeader(&clustermetadatapb.ID{Cell: "zone1", Name: "new-leader"}).
+					withPreviousRule(1, 2) // expects term=1, subterm=2 but current is term=1, subterm=3
+			},
+			setupMock: func(m *mock.QueryService) {
+				// DB returns 0 rows: WHERE clause didn't match, CAS check failed
+				m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(returnCols, [][]any{}))
+			},
+			expectError:   true,
+			errorContains: "rule conflict: current rule version mismatch",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			pm, mockQueryService := newTestManagerWithMock(constants.DefaultTableGroup, constants.DefaultShard)
-
 			tt.setupMock(mockQueryService)
 
-			err := pm.insertHistoryRecord(t.Context(), tt.termNumber, "promotion", tt.leaderID, tt.coordinatorID,
-				tt.walPosition, tt.operation, tt.reason, tt.cohortMembers, tt.acceptedMembers, tt.force)
+			_, err := pm.updateRule(t.Context(), tt.buildUpdate(pm))
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -398,76 +521,92 @@ func TestInsertLeadershipHistory(t *testing.T) {
 	}
 }
 
-func TestQueryLeadershipHistory(t *testing.T) {
+func TestUpdateRuleConflictSentinel(t *testing.T) {
+	// Verify that the CAS failure returns exactly errRuleConflict so callers
+	// can check it with errors.Is rather than string-matching.
+	returnCols := []string{
+		"coordinator_term", "rule_subterm", "event_type", "leader_id", "coordinator_id",
+		"wal_position", "operation", "reason", "cohort_members", "accepted_members",
+		"durability_policy_name", "durability_quorum_type", "durability_required_count",
+		"durability_async_fallback", "created_at",
+	}
+
+	pm, mockQueryService := newTestManagerWithMock(constants.DefaultTableGroup, constants.DefaultShard)
+	mockQueryService.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(returnCols, [][]any{}))
+
+	_, err := pm.updateRule(t.Context(),
+		newRuleUpdate(2, &clustermetadatapb.ID{Cell: "zone1", Name: "coordinator-2"}, "promotion", "failover").
+			withLeader(&clustermetadatapb.ID{Cell: "zone1", Name: "new-leader"}).
+			withPreviousRule(1, 2),
+	)
+
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, errRuleConflict), "expected errRuleConflict sentinel, got: %v", err)
+	assert.NoError(t, mockQueryService.ExpectationsWereMet())
+}
+
+func TestQueryRuleHistory(t *testing.T) {
+	cols := []string{
+		"coordinator_term", "rule_subterm", "event_type", "leader_id", "coordinator_id",
+		"wal_position", "operation", "reason", "cohort_members", "accepted_members",
+		"durability_policy_name", "durability_quorum_type", "durability_required_count",
+		"durability_async_fallback", "created_at",
+	}
+	createdAt := "2026-03-24 09:00:17.000000+00"
+
 	t.Run("returns records ordered newest first", func(t *testing.T) {
 		pm, mockQueryService := newTestManagerWithMock(constants.DefaultTableGroup, constants.DefaultShard)
 
 		leaderID := "zone1_leader-1"
 		coordID := "zone1_coordinator-1"
 		walPos := "0/1234567"
-		operation := "promotion"
-		createdAt := "2026-03-24 09:00:17.000000+00"
 
 		mockQueryService.AddQueryPatternOnce(
-			"SELECT id, term_number, event_type",
-			mock.MakeQueryResult(
-				[]string{
-					"id", "term_number", "event_type", "leader_id", "coordinator_id",
-					"wal_position", "operation", "reason", "cohort_members", "accepted_members", "created_at",
+			"SELECT coordinator_term",
+			mock.MakeQueryResult(cols, [][]any{
+				{
+					int64(2), int64(1), "promotion", leaderID, coordID, walPos, "promotion",
+					"manual failover", "{zone1_pooler-2,zone1_pooler-3}", "{zone1_pooler-2}",
+					nil, nil, nil, nil, createdAt,
 				},
-				[][]any{
-					{
-						int64(2), int64(2), "promotion", leaderID, coordID, walPos, operation,
-						"manual failover", `["zone1_pooler-2","zone1_pooler-3"]`, `["zone1_pooler-2"]`, createdAt,
-					},
-					{
-						int64(1), int64(1), "replication_config", leaderID, coordID, nil, "configure",
-						"initial bootstrap", `["zone1_pooler-1","zone1_pooler-2"]`, nil, createdAt,
-					},
+				{
+					int64(1), int64(0), "replication_config", leaderID, coordID, nil, "configure",
+					"initial bootstrap", "{zone1_pooler-1,zone1_pooler-2}", nil,
+					nil, nil, nil, nil, createdAt,
 				},
-			),
+			}),
 		)
 
-		records, err := pm.queryLeadershipHistory(t.Context(), 10)
+		records, err := pm.queryRuleHistory(t.Context(), 10)
 		require.NoError(t, err)
 		require.Len(t, records, 2)
 
-		// First record: term 2 (newest)
-		assert.Equal(t, int64(2), records[0].ID)
-		assert.Equal(t, int64(2), records[0].TermNumber)
+		// First record: term 2, subterm 1 (newest)
+		assert.Equal(t, int64(2), records[0].CoordinatorTerm)
+		assert.Equal(t, int64(1), records[0].RuleSubterm)
 		assert.Equal(t, "promotion", records[0].EventType)
 		require.NotNil(t, records[0].LeaderID)
-		assert.Equal(t, leaderID, *records[0].LeaderID)
+		assert.Equal(t, leaderID, records[0].LeaderID.appName)
 		require.NotNil(t, records[0].WALPosition)
 		assert.Equal(t, walPos, *records[0].WALPosition)
-		require.NotNil(t, records[0].Operation)
-		assert.Equal(t, operation, *records[0].Operation)
 		assert.Equal(t, "manual failover", records[0].Reason)
-		assert.Equal(t, []string{"zone1_pooler-2", "zone1_pooler-3"}, records[0].CohortMembers)
-		assert.Equal(t, []string{"zone1_pooler-2"}, records[0].AcceptedMembers)
+		assert.Equal(t, []string{"zone1_pooler-2", "zone1_pooler-3"}, poolerIDsToAppNames(records[0].CohortMembers))
+		assert.Equal(t, []string{"zone1_pooler-2"}, poolerIDsToAppNames(records[0].AcceptedMembers))
 
-		// Second record: term 1, nullable fields are nil
-		assert.Equal(t, int64(1), records[1].TermNumber)
+		// Second record: nullable fields are nil
+		assert.Equal(t, int64(1), records[1].CoordinatorTerm)
+		assert.Equal(t, int64(0), records[1].RuleSubterm)
 		assert.Nil(t, records[1].WALPosition)
-		assert.Nil(t, records[1].AcceptedMembers)
+		assert.Empty(t, records[1].AcceptedMembers)
 		assert.NoError(t, mockQueryService.ExpectationsWereMet())
 	})
 
 	t.Run("returns empty slice when no records exist", func(t *testing.T) {
 		pm, mockQueryService := newTestManagerWithMock(constants.DefaultTableGroup, constants.DefaultShard)
 
-		mockQueryService.AddQueryPatternOnce(
-			"SELECT id, term_number, event_type",
-			mock.MakeQueryResult(
-				[]string{
-					"id", "term_number", "event_type", "leader_id", "coordinator_id",
-					"wal_position", "operation", "reason", "cohort_members", "accepted_members", "created_at",
-				},
-				[][]any{},
-			),
-		)
+		mockQueryService.AddQueryPatternOnce("SELECT coordinator_term", mock.MakeQueryResult(cols, [][]any{}))
 
-		records, err := pm.queryLeadershipHistory(t.Context(), 10)
+		records, err := pm.queryRuleHistory(t.Context(), 10)
 		require.NoError(t, err)
 		assert.Empty(t, records)
 		assert.NoError(t, mockQueryService.ExpectationsWereMet())
@@ -476,70 +615,130 @@ func TestQueryLeadershipHistory(t *testing.T) {
 	t.Run("propagates query error", func(t *testing.T) {
 		pm, mockQueryService := newTestManagerWithMock(constants.DefaultTableGroup, constants.DefaultShard)
 
-		mockQueryService.AddQueryPatternOnceWithError(
-			"SELECT id, term_number, event_type",
-			errors.New("connection refused"),
-		)
+		mockQueryService.AddQueryPatternOnceWithError("SELECT coordinator_term", errors.New("connection refused"))
 
-		_, err := pm.queryLeadershipHistory(t.Context(), 10)
+		_, err := pm.queryRuleHistory(t.Context(), 10)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to query leadership history")
+		assert.Contains(t, err.Error(), "failed to query rule_history")
 		assert.NoError(t, mockQueryService.ExpectationsWereMet())
+	})
+
+	t.Run("returns error when leader_id is malformed", func(t *testing.T) {
+		pm, mockQueryService := newTestManagerWithMock(constants.DefaultTableGroup, constants.DefaultShard)
+
+		mockQueryService.AddQueryPatternOnce("SELECT coordinator_term", mock.MakeQueryResult(cols, [][]any{
+			{
+				int64(1), int64(0), "promotion", "nounderscore", "zone1_coordinator-1", nil, nil,
+				"reason", "{zone1_pooler-1}", nil,
+				nil, nil, nil, nil, createdAt,
+			},
+		}))
+
+		_, err := pm.queryRuleHistory(t.Context(), 10)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to parse rule_history row")
+	})
+
+	t.Run("returns error when cohort_members contains malformed entry", func(t *testing.T) {
+		pm, mockQueryService := newTestManagerWithMock(constants.DefaultTableGroup, constants.DefaultShard)
+
+		mockQueryService.AddQueryPatternOnce("SELECT coordinator_term", mock.MakeQueryResult(cols, [][]any{
+			{
+				int64(1), int64(0), "promotion", nil, nil, nil, nil,
+				"reason", "{valid_pooler,badentry}", nil,
+				nil, nil, nil, nil, createdAt,
+			},
+		}))
+
+		_, err := pm.queryRuleHistory(t.Context(), 10)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to parse rule_history row")
 	})
 }
 
-func TestCurrentLeadershipRecord(t *testing.T) {
-	t.Run("returns the record with the highest term_number", func(t *testing.T) {
+func TestParsePoolerIDStrings(t *testing.T) {
+	t.Run("parses valid app name strings", func(t *testing.T) {
+		result, err := parsePoolerIDStrings([]string{"zone1_pooler-1", "zone2_pooler-2"})
+		require.NoError(t, err)
+		require.Len(t, result, 2)
+		assert.Equal(t, "zone1_pooler-1", result[0].appName)
+		assert.Equal(t, "zone1", result[0].id.Cell)
+		assert.Equal(t, "pooler-1", result[0].id.Name)
+		assert.Equal(t, "zone2_pooler-2", result[1].appName)
+	})
+
+	t.Run("returns empty slice for empty input", func(t *testing.T) {
+		result, err := parsePoolerIDStrings([]string{})
+		require.NoError(t, err)
+		assert.Empty(t, result)
+	})
+
+	t.Run("returns nil for nil input", func(t *testing.T) {
+		result, err := parsePoolerIDStrings(nil)
+		require.NoError(t, err)
+		assert.Nil(t, result)
+	})
+
+	t.Run("returns error for string missing underscore separator", func(t *testing.T) {
+		_, err := parsePoolerIDStrings([]string{"zone1_pooler-1", "nounderscore"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "nounderscore")
+	})
+
+	t.Run("returns error for string with empty cell", func(t *testing.T) {
+		_, err := parsePoolerIDStrings([]string{"_pooler-1"})
+		require.Error(t, err)
+	})
+
+	t.Run("returns error for string with empty name", func(t *testing.T) {
+		_, err := parsePoolerIDStrings([]string{"zone1_"})
+		require.Error(t, err)
+	})
+}
+
+func TestCurrentRuleRecord(t *testing.T) {
+	// current_rule only stores operational state, not audit fields
+	cols := []string{
+		"coordinator_term", "rule_subterm", "leader_id", "coordinator_id", "cohort_members",
+		"durability_policy_name", "durability_quorum_type", "durability_required_count",
+		"durability_async_fallback", "created_at",
+	}
+	createdAt := "2026-03-24 09:00:17.000000+00"
+
+	t.Run("returns current rule record", func(t *testing.T) {
 		pm, mockQueryService := newTestManagerWithMock(constants.DefaultTableGroup, constants.DefaultShard)
 
 		leaderID := "zone1_leader-2"
 		coordID := "zone1_coordinator-1"
-		walPos := "0/5000000"
-		operation := "promotion"
-		createdAt := "2026-03-24 09:00:17.000000+00"
 
 		mockQueryService.AddQueryPatternOnce(
-			"SELECT id, term_number, event_type",
-			mock.MakeQueryResult(
-				[]string{
-					"id", "term_number", "event_type", "leader_id", "coordinator_id",
-					"wal_position", "operation", "reason", "cohort_members", "accepted_members", "created_at",
+			"SELECT coordinator_term",
+			mock.MakeQueryResult(cols, [][]any{
+				{
+					int64(3), int64(0), leaderID, coordID,
+					"{zone1_pooler-2,zone1_pooler-3}",
+					nil, nil, nil, nil, createdAt,
 				},
-				[][]any{
-					{
-						int64(5), int64(3), "promotion", leaderID, coordID, walPos, operation,
-						"failover", `["zone1_pooler-2","zone1_pooler-3"]`, `["zone1_pooler-2"]`, createdAt,
-					},
-				},
-			),
+			}),
 		)
 
-		record, err := pm.currentLeadershipRecord(t.Context())
+		record, err := pm.currentRuleRecord(t.Context())
 		require.NoError(t, err)
 		require.NotNil(t, record)
-		assert.Equal(t, int64(5), record.ID)
-		assert.Equal(t, int64(3), record.TermNumber)
-		assert.Equal(t, "promotion", record.EventType)
+		assert.Equal(t, int64(3), record.CoordinatorTerm)
+		assert.Equal(t, int64(0), record.RuleSubterm)
 		require.NotNil(t, record.LeaderID)
-		assert.Equal(t, leaderID, *record.LeaderID)
+		assert.Equal(t, leaderID, record.LeaderID.appName)
+		assert.Equal(t, []string{"zone1_pooler-2", "zone1_pooler-3"}, poolerIDsToAppNames(record.CohortMembers))
 		assert.NoError(t, mockQueryService.ExpectationsWereMet())
 	})
 
 	t.Run("returns nil when table is empty", func(t *testing.T) {
 		pm, mockQueryService := newTestManagerWithMock(constants.DefaultTableGroup, constants.DefaultShard)
 
-		mockQueryService.AddQueryPatternOnce(
-			"SELECT id, term_number, event_type",
-			mock.MakeQueryResult(
-				[]string{
-					"id", "term_number", "event_type", "leader_id", "coordinator_id",
-					"wal_position", "operation", "reason", "cohort_members", "accepted_members", "created_at",
-				},
-				[][]any{},
-			),
-		)
+		mockQueryService.AddQueryPatternOnce("SELECT coordinator_term", mock.MakeQueryResult(cols, [][]any{}))
 
-		record, err := pm.currentLeadershipRecord(t.Context())
+		record, err := pm.currentRuleRecord(t.Context())
 		require.NoError(t, err)
 		assert.Nil(t, record)
 		assert.NoError(t, mockQueryService.ExpectationsWereMet())
@@ -548,15 +747,36 @@ func TestCurrentLeadershipRecord(t *testing.T) {
 	t.Run("propagates query error", func(t *testing.T) {
 		pm, mockQueryService := newTestManagerWithMock(constants.DefaultTableGroup, constants.DefaultShard)
 
-		mockQueryService.AddQueryPatternOnceWithError(
-			"SELECT id, term_number, event_type",
-			errors.New("connection refused"),
-		)
+		mockQueryService.AddQueryPatternOnceWithError("SELECT coordinator_term", errors.New("connection refused"))
 
-		_, err := pm.currentLeadershipRecord(t.Context())
+		_, err := pm.currentRuleRecord(t.Context())
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to query leadership history")
+		assert.Contains(t, err.Error(), "failed to query current_rule")
 		assert.NoError(t, mockQueryService.ExpectationsWereMet())
+	})
+
+	t.Run("returns error when leader_id is malformed", func(t *testing.T) {
+		pm, mockQueryService := newTestManagerWithMock(constants.DefaultTableGroup, constants.DefaultShard)
+
+		mockQueryService.AddQueryPatternOnce("SELECT coordinator_term", mock.MakeQueryResult(cols, [][]any{
+			{int64(1), int64(0), "nounderscore", nil, "{zone1_pooler-1}", nil, nil, nil, nil, createdAt},
+		}))
+
+		_, err := pm.currentRuleRecord(t.Context())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to parse current_rule row")
+	})
+
+	t.Run("returns error when cohort_members contains malformed entry", func(t *testing.T) {
+		pm, mockQueryService := newTestManagerWithMock(constants.DefaultTableGroup, constants.DefaultShard)
+
+		mockQueryService.AddQueryPatternOnce("SELECT coordinator_term", mock.MakeQueryResult(cols, [][]any{
+			{int64(1), int64(0), nil, nil, "{valid_pooler,badentry}", nil, nil, nil, nil, createdAt},
+		}))
+
+		_, err := pm.currentRuleRecord(t.Context())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to parse current_rule row")
 	})
 }
 
@@ -581,7 +801,20 @@ func TestInsertReplicationConfigHistory(t *testing.T) {
 				{Cell: "us-west", Name: "replica-2"},
 			},
 			setupMock: func(m *mock.QueryService) {
-				m.AddQueryPatternOnce("INSERT INTO multigres.leadership_history", mock.MakeQueryResult(nil, nil))
+				returnCols := []string{
+					"coordinator_term", "rule_subterm", "event_type", "leader_id", "coordinator_id",
+					"wal_position", "operation", "reason", "cohort_members", "accepted_members",
+					"durability_policy_name", "durability_quorum_type", "durability_required_count",
+					"durability_async_fallback", "created_at",
+				}
+				m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(returnCols, [][]any{
+					{
+						int64(1), int64(0), "replication_config", nil, nil,
+						nil, "configure", "ConfigureSynchronousReplication called",
+						"{us-west_replica-1,us-west_replica-2}", nil,
+						nil, nil, nil, nil, "2026-03-24 09:00:17.000000+00",
+					},
+				}))
 			},
 			expectError: false,
 		},
@@ -594,12 +827,25 @@ func TestInsertReplicationConfigHistory(t *testing.T) {
 				{Cell: "us-west", Name: "replica-3"},
 			},
 			setupMock: func(m *mock.QueryService) {
-				m.AddQueryPatternOnce("INSERT INTO multigres.leadership_history", mock.MakeQueryResult(nil, nil))
+				returnCols := []string{
+					"coordinator_term", "rule_subterm", "event_type", "leader_id", "coordinator_id",
+					"wal_position", "operation", "reason", "cohort_members", "accepted_members",
+					"durability_policy_name", "durability_quorum_type", "durability_required_count",
+					"durability_async_fallback", "created_at",
+				}
+				m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(returnCols, [][]any{
+					{
+						int64(2), int64(0), "replication_config", nil, nil,
+						nil, "add", "UpdateSynchronousStandbyList: add",
+						"{us-west_replica-3}", nil,
+						nil, nil, nil, nil, "2026-03-24 09:00:17.000000+00",
+					},
+				}))
 			},
 			expectError: false,
 		},
 		{
-			name:       "insert fails with database error",
+			name:       "write fails with database error",
 			termNumber: 3,
 			operation:  "remove",
 			reason:     "UpdateSynchronousStandbyList: remove",
@@ -607,10 +853,10 @@ func TestInsertReplicationConfigHistory(t *testing.T) {
 				{Cell: "us-west", Name: "replica-1"},
 			},
 			setupMock: func(m *mock.QueryService) {
-				m.AddQueryPatternOnceWithError("INSERT INTO multigres.leadership_history", errors.New("timeout waiting for sync replication"))
+				m.AddQueryPatternOnceWithError("FROM multigres.current_rule", errors.New("timeout waiting for sync replication"))
 			},
 			expectError:   true,
-			errorContains: "failed to insert history record",
+			errorContains: "failed to write rule history record",
 		},
 		{
 			name:       "insert with empty standby list",
@@ -619,7 +865,20 @@ func TestInsertReplicationConfigHistory(t *testing.T) {
 			reason:     "ConfigureSynchronousReplication called",
 			standbyIDs: []*clustermetadatapb.ID{},
 			setupMock: func(m *mock.QueryService) {
-				m.AddQueryPatternOnce("INSERT INTO multigres.leadership_history", mock.MakeQueryResult(nil, nil))
+				returnCols := []string{
+					"coordinator_term", "rule_subterm", "event_type", "leader_id", "coordinator_id",
+					"wal_position", "operation", "reason", "cohort_members", "accepted_members",
+					"durability_policy_name", "durability_quorum_type", "durability_required_count",
+					"durability_async_fallback", "created_at",
+				}
+				m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(returnCols, [][]any{
+					{
+						int64(4), int64(0), "replication_config", nil, nil,
+						nil, "configure", "ConfigureSynchronousReplication called",
+						"{}", nil,
+						nil, nil, nil, nil, "2026-03-24 09:00:17.000000+00",
+					},
+				}))
 			},
 			expectError: false,
 		},
@@ -633,11 +892,9 @@ func TestInsertReplicationConfigHistory(t *testing.T) {
 
 			ctx := context.Background()
 
-			// Convert standby IDs to pooler IDs
-			standbyPoolerIDs, err := toPoolerIDs(tt.standbyIDs)
-			require.NoError(t, err)
-
-			err = pm.insertHistoryRecord(ctx, tt.termNumber, "replication_config", pm.servicePoolerID, nil, "", tt.operation, tt.reason, standbyPoolerIDs, nil, false /* force */)
+			_, err := pm.updateRule(ctx, newRuleUpdate(tt.termNumber, pm.serviceID, "replication_config", tt.reason).
+				withCohort(tt.standbyIDs).
+				withOperation(tt.operation))
 
 			if tt.expectError {
 				assert.Error(t, err)

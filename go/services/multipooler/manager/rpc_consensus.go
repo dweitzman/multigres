@@ -242,14 +242,14 @@ func (pm *MultiPoolerManager) executeRevoke(ctx context.Context, term int64, res
 	// the primary criterion: a node that has seen a higher term has applied more
 	// of the agreed WAL history (the history write uses RemoteOperationTimeout,
 	// so sync standbys are guaranteed to have acknowledged it).
-	if rec, err := pm.currentLeadershipRecord(ctx); err != nil {
-		pm.logger.WarnContext(ctx, "Failed to get leadership term during revoke; candidate selection may be suboptimal",
+	if rec, err := pm.currentRuleRecord(ctx); err != nil {
+		pm.logger.WarnContext(ctx, "Failed to get rule history during revoke; candidate selection may be suboptimal",
 			"term", term, "error", err)
 	} else if rec != nil {
-		response.WalPosition.LeadershipTerm = rec.TermNumber
-		response.WalPosition.CohortMembers = rec.CohortMembers
-		pm.logger.InfoContext(ctx, "Captured leadership term for candidate selection",
-			"term", term, "leadership_term", rec.TermNumber)
+		response.WalPosition.LeadershipTerm = rec.CoordinatorTerm
+		response.WalPosition.CohortMembers = poolerIDsToAppNames(rec.CohortMembers)
+		pm.logger.InfoContext(ctx, "Captured coordinator term for candidate selection",
+			"term", term, "coordinator_term", rec.CoordinatorTerm)
 	}
 
 	return nil
