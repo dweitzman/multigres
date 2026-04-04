@@ -322,18 +322,18 @@ func (pm *MultiPoolerManager) getConsensusStatus(ctx context.Context) (*clusterm
 }
 
 // buildConsensusStatus constructs a ConsensusStatus from a pre-fetched consensus term
-// and the current postgres state (rule record + WAL position).
+// and the current postgres state (rule + WAL position from a single current_rule query).
 //
-// If prefetchedRec is non-nil it is used directly, avoiding a redundant DB round-trip
-// when the caller already has the current rule (e.g. from updateRule's return value).
-// If nil, the record is fetched from postgres.
+// If prefetchedPos is non-nil it is used directly, avoiding a redundant DB round-trip
+// when the caller already has the current position (e.g. from updateRule's return value).
+// If nil, the position is fetched from postgres via currentRuleRecord.
 //
 // Returns an error if postgres is unreachable, since a partial status (promise
 // without current_position) could mislead callers about this node's rule position.
 //
 // The highest_known_rule field is not yet populated; it will be added once
 // the pooler tracks forward rule knowledge from the coordinator.
-func (pm *MultiPoolerManager) buildConsensusStatus(ctx context.Context, term *multipoolermanagerdatapb.ConsensusTerm, prefetchedRec *ruleHistoryRecord) (*clustermetadatapb.ConsensusStatus, error) {
+func (pm *MultiPoolerManager) buildConsensusStatus(ctx context.Context, term *multipoolermanagerdatapb.ConsensusTerm, prefetchedPos *clustermetadatapb.NodePosition) (*clustermetadatapb.ConsensusStatus, error) {
 	status := &clustermetadatapb.ConsensusStatus{}
 
 	if term != nil {
@@ -345,59 +345,18 @@ func (pm *MultiPoolerManager) buildConsensusStatus(ctx context.Context, term *mu
 		}
 	}
 
-	// Populate current_position from current_rule and the current WAL position.
-	var rec *ruleHistoryRecord
-	if prefetchedRec != nil {
-		rec = prefetchedRec
+	var pos *clustermetadatapb.NodePosition
+	if prefetchedPos != nil {
+		pos = prefetchedPos
 	} else {
 		var err error
-		rec, err = pm.currentRuleRecord(ctx)
+		pos, err = pm.currentRuleRecord(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read current rule: %w", err)
 		}
 	}
-	if rec != nil {
-		ruleNumber := &clustermetadatapb.RuleNumber{
-			CoordinatorTerm: rec.CoordinatorTerm,
-			RuleSubterm:     rec.RuleSubterm,
-		}
-		var primaryID *clustermetadatapb.ID
-		if rec.LeaderID != nil {
-			primaryID = rec.LeaderID.id
-		}
-		cohortIDs := make([]*clustermetadatapb.ID, 0, len(rec.CohortMembers))
-		for _, m := range rec.CohortMembers {
-			cohortIDs = append(cohortIDs, m.id)
-		}
-
-		// LSN semantics by role:
-		//   primary  → pg_current_wal_lsn() (last committed write position)
-		//   standby  → pg_last_wal_receive_lsn() (flushed to disk, ahead of replay)
-		//   restored standby with no WAL received yet → pg_last_wal_replay_lsn() (backup LSN)
-		lsnCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
-		defer cancel()
-		lsnResult, lsnErr := pm.query(lsnCtx, `
-			SELECT CASE
-			  WHEN pg_is_in_recovery()
-			    THEN COALESCE(pg_last_wal_receive_lsn(), pg_last_wal_replay_lsn())
-			  ELSE pg_current_wal_lsn()
-			END::text`)
-		if lsnErr != nil {
-			return nil, fmt.Errorf("failed to read WAL position: %w", lsnErr)
-		}
-		var lsn string
-		if err := executor.ScanSingleRow(lsnResult, &lsn); err != nil {
-			return nil, fmt.Errorf("failed to scan WAL position: %w", err)
-		}
-
-		status.CurrentPosition = &clustermetadatapb.NodePosition{
-			Rule: &clustermetadatapb.ShardRule{
-				RuleNumber:    ruleNumber,
-				PrimaryId:     primaryID,
-				CohortMembers: cohortIDs,
-			},
-			Lsn: lsn,
-		}
+	if pos != nil {
+		status.CurrentPosition = pos
 	}
 	return status, nil
 }

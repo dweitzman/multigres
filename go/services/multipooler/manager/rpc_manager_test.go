@@ -360,40 +360,31 @@ func TestActionLock_MutationMethodsTimeout(t *testing.T) {
 	}
 }
 
-// expectLeadershipHistoryInsert adds a mock expectation for successful rule history insertion.
-// This is required for Promote to succeed since history insertion failure now fails the promotion.
-// expectCurrentRuleQuery adds a mock for the currentRuleRecord SELECT used by
-// buildConsensusStatus (10 columns, read-only path).
+// expectCurrentRuleQuery adds a mock for the observePosition SELECT used by
+// getConsensusStatus (10 columns including current_lsn, read-only path).
+// The lsn parameter is returned as current_lsn in the single combined query.
 func expectCurrentRuleQuery(m *mock.QueryService, coordinatorTerm int64, leaderAppName string, cohortAppNames string, lsn string) {
 	cols := []string{
 		"coordinator_term", "rule_subterm", "leader_id", "coordinator_id", "cohort_members",
 		"durability_policy_name", "durability_quorum_type", "durability_required_count",
-		"durability_async_fallback", "created_at",
+		"durability_async_fallback", "current_lsn",
 	}
 	m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(cols, [][]any{
-		{
-			coordinatorTerm, int64(0), leaderAppName, "zone1_test-coordinator", "{" + cohortAppNames + "}",
-			nil, nil, nil, nil, "2026-01-01 00:00:00",
-		},
+		{coordinatorTerm, int64(0), leaderAppName, "zone1_test-coordinator", "{" + cohortAppNames + "}", nil, nil, nil, nil, lsn},
 	}))
-	m.AddQueryPatternOnce("COALESCE.pg_last_wal_receive_lsn",
-		mock.MakeQueryResult([]string{"lsn"}, [][]any{{lsn}}))
 }
 
-func expectLeadershipHistoryInsert(m *mock.QueryService) {
+// expectLeadershipHistoryInsert adds a mock expectation for successful rule history insertion.
+// This is required for Promote to succeed since history insertion failure now fails the promotion.
+// lsn is the WAL position returned as current_lsn in the RETURNING clause.
+func expectLeadershipHistoryInsert(m *mock.QueryService, lsn string) {
 	returnCols := []string{
-		"coordinator_term", "rule_subterm", "event_type", "leader_id", "coordinator_id",
-		"wal_position", "operation", "reason", "cohort_members", "accepted_members",
+		"coordinator_term", "rule_subterm", "leader_id", "coordinator_id", "cohort_members",
 		"durability_policy_name", "durability_quorum_type", "durability_required_count",
-		"durability_async_fallback", "created_at",
+		"durability_async_fallback", "current_lsn",
 	}
 	m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(returnCols, [][]any{
-		{
-			int64(1), int64(0), "promotion", "zone1_test-pooler", "zone1_test-coordinator",
-			"0/ABCDEF0", nil, "test reason",
-			"{zone1_test-pooler}", "{}",
-			nil, nil, nil, nil, "2026-03-24 09:00:17.000000+00",
-		},
+		{int64(1), int64(0), "zone1_test-pooler", "zone1_test-coordinator", "{zone1_test-pooler}", nil, nil, nil, nil, lsn},
 	}))
 }
 
@@ -514,7 +505,7 @@ func TestPromoteIdempotency_PostgreSQLPromotedButTopologyNotUpdated(t *testing.T
 		mock.MakeQueryResult([]string{"pg_current_wal_lsn"}, [][]any{{"0/ABCDEF0"}}))
 
 	// Mock: insertLeadershipHistory - required for promotion success
-	expectLeadershipHistoryInsert(mockQueryService)
+	expectLeadershipHistoryInsert(mockQueryService, "0/ABCDEF0")
 
 	pm, _ := setupPromoteTestManager(t, mockQueryService)
 
@@ -587,6 +578,7 @@ func TestPromoteIdempotency_FullyCompleteTopologyPrimary(t *testing.T) {
 				RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 10},
 				PrimaryId:     &clustermetadatapb.ID{Cell: "zone1", Name: "test-replica"},
 				CohortMembers: []*clustermetadatapb.ID{{Cell: "zone1", Name: "test-replica"}},
+				CoordinatorId: &clustermetadatapb.ID{Cell: "zone1", Name: "test-coordinator"},
 			},
 			Lsn: "0/FEDCBA0",
 		},
@@ -723,12 +715,7 @@ func TestPromoteIdempotency_NothingCompleteYet(t *testing.T) {
 		mock.MakeQueryResult([]string{"pg_current_wal_lsn"}, [][]any{{"0/5678ABC"}}))
 
 	// Mock: insertLeadershipHistory - required for promotion success
-	expectLeadershipHistoryInsert(mockQueryService)
-
-	// Mock: buildConsensusStatus LSN query — uses the ruleRec returned by updateRule
-	// so no second current_rule fetch is needed, only the WAL position query.
-	mockQueryService.AddQueryPatternOnce("COALESCE.pg_last_wal_receive_lsn",
-		mock.MakeQueryResult([]string{"lsn"}, [][]any{{"0/5678ABC"}}))
+	expectLeadershipHistoryInsert(mockQueryService, "0/5678ABC")
 
 	pm, _ := setupPromoteTestManager(t, mockQueryService)
 
@@ -757,6 +744,7 @@ func TestPromoteIdempotency_NothingCompleteYet(t *testing.T) {
 				RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
 				PrimaryId:     &clustermetadatapb.ID{Cell: "zone1", Name: "test-pooler"},
 				CohortMembers: []*clustermetadatapb.ID{{Cell: "zone1", Name: "test-pooler"}},
+				CoordinatorId: &clustermetadatapb.ID{Cell: "zone1", Name: "test-coordinator"},
 			},
 			Lsn: "0/5678ABC",
 		},
@@ -859,7 +847,7 @@ func TestPromoteIdempotency_SecondCallSucceedsAfterCompletion(t *testing.T) {
 
 	// Mock: insertLeadershipHistory - required for first promotion call success
 	// Note: second call returns early (WasAlreadyPrimary) so doesn't need this
-	expectLeadershipHistoryInsert(mockQueryService)
+	expectLeadershipHistoryInsert(mockQueryService, "0/ABCDEF0")
 
 	pm, _ := setupPromoteTestManager(t, mockQueryService)
 
@@ -917,7 +905,7 @@ func TestPromoteIdempotency_EmptyExpectedLSNSkipsValidation(t *testing.T) {
 		mock.MakeQueryResult([]string{"pg_current_wal_lsn"}, [][]any{{"0/BBBBBBB"}}))
 
 	// Mock: insertLeadershipHistory - required for promotion success
-	expectLeadershipHistoryInsert(mockQueryService)
+	expectLeadershipHistoryInsert(mockQueryService, "0/ABCDEF0")
 
 	pm, _ := setupPromoteTestManager(t, mockQueryService)
 
@@ -962,7 +950,7 @@ func TestPromote_WithElectionMetadata(t *testing.T) {
 		mock.MakeQueryResult([]string{"pg_current_wal_lsn"}, [][]any{{"0/1234567"}}))
 
 	// Mock: insertLeadershipHistory - required for promotion success
-	expectLeadershipHistoryInsert(mockQueryService)
+	expectLeadershipHistoryInsert(mockQueryService, "0/ABCDEF0")
 
 	// Mock: Clear primary_conninfo after promotion
 	mockQueryService.AddQueryPatternOnce("ALTER SYSTEM RESET primary_conninfo",
@@ -1117,7 +1105,7 @@ func TestPromote_TopologyUpdateFailureDoesNotFailPromotion(t *testing.T) {
 		mock.MakeQueryResult([]string{"pg_current_wal_lsn"}, [][]any{{"0/ABCDEF0"}}))
 
 	// insertLeadershipHistory
-	expectLeadershipHistoryInsert(mockQueryService)
+	expectLeadershipHistoryInsert(mockQueryService, "0/ABCDEF0")
 
 	// Inline setup (like setupPromoteTestManager but capturing factory)
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))

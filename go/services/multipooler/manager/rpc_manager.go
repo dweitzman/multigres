@@ -1329,7 +1329,7 @@ func (pm *MultiPoolerManager) Promote(ctx context.Context, consensusTerm int64, 
 	if force {
 		promoteUpdate.withForce()
 	}
-	ruleRec, err := pm.updateRule(ctx, promoteUpdate)
+	rulePos, err := pm.updateRule(ctx, promoteUpdate)
 	if err != nil {
 		pm.logger.ErrorContext(ctx, "Failed to write rule history - promotion failed",
 			"term", consensusTerm,
@@ -1360,7 +1360,7 @@ func (pm *MultiPoolerManager) Promote(ctx context.Context, consensusTerm int64, 
 			term = nil
 		}
 	}
-	consensusStatus, statusErr := pm.buildConsensusStatus(ctx, term, ruleRec)
+	consensusStatus, statusErr := pm.buildConsensusStatus(ctx, term, rulePos)
 	if statusErr != nil {
 		pm.logger.WarnContext(ctx, "Failed to build consensus status for promote response", "error", statusErr)
 	}

@@ -106,6 +106,7 @@ type MultiPoolerManager struct {
 	state          ManagerState
 	stateError     error
 	consensusState *ConsensusState
+	rules          *ruleStore
 	topoLoaded     bool
 	ctx            context.Context
 	cancel         context.CancelFunc
@@ -256,6 +257,7 @@ func NewMultiPoolerManagerWithTimeout(logger *slog.Logger, multiPooler *clusterm
 			return nil, fmt.Errorf("failed to load consensus term from disk: %w", err)
 		}
 	}
+	pm.rules = newRuleStore(pm.logger, pm.query, pm.queryArgs, nil)
 
 	// Create the query service controller with the pool manager.
 	// Get the drain grace period from connpool config (0 means use default).

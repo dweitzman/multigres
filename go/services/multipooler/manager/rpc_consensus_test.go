@@ -142,16 +142,16 @@ func setupManagerWithMockDB(t *testing.T, mockQueryService *mock.QueryService) (
 // ============================================================================
 
 func TestBeginTerm(t *testing.T) {
-	// Columns returned by currentRuleRecord (SELECT from multigres.current_rule).
+	// Columns returned by observePosition (SELECT from multigres.current_rule, including current_lsn).
 	currentRuleCols := []string{
 		"coordinator_term", "rule_subterm", "leader_id", "coordinator_id", "cohort_members",
 		"durability_policy_name", "durability_quorum_type", "durability_required_count",
-		"durability_async_fallback", "created_at",
+		"durability_async_fallback", "current_lsn",
 	}
 	// A representative current_rule row used in cases that assert on ConsensusStatus.
 	currentRuleRow := [][]any{{
 		int64(1), int64(0), "zone1_test-pooler", "zone1_test-coord",
-		"{zone1_test-pooler}", nil, nil, nil, nil, "2026-01-01 00:00:00",
+		"{zone1_test-pooler}", nil, nil, nil, nil, "0/5000000",
 	}}
 
 	tests := []struct {
@@ -215,7 +215,6 @@ func TestBeginTerm(t *testing.T) {
 			setupMocks: func(m *mock.QueryService) {
 				// Term rejected: getConsensusStatus still runs to give coordinator fresh state
 				m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(currentRuleCols, currentRuleRow))
-				m.AddQueryPatternOnce("COALESCE.pg_last_wal_receive_lsn", mock.MakeQueryResult([]string{"lsn"}, [][]any{{"0/5000000"}}))
 			},
 			expectedAccepted:                    false,
 			expectedTerm:                        5,
@@ -234,6 +233,7 @@ func TestBeginTerm(t *testing.T) {
 						RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 1, RuleSubterm: 0},
 						PrimaryId:     &clustermetadatapb.ID{Cell: "zone1", Name: "test-pooler"},
 						CohortMembers: []*clustermetadatapb.ID{{Cell: "zone1", Name: "test-pooler"}},
+						CoordinatorId: &clustermetadatapb.ID{Cell: "zone1", Name: "test-coord"},
 					},
 					Lsn: "0/5000000",
 				},
@@ -331,7 +331,6 @@ func TestBeginTerm(t *testing.T) {
 				expectStandbyRevokeMocks(m, "0/5000000")
 				// getConsensusStatus after revoke
 				m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(currentRuleCols, currentRuleRow))
-				m.AddQueryPatternOnce("COALESCE.pg_last_wal_receive_lsn", mock.MakeQueryResult([]string{"lsn"}, [][]any{{"0/5000000"}}))
 			},
 			expectedError:                       false,
 			expectedAccepted:                    true,
@@ -352,6 +351,7 @@ func TestBeginTerm(t *testing.T) {
 						RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 1, RuleSubterm: 0},
 						PrimaryId:     &clustermetadatapb.ID{Cell: "zone1", Name: "test-pooler"},
 						CohortMembers: []*clustermetadatapb.ID{{Cell: "zone1", Name: "test-pooler"}},
+						CoordinatorId: &clustermetadatapb.ID{Cell: "zone1", Name: "test-coord"},
 					},
 					Lsn: "0/5000000",
 				},
@@ -394,7 +394,6 @@ func TestBeginTerm(t *testing.T) {
 			setupMocks: func(m *mock.QueryService) {
 				// getConsensusStatus after acceptance
 				m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(currentRuleCols, currentRuleRow))
-				m.AddQueryPatternOnce("COALESCE.pg_last_wal_receive_lsn", mock.MakeQueryResult([]string{"lsn"}, [][]any{{"0/8000000"}}))
 			},
 			expectedError:                       false,
 			expectedAccepted:                    true,
@@ -414,8 +413,9 @@ func TestBeginTerm(t *testing.T) {
 						RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 1, RuleSubterm: 0},
 						PrimaryId:     &clustermetadatapb.ID{Cell: "zone1", Name: "test-pooler"},
 						CohortMembers: []*clustermetadatapb.ID{{Cell: "zone1", Name: "test-pooler"}},
+						CoordinatorId: &clustermetadatapb.ID{Cell: "zone1", Name: "test-coord"},
 					},
-					Lsn: "0/8000000",
+					Lsn: "0/5000000",
 				},
 			},
 			description: "NO_ACTION accepts term without executing revoke",
@@ -995,11 +995,11 @@ func TestCanReachPrimary(t *testing.T) {
 // ============================================================================
 
 func TestConsensusStatus(t *testing.T) {
-	// Columns returned by currentRuleRecord (SELECT from multigres.current_rule).
+	// Columns returned by observePosition (SELECT from multigres.current_rule, including current_lsn).
 	currentRuleCols := []string{
 		"coordinator_term", "rule_subterm", "leader_id", "coordinator_id", "cohort_members",
 		"durability_policy_name", "durability_quorum_type", "durability_required_count",
-		"durability_async_fallback", "created_at",
+		"durability_async_fallback", "current_lsn",
 	}
 
 	tests := []struct {
@@ -1031,13 +1031,11 @@ func TestConsensusStatus(t *testing.T) {
 				// Single pg_is_in_recovery check determines both role and which WAL position to query
 				m.AddQueryPatternOnce("SELECT pg_is_in_recovery", mock.MakeQueryResult([]string{"pg_is_in_recovery"}, [][]any{{"f"}}))
 				m.AddQueryPatternOnce("SELECT pg_current_wal_lsn", mock.MakeQueryResult([]string{"pg_current_wal_lsn"}, [][]any{{"0/4000000"}}))
-				// currentRuleRecord for getInconsistentConsensusStatus
+				// currentRuleRecord for getInconsistentConsensusStatus (LSN comes from this single query)
 				m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(currentRuleCols, [][]any{{
 					int64(1), int64(0), "zone1_test-pooler", "zone1_test-coord",
-					"{zone1_test-pooler}", nil, nil, nil, nil, "2026-01-01 00:00:00",
+					"{zone1_test-pooler}", nil, nil, nil, nil, "0/4000000",
 				}}))
-				// LSN: CASE WHEN pg_is_in_recovery() THEN COALESCE(...) ELSE pg_current_wal_lsn() END
-				m.AddQueryPatternOnce("COALESCE.pg_last_wal_receive_lsn", mock.MakeQueryResult([]string{"lsn"}, [][]any{{"0/4000000"}}))
 			},
 			expectedCurrentTerm: 5,
 			expectedIsHealthy:   true,
@@ -1053,6 +1051,7 @@ func TestConsensusStatus(t *testing.T) {
 						RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 1, RuleSubterm: 0},
 						PrimaryId:     &clustermetadatapb.ID{Cell: "zone1", Name: "test-pooler"},
 						CohortMembers: []*clustermetadatapb.ID{{Cell: "zone1", Name: "test-pooler"}},
+						CoordinatorId: &clustermetadatapb.ID{Cell: "zone1", Name: "test-coord"},
 					},
 					Lsn: "0/4000000",
 				},
@@ -1083,13 +1082,11 @@ func TestConsensusStatus(t *testing.T) {
 						"wal_receiver_status",
 					},
 					[][]any{{"0/4FFFFFF", "0/5000000", "f", "not paused", nil, "", "streaming"}}))
-				// currentRuleRecord for getInconsistentConsensusStatus
+				// currentRuleRecord for getInconsistentConsensusStatus (LSN comes from this single query)
 				m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(currentRuleCols, [][]any{{
 					int64(1), int64(0), "zone1_test-pooler", "zone1_test-coord",
-					"{zone1_test-pooler}", nil, nil, nil, nil, "2026-01-01 00:00:00",
+					"{zone1_test-pooler}", nil, nil, nil, nil, "0/5000000",
 				}}))
-				// LSN: CASE WHEN pg_is_in_recovery() THEN COALESCE(...) ELSE pg_current_wal_lsn() END
-				m.AddQueryPatternOnce("COALESCE.pg_last_wal_receive_lsn", mock.MakeQueryResult([]string{"lsn"}, [][]any{{"0/5000000"}}))
 			},
 			expectedCurrentTerm: 3,
 			expectedIsHealthy:   true,
@@ -1104,6 +1101,7 @@ func TestConsensusStatus(t *testing.T) {
 						RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 1, RuleSubterm: 0},
 						PrimaryId:     &clustermetadatapb.ID{Cell: "zone1", Name: "test-pooler"},
 						CohortMembers: []*clustermetadatapb.ID{{Cell: "zone1", Name: "test-pooler"}},
+						CoordinatorId: &clustermetadatapb.ID{Cell: "zone1", Name: "test-coord"},
 					},
 					Lsn: "0/5000000",
 				},
@@ -1226,7 +1224,7 @@ func TestGetInconsistentConsensusStatus(t *testing.T) {
 	currentRuleCols := []string{
 		"coordinator_term", "rule_subterm", "leader_id", "coordinator_id", "cohort_members",
 		"durability_policy_name", "durability_quorum_type", "durability_required_count",
-		"durability_async_fallback", "created_at",
+		"durability_async_fallback", "current_lsn",
 	}
 
 	tests := []struct {
@@ -1249,9 +1247,8 @@ func TestGetInconsistentConsensusStatus(t *testing.T) {
 			setupMock: func(m *mock.QueryService) {
 				m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(currentRuleCols, [][]any{{
 					int64(2), int64(1), "zone1_primary-node", "zone1_coord-node",
-					"{zone1_primary-node,zone1_replica-node}", nil, nil, nil, nil, "2026-01-01 00:00:00",
+					"{zone1_primary-node,zone1_replica-node}", nil, nil, nil, nil, "0/A000000",
 				}}))
-				m.AddQueryPatternOnce("COALESCE.pg_last_wal_receive_lsn", mock.MakeQueryResult([]string{"lsn"}, [][]any{{"0/A000000"}}))
 			},
 			expectedStatus: &clustermetadatapb.ConsensusStatus{
 				Promise: &clustermetadatapb.HighestCoordinatorPromise{
@@ -1266,6 +1263,7 @@ func TestGetInconsistentConsensusStatus(t *testing.T) {
 							{Cell: "zone1", Name: "primary-node"},
 							{Cell: "zone1", Name: "replica-node"},
 						},
+						CoordinatorId: &clustermetadatapb.ID{Cell: "zone1", Name: "coord-node"},
 					},
 					Lsn: "0/A000000",
 				},
