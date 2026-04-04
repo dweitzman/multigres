@@ -417,7 +417,7 @@ func (pm *MultiPoolerManager) configureSynchronousReplicationLocked(ctx context.
 		return mterrors.Wrap(err, "failed to get consensus term")
 	}
 	update := newRuleUpdate(
-		term.GetPrimaryTerm(),
+		term.GetTermNumber(),
 		pm.serviceID,
 		"replication_config",
 		"ConfigureSynchronousReplication called").
@@ -1296,6 +1296,16 @@ func (pm *MultiPoolerManager) Promote(ctx context.Context, consensusTerm int64, 
 		PrimaryID:   pm.serviceID,
 		PrimaryTerm: consensusTerm,
 	})
+
+	// Run a CHECKPOINT to ensure the control file records the current timeline.
+	// PostgreSQL promotion via trigger writes an end-of-recovery WAL record instead
+	// of a full checkpoint, so checkPointCopy.ThisTimeLineID may still reflect the
+	// pre-promotion timeline until a background checkpoint runs. Any node that later
+	// uses this primary as a pg_rewind source needs an up-to-date checkpoint TLI to
+	// set the correct minRecoveryPointTLI on the rewound target.
+	if _, err := pm.query(ctx, "CHECKPOINT"); err != nil {
+		pm.logger.WarnContext(ctx, "CHECKPOINT after promotion failed (continuing)", "error", err)
+	}
 
 	// Write rule history record - this validates that sync replication is working.
 	// If this fails (typically due to timeout waiting for standby acknowledgment), we fail

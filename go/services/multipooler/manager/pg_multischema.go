@@ -25,6 +25,7 @@ import (
 	"github.com/multigres/multigres/go/common/timeouts"
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	"github.com/multigres/multigres/go/services/multipooler/executor"
 )
 
@@ -680,6 +681,7 @@ func (pm *MultiPoolerManager) updateRule(ctx context.Context, update *ruleUpdate
 		        created_at       = now()
 		    FROM next_sub, locked
 		    WHERE shard_id = $1
+		      AND ($2 > locked.coordinator_term OR ($2 = locked.coordinator_term AND next_sub.value > locked.rule_subterm))
 		    RETURNING current_rule.coordinator_term, current_rule.rule_subterm
 		  )
 		INSERT INTO multigres.rule_history
@@ -717,9 +719,17 @@ func (pm *MultiPoolerManager) updateRule(ctx context.Context, update *ruleUpdate
 		return nil, mterrors.Wrap(err, "failed to write rule history record")
 	}
 
-	// If the CAS check failed, the UPDATE matched 0 rows and RETURNING is empty.
-	if len(result.Rows) == 0 && update.previousRule != nil {
-		return nil, errRuleConflict
+	// Zero rows means either:
+	//   - CAS check failed (expectedPreviousRule didn't match)
+	//   - advancement check failed (term/subterm would not advance current state — bug)
+	//   - shard row missing from current_rule (should never happen after initialisation)
+	if len(result.Rows) == 0 {
+		if update.previousRule != nil {
+			return nil, errRuleConflict
+		}
+		return nil, mterrors.Errorf(mtrpcpb.Code_INTERNAL,
+			"rule update rejected for term %d: current_rule already at equal or higher position",
+			update.termNumber)
 	}
 
 	var rec ruleHistoryRecord
