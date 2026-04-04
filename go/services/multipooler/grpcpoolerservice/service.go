@@ -637,6 +637,10 @@ func healthStateToProto(state *poolerserver.HealthState) *multipoolerpb.StreamPo
 		}
 	}
 
+	if state.ConsensusStatus != nil {
+		resp.ConsensusStatus = state.ConsensusStatus
+	}
+
 	if state.RecommendedStalenessTimeout > 0 {
 		resp.RecommendedStalenessTimeout = durationpb.New(state.RecommendedStalenessTimeout)
 	}

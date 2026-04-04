@@ -89,6 +89,7 @@ func newTestManagerWithMock(tableGroup, shard string) (*MultiPoolerManager, *moc
 		serviceID:       svcID,
 		servicePoolerID: svcPoolerID,
 	}
+	pm.rules = newRuleStore(pm.logger, pm.query, pm.queryArgs, func() {})
 
 	return pm, mockQueryService
 }
@@ -308,7 +309,7 @@ func TestUpdateRule(t *testing.T) {
 		"coordinator_term", "rule_subterm", "event_type", "leader_id", "coordinator_id",
 		"wal_position", "operation", "reason", "cohort_members", "accepted_members",
 		"durability_policy_name", "durability_quorum_type", "durability_required_count",
-		"durability_async_fallback", "created_at",
+		"durability_async_fallback", "created_at", "current_lsn",
 	}
 
 	tests := []struct {
@@ -341,7 +342,7 @@ func TestUpdateRule(t *testing.T) {
 						int64(1), int64(0), "promotion", "zone1_leader-1", "zone1_coordinator-1",
 						"0/1234567", "promotion", "Leadership changed due to manual promotion",
 						"{zone1_member-1,zone1_member-2,zone1_member-3}", "{zone1_member-1,zone1_member-2}",
-						nil, nil, nil, nil, "2026-03-24 09:00:17.000000+00",
+						nil, nil, nil, nil, "2026-03-24 09:00:17.000000+00", "0/1234567",
 					},
 				}))
 			},
@@ -363,7 +364,7 @@ func TestUpdateRule(t *testing.T) {
 						int64(2), int64(0), "replication_config", "zone1_leader-1", "zone1_coordinator-2",
 						nil, "add", "standby added",
 						"{zone1_member-1,zone1_member-2}", nil,
-						nil, nil, nil, nil, "2026-03-24 09:00:17.000000+00",
+						nil, nil, nil, nil, "2026-03-24 09:00:17.000000+00", "0/2000000",
 					},
 				}))
 			},
@@ -407,7 +408,7 @@ func TestUpdateRule(t *testing.T) {
 						int64(3), int64(0), "promotion", "zone1_leader-3", "zone1_coordinator-3",
 						"0/3456789", "bootstrap", "Initial cluster bootstrap",
 						"{}", "{}",
-						nil, nil, nil, nil, "2026-03-24 09:00:17.000000+00",
+						nil, nil, nil, nil, "2026-03-24 09:00:17.000000+00", "0/3456789",
 					},
 				}))
 			},
@@ -426,7 +427,7 @@ func TestUpdateRule(t *testing.T) {
 						int64(4), int64(0), "promotion", "zone1_new-leader", "zone1_coordinator-4",
 						nil, nil, "failover",
 						"{zone1_pooler-1,zone1_pooler-2}", nil,
-						nil, nil, nil, nil, "2026-03-24 09:00:17.000000+00",
+						nil, nil, nil, nil, "2026-03-24 09:00:17.000000+00", "0/4000000",
 					},
 				}))
 			},
@@ -479,7 +480,7 @@ func TestUpdateRule(t *testing.T) {
 						int64(2), int64(0), "promotion", "zone1_new-leader", "zone1_coordinator-2",
 						nil, nil, "failover",
 						"{zone1_pooler-1}", nil,
-						nil, nil, nil, nil, "2026-03-24 09:00:17.000000+00",
+						nil, nil, nil, nil, "2026-03-24 09:00:17.000000+00", "0/2000000",
 					},
 				}))
 			},
@@ -701,7 +702,7 @@ func TestCurrentRuleRecord(t *testing.T) {
 	cols := []string{
 		"coordinator_term", "rule_subterm", "leader_id", "coordinator_id", "cohort_members",
 		"durability_policy_name", "durability_quorum_type", "durability_required_count",
-		"durability_async_fallback", "created_at",
+		"durability_async_fallback", "created_at", "current_lsn",
 	}
 	createdAt := "2026-03-24 09:00:17.000000+00"
 
@@ -717,7 +718,7 @@ func TestCurrentRuleRecord(t *testing.T) {
 				{
 					int64(3), int64(0), leaderID, coordID,
 					"{zone1_pooler-2,zone1_pooler-3}",
-					nil, nil, nil, nil, createdAt,
+					nil, nil, nil, nil, createdAt, "0/ABCDEF0",
 				},
 			}),
 		)
@@ -751,7 +752,7 @@ func TestCurrentRuleRecord(t *testing.T) {
 
 		_, err := pm.currentRuleRecord(t.Context())
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to query current_rule")
+		assert.Contains(t, err.Error(), "failed to query current position")
 		assert.NoError(t, mockQueryService.ExpectationsWereMet())
 	})
 
@@ -759,24 +760,24 @@ func TestCurrentRuleRecord(t *testing.T) {
 		pm, mockQueryService := newTestManagerWithMock(constants.DefaultTableGroup, constants.DefaultShard)
 
 		mockQueryService.AddQueryPatternOnce("SELECT coordinator_term", mock.MakeQueryResult(cols, [][]any{
-			{int64(1), int64(0), "nounderscore", nil, "{zone1_pooler-1}", nil, nil, nil, nil, createdAt},
+			{int64(1), int64(0), "nounderscore", nil, "{zone1_pooler-1}", nil, nil, nil, nil, createdAt, "0/ABCDEF0"},
 		}))
 
 		_, err := pm.currentRuleRecord(t.Context())
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to parse current_rule row")
+		assert.Contains(t, err.Error(), "failed to parse current position")
 	})
 
 	t.Run("returns error when cohort_members contains malformed entry", func(t *testing.T) {
 		pm, mockQueryService := newTestManagerWithMock(constants.DefaultTableGroup, constants.DefaultShard)
 
 		mockQueryService.AddQueryPatternOnce("SELECT coordinator_term", mock.MakeQueryResult(cols, [][]any{
-			{int64(1), int64(0), nil, nil, "{valid_pooler,badentry}", nil, nil, nil, nil, createdAt},
+			{int64(1), int64(0), nil, nil, "{valid_pooler,badentry}", nil, nil, nil, nil, createdAt, "0/ABCDEF0"},
 		}))
 
 		_, err := pm.currentRuleRecord(t.Context())
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to parse current_rule row")
+		assert.Contains(t, err.Error(), "failed to parse current position")
 	})
 }
 
@@ -805,14 +806,14 @@ func TestInsertReplicationConfigHistory(t *testing.T) {
 					"coordinator_term", "rule_subterm", "event_type", "leader_id", "coordinator_id",
 					"wal_position", "operation", "reason", "cohort_members", "accepted_members",
 					"durability_policy_name", "durability_quorum_type", "durability_required_count",
-					"durability_async_fallback", "created_at",
+					"durability_async_fallback", "created_at", "current_lsn",
 				}
 				m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(returnCols, [][]any{
 					{
 						int64(1), int64(0), "replication_config", nil, nil,
 						nil, "configure", "ConfigureSynchronousReplication called",
 						"{us-west_replica-1,us-west_replica-2}", nil,
-						nil, nil, nil, nil, "2026-03-24 09:00:17.000000+00",
+						nil, nil, nil, nil, "2026-03-24 09:00:17.000000+00", "0/1000000",
 					},
 				}))
 			},
@@ -831,14 +832,14 @@ func TestInsertReplicationConfigHistory(t *testing.T) {
 					"coordinator_term", "rule_subterm", "event_type", "leader_id", "coordinator_id",
 					"wal_position", "operation", "reason", "cohort_members", "accepted_members",
 					"durability_policy_name", "durability_quorum_type", "durability_required_count",
-					"durability_async_fallback", "created_at",
+					"durability_async_fallback", "created_at", "current_lsn",
 				}
 				m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(returnCols, [][]any{
 					{
 						int64(2), int64(0), "replication_config", nil, nil,
 						nil, "add", "UpdateSynchronousStandbyList: add",
 						"{us-west_replica-3}", nil,
-						nil, nil, nil, nil, "2026-03-24 09:00:17.000000+00",
+						nil, nil, nil, nil, "2026-03-24 09:00:17.000000+00", "0/2000000",
 					},
 				}))
 			},
@@ -869,14 +870,14 @@ func TestInsertReplicationConfigHistory(t *testing.T) {
 					"coordinator_term", "rule_subterm", "event_type", "leader_id", "coordinator_id",
 					"wal_position", "operation", "reason", "cohort_members", "accepted_members",
 					"durability_policy_name", "durability_quorum_type", "durability_required_count",
-					"durability_async_fallback", "created_at",
+					"durability_async_fallback", "created_at", "current_lsn",
 				}
 				m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(returnCols, [][]any{
 					{
 						int64(4), int64(0), "replication_config", nil, nil,
 						nil, "configure", "ConfigureSynchronousReplication called",
 						"{}", nil,
-						nil, nil, nil, nil, "2026-03-24 09:00:17.000000+00",
+						nil, nil, nil, nil, "2026-03-24 09:00:17.000000+00", "0/4000000",
 					},
 				}))
 			},

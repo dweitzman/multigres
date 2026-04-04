@@ -131,7 +131,8 @@ func setupManagerWithMockDB(t *testing.T, mockQueryService *mock.QueryService) (
 
 	// Initialize consensus state
 	pm.mu.Lock()
-	pm.consensusState = NewConsensusState(tmpDir, serviceID)
+	pm.consensusState = newTermRevocation(tmpDir, serviceID)
+	pm.nodeConsensus.revokedUntil = pm.consensusState
 	pm.mu.Unlock()
 
 	return pm, tmpDir
@@ -142,16 +143,16 @@ func setupManagerWithMockDB(t *testing.T, mockQueryService *mock.QueryService) (
 // ============================================================================
 
 func TestBeginTerm(t *testing.T) {
-	// Columns returned by currentRuleRecord (SELECT from multigres.current_rule).
+	// Columns returned by observePosition (SELECT from multigres.current_rule, including current_lsn).
 	currentRuleCols := []string{
 		"coordinator_term", "rule_subterm", "leader_id", "coordinator_id", "cohort_members",
 		"durability_policy_name", "durability_quorum_type", "durability_required_count",
-		"durability_async_fallback", "created_at",
+		"durability_async_fallback", "created_at", "current_lsn",
 	}
 	// A representative current_rule row used in cases that assert on ConsensusStatus.
 	currentRuleRow := [][]any{{
 		int64(1), int64(0), "zone1_test-pooler", "zone1_test-coord",
-		"{zone1_test-pooler}", nil, nil, nil, nil, "2026-01-01 00:00:00",
+		"{zone1_test-pooler}", nil, nil, nil, nil, "2026-01-01 00:00:00", "0/5000000",
 	}}
 
 	tests := []struct {
@@ -215,7 +216,6 @@ func TestBeginTerm(t *testing.T) {
 			setupMocks: func(m *mock.QueryService) {
 				// Term rejected: getConsensusStatus still runs to give coordinator fresh state
 				m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(currentRuleCols, currentRuleRow))
-				m.AddQueryPatternOnce("COALESCE.pg_last_wal_receive_lsn", mock.MakeQueryResult([]string{"lsn"}, [][]any{{"0/5000000"}}))
 			},
 			expectedAccepted:                    false,
 			expectedTerm:                        5,
@@ -331,7 +331,6 @@ func TestBeginTerm(t *testing.T) {
 				expectStandbyRevokeMocks(m, "0/5000000")
 				// getConsensusStatus after revoke
 				m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(currentRuleCols, currentRuleRow))
-				m.AddQueryPatternOnce("COALESCE.pg_last_wal_receive_lsn", mock.MakeQueryResult([]string{"lsn"}, [][]any{{"0/5000000"}}))
 			},
 			expectedError:                       false,
 			expectedAccepted:                    true,
@@ -393,8 +392,10 @@ func TestBeginTerm(t *testing.T) {
 			action: consensusdatapb.BeginTermAction_BEGIN_TERM_ACTION_NO_ACTION,
 			setupMocks: func(m *mock.QueryService) {
 				// getConsensusStatus after acceptance
-				m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(currentRuleCols, currentRuleRow))
-				m.AddQueryPatternOnce("COALESCE.pg_last_wal_receive_lsn", mock.MakeQueryResult([]string{"lsn"}, [][]any{{"0/8000000"}}))
+				m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(currentRuleCols, [][]any{{
+					int64(1), int64(0), "zone1_test-pooler", "zone1_test-coord",
+					"{zone1_test-pooler}", nil, nil, nil, nil, "2026-01-01 00:00:00", "0/8000000",
+				}}))
 			},
 			expectedError:                       false,
 			expectedAccepted:                    true,
@@ -675,8 +676,9 @@ func TestBeginTerm(t *testing.T) {
 				memoryTerm, err := pm.consensusState.GetCurrentTermNumber(inspectCtx)
 				require.NoError(t, err)
 				assert.Equal(t, tt.expectedMemoryTerm, memoryTerm, "Memory term should be unchanged after save failure")
-				memoryLeader, err := pm.consensusState.GetAcceptedLeader(inspectCtx)
+				memoryTermProto, err := pm.consensusState.GetInconsistentTerm()
 				require.NoError(t, err)
+				memoryLeader := memoryTermProto.GetAcceptedTermFromCoordinatorId().GetName()
 				assert.Equal(t, tt.expectedMemoryLeader, memoryLeader, "Memory leader should be unchanged after save failure")
 
 				// Verify disk is unchanged
@@ -815,7 +817,7 @@ func TestUpdateTermAndAcceptCandidate(t *testing.T) {
 			require.NoError(t, err)
 			t.Setenv(constants.PgDataDirEnvVar, pgDataDir)
 
-			cs := NewConsensusState(poolerDir, serviceID)
+			cs := newTermRevocation(poolerDir, serviceID)
 			_, err = cs.Load()
 			require.NoError(t, err)
 
@@ -995,11 +997,11 @@ func TestCanReachPrimary(t *testing.T) {
 // ============================================================================
 
 func TestConsensusStatus(t *testing.T) {
-	// Columns returned by currentRuleRecord (SELECT from multigres.current_rule).
+	// Columns returned by observePosition (SELECT from multigres.current_rule, including current_lsn).
 	currentRuleCols := []string{
 		"coordinator_term", "rule_subterm", "leader_id", "coordinator_id", "cohort_members",
 		"durability_policy_name", "durability_quorum_type", "durability_required_count",
-		"durability_async_fallback", "created_at",
+		"durability_async_fallback", "created_at", "current_lsn",
 	}
 
 	tests := []struct {
@@ -1034,7 +1036,7 @@ func TestConsensusStatus(t *testing.T) {
 				// currentRuleRecord for getInconsistentConsensusStatus
 				m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(currentRuleCols, [][]any{{
 					int64(1), int64(0), "zone1_test-pooler", "zone1_test-coord",
-					"{zone1_test-pooler}", nil, nil, nil, nil, "2026-01-01 00:00:00",
+					"{zone1_test-pooler}", nil, nil, nil, nil, "2026-01-01 00:00:00", "0/0",
 				}}))
 				// LSN: CASE WHEN pg_is_in_recovery() THEN COALESCE(...) ELSE pg_current_wal_lsn() END
 				m.AddQueryPatternOnce("COALESCE.pg_last_wal_receive_lsn", mock.MakeQueryResult([]string{"lsn"}, [][]any{{"0/4000000"}}))
@@ -1086,7 +1088,7 @@ func TestConsensusStatus(t *testing.T) {
 				// currentRuleRecord for getInconsistentConsensusStatus
 				m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(currentRuleCols, [][]any{{
 					int64(1), int64(0), "zone1_test-pooler", "zone1_test-coord",
-					"{zone1_test-pooler}", nil, nil, nil, nil, "2026-01-01 00:00:00",
+					"{zone1_test-pooler}", nil, nil, nil, nil, "2026-01-01 00:00:00", "0/0",
 				}}))
 				// LSN: CASE WHEN pg_is_in_recovery() THEN COALESCE(...) ELSE pg_current_wal_lsn() END
 				m.AddQueryPatternOnce("COALESCE.pg_last_wal_receive_lsn", mock.MakeQueryResult([]string{"lsn"}, [][]any{{"0/5000000"}}))
@@ -1226,7 +1228,7 @@ func TestGetInconsistentConsensusStatus(t *testing.T) {
 	currentRuleCols := []string{
 		"coordinator_term", "rule_subterm", "leader_id", "coordinator_id", "cohort_members",
 		"durability_policy_name", "durability_quorum_type", "durability_required_count",
-		"durability_async_fallback", "created_at",
+		"durability_async_fallback", "created_at", "current_lsn",
 	}
 
 	tests := []struct {
@@ -1249,7 +1251,7 @@ func TestGetInconsistentConsensusStatus(t *testing.T) {
 			setupMock: func(m *mock.QueryService) {
 				m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(currentRuleCols, [][]any{{
 					int64(2), int64(1), "zone1_primary-node", "zone1_coord-node",
-					"{zone1_primary-node,zone1_replica-node}", nil, nil, nil, nil, "2026-01-01 00:00:00",
+					"{zone1_primary-node,zone1_replica-node}", nil, nil, nil, nil, "2026-01-01 00:00:00", "0/0",
 				}}))
 				m.AddQueryPatternOnce("COALESCE.pg_last_wal_receive_lsn", mock.MakeQueryResult([]string{"lsn"}, [][]any{{"0/A000000"}}))
 			},
@@ -1534,7 +1536,7 @@ func TestDemoteStalePrimary_UpdatesConsensusTerm(t *testing.T) {
 
 			// Initialize consensus state and set initial term
 			pm.mu.Lock()
-			pm.consensusState = NewConsensusState(tmpDir, serviceID)
+			pm.consensusState = newTermRevocation(tmpDir, serviceID)
 			pm.mu.Unlock()
 
 			err = pm.consensusState.setConsensusTerm(tt.initialTerm)

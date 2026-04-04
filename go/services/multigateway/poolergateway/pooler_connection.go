@@ -55,8 +55,13 @@ type PoolerHealth struct {
 	ServingStatus clustermetadatapb.PoolerServingStatus
 
 	// PrimaryObservation contains the pooler's view of who the primary is.
-	// Used for term-based primary reconciliation.
+	// Used for primary reconciliation when ConsensusStatus is not available.
 	PrimaryObservation *multipoolerservice.PrimaryObservation
+
+	// ConsensusStatus contains the pooler's complete distributed-system position:
+	// coordinator promise, current rule, and WAL position. Preferred over
+	// PrimaryObservation for primary reconciliation when present.
+	ConsensusStatus *clustermetadatapb.ConsensusStatus
 
 	// LastError is the most recent error from the health stream.
 	LastError error
@@ -87,6 +92,7 @@ func (h *PoolerHealth) SimpleCopy() *PoolerHealth {
 		PoolerID:           h.PoolerID,
 		ServingStatus:      h.ServingStatus,
 		PrimaryObservation: h.PrimaryObservation,
+		ConsensusStatus:    h.ConsensusStatus,
 		LastError:          h.LastError,
 		LastResponse:       h.LastResponse,
 	}
@@ -411,6 +417,7 @@ func (pc *PoolerConnection) processHealthResponse(response *multipoolerservice.S
 		PoolerID:           response.PoolerId,
 		ServingStatus:      response.ServingStatus,
 		PrimaryObservation: response.PrimaryObservation,
+		ConsensusStatus:    response.ConsensusStatus,
 		LastError:          nil,
 		LastResponse:       time.Now(),
 	}

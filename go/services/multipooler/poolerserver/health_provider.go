@@ -38,6 +38,11 @@ type HealthState struct {
 	// May be nil if no primary observation is available.
 	PrimaryObservation *PrimaryObservation
 
+	// ConsensusStatus contains this pooler's complete view of its distributed
+	// system position: coordinator promise, current rule, and WAL position.
+	// May be nil until the first rule write or term acceptance after startup.
+	ConsensusStatus *clustermetadatapb.ConsensusStatus
+
 	// RecommendedStalenessTimeout is the duration clients should use
 	// to detect a stale/dead health stream.
 	RecommendedStalenessTimeout time.Duration

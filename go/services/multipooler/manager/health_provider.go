@@ -53,6 +53,10 @@ type healthStreamer struct {
 	// before the gateway discovers the new state.
 	queryServer poolerserver.PoolerController
 
+	// nodeConsensus is read (without I/O) to populate ConsensusStatus in each
+	// health push. Set at construction and never nil.
+	nodeConsensus *nodeConsensusState
+
 	// Immutable fields (set once via Init)
 	poolerID   *clustermetadatapb.ID
 	tableGroup string
@@ -71,12 +75,14 @@ type healthStreamer struct {
 }
 
 // newHealthStreamer creates a new health streamer with the given identity.
-func newHealthStreamer(logger *slog.Logger, poolerID *clustermetadatapb.ID, tableGroup, shard string) *healthStreamer {
+// nodeConsensus is read (zero I/O) on every health push to populate ConsensusStatus.
+func newHealthStreamer(logger *slog.Logger, poolerID *clustermetadatapb.ID, tableGroup, shard string, nodeConsensus *nodeConsensusState) *healthStreamer {
 	return &healthStreamer{
 		logger:                      logger,
 		poolerID:                    poolerID,
 		tableGroup:                  tableGroup,
 		shard:                       shard,
+		nodeConsensus:               nodeConsensus,
 		clients:                     make(map[chan *poolerserver.HealthState]struct{}),
 		recommendedStalenessTimeout: defaultRecommendedStalenessTimeout,
 		servingStatus:               clustermetadatapb.PoolerServingStatus_NOT_SERVING,
@@ -133,6 +139,7 @@ func (hs *healthStreamer) Broadcast() {
 
 // buildStateLocked builds the current health state. Caller must hold hs.mu.
 func (hs *healthStreamer) buildStateLocked() *poolerserver.HealthState {
+	consensusStatus := hs.nodeConsensus.buildConsensusStatus()
 	return &poolerserver.HealthState{
 		Target: &querypb.Target{
 			TableGroup: hs.tableGroup,
@@ -142,6 +149,7 @@ func (hs *healthStreamer) buildStateLocked() *poolerserver.HealthState {
 		PoolerID:                    hs.poolerID,
 		ServingStatus:               hs.servingStatus,
 		PrimaryObservation:          hs.primaryObservation,
+		ConsensusStatus:             consensusStatus,
 		RecommendedStalenessTimeout: hs.recommendedStalenessTimeout,
 	}
 }

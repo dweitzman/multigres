@@ -36,12 +36,12 @@ func multigresDataDir() string {
 }
 
 // consensusTermPath returns the path to the consensus term file
-func (cs *ConsensusState) consensusTermPath() string {
+func (cs *termRevocation) consensusTermPath() string {
 	return filepath.Join(cs.poolerDir, constants.ConsensusTermFile)
 }
 
 // getConsensusTerm retrieves the current consensus term information from disk
-func (cs *ConsensusState) getConsensusTerm() (*multipoolermanagerdatapb.ConsensusTerm, error) {
+func (cs *termRevocation) getConsensusTerm() (*multipoolermanagerdatapb.ConsensusTerm, error) {
 	termPath := cs.consensusTermPath()
 
 	// Check if consensus term file exists
@@ -66,7 +66,7 @@ func (cs *ConsensusState) getConsensusTerm() (*multipoolermanagerdatapb.Consensu
 }
 
 // setConsensusTerm saves the consensus term information to disk
-func (cs *ConsensusState) setConsensusTerm(term *multipoolermanagerdatapb.ConsensusTerm) error {
+func (cs *termRevocation) setConsensusTerm(term *multipoolermanagerdatapb.ConsensusTerm) error {
 	termPath := cs.consensusTermPath()
 
 	// Marshal protobuf to JSON
@@ -99,7 +99,7 @@ func (cs *ConsensusState) setConsensusTerm(term *multipoolermanagerdatapb.Consen
 // first contact via BeginTerm.
 // If the file does not exist this is a no-op. Returns an error only if
 // the file exists but cannot be removed.
-func (cs *ConsensusState) DeleteTermFile() error {
+func (cs *termRevocation) DeleteTermFile() error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 

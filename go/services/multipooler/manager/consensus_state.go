@@ -30,31 +30,42 @@ import (
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
 
-// ConsensusState manages the in-memory and on-disk consensus state for this node.
+// termRevocation manages the in-memory and on-disk consensus state for this node.
 // It provides thread-safe access to consensus state and ensures that memory is only
 // updated after successful disk writes (pessimistic approach).
-type ConsensusState struct {
+type termRevocation struct {
 	poolerDir string
 	serviceID *clustermetadatapb.ID
 
 	mu   sync.Mutex
 	term *multipoolermanagerdatapb.ConsensusTerm // cached term from disk
+
+	// onTermChange is called (outside mu) after any successful term mutation.
+	onTermChange func()
 }
 
-// NewConsensusState creates a new ConsensusState manager.
+// newTermRevocation creates a new termRevocation manager.
 // It does not load state from disk - call Load() to initialize.
-func NewConsensusState(poolerDir string, serviceID *clustermetadatapb.ID) *ConsensusState {
-	return &ConsensusState{
+func newTermRevocation(poolerDir string, serviceID *clustermetadatapb.ID) *termRevocation {
+	return &termRevocation{
 		poolerDir: poolerDir,
 		serviceID: serviceID,
 		term:      nil,
 	}
 }
 
+// SetOnTermChange registers a callback invoked after any successful term
+// mutation. The callback is called outside mu with no locks held.
+func (cs *termRevocation) SetOnTermChange(fn func()) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	cs.onTermChange = fn
+}
+
 // Load loads consensus state from disk into memory.
 // If the file doesn't exist, initializes with default values (term 0, no accepted coordinator).
 // This method is idempotent - subsequent calls will reload from disk.
-func (cs *ConsensusState) Load() (int64, error) {
+func (cs *termRevocation) Load() (int64, error) {
 	term, err := cs.getConsensusTerm()
 	if err != nil {
 		return 0, fmt.Errorf("failed to load consensus term: %w", err)
@@ -69,7 +80,7 @@ func (cs *ConsensusState) Load() (int64, error) {
 
 // GetCurrentTermNumber returns the current term.
 // Returns 0 if state has not been loaded.
-func (cs *ConsensusState) GetCurrentTermNumber(ctx context.Context) (int64, error) {
+func (cs *termRevocation) GetCurrentTermNumber(ctx context.Context) (int64, error) {
 	if err := AssertActionLockHeld(ctx); err != nil {
 		return 0, err
 	}
@@ -81,7 +92,7 @@ func (cs *ConsensusState) GetCurrentTermNumber(ctx context.Context) (int64, erro
 // be outdated by the time it's used. Use GetCurrentTermNumber() as part of
 // any action workflow to protect against race conditions.
 // Returns 0 if state has not been loaded.
-func (cs *ConsensusState) GetInconsistentCurrentTermNumber() (int64, error) {
+func (cs *termRevocation) GetInconsistentCurrentTermNumber() (int64, error) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
@@ -96,7 +107,7 @@ func (cs *ConsensusState) GetInconsistentCurrentTermNumber() (int64, error) {
 // be outdated by the time it's used. Use GetTerm() as part of any action
 // workflow to protect against race conditions.
 // Returns nil if state has not been loaded.
-func (cs *ConsensusState) GetInconsistentTerm() (*multipoolermanagerdatapb.ConsensusTerm, error) {
+func (cs *termRevocation) GetInconsistentTerm() (*multipoolermanagerdatapb.ConsensusTerm, error) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
@@ -108,24 +119,9 @@ func (cs *ConsensusState) GetInconsistentTerm() (*multipoolermanagerdatapb.Conse
 	return cloneTerm(cs.term), nil
 }
 
-// GetAcceptedLeader returns the coordinator ID this pooler accepted the term from.
-// Returns empty string if no coordinator was accepted.
-func (cs *ConsensusState) GetAcceptedLeader(ctx context.Context) (string, error) {
-	if err := AssertActionLockHeld(ctx); err != nil {
-		return "", err
-	}
-	cs.mu.Lock()
-	defer cs.mu.Unlock()
-
-	if cs.term == nil || cs.term.AcceptedTermFromCoordinatorId == nil {
-		return "", nil
-	}
-	return cs.term.AcceptedTermFromCoordinatorId.GetName(), nil
-}
-
 // GetTerm returns a copy of the current consensus term.
 // Returns nil if state has not been loaded.
-func (cs *ConsensusState) GetTerm(ctx context.Context) (*multipoolermanagerdatapb.ConsensusTerm, error) {
+func (cs *termRevocation) GetTerm(ctx context.Context) (*multipoolermanagerdatapb.ConsensusTerm, error) {
 	if err := AssertActionLockHeld(ctx); err != nil {
 		return nil, err
 	}
@@ -144,7 +140,8 @@ func (cs *ConsensusState) GetTerm(ctx context.Context) (*multipoolermanagerdatap
 // This is called when a node accepts the term during BeginTerm.
 // Returns error if already accepted from a different coordinator in this term.
 // Idempotent: succeeds if already accepted from the same coordinator.
-func (cs *ConsensusState) AcceptCandidateAndSave(ctx context.Context, candidateID *clustermetadatapb.ID) error {
+// Deprecated: prefer node position and/or highest known rule
+func (cs *termRevocation) AcceptCandidateAndSave(ctx context.Context, candidateID *clustermetadatapb.ID) error {
 	if err := AssertActionLockHeld(ctx); err != nil {
 		return err
 	}
@@ -187,9 +184,9 @@ func (cs *ConsensusState) AcceptCandidateAndSave(ctx context.Context, candidateI
 // UpdateTermAndAcceptCandidate atomically updates the term and accepts a candidate in one file write.
 // This is used by BeginTerm to avoid two separate file writes.
 // If newTerm > currentTerm, updates term and resets acceptance, then sets the candidate.
-// If newTerm == currentTerm, just accepts the candidate (same as AcceptCandidateAndSave).
+// If newTerm == currentTerm, just accepts the candidate (idempotent for same coordinator).
 // Returns error if newTerm < currentTerm.
-func (cs *ConsensusState) UpdateTermAndAcceptCandidate(ctx context.Context, newTerm int64, candidateID *clustermetadatapb.ID) error {
+func (cs *termRevocation) UpdateTermAndAcceptCandidate(ctx context.Context, newTerm int64, candidateID *clustermetadatapb.ID) error {
 	if err := AssertActionLockHeld(ctx); err != nil {
 		return err
 	}
@@ -253,7 +250,8 @@ func (cs *ConsensusState) UpdateTermAndAcceptCandidate(ctx context.Context, newT
 // This is called when discovering a newer term from another node.
 // Returns error if newTerm < currentTerm.
 // Idempotent: succeeds without changes if newTerm == currentTerm.
-func (cs *ConsensusState) UpdateTermAndSave(ctx context.Context, newTerm int64) error {
+// Deprecated: prefer node position and/or highest known rule
+func (cs *termRevocation) UpdateTermAndSave(ctx context.Context, newTerm int64) error {
 	if err := AssertActionLockHeld(ctx); err != nil {
 		return err
 	}
@@ -292,7 +290,8 @@ func (cs *ConsensusState) UpdateTermAndSave(ctx context.Context, newTerm int64) 
 // SetPrimaryTerm updates the primary term in the consensus record.
 // This is called during propagation when a multipooler is promoted to primary.
 // The force parameter bypasses invariant validation for manual intervention (e.g., split-brain recovery).
-func (cs *ConsensusState) SetPrimaryTerm(ctx context.Context, primaryTerm int64, force bool) error {
+// Deprecated: prefer node position and/or highest known rule
+func (cs *termRevocation) SetPrimaryTerm(ctx context.Context, primaryTerm int64, force bool) error {
 	if err := AssertActionLockHeld(ctx); err != nil {
 		return err
 	}
@@ -337,7 +336,7 @@ func (cs *ConsensusState) SetPrimaryTerm(ctx context.Context, primaryTerm int64,
 // MUST be called with cs.mu held.
 // This is the key method that ensures memory never diverges from disk.
 // If the save fails, memory remains unchanged and the error is returned.
-func (cs *ConsensusState) saveAndUpdateLocked(newTerm *multipoolermanagerdatapb.ConsensusTerm) error {
+func (cs *termRevocation) saveAndUpdateLocked(newTerm *multipoolermanagerdatapb.ConsensusTerm) error {
 	// Save to disk (lock still held)
 	if err := cs.setConsensusTerm(newTerm); err != nil {
 		// Save failed - don't update memory, propagate error

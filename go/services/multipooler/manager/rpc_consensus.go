@@ -91,9 +91,9 @@ func (pm *MultiPoolerManager) BeginTerm(ctx context.Context, req *consensusdatap
 		return nil, fmt.Errorf("failed to get current term: %w", err)
 	}
 
-	// Atomically update term and accept candidate
-	// This handles all consensus rules: term validation, duplicate check, etc.
-	err = cs.UpdateTermAndAcceptCandidate(ctx, req.Term, req.CandidateId)
+	// Attempt to claim authority for the requested term and coordinator.
+	// Returns the current ConsensusStatus on both success and failure.
+	_, err = pm.nodeConsensus.claimCurrentAuthority(ctx, req.Term, req.CandidateId)
 	if err != nil {
 		// Term not accepted - return rejection with current consensus status so
 		// the coordinator gains up-to-date node state even from rejections.
@@ -101,7 +101,7 @@ func (pm *MultiPoolerManager) BeginTerm(ctx context.Context, req *consensusdatap
 			"request_term", req.Term,
 			"current_term", currentTerm,
 			"error", err)
-		consensusStatus, statusErr := pm.getConsensusStatus(ctx)
+		consensusStatus, statusErr := pm.refreshNodePosition(ctx)
 		if statusErr != nil {
 			pm.logger.WarnContext(ctx, "Failed to build consensus status for rejection response", "error", statusErr)
 		}
@@ -155,7 +155,7 @@ func (pm *MultiPoolerManager) BeginTerm(ctx context.Context, req *consensusdatap
 
 	switch req.Action {
 	case consensusdatapb.BeginTermAction_BEGIN_TERM_ACTION_NO_ACTION:
-		consensusStatus, statusErr := pm.getConsensusStatus(ctx)
+		consensusStatus, statusErr := pm.refreshNodePosition(ctx)
 		if statusErr != nil {
 			pm.logger.WarnContext(ctx, "Failed to build consensus status", "error", statusErr)
 		}
@@ -253,7 +253,7 @@ func (pm *MultiPoolerManager) executeRevoke(ctx context.Context, term int64, res
 	// Also extract leadership_term and cohort_members for WAL position candidate
 	// selection: a node that has seen a higher coordinator term has applied more of
 	// the agreed WAL history, so this is the primary criterion (LSN is a tiebreaker).
-	consensusStatus, statusErr := pm.getConsensusStatus(ctx)
+	consensusStatus, statusErr := pm.refreshNodePosition(ctx)
 	if statusErr != nil {
 		pm.logger.WarnContext(ctx, "Failed to build consensus status during revoke; candidate selection may be suboptimal", "error", statusErr)
 	} else if pos := consensusStatus.GetCurrentPosition(); pos != nil {
@@ -297,26 +297,6 @@ func (pm *MultiPoolerManager) getInconsistentConsensusStatus(ctx context.Context
 	var term *multipoolermanagerdatapb.ConsensusTerm
 	if cs != nil {
 		term, _ = cs.GetInconsistentTerm()
-	}
-	return pm.buildConsensusStatus(ctx, term, nil)
-}
-
-// getConsensusStatus builds a ConsensusStatus snapshot while holding the action lock.
-// Callers must hold the action lock (i.e. ctx must have been acquired via actionLock.Acquire).
-// Use this inside consensus operations (BeginTerm, executeRevoke) where a consistent
-// term read is both safe and appropriate.
-func (pm *MultiPoolerManager) getConsensusStatus(ctx context.Context) (*clustermetadatapb.ConsensusStatus, error) {
-	pm.mu.Lock()
-	cs := pm.consensusState
-	pm.mu.Unlock()
-
-	var term *multipoolermanagerdatapb.ConsensusTerm
-	if cs != nil {
-		var err error
-		term, err = cs.GetTerm(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read consensus term: %w", err)
-		}
 	}
 	return pm.buildConsensusStatus(ctx, term, nil)
 }

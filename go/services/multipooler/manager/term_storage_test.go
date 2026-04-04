@@ -27,7 +27,7 @@ import (
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
 
-func newTestConsensusState(t *testing.T) (*ConsensusState, string) {
+func newTesttermRevocation(t *testing.T) (*termRevocation, string) {
 	t.Helper()
 	poolerDir := t.TempDir()
 	id := &clustermetadatapb.ID{
@@ -35,11 +35,11 @@ func newTestConsensusState(t *testing.T) (*ConsensusState, string) {
 		Cell:      "zone1",
 		Name:      "test-pooler",
 	}
-	return NewConsensusState(poolerDir, id), poolerDir
+	return newTermRevocation(poolerDir, id), poolerDir
 }
 
 func TestDeleteTermFile_FileExists(t *testing.T) {
-	cs, poolerDir := newTestConsensusState(t)
+	cs, poolerDir := newTesttermRevocation(t)
 
 	// Write a term file with a non-zero term
 	term := &multipoolermanagerdatapb.ConsensusTerm{TermNumber: 42}
@@ -65,7 +65,7 @@ func TestDeleteTermFile_FileExists(t *testing.T) {
 }
 
 func TestDeleteTermFile_FileDoesNotExist(t *testing.T) {
-	cs, poolerDir := newTestConsensusState(t)
+	cs, poolerDir := newTesttermRevocation(t)
 
 	// Prime in-memory state to a non-zero term without writing to disk
 	cs.mu.Lock()

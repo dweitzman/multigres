@@ -123,7 +123,7 @@ func TestInitializeEmptyPrimary(t *testing.T) {
 
 			pm := NewTestMultiPoolerManager(t, multiPooler, &Config{TopoClient: store})
 
-			pm.consensusState = NewConsensusState(poolerDir, serviceID)
+			pm.consensusState = newTermRevocation(poolerDir, serviceID)
 			_, err = pm.consensusState.Load()
 			require.NoError(t, err)
 
@@ -327,7 +327,7 @@ func TestInitializeEmptyPrimary_EventPoolerName(t *testing.T) {
 	require.NoError(t, err)
 
 	serviceID := multiPooler.Id
-	pm.consensusState = NewConsensusState(poolerDir, serviceID)
+	pm.consensusState = newTermRevocation(poolerDir, serviceID)
 	_, err = pm.consensusState.Load()
 	require.NoError(t, err)
 

@@ -462,6 +462,12 @@ message StreamPoolerHealthResponse {
   // to detect a stale/dead health stream. If no message is received within
   // this duration, clients should mark the pooler as unhealthy.
   google.protobuf.Duration recommended_staleness_timeout = 5;
+
+  // consensus_status contains this pooler's complete view of its position in
+  // the distributed system: its coordinator promise, current rule, and WAL
+  // position. Pushed on rule writes and consensus term (promise) changes.
+  // Nil until the first rule write or term acceptance after startup.
+  clustermetadata.ConsensusStatus consensus_status = 6;
 }
 
 // PrimaryObservation represents a pooler's view of who the primary is.

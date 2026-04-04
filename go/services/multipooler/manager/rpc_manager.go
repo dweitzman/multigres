@@ -1227,7 +1227,7 @@ func (pm *MultiPoolerManager) Promote(ctx context.Context, consensusTerm int64, 
 			// Everything is consistent and complete - idempotent success
 			pm.logger.InfoContext(ctx, "Promotion already complete and consistent (idempotent)",
 				"lsn", state.currentLSN)
-			consensusStatus, statusErr := pm.getConsensusStatus(ctx)
+			consensusStatus, statusErr := pm.refreshNodePosition(ctx)
 			if statusErr != nil {
 				pm.logger.WarnContext(ctx, "Failed to build consensus status for idempotent promote response", "error", statusErr)
 			}
@@ -1329,8 +1329,7 @@ func (pm *MultiPoolerManager) Promote(ctx context.Context, consensusTerm int64, 
 	if force {
 		promoteUpdate.withForce()
 	}
-	ruleRec, err := pm.updateRule(ctx, promoteUpdate)
-	if err != nil {
+	if _, err := pm.updateRule(ctx, promoteUpdate); err != nil {
 		pm.logger.ErrorContext(ctx, "Failed to write rule history - promotion failed",
 			"term", consensusTerm,
 			"error", err)
@@ -1347,23 +1346,8 @@ func (pm *MultiPoolerManager) Promote(ctx context.Context, consensusTerm int64, 
 		"consensus_term", consensusTerm,
 		"was_already_primary", state.isPrimaryInPostgres)
 
-	// Build ConsensusStatus using the rule record already returned by updateRule,
-	// avoiding a redundant current_rule query.
-	pm.mu.Lock()
-	cs := pm.consensusState
-	pm.mu.Unlock()
-	var term *multipoolermanagerdatapb.ConsensusTerm
-	if cs != nil {
-		term, err = cs.GetTerm(ctx)
-		if err != nil {
-			pm.logger.WarnContext(ctx, "Failed to read consensus term for promote response", "error", err)
-			term = nil
-		}
-	}
-	consensusStatus, statusErr := pm.buildConsensusStatus(ctx, term, ruleRec)
-	if statusErr != nil {
-		pm.logger.WarnContext(ctx, "Failed to build consensus status for promote response", "error", statusErr)
-	}
+	// nodeConsensus was already updated by updateRule; read from cache (zero I/O).
+	consensusStatus := pm.nodeConsensus.buildConsensusStatus()
 	return &multipoolermanagerdatapb.PromoteResponse{
 		LsnPosition:       finalLSN,
 		WasAlreadyPrimary: state.isPrimaryInPostgres && state.isPrimaryInTopology && state.syncReplicationMatches,

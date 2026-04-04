@@ -45,7 +45,7 @@ import (
 // setTermForTest writes the consensus term file directly for testing.
 func setTermForTest(t *testing.T, poolerDir string, term *multipoolermanagerdatapb.ConsensusTerm) {
 	t.Helper()
-	cs := NewConsensusState(poolerDir, nil)
+	cs := newTermRevocation(poolerDir, nil)
 	require.NoError(t, cs.setConsensusTerm(term), "failed to write term file")
 }
 
@@ -362,37 +362,36 @@ func TestActionLock_MutationMethodsTimeout(t *testing.T) {
 
 // expectLeadershipHistoryInsert adds a mock expectation for successful rule history insertion.
 // This is required for Promote to succeed since history insertion failure now fails the promotion.
-// expectCurrentRuleQuery adds a mock for the currentRuleRecord SELECT used by
-// buildConsensusStatus (10 columns, read-only path).
+// expectCurrentRuleQuery adds a mock for the observePosition SELECT used by
+// getConsensusStatus (11 columns including current_lsn, read-only path).
+// The lsn parameter is returned as the current_lsn column value.
 func expectCurrentRuleQuery(m *mock.QueryService, coordinatorTerm int64, leaderAppName string, cohortAppNames string, lsn string) {
 	cols := []string{
 		"coordinator_term", "rule_subterm", "leader_id", "coordinator_id", "cohort_members",
 		"durability_policy_name", "durability_quorum_type", "durability_required_count",
-		"durability_async_fallback", "created_at",
+		"durability_async_fallback", "created_at", "current_lsn",
 	}
 	m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(cols, [][]any{
 		{
 			coordinatorTerm, int64(0), leaderAppName, "zone1_test-coordinator", "{" + cohortAppNames + "}",
-			nil, nil, nil, nil, "2026-01-01 00:00:00",
+			nil, nil, nil, nil, "2026-01-01 00:00:00", lsn,
 		},
 	}))
-	m.AddQueryPatternOnce("COALESCE.pg_last_wal_receive_lsn",
-		mock.MakeQueryResult([]string{"lsn"}, [][]any{{lsn}}))
 }
 
-func expectLeadershipHistoryInsert(m *mock.QueryService) {
+func expectLeadershipHistoryInsert(m *mock.QueryService, lsn string) {
 	returnCols := []string{
 		"coordinator_term", "rule_subterm", "event_type", "leader_id", "coordinator_id",
 		"wal_position", "operation", "reason", "cohort_members", "accepted_members",
 		"durability_policy_name", "durability_quorum_type", "durability_required_count",
-		"durability_async_fallback", "created_at",
+		"durability_async_fallback", "created_at", "current_lsn",
 	}
 	m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(returnCols, [][]any{
 		{
 			int64(1), int64(0), "promotion", "zone1_test-pooler", "zone1_test-coordinator",
-			"0/ABCDEF0", nil, "test reason",
+			lsn, nil, "test reason",
 			"{zone1_test-pooler}", "{}",
-			nil, nil, nil, nil, "2026-03-24 09:00:17.000000+00",
+			nil, nil, nil, nil, "2026-03-24 09:00:17.000000+00", lsn,
 		},
 	}))
 }
@@ -479,7 +478,8 @@ func setupPromoteTestManager(t *testing.T, mockQueryService *mock.QueryService) 
 
 	// Initialize consensus state so the manager can read the term
 	pm.mu.Lock()
-	pm.consensusState = NewConsensusState(tmpDir, serviceID)
+	pm.consensusState = newTermRevocation(tmpDir, serviceID)
+	pm.nodeConsensus.revokedUntil = pm.consensusState
 	pm.mu.Unlock()
 
 	// Load the term from file
@@ -514,7 +514,7 @@ func TestPromoteIdempotency_PostgreSQLPromotedButTopologyNotUpdated(t *testing.T
 		mock.MakeQueryResult([]string{"pg_current_wal_lsn"}, [][]any{{"0/ABCDEF0"}}))
 
 	// Mock: insertLeadershipHistory - required for promotion success
-	expectLeadershipHistoryInsert(mockQueryService)
+	expectLeadershipHistoryInsert(mockQueryService, "0/ABCDEF0")
 
 	pm, _ := setupPromoteTestManager(t, mockQueryService)
 
@@ -723,12 +723,7 @@ func TestPromoteIdempotency_NothingCompleteYet(t *testing.T) {
 		mock.MakeQueryResult([]string{"pg_current_wal_lsn"}, [][]any{{"0/5678ABC"}}))
 
 	// Mock: insertLeadershipHistory - required for promotion success
-	expectLeadershipHistoryInsert(mockQueryService)
-
-	// Mock: buildConsensusStatus LSN query — uses the ruleRec returned by updateRule
-	// so no second current_rule fetch is needed, only the WAL position query.
-	mockQueryService.AddQueryPatternOnce("COALESCE.pg_last_wal_receive_lsn",
-		mock.MakeQueryResult([]string{"lsn"}, [][]any{{"0/5678ABC"}}))
+	expectLeadershipHistoryInsert(mockQueryService, "0/5678ABC")
 
 	pm, _ := setupPromoteTestManager(t, mockQueryService)
 
@@ -859,7 +854,7 @@ func TestPromoteIdempotency_SecondCallSucceedsAfterCompletion(t *testing.T) {
 
 	// Mock: insertLeadershipHistory - required for first promotion call success
 	// Note: second call returns early (WasAlreadyPrimary) so doesn't need this
-	expectLeadershipHistoryInsert(mockQueryService)
+	expectLeadershipHistoryInsert(mockQueryService, "0/ABCDEF0")
 
 	pm, _ := setupPromoteTestManager(t, mockQueryService)
 
@@ -917,7 +912,7 @@ func TestPromoteIdempotency_EmptyExpectedLSNSkipsValidation(t *testing.T) {
 		mock.MakeQueryResult([]string{"pg_current_wal_lsn"}, [][]any{{"0/BBBBBBB"}}))
 
 	// Mock: insertLeadershipHistory - required for promotion success
-	expectLeadershipHistoryInsert(mockQueryService)
+	expectLeadershipHistoryInsert(mockQueryService, "0/ABCDEF0")
 
 	pm, _ := setupPromoteTestManager(t, mockQueryService)
 
@@ -962,7 +957,7 @@ func TestPromote_WithElectionMetadata(t *testing.T) {
 		mock.MakeQueryResult([]string{"pg_current_wal_lsn"}, [][]any{{"0/1234567"}}))
 
 	// Mock: insertLeadershipHistory - required for promotion success
-	expectLeadershipHistoryInsert(mockQueryService)
+	expectLeadershipHistoryInsert(mockQueryService, "0/ABCDEF0")
 
 	// Mock: Clear primary_conninfo after promotion
 	mockQueryService.AddQueryPatternOnce("ALTER SYSTEM RESET primary_conninfo",
@@ -1117,7 +1112,7 @@ func TestPromote_TopologyUpdateFailureDoesNotFailPromotion(t *testing.T) {
 		mock.MakeQueryResult([]string{"pg_current_wal_lsn"}, [][]any{{"0/ABCDEF0"}}))
 
 	// insertLeadershipHistory
-	expectLeadershipHistoryInsert(mockQueryService)
+	expectLeadershipHistoryInsert(mockQueryService, "0/ABCDEF0")
 
 	// Inline setup (like setupPromoteTestManager but capturing factory)
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -1179,7 +1174,7 @@ func TestPromote_TopologyUpdateFailureDoesNotFailPromotion(t *testing.T) {
 	setTermForTest(t, tmpDir, term)
 
 	pm.mu.Lock()
-	pm.consensusState = NewConsensusState(tmpDir, serviceID)
+	pm.consensusState = newTermRevocation(tmpDir, serviceID)
 	pm.mu.Unlock()
 
 	_, err = pm.consensusState.Load()
@@ -1225,7 +1220,7 @@ func TestSetPrimaryTerm_InvariantValidation(t *testing.T) {
 	}
 
 	// Create consensus state and set initial term to 5
-	consensusState := NewConsensusState(tmpDir, serviceID)
+	consensusState := newTermRevocation(tmpDir, serviceID)
 	initialTerm := &multipoolermanagerdatapb.ConsensusTerm{
 		TermNumber:  5,
 		PrimaryTerm: 0,
@@ -1335,7 +1330,7 @@ func TestSetPrimaryConnInfo_StoresPrimaryPoolerID(t *testing.T) {
 
 	// Initialize consensus state
 	pm.mu.Lock()
-	pm.consensusState = NewConsensusState(tmpDir, serviceID)
+	pm.consensusState = newTermRevocation(tmpDir, serviceID)
 	pm.mu.Unlock()
 
 	// Set up mock query service
@@ -2270,7 +2265,7 @@ func TestConfigureSynchronousReplication_HistoryFailurePreventGUCUpdates(t *test
 
 	// Initialize consensus state so the manager can read the term
 	manager.mu.Lock()
-	manager.consensusState = NewConsensusState(poolerDir, serviceID)
+	manager.consensusState = newTermRevocation(poolerDir, serviceID)
 	manager.mu.Unlock()
 
 	// Load the term from file
@@ -2382,7 +2377,7 @@ func TestUpdateSynchronousStandbyList_HistoryFailurePreventsGUCUpdate(t *testing
 
 	// Initialize consensus state so the manager can read the term
 	manager.mu.Lock()
-	manager.consensusState = NewConsensusState(poolerDir, serviceID)
+	manager.consensusState = newTermRevocation(poolerDir, serviceID)
 	manager.mu.Unlock()
 
 	// Load the term from file

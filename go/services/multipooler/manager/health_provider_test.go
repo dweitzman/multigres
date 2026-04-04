@@ -28,6 +28,15 @@ import (
 	"github.com/multigres/multigres/go/services/multipooler/poolerserver"
 )
 
+// emptyNodeConsensus returns a nodeConsensusState whose buildConsensusStatus
+// always returns nil. Used in tests that don't exercise consensus status.
+func emptyNodeConsensus() *nodeConsensusState {
+	return &nodeConsensusState{
+		revokedUntil: &termRevocation{},
+		rules:        &ruleStore{},
+	}
+}
+
 func TestHealthStreamer_BroadcastToSubscribers(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	serviceID := &clustermetadatapb.ID{
@@ -35,7 +44,7 @@ func TestHealthStreamer_BroadcastToSubscribers(t *testing.T) {
 		Cell:      "zone1",
 		Name:      "test-pooler",
 	}
-	hs := newHealthStreamer(logger, serviceID, "tg1", "0")
+	hs := newHealthStreamer(logger, serviceID, "tg1", "0", emptyNodeConsensus())
 
 	// Subscribe two clients
 	_, ch1 := hs.subscribe()
@@ -74,7 +83,7 @@ func TestHealthStreamer_SubscribeReceivesCurrentState(t *testing.T) {
 		Cell:      "zone1",
 		Name:      "test-pooler",
 	}
-	hs := newHealthStreamer(logger, serviceID, "initial", "0")
+	hs := newHealthStreamer(logger, serviceID, "initial", "0", emptyNodeConsensus())
 
 	// Set initial state via OnStateChange
 	require.NoError(t, hs.OnStateChange(context.Background(), clustermetadatapb.PoolerType_REPLICA, clustermetadatapb.PoolerServingStatus_SERVING))
@@ -87,7 +96,7 @@ func TestHealthStreamer_SubscribeReceivesCurrentState(t *testing.T) {
 
 func TestHealthStreamer_UnsubscribeRemovesClient(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	hs := newHealthStreamer(logger, nil, "tg1", "0")
+	hs := newHealthStreamer(logger, nil, "tg1", "0", emptyNodeConsensus())
 
 	_, ch := hs.subscribe()
 	assert.Equal(t, 1, hs.clientCount())
@@ -98,7 +107,7 @@ func TestHealthStreamer_UnsubscribeRemovesClient(t *testing.T) {
 
 func TestHealthStreamer_FullBufferClosesChannel(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	hs := newHealthStreamer(logger, nil, "tg1", "0")
+	hs := newHealthStreamer(logger, nil, "tg1", "0", emptyNodeConsensus())
 
 	_, ch := hs.subscribe()
 
@@ -134,7 +143,7 @@ func TestHealthStreamer_GetState(t *testing.T) {
 		Cell:      "zone1",
 		Name:      "test-pooler",
 	}
-	hs := newHealthStreamer(logger, serviceID, "test", "0")
+	hs := newHealthStreamer(logger, serviceID, "test", "0", emptyNodeConsensus())
 
 	// Get initial state
 	got := hs.getState()
@@ -159,7 +168,7 @@ func TestHealthProvider_SubscribeWithContextCancellation(t *testing.T) {
 	// Create a minimal manager with healthStreamer
 	pm := &MultiPoolerManager{
 		logger:         logger,
-		healthStreamer: newHealthStreamer(logger, serviceID, "tg1", "0"),
+		healthStreamer: newHealthStreamer(logger, serviceID, "tg1", "0", emptyNodeConsensus()),
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -207,7 +216,7 @@ func TestHealthStreamer_UpdatePrimaryObservation(t *testing.T) {
 		Cell:      "zone1",
 		Name:      "test-pooler",
 	}
-	hs := newHealthStreamer(logger, serviceID, "tg1", "0")
+	hs := newHealthStreamer(logger, serviceID, "tg1", "0", emptyNodeConsensus())
 
 	// Subscribe
 	_, ch := hs.subscribe()
@@ -236,7 +245,7 @@ func TestHealthStreamer_OnStateChange(t *testing.T) {
 		Cell:      "zone1",
 		Name:      "test-pooler",
 	}
-	hs := newHealthStreamer(logger, serviceID, "tg1", "0")
+	hs := newHealthStreamer(logger, serviceID, "tg1", "0", emptyNodeConsensus())
 
 	// Subscribe before the state change
 	_, ch := hs.subscribe()
@@ -279,7 +288,7 @@ func TestHealthHeartbeat_BroadcastsPeriodically(t *testing.T) {
 
 	pm := &MultiPoolerManager{
 		logger:         logger,
-		healthStreamer: newHealthStreamer(logger, serviceID, "tg1", "0"),
+		healthStreamer: newHealthStreamer(logger, serviceID, "tg1", "0", emptyNodeConsensus()),
 	}
 
 	// Subscribe to get heartbeat broadcasts
@@ -310,7 +319,7 @@ func TestHealthHeartbeat_BroadcastsPeriodically(t *testing.T) {
 // before broadcasting the new state to subscribers.
 func TestHealthStreamer_WaitsForQueryServerOnServing(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	hs := newHealthStreamer(logger, nil, "tg1", "0")
+	hs := newHealthStreamer(logger, nil, "tg1", "0", emptyNodeConsensus())
 
 	// Create a real QueryPoolerServer to use as the gate.
 	qps := poolerserver.NewQueryPoolerServer(logger, nil, nil, "", "", nil, 0)
@@ -359,7 +368,7 @@ func TestHealthStreamer_WaitsForQueryServerOnServing(t *testing.T) {
 // transitions broadcast immediately without waiting for the query server.
 func TestHealthStreamer_DoesNotWaitOnNotServing(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	hs := newHealthStreamer(logger, nil, "tg1", "0")
+	hs := newHealthStreamer(logger, nil, "tg1", "0", emptyNodeConsensus())
 
 	// Create a query server that is PRIMARY/SERVING.
 	qps := poolerserver.NewQueryPoolerServer(logger, nil, nil, "", "", nil, 0)

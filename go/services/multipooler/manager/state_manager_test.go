@@ -262,7 +262,7 @@ func TestStateManager_HealthStreamerIntegration(t *testing.T) {
 		Cell:      "zone1",
 		Name:      "test-pooler",
 	}
-	hs := newHealthStreamer(logger, serviceID, "tg1", "0")
+	hs := newHealthStreamer(logger, serviceID, "tg1", "0", emptyNodeConsensus())
 	comp := &testComponent{}
 	mp := newTestMultiPooler(clustermetadatapb.PoolerType_REPLICA, clustermetadatapb.PoolerServingStatus_NOT_SERVING)
 

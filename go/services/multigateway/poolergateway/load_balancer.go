@@ -22,6 +22,7 @@ import (
 	"math/rand/v2"
 	"sync"
 
+	"github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -36,9 +37,11 @@ type shardKey struct {
 }
 
 // cachedPrimary holds the cached primary connection for a shard.
+// rule is nil when the entry is seeded from topology discovery (unconfirmed);
+// health stream updates replace it with the confirmed rule number.
 type cachedPrimary struct {
 	conn *PoolerConnection
-	term int64
+	rule *clustermetadatapb.RuleNumber
 }
 
 // LoadBalancer manages PoolerConnections and selects connections for queries.
@@ -110,7 +113,7 @@ func (lb *LoadBalancer) AddPooler(pooler *clustermetadatapb.MultiPooler) error {
 		// Invalidate seed if type changed away from PRIMARY
 		if oldType == clustermetadatapb.PoolerType_PRIMARY && newType != clustermetadatapb.PoolerType_PRIMARY {
 			key := shardKey{tableGroup: pooler.GetTableGroup(), shard: pooler.GetShard()}
-			if cached, ok := lb.cachedPrimaries[key]; ok && cached.conn == conn && cached.term == 0 {
+			if cached, ok := lb.cachedPrimaries[key]; ok && cached.conn == conn && cached.rule == nil {
 				delete(lb.cachedPrimaries, key)
 				lb.logger.Debug("invalidated seeded primary cache on type change",
 					"pooler_id", poolerID, "old_type", oldType, "new_type", newType)
@@ -120,8 +123,8 @@ func (lb *LoadBalancer) AddPooler(pooler *clustermetadatapb.MultiPooler) error {
 		// Seed if type changed to PRIMARY
 		if oldType != clustermetadatapb.PoolerType_PRIMARY && newType == clustermetadatapb.PoolerType_PRIMARY {
 			key := shardKey{tableGroup: pooler.GetTableGroup(), shard: pooler.GetShard()}
-			if existing, ok := lb.cachedPrimaries[key]; !ok || existing.term == 0 {
-				lb.cachedPrimaries[key] = &cachedPrimary{conn: conn, term: 0}
+			if existing, ok := lb.cachedPrimaries[key]; !ok || existing.rule == nil {
+				lb.cachedPrimaries[key] = &cachedPrimary{conn: conn}
 				lb.logger.Debug("seeded primary cache on type change",
 					"pooler_id", poolerID, "old_type", oldType, "new_type", newType)
 			}
@@ -137,12 +140,12 @@ func (lb *LoadBalancer) AddPooler(pooler *clustermetadatapb.MultiPooler) error {
 
 	lb.connections[poolerID] = conn
 
-	// Seed primary cache from discovery type (term 0 = unconfirmed).
-	// Health stream callbacks will overwrite with real term data.
+	// Seed primary cache from discovery type (rule nil = unconfirmed).
+	// Health stream callbacks will overwrite with the confirmed rule number.
 	if pooler.Type == clustermetadatapb.PoolerType_PRIMARY {
 		key := shardKey{tableGroup: pooler.GetTableGroup(), shard: pooler.GetShard()}
-		if existing, ok := lb.cachedPrimaries[key]; !ok || existing.term == 0 {
-			lb.cachedPrimaries[key] = &cachedPrimary{conn: conn, term: 0}
+		if existing, ok := lb.cachedPrimaries[key]; !ok || existing.rule == nil {
+			lb.cachedPrimaries[key] = &cachedPrimary{conn: conn}
 			lb.logger.Debug("seeded primary cache from discovery",
 				"pooler_id", poolerID, "tablegroup", key.tableGroup, "shard", key.shard)
 		}
@@ -288,15 +291,44 @@ func (lb *LoadBalancer) selectReplicaConnection(candidates []*PoolerConnection) 
 	return candidates[rand.IntN(len(candidates))]
 }
 
+// primaryInfoFromHealth extracts the primary ID and rule number from a health
+// update. ConsensusStatus is preferred when available; PrimaryObservation is
+// used as a fallback (e.g. for poolers that have not yet written their first
+// rule). When falling back, a synthetic RuleNumber is constructed from
+// PrimaryTerm so that the rule-based comparison still works.
+func primaryInfoFromHealth(health *PoolerHealth) (primaryID string, rule *clustermetadatapb.RuleNumber) {
+	if cs := health.ConsensusStatus; cs != nil {
+		if pos := cs.GetCurrentPosition(); pos != nil {
+			if r := pos.GetRule(); r != nil && r.GetRuleNumber() != nil {
+				return poolerIDString(r.GetPrimaryId()), r.GetRuleNumber()
+			}
+		}
+	}
+	if obs := health.PrimaryObservation; obs != nil {
+		// Synthesise a RuleNumber from PrimaryTerm so that consensus.CompareRuleNumbers
+		// still orders correctly. rule_subterm is left at zero (conservative).
+		return poolerIDString(obs.PrimaryId), &clustermetadatapb.RuleNumber{
+			CoordinatorTerm: obs.PrimaryTerm,
+		}
+	}
+	return "", nil
+}
+
 // onPoolerHealthUpdate is the callback invoked by PoolerConnection when health
 // state changes. It updates the cached primary for the connection's shard
-// based on PrimaryObservation term reconciliation.
+// based on rule number reconciliation (ConsensusStatus preferred, PrimaryObservation
+// as fallback).
 //
 // This is safe to call concurrently: both processHealthResponse and setHealthError
 // release healthMu before invoking this callback.
 func (lb *LoadBalancer) onPoolerHealthUpdate(conn *PoolerConnection) {
 	health := conn.Health()
-	if health == nil || health.PrimaryObservation == nil {
+	if health == nil {
+		return
+	}
+
+	primaryID, rule := primaryInfoFromHealth(health)
+	if rule == nil {
 		return
 	}
 
@@ -304,46 +336,55 @@ func (lb *LoadBalancer) onPoolerHealthUpdate(conn *PoolerConnection) {
 		tableGroup: health.Target.GetTableGroup(),
 		shard:      health.Target.GetShard(),
 	}
-	term := health.PrimaryObservation.PrimaryTerm
-	primaryID := poolerIDString(health.PrimaryObservation.PrimaryId)
 
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
 
 	cached := lb.cachedPrimaries[key]
 
-	switch {
-	case cached == nil || term > cached.term:
-		// New primary or higher term — update the cached primary.
+	switch consensus.CompareRuleNumbers(rule, cached.getRuleNumber()) {
+	case 1:
+		// Higher rule — update the cached primary.
 		primaryConn, exists := lb.connections[primaryID]
 		if !exists {
 			return
 		}
-		lb.cachedPrimaries[key] = &cachedPrimary{conn: primaryConn, term: term}
+		lb.cachedPrimaries[key] = &cachedPrimary{conn: primaryConn, rule: rule}
 		lb.logger.Debug("cached primary updated",
 			"tablegroup", key.tableGroup,
 			"shard", key.shard,
 			"primary_id", primaryID,
-			"term", term)
+			"rule_term", rule.GetCoordinatorTerm(),
+			"rule_subterm", rule.GetRuleSubterm())
 
 		// Only stop failover buffering when the primary is confirmed to be
-		// PRIMARY type and SERVING. The PrimaryObservation can arrive before
-		// the pooler has transitioned its query server to PRIMARY/SERVING
-		// (e.g., during Promote, UpdatePrimaryObservation fires before
-		// changeTypeLocked). Draining buffered requests too early would send
-		// them to a pooler that still rejects PRIMARY traffic.
+		// PRIMARY type and SERVING. The observation can arrive before the
+		// pooler has transitioned its query server to PRIMARY/SERVING
+		// (e.g., during Promote, the health push fires before changeTypeLocked).
+		// Draining buffered requests too early would send them to a pooler that
+		// still rejects PRIMARY traffic.
 		lb.notifyIfPrimaryServingLocked(key, primaryConn)
 
-	case term == cached.term:
-		// Same term — the primary is already cached but may not have been
+	case 0:
+		// Same rule — the primary is already cached but may not have been
 		// SERVING when we first saw the observation. Re-check now so that
 		// StopBuffering fires once the primary transitions to PRIMARY/SERVING.
-		lb.notifyIfPrimaryServingLocked(key, cached.conn)
+		if cached != nil {
+			lb.notifyIfPrimaryServingLocked(key, cached.conn)
+		}
 
 	default:
-		// Stale term — ignore.
-		return
+		// Stale rule — ignore.
 	}
+}
+
+// getRuleNumber returns the cached rule number, or nil for seeded (unconfirmed)
+// entries. Safe to call on a nil cachedPrimary.
+func (c *cachedPrimary) getRuleNumber() *clustermetadatapb.RuleNumber {
+	if c == nil {
+		return nil
+	}
+	return c.rule
 }
 
 // notifyIfPrimaryServingLocked calls onPrimaryServing if the primary connection
