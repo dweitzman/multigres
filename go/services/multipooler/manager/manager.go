@@ -102,15 +102,14 @@ type MultiPoolerManager struct {
 	// all fields other than Type and ServingStatus never change after initialization.
 	// They can be accessed without holding the lock.
 	// Type and ServingStatus are exclusively written by the StateManager.
-	multipooler     *clustermetadatapb.MultiPooler
-	state           ManagerState
-	stateError      error
-	consensusState  *ConsensusState
-	topoLoaded      bool
-	consensusLoaded bool
-	ctx             context.Context
-	cancel          context.CancelFunc
-	loadTimeout     time.Duration
+	multipooler    *clustermetadatapb.MultiPooler
+	state          ManagerState
+	stateError     error
+	consensusState *ConsensusState
+	topoLoaded     bool
+	ctx            context.Context
+	cancel         context.CancelFunc
+	loadTimeout    time.Duration
 
 	// readyChan is closed when state becomes Ready or Error, to broadcast to all waiters.
 	// Unbuffered is safe here because we only close() the channel (which never blocks
@@ -249,8 +248,14 @@ func NewMultiPoolerManagerWithTimeout(logger *slog.Logger, multiPooler *clusterm
 		cancel: cancel,
 	}
 
-	// Consensus state is always available; it will be loaded when needed.
+	// Consensus state is always available; load it synchronously so the term
+	// is ready before any RPC handler can be called.
 	pm.consensusState = NewConsensusState(pm.multipooler.PoolerDir, pm.serviceID)
+	if config.ConsensusEnabled {
+		if _, err := pm.consensusState.Load(); err != nil {
+			return nil, fmt.Errorf("failed to load consensus term from disk: %w", err)
+		}
+	}
 
 	// Create the query service controller with the pool manager.
 	// Get the drain grace period from connpool config (0 means use default).
@@ -677,9 +682,7 @@ func (pm *MultiPoolerManager) checkAndSetReady() {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 
-	// Check that topo is loaded and consensus is loaded (if enabled)
-	consensusReady := !pm.config.ConsensusEnabled || pm.consensusLoaded
-	if pm.topoLoaded && consensusReady {
+	if pm.topoLoaded {
 		pm.state = ManagerStateReady
 		pm.logger.Info("Manager state changed", "state", ManagerStateReady, "service_id", pm.serviceID.String())
 
@@ -951,49 +954,6 @@ func (pm *MultiPoolerManager) validateTermExactMatch(ctx context.Context, reques
 	}
 
 	return nil
-}
-
-// loadConsensusTermFromDisk loads the consensus term from local disk asynchronously
-func (pm *MultiPoolerManager) loadConsensusTermFromDisk() {
-	// Set timeout for the entire loading process
-	timeoutCtx, timeoutCancel := context.WithTimeout(pm.ctx, pm.loadTimeout)
-	defer timeoutCancel()
-
-	r := retry.New(100*time.Millisecond, 30*time.Second)
-	for _, err := range r.Attempts(timeoutCtx) {
-		if err != nil {
-			if errors.Is(err, context.DeadlineExceeded) {
-				pm.setStateError(fmt.Errorf("timeout waiting for consensus term from disk after %v", pm.loadTimeout))
-			} else {
-				pm.setStateError(errors.New("manager context cancelled while loading consensus term"))
-			}
-			return
-		}
-
-		// Initialize consensus state if not already done
-		pm.mu.Lock()
-		if pm.consensusState == nil {
-			pm.consensusState = NewConsensusState(pm.multipooler.PoolerDir, pm.serviceID)
-		}
-		cs := pm.consensusState
-		pm.mu.Unlock()
-
-		// Load term from local disk using the ConsensusState
-		var currentTerm int64
-		if currentTerm, err = cs.Load(); err != nil {
-			pm.logger.Debug("Failed to load consensus term from disk, retrying", "error", err)
-			continue // Will retry with backoff
-		}
-
-		// Successfully loaded (nil/empty term is OK)
-		pm.mu.Lock()
-		pm.consensusLoaded = true
-		pm.mu.Unlock()
-
-		pm.logger.Info("Loaded consensus term from disk", "current_term", currentTerm)
-		pm.checkAndSetReady()
-		return
-	}
 }
 
 // checkDemotionState checks the current state to determine what steps remain
@@ -1458,10 +1418,6 @@ func (pm *MultiPoolerManager) Start(senv *servenv.ServEnv) {
 
 	// Start loading multipooler record from topology asynchronously
 	go pm.loadMultiPoolerFromTopo()
-	// Start loading consensus term from local disk asynchronously (only if consensus is enabled)
-	if pm.config.ConsensusEnabled {
-		go pm.loadConsensusTermFromDisk()
-	}
 
 	senv.OnRunE(func() error {
 		// Block until manager is ready or error before registering gRPC services

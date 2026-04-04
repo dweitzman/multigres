@@ -210,9 +210,7 @@ func TestManagerState_RetryUntilSuccess(t *testing.T) {
 	require.NoError(t, err)
 	defer manager.Shutdown()
 
-	// Start both async loaders (topo and consensus term)
 	go manager.loadMultiPoolerFromTopo()
-	go manager.loadConsensusTermFromDisk()
 
 	// Wait for the state to become Ready after retries
 	require.Eventually(t, func() bool {
