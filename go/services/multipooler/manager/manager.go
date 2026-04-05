@@ -106,7 +106,7 @@ type MultiPoolerManager struct {
 	state          ManagerState
 	stateError     error
 	consensusState *ConsensusState
-	rules          *ruleStore
+	rules          ruleStorer
 	topoLoaded     bool
 	ctx            context.Context
 	cancel         context.CancelFunc

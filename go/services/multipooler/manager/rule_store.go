@@ -30,6 +30,13 @@ import (
 	"github.com/multigres/multigres/go/services/multipooler/executor"
 )
 
+// ruleStorer is the interface for reading and writing the current shard rule.
+// *ruleStore implements this; tests use fakeRuleStore.
+type ruleStorer interface {
+	observePosition(ctx context.Context) (*clustermetadatapb.NodePosition, error)
+	updateRule(ctx context.Context, update *ruleUpdateBuilder) (*clustermetadatapb.NodePosition, error)
+}
+
 // ruleStore manages the current shard rule in postgres and maintains an
 // in-memory cache of the last observed node position (rule + WAL LSN).
 //

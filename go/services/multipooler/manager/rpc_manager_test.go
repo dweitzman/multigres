@@ -360,34 +360,6 @@ func TestActionLock_MutationMethodsTimeout(t *testing.T) {
 	}
 }
 
-// expectCurrentRuleQuery adds a mock for the observePosition SELECT used by
-// getConsensusStatus (10 columns including current_lsn, read-only path).
-// The lsn parameter is returned as current_lsn in the single combined query.
-func expectCurrentRuleQuery(m *mock.QueryService, coordinatorTerm int64, leaderAppName string, cohortAppNames string, lsn string) {
-	cols := []string{
-		"coordinator_term", "rule_subterm", "leader_id", "coordinator_id", "cohort_members",
-		"durability_policy_name", "durability_quorum_type", "durability_required_count",
-		"durability_async_fallback", "current_lsn",
-	}
-	m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(cols, [][]any{
-		{coordinatorTerm, int64(0), leaderAppName, "zone1_test-coordinator", "{" + cohortAppNames + "}", nil, nil, nil, nil, lsn},
-	}))
-}
-
-// expectLeadershipHistoryInsert adds a mock expectation for successful rule history insertion.
-// This is required for Promote to succeed since history insertion failure now fails the promotion.
-// lsn is the WAL position returned as current_lsn in the RETURNING clause.
-func expectLeadershipHistoryInsert(m *mock.QueryService, lsn string) {
-	returnCols := []string{
-		"coordinator_term", "rule_subterm", "leader_id", "coordinator_id", "cohort_members",
-		"durability_policy_name", "durability_quorum_type", "durability_required_count",
-		"durability_async_fallback", "current_lsn",
-	}
-	m.AddQueryPatternOnce("FROM multigres.current_rule", mock.MakeQueryResult(returnCols, [][]any{
-		{int64(1), int64(0), "zone1_test-pooler", "zone1_test-coordinator", "{zone1_test-pooler}", nil, nil, nil, nil, lsn},
-	}))
-}
-
 // createPgDataDir creates the pg_data directory with PG_VERSION file.
 // This is needed for setInitialized() to work since it writes a marker file to pg_data.
 func createPgDataDir(t *testing.T, poolerDir string) {
@@ -504,10 +476,17 @@ func TestPromoteIdempotency_PostgreSQLPromotedButTopologyNotUpdated(t *testing.T
 	mockQueryService.AddQueryPatternOnce("SELECT pg_current_wal_lsn",
 		mock.MakeQueryResult([]string{"pg_current_wal_lsn"}, [][]any{{"0/ABCDEF0"}}))
 
-	// Mock: insertLeadershipHistory - required for promotion success
-	expectLeadershipHistoryInsert(mockQueryService, "0/ABCDEF0")
-
 	pm, _ := setupPromoteTestManager(t, mockQueryService)
+	fakeRules := &fakeRuleStore{pos: &clustermetadatapb.NodePosition{
+		Rule: &clustermetadatapb.ShardRule{
+			RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
+			PrimaryId:     &clustermetadatapb.ID{Cell: "zone1", Name: "test-pooler"},
+			CohortMembers: []*clustermetadatapb.ID{{Cell: "zone1", Name: "test-pooler"}},
+			CoordinatorId: &clustermetadatapb.ID{Cell: "zone1", Name: "test-coordinator"},
+		},
+		Lsn: "0/ABCDEF0",
+	}}
+	pm.rules = fakeRules
 
 	// Topology is still REPLICA (this is what the guard rail checks)
 	pm.mu.Lock()
@@ -527,6 +506,15 @@ func TestPromoteIdempotency_PostgreSQLPromotedButTopologyNotUpdated(t *testing.T
 	pm.mu.Lock()
 	assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, pm.multipooler.Type, "Topology should be updated to PRIMARY")
 	pm.mu.Unlock()
+
+	// Verify the rule history write: one call with the promotion event.
+	require.Len(t, fakeRules.updates, 1)
+	update := fakeRules.updates[0]
+	assert.Equal(t, int64(10), update.termNumber)
+	assert.Equal(t, "promotion", update.eventType)
+	assert.Equal(t, "unknown", update.reason) // empty reason → "unknown"
+	assert.Equal(t, "0/ABCDEF0", update.walPosition)
+
 	assert.NoError(t, mockQueryService.ExpectationsWereMet())
 }
 
@@ -551,10 +539,17 @@ func TestPromoteIdempotency_FullyCompleteTopologyPrimary(t *testing.T) {
 	mockQueryService.AddQueryPatternOnce("SELECT pg_current_wal_lsn",
 		mock.MakeQueryResult([]string{"pg_current_wal_lsn"}, [][]any{{"0/FEDCBA0"}}))
 
-	// Mock: getConsensusStatus queries current_rule + WAL position (idempotent path has no ruleRec)
-	expectCurrentRuleQuery(mockQueryService, 10, "zone1_test-replica", "zone1_test-replica", "0/FEDCBA0")
-
 	pm, _ := setupPromoteTestManager(t, mockQueryService)
+	fakeRules := &fakeRuleStore{pos: &clustermetadatapb.NodePosition{
+		Rule: &clustermetadatapb.ShardRule{
+			RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 10},
+			PrimaryId:     &clustermetadatapb.ID{Cell: "zone1", Name: "test-replica"},
+			CohortMembers: []*clustermetadatapb.ID{{Cell: "zone1", Name: "test-replica"}},
+			CoordinatorId: &clustermetadatapb.ID{Cell: "zone1", Name: "test-coordinator"},
+		},
+		Lsn: "0/FEDCBA0",
+	}}
+	pm.rules = fakeRules
 
 	// Topology is already PRIMARY
 	pm.mu.Lock()
@@ -583,6 +578,8 @@ func TestPromoteIdempotency_FullyCompleteTopologyPrimary(t *testing.T) {
 			Lsn: "0/FEDCBA0",
 		},
 	}, resp.ConsensusStatus)
+	// Idempotent path returns early: updateRule must NOT be called.
+	assert.Empty(t, fakeRules.updates, "rule history must not be written when promotion was already complete")
 	assert.NoError(t, mockQueryService.ExpectationsWereMet())
 }
 
@@ -714,10 +711,17 @@ func TestPromoteIdempotency_NothingCompleteYet(t *testing.T) {
 	mockQueryService.AddQueryPatternOnce("SELECT pg_current_wal_lsn",
 		mock.MakeQueryResult([]string{"pg_current_wal_lsn"}, [][]any{{"0/5678ABC"}}))
 
-	// Mock: insertLeadershipHistory - required for promotion success
-	expectLeadershipHistoryInsert(mockQueryService, "0/5678ABC")
-
 	pm, _ := setupPromoteTestManager(t, mockQueryService)
+	fakeRules := &fakeRuleStore{pos: &clustermetadatapb.NodePosition{
+		Rule: &clustermetadatapb.ShardRule{
+			RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
+			PrimaryId:     &clustermetadatapb.ID{Cell: "zone1", Name: "test-pooler"},
+			CohortMembers: []*clustermetadatapb.ID{{Cell: "zone1", Name: "test-pooler"}},
+			CoordinatorId: &clustermetadatapb.ID{Cell: "zone1", Name: "test-coordinator"},
+		},
+		Lsn: "0/5678ABC",
+	}}
+	pm.rules = fakeRules
 
 	// Topology is REPLICA
 	pm.mu.Lock()
@@ -733,8 +737,6 @@ func TestPromoteIdempotency_NothingCompleteYet(t *testing.T) {
 	assert.Equal(t, int64(10), resp.ConsensusTerm)
 
 	// Verify ConsensusStatus reflects the rule written during promotion.
-	// The rule data comes from expectLeadershipHistoryInsert's mock (coordinator_term=1,
-	// leader=zone1_test-pooler). The promise term matches the consensus term (10).
 	prototest.RequireEqual(t, &clustermetadatapb.ConsensusStatus{
 		Promise: &clustermetadatapb.HighestCoordinatorPromise{
 			TermNumber: 10,
@@ -754,6 +756,14 @@ func TestPromoteIdempotency_NothingCompleteYet(t *testing.T) {
 	pm.mu.Lock()
 	assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, pm.multipooler.Type)
 	pm.mu.Unlock()
+
+	require.Len(t, fakeRules.updates, 1)
+	update := fakeRules.updates[0]
+	assert.Equal(t, int64(10), update.termNumber)
+	assert.Equal(t, "promotion", update.eventType)
+	assert.Equal(t, "unknown", update.reason) // empty reason defaults to "unknown"
+	assert.Equal(t, "0/5678ABC", update.walPosition)
+
 	assert.NoError(t, mockQueryService.ExpectationsWereMet())
 }
 
@@ -845,11 +855,17 @@ func TestPromoteIdempotency_SecondCallSucceedsAfterCompletion(t *testing.T) {
 	mockQueryService.AddQueryPatternOnce("SELECT pg_current_wal_lsn",
 		mock.MakeQueryResult([]string{"pg_current_wal_lsn"}, [][]any{{"0/AAA1111"}}))
 
-	// Mock: insertLeadershipHistory - required for first promotion call success
-	// Note: second call returns early (WasAlreadyPrimary) so doesn't need this
-	expectLeadershipHistoryInsert(mockQueryService, "0/ABCDEF0")
-
 	pm, _ := setupPromoteTestManager(t, mockQueryService)
+	fakeRules := &fakeRuleStore{pos: &clustermetadatapb.NodePosition{
+		Rule: &clustermetadatapb.ShardRule{
+			RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
+			PrimaryId:     &clustermetadatapb.ID{Cell: "zone1", Name: "test-pooler"},
+			CohortMembers: []*clustermetadatapb.ID{{Cell: "zone1", Name: "test-pooler"}},
+			CoordinatorId: &clustermetadatapb.ID{Cell: "zone1", Name: "test-coordinator"},
+		},
+		Lsn: "0/AAA1111",
+	}}
+	pm.rules = fakeRules
 
 	pm.mu.Lock()
 	pm.multipooler.Type = clustermetadatapb.PoolerType_REPLICA
@@ -871,6 +887,12 @@ func TestPromoteIdempotency_SecondCallSucceedsAfterCompletion(t *testing.T) {
 	require.NoError(t, err, "Second call should succeed - idempotent operation")
 	assert.True(t, resp2.WasAlreadyPrimary, "Second call should report as already primary")
 	assert.Equal(t, "0/AAA1111", resp2.LsnPosition)
+	require.Len(t, fakeRules.updates, 1, "rule history should be written exactly once (first call only)")
+	update := fakeRules.updates[0]
+	assert.Equal(t, int64(10), update.termNumber)
+	assert.Equal(t, "promotion", update.eventType)
+	assert.Equal(t, "unknown", update.reason) // empty reason defaults to "unknown"
+	assert.Equal(t, "0/AAA1111", update.walPosition)
 	assert.NoError(t, mockQueryService.ExpectationsWereMet())
 }
 
@@ -904,10 +926,17 @@ func TestPromoteIdempotency_EmptyExpectedLSNSkipsValidation(t *testing.T) {
 	mockQueryService.AddQueryPatternOnce("SELECT pg_current_wal_lsn",
 		mock.MakeQueryResult([]string{"pg_current_wal_lsn"}, [][]any{{"0/BBBBBBB"}}))
 
-	// Mock: insertLeadershipHistory - required for promotion success
-	expectLeadershipHistoryInsert(mockQueryService, "0/ABCDEF0")
-
 	pm, _ := setupPromoteTestManager(t, mockQueryService)
+	fakeRules := &fakeRuleStore{pos: &clustermetadatapb.NodePosition{
+		Rule: &clustermetadatapb.ShardRule{
+			RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
+			PrimaryId:     &clustermetadatapb.ID{Cell: "zone1", Name: "test-pooler"},
+			CohortMembers: []*clustermetadatapb.ID{{Cell: "zone1", Name: "test-pooler"}},
+			CoordinatorId: &clustermetadatapb.ID{Cell: "zone1", Name: "test-coordinator"},
+		},
+		Lsn: "0/BBBBBBB",
+	}}
+	pm.rules = fakeRules
 
 	pm.mu.Lock()
 	pm.multipooler.Type = clustermetadatapb.PoolerType_REPLICA
@@ -920,6 +949,14 @@ func TestPromoteIdempotency_EmptyExpectedLSNSkipsValidation(t *testing.T) {
 
 	assert.False(t, resp.WasAlreadyPrimary)
 	assert.Equal(t, "0/BBBBBBB", resp.LsnPosition)
+
+	require.Len(t, fakeRules.updates, 1)
+	update := fakeRules.updates[0]
+	assert.Equal(t, int64(10), update.termNumber)
+	assert.Equal(t, "promotion", update.eventType)
+	assert.Equal(t, "unknown", update.reason) // empty reason defaults to "unknown"
+	assert.Equal(t, "0/BBBBBBB", update.walPosition)
+
 	assert.NoError(t, mockQueryService.ExpectationsWereMet())
 }
 
@@ -949,9 +986,6 @@ func TestPromote_WithElectionMetadata(t *testing.T) {
 	mockQueryService.AddQueryPatternOnce("SELECT pg_current_wal_lsn",
 		mock.MakeQueryResult([]string{"pg_current_wal_lsn"}, [][]any{{"0/1234567"}}))
 
-	// Mock: insertLeadershipHistory - required for promotion success
-	expectLeadershipHistoryInsert(mockQueryService, "0/ABCDEF0")
-
 	// Mock: Clear primary_conninfo after promotion
 	mockQueryService.AddQueryPatternOnce("ALTER SYSTEM RESET primary_conninfo",
 		mock.MakeQueryResult(nil, nil))
@@ -959,6 +993,16 @@ func TestPromote_WithElectionMetadata(t *testing.T) {
 		mock.MakeQueryResult(nil, nil))
 
 	pm, _ := setupPromoteTestManager(t, mockQueryService)
+	fakeRules := &fakeRuleStore{pos: &clustermetadatapb.NodePosition{
+		Rule: &clustermetadatapb.ShardRule{
+			RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
+			PrimaryId:     &clustermetadatapb.ID{Cell: "zone1", Name: "test-pooler"},
+			CohortMembers: []*clustermetadatapb.ID{{Cell: "zone1", Name: "test-pooler"}},
+			CoordinatorId: &clustermetadatapb.ID{Cell: "zone1", Name: "test-coordinator"},
+		},
+		Lsn: "0/1234567",
+	}}
+	pm.rules = fakeRules
 
 	// Topology is REPLICA
 	pm.mu.Lock()
@@ -990,11 +1034,20 @@ func TestPromote_WithElectionMetadata(t *testing.T) {
 	pm.mu.Lock()
 	assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, pm.multipooler.Type)
 	pm.mu.Unlock()
+	// Verify updateRule was called once with the election metadata.
+	require.Len(t, fakeRules.updates, 1, "rule history should be written once")
+	update := fakeRules.updates[0]
+	assert.Equal(t, int64(10), update.termNumber)
+	assert.Equal(t, "promotion", update.eventType)
+	assert.Equal(t, reason, update.reason)
+	assert.Equal(t, "0/1234567", update.walPosition)
+	assert.Equal(t, coordinatorID, update.coordinatorID)
+	assert.Equal(t, cohortMembers, update.cohortMembers)
+	assert.Equal(t, acceptedMembers, update.acceptedMembers)
+
 	assert.NoError(t, mockQueryService.ExpectationsWereMet())
 
-	// Note: We don't directly test that insertLeadershipHistory is called with the correct metadata
-	// because that would require mocking the database layer. The leadership history functionality
-	// will be tested by the actual implementation. This test verifies that the Promote method
+	// This test verifies that the Promote method
 	// accepts the new parameters without error and completes successfully.
 }
 
@@ -1104,9 +1157,6 @@ func TestPromote_TopologyUpdateFailureDoesNotFailPromotion(t *testing.T) {
 	mockQueryService.AddQueryPatternOnce("SELECT pg_current_wal_lsn",
 		mock.MakeQueryResult([]string{"pg_current_wal_lsn"}, [][]any{{"0/ABCDEF0"}}))
 
-	// insertLeadershipHistory
-	expectLeadershipHistoryInsert(mockQueryService, "0/ABCDEF0")
-
 	// Inline setup (like setupPromoteTestManager but capturing factory)
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	ts, factory := memorytopo.NewServerAndFactory(ctx, "zone1")
@@ -1173,6 +1223,17 @@ func TestPromote_TopologyUpdateFailureDoesNotFailPromotion(t *testing.T) {
 	_, err = pm.consensusState.Load()
 	require.NoError(t, err)
 
+	fakeRules := &fakeRuleStore{pos: &clustermetadatapb.NodePosition{
+		Rule: &clustermetadatapb.ShardRule{
+			RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
+			PrimaryId:     &clustermetadatapb.ID{Cell: "zone1", Name: "test-replica"},
+			CohortMembers: []*clustermetadatapb.ID{{Cell: "zone1", Name: "test-replica"}},
+			CoordinatorId: &clustermetadatapb.ID{Cell: "zone1", Name: "test-coordinator"},
+		},
+		Lsn: "0/ABCDEF0",
+	}}
+	pm.rules = fakeRules
+
 	// Inject topo failure before calling Promote
 	factory.SetError(errors.New("topo unavailable"))
 
@@ -1195,6 +1256,13 @@ func TestPromote_TopologyUpdateFailureDoesNotFailPromotion(t *testing.T) {
 	require.NotNil(t, healthState.PrimaryObservation, "health streamer should have primary observation after Promote")
 	assert.Equal(t, serviceID, healthState.PrimaryObservation.PrimaryID, "primary observation should point to self")
 	assert.Equal(t, int64(10), healthState.PrimaryObservation.PrimaryTerm, "primary observation term should match consensus term")
+
+	require.Len(t, fakeRules.updates, 1)
+	update := fakeRules.updates[0]
+	assert.Equal(t, int64(10), update.termNumber)
+	assert.Equal(t, "promotion", update.eventType)
+	assert.Equal(t, "test_reason", update.reason)
+	assert.Equal(t, "0/ABCDEF0", update.walPosition)
 
 	assert.NoError(t, mockQueryService.ExpectationsWereMet())
 }
