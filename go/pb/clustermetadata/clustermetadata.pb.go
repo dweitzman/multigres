@@ -1528,53 +1528,53 @@ func (x *HighestKnownRule) GetRule() *ShardRule {
 	return nil
 }
 
-// HighestCoordinatorPromise is a promise to a coordinator.
+// TermRevocation records that this node has revoked participation in all terms
+// strictly below revoked_below_term. Two things are revoked:
 //
-// Promises are used for sequencing coordinators when they take action to establish
-// a new term. Those actions are:
-// - Revoking the ability of primaries established at lower terms to write transactions
-// - Obtaining the exclusive right to begin applying rules under this term number
+//  1. Consensus participation: the node will refuse BeginTerm or other coordinator
+//     requests for any term < revoked_below_term, and for revoked_below_term itself
+//     from a different coordinator than accepted_coordinator_id.
 //
-// Promises must be persisted to a pooler's local disk to survive pooler restarts.
+//  2. Replication participation: a revoked primary must stop accepting writes; a
+//     revoked replica must clear primary_conninfo. Replication participation resumes
+//     once the node's highest known rule reaches or exceeds revoked_below_term
+//     (i.e. the rule for that term has replicated through).
 //
-// A pooler that has granted a promise for term T to coordinator C1 must refuse any
-// action request with a term less than T or a term equal to T but a different coordinator.
-//
-// Higher-term promises can implicitly replace and revoke lower-term promises.
-type HighestCoordinatorPromise struct {
+// Re-sending an identical recruitment is idempotent — the node re-confirms the same
+// revocation without revoking anything additional. A higher-term recruitment supersedes
+// lower ones automatically.
+type TermRevocation struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The coordinator term this node has promised to honor.
-	TermNumber int64 `protobuf:"varint,1,opt,name=term_number,json=termNumber,proto3" json:"term_number,omitempty"`
-	// The coordinator (multiorch instance) that this promise was made to.
-	// This is retained for idempotency and informational purposes: if the same
-	// coordinator asks for a promise for the same term number, a pooler will
-	// re-accept. If a different coordinator asks for a promise at the same term
-	// number, a pooler will refuse.
+	// All terms strictly below this value are revoked. The node has accepted
+	// the coordinator's exclusive right to act at this term.
+	RevokedBelowTerm int64 `protobuf:"varint,1,opt,name=revoked_below_term,json=revokedBelowTerm,proto3" json:"revoked_below_term,omitempty"`
+	// The coordinator (multiorch instance) that recruited this revocation.
+	// Retained for idempotency: the same coordinator at the same term is re-accepted;
+	// a different coordinator at the same term is refused.
 	AcceptedCoordinatorId *ID `protobuf:"bytes,2,opt,name=accepted_coordinator_id,json=acceptedCoordinatorId,proto3" json:"accepted_coordinator_id,omitempty"`
 	// When the coordinator created this term, set by the coordinator before
-	// recruiting promises. All poolers that accept the same recruitment will
-	// store the same value. If a coordinator restarts, loses in-memory state,
-	// and recruits again for the same term, poolers can detect this mismatch
-	// and reject the stale coordinator instance.
+	// recruiting. All poolers that accept the same recruitment store the same value.
+	// If a coordinator restarts and recruits again for the same term, poolers can
+	// detect the mismatch and reject the stale coordinator instance.
 	CoordinatorInitiatedAt *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=coordinator_initiated_at,json=coordinatorInitiatedAt,proto3" json:"coordinator_initiated_at,omitempty"`
 	unknownFields          protoimpl.UnknownFields
 	sizeCache              protoimpl.SizeCache
 }
 
-func (x *HighestCoordinatorPromise) Reset() {
-	*x = HighestCoordinatorPromise{}
+func (x *TermRevocation) Reset() {
+	*x = TermRevocation{}
 	mi := &file_clustermetadata_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *HighestCoordinatorPromise) String() string {
+func (x *TermRevocation) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*HighestCoordinatorPromise) ProtoMessage() {}
+func (*TermRevocation) ProtoMessage() {}
 
-func (x *HighestCoordinatorPromise) ProtoReflect() protoreflect.Message {
+func (x *TermRevocation) ProtoReflect() protoreflect.Message {
 	mi := &file_clustermetadata_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1586,26 +1586,26 @@ func (x *HighestCoordinatorPromise) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use HighestCoordinatorPromise.ProtoReflect.Descriptor instead.
-func (*HighestCoordinatorPromise) Descriptor() ([]byte, []int) {
+// Deprecated: Use TermRevocation.ProtoReflect.Descriptor instead.
+func (*TermRevocation) Descriptor() ([]byte, []int) {
 	return file_clustermetadata_proto_rawDescGZIP(), []int{16}
 }
 
-func (x *HighestCoordinatorPromise) GetTermNumber() int64 {
+func (x *TermRevocation) GetRevokedBelowTerm() int64 {
 	if x != nil {
-		return x.TermNumber
+		return x.RevokedBelowTerm
 	}
 	return 0
 }
 
-func (x *HighestCoordinatorPromise) GetAcceptedCoordinatorId() *ID {
+func (x *TermRevocation) GetAcceptedCoordinatorId() *ID {
 	if x != nil {
 		return x.AcceptedCoordinatorId
 	}
 	return nil
 }
 
-func (x *HighestCoordinatorPromise) GetCoordinatorInitiatedAt() *timestamppb.Timestamp {
+func (x *TermRevocation) GetCoordinatorInitiatedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.CoordinatorInitiatedAt
 	}
@@ -1613,11 +1613,11 @@ func (x *HighestCoordinatorPromise) GetCoordinatorInitiatedAt() *timestamppb.Tim
 }
 
 // ConsensusStatus is a node's complete view of its position in the distributed
-// system: its promise, what it has committed, and what it knows is coming.
+// system: its term revocation, what it has committed, and what it knows is coming.
 type ConsensusStatus struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// promise is the coordinator term this node has accepted.
-	Promise *HighestCoordinatorPromise `protobuf:"bytes,1,opt,name=promise,proto3" json:"promise,omitempty"`
+	// term_revocation records the highest coordinator term this node has revoked for.
+	TermRevocation *TermRevocation `protobuf:"bytes,1,opt,name=term_revocation,json=termRevocation,proto3" json:"term_revocation,omitempty"`
 	// current_position is the highest rule this node has committed to local WAL
 	// and the latest WAL position.
 	CurrentPosition *NodePosition `protobuf:"bytes,2,opt,name=current_position,json=currentPosition,proto3" json:"current_position,omitempty"`
@@ -1661,9 +1661,9 @@ func (*ConsensusStatus) Descriptor() ([]byte, []int) {
 	return file_clustermetadata_proto_rawDescGZIP(), []int{17}
 }
 
-func (x *ConsensusStatus) GetPromise() *HighestCoordinatorPromise {
+func (x *ConsensusStatus) GetTermRevocation() *TermRevocation {
 	if x != nil {
-		return x.Promise
+		return x.TermRevocation
 	}
 	return nil
 }
@@ -1788,14 +1788,13 @@ const file_clustermetadata_proto_rawDesc = "" +
 	"\x04rule\x18\x01 \x01(\v2\x1a.clustermetadata.ShardRuleR\x04rule\x12\x10\n" +
 	"\x03lsn\x18\x02 \x01(\tR\x03lsn\"B\n" +
 	"\x10HighestKnownRule\x12.\n" +
-	"\x04rule\x18\x01 \x01(\v2\x1a.clustermetadata.ShardRuleR\x04rule\"\xdf\x01\n" +
-	"\x19HighestCoordinatorPromise\x12\x1f\n" +
-	"\vterm_number\x18\x01 \x01(\x03R\n" +
-	"termNumber\x12K\n" +
+	"\x04rule\x18\x01 \x01(\v2\x1a.clustermetadata.ShardRuleR\x04rule\"\xe1\x01\n" +
+	"\x0eTermRevocation\x12,\n" +
+	"\x12revoked_below_term\x18\x01 \x01(\x03R\x10revokedBelowTerm\x12K\n" +
 	"\x17accepted_coordinator_id\x18\x02 \x01(\v2\x13.clustermetadata.IDR\x15acceptedCoordinatorId\x12T\n" +
-	"\x18coordinator_initiated_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x16coordinatorInitiatedAt\"\xf2\x01\n" +
-	"\x0fConsensusStatus\x12D\n" +
-	"\apromise\x18\x01 \x01(\v2*.clustermetadata.HighestCoordinatorPromiseR\apromise\x12H\n" +
+	"\x18coordinator_initiated_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x16coordinatorInitiatedAt\"\xf6\x01\n" +
+	"\x0fConsensusStatus\x12H\n" +
+	"\x0fterm_revocation\x18\x01 \x01(\v2\x1f.clustermetadata.TermRevocationR\x0etermRevocation\x12H\n" +
 	"\x10current_position\x18\x02 \x01(\v2\x1d.clustermetadata.NodePositionR\x0fcurrentPosition\x12O\n" +
 	"\x12highest_known_rule\x18\x03 \x01(\v2!.clustermetadata.HighestKnownRuleR\x10highestKnownRule*@\n" +
 	"\n" +
@@ -1858,7 +1857,7 @@ var file_clustermetadata_proto_goTypes = []any{
 	(*ShardRule)(nil),                 // 18: clustermetadata.ShardRule
 	(*NodePosition)(nil),              // 19: clustermetadata.NodePosition
 	(*HighestKnownRule)(nil),          // 20: clustermetadata.HighestKnownRule
-	(*HighestCoordinatorPromise)(nil), // 21: clustermetadata.HighestCoordinatorPromise
+	(*TermRevocation)(nil),            // 21: clustermetadata.TermRevocation
 	(*ConsensusStatus)(nil),           // 22: clustermetadata.ConsensusStatus
 	nil,                               // 23: clustermetadata.MultiPooler.PortMapEntry
 	nil,                               // 24: clustermetadata.MultiGateway.PortMapEntry
@@ -1890,9 +1889,9 @@ var file_clustermetadata_proto_depIdxs = []int32{
 	26, // 21: clustermetadata.ShardRule.creation_time:type_name -> google.protobuf.Timestamp
 	18, // 22: clustermetadata.NodePosition.rule:type_name -> clustermetadata.ShardRule
 	18, // 23: clustermetadata.HighestKnownRule.rule:type_name -> clustermetadata.ShardRule
-	14, // 24: clustermetadata.HighestCoordinatorPromise.accepted_coordinator_id:type_name -> clustermetadata.ID
-	26, // 25: clustermetadata.HighestCoordinatorPromise.coordinator_initiated_at:type_name -> google.protobuf.Timestamp
-	21, // 26: clustermetadata.ConsensusStatus.promise:type_name -> clustermetadata.HighestCoordinatorPromise
+	14, // 24: clustermetadata.TermRevocation.accepted_coordinator_id:type_name -> clustermetadata.ID
+	26, // 25: clustermetadata.TermRevocation.coordinator_initiated_at:type_name -> google.protobuf.Timestamp
+	21, // 26: clustermetadata.ConsensusStatus.term_revocation:type_name -> clustermetadata.TermRevocation
 	19, // 27: clustermetadata.ConsensusStatus.current_position:type_name -> clustermetadata.NodePosition
 	20, // 28: clustermetadata.ConsensusStatus.highest_known_rule:type_name -> clustermetadata.HighestKnownRule
 	29, // [29:29] is the sub-list for method output_type

@@ -565,8 +565,8 @@ func TestPromoteIdempotency_FullyCompleteTopologyPrimary(t *testing.T) {
 	assert.Equal(t, int64(10), resp.ConsensusTerm)
 	assert.Equal(t, "0/FEDCBA0", resp.LsnPosition)
 	prototest.RequireEqual(t, &clustermetadatapb.ConsensusStatus{
-		Promise: &clustermetadatapb.HighestCoordinatorPromise{
-			TermNumber: 10,
+		TermRevocation: &clustermetadatapb.TermRevocation{
+			RevokedBelowTerm: 10,
 		},
 		CurrentPosition: &clustermetadatapb.NodePosition{
 			Rule: &clustermetadatapb.ShardRule{
@@ -738,8 +738,8 @@ func TestPromoteIdempotency_NothingCompleteYet(t *testing.T) {
 
 	// Verify ConsensusStatus reflects the rule written during promotion.
 	prototest.RequireEqual(t, &clustermetadatapb.ConsensusStatus{
-		Promise: &clustermetadatapb.HighestCoordinatorPromise{
-			TermNumber: 10,
+		TermRevocation: &clustermetadatapb.TermRevocation{
+			RevokedBelowTerm: 10,
 		},
 		CurrentPosition: &clustermetadatapb.NodePosition{
 			Rule: &clustermetadatapb.ShardRule{

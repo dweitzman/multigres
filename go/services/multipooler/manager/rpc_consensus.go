@@ -337,8 +337,8 @@ func (pm *MultiPoolerManager) buildConsensusStatus(ctx context.Context, term *mu
 	status := &clustermetadatapb.ConsensusStatus{}
 
 	if term != nil {
-		status.Promise = &clustermetadatapb.HighestCoordinatorPromise{
-			TermNumber:            term.TermNumber,
+		status.TermRevocation = &clustermetadatapb.TermRevocation{
+			RevokedBelowTerm:      term.TermNumber,
 			AcceptedCoordinatorId: term.AcceptedTermFromCoordinatorId,
 			// TODO: populate CoordinatorInitiatedAt once BeginTermRequest carries
 			// the coordinator's initiation timestamp and ConsensusTerm persists it.

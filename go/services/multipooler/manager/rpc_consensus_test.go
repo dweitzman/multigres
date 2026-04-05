@@ -218,8 +218,8 @@ func TestBeginTerm(t *testing.T) {
 			expectedTerm:                        5,
 			expectedAcceptedTermFromCoordinator: "candidate-A",
 			expectedConsensusStatus: &clustermetadatapb.ConsensusStatus{
-				Promise: &clustermetadatapb.HighestCoordinatorPromise{
-					TermNumber: 5,
+				TermRevocation: &clustermetadatapb.TermRevocation{
+					RevokedBelowTerm: 5,
 					AcceptedCoordinatorId: &clustermetadatapb.ID{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      "zone1",
@@ -335,8 +335,8 @@ func TestBeginTerm(t *testing.T) {
 			expectedAcceptedTermFromCoordinator: "new-candidate",
 			expectedWalPosition:                 &consensusdatapb.WALPosition{LastReceiveLsn: "0/5000000", LastReplayLsn: "0/5000000"},
 			expectedConsensusStatus: &clustermetadatapb.ConsensusStatus{
-				Promise: &clustermetadatapb.HighestCoordinatorPromise{
-					TermNumber: 10,
+				TermRevocation: &clustermetadatapb.TermRevocation{
+					RevokedBelowTerm: 10,
 					AcceptedCoordinatorId: &clustermetadatapb.ID{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      "zone1",
@@ -395,8 +395,8 @@ func TestBeginTerm(t *testing.T) {
 			expectedTerm:                        10,
 			expectedAcceptedTermFromCoordinator: "new-candidate",
 			expectedConsensusStatus: &clustermetadatapb.ConsensusStatus{
-				Promise: &clustermetadatapb.HighestCoordinatorPromise{
-					TermNumber: 10,
+				TermRevocation: &clustermetadatapb.TermRevocation{
+					RevokedBelowTerm: 10,
 					AcceptedCoordinatorId: &clustermetadatapb.ID{
 						Component: clustermetadatapb.ID_MULTIPOOLER,
 						Cell:      "zone1",
@@ -1037,8 +1037,8 @@ func TestConsensusStatus(t *testing.T) {
 			expectedRole:        "primary",
 			expectedWALLsn:      "0/4000000",
 			expectedConsensusStatus: &clustermetadatapb.ConsensusStatus{
-				Promise: &clustermetadatapb.HighestCoordinatorPromise{
-					TermNumber:            5,
+				TermRevocation: &clustermetadatapb.TermRevocation{
+					RevokedBelowTerm:      5,
 					AcceptedCoordinatorId: &clustermetadatapb.ID{Cell: "zone1", Name: "leader-node"},
 				},
 				CurrentPosition: &clustermetadatapb.NodePosition{
@@ -1092,8 +1092,8 @@ func TestConsensusStatus(t *testing.T) {
 			expectedRole:        "replica",
 			expectedWALLsn:      "0/5000000", // receive LSN
 			expectedConsensusStatus: &clustermetadatapb.ConsensusStatus{
-				Promise: &clustermetadatapb.HighestCoordinatorPromise{
-					TermNumber: 3,
+				TermRevocation: &clustermetadatapb.TermRevocation{
+					RevokedBelowTerm: 3,
 				},
 				CurrentPosition: &clustermetadatapb.NodePosition{
 					Rule: &clustermetadatapb.ShardRule{
@@ -1255,8 +1255,8 @@ func TestGetInconsistentConsensusStatus(t *testing.T) {
 				Lsn: "0/A000000",
 			},
 			expectedStatus: &clustermetadatapb.ConsensusStatus{
-				Promise: &clustermetadatapb.HighestCoordinatorPromise{
-					TermNumber:            5,
+				TermRevocation: &clustermetadatapb.TermRevocation{
+					RevokedBelowTerm:      5,
 					AcceptedCoordinatorId: &clustermetadatapb.ID{Cell: "zone1", Name: "coord-node"},
 				},
 				CurrentPosition: &clustermetadatapb.NodePosition{
@@ -1282,8 +1282,8 @@ func TestGetInconsistentConsensusStatus(t *testing.T) {
 			setupMock: func(m *mock.QueryService) {},
 			// rulePos nil: observePosition returns nil (no rule applied yet)
 			expectedStatus: &clustermetadatapb.ConsensusStatus{
-				Promise: &clustermetadatapb.HighestCoordinatorPromise{
-					TermNumber: 3,
+				TermRevocation: &clustermetadatapb.TermRevocation{
+					RevokedBelowTerm: 3,
 				},
 				// CurrentPosition is nil: no rule has been applied
 			},

@@ -404,43 +404,43 @@ message HighestKnownRule {
   ShardRule rule = 1;
 }
 
-// HighestCoordinatorPromise is a promise to a coordinator.
+// TermRevocation records that this node has revoked participation in all terms
+// strictly below revoked_below_term. Two things are revoked:
 //
-// Promises are used for sequencing coordinators when they take action to establish
-// a new term. Those actions are:
-// - Revoking the ability of primaries established at lower terms to write transactions
-// - Obtaining the exclusive right to begin applying rules under this term number
+//  1. Consensus participation: the node will refuse BeginTerm or other coordinator
+//     requests for any term < revoked_below_term, and for revoked_below_term itself
+//     from a different coordinator than accepted_coordinator_id.
 //
-// Promises must be persisted to a pooler's local disk to survive pooler restarts.
+//  2. Replication participation: a revoked primary must stop accepting writes; a
+//     revoked replica must clear primary_conninfo. Replication participation resumes
+//     once the node's highest known rule reaches or exceeds revoked_below_term
+//     (i.e. the rule for that term has replicated through).
 //
-// A pooler that has granted a promise for term T to coordinator C1 must refuse any
-// action request with a term less than T or a term equal to T but a different coordinator.
-//
-// Higher-term promises can implicitly replace and revoke lower-term promises.
-message HighestCoordinatorPromise {
-  // The coordinator term this node has promised to honor.
-  int64 term_number = 1;
+// Re-sending an identical recruitment is idempotent — the node re-confirms the same
+// revocation without revoking anything additional. A higher-term recruitment supersedes
+// lower ones automatically.
+message TermRevocation {
+  // All terms strictly below this value are revoked. The node has accepted
+  // the coordinator's exclusive right to act at this term.
+  int64 revoked_below_term = 1;
 
-  // The coordinator (multiorch instance) that this promise was made to.
-  // This is retained for idempotency and informational purposes: if the same
-  // coordinator asks for a promise for the same term number, a pooler will
-  // re-accept. If a different coordinator asks for a promise at the same term
-  // number, a pooler will refuse.
+  // The coordinator (multiorch instance) that recruited this revocation.
+  // Retained for idempotency: the same coordinator at the same term is re-accepted;
+  // a different coordinator at the same term is refused.
   ID accepted_coordinator_id = 2;
 
   // When the coordinator created this term, set by the coordinator before
-  // recruiting promises. All poolers that accept the same recruitment will
-  // store the same value. If a coordinator restarts, loses in-memory state,
-  // and recruits again for the same term, poolers can detect this mismatch
-  // and reject the stale coordinator instance.
+  // recruiting. All poolers that accept the same recruitment store the same value.
+  // If a coordinator restarts and recruits again for the same term, poolers can
+  // detect the mismatch and reject the stale coordinator instance.
   google.protobuf.Timestamp coordinator_initiated_at = 3;
 }
 
 // ConsensusStatus is a node's complete view of its position in the distributed
-// system: its promise, what it has committed, and what it knows is coming.
+// system: its term revocation, what it has committed, and what it knows is coming.
 message ConsensusStatus {
-  // promise is the coordinator term this node has accepted.
-  HighestCoordinatorPromise promise = 1;
+  // term_revocation records the highest coordinator term this node has revoked for.
+  TermRevocation term_revocation = 1;
 
   // current_position is the highest rule this node has committed to local WAL
   // and the latest WAL position.
