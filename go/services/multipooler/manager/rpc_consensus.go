@@ -358,7 +358,42 @@ func (pm *MultiPoolerManager) buildConsensusStatus(ctx context.Context, term *mu
 	if pos != nil {
 		status.CurrentPosition = pos
 	}
+
+	if av := pm.buildAvailabilityStatus(); av != nil {
+		status.AvailabilityStatus = av
+	}
 	return status, nil
+}
+
+// buildAvailabilityStatus returns the current AvailabilityStatus for this node,
+// or nil if no fitness signals are set.
+func (pm *MultiPoolerManager) buildAvailabilityStatus() *clustermetadatapb.AvailabilityStatus {
+	pm.mu.Lock()
+	resignedTerm := pm.resignedPrimaryAtTerm
+	pm.mu.Unlock()
+	if resignedTerm == 0 {
+		return nil
+	}
+	return &clustermetadatapb.AvailabilityStatus{
+		ResignedPrimaryAtTerm: resignedTerm,
+	}
+}
+
+// setResignedPrimaryAtTerm records that this node voluntarily resigned as primary
+// at the given consensus term. The signal is included in subsequent StatusResponses
+// so the coordinator can trigger an immediate election.
+func (pm *MultiPoolerManager) setResignedPrimaryAtTerm(term int64) {
+	pm.mu.Lock()
+	pm.resignedPrimaryAtTerm = term
+	pm.mu.Unlock()
+}
+
+// clearResignedPrimaryAtTerm clears the voluntary resignation signal, called when
+// this node is elected as primary again.
+func (pm *MultiPoolerManager) clearResignedPrimaryAtTerm() {
+	pm.mu.Lock()
+	pm.resignedPrimaryAtTerm = 0
+	pm.mu.Unlock()
 }
 
 // ConsensusStatus returns the current status of this node for consensus
@@ -437,16 +472,17 @@ func (pm *MultiPoolerManager) ConsensusStatus(ctx context.Context, req *consensu
 	}
 
 	return &consensusdatapb.StatusResponse{
-		PoolerId:        pm.serviceID.GetName(),
-		CurrentTerm:     localCurrentTerm,
-		WalPosition:     walPosition,
-		IsHealthy:       isHealthy,
-		IsEligible:      true, // TODO: implement eligibility logic based on policy
-		Cell:            pm.serviceID.GetCell(),
-		Role:            role,
-		TimelineInfo:    timelineInfo,
-		PrimaryTerm:     localPrimaryTerm,
-		ConsensusStatus: consensusStatus,
+		PoolerId:           pm.serviceID.GetName(),
+		CurrentTerm:        localCurrentTerm,
+		WalPosition:        walPosition,
+		IsHealthy:          isHealthy,
+		IsEligible:         true, // TODO: implement eligibility logic based on policy
+		Cell:               pm.serviceID.GetCell(),
+		Role:               role,
+		TimelineInfo:       timelineInfo,
+		PrimaryTerm:        localPrimaryTerm,
+		ConsensusStatus:    consensusStatus,
+		AvailabilityStatus: pm.buildAvailabilityStatus(),
 	}, nil
 }
 

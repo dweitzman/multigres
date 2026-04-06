@@ -357,6 +357,11 @@ message EmergencyDemoteResponse {
 
   // Number of connections that were terminated
   int32 connections_terminated = 4;
+
+  // Consensus status at the time of demotion, including AvailabilityStatus with
+  // resigned_primary_at_term set. The coordinator can use this immediately to
+  // trigger an election without waiting for the next status poll.
+  clustermetadata.ConsensusStatus consensus_status = 5;
 }
 
 // DemoteStalePrimary demotes a stale primary that came back online after failover.

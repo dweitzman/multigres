@@ -155,6 +155,12 @@ message StatusResponse {
   // rule position, and highest known rule. This is the authoritative view of
   // where this node stands in the distributed system.
   clustermetadata.ConsensusStatus consensus_status = 12;
+
+  // Best-effort operational fitness signals for this node. Distinct from
+  // consensus_status (which is authoritative): these signals are in-memory and
+  // may be absent after a process restart. Coordinators treat absence as
+  // "unknown," not "unfit."
+  clustermetadata.AvailabilityStatus availability_status = 13;
 }
 
 // GetLeadershipView returns leadership information from the heartbeat table
