@@ -76,20 +76,43 @@ func (a *AppointLeaderAction) Execute(ctx context.Context, problem types.Problem
 		return fmt.Errorf("no poolers found for shard %s", problem.ShardKey)
 	}
 
+	// Compute the highest consensus term seen across the cohort.
+	// Used to detect stale primary resignations below.
+	var maxCohortTerm int64
+	for _, pooler := range cohort {
+		if pooler.ConsensusStatus != nil && pooler.ConsensusStatus.CurrentTerm > maxCohortTerm {
+			maxCohortTerm = pooler.ConsensusStatus.CurrentTerm
+		}
+	}
+
 	// Check if a primary already exists and is healthy (problem resolved).
 	// We must verify both that the pooler is reachable (IsLastCheckValid) AND that
 	// PostgreSQL is running (IsPostgresRunning). If the pooler is up but Postgres
 	// is down, we still need to trigger failover.
+	// A primary that has voluntarily resigned (ResignedPrimaryAtTerm != 0) at the
+	// current term is not considered healthy. If the resignation is from an older
+	// term (i.e. a new election already succeeded), it is stale and ignored.
 	for _, pooler := range cohort {
-		if pooler.MultiPooler != nil &&
-			pooler.MultiPooler.Type == clustermetadatapb.PoolerType_PRIMARY &&
-			pooler.IsLastCheckValid &&
-			pooler.IsPostgresRunning {
-			a.logger.InfoContext(ctx, "primary already exists, skipping leader appointment",
-				"primary", pooler.MultiPooler.Id.Name,
-				"shard_key", problem.ShardKey.String())
-			return nil
+		if pooler.MultiPooler == nil ||
+			pooler.MultiPooler.Type != clustermetadatapb.PoolerType_PRIMARY ||
+			!pooler.IsLastCheckValid ||
+			!pooler.IsPostgresRunning {
+			continue
 		}
+		if pooler.ConsensusStatus != nil && pooler.ConsensusStatus.AvailabilityStatus != nil {
+			resignedTerm := pooler.ConsensusStatus.AvailabilityStatus.ResignedPrimaryAtTerm
+			if resignedTerm != 0 && resignedTerm >= maxCohortTerm {
+				a.logger.InfoContext(ctx, "primary has resigned, proceeding with leader appointment",
+					"primary", pooler.MultiPooler.Id.Name,
+					"resigned_at_term", resignedTerm,
+					"shard_key", problem.ShardKey.String())
+				continue
+			}
+		}
+		a.logger.InfoContext(ctx, "primary already exists, skipping leader appointment",
+			"primary", pooler.MultiPooler.Id.Name,
+			"shard_key", problem.ShardKey.String())
+		return nil
 	}
 
 	a.logger.InfoContext(ctx, "verified shard still needs leader appointment, proceeding",

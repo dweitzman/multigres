@@ -359,9 +359,6 @@ func (pm *MultiPoolerManager) buildConsensusStatus(ctx context.Context, term *mu
 		status.CurrentPosition = pos
 	}
 
-	if av := pm.buildAvailabilityStatus(); av != nil {
-		status.AvailabilityStatus = av
-	}
 	return status, nil
 }
 

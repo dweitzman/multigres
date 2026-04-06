@@ -94,17 +94,35 @@ func TestPrimaryIsDeadAnalyzer_Analyze(t *testing.T) {
 		require.Nil(t, problem) // Future analyzer will handle this case
 	})
 
-	t.Run("ignores primary itself", func(t *testing.T) {
+	t.Run("ignores primary that has not resigned", func(t *testing.T) {
 		analysis := &store.ReplicationAnalysis{
-			IsPrimary:        true, // This is the primary node
-			IsInitialized:    true,
-			PrimaryPoolerID:  nil,
-			PrimaryReachable: false,
+			IsPrimary:             true,
+			IsInitialized:         true,
+			PrimaryPoolerID:       nil,
+			PrimaryReachable:      false,
+			ResignedPrimaryAtTerm: 0, // not resigned
 		}
 
 		problem, err := analyzer.Analyze(analysis)
 		require.NoError(t, err)
-		require.Nil(t, problem) // Primaries don't report themselves as dead
+		require.Nil(t, problem) // Non-resigned primaries don't report themselves as dead
+	})
+
+	t.Run("triggers immediate election when primary voluntarily resigned", func(t *testing.T) {
+		analysis := &store.ReplicationAnalysis{
+			PoolerID:              &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "primary1"},
+			ShardKey:              commontypes.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"},
+			IsPrimary:             true,
+			IsInitialized:         true,
+			ResignedPrimaryAtTerm: 5, // voluntarily resigned at term 5
+		}
+
+		problem, err := analyzer.Analyze(analysis)
+		require.NoError(t, err)
+		require.NotNil(t, problem, "resigned primary should trigger immediate election")
+		require.Equal(t, types.ProblemPrimaryIsDead, problem.Code)
+		require.Equal(t, types.PriorityEmergency, problem.Priority)
+		require.Equal(t, types.ScopeShard, problem.Scope)
 	})
 
 	t.Run("ignores uninitialized replica", func(t *testing.T) {

@@ -468,8 +468,4 @@ message ConsensusStatus {
   // This could represent a decision from WAL or intent to propose a decision
   // from a coordinator that has negotiated exclusive rights to this rule number.
   HighestKnownRule highest_known_rule = 3;
-
-  // availability_status carries best-effort operational fitness signals.
-  // May be nil if the node has just restarted or has not yet assessed its fitness.
-  AvailabilityStatus availability_status = 4;
 }

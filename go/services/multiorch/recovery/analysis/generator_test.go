@@ -616,6 +616,89 @@ func TestIsInStandbyList(t *testing.T) {
 	}
 }
 
+func TestGenerateAnalysis_ResignedPrimaryAtTerm(t *testing.T) {
+	t.Run("populates ResignedPrimaryAtTerm for a primary that has resigned", func(t *testing.T) {
+		ps := store.NewPoolerStore(nil, slog.Default())
+		primaryID := "multipooler-cell1-primary"
+
+		ps.Set(primaryID, &multiorchdatapb.PoolerHealthState{
+			MultiPooler: &clustermetadatapb.MultiPooler{
+				Id:         &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary"},
+				Database:   "db1",
+				TableGroup: "tg1",
+				Shard:      "shard1",
+			},
+			PoolerType:       clustermetadatapb.PoolerType_PRIMARY,
+			IsLastCheckValid: true,
+			ConsensusStatus: &consensusdatapb.StatusResponse{
+				CurrentTerm:        5,
+				AvailabilityStatus: &clustermetadatapb.AvailabilityStatus{ResignedPrimaryAtTerm: 5},
+			},
+		})
+
+		gen := NewAnalysisGenerator(ps)
+		analysis, err := gen.GenerateAnalysisForPooler(primaryID)
+		require.NoError(t, err)
+
+		require.Equal(t, int64(5), analysis.ResignedPrimaryAtTerm)
+	})
+
+	t.Run("ResignedPrimaryAtTerm is zero when primary has not resigned", func(t *testing.T) {
+		ps := store.NewPoolerStore(nil, slog.Default())
+		primaryID := "multipooler-cell1-primary"
+
+		ps.Set(primaryID, &multiorchdatapb.PoolerHealthState{
+			MultiPooler: &clustermetadatapb.MultiPooler{
+				Id:         &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary"},
+				Database:   "db1",
+				TableGroup: "tg1",
+				Shard:      "shard1",
+			},
+			PoolerType:       clustermetadatapb.PoolerType_PRIMARY,
+			IsLastCheckValid: true,
+			ConsensusStatus:  &consensusdatapb.StatusResponse{CurrentTerm: 3},
+		})
+
+		gen := NewAnalysisGenerator(ps)
+		analysis, err := gen.GenerateAnalysisForPooler(primaryID)
+		require.NoError(t, err)
+
+		require.Equal(t, int64(0), analysis.ResignedPrimaryAtTerm)
+	})
+
+	// A primary resigned at term 5 but is now at term 6 (new election happened and
+	// clearResignedPrimaryAtTerm was not yet called, or this is stale health state data).
+	// The coordinator uses ResignedPrimaryAtTerm vs maxCohortTerm to detect this case;
+	// the generator's job is just to faithfully report the value from health state.
+	t.Run("faithfully reports stale resignation term for coordinator to evaluate", func(t *testing.T) {
+		ps := store.NewPoolerStore(nil, slog.Default())
+		primaryID := "multipooler-cell1-primary"
+
+		ps.Set(primaryID, &multiorchdatapb.PoolerHealthState{
+			MultiPooler: &clustermetadatapb.MultiPooler{
+				Id:         &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary"},
+				Database:   "db1",
+				TableGroup: "tg1",
+				Shard:      "shard1",
+			},
+			PoolerType:       clustermetadatapb.PoolerType_PRIMARY,
+			IsLastCheckValid: true,
+			ConsensusStatus: &consensusdatapb.StatusResponse{
+				CurrentTerm:        6, // now at a higher term after re-election
+				AvailabilityStatus: &clustermetadatapb.AvailabilityStatus{ResignedPrimaryAtTerm: 5},
+			},
+		})
+
+		gen := NewAnalysisGenerator(ps)
+		analysis, err := gen.GenerateAnalysisForPooler(primaryID)
+		require.NoError(t, err)
+
+		// Generator reports the raw value; appoint_leader.go's maxCohortTerm check
+		// detects that resignedTerm(5) < maxCohortTerm(6) and ignores it.
+		require.Equal(t, int64(5), analysis.ResignedPrimaryAtTerm)
+	})
+}
+
 func TestPopulatePrimaryInfo_PrimaryHealthFields(t *testing.T) {
 	t.Run("sets PrimaryPoolerReachable and PrimaryPostgresRunning correctly", func(t *testing.T) {
 		ps := store.NewPoolerStore(nil, slog.Default())

@@ -194,6 +194,13 @@ func (g *AnalysisGenerator) generateAnalysisForPooler(
 		analysis.ConsensusTerm = pooler.ConsensusStatus.CurrentTerm
 	}
 
+	// Capture voluntary resignation signal. ConsensusStatus here is a StatusResponse;
+	// AvailabilityStatus is a sibling field alongside ConsensusStatus in that response.
+	// Set for any pooler that has signalled resignation (currently only resigned primaries).
+	if pooler.ConsensusStatus != nil && pooler.ConsensusStatus.AvailabilityStatus != nil {
+		analysis.ResignedPrimaryAtTerm = pooler.ConsensusStatus.AvailabilityStatus.ResignedPrimaryAtTerm
+	}
+
 	// Store primary term (term when this pooler was promoted to primary)
 	if pooler.ConsensusTerm != nil {
 		analysis.PrimaryTerm = pooler.ConsensusTerm.PrimaryTerm

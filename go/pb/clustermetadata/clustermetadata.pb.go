@@ -1683,11 +1683,8 @@ type ConsensusStatus struct {
 	// This could represent a decision from WAL or intent to propose a decision
 	// from a coordinator that has negotiated exclusive rights to this rule number.
 	HighestKnownRule *HighestKnownRule `protobuf:"bytes,3,opt,name=highest_known_rule,json=highestKnownRule,proto3" json:"highest_known_rule,omitempty"`
-	// availability_status carries best-effort operational fitness signals.
-	// May be nil if the node has just restarted or has not yet assessed its fitness.
-	AvailabilityStatus *AvailabilityStatus `protobuf:"bytes,4,opt,name=availability_status,json=availabilityStatus,proto3" json:"availability_status,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *ConsensusStatus) Reset() {
@@ -1737,13 +1734,6 @@ func (x *ConsensusStatus) GetCurrentPosition() *NodePosition {
 func (x *ConsensusStatus) GetHighestKnownRule() *HighestKnownRule {
 	if x != nil {
 		return x.HighestKnownRule
-	}
-	return nil
-}
-
-func (x *ConsensusStatus) GetAvailabilityStatus() *AvailabilityStatus {
-	if x != nil {
-		return x.AvailabilityStatus
 	}
 	return nil
 }
@@ -1860,12 +1850,11 @@ const file_clustermetadata_proto_rawDesc = "" +
 	"\x17accepted_coordinator_id\x18\x02 \x01(\v2\x13.clustermetadata.IDR\x15acceptedCoordinatorId\x12T\n" +
 	"\x18coordinator_initiated_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x16coordinatorInitiatedAt\"M\n" +
 	"\x12AvailabilityStatus\x127\n" +
-	"\x18resigned_primary_at_term\x18\x01 \x01(\x03R\x15resignedPrimaryAtTerm\"\xcc\x02\n" +
+	"\x18resigned_primary_at_term\x18\x01 \x01(\x03R\x15resignedPrimaryAtTerm\"\xf6\x01\n" +
 	"\x0fConsensusStatus\x12H\n" +
 	"\x0fterm_revocation\x18\x01 \x01(\v2\x1f.clustermetadata.TermRevocationR\x0etermRevocation\x12H\n" +
 	"\x10current_position\x18\x02 \x01(\v2\x1d.clustermetadata.NodePositionR\x0fcurrentPosition\x12O\n" +
-	"\x12highest_known_rule\x18\x03 \x01(\v2!.clustermetadata.HighestKnownRuleR\x10highestKnownRule\x12T\n" +
-	"\x13availability_status\x18\x04 \x01(\v2#.clustermetadata.AvailabilityStatusR\x12availabilityStatus*@\n" +
+	"\x12highest_known_rule\x18\x03 \x01(\v2!.clustermetadata.HighestKnownRuleR\x10highestKnownRule*@\n" +
 	"\n" +
 	"PoolerType\x12\v\n" +
 	"\aUNKNOWN\x10\x00\x12\v\n" +
@@ -1964,12 +1953,11 @@ var file_clustermetadata_proto_depIdxs = []int32{
 	21, // 26: clustermetadata.ConsensusStatus.term_revocation:type_name -> clustermetadata.TermRevocation
 	19, // 27: clustermetadata.ConsensusStatus.current_position:type_name -> clustermetadata.NodePosition
 	20, // 28: clustermetadata.ConsensusStatus.highest_known_rule:type_name -> clustermetadata.HighestKnownRule
-	22, // 29: clustermetadata.ConsensusStatus.availability_status:type_name -> clustermetadata.AvailabilityStatus
-	30, // [30:30] is the sub-list for method output_type
-	30, // [30:30] is the sub-list for method input_type
-	30, // [30:30] is the sub-list for extension type_name
-	30, // [30:30] is the sub-list for extension extendee
-	0,  // [0:30] is the sub-list for field type_name
+	29, // [29:29] is the sub-list for method output_type
+	29, // [29:29] is the sub-list for method input_type
+	29, // [29:29] is the sub-list for extension type_name
+	29, // [29:29] is the sub-list for extension extendee
+	0,  // [0:29] is the sub-list for field type_name
 }
 
 func init() { file_clustermetadata_proto_init() }
