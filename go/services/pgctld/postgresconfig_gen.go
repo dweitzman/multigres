@@ -48,18 +48,14 @@ func ExpandToAbsolutePath(dir string) (string, error) {
 	return absPath, nil
 }
 
-// GeneratePostgresServerConfig generates a new PostgreSQL server configuration
-// and writes it to disk using the embedded template, then reads it back.
-// poolerId is used for the cluster name and path generation.
-// port is the port for the PostgreSQL server.
-// pgUser is the PostgreSQL user name for authentication.
-func GeneratePostgresServerConfig(poolerDir string, port int, pgUser string) (*PostgresServerConfig, error) {
-	// Create minimal config for template generation
+// BuildDefaultServerConfig creates a PostgresServerConfig populated with Multigres defaults
+// without writing anything to disk. Use this when you need the config values before the
+// data directory exists (e.g., to pass max_connections to initdb).
+func BuildDefaultServerConfig(poolerDir string, port int, pgUser string) (*PostgresServerConfig, error) {
 	if poolerDir == "" {
 		return nil, errors.New("--pooler-dir needs to be set to generate postgres server config")
 	}
 
-	// Expand relative path to absolute path for consistent path handling
 	absPoolerDir, err := ExpandToAbsolutePath(poolerDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to expand pooler directory path: %w", err)
@@ -74,11 +70,6 @@ func GeneratePostgresServerConfig(poolerDir string, port int, pgUser string) (*P
 	cnf.UnixSocketDirectories = PostgresSocketDir(absPoolerDir)
 	cnf.ClusterName = "default"
 	cnf.User = pgUser
-
-	// Ensure Unix socket directory exists
-	if err := os.MkdirAll(cnf.UnixSocketDirectories, 0o755); err != nil {
-		return nil, fmt.Errorf("failed to create Unix socket directory: %w", err)
-	}
 
 	// Set Multigres default values - starting with Pico instance defaults from Supabase
 	// Reference: https://github.com/supabase/supabase-admin-api/blob/3765a153ef6361cb19a1cbd485cdbf93e0a1820a/optimizations/postgres.go#L38
@@ -103,6 +94,25 @@ func GeneratePostgresServerConfig(poolerDir string, port int, pgUser string) (*P
 	cnf.EffectiveCacheSize = "192MB"
 	cnf.RandomPageCost = 1.1
 	cnf.DefaultStatisticsTarget = 100
+
+	return cnf, nil
+}
+
+// GeneratePostgresServerConfig generates a new PostgreSQL server configuration
+// and writes it to disk using the embedded template, then reads it back.
+// poolerId is used for the cluster name and path generation.
+// port is the port for the PostgreSQL server.
+// pgUser is the PostgreSQL user name for authentication.
+func GeneratePostgresServerConfig(poolerDir string, port int, pgUser string) (*PostgresServerConfig, error) {
+	cnf, err := BuildDefaultServerConfig(poolerDir, port, pgUser)
+	if err != nil {
+		return nil, err
+	}
+
+	// Ensure Unix socket directory exists
+	if err := os.MkdirAll(cnf.UnixSocketDirectories, 0o755); err != nil {
+		return nil, fmt.Errorf("failed to create Unix socket directory: %w", err)
+	}
 
 	// Generate config file from template
 	if err := cnf.generateConfigFile(); err != nil {

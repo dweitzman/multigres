@@ -436,6 +436,20 @@ message TermRevocation {
   google.protobuf.Timestamp coordinator_initiated_at = 3;
 }
 
+// AvailabilityStatus contains operational fitness signals for a node.
+// These inform coordinator decisions about cohort membership, primary preference,
+// and routing — separate from protocol position (ConsensusStatus).
+//
+// Signals here are best-effort: they are held in memory and may be absent after
+// a process restart. Coordinators must treat absence as "unknown," not "fit."
+// Applies to both primaries and standbys.
+message AvailabilityStatus {
+  // Non-zero when this node has voluntarily resigned its primary role at the given term.
+  // The coordinator should initiate a new election rather than waiting for timeout detection.
+  // Cleared when the node observes a newer rule with a different primary.
+  int64 resigned_primary_at_term = 1;
+}
+
 // ConsensusStatus is a node's complete view of its position in the distributed
 // system: its term revocation, what it has committed, and what it knows is coming.
 message ConsensusStatus {

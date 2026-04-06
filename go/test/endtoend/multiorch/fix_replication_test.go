@@ -206,10 +206,13 @@ func TestFixReplication(t *testing.T) {
 	t.Logf("Removing replica %s from primary's standby list...", replicaName)
 	removeReplicaFromStandbyList(t, primaryClient, replicaName)
 
-	// Verify replica was actually removed
+	// Verify replica was actually removed.
+	// pg_reload_conf() sends SIGHUP to postgres processes asynchronously, so we
+	// poll until the GUC value is updated rather than checking immediately.
 	t.Log("Verifying replica was removed from standby list...")
-	require.False(t, isReplicaInStandbyList(t, primaryClient, replicaName),
-		"replica should not be in standby list after removal")
+	require.Eventually(t, func() bool {
+		return !isReplicaInStandbyList(t, primaryClient, replicaName)
+	}, 5*time.Second, 100*time.Millisecond, "replica should not be in standby list after removal")
 
 	// Verify replication is still working (primary_conninfo should still be configured)
 	t.Log("Verifying replication is still working after standby list removal...")

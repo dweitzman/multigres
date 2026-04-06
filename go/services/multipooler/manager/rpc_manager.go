@@ -987,16 +987,26 @@ func (pm *MultiPoolerManager) emergencyDemoteLocked(ctx context.Context, consens
 		return nil, err
 	}
 
-	// Emergency demotion: stop PostgreSQL without restart
-	// In this emergency path, the SHUTDOWN_CHECKPOINT from this demoted primary may not
-	// propagate to other nodes (they could have already been recruited by multiorch to form
-	// a new cohort). This will result in timeline divergence. The expected flow is that this
-	// node will need to be rewired with pg_rewind before it can rejoin the cluster.
-	if err := pm.stopPostgresForEmergencyDemote(ctx, state); err != nil {
+	// Advertise resignation early as an availability signal so multiorch can start
+	// a new leader appointment without waiting for a heartbeat timeout. This is
+	// best-effort and set before stopping postgres — no harm in publishing early.
+	pm.setResignedPrimaryAtTerm(consensusTerm)
+
+	// Emergency demotion: fast restart as standby.
+	// This is preferred over stop + StartAsStandby because it atomically handles
+	// the transition and writes standby.signal before postgres comes back up.
+	// Note: In this emergency path, the SHUTDOWN_CHECKPOINT may not propagate to
+	// other nodes, which can result in timeline divergence requiring pg_rewind.
+	if err := pm.restartPostgresAsStandby(ctx, state); err != nil {
 		return nil, err
 	}
 
 	pm.healthStreamer.UpdatePrimaryObservation(nil)
+
+	consensusStatus, err := pm.getConsensusStatus(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	pm.logger.InfoContext(ctx, "Demote completed successfully",
 		"final_lsn", finalLSN,
@@ -1008,6 +1018,7 @@ func (pm *MultiPoolerManager) emergencyDemoteLocked(ctx context.Context, consens
 		ConsensusTerm:         consensusTerm,
 		LsnPosition:           finalLSN,
 		ConnectionsTerminated: connectionsTerminated,
+		ConsensusStatus:       consensusStatus,
 	}, nil
 }
 
@@ -1087,13 +1098,6 @@ func (pm *MultiPoolerManager) DemoteStalePrimary(
 			LsnPosition:     finalLSN,
 		}, nil
 	}
-
-	// Pause monitoring during this operation to prevent interference
-	resumeMonitor, err := pm.PausePostgresMonitor(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer resumeMonitor(ctx)
 
 	// Validate the term
 	if err := pm.validateTerm(ctx, consensusTerm, force); err != nil {
@@ -1406,13 +1410,6 @@ func (pm *MultiPoolerManager) RewindToSource(ctx context.Context, source *cluste
 		return nil, mterrors.Wrap(err, "failed to acquire action lock")
 	}
 	defer pm.actionLock.Release(ctx)
-
-	// Pause monitoring during this operation to prevent interference
-	resumeMonitor, err := pm.PausePostgresMonitor(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer resumeMonitor(ctx)
 
 	// Check if pgctld client is available
 	if pm.pgctldClient == nil {

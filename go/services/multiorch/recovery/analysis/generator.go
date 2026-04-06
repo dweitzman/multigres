@@ -192,6 +192,9 @@ func (g *AnalysisGenerator) generateAnalysisForPooler(
 	// Store consensus term for stale primary detection
 	if pooler.ConsensusStatus != nil {
 		analysis.ConsensusTerm = pooler.ConsensusStatus.CurrentTerm
+		if pooler.ConsensusStatus.AvailabilityStatus != nil {
+			analysis.ResignedPrimaryAtTerm = pooler.ConsensusStatus.AvailabilityStatus.ResignedPrimaryAtTerm
+		}
 	}
 
 	// Store primary term (term when this pooler was promoted to primary)

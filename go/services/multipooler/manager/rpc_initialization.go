@@ -55,13 +55,6 @@ func (pm *MultiPoolerManager) InitializeEmptyPrimary(ctx context.Context, req *m
 	}
 	defer pm.actionLock.Release(ctx)
 
-	// Pause monitoring during initialization to prevent interference
-	resumeMonitor, err := pm.PausePostgresMonitor(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer resumeMonitor(ctx)
-
 	// Validate consensus term must be 1 for new primary
 	if req.ConsensusTerm != 1 {
 		return nil, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT, "consensus term must be 1 for new primary initialization, got %d", req.ConsensusTerm)
@@ -111,8 +104,7 @@ func (pm *MultiPoolerManager) InitializeEmptyPrimary(ctx context.Context, req *m
 			return nil, mterrors.New(mtrpcpb.Code_UNAVAILABLE, "pgctld client not available")
 		}
 
-		startReq := &pgctldpb.StartRequest{}
-		if _, err := pm.pgctldClient.Start(ctx, startReq); err != nil {
+		if _, err := pm.pgctldClient.StartAsStandby(ctx, &pgctldpb.StartAsStandbyRequest{}); err != nil {
 			return nil, mterrors.Wrap(err, "failed to start PostgreSQL")
 		}
 	}
@@ -120,6 +112,17 @@ func (pm *MultiPoolerManager) InitializeEmptyPrimary(ctx context.Context, req *m
 	// Wait for database connection
 	if err := pm.waitForDatabaseConnection(ctx); err != nil {
 		return nil, mterrors.Wrap(err, "failed to connect to database")
+	}
+
+	// Promote from standby to primary so DDL is allowed.
+	// StartAsStandby writes standby.signal, so postgres starts in recovery mode.
+	// pg_promote() transitions it to a writable primary before we run schema DDL.
+	pm.logger.InfoContext(ctx, "Promoting PostgreSQL from standby to primary for bootstrap", "shard", pm.getShardID())
+	if err := pm.exec(ctx, "SELECT pg_promote()"); err != nil {
+		return nil, mterrors.Wrap(err, "failed to promote postgres to primary")
+	}
+	if err := pm.waitForPromotionComplete(ctx); err != nil {
+		return nil, mterrors.Wrap(err, "failed to wait for postgres promotion")
 	}
 
 	// Create multigres schema and tables (heartbeat, durability_policy, tablegroup, table, shard)

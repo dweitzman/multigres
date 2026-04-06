@@ -436,18 +436,47 @@ func (pm *MultiPoolerManager) ConsensusStatus(ctx context.Context, req *consensu
 		pm.logger.WarnContext(ctx, "Failed to build consensus status", "error", statusErr)
 	}
 
+	pm.mu.Lock()
+	resignedTerm := pm.resignedPrimaryAtTerm
+	pm.mu.Unlock()
+
+	var availabilityStatus *clustermetadatapb.AvailabilityStatus
+	if resignedTerm != 0 {
+		availabilityStatus = &clustermetadatapb.AvailabilityStatus{
+			ResignedPrimaryAtTerm: resignedTerm,
+		}
+	}
+
 	return &consensusdatapb.StatusResponse{
-		PoolerId:        pm.serviceID.GetName(),
-		CurrentTerm:     localCurrentTerm,
-		WalPosition:     walPosition,
-		IsHealthy:       isHealthy,
-		IsEligible:      true, // TODO: implement eligibility logic based on policy
-		Cell:            pm.serviceID.GetCell(),
-		Role:            role,
-		TimelineInfo:    timelineInfo,
-		PrimaryTerm:     localPrimaryTerm,
-		ConsensusStatus: consensusStatus,
+		PoolerId:           pm.serviceID.GetName(),
+		CurrentTerm:        localCurrentTerm,
+		WalPosition:        walPosition,
+		IsHealthy:          isHealthy,
+		IsEligible:         true, // TODO: implement eligibility logic based on policy
+		Cell:               pm.serviceID.GetCell(),
+		Role:               role,
+		TimelineInfo:       timelineInfo,
+		PrimaryTerm:        localPrimaryTerm,
+		ConsensusStatus:    consensusStatus,
+		AvailabilityStatus: availabilityStatus,
 	}, nil
+}
+
+// setResignedPrimaryAtTerm records that this node has voluntarily resigned its primary
+// role at the given term. Callers: EmergencyDemote, monitor self-demotion.
+func (pm *MultiPoolerManager) setResignedPrimaryAtTerm(term int64) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	pm.resignedPrimaryAtTerm = term
+}
+
+// clearResignedPrimaryAtTerm clears the voluntary resignation signal.
+// Called when a newer rule with a different primary is observed (e.g. Rejoin).
+// TODO: wire this into the Rejoin RPC (PR 4).
+func (pm *MultiPoolerManager) clearResignedPrimaryAtTerm() { //nolint:unused
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	pm.resignedPrimaryAtTerm = 0
 }
 
 // GetLeadershipView returns leadership information from the heartbeat table

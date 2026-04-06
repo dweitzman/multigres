@@ -154,6 +154,12 @@ type MultiPoolerManager struct {
 	// healthStreamer streams health state to subscribers.
 	// Owns all health-related state and provides typed update methods.
 	healthStreamer *healthStreamer
+
+	// resignedPrimaryAtTerm is non-zero when this node has voluntarily resigned its
+	// primary role at the given term. Best-effort: lost on process restart.
+	// Protected by mu. Set by the monitor and EmergencyDemote; cleared when a newer
+	// rule with a different primary is observed.
+	resignedPrimaryAtTerm int64
 }
 
 // promotionState tracks which parts of the promotion are complete
@@ -1032,30 +1038,6 @@ func (pm *MultiPoolerManager) setNotServing(ctx context.Context, state *demotion
 	return nil
 }
 
-// stopPostgresForEmergencyDemote stops PostgreSQL during emergency demotion without restarting.
-// This is used when a primary needs to step down immediately during consensus term changes.
-// The node will be left in a stopped state and will require pg_rewind to rejoin the cluster.
-func (pm *MultiPoolerManager) stopPostgresForEmergencyDemote(ctx context.Context, state *demotionState) error {
-	if state.isReadOnly {
-		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, "unexpected state: PostgreSQL already in standby mode during emergency demotion")
-	}
-
-	if pm.pgctldClient == nil {
-		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, "pgctld client not initialized")
-	}
-
-	stopReq := &pgctldpb.StopRequest{
-		Mode: "fast",
-	}
-	if _, err := pm.pgctldClient.Stop(ctx, stopReq); err != nil {
-		return mterrors.Wrap(err, "failed to stop PostgreSQL during emergency demotion")
-	}
-
-	pm.logger.InfoContext(ctx, "PostgreSQL stopped for emergency demotion")
-
-	return nil
-}
-
 // restartPostgresAsStandby restarts PostgreSQL as a standby server
 // This creates standby.signal and restarts PostgreSQL via pgctld
 func (pm *MultiPoolerManager) restartPostgresAsStandby(ctx context.Context, state *demotionState) error {
@@ -1703,15 +1685,17 @@ func (pm *MultiPoolerManager) hasCompleteBackups(ctx context.Context) bool {
 	return false
 }
 
-// startPostgres starts PostgreSQL via pgctld
+// startPostgres starts PostgreSQL as a standby via pgctld.
+// Crash recovery is not permitted — it requires consensus awareness and must be
+// explicitly requested. If crash recovery is needed, an error is returned and
+// MonitorPostgres will log it and retry next cycle.
 func (pm *MultiPoolerManager) startPostgres(ctx context.Context) error {
-	pm.logger.InfoContext(ctx, "MonitorPostgres: Attempting to restart PostgreSQL")
+	pm.logger.InfoContext(ctx, "MonitorPostgres: Attempting to start PostgreSQL as standby")
 	if pm.pgctldClient == nil {
 		return errors.New("pgctld client not available")
 	}
 
-	_, err := pm.pgctldClient.Start(ctx, &pgctldpb.StartRequest{})
-	if err != nil {
+	if _, err := pm.pgctldClient.StartAsStandby(ctx, &pgctldpb.StartAsStandbyRequest{}); err != nil {
 		return fmt.Errorf("MonitorPostgres: failed to start PostgreSQL: %w", err)
 	}
 

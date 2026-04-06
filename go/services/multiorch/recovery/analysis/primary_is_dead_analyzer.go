@@ -48,9 +48,24 @@ func (a *PrimaryIsDeadAnalyzer) Analyze(poolerAnalysis *store.ReplicationAnalysi
 		return nil, errors.New("recovery action factory not initialized")
 	}
 
-	// Only analyze replicas (primaries can't report themselves as dead)
+	// A primary can signal its own resignation via EmergencyDemote.
+	// Treat this as equivalent to a dead primary so a new election starts immediately,
+	// rather than waiting for a heartbeat timeout.
 	if poolerAnalysis.IsPrimary {
-		return nil, nil
+		if poolerAnalysis.ResignedPrimaryAtTerm == 0 {
+			return nil, nil
+		}
+		return &types.Problem{
+			Code:           types.ProblemPrimaryIsDead,
+			CheckName:      "PrimaryIsDead",
+			PoolerID:       poolerAnalysis.PoolerID,
+			ShardKey:       poolerAnalysis.ShardKey,
+			Description:    fmt.Sprintf("Primary for shard %s voluntarily resigned at term %d", poolerAnalysis.ShardKey, poolerAnalysis.ResignedPrimaryAtTerm),
+			Priority:       types.PriorityEmergency,
+			Scope:          types.ScopeShard,
+			DetectedAt:     time.Now(),
+			RecoveryAction: a.factory.NewAppointLeaderAction(),
+		}, nil
 	}
 
 	// Skip if replica is not initialized (ShardNeedsBootstrap handles that)

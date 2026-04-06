@@ -81,6 +81,10 @@ type ReplicationAnalysis struct {
 	HighestTermPrimary    *PrimaryInfo   // Primary with highest PrimaryTerm (rewind source)
 	ConsensusTerm         int64          // This node's consensus term (from health check)
 
+	// ResignedPrimaryAtTerm is non-zero when the primary has voluntarily resigned its role
+	// at the given term (via EmergencyDemote). Populated for PRIMARY nodes only.
+	ResignedPrimaryAtTerm int64
+
 	// Primary health details (for distinguishing pooler-down vs postgres-down)
 	PrimaryPoolerReachable bool // True if primary pooler health check succeeded (IsLastCheckValid)
 	PrimaryPostgresRunning bool // True if primary Postgres is running (IsPostgresRunning from health check)

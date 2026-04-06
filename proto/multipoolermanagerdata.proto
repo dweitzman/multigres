@@ -357,6 +357,10 @@ message EmergencyDemoteResponse {
 
   // Number of connections that were terminated
   int32 connections_terminated = 4;
+
+  // The node's consensus status after demotion, reflecting availability signals
+  // including resigned_primary_at_term. May be nil if postgres is unreachable.
+  clustermetadata.ConsensusStatus consensus_status = 5;
 }
 
 // DemoteStalePrimary demotes a stale primary that came back online after failover.

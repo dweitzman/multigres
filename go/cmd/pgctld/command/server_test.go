@@ -87,19 +87,19 @@ func TestIntToInt32(t *testing.T) {
 	}
 }
 
-func TestPgCtldServiceStart(t *testing.T) {
+func TestPgCtldServiceStartAsStandby(t *testing.T) {
 	tests := []struct {
 		name          string
-		request       *pb.StartRequest
+		request       *pb.StartAsStandbyRequest
 		setupDataDir  func(string) string
 		setupBinaries bool
 		expectError   bool
 		errorContains string
-		checkResponse func(*testing.T, *pb.StartResponse)
+		checkResponse func(*testing.T, *pb.StartAsStandbyResponse)
 	}{
 		{
 			name: "start with uninitialized data dir should fail",
-			request: &pb.StartRequest{
+			request: &pb.StartAsStandbyRequest{
 				Port:      5432,
 				ExtraArgs: []string{},
 			},
@@ -112,7 +112,7 @@ func TestPgCtldServiceStart(t *testing.T) {
 		},
 		{
 			name: "start already running server",
-			request: &pb.StartRequest{
+			request: &pb.StartAsStandbyRequest{
 				Port: 5432,
 			},
 			setupDataDir: func(baseDir string) string {
@@ -122,8 +122,8 @@ func TestPgCtldServiceStart(t *testing.T) {
 			},
 			setupBinaries: true,
 			expectError:   false,
-			checkResponse: func(t *testing.T, resp *pb.StartResponse) {
-				assert.Contains(t, resp.Message, "already running")
+			checkResponse: func(t *testing.T, resp *pb.StartAsStandbyResponse) {
+				assert.Equal(t, pb.StartAsStandbyResult_START_AS_STANDBY_RESULT_ALREADY_RUNNING, resp.GetResult())
 			},
 		},
 	}
@@ -149,7 +149,7 @@ func TestPgCtldServiceStart(t *testing.T) {
 			service, err := NewPgCtldService(testLogger(), testServiceConfig, 30, poolerDir, "localhost", 0, "")
 			require.NoError(t, err)
 
-			resp, err := service.Start(context.Background(), tt.request)
+			resp, err := service.StartAsStandby(context.Background(), tt.request)
 
 			if tt.expectError {
 				fmt.Println(resp)
