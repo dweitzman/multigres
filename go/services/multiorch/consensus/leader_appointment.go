@@ -17,11 +17,13 @@ package consensus
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/jackc/pglogrepl"
 
+	localconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/timeouts"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -98,31 +100,23 @@ func (c *Coordinator) BeginTerm(ctx context.Context, shardID string, cohort []*m
 	return candidate, standbys, proposedTerm, nil
 }
 
-// discoverMaxTerm finds the maximum consensus term from cached health state.
-// This uses the ConsensusTerm data already populated by health checks, avoiding extra RPCs.
-func (c *Coordinator) discoverMaxTerm(cohort []*multiorchdatapb.PoolerHealthState) (int64, error) {
-	var maxTerm int64
+// discoverMaxRule finds the highest committed rule number across the cohort's cached health state.
+// The coordinator_term from the returned rule is used to compute the next proposed term.
+// Uses ConsensusStatus.CurrentPosition populated by health checks, avoiding extra RPCs.
+func (c *Coordinator) discoverMaxRule(cohort []*multiorchdatapb.PoolerHealthState) (*clustermetadatapb.RuleNumber, error) {
+	maxPooler := slices.MaxFunc(cohort, func(a, b *multiorchdatapb.PoolerHealthState) int {
+		ruleA := a.ConsensusStatus.GetConsensusStatus().GetCurrentPosition().GetRule().GetRuleNumber()
+		ruleB := b.ConsensusStatus.GetConsensusStatus().GetCurrentPosition().GetRule().GetRuleNumber()
+		return localconsensus.CompareRuleNumbers(ruleA, ruleB)
+	})
 
-	for _, pooler := range cohort {
-		// Invariant: poolers in the cohort with successful health checks must have ConsensusTerm populated
-		if pooler.IsLastCheckValid && pooler.ConsensusTerm == nil {
-			return 0, mterrors.Errorf(mtrpcpb.Code_INTERNAL,
-				"healthy pooler %s in cohort missing consensus term data - health check invariant violated",
-				pooler.MultiPooler.Id.Name)
-		}
-
-		if pooler.ConsensusTerm != nil && pooler.ConsensusTerm.TermNumber > maxTerm {
-			maxTerm = pooler.ConsensusTerm.TermNumber
-		}
+	ruleNum := maxPooler.ConsensusStatus.GetConsensusStatus().GetCurrentPosition().GetRule().GetRuleNumber()
+	if ruleNum == nil || ruleNum.CoordinatorTerm == 0 {
+		return nil, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
+			"no poolers in cohort have committed any rules — cannot discover max rule for term proposal")
 	}
 
-	// Invariant: at least one pooler in the cohort must have a term > 0
-	if maxTerm == 0 {
-		return 0, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
-			"no poolers in cohort have initialized consensus term - cannot discover max term")
-	}
-
-	return maxTerm, nil
+	return ruleNum, nil
 }
 
 // walPositionLSN extracts and parses the most relevant LSN from a WALPosition.

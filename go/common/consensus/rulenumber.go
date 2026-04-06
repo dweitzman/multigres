@@ -16,8 +16,19 @@
 package consensus
 
 import (
+	"fmt"
+
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 )
+
+// FormatRuleNumber formats a RuleNumber as "Rule[term.subterm]" for use in log messages
+// and descriptions. Returns "Rule[unknown]" for a nil rule.
+func FormatRuleNumber(rn *clustermetadatapb.RuleNumber) string {
+	if rn == nil {
+		return "Rule[unknown]"
+	}
+	return fmt.Sprintf("Rule[%d.%d]", rn.GetCoordinatorTerm(), rn.GetRuleSubterm())
+}
 
 // CompareRuleNumbers compares two RuleNumbers lexicographically.
 // Returns -1 if a < b, 0 if a == b, 1 if a > b.

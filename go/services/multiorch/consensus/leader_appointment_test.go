@@ -94,11 +94,24 @@ func createMockNode(fakeClient *rpcclient.FakeClient, name string, term int64, w
 
 	fakeClient.SetPrimaryConnInfoResponses[poolerKey] = &multipoolermanagerdatapb.SetPrimaryConnInfoResponse{}
 
-	// Build ConsensusTerm if term > 0
+	// Build ConsensusTerm (used by pre-vote backoff check) and ConsensusStatus
+	// (used by discoverMaxRule) if term > 0.
 	var consensusTerm *multipoolermanagerdatapb.ConsensusTerm
+	var consensusStatus *consensusdatapb.StatusResponse
 	if term > 0 {
 		consensusTerm = &multipoolermanagerdatapb.ConsensusTerm{
 			TermNumber: term,
+		}
+		consensusStatus = &consensusdatapb.StatusResponse{
+			ConsensusStatus: &clustermetadatapb.ConsensusStatus{
+				CurrentPosition: &clustermetadatapb.NodePosition{
+					Rule: &clustermetadatapb.ShardRule{
+						RuleNumber: &clustermetadatapb.RuleNumber{
+							CoordinatorTerm: term,
+						},
+					},
+				},
+			},
 		}
 	}
 
@@ -107,10 +120,11 @@ func createMockNode(fakeClient *rpcclient.FakeClient, name string, term int64, w
 		IsLastCheckValid: healthy,
 		IsInitialized:    term > 0,
 		ConsensusTerm:    consensusTerm,
+		ConsensusStatus:  consensusStatus,
 	}
 }
 
-func TestDiscoverMaxTerm(t *testing.T) {
+func TestDiscoverMaxRule(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	coordID := &clustermetadatapb.ID{
 		Component: clustermetadatapb.ID_MULTIORCH,
@@ -118,7 +132,7 @@ func TestDiscoverMaxTerm(t *testing.T) {
 		Name:      "test-coordinator",
 	}
 
-	t.Run("success - finds max term from cohort", func(t *testing.T) {
+	t.Run("success - finds max rule from cohort", func(t *testing.T) {
 		fakeClient := rpcclient.NewFakeClient()
 		c := &Coordinator{
 			coordinatorID: coordID,
@@ -131,12 +145,12 @@ func TestDiscoverMaxTerm(t *testing.T) {
 			createMockNode(fakeClient, "mp3", 7, "0/1000000", true, "standby"),
 		}
 
-		maxTerm, err := c.discoverMaxTerm(cohort)
+		maxRule, err := c.discoverMaxRule(cohort)
 		require.NoError(t, err)
-		require.Equal(t, int64(7), maxTerm)
+		require.Equal(t, int64(7), maxRule.CoordinatorTerm)
 	})
 
-	t.Run("error - returns error when all nodes have term 0", func(t *testing.T) {
+	t.Run("error - returns error when all nodes have no committed rules", func(t *testing.T) {
 		fakeClient := rpcclient.NewFakeClient()
 		c := &Coordinator{
 			coordinatorID: coordID,
@@ -148,9 +162,9 @@ func TestDiscoverMaxTerm(t *testing.T) {
 			createMockNode(fakeClient, "mp2", 0, "0/1000000", false /* unhealthy */, "standby"),
 		}
 
-		_, err := c.discoverMaxTerm(cohort)
+		_, err := c.discoverMaxRule(cohort)
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "no poolers in cohort have initialized consensus term")
+		require.Contains(t, err.Error(), "no poolers in cohort have committed any rules")
 	})
 
 	t.Run("success - ignores failed nodes", func(t *testing.T) {
@@ -179,9 +193,9 @@ func TestDiscoverMaxTerm(t *testing.T) {
 			createMockNode(fakeClient, "mp3", 3, "0/1000000", true, "standby"),
 		}
 
-		maxTerm, err := c.discoverMaxTerm(cohort)
+		maxRule, err := c.discoverMaxRule(cohort)
 		require.NoError(t, err)
-		require.Equal(t, int64(5), maxTerm)
+		require.Equal(t, int64(5), maxRule.CoordinatorTerm)
 	})
 }
 

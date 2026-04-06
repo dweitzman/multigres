@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"time"
 
+	consensuspkg "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/eventlog"
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/rpcclient"
@@ -170,13 +171,15 @@ func (a *DemoteStalePrimaryAction) Execute(ctx context.Context, problem types.Pr
 	return nil
 }
 
-// findCorrectPrimary finds the correct primary in the shard and returns it along with its term.
-// The correct primary is the one with the highest PrimaryTerm.
+// findCorrectPrimary finds the most advanced primary in the shard and returns it along with its term.
+// The correct primary is the one with the highest committed rule number.
 func (a *DemoteStalePrimaryAction) findCorrectPrimary(shardKey commontypes.ShardKey, stalePrimaryIDStr string) (*multiorchdatapb.PoolerHealthState, int64, error) {
-	var correctPrimary *multiorchdatapb.PoolerHealthState
-	var maxPrimaryTerm int64
+	type candidate struct {
+		pooler   *multiorchdatapb.PoolerHealthState
+		position *clustermetadatapb.NodePosition
+	}
+	var candidates []candidate
 
-	// Iterate through all poolers to find the correct primary
 	a.poolerStore.Range(func(key string, pooler *multiorchdatapb.PoolerHealthState) bool {
 		if pooler == nil || pooler.MultiPooler == nil || pooler.MultiPooler.Id == nil {
 			return true // continue
@@ -189,10 +192,8 @@ func (a *DemoteStalePrimaryAction) findCorrectPrimary(shardKey commontypes.Shard
 			return true // continue
 		}
 
-		poolerIDStr := topoclient.MultiPoolerIDString(pooler.MultiPooler.Id)
-
 		// Skip the stale primary
-		if poolerIDStr == stalePrimaryIDStr {
+		if topoclient.MultiPoolerIDString(pooler.MultiPooler.Id) == stalePrimaryIDStr {
 			return true // continue
 		}
 
@@ -203,26 +204,31 @@ func (a *DemoteStalePrimaryAction) findCorrectPrimary(shardKey commontypes.Shard
 		}
 
 		if poolerType == clustermetadatapb.PoolerType_PRIMARY {
-			// Get its PrimaryTerm (not consensus term)
-			var primaryTerm int64
-			if pooler.ConsensusTerm != nil {
-				primaryTerm = pooler.ConsensusTerm.PrimaryTerm
-			}
-
-			if primaryTerm > maxPrimaryTerm {
-				maxPrimaryTerm = primaryTerm
-				correctPrimary = pooler
-			}
+			candidates = append(candidates, candidate{
+				pooler:   pooler,
+				position: pooler.ConsensusStatus.GetConsensusStatus().GetCurrentPosition(),
+			})
 		}
 
 		return true // continue
 	})
 
-	if correctPrimary == nil {
+	if len(candidates) == 0 {
 		return nil, 0, fmt.Errorf("no correct primary found in shard %s", shardKey.String())
 	}
 
-	// Return consensus term for the RPC parameter
+	positions := make([]*clustermetadatapb.NodePosition, len(candidates))
+	for i, c := range candidates {
+		positions[i] = c.position
+	}
+	idx := consensuspkg.MostAdvancedIndex(positions)
+	if idx == -1 {
+		return nil, 0, fmt.Errorf("cannot determine most advanced primary in shard %s (tie or no valid positions)", shardKey.String())
+	}
+
+	correctPrimary := candidates[idx].pooler
+
+	// Return current term for the RPC parameter
 	consensusTerm := int64(0)
 	if correctPrimary.ConsensusStatus != nil {
 		consensusTerm = correctPrimary.ConsensusStatus.CurrentTerm

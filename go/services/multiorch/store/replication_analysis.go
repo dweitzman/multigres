@@ -24,9 +24,8 @@ import (
 // PrimaryInfo represents information about a primary pooler in the shard.
 // Used for stale primary detection to identify which primary is most advanced.
 type PrimaryInfo struct {
-	ID            *clustermetadatapb.ID // Pooler ID
-	ConsensusTerm int64                 // Current consensus term (for logging/context)
-	PrimaryTerm   int64                 // Term when this node was promoted to primary
+	ID       *clustermetadatapb.ID           // Pooler ID
+	Position *clustermetadatapb.NodePosition // Committed WAL position at detection time
 }
 
 // ReplicationAnalysis represents the analyzed state of a single pooler
@@ -76,10 +75,9 @@ type ReplicationAnalysis struct {
 	IsInPrimaryStandbyList bool // Whether this replica is in the primary's synchronous_standby_names
 
 	// Stale primary detection: populated for PRIMARY nodes only
-	PrimaryTerm           int64          // This pooler's primary term (term when promoted)
-	OtherPrimariesInShard []*PrimaryInfo // All other primaries detected in the shard
-	HighestTermPrimary    *PrimaryInfo   // Primary with highest PrimaryTerm (rewind source)
-	ConsensusTerm         int64          // This node's consensus term (from health check)
+	PrimaryPosition       *clustermetadatapb.NodePosition // This pooler's committed WAL position
+	OtherPrimariesInShard []*PrimaryInfo                  // All other primaries detected in the shard
+	HighestTermPrimary    *PrimaryInfo                    // Primary with highest committed rule (rewind source)
 
 	// Primary health details (for distinguishing pooler-down vs postgres-down)
 	PrimaryPoolerReachable bool  // True if primary pooler health check succeeded (IsLastCheckValid)

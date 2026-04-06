@@ -1184,10 +1184,10 @@ func TestPopulatePrimaryInfo_IsInPrimaryStandbyList(t *testing.T) {
 	})
 }
 
-// TestPopulatePrimaryInfo_PicksHighestPrimaryTerm verifies that when two primaries transiently
+// TestPopulatePrimaryInfo_PicksHighestCommittedRule verifies that when two primaries transiently
 // coexist (e.g. during failover), the replica's analysis references the one with the higher
-// PrimaryTerm — not an arbitrary one from non-deterministic map iteration.
-func TestPopulatePrimaryInfo_PicksHighestPrimaryTerm(t *testing.T) {
+// committed rule number — not an arbitrary one from non-deterministic map iteration.
+func TestPopulatePrimaryInfo_PicksHighestCommittedRule(t *testing.T) {
 	ps := store.NewPoolerStore(nil, slog.Default())
 
 	newPrimaryID := &clustermetadatapb.ID{
@@ -1213,26 +1213,32 @@ func TestPopulatePrimaryInfo_PicksHighestPrimaryTerm(t *testing.T) {
 		}
 	}
 
-	// New (correct) primary: higher PrimaryTerm, postgres running.
+	// New (correct) primary: higher committed rule (term 6), postgres running.
 	ps.Set("multipooler-cell1-new-primary", &multiorchdatapb.PoolerHealthState{
 		MultiPooler:       shardConfig(newPrimaryID),
 		PoolerType:        clustermetadatapb.PoolerType_PRIMARY,
 		IsLastCheckValid:  true,
 		IsPostgresRunning: true,
 		LastSeen:          timestamppb.Now(),
-		ConsensusTerm:     &multipoolermanagerdatapb.ConsensusTerm{TermNumber: 11, PrimaryTerm: 6},
-		ConsensusStatus:   &consensusdatapb.StatusResponse{CurrentTerm: 11},
+		ConsensusStatus: &consensusdatapb.StatusResponse{
+			ConsensusStatus: &clustermetadatapb.ConsensusStatus{
+				CurrentPosition: testNodePos(6, 0),
+			},
+		},
 	})
 
-	// Stale primary: lower PrimaryTerm, postgres NOT running (just came back after being killed).
+	// Stale primary: lower committed rule (term 5), postgres NOT running (just came back after being killed).
 	ps.Set("multipooler-cell1-stale-primary", &multiorchdatapb.PoolerHealthState{
 		MultiPooler:       shardConfig(stalePrimaryID),
 		PoolerType:        clustermetadatapb.PoolerType_PRIMARY,
 		IsLastCheckValid:  true,
 		IsPostgresRunning: false,
 		LastSeen:          timestamppb.Now(),
-		ConsensusTerm:     &multipoolermanagerdatapb.ConsensusTerm{TermNumber: 10, PrimaryTerm: 5},
-		ConsensusStatus:   &consensusdatapb.StatusResponse{CurrentTerm: 10},
+		ConsensusStatus: &consensusdatapb.StatusResponse{
+			ConsensusStatus: &clustermetadatapb.ConsensusStatus{
+				CurrentPosition: testNodePos(5, 0),
+			},
+		},
 	})
 
 	// Replica.
@@ -1255,19 +1261,23 @@ func TestPopulatePrimaryInfo_PicksHighestPrimaryTerm(t *testing.T) {
 	// and PrimaryIsDeadAnalyzer would falsely trigger a new election.
 	require.NotNil(t, analysis.PrimaryPoolerID)
 	assert.Equal(t, "new-primary", analysis.PrimaryPoolerID.Name,
-		"should pick primary with highest PrimaryTerm")
+		"should pick primary with highest committed rule number")
 	assert.True(t, analysis.PrimaryReachable,
 		"primary must appear reachable when new primary has postgres running")
 }
 
 func TestDetectOtherPrimary(t *testing.T) {
-	// Test the multiple primaries detection logic
+	// ruleCoordTerm extracts the rule coordinator term from a PrimaryInfo's committed position.
+	ruleCoordTerm := func(p *store.PrimaryInfo) int64 {
+		return p.Position.GetRule().GetRuleNumber().GetCoordinatorTerm()
+	}
+
 	t.Run("single other primary detected", func(t *testing.T) {
-		store := setupMultiplePrimariesStore(t, []primaryConfig{
-			{id: "primary-1", primaryTerm: 5, consensusTerm: 10},
-			{id: "primary-2", primaryTerm: 6, consensusTerm: 11},
+		s := setupMultiplePrimariesStore([]primaryConfig{
+			{id: "primary-1", ruleCoordTerm: 5},
+			{id: "primary-2", ruleCoordTerm: 6},
 		})
-		generator := NewAnalysisGenerator(store)
+		generator := NewAnalysisGenerator(s)
 
 		analysis, err := generator.GenerateAnalysisForPooler("multipooler-cell1-primary-1")
 		require.NoError(t, err)
@@ -1275,22 +1285,21 @@ func TestDetectOtherPrimary(t *testing.T) {
 		// Should detect one other primary
 		require.Len(t, analysis.OtherPrimariesInShard, 1)
 		assert.Equal(t, "primary-2", analysis.OtherPrimariesInShard[0].ID.Name)
-		assert.Equal(t, int64(6), analysis.OtherPrimariesInShard[0].PrimaryTerm)
-		assert.Equal(t, int64(11), analysis.OtherPrimariesInShard[0].ConsensusTerm)
+		assert.Equal(t, int64(6), ruleCoordTerm(analysis.OtherPrimariesInShard[0]))
 
-		// primary-2 has higher PrimaryTerm, so it's the most advanced
+		// primary-2 has higher committed rule, so it's the most advanced
 		require.NotNil(t, analysis.HighestTermPrimary)
 		assert.Equal(t, "primary-2", analysis.HighestTermPrimary.ID.Name)
-		assert.Equal(t, int64(6), analysis.HighestTermPrimary.PrimaryTerm)
+		assert.Equal(t, int64(6), ruleCoordTerm(analysis.HighestTermPrimary))
 	})
 
 	t.Run("multiple other primaries detected", func(t *testing.T) {
-		store := setupMultiplePrimariesStore(t, []primaryConfig{
-			{id: "primary-1", primaryTerm: 5, consensusTerm: 11},
-			{id: "primary-2", primaryTerm: 4, consensusTerm: 10},
-			{id: "primary-3", primaryTerm: 6, consensusTerm: 9},
+		s := setupMultiplePrimariesStore([]primaryConfig{
+			{id: "primary-1", ruleCoordTerm: 5},
+			{id: "primary-2", ruleCoordTerm: 4},
+			{id: "primary-3", ruleCoordTerm: 6},
 		})
-		generator := NewAnalysisGenerator(store)
+		generator := NewAnalysisGenerator(s)
 
 		analysis, err := generator.GenerateAnalysisForPooler("multipooler-cell1-primary-1")
 		require.NoError(t, err)
@@ -1306,20 +1315,19 @@ func TestDetectOtherPrimary(t *testing.T) {
 		assert.Contains(t, otherNames, "primary-2")
 		assert.Contains(t, otherNames, "primary-3")
 
-		// primary-3 has highest PrimaryTerm (6), even though primary-1 has highest ConsensusTerm (11).
-		// This verifies we're comparing on PrimaryTerm, not ConsensusTerm.
+		// primary-3 has the highest committed rule (term 6), so it's the most advanced
 		require.NotNil(t, analysis.HighestTermPrimary)
 		assert.Equal(t, "primary-3", analysis.HighestTermPrimary.ID.Name)
-		assert.Equal(t, int64(6), analysis.HighestTermPrimary.PrimaryTerm)
+		assert.Equal(t, int64(6), ruleCoordTerm(analysis.HighestTermPrimary))
 	})
 
 	t.Run("this primary is most advanced", func(t *testing.T) {
-		store := setupMultiplePrimariesStore(t, []primaryConfig{
-			{id: "primary-1", primaryTerm: 7, consensusTerm: 12},
-			{id: "primary-2", primaryTerm: 5, consensusTerm: 10},
-			{id: "primary-3", primaryTerm: 6, consensusTerm: 11},
+		s := setupMultiplePrimariesStore([]primaryConfig{
+			{id: "primary-1", ruleCoordTerm: 7},
+			{id: "primary-2", ruleCoordTerm: 5},
+			{id: "primary-3", ruleCoordTerm: 6},
 		})
-		generator := NewAnalysisGenerator(store)
+		generator := NewAnalysisGenerator(s)
 
 		analysis, err := generator.GenerateAnalysisForPooler("multipooler-cell1-primary-1")
 		require.NoError(t, err)
@@ -1327,18 +1335,18 @@ func TestDetectOtherPrimary(t *testing.T) {
 		// Should detect two other primaries
 		require.Len(t, analysis.OtherPrimariesInShard, 2)
 
-		// This primary has highest PrimaryTerm (7), so it's the most advanced
+		// primary-1 has highest committed rule (term 7), so it's the most advanced
 		require.NotNil(t, analysis.HighestTermPrimary)
 		assert.Equal(t, "primary-1", analysis.HighestTermPrimary.ID.Name)
-		assert.Equal(t, int64(7), analysis.HighestTermPrimary.PrimaryTerm)
+		assert.Equal(t, int64(7), ruleCoordTerm(analysis.HighestTermPrimary))
 	})
 
-	t.Run("tie in primary_term returns nil", func(t *testing.T) {
-		store := setupMultiplePrimariesStore(t, []primaryConfig{
-			{id: "primary-1", primaryTerm: 5, consensusTerm: 10},
-			{id: "primary-2", primaryTerm: 5, consensusTerm: 11}, // Same PrimaryTerm
+	t.Run("tie in committed rule returns nil", func(t *testing.T) {
+		s := setupMultiplePrimariesStore([]primaryConfig{
+			{id: "primary-1", ruleCoordTerm: 5},
+			{id: "primary-2", ruleCoordTerm: 5}, // Same committed rule
 		})
-		generator := NewAnalysisGenerator(store)
+		generator := NewAnalysisGenerator(s)
 
 		analysis, err := generator.GenerateAnalysisForPooler("multipooler-cell1-primary-1")
 		require.NoError(t, err)
@@ -1347,18 +1355,17 @@ func TestDetectOtherPrimary(t *testing.T) {
 		require.Len(t, analysis.OtherPrimariesInShard, 1)
 
 		// Tie detected, so HighestTermPrimary should be nil
-		assert.Nil(t, analysis.HighestTermPrimary, "tie in PrimaryTerm should result in nil HighestTermPrimary")
+		assert.Nil(t, analysis.HighestTermPrimary, "tie in committed rule should result in nil HighestTermPrimary")
 	})
 
-	t.Run("all primary_terms zero returns nil (defensive - invalid state)", func(t *testing.T) {
+	t.Run("all committed rules zero returns nil (defensive - invalid state)", func(t *testing.T) {
 		// Note: This tests defensive behavior. In a properly initialized shard,
-		// PRIMARY poolers should never have PrimaryTerm=0. PrimaryTerm is set during
-		// promotion and only cleared during demotion.
-		store := setupMultiplePrimariesStore(t, []primaryConfig{
-			{id: "primary-1", primaryTerm: 0, consensusTerm: 10},
-			{id: "primary-2", primaryTerm: 0, consensusTerm: 11},
+		// PRIMARY poolers should never have a zero committed rule.
+		s := setupMultiplePrimariesStore([]primaryConfig{
+			{id: "primary-1", ruleCoordTerm: 0},
+			{id: "primary-2", ruleCoordTerm: 0},
 		})
-		generator := NewAnalysisGenerator(store)
+		generator := NewAnalysisGenerator(s)
 
 		analysis, err := generator.GenerateAnalysisForPooler("multipooler-cell1-primary-1")
 		require.NoError(t, err)
@@ -1366,17 +1373,17 @@ func TestDetectOtherPrimary(t *testing.T) {
 		// Should detect one other primary
 		require.Len(t, analysis.OtherPrimariesInShard, 1)
 
-		// All PrimaryTerm=0 is invalid state, defensive check returns nil
-		assert.Nil(t, analysis.HighestTermPrimary, "all PrimaryTerm=0 (invalid state) should result in nil HighestTermPrimary")
+		// All zero committed rules is invalid state, defensive check returns nil
+		assert.Nil(t, analysis.HighestTermPrimary, "all zero committed rules (invalid state) should result in nil HighestTermPrimary")
 	})
 
-	t.Run("mix of zero and non-zero primary_terms", func(t *testing.T) {
-		store := setupMultiplePrimariesStore(t, []primaryConfig{
-			{id: "primary-1", primaryTerm: 0, consensusTerm: 9},
-			{id: "primary-2", primaryTerm: 5, consensusTerm: 10},
-			{id: "primary-3", primaryTerm: 0, consensusTerm: 11},
+	t.Run("mix of zero and non-zero committed rules", func(t *testing.T) {
+		s := setupMultiplePrimariesStore([]primaryConfig{
+			{id: "primary-1", ruleCoordTerm: 0},
+			{id: "primary-2", ruleCoordTerm: 5},
+			{id: "primary-3", ruleCoordTerm: 0},
 		})
-		generator := NewAnalysisGenerator(store)
+		generator := NewAnalysisGenerator(s)
 
 		analysis, err := generator.GenerateAnalysisForPooler("multipooler-cell1-primary-1")
 		require.NoError(t, err)
@@ -1384,17 +1391,17 @@ func TestDetectOtherPrimary(t *testing.T) {
 		// Should detect two other primaries
 		require.Len(t, analysis.OtherPrimariesInShard, 2)
 
-		// primary-2 has non-zero PrimaryTerm (5), so it's the most advanced
+		// primary-2 has non-zero committed rule (term 5), so it's the most advanced
 		require.NotNil(t, analysis.HighestTermPrimary)
 		assert.Equal(t, "primary-2", analysis.HighestTermPrimary.ID.Name)
-		assert.Equal(t, int64(5), analysis.HighestTermPrimary.PrimaryTerm)
+		assert.Equal(t, int64(5), ruleCoordTerm(analysis.HighestTermPrimary))
 	})
 
 	t.Run("no other primaries detected", func(t *testing.T) {
-		store := setupMultiplePrimariesStore(t, []primaryConfig{
-			{id: "primary-1", primaryTerm: 5, consensusTerm: 10},
+		s := setupMultiplePrimariesStore([]primaryConfig{
+			{id: "primary-1", ruleCoordTerm: 5},
 		})
-		generator := NewAnalysisGenerator(store)
+		generator := NewAnalysisGenerator(s)
 
 		analysis, err := generator.GenerateAnalysisForPooler("multipooler-cell1-primary-1")
 		require.NoError(t, err)
@@ -1405,15 +1412,15 @@ func TestDetectOtherPrimary(t *testing.T) {
 		// Single primary is still the most advanced
 		require.NotNil(t, analysis.HighestTermPrimary)
 		assert.Equal(t, "primary-1", analysis.HighestTermPrimary.ID.Name)
-		assert.Equal(t, int64(5), analysis.HighestTermPrimary.PrimaryTerm)
+		assert.Equal(t, int64(5), ruleCoordTerm(analysis.HighestTermPrimary))
 	})
 
 	t.Run("unreachable primary not detected", func(t *testing.T) {
-		store := setupMultiplePrimariesStoreWithReachability(t, []primaryConfigWithReachability{
-			{primaryConfig: primaryConfig{id: "primary-1", primaryTerm: 5, consensusTerm: 10}, reachable: true},
-			{primaryConfig: primaryConfig{id: "primary-2", primaryTerm: 6, consensusTerm: 11}, reachable: false},
+		s := setupMultiplePrimariesStoreWithReachability([]primaryConfigWithReachability{
+			{primaryConfig: primaryConfig{id: "primary-1", ruleCoordTerm: 5}, reachable: true},
+			{primaryConfig: primaryConfig{id: "primary-2", ruleCoordTerm: 6}, reachable: false},
 		})
-		generator := NewAnalysisGenerator(store)
+		generator := NewAnalysisGenerator(s)
 
 		analysis, err := generator.GenerateAnalysisForPooler("multipooler-cell1-primary-1")
 		require.NoError(t, err)
@@ -1424,7 +1431,7 @@ func TestDetectOtherPrimary(t *testing.T) {
 		// Only this primary is reachable, so it's the most advanced
 		require.NotNil(t, analysis.HighestTermPrimary)
 		assert.Equal(t, "primary-1", analysis.HighestTermPrimary.ID.Name)
-		assert.Equal(t, int64(5), analysis.HighestTermPrimary.PrimaryTerm)
+		assert.Equal(t, int64(5), ruleCoordTerm(analysis.HighestTermPrimary))
 	})
 }
 
@@ -1432,8 +1439,7 @@ func TestDetectOtherPrimary(t *testing.T) {
 
 type primaryConfig struct {
 	id            string
-	primaryTerm   int64
-	consensusTerm int64
+	ruleCoordTerm int64 // coordinator term of this primary's committed rule number
 }
 
 type primaryConfigWithReachability struct {
@@ -1441,7 +1447,7 @@ type primaryConfigWithReachability struct {
 	reachable bool
 }
 
-func setupMultiplePrimariesStore(t *testing.T, primaries []primaryConfig) *store.PoolerStore {
+func setupMultiplePrimariesStore(primaries []primaryConfig) *store.PoolerStore {
 	configs := make([]primaryConfigWithReachability, len(primaries))
 	for i, p := range primaries {
 		configs[i] = primaryConfigWithReachability{
@@ -1449,10 +1455,10 @@ func setupMultiplePrimariesStore(t *testing.T, primaries []primaryConfig) *store
 			reachable:     true,
 		}
 	}
-	return setupMultiplePrimariesStoreWithReachability(t, configs)
+	return setupMultiplePrimariesStoreWithReachability(configs)
 }
 
-func setupMultiplePrimariesStoreWithReachability(t *testing.T, primaries []primaryConfigWithReachability) *store.PoolerStore {
+func setupMultiplePrimariesStoreWithReachability(primaries []primaryConfigWithReachability) *store.PoolerStore {
 	ps := store.NewPoolerStore(nil, slog.Default())
 
 	for _, p := range primaries {
@@ -1474,11 +1480,9 @@ func setupMultiplePrimariesStoreWithReachability(t *testing.T, primaries []prima
 			IsLastCheckValid: p.reachable,
 			IsUpToDate:       true,
 			ConsensusStatus: &consensusdatapb.StatusResponse{
-				CurrentTerm: p.consensusTerm,
-			},
-			ConsensusTerm: &multipoolermanagerdatapb.ConsensusTerm{
-				TermNumber:  p.consensusTerm,
-				PrimaryTerm: p.primaryTerm,
+				ConsensusStatus: &clustermetadatapb.ConsensusStatus{
+					CurrentPosition: testNodePos(p.ruleCoordTerm, 0),
+				},
 			},
 		}
 		ps.Set(poolerID, poolerState)

@@ -93,12 +93,13 @@ func (c *Coordinator) AppointLeader(ctx context.Context, shardID string, cohort 
 		"description", policy.Description)
 
 	// Goal 1: Obtaining a term number
-	// Discover max term from cached health state and increment to get proposed term
-	maxTerm, err := c.discoverMaxTerm(cohort)
+	// Discover the highest committed rule from cached health state and increment its
+	// coordinator_term to get the proposed term for the new election.
+	maxRule, err := c.discoverMaxRule(cohort)
 	if err != nil {
-		return mterrors.Wrap(err, "failed to discover max term")
+		return mterrors.Wrap(err, "failed to discover max rule")
 	}
-	proposedTerm := maxTerm + 1
+	proposedTerm := maxRule.CoordinatorTerm + 1
 
 	// PreVote - validate that leadership change is likely to succeed
 	canProceed, preVoteReason := c.preVote(ctx, cohort, policy, proposedTerm)
