@@ -52,6 +52,35 @@
 // AvailabilityStatus survives only for the life of the process. Coordinators
 // must treat absence as "unknown," not "unfit."
 //
+// --- Voluntary Resignation and Decommissioning ---
+//
+// A pooler that wants to give up a role or leave the cohort — for example
+// because Kubernetes has signaled that its pod is being decommissioned, or
+// because an operator has requested a graceful handoff — publishes its intent
+// via AvailabilityStatus. The coordinator observes these signals during its
+// normal health-polling loop and takes the appropriate action.
+//
+// Requesting primary handoff:
+//
+//   A primary that wants to resign sets wants_primary_handoff in its
+//   AvailabilityStatus. The coordinator responds by initiating a
+//   coordinator-led failover: it revokes the primary, selects the best
+//   standby candidate, and promotes it. This is faster than waiting for a
+//   heartbeat timeout and produces a clean transfer rather than an emergency
+//   failover.
+//
+// Requesting cohort removal:
+//
+//   Any node (primary or standby) that wants to leave the cohort sets
+//   wants_cohort_removal. The coordinator responds by removing it via a
+//   leader-led UpdateRule() (if the node is a standby) or by first promoting
+//   a replacement primary and then removing it (if the node is the current
+//   primary). No revocation is needed for a standby removal.
+//
+// Because AvailabilityStatus is best-effort and in-memory, these requests may
+// be lost on a process restart. The coordinator acts on them opportunistically;
+// the pooler should re-publish them after restarting if the request still applies.
+//
 // --- Durability Policies ---
 //
 // A DurabilityPolicy governs three operations:
@@ -506,4 +535,10 @@ message AvailabilityStatus {
   // immediate election rather than waiting for a heartbeat timeout.
   // Cleared when this node is elected as primary again.
   int64 resigned_primary_at_term = 1;
+
+  // wants_cohort_removal is set by a node that would like to be removed from
+  // the replication cohort — for example, because it is being decommissioned.
+  // The coordinator responds by issuing a leader-led UpdateRule() to shrink
+  // the cohort. Best-effort: may be lost on restart.
+  bool wants_cohort_removal = 2;
 }
