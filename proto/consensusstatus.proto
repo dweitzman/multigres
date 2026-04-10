@@ -1,0 +1,470 @@
+// Copyright 2026 Supabase, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// =============================================================================
+// Consensus Protocol Overview
+// =============================================================================
+//
+// The consensus protocol keeps a cluster of PostgreSQL nodes in agreement about
+// which node is primary, which nodes form the replication cohort, and what
+// durability guarantees apply. Consensus state is split across layers with
+// different durability and precision guarantees.
+//
+// --- ConsensusStatus: Three Layers ---
+//
+// Each node exposes a ConsensusStatus combining three fields:
+//
+//  1. term_revocation (authoritative, disk-backed)
+//     Written to local disk before responding; survives process restarts.
+//     Records the highest coordinator term accepted and the coordinator's
+//     identity. Once written, this promise is permanent — a node will never
+//     accept a lower term or a different coordinator at the same term.
+//
+//  2. current_position (authoritative, postgres-WAL-backed)
+//     The highest ShardRule committed to local WAL (from the rule_history
+//     postgres table) and the current LSN. For a primary: reflects the latest
+//     rule it wrote. For a standby: how far it has replicated. Authoritative
+//     because postgres WAL is durable and ordered.
+//
+//  3. highest_known_rule (best-effort, coordinator-provided)
+//     The most recent rule the coordinator is about to establish or has
+//     recently established. May be ahead of current_position: it can represent
+//     a rule the coordinator is still writing that doesn't yet exist in any WAL
+//     entries. Not persisted; may be absent or stale after restarts. Any
+//     coordinator that notices a node has incorrect replication settings will
+//     re-inform it of the latest HighestKnownRule.
+//
+// --- AvailabilityStatus ---
+//
+// A separate in-memory best-effort message carrying operational fitness signals.
+// Unlike ConsensusStatus (backed by postgres WAL and on-disk term state),
+// AvailabilityStatus survives only for the life of the process. Coordinators
+// must treat absence as "unknown," not "unfit."
+//
+// --- Durability Policies ---
+//
+// A DurabilityPolicy governs three operations:
+//
+//  IsDurable(cohortMembers, ackingMembers):
+//    Returns true when enough cohort members have acknowledged a write. For
+//    AT_LEAST_N: at least N members — including the primary — must acknowledge.
+//    This maps to PostgreSQL's synchronous_standby_names ANY (N-1) syntax
+//    (postgres counts replica ACKs, not total nodes):
+//
+//      AtLeast(1) ↔ ANY 0  — primary alone sufficient, no replica ACK required
+//      AtLeast(2) ↔ ANY 1  — primary + 1 replica
+//      AtLeast(3) ↔ ANY 2  — primary + 2 replicas (recommended for production HA)
+//
+//  IsAchievable(proposedCohort):
+//    Returns true if the cohort is large enough to ever satisfy the policy.
+//    For AT_LEAST_N: the cohort must have at least N members.
+//
+//  Coverage check (see Revocation section below):
+//    Determines whether a coordinator has recruited enough nodes to safely
+//    claim exclusive authority to establish a new rule.
+//
+// --- Revocation ---
+//
+// Revocation is the process by which a coordinator blocks the current rule from
+// making further progress and claims exclusive authority to establish a new rule.
+//
+// Blocking progress:
+//
+//   To prevent the current primary from producing further durable writes, the
+//   coordinator must either revoke the primary directly, OR revoke enough
+//   replica cohort members that the primary can no longer collect the
+//   acknowledgments required by the current durability policy.
+//
+// Coordinator uniqueness (quorum intersection):
+//
+//   Blocking progress alone is not sufficient. Two coordinators could each
+//   independently block progress using different non-overlapping sets of nodes,
+//   both believing they have exclusive authority. To prevent this, the
+//   coordinator must visit a set of replicas that:
+//
+//   1. Intersects every minimal replica-only revocation set — so it will
+//      encounter any competing coordinator's recruited nodes (which will reject
+//      the second coordinator's claim), AND
+//
+//   2. Contains at least one complete minimal replica-only revocation set —
+//      proving that this coordinator has visited enough nodes to have exclusive
+//      authority.
+//
+//   The primary is never counted toward the coverage criterion. Emergency
+//   failover is triggered precisely because the primary may be unreachable; a
+//   coordinator cannot rely on "I contacted the primary" to prove it has sampled
+//   all possible revocation paths.
+//
+//   Example: AtLeast(2) with cohort {P, R1, R2} — P needs any 1 replica ack.
+//   The only minimal replica-only revocation set is {R1, R2}. The coordinator
+//   must recruit both R1 and R2. Recruiting only R1 is not enough: P could
+//   still get R2's ack.
+//
+//   Example: AtLeast(3) with cohort {P, R1, R2, R3, R4} — P needs any 2 replica
+//   acks. Minimal replica-only revocation sets are any 3 of the 4 replicas.
+//   The coordinator can recruit any 3 (e.g., R1,R2,R3) — this intersects all
+//   minimal sets and contains one complete set. Any two coordinators each
+//   choosing 3 of 4 replicas must share at least 2 nodes, preventing split
+//   authority.
+//
+// Staleness guard:
+//
+//   A Revoke() request carries the coordinator's HighestKnownRule. If the
+//   pooler's highest known rule is ahead of the coordinator's, the pooler may
+//   decline: the coordinator's revocation is premised on stale knowledge of
+//   cluster state, and proceeding could disrupt a newer, valid rule.
+//
+// --- Propagation ---
+//
+// After a coordinator establishes a new primary via Rejoin(), it must formally
+// commit the new consensus term by writing a rule entry from the primary. This
+// write succeeds only once a quorum of replicas has caught up — replicated all
+// WAL entries they were missing — and acknowledged the write. The period from
+// when the new primary starts until this first rule write reaches quorum is
+// called propagation.
+//
+// During propagation, the cluster is in a transitional state: the new primary
+// is serving writes, but the new consensus term is not yet established. The
+// synchronous_standby_names configuration used during propagation must ensure
+// the rule write is durable under both the outgoing and incoming policies (if
+// they differ).
+//
+// For most failovers (same policy, same cohort), propagation is straightforward:
+// synchronous_standby_names is set to the same ANY N as before the failover, and
+// propagation completes once N replicas have caught up.
+//
+// If a cohort change was in progress when the failover occurred (see the example
+// below), propagation uses the more restrictive of the outgoing and incoming
+// policies. Once propagation completes and the new consensus term is established,
+// any relaxation (e.g., expanding synchronous_standby_names to include newly
+// added cohort members) can happen at the coordinator's earliest convenience.
+//
+// A key simplifying property: propagation always moves logical time forward,
+// where logical time is ordered by RuleNumber. Even if a rule change did not
+// reach quorum and we cannot prove it was durable, we do not roll it back.
+// We propagate the highest seen NodePosition forward to maintain consistency.
+// Cases where an un-durable rule could be safely rolled back exist in theory
+// but are out of scope for now.
+//
+// --- Discovery: Coordinator Startup ---
+//
+// When a coordinator starts or restarts, it calls Status() on all nodes in the
+// known topology (from etcd) before taking any action. To guarantee it has seen
+// the highest committed rule, it must collect responses from a hitting set of
+// the current rule's cohort — satisfying the same blocking and coverage
+// requirements as revocation ensures it cannot miss a committed write.
+//
+// The coordinator uses the highest seen NodePosition across all responding nodes
+// as the basis for new rules, and uses HighestKnownRule to inform lagging nodes
+// of the current rule and help them reconnect to the correct primary.
+//
+// --- Example: Emergency Failover ---
+//
+// Starting state: cohort {P, R1, R2}, policy AtLeast(2). P becomes unreachable.
+//
+//  1. Coordinator collects Status() from all nodes; gets responses from R1, R2.
+//  2. The current policy is AtLeast(2) on {P,R1,R2}: the only minimal
+//     replica-only revocation set is {R1,R2}. Recruiting both satisfies the
+//     blocking and coverage requirements.
+//  3. Sends Revoke() to R1 and R2. Each stops replicating from P and returns
+//     its NodePosition.
+//  4. Selects R1 as promotion candidate (higher NodePosition: higher rule or
+//     higher LSN as tiebreaker).
+//  5. Sends Rejoin(role=primary, new_rule=...) to R1 → R1 promotes to primary
+//     and configures synchronous_standby_names = ANY 1 (still AtLeast(2)).
+//  6. Sends Rejoin(role=standby, new_rule=...) to R2 → R2 sets primary_conninfo
+//     to point to R1 and starts catching up.
+//  7. Propagation: R1 attempts to write the new consensus term rule. Once R2
+//     has caught up and acknowledged, the write succeeds and the new term is
+//     established.
+//
+// --- Example: Emergency Failover After a Hung Rule Change ---
+//
+// Starting state: cohort {P, R1, R2}, policy AtLeast(2). A coordinator was
+// adding R3 via UpdateRule() when P became unreachable mid-write. Two cases:
+//
+// Case A — the UpdateRule write committed (R1 had already acknowledged it):
+//
+//   R1's NodePosition shows the new rule (cohort {P,R1,R2,R3}) in rule_history.
+//   The coordinator uses the new cohort as authoritative.
+//   Revocation and candidate selection proceed against the new cohort.
+//   During propagation, R1 (new primary) uses the more restrictive of the
+//   outgoing and incoming policies for synchronous_standby_names — in this case
+//   the old AtLeast(2) on {R1,R2}, since R3 was newly added and may not have
+//   caught up. Once propagation completes, synchronous_standby_names can be
+//   relaxed to include R3.
+//
+// Case B — the UpdateRule write did not commit (P crashed before any replica acked):
+//
+//   R1 and R2 both show the old rule (cohort {P,R1,R2}) in their NodePosition.
+//   The coordinator uses the old cohort as authoritative and proceeds with a
+//   standard failover (see above). R3 is not yet a cohort member.
+//
+// In both cases, NodePosition (WAL-backed) gives a definitive answer about which
+// rule committed, across arbitrary failures.
+
+syntax = "proto3";
+
+package clustermetadata;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/multigres/multigres/go/pb/consensusstatus";
+
+
+// =============================================================================
+// Durability Policy
+// =============================================================================
+
+// DurabilityPolicy defines consensus quorum rules for a shard.
+// These policies are stored locally in each shard's postgres database
+// and replicated via postgres streaming replication.
+//
+// A DurabilityPolicy governs three operations:
+//   - IsDurable: whether a set of acknowledging nodes constitutes a durable write.
+//   - IsAchievable: whether the proposed cohort is large enough to satisfy the policy.
+//   - The revocation coverage check: whether a coordinator has recruited enough nodes
+//     to safely claim exclusive authority (see file-level Revocation section).
+//
+// The ShardRule being revoked must be known to the coordinator before planning
+// recruitment, because the required set depends on both the policy and the cohort.
+message DurabilityPolicy {
+  // policy_name is a human-readable identifier (e.g., "AT_LEAST_2")
+  string policy_name = 1;
+
+  // policy_version allows policy evolution over time
+  int64 policy_version = 2;
+
+  // quorum_type determines which quorum algorithm to use
+  QuorumType quorum_type = 3;
+
+  // required_count is the number of nodes/cells required for quorum
+  // - For QUORUM_TYPE_AT_LEAST_N: number of nodes required from discovered cohort
+  // - For QUORUM_TYPE_MULTI_CELL_AT_LEAST_N: number of distinct cells required,
+  //   with at least one node from each cell
+  int32 required_count = 4;
+
+  // description is a human-readable summary of this policy
+  string description = 5;
+
+  // async_fallback defines behavior when insufficient standbys are available
+  // for synchronous replication. Defaults to ALLOW if unset.
+  AsyncReplicationFallbackMode async_fallback = 6;
+}
+
+// QuorumType enumerates supported quorum algorithms
+enum QuorumType {
+  // QUORUM_TYPE_UNKNOWN represents an unknown or uninitialized quorum type
+  QUORUM_TYPE_UNKNOWN = 0;
+
+  // QUORUM_TYPE_AT_LEAST_N requires at least N nodes from the discovered cohort to acknowledge
+  QUORUM_TYPE_AT_LEAST_N = 3;
+
+  // QUORUM_TYPE_MULTI_CELL_AT_LEAST_N requires nodes from multiple cells (availability zones)
+  // with at least one node from each of the required cells
+  QUORUM_TYPE_MULTI_CELL_AT_LEAST_N = 4;
+}
+
+// AsyncReplicationFallbackMode defines the behavior when insufficient standbys are available
+// for synchronous replication to meet the quorum requirement
+enum AsyncReplicationFallbackMode {
+  // ASYNC_REPLICATION_FALLBACK_MODE_UNKNOWN represents an unknown or uninitialized mode
+  ASYNC_REPLICATION_FALLBACK_MODE_UNKNOWN = 0;
+
+  // ASYNC_REPLICATION_FALLBACK_MODE_ALLOW permits falling back to async replication
+  // when no standby servers are available. This is the default behavior.
+  ASYNC_REPLICATION_FALLBACK_MODE_ALLOW = 1;
+
+  // ASYNC_REPLICATION_FALLBACK_MODE_REJECT rejects the leader appointment
+  // if synchronous replication cannot be established to meet quorum requirements
+  ASYNC_REPLICATION_FALLBACK_MODE_REJECT = 2;
+}
+
+// =============================================================================
+// Rule Numbers and Cluster State
+// =============================================================================
+
+// RuleNumber uniquely identifies a shard rule — the outcome of a coordinator
+// writing a cluster state change to rule_history. Every change (promotion,
+// cohort membership, durability policy) produces a new RuleNumber.
+//
+// RuleNumber serves as a compact, stable label for referencing specific rules
+// in memory, data structures, logs, and monitoring/observability. It also acts
+// as a logical clock: RuleNumbers define the canonical ordering of cluster
+// state changes, and propagation always moves this clock forward.
+//
+// Compared lexicographically: higher coordinator_term takes precedence; within
+// the same coordinator_term, higher rule_subterm takes precedence. rule_subterm
+// resets to 0 when coordinator_term increases, so subterms alone are not
+// globally unique.
+message RuleNumber {
+  // coordinator_term sequences coordinators during revocation. Each time a
+  // coordinator successfully recruits a cohort and establishes its authority to
+  // write rules, it does so at a specific coordinator_term. A pooler that has
+  // accepted term T will refuse Revoke() requests for any term < T from a
+  // different coordinator, ensuring only one coordinator can hold authority at
+  // a given term.
+  int64 coordinator_term = 1;
+
+  // rule_subterm distinguishes rules within the same coordinator_term. It serves
+  // several purposes:
+  //
+  //  1. Compare-and-swap safety: a coordinator can specify the expected previous
+  //     RuleNumber when writing a new rule, preventing conflicting concurrent
+  //     writes from different coordinators or retries.
+  //
+  //  2. Easy to reference: a rule number because easy to read and identify in a
+  //     datastore or in logs and monitoring.
+  //
+  //  3. Staleness guard for Revoke(): a Revoke() request carries the
+  //     coordinator's HighestKnownRule. If the pooler's highest known
+  //     rule_subterm is higher than the coordinator's, the pooler can decline:
+  //     the coordinator's revocation is premised on stale knowledge of the
+  //     cluster state, and proceeding could disrupt a newer, valid rule.
+  int64 rule_subterm = 2;
+}
+
+// ShardRule is the complete, authoritative description of shard state at a
+// specific rule number. Primary identity, cohort membership, and durability
+// policy are only meaningful together and relative to the rule that established
+// them.
+message ShardRule {
+  RuleNumber rule_number = 1;
+  // The postgres primary for this rule, through which all transactions (including rules) are
+  // written to the WAL.
+  ID primary_id = 2;
+  repeated ID cohort_members = 3;
+
+  // What nodes need to acknowledge a write before it's considered durable.
+  DurabilityPolicy durability_policy = 4;
+
+  // Which coordinator or pooler facilitated applying the rule.
+  ID coordinator_id = 5;
+  // At what time the coordinator or pooler began trying to apply the rule,
+  // from the coordinator's perspective.
+  google.protobuf.Timestamp creation_time = 6;
+}
+
+// NodePosition describes a node's committed position in logical and physical
+// time. It captures the highest ShardRule this node has replicated (or written,
+// for a primary) and the latest WAL position.
+//
+// Used in Status, Revoke, and Rejoin responses so the coordinator can determine
+// which node is most advanced when selecting a promotion candidate.
+//
+// Comparison: prefer the node with the higher rule (coordinator_term first,
+// then rule_subterm). Break ties by LSN.
+message NodePosition {
+  // The highest shard rule this node has committed to local WAL.
+  ShardRule rule = 1;
+
+  // The latest WAL position.
+  string lsn = 2;
+}
+
+// HighestKnownRule is the most recent ShardRule this node is aware of,
+// which could be beyond the end of this pooler's WAL / NodePosition.
+//
+// If a pooler is disconnected from replication due to network partitions
+// or stale coordinators, the HighestKnownRule helps them fix replication
+// settings and reconnect to learn the latest shard state.
+//
+// If a coordinator is still establishing a new term's first rule, the
+// HighestKnownRule may represent a rule that the coordinator is about to write
+// that doesn't exist in any WAL entries yet.
+//
+// HighestKnownRule does not need to be persisted. It is a best-effort attempt
+// to fix replication settings so that nodes can participate. Nodes with
+// out-of-date information will be re-informed of the latest HighestKnownRule
+// by any coordinator that notices the pooler has incorrect replication settings.
+message HighestKnownRule {
+  ShardRule rule = 1;
+}
+
+// TermRevocation records that this node has revoked participation in all terms
+// strictly below revoked_below_term. Two things are revoked:
+//
+//  1. Consensus participation: the node will refuse Revoke() or other coordinator
+//     requests for any term < revoked_below_term, and for revoked_below_term itself
+//     from a different coordinator than accepted_coordinator_id.
+//
+//  2. Replication participation: a revoked primary must stop accepting writes; a
+//     revoked replica must clear primary_conninfo. Replication participation resumes
+//     once the node's highest known rule reaches or exceeds revoked_below_term
+//     (i.e. the rule for that term has replicated through).
+//
+// Re-sending an identical recruitment is idempotent — the node re-confirms the same
+// revocation without revoking anything additional. A higher-term recruitment supersedes
+// lower ones automatically.
+//
+// Once written to disk, this promise is permanent. A node will never roll back a
+// term acceptance or accept a lower term.
+message TermRevocation {
+  // All terms strictly below this value are revoked. The node has accepted
+  // the coordinator's exclusive right to act at this term.
+  int64 revoked_below_term = 1;
+
+  // The coordinator (multiorch instance) that recruited this revocation.
+  // Retained for idempotency: the same coordinator at the same term is re-accepted;
+  // a different coordinator at the same term is refused.
+  ID accepted_coordinator_id = 2;
+
+  // When the coordinator created this term, set by the coordinator before
+  // recruiting. All poolers that accept the same recruitment store the same value.
+  // If a coordinator restarts and recruits again for the same term, poolers can
+  // detect the mismatch and reject the stale coordinator instance.
+  google.protobuf.Timestamp coordinator_initiated_at = 3;
+}
+
+// ConsensusStatus is a node's complete view of its position in the distributed
+// system. It combines three fields with different storage and authority:
+//
+//   term_revocation   — disk-backed promise, authoritative
+//   current_position  — WAL-backed truth, authoritative
+//   highest_known_rule — best-effort hint, coordinator-provided
+//
+// See the file-level comment for the full description of each layer.
+message ConsensusStatus {
+  // term_revocation records the highest coordinator term this node has revoked for.
+  // Written to disk before responding; survives process restarts.
+  TermRevocation term_revocation = 1;
+
+  // current_position is the highest rule this node has committed to local WAL
+  // and the latest WAL position.
+  NodePosition current_position = 2;
+
+  // highest_known_rule is the most recent rule this node is aware of. May be
+  // ahead of current_position when the node has forward knowledge of an
+  // upcoming rule that has not yet been replicated or written.
+  HighestKnownRule highest_known_rule = 3;
+}
+
+// AvailabilityStatus carries best-effort operational fitness signals for a node.
+// Unlike ConsensusStatus (which is authoritative and backed by postgres WAL and
+// on-disk state), AvailabilityStatus is in-memory and may be absent after a
+// process restart.
+//
+// Coordinators must treat absence as "unknown," not "unfit." Never block
+// election or rule changes solely because AvailabilityStatus is missing.
+//
+// These signals answer "how suitable is this node for each role right now?" and
+// are used by the coordinator for promotion preference and failover decisions.
+message AvailabilityStatus {
+  // resigned_primary_at_term is set when the primary voluntarily resigns
+  // (e.g. via Revoke). The value is the consensus term at which the
+  // primary resigned. A non-zero value signals the coordinator to trigger an
+  // immediate election rather than waiting for a heartbeat timeout.
+  // Cleared when this node is elected as primary again.
+  int64 resigned_primary_at_term = 1;
+}

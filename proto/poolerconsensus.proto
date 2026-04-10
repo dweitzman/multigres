@@ -1,0 +1,196 @@
+// Copyright 2026 Supabase, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// This file is a design sketch for the upcoming pooler consensus RPC surface.
+// It documents intended semantics and the expected shape of requests and
+// responses. Generated code is not yet wired into the implementation.
+
+syntax = "proto3";
+
+package poolerconsensus;
+
+import "clustermetadata.proto";
+import "consensusstatus.proto";
+
+option go_package = "github.com/multigres/multigres/go/pb/poolerconsensus";
+
+// PoolerConsensus is the consensus RPC interface exposed by each multipooler.
+// Coordinators use these RPCs to:
+//   - Learn the current state of the cluster (Status, discovery)
+//   - Block old rules from making progress (Revoke)
+//   - Apply new rules and establish replication topology (Rejoin)
+//   - Instruct a running primary to write incremental rule changes (UpdateRule)
+//
+// See consensusstatus.proto for the full explanation of consensus concepts,
+// including durability policies, revocation, propagation, and discovery.
+service PoolerConsensus {
+  // Status returns the current consensus and availability state of this node.
+  // No side effects. Used by coordinators during startup discovery and ongoing
+  // health monitoring.
+  rpc Status(StatusRequest) returns (StatusResponse);
+
+  // Revoke asks this node to accept a new coordinator term and stop
+  // participating under the previous rule. See RevokeRequest for details.
+  rpc Revoke(RevokeRequest) returns (RevokeResponse);
+
+  // Rejoin asks this node to apply a new ShardRule and take up its role within
+  // it (primary if its ID matches ShardRule.primary_id, standby otherwise).
+  // See RejoinRequest for details.
+  rpc Rejoin(RejoinRequest) returns (RejoinResponse);
+
+  // UpdateRule asks the running primary to write a new rule to rule_history.
+  // This is the leader-driven path for incremental changes (cohort membership,
+  // durability policy) that do not require a full failover. See UpdateRuleRequest
+  // for details.
+  rpc UpdateRule(UpdateRuleRequest) returns (UpdateRuleResponse);
+}
+
+// =============================================================================
+// Status
+// =============================================================================
+
+message StatusRequest {
+}
+
+message StatusResponse {
+  // consensus_status is the node's authoritative consensus state:
+  // term revocation (disk-backed), current position (WAL-backed), and
+  // highest known rule (best-effort coordinator hint).
+  clustermetadata.ConsensusStatus consensus_status = 1;
+
+  // availability_status carries best-effort operational fitness signals.
+  // May be absent after a process restart; treat absence as "unknown."
+  clustermetadata.AvailabilityStatus availability_status = 2;
+}
+
+// =============================================================================
+// Revoke
+// =============================================================================
+
+// RevokeRequest asks a pooler to accept a new coordinator term and stop
+// participating under the previous rule. This is the "recruit" step of the
+// coordinator-led protocol.
+//
+// The coordinator sends Revoke() to enough nodes to satisfy both the blocking
+// and coverage requirements for the previous rule's durability policy and cohort
+// (see consensusstatus.proto for details). Until enough nodes have responded,
+// the coordinator cannot safely proceed to establish a new rule via Rejoin().
+//
+// Idempotent: sending the same TermRevocation again re-confirms the revocation
+// and re-returns the node's current status.
+message RevokeRequest {
+  // term_revocation specifies the coordinator term being established, the
+  // coordinator's identity, and the initiation timestamp. The pooler writes
+  // this to disk if it represents a higher term than already accepted.
+  clustermetadata.TermRevocation term_revocation = 1;
+
+  // coordinator_highest_known_rule is the staleness guard. If the pooler's
+  // highest known rule is ahead of this value, the pooler may decline: the
+  // coordinator's request is premised on stale knowledge and proceeding could
+  // disrupt a newer, valid rule established by a different coordinator.
+  clustermetadata.HighestKnownRule coordinator_highest_known_rule = 2;
+}
+
+message RevokeResponse {
+  // accepted is true if this pooler accepted the revocation. False if rejected
+  // (e.g., the coordinator's rule is stale, or a different coordinator already
+  // holds this term).
+  bool accepted = 1;
+
+  // node_position is the pooler's committed state after revocation stabilizes
+  // (WAL replay has caught up). The coordinator uses node_position values across
+  // all recruited nodes to select the best promotion candidate.
+  clustermetadata.NodePosition node_position = 2;
+}
+
+// =============================================================================
+// Rejoin
+// =============================================================================
+
+// RejoinRequest asks a pooler to apply a new ShardRule and take up its role
+// within it. The pooler infers its role from whether its ID matches
+// new_rule.primary_id: if so it becomes primary, otherwise standby.
+//
+// For the node becoming primary: Rejoin promotes it from standby, configures
+// synchronous_standby_names according to the new rule's durability policy, and
+// initiates the propagation phase (writing the first rule entry to establish the
+// new consensus term). Propagation completes once a quorum of replicas has caught
+// up and acknowledged the new rule write.
+//
+// For a node becoming standby: Rejoin sets primary_conninfo to point to the new
+// primary. If the standby's WAL has diverged from the new primary's timeline
+// (due to a previous emergency failover), Rejoin performs a pg_rewind to align
+// the timelines before resuming replication.
+//
+// During propagation after a cohort change, synchronous_standby_names must
+// satisfy the more restrictive of the outgoing and incoming durability policies.
+// Once the new consensus term rule write reaches quorum, any relaxation (e.g.,
+// expanding sync_standby_names to include newly added cohort members) can happen
+// at the coordinator's earliest convenience.
+message RejoinRequest {
+  // highest_known_rule is propagated to the pooler so it can update its
+  // replication settings even if it hasn't yet replicated the new rule's WAL.
+  // If this pooler should be the primary for this rule, this causes the rule
+  // to be written once propagation is complete.
+  clustermetadata.HighestKnownRule highest_known_rule = 1;
+}
+
+message RejoinResponse {
+}
+
+// =============================================================================
+// UpdateRule
+// =============================================================================
+
+// UpdateRuleRequest asks the running primary to write a new rule to rule_history.
+// This is the leader-driven path for incremental rule changes that do not
+// require a full failover — for example, adding or removing cohort members or
+// updating the durability policy.
+//
+// No revocation is required: the primary is still running and writing normally.
+//
+// For cohort changes, the ordering of the synchronous_standby_names GUC change
+// relative to the rule WAL write is intentional: at the moment of the WAL write,
+// the more restrictive of the before/after policies must be in effect.
+//
+//   Adding a cohort member:
+//     Write the rule WAL entry first (under the current, more restrictive policy
+//     on the smaller cohort), then expand synchronous_standby_names to include
+//     the new member.
+//
+//   Removing a cohort member:
+//     Shrink synchronous_standby_names first (to the new, more restrictive
+//     policy on the smaller cohort), then write the rule WAL entry.
+//
+// This ordering ensures the rule write is always durable under the stricter of
+// the two policies, preventing data loss during the transition.
+message UpdateRuleRequest {
+  // new_rule is the ShardRule to write (updated cohort, policy, or both).
+  clustermetadata.ShardRule new_rule = 1;
+
+  // NOTE: We could also have variations of this request that do an automic
+  // cohort add, remove, or a durability policy change without needing compare-and-swap.
+
+  // previous_rule_number is the expected current RuleNumber for compare-and-swap
+  // safety. The primary rejects the write if the current rule in rule_history
+  // does not match this value, preventing conflicting writes.
+  // This is optional
+  clustermetadata.RuleNumber previous_rule_number = 2;
+}
+
+message UpdateRuleResponse {
+  // node_position is the primary's committed state after the rule write, including
+  // the new RuleNumber that was written.
+  clustermetadata.NodePosition node_position = 1;
+}
