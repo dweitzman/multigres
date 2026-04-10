@@ -108,10 +108,16 @@ message RevokeResponse {
   // holds this term).
   bool accepted = 1;
 
-  // node_position is the pooler's committed state after revocation stabilizes
-  // (WAL replay has caught up). The coordinator uses node_position values across
-  // all recruited nodes to select the best promotion candidate.
-  clustermetadata.NodePosition node_position = 2;
+  // consensus_status is the pooler's full consensus state after revocation
+  // stabilizes (WAL replay has caught up). The coordinator uses
+  // consensus_status.current_position across all recruited nodes to select the
+  // best promotion candidate, and consensus_status.term_revocation to confirm
+  // the revocation was recorded durably.
+  clustermetadata.ConsensusStatus consensus_status = 2;
+
+  // availability_status carries best-effort fitness signals. May be absent;
+  // treat absence as "unknown."
+  clustermetadata.AvailabilityStatus availability_status = 3;
 }
 
 // =============================================================================
@@ -147,6 +153,13 @@ message RejoinRequest {
 }
 
 message RejoinResponse {
+  // consensus_status is the pooler's full consensus state after the rejoin
+  // completes.
+  clustermetadata.ConsensusStatus consensus_status = 1;
+
+  // availability_status carries best-effort fitness signals. May be absent;
+  // treat absence as "unknown."
+  clustermetadata.AvailabilityStatus availability_status = 2;
 }
 
 // =============================================================================
@@ -190,7 +203,11 @@ message UpdateRuleRequest {
 }
 
 message UpdateRuleResponse {
-  // node_position is the primary's committed state after the rule write, including
-  // the new RuleNumber that was written.
-  clustermetadata.NodePosition node_position = 1;
+  // consensus_status is the primary's full consensus state after the rule write,
+  // including the new RuleNumber in consensus_status.current_position.rule.
+  clustermetadata.ConsensusStatus consensus_status = 1;
+
+  // availability_status carries best-effort fitness signals. May be absent;
+  // treat absence as "unknown."
+  clustermetadata.AvailabilityStatus availability_status = 2;
 }

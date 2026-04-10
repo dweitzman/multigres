@@ -268,8 +268,8 @@
 //     replica-only revocation set is {R1,R2}. Recruiting both satisfies the
 //     blocking and coverage requirements.
 //  3. Sends Revoke() to R1 and R2. Each stops replicating from P and returns
-//     its NodePosition.
-//  4. Selects R1 as promotion candidate (higher NodePosition: higher rule or
+//     its ConsensusStatus and AvailabilityStatus.
+//  4. Selects R1 as promotion candidate (higher current_position: higher rule or
 //     higher LSN as tiebreaker).
 //  5. Sends Rejoin(role=primary, new_rule=...) to R1 → R1 promotes to primary
 //     and configures synchronous_standby_names = ANY 1 (still AtLeast(2)).
@@ -301,8 +301,8 @@
 //   The coordinator uses the old cohort as authoritative and proceeds with a
 //   standard failover (see above). R3 is not yet a cohort member.
 //
-// In both cases, NodePosition (WAL-backed) gives a definitive answer about which
-// rule committed, across arbitrary failures.
+// In both cases, ConsensusStatus.current_position (WAL-backed) gives a definitive
+// answer about which rule committed, across arbitrary failures.
 
 syntax = "proto3";
 
