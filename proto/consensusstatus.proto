@@ -81,6 +81,28 @@
 // be lost on a process restart. The coordinator acts on them opportunistically;
 // the pooler should re-publish them after restarting if the request still applies.
 //
+// --- Cohort Members vs Observers ---
+//
+// Not every pooler needs to be a cohort member. Poolers that replicate from the
+// primary but are not listed in ShardRule.cohort_members are called observers.
+// Observers contribute query capacity (read traffic) but do not participate in
+// the quorum for writes: the primary does not wait for them to acknowledge
+// transactions, and they are not contacted during revocation or discovery.
+//
+// Keeping the cohort smaller than the total number of running poolers has a
+// practical benefit: the bar for revocation and term establishment is lower.
+// Revocation requires reaching enough cohort members to satisfy the blocking
+// and coverage conditions; with fewer cohort members, fewer nodes need to be
+// reachable for a failover to succeed.
+//
+// Observers can be promoted to cohort members (and cohort members demoted to
+// observers) via leader-led UpdateRule() changes. It is reasonable for the
+// coordinator to do this dynamically — for example, replacing a cohort member
+// that has fallen behind on replication with an observer that is more caught up,
+// or swapping in an observer with more query capacity. Such rotations happen
+// through normal leader-led rule changes and require no revocation as long as
+// the primary is healthy.
+//
 // --- Durability Policies ---
 //
 // A DurabilityPolicy governs three operations:
