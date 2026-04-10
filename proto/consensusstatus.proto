@@ -74,10 +74,49 @@
 //    Determines whether a coordinator has recruited enough nodes to safely
 //    claim exclusive authority to establish a new rule.
 //
+// --- Leader-Led Rule Changes ---
+//
+// When the primary is running normally, the coordinator can write incremental
+// rule changes via UpdateRule() without any revocation. The coordinator
+// instructs the primary to write a new rule to rule_history; the write is
+// durable once acknowledged by enough nodes per the current durability policy.
+// The primary's compare-and-swap on the previous RuleNumber ensures only one
+// rule change can commit at a time.
+//
+// For cohort changes, the ordering of the synchronous_standby_names GUC change
+// relative to the rule WAL write is intentional: at the moment of the WAL write,
+// the more restrictive of the before/after policies must be in effect. This
+// ensures the rule write itself is always durable under the stricter quorum.
+//
+// Adding a cohort member (e.g. adding R3 to {P, R1, R2} with AtLeast(2)):
+//
+//  1. Write the new rule to rule_history first, while synchronous_standby_names
+//     is still ANY 1 (the old, more restrictive policy on the smaller cohort).
+//     The write is durable when P + any 1 of {R1, R2} ack — R3 need not have
+//     caught up yet.
+//  2. After the rule write commits, expand synchronous_standby_names to ANY 1
+//     on the full new cohort {R1, R2, R3}. R3 catches up via streaming
+//     replication and starts participating in future writes.
+//
+// Removing a cohort member (e.g. removing R2 from {P, R1, R2} with AtLeast(2)):
+//
+//  1. Shrink synchronous_standby_names to ANY 1 on the new cohort {R1} first,
+//     applying the new (more restrictive) policy before the rule write.
+//  2. Write the new rule to rule_history. The write is durable when P + R1 ack
+//     (under the new, smaller cohort). R2 is now free to be decommissioned.
+//
+// Changing the durability policy (e.g. AtLeast(2) → AtLeast(3)):
+//
+//  1. Update synchronous_standby_names to ANY 2 (the new, more restrictive
+//     policy) before writing the rule.
+//  2. Write the new rule to rule_history under the new policy.
+//
 // --- Revocation ---
 //
 // Revocation is the process by which a coordinator blocks the current rule from
 // making further progress and claims exclusive authority to establish a new rule.
+// Unlike leader-led changes, revocation is required when the primary is
+// unreachable or when the coordinator needs to establish a new term.
 //
 // Blocking progress:
 //
