@@ -96,8 +96,7 @@ func ValidateTerm(ctx context.Context, client consensuspb.MultiPoolerConsensusCl
 }
 
 // RestorePrimaryAfterDemotion restores the original primary to primary state after it was demoted.
-// Uses Force=true to bypass term validation for simplicity in test cleanup.
-func RestorePrimaryAfterDemotion(ctx context.Context, t *testing.T, client multipoolermanagerpb.MultiPoolerManagerClient) error {
+func RestorePrimaryAfterDemotion(ctx context.Context, t *testing.T, client multipoolermanagerpb.MultiPoolerManagerClient, consensusClient consensuspb.MultiPoolerConsensusClient) error {
 	t.Helper()
 
 	// Stop replication on primary
@@ -112,12 +111,16 @@ func RestorePrimaryAfterDemotion(ctx context.Context, t *testing.T, client multi
 		return fmt.Errorf("failed to get primary replication status: %w", err)
 	}
 
-	// Force promote primary back - term value doesn't matter when Force=true
-	// (Force bypasses term validation)
+	// Get the current consensus term so the promote call passes term validation
+	// and the rule write uses a valid term.
+	term, err := GetCurrentTerm(ctx, consensusClient)
+	if err != nil {
+		return fmt.Errorf("failed to get current consensus term: %w", err)
+	}
+
 	_, err = client.Promote(ctx, &multipoolermanagerdatapb.PromoteRequest{
-		ConsensusTerm: 0, // Ignored when Force=true
+		ConsensusTerm: term,
 		ExpectedLsn:   statusResp.Status.LastReplayLsn,
-		Force:         true,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to promote primary: %w", err)

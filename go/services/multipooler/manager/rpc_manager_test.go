@@ -285,8 +285,7 @@ func TestActionLock_MutationMethodsTimeout(t *testing.T) {
 					multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 					1,
 					[]*clustermetadatapb.ID{serviceID},
-					true,  // reloadConfig
-					false, // force
+					true, // reloadConfig
 				)
 			},
 		},
@@ -324,7 +323,7 @@ func TestActionLock_MutationMethodsTimeout(t *testing.T) {
 			name:       "UpdateSynchronousStandbyList times out when lock is held",
 			poolerType: clustermetadatapb.PoolerType_PRIMARY,
 			callMethod: func(ctx context.Context) error {
-				return manager.UpdateSynchronousStandbyList(ctx, multipoolermanagerdatapb.StandbyUpdateOperation_STANDBY_UPDATE_OPERATION_ADD, []*clustermetadatapb.ID{serviceID}, true, 0, true, nil)
+				return manager.UpdateSynchronousStandbyList(ctx, multipoolermanagerdatapb.StandbyUpdateOperation_STANDBY_UPDATE_OPERATION_ADD, []*clustermetadatapb.ID{serviceID}, true, 0, nil)
 			},
 		},
 	}
@@ -2231,8 +2230,7 @@ func TestConfigureSynchronousReplication_HistoryFailurePreventGUCUpdates(t *test
 		multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
 		1,
 		standbyIDs,
-		true,  // reloadConfig
-		false, // force
+		true, // reloadConfig
 	)
 
 	// Verify it failed with the expected error
@@ -2338,10 +2336,9 @@ func TestUpdateSynchronousStandbyList_HistoryFailurePreventsGUCUpdate(t *testing
 		ctx,
 		multipoolermanagerdatapb.StandbyUpdateOperation_STANDBY_UPDATE_OPERATION_ADD,
 		[]*clustermetadatapb.ID{newStandby},
-		true,  // reloadConfig
-		5,     // consensusTerm
-		false, // force
-		nil,   // coordinatorID
+		true, // reloadConfig
+		5,    // consensusTerm
+		nil,  // coordinatorID
 	)
 
 	// Verify it failed

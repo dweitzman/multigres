@@ -745,22 +745,21 @@ func TestBeginTermEmergencyDemotesPrimary(t *testing.T) {
 		require.NoError(t, err)
 		standbyLSN := standbyStatusResp.Status.LastReplayLsn
 
-		// Promote standby to primary
-		// Use Force=true since we're testing BeginTerm auto-demote, not term validation
+		// Promote standby to primary. BeginTerm was only sent to the primary above,
+		// so query the standby's actual current term directly.
+		promotionTerm, err := shardsetup.GetCurrentTerm(utils.WithShortDeadline(t), standbyConsensusClient)
+		require.NoError(t, err, "failed to get standby consensus term")
 		promoteReq := &multipoolermanagerdatapb.PromoteRequest{
-			ConsensusTerm: 0, // Ignored when Force=true
+			ConsensusTerm: promotionTerm,
 			ExpectedLsn:   standbyLSN,
-			Force:         true,
 		}
 		_, err = standbyManagerClient.Promote(utils.WithTimeout(t, 10*time.Second), promoteReq)
 		require.NoError(t, err, "Promote should succeed on standby")
 		t.Log("Standby promoted to primary")
 
-		// Now demote the new primary (standby) and promote original primary back
-		// Use Force=true since we're testing BeginTerm auto-demote, not term validation
+		// Now demote the new primary (standby) back so we can restore the original state.
 		demoteReq := &multipoolermanagerdatapb.EmergencyDemoteRequest{
-			ConsensusTerm: 0, // Ignored when Force=true
-			Force:         true,
+			ConsensusTerm: promotionTerm,
 		}
 		_, err = standbyManagerClient.EmergencyDemote(utils.WithTimeout(t, 10*time.Second), demoteReq)
 		require.NoError(t, err, "Demote should succeed on new primary")
@@ -769,8 +768,7 @@ func TestBeginTermEmergencyDemotesPrimary(t *testing.T) {
 		// Restore demoted standby to working state
 		restoreAfterEmergencyDemotion(t, setup, setup.StandbyPgctld, setup.StandbyMultipooler, setup.StandbyMultipooler.Name)
 
-		// Promote original primary back
-		// Use Force=true since we're testing BeginTerm auto-demote, not term validation
+		// Promote original primary back. Query its current term directly.
 		_, err = primaryManagerClient.StopReplication(utils.WithShortDeadline(t), &multipoolermanagerdatapb.StopReplicationRequest{})
 		require.NoError(t, err)
 
@@ -779,10 +777,11 @@ func TestBeginTermEmergencyDemotesPrimary(t *testing.T) {
 		require.NoError(t, err)
 		primaryLSN := primaryStatusResp.Status.LastReplayLsn
 
+		primaryTerm, err := shardsetup.GetCurrentTerm(utils.WithShortDeadline(t), primaryConsensusClient)
+		require.NoError(t, err, "failed to get primary consensus term")
 		promoteReq2 := &multipoolermanagerdatapb.PromoteRequest{
-			ConsensusTerm: 0, // Ignored when Force=true
+			ConsensusTerm: primaryTerm,
 			ExpectedLsn:   primaryLSN,
-			Force:         true,
 		}
 		_, err = primaryManagerClient.Promote(utils.WithTimeout(t, 10*time.Second), promoteReq2)
 		require.NoError(t, err, "Promote should succeed on original primary")

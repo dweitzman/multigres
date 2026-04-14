@@ -368,7 +368,7 @@ func (pm *MultiPoolerManager) ResetReplication(ctx context.Context) error {
 }
 
 // ConfigureSynchronousReplication configures PostgreSQL synchronous replication settings
-func (pm *MultiPoolerManager) ConfigureSynchronousReplication(ctx context.Context, synchronousCommit multipoolermanagerdatapb.SynchronousCommitLevel, synchronousMethod multipoolermanagerdatapb.SynchronousMethod, numSync int32, standbyIDs []*clustermetadatapb.ID, reloadConfig bool, force bool) error {
+func (pm *MultiPoolerManager) ConfigureSynchronousReplication(ctx context.Context, synchronousCommit multipoolermanagerdatapb.SynchronousCommitLevel, synchronousMethod multipoolermanagerdatapb.SynchronousMethod, numSync int32, standbyIDs []*clustermetadatapb.ID, reloadConfig bool) error {
 	if err := pm.checkReady(); err != nil {
 		return err
 	}
@@ -380,12 +380,12 @@ func (pm *MultiPoolerManager) ConfigureSynchronousReplication(ctx context.Contex
 	}
 	defer pm.actionLock.Release(ctx)
 
-	return pm.configureSynchronousReplicationLocked(ctx, synchronousCommit, synchronousMethod, numSync, standbyIDs, reloadConfig, force)
+	return pm.configureSynchronousReplicationLocked(ctx, synchronousCommit, synchronousMethod, numSync, standbyIDs, reloadConfig)
 }
 
 // configureSynchronousReplicationLocked configures PostgreSQL synchronous replication settings.
 // The caller MUST already hold the action lock.
-func (pm *MultiPoolerManager) configureSynchronousReplicationLocked(ctx context.Context, synchronousCommit multipoolermanagerdatapb.SynchronousCommitLevel, synchronousMethod multipoolermanagerdatapb.SynchronousMethod, numSync int32, standbyIDs []*clustermetadatapb.ID, reloadConfig bool, force bool) error {
+func (pm *MultiPoolerManager) configureSynchronousReplicationLocked(ctx context.Context, synchronousCommit multipoolermanagerdatapb.SynchronousCommitLevel, synchronousMethod multipoolermanagerdatapb.SynchronousMethod, numSync int32, standbyIDs []*clustermetadatapb.ID, reloadConfig bool) error {
 	// Validate input parameters
 	standbyNames, err := validateSyncReplicationParams(numSync, standbyIDs)
 	if err != nil {
@@ -420,9 +420,6 @@ func (pm *MultiPoolerManager) configureSynchronousReplicationLocked(ctx context.
 		time.Now()).
 		withCohort(standbyIDs).
 		withOperation("configure")
-	if force {
-		update.withForce()
-	}
 	if _, err := pm.rules.updateRule(ctx, update); err != nil {
 		return mterrors.Wrap(err, "failed to record replication config history")
 	}
@@ -457,7 +454,7 @@ func (pm *MultiPoolerManager) configureSynchronousReplicationLocked(ctx context.
 // UpdateSynchronousStandbyList updates PostgreSQL synchronous_standby_names by adding,
 // removing, or replacing members. It is idempotent and only valid when synchronous
 // replication is already configured.
-func (pm *MultiPoolerManager) UpdateSynchronousStandbyList(ctx context.Context, operation multipoolermanagerdatapb.StandbyUpdateOperation, standbyIDs []*clustermetadatapb.ID, reloadConfig bool, consensusTerm int64, force bool, coordinatorID *clustermetadatapb.ID) error {
+func (pm *MultiPoolerManager) UpdateSynchronousStandbyList(ctx context.Context, operation multipoolermanagerdatapb.StandbyUpdateOperation, standbyIDs []*clustermetadatapb.ID, reloadConfig bool, consensusTerm int64, coordinatorID *clustermetadatapb.ID) error {
 	if err := pm.checkReady(); err != nil {
 		return err
 	}
@@ -582,9 +579,6 @@ func (pm *MultiPoolerManager) UpdateSynchronousStandbyList(ctx context.Context, 
 		withLeader(leaderID.id).
 		withCohort(updatedStandbyIDs).
 		withOperation(operationName)
-	if force {
-		standbyUpdate.withForce()
-	}
 	if _, err := pm.rules.updateRule(ctx, standbyUpdate); err != nil {
 		return mterrors.Wrap(err, "failed to record replication config history")
 	}
@@ -606,8 +600,7 @@ func (pm *MultiPoolerManager) UpdateSynchronousStandbyList(ctx context.Context, 
 		"old_value", currentValue,
 		"new_value", newValue,
 		"reload_config", reloadConfig,
-		"consensus_term", consensusTerm,
-		"force", force)
+		"consensus_term", consensusTerm)
 	return nil
 }
 
@@ -1310,9 +1303,6 @@ func (pm *MultiPoolerManager) Promote(ctx context.Context, consensusTerm int64, 
 		withCohort(cohortMemberIDs).
 		withAcceptedMembers(acceptedMemberIDs).
 		withWALPosition(finalLSN)
-	if force {
-		promoteUpdate.withForce()
-	}
 	if _, err = pm.rules.updateRule(ctx, promoteUpdate); err != nil {
 		pm.logger.ErrorContext(ctx, "Failed to write rule history - promotion failed",
 			"term", consensusTerm,

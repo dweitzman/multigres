@@ -67,7 +67,7 @@ func TestEmergencyDemoteAndPromote(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { standbyConn.Close() })
 	standbyManagerClient := multipoolermanagerpb.NewMultiPoolerManagerClient(standbyConn)
-	_ = consensuspb.NewMultiPoolerConsensusClient(standbyConn) // Available if needed in future tests
+	standbyConsensusClient := consensuspb.NewMultiPoolerConsensusClient(standbyConn)
 
 	t.Run("FullCycle_EmergencyDemoteAndPromote", func(t *testing.T) {
 		setupPoolerTest(t, setup)
@@ -153,12 +153,11 @@ func TestEmergencyDemoteAndPromote(t *testing.T) {
 		currentLSN := statusResp.Status.LastReplayLsn
 		t.Logf("Current LSN before promotion: %s", currentLSN)
 
-		// Perform promotion with Force=true (testing promote functionality, not term validation)
+		standbyTerm := shardsetup.MustGetCurrentTerm(t, utils.WithShortDeadline(t), standbyConsensusClient)
 		promoteReq := &multipoolermanagerdatapb.PromoteRequest{
-			ConsensusTerm:         0, // Ignored when Force=true
+			ConsensusTerm:         standbyTerm,
 			ExpectedLsn:           currentLSN,
-			SyncReplicationConfig: nil, // Don't configure sync replication for now
-			Force:                 true,
+			SyncReplicationConfig: nil,
 		}
 		promoteResp, err := standbyManagerClient.Promote(utils.WithTimeout(t, 10*time.Second), promoteReq)
 		require.NoError(t, err, "Promote should succeed")
@@ -219,12 +218,11 @@ func TestEmergencyDemoteAndPromote(t *testing.T) {
 		require.NoError(t, err, "ReplicationStatus should succeed")
 		currentLSN2 := statusResp2.Status.LastReplayLsn
 
-		// Promote original primary back with Force=true
+		primaryTerm2 := shardsetup.MustGetCurrentTerm(t, utils.WithShortDeadline(t), primaryConsensusClient)
 		promoteReq2 := &multipoolermanagerdatapb.PromoteRequest{
-			ConsensusTerm:         0, // Ignored when Force=true
+			ConsensusTerm:         primaryTerm2,
 			ExpectedLsn:           currentLSN2,
 			SyncReplicationConfig: nil,
-			Force:                 true,
 		}
 		promoteResp2, err := primaryManagerClient.Promote(utils.WithTimeout(t, 10*time.Second), promoteReq2)
 		require.NoError(t, err, "Promote should succeed")
