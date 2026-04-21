@@ -114,6 +114,13 @@ func TestDeadPrimaryRecovery(t *testing.T) {
 	preFailoverSuccess, preFailoverFailed := validator.Stats()
 	t.Logf("Pre-failover writes: %d successful, %d failed", preFailoverSuccess, preFailoverFailed)
 
+	// Stop etcd before any failover: consensus runs via gRPC between multipoolers
+	// and multigateway learns the new primary via PrimaryObservation health streams,
+	// so neither component requires etcd during or after failover.
+	t.Log("Stopping etcd to verify etcd-independent failover...")
+	setup.StopEtcd(t)
+	t.Log("etcd stopped; all failovers will proceed without etcd")
+
 	// Perform 3 consecutive failovers
 	for i := range 3 {
 		t.Logf("=== Failover iteration %d ===", i+1)

@@ -118,7 +118,7 @@ func setupManagerWithMockDB(t *testing.T, mockQueryService *mock.QueryService, r
 	pm.Start(senv)
 
 	require.Eventually(t, func() bool {
-		return pm.GetState() == ManagerStateReady
+		return pm.IsOpen()
 	}, 5*time.Second, 100*time.Millisecond, "Manager should reach Ready state")
 
 	// Create the pg_data directory to simulate initialized data directory
@@ -1286,7 +1286,7 @@ func TestDemoteStalePrimary_UpdatesConsensusTerm(t *testing.T) {
 			senv := servenv.NewServEnv(viperutil.NewRegistry())
 			pm.Start(senv)
 			require.Eventually(t, func() bool {
-				return pm.GetState() == ManagerStateReady
+				return pm.IsOpen()
 			}, 5*time.Second, 100*time.Millisecond, "Manager should reach Ready state")
 
 			// Initialize consensus state and set initial term

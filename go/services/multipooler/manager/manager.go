@@ -50,18 +50,6 @@ import (
 	pgctldpb "github.com/multigres/multigres/go/pb/pgctldservice"
 )
 
-// ManagerState represents the state of the MultiPoolerManager
-type ManagerState string
-
-const (
-	// ManagerStateStarting indicates the manager is starting and loading the multipooler record
-	ManagerStateStarting ManagerState = "starting"
-	// ManagerStateReady indicates the manager has successfully loaded the multipooler record
-	ManagerStateReady ManagerState = "ready"
-	// ManagerStateError indicates the manager failed to load the multipooler record
-	ManagerStateError ManagerState = "error"
-)
-
 // MultiPoolerManager manages the pooler lifecycle and PostgreSQL operations
 type MultiPoolerManager struct {
 	logger     *slog.Logger
@@ -103,19 +91,11 @@ type MultiPoolerManager struct {
 	// They can be accessed without holding the lock.
 	// Type and ServingStatus are exclusively written by the StateManager.
 	multipooler    *clustermetadatapb.MultiPooler
-	state          ManagerState
-	stateError     error
 	consensusState *ConsensusState
 	topoLoaded     bool
 	rules          ruleStorer
 	ctx            context.Context
 	cancel         context.CancelFunc
-	loadTimeout    time.Duration
-
-	// readyChan is closed when state becomes Ready or Error, to broadcast to all waiters.
-	// Unbuffered is safe here because we only close() the channel (which never blocks
-	// and broadcasts to all receivers) rather than sending to it.
-	readyChan chan struct{}
 
 	// Cached backup config from the database topology record.
 	// This is loaded once during startup and cached for fast access.
@@ -253,12 +233,9 @@ func NewMultiPoolerManagerWithTimeout(logger *slog.Logger, multiPooler *clusterm
 		servicePoolerID:        svcPoolerID,
 		multipooler:            multiPooler,
 		actionLock:             NewActionLock(),
-		state:                  ManagerStateStarting,
-		loadTimeout:            loadTimeout,
 		pgMonitorRetryInterval: monitorRetryInterval,
 		pgctldClient:           pgctldClient,
 		connPoolMgr:            connPoolMgr,
-		readyChan:              make(chan struct{}),
 		pgMonitor:              monitorRunner,
 		healthStreamer:         newHealthStreamer(logger, multiPooler.Id, multiPooler.TableGroup, multiPooler.Shard),
 		// We create a dummy context because some unit tests need them.
@@ -370,6 +347,15 @@ func (pm *MultiPoolerManager) Open() {
 	pm.logger.InfoContext(pm.ctx, "MonitorPostgres enabled successfully")
 
 	pm.isOpen = true
+
+	// Set initial primary observation from consensus state so the health streamer
+	// can route traffic immediately without waiting for the first heartbeat.
+	if term, _ := pm.consensusState.GetInconsistentTerm(); term != nil && term.GetPrimaryTerm() > 0 {
+		pm.healthStreamer.UpdatePrimaryObservation(&poolerserver.PrimaryObservation{
+			PrimaryID:   pm.serviceID,
+			PrimaryTerm: term.GetPrimaryTerm(),
+		})
+	}
 
 	// Start topology publisher goroutine to eventually-consistently sync state to etcd.
 	go pm.topoPublisher.Run(pm.ctx)
@@ -556,18 +542,11 @@ func (pm *MultiPoolerManager) reopenConnections(_ context.Context) {
 	pm.openConnectionsLocked()
 }
 
-// GetState returns the current state of the manager
-func (pm *MultiPoolerManager) GetState() ManagerState {
+// IsOpen reports whether the manager has been started.
+func (pm *MultiPoolerManager) IsOpen() bool {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
-	return pm.state
-}
-
-// GetStateAndError returns the current manager state and error (used for testing)
-func (pm *MultiPoolerManager) GetStateAndError() (ManagerState, error) {
-	pm.mu.Lock()
-	defer pm.mu.Unlock()
-	return pm.state, pm.stateError
+	return pm.isOpen
 }
 
 // stanzaName returns the pgbackrest stanza name
@@ -596,21 +575,14 @@ func (pm *MultiPoolerManager) shardKey() commontypes.ShardKey {
 	}
 }
 
-// checkReady returns an error if the manager is not in Ready state
+// checkReady returns an error if the manager has not been started yet.
 func (pm *MultiPoolerManager) checkReady() error {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
-
-	switch pm.state {
-	case ManagerStateReady:
-		return nil
-	case ManagerStateStarting:
-		return mterrors.New(mtrpcpb.Code_UNAVAILABLE, "manager is still starting up")
-	case ManagerStateError:
-		return mterrors.Wrap(pm.stateError, "manager is in error state")
-	default:
-		return mterrors.New(mtrpcpb.Code_INTERNAL, fmt.Sprintf("manager is in unknown state: %s", pm.state))
+	if !pm.isOpen {
+		return mterrors.New(mtrpcpb.Code_UNAVAILABLE, "manager not started")
 	}
+	return nil
 }
 
 // checkPoolerType verifies that the pooler matches the expected type
@@ -678,74 +650,26 @@ func (pm *MultiPoolerManager) checkPrimaryGuardrails(ctx context.Context) error 
 	return nil
 }
 
-// setStateError sets the manager state to error with the given error message
-// Must be called without holding the mutex
-func (pm *MultiPoolerManager) setStateError(err error) {
-	pm.mu.Lock()
-	defer pm.mu.Unlock()
-	pm.state = ManagerStateError
-	pm.stateError = err
-	pm.logger.Error("Manager state changed", "state", ManagerStateError, "error", err.Error())
-
-	// Signal that we've reached a terminal state
-	select {
-	case <-pm.readyChan:
-		// Already closed
-	default:
-		close(pm.readyChan)
-	}
-}
-
-// checkAndSetReady checks if all required resources are loaded and sets state to ready if so
-// Must be called without holding the mutex
-func (pm *MultiPoolerManager) checkAndSetReady() {
-	pm.mu.Lock()
-	defer pm.mu.Unlock()
-
-	if pm.topoLoaded {
-		pm.state = ManagerStateReady
-		pm.logger.Info("Manager state changed", "state", ManagerStateReady, "service_id", pm.serviceID.String())
-
-		// Signal that we've reached ready state
-		select {
-		case <-pm.readyChan:
-			// Already closed
-		default:
-			close(pm.readyChan)
-		}
-
-		// Set initial primary observation from loaded consensus state.
-		if term, _ := pm.consensusState.GetInconsistentTerm(); term != nil && term.GetPrimaryTerm() > 0 {
-			pm.healthStreamer.UpdatePrimaryObservation(&poolerserver.PrimaryObservation{
-				PrimaryID:   pm.serviceID,
-				PrimaryTerm: term.GetPrimaryTerm(),
-			})
-		}
-	}
-}
-
-// loadMultiPoolerFromTopo loads the multipooler record from topology asynchronously
-// TODO(sougou): Simplify: We actually just have to verify that we were able to write the record
-// to the topo.
+// loadMultiPoolerFromTopo loads the backup configuration from topology in the background.
+// Retries indefinitely until successful or the manager context is cancelled (shutdown).
+// Backup operations are unavailable until this completes, but consensus and pooling
+// operations proceed regardless.
+//
+// TODO: Introduce a ShardConfig proto to replace the current two-fetch pattern
+// (GetMultiPooler + GetDatabase) and make the config etcd-down resilient:
+//   - Define ShardConfig in proto/clustermetadata.proto with backup_location and
+//     other shard-level operator config (currently spread across MultiPooler and Database).
+//   - Provisioner writes ShardConfig to etcd (new key: /shard_configs/{db}/{tg}/{shard}).
+//   - On successful load, persist ShardConfig to <poolerDir>/shard_config.pb so a
+//     restarted multipooler can read it immediately without etcd being available.
+//   - On startup, attempt disk load first; fall back to etcd fetch with retry.
+//   - etcd fetch (when it succeeds) overwrites the disk file — same proto on both sides.
+//   - Migrate existing Database.backup_location to ShardConfig during provisioner rollout.
 func (pm *MultiPoolerManager) loadMultiPoolerFromTopo() {
-	// Validate ServiceID is not nil
-	if pm.serviceID == nil {
-		pm.setStateError(errors.New("ServiceID cannot be nil"))
-		return
-	}
-
-	// Set timeout for the entire loading process
-	timeoutCtx, timeoutCancel := context.WithTimeout(pm.ctx, pm.loadTimeout)
-	defer timeoutCancel()
-
 	r := retry.New(100*time.Millisecond, 30*time.Second)
-	for _, err := range r.Attempts(timeoutCtx) {
+	for _, err := range r.Attempts(pm.ctx) {
 		if err != nil {
-			if errors.Is(err, context.DeadlineExceeded) {
-				pm.setStateError(fmt.Errorf("timeout waiting for multipooler record to be available in topology after %v", pm.loadTimeout))
-			} else {
-				pm.setStateError(errors.New("manager context cancelled while loading multipooler record"))
-			}
+			// Context cancelled — manager is shutting down.
 			return
 		}
 
@@ -754,13 +678,13 @@ func (pm *MultiPoolerManager) loadMultiPoolerFromTopo() {
 		cancel()
 
 		if err != nil {
-			continue // Will retry with backoff
+			pm.logger.WarnContext(pm.ctx, "Failed to verify multipooler record in topology, will retry", "error", err)
+			continue
 		}
-		// Successfully loaded multipooler record
-		// Now load the backup location from the database topology
+
 		database := pm.multipooler.Database
 		if database == "" {
-			pm.setStateError(errors.New("database name not set in multipooler"))
+			pm.logger.Error("Database name not set in multipooler; backup operations will be unavailable")
 			return
 		}
 
@@ -768,25 +692,22 @@ func (pm *MultiPoolerManager) loadMultiPoolerFromTopo() {
 		db, err := pm.topoClient.GetDatabase(ctx, database)
 		cancel()
 		if err != nil {
-			pm.setStateError(fmt.Errorf("failed to get database %s from topology: %w", database, err))
-			return
+			pm.logger.WarnContext(pm.ctx, "Failed to get database from topology, will retry", "database", database, "error", err)
+			continue
 		}
 
-		// Validate and parse backup configuration
 		backupConfig, err := backup.NewConfig(db.BackupLocation)
 		if err != nil {
-			pm.setStateError(fmt.Errorf("invalid backup_location: %w", err))
+			pm.logger.ErrorContext(pm.ctx, "Invalid backup_location in topology; backup operations will be unavailable", "error", err)
 			return
 		}
 
-		// Verify we can compute the full backup path
 		_, err = backupConfig.FullPath(database, pm.multipooler.TableGroup, pm.multipooler.Shard)
 		if err != nil {
-			pm.setStateError(fmt.Errorf("failed to compute backup path: %w", err))
+			pm.logger.ErrorContext(pm.ctx, "Failed to compute backup path; backup operations will be unavailable", "error", err)
 			return
 		}
 
-		// Generate pgbackrest client config now that we have backup location
 		pgPort := int(pm.multipooler.PortMap["postgres"])
 		socketDir := filepath.Join(pm.multipooler.PoolerDir, "pg_sockets")
 		configPath, err := backup.WriteClientConfig(backup.ClientConfigOpts{
@@ -796,7 +717,7 @@ func (pm *MultiPoolerManager) loadMultiPoolerFromTopo() {
 			Pg1Path:       postgresDataDir(),
 		}, backupConfig)
 		if err != nil {
-			pm.setStateError(fmt.Errorf("failed to generate pgbackrest client config: %w", err))
+			pm.logger.ErrorContext(pm.ctx, "Failed to generate pgbackrest client config; backup operations will be unavailable", "error", err)
 			return
 		}
 		pm.logger.Info("Generated pgbackrest client config", "path", configPath)
@@ -812,9 +733,7 @@ func (pm *MultiPoolerManager) loadMultiPoolerFromTopo() {
 			pm.logger.Error("Failed to set state after topo load", "error", err)
 		}
 
-		// Note: restoring from backup (for replicas) happens in a separate goroutine
-
-		pm.checkAndSetReady()
+		pm.logger.Info("Topology loaded; backup operations now available")
 		return
 	}
 }
@@ -1381,67 +1300,21 @@ func (pm *MultiPoolerManager) ReplicationLag(ctx context.Context) (time.Duration
 
 // Start initializes the MultiPoolerManager
 func (pm *MultiPoolerManager) Start(senv *servenv.ServEnv) {
-	// Open the database connections, connection pool manager, and start background operations
-	// TODO: This should be managed by a proper state manager (like tm_state.go)
 	pm.Open()
 
-	// Start loading multipooler record from topology asynchronously
+	// Start loading the backup configuration from topology asynchronously.
+	// Retries indefinitely until etcd is available or the manager shuts down.
+	// Backup operations (pgBackRest) are unavailable until this completes.
 	go pm.loadMultiPoolerFromTopo()
 
 	senv.OnRunE(func() error {
-		// Block until manager is ready or error before registering gRPC services
-		// Use load timeout from manager configuration
-		waitCtx, cancel := context.WithTimeout(pm.ctx, pm.loadTimeout)
-		defer cancel()
-
-		pm.logger.Info("Waiting for manager to reach ready state before registering gRPC services")
-		if err := pm.WaitUntilReady(waitCtx); err != nil {
-			pm.logger.Error("Manager failed to reach ready state during startup", "error", err)
-			return fmt.Errorf("manager failed to reach ready state: %w", err)
-		}
-		pm.logger.Info("Manager reached ready state, will register gRPC services")
-
 		pm.logger.Info("MultiPoolerManager started")
 		pm.qsc.RegisterGRPCServices()
 		pm.logger.Info("Query service controller registered")
-
-		// Register manager gRPC services
 		pm.registerGRPCServices()
 		pm.logger.Info("MultiPoolerManager gRPC services registered")
 		return nil
 	})
-}
-
-// WaitUntilReady blocks until the manager reaches Ready or Error state, or
-// the context is cancelled. Returns nil if Ready, or an error if Error state
-// or context cancelled. This should be called after Start() to ensure
-// initialization is complete before accepting RPC requests.
-//
-// Thread-safety: This method waits on a channel that is closed when the state
-// changes to Ready or Error, allowing efficient notification without polling.
-func (pm *MultiPoolerManager) WaitUntilReady(ctx context.Context) error {
-	select {
-	case <-ctx.Done():
-		return fmt.Errorf("waiting for manager ready cancelled: %w", ctx.Err())
-	case <-pm.readyChan:
-		// State has changed to Ready or Error, check which one
-		pm.mu.Lock()
-		state := pm.state
-		stateError := pm.stateError
-		pm.mu.Unlock()
-
-		switch state {
-		case ManagerStateReady:
-			pm.logger.InfoContext(ctx, "Manager is ready")
-			return nil
-		case ManagerStateError:
-			pm.logger.ErrorContext(ctx, "Manager failed to initialize", "error", stateError)
-			return fmt.Errorf("manager is in error state: %w", stateError)
-		default:
-			// This shouldn't happen - channel was closed but state isn't terminal
-			return fmt.Errorf("unexpected state after ready signal: %s", state)
-		}
-	}
 }
 
 // postgresState represents the state of PostgreSQL for monitoring

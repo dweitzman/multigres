@@ -140,7 +140,7 @@ func TestPrimaryPosition(t *testing.T) {
 			senv := servenv.NewServEnv(viperutil.NewRegistry())
 			go manager.Start(senv)
 			require.Eventually(t, func() bool {
-				return manager.GetState() == ManagerStateReady
+				return manager.IsOpen()
 			}, 5*time.Second, 100*time.Millisecond, "Manager should reach Ready state")
 
 			// Call PrimaryPosition
@@ -211,7 +211,7 @@ func TestActionLock_MutationMethodsTimeout(t *testing.T) {
 	senv := servenv.NewServEnv(viperutil.NewRegistry())
 	go manager.Start(senv)
 	require.Eventually(t, func() bool {
-		return manager.GetState() == ManagerStateReady
+		return manager.IsOpen()
 	}, 5*time.Second, 100*time.Millisecond, "Manager should reach Ready state")
 
 	// Helper function to hold the lock for a duration
@@ -435,7 +435,7 @@ func setupPromoteTestManager(t *testing.T, mockQueryService *mock.QueryService, 
 	go pm.Start(senv)
 
 	require.Eventually(t, func() bool {
-		return pm.GetState() == ManagerStateReady
+		return pm.IsOpen()
 	}, 5*time.Second, 100*time.Millisecond, "Manager should reach Ready state")
 
 	// Set consensus term to expected value (10) for testing via direct file write
@@ -1089,7 +1089,7 @@ func TestPromote_TopologyUpdateFailureDoesNotFailPromotion(t *testing.T) {
 	go pm.Start(senv)
 
 	require.Eventually(t, func() bool {
-		return pm.GetState() == ManagerStateReady
+		return pm.IsOpen()
 	}, 5*time.Second, 100*time.Millisecond, "Manager should reach Ready state")
 
 	term := &multipoolermanagerdatapb.ConsensusTerm{TermNumber: 10}
@@ -1269,7 +1269,7 @@ func TestSetPrimaryConnInfo_StoresPrimaryPoolerID(t *testing.T) {
 	senv := servenv.NewServEnv(viperutil.NewRegistry())
 	go pm.Start(senv)
 	require.Eventually(t, func() bool {
-		return pm.GetState() == ManagerStateReady
+		return pm.IsOpen()
 	}, 5*time.Second, 100*time.Millisecond, "Manager should reach Ready state")
 
 	// Set consensus term first (required for SetPrimaryConnInfo) via direct file write
@@ -1378,7 +1378,7 @@ func TestReplicationStatus(t *testing.T) {
 		go pm.Start(senv)
 
 		require.Eventually(t, func() bool {
-			return pm.GetState() == ManagerStateReady
+			return pm.IsOpen()
 		}, 5*time.Second, 100*time.Millisecond, "Manager should reach Ready state")
 
 		// Call ReplicationStatus
@@ -1466,7 +1466,7 @@ func TestReplicationStatus(t *testing.T) {
 		go pm.Start(senv)
 
 		require.Eventually(t, func() bool {
-			return pm.GetState() == ManagerStateReady
+			return pm.IsOpen()
 		}, 5*time.Second, 100*time.Millisecond, "Manager should reach Ready state")
 
 		// Call ReplicationStatus
@@ -1549,7 +1549,7 @@ func TestReplicationStatus(t *testing.T) {
 		go pm.Start(senv)
 
 		require.Eventually(t, func() bool {
-			return pm.GetState() == ManagerStateReady
+			return pm.IsOpen()
 		}, 5*time.Second, 100*time.Millisecond, "Manager should reach Ready state")
 
 		// Call Status - now returns status with mismatch observable
@@ -1699,7 +1699,7 @@ func TestReplicationStatus(t *testing.T) {
 		go pm.Start(senv)
 
 		require.Eventually(t, func() bool {
-			return pm.GetState() == ManagerStateReady
+			return pm.IsOpen()
 		}, 5*time.Second, 100*time.Millisecond, "Manager should reach Ready state")
 
 		// Call Status - now returns status with mismatch observable
@@ -1790,7 +1790,7 @@ func TestConfigureSynchronousReplication_HistoryFailurePreventGUCUpdates(t *test
 	senv := servenv.NewServEnv(viperutil.NewRegistry())
 	go manager.Start(senv)
 	require.Eventually(t, func() bool {
-		return manager.GetState() == ManagerStateReady
+		return manager.IsOpen()
 	}, 5*time.Second, 100*time.Millisecond)
 
 	// We do NOT add expectations for ALTER SYSTEM SET queries
@@ -1895,7 +1895,7 @@ func TestUpdateSynchronousStandbyList_HistoryFailurePreventsGUCUpdate(t *testing
 	senv := servenv.NewServEnv(viperutil.NewRegistry())
 	go manager.Start(senv)
 	require.Eventually(t, func() bool {
-		return manager.GetState() == ManagerStateReady
+		return manager.IsOpen()
 	}, 5*time.Second, 100*time.Millisecond)
 
 	// Mock getSynchronousReplicationConfig (called to get current config)
@@ -1993,7 +1993,6 @@ func TestRewindToSource_ManagerReopenedOnError(t *testing.T) {
 	// Simulate the manager being open and ready (set internal state without starting goroutines)
 	manager.mu.Lock()
 	manager.isOpen = true
-	manager.state = ManagerStateReady
 	manager.ctx, manager.cancel = context.WithCancel(ctx)
 	manager.mu.Unlock()
 

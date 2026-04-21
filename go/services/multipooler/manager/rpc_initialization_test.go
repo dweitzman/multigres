@@ -788,8 +788,6 @@ func TestStartPostgres_StartFails(t *testing.T) {
 func TestMonitorPostgres_WaitsForReady(t *testing.T) {
 	ctx := t.Context()
 
-	readyChan := make(chan struct{})
-
 	mockPgctld := &mockPgctldClient{
 		statusResponse: &pgctldpb.StatusResponse{
 			Status: pgctldpb.ServerStatus_STOPPED,
@@ -798,32 +796,26 @@ func TestMonitorPostgres_WaitsForReady(t *testing.T) {
 
 	pm := &MultiPoolerManager{
 		logger:       slog.Default(),
-		readyChan:    readyChan,
 		pgctldClient: mockPgctld,
-		state:        ManagerStateStarting,
 		actionLock:   NewActionLock(),
 	}
 
-	// Call iteration when not ready - should return early without calling pgctld
+	// Call iteration when not open - should return early without calling pgctld
 	pm.monitorPostgresIteration(ctx)
-	assert.False(t, mockPgctld.startCalled, "Should not attempt to start when not ready")
+	assert.False(t, mockPgctld.startCalled, "Should not attempt to start when not open")
 
-	// Set state to ready
+	// Open the manager
 	pm.mu.Lock()
-	pm.state = ManagerStateReady
+	pm.isOpen = true
 	pm.mu.Unlock()
-	close(readyChan)
 
-	// Call iteration again when ready - should proceed and attempt to start
+	// Call iteration again when open - should proceed and attempt to start
 	pm.monitorPostgresIteration(ctx)
-	assert.True(t, mockPgctld.startCalled, "Should attempt to start when ready")
+	assert.True(t, mockPgctld.startCalled, "Should attempt to start when open")
 }
 
 func TestMonitorPostgres_HandlesRunningPostgres(t *testing.T) {
 	ctx := t.Context()
-
-	readyChan := make(chan struct{})
-	close(readyChan)
 
 	mockPgctld := &mockPgctldClient{
 		statusResponse: &pgctldpb.StatusResponse{
@@ -833,9 +825,8 @@ func TestMonitorPostgres_HandlesRunningPostgres(t *testing.T) {
 
 	pm := &MultiPoolerManager{
 		logger:       slog.Default(),
-		readyChan:    readyChan,
 		pgctldClient: mockPgctld,
-		state:        ManagerStateReady,
+		isOpen:       true,
 		actionLock:   NewActionLock(),
 		multipooler: &clustermetadatapb.MultiPooler{
 			Type: clustermetadatapb.PoolerType_PRIMARY,
@@ -852,9 +843,6 @@ func TestMonitorPostgres_HandlesRunningPostgres(t *testing.T) {
 func TestMonitorPostgres_StartsStoppedPostgres(t *testing.T) {
 	ctx := t.Context()
 
-	readyChan := make(chan struct{})
-	close(readyChan)
-
 	mockPgctld := &mockPgctldClient{
 		statusResponse: &pgctldpb.StatusResponse{
 			Status: pgctldpb.ServerStatus_STOPPED,
@@ -863,9 +851,8 @@ func TestMonitorPostgres_StartsStoppedPostgres(t *testing.T) {
 
 	pm := &MultiPoolerManager{
 		logger:       slog.Default(),
-		readyChan:    readyChan,
 		pgctldClient: mockPgctld,
-		state:        ManagerStateReady,
+		isOpen:       true,
 		actionLock:   NewActionLock(),
 	}
 
@@ -879,9 +866,6 @@ func TestMonitorPostgres_StartsStoppedPostgres(t *testing.T) {
 func TestMonitorPostgres_RetriesOnStartFailure(t *testing.T) {
 	ctx := t.Context()
 
-	readyChan := make(chan struct{})
-	close(readyChan)
-
 	mockPgctld := &mockPgctldClientWithCounter{
 		mockPgctldClient: mockPgctldClient{
 			statusResponse: &pgctldpb.StatusResponse{
@@ -893,9 +877,8 @@ func TestMonitorPostgres_RetriesOnStartFailure(t *testing.T) {
 
 	pm := &MultiPoolerManager{
 		logger:       slog.Default(),
-		readyChan:    readyChan,
 		pgctldClient: mockPgctld,
-		state:        ManagerStateReady,
+		isOpen:       true,
 		actionLock:   NewActionLock(),
 	}
 

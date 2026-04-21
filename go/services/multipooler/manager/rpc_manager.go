@@ -784,15 +784,13 @@ func (pm *MultiPoolerManager) State(ctx context.Context) (*multipoolermanagerdat
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 
-	state := string(pm.state)
-	var errorMessage string
-	if pm.stateError != nil {
-		errorMessage = pm.stateError.Error()
+	state := "starting"
+	if pm.isOpen {
+		state = "ready"
 	}
 
 	return &multipoolermanagerdatapb.StateResponse{
-		State:        state,
-		ErrorMessage: errorMessage,
+		State: state,
 	}, nil
 }
 

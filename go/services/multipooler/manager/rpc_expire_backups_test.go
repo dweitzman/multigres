@@ -30,6 +30,6 @@ func TestExpireBackups(t *testing.T) {
 		pm := &MultiPoolerManager{}
 		_, err := pm.ExpireBackups(context.Background(), nil)
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "manager is in unknown state")
+		require.Contains(t, err.Error(), "manager not started")
 	})
 }

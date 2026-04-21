@@ -109,7 +109,7 @@ func TestConsensusService_BeginTerm(t *testing.T) {
 
 	// Wait for the manager to become ready
 	require.Eventually(t, func() bool {
-		return pm.GetState() == manager.ManagerStateReady
+		return pm.IsOpen()
 	}, 5*time.Second, 100*time.Millisecond, "Manager should reach Ready state")
 
 	svc := &consensusService{
@@ -202,7 +202,7 @@ func TestConsensusService_Status(t *testing.T) {
 
 	// Wait for the manager to become ready
 	require.Eventually(t, func() bool {
-		return pm.GetState() == manager.ManagerStateReady
+		return pm.IsOpen()
 	}, 5*time.Second, 100*time.Millisecond, "Manager should reach Ready state")
 
 	svc := &consensusService{
@@ -288,7 +288,7 @@ func TestConsensusService_GetLeadershipView(t *testing.T) {
 
 	// Wait for the manager to become ready
 	require.Eventually(t, func() bool {
-		return pm.GetState() == manager.ManagerStateReady
+		return pm.IsOpen()
 	}, 5*time.Second, 100*time.Millisecond, "Manager should reach Ready state")
 
 	svc := &consensusService{
@@ -369,7 +369,7 @@ func TestConsensusService_CanReachPrimary(t *testing.T) {
 
 	// Wait for the manager to become ready
 	require.Eventually(t, func() bool {
-		return pm.GetState() == manager.ManagerStateReady
+		return pm.IsOpen()
 	}, 5*time.Second, 100*time.Millisecond, "Manager should reach Ready state")
 
 	svc := &consensusService{
@@ -452,7 +452,7 @@ func TestConsensusService_AllMethods(t *testing.T) {
 
 	// Wait for the manager to become ready
 	require.Eventually(t, func() bool {
-		return pm.GetState() == manager.ManagerStateReady
+		return pm.IsOpen()
 	}, 5*time.Second, 100*time.Millisecond, "Manager should reach Ready state")
 
 	svc := &consensusService{

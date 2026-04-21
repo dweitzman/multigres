@@ -99,7 +99,7 @@ func TestManagerServiceMethods_NotImplemented(t *testing.T) {
 
 	// Wait for the manager to become ready
 	require.Eventually(t, func() bool {
-		return pm.GetState() == manager.ManagerStateReady
+		return pm.IsOpen()
 	}, 5*time.Second, 100*time.Millisecond, "Manager should reach Ready state")
 
 	svc := &managerService{
@@ -171,9 +171,8 @@ func TestManagerServiceMethods_ManagerNotReady(t *testing.T) {
 	require.NoError(t, err)
 	defer pm.Shutdown()
 
-	// Do NOT start the manager - keep it in starting state
-	// Verify manager is in starting state
-	assert.Equal(t, manager.ManagerStateStarting, pm.GetState())
+	// Do NOT start the manager - it should not be open
+	assert.False(t, pm.IsOpen())
 
 	svc := &managerService{
 		manager: pm,
@@ -332,7 +331,7 @@ func TestManagerServiceMethods_ManagerNotReady(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Check manager state before calling method
-			t.Logf("Manager state before %s: %s", tt.name, pm.GetState())
+			t.Logf("Manager open before %s: %v", tt.name, pm.IsOpen())
 
 			err := tt.method()
 
@@ -347,7 +346,7 @@ func TestManagerServiceMethods_ManagerNotReady(t *testing.T) {
 			code := mterrors.Code(mterr)
 			// Should return UNAVAILABLE when manager is starting
 			assert.Equal(t, mtrpcpb.Code_UNAVAILABLE, code, "Should return UNAVAILABLE code when manager is not ready")
-			assert.Contains(t, err.Error(), "manager is still starting up", "Error message should indicate manager is starting")
+			assert.Contains(t, err.Error(), "manager not started", "Error message should indicate manager is not started")
 		})
 	}
 }
