@@ -46,10 +46,7 @@
 //	defer client.Close()
 //
 //	// Call consensus methods
-//	resp, err := client.BeginTerm(ctx, tablet, &consensusdatapb.BeginTermRequest{
-//	    Term: 5,
-//	    CandidateId: coordinatorID,
-//	})
+//	resp, err := client.Recruit(ctx, tablet, &consensusdatapb.RecruitRequest{...})
 //
 //	// Call manager methods
 //	status, err := client.Status(ctx, tablet, &multipoolermanagerdatapb.StatusRequest{})
@@ -141,9 +138,17 @@ type MultiPoolerClient interface {
 	// Consensus Service Methods (consensuspb.MultiPoolerConsensusClient)
 	//
 
-	// BeginTerm sends a BeginTerm request for leader appointment.
-	// This is part of the consensus protocol for establishing a new term.
-	BeginTerm(ctx context.Context, pooler *clustermetadatapb.MultiPooler, request *consensusdatapb.BeginTermRequest) (*consensusdatapb.BeginTermResponse, error)
+	// Recruit sends a Recruit request to revoke prior terms and freeze WAL positions.
+	// This is phase 1 of the consensus protocol (Paxos prepare).
+	Recruit(ctx context.Context, pooler *clustermetadatapb.MultiPooler, request *consensusdatapb.RecruitRequest) (*consensusdatapb.RecruitResponse, error)
+
+	// Propose sends a CoordinatorProposal to all poolers to establish a new primary.
+	// Each pooler self-identifies: if proposal_leader_id == self, it promotes to primary;
+	// otherwise it configures replication to the proposal leader.
+	Propose(ctx context.Context, pooler *clustermetadatapb.MultiPooler, request *consensusdatapb.ProposeRequest) (*consensusdatapb.ProposeResponse, error)
+
+	// Inform notifies a pooler of a committed shard rule decision.
+	Inform(ctx context.Context, pooler *clustermetadatapb.MultiPooler, request *consensusdatapb.InformRequest) (*consensusdatapb.InformResponse, error)
 
 	// ConsensusStatus gets the consensus status of the multipooler.
 	// This may be called frequently for monitoring, so implementations cache connections.
@@ -152,17 +157,11 @@ type MultiPoolerClient interface {
 	// EmergencyDemote demotes the current leader server.
 	EmergencyDemote(ctx context.Context, pooler *clustermetadatapb.MultiPooler, request *multipoolermanagerdatapb.EmergencyDemoteRequest) (*multipoolermanagerdatapb.EmergencyDemoteResponse, error)
 
-	// DemoteStalePrimary demotes a stale primary that came back after failover.
-	DemoteStalePrimary(ctx context.Context, pooler *clustermetadatapb.MultiPooler, request *multipoolermanagerdatapb.DemoteStalePrimaryRequest) (*multipoolermanagerdatapb.DemoteStalePrimaryResponse, error)
-
-	// Promote promotes the multipooler to primary.
-	Promote(ctx context.Context, pooler *clustermetadatapb.MultiPooler, request *multipoolermanagerdatapb.PromoteRequest) (*multipoolermanagerdatapb.PromoteResponse, error)
-
 	// UpdateConsensusRule updates the synchronous standby list (quorum membership).
 	UpdateConsensusRule(ctx context.Context, pooler *clustermetadatapb.MultiPooler, request *multipoolermanagerdatapb.UpdateSynchronousStandbyListRequest) (*multipoolermanagerdatapb.UpdateSynchronousStandbyListResponse, error)
 
-	// SetPrimaryConnInfo configures the standby's connection to a primary.
-	SetPrimaryConnInfo(ctx context.Context, pooler *clustermetadatapb.MultiPooler, request *multipoolermanagerdatapb.SetPrimaryConnInfoRequest) (*multipoolermanagerdatapb.SetPrimaryConnInfoResponse, error)
+	// DemoteStalePrimary demotes a stale primary that came back after failover.
+	DemoteStalePrimary(ctx context.Context, pooler *clustermetadatapb.MultiPooler, request *multipoolermanagerdatapb.DemoteStalePrimaryRequest) (*multipoolermanagerdatapb.DemoteStalePrimaryResponse, error)
 
 	// RewindToSource performs pg_rewind to synchronize a replica with its source.
 	RewindToSource(ctx context.Context, pooler *clustermetadatapb.MultiPooler, request *multipoolermanagerdatapb.RewindToSourceRequest) (*multipoolermanagerdatapb.RewindToSourceResponse, error)

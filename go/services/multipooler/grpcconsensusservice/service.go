@@ -45,13 +45,33 @@ func RegisterConsensusServices(senv *servenv.ServEnv, grpc *servenv.GrpcServer) 
 	})
 }
 
-// BeginTerm handles coordinator requests during leader appointments
-func (s *consensusService) BeginTerm(ctx context.Context, req *consensusdata.BeginTermRequest) (*consensusdata.BeginTermResponse, error) {
-	resp, err := s.manager.BeginTerm(ctx, req)
+// Recruit handles Phase 1 of the Paxos-inspired consensus protocol.
+// The coordinator sends a TermRevocation; this pooler accepts it if the
+// revoked_below_term is >= the current value, then freezes its WAL position.
+func (s *consensusService) Recruit(ctx context.Context, req *consensusdata.RecruitRequest) (*consensusdata.RecruitResponse, error) {
+	resp, err := s.manager.Recruit(ctx, req)
 	if err != nil {
-		// Return response even on error - the response may contain accepted=true
-		// when the term was accepted but the action (e.g. REVOKE) failed
 		return resp, mterrors.ToGRPC(err)
+	}
+	return resp, nil
+}
+
+// Propose handles Phase 2 of the Paxos-inspired consensus protocol.
+// Each pooler self-identifies: if proposal_leader_id == self it promotes to primary;
+// otherwise it configures replication to the proposal leader.
+func (s *consensusService) Propose(ctx context.Context, req *consensusdata.ProposeRequest) (*consensusdata.ProposeResponse, error) {
+	resp, err := s.manager.Propose(ctx, req)
+	if err != nil {
+		return resp, mterrors.ToGRPC(err)
+	}
+	return resp, nil
+}
+
+// Inform notifies this pooler of a committed shard rule decision.
+func (s *consensusService) Inform(ctx context.Context, req *consensusdata.InformRequest) (*consensusdata.InformResponse, error) {
+	resp, err := s.manager.Inform(ctx, req)
+	if err != nil {
+		return nil, mterrors.ToGRPC(err)
 	}
 	return resp, nil
 }
@@ -87,23 +107,6 @@ func (s *consensusService) DemoteStalePrimary(ctx context.Context, req *multipoo
 	return resp, nil
 }
 
-// Promote promotes a replica to leader
-func (s *consensusService) Promote(ctx context.Context, req *multipoolermanagerdatapb.PromoteRequest) (*multipoolermanagerdatapb.PromoteResponse, error) {
-	resp, err := s.manager.Promote(ctx,
-		req.ConsensusTerm,
-		req.ExpectedLsn,
-		req.SyncReplicationConfig,
-		req.Force,
-		req.Reason,
-		req.CoordinatorId,
-		req.CohortMembers,
-		req.AcceptedMembers)
-	if err != nil {
-		return nil, mterrors.ToGRPC(err)
-	}
-	return resp, nil
-}
-
 // UpdateConsensusRule updates the synchronous standby list (quorum membership)
 func (s *consensusService) UpdateConsensusRule(ctx context.Context, req *multipoolermanagerdatapb.UpdateSynchronousStandbyListRequest) (*multipoolermanagerdatapb.UpdateSynchronousStandbyListResponse, error) {
 	err := s.manager.UpdateSynchronousStandbyList(ctx,
@@ -117,20 +120,6 @@ func (s *consensusService) UpdateConsensusRule(ctx context.Context, req *multipo
 		return nil, mterrors.ToGRPC(err)
 	}
 	return &multipoolermanagerdatapb.UpdateSynchronousStandbyListResponse{}, nil
-}
-
-// SetPrimaryConnInfo sets the primary connection info for a standby server
-func (s *consensusService) SetPrimaryConnInfo(ctx context.Context, req *multipoolermanagerdatapb.SetPrimaryConnInfoRequest) (*multipoolermanagerdatapb.SetPrimaryConnInfoResponse, error) {
-	err := s.manager.SetPrimaryConnInfo(ctx,
-		req.Primary,
-		req.StopReplicationBefore,
-		req.StartReplicationAfter,
-		req.CurrentTerm,
-		req.Force)
-	if err != nil {
-		return nil, mterrors.ToGRPC(err)
-	}
-	return &multipoolermanagerdatapb.SetPrimaryConnInfoResponse{}, nil
 }
 
 // RewindToSource performs pg_rewind to synchronize this server with a source

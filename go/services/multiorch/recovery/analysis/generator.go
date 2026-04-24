@@ -233,13 +233,12 @@ func (g *AnalysisGenerator) generateAnalysisForPooler(
 
 	// Store consensus status.
 	if pooler.ConsensusStatus != nil {
-		analysis.ConsensusTerm = pooler.ConsensusStatus.CurrentTerm
-		analysis.ConsensusStatus = pooler.ConsensusStatus.ConsensusStatus
-	}
-
-	// Store primary term (term when this pooler was promoted to primary)
-	if ct := pooler.GetStatus().GetConsensusTerm(); ct != nil {
-		analysis.PrimaryTerm = ct.PrimaryTerm
+		cs := pooler.ConsensusStatus.GetConsensusStatus()
+		analysis.ConsensusTerm = cs.GetTermRevocation().GetRevokedBelowTerm()
+		analysis.ConsensusStatus = cs
+		// PrimaryTerm is the coordinator_term of the highest committed rule — the term
+		// at which this node was most recently established as primary.
+		analysis.PrimaryTerm = cs.GetCurrentPosition().GetRule().GetRuleNumber().GetCoordinatorTerm()
 	}
 
 	// If this is a REPLICA, populate replica-specific fields
@@ -272,10 +271,7 @@ func findHighestTermRawPooler(poolers map[string]*multiorchdatapb.PoolerHealthSt
 		if pooler.GetStatus().GetPoolerType() != clustermetadatapb.PoolerType_PRIMARY {
 			continue
 		}
-		var term int64
-		if ct := pooler.GetStatus().GetConsensusTerm(); ct != nil {
-			term = ct.PrimaryTerm
-		}
+		term := pooler.ConsensusStatus.GetConsensusStatus().GetCurrentPosition().GetRule().GetRuleNumber().GetCoordinatorTerm()
 		if best == nil || term > bestTerm {
 			best = pooler
 			bestTerm = term

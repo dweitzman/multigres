@@ -194,25 +194,33 @@ func (a *FixReplicationAction) fixNotReplicating(
 		}
 	}()
 
-	// Get the current consensus term from the primary
+	// Get the current consensus status from the primary to obtain the term revocation.
 	consensusResp, err := a.rpcClient.ConsensusStatus(ctx, primary.MultiPooler, &consensusdatapb.StatusRequest{})
 	if err != nil {
 		return mterrors.Wrap(err, "failed to get consensus status from primary")
 	}
-	consensusTerm := consensusResp.CurrentTerm
+	termRevocation := consensusResp.GetConsensusStatus().GetTermRevocation()
+	consensusTerm := termRevocation.GetRevokedBelowTerm()
 
-	// Configure primary_conninfo on the replica
-	req := &multipoolermanagerdatapb.SetPrimaryConnInfoRequest{
-		Primary:               primary.MultiPooler,
-		StopReplicationBefore: true,
-		StartReplicationAfter: true,
-		CurrentTerm:           consensusTerm,
-		Force:                 false,
+	// Configure primary_conninfo on the replica via Propose. In the new consensus
+	// model replication setup is driven by the coordinator through Propose; the
+	// replica must have been recruited to the same term for this to succeed.
+	primaryPort := int32(0)
+	if primary.MultiPooler.PortMap != nil {
+		primaryPort = primary.MultiPooler.PortMap["postgres"]
 	}
-
-	_, err = a.rpcClient.SetPrimaryConnInfo(ctx, replica.MultiPooler, req)
+	_, err = a.rpcClient.Propose(ctx, replica.MultiPooler, &consensusdatapb.ProposeRequest{
+		Proposal: &consensusdatapb.CoordinatorProposal{
+			TermRevocation: termRevocation,
+			ProposalLeader: &consensusdatapb.ProposalLeader{
+				Id:           primary.MultiPooler.Id,
+				Host:         primary.MultiPooler.Hostname,
+				PostgresPort: primaryPort,
+			},
+		},
+	})
 	if err != nil {
-		return mterrors.Wrap(err, "failed to set primary connection info")
+		return mterrors.Wrap(err, "failed to configure replica replication")
 	}
 
 	// Verify replication started

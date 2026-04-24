@@ -22,21 +22,23 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 )
 
 // fakeRuleStore is a test double for ruleStorer that returns a preset position
 // without hitting postgres. Both observePosition and updateRule return pos
 // (or observeErr/updateErr when set). updateRule records all calls in updates.
 type fakeRuleStore struct {
-	mu         sync.Mutex
-	pos        *clustermetadatapb.PoolerPosition
-	observeErr error
-	updateErr  error
-	updates    []*ruleUpdateBuilder
+	mu          sync.Mutex
+	pos         *consensusdatapb.PoolerPosition
+	observeErr  error
+	updateErr   error
+	fenceErr    error
+	updates     []*ruleUpdateBuilder
+	fenceCount  int
 }
 
-func (f *fakeRuleStore) observePosition(_ context.Context) (*clustermetadatapb.PoolerPosition, error) {
+func (f *fakeRuleStore) observePosition(_ context.Context) (*consensusdatapb.PoolerPosition, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.pos, f.observeErr
@@ -46,13 +48,13 @@ func (f *fakeRuleStore) createRuleTables(_ context.Context) error {
 	return nil
 }
 
-func (f *fakeRuleStore) cachedPosition() *clustermetadatapb.PoolerPosition {
+func (f *fakeRuleStore) cachedPosition() *consensusdatapb.PoolerPosition {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.pos
 }
 
-func (f *fakeRuleStore) updateRule(_ context.Context, update *ruleUpdateBuilder) (*clustermetadatapb.PoolerPosition, error) {
+func (f *fakeRuleStore) updateRule(_ context.Context, update *ruleUpdateBuilder) (*consensusdatapb.PoolerPosition, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.updates = append(f.updates, update)
@@ -60,6 +62,13 @@ func (f *fakeRuleStore) updateRule(_ context.Context, update *ruleUpdateBuilder)
 		return nil, f.updateErr
 	}
 	return f.pos, nil
+}
+
+func (f *fakeRuleStore) fenceRule(_ context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fenceCount++
+	return f.fenceErr
 }
 
 // assertPromoteRecorded asserts that exactly one updateRule call was made with

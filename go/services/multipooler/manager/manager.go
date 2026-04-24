@@ -631,9 +631,9 @@ func (pm *MultiPoolerManager) checkPoolerType(expectedType clustermetadatapb.Poo
 	return nil
 }
 
-// getCurrentTermNumber returns the current consensus term number.
+// getCurrentTermNumber returns the current revoked_below_term.
 func (pm *MultiPoolerManager) getCurrentTermNumber(ctx context.Context) (int64, error) {
-	return pm.consensusState.GetCurrentTermNumber(ctx)
+	return pm.consensusState.GetRevokedBelowTerm(ctx)
 }
 
 // checkReplicaGuardrails verifies that the pooler is a REPLICA and PostgreSQL is in recovery mode
@@ -712,14 +712,6 @@ func (pm *MultiPoolerManager) checkAndSetReady() {
 			// Already closed
 		default:
 			close(pm.readyChan)
-		}
-
-		// Set initial primary observation from loaded consensus state.
-		if term, _ := pm.consensusState.GetInconsistentTerm(); term != nil && term.GetPrimaryTerm() > 0 {
-			pm.healthStreamer.UpdatePrimaryObservation(&poolerserver.PrimaryObservation{
-				PrimaryID:   pm.serviceID,
-				PrimaryTerm: term.GetPrimaryTerm(),
-			})
 		}
 	}
 }
@@ -845,22 +837,8 @@ func (pm *MultiPoolerManager) validateAndUpdateTerm(ctx context.Context, request
 		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
 			fmt.Sprintf("consensus term too old: request term %d is less than current term %d (use force=true to bypass)",
 				requestTerm, currentTerm))
-	} else if requestTerm > currentTerm {
-		// Request has newer term, update our term
-		pm.logger.InfoContext(ctx, "Discovered newer term, updating",
-			"request_term", requestTerm,
-			"old_term", currentTerm,
-			"service_id", pm.serviceID.String())
-
-		// Update term atomically (resets accepted leader)
-		if err := pm.consensusState.UpdateTermAndSave(ctx, requestTerm); err != nil {
-			pm.logger.ErrorContext(ctx, "Failed to update term", "error", err)
-			return mterrors.Wrap(err, "failed to update consensus term")
-		}
-
-		pm.logger.InfoContext(ctx, "Consensus term updated successfully", "new_term", requestTerm)
 	}
-	// If requestTerm == currentCachedTerm, just continue (same term is OK)
+	// Terms now advance only via Recruit. Accept equal or newer terms without auto-updating.
 	return nil
 }
 
@@ -881,7 +859,7 @@ func (pm *MultiPoolerManager) validateTerm(ctx context.Context, requestTerm int6
 	// Check if consensus term has been initialized (term 0 means uninitialized)
 	if currentTerm == 0 {
 		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
-			"consensus term not initialized, must be set via BeginTerm (use force=true to bypass)")
+			"consensus term not initialized, must be set via Recruit (use force=true to bypass)")
 	}
 
 	// Reject stale requests
@@ -895,29 +873,9 @@ func (pm *MultiPoolerManager) validateTerm(ctx context.Context, requestTerm int6
 	return nil
 }
 
-// updateTermIfNewer updates the consensus term if the provided term is newer than current.
-// This is used to decouple term validation from term update, allowing updates to occur
-// only after an operation succeeds.
-func (pm *MultiPoolerManager) updateTermIfNewer(ctx context.Context, requestTerm int64) error {
-	currentTerm, err := pm.getCurrentTermNumber(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get current term: %w", err)
-	}
-
-	if requestTerm <= currentTerm {
-		// Already at or past this term
-		return nil
-	}
-
-	pm.logger.InfoContext(ctx, "Updating to newer term after successful operation",
-		"request_term", requestTerm,
-		"old_term", currentTerm,
-		"service_id", pm.serviceID.String())
-
-	if err := pm.consensusState.UpdateTermAndSave(ctx, requestTerm); err != nil {
-		return mterrors.Wrap(err, "failed to update consensus term")
-	}
-
+// updateTermIfNewer is a no-op in the new model: terms advance only via Recruit.
+// Retained for call-site compatibility during the prototype transition.
+func (pm *MultiPoolerManager) updateTermIfNewer(_ context.Context, _ int64) error {
 	return nil
 }
 
@@ -1595,11 +1553,10 @@ func (pm *MultiPoolerManager) determineRemedialAction(currentState postgresState
 		// signal needs to be (re-)published. This handles the case where the signal was
 		// lost after a process restart following EmergencyDemote.
 		if !currentState.isPrimary {
-			term, _ := pm.consensusState.GetInconsistentTerm()
 			pm.mu.Lock()
 			resigned := pm.resignedPrimaryAtTerm
 			pm.mu.Unlock()
-			if term.GetPrimaryTerm() != 0 && resigned == 0 {
+			if resigned == 0 {
 				return remedialActionAdjustTypeToReplica
 			}
 		}
@@ -1654,12 +1611,9 @@ func (pm *MultiPoolerManager) takeRemedialAction(ctx context.Context, action rem
 		pm.logger.InfoContext(ctx, "MonitorPostgres: PostgreSQL is running but not primary")
 		pm.logger.InfoContext(ctx, "MonitorPostgres: Changing pooler type to replica")
 		// Signal voluntary resignation so the coordinator can trigger an immediate
-		// election. Use the primary_term (the term at which we were elected) since
-		// the coordinator uses this to decide whether the signal is still active.
-		// TODO: Once ConsensusStatus is populated in StatusResponse, use the
-		// consensus term from there for a more precise resignation signal.
-		if term, err := pm.consensusState.GetInconsistentTerm(); err == nil && term.GetPrimaryTerm() != 0 {
-			if err := pm.setResignedPrimaryAtTerm(ctx, term.GetPrimaryTerm()); err != nil {
+		// election. Use the revoked_below_term as the resignation term signal.
+		if term, err := pm.consensusState.GetInconsistentRevokedBelowTerm(); err == nil && term != 0 {
+			if err := pm.setResignedPrimaryAtTerm(ctx, term); err != nil {
 				pm.logger.ErrorContext(ctx, "MonitorPostgres: failed to set resigned primary term", "error", err)
 			}
 		}
@@ -1811,10 +1765,11 @@ func (pm *MultiPoolerManager) restoreAndStartPostgres(ctx context.Context) error
 		return fmt.Errorf("failed to restore from backup: %w", err)
 	}
 
+	term, _ := pm.consensusState.GetInconsistentRevokedBelowTerm()
 	pm.logger.InfoContext(ctx, "MonitorPostgres: successfully restored from backup",
 		"backup_id", latestBackup.BackupId,
 		"shard", pm.getShardID(),
-		"term", pm.consensusState.term.TermNumber)
+		"term", term)
 
 	return nil
 }

@@ -20,6 +20,7 @@ import (
 
 	commontypes "github.com/multigres/multigres/go/common/types"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
 )
 
@@ -155,7 +156,7 @@ type PoolerAnalysis struct {
 	// ConsensusStatus is the pooler's authoritative consensus state as of the last
 	// ConsensusStatus RPC.
 	// Nil if the ConsensusStatus RPC failed or has not yet been called.
-	ConsensusStatus *clustermetadatapb.ConsensusStatus
+	ConsensusStatus *consensusdatapb.ConsensusStatus
 }
 
 // comparePrimaryTimeline compares two primary PoolerAnalysis entries by PrimaryTerm only.

@@ -16,13 +16,13 @@
 package consensus
 
 import (
-	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 )
 
 // CompareRuleNumbers compares two RuleNumbers lexicographically.
 // Returns -1 if a < b, 0 if a == b, 1 if a > b.
 // A nil RuleNumber is treated as zero (the smallest possible value).
-func CompareRuleNumbers(a, b *clustermetadatapb.RuleNumber) int {
+func CompareRuleNumbers(a, b *consensusdatapb.RuleNumber) int {
 	aTerm := int64(0)
 	aSubterm := int64(0)
 	if a != nil {

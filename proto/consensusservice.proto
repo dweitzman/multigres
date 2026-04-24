@@ -21,57 +21,58 @@ import "multipoolermanagerdata.proto";
 
 option go_package = "github.com/multigres/multigres/go/pb/consensus";
 
-// MultiPoolerConsensus provides consensus APIs for leader election and HA operations
+// MultiPoolerConsensus provides consensus APIs for leader election and HA operations.
 service MultiPoolerConsensus {
-  // Leader Appointment Protocol
+  // Consensus Protocol
 
-  // BeginTerm initiates a new leadership term by requesting the current leader
-  // to step down. The current leader will revoke its leadership and trigger a
-  // new election, allowing the coordinator to select a new leader based on the
-  // latest replication state of the followers. This is used by MultiOrch during
-  // failover to ensure that the old leader steps down gracefully and does not
-  // continue to accept writes, which could lead to data divergence.
-  rpc BeginTerm(consensusdata.BeginTermRequest) returns (consensusdata.BeginTermResponse);
+  // Recruit initiates a new leadership term by asking poolers to revoke
+  // participation in all prior terms. The pooler accepts the TermRevocation
+  // if its revoked_below_term is >= its current, then freezes WAL positions
+  // (demotes primary or pauses standby replication). The coordinator collects
+  // responses to identify the most-progressed candidate.
+  rpc Recruit(consensusdata.RecruitRequest) returns (consensusdata.RecruitResponse);
+
+  // Propose is sent to all poolers after sufficient recruitment to establish
+  // a new primary. Each pooler self-identifies via proposal.proposal_leader_id:
+  //   - The proposal leader promotes to primary, configures sync replication,
+  //     and writes rule history.
+  //   - All other poolers set primary_conninfo to the proposal leader and
+  //     resume replication.
+  rpc Propose(consensusdata.ProposeRequest) returns (consensusdata.ProposeResponse);
+
+  // Inform notifies all poolers of a committed shard rule decision. No authority
+  // proof is required. Sets highest_known_decision in each pooler's ConsensusStatus.
+  rpc Inform(consensusdata.InformRequest) returns (consensusdata.InformResponse);
 
   // Status and Health
 
-  // Status provides the current status of the consensus service, including the
-  // health of the cluster, the current leader, and any ongoing elections. This
-  // is used by MultiOrch to monitor the cluster and determine if it needs to
-  // trigger failover or other recovery actions.
+  // Status provides the current status of the consensus service, including
+  // the pooler's term revocation, WAL position, and role. Used by MultiOrch
+  // to monitor the cluster and detect failover conditions.
   rpc Status(consensusdata.StatusRequest) returns (consensusdata.StatusResponse);
 
   // HA Operations
 
-  // EmergencyDemote demotes the current leader server
+  // EmergencyDemote self-demotes a primary that has detected it should no
+  // longer be serving writes. Not a consensus operation: the pooler restarts
+  // as a standby and signals the coordinator via AvailabilityStatus that it
+  // has resigned. The coordinator then drives recovery via Recruit/Propose/Inform.
   rpc EmergencyDemote(multipoolermanagerdata.EmergencyDemoteRequest)
     returns (multipoolermanagerdata.EmergencyDemoteResponse);
 
-  // Promote promotes a replica to leader (Multigres-level operation)
-  rpc Promote(multipoolermanagerdata.PromoteRequest)
-    returns (multipoolermanagerdata.PromoteResponse);
-
-  // UpdateConsensusRule updates the synchronous standby list (quorum membership)
+  // UpdateConsensusRule updates the synchronous standby list (quorum membership).
   rpc UpdateConsensusRule(multipoolermanagerdata.UpdateSynchronousStandbyListRequest)
     returns (multipoolermanagerdata.UpdateSynchronousStandbyListResponse);
 
   // Replication Configuration
-  
-  // TODO: combine the below RPCs into a single RPC that informs a pooler of the highest
-  // known rule replication settings.
 
   // DemoteStalePrimary demotes a stale primary that came back after failover
-  // by rewinding to the correct primary and restarting as standby
-  // TODO: This will be replaced by informing a pooler of a newer rule version.
+  // by rewinding to the correct primary and restarting as standby.
   rpc DemoteStalePrimary(multipoolermanagerdata.DemoteStalePrimaryRequest)
     returns (multipoolermanagerdata.DemoteStalePrimaryResponse);
 
-  // SetPrimaryConnInfo sets the primary connection info for a standby server
-  rpc SetPrimaryConnInfo(multipoolermanagerdata.SetPrimaryConnInfoRequest)
-    returns (multipoolermanagerdata.SetPrimaryConnInfoResponse);
-
   // RewindToSource performs pg_rewind to synchronize this server with a source.
-  // This is used to repair diverged timelines after failover.
+  // Used to repair diverged timelines after failover.
   rpc RewindToSource(multipoolermanagerdata.RewindToSourceRequest)
     returns (multipoolermanagerdata.RewindToSourceResponse);
 }

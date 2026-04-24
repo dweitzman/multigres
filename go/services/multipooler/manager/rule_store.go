@@ -26,6 +26,7 @@ import (
 	"github.com/multigres/multigres/go/common/timeouts"
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	"github.com/multigres/multigres/go/services/multipooler/executor"
 )
@@ -33,8 +34,12 @@ import (
 // ruleStorer is the interface for reading and writing the current shard rule.
 // *ruleStore implements this; tests use fakeRuleStore.
 type ruleStorer interface {
-	observePosition(ctx context.Context) (*clustermetadatapb.PoolerPosition, error)
-	updateRule(ctx context.Context, update *ruleUpdateBuilder) (*clustermetadatapb.PoolerPosition, error)
+	observePosition(ctx context.Context) (*consensusdatapb.PoolerPosition, error)
+	updateRule(ctx context.Context, update *ruleUpdateBuilder) (*consensusdatapb.PoolerPosition, error)
+	// fenceRule forces synchronous replication of the existing WAL (including a
+	// hung rule_history entry) to the required standbys without writing a new
+	// rule_history entry. Used when re-proposing a hung cohort-change rule.
+	fenceRule(ctx context.Context) error
 	// createRuleTables creates multigres.current_rule and multigres.rule_history
 	// if they do not already exist, and inserts the zero-state sentinel row for
 	// the default shard. It is idempotent and safe to call multiple times.
@@ -42,7 +47,7 @@ type ruleStorer interface {
 	// cachedPosition returns the most recently observed or written PoolerPosition
 	// from memory, without querying postgres. Returns nil if no position has been
 	// cached yet (e.g. before the first observePosition or updateRule call).
-	cachedPosition() *clustermetadatapb.PoolerPosition
+	cachedPosition() *consensusdatapb.PoolerPosition
 }
 
 // ruleStore manages the current shard rule in postgres.
@@ -54,7 +59,7 @@ type ruleStore struct {
 	queryService executor.InternalQueryService
 
 	mu      sync.Mutex
-	lastPos *clustermetadatapb.PoolerPosition // updated on every observePosition / updateRule
+	lastPos *consensusdatapb.PoolerPosition // updated on every observePosition / updateRule
 }
 
 // newRuleStore creates a ruleStore.
@@ -69,7 +74,7 @@ func newRuleStore(
 }
 
 // cacheRuleObservation updates the in-memory position cache.
-func (rs *ruleStore) cacheRuleObservation(pos *clustermetadatapb.PoolerPosition) {
+func (rs *ruleStore) cacheRuleObservation(pos *consensusdatapb.PoolerPosition) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	if rs.lastPos != nil && pos != nil && consensus.CompareRuleNumbers(pos.GetRule().GetRuleNumber(), rs.lastPos.GetRule().GetRuleNumber()) < 0 {
@@ -81,7 +86,7 @@ func (rs *ruleStore) cacheRuleObservation(pos *clustermetadatapb.PoolerPosition)
 
 // cachedPosition returns the most recently observed or written PoolerPosition
 // from memory. Returns nil if no position has been cached yet.
-func (rs *ruleStore) cachedPosition() *clustermetadatapb.PoolerPosition {
+func (rs *ruleStore) cachedPosition() *consensusdatapb.PoolerPosition {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	return rs.lastPos
@@ -249,7 +254,7 @@ var errRuleConflict = errors.New("rule conflict: current rule version mismatch")
 // (coordinator_term = 0).
 //
 // Returns an error if postgres is unreachable.
-func (rs *ruleStore) observePosition(ctx context.Context) (*clustermetadatapb.PoolerPosition, error) {
+func (rs *ruleStore) observePosition(ctx context.Context) (*consensusdatapb.PoolerPosition, error) {
 	queryCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer cancel()
 
@@ -333,7 +338,7 @@ func (rs *ruleStore) observePosition(ctx context.Context) (*clustermetadatapb.Po
 // This operation uses the remote-operation-timeout and will fail if it cannot
 // complete within that time. A timeout typically indicates that synchronous
 // replication is not functioning.
-func (rs *ruleStore) updateRule(ctx context.Context, update *ruleUpdateBuilder) (*clustermetadatapb.PoolerPosition, error) {
+func (rs *ruleStore) updateRule(ctx context.Context, update *ruleUpdateBuilder) (*consensusdatapb.PoolerPosition, error) {
 	if update.force {
 		// Force mode skips history recording entirely. Force operations are emergency
 		// operations that must configure replication GUCs regardless. The write would
@@ -534,6 +539,27 @@ func (rs *ruleStore) updateRule(ctx context.Context, update *ruleUpdateBuilder) 
 	return pos, nil
 }
 
+// fenceRule forces synchronous replication of the existing WAL position to
+// the required standbys without writing a new rule_history entry.
+//
+// This is used when re-proposing a hung cohort-change rule that already exists
+// in the local WAL: the rule_history entry is already present, but has not yet
+// been acknowledged by enough standbys to satisfy durability. Committing any
+// transaction under synchronous_commit=on causes the standbys to acknowledge
+// all preceding WAL, including the hung rule_history entry.
+func (rs *ruleStore) fenceRule(ctx context.Context) error {
+	execCtx, cancel := context.WithTimeout(ctx, timeouts.RemoteOperationTimeout)
+	defer cancel()
+
+	if _, err := rs.queryService.QueryArgs(execCtx, `
+		UPDATE multigres.current_rule
+		SET created_at = now()
+		WHERE shard_id = $1`, []byte("0")); err != nil {
+		return mterrors.Wrap(err, "fencing write failed")
+	}
+	return nil
+}
+
 // queryRuleHistory returns the most recent rule history records in descending
 // order by (coordinator_term, leader_subterm). Returns at most limit records.
 func (rs *ruleStore) queryRuleHistory(ctx context.Context, limit int) ([]ruleHistoryRecord, error) {
@@ -593,7 +619,7 @@ func (rs *ruleStore) queryRuleHistory(ctx context.Context, limit int) ([]ruleHis
 // Helpers
 // ----------------------------------------------------------------------------
 
-// buildPoolerPosition constructs a *clustermetadatapb.PoolerPosition from raw DB column values.
+// buildPoolerPosition constructs a *consensusdatapb.PoolerPosition from raw DB column values.
 // leaderIDStr and coordinatorIDStr are app-name formatted strings (e.g. "zone1_pooler-name").
 // durability fields are nil when not set in the DB.
 func buildPoolerPosition(
@@ -605,9 +631,9 @@ func buildPoolerPosition(
 	durabilityRequiredCount *int64,
 	durabilityAsyncFallback *string,
 	lsn string,
-) (*clustermetadatapb.PoolerPosition, error) {
-	rule := &clustermetadatapb.ShardRule{
-		RuleNumber: &clustermetadatapb.RuleNumber{
+) (*consensusdatapb.PoolerPosition, error) {
+	rule := &consensusdatapb.ShardRule{
+		RuleNumber: &consensusdatapb.RuleNumber{
 			CoordinatorTerm: coordinatorTerm,
 			LeaderSubterm:   leaderSubterm,
 		},
@@ -660,7 +686,7 @@ func buildPoolerPosition(
 		rule.DurabilityPolicy = dp
 	}
 
-	return &clustermetadatapb.PoolerPosition{
+	return &consensusdatapb.PoolerPosition{
 		Rule: rule,
 		Lsn:  lsn,
 	}, nil

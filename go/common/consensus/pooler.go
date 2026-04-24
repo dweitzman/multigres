@@ -14,12 +14,12 @@
 
 package consensus
 
-import clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+import consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 
 // IsPrimary reports whether the pooler identified by cs is the designated
 // primary according to its highest committed rule. Returns false when cs, its
 // ID, or the current rule is absent.
-func IsPrimary(cs *clustermetadatapb.ConsensusStatus) bool {
+func IsPrimary(cs *consensusdatapb.ConsensusStatus) bool {
 	if cs == nil {
 		return false
 	}

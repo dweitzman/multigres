@@ -29,14 +29,14 @@ import (
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
 
-// GetCurrentTerm returns the current consensus term from a node.
+// GetCurrentTerm returns the current revoked_below_term from a node's consensus status.
 // Use this instead of hardcoded term values for test isolation.
 func GetCurrentTerm(ctx context.Context, client consensuspb.MultiPoolerConsensusClient) (int64, error) {
 	resp, err := client.Status(ctx, &consensusdatapb.StatusRequest{})
 	if err != nil {
 		return 0, fmt.Errorf("failed to get consensus status: %w", err)
 	}
-	return resp.CurrentTerm, nil
+	return resp.GetConsensusStatus().GetTermRevocation().GetRevokedBelowTerm(), nil
 }
 
 // MustGetCurrentTerm returns the current term or fails the test.
@@ -76,8 +76,9 @@ func ValidateTerm(ctx context.Context, client consensuspb.MultiPoolerConsensusCl
 		return fmt.Errorf("%s failed to get consensus status: %w", nodeName, err)
 	}
 
-	if status.CurrentTerm != expectedTerm {
-		return fmt.Errorf("%s term=%d (expected %d)", nodeName, status.CurrentTerm, expectedTerm)
+	actualTerm := status.GetConsensusStatus().GetTermRevocation().GetRevokedBelowTerm()
+	if actualTerm != expectedTerm {
+		return fmt.Errorf("%s term=%d (expected %d)", nodeName, actualTerm, expectedTerm)
 	}
 
 	return nil
@@ -112,12 +113,24 @@ func RestorePrimaryAfterDemotion(ctx context.Context, t *testing.T, client *Mult
 		lastReplayLSN = statusResp.Status.ReplicationStatus.LastReplayLsn
 	}
 
-	// Force promote primary back - term value doesn't matter when Force=true
-	// (Force bypasses term validation)
-	_, err = client.Consensus.Promote(ctx, &multipoolermanagerdatapb.PromoteRequest{
-		ConsensusTerm: 0, // Ignored when Force=true
-		ExpectedLsn:   lastReplayLSN,
-		Force:         true,
+	// Get the current consensus status to obtain the term revocation and node ID.
+	csResp, err := client.Consensus.Status(ctx, &consensusdatapb.StatusRequest{})
+	if err != nil {
+		return fmt.Errorf("failed to get consensus status: %w", err)
+	}
+
+	// Propose this node as its own leader. The term revocation must match what
+	// was accepted when the node was last recruited (EmergencyDemote records it).
+	_, err = client.Consensus.Propose(ctx, &consensusdatapb.ProposeRequest{
+		Proposal: &consensusdatapb.CoordinatorProposal{
+			TermRevocation: csResp.GetConsensusStatus().GetTermRevocation(),
+			ProposalLeader: &consensusdatapb.ProposalLeader{
+				Id: csResp.GetConsensusStatus().GetId(),
+			},
+			RecruitmentPosition: &consensusdatapb.RecruitmentPosition{
+				Lsn: lastReplayLSN,
+			},
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("failed to promote primary: %w", err)

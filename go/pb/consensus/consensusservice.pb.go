@@ -40,51 +40,51 @@ var File_consensusservice_proto protoreflect.FileDescriptor
 
 const file_consensusservice_proto_rawDesc = "" +
 	"\n" +
-	"\x16consensusservice.proto\x12\tconsensus\x1a\x13consensusdata.proto\x1a\x1cmultipoolermanagerdata.proto2\xfb\x06\n" +
-	"\x14MultiPoolerConsensus\x12N\n" +
-	"\tBeginTerm\x12\x1f.consensusdata.BeginTermRequest\x1a .consensusdata.BeginTermResponse\x12E\n" +
+	"\x16consensusservice.proto\x12\tconsensus\x1a\x13consensusdata.proto\x1a\x1cmultipoolermanagerdata.proto2\xad\x06\n" +
+	"\x14MultiPoolerConsensus\x12H\n" +
+	"\aRecruit\x12\x1d.consensusdata.RecruitRequest\x1a\x1e.consensusdata.RecruitResponse\x12H\n" +
+	"\aPropose\x12\x1d.consensusdata.ProposeRequest\x1a\x1e.consensusdata.ProposeResponse\x12E\n" +
+	"\x06Inform\x12\x1c.consensusdata.InformRequest\x1a\x1d.consensusdata.InformResponse\x12E\n" +
 	"\x06Status\x12\x1c.consensusdata.StatusRequest\x1a\x1d.consensusdata.StatusResponse\x12r\n" +
-	"\x0fEmergencyDemote\x12..multipoolermanagerdata.EmergencyDemoteRequest\x1a/.multipoolermanagerdata.EmergencyDemoteResponse\x12Z\n" +
-	"\aPromote\x12&.multipoolermanagerdata.PromoteRequest\x1a'.multipoolermanagerdata.PromoteResponse\x12\x90\x01\n" +
+	"\x0fEmergencyDemote\x12..multipoolermanagerdata.EmergencyDemoteRequest\x1a/.multipoolermanagerdata.EmergencyDemoteResponse\x12\x90\x01\n" +
 	"\x13UpdateConsensusRule\x12;.multipoolermanagerdata.UpdateSynchronousStandbyListRequest\x1a<.multipoolermanagerdata.UpdateSynchronousStandbyListResponse\x12{\n" +
-	"\x12DemoteStalePrimary\x121.multipoolermanagerdata.DemoteStalePrimaryRequest\x1a2.multipoolermanagerdata.DemoteStalePrimaryResponse\x12{\n" +
-	"\x12SetPrimaryConnInfo\x121.multipoolermanagerdata.SetPrimaryConnInfoRequest\x1a2.multipoolermanagerdata.SetPrimaryConnInfoResponse\x12o\n" +
+	"\x12DemoteStalePrimary\x121.multipoolermanagerdata.DemoteStalePrimaryRequest\x1a2.multipoolermanagerdata.DemoteStalePrimaryResponse\x12o\n" +
 	"\x0eRewindToSource\x12-.multipoolermanagerdata.RewindToSourceRequest\x1a..multipoolermanagerdata.RewindToSourceResponseB0Z.github.com/multigres/multigres/go/pb/consensusb\x06proto3"
 
 var file_consensusservice_proto_goTypes = []any{
-	(*consensusdata.BeginTermRequest)(nil),                              // 0: consensusdata.BeginTermRequest
-	(*consensusdata.StatusRequest)(nil),                                 // 1: consensusdata.StatusRequest
-	(*multipoolermanagerdata.EmergencyDemoteRequest)(nil),               // 2: multipoolermanagerdata.EmergencyDemoteRequest
-	(*multipoolermanagerdata.PromoteRequest)(nil),                       // 3: multipoolermanagerdata.PromoteRequest
-	(*multipoolermanagerdata.UpdateSynchronousStandbyListRequest)(nil),  // 4: multipoolermanagerdata.UpdateSynchronousStandbyListRequest
-	(*multipoolermanagerdata.DemoteStalePrimaryRequest)(nil),            // 5: multipoolermanagerdata.DemoteStalePrimaryRequest
-	(*multipoolermanagerdata.SetPrimaryConnInfoRequest)(nil),            // 6: multipoolermanagerdata.SetPrimaryConnInfoRequest
+	(*consensusdata.RecruitRequest)(nil),                                // 0: consensusdata.RecruitRequest
+	(*consensusdata.ProposeRequest)(nil),                                // 1: consensusdata.ProposeRequest
+	(*consensusdata.InformRequest)(nil),                                 // 2: consensusdata.InformRequest
+	(*consensusdata.StatusRequest)(nil),                                 // 3: consensusdata.StatusRequest
+	(*multipoolermanagerdata.EmergencyDemoteRequest)(nil),               // 4: multipoolermanagerdata.EmergencyDemoteRequest
+	(*multipoolermanagerdata.UpdateSynchronousStandbyListRequest)(nil),  // 5: multipoolermanagerdata.UpdateSynchronousStandbyListRequest
+	(*multipoolermanagerdata.DemoteStalePrimaryRequest)(nil),            // 6: multipoolermanagerdata.DemoteStalePrimaryRequest
 	(*multipoolermanagerdata.RewindToSourceRequest)(nil),                // 7: multipoolermanagerdata.RewindToSourceRequest
-	(*consensusdata.BeginTermResponse)(nil),                             // 8: consensusdata.BeginTermResponse
-	(*consensusdata.StatusResponse)(nil),                                // 9: consensusdata.StatusResponse
-	(*multipoolermanagerdata.EmergencyDemoteResponse)(nil),              // 10: multipoolermanagerdata.EmergencyDemoteResponse
-	(*multipoolermanagerdata.PromoteResponse)(nil),                      // 11: multipoolermanagerdata.PromoteResponse
-	(*multipoolermanagerdata.UpdateSynchronousStandbyListResponse)(nil), // 12: multipoolermanagerdata.UpdateSynchronousStandbyListResponse
-	(*multipoolermanagerdata.DemoteStalePrimaryResponse)(nil),           // 13: multipoolermanagerdata.DemoteStalePrimaryResponse
-	(*multipoolermanagerdata.SetPrimaryConnInfoResponse)(nil),           // 14: multipoolermanagerdata.SetPrimaryConnInfoResponse
+	(*consensusdata.RecruitResponse)(nil),                               // 8: consensusdata.RecruitResponse
+	(*consensusdata.ProposeResponse)(nil),                               // 9: consensusdata.ProposeResponse
+	(*consensusdata.InformResponse)(nil),                                // 10: consensusdata.InformResponse
+	(*consensusdata.StatusResponse)(nil),                                // 11: consensusdata.StatusResponse
+	(*multipoolermanagerdata.EmergencyDemoteResponse)(nil),              // 12: multipoolermanagerdata.EmergencyDemoteResponse
+	(*multipoolermanagerdata.UpdateSynchronousStandbyListResponse)(nil), // 13: multipoolermanagerdata.UpdateSynchronousStandbyListResponse
+	(*multipoolermanagerdata.DemoteStalePrimaryResponse)(nil),           // 14: multipoolermanagerdata.DemoteStalePrimaryResponse
 	(*multipoolermanagerdata.RewindToSourceResponse)(nil),               // 15: multipoolermanagerdata.RewindToSourceResponse
 }
 var file_consensusservice_proto_depIdxs = []int32{
-	0,  // 0: consensus.MultiPoolerConsensus.BeginTerm:input_type -> consensusdata.BeginTermRequest
-	1,  // 1: consensus.MultiPoolerConsensus.Status:input_type -> consensusdata.StatusRequest
-	2,  // 2: consensus.MultiPoolerConsensus.EmergencyDemote:input_type -> multipoolermanagerdata.EmergencyDemoteRequest
-	3,  // 3: consensus.MultiPoolerConsensus.Promote:input_type -> multipoolermanagerdata.PromoteRequest
-	4,  // 4: consensus.MultiPoolerConsensus.UpdateConsensusRule:input_type -> multipoolermanagerdata.UpdateSynchronousStandbyListRequest
-	5,  // 5: consensus.MultiPoolerConsensus.DemoteStalePrimary:input_type -> multipoolermanagerdata.DemoteStalePrimaryRequest
-	6,  // 6: consensus.MultiPoolerConsensus.SetPrimaryConnInfo:input_type -> multipoolermanagerdata.SetPrimaryConnInfoRequest
+	0,  // 0: consensus.MultiPoolerConsensus.Recruit:input_type -> consensusdata.RecruitRequest
+	1,  // 1: consensus.MultiPoolerConsensus.Propose:input_type -> consensusdata.ProposeRequest
+	2,  // 2: consensus.MultiPoolerConsensus.Inform:input_type -> consensusdata.InformRequest
+	3,  // 3: consensus.MultiPoolerConsensus.Status:input_type -> consensusdata.StatusRequest
+	4,  // 4: consensus.MultiPoolerConsensus.EmergencyDemote:input_type -> multipoolermanagerdata.EmergencyDemoteRequest
+	5,  // 5: consensus.MultiPoolerConsensus.UpdateConsensusRule:input_type -> multipoolermanagerdata.UpdateSynchronousStandbyListRequest
+	6,  // 6: consensus.MultiPoolerConsensus.DemoteStalePrimary:input_type -> multipoolermanagerdata.DemoteStalePrimaryRequest
 	7,  // 7: consensus.MultiPoolerConsensus.RewindToSource:input_type -> multipoolermanagerdata.RewindToSourceRequest
-	8,  // 8: consensus.MultiPoolerConsensus.BeginTerm:output_type -> consensusdata.BeginTermResponse
-	9,  // 9: consensus.MultiPoolerConsensus.Status:output_type -> consensusdata.StatusResponse
-	10, // 10: consensus.MultiPoolerConsensus.EmergencyDemote:output_type -> multipoolermanagerdata.EmergencyDemoteResponse
-	11, // 11: consensus.MultiPoolerConsensus.Promote:output_type -> multipoolermanagerdata.PromoteResponse
-	12, // 12: consensus.MultiPoolerConsensus.UpdateConsensusRule:output_type -> multipoolermanagerdata.UpdateSynchronousStandbyListResponse
-	13, // 13: consensus.MultiPoolerConsensus.DemoteStalePrimary:output_type -> multipoolermanagerdata.DemoteStalePrimaryResponse
-	14, // 14: consensus.MultiPoolerConsensus.SetPrimaryConnInfo:output_type -> multipoolermanagerdata.SetPrimaryConnInfoResponse
+	8,  // 8: consensus.MultiPoolerConsensus.Recruit:output_type -> consensusdata.RecruitResponse
+	9,  // 9: consensus.MultiPoolerConsensus.Propose:output_type -> consensusdata.ProposeResponse
+	10, // 10: consensus.MultiPoolerConsensus.Inform:output_type -> consensusdata.InformResponse
+	11, // 11: consensus.MultiPoolerConsensus.Status:output_type -> consensusdata.StatusResponse
+	12, // 12: consensus.MultiPoolerConsensus.EmergencyDemote:output_type -> multipoolermanagerdata.EmergencyDemoteResponse
+	13, // 13: consensus.MultiPoolerConsensus.UpdateConsensusRule:output_type -> multipoolermanagerdata.UpdateSynchronousStandbyListResponse
+	14, // 14: consensus.MultiPoolerConsensus.DemoteStalePrimary:output_type -> multipoolermanagerdata.DemoteStalePrimaryResponse
 	15, // 15: consensus.MultiPoolerConsensus.RewindToSource:output_type -> multipoolermanagerdata.RewindToSourceResponse
 	8,  // [8:16] is the sub-list for method output_type
 	0,  // [0:8] is the sub-list for method input_type

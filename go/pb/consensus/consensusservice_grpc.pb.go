@@ -35,13 +35,13 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	MultiPoolerConsensus_BeginTerm_FullMethodName           = "/consensus.MultiPoolerConsensus/BeginTerm"
+	MultiPoolerConsensus_Recruit_FullMethodName             = "/consensus.MultiPoolerConsensus/Recruit"
+	MultiPoolerConsensus_Propose_FullMethodName             = "/consensus.MultiPoolerConsensus/Propose"
+	MultiPoolerConsensus_Inform_FullMethodName              = "/consensus.MultiPoolerConsensus/Inform"
 	MultiPoolerConsensus_Status_FullMethodName              = "/consensus.MultiPoolerConsensus/Status"
 	MultiPoolerConsensus_EmergencyDemote_FullMethodName     = "/consensus.MultiPoolerConsensus/EmergencyDemote"
-	MultiPoolerConsensus_Promote_FullMethodName             = "/consensus.MultiPoolerConsensus/Promote"
 	MultiPoolerConsensus_UpdateConsensusRule_FullMethodName = "/consensus.MultiPoolerConsensus/UpdateConsensusRule"
 	MultiPoolerConsensus_DemoteStalePrimary_FullMethodName  = "/consensus.MultiPoolerConsensus/DemoteStalePrimary"
-	MultiPoolerConsensus_SetPrimaryConnInfo_FullMethodName  = "/consensus.MultiPoolerConsensus/SetPrimaryConnInfo"
 	MultiPoolerConsensus_RewindToSource_FullMethodName      = "/consensus.MultiPoolerConsensus/RewindToSource"
 )
 
@@ -49,34 +49,40 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// MultiPoolerConsensus provides consensus APIs for leader election and HA operations
+// MultiPoolerConsensus provides consensus APIs for leader election and HA operations.
 type MultiPoolerConsensusClient interface {
-	// BeginTerm initiates a new leadership term by requesting the current leader
-	// to step down. The current leader will revoke its leadership and trigger a
-	// new election, allowing the coordinator to select a new leader based on the
-	// latest replication state of the followers. This is used by MultiOrch during
-	// failover to ensure that the old leader steps down gracefully and does not
-	// continue to accept writes, which could lead to data divergence.
-	BeginTerm(ctx context.Context, in *consensusdata.BeginTermRequest, opts ...grpc.CallOption) (*consensusdata.BeginTermResponse, error)
-	// Status provides the current status of the consensus service, including the
-	// health of the cluster, the current leader, and any ongoing elections. This
-	// is used by MultiOrch to monitor the cluster and determine if it needs to
-	// trigger failover or other recovery actions.
+	// Recruit initiates a new leadership term by asking poolers to revoke
+	// participation in all prior terms. The pooler accepts the TermRevocation
+	// if its revoked_below_term is >= its current, then freezes WAL positions
+	// (demotes primary or pauses standby replication). The coordinator collects
+	// responses to identify the most-progressed candidate.
+	Recruit(ctx context.Context, in *consensusdata.RecruitRequest, opts ...grpc.CallOption) (*consensusdata.RecruitResponse, error)
+	// Propose is sent to all poolers after sufficient recruitment to establish
+	// a new primary. Each pooler self-identifies via proposal.proposal_leader_id:
+	//   - The proposal leader promotes to primary, configures sync replication,
+	//     and writes rule history.
+	//   - All other poolers set primary_conninfo to the proposal leader and
+	//     resume replication.
+	Propose(ctx context.Context, in *consensusdata.ProposeRequest, opts ...grpc.CallOption) (*consensusdata.ProposeResponse, error)
+	// Inform notifies all poolers of a committed shard rule decision. No authority
+	// proof is required. Sets highest_known_decision in each pooler's ConsensusStatus.
+	Inform(ctx context.Context, in *consensusdata.InformRequest, opts ...grpc.CallOption) (*consensusdata.InformResponse, error)
+	// Status provides the current status of the consensus service, including
+	// the pooler's term revocation, WAL position, and role. Used by MultiOrch
+	// to monitor the cluster and detect failover conditions.
 	Status(ctx context.Context, in *consensusdata.StatusRequest, opts ...grpc.CallOption) (*consensusdata.StatusResponse, error)
-	// EmergencyDemote demotes the current leader server
+	// EmergencyDemote self-demotes a primary that has detected it should no
+	// longer be serving writes. Not a consensus operation: the pooler restarts
+	// as a standby and signals the coordinator via AvailabilityStatus that it
+	// has resigned. The coordinator then drives recovery via Recruit/Propose/Inform.
 	EmergencyDemote(ctx context.Context, in *multipoolermanagerdata.EmergencyDemoteRequest, opts ...grpc.CallOption) (*multipoolermanagerdata.EmergencyDemoteResponse, error)
-	// Promote promotes a replica to leader (Multigres-level operation)
-	Promote(ctx context.Context, in *multipoolermanagerdata.PromoteRequest, opts ...grpc.CallOption) (*multipoolermanagerdata.PromoteResponse, error)
-	// UpdateConsensusRule updates the synchronous standby list (quorum membership)
+	// UpdateConsensusRule updates the synchronous standby list (quorum membership).
 	UpdateConsensusRule(ctx context.Context, in *multipoolermanagerdata.UpdateSynchronousStandbyListRequest, opts ...grpc.CallOption) (*multipoolermanagerdata.UpdateSynchronousStandbyListResponse, error)
 	// DemoteStalePrimary demotes a stale primary that came back after failover
-	// by rewinding to the correct primary and restarting as standby
-	// TODO: This will be replaced by informing a pooler of a newer rule version.
+	// by rewinding to the correct primary and restarting as standby.
 	DemoteStalePrimary(ctx context.Context, in *multipoolermanagerdata.DemoteStalePrimaryRequest, opts ...grpc.CallOption) (*multipoolermanagerdata.DemoteStalePrimaryResponse, error)
-	// SetPrimaryConnInfo sets the primary connection info for a standby server
-	SetPrimaryConnInfo(ctx context.Context, in *multipoolermanagerdata.SetPrimaryConnInfoRequest, opts ...grpc.CallOption) (*multipoolermanagerdata.SetPrimaryConnInfoResponse, error)
 	// RewindToSource performs pg_rewind to synchronize this server with a source.
-	// This is used to repair diverged timelines after failover.
+	// Used to repair diverged timelines after failover.
 	RewindToSource(ctx context.Context, in *multipoolermanagerdata.RewindToSourceRequest, opts ...grpc.CallOption) (*multipoolermanagerdata.RewindToSourceResponse, error)
 }
 
@@ -88,10 +94,30 @@ func NewMultiPoolerConsensusClient(cc grpc.ClientConnInterface) MultiPoolerConse
 	return &multiPoolerConsensusClient{cc}
 }
 
-func (c *multiPoolerConsensusClient) BeginTerm(ctx context.Context, in *consensusdata.BeginTermRequest, opts ...grpc.CallOption) (*consensusdata.BeginTermResponse, error) {
+func (c *multiPoolerConsensusClient) Recruit(ctx context.Context, in *consensusdata.RecruitRequest, opts ...grpc.CallOption) (*consensusdata.RecruitResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(consensusdata.BeginTermResponse)
-	err := c.cc.Invoke(ctx, MultiPoolerConsensus_BeginTerm_FullMethodName, in, out, cOpts...)
+	out := new(consensusdata.RecruitResponse)
+	err := c.cc.Invoke(ctx, MultiPoolerConsensus_Recruit_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *multiPoolerConsensusClient) Propose(ctx context.Context, in *consensusdata.ProposeRequest, opts ...grpc.CallOption) (*consensusdata.ProposeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(consensusdata.ProposeResponse)
+	err := c.cc.Invoke(ctx, MultiPoolerConsensus_Propose_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *multiPoolerConsensusClient) Inform(ctx context.Context, in *consensusdata.InformRequest, opts ...grpc.CallOption) (*consensusdata.InformResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(consensusdata.InformResponse)
+	err := c.cc.Invoke(ctx, MultiPoolerConsensus_Inform_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -118,16 +144,6 @@ func (c *multiPoolerConsensusClient) EmergencyDemote(ctx context.Context, in *mu
 	return out, nil
 }
 
-func (c *multiPoolerConsensusClient) Promote(ctx context.Context, in *multipoolermanagerdata.PromoteRequest, opts ...grpc.CallOption) (*multipoolermanagerdata.PromoteResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(multipoolermanagerdata.PromoteResponse)
-	err := c.cc.Invoke(ctx, MultiPoolerConsensus_Promote_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *multiPoolerConsensusClient) UpdateConsensusRule(ctx context.Context, in *multipoolermanagerdata.UpdateSynchronousStandbyListRequest, opts ...grpc.CallOption) (*multipoolermanagerdata.UpdateSynchronousStandbyListResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(multipoolermanagerdata.UpdateSynchronousStandbyListResponse)
@@ -148,16 +164,6 @@ func (c *multiPoolerConsensusClient) DemoteStalePrimary(ctx context.Context, in 
 	return out, nil
 }
 
-func (c *multiPoolerConsensusClient) SetPrimaryConnInfo(ctx context.Context, in *multipoolermanagerdata.SetPrimaryConnInfoRequest, opts ...grpc.CallOption) (*multipoolermanagerdata.SetPrimaryConnInfoResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(multipoolermanagerdata.SetPrimaryConnInfoResponse)
-	err := c.cc.Invoke(ctx, MultiPoolerConsensus_SetPrimaryConnInfo_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *multiPoolerConsensusClient) RewindToSource(ctx context.Context, in *multipoolermanagerdata.RewindToSourceRequest, opts ...grpc.CallOption) (*multipoolermanagerdata.RewindToSourceResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(multipoolermanagerdata.RewindToSourceResponse)
@@ -172,34 +178,40 @@ func (c *multiPoolerConsensusClient) RewindToSource(ctx context.Context, in *mul
 // All implementations must embed UnimplementedMultiPoolerConsensusServer
 // for forward compatibility.
 //
-// MultiPoolerConsensus provides consensus APIs for leader election and HA operations
+// MultiPoolerConsensus provides consensus APIs for leader election and HA operations.
 type MultiPoolerConsensusServer interface {
-	// BeginTerm initiates a new leadership term by requesting the current leader
-	// to step down. The current leader will revoke its leadership and trigger a
-	// new election, allowing the coordinator to select a new leader based on the
-	// latest replication state of the followers. This is used by MultiOrch during
-	// failover to ensure that the old leader steps down gracefully and does not
-	// continue to accept writes, which could lead to data divergence.
-	BeginTerm(context.Context, *consensusdata.BeginTermRequest) (*consensusdata.BeginTermResponse, error)
-	// Status provides the current status of the consensus service, including the
-	// health of the cluster, the current leader, and any ongoing elections. This
-	// is used by MultiOrch to monitor the cluster and determine if it needs to
-	// trigger failover or other recovery actions.
+	// Recruit initiates a new leadership term by asking poolers to revoke
+	// participation in all prior terms. The pooler accepts the TermRevocation
+	// if its revoked_below_term is >= its current, then freezes WAL positions
+	// (demotes primary or pauses standby replication). The coordinator collects
+	// responses to identify the most-progressed candidate.
+	Recruit(context.Context, *consensusdata.RecruitRequest) (*consensusdata.RecruitResponse, error)
+	// Propose is sent to all poolers after sufficient recruitment to establish
+	// a new primary. Each pooler self-identifies via proposal.proposal_leader_id:
+	//   - The proposal leader promotes to primary, configures sync replication,
+	//     and writes rule history.
+	//   - All other poolers set primary_conninfo to the proposal leader and
+	//     resume replication.
+	Propose(context.Context, *consensusdata.ProposeRequest) (*consensusdata.ProposeResponse, error)
+	// Inform notifies all poolers of a committed shard rule decision. No authority
+	// proof is required. Sets highest_known_decision in each pooler's ConsensusStatus.
+	Inform(context.Context, *consensusdata.InformRequest) (*consensusdata.InformResponse, error)
+	// Status provides the current status of the consensus service, including
+	// the pooler's term revocation, WAL position, and role. Used by MultiOrch
+	// to monitor the cluster and detect failover conditions.
 	Status(context.Context, *consensusdata.StatusRequest) (*consensusdata.StatusResponse, error)
-	// EmergencyDemote demotes the current leader server
+	// EmergencyDemote self-demotes a primary that has detected it should no
+	// longer be serving writes. Not a consensus operation: the pooler restarts
+	// as a standby and signals the coordinator via AvailabilityStatus that it
+	// has resigned. The coordinator then drives recovery via Recruit/Propose/Inform.
 	EmergencyDemote(context.Context, *multipoolermanagerdata.EmergencyDemoteRequest) (*multipoolermanagerdata.EmergencyDemoteResponse, error)
-	// Promote promotes a replica to leader (Multigres-level operation)
-	Promote(context.Context, *multipoolermanagerdata.PromoteRequest) (*multipoolermanagerdata.PromoteResponse, error)
-	// UpdateConsensusRule updates the synchronous standby list (quorum membership)
+	// UpdateConsensusRule updates the synchronous standby list (quorum membership).
 	UpdateConsensusRule(context.Context, *multipoolermanagerdata.UpdateSynchronousStandbyListRequest) (*multipoolermanagerdata.UpdateSynchronousStandbyListResponse, error)
 	// DemoteStalePrimary demotes a stale primary that came back after failover
-	// by rewinding to the correct primary and restarting as standby
-	// TODO: This will be replaced by informing a pooler of a newer rule version.
+	// by rewinding to the correct primary and restarting as standby.
 	DemoteStalePrimary(context.Context, *multipoolermanagerdata.DemoteStalePrimaryRequest) (*multipoolermanagerdata.DemoteStalePrimaryResponse, error)
-	// SetPrimaryConnInfo sets the primary connection info for a standby server
-	SetPrimaryConnInfo(context.Context, *multipoolermanagerdata.SetPrimaryConnInfoRequest) (*multipoolermanagerdata.SetPrimaryConnInfoResponse, error)
 	// RewindToSource performs pg_rewind to synchronize this server with a source.
-	// This is used to repair diverged timelines after failover.
+	// Used to repair diverged timelines after failover.
 	RewindToSource(context.Context, *multipoolermanagerdata.RewindToSourceRequest) (*multipoolermanagerdata.RewindToSourceResponse, error)
 	mustEmbedUnimplementedMultiPoolerConsensusServer()
 }
@@ -211,8 +223,14 @@ type MultiPoolerConsensusServer interface {
 // pointer dereference when methods are called.
 type UnimplementedMultiPoolerConsensusServer struct{}
 
-func (UnimplementedMultiPoolerConsensusServer) BeginTerm(context.Context, *consensusdata.BeginTermRequest) (*consensusdata.BeginTermResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method BeginTerm not implemented")
+func (UnimplementedMultiPoolerConsensusServer) Recruit(context.Context, *consensusdata.RecruitRequest) (*consensusdata.RecruitResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Recruit not implemented")
+}
+func (UnimplementedMultiPoolerConsensusServer) Propose(context.Context, *consensusdata.ProposeRequest) (*consensusdata.ProposeResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Propose not implemented")
+}
+func (UnimplementedMultiPoolerConsensusServer) Inform(context.Context, *consensusdata.InformRequest) (*consensusdata.InformResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Inform not implemented")
 }
 func (UnimplementedMultiPoolerConsensusServer) Status(context.Context, *consensusdata.StatusRequest) (*consensusdata.StatusResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Status not implemented")
@@ -220,17 +238,11 @@ func (UnimplementedMultiPoolerConsensusServer) Status(context.Context, *consensu
 func (UnimplementedMultiPoolerConsensusServer) EmergencyDemote(context.Context, *multipoolermanagerdata.EmergencyDemoteRequest) (*multipoolermanagerdata.EmergencyDemoteResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method EmergencyDemote not implemented")
 }
-func (UnimplementedMultiPoolerConsensusServer) Promote(context.Context, *multipoolermanagerdata.PromoteRequest) (*multipoolermanagerdata.PromoteResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Promote not implemented")
-}
 func (UnimplementedMultiPoolerConsensusServer) UpdateConsensusRule(context.Context, *multipoolermanagerdata.UpdateSynchronousStandbyListRequest) (*multipoolermanagerdata.UpdateSynchronousStandbyListResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpdateConsensusRule not implemented")
 }
 func (UnimplementedMultiPoolerConsensusServer) DemoteStalePrimary(context.Context, *multipoolermanagerdata.DemoteStalePrimaryRequest) (*multipoolermanagerdata.DemoteStalePrimaryResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DemoteStalePrimary not implemented")
-}
-func (UnimplementedMultiPoolerConsensusServer) SetPrimaryConnInfo(context.Context, *multipoolermanagerdata.SetPrimaryConnInfoRequest) (*multipoolermanagerdata.SetPrimaryConnInfoResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method SetPrimaryConnInfo not implemented")
 }
 func (UnimplementedMultiPoolerConsensusServer) RewindToSource(context.Context, *multipoolermanagerdata.RewindToSourceRequest) (*multipoolermanagerdata.RewindToSourceResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RewindToSource not implemented")
@@ -256,20 +268,56 @@ func RegisterMultiPoolerConsensusServer(s grpc.ServiceRegistrar, srv MultiPooler
 	s.RegisterService(&MultiPoolerConsensus_ServiceDesc, srv)
 }
 
-func _MultiPoolerConsensus_BeginTerm_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(consensusdata.BeginTermRequest)
+func _MultiPoolerConsensus_Recruit_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(consensusdata.RecruitRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(MultiPoolerConsensusServer).BeginTerm(ctx, in)
+		return srv.(MultiPoolerConsensusServer).Recruit(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: MultiPoolerConsensus_BeginTerm_FullMethodName,
+		FullMethod: MultiPoolerConsensus_Recruit_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(MultiPoolerConsensusServer).BeginTerm(ctx, req.(*consensusdata.BeginTermRequest))
+		return srv.(MultiPoolerConsensusServer).Recruit(ctx, req.(*consensusdata.RecruitRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MultiPoolerConsensus_Propose_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(consensusdata.ProposeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MultiPoolerConsensusServer).Propose(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MultiPoolerConsensus_Propose_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MultiPoolerConsensusServer).Propose(ctx, req.(*consensusdata.ProposeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MultiPoolerConsensus_Inform_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(consensusdata.InformRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MultiPoolerConsensusServer).Inform(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MultiPoolerConsensus_Inform_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MultiPoolerConsensusServer).Inform(ctx, req.(*consensusdata.InformRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -310,24 +358,6 @@ func _MultiPoolerConsensus_EmergencyDemote_Handler(srv interface{}, ctx context.
 	return interceptor(ctx, in, info, handler)
 }
 
-func _MultiPoolerConsensus_Promote_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(multipoolermanagerdata.PromoteRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(MultiPoolerConsensusServer).Promote(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: MultiPoolerConsensus_Promote_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(MultiPoolerConsensusServer).Promote(ctx, req.(*multipoolermanagerdata.PromoteRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _MultiPoolerConsensus_UpdateConsensusRule_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(multipoolermanagerdata.UpdateSynchronousStandbyListRequest)
 	if err := dec(in); err != nil {
@@ -364,24 +394,6 @@ func _MultiPoolerConsensus_DemoteStalePrimary_Handler(srv interface{}, ctx conte
 	return interceptor(ctx, in, info, handler)
 }
 
-func _MultiPoolerConsensus_SetPrimaryConnInfo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(multipoolermanagerdata.SetPrimaryConnInfoRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(MultiPoolerConsensusServer).SetPrimaryConnInfo(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: MultiPoolerConsensus_SetPrimaryConnInfo_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(MultiPoolerConsensusServer).SetPrimaryConnInfo(ctx, req.(*multipoolermanagerdata.SetPrimaryConnInfoRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _MultiPoolerConsensus_RewindToSource_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(multipoolermanagerdata.RewindToSourceRequest)
 	if err := dec(in); err != nil {
@@ -408,8 +420,16 @@ var MultiPoolerConsensus_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*MultiPoolerConsensusServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "BeginTerm",
-			Handler:    _MultiPoolerConsensus_BeginTerm_Handler,
+			MethodName: "Recruit",
+			Handler:    _MultiPoolerConsensus_Recruit_Handler,
+		},
+		{
+			MethodName: "Propose",
+			Handler:    _MultiPoolerConsensus_Propose_Handler,
+		},
+		{
+			MethodName: "Inform",
+			Handler:    _MultiPoolerConsensus_Inform_Handler,
 		},
 		{
 			MethodName: "Status",
@@ -420,20 +440,12 @@ var MultiPoolerConsensus_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _MultiPoolerConsensus_EmergencyDemote_Handler,
 		},
 		{
-			MethodName: "Promote",
-			Handler:    _MultiPoolerConsensus_Promote_Handler,
-		},
-		{
 			MethodName: "UpdateConsensusRule",
 			Handler:    _MultiPoolerConsensus_UpdateConsensusRule_Handler,
 		},
 		{
 			MethodName: "DemoteStalePrimary",
 			Handler:    _MultiPoolerConsensus_DemoteStalePrimary_Handler,
-		},
-		{
-			MethodName: "SetPrimaryConnInfo",
-			Handler:    _MultiPoolerConsensus_SetPrimaryConnInfo_Handler,
 		},
 		{
 			MethodName: "RewindToSource",

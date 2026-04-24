@@ -161,10 +161,7 @@ func FormatPoolerDiagnostics(s *multipoolermanagerdatapb.Status) string {
 	if s == nil {
 		return "[status=nil]"
 	}
-	term := int64(0)
-	if s.ConsensusTerm != nil {
-		term = s.ConsensusTerm.TermNumber
-	}
+	term := s.GetTermRevocation().GetRevokedBelowTerm()
 	result := fmt.Sprintf("[postgres_ready=%v, initialized=%v, pooler_type=%v, term=%d",
 		s.PostgresReady, s.IsInitialized, s.PoolerType, term)
 	if s.PostgresAction != multipoolermanagerdatapb.PostgresAction_POSTGRES_ACTION_UNSPECIFIED {

@@ -45,6 +45,6 @@ func PrimaryNeedsReplacement(p *multiorchdatapb.PoolerHealthState) bool {
 	if leadershipStatus.Signal != clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION {
 		return false
 	}
-	// Verify the signal is for the current primary term, not a stale one.
-	return leadershipStatus.PrimaryTerm != 0 && leadershipStatus.PrimaryTerm == p.ConsensusStatus.GetPrimaryTerm()
+	// Verify the signal carries a non-zero term (guards against zero-value signals).
+	return leadershipStatus.PrimaryTerm != 0
 }

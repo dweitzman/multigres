@@ -105,73 +105,60 @@ func (c *Coordinator) AppointLeader(ctx context.Context, shardID string, cohort 
 }
 
 // appointLeaderWithTerm is the shared core of AppointLeader and AppointInitialLeader.
-// Given a resolved policy and proposed term, it runs preVote, BeginTerm, and
-// EstablishLeadership.
+// Given a resolved policy and proposed term, it runs preVote, recruits nodes,
+// validates the recruited set, then sends Propose and Inform to establish the new leader.
 func (c *Coordinator) appointLeaderWithTerm(ctx context.Context, shardID string, cohort []*multiorchdatapb.PoolerHealthState, policy *clustermetadatapb.DurabilityPolicy, proposedTerm int64, reason string) (retErr error) {
-	// Parse the proto policy once into the typed DurabilityPolicy interface so
-	// preVote and BeginTerm can call its recruitment checks directly. The proto
-	// still flows through EstablishLeadership for synchronous replication setup.
 	durabilityPolicy, err := commonconsensus.NewPolicyFromProto(policy)
 	if err != nil {
 		return mterrors.Wrap(err, "failed to parse durability policy")
 	}
 
-	// PreVote — validate that leadership change is likely to succeed.
+	// PreVote — validate that leadership change is likely to succeed before sending RPCs.
 	canProceed, preVoteReason := c.preVote(ctx, cohort, durabilityPolicy, proposedTerm)
 	if !canProceed {
 		return mterrors.Errorf(mtrpcpb.Code_UNAVAILABLE,
 			"pre-vote failed for shard %s: %s", shardID, preVoteReason)
 	}
 
-	// Goal 2: Revocation, Candidacy, Discovery
-	// BeginTerm recruits nodes under the new term, which achieves:
-	// - Revocation: recruited nodes accept new term, preventing old leader from completing requests
-	// - Discovery: identify the most progressed node based on WAL position
-	// - Candidacy: validate recruited nodes satisfy quorum rules for the candidate
-	candidate, standbys, term, err := c.BeginTerm(ctx, shardID, cohort, durabilityPolicy, proposedTerm)
+	// Recruit all nodes, validate the recruited set satisfies consensus safety,
+	// and build the CoordinatorProposal via CheckSufficientRecruitment.
+	proposal, recruited, err := c.recruitAndPropose(ctx, shardID, cohort, policy, proposedTerm)
 	if err != nil {
-		return mterrors.Wrap(err, "BeginTerm failed")
+		return mterrors.Wrap(err, "recruitment failed")
 	}
 
-	c.logger.InfoContext(ctx, "Recruitment succeeded",
+	leaderName := proposal.GetProposalLeader().GetId().GetName()
+	c.logger.InfoContext(ctx, "recruitment succeeded",
 		"shard", shardID,
-		"term", term,
-		"candidate", candidate.MultiPooler.Id.Name,
-		"standbys", len(standbys))
+		"term", proposedTerm,
+		"leader", leaderName,
+		"recruited", len(recruited))
 
-	// We know the candidate now — emit Started before establishing leadership.
 	eventlog.Emit(ctx, c.logger, eventlog.Started, eventlog.PrimaryPromotion{
-		NewPrimary: candidate.MultiPooler.Id.Name,
+		NewPrimary: leaderName,
 	})
 	defer func() {
 		if retErr == nil {
 			eventlog.Emit(ctx, c.logger, eventlog.Success, eventlog.PrimaryPromotion{
-				NewPrimary: candidate.MultiPooler.Id.Name,
+				NewPrimary: leaderName,
 			})
 		} else {
 			eventlog.Emit(ctx, c.logger, eventlog.Failed, eventlog.PrimaryPromotion{
-				NewPrimary: candidate.MultiPooler.Id.Name,
+				NewPrimary: leaderName,
 			}, "error", retErr)
 		}
 	}()
 
-	// Reconstruct the recruited list (nodes that accepted the term).
-	// This is candidate + standbys.
-	//
-	// The recruited list may differ from the original cohort in these scenarios:
-	// - Some nodes in the cohort were unreachable during BeginTerm
-	// - Some nodes rejected the term (e.g., had a higher term already)
-	// - Some nodes failed validation (e.g., insufficient LSN)
-	recruited := make([]*multiorchdatapb.PoolerHealthState, 0, len(standbys)+1)
-	recruited = append(recruited, candidate)
-	recruited = append(recruited, standbys...)
-
-	// Propagation and Establishment
-	if err := c.EstablishLeadership(ctx, candidate, standbys, term, policy, reason, cohort, recruited); err != nil {
-		return mterrors.Wrap(err, "EstablishLeadership failed")
+	if err := c.sendPropose(ctx, recruited, proposal); err != nil {
+		return mterrors.Wrap(err, "Propose phase failed")
 	}
 
-	c.logger.InfoContext(ctx, "Leadership established", "shard", shardID)
+	c.logger.InfoContext(ctx, "Propose phase complete, sending Inform",
+		"leader", leaderName, "term", proposedTerm)
+
+	c.sendInform(ctx, recruited, proposal.GetProposedRule())
+
+	c.logger.InfoContext(ctx, "leadership established", "shard", shardID)
 	return nil
 }
 

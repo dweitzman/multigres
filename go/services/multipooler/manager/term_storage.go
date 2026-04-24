@@ -22,7 +22,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 
 	"github.com/multigres/multigres/go/common/constants"
-	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
+	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 )
 
 // postgresDataDir returns the PostgreSQL data directory path from PGDATA env var
@@ -40,14 +40,14 @@ func (cs *ConsensusState) consensusTermPath() string {
 	return filepath.Join(cs.poolerDir, constants.ConsensusTermFile)
 }
 
-// getConsensusTerm retrieves the current consensus term information from disk
-func (cs *ConsensusState) getConsensusTerm() (*multipoolermanagerdatapb.ConsensusTerm, error) {
+// getConsensusTerm retrieves the current term revocation from disk.
+func (cs *ConsensusState) getConsensusTerm() (*consensusdatapb.TermRevocation, error) {
 	termPath := cs.consensusTermPath()
 
 	// Check if consensus term file exists
 	if _, err := os.Stat(termPath); os.IsNotExist(err) {
-		// Return empty term if file doesn't exist
-		return &multipoolermanagerdatapb.ConsensusTerm{}, nil
+		// Return empty revocation if file doesn't exist
+		return &consensusdatapb.TermRevocation{}, nil
 	}
 
 	// Read the file
@@ -57,22 +57,22 @@ func (cs *ConsensusState) getConsensusTerm() (*multipoolermanagerdatapb.Consensu
 	}
 
 	// Unmarshal JSON to protobuf
-	term := &multipoolermanagerdatapb.ConsensusTerm{}
-	if err := protojson.Unmarshal(data, term); err != nil {
+	revocation := &consensusdatapb.TermRevocation{}
+	if err := protojson.Unmarshal(data, revocation); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal consensus term: %w", err)
 	}
 
-	return term, nil
+	return revocation, nil
 }
 
-// setConsensusTerm saves the consensus term information to disk
-func (cs *ConsensusState) setConsensusTerm(term *multipoolermanagerdatapb.ConsensusTerm) error {
+// setConsensusTerm saves the term revocation to disk.
+func (cs *ConsensusState) setConsensusTerm(revocation *consensusdatapb.TermRevocation) error {
 	termPath := cs.consensusTermPath()
 
 	// Marshal protobuf to JSON
 	data, err := protojson.MarshalOptions{
 		Indent: "  ",
-	}.Marshal(term)
+	}.Marshal(revocation)
 	if err != nil {
 		return fmt.Errorf("failed to marshal consensus term: %w", err)
 	}
@@ -93,10 +93,10 @@ func (cs *ConsensusState) setConsensusTerm(term *multipoolermanagerdatapb.Consen
 }
 
 // DeleteTermFile removes the consensus term file from disk and resets the
-// in-memory state to uninitialized (term 0, no accepted coordinator).
+// in-memory state to uninitialized (revoked_below_term 0, no accepted coordinator).
 // Called after a pgBackRest restore so the node re-joins consensus from
 // scratch; the cluster's current term will be propagated by multiorch on
-// first contact via BeginTerm.
+// first contact via Recruit.
 // If the file does not exist this is a no-op. Returns an error only if
 // the file exists but cannot be removed.
 func (cs *ConsensusState) DeleteTermFile() error {
@@ -107,6 +107,6 @@ func (cs *ConsensusState) DeleteTermFile() error {
 		return fmt.Errorf("failed to delete consensus term file after restore: %w", err)
 	}
 
-	cs.term = &multipoolermanagerdatapb.ConsensusTerm{}
+	cs.revocation = &consensusdatapb.TermRevocation{}
 	return nil
 }

@@ -203,12 +203,7 @@ func (a *DemoteStalePrimaryAction) findCorrectPrimary(shardKey commontypes.Shard
 		}
 
 		if poolerType == clustermetadatapb.PoolerType_PRIMARY {
-			// Get its PrimaryTerm (not consensus term)
-			var primaryTerm int64
-			if ct := pooler.GetStatus().GetConsensusTerm(); ct != nil {
-				primaryTerm = ct.PrimaryTerm
-			}
-
+			primaryTerm := pooler.ConsensusStatus.GetConsensusStatus().GetTermRevocation().GetRevokedBelowTerm()
 			if primaryTerm > maxPrimaryTerm {
 				maxPrimaryTerm = primaryTerm
 				correctPrimary = pooler
@@ -222,11 +217,7 @@ func (a *DemoteStalePrimaryAction) findCorrectPrimary(shardKey commontypes.Shard
 		return nil, 0, fmt.Errorf("no correct primary found in shard %s", shardKey.String())
 	}
 
-	// Return consensus term for the RPC parameter
-	consensusTerm := int64(0)
-	if correctPrimary.ConsensusStatus != nil {
-		consensusTerm = correctPrimary.ConsensusStatus.CurrentTerm
-	}
+	consensusTerm := correctPrimary.ConsensusStatus.GetConsensusStatus().GetTermRevocation().GetRevokedBelowTerm()
 
 	return correctPrimary, consensusTerm, nil
 }
