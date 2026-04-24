@@ -30,7 +30,7 @@ import (
 	"github.com/multigres/multigres/go/common/topoclient/memorytopo"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
+	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 	pgctldpb "github.com/multigres/multigres/go/pb/pgctldservice"
 )
 
@@ -338,14 +338,16 @@ func TestDetermineRemedialAction(t *testing.T) {
 			expectedAction: remedialActionAdjustTypeToReplica,
 		},
 		{
-			name: "postgres_ready_type_matches_replica_no_primary_term",
+			// resignedPrimaryAtTerm is always checked; even a node that was never a primary
+			// triggers adjustTypeToReplica when resigned == 0 (to re-publish the signal).
+			name: "postgres_ready_type_matches_replica_no_resigned_signal",
 			state: postgresState{
 				pgctldAvailable: true,
 				postgresRunning: true,
 				isPrimary:       false,
 			},
 			poolerType:     clustermetadatapb.PoolerType_REPLICA,
-			expectedAction: remedialActionNone,
+			expectedAction: remedialActionAdjustTypeToReplica,
 		},
 		{
 			// After EmergencyDemote + process restart, resignedPrimaryAtTerm is lost.
@@ -418,7 +420,7 @@ func TestDetermineRemedialAction(t *testing.T) {
 			cs := NewConsensusState("", nil)
 			if tt.primaryTerm != 0 {
 				cs.mu.Lock()
-				cs.term = &multipoolermanagerdatapb.ConsensusTerm{PrimaryTerm: tt.primaryTerm}
+				cs.revocation = &consensusdatapb.TermRevocation{RevokedBelowTerm: tt.primaryTerm}
 				cs.mu.Unlock()
 			}
 			pm.consensusState = cs
@@ -654,7 +656,7 @@ func TestTakeRemedialAction_ResignationSignal(t *testing.T) {
 
 			cs := NewConsensusState("", nil)
 			cs.mu.Lock()
-			cs.term = &multipoolermanagerdatapb.ConsensusTerm{TermNumber: 1, PrimaryTerm: tc.primaryTerm}
+			cs.revocation = &consensusdatapb.TermRevocation{RevokedBelowTerm: tc.primaryTerm}
 			cs.mu.Unlock()
 			pm.consensusState = cs
 

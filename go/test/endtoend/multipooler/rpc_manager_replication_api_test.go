@@ -104,31 +104,41 @@ func TestReplicationAPIs(t *testing.T) {
 		tableCount := string(queryResp.Rows[0].Values[0])
 		assert.Equal(t, "0", tableCount, "Table should not exist in standby yet")
 
-		// Configure replication using SetPrimaryConnInfo RPC
-		t.Log("Configuring replication via SetPrimaryConnInfo RPC...")
+		// Configure replication via Recruit+Propose (replica path).
+		t.Log("Configuring replication via Recruit+Propose...")
 
-		ctx = utils.WithTimeout(t, 1*time.Second)
-
-		// Call SetPrimaryConnInfo with StartReplicationAfter=true
-		// Use Force=true since we're testing replication functionality, not term validation
-		primary := &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{
+		// Recruit the standby to establish term authority.
+		currentTerm := shardsetup.MustGetCurrentTerm(t, utils.WithShortDeadline(t), standbyClient.Consensus)
+		termRevoc := &consensusdatapb.TermRevocation{
+			RevokedBelowTerm: currentTerm + 100,
+			AcceptedCoordinatorId: &clustermetadatapb.ID{
 				Component: clustermetadatapb.ID_MULTIPOOLER,
 				Cell:      "test-cell",
-				Name:      setup.PrimaryMultipooler.Name,
+				Name:      "test-coordinator",
 			},
-			Hostname: "localhost",
-			PortMap:  map[string]int32{"postgres": int32(setup.PrimaryPgctld.PgPort)},
 		}
-		setPrimaryReq := &multipoolermanagerdatapb.SetPrimaryConnInfoRequest{
-			Primary:               primary,
-			StartReplicationAfter: true,
-			StopReplicationBefore: false,
-			CurrentTerm:           0, // Ignored when Force=true
-			Force:                 true,
-		}
-		_, err = standbyClient.Consensus.SetPrimaryConnInfo(ctx, setPrimaryReq)
-		require.NoError(t, err, "SetPrimaryConnInfo should succeed")
+		ctx = utils.WithTimeout(t, 5*time.Second)
+		_, err = standbyClient.Consensus.Recruit(ctx, &consensusdatapb.RecruitRequest{TermRevocation: termRevoc})
+		require.NoError(t, err, "Recruit should succeed on standby")
+
+		// Propose to standby with primary as leader: standby takes the replica path
+		// and configures primary_conninfo to point to the primary, then starts replication.
+		ctx = utils.WithTimeout(t, 5*time.Second)
+		_, err = standbyClient.Consensus.Propose(ctx, &consensusdatapb.ProposeRequest{
+			Proposal: &consensusdatapb.CoordinatorProposal{
+				TermRevocation: termRevoc,
+				ProposalLeader: &consensusdatapb.ProposalLeader{
+					Id: &clustermetadatapb.ID{
+						Component: clustermetadatapb.ID_MULTIPOOLER,
+						Cell:      "test-cell",
+						Name:      setup.PrimaryMultipooler.Name,
+					},
+					Host:         "localhost",
+					PostgresPort: int32(setup.PrimaryPgctld.PgPort),
+				},
+			},
+		})
+		require.NoError(t, err, "Propose should succeed on standby")
 		t.Log("Replication configured successfully")
 
 		// Wait for standby to catch up to primary's LSN using WaitForLSN API
@@ -160,176 +170,6 @@ func TestReplicationAPIs(t *testing.T) {
 		assert.Equal(t, "1", rowCount, "Should have 1 row in standby")
 
 		t.Log("Replication is working! Data successfully replicated from primary to standby")
-	})
-
-	t.Run("TermMismatchRejected", func(t *testing.T) {
-		setupPoolerTest(t, setup)
-
-		ctx := utils.WithTimeout(t, 1*time.Second)
-
-		// Try to set primary conn info with stale term (current term is 1, we'll try with 0)
-		primary := &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
-				Cell:      "test-cell",
-				Name:      setup.PrimaryMultipooler.Name,
-			},
-			Hostname: "localhost",
-			PortMap:  map[string]int32{"postgres": int32(setup.PrimaryPgctld.PgPort)},
-		}
-		setPrimaryReq := &multipoolermanagerdatapb.SetPrimaryConnInfoRequest{
-			Primary:               primary,
-			StartReplicationAfter: true,
-			StopReplicationBefore: false,
-			CurrentTerm:           0, // Stale term (lower than current term 1)
-			Force:                 false,
-		}
-		_, err = standbyClient.Consensus.SetPrimaryConnInfo(ctx, setPrimaryReq)
-		require.Error(t, err, "SetPrimaryConnInfo should fail with stale term")
-		assert.Contains(t, err.Error(), "consensus term too old", "Error should mention term is too old")
-
-		// Try again with force=true, should succeed
-		setPrimaryReq.Force = true
-		_, err = standbyClient.Consensus.SetPrimaryConnInfo(ctx, setPrimaryReq)
-		require.NoError(t, err, "SetPrimaryConnInfo should succeed with force=true")
-	})
-
-	t.Run("StopReplicationBeforeFlag", func(t *testing.T) {
-		// This test verifies that StopReplicationBefore flag stops replication before setting primary_conninfo
-
-		// Setup cleanup - default behavior starts replication
-		setupPoolerTest(t, setup)
-
-		// First ensure replication is running by checking pg_stat_wal_receiver
-		t.Log("Verifying replication is running...")
-		queryResp, err := standbyPoolerClient.ExecuteQuery(context.Background(), "SELECT status FROM pg_stat_wal_receiver", 1)
-		require.NoError(t, err)
-		require.Len(t, queryResp.Rows, 1)
-		initialStatus := string(queryResp.Rows[0].Values[0])
-		t.Logf("Initial WAL receiver status: %s", initialStatus)
-		assert.Equal(t, "streaming", initialStatus, "Replication should be streaming")
-
-		// Check if WAL replay is not paused
-		queryResp, err = standbyPoolerClient.ExecuteQuery(context.Background(), "SELECT pg_is_wal_replay_paused()", 1)
-		require.NoError(t, err)
-		require.Len(t, queryResp.Rows, 1)
-		isPaused := string(queryResp.Rows[0].Values[0])
-		// PostgreSQL wire protocol returns boolean as 't' or 'f' in text format
-		assert.Equal(t, "f", isPaused, "WAL replay should not be paused initially")
-
-		// Get current term
-		consensusStatus, err := standbyClient.Consensus.Status(utils.WithShortDeadline(t), &consensusdatapb.StatusRequest{})
-		require.NoError(t, err)
-		currentTerm := consensusStatus.CurrentTerm
-
-		// Call SetPrimaryConnInfo with StopReplicationBefore=true and StartReplicationAfter=false
-		ctx := utils.WithTimeout(t, 1*time.Second)
-
-		t.Log("Calling SetPrimaryConnInfo with StopReplicationBefore=true, StartReplicationAfter=false...")
-		primary := &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
-				Cell:      "test-cell",
-				Name:      setup.PrimaryMultipooler.Name,
-			},
-			Hostname: "localhost",
-			PortMap:  map[string]int32{"postgres": int32(setup.PrimaryPgctld.PgPort)},
-		}
-		setPrimaryReq := &multipoolermanagerdatapb.SetPrimaryConnInfoRequest{
-			Primary:               primary,
-			StartReplicationAfter: false, // Don't start after
-			StopReplicationBefore: true,  // Stop before
-			CurrentTerm:           currentTerm,
-			Force:                 false,
-		}
-		_, err = standbyClient.Consensus.SetPrimaryConnInfo(ctx, setPrimaryReq)
-		require.NoError(t, err, "SetPrimaryConnInfo should succeed")
-
-		// Verify that WAL replay is now paused
-		t.Log("Verifying replication is paused after StopReplicationBefore...")
-		queryResp, err = standbyPoolerClient.ExecuteQuery(context.Background(), "SELECT pg_is_wal_replay_paused()", 1)
-		require.NoError(t, err)
-		require.Len(t, queryResp.Rows, 1)
-		isPaused = string(queryResp.Rows[0].Values[0])
-		// PostgreSQL wire protocol returns boolean as 't' or 'f' in text format
-		assert.Equal(t, "t", isPaused, "WAL replay should be paused after StopReplicationBefore=true")
-
-		t.Log("Replication successfully stopped with StopReplicationBefore flag")
-	})
-
-	t.Run("StartReplicationAfterFlag", func(t *testing.T) {
-		setupPoolerTest(t, setup)
-
-		// This test verifies that replication only starts if StartReplicationAfter=true
-
-		// Stop replication using StopReplication RPC
-		t.Log("Stopping replication using StopReplication RPC...")
-		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-		stopReq := &multipoolermanagerdatapb.StopReplicationRequest{
-			Mode: multipoolermanagerdatapb.ReplicationPauseMode_REPLICATION_PAUSE_MODE_REPLAY_ONLY,
-			Wait: true,
-		}
-		_, err = standbyManagerClient.StopReplication(ctx, stopReq)
-		require.NoError(t, err)
-		cancel()
-
-		// Verify replication is paused
-		queryResp, err := standbyPoolerClient.ExecuteQuery(context.Background(), "SELECT pg_is_wal_replay_paused()", 1)
-		require.NoError(t, err)
-		require.Len(t, queryResp.Rows, 1)
-		isPaused := string(queryResp.Rows[0].Values[0])
-		// PostgreSQL wire protocol returns boolean as 't' or 'f' in text format
-		assert.Equal(t, "t", isPaused, "WAL replay should be paused")
-
-		// Call SetPrimaryConnInfo with StartReplicationAfter=false
-		// Use Force=true since we're testing replication functionality, not term validation
-		ctx = utils.WithTimeout(t, 1*time.Second)
-
-		t.Log("Calling SetPrimaryConnInfo with StartReplicationAfter=false...")
-		primary := &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
-				Cell:      "test-cell",
-				Name:      setup.PrimaryMultipooler.Name,
-			},
-			Hostname: "localhost",
-			PortMap:  map[string]int32{"postgres": int32(setup.PrimaryPgctld.PgPort)},
-		}
-		setPrimaryReq := &multipoolermanagerdatapb.SetPrimaryConnInfoRequest{
-			Primary:               primary,
-			StartReplicationAfter: false, // Don't start after
-			StopReplicationBefore: false,
-			CurrentTerm:           0, // Ignored when Force=true
-			Force:                 true,
-		}
-		_, err = standbyClient.Consensus.SetPrimaryConnInfo(ctx, setPrimaryReq)
-		require.NoError(t, err, "SetPrimaryConnInfo should succeed")
-
-		// Verify replication is still paused (not started)
-		t.Log("Verifying replication remains paused when StartReplicationAfter=false...")
-		queryResp, err = standbyPoolerClient.ExecuteQuery(context.Background(), "SELECT pg_is_wal_replay_paused()", 1)
-		require.NoError(t, err)
-		require.Len(t, queryResp.Rows, 1)
-		isPaused = string(queryResp.Rows[0].Values[0])
-		// PostgreSQL wire protocol returns boolean as 't' or 'f' in text format
-		assert.Equal(t, "t", isPaused, "WAL replay should still be paused when StartReplicationAfter=false")
-
-		// Now call again with StartReplicationAfter=true
-		t.Log("Calling SetPrimaryConnInfo with StartReplicationAfter=true...")
-		setPrimaryReq.StartReplicationAfter = true
-		_, err = standbyClient.Consensus.SetPrimaryConnInfo(ctx, setPrimaryReq)
-		require.NoError(t, err, "SetPrimaryConnInfo should succeed")
-
-		// Verify replication is now running
-		t.Log("Verifying replication started when StartReplicationAfter=true...")
-		queryResp, err = standbyPoolerClient.ExecuteQuery(context.Background(), "SELECT pg_is_wal_replay_paused()", 1)
-		require.NoError(t, err)
-		require.Len(t, queryResp.Rows, 1)
-		isPaused = string(queryResp.Rows[0].Values[0])
-		// PostgreSQL wire protocol returns boolean as 't' or 'f' in text format
-		assert.Equal(t, "f", isPaused, "WAL replay should be running after StartReplicationAfter=true")
-
-		t.Log("Replication successfully started with StartReplicationAfter flag")
 	})
 
 	t.Run("WaitForLSN_Standby_Success", func(t *testing.T) {

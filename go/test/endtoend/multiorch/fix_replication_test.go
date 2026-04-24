@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	"github.com/multigres/multigres/go/test/endtoend/shardsetup"
 	"github.com/multigres/multigres/go/test/utils"
@@ -262,23 +263,34 @@ func verifyReplicationStreaming(t *testing.T, client *shardsetup.MultipoolerClie
 		repStatus.PrimaryConnInfo.Host, repStatus.LastReceiveLsn)
 }
 
-// breakReplication stops replication and clears primary_conninfo using the RPC API.
-// It waits until the replication is confirmed broken before returning.
+// breakReplication stops replication and clears primary_conninfo by sending Recruit
+// to the replica. Recruit freezes the WAL position (pauses the WAL receiver and
+// resets primary_conninfo), which is the equivalent of the old SetPrimaryConnInfo(nil) call.
 func breakReplication(t *testing.T, client *shardsetup.MultipoolerClient, inst *shardsetup.MultipoolerInstance) {
 	t.Helper()
 
 	ctx := utils.WithTimeout(t, 10*time.Second)
 
-	// Clear primary_conninfo by setting it to nil
-	// Use StopReplicationBefore=true to stop WAL receiver first
-	_, err := client.Consensus.SetPrimaryConnInfo(ctx, &multipoolermanagerdatapb.SetPrimaryConnInfoRequest{
-		Primary:               nil, // nil primary clears the connection
-		StopReplicationBefore: true,
-		StartReplicationAfter: false,
-		Force:                 true, // Force to bypass term check
-	})
-	require.NoError(t, err, "SetPrimaryConnInfo (clear) should succeed")
-	t.Log("Cleared primary_conninfo via RPC")
+	// Read the current term so we can propose a strictly higher one.
+	statusResp, err := client.Consensus.Status(ctx, &consensusdatapb.StatusRequest{})
+	require.NoError(t, err, "should get current consensus status")
+	currentTerm := statusResp.GetConsensusStatus().GetTermRevocation().GetRevokedBelowTerm()
+
+	// Recruit with a new term. For a standby, Recruit freezes the WAL by pausing
+	// the WAL receiver and resetting primary_conninfo — effectively breaking replication.
+	recruitReq := &consensusdatapb.RecruitRequest{
+		TermRevocation: &consensusdatapb.TermRevocation{
+			RevokedBelowTerm: currentTerm + 1,
+			AcceptedCoordinatorId: &clustermetadatapb.ID{
+				Component: clustermetadatapb.ID_MULTIPOOLER,
+				Cell:      inst.Multipooler.Cell,
+				Name:      "test-break-replication",
+			},
+		},
+	}
+	_, err = client.Consensus.Recruit(ctx, recruitReq)
+	require.NoError(t, err, "Recruit should succeed to break replication")
+	t.Log("Cleared primary_conninfo via Recruit (WAL freeze)")
 
 	waitForReplicationBroken(t, inst, 10*time.Second)
 }

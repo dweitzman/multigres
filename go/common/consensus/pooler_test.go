@@ -20,24 +20,25 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 )
 
 func TestIsPrimary(t *testing.T) {
 	id := func(cell, name string) *clustermetadatapb.ID {
 		return &clustermetadatapb.ID{Cell: cell, Name: name}
 	}
-	statusWithRule := func(self, primary *clustermetadatapb.ID) *clustermetadatapb.ConsensusStatus {
-		return &clustermetadatapb.ConsensusStatus{
+	statusWithRule := func(self, primary *clustermetadatapb.ID) *consensusdatapb.ConsensusStatus {
+		return &consensusdatapb.ConsensusStatus{
 			Id: self,
-			CurrentPosition: &clustermetadatapb.PoolerPosition{
-				Rule: &clustermetadatapb.ShardRule{PrimaryId: primary},
+			CurrentPosition: &consensusdatapb.PoolerPosition{
+				Rule: &consensusdatapb.ShardRule{PrimaryId: primary},
 			},
 		}
 	}
 
 	tests := []struct {
 		name string
-		cs   *clustermetadatapb.ConsensusStatus
+		cs   *consensusdatapb.ConsensusStatus
 		want bool
 	}{
 		{
@@ -52,14 +53,14 @@ func TestIsPrimary(t *testing.T) {
 		},
 		{
 			name: "nil current_position",
-			cs:   &clustermetadatapb.ConsensusStatus{Id: id("zone1", "pooler-1")},
+			cs:   &consensusdatapb.ConsensusStatus{Id: id("zone1", "pooler-1")},
 			want: false,
 		},
 		{
 			name: "nil rule",
-			cs: &clustermetadatapb.ConsensusStatus{
+			cs: &consensusdatapb.ConsensusStatus{
 				Id:              id("zone1", "pooler-1"),
-				CurrentPosition: &clustermetadatapb.PoolerPosition{},
+				CurrentPosition: &consensusdatapb.PoolerPosition{},
 			},
 			want: false,
 		},

@@ -39,6 +39,7 @@ import (
 	"github.com/multigres/multigres/go/tools/viperutil"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
@@ -57,7 +58,7 @@ func (f *fakeConnPoolMgr) PgUser() string { return f.user }
 func (f *fakeConnPoolMgr) Close()         {} // called from MultiPoolerManager.Shutdown
 
 // setTermForTest writes the consensus term file directly for testing.
-func setTermForTest(t *testing.T, poolerDir string, term *multipoolermanagerdatapb.ConsensusTerm) {
+func setTermForTest(t *testing.T, poolerDir string, term *consensusdatapb.TermRevocation) {
 	t.Helper()
 	cs := NewConsensusState(poolerDir, nil)
 	require.NoError(t, cs.setConsensusTerm(term), "failed to write term file")
@@ -327,10 +328,15 @@ func TestActionLock_MutationMethodsTimeout(t *testing.T) {
 			},
 		},
 		{
-			name:       "Promote times out when lock is held",
+			name:       "Propose times out when lock is held",
 			poolerType: clustermetadatapb.PoolerType_REPLICA,
 			callMethod: func(ctx context.Context) error {
-				_, err := manager.Promote(ctx, 1, "", nil, false /* force */, "", nil, nil, nil)
+				_, err := manager.Propose(ctx, &consensusdatapb.ProposeRequest{
+					Proposal: &consensusdatapb.CoordinatorProposal{
+						TermRevocation: &consensusdatapb.TermRevocation{RevokedBelowTerm: 1},
+						ProposalLeader: &consensusdatapb.ProposalLeader{Id: manager.serviceID},
+					},
+				})
 				return err
 			},
 		},
@@ -453,7 +459,7 @@ func setupPromoteTestManager(t *testing.T, mockQueryService *mock.QueryService, 
 	}, 5*time.Second, 100*time.Millisecond, "Manager should reach Ready state")
 
 	// Set consensus term to expected value (10) for testing via direct file write
-	term := &multipoolermanagerdatapb.ConsensusTerm{TermNumber: 10}
+	term := &consensusdatapb.TermRevocation{RevokedBelowTerm: 10}
 	setTermForTest(t, tmpDir, term)
 
 	// Initialize consensus state so the manager can read the term
@@ -500,14 +506,16 @@ func TestPromoteIdempotency_PostgreSQLPromotedButTopologyNotUpdated(t *testing.T
 	pm.multipooler.Type = clustermetadatapb.PoolerType_REPLICA
 	pm.mu.Unlock()
 
-	// Call Promote - should detect PG is already promoted and only update topology
-	resp, err := pm.Promote(ctx, 10, "0/ABCDEF0", nil, false /* force */, "", nil, nil, nil)
+	// Call Propose - should detect PG is already promoted and only update topology
+	resp, err := pm.Propose(ctx, &consensusdatapb.ProposeRequest{
+		Proposal: &consensusdatapb.CoordinatorProposal{
+			TermRevocation:      &consensusdatapb.TermRevocation{RevokedBelowTerm: 10},
+			ProposalLeader:      &consensusdatapb.ProposalLeader{Id: pm.serviceID},
+			RecruitmentPosition: &consensusdatapb.RecruitmentPosition{Lsn: "0/ABCDEF0"},
+		},
+	})
 	require.NoError(t, err, "Should succeed - idempotent retry after partial failure")
 	require.NotNil(t, resp)
-
-	assert.False(t, resp.WasAlreadyPrimary, "Should not report as fully complete since topology wasn't updated")
-	assert.Equal(t, int64(10), resp.ConsensusTerm)
-	assert.Equal(t, "0/ABCDEF0", resp.LsnPosition)
 
 	// Verify topology was updated
 	pm.mu.Lock()
@@ -545,14 +553,16 @@ func TestPromoteIdempotency_FullyCompleteTopologyPrimary(t *testing.T) {
 	pm.multipooler.Type = clustermetadatapb.PoolerType_PRIMARY
 	pm.mu.Unlock()
 
-	// Call Promote - should succeed with WasAlreadyPrimary=true (idempotent)
-	resp, err := pm.Promote(ctx, 10, "0/FEDCBA0", nil, false /* force */, "", nil, nil, nil)
+	// Call Propose - should succeed when everything is already complete (idempotent)
+	resp, err := pm.Propose(ctx, &consensusdatapb.ProposeRequest{
+		Proposal: &consensusdatapb.CoordinatorProposal{
+			TermRevocation:      &consensusdatapb.TermRevocation{RevokedBelowTerm: 10},
+			ProposalLeader:      &consensusdatapb.ProposalLeader{Id: pm.serviceID},
+			RecruitmentPosition: &consensusdatapb.RecruitmentPosition{Lsn: "0/FEDCBA0"},
+		},
+	})
 	require.NoError(t, err, "Should succeed - everything is already complete")
 	require.NotNil(t, resp)
-
-	assert.True(t, resp.WasAlreadyPrimary, "Should report as already primary")
-	assert.Equal(t, int64(10), resp.ConsensusTerm)
-	assert.Equal(t, "0/FEDCBA0", resp.LsnPosition)
 	assert.NoError(t, mockQueryService.ExpectationsWereMet())
 }
 
@@ -579,69 +589,57 @@ func TestPromoteIdempotency_InconsistentStateTopologyPrimaryPgNotPrimary(t *test
 	pm.multipooler.Type = clustermetadatapb.PoolerType_PRIMARY
 	pm.mu.Unlock()
 
-	// Call Promote without force - should fail with inconsistent state error
-	_, err := pm.Promote(ctx, 10, "0/FEDCBA0", nil, false, "", nil, nil, nil)
+	// Call Propose without force - should fail with inconsistent state error
+	_, err := pm.Propose(ctx, &consensusdatapb.ProposeRequest{
+		Proposal: &consensusdatapb.CoordinatorProposal{
+			TermRevocation:      &consensusdatapb.TermRevocation{RevokedBelowTerm: 10},
+			ProposalLeader:      &consensusdatapb.ProposalLeader{Id: pm.serviceID},
+			RecruitmentPosition: &consensusdatapb.RecruitmentPosition{Lsn: "0/FEDCBA0"},
+		},
+	})
 	require.Error(t, err, "Should fail due to inconsistent state without force flag")
 	assert.Contains(t, err.Error(), "inconsistent state")
-	assert.Contains(t, err.Error(), "Manual intervention required")
+	assert.Contains(t, err.Error(), "Use force=true.")
 	assert.NoError(t, mockQueryService.ExpectationsWereMet())
 }
 
-// TestPromoteIdempotency_InconsistentStateFixedWithForce tests that force flag fixes inconsistent state
-func TestPromoteIdempotency_InconsistentStateFixedWithForce(t *testing.T) {
+// TestPromoteIdempotency_InconsistentStateAlreadyFullyPromoted tests that Propose
+// succeeds without re-promoting when topology is PRIMARY and PostgreSQL is already primary
+// with sync replication matching (fully consistent idempotent case).
+func TestPromoteIdempotency_InconsistentStateAlreadyFullyPromoted(t *testing.T) {
 	ctx := context.Background()
 
-	// Simulate inconsistent state:
-	// 1. PostgreSQL is still in recovery (standby)
-	// 2. Topology shows PRIMARY
-	// With force=true, it should complete the missing promotion steps
+	// State: topology is PRIMARY, postgres is already primary, sync matches.
+	// Propose should be a no-op and return success.
 
 	// Create mock and set ALL expectations BEFORE starting the manager
 	mockQueryService := mock.NewQueryService()
 
-	// The sequence of pg_is_in_recovery calls is:
-	// 1. Promote checkPromotionState - returns "t" (consumed) - still in recovery
-	// 2. waitForPromotionComplete polling - returns "f" (persistent) - promotion complete
-	mockQueryService.AddQueryPatternOnce("SELECT pg_is_in_recovery",
-		mock.MakeQueryResult([]string{"pg_is_in_recovery"}, [][]any{{"t"}}))
-	// After pg_promote(), waitForPromotionComplete polls until pg_is_in_recovery returns false
+	// checkPromotionState: pg_is_in_recovery returns false (already primary)
 	mockQueryService.AddQueryPatternOnce("SELECT pg_is_in_recovery",
 		mock.MakeQueryResult([]string{"pg_is_in_recovery"}, [][]any{{"f"}}))
 
-	// Mock: Validate expected LSN
-	mockQueryService.AddQueryPatternOnce("SELECT pg_last_wal_replay_lsn",
-		mock.MakeQueryResult([]string{"pg_last_wal_replay_lsn", "pg_is_wal_replay_paused"}, [][]any{{"0/FEDCBA0", "t"}}))
-
-	// Mock: pg_promote() call to fix the inconsistency
-	mockQueryService.AddQueryPatternOnce("SELECT pg_promote",
-		mock.MakeQueryResult(nil, nil))
-
-	// Mock: Clear primary_conninfo after promotion
-	mockQueryService.AddQueryPatternOnce("ALTER SYSTEM RESET primary_conninfo",
-		mock.MakeQueryResult(nil, nil))
-	mockQueryService.AddQueryPatternOnce("SELECT pg_reload_conf",
-		mock.MakeQueryResult(nil, nil))
-
-	// Mock: Get final LSN
+	// checkPromotionState: get current primary LSN
 	mockQueryService.AddQueryPatternOnce("SELECT pg_current_wal_lsn",
 		mock.MakeQueryResult([]string{"pg_current_wal_lsn"}, [][]any{{"0/FEDCBA0"}}))
 
 	pm, _ := setupPromoteTestManager(t, mockQueryService, &fakeRuleStore{})
 
-	// Topology shows PRIMARY (inconsistent!)
+	// Topology shows PRIMARY and postgres is also primary — fully consistent
 	pm.mu.Lock()
 	pm.multipooler.Type = clustermetadatapb.PoolerType_PRIMARY
 	pm.mu.Unlock()
 
-	// Call Promote with force=true - should fix the inconsistency
-	resp, err := pm.Promote(ctx, 10, "0/FEDCBA0", nil, true, "", nil, nil, nil)
-	require.NoError(t, err, "Should succeed with force flag - fixing inconsistent state")
+	// Call Propose - should succeed as idempotent (already done)
+	resp, err := pm.Propose(ctx, &consensusdatapb.ProposeRequest{
+		Proposal: &consensusdatapb.CoordinatorProposal{
+			TermRevocation:      &consensusdatapb.TermRevocation{RevokedBelowTerm: 10},
+			ProposalLeader:      &consensusdatapb.ProposalLeader{Id: pm.serviceID},
+			RecruitmentPosition: &consensusdatapb.RecruitmentPosition{Lsn: "0/FEDCBA0"},
+		},
+	})
+	require.NoError(t, err, "Should succeed - promotion already complete and consistent")
 	require.NotNil(t, resp)
-
-	// PostgreSQL was promoted, so this is not "already primary" case
-	assert.False(t, resp.WasAlreadyPrimary)
-	assert.Equal(t, int64(10), resp.ConsensusTerm)
-	assert.Equal(t, "0/FEDCBA0", resp.LsnPosition)
 	assert.NoError(t, mockQueryService.ExpectationsWereMet())
 }
 
@@ -692,13 +690,16 @@ func TestPromoteIdempotency_NothingCompleteYet(t *testing.T) {
 	pm.multipooler.Type = clustermetadatapb.PoolerType_REPLICA
 	pm.mu.Unlock()
 
-	// Call Promote - should execute all steps
-	resp, err := pm.Promote(ctx, 10, "0/5678ABC", nil, false /* force */, "", nil, nil, nil)
+	// Call Propose - should execute all steps
+	resp, err := pm.Propose(ctx, &consensusdatapb.ProposeRequest{
+		Proposal: &consensusdatapb.CoordinatorProposal{
+			TermRevocation:      &consensusdatapb.TermRevocation{RevokedBelowTerm: 10},
+			ProposalLeader:      &consensusdatapb.ProposalLeader{Id: pm.serviceID},
+			RecruitmentPosition: &consensusdatapb.RecruitmentPosition{Lsn: "0/5678ABC"},
+		},
+	})
 	require.NoError(t, err)
 	require.NotNil(t, resp)
-
-	assert.False(t, resp.WasAlreadyPrimary)
-	assert.Equal(t, int64(10), resp.ConsensusTerm)
 
 	// Verify topology was updated
 	pm.mu.Lock()
@@ -729,8 +730,14 @@ func TestPromoteIdempotency_LSNMismatchBeforePromotion(t *testing.T) {
 	pm.multipooler.Type = clustermetadatapb.PoolerType_REPLICA
 	pm.mu.Unlock()
 
-	// Call Promote with different expected LSN - should fail
-	_, err := pm.Promote(ctx, 10, "0/1111111", nil, false /* force */, "", nil, nil, nil)
+	// Call Propose with different expected LSN - should fail
+	_, err := pm.Propose(ctx, &consensusdatapb.ProposeRequest{
+		Proposal: &consensusdatapb.CoordinatorProposal{
+			TermRevocation:      &consensusdatapb.TermRevocation{RevokedBelowTerm: 10},
+			ProposalLeader:      &consensusdatapb.ProposalLeader{Id: pm.serviceID},
+			RecruitmentPosition: &consensusdatapb.RecruitmentPosition{Lsn: "0/1111111"},
+		},
+	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "LSN")
 	assert.NoError(t, mockQueryService.ExpectationsWereMet())
@@ -746,11 +753,17 @@ func TestPromoteIdempotency_TermMismatch(t *testing.T) {
 	pm, tmpDir := setupPromoteTestManager(t, mockQueryService, &fakeRuleStore{})
 
 	// Explicitly set the term to 10 to ensure we have the expected value via direct file write
-	term := &multipoolermanagerdatapb.ConsensusTerm{TermNumber: 10}
+	term := &consensusdatapb.TermRevocation{RevokedBelowTerm: 10}
 	setTermForTest(t, tmpDir, term)
 
-	// Call Promote with wrong term (current term is 10, passing 5)
-	_, err := pm.Promote(ctx, 5, "0/1234567", nil, false /* force */, "", nil, nil, nil)
+	// Call Propose with wrong term (current term is 10, passing 5)
+	_, err := pm.Propose(ctx, &consensusdatapb.ProposeRequest{
+		Proposal: &consensusdatapb.CoordinatorProposal{
+			TermRevocation:      &consensusdatapb.TermRevocation{RevokedBelowTerm: 5},
+			ProposalLeader:      &consensusdatapb.ProposalLeader{Id: pm.serviceID},
+			RecruitmentPosition: &consensusdatapb.RecruitmentPosition{Lsn: "0/1234567"},
+		},
+	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "term")
 	assert.NoError(t, mockQueryService.ExpectationsWereMet())
@@ -804,9 +817,14 @@ func TestPromoteIdempotency_SecondCallSucceedsAfterCompletion(t *testing.T) {
 	pm.mu.Unlock()
 
 	// First call
-	resp1, err := pm.Promote(ctx, 10, "0/AAA1111", nil, false /* force */, "", nil, nil, nil)
+	_, err := pm.Propose(ctx, &consensusdatapb.ProposeRequest{
+		Proposal: &consensusdatapb.CoordinatorProposal{
+			TermRevocation:      &consensusdatapb.TermRevocation{RevokedBelowTerm: 10},
+			ProposalLeader:      &consensusdatapb.ProposalLeader{Id: pm.serviceID},
+			RecruitmentPosition: &consensusdatapb.RecruitmentPosition{Lsn: "0/AAA1111"},
+		},
+	})
 	require.NoError(t, err)
-	assert.False(t, resp1.WasAlreadyPrimary)
 
 	// Verify topology was updated to PRIMARY
 	pm.mu.Lock()
@@ -816,10 +834,14 @@ func TestPromoteIdempotency_SecondCallSucceedsAfterCompletion(t *testing.T) {
 
 	// Second call should SUCCEED - topology is PRIMARY and everything is consistent (idempotent)
 	// The pg_is_in_recovery pattern already returns "f" (false) since the first call consumed the "t" patterns
-	resp2, err := pm.Promote(ctx, 10, "0/AAA1111", nil, false /* force */, "", nil, nil, nil)
+	_, err = pm.Propose(ctx, &consensusdatapb.ProposeRequest{
+		Proposal: &consensusdatapb.CoordinatorProposal{
+			TermRevocation:      &consensusdatapb.TermRevocation{RevokedBelowTerm: 10},
+			ProposalLeader:      &consensusdatapb.ProposalLeader{Id: pm.serviceID},
+			RecruitmentPosition: &consensusdatapb.RecruitmentPosition{Lsn: "0/AAA1111"},
+		},
+	})
 	require.NoError(t, err, "Second call should succeed - idempotent operation")
-	assert.True(t, resp2.WasAlreadyPrimary, "Second call should report as already primary")
-	assert.Equal(t, "0/AAA1111", resp2.LsnPosition)
 	assert.NoError(t, mockQueryService.ExpectationsWereMet())
 }
 
@@ -860,13 +882,16 @@ func TestPromoteIdempotency_EmptyExpectedLSNSkipsValidation(t *testing.T) {
 	pm.multipooler.Type = clustermetadatapb.PoolerType_REPLICA
 	pm.mu.Unlock()
 
-	// Call Promote with empty expectedLSN - should skip LSN validation
-	resp, err := pm.Promote(ctx, 10, "", nil, false /* force */, "", nil, nil, nil)
+	// Call Propose with empty expectedLSN - should skip LSN validation
+	resp, err := pm.Propose(ctx, &consensusdatapb.ProposeRequest{
+		Proposal: &consensusdatapb.CoordinatorProposal{
+			TermRevocation: &consensusdatapb.TermRevocation{RevokedBelowTerm: 10},
+			ProposalLeader: &consensusdatapb.ProposalLeader{Id: pm.serviceID},
+			// No RecruitmentPosition = empty LSN, skips validation
+		},
+	})
 	require.NoError(t, err, "Should succeed with empty expectedLSN")
 	require.NotNil(t, resp)
-
-	assert.False(t, resp.WasAlreadyPrimary)
-	assert.Equal(t, "0/BBBBBBB", resp.LsnPosition)
 	fakeRules.assertPromoteRecorded(t)
 	assert.NoError(t, mockQueryService.ExpectationsWereMet())
 }
@@ -903,6 +928,20 @@ func TestPromote_WithElectionMetadata(t *testing.T) {
 	mockQueryService.AddQueryPatternOnce("SELECT pg_reload_conf",
 		mock.MakeQueryResult(nil, nil))
 
+	// ProposedRule has cohort members → proposedRuleToSyncConfig returns non-nil →
+	// configureReplicationAfterPromotion runs → checkPrimaryGuardrails needs pg_is_in_recovery
+	mockQueryService.AddQueryPatternOnce("SELECT pg_is_in_recovery",
+		mock.MakeQueryResult([]string{"pg_is_in_recovery"}, [][]any{{"f"}}))
+	// configureSynchronousReplicationLocked → setSynchronousCommit
+	mockQueryService.AddQueryPatternOnce("ALTER SYSTEM SET synchronous_commit",
+		mock.MakeQueryResult(nil, nil))
+	// setSynchronousStandbyNames
+	mockQueryService.AddQueryPatternOnce("ALTER SYSTEM SET synchronous_standby_names",
+		mock.MakeQueryResult(nil, nil))
+	// reloadPostgresConfig (ReloadConfig: true)
+	mockQueryService.AddQueryPatternOnce("SELECT pg_reload_conf",
+		mock.MakeQueryResult(nil, nil))
+
 	fakeRules := &fakeRuleStore{}
 	pm, _ := setupPromoteTestManager(t, mockQueryService, fakeRules)
 
@@ -911,37 +950,40 @@ func TestPromote_WithElectionMetadata(t *testing.T) {
 	pm.multipooler.Type = clustermetadatapb.PoolerType_REPLICA
 	pm.mu.Unlock()
 
-	// Call Promote with election metadata
-	reason := "dead_primary"
+	// Call Propose with election metadata
 	coordinatorID := &clustermetadatapb.ID{Cell: "zone1", Name: "coordinator-1"}
 	cohortMembers := []*clustermetadatapb.ID{
 		{Cell: "zone1", Name: "pooler-1"},
 		{Cell: "zone1", Name: "pooler-2"},
 		{Cell: "zone1", Name: "pooler-3"},
 	}
-	acceptedMembers := []*clustermetadatapb.ID{
-		{Cell: "zone1", Name: "pooler-1"},
-		{Cell: "zone1", Name: "pooler-3"},
-	}
 
-	resp, err := pm.Promote(ctx, 10, "0/1234567", nil, false /* force */, reason, coordinatorID, cohortMembers, acceptedMembers)
-	require.NoError(t, err, "Promote should succeed with election metadata")
+	resp, err := pm.Propose(ctx, &consensusdatapb.ProposeRequest{
+		Proposal: &consensusdatapb.CoordinatorProposal{
+			TermRevocation: &consensusdatapb.TermRevocation{
+				RevokedBelowTerm:      10,
+				AcceptedCoordinatorId: coordinatorID,
+			},
+			ProposalLeader:      &consensusdatapb.ProposalLeader{Id: pm.serviceID},
+			RecruitmentPosition: &consensusdatapb.RecruitmentPosition{Lsn: "0/1234567"},
+			ProposedRule: &consensusdatapb.ShardRule{
+				CohortMembers: cohortMembers,
+			},
+		},
+	})
+	require.NoError(t, err, "Propose should succeed with election metadata")
 	require.NotNil(t, resp)
-
-	assert.False(t, resp.WasAlreadyPrimary)
-	assert.Equal(t, int64(10), resp.ConsensusTerm)
-	assert.Equal(t, "0/1234567", resp.LsnPosition)
 
 	// Verify topology was updated
 	pm.mu.Lock()
 	assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, pm.multipooler.Type)
 	pm.mu.Unlock()
 
-	update := fakeRules.assertPromoteRecorded(t)
-	assert.Equal(t, "dead_primary", update.reason)
+	// Two updateRule calls: one from configureSynchronousReplicationLocked (replication_config)
+	// and one from the promotion itself. Find the promotion update.
+	update := fakeRules.assertPromoteAmongUpdates(t)
 	prototest.AssertEqual(t, coordinatorID, update.coordinatorID)
 	prototest.RequireElementsMatch(t, cohortMembers, update.cohortMembers)
-	prototest.RequireElementsMatch(t, acceptedMembers, update.acceptedMembers)
 	assert.NoError(t, mockQueryService.ExpectationsWereMet())
 }
 
@@ -988,28 +1030,19 @@ func TestPromote_RuleHistoryErrorFailsPromotion(t *testing.T) {
 	pm.multipooler.Type = clustermetadatapb.PoolerType_REPLICA
 	pm.mu.Unlock()
 
-	// Verify primary_term is 0 before promotion
-	term, err := pm.consensusState.GetInconsistentTerm()
-	require.NoError(t, err)
-	require.Equal(t, int64(0), term.GetPrimaryTerm(), "primary_term should be 0 before promotion")
-
-	// Call Promote - should FAIL because rule history write fails
-	resp, err := pm.Promote(ctx, 10, "0/9876543", nil, false /* force */, "test_reason", nil, nil, nil)
-	require.Error(t, err, "Promote should fail when rule history write fails")
-	require.Nil(t, resp)
+	// Call Propose - should FAIL because rule history write fails
+	resp, err := pm.Propose(ctx, &consensusdatapb.ProposeRequest{
+		Proposal: &consensusdatapb.CoordinatorProposal{
+			TermRevocation:      &consensusdatapb.TermRevocation{RevokedBelowTerm: 10},
+			ProposalLeader:      &consensusdatapb.ProposalLeader{Id: pm.serviceID},
+			RecruitmentPosition: &consensusdatapb.RecruitmentPosition{Lsn: "0/9876543"},
+		},
+	})
+	require.Error(t, err, "Propose should fail when rule history write fails")
+	require.NotNil(t, resp) // Propose returns a response with ConsensusStatus even on error
 
 	// Error message should indicate the rule history failure
 	assert.Contains(t, err.Error(), "rule history")
-
-	// CRITICAL: Verify that primary_term WAS set even though promotion failed.
-	// This is intentional - we set primary_term (local state) before writing to history table
-	// (committed transaction). If the order were reversed and history write succeeded but
-	// primary_term write failed, we'd have a committed transaction without local state.
-	// With this ordering, on retry the primary_term set is idempotent and history write will succeed.
-	term, err = pm.consensusState.GetInconsistentTerm()
-	require.NoError(t, err)
-	assert.Equal(t, int64(10), term.GetPrimaryTerm(),
-		"primary_term should be set to 10 even though promotion failed (set before history write)")
 
 	// Note: PostgreSQL was promoted but we return error to indicate the promotion is incomplete.
 	// The coordinator should handle this partial promotion state (e.g., retry or repair).
@@ -1106,7 +1139,7 @@ func TestPromote_TopologyUpdateFailureDoesNotFailPromotion(t *testing.T) {
 		return pm.GetState() == ManagerStateReady
 	}, 5*time.Second, 100*time.Millisecond, "Manager should reach Ready state")
 
-	term := &multipoolermanagerdatapb.ConsensusTerm{TermNumber: 10}
+	term := &consensusdatapb.TermRevocation{RevokedBelowTerm: 10}
 	setTermForTest(t, tmpDir, term)
 
 	pm.mu.Lock()
@@ -1116,17 +1149,19 @@ func TestPromote_TopologyUpdateFailureDoesNotFailPromotion(t *testing.T) {
 	_, err = pm.consensusState.Load()
 	require.NoError(t, err)
 
-	// Inject topo failure before calling Promote
+	// Inject topo failure before calling Propose
 	factory.SetError(errors.New("topo unavailable"))
 
-	// Promote should succeed despite topo failure
-	resp, err := pm.Promote(ctx, 10, "0/ABCDEF0", nil, false, "test_reason", nil, nil, nil)
-	require.NoError(t, err, "Promote should succeed even when topology update fails")
+	// Propose should succeed despite topo failure
+	resp, err := pm.Propose(ctx, &consensusdatapb.ProposeRequest{
+		Proposal: &consensusdatapb.CoordinatorProposal{
+			TermRevocation:      &consensusdatapb.TermRevocation{RevokedBelowTerm: 10},
+			ProposalLeader:      &consensusdatapb.ProposalLeader{Id: pm.serviceID},
+			RecruitmentPosition: &consensusdatapb.RecruitmentPosition{Lsn: "0/ABCDEF0"},
+		},
+	})
+	require.NoError(t, err, "Propose should succeed even when topology update fails")
 	require.NotNil(t, resp)
-
-	assert.False(t, resp.WasAlreadyPrimary)
-	assert.Equal(t, int64(10), resp.ConsensusTerm)
-	assert.Equal(t, "0/ABCDEF0", resp.LsnPosition)
 
 	// Local state should still be updated to PRIMARY
 	pm.mu.Lock()
@@ -1135,84 +1170,12 @@ func TestPromote_TopologyUpdateFailureDoesNotFailPromotion(t *testing.T) {
 
 	// Verify health streamer has primary observation with self as primary
 	healthState := pm.healthStreamer.getState()
-	require.NotNil(t, healthState.PrimaryObservation, "health streamer should have primary observation after Promote")
+	require.NotNil(t, healthState.PrimaryObservation, "health streamer should have primary observation after Propose")
 	assert.Equal(t, serviceID, healthState.PrimaryObservation.PrimaryID, "primary observation should point to self")
 	assert.Equal(t, int64(10), healthState.PrimaryObservation.PrimaryTerm, "primary observation term should match consensus term")
 
 	fakeRules.assertPromoteRecorded(t)
 	assert.NoError(t, mockQueryService.ExpectationsWereMet())
-}
-
-func TestSetPrimaryTerm_InvariantValidation(t *testing.T) {
-	ctx := context.Background()
-	tmpDir := t.TempDir()
-
-	// Create pg_data directory structure
-	createPgDataDir(t, tmpDir)
-
-	serviceID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
-		Cell:      "zone1",
-		Name:      "test-pooler",
-	}
-
-	// Create consensus state and set initial term to 5
-	consensusState := NewConsensusState(tmpDir, serviceID)
-	initialTerm := &multipoolermanagerdatapb.ConsensusTerm{
-		TermNumber:  5,
-		PrimaryTerm: 0,
-	}
-	setTermForTest(t, tmpDir, initialTerm)
-	_, err := consensusState.Load()
-	require.NoError(t, err)
-
-	// Create action lock and acquire it
-	actionLock := NewActionLock()
-	lockCtx, err := actionLock.Acquire(ctx, "test-primary-term")
-	require.NoError(t, err)
-	defer actionLock.Release(lockCtx)
-
-	// Setting primary_term to match current term should succeed
-	err = consensusState.SetPrimaryTerm(lockCtx, 5, false /* force */)
-	require.NoError(t, err, "Should be able to set primary_term to current term value")
-
-	term, err := consensusState.GetInconsistentTerm()
-	require.NoError(t, err)
-	assert.Equal(t, int64(5), term.GetPrimaryTerm(), "primary_term should be set to 5")
-
-	// Setting primary_term to a different value should fail (invariant violation)
-	err = consensusState.SetPrimaryTerm(lockCtx, 7, false /* force */)
-	require.Error(t, err, "Should fail when primary_term doesn't match current term")
-
-	// Verify primary_term was not changed
-	term, err = consensusState.GetInconsistentTerm()
-	require.NoError(t, err)
-	assert.Equal(t, int64(5), term.GetPrimaryTerm(), "primary_term should still be 5")
-
-	// But with force=true, setting a mismatched term should succeed
-	err = consensusState.SetPrimaryTerm(lockCtx, 7, true /* force */)
-	require.NoError(t, err, "Should succeed with force=true even when terms don't match")
-
-	term, err = consensusState.GetInconsistentTerm()
-	require.NoError(t, err)
-	assert.Equal(t, int64(7), term.GetPrimaryTerm(), "primary_term should be updated to 7 with force")
-
-	// Clearing primary_term to 0 should always succeed (exception to invariant)
-	err = consensusState.SetPrimaryTerm(lockCtx, 0, false /* force */)
-	require.NoError(t, err, "Should be able to clear primary_term to 0 regardless of current term")
-
-	term, err = consensusState.GetInconsistentTerm()
-	require.NoError(t, err)
-	assert.Equal(t, int64(0), term.GetPrimaryTerm(), "primary_term should be cleared to 0")
-
-	// Negative primary_term should fail even with force
-	err = consensusState.SetPrimaryTerm(lockCtx, -1, false /* force */)
-	require.Error(t, err, "Should fail with negative primary_term")
-	assert.Contains(t, err.Error(), "primary_term cannot be negative")
-
-	err = consensusState.SetPrimaryTerm(lockCtx, -1, true /* force */)
-	require.Error(t, err, "Should fail with negative primary_term even with force=true")
-	assert.Contains(t, err.Error(), "primary_term cannot be negative")
 }
 
 func TestSetPrimaryConnInfo_StoresPrimaryPoolerID(t *testing.T) {
@@ -1300,7 +1263,7 @@ func TestSetPrimaryConnInfo_StoresPrimaryPoolerID(t *testing.T) {
 	pm.mu.Unlock()
 
 	// Set consensus term first (required for SetPrimaryConnInfo) via direct file write
-	term := &multipoolermanagerdatapb.ConsensusTerm{TermNumber: 1}
+	term := &consensusdatapb.TermRevocation{RevokedBelowTerm: 1}
 	setTermForTest(t, tmpDir, term)
 	// Reload consensus state to pick up the term from file
 	_, err = pm.consensusState.Load()
@@ -1643,9 +1606,9 @@ func TestReplicationStatus(t *testing.T) {
 			mock.MakeQueryResult([]string{"synchronous_commit"}, [][]any{{"on"}}))
 		pm.qsc = &mockPoolerController{queryService: mockQueryService}
 		pm.rules = &fakeRuleStore{
-			pos: &clustermetadatapb.PoolerPosition{
-				Rule: &clustermetadatapb.ShardRule{
-					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
+			pos: &consensusdatapb.PoolerPosition{
+				Rule: &consensusdatapb.ShardRule{
+					RuleNumber: &consensusdatapb.RuleNumber{CoordinatorTerm: 1},
 					CohortMembers: []*clustermetadatapb.ID{
 						{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "pooler-a"},
 						{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "pooler-b"},
@@ -1785,8 +1748,8 @@ func TestConfigureSynchronousReplication_HistoryFailurePreventGUCUpdates(t *test
 	multipooler.PoolerDir = poolerDir
 
 	// Set consensus term
-	setTermForTest(t, poolerDir, &multipoolermanagerdatapb.ConsensusTerm{
-		PrimaryTerm: 1,
+	setTermForTest(t, poolerDir, &consensusdatapb.TermRevocation{
+		RevokedBelowTerm: 1,
 	})
 
 	config := &Config{
@@ -1892,8 +1855,8 @@ func TestUpdateSynchronousStandbyList_HistoryFailurePreventsGUCUpdate(t *testing
 	multipooler.PoolerDir = poolerDir
 
 	// Set consensus term
-	setTermForTest(t, poolerDir, &multipoolermanagerdatapb.ConsensusTerm{
-		PrimaryTerm: 5,
+	setTermForTest(t, poolerDir, &consensusdatapb.TermRevocation{
+		RevokedBelowTerm: 5,
 	})
 
 	config := &Config{

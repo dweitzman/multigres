@@ -135,7 +135,7 @@ func (c *Coordinator) buildProposal(
 			CreationTime:     timestamppb.Now(),
 		},
 		RecruitmentPosition: &consensusdatapb.RecruitmentPosition{
-			Lsn: leader.consensusStatus.GetCurrentPosition().GetLsn(),
+			Lsn:        leader.consensusStatus.GetCurrentPosition().GetLsn(),
 			RuleNumber: leader.consensusStatus.GetCurrentPosition().GetRule().GetRuleNumber(),
 		},
 	}, nil

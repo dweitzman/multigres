@@ -37,9 +37,60 @@ import (
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
 
-// TestEmergencyDemoteAndPromote tests the full EmergencyDemote and Promote cycle
-// This ensures that emergency demoting a primary and promoting a standby work together correctly,
-// and that we can restore the original state at the end
+// testCoordinatorID is the coordinator identity used in Recruit/Propose calls within tests.
+var testCoordinatorID = &clustermetadatapb.ID{
+	Component: clustermetadatapb.ID_MULTIPOOLER,
+	Cell:      "test-cell",
+	Name:      "test-coordinator",
+}
+
+// recruitBoth sends Recruit to both consensus clients with a new term (currentTerm+100).
+// Returns the TermRevocation to pass to subsequent Propose calls.
+func recruitBoth(
+	t *testing.T,
+	primaryConsensusClient, standbyConsensusClient consensuspb.MultiPoolerConsensusClient,
+	currentTerm int64,
+) *consensusdatapb.TermRevocation {
+	t.Helper()
+	termRevocation := &consensusdatapb.TermRevocation{
+		RevokedBelowTerm:      currentTerm + 100,
+		AcceptedCoordinatorId: testCoordinatorID,
+	}
+	recruitReq := &consensusdatapb.RecruitRequest{TermRevocation: termRevocation}
+	_, err := primaryConsensusClient.Recruit(utils.WithTimeout(t, 5*time.Second), recruitReq)
+	require.NoError(t, err, "Recruit primary should succeed")
+	_, err = standbyConsensusClient.Recruit(utils.WithTimeout(t, 5*time.Second), recruitReq)
+	require.NoError(t, err, "Recruit standby should succeed")
+	return termRevocation
+}
+
+// proposeBothWithLeader sends a CoordinatorProposal to both consensus clients.
+// The node whose ID matches leaderID will promote; the other will configure replication.
+func proposeBothWithLeader(
+	t *testing.T,
+	primaryConsensusClient, standbyConsensusClient consensuspb.MultiPoolerConsensusClient,
+	termRevocation *consensusdatapb.TermRevocation,
+	leaderID *clustermetadatapb.ID, leaderHost string, leaderPgPort int32,
+) {
+	t.Helper()
+	proposal := &consensusdatapb.CoordinatorProposal{
+		TermRevocation: termRevocation,
+		ProposalLeader: &consensusdatapb.ProposalLeader{
+			Id:           leaderID,
+			Host:         leaderHost,
+			PostgresPort: leaderPgPort,
+		},
+	}
+	proposeReq := &consensusdatapb.ProposeRequest{Proposal: proposal}
+	_, err := primaryConsensusClient.Propose(utils.WithTimeout(t, 5*time.Second), proposeReq)
+	require.NoError(t, err, "Propose to primary should succeed")
+	_, err = standbyConsensusClient.Propose(utils.WithTimeout(t, 5*time.Second), proposeReq)
+	require.NoError(t, err, "Propose to standby should succeed")
+}
+
+// TestEmergencyDemoteAndPromote tests the full EmergencyDemote and Recruit/Propose cycle.
+// This ensures that emergency demoting a primary and promoting a standby work together correctly
+// using the new consensus protocol.
 func TestEmergencyDemoteAndPromote(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping end-to-end tests in short mode")
@@ -70,13 +121,22 @@ func TestEmergencyDemoteAndPromote(t *testing.T) {
 	standbyManagerClient := multipoolermanagerpb.NewMultiPoolerManagerClient(standbyConn)
 	standbyConsensusClient := consensuspb.NewMultiPoolerConsensusClient(standbyConn)
 
+	standbyID := &clustermetadatapb.ID{
+		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Cell:      setup.StandbyMultipooler.Cell,
+		Name:      setup.StandbyMultipooler.Name,
+	}
+	primaryID := &clustermetadatapb.ID{
+		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Cell:      setup.PrimaryMultipooler.Cell,
+		Name:      setup.PrimaryMultipooler.Name,
+	}
+
 	t.Run("FullCycle_EmergencyDemoteAndPromote", func(t *testing.T) {
 		setupPoolerTest(t, setup)
 
-		t.Log("=== Testing full EmergencyDemote/Promote cycle ===")
+		t.Log("=== Testing full EmergencyDemote/Propose cycle ===")
 
-		// Get current terms - tests use Force=true so actual term values don't matter,
-		// but we use them for consistency in responses
 		ctx := utils.WithShortDeadline(t)
 		primaryTerm := shardsetup.MustGetCurrentTerm(t, ctx, primaryConsensusClient)
 		t.Logf("Starting test with primary term: %d", primaryTerm)
@@ -84,13 +144,11 @@ func TestEmergencyDemoteAndPromote(t *testing.T) {
 		// Demote the original primary
 		t.Log("Demoting original primary...")
 
-		// Get LSN before demotion
 		primaryStatusBefore, err := primaryConsensusClient.Status(utils.WithShortDeadline(t), &consensusdatapb.StatusRequest{})
 		require.NoError(t, err, "Status should succeed before demotion")
 		lsnBeforeDemotion := primaryStatusBefore.WalPosition.CurrentLsn
 		t.Logf("LSN before demotion: %s", lsnBeforeDemotion)
 
-		// Perform demotion with Force=true (testing demote functionality, not term validation)
 		demoteReq := &multipoolermanagerdatapb.EmergencyDemoteRequest{
 			ConsensusTerm: primaryTerm,
 			DrainTimeout:  nil,
@@ -108,86 +166,39 @@ func TestEmergencyDemoteAndPromote(t *testing.T) {
 		// Restore demoted primary to working state (emergency demotion stops postgres)
 		restoreAfterEmergencyDemotion(t, setup, setup.PrimaryPgctld, setup.PrimaryMultipooler, setup.PrimaryMultipooler.Name)
 
-		// Now configure the demoted server to replicate from the standby (which will be promoted)
-		t.Log("Configuring demoted primary to replicate from standby...")
-		primary := &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
-				Cell:      "test-cell",
-				Name:      setup.StandbyMultipooler.Name,
-			},
-			Hostname: "localhost",
-			PortMap:  map[string]int32{"postgres": int32(setup.StandbyMultipooler.PgPort)},
-		}
-		setPrimaryConnInfoReq := &multipoolermanagerdatapb.SetPrimaryConnInfoRequest{
-			Primary:               primary,
-			StopReplicationBefore: false,
-			StartReplicationAfter: true, // Start replication immediately
-			CurrentTerm:           0,    // Ignored when Force=true
-			Force:                 true,
-		}
-		_, err = primaryConsensusClient.SetPrimaryConnInfo(utils.WithShortDeadline(t), setPrimaryConnInfoReq)
-		require.NoError(t, err, "SetPrimaryConnInfo should succeed after demotion")
+		// Use Recruit+Propose to configure demoted primary as replica and promote standby.
+		t.Log("Recruiting nodes and proposing standby as new leader...")
+		currentTerm := shardsetup.MustGetCurrentTerm(t, ctx, primaryConsensusClient)
+		termRevocation := recruitBoth(t, primaryConsensusClient, standbyConsensusClient, currentTerm)
+		proposeBothWithLeader(t, primaryConsensusClient, standbyConsensusClient,
+			termRevocation, standbyID, "localhost", int32(setup.StandbyMultipooler.PgPort))
 
-		// Verify standby.signal exists after demotion and replication config
-		t.Log("Verifying standby.signal exists after demotion...")
+		// Verify standby.signal exists on the demoted primary (now replica)
+		t.Log("Verifying standby.signal exists after replica configuration...")
 		primaryStandbySignalPath := filepath.Join(setup.PrimaryPgctld.PoolerDir, "pg_data", "standby.signal")
 		_, statErr := os.Stat(primaryStandbySignalPath)
-		assert.NoError(t, statErr, "standby.signal should exist after demotion")
+		assert.NoError(t, statErr, "standby.signal should exist after replica configuration")
 
-		// Verify node is now in replica role after demotion
+		// Verify demoted node is now in replica role
 		primaryStatusAfter, err := primaryConsensusClient.Status(utils.WithShortDeadline(t), &consensusdatapb.StatusRequest{})
 		require.NoError(t, err)
 		assert.Equal(t, consensusdatapb.PostgresRole_POSTGRES_ROLE_REPLICA, primaryStatusAfter.Role,
-			"Demoted primary should be in replica role after demotion and SetPrimaryConnInfo")
+			"Demoted primary should be in replica role after Propose")
 
-		t.Log("Promoting original standby to primary...")
-
-		// Stop replication to freeze LSN
-		stopReq := &multipoolermanagerdatapb.StopReplicationRequest{}
-		_, err = standbyManagerClient.StopReplication(utils.WithShortDeadline(t), stopReq)
-		require.NoError(t, err, "StopReplication should succeed")
-
-		// Get current LSN
-		standbyStatusResp, err := standbyManagerClient.Status(utils.WithShortDeadline(t), &multipoolermanagerdatapb.StatusRequest{})
-		require.NoError(t, err, "Status should succeed")
-		require.NotNil(t, standbyStatusResp.Status.ReplicationStatus, "standby should have replication status")
-		currentLSN := standbyStatusResp.Status.ReplicationStatus.LastReplayLsn
-		t.Logf("Current LSN before promotion: %s", currentLSN)
-
-		// Perform promotion with Force=true (testing promote functionality, not term validation)
-		promoteReq := &multipoolermanagerdatapb.PromoteRequest{
-			ConsensusTerm:         0, // Ignored when Force=true
-			ExpectedLsn:           currentLSN,
-			SyncReplicationConfig: nil, // Don't configure sync replication for now
-			Force:                 true,
-		}
-		promoteResp, err := standbyConsensusClient.Promote(utils.WithTimeout(t, 10*time.Second), promoteReq)
-		require.NoError(t, err, "Promote should succeed")
-		require.NotNil(t, promoteResp)
-
-		assert.False(t, promoteResp.WasAlreadyPrimary, "Should not have been already primary")
-		assert.NotEmpty(t, promoteResp.LsnPosition)
-		t.Logf("Promotion complete. LSN: %s", promoteResp.LsnPosition)
-
-		// Verify signal files are removed after promotion
-		t.Log("Verifying signal files removed from newly promoted primary...")
-		standbySignalPath := filepath.Join(setup.StandbyPgctld.PoolerDir, "pg_data", "standby.signal")
-		recoverySignalPath := filepath.Join(setup.StandbyPgctld.PoolerDir, "pg_data", "recovery.signal")
-
-		_, standbyStatErr := os.Stat(standbySignalPath)
-		assert.True(t, os.IsNotExist(standbyStatErr), "standby.signal should not exist after promotion")
-
-		_, recoveryStatErr := os.Stat(recoverySignalPath)
-		assert.True(t, os.IsNotExist(recoveryStatErr), "recovery.signal should not exist after promotion")
-
-		// Verify new primary works
+		t.Log("Verifying standby promoted to primary...")
 		standbyNowPrimaryStatus, err := standbyConsensusClient.Status(utils.WithShortDeadline(t), &consensusdatapb.StatusRequest{})
 		require.NoError(t, err, "Status should work on new primary")
 		assert.NotEmpty(t, standbyNowPrimaryStatus.WalPosition.GetCurrentLsn())
 
-		t.Log("Original standby is now primary")
+		// Verify signal files are removed after promotion
+		standbySignalPath := filepath.Join(setup.StandbyPgctld.PoolerDir, "pg_data", "standby.signal")
+		recoverySignalPath := filepath.Join(setup.StandbyPgctld.PoolerDir, "pg_data", "recovery.signal")
+		_, standbyStatErr := os.Stat(standbySignalPath)
+		assert.True(t, os.IsNotExist(standbyStatErr), "standby.signal should not exist after promotion")
+		_, recoveryStatErr := os.Stat(recoverySignalPath)
+		assert.True(t, os.IsNotExist(recoveryStatErr), "recovery.signal should not exist after promotion")
 
+		t.Log("Original standby is now primary")
 		t.Log("Restoring original state...")
 
 		// Demote the new primary (original standby) with Force=true
@@ -201,46 +212,31 @@ func TestEmergencyDemoteAndPromote(t *testing.T) {
 		assert.False(t, demoteResp2.WasAlreadyDemoted)
 		t.Logf("New primary demoted. LSN: %s", demoteResp2.LsnPosition)
 
-		// Restore demoted standby to working state (emergency demotion stops postgres)
+		// Restore demoted standby to working state
 		restoreAfterEmergencyDemotion(t, setup, setup.StandbyPgctld, setup.StandbyMultipooler, setup.StandbyMultipooler.Name)
 
-		// Verify standby.signal exists after second demotion
-		t.Log("Verifying standby.signal exists after second demotion...")
-		standbyStandbySignalPath := filepath.Join(setup.StandbyPgctld.PoolerDir, "pg_data", "standby.signal")
-		_, statErr2 := os.Stat(standbyStandbySignalPath)
-		assert.NoError(t, statErr2, "standby.signal should exist after demotion")
-
-		// Stop replication on original primary
+		// Stop replication on original primary (now replica), get LSN
 		stopReq2 := &multipoolermanagerdatapb.StopReplicationRequest{}
 		_, err = primaryManagerClient.StopReplication(utils.WithShortDeadline(t), stopReq2)
 		require.NoError(t, err, "StopReplication should succeed")
 
-		// Get LSN
 		primaryNowReplicaStatus, err := primaryManagerClient.Status(utils.WithShortDeadline(t), &multipoolermanagerdatapb.StatusRequest{})
 		require.NoError(t, err, "Status should succeed")
 		require.NotNil(t, primaryNowReplicaStatus.Status.ReplicationStatus, "primary (now replica) should have replication status")
-		currentLSN2 := primaryNowReplicaStatus.Status.ReplicationStatus.LastReplayLsn
 
-		// Promote original primary back with Force=true
-		promoteReq2 := &multipoolermanagerdatapb.PromoteRequest{
-			ConsensusTerm:         0, // Ignored when Force=true
-			ExpectedLsn:           currentLSN2,
-			SyncReplicationConfig: nil,
-			Force:                 true,
-		}
-		promoteResp2, err := primaryConsensusClient.Promote(utils.WithTimeout(t, 10*time.Second), promoteReq2)
-		require.NoError(t, err, "Promote should succeed")
-		assert.False(t, promoteResp2.WasAlreadyPrimary)
-		t.Logf("Original primary restored. LSN: %s", promoteResp2.LsnPosition)
+		// Recruit+Propose with original primary as leader to restore original state
+		t.Log("Restoring original primary via Recruit+Propose...")
+		currentTerm2 := shardsetup.MustGetCurrentTerm(t, ctx, primaryConsensusClient)
+		termRevocation2 := recruitBoth(t, primaryConsensusClient, standbyConsensusClient, currentTerm2)
+		proposeBothWithLeader(t, primaryConsensusClient, standbyConsensusClient,
+			termRevocation2, primaryID, "localhost", int32(setup.PrimaryMultipooler.PgPort))
 
 		// Verify signal files are removed after restoring original primary
 		t.Log("Verifying signal files removed from restored primary...")
 		primaryStandbySignalPath = filepath.Join(setup.PrimaryPgctld.PoolerDir, "pg_data", "standby.signal")
 		primaryRecoverySignalPath := filepath.Join(setup.PrimaryPgctld.PoolerDir, "pg_data", "recovery.signal")
-
 		_, primaryStandbyStatErr := os.Stat(primaryStandbySignalPath)
 		assert.True(t, os.IsNotExist(primaryStandbyStatErr), "standby.signal should not exist after promotion")
-
 		_, primaryRecoveryStatErr := os.Stat(primaryRecoverySignalPath)
 		assert.True(t, os.IsNotExist(primaryRecoveryStatErr), "recovery.signal should not exist after promotion")
 
@@ -256,12 +252,8 @@ func TestEmergencyDemoteAndPromote(t *testing.T) {
 		setupPoolerTest(t, setup)
 
 		t.Log("Testing that EmergencyDemote cannot be called twice after completion...")
-		// TODO: This test needs to be hardened to actually
-		// test that a promote that fail halfhway through
-		// can be retried and successfully completes
-		// in an idempotent way.
 
-		// First demotion with Force=true (testing demote behavior, not term validation)
+		// First demotion with Force=true
 		demoteReq := &multipoolermanagerdatapb.EmergencyDemoteRequest{
 			ConsensusTerm: 0, // Ignored when Force=true
 			DrainTimeout:  nil,
@@ -271,30 +263,27 @@ func TestEmergencyDemoteAndPromote(t *testing.T) {
 		require.NoError(t, err, "First demote should succeed")
 		assert.False(t, demoteResp1.WasAlreadyDemoted)
 
-		// Restore demoted primary to working state (emergency demotion stops postgres)
+		// Restore demoted primary to working state
 		restoreAfterEmergencyDemotion(t, setup, setup.PrimaryPgctld, setup.PrimaryMultipooler, setup.PrimaryMultipooler.Name)
 
-		// Configure demoted primary to replicate from standby
-		primary := &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
-				Cell:      "test-cell",
-				Name:      setup.StandbyMultipooler.Name,
+		// Use Recruit+Propose to configure the demoted primary as a replica of the standby.
+		// This puts the primary's postgres into standby mode, so the next EmergencyDemote should fail.
+		currentTerm := shardsetup.MustGetCurrentTerm(t, utils.WithShortDeadline(t), primaryConsensusClient)
+		termRevocation := recruitBoth(t, primaryConsensusClient, standbyConsensusClient, currentTerm)
+		// Propose only to primary (replica path: configure replication to standby).
+		// We don't promote the standby — we just need the primary's postgres in standby mode.
+		proposal := &consensusdatapb.CoordinatorProposal{
+			TermRevocation: termRevocation,
+			ProposalLeader: &consensusdatapb.ProposalLeader{
+				Id:           standbyID,
+				Host:         "localhost",
+				PostgresPort: int32(setup.StandbyMultipooler.PgPort),
 			},
-			Hostname: "localhost",
-			PortMap:  map[string]int32{"postgres": int32(setup.StandbyMultipooler.PgPort)},
 		}
-		setPrimaryConnInfoReq := &multipoolermanagerdatapb.SetPrimaryConnInfoRequest{
-			Primary:               primary,
-			StopReplicationBefore: false,
-			StartReplicationAfter: true,
-			CurrentTerm:           0, // Ignored when Force=true
-			Force:                 true,
-		}
-		_, err = primaryConsensusClient.SetPrimaryConnInfo(utils.WithShortDeadline(t), setPrimaryConnInfoReq)
-		require.NoError(t, err)
+		_, err = primaryConsensusClient.Propose(utils.WithTimeout(t, 5*time.Second), &consensusdatapb.ProposeRequest{Proposal: proposal})
+		require.NoError(t, err, "Propose (replica path) to primary should succeed")
 
-		// Second demotion should fail with guard rail error (server is now a standby in PostgreSQL)
+		// Second demotion should fail — cannot demote a standby
 		_, err = primaryConsensusClient.EmergencyDemote(utils.WithTimeout(t, 10*time.Second), demoteReq)
 		require.Error(t, err, "Second emergency demote should fail - cannot demote a standby")
 		assert.Contains(t, err.Error(), "standby mode")
@@ -302,12 +291,12 @@ func TestEmergencyDemoteAndPromote(t *testing.T) {
 		t.Log("EmergencyDemote guard rail verified - cannot demote a standby")
 	})
 
-	t.Run("Idempotency_Promote", func(t *testing.T) {
+	t.Run("Idempotency_Propose", func(t *testing.T) {
 		setupPoolerTest(t, setup)
 
-		t.Log("Testing Promote idempotency...")
+		t.Log("Testing Propose idempotency (promoting a demoted primary twice)...")
 
-		// First demote the primary so we can test promote idempotency
+		// Demote the primary so we can test promote idempotency
 		demoteReq := &multipoolermanagerdatapb.EmergencyDemoteRequest{
 			ConsensusTerm: 0, // Ignored when Force=true
 			DrainTimeout:  nil,
@@ -316,57 +305,38 @@ func TestEmergencyDemoteAndPromote(t *testing.T) {
 		_, err = primaryConsensusClient.EmergencyDemote(utils.WithTimeout(t, 10*time.Second), demoteReq)
 		require.NoError(t, err, "Demote should succeed")
 
-		// Restore demoted primary to working state (emergency demotion stops postgres)
+		// Restore demoted primary to working state
 		restoreAfterEmergencyDemotion(t, setup, setup.PrimaryPgctld, setup.PrimaryMultipooler, setup.PrimaryMultipooler.Name)
 
-		// Configure demoted primary to replicate from standby
-		primary := &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
-				Cell:      "test-cell",
-				Name:      setup.StandbyMultipooler.Name,
-			},
-			Hostname: "localhost",
-			PortMap:  map[string]int32{"postgres": int32(setup.StandbyMultipooler.PgPort)},
-		}
-		setPrimaryConnInfoReq := &multipoolermanagerdatapb.SetPrimaryConnInfoRequest{
-			Primary:               primary,
-			StopReplicationBefore: false,
-			StartReplicationAfter: true,
-			CurrentTerm:           0, // Ignored when Force=true
-			Force:                 true,
-		}
-		_, err = primaryConsensusClient.SetPrimaryConnInfo(utils.WithShortDeadline(t), setPrimaryConnInfoReq)
-		require.NoError(t, err)
-
-		// Now test promote idempotency
+		// Stop replication on the demoted primary (now replica) so we can promote it back.
 		stopReq := &multipoolermanagerdatapb.StopReplicationRequest{}
 		_, err = primaryManagerClient.StopReplication(utils.WithShortDeadline(t), stopReq)
 		require.NoError(t, err)
 
-		idempotencyStatusResp, err := primaryManagerClient.Status(utils.WithShortDeadline(t), &multipoolermanagerdatapb.StatusRequest{})
+		// Recruit+Propose: promote the demoted primary back with primaryID as leader.
+		currentTerm := shardsetup.MustGetCurrentTerm(t, utils.WithShortDeadline(t), primaryConsensusClient)
+		termRevocation := recruitBoth(t, primaryConsensusClient, standbyConsensusClient, currentTerm)
+		proposeBothWithLeader(t, primaryConsensusClient, standbyConsensusClient,
+			termRevocation, primaryID, "localhost", int32(setup.PrimaryMultipooler.PgPort))
+
+		t.Log("First Propose complete, verifying primary role...")
+		restoredStatus, err := primaryConsensusClient.Status(utils.WithShortDeadline(t), &consensusdatapb.StatusRequest{})
 		require.NoError(t, err)
-		require.NotNil(t, idempotencyStatusResp.Status.ReplicationStatus)
-		currentLSN := idempotencyStatusResp.Status.ReplicationStatus.LastReplayLsn
+		assert.Equal(t, consensusdatapb.PostgresRole_POSTGRES_ROLE_PRIMARY, restoredStatus.Role,
+			"Node should be primary after first Propose")
 
-		// First promotion with Force=true
-		promoteReq := &multipoolermanagerdatapb.PromoteRequest{
-			ConsensusTerm:         0, // Ignored when Force=true
-			ExpectedLsn:           currentLSN,
-			SyncReplicationConfig: nil,
-			Force:                 true,
-		}
-		promoteResp1, err := primaryConsensusClient.Promote(utils.WithTimeout(t, 10*time.Second), promoteReq)
-		require.NoError(t, err, "First promote should succeed")
-		assert.False(t, promoteResp1.WasAlreadyPrimary)
+		// Second Propose with same term revocation — tests idempotency.
+		// The accepted term revocation is unchanged so the proposal is still valid.
+		t.Log("Calling Propose a second time with the same term (idempotency check)...")
+		proposeBothWithLeader(t, primaryConsensusClient, standbyConsensusClient,
+			termRevocation, primaryID, "localhost", int32(setup.PrimaryMultipooler.PgPort))
 
-		// Second promotion should SUCCEED with idempotent behavior (server is now PRIMARY in topology)
-		// The new guard rail logic detects that everything is already complete and returns success
-		promoteResp2, err := primaryConsensusClient.Promote(utils.WithTimeout(t, 10*time.Second), promoteReq)
-		require.NoError(t, err, "Second promote should succeed - idempotent operation")
-		assert.True(t, promoteResp2.WasAlreadyPrimary, "Should report as already primary")
+		restoredStatus2, err := primaryConsensusClient.Status(utils.WithShortDeadline(t), &consensusdatapb.StatusRequest{})
+		require.NoError(t, err)
+		assert.Equal(t, consensusdatapb.PostgresRole_POSTGRES_ROLE_PRIMARY, restoredStatus2.Role,
+			"Node should still be primary after second Propose")
 
-		t.Log("Promote idempotency verified - second call succeeds and reports WasAlreadyPrimary=true")
+		t.Log("Propose idempotency verified - second call succeeds and node remains primary")
 	})
 
 	t.Run("TermValidation_EmergencyDemote", func(t *testing.T) {
@@ -374,13 +344,10 @@ func TestEmergencyDemoteAndPromote(t *testing.T) {
 
 		t.Log("Testing EmergencyDemote term validation...")
 
-		// Get current term to test relative term validation
 		ctx := utils.WithShortDeadline(t)
 		currentTerm := shardsetup.MustGetCurrentTerm(t, ctx, primaryConsensusClient)
 		t.Logf("Current term: %d", currentTerm)
 
-		// Calculate stale term - if term is too low, skip this test
-		// (term bumping via demote would leave node in REPLICA state)
 		staleTerm := currentTerm - 2
 		if staleTerm < 1 {
 			t.Skipf("Skipping test: current term %d is too low for stale term validation (need at least 3)", currentTerm)
@@ -400,154 +367,48 @@ func TestEmergencyDemoteAndPromote(t *testing.T) {
 		_, err = primaryConsensusClient.EmergencyDemote(utils.WithTimeout(t, 10*time.Second), demoteReq)
 		require.NoError(t, err, "EmergencyDemote with force should succeed")
 
-		// Restore demoted primary to working state (emergency demotion stops postgres)
+		// Restore demoted primary to working state
 		restoreAfterEmergencyDemotion(t, setup, setup.PrimaryPgctld, setup.PrimaryMultipooler, setup.PrimaryMultipooler.Name)
 
 		t.Log("EmergencyDemote term validation verified")
 	})
 
-	t.Run("TermValidation_Promote", func(t *testing.T) {
+	t.Run("TermValidation_Propose", func(t *testing.T) {
 		setupPoolerTest(t, setup)
 
-		t.Log("Testing Promote term validation...")
+		t.Log("Testing Propose term validation...")
 
-		// Get current term for relative term values
 		ctx := utils.WithShortDeadline(t)
 		currentTerm := shardsetup.MustGetCurrentTerm(t, ctx, primaryConsensusClient)
 		t.Logf("Current term: %d", currentTerm)
 
-		// First demote the primary so we can test promote term validation
-		// Use Force=true since we're testing promote validation, not demote
-		demoteReq := &multipoolermanagerdatapb.EmergencyDemoteRequest{
-			ConsensusTerm: 0, // Ignored when Force=true
-			DrainTimeout:  nil,
-			Force:         true,
+		// Recruit both nodes with term K+100.
+		acceptedRevocation := recruitBoth(t, primaryConsensusClient, standbyConsensusClient, currentTerm)
+		acceptedTerm := acceptedRevocation.GetRevokedBelowTerm()
+
+		// Try Propose with a different term (stale relative to what was accepted) — should fail.
+		wrongRevocation := &consensusdatapb.TermRevocation{
+			RevokedBelowTerm:      acceptedTerm - 1,
+			AcceptedCoordinatorId: testCoordinatorID,
 		}
-		_, err = primaryConsensusClient.EmergencyDemote(utils.WithTimeout(t, 10*time.Second), demoteReq)
-		require.NoError(t, err, "Demote should succeed")
-
-		// Restore demoted primary to working state (emergency demotion stops postgres)
-		restoreAfterEmergencyDemotion(t, setup, setup.PrimaryPgctld, setup.PrimaryMultipooler, setup.PrimaryMultipooler.Name)
-
-		// Configure demoted primary to replicate from standby
-		primary := &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
-				Cell:      "test-cell",
-				Name:      setup.StandbyMultipooler.Name,
+		wrongProposal := &consensusdatapb.CoordinatorProposal{
+			TermRevocation: wrongRevocation,
+			ProposalLeader: &consensusdatapb.ProposalLeader{
+				Id:           standbyID,
+				Host:         "localhost",
+				PostgresPort: int32(setup.StandbyMultipooler.PgPort),
 			},
-			Hostname: "localhost",
-			PortMap:  map[string]int32{"postgres": int32(setup.StandbyMultipooler.PgPort)},
 		}
-		setPrimaryConnInfoReq := &multipoolermanagerdatapb.SetPrimaryConnInfoRequest{
-			Primary:               primary,
-			StopReplicationBefore: false,
-			StartReplicationAfter: true,
-			CurrentTerm:           0, // Ignored when Force=true
-			Force:                 true,
-		}
-		_, err = primaryConsensusClient.SetPrimaryConnInfo(utils.WithShortDeadline(t), setPrimaryConnInfoReq)
-		require.NoError(t, err)
-
-		// Now test promote term validation
-		stopReq := &multipoolermanagerdatapb.StopReplicationRequest{}
-		_, err = primaryManagerClient.StopReplication(utils.WithShortDeadline(t), stopReq)
-		require.NoError(t, err)
-
-		// Get the updated term after demote (term increases with operations)
-		ctx = utils.WithShortDeadline(t)
-		updatedTerm := shardsetup.MustGetCurrentTerm(t, ctx, primaryConsensusClient)
-		staleTerm := max(updatedTerm-2, 0)
-		t.Logf("Testing promote with stale term %d (current: %d)", staleTerm, updatedTerm)
-
-		// Try with stale term (should fail)
-		promoteReq := &multipoolermanagerdatapb.PromoteRequest{
-			ConsensusTerm:         staleTerm,
-			ExpectedLsn:           "",
-			SyncReplicationConfig: nil,
-			Force:                 false,
-		}
-		_, err = primaryConsensusClient.Promote(utils.WithTimeout(t, 10*time.Second), promoteReq)
-		require.Error(t, err, "Promote with stale term should fail")
+		_, err = primaryConsensusClient.Propose(utils.WithTimeout(t, 5*time.Second),
+			&consensusdatapb.ProposeRequest{Proposal: wrongProposal})
+		require.Error(t, err, "Propose with mismatched term should fail")
 		assert.Contains(t, err.Error(), "term")
 
-		// Try with force flag (should succeed)
-		promoteReq.Force = true
-		_, err = primaryConsensusClient.Promote(utils.WithTimeout(t, 10*time.Second), promoteReq)
-		require.NoError(t, err, "Promote with force should succeed")
+		// Propose with the correct term (matching Recruit) — should succeed.
+		proposeBothWithLeader(t, primaryConsensusClient, standbyConsensusClient,
+			acceptedRevocation, standbyID, "localhost", int32(setup.StandbyMultipooler.PgPort))
 
-		t.Log("Promote term validation verified")
-	})
-
-	t.Run("LSNValidation_Promote", func(t *testing.T) {
-		setupPoolerTest(t, setup)
-
-		t.Log("Testing Promote LSN validation...")
-
-		// Demote primary first - use Force=true since we're testing LSN validation, not term
-		demoteReq := &multipoolermanagerdatapb.EmergencyDemoteRequest{
-			ConsensusTerm: 0, // Ignored when Force=true
-			DrainTimeout:  nil,
-			Force:         true,
-		}
-		_, err = primaryConsensusClient.EmergencyDemote(utils.WithTimeout(t, 10*time.Second), demoteReq)
-		require.NoError(t, err)
-
-		// Restore demoted primary to working state (emergency demotion stops postgres)
-		restoreAfterEmergencyDemotion(t, setup, setup.PrimaryPgctld, setup.PrimaryMultipooler, setup.PrimaryMultipooler.Name)
-
-		// Configure the demoted server to replicate from the standby
-		t.Log("Configuring demoted primary to replicate from standby...")
-		primary := &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
-				Cell:      "test-cell",
-				Name:      setup.StandbyMultipooler.Name,
-			},
-			Hostname: "localhost",
-			PortMap:  map[string]int32{"postgres": int32(setup.StandbyMultipooler.PgPort)},
-		}
-		setPrimaryConnInfoReq := &multipoolermanagerdatapb.SetPrimaryConnInfoRequest{
-			Primary:               primary,
-			StopReplicationBefore: false,
-			StartReplicationAfter: true,
-			CurrentTerm:           0, // Ignored when Force=true
-			Force:                 true,
-		}
-		_, err = primaryConsensusClient.SetPrimaryConnInfo(utils.WithShortDeadline(t), setPrimaryConnInfoReq)
-		require.NoError(t, err, "SetPrimaryConnInfo should succeed after demotion")
-
-		// Now test LSN validation during promote
-		stopReq := &multipoolermanagerdatapb.StopReplicationRequest{}
-		_, err = primaryManagerClient.StopReplication(utils.WithShortDeadline(t), stopReq)
-		require.NoError(t, err)
-
-		lsnValidationStatusResp, err := primaryManagerClient.Status(utils.WithShortDeadline(t), &multipoolermanagerdatapb.StatusRequest{})
-		require.NoError(t, err)
-		require.NotNil(t, lsnValidationStatusResp.Status.ReplicationStatus)
-		currentLSN := lsnValidationStatusResp.Status.ReplicationStatus.LastReplayLsn
-
-		// Get current term for the promote request
-		ctx := utils.WithShortDeadline(t)
-		currentTerm := shardsetup.MustGetCurrentTerm(t, ctx, primaryConsensusClient)
-
-		// Try with wrong LSN (should fail) - use correct term so only LSN validation triggers
-		promoteReq := &multipoolermanagerdatapb.PromoteRequest{
-			ConsensusTerm:         currentTerm,
-			ExpectedLsn:           "FF/FFFFFFFF",
-			SyncReplicationConfig: nil,
-			Force:                 false,
-		}
-		_, err = primaryConsensusClient.Promote(utils.WithTimeout(t, 10*time.Second), promoteReq)
-		require.Error(t, err, "Promote with wrong LSN should fail")
-		assert.Contains(t, err.Error(), "LSN")
-
-		// Try with correct LSN (should succeed)
-		promoteReq.ExpectedLsn = currentLSN
-		_, err = primaryConsensusClient.Promote(utils.WithTimeout(t, 10*time.Second), promoteReq)
-		require.NoError(t, err, "Promote with correct LSN should succeed")
-
-		t.Log("Promote LSN validation verified")
+		t.Log("Propose term validation verified")
 	})
 
 	t.Run("ErrorCases_EmergencyDemoteOnStandby", func(t *testing.T) {
@@ -568,4 +429,7 @@ func TestEmergencyDemoteAndPromote(t *testing.T) {
 
 		t.Log("Confirmed: EmergencyDemote correctly rejected on standby")
 	})
+
+	// Silence unused variable warnings for clients only used in some subtests.
+	_ = standbyManagerClient
 }

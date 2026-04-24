@@ -284,7 +284,7 @@ func NewMultiPoolerManagerWithTimeout(logger *slog.Logger, multiPooler *clusterm
 		drainGracePeriod = config.ConnPoolConfig.DrainGracePeriod()
 	}
 	pm.qsc = poolerserver.NewQueryPoolerServer(logger, connPoolMgr, multiPooler.Id, multiPooler.TableGroup, multiPooler.Shard, pm, drainGracePeriod)
-	pm.rules = newRuleStore(pm.logger, pm.qsc.InternalQueryService())
+	pm.rules = newRuleStore(pm.logger, pm.qsc.InternalQueryService(), pm.applyStandbyNamesGUC)
 
 	// The health streamer must wait for the query server to update its type before
 	// broadcasting SERVING transitions, so the gateway doesn't discover the new
@@ -876,42 +876,6 @@ func (pm *MultiPoolerManager) validateTerm(ctx context.Context, requestTerm int6
 // updateTermIfNewer is a no-op in the new model: terms advance only via Recruit.
 // Retained for call-site compatibility during the prototype transition.
 func (pm *MultiPoolerManager) updateTermIfNewer(_ context.Context, _ int64) error {
-	return nil
-}
-
-// validateTermExactMatch validates that the request term exactly matches the current term.
-// Unlike validateAndUpdateTerm, this does NOT update the term automatically.
-// This is used for Promote to ensure the node was properly recruited before promotion.
-func (pm *MultiPoolerManager) validateTermExactMatch(ctx context.Context, requestTerm int64, force bool) error {
-	if force {
-		return nil // Skip validation if force is set
-	}
-
-	currentTerm, err := pm.getCurrentTermNumber(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get current term: %w", err)
-	}
-
-	// Check if consensus term has been initialized
-	if currentTerm == 0 {
-		pm.logger.ErrorContext(ctx, "Consensus term not initialized - node not recruited",
-			"service_id", pm.serviceID.String())
-		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
-			"consensus term not initialized - node must be recruited via BeginTerm first")
-	}
-
-	// Require exact match - do not update term automatically
-	if requestTerm != currentTerm {
-		pm.logger.ErrorContext(ctx, "Promote term mismatch - node not recruited for this term",
-			"request_term", requestTerm,
-			"current_term", currentTerm,
-			"service_id", pm.serviceID.String())
-		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
-			fmt.Sprintf("term mismatch: node not recruited for term %d (current term is %d). "+
-				"Coordinator must call BeginTerm first to recruit this node",
-				requestTerm, currentTerm))
-	}
-
 	return nil
 }
 

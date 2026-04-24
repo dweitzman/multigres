@@ -28,6 +28,7 @@ import (
 	"github.com/multigres/multigres/go/common/topoclient"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
@@ -51,15 +52,15 @@ func createPoolerForPreVote(name string, isHealthy bool, termNumber int64, lastA
 		},
 	}
 
-	var consensusTerm *multipoolermanagerdatapb.ConsensusTerm
+	var termRevocation *consensusdatapb.TermRevocation
 	isInitialized := false
 	if termNumber > 0 {
-		consensusTerm = &multipoolermanagerdatapb.ConsensusTerm{
-			TermNumber:                    termNumber,
-			AcceptedTermFromCoordinatorId: acceptedFrom,
+		termRevocation = &consensusdatapb.TermRevocation{
+			RevokedBelowTerm:      termNumber,
+			AcceptedCoordinatorId: acceptedFrom,
 		}
 		if lastAcceptanceTime != nil {
-			consensusTerm.LastAcceptanceTime = timestamppb.New(*lastAcceptanceTime)
+			termRevocation.CoordinatorInitiatedAt = timestamppb.New(*lastAcceptanceTime)
 		}
 		isInitialized = true
 	}
@@ -68,9 +69,9 @@ func createPoolerForPreVote(name string, isHealthy bool, termNumber int64, lastA
 		MultiPooler:      pooler,
 		IsLastCheckValid: isHealthy,
 		Status: &multipoolermanagerdatapb.Status{
-			ConsensusTerm: consensusTerm,
-			IsInitialized: isInitialized,
-			PostgresReady: isHealthy && isInitialized, // postgres is ready if healthy and initialized
+			TermRevocation: termRevocation,
+			IsInitialized:  isInitialized,
+			PostgresReady:  isHealthy && isInitialized,
 		},
 	}
 }

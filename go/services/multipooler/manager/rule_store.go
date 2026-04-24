@@ -57,19 +57,25 @@ type ruleStorer interface {
 type ruleStore struct {
 	logger       *slog.Logger
 	queryService executor.InternalQueryService
+	// applyGUC sets synchronous_standby_names, reloads the config, and waits for
+	// the new setting to take effect. It is called during cohort-change transitions.
+	applyGUC func(ctx context.Context, standbyNames string) error
 
 	mu      sync.Mutex
 	lastPos *consensusdatapb.PoolerPosition // updated on every observePosition / updateRule
 }
 
-// newRuleStore creates a ruleStore.
+// newRuleStore creates a ruleStore. applyGUC is called during cohort-change transitions
+// to set synchronous_standby_names and reload the PostgreSQL configuration.
 func newRuleStore(
 	logger *slog.Logger,
 	qs executor.InternalQueryService,
+	applyGUC func(ctx context.Context, standbyNames string) error,
 ) *ruleStore {
 	return &ruleStore{
 		logger:       logger,
 		queryService: qs,
+		applyGUC:     applyGUC,
 	}
 }
 
@@ -201,7 +207,11 @@ func (rs *ruleStore) createRuleTables(ctx context.Context) error {
 		durability_quorum_type    TEXT,
 		durability_required_count INT,
 		durability_async_fallback TEXT,
-		created_at                TIMESTAMPTZ NOT NULL
+		created_at                TIMESTAMPTZ NOT NULL,
+		-- In-progress cohort change; NULL when no cohort change is in flight.
+		proposal_coordinator_term BIGINT,
+		proposal_leader_subterm   BIGINT,
+		proposal_cohort_members   TEXT[]
 	)`); err != nil {
 		return mterrors.Wrap(err, "failed to create current_rule table")
 	}
@@ -239,6 +249,419 @@ func (rs *ruleStore) createRuleTables(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// ----------------------------------------------------------------------------
+// Cohort Change Helpers
+// ----------------------------------------------------------------------------
+
+// cohortChangeState holds the data read from current_rule needed to manage a
+// cohort transition. It is read at the start of both updateRuleWithCohortChange
+// and fenceRule so both methods share the same GUC and decision-advance logic.
+type cohortChangeState struct {
+	// prevCoordinatorTerm and prevLeaderSubterm are the rule version at read time;
+	// passed to writeProposalColumns as the CAS condition to reject concurrent writes.
+	prevCoordinatorTerm int64
+	prevLeaderSubterm   int64
+	durabilityPolicy    consensus.DurabilityPolicy // nil if not yet set
+	oldCohort           []*clustermetadatapb.ID
+	// proposalCohort is nil when no cohort change is in flight.
+	proposalCohort  []*clustermetadatapb.ID
+	proposalTerm    int64
+	proposalSubterm int64
+}
+
+// readCohortChangeState queries current_rule for the fields needed to manage a
+// cohort transition: the existing cohort, durability policy, and any in-progress
+// proposal. No lock is taken; the caller must hold the action lock.
+func (rs *ruleStore) readCohortChangeState(ctx context.Context) (*cohortChangeState, error) {
+	queryCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+
+	result, err := rs.queryService.QueryArgs(queryCtx, `
+		SELECT coordinator_term, leader_subterm, cohort_members,
+		       durability_quorum_type, durability_required_count,
+		       proposal_coordinator_term, proposal_leader_subterm, proposal_cohort_members
+		FROM multigres.current_rule
+		WHERE shard_id = $1`, []byte("0"))
+	if err != nil {
+		return nil, mterrors.Wrap(err, "failed to read cohort change state")
+	}
+	if len(result.Rows) == 0 {
+		return nil, mterrors.New(mtrpcpb.Code_INTERNAL, "current_rule row missing")
+	}
+
+	var prevCoordinatorTerm, prevLeaderSubterm int64
+	var cohortNames []string
+	var durabilityQuorumType *string
+	var durabilityRequiredCount *int64
+	var proposalTerm, proposalSubterm *int64
+	var proposalCohortNames []string
+
+	if err := executor.ScanRow(result.Rows[0],
+		&prevCoordinatorTerm,
+		&prevLeaderSubterm,
+		&cohortNames,
+		&durabilityQuorumType,
+		&durabilityRequiredCount,
+		&proposalTerm,
+		&proposalSubterm,
+		&proposalCohortNames,
+	); err != nil {
+		return nil, mterrors.Wrap(err, "failed to scan cohort change state")
+	}
+
+	oldCohort, err := appNamesToIDs(cohortNames)
+	if err != nil {
+		return nil, mterrors.Wrap(err, "failed to parse cohort_members")
+	}
+
+	state := &cohortChangeState{
+		prevCoordinatorTerm: prevCoordinatorTerm,
+		prevLeaderSubterm:   prevLeaderSubterm,
+		oldCohort:           oldCohort,
+	}
+
+	if durabilityQuorumType != nil && durabilityRequiredCount != nil {
+		v, ok := clustermetadatapb.QuorumType_value[*durabilityQuorumType]
+		if !ok {
+			return nil, mterrors.Errorf(mtrpcpb.Code_INTERNAL, "unknown quorum_type %q", *durabilityQuorumType)
+		}
+		dp := &clustermetadatapb.DurabilityPolicy{
+			QuorumType:    clustermetadatapb.QuorumType(v),
+			RequiredCount: int32(*durabilityRequiredCount),
+		}
+		state.durabilityPolicy, err = consensus.NewPolicyFromProto(dp)
+		if err != nil {
+			return nil, mterrors.Wrap(err, "failed to parse durability policy")
+		}
+	}
+
+	if proposalTerm != nil && proposalCohortNames != nil {
+		state.proposalTerm = *proposalTerm
+		if proposalSubterm != nil {
+			state.proposalSubterm = *proposalSubterm
+		}
+		proposalCohort, err := appNamesToIDs(proposalCohortNames)
+		if err != nil {
+			return nil, mterrors.Wrap(err, "failed to parse proposal_cohort_members")
+		}
+		state.proposalCohort = proposalCohort
+	}
+	return state, nil
+}
+
+// idToAppName converts a cluster ID to its PostgreSQL application_name (cell_name format).
+// It implements consensus.IDToAppName for use with DurabilityPolicy.StandbyNames.
+func idToAppName(id *clustermetadatapb.ID) (string, error) {
+	pid, err := newPoolerID(id)
+	return pid.appName, err
+}
+
+// emitFenceWAL writes a transactional logical-replication message to force all
+// preceding WAL to be acknowledged by the synchronous standbys defined in the
+// current GUC. The message itself carries no semantic content.
+func (rs *ruleStore) emitFenceWAL(ctx context.Context) error {
+	execCtx, cancel := context.WithTimeout(ctx, timeouts.RemoteOperationTimeout)
+	defer cancel()
+
+	if _, err := rs.queryService.Query(execCtx,
+		`SELECT pg_logical_emit_message(true, 'multigres', 'fence')`); err != nil {
+		return mterrors.Wrap(err, "fencing WAL emit failed")
+	}
+	return nil
+}
+
+// writeProposalColumns writes the in-progress cohort-change proposal into
+// current_rule under the current synchronous_standby_names GUC. Returns the
+// proposal_leader_subterm assigned by the database, or an error if the CAS
+// check fails (rule changed since state was read) or a proposal is already
+// in flight for a different coordinator term.
+func (rs *ruleStore) writeProposalColumns(ctx context.Context, state *cohortChangeState, coordinatorTerm int64, cohort []*clustermetadatapb.ID) (int64, error) {
+	cohortNames := make([]string, 0, len(cohort))
+	for _, id := range cohort {
+		name, err := idToAppName(id)
+		if err != nil {
+			return 0, mterrors.Wrap(err, "invalid cohort member ID")
+		}
+		cohortNames = append(cohortNames, name)
+	}
+
+	execCtx, cancel := context.WithTimeout(ctx, timeouts.RemoteOperationTimeout)
+	defer cancel()
+
+	result, err := rs.queryService.QueryArgs(execCtx, `
+		WITH
+		  params AS (
+		    SELECT $1::bytea  AS shard_id,
+		           $2::bigint AS coordinator_term,
+		           $3::text[] AS cohort_members,
+		           $4::bigint AS prev_coordinator_term,
+		           $5::bigint AS prev_leader_subterm
+		  ),
+		  locked AS (
+		    SELECT CASE WHEN params.coordinator_term > current_rule.coordinator_term THEN 0
+		                ELSE current_rule.leader_subterm + 1
+		           END AS next_subterm
+		    FROM multigres.current_rule, params
+		    WHERE current_rule.shard_id = params.shard_id
+		      AND params.coordinator_term >= current_rule.coordinator_term
+		      AND current_rule.coordinator_term = params.prev_coordinator_term
+		      AND current_rule.leader_subterm   = params.prev_leader_subterm
+		      AND current_rule.proposal_cohort_members IS NULL
+		    FOR UPDATE
+		  ),
+		  proposed AS (
+		    UPDATE multigres.current_rule
+		    SET proposal_coordinator_term = params.coordinator_term,
+		        proposal_leader_subterm   = locked.next_subterm,
+		        proposal_cohort_members   = params.cohort_members
+		    FROM locked, params
+		    WHERE current_rule.shard_id = params.shard_id
+		    RETURNING current_rule.proposal_leader_subterm
+		  )
+		SELECT proposal_leader_subterm FROM proposed`,
+		[]byte("0"), coordinatorTerm, cohortNames, state.prevCoordinatorTerm, state.prevLeaderSubterm)
+	if err != nil {
+		return 0, mterrors.Wrap(err, "failed to write proposal columns")
+	}
+	if len(result.Rows) == 0 {
+		return 0, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
+			"proposal write rejected: cohort change already in progress or stale term")
+	}
+	var subterm int64
+	if err := executor.ScanSingleRow(result, &subterm); err != nil {
+		return 0, mterrors.Wrap(err, "failed to scan proposal_leader_subterm")
+	}
+	return subterm, nil
+}
+
+// advanceCohortToDecision advances the in-progress proposal identified by
+// (proposalTerm, proposalSubterm) to a committed decision: it copies the
+// proposal_cohort_members to cohort_members, clears the proposal columns, and
+// appends a rule_history entry. It is used by both updateRuleWithCohortChange
+// and fenceRule after the synchronous_standby_names GUC has been switched to
+// the after-cohort.
+func (rs *ruleStore) advanceCohortToDecision(ctx context.Context, proposalTerm, proposalSubterm int64, update *ruleUpdateBuilder) (*consensusdatapb.PoolerPosition, error) {
+	var leaderStr string
+	if update.leaderID != nil {
+		pid, err := newPoolerID(update.leaderID)
+		if err != nil {
+			return nil, mterrors.Wrap(err, "invalid leader ID")
+		}
+		leaderStr = pid.appName
+	}
+	coordinatorIDStr := topoclient.ClusterIDString(update.coordinatorID)
+
+	execCtx, cancel := context.WithTimeout(ctx, timeouts.RemoteOperationTimeout)
+	defer cancel()
+
+	result, err := rs.queryService.QueryArgs(execCtx, `
+		WITH
+		  params AS (
+		    SELECT $1::bytea        AS shard_id,
+		           $2::bigint       AS proposal_term,
+		           $3::bigint       AS proposal_subterm,
+		           $4::text         AS leader_id,
+		           $5::text         AS coordinator_id,
+		           $6::text         AS event_type,
+		           $7::text         AS reason,
+		           $8::timestamptz  AS created_at
+		  ),
+		  locked AS (
+		    SELECT current_rule.proposal_coordinator_term, current_rule.proposal_leader_subterm,
+		           current_rule.proposal_cohort_members, current_rule.leader_id,
+		           current_rule.coordinator_id, current_rule.durability_policy_name,
+		           current_rule.durability_quorum_type, current_rule.durability_required_count,
+		           current_rule.durability_async_fallback
+		    FROM multigres.current_rule, params
+		    WHERE current_rule.shard_id = params.shard_id
+		      AND current_rule.proposal_coordinator_term = params.proposal_term
+		      AND current_rule.proposal_leader_subterm   = params.proposal_subterm
+		    FOR UPDATE
+		  ),
+		  updated AS (
+		    UPDATE multigres.current_rule
+		    SET coordinator_term          = locked.proposal_coordinator_term,
+		        leader_subterm            = locked.proposal_leader_subterm,
+		        cohort_members            = locked.proposal_cohort_members,
+		        leader_id                 = COALESCE(NULLIF(params.leader_id, ''), locked.leader_id),
+		        coordinator_id            = COALESCE(NULLIF(params.coordinator_id, ''), locked.coordinator_id),
+		        proposal_coordinator_term = NULL,
+		        proposal_leader_subterm   = NULL,
+		        proposal_cohort_members   = NULL,
+		        created_at                = params.created_at
+		    FROM locked, params
+		    WHERE current_rule.shard_id = params.shard_id
+		    RETURNING current_rule.coordinator_term, current_rule.leader_subterm,
+		              current_rule.leader_id, current_rule.coordinator_id,
+		              current_rule.cohort_members, current_rule.durability_policy_name,
+		              current_rule.durability_quorum_type, current_rule.durability_required_count,
+		              current_rule.durability_async_fallback
+		  ),
+		  inserted AS (
+		    INSERT INTO multigres.rule_history
+		      (coordinator_term, leader_subterm, event_type, leader_id, coordinator_id,
+		       reason, cohort_members, durability_policy_name, durability_quorum_type,
+		       durability_required_count, durability_async_fallback, created_at)
+		    SELECT updated.coordinator_term, updated.leader_subterm,
+		           params.event_type, updated.leader_id, updated.coordinator_id,
+		           params.reason, updated.cohort_members, updated.durability_policy_name,
+		           updated.durability_quorum_type, updated.durability_required_count,
+		           updated.durability_async_fallback, params.created_at
+		    FROM updated, params
+		    RETURNING coordinator_term
+		  )
+		SELECT updated.coordinator_term, updated.leader_subterm,
+		       updated.leader_id, updated.coordinator_id, updated.cohort_members,
+		       updated.durability_policy_name, updated.durability_quorum_type,
+		       updated.durability_required_count, updated.durability_async_fallback,
+		       CASE
+		         WHEN pg_is_in_recovery()
+		           THEN COALESCE(pg_last_wal_receive_lsn(), pg_last_wal_replay_lsn())
+		         ELSE pg_current_wal_lsn()
+		       END::text AS current_lsn
+		FROM updated, inserted`,
+		[]byte("0"),
+		proposalTerm,
+		proposalSubterm,
+		leaderStr,
+		coordinatorIDStr,
+		update.eventType,
+		update.reason,
+		update.createdAt,
+	)
+	if err != nil {
+		return nil, mterrors.Wrap(err, "failed to advance cohort proposal to decision")
+	}
+	if len(result.Rows) == 0 {
+		return nil, mterrors.Errorf(mtrpcpb.Code_INTERNAL,
+			"cohort decision advance returned no rows: proposal (%d,%d) may not exist",
+			proposalTerm, proposalSubterm)
+	}
+
+	var coordinatorTerm, leaderSubterm int64
+	var leaderIDStr *string
+	var coordinatorIDStrResult string
+	var cohortNames []string
+	var durabilityPolicyName, durabilityQuorumType, durabilityAsyncFallback *string
+	var durabilityRequiredCount *int64
+	var lsn string
+	if err := executor.ScanSingleRow(result,
+		&coordinatorTerm,
+		&leaderSubterm,
+		&leaderIDStr,
+		&coordinatorIDStrResult,
+		&cohortNames,
+		&durabilityPolicyName,
+		&durabilityQuorumType,
+		&durabilityRequiredCount,
+		&durabilityAsyncFallback,
+		&lsn,
+	); err != nil {
+		return nil, mterrors.Wrap(err, "failed to scan advanced cohort position")
+	}
+
+	pos, err := buildPoolerPosition(
+		coordinatorTerm, leaderSubterm,
+		leaderIDStr, coordinatorIDStrResult, cohortNames,
+		durabilityPolicyName, durabilityQuorumType, durabilityRequiredCount, durabilityAsyncFallback,
+		lsn,
+	)
+	if err != nil {
+		return nil, mterrors.Wrap(err, "failed to parse advanced cohort position")
+	}
+	rs.cacheRuleObservation(pos)
+	return pos, nil
+}
+
+// bothStandbyNames returns the synchronous_standby_names GUC value that
+// satisfies both the before and after cohort policies simultaneously.
+// It delegates to consensus.JointPolicy to find a joint quorum expression.
+func bothStandbyNames(policy consensus.DurabilityPolicy, oldCohort, newCohort []*clustermetadatapb.ID) (string, error) {
+	jointPolicy, jointCohort, err := consensus.JointPolicy(policy, oldCohort, policy, newCohort)
+	if err != nil {
+		return "", mterrors.Wrap(err, "cannot compute joint quorum for cohort change")
+	}
+	return jointPolicy.StandbyNames(jointCohort, idToAppName)
+}
+
+// phaseTwo is the shared tail of a cohort change: it switches the GUC to the
+// after-cohort (proposal cohort) and advances the proposal to a decision. It is
+// called by both updateRuleWithCohortChange and fenceRule after the write under
+// the "both" GUC has been committed.
+func (rs *ruleStore) phaseTwo(ctx context.Context, state *cohortChangeState, proposalTerm, proposalSubterm int64, proposalCohort []*clustermetadatapb.ID, update *ruleUpdateBuilder) (*consensusdatapb.PoolerPosition, error) {
+	afterValue, err := state.durabilityPolicy.StandbyNames(proposalCohort, idToAppName)
+	if err != nil {
+		return nil, mterrors.Wrap(err, "failed to compute after-cohort GUC")
+	}
+	if err := rs.applyGUC(ctx, afterValue); err != nil {
+		return nil, mterrors.Wrap(err, "failed to apply after-cohort GUC")
+	}
+	return rs.advanceCohortToDecision(ctx, proposalTerm, proposalSubterm, update)
+}
+
+// updateRuleWithCohortChange implements the two-phase cohort-change protocol:
+//  1. GUC → "both" (joint quorum of old and new cohort), write proposal columns
+//  2. GUC → "after" (new cohort only), advance proposal to decision
+//
+// If a proposal for the same coordinator term is already in flight (e.g. after a
+// crash between phases), the method resumes at phase 2 via emitFenceWAL to first
+// force the pre-existing proposal WAL to be acknowledged.
+func (rs *ruleStore) updateRuleWithCohortChange(ctx context.Context, update *ruleUpdateBuilder) (*consensusdatapb.PoolerPosition, error) {
+	state, err := rs.readCohortChangeState(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if state.durabilityPolicy == nil {
+		return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
+			"cannot perform cohort change: no durability policy configured")
+	}
+
+	newCohort := update.cohortMembers
+
+	var proposalTerm, proposalSubterm int64
+
+	if state.proposalCohort != nil {
+		// Proposal already in flight.
+		if state.proposalTerm != update.termNumber {
+			return nil, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
+				"cohort change proposal already in progress for term %d, cannot apply term %d",
+				state.proposalTerm, update.termNumber)
+		}
+		// Resume: proposal written, may not be replicated. Set GUC to "both" and
+		// force ack of the existing proposal WAL before advancing.
+		proposalTerm = state.proposalTerm
+		proposalSubterm = state.proposalSubterm
+		newCohort = state.proposalCohort
+
+		bothValue, err := bothStandbyNames(state.durabilityPolicy, state.oldCohort, newCohort)
+		if err != nil {
+			return nil, err
+		}
+		if err := rs.applyGUC(ctx, bothValue); err != nil {
+			return nil, mterrors.Wrap(err, "failed to apply both-cohort GUC for resume")
+		}
+		if err := rs.emitFenceWAL(ctx); err != nil {
+			return nil, err
+		}
+	} else {
+		// Phase 1: set GUC to "both" and write proposal columns.
+		bothValue, err := bothStandbyNames(state.durabilityPolicy, state.oldCohort, newCohort)
+		if err != nil {
+			return nil, err
+		}
+		if err := rs.applyGUC(ctx, bothValue); err != nil {
+			return nil, mterrors.Wrap(err, "failed to apply both-cohort GUC")
+		}
+		proposalSubterm, err = rs.writeProposalColumns(ctx, state, update.termNumber, newCohort)
+		if err != nil {
+			return nil, err
+		}
+		proposalTerm = update.termNumber
+	}
+
+	return rs.phaseTwo(ctx, state, proposalTerm, proposalSubterm, newCohort, update)
 }
 
 // ----------------------------------------------------------------------------
@@ -348,6 +771,12 @@ func (rs *ruleStore) updateRule(ctx context.Context, update *ruleUpdateBuilder) 
 			"coordinator_term", update.termNumber,
 			"event_type", update.eventType)
 		return nil, nil
+	}
+
+	// Cohort changes require a two-phase GUC+WAL protocol to ensure both the
+	// outgoing and incoming standbys durably acknowledge the transition.
+	if update.cohortMembers != nil {
+		return rs.updateRuleWithCohortChange(ctx, update)
 	}
 
 	// Convert optional leader ID; empty string causes NULLIF→COALESCE to keep existing.
@@ -547,17 +976,50 @@ func (rs *ruleStore) updateRule(ctx context.Context, update *ruleUpdateBuilder) 
 // been acknowledged by enough standbys to satisfy durability. Committing any
 // transaction under synchronous_commit=on causes the standbys to acknowledge
 // all preceding WAL, including the hung rule_history entry.
+// fenceRule forces synchronous replication of in-flight WAL to the required
+// standbys without writing a new rule_history entry. It handles two cases:
+//
+//   - No cohort change in progress: emits a transactional logical-replication
+//     message to force ack of all preceding WAL under the current GUC.
+//
+//   - Cohort change in progress (proposal_cohort_members IS NOT NULL): sets GUC
+//     to the union of the old and proposal cohorts ("both"), forces ack of the
+//     proposal WAL, then switches to the proposal cohort ("after") and advances
+//     the proposal to a committed decision.
 func (rs *ruleStore) fenceRule(ctx context.Context) error {
-	execCtx, cancel := context.WithTimeout(ctx, timeouts.RemoteOperationTimeout)
-	defer cancel()
-
-	if _, err := rs.queryService.QueryArgs(execCtx, `
-		UPDATE multigres.current_rule
-		SET created_at = now()
-		WHERE shard_id = $1`, []byte("0")); err != nil {
-		return mterrors.Wrap(err, "fencing write failed")
+	state, err := rs.readCohortChangeState(ctx)
+	if err != nil {
+		return err
 	}
-	return nil
+
+	if state.proposalCohort == nil {
+		// Simple hung rule: force ack of any preceding WAL under the current GUC.
+		return rs.emitFenceWAL(ctx)
+	}
+
+	// Hung cohort-change rule. Step through the two-phase protocol:
+	// 1. GUC → both (joint quorum of old and proposal cohort), force ack of proposal WAL.
+	if state.durabilityPolicy == nil {
+		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
+			"cannot fence cohort change: no durability policy configured")
+	}
+	bothValue, err := bothStandbyNames(state.durabilityPolicy, state.oldCohort, state.proposalCohort)
+	if err != nil {
+		return err
+	}
+	if err := rs.applyGUC(ctx, bothValue); err != nil {
+		return mterrors.Wrap(err, "failed to apply both-cohort GUC during fence")
+	}
+	if err := rs.emitFenceWAL(ctx); err != nil {
+		return err
+	}
+
+	// 2. GUC → after (proposal cohort), advance proposal to decision.
+	fenceUpdate := newRuleUpdate(
+		state.proposalTerm, nil, "fence", "hung cohort-change rule fenced", time.Now())
+	_, err = rs.phaseTwo(ctx, state, state.proposalTerm, state.proposalSubterm,
+		state.proposalCohort, fenceUpdate)
+	return err
 }
 
 // queryRuleHistory returns the most recent rule history records in descending

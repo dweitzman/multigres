@@ -17,6 +17,7 @@ package consensus
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -35,6 +36,12 @@ func ParseUserSpecifiedDurabilityPolicy(name string) (*clustermetadatapb.Durabil
 		return nil, fmt.Errorf("unsupported durability policy %q (supported: AT_LEAST_2, MULTI_CELL_AT_LEAST_2)", name)
 	}
 }
+
+// IDToAppName converts a cluster ID to its PostgreSQL application_name string.
+// Callers in the multipooler manager supply this as the cell_name format
+// (e.g., "us-east_pooler-1"). Custom durability-policy plugins receive it so
+// they can format standby names without depending on the naming convention.
+type IDToAppName func(id *clustermetadatapb.ID) (string, error)
 
 // DurabilityPolicy captures the quorum semantics of a single durability rule.
 //
@@ -64,6 +71,11 @@ type DurabilityPolicy interface {
 
 	// Description returns a human-readable summary of the policy.
 	Description() string
+
+	// StandbyNames returns the PostgreSQL synchronous_standby_names value for
+	// this policy applied to the given cohort. idToAppName converts each cohort
+	// member to its PostgreSQL application_name. Returns "" when cohort is empty.
+	StandbyNames(cohort []*clustermetadatapb.ID, idToAppName IDToAppName) (string, error)
 }
 
 // NewPolicyFromProto converts a proto DurabilityPolicy into a concrete
@@ -89,6 +101,30 @@ func NewPolicyFromProto(policy *clustermetadatapb.DurabilityPolicy) (DurabilityP
 	default:
 		return nil, fmt.Errorf("unsupported quorum type: %v", policy.QuorumType)
 	}
+}
+
+// cohortToAppNames converts each member of the cohort to its PostgreSQL
+// application_name using idToAppName, returning the names in cohort order.
+func cohortToAppNames(cohort []*clustermetadatapb.ID, idToAppName IDToAppName) ([]string, error) {
+	names := make([]string, 0, len(cohort))
+	for _, id := range cohort {
+		name, err := idToAppName(id)
+		if err != nil {
+			return nil, err
+		}
+		names = append(names, name)
+	}
+	return names, nil
+}
+
+// quotedNameList returns a comma-separated list of double-quoted names, suitable
+// for inclusion in a synchronous_standby_names value.
+func quotedNameList(names []string) string {
+	quoted := make([]string, len(names))
+	for i, n := range names {
+		quoted[i] = `"` + n + `"`
+	}
+	return strings.Join(quoted, ", ")
 }
 
 // keysOf returns the set of distinct keyFn-keys present in poolers.

@@ -29,13 +29,13 @@ import (
 // without hitting postgres. Both observePosition and updateRule return pos
 // (or observeErr/updateErr when set). updateRule records all calls in updates.
 type fakeRuleStore struct {
-	mu          sync.Mutex
-	pos         *consensusdatapb.PoolerPosition
-	observeErr  error
-	updateErr   error
-	fenceErr    error
-	updates     []*ruleUpdateBuilder
-	fenceCount  int
+	mu         sync.Mutex
+	pos        *consensusdatapb.PoolerPosition
+	observeErr error
+	updateErr  error
+	fenceErr   error
+	updates    []*ruleUpdateBuilder
+	fenceCount int
 }
 
 func (f *fakeRuleStore) observePosition(_ context.Context) (*consensusdatapb.PoolerPosition, error) {
@@ -80,4 +80,20 @@ func (f *fakeRuleStore) assertPromoteRecorded(t *testing.T) *ruleUpdateBuilder {
 	require.Len(t, f.updates, 1, "expected exactly one updateRule call for promotion")
 	assert.Equal(t, "promotion", f.updates[0].eventType)
 	return f.updates[0]
+}
+
+// assertPromoteAmongUpdates asserts that at least one updateRule call with eventType
+// "promotion" was made and returns it. Use this when other updateRule calls (e.g.
+// from sync replication config) may also be present.
+func (f *fakeRuleStore) assertPromoteAmongUpdates(t *testing.T) *ruleUpdateBuilder {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, u := range f.updates {
+		if u.eventType == "promotion" {
+			return u
+		}
+	}
+	t.Fatal("expected at least one updateRule call with eventType 'promotion', got none")
+	return nil
 }

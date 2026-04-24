@@ -15,6 +15,7 @@
 package consensus
 
 import (
+	"errors"
 	"fmt"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -77,6 +78,12 @@ func (p MultiCellPolicy) CheckSufficientRecruitment(cohort, recruited []*cluster
 // Description returns a human-readable summary of the policy.
 func (p MultiCellPolicy) Description() string {
 	return fmt.Sprintf("MULTI_CELL_AT_LEAST_N(N=%d)", p.N)
+}
+
+// StandbyNames is not implemented for MultiCellPolicy because PostgreSQL's
+// synchronous_standby_names has no native multi-cell concept.
+func (p MultiCellPolicy) StandbyNames(_ []*clustermetadatapb.ID, _ IDToAppName) (string, error) {
+	return "", errors.New("StandbyNames not supported for MultiCellPolicy")
 }
 
 // cellsOf returns the set of distinct cells covered by poolers.

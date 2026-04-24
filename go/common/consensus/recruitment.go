@@ -15,6 +15,7 @@
 package consensus
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/multigres/multigres/go/common/topoclient"
@@ -87,7 +88,7 @@ func CheckSufficientRecruitment(
 	buildProposal func(RecruitmentResult) (*consensusdatapb.CoordinatorProposal, error),
 ) (*consensusdatapb.CoordinatorProposal, error) {
 	if len(statuses) == 0 {
-		return nil, fmt.Errorf("no recruitment statuses provided")
+		return nil, errors.New("no recruitment statuses provided")
 	}
 
 	// Step 1: Find the best committed rule (highest RuleNumber) across all
@@ -101,7 +102,7 @@ func CheckSufficientRecruitment(
 		}
 	}
 	if bestRule == nil {
-		return nil, fmt.Errorf("no committed rule found among recruited nodes; cannot determine cohort")
+		return nil, errors.New("no committed rule found among recruited nodes; cannot determine cohort")
 	}
 
 	// Step 2: Detect a hung cohort change.
@@ -158,7 +159,7 @@ func CheckSufficientRecruitment(
 		}
 	}
 	if len(eligibleLeaders) == 0 {
-		return nil, fmt.Errorf("no eligible leaders found among recruited nodes")
+		return nil, errors.New("no eligible leaders found among recruited nodes")
 	}
 
 	result := RecruitmentResult{
@@ -174,7 +175,7 @@ func CheckSufficientRecruitment(
 		return nil, fmt.Errorf("buildProposal: %w", err)
 	}
 	if proposal == nil {
-		return nil, fmt.Errorf("buildProposal returned nil proposal")
+		return nil, errors.New("buildProposal returned nil proposal")
 	}
 
 	// Step 7: Validate the returned proposal against the recruitment constraints.
@@ -194,7 +195,7 @@ func validateProposal(
 ) error {
 	leaderID := proposal.GetProposalLeader().GetId()
 	if leaderID == nil {
-		return fmt.Errorf("proposal has no leader ID")
+		return errors.New("proposal has no leader ID")
 	}
 	leaderKey := topoclient.ClusterIDString(leaderID)
 	foundLeader := false

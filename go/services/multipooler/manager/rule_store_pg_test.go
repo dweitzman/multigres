@@ -227,7 +227,7 @@ func startSharedPostgres(t *testing.T) (*pgPostgresFixture, error) {
 	}
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	rs := newRuleStore(logger, qs)
+	rs := newRuleStore(logger, qs, nil)
 	if err := rs.createRuleTables(ctx); err != nil {
 		_ = exec.Command("pg_ctl", "stop", "-D", pgDataDir, "-m", "fast").Run()
 		return nil, fmt.Errorf("create rule tables: %w", err)
@@ -248,7 +248,7 @@ func newTestRuleStore(ctx context.Context, t *testing.T) (*ruleStore, *client.Co
 	conn, err := pgTestFixture.newClientConn(ctx)
 	require.NoError(t, err)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	rs := newRuleStore(logger, &connQueryService{conn: conn})
+	rs := newRuleStore(logger, &connQueryService{conn: conn}, nil)
 	return rs, conn
 }
 
@@ -265,7 +265,7 @@ func resetRuleStoreTables(ctx context.Context, t *testing.T) {
 	require.NoError(t, err)
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	rs := newRuleStore(logger, qs)
+	rs := newRuleStore(logger, qs, nil)
 	require.NoError(t, rs.createRuleTables(ctx))
 }
 
@@ -592,7 +592,7 @@ func TestRuleStorePG_UpdateRule_Concurrent(t *testing.T) {
 			defer conn.Close()
 
 			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-			rs := newRuleStore(logger, &connQueryService{conn: conn})
+			rs := newRuleStore(logger, &connQueryService{conn: conn}, nil)
 			_, errs[idx] = rs.updateRule(ctx,
 				newRuleUpdate(1, coordinatorID, "config_change",
 					fmt.Sprintf("concurrent write %d", idx), now),

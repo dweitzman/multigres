@@ -328,10 +328,8 @@ func verifyReplicaReplicating(t *testing.T, setup *shardsetup.ShardSetup, replic
 	ctx := utils.WithTimeout(t, 5*time.Second)
 	status, err := client.Manager.Status(ctx, &multipoolermanagerdatapb.StatusRequest{})
 	require.NoError(t, err, "Should be able to get status from demoted replica")
-	require.NotNil(t, status.Status.ConsensusTerm, "Replica should have consensus term")
-	require.Equal(t, int64(0), status.Status.ConsensusTerm.PrimaryTerm,
-		"Demoted stale primary %s should have primary_term=0 (cleared during DemoteStalePrimary)", replicaName)
-	t.Logf("Verified demoted stale primary %s has primary_term=0", replicaName)
+	require.NotNil(t, status.Status.TermRevocation, "Replica should have term revocation after DemoteStalePrimary")
+	t.Logf("Verified demoted stale primary %s has term revocation set", replicaName)
 }
 
 // verifyDataReplication writes data to the new primary and verifies it replicates to the old primary

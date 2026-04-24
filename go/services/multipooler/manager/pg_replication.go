@@ -690,6 +690,21 @@ func (pm *MultiPoolerManager) resumeWALReplay(ctx context.Context) error {
 }
 
 // reloadPostgresConfig reloads PostgreSQL configuration to apply changes made via ALTER SYSTEM
+// applyStandbyNamesGUC sets synchronous_standby_names, reloads PostgreSQL configuration,
+// and waits briefly for the new setting to take effect. Suitable for injection into
+// ruleStore as the applyGUC function.
+func (pm *MultiPoolerManager) applyStandbyNamesGUC(ctx context.Context, standbyNames string) error {
+	if err := pm.applySynchronousStandbyNames(ctx, standbyNames); err != nil {
+		return err
+	}
+	if err := pm.reloadPostgresConfig(ctx); err != nil {
+		return err
+	}
+	// Brief wait for the reloaded GUC to be visible to new transactions.
+	time.Sleep(100 * time.Millisecond)
+	return nil
+}
+
 func (pm *MultiPoolerManager) reloadPostgresConfig(ctx context.Context) error {
 	pm.logger.InfoContext(ctx, "Reloading PostgreSQL configuration")
 

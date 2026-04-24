@@ -166,14 +166,8 @@ func TestDeadPrimaryRecovery(t *testing.T) {
 		status, err := newPrimaryClient.Manager.Status(utils.WithTimeout(t, 5*time.Second), &multipoolermanagerdatapb.StatusRequest{})
 		newPrimaryClient.Close()
 		require.NoError(t, err, "should be able to get status from new primary")
-		newPrimaryTerm := status.Status.ConsensusTerm.TermNumber
-		newPrimaryTermActual := status.Status.ConsensusTerm.PrimaryTerm
-		t.Logf("New primary %s is on term %d, primary_term=%d", newPrimaryName, newPrimaryTerm, newPrimaryTermActual)
-
-		// Verify primary_term is set and matches the consensus term
-		require.NotZero(t, newPrimaryTermActual, "Primary term must be non-zero for new primary %s", newPrimaryName)
-		assert.Equal(t, newPrimaryTerm, newPrimaryTermActual,
-			"Primary term should match consensus term for new primary %s (term=%d)", newPrimaryName, newPrimaryTerm)
+		newPrimaryTerm := status.Status.GetTermRevocation().GetRevokedBelowTerm()
+		t.Logf("New primary %s is on term %d", newPrimaryName, newPrimaryTerm)
 
 		// Wait for killed multipooler to rejoin as standby (always wait, even on last iteration)
 		waitForNodeToRejoinAsStandby(t, setup, currentPrimaryName, newPrimaryName, newPrimaryTerm, 2*time.Second)
@@ -204,28 +198,28 @@ func TestDeadPrimaryRecovery(t *testing.T) {
 	require.NoError(t, err)
 	statusResp, err := primaryClient.Manager.Status(utils.WithTimeout(t, 5*time.Second), &multipoolermanagerdatapb.StatusRequest{})
 	require.NoError(t, err)
-	oldPrimaryTerm := statusResp.Status.ConsensusTerm.TermNumber
+	oldPrimaryTerm := statusResp.Status.GetTermRevocation().GetRevokedBelowTerm()
 	t.Logf("Primary %s is on term %d", currentPrimaryName, oldPrimaryTerm)
 
-	// Call BeginTerm with a higher term to trigger emergency demotion
-	beginTermTerm := oldPrimaryTerm + 1
-	t.Logf("Calling BeginTerm on primary %s with term %d to trigger emergency demotion", currentPrimaryName, beginTermTerm)
+	// Call Recruit with a higher term to trigger emergency demotion
+	recruitTerm := oldPrimaryTerm + 1
+	t.Logf("Calling Recruit on primary %s with term %d to trigger emergency demotion", currentPrimaryName, recruitTerm)
 
-	beginTermReq := &consensusdatapb.BeginTermRequest{
-		Term: beginTermTerm,
-		CandidateId: &clustermetadatapb.ID{
-			Component: clustermetadatapb.ID_MULTIORCH,
-			Cell:      setup.CellName,
-			Name:      "test-coordinator",
+	recruitResp, err := primaryClient.Consensus.Recruit(utils.WithTimeout(t, 10*time.Second), &consensusdatapb.RecruitRequest{
+		TermRevocation: &consensusdatapb.TermRevocation{
+			RevokedBelowTerm: recruitTerm,
+			AcceptedCoordinatorId: &clustermetadatapb.ID{
+				Component: clustermetadatapb.ID_MULTIORCH,
+				Cell:      setup.CellName,
+				Name:      "test-coordinator",
+			},
 		},
-		Action: consensusdatapb.BeginTermAction_BEGIN_TERM_ACTION_REVOKE,
-	}
-	beginTermResp, err := primaryClient.Consensus.BeginTerm(utils.WithTimeout(t, 10*time.Second), beginTermReq)
+	})
 	primaryClient.Close()
 
-	require.NoError(t, err, "BeginTerm should succeed")
-	require.True(t, beginTermResp.Accepted, "Primary should accept BeginTerm with higher term")
-	t.Logf("BeginTerm accepted by primary, emergency demotion triggered (current_lsn=%s)", beginTermResp.WalPosition.GetCurrentLsn())
+	require.NoError(t, err, "Recruit should succeed")
+	require.NotNil(t, recruitResp.GetConsensusStatus(), "Primary should return consensus status after Recruit")
+	t.Logf("Recruit accepted by primary, emergency demotion triggered")
 
 	// Wait for multiorch to detect failure and elect new primary
 	t.Logf("Waiting for multiorch to detect emergency demotion and elect new leader...")
@@ -241,7 +235,7 @@ func TestDeadPrimaryRecovery(t *testing.T) {
 	newStatusResp, err := newPrimaryClient.Manager.Status(utils.WithTimeout(t, 5*time.Second), &multipoolermanagerdatapb.StatusRequest{})
 	newPrimaryClient.Close()
 	require.NoError(t, err, "should be able to get status from new primary")
-	newPrimaryTerm := newStatusResp.Status.ConsensusTerm.TermNumber
+	newPrimaryTerm := newStatusResp.Status.GetTermRevocation().GetRevokedBelowTerm()
 	t.Logf("New primary %s is on term %d", newPrimaryName, newPrimaryTerm)
 
 	// Verify new primary's term is higher than the old primary's original term
@@ -301,9 +295,8 @@ func TestDeadPrimaryRecovery(t *testing.T) {
 
 		require.NoError(t, err)
 		if status.Status.PoolerType == clustermetadatapb.PoolerType_REPLICA {
-			require.NotNil(t, status.Status.ConsensusTerm, "Replica %s should have consensus term", name)
-			assert.Equal(t, int64(0), status.Status.ConsensusTerm.PrimaryTerm,
-				"Replica %s should have primary_term=0 (never been primary)", name)
+			assert.NotZero(t, status.Status.GetTermRevocation().GetRevokedBelowTerm(),
+				"Replica %s should have a non-zero term revocation", name)
 		}
 	}
 
@@ -574,10 +567,7 @@ func waitForNodeToRejoinAsStandby(t *testing.T, setup *shardsetup.ShardSetup, mu
 				if s.ReplicationStatus == nil || s.ReplicationStatus.PrimaryConnInfo == nil {
 					return false, "replication not configured"
 				}
-				termNum := int64(0)
-				if s.ConsensusTerm != nil {
-					termNum = s.ConsensusTerm.TermNumber
-				}
+				termNum := s.GetTermRevocation().GetRevokedBelowTerm()
 				if termNum != expectedTerm {
 					return false, fmt.Sprintf("wrong term %d, expected %d", termNum, expectedTerm)
 				}

@@ -23,14 +23,15 @@ import (
 	"github.com/multigres/multigres/go/test/endtoend/shardsetup"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
 
-// TestManagerHealthStream_SnapshotOnSetPrimaryConnInfo verifies that a snapshot
-// is pushed to an open ManagerHealthStream promptly after SetPrimaryConnInfo is
-// called. SetPrimaryConnInfo calls broadcastHealth() at the end of its work, so
-// the stream client should not need to wait for the periodic poll ticker.
-func TestManagerHealthStream_SnapshotOnSetPrimaryConnInfo(t *testing.T) {
+// TestManagerHealthStream_SnapshotOnRecruit verifies that a snapshot is pushed to
+// an open ManagerHealthStream promptly after Recruit is called. Recruit calls
+// broadcastHealth() at the end of its work, so the stream client should not need
+// to wait for the periodic poll ticker.
+func TestManagerHealthStream_SnapshotOnRecruit(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping end-to-end tests in short mode")
 	}
@@ -65,25 +66,19 @@ func TestManagerHealthStream_SnapshotOnSetPrimaryConnInfo(t *testing.T) {
 	require.Equal(t, multipoolermanagerdatapb.SnapshotTrigger_SNAPSHOT_TRIGGER_INITIAL,
 		initial.GetSnapshot().GetTrigger(), "first message should be an initial snapshot")
 
-	// Call SetPrimaryConnInfo on the standby. This configures primary_conninfo
-	// (without starting replication) and calls broadcastHealth() at the end,
-	// which should cause the stream to send a broadcast-triggered snapshot.
-	primary := &clustermetadatapb.MultiPooler{
-		Id: &clustermetadatapb.ID{
-			Component: clustermetadatapb.ID_MULTIPOOLER,
-			Cell:      setup.CellName,
-			Name:      setup.PrimaryMultipooler.Name,
+	// Call Recruit on the standby with a higher term. Recruit calls broadcastHealth()
+	// at the end of its work, which should cause the stream to send a broadcast-triggered snapshot.
+	_, err = standbyClient.Consensus.Recruit(t.Context(), &consensusdatapb.RecruitRequest{
+		TermRevocation: &consensusdatapb.TermRevocation{
+			RevokedBelowTerm: 2,
+			AcceptedCoordinatorId: &clustermetadatapb.ID{
+				Component: clustermetadatapb.ID_MULTIORCH,
+				Cell:      setup.CellName,
+				Name:      "test-coordinator",
+			},
 		},
-		Hostname: "localhost",
-		PortMap:  map[string]int32{"postgres": int32(setup.PrimaryPgctld.PgPort)},
-	}
-	_, err = standbyClient.Consensus.SetPrimaryConnInfo(t.Context(), &multipoolermanagerdatapb.SetPrimaryConnInfoRequest{
-		Primary:               primary,
-		StopReplicationBefore: false,
-		StartReplicationAfter: false,
-		Force:                 true,
 	})
-	require.NoError(t, err, "SetPrimaryConnInfo should succeed on standby")
+	require.NoError(t, err, "Recruit should succeed on standby")
 
 	// Receive snapshots until we see one with SNAPSHOT_TRIGGER_BROADCAST.
 	// We skip over any heartbeat snapshots that may arrive concurrently.

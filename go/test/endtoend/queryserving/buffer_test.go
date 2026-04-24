@@ -382,26 +382,26 @@ func triggerFailover(t *testing.T, setup *shardsetup.ShardSetup) {
 	statusResp, err := primaryClient.Manager.Status(
 		utils.WithTimeout(t, 5*time.Second), &multipoolermanagerdatapb.StatusRequest{})
 	require.NoError(t, err)
-	oldTerm := statusResp.Status.ConsensusTerm.TermNumber
+	oldTerm := statusResp.Status.GetTermRevocation().GetRevokedBelowTerm()
 
-	t.Logf("Triggering failover: BeginTerm on %s (term %d → %d)", currentPrimaryName, oldTerm, oldTerm+1)
+	t.Logf("Triggering failover: Recruit on %s (term %d → %d)", currentPrimaryName, oldTerm, oldTerm+1)
 
-	beginTermResp, err := primaryClient.Consensus.BeginTerm(
+	_, err = primaryClient.Consensus.Recruit(
 		utils.WithTimeout(t, 10*time.Second),
-		&consensusdatapb.BeginTermRequest{
-			Term: oldTerm + 1,
-			CandidateId: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIORCH,
-				Cell:      setup.CellName,
-				Name:      "test-coordinator",
+		&consensusdatapb.RecruitRequest{
+			TermRevocation: &consensusdatapb.TermRevocation{
+				RevokedBelowTerm: oldTerm + 1,
+				AcceptedCoordinatorId: &clustermetadatapb.ID{
+					Component: clustermetadatapb.ID_MULTIORCH,
+					Cell:      setup.CellName,
+					Name:      "test-coordinator",
+				},
 			},
-			Action: consensusdatapb.BeginTermAction_BEGIN_TERM_ACTION_REVOKE,
 		})
 	primaryClient.Close()
 
-	require.NoError(t, err, "BeginTerm should succeed")
-	require.True(t, beginTermResp.Accepted, "primary should accept BeginTerm")
-	t.Logf("BeginTerm accepted, emergency demotion triggered")
+	require.NoError(t, err, "Recruit should succeed (WAL freeze + term acceptance)")
+	t.Logf("Recruit accepted, emergency demotion triggered")
 
 	// Trigger immediate recovery to elect a new primary and fully stabilize the cluster.
 	setup.RequireRecovery(t, "multiorch", 90*time.Second)

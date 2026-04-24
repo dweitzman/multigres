@@ -36,8 +36,8 @@ import (
 	"github.com/multigres/multigres/go/tools/viperutil"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
-	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
 
 func TestManagerState_InitialState(t *testing.T) {
@@ -327,8 +327,8 @@ func TestValidateAndUpdateTerm(t *testing.T) {
 
 			// Set initial consensus term on disk if currentTerm > 0
 			if tt.currentTerm > 0 {
-				initialTerm := &multipoolermanagerdatapb.ConsensusTerm{
-					TermNumber: tt.currentTerm,
+				initialTerm := &consensusdatapb.TermRevocation{
+					RevokedBelowTerm: tt.currentTerm,
 				}
 				setupCS := NewConsensusState(poolerDir, nil)
 				require.NoError(t, setupCS.setConsensusTerm(initialTerm))

@@ -85,3 +85,18 @@ func (p AtLeastNPolicy) CheckSufficientRecruitment(cohort, recruited []*clusterm
 func (p AtLeastNPolicy) Description() string {
 	return fmt.Sprintf("AT_LEAST_N(N=%d)", p.N)
 }
+
+// StandbyNames returns an ANY (N-1) (...) synchronous_standby_names value.
+// AT_LEAST_N requires N total copies (primary + N-1 standbys), so we wait
+// for N-1 standby acknowledgements. Returns "" when cohort is empty or N <= 1
+// (async — primary alone is sufficient).
+func (p AtLeastNPolicy) StandbyNames(cohort []*clustermetadatapb.ID, idToAppName IDToAppName) (string, error) {
+	if len(cohort) == 0 || p.N <= 1 {
+		return "", nil
+	}
+	names, err := cohortToAppNames(cohort, idToAppName)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("ANY %d (%s)", p.N-1, quotedNameList(names)), nil
+}

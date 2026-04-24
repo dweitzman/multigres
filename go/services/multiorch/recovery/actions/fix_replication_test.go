@@ -146,7 +146,9 @@ func TestFixReplicationAction_ExecuteUnsupportedProblemCode(t *testing.T) {
 		},
 		ConsensusStatusResponses: map[string]*consensusdatapb.StatusResponse{
 			"multipooler-cell1-primary": {
-				CurrentTerm: 1,
+				ConsensusStatus: &consensusdatapb.ConsensusStatus{
+					TermRevocation: &consensusdatapb.TermRevocation{RevokedBelowTerm: 1},
+				},
 			},
 		},
 	}
@@ -227,10 +229,12 @@ func TestFixReplicationAction_ExecuteSuccessNotReplicating(t *testing.T) {
 		},
 		ConsensusStatusResponses: map[string]*consensusdatapb.StatusResponse{
 			"multipooler-cell1-primary": {
-				CurrentTerm: 1,
+				ConsensusStatus: &consensusdatapb.ConsensusStatus{
+					TermRevocation: &consensusdatapb.TermRevocation{RevokedBelowTerm: 1},
+				},
 			},
 		},
-		SetPrimaryConnInfoResponses: map[string]*multipoolermanagerdatapb.SetPrimaryConnInfoResponse{
+		ProposeResponses: map[string]*consensusdatapb.ProposeResponse{
 			"multipooler-cell1-replica1": {},
 		},
 		UpdateConsensusRuleResponses: map[string]*multipoolermanagerdatapb.UpdateSynchronousStandbyListResponse{
@@ -287,7 +291,7 @@ func TestFixReplicationAction_ExecuteSuccessNotReplicating(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify SetPrimaryConnInfo was called on the replica
-	assert.Contains(t, fakeClient.CallLog, "SetPrimaryConnInfo(multipooler-cell1-replica1)")
+	assert.Contains(t, fakeClient.CallLog, "Propose(multipooler-cell1-replica1)")
 
 	// Verify UpdateConsensusRule was called on the primary to add the replica
 	assert.Contains(t, fakeClient.CallLog, "UpdateConsensusRule(multipooler-cell1-primary)")
@@ -373,7 +377,7 @@ func TestFixReplicationAction_ExecuteAlreadyConfigured(t *testing.T) {
 
 	// Should succeed without calling SetPrimaryConnInfo (already configured)
 	require.NoError(t, err)
-	assert.NotContains(t, fakeClient.CallLog, "SetPrimaryConnInfo(multipooler-cell1-replica1)")
+	assert.NotContains(t, fakeClient.CallLog, "Propose(multipooler-cell1-replica1)")
 }
 
 // delayedStreamingClient wraps FakeClient to simulate a WAL receiver that takes
@@ -491,19 +495,20 @@ func TestFixReplicationAction_FailsWhenReplicationDoesNotStart(t *testing.T) {
 	})
 	baseFakeClient.ConsensusStatusResponses = map[string]*consensusdatapb.StatusResponse{
 		"multipooler-cell1-primary": {
-			CurrentTerm: 1,
+			ConsensusStatus: &consensusdatapb.ConsensusStatus{
+				TermRevocation: &consensusdatapb.TermRevocation{RevokedBelowTerm: 1},
+			},
 			TimelineInfo: &consensusdatapb.TimelineInfo{
 				TimelineId: 2, // Primary on timeline 2
 			},
 		},
 		"multipooler-cell1-replica1": {
-			CurrentTerm: 1,
 			TimelineInfo: &consensusdatapb.TimelineInfo{
 				TimelineId: 1, // Replica still on timeline 1 - DIVERGED!
 			},
 		},
 	}
-	baseFakeClient.SetPrimaryConnInfoResponses = map[string]*multipoolermanagerdatapb.SetPrimaryConnInfoResponse{
+	baseFakeClient.ProposeResponses = map[string]*consensusdatapb.ProposeResponse{
 		"multipooler-cell1-replica1": {},
 	}
 	baseFakeClient.UpdateConsensusRuleResponses = map[string]*multipoolermanagerdatapb.UpdateSynchronousStandbyListResponse{
@@ -579,7 +584,7 @@ func TestFixReplicationAction_FailsWhenReplicationDoesNotStart(t *testing.T) {
 	assert.Contains(t, err.Error(), "replication did not start after pg_rewind")
 
 	// Verify SetPrimaryConnInfo was called (configuration was attempted)
-	assert.Contains(t, fakeClient.CallLog, "SetPrimaryConnInfo(multipooler-cell1-replica1)")
+	assert.Contains(t, fakeClient.CallLog, "Propose(multipooler-cell1-replica1)")
 	// Verify pg_rewind was tried after replication failed to start
 	assert.Contains(t, fakeClient.CallLog, "RewindToSource(multipooler-cell1-replica1)")
 

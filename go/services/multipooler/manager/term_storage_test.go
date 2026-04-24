@@ -24,7 +24,7 @@ import (
 
 	"github.com/multigres/multigres/go/common/constants"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
+	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 )
 
 func newTestConsensusState(t *testing.T) (*ConsensusState, string) {
@@ -42,10 +42,10 @@ func TestDeleteTermFile_FileExists(t *testing.T) {
 	cs, poolerDir := newTestConsensusState(t)
 
 	// Write a term file with a non-zero term
-	term := &multipoolermanagerdatapb.ConsensusTerm{TermNumber: 42}
+	revocation := &consensusdatapb.TermRevocation{RevokedBelowTerm: 42}
 	cs.mu.Lock()
-	cs.term = term
-	require.NoError(t, cs.setConsensusTerm(term))
+	cs.revocation = revocation
+	require.NoError(t, cs.setConsensusTerm(revocation))
 	cs.mu.Unlock()
 
 	termPath := filepath.Join(poolerDir, constants.ConsensusTermFile)
@@ -59,7 +59,7 @@ func TestDeleteTermFile_FileExists(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "term file should be deleted")
 
 	// In-memory term must be reset to 0
-	n, err := cs.GetInconsistentCurrentTermNumber()
+	n, err := cs.GetInconsistentRevokedBelowTerm()
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), n)
 }
@@ -69,7 +69,7 @@ func TestDeleteTermFile_FileDoesNotExist(t *testing.T) {
 
 	// Prime in-memory state to a non-zero term without writing to disk
 	cs.mu.Lock()
-	cs.term = &multipoolermanagerdatapb.ConsensusTerm{TermNumber: 7}
+	cs.revocation = &consensusdatapb.TermRevocation{RevokedBelowTerm: 7}
 	cs.mu.Unlock()
 
 	termPath := filepath.Join(poolerDir, constants.ConsensusTermFile)
@@ -80,7 +80,7 @@ func TestDeleteTermFile_FileDoesNotExist(t *testing.T) {
 	require.NoError(t, cs.DeleteTermFile())
 
 	// In-memory term must still be reset to 0
-	n, err := cs.GetInconsistentCurrentTermNumber()
+	n, err := cs.GetInconsistentRevokedBelowTerm()
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), n)
 }

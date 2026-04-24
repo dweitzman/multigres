@@ -150,11 +150,9 @@ func TestBootstrapInitialization(t *testing.T) {
 		// Verify primary term is set to 1 (bootstrap term)
 		status, err := primaryClient.Manager.Status(ctx, &multipoolermanagerdatapb.StatusRequest{})
 		require.NoError(t, err, "Should be able to get status from primary")
-		require.NotNil(t, status.Status.ConsensusTerm, "Primary should have consensus term")
-		assert.Equal(t, int64(1), status.Status.ConsensusTerm.TermNumber, "Primary should be on term 1 after bootstrap")
-		assert.Equal(t, int64(1), status.Status.ConsensusTerm.PrimaryTerm, "Primary term should be set to 1 after bootstrap")
-		t.Logf("Primary %s: term=%d, primary_term=%d", setup.PrimaryName,
-			status.Status.ConsensusTerm.TermNumber, status.Status.ConsensusTerm.PrimaryTerm)
+		require.NotNil(t, status.Status.GetTermRevocation(), "Primary should have term revocation")
+		assert.Equal(t, int64(1), status.Status.GetTermRevocation().GetRevokedBelowTerm(), "Primary should be on term 1 after bootstrap")
+		t.Logf("Primary %s: term=%d", setup.PrimaryName, status.Status.GetTermRevocation().GetRevokedBelowTerm())
 
 		// Verify multigres schema exists
 		resp, err := primaryClient.Pooler.ExecuteQuery(ctx,
@@ -181,13 +179,8 @@ func TestBootstrapInitialization(t *testing.T) {
 			if status.Status.IsInitialized && status.Status.PoolerType == clustermetadatapb.PoolerType_REPLICA {
 				standbyCount++
 
-				// Verify replica has primary_term = 0 (never been primary)
-				require.NotNil(t, status.Status.ConsensusTerm, "Standby %s should have consensus term", name)
-				assert.Equal(t, int64(0), status.Status.ConsensusTerm.PrimaryTerm,
-					"Standby %s should have primary_term=0 (never been primary)", name)
-
-				t.Logf("Standby node: %s (pooler_type=%s, primary_term=%d)",
-					name, status.Status.PoolerType, status.Status.ConsensusTerm.PrimaryTerm)
+				t.Logf("Standby node: %s (pooler_type=%s, term=%d)",
+					name, status.Status.PoolerType, status.Status.GetTermRevocation().GetRevokedBelowTerm())
 			}
 		}
 		// Should have at least 1 standby
@@ -212,10 +205,7 @@ func TestBootstrapInitialization(t *testing.T) {
 				if !s.IsInitialized {
 					return false, "not yet initialized"
 				}
-				termNum := int64(0)
-				if s.ConsensusTerm != nil {
-					termNum = s.ConsensusTerm.TermNumber
-				}
+				termNum := s.GetTermRevocation().GetRevokedBelowTerm()
 				if termNum != 1 {
 					return false, fmt.Sprintf("consensus term is %d, expected 1", termNum)
 				}
@@ -361,7 +351,7 @@ func TestBootstrapInitialization(t *testing.T) {
 				if !s.PostgresReady {
 					return false, "postgres not running"
 				}
-				if s.ConsensusTerm == nil || s.ConsensusTerm.TermNumber == 0 {
+				if s.GetTermRevocation().GetRevokedBelowTerm() == 0 {
 					return false, "consensus term not yet assigned"
 				}
 				return true, ""

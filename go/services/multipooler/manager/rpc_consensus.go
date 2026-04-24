@@ -302,7 +302,7 @@ func (pm *MultiPoolerManager) Propose(ctx context.Context, req *consensusdatapb.
 
 	pm.consensusState.SetInProgressProposal(proposal)
 
-	amLeader := proposal.GetProposalLeader().GetId().GetName() == pm.serviceID.GetName()
+	amLeader := isProposalLeader(pm.serviceID, proposal)
 
 	if amLeader {
 		pm.logger.InfoContext(ctx, "Propose: self is proposal leader, promoting to primary",
@@ -330,6 +330,11 @@ func (pm *MultiPoolerManager) Propose(ctx context.Context, req *consensusdatapb.
 		pm.logger.WarnContext(ctx, "Failed to build cached consensus status after propose", "error", err)
 	}
 	return &consensusdatapb.ProposeResponse{ConsensusStatus: cs}, nil
+}
+
+// isProposalLeader reports whether serviceID is the designated leader in proposal.
+func isProposalLeader(serviceID *clustermetadatapb.ID, proposal *consensusdatapb.CoordinatorProposal) bool {
+	return proposal.GetProposalLeader().GetId().GetName() == serviceID.GetName()
 }
 
 // validateProposalTerm checks that the proposal's term revocation matches the

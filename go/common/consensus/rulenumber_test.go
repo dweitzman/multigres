@@ -19,17 +19,17 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 )
 
-func rn(term, subterm int64) *clustermetadatapb.RuleNumber {
-	return &clustermetadatapb.RuleNumber{CoordinatorTerm: term, LeaderSubterm: subterm}
+func rn(term, subterm int64) *consensusdatapb.RuleNumber {
+	return &consensusdatapb.RuleNumber{CoordinatorTerm: term, LeaderSubterm: subterm}
 }
 
 func TestCompareRuleNumbers(t *testing.T) {
 	tests := []struct {
 		name string
-		a, b *clustermetadatapb.RuleNumber
+		a, b *consensusdatapb.RuleNumber
 		want int
 	}{
 		{"equal", rn(5, 3), rn(5, 3), 0},

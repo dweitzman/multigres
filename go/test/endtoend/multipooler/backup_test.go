@@ -30,6 +30,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 	multiadminpb "github.com/multigres/multigres/go/pb/multiadmin"
 	multipoolermanagerdata "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	adminserver "github.com/multigres/multigres/go/services/multiadmin"
@@ -173,7 +174,7 @@ func TestBackup_CreateListAndRestore(t *testing.T) {
 					t.Logf("Backup verified in standby's list: ID=%s, Status=%s, FinalLSN=%s",
 						foundBackup.BackupId, foundBackup.Status, foundBackup.FinalLsn)
 
-					// Update term to a higher value by doing a dummy SetPrimaryConnInfo
+					// Update term to a higher value by recruiting with a new term revocation
 					higherTerm := int64(100)
 					primary := &clustermetadatapb.MultiPooler{
 						Id: &clustermetadatapb.ID{
@@ -184,23 +185,24 @@ func TestBackup_CreateListAndRestore(t *testing.T) {
 						Hostname: "localhost",
 						PortMap:  map[string]int32{"postgres": int32(setup.PrimaryPgctld.PgPort)},
 					}
-					updateTermReq := &multipoolermanagerdata.SetPrimaryConnInfoRequest{
-						Primary:               primary,
-						StartReplicationAfter: false, // Don't restart replication
-						StopReplicationBefore: false,
-						CurrentTerm:           higherTerm,
-						Force:                 false,
-					}
 					updateTermCtx := utils.WithTimeout(t, 30*time.Second)
-					_, err = standbyConsensusClient.SetPrimaryConnInfo(updateTermCtx, updateTermReq)
-					require.NoError(t, err, "Should be able to update term")
+					_, err = standbyConsensusClient.Recruit(updateTermCtx, &consensusdatapb.RecruitRequest{
+						TermRevocation: &consensusdatapb.TermRevocation{
+							RevokedBelowTerm: higherTerm,
+							AcceptedCoordinatorId: &clustermetadatapb.ID{
+								Component: clustermetadatapb.ID_MULTIORCH,
+								Cell:      "test-cell",
+								Name:      "test-coordinator",
+							},
+						},
+					})
+					require.NoError(t, err, "Should be able to update term via Recruit")
 
 					// Verify term was updated
 					statusCtx := utils.WithShortDeadline(t)
 					statusResp, err := standbyBackupClient.Status(statusCtx, &multipoolermanagerdata.StatusRequest{})
 					require.NoError(t, err, "Should be able to get status after term update")
-					require.NotNil(t, statusResp.Status.ConsensusTerm, "ConsensusTerm should not be nil")
-					assert.Equal(t, higherTerm, statusResp.Status.ConsensusTerm.TermNumber, "Term should be updated to higher value")
+					assert.Equal(t, higherTerm, statusResp.Status.GetTermRevocation().GetRevokedBelowTerm(), "Term should be updated to higher value")
 					t.Log("Preparing standby for restore (stopping PostgreSQL and removing PGDATA)...")
 					standbyInst := setup.GetStandbys()
 					require.NotEmpty(t, standbyInst, "expected at least one standby")
@@ -227,32 +229,38 @@ func TestBackup_CreateListAndRestore(t *testing.T) {
 						if err != nil {
 							return false
 						}
-						if statusResp.Status.ConsensusTerm != nil {
-							restoredTerm = statusResp.Status.ConsensusTerm.TermNumber
-						}
+						restoredTerm = statusResp.Status.GetTermRevocation().GetRevokedBelowTerm()
 						return statusResp.Status.PostgresReady
 					}, 10*time.Second, 100*time.Millisecond, "PostgreSQL should be running after restore")
 					t.Logf("Term after restore: %d (expected: 0)", restoredTerm)
 					assert.Equal(t, int64(0), restoredTerm, "Term should be reset to 0 after restore (stale term file is deleted)")
 
-					// Verify primary_term is 0 after restore
-					statusCtx = utils.WithShortDeadline(t)
-					statusResp, err = standbyBackupClient.Status(statusCtx, &multipoolermanagerdata.StatusRequest{})
-					require.NoError(t, err, "Should be able to get status after restore")
-					require.NotNil(t, statusResp.Status.ConsensusTerm, "ConsensusTerm should not be nil after restore")
-					assert.Equal(t, int64(0), statusResp.Status.ConsensusTerm.PrimaryTerm,
-						"primary_term should be 0 after restore")
+					// Configure replication after restore: recruit to accept a new term, then propose
+					// to point the standby at the primary (term 0 after restore, so we recruit to term 1).
+					recruitCtx := utils.WithTimeout(t, 30*time.Second)
+					_, err = standbyConsensusClient.Recruit(recruitCtx, &consensusdatapb.RecruitRequest{
+						TermRevocation: &consensusdatapb.TermRevocation{
+							RevokedBelowTerm: 1,
+							AcceptedCoordinatorId: &clustermetadatapb.ID{
+								Component: clustermetadatapb.ID_MULTIORCH,
+								Cell:      "test-cell",
+								Name:      "test-coordinator",
+							},
+						},
+					})
+					require.NoError(t, err, "Should be able to recruit after restore")
 
-					// Configure replication after restore
-					setPrimaryReq := &multipoolermanagerdata.SetPrimaryConnInfoRequest{
-						Primary:               primary,
-						StartReplicationAfter: true,
-						StopReplicationBefore: false,
-						CurrentTerm:           restoredTerm, // Term is 0 after restore; Force allows multiorch to advance it
-						Force:                 true,         // Force reconfiguration after restore
-					}
 					setPrimaryCtx := utils.WithTimeout(t, 30*time.Second)
-					_, err = standbyConsensusClient.SetPrimaryConnInfo(setPrimaryCtx, setPrimaryReq)
+					_, err = standbyConsensusClient.Propose(setPrimaryCtx, &consensusdatapb.ProposeRequest{
+						Proposal: &consensusdatapb.CoordinatorProposal{
+							TermRevocation: &consensusdatapb.TermRevocation{RevokedBelowTerm: 1},
+							ProposalLeader: &consensusdatapb.ProposalLeader{
+								Id:           primary.Id,
+								Host:         primary.Hostname,
+								PostgresPort: primary.PortMap["postgres"],
+							},
+						},
+					})
 					require.NoError(t, err, "Should be able to configure replication after restore")
 
 					// Connect to the standby database after restore
@@ -612,16 +620,33 @@ func TestBackup_MultiAdminAPIs(t *testing.T) {
 					Hostname: "localhost",
 					PortMap:  map[string]int32{"postgres": int32(setup.PrimaryPgctld.PgPort)},
 				}
-				setPrimaryReq := &multipoolermanagerdata.SetPrimaryConnInfoRequest{
-					Primary:               primary,
-					StartReplicationAfter: true,
-					StopReplicationBefore: false,
-					CurrentTerm:           1,
-					Force:                 true,
-				}
+				// Recruit to accept term 1, then propose to configure replication to the primary.
+				recruitCtx2, recruitCancel2 := context.WithTimeout(t.Context(), 30*time.Second)
+				defer recruitCancel2()
+				_, err = standbyRestoreConsensusClient.Recruit(recruitCtx2, &consensusdatapb.RecruitRequest{
+					TermRevocation: &consensusdatapb.TermRevocation{
+						RevokedBelowTerm: 1,
+						AcceptedCoordinatorId: &clustermetadatapb.ID{
+							Component: clustermetadatapb.ID_MULTIORCH,
+							Cell:      "test-cell",
+							Name:      "test-coordinator",
+						},
+					},
+				})
+				require.NoError(t, err, "Should be able to recruit after restore")
+
 				setPrimaryCtx, setPrimaryCancel := context.WithTimeout(t.Context(), 30*time.Second)
 				defer setPrimaryCancel()
-				_, err = standbyRestoreConsensusClient.SetPrimaryConnInfo(setPrimaryCtx, setPrimaryReq)
+				_, err = standbyRestoreConsensusClient.Propose(setPrimaryCtx, &consensusdatapb.ProposeRequest{
+					Proposal: &consensusdatapb.CoordinatorProposal{
+						TermRevocation: &consensusdatapb.TermRevocation{RevokedBelowTerm: 1},
+						ProposalLeader: &consensusdatapb.ProposalLeader{
+							Id:           primary.Id,
+							Host:         primary.Hostname,
+							PostgresPort: primary.PortMap["postgres"],
+						},
+					},
+				})
 				require.NoError(t, err, "Should be able to configure replication after restore")
 				t.Log("Replication configured after restore")
 

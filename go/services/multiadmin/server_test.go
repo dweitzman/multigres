@@ -31,6 +31,7 @@ import (
 	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/common/topoclient/memorytopo"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 	multiadminpb "github.com/multigres/multigres/go/pb/multiadmin"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	"github.com/multigres/multigres/go/test/utils"
@@ -605,8 +606,8 @@ func TestMultiAdminServerGetPoolerStatus(t *testing.T) {
 			PostgresReady: true,
 			PostgresRole:  "primary",
 			WalPosition:   "0/1000000",
-			ConsensusTerm: &multipoolermanagerdatapb.ConsensusTerm{
-				TermNumber: 1,
+			TermRevocation: &consensusdatapb.TermRevocation{
+				RevokedBelowTerm: 1,
 			},
 			ShardId: "0-inf",
 		}
@@ -627,8 +628,8 @@ func TestMultiAdminServerGetPoolerStatus(t *testing.T) {
 		assert.True(t, resp.Status.PostgresReady)
 		assert.Equal(t, "primary", resp.Status.PostgresRole)
 		assert.Equal(t, "0/1000000", resp.Status.WalPosition)
-		require.NotNil(t, resp.Status.ConsensusTerm)
-		assert.Equal(t, int64(1), resp.Status.ConsensusTerm.TermNumber)
+		require.NotNil(t, resp.Status.GetTermRevocation())
+		assert.Equal(t, int64(1), resp.Status.GetTermRevocation().GetRevokedBelowTerm())
 	})
 
 	t.Run("rpc error returns Unavailable", func(t *testing.T) {

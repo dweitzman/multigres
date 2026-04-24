@@ -88,7 +88,7 @@ func newTestManagerWithMock(tableGroup, shard string) (*MultiPoolerManager, *moc
 		serviceID:       svcID,
 		servicePoolerID: svcPoolerID,
 	}
-	pm.rules = newRuleStore(logger, mockQueryService)
+	pm.rules = newRuleStore(logger, mockQueryService, nil)
 
 	return pm, mockQueryService
 }

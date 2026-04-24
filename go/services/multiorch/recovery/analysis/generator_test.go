@@ -1425,11 +1425,20 @@ func TestPopulatePrimaryInfo_PicksHighestPrimaryTerm(t *testing.T) {
 		MultiPooler:      shardConfig(newPrimaryID),
 		IsLastCheckValid: true,
 		LastSeen:         timestamppb.Now(),
-		ConsensusStatus:  &consensusdatapb.StatusResponse{CurrentTerm: 11},
+		ConsensusStatus: &consensusdatapb.StatusResponse{
+			ConsensusStatus: &consensusdatapb.ConsensusStatus{
+				TermRevocation: &consensusdatapb.TermRevocation{RevokedBelowTerm: 11},
+				CurrentPosition: &consensusdatapb.PoolerPosition{
+					Rule: &consensusdatapb.ShardRule{
+						RuleNumber: &consensusdatapb.RuleNumber{CoordinatorTerm: 6},
+					},
+				},
+			},
+		},
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
-			PostgresReady: true,
-			ConsensusTerm: &multipoolermanagerdatapb.ConsensusTerm{TermNumber: 11, PrimaryTerm: 6},
+			PoolerType:     clustermetadatapb.PoolerType_PRIMARY,
+			PostgresReady:  true,
+			TermRevocation: &consensusdatapb.TermRevocation{RevokedBelowTerm: 11},
 		},
 	})
 
@@ -1438,11 +1447,20 @@ func TestPopulatePrimaryInfo_PicksHighestPrimaryTerm(t *testing.T) {
 		MultiPooler:      shardConfig(stalePrimaryID),
 		IsLastCheckValid: true,
 		LastSeen:         timestamppb.Now(),
-		ConsensusStatus:  &consensusdatapb.StatusResponse{CurrentTerm: 10},
+		ConsensusStatus: &consensusdatapb.StatusResponse{
+			ConsensusStatus: &consensusdatapb.ConsensusStatus{
+				TermRevocation: &consensusdatapb.TermRevocation{RevokedBelowTerm: 10},
+				CurrentPosition: &consensusdatapb.PoolerPosition{
+					Rule: &consensusdatapb.ShardRule{
+						RuleNumber: &consensusdatapb.RuleNumber{CoordinatorTerm: 5},
+					},
+				},
+			},
+		},
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
-			PostgresReady: false,
-			ConsensusTerm: &multipoolermanagerdatapb.ConsensusTerm{TermNumber: 10, PrimaryTerm: 5},
+			PoolerType:     clustermetadatapb.PoolerType_PRIMARY,
+			PostgresReady:  false,
+			TermRevocation: &consensusdatapb.TermRevocation{RevokedBelowTerm: 10},
 		},
 	})
 
@@ -1686,14 +1704,18 @@ func setupMultiplePrimariesStoreWithReachability(t *testing.T, primaries []prima
 			IsLastCheckValid: p.reachable,
 			IsUpToDate:       true,
 			ConsensusStatus: &consensusdatapb.StatusResponse{
-				CurrentTerm: p.consensusTerm,
+				ConsensusStatus: &consensusdatapb.ConsensusStatus{
+					TermRevocation: &consensusdatapb.TermRevocation{RevokedBelowTerm: p.consensusTerm},
+					CurrentPosition: &consensusdatapb.PoolerPosition{
+						Rule: &consensusdatapb.ShardRule{
+							RuleNumber: &consensusdatapb.RuleNumber{CoordinatorTerm: p.primaryTerm},
+						},
+					},
+				},
 			},
 			Status: &multipoolermanagerdatapb.Status{
-				PoolerType: clustermetadatapb.PoolerType_PRIMARY,
-				ConsensusTerm: &multipoolermanagerdatapb.ConsensusTerm{
-					TermNumber:  p.consensusTerm,
-					PrimaryTerm: p.primaryTerm,
-				},
+				PoolerType:     clustermetadatapb.PoolerType_PRIMARY,
+				TermRevocation: &consensusdatapb.TermRevocation{RevokedBelowTerm: p.consensusTerm},
 			},
 		}
 		ps.Set(poolerID, poolerState)
