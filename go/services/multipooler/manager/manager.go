@@ -176,10 +176,9 @@ type MultiPoolerManager struct {
 
 // promotionState tracks which parts of the promotion are complete
 type promotionState struct {
-	isPrimaryInPostgres    bool
-	isPrimaryInTopology    bool
-	syncReplicationMatches bool
-	currentLSN             string
+	isPrimaryInPostgres bool
+	isPrimaryInTopology bool
+	currentLSN          string
 }
 
 // demotionState tracks which parts of the demotion are complete
@@ -1114,10 +1113,9 @@ func (pm *MultiPoolerManager) drainWriteActivity(ctx context.Context, drainTimeo
 }
 
 // checkPromotionState checks the current state to determine what steps remain
-func (pm *MultiPoolerManager) checkPromotionState(ctx context.Context, syncReplicationConfig *multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest) (*promotionState, error) {
+func (pm *MultiPoolerManager) checkPromotionState(ctx context.Context) (*promotionState, error) {
 	state := &promotionState{}
 
-	// Check PostgreSQL promotion state
 	isInRecovery, err := pm.isInRecovery(ctx)
 	if err != nil {
 		pm.logger.ErrorContext(ctx, "Failed to check recovery status", "error", err)
@@ -1127,7 +1125,6 @@ func (pm *MultiPoolerManager) checkPromotionState(ctx context.Context, syncRepli
 	state.isPrimaryInPostgres = !isInRecovery
 
 	if state.isPrimaryInPostgres {
-		// Get current primary LSN
 		state.currentLSN, err = pm.getPrimaryLSN(ctx)
 		if err != nil {
 			pm.logger.ErrorContext(ctx, "Failed to get current LSN", "error", err)
@@ -1135,37 +1132,15 @@ func (pm *MultiPoolerManager) checkPromotionState(ctx context.Context, syncRepli
 		}
 	}
 
-	// Check topology state
 	pm.mu.Lock()
 	poolerType := pm.multipooler.Type
 	pm.mu.Unlock()
 
 	state.isPrimaryInTopology = (poolerType == clustermetadatapb.PoolerType_PRIMARY)
 
-	// Default: if no sync config requested, consider it as matching (no requirements to check)
-	state.syncReplicationMatches = true
-
-	// Check sync replication state if config was provided
-	if syncReplicationConfig != nil {
-		if state.isPrimaryInPostgres {
-			state.syncReplicationMatches = false
-			currentConfig, err := pm.getSynchronousReplicationConfig(ctx)
-			if err != nil {
-				pm.logger.WarnContext(ctx, "Failed to get current sync replication config", "error", err)
-			}
-			if err == nil {
-				state.syncReplicationMatches = pm.syncReplicationConfigMatches(currentConfig, syncReplicationConfig)
-			}
-		} else {
-			// Node is a standby being promoted - it doesn't have sync replication configured yet
-			state.syncReplicationMatches = false
-		}
-	}
-
 	pm.logger.InfoContext(ctx, "Checked promotion state",
 		"is_primary_in_postgres", state.isPrimaryInPostgres,
-		"is_primary_in_topology", state.isPrimaryInTopology,
-		"sync_replication_matches", state.syncReplicationMatches)
+		"is_primary_in_topology", state.isPrimaryInTopology)
 
 	return state, nil
 }
@@ -1258,31 +1233,21 @@ func (pm *MultiPoolerManager) updateTopologyAfterPromotion(ctx context.Context, 
 	return nil
 }
 
-// configureReplicationAfterPromotion applies synchronous replication configuration
-func (pm *MultiPoolerManager) configureReplicationAfterPromotion(ctx context.Context, state *promotionState, syncReplicationConfig *multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest) error {
-	if syncReplicationConfig == nil {
-		return nil // No configuration requested
-	}
-
-	// Return early if already configured
-	if state.syncReplicationMatches {
-		pm.logger.InfoContext(ctx, "Sync replication already configured, skipping")
+// configureReplicationAfterPromotion applies the synchronous_standby_names GUC derived
+// from the proposed rule's durability policy. standbyNamesStr is empty for async clusters.
+func (pm *MultiPoolerManager) configureReplicationAfterPromotion(ctx context.Context, _ *promotionState, standbyNamesStr string) error {
+	if standbyNamesStr == "" {
 		return nil
 	}
 
-	pm.logger.InfoContext(ctx, "Sync replication configuration needed")
 	pm.logger.InfoContext(ctx, "Configuring synchronous replication for new cohort")
-	// Use the locked version since we're already holding the action lock from Promote
-	err := pm.configureSynchronousReplicationLocked(ctx,
-		syncReplicationConfig.SynchronousCommit,
-		syncReplicationConfig.SynchronousMethod,
-		syncReplicationConfig.NumSync,
-		syncReplicationConfig.StandbyIds,
-		syncReplicationConfig.ReloadConfig,
-		syncReplicationConfig.Force)
-	if err != nil {
-		pm.logger.ErrorContext(ctx, "Failed to configure synchronous replication", "error", err)
-		return mterrors.Wrap(err, "promotion succeeded but failed to configure synchronous replication")
+
+	if err := pm.setSynchronousCommit(ctx, multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_WRITE); err != nil {
+		return mterrors.Wrap(err, "promotion succeeded but failed to set synchronous_commit")
+	}
+
+	if err := pm.applyStandbyNamesGUC(ctx, standbyNamesStr); err != nil {
+		return mterrors.Wrap(err, "promotion succeeded but failed to set synchronous_standby_names")
 	}
 
 	return nil

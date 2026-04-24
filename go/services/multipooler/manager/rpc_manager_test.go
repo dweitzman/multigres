@@ -291,21 +291,6 @@ func TestActionLock_MutationMethodsTimeout(t *testing.T) {
 			},
 		},
 		{
-			name:       "ConfigureSynchronousReplication times out when lock is held",
-			poolerType: clustermetadatapb.PoolerType_PRIMARY,
-			callMethod: func(ctx context.Context) error {
-				return manager.ConfigureSynchronousReplication(
-					ctx,
-					multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
-					multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
-					1,
-					[]*clustermetadatapb.ID{serviceID},
-					true,  // reloadConfig
-					false, // force
-				)
-			},
-		},
-		{
 			name:       "ChangeType times out when lock is held",
 			poolerType: clustermetadatapb.PoolerType_PRIMARY,
 			callMethod: func(ctx context.Context) error {
@@ -1710,114 +1695,6 @@ func TestReplicationStatus(t *testing.T) {
 	})
 }
 
-func TestConfigureSynchronousReplication_HistoryFailurePreventGUCUpdates(t *testing.T) {
-	// This test verifies that if updateRule fails,
-	// the synchronous_commit and synchronous_standby_names GUCs are NOT updated.
-	// This ensures that we only update GUCs if the rule update succeeds.
-
-	ctx := context.Background()
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-
-	serviceID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
-		Cell:      "zone1",
-		Name:      "test-primary",
-	}
-
-	ts, _ := memorytopo.NewServerAndFactory(ctx, "zone1")
-	defer ts.Close()
-
-	poolerDir := t.TempDir()
-	createPgDataDir(t, poolerDir)
-
-	database := "testdb"
-	addDatabaseToTopo(t, ts, database)
-
-	multipooler := &clustermetadatapb.MultiPooler{
-		Id:            serviceID,
-		Database:      database,
-		Hostname:      "localhost",
-		PortMap:       map[string]int32{"grpc": 8080, "postgres": 5432},
-		Type:          clustermetadatapb.PoolerType_PRIMARY,
-		ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-		TableGroup:    constants.DefaultTableGroup,
-		Shard:         constants.DefaultShard,
-	}
-	require.NoError(t, ts.CreateMultiPooler(ctx, multipooler))
-
-	multipooler.PoolerDir = poolerDir
-
-	// Set consensus term
-	setTermForTest(t, poolerDir, &consensusdatapb.TermRevocation{
-		RevokedBelowTerm: 1,
-	})
-
-	config := &Config{
-		TopoClient: ts,
-	}
-	manager, err := NewMultiPoolerManager(logger, multipooler, config)
-	require.NoError(t, err)
-	defer manager.Shutdown()
-
-	// Initialize consensus state so the manager can read the term
-	manager.mu.Lock()
-	manager.consensusState = NewConsensusState(poolerDir, serviceID)
-	manager.mu.Unlock()
-
-	// Load the term from file
-	_, err = manager.consensusState.Load()
-	require.NoError(t, err, "Failed to load consensus state")
-
-	// Set up mock query service
-	mockQueryService := mock.NewQueryService()
-
-	// Mock for startup: pg_is_in_recovery returns false (PRIMARY)
-	mockQueryService.AddQueryPattern("SELECT pg_is_in_recovery",
-		mock.MakeQueryResult([]string{"pg_is_in_recovery"}, [][]any{{false}}))
-
-	manager.qsc = &mockPoolerController{queryService: mockQueryService}
-	manager.rules = &fakeRuleStore{updateErr: mterrors.New(mtrpcpb.Code_DEADLINE_EXCEEDED, "timeout waiting for sync replication")}
-
-	// Mark as initialized
-	err = manager.setInitialized()
-	require.NoError(t, err)
-
-	// Start and wait for ready
-	senv := servenv.NewServEnv(viperutil.NewRegistry())
-	go manager.Start(senv)
-	require.Eventually(t, func() bool {
-		return manager.GetState() == ManagerStateReady
-	}, 5*time.Second, 100*time.Millisecond)
-
-	// We do NOT add expectations for ALTER SYSTEM SET queries
-	// If they get called, ExpectationsWereMet() will fail
-
-	// Call ConfigureSynchronousReplication
-	standbyIDs := []*clustermetadatapb.ID{
-		{Cell: "zone1", Name: "replica-1"},
-		{Cell: "zone1", Name: "replica-2"},
-	}
-
-	err = manager.ConfigureSynchronousReplication(
-		ctx,
-		multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_WRITE,
-		multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
-		1,
-		standbyIDs,
-		true,  // reloadConfig
-		false, // force
-	)
-
-	// Verify it failed with the expected error
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to record replication config history")
-
-	// CRITICAL: Verify that NO additional queries were executed beyond the INSERT
-	// This proves that setSynchronousCommit and setSynchronousStandbyNames were NOT called
-	assert.NoError(t, mockQueryService.ExpectationsWereMet(),
-		"If this fails, it means GUC update queries were called despite history insert failure")
-}
-
 func TestUpdateSynchronousStandbyList_HistoryFailurePreventsGUCUpdate(t *testing.T) {
 	// This test verifies that if updateRule fails during
 	// UpdateSynchronousStandbyList, the synchronous_standby_names GUC is NOT updated.
@@ -1883,7 +1760,25 @@ func TestUpdateSynchronousStandbyList_HistoryFailurePreventsGUCUpdate(t *testing
 		mock.MakeQueryResult([]string{"pg_is_in_recovery"}, [][]any{{false}}))
 
 	manager.qsc = &mockPoolerController{queryService: mockQueryService}
-	manager.rules = &fakeRuleStore{updateErr: mterrors.New(mtrpcpb.Code_DEADLINE_EXCEEDED, "timeout waiting for sync replication")}
+
+	// Provide a cached rule with two standbys and an AT_LEAST_N(2) policy so the
+	// function gets past the "not configured" guard and reaches updateRule.
+	existingCohort := []*clustermetadatapb.ID{
+		{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica-1"},
+		{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica-2"},
+	}
+	manager.rules = &fakeRuleStore{
+		pos: &consensusdatapb.PoolerPosition{
+			Rule: &consensusdatapb.ShardRule{
+				DurabilityPolicy: &clustermetadatapb.DurabilityPolicy{
+					QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_AT_LEAST_N,
+					RequiredCount: 2,
+				},
+				CohortMembers: existingCohort,
+			},
+		},
+		updateErr: mterrors.New(mtrpcpb.Code_DEADLINE_EXCEEDED, "timeout waiting for sync replication"),
+	}
 
 	err = manager.setInitialized()
 	require.NoError(t, err)
@@ -1894,15 +1789,8 @@ func TestUpdateSynchronousStandbyList_HistoryFailurePreventsGUCUpdate(t *testing
 		return manager.GetState() == ManagerStateReady
 	}, 5*time.Second, 100*time.Millisecond)
 
-	// Mock getSynchronousReplicationConfig (called to get current config)
-	// Returns current config with 2 standbys
-	mockQueryService.AddQueryPattern("SHOW synchronous_standby_names",
-		mock.MakeQueryResult([]string{"synchronous_standby_names"}, [][]any{{"FIRST 1 (zone1_replica-1, zone1_replica-2)"}}))
-	mockQueryService.AddQueryPattern("SHOW synchronous_commit",
-		mock.MakeQueryResult([]string{"synchronous_commit"}, [][]any{{"remote_write"}}))
-
-	// We do NOT add expectations for ALTER SYSTEM SET synchronous_standby_names
-	// If it gets called, ExpectationsWereMet() will fail
+	// We do NOT add expectations for ALTER SYSTEM SET synchronous_standby_names.
+	// If it gets called, ExpectationsWereMet() will fail.
 
 	// Call UpdateSynchronousStandbyList to add a new standby
 	newStandby := &clustermetadatapb.ID{Cell: "zone1", Name: "replica-3"}

@@ -395,107 +395,23 @@ func (pm *MultiPoolerManager) ResetReplication(ctx context.Context) error {
 	return nil
 }
 
-// ConfigureSynchronousReplication configures PostgreSQL synchronous replication settings
-func (pm *MultiPoolerManager) ConfigureSynchronousReplication(ctx context.Context, synchronousCommit multipoolermanagerdatapb.SynchronousCommitLevel, synchronousMethod multipoolermanagerdatapb.SynchronousMethod, numSync int32, standbyIDs []*clustermetadatapb.ID, reloadConfig bool, force bool) error {
-	if err := pm.checkReady(); err != nil {
-		return err
-	}
-
-	// Acquire the action lock to ensure only one mutation runs at a time
-	ctx, err := pm.actionLock.Acquire(ctx, "ConfigureSynchronousReplication")
-	if err != nil {
-		return err
-	}
-	defer pm.actionLock.Release(ctx)
-
-	return pm.configureSynchronousReplicationLocked(ctx, synchronousCommit, synchronousMethod, numSync, standbyIDs, reloadConfig, force)
-}
-
-// configureSynchronousReplicationLocked configures PostgreSQL synchronous replication settings.
-// The caller MUST already hold the action lock.
-func (pm *MultiPoolerManager) configureSynchronousReplicationLocked(ctx context.Context, synchronousCommit multipoolermanagerdatapb.SynchronousCommitLevel, synchronousMethod multipoolermanagerdatapb.SynchronousMethod, numSync int32, standbyIDs []*clustermetadatapb.ID, reloadConfig bool, force bool) error {
-	// Validate input parameters
-	standbyNames, err := validateSyncReplicationParams(numSync, standbyIDs)
-	if err != nil {
-		return err
-	}
-
-	// Check PRIMARY guardrails (pooler type and non-recovery mode)
-	if err := pm.checkPrimaryGuardrails(ctx); err != nil {
-		return err
-	}
-
-	// Insert history before applying GUCs.
-	// Rationale: we want to ensure that a new cohort is advertised
-	// before this primary can accept ACKs from it.
-	// This is for safe replica joining of the cluster.
-	// It will ensure multiorch can discover the new cohort during a failure.
-	revocation, err := pm.consensusState.GetRevocation(ctx)
-	if err != nil {
-		return mterrors.Wrap(err, "failed to get consensus term")
-	}
-	update := newRuleUpdate(
-		revocation.GetRevokedBelowTerm(),
-		pm.serviceID,
-		"replication_config",
-		"ConfigureSynchronousReplication called",
-		time.Now()).
-		withCohort(standbyIDs).
-		withOperation("configure")
-	if force {
-		update.withForce()
-	}
-	if _, err := pm.rules.updateRule(ctx, update); err != nil {
-		return mterrors.Wrap(err, "failed to record replication config history")
-	}
-
-	// Set synchronous_commit level
-	if err := pm.setSynchronousCommit(ctx, synchronousCommit); err != nil {
-		return err
-	}
-
-	// Build and set synchronous_standby_names
-	if err := pm.setSynchronousStandbyNames(ctx, synchronousMethod, numSync, standbyNames); err != nil {
-		return err
-	}
-
-	// Reload configuration if requested
-	if reloadConfig {
-		if err := pm.reloadPostgresConfig(ctx); err != nil {
-			return err
-		}
-	}
-
-	pm.logger.InfoContext(ctx, "ConfigureSynchronousReplication completed successfully",
-		"synchronous_commit", synchronousCommit,
-		"synchronous_method", synchronousMethod,
-		"num_sync", numSync,
-		"standby_ids", standbyIDs,
-		"reload_config", reloadConfig)
-
-	return nil
-}
-
 // UpdateSynchronousStandbyList updates PostgreSQL synchronous_standby_names by adding,
-// removing, or replacing members. It is idempotent and only valid when synchronous
-// replication is already configured.
+// removing, or replacing members. It derives the correct GUC value from the committed
+// rule's durability policy rather than re-reading the current GUC format from postgres.
 func (pm *MultiPoolerManager) UpdateSynchronousStandbyList(ctx context.Context, operation multipoolermanagerdatapb.StandbyUpdateOperation, standbyIDs []*clustermetadatapb.ID, reloadConfig bool, consensusTerm int64, force bool, coordinatorID *clustermetadatapb.ID) error {
 	if err := pm.checkReady(); err != nil {
 		return err
 	}
 
-	// Validate operation
 	if operation == multipoolermanagerdatapb.StandbyUpdateOperation_STANDBY_UPDATE_OPERATION_UNSPECIFIED {
 		return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "operation must be specified")
 	}
 
-	// Validate standby IDs using the shared validation function
-	requestedApplicationNames, err := validateStandbyIDs(standbyIDs)
+	requestedPoolerIDs, err := validateStandbyIDs(standbyIDs)
 	if err != nil {
 		return err
 	}
 
-	// Pre-compute history fields before acquiring the lock.
 	leaderID := pm.servicePoolerID
 
 	ctx, err = pm.actionLock.Acquire(ctx, "UpdateSynchronousStandbyList")
@@ -504,93 +420,67 @@ func (pm *MultiPoolerManager) UpdateSynchronousStandbyList(ctx context.Context, 
 	}
 	defer pm.actionLock.Release(ctx)
 
-	// === Validation ===
-	// TODO: We need to validate consensus term here.
-	// We should check if the request is a valid term.
-	// If it's a newer term and probably we need to demote
-	// ourself. But details yet to be implemented
-
-	// Check PRIMARY guardrails (pooler type and non-recovery mode)
 	if err = pm.checkPrimaryGuardrails(ctx); err != nil {
 		return err
 	}
 
-	// === Parse Current Configuration ===
-
-	// Get current synchronous replication configuration
-	syncConfig, err := pm.getSynchronousReplicationConfig(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Check if synchronous replication is configured
-	if len(syncConfig.StandbyIds) == 0 {
-		pm.logger.ErrorContext(ctx, "UpdateSynchronousStandbyList requires synchronous replication to be configured")
+	// Use the committed rule as the source of truth for the current cohort and policy.
+	currentRule := pm.rules.cachedPosition().GetRule()
+	if len(currentRule.GetCohortMembers()) == 0 {
 		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
-			"synchronous replication is not configured - use ConfigureSynchronousReplication first")
+			"synchronous replication is not configured")
 	}
 
-	// Convert current config IDs to application names for set operations.
-	// These IDs were previously validated and written by us, so this cannot fail in practice.
-	currentApplicationNames, err := toPoolerIDs(syncConfig.StandbyIds)
+	policy, err := consensus.NewPolicyFromProto(currentRule.GetDurabilityPolicy())
 	if err != nil {
-		return err
+		return mterrors.Wrap(err, "failed to parse durability policy from current rule")
 	}
 
-	// Build the current value string for comparison
-	currentValue, err := buildSynchronousStandbyNamesValue(syncConfig.SynchronousMethod, syncConfig.NumSync, currentApplicationNames)
+	currentPoolerIDs, err := toPoolerIDs(currentRule.GetCohortMembers())
 	if err != nil {
-		return err
+		return mterrors.Wrap(err, "invalid current cohort")
 	}
 
-	// === Apply Operation ===
-
-	var updatedStandbys []poolerID
+	var updatedPoolerIDs []poolerID
 	switch operation {
 	case multipoolermanagerdatapb.StandbyUpdateOperation_STANDBY_UPDATE_OPERATION_ADD:
-		updatedStandbys = applyAddOperation(currentApplicationNames, requestedApplicationNames)
-
+		updatedPoolerIDs = applyAddOperation(currentPoolerIDs, requestedPoolerIDs)
 	case multipoolermanagerdatapb.StandbyUpdateOperation_STANDBY_UPDATE_OPERATION_REMOVE:
-		updatedStandbys = applyRemoveOperation(currentApplicationNames, requestedApplicationNames)
-
+		updatedPoolerIDs = applyRemoveOperation(currentPoolerIDs, requestedPoolerIDs)
 	default:
-		return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
-			"unsupported operation: "+operation.String())
+		return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "unsupported operation: "+operation.String())
 	}
 
-	// Validate that the final list is not empty
-	if len(updatedStandbys) == 0 {
-		return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
-			"resulting standby list cannot be empty after operation")
+	if len(updatedPoolerIDs) == 0 {
+		return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "resulting standby list cannot be empty after operation")
 	}
 
-	// === Build and Apply New Configuration ===
+	updatedIDs := make([]*clustermetadatapb.ID, len(updatedPoolerIDs))
+	for i, pid := range updatedPoolerIDs {
+		updatedIDs[i] = pid.id
+	}
 
-	// Build new synchronous_standby_names value using shared helper
-	newValue, err := buildSynchronousStandbyNamesValue(syncConfig.SynchronousMethod, syncConfig.NumSync, updatedStandbys)
+	// Derive the new GUC string from the policy.
+	currentValue, err := policy.StandbyNames(currentRule.GetCohortMembers(), idToAppName)
 	if err != nil {
-		return err
+		return mterrors.Wrap(err, "failed to compute current standby names")
+	}
+	newValue, err := policy.StandbyNames(updatedIDs, idToAppName)
+	if err != nil {
+		return mterrors.Wrap(err, "failed to compute new standby names")
 	}
 
-	// Check if there are any changes (idempotent)
 	if currentValue == newValue {
 		return nil
 	}
 
 	operationName := standbyUpdateOperationName(operation)
 
-	// Insert history before applying GUCs
-	// Rationale: we want to ensure that a new cohort is advertised
+	// Insert history before applying GUCs so the new cohort is advertised
 	// before this primary can accept ACKs from it.
-	// This is for safe replica joining of the cluster.
-	// It will ensure multiorch can discover the new cohort during a failure.
 	coordID := coordinatorID
 	if coordID == nil {
 		coordID = pm.serviceID
-	}
-	updatedStandbyIDs := make([]*clustermetadatapb.ID, len(updatedStandbys))
-	for i, p := range updatedStandbys {
-		updatedStandbyIDs[i] = p.id
 	}
 	standbyUpdate := newRuleUpdate(
 		consensusTerm,
@@ -599,7 +489,7 @@ func (pm *MultiPoolerManager) UpdateSynchronousStandbyList(ctx context.Context, 
 		"UpdateSynchronousStandbyList: "+operationName,
 		time.Now()).
 		withLeader(leaderID.id).
-		withCohort(updatedStandbyIDs).
+		withCohort(updatedIDs).
 		withOperation(operationName)
 	if force {
 		standbyUpdate.withForce()
@@ -608,12 +498,10 @@ func (pm *MultiPoolerManager) UpdateSynchronousStandbyList(ctx context.Context, 
 		return mterrors.Wrap(err, "failed to record replication config history")
 	}
 
-	// Apply the setting
 	if err = pm.applySynchronousStandbyNames(ctx, newValue); err != nil {
 		return err
 	}
 
-	// Reload configuration if requested
 	if reloadConfig {
 		if err := pm.reloadPostgresConfig(ctx); err != nil {
 			return err
@@ -628,8 +516,6 @@ func (pm *MultiPoolerManager) UpdateSynchronousStandbyList(ctx context.Context, 
 		"consensus_term", consensusTerm,
 		"force", force)
 
-	// Push an immediate health snapshot so orchestrators learn about the changed
-	// synchronous standby list without waiting for the next 30-second heartbeat.
 	pm.broadcastHealth()
 	return nil
 }
@@ -1109,7 +995,7 @@ type promoteResult struct {
 
 // promote promotes a standby to primary as the proposal leader during Propose().
 // The action lock must already be held by the caller.
-func (pm *MultiPoolerManager) promote(ctx context.Context, proposal *consensusdatapb.CoordinatorProposal, syncReplicationConfig *multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest, force bool) (*promoteResult, error) {
+func (pm *MultiPoolerManager) promote(ctx context.Context, proposal *consensusdatapb.CoordinatorProposal, standbyNamesStr string, force bool) (*promoteResult, error) {
 	consensusTerm := proposal.GetTermRevocation().GetRevokedBelowTerm()
 	expectedLSN := proposal.GetRecruitmentPosition().GetLsn()
 	coordinatorID := proposal.GetTermRevocation().GetAcceptedCoordinatorId()
@@ -1126,7 +1012,7 @@ func (pm *MultiPoolerManager) promote(ctx context.Context, proposal *consensusda
 		consensus.CompareRuleNumbers(proposedRN, currentPos.GetRule().GetRuleNumber()) == 0
 
 	// Check current promotion state to determine what needs to be done
-	state, err := pm.checkPromotionState(ctx, syncReplicationConfig)
+	state, err := pm.checkPromotionState(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1134,14 +1020,14 @@ func (pm *MultiPoolerManager) promote(ctx context.Context, proposal *consensusda
 	// Guard rail: Check topology type and validate state consistency
 	if state.isPrimaryInTopology {
 		pm.logger.InfoContext(ctx, "Promote called but topology already shows PRIMARY - validating state consistency")
-		if state.isPrimaryInPostgres && state.syncReplicationMatches {
-			pm.logger.InfoContext(ctx, "Promotion already complete and consistent (idempotent)", "lsn", state.currentLSN)
+		if state.isPrimaryInPostgres {
+			pm.logger.InfoContext(ctx, "Promotion already complete (idempotent)", "lsn", state.currentLSN)
 			return &promoteResult{finalLSN: state.currentLSN, wasAlreadyPrimary: true}, nil
 		}
 		if !force {
 			return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
-				fmt.Sprintf("inconsistent state: topology is PRIMARY but PostgreSQL state doesn't match (pg_primary=%v, sync_matches=%v). Use force=true.",
-					state.isPrimaryInPostgres, state.syncReplicationMatches))
+				fmt.Sprintf("inconsistent state: topology is PRIMARY but PostgreSQL is not primary. Use force=true. (pg_primary=%v)",
+					state.isPrimaryInPostgres))
 		}
 	}
 
@@ -1156,7 +1042,7 @@ func (pm *MultiPoolerManager) promote(ctx context.Context, proposal *consensusda
 		return nil, err
 	}
 
-	if err := pm.configureReplicationAfterPromotion(ctx, state, syncReplicationConfig); err != nil {
+	if err := pm.configureReplicationAfterPromotion(ctx, state, standbyNamesStr); err != nil {
 		return nil, err
 	}
 
@@ -1215,7 +1101,7 @@ func (pm *MultiPoolerManager) promote(ctx context.Context, proposal *consensusda
 
 	return &promoteResult{
 		finalLSN:          finalLSN,
-		wasAlreadyPrimary: state.isPrimaryInPostgres && state.isPrimaryInTopology && state.syncReplicationMatches,
+		wasAlreadyPrimary: state.isPrimaryInPostgres && state.isPrimaryInTopology,
 	}, nil
 }
 

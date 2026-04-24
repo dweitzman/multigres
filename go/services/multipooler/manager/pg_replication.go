@@ -17,7 +17,6 @@ package manager
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -118,15 +117,6 @@ func poolerIDsToAppNames(ids []poolerID) []string {
 		strs[i] = n.appName
 	}
 	return strs
-}
-
-// formatStandbyList formats a list of pooler IDs as a comma-separated list of quoted application names.
-func formatStandbyList(ids []poolerID) string {
-	quoted := make([]string, len(ids))
-	for i, id := range ids {
-		quoted[i] = fmt.Sprintf(`"%s"`, id.appName)
-	}
-	return strings.Join(quoted, ", ")
 }
 
 // toPoolerIDs converts a slice of IDs to their poolerID representations.
@@ -803,27 +793,6 @@ func (pm *MultiPoolerManager) setSynchronousCommit(ctx context.Context, synchron
 	return nil
 }
 
-// buildSynchronousStandbyNamesValue constructs the synchronous_standby_names value string
-// This produces values like: FIRST 1 ("standby-1", "standby-2") or ANY 1 ("standby-1", "standby-2")
-func buildSynchronousStandbyNamesValue(method multipoolermanagerdatapb.SynchronousMethod, numSync int32, names []poolerID) (string, error) {
-	if len(names) == 0 {
-		return "", nil
-	}
-
-	var methodStr string
-	switch method {
-	case multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST:
-		methodStr = "FIRST"
-	case multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_ANY:
-		methodStr = "ANY"
-	default:
-		return "", mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
-			fmt.Sprintf("invalid synchronous method: %s, must be FIRST or ANY", method.String()))
-	}
-
-	return fmt.Sprintf("%s %d (%s)", methodStr, numSync, formatStandbyList(names)), nil
-}
-
 // applySynchronousStandbyNames applies the synchronous_standby_names setting to PostgreSQL
 func (pm *MultiPoolerManager) applySynchronousStandbyNames(ctx context.Context, value string) error {
 	pm.logger.InfoContext(ctx, "Setting synchronous_standby_names", "value", value)
@@ -839,44 +808,6 @@ func (pm *MultiPoolerManager) applySynchronousStandbyNames(ctx context.Context, 
 	}
 
 	return nil
-}
-
-// setSynchronousStandbyNames builds and sets the PostgreSQL synchronous_standby_names configuration
-// Format: https://www.postgresql.org/docs/current/runtime-config-replication.html#GUC-SYNCHRONOUS-STANDBY-NAMES
-// Examples:
-//
-//	FIRST 2 (standby1, standby2, standby3)
-//	ANY 1 (standby1, standby2)
-//
-// Note: Use '*' to match all connected standbys, or specify explicit standby application_name values
-// Application names are generated from multipooler IDs using the shared newPoolerID helper
-func (pm *MultiPoolerManager) setSynchronousStandbyNames(ctx context.Context, synchronousMethod multipoolermanagerdatapb.SynchronousMethod, numSync int32, names []poolerID) error {
-	// If standby list is empty, clear synchronous_standby_names
-	if len(names) == 0 {
-		execCtx, execCancel := context.WithTimeout(ctx, 500*time.Millisecond)
-		defer execCancel()
-
-		pm.logger.InfoContext(ctx, "Clearing synchronous_standby_names (empty standby list)")
-		if err := pm.exec(execCtx, "ALTER SYSTEM RESET synchronous_standby_names"); err != nil {
-			pm.logger.ErrorContext(ctx, "Failed to clear synchronous_standby_names", "error", err)
-			return mterrors.Wrap(err, "failed to clear synchronous_standby_names")
-		}
-		return nil
-	}
-
-	// If numSync was not provided, default to 1
-	if numSync == 0 {
-		numSync = 1
-	}
-
-	// Build the synchronous_standby_names value using the shared helper
-	standbyNamesValue, err := buildSynchronousStandbyNamesValue(synchronousMethod, numSync, names)
-	if err != nil {
-		return err
-	}
-
-	// Apply the setting
-	return pm.applySynchronousStandbyNames(ctx, standbyNamesValue)
 }
 
 // getSynchronousReplicationConfig retrieves and parses the current synchronous replication configuration
@@ -1005,51 +936,6 @@ func (pm *MultiPoolerManager) resetSynchronousReplication(ctx context.Context) e
 	return nil
 }
 
-// syncReplicationConfigMatches checks if the current sync replication config matches the requested config
-func (pm *MultiPoolerManager) syncReplicationConfigMatches(current *multipoolermanagerdatapb.SynchronousReplicationConfiguration, requested *multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest) bool {
-	// Check synchronous commit level
-	if current.SynchronousCommit != requested.SynchronousCommit {
-		return false
-	}
-
-	// Check synchronous method
-	if current.SynchronousMethod != requested.SynchronousMethod {
-		return false
-	}
-
-	// Check num_sync
-	if current.NumSync != requested.NumSync {
-		return false
-	}
-
-	// Check standby IDs (must match exactly 1:1, so sort and compare)
-	if len(current.StandbyIds) != len(requested.StandbyIds) {
-		return false
-	}
-
-	// Sort both lists by cell_name for comparison
-	currentSorted := make([]string, len(current.StandbyIds))
-	for i, id := range current.StandbyIds {
-		currentSorted[i] = fmt.Sprintf("%s_%s", id.Cell, id.Name)
-	}
-	sort.Strings(currentSorted)
-
-	requestedSorted := make([]string, len(requested.StandbyIds))
-	for i, id := range requested.StandbyIds {
-		requestedSorted[i] = fmt.Sprintf("%s_%s", id.Cell, id.Name)
-	}
-	sort.Strings(requestedSorted)
-
-	// Compare sorted lists element by element
-	for i := range currentSorted {
-		if currentSorted[i] != requestedSorted[i] {
-			return false
-		}
-	}
-
-	return true
-}
-
 // ----------------------------------------------------------------------------
 // Validation Helpers
 // ----------------------------------------------------------------------------
@@ -1063,34 +949,6 @@ func validateStandbyIDs(standbyIDs []*clustermetadatapb.ID) ([]poolerID, error) 
 		return pids, mterrors.Wrap(err, "invalid standby_ids")
 	}
 	return pids, nil
-}
-
-// validateSyncReplicationParams validates the parameters for ConfigureSynchronousReplication
-func validateSyncReplicationParams(numSync int32, standbyIDs []*clustermetadatapb.ID) ([]poolerID, error) {
-	// Validate numSync is non-negative
-	if numSync < 0 {
-		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
-			fmt.Sprintf("num_sync must be non-negative, got: %d", numSync))
-	}
-
-	// If standbyIDs are provided, validate them
-	if len(standbyIDs) > 0 {
-		// Validate that numSync doesn't exceed the number of standbys (PostgreSQL requirement)
-		// Note: numSync=0 is allowed and will be defaulted to 1 in setSynchronousStandbyNames
-		if numSync > int32(len(standbyIDs)) {
-			return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
-				fmt.Sprintf("num_sync (%d) cannot exceed number of standby_ids (%d)", numSync, len(standbyIDs)))
-		}
-
-		// Validate each standby ID
-		names, err := validateStandbyIDs(standbyIDs)
-		if err != nil {
-			return nil, err
-		}
-		return names, nil
-	}
-
-	return nil, nil
 }
 
 // ----------------------------------------------------------------------------

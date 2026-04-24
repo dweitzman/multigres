@@ -21,6 +21,7 @@ import (
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/mterrors"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
@@ -308,8 +309,12 @@ func (pm *MultiPoolerManager) Propose(ctx context.Context, req *consensusdatapb.
 		pm.logger.InfoContext(ctx, "Propose: self is proposal leader, promoting to primary",
 			"term", proposal.GetTermRevocation().GetRevokedBelowTerm())
 
-		syncCfg := proposedRuleToSyncConfig(proposal.GetProposedRule())
-		result, err := pm.promote(ctx, proposal, syncCfg, false)
+		standbyNamesStr, err := standbyNamesForRule(proposal.GetProposedRule())
+		if err != nil {
+			cs, _ := pm.getCachedConsensusStatus()
+			return &consensusdatapb.ProposeResponse{ConsensusStatus: cs}, mterrors.Wrap(err, "failed to compute standby names")
+		}
+		result, err := pm.promote(ctx, proposal, standbyNamesStr, false)
 		if err != nil {
 			cs, _ := pm.getCachedConsensusStatus()
 			return &consensusdatapb.ProposeResponse{ConsensusStatus: cs}, mterrors.Wrap(err, "promote failed")
@@ -360,20 +365,17 @@ func (pm *MultiPoolerManager) validateProposalTerm(ctx context.Context, proposal
 	return nil
 }
 
-// proposedRuleToSyncConfig converts a ShardRule's cohort members into a
-// ConfigureSynchronousReplicationRequest suitable for passing to promote().
-// Returns nil if the proposed rule has no cohort members (async replication).
-func proposedRuleToSyncConfig(rule *consensusdatapb.ShardRule) *multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest {
+// standbyNamesForRule derives the synchronous_standby_names GUC value from the
+// proposed rule's durability policy. Returns "" if the rule has no cohort (async).
+func standbyNamesForRule(rule *consensusdatapb.ShardRule) (string, error) {
 	if rule == nil || len(rule.GetCohortMembers()) == 0 {
-		return nil
+		return "", nil
 	}
-	return &multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest{
-		SynchronousCommit: multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_WRITE,
-		SynchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_ANY,
-		NumSync:           1,
-		StandbyIds:        rule.GetCohortMembers(),
-		ReloadConfig:      true,
+	policy, err := consensus.NewPolicyFromProto(rule.GetDurabilityPolicy())
+	if err != nil {
+		return "", fmt.Errorf("failed to parse durability policy: %w", err)
 	}
+	return policy.StandbyNames(rule.GetCohortMembers(), idToAppName)
 }
 
 // configureReplicationToLeader sets primary_conninfo on this replica to point at the

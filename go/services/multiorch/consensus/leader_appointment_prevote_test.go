@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/rpcclient"
 	"github.com/multigres/multigres/go/common/topoclient"
 
@@ -32,6 +33,13 @@ import (
 	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
+
+func mustPolicy(t *testing.T, proto *clustermetadatapb.DurabilityPolicy) commonconsensus.DurabilityPolicy {
+	t.Helper()
+	policy, err := commonconsensus.NewPolicyFromProto(proto)
+	require.NoError(t, err)
+	return policy
+}
 
 // createPoolerForPreVote creates a pooler with specific health state and consensus term for testing
 func createPoolerForPreVote(name string, isHealthy bool, termNumber int64, lastAcceptanceTime *time.Time, acceptedFrom *clustermetadatapb.ID) *multiorchdatapb.PoolerHealthState {
