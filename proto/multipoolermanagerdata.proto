@@ -336,35 +336,6 @@ message EmergencyDemoteResponse {
   int32 connections_terminated = 4;
 }
 
-// DemoteStalePrimary demotes a stale primary that came back online after failover.
-// This is a complete operation that:
-// 1. Stops postgres if running
-// 2. Runs pg_rewind to sync with the correct primary
-// 3. Clears sync replication config
-// 4. Restarts as standby
-// 5. Updates topology to REPLICA
-message DemoteStalePrimaryRequest {
-  // Source multipooler (the correct primary) to rewind to
-  clustermetadata.MultiPooler source = 1;
-
-  // Consensus term from the correct primary
-  int64 consensus_term = 2;
-
-  // Force the operation even if term validation fails
-  bool force = 3;
-}
-
-message DemoteStalePrimaryResponse {
-  // True if the operation completed successfully
-  bool success = 1;
-
-  // Whether pg_rewind was performed (servers were diverged)
-  bool rewind_performed = 2;
-
-  // LSN position after becoming standby
-  string lsn_position = 3;
-}
-
 // Replication pause mode - defines what aspect of replication to pause
 enum ReplicationPauseMode {
   // PAUSE_REPLAY_ONLY pauses WAL replay only (using pg_wal_replay_pause)
@@ -579,33 +550,6 @@ message BackupMetadata {
     COMPLETE = 2;
     // TODO: add VALID/INVALID states
   }
-}
-
-// =============================================================================
-// PgRewind APIs
-// =============================================================================
-
-// RewindToSourceRequest requests pg_rewind to synchronize with a source server.
-// This operation:
-// 1. Stops PostgreSQL
-// 2. Runs pg_rewind --dry-run to check if rewind is needed
-// 3. If needed, runs actual pg_rewind
-// 4. Starts PostgreSQL
-message RewindToSourceRequest {
-  // Source multipooler (the primary) to rewind to
-  clustermetadata.MultiPooler source = 1;
-}
-
-message RewindToSourceResponse {
-  // True if the operation completed successfully
-  bool success = 1;
-
-  // Error message if operation failed
-  string error_message = 2;
-
-  // True if servers had diverged and pg_rewind was performed
-  // False if timelines were compatible and no rewind was needed
-  bool rewind_performed = 3;
 }
 
 // =============================================================================

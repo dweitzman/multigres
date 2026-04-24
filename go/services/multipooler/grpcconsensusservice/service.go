@@ -98,15 +98,6 @@ func (s *consensusService) EmergencyDemote(ctx context.Context, req *multipooler
 	return resp, nil
 }
 
-// DemoteStalePrimary demotes a stale primary that came back after failover
-func (s *consensusService) DemoteStalePrimary(ctx context.Context, req *multipoolermanagerdatapb.DemoteStalePrimaryRequest) (*multipoolermanagerdatapb.DemoteStalePrimaryResponse, error) {
-	resp, err := s.manager.DemoteStalePrimary(ctx, req.Source, req.ConsensusTerm, req.Force)
-	if err != nil {
-		return nil, mterrors.ToGRPC(err)
-	}
-	return resp, nil
-}
-
 // UpdateConsensusRule updates the synchronous standby list (quorum membership)
 func (s *consensusService) UpdateConsensusRule(ctx context.Context, req *multipoolermanagerdatapb.UpdateSynchronousStandbyListRequest) (*multipoolermanagerdatapb.UpdateSynchronousStandbyListResponse, error) {
 	err := s.manager.UpdateSynchronousStandbyList(ctx,
@@ -120,13 +111,4 @@ func (s *consensusService) UpdateConsensusRule(ctx context.Context, req *multipo
 		return nil, mterrors.ToGRPC(err)
 	}
 	return &multipoolermanagerdatapb.UpdateSynchronousStandbyListResponse{}, nil
-}
-
-// RewindToSource performs pg_rewind to synchronize this server with a source
-func (s *consensusService) RewindToSource(ctx context.Context, req *multipoolermanagerdatapb.RewindToSourceRequest) (*multipoolermanagerdatapb.RewindToSourceResponse, error) {
-	resp, err := s.manager.RewindToSource(ctx, req.Source)
-	if err != nil {
-		return nil, mterrors.ToGRPC(err)
-	}
-	return resp, nil
 }

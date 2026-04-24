@@ -134,19 +134,6 @@ func (c *Client) EmergencyDemote(ctx context.Context, pooler *clustermetadatapb.
 	return conn.consensusClient.EmergencyDemote(ctx, request)
 }
 
-// DemoteStalePrimary demotes a stale primary that came back after failover.
-func (c *Client) DemoteStalePrimary(ctx context.Context, pooler *clustermetadatapb.MultiPooler, request *multipoolermanagerdatapb.DemoteStalePrimaryRequest) (*multipoolermanagerdatapb.DemoteStalePrimaryResponse, error) {
-	conn, closer, err := c.dialPersistent(ctx, pooler)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		_ = closer()
-	}()
-
-	return conn.consensusClient.DemoteStalePrimary(ctx, request)
-}
-
 // UpdateConsensusRule updates the synchronous standby list (quorum membership).
 func (c *Client) UpdateConsensusRule(ctx context.Context, pooler *clustermetadatapb.MultiPooler, request *multipoolermanagerdatapb.UpdateSynchronousStandbyListRequest) (*multipoolermanagerdatapb.UpdateSynchronousStandbyListResponse, error) {
 	conn, closer, err := c.dialPersistent(ctx, pooler)
@@ -158,19 +145,6 @@ func (c *Client) UpdateConsensusRule(ctx context.Context, pooler *clustermetadat
 	}()
 
 	return conn.consensusClient.UpdateConsensusRule(ctx, request)
-}
-
-// RewindToSource performs pg_rewind to synchronize a replica with its source.
-func (c *Client) RewindToSource(ctx context.Context, pooler *clustermetadatapb.MultiPooler, request *multipoolermanagerdatapb.RewindToSourceRequest) (*multipoolermanagerdatapb.RewindToSourceResponse, error) {
-	conn, closer, err := c.dialPersistent(ctx, pooler)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		_ = closer()
-	}()
-
-	return conn.consensusClient.RewindToSource(ctx, request)
 }
 
 //

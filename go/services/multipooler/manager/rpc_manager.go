@@ -851,142 +851,6 @@ func (pm *MultiPoolerManager) UndoDemote(ctx context.Context) error {
 	return mterrors.New(mtrpcpb.Code_UNIMPLEMENTED, "method UndoDemote not implemented")
 }
 
-// DemoteStalePrimary demotes a stale primary that came back online after failover.
-// This is a complete operation that:
-// 1. Stops postgres if running
-// 2. Runs pg_rewind to sync with the correct primary
-// 3. Clears sync replication config
-// 4. Restarts as standby
-// 5. Updates topology to REPLICA
-func (pm *MultiPoolerManager) DemoteStalePrimary(
-	ctx context.Context,
-	source *clustermetadatapb.MultiPooler,
-	consensusTerm int64,
-	force bool,
-) (*multipoolermanagerdatapb.DemoteStalePrimaryResponse, error) {
-	if err := pm.checkReady(); err != nil {
-		return nil, err
-	}
-
-	// Validate source pooler
-	if source == nil || source.PortMap == nil {
-		return nil, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT, "source pooler or port_map is nil")
-	}
-	if source.Hostname == "" {
-		return nil, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT, "source hostname is required")
-	}
-
-	pm.logger.InfoContext(ctx, "DemoteStalePrimary RPC called",
-		"source", source.Id.Name,
-		"consensus_term", consensusTerm)
-
-	// Acquire the action lock to ensure only one mutation runs at a time
-	ctx, err := pm.actionLock.Acquire(ctx, "DemoteStalePrimary")
-	if err != nil {
-		return nil, mterrors.Wrap(err, "failed to acquire action lock")
-	}
-	defer pm.actionLock.Release(ctx)
-
-	// Check if already demoted by reading primary_term from disk.
-	// Invariant: primary_term > 0 if and only if postgres is (or was) in primary state.
-	// We set primary_term before promotion and clear it after demotion.
-	// Check topology type to detect already-demoted state.
-	if pm.getPoolerType() != clustermetadatapb.PoolerType_PRIMARY {
-		pm.logger.InfoContext(ctx, "Pooler already demoted (not PRIMARY in topology), skipping DemoteStalePrimary")
-		finalLSN := ""
-		if lsn, err := pm.getStandbyReplayLSN(ctx); err == nil {
-			finalLSN = lsn
-		}
-		return &multipoolermanagerdatapb.DemoteStalePrimaryResponse{
-			RewindPerformed: false,
-			LsnPosition:     finalLSN,
-		}, nil
-	}
-
-	// Validate the term
-	if err := pm.validateTerm(ctx, consensusTerm, force); err != nil {
-		return nil, err
-	}
-
-	if err := pm.stopPostgresIfRunning(ctx); err != nil {
-		return nil, mterrors.Wrap(err, "failed to stop postgres")
-	}
-
-	port, ok := source.PortMap["postgres"]
-	if !ok {
-		return nil, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT, "postgres port not found in source pooler's port map")
-	}
-
-	rewindPerformed, err := pm.runPgRewind(ctx, source.Hostname, port)
-	if err != nil {
-		return nil, mterrors.Wrap(err, "pg_rewind failed")
-	}
-
-	// Fix pgbackrest paths in postgresql.auto.conf after pg_rewind
-	// The config may have wrong paths copied from another pooler during initial setup
-	if err := pm.fixPgBackRestPaths(ctx); err != nil {
-		pm.logger.WarnContext(ctx, "Failed to fix pgbackrest paths, continuing anyway", "error", err)
-	}
-
-	if err := pm.restartAsStandbyAfterRewind(ctx); err != nil {
-		return nil, mterrors.Wrap(err, "failed to restart as standby")
-	}
-
-	if err := pm.resetSynchronousReplication(ctx); err != nil {
-		pm.logger.WarnContext(ctx, "Failed to reset synchronous replication", "error", err)
-	}
-
-	pm.logger.InfoContext(ctx, "Configuring replication to source primary",
-		"source", source.Id.Name,
-		"source_host", source.Hostname,
-		"source_port", port)
-
-	// Store primary pooler ID for tracking
-	pm.mu.Lock()
-	pm.primaryPoolerID = source.Id
-	pm.primaryHost = source.Hostname
-	pm.primaryPort = port
-	pm.mu.Unlock()
-
-	// Call the locked version directly since we already hold the action lock
-	// (calling SetPrimaryConnInfo would deadlock trying to acquire the same lock)
-	if err := pm.setPrimaryConnInfoLocked(ctx, source.Hostname, port, false, false); err != nil {
-		return nil, mterrors.Wrap(err, "failed to configure replication to source primary")
-	}
-
-	// Report the new primary (source) so the gateway can use this observation.
-	pm.healthStreamer.UpdatePrimaryObservation(&poolerserver.PrimaryObservation{
-		PrimaryID:   source.Id,
-		PrimaryTerm: consensusTerm,
-	})
-
-	// Update consensus term to match the correct primary's term after successful demotion
-	if err := pm.updateTermIfNewer(ctx, consensusTerm); err != nil {
-		return nil, mterrors.Wrap(err, "failed to update consensus term")
-	}
-
-	// Get final LSN
-	finalLSN := ""
-	if lsn, err := pm.getStandbyReplayLSN(ctx); err == nil {
-		finalLSN = lsn
-	}
-
-	// Update topology to REPLICA
-	if err := pm.changeTypeLocked(ctx, clustermetadatapb.PoolerType_REPLICA); err != nil {
-		return nil, mterrors.Wrap(err, "failed to update topology")
-	}
-
-	pm.logger.InfoContext(ctx, "DemoteStalePrimary completed successfully",
-		"rewind_performed", rewindPerformed,
-		"lsn_position", finalLSN)
-
-	return &multipoolermanagerdatapb.DemoteStalePrimaryResponse{
-		Success:         true,
-		RewindPerformed: rewindPerformed,
-		LsnPosition:     finalLSN,
-	}, nil
-}
-
 // promoteResult holds the outcome of a successful Promote operation.
 type promoteResult struct {
 	finalLSN          string
@@ -1105,140 +969,6 @@ func (pm *MultiPoolerManager) promote(ctx context.Context, proposal *consensusda
 	}, nil
 }
 
-// RewindToSource performs pg_rewind to synchronize this server with a source.
-// This operation:
-// 1. Stops PostgreSQL
-// 2. Runs pg_rewind --dry-run to check if rewind is needed
-// 3. If needed, runs actual pg_rewind
-// 4. Starts PostgreSQL
-func (pm *MultiPoolerManager) RewindToSource(ctx context.Context, source *clustermetadatapb.MultiPooler) (*multipoolermanagerdatapb.RewindToSourceResponse, error) {
-	// Check if multipooler is ready
-	if err := pm.checkReady(); err != nil {
-		return nil, mterrors.Wrap(err, "multipooler not ready")
-	}
-
-	// Validate source pooler
-	if source == nil || source.PortMap == nil {
-		return nil, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT, "source pooler or port_map is nil")
-	}
-
-	if source.Hostname == "" {
-		return nil, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT, "source hostname is required")
-	}
-
-	pm.logger.InfoContext(ctx, "RewindToSource RPC called", "source", source.Id.Name)
-
-	port, ok := source.PortMap["postgres"]
-	if !ok {
-		return nil, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT, "postgres port not found in source pooler's port map")
-	}
-
-	// Acquire the action lock to ensure only one mutation runs at a time
-	ctx, err := pm.actionLock.Acquire(ctx, "RewindToSource")
-	if err != nil {
-		return nil, mterrors.Wrap(err, "failed to acquire action lock")
-	}
-	defer pm.actionLock.Release(ctx)
-
-	// Check if pgctld client is available
-	if pm.pgctldClient == nil {
-		return nil, mterrors.Errorf(mtrpcpb.Code_UNAVAILABLE, "pgctld client not available")
-	}
-
-	// Pause manager and stop PostgreSQL for pg_rewind
-	// resume() is called explicitly after PostgreSQL restart, and also via defer for cleanup
-	pm.logger.InfoContext(ctx, "Pausing manager and stopping PostgreSQL for pg_rewind")
-	resume := pm.Pause()
-	defer resume() // Safety net: ensure manager is resumed even if errors occur
-
-	stopReq := &pgctldpb.StopRequest{
-		Mode: "fast",
-	}
-	if _, err := pm.pgctldClient.Stop(ctx, stopReq); err != nil {
-		pm.logger.ErrorContext(ctx, "Failed to stop PostgreSQL", "error", err)
-		return nil, mterrors.Wrap(err, "failed to stop PostgreSQL before pg_rewind")
-	}
-
-	// Run pg_rewind --dry-run to check if rewind is needed
-	pm.logger.InfoContext(ctx, "Running pg_rewind dry-run to check for divergence",
-		"source_host", source.Hostname,
-		"source_port", port)
-	dryRunReq := &pgctldpb.PgRewindRequest{
-		SourceHost: source.Hostname,
-		SourcePort: port,
-		DryRun:     true,
-	}
-	dryRunResp, err := pm.pgctldClient.PgRewind(ctx, dryRunReq)
-	if err != nil {
-		pm.logger.ErrorContext(ctx, "pg_rewind dry-run failed, leaving postgres stopped", "error", err)
-		if dryRunResp != nil {
-			pm.logger.ErrorContext(ctx, "pg_rewind dry-run output", "output", dryRunResp.Output)
-		}
-		return nil, mterrors.Wrap(err, "pg_rewind dry-run failed")
-	}
-
-	// Check if rewind is needed by parsing output
-	rewindPerformed := false
-	if dryRunResp.Output != "" && strings.Contains(dryRunResp.Output, "servers diverged at") {
-		// Servers have diverged - run actual pg_rewind
-		pm.logger.InfoContext(ctx, "Servers diverged, running actual pg_rewind",
-			"source_host", source.Hostname,
-			"source_port", port)
-
-		rewindReq := &pgctldpb.PgRewindRequest{
-			SourceHost: source.Hostname,
-			SourcePort: port,
-			DryRun:     false,
-		}
-		rewindResp, err := pm.pgctldClient.PgRewind(ctx, rewindReq)
-		if err != nil {
-			pm.logger.ErrorContext(ctx, "pg_rewind failed, leaving postgres stopped", "error", err)
-			if rewindResp != nil {
-				pm.logger.ErrorContext(ctx, "pg_rewind output", "output", rewindResp.Output)
-			}
-			return nil, mterrors.Wrap(err, "pg_rewind failed")
-		}
-
-		pm.logger.InfoContext(ctx, "pg_rewind completed successfully", "message", rewindResp.Message)
-		rewindPerformed = true
-	} else {
-		pm.logger.InfoContext(ctx, "No timeline divergence detected, skipping rewind")
-	}
-
-	// Step 4: Start PostgreSQL as standby
-	// Use Restart with as_standby=true to create standby.signal and start postgres
-	// Note: postgres is already stopped, so the stop phase will be a no-op
-	pm.logger.InfoContext(ctx, "Starting PostgreSQL as standby after pg_rewind")
-	restartReq := &pgctldpb.RestartRequest{
-		Mode:      "fast",
-		AsStandby: true,
-	}
-	if _, err := pm.pgctldClient.Restart(ctx, restartReq); err != nil {
-		pm.logger.ErrorContext(ctx, "Failed to restart PostgreSQL as standby", "error", err)
-		return nil, mterrors.Wrap(err, "failed to start PostgreSQL as standby after pg_rewind")
-	}
-
-	// Resume manager now that PostgreSQL is running
-	resume()
-
-	// Wait for database connection
-	if err := pm.waitForDatabaseConnection(ctx); err != nil {
-		pm.logger.ErrorContext(ctx, "Failed to reconnect to database", "error", err)
-		return nil, mterrors.Wrap(err, "failed to reconnect to database after pg_rewind")
-	}
-
-	// Rewind succeeded: allow the monitor to resume normal operation.
-	pm.rewindPending.Store(false)
-
-	pm.logger.InfoContext(ctx, "RewindToSource completed successfully",
-		"rewind_performed", rewindPerformed)
-	return &multipoolermanagerdatapb.RewindToSourceResponse{
-		Success:         true,
-		ErrorMessage:    "",
-		RewindPerformed: rewindPerformed,
-	}, nil
-}
-
 // SetPostgresRestartsEnabled enables or disables automatic PostgreSQL restarts by the monitor.
 // When disabled, the monitor continues to run and detect problems but will not auto-restart
 // a stopped PostgreSQL instance. Used by tests and demos during controlled failovers.
@@ -1249,7 +979,87 @@ func (pm *MultiPoolerManager) SetPostgresRestartsEnabled(ctx context.Context, re
 }
 
 // ====================================================================================
-// Helper methods for DemoteStalePrimary
+// Stale primary recovery — triggered asynchronously by the Inform handler
+// ====================================================================================
+
+// performStalePrimaryRecovery runs when an Inform RPC reveals that this node is
+// still in the postgres-primary role but the committed rule names a different primary.
+// It stops postgres, runs pg_rewind against the new primary, and restarts as standby.
+// Called as a goroutine; logs errors but does not return them.
+func (pm *MultiPoolerManager) performStalePrimaryRecovery(ctx context.Context, rule *consensusdatapb.ShardRule) {
+	ctx, err := pm.actionLock.Acquire(ctx, "performStalePrimaryRecovery")
+	if err != nil {
+		pm.logger.ErrorContext(ctx, "Stale primary recovery: failed to acquire action lock", "error", err)
+		return
+	}
+	defer pm.actionLock.Release(ctx)
+
+	// Re-check after acquiring the lock; another goroutine may have already demoted.
+	if pm.getPoolerType() != clustermetadatapb.PoolerType_PRIMARY {
+		pm.logger.InfoContext(ctx, "Stale primary recovery: already demoted, skipping")
+		return
+	}
+
+	pm.logger.InfoContext(ctx, "Stale primary recovery: starting",
+		"new_primary", rule.GetPrimaryId().GetName())
+
+	if err := pm.stopPostgresIfRunning(ctx); err != nil {
+		pm.logger.ErrorContext(ctx, "Stale primary recovery: failed to stop postgres", "error", err)
+		return
+	}
+
+	source, err := pm.topoClient.GetMultiPooler(ctx, rule.GetPrimaryId())
+	if err != nil {
+		pm.logger.ErrorContext(ctx, "Stale primary recovery: failed to look up new primary", "error", err)
+		return
+	}
+
+	port, ok := source.PortMap["postgres"]
+	if !ok {
+		pm.logger.ErrorContext(ctx, "Stale primary recovery: postgres port not found in new primary's port map")
+		return
+	}
+
+	if _, err := pm.runPgRewind(ctx, source.Hostname, port); err != nil {
+		pm.logger.ErrorContext(ctx, "Stale primary recovery: pg_rewind failed", "error", err)
+		return
+	}
+
+	if err := pm.fixPgBackRestPaths(ctx); err != nil {
+		pm.logger.WarnContext(ctx, "Stale primary recovery: failed to fix pgbackrest paths", "error", err)
+	}
+
+	if err := pm.restartAsStandbyAfterRewind(ctx); err != nil {
+		pm.logger.ErrorContext(ctx, "Stale primary recovery: failed to restart as standby", "error", err)
+		return
+	}
+
+	if err := pm.resetSynchronousReplication(ctx); err != nil {
+		pm.logger.WarnContext(ctx, "Stale primary recovery: failed to reset synchronous replication", "error", err)
+	}
+
+	pm.mu.Lock()
+	pm.primaryPoolerID = source.Id
+	pm.primaryHost = source.Hostname
+	pm.primaryPort = port
+	pm.mu.Unlock()
+
+	if err := pm.setPrimaryConnInfoLocked(ctx, source.Hostname, port, false, false); err != nil {
+		pm.logger.ErrorContext(ctx, "Stale primary recovery: failed to configure replication", "error", err)
+		return
+	}
+
+	if err := pm.changeTypeLocked(ctx, clustermetadatapb.PoolerType_REPLICA); err != nil {
+		pm.logger.ErrorContext(ctx, "Stale primary recovery: failed to update topology", "error", err)
+		return
+	}
+
+	pm.logger.InfoContext(ctx, "Stale primary recovery: completed successfully",
+		"new_primary", source.Id.GetName())
+}
+
+// ====================================================================================
+// Postgres stop/rewind/restart helpers (used by stale primary recovery and Inform)
 // ====================================================================================
 
 // stopPostgresIfRunning stops postgres if it's currently running.

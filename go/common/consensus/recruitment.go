@@ -97,7 +97,7 @@ func CheckSufficientRecruitment(
 	var bestRule *consensusdatapb.ShardRule
 	for _, cs := range statuses {
 		rule := cs.GetCurrentPosition().GetRule()
-		if CompareRuleNumbers(rule.GetRuleNumber(), bestRule.GetRuleNumber()) > 0 {
+		if rule != nil && (bestRule == nil || CompareRuleNumbers(rule.GetRuleNumber(), bestRule.GetRuleNumber()) > 0) {
 			bestRule = rule
 		}
 	}

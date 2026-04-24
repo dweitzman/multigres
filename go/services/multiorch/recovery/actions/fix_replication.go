@@ -223,22 +223,11 @@ func (a *FixReplicationAction) fixNotReplicating(
 		return mterrors.Wrap(err, "failed to configure replica replication")
 	}
 
-	// Verify replication started
-	err = a.verifyReplicationStarted(ctx, replica)
-	if err != nil {
-		a.logger.WarnContext(ctx, "replication did not start after configuration",
-			"replica", replica.MultiPooler.Id.Name,
-			"primary", primary.MultiPooler.Id.Name)
-
-		if rewindErr := a.tryPgRewind(ctx, primary, replica); rewindErr != nil {
-			return mterrors.Wrap(rewindErr, "pg_rewind failed")
-		}
-		// Re-verify replication after rewind. RewindToSource restarts
-		// PostgreSQL as a standby, and primary_conninfo in
-		// postgresql.auto.conf is preserved (pg_rewind doesn't touch it).
-		if verifyErr := a.verifyReplicationStarted(ctx, replica); verifyErr != nil {
-			return mterrors.Wrap(verifyErr, "replication did not start after pg_rewind")
-		}
+	// Verify replication started. If not, return an error and let the recovery
+	// loop retry. The postgres monitor on the replica will autonomously detect
+	// when a pg_rewind is needed and perform it without an explicit RPC.
+	if err = a.verifyReplicationStarted(ctx, replica); err != nil {
+		return mterrors.Wrap(err, "replication did not start after configuration")
 	}
 
 	// Add replica to the primary's synchronous standby list if it's a REPLICA type
@@ -260,51 +249,6 @@ func (a *FixReplicationAction) fixNotReplicating(
 	a.logger.InfoContext(ctx, "fix replication action completed successfully",
 		"replica", replica.MultiPooler.Id.Name,
 		"primary", primary.MultiPooler.Id.Name)
-
-	return nil
-}
-
-// tryPgRewind attempts to repair a replica using pg_rewind.
-// RewindToSource will:
-// 1. Stop postgres
-// 2. Check if rewind is needed (dry-run)
-// 3. Run actual rewind if needed
-// 4. Start postgres
-// If pg_rewind is not feasible (missing WAL), it marks the pooler as DRAINED.
-func (a *FixReplicationAction) tryPgRewind(
-	ctx context.Context,
-	primary *multiorchdatapb.PoolerHealthState,
-	replica *multiorchdatapb.PoolerHealthState,
-) error {
-	a.logger.InfoContext(ctx, "attempting pg_rewind",
-		"replica", replica.MultiPooler.Id.Name,
-		"primary", primary.MultiPooler.Id.Name)
-
-	// Call RewindToSource - it handles the entire flow atomically
-	rewindReq := &multipoolermanagerdatapb.RewindToSourceRequest{
-		Source: primary.MultiPooler,
-	}
-	rewindResp, err := a.rpcClient.RewindToSource(ctx, replica.MultiPooler, rewindReq)
-	if err != nil {
-		a.logger.WarnContext(ctx, "pg_rewind RPC failed, marking as DRAINED",
-			"replica", replica.MultiPooler.Id.Name,
-			"error", err)
-		return a.markPoolerDrained(ctx, replica)
-	}
-	if !rewindResp.Success {
-		a.logger.WarnContext(ctx, "pg_rewind not feasible, marking as DRAINED",
-			"replica", replica.MultiPooler.Id.Name,
-			"error", rewindResp.ErrorMessage)
-		return a.markPoolerDrained(ctx, replica)
-	}
-
-	if rewindResp.RewindPerformed {
-		a.logger.InfoContext(ctx, "pg_rewind completed successfully - servers were diverged",
-			"replica", replica.MultiPooler.Id.Name)
-	} else {
-		a.logger.InfoContext(ctx, "pg_rewind not needed - timelines are compatible",
-			"replica", replica.MultiPooler.Id.Name)
-	}
 
 	return nil
 }
@@ -534,28 +478,6 @@ func (a *FixReplicationAction) Priority() types.Priority {
 
 func (a *FixReplicationAction) GracePeriod() *types.GracePeriodConfig {
 	// No grace period needed, execute immediately
-	return nil
-}
-
-// markPoolerDrained marks a pooler as DRAINED in the topology.
-func (a *FixReplicationAction) markPoolerDrained(ctx context.Context, pooler *multiorchdatapb.PoolerHealthState) (retErr error) {
-	nodeName := pooler.MultiPooler.Id.Name
-	a.logger.InfoContext(ctx, "marking pooler as DRAINED", "pooler", nodeName)
-	eventlog.Emit(ctx, a.logger, eventlog.Started, eventlog.NodeDrain{NodeName: nodeName, Reason: "rewind_not_feasible"})
-	defer func() {
-		if retErr == nil {
-			eventlog.Emit(ctx, a.logger, eventlog.Success, eventlog.NodeDrain{NodeName: nodeName, Reason: "rewind_not_feasible"})
-		} else {
-			eventlog.Emit(ctx, a.logger, eventlog.Failed, eventlog.NodeDrain{NodeName: nodeName, Reason: "rewind_not_feasible"}, "error", retErr)
-		}
-	}()
-	_, err := a.topoStore.UpdateMultiPoolerFields(ctx, pooler.MultiPooler.Id, func(mp *clustermetadatapb.MultiPooler) error {
-		mp.Type = clustermetadatapb.PoolerType_DRAINED
-		return nil
-	})
-	if err != nil {
-		return mterrors.Wrap(err, "failed to mark pooler as DRAINED")
-	}
 	return nil
 }
 

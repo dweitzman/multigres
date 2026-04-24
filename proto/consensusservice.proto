@@ -64,15 +64,4 @@ service MultiPoolerConsensus {
   rpc UpdateConsensusRule(multipoolermanagerdata.UpdateSynchronousStandbyListRequest)
     returns (multipoolermanagerdata.UpdateSynchronousStandbyListResponse);
 
-  // Replication Configuration
-
-  // DemoteStalePrimary demotes a stale primary that came back after failover
-  // by rewinding to the correct primary and restarting as standby.
-  rpc DemoteStalePrimary(multipoolermanagerdata.DemoteStalePrimaryRequest)
-    returns (multipoolermanagerdata.DemoteStalePrimaryResponse);
-
-  // RewindToSource performs pg_rewind to synchronize this server with a source.
-  // Used to repair diverged timelines after failover.
-  rpc RewindToSource(multipoolermanagerdata.RewindToSourceRequest)
-    returns (multipoolermanagerdata.RewindToSourceResponse);
 }

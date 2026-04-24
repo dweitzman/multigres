@@ -23,6 +23,7 @@ import (
 
 	"github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/mterrors"
+	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
@@ -403,6 +404,8 @@ func (pm *MultiPoolerManager) configureReplicationToLeader(ctx context.Context, 
 // Inform handles notification of a committed shard rule decision.
 // This is the final phase of the Paxos-inspired protocol. No authority check
 // is required — the coordinator broadcasts the committed rule to all poolers.
+// If the committed rule names a different primary but this node is still running
+// postgres as primary, stale-primary recovery is triggered asynchronously.
 func (pm *MultiPoolerManager) Inform(ctx context.Context, req *consensusdatapb.InformRequest) (*consensusdatapb.InformResponse, error) {
 	rule := req.GetRule()
 	if rule == nil {
@@ -415,6 +418,16 @@ func (pm *MultiPoolerManager) Inform(ctx context.Context, req *consensusdatapb.I
 	pm.logger.InfoContext(ctx, "Inform received: rule committed",
 		"coordinator_term", rule.GetRuleNumber().GetCoordinatorTerm(),
 		"leader_subterm", rule.GetRuleNumber().GetLeaderSubterm())
+
+	// Detect stale primary: committed rule names a different primary but this node
+	// is still recorded as PRIMARY in topology. Trigger async recovery so the
+	// RPC returns quickly while the node stops, rewinds, and restarts as standby.
+	if primaryID := rule.GetPrimaryId(); primaryID != nil {
+		if topoclient.ClusterIDString(primaryID) != topoclient.ClusterIDString(pm.serviceID) &&
+			pm.getPoolerType() == clustermetadatapb.PoolerType_PRIMARY {
+			go pm.performStalePrimaryRecovery(pm.ctx, rule)
+		}
+	}
 
 	cs, err := pm.getInconsistentConsensusStatus(ctx)
 	if err != nil {

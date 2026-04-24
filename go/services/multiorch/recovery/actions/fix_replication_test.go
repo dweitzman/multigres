@@ -237,6 +237,7 @@ func TestFixReplicationAction_ExecuteSuccessNotReplicating(t *testing.T) {
 		ProposeResponses: map[string]*consensusdatapb.ProposeResponse{
 			"multipooler-cell1-replica1": {},
 		},
+		ProposeRequests: make(map[string]*consensusdatapb.ProposeRequest),
 		UpdateConsensusRuleResponses: map[string]*multipoolermanagerdatapb.UpdateSynchronousStandbyListResponse{
 			"multipooler-cell1-primary": {},
 		},
@@ -514,13 +515,6 @@ func TestFixReplicationAction_FailsWhenReplicationDoesNotStart(t *testing.T) {
 	baseFakeClient.UpdateConsensusRuleResponses = map[string]*multipoolermanagerdatapb.UpdateSynchronousStandbyListResponse{
 		"multipooler-cell1-primary": {},
 	}
-	// pg_rewind dry-run fails, so it marks the pooler as DRAINED
-	baseFakeClient.RewindToSourceResponses = map[string]*multipoolermanagerdatapb.RewindToSourceResponse{
-		"multipooler-cell1-replica1": {
-			Success:      false,
-			ErrorMessage: "pg_rewind not feasible: source timeline diverged before target's last checkpoint",
-		},
-	}
 
 	fakeClient := &replicationStatusClient{FakeClient: baseFakeClient, walReceiverStatus: "stopping"}
 	poolerStore := store.NewPoolerStore(fakeClient, slog.Default())
@@ -578,18 +572,17 @@ func TestFixReplicationAction_FailsWhenReplicationDoesNotStart(t *testing.T) {
 
 	err := action.Execute(ctx, problem)
 
-	// Should fail: pg_rewind marked pooler as DRAINED (returned nil), then
-	// re-verification fails because the replica is not actually replicating.
+	// Should fail: replication did not start after Propose. The recovery loop
+	// retries; the postgres monitor autonomously handles pg_rewind if needed.
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "replication did not start after pg_rewind")
+	assert.Contains(t, err.Error(), "replication did not start after configuration")
 
-	// Verify SetPrimaryConnInfo was called (configuration was attempted)
+	// Verify Propose was called (configuration was attempted)
 	assert.Contains(t, fakeClient.CallLog, "Propose(multipooler-cell1-replica1)")
-	// Verify pg_rewind was tried after replication failed to start
-	assert.Contains(t, fakeClient.CallLog, "RewindToSource(multipooler-cell1-replica1)")
 
-	// Verify the pooler was marked as DRAINED in topology when pg_rewind wasn't feasible
+	// Verify the pooler was NOT marked as DRAINED — the action fails for retry,
+	// not permanently.
 	updatedPooler, err := ts.GetMultiPooler(ctx, replicaID)
 	require.NoError(t, err)
-	assert.Equal(t, clustermetadatapb.PoolerType_DRAINED, updatedPooler.Type)
+	assert.NotEqual(t, clustermetadatapb.PoolerType_DRAINED, updatedPooler.Type)
 }

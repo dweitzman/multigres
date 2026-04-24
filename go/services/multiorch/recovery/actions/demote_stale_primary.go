@@ -30,8 +30,8 @@ import (
 	"github.com/multigres/multigres/go/services/multiorch/store"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
-	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
 
 // Compile-time assertion that DemoteStalePrimaryAction implements types.RecoveryAction.
@@ -96,11 +96,9 @@ func (a *DemoteStalePrimaryAction) GracePeriod() *types.GracePeriodConfig {
 	}
 }
 
-// Execute demotes the stale primary using the DemoteStalePrimary RPC with the correct primary's term.
-// This is safer than BeginTerm because:
-// 1. We use the correct primary's term (not a new term), avoiding term inconsistency
-// 2. The stale primary accepts term >= its current term and demotes
-// 3. Both primaries end up with the same term (no term inconsistency)
+// Execute notifies the stale primary of the committed rule via Inform. The stale
+// primary's Inform handler detects that the committed rule names a different primary
+// and triggers autonomous recovery (stop → pg_rewind → restart as standby).
 func (a *DemoteStalePrimaryAction) Execute(ctx context.Context, problem types.Problem) (retErr error) {
 	poolerIDStr := topoclient.MultiPoolerIDString(problem.PoolerID)
 
@@ -108,31 +106,24 @@ func (a *DemoteStalePrimaryAction) Execute(ctx context.Context, problem types.Pr
 		"shard_key", problem.ShardKey.String(),
 		"stale_primary", poolerIDStr)
 
-	// Get the stale primary from the store
 	stalePrimary, ok := a.poolerStore.Get(poolerIDStr)
 	if !ok {
 		return fmt.Errorf("stale primary %s not found in store", poolerIDStr)
 	}
 
-	// Check if postgres is running on the stale primary before attempting demote.
-	// Demote requires postgres to be healthy. If postgres is not running yet,
-	// we should skip this attempt and let the next recovery cycle retry once
-	// postgres is ready. This avoids wasting time on RPCs that will fail.
-	// if !stalePrimary.IsPostgresReady {
-	// 	return mterrors.New(mtrpcpb.Code_UNAVAILABLE,
-	// 		fmt.Sprintf("postgres not running on stale primary %s, skipping demote attempt", poolerIDStr))
-	// }
-
-	// Find the correct primary to use as rewind source
-	correctPrimary, correctPrimaryTerm, err := a.findCorrectPrimary(problem.ShardKey, poolerIDStr)
+	correctPrimary, _, err := a.findCorrectPrimary(problem.ShardKey, poolerIDStr)
 	if err != nil {
 		return mterrors.Wrap(err, "failed to find correct primary")
 	}
 
-	a.logger.InfoContext(ctx, "demoting stale primary using DemoteStalePrimary RPC",
-		"stale_primary", poolerIDStr,
-		"correct_primary", correctPrimary.MultiPooler.Id.Name,
-		"correct_primary_term", correctPrimaryTerm)
+	// Get the committed rule from the correct primary's known state.
+	rule := correctPrimary.ConsensusStatus.GetConsensusStatus().GetHighestKnownDecision()
+	if rule == nil {
+		rule = correctPrimary.ConsensusStatus.GetConsensusStatus().GetCurrentPosition().GetRule()
+	}
+	if rule == nil {
+		return fmt.Errorf("no committed rule found for correct primary %s", correctPrimary.MultiPooler.Id.Name)
+	}
 
 	eventlog.Emit(ctx, a.logger, eventlog.Started, eventlog.PrimaryDemotion{NodeName: poolerIDStr, Reason: "stale"})
 	defer func() {
@@ -143,25 +134,18 @@ func (a *DemoteStalePrimaryAction) Execute(ctx context.Context, problem types.Pr
 		}
 	}()
 
-	// Call DemoteStalePrimary RPC - this will:
-	// 1. Stop postgres
-	// 2. Run pg_rewind to sync with correct primary
-	// 3. Restart as standby
-	// 4. Clear sync replication config
-	// 5. Update topology to REPLICA
-	demoteResp, err := a.rpcClient.DemoteStalePrimary(ctx, stalePrimary.MultiPooler, &multipoolermanagerdatapb.DemoteStalePrimaryRequest{
-		Source:        correctPrimary.MultiPooler,
-		ConsensusTerm: correctPrimaryTerm,
-		Force:         false,
+	a.logger.InfoContext(ctx, "sending Inform to stale primary",
+		"stale_primary", poolerIDStr,
+		"correct_primary", correctPrimary.MultiPooler.Id.Name)
+
+	// Inform the stale primary of the committed rule. Its handler will detect
+	// that the committed rule names a different primary and trigger recovery.
+	_, err = a.rpcClient.Inform(ctx, stalePrimary.MultiPooler, &consensusdatapb.InformRequest{
+		Rule: rule,
 	})
 	if err != nil {
-		return mterrors.Wrap(err, "DemoteStalePrimary RPC failed")
+		return mterrors.Wrap(err, "Inform RPC failed")
 	}
-
-	a.logger.InfoContext(ctx, "stale primary demoted successfully",
-		"stale_primary", poolerIDStr,
-		"rewind_performed", demoteResp.RewindPerformed,
-		"lsn_position", demoteResp.LsnPosition)
 
 	a.logger.InfoContext(ctx, "demote stale primary action completed",
 		"shard_key", problem.ShardKey.String(),
