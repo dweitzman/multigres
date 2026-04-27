@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"time"
 
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/multigres/multigres/go/common/consensus"
@@ -28,6 +29,7 @@ import (
 	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
+	"github.com/multigres/multigres/go/services/multipooler/poolerserver"
 )
 
 // BeginTerm handles coordinator requests during leader appointments.
@@ -531,6 +533,155 @@ func (pm *MultiPoolerManager) setPrimaryConnInfoAndReload(ctx context.Context, c
 		return err
 	}
 	return pm.reloadPostgresConfig(ctx)
+}
+
+// Propose handles a coordinator's proposal for a new shard rule. The pooler
+// either promotes its postgres to primary (if designated leader) or configures
+// replication toward the new primary (if replica).
+//
+// Propose requires prior recruitment: the stored term_revocation must match the
+// proposal's term exactly. There is no implicit recruitment on Propose.
+//
+// Order of operations:
+//  1. Validate fields and check that the stored revocation matches the proposal term.
+//  2. Determine role by comparing this pooler's ID to proposal_leader.id.
+//     3a. Leader: promote postgres, write the rule to the rule store, enable query service.
+//     3b. Replica: configure primary_conninfo toward the new leader's postgres.
+//  4. Return ConsensusStatus with the post-propose position.
+func (pm *MultiPoolerManager) Propose(ctx context.Context, req *consensusdatapb.ProposeRequest) (*consensusdatapb.ProposeResponse, error) {
+	var err error
+	ctx, err = pm.actionLock.Acquire(ctx, "Propose")
+	if err != nil {
+		return nil, err
+	}
+	defer pm.actionLock.Release(ctx)
+
+	proposal := req.GetProposal()
+	if proposal == nil {
+		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "proposal is required")
+	}
+	revocation := proposal.GetTermRevocation()
+	if revocation == nil {
+		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "proposal.term_revocation is required")
+	}
+	proposalLeader := proposal.GetProposalLeader()
+	if proposalLeader == nil {
+		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "proposal.proposal_leader is required")
+	}
+	if proposalLeader.GetPostgresPort() == 0 {
+		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "proposal.proposal_leader.postgres_port is required")
+	}
+	proposedRule := proposal.GetProposedRule()
+	if proposedRule == nil {
+		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "proposal.proposed_rule is required")
+	}
+
+	revokedBelowTerm := revocation.GetRevokedBelowTerm()
+	coordinatorID := revocation.GetAcceptedCoordinatorId()
+
+	pm.logger.InfoContext(ctx, "Propose received",
+		"revoked_below_term", revokedBelowTerm,
+		"coordinator_id", coordinatorID.GetName(),
+		"leader_id", proposalLeader.GetId().GetName())
+
+	// Step 1: Validate the term revocation.
+	// ValidateRevocation ensures the WAL position is safe and the coordinator is consistent.
+	// Fails open on I/O error (nil status passes safely).
+	currentStatus, err := pm.getConsensusStatus(ctx)
+	if err != nil {
+		return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, err.Error())
+	}
+	if err := consensus.ValidateRevocation(currentStatus, revocation); err != nil {
+		return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, err.Error())
+	}
+
+	// No implicit recruitment: require a prior Recruit() for this exact term.
+	storedTerm := currentStatus.GetTermRevocation().GetRevokedBelowTerm()
+	if storedTerm != revokedBelowTerm {
+		return nil, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
+			"must Recruit before Propose: stored term %d != proposal term %d", storedTerm, revokedBelowTerm)
+	}
+
+	// Step 2: Act based on role.
+	isLeader := proto.Equal(pm.serviceID, proposalLeader.GetId())
+
+	if isLeader {
+		// Step 3a: Leader — promote postgres, write rule, enable query service.
+		state, err := pm.checkPromotionState(ctx, nil)
+		if err != nil {
+			return nil, err
+		}
+		if err := pm.promoteStandbyToPrimary(ctx, state); err != nil {
+			return nil, err
+		}
+		if err := pm.clearResignedPrimaryAtTerm(ctx); err != nil {
+			return nil, mterrors.Wrap(err, "failed to clear resigned primary term")
+		}
+		pm.healthStreamer.UpdatePrimaryObservation(&poolerserver.PrimaryObservation{
+			PrimaryID:   pm.serviceID,
+			PrimaryTerm: revokedBelowTerm,
+		})
+		// checkPromotionState already fetched the LSN when postgres was primary;
+		// only query again after a fresh pg_promote() call.
+		var finalLSN string
+		if state.isPrimaryInPostgres {
+			finalLSN = state.currentLSN
+		} else {
+			finalLSN, err = pm.getPrimaryLSN(ctx)
+			if err != nil {
+				return nil, err
+			}
+		}
+		// TODO: If this proposal already exists, we're being asked to propagate
+		// rather than make a new entry. We can make the rule store understand
+		// propagation for that case.
+		if _, err = pm.rules.updateRule(ctx, newRuleUpdate(
+			revokedBelowTerm,
+			coordinatorID,
+			"promotion",
+			"propose",
+			time.Now()).
+			withLeader(pm.serviceID).
+			withCohort(proposedRule.GetCohortMembers()).
+			withWALPosition(finalLSN)); err != nil {
+			return nil, mterrors.Wrap(err, "propose failed: could not write rule")
+		}
+		if err := pm.updateTopologyAfterPromotion(ctx, state); err != nil {
+			pm.logger.WarnContext(ctx, "Failed to update topology after propose", "error", err)
+		}
+	} else {
+		// Step 3b: Replica — configure replication toward the new primary.
+		// Recruit stopped only the WAL receiver (RECEIVER_ONLY), not replay, so
+		// startAfter=false: replication restarts automatically when postgres
+		// reloads the new primary_conninfo; no pg_wal_replay_resume() needed.
+		host := proposalLeader.GetHost()
+		port := proposalLeader.GetPostgresPort()
+		pm.mu.Lock()
+		pm.primaryPoolerID = proposalLeader.GetId()
+		pm.primaryHost = host
+		pm.primaryPort = port
+		pm.mu.Unlock()
+
+		if err := pm.setPrimaryConnInfoLocked(ctx, host, port, false /* stopBefore */, false /* startAfter */); err != nil {
+			return nil, err
+		}
+		pm.broadcastHealth()
+		if _, err := pm.rules.observePosition(ctx); err != nil {
+			return nil, mterrors.Wrap(err, "propose failed: could not refresh rule position")
+		}
+	}
+
+	pm.logger.InfoContext(ctx, "Propose complete",
+		"revoked_below_term", revokedBelowTerm,
+		"is_leader", isLeader)
+
+	// Step 4: Return ConsensusStatus. The cache was warmed by getConsensusStatus in step 1
+	// and updated by updateRule (leader path); the replica position is unchanged.
+	cs, err := pm.getCachedConsensusStatus()
+	if err != nil {
+		return nil, mterrors.Wrap(err, "failed to build consensus status")
+	}
+	return &consensusdatapb.ProposeResponse{ConsensusStatus: cs}, nil
 }
 
 // ConsensusStatus returns the current status of this node for consensus
