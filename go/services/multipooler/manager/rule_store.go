@@ -288,11 +288,6 @@ func (rs *ruleStore) observePosition(ctx context.Context) (*clustermetadatapb.Po
 		return nil, mterrors.Wrap(err, "failed to scan current position")
 	}
 
-	// coordinator_term=0 is the sentinel initial state; no rule has been applied yet.
-	if coordinatorTerm == 0 {
-		return nil, nil
-	}
-
 	var coordinatorIDStrVal string
 	if coordinatorIDStr != nil {
 		coordinatorIDStrVal = *coordinatorIDStr
