@@ -22,6 +22,7 @@ import (
 	"time"
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
+	"github.com/multigres/multigres/go/common/eventlog"
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/timeouts"
 	"github.com/multigres/multigres/go/common/topoclient"
@@ -90,8 +91,22 @@ func (r *coordinatorLedRuleChange) Run(ctx context.Context, cohort []*multiorchd
 		return mterrors.Wrap(err, "recruitment failed")
 	}
 
+	newPrimary := proposal.GetProposalLeader().GetId().GetName()
+	eventlog.Emit(ctx, r.coordinator.logger, eventlog.Started, eventlog.PrimaryPromotion{
+		NewPrimary: newPrimary,
+	})
 	poolerByID, _ := buildCohortMaps(cohort)
-	return proposeAll(ctx, r.coordinator, r.reason, proposal, statuses, poolerByID)
+	proposeErr := proposeAll(ctx, r.coordinator, r.reason, proposal, statuses, poolerByID)
+	if proposeErr == nil {
+		eventlog.Emit(ctx, r.coordinator.logger, eventlog.Success, eventlog.PrimaryPromotion{
+			NewPrimary: newPrimary,
+		})
+	} else {
+		eventlog.Emit(ctx, r.coordinator.logger, eventlog.Failed, eventlog.PrimaryPromotion{
+			NewPrimary: newPrimary,
+		}, "error", proposeErr)
+	}
+	return proposeErr
 }
 
 // recruit sends Recruit RPCs to all cohort members in parallel. After each
