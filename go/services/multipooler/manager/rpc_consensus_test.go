@@ -1550,13 +1550,15 @@ func TestPropose(t *testing.T) {
 	}
 
 	// recruitedTerm simulates a node that has been recruited for term 7 by coordinatorA.
-	recruitedTerm := &multipoolermanagerdatapb.ConsensusTerm{
-		TermNumber:                    7,
-		AcceptedTermFromCoordinatorId: coordinatorA,
+	recruitedTerm := &clustermetadatapb.TermRevocation{
+		RevokedBelowTerm:       7,
+		AcceptedCoordinatorId:  coordinatorA,
+		CoordinatorInitiatedAt: recruitTS,
 	}
 	validRevocation := &clustermetadatapb.TermRevocation{
-		RevokedBelowTerm:      7,
-		AcceptedCoordinatorId: coordinatorA,
+		RevokedBelowTerm:       7,
+		AcceptedCoordinatorId:  coordinatorA,
+		CoordinatorInitiatedAt: recruitTS,
 	}
 	validProposedRule := &clustermetadatapb.ShardRule{
 		CohortMembers: []*clustermetadatapb.ID{selfID, otherPooler},
@@ -1592,7 +1594,7 @@ func TestPropose(t *testing.T) {
 
 	tests := []struct {
 		name              string
-		initialTerm       *multipoolermanagerdatapb.ConsensusTerm
+		initialTerm       *clustermetadatapb.TermRevocation
 		ruleStore         *fakeRuleStore
 		req               *consensusdatapb.ProposeRequest
 		setupMocks        func(*mock.QueryService)
@@ -1653,8 +1655,8 @@ func TestPropose(t *testing.T) {
 		},
 		{
 			name:        "TermNotRecruited",
-			initialTerm: &multipoolermanagerdatapb.ConsensusTerm{TermNumber: 3},
-			ruleStore:   &fakeRuleStore{},
+			initialTerm: &clustermetadatapb.TermRevocation{RevokedBelowTerm: 3},
+			ruleStore:   &fakeRuleStore{pos: makeRulePosition(0)},
 			req:         makeLeaderReq(),
 			setupMocks:  func(m *mock.QueryService) {},
 			expectError: true,
@@ -1663,16 +1665,17 @@ func TestPropose(t *testing.T) {
 		},
 		{
 			name: "WrongCoordinator",
-			initialTerm: &multipoolermanagerdatapb.ConsensusTerm{
-				TermNumber:                    7,
-				AcceptedTermFromCoordinatorId: coordinatorA,
+			initialTerm: &clustermetadatapb.TermRevocation{
+				RevokedBelowTerm:      7,
+				AcceptedCoordinatorId: coordinatorA,
 			},
-			ruleStore: &fakeRuleStore{},
+			ruleStore: &fakeRuleStore{pos: makeRulePosition(0)},
 			req: &consensusdatapb.ProposeRequest{
 				Proposal: &consensusdatapb.CoordinatorProposal{
 					TermRevocation: &clustermetadatapb.TermRevocation{
-						RevokedBelowTerm:      7,
-						AcceptedCoordinatorId: coordinatorB,
+						RevokedBelowTerm:       7,
+						AcceptedCoordinatorId:  coordinatorB,
+						CoordinatorInitiatedAt: recruitTS,
 					},
 					ProposalLeader: &consensusdatapb.ProposalLeader{Id: selfID, PostgresPort: 5432},
 					ProposedRule:   validProposedRule,
@@ -1733,7 +1736,7 @@ func TestPropose(t *testing.T) {
 		{
 			name:        "ReplicaRejected_IsPrimary",
 			initialTerm: recruitedTerm,
-			ruleStore:   &fakeRuleStore{},
+			ruleStore:   &fakeRuleStore{pos: makeRulePosition(0)},
 			req:         makeReplicaReq(),
 			setupMocks: func(m *mock.QueryService) {
 				// setPrimaryConnInfoLocked guardrail: postgres is NOT in recovery (it's primary)
@@ -1754,7 +1757,7 @@ func TestPropose(t *testing.T) {
 
 			pm, _ := setupManagerWithMockDB(t, mockQueryService, tt.ruleStore)
 
-			err := pm.consensusState.setConsensusTerm(tt.initialTerm)
+			err := pm.consensusState.setRevocation(tt.initialTerm)
 			require.NoError(t, err)
 			_, err = pm.consensusState.Load()
 			require.NoError(t, err)

@@ -58,7 +58,7 @@ func (r *coordinatorLedRuleChange) Run(ctx context.Context, cohort []*multiorchd
 	// Extract consensus statuses from the cached health state to derive the term.
 	var initialStatuses []*clustermetadatapb.ConsensusStatus
 	for _, p := range cohort {
-		if cs := p.GetConsensusStatus().GetConsensusStatus(); cs != nil {
+		if cs := p.GetConsensusStatus(); cs != nil {
 			initialStatuses = append(initialStatuses, cs)
 		}
 	}
@@ -319,15 +319,15 @@ func checkRecentAcceptance(ctx context.Context, logger *slog.Logger, cohort []*m
 	const backoffWindow = 4 * time.Second
 	now := time.Now()
 	for _, pooler := range cohort {
-		ct := pooler.GetStatus().GetConsensusTerm()
-		if ct == nil || ct.LastAcceptanceTime == nil {
+		rev := pooler.GetConsensusStatus().GetTermRevocation()
+		if rev == nil || rev.CoordinatorInitiatedAt == nil {
 			continue
 		}
-		timeSince := now.Sub(ct.LastAcceptanceTime.AsTime())
+		timeSince := now.Sub(rev.CoordinatorInitiatedAt.AsTime())
 		if timeSince >= 0 && timeSince < backoffWindow {
 			logger.InfoContext(ctx, "Recent term acceptance detected, backing off",
 				"pooler", pooler.MultiPooler.Id.Name,
-				"accepted_term", ct.TermNumber,
+				"accepted_term", rev.RevokedBelowTerm,
 				"time_since_acceptance", timeSince)
 			return fmt.Errorf("another coordinator started recruiting recently (%v ago), backing off",
 				timeSince.Round(time.Millisecond))

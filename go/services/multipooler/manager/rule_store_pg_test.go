@@ -301,7 +301,9 @@ func TestRuleStorePG_ObservePosition_FreshState(t *testing.T) {
 
 	pos, err := rs.observePosition(ctx)
 	require.NoError(t, err)
-	assert.Nil(t, pos, "fresh sentinel row (coordinator_term=0) should return nil position")
+	require.NotNil(t, pos, "fresh state should still return a position with the current LSN")
+	assert.Equal(t, int64(0), pos.GetRule().GetRuleNumber().GetCoordinatorTerm(), "fresh sentinel row has coordinator_term=0")
+	assert.NotEmpty(t, pos.GetLsn(), "fresh state should include the current WAL LSN")
 }
 
 func TestRuleStorePG_UpdateRule_FirstWrite(t *testing.T) {

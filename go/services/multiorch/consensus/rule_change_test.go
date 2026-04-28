@@ -34,7 +34,6 @@ import (
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
-	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
 
 // makePoolerState creates a PoolerHealthState with the given cell/name.
@@ -126,23 +125,21 @@ func TestBuildFailoverProposal(t *testing.T) {
 	makeResignedHealth := func(name string, primaryTerm int64) *multiorchdatapb.PoolerHealthState {
 		return &multiorchdatapb.PoolerHealthState{
 			MultiPooler: makeMP(name),
-			ConsensusStatus: &consensusdatapb.StatusResponse{
-				ConsensusStatus: &clustermetadatapb.ConsensusStatus{
-					Id: makeID(name),
-					CurrentPosition: &clustermetadatapb.PoolerPosition{
-						Rule: &clustermetadatapb.ShardRule{
-							PrimaryId: makeID(name),
-							RuleNumber: &clustermetadatapb.RuleNumber{
-								CoordinatorTerm: primaryTerm,
-							},
+			ConsensusStatus: &clustermetadatapb.ConsensusStatus{
+				Id: makeID(name),
+				CurrentPosition: &clustermetadatapb.PoolerPosition{
+					Rule: &clustermetadatapb.ShardRule{
+						PrimaryId: makeID(name),
+						RuleNumber: &clustermetadatapb.RuleNumber{
+							CoordinatorTerm: primaryTerm,
 						},
 					},
 				},
-				AvailabilityStatus: &clustermetadatapb.AvailabilityStatus{
-					LeadershipStatus: &clustermetadatapb.LeadershipStatus{
-						Signal:      clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION,
-						PrimaryTerm: primaryTerm,
-					},
+			},
+			AvailabilityStatus: &clustermetadatapb.AvailabilityStatus{
+				LeadershipStatus: &clustermetadatapb.LeadershipStatus{
+					Signal:      clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION,
+					PrimaryTerm: primaryTerm,
 				},
 			},
 		}
@@ -425,10 +422,10 @@ func TestRun_BackoffOnRecentAcceptance(t *testing.T) {
 	c := newRuleChangeCoordinator(t, fc)
 
 	mp1 := makePoolerState("zone1", "mp1")
-	mp1.Status = &multipoolermanagerdatapb.Status{
-		ConsensusTerm: &multipoolermanagerdatapb.ConsensusTerm{
-			TermNumber:         5,
-			LastAcceptanceTime: timestamppb.New(time.Now().Add(-500 * time.Millisecond)),
+	mp1.ConsensusStatus = &clustermetadatapb.ConsensusStatus{
+		TermRevocation: &clustermetadatapb.TermRevocation{
+			RevokedBelowTerm:       5,
+			CoordinatorInitiatedAt: timestamppb.New(time.Now().Add(-500 * time.Millisecond)),
 		},
 	}
 	cohort := []*multiorchdatapb.PoolerHealthState{mp1}
