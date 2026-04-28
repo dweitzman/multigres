@@ -338,7 +338,7 @@ func TestRun_Success(t *testing.T) {
 		},
 	}
 
-	rc := c.newRuleChange(fixedProposal(2, proposal), nopCheckPossible)
+	rc := c.newRuleChange("test", fixedProposal(2, proposal), nopCheckPossible)
 	require.NoError(t, rc.Run(ctx, cohort))
 
 	// Both nodes should have received a Propose request.
@@ -389,7 +389,7 @@ func TestRun_EarlyExit(t *testing.T) {
 		}, nil
 	}
 
-	rc := c.newRuleChange(tryBuild, nopCheckPossible)
+	rc := c.newRuleChange("test", tryBuild, nopCheckPossible)
 	require.NoError(t, rc.Run(ctx, cohort))
 }
 
@@ -409,7 +409,7 @@ func TestRun_InsufficientRecruitment(t *testing.T) {
 		return nil, fmt.Errorf("not enough nodes: have %d", len(statuses))
 	}
 
-	rc := c.newRuleChange(tryBuild, nopCheckPossible)
+	rc := c.newRuleChange("test", tryBuild, nopCheckPossible)
 	err := rc.Run(ctx, cohort)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "recruitment failed")
@@ -430,7 +430,7 @@ func TestRun_BackoffOnRecentAcceptance(t *testing.T) {
 	}
 	cohort := []*multiorchdatapb.PoolerHealthState{mp1}
 
-	rc := c.newRuleChange(fixedProposal(1, &consensusdatapb.CoordinatorProposal{}), nopCheckPossible)
+	rc := c.newRuleChange("test", fixedProposal(1, &consensusdatapb.CoordinatorProposal{}), nopCheckPossible)
 	err := rc.Run(ctx, cohort)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "another coordinator started recruiting recently")
@@ -452,7 +452,7 @@ func TestRun_PreValidateFails(t *testing.T) {
 		return preValidateErr
 	}
 
-	rc := c.newRuleChange(fixedProposal(1, &consensusdatapb.CoordinatorProposal{}), checkPossible)
+	rc := c.newRuleChange("test", fixedProposal(1, &consensusdatapb.CoordinatorProposal{}), checkPossible)
 	err := rc.Run(ctx, cohort)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "pre-vote failed")
@@ -510,7 +510,7 @@ func TestRun_LeaderProposeFails(t *testing.T) {
 		return proposal, nil
 	}
 
-	rc := c.newRuleChange(tryBuild, nopCheckPossible)
+	rc := c.newRuleChange("test", tryBuild, nopCheckPossible)
 	err := rc.Run(ctx, cohort)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to accept proposal")
@@ -563,7 +563,7 @@ func TestRun_NonLeaderProposeFails(t *testing.T) {
 	fc.Errors[mp2Key] = errors.New("standby propose rejected")
 
 	// With mp2 failing Recruit, only mp1 recruits — use minNodes=1.
-	rc := c.newRuleChange(fixedProposal(1, proposal), nopCheckPossible)
+	rc := c.newRuleChange("test", fixedProposal(1, proposal), nopCheckPossible)
 	require.NoError(t, rc.Run(ctx, cohort))
 
 	// Leader (mp1) received Propose.

@@ -186,6 +186,14 @@ message RecruitResponse {
 // itself; all others configure replication toward the new primary.
 message ProposeRequest {
   CoordinatorProposal proposal = 1;
+
+  // Human-readable reason for this proposal (e.g. "ShardInit", "failover").
+  // Written to rule_history.reason on the leader node for audit purposes.
+  string reason = 2;
+
+  // The pooler IDs that successfully responded to the Recruit RPC for this
+  // term. Written to rule_history.accepted_members on the leader node.
+  repeated clustermetadata.ID accepted_node_ids = 3;
 }
 
 // ProposeResponse carries the pooler's state after applying a ProposeRequest.

@@ -91,6 +91,7 @@ func (c *Coordinator) AppointLeader(ctx context.Context, shardID string, cohort 
 			return buildFailoverProposal(ctx, c.logger, result, poolerByID, healthByID)
 		}
 		return c.newRuleChange(
+			reason,
 			func(rev *clustermetadatapb.TermRevocation, statuses []*clustermetadatapb.ConsensusStatus) (*consensusdatapb.CoordinatorProposal, error) {
 				return commonconsensus.BuildSafeProposal(rev, statuses, buildProposalFn)
 			},
@@ -222,6 +223,7 @@ func (c *Coordinator) AppointInitialLeader(ctx context.Context, shardID string, 
 			return buildBootstrapProposal(result, cohortIDs, policy, poolerByID)
 		}
 		return c.newRuleChange(
+			"ShardInit",
 			func(rev *clustermetadatapb.TermRevocation, statuses []*clustermetadatapb.ConsensusStatus) (*consensusdatapb.CoordinatorProposal, error) {
 				return commonconsensus.BuildForcedProposal(rev, statuses, buildProposalFn)
 			},

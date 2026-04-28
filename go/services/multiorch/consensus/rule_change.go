@@ -38,16 +38,19 @@ import (
 // callbacks so the same workflow serves both normal failover and bootstrap.
 type coordinatorLedRuleChange struct {
 	coordinator   *Coordinator
+	reason        string
 	tryBuild      func(*clustermetadatapb.TermRevocation, []*clustermetadatapb.ConsensusStatus) (*consensusdatapb.CoordinatorProposal, error)
 	checkPossible func(*clustermetadatapb.TermRevocation, []*clustermetadatapb.ConsensusStatus) error
 }
 
 func (c *Coordinator) newRuleChange(
+	reason string,
 	tryBuild func(*clustermetadatapb.TermRevocation, []*clustermetadatapb.ConsensusStatus) (*consensusdatapb.CoordinatorProposal, error),
 	checkPossible func(*clustermetadatapb.TermRevocation, []*clustermetadatapb.ConsensusStatus) error,
 ) *coordinatorLedRuleChange {
 	return &coordinatorLedRuleChange{
 		coordinator:   c,
+		reason:        reason,
 		tryBuild:      tryBuild,
 		checkPossible: checkPossible,
 	}
@@ -88,7 +91,7 @@ func (r *coordinatorLedRuleChange) Run(ctx context.Context, cohort []*multiorchd
 	}
 
 	poolerByID, _ := buildCohortMaps(cohort)
-	return proposeAll(ctx, r.coordinator, proposal, statuses, poolerByID)
+	return proposeAll(ctx, r.coordinator, r.reason, proposal, statuses, poolerByID)
 }
 
 // recruit sends Recruit RPCs to all cohort members in parallel. After each
@@ -246,6 +249,7 @@ func buildBootstrapProposal(
 func proposeAll(
 	ctx context.Context,
 	c *Coordinator,
+	reason string,
 	proposal *consensusdatapb.CoordinatorProposal,
 	statuses []*clustermetadatapb.ConsensusStatus,
 	poolerByID map[string]*clustermetadatapb.MultiPooler,
@@ -264,6 +268,11 @@ func proposeAll(
 			"proposed leader %s not found in recruited statuses", leaderKey)
 	}
 
+	acceptedIDs := make([]*clustermetadatapb.ID, 0, len(statuses))
+	for _, cs := range statuses {
+		acceptedIDs = append(acceptedIDs, cs.GetId())
+	}
+
 	type proposeResult struct {
 		poolerName string
 		isLeader   bool
@@ -271,7 +280,11 @@ func proposeAll(
 	}
 	results := make(chan proposeResult, len(statuses))
 
-	req := &consensusdatapb.ProposeRequest{Proposal: proposal}
+	req := &consensusdatapb.ProposeRequest{
+		Proposal:        proposal,
+		Reason:          reason,
+		AcceptedNodeIds: acceptedIDs,
+	}
 	for _, cs := range statuses {
 		key := topoclient.ClusterIDString(cs.GetId())
 		mp, ok := poolerByID[key]

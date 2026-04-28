@@ -17,12 +17,13 @@ package manager
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/multigres/multigres/go/common/consensus"
+	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/eventlog"
 	"github.com/multigres/multigres/go/common/mterrors"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -447,7 +448,7 @@ func (pm *MultiPoolerManager) Recruit(ctx context.Context, req *consensusdatapb.
 	// rule or stored revocation already conflicts with this request.
 	// Fails open on I/O error: a nil status passes ValidateRevocation safely.
 	preStatus, _ := pm.getConsensusStatus(ctx)
-	if err := consensus.ValidateRevocation(preStatus, revocation); err != nil {
+	if err := commonconsensus.ValidateRevocation(preStatus, revocation); err != nil {
 		return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, err.Error())
 	}
 
@@ -591,7 +592,7 @@ func (pm *MultiPoolerManager) Propose(ctx context.Context, req *consensusdatapb.
 	if err != nil {
 		return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, err.Error())
 	}
-	if err := consensus.ValidateRevocation(currentStatus, revocation); err != nil {
+	if err := commonconsensus.ValidateRevocation(currentStatus, revocation); err != nil {
 		return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, err.Error())
 	}
 
@@ -610,6 +611,14 @@ func (pm *MultiPoolerManager) Propose(ctx context.Context, req *consensusdatapb.
 		state, err := pm.checkPromotionState(ctx, nil)
 		if err != nil {
 			return nil, err
+		}
+		// Pre-configure synchronous_standby_names before pg_promote() so the primary
+		// enforces sync replication from the moment it starts accepting connections.
+		syncCfg, err := syncConfigFromProposedRule(pm.logger, proposedRule, pm.serviceID)
+		if err != nil {
+			pm.logger.WarnContext(ctx, "Failed to compute sync config from proposal", "error", err)
+		} else if err := pm.applyGUCsForSyncReplication(ctx, syncCfg); err != nil {
+			pm.logger.WarnContext(ctx, "Failed to pre-configure sync replication before promote", "error", err)
 		}
 		if err := pm.promoteStandbyToPrimary(ctx, state); err != nil {
 			return nil, err
@@ -635,14 +644,19 @@ func (pm *MultiPoolerManager) Propose(ctx context.Context, req *consensusdatapb.
 		// TODO: If this proposal already exists, we're being asked to propagate
 		// rather than make a new entry. We can make the rule store understand
 		// propagation for that case.
+		reason := req.GetReason()
+		if reason == "" {
+			reason = "propose"
+		}
 		if _, err = pm.rules.updateRule(ctx, newRuleUpdate(
 			revokedBelowTerm,
 			coordinatorID,
 			"promotion",
-			"propose",
+			reason,
 			time.Now()).
 			withLeader(pm.serviceID).
 			withCohort(proposedRule.GetCohortMembers()).
+			withAcceptedMembers(req.GetAcceptedNodeIds()).
 			withWALPosition(finalLSN)); err != nil {
 			return nil, mterrors.Wrap(err, "propose failed: could not write rule")
 		}
@@ -682,6 +696,20 @@ func (pm *MultiPoolerManager) Propose(ctx context.Context, req *consensusdatapb.
 		return nil, mterrors.Wrap(err, "failed to build consensus status")
 	}
 	return &consensusdatapb.ProposeResponse{ConsensusStatus: cs}, nil
+}
+
+// syncConfigFromProposedRule derives the synchronous replication config from a proposed rule
+// by delegating to the durability policy.
+func syncConfigFromProposedRule(
+	logger *slog.Logger,
+	rule *clustermetadatapb.ShardRule,
+	leaderID *clustermetadatapb.ID,
+) (*commonconsensus.LeaderDurabilityPostgresConfig, error) {
+	policy, err := commonconsensus.NewPolicyFromProto(rule.GetDurabilityPolicy())
+	if err != nil {
+		return nil, fmt.Errorf("cannot derive sync config: %w", err)
+	}
+	return policy.BuildLeaderDurabilityPostgresConfig(logger, rule.GetCohortMembers(), leaderID)
 }
 
 // ConsensusStatus returns the current status of this node for consensus
