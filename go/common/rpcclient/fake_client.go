@@ -21,6 +21,8 @@ import (
 	"sync"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
@@ -84,6 +86,7 @@ type FakeClient struct {
 
 	// Request tracking for verification in tests
 	PromoteRequests map[string]*multipoolermanagerdatapb.PromoteRequest
+	ProposeRequests map[string]*consensusdatapb.ProposeRequest
 
 	// OnManagerHealthStream, if set, is called after each FakeManagerHealthStream
 	// is created. Tests use this to capture the stream and inject snapshots.
@@ -114,6 +117,7 @@ func NewFakeClient() *FakeClient {
 		Errors:                              make(map[string]error),
 		CallLog:                             make([]string, 0),
 		PromoteRequests:                     make(map[string]*multipoolermanagerdatapb.PromoteRequest),
+		ProposeRequests:                     make(map[string]*consensusdatapb.ProposeRequest),
 	}
 }
 
@@ -214,16 +218,30 @@ func (f *FakeClient) Recruit(ctx context.Context, pooler *clustermetadatapb.Mult
 	}
 
 	f.mu.RLock()
-	defer f.mu.RUnlock()
-	if resp, ok := f.RecruitResponses[poolerID]; ok {
-		return resp, nil
+	resp, ok := f.RecruitResponses[poolerID]
+	f.mu.RUnlock()
+	if !ok {
+		resp = &consensusdatapb.RecruitResponse{}
 	}
-	return &consensusdatapb.RecruitResponse{}, nil
+
+	// Stamp the request's TermRevocation onto the ConsensusStatus. The real
+	// multipooler stores the accepted revocation in its state and returns it in
+	// ConsensusStatus; filterByRevocation in BuildSafeProposal matches on it.
+	if cs := resp.GetConsensusStatus(); cs != nil {
+		cloned := proto.Clone(resp).(*consensusdatapb.RecruitResponse)
+		cloned.ConsensusStatus.TermRevocation = request.GetTermRevocation()
+		return cloned, nil
+	}
+	return resp, nil
 }
 
 func (f *FakeClient) Propose(ctx context.Context, pooler *clustermetadatapb.MultiPooler, request *consensusdatapb.ProposeRequest) (*consensusdatapb.ProposeResponse, error) {
 	poolerID := f.getPoolerID(pooler)
 	f.logCall("Propose", poolerID)
+
+	f.mu.Lock()
+	f.ProposeRequests[poolerID] = request
+	f.mu.Unlock()
 
 	if err := f.checkError(poolerID); err != nil {
 		return nil, err
