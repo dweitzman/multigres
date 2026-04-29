@@ -227,7 +227,7 @@ func buildFailoverProposal(
 	poolerByID map[string]*clustermetadatapb.MultiPooler,
 	healthByID map[string]*multiorchdatapb.PoolerHealthState,
 ) (*consensusdatapb.CoordinatorProposal, error) {
-	if result.BestRule == nil {
+	if result.OutgoingRule == nil {
 		return nil, errors.New("no committed rule found; use bootstrap path for fresh clusters")
 	}
 
@@ -259,8 +259,9 @@ func buildFailoverProposal(
 			PostgresPort: mp.GetPortMap()["postgres"],
 		},
 		ProposedRule: &clustermetadatapb.ShardRule{
-			CohortMembers:    result.BestRule.GetCohortMembers(),
-			DurabilityPolicy: result.BestRule.GetDurabilityPolicy(),
+			RuleNumber:       &clustermetadatapb.RuleNumber{CoordinatorTerm: result.TermRevocation.GetRevokedBelowTerm()},
+			CohortMembers:    result.OutgoingRule.GetCohortMembers(),
+			DurabilityPolicy: result.OutgoingRule.GetDurabilityPolicy(),
 			PrimaryId:        leader.GetId(),
 		},
 	}, nil
@@ -291,6 +292,7 @@ func buildBootstrapProposal(
 			PostgresPort: mp.GetPortMap()["postgres"],
 		},
 		ProposedRule: &clustermetadatapb.ShardRule{
+			RuleNumber:       &clustermetadatapb.RuleNumber{CoordinatorTerm: result.TermRevocation.GetRevokedBelowTerm()},
 			CohortMembers:    cohortIDs,
 			DurabilityPolicy: policy,
 			PrimaryId:        leader.GetId(),

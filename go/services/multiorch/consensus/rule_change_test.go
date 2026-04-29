@@ -163,7 +163,7 @@ func TestBuildFailoverProposal(t *testing.T) {
 	t.Run("picks first eligible leader", func(t *testing.T) {
 		result := commonconsensus.RecruitmentResult{
 			TermRevocation:  rev,
-			BestRule:        bestRule,
+			OutgoingRule:    bestRule,
 			EligibleLeaders: []*clustermetadatapb.ConsensusStatus{makeCS("mp1"), makeCS("mp2")},
 		}
 		healthByID := map[string]*multiorchdatapb.PoolerHealthState{
@@ -182,7 +182,7 @@ func TestBuildFailoverProposal(t *testing.T) {
 	t.Run("skips resigned primary, picks next eligible leader", func(t *testing.T) {
 		result := commonconsensus.RecruitmentResult{
 			TermRevocation:  rev,
-			BestRule:        bestRule,
+			OutgoingRule:    bestRule,
 			EligibleLeaders: []*clustermetadatapb.ConsensusStatus{makeCS("mp1"), makeCS("mp2")},
 		}
 		healthByID := map[string]*multiorchdatapb.PoolerHealthState{
@@ -198,7 +198,7 @@ func TestBuildFailoverProposal(t *testing.T) {
 	t.Run("all eligible leaders resigned returns error", func(t *testing.T) {
 		result := commonconsensus.RecruitmentResult{
 			TermRevocation:  rev,
-			BestRule:        bestRule,
+			OutgoingRule:    bestRule,
 			EligibleLeaders: []*clustermetadatapb.ConsensusStatus{makeCS("mp1"), makeCS("mp2")},
 		}
 		healthByID := map[string]*multiorchdatapb.PoolerHealthState{
@@ -211,10 +211,10 @@ func TestBuildFailoverProposal(t *testing.T) {
 		assert.Contains(t, err.Error(), "all eligible leaders have resigned")
 	})
 
-	t.Run("no BestRule returns error", func(t *testing.T) {
+	t.Run("no OutgoingRule returns error", func(t *testing.T) {
 		result := commonconsensus.RecruitmentResult{
 			TermRevocation:  rev,
-			BestRule:        nil,
+			OutgoingRule:    nil,
 			EligibleLeaders: []*clustermetadatapb.ConsensusStatus{makeCS("mp1")},
 		}
 		healthByID := map[string]*multiorchdatapb.PoolerHealthState{
@@ -263,7 +263,6 @@ func TestBuildBootstrapProposal(t *testing.T) {
 	t.Run("picks first eligible leader", func(t *testing.T) {
 		result := commonconsensus.RecruitmentResult{
 			TermRevocation:  rev,
-			BestRule:        nil,
 			EligibleLeaders: []*clustermetadatapb.ConsensusStatus{makeCS("mp1"), makeCS("mp2")},
 		}
 
@@ -277,7 +276,6 @@ func TestBuildBootstrapProposal(t *testing.T) {
 	t.Run("uses provided cohortIDs and policy", func(t *testing.T) {
 		result := commonconsensus.RecruitmentResult{
 			TermRevocation:  rev,
-			BestRule:        nil,
 			EligibleLeaders: []*clustermetadatapb.ConsensusStatus{makeCS("mp2")},
 		}
 
@@ -285,7 +283,7 @@ func TestBuildBootstrapProposal(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, "mp2", proposal.GetProposalLeader().GetId().GetName())
-		// CohortMembers must be the provided cohortIDs, not derived from BestRule
+		// CohortMembers must be the provided cohortIDs, not derived from OutgoingRule
 		require.Len(t, proposal.GetProposedRule().GetCohortMembers(), 3)
 		assert.Equal(t, "mp2", proposal.GetProposedRule().GetPrimaryId().GetName())
 		assert.Equal(t, int32(2), proposal.GetProposedRule().GetDurabilityPolicy().GetRequiredCount())
