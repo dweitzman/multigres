@@ -656,6 +656,7 @@ func (pm *MultiPoolerManager) Propose(ctx context.Context, req *consensusdatapb.
 			time.Now()).
 			withLeader(pm.serviceID).
 			withCohort(proposedRule.GetCohortMembers()).
+			withDurabilityPolicy(proposedRule.GetDurabilityPolicy()).
 			withAcceptedMembers(req.GetAcceptedNodeIds()).
 			withWALPosition(finalLSN)); err != nil {
 			return nil, mterrors.Wrap(err, "propose failed: could not write rule")
@@ -679,6 +680,14 @@ func (pm *MultiPoolerManager) Propose(ctx context.Context, req *consensusdatapb.
 		if err := pm.setPrimaryConnInfoLocked(ctx, host, port, false /* stopBefore */, false /* startAfter */); err != nil {
 			return nil, err
 		}
+		// Ensure health state reflects REPLICA, even if this node was recently
+		// an emergency-demoted primary (which restarts postgres as standby but
+		// does not update the pooler type until a Propose arrives).
+		if err := pm.changeTypeLocked(ctx, clustermetadatapb.PoolerType_REPLICA); err != nil {
+			pm.logger.WarnContext(ctx, "Failed to update pooler type to REPLICA after propose", "error", err)
+		}
+		// Replication is now configured; allow the postgres monitor to resume.
+		pm.rewindPending.Store(false)
 		pm.broadcastHealth()
 		if _, err := pm.rules.observePosition(ctx); err != nil {
 			return nil, mterrors.Wrap(err, "propose failed: could not refresh rule position")
