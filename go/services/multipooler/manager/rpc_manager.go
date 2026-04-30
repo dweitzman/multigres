@@ -397,87 +397,6 @@ func (pm *MultiPoolerManager) ResetReplication(ctx context.Context) error {
 	return nil
 }
 
-// ConfigureSynchronousReplication configures PostgreSQL synchronous replication settings
-func (pm *MultiPoolerManager) ConfigureSynchronousReplication(ctx context.Context, synchronousCommit multipoolermanagerdatapb.SynchronousCommitLevel, synchronousMethod multipoolermanagerdatapb.SynchronousMethod, numSync int32, standbyIDs []*clustermetadatapb.ID, reloadConfig bool, force bool) error {
-	if err := pm.checkReady(); err != nil {
-		return err
-	}
-
-	// Acquire the action lock to ensure only one mutation runs at a time
-	ctx, err := pm.actionLock.Acquire(ctx, "ConfigureSynchronousReplication")
-	if err != nil {
-		return err
-	}
-	defer pm.actionLock.Release(ctx)
-
-	return pm.configureSynchronousReplicationLocked(ctx, synchronousCommit, synchronousMethod, numSync, standbyIDs, reloadConfig, force)
-}
-
-// configureSynchronousReplicationLocked configures PostgreSQL synchronous replication settings.
-// The caller MUST already hold the action lock.
-func (pm *MultiPoolerManager) configureSynchronousReplicationLocked(ctx context.Context, synchronousCommit multipoolermanagerdatapb.SynchronousCommitLevel, synchronousMethod multipoolermanagerdatapb.SynchronousMethod, numSync int32, standbyIDs []*clustermetadatapb.ID, reloadConfig bool, force bool) error {
-	// Validate input parameters
-	standbyNames, err := validateSyncReplicationParams(numSync, standbyIDs)
-	if err != nil {
-		return err
-	}
-
-	// Check PRIMARY guardrails (pooler type and non-recovery mode)
-	if err := pm.checkPrimaryGuardrails(ctx); err != nil {
-		return err
-	}
-
-	// Insert history before applying GUCs.
-	// Rationale: we want to ensure that a new cohort is advertised
-	// before this primary can accept ACKs from it.
-	// This is for safe replica joining of the cluster.
-	// It will ensure multiorch can discover the new cohort during a failure.
-	revocation, err := pm.consensusState.GetRevocation(ctx)
-	if err != nil {
-		return mterrors.Wrap(err, "failed to get consensus term")
-	}
-	update := newRuleUpdate(
-		revocation.GetRevokedBelowTerm(),
-		pm.serviceID,
-		"replication_config",
-		"ConfigureSynchronousReplication called",
-		time.Now()).
-		withCohort(standbyIDs).
-		withOperation("configure")
-	if force {
-		update.withForce()
-	}
-	if _, err := pm.rules.updateRule(ctx, update); err != nil {
-		return mterrors.Wrap(err, "failed to record replication config history")
-	}
-
-	// Set synchronous_commit level
-	if err := pm.setSynchronousCommit(ctx, synchronousCommit); err != nil {
-		return err
-	}
-
-	// Build and set synchronous_standby_names
-	if err := pm.setSynchronousStandbyNames(ctx, synchronousMethod, numSync, standbyNames); err != nil {
-		return err
-	}
-
-	// Reload configuration if requested
-	if reloadConfig {
-		if err := pm.reloadPostgresConfig(ctx); err != nil {
-			return err
-		}
-	}
-
-	pm.logger.InfoContext(ctx, "ConfigureSynchronousReplication completed successfully",
-		"synchronous_commit", synchronousCommit,
-		"synchronous_method", synchronousMethod,
-		"num_sync", numSync,
-		"standby_ids", standbyIDs,
-		"reload_config", reloadConfig)
-
-	return nil
-}
-
 // UpdateSynchronousStandbyList updates PostgreSQL synchronous_standby_names by adding,
 // removing, or replacing members. It is idempotent and only valid when synchronous
 // replication is already configured.
@@ -1105,12 +1024,12 @@ func (pm *MultiPoolerManager) DemoteStalePrimary(
 	}, nil
 }
 
-// Promote promotes a standby to primary
+// Promote promotes a standby to primary.
 // This is called during the Propagate stage of generalized consensus to safely
 // transition a standby to primary and reconfigure replication.
 // This operation is fully idempotent - it checks what steps are already complete
 // and only executes the missing steps.
-func (pm *MultiPoolerManager) Promote(ctx context.Context, consensusTerm int64, expectedLSN string, syncReplicationConfig *multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest, force bool, reason string, coordinatorID *clustermetadatapb.ID, cohortMemberIDs, acceptedMemberIDs []*clustermetadatapb.ID) (*multipoolermanagerdatapb.PromoteResponse, error) {
+func (pm *MultiPoolerManager) Promote(ctx context.Context, consensusTerm int64, expectedLSN string, durabilityPolicy *clustermetadatapb.DurabilityPolicy, force bool, reason string, coordinatorID *clustermetadatapb.ID, cohortMemberIDs, acceptedMemberIDs []*clustermetadatapb.ID) (*multipoolermanagerdatapb.PromoteResponse, error) {
 	if err := pm.checkReady(); err != nil {
 		return nil, err
 	}
@@ -1122,68 +1041,41 @@ func (pm *MultiPoolerManager) Promote(ctx context.Context, consensusTerm int64, 
 	}
 	defer pm.actionLock.Release(ctx)
 
-	// Validation & Readiness
-
 	// Validate term - strict equality, no automatic updates
 	if err := pm.validateTermExactMatch(ctx, consensusTerm, force); err != nil {
 		return nil, err
 	}
 
-	// Check current promotion state to determine what needs to be done
-	state, err := pm.checkPromotionState(ctx, syncReplicationConfig)
+	state, err := pm.checkPromotionState(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	// Guard rail: Check topology type and validate state consistency
-	// If topology is PRIMARY, verify everything is in expected state (idempotency check)
-	// If topology is REPLICA, proceed with promotion
+	// Idempotency: if postgres and topology already reflect PRIMARY, nothing to do.
 	if state.isPrimaryInTopology {
-		// Topology shows PRIMARY - validate that everything is consistent
 		pm.logger.InfoContext(ctx, "Promote called but topology already shows PRIMARY - validating state consistency")
 
-		// Check if everything is in expected state
-		if state.isPrimaryInPostgres && state.syncReplicationMatches {
-			// Everything is consistent and complete - idempotent success
-			pm.logger.InfoContext(ctx, "Promotion already complete and consistent (idempotent)",
-				"lsn", state.currentLSN)
+		if state.isPrimaryInPostgres {
+			pm.logger.InfoContext(ctx, "Promotion already complete (idempotent)", "lsn", state.currentLSN)
 			return &multipoolermanagerdatapb.PromoteResponse{
 				LsnPosition:       state.currentLSN,
 				WasAlreadyPrimary: true,
 			}, nil
 		}
 
-		// Inconsistent state detected
-		pm.logger.ErrorContext(ctx, "Inconsistent state detected - topology is PRIMARY but state is incomplete",
-			"is_primary_in_postgres", state.isPrimaryInPostgres,
-			"sync_replication_matches", state.syncReplicationMatches,
+		pm.logger.ErrorContext(ctx, "Inconsistent state: topology is PRIMARY but postgres is not",
 			"force", force)
-
 		if !force {
-			// Without force flag, require manual intervention
 			return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
-				fmt.Sprintf("inconsistent state: topology is PRIMARY but PostgreSQL state doesn't match (pg_primary=%v, sync_matches=%v). Manual intervention required or use force=true.",
-					state.isPrimaryInPostgres, state.syncReplicationMatches))
+				"inconsistent state: topology is PRIMARY but PostgreSQL is still in recovery. Manual intervention required or use force=true.")
 		}
 	}
 
-	// If PostgreSQL is not promoted yet, validate expected LSN before promotion
+	// Validate expected LSN before promoting (while still a standby).
 	if !state.isPrimaryInPostgres {
 		if err := pm.validateExpectedLSN(ctx, expectedLSN); err != nil {
 			return nil, err
 		}
-	}
-
-	// Execute missing steps
-
-	// Promote PostgreSQL if needed
-	if err := pm.promoteStandbyToPrimary(ctx, state); err != nil {
-		return nil, err
-	}
-
-	// Configure sync replication if needed
-	if err := pm.configureReplicationAfterPromotion(ctx, state, syncReplicationConfig); err != nil {
-		return nil, err
 	}
 
 	// Get final LSN position
@@ -1193,22 +1085,6 @@ func (pm *MultiPoolerManager) Promote(ctx context.Context, consensusTerm int64, 
 		return nil, err
 	}
 
-	// Clear any outstanding resignation signal now that the coordinator has
-	// explicitly re-promoted us at a new term. A higher primary_term implicitly
-	// invalidates the old signal, but clearing eagerly avoids a window where
-	// a stale REQUESTING_DEMOTION is still published in StatusResponse.
-	if err := pm.clearResignedLeaderAtTerm(ctx); err != nil {
-		return nil, mterrors.Wrap(err, "failed to clear resigned primary term")
-	}
-
-	pm.healthStreamer.UpdateLeaderObservation(&poolerserver.LeaderObservation{
-		LeaderID:   pm.serviceID,
-		LeaderTerm: consensusTerm,
-	})
-
-	// Write rule history record - this validates that sync replication is working.
-	// If this fails (typically due to timeout waiting for standby acknowledgment), we fail
-	// the promotion. It's better to have no primary than one that can't satisfy durability.
 	if reason == "" {
 		reason = "unknown"
 	}
@@ -1216,6 +1092,14 @@ func (pm *MultiPoolerManager) Promote(ctx context.Context, consensusTerm int64, 
 	if promoteCoordID == nil {
 		promoteCoordID = pm.serviceID
 	}
+
+	// ---- BEGIN CRITICAL ORDERING SECTION ----------------------------------------
+	// updateRule owns the full GUC→promote→WAL ordering (mirrors the Propose path):
+	//   1. Pre-promote GUC: transition policy applied while still a standby.
+	//   2. pg_promote() via promotionHook (standby path only).
+	//   3. Pre-commit GUC: transition policy re-applied after acquiring row lock.
+	//   4. WAL write (COMMIT): sync standby acknowledgment waits here.
+	//   5. Post-commit GUC: incoming policy only, now that the rule is durable.
 	promoteUpdate := newRuleUpdate(
 		consensusTerm,
 		promoteCoordID,
@@ -1225,7 +1109,13 @@ func (pm *MultiPoolerManager) Promote(ctx context.Context, consensusTerm int64, 
 		withLeader(pm.serviceID).
 		withCohort(cohortMemberIDs).
 		withAcceptedMembers(acceptedMemberIDs).
-		withWALPosition(finalLSN)
+		withWALPosition(finalLSN).
+		withDurabilityPolicy(durabilityPolicy)
+	if !state.isPrimaryInPostgres {
+		promoteUpdate.withPromotionHook(func(hookCtx context.Context) error {
+			return pm.promoteStandbyToPrimary(hookCtx, state)
+		})
+	}
 	if force {
 		promoteUpdate.withForce()
 	}
@@ -1235,6 +1125,18 @@ func (pm *MultiPoolerManager) Promote(ctx context.Context, consensusTerm int64, 
 			"error", err)
 		return nil, mterrors.Wrap(err, "promotion failed: could not write rule history (sync replication may not be functioning)")
 	}
+	// ---- END CRITICAL ORDERING SECTION ------------------------------------------
+
+	// Clear any outstanding resignation signal now that the coordinator has
+	// explicitly re-promoted us at a new term.
+	if err := pm.clearResignedLeaderAtTerm(ctx); err != nil {
+		return nil, mterrors.Wrap(err, "failed to clear resigned primary term")
+	}
+
+	pm.healthStreamer.UpdateLeaderObservation(&poolerserver.LeaderObservation{
+		LeaderID:   pm.serviceID,
+		LeaderTerm: consensusTerm,
+	})
 
 	// Update topology and notify all components (best-effort, don't fail promotion)
 	if err := pm.updateTopologyAfterPromotion(ctx, state); err != nil {
@@ -1248,7 +1150,7 @@ func (pm *MultiPoolerManager) Promote(ctx context.Context, consensusTerm int64, 
 
 	return &multipoolermanagerdatapb.PromoteResponse{
 		LsnPosition:       finalLSN,
-		WasAlreadyPrimary: state.isPrimaryInPostgres && state.isPrimaryInTopology && state.syncReplicationMatches,
+		WasAlreadyPrimary: state.isPrimaryInPostgres && state.isPrimaryInTopology,
 	}, nil
 }
 

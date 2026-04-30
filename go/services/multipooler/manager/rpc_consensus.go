@@ -607,7 +607,7 @@ func (pm *MultiPoolerManager) Propose(ctx context.Context, req *consensusdatapb.
 
 	if isLeader {
 		// Step 3a: Leader — promote postgres (if needed), write rule, enable query service.
-		state, err := pm.checkPromotionState(ctx, nil)
+		state, err := pm.checkPromotionState(ctx)
 		if err != nil {
 			return nil, err
 		}

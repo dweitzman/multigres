@@ -1370,7 +1370,7 @@ func TestPropagate(t *testing.T) {
 		recruited := []*multiorchdatapb.PoolerHealthState{candidate}
 		recruited = append(recruited, standbys...)
 
-		err := c.EstablishLeadership(ctx, candidate, standbys, 6, mustPolicy(t, quorumRule), "test_election", cohort, recruited)
+		err := c.EstablishLeadership(ctx, candidate, standbys, 6, quorumRule, "test_election", cohort, recruited)
 		require.NoError(t, err)
 
 		// Verify the PromoteRequest contains the expected election metadata
@@ -1427,7 +1427,7 @@ func TestPropagate(t *testing.T) {
 		recruited := []*multiorchdatapb.PoolerHealthState{candidate}
 		recruited = append(recruited, standbys...)
 
-		err := c.EstablishLeadership(ctx, candidate, standbys, 6, mustPolicy(t, quorumRule), "test_election", cohort, recruited)
+		err := c.EstablishLeadership(ctx, candidate, standbys, 6, quorumRule, "test_election", cohort, recruited)
 		// Should succeed even though one standby failed
 		require.NoError(t, err)
 
@@ -1529,18 +1529,10 @@ func TestAppointLeader(t *testing.T) {
 		prototest.RequireEqual(t, coordID, promoteReq.CoordinatorId)
 		require.Equal(t, int64(6), promoteReq.ConsensusTerm)
 
-		// Verify syncConfig includes the full cohort in the standby list,
-		// including the leader and nodes that rejected the term
-		require.NotNil(t, promoteReq.SyncReplicationConfig, "SyncReplicationConfig should be set")
-		syncConfig := promoteReq.SyncReplicationConfig
-		require.Equal(t, int32(1), syncConfig.NumSync)
-
-		standbyNames := make([]string, len(syncConfig.StandbyIds))
-		for i, id := range syncConfig.StandbyIds {
-			standbyNames[i] = id.Name
-		}
-		require.ElementsMatch(t, []string{"mp1", "mp2", "mp3"}, standbyNames,
-			"StandbyIds should include the full cohort: leader, accepted standbys, and rejected nodes")
+		// Verify the durability policy is passed through from the bootstrap policy.
+		require.NotNil(t, promoteReq.DurabilityPolicy, "DurabilityPolicy should be set")
+		require.Equal(t, clustermetadatapb.QuorumType_QUORUM_TYPE_AT_LEAST_N, promoteReq.DurabilityPolicy.QuorumType)
+		require.Equal(t, int32(2), promoteReq.DurabilityPolicy.RequiredCount)
 	})
 }
 

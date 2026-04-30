@@ -67,13 +67,13 @@ func (f *fakeRuleStore) updateRule(ctx context.Context, update *ruleUpdateBuilde
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.updates = append(f.updates, update)
-	if f.updateErr != nil {
-		return nil, f.updateErr
-	}
 	if update.promotionHook != nil {
 		if err := update.promotionHook(ctx); err != nil {
 			return nil, err
 		}
+	}
+	if f.updateErr != nil {
+		return nil, f.updateErr
 	}
 	return f.pos, nil
 }

@@ -17,7 +17,6 @@ package manager
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -64,7 +63,6 @@ type poolerID struct {
 // Format: {cell}_{name}
 // This is used consistently for:
 // - SetPrimaryConnInfo: standby's application_name when connecting to primary
-// - ConfigureSynchronousReplication: standby names in synchronous_standby_names
 //
 // On validation failure an approximate poolerID is returned alongside the error.
 // The approximate appName is "{cell}_{name}" with missing fields replaced by
@@ -774,37 +772,23 @@ func (pm *MultiPoolerManager) validateExpectedLSN(ctx context.Context, expectedL
 // Synchronous Replication Configuration
 // ----------------------------------------------------------------------------
 
-// setSynchronousCommit sets the PostgreSQL synchronous_commit level
-func (pm *MultiPoolerManager) setSynchronousCommit(ctx context.Context, synchronousCommit multipoolermanagerdatapb.SynchronousCommitLevel) error {
-	// Convert enum to PostgreSQL string value
-	var syncCommitValue string
-	switch synchronousCommit {
+// syncCommitString converts a SynchronousCommitLevel enum to the PostgreSQL GUC string.
+func syncCommitString(level multipoolermanagerdatapb.SynchronousCommitLevel) (string, error) {
+	switch level {
 	case multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_OFF:
-		syncCommitValue = "off"
+		return "off", nil
 	case multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LOCAL:
-		syncCommitValue = "local"
+		return "local", nil
 	case multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_WRITE:
-		syncCommitValue = "remote_write"
+		return "remote_write", nil
 	case multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON:
-		syncCommitValue = "on"
+		return "on", nil
 	case multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_REMOTE_APPLY:
-		syncCommitValue = "remote_apply"
+		return "remote_apply", nil
 	default:
-		return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
-			"invalid synchronous_commit level: "+synchronousCommit.String())
+		return "", mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
+			"invalid synchronous_commit level: "+level.String())
 	}
-
-	execCtx, execCancel := context.WithTimeout(ctx, 500*time.Millisecond)
-	defer execCancel()
-
-	pm.logger.InfoContext(ctx, "Setting synchronous_commit", "value", syncCommitValue)
-	sql := fmt.Sprintf("ALTER SYSTEM SET synchronous_commit = '%s'", syncCommitValue)
-	if err := pm.exec(execCtx, sql); err != nil {
-		pm.logger.ErrorContext(ctx, "Failed to set synchronous_commit", "error", err)
-		return mterrors.Wrap(err, "failed to set synchronous_commit")
-	}
-
-	return nil
 }
 
 // buildSynchronousStandbyNamesValue constructs the synchronous_standby_names value string
@@ -826,61 +810,6 @@ func buildSynchronousStandbyNamesValue(method multipoolermanagerdatapb.Synchrono
 	}
 
 	return fmt.Sprintf("%s %d (%s)", methodStr, numSync, formatStandbyList(names)), nil
-}
-
-// applySynchronousStandbyNames applies the synchronous_standby_names setting to PostgreSQL
-func (pm *MultiPoolerManager) applySynchronousStandbyNames(ctx context.Context, value string) error {
-	pm.logger.InfoContext(ctx, "Setting synchronous_standby_names", "value", value)
-
-	execCtx, execCancel := context.WithTimeout(ctx, 500*time.Millisecond)
-	defer execCancel()
-
-	// ALTER SYSTEM SET doesn't support parameterized queries, so we use string formatting
-	sql := "ALTER SYSTEM SET synchronous_standby_names = " + ast.QuoteStringLiteral(value)
-	if err := pm.exec(execCtx, sql); err != nil {
-		pm.logger.ErrorContext(ctx, "Failed to set synchronous_standby_names", "error", err)
-		return mterrors.Wrap(err, "failed to set synchronous_standby_names")
-	}
-
-	return nil
-}
-
-// setSynchronousStandbyNames builds and sets the PostgreSQL synchronous_standby_names configuration
-// Format: https://www.postgresql.org/docs/current/runtime-config-replication.html#GUC-SYNCHRONOUS-STANDBY-NAMES
-// Examples:
-//
-//	FIRST 2 (standby1, standby2, standby3)
-//	ANY 1 (standby1, standby2)
-//
-// Note: Use '*' to match all connected standbys, or specify explicit standby application_name values
-// Application names are generated from multipooler IDs using the shared newPoolerID helper
-func (pm *MultiPoolerManager) setSynchronousStandbyNames(ctx context.Context, synchronousMethod multipoolermanagerdatapb.SynchronousMethod, numSync int32, names []poolerID) error {
-	// If standby list is empty, clear synchronous_standby_names
-	if len(names) == 0 {
-		execCtx, execCancel := context.WithTimeout(ctx, 500*time.Millisecond)
-		defer execCancel()
-
-		pm.logger.InfoContext(ctx, "Clearing synchronous_standby_names (empty standby list)")
-		if err := pm.exec(execCtx, "ALTER SYSTEM RESET synchronous_standby_names"); err != nil {
-			pm.logger.ErrorContext(ctx, "Failed to clear synchronous_standby_names", "error", err)
-			return mterrors.Wrap(err, "failed to clear synchronous_standby_names")
-		}
-		return nil
-	}
-
-	// If numSync was not provided, default to 1
-	if numSync == 0 {
-		numSync = 1
-	}
-
-	// Build the synchronous_standby_names value using the shared helper
-	standbyNamesValue, err := buildSynchronousStandbyNamesValue(synchronousMethod, numSync, names)
-	if err != nil {
-		return err
-	}
-
-	// Apply the setting
-	return pm.applySynchronousStandbyNames(ctx, standbyNamesValue)
 }
 
 // getSynchronousReplicationConfig retrieves and parses the current synchronous replication configuration
@@ -951,107 +880,10 @@ func (pm *MultiPoolerManager) getSynchronousReplicationConfig(ctx context.Contex
 	return config, nil
 }
 
-// clearSyncReplicationForDemotion clears synchronous replication settings at the start of demotion.
-//
-// When a stale primary comes back online after failover:
-// 1. It still has synchronous_standby_names configured
-// 2. No standbys are connected (they're all connected to the new primary)
-// 3. Any writes (like heartbeat) block indefinitely waiting for sync acknowledgment
-// 4. This blocks the demote flow and causes timeout
-//
-// ALTER SYSTEM writes to postgresql.auto.conf, not to WAL, so it doesn't need sync
-// replication acknowledgment and won't block even with no standbys connected.
-func (pm *MultiPoolerManager) clearSyncReplicationForDemotion(ctx context.Context) error {
-	pm.logger.InfoContext(ctx, "Clearing synchronous replication for demotion (early)")
-
-	// Use a short timeout - if this hangs, the demote will fail anyway
-	execCtx, execCancel := context.WithTimeout(ctx, 5*time.Second)
-	defer execCancel()
-
-	// ALTER SYSTEM writes to postgresql.auto.conf (not WAL), so it doesn't require
-	// sync replication acknowledgment and won't block.
-	if err := pm.exec(execCtx, "ALTER SYSTEM RESET synchronous_standby_names"); err != nil {
-		pm.logger.WarnContext(ctx, "Failed to clear synchronous_standby_names for demotion", "error", err)
-		return mterrors.Wrap(err, "failed to clear synchronous_standby_names for demotion")
-	}
-
-	// Reload configuration to apply changes immediately
-	if err := pm.exec(execCtx, "SELECT pg_reload_conf()"); err != nil {
-		pm.logger.WarnContext(ctx, "Failed to reload configuration for demotion", "error", err)
-		return mterrors.Wrap(err, "failed to reload configuration for demotion")
-	}
-
-	pm.logger.InfoContext(ctx, "Successfully cleared synchronous replication for demotion")
-	return nil
-}
-
-// resetSynchronousReplication clears the synchronous standby list
-// This should be called after the server is read-only to safely clear settings
+// resetSynchronousReplication resets synchronous_standby_names so that demotion
+// commits do not block waiting for standbys that are no longer connected.
 func (pm *MultiPoolerManager) resetSynchronousReplication(ctx context.Context) error {
-	pm.logger.InfoContext(ctx, "Clearing synchronous standby list")
-
-	execCtx, execCancel := context.WithTimeout(ctx, 500*time.Millisecond)
-	defer execCancel()
-
-	// Clear synchronous_standby_names to remove all standbys
-	if err := pm.exec(execCtx, "ALTER SYSTEM RESET synchronous_standby_names"); err != nil {
-		pm.logger.ErrorContext(ctx, "Failed to clear synchronous_standby_names", "error", err)
-		return mterrors.Wrap(err, "failed to clear synchronous_standby_names")
-	}
-
-	// Reload configuration to apply changes
-	if err := pm.exec(execCtx, "SELECT pg_reload_conf()"); err != nil {
-		pm.logger.ErrorContext(ctx, "Failed to reload configuration", "error", err)
-		return mterrors.Wrap(err, "failed to reload configuration after clearing standby list")
-	}
-
-	pm.logger.InfoContext(ctx, "Successfully cleared synchronous standby list")
-	return nil
-}
-
-// syncReplicationConfigMatches checks if the current sync replication config matches the requested config
-func (pm *MultiPoolerManager) syncReplicationConfigMatches(current *multipoolermanagerdatapb.SynchronousReplicationConfiguration, requested *multipoolermanagerdatapb.ConfigureSynchronousReplicationRequest) bool {
-	// Check synchronous commit level
-	if current.SynchronousCommit != requested.SynchronousCommit {
-		return false
-	}
-
-	// Check synchronous method
-	if current.SynchronousMethod != requested.SynchronousMethod {
-		return false
-	}
-
-	// Check num_sync
-	if current.NumSync != requested.NumSync {
-		return false
-	}
-
-	// Check standby IDs (must match exactly 1:1, so sort and compare)
-	if len(current.StandbyIds) != len(requested.StandbyIds) {
-		return false
-	}
-
-	// Sort both lists by cell_name for comparison
-	currentSorted := make([]string, len(current.StandbyIds))
-	for i, id := range current.StandbyIds {
-		currentSorted[i] = fmt.Sprintf("%s_%s", id.Cell, id.Name)
-	}
-	sort.Strings(currentSorted)
-
-	requestedSorted := make([]string, len(requested.StandbyIds))
-	for i, id := range requested.StandbyIds {
-		requestedSorted[i] = fmt.Sprintf("%s_%s", id.Cell, id.Name)
-	}
-	sort.Strings(requestedSorted)
-
-	// Compare sorted lists element by element
-	for i := range currentSorted {
-		if currentSorted[i] != requestedSorted[i] {
-			return false
-		}
-	}
-
-	return true
+	return pm.syncStandby.Clear(ctx)
 }
 
 // ----------------------------------------------------------------------------

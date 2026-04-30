@@ -110,7 +110,7 @@ func (s *consensusService) Promote(ctx context.Context, req *multipoolermanagerd
 	resp, err := s.manager.Promote(ctx,
 		req.ConsensusTerm,
 		req.ExpectedLsn,
-		req.SyncReplicationConfig,
+		req.DurabilityPolicy,
 		req.Force,
 		req.Reason,
 		req.CoordinatorId,

@@ -544,16 +544,16 @@ func (rs *ruleStore) observePosition(ctx context.Context) (*clustermetadatapb.Po
 // complete within that time. A timeout typically indicates that synchronous
 // replication is not functioning.
 func (rs *ruleStore) updateRule(ctx context.Context, update *ruleUpdateBuilder) (*clustermetadatapb.PoolerPosition, error) {
-	if update.force {
-		// Force mode skips history recording entirely. Force operations are emergency
-		// operations that must configure replication GUCs regardless. The write would
-		// block on sync replication with unreachable standbys, consuming the parent
-		// context's deadline and causing subsequent GUC changes to fail.
-		rs.logger.InfoContext(ctx, "Skipping rule update in force mode",
-			"coordinator_term", update.termNumber,
-			"event_type", update.eventType)
-		return nil, nil
-	}
+	// if update.force {
+	// 	// Force mode skips history recording entirely. Force operations are emergency
+	// 	// operations that must configure replication GUCs regardless. The write would
+	// 	// block on sync replication with unreachable standbys, consuming the parent
+	// 	// context's deadline and causing subsequent GUC changes to fail.
+	// 	rs.logger.InfoContext(ctx, "Skipping rule update in force mode",
+	// 		"coordinator_term", update.termNumber,
+	// 		"event_type", update.eventType)
+	// 	return nil, nil
+	// }
 
 	// Convert optional leader ID; empty string causes NULLIF→COALESCE to keep existing.
 	var leaderStr string

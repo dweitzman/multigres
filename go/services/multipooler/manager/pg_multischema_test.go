@@ -87,6 +87,7 @@ func newTestManagerWithMock(tableGroup, shard string) (*MultiPoolerManager, *moc
 		multipooler:     multiPooler,
 		serviceID:       svcID,
 		servicePoolerID: svcPoolerID,
+		syncStandby:     noopSyncStandbyManager{},
 	}
 	pm.rules = newRuleStore(logger, mockQueryService, noopSyncStandbyManager{})
 

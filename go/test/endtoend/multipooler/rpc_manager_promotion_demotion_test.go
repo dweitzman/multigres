@@ -161,10 +161,10 @@ func TestEmergencyDemoteAndPromote(t *testing.T) {
 
 		// Perform promotion with Force=true (testing promote functionality, not term validation)
 		promoteReq := &multipoolermanagerdatapb.PromoteRequest{
-			ConsensusTerm:         0, // Ignored when Force=true
-			ExpectedLsn:           currentLSN,
-			SyncReplicationConfig: nil, // Don't configure sync replication for now
-			Force:                 true,
+			ConsensusTerm:    0, // Ignored when Force=true
+			ExpectedLsn:      currentLSN,
+			DurabilityPolicy: nil,
+			Force:            true,
 		}
 		promoteResp, err := standbyConsensusClient.Promote(utils.WithTimeout(t, 10*time.Second), promoteReq)
 		require.NoError(t, err, "Promote should succeed")
@@ -227,10 +227,10 @@ func TestEmergencyDemoteAndPromote(t *testing.T) {
 
 		// Promote original primary back with Force=true
 		promoteReq2 := &multipoolermanagerdatapb.PromoteRequest{
-			ConsensusTerm:         0, // Ignored when Force=true
-			ExpectedLsn:           currentLSN2,
-			SyncReplicationConfig: nil,
-			Force:                 true,
+			ConsensusTerm:    0, // Ignored when Force=true
+			ExpectedLsn:      currentLSN2,
+			DurabilityPolicy: nil,
+			Force:            true,
 		}
 		promoteResp2, err := primaryConsensusClient.Promote(utils.WithTimeout(t, 10*time.Second), promoteReq2)
 		require.NoError(t, err, "Promote should succeed")
@@ -355,10 +355,10 @@ func TestEmergencyDemoteAndPromote(t *testing.T) {
 
 		// First promotion with Force=true
 		promoteReq := &multipoolermanagerdatapb.PromoteRequest{
-			ConsensusTerm:         0, // Ignored when Force=true
-			ExpectedLsn:           currentLSN,
-			SyncReplicationConfig: nil,
-			Force:                 true,
+			ConsensusTerm:    0, // Ignored when Force=true
+			ExpectedLsn:      currentLSN,
+			DurabilityPolicy: nil,
+			Force:            true,
 		}
 		promoteResp1, err := primaryConsensusClient.Promote(utils.WithTimeout(t, 10*time.Second), promoteReq)
 		require.NoError(t, err, "First promote should succeed")
@@ -466,10 +466,10 @@ func TestEmergencyDemoteAndPromote(t *testing.T) {
 
 		// Try with stale term (should fail)
 		promoteReq := &multipoolermanagerdatapb.PromoteRequest{
-			ConsensusTerm:         staleTerm,
-			ExpectedLsn:           "",
-			SyncReplicationConfig: nil,
-			Force:                 false,
+			ConsensusTerm:    staleTerm,
+			ExpectedLsn:      "",
+			DurabilityPolicy: nil,
+			Force:            false,
 		}
 		_, err = primaryConsensusClient.Promote(utils.WithTimeout(t, 10*time.Second), promoteReq)
 		require.Error(t, err, "Promote with stale term should fail")
@@ -537,10 +537,10 @@ func TestEmergencyDemoteAndPromote(t *testing.T) {
 
 		// Try with wrong LSN (should fail) - use correct term so only LSN validation triggers
 		promoteReq := &multipoolermanagerdatapb.PromoteRequest{
-			ConsensusTerm:         currentTerm,
-			ExpectedLsn:           "FF/FFFFFFFF",
-			SyncReplicationConfig: nil,
-			Force:                 false,
+			ConsensusTerm:    currentTerm,
+			ExpectedLsn:      "FF/FFFFFFFF",
+			DurabilityPolicy: nil,
+			Force:            false,
 		}
 		_, err = primaryConsensusClient.Promote(utils.WithTimeout(t, 10*time.Second), promoteReq)
 		require.Error(t, err, "Promote with wrong LSN should fail")

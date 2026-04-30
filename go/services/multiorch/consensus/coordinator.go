@@ -167,7 +167,7 @@ func (c *Coordinator) appointLeaderWithTerm(ctx context.Context, shardID string,
 	recruited = append(recruited, standbys...)
 
 	// Propagation and Establishment
-	if err := c.EstablishLeadership(ctx, candidate, standbys, term, durabilityPolicy, reason, cohort, recruited); err != nil {
+	if err := c.EstablishLeadership(ctx, candidate, standbys, term, policy, reason, cohort, recruited); err != nil {
 		return mterrors.Wrap(err, "EstablishLeadership failed")
 	}
 
