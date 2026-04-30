@@ -52,19 +52,23 @@ type ruleStorer interface {
 type ruleStore struct {
 	logger       *slog.Logger
 	queryService executor.InternalQueryService
+	syncStandby  SyncStandbyManager
 
 	mu      sync.Mutex
 	lastPos *clustermetadatapb.PoolerPosition // updated on every observePosition / updateRule
 }
 
-// newRuleStore creates a ruleStore.
+// newRuleStore creates a ruleStore. ssm must not be nil; tests that do not
+// need GUC verification should pass noopSyncStandbyManager{}.
 func newRuleStore(
 	logger *slog.Logger,
 	qs executor.InternalQueryService,
+	ssm SyncStandbyManager,
 ) *ruleStore {
 	return &ruleStore{
 		logger:       logger,
 		queryService: qs,
+		syncStandby:  ssm,
 	}
 }
 
@@ -118,9 +122,17 @@ type ruleUpdateBuilder struct {
 	operation       string
 	acceptedMembers []*clustermetadatapb.ID
 
-	force        bool
-	previousRule *ruleNumber // for compare-and-swap; nil means no check
+	force         bool
+	previousRule  *ruleNumber // for compare-and-swap; nil means no check
+	promotionHook promotionFn // non-nil iff postgres is known to be in recovery
 }
+
+// promotionFn is called by updateRule after the pre-promote GUC is applied and
+// before the main Transact. It must call pg_promote() and wait for promotion to
+// complete. It is provided iff the caller already knows postgres is in recovery.
+// walPosition must be provided separately via withWALPosition — the rule store
+// never computes it internally.
+type promotionFn func(ctx context.Context) error
 
 func newRuleUpdate(termNumber int64, coordinatorID *clustermetadatapb.ID, eventType, reason string, createdAt time.Time) *ruleUpdateBuilder {
 	return &ruleUpdateBuilder{
@@ -171,6 +183,15 @@ func (b *ruleUpdateBuilder) withForce() *ruleUpdateBuilder {
 // current rule matches the given coordinator term and subterm.
 func (b *ruleUpdateBuilder) withPreviousRule(coordinatorTerm, leaderSubterm int64) *ruleUpdateBuilder {
 	b.previousRule = &ruleNumber{coordinatorTerm: coordinatorTerm, leaderSubterm: leaderSubterm}
+	return b
+}
+
+// withPromotionHook registers a callback that updateRule will invoke after
+// applying the pre-promote GUC and before starting the main transaction.
+// Provide this iff the caller has verified that postgres is in recovery (standby).
+// The hook must call pg_promote() and wait for promotion to complete.
+func (b *ruleUpdateBuilder) withPromotionHook(fn promotionFn) *ruleUpdateBuilder {
+	b.promotionHook = fn
 	return b
 }
 
@@ -248,16 +269,70 @@ func (rs *ruleStore) createRuleTables(ctx context.Context) error {
 // check fails: the current rule's term/subterm did not match the expected values.
 var errRuleConflict = errors.New("rule conflict: current rule version mismatch")
 
-// observePosition reads the current rule and WAL LSN from postgres and returns
-// the observed position. Returns nil if no rule has been applied yet
-// (coordinator_term = 0).
-//
-// Returns an error if postgres is unreachable.
-func (rs *ruleStore) observePosition(ctx context.Context) (*clustermetadatapb.PoolerPosition, error) {
-	queryCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
-	defer cancel()
+// lockedRuleState holds the rule state read from current_rule inside an updateRule
+// transaction, plus the next leader_subterm to assign.
+type lockedRuleState struct {
+	rule        *clustermetadatapb.ShardRule
+	nextSubterm int64
+}
 
-	result, err := rs.queryService.QueryArgs(queryCtx, `
+// ruleRowLockKey is a context key that proves SELECT FOR UPDATE was executed on
+// current_rule within the current action-lock session. Both the action lock and
+// this row lock must be held before any call to SyncStandbyManager.SetPolicy:
+//
+//   - The action lock ensures no concurrent goroutine is modifying the GUC.
+//   - The row lock ensures the GUC change is consistent with the rule the caller
+//     just read; without it, a stale GUC update could race with a concurrent rule
+//     write that committed after the action lock was acquired but before the GUC
+//     was written.
+//
+// The row lock is released at COMMIT, but the context token remains valid for
+// the post-commit SetPolicy call because the action lock is still held, and the
+// next caller to modify the GUC will acquire both locks before doing so.
+type ruleRowLockKey struct{}
+
+// withRuleRowLock returns a derived context that carries proof of a
+// SELECT FOR UPDATE on current_rule within this action-lock session.
+func withRuleRowLock(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ruleRowLockKey{}, struct{}{})
+}
+
+// prePromoteKey is a context key used when SetPolicy is called before pg_promote(),
+// while the node is still a standby. On a standby, SELECT FOR UPDATE is not
+// allowed, but the action lock alone is sufficient — no concurrent writer can
+// modify the rule table on a read-only standby.
+type prePromoteKey struct{}
+
+// withPrePromoteToken returns a derived context proving that SetPolicy is being
+// called from the pre-promote path, where the action lock alone is sufficient.
+func withPrePromoteToken(ctx context.Context) context.Context {
+	return context.WithValue(ctx, prePromoteKey{}, struct{}{})
+}
+
+// assertRuleRowLockedSinceActionLock returns an error if the context carries
+// neither a ruleRowLock token (SELECT FOR UPDATE was run since the action lock
+// was acquired) nor a prePromote token (caller is on the standby pre-promote
+// path, where action lock alone is sufficient because standbys have no
+// concurrent rule writers).
+func assertRuleRowLockedSinceActionLock(ctx context.Context) error {
+	_, hasRowLock := ctx.Value(ruleRowLockKey{}).(struct{})
+	_, hasPrePromote := ctx.Value(prePromoteKey{}).(struct{})
+	if !hasRowLock && !hasPrePromote {
+		return errors.New("SetPolicy requires SELECT FOR UPDATE on current_rule or pre-promote token")
+	}
+	return nil
+}
+
+// readRuleRow reads the current rule state and WAL LSN from current_rule. If
+// forUpdate is true, appends FOR UPDATE to acquire a row-level lock. The query
+// is executed on qs (either a transaction or the bare query service).
+// Returns nil if no row exists for the default shard.
+func (rs *ruleStore) readRuleRow(ctx context.Context, qs executor.InternalQueryService, forUpdate bool) (*clustermetadatapb.PoolerPosition, error) {
+	suffix := ""
+	if forUpdate {
+		suffix = " FOR UPDATE"
+	}
+	result, err := qs.QueryArgs(ctx, `
 		SELECT coordinator_term, leader_subterm, leader_id, coordinator_id, cohort_members,
 		       durability_policy_name, durability_quorum_type, durability_required_count,
 		       CASE
@@ -266,9 +341,9 @@ func (rs *ruleStore) observePosition(ctx context.Context) (*clustermetadatapb.Po
 		         ELSE pg_current_wal_lsn()
 		       END::text AS current_lsn
 		FROM multigres.current_rule
-		WHERE shard_id = $1`, []byte("0"))
+		WHERE shard_id = $1`+suffix, []byte("0"))
 	if err != nil {
-		return nil, mterrors.Wrap(err, "failed to query current position")
+		return nil, mterrors.Wrap(err, "failed to read current_rule")
 	}
 	if len(result.Rows) == 0 {
 		return nil, nil
@@ -291,23 +366,161 @@ func (rs *ruleStore) observePosition(ctx context.Context) (*clustermetadatapb.Po
 		&durabilityRequiredCount,
 		&lsn,
 	); err != nil {
-		return nil, mterrors.Wrap(err, "failed to scan current position")
+		return nil, mterrors.Wrap(err, "failed to scan current_rule")
 	}
 
 	var coordinatorIDStrVal string
 	if coordinatorIDStr != nil {
 		coordinatorIDStrVal = *coordinatorIDStr
 	}
-	pos, err := buildPoolerPosition(
+	return buildPoolerPosition(
 		coordinatorTerm, leaderSubterm,
 		leaderIDStr, coordinatorIDStrVal, cohortNames,
 		durabilityPolicyName, durabilityQuorumType, durabilityRequiredCount,
 		lsn,
 	)
+}
+
+// lockCurrentRule runs SELECT FOR UPDATE on current_rule to acquire a row-level
+// lock and read the current state. It also validates the stale-write and CAS
+// conditions, returning errRuleConflict when a CAS check fails.
+//
+// The returned context carries a ruleRowLock token (see withRuleRowLock); pass it
+// to SyncStandbyManager.SetPolicy to satisfy the dual-lock invariant.
+func (rs *ruleStore) lockCurrentRule(ctx context.Context, tx executor.InternalQueryService, update *ruleUpdateBuilder) (context.Context, *lockedRuleState, error) {
+	pos, err := rs.readRuleRow(ctx, tx, true)
 	if err != nil {
-		return nil, mterrors.Wrap(err, "failed to parse current position")
+		return nil, nil, mterrors.Wrap(err, "failed to lock current_rule")
 	}
-	rs.cacheRuleObservation(pos)
+	if pos == nil {
+		return nil, nil, mterrors.Errorf(mtrpcpb.Code_INTERNAL, "current_rule row not found for default shard")
+	}
+
+	rule := pos.GetRule()
+	coordinatorTerm := rule.GetRuleNumber().GetCoordinatorTerm()
+	leaderSubterm := rule.GetRuleNumber().GetLeaderSubterm()
+
+	// Stale write check: reject writes that would not advance the state.
+	if update.termNumber < coordinatorTerm {
+		return nil, nil, mterrors.Errorf(mtrpcpb.Code_INTERNAL,
+			"rule update rejected for term %d: current_rule already at equal or higher position",
+			update.termNumber)
+	}
+
+	// CAS check: if the caller provided an expected previous rule, verify it matches.
+	if update.previousRule != nil {
+		if coordinatorTerm != update.previousRule.coordinatorTerm ||
+			leaderSubterm != update.previousRule.leaderSubterm {
+			return nil, nil, errRuleConflict
+		}
+	}
+
+	// Compute next leader_subterm: 0 when starting a new coordinator term, otherwise increment.
+	var nextSubterm int64
+	if update.termNumber > coordinatorTerm {
+		nextSubterm = 0
+	} else {
+		nextSubterm = leaderSubterm + 1
+	}
+
+	return withRuleRowLock(ctx), &lockedRuleState{rule: rule, nextSubterm: nextSubterm}, nil
+}
+
+// ruleTransition captures the computed TransitionPolicy and resolved leader for a
+// pending rule change. The pre-commit GUC uses the TransitionPolicy; the post-commit
+// GUC uses TransitionPolicy.Incoming with TransitionPolicy.IncomingCohort.
+type ruleTransition struct {
+	policy consensus.TransitionPolicy
+	leader *clustermetadatapb.ID
+}
+
+// buildTransitionPolicy computes the TransitionPolicy for a pending rule change.
+//
+// outgoing is the current rule state (from either a locked or plain SELECT). The
+// TransitionPolicy is applied as the pre-commit "both" GUC (satisfying outgoing
+// and incoming policies simultaneously). After the WAL write commits, the caller applies
+// policy.Incoming with policy.IncomingCohort as the post-commit GUC.
+//
+// Returns nil when neither cohort nor policy is changing (no GUC update needed).
+// When there is no prior policy (fresh system), Outgoing and OutgoingCohort are set
+// equal to Incoming and IncomingCohort, giving an identity transition.
+func (rs *ruleStore) buildTransitionPolicy(outgoing *clustermetadatapb.ShardRule, update *ruleUpdateBuilder) (*ruleTransition, error) {
+	if update.cohortMembers == nil && update.durabilityPolicy == nil {
+		return nil, nil
+	}
+
+	outgoingCohort := outgoing.GetCohortMembers()
+	outgoingPolicyProto := outgoing.GetDurabilityPolicy()
+
+	// Incoming (new) state: override outgoing values with update values.
+	incomingCohort := outgoingCohort
+	if update.cohortMembers != nil {
+		incomingCohort = update.cohortMembers
+	}
+	incomingPolicyProto := outgoingPolicyProto
+	if update.durabilityPolicy != nil {
+		incomingPolicyProto = update.durabilityPolicy
+	}
+	if incomingPolicyProto == nil {
+		return nil, nil // no policy in effect → no GUC
+	}
+
+	// Leader: prefer update value, fall back to outgoing rule.
+	leader := outgoing.GetLeaderId()
+	if update.leaderID != nil {
+		leader = update.leaderID
+	}
+
+	incomingPolicy, err := consensus.NewPolicyFromProto(incomingPolicyProto)
+	if err != nil {
+		return nil, mterrors.Wrap(err, "failed to create incoming durability policy")
+	}
+
+	if outgoingPolicyProto == nil {
+		// No prior policy: identity transition — both phases use the incoming policy.
+		return &ruleTransition{
+			policy: consensus.TransitionPolicy{
+				Outgoing:       incomingPolicy,
+				Incoming:       incomingPolicy,
+				OutgoingCohort: incomingCohort,
+				IncomingCohort: incomingCohort,
+			},
+			leader: leader,
+		}, nil
+	}
+
+	outgoingPolicy, err := consensus.NewPolicyFromProto(outgoingPolicyProto)
+	if err != nil {
+		return nil, mterrors.Wrap(err, "failed to create outgoing durability policy")
+	}
+
+	return &ruleTransition{
+		policy: consensus.TransitionPolicy{
+			Outgoing:       outgoingPolicy,
+			Incoming:       incomingPolicy,
+			OutgoingCohort: outgoingCohort,
+			IncomingCohort: incomingCohort,
+		},
+		leader: leader,
+	}, nil
+}
+
+// observePosition reads the current rule and WAL LSN from postgres and returns
+// the observed position. Returns nil if no rule has been applied yet
+// (coordinator_term = 0).
+//
+// Returns an error if postgres is unreachable.
+func (rs *ruleStore) observePosition(ctx context.Context) (*clustermetadatapb.PoolerPosition, error) {
+	queryCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+
+	pos, err := rs.readRuleRow(queryCtx, rs.queryService, false)
+	if err != nil {
+		return nil, mterrors.Wrap(err, "failed to query current position")
+	}
+	if pos != nil {
+		rs.cacheRuleObservation(pos)
+	}
 	return pos, nil
 }
 
@@ -373,14 +586,6 @@ func (rs *ruleStore) updateRule(ctx context.Context, update *ruleUpdateBuilder) 
 
 	coordinatorIDStr := topoclient.ClusterIDString(update.coordinatorID)
 
-	// For compare-and-swap: pass the expected term/subterm as SQL parameters.
-	// NULL causes the WHERE clause to skip the check, allowing any current state.
-	var previousTerm, previousSubterm *int64
-	if update.previousRule != nil {
-		previousTerm = &update.previousRule.coordinatorTerm
-		previousSubterm = &update.previousRule.leaderSubterm
-	}
-
 	// Use the remote operation timeout for history writes. This write validates that synchronous
 	// replication is functioning - it must wait long enough for standbys to connect and acknowledge.
 	execCtx, cancel := context.WithTimeout(ctx, timeouts.RemoteOperationTimeout)
@@ -411,160 +616,220 @@ func (rs *ruleStore) updateRule(ctx context.Context, update *ruleUpdateBuilder) 
 	// TODO: It'd be nice to validate that the rule is achievable if only one of the cohort
 	// or durability policy is modified, but we'd have to look up the previous rule first.
 
-	result, err := rs.queryService.QueryArgs(execCtx, `
-		WITH
-		  params AS (
-		    SELECT $1::bytea        AS shard_id,
-		           $2::bigint       AS coordinator_term,
-		           $3::text         AS event_type,
-		           $4::text         AS leader_id,
-		           $5::text         AS coordinator_id,
-		           $6::text         AS wal_position,
-		           $7::text         AS operation,
-		           $8::text         AS reason,
-		           $9::text[]       AS cohort_members,
-		           $10::text[]      AS accepted_members,
-		           $11::bigint      AS cas_coordinator_term,
-		           $12::bigint      AS cas_leader_subterm,
-		           $13::timestamptz AS created_at,
-		           $14::text        AS durability_policy_name,
-		           $15::text        AS durability_quorum_type,
-		           $16::int         AS durability_required_count
-		  ),
-		  locked AS (
-		    -- FOR UPDATE serializes concurrent writes at the database level, complementing
-		    -- the action lock held by the caller.
-		    -- Returns zero rows (causing a no-op write and error return) when any condition fails.
-		    -- next_leader_subterm: 0 when starting a new coordinator term, otherwise increment within term.
-		    SELECT current_rule.coordinator_term, current_rule.leader_subterm,
-		           current_rule.leader_id, current_rule.cohort_members,
-		           current_rule.durability_policy_name, current_rule.durability_quorum_type,
-		           current_rule.durability_required_count,
-		           CASE WHEN params.coordinator_term > current_rule.coordinator_term THEN 0
-		                ELSE current_rule.leader_subterm + 1
-		           END AS next_leader_subterm
-		    FROM multigres.current_rule, params
-		    WHERE current_rule.shard_id = params.shard_id                   -- target shard
-		      AND params.coordinator_term >= current_rule.coordinator_term  -- reject stale writes
-		      AND (params.cas_coordinator_term IS NULL                      -- optimistic CAS check
-		           OR (current_rule.coordinator_term = params.cas_coordinator_term
-		               AND current_rule.leader_subterm = params.cas_leader_subterm))
-		    FOR UPDATE
-		  ),
-		  updated AS (
-		    UPDATE multigres.current_rule
-		    SET coordinator_term          = params.coordinator_term,
-		        leader_subterm            = locked.next_leader_subterm,
-		        leader_id                 = COALESCE(NULLIF(params.leader_id, ''), locked.leader_id),
-		        coordinator_id            = NULLIF(params.coordinator_id, ''),
-		        cohort_members            = COALESCE(params.cohort_members, locked.cohort_members),
-		        durability_policy_name    = COALESCE(NULLIF(params.durability_policy_name, ''), locked.durability_policy_name),
-		        durability_quorum_type    = COALESCE(NULLIF(params.durability_quorum_type, ''), locked.durability_quorum_type),
-		        durability_required_count = COALESCE(params.durability_required_count, locked.durability_required_count),
-		        created_at                = params.created_at
-		    FROM locked, params
-		    -- Correlates the update target to the specific shard row. If locked is empty
-		    -- (any condition above failed), the cross-join produces zero rows here too.
-		    WHERE current_rule.shard_id = params.shard_id
-		    RETURNING current_rule.coordinator_term, current_rule.leader_subterm,
-		              current_rule.leader_id, current_rule.coordinator_id, current_rule.cohort_members,
-		              current_rule.durability_policy_name, current_rule.durability_quorum_type,
-		              current_rule.durability_required_count
-		  ),
-		  inserted AS (
-		    INSERT INTO multigres.rule_history
-		      (coordinator_term, leader_subterm, event_type, leader_id, coordinator_id,
-		       wal_position, operation, reason, cohort_members, accepted_members,
-		       durability_policy_name, durability_quorum_type, durability_required_count, created_at)
-		    SELECT updated.coordinator_term, updated.leader_subterm,
-		           params.event_type,
-		           updated.leader_id,
-		           updated.coordinator_id,
-		           NULLIF(params.wal_position, ''), NULLIF(params.operation, ''), params.reason,
-		           updated.cohort_members,
-		           params.accepted_members,
-		           updated.durability_policy_name, updated.durability_quorum_type,
-		           updated.durability_required_count,
-		           params.created_at
-		    FROM updated, params
-		    RETURNING coordinator_term
-		  )
-		-- Cross-joining inserted ensures a zero-row history insert (a bug) also returns zero
-		-- rows here, causing the caller to surface an error rather than silently succeeding.
-		SELECT updated.coordinator_term, updated.leader_subterm,
-		       updated.leader_id, updated.coordinator_id, updated.cohort_members,
-		       updated.durability_policy_name, updated.durability_quorum_type,
-		       updated.durability_required_count,
-		       CASE
-		         WHEN pg_is_in_recovery()
-		           THEN COALESCE(pg_last_wal_receive_lsn(), pg_last_wal_replay_lsn())
-		         ELSE pg_current_wal_lsn()
-		       END::text AS current_lsn
-		FROM updated, inserted`,
-		[]byte("0"),
-		update.termNumber,
-		update.eventType,
-		leaderStr,
-		coordinatorIDStr,
-		update.walPosition,
-		update.operation,
-		update.reason,
-		cohortParam,
-		acceptedParam,
-		previousTerm,
-		previousSubterm,
-		update.createdAt,
-		dpName,
-		dpQuorumType,
-		dpRequiredCount,
-	)
-	if err != nil {
-		return nil, mterrors.Wrap(err, "failed to write rule history record")
-	}
-
-	// Zero rows means either:
-	//   - CAS check failed (expectedPreviousRule didn't match)
-	//   - advancement check failed (term/subterm would not advance current state — bug)
-	//   - shard row missing from current_rule (should never happen after initialisation)
-	if len(result.Rows) == 0 {
-		if update.previousRule != nil {
-			return nil, errRuleConflict
+	// Pre-promote phase: if the caller provided a promotion hook, the node is known
+	// to be a standby (SELECT FOR UPDATE is not allowed in hot_standby mode). Apply
+	// the transition GUC now so that once pg_promote() completes, the primary
+	// immediately enforces the correct standby requirements. observePosition does a
+	// plain SELECT, which is safe on a standby and does not require a transaction.
+	if update.promotionHook != nil {
+		if rs.syncStandby == nil {
+			return nil, mterrors.Errorf(mtrpcpb.Code_INTERNAL,
+				"promotionHook provided but SyncStandbyManager is not configured")
 		}
-		return nil, mterrors.Errorf(mtrpcpb.Code_INTERNAL,
-			"rule update rejected for term %d: current_rule already at equal or higher position",
-			update.termNumber)
+		prePos, err := rs.observePosition(execCtx)
+		if err != nil {
+			return nil, mterrors.Wrap(err, "pre-promote: failed to read current rule")
+		}
+		if prePos == nil {
+			return nil, mterrors.Errorf(mtrpcpb.Code_INTERNAL, "pre-promote: current rule row not found")
+		}
+		rt, err := rs.buildTransitionPolicy(prePos.GetRule(), update)
+		if err != nil {
+			return nil, mterrors.Wrap(err, "pre-promote: failed to build transition policy")
+		}
+		if rt != nil {
+			prePromoteCtx := withPrePromoteToken(execCtx)
+			if err := rs.syncStandby.SetPolicy(prePromoteCtx, &rt.policy, nil, rt.leader); err != nil {
+				return nil, mterrors.Wrap(err, "pre-promote GUC apply failed")
+			}
+		}
+		if err := update.promotionHook(execCtx); err != nil {
+			return nil, mterrors.Wrap(err, "promotion hook failed")
+		}
 	}
 
-	var coordinatorTerm, leaderSubterm int64
-	var leaderIDStr *string
-	var coordinatorIDStrResult string
-	var cohortNames []string
-	var durabilityPolicyName, durabilityQuorumType *string
-	var durabilityRequiredCount *int64
-	var lsn string
-	if err := executor.ScanSingleRow(result,
-		&coordinatorTerm,
-		&leaderSubterm,
-		&leaderIDStr,
-		&coordinatorIDStrResult,
-		&cohortNames,
-		&durabilityPolicyName,
-		&durabilityQuorumType,
-		&durabilityRequiredCount,
-		&lsn,
-	); err != nil {
-		return nil, mterrors.Wrap(err, "failed to scan written rule position")
-	}
+	var pos *clustermetadatapb.PoolerPosition
+	var postCommitPolicy consensus.DurabilityPolicy
+	var postCommitCohort []*clustermetadatapb.ID
+	var postCommitLeader *clustermetadatapb.ID
+	// lockedCtx carries the ruleRowLock token set by lockCurrentRule and is used
+	// for both the pre-commit and post-commit SetPolicy calls.
+	var lockedCtx context.Context
 
-	pos, err := buildPoolerPosition(
-		coordinatorTerm, leaderSubterm,
-		leaderIDStr, coordinatorIDStrResult, cohortNames,
-		durabilityPolicyName, durabilityQuorumType, durabilityRequiredCount,
-		lsn,
-	)
+	err := rs.queryService.Transact(execCtx, func(tx executor.InternalQueryService) error {
+		// Step 1: Lock current rule and read its state. FOR UPDATE serializes concurrent
+		// writes at the database level, complementing the action lock held by the caller.
+		var locked *lockedRuleState
+		var err error
+		lockedCtx, locked, err = rs.lockCurrentRule(execCtx, tx, update)
+		if err != nil {
+			return err
+		}
+
+		// Step 2: Apply the "both" GUC before the WAL write. This ensures the rule change
+		// record itself is acknowledged by standbys valid under both the outgoing and incoming
+		// policies. SetPolicy is idempotent when the config has not changed.
+		rt, err := rs.buildTransitionPolicy(locked.rule, update)
+		if err != nil {
+			return err
+		}
+		if rt != nil {
+			if rs.syncStandby == nil {
+				return mterrors.Errorf(mtrpcpb.Code_INTERNAL,
+					"durability policy requires SyncStandbyManager, but it is not configured")
+			}
+			if err := rs.syncStandby.SetPolicy(lockedCtx, &rt.policy, nil, rt.leader); err != nil {
+				return mterrors.Wrap(err, "pre-commit GUC apply failed")
+			}
+			postCommitPolicy = rt.policy.Incoming
+			postCommitCohort = rt.policy.IncomingCohort
+			postCommitLeader = rt.leader
+		}
+
+		// Step 3: Write the new rule and append to history. The COMMIT (below, after
+		// this closure returns) is where synchronous replication acknowledgment waits.
+		//
+		// Parameters are aliased in the "p" CTE so that the UPDATE and INSERT reference
+		// them by name rather than by positional index.
+		result, err := tx.QueryArgs(execCtx, `
+			WITH
+			  p AS (
+			    SELECT $1::bytea        AS shard_id,
+			           $2::bigint       AS coordinator_term,
+			           $3::bigint       AS leader_subterm,
+			           $4::text         AS leader_id,
+			           $5::text         AS coordinator_id,
+			           $6::text[]       AS cohort_members,
+			           $7::text         AS dp_name,
+			           $8::text         AS dp_quorum_type,
+			           $9::int          AS dp_required_count,
+			           $10::timestamptz AS created_at,
+			           $11::text        AS event_type,
+			           $12::text        AS wal_position,
+			           $13::text        AS operation,
+			           $14::text        AS reason,
+			           $15::text[]      AS accepted_members
+			  ),
+			  updated AS (
+			    UPDATE multigres.current_rule
+			    SET coordinator_term          = p.coordinator_term,
+			        leader_subterm            = p.leader_subterm,
+			        leader_id                 = COALESCE(NULLIF(p.leader_id, ''), current_rule.leader_id),
+			        coordinator_id            = NULLIF(p.coordinator_id, ''),
+			        cohort_members            = COALESCE(p.cohort_members, current_rule.cohort_members),
+			        durability_policy_name    = COALESCE(NULLIF(p.dp_name, ''), current_rule.durability_policy_name),
+			        durability_quorum_type    = COALESCE(NULLIF(p.dp_quorum_type, ''), current_rule.durability_quorum_type),
+			        durability_required_count = COALESCE(p.dp_required_count, current_rule.durability_required_count),
+			        created_at                = p.created_at
+			    FROM p
+			    WHERE current_rule.shard_id = p.shard_id
+			    RETURNING current_rule.coordinator_term, current_rule.leader_subterm,
+			              current_rule.leader_id, current_rule.coordinator_id, current_rule.cohort_members,
+			              current_rule.durability_policy_name, current_rule.durability_quorum_type,
+			              current_rule.durability_required_count
+			  ),
+			  inserted AS (
+			    INSERT INTO multigres.rule_history
+			      (coordinator_term, leader_subterm, event_type, leader_id, coordinator_id,
+			       wal_position, operation, reason, cohort_members, accepted_members,
+			       durability_policy_name, durability_quorum_type, durability_required_count, created_at)
+			    SELECT updated.coordinator_term, updated.leader_subterm,
+			           p.event_type,
+			           updated.leader_id, updated.coordinator_id,
+			           NULLIF(p.wal_position, ''), NULLIF(p.operation, ''), p.reason,
+			           updated.cohort_members,
+			           p.accepted_members,
+			           updated.durability_policy_name, updated.durability_quorum_type,
+			           updated.durability_required_count,
+			           p.created_at
+			    FROM updated, p
+			    RETURNING coordinator_term
+			  )
+			-- Cross-joining inserted ensures a zero-row history insert (a bug) also returns zero
+			-- rows here, causing the caller to surface an error rather than silently succeeding.
+			SELECT updated.coordinator_term, updated.leader_subterm,
+			       updated.leader_id, updated.coordinator_id, updated.cohort_members,
+			       updated.durability_policy_name, updated.durability_quorum_type,
+			       updated.durability_required_count,
+			       CASE
+			         WHEN pg_is_in_recovery()
+			           THEN COALESCE(pg_last_wal_receive_lsn(), pg_last_wal_replay_lsn())
+			         ELSE pg_current_wal_lsn()
+			       END::text AS current_lsn
+			FROM updated, inserted`,
+			[]byte("0"),        // $1  shard_id
+			update.termNumber,  // $2  coordinator_term
+			locked.nextSubterm, // $3  leader_subterm
+			leaderStr,          // $4  leader_id
+			coordinatorIDStr,   // $5  coordinator_id
+			cohortParam,        // $6  cohort_members
+			dpName,             // $7  dp_name
+			dpQuorumType,       // $8  dp_quorum_type
+			dpRequiredCount,    // $9  dp_required_count
+			update.createdAt,   // $10 created_at
+			update.eventType,   // $11 event_type
+			update.walPosition, // $12 wal_position
+			update.operation,   // $13 operation
+			update.reason,      // $14 reason
+			acceptedParam,      // $15 accepted_members
+		)
+		if err != nil {
+			return mterrors.Wrap(err, "failed to write rule history record")
+		}
+
+		if len(result.Rows) == 0 {
+			// Should not happen: we just locked the row. If the UPDATE returns 0 rows the
+			// cross-join with inserted also produces 0 rows, landing here. This is a bug.
+			return mterrors.Errorf(mtrpcpb.Code_INTERNAL,
+				"rule update produced no result after successful lock (term %d)", update.termNumber)
+		}
+
+		var coordinatorTerm, leaderSubterm int64
+		var leaderIDStr *string
+		var coordinatorIDStrResult string
+		var cohortNames []string
+		var durabilityPolicyName, durabilityQuorumType *string
+		var durabilityRequiredCount *int64
+		var lsn string
+		if err := executor.ScanSingleRow(result,
+			&coordinatorTerm,
+			&leaderSubterm,
+			&leaderIDStr,
+			&coordinatorIDStrResult,
+			&cohortNames,
+			&durabilityPolicyName,
+			&durabilityQuorumType,
+			&durabilityRequiredCount,
+			&lsn,
+		); err != nil {
+			return mterrors.Wrap(err, "failed to scan written rule position")
+		}
+
+		newPos, err := buildPoolerPosition(
+			coordinatorTerm, leaderSubterm,
+			leaderIDStr, coordinatorIDStrResult, cohortNames,
+			durabilityPolicyName, durabilityQuorumType, durabilityRequiredCount,
+			lsn,
+		)
+		if err != nil {
+			return mterrors.Wrap(err, "failed to parse written rule position")
+		}
+		pos = newPos
+		return nil
+	})
 	if err != nil {
-		return nil, mterrors.Wrap(err, "failed to parse written rule position")
+		return nil, err
 	}
+
+	// Step 4: Apply the "after" GUC post-commit. The WAL write has already been
+	// acknowledged by standbys, so the rule change is durable. Now switch to the
+	// incoming policy alone (no longer need to satisfy both simultaneously).
+	if postCommitPolicy != nil {
+		if err := rs.syncStandby.SetPolicy(lockedCtx, postCommitPolicy, postCommitCohort, postCommitLeader); err != nil {
+			return pos, mterrors.Wrap(err, "post-commit GUC apply failed")
+		}
+	}
+
 	rs.cacheRuleObservation(pos)
 	return pos, nil
 }

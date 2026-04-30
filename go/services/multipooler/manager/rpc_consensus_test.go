@@ -1121,7 +1121,7 @@ func TestDemoteStalePrimary_UpdatesConsensusTerm(t *testing.T) {
 
 			tt.setupQueryMock(mockQueryService)
 			pm.qsc = &mockPoolerController{queryService: mockQueryService}
-			pm.rules = newRuleStore(logger, mockQueryService)
+			pm.rules = newRuleStore(logger, mockQueryService, noopSyncStandbyManager{})
 
 			senv := servenv.NewServEnv(viperutil.NewRegistry())
 			pm.Start(senv)
@@ -1496,8 +1496,9 @@ func TestRecruit(t *testing.T) {
 
 // expectLeaderProposeMocks sets up the postgres query expectations for the leader
 // Propose path: check recovery state, pg_promote, wait for promotion, reset conninfo,
-// reload config, then get the primary WAL position.
-func expectLeaderProposeMocks(m *mock.QueryService, lsn string) {
+// reload config. The WAL position comes from observePosition on the rule store (no extra
+// pg_current_wal_lsn query needed on the standby path).
+func expectLeaderProposeMocks(m *mock.QueryService) {
 	// checkPromotionState: postgres is still in recovery (standby before promotion)
 	m.AddQueryPatternOnce("SELECT pg_is_in_recovery",
 		mock.MakeQueryResult([]string{"pg_is_in_recovery"}, [][]any{{"t"}}))
@@ -1509,9 +1510,6 @@ func expectLeaderProposeMocks(m *mock.QueryService, lsn string) {
 	// resetPrimaryConnInfo: clear conninfo + reload
 	m.AddQueryPatternOnce("ALTER SYSTEM RESET primary_conninfo", mock.MakeQueryResult(nil, nil))
 	m.AddQueryPatternOnce("SELECT pg_reload_conf", mock.MakeQueryResult(nil, nil))
-	// getPrimaryLSN
-	m.AddQueryPatternOnce("SELECT pg_current_wal_lsn",
-		mock.MakeQueryResult([]string{"pg_current_wal_lsn"}, [][]any{{lsn}}))
 }
 
 // expectReplicaProposeMocks sets up the postgres query expectations for the replica
@@ -1717,7 +1715,7 @@ func TestPropose(t *testing.T) {
 			ruleStore:   &fakeRuleStore{pos: makeRulePosition(0)},
 			req:         makeLeaderReq(),
 			setupMocks: func(m *mock.QueryService) {
-				expectLeaderProposeMocks(m, "0/5000000")
+				expectLeaderProposeMocks(m)
 			},
 			expectError: false,
 		},

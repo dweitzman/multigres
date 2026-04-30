@@ -108,6 +108,20 @@ func (s *connQueryService) QueryMultiStatement(ctx context.Context, query string
 	return err
 }
 
+func (s *connQueryService) Transact(ctx context.Context, fn func(tx executor.InternalQueryService) error) error {
+	if _, err := s.conn.QueryArgs(ctx, "BEGIN"); err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	if err := fn(s); err != nil {
+		_, _ = s.conn.QueryArgs(ctx, "ROLLBACK")
+		return err
+	}
+	if _, err := s.conn.QueryArgs(ctx, "COMMIT"); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
 // TestMain sets up the PATH for PG binaries and the orphan-detection watchdog,
 // runs the tests, and tears down the postgres instance if it was started.
 // Postgres is started lazily by the first PG test (via skipIfNoPG) so that
@@ -227,7 +241,7 @@ func startSharedPostgres(t *testing.T) (*pgPostgresFixture, error) {
 	}
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	rs := newRuleStore(logger, qs)
+	rs := newRuleStore(logger, qs, noopSyncStandbyManager{})
 	if err := rs.createRuleTables(ctx); err != nil {
 		_ = exec.Command("pg_ctl", "stop", "-D", pgDataDir, "-m", "fast").Run()
 		return nil, fmt.Errorf("create rule tables: %w", err)
@@ -248,7 +262,7 @@ func newTestRuleStore(ctx context.Context, t *testing.T) (*ruleStore, *client.Co
 	conn, err := pgTestFixture.newClientConn(ctx)
 	require.NoError(t, err)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	rs := newRuleStore(logger, &connQueryService{conn: conn})
+	rs := newRuleStore(logger, &connQueryService{conn: conn}, noopSyncStandbyManager{})
 	return rs, conn
 }
 
@@ -265,7 +279,7 @@ func resetRuleStoreTables(ctx context.Context, t *testing.T) {
 	require.NoError(t, err)
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	rs := newRuleStore(logger, qs)
+	rs := newRuleStore(logger, qs, noopSyncStandbyManager{})
 	require.NoError(t, rs.createRuleTables(ctx))
 }
 
@@ -594,7 +608,7 @@ func TestRuleStorePG_UpdateRule_Concurrent(t *testing.T) {
 			defer conn.Close()
 
 			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-			rs := newRuleStore(logger, &connQueryService{conn: conn})
+			rs := newRuleStore(logger, &connQueryService{conn: conn}, noopSyncStandbyManager{})
 			_, errs[idx] = rs.updateRule(ctx,
 				newRuleUpdate(1, coordinatorID, "config_change",
 					fmt.Sprintf("concurrent write %d", idx), now),

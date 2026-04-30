@@ -183,6 +183,12 @@ func (m *QueryService) QueryArgs(ctx context.Context, queryStr string, args ...a
 	return m.Query(ctx, queryStr)
 }
 
+// Transact implements executor.InternalQueryService.
+// For the mock, no real transaction is started; fn is called directly on the same mock.
+func (m *QueryService) Transact(_ context.Context, fn func(tx executor.InternalQueryService) error) error {
+	return fn(m)
+}
+
 // MakeQueryResult creates a sqltypes.Result from columns and rows.
 func MakeQueryResult(columns []string, rows [][]any) *sqltypes.Result {
 	result := &sqltypes.Result{

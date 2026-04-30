@@ -15,21 +15,34 @@
 package manager
 
 import (
+	"context"
 	"errors"
 	"io"
 	"log/slog"
 	"testing"
 
-	"github.com/multigres/multigres/go/services/multipooler/executor/mock"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	commonconsensus "github.com/multigres/multigres/go/common/consensus"
+	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	"github.com/multigres/multigres/go/services/multipooler/executor/mock"
 )
+
+// noopSyncStandbyManager is a SyncStandbyManager that silently accepts all calls.
+// Used in tests that exercise rule-store DB logic but do not need GUC verification.
+type noopSyncStandbyManager struct{}
+
+func (noopSyncStandbyManager) SetPolicy(_ context.Context, _ commonconsensus.DurabilityPolicy, _ []*clustermetadatapb.ID, _ *clustermetadatapb.ID) error {
+	return nil
+}
+
+func (noopSyncStandbyManager) Clear(_ context.Context) error { return nil }
 
 func TestQueryRuleHistory(t *testing.T) {
 	t.Run("returns records ordered newest first", func(t *testing.T) {
 		mockQueryService := mock.NewQueryService()
-		rs := newRuleStore(slog.New(slog.NewTextHandler(io.Discard, nil)), mockQueryService)
+		rs := newRuleStore(slog.New(slog.NewTextHandler(io.Discard, nil)), mockQueryService, noopSyncStandbyManager{})
 
 		leaderAppName := "zone1_leader-1"
 		coordID := "zone1_coordinator-1"
@@ -93,7 +106,7 @@ func TestQueryRuleHistory(t *testing.T) {
 
 	t.Run("returns empty slice when no records exist", func(t *testing.T) {
 		mockQueryService := mock.NewQueryService()
-		rs := newRuleStore(slog.New(slog.NewTextHandler(io.Discard, nil)), mockQueryService)
+		rs := newRuleStore(slog.New(slog.NewTextHandler(io.Discard, nil)), mockQueryService, noopSyncStandbyManager{})
 
 		mockQueryService.AddQueryPatternOnce(
 			"SELECT coordinator_term, leader_subterm, event_type",
@@ -116,7 +129,7 @@ func TestQueryRuleHistory(t *testing.T) {
 
 	t.Run("propagates query error", func(t *testing.T) {
 		mockQueryService := mock.NewQueryService()
-		rs := newRuleStore(slog.New(slog.NewTextHandler(io.Discard, nil)), mockQueryService)
+		rs := newRuleStore(slog.New(slog.NewTextHandler(io.Discard, nil)), mockQueryService, noopSyncStandbyManager{})
 
 		mockQueryService.AddQueryPatternOnceWithError(
 			"SELECT coordinator_term, leader_subterm, event_type",

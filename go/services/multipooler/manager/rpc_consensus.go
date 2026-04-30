@@ -17,7 +17,6 @@ package manager
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -607,22 +606,33 @@ func (pm *MultiPoolerManager) Propose(ctx context.Context, req *consensusdatapb.
 	isLeader := proto.Equal(pm.serviceID, proposalLeader.GetId())
 
 	if isLeader {
-		// Step 3a: Leader — promote postgres, write rule, enable query service.
+		// Step 3a: Leader — promote postgres (if needed), write rule, enable query service.
 		state, err := pm.checkPromotionState(ctx, nil)
 		if err != nil {
 			return nil, err
 		}
-		// Pre-configure synchronous_standby_names before pg_promote() so the primary
-		// enforces sync replication from the moment it starts accepting connections.
-		// TODO: Eventually updateRule() should own this GUC update so that the ordering
-		// of WAL writes and GUC changes is managed in one place, ensuring the durability
-		// configuration is always consistent with what is recorded in the rule history.
-		syncCfg, err := syncConfigFromProposedRule(pm.logger, proposedRule, pm.serviceID)
-		if err != nil {
-			pm.logger.WarnContext(ctx, "Failed to compute sync config from proposal", "error", err)
-		} else if err := pm.applyGUCsForSyncReplication(ctx, syncCfg); err != nil {
-			pm.logger.WarnContext(ctx, "Failed to pre-configure sync replication before promote", "error", err)
+		if err := pm.clearResignedLeaderAtTerm(ctx); err != nil {
+			return nil, mterrors.Wrap(err, "failed to clear resigned primary term")
 		}
+
+		// Compute the WAL position before calling updateRule. When promoting from a
+		// standby, replication was revoked before this Propose, so WAL is not
+		// advancing — the standby LSN equals what the primary LSN will be after
+		// pg_promote(). When already primary, checkPromotionState already fetched it.
+		var walPos string
+		if state.isPrimaryInPostgres {
+			walPos = state.currentLSN
+		} else {
+			prePos, err := pm.rules.observePosition(ctx)
+			if err != nil {
+				return nil, mterrors.Wrap(err, "failed to get standby WAL position")
+			}
+			if prePos == nil {
+				return nil, mterrors.Errorf(mtrpcpb.Code_INTERNAL, "no rule row found when reading standby WAL position")
+			}
+			walPos = prePos.GetLsn()
+		}
+
 		// ---- BEGIN CRITICAL ORDERING SECTION ----------------------------------------
 		// postgres becomes a writable primary after pg_promote(), but this pooler's
 		// type remains REPLICA until updateTopologyAfterPromotion() below. While type
@@ -633,23 +643,16 @@ func (pm *MultiPoolerManager) Propose(ctx context.Context, req *consensusdatapb.
 		// The rule commit is the durability gate: it waits for sync-standby
 		// acknowledgment, proving the new primary position is replicated. Only after
 		// that gate closes is it safe to advertise PRIMARY + SERVING to the gateway.
-		if err := pm.promoteStandbyToPrimary(ctx, state); err != nil {
-			return nil, err
-		}
-		if err := pm.clearResignedLeaderAtTerm(ctx); err != nil {
-			return nil, mterrors.Wrap(err, "failed to clear resigned primary term")
-		}
-		// checkPromotionState already fetched the LSN when postgres was primary;
-		// only query again after a fresh pg_promote() call.
-		var finalLSN string
-		if state.isPrimaryInPostgres {
-			finalLSN = state.currentLSN
-		} else {
-			finalLSN, err = pm.getPrimaryLSN(ctx)
-			if err != nil {
-				return nil, err
-			}
-		}
+		//
+		// updateRule owns the full GUC→promote→WAL ordering:
+		//   1. Pre-promote GUC (via promotionHook path): transition "both" config applied
+		//      while still a standby, so sync replication is active from the first commit.
+		//   2. pg_promote() via promotionHook (standby path only).
+		//   3. Pre-commit GUC (inside Transact): transition "both" config re-applied
+		//      after acquiring the row lock, ensuring the WAL write is acked by standbys
+		//      valid under both old and new rules simultaneously.
+		//   4. WAL write (COMMIT): synchronous replication acknowledgment waits here.
+		//   5. Post-commit GUC: incoming policy only, now that the rule is durable.
 		// TODO: If this proposal already exists, we're being asked to propagate
 		// rather than make a new entry. We can make the rule store understand
 		// propagation for that case.
@@ -657,17 +660,18 @@ func (pm *MultiPoolerManager) Propose(ctx context.Context, req *consensusdatapb.
 		if reason == "" {
 			reason = "propose"
 		}
-		if _, err = pm.rules.updateRule(ctx, newRuleUpdate(
-			revokedBelowTerm,
-			coordinatorID,
-			"promotion",
-			reason,
-			time.Now()).
+		ruleUpdate := newRuleUpdate(revokedBelowTerm, coordinatorID, "promotion", reason, time.Now()).
 			withLeader(pm.serviceID).
 			withCohort(proposedRule.GetCohortMembers()).
 			withDurabilityPolicy(proposedRule.GetDurabilityPolicy()).
 			withAcceptedMembers(req.GetAcceptedNodeIds()).
-			withWALPosition(finalLSN)); err != nil {
+			withWALPosition(walPos)
+		if !state.isPrimaryInPostgres {
+			ruleUpdate.withPromotionHook(func(hookCtx context.Context) error {
+				return pm.promoteStandbyToPrimary(hookCtx, state)
+			})
+		}
+		if _, err = pm.rules.updateRule(ctx, ruleUpdate); err != nil {
 			return nil, mterrors.Wrap(err, "propose failed: could not write rule")
 		}
 		// ---- END CRITICAL ORDERING SECTION ------------------------------------------
@@ -722,20 +726,6 @@ func (pm *MultiPoolerManager) Propose(ctx context.Context, req *consensusdatapb.
 		return nil, mterrors.Wrap(err, "failed to build consensus status")
 	}
 	return &consensusdatapb.ProposeResponse{ConsensusStatus: cs}, nil
-}
-
-// syncConfigFromProposedRule derives the synchronous replication config from a proposed rule
-// by delegating to the durability policy.
-func syncConfigFromProposedRule(
-	logger *slog.Logger,
-	rule *clustermetadatapb.ShardRule,
-	leaderID *clustermetadatapb.ID,
-) (*commonconsensus.LeaderDurabilityPostgresConfig, error) {
-	policy, err := commonconsensus.NewPolicyFromProto(rule.GetDurabilityPolicy())
-	if err != nil {
-		return nil, fmt.Errorf("cannot derive sync config: %w", err)
-	}
-	return policy.BuildLeaderDurabilityPostgresConfig(logger, rule.GetCohortMembers(), leaderID)
 }
 
 // ConsensusStatus returns the current status of this node for consensus

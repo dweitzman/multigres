@@ -131,6 +131,18 @@ func NewPolicyFromProto(policy *clustermetadatapb.DurabilityPolicy) (DurabilityP
 	}
 }
 
+// intersectStandbys returns the IDs from a that also appear in b.
+func intersectStandbys(a, b []*clustermetadatapb.ID) []*clustermetadatapb.ID {
+	bKeys := poolerKeysOf(b)
+	result := make([]*clustermetadatapb.ID, 0, len(a))
+	for _, id := range a {
+		if _, ok := bKeys[topoclient.ClusterIDString(id)]; ok {
+			result = append(result, id)
+		}
+	}
+	return result
+}
+
 // keysOf returns the set of distinct keyFn-keys present in poolers.
 func keysOf(poolers []*clustermetadatapb.ID, keyFn func(*clustermetadatapb.ID) string) map[string]struct{} {
 	out := make(map[string]struct{}, len(poolers))

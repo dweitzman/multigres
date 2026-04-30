@@ -17,6 +17,7 @@ package executor
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/multigres/multigres/go/common/pgprotocol/client"
 	"github.com/multigres/multigres/go/common/sqltypes"
@@ -39,6 +40,13 @@ type InternalQueryService interface {
 	// QueryMultiStatement executes a multi-statement query (e.g. "BEGIN; ...; COMMIT;")
 	// using the simple query protocol. Unlike Query, it does not require exactly one result set.
 	QueryMultiStatement(ctx context.Context, query string) error
+
+	// Transact runs fn inside a single transaction on a pinned connection.
+	// fn receives a tx handle whose methods execute without retry (retrying
+	// inside a transaction would lose server-side state). The COMMIT is where
+	// synchronous replication acknowledgment waits when
+	// synchronous_standby_names is configured.
+	Transact(ctx context.Context, fn func(tx InternalQueryService) error) error
 }
 
 // Compile-time check that Executor implements InternalQueryService.
@@ -117,4 +125,77 @@ func (e *Executor) QueryArgs(ctx context.Context, sql string, args ...any) (*sql
 		return nil, errors.New("unexpected number of results")
 	}
 	return results[0], nil
+}
+
+// Transact implements InternalQueryService by running fn inside a transaction
+// on a single pinned connection. The COMMIT is where synchronous replication
+// acknowledgment waits when synchronous_standby_names is configured.
+func (e *Executor) Transact(ctx context.Context, fn func(tx InternalQueryService) error) error {
+	ctx = client.WithQueryTracing(ctx, client.QueryTracingConfig{
+		IncludeQueryText: true,
+	})
+
+	pooledConn, err := e.poolManager.GetRegularConn(ctx, e.poolManager.PgUser())
+	if err != nil {
+		return err
+	}
+	defer pooledConn.Recycle()
+
+	if _, err := pooledConn.Conn.QueryWithRetry(ctx, "BEGIN"); err != nil {
+		return fmt.Errorf("transact: begin: %w", err)
+	}
+
+	rawConn := pooledConn.Conn.RawConn()
+	tx := &txQueryService{conn: rawConn}
+
+	if fnErr := fn(tx); fnErr != nil {
+		_, _ = rawConn.Query(ctx, "ROLLBACK")
+		return fnErr
+	}
+
+	if _, err := rawConn.Query(ctx, "COMMIT"); err != nil {
+		return fmt.Errorf("transact: commit: %w", err)
+	}
+	return nil
+}
+
+// txQueryService implements InternalQueryService on a pinned *client.Conn that
+// is already inside a transaction. It does not retry — retrying in a transaction
+// would lose server-side state.
+type txQueryService struct {
+	conn *client.Conn
+}
+
+var _ InternalQueryService = (*txQueryService)(nil)
+
+func (t *txQueryService) Query(ctx context.Context, queryStr string) (*sqltypes.Result, error) {
+	results, err := t.conn.Query(ctx, queryStr)
+	if err != nil {
+		return nil, err
+	}
+	if len(results) != 1 {
+		return nil, errors.New("unexpected number of results")
+	}
+	return results[0], nil
+}
+
+func (t *txQueryService) QueryArgs(ctx context.Context, queryStr string, args ...any) (*sqltypes.Result, error) {
+	results, err := t.conn.QueryArgs(ctx, queryStr, args...)
+	if err != nil {
+		return nil, err
+	}
+	if len(results) != 1 {
+		return nil, errors.New("unexpected number of results")
+	}
+	return results[0], nil
+}
+
+func (t *txQueryService) QueryMultiStatement(ctx context.Context, queryStr string) error {
+	_, err := t.conn.Query(ctx, queryStr)
+	return err
+}
+
+func (t *txQueryService) Transact(_ context.Context, fn func(tx InternalQueryService) error) error {
+	// Already in a transaction; run fn directly on the same connection.
+	return fn(t)
 }
