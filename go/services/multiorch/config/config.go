@@ -157,7 +157,7 @@ type Config struct {
 	leaderFailoverGracePeriodMaxJitter viperutil.Value[time.Duration]
 	verifyReplicationTimeout           viperutil.Value[time.Duration]
 	leaderPostgresResponseThreshold    viperutil.Value[time.Duration]
-	useNewConsensusFlow                 viperutil.Value[bool]
+	useNewConsensusFlow                viperutil.Value[bool]
 }
 
 // Constants
@@ -369,7 +369,7 @@ func (c *Config) RegisterFlags(fs *pflag.FlagSet) {
 		c.leaderFailoverGracePeriodBase,
 		c.leaderFailoverGracePeriodMaxJitter,
 		c.verifyReplicationTimeout,
-		c.leaderPostgresResponseThreshold)
+		c.leaderPostgresResponseThreshold,
 		c.useNewConsensusFlow)
 }
 

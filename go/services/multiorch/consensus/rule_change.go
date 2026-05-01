@@ -234,7 +234,7 @@ func buildFailoverProposal(
 	var leader *clustermetadatapb.ConsensusStatus
 	for _, cs := range result.EligibleLeaders {
 		key := topoclient.ClusterIDString(cs.GetId())
-		if health, ok := healthByID[key]; ok && types.PrimaryNeedsReplacement(health) {
+		if health, ok := healthByID[key]; ok && types.LeaderNeedsReplacement(health) {
 			logger.InfoContext(ctx, "Skipping resigned primary during leader selection",
 				"pooler", cs.GetId().GetName())
 			continue
@@ -262,7 +262,7 @@ func buildFailoverProposal(
 			RuleNumber:       &clustermetadatapb.RuleNumber{CoordinatorTerm: result.TermRevocation.GetRevokedBelowTerm()},
 			CohortMembers:    result.OutgoingRule.GetCohortMembers(),
 			DurabilityPolicy: result.OutgoingRule.GetDurabilityPolicy(),
-			PrimaryId:        leader.GetId(),
+			LeaderId:         leader.GetId(),
 		},
 	}, nil
 }
@@ -295,7 +295,7 @@ func buildBootstrapProposal(
 			RuleNumber:       &clustermetadatapb.RuleNumber{CoordinatorTerm: result.TermRevocation.GetRevokedBelowTerm()},
 			CohortMembers:    cohortIDs,
 			DurabilityPolicy: policy,
-			PrimaryId:        leader.GetId(),
+			LeaderId:         leader.GetId(),
 		},
 	}, nil
 }

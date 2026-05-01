@@ -575,7 +575,7 @@ func TestBuildProposalCore(t *testing.T) {
 					ProposalLeader: &consensusdatapb.ProposalLeader{Id: a},
 					ProposedRule: &clustermetadatapb.ShardRule{
 						RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
-						PrimaryId:     a,
+						LeaderId:      a,
 						CohortMembers: cohort,
 					},
 				}, nil
@@ -617,7 +617,7 @@ func TestBuildProposalCore(t *testing.T) {
 						RuleNumber:       &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
 						CohortMembers:    cohort,
 						DurabilityPolicy: topoclient.AtLeastN(2),
-						PrimaryId:        leader.GetId(),
+						LeaderId:         leader.GetId(),
 					},
 				}, nil
 			},
@@ -638,7 +638,7 @@ func TestBuildProposalCore(t *testing.T) {
 						RuleNumber:       &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
 						CohortMembers:    cohort,
 						DurabilityPolicy: topoclient.AtLeastN(2),
-						PrimaryId:        leader.GetId(),
+						LeaderId:         leader.GetId(),
 					},
 				}, nil
 			},
@@ -661,7 +661,7 @@ func TestBuildProposalCore(t *testing.T) {
 						RuleNumber:       &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
 						CohortMembers:    cohort,
 						DurabilityPolicy: &clustermetadatapb.DurabilityPolicy{QuorumType: clustermetadatapb.QuorumType_QUORUM_TYPE_UNKNOWN},
-						PrimaryId:        leader.GetId(),
+						LeaderId:         leader.GetId(),
 					},
 				}, nil
 			},
@@ -690,7 +690,7 @@ func TestBuildProposalCore(t *testing.T) {
 							RuleNumber:       &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
 							CohortMembers:    bigCohort,
 							DurabilityPolicy: topoclient.AtLeastN(2),
-							PrimaryId:        leader.GetId(),
+							LeaderId:         leader.GetId(),
 						},
 					}, nil
 				},
@@ -710,13 +710,13 @@ func TestBuildProposalCore(t *testing.T) {
 			stuckRev := &clustermetadatapb.TermRevocation{RevokedBelowTerm: 7}
 			multiCellRule := &clustermetadatapb.ShardRule{
 				RuleNumber:       &clustermetadatapb.RuleNumber{CoordinatorTerm: 6},
-				PrimaryId:        nodeA,
+				LeaderId:         nodeA,
 				CohortMembers:    stuckCohort,
 				DurabilityPolicy: topoclient.MultiCellAtLeastN(2),
 			}
 			atLeastNRule := &clustermetadatapb.ShardRule{
 				RuleNumber:       &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
-				PrimaryId:        nodeA,
+				LeaderId:         nodeA,
 				CohortMembers:    stuckCohort,
 				DurabilityPolicy: topoclient.AtLeastN(2),
 			}
@@ -876,7 +876,7 @@ func TestCheckSufficientRecruitment_NoCommittedRule(t *testing.T) {
 		{Id: a, TermRevocation: testRevocation}, // no current_position
 	}
 
-	_, err := BuildSafeProposal(testRevocation, statuses, simpleProposal(nil))
+	_, err := BuildSafeProposal(testRevocation, statuses, simpleProposal(0, nil))
 
 	require.Error(t, err)
 	// A node with no current_position has no parseable LSN, so it is filtered
@@ -896,7 +896,7 @@ func TestCheckSufficientRecruitment_InsufficientQuorum(t *testing.T) {
 		makeStatus(a, rule, testRevocation),
 	}
 
-	_, err := BuildSafeProposal(testRevocation, statuses, simpleProposal(rule))
+	_, err := BuildSafeProposal(testRevocation, statuses, simpleProposal(3, cohort))
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "insufficient recruitment")
@@ -1084,7 +1084,7 @@ func TestCheckSufficientRecruitment_BestRuleSelected(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, proposal)
-	assert.Equal(t, int64(3), gotResult.BestRule.GetRuleNumber().GetCoordinatorTerm())
+	assert.Equal(t, int64(3), gotResult.OutgoingRule.GetRuleNumber().GetCoordinatorTerm())
 	assert.Len(t, gotResult.EligibleLeaders, 2, "only nodes at bestRule are eligible")
 	// Leader must be a or b (both at newRule), not c.
 	leaderName := proposal.GetProposalLeader().GetId().GetName()
@@ -1161,7 +1161,7 @@ func TestCheckSufficientRecruitment_DuplicateStatusIgnoredForQuorum(t *testing.T
 		makeStatus(a, rule, testRevocation), // duplicate
 	}
 
-	_, err := BuildSafeProposal(testRevocation, statuses, simpleProposal(rule))
+	_, err := BuildSafeProposal(testRevocation, statuses, simpleProposal(3, cohort))
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "insufficient recruitment")
@@ -1407,7 +1407,7 @@ func TestCheckForcedProposalPossible(t *testing.T) {
 				RuleNumber:       &clustermetadatapb.RuleNumber{CoordinatorTerm: r.TermRevocation.GetRevokedBelowTerm()},
 				CohortMembers:    cohort,
 				DurabilityPolicy: topoclient.AtLeastN(2),
-				PrimaryId:        leader.GetId(),
+				LeaderId:         leader.GetId(),
 			},
 		}, nil
 	}

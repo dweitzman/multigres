@@ -129,7 +129,7 @@ func TestBuildFailoverProposal(t *testing.T) {
 				Id: makeID(name),
 				CurrentPosition: &clustermetadatapb.PoolerPosition{
 					Rule: &clustermetadatapb.ShardRule{
-						PrimaryId: makeID(name),
+						LeaderId: makeID(name),
 						RuleNumber: &clustermetadatapb.RuleNumber{
 							CoordinatorTerm: primaryTerm,
 						},
@@ -138,8 +138,8 @@ func TestBuildFailoverProposal(t *testing.T) {
 			},
 			AvailabilityStatus: &clustermetadatapb.AvailabilityStatus{
 				LeadershipStatus: &clustermetadatapb.LeadershipStatus{
-					Signal:      clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION,
-					PrimaryTerm: primaryTerm,
+					Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION,
+					LeaderTerm: primaryTerm,
 				},
 			},
 		}
@@ -151,7 +151,7 @@ func TestBuildFailoverProposal(t *testing.T) {
 			QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_AT_LEAST_N,
 			RequiredCount: 2,
 		},
-		PrimaryId: makeID("mp1"),
+		LeaderId: makeID("mp1"),
 	}
 	rev := &clustermetadatapb.TermRevocation{RevokedBelowTerm: 5}
 	poolerByID := map[string]*clustermetadatapb.MultiPooler{
@@ -176,7 +176,7 @@ func TestBuildFailoverProposal(t *testing.T) {
 		assert.Equal(t, "mp1", proposal.GetProposalLeader().GetId().GetName())
 		assert.Equal(t, "localhost", proposal.GetProposalLeader().GetHost())
 		assert.Len(t, proposal.GetProposedRule().GetCohortMembers(), 3)
-		assert.Equal(t, "mp1", proposal.GetProposedRule().GetPrimaryId().GetName())
+		assert.Equal(t, "mp1", proposal.GetProposedRule().GetLeaderId().GetName())
 	})
 
 	t.Run("skips resigned primary, picks next eligible leader", func(t *testing.T) {
@@ -285,7 +285,7 @@ func TestBuildBootstrapProposal(t *testing.T) {
 		assert.Equal(t, "mp2", proposal.GetProposalLeader().GetId().GetName())
 		// CohortMembers must be the provided cohortIDs, not derived from OutgoingRule
 		require.Len(t, proposal.GetProposedRule().GetCohortMembers(), 3)
-		assert.Equal(t, "mp2", proposal.GetProposedRule().GetPrimaryId().GetName())
+		assert.Equal(t, "mp2", proposal.GetProposedRule().GetLeaderId().GetName())
 		assert.Equal(t, int32(2), proposal.GetProposedRule().GetDurabilityPolicy().GetRequiredCount())
 	})
 
@@ -324,7 +324,7 @@ func TestRun_Success(t *testing.T) {
 			PostgresPort: 5432,
 		},
 		ProposedRule: &clustermetadatapb.ShardRule{
-			PrimaryId: leaderID,
+			LeaderId: leaderID,
 			CohortMembers: []*clustermetadatapb.ID{
 				mp1.MultiPooler.Id,
 				mp2.MultiPooler.Id,
@@ -377,7 +377,7 @@ func TestRun_EarlyExit(t *testing.T) {
 				PostgresPort: mp.GetPortMap()["postgres"],
 			},
 			ProposedRule: &clustermetadatapb.ShardRule{
-				PrimaryId:     leader.GetId(),
+				LeaderId:      leader.GetId(),
 				CohortMembers: []*clustermetadatapb.ID{leader.GetId()},
 				DurabilityPolicy: &clustermetadatapb.DurabilityPolicy{
 					QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_AT_LEAST_N,
@@ -483,7 +483,7 @@ func TestRun_LeaderProposeFails(t *testing.T) {
 			PostgresPort: 5432,
 		},
 		ProposedRule: &clustermetadatapb.ShardRule{
-			PrimaryId: leaderID,
+			LeaderId: leaderID,
 			CohortMembers: []*clustermetadatapb.ID{
 				mp1.MultiPooler.Id,
 				mp2.MultiPooler.Id,
@@ -536,7 +536,7 @@ func TestRun_NonLeaderProposeFails(t *testing.T) {
 			PostgresPort: 5432,
 		},
 		ProposedRule: &clustermetadatapb.ShardRule{
-			PrimaryId: leaderID,
+			LeaderId: leaderID,
 			CohortMembers: []*clustermetadatapb.ID{
 				mp1.MultiPooler.Id,
 				mp2.MultiPooler.Id,

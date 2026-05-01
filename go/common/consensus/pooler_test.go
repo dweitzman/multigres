@@ -113,7 +113,7 @@ func TestPrimaryTerm(t *testing.T) {
 				Id: id("z1", "pooler-1"),
 				CurrentPosition: &clustermetadatapb.PoolerPosition{
 					Rule: &clustermetadatapb.ShardRule{
-						PrimaryId:  id("z1", "pooler-2"),
+						LeaderId:   id("z1", "pooler-2"),
 						RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 7},
 					},
 				},
@@ -126,7 +126,7 @@ func TestPrimaryTerm(t *testing.T) {
 				Id: id("z1", "pooler-1"),
 				CurrentPosition: &clustermetadatapb.PoolerPosition{
 					Rule: &clustermetadatapb.ShardRule{
-						PrimaryId:  id("z1", "pooler-1"),
+						LeaderId:   id("z1", "pooler-1"),
 						RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 7},
 					},
 				},
@@ -139,7 +139,7 @@ func TestPrimaryTerm(t *testing.T) {
 				Id: id("z1", "pooler-1"),
 				CurrentPosition: &clustermetadatapb.PoolerPosition{
 					Rule: &clustermetadatapb.ShardRule{
-						PrimaryId: id("z1", "pooler-1"),
+						LeaderId: id("z1", "pooler-1"),
 					},
 				},
 			},
@@ -149,7 +149,7 @@ func TestPrimaryTerm(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, PrimaryTerm(tt.cs))
+			assert.Equal(t, tt.want, LeaderTerm(tt.cs))
 		})
 	}
 }
