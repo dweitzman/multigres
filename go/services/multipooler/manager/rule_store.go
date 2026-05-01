@@ -326,7 +326,7 @@ func assertRuleRowLockedSinceActionLock(ctx context.Context) error {
 // readRuleRow reads the current rule state and WAL LSN from current_rule. If
 // forUpdate is true, appends FOR UPDATE to acquire a row-level lock. The query
 // is executed on qs (either a transaction or the bare query service).
-// Returns nil if no row exists for the default shard.
+// Returns an error if no row exists for the default shard.
 func (rs *ruleStore) readRuleRow(ctx context.Context, qs executor.InternalQueryService, forUpdate bool) (*clustermetadatapb.PoolerPosition, error) {
 	suffix := ""
 	if forUpdate {
@@ -346,7 +346,7 @@ func (rs *ruleStore) readRuleRow(ctx context.Context, qs executor.InternalQueryS
 		return nil, mterrors.Wrap(err, "failed to read current_rule")
 	}
 	if len(result.Rows) == 0 {
-		return nil, nil
+		return nil, errors.New("no rule found")
 	}
 
 	var coordinatorTerm, leaderSubterm int64
