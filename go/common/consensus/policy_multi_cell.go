@@ -150,6 +150,44 @@ func (p MultiCellPolicy) BuildLeaderDurabilityPostgresConfig(
 	}, nil
 }
 
+// BuildIntersectionGUC implements IntersectableDurabilityPolicy. It handles
+// MultiCell → MultiCell transitions by type-asserting other and applying
+// cohort-subset heuristics to select whichever single-policy GUC satisfies both
+// simultaneously. Returns nil when the two policies cannot be resolved this way,
+// signalling TransitionPolicy to use the representative-sample fallback.
+func (p MultiCellPolicy) BuildIntersectionGUC(logger *slog.Logger, leader *clustermetadatapb.ID, other DurabilityPolicy, selfCohort, otherCohort []*clustermetadatapb.ID) *LeaderDurabilityPostgresConfig {
+	otherP, ok := other.(MultiCellPolicy)
+	if !ok {
+		return nil
+	}
+
+	selfIsSubset := cohortIsSubsetOf(selfCohort, otherCohort)
+	otherIsSubset := cohortIsSubsetOf(otherCohort, selfCohort)
+
+	if p.N == otherP.N {
+		switch {
+		case selfIsSubset:
+			cfg, _ := p.BuildLeaderDurabilityPostgresConfig(logger, selfCohort, leader)
+			return cfg
+		case otherIsSubset:
+			cfg, _ := otherP.BuildLeaderDurabilityPostgresConfig(logger, otherCohort, leader)
+			return cfg
+		}
+		return nil
+	}
+
+	if selfIsSubset && otherIsSubset {
+		if p.N < otherP.N {
+			cfg, _ := p.BuildLeaderDurabilityPostgresConfig(logger, selfCohort, leader)
+			return cfg
+		}
+		cfg, _ := otherP.BuildLeaderDurabilityPostgresConfig(logger, otherCohort, leader)
+		return cfg
+	}
+
+	return nil
+}
+
 // Description returns a human-readable summary of the policy.
 func (p MultiCellPolicy) Description() string {
 	return fmt.Sprintf("MULTI_CELL_AT_LEAST_N(N=%d)", p.N)

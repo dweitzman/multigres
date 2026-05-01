@@ -106,6 +106,21 @@ type LeaderDurabilityPostgresConfig struct {
 	SyncStandbyIDs []*clustermetadatapb.ID
 }
 
+// IntersectableDurabilityPolicy is an optional interface a DurabilityPolicy
+// may implement when it can compute the "both" GUC for a policy transition.
+//
+// TransitionPolicy calls BuildIntersectionGUC on the outgoing policy first,
+// then the incoming policy if the first returns nil. nil means "I can't
+// handle this pair — fall back to representative-sample."
+type IntersectableDurabilityPolicy interface {
+	BuildIntersectionGUC(
+		logger *slog.Logger,
+		leader *clustermetadatapb.ID,
+		other DurabilityPolicy,
+		selfCohort, otherCohort []*clustermetadatapb.ID,
+	) *LeaderDurabilityPostgresConfig
+}
+
 // NewPolicyFromProto converts a proto DurabilityPolicy into a concrete
 // DurabilityPolicy implementation.
 func NewPolicyFromProto(policy *clustermetadatapb.DurabilityPolicy) (DurabilityPolicy, error) {

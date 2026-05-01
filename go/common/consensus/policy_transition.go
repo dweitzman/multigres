@@ -77,19 +77,27 @@ func (p TransitionPolicy) CheckSufficientRecruitment(cohort, recruited []*cluste
 // OutgoingCohort and IncomingCohort. Callers should pass nil.
 //
 // The "both" GUC must be acknowledged by standbys valid under both the outgoing and incoming
-// policies simultaneously. The algorithm first tries policy-aware special cases:
-//
-//   - Same concrete type and N, outgoing cohort ⊆ incoming cohort: use outgoing config.
-//   - Same concrete type and N, incoming cohort ⊆ outgoing cohort: use incoming config.
-//   - Same concrete type, same cohort, different N: use the config with the smaller N.
-//
-// If none of the above apply, it falls back to a representative-sample approach: select the
-// minimum number of standbys from each policy's standby set needed to satisfy both policies
-// simultaneously and require all of them. OutgoingCohort and IncomingCohort are expected to
-// be ordered by replication fitness (most caught-up first) so earlier standbys are preferred.
+// policies simultaneously. The algorithm first checks whether either policy implements
+// IntersectableDurabilityPolicy (tried outgoing-first); if so, the policy computes the
+// result directly using type-specific heuristics. Otherwise, it falls back to a
+// representative-sample approach: select the minimum number of standbys from each policy's
+// standby set needed to satisfy both policies simultaneously and require all of them.
+// OutgoingCohort and IncomingCohort are expected to be ordered by replication fitness
+// (most caught-up first) so earlier standbys are preferred.
 //
 // Returns an error when the "both" GUC cannot be constructed (e.g. incompatible commit levels).
 func (p TransitionPolicy) BuildLeaderDurabilityPostgresConfig(logger *slog.Logger, _ []*clustermetadatapb.ID, leader *clustermetadatapb.ID) (*LeaderDurabilityPostgresConfig, error) {
+	if b, ok := p.Outgoing.(IntersectableDurabilityPolicy); ok {
+		if result := b.BuildIntersectionGUC(logger, leader, p.Incoming, p.OutgoingCohort, p.IncomingCohort); result != nil {
+			return result, nil
+		}
+	}
+	if b, ok := p.Incoming.(IntersectableDurabilityPolicy); ok {
+		if result := b.BuildIntersectionGUC(logger, leader, p.Outgoing, p.IncomingCohort, p.OutgoingCohort); result != nil {
+			return result, nil
+		}
+	}
+
 	outgoingGUC, err := p.Outgoing.BuildLeaderDurabilityPostgresConfig(logger, p.OutgoingCohort, leader)
 	if err != nil {
 		return nil, fmt.Errorf("outgoing GUC: %w", err)
@@ -98,49 +106,7 @@ func (p TransitionPolicy) BuildLeaderDurabilityPostgresConfig(logger *slog.Logge
 	if err != nil {
 		return nil, fmt.Errorf("incoming GUC: %w", err)
 	}
-
-	if bothGUC, ok := policyAwareBothGUC(p.Outgoing, p.Incoming, outgoingGUC, afterGUC, p.OutgoingCohort, p.IncomingCohort); ok {
-		return bothGUC, nil
-	}
-
 	return representativeSampleBothGUC(outgoingGUC, afterGUC)
-}
-
-// policyAwareBothGUC resolves the "both" GUC when both policies are the same concrete
-// type and their N/cohort relationship is directly resolvable. Returns (nil, false) to
-// signal that the representative-sample fallback should be used instead.
-func policyAwareBothGUC(outgoing, incoming DurabilityPolicy, outgoingGUC, afterGUC *LeaderDurabilityPostgresConfig, outCohort, inCohort []*clustermetadatapb.ID) (*LeaderDurabilityPostgresConfig, bool) {
-	outN, inN, ok := transitionPolicyNValues(outgoing, incoming)
-	if !ok {
-		return nil, false
-	}
-
-	outIsSubset := cohortIsSubsetOf(outCohort, inCohort)
-	inIsSubset := cohortIsSubsetOf(inCohort, outCohort)
-
-	if outN == inN {
-		// Same N: use the config whose cohort is a subset of the other. When cohorts
-		// are equal both conditions are true; outgoing is returned for consistency.
-		switch {
-		case outIsSubset:
-			return outgoingGUC, true
-		case inIsSubset:
-			return afterGUC, true
-		}
-		// Same N, cohorts not in a subset relationship → representative sample.
-		return nil, false
-	}
-
-	if outIsSubset && inIsSubset {
-		// Same cohort, different N: use the smaller N.
-		if outN < inN {
-			return outgoingGUC, true
-		}
-		return afterGUC, true
-	}
-
-	// Different N and different cohorts → representative sample.
-	return nil, false
 }
 
 // representativeSampleBothGUC builds a "both" GUC by selecting the minimum number of
@@ -185,22 +151,6 @@ func representativeSampleBothGUC(outgoing, incoming *LeaderDurabilityPostgresCon
 		NumSync:        len(reps),
 		SyncStandbyIDs: reps,
 	}, nil
-}
-
-// transitionPolicyNValues extracts the N field from two DurabilityPolicies if they
-// are the same concrete type. Returns ok=false if types differ or are unsupported.
-func transitionPolicyNValues(a, b DurabilityPolicy) (aN, bN int, ok bool) {
-	switch ta := a.(type) {
-	case AtLeastNPolicy:
-		if tb, isMatch := b.(AtLeastNPolicy); isMatch {
-			return ta.N, tb.N, true
-		}
-	case MultiCellPolicy:
-		if tb, isMatch := b.(MultiCellPolicy); isMatch {
-			return ta.N, tb.N, true
-		}
-	}
-	return 0, 0, false
 }
 
 // cohortIsSubsetOf reports whether every element of a appears in b.
