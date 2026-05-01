@@ -19,6 +19,7 @@ import (
 	"log/slog"
 
 	"github.com/multigres/multigres/go/common/mterrors"
+	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
@@ -85,18 +86,18 @@ func (p AtLeastNPolicy) CheckSufficientRecruitment(cohort, recruited []*clusterm
 	return nil
 }
 
-// BuildLeaderDurabilityPostgresConfig returns the Postgres-level config the
+// BuildPrimaryDurabilityPostgresConfig returns the Postgres-level config the
 // new leader must apply to satisfy AT_LEAST_N. The standby list is the full
 // cohort — AT_LEAST_N is cell-agnostic and including the leader is harmless
 // (Postgres ignores its own entry; num_sync = N-1 already accounts for the
 // leader's local write counting as 1).
 //
 // Errors when the cohort is too small to satisfy num_sync.
-func (p AtLeastNPolicy) BuildLeaderDurabilityPostgresConfig(
+func (p AtLeastNPolicy) BuildPrimaryDurabilityPostgresConfig(
 	logger *slog.Logger,
 	cohort []*clustermetadatapb.ID,
 	leader *clustermetadatapb.ID,
-) (*LeaderDurabilityPostgresConfig, error) {
+) (*PrimaryDurabilityPostgresConfig, error) {
 	// N==1 means the primary alone satisfies durability — return an explicit
 	// "no sync standbys" config so the new primary clears any stale
 	// synchronous_standby_names instead of silently inheriting them.
@@ -104,7 +105,7 @@ func (p AtLeastNPolicy) BuildLeaderDurabilityPostgresConfig(
 		logger.Info("Configuring leader for local-only durability",
 			"policy", "AT_LEAST_N",
 			"required_count", p.N)
-		return &LeaderDurabilityPostgresConfig{
+		return &PrimaryDurabilityPostgresConfig{
 			SyncCommit:     multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LOCAL,
 			SyncMethod:     multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_ANY,
 			NumSync:        1,
@@ -112,26 +113,84 @@ func (p AtLeastNPolicy) BuildLeaderDurabilityPostgresConfig(
 		}, nil
 	}
 
-	// num_sync = required_count - 1: the primary's own write counts as 1 ack.
+	leaderKey := topoclient.ClusterIDString(leader)
+	leaderInCohort := false
+	standbys := make([]*clustermetadatapb.ID, 0, len(cohort))
+	for _, s := range cohort {
+		if topoclient.ClusterIDString(s) == leaderKey {
+			leaderInCohort = true
+		} else {
+			standbys = append(standbys, s)
+		}
+	}
+
+	// num_sync = N-1 when the leader is a cohort member (its own write counts
+	// as 1 ack); N when the leader is external to this cohort (e.g. resigning
+	// or assisting recovery) so all N acks must come from standbys.
 	requiredNumSync := p.N - 1
-	if requiredNumSync > len(cohort) {
+	if !leaderInCohort {
+		requiredNumSync = p.N
+	}
+	if requiredNumSync > len(standbys) {
 		return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
 			fmt.Sprintf("cannot establish synchronous replication: insufficient cohort members (required %d standbys, available %d)",
-				requiredNumSync, len(cohort)))
+				requiredNumSync, len(standbys)))
 	}
 
 	logger.Info("Configuring synchronous replication",
 		"policy", "AT_LEAST_N",
 		"required_count", p.N,
 		"num_sync", requiredNumSync,
-		"standbys", len(cohort))
+		"standbys", len(standbys))
 
-	return &LeaderDurabilityPostgresConfig{
+	return &PrimaryDurabilityPostgresConfig{
 		SyncCommit:     multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 		SyncMethod:     multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_ANY,
 		NumSync:        requiredNumSync,
-		SyncStandbyIDs: cohort,
+		SyncStandbyIDs: standbys,
 	}, nil
+}
+
+// BuildBothGUC implements BothGUCPolicy. It handles
+// AtLeastN → AtLeastN transitions by type-asserting other and applying
+// cohort-subset heuristics to select whichever single-policy GUC satisfies both
+// simultaneously. Returns nil when the two policies cannot be resolved this way,
+// signalling TransitionPolicy to use the representative-sample fallback.
+func (p AtLeastNPolicy) BuildBothGUC(logger *slog.Logger, leader *clustermetadatapb.ID, other DurabilityPolicy, selfCohort, otherCohort []*clustermetadatapb.ID) *PrimaryDurabilityPostgresConfig {
+	otherP, ok := other.(AtLeastNPolicy)
+	if !ok {
+		return nil
+	}
+
+	selfIsSubset := cohortIsSubsetOf(selfCohort, otherCohort)
+	otherIsSubset := cohortIsSubsetOf(otherCohort, selfCohort)
+
+	if p.N == otherP.N {
+		// Same N: the config whose cohort is a subset already satisfies the
+		// larger cohort's requirements. Equal cohorts → use self for consistency.
+		switch {
+		case selfIsSubset:
+			cfg, _ := p.BuildPrimaryDurabilityPostgresConfig(logger, selfCohort, leader)
+			return cfg
+		case otherIsSubset:
+			cfg, _ := otherP.BuildPrimaryDurabilityPostgresConfig(logger, otherCohort, leader)
+			return cfg
+		}
+		return nil
+	}
+
+	if selfIsSubset && otherIsSubset {
+		// Same cohort, different N: the larger N is the binding constraint —
+		// the "both" GUC must satisfy the stricter policy.
+		if p.N > otherP.N {
+			cfg, _ := p.BuildPrimaryDurabilityPostgresConfig(logger, selfCohort, leader)
+			return cfg
+		}
+		cfg, _ := otherP.BuildPrimaryDurabilityPostgresConfig(logger, otherCohort, leader)
+		return cfg
+	}
+
+	return nil
 }
 
 // Description returns a human-readable summary of the policy.

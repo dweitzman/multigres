@@ -1,0 +1,171 @@
+// Copyright 2026 Supabase, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package consensus
+
+import (
+	"fmt"
+	"log/slog"
+
+	"github.com/multigres/multigres/go/common/topoclient"
+	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+)
+
+// TransitionPolicy represents a durability policy transition from Outgoing to Incoming.
+//
+// It is a DurabilityPolicy that models the window during which a rule change WAL record
+// is being committed. Its BuildPrimaryDurabilityPostgresConfig returns the "both" GUC:
+// a Postgres sync-replication config whose standby set is the intersection of the outgoing
+// and incoming standby sets, ensuring the WAL commit is acknowledged by standbys that are
+// valid witnesses under both the old and new rules.
+//
+// IncomingCohortMode changes the policy's behavior:
+//   - false (default): CheckAchievable requires both policies to be achievable;
+//     CheckSufficientRecruitment uses the outgoing policy's requirements.
+//   - true: both checks operate on the incoming policy and IncomingCohort only.
+//     Used after the transition is decided (the rule has been committed and propagated).
+type TransitionPolicy struct {
+	Outgoing           DurabilityPolicy
+	Incoming           DurabilityPolicy
+	OutgoingCohort     []*clustermetadatapb.ID
+	IncomingCohort     []*clustermetadatapb.ID
+	IncomingCohortMode bool
+}
+
+// Compile-time check that TransitionPolicy implements DurabilityPolicy.
+var _ DurabilityPolicy = TransitionPolicy{}
+
+// CheckAchievable checks that the proposed cohort can achieve both the outgoing and
+// incoming policies. In IncomingCohortMode, only the incoming policy is checked.
+func (p TransitionPolicy) CheckAchievable(proposedCohort []*clustermetadatapb.ID) error {
+	if p.IncomingCohortMode {
+		return p.Incoming.CheckAchievable(p.IncomingCohort)
+	}
+	if err := p.Outgoing.CheckAchievable(proposedCohort); err != nil {
+		return fmt.Errorf("outgoing policy not achievable: %w", err)
+	}
+	if err := p.Incoming.CheckAchievable(proposedCohort); err != nil {
+		return fmt.Errorf("incoming policy not achievable: %w", err)
+	}
+	return nil
+}
+
+// CheckSufficientRecruitment delegates to the outgoing policy's requirements, since
+// recruitment still operates under the old rule during a transition. In
+// IncomingCohortMode, it delegates to the incoming policy instead.
+func (p TransitionPolicy) CheckSufficientRecruitment(cohort, recruited []*clustermetadatapb.ID) error {
+	if p.IncomingCohortMode {
+		return p.Incoming.CheckSufficientRecruitment(p.IncomingCohort, recruited)
+	}
+	return p.Outgoing.CheckSufficientRecruitment(cohort, recruited)
+}
+
+// BuildPrimaryDurabilityPostgresConfig returns the "both" GUC config for the transition.
+//
+// NOTE: The cohort parameter is unused for TransitionPolicy — both cohorts are stored in
+// OutgoingCohort and IncomingCohort. Callers should pass nil.
+//
+// The "both" GUC must be acknowledged by standbys valid under both the outgoing and incoming
+// policies simultaneously. The algorithm first checks whether either policy implements
+// BothGUCPolicy (tried outgoing-first); if so, the policy computes the
+// result directly using type-specific heuristics. Otherwise, it falls back to a
+// representative-sample approach: select the minimum number of standbys from each policy's
+// standby set needed to satisfy both policies simultaneously and require all of them.
+// OutgoingCohort and IncomingCohort are expected to be ordered by replication fitness
+// (most caught-up first) so earlier standbys are preferred.
+//
+// Returns an error when the "both" GUC cannot be constructed (e.g. incompatible commit levels).
+func (p TransitionPolicy) BuildPrimaryDurabilityPostgresConfig(logger *slog.Logger, _ []*clustermetadatapb.ID, leader *clustermetadatapb.ID) (*PrimaryDurabilityPostgresConfig, error) {
+	if b, ok := p.Outgoing.(BothGUCPolicy); ok {
+		if result := b.BuildBothGUC(logger, leader, p.Incoming, p.OutgoingCohort, p.IncomingCohort); result != nil {
+			return result, nil
+		}
+	}
+	if b, ok := p.Incoming.(BothGUCPolicy); ok {
+		if result := b.BuildBothGUC(logger, leader, p.Outgoing, p.IncomingCohort, p.OutgoingCohort); result != nil {
+			return result, nil
+		}
+	}
+
+	outgoingGUC, err := p.Outgoing.BuildPrimaryDurabilityPostgresConfig(logger, p.OutgoingCohort, leader)
+	if err != nil {
+		return nil, fmt.Errorf("outgoing GUC: %w", err)
+	}
+	afterGUC, err := p.Incoming.BuildPrimaryDurabilityPostgresConfig(logger, p.IncomingCohort, leader)
+	if err != nil {
+		return nil, fmt.Errorf("incoming GUC: %w", err)
+	}
+	return representativeSampleBothGUC(outgoingGUC, afterGUC)
+}
+
+// representativeSampleBothGUC builds a "both" GUC by selecting the minimum number of
+// standbys from each policy's standby set needed to satisfy both simultaneously.
+//
+// Shared standbys (in both sets) count toward both policies' NumSync requirements at once,
+// so they are preferred: we use as many shared standbys as the stricter policy requires
+// before drawing from policy-exclusive pools. Within each set, earlier entries are preferred
+// (the caller is expected to pass cohorts ordered by fitness).
+func representativeSampleBothGUC(outgoing, incoming *PrimaryDurabilityPostgresConfig) (*PrimaryDurabilityPostgresConfig, error) {
+	if outgoing.SyncCommit != incoming.SyncCommit || outgoing.SyncMethod != incoming.SyncMethod {
+		return nil, fmt.Errorf(
+			"cannot build representative-sample GUC: incompatible commit levels (%v/%v vs %v/%v)",
+			outgoing.SyncCommit, outgoing.SyncMethod,
+			incoming.SyncCommit, incoming.SyncMethod,
+		)
+	}
+
+	shared := intersectStandbys(outgoing.SyncStandbyIDs, incoming.SyncStandbyIDs)
+	outOnly := excludeStandbys(outgoing.SyncStandbyIDs, incoming.SyncStandbyIDs)
+	inOnly := excludeStandbys(incoming.SyncStandbyIDs, outgoing.SyncStandbyIDs)
+
+	// Shared standbys satisfy both policies simultaneously. Use up to the stricter
+	// policy's NumSync worth of them before falling back to policy-exclusive standbys.
+	sharedUsed := min(len(shared), max(outgoing.NumSync, incoming.NumSync))
+	outNeed := max(0, outgoing.NumSync-sharedUsed)
+	inNeed := max(0, incoming.NumSync-sharedUsed)
+
+	reps := make([]*clustermetadatapb.ID, 0, sharedUsed+outNeed+inNeed)
+	reps = append(reps, shared[:sharedUsed]...)
+	reps = append(reps, outOnly[:outNeed]...)
+	reps = append(reps, inOnly[:inNeed]...)
+
+	return &PrimaryDurabilityPostgresConfig{
+		SyncCommit:     outgoing.SyncCommit,
+		SyncMethod:     outgoing.SyncMethod,
+		NumSync:        len(reps),
+		SyncStandbyIDs: reps,
+	}, nil
+}
+
+// cohortIsSubsetOf reports whether every element of a appears in b.
+func cohortIsSubsetOf(a, b []*clustermetadatapb.ID) bool {
+	return len(intersectStandbys(a, b)) == len(a)
+}
+
+// excludeStandbys returns elements of a that do not appear in b.
+func excludeStandbys(a, b []*clustermetadatapb.ID) []*clustermetadatapb.ID {
+	bKeys := poolerKeysOf(b)
+	result := make([]*clustermetadatapb.ID, 0, len(a))
+	for _, id := range a {
+		if _, ok := bKeys[topoclient.ClusterIDString(id)]; !ok {
+			result = append(result, id)
+		}
+	}
+	return result
+}
+
+// Description returns a human-readable summary of the transition policy.
+func (p TransitionPolicy) Description() string {
+	return fmt.Sprintf("Transition(%s → %s)", p.Outgoing.Description(), p.Incoming.Description())
+}

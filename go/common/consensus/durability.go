@@ -64,8 +64,8 @@ type DurabilityPolicy interface {
 	//     commit outside our recruitment.
 	CheckSufficientRecruitment(cohort, recruited []*clustermetadatapb.ID) error
 
-	// BuildLeaderDurabilityPostgresConfig returns the Postgres-level config
-	// the new primary must apply to satisfy this policy's durability
+	// BuildPrimaryDurabilityPostgresConfig returns the Postgres-level config
+	// a primary must apply for transactions to satisfy this policy's durability
 	// obligations.
 	//
 	// cohort is the full set of poolers participating in the term, including
@@ -82,28 +82,44 @@ type DurabilityPolicy interface {
 	// dropping any stale sync configuration the new primary may have
 	// inherited from a prior role. Returns an error when the cohort cannot
 	// satisfy the policy's num_sync requirement.
-	BuildLeaderDurabilityPostgresConfig(
+	BuildPrimaryDurabilityPostgresConfig(
 		logger *slog.Logger,
 		cohort []*clustermetadatapb.ID,
 		leader *clustermetadatapb.ID,
-	) (*LeaderDurabilityPostgresConfig, error)
+	) (*PrimaryDurabilityPostgresConfig, error)
 
 	// Description returns a human-readable summary of the policy.
 	Description() string
 }
 
-// LeaderDurabilityPostgresConfig is the Postgres-level configuration a new
-// leader must apply to satisfy a durability policy.
+// PrimaryDurabilityPostgresConfig is the Postgres-level configuration a
+// primary must apply for transactions to satisfy the durability policy.
 //
 // It captures only the durability-meaningful outputs of the policy — the
 // commit level, the standby acknowledgement method, the count, and the
 // eligible standby set. RPC plumbing concerns (reload-vs-restart, etc.) live
 // at the call site that translates this into a wire request.
-type LeaderDurabilityPostgresConfig struct {
+type PrimaryDurabilityPostgresConfig struct {
 	SyncCommit     multipoolermanagerdatapb.SynchronousCommitLevel
 	SyncMethod     multipoolermanagerdatapb.SynchronousMethod
 	NumSync        int
 	SyncStandbyIDs []*clustermetadatapb.ID
+}
+
+// BothGUCPolicy is an optional interface a DurabilityPolicy may implement
+// when it can compute the "both" GUC for a policy transition — the config
+// that satisfies both the outgoing and incoming policies simultaneously.
+//
+// TransitionPolicy calls BuildBothGUC on the outgoing policy first, then the
+// incoming policy if the first returns nil. nil means "I can't handle this
+// pair — fall back to representative-sample."
+type BothGUCPolicy interface {
+	BuildBothGUC(
+		logger *slog.Logger,
+		leader *clustermetadatapb.ID,
+		other DurabilityPolicy,
+		selfCohort, otherCohort []*clustermetadatapb.ID,
+	) *PrimaryDurabilityPostgresConfig
 }
 
 // NewPolicyFromProto converts a proto DurabilityPolicy into a concrete
@@ -129,6 +145,18 @@ func NewPolicyFromProto(policy *clustermetadatapb.DurabilityPolicy) (DurabilityP
 	default:
 		return nil, fmt.Errorf("unsupported quorum type: %v", policy.QuorumType)
 	}
+}
+
+// intersectStandbys returns the IDs from a that also appear in b.
+func intersectStandbys(a, b []*clustermetadatapb.ID) []*clustermetadatapb.ID {
+	bKeys := poolerKeysOf(b)
+	result := make([]*clustermetadatapb.ID, 0, len(a))
+	for _, id := range a {
+		if _, ok := bKeys[topoclient.ClusterIDString(id)]; ok {
+			result = append(result, id)
+		}
+	}
+	return result
 }
 
 // keysOf returns the set of distinct keyFn-keys present in poolers.

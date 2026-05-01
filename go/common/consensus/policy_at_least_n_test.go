@@ -294,7 +294,7 @@ func TestAtLeastNPolicy_CheckSufficientRecruitment(t *testing.T) {
 	}
 }
 
-func TestAtLeastNPolicy_BuildLeaderDurabilityPostgresConfig(t *testing.T) {
+func TestAtLeastNPolicy_BuildPrimaryDurabilityPostgresConfig(t *testing.T) {
 	logger := testLogger()
 	leader := id("primary", "cell-primary")
 
@@ -305,7 +305,7 @@ func TestAtLeastNPolicy_BuildLeaderDurabilityPostgresConfig(t *testing.T) {
 			id("mp1", "cell1"),
 			id("mp2", "cell1"),
 		}
-		cfg, err := p.BuildLeaderDurabilityPostgresConfig(logger, cohort, leader)
+		cfg, err := p.BuildPrimaryDurabilityPostgresConfig(logger, cohort, leader)
 		require.NoError(t, err)
 		require.NotNil(t, cfg, "N=1 must still return a config so the new primary explicitly clears stale sync settings")
 		require.Equal(t, multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LOCAL, cfg.SyncCommit,
@@ -318,14 +318,14 @@ func TestAtLeastNPolicy_BuildLeaderDurabilityPostgresConfig(t *testing.T) {
 	t.Run("N=2 with cohort of 2 sets num_sync=1", func(t *testing.T) {
 		p := AtLeastNPolicy{N: 2}
 		cohort := []*clustermetadatapb.ID{leader, id("mp1", "cell1")}
-		cfg, err := p.BuildLeaderDurabilityPostgresConfig(logger, cohort, leader)
+		cfg, err := p.BuildPrimaryDurabilityPostgresConfig(logger, cohort, leader)
 		require.NoError(t, err)
 		require.NotNil(t, cfg)
 		require.Equal(t, multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON, cfg.SyncCommit)
 		require.Equal(t, multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_ANY, cfg.SyncMethod)
 		require.Equal(t, 1, cfg.NumSync)
 		require.ElementsMatch(t,
-			[]string{"cell-primary_primary", "cell1_mp1"},
+			[]string{"cell1_mp1"},
 			clusterIDStrings(cfg.SyncStandbyIDs),
 		)
 	})
@@ -337,11 +337,11 @@ func TestAtLeastNPolicy_BuildLeaderDurabilityPostgresConfig(t *testing.T) {
 			id("mp1", "cell1"),
 			id("mp2", "cell1"),
 		}
-		cfg, err := p.BuildLeaderDurabilityPostgresConfig(logger, cohort, leader)
+		cfg, err := p.BuildPrimaryDurabilityPostgresConfig(logger, cohort, leader)
 		require.NoError(t, err)
 		require.NotNil(t, cfg)
 		require.Equal(t, 2, cfg.NumSync)
-		require.Len(t, cfg.SyncStandbyIDs, 3)
+		require.Len(t, cfg.SyncStandbyIDs, 2)
 	})
 
 	t.Run("N=3 with cohort of 6 keeps num_sync=2 (not capped by cohort size)", func(t *testing.T) {
@@ -352,11 +352,11 @@ func TestAtLeastNPolicy_BuildLeaderDurabilityPostgresConfig(t *testing.T) {
 			id("mp3", "cell1"), id("mp4", "cell1"),
 			id("mp5", "cell1"),
 		}
-		cfg, err := p.BuildLeaderDurabilityPostgresConfig(logger, cohort, leader)
+		cfg, err := p.BuildPrimaryDurabilityPostgresConfig(logger, cohort, leader)
 		require.NoError(t, err)
 		require.NotNil(t, cfg)
 		require.Equal(t, 2, cfg.NumSync, "num_sync should be N-1, not the cohort size")
-		require.Len(t, cfg.SyncStandbyIDs, 6)
+		require.Len(t, cfg.SyncStandbyIDs, 5)
 	})
 
 	t.Run("AT_LEAST_N does not filter by cell", func(t *testing.T) {
@@ -367,18 +367,18 @@ func TestAtLeastNPolicy_BuildLeaderDurabilityPostgresConfig(t *testing.T) {
 			id("mp1", "us-west-1a"), // same cell as leader; AT_LEAST_N keeps it
 			id("mp2", "us-west-1b"),
 		}
-		cfg, err := p.BuildLeaderDurabilityPostgresConfig(logger, cohort, sameCellLeader)
+		cfg, err := p.BuildPrimaryDurabilityPostgresConfig(logger, cohort, sameCellLeader)
 		require.NoError(t, err)
 		require.NotNil(t, cfg)
 		require.ElementsMatch(t,
-			[]string{"us-west-1a_primary", "us-west-1a_mp1", "us-west-1b_mp2"},
+			[]string{"us-west-1a_mp1", "us-west-1b_mp2"},
 			clusterIDStrings(cfg.SyncStandbyIDs),
 		)
 	})
 
 	t.Run("empty cohort returns error", func(t *testing.T) {
 		p := AtLeastNPolicy{N: 2}
-		cfg, err := p.BuildLeaderDurabilityPostgresConfig(logger, []*clustermetadatapb.ID{}, leader)
+		cfg, err := p.BuildPrimaryDurabilityPostgresConfig(logger, []*clustermetadatapb.ID{}, leader)
 		require.Error(t, err)
 		require.Nil(t, cfg)
 		require.Contains(t, err.Error(), "cannot establish synchronous replication")
@@ -392,14 +392,14 @@ func TestAtLeastNPolicy_BuildLeaderDurabilityPostgresConfig(t *testing.T) {
 			id("mp1", "us-west-1a"),
 			id("mp2", "us-west-1b"),
 		}
-		cfg, err := p.BuildLeaderDurabilityPostgresConfig(logger, cohort, leader)
+		cfg, err := p.BuildPrimaryDurabilityPostgresConfig(logger, cohort, leader)
 		require.Error(t, err)
 		require.Nil(t, cfg)
 		require.Contains(t, err.Error(), "required 4 standbys")
-		require.Contains(t, err.Error(), "available 3")
+		require.Contains(t, err.Error(), "available 2")
 	})
 
-	t.Run("includes the full cohort (leader + standbys) in result", func(t *testing.T) {
+	t.Run("includes standbys but not leader in SyncStandbyIDs", func(t *testing.T) {
 		p := AtLeastNPolicy{N: 2}
 		cohort := []*clustermetadatapb.ID{
 			leader,
@@ -407,12 +407,17 @@ func TestAtLeastNPolicy_BuildLeaderDurabilityPostgresConfig(t *testing.T) {
 			id("mp-beta", "cell-b"),
 			id("mp-gamma", "cell-c"),
 		}
-		cfg, err := p.BuildLeaderDurabilityPostgresConfig(logger, cohort, leader)
+		cfg, err := p.BuildPrimaryDurabilityPostgresConfig(logger, cohort, leader)
 		require.NoError(t, err)
 		require.NotNil(t, cfg)
 		require.ElementsMatch(t,
-			[]string{"cell-primary_primary", "cell-a_mp-alpha", "cell-b_mp-beta", "cell-c_mp-gamma"},
+			[]string{"cell-a_mp-alpha", "cell-b_mp-beta", "cell-c_mp-gamma"},
 			clusterIDStrings(cfg.SyncStandbyIDs),
 		)
 	})
+}
+
+func TestAtLeastNPolicy_Description(t *testing.T) {
+	require.Equal(t, "AT_LEAST_N(N=2)", AtLeastNPolicy{N: 2}.Description())
+	require.Equal(t, "AT_LEAST_N(N=3)", AtLeastNPolicy{N: 3}.Description())
 }

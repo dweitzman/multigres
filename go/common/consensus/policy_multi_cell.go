@@ -78,18 +78,18 @@ func (p MultiCellPolicy) CheckSufficientRecruitment(cohort, recruited []*cluster
 	return nil
 }
 
-// BuildLeaderDurabilityPostgresConfig returns the Postgres-level config the
+// BuildPrimaryDurabilityPostgresConfig returns the Postgres-level config the
 // new primary must apply to satisfy MULTI_CELL_AT_LEAST_N. Standbys in the
 // primary's own cell are excluded so synchronous acknowledgement always
 // crosses a cell boundary.
 //
 // Errors when no eligible different-cell standbys exist or when the eligible
 // set is too small to satisfy num_sync.
-func (p MultiCellPolicy) BuildLeaderDurabilityPostgresConfig(
+func (p MultiCellPolicy) BuildPrimaryDurabilityPostgresConfig(
 	logger *slog.Logger,
 	cohort []*clustermetadatapb.ID,
 	leader *clustermetadatapb.ID,
-) (*LeaderDurabilityPostgresConfig, error) {
+) (*PrimaryDurabilityPostgresConfig, error) {
 	// N==1 means the primary alone satisfies durability — return an explicit
 	// "no sync standbys" config so the new primary clears any stale
 	// synchronous_standby_names instead of silently inheriting them.
@@ -97,7 +97,7 @@ func (p MultiCellPolicy) BuildLeaderDurabilityPostgresConfig(
 		logger.Info("Configuring leader for local-only durability",
 			"policy", "MULTI_CELL_AT_LEAST_N",
 			"required_count", p.N)
-		return &LeaderDurabilityPostgresConfig{
+		return &PrimaryDurabilityPostgresConfig{
 			SyncCommit:     multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_LOCAL,
 			SyncMethod:     multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_ANY,
 			NumSync:        1,
@@ -142,12 +142,52 @@ func (p MultiCellPolicy) BuildLeaderDurabilityPostgresConfig(
 		"num_sync", requiredNumSync,
 		"eligible_standbys", len(eligible))
 
-	return &LeaderDurabilityPostgresConfig{
+	return &PrimaryDurabilityPostgresConfig{
 		SyncCommit:     multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON,
 		SyncMethod:     multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_ANY,
 		NumSync:        requiredNumSync,
 		SyncStandbyIDs: eligible,
 	}, nil
+}
+
+// BuildBothGUC implements BothGUCPolicy. It handles
+// MultiCell → MultiCell transitions by type-asserting other and applying
+// cohort-subset heuristics to select whichever single-policy GUC satisfies both
+// simultaneously. Returns nil when the two policies cannot be resolved this way,
+// signalling TransitionPolicy to use the representative-sample fallback.
+func (p MultiCellPolicy) BuildBothGUC(logger *slog.Logger, leader *clustermetadatapb.ID, other DurabilityPolicy, selfCohort, otherCohort []*clustermetadatapb.ID) *PrimaryDurabilityPostgresConfig {
+	otherP, ok := other.(MultiCellPolicy)
+	if !ok {
+		return nil
+	}
+
+	selfIsSubset := cohortIsSubsetOf(selfCohort, otherCohort)
+	otherIsSubset := cohortIsSubsetOf(otherCohort, selfCohort)
+
+	if p.N == otherP.N {
+		switch {
+		case selfIsSubset:
+			cfg, _ := p.BuildPrimaryDurabilityPostgresConfig(logger, selfCohort, leader)
+			return cfg
+		case otherIsSubset:
+			cfg, _ := otherP.BuildPrimaryDurabilityPostgresConfig(logger, otherCohort, leader)
+			return cfg
+		}
+		return nil
+	}
+
+	if selfIsSubset && otherIsSubset {
+		// Same cohort, different N: the larger N is the binding constraint —
+		// the "both" GUC must satisfy the stricter policy.
+		if p.N > otherP.N {
+			cfg, _ := p.BuildPrimaryDurabilityPostgresConfig(logger, selfCohort, leader)
+			return cfg
+		}
+		cfg, _ := otherP.BuildPrimaryDurabilityPostgresConfig(logger, otherCohort, leader)
+		return cfg
+	}
+
+	return nil
 }
 
 // Description returns a human-readable summary of the policy.
