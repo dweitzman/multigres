@@ -34,12 +34,12 @@ type RecruitmentResult struct {
 	// nodes in this result have accepted.
 	TermRevocation *clustermetadatapb.TermRevocation
 
-	// BestRule is the highest committed ShardRule across all recruited nodes,
+	// HighestDiscoveredRule is the highest committed ShardRule across all recruited nodes,
 	// determined from current_position.rule (WAL-backed, authoritative).
-	BestRule *clustermetadatapb.ShardRule
+	HighestDiscoveredRule *clustermetadatapb.ShardRule
 
 	// EligibleLeaders are the recruited nodes whose committed rule number
-	// matches BestRule. The buildProposal callback must choose its leader
+	// matches HighestDiscoveredRule. The buildProposal callback must choose its leader
 	// from this set.
 	EligibleLeaders []*clustermetadatapb.ConsensusStatus
 }
@@ -57,12 +57,12 @@ type RecruitmentResult struct {
 //
 // # Quorum validation
 //
-// The highest committed rule (BestRule) across the recruited nodes determines
+// The highest committed rule (HighestDiscoveredRule) across the recruited nodes determines
 // the cohort and durability policy for the quorum check. Recruited nodes in
 // that cohort must satisfy the policy.
 //
-// TODO: This assumes BestRule is already durably committed. If a cohort change
-// was in progress when the primary failed, some nodes may hold BestRule in WAL
+// TODO: This assumes HighestDiscoveredRule is already durably committed. If a cohort change
+// was in progress when the primary failed, some nodes may hold HighestDiscoveredRule in WAL
 // while others do not, and the previous cohort's policy may apply instead. We
 // don't yet have enough information from the Recruit responses alone to detect
 // this safely, so for now we proceed optimistically.
@@ -88,30 +88,30 @@ func BuildSafeProposal(
 
 	// Step 1: Find the best committed rule (highest RuleNumber) across all
 	// recruited nodes from their WAL-backed current_position.rule.
-	var bestRule *clustermetadatapb.ShardRule
+	var highestDiscoveredRule *clustermetadatapb.ShardRule
 	for _, cs := range statuses {
 		rule := cs.GetCurrentPosition().GetRule()
-		if rule != nil && (bestRule == nil || CompareRuleNumbers(rule.GetRuleNumber(), bestRule.GetRuleNumber()) > 0) {
-			bestRule = rule
+		if rule != nil && (highestDiscoveredRule == nil || CompareRuleNumbers(rule.GetRuleNumber(), highestDiscoveredRule.GetRuleNumber()) > 0) {
+			highestDiscoveredRule = rule
 		}
 	}
-	if bestRule == nil {
+	if highestDiscoveredRule == nil {
 		return nil, errors.New("no committed rule found among recruited nodes; cannot determine cohort")
 	}
 
 	// Step 2: Validate that the recruited nodes cover sufficient quorum under
 	// the best rule's cohort and policy.
-	policy, err := NewPolicyFromProto(bestRule.GetDurabilityPolicy())
+	policy, err := NewPolicyFromProto(highestDiscoveredRule.GetDurabilityPolicy())
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse durability policy from rule: %w", err)
 	}
-	cohort := bestRule.GetCohortMembers()
+	cohort := highestDiscoveredRule.GetCohortMembers()
 	recruitedInCohort := cohortIntersect(cohort, statuses)
 	if err := policy.CheckSufficientRecruitment(cohort, recruitedInCohort); err != nil {
 		return nil, fmt.Errorf("insufficient recruitment: %w", err)
 	}
 
-	// Step 3: Build the eligible leader set — nodes at bestRule's rule number
+	// Step 3: Build the eligible leader set — nodes at highestDiscoveredRule's rule number
 	// with the highest LSN. Rule number is the primary criterion; LSN breaks
 	// ties within the same rule (a node at the same rule but a lower LSN has
 	// less WAL and is strictly worse). Nodes with unparsable or empty LSNs
@@ -119,7 +119,7 @@ func BuildSafeProposal(
 	var bestLSN pgutil.LSN
 	var eligibleLeaders []*clustermetadatapb.ConsensusStatus
 	for _, cs := range statuses {
-		if CompareRuleNumbers(cs.GetCurrentPosition().GetRule().GetRuleNumber(), bestRule.GetRuleNumber()) != 0 {
+		if CompareRuleNumbers(cs.GetCurrentPosition().GetRule().GetRuleNumber(), highestDiscoveredRule.GetRuleNumber()) != 0 {
 			continue
 		}
 		lsn, err := pgutil.ParseLSN(cs.GetCurrentPosition().GetLsn())
@@ -137,16 +137,16 @@ func BuildSafeProposal(
 		}
 	}
 	if len(eligibleLeaders) == 0 {
-		// bestRule was derived from statuses; at least one status must match it
+		// highestDiscoveredRule was derived from statuses; at least one status must match it
 		// with a valid LSN (guaranteed by filterByValidPosition above). This path
 		// is unreachable in practice and guards against future refactoring.
 		return nil, errors.New("no eligible leaders found among recruited nodes")
 	}
 
 	result := RecruitmentResult{
-		TermRevocation:  revocation,
-		BestRule:        bestRule,
-		EligibleLeaders: eligibleLeaders,
+		TermRevocation:        revocation,
+		HighestDiscoveredRule: highestDiscoveredRule,
+		EligibleLeaders:       eligibleLeaders,
 	}
 
 	// Step 4: Ask the caller to build the proposal.

@@ -442,7 +442,7 @@ func TestCheckSufficientRecruitment_BuildProposalError(t *testing.T) {
 	assert.Contains(t, err.Error(), "no suitable candidate")
 }
 
-func TestCheckSufficientRecruitment_BestRuleSelected(t *testing.T) {
+func TestCheckSufficientRecruitment_HighestDiscoveredRuleSelected(t *testing.T) {
 	// One node is behind; the others are at the higher rule.
 	// The higher rule's cohort and policy must govern quorum.
 	a := makeID("z1", "pooler-a")
@@ -458,7 +458,7 @@ func TestCheckSufficientRecruitment_BestRuleSelected(t *testing.T) {
 		makeStatus(c, oldRule, testRevocation), // behind
 	}
 
-	// Only a and b are eligible (at bestRule); callback picks a.
+	// Only a and b are eligible (at highestDiscoveredRule); callback picks a.
 	var gotResult RecruitmentResult
 	buildProposal := func(r RecruitmentResult) (*consensusdatapb.CoordinatorProposal, error) {
 		gotResult = r
@@ -473,8 +473,8 @@ func TestCheckSufficientRecruitment_BestRuleSelected(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, proposal)
-	assert.Equal(t, int64(3), gotResult.BestRule.GetRuleNumber().GetCoordinatorTerm())
-	assert.Len(t, gotResult.EligibleLeaders, 2, "only nodes at bestRule are eligible")
+	assert.Equal(t, int64(3), gotResult.HighestDiscoveredRule.GetRuleNumber().GetCoordinatorTerm())
+	assert.Len(t, gotResult.EligibleLeaders, 2, "only nodes at highestDiscoveredRule are eligible")
 	// Leader must be a or b (both at newRule), not c.
 	leaderName := proposal.GetProposalLeader().GetId().GetName()
 	assert.NotEqual(t, "pooler-c", leaderName)
@@ -638,7 +638,7 @@ func TestCheckSufficientRecruitment_EligibleLeadersOrderDeterministic(t *testing
 }
 
 func TestCheckSufficientRecruitment_ExtraNodeOutsideCohortIgnored(t *testing.T) {
-	// An extra node that is not in the bestRule cohort was also recruited
+	// An extra node that is not in the highestDiscoveredRule cohort was also recruited
 	// (e.g. a node being removed from the cohort). It must not inflate the
 	// quorum count for the current cohort's policy.
 	a := makeID("z1", "pooler-a")
@@ -722,8 +722,8 @@ func TestCheckSufficientRecruitment_LSNTiedAtMax(t *testing.T) {
 }
 
 func TestCheckSufficientRecruitment_NodeWithHigherRuleButLowerLSNNotEligible(t *testing.T) {
-	// Node a is at bestRule with a high LSN.
-	// Node b is at bestRule with a lower LSN — should be ineligible as leader
+	// Node a is at highestDiscoveredRule with a high LSN.
+	// Node b is at highestDiscoveredRule with a lower LSN — should be ineligible as leader
 	// even though it is at the correct rule number.
 	// Node c is at an older rule — also ineligible.
 	// Quorum is satisfied (all 3 recruited from a 3-node cohort).
@@ -850,7 +850,7 @@ func TestCheckSufficientRecruitment_CohortExpansionNewMembersOnly(t *testing.T) 
 	//
 	// The coordinator wants to stabilize by promoting D with a new cohort [D, E].
 	//
-	// This correctly fails: AT_LEAST_2 with the 5-node bestRule cohort requires
+	// This correctly fails: AT_LEAST_2 with the 5-node highestDiscoveredRule cohort requires
 	// recruiting at least 4 nodes (revocation: 5-2+1=4, majority: 3 — max=4).
 	// Only 2 are recruited, so quorum is rejected.
 	//
@@ -909,17 +909,17 @@ func TestCheckSufficientRecruitment_CohortReplacementSplitBrain(t *testing.T) {
 	// Two coordinators now independently recruit disjoint sets of nodes:
 	//
 	//   Coordinator 1 sees B and C (both at old rule, cohort [A,B,C]):
-	//     - bestRule = old rule, cohort = [A,B,C], recruited 2 of 3 → AT_LEAST_2 ✓
+	//     - highestDiscoveredRule = old rule, cohort = [A,B,C], recruited 2 of 3 → AT_LEAST_2 ✓
 	//     - promotes B with cohort [B,C]
 	//
 	//   Coordinator 2 sees D and E (both at new rule, cohort [D,E,F]):
-	//     - bestRule = new rule (phantom), cohort = [D,E,F], recruited 2 of 3 → AT_LEAST_2 ✓
+	//     - highestDiscoveredRule = new rule (phantom), cohort = [D,E,F], recruited 2 of 3 → AT_LEAST_2 ✓
 	//     - promotes D with cohort [D,E]
 	//
 	// The two recruited sets share no nodes. Both promotions succeed, yielding
 	// two independent primaries — split brain.
 	//
-	// A correct implementation would reject the new rule as bestRule when it has
+	// A correct implementation would reject the new rule as highestDiscoveredRule when it has
 	// not achieved quorum under the outgoing cohort's policy. We don't yet have
 	// enough information from Recruit responses to enforce this. When the TODO is
 	// resolved, at least one of the two calls below should return an error.
@@ -982,7 +982,7 @@ func TestCheckSufficientRecruitment_CohortReplacementSplitBrain(t *testing.T) {
 func TestBuildSafeProposal_NoRuleWithValidLSN(t *testing.T) {
 	// A node accepted the revocation and has a parseable LSN, so it passes
 	// filterByValidPosition. But its CurrentPosition has no Rule, so it
-	// contributes nothing to bestRule — leaving bestRule nil.
+	// contributes nothing to highestDiscoveredRule — leaving highestDiscoveredRule nil.
 	a := makeID("z1", "pooler-a")
 	statuses := []*clustermetadatapb.ConsensusStatus{
 		{
@@ -999,7 +999,7 @@ func TestBuildSafeProposal_NoRuleWithValidLSN(t *testing.T) {
 	require.EqualError(t, err, "no committed rule found among recruited nodes; cannot determine cohort")
 }
 
-func TestBuildSafeProposal_InvalidDurabilityPolicyInBestRule(t *testing.T) {
+func TestBuildSafeProposal_InvalidDurabilityPolicyInHighestDiscoveredRule(t *testing.T) {
 	// The best rule's durability policy uses an unsupported quorum type, so
 	// NewPolicyFromProto returns an error before quorum can be verified.
 	a := makeID("z1", "pooler-a")
