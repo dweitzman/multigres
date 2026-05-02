@@ -979,6 +979,132 @@ func TestCheckSufficientRecruitment_CohortReplacementSplitBrain(t *testing.T) {
 	assert.NotNil(t, proposal2)
 }
 
+func TestBuildSafeProposal_NoRuleWithValidLSN(t *testing.T) {
+	// A node accepted the revocation and has a parseable LSN, so it passes
+	// filterByValidPosition. But its CurrentPosition has no Rule, so it
+	// contributes nothing to bestRule — leaving bestRule nil.
+	a := makeID("z1", "pooler-a")
+	statuses := []*clustermetadatapb.ConsensusStatus{
+		{
+			Id:             a,
+			TermRevocation: testRevocation,
+			CurrentPosition: &clustermetadatapb.PoolerPosition{
+				Lsn: "0/1000000",
+			},
+		},
+	}
+
+	_, err := BuildSafeProposal(testRevocation, statuses, simpleProposal(nil))
+
+	require.EqualError(t, err, "no committed rule found among recruited nodes; cannot determine cohort")
+}
+
+func TestBuildSafeProposal_InvalidDurabilityPolicyInBestRule(t *testing.T) {
+	// The best rule's durability policy uses an unsupported quorum type, so
+	// NewPolicyFromProto returns an error before quorum can be verified.
+	a := makeID("z1", "pooler-a")
+	b := makeID("z1", "pooler-b")
+	c := makeID("z1", "pooler-c")
+	cohort := []*clustermetadatapb.ID{a, b, c}
+	badPolicyRule := &clustermetadatapb.ShardRule{
+		RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 3},
+		LeaderId:      a,
+		CohortMembers: cohort,
+		DurabilityPolicy: &clustermetadatapb.DurabilityPolicy{
+			QuorumType: clustermetadatapb.QuorumType_QUORUM_TYPE_UNKNOWN,
+		},
+	}
+	statuses := []*clustermetadatapb.ConsensusStatus{
+		makeStatus(a, badPolicyRule, testRevocation),
+		makeStatus(b, badPolicyRule, testRevocation),
+		makeStatus(c, badPolicyRule, testRevocation),
+	}
+
+	_, err := BuildSafeProposal(testRevocation, statuses, simpleProposal(badPolicyRule))
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to parse durability policy from rule")
+}
+
+func TestBuildSafeProposal_NilProposalLeaderID(t *testing.T) {
+	// The buildProposal callback returns a proposal with a nil leader ID.
+	a := makeID("z1", "pooler-a")
+	b := makeID("z1", "pooler-b")
+	c := makeID("z1", "pooler-c")
+	cohort := []*clustermetadatapb.ID{a, b, c}
+	rule := makeRule(3, cohort)
+
+	statuses := []*clustermetadatapb.ConsensusStatus{
+		makeStatus(a, rule, testRevocation),
+		makeStatus(b, rule, testRevocation),
+		makeStatus(c, rule, testRevocation),
+	}
+
+	_, err := BuildSafeProposal(testRevocation, statuses, func(r RecruitmentResult) (*consensusdatapb.CoordinatorProposal, error) {
+		return &consensusdatapb.CoordinatorProposal{
+			TermRevocation: r.TermRevocation,
+			ProposalLeader: &consensusdatapb.ProposalLeader{Id: nil},
+			ProposedRule:   rule,
+		}, nil
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "proposal has no leader ID")
+}
+
+func TestBuildSafeProposal_InvalidDurabilityPolicyInProposedRule(t *testing.T) {
+	// The buildProposal callback returns a proposed rule whose durability policy
+	// uses an unsupported quorum type.
+	a := makeID("z1", "pooler-a")
+	b := makeID("z1", "pooler-b")
+	c := makeID("z1", "pooler-c")
+	cohort := []*clustermetadatapb.ID{a, b, c}
+	rule := makeRule(3, cohort)
+
+	statuses := []*clustermetadatapb.ConsensusStatus{
+		makeStatus(a, rule, testRevocation),
+		makeStatus(b, rule, testRevocation),
+		makeStatus(c, rule, testRevocation),
+	}
+
+	_, err := BuildSafeProposal(testRevocation, statuses, func(r RecruitmentResult) (*consensusdatapb.CoordinatorProposal, error) {
+		return &consensusdatapb.CoordinatorProposal{
+			TermRevocation: r.TermRevocation,
+			ProposalLeader: &consensusdatapb.ProposalLeader{Id: r.EligibleLeaders[0].GetId()},
+			ProposedRule: &clustermetadatapb.ShardRule{
+				CohortMembers: cohort,
+				DurabilityPolicy: &clustermetadatapb.DurabilityPolicy{
+					QuorumType: clustermetadatapb.QuorumType_QUORUM_TYPE_UNKNOWN,
+				},
+			},
+		}, nil
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid durability policy in proposal")
+}
+
+func TestDeduplicateStatuses_NilIDIsSkipped(t *testing.T) {
+	// A status with a nil ID is filtered out by deduplicateStatuses and does
+	// not count toward quorum. The two valid nodes still satisfy AT_LEAST_2.
+	a := makeID("z1", "pooler-a")
+	b := makeID("z1", "pooler-b")
+	c := makeID("z1", "pooler-c")
+	cohort := []*clustermetadatapb.ID{a, b, c}
+	rule := makeRule(3, cohort)
+
+	statuses := []*clustermetadatapb.ConsensusStatus{
+		makeStatus(a, rule, testRevocation),
+		makeStatus(b, rule, testRevocation),
+		{Id: nil, TermRevocation: testRevocation, CurrentPosition: &clustermetadatapb.PoolerPosition{
+			Rule: rule, Lsn: "0/1000000",
+		}},
+	}
+
+	_, err := BuildSafeProposal(testRevocation, statuses, simpleProposal(rule))
+	require.NoError(t, err)
+}
+
 func TestSameCohort(t *testing.T) {
 	a := makeID("z1", "a")
 	b := makeID("z1", "b")

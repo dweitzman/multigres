@@ -181,6 +181,8 @@ func cohortIntersect(cohort []*clustermetadatapb.ID, statuses []*clustermetadata
 	for _, cs := range statuses {
 		id := cs.GetId()
 		if id == nil {
+			// deduplicateStatuses skips nil-ID entries before callers reach here;
+			// this guard defends against direct callers that skip deduplication.
 			continue
 		}
 		if _, inCohort := cohortKeys[topoclient.ClusterIDString(id)]; inCohort {

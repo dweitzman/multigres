@@ -91,3 +91,23 @@ func TestIsLeader(t *testing.T) {
 		})
 	}
 }
+
+func TestLeaderTerm(t *testing.T) {
+	statusWithTerm := func(self, primary *clustermetadatapb.ID, term int64) *clustermetadatapb.ConsensusStatus {
+		return &clustermetadatapb.ConsensusStatus{
+			Id: self,
+			CurrentPosition: &clustermetadatapb.PoolerPosition{
+				Rule: &clustermetadatapb.ShardRule{
+					LeaderId:   primary,
+					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: term},
+				},
+			},
+		}
+	}
+	self := &clustermetadatapb.ID{Cell: "z1", Name: "pooler-1"}
+	other := &clustermetadatapb.ID{Cell: "z1", Name: "pooler-2"}
+
+	assert.Equal(t, int64(0), LeaderTerm(nil), "nil status")
+	assert.Equal(t, int64(0), LeaderTerm(statusWithTerm(self, other, 42)), "not leader")
+	assert.Equal(t, int64(42), LeaderTerm(statusWithTerm(self, self, 42)), "is leader")
+}

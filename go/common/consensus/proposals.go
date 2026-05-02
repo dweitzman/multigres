@@ -124,6 +124,8 @@ func BuildSafeProposal(
 		}
 		lsn, err := pgutil.ParseLSN(cs.GetCurrentPosition().GetLsn())
 		if err != nil {
+			// filterByValidPosition already removed all unparseable-LSN entries;
+			// this guard defends against future code that bypasses that filter.
 			continue
 		}
 		if lsn > bestLSN {
@@ -135,6 +137,9 @@ func BuildSafeProposal(
 		}
 	}
 	if len(eligibleLeaders) == 0 {
+		// bestRule was derived from statuses; at least one status must match it
+		// with a valid LSN (guaranteed by filterByValidPosition above). This path
+		// is unreachable in practice and guards against future refactoring.
 		return nil, errors.New("no eligible leaders found among recruited nodes")
 	}
 
