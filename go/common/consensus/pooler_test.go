@@ -26,11 +26,11 @@ func TestIsLeader(t *testing.T) {
 	id := func(cell, name string) *clustermetadatapb.ID {
 		return &clustermetadatapb.ID{Cell: cell, Name: name}
 	}
-	statusWithRule := func(self, primary *clustermetadatapb.ID) *clustermetadatapb.ConsensusStatus {
+	statusWithRule := func(self, leader *clustermetadatapb.ID) *clustermetadatapb.ConsensusStatus {
 		return &clustermetadatapb.ConsensusStatus{
 			Id: self,
 			CurrentPosition: &clustermetadatapb.PoolerPosition{
-				Rule: &clustermetadatapb.ShardRule{LeaderId: primary},
+				Rule: &clustermetadatapb.ShardRule{LeaderId: leader},
 			},
 		}
 	}
@@ -92,7 +92,7 @@ func TestIsLeader(t *testing.T) {
 	}
 }
 
-func TestPrimaryTerm(t *testing.T) {
+func TestLeaderTerm(t *testing.T) {
 	id := func(cell, name string) *clustermetadatapb.ID {
 		return &clustermetadatapb.ID{Cell: cell, Name: name}
 	}
