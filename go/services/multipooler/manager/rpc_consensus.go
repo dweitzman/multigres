@@ -451,6 +451,15 @@ func (pm *MultiPoolerManager) Recruit(ctx context.Context, req *consensusdatapb.
 		return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, err.Error())
 	}
 
+	// Refuse recruitment if a rewind is still pending from a prior emergency
+	// demotion. The node's WAL is in an indeterminate state until RewindToSource
+	// completes; allowing it to be recruited could elect a leader with divergent
+	// or missing WAL.
+	if pm.rewindPending.Load() {
+		return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
+			"rewind pending after emergency demotion; call RewindToSource before Recruit")
+	}
+
 	isPrimary, err := pm.isPrimary(ctx)
 	if err != nil {
 		return nil, mterrors.Wrap(err, "failed to determine role for recruit")
@@ -568,6 +577,9 @@ func (pm *MultiPoolerManager) Propose(ctx context.Context, req *consensusdatapb.
 	if proposalLeader == nil {
 		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "proposal.proposal_leader is required")
 	}
+	if proposalLeader.GetId() == nil {
+		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "proposal.proposal_leader.id is required")
+	}
 	if proposalLeader.GetPostgresPort() == 0 {
 		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "proposal.proposal_leader.postgres_port is required")
 	}
@@ -595,18 +607,46 @@ func (pm *MultiPoolerManager) Propose(ctx context.Context, req *consensusdatapb.
 		return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, err.Error())
 	}
 
-	// No implicit recruitment: require a prior Recruit() for this exact term.
+	// Require an explicit Recruit() for this exact term before accepting a
+	// Propose. Implicit recruitment (accepting the term here without a prior
+	// Recruit call) could in principle be made safe, but it would need to
+	// reproduce everything Recruit does: pausing replication on replicas and
+	// restarting primaries in standby mode. We keep things simple for now by
+	// requiring the two-phase protocol. ValidateRevocation already ensures
+	// storedTerm <= revokedBelowTerm, so a mismatch here always means Recruit
+	// was never called for this term.
 	storedTerm := currentStatus.GetTermRevocation().GetRevokedBelowTerm()
 	if storedTerm != revokedBelowTerm {
 		return nil, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
 			"must Recruit before Propose: stored term %d != proposal term %d", storedTerm, revokedBelowTerm)
 	}
 
+	// Verify postgres is in the expected standby state: in recovery with no
+	// primary_conninfo set. Together these prove that Recruit ran (which clears
+	// primary_conninfo and goes into recovery mode) and that no prior Propose on
+	// this node succeeded.
+	inRecovery, err := pm.isInRecovery(ctx)
+	if err != nil {
+		return nil, mterrors.Wrap(err, "failed to verify standby state before propose")
+	}
+	if !inRecovery {
+		return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
+			"postgres is not in standby mode; call Recruit before Propose")
+	}
+	connInfo, err := pm.readPrimaryConnInfo(ctx)
+	if err != nil {
+		return nil, mterrors.Wrap(err, "failed to verify primary_conninfo before propose")
+	}
+	if connInfo != "" {
+		return nil, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
+			"primary_conninfo is set (%q); call Recruit before Propose to stop replication", connInfo)
+	}
+
 	// Step 2: Act based on role.
 	isLeader := proto.Equal(pm.serviceID, proposalLeader.GetId())
 
 	if isLeader {
-		// Step 3a: Leader — promote postgres (if needed), write rule, enable query service.
+		// Step 3a: Leader — promote postgres, write rule, enable query service.
 		state, err := pm.checkPromotionState(ctx)
 		if err != nil {
 			return nil, err
@@ -615,23 +655,17 @@ func (pm *MultiPoolerManager) Propose(ctx context.Context, req *consensusdatapb.
 			return nil, mterrors.Wrap(err, "failed to clear resigned primary term")
 		}
 
-		// Compute the WAL position before calling updateRule. When promoting from a
-		// standby, replication was revoked before this Propose, so WAL is not
-		// advancing — the standby LSN equals what the primary LSN will be after
-		// pg_promote(). When already primary, checkPromotionState already fetched it.
-		var walPos string
-		if state.isPrimaryInPostgres {
-			walPos = state.currentLSN
-		} else {
-			prePos, err := pm.rules.observePosition(ctx)
-			if err != nil {
-				return nil, mterrors.Wrap(err, "failed to get standby WAL position")
-			}
-			if prePos == nil {
-				return nil, mterrors.Errorf(mtrpcpb.Code_INTERNAL, "no rule row found when reading standby WAL position")
-			}
-			walPos = prePos.GetLsn()
+		// Capture the WAL position before calling updateRule. Replication was
+		// revoked before this Propose, so WAL is not advancing — the standby LSN
+		// equals what the primary LSN will be after pg_promote().
+		prePos, err := pm.rules.observePosition(ctx)
+		if err != nil {
+			return nil, mterrors.Wrap(err, "failed to get standby WAL position")
 		}
+		if prePos == nil {
+			return nil, mterrors.Errorf(mtrpcpb.Code_INTERNAL, "no rule row found when reading standby WAL position")
+		}
+		walPos := prePos.GetLsn()
 
 		// ---- BEGIN CRITICAL ORDERING SECTION ----------------------------------------
 		// postgres becomes a writable primary after pg_promote(), but this pooler's
@@ -647,12 +681,13 @@ func (pm *MultiPoolerManager) Propose(ctx context.Context, req *consensusdatapb.
 		// updateRule owns the full GUC→promote→WAL ordering:
 		//   1. Pre-promote GUC (via promotionHook path): transition "both" config applied
 		//      while still a standby, so sync replication is active from the first commit.
-		//   2. pg_promote() via promotionHook (standby path only).
+		//   2. pg_promote() via promotionHook.
 		//   3. Pre-commit GUC (inside Transact): transition "both" config re-applied
 		//      after acquiring the row lock, ensuring the WAL write is acked by standbys
 		//      valid under both old and new rules simultaneously.
 		//   4. WAL write (COMMIT): synchronous replication acknowledgment waits here.
 		//   5. Post-commit GUC: incoming policy only, now that the rule is durable.
+		//
 		// TODO: If this proposal already exists, we're being asked to propagate
 		// rather than make a new entry. We can make the rule store understand
 		// propagation for that case.
@@ -665,12 +700,10 @@ func (pm *MultiPoolerManager) Propose(ctx context.Context, req *consensusdatapb.
 			withCohort(proposedRule.GetCohortMembers()).
 			withDurabilityPolicy(proposedRule.GetDurabilityPolicy()).
 			withAcceptedMembers(req.GetAcceptedNodeIds()).
-			withWALPosition(walPos)
-		if !state.isPrimaryInPostgres {
-			ruleUpdate.withPromotionHook(func(hookCtx context.Context) error {
+			withWALPosition(walPos).
+			withPromotionHook(func(hookCtx context.Context) error {
 				return pm.promoteStandbyToPrimary(hookCtx, state)
 			})
-		}
 		if _, err = pm.rules.updateRule(ctx, ruleUpdate); err != nil {
 			return nil, mterrors.Wrap(err, "propose failed: could not write rule")
 		}
@@ -707,8 +740,9 @@ func (pm *MultiPoolerManager) Propose(ctx context.Context, req *consensusdatapb.
 		if err := pm.changeTypeLocked(ctx, clustermetadatapb.PoolerType_REPLICA); err != nil {
 			pm.logger.WarnContext(ctx, "Failed to update pooler type to REPLICA after propose", "error", err)
 		}
-		// Replication is now configured; allow the postgres monitor to resume.
-		pm.rewindPending.Store(false)
+		if err := pm.clearResignedLeaderAtTerm(ctx); err != nil {
+			pm.logger.WarnContext(ctx, "Failed to clear resigned leader term after propose", "error", err)
+		}
 		pm.broadcastHealth()
 		if _, err := pm.rules.observePosition(ctx); err != nil {
 			return nil, mterrors.Wrap(err, "propose failed: could not refresh rule position")
