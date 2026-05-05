@@ -42,20 +42,26 @@ type SyncStandbyManager interface {
 	// ctx must carry either a ruleRowLock token (from lockCurrentRule on a
 	// primary) or a prePromote token (from lockCurrentRule on a standby), both
 	// of which are set automatically by ruleStore.updateRule.
-	SetPolicy(ctx context.Context, pc commonconsensus.PolicyWithCohort, leader *clustermetadatapb.ID) error
+	SetPolicy(ctx context.Context, pc commonconsensus.PolicyWithCohort) error
 
 	// Clear resets synchronous_standby_names to its default (empty) value and
 	// invalidates the in-memory cache. It must only be called after postgres has
 	// entered recovery mode (pg_is_in_recovery() = true); calling it on a primary
 	// would allow commits to proceed without standby acknowledgment.
 	Clear(ctx context.Context) error
+
+	// NeedsApply returns true if the given policy would produce GUC strings that
+	// differ from the in-memory cache, meaning a SetPolicy call would issue ALTER
+	// SYSTEM. Returns false when the cache already reflects the desired state.
+	// Safe to call without holding the action lock (purely in-memory).
+	NeedsApply(pc commonconsensus.PolicyWithCohort) (bool, error)
 }
 
 // noopSyncStandbyManager implements SyncStandbyManager with no-op operations.
 // Used in tests that do not need GUC verification.
 type noopSyncStandbyManager struct{}
 
-func (noopSyncStandbyManager) SetPolicy(_ context.Context, _ commonconsensus.PolicyWithCohort, _ *clustermetadatapb.ID) error {
+func (noopSyncStandbyManager) SetPolicy(_ context.Context, _ commonconsensus.PolicyWithCohort) error {
 	return nil
 }
 
@@ -63,21 +69,26 @@ func (noopSyncStandbyManager) Clear(_ context.Context) error {
 	return nil
 }
 
+func (noopSyncStandbyManager) NeedsApply(_ commonconsensus.PolicyWithCohort) (bool, error) {
+	return false, nil
+}
+
 // postgresqlSyncStandbyManager implements SyncStandbyManager against a live
 // PostgreSQL instance. It is the sole writer of synchronous_commit and
 // synchronous_standby_names; the in-memory cache is therefore always consistent
 // with what was last applied.
 type postgresqlSyncStandbyManager struct {
-	logger *slog.Logger
-	qs     executor.InternalQueryService
+	logger  *slog.Logger
+	qs      executor.InternalQueryService
+	localID *clustermetadatapb.ID // identity of the local pooler (always the primary when SetPolicy is called)
 
 	mu               sync.Mutex
 	lastSyncCommit   string // serialised GUC string ("on", "remote_apply", …); empty = unknown
 	lastStandbyNames string // serialised GUC string ("FIRST 1 (…)"); empty = unknown
 }
 
-func newSyncStandbyManager(logger *slog.Logger, qs executor.InternalQueryService) *postgresqlSyncStandbyManager {
-	return &postgresqlSyncStandbyManager{logger: logger, qs: qs}
+func newSyncStandbyManager(logger *slog.Logger, qs executor.InternalQueryService, localID *clustermetadatapb.ID) *postgresqlSyncStandbyManager {
+	return &postgresqlSyncStandbyManager{logger: logger, qs: qs, localID: localID}
 }
 
 func (s *postgresqlSyncStandbyManager) exec(ctx context.Context, sql string) error {
@@ -127,47 +138,82 @@ func (s *postgresqlSyncStandbyManager) reloadConfig(ctx context.Context) error {
 	return nil
 }
 
+// computedGUC holds the GUC strings and the config needed to apply them.
+// A zero wantCommit means the policy produced no eligible standbys.
+type computedGUC struct {
+	cfg          *commonconsensus.SyncReplicationConfig
+	standbyNames []poolerID
+	wantCommit   string
+	wantStandby  string
+}
+
+// computeGUC derives the expected GUC state for the current policy.
+// Returns a zero computedGUC (wantCommit == "") when the policy produces no
+// eligible standbys; the caller should use Clear in that case.
+func (s *postgresqlSyncStandbyManager) computeGUC(pc commonconsensus.PolicyWithCohort) (computedGUC, error) {
+	cfg, err := pc.Policy.BuildSyncReplicationConfig(s.logger, pc.Cohort, s.localID)
+	if err != nil {
+		return computedGUC{}, fmt.Errorf("build GUC config: %w", err)
+	}
+	standbyNames, err := validateSyncReplicationParams(int32(cfg.NumSync), cfg.SyncStandbyIDs)
+	if err != nil {
+		return computedGUC{}, err
+	}
+	if len(standbyNames) == 0 {
+		return computedGUC{}, nil
+	}
+	wantCommit, err := syncCommitString(cfg.SyncCommit)
+	if err != nil {
+		return computedGUC{}, err
+	}
+	wantStandby, err := buildSynchronousStandbyNamesValue(cfg.SyncMethod, int32(cfg.NumSync), standbyNames)
+	if err != nil {
+		return computedGUC{}, err
+	}
+	return computedGUC{cfg: cfg, standbyNames: standbyNames, wantCommit: wantCommit, wantStandby: wantStandby}, nil
+}
+
+// NeedsApply returns true if the given policy would produce GUC strings that
+// differ from the in-memory cache. Safe to call without the action lock.
+func (s *postgresqlSyncStandbyManager) NeedsApply(pc commonconsensus.PolicyWithCohort) (bool, error) {
+	g, err := s.computeGUC(pc)
+	if err != nil {
+		return false, err
+	}
+	s.mu.Lock()
+	unchanged := s.lastSyncCommit == g.wantCommit && s.lastStandbyNames == g.wantStandby
+	s.mu.Unlock()
+	return !unchanged, nil
+}
+
 // SetPolicy computes the Postgres GUC configuration for the given durability policy and applies it.
 // Uses an in-memory cache of the last-written GUC strings to skip ALTER SYSTEM calls when the
 // desired values haven't changed. This is safe because postgresqlSyncStandbyManager is the sole
 // writer of synchronous_commit and synchronous_standby_names.
-func (s *postgresqlSyncStandbyManager) SetPolicy(ctx context.Context, pc commonconsensus.PolicyWithCohort, leader *clustermetadatapb.ID) error {
+func (s *postgresqlSyncStandbyManager) SetPolicy(ctx context.Context, pc commonconsensus.PolicyWithCohort) error {
 	if err := assertPriorRuleWritesDrained(ctx); err != nil {
 		return fmt.Errorf("SetPolicy: %w", err)
 	}
-	cfg, err := pc.Policy.BuildSyncReplicationConfig(s.logger, pc.Cohort, leader)
-	if err != nil {
-		return fmt.Errorf("SetPolicy: build GUC config: %w", err)
-	}
 
-	standbyNames, err := validateSyncReplicationParams(int32(cfg.NumSync), cfg.SyncStandbyIDs)
+	g, err := s.computeGUC(pc)
 	if err != nil {
-		return err
+		return fmt.Errorf("SetPolicy: %w", err)
 	}
-	if len(standbyNames) == 0 {
+	if g.wantCommit == "" {
 		return errors.New("SetPolicy: policy produced no eligible standbys; use Clear to reset synchronous_standby_names")
 	}
 
-	wantCommit, err := syncCommitString(cfg.SyncCommit)
-	if err != nil {
-		return err
-	}
-	wantStandby, err := buildSynchronousStandbyNamesValue(cfg.SyncMethod, int32(cfg.NumSync), standbyNames)
-	if err != nil {
-		return err
-	}
-
 	s.mu.Lock()
-	unchanged := s.lastSyncCommit == wantCommit && s.lastStandbyNames == wantStandby
+	unchanged := s.lastSyncCommit == g.wantCommit && s.lastStandbyNames == g.wantStandby
 	s.mu.Unlock()
 	if unchanged {
 		return nil
 	}
 
-	if err := s.setSynchronousCommit(ctx, cfg.SyncCommit); err != nil {
+	if err := s.setSynchronousCommit(ctx, g.cfg.SyncCommit); err != nil {
 		return err
 	}
-	if err := s.setStandbyNames(ctx, cfg.SyncMethod, int32(cfg.NumSync), standbyNames); err != nil {
+	if err := s.setStandbyNames(ctx, g.cfg.SyncMethod, int32(g.cfg.NumSync), g.standbyNames); err != nil {
 		return err
 	}
 	if err := s.reloadConfig(ctx); err != nil {
@@ -184,8 +230,8 @@ func (s *postgresqlSyncStandbyManager) SetPolicy(ctx context.Context, pc commonc
 	}
 
 	s.mu.Lock()
-	s.lastSyncCommit = wantCommit
-	s.lastStandbyNames = wantStandby
+	s.lastSyncCommit = g.wantCommit
+	s.lastStandbyNames = g.wantStandby
 	s.mu.Unlock()
 	return nil
 }

@@ -31,7 +31,7 @@ import (
 
 // newTestSSM creates a postgresqlSyncStandbyManager backed by the given mock query service.
 func newTestSSM(mockQS *mock.QueryService) *postgresqlSyncStandbyManager {
-	return newSyncStandbyManager(slog.New(slog.NewTextHandler(io.Discard, nil)), mockQS)
+	return newSyncStandbyManager(slog.New(slog.NewTextHandler(io.Discard, nil)), mockQS, nil)
 }
 
 // withTestActionLock returns a context that satisfies AssertActionLockHeld.
@@ -75,7 +75,7 @@ func TestSetPolicy_SkipsQueriesWhenCached(t *testing.T) {
 	ssm.lastStandbyNames = `ANY 1 ("zone1_standby-1")`
 
 	ctx := withPriorRuleWritesDrained(t.Context())
-	err := ssm.SetPolicy(ctx, ssmTestPolicyWithCohort(), nil)
+	err := ssm.SetPolicy(ctx, ssmTestPolicyWithCohort())
 	require.NoError(t, err)
 	// No queries should have been issued — cache already held the correct values.
 	assert.NoError(t, mockQS.ExpectationsWereMet())
@@ -87,7 +87,7 @@ func TestSetPolicy_AppliesWhenCacheMisses(t *testing.T) {
 	addSetPolicyExpectations(mockQS)
 
 	ctx := withPriorRuleWritesDrained(t.Context())
-	require.NoError(t, ssm.SetPolicy(ctx, ssmTestPolicyWithCohort(), nil))
+	require.NoError(t, ssm.SetPolicy(ctx, ssmTestPolicyWithCohort()))
 	require.NoError(t, mockQS.ExpectationsWereMet())
 
 	assert.Equal(t, "on", ssm.lastSyncCommit)
@@ -101,11 +101,11 @@ func TestSetPolicy_SecondCallHitsCache(t *testing.T) {
 	// First call writes; second call hits cache and issues no queries.
 	addSetPolicyExpectations(mockQS)
 	ctx := withPriorRuleWritesDrained(t.Context())
-	require.NoError(t, ssm.SetPolicy(ctx, ssmTestPolicyWithCohort(), nil))
+	require.NoError(t, ssm.SetPolicy(ctx, ssmTestPolicyWithCohort()))
 	require.NoError(t, mockQS.ExpectationsWereMet())
 
 	// Second call: no new expectations, no queries should be issued.
-	require.NoError(t, ssm.SetPolicy(ctx, ssmTestPolicyWithCohort(), nil))
+	require.NoError(t, ssm.SetPolicy(ctx, ssmTestPolicyWithCohort()))
 	assert.NoError(t, mockQS.ExpectationsWereMet())
 }
 
@@ -115,7 +115,7 @@ func TestSetPolicy_ErrorLeavesCache(t *testing.T) {
 	mockQS.AddQueryPatternOnceWithError("ALTER SYSTEM SET synchronous_commit", errors.New("postgres is down"))
 
 	ctx := withPriorRuleWritesDrained(t.Context())
-	err := ssm.SetPolicy(ctx, ssmTestPolicyWithCohort(), nil)
+	err := ssm.SetPolicy(ctx, ssmTestPolicyWithCohort())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "postgres is down")
 	require.NoError(t, mockQS.ExpectationsWereMet())

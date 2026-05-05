@@ -290,7 +290,7 @@ func NewMultiPoolerManagerWithTimeout(logger *slog.Logger, multiPooler *clusterm
 		drainGracePeriod = config.ConnPoolConfig.DrainGracePeriod()
 	}
 	pm.qsc = poolerserver.NewQueryPoolerServer(logger, connPoolMgr, multiPooler.Id, multiPooler.TableGroup, multiPooler.Shard, pm, drainGracePeriod)
-	pm.rules = newRuleStore(pm.logger, pm.qsc.InternalQueryService(), newSyncStandbyManager(pm.logger, pm.qsc.InternalQueryService()))
+	pm.rules = newRuleStore(pm.logger, pm.qsc.InternalQueryService(), newSyncStandbyManager(pm.logger, pm.qsc.InternalQueryService(), multiPooler.Id))
 
 	// The health streamer must wait for the query server to update its type before
 	// broadcasting SERVING transitions, so the gateway doesn't discover the new
@@ -1544,6 +1544,7 @@ const (
 	remedialActionAdjustTypeToPrimary
 	remedialActionAdjustTypeToReplica
 	remedialActionCreateFirstBackup
+	remedialActionReconcileGUC
 )
 
 // monitorPostgresIteration performs one iteration of PostgreSQL monitoring.
@@ -1742,7 +1743,11 @@ func (pm *MultiPoolerManager) determineRemedialAction(currentState postgresState
 				return remedialActionAdjustTypeToReplica
 			}
 		}
-		return remedialActionNone // Pooler type already matches
+		// Pooler type already matches; check for a stale GUC that needs re-applying.
+		if pm.rules.hasInconsistentGUC() {
+			return remedialActionReconcileGUC
+		}
+		return remedialActionNone
 	}
 
 	// A sentinel from a prior first-backup attempt means bootstrap crashed
@@ -1786,6 +1791,13 @@ func (pm *MultiPoolerManager) takeRemedialAction(ctx context.Context, action rem
 	case remedialActionNone:
 		// No action to take
 		return
+
+	case remedialActionReconcileGUC:
+		pm.setMonitorReason(ctx, reasonPostgresRunning, "MonitorPostgres: PostgreSQL is running")
+		pm.logger.InfoContext(ctx, "MonitorPostgres: re-applying stale GUC")
+		if err := pm.rules.reconcileGUC(ctx, !state.isPrimary); err != nil {
+			pm.logger.ErrorContext(ctx, "MonitorPostgres: GUC reconciliation failed", "error", err)
+		}
 
 	case remedialActionAdjustTypeToPrimary:
 		pm.setMonitorReason(ctx, reasonPostgresRunning, "MonitorPostgres: PostgreSQL is running")
