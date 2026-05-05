@@ -177,7 +177,11 @@ func (s *postgresqlSyncStandbyManager) SetPolicy(ctx context.Context, pc commonc
 	// Sleep briefly to give pool backends time to reload before the next WAL write.
 	// SHOW on a single connection is insufficient — it only confirms one backend
 	// processed the SIGHUP; other pooled connections may still use the old value.
-	time.Sleep(100 * time.Millisecond)
+	select {
+	case <-time.After(100 * time.Millisecond):
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 
 	s.mu.Lock()
 	s.lastSyncCommit = wantCommit

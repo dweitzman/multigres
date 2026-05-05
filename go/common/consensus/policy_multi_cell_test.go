@@ -290,10 +290,8 @@ func TestMultiCellPolicy_BuildSyncReplicationConfig(t *testing.T) {
 			id("mp3", "us-west-1a"),
 		}
 		cfg, err := p.BuildSyncReplicationConfig(logger, cohort, leader)
-		require.Error(t, err)
 		require.Nil(t, cfg)
-		require.Contains(t, err.Error(), "no eligible standbys in different cells")
-		require.Contains(t, err.Error(), "leader_cell=us-west-1a")
+		require.EqualError(t, err, "cannot establish synchronous replication: no eligible standbys in different cells (primary_cell=us-west-1a)")
 	})
 
 	t.Run("insufficient different-cell standbys returns error", func(t *testing.T) {
@@ -306,11 +304,8 @@ func TestMultiCellPolicy_BuildSyncReplicationConfig(t *testing.T) {
 			id("mp3", "cell-b"),
 		}
 		cfg, err := p.BuildSyncReplicationConfig(logger, cohort, leader)
-		require.Error(t, err)
 		require.Nil(t, cfg)
-		require.Contains(t, err.Error(), "insufficient different-cell standbys")
-		require.Contains(t, err.Error(), "required 3 standbys")
-		require.Contains(t, err.Error(), "available 1")
+		require.EqualError(t, err, "cannot establish synchronous replication: insufficient different-cell standbys (required 3 standbys, available 1)")
 	})
 
 	t.Run("N=2 with 3 different-cell standbys includes all", func(t *testing.T) {

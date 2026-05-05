@@ -116,14 +116,14 @@ func (p MultiCellPolicy) BuildSyncReplicationConfig(
 	}
 
 	logger.Info("Filtered standbys for MULTI_CELL_AT_LEAST_N",
-		"leader_cell", primaryCell,
+		"primary_cell", primaryCell,
 		"cohort_size", len(cohort),
 		"eligible_standbys", len(eligible),
 		"excluded_same_cell", len(cohort)-len(eligible))
 
 	if len(eligible) == 0 {
 		return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
-			fmt.Sprintf("cannot establish synchronous replication: no eligible standbys in different cells (leader_cell=%s)",
+			fmt.Sprintf("cannot establish synchronous replication: no eligible standbys in different cells (primary_cell=%s)",
 				primaryCell))
 	}
 
