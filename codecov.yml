@@ -1,6 +1,7 @@
 ignore:
   - "go/pb/**"
   - "go/common/parser/goyacc/**"
+  - "go/test/endtoend/pgregresstest/**"
   - "go/tools/asthelpergen/**"
   - "go/tools/flakyaggregator/**"
   - "go/tools/ruleguard/**"
