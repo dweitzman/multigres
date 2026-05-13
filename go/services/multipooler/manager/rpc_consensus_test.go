@@ -1955,6 +1955,7 @@ func TestAvailabilityStatus(t *testing.T) {
 		require.NotNil(t, av.LeadershipStatus)
 		assert.Equal(t, int64(7), av.LeadershipStatus.LeaderTerm)
 		assert.Equal(t, clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION, av.LeadershipStatus.Signal)
+		assert.Nil(t, av.LifecycleStatus)
 	})
 
 	t.Run("resignedLeaderAtTerm cleared makes buildAvailabilityStatus return nil", func(t *testing.T) {
@@ -1962,5 +1963,36 @@ func TestAvailabilityStatus(t *testing.T) {
 		pm.resignedLeaderAtTerm = 3
 		pm.resignedLeaderAtTerm = 0
 		assert.Nil(t, pm.buildAvailabilityStatus())
+	})
+
+	t.Run("lifecycle SHUTTING_DOWN alone makes buildAvailabilityStatus return non-nil", func(t *testing.T) {
+		pm := &MultiPoolerManager{}
+		pm.lifecycleSignal = clustermetadatapb.LifecycleSignal_LIFECYCLE_SIGNAL_SHUTTING_DOWN
+		av := pm.buildAvailabilityStatus()
+		require.NotNil(t, av)
+		assert.Nil(t, av.LeadershipStatus)
+		require.NotNil(t, av.LifecycleStatus)
+		assert.Equal(t, clustermetadatapb.LifecycleSignal_LIFECYCLE_SIGNAL_SHUTTING_DOWN, av.LifecycleStatus.Signal)
+	})
+
+	t.Run("lifecycle STOPPED alone makes buildAvailabilityStatus return non-nil", func(t *testing.T) {
+		pm := &MultiPoolerManager{}
+		pm.lifecycleSignal = clustermetadatapb.LifecycleSignal_LIFECYCLE_SIGNAL_STOPPED
+		av := pm.buildAvailabilityStatus()
+		require.NotNil(t, av)
+		require.NotNil(t, av.LifecycleStatus)
+		assert.Equal(t, clustermetadatapb.LifecycleSignal_LIFECYCLE_SIGNAL_STOPPED, av.LifecycleStatus.Signal)
+	})
+
+	t.Run("lifecycle and resignedLeaderAtTerm both set returns both", func(t *testing.T) {
+		pm := &MultiPoolerManager{}
+		pm.resignedLeaderAtTerm = 5
+		pm.lifecycleSignal = clustermetadatapb.LifecycleSignal_LIFECYCLE_SIGNAL_STOPPED
+		av := pm.buildAvailabilityStatus()
+		require.NotNil(t, av)
+		require.NotNil(t, av.LeadershipStatus)
+		assert.Equal(t, int64(5), av.LeadershipStatus.LeaderTerm)
+		require.NotNil(t, av.LifecycleStatus)
+		assert.Equal(t, clustermetadatapb.LifecycleSignal_LIFECYCLE_SIGNAL_STOPPED, av.LifecycleStatus.Signal)
 	})
 }
