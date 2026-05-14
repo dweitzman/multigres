@@ -23,26 +23,26 @@ import (
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
 )
 
-// LeaderIsDownAnalyzer detects when a leader exists in the shard but is unhealthy/unreachable.
+// LeaderIsDeadAnalyzer detects when a leader exists in the shard but is unhealthy/unreachable.
 // It operates at the shard level: if any initialized follower observes the leader as dead,
 // one shard-scoped problem is emitted.
-type LeaderIsDownAnalyzer struct {
+type LeaderIsDeadAnalyzer struct {
 	factory *RecoveryActionFactory
 }
 
-func (a *LeaderIsDownAnalyzer) Name() types.CheckName {
-	return "LeaderIsDown"
+func (a *LeaderIsDeadAnalyzer) Name() types.CheckName {
+	return "LeaderIsDead"
 }
 
-func (a *LeaderIsDownAnalyzer) ProblemCode() types.ProblemCode {
-	return types.ProblemLeaderIsDown
+func (a *LeaderIsDeadAnalyzer) ProblemCode() types.ProblemCode {
+	return types.ProblemLeaderIsDead
 }
 
-func (a *LeaderIsDownAnalyzer) RecoveryAction() types.RecoveryAction {
+func (a *LeaderIsDeadAnalyzer) RecoveryAction() types.RecoveryAction {
 	return a.factory.NewAppointLeaderAction()
 }
 
-func (a *LeaderIsDownAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, error) {
+func (a *LeaderIsDeadAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, error) {
 	if a.factory == nil {
 		return nil, errors.New("recovery action factory not initialized")
 	}
@@ -71,7 +71,7 @@ func (a *LeaderIsDownAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, erro
 	// If postgres crashes during promotion, LeaderPostgresRunning=false and we fall through.
 	// If the multipooler crashes, LeaderPoolerReachable=false and we fall through.
 	if sa.PromotingPrimaryID != nil && sa.LeaderPoolerReachable && sa.LeaderPostgresRunning {
-		a.factory.Logger().Info("primary promotion in progress, suppressing LeaderIsDown",
+		a.factory.Logger().Info("primary promotion in progress, suppressing LeaderIsDead",
 			"shard_key", sa.ShardKey.String(),
 			"promoting_primary", topoclient.MultiPoolerIDString(sa.PromotingPrimaryID))
 		return nil, nil
@@ -102,7 +102,7 @@ func (a *LeaderIsDownAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, erro
 	// yet). Suppressing would delay failover by up to the TCP keepalive
 	// interval (~30s).
 
-	if sa.ReplicasConnectedToLeader && !sa.LeaderHasResigned {
+	if sa.ReplicasConnectedToLeader {
 		threshold := a.factory.Config().GetLeaderPostgresResponseThreshold()
 		lastReadyTime := sa.LeaderLastPostgresReadyTime
 		primaryPostgresUnresponsive := !sa.LeaderPostgresReady &&
@@ -149,8 +149,8 @@ func (a *LeaderIsDownAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, erro
 
 	// Leader is dead — emit one shard-level problem.
 	return []types.Problem{{
-		Code:           types.ProblemLeaderIsDown,
-		CheckName:      "LeaderIsDown",
+		Code:           types.ProblemLeaderIsDead,
+		CheckName:      "LeaderIsDead",
 		PoolerID:       sa.HighestTermDiscoveredLeaderID,
 		ShardKey:       sa.ShardKey,
 		Description:    fmt.Sprintf("Leader for shard %s is dead/unreachable", sa.ShardKey),

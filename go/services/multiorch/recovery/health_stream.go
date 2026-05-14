@@ -26,7 +26,6 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/rpcclient"
 	"github.com/multigres/multigres/go/common/timeouts"
 	"github.com/multigres/multigres/go/common/topoclient"
@@ -50,8 +49,8 @@ const (
 type streamEntry struct {
 	cancel context.CancelFunc
 
-	// mu protects stream. stream is set to the live gRPC stream after the
-	// start message is sent and cleared on stream exit.
+	// mu protects stream; set to the live gRPC stream after the start message
+	// is sent, and cleared on stream exit.
 	mu     sync.Mutex
 	stream rpcclient.ManagerHealthStream
 }
@@ -110,12 +109,6 @@ func WithStalenessTimeout(d time.Duration) Option {
 	return func(hs *HealthStream) {
 		hs.stalenessTimeout = d
 	}
-}
-
-func (entry *streamEntry) withLock(action func()) {
-	entry.mu.Lock()
-	defer entry.mu.Unlock()
-	action()
 }
 
 // NewHealthStream creates a HealthStream.
@@ -234,38 +227,7 @@ func (hs *HealthStream) runStream(ctx context.Context, poolerID string, entry *s
 				"error", streamErr,
 			)
 		}
-
-		// If the pooler announced graceful shutdown before the stream ended,
-		// stop trying to reconnect: it is intentionally going away. For a
-		// SHUTTING_DOWN pooler, also synthesize a local STOPPED so the cache
-		// reflects the pooler's departure even though we never received an
-		// explicit STOPPED snapshot.
-		switch hs.lastLifecycleSignal(poolerID) {
-		case clustermetadatapb.LifecycleSignal_LIFECYCLE_SIGNAL_SHUTTING_DOWN:
-			reason := "stream EOF after SHUTTING_DOWN"
-			hs.synthesizeShutdownStopped(poolerID, reason)
-			hs.synthesizeRequestingDemotion(poolerID, reason)
-			return
-		case clustermetadatapb.LifecycleSignal_LIFECYCLE_SIGNAL_STOPPED:
-			// Cache already shows STOPPED; no synthesis needed. Skip backoff.
-			reason := "stream EOF after STOPPED"
-			hs.synthesizeRequestingDemotion(poolerID, reason)
-			return
-		}
 	}
-}
-
-// lastLifecycleSignal returns the LifecycleSignal currently cached for a
-// pooler, or UNKNOWN if no AvailabilityStatus or LifecycleStatus is present.
-// Used to decide whether a stream EOF should trigger reconnect-with-backoff
-// (existing behaviour, no SHUTTING_DOWN/STOPPED in cache) or be treated as
-// the end of an intentional shutdown.
-func (hs *HealthStream) lastLifecycleSignal(poolerID string) clustermetadatapb.LifecycleSignal {
-	cached, ok := hs.store.Get(poolerID)
-	if !ok {
-		return clustermetadatapb.LifecycleSignal_LIFECYCLE_SIGNAL_UNKNOWN
-	}
-	return cached.GetAvailabilityStatus().GetLifecycleStatus().GetSignal()
 }
 
 // streamOnce opens one ManagerHealthStream and reads until the stream fails or
@@ -373,8 +335,14 @@ func (hs *HealthStream) streamOnce(ctx context.Context, poolerID string, poolerH
 	}
 
 	// Expose the live stream so Poll() can send requests.
-	entry.withLock(func() { entry.stream = stream })
-	defer entry.withLock(func() { entry.stream = nil })
+	entry.mu.Lock()
+	entry.stream = stream
+	entry.mu.Unlock()
+	defer func() {
+		entry.mu.Lock()
+		entry.stream = nil
+		entry.mu.Unlock()
+	}()
 
 	hs.markConnected(poolerID)
 
@@ -434,8 +402,7 @@ func (hs *HealthStream) Poll(id *clustermetadatapb.ID) error {
 }
 
 // applySnapshot writes health fields from a snapshot into the pooler store.
-// This mirrors the field writes performed by the old pollPooler function on
-// success.
+// This mirrors the field writes performed by the old pollPooler function on success.
 func (hs *HealthStream) applySnapshot(ctx context.Context, poolerID string, poolerHealth *multiorchdatapb.PoolerHealthState, snapshot *multipoolermanagerdatapb.ManagerHealthSnapshot) {
 	if snapshot.Status == nil || snapshot.Status.Status == nil {
 		hs.logger.WarnContext(ctx, "received snapshot with nil status, skipping",
@@ -474,107 +441,12 @@ func (hs *HealthStream) applySnapshot(ctx context.Context, poolerID string, pool
 
 	hs.store.DoUpdate(poolerIDStr, update)
 
-	hs.handleLifecycleSnapshot(poolerID, snapshot)
-
 	hs.logger.DebugContext(ctx, "health snapshot applied",
 		"pooler_id", poolerID,
 		"pooler_type", status.PoolerType,
 		"postgres_ready", status.PostgresReady,
 		"postgres_running", status.PostgresRunning,
 	)
-}
-
-// handleLifecycleSnapshot reacts to the LifecycleStatus carried in the
-// just-arrived snapshot. The cache itself was already updated upstream by
-// applySnapshot; this hook only fires the failover-trigger synthesis when
-// STOPPED arrives.
-//
-// SHUTTING_DOWN is intentionally not a trigger here: it is announced before
-// the pooler stops Postgres, so triggering failover on SHUTTING_DOWN would
-// race against the still-running old leader. UNKNOWN, RUNNING, and missing
-// values are also no-ops.
-func (hs *HealthStream) handleLifecycleSnapshot(poolerID string, snapshot *multipoolermanagerdatapb.ManagerHealthSnapshot) {
-	if snapshot.GetStatus().GetAvailabilityStatus().GetLifecycleStatus().GetSignal() != clustermetadatapb.LifecycleSignal_LIFECYCLE_SIGNAL_STOPPED {
-		return
-	}
-	hs.synthesizeRequestingDemotion(poolerID, "STOPPED snapshot received")
-}
-
-// synthesizeRequestingDemotion writes LeadershipSignal_REQUESTING_DEMOTION into
-// the pooler's cached AvailabilityStatus.LeadershipStatus, but only when the
-// pooler is the current topology primary (MultiPooler.Type == PRIMARY) and the
-// consensus primary_term is > 0. This is what drives LeaderNeedsReplacement to
-// fire failover after the orchestrator observes that a primary has stopped.
-//
-// Called from the two convergent shutdown-intent paths: STOPPED snapshot
-// received, and stream EOF after SHUTTING_DOWN. For non-primary poolers it
-// is a no-op: only a leader's departure should request demotion. Idempotent
-// across the two paths (skips if the signal is already set for the current
-// term).
-//
-// Captures the leader_term at observation time so LeaderNeedsReplacement's
-// staleness check (leader_term == consensus primary_term) passes when the
-// analyzer reads the cached state on its next tick.
-func (hs *HealthStream) synthesizeRequestingDemotion(poolerID, reason string) {
-	cached, ok := hs.store.Get(poolerID)
-	if !ok || cached.MultiPooler == nil {
-		return
-	}
-	if cached.MultiPooler.Type != clustermetadatapb.PoolerType_PRIMARY {
-		return
-	}
-	primaryTerm := commonconsensus.LeaderTerm(cached.GetConsensusStatus())
-	if primaryTerm <= 0 {
-		return
-	}
-	as := cached.GetAvailabilityStatus()
-	if ls := as.GetLeadershipStatus(); ls != nil &&
-		ls.Signal == clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION &&
-		ls.LeaderTerm == primaryTerm {
-		return
-	}
-
-	updateLeadership := func(existing *multiorchdatapb.PoolerHealthState) *multiorchdatapb.PoolerHealthState {
-		if existing.AvailabilityStatus == nil {
-			existing.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{}
-		}
-		existing.AvailabilityStatus.LeadershipStatus = &clustermetadatapb.LeadershipStatus{
-			Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION,
-			LeaderTerm: primaryTerm,
-		}
-		return existing
-	}
-	hs.store.DoUpdate(poolerID, updateLeadership)
-	hs.logger.Info("synthesized REQUESTING_DEMOTION locally",
-		"pooler_id", poolerID,
-		"reason", reason,
-		"leader_term", primaryTerm)
-}
-
-// synthesizeShutdownStopped writes a local LIFECYCLE_SIGNAL_STOPPED into the
-// pooler's cached AvailabilityStatus. Used when the orchestrator has lost
-// contact with a pooler that previously announced SHUTTING_DOWN. The
-// synthesized STOPPED is observability-only — it makes the cached state
-// consistent with what the pooler would have published if its STOPPED
-// snapshot had arrived (e.g. for `multigres getpoolers`). The failover
-// trigger for primaries is synthesizeRequestingDemotion, called alongside
-// this helper on the EOF path.
-//
-// This is purely local inference: nothing is sent on the wire.
-func (hs *HealthStream) synthesizeShutdownStopped(poolerID, reason string) {
-	cb := func(existing *multiorchdatapb.PoolerHealthState) *multiorchdatapb.PoolerHealthState {
-		if existing.AvailabilityStatus == nil {
-			existing.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{}
-		}
-		existing.AvailabilityStatus.LifecycleStatus = &clustermetadatapb.LifecycleStatus{
-			Signal: clustermetadatapb.LifecycleSignal_LIFECYCLE_SIGNAL_STOPPED,
-		}
-		return existing
-	}
-	hs.store.DoUpdate(poolerID, cb)
-	hs.logger.Info("synthesized LIFECYCLE_SIGNAL_STOPPED locally",
-		"pooler_id", poolerID,
-		"reason", reason)
 }
 
 // markConnected records that the stream is connected in the pooler store.

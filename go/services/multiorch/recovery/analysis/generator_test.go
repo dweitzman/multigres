@@ -1602,7 +1602,7 @@ func TestPopulatePrimaryInfo_PicksHighestPrimaryTerm(t *testing.T) {
 
 	// The shard-level topology primary must point to the new (correct) primary, not the stale one.
 	// If it pointed to the stale primary (postgres dead), PrimaryReachable would be false
-	// and LeaderIsDownAnalyzer would falsely trigger a new election.
+	// and LeaderIsDeadAnalyzer would falsely trigger a new election.
 	require.NotNil(t, sa.HighestTermDiscoveredLeaderID)
 	assert.Equal(t, "new-primary", sa.HighestTermDiscoveredLeaderID.Name,
 		"should pick primary with highest PrimaryTerm")

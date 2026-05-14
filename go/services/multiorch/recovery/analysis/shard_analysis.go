@@ -70,7 +70,7 @@ type ShardAnalysis struct {
 	// HasInitializedReplica is true if at least one non-leader, reachable, initialized pooler exists
 	// in the shard. This is a postgres-layer check (is there a standby that has joined the cluster?),
 	// not a consensus-layer check — it does not require the pooler to be a cohort member. Used by
-	// LeaderIsDownAnalyzer to avoid false positives when no postgres standby can observe the leader.
+	// LeaderIsDeadAnalyzer to avoid false positives when no postgres standby can observe the leader.
 	HasInitializedReplica bool
 
 	// ReplicasConnectedToLeader is true only if ALL postgres standbys in the shard are still
@@ -93,17 +93,15 @@ type ShardAnalysis struct {
 	LeaderLastPostgresReadyTime time.Time
 
 	// LeaderHasResigned is true when the topology leader has voluntarily requested
-	// replacement via the REQUESTING_DEMOTION signal (set during EmergencyDemote).
-	// When true, the LeaderIsDown failover suppression logic (which normally waits
-	// for followers to disconnect before declaring the leader dead) is bypassed
-	// because the resignation is an explicit and intentional signal, not an ambiguous
-	// network/process failure.
+	// replacement via the REQUESTING_DEMOTION signal (set during EmergencyDemote or
+	// graceful shutdown of a leader). LeaderResignedAnalyzer keys off this to trigger
+	// immediate failover, separately from the LeaderIsDead reachability-based path.
 	LeaderHasResigned bool
 
 	// PromotingPrimaryID is the ID of the topology primary that is currently running
 	// pg_promote() but has not yet transitioned to accepting connections. Nil when no
 	// promotion is in progress.
-	// Used by LeaderIsDownAnalyzer to suppress spurious failover detection during the
+	// Used by LeaderIsDeadAnalyzer to suppress spurious failover detection during the
 	// brief window (~5–10s) when the newly promoted node's postgres is not yet ready.
 	PromotingPrimaryID *clustermetadatapb.ID
 }

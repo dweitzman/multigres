@@ -136,24 +136,11 @@ type MultiPoolerManager struct {
 	initialized bool
 
 	// resignedLeaderAtTerm is set when this node voluntarily resigns as primary
-	// (via EmergencyDemote). The value is the consensus term at which the primary
-	// resigned. A non-zero value signals the coordinator to trigger an immediate
-	// election. Protected by mu. Cleared when this node is elected primary again.
+	// (via EmergencyDemote or graceful shutdown). The value is the consensus
+	// term at which the primary resigned. A non-zero value signals the
+	// coordinator to trigger an immediate election. Protected by mu. Cleared
+	// when this node is elected primary again.
 	resignedLeaderAtTerm int64
-
-	// lifecycleSignal is the pooler's process-level lifecycle state published
-	// to the coordinator via AvailabilityStatus. The default (UNKNOWN) means
-	// "no announcement" — treated as unknown by consumers per the
-	// AvailabilityStatus convention. Set by the graceful-shutdown sequence
-	// to LIFECYCLE_SIGNAL_SHUTTING_DOWN when SIGTERM initiates shutdown,
-	// then to LIFECYCLE_SIGNAL_STOPPED once Postgres has stopped and drain
-	// has completed. Protected by mu.
-	lifecycleSignal clustermetadatapb.LifecycleSignal
-
-	// lifecycleDeadlineAt is the absolute wall-clock time at which the
-	// graceful-shutdown safety-net force-exit fires. Only meaningful when
-	// lifecycleSignal == LIFECYCLE_SIGNAL_SHUTTING_DOWN. Protected by mu.
-	lifecycleDeadlineAt time.Time
 
 	// pgMonitor manages the PostgreSQL monitoring loop.
 	pgMonitor *timer.PeriodicRunner
@@ -241,11 +228,6 @@ func NewMultiPoolerManagerWithTimeout(logger *slog.Logger, multiPooler *clusterm
 		return nil, mterrors.Wrap(err, "MVP validation failed")
 	}
 
-	applyGracefulShutdownDefaults(config)
-	if err := validateGracefulShutdownConfig(config); err != nil {
-		return nil, mterrors.Wrap(err, "graceful shutdown config validation failed")
-	}
-
 	ctx, cancel := context.WithCancel(context.TODO())
 
 	// Create pgctld gRPC client
@@ -331,20 +313,6 @@ func NewMultiPoolerManagerWithTimeout(logger *slog.Logger, multiPooler *clusterm
 	pm.topoPublisher = newTopoPublisher(logger, config.TopoClient)
 
 	return pm, nil
-}
-
-// withLock runs fn with pm.mu held. Use this for short critical sections that
-// only mutate manager fields; for read-then-act patterns or anything that
-// needs to return a value, take the lock explicitly instead.
-//
-// Note: the rest of the package uses the *Locked suffix to mean "caller holds
-// the relevant lock" (see closeLocked, buildLeadershipStatusLocked, etc.).
-// withLock is the inverse — it acquires the lock for you — so the name is
-// deliberately different to avoid that confusion.
-func (pm *MultiPoolerManager) withLock(fn func()) {
-	pm.mu.Lock()
-	defer pm.mu.Unlock()
-	fn()
 }
 
 // internalQueryService returns the InternalQueryService for executing queries via the connection pool.
