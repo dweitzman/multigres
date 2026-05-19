@@ -21,7 +21,7 @@ import (
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 )
 
-// CheckPropagationPossible checks whether finalising an in-WAL rule change is
+// CheckPropagationPossible checks whether finalizing an in-WAL rule change is
 // feasible given the current observed statuses. It is the propagation
 // counterpart of CheckProposalPossible.
 //

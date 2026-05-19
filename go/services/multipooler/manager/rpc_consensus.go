@@ -1027,16 +1027,170 @@ func syncConfigFromProposedRule(
 	return policy.BuildSyncReplicationConfig(logger, rule.GetCohortMembers(), leaderID)
 }
 
-// Propagate finalises an existing in-WAL rule change on this node. It promotes
-// postgres to primary, drives the WAL entry to sync-standby quorum, marks the
-// rule as decided, then self-promotes by writing a new rule at
-// (term_revocation.revoked_below_term, 0) with the same cohort and policy.
+// Propagate finalises an existing in-WAL rule change on this node.
 //
-// TODO: implement — validate expected_proposal, promote, wait for quorum, decide, self-promote.
-func (pm *MultiPoolerManager) Propagate(_ context.Context, req *consensusdatapb.PropagateRequest) (*consensusdatapb.PropagateResponse, error) {
-	return nil, mterrors.Errorf(mtrpcpb.Code_UNIMPLEMENTED,
-		"Propagate not yet implemented (expected_proposal=%v)",
-		req.GetExpectedProposal().GetRuleNumber())
+// The coordinator calls this on the most-advanced recruited node when a prior
+// Propose left an in-WAL proposal that was never driven to decision. This node
+// promotes postgres, drives the proposal to sync-standby quorum via a WAL
+// quorum gate, marks the proposal as decided, then writes a self-promotion rule.
+//
+// Order of operations:
+//  1. Validate inputs and confirm this node was Recruited for the right term.
+//  2. Verify postgres is in standby mode (same precondition as Propose).
+//  3. Pre-configure sync replication GUCs; promote postgres.
+//  4. Rule store: emit WAL quorum gate (proves proposal durable) + mark decision.
+//  5. Write self-promotion rule at (revokedBelowTerm, N) with same cohort/policy.
+//  6. Update topology and return ConsensusStatus.
+func (pm *MultiPoolerManager) Propagate(ctx context.Context, req *consensusdatapb.PropagateRequest) (*consensusdatapb.PropagateResponse, error) {
+	var err error
+	ctx, err = pm.actionLock.Acquire(ctx, "Propagate")
+	if err != nil {
+		return nil, err
+	}
+	defer pm.actionLock.Release(ctx)
+
+	revocation := req.GetTermRevocation()
+	if revocation == nil {
+		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "term_revocation is required")
+	}
+	expectedProposal := req.GetExpectedProposal()
+	if expectedProposal == nil {
+		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "expected_proposal is required")
+	}
+	propagationIntent := revocation.GetPropagationIntent()
+	if propagationIntent == nil {
+		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "term_revocation.propagation_intent is required")
+	}
+	if commonconsensus.CompareRuleNumbers(propagationIntent, expectedProposal.GetRuleNumber()) != 0 {
+		return nil, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,
+			"term_revocation.propagation_intent %v does not match expected_proposal.rule_number %v",
+			propagationIntent, expectedProposal.GetRuleNumber())
+	}
+
+	revokedBelowTerm := revocation.GetRevokedBelowTerm()
+	coordinatorID := revocation.GetAcceptedCoordinatorId()
+
+	pm.logger.InfoContext(ctx, "Propagate received",
+		"revoked_below_term", revokedBelowTerm,
+		"coordinator_id", coordinatorID.GetName(),
+		"propagation_intent", propagationIntent)
+
+	// Step 1: validate the term revocation (same as Propose).
+	// getConsensusStatus also reads the current DB position, giving us the
+	// decision CAS baseline for the propagation update.
+	currentStatus, err := pm.getConsensusStatus(ctx)
+	if err != nil {
+		return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, err.Error())
+	}
+	if err := commonconsensus.ValidateRevocation(currentStatus, revocation); err != nil {
+		return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, err.Error())
+	}
+	storedTerm := currentStatus.GetTermRevocation().GetRevokedBelowTerm()
+	if storedTerm != revokedBelowTerm {
+		return nil, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
+			"must Recruit before Propagate: stored term %d != revocation term %d",
+			storedTerm, revokedBelowTerm)
+	}
+
+	// Step 2: verify postgres is in standby mode with no primary_conninfo.
+	inRecovery, err := pm.isInRecovery(ctx)
+	if err != nil {
+		return nil, mterrors.Wrap(err, "failed to verify standby state before propagate")
+	}
+	if !inRecovery {
+		return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
+			"postgres is not in standby mode; call Recruit before Propagate")
+	}
+	connInfo, err := pm.readPrimaryConnInfo(ctx)
+	if err != nil {
+		return nil, mterrors.Wrap(err, "failed to verify primary_conninfo before propagate")
+	}
+	if connInfo != "" {
+		return nil, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
+			"primary_conninfo is set (%q); call Recruit before Propagate to stop replication", connInfo)
+	}
+
+	// Derive the decision CAS baseline from the position already read by getConsensusStatus.
+	currentDecisionRN := currentStatus.GetCurrentPosition().GetDecision().GetRuleNumber()
+
+	// Step 3: promote postgres (same critical ordering section as Propose).
+	// GUC config uses expectedProposal — the rule store validates it matches the DB.
+	state, err := pm.checkPromotionState(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	if expectedProposal.GetDurabilityPolicy() != nil {
+		syncCfg, err := syncConfigFromProposedRule(pm.logger, expectedProposal, pm.serviceID)
+		if err != nil {
+			return nil, mterrors.Wrap(err, "cannot derive sync config from propagated proposal")
+		}
+		if err := pm.applyGUCsForSyncReplication(ctx, syncCfg); err != nil {
+			return nil, mterrors.Wrap(err, "failed to pre-configure sync replication before propagate")
+		}
+	}
+	// ---- BEGIN CRITICAL ORDERING SECTION ----------------------------------------
+	if err := pm.promoteStandbyToPrimary(ctx, state); err != nil {
+		return nil, err
+	}
+	if err := pm.clearResignedLeaderAtTerm(ctx); err != nil {
+		return nil, mterrors.Wrap(err, "failed to clear resigned primary term")
+	}
+
+	// Step 4: quorum gate + mark decision. The rule store verifies expectedProposal
+	// is in-WAL, emits a transactional WAL message sync standbys must ACK, then
+	// copies proposal→decision columns (clearing the proposal).
+	if _, err := pm.rules.updateRule(ctx, newPropagationUpdate(
+		expectedProposal,
+		currentDecisionRN.GetCoordinatorTerm(),
+		currentDecisionRN.GetLeaderSubterm(),
+	)); err != nil {
+		return nil, mterrors.Wrap(err, "propagate failed")
+	}
+
+	// Step 5: self-promotion — write a new rule at (revokedBelowTerm, N) with the
+	// same cohort and durability policy as the propagated proposal.
+	finalLSN, err := pm.getPrimaryLSN(ctx)
+	if err != nil {
+		return nil, err
+	}
+	selfPos, err := pm.rules.updateRule(ctx, newRuleUpdate(
+		expectedProposal.RuleNumber.CoordinatorTerm,
+		pm.servicePoolerID.id,
+		"promotion",
+		"propagate",
+		time.Now()).
+		withLeader(pm.serviceID).
+		withCohort(expectedProposal.GetCohortMembers()).
+		withDurabilityPolicy(expectedProposal.GetDurabilityPolicy()).
+		withWALPosition(finalLSN))
+	if err != nil {
+		return nil, mterrors.Wrap(err, "propagate failed: could not write self-promotion rule")
+	}
+	// ---- END CRITICAL ORDERING SECTION ------------------------------------------
+
+	pm.healthStreamer.UpdateLeaderObservation(&poolerserver.LeaderObservation{
+		LeaderID:   pm.serviceID,
+		LeaderTerm: revokedBelowTerm,
+	})
+
+	// Step 6: open write traffic and publish the new primary to the health stream.
+	if err := pm.updateTopologyAfterPromotion(ctx, state); err != nil {
+		pm.logger.WarnContext(ctx, "Failed to update topology after propagate", "error", err)
+	}
+	selfAddr := &clustermetadatapb.PoolerAddress{
+		Id:           pm.serviceID,
+		Host:         pm.multipooler.GetHostname(),
+		PostgresPort: pm.multipooler.GetPortMap()["postgres"],
+	}
+	pm.consensusState.RecordTermPrimary(selfPos.GetDecision(), selfAddr)
+
+	pm.logger.InfoContext(ctx, "Propagate complete", "revoked_below_term", revokedBelowTerm)
+
+	cs, err := pm.getCachedConsensusStatus()
+	if err != nil {
+		return nil, mterrors.Wrap(err, "failed to build consensus status")
+	}
+	return &consensusdatapb.PropagateResponse{ConsensusStatus: cs}, nil
 }
 
 // ConsensusStatus returns the current status of this node for consensus

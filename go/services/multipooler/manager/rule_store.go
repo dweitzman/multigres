@@ -122,7 +122,8 @@ type ruleUpdateBuilder struct {
 	acceptedMembers []*clustermetadatapb.ID
 
 	force        bool
-	previousRule *ruleNumber // for compare-and-swap; nil means no check
+	propagation  *clustermetadatapb.ShardRule // when non-nil, skip step 1; mark this exact proposal as decision
+	previousRule *ruleNumber                  // for compare-and-swap; nil means no check
 }
 
 func newRuleUpdate(termNumber int64, coordinatorID *clustermetadatapb.ID, eventType, reason string, createdAt time.Time) *ruleUpdateBuilder {
@@ -132,6 +133,19 @@ func newRuleUpdate(termNumber int64, coordinatorID *clustermetadatapb.ID, eventT
 		eventType:     eventType,
 		reason:        reason,
 		createdAt:     createdAt,
+	}
+}
+
+// newPropagationUpdate constructs a ruleUpdateBuilder that finalises an existing
+// in-WAL proposal rather than writing a new one. previousDecisionTerm/Subterm are
+// required: they CAS-guard the decision columns to detect concurrent advances.
+func newPropagationUpdate(
+	expectedProposal *clustermetadatapb.ShardRule,
+	previousDecisionTerm, previousDecisionSubterm int64,
+) *ruleUpdateBuilder {
+	return &ruleUpdateBuilder{
+		propagation:  expectedProposal,
+		previousRule: &ruleNumber{coordinatorTerm: previousDecisionTerm, leaderSubterm: previousDecisionSubterm},
 	}
 }
 
@@ -370,7 +384,7 @@ func (rs *ruleStore) observePosition(ctx context.Context) (*clustermetadatapb.Po
 // Fields not set via the builder (leaderID, cohortMembers) retain their current
 // values in current_rule. All provided values are written to rule_history.
 //
-// current_rule is locked with SELECT FOR UPDATE before the update, serialising
+// current_rule is locked with SELECT FOR UPDATE before the update, serializing
 // concurrent writes at the database level in addition to the caller's action lock.
 //
 // Returns the node's position (rule + WAL LSN) at the time of the write,
@@ -389,6 +403,10 @@ func (rs *ruleStore) updateRule(ctx context.Context, update *ruleUpdateBuilder) 
 			"coordinator_term", update.termNumber,
 			"event_type", update.eventType)
 		return nil, nil
+	}
+
+	if update.propagation != nil {
+		return rs.propagateProposal(ctx, update)
 	}
 
 	// Convert optional leader ID; empty string causes NULLIF→COALESCE to keep existing.
@@ -671,6 +689,105 @@ func (rs *ruleStore) updateRule(ctx context.Context, update *ruleUpdateBuilder) 
 		return nil, mterrors.Wrap(err, "failed to parse written position")
 	}
 	rs.cacheRuleObservation(pos)
+	return pos, nil
+}
+
+// markProposalAsDecision copies the in-flight proposal columns to the decision
+// columns and clears the proposal columns. This is a local write (500ms timeout)
+// because quorum has already been established by the caller.
+// Returns an error if no proposal matching (expectedTerm, expectedSubterm) is found.
+func (rs *ruleStore) markProposalAsDecision(ctx context.Context, expectedTerm, expectedSubterm int64) error {
+	markCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+
+	result, err := rs.queryService.QueryArgs(markCtx, `
+		UPDATE multigres.current_rule
+		SET decision_coordinator_term          = proposal_coordinator_term,
+		    decision_leader_subterm            = proposal_leader_subterm,
+		    decision_leader_id                 = proposal_leader_id,
+		    decision_coordinator_id            = proposal_coordinator_id,
+		    decision_cohort_members            = proposal_cohort_members,
+		    decision_durability_policy_name    = proposal_durability_policy_name,
+		    decision_durability_quorum_type    = proposal_durability_quorum_type,
+		    decision_durability_required_count = proposal_durability_required_count,
+		    proposal_coordinator_term          = NULL,
+		    proposal_leader_subterm            = NULL,
+		    proposal_leader_id                 = NULL,
+		    proposal_coordinator_id            = NULL,
+		    proposal_cohort_members            = NULL,
+		    proposal_durability_policy_name    = NULL,
+		    proposal_durability_quorum_type    = NULL,
+		    proposal_durability_required_count = NULL
+		WHERE shard_id = $1
+		  AND proposal_coordinator_term = $2
+		  AND proposal_leader_subterm   = $3
+		RETURNING shard_id`,
+		[]byte("0"), expectedTerm, expectedSubterm)
+	if err != nil {
+		return mterrors.Wrap(err, "mark-decision failed")
+	}
+	if len(result.Rows) == 0 {
+		return mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
+			"mark-decision: proposal (%d,%d) not found", expectedTerm, expectedSubterm)
+	}
+	return nil
+}
+
+// propagateProposal finalises an existing in-WAL proposal: emits a WAL record as a
+// quorum gate (step 1), then marks the proposal as decided (step 2).
+//
+// Step 1 uses pg_logical_emit_message to emit a transactional WAL message that sync
+// standbys must acknowledge, proving the proposal WAL is durable across the cohort.
+// The WHERE clause simultaneously verifies the expected proposal is in flight and the
+// decision CAS baseline matches. Once PR #992 lands, step 1 will also apply the "both"
+// GUC before emitting so both the outgoing and incoming cohorts participate.
+//
+// Step 2 calls markProposalAsDecision to copy proposal → decision columns.
+func (rs *ruleStore) propagateProposal(ctx context.Context, update *ruleUpdateBuilder) (*clustermetadatapb.PoolerPosition, error) {
+	if update.previousRule == nil {
+		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
+			"propagation update requires withPreviousRule for CAS guard")
+	}
+
+	expected := update.propagation
+	expectedTerm := expected.GetRuleNumber().GetCoordinatorTerm()
+	expectedSubterm := expected.GetRuleNumber().GetLeaderSubterm()
+	prevTerm := update.previousRule.coordinatorTerm
+	prevSubterm := update.previousRule.leaderSubterm
+
+	// Step 1: quorum gate. pg_logical_emit_message(true, ...) emits a transactional
+	// WAL message; with synchronous_standby_names configured, the transaction blocks
+	// until standbys ACK, proving the proposal WAL (written before us) is durable.
+	quorumCtx, quorumCancel := context.WithTimeout(ctx, timeouts.RemoteOperationTimeout)
+	defer quorumCancel()
+
+	result, err := rs.queryService.QueryArgs(quorumCtx, `
+		SELECT pg_logical_emit_message(true, 'multigres/propagate', '')
+		FROM multigres.current_rule
+		WHERE shard_id = $1
+		  AND proposal_coordinator_term = $2
+		  AND proposal_leader_subterm   = $3
+		  AND decision_coordinator_term = $4
+		  AND decision_leader_subterm   = $5`,
+		[]byte("0"), expectedTerm, expectedSubterm, prevTerm, prevSubterm)
+	if err != nil {
+		return nil, mterrors.Wrap(err, "propagation quorum gate failed")
+	}
+	if len(result.Rows) == 0 {
+		return nil, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
+			"propagation quorum gate: proposal (%d,%d) not found or decision (%d,%d) CAS mismatch",
+			expectedTerm, expectedSubterm, prevTerm, prevSubterm)
+	}
+
+	// Step 2: mark the proposal as decided (local write).
+	if err := rs.markProposalAsDecision(ctx, expectedTerm, expectedSubterm); err != nil {
+		return nil, err
+	}
+
+	pos, err := rs.observePosition(ctx)
+	if err != nil {
+		return nil, mterrors.Wrap(err, "failed to read position after propagation")
+	}
 	return pos, nil
 }
 
