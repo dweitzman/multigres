@@ -189,19 +189,36 @@ func ValidateRevocation(status *clustermetadatapb.ConsensusStatus, revocation *c
 			ruleCoordTerm, revokedBelowTerm,
 		)
 	}
-	// TODO: reject revocations whose outgoing_rule is known to be obsolete.
-	// This may require us to first have more clarity about what's a proposal vs
-	// what's a decision.
+	// If the node's committed rule is strictly beyond outgoing_rule, the
+	// revocation is stale: it describes a transition from a state the node has
+	// already moved past. Accepting it would allow a second bootstrap (or
+	// retried failover) based on obsolete cluster state.
+	if CompareRuleNumbers(pos.GetRule().GetRuleNumber(), revocation.GetOutgoingRule()) > 0 {
+		return fmt.Errorf(
+			"cannot accept revocation: committed rule (%d.%d) is beyond outgoing_rule (%d.%d)",
+			pos.GetRule().GetRuleNumber().GetCoordinatorTerm(),
+			pos.GetRule().GetRuleNumber().GetLeaderSubterm(),
+			revocation.GetOutgoingRule().GetCoordinatorTerm(),
+			revocation.GetOutgoingRule().GetLeaderSubterm(),
+		)
+	}
 
 	// Conditions 2 and 3: stored-revocation consistency.
 	stored := status.GetTermRevocation()
 	if stored != nil {
 		storedTerm := stored.GetRevokedBelowTerm()
 		if storedTerm > revokedBelowTerm {
-			return fmt.Errorf(
-				"cannot accept revocation: already accepted term %d > requested %d",
-				storedTerm, revokedBelowTerm,
-			)
+			// Allow a revocation with a strictly higher outgoing_rule to override a
+			// stale stored one, even when the new revokedBelowTerm is lower. A higher
+			// outgoing_rule means the coordinator observed a more advanced cluster
+			// state, so the stored revocation was based on older information.
+			if CompareRuleNumbers(revocation.GetOutgoingRule(), stored.GetOutgoingRule()) <= 0 {
+				return fmt.Errorf(
+					"cannot accept revocation: already accepted term %d > requested %d",
+					storedTerm, revokedBelowTerm,
+				)
+			}
+			// New revocation has a higher outgoing_rule: it supersedes the stored one.
 		}
 		if storedTerm == revokedBelowTerm {
 			storedCoord := topoclient.ClusterIDString(stored.GetAcceptedCoordinatorId())

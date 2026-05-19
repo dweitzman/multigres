@@ -40,11 +40,15 @@ var (
 )
 
 func TestValidateRevocation(t *testing.T) {
+	// outgoingAt4 represents the highest rule observed across the cohort when
+	// the revocation was authored — coordinator_term=4, which is what you'd see
+	// when the node being tested has committed rule at term=4.
+	outgoingAt4 := &clustermetadatapb.RuleNumber{CoordinatorTerm: 4}
 	revocationAt5 := &clustermetadatapb.TermRevocation{
 		RevokedBelowTerm:       5,
 		AcceptedCoordinatorId:  coordA,
 		CoordinatorInitiatedAt: ts1,
-		OutgoingRule:           zeroOutgoingRule,
+		OutgoingRule:           outgoingAt4,
 	}
 
 	tests := []struct {
@@ -156,16 +160,67 @@ func TestValidateRevocation(t *testing.T) {
 			wantErr:    "coordinator term 7 >= revoked_below_term 5",
 		},
 		{
+			// if the committed rule is beyond outgoing_rule, the
+			// revocation is stale
+			name: "CommittedRuleBeyondOutgoingRule_Refused",
+			status: &clustermetadatapb.ConsensusStatus{
+				CurrentPosition: positionAtCoordTerm(1),
+			},
+			revocation: &clustermetadatapb.TermRevocation{
+				RevokedBelowTerm:       2,
+				AcceptedCoordinatorId:  coordA,
+				CoordinatorInitiatedAt: ts1,
+				OutgoingRule:           zeroOutgoingRule, // {0,0} < committed {1,0}
+			},
+			wantErr: "committed rule (1.0) is beyond outgoing_rule (0.0)",
+		},
+		{
+			// committed rule equals outgoing_rule — not beyond it, so OK.
+			name: "CommittedRuleEqualsOutgoingRule_Accepted",
+			status: &clustermetadatapb.ConsensusStatus{
+				CurrentPosition: positionAtCoordTerm(0),
+			},
+			revocation: &clustermetadatapb.TermRevocation{
+				RevokedBelowTerm:       1,
+				AcceptedCoordinatorId:  coordA,
+				CoordinatorInitiatedAt: ts1,
+				OutgoingRule:           zeroOutgoingRule, // {0,0} == committed {0,0}
+			},
+		},
+		{
+			// Stored term=10 > requested term=5, and stored outgoing_rule >= incoming
+			// outgoing_rule so the override rule does not apply.
 			name: "StoredTerm_HigherThanRequested_Refused",
 			status: &clustermetadatapb.ConsensusStatus{
 				TermRevocation: &clustermetadatapb.TermRevocation{
 					RevokedBelowTerm:      10,
 					AcceptedCoordinatorId: coordA,
+					OutgoingRule:          outgoingAt4, // same as incoming — no override
 				},
 				CurrentPosition: positionAtCoordTerm(4),
 			},
 			revocation: revocationAt5,
 			wantErr:    "already accepted term 10 > requested 5",
+		},
+		{
+			// incoming revocation has a higher outgoing_rule than the
+			// stored one, so it supersedes it even though revokedBelowTerm is lower.
+			// Scenario: stored is "outgoing=2 → term=5", incoming is "outgoing=3 → term=4".
+			name: "StoredTerm_HigherButIncomingHasHigherOutgoingRule_Accepted",
+			status: &clustermetadatapb.ConsensusStatus{
+				TermRevocation: &clustermetadatapb.TermRevocation{
+					RevokedBelowTerm:      5,
+					AcceptedCoordinatorId: coordA,
+					OutgoingRule:          &clustermetadatapb.RuleNumber{CoordinatorTerm: 2},
+				},
+				CurrentPosition: positionAtCoordTerm(3),
+			},
+			revocation: &clustermetadatapb.TermRevocation{
+				RevokedBelowTerm:       4,
+				AcceptedCoordinatorId:  coordA,
+				CoordinatorInitiatedAt: ts1,
+				OutgoingRule:           &clustermetadatapb.RuleNumber{CoordinatorTerm: 3},
+			},
 		},
 		{
 			name: "StoredTerm_LowerThanRequested_Accepted",
@@ -200,7 +255,7 @@ func TestValidateRevocation(t *testing.T) {
 				RevokedBelowTerm:       5,
 				AcceptedCoordinatorId:  coordB,
 				CoordinatorInitiatedAt: ts1,
-				OutgoingRule:           zeroOutgoingRule,
+				OutgoingRule:           outgoingAt4,
 			},
 			wantErr: "already accepted term 5 from coordinator",
 		},
@@ -218,7 +273,7 @@ func TestValidateRevocation(t *testing.T) {
 				RevokedBelowTerm:       5,
 				AcceptedCoordinatorId:  coordA,
 				CoordinatorInitiatedAt: ts2,
-				OutgoingRule:           zeroOutgoingRule,
+				OutgoingRule:           outgoingAt4,
 			},
 			wantErr: "different coordinator_initiated_at",
 		},
