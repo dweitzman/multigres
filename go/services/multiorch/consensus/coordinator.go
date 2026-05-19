@@ -153,6 +153,14 @@ func (c *Coordinator) runFailover(ctx context.Context, cohort []*multiorchdatapb
 		return mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION, "%v", err)
 	}
 
+	if revocation.GetPropagationIntent() != nil {
+		c.logger.InfoContext(ctx, "Detected in-flight proposal; using propagation path",
+			"outgoing_decision", revocation.GetOutgoingDecision(),
+			"propagation_intent", revocation.GetPropagationIntent(),
+			"recruited_term", revocation.GetRevokedBelowTerm())
+		return c.runPropagation(ctx, liveCohort, revocation)
+	}
+
 	poolerByID, _ := buildCohortMaps(liveCohort)
 	buildProposal := func(r commonconsensus.RecruitmentResult) (*consensusdatapb.CoordinatorProposal, error) {
 		return buildFailoverProposal(r, poolerByID)
@@ -164,6 +172,18 @@ func (c *Coordinator) runFailover(ctx context.Context, cohort []*multiorchdatapb
 		return commonconsensus.CheckProposalPossible(rev, statuses, buildProposal)
 	}
 	return c.newRuleChange(reason, tryBuildProposal, checkProposalPossible).Run(ctx, liveCohort, revocation)
+}
+
+// runPropagation handles the propagation path: when NewTermRevocation detects an
+// in-flight proposal (propagation_intent is set), we recruit all nodes with the
+// propagation revocation and then drive the existing WAL entry to quorum via the
+// Propagate RPC rather than writing a new rule.
+//
+// TODO: implement — requires proto Propagate RPC and multipooler handler.
+func (c *Coordinator) runPropagation(_ context.Context, _ []*multiorchdatapb.PoolerHealthState, revocation *clustermetadatapb.TermRevocation) error {
+	return mterrors.Errorf(mtrpcpb.Code_UNIMPLEMENTED,
+		"propagation recruitment not yet implemented (propagation_intent=%v)",
+		revocation.GetPropagationIntent())
 }
 
 // appointLeaderWithTerm is the shared core of AppointLeader and AppointInitialLeader.
