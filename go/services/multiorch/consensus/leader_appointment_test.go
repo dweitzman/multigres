@@ -49,7 +49,7 @@ func leaderRuleStatus(id *clustermetadatapb.ID, term int64) *clustermetadatapb.C
 	return &clustermetadatapb.ConsensusStatus{
 		Id: id,
 		CurrentPosition: &clustermetadatapb.PoolerPosition{
-			Rule: &clustermetadatapb.ShardRule{
+			Decision: &clustermetadatapb.ShardRule{
 				LeaderId: id,
 				RuleNumber: &clustermetadatapb.RuleNumber{
 					CoordinatorTerm: term,
@@ -99,8 +99,8 @@ func createMockNode(fakeClient *rpcclient.FakeClient, name string, term int64, w
 				RevokedBelowTerm: term,
 			},
 			CurrentPosition: &clustermetadatapb.PoolerPosition{
-				Lsn:  walPosition,
-				Rule: rule,
+				Lsn:      walPosition,
+				Decision: rule,
 			},
 		},
 	}
@@ -1660,16 +1660,16 @@ func TestAppointLeader_NewFlow(t *testing.T) {
 		// here too. createMockNode leaves these fields zero on the cached status.
 		mp.ConsensusStatus.Id = id
 		mp.ConsensusStatus.CurrentPosition = &clustermetadatapb.PoolerPosition{
-			Lsn:  walPositions[i],
-			Rule: outgoingRule,
+			Lsn:      walPositions[i],
+			Decision: outgoingRule,
 		}
 		key := topoclient.MultiPoolerIDString(id)
 		fakeClient.RecruitResponses[key] = &consensusdatapb.RecruitResponse{
 			ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 				Id: id,
 				CurrentPosition: &clustermetadatapb.PoolerPosition{
-					Lsn:  walPositions[i],
-					Rule: outgoingRule,
+					Lsn:      walPositions[i],
+					Decision: outgoingRule,
 				},
 			},
 		}
@@ -1876,8 +1876,8 @@ func TestAppointInitialLeader_NewFlow(t *testing.T) {
 		mp.ConsensusStatus = &clustermetadatapb.ConsensusStatus{
 			Id: id,
 			CurrentPosition: &clustermetadatapb.PoolerPosition{
-				Lsn:  walPositions[i],
-				Rule: sentinelRule,
+				Lsn:      walPositions[i],
+				Decision: sentinelRule,
 			},
 		}
 		key := topoclient.MultiPoolerIDString(id)
@@ -1885,8 +1885,8 @@ func TestAppointInitialLeader_NewFlow(t *testing.T) {
 			ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 				Id: id,
 				CurrentPosition: &clustermetadatapb.PoolerPosition{
-					Lsn:  walPositions[i],
-					Rule: sentinelRule,
+					Lsn:      walPositions[i],
+					Decision: sentinelRule,
 				},
 			},
 		}

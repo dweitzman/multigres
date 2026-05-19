@@ -567,14 +567,14 @@ message UpdateConsensusRuleRequest {
   // The application names will be generated as {cell}_{name} from these IDs.
   repeated clustermetadata.ID standby_ids = 2;
 
-  // expected_outgoing_rule is the RuleNumber the caller observed as the
-  // primary's current rule. The primary applies the change only if its
-  // recorded rule still matches this value (compare-and-swap). It rejects
-  // with a "rule has changed" error otherwise, signaling that the caller's
-  // view is stale and it should re-read state and retry. This prevents
-  // races between concurrent coordinators making cohort decisions based on
-  // stale snapshots. Required.
-  clustermetadata.RuleNumber expected_outgoing_rule = 4;
+  // expected_outgoing_decision is the RuleNumber the caller observed as the
+  // primary's current committed decision. The primary applies the change only
+  // if its recorded decision still matches this value (compare-and-swap). It
+  // rejects with a "rule has changed" error otherwise, signaling that the
+  // caller's view is stale and it should re-read state and retry. This
+  // prevents races between concurrent coordinators making cohort decisions
+  // based on stale snapshots. Required.
+  clustermetadata.RuleNumber expected_outgoing_decision = 4;
 
   // Coordinator ID that initiated this operation (for audit trail)
   clustermetadata.ID coordinator_id = 6;

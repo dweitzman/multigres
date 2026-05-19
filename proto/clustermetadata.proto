@@ -375,24 +375,31 @@ message ShardRule {
   google.protobuf.Timestamp creation_time = 6;
 }
 
-// PoolerPosition describes a pooler's committed position in logical and physical
-// time. It captures the highest ShardRule this pooler has replicated (or written,
-// for a leader) and the latest WAL position.
+// PoolerPosition describes a pooler's position in logical and physical time.
+// It captures the last marked decision rule (durable, both cohorts confirmed)
+// and the latest WAL position. When a cohort transition is in progress, it also
+// carries the in-flight proposal rule.
 //
 // Used in Status, BeginTerm, EmergencyDemote, and Promote responses so the
 // coordinator can determine which pooler is most advanced when selecting a
 // promotion candidate.
 //
-// Comparison: prefer the pooler with the higher rule (coordinator_term first,
-// then leader_subterm). Break ties by LSN.
+// Comparison: prefer the pooler with the higher decision (coordinator_term first,
+// then leader_subterm). Break ties by LSN. The proposal field is not used for
+// ordering — it is not yet durable.
 message PoolerPosition {
-  // The highest shard rule this pooler has committed to local WAL.
-  ShardRule rule = 1;
+  // The last marked decision rule: the most recently confirmed durable rule on
+  // this node (written to WAL and acknowledged by the required quorum).
+  ShardRule decision = 1;
+
+  // In-flight proposal rule, populated while a rule transition is in progress.
+  // Null when no transition is in progress.
+  ShardRule proposal = 2;
 
   // The current real-time WAL head at the time of reading. Note that this is likely
-  // beyond the LSN at which the rule was committed. For a primary: pg_current_wal_lsn().
+  // beyond the LSN at which the decision was committed. For a primary: pg_current_wal_lsn().
   // For a standby: pg_last_wal_receive_lsn() (or pg_last_wal_replay_lsn() if receive is null).
-  string lsn = 2;
+  string lsn = 3;
 }
 
 // ReplicationPrimary advertises the primary this pooler believes it should be
@@ -454,12 +461,13 @@ message TermRevocation {
   // TODO: populate once BeginTermRequest carries this timestamp.
   google.protobuf.Timestamp coordinator_initiated_at = 3;
 
-  // The rule the coordinator observed across the cohort at recruit time —
-  // the "from" side of the transition this recruit was authoring. Used as
-  // an override key during SetTermPrimary: if a subsequent SetTermPrimary carries a rule
-  // strictly greater than this, the cluster has demonstrably moved past
-  // the runaway recruit's premise and the revocation is moot.
-  RuleNumber outgoing_rule = 4;
+  // The highest marked decision the coordinator observed across the cohort at
+  // recruit time — the "from" side of the transition this recruit was authoring.
+  // Always a decision (never an in-flight proposal). Used as an override key
+  // during SetTermPrimary: if a subsequent SetTermPrimary carries a rule strictly
+  // greater than this, the cluster has demonstrably moved past the runaway
+  // recruit's premise and the revocation is moot.
+  RuleNumber outgoing_decision = 4;
 }
 
 // ExternallyCertifiedRevocation certifies that the outgoing cohort's revocation
@@ -469,7 +477,7 @@ message TermRevocation {
 // The external actor certifies:
 //
 //  1. No pooler in the outgoing cohort can make progress beyond frozen_lsn
-//     under term_revocation.outgoing_rule — all durable transactions at the
+//     under term_revocation.outgoing_decision — all durable transactions at the
 //     time of revocation are captured at or below that position.
 //
 //  2. The term in term_revocation is globally unique; no other coordinator has
@@ -479,13 +487,13 @@ message TermRevocation {
 // it is acting on an external request.
 message ExternallyCertifiedRevocation {
   // Records the unique coordinator term for this proposal, the coordinator
-  // facilitating the request, and the outgoing_rule the cohort is being
+  // facilitating the request, and the outgoing_decision the cohort is being
   // transitioned from. The coordinator fills this in even though it is acting
   // on behalf of an external operator request.
   TermRevocation term_revocation = 1;
 
   // The LSN at which the outgoing cohort's progress is frozen. No durable writes
-  // occurred beyond this position under term_revocation.outgoing_rule. The chosen
+  // occurred beyond this position under term_revocation.outgoing_decision. The chosen
   // leader's WAL position must meet or exceed this LSN.
   string frozen_lsn = 2;
 }

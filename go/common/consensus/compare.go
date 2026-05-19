@@ -54,8 +54,8 @@ func CompareRuleNumbers(a, b *clustermetadatapb.RuleNumber) int {
 }
 
 // MostAdvancedPosition returns the highest-ranked PoolerPosition among the
-// given statuses. Rule number takes precedence; LSN breaks ties within the
-// same rule. Returns nil if no status has a parseable LSN.
+// given statuses, using the same ordering as ComparePosition (decision, then
+// proposal, then LSN). Returns nil if no status has a parseable LSN.
 //
 // This is the cached-snapshot analogue of discoverMostAdvancedTimeline, which
 // runs over recruited statuses and returns the eligible-leader set. Callers
@@ -118,12 +118,29 @@ func idsEqual(a, b *clustermetadatapb.ID) bool {
 }
 
 // ComparePosition returns negative, zero, or positive based on whether a is
-// behind, equal to, or ahead of b. Rule number takes precedence; LSN breaks
-// ties within the same rule. A missing or unparsable LSN is treated as less
-// than any valid LSN.
+// behind, equal to, or ahead of b. Comparison order follows the unified logical
+// clock position:
+//  1. Decision rule number — higher always wins.
+//  2. Proposal rule number — a node with a proposal (or a higher proposal) is
+//     further ahead; nil proposal is treated as less than any proposal.
+//  3. LSN — breaks ties when decision and proposal both match.
+//
+// A missing or unparsable LSN is treated as less than any valid LSN.
 func ComparePosition(a, b *clustermetadatapb.PoolerPosition) int {
-	if cmp := CompareRuleNumbers(a.GetRule().GetRuleNumber(), b.GetRule().GetRuleNumber()); cmp != 0 {
+	if cmp := CompareRuleNumbers(a.GetDecision().GetRuleNumber(), b.GetDecision().GetRuleNumber()); cmp != 0 {
 		return cmp
+	}
+	aProposal := a.GetProposal()
+	bProposal := b.GetProposal()
+	switch {
+	case aProposal == nil && bProposal != nil:
+		return -1
+	case aProposal != nil && bProposal == nil:
+		return 1
+	case aProposal != nil && bProposal != nil:
+		if cmp := CompareRuleNumbers(aProposal.GetRuleNumber(), bProposal.GetRuleNumber()); cmp != 0 {
+			return cmp
+		}
 	}
 	lsnA, errA := pgutil.ParseLSN(a.GetLsn())
 	lsnB, errB := pgutil.ParseLSN(b.GetLsn())

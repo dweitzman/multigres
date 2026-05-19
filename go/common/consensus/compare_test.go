@@ -28,8 +28,8 @@ func rn(term, subterm int64) *clustermetadatapb.RuleNumber {
 
 func pos(term int64, lsn string) *clustermetadatapb.PoolerPosition {
 	return &clustermetadatapb.PoolerPosition{
-		Rule: &clustermetadatapb.ShardRule{RuleNumber: rn(term, 0)},
-		Lsn:  lsn,
+		Decision: &clustermetadatapb.ShardRule{RuleNumber: rn(term, 0)},
+		Lsn:      lsn,
 	}
 }
 
@@ -87,7 +87,7 @@ func TestMostAdvancedPosition(t *testing.T) {
 			status("b", pos(4, "0/100")),
 			status("c", pos(3, "0/500000")),
 		})
-		assert.Equal(t, int64(4), got.GetRule().GetRuleNumber().GetCoordinatorTerm())
+		assert.Equal(t, int64(4), got.GetDecision().GetRuleNumber().GetCoordinatorTerm())
 		assert.Equal(t, "0/100", got.GetLsn())
 	})
 
@@ -107,7 +107,7 @@ func TestMostAdvancedPosition(t *testing.T) {
 		})
 		// pooler-a's rule is higher (5) but its LSN is unparsable, so it's
 		// filtered out and pooler-b wins despite the lower rule.
-		assert.Equal(t, int64(3), got.GetRule().GetRuleNumber().GetCoordinatorTerm())
+		assert.Equal(t, int64(3), got.GetDecision().GetRuleNumber().GetCoordinatorTerm())
 		assert.Equal(t, "0/100", got.GetLsn())
 	})
 }

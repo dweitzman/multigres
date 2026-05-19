@@ -38,15 +38,15 @@ type RecruitmentResult struct {
 	// been filtered by whether they could accept it via ValidateRevocation.
 	TermRevocation *clustermetadatapb.TermRevocation
 
-	// OutgoingRule is the highest recorded ShardRule across all recruited nodes,
-	// determined from current_position.rule (WAL-backed, authoritative).
-	// May be nil for BuildExternallyCertifiedProposal when nodes have no
-	// recorded rule (e.g. fresh bootstrap before any rule has been written).
-	OutgoingRule *clustermetadatapb.ShardRule
+	// OutgoingDecision is the highest recorded decision ShardRule across all
+	// recruited nodes, determined from current_position.decision (WAL-backed,
+	// authoritative). May be nil for BuildExternallyCertifiedProposal when nodes
+	// have no recorded decision (e.g. fresh bootstrap before any rule has been written).
+	OutgoingDecision *clustermetadatapb.ShardRule
 
 	// EligibleLeaders are the recruited nodes with the best WAL position.
-	// For nodes with a recorded rule, this is those matching OutgoingRule's rule
-	// number with the highest LSN. For bootstrap (no rule), this is all nodes
+	// For nodes with a recorded decision, this is those matching OutgoingDecision's
+	// rule number with the highest LSN. For bootstrap (no rule), this is all nodes
 	// tied at the highest LSN. The buildProposal callback must choose its
 	// leader from this set.
 	EligibleLeaders []*clustermetadatapb.ConsensusStatus
@@ -241,16 +241,16 @@ func newExternallyCertifiedDiscoverer(
 	cert *clustermetadatapb.ExternallyCertifiedRevocation,
 	nodes []*clustermetadatapb.ConsensusStatus,
 ) (discoverer, error) {
-	if cert.GetTermRevocation().GetOutgoingRule() == nil {
+	if cert.GetTermRevocation().GetOutgoingDecision() == nil {
 		return nil, errors.New("cert.term_revocation.outgoing_rule is required")
 	}
 	if cert.GetFrozenLsn() == "" {
 		return nil, errors.New("cert is missing frozen_lsn")
 	}
 	for _, cs := range nodes {
-		if cs.GetCurrentPosition().GetRule() == nil {
-			// Recruited nodes should always carry a rule.
-			return nil, fmt.Errorf("node %s has no recorded rule; consensus state may be uninitialized",
+		if cs.GetCurrentPosition().GetDecision() == nil {
+			// Recruited nodes should always carry a decision.
+			return nil, fmt.Errorf("node %s has no recorded decision; consensus state may be uninitialized",
 				topoclient.ClusterIDString(cs.GetId()))
 		}
 	}
@@ -300,27 +300,27 @@ func buildProposalCore(
 	// to that view: no recruit may report a strictly newer rule, and we look
 	// up the full ShardRule (cohort_members + durability_policy) by matching
 	// a recruit whose rule number equals it.
-	expectedOutgoing := revocation.GetOutgoingRule()
+	expectedOutgoing := revocation.GetOutgoingDecision()
 	if expectedOutgoing == nil {
 		return nil, errors.New("revocation.outgoing_rule is required (use NewTermRevocation to construct revocations)")
 	}
 	var outgoingRule *clustermetadatapb.ShardRule
 	for _, cs := range recruitedStatuses {
-		rule := cs.GetCurrentPosition().GetRule()
-		if rule == nil {
+		decision := cs.GetCurrentPosition().GetDecision()
+		if decision == nil {
 			continue
 		}
-		cmp := CompareRuleNumbers(rule.GetRuleNumber(), expectedOutgoing)
+		cmp := CompareRuleNumbers(decision.GetRuleNumber(), expectedOutgoing)
 		if cmp > 0 {
 			return nil, fmt.Errorf(
-				"recruit %s reports rule %v strictly greater than revocation.outgoing_rule %v; coordinator view is stale, re-discover",
+				"recruit %s reports decision %v strictly greater than revocation.outgoing_rule %v; coordinator view is stale, re-discover",
 				topoclient.ClusterIDString(cs.GetId()),
-				rule.GetRuleNumber(),
+				decision.GetRuleNumber(),
 				expectedOutgoing,
 			)
 		}
 		if cmp == 0 && outgoingRule == nil {
-			outgoingRule = rule
+			outgoingRule = decision
 		}
 	}
 
@@ -359,9 +359,9 @@ func buildProposalCore(
 	}
 
 	result := RecruitmentResult{
-		TermRevocation:  revocation,
-		OutgoingRule:    outgoingRule,
-		EligibleLeaders: eligibleLeaders,
+		TermRevocation:   revocation,
+		OutgoingDecision: outgoingRule,
+		EligibleLeaders:  eligibleLeaders,
 	}
 
 	proposal, err := buildProposal(result)
@@ -400,7 +400,7 @@ func discoverMostAdvancedTimeline(
 	var eligibleLeaders []*clustermetadatapb.ConsensusStatus
 	for _, cs := range recruitedStatuses {
 		if outgoingRule != nil {
-			ruleNum := cs.GetCurrentPosition().GetRule().GetRuleNumber()
+			ruleNum := cs.GetCurrentPosition().GetDecision().GetRuleNumber()
 			if CompareRuleNumbers(ruleNum, outgoingRule.GetRuleNumber()) != 0 {
 				continue
 			}

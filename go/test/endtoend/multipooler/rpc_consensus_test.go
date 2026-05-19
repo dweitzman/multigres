@@ -670,9 +670,9 @@ func TestUpdateConsensusRule(t *testing.T) {
 		// ADD all desired standbys first (keeps list non-empty throughout).
 		_, err := primaryConsensusClient.UpdateConsensusRule(utils.WithTimeout(t, 10*time.Second),
 			&multipoolermanagerdatapb.UpdateConsensusRuleRequest{
-				Operation:            multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_ADD,
-				StandbyIds:           desired,
-				ExpectedOutgoingRule: currentRuleNumberFromClient(t, primaryManagerClient),
+				Operation:                multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_ADD,
+				StandbyIds:               desired,
+				ExpectedOutgoingDecision: currentRuleNumberFromClient(t, primaryManagerClient),
 			})
 		require.NoError(t, err, "ADD setup should succeed")
 
@@ -694,9 +694,9 @@ func TestUpdateConsensusRule(t *testing.T) {
 		if len(toRemove) > 0 {
 			_, err = primaryConsensusClient.UpdateConsensusRule(utils.WithTimeout(t, 10*time.Second),
 				&multipoolermanagerdatapb.UpdateConsensusRuleRequest{
-					Operation:            multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_REMOVE,
-					StandbyIds:           toRemove,
-					ExpectedOutgoingRule: currentRuleNumberFromClient(t, primaryManagerClient),
+					Operation:                multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_REMOVE,
+					StandbyIds:               toRemove,
+					ExpectedOutgoingDecision: currentRuleNumberFromClient(t, primaryManagerClient),
 				})
 			require.NoError(t, err, "REMOVE cleanup should succeed")
 		}
@@ -715,9 +715,9 @@ func TestUpdateConsensusRule(t *testing.T) {
 
 		_, err := primaryConsensusClient.UpdateConsensusRule(utils.WithTimeout(t, 10*time.Second),
 			&multipoolermanagerdatapb.UpdateConsensusRuleRequest{
-				Operation:            multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_ADD,
-				StandbyIds:           []*clustermetadatapb.ID{makeMultipoolerID("test-cell", "standby2")},
-				ExpectedOutgoingRule: currentRuleNumberFromClient(t, primaryManagerClient),
+				Operation:                multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_ADD,
+				StandbyIds:               []*clustermetadatapb.ID{makeMultipoolerID("test-cell", "standby2")},
+				ExpectedOutgoingDecision: currentRuleNumberFromClient(t, primaryManagerClient),
 			})
 		require.NoError(t, err, "ADD should succeed")
 
@@ -751,9 +751,9 @@ func TestUpdateConsensusRule(t *testing.T) {
 		// ADD a standby that already exists
 		_, err := primaryConsensusClient.UpdateConsensusRule(utils.WithTimeout(t, 10*time.Second),
 			&multipoolermanagerdatapb.UpdateConsensusRuleRequest{
-				Operation:            multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_ADD,
-				StandbyIds:           []*clustermetadatapb.ID{makeMultipoolerID("test-cell", "standby1")},
-				ExpectedOutgoingRule: currentRuleNumberFromClient(t, primaryManagerClient),
+				Operation:                multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_ADD,
+				StandbyIds:               []*clustermetadatapb.ID{makeMultipoolerID("test-cell", "standby1")},
+				ExpectedOutgoingDecision: currentRuleNumberFromClient(t, primaryManagerClient),
 			})
 		require.NoError(t, err, "ADD should be idempotent")
 
@@ -776,9 +776,9 @@ func TestUpdateConsensusRule(t *testing.T) {
 
 		_, err := primaryConsensusClient.UpdateConsensusRule(utils.WithTimeout(t, 10*time.Second),
 			&multipoolermanagerdatapb.UpdateConsensusRuleRequest{
-				Operation:            multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_REMOVE,
-				StandbyIds:           []*clustermetadatapb.ID{makeMultipoolerID("test-cell", "standby2")},
-				ExpectedOutgoingRule: currentRuleNumberFromClient(t, primaryManagerClient),
+				Operation:                multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_REMOVE,
+				StandbyIds:               []*clustermetadatapb.ID{makeMultipoolerID("test-cell", "standby2")},
+				ExpectedOutgoingDecision: currentRuleNumberFromClient(t, primaryManagerClient),
 			})
 		require.NoError(t, err, "REMOVE should succeed")
 
@@ -814,7 +814,7 @@ func TestUpdateConsensusRule(t *testing.T) {
 				StandbyIds: []*clustermetadatapb.ID{
 					makeMultipoolerID("test-cell", "does-not-exist"),
 				},
-				ExpectedOutgoingRule: currentRuleNumberFromClient(t, primaryManagerClient),
+				ExpectedOutgoingDecision: currentRuleNumberFromClient(t, primaryManagerClient),
 			})
 		require.NoError(t, err, "REMOVE of non-existent standby should succeed")
 
@@ -841,7 +841,7 @@ func TestUpdateConsensusRule(t *testing.T) {
 					makeMultipoolerID("test-cell", "standby3"),
 					makeMultipoolerID("test-cell", "standby4"),
 				},
-				ExpectedOutgoingRule: currentRuleNumberFromClient(t, primaryManagerClient),
+				ExpectedOutgoingDecision: currentRuleNumberFromClient(t, primaryManagerClient),
 			})
 		require.NoError(t, err, "ADD should succeed")
 
@@ -858,7 +858,7 @@ func TestUpdateConsensusRule(t *testing.T) {
 					makeMultipoolerID("test-cell", "standby2"),
 					makeMultipoolerID("test-cell", "standby4"),
 				},
-				ExpectedOutgoingRule: currentRuleNumberFromClient(t, primaryManagerClient),
+				ExpectedOutgoingDecision: currentRuleNumberFromClient(t, primaryManagerClient),
 			})
 		require.NoError(t, err, "REMOVE should succeed")
 
@@ -894,7 +894,7 @@ func TestUpdateConsensusRule(t *testing.T) {
 				StandbyIds: []*clustermetadatapb.ID{makeMultipoolerID("test-cell", "standby1")},
 				// Expected rule is a placeholder; the call should fail at the
 				// REPLICA guardrail before the CAS check would matter.
-				ExpectedOutgoingRule: &clustermetadatapb.RuleNumber{},
+				ExpectedOutgoingDecision: &clustermetadatapb.RuleNumber{},
 			})
 		require.Error(t, err, "UpdateConsensusRule should fail on standby")
 		assert.Contains(t, err.Error(), "operation not allowed", "Error should indicate operation not allowed on REPLICA")

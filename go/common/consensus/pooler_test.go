@@ -30,7 +30,7 @@ func TestIsLeader(t *testing.T) {
 		return &clustermetadatapb.ConsensusStatus{
 			Id: self,
 			CurrentPosition: &clustermetadatapb.PoolerPosition{
-				Rule: &clustermetadatapb.ShardRule{LeaderId: leader},
+				Decision: &clustermetadatapb.ShardRule{LeaderId: leader},
 			},
 		}
 	}
@@ -112,7 +112,7 @@ func TestLeaderTerm(t *testing.T) {
 			cs: &clustermetadatapb.ConsensusStatus{
 				Id: id("zone1", "pooler-1"),
 				CurrentPosition: &clustermetadatapb.PoolerPosition{
-					Rule: &clustermetadatapb.ShardRule{
+					Decision: &clustermetadatapb.ShardRule{
 						LeaderId:   id("zone1", "pooler-2"),
 						RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 7},
 					},
@@ -125,7 +125,7 @@ func TestLeaderTerm(t *testing.T) {
 			cs: &clustermetadatapb.ConsensusStatus{
 				Id: id("zone1", "pooler-1"),
 				CurrentPosition: &clustermetadatapb.PoolerPosition{
-					Rule: &clustermetadatapb.ShardRule{
+					Decision: &clustermetadatapb.ShardRule{
 						LeaderId:   id("zone1", "pooler-1"),
 						RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 7},
 					},
@@ -138,7 +138,7 @@ func TestLeaderTerm(t *testing.T) {
 			cs: &clustermetadatapb.ConsensusStatus{
 				Id: id("zone1", "pooler-1"),
 				CurrentPosition: &clustermetadatapb.PoolerPosition{
-					Rule: &clustermetadatapb.ShardRule{
+					Decision: &clustermetadatapb.ShardRule{
 						LeaderId: id("zone1", "pooler-1"),
 					},
 				},
