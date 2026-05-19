@@ -1691,6 +1691,9 @@ func TestCheckExternallyCertifiedProposalPossible(t *testing.T) {
 	})
 
 	t.Run("outgoing_rule: candidate rule exceeds revocation's outgoing_rule", func(t *testing.T) {
+		// Node has committed rule (3,0) but outgoing_rule is (2,0). ValidateRevocation
+		// rejects the node (committed rule is beyond outgoing_rule), so the pre-flight
+		// check finds no qualifying candidates.
 		cert := &clustermetadatapb.ExternallyCertifiedRevocation{
 			TermRevocation: coordRevocation(5, &clustermetadatapb.RuleNumber{CoordinatorTerm: 2}),
 			FrozenLsn:      "0/0",
@@ -1698,7 +1701,7 @@ func TestCheckExternallyCertifiedProposalPossible(t *testing.T) {
 		err := CheckExternallyCertifiedProposalPossible(cert, []*clustermetadatapb.ConsensusStatus{
 			makeUnrecruitedStatus(a, makeRule(ruleNum(3, 0), atLeast(2), cohort...)),
 		}, bootstrapProposal)
-		require.ErrorContains(t, err, "strictly greater than revocation.outgoing_rule")
+		require.ErrorContains(t, err, "no nodes could accept the proposed revocation")
 	})
 
 	t.Run("nil cert.term_revocation.outgoing_rule rejected by discoverer", func(t *testing.T) {
