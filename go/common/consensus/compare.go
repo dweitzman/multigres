@@ -53,6 +53,34 @@ func CompareRuleNumbers(a, b *clustermetadatapb.RuleNumber) int {
 	return 0
 }
 
+// MostAdvancedStatuses returns all ConsensusStatuses tied at the highest
+// position, using ComparePosition (decision, then proposal, then LSN).
+// Returns nil if no status has a parseable LSN.
+func MostAdvancedStatuses(statuses []*clustermetadatapb.ConsensusStatus) []*clustermetadatapb.ConsensusStatus {
+	var bestPos *clustermetadatapb.PoolerPosition
+	var result []*clustermetadatapb.ConsensusStatus
+	for _, cs := range statuses {
+		pos := cs.GetCurrentPosition()
+		if _, err := pgutil.ParseLSN(pos.GetLsn()); err != nil {
+			continue
+		}
+		if bestPos == nil {
+			bestPos = pos
+			result = append(result, cs)
+			continue
+		}
+		cmp := ComparePosition(pos, bestPos)
+		if cmp > 0 {
+			bestPos = pos
+			result = result[:0]
+			result = append(result, cs)
+		} else if cmp == 0 {
+			result = append(result, cs)
+		}
+	}
+	return result
+}
+
 // MostAdvancedPosition returns the highest-ranked PoolerPosition among the
 // given statuses, using the same ordering as ComparePosition (decision, then
 // proposal, then LSN). Returns nil if no status has a parseable LSN.
@@ -63,17 +91,11 @@ func CompareRuleNumbers(a, b *clustermetadatapb.RuleNumber) int {
 // state — e.g. the bootstrap path before recruitment — use this to obtain the
 // outgoing rule number and frozen LSN.
 func MostAdvancedPosition(statuses []*clustermetadatapb.ConsensusStatus) *clustermetadatapb.PoolerPosition {
-	var best *clustermetadatapb.PoolerPosition
-	for _, cs := range statuses {
-		pos := cs.GetCurrentPosition()
-		if _, err := pgutil.ParseLSN(pos.GetLsn()); err != nil {
-			continue
-		}
-		if best == nil || ComparePosition(pos, best) > 0 {
-			best = pos
-		}
+	best := MostAdvancedStatuses(statuses)
+	if len(best) == 0 {
+		return nil
 	}
-	return best
+	return best[0].GetCurrentPosition()
 }
 
 // ReplicationPrimaryMatches reports whether a pooler's published
