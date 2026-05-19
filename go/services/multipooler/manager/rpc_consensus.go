@@ -1027,6 +1027,18 @@ func syncConfigFromProposedRule(
 	return policy.BuildSyncReplicationConfig(logger, rule.GetCohortMembers(), leaderID)
 }
 
+// Propagate finalises an existing in-WAL rule change on this node. It promotes
+// postgres to primary, drives the WAL entry to sync-standby quorum, marks the
+// rule as decided, then self-promotes by writing a new rule at
+// (term_revocation.revoked_below_term, 0) with the same cohort and policy.
+//
+// TODO: implement — validate expected_proposal, promote, wait for quorum, decide, self-promote.
+func (pm *MultiPoolerManager) Propagate(_ context.Context, req *consensusdatapb.PropagateRequest) (*consensusdatapb.PropagateResponse, error) {
+	return nil, mterrors.Errorf(mtrpcpb.Code_UNIMPLEMENTED,
+		"Propagate not yet implemented (expected_proposal=%v)",
+		req.GetExpectedProposal().GetRuleNumber())
+}
+
 // ConsensusStatus returns the current status of this node for consensus
 func (pm *MultiPoolerManager) ConsensusStatus(ctx context.Context, req *consensusdatapb.StatusRequest) (*consensusdatapb.StatusResponse, error) {
 	consensusStatus, statusErr := pm.getInconsistentConsensusStatus(ctx)
