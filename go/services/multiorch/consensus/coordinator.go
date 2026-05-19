@@ -236,12 +236,26 @@ func (c *Coordinator) runPropagation(
 	}
 
 	// Find the propagation leader candidates: most-advanced recruited nodes with
-	// the matching proposal. Pick the first (arbitrary choice when tied).
+	// the matching proposal. Pick the first eligible one (arbitrary choice when tied).
 	leaders, err := commonconsensus.FindPropagationLeaders(revocation, recruitedStatuses)
 	if err != nil {
 		return mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION, "recruitment failed: %v", err)
 	}
-	propLeaderCS := leaders[0]
+	var propLeaderCS *clustermetadatapb.ConsensusStatus
+	for _, cs := range leaders {
+		ph := healthByID[topoclient.ClusterIDString(cs.GetId())]
+		if types.PoolerIsCohortIneligible(ph.GetAvailabilityStatus()) {
+			c.logger.WarnContext(ctx, "Skipping ineligible propagation leader candidate",
+				"pooler", cs.GetId().GetName())
+			continue
+		}
+		propLeaderCS = cs
+		break
+	}
+	if propLeaderCS == nil {
+		return mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
+			"no eligible propagation leader: all candidates are cohort-ineligible")
+	}
 
 	leaderKey := topoclient.ClusterIDString(propLeaderCS.GetId())
 	mp := healthByID[leaderKey].MultiPooler
