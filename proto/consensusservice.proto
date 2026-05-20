@@ -94,4 +94,9 @@ service MultiPoolerConsensus {
   // consensus term. Used both to endorse in-flight proposals and to catch
   // followers up to durable decisions.
   rpc SetTermPrimary(consensusdata.SetTermPrimaryRequest) returns (consensusdata.SetTermPrimaryResponse);
+
+  // Propagate asks the receiving pooler to finalise an existing in-WAL rule
+  // change. The pooler promotes postgres, drives the WAL entry to quorum, marks
+  // it decided, then self-promotes. Unlike Propose, no new rule is written.
+  rpc Propagate(consensusdata.PropagateRequest) returns (consensusdata.PropagateResponse);
 }

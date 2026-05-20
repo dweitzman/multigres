@@ -884,6 +884,120 @@ func (x *SetTermPrimaryResponse) GetConsensusStatus() *clustermetadata.Consensus
 	return nil
 }
 
+// PropagateRequest asks the receiving pooler to finalise an in-WAL rule change
+// that it already holds as a proposal. Unlike Propose, no new rule is written —
+// the pooler promotes postgres, waits for the existing WAL entry to reach
+// sync-standby quorum, marks it as decided, then self-promotes by writing a
+// new rule at (term_revocation.revoked_below_term, 0) with the same cohort and
+// durability policy.
+//
+// The coordinator issues Propagate to the node that holds the in-WAL proposal
+// and SetTermPrimary to all followers, pointing them at that node as their
+// replication source.
+type PropagateRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The propagation recruitment revocation. Must have propagation_intent set
+	// to the rule number of the in-WAL proposal being finalised.
+	TermRevocation *clustermetadata.TermRevocation `protobuf:"bytes,1,opt,name=term_revocation,json=termRevocation,proto3" json:"term_revocation,omitempty"`
+	// The full ShardRule the coordinator expects to find in-WAL on this node.
+	// The handler validates this matches the node's current proposal exactly
+	// (rule number, cohort, durability policy) before proceeding.
+	ExpectedProposal *clustermetadata.ShardRule `protobuf:"bytes,2,opt,name=expected_proposal,json=expectedProposal,proto3" json:"expected_proposal,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *PropagateRequest) Reset() {
+	*x = PropagateRequest{}
+	mi := &file_consensusdata_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PropagateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PropagateRequest) ProtoMessage() {}
+
+func (x *PropagateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_consensusdata_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PropagateRequest.ProtoReflect.Descriptor instead.
+func (*PropagateRequest) Descriptor() ([]byte, []int) {
+	return file_consensusdata_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *PropagateRequest) GetTermRevocation() *clustermetadata.TermRevocation {
+	if x != nil {
+		return x.TermRevocation
+	}
+	return nil
+}
+
+func (x *PropagateRequest) GetExpectedProposal() *clustermetadata.ShardRule {
+	if x != nil {
+		return x.ExpectedProposal
+	}
+	return nil
+}
+
+// PropagateResponse carries the pooler's state after a successful Propagate.
+// On success the node has decided the propagated rule and written its
+// self-promotion rule; consensus_status reflects the self-promotion decision.
+type PropagateResponse struct {
+	state           protoimpl.MessageState           `protogen:"open.v1"`
+	ConsensusStatus *clustermetadata.ConsensusStatus `protobuf:"bytes,1,opt,name=consensus_status,json=consensusStatus,proto3" json:"consensus_status,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *PropagateResponse) Reset() {
+	*x = PropagateResponse{}
+	mi := &file_consensusdata_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PropagateResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PropagateResponse) ProtoMessage() {}
+
+func (x *PropagateResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_consensusdata_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PropagateResponse.ProtoReflect.Descriptor instead.
+func (*PropagateResponse) Descriptor() ([]byte, []int) {
+	return file_consensusdata_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *PropagateResponse) GetConsensusStatus() *clustermetadata.ConsensusStatus {
+	if x != nil {
+		return x.ConsensusStatus
+	}
+	return nil
+}
+
 var File_consensusdata_proto protoreflect.FileDescriptor
 
 const file_consensusdata_proto_rawDesc = "" +
@@ -936,6 +1050,11 @@ const file_consensusdata_proto_rawDesc = "" +
 	"\x06leader\x18\x01 \x01(\v2\x1e.clustermetadata.PoolerAddressR\x06leader\x12.\n" +
 	"\x04rule\x18\x02 \x01(\v2\x1a.clustermetadata.ShardRuleR\x04rule\"e\n" +
 	"\x16SetTermPrimaryResponse\x12K\n" +
+	"\x10consensus_status\x18\x01 \x01(\v2 .clustermetadata.ConsensusStatusR\x0fconsensusStatus\"\xa5\x01\n" +
+	"\x10PropagateRequest\x12H\n" +
+	"\x0fterm_revocation\x18\x01 \x01(\v2\x1f.clustermetadata.TermRevocationR\x0etermRevocation\x12G\n" +
+	"\x11expected_proposal\x18\x02 \x01(\v2\x1a.clustermetadata.ShardRuleR\x10expectedProposal\"`\n" +
+	"\x11PropagateResponse\x12K\n" +
 	"\x10consensus_status\x18\x01 \x01(\v2 .clustermetadata.ConsensusStatusR\x0fconsensusStatus*s\n" +
 	"\x0fBeginTermAction\x12!\n" +
 	"\x1dBEGIN_TERM_ACTION_UNSPECIFIED\x10\x00\x12\x1f\n" +
@@ -955,7 +1074,7 @@ func file_consensusdata_proto_rawDescGZIP() []byte {
 }
 
 var file_consensusdata_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_consensusdata_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_consensusdata_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_consensusdata_proto_goTypes = []any{
 	(BeginTermAction)(0),                       // 0: consensusdata.BeginTermAction
 	(*WALPosition)(nil),                        // 1: consensusdata.WALPosition
@@ -970,39 +1089,44 @@ var file_consensusdata_proto_goTypes = []any{
 	(*ProposeResponse)(nil),                    // 10: consensusdata.ProposeResponse
 	(*SetTermPrimaryRequest)(nil),              // 11: consensusdata.SetTermPrimaryRequest
 	(*SetTermPrimaryResponse)(nil),             // 12: consensusdata.SetTermPrimaryResponse
-	(*timestamppb.Timestamp)(nil),              // 13: google.protobuf.Timestamp
-	(*clustermetadata.ID)(nil),                 // 14: clustermetadata.ID
-	(*clustermetadata.ConsensusStatus)(nil),    // 15: clustermetadata.ConsensusStatus
-	(*clustermetadata.AvailabilityStatus)(nil), // 16: clustermetadata.AvailabilityStatus
-	(*clustermetadata.TermRevocation)(nil),     // 17: clustermetadata.TermRevocation
-	(*clustermetadata.PoolerAddress)(nil),      // 18: clustermetadata.PoolerAddress
-	(*clustermetadata.ShardRule)(nil),          // 19: clustermetadata.ShardRule
+	(*PropagateRequest)(nil),                   // 13: consensusdata.PropagateRequest
+	(*PropagateResponse)(nil),                  // 14: consensusdata.PropagateResponse
+	(*timestamppb.Timestamp)(nil),              // 15: google.protobuf.Timestamp
+	(*clustermetadata.ID)(nil),                 // 16: clustermetadata.ID
+	(*clustermetadata.ConsensusStatus)(nil),    // 17: clustermetadata.ConsensusStatus
+	(*clustermetadata.AvailabilityStatus)(nil), // 18: clustermetadata.AvailabilityStatus
+	(*clustermetadata.TermRevocation)(nil),     // 19: clustermetadata.TermRevocation
+	(*clustermetadata.PoolerAddress)(nil),      // 20: clustermetadata.PoolerAddress
+	(*clustermetadata.ShardRule)(nil),          // 21: clustermetadata.ShardRule
 }
 var file_consensusdata_proto_depIdxs = []int32{
-	13, // 0: consensusdata.WALPosition.timestamp:type_name -> google.protobuf.Timestamp
-	14, // 1: consensusdata.BeginTermRequest.candidate_id:type_name -> clustermetadata.ID
+	15, // 0: consensusdata.WALPosition.timestamp:type_name -> google.protobuf.Timestamp
+	16, // 1: consensusdata.BeginTermRequest.candidate_id:type_name -> clustermetadata.ID
 	0,  // 2: consensusdata.BeginTermRequest.action:type_name -> consensusdata.BeginTermAction
 	1,  // 3: consensusdata.BeginTermResponse.wal_position:type_name -> consensusdata.WALPosition
-	15, // 4: consensusdata.BeginTermResponse.consensus_status:type_name -> clustermetadata.ConsensusStatus
-	14, // 5: consensusdata.StatusResponse.id:type_name -> clustermetadata.ID
-	15, // 6: consensusdata.StatusResponse.consensus_status:type_name -> clustermetadata.ConsensusStatus
-	16, // 7: consensusdata.StatusResponse.availability_status:type_name -> clustermetadata.AvailabilityStatus
-	17, // 8: consensusdata.CoordinatorProposal.term_revocation:type_name -> clustermetadata.TermRevocation
-	18, // 9: consensusdata.CoordinatorProposal.proposal_leader:type_name -> clustermetadata.PoolerAddress
-	19, // 10: consensusdata.CoordinatorProposal.proposed_rule:type_name -> clustermetadata.ShardRule
-	17, // 11: consensusdata.RecruitRequest.term_revocation:type_name -> clustermetadata.TermRevocation
-	15, // 12: consensusdata.RecruitResponse.consensus_status:type_name -> clustermetadata.ConsensusStatus
+	17, // 4: consensusdata.BeginTermResponse.consensus_status:type_name -> clustermetadata.ConsensusStatus
+	16, // 5: consensusdata.StatusResponse.id:type_name -> clustermetadata.ID
+	17, // 6: consensusdata.StatusResponse.consensus_status:type_name -> clustermetadata.ConsensusStatus
+	18, // 7: consensusdata.StatusResponse.availability_status:type_name -> clustermetadata.AvailabilityStatus
+	19, // 8: consensusdata.CoordinatorProposal.term_revocation:type_name -> clustermetadata.TermRevocation
+	20, // 9: consensusdata.CoordinatorProposal.proposal_leader:type_name -> clustermetadata.PoolerAddress
+	21, // 10: consensusdata.CoordinatorProposal.proposed_rule:type_name -> clustermetadata.ShardRule
+	19, // 11: consensusdata.RecruitRequest.term_revocation:type_name -> clustermetadata.TermRevocation
+	17, // 12: consensusdata.RecruitResponse.consensus_status:type_name -> clustermetadata.ConsensusStatus
 	6,  // 13: consensusdata.ProposeRequest.proposal:type_name -> consensusdata.CoordinatorProposal
-	14, // 14: consensusdata.ProposeRequest.accepted_node_ids:type_name -> clustermetadata.ID
-	15, // 15: consensusdata.ProposeResponse.consensus_status:type_name -> clustermetadata.ConsensusStatus
-	18, // 16: consensusdata.SetTermPrimaryRequest.leader:type_name -> clustermetadata.PoolerAddress
-	19, // 17: consensusdata.SetTermPrimaryRequest.rule:type_name -> clustermetadata.ShardRule
-	15, // 18: consensusdata.SetTermPrimaryResponse.consensus_status:type_name -> clustermetadata.ConsensusStatus
-	19, // [19:19] is the sub-list for method output_type
-	19, // [19:19] is the sub-list for method input_type
-	19, // [19:19] is the sub-list for extension type_name
-	19, // [19:19] is the sub-list for extension extendee
-	0,  // [0:19] is the sub-list for field type_name
+	16, // 14: consensusdata.ProposeRequest.accepted_node_ids:type_name -> clustermetadata.ID
+	17, // 15: consensusdata.ProposeResponse.consensus_status:type_name -> clustermetadata.ConsensusStatus
+	20, // 16: consensusdata.SetTermPrimaryRequest.leader:type_name -> clustermetadata.PoolerAddress
+	21, // 17: consensusdata.SetTermPrimaryRequest.rule:type_name -> clustermetadata.ShardRule
+	17, // 18: consensusdata.SetTermPrimaryResponse.consensus_status:type_name -> clustermetadata.ConsensusStatus
+	19, // 19: consensusdata.PropagateRequest.term_revocation:type_name -> clustermetadata.TermRevocation
+	21, // 20: consensusdata.PropagateRequest.expected_proposal:type_name -> clustermetadata.ShardRule
+	17, // 21: consensusdata.PropagateResponse.consensus_status:type_name -> clustermetadata.ConsensusStatus
+	22, // [22:22] is the sub-list for method output_type
+	22, // [22:22] is the sub-list for method input_type
+	22, // [22:22] is the sub-list for extension type_name
+	22, // [22:22] is the sub-list for extension extendee
+	0,  // [0:22] is the sub-list for field type_name
 }
 
 func init() { file_consensusdata_proto_init() }
@@ -1016,7 +1140,7 @@ func file_consensusdata_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_consensusdata_proto_rawDesc), len(file_consensusdata_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   12,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

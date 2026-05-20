@@ -153,6 +153,11 @@ type MultiPoolerClient interface {
 	// leader) or point replication at the new primary (if replica).
 	Propose(ctx context.Context, pooler *clustermetadatapb.MultiPooler, request *consensusdatapb.ProposeRequest) (*consensusdatapb.ProposeResponse, error)
 
+	// Propagate asks the receiving pooler to finalise an existing in-WAL rule change.
+	// The pooler promotes postgres, drives the WAL entry to sync-standby quorum, marks
+	// it decided, then self-promotes.
+	Propagate(ctx context.Context, pooler *clustermetadatapb.MultiPooler, request *consensusdatapb.PropagateRequest) (*consensusdatapb.PropagateResponse, error)
+
 	// ConsensusStatus gets the consensus status of the multipooler.
 	// This may be called frequently for monitoring, so implementations cache connections.
 	ConsensusStatus(ctx context.Context, pooler *clustermetadatapb.MultiPooler, request *consensusdatapb.StatusRequest) (*consensusdatapb.StatusResponse, error)
