@@ -33,8 +33,14 @@ import (
 // cohort. The revocation term is derived from the highest term observed
 // across the provided ConsensusStatus values — the maximum of each node's
 // accepted revocation term and its recorded rule's coordinator term —
-// incremented by one. outgoing_rule is the highest RuleNumber recorded
-// across the cohort.
+// incremented by one. outgoing_decision is the highest decision RuleNumber
+// recorded across the cohort.
+//
+// If the highest position across the cohort is an in-flight proposal (i.e.
+// some node's proposal.rule_number > the highest decision), propagation_intent
+// is set to that proposal rule number. The caller can inspect this field to
+// decide whether to use the safe-proposal path (BuildSafeProposal) or the
+// propagation path (Propagate RPC + SetTermPrimary).
 //
 // statuses must be non-empty and at least one status must carry a recorded
 // rule. An empty list or a cohort with no recorded rules indicates the
@@ -51,6 +57,7 @@ func NewTermRevocation(
 	}
 	var maxTerm int64
 	var maxDecision *clustermetadatapb.RuleNumber
+	var maxProposal *clustermetadatapb.RuleNumber
 	for _, cs := range statuses {
 		if t := cs.GetTermRevocation().GetRevokedBelowTerm(); t > maxTerm {
 			maxTerm = t
@@ -70,23 +77,28 @@ func NewTermRevocation(
 				maxDecision = decisionNum
 			}
 		}
-		// Include proposal term in maxTerm so RevokedBelowTerm is above all known
-		// terms, including in-flight proposals.
 		if proposalNum := pos.GetProposal().GetRuleNumber(); proposalNum != nil {
 			if t := proposalNum.GetCoordinatorTerm(); t > maxTerm {
 				maxTerm = t
+			}
+			if maxProposal == nil || CompareRuleNumbers(proposalNum, maxProposal) > 0 {
+				maxProposal = proposalNum
 			}
 		}
 	}
 	if maxDecision == nil {
 		return nil, errors.New("NewTermRevocation: no cohort member reports a recorded decision; agent should construct revocation directly with explicit outgoing_rule")
 	}
-	return &clustermetadatapb.TermRevocation{
+	rev := &clustermetadatapb.TermRevocation{
 		RevokedBelowTerm:       maxTerm + 1,
 		AcceptedCoordinatorId:  coordinatorID,
 		CoordinatorInitiatedAt: timestamppb.Now(),
 		OutgoingDecision:       maxDecision,
-	}, nil
+	}
+	if maxProposal != nil && CompareRuleNumbers(maxProposal, maxDecision) > 0 {
+		rev.PropagationIntent = maxProposal
+	}
+	return rev, nil
 }
 
 // IsRuleRevoked reports whether the pooler's recorded revocation forbids

@@ -491,6 +491,93 @@ func TestNewTermRevocation(t *testing.T) {
 		require.Equal(t, int64(4), got.GetCoordinatorTerm())
 		require.Equal(t, int64(5), got.GetLeaderSubterm())
 	})
+
+	t.Run("no proposals: propagation_intent is nil", func(t *testing.T) {
+		statuses := []*clustermetadatapb.ConsensusStatus{
+			{CurrentPosition: positionAtCoordTerm(4)},
+			{CurrentPosition: positionAtCoordTerm(4)},
+		}
+		rev, err := NewTermRevocation(statuses, coord)
+		require.NoError(t, err)
+		require.Nil(t, rev.GetPropagationIntent(), "no proposals means no propagation_intent")
+	})
+
+	t.Run("proposal beyond decision: propagation_intent set", func(t *testing.T) {
+		// Node B has an in-flight proposal (4.7) beyond the max decision (4.5).
+		// NewTermRevocation should set propagation_intent to (4.7) and
+		// outgoing_decision to (4.5).
+		statuses := []*clustermetadatapb.ConsensusStatus{
+			{CurrentPosition: &clustermetadatapb.PoolerPosition{
+				Decision: &clustermetadatapb.ShardRule{
+					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4, LeaderSubterm: 5},
+				},
+				Lsn: "16/1000",
+			}},
+			{CurrentPosition: &clustermetadatapb.PoolerPosition{
+				Decision: &clustermetadatapb.ShardRule{
+					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4, LeaderSubterm: 5},
+				},
+				Proposal: &clustermetadatapb.ShardRule{
+					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4, LeaderSubterm: 7},
+				},
+				Lsn: "16/2000",
+			}},
+		}
+		rev, err := NewTermRevocation(statuses, coord)
+		require.NoError(t, err)
+		require.Equal(t, int64(4), rev.GetOutgoingDecision().GetCoordinatorTerm())
+		require.Equal(t, int64(5), rev.GetOutgoingDecision().GetLeaderSubterm())
+		require.NotNil(t, rev.GetPropagationIntent())
+		require.Equal(t, int64(4), rev.GetPropagationIntent().GetCoordinatorTerm())
+		require.Equal(t, int64(7), rev.GetPropagationIntent().GetLeaderSubterm())
+		// RevokedBelowTerm must be above the proposal term too.
+		require.Greater(t, rev.GetRevokedBelowTerm(), int64(4))
+	})
+
+	t.Run("proposal equal to decision: no propagation_intent", func(t *testing.T) {
+		// A proposal that equals the max decision means it has already been decided.
+		statuses := []*clustermetadatapb.ConsensusStatus{
+			{CurrentPosition: &clustermetadatapb.PoolerPosition{
+				Decision: &clustermetadatapb.ShardRule{
+					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4, LeaderSubterm: 7},
+				},
+				Proposal: &clustermetadatapb.ShardRule{
+					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4, LeaderSubterm: 7},
+				},
+				Lsn: "16/1000",
+			}},
+		}
+		rev, err := NewTermRevocation(statuses, coord)
+		require.NoError(t, err)
+		require.Nil(t, rev.GetPropagationIntent(), "proposal == decision means already decided")
+	})
+
+	t.Run("multiple nodes with proposals: highest proposal wins", func(t *testing.T) {
+		statuses := []*clustermetadatapb.ConsensusStatus{
+			{CurrentPosition: &clustermetadatapb.PoolerPosition{
+				Decision: &clustermetadatapb.ShardRule{
+					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4, LeaderSubterm: 5},
+				},
+				Proposal: &clustermetadatapb.ShardRule{
+					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4, LeaderSubterm: 6},
+				},
+				Lsn: "16/1000",
+			}},
+			{CurrentPosition: &clustermetadatapb.PoolerPosition{
+				Decision: &clustermetadatapb.ShardRule{
+					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4, LeaderSubterm: 5},
+				},
+				Proposal: &clustermetadatapb.ShardRule{
+					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4, LeaderSubterm: 9},
+				},
+				Lsn: "16/2000",
+			}},
+		}
+		rev, err := NewTermRevocation(statuses, coord)
+		require.NoError(t, err)
+		require.NotNil(t, rev.GetPropagationIntent())
+		require.Equal(t, int64(9), rev.GetPropagationIntent().GetLeaderSubterm(), "highest proposal wins")
+	})
 }
 
 func TestIsRuleRevoked(t *testing.T) {
