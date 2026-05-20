@@ -111,10 +111,10 @@ func (a *ReconcileCohortAction) Execute(ctx context.Context, problem types.Probl
 	// time the multipooler handles the request, the CAS check fails and we
 	// retry on the next analyzer cycle with a fresh view — preventing two
 	// coordinators from racing on overlapping cohort changes.
-	expectedRule := primary.GetConsensusStatus().GetCurrentPosition().GetRule().GetRuleNumber()
+	expectedRule := primary.GetConsensusStatus().GetCurrentPosition().GetDecision().GetRuleNumber()
 	if expectedRule == nil {
 		return mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
-			"primary %s has no recorded rule; cannot reconcile cohort", primary.MultiPooler.Id.Name)
+			"primary %s has no recorded decision; cannot reconcile cohort", primary.MultiPooler.Id.Name)
 	}
 
 	// TODO: batch multiple cohort changes into a single UpdateConsensusRule
@@ -125,9 +125,9 @@ func (a *ReconcileCohortAction) Execute(ctx context.Context, problem types.Probl
 	// the underlying RPC could apply them in one shot. Coalescing same-shard,
 	// same-operation problems would cut RPC fanout and history churn.
 	req := &multipoolermanagerdatapb.UpdateConsensusRuleRequest{
-		Operation:            op,
-		StandbyIds:           []*clustermetadatapb.ID{target.MultiPooler.Id},
-		ExpectedOutgoingRule: expectedRule,
+		Operation:                op,
+		StandbyIds:               []*clustermetadatapb.ID{target.MultiPooler.Id},
+		ExpectedOutgoingDecision: expectedRule,
 	}
 
 	if _, err := a.rpcClient.UpdateConsensusRule(ctx, primary.MultiPooler, req); err != nil {

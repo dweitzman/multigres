@@ -85,8 +85,8 @@ func makeStatusWithLSN(id *clustermetadatapb.ID, rule *clustermetadatapb.ShardRu
 		Id:             id,
 		TermRevocation: revocation,
 		CurrentPosition: &clustermetadatapb.PoolerPosition{
-			Rule: rule,
-			Lsn:  lsn,
+			Decision: rule,
+			Lsn:      lsn,
 		},
 	}
 }
@@ -113,7 +113,7 @@ func proposeFirstEligible(rule *clustermetadatapb.ShardRule) func(RecruitmentRes
 func revocation(term int64, outgoingRule *clustermetadatapb.RuleNumber) *clustermetadatapb.TermRevocation {
 	return &clustermetadatapb.TermRevocation{
 		RevokedBelowTerm: term,
-		OutgoingRule:     outgoingRule,
+		OutgoingDecision: outgoingRule,
 	}
 }
 
@@ -126,7 +126,7 @@ func coordRevocation(term int64, outgoingRule *clustermetadatapb.RuleNumber) *cl
 		RevokedBelowTerm:       term,
 		AcceptedCoordinatorId:  makeID("zone1", "coord-1"),
 		CoordinatorInitiatedAt: timestamppb.Now(),
-		OutgoingRule:           outgoingRule,
+		OutgoingDecision:       outgoingRule,
 	}
 }
 
@@ -136,8 +136,8 @@ func makeUnrecruitedStatus(id *clustermetadatapb.ID, rule *clustermetadatapb.Sha
 	return &clustermetadatapb.ConsensusStatus{
 		Id: id,
 		CurrentPosition: &clustermetadatapb.PoolerPosition{
-			Rule: rule,
-			Lsn:  "0/1000000",
+			Decision: rule,
+			Lsn:      "0/1000000",
 		},
 	}
 }
@@ -391,7 +391,7 @@ func TestBuildProposalCore(t *testing.T) {
 				},
 				wantLeader: "pooler-a",
 				checkResult: func(t *testing.T, r RecruitmentResult) {
-					assert.Equal(t, int64(3), r.OutgoingRule.GetRuleNumber().GetCoordinatorTerm())
+					assert.Equal(t, int64(3), r.OutgoingDecision.GetRuleNumber().GetCoordinatorTerm())
 					assert.Len(t, r.EligibleLeaders, 2, "only nodes at outgoingRule are eligible")
 					assert.NotEqual(t, "pooler-c", r.EligibleLeaders[0].GetId().GetName())
 				},
@@ -949,7 +949,7 @@ func TestBuildProposalCore(t *testing.T) {
 					return &consensusdatapb.CoordinatorProposal{
 						TermRevocation: r.TermRevocation,
 						ProposalLeader: &clustermetadatapb.PoolerAddress{Id: r.EligibleLeaders[0].GetId()},
-						ProposedRule:   r.OutgoingRule, // re-propose term-6 rule to propagate it
+						ProposedRule:   r.OutgoingDecision, // re-propose term-6 rule to propagate it
 					}, nil
 				},
 				wantErr: "proposal validation: proposed rule term 6 is below the recruitment revocation term 7",
@@ -1001,7 +1001,7 @@ func TestBuildProposalCore(t *testing.T) {
 		cohort := zone1.all[:3]
 		rule := makeRule(ruleNum(3, 0), atLeast(2), cohort...)
 		rev := revocation(5, ruleNum(3, 0))
-		rev.OutgoingRule = nil
+		rev.OutgoingDecision = nil
 		statuses := []*clustermetadatapb.ConsensusStatus{
 			makeStatus(zone1.a, rule, rev),
 		}
@@ -1329,7 +1329,7 @@ func TestBuildSafeProposal_OutgoingRuleSelected(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, proposal)
-	assert.Equal(t, int64(3), gotResult.OutgoingRule.GetRuleNumber().GetCoordinatorTerm())
+	assert.Equal(t, int64(3), gotResult.OutgoingDecision.GetRuleNumber().GetCoordinatorTerm())
 	assert.Len(t, gotResult.EligibleLeaders, 2, "only nodes at outgoingRule are eligible")
 	// Leader must be a or b (both at newRule), not c.
 	leaderName := proposal.GetProposalLeader().GetId().GetName()
@@ -1530,13 +1530,13 @@ func TestBuildSafeProposal_CohortReplacementSplitBrain(t *testing.T) {
 		RevokedBelowTerm:       6,
 		AcceptedCoordinatorId:  makeID("zone1", "multiorch-1"),
 		CoordinatorInitiatedAt: &timestamppb.Timestamp{Seconds: 1000},
-		OutgoingRule:           ruleNum(3, 0),
+		OutgoingDecision:       ruleNum(3, 0),
 	}
 	revocationCoord2 := &clustermetadatapb.TermRevocation{
 		RevokedBelowTerm:       6,
 		AcceptedCoordinatorId:  makeID("zone1", "multiorch-2"),
 		CoordinatorInitiatedAt: &timestamppb.Timestamp{Seconds: 1000},
-		OutgoingRule:           ruleNum(4, 0),
+		OutgoingDecision:       ruleNum(4, 0),
 	}
 
 	// All four responding nodes' statuses are in the same pool. The revocation
@@ -1709,7 +1709,7 @@ func TestCheckExternallyCertifiedProposalPossible(t *testing.T) {
 		// guard is never tripped via CheckExternallyCertifiedProposalPossible
 		// in practice. Direct-call the internal discoverer to exercise it.
 		rev := coordRevocation(5, &clustermetadatapb.RuleNumber{})
-		rev.OutgoingRule = nil
+		rev.OutgoingDecision = nil
 		cert := &clustermetadatapb.ExternallyCertifiedRevocation{
 			TermRevocation: rev,
 			FrozenLsn:      "0/0",
@@ -1731,7 +1731,7 @@ func TestCheckExternallyCertifiedProposalPossible(t *testing.T) {
 		err := CheckExternallyCertifiedProposalPossible(cert, []*clustermetadatapb.ConsensusStatus{
 			makeUnrecruitedStatus(a, nil),
 		}, bootstrapProposal)
-		require.EqualError(t, err, "node zone1_a has no recorded rule; consensus state may be uninitialized")
+		require.EqualError(t, err, "node zone1_a has no recorded decision; consensus state may be uninitialized")
 	})
 
 	t.Run("frozen_lsn: invalid LSN string", func(t *testing.T) {
@@ -1871,7 +1871,7 @@ func TestBuildExternallyCertifiedProposal(t *testing.T) {
 			makeStatus(zone1.a, nil, revocation(5, ruleNum(3, 0))),
 		}
 		_, err := BuildExternallyCertifiedProposal(cert, statuses, bootstrapProposal)
-		require.EqualError(t, err, "node zone1_pooler-a has no recorded rule; consensus state may be uninitialized")
+		require.EqualError(t, err, "node zone1_pooler-a has no recorded decision; consensus state may be uninitialized")
 	})
 
 	t.Run("frozen_lsn: invalid LSN string → error", func(t *testing.T) {

@@ -846,7 +846,7 @@ func TestPrimaryConnInfoDiffersFromRecorded(t *testing.T) {
 			},
 			seedRevocation: &clustermetadatapb.TermRevocation{
 				RevokedBelowTerm: 9,
-				OutgoingRule:     &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
+				OutgoingDecision: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
 			},
 			want: false,
 		},

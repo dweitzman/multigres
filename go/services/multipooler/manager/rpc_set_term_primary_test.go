@@ -172,7 +172,7 @@ func TestSetTermPrimary_NoOpWhenPositionNotHigher(t *testing.T) {
 			pm, _ := setupManagerWithMockDB(t, mockQueryService, &fakeRuleStore{pos: makeRulePosition(tt.selfTerm)})
 
 			leader := newLeaderAddress("new-primary", "primary-host", 5432)
-			incomingRule := tt.incomingPos.GetRule()
+			incomingRule := tt.incomingPos.GetDecision()
 			incomingRule.LeaderId = leader.GetId()
 			req := &consensusdatapb.SetTermPrimaryRequest{
 				Leader: leader,
@@ -190,7 +190,7 @@ func TestSetTermPrimary_NoOpWhenPositionNotHigher(t *testing.T) {
 			// were issued (ExpectationsWereMet below).
 			highest := pm.consensusState.GetReplicationPrimary()
 			require.NotNil(t, highest, "SetTermPrimary should record the rule even on no-op")
-			assert.Equal(t, tt.incomingPos.GetRule().GetRuleNumber().GetCoordinatorTerm(),
+			assert.Equal(t, tt.incomingPos.GetDecision().GetRuleNumber().GetCoordinatorTerm(),
 				highest.GetRule().GetRuleNumber().GetCoordinatorTerm())
 			require.NotNil(t, highest.GetPrimary(), "SetTermPrimary should record the primary even on no-op")
 			assert.Equal(t, "new-primary", highest.GetPrimary().Id.Name)
@@ -387,7 +387,7 @@ func TestSetTermPrimary_IgnoresRevokedRule(t *testing.T) {
 			require.NoError(t, pm.consensusState.setRevocation(
 				&clustermetadatapb.TermRevocation{
 					RevokedBelowTerm: tt.revokedBelow,
-					OutgoingRule:     tt.outgoing,
+					OutgoingDecision: tt.outgoing,
 				},
 			))
 			_, err := pm.consensusState.Load()
@@ -433,7 +433,7 @@ func TestSetTermPrimary_AppliesViaOutgoingRuleOverride(t *testing.T) {
 	require.NoError(t, pm.consensusState.setRevocation(
 		&clustermetadatapb.TermRevocation{
 			RevokedBelowTerm: 5,
-			OutgoingRule:     &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
+			OutgoingDecision: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
 		},
 	))
 	_, err := pm.consensusState.Load()

@@ -1587,7 +1587,7 @@ func TestReplicationStatus(t *testing.T) {
 		pm.rules = newRuleStore(logger, mockQueryService)
 		pm.rules = &fakeRuleStore{
 			pos: &clustermetadatapb.PoolerPosition{
-				Rule: &clustermetadatapb.ShardRule{
+				Decision: &clustermetadatapb.ShardRule{
 					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
 					CohortMembers: []*clustermetadatapb.ID{
 						{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "pooler-a"},
@@ -1900,7 +1900,7 @@ func TestUpdateConsensusRule_HistoryFailurePreventsGUCUpdate(t *testing.T) {
 		ctx,
 		multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_ADD,
 		[]*clustermetadatapb.ID{newStandby},
-		&clustermetadatapb.RuleNumber{CoordinatorTerm: 5}, // expectedOutgoingRule
+		&clustermetadatapb.RuleNumber{CoordinatorTerm: 5}, // expectedOutgoingDecision
 		nil, // coordinatorID
 	)
 

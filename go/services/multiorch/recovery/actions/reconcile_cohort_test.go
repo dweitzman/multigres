@@ -71,7 +71,7 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 			ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 				TermRevocation: &clustermetadatapb.TermRevocation{RevokedBelowTerm: 3},
 				CurrentPosition: &clustermetadatapb.PoolerPosition{
-					Rule: &clustermetadatapb.ShardRule{
+					Decision: &clustermetadatapb.ShardRule{
 						RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 3, LeaderSubterm: 7},
 					},
 				},
@@ -118,9 +118,9 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 		assert.Equal(t, multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_ADD, req.Operation)
 		require.Len(t, req.StandbyIds, 1)
 		assert.Equal(t, replicaID.Name, req.StandbyIds[0].Name)
-		require.NotNil(t, req.ExpectedOutgoingRule, "CAS guard must be set")
-		assert.Equal(t, int64(3), req.ExpectedOutgoingRule.CoordinatorTerm)
-		assert.Equal(t, int64(7), req.ExpectedOutgoingRule.LeaderSubterm)
+		require.NotNil(t, req.ExpectedOutgoingDecision, "CAS guard must be set")
+		assert.Equal(t, int64(3), req.ExpectedOutgoingDecision.CoordinatorTerm)
+		assert.Equal(t, int64(7), req.ExpectedOutgoingDecision.LeaderSubterm)
 	})
 
 	t.Run("ProblemCohortMemberIneligible issues UpdateConsensusRule with REMOVE", func(t *testing.T) {
@@ -190,7 +190,7 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 		})
 
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "no recorded rule")
+		assert.Contains(t, err.Error(), "no recorded decision")
 		assert.NotContains(t, fakeClient.CallLog, "UpdateConsensusRule(multipooler-cell1-primary)")
 	})
 

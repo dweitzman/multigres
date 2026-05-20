@@ -256,15 +256,15 @@ func (pm *MultiPoolerManager) executeRevoke(ctx context.Context, term int64, res
 		pm.logger.WarnContext(ctx, "Failed to get rule history during revoke; candidate selection may be suboptimal",
 			"term", term, "error", err)
 	} else {
-		response.WalPosition.LeadershipTerm = pos.GetRule().GetRuleNumber().GetCoordinatorTerm()
-		pids, pidErr := toPoolerIDs(pos.GetRule().GetCohortMembers())
+		response.WalPosition.LeadershipTerm = pos.GetDecision().GetRuleNumber().GetCoordinatorTerm()
+		pids, pidErr := toPoolerIDs(pos.GetDecision().GetCohortMembers())
 		if pidErr != nil {
 			pm.logger.WarnContext(ctx, "Some cohort member IDs have invalid format; using approximate names for candidate selection",
 				"term", term, "error", pidErr)
 		}
 		response.WalPosition.CohortMembers = poolerIDsToAppNames(pids)
 		pm.logger.InfoContext(ctx, "Captured coordinator term for candidate selection",
-			"term", term, "coordinator_term", pos.GetRule().GetRuleNumber().GetCoordinatorTerm())
+			"term", term, "coordinator_term", pos.GetDecision().GetRuleNumber().GetCoordinatorTerm())
 	}
 
 	// Capture consensus status after WAL positions are frozen (post-revoke snapshot).
@@ -307,14 +307,14 @@ func buildConsensusStatus(id *clustermetadatapb.ID, revocation *clustermetadatap
 // recent observed position and the most recent rule+primary heard via RPC.
 // See buildConsensusStatus for the merge semantics.
 func buildStatusReplicationPrimary(pos *clustermetadatapb.PoolerPosition, replicationPrimary *clustermetadatapb.ReplicationPrimary) *clustermetadatapb.ReplicationPrimary {
-	observedRule := pos.GetRule()
+	observedDecision := pos.GetDecision()
 	rpcRule := replicationPrimary.GetRule()
 	rpcPrimary := replicationPrimary.GetPrimary()
-	if observedRule == nil && rpcRule == nil && rpcPrimary == nil {
+	if observedDecision == nil && rpcRule == nil && rpcPrimary == nil {
 		return nil
 	}
-	rule := observedRule
-	if commonconsensus.CompareRuleNumbers(rpcRule.GetRuleNumber(), observedRule.GetRuleNumber()) > 0 {
+	rule := observedDecision
+	if commonconsensus.CompareRuleNumbers(rpcRule.GetRuleNumber(), observedDecision.GetRuleNumber()) > 0 {
 		rule = rpcRule
 	}
 	return &clustermetadatapb.ReplicationPrimary{
@@ -900,7 +900,7 @@ func (pm *MultiPoolerManager) SetTermPrimary(ctx context.Context, req *consensus
 		pm.logger.InfoContext(ctx, "SetTermPrimary: rule revoked, ignoring",
 			"incoming_rule", rule.GetRuleNumber(),
 			"revoked_below_term", revocation.GetRevokedBelowTerm(),
-			"outgoing_rule", revocation.GetOutgoingRule())
+			"outgoing_rule", revocation.GetOutgoingDecision())
 		cs, err := pm.getCachedConsensusStatus()
 		if err != nil {
 			return nil, mterrors.Wrap(err, "failed to build consensus status")
@@ -927,10 +927,10 @@ func (pm *MultiPoolerManager) SetTermPrimary(ctx context.Context, req *consensus
 
 	// Compare by RuleNumber only — LSN is intentionally not part of the gate.
 	// See SetTermPrimaryRequest's proto comment for the reasoning.
-	if commonconsensus.CompareRuleNumbers(rule.GetRuleNumber(), selfPos.GetRule().GetRuleNumber()) <= 0 {
+	if commonconsensus.CompareRuleNumbers(rule.GetRuleNumber(), selfPos.GetDecision().GetRuleNumber()) <= 0 {
 		pm.logger.InfoContext(ctx, "SetTermPrimary: incoming rule not higher, no-op",
 			"incoming_rule", rule.GetRuleNumber(),
-			"self_rule", selfPos.GetRule().GetRuleNumber())
+			"self_decision", selfPos.GetDecision().GetRuleNumber())
 		cs, err := pm.getCachedConsensusStatus()
 		if err != nil {
 			return nil, mterrors.Wrap(err, "failed to build consensus status")

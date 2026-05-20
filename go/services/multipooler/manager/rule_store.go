@@ -75,7 +75,7 @@ func newRuleStore(
 func (rs *ruleStore) cacheRuleObservation(pos *clustermetadatapb.PoolerPosition) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
-	if rs.lastPos != nil && pos != nil && consensus.CompareRuleNumbers(pos.GetRule().GetRuleNumber(), rs.lastPos.GetRule().GetRuleNumber()) < 0 {
+	if rs.lastPos != nil && pos != nil && consensus.CompareRuleNumbers(pos.GetDecision().GetRuleNumber(), rs.lastPos.GetDecision().GetRuleNumber()) < 0 {
 		// This position observation is stale. Ignore it.
 		return
 	}
@@ -206,24 +206,37 @@ func (rs *ruleStore) createRuleTables(ctx context.Context, policy *clustermetada
 	defer cancel()
 
 	if _, err := rs.queryService.Query(execCtx, `CREATE TABLE multigres.current_rule (
-		shard_id                  BYTEA PRIMARY KEY,
-		coordinator_term          BIGINT NOT NULL,
-		leader_subterm            BIGINT NOT NULL,
-		leader_id                 TEXT,
-		coordinator_id            TEXT,
-		cohort_members            TEXT[] NOT NULL,
-		durability_policy_name    TEXT NOT NULL,
-		durability_quorum_type    TEXT NOT NULL,
-		durability_required_count INT NOT NULL,
-		created_at                TIMESTAMPTZ NOT NULL
+		shard_id                          BYTEA PRIMARY KEY,
+		-- Last marked decision: always populated, represents the current durable rule.
+		decision_coordinator_term         BIGINT NOT NULL,
+		decision_leader_subterm           BIGINT NOT NULL,
+		decision_leader_id                TEXT,
+		decision_coordinator_id           TEXT,
+		decision_cohort_members           TEXT[] NOT NULL,
+		decision_durability_policy_name   TEXT NOT NULL,
+		decision_durability_quorum_type   TEXT NOT NULL,
+		decision_durability_required_count INT NOT NULL,
+		-- In-flight proposal: null when no transition is in progress (the common case).
+		-- Populated between the proposal write (sync replication wait) and the decision
+		-- marking. Cleared atomically when the decision columns are updated.
+		proposal_coordinator_term         BIGINT,
+		proposal_leader_subterm           BIGINT,
+		proposal_leader_id                TEXT,
+		proposal_coordinator_id           TEXT,
+		proposal_cohort_members           TEXT[],
+		proposal_durability_policy_name   TEXT,
+		proposal_durability_quorum_type   TEXT,
+		proposal_durability_required_count INT,
+		created_at                        TIMESTAMPTZ NOT NULL
 	)`); err != nil {
 		return mterrors.Wrap(err, "failed to create current_rule table")
 	}
 
 	if _, err := rs.queryService.QueryArgs(execCtx, `
 		INSERT INTO multigres.current_rule
-		  (shard_id, coordinator_term, leader_subterm, cohort_members,
-		   durability_policy_name, durability_quorum_type, durability_required_count, created_at)
+		  (shard_id, decision_coordinator_term, decision_leader_subterm, decision_cohort_members,
+		   decision_durability_policy_name, decision_durability_quorum_type,
+		   decision_durability_required_count, created_at)
 		VALUES ($1, 0, 0, '{}', $2, $3, $4, now())`,
 		[]byte("0"), policy.PolicyName, policy.QuorumType.String(), int64(policy.RequiredCount)); err != nil {
 		return mterrors.Wrap(err, "failed to initialize current_rule")
@@ -271,8 +284,14 @@ func (rs *ruleStore) observePosition(ctx context.Context) (*clustermetadatapb.Po
 	defer cancel()
 
 	result, err := rs.queryService.QueryArgs(queryCtx, `
-		SELECT coordinator_term, leader_subterm, leader_id, coordinator_id, cohort_members,
-		       durability_policy_name, durability_quorum_type, durability_required_count,
+		SELECT decision_coordinator_term, decision_leader_subterm,
+		       decision_leader_id, decision_coordinator_id, decision_cohort_members,
+		       decision_durability_policy_name, decision_durability_quorum_type,
+		       decision_durability_required_count,
+		       proposal_coordinator_term, proposal_leader_subterm,
+		       proposal_leader_id, proposal_coordinator_id, proposal_cohort_members,
+		       proposal_durability_policy_name, proposal_durability_quorum_type,
+		       proposal_durability_required_count,
 		       CASE
 		         WHEN pg_is_in_recovery()
 		           THEN COALESCE(pg_last_wal_receive_lsn(), pg_last_wal_replay_lsn())
@@ -287,34 +306,51 @@ func (rs *ruleStore) observePosition(ctx context.Context) (*clustermetadatapb.Po
 		return nil, mterrors.Errorf(mtrpcpb.Code_INTERNAL, "current_rule initial row missing for shard 0: tables may not be initialized")
 	}
 
-	var coordinatorTerm, leaderSubterm int64
-	var leaderIDStr, coordinatorIDStr *string
-	var cohortNames []string
-	var durabilityPolicyName, durabilityQuorumType string
-	var durabilityRequiredCount int64
+	var decisionCoordTerm, decisionLeaderSubterm int64
+	var decisionLeaderIDStr, decisionCoordinatorIDStr *string
+	var decisionCohortNames []string
+	var decisionDPName, decisionDPQuorumType string
+	var decisionDPRequiredCount int64
+	var proposalCoordTerm, proposalLeaderSubterm *int64
+	var proposalLeaderIDStr, proposalCoordinatorIDStr *string
+	var proposalCohortNames []string
+	var proposalDPName, proposalDPQuorumType *string
+	var proposalDPRequiredCount *int64
 	var lsn string
 	if err := executor.ScanRow(result.Rows[0],
-		&coordinatorTerm,
-		&leaderSubterm,
-		&leaderIDStr,
-		&coordinatorIDStr,
-		&cohortNames,
-		&durabilityPolicyName,
-		&durabilityQuorumType,
-		&durabilityRequiredCount,
+		&decisionCoordTerm,
+		&decisionLeaderSubterm,
+		&decisionLeaderIDStr,
+		&decisionCoordinatorIDStr,
+		&decisionCohortNames,
+		&decisionDPName,
+		&decisionDPQuorumType,
+		&decisionDPRequiredCount,
+		&proposalCoordTerm,
+		&proposalLeaderSubterm,
+		&proposalLeaderIDStr,
+		&proposalCoordinatorIDStr,
+		&proposalCohortNames,
+		&proposalDPName,
+		&proposalDPQuorumType,
+		&proposalDPRequiredCount,
 		&lsn,
 	); err != nil {
 		return nil, mterrors.Wrap(err, "failed to scan current position")
 	}
 
-	var coordinatorIDStrVal string
-	if coordinatorIDStr != nil {
-		coordinatorIDStrVal = *coordinatorIDStr
+	var decisionCoordinatorIDStrVal string
+	if decisionCoordinatorIDStr != nil {
+		decisionCoordinatorIDStrVal = *decisionCoordinatorIDStr
 	}
 	pos, err := buildPoolerPosition(
-		coordinatorTerm, leaderSubterm,
-		leaderIDStr, coordinatorIDStrVal, cohortNames,
-		durabilityPolicyName, durabilityQuorumType, durabilityRequiredCount,
+		decisionCoordTerm, decisionLeaderSubterm,
+		decisionLeaderIDStr, decisionCoordinatorIDStrVal, decisionCohortNames,
+		decisionDPName, decisionDPQuorumType, decisionDPRequiredCount,
+		proposalCoordTerm, proposalLeaderSubterm,
+		proposalLeaderIDStr, proposalCoordinatorIDStr,
+		proposalCohortNames,
+		proposalDPName, proposalDPQuorumType, proposalDPRequiredCount,
 		lsn,
 	)
 	if err != nil {
@@ -424,7 +460,10 @@ func (rs *ruleStore) updateRule(ctx context.Context, update *ruleUpdateBuilder) 
 	// TODO: It'd be nice to validate that the rule is achievable if only one of the cohort
 	// or durability policy is modified, but we'd have to look up the previous rule first.
 
-	result, err := rs.queryService.QueryArgs(execCtx, `
+	// Step 1: Write the proposal columns and append to rule_history. This write waits
+	// for sync-standby acknowledgement (the durability gate). The proposal columns are
+	// visible to concurrent readers between step 1 and step 2 — that's intentional.
+	step1Result, err := rs.queryService.QueryArgs(execCtx, `
 		WITH
 		  params AS (
 		    SELECT $1::bytea        AS shard_id,
@@ -446,68 +485,89 @@ func (rs *ruleStore) updateRule(ctx context.Context, update *ruleUpdateBuilder) 
 		  ),
 		  locked AS (
 		    -- FOR UPDATE serializes concurrent writes at the database level, complementing
-		    -- the action lock held by the caller.
-		    -- Returns zero rows (causing a no-op write and error return) when any condition fails.
-		    -- next_leader_subterm: 0 when starting a new coordinator term, otherwise increment within term.
-		    SELECT current_rule.coordinator_term, current_rule.leader_subterm,
-		           current_rule.leader_id, current_rule.cohort_members,
-		           current_rule.durability_policy_name, current_rule.durability_quorum_type,
-		           current_rule.durability_required_count,
-		           CASE WHEN params.coordinator_term > current_rule.coordinator_term THEN 0
-		                ELSE current_rule.leader_subterm + 1
-		           END AS next_leader_subterm
+		    -- the action lock held by the caller. CAS check and advancement check are applied
+		    -- against the decision columns (the committed state).
+		    -- next_leader_subterm: 0 when starting a new coordinator term, otherwise the next
+		    -- value after the highest allocated subterm for that coordinator term. We take the
+		    -- GREATEST of the decision and proposal subtermss (when they are at the incoming
+		    -- coordinator_term) to avoid duplicate primary keys in rule_history during the
+		    -- brief window between writing the proposal (step 1) and marking the decision (step 2).
+		    SELECT current_rule.decision_coordinator_term,
+		           current_rule.decision_leader_subterm,
+		           current_rule.decision_leader_id,
+		           current_rule.decision_cohort_members,
+		           current_rule.decision_durability_policy_name,
+		           current_rule.decision_durability_quorum_type,
+		           current_rule.decision_durability_required_count,
+		           GREATEST(
+		               CASE WHEN current_rule.decision_coordinator_term = params.coordinator_term
+		                    THEN current_rule.decision_leader_subterm ELSE -1 END,
+		               CASE WHEN current_rule.proposal_coordinator_term = params.coordinator_term
+		                    THEN current_rule.proposal_leader_subterm ELSE -1 END
+		           ) + 1 AS next_leader_subterm
 		    FROM multigres.current_rule, params
-		    WHERE current_rule.shard_id = params.shard_id                   -- target shard
-		      AND params.coordinator_term >= current_rule.coordinator_term  -- reject stale writes
-		      AND (params.cas_coordinator_term IS NULL                      -- optimistic CAS check
-		           OR (current_rule.coordinator_term = params.cas_coordinator_term
-		               AND current_rule.leader_subterm = params.cas_leader_subterm))
+		    WHERE current_rule.shard_id = params.shard_id
+		      AND params.coordinator_term >= GREATEST(
+		              current_rule.decision_coordinator_term,
+		              COALESCE(current_rule.proposal_coordinator_term, 0))
+		      AND (params.cas_coordinator_term IS NULL
+		           OR (current_rule.decision_coordinator_term = params.cas_coordinator_term
+		               AND current_rule.decision_leader_subterm = params.cas_leader_subterm))
 		    FOR UPDATE
 		  ),
 		  updated AS (
 		    UPDATE multigres.current_rule
-		    SET coordinator_term          = params.coordinator_term,
-		        leader_subterm            = locked.next_leader_subterm,
-		        leader_id                 = COALESCE(NULLIF(params.leader_id, ''), locked.leader_id),
-		        coordinator_id            = NULLIF(params.coordinator_id, ''),
-		        cohort_members            = COALESCE(params.cohort_members, locked.cohort_members),
-		        durability_policy_name    = COALESCE(NULLIF(params.durability_policy_name, ''), locked.durability_policy_name),
-		        durability_quorum_type    = COALESCE(NULLIF(params.durability_quorum_type, ''), locked.durability_quorum_type),
-		        durability_required_count = COALESCE(params.durability_required_count, locked.durability_required_count),
-		        created_at                = params.created_at
+		    SET proposal_coordinator_term          = params.coordinator_term,
+		        proposal_leader_subterm            = locked.next_leader_subterm,
+		        proposal_leader_id                 = COALESCE(NULLIF(params.leader_id, ''), locked.decision_leader_id),
+		        proposal_coordinator_id            = NULLIF(params.coordinator_id, ''),
+		        proposal_cohort_members            = COALESCE(params.cohort_members, locked.decision_cohort_members),
+		        proposal_durability_policy_name    = COALESCE(NULLIF(params.durability_policy_name, ''), locked.decision_durability_policy_name),
+		        proposal_durability_quorum_type    = COALESCE(NULLIF(params.durability_quorum_type, ''), locked.decision_durability_quorum_type),
+		        proposal_durability_required_count = COALESCE(params.durability_required_count, locked.decision_durability_required_count),
+		        created_at                         = params.created_at
 		    FROM locked, params
-		    -- Correlates the update target to the specific shard row. If locked is empty
-		    -- (any condition above failed), the cross-join produces zero rows here too.
 		    WHERE current_rule.shard_id = params.shard_id
-		    RETURNING current_rule.coordinator_term, current_rule.leader_subterm,
-		              current_rule.leader_id, current_rule.coordinator_id, current_rule.cohort_members,
-		              current_rule.durability_policy_name, current_rule.durability_quorum_type,
-		              current_rule.durability_required_count
+		    RETURNING current_rule.proposal_coordinator_term,
+		              current_rule.proposal_leader_subterm,
+		              current_rule.proposal_leader_id,
+		              current_rule.proposal_coordinator_id,
+		              current_rule.proposal_cohort_members,
+		              current_rule.proposal_durability_policy_name,
+		              current_rule.proposal_durability_quorum_type,
+		              current_rule.proposal_durability_required_count
 		  ),
 		  inserted AS (
 		    INSERT INTO multigres.rule_history
 		      (coordinator_term, leader_subterm, event_type, leader_id, coordinator_id,
 		       wal_position, operation, reason, cohort_members, accepted_members,
 		       durability_policy_name, durability_quorum_type, durability_required_count, created_at)
-		    SELECT updated.coordinator_term, updated.leader_subterm,
+		    SELECT updated.proposal_coordinator_term,
+		           updated.proposal_leader_subterm,
 		           params.event_type,
-		           updated.leader_id,
-		           updated.coordinator_id,
+		           updated.proposal_leader_id,
+		           updated.proposal_coordinator_id,
 		           NULLIF(params.wal_position, ''), NULLIF(params.operation, ''), params.reason,
-		           updated.cohort_members,
+		           updated.proposal_cohort_members,
 		           params.accepted_members,
-		           updated.durability_policy_name, updated.durability_quorum_type,
-		           updated.durability_required_count,
+		           updated.proposal_durability_policy_name,
+		           updated.proposal_durability_quorum_type,
+		           updated.proposal_durability_required_count,
 		           params.created_at
 		    FROM updated, params
 		    RETURNING coordinator_term
 		  )
 		-- Cross-joining inserted ensures a zero-row history insert (a bug) also returns zero
 		-- rows here, causing the caller to surface an error rather than silently succeeding.
-		SELECT updated.coordinator_term, updated.leader_subterm,
-		       updated.leader_id, updated.coordinator_id, updated.cohort_members,
-		       updated.durability_policy_name, updated.durability_quorum_type,
-		       updated.durability_required_count,
+		-- The LSN is captured here, after the sync-standby ack for this WAL write.
+		SELECT updated.proposal_coordinator_term,
+		       updated.proposal_leader_subterm,
+		       updated.proposal_leader_id,
+		       updated.proposal_coordinator_id,
+		       updated.proposal_cohort_members,
+		       updated.proposal_durability_policy_name,
+		       updated.proposal_durability_quorum_type,
+		       updated.proposal_durability_required_count,
 		       CASE
 		         WHEN pg_is_in_recovery()
 		           THEN COALESCE(pg_last_wal_receive_lsn(), pg_last_wal_replay_lsn())
@@ -532,14 +592,14 @@ func (rs *ruleStore) updateRule(ctx context.Context, update *ruleUpdateBuilder) 
 		dpRequiredCount,
 	)
 	if err != nil {
-		return nil, mterrors.Wrap(err, "failed to write rule history record")
+		return nil, mterrors.Wrap(err, "failed to write proposal")
 	}
 
 	// Zero rows means either:
 	//   - CAS check failed (expectedPreviousRule didn't match)
 	//   - advancement check failed (term/subterm would not advance current state — bug)
 	//   - shard row missing from current_rule (should never happen after initialisation)
-	if len(result.Rows) == 0 {
+	if len(step1Result.Rows) == 0 {
 		if update.previousRule != nil {
 			return nil, errRuleConflict
 		}
@@ -548,35 +608,67 @@ func (rs *ruleStore) updateRule(ctx context.Context, update *ruleUpdateBuilder) 
 			update.termNumber)
 	}
 
-	var coordinatorTerm, leaderSubterm int64
-	var leaderIDStr *string
-	var coordinatorIDStrResult string
-	var cohortNames []string
-	var durabilityPolicyName, durabilityQuorumType string
-	var durabilityRequiredCount int64
+	var proposalCoordTerm, proposalLeaderSubterm int64
+	var proposalLeaderIDStr *string
+	var proposalCoordinatorIDStr string
+	var proposalCohortNames []string
+	var proposalDPName, proposalDPQuorumType string
+	var proposalDPRequiredCount int64
 	var lsn string
-	if err := executor.ScanSingleRow(result,
-		&coordinatorTerm,
-		&leaderSubterm,
-		&leaderIDStr,
-		&coordinatorIDStrResult,
-		&cohortNames,
-		&durabilityPolicyName,
-		&durabilityQuorumType,
-		&durabilityRequiredCount,
+	if err := executor.ScanSingleRow(step1Result,
+		&proposalCoordTerm,
+		&proposalLeaderSubterm,
+		&proposalLeaderIDStr,
+		&proposalCoordinatorIDStr,
+		&proposalCohortNames,
+		&proposalDPName,
+		&proposalDPQuorumType,
+		&proposalDPRequiredCount,
 		&lsn,
 	); err != nil {
-		return nil, mterrors.Wrap(err, "failed to scan written rule position")
+		return nil, mterrors.Wrap(err, "failed to scan written proposal")
 	}
 
+	// Step 2: Mark the decision by copying proposal → decision columns and clearing
+	// the proposal columns. This is a local write (no sync replication wait).
+	markCtx, markCancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer markCancel()
+
+	if _, err := rs.queryService.QueryArgs(markCtx, `
+		UPDATE multigres.current_rule
+		SET decision_coordinator_term          = proposal_coordinator_term,
+		    decision_leader_subterm            = proposal_leader_subterm,
+		    decision_leader_id                 = proposal_leader_id,
+		    decision_coordinator_id            = proposal_coordinator_id,
+		    decision_cohort_members            = proposal_cohort_members,
+		    decision_durability_policy_name    = proposal_durability_policy_name,
+		    decision_durability_quorum_type    = proposal_durability_quorum_type,
+		    decision_durability_required_count = proposal_durability_required_count,
+		    proposal_coordinator_term          = NULL,
+		    proposal_leader_subterm            = NULL,
+		    proposal_leader_id                 = NULL,
+		    proposal_coordinator_id            = NULL,
+		    proposal_cohort_members            = NULL,
+		    proposal_durability_policy_name    = NULL,
+		    proposal_durability_quorum_type    = NULL,
+		    proposal_durability_required_count = NULL
+		WHERE shard_id = $1
+		  AND proposal_coordinator_term IS NOT NULL`,
+		[]byte("0")); err != nil {
+		return nil, mterrors.Wrap(err, "failed to mark decision")
+	}
+
+	// Build the PoolerPosition from the proposal values (which are now the decision).
+	// No proposal is in flight at this point — the decision was just marked.
 	pos, err := buildPoolerPosition(
-		coordinatorTerm, leaderSubterm,
-		leaderIDStr, coordinatorIDStrResult, cohortNames,
-		durabilityPolicyName, durabilityQuorumType, durabilityRequiredCount,
+		proposalCoordTerm, proposalLeaderSubterm,
+		proposalLeaderIDStr, proposalCoordinatorIDStr, proposalCohortNames,
+		proposalDPName, proposalDPQuorumType, proposalDPRequiredCount,
+		nil, nil, nil, nil, nil, nil, nil, nil,
 		lsn,
 	)
 	if err != nil {
-		return nil, mterrors.Wrap(err, "failed to parse written rule position")
+		return nil, mterrors.Wrap(err, "failed to parse written position")
 	}
 	rs.cacheRuleObservation(pos)
 	return pos, nil
@@ -637,18 +729,16 @@ func (rs *ruleStore) queryRuleHistory(ctx context.Context, limit int) ([]ruleHis
 // Helpers
 // ----------------------------------------------------------------------------
 
-// buildPoolerPosition constructs a *clustermetadatapb.PoolerPosition from raw DB column values.
-// leaderIDStr and coordinatorIDStr are app-name formatted strings (e.g. "zone1_pooler-name").
-// Durability fields are NOT NULL in the DB and are always populated in the returned position.
-func buildPoolerPosition(
+// buildShardRule constructs a ShardRule from raw DB column values.
+// leaderIDStr and coordinatorIDStr are app-name formatted strings.
+func buildShardRule(
 	coordinatorTerm, leaderSubterm int64,
 	leaderIDStr *string,
 	coordinatorIDStr string,
 	cohortNames []string,
 	durabilityPolicyName, durabilityQuorumType string,
 	durabilityRequiredCount int64,
-	lsn string,
-) (*clustermetadatapb.PoolerPosition, error) {
+) (*clustermetadatapb.ShardRule, error) {
 	rule := &clustermetadatapb.ShardRule{
 		RuleNumber: &clustermetadatapb.RuleNumber{
 			CoordinatorTerm: coordinatorTerm,
@@ -693,11 +783,71 @@ func buildPoolerPosition(
 		QuorumType:    clustermetadatapb.QuorumType(v),
 		RequiredCount: int32(durabilityRequiredCount),
 	}
+	return rule, nil
+}
 
-	return &clustermetadatapb.PoolerPosition{
-		Rule: rule,
-		Lsn:  lsn,
-	}, nil
+// buildPoolerPosition constructs a *clustermetadatapb.PoolerPosition from raw DB column values.
+// Decision columns are NOT NULL and always produce a populated Decision field.
+// Proposal columns are nullable: if proposalCoordTerm is nil there is no in-flight proposal
+// and Proposal is left nil. All other proposal pointer args are ignored when proposalCoordTerm is nil.
+func buildPoolerPosition(
+	decisionCoordTerm, decisionLeaderSubterm int64,
+	decisionLeaderIDStr *string,
+	decisionCoordinatorIDStr string,
+	decisionCohortNames []string,
+	decisionDPName, decisionDPQuorumType string,
+	decisionDPRequiredCount int64,
+	proposalCoordTerm, proposalLeaderSubterm *int64,
+	proposalLeaderIDStr *string,
+	proposalCoordinatorIDStr *string,
+	proposalCohortNames []string,
+	proposalDPName, proposalDPQuorumType *string,
+	proposalDPRequiredCount *int64,
+	lsn string,
+) (*clustermetadatapb.PoolerPosition, error) {
+	decision, err := buildShardRule(
+		decisionCoordTerm, decisionLeaderSubterm,
+		decisionLeaderIDStr, decisionCoordinatorIDStr, decisionCohortNames,
+		decisionDPName, decisionDPQuorumType, decisionDPRequiredCount,
+	)
+	if err != nil {
+		return nil, mterrors.Wrap(err, "failed to parse decision")
+	}
+
+	pos := &clustermetadatapb.PoolerPosition{Decision: decision, Lsn: lsn}
+
+	if proposalCoordTerm != nil {
+		var proposalCoordinatorIDStrVal string
+		if proposalCoordinatorIDStr != nil {
+			proposalCoordinatorIDStrVal = *proposalCoordinatorIDStr
+		}
+		var proposalDPNameVal, proposalDPQuorumTypeVal string
+		if proposalDPName != nil {
+			proposalDPNameVal = *proposalDPName
+		}
+		if proposalDPQuorumType != nil {
+			proposalDPQuorumTypeVal = *proposalDPQuorumType
+		}
+		var proposalDPRequiredCountVal int64
+		if proposalDPRequiredCount != nil {
+			proposalDPRequiredCountVal = *proposalDPRequiredCount
+		}
+		var proposalLeaderSubtermVal int64
+		if proposalLeaderSubterm != nil {
+			proposalLeaderSubtermVal = *proposalLeaderSubterm
+		}
+		proposal, err := buildShardRule(
+			*proposalCoordTerm, proposalLeaderSubtermVal,
+			proposalLeaderIDStr, proposalCoordinatorIDStrVal, proposalCohortNames,
+			proposalDPNameVal, proposalDPQuorumTypeVal, proposalDPRequiredCountVal,
+		)
+		if err != nil {
+			return nil, mterrors.Wrap(err, "failed to parse proposal")
+		}
+		pos.Proposal = proposal
+	}
+
+	return pos, nil
 }
 
 // appNamesToIDs converts a slice of app-name formatted strings to proto IDs.

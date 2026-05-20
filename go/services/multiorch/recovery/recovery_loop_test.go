@@ -734,7 +734,7 @@ func TestProcessShardProblems_DependencyEnforcement(t *testing.T) {
 			ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 				Id: primaryID,
 				CurrentPosition: &clustermetadatapb.PoolerPosition{
-					Rule: &clustermetadatapb.ShardRule{
+					Decision: &clustermetadatapb.ShardRule{
 						RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
 						LeaderId:   primaryID,
 					},
@@ -1062,7 +1062,7 @@ func TestRecoveryLoop_PostRecoveryRefresh(t *testing.T) {
 		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 			Id: primaryID,
 			CurrentPosition: &clustermetadatapb.PoolerPosition{
-				Rule: &clustermetadatapb.ShardRule{
+				Decision: &clustermetadatapb.ShardRule{
 					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
 					LeaderId:   primaryID,
 				},

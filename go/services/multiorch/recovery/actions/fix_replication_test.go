@@ -374,7 +374,7 @@ func TestFixReplicationAction_ExecuteSuccessNotReplicating_NewConsensusFlow(t *t
 		},
 	})
 	primaryPosition := &clustermetadatapb.PoolerPosition{
-		Rule: &clustermetadatapb.ShardRule{
+		Decision: &clustermetadatapb.ShardRule{
 			RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
 		},
 		Lsn: "0/1234",

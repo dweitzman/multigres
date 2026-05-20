@@ -1626,24 +1626,30 @@ func (x *ShardRule) GetCreationTime() *timestamppb.Timestamp {
 	return nil
 }
 
-// PoolerPosition describes a pooler's committed position in logical and physical
-// time. It captures the highest ShardRule this pooler has replicated (or written,
-// for a leader) and the latest WAL position.
+// PoolerPosition describes a pooler's position in logical and physical time.
+// It captures the last marked decision rule (durable, both cohorts confirmed)
+// and the latest WAL position. When a cohort transition is in progress, it also
+// carries the in-flight proposal rule.
 //
 // Used in Status, BeginTerm, EmergencyDemote, and Promote responses so the
 // coordinator can determine which pooler is most advanced when selecting a
 // promotion candidate.
 //
-// Comparison: prefer the pooler with the higher rule (coordinator_term first,
-// then leader_subterm). Break ties by LSN.
+// Comparison: prefer the pooler with the higher decision (coordinator_term first,
+// then leader_subterm). Break ties by LSN. The proposal field is not used for
+// ordering — it is not yet durable.
 type PoolerPosition struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The highest shard rule this pooler has committed to local WAL.
-	Rule *ShardRule `protobuf:"bytes,1,opt,name=rule,proto3" json:"rule,omitempty"`
+	// The last marked decision rule: the most recently confirmed durable rule on
+	// this node (written to WAL and acknowledged by the required quorum).
+	Decision *ShardRule `protobuf:"bytes,1,opt,name=decision,proto3" json:"decision,omitempty"`
+	// In-flight proposal rule, populated while a rule transition is in progress.
+	// Null when no transition is in progress.
+	Proposal *ShardRule `protobuf:"bytes,2,opt,name=proposal,proto3" json:"proposal,omitempty"`
 	// The current real-time WAL head at the time of reading. Note that this is likely
-	// beyond the LSN at which the rule was committed. For a primary: pg_current_wal_lsn().
+	// beyond the LSN at which the decision was committed. For a primary: pg_current_wal_lsn().
 	// For a standby: pg_last_wal_receive_lsn() (or pg_last_wal_replay_lsn() if receive is null).
-	Lsn           string `protobuf:"bytes,2,opt,name=lsn,proto3" json:"lsn,omitempty"`
+	Lsn           string `protobuf:"bytes,3,opt,name=lsn,proto3" json:"lsn,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1678,9 +1684,16 @@ func (*PoolerPosition) Descriptor() ([]byte, []int) {
 	return file_clustermetadata_proto_rawDescGZIP(), []int{17}
 }
 
-func (x *PoolerPosition) GetRule() *ShardRule {
+func (x *PoolerPosition) GetDecision() *ShardRule {
 	if x != nil {
-		return x.Rule
+		return x.Decision
+	}
+	return nil
+}
+
+func (x *PoolerPosition) GetProposal() *ShardRule {
+	if x != nil {
+		return x.Proposal
 	}
 	return nil
 }
@@ -1795,14 +1808,15 @@ type TermRevocation struct {
 	// recruiting. All poolers that accept the same recruitment store the same value.
 	// TODO: populate once BeginTermRequest carries this timestamp.
 	CoordinatorInitiatedAt *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=coordinator_initiated_at,json=coordinatorInitiatedAt,proto3" json:"coordinator_initiated_at,omitempty"`
-	// The rule the coordinator observed across the cohort at recruit time —
-	// the "from" side of the transition this recruit was authoring. Used as
-	// an override key during SetTermPrimary: if a subsequent SetTermPrimary carries a rule
-	// strictly greater than this, the cluster has demonstrably moved past
-	// the runaway recruit's premise and the revocation is moot.
-	OutgoingRule  *RuleNumber `protobuf:"bytes,4,opt,name=outgoing_rule,json=outgoingRule,proto3" json:"outgoing_rule,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// The highest marked decision the coordinator observed across the cohort at
+	// recruit time — the "from" side of the transition this recruit was authoring.
+	// Always a decision (never an in-flight proposal). Used as an override key
+	// during SetTermPrimary: if a subsequent SetTermPrimary carries a rule strictly
+	// greater than this, the cluster has demonstrably moved past the runaway
+	// recruit's premise and the revocation is moot.
+	OutgoingDecision *RuleNumber `protobuf:"bytes,4,opt,name=outgoing_decision,json=outgoingDecision,proto3" json:"outgoing_decision,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *TermRevocation) Reset() {
@@ -1856,9 +1870,9 @@ func (x *TermRevocation) GetCoordinatorInitiatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
-func (x *TermRevocation) GetOutgoingRule() *RuleNumber {
+func (x *TermRevocation) GetOutgoingDecision() *RuleNumber {
 	if x != nil {
-		return x.OutgoingRule
+		return x.OutgoingDecision
 	}
 	return nil
 }
@@ -1870,7 +1884,7 @@ func (x *TermRevocation) GetOutgoingRule() *RuleNumber {
 // The external actor certifies:
 //
 //  1. No pooler in the outgoing cohort can make progress beyond frozen_lsn
-//     under term_revocation.outgoing_rule — all durable transactions at the
+//     under term_revocation.outgoing_decision — all durable transactions at the
 //     time of revocation are captured at or below that position.
 //
 //  2. The term in term_revocation is globally unique; no other coordinator has
@@ -1881,12 +1895,12 @@ func (x *TermRevocation) GetOutgoingRule() *RuleNumber {
 type ExternallyCertifiedRevocation struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Records the unique coordinator term for this proposal, the coordinator
-	// facilitating the request, and the outgoing_rule the cohort is being
+	// facilitating the request, and the outgoing_decision the cohort is being
 	// transitioned from. The coordinator fills this in even though it is acting
 	// on behalf of an external operator request.
 	TermRevocation *TermRevocation `protobuf:"bytes,1,opt,name=term_revocation,json=termRevocation,proto3" json:"term_revocation,omitempty"`
 	// The LSN at which the outgoing cohort's progress is frozen. No durable writes
-	// occurred beyond this position under term_revocation.outgoing_rule. The chosen
+	// occurred beyond this position under term_revocation.outgoing_decision. The chosen
 	// leader's WAL position must meet or exceed this LSN.
 	FrozenLsn     string `protobuf:"bytes,2,opt,name=frozen_lsn,json=frozenLsn,proto3" json:"frozen_lsn,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -2316,18 +2330,19 @@ const file_clustermetadata_proto_rawDesc = "" +
 	"\x0ecohort_members\x18\x03 \x03(\v2\x13.clustermetadata.IDR\rcohortMembers\x12N\n" +
 	"\x11durability_policy\x18\x04 \x01(\v2!.clustermetadata.DurabilityPolicyR\x10durabilityPolicy\x12:\n" +
 	"\x0ecoordinator_id\x18\x05 \x01(\v2\x13.clustermetadata.IDR\rcoordinatorId\x12?\n" +
-	"\rcreation_time\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\fcreationTime\"R\n" +
-	"\x0ePoolerPosition\x12.\n" +
-	"\x04rule\x18\x01 \x01(\v2\x1a.clustermetadata.ShardRuleR\x04rule\x12\x10\n" +
-	"\x03lsn\x18\x02 \x01(\tR\x03lsn\"~\n" +
+	"\rcreation_time\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\fcreationTime\"\x92\x01\n" +
+	"\x0ePoolerPosition\x126\n" +
+	"\bdecision\x18\x01 \x01(\v2\x1a.clustermetadata.ShardRuleR\bdecision\x126\n" +
+	"\bproposal\x18\x02 \x01(\v2\x1a.clustermetadata.ShardRuleR\bproposal\x12\x10\n" +
+	"\x03lsn\x18\x03 \x01(\tR\x03lsn\"~\n" +
 	"\x12ReplicationPrimary\x12.\n" +
 	"\x04rule\x18\x01 \x01(\v2\x1a.clustermetadata.ShardRuleR\x04rule\x128\n" +
-	"\aprimary\x18\x02 \x01(\v2\x1e.clustermetadata.PoolerAddressR\aprimary\"\xa3\x02\n" +
+	"\aprimary\x18\x02 \x01(\v2\x1e.clustermetadata.PoolerAddressR\aprimary\"\xab\x02\n" +
 	"\x0eTermRevocation\x12,\n" +
 	"\x12revoked_below_term\x18\x01 \x01(\x03R\x10revokedBelowTerm\x12K\n" +
 	"\x17accepted_coordinator_id\x18\x02 \x01(\v2\x13.clustermetadata.IDR\x15acceptedCoordinatorId\x12T\n" +
-	"\x18coordinator_initiated_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x16coordinatorInitiatedAt\x12@\n" +
-	"\routgoing_rule\x18\x04 \x01(\v2\x1b.clustermetadata.RuleNumberR\foutgoingRule\"\x88\x01\n" +
+	"\x18coordinator_initiated_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x16coordinatorInitiatedAt\x12H\n" +
+	"\x11outgoing_decision\x18\x04 \x01(\v2\x1b.clustermetadata.RuleNumberR\x10outgoingDecision\"\x88\x01\n" +
 	"\x1dExternallyCertifiedRevocation\x12H\n" +
 	"\x0fterm_revocation\x18\x01 \x01(\v2\x1f.clustermetadata.TermRevocationR\x0etermRevocation\x12\x1d\n" +
 	"\n" +
@@ -2449,26 +2464,27 @@ var file_clustermetadata_proto_depIdxs = []int32{
 	20, // 22: clustermetadata.ShardRule.durability_policy:type_name -> clustermetadata.DurabilityPolicy
 	18, // 23: clustermetadata.ShardRule.coordinator_id:type_name -> clustermetadata.ID
 	34, // 24: clustermetadata.ShardRule.creation_time:type_name -> google.protobuf.Timestamp
-	22, // 25: clustermetadata.PoolerPosition.rule:type_name -> clustermetadata.ShardRule
-	22, // 26: clustermetadata.ReplicationPrimary.rule:type_name -> clustermetadata.ShardRule
-	13, // 27: clustermetadata.ReplicationPrimary.primary:type_name -> clustermetadata.PoolerAddress
-	18, // 28: clustermetadata.TermRevocation.accepted_coordinator_id:type_name -> clustermetadata.ID
-	34, // 29: clustermetadata.TermRevocation.coordinator_initiated_at:type_name -> google.protobuf.Timestamp
-	21, // 30: clustermetadata.TermRevocation.outgoing_rule:type_name -> clustermetadata.RuleNumber
-	25, // 31: clustermetadata.ExternallyCertifiedRevocation.term_revocation:type_name -> clustermetadata.TermRevocation
-	25, // 32: clustermetadata.ConsensusStatus.term_revocation:type_name -> clustermetadata.TermRevocation
-	23, // 33: clustermetadata.ConsensusStatus.current_position:type_name -> clustermetadata.PoolerPosition
-	24, // 34: clustermetadata.ConsensusStatus.replication_primary:type_name -> clustermetadata.ReplicationPrimary
-	18, // 35: clustermetadata.ConsensusStatus.id:type_name -> clustermetadata.ID
-	3,  // 36: clustermetadata.LeadershipStatus.signal:type_name -> clustermetadata.LeadershipSignal
-	28, // 37: clustermetadata.AvailabilityStatus.leadership_status:type_name -> clustermetadata.LeadershipStatus
-	30, // 38: clustermetadata.AvailabilityStatus.cohort_eligibility_status:type_name -> clustermetadata.CohortEligibilityStatus
-	4,  // 39: clustermetadata.CohortEligibilityStatus.signal:type_name -> clustermetadata.CohortEligibilitySignal
-	40, // [40:40] is the sub-list for method output_type
-	40, // [40:40] is the sub-list for method input_type
-	40, // [40:40] is the sub-list for extension type_name
-	40, // [40:40] is the sub-list for extension extendee
-	0,  // [0:40] is the sub-list for field type_name
+	22, // 25: clustermetadata.PoolerPosition.decision:type_name -> clustermetadata.ShardRule
+	22, // 26: clustermetadata.PoolerPosition.proposal:type_name -> clustermetadata.ShardRule
+	22, // 27: clustermetadata.ReplicationPrimary.rule:type_name -> clustermetadata.ShardRule
+	13, // 28: clustermetadata.ReplicationPrimary.primary:type_name -> clustermetadata.PoolerAddress
+	18, // 29: clustermetadata.TermRevocation.accepted_coordinator_id:type_name -> clustermetadata.ID
+	34, // 30: clustermetadata.TermRevocation.coordinator_initiated_at:type_name -> google.protobuf.Timestamp
+	21, // 31: clustermetadata.TermRevocation.outgoing_decision:type_name -> clustermetadata.RuleNumber
+	25, // 32: clustermetadata.ExternallyCertifiedRevocation.term_revocation:type_name -> clustermetadata.TermRevocation
+	25, // 33: clustermetadata.ConsensusStatus.term_revocation:type_name -> clustermetadata.TermRevocation
+	23, // 34: clustermetadata.ConsensusStatus.current_position:type_name -> clustermetadata.PoolerPosition
+	24, // 35: clustermetadata.ConsensusStatus.replication_primary:type_name -> clustermetadata.ReplicationPrimary
+	18, // 36: clustermetadata.ConsensusStatus.id:type_name -> clustermetadata.ID
+	3,  // 37: clustermetadata.LeadershipStatus.signal:type_name -> clustermetadata.LeadershipSignal
+	28, // 38: clustermetadata.AvailabilityStatus.leadership_status:type_name -> clustermetadata.LeadershipStatus
+	30, // 39: clustermetadata.AvailabilityStatus.cohort_eligibility_status:type_name -> clustermetadata.CohortEligibilityStatus
+	4,  // 40: clustermetadata.CohortEligibilityStatus.signal:type_name -> clustermetadata.CohortEligibilitySignal
+	41, // [41:41] is the sub-list for method output_type
+	41, // [41:41] is the sub-list for method input_type
+	41, // [41:41] is the sub-list for extension type_name
+	41, // [41:41] is the sub-list for extension extendee
+	0,  // [0:41] is the sub-list for field type_name
 }
 
 func init() { file_clustermetadata_proto_init() }

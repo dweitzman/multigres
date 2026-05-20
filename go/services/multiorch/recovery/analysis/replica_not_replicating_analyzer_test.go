@@ -60,7 +60,7 @@ func TestReplicaNotReplicatingAnalyzer_Analyze(t *testing.T) {
 			IsLeader: true,
 			ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 				CurrentPosition: &clustermetadatapb.PoolerPosition{
-					Rule: &clustermetadatapb.ShardRule{
+					Decision: &clustermetadatapb.ShardRule{
 						RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
 					},
 				},

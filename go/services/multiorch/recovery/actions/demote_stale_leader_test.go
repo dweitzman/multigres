@@ -72,7 +72,7 @@ func makeDemoteScenarioPoolers(t *testing.T, poolerStore *store.PoolerStore) (st
 	})
 
 	correctPosition := &clustermetadatapb.PoolerPosition{
-		Rule: &clustermetadatapb.ShardRule{
+		Decision: &clustermetadatapb.ShardRule{
 			RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
 			LeaderId:   correctLeaderID,
 		},

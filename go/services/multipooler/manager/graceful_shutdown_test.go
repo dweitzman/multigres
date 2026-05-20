@@ -173,7 +173,7 @@ func TestGracefulShutdown_AnnouncesBeforeStop(t *testing.T) {
 	// fails, mirroring the "postgres is down" reality.
 	rules := &fakeRuleStore{
 		pos: &clustermetadatapb.PoolerPosition{
-			Rule: &clustermetadatapb.ShardRule{
+			Decision: &clustermetadatapb.ShardRule{
 				LeaderId:   id,
 				RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: primaryTerm},
 			},

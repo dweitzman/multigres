@@ -85,7 +85,7 @@ func poolerWithLeaderTerm(t *testing.T, primaryTerm int64) *multiorchdatapb.Pool
 		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 			Id: id,
 			CurrentPosition: &clustermetadatapb.PoolerPosition{
-				Rule: &clustermetadatapb.ShardRule{
+				Decision: &clustermetadatapb.ShardRule{
 					LeaderId: id,
 					RuleNumber: &clustermetadatapb.RuleNumber{
 						CoordinatorTerm: primaryTerm,
