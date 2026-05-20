@@ -289,6 +289,74 @@ func TestValidateRevocation(t *testing.T) {
 			revocation: revocationAt5,
 			wantErr:    "coordinator term 6 >= revoked_below_term 5",
 		},
+		{
+			name: "ProposalBeyondOutgoing_NoIntent_Refused",
+			status: &clustermetadatapb.ConsensusStatus{
+				CurrentPosition: &clustermetadatapb.PoolerPosition{
+					Decision: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 3}},
+					Proposal: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5}},
+					Lsn:      "0/1",
+				},
+			},
+			revocation: &clustermetadatapb.TermRevocation{
+				RevokedBelowTerm:       10,
+				AcceptedCoordinatorId:  coordA,
+				CoordinatorInitiatedAt: ts1,
+				OutgoingDecision:       &clustermetadatapb.RuleNumber{CoordinatorTerm: 3},
+			},
+			wantErr: "in-flight proposal (5.0) is beyond outgoing_decision (3.0)",
+		},
+		{
+			name: "ProposalBeyondOutgoing_WithMatchingIntent_Accepted",
+			status: &clustermetadatapb.ConsensusStatus{
+				CurrentPosition: &clustermetadatapb.PoolerPosition{
+					Decision: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 3}},
+					Proposal: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5}},
+					Lsn:      "0/1",
+				},
+			},
+			revocation: &clustermetadatapb.TermRevocation{
+				RevokedBelowTerm:       10,
+				AcceptedCoordinatorId:  coordA,
+				CoordinatorInitiatedAt: ts1,
+				OutgoingDecision:       &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
+				PropagationIntent:      &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
+			},
+		},
+		{
+			name: "ProposalBeyondOutgoing_WithMismatchedIntent_Refused",
+			status: &clustermetadatapb.ConsensusStatus{
+				CurrentPosition: &clustermetadatapb.PoolerPosition{
+					Decision: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 3}},
+					Proposal: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 6}},
+					Lsn:      "0/1",
+				},
+			},
+			revocation: &clustermetadatapb.TermRevocation{
+				RevokedBelowTerm:       10,
+				AcceptedCoordinatorId:  coordA,
+				CoordinatorInitiatedAt: ts1,
+				OutgoingDecision:       &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
+				PropagationIntent:      &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
+			},
+			wantErr: "in-flight proposal (6.0) is beyond outgoing_decision (5.0)",
+		},
+		{
+			name: "ProposalAtOrBelowOutgoing_NoIntent_Accepted",
+			status: &clustermetadatapb.ConsensusStatus{
+				CurrentPosition: &clustermetadatapb.PoolerPosition{
+					Decision: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 3}},
+					Proposal: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4}},
+					Lsn:      "0/1",
+				},
+			},
+			revocation: &clustermetadatapb.TermRevocation{
+				RevokedBelowTerm:       10,
+				AcceptedCoordinatorId:  coordA,
+				CoordinatorInitiatedAt: ts1,
+				OutgoingDecision:       &clustermetadatapb.RuleNumber{CoordinatorTerm: 4},
+			},
+		},
 	}
 
 	for _, tc := range tests {

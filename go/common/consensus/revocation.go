@@ -197,7 +197,7 @@ func ValidateRevocation(status *clustermetadatapb.ConsensusStatus, revocation *c
 			ruleCoordTerm, revokedBelowTerm,
 		)
 	}
-	// If the node's committed decision is strictly beyond outgoing_rule, the
+	// If the node's committed decision is strictly beyond outgoing_decision, the
 	// revocation is stale: it describes a transition from a state the node has
 	// already moved past. Accepting it would allow a second bootstrap (or
 	// retried failover) based on obsolete cluster state.
@@ -209,6 +209,24 @@ func ValidateRevocation(status *clustermetadatapb.ConsensusStatus, revocation *c
 			revocation.GetOutgoingDecision().GetCoordinatorTerm(),
 			revocation.GetOutgoingDecision().GetLeaderSubterm(),
 		)
+	}
+	// If the node has an in-flight proposal beyond outgoing_decision, the
+	// coordinator's view is stale relative to WAL: it doesn't know about this
+	// entry. Exception: if the revocation carries a propagation_intent that
+	// exactly matches the proposal, the coordinator has explicitly acknowledged
+	// the entry and promises to propagate it rather than write a new WAL entry.
+	if proposalNum := pos.GetProposal().GetRuleNumber(); proposalNum != nil {
+		if CompareRuleNumbers(proposalNum, revocation.GetOutgoingDecision()) > 0 {
+			if !proto.Equal(proposalNum, revocation.GetPropagationIntent()) {
+				return fmt.Errorf(
+					"cannot accept revocation: in-flight proposal (%d.%d) is beyond outgoing_decision (%d.%d); use propagation_intent to acknowledge",
+					proposalNum.GetCoordinatorTerm(),
+					proposalNum.GetLeaderSubterm(),
+					revocation.GetOutgoingDecision().GetCoordinatorTerm(),
+					revocation.GetOutgoingDecision().GetLeaderSubterm(),
+				)
+			}
+		}
 	}
 
 	// Conditions 2 and 3: stored-revocation consistency.
