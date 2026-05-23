@@ -33,15 +33,21 @@ import (
 // cohort. The revocation term is derived from the highest term observed
 // across the provided ConsensusStatus values — the maximum of each node's
 // accepted revocation term and its recorded rule's coordinator term —
-// incremented by one. outgoing_rule is the highest RuleNumber recorded
-// across the cohort.
+// incremented by one. outgoing_decision is the highest decision RuleNumber
+// recorded across the cohort.
+//
+// If the highest position across the cohort is an in-flight proposal (i.e.
+// some node's proposal.rule_number > the highest decision), propagation_intent
+// is set to that proposal rule number. The caller can inspect this field to
+// decide whether to use the safe-proposal path (BuildSafeProposal) or the
+// propagation path (Propagate RPC + SetTermPrimary).
 //
 // statuses must be non-empty and at least one status must carry a recorded
 // rule. An empty list or a cohort with no recorded rules indicates the
 // caller has nothing meaningful to transition from — that's a fresh-cluster
 // or bootstrap scenario where the agent (e.g. multiorch's
 // AppointInitialLeader) constructs the TermRevocation directly with an
-// explicit outgoing_rule, rather than going through this helper.
+// explicit outgoing_decision, rather than going through this helper.
 func NewTermRevocation(
 	statuses []*clustermetadatapb.ConsensusStatus,
 	coordinatorID *clustermetadatapb.ID,
@@ -50,35 +56,47 @@ func NewTermRevocation(
 		return nil, errors.New("NewTermRevocation: statuses must be non-empty")
 	}
 	var maxTerm int64
-	var maxRule *clustermetadatapb.RuleNumber
+	var maxDecision *clustermetadatapb.RuleNumber
+	var maxProposal *clustermetadatapb.RuleNumber
 	for _, cs := range statuses {
 		if t := cs.GetTermRevocation().GetRevokedBelowTerm(); t > maxTerm {
 			maxTerm = t
 		}
-		ruleNum := cs.GetCurrentPosition().GetDecision().GetRuleNumber()
-		if ruleNum == nil {
-			continue
+		pos := cs.GetCurrentPosition()
+		if decisionNum := pos.GetDecision().GetRuleNumber(); decisionNum != nil {
+			if t := decisionNum.GetCoordinatorTerm(); t > maxTerm {
+				maxTerm = t
+			}
+			// Capture the first non-nil RuleNumber we see; bump only on strictly
+			// greater. The "first non-nil" path matters when the recorded rule
+			// is the zero RuleNumber — CompareRuleNumbers treats zero == nil, so
+			// without the explicit nil check we'd never lift maxDecision above nil.
+			if maxDecision == nil || CompareRuleNumbers(decisionNum, maxDecision) > 0 {
+				maxDecision = decisionNum
+			}
 		}
-		if t := ruleNum.GetCoordinatorTerm(); t > maxTerm {
-			maxTerm = t
-		}
-		// Capture the first non-nil RuleNumber we see; bump only on strictly
-		// greater. The "first non-nil" path matters when the recorded rule
-		// is the zero RuleNumber — CompareRuleNumbers treats zero == nil, so
-		// without the explicit nil check we'd never lift maxRule above nil.
-		if maxRule == nil || CompareRuleNumbers(ruleNum, maxRule) > 0 {
-			maxRule = ruleNum
+		if proposalNum := pos.GetProposal().GetRuleNumber(); proposalNum != nil {
+			if t := proposalNum.GetCoordinatorTerm(); t > maxTerm {
+				maxTerm = t
+			}
+			if maxProposal == nil || CompareRuleNumbers(proposalNum, maxProposal) > 0 {
+				maxProposal = proposalNum
+			}
 		}
 	}
-	if maxRule == nil {
-		return nil, errors.New("NewTermRevocation: no cohort member reports a recorded rule; agent should construct revocation directly with explicit outgoing_rule")
+	if maxDecision == nil {
+		return nil, errors.New("NewTermRevocation: no cohort member reports a recorded decision; agent should construct revocation directly with explicit outgoing_decision")
 	}
-	return &clustermetadatapb.TermRevocation{
+	rev := &clustermetadatapb.TermRevocation{
 		RevokedBelowTerm:       maxTerm + 1,
 		AcceptedCoordinatorId:  coordinatorID,
 		CoordinatorInitiatedAt: timestamppb.Now(),
-		OutgoingDecision:       maxRule,
-	}, nil
+		OutgoingDecision:       maxDecision,
+	}
+	if maxProposal != nil && CompareRuleNumbers(maxProposal, maxDecision) > 0 {
+		rev.PropagationIntent = maxProposal
+	}
+	return rev, nil
 }
 
 // IsRuleRevoked reports whether the pooler's recorded revocation forbids
