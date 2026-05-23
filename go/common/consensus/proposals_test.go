@@ -147,6 +147,21 @@ func makeUnrecruitedStatus(id *clustermetadatapb.ID, rule *clustermetadatapb.Sha
 	}
 }
 
+// makeStatusWithProposal builds a ConsensusStatus with a committed decision and
+// an in-flight proposal at the default LSN. Pass nil for rev when simulating a
+// node that rejected the recruiting revocation (its TermRevocation won't match).
+func makeStatusWithProposal(id *clustermetadatapb.ID, decision, proposal *clustermetadatapb.ShardRule, rev *clustermetadatapb.TermRevocation) *clustermetadatapb.ConsensusStatus {
+	return &clustermetadatapb.ConsensusStatus{
+		Id:             id,
+		TermRevocation: rev,
+		CurrentPosition: &clustermetadatapb.PoolerPosition{
+			Decision: decision,
+			Proposal: proposal,
+			Lsn:      "0/1000000",
+		},
+	}
+}
+
 // cellPoolers holds the standard test pooler IDs (a..f) for one cell. The
 // `all` field is the same six IDs as a slice in order, useful for
 // `cohort := poolerIDs.zone1.all[:3]` style cohort construction.
@@ -2021,4 +2036,188 @@ func TestCohortIntersect_NilIDSkipped(t *testing.T) {
 	result := cohortIntersect(cohort, statuses)
 	require.Len(t, result, 1)
 	assert.Equal(t, "a", result[0].GetName())
+}
+
+func TestBuildSafeProposal_PropagationIntentRejected(t *testing.T) {
+	// BuildSafeProposal must not be used with propagation-recruitment revocations.
+	// Propagation of an in-WAL rule change is handled by recruiting with
+	// propagation_intent, then driving SetTermPrimary directly — no new proposal
+	// is written.
+	zone1 := poolerIDs.zone1
+	cohort := zone1.all[:3]
+	outgoingRule := makeRule(ruleNum(3, 2), atLeast(2), cohort...)
+	newRule := makeRule(ruleNum(6, 0), atLeast(2), cohort...)
+
+	rev := coordRevocation(6, ruleNum(3, 2))
+	rev.PropagationIntent = ruleNum(3, 5)
+
+	statuses := []*clustermetadatapb.ConsensusStatus{
+		makeStatus(zone1.a, outgoingRule, rev),
+		makeStatus(zone1.b, outgoingRule, rev),
+		makeStatus(zone1.c, outgoingRule, rev),
+	}
+	_, err := BuildSafeProposal(rev, statuses, proposeFirstEligible(newRule))
+	require.ErrorContains(t, err, "propagation_intent")
+}
+
+func TestCheckProposalPossible_PropagationIntentRejected(t *testing.T) {
+	zone1 := poolerIDs.zone1
+	cohort := zone1.all[:3]
+	outgoingRule := makeRule(ruleNum(3, 2), atLeast(2), cohort...)
+	newRule := makeRule(ruleNum(6, 0), atLeast(2), cohort...)
+
+	rev := coordRevocation(6, ruleNum(3, 2))
+	rev.PropagationIntent = ruleNum(3, 5)
+
+	statuses := []*clustermetadatapb.ConsensusStatus{
+		makeUnrecruitedStatus(zone1.a, outgoingRule),
+		makeUnrecruitedStatus(zone1.b, outgoingRule),
+		makeUnrecruitedStatus(zone1.c, outgoingRule),
+	}
+	err := CheckProposalPossible(rev, statuses, proposeFirstEligible(newRule))
+	require.ErrorContains(t, err, "propagation_intent")
+}
+
+func TestBuildSafeProposal_NodeWithProposalExcluded(t *testing.T) {
+	// A node that has an in-flight proposal (proposal.RuleNumber > outgoing_decision)
+	// will reject a safe revocation (ValidateRevocation returns an error) because the
+	// coordinator's outgoing_decision is stale relative to the node's in-flight state.
+	// As a result, filterByRevocation excludes it from the recruited set.
+	zone1 := poolerIDs.zone1
+	cohort := zone1.all[:3]
+	outgoingRule := makeRule(ruleNum(3, 5), atLeast(2), cohort...)
+	inFlightProposal := makeRule(ruleNum(3, 7), atLeast(2), cohort...)
+	newRule := makeRule(ruleNum(6, 0), atLeast(2), cohort...)
+	rev := revocation(6, ruleNum(3, 5)) // safe revocation, no propagation_intent
+
+	t.Run("quorum holds with remaining nodes", func(t *testing.T) {
+		// Node B has a proposal (3.7) beyond outgoing_decision (3.5) and rejected the
+		// safe revocation. A and C form quorum (atLeast(2) of 3).
+		nodeB := makeStatusWithProposal(zone1.b, outgoingRule, inFlightProposal, nil) // nil rev = rejected
+		statuses := []*clustermetadatapb.ConsensusStatus{
+			makeStatus(zone1.a, outgoingRule, rev),
+			nodeB,
+			makeStatus(zone1.c, outgoingRule, rev),
+		}
+		proposal, err := BuildSafeProposal(rev, statuses, proposeFirstEligible(newRule))
+		require.NoError(t, err)
+		// A is the first eligible leader (B excluded, C also eligible but A is first alphabetically)
+		assert.Equal(t, "pooler-a", proposal.GetProposalLeader().GetId().GetName())
+	})
+
+	t.Run("quorum fails when too many nodes have proposals", func(t *testing.T) {
+		// B and C both have proposals and rejected the safe revocation.
+		// Only A was recruited — insufficient for atLeast(2) of 3.
+		nodeBNoRev := makeStatusWithProposal(zone1.b, outgoingRule, inFlightProposal, nil)
+		nodeCNoRev := makeStatusWithProposal(zone1.c, outgoingRule, inFlightProposal, nil)
+		statuses := []*clustermetadatapb.ConsensusStatus{
+			makeStatus(zone1.a, outgoingRule, rev),
+			nodeBNoRev,
+			nodeCNoRev,
+		}
+		_, err := BuildSafeProposal(rev, statuses, proposeFirstEligible(newRule))
+		require.ErrorContains(t, err, "insufficient outgoing cohort recruitment")
+	})
+}
+
+func TestCheckProposalPossible_NodeWithProposalExcluded(t *testing.T) {
+	// filterByPotentialRevocation calls ValidateRevocation for each node.
+	// A node with an in-flight proposal beyond outgoing_decision fails ValidateRevocation
+	// for a safe revocation (no propagation_intent), so it is excluded from candidates.
+	zone1 := poolerIDs.zone1
+	cohort := zone1.all[:3]
+	outgoingRule := makeRule(ruleNum(3, 5), atLeast(2), cohort...)
+	proposalRule := makeRule(ruleNum(3, 7), atLeast(2), cohort...)
+	newRule := makeRule(ruleNum(6, 0), atLeast(2), cohort...)
+	rev := coordRevocation(6, ruleNum(3, 5))
+
+	t.Run("excluded node does not prevent quorum", func(t *testing.T) {
+		// Node B has a proposal (3.7) beyond outgoing_decision (3.5): excluded.
+		// A and C form quorum.
+		statuses := []*clustermetadatapb.ConsensusStatus{
+			makeUnrecruitedStatus(zone1.a, outgoingRule),
+			makeStatusWithProposal(zone1.b, outgoingRule, proposalRule, nil),
+			makeUnrecruitedStatus(zone1.c, outgoingRule),
+		}
+		err := CheckProposalPossible(rev, statuses, proposeFirstEligible(newRule))
+		require.NoError(t, err)
+	})
+
+	t.Run("all nodes have proposals: no candidates", func(t *testing.T) {
+		statuses := []*clustermetadatapb.ConsensusStatus{
+			makeStatusWithProposal(zone1.a, outgoingRule, proposalRule, nil),
+			makeStatusWithProposal(zone1.b, outgoingRule, proposalRule, nil),
+			makeStatusWithProposal(zone1.c, outgoingRule, proposalRule, nil),
+		}
+		err := CheckProposalPossible(rev, statuses, proposeFirstEligible(newRule))
+		require.ErrorContains(t, err, "no nodes could accept the proposed revocation")
+	})
+}
+
+// TestPropagationRecruitment documents the propagation-recruitment flow:
+// when a coordinator discovers a node with an in-WAL rule change that never
+// reached quorum (the leader failed mid-proposal), it can finalize that change
+// by recruiting with propagation_intent matching the in-WAL rule number, then
+// driving SetTermPrimary directly rather than writing a new rule.
+//
+// Scenario (rule numbers are coordinator_term.leader_subterm):
+//   - Last decided rule: 3.2 (outgoing_decision)
+//   - In-WAL proposal: 3.5 (written to node B's WAL; original leader gone)
+//   - Coordinator recruits at term 6 with outgoing_decision=3.2 and
+//     propagation_intent=3.5, signalling it will propagate rule 3.5
+//   - Node B accepts the revocation (ValidateRevocation passes because
+//     propagation_intent matches its in-flight proposal)
+//   - Coordinator then issues SetTermPrimary at the recruited term (6),
+//     pointing all followers at node B as their replication source
+//   - Node B finalises rule 3.5 once quorum is reached; term-6 recruitment
+//     invalidates any prior recruitments rooted at rule 3.2
+func TestPropagationRecruitment(t *testing.T) {
+	zone1 := poolerIDs.zone1
+	cohort := zone1.all[:3]
+	outgoingDecisionRule := makeRule(ruleNum(3, 2), atLeast(2), cohort...)
+	inWALProposalRule := makeRule(ruleNum(3, 5), atLeast(2), cohort...)
+
+	// Propagation revocation: recruit at term 6, promise to propagate rule 3.5.
+	propRev := coordRevocation(6, ruleNum(3, 2))
+	propRev.PropagationIntent = ruleNum(3, 5)
+
+	t.Run("node with matching proposal is accepted as candidate", func(t *testing.T) {
+		// Node B has the in-WAL proposal 3.5; ValidateRevocation accepts propRev
+		// because PropagationIntent matches the proposal exactly.
+		statuses := []*clustermetadatapb.ConsensusStatus{
+			makeUnrecruitedStatus(zone1.a, outgoingDecisionRule),
+			makeStatusWithProposal(zone1.b, outgoingDecisionRule, inWALProposalRule, nil),
+			makeUnrecruitedStatus(zone1.c, outgoingDecisionRule),
+		}
+		candidates := filterByPotentialRevocation(propRev, statuses)
+		var names []string
+		for _, cs := range candidates {
+			names = append(names, cs.GetId().GetName())
+		}
+		assert.Contains(t, names, zone1.b.GetName())
+	})
+
+	t.Run("node with mismatched proposal is rejected as candidate", func(t *testing.T) {
+		// Node B has a different in-flight proposal (3.9, not 3.5): ValidateRevocation
+		// rejects it because PropagationIntent does not match.
+		differentProposal := makeRule(ruleNum(3, 9), atLeast(2), cohort...)
+		statuses := []*clustermetadatapb.ConsensusStatus{
+			makeStatusWithProposal(zone1.b, outgoingDecisionRule, differentProposal, nil),
+		}
+		candidates := filterByPotentialRevocation(propRev, statuses)
+		assert.Empty(t, candidates, "node with mismatched proposal must not be recruited for propagation")
+	})
+
+	t.Run("BuildSafeProposal rejected: propagation path uses SetTermPrimary instead", func(t *testing.T) {
+		// After propagation recruitment, the coordinator does not call BuildSafeProposal.
+		// It issues SetTermPrimary pointing at the node that holds the in-WAL change.
+		// This test confirms that BuildSafeProposal explicitly refuses a propagation revocation.
+		statuses := []*clustermetadatapb.ConsensusStatus{
+			makeStatus(zone1.a, outgoingDecisionRule, propRev),
+			makeStatus(zone1.b, outgoingDecisionRule, propRev),
+			makeStatus(zone1.c, outgoingDecisionRule, propRev),
+		}
+		_, err := BuildSafeProposal(propRev, statuses, proposeFirstEligible(makeRule(ruleNum(6, 0), atLeast(2), cohort...)))
+		require.ErrorContains(t, err, "propagation_intent")
+	})
 }

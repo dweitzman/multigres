@@ -285,6 +285,9 @@ func buildProposalCore(
 	discover discoverer,
 	buildProposal func(RecruitmentResult) (*consensusdatapb.CoordinatorProposal, error),
 ) (*consensusdatapb.CoordinatorProposal, error) {
+	if revocation.GetPropagationIntent() != nil {
+		return nil, errors.New("revocation has propagation_intent set: use propagation recruitment (SetTermPrimary) to finalize an in-WAL rule change, not a proposal-building function")
+	}
 	if len(recruitedStatuses) == 0 {
 		return nil, errors.New("empty list of statuses")
 	}

@@ -469,6 +469,18 @@ message TermRevocation {
   // greater than this, the cluster has demonstrably moved past the runaway
   // recruit's premise and the revocation is moot.
   RuleNumber outgoing_decision = 4;
+
+  // propagation_intent, when set, indicates this is a propagation recruitment:
+  // the coordinator discovered an in-WAL proposal at this rule number and
+  // intends to propagate it to quorum rather than write a new WAL entry.
+  //
+  // ValidateRevocation allows the revocation when a follower's in-flight
+  // proposal matches propagation_intent exactly (the coordinator has
+  // acknowledged the entry). Without this field, any in-flight proposal
+  // beyond outgoing_decision causes rejection (coordinator view is stale).
+  //
+  // propagation_intent must equal outgoing_decision.
+  RuleNumber propagation_intent = 5;
 }
 
 // ExternallyCertifiedRevocation certifies that the outgoing cohort's revocation
