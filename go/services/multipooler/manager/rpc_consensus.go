@@ -1018,31 +1018,158 @@ func (pm *MultiPoolerManager) ConsensusStatus(ctx context.Context, req *consensu
 // in the term revocation) rather than writing a fresh rule via Propose.
 //
 // The handler:
-//  1. Acquires the action lock.
-//  2. Verifies the expected proposal matches the node's in-flight proposal.
-//  3. Drives the proposal to sync-standby quorum (via the existing GUC machinery).
-//  4. Marks the proposal as decided using markProposalAsDecision.
-//  5. (Future) Promotes postgres if the node is in recovery, then writes a
-//     self-promotion rule at the new term.
-//
-// TODO: This is a partial implementation. The full design requires threading the
-// SyncStandbyManager "Both" GUC application, the promotion hook, and the
-// self-promotion rule write through the new rule_store architecture. For now,
-// this stub returns UNIMPLEMENTED so coordinator-side propagation logic can be
-// developed against a well-defined RPC surface; the multipooler handler will
-// be completed in a follow-up.
+//  1. Validates inputs (term_revocation, expected_proposal, propagation_intent
+//     matches expected_proposal.rule_number).
+//  2. Validates the revocation against the local position; requires Recruit ran
+//     for this term (storedTerm == revokedBelowTerm).
+//  3. Verifies postgres is in standby mode with no primary_conninfo (Recruit's
+//     post-condition).
+//  4. Drives the in-WAL proposal to sync-standby quorum and marks it as decision
+//     via ruleStore.propagateProposal, which:
+//     a. Applies the "Both" GUC (outgoing ∪ incoming cohort).
+//     b. Calls the promotion hook (postgres becomes primary).
+//     c. Emits pg_logical_emit_message as the quorum gate.
+//     d. Marks the proposal as decision (proposal_* → decision_*).
+//     e. Applies the "Incoming" GUC (just the new cohort).
+//  5. Writes a self-promotion rule at (revoked_below_term, 0) naming this pooler
+//     as leader; cohort and durability policy carry forward from the propagated
+//     proposal.
+//  6. Updates topology to PRIMARY/SERVING and records the new (rule, primary)
+//     in the consensus state for the health stream.
 func (pm *MultiPoolerManager) Propagate(ctx context.Context, req *consensusdatapb.PropagateRequest) (*consensusdatapb.PropagateResponse, error) {
-	if err := pm.checkReady(); err != nil {
+	var err error
+	ctx, err = pm.actionLock.Acquire(ctx, "Propagate")
+	if err != nil {
 		return nil, err
 	}
-	if req.GetTermRevocation().GetPropagationIntent() == nil {
-		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
-			"Propagate requires term_revocation.propagation_intent to be set")
+	defer pm.actionLock.Release(ctx)
+
+	revocation := req.GetTermRevocation()
+	if revocation == nil {
+		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "term_revocation is required")
 	}
-	if req.GetExpectedProposal() == nil {
-		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
-			"Propagate requires expected_proposal to be set")
+	expectedProposal := req.GetExpectedProposal()
+	if expectedProposal == nil {
+		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "expected_proposal is required")
 	}
-	return nil, mterrors.New(mtrpcpb.Code_UNIMPLEMENTED,
-		"Propagate handler not yet implemented; full propagation flow lands with the SyncStandbyManager 'Both' GUC integration")
+	propagationIntent := revocation.GetPropagationIntent()
+	if propagationIntent == nil {
+		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "term_revocation.propagation_intent is required")
+	}
+	if commonconsensus.CompareRuleNumbers(propagationIntent, expectedProposal.GetRuleNumber()) != 0 {
+		return nil, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,
+			"term_revocation.propagation_intent %v does not match expected_proposal.rule_number %v",
+			propagationIntent, expectedProposal.GetRuleNumber())
+	}
+
+	revokedBelowTerm := revocation.GetRevokedBelowTerm()
+	coordinatorID := revocation.GetAcceptedCoordinatorId()
+
+	pm.logger.InfoContext(ctx, "Propagate received",
+		"revoked_below_term", revokedBelowTerm,
+		"coordinator_id", coordinatorID.GetName(),
+		"propagation_intent", propagationIntent)
+
+	// Step 1: validate the term revocation. getConsensusStatus also reads the
+	// current DB position, giving us the decision CAS baseline below.
+	beforeStatus, err := pm.getConsensusStatus(ctx)
+	if err != nil {
+		return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, err.Error())
+	}
+	if err := commonconsensus.ValidateRevocation(beforeStatus, revocation); err != nil {
+		return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, err.Error())
+	}
+	storedTerm := beforeStatus.GetTermRevocation().GetRevokedBelowTerm()
+	if storedTerm != revokedBelowTerm {
+		return nil, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
+			"must Recruit before Propagate: stored term %d != revocation term %d",
+			storedTerm, revokedBelowTerm)
+	}
+
+	// Step 2: verify postgres is in standby mode with no primary_conninfo.
+	inRecovery, err := pm.isInRecovery(ctx)
+	if err != nil {
+		return nil, mterrors.Wrap(err, "failed to verify standby state before propagate")
+	}
+	if !inRecovery {
+		return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
+			"postgres is not in standby mode; call Recruit before Propagate")
+	}
+	connInfo, err := pm.readPrimaryConnInfo(ctx)
+	if err != nil {
+		return nil, mterrors.Wrap(err, "failed to verify primary_conninfo before propagate")
+	}
+	if connInfo != "" {
+		return nil, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
+			"primary_conninfo is set (%q); call Recruit before Propagate to stop replication", connInfo)
+	}
+
+	// Derive the decision CAS baseline from the position already read.
+	currentDecisionRN := beforeStatus.GetCurrentPosition().GetDecision().GetRuleNumber()
+
+	// Step 3: drive the proposal to quorum and mark it as decision. The
+	// promotion hook runs after the pre-promote GUC and before the WAL emission.
+	state, err := pm.checkPromotionState(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := pm.rules.updateRule(ctx, newPropagationUpdate(
+		expectedProposal,
+		currentDecisionRN.GetCoordinatorTerm(),
+		currentDecisionRN.GetLeaderSubterm(),
+	).withPromotionHook(func(hookCtx context.Context) error {
+		if err := pm.clearResignedLeaderAtTerm(hookCtx); err != nil {
+			return mterrors.Wrap(err, "failed to clear resigned primary term")
+		}
+		return pm.promoteStandbyToPrimary(hookCtx, state)
+	})); err != nil {
+		return nil, mterrors.Wrap(err, "propagate failed")
+	}
+
+	// Step 4: self-promotion — write a new rule at (revokedBelowTerm, 0) naming
+	// this pooler as leader. Cohort and durability policy carry forward from the
+	// propagated proposal.
+	finalLSN, err := pm.getPrimaryLSN(ctx)
+	if err != nil {
+		return nil, err
+	}
+	selfPos, err := pm.rules.updateRule(ctx, newRuleUpdate(
+		revokedBelowTerm,
+		coordinatorID,
+		"promotion",
+		"propagate",
+		time.Now()).
+		withLeader(pm.serviceID).
+		withCohort(expectedProposal.GetCohortMembers()).
+		withDurabilityPolicy(expectedProposal.GetDurabilityPolicy()).
+		withWALPosition(finalLSN))
+	if err != nil {
+		return nil, mterrors.Wrap(err, "propagate failed: could not write self-promotion rule")
+	}
+
+	pm.healthStreamer.UpdateLeaderObservation(&poolerserver.LeaderObservation{
+		LeaderID:   pm.serviceID,
+		LeaderTerm: revokedBelowTerm,
+	})
+
+	// IMPORTANT: updateTopologyAfterPromotion must only be called after the
+	// self-promotion updateRule succeeds (same invariant as Propose).
+	if err := pm.updateTopologyAfterPromotion(ctx, state); err != nil {
+		pm.logger.WarnContext(ctx, "Failed to update topology after propagate", "error", err)
+	}
+
+	selfAddr := &clustermetadatapb.PoolerAddress{
+		Id:           pm.serviceID,
+		Host:         pm.multipooler.GetHostname(),
+		PostgresPort: pm.multipooler.GetPortMap()["postgres"],
+	}
+	pm.consensusState.RecordTermPrimary(selfPos.GetDecision(), selfAddr)
+
+	pm.logger.InfoContext(ctx, "Propagate complete", "revoked_below_term", revokedBelowTerm)
+
+	cs, err := pm.getCachedConsensusStatus()
+	if err != nil {
+		return nil, mterrors.Wrap(err, "failed to build consensus status")
+	}
+	return &consensusdatapb.PropagateResponse{ConsensusStatus: cs}, nil
 }

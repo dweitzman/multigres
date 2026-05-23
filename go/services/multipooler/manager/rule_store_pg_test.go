@@ -834,8 +834,169 @@ func TestRuleStorePG_UpdateRule_DurabilityPolicyAchievabilityRejected(t *testing
 }
 
 // ----------------------------------------------------------------------------
+// Propagation helpers
+// ----------------------------------------------------------------------------
+
+// noopPromotionHook is a placeholder promotionFn for tests where the test
+// postgres is already a primary; the hook does nothing.
+func noopPromotionHook(_ context.Context) error { return nil }
+
+// TestRuleStorePG_MarkProposalAsDecision_PromotesProposal seeds an in-flight proposal
+// directly into current_rule, then verifies markProposalAsDecision copies the proposal
+// columns to the decision columns and clears the proposal columns.
+func TestRuleStorePG_MarkProposalAsDecision_PromotesProposal(t *testing.T) {
+	skipIfNoPG(t)
+	ctx := withTestActionLock(t)
+	resetRuleStoreTables(ctx, t)
+
+	rs, conn := newTestRuleStore(ctx, t)
+	defer conn.Close()
+
+	// Establish a decision at term 1, subterm 0 via the normal path so we have a
+	// realistic baseline (cohort, durability policy, etc.) for the proposal to advance.
+	coordinatorID := testPoolerID(t, "zone1", "coordinator-1")
+	leaderID := testPoolerID(t, "zone1", "leader-1")
+	cohort := []*clustermetadatapb.ID{leaderID, testPoolerID(t, "zone1", "leader-2")}
+	_, err := rs.updateRule(ctx,
+		newRuleUpdate(1, coordinatorID, "promotion", "baseline", time.Now()).
+			withLeader(leaderID).
+			withCohort(cohort),
+	)
+	require.NoError(t, err)
+
+	// Inject an in-flight proposal at term 2, subterm 0 directly via SQL.
+	injectProposal(ctx, t, conn, 2, 0, "zone1_leader-2", "zone1_coordinator-1")
+
+	_, err = rs.markProposalAsDecision(ctx, 2, 0)
+	require.NoError(t, err)
+
+	pos, err := rs.observePosition(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), pos.GetDecision().GetRuleNumber().GetCoordinatorTerm(), "decision term must advance to the proposal term")
+	assert.Equal(t, int64(0), pos.GetDecision().GetRuleNumber().GetLeaderSubterm())
+	assert.Equal(t, "leader-2", pos.GetDecision().GetLeaderId().GetName(), "decision leader must match proposal leader")
+	assert.Nil(t, pos.GetProposal(), "proposal columns must be cleared after mark-decision")
+}
+
+// TestRuleStorePG_MarkProposalAsDecision_NoMatchingProposal verifies that
+// markProposalAsDecision returns FAILED_PRECONDITION when no proposal at the
+// expected term/subterm is present.
+func TestRuleStorePG_MarkProposalAsDecision_NoMatchingProposal(t *testing.T) {
+	skipIfNoPG(t)
+	ctx := withTestActionLock(t)
+	resetRuleStoreTables(ctx, t)
+
+	rs, conn := newTestRuleStore(ctx, t)
+	defer conn.Close()
+
+	// Fresh state has no in-flight proposal.
+	_, err := rs.markProposalAsDecision(ctx, 2, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "proposal (2,0) not found")
+}
+
+// TestRuleStorePG_PropagateProposal_Success exercises the full propagation path:
+// inject a proposal, call updateRule with newPropagationUpdate, verify the proposal
+// is finalised as the decision.
+func TestRuleStorePG_PropagateProposal_Success(t *testing.T) {
+	skipIfNoPG(t)
+	ctx := withTestActionLock(t)
+	resetRuleStoreTables(ctx, t)
+
+	rs, conn := newTestRuleStore(ctx, t)
+	defer conn.Close()
+
+	coordinatorID := testPoolerID(t, "zone1", "coordinator-1")
+	leaderID := testPoolerID(t, "zone1", "leader-1")
+	cohort := []*clustermetadatapb.ID{leaderID, testPoolerID(t, "zone1", "leader-2")}
+	_, err := rs.updateRule(ctx,
+		newRuleUpdate(1, coordinatorID, "promotion", "baseline", time.Now()).
+			withLeader(leaderID).
+			withCohort(cohort),
+	)
+	require.NoError(t, err)
+
+	// Inject an in-flight proposal at term 2, subterm 0 with the same cohort and
+	// durability policy as the baseline (carried via decision_* in injectProposal).
+	injectProposal(ctx, t, conn, 2, 0, "zone1_leader-2", "zone1_coordinator-1")
+
+	expectedProposal := &clustermetadatapb.ShardRule{
+		RuleNumber:       &clustermetadatapb.RuleNumber{CoordinatorTerm: 2, LeaderSubterm: 0},
+		CohortMembers:    cohort,
+		DurabilityPolicy: testBootstrapPolicy(),
+	}
+	// CAS baseline is the decision we established above (term 1, subterm 0).
+	pos, err := rs.updateRule(ctx, newPropagationUpdate(expectedProposal, 1, 0).
+		withPromotionHook(noopPromotionHook))
+	require.NoError(t, err)
+	require.NotNil(t, pos)
+	assert.Equal(t, int64(2), pos.GetDecision().GetRuleNumber().GetCoordinatorTerm())
+	assert.Equal(t, int64(0), pos.GetDecision().GetRuleNumber().GetLeaderSubterm())
+	assert.Nil(t, pos.GetProposal(), "proposal must be cleared after propagation")
+}
+
+// TestRuleStorePG_PropagateProposal_CASMismatch verifies that propagateProposal
+// rejects the update when the CAS baseline does not match the current decision.
+func TestRuleStorePG_PropagateProposal_CASMismatch(t *testing.T) {
+	skipIfNoPG(t)
+	ctx := withTestActionLock(t)
+	resetRuleStoreTables(ctx, t)
+
+	rs, conn := newTestRuleStore(ctx, t)
+	defer conn.Close()
+
+	coordinatorID := testPoolerID(t, "zone1", "coordinator-1")
+	leaderID := testPoolerID(t, "zone1", "leader-1")
+	cohort := []*clustermetadatapb.ID{leaderID, testPoolerID(t, "zone1", "leader-2")}
+	_, err := rs.updateRule(ctx,
+		newRuleUpdate(1, coordinatorID, "promotion", "baseline", time.Now()).
+			withLeader(leaderID).
+			withCohort(cohort),
+	)
+	require.NoError(t, err)
+
+	injectProposal(ctx, t, conn, 2, 0, "zone1_leader-2", "zone1_coordinator-1")
+
+	expectedProposal := &clustermetadatapb.ShardRule{
+		RuleNumber:       &clustermetadatapb.RuleNumber{CoordinatorTerm: 2, LeaderSubterm: 0},
+		CohortMembers:    cohort,
+		DurabilityPolicy: testBootstrapPolicy(),
+	}
+	// Pass a CAS baseline that does not match the current decision (term 1, subterm 0).
+	_, err = rs.updateRule(ctx, newPropagationUpdate(expectedProposal, 99, 99).
+		withPromotionHook(noopPromotionHook))
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errRuleConflict), "expected errRuleConflict, got %v", err)
+
+	// Proposal must still be in flight; markProposalAsDecision must still find it.
+	_, err = rs.markProposalAsDecision(ctx, 2, 0)
+	require.NoError(t, err)
+}
+
+// ----------------------------------------------------------------------------
 // Helpers
 // ----------------------------------------------------------------------------
+
+// injectProposal writes proposal columns to the current_rule row directly via SQL,
+// bypassing updateRule. This simulates a stuck in-WAL proposal left behind by a
+// dead leader that the propagation path is designed to finalise.
+func injectProposal(ctx context.Context, t *testing.T, conn *client.Conn, term, subterm int64, leaderAppName, coordinatorAppName string) {
+	t.Helper()
+	qs := &connQueryService{conn: conn}
+	_, err := qs.QueryArgs(ctx, `
+		UPDATE multigres.current_rule
+		SET proposal_coordinator_term         = $1,
+		    proposal_leader_subterm           = $2,
+		    proposal_leader_id                = $3,
+		    proposal_coordinator_id           = $4,
+		    proposal_cohort_members           = ARRAY[$3]::TEXT[],
+		    proposal_durability_policy_name    = decision_durability_policy_name,
+		    proposal_durability_quorum_type    = decision_durability_quorum_type,
+		    proposal_durability_required_count = decision_durability_required_count
+		WHERE shard_id = $5`,
+		term, subterm, leaderAppName, coordinatorAppName, []byte("0"))
+	require.NoError(t, err)
+}
 
 // testPoolerID builds a *clustermetadatapb.ID for use in test updates.
 func testPoolerID(t *testing.T, cell, name string) *clustermetadatapb.ID {

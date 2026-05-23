@@ -63,14 +63,16 @@ func NewTermRevocation(
 			maxTerm = t
 		}
 		pos := cs.GetCurrentPosition()
-		if decisionNum := pos.GetDecision().GetRuleNumber(); decisionNum != nil {
+		decisionNum := pos.GetDecision().GetRuleNumber()
+		if decisionNum != nil {
 			if t := decisionNum.GetCoordinatorTerm(); t > maxTerm {
 				maxTerm = t
 			}
-			// Capture the first non-nil RuleNumber we see; bump only on strictly
-			// greater. The "first non-nil" path matters when the recorded rule
-			// is the zero RuleNumber — CompareRuleNumbers treats zero == nil, so
-			// without the explicit nil check we'd never lift maxDecision above nil.
+			// Capture the max decision RuleNumber for OutgoingRule. OutgoingRule must
+			// always reference a marked decision — never an in-flight proposal.
+			// "First non-nil" matters when the decision is the zero RuleNumber —
+			// CompareRuleNumbers treats zero == nil, so without the explicit nil check
+			// we'd never lift maxDecision above nil.
 			if maxDecision == nil || CompareRuleNumbers(decisionNum, maxDecision) > 0 {
 				maxDecision = decisionNum
 			}
@@ -203,7 +205,7 @@ func ValidateRevocation(status *clustermetadatapb.ConsensusStatus, revocation *c
 	ruleCoordTerm := pos.GetDecision().GetRuleNumber().GetCoordinatorTerm()
 	if ruleCoordTerm >= revokedBelowTerm {
 		return fmt.Errorf(
-			"cannot accept revocation: recorded rule is at coordinator term %d >= revoked_below_term %d",
+			"cannot accept revocation: recorded decision is at coordinator term %d >= revoked_below_term %d",
 			ruleCoordTerm, revokedBelowTerm,
 		)
 	}
@@ -212,7 +214,7 @@ func ValidateRevocation(status *clustermetadatapb.ConsensusStatus, revocation *c
 	// already moved past.
 	if CompareRuleNumbers(pos.GetDecision().GetRuleNumber(), revocation.GetOutgoingDecision()) > 0 {
 		return fmt.Errorf(
-			"cannot accept revocation: committed rule (%d.%d) is beyond outgoing_decision (%d.%d)",
+			"cannot accept revocation: committed decision (%d.%d) is beyond outgoing_decision (%d.%d)",
 			pos.GetDecision().GetRuleNumber().GetCoordinatorTerm(),
 			pos.GetDecision().GetRuleNumber().GetLeaderSubterm(),
 			revocation.GetOutgoingDecision().GetCoordinatorTerm(),

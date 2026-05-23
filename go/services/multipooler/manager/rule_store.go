@@ -190,6 +190,14 @@ type ruleUpdateBuilder struct {
 	skipOutgoingQuorum bool        // skip BuildPolicyTransition; apply incoming GUC directly
 	previousRule       *ruleNumber // for compare-and-swap; nil means no check
 	promotionHook      promotionFn // non-nil iff postgres is known to be in recovery
+
+	// propagation, when non-nil, signals propagation mode: finalise an existing
+	// in-WAL proposal rather than writing a new one. The value is the expected
+	// proposal that the rule store will CAS against current_rule.proposal_*.
+	// previousRule must also be set, providing the expected current decision baseline.
+	// In propagation mode, termNumber/coordinatorID/eventType/reason/createdAt
+	// are ignored — the proposal already exists.
+	propagation *clustermetadatapb.ShardRule
 }
 
 // promotionFn is called by updateRule after the pre-promote GUC is applied and
@@ -205,6 +213,21 @@ func newRuleUpdate(termNumber int64, coordinatorID *clustermetadatapb.ID, eventT
 		eventType:     eventType,
 		reason:        reason,
 		createdAt:     createdAt,
+	}
+}
+
+// newPropagationUpdate constructs a ruleUpdateBuilder that finalises an existing
+// in-WAL proposal rather than writing a new one. previousDecisionTerm/Subterm are
+// required: they CAS-guard the decision columns to detect concurrent advances.
+// Callers must also supply a promotion hook via withPromotionHook — the WAL
+// emission step requires a primary.
+func newPropagationUpdate(
+	expectedProposal *clustermetadatapb.ShardRule,
+	previousDecisionTerm, previousDecisionSubterm int64,
+) *ruleUpdateBuilder {
+	return &ruleUpdateBuilder{
+		propagation:  expectedProposal,
+		previousRule: &ruleNumber{coordinatorTerm: previousDecisionTerm, leaderSubterm: previousDecisionSubterm},
 	}
 }
 
@@ -530,6 +553,10 @@ func (rs *ruleStore) readCurrentRuleLocked(ctx context.Context, inRecovery bool)
 func (rs *ruleStore) updateRule(ctx context.Context, update *ruleUpdateBuilder) (*clustermetadatapb.PoolerPosition, error) {
 	if err := AssertActionLockHeld(ctx); err != nil {
 		return nil, fmt.Errorf("updateRule: %w", err)
+	}
+
+	if update.propagation != nil {
+		return rs.propagateProposal(ctx, update)
 	}
 
 	if update.force {
@@ -941,6 +968,115 @@ func (rs *ruleStore) markProposalAsDecision(ctx context.Context, expectedTerm, e
 		createdAt,
 		lsn,
 	)
+}
+
+// propagateProposal finalises an in-WAL proposal left by a dead leader. It is
+// invoked from updateRule when update.propagation is set (via newPropagationUpdate).
+//
+//  1. Reads current_rule under FOR UPDATE NOWAIT (verifies the expected proposal
+//     and the decision baseline from update.previousRule).
+//  2. Applies the "Both" GUC (outgoing ∪ incoming cohort) so the WAL emission
+//     in step 4 will require ACK from both cohorts.
+//  3. Calls update.promotionHook (postgres promotes to primary).
+//  4. Quorum gate: pg_logical_emit_message(true, ...) emits a transactional
+//     WAL message that synchronous_standby_names must ACK. With sync configured
+//     to "Both", this proves both cohorts hold the proposal WAL.
+//  5. Marks the proposal as decision (local write, CAS-guarded).
+//  6. Applies the "Incoming" GUC (just the new cohort).
+//
+// Returns the resulting PoolerPosition with the propagated rule as the decision
+// (proposal cleared).
+func (rs *ruleStore) propagateProposal(ctx context.Context, update *ruleUpdateBuilder) (*clustermetadatapb.PoolerPosition, error) {
+	if update.propagation == nil || update.propagation.GetRuleNumber() == nil {
+		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "propagateProposal requires update.propagation with a rule number")
+	}
+	if update.previousRule == nil {
+		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "propagateProposal requires update.previousRule (decision CAS baseline)")
+	}
+	if update.promotionHook == nil {
+		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "propagateProposal requires a promotion hook (WAL emission needs primary)")
+	}
+
+	expectedTerm := update.propagation.GetRuleNumber().GetCoordinatorTerm()
+	expectedSubterm := update.propagation.GetRuleNumber().GetLeaderSubterm()
+
+	// Read the current rule with lock; we promote postgres below so this read is
+	// against a standby (inRecovery=true). The lockedCtx carries the
+	// priorRuleWritesDrained token used by SetPolicy.
+	current, lockedCtx, err := rs.readCurrentRuleLocked(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+
+	// Verify the expected proposal is exactly what's in WAL on this node.
+	currentProposal := current.GetProposal()
+	if currentProposal == nil {
+		return nil, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
+			"no in-flight proposal on this node; nothing to propagate")
+	}
+	pNum := currentProposal.GetRuleNumber()
+	if pNum.GetCoordinatorTerm() != expectedTerm || pNum.GetLeaderSubterm() != expectedSubterm {
+		return nil, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
+			"propagate: in-flight proposal (%d,%d) does not match expected (%d,%d)",
+			pNum.GetCoordinatorTerm(), pNum.GetLeaderSubterm(), expectedTerm, expectedSubterm)
+	}
+
+	// Verify the decision baseline matches what the caller observed (CAS).
+	currentDecision := current.GetDecision()
+	dNum := currentDecision.GetRuleNumber()
+	if dNum.GetCoordinatorTerm() != update.previousRule.coordinatorTerm || dNum.GetLeaderSubterm() != update.previousRule.leaderSubterm {
+		return nil, errRuleConflict
+	}
+
+	// Build the GUC transition.
+	outgoingPWC, err := consensus.NewPolicyWithCohort(currentDecision.GetCohortMembers(), currentDecision.GetDurabilityPolicy())
+	if err != nil {
+		return nil, mterrors.Wrap(err, "propagate: invalid outgoing policy")
+	}
+	incomingPWC, err := consensus.NewPolicyWithCohort(update.propagation.GetCohortMembers(), update.propagation.GetDurabilityPolicy())
+	if err != nil {
+		return nil, mterrors.Wrap(err, "propagate: invalid incoming policy")
+	}
+	transition, err := consensus.BuildPolicyTransition(outgoingPWC, incomingPWC)
+	if err != nil {
+		return nil, fmt.Errorf("propagate: compute GUC transition: %w", err)
+	}
+
+	// Pre-promote GUC: set sync_standby_names to "Both" (outgoing ∪ incoming).
+	if err := rs.syncStandby.SetPolicy(lockedCtx, transition.Both); err != nil {
+		return nil, fmt.Errorf("propagate: pre-promote GUC: %w", err)
+	}
+
+	// Promote postgres. After this returns, pg_logical_emit_message will work
+	// (it requires a primary).
+	if err := update.promotionHook(lockedCtx); err != nil {
+		return nil, fmt.Errorf("propagate: promotion hook: %w", err)
+	}
+
+	// Quorum gate: emit a transactional WAL message. With synchronous_commit=on
+	// and sync_standby_names configured to the "Both" cohort, postgres blocks
+	// until enough standbys ACK. This proves both cohorts hold all WAL up to
+	// and including the proposal entry.
+	emitCtx, emitCancel := context.WithTimeout(ctx, timeouts.RemoteOperationTimeout)
+	defer emitCancel()
+	if _, err := rs.queryService.Query(emitCtx,
+		`SELECT pg_logical_emit_message(true, 'multigres/propagate', '')`); err != nil {
+		return nil, mterrors.Wrap(err, "propagate: quorum gate failed")
+	}
+
+	// Mark the proposal as decision (local write, CAS-guarded).
+	pos, err := rs.markProposalAsDecision(ctx, expectedTerm, expectedSubterm)
+	if err != nil {
+		return nil, err
+	}
+
+	// Post-write GUC: transition to "Incoming" (just the new cohort).
+	if err := rs.syncStandby.SetPolicy(lockedCtx, transition.Incoming); err != nil {
+		return nil, fmt.Errorf("propagate: post-write GUC: %w", err)
+	}
+
+	rs.cacheRuleObservation(pos)
+	return pos, nil
 }
 
 // queryRuleHistory returns the most recent rule history records in descending
