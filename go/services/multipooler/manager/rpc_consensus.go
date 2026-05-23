@@ -1012,3 +1012,37 @@ func (pm *MultiPoolerManager) ConsensusStatus(ctx context.Context, req *consensu
 		AvailabilityStatus: pm.buildAvailabilityStatus(),
 	}, nil
 }
+
+// Propagate finalises an existing in-WAL rule change on this node. The coordinator
+// issues this RPC when it discovers an in-flight proposal (propagation_intent set
+// in the term revocation) rather than writing a fresh rule via Propose.
+//
+// The handler:
+//  1. Acquires the action lock.
+//  2. Verifies the expected proposal matches the node's in-flight proposal.
+//  3. Drives the proposal to sync-standby quorum (via the existing GUC machinery).
+//  4. Marks the proposal as decided using markProposalAsDecision.
+//  5. (Future) Promotes postgres if the node is in recovery, then writes a
+//     self-promotion rule at the new term.
+//
+// TODO: This is a partial implementation. The full design requires threading the
+// SyncStandbyManager "Both" GUC application, the promotion hook, and the
+// self-promotion rule write through the new rule_store architecture. For now,
+// this stub returns UNIMPLEMENTED so coordinator-side propagation logic can be
+// developed against a well-defined RPC surface; the multipooler handler will
+// be completed in a follow-up.
+func (pm *MultiPoolerManager) Propagate(ctx context.Context, req *consensusdatapb.PropagateRequest) (*consensusdatapb.PropagateResponse, error) {
+	if err := pm.checkReady(); err != nil {
+		return nil, err
+	}
+	if req.GetTermRevocation().GetPropagationIntent() == nil {
+		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
+			"Propagate requires term_revocation.propagation_intent to be set")
+	}
+	if req.GetExpectedProposal() == nil {
+		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
+			"Propagate requires expected_proposal to be set")
+	}
+	return nil, mterrors.New(mtrpcpb.Code_UNIMPLEMENTED,
+		"Propagate handler not yet implemented; full propagation flow lands with the SyncStandbyManager 'Both' GUC integration")
+}

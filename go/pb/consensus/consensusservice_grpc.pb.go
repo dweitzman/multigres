@@ -46,6 +46,7 @@ const (
 	MultiPoolerConsensus_Recruit_FullMethodName             = "/consensus.MultiPoolerConsensus/Recruit"
 	MultiPoolerConsensus_Propose_FullMethodName             = "/consensus.MultiPoolerConsensus/Propose"
 	MultiPoolerConsensus_SetTermPrimary_FullMethodName      = "/consensus.MultiPoolerConsensus/SetTermPrimary"
+	MultiPoolerConsensus_Propagate_FullMethodName           = "/consensus.MultiPoolerConsensus/Propagate"
 )
 
 // MultiPoolerConsensusClient is the client API for MultiPoolerConsensus service.
@@ -94,6 +95,10 @@ type MultiPoolerConsensusClient interface {
 	// consensus term. Used both to endorse in-flight proposals and to catch
 	// followers up to durable decisions.
 	SetTermPrimary(ctx context.Context, in *consensusdata.SetTermPrimaryRequest, opts ...grpc.CallOption) (*consensusdata.SetTermPrimaryResponse, error)
+	// Propagate asks the receiving pooler to finalise an existing in-WAL rule
+	// change. The pooler promotes postgres, drives the WAL entry to quorum, marks
+	// it decided, then self-promotes. Unlike Propose, no new rule is written.
+	Propagate(ctx context.Context, in *consensusdata.PropagateRequest, opts ...grpc.CallOption) (*consensusdata.PropagateResponse, error)
 }
 
 type multiPoolerConsensusClient struct {
@@ -214,6 +219,16 @@ func (c *multiPoolerConsensusClient) SetTermPrimary(ctx context.Context, in *con
 	return out, nil
 }
 
+func (c *multiPoolerConsensusClient) Propagate(ctx context.Context, in *consensusdata.PropagateRequest, opts ...grpc.CallOption) (*consensusdata.PropagateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(consensusdata.PropagateResponse)
+	err := c.cc.Invoke(ctx, MultiPoolerConsensus_Propagate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // MultiPoolerConsensusServer is the server API for MultiPoolerConsensus service.
 // All implementations must embed UnimplementedMultiPoolerConsensusServer
 // for forward compatibility.
@@ -260,6 +275,10 @@ type MultiPoolerConsensusServer interface {
 	// consensus term. Used both to endorse in-flight proposals and to catch
 	// followers up to durable decisions.
 	SetTermPrimary(context.Context, *consensusdata.SetTermPrimaryRequest) (*consensusdata.SetTermPrimaryResponse, error)
+	// Propagate asks the receiving pooler to finalise an existing in-WAL rule
+	// change. The pooler promotes postgres, drives the WAL entry to quorum, marks
+	// it decided, then self-promotes. Unlike Propose, no new rule is written.
+	Propagate(context.Context, *consensusdata.PropagateRequest) (*consensusdata.PropagateResponse, error)
 	mustEmbedUnimplementedMultiPoolerConsensusServer()
 }
 
@@ -302,6 +321,9 @@ func (UnimplementedMultiPoolerConsensusServer) Propose(context.Context, *consens
 }
 func (UnimplementedMultiPoolerConsensusServer) SetTermPrimary(context.Context, *consensusdata.SetTermPrimaryRequest) (*consensusdata.SetTermPrimaryResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetTermPrimary not implemented")
+}
+func (UnimplementedMultiPoolerConsensusServer) Propagate(context.Context, *consensusdata.PropagateRequest) (*consensusdata.PropagateResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Propagate not implemented")
 }
 func (UnimplementedMultiPoolerConsensusServer) mustEmbedUnimplementedMultiPoolerConsensusServer() {}
 func (UnimplementedMultiPoolerConsensusServer) testEmbeddedByValue()                              {}
@@ -522,6 +544,24 @@ func _MultiPoolerConsensus_SetTermPrimary_Handler(srv interface{}, ctx context.C
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MultiPoolerConsensus_Propagate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(consensusdata.PropagateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MultiPoolerConsensusServer).Propagate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MultiPoolerConsensus_Propagate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MultiPoolerConsensusServer).Propagate(ctx, req.(*consensusdata.PropagateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // MultiPoolerConsensus_ServiceDesc is the grpc.ServiceDesc for MultiPoolerConsensus service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -572,6 +612,10 @@ var MultiPoolerConsensus_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetTermPrimary",
 			Handler:    _MultiPoolerConsensus_SetTermPrimary_Handler,
+		},
+		{
+			MethodName: "Propagate",
+			Handler:    _MultiPoolerConsensus_Propagate_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

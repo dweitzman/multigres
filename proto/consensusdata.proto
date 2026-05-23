@@ -219,3 +219,31 @@ message SetTermPrimaryRequest {
 message SetTermPrimaryResponse {
   clustermetadata.ConsensusStatus consensus_status = 1;
 }
+
+// PropagateRequest asks the receiving pooler to finalise an in-WAL rule change
+// that it already holds as a proposal. Unlike Propose, no new rule is written —
+// the pooler promotes postgres, waits for the existing WAL entry to reach
+// sync-standby quorum, marks it as decided, then self-promotes by writing a
+// new rule at (term_revocation.revoked_below_term, 0) with the same cohort and
+// durability policy.
+//
+// The coordinator issues Propagate to the node that holds the in-WAL proposal
+// and SetTermPrimary to all followers, pointing them at that node as their
+// replication source.
+message PropagateRequest {
+  // The propagation recruitment revocation. Must have propagation_intent set
+  // to the rule number of the in-WAL proposal being finalised.
+  clustermetadata.TermRevocation term_revocation = 1;
+
+  // The full ShardRule the coordinator expects to find in-WAL on this node.
+  // The handler validates this matches the node's current proposal exactly
+  // (rule number, cohort, durability policy) before proceeding.
+  clustermetadata.ShardRule expected_proposal = 2;
+}
+
+// PropagateResponse carries the pooler's state after a successful Propagate.
+// On success the node has decided the propagated rule and written its
+// self-promotion rule; consensus_status reflects the self-promotion decision.
+message PropagateResponse {
+  clustermetadata.ConsensusStatus consensus_status = 1;
+}

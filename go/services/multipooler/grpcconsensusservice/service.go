@@ -159,6 +159,17 @@ func (s *consensusService) SetTermPrimary(ctx context.Context, req *consensusdat
 	return resp, nil
 }
 
+// Propagate finalises an existing in-WAL rule change: promotes postgres, drives the
+// proposal to sync-standby quorum, marks it decided, then self-promotes.
+// See manager.Propagate for details.
+func (s *consensusService) Propagate(ctx context.Context, req *consensusdata.PropagateRequest) (*consensusdata.PropagateResponse, error) {
+	resp, err := s.manager.Propagate(ctx, req)
+	if err != nil {
+		return nil, mterrors.ToGRPC(err)
+	}
+	return resp, nil
+}
+
 // RewindToSource performs pg_rewind to synchronize this server with a source
 func (s *consensusService) RewindToSource(ctx context.Context, req *multipoolermanagerdatapb.RewindToSourceRequest) (*multipoolermanagerdatapb.RewindToSourceResponse, error) {
 	resp, err := s.manager.RewindToSource(ctx, req.Source)

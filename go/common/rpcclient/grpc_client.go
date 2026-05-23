@@ -108,6 +108,19 @@ func (c *Client) Propose(ctx context.Context, pooler *clustermetadatapb.MultiPoo
 	return conn.consensusClient.Propose(ctx, request)
 }
 
+// Propagate asks the receiving pooler to finalise an existing in-WAL rule change.
+func (c *Client) Propagate(ctx context.Context, pooler *clustermetadatapb.MultiPooler, request *consensusdatapb.PropagateRequest) (*consensusdatapb.PropagateResponse, error) {
+	conn, closer, err := c.dialPersistent(ctx, pooler)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = closer()
+	}()
+
+	return conn.consensusClient.Propagate(ctx, request)
+}
+
 // ConsensusStatus gets the consensus status of the multipooler.
 func (c *Client) ConsensusStatus(ctx context.Context, pooler *clustermetadatapb.MultiPooler, request *consensusdatapb.StatusRequest) (*consensusdatapb.StatusResponse, error) {
 	conn, closer, err := c.dialPersistent(ctx, pooler)
