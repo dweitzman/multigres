@@ -57,7 +57,7 @@ func makePoolerState(cell, name string) *multiorchdatapb.PoolerHealthState {
 		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 			Id: id,
 			CurrentPosition: &clustermetadatapb.PoolerPosition{
-				Rule: &clustermetadatapb.ShardRule{
+				Decision: &clustermetadatapb.ShardRule{
 					RuleNumber: &clustermetadatapb.RuleNumber{},
 				},
 			},
@@ -163,9 +163,9 @@ func TestBuildFailoverProposal(t *testing.T) {
 
 	t.Run("picks first eligible leader", func(t *testing.T) {
 		result := commonconsensus.RecruitmentResult{
-			TermRevocation:  rev,
-			OutgoingRule:    outgoingRule,
-			EligibleLeaders: []*clustermetadatapb.ConsensusStatus{makeCS("mp1"), makeCS("mp2")},
+			TermRevocation:   rev,
+			OutgoingDecision: outgoingRule,
+			EligibleLeaders:  []*clustermetadatapb.ConsensusStatus{makeCS("mp1"), makeCS("mp2")},
 		}
 
 		proposal, err := buildFailoverProposal(result, addressByID)
@@ -178,9 +178,9 @@ func TestBuildFailoverProposal(t *testing.T) {
 
 	t.Run("no OutgoingRule returns error", func(t *testing.T) {
 		result := commonconsensus.RecruitmentResult{
-			TermRevocation:  rev,
-			OutgoingRule:    nil,
-			EligibleLeaders: []*clustermetadatapb.ConsensusStatus{makeCS("mp1")},
+			TermRevocation:   rev,
+			OutgoingDecision: nil,
+			EligibleLeaders:  []*clustermetadatapb.ConsensusStatus{makeCS("mp1")},
 		}
 
 		_, err := buildFailoverProposal(result, addressByID)
@@ -190,9 +190,9 @@ func TestBuildFailoverProposal(t *testing.T) {
 
 	t.Run("no EligibleLeaders returns error", func(t *testing.T) {
 		result := commonconsensus.RecruitmentResult{
-			TermRevocation:  rev,
-			OutgoingRule:    outgoingRule,
-			EligibleLeaders: nil,
+			TermRevocation:   rev,
+			OutgoingDecision: outgoingRule,
+			EligibleLeaders:  nil,
 		}
 
 		_, err := buildFailoverProposal(result, addressByID)

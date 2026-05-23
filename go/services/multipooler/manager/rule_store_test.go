@@ -52,13 +52,105 @@ func (e errSyncStandbyManager) NeedsApply(_ context.Context, _ commonconsensus.P
 // makePoolerPosition builds a PoolerPosition with the given rule number.
 func makePoolerPosition(coordinatorTerm, leaderSubterm int64) *clustermetadatapb.PoolerPosition {
 	return &clustermetadatapb.PoolerPosition{
-		Rule: &clustermetadatapb.ShardRule{
+		Decision: &clustermetadatapb.ShardRule{
 			RuleNumber: &clustermetadatapb.RuleNumber{
 				CoordinatorTerm: coordinatorTerm,
 				LeaderSubterm:   leaderSubterm,
 			},
 		},
 	}
+}
+
+func TestBuildPoolerPosition(t *testing.T) {
+	leaderApp := ptrStr("zone1_pooler-a")
+	coordStr := "zone1_coord-1"
+	cohort := []string{"zone1_pooler-a", "zone1_pooler-b"}
+	dpName := "AT_LEAST_2"
+	dpQuorum := "QUORUM_TYPE_AT_LEAST_N"
+	var dpCount int64 = 2
+
+	t.Run("decision only, no proposal", func(t *testing.T) {
+		pos, err := buildPoolerPosition(
+			3, 1, leaderApp, coordStr, cohort, dpName, dpQuorum, dpCount,
+			nil, nil, nil, nil, nil, nil, nil, nil,
+			time.Time{}, "0/100",
+		)
+		require.NoError(t, err)
+		require.NotNil(t, pos)
+		assert.Equal(t, int64(3), pos.GetDecision().GetRuleNumber().GetCoordinatorTerm())
+		assert.Equal(t, int64(1), pos.GetDecision().GetRuleNumber().GetLeaderSubterm())
+		assert.Equal(t, "pooler-a", pos.GetDecision().GetLeaderId().GetName())
+		assert.Equal(t, "0/100", pos.GetLsn())
+		assert.Nil(t, pos.GetProposal(), "no proposal when proposalCoordTerm is nil")
+	})
+
+	t.Run("with proposal", func(t *testing.T) {
+		var propTerm int64 = 5
+		var propSubterm int64 = 0
+		propLeader := ptrStr("zone1_pooler-b")
+		propCoord := ptrStr("zone1_coord-2")
+		propCohort := []string{"zone1_pooler-a", "zone1_pooler-b", "zone1_pooler-c"}
+		propDPName := ptrStr("AT_LEAST_2")
+		propDPQuorum := ptrStr("QUORUM_TYPE_AT_LEAST_N")
+		var propDPCount int64 = 2
+
+		pos, err := buildPoolerPosition(
+			3, 1, leaderApp, coordStr, cohort, dpName, dpQuorum, dpCount,
+			&propTerm, &propSubterm, propLeader, propCoord, propCohort, propDPName, propDPQuorum, &propDPCount,
+			time.Time{}, "0/200",
+		)
+		require.NoError(t, err)
+		require.NotNil(t, pos)
+		assert.Equal(t, int64(3), pos.GetDecision().GetRuleNumber().GetCoordinatorTerm())
+		require.NotNil(t, pos.GetProposal(), "proposal must be set")
+		assert.Equal(t, int64(5), pos.GetProposal().GetRuleNumber().GetCoordinatorTerm())
+		assert.Equal(t, "pooler-b", pos.GetProposal().GetLeaderId().GetName())
+		assert.Len(t, pos.GetProposal().GetCohortMembers(), 3)
+	})
+
+	t.Run("proposal with nil leader and coordinator", func(t *testing.T) {
+		var propTerm int64 = 7
+		propDP := ptrStr("AT_LEAST_2")
+		propDPQ := ptrStr("QUORUM_TYPE_AT_LEAST_N")
+		var propDPC int64 = 2
+		pos, err := buildPoolerPosition(
+			3, 1, leaderApp, coordStr, cohort, dpName, dpQuorum, dpCount,
+			&propTerm, nil, nil, nil, nil, propDP, propDPQ, &propDPC,
+			time.Time{}, "0/1",
+		)
+		require.NoError(t, err)
+		require.NotNil(t, pos.GetProposal())
+		assert.Equal(t, int64(7), pos.GetProposal().GetRuleNumber().GetCoordinatorTerm())
+		assert.Nil(t, pos.GetProposal().GetLeaderId(), "nil leaderIDStr yields no LeaderId")
+	})
+}
+
+func ptrStr(s string) *string { return &s }
+
+func TestCacheRuleObservation(t *testing.T) {
+	newPos := func(coordTerm int64) *clustermetadatapb.PoolerPosition {
+		return &clustermetadatapb.PoolerPosition{
+			Decision: &clustermetadatapb.ShardRule{
+				RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: coordTerm},
+			},
+			Lsn: "0/1",
+		}
+	}
+
+	t.Run("advances cache forward", func(t *testing.T) {
+		rs := newRuleStore(slog.New(slog.NewTextHandler(io.Discard, nil)), nil, noopSyncStandbyManager{})
+		rs.cacheRuleObservation(newPos(3))
+		rs.cacheRuleObservation(newPos(5))
+		assert.Equal(t, int64(5), rs.cachedPosition().GetDecision().GetRuleNumber().GetCoordinatorTerm())
+	})
+
+	t.Run("ignores stale observation", func(t *testing.T) {
+		rs := newRuleStore(slog.New(slog.NewTextHandler(io.Discard, nil)), nil, noopSyncStandbyManager{})
+		rs.cacheRuleObservation(newPos(5))
+		rs.cacheRuleObservation(newPos(3)) // stale
+		assert.Equal(t, int64(5), rs.cachedPosition().GetDecision().GetRuleNumber().GetCoordinatorTerm(),
+			"stale observation must not overwrite a newer cached position")
+	})
 }
 
 func TestQueryRuleHistory(t *testing.T) {
@@ -172,14 +264,14 @@ func TestCacheRuleObservation_StaleRuleIgnored(t *testing.T) {
 	// Seed cache with rule number (2, 1).
 	rs.cacheRuleObservation(makePoolerPosition(2, 1))
 	require.NotNil(t, rs.cachedPosition())
-	assert.Equal(t, int64(2), rs.cachedPosition().GetRule().GetRuleNumber().GetCoordinatorTerm())
+	assert.Equal(t, int64(2), rs.cachedPosition().GetDecision().GetRuleNumber().GetCoordinatorTerm())
 
 	// Stale observation: rule number (1, 5) is strictly less than (2, 1).
 	rs.cacheRuleObservation(makePoolerPosition(1, 5))
 
 	// Cache must still hold the newer rule.
-	assert.Equal(t, int64(2), rs.cachedPosition().GetRule().GetRuleNumber().GetCoordinatorTerm())
-	assert.Equal(t, int64(1), rs.cachedPosition().GetRule().GetRuleNumber().GetLeaderSubterm())
+	assert.Equal(t, int64(2), rs.cachedPosition().GetDecision().GetRuleNumber().GetCoordinatorTerm())
+	assert.Equal(t, int64(1), rs.cachedPosition().GetDecision().GetRuleNumber().GetLeaderSubterm())
 }
 
 func TestHasInconsistentGUC_FalseWhenCacheCold(t *testing.T) {
@@ -194,7 +286,7 @@ func TestHasInconsistentGUC_FalseWhenPolicyInvalid(t *testing.T) {
 	// (UNKNOWN quorum type). hasInconsistentGUC must swallow the error and
 	// return false rather than crash or report drift.
 	rs.lastPos = &clustermetadatapb.PoolerPosition{
-		Rule: &clustermetadatapb.ShardRule{
+		Decision: &clustermetadatapb.ShardRule{
 			RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
 			DurabilityPolicy: &clustermetadatapb.DurabilityPolicy{
 				QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_UNKNOWN,
@@ -212,7 +304,7 @@ func TestHasInconsistentGUC_FalseWhenNeedsApplyErrors(t *testing.T) {
 		errSyncStandbyManager{needsApplyErr: errors.New("postgres down")},
 	)
 	rs.lastPos = &clustermetadatapb.PoolerPosition{
-		Rule: &clustermetadatapb.ShardRule{
+		Decision: &clustermetadatapb.ShardRule{
 			RuleNumber:       &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
 			DurabilityPolicy: testBootstrapPolicy(),
 		},
@@ -265,25 +357,33 @@ func TestScanRuleHistoryRow_AcceptedInvalid(t *testing.T) {
 
 func TestBuildPoolerPosition_LeaderInvalid(t *testing.T) {
 	bad := "noseparator"
-	_, err := buildPoolerPosition(1, 0, &bad, "", nil, "AT_LEAST_2", "QUORUM_TYPE_AT_LEAST_N", 2, time.Time{}, "0/0")
+	_, err := buildPoolerPosition(1, 0, &bad, "", nil, "AT_LEAST_2", "QUORUM_TYPE_AT_LEAST_N", 2,
+		nil, nil, nil, nil, nil, nil, nil, nil,
+		time.Time{}, "0/0")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to parse leader_id")
 }
 
 func TestBuildPoolerPosition_CoordinatorInvalid(t *testing.T) {
-	_, err := buildPoolerPosition(1, 0, nil, "noseparator", nil, "AT_LEAST_2", "QUORUM_TYPE_AT_LEAST_N", 2, time.Time{}, "0/0")
+	_, err := buildPoolerPosition(1, 0, nil, "noseparator", nil, "AT_LEAST_2", "QUORUM_TYPE_AT_LEAST_N", 2,
+		nil, nil, nil, nil, nil, nil, nil, nil,
+		time.Time{}, "0/0")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to parse coordinator_id")
 }
 
 func TestBuildPoolerPosition_CohortInvalid(t *testing.T) {
-	_, err := buildPoolerPosition(1, 0, nil, "", []string{"noseparator"}, "AT_LEAST_2", "QUORUM_TYPE_AT_LEAST_N", 2, time.Time{}, "0/0")
+	_, err := buildPoolerPosition(1, 0, nil, "", []string{"noseparator"}, "AT_LEAST_2", "QUORUM_TYPE_AT_LEAST_N", 2,
+		nil, nil, nil, nil, nil, nil, nil, nil,
+		time.Time{}, "0/0")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to parse cohort_members")
 }
 
 func TestBuildPoolerPosition_UnknownQuorumType(t *testing.T) {
-	_, err := buildPoolerPosition(1, 0, nil, "", nil, "AT_LEAST_2", "QUORUM_TYPE_BOGUS", 2, time.Time{}, "0/0")
+	_, err := buildPoolerPosition(1, 0, nil, "", nil, "AT_LEAST_2", "QUORUM_TYPE_BOGUS", 2,
+		nil, nil, nil, nil, nil, nil, nil, nil,
+		time.Time{}, "0/0")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown quorum_type")
 }

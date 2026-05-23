@@ -304,11 +304,11 @@ func TestRuleStorePG_ObservePosition_FreshState(t *testing.T) {
 	pos, err := rs.observePosition(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, pos, "fresh state should still return a position with the current LSN")
-	assert.Equal(t, int64(0), pos.GetRule().GetRuleNumber().GetCoordinatorTerm(), "fresh initial row has coordinator_term=0")
+	assert.Equal(t, int64(0), pos.GetDecision().GetRuleNumber().GetCoordinatorTerm(), "fresh initial row has coordinator_term=0")
 	assert.NotEmpty(t, pos.GetLsn(), "fresh state should include the current WAL LSN")
 
 	// The initial row written by createRuleTables must carry the bootstrap durability policy.
-	dp := pos.GetRule().GetDurabilityPolicy()
+	dp := pos.GetDecision().GetDurabilityPolicy()
 	require.NotNil(t, dp, "initial row must carry the bootstrap durability policy")
 	assert.Equal(t, testBootstrapPolicy().PolicyName, dp.PolicyName)
 	assert.Equal(t, testBootstrapPolicy().QuorumType, dp.QuorumType)
@@ -350,7 +350,7 @@ func TestRuleStorePG_ObservePosition_InitialPolicyCarriedThroughUpdate(t *testin
 	pos, err := rs.observePosition(ctx)
 	require.NoError(t, err)
 
-	dp := pos.GetRule().GetDurabilityPolicy()
+	dp := pos.GetDecision().GetDurabilityPolicy()
 	require.NotNil(t, dp, "initial policy must carry forward through updateRule without withDurabilityPolicy")
 	assert.Equal(t, testBootstrapPolicy().PolicyName, dp.PolicyName)
 	assert.Equal(t, testBootstrapPolicy().QuorumType, dp.QuorumType)
@@ -371,8 +371,8 @@ func TestRuleStorePG_UpdateRule_FirstWrite(t *testing.T) {
 	pos, err := rs.updateRule(ctx, update)
 	require.NoError(t, err)
 	require.NotNil(t, pos)
-	assert.Equal(t, int64(1), pos.Rule.RuleNumber.CoordinatorTerm)
-	assert.Equal(t, int64(0), pos.Rule.RuleNumber.LeaderSubterm, "first write in a new term starts at subterm 0")
+	assert.Equal(t, int64(1), pos.Decision.RuleNumber.CoordinatorTerm)
+	assert.Equal(t, int64(0), pos.Decision.RuleNumber.LeaderSubterm, "first write in a new term starts at subterm 0")
 }
 
 func TestRuleStorePG_UpdateRule_SameTermIncrementsSubterm(t *testing.T) {
@@ -388,11 +388,11 @@ func TestRuleStorePG_UpdateRule_SameTermIncrementsSubterm(t *testing.T) {
 
 	pos1, err := rs.updateRule(ctx, newRuleUpdate(1, coordinatorID, "promotion", "first", now))
 	require.NoError(t, err)
-	assert.Equal(t, int64(0), pos1.Rule.RuleNumber.LeaderSubterm)
+	assert.Equal(t, int64(0), pos1.Decision.RuleNumber.LeaderSubterm)
 
 	pos2, err := rs.updateRule(ctx, newRuleUpdate(1, coordinatorID, "config_change", "second", now))
 	require.NoError(t, err)
-	assert.Equal(t, int64(1), pos2.Rule.RuleNumber.LeaderSubterm, "second write in same term increments subterm")
+	assert.Equal(t, int64(1), pos2.Decision.RuleNumber.LeaderSubterm, "second write in same term increments subterm")
 }
 
 func TestRuleStorePG_UpdateRule_NewTermResetsSubterm(t *testing.T) {
@@ -415,8 +415,8 @@ func TestRuleStorePG_UpdateRule_NewTermResetsSubterm(t *testing.T) {
 	// Advance to term 2: subterm must reset to 0.
 	pos, err := rs.updateRule(ctx, newRuleUpdate(2, coordinatorID, "promotion", "new coordinator", now))
 	require.NoError(t, err)
-	assert.Equal(t, int64(2), pos.Rule.RuleNumber.CoordinatorTerm)
-	assert.Equal(t, int64(0), pos.Rule.RuleNumber.LeaderSubterm, "new term resets subterm to 0")
+	assert.Equal(t, int64(2), pos.Decision.RuleNumber.CoordinatorTerm)
+	assert.Equal(t, int64(0), pos.Decision.RuleNumber.LeaderSubterm, "new term resets subterm to 0")
 }
 
 func TestRuleStorePG_UpdateRule_StaleTermRejected(t *testing.T) {
@@ -466,20 +466,20 @@ func TestRuleStorePG_UpdateRule_ObserveAfterWrite(t *testing.T) {
 	pos, err := rs.observePosition(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, pos)
-	assert.Equal(t, int64(3), pos.Rule.RuleNumber.CoordinatorTerm)
-	assert.Equal(t, int64(0), pos.Rule.RuleNumber.LeaderSubterm)
+	assert.Equal(t, int64(3), pos.Decision.RuleNumber.CoordinatorTerm)
+	assert.Equal(t, int64(0), pos.Decision.RuleNumber.LeaderSubterm)
 
-	require.NotNil(t, pos.Rule.LeaderId)
-	assert.Equal(t, "zone1", pos.Rule.LeaderId.Cell)
-	assert.Equal(t, "leader-1", pos.Rule.LeaderId.Name)
+	require.NotNil(t, pos.Decision.LeaderId)
+	assert.Equal(t, "zone1", pos.Decision.LeaderId.Cell)
+	assert.Equal(t, "leader-1", pos.Decision.LeaderId.Name)
 
-	require.NotNil(t, pos.Rule.CoordinatorId)
-	assert.Equal(t, "zone1", pos.Rule.CoordinatorId.Cell)
-	assert.Equal(t, "coordinator-1", pos.Rule.CoordinatorId.Name)
+	require.NotNil(t, pos.Decision.CoordinatorId)
+	assert.Equal(t, "zone1", pos.Decision.CoordinatorId.Cell)
+	assert.Equal(t, "coordinator-1", pos.Decision.CoordinatorId.Name)
 
-	require.Len(t, pos.Rule.CohortMembers, 2)
-	assert.Equal(t, "member-1", pos.Rule.CohortMembers[0].Name)
-	assert.Equal(t, "member-2", pos.Rule.CohortMembers[1].Name)
+	require.Len(t, pos.Decision.CohortMembers, 2)
+	assert.Equal(t, "member-1", pos.Decision.CohortMembers[0].Name)
+	assert.Equal(t, "member-2", pos.Decision.CohortMembers[1].Name)
 
 	assert.NotEmpty(t, pos.Lsn, "LSN should be populated after a write")
 }
@@ -564,8 +564,8 @@ func TestRuleStorePG_UpdateRule_CASSuccess(t *testing.T) {
 	// Write the first rule so we know the exact term/subterm.
 	pos1, err := rs.updateRule(ctx, newRuleUpdate(1, coordinatorID, "promotion", "first", now))
 	require.NoError(t, err)
-	term := pos1.Rule.RuleNumber.CoordinatorTerm  // 1
-	subterm := pos1.Rule.RuleNumber.LeaderSubterm // 0
+	term := pos1.Decision.RuleNumber.CoordinatorTerm  // 1
+	subterm := pos1.Decision.RuleNumber.LeaderSubterm // 0
 
 	// CAS: only proceed if current rule is still (term=1, subterm=0).
 	pos2, err := rs.updateRule(ctx,
@@ -573,7 +573,7 @@ func TestRuleStorePG_UpdateRule_CASSuccess(t *testing.T) {
 			withPreviousRule(term, subterm),
 	)
 	require.NoError(t, err, "CAS should succeed when term/subterm match")
-	assert.Equal(t, int64(1), pos2.Rule.RuleNumber.LeaderSubterm, "subterm should advance to 1")
+	assert.Equal(t, int64(1), pos2.Decision.RuleNumber.LeaderSubterm, "subterm should advance to 1")
 }
 
 func TestRuleStorePG_UpdateRule_CASConflict(t *testing.T) {
@@ -678,8 +678,8 @@ func TestRuleStorePG_UpdateRule_Concurrent(t *testing.T) {
 	pos, err := rs.observePosition(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, pos)
-	assert.Equal(t, int64(1), pos.Rule.RuleNumber.CoordinatorTerm)
-	assert.Equal(t, int64(goroutines-1), pos.Rule.RuleNumber.LeaderSubterm,
+	assert.Equal(t, int64(1), pos.Decision.RuleNumber.CoordinatorTerm)
+	assert.Equal(t, int64(goroutines-1), pos.Decision.RuleNumber.LeaderSubterm,
 		"final subterm should equal goroutines-1 after %d serialized writes", goroutines)
 }
 
@@ -716,7 +716,7 @@ func TestRuleStorePG_UpdateRule_DurabilityPolicyRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, pos)
 
-	dp := pos.Rule.GetDurabilityPolicy()
+	dp := pos.Decision.GetDurabilityPolicy()
 	require.NotNil(t, dp, "durability policy must be persisted and returned by observePosition")
 	assert.Equal(t, "MULTI_CELL_AT_LEAST_2", dp.PolicyName)
 	assert.Equal(t, clustermetadatapb.QuorumType_QUORUM_TYPE_MULTI_CELL_AT_LEAST_N, dp.QuorumType)
@@ -762,7 +762,7 @@ func TestRuleStorePG_UpdateRule_DurabilityPolicyPreservedOnUpdate(t *testing.T) 
 	require.NoError(t, err)
 	require.NotNil(t, pos)
 
-	dp := pos.Rule.GetDurabilityPolicy()
+	dp := pos.Decision.GetDurabilityPolicy()
 	require.NotNil(t, dp, "durability policy must be preserved across updates that omit it")
 	assert.Equal(t, "MULTI_CELL_AT_LEAST_2", dp.PolicyName)
 }
@@ -1273,7 +1273,7 @@ func TestRuleStorePG_ReconcileGUC_InvalidPolicy(t *testing.T) {
 	// accepts it, but NewPolicyFromProto rejects it inside reconcileGUC.
 	qs := &connQueryService{conn: conn}
 	_, err := qs.QueryArgs(ctx,
-		"UPDATE multigres.current_rule SET durability_quorum_type = 'QUORUM_TYPE_UNKNOWN' WHERE shard_id = $1",
+		"UPDATE multigres.current_rule SET decision_durability_quorum_type = 'QUORUM_TYPE_UNKNOWN' WHERE shard_id = $1",
 		[]byte("0"))
 	require.NoError(t, err)
 
@@ -1295,7 +1295,7 @@ func TestRuleStorePG_ReadCurrentRule_ParseFailureFromBogusQuorumType(t *testing.
 	// readCurrentRule as "failed to parse current_rule".
 	qs := &connQueryService{conn: conn}
 	_, err := qs.QueryArgs(ctx,
-		"UPDATE multigres.current_rule SET durability_quorum_type = 'BOGUS_QUORUM_TYPE' WHERE shard_id = $1",
+		"UPDATE multigres.current_rule SET decision_durability_quorum_type = 'BOGUS_QUORUM_TYPE' WHERE shard_id = $1",
 		[]byte("0"))
 	require.NoError(t, err)
 

@@ -38,7 +38,7 @@ func primaryConsensusStatus(id *clustermetadatapb.ID, term int64) *clustermetada
 	return &clustermetadatapb.ConsensusStatus{
 		Id: id,
 		CurrentPosition: &clustermetadatapb.PoolerPosition{
-			Rule: &clustermetadatapb.ShardRule{
+			Decision: &clustermetadatapb.ShardRule{
 				RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: term},
 				LeaderId:   id,
 			},
@@ -1637,7 +1637,7 @@ func TestPopulatePrimaryInfo_PicksHighestPrimaryTerm(t *testing.T) {
 			Id:             newPrimaryID,
 			TermRevocation: &clustermetadatapb.TermRevocation{RevokedBelowTerm: 11},
 			CurrentPosition: &clustermetadatapb.PoolerPosition{
-				Rule: &clustermetadatapb.ShardRule{
+				Decision: &clustermetadatapb.ShardRule{
 					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 6},
 					LeaderId:   newPrimaryID,
 				},
@@ -1658,7 +1658,7 @@ func TestPopulatePrimaryInfo_PicksHighestPrimaryTerm(t *testing.T) {
 			Id:             stalePrimaryID,
 			TermRevocation: &clustermetadatapb.TermRevocation{RevokedBelowTerm: 10},
 			CurrentPosition: &clustermetadatapb.PoolerPosition{
-				Rule: &clustermetadatapb.ShardRule{
+				Decision: &clustermetadatapb.ShardRule{
 					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
 					LeaderId:   stalePrimaryID,
 				},
@@ -1917,7 +1917,7 @@ func setupMultiplePrimariesStoreWithReachability(t *testing.T, primaries []prima
 				Id:             id,
 				TermRevocation: &clustermetadatapb.TermRevocation{RevokedBelowTerm: p.consensusTerm},
 				CurrentPosition: &clustermetadatapb.PoolerPosition{
-					Rule: &clustermetadatapb.ShardRule{
+					Decision: &clustermetadatapb.ShardRule{
 						RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: p.primaryTerm},
 						LeaderId:   id,
 					},

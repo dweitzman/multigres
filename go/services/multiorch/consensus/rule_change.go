@@ -299,14 +299,14 @@ func (r *coordinatorLedRuleChange) propose(
 
 // buildFailoverProposal constructs a CoordinatorProposal for normal failover.
 // It picks the first eligible leader from result.EligibleLeaders and derives
-// the cohort and durability policy from result.OutgoingRule. Resigned poolers
+// the cohort and durability policy from result.OutgoingDecision. Resigned poolers
 // are expected to have been filtered out upstream (see Coordinator.runFailover);
 // any pooler reaching this point is treated as a valid leader candidate.
 func buildFailoverProposal(
 	result commonconsensus.RecruitmentResult,
 	addressByID map[string]*clustermetadatapb.PoolerAddress,
 ) (*consensusdatapb.CoordinatorProposal, error) {
-	if result.OutgoingRule == nil {
+	if result.OutgoingDecision == nil {
 		return nil, errors.New("no committed rule found; use bootstrap path for fresh clusters")
 	}
 	if len(result.EligibleLeaders) == 0 {
@@ -324,8 +324,8 @@ func buildFailoverProposal(
 		ProposalLeader: addr,
 		ProposedRule: &clustermetadatapb.ShardRule{
 			RuleNumber:       &clustermetadatapb.RuleNumber{CoordinatorTerm: result.TermRevocation.GetRevokedBelowTerm()},
-			CohortMembers:    result.OutgoingRule.GetCohortMembers(),
-			DurabilityPolicy: result.OutgoingRule.GetDurabilityPolicy(),
+			CohortMembers:    result.OutgoingDecision.GetCohortMembers(),
+			DurabilityPolicy: result.OutgoingDecision.GetDurabilityPolicy(),
 			LeaderId:         leader.GetId(),
 			// The coordinator that ran the recruit round (carried in the
 			// revocation's accepted_coordinator_id) is also the

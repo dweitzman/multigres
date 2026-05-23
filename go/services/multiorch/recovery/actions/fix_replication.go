@@ -220,7 +220,7 @@ func (a *FixReplicationAction) fixNotReplicating(
 	if a.config.GetUseNewConsensusFlow() {
 		informReq := &consensusdatapb.SetTermPrimaryRequest{
 			Leader: topoclient.PoolerAddressFor(primary.MultiPooler),
-			Rule:   primary.GetConsensusStatus().GetCurrentPosition().GetRule(),
+			Rule:   primary.GetConsensusStatus().GetCurrentPosition().GetDecision(),
 		}
 		if _, err := a.rpcClient.SetTermPrimary(ctx, replica.MultiPooler, informReq); err != nil {
 			return mterrors.Wrap(err, "failed to inform replica of primary")

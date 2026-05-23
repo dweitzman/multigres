@@ -24,7 +24,7 @@ func IsLeader(cs *clustermetadatapb.ConsensusStatus) bool {
 		return false
 	}
 	self := cs.GetId()
-	leader := cs.GetCurrentPosition().GetRule().GetLeaderId()
+	leader := cs.GetCurrentPosition().GetDecision().GetLeaderId()
 	if self == nil || leader == nil {
 		return false
 	}
@@ -39,5 +39,5 @@ func LeaderTerm(cs *clustermetadatapb.ConsensusStatus) int64 {
 	if !IsLeader(cs) {
 		return 0
 	}
-	return cs.GetCurrentPosition().GetRule().GetRuleNumber().GetCoordinatorTerm()
+	return cs.GetCurrentPosition().GetDecision().GetRuleNumber().GetCoordinatorTerm()
 }

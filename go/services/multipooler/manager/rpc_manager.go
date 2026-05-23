@@ -383,8 +383,8 @@ func (pm *MultiPoolerManager) Status(ctx context.Context) (*multipoolermanagerda
 	// Get cohort members from the current rule (best-effort).
 	if pos, err := pm.rules.observePosition(ctx); err != nil {
 		pm.logger.WarnContext(ctx, "Failed to read current rule for status", "error", err)
-	} else if pos.Rule != nil {
-		poolerStatus.CohortMembers = pos.Rule.CohortMembers
+	} else if pos.Decision != nil {
+		poolerStatus.CohortMembers = pos.Decision.CohortMembers
 	}
 
 	resp := &multipoolermanagerdatapb.StatusResponse{
@@ -589,7 +589,7 @@ func (pm *MultiPoolerManager) UpdateConsensusRule(ctx context.Context, operation
 	if err != nil {
 		return err
 	}
-	currentCohort := pos.GetRule().GetCohortMembers()
+	currentCohort := pos.GetDecision().GetCohortMembers()
 
 	// Check if synchronous replication is configured
 	if len(currentCohort) == 0 {
@@ -668,7 +668,7 @@ func (pm *MultiPoolerManager) UpdateConsensusRule(ctx context.Context, operation
 		"operation", operation,
 		"old_cohort", currentCohort,
 		"new_cohort", updatedStandbyIDs,
-		"expected_outgoing_rule", expectedOutgoingRule)
+		"expected_outgoing_decision", expectedOutgoingRule)
 
 	// Push an immediate health snapshot so orchestrators learn about the changed
 	// synchronous standby list without waiting for the next 30-second heartbeat.

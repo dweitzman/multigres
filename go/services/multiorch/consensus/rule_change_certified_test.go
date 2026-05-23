@@ -63,7 +63,7 @@ func makeCertifiedRequest(outgoingTerm int64, leaderID *clustermetadatapb.ID, co
 			RevokedBelowTerm:       newTerm,
 			AcceptedCoordinatorId:  orchID,
 			CoordinatorInitiatedAt: timestamppb.Now(),
-			OutgoingRule:           &clustermetadatapb.RuleNumber{CoordinatorTerm: outgoingTerm},
+			OutgoingDecision:       &clustermetadatapb.RuleNumber{CoordinatorTerm: outgoingTerm},
 		},
 	}
 	return shardKey, rule, cert
@@ -141,7 +141,7 @@ func TestApplyCertifiedRuleChange_RejectsRevocationNotAboveOutgoing(t *testing.T
 	c, orchID := newCertifiedTestCoordinator(t, rpcclient.NewFakeClient(), []*clustermetadatapb.MultiPooler{mp1.MultiPooler})
 	shardKey, rule, cert := makeCertifiedRequest(5, mp1.MultiPooler.Id, []*clustermetadatapb.ID{mp1.MultiPooler.Id}, orchID)
 	// New term must be > outgoing term. Force them equal.
-	cert.TermRevocation.OutgoingRule.CoordinatorTerm = cert.TermRevocation.RevokedBelowTerm
+	cert.TermRevocation.OutgoingDecision.CoordinatorTerm = cert.TermRevocation.RevokedBelowTerm
 
 	err := c.ApplyCertifiedRuleChange(context.Background(), shardKey, rule, cert, "test")
 	require.Error(t, err)
@@ -194,7 +194,7 @@ func TestValidateCertifiedRuleChange(t *testing.T) {
 				RevokedBelowTerm:       1,
 				AcceptedCoordinatorId:  orchID,
 				CoordinatorInitiatedAt: timestamppb.Now(),
-				OutgoingRule:           &clustermetadatapb.RuleNumber{},
+				OutgoingDecision:       &clustermetadatapb.RuleNumber{},
 			},
 		}
 	}
@@ -277,7 +277,7 @@ func TestValidateCertifiedRuleChange(t *testing.T) {
 		{
 			name: "cert.term_revocation.outgoing_rule missing",
 			mutate: func(_ **clustermetadatapb.ShardKey, _ *clustermetadatapb.ShardRule, cert *clustermetadatapb.ExternallyCertifiedRevocation) {
-				cert.TermRevocation.OutgoingRule = nil
+				cert.TermRevocation.OutgoingDecision = nil
 			},
 			wantMatch: "outgoing_rule is required",
 		},
@@ -380,8 +380,8 @@ func TestRefreshShardConsensusStatuses(t *testing.T) {
 		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 			Id: mp1.Id,
 			CurrentPosition: &clustermetadatapb.PoolerPosition{
-				Rule: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4}},
-				Lsn:  "0/100",
+				Decision: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4}},
+				Lsn:      "0/100",
 			},
 		},
 	}
@@ -389,8 +389,8 @@ func TestRefreshShardConsensusStatuses(t *testing.T) {
 		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 			Id: mp2.Id,
 			CurrentPosition: &clustermetadatapb.PoolerPosition{
-				Rule: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4}},
-				Lsn:  "0/200",
+				Decision: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4}},
+				Lsn:      "0/200",
 			},
 		},
 	}

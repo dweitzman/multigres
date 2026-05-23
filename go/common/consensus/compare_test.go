@@ -28,8 +28,8 @@ func rn(term, subterm int64) *clustermetadatapb.RuleNumber {
 
 func pos(term int64, lsn string) *clustermetadatapb.PoolerPosition {
 	return &clustermetadatapb.PoolerPosition{
-		Rule: &clustermetadatapb.ShardRule{RuleNumber: rn(term, 0)},
-		Lsn:  lsn,
+		Decision: &clustermetadatapb.ShardRule{RuleNumber: rn(term, 0)},
+		Lsn:      lsn,
 	}
 }
 
@@ -87,7 +87,7 @@ func TestMostAdvancedPosition(t *testing.T) {
 			status("b", pos(4, "0/100")),
 			status("c", pos(3, "0/500000")),
 		})
-		assert.Equal(t, int64(4), got.GetRule().GetRuleNumber().GetCoordinatorTerm())
+		assert.Equal(t, int64(4), got.GetDecision().GetRuleNumber().GetCoordinatorTerm())
 		assert.Equal(t, "0/100", got.GetLsn())
 	})
 
@@ -107,7 +107,7 @@ func TestMostAdvancedPosition(t *testing.T) {
 		})
 		// pooler-a's rule is higher (5) but its LSN is unparsable, so it's
 		// filtered out and pooler-b wins despite the lower rule.
-		assert.Equal(t, int64(3), got.GetRule().GetRuleNumber().GetCoordinatorTerm())
+		assert.Equal(t, int64(3), got.GetDecision().GetRuleNumber().GetCoordinatorTerm())
 		assert.Equal(t, "0/100", got.GetLsn())
 	})
 }
@@ -232,6 +232,56 @@ func TestComparePosition(t *testing.T) {
 		{"both nil", nil, nil, 0},
 		{"nil less than non-nil", nil, pos(1, "0/100"), -1},
 		{"non-nil greater than nil", pos(1, "0/100"), nil, 1},
+
+		// Proposal comparison: same decision, proposal is the tiebreaker.
+		{
+			"proposal wins over no proposal",
+			&clustermetadatapb.PoolerPosition{
+				Decision: &clustermetadatapb.ShardRule{RuleNumber: rn(3, 0)},
+				Proposal: &clustermetadatapb.ShardRule{RuleNumber: rn(5, 0)},
+				Lsn:      "0/100",
+			},
+			pos(3, "0/100"),
+			1,
+		},
+		{
+			"no proposal loses to proposal",
+			pos(3, "0/100"),
+			&clustermetadatapb.PoolerPosition{
+				Decision: &clustermetadatapb.ShardRule{RuleNumber: rn(3, 0)},
+				Proposal: &clustermetadatapb.ShardRule{RuleNumber: rn(5, 0)},
+				Lsn:      "0/100",
+			},
+			-1,
+		},
+		{
+			"higher proposal wins",
+			&clustermetadatapb.PoolerPosition{
+				Decision: &clustermetadatapb.ShardRule{RuleNumber: rn(3, 0)},
+				Proposal: &clustermetadatapb.ShardRule{RuleNumber: rn(7, 0)},
+				Lsn:      "0/1",
+			},
+			&clustermetadatapb.PoolerPosition{
+				Decision: &clustermetadatapb.ShardRule{RuleNumber: rn(3, 0)},
+				Proposal: &clustermetadatapb.ShardRule{RuleNumber: rn(5, 0)},
+				Lsn:      "0/999",
+			},
+			1,
+		},
+		{
+			"equal proposals fall through to LSN",
+			&clustermetadatapb.PoolerPosition{
+				Decision: &clustermetadatapb.ShardRule{RuleNumber: rn(3, 0)},
+				Proposal: &clustermetadatapb.ShardRule{RuleNumber: rn(5, 0)},
+				Lsn:      "0/200",
+			},
+			&clustermetadatapb.PoolerPosition{
+				Decision: &clustermetadatapb.ShardRule{RuleNumber: rn(3, 0)},
+				Proposal: &clustermetadatapb.ShardRule{RuleNumber: rn(5, 0)},
+				Lsn:      "0/100",
+			},
+			1,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

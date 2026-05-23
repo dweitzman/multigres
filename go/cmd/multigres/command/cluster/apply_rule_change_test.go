@@ -71,7 +71,7 @@ func TestBuildRequest_CertModeHappyPath(t *testing.T) {
 			Cert: &clustermetadatapb.ExternallyCertifiedRevocation{
 				FrozenLsn: "0/0",
 				TermRevocation: &clustermetadatapb.TermRevocation{
-					OutgoingRule: &clustermetadatapb.RuleNumber{
+					OutgoingDecision: &clustermetadatapb.RuleNumber{
 						CoordinatorTerm: 5,
 						LeaderSubterm:   3,
 					},
@@ -202,7 +202,7 @@ func testConfirmRequest() *multiadminpb.ApplyCertifiedRuleChangeRequest {
 			Cert: &clustermetadatapb.ExternallyCertifiedRevocation{
 				FrozenLsn: "0/0",
 				TermRevocation: &clustermetadatapb.TermRevocation{
-					OutgoingRule: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
+					OutgoingDecision: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
 				},
 			},
 		},

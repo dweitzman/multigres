@@ -1587,7 +1587,7 @@ func TestReplicationStatus(t *testing.T) {
 		pm.rules = newRuleStore(logger, mockQueryService, noopSyncStandbyManager{})
 		pm.rules = &fakeRuleStore{
 			pos: &clustermetadatapb.PoolerPosition{
-				Rule: &clustermetadatapb.ShardRule{
+				Decision: &clustermetadatapb.ShardRule{
 					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
 					CohortMembers: []*clustermetadatapb.ID{
 						{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "pooler-a"},
@@ -1875,7 +1875,7 @@ func TestUpdateConsensusRule_HistoryFailurePreventsGUCUpdate(t *testing.T) {
 	// updateErr simulates the history write timing out (the failure we're testing).
 	manager.rules = &fakeRuleStore{
 		pos: &clustermetadatapb.PoolerPosition{
-			Rule: &clustermetadatapb.ShardRule{
+			Decision: &clustermetadatapb.ShardRule{
 				RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
 				CohortMembers: []*clustermetadatapb.ID{
 					{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica-1"},

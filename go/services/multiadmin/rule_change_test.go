@@ -96,7 +96,7 @@ func TestFillIdentityFields_PopulatesEmpty(t *testing.T) {
 	rule := &clustermetadatapb.ShardRule{}
 	cert := &clustermetadatapb.ExternallyCertifiedRevocation{
 		TermRevocation: &clustermetadatapb.TermRevocation{
-			OutgoingRule: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
+			OutgoingDecision: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
 		},
 		FrozenLsn: "0/100",
 	}
@@ -132,7 +132,7 @@ func TestFillIdentityFields_PreservesCallerValues(t *testing.T) {
 			RevokedBelowTerm:       42,
 			AcceptedCoordinatorId:  callerOrch,
 			CoordinatorInitiatedAt: callerTime,
-			OutgoingRule:           &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
+			OutgoingDecision:       &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
 		},
 	}
 	// Multiadmin happens to pick the same orch the caller named.
@@ -154,7 +154,7 @@ func TestFillIdentityFields_RejectsCoordinatorMismatch(t *testing.T) {
 		FrozenLsn: "0/100",
 		TermRevocation: &clustermetadatapb.TermRevocation{
 			AcceptedCoordinatorId: callerOrch,
-			OutgoingRule:          &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
+			OutgoingDecision:      &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
 		},
 	}
 	differentOrch := orchID("cell2", "multiadmin-chose-this")
@@ -171,7 +171,7 @@ func TestFillIdentityFields_BootstrapZeroOutgoing(t *testing.T) {
 	rule := &clustermetadatapb.ShardRule{}
 	cert := &clustermetadatapb.ExternallyCertifiedRevocation{
 		TermRevocation: &clustermetadatapb.TermRevocation{
-			OutgoingRule: &clustermetadatapb.RuleNumber{},
+			OutgoingDecision: &clustermetadatapb.RuleNumber{},
 		},
 		FrozenLsn: "0/0",
 	}
@@ -257,8 +257,8 @@ func TestProbeMostAdvanced_PicksMostAdvanced(t *testing.T) {
 			ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 				Id: p.pooler.Id,
 				CurrentPosition: &clustermetadatapb.PoolerPosition{
-					Rule: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: p.term}},
-					Lsn:  p.lsn,
+					Decision: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: p.term}},
+					Lsn:      p.lsn,
 				},
 			},
 		})
@@ -292,8 +292,8 @@ func TestProbeMostAdvanced_InsufficientCohortRecruitment(t *testing.T) {
 		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 			Id: mp1.Id,
 			CurrentPosition: &clustermetadatapb.PoolerPosition{
-				Rule: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1}},
-				Lsn:  "0/100",
+				Decision: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1}},
+				Lsn:      "0/100",
 			},
 		},
 	})
@@ -359,7 +359,7 @@ func TestBuildCert_ExplicitCert_Cloned(t *testing.T) {
 	original := &clustermetadatapb.ExternallyCertifiedRevocation{
 		FrozenLsn: "0/100",
 		TermRevocation: &clustermetadatapb.TermRevocation{
-			OutgoingRule: &clustermetadatapb.RuleNumber{CoordinatorTerm: 3},
+			OutgoingDecision: &clustermetadatapb.RuleNumber{CoordinatorTerm: 3},
 		},
 	}
 	req := &multiadminpb.ApplyCertifiedRuleChangeRequest{
@@ -401,8 +401,8 @@ func TestBuildCert_UnsafeDerive_UsesProbe(t *testing.T) {
 		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 			Id: mp1.Id,
 			CurrentPosition: &clustermetadatapb.PoolerPosition{
-				Rule: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4}},
-				Lsn:  "0/200",
+				Decision: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4}},
+				Lsn:      "0/200",
 			},
 		},
 	})
@@ -410,8 +410,8 @@ func TestBuildCert_UnsafeDerive_UsesProbe(t *testing.T) {
 		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 			Id: mp2.Id,
 			CurrentPosition: &clustermetadatapb.PoolerPosition{
-				Rule: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4}},
-				Lsn:  "0/300",
+				Decision: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4}},
+				Lsn:      "0/300",
 			},
 		},
 	})
@@ -432,7 +432,7 @@ func TestBuildCert_UnsafeDerive_UsesProbe(t *testing.T) {
 	prototest.AssertEqual(t, &clustermetadatapb.ExternallyCertifiedRevocation{
 		FrozenLsn: "0/300",
 		TermRevocation: &clustermetadatapb.TermRevocation{
-			OutgoingRule: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4},
+			OutgoingDecision: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4},
 		},
 	}, got)
 }
@@ -527,7 +527,7 @@ func validApplyRequest(leader *clustermetadatapb.ID, cohort []*clustermetadatapb
 			Cert: &clustermetadatapb.ExternallyCertifiedRevocation{
 				FrozenLsn: "0/100",
 				TermRevocation: &clustermetadatapb.TermRevocation{
-					OutgoingRule: &clustermetadatapb.RuleNumber{CoordinatorTerm: 2},
+					OutgoingDecision: &clustermetadatapb.RuleNumber{CoordinatorTerm: 2},
 				},
 			},
 		},

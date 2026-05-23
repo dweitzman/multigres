@@ -184,7 +184,7 @@ func (s *MultiAdminServer) buildCert(
 		}
 		return &clustermetadatapb.ExternallyCertifiedRevocation{
 			TermRevocation: &clustermetadatapb.TermRevocation{
-				OutgoingRule: outgoingRule,
+				OutgoingDecision: outgoingRule,
 			},
 			FrozenLsn: frozenLSN,
 		}, nil
@@ -288,7 +288,7 @@ func (s *MultiAdminServer) probeMostAdvanced(
 	s.logger.InfoContext(ctx, "derived cert from reachable cohort",
 		"reachable", len(reachable), "total", len(poolers))
 
-	outgoingRule := best.GetRule().GetRuleNumber()
+	outgoingRule := best.GetDecision().GetRuleNumber()
 	if outgoingRule == nil {
 		// Fresh bootstrap: no rule recorded anywhere. Bootstrap convention.
 		outgoingRule = &clustermetadatapb.RuleNumber{}
@@ -325,7 +325,7 @@ func fillIdentityFields(
 		rev.CoordinatorInitiatedAt = now
 	}
 	if rev.GetRevokedBelowTerm() == 0 {
-		rev.RevokedBelowTerm = rev.GetOutgoingRule().GetCoordinatorTerm() + 1
+		rev.RevokedBelowTerm = rev.GetOutgoingDecision().GetCoordinatorTerm() + 1
 	}
 
 	if proposedRule.GetRuleNumber() == nil {

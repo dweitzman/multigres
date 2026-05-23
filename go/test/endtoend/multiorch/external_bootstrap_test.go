@@ -155,7 +155,7 @@ func TestBootstrap_ViaExternalAPI(t *testing.T) {
 					RevokedBelowTerm:       1,
 					AcceptedCoordinatorId:  orchProtoID,
 					CoordinatorInitiatedAt: now,
-					OutgoingRule:           &clustermetadatapb.RuleNumber{},
+					OutgoingDecision:       &clustermetadatapb.RuleNumber{},
 				},
 			},
 		},
@@ -204,7 +204,7 @@ func TestBootstrap_ViaExternalAPI(t *testing.T) {
 		// the field the caller set on the ShardRule, written to current_rule,
 		// and reported back via observePosition in ConsensusStatus.
 		// Postgres truncates to microseconds, so compare at that granularity.
-		recordedRule := status.ConsensusStatus.GetCurrentPosition().GetRule()
+		recordedRule := status.ConsensusStatus.GetCurrentPosition().GetDecision()
 		require.NotNil(t, recordedRule, "primary should have a recorded rule")
 		require.NotNil(t, recordedRule.GetCreationTime(), "recorded rule should have a creation_time")
 		wantCreation := now.AsTime().Truncate(time.Microsecond).UTC()
