@@ -152,12 +152,12 @@ func TestGracefulShutdown_NilPgctldClient(t *testing.T) {
 // primaryTermLocked reads from postgres (via rules.observePosition), so it
 // would silently no-op once postgres was down and the coordinator would have
 // to wait for stream-EOF + LeaderIsDead grace period instead of firing
-// LeaderResignedAnalyzer on REQUESTING_DEMOTION.
+// LeaderResignedAnalyzer on requesting_demotion.
 //
 // The fake ruleStore is configured to fail observePosition the moment
 // pgctld.Stop has been called. If GracefulShutdown stops postgres before
-// announcing, observePosition fails and resignedLeaderAtTerm stays 0 — the
-// assertion that resignedLeaderAtTerm == primary_term would then fail.
+// announcing, observePosition fails and requestingDemotion stays false — the
+// assertion that requestingDemotion is true would then fail.
 func TestGracefulShutdown_AnnouncesBeforeStop(t *testing.T) {
 	const primaryTerm int64 = 42
 
@@ -207,9 +207,9 @@ func TestGracefulShutdown_AnnouncesBeforeStop(t *testing.T) {
 		"pgctld.Stop should have been called once (fast succeeded)")
 
 	pm.mu.Lock()
-	got := pm.resignedLeaderAtTerm
+	got := pm.requestingDemotion
 	pm.mu.Unlock()
-	require.Equal(t, primaryTerm, got,
-		"resignedLeaderAtTerm must be set to the primary term; if 0, the announce was "+
+	require.True(t, got,
+		"requestingDemotion must be set to true; if false, the announce was "+
 			"sequenced AFTER pgctld.Stop and observePosition failed for the dead postgres")
 }

@@ -15,8 +15,39 @@
 package store
 
 import (
+	"time"
+
 	multiorchdata "github.com/multigres/multigres/go/pb/multiorchdata"
 )
+
+// PoolerLikelyUnreachable reports whether the coordinator has been out of
+// contact with a pooler for long enough to treat it as unreachable. It is a
+// pure staleness check against PoolerHealthState.LastSeen — intentionally
+// NOT consulting IsLastCheckValid, which flips to false instantly on any
+// health-stream disconnect including the brief window of an ordinary network
+// blip. Decision sites (cohort exclusion, failover trigger, AppointLeader
+// pre-check, etc.) should ALWAYS go through this helper rather than reading
+// IsLastCheckValid directly.
+//
+// A missing LastSeen timestamp also returns true (we have no positive
+// evidence the pooler exists). threshold is the maximum staleness tolerated
+// before declaring the pooler unreachable; callers pick a value that matches
+// their tolerance for transient flaps.
+//
+// TODO: audit existing IsLastCheckValid consumers (appoint_leader.go,
+// generator.go, leader_appointment.go, store.IsInitialized, etc.) and route
+// them through this helper too. They were all written before the debounce
+// concern surfaced and are similarly vulnerable to stream-blip noise.
+func PoolerLikelyUnreachable(p *multiorchdata.PoolerHealthState, threshold time.Duration) bool {
+	if p == nil {
+		return true
+	}
+	last := p.GetLastSeen()
+	if last == nil {
+		return true
+	}
+	return time.Since(last.AsTime()) > threshold
+}
 
 // poolerHealthStore is a thread-safe store for pooler health state.
 // It provides clone-on-read/write semantics so callers always work with

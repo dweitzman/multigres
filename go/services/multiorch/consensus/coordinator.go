@@ -18,6 +18,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"time"
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/eventlog"
@@ -28,7 +29,7 @@ import (
 	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
-	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
+	"github.com/multigres/multigres/go/services/multiorch/store"
 )
 
 // Coordinator orchestrates consensus-based leader election for shards.
@@ -117,19 +118,39 @@ func (c *Coordinator) AppointLeader(ctx context.Context, shardID string, cohort 
 	return c.appointLeaderWithTerm(ctx, shardID, cohort, policy, proposedTerm, reason)
 }
 
+// failoverCohortUnreachableThreshold is how long a pooler must have been out
+// of contact before runFailover treats it as unreachable for cohort exclusion.
+// Picked to absorb transient stream blips (markDisconnected flips
+// IsLastCheckValid=false instantly on any disconnect) while still recognising
+// a genuine outage promptly. See store.PoolerLikelyUnreachable for details.
+const failoverCohortUnreachableThreshold = 10 * time.Second
+
 // runFailover wires the new-flow failover callbacks for a coordinatorLedRuleChange
-// and runs it. Poolers that have signaled REQUESTING_DEMOTION are excluded from
-// the cohort entirely: a writing leader's local LSN is always at least as
-// advanced as any replica's (async replication), so including a resigned
-// leader would let it dominate discovery and dead-end the proposal when health
-// check rejects it. The full cohort identity is preserved via OutgoingRule's
-// CohortMembers (replicas carry the same rule), so the consensus layer's
-// outgoing-quorum check still runs against the original cohort size.
+// and runs it. A pooler is excluded from the rule-change flow only when:
+//
+//   - We have not heard from it for longer than the unreachable threshold.
+//     Including a truly-dead pooler would stall the Recruit fan-out waiting
+//     for an RPC that will never return; including a briefly-disconnected one
+//     would drop the cohort below quorum unnecessarily.
+//   - It has self-reported INELIGIBLE for the next cohort (e.g. graceful
+//     shutdown in progress, operator drain). Including it would form a cohort
+//     around a pooler that explicitly does not want to participate.
+//
+// Notably, requesting_demotion=true is NOT a cohort-exclusion signal: that's
+// a current-term failover trigger, not a statement about the next cohort. A
+// resigning leader stays in liveCohort and may even be re-elected if it
+// remains the best candidate. Excluding it can drop the recruitment pool
+// below quorum and dead-end the proposal when the cohort is small.
 func (c *Coordinator) runFailover(ctx context.Context, cohort []*multiorchdatapb.PoolerHealthState, reason string) error {
 	liveCohort := make([]*multiorchdatapb.PoolerHealthState, 0, len(cohort))
 	for _, p := range cohort {
-		if types.LeaderNeedsReplacement(p) {
-			c.logger.InfoContext(ctx, "Excluding resigned pooler from failover cohort",
+		if store.PoolerLikelyUnreachable(p, failoverCohortUnreachableThreshold) {
+			c.logger.InfoContext(ctx, "Excluding unreachable pooler from failover cohort",
+				"pooler", p.GetMultiPooler().GetId().GetName())
+			continue
+		}
+		if p.GetAvailabilityStatus().GetCohortIneligible() {
+			c.logger.InfoContext(ctx, "Excluding cohort-ineligible pooler from failover cohort",
 				"pooler", p.GetMultiPooler().GetId().GetName())
 			continue
 		}
@@ -137,7 +158,7 @@ func (c *Coordinator) runFailover(ctx context.Context, cohort []*multiorchdatapb
 	}
 	if len(liveCohort) == 0 {
 		return mterrors.Errorf(mtrpcpb.Code_UNAVAILABLE,
-			"no non-resigned poolers in cohort; cannot fail over")
+			"no cohort-eligible reachable poolers; cannot fail over")
 	}
 
 	// Failover constructs the revocation via NewTermRevocation: outgoing_rule
@@ -193,7 +214,7 @@ func (c *Coordinator) appointLeaderWithTerm(ctx context.Context, shardID string,
 	// quorum is recruited, so a slow node doesn't stall the path.)
 	filteredCohort := make([]*multiorchdatapb.PoolerHealthState, 0, len(cohort))
 	for _, p := range cohort {
-		if types.LeaderNeedsReplacement(p) {
+		if p.GetAvailabilityStatus().GetRequestingDemotion() {
 			c.logger.InfoContext(ctx, "Excluding resigned pooler from election cohort",
 				"shard", shardID,
 				"pooler", p.MultiPooler.Id.Name)

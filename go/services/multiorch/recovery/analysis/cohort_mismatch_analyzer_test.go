@@ -47,13 +47,11 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 	shardKey := &clustermetadatapb.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"}
 
 	// healthyReplicaPA returns a PoolerAnalysis for a healthy, replicating
-	// REPLICA, optionally with a cohort eligibility signal.
-	healthyReplicaPA := func(id *clustermetadatapb.ID, signal clustermetadatapb.CohortEligibilitySignal) *PoolerAnalysis {
+	// REPLICA, with the requested cohort_ineligible value (false = eligible).
+	healthyReplicaPA := func(id *clustermetadatapb.ID, cohortIneligible bool) *PoolerAnalysis {
 		var av *clustermetadatapb.AvailabilityStatus
-		if signal != clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_UNKNOWN {
-			av = &clustermetadatapb.AvailabilityStatus{
-				CohortEligibilityStatus: &clustermetadatapb.CohortEligibilityStatus{Signal: signal},
-			}
+		if cohortIneligible {
+			av = &clustermetadatapb.AvailabilityStatus{CohortIneligible: true}
 		}
 		return &PoolerAnalysis{
 			PoolerID:            id,
@@ -91,7 +89,7 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 
 	t.Run("detects healthy replica missing from cohort", func(t *testing.T) {
 		// Cohort = {} — replica A is replicating, eligible by default, and absent.
-		sa := healthyShard(nil, healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_UNKNOWN))
+		sa := healthyShard(nil, healthyReplicaPA(replicaA, false))
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
 		require.Len(t, problems, 1)
@@ -104,7 +102,7 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 	t.Run("detects cohort member signaling INELIGIBLE", func(t *testing.T) {
 		sa := healthyShard(
 			[]*clustermetadatapb.ID{replicaA},
-			healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE),
+			healthyReplicaPA(replicaA, true),
 		)
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
@@ -116,7 +114,7 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 	t.Run("ignores eligible cohort member already in cohort", func(t *testing.T) {
 		sa := healthyShard(
 			[]*clustermetadatapb.ID{replicaA},
-			healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
+			healthyReplicaPA(replicaA, false),
 		)
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
@@ -124,14 +122,14 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 	})
 
 	t.Run("ignores ineligible non-cohort pooler (don't add)", func(t *testing.T) {
-		sa := healthyShard(nil, healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE))
+		sa := healthyShard(nil, healthyReplicaPA(replicaA, true))
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
 		assert.Empty(t, problems)
 	})
 
 	t.Run("ignores non-replicating non-cohort pooler", func(t *testing.T) {
-		pa := healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE)
+		pa := healthyReplicaPA(replicaA, false)
 		pa.PrimaryConnInfoHost = "" // not yet replicating
 		sa := healthyShard(nil, pa)
 		problems, err := analyzer.Analyze(sa)
@@ -140,7 +138,7 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 	})
 
 	t.Run("ignores replica with stopped replication", func(t *testing.T) {
-		pa := healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE)
+		pa := healthyReplicaPA(replicaA, false)
 		pa.ReplicationStopped = true
 		sa := healthyShard(nil, pa)
 		problems, err := analyzer.Analyze(sa)
@@ -149,7 +147,7 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 	})
 
 	t.Run("ignores uninitialized replica", func(t *testing.T) {
-		pa := healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE)
+		pa := healthyReplicaPA(replicaA, false)
 		pa.IsInitialized = false
 		sa := healthyShard(nil, pa)
 		problems, err := analyzer.Analyze(sa)
@@ -158,7 +156,7 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 	})
 
 	t.Run("does not fire when leader is unreachable", func(t *testing.T) {
-		sa := healthyShard(nil, healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE))
+		sa := healthyShard(nil, healthyReplicaPA(replicaA, false))
 		sa.LeaderReachable = false
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
@@ -166,7 +164,7 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 	})
 
 	t.Run("does not fire when leader postgres is not ready", func(t *testing.T) {
-		sa := healthyShard(nil, healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE))
+		sa := healthyShard(nil, healthyReplicaPA(replicaA, false))
 		sa.LeaderPostgresReady = false
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
@@ -176,8 +174,8 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 	t.Run("emits both add and remove problems together", func(t *testing.T) {
 		sa := healthyShard(
 			[]*clustermetadatapb.ID{replicaA}, // A is in cohort, B is not
-			healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE),
-			healthyReplicaPA(replicaB, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
+			healthyReplicaPA(replicaA, true),
+			healthyReplicaPA(replicaB, false),
 		)
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
@@ -189,7 +187,7 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 
 	t.Run("returns error when factory is nil", func(t *testing.T) {
 		nilFactoryAnalyzer := &CohortMismatchAnalyzer{factory: nil}
-		sa := healthyShard(nil, healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE))
+		sa := healthyShard(nil, healthyReplicaPA(replicaA, false))
 		problems, err := nilFactoryAnalyzer.Analyze(sa)
 		require.Error(t, err)
 		assert.Nil(t, problems)
@@ -210,7 +208,7 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 	})
 
 	t.Run("ignores replica with stale health snapshot (LastCheckValid false)", func(t *testing.T) {
-		pa := healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE)
+		pa := healthyReplicaPA(replicaA, false)
 		pa.LastCheckValid = false
 		sa := healthyShard(nil, pa)
 		problems, err := analyzer.Analyze(sa)

@@ -59,7 +59,7 @@ var pgctldStopModes = []struct {
 //
 // The action lock is held for the whole sequence: pgctld.Stop is gated behind
 // the protectedPgctldClient action-lock check, and announcing the resignation
-// involves reading consensus state and writing resignedLeaderAtTerm under the
+// involves reading consensus state and writing requestingDemotion under the
 // same lock — holding it across both serialises against any concurrent
 // consensus operation (Promote, Demote, Recruit, BeginTerm REVOKE).
 func (pm *MultiPoolerManager) GracefulShutdown(ctx context.Context) {
@@ -84,26 +84,25 @@ func (pm *MultiPoolerManager) GracefulShutdown(ctx context.Context) {
 		}
 	}
 
-	// If we are the leader, announce REQUESTING_DEMOTION before stopping
-	// postgres. primaryTermLocked reads the current rule position from
-	// postgres, so the read must happen while postgres is still alive;
-	// running it post-stop would fail and the coordinator would have to wait
-	// for stream EOF + LeaderIsDead grace period instead. No-op for
-	// non-leaders and partially-initialized managers (consensus not wired).
-	// Mirrors the EmergencyDemote pattern in rpc_manager.go.
+	// Announce both signals before stopping postgres so the coordinator can
+	// react while we still respond to RPCs:
+	//   - requesting_demotion: fail us over as the current leader immediately
+	//     (skips stream EOF + LeaderIsDead grace period for a leader).
+	//   - cohort INELIGIBLE: remove us from the next cohort if the timing
+	//     allows orch to run a cohort reconcile before we're gone. If we exit
+	//     first, reachability checks pick it up; either way the cluster ends
+	//     up reconfigured around our absence.
+	//
+	// For partially-initialized managers (consensus not wired), the
+	// requesting_demotion path no-ops; cohort eligibility is published in
+	// every snapshot so the INELIGIBLE flip still takes effect.
 	if pm.consensusState != nil && pm.rules != nil {
-		primaryTerm, err := pm.primaryTermLocked(lockCtx)
-		switch {
-		case err != nil:
-			pm.logger.WarnContext(lockCtx, "could not read primary term for resignation announcement; coordinator will fail over via stream EOF",
+		if err := pm.setRequestingDemotion(lockCtx, true); err != nil {
+			pm.logger.WarnContext(lockCtx, "failed to set requesting_demotion during graceful shutdown",
 				"error", err)
-		case primaryTerm != 0:
-			if err := pm.setResignedLeaderAtTerm(lockCtx, primaryTerm); err != nil {
-				pm.logger.WarnContext(lockCtx, "failed to record resigned primary term",
-					"error", err)
-			}
 		}
 	}
+	pm.setCohortIneligible(true)
 
 	pm.stopPostgresLocked(lockCtx)
 

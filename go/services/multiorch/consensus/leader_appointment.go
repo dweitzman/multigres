@@ -22,7 +22,6 @@ import (
 
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/timeouts"
-	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
 	"github.com/multigres/multigres/go/tools/pgutil"
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
@@ -105,7 +104,7 @@ func (c *Coordinator) BeginTerm(ctx context.Context, shardID string, cohort []*m
 		if pooler.MultiPooler.Id.Name == candidate.MultiPooler.Id.Name {
 			continue
 		}
-		if types.LeaderNeedsReplacement(pooler) {
+		if pooler.GetAvailabilityStatus().GetRequestingDemotion() {
 			c.logger.InfoContext(ctx, "Skipping resigned pooler from standbys",
 				"pooler", pooler.MultiPooler.Id.Name)
 			continue
@@ -236,7 +235,7 @@ func (c *Coordinator) selectCandidate(ctx context.Context, recruited []recruitme
 		// unconditionally avoids confusing re-elections of a node that just
 		// stepped down. If all candidates are resigned the election is deferred
 		// until a non-resigned candidate is available.
-		if types.LeaderNeedsReplacement(r.pooler) {
+		if r.pooler.GetAvailabilityStatus().GetRequestingDemotion() {
 			c.logger.InfoContext(ctx, "Skipping resigned candidate during selection",
 				"pooler", r.pooler.MultiPooler.Id.Name)
 			continue

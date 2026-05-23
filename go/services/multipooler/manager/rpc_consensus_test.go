@@ -503,15 +503,14 @@ func TestBeginTerm(t *testing.T) {
 				Name:      "candidate-B",
 			},
 			makeFilesystemReadOnly: true,
-			setupMocks: func(m *mock.QueryService) {
-			},
-			expectedError:        false,
-			expectedAccepted:     false,
-			expectedRespTerm:     5,
-			checkMemoryUnchanged: true,
-			expectedMemoryTerm:   5,
-			expectedMemoryLeader: "", // Should remain empty after save failure
-			description:          "Save failure should leave memory unchanged with original term and leader",
+			setupMocks:             func(m *mock.QueryService) {},
+			expectedError:          false,
+			expectedAccepted:       false,
+			expectedRespTerm:       5,
+			checkMemoryUnchanged:   true,
+			expectedMemoryTerm:     5,
+			expectedMemoryLeader:   "", // Should remain empty after save failure
+			description:            "Save failure should leave memory unchanged with original term and leader",
 		},
 		{
 			name:   "NoAction_SaveFailureDuringAcceptance_MemoryUnchanged",
@@ -1517,9 +1516,12 @@ func TestRecruit(t *testing.T) {
 		})
 	}
 
-	t.Run("RewindPending_RejectsRecruit", func(t *testing.T) {
+	t.Run("RewindPending_RejectsRecruit_WhenOutgoingTermMismatches", func(t *testing.T) {
+		// Local rule term is 3; incoming Recruit's OutgoingRule references a
+		// different term (5), meaning some other leader reigned in between and
+		// our WAL may diverge from theirs. Refuse until pg_rewind reconciles.
 		mockQueryService := mock.NewQueryService()
-		pm, _ := setupManagerWithMockDB(t, mockQueryService, &fakeRuleStore{pos: makeRulePosition(0)})
+		pm, _ := setupManagerWithMockDB(t, mockQueryService, &fakeRuleStore{pos: makeRulePosition(3)})
 		pm.rewindPending.Store(true)
 
 		req := &consensusdatapb.RecruitRequest{
@@ -1527,12 +1529,41 @@ func TestRecruit(t *testing.T) {
 				RevokedBelowTerm:       7,
 				AcceptedCoordinatorId:  &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "coord"},
 				CoordinatorInitiatedAt: recruitTS,
-				OutgoingRule:           &clustermetadatapb.RuleNumber{},
+				OutgoingRule:           &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
 			},
 		}
 		_, err := pm.Recruit(t.Context(), req)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "rewind pending")
+		assert.True(t, pm.rewindPending.Load(), "rewindPending must stay set on refusal")
+	})
+
+	t.Run("RewindPending_AcceptsRecruit_WhenOutgoingTermMatches", func(t *testing.T) {
+		// Local rule term is 3; incoming Recruit's OutgoingRule references the
+		// same term, so no intermediate leader has committed since we resigned.
+		// The relax path lets the Recruit proceed even with rewindPending=true.
+		// Importantly, the flag stays set: clearing it is the authoritative job
+		// of promoteStandbyToPrimary (re-election) or SetTermPrimary →
+		// demoteStalePrimaryLocked (rejoin as follower).
+		mockQueryService := mock.NewQueryService()
+		pm, _ := setupManagerWithMockDB(t, mockQueryService, &fakeRuleStore{pos: makeRulePosition(3)})
+		pm.rewindPending.Store(true)
+
+		expectStandbyRecruitMocks(mockQueryService, "0/7000000", "")
+
+		req := &consensusdatapb.RecruitRequest{
+			TermRevocation: &clustermetadatapb.TermRevocation{
+				RevokedBelowTerm:       7,
+				AcceptedCoordinatorId:  &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "coord"},
+				CoordinatorInitiatedAt: recruitTS,
+				OutgoingRule:           &clustermetadatapb.RuleNumber{CoordinatorTerm: 3},
+			},
+		}
+		resp, err := pm.Recruit(t.Context(), req)
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+		assert.True(t, pm.rewindPending.Load(),
+			"rewindPending must remain set: clearing is owned by promote/SetTermPrimary, not Recruit")
 	})
 }
 
@@ -1786,9 +1817,9 @@ func TestPropose(t *testing.T) {
 			// Verify the promotion was recorded with the right coordinator term and WAL
 			// position, and that the health streamer was updated for write traffic.
 			preRun: func(pm *MultiPoolerManager) {
-				// Pre-set so we can verify clearResignedLeaderAtTerm ran.
+				// Pre-set so we can verify setRequestingDemotion(false) ran.
 				pm.mu.Lock()
-				pm.resignedLeaderAtTerm = 7
+				pm.requestingDemotion = true
 				pm.mu.Unlock()
 			},
 			postCheck: func(t *testing.T, pm *MultiPoolerManager, rs *fakeRuleStore) {
@@ -1807,7 +1838,7 @@ func TestPropose(t *testing.T) {
 				assert.Equal(t, int64(7), state.LeaderObservation.LeaderTerm)
 
 				pm.mu.Lock()
-				assert.Equal(t, int64(0), pm.resignedLeaderAtTerm, "clearResignedLeaderAtTerm should have cleared the term")
+				assert.False(t, pm.requestingDemotion, "setRequestingDemotion(false) should have cleared the term")
 				pm.mu.Unlock()
 
 				// ReplicationPrimary should advertise this pooler as the primary
@@ -2003,43 +2034,38 @@ func TestPropose(t *testing.T) {
 
 func TestAvailabilityStatus(t *testing.T) {
 	t.Run("buildAvailabilityStatus publishes cohort eligibility with no leadership status when no resignation is set", func(t *testing.T) {
-		pm := &MultiPoolerManager{cohortEligibility: clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE}
+		pm := &MultiPoolerManager{}
 		av := pm.buildAvailabilityStatus()
 		require.NotNil(t, av)
-		assert.Nil(t, av.LeadershipStatus)
-		require.NotNil(t, av.CohortEligibilityStatus)
-		assert.Equal(t, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE, av.CohortEligibilityStatus.Signal)
+		assert.False(t, av.RequestingDemotion)
+		assert.False(t, av.CohortIneligible)
 	})
 
-	t.Run("resignedLeaderAtTerm set adds a LeadershipStatus alongside cohort eligibility", func(t *testing.T) {
-		pm := &MultiPoolerManager{cohortEligibility: clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE}
-		pm.resignedLeaderAtTerm = 7
+	t.Run("requestingDemotion=true is published alongside cohort eligibility", func(t *testing.T) {
+		pm := &MultiPoolerManager{}
+		pm.requestingDemotion = true
 		av := pm.buildAvailabilityStatus()
 		require.NotNil(t, av)
-		require.NotNil(t, av.LeadershipStatus)
-		assert.Equal(t, int64(7), av.LeadershipStatus.LeaderTerm)
-		assert.Equal(t, clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION, av.LeadershipStatus.Signal)
-		require.NotNil(t, av.CohortEligibilityStatus)
-		assert.Equal(t, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE, av.CohortEligibilityStatus.Signal)
+		assert.True(t, av.RequestingDemotion)
+		assert.False(t, av.CohortIneligible)
 	})
 
-	t.Run("resignedLeaderAtTerm cleared drops LeadershipStatus but keeps cohort eligibility", func(t *testing.T) {
-		pm := &MultiPoolerManager{cohortEligibility: clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE}
-		pm.resignedLeaderAtTerm = 3
-		pm.resignedLeaderAtTerm = 0
+	t.Run("requestingDemotion cleared drops the signal but keeps cohort eligibility", func(t *testing.T) {
+		pm := &MultiPoolerManager{}
+		pm.requestingDemotion = true
+		pm.requestingDemotion = false
 		av := pm.buildAvailabilityStatus()
 		require.NotNil(t, av)
-		assert.Nil(t, av.LeadershipStatus)
-		require.NotNil(t, av.CohortEligibilityStatus)
+		assert.False(t, av.RequestingDemotion)
+		assert.False(t, av.CohortIneligible)
 	})
 
-	t.Run("setCohortEligibility flips the signal", func(t *testing.T) {
-		pm := &MultiPoolerManager{cohortEligibility: clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE}
-		pm.setCohortEligibility(clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE)
+	t.Run("setCohortIneligible flips the flag", func(t *testing.T) {
+		pm := &MultiPoolerManager{}
+		pm.setCohortIneligible(true)
 		av := pm.buildAvailabilityStatus()
 		require.NotNil(t, av)
-		require.NotNil(t, av.CohortEligibilityStatus)
-		assert.Equal(t, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE, av.CohortEligibilityStatus.Signal)
+		assert.True(t, av.CohortIneligible)
 	})
 }
 
@@ -2047,7 +2073,7 @@ func TestAvailabilityStatus(t *testing.T) {
 // resignation term broadcasts to subscribers on change so the coordinator
 // sees the signal without waiting for the next periodic snapshot, and does
 // NOT broadcast when the value is unchanged (idempotent calls are cheap).
-func TestSetResignedLeaderAtTerm_BroadcastsOnChange(t *testing.T) {
+func TestSetRequestingDemotion_BroadcastsOnChange(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	id := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "test"}
 	streamer := newHealthStreamer(logger, id, "tg", "0")
@@ -2077,15 +2103,15 @@ func TestSetResignedLeaderAtTerm_BroadcastsOnChange(t *testing.T) {
 	require.NoError(t, err)
 	defer pm.actionLock.Release(lockCtx)
 
-	require.NoError(t, pm.setResignedLeaderAtTerm(lockCtx, 5))
-	assert.Equal(t, 1, drain(), "first call should broadcast on change from 0 to 5")
+	require.NoError(t, pm.setRequestingDemotion(lockCtx, true))
+	assert.Equal(t, 1, drain(), "first call should broadcast on change from false to true")
 
-	require.NoError(t, pm.setResignedLeaderAtTerm(lockCtx, 5))
+	require.NoError(t, pm.setRequestingDemotion(lockCtx, true))
 	assert.Equal(t, 0, drain(), "repeating the same value should NOT broadcast")
 
-	require.NoError(t, pm.setResignedLeaderAtTerm(lockCtx, 7))
-	assert.Equal(t, 1, drain(), "changing to a new term should broadcast")
+	require.NoError(t, pm.setRequestingDemotion(lockCtx, false))
+	assert.Equal(t, 1, drain(), "clearing the flag is a change and should broadcast")
 
-	require.NoError(t, pm.setResignedLeaderAtTerm(lockCtx, 0))
-	assert.Equal(t, 1, drain(), "clearing the term is also a change and should broadcast")
+	require.NoError(t, pm.setRequestingDemotion(lockCtx, false))
+	assert.Equal(t, 0, drain(), "repeating the cleared value should NOT broadcast")
 }

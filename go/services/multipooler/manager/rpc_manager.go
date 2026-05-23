@@ -1003,16 +1003,11 @@ func (pm *MultiPoolerManager) emergencyDemoteLocked(ctx context.Context, consens
 	}
 
 	// Signal voluntary resignation so the coordinator can trigger an immediate
-	// election without waiting for a heartbeat timeout. Use this node's own
-	// primary_term (not the incoming consensusTerm) so the coordinator can
-	// correlate the signal with the term at which this node was elected.
-	// setResignedLeaderAtTerm broadcasts internally on a change so multiorch
-	// sees leadership_status.REQUESTING_DEMOTION before the next periodic
-	// health stream interval fires.
-	if primaryTerm, err := pm.primaryTermLocked(ctx); err == nil && primaryTerm != 0 {
-		if err := pm.setResignedLeaderAtTerm(ctx, primaryTerm); err != nil {
-			return nil, mterrors.Wrap(err, "failed to set resigned primary term")
-		}
+	// election without waiting for a heartbeat timeout. setRequestingDemotion
+	// broadcasts internally on a change so multiorch sees requesting_demotion
+	// before the next periodic health stream interval fires.
+	if err := pm.setRequestingDemotion(ctx, true); err != nil {
+		return nil, mterrors.Wrap(err, "failed to set requesting_demotion")
 	}
 
 	// Restart PostgreSQL as standby. Unlike the old stop-only path, this keeps
@@ -1331,14 +1326,6 @@ func (pm *MultiPoolerManager) Promote(ctx context.Context, consensusTerm int64, 
 	if err != nil {
 		pm.logger.ErrorContext(ctx, "Failed to get final LSN", "error", err)
 		return nil, err
-	}
-
-	// Clear any outstanding resignation signal now that the coordinator has
-	// explicitly re-promoted us at a new term. A higher primary_term implicitly
-	// invalidates the old signal, but clearing eagerly avoids a window where
-	// a stale REQUESTING_DEMOTION is still published in StatusResponse.
-	if err := pm.clearResignedLeaderAtTerm(ctx); err != nil {
-		return nil, mterrors.Wrap(err, "failed to clear resigned primary term")
 	}
 
 	pm.healthStreamer.UpdateLeaderObservation(&poolerserver.LeaderObservation{

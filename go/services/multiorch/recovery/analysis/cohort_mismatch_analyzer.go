@@ -84,7 +84,7 @@ func (a *CohortMismatchAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, er
 	for _, pa := range sa.Analyses {
 		// Removal candidates: current cohort members signaling INELIGIBLE.
 		if _, inCohort := cohortIDs[topoclient.MultiPoolerIDString(pa.PoolerID)]; inCohort {
-			if types.PoolerIsCohortIneligible(pa.AvailabilityStatus) {
+			if pa.AvailabilityStatus.GetCohortIneligible() {
 				problems = append(problems, types.Problem{
 					Code:           types.ProblemCohortMemberIneligible,
 					CheckName:      "CohortMismatch",
@@ -153,7 +153,7 @@ func (a *CohortMismatchAnalyzer) isAdditionCandidate(sa *ShardAnalysis, pa *Pool
 	if pa.PrimaryConnInfoHost == "" || pa.ReplicationStopped {
 		return false
 	}
-	if types.PoolerIsCohortIneligible(pa.AvailabilityStatus) {
+	if pa.AvailabilityStatus.GetCohortIneligible() {
 		return false
 	}
 	return true

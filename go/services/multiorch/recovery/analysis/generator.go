@@ -25,7 +25,6 @@ import (
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
-	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
 	"github.com/multigres/multigres/go/services/multiorch/store"
 )
 
@@ -452,9 +451,9 @@ func (g *AnalysisGenerator) computeShardLevelFields(sa *ShardAnalysis, poolers m
 		sa.LeaderPostgresReady = topologyPrimary.GetStatus().GetPostgresReady()
 		sa.LeaderPostgresRunning = topologyPrimary.GetStatus().GetPostgresRunning()
 		// LeaderHasResigned: AvailabilityStatus and ConsensusTerm are populated from
-		// StatusResponse on every health stream snapshot, so LeaderNeedsReplacement
+		// StatusResponse on every health stream snapshot, so requesting_demotion
 		// correctly detects REQUESTING_DEMOTION signals without a separate RPC.
-		sa.LeaderHasResigned = types.LeaderNeedsReplacement(topologyPrimary)
+		sa.LeaderHasResigned = topologyPrimary.GetAvailabilityStatus().GetRequestingDemotion()
 		// LeaderReachable requires the topology leader to be serving as PRIMARY and
 		// not have resigned. A resigned leader has voluntarily stepped down;
 		// treating it as reachable would prevent LeaderIsDead detection even when

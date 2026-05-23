@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/rpcclient"
@@ -126,7 +127,7 @@ func createMockNode(fakeClient *rpcclient.FakeClient, name string, term int64, w
 		}
 	}
 
-	return &multiorchdatapb.PoolerHealthState{
+	state := &multiorchdatapb.PoolerHealthState{
 		MultiPooler:      pooler,
 		IsLastCheckValid: healthy,
 		ConsensusStatus:  &clustermetadatapb.ConsensusStatus{TermRevocation: consensusTerm},
@@ -135,6 +136,13 @@ func createMockNode(fakeClient *rpcclient.FakeClient, name string, term int64, w
 			PostgresRunning: healthy,
 		},
 	}
+	// store.PoolerLikelyUnreachable looks at LastSeen rather than IsLastCheckValid
+	// to avoid stream-blip flapping. A healthy mock needs a fresh LastSeen so
+	// debounced reachability checks treat it as reachable.
+	if healthy {
+		state.LastSeen = timestamppb.Now()
+	}
+	return state
 }
 
 func TestDiscoverMaxTerm(t *testing.T) {
@@ -696,7 +704,7 @@ func TestSelectCandidate(t *testing.T) {
 	// Resigned-primary avoidance tests
 	//
 	// A node that has voluntarily resigned via EmergencyDemote carries a
-	// REQUESTING_DEMOTION LeadershipStatus signal in its PoolerHealthState.
+	// requesting_demotion signal in its PoolerHealthState.
 	// The coordinator should prefer any non-resigned node over it, even if
 	// the resigned node has a higher LSN (it was the most-recent primary and
 	// therefore has the most WAL).
@@ -716,11 +724,8 @@ func TestSelectCandidate(t *testing.T) {
 			MultiPooler: &clustermetadatapb.MultiPooler{
 				Id: resignedPoolerID,
 			},
-			ConsensusStatus: leaderRuleStatus(resignedPoolerID, 4),
-			AvailabilityStatus: &clustermetadatapb.AvailabilityStatus{LeadershipStatus: &clustermetadatapb.LeadershipStatus{
-				LeaderTerm: 4,
-				Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION,
-			}},
+			ConsensusStatus:    leaderRuleStatus(resignedPoolerID, 4),
+			AvailabilityStatus: &clustermetadatapb.AvailabilityStatus{RequestingDemotion: true},
 		}
 
 		recruited := []recruitmentResult{
@@ -766,11 +771,8 @@ func TestSelectCandidate(t *testing.T) {
 			MultiPooler: &clustermetadatapb.MultiPooler{
 				Id: onlyNodeID,
 			},
-			ConsensusStatus: leaderRuleStatus(onlyNodeID, 3),
-			AvailabilityStatus: &clustermetadatapb.AvailabilityStatus{LeadershipStatus: &clustermetadatapb.LeadershipStatus{
-				LeaderTerm: 3,
-				Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION,
-			}},
+			ConsensusStatus:    leaderRuleStatus(onlyNodeID, 3),
+			AvailabilityStatus: &clustermetadatapb.AvailabilityStatus{RequestingDemotion: true},
 		}
 
 		recruited := []recruitmentResult{
@@ -784,47 +786,10 @@ func TestSelectCandidate(t *testing.T) {
 		require.Error(t, err, "should return error when all candidates have resigned")
 	})
 
-	t.Run("stale resignation signal (different term) does not disqualify node", func(t *testing.T) {
-		// A REQUESTING_DEMOTION signal from a previous election cycle (primary_term
-		// in the signal does not match the node's current consensus primary_term)
-		// is stale and should not disqualify the node.
-		c := &Coordinator{
-			coordinatorID: coordID,
-			logger:        logger,
-		}
-
-		staleSignalID := &clustermetadatapb.ID{Name: "mp1-stale-signal"}
-		nodeWithStaleSignal := &multiorchdatapb.PoolerHealthState{
-			MultiPooler: &clustermetadatapb.MultiPooler{
-				Id: staleSignalID,
-			},
-			ConsensusStatus: leaderRuleStatus(staleSignalID, 5), // current term is 5
-			AvailabilityStatus: &clustermetadatapb.AvailabilityStatus{LeadershipStatus: &clustermetadatapb.LeadershipStatus{
-				LeaderTerm: 3, // signal from an old term — stale
-				Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION,
-			}},
-		}
-
-		recruited := []recruitmentResult{
-			{
-				pooler:      nodeWithStaleSignal,
-				walPosition: &consensusdatapb.WALPosition{LastReceiveLsn: "0/7000000", LeadershipTerm: 5}, // highest LSN
-			},
-			{
-				pooler: &multiorchdatapb.PoolerHealthState{
-					MultiPooler: &clustermetadatapb.MultiPooler{
-						Id: &clustermetadatapb.ID{Name: "mp2"},
-					},
-				},
-				walPosition: &consensusdatapb.WALPosition{LastReceiveLsn: "0/4000000", LeadershipTerm: 5},
-			},
-		}
-
-		candidate, err := c.selectCandidate(ctx, recruited)
-		require.NoError(t, err)
-		require.Equal(t, "mp1-stale-signal", candidate.MultiPooler.Id.Name,
-			"a stale resignation signal must not disqualify the node; it should win on LSN")
-	})
+	// NOTE: the "stale resignation signal" test that used to live here exercised
+	// the per-term staleness gate on REQUESTING_DEMOTION. The signal is now a
+	// plain bool that the multipooler clears on every transition out of
+	// leadership, so there is no "stale" state to disambiguate.
 }
 
 func TestRecruitNodes(t *testing.T) {
@@ -1305,14 +1270,9 @@ func TestBeginTerm(t *testing.T) {
 		// mp1 was the previous primary at term 4 and has emergency-demoted.
 		// Its cached health still shows rule=(primary=mp1, term=4) and the
 		// leadership status carries REQUESTING_DEMOTION at that same term —
-		// the shape types.LeaderNeedsReplacement looks for.
+		// the shape requesting_demotion looks for.
 		mp1.ConsensusStatus = leaderRuleStatus(mp1.MultiPooler.Id, 4)
-		mp1.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{
-			LeadershipStatus: &clustermetadatapb.LeadershipStatus{
-				LeaderTerm: 4,
-				Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION,
-			},
-		}
+		mp1.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{RequestingDemotion: true}
 
 		cohort := []*multiorchdatapb.PoolerHealthState{mp1, mp2, mp3}
 

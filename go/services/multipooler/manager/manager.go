@@ -152,23 +152,56 @@ type MultiPoolerManager struct {
 	// Once true, stays true for the lifetime of the manager.
 	initialized bool
 
-	// resignedLeaderAtTerm is set when this node voluntarily resigns as primary
-	// (via EmergencyDemote or graceful shutdown). The value is the consensus
-	// term at which the primary resigned. A non-zero value signals the
-	// coordinator to trigger an immediate election. Protected by mu. Cleared
-	// when this node is elected primary again.
-	resignedLeaderAtTerm int64
+	// requestingDemotion is true when this node has voluntarily resigned as
+	// primary (via EmergencyDemote, graceful shutdown, or the monitor's
+	// stale-primary remediation). Published in AvailabilityStatus so the
+	// coordinator can trigger an immediate election. Protected by mu. Cleared
+	// on every transition out of leadership (promoteStandbyToPrimary,
+	// SetTermPrimary as standby) and on process restart.
+	requestingDemotion bool
 
-	// cohortEligibility is this node's self-reported willingness to be a member
-	// of the consensus cohort. Defaults to ELIGIBLE; published in every health
-	// snapshot via AvailabilityStatus.CohortEligibilityStatus. Protected by mu.
-	cohortEligibility clustermetadatapb.CohortEligibilitySignal
+	// cohortIneligible is this node's self-reported "do not include me in the
+	// next cohort" signal. Defaults to false (eligible). Published in every
+	// health snapshot via AvailabilityStatus.cohort_ineligible. Protected by
+	// mu. walReceiverManuallyStopped acts as an additional dynamic source —
+	// when set, the published signal is forced true regardless of this field.
+	cohortIneligible bool
 
 	// pgMonitor manages the PostgreSQL monitoring loop.
 	pgMonitor *timer.PeriodicRunner
 
 	// rewindPending suppresses the postgres monitor after emergency demotion until a
-	// rewind completes successfully. Set by emergencyDemoteLocked, cleared by RewindToSource.
+	// rewind completes successfully. Set by emergencyDemoteLocked, cleared by
+	// RewindToSource (via SetTermPrimary's stale-primary branch) or by
+	// promoteStandbyToPrimary (re-election at a higher term makes this node's
+	// WAL canonical).
+	//
+	// TODO: persist this state to disk so it survives a multipooler restart.
+	// Today it's in-memory only — a multipooler restart between
+	// emergencyDemoteLocked and the next authoritative clear path (promote or
+	// SetTermPrimary→pg_rewind) loses the signal. The pooler then rejoins as
+	// if it never needed a rewind, neither the Recruit refusal nor
+	// SetTermPrimary's stale-primary branch fires, and a potentially-divergent
+	// WAL gets accepted into the cohort. A small sentinel file in the pooler
+	// data directory written by emergencyDemoteLocked and deleted by the same
+	// paths that clear this flag would close the gap.
+	//
+	// TODO: this only covers the primary-emergency-demote path. A standby can
+	// also end up with WAL the cohort never committed — under durability
+	// policies that allow recruitment to succeed without every standby (e.g.
+	// AT_LEAST_3 over 7 replicas where quorum is 5), a standby outside the
+	// recruitment quorum could hold a non-durable record that the new leader
+	// never saw. Following the new leader then requires pg_rewind, but the
+	// standby has no signal that this is the case.
+	//
+	// Possible directions:
+	//   - Postgres monitor self-detects suspicious state and queues a rewind
+	//     when it might help. Cheap to check is the hard part — pg_rewind
+	//     dry-run requires stopping serving and isn't free.
+	//   - Authoritative: when a new term commits, write the previous term's
+	//     final committed LSN into the rule history. orch (or the multipooler
+	//     itself) can compare its local LSN to that watermark and trigger
+	//     rewind only when the local LSN is past it.
 	rewindPending atomic.Bool
 
 	// promotionInProgress is set while pg_promote() has been called but postgres has not yet
@@ -298,7 +331,6 @@ func NewMultiPoolerManagerWithTimeout(logger *slog.Logger, multiPooler *clusterm
 		readyChan:              make(chan struct{}),
 		pgMonitor:              monitorRunner,
 		healthStreamer:         newHealthStreamer(logger, multiPooler.Id, multiPooler.GetShardKey().GetTableGroup(), multiPooler.GetShardKey().GetShard()),
-		cohortEligibility:      clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE,
 		// We create a dummy context because some unit tests need them.
 		// These will be overwritten when Open gets called.
 		ctx:    ctx,
@@ -1399,8 +1431,29 @@ func (pm *MultiPoolerManager) checkPromotionState(ctx context.Context, syncRepli
 	return state, nil
 }
 
-// promoteStandbyToPrimary calls pg_promote() and waits for promotion to complete
+// promoteStandbyToPrimary calls pg_promote() and waits for promotion to complete.
+// Callers must already hold the action lock — both prior-state clears below depend
+// on that invariant (the resignation clear via AssertActionLockHeld inside
+// setRequestingDemotion(false)).
 func (pm *MultiPoolerManager) promoteStandbyToPrimary(ctx context.Context, state *promotionState) error {
+	// We are about to become (or already are) the primary at the new term.
+	// Two pieces of prior-demote state become moot at this point:
+	//
+	//   - rewindPending: our WAL is the canonical timeline going forward, not
+	//     something to reconcile against another leader's. Clearing before
+	//     pg_promote() also lets MonitorPostgres restart postgres normally
+	//     during the promotion sequence instead of skipping on "awaiting rewind."
+	//
+	//   - requestingDemotion: any outstanding resignation signal referenced
+	//     the previous leadership episode. Clearing eagerly avoids a window
+	//     where StatusResponse advertises us as both PRIMARY and resigning.
+	if pm.rewindPending.Swap(false) {
+		pm.logger.InfoContext(ctx, "Cleared rewindPending before promotion")
+	}
+	if err := pm.setRequestingDemotion(ctx, false); err != nil {
+		return mterrors.Wrap(err, "failed to clear requesting_demotion before promotion")
+	}
+
 	// Return early if already promoted
 	if state.isPrimaryInPostgres {
 		pm.logger.InfoContext(ctx, "PostgreSQL already promoted, skipping")
@@ -1940,9 +1993,9 @@ func (pm *MultiPoolerManager) determineRemedialAction(currentState postgresState
 		// lost after a process restart following EmergencyDemote.
 		if !currentState.isPrimary {
 			pm.mu.Lock()
-			resigned := pm.resignedLeaderAtTerm
+			resigned := pm.requestingDemotion
 			pm.mu.Unlock()
-			if currentState.primaryTerm != 0 && resigned == 0 {
+			if currentState.primaryTerm != 0 && !resigned {
 				return remedialActionAdjustTypeToReplica
 			}
 			// Drift check: replica is otherwise healthy but its primary_conninfo
@@ -2023,11 +2076,12 @@ func (pm *MultiPoolerManager) takeRemedialAction(ctx context.Context, action rem
 		pm.logger.InfoContext(ctx, "MonitorPostgres: PostgreSQL is running but not primary")
 		pm.logger.InfoContext(ctx, "MonitorPostgres: Changing pooler type to replica")
 		// Signal voluntary resignation so the coordinator can trigger an immediate
-		// election. Use the primary_term (the term at which we were elected) since
-		// the coordinator uses this to decide whether the signal is still active.
+		// election. Only set the signal if we used to be a primary at some
+		// recorded term; otherwise this is a standby that has never led and
+		// has nothing to resign from.
 		if state.primaryTerm != 0 {
-			if err := pm.setResignedLeaderAtTerm(ctx, state.primaryTerm); err != nil {
-				pm.logger.ErrorContext(ctx, "MonitorPostgres: failed to set resigned primary term", "error", err)
+			if err := pm.setRequestingDemotion(ctx, true); err != nil {
+				pm.logger.ErrorContext(ctx, "MonitorPostgres: failed to set requesting_demotion", "error", err)
 				return
 			}
 		}

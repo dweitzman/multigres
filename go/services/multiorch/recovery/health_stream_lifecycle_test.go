@@ -28,7 +28,7 @@ import (
 // TestHealthStream_StreamEOFWithoutSpecialSignal_KeepsBackoff verifies that
 // an EOF on an ordinary stream goes through the existing
 // reconnect-with-backoff path. The graceful-shutdown trigger
-// (REQUESTING_DEMOTION on LeadershipStatus) is published by the pooler
+// (requesting_demotion on AvailabilityStatus) is published by the pooler
 // directly and handled by the analyzer; this test guards the orthogonal
 // "no special signal → reconnect" default.
 func TestHealthStream_StreamEOFWithoutSpecialSignal_KeepsBackoff(t *testing.T) {

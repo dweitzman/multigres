@@ -388,99 +388,53 @@ func (pm *MultiPoolerManager) getInconsistentConsensusStatus(ctx context.Context
 }
 
 // buildAvailabilityStatus returns the current AvailabilityStatus for this node.
-// Leaders that have resigned publish a LeadershipStatus. Every pooler publishes
-// its cohort eligibility, so the result is non-nil.
 func (pm *MultiPoolerManager) buildAvailabilityStatus() *clustermetadatapb.AvailabilityStatus {
+	pm.mu.Lock()
+	requesting := pm.requestingDemotion
+	cohortBase := pm.cohortIneligible
+	pm.mu.Unlock()
+	// walReceiverManuallyStopped forces ineligible even if the base flag is
+	// false, so that StopReplication is visible to the coordinator without
+	// requiring a separate setCohortIneligible call.
+	cohortIneligible := cohortBase || pm.walReceiverManuallyStopped.Load()
 	return &clustermetadatapb.AvailabilityStatus{
-		LeadershipStatus:        pm.buildLeadershipStatus(),
-		CohortEligibilityStatus: pm.buildCohortEligibilityStatus(),
+		RequestingDemotion: requesting,
+		CohortIneligible:   cohortIneligible,
 	}
 }
 
-// buildCohortEligibilityStatus returns the pooler's self-reported willingness
-// to be a cohort member. Defaults to ELIGIBLE; downgraded to INELIGIBLE when
-// the WAL receiver was manually stopped (StopReplication cleared
-// primary_conninfo), so the coordinator does not try to re-include this node
-// while the admin signal is in effect. setCohortEligibility (currently
-// test-only) sets the base value the dynamic downgrade applies on top of.
-func (pm *MultiPoolerManager) buildCohortEligibilityStatus() *clustermetadatapb.CohortEligibilityStatus {
-	if pm.walReceiverManuallyStopped.Load() {
-		return &clustermetadatapb.CohortEligibilityStatus{
-			Signal: clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE,
-		}
-	}
+// setCohortIneligible records this pooler's self-reported next-cohort
+// availability. Broadcasts when the value actually changes so the coordinator
+// sees the transition without waiting for the next periodic snapshot.
+func (pm *MultiPoolerManager) setCohortIneligible(ineligible bool) {
 	pm.mu.Lock()
-	signal := pm.cohortEligibility
-	pm.mu.Unlock()
-	return &clustermetadatapb.CohortEligibilityStatus{Signal: signal}
-}
-
-// setCohortEligibility records this pooler's cohort eligibility. If the
-// signal actually changed, an immediate health broadcast is pushed so the
-// coordinator sees the new value without waiting for the next heartbeat —
-// otherwise a transition INELIGIBLE → cohort removal could be delayed by up
-// to a heartbeat interval. Currently test-only — there is no operator/admin
-// RPC to flip it yet.
-func (pm *MultiPoolerManager) setCohortEligibility(signal clustermetadatapb.CohortEligibilitySignal) {
-	pm.mu.Lock()
-	changed := pm.cohortEligibility != signal
-	pm.cohortEligibility = signal
+	changed := pm.cohortIneligible != ineligible
+	pm.cohortIneligible = ineligible
 	pm.mu.Unlock()
 	if changed {
 		pm.broadcastHealth()
 	}
 }
 
-// buildLeadershipStatus returns the LeadershipStatus for this node. Non-nil only
-// when resignedLeaderAtTerm is set (i.e. after a BeginTerm REVOKE or graceful
-// shutdown of a leader). Nil means this node has not recently held or resigned
-// from primary leadership.
-func (pm *MultiPoolerManager) buildLeadershipStatus() *clustermetadatapb.LeadershipStatus {
-	pm.mu.Lock()
-	resignedTerm := pm.resignedLeaderAtTerm
-	pm.mu.Unlock()
-
-	if resignedTerm == 0 {
-		return nil
-	}
-
-	return &clustermetadatapb.LeadershipStatus{
-		LeaderTerm: resignedTerm,
-		Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION,
-	}
-}
-
-// setResignedLeaderAtTerm records that this node is requesting demotion as primary
-// for the given term. The signal is included in subsequent StatusResponses so the
-// coordinator can trigger an immediate election. Broadcasts to health stream
-// subscribers when the value actually changes, so the coordinator sees the new
-// signal without waiting for the next periodic snapshot.
-// Requires the action lock (ctx must be an action-lock context).
-func (pm *MultiPoolerManager) setResignedLeaderAtTerm(ctx context.Context, term int64) error {
+// setRequestingDemotion records this node's resignation-from-leadership signal.
+// Set to true after EmergencyDemote, graceful shutdown of a leader, or the
+// monitor's stale-primary remediation; cleared on every transition out of
+// leadership (promoteStandbyToPrimary, SetTermPrimary as standby).
+//
+// Broadcasts to health stream subscribers when the value actually changes so
+// the coordinator sees the new signal without waiting for the next periodic
+// snapshot. Requires the action lock (ctx must be an action-lock context).
+func (pm *MultiPoolerManager) setRequestingDemotion(ctx context.Context, requesting bool) error {
 	if err := AssertActionLockHeld(ctx); err != nil {
 		return err
 	}
 	pm.mu.Lock()
-	changed := pm.resignedLeaderAtTerm != term
-	pm.resignedLeaderAtTerm = term
+	changed := pm.requestingDemotion != requesting
+	pm.requestingDemotion = requesting
 	pm.mu.Unlock()
 	if changed {
 		pm.broadcastHealth()
 	}
-	return nil
-}
-
-// clearResignedLeaderAtTerm clears the leadership demotion request. Called by
-// coordinator-driven promotion (Promote) when this node is explicitly
-// re-appointed as primary at a new term.
-// Requires the action lock (ctx must be an action-lock context).
-func (pm *MultiPoolerManager) clearResignedLeaderAtTerm(ctx context.Context) error {
-	if err := AssertActionLockHeld(ctx); err != nil {
-		return err
-	}
-	pm.mu.Lock()
-	pm.resignedLeaderAtTerm = 0
-	pm.mu.Unlock()
 	return nil
 }
 
@@ -523,13 +477,31 @@ func (pm *MultiPoolerManager) Recruit(ctx context.Context, req *consensusdatapb.
 		return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, err.Error())
 	}
 
-	// Refuse recruitment if a rewind is still pending from a prior emergency
-	// demotion. The node's WAL is in an indeterminate state until RewindToSource
-	// completes; allowing it to be recruited could elect a leader with divergent
-	// or missing WAL.
+	// rewindPending means a prior emergency demote left this node potentially
+	// holding WAL the cohort never committed. We refuse only when the incoming
+	// revocation's outgoing rule references a *different* coordinator term
+	// than our local committed rule — that's evidence some other leader
+	// reigned in between and our WAL may genuinely diverge from the new
+	// timeline, so the coordinator must reconcile via SetTermPrimary
+	// (pg_rewind) or RewindToSource before recruiting us.
+	//
+	// When the outgoing-rule term equals our local rule term, no intermediate
+	// leader has committed since we resigned, so it is safe to participate in
+	// this Recruit round. We do NOT clear rewindPending here: the coordinator
+	// may itself be running on stale information, and the flag's eventual
+	// clear is owned by the authoritative paths (promoteStandbyToPrimary if we
+	// are elected, SetTermPrimary → demoteStalePrimaryLocked if we follow
+	// someone else).
 	if pm.rewindPending.Load() {
-		return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
-			"rewind pending after emergency demotion; call RewindToSource before Recruit")
+		outgoingTerm := revocation.GetOutgoingRule().GetCoordinatorTerm()
+		localTerm := preStatus.GetCurrentPosition().GetRule().GetRuleNumber().GetCoordinatorTerm()
+		if outgoingTerm != localTerm {
+			return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
+				fmt.Sprintf("rewind pending after emergency demotion and outgoing rule term %d differs from local rule term %d; reconcile via SetTermPrimary or RewindToSource first",
+					outgoingTerm, localTerm))
+		}
+		pm.logger.InfoContext(ctx, "Proceeding with Recruit despite rewindPending: outgoing rule term matches local",
+			"outgoing_term", outgoingTerm)
 	}
 
 	isPrimary, err := pm.isPrimary(ctx)
@@ -773,9 +745,6 @@ func (pm *MultiPoolerManager) Propose(ctx context.Context, req *consensusdatapb.
 	if err := pm.promoteStandbyToPrimary(ctx, state); err != nil {
 		return nil, err
 	}
-	if err := pm.clearResignedLeaderAtTerm(ctx); err != nil {
-		return nil, mterrors.Wrap(err, "failed to clear resigned primary term")
-	}
 	finalLSN, err := pm.getPrimaryLSN(ctx)
 	if err != nil {
 		return nil, err
@@ -1015,8 +984,8 @@ func (pm *MultiPoolerManager) SetTermPrimary(ctx context.Context, req *consensus
 		LeaderTerm: consensusTerm,
 	})
 
-	if err := pm.clearResignedLeaderAtTerm(ctx); err != nil {
-		pm.logger.WarnContext(ctx, "Failed to clear resigned leader term after propose", "error", err)
+	if err := pm.setRequestingDemotion(ctx, false); err != nil {
+		pm.logger.WarnContext(ctx, "Failed to clear requesting_demotion after propose", "error", err)
 	}
 
 	pm.broadcastHealth()

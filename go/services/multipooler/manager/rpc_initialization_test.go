@@ -394,7 +394,7 @@ func TestDetermineRemedialAction(t *testing.T) {
 		state              postgresState
 		poolerType         clustermetadatapb.PoolerType
 		primaryTerm        int64
-		resignedLeaderTerm int64
+		requestingDemotion bool
 		expectedAction     remedialAction
 	}{
 		{
@@ -444,7 +444,7 @@ func TestDetermineRemedialAction(t *testing.T) {
 			expectedAction: remedialActionNone,
 		},
 		{
-			// After EmergencyDemote + process restart, resignedLeaderAtTerm is lost.
+			// After EmergencyDemote + process restart, requestingDemotion is lost.
 			// The monitor should re-publish it by triggering the replica adjustment action.
 			name: "postgres_ready_replica_missing_resignation_signal",
 			state: postgresState{
@@ -454,7 +454,7 @@ func TestDetermineRemedialAction(t *testing.T) {
 			},
 			poolerType:         clustermetadatapb.PoolerType_REPLICA,
 			primaryTerm:        5,
-			resignedLeaderTerm: 0,
+			requestingDemotion: false,
 			expectedAction:     remedialActionAdjustTypeToReplica,
 		},
 		{
@@ -467,7 +467,7 @@ func TestDetermineRemedialAction(t *testing.T) {
 			},
 			poolerType:         clustermetadatapb.PoolerType_REPLICA,
 			primaryTerm:        5,
-			resignedLeaderTerm: 5,
+			requestingDemotion: true,
 			expectedAction:     remedialActionNone,
 		},
 		{
@@ -526,7 +526,7 @@ func TestDetermineRemedialAction(t *testing.T) {
 				},
 			}
 			pm.consensusState = NewConsensusState("", nil)
-			pm.resignedLeaderAtTerm = tt.resignedLeaderTerm
+			pm.requestingDemotion = tt.requestingDemotion
 			tt.state.primaryTerm = tt.primaryTerm
 
 			got := pm.determineRemedialAction(tt.state)
@@ -695,14 +695,13 @@ func newRemedialActionTestManager(t *testing.T, multipooler *clustermetadatapb.M
 	t.Cleanup(func() { ts.Close() })
 	require.NoError(t, ts.CreateMultiPooler(ctx, multipooler))
 	return &MultiPoolerManager{
-		logger:            slog.Default(),
-		actionLock:        NewActionLock(),
-		multipooler:       multipooler,
-		serviceID:         multipooler.Id,
-		topoClient:        ts,
-		servingState:      NewStateManager(slog.Default(), multipooler),
-		topoPublisher:     newTopoPublisher(slog.Default(), ts),
-		cohortEligibility: clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE,
+		logger:        slog.Default(),
+		actionLock:    NewActionLock(),
+		multipooler:   multipooler,
+		serviceID:     multipooler.Id,
+		topoClient:    ts,
+		servingState:  NewStateManager(slog.Default(), multipooler),
+		topoPublisher: newTopoPublisher(slog.Default(), ts),
 	}
 }
 
@@ -712,48 +711,32 @@ func TestTakeRemedialAction_ResignationSignal(t *testing.T) {
 		action         remedialAction
 		poolerType     clustermetadatapb.PoolerType
 		primaryTerm    int64 // set in consensus state before action
-		resignedBefore int64 // set resignedLeaderAtTerm before action (0 = don't set)
+		resignedBefore bool  // set requestingDemotion=true before action
 		wantAvStatus   *clustermetadatapb.AvailabilityStatus
 	}{
 		{
-			name:        "AdjustTypeToReplica sets resignation at primary_term",
+			name:        "AdjustTypeToReplica sets resignation when primary_term is non-zero",
 			action:      remedialActionAdjustTypeToReplica,
 			poolerType:  clustermetadatapb.PoolerType_PRIMARY,
 			primaryTerm: 5,
 			wantAvStatus: &clustermetadatapb.AvailabilityStatus{
-				LeadershipStatus: &clustermetadatapb.LeadershipStatus{
-					LeaderTerm: 5,
-					Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION,
-				},
-				CohortEligibilityStatus: &clustermetadatapb.CohortEligibilityStatus{
-					Signal: clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE,
-				},
+				RequestingDemotion: true,
 			},
 		},
 		{
-			name:        "AdjustTypeToReplica sets no resignation when primary_term is zero",
-			action:      remedialActionAdjustTypeToReplica,
-			poolerType:  clustermetadatapb.PoolerType_PRIMARY,
-			primaryTerm: 0,
-			wantAvStatus: &clustermetadatapb.AvailabilityStatus{
-				CohortEligibilityStatus: &clustermetadatapb.CohortEligibilityStatus{
-					Signal: clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE,
-				},
-			},
+			name:         "AdjustTypeToReplica sets no resignation when primary_term is zero",
+			action:       remedialActionAdjustTypeToReplica,
+			poolerType:   clustermetadatapb.PoolerType_PRIMARY,
+			primaryTerm:  0,
+			wantAvStatus: &clustermetadatapb.AvailabilityStatus{},
 		},
 		{
 			name:           "AdjustTypeToPrimary does not clear existing resignation signal",
 			action:         remedialActionAdjustTypeToPrimary,
 			poolerType:     clustermetadatapb.PoolerType_REPLICA,
-			resignedBefore: 7,
+			resignedBefore: true,
 			wantAvStatus: &clustermetadatapb.AvailabilityStatus{
-				LeadershipStatus: &clustermetadatapb.LeadershipStatus{
-					LeaderTerm: 7,
-					Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION,
-				},
-				CohortEligibilityStatus: &clustermetadatapb.CohortEligibilityStatus{
-					Signal: clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE,
-				},
+				RequestingDemotion: true,
 			},
 		},
 	}
@@ -778,8 +761,8 @@ func TestTakeRemedialAction_ResignationSignal(t *testing.T) {
 			require.NoError(t, err)
 			defer pm.actionLock.Release(lockCtx)
 
-			if tc.resignedBefore != 0 {
-				require.NoError(t, pm.setResignedLeaderAtTerm(lockCtx, tc.resignedBefore))
+			if tc.resignedBefore {
+				require.NoError(t, pm.setRequestingDemotion(lockCtx, true))
 			}
 
 			pm.takeRemedialAction(lockCtx, tc.action, postgresState{primaryTerm: tc.primaryTerm})

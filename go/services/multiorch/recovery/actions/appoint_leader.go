@@ -96,7 +96,7 @@ func (a *AppointLeaderAction) Execute(ctx context.Context, problem types.Problem
 			!pooler.GetStatus().GetPostgresReady() {
 			continue
 		}
-		if types.LeaderNeedsReplacement(pooler) {
+		if pooler.GetAvailabilityStatus().GetRequestingDemotion() {
 			a.logger.InfoContext(ctx, "primary has requested replacement, proceeding with election",
 				"primary", pooler.MultiPooler.Id.Name,
 				"shard_key", commontypes.FormatShardKey(problem.ShardKey))

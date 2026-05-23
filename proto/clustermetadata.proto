@@ -524,46 +524,13 @@ message ConsensusStatus {
   ID id = 4;
 }
 
-// LeadershipSignal describes a leader's self-reported status for its current term.
-// Only published by nodes that are or were the consensus leader (leader_term != 0).
-// 0 (UNKNOWN) means the field was not intentionally set.
-enum LeadershipSignal {
-  LEADERSHIP_SIGNAL_UNKNOWN = 0;
-
-  // Node is actively and healthily serving as leader for leader_term.
-  // Published each poll cycle so the coordinator can distinguish a confirmed
-  // healthy leader from one that restarted and hasn't re-published yet.
-  LEADERSHIP_SIGNAL_ACTIVE = 1;
-
-  // Node is requesting demotion from leadership for leader_term. Coordinator
-  // should trigger an immediate failover rather than waiting for a heartbeat
-  // timeout. The node may continue as a follower after demotion.
-  //
-  // Staleness check: coordinator verifies leadership_status.leader_term matches
-  // the node's known leader_term before acting, to ignore signals left over from
-  // a previous failover cycle.
-  LEADERSHIP_SIGNAL_REQUESTING_DEMOTION = 2;
-}
-
-// LeadershipStatus is published only by nodes that are or have been the consensus leader.
-// It lets the coordinator distinguish an actively healthy leader, a leader
-// requesting demotion, and a node that has never held leadership.
-message LeadershipStatus {
-  // The leader_term at which this node was most recently appointed.
-  // Non-zero only on nodes that have been appointed as leader.
-  int64 leader_term = 1;
-
-  LeadershipSignal signal = 2;
-}
-
 // AvailabilityStatus carries best-effort operational fitness signals for a pooler.
 // Unlike ConsensusStatus (which is authoritative and backed by postgres WAL and
 // on-disk state), AvailabilityStatus is in-memory and may be absent after a
 // process restart. Coordinators must treat absence as "unknown," not "unfit."
 //
 // Signals are re-derivable from continuous health polling, so process restarts
-// do not create permanent unavailability. See LeadershipSignal for re-derivation
-// rules.
+// do not create permanent unavailability.
 //
 // Sources: self-reported by the pooler (fast path) or synthesized by the
 // coordinator from observed health state.
@@ -571,38 +538,33 @@ message LeadershipStatus {
 // PoolerHealthState.AvailabilityStatus so the analyzer reads from one place
 // regardless of source.
 message AvailabilityStatus {
-  // leadership_status is only set by poolers that are or have been the consensus leader.
-  LeadershipStatus leadership_status = 1;
+  // requesting_demotion is set by a pooler that is (or recently was) the
+  // consensus leader and is asking to be replaced as the current leader.
+  // Coordinators should trigger an immediate failover rather than waiting for
+  // a heartbeat timeout. The node may continue as a follower after demotion,
+  // and may even be re-elected at the new term if it remains the best
+  // candidate — this is a "please replace me if you can," not a promise to
+  // leave the cohort.
+  //
+  // The signal is per-process (in-memory) and reliably cleared on every
+  // transition out of leadership: promotion to primary at a new term, learning
+  // of a new leader via SetTermPrimary as a follower, or process restart.
+  // Coordinators may read at face value without a staleness gate, but should
+  // only consult it on nodes that currently hold the topology primary role.
+  //
+  // Independent of cohort_ineligible: requesting_demotion talks about the
+  // *current* term and is purely a failover trigger; cohort_ineligible talks
+  // about whether to include the pooler in the *next* cohort.
+  bool requesting_demotion = 1;
 
-  // cohort_eligibility_status is published by every pooler regardless of
-  // current cohort membership. It expresses whether the pooler is willing to
-  // serve as a cohort member; meaning falls out of the combination with the
-  // pooler's current membership in ShardRule.cohort_members. A current cohort
-  // member signaling INELIGIBLE is a candidate for removal/replacement; a
-  // non-member signaling INELIGIBLE should be skipped when growing the cohort.
-  CohortEligibilityStatus cohort_eligibility_status = 2;
-}
-
-// CohortEligibilitySignal describes a pooler's self-reported willingness to
-// be a member of the consensus cohort. 0 (UNKNOWN) means the field was not
-// intentionally set; coordinators should treat that the same as ELIGIBLE for
-// backwards compatibility with older poolers that don't publish the signal.
-enum CohortEligibilitySignal {
-  COHORT_ELIGIBILITY_SIGNAL_UNKNOWN = 0;
-
-  // Pooler is willing to serve as a cohort member.
-  COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE = 1;
-
-  // Pooler is not willing to serve as a cohort member. If currently a member,
-  // the coordinator should remove and (when possible) replace it. If not
-  // currently a member, the coordinator should not add it to the cohort.
-  COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE = 2;
-}
-
-// CohortEligibilityStatus carries the pooler's cohort-eligibility signal.
-// Unlike LeadershipStatus there is no per-term gating: eligibility is a
-// current preference, not tied to a specific epoch. Staleness comes from the
-// freshness of the surrounding health snapshot.
-message CohortEligibilityStatus {
-  CohortEligibilitySignal signal = 1;
+  // cohort_ineligible is set when a pooler is unwilling to serve as a member
+  // of the next consensus cohort — e.g. graceful shutdown in progress,
+  // operator drain, replication manually stopped. Default false means
+  // "eligible," matching backwards-compatible behaviour for older poolers
+  // that don't publish the field.
+  //
+  // A current cohort member signaling ineligible is a candidate for removal/
+  // replacement; a non-member signaling ineligible should be skipped when
+  // growing the cohort.
+  bool cohort_ineligible = 2;
 }
