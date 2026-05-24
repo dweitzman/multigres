@@ -886,7 +886,7 @@ func (pm *MultiPoolerManager) SetTermPrimary(ctx context.Context, req *consensus
 		pm.logger.InfoContext(ctx, "SetTermPrimary: rule revoked, ignoring",
 			"incoming_rule", rule.GetRuleNumber(),
 			"revoked_below_term", revocation.GetRevokedBelowTerm(),
-			"outgoing_rule", revocation.GetOutgoingDecision())
+			"outgoing_decision", revocation.GetOutgoingDecision())
 		cs, err := pm.getCachedConsensusStatus()
 		if err != nil {
 			return nil, mterrors.Wrap(err, "failed to build consensus status")

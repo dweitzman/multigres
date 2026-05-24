@@ -33,10 +33,10 @@ var (
 	ts1 = timestamppb.New(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	ts2 = timestamppb.New(time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC))
 
-	// zeroOutgoingRule is a placeholder outgoing_rule used in tests where the
+	// zeroOutgoingDecision is a placeholder outgoing_decision used in tests where the
 	// specific outgoing rule value doesn't matter — only that it's non-nil so
 	// ValidateRevocation accepts the revocation.
-	zeroOutgoingRule = &clustermetadatapb.RuleNumber{}
+	zeroOutgoingDecision = &clustermetadatapb.RuleNumber{}
 )
 
 func TestValidateRevocation(t *testing.T) {
@@ -69,7 +69,7 @@ func TestValidateRevocation(t *testing.T) {
 			revocation: &clustermetadatapb.TermRevocation{
 				RevokedBelowTerm:       5,
 				CoordinatorInitiatedAt: ts1,
-				OutgoingDecision:       zeroOutgoingRule,
+				OutgoingDecision:       zeroOutgoingDecision,
 			},
 			wantErr: "accepted_coordinator_id is required",
 		},
@@ -79,27 +79,27 @@ func TestValidateRevocation(t *testing.T) {
 			revocation: &clustermetadatapb.TermRevocation{
 				RevokedBelowTerm:      5,
 				AcceptedCoordinatorId: coordA,
-				OutgoingDecision:      zeroOutgoingRule,
+				OutgoingDecision:      zeroOutgoingDecision,
 			},
 			wantErr: "coordinator_initiated_at is required",
 		},
 		{
-			name:   "NilOutgoingRule_Refused",
+			name:   "NilOutgoingDecision_Refused",
 			status: nil,
 			revocation: &clustermetadatapb.TermRevocation{
 				RevokedBelowTerm:       5,
 				AcceptedCoordinatorId:  coordA,
 				CoordinatorInitiatedAt: ts1,
 			},
-			wantErr: "outgoing_rule is required",
+			wantErr: "outgoing_decision is required",
 		},
 		{
-			// outgoing_rule.coordinator_term must be strictly less than
+			// outgoing_decision.coordinator_term must be strictly less than
 			// revoked_below_term. NewTermRevocation always produces values that
 			// satisfy this, but a hand-built revocation (e.g. from an external
 			// agent constructing a cert) could violate it and ValidateRevocation
 			// catches it on read.
-			name:   "OutgoingRuleTermAtOrAboveRevokedBelow_Refused",
+			name:   "OutgoingDecisionTermAtOrAboveRevokedBelow_Refused",
 			status: nil,
 			revocation: &clustermetadatapb.TermRevocation{
 				RevokedBelowTerm:       5,
@@ -107,7 +107,7 @@ func TestValidateRevocation(t *testing.T) {
 				CoordinatorInitiatedAt: ts1,
 				OutgoingDecision:       &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
 			},
-			wantErr: "outgoing_rule coordinator_term 5 >= revoked_below_term 5",
+			wantErr: "outgoing_decision coordinator_term 5 >= revoked_below_term 5",
 		},
 		{
 			name:       "NilStatus_Refused",
@@ -160,9 +160,9 @@ func TestValidateRevocation(t *testing.T) {
 			wantErr:    "coordinator term 7 >= revoked_below_term 5",
 		},
 		{
-			// if the committed rule is beyond outgoing_rule, the
+			// if the committed rule is beyond outgoing_decision, the
 			// revocation is stale
-			name: "CommittedRuleBeyondOutgoingRule_Refused",
+			name: "CommittedRuleBeyondOutgoingDecision_Refused",
 			status: &clustermetadatapb.ConsensusStatus{
 				CurrentPosition: positionAtCoordTerm(1),
 			},
@@ -170,13 +170,13 @@ func TestValidateRevocation(t *testing.T) {
 				RevokedBelowTerm:       2,
 				AcceptedCoordinatorId:  coordA,
 				CoordinatorInitiatedAt: ts1,
-				OutgoingDecision:       zeroOutgoingRule, // {0,0} < committed {1,0}
+				OutgoingDecision:       zeroOutgoingDecision, // {0,0} < committed {1,0}
 			},
-			wantErr: "committed rule (1.0) is beyond outgoing_decision (0.0)",
+			wantErr: "committed decision (1.0) is beyond outgoing_decision (0.0)",
 		},
 		{
-			// committed rule equals outgoing_rule — not beyond it, so OK.
-			name: "CommittedRuleEqualsOutgoingRule_Accepted",
+			// committed rule equals outgoing_decision — not beyond it, so OK.
+			name: "CommittedRuleEqualsOutgoingDecision_Accepted",
 			status: &clustermetadatapb.ConsensusStatus{
 				CurrentPosition: positionAtCoordTerm(0),
 			},
@@ -184,12 +184,12 @@ func TestValidateRevocation(t *testing.T) {
 				RevokedBelowTerm:       1,
 				AcceptedCoordinatorId:  coordA,
 				CoordinatorInitiatedAt: ts1,
-				OutgoingDecision:       zeroOutgoingRule, // {0,0} == committed {0,0}
+				OutgoingDecision:       zeroOutgoingDecision, // {0,0} == committed {0,0}
 			},
 		},
 		{
-			// Stored term=10 > requested term=5, and stored outgoing_rule >= incoming
-			// outgoing_rule so the override rule does not apply.
+			// Stored term=10 > requested term=5, and stored outgoing_decision >= incoming
+			// outgoing_decision so the override rule does not apply.
 			name: "StoredTerm_HigherThanRequested_Refused",
 			status: &clustermetadatapb.ConsensusStatus{
 				TermRevocation: &clustermetadatapb.TermRevocation{
@@ -203,10 +203,10 @@ func TestValidateRevocation(t *testing.T) {
 			wantErr:    "already accepted term 10 > requested 5",
 		},
 		{
-			// incoming revocation has a higher outgoing_rule than the
+			// incoming revocation has a higher outgoing_decision than the
 			// stored one, so it supersedes it even though revokedBelowTerm is lower.
 			// Scenario: stored is "outgoing=2 → term=5", incoming is "outgoing=3 → term=4".
-			name: "StoredTerm_HigherButIncomingHasHigherOutgoingRule_Accepted",
+			name: "StoredTerm_HigherButIncomingHasHigherOutgoingDecision_Accepted",
 			status: &clustermetadatapb.ConsensusStatus{
 				TermRevocation: &clustermetadatapb.TermRevocation{
 					RevokedBelowTerm:      5,
@@ -398,7 +398,7 @@ func TestNewTermRevocation(t *testing.T) {
 	t.Run("no cohort member has a recorded rule returns error", func(t *testing.T) {
 		// Bootstrap-shaped scenario: cohort visible but nobody reports a
 		// rule. NewTermRevocation refuses; the agent should construct the
-		// revocation directly with an explicit outgoing_rule.
+		// revocation directly with an explicit outgoing_decision.
 		statuses := []*clustermetadatapb.ConsensusStatus{{}, {}}
 		rev, err := NewTermRevocation(statuses, coord)
 		require.Error(t, err)
@@ -409,7 +409,7 @@ func TestNewTermRevocation(t *testing.T) {
 	t.Run("revocation-term-only statuses with no recorded rule return error", func(t *testing.T) {
 		// Same shape: statuses carry a stored revocation but no recorded
 		// rule. NewTermRevocation requires at least one rule to derive
-		// outgoing_rule from.
+		// outgoing_decision from.
 		statuses := []*clustermetadatapb.ConsensusStatus{
 			{TermRevocation: &clustermetadatapb.TermRevocation{RevokedBelowTerm: 3}},
 			{TermRevocation: &clustermetadatapb.TermRevocation{RevokedBelowTerm: 7}},
@@ -463,7 +463,7 @@ func TestNewTermRevocation(t *testing.T) {
 		require.Equal(t, int64(12), rev.GetRevokedBelowTerm())
 	})
 
-	t.Run("outgoing_rule picks the highest RuleNumber across statuses", func(t *testing.T) {
+	t.Run("outgoing_decision picks the highest RuleNumber across statuses", func(t *testing.T) {
 		statuses := []*clustermetadatapb.ConsensusStatus{
 			{CurrentPosition: &clustermetadatapb.PoolerPosition{
 				Decision: &clustermetadatapb.ShardRule{

@@ -1778,7 +1778,7 @@ func TestPropose(t *testing.T) {
 			name:        "WALAheadOfTerm",
 			initialTerm: recruitedTerm,
 			// fakeRuleStore returns a position with coordinator_term == 7:
-			// ValidateRevocation rejects because committed rule term >= revoked_below_term.
+			// ValidateRevocation rejects because committed decision term >= revoked_below_term.
 			ruleStore:         &fakeRuleStore{pos: makeRulePosition(7)},
 			req:               makeLeaderReq(),
 			setupMocks:        func(m *mock.QueryService) {},

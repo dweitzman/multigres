@@ -2174,11 +2174,11 @@ type isApplyCertifiedRuleChangeRequest_CertSource interface {
 }
 
 type ApplyCertifiedRuleChangeRequest_Cert struct {
-	// Caller-supplied cert. The caller must populate outgoing_rule_number
+	// Caller-supplied cert. The caller must populate outgoing_decision_number
 	// and frozen_lsn. term_revocation may be left empty; if so, multiadmin
 	// fills it in (accepted_coordinator_id from the chosen multiorch,
 	// coordinator_initiated_at from "now", revoked_below_term picked by
-	// multiadmin to be greater than outgoing_rule_number.coordinator_term).
+	// multiadmin to be greater than outgoing_decision_number.coordinator_term).
 	//
 	// For initial leader appointment (no prior rule), pass a zero RuleNumber
 	// and frozen_lsn="0/0".
@@ -2186,7 +2186,7 @@ type ApplyCertifiedRuleChangeRequest_Cert struct {
 }
 
 type ApplyCertifiedRuleChangeRequest_UnsafeDeriveCert struct {
-	// Ask multiadmin to derive outgoing_rule_number and frozen_lsn by
+	// Ask multiadmin to derive outgoing_decision_number and frozen_lsn by
 	// probing the proposed cohort for their current ConsensusStatus.
 	// term_revocation and rule identity fields are then filled in as above.
 	UnsafeDeriveCert *UnsafeDeriveCertOptions `protobuf:"bytes,4,opt,name=unsafe_derive_cert,json=unsafeDeriveCert,proto3,oneof"`
@@ -2198,7 +2198,7 @@ func (*ApplyCertifiedRuleChangeRequest_UnsafeDeriveCert) isApplyCertifiedRuleCha
 }
 
 // UnsafeDeriveCertOptions requests that multiadmin probe the proposed cohort
-// members for their current ConsensusStatus and derive cert.outgoing_rule_number
+// members for their current ConsensusStatus and derive cert.outgoing_decision_number
 // and cert.frozen_lsn from the most-advanced response.
 //
 // Unsafe because if an unreachable node is actually ahead of the reachable

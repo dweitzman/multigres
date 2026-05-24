@@ -1068,9 +1068,9 @@ func TestBuildProposalCore(t *testing.T) {
 	}
 
 	// Defensive guard: public wrappers filter via ValidateRevocation first
-	// so a nil outgoing_rule never reaches buildProposalCore in practice.
+	// so a nil outgoing_decision never reaches buildProposalCore in practice.
 	// Exercise the guard directly here.
-	t.Run("revocation with nil outgoing_rule is rejected", func(t *testing.T) {
+	t.Run("revocation with nil outgoing_decision is rejected", func(t *testing.T) {
 		zone1 := poolerIDs.zone1
 		cohort := zone1.all[:3]
 		rule := makeRule(ruleNum(3, 0), atLeast(2), cohort...)
@@ -1081,7 +1081,7 @@ func TestBuildProposalCore(t *testing.T) {
 		}
 		_, err := buildProposalCore(rev, statuses, requireOutgoingQuorum, discoverMostAdvancedTimeline,
 			func(RecruitmentResult) (*consensusdatapb.CoordinatorProposal, error) { return nil, nil })
-		require.ErrorContains(t, err, "revocation.outgoing_rule is required")
+		require.ErrorContains(t, err, "revocation.outgoing_decision is required")
 	})
 }
 
@@ -1372,7 +1372,7 @@ func TestBuildSafeProposal_BuildProposalError(t *testing.T) {
 	require.EqualError(t, err, "buildProposal: no suitable candidate")
 }
 
-func TestBuildSafeProposal_OutgoingRuleSelected(t *testing.T) {
+func TestBuildSafeProposal_OutgoingDecisionSelected(t *testing.T) {
 	// One node is behind; the others are at the higher rule.
 	// The higher rule's cohort and policy must govern quorum.
 	zone1 := poolerIDs.zone1
@@ -1599,7 +1599,7 @@ func TestBuildSafeProposal_CohortReplacementSplitBrain(t *testing.T) {
 
 	// Each coordinator has its own TermRevocation (different accepted_coordinator_id).
 	// B and C accepted coordinator 1; D and E accepted coordinator 2.
-	// Each coordinator's outgoing_rule reflects what its own recruited cohort
+	// Each coordinator's outgoing_decision reflects what its own recruited cohort
 	// reports: coord 1 sees B & C at oldRule (3, 0); coord 2 sees D & E at
 	// newRule (4, 0).
 	revocationCoord1 := &clustermetadatapb.TermRevocation{
@@ -1769,13 +1769,13 @@ func TestCheckExternallyCertifiedProposalPossible(t *testing.T) {
 		require.EqualError(t, err, "cert is missing frozen_lsn")
 	})
 
-	t.Run("outgoing_rule: candidate rule exceeds revocation's outgoing_rule", func(t *testing.T) {
+	t.Run("outgoing_decision: candidate rule exceeds revocation's outgoing_decision", func(t *testing.T) {
 		cert := &clustermetadatapb.ExternallyCertifiedRevocation{
 			TermRevocation: coordRevocation(5, &clustermetadatapb.RuleNumber{CoordinatorTerm: 2}),
 			FrozenLsn:      "0/0",
 		}
-		// Node has committed rule (3,0) but outgoing_rule is (2,0). ValidateRevocation
-		// rejects the node (committed rule is beyond outgoing_rule), so the pre-flight
+		// Node has committed rule (3,0) but outgoing_decision is (2,0). ValidateRevocation
+		// rejects the node (committed rule is beyond outgoing_decision), so the pre-flight
 		// check finds no qualifying candidates.
 		err := CheckExternallyCertifiedProposalPossible(cert, []*clustermetadatapb.ConsensusStatus{
 			makeUnrecruitedStatus(a, makeRule(ruleNum(3, 0), atLeast(2), cohort...)),
@@ -1783,7 +1783,7 @@ func TestCheckExternallyCertifiedProposalPossible(t *testing.T) {
 		require.ErrorContains(t, err, "no nodes could accept the proposed revocation")
 	})
 
-	t.Run("nil cert.term_revocation.outgoing_rule rejected by discoverer", func(t *testing.T) {
+	t.Run("nil cert.term_revocation.outgoing_decision rejected by discoverer", func(t *testing.T) {
 		// Public wrappers filter via ValidateRevocation first, so this
 		// guard is never tripped via CheckExternallyCertifiedProposalPossible
 		// in practice. Direct-call the internal discoverer to exercise it.
@@ -1796,7 +1796,7 @@ func TestCheckExternallyCertifiedProposalPossible(t *testing.T) {
 		_, err := newExternallyCertifiedDiscoverer(cert, []*clustermetadatapb.ConsensusStatus{
 			makeUnrecruitedStatus(a, initialRule),
 		})
-		require.ErrorContains(t, err, "cert.term_revocation.outgoing_rule is required")
+		require.ErrorContains(t, err, "cert.term_revocation.outgoing_decision is required")
 	})
 
 	t.Run("nil rule on candidate node → error", func(t *testing.T) {
@@ -1895,8 +1895,8 @@ func TestBuildExternallyCertifiedProposal(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	// The "cert missing outgoing_rule_number" case is gone — the cert no longer
-	// carries that field. revocation.outgoing_rule = nil is exercised by
+	// The "cert missing outgoing_decision_number" case is gone — the cert no longer
+	// carries that field. revocation.outgoing_decision = nil is exercised by
 	// TestValidateRevocation directly.
 
 	t.Run("cert missing frozen_lsn", func(t *testing.T) {
@@ -1936,7 +1936,7 @@ func TestBuildExternallyCertifiedProposal(t *testing.T) {
 			makeStatus(zone1.a, recruitedRule, rev),
 		}
 		_, err := BuildExternallyCertifiedProposal(cert, statuses, bootstrapProposal)
-		require.ErrorContains(t, err, "strictly greater than revocation.outgoing_rule")
+		require.ErrorContains(t, err, "strictly greater than revocation.outgoing_decision")
 	})
 
 	t.Run("nil rule on recruited node → error", func(t *testing.T) {

@@ -252,7 +252,7 @@ func validateCertifiedRuleChange(
 		return mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT, "cert.term_revocation is required")
 	}
 	if rev.GetOutgoingDecision() == nil {
-		return mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT, "cert.term_revocation.outgoing_rule is required (use a zero RuleNumber for initial appointment)")
+		return mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT, "cert.term_revocation.outgoing_decision is required (use a zero RuleNumber for initial appointment)")
 	}
 	if rev.GetRevokedBelowTerm() <= 0 {
 		return mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT, "cert.term_revocation.revoked_below_term must be positive")
@@ -274,7 +274,7 @@ func validateCertifiedRuleChange(
 	}
 	if rev.GetRevokedBelowTerm() <= rev.GetOutgoingDecision().GetCoordinatorTerm() {
 		return mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,
-			"cert.term_revocation.revoked_below_term (%d) must be greater than cert.term_revocation.outgoing_rule.coordinator_term (%d)",
+			"cert.term_revocation.revoked_below_term (%d) must be greater than cert.term_revocation.outgoing_decision.coordinator_term (%d)",
 			rev.GetRevokedBelowTerm(), rev.GetOutgoingDecision().GetCoordinatorTerm())
 	}
 

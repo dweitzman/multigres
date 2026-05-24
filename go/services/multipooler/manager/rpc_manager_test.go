@@ -1913,7 +1913,7 @@ func TestUpdateConsensusRule_HistoryFailurePreventsGUCUpdate(t *testing.T) {
 		ctx,
 		multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_ADD,
 		[]*clustermetadatapb.ID{newStandby},
-		&clustermetadatapb.RuleNumber{CoordinatorTerm: 5}, // expectedOutgoingRule
+		&clustermetadatapb.RuleNumber{CoordinatorTerm: 5}, // expectedOutgoingDecision
 		nil, // coordinatorID
 	)
 

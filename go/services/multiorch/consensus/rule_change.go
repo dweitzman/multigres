@@ -69,7 +69,7 @@ func (c *Coordinator) newRuleChange(
 //     commonconsensus.NewTermRevocation to derive it from cohort statuses.
 //   - For externally-certified transitions (bootstrap, operator override),
 //     construct the cert and pass cert.GetTermRevocation() — the agent
-//     defines revoked_below_term and outgoing_rule, not local discovery.
+//     defines revoked_below_term and outgoing_decision, not local discovery.
 func (r *coordinatorLedRuleChange) Run(
 	ctx context.Context,
 	cohort []*multiorchdatapb.PoolerHealthState,

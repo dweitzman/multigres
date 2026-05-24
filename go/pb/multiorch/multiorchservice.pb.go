@@ -682,7 +682,7 @@ func (x *TriggerRecoveryNowResponse) GetRemainingProblemCodes() []string {
 //
 // The cert is the caller's load-bearing safety attestation: by submitting it,
 // the caller asserts that no member of the outgoing cohort will commit further
-// writes past cert.outgoing_rule_number, and that any candidate leader has
+// writes past cert.outgoing_decision_number, and that any candidate leader has
 // reached at least cert.frozen_lsn under that rule. Pooler-side
 // ValidateRevocation enforces this at the WAL level (a node that resumes with
 // progress past the certified rule will refuse the new rule), but callers
@@ -701,7 +701,7 @@ type ApplyCertifiedRuleChangeRequest struct {
 	// what each pooler will record on disk via Recruit.
 	//
 	// For initial leader appointment (no prior rule), set
-	// outgoing_rule_number to a zero RuleNumber (coordinator_term=0,
+	// outgoing_decision_number to a zero RuleNumber (coordinator_term=0,
 	// leader_subterm=0) and frozen_lsn to "0/0".
 	Cert *clustermetadata.ExternallyCertifiedRevocation `protobuf:"bytes,3,opt,name=cert,proto3" json:"cert,omitempty"`
 	// Free-text, recorded in rule_history for audit.

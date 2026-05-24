@@ -275,11 +275,11 @@ func TestValidateCertifiedRuleChange(t *testing.T) {
 			wantMatch: "term_revocation is required",
 		},
 		{
-			name: "cert.term_revocation.outgoing_rule missing",
+			name: "cert.term_revocation.outgoing_decision missing",
 			mutate: func(_ **clustermetadatapb.ShardKey, _ *clustermetadatapb.ShardRule, cert *clustermetadatapb.ExternallyCertifiedRevocation) {
 				cert.TermRevocation.OutgoingDecision = nil
 			},
-			wantMatch: "outgoing_rule is required",
+			wantMatch: "outgoing_decision is required",
 		},
 		{
 			name: "cert.term_revocation.revoked_below_term non-positive",

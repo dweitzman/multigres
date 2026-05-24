@@ -67,7 +67,7 @@ func makePoolerState(cell, name string) *multiorchdatapb.PoolerHealthState {
 
 // newTestRevocation builds a TermRevocation suitable for rule_change.Run from
 // the given cohort. Tests that don't care about specific revocation contents
-// (term, outgoing_rule, etc.) use this to satisfy Run's "revocation is required"
+// (term, outgoing_decision, etc.) use this to satisfy Run's "revocation is required"
 // contract; tests that need richer state construct their own.
 func newTestRevocation(t *testing.T, coord *Coordinator, cohort []*multiorchdatapb.PoolerHealthState) *clustermetadatapb.TermRevocation {
 	t.Helper()
@@ -176,7 +176,7 @@ func TestBuildFailoverProposal(t *testing.T) {
 		assert.Equal(t, "mp1", proposal.GetProposedRule().GetLeaderId().GetName())
 	})
 
-	t.Run("no OutgoingRule returns error", func(t *testing.T) {
+	t.Run("no OutgoingDecision returns error", func(t *testing.T) {
 		result := commonconsensus.RecruitmentResult{
 			TermRevocation:   rev,
 			OutgoingDecision: nil,

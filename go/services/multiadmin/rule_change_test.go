@@ -567,7 +567,7 @@ func TestApplyCertifiedRuleChange_ForwardsToOrch(t *testing.T) {
 	require.NotNil(t, forwardedRule.GetCreationTime(), "fillIdentityFields should have populated creation_time")
 	require.NotNil(t, forwardedRule.GetRuleNumber(), "fillIdentityFields should have populated rule_number")
 	assert.Equal(t, int64(3), forwardedRule.GetRuleNumber().GetCoordinatorTerm(),
-		"derived from cert outgoing_rule (term 2) + 1")
+		"derived from cert outgoing_decision (term 2) + 1")
 
 	rev := fake.received.GetCert().GetTermRevocation()
 	require.NotNil(t, rev)

@@ -414,22 +414,22 @@ func TestSetTermPrimary_IgnoresRevokedRule(t *testing.T) {
 	}
 }
 
-// TestSetTermPrimary_AppliesViaOutgoingRuleOverride verifies that an SetTermPrimary whose
+// TestSetTermPrimary_AppliesViaOutgoingDecisionOverride verifies that an SetTermPrimary whose
 // rule term is below revoked_below_term is accepted when the rule strictly
-// exceeds the revocation's recorded outgoing_rule — the runaway-recruit
+// exceeds the revocation's recorded outgoing_decision — the runaway-recruit
 // self-heal path. To avoid wiring full postgres mocks for the apply branch,
 // the test sets self's rule term above the incoming rule so SetTermPrimary takes
 // its "not higher, no-op" branch after the revocation check passes; the
 // (rule, leader) tuple is still recorded by RecordTermPrimary, which is the
 // observable proving the override fired.
-func TestSetTermPrimary_AppliesViaOutgoingRuleOverride(t *testing.T) {
+func TestSetTermPrimary_AppliesViaOutgoingDecisionOverride(t *testing.T) {
 	mockQueryService := mock.NewQueryService()
 
 	const selfRuleTerm = 10
 	pm, _ := setupManagerWithMockDB(t, mockQueryService, &fakeRuleStore{pos: makeRulePosition(selfRuleTerm)})
 
-	// Revocation at term 5 with outgoing_rule at term 1; an incoming rule
-	// at term 3 is below revoked_below_term but strictly above outgoing_rule.
+	// Revocation at term 5 with outgoing_decision at term 1; an incoming rule
+	// at term 3 is below revoked_below_term but strictly above outgoing_decision.
 	require.NoError(t, pm.consensusState.setRevocation(
 		&clustermetadatapb.TermRevocation{
 			RevokedBelowTerm: 5,

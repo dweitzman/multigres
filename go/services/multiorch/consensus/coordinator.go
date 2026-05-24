@@ -123,7 +123,7 @@ func (c *Coordinator) AppointLeader(ctx context.Context, shardID string, cohort 
 // the cohort entirely: a writing leader's local LSN is always at least as
 // advanced as any replica's (async replication), so including a resigned
 // leader would let it dominate discovery and dead-end the proposal when health
-// check rejects it. The full cohort identity is preserved via OutgoingRule's
+// check rejects it. The full cohort identity is preserved via OutgoingDecision's
 // CohortMembers (replicas carry the same rule), so the consensus layer's
 // outgoing-quorum check still runs against the original cohort size.
 func (c *Coordinator) runFailover(ctx context.Context, cohort []*multiorchdatapb.PoolerHealthState, reason string) error {
@@ -141,7 +141,7 @@ func (c *Coordinator) runFailover(ctx context.Context, cohort []*multiorchdatapb
 			"no non-resigned poolers in cohort; cannot fail over")
 	}
 
-	// Failover constructs the revocation via NewTermRevocation: outgoing_rule
+	// Failover constructs the revocation via NewTermRevocation: outgoing_decision
 	// is the highest RuleNumber discovered across cohort statuses.
 	var liveStatuses []*clustermetadatapb.ConsensusStatus
 	for _, p := range liveCohort {
