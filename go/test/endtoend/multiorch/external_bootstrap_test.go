@@ -115,7 +115,7 @@ func TestBootstrap_ViaExternalAPI(t *testing.T) {
 	}
 	leaderID := poolerIDs[0]
 
-	// Build the bootstrap request: zero outgoing rule, frozen_lsn="0/0",
+	// Build the bootstrap request: zero outgoing decision, frozen_lsn="0/0",
 	// fully-populated identity and timing fields. Multiadmin will fill in
 	// any of those left blank, but populating them explicitly here mirrors
 	// what the CLI does and exercises the strict-validation path in

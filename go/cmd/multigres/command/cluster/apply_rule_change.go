@@ -51,10 +51,10 @@ type applyRuleChangeCmd struct {
 
 // AddApplyRuleChangeCommand registers the apply-rule-change subcommand.
 //
-// Used for both initial leader appointment (cohort has no committed rule yet
+// Used for both initial leader appointment (cohort has no committed decision yet
 // — pass zero outgoing-rule-term + --frozen-lsn=0/0) and stuck-quorum
 // recovery (cohort has a rule but quorum is unreachable — pass the
-// outgoing rule's term and frozen LSN, or use --unsafe-derive-cert-from-reachable
+// outgoing decision's term and frozen LSN, or use --unsafe-derive-cert-from-reachable
 // to have multiadmin probe the proposed cohort and derive them).
 // newApplyRuleChangeCmd constructs the applyRuleChangeCmd struct with all its
 // viperutil.Value flag handles. Shared by the public command constructor and
@@ -112,13 +112,13 @@ func AddApplyRuleChangeCommand(clusterCmd *cobra.Command) {
 		Use:   "apply-rule-change",
 		Short: "Install a new shard rule via an externally certified revocation",
 		Long: `Install a new shard rule (leader, cohort, durability) using an externally
-certified revocation. Handles both initial leader appointment (zero outgoing rule)
-and stuck-quorum recovery (existing outgoing rule, supplied explicitly or derived
+certified revocation. Handles both initial leader appointment (zero outgoing decision)
+and stuck-quorum recovery (existing outgoing decision, supplied explicitly or derived
 from a probe of the proposed cohort).
 
 The cert is the operator's load-bearing safety attestation: by submitting,
 the operator asserts that no member of the outgoing cohort will commit
-further writes past the outgoing rule. If that assertion is wrong, data
+further writes past the outgoing decision. If that assertion is wrong, data
 loss is possible. Use --unsafe-derive-cert-from-reachable only when you
 accept that risk explicitly.
 
@@ -153,10 +153,10 @@ Examples:
 	cmd.Flags().String("leader", a.leader.Default(), "Proposed leader, format 'cell_name' (required)")
 	cmd.Flags().StringSlice("cohort", a.cohort.Default(), "Proposed cohort members, comma-separated 'cell_name' (required)")
 	cmd.Flags().String("durability", a.durability.Default(), "Durability policy, e.g. AT_LEAST_2 or MULTI_CELL_AT_LEAST_2 (required)")
-	cmd.Flags().Int64("outgoing-rule-term", a.outgoingRuleTerm.Default(), "Coordinator term of the outgoing rule being revoked (0 for initial appointment)")
-	cmd.Flags().Int64("outgoing-leader-subterm", a.outgoingLeaderSubterm.Default(), "Leader subterm of the outgoing rule")
+	cmd.Flags().Int64("outgoing-rule-term", a.outgoingRuleTerm.Default(), "Coordinator term of the outgoing decision being revoked (0 for initial appointment)")
+	cmd.Flags().Int64("outgoing-leader-subterm", a.outgoingLeaderSubterm.Default(), "Leader subterm of the outgoing decision")
 	cmd.Flags().String("frozen-lsn", a.frozenLSN.Default(), "WAL LSN at which the outgoing cohort is certified frozen (use '0/0' for initial appointment). Required unless --unsafe-derive-cert-from-reachable is set")
-	cmd.Flags().Bool("unsafe-derive-cert-from-reachable", a.unsafeDeriveCert.Default(), "Ask multiadmin to probe the proposed cohort and derive outgoing rule + frozen LSN. UNSAFE: if an unreachable node is more advanced, data loss is possible")
+	cmd.Flags().Bool("unsafe-derive-cert-from-reachable", a.unsafeDeriveCert.Default(), "Ask multiadmin to probe the proposed cohort and derive outgoing decision + frozen LSN. UNSAFE: if an unreachable node is more advanced, data loss is possible")
 	cmd.Flags().String("reason", a.reason.Default(), "Free-text reason for the rule change (recorded for audit)")
 	cmd.Flags().Bool("yes", a.yes.Default(), "Skip the interactive confirmation prompt")
 	cmd.Flags().Duration("timeout", a.timeout.Default(), "Timeout for the RPC call")
@@ -317,8 +317,8 @@ func confirm(cmd *cobra.Command, req *multiadminpb.ApplyCertifiedRuleChangeReque
 	cmd.Printf("Reason:      %s\n", req.GetReason())
 
 	cmd.Print("\nYou are attesting that any unreachable cohort members under\n" +
-		"the outgoing rule will not commit further writes. If they resume\n" +
-		"and accept writes under the outgoing rule, data loss may occur.\n\n")
+		"the outgoing decision will not commit further writes. If they resume\n" +
+		"and accept writes under the outgoing decision, data loss may occur.\n\n")
 	cmd.Printf("Type the shard name (%s) to confirm: ", sk.GetShard())
 
 	scanner := bufio.NewScanner(cmd.InOrStdin())

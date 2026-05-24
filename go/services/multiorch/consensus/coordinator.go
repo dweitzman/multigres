@@ -462,7 +462,7 @@ func (c *Coordinator) AppointInitialLeader(ctx context.Context, shardID string, 
 
 		// This is the discovery phase of coordinator-led rule changes. For
 		// externally-certified rule changes, the agent (this method) is
-		// responsible for choosing the outgoing rule and authoring the
+		// responsible for choosing the outgoing decision and authoring the
 		// revocation; common/consensus consumes the cert without re-deriving.
 		mostAdvanced := commonconsensus.MostAdvancedPosition(cohortStatuses)
 		if mostAdvanced == nil {

@@ -29,7 +29,7 @@ import (
 
 // NewTermRevocation constructs a TermRevocation for a coordinator-led safe
 // transition. Use this for failover-style rule changes where the
-// coordinator's view of the outgoing rule comes from discovery over the
+// coordinator's view of the outgoing decision comes from discovery over the
 // cohort. The revocation term is derived from the highest term observed
 // across the provided ConsensusStatus values — the maximum of each node's
 // accepted revocation term and its recorded rule's coordinator term —

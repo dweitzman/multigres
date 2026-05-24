@@ -524,7 +524,7 @@ func TestPopulatePrimaryInfo_DemotedViaBeginTermRevoke(t *testing.T) {
 	t.Run("topology type PRIMARY, PoolerType REPLICA, primary term > 0 via ConsensusStatus", func(t *testing.T) {
 		// Former primary promoted at term 4; etcd topology updated to PRIMARY.
 		// After REVOKE, postgres restarts as standby → PoolerType=REPLICA.
-		// The committed rule still names this node as primary (before new rule replicates),
+		// The committed decision still names this node as primary (before new rule replicates),
 		// so IsPrimary(ConsensusStatus) remains true and term > 0.
 		ps := store.NewPoolerStore(nil, slog.Default())
 		formerPrimaryID := &clustermetadatapb.ID{

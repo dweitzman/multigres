@@ -73,7 +73,7 @@ type MultiOrchServiceClient interface {
 	// certified revocation. Handles both initial leader appointment (term 0)
 	// and stuck-quorum recovery (term > 0): the caller supplies the proposed
 	// leader, cohort, and durability policy, plus a cert that attests to which
-	// outgoing rule and WAL position the absent cohort members are frozen at.
+	// outgoing decision and WAL position the absent cohort members are frozen at.
 	ApplyCertifiedRuleChange(ctx context.Context, in *ApplyCertifiedRuleChangeRequest, opts ...grpc.CallOption) (*ApplyCertifiedRuleChangeResponse, error)
 }
 
@@ -177,7 +177,7 @@ type MultiOrchServiceServer interface {
 	// certified revocation. Handles both initial leader appointment (term 0)
 	// and stuck-quorum recovery (term > 0): the caller supplies the proposed
 	// leader, cohort, and durability policy, plus a cert that attests to which
-	// outgoing rule and WAL position the absent cohort members are frozen at.
+	// outgoing decision and WAL position the absent cohort members are frozen at.
 	ApplyCertifiedRuleChange(context.Context, *ApplyCertifiedRuleChangeRequest) (*ApplyCertifiedRuleChangeResponse, error)
 	mustEmbedUnimplementedMultiOrchServiceServer()
 }

@@ -185,7 +185,7 @@ func TestBuildFailoverProposal(t *testing.T) {
 
 		_, err := buildFailoverProposal(result, addressByID)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "no committed rule found")
+		assert.Contains(t, err.Error(), "no committed decision found")
 	})
 
 	t.Run("no EligibleLeaders returns error", func(t *testing.T) {

@@ -1633,7 +1633,7 @@ func TestAppointLeader_NewFlow(t *testing.T) {
 
 	c := NewCoordinator(coordID, ts, fakeClient, logger, true /* useNewFlow */)
 
-	// Build the committed rule shared by all nodes. Coordinator term 5 means
+	// Build the committed decision shared by all nodes. Coordinator term 5 means
 	// the new revocation will be at term 6.
 	cohortIDs := []*clustermetadatapb.ID{
 		{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "mp1"},
@@ -1656,7 +1656,7 @@ func TestAppointLeader_NewFlow(t *testing.T) {
 	for i, id := range cohortIDs {
 		mp := createMockNode(fakeClient, id.Name, 5, walPositions[i], true, outgoingRule)
 		// Pre-vote runs over cached cohort statuses (not Recruit responses), so
-		// we need an Id and a populated CurrentPosition with the committed rule
+		// we need an Id and a populated CurrentPosition with the committed decision
 		// here too. createMockNode leaves these fields zero on the cached status.
 		mp.ConsensusStatus.Id = id
 		mp.ConsensusStatus.CurrentPosition = &clustermetadatapb.PoolerPosition{

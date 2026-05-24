@@ -1822,7 +1822,7 @@ func (pm *MultiPoolerManager) discoverPostgresState(ctx context.Context) (postgr
 }
 
 // primaryTermLocked returns the coordinator term of the pooler's current
-// committed rule if this pooler is the primary per that rule. Uses a
+// committed decision if this pooler is the primary per that rule. Uses a
 // consistent consensus status read and therefore requires the action lock.
 // Returns (0, nil) when the rule does not name this pooler as primary.
 // Returns (0, err) only when the consensus status cannot be read at all —

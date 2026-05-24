@@ -227,7 +227,7 @@ func BuildExternallyCertifiedProposal(
 //
 // frozen_lsn is required on the cert: without it, the cert provides no real
 // guarantee about what the outgoing cohort was frozen at. Bootstrap callers
-// must set it explicitly (e.g. "0/0"). The outgoing rule itself comes from
+// must set it explicitly (e.g. "0/0"). The outgoing decision itself comes from
 // cert.term_revocation.outgoing_decision, and buildProposalCore enforces that no
 // recruit reports a strictly newer rule — surfaced as a specific error rather
 // than returning a discoverer that would yield "no eligible leaders".
@@ -332,11 +332,11 @@ func buildProposalCore(
 		// Validate revocation of the outgoing cohort: no parallel quorum can still
 		// form among the non-recruited nodes. outgoingRule must be known to identify
 		// the cohort. A nil here means no recruit reported a rule matching the
-		// coordinator's expected outgoing rule — the cohort has progressed past
+		// coordinator's expected outgoing decision — the cohort has progressed past
 		// our view (or never reached it), and we need to re-discover.
 		if outgoingRule == nil {
 			return nil, fmt.Errorf(
-				"no recruit reports the expected outgoing rule %v; cannot determine cohort for quorum check",
+				"no recruit reports the expected outgoing decision %v; cannot determine cohort for quorum check",
 				expectedOutgoing,
 			)
 		}

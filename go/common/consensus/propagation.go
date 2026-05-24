@@ -126,7 +126,7 @@ func checkPropagationUniqueTermRevocation(
 		}
 	}
 	if outgoingRule == nil {
-		return fmt.Errorf("no status reports the expected outgoing rule %v; cannot determine cohort for quorum check", expectedOutgoing)
+		return fmt.Errorf("no status reports the expected outgoing decision %v; cannot determine cohort for quorum check", expectedOutgoing)
 	}
 
 	outgoingPolicy, err := NewPolicyFromProto(outgoingRule.GetDurabilityPolicy())

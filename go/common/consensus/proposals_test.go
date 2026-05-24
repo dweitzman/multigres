@@ -113,7 +113,7 @@ func proposeFirstEligible(rule *clustermetadatapb.ShardRule) func(RecruitmentRes
 }
 
 // revocation builds a *TermRevocation at the given term with the given
-// outgoing rule. Use inline so each test makes its term and outgoing rule
+// outgoing decision. Use inline so each test makes its term and outgoing decision
 // explicit. Pass &clustermetadatapb.RuleNumber{} for the "no prior rule" case.
 func revocation(term int64, outgoingRule *clustermetadatapb.RuleNumber) *clustermetadatapb.TermRevocation {
 	return &clustermetadatapb.TermRevocation{
@@ -703,7 +703,7 @@ func TestBuildProposalCore(t *testing.T) {
 				DurabilityPolicy: &clustermetadatapb.DurabilityPolicy{QuorumType: clustermetadatapb.QuorumType_QUORUM_TYPE_UNKNOWN},
 			}
 			return tc{
-				name:       "outgoing rule has unknown quorum type: failed to parse",
+				name:       "outgoing decision has unknown quorum type: failed to parse",
 				mode:       requireOutgoingQuorum,
 				revocation: revocation(5, ruleNum(3, 0)),
 				recruitedStatuses: []*clustermetadatapb.ConsensusStatus{
@@ -727,7 +727,7 @@ func TestBuildProposalCore(t *testing.T) {
 					makeStatusWithLSN(zone1.b, nil, revocation(5, ruleNum(3, 0)), "0/1000000"),
 				},
 				buildProposal: proposeFirstEligible(makeRule(ruleNum(5, 0), atLeast(2), cohort...)),
-				wantErr:       "no recruit reports the expected outgoing rule coordinator_term:3; cannot determine cohort for quorum check",
+				wantErr:       "no recruit reports the expected outgoing decision coordinator_term:3; cannot determine cohort for quorum check",
 			}
 		}(),
 		func() tc {
@@ -906,7 +906,7 @@ func TestBuildProposalCore(t *testing.T) {
 			zone1 := poolerIDs.zone1
 			cohort := zone1.all[:3]
 			return tc{
-				name:       "bootstrap: nil outgoing rule allowed, highest LSN leads",
+				name:       "bootstrap: nil outgoing decision allowed, highest LSN leads",
 				mode:       skipOutgoingQuorum,
 				revocation: revocation(5, ruleNum(3, 0)),
 				recruitedStatuses: []*clustermetadatapb.ConsensusStatus{
@@ -1003,7 +1003,7 @@ func TestBuildProposalCore(t *testing.T) {
 		func() tc {
 			// A in zone1 applied MULTI_CELL_AT_LEAST_2 at term 6; B and C in zone2
 			// never received it (still at AT_LEAST_2 term 5). All three recruited
-			// at term 7. A coordinator that re-proposes the term-6 outgoing rule
+			// at term 7. A coordinator that re-proposes the term-6 outgoing decision
 			// to propagate it is rejected: proposed term (6) < revocation term (7).
 			// See the TODO in validateProposal for the two-round recovery path.
 			cohort := []*clustermetadatapb.ID{poolerIDs.zone1.a, poolerIDs.zone2.b, poolerIDs.zone2.c}
@@ -1011,7 +1011,7 @@ func TestBuildProposalCore(t *testing.T) {
 			multiCellRule := makeRule(ruleNum(6, 0), multiCell(2), cohort...)
 			atLeastNRule := makeRule(ruleNum(5, 0), atLeast(2), cohort...)
 			return tc{
-				name:       "stuck rule change: coordinator re-proposes outgoing rule below revocation term",
+				name:       "stuck rule change: coordinator re-proposes outgoing decision below revocation term",
 				mode:       requireOutgoingQuorum,
 				revocation: rev,
 				recruitedStatuses: []*clustermetadatapb.ConsensusStatus{
@@ -1774,8 +1774,8 @@ func TestCheckExternallyCertifiedProposalPossible(t *testing.T) {
 			TermRevocation: coordRevocation(5, &clustermetadatapb.RuleNumber{CoordinatorTerm: 2}),
 			FrozenLsn:      "0/0",
 		}
-		// Node has committed rule (3,0) but outgoing_decision is (2,0). ValidateRevocation
-		// rejects the node (committed rule is beyond outgoing_decision), so the pre-flight
+		// Node has committed decision (3,0) but outgoing_decision is (2,0). ValidateRevocation
+		// rejects the node (committed decision is beyond outgoing_decision), so the pre-flight
 		// check finds no qualifying candidates.
 		err := CheckExternallyCertifiedProposalPossible(cert, []*clustermetadatapb.ConsensusStatus{
 			makeUnrecruitedStatus(a, makeRule(ruleNum(3, 0), atLeast(2), cohort...)),
@@ -1909,7 +1909,7 @@ func TestBuildExternallyCertifiedProposal(t *testing.T) {
 		require.EqualError(t, err, "cert is missing frozen_lsn")
 	})
 
-	t.Run("succeeds if the outgoing rule matches the highest observed node rule", func(t *testing.T) {
+	t.Run("succeeds if the outgoing decision matches the highest observed node rule", func(t *testing.T) {
 		outgoingRule := makeRule(ruleNum(3, 0), atLeast(2), incomingCohort...)
 		rev := coordRevocation(5, ruleNum(3, 0))
 		cert := &clustermetadatapb.ExternallyCertifiedRevocation{
@@ -1925,7 +1925,7 @@ func TestBuildExternallyCertifiedProposal(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	t.Run("recruit fails if some nodes are beyond the expected outgoing rule", func(t *testing.T) {
+	t.Run("recruit fails if some nodes are beyond the expected outgoing decision", func(t *testing.T) {
 		recruitedRule := makeRule(ruleNum(4, 0), atLeast(2), incomingCohort...) // node progressed past the certified point
 		rev := coordRevocation(5, ruleNum(3, 0))
 		cert := &clustermetadatapb.ExternallyCertifiedRevocation{

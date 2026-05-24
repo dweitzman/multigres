@@ -1472,7 +1472,7 @@ type StatusResponse struct {
 	// which the signal applies. Used by multiorch to detect voluntary demotions
 	// (BeginTerm REVOKE) without a separate ConsensusStatus RPC call.
 	// Staleness check: availability_status.leadership_status.primary_term must
-	// equal the coordinator term of the committed rule (via ConsensusStatus)
+	// equal the coordinator term of the committed decision (via ConsensusStatus)
 	// to ensure signals from previous election cycles are ignored.
 	AvailabilityStatus *clustermetadata.AvailabilityStatus `protobuf:"bytes,3,opt,name=availability_status,json=availabilityStatus,proto3" json:"availability_status,omitempty"`
 	// ConsensusStatus snapshot for this pooler. Used by multiorch to derive the

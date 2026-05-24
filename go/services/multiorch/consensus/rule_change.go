@@ -307,7 +307,7 @@ func buildFailoverProposal(
 	addressByID map[string]*clustermetadatapb.PoolerAddress,
 ) (*consensusdatapb.CoordinatorProposal, error) {
 	if result.OutgoingDecision == nil {
-		return nil, errors.New("no committed rule found; use bootstrap path for fresh clusters")
+		return nil, errors.New("no committed decision found; use bootstrap path for fresh clusters")
 	}
 	if len(result.EligibleLeaders) == 0 {
 		return nil, errors.New("no eligible leaders for failover proposal")

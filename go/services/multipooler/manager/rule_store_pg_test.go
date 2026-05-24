@@ -1111,7 +1111,7 @@ func TestRuleStorePG_GUCReconciliation(t *testing.T) {
 
 	// Cold SSM cache: postgres has the correct values but cache is empty, so
 	// NeedsApply queries postgres and returns true (cache != desired).
-	assert.True(t, rs.hasInconsistentGUC(ctx), "cold SSM cache with a committed rule should be inconsistent")
+	assert.True(t, rs.hasInconsistentGUC(ctx), "cold SSM cache with a committed decision should be inconsistent")
 
 	// reconcileGUC should apply the GUC and populate the SSM cache.
 	require.NoError(t, rs.reconcileGUC(ctx, false /* inRecovery */))

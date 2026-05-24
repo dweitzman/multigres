@@ -89,7 +89,7 @@ func MostAdvancedStatuses(statuses []*clustermetadatapb.ConsensusStatus) []*clus
 // runs over recruited statuses and returns the eligible-leader set. Callers
 // that need to derive an ExternallyCertifiedRevocation from cached cohort
 // state — e.g. the bootstrap path before recruitment — use this to obtain the
-// outgoing rule number and frozen LSN.
+// outgoing decision number and frozen LSN.
 func MostAdvancedPosition(statuses []*clustermetadatapb.ConsensusStatus) *clustermetadatapb.PoolerPosition {
 	best := MostAdvancedStatuses(statuses)
 	if len(best) == 0 {

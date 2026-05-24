@@ -88,7 +88,7 @@ func (c *Coordinator) ApplyCertifiedRuleChange(
 		ProposalLeader: leaderAddr,
 		ProposedRule:   proposedRule,
 		// Externally-certified proposals bypass the outgoing-cohort quorum check:
-		// the cert attests that the outgoing rule's quorum cannot commit further
+		// the cert attests that the outgoing decision's quorum cannot commit further
 		// writes, so the receiving pooler should apply the incoming cohort GUC
 		// directly rather than computing a (incoming ∩ outgoing) transition that
 		// collapses to empty for bootstrap (where the outgoing cohort is empty)

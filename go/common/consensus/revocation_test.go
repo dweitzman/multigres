@@ -34,7 +34,7 @@ var (
 	ts2 = timestamppb.New(time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC))
 
 	// zeroOutgoingDecision is a placeholder outgoing_decision used in tests where the
-	// specific outgoing rule value doesn't matter — only that it's non-nil so
+	// specific outgoing decision value doesn't matter — only that it's non-nil so
 	// ValidateRevocation accepts the revocation.
 	zeroOutgoingDecision = &clustermetadatapb.RuleNumber{}
 )
@@ -42,7 +42,7 @@ var (
 func TestValidateRevocation(t *testing.T) {
 	// outgoingAt4 represents the highest rule observed across the cohort when
 	// the revocation was authored — coordinator_term=4, which is what you'd see
-	// when the node being tested has committed rule at term=4.
+	// when the node being tested has committed decision at term=4.
 	outgoingAt4 := &clustermetadatapb.RuleNumber{CoordinatorTerm: 4}
 	revocationAt5 := &clustermetadatapb.TermRevocation{
 		RevokedBelowTerm:       5,
@@ -160,7 +160,7 @@ func TestValidateRevocation(t *testing.T) {
 			wantErr:    "coordinator term 7 >= revoked_below_term 5",
 		},
 		{
-			// if the committed rule is beyond outgoing_decision, the
+			// if the committed decision is beyond outgoing_decision, the
 			// revocation is stale
 			name: "CommittedRuleBeyondOutgoingDecision_Refused",
 			status: &clustermetadatapb.ConsensusStatus{
@@ -175,7 +175,7 @@ func TestValidateRevocation(t *testing.T) {
 			wantErr: "committed decision (1.0) is beyond outgoing_decision (0.0)",
 		},
 		{
-			// committed rule equals outgoing_decision — not beyond it, so OK.
+			// committed decision equals outgoing_decision — not beyond it, so OK.
 			name: "CommittedRuleEqualsOutgoingDecision_Accepted",
 			status: &clustermetadatapb.ConsensusStatus{
 				CurrentPosition: positionAtCoordTerm(0),

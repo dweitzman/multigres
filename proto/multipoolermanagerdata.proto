@@ -277,7 +277,7 @@ message StatusResponse {
   // which the signal applies. Used by multiorch to detect voluntary demotions
   // (BeginTerm REVOKE) without a separate ConsensusStatus RPC call.
   // Staleness check: availability_status.leadership_status.primary_term must
-  // equal the coordinator term of the committed rule (via ConsensusStatus)
+  // equal the coordinator term of the committed decision (via ConsensusStatus)
   // to ensure signals from previous election cycles are ignored.
   clustermetadata.AvailabilityStatus availability_status = 3;
 
