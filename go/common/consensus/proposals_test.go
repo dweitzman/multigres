@@ -1558,93 +1558,112 @@ func TestBuildProposalCore_EligibleLeadersOrderDeterministic(t *testing.T) {
 	assert.Equal(t, collect(forward), collect(reversed), "eligible leader order must not depend on input order")
 }
 
-func TestBuildSafeProposal_CohortReplacementSplitBrain(t *testing.T) {
-	// KNOWN LIMITATION: documents a split-brain scenario that CheckSufficientRecruitment
-	// cannot detect. See the TODO in CheckSufficientRecruitment.
+func TestBuildSafeProposal_CohortReplacementSplitBrainPrevented(t *testing.T) {
+	// Documents how the decision/proposal split + propagation_intent prevents a
+	// split-brain that the legacy single-rule model could not.
 	//
-	// A is the leader for cohort [A, B, C] (AT_LEAST_2). A coordinator sends a
-	// Propose to replace the cohort with [D, E, F]. A writes the new rule to its
-	// rule_history; D and E stream that WAL from A and apply it. But B and C never
-	// receive the new rule, and A crashes before the coordinator gets a Propose
-	// response — so the new rule was never durably decided. Under the outgoing
-	// cohort's policy (AT_LEAST_2 on [A, B, C]), only A applied the rule change;
-	// it needed at least one of B or C to commit. The new rule is a phantom: it
-	// exists in D and E's WAL but was never agreed to by the outgoing cohort.
+	// Scenario: A is the leader for cohort [A, B, C] (AT_LEAST_2). A coordinator
+	// sends a Propose to replace the cohort with [D, E, F]. A writes the new rule
+	// to its WAL as a proposal; D and E stream that WAL from A and apply it as
+	// their in-flight proposal. But B and C never receive it, and A crashes
+	// before the proposal reaches the outgoing cohort's quorum — so the new rule
+	// is in WAL on D and E but was never marked as a decision (it never satisfied
+	// the outgoing cohort [A, B, C]'s AT_LEAST_2 policy with only A acking).
 	//
-	// Two coordinators now independently recruit disjoint sets of nodes:
+	// Two coordinators now independently try to recover:
 	//
-	//   Coordinator 1 sees B and C (both at old rule, cohort [A,B,C]):
-	//     - outgoingRule = old rule, cohort = [A,B,C], recruited 2 of 3 → AT_LEAST_2 ✓
-	//     - promotes B with cohort [B,C]
+	//   Coordinator 1 sees B and C (decision=oldRule, no proposal): takes the
+	//   safe-proposal path. Recruited 2 of [A,B,C] → AT_LEAST_2 ✓, promotes B.
 	//
-	//   Coordinator 2 sees D and E (both at new rule, cohort [D,E,F]):
-	//     - outgoingRule = new rule (phantom), cohort = [D,E,F], recruited 2 of 3 → AT_LEAST_2 ✓
-	//     - promotes D with cohort [D,E]
+	//   Coordinator 2 sees D and E (decision=oldRule, proposal=newRule):
+	//   NewTermRevocation sets propagation_intent because proposal > decision.
+	//   Coord 2 must use the propagation path (BuildSafeProposal rejects
+	//   revocations with propagation_intent). CheckPropagationPossible checks
+	//   outgoing-cohort quorum on the OLD cohort [A,B,C] — but coord 2's
+	//   candidates D and E aren't in that cohort. Quorum fails; propagation
+	//   refused. Coord 2 cannot make progress without consulting B or C.
 	//
-	// The two recruited sets share no nodes. Both promotions succeed, yielding
-	// two independent leaders — split brain.
-	//
-	// A correct implementation would reject the new rule as outgoingRule when it has
-	// not achieved quorum under the outgoing cohort's policy. We don't yet have
-	// enough information from Recruit responses to enforce this. When the TODO is
-	// resolved, at least one of the two calls below should return an error.
+	// This is the safety property: the proposal in D's and E's WAL doesn't
+	// elevate to outgoing_decision, and propagation requires the outgoing
+	// cohort's quorum to confirm it. Without that confirmation, no second
+	// leader can emerge.
 	zone1 := poolerIDs.zone1
 	// zone1.a: old leader, crashed — not recruited.
 	// zone1.b, zone1.c: old cohort, respond to coord 1.
-	// zone1.d, zone1.e: new cohort, respond to coord 2.
+	// zone1.d, zone1.e: new cohort, respond to coord 2 with an in-WAL proposal.
 	// zone1.f: new cohort, unreachable.
 
 	oldRule := makeRule(ruleNum(3, 0), atLeast(2), zone1.a, zone1.b, zone1.c)
 	newRule := makeRule(ruleNum(4, 0), atLeast(2), zone1.d, zone1.e, zone1.f)
 
-	// Each coordinator has its own TermRevocation (different accepted_coordinator_id).
-	// B and C accepted coordinator 1; D and E accepted coordinator 2.
-	// Each coordinator's outgoing_decision reflects what its own recruited cohort
-	// reports: coord 1 sees B & C at oldRule (3, 0); coord 2 sees D & E at
-	// newRule (4, 0).
-	revocationCoord1 := &clustermetadatapb.TermRevocation{
-		RevokedBelowTerm:       6,
-		AcceptedCoordinatorId:  makeID("zone1", "multiorch-1"),
-		CoordinatorInitiatedAt: &timestamppb.Timestamp{Seconds: 1000},
-		OutgoingDecision:       ruleNum(3, 0),
+	// Statuses: B and C have decision=oldRule only. D and E have decision=oldRule
+	// AND proposal=newRule (the in-flight rule replication brought them from A).
+	bcStatuses := []*clustermetadatapb.ConsensusStatus{
+		makeStatusWithLSN(zone1.b, oldRule, nil, "0/3000000"),
+		makeStatusWithLSN(zone1.c, oldRule, nil, "0/3000000"),
 	}
-	revocationCoord2 := &clustermetadatapb.TermRevocation{
-		RevokedBelowTerm:       6,
-		AcceptedCoordinatorId:  makeID("zone1", "multiorch-2"),
-		CoordinatorInitiatedAt: &timestamppb.Timestamp{Seconds: 1000},
-		OutgoingDecision:       ruleNum(4, 0),
+	deStatuses := []*clustermetadatapb.ConsensusStatus{
+		makeStatusWithProposal(zone1.d, oldRule, newRule, nil),
+		makeStatusWithProposal(zone1.e, oldRule, newRule, nil),
 	}
 
-	// All four responding nodes' statuses are in the same pool. The revocation
-	// embedded in each status records which coordinator that node pledged to.
-	allStatuses := []*clustermetadatapb.ConsensusStatus{
+	// Coordinator 1 only observes B and C. NewTermRevocation produces a safe
+	// revocation (no propagation_intent — no proposals in its view).
+	coord1ID := makeID("zone1", "multiorch-1")
+	revocationCoord1, err := NewTermRevocation(bcStatuses, coord1ID)
+	require.NoError(t, err)
+	require.Nil(t, revocationCoord1.GetPropagationIntent(),
+		"coord 1's view (B, C) has no proposals → no propagation_intent")
+
+	// After B and C accept the revocation, their stored TermRevocation matches
+	// coord 1's. Rebuild the status set with that recruited state.
+	bcRecruited := []*clustermetadatapb.ConsensusStatus{
 		makeStatusWithLSN(zone1.b, oldRule, revocationCoord1, "0/3000000"),
 		makeStatusWithLSN(zone1.c, oldRule, revocationCoord1, "0/3000000"),
-		makeStatusWithLSN(zone1.d, newRule, revocationCoord2, "0/4000000"),
-		makeStatusWithLSN(zone1.e, newRule, revocationCoord2, "0/4000000"),
 	}
 
-	// Each coordinator passes the full pool but its own revocation. The filtering
-	// step ensures each coordinator only counts nodes that pledged to it.
-	proposal1, err1 := BuildSafeProposal(revocationCoord1, allStatuses, func(r RecruitmentResult) (*consensusdatapb.CoordinatorProposal, error) {
+	// Coord 1's safe-proposal succeeds: B and C form quorum under the old cohort.
+	proposal1, err := BuildSafeProposal(revocationCoord1, bcRecruited, func(r RecruitmentResult) (*consensusdatapb.CoordinatorProposal, error) {
 		return &consensusdatapb.CoordinatorProposal{
 			TermRevocation: r.TermRevocation,
 			ProposalLeader: &clustermetadatapb.PoolerAddress{Id: zone1.b},
-			ProposedRule:   makeRule(ruleNum(6, 0), atLeast(2), zone1.b, zone1.c),
+			ProposedRule:   makeRule(ruleNum(revocationCoord1.GetRevokedBelowTerm(), 0), atLeast(2), zone1.b, zone1.c),
 		}, nil
 	})
-	proposal2, err2 := BuildSafeProposal(revocationCoord2, allStatuses, func(r RecruitmentResult) (*consensusdatapb.CoordinatorProposal, error) {
+	require.NoError(t, err)
+	assert.NotNil(t, proposal1)
+
+	// Coordinator 2 only observes D and E. They carry an in-flight proposal
+	// beyond their decision → NewTermRevocation sets propagation_intent.
+	coord2ID := makeID("zone1", "multiorch-2")
+	revocationCoord2, err := NewTermRevocation(deStatuses, coord2ID)
+	require.NoError(t, err)
+	require.NotNil(t, revocationCoord2.GetPropagationIntent(),
+		"coord 2's view has a proposal beyond the decision → propagation_intent set")
+	assert.Equal(t, int64(4), revocationCoord2.GetPropagationIntent().GetCoordinatorTerm())
+
+	// After D and E accept the propagation revocation, their stored TermRevocation
+	// matches coord 2's. Rebuild the status set with that recruited state.
+	deRecruited := []*clustermetadatapb.ConsensusStatus{
+		makeStatusWithProposal(zone1.d, oldRule, newRule, revocationCoord2),
+		makeStatusWithProposal(zone1.e, oldRule, newRule, revocationCoord2),
+	}
+
+	// Coord 2 cannot use BuildSafeProposal — propagation revocations are refused.
+	_, err = BuildSafeProposal(revocationCoord2, deRecruited, func(r RecruitmentResult) (*consensusdatapb.CoordinatorProposal, error) {
 		return &consensusdatapb.CoordinatorProposal{
 			TermRevocation: r.TermRevocation,
 			ProposalLeader: &clustermetadatapb.PoolerAddress{Id: zone1.d},
-			ProposedRule:   makeRule(ruleNum(6, 0), atLeast(2), zone1.d, zone1.e),
+			ProposedRule:   makeRule(ruleNum(revocationCoord2.GetRevokedBelowTerm(), 0), atLeast(2), zone1.d, zone1.e),
 		}, nil
 	})
+	require.ErrorContains(t, err, "propagation_intent")
 
-	require.NoError(t, err1)
-	assert.NotNil(t, proposal1)
-	require.NoError(t, err2)
-	assert.NotNil(t, proposal2)
+	// Propagation path requires outgoing-cohort quorum on the OLD cohort
+	// [A,B,C]. Coord 2 only has D and E recruited; none of A, B, or C are in
+	// the candidate set, so quorum fails. Propagation refused.
+	err = CheckPropagationPossible(revocationCoord2, deRecruited)
+	require.ErrorContains(t, err, "insufficient outgoing cohort recruitment for propagation")
 }
 
 func TestSameCohort(t *testing.T) {

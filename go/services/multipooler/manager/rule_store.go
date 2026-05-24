@@ -996,6 +996,14 @@ func (rs *ruleStore) propagateProposal(ctx context.Context, update *ruleUpdateBu
 	if update.promotionHook == nil {
 		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "propagateProposal requires a promotion hook (WAL emission needs primary)")
 	}
+	// Propagation always respects the outgoing cohort: the in-WAL proposal was
+	// written under the outgoing rule's durability policy, and the Both GUC
+	// requires both cohorts to ACK before we mark the proposal as decision.
+	// Bypassing outgoing quorum is the externally-certified path, not propagation.
+	if update.skipOutgoingQuorum {
+		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
+			"propagateProposal cannot be combined with withSkipOutgoingQuorum; use an externally-certified proposal to bypass outgoing quorum")
+	}
 
 	expectedTerm := update.propagation.GetRuleNumber().GetCoordinatorTerm()
 	expectedSubterm := update.propagation.GetRuleNumber().GetLeaderSubterm()
