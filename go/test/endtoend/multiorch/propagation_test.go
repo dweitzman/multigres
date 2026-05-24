@@ -64,10 +64,15 @@ func TestPropagationRecovery(t *testing.T) {
 
 	setup.StartMultiOrchs(t.Context(), t)
 
-	primaryName := waitForShardReady(t, setup, 3, 60*time.Second)
-	t.Logf("Shard ready: primary=%s", primaryName)
-
+	waitForShardReady(t, setup, 3, 60*time.Second)
 	enableRecovery := setup.DisableRecovery(t, "multiorch")
+
+	// Re-resolve the primary AFTER recovery is disabled. multiorch can run a
+	// post-bootstrap "LeaderIsDead" re-election that races with waitForShardReady,
+	// so the primary identity captured during ready-wait may be stale.
+	primaryInst := setup.RefreshPrimary(t)
+	primaryName := primaryInst.Name
+	t.Logf("Shard ready: primary=%s", primaryName)
 
 	// --- Phase 1: kill two standbys ------------------------------------------------
 
@@ -290,8 +295,11 @@ func TestPropagationRecovery(t *testing.T) {
 
 	// --- Phase 5: verify propagation succeeded -------------------------------------
 
-	newPrimaryName := shardsetup.WaitForNewPrimary(t, setup, primaryName, 5*time.Second)
-	require.NotEmpty(t, newPrimaryName, "orch should elect a new primary via propagation")
+	// RequireRecovery isn't usable here because the dead primary (P) will
+	// indefinitely show up as a StaleLeader problem (its postgres can't be
+	// reached for demotion), so we wait on the observable propagation outcome
+	// directly: a new primary other than P appears within the cohort.
+	newPrimaryName := shardsetup.WaitForNewPrimary(t, setup, primaryName, 30*time.Second)
 	require.Equal(t, r3Name, newPrimaryName,
 		"R3 (the only node carrying the in-WAL proposal) must become the new primary")
 	t.Logf("Propagation succeeded: %s is the new primary", newPrimaryName)

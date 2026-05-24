@@ -1728,9 +1728,14 @@ type ReplicationPrimary struct {
 	// Contact info for the primary the pooler was last told to use. Snapshot
 	// from the most recent SetTermPrimary/Propose; treat as "what this pooler currently
 	// believes," not as the canonical primary for the cluster.
-	Primary       *PoolerAddress `protobuf:"bytes,2,opt,name=primary,proto3" json:"primary,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Primary *PoolerAddress `protobuf:"bytes,2,opt,name=primary,proto3" json:"primary,omitempty"`
+	// The revocation that established this primary, as supplied by the
+	// SetTermPrimary/Propose RPC that recorded it. Used to reject stale
+	// SetTermPrimary attempts whose revocation is below what has already been
+	// recorded for this primary lineage.
+	PrimaryRevocation *TermRevocation `protobuf:"bytes,3,opt,name=primary_revocation,json=primaryRevocation,proto3" json:"primary_revocation,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *ReplicationPrimary) Reset() {
@@ -1773,6 +1778,13 @@ func (x *ReplicationPrimary) GetRule() *ShardRule {
 func (x *ReplicationPrimary) GetPrimary() *PoolerAddress {
 	if x != nil {
 		return x.Primary
+	}
+	return nil
+}
+
+func (x *ReplicationPrimary) GetPrimaryRevocation() *TermRevocation {
+	if x != nil {
+		return x.PrimaryRevocation
 	}
 	return nil
 }
@@ -2353,10 +2365,11 @@ const file_clustermetadata_proto_rawDesc = "" +
 	"\x0ePoolerPosition\x126\n" +
 	"\bdecision\x18\x01 \x01(\v2\x1a.clustermetadata.ShardRuleR\bdecision\x126\n" +
 	"\bproposal\x18\x02 \x01(\v2\x1a.clustermetadata.ShardRuleR\bproposal\x12\x10\n" +
-	"\x03lsn\x18\x03 \x01(\tR\x03lsn\"~\n" +
+	"\x03lsn\x18\x03 \x01(\tR\x03lsn\"\xce\x01\n" +
 	"\x12ReplicationPrimary\x12.\n" +
 	"\x04rule\x18\x01 \x01(\v2\x1a.clustermetadata.ShardRuleR\x04rule\x128\n" +
-	"\aprimary\x18\x02 \x01(\v2\x1e.clustermetadata.PoolerAddressR\aprimary\"\xf7\x02\n" +
+	"\aprimary\x18\x02 \x01(\v2\x1e.clustermetadata.PoolerAddressR\aprimary\x12N\n" +
+	"\x12primary_revocation\x18\x03 \x01(\v2\x1f.clustermetadata.TermRevocationR\x11primaryRevocation\"\xf7\x02\n" +
 	"\x0eTermRevocation\x12,\n" +
 	"\x12revoked_below_term\x18\x01 \x01(\x03R\x10revokedBelowTerm\x12K\n" +
 	"\x17accepted_coordinator_id\x18\x02 \x01(\v2\x13.clustermetadata.IDR\x15acceptedCoordinatorId\x12T\n" +
@@ -2488,24 +2501,25 @@ var file_clustermetadata_proto_depIdxs = []int32{
 	22, // 26: clustermetadata.PoolerPosition.proposal:type_name -> clustermetadata.ShardRule
 	22, // 27: clustermetadata.ReplicationPrimary.rule:type_name -> clustermetadata.ShardRule
 	13, // 28: clustermetadata.ReplicationPrimary.primary:type_name -> clustermetadata.PoolerAddress
-	18, // 29: clustermetadata.TermRevocation.accepted_coordinator_id:type_name -> clustermetadata.ID
-	34, // 30: clustermetadata.TermRevocation.coordinator_initiated_at:type_name -> google.protobuf.Timestamp
-	21, // 31: clustermetadata.TermRevocation.outgoing_decision:type_name -> clustermetadata.RuleNumber
-	21, // 32: clustermetadata.TermRevocation.propagation_intent:type_name -> clustermetadata.RuleNumber
-	25, // 33: clustermetadata.ExternallyCertifiedRevocation.term_revocation:type_name -> clustermetadata.TermRevocation
-	25, // 34: clustermetadata.ConsensusStatus.term_revocation:type_name -> clustermetadata.TermRevocation
-	23, // 35: clustermetadata.ConsensusStatus.current_position:type_name -> clustermetadata.PoolerPosition
-	24, // 36: clustermetadata.ConsensusStatus.replication_primary:type_name -> clustermetadata.ReplicationPrimary
-	18, // 37: clustermetadata.ConsensusStatus.id:type_name -> clustermetadata.ID
-	3,  // 38: clustermetadata.LeadershipStatus.signal:type_name -> clustermetadata.LeadershipSignal
-	28, // 39: clustermetadata.AvailabilityStatus.leadership_status:type_name -> clustermetadata.LeadershipStatus
-	30, // 40: clustermetadata.AvailabilityStatus.cohort_eligibility_status:type_name -> clustermetadata.CohortEligibilityStatus
-	4,  // 41: clustermetadata.CohortEligibilityStatus.signal:type_name -> clustermetadata.CohortEligibilitySignal
-	42, // [42:42] is the sub-list for method output_type
-	42, // [42:42] is the sub-list for method input_type
-	42, // [42:42] is the sub-list for extension type_name
-	42, // [42:42] is the sub-list for extension extendee
-	0,  // [0:42] is the sub-list for field type_name
+	25, // 29: clustermetadata.ReplicationPrimary.primary_revocation:type_name -> clustermetadata.TermRevocation
+	18, // 30: clustermetadata.TermRevocation.accepted_coordinator_id:type_name -> clustermetadata.ID
+	34, // 31: clustermetadata.TermRevocation.coordinator_initiated_at:type_name -> google.protobuf.Timestamp
+	21, // 32: clustermetadata.TermRevocation.outgoing_decision:type_name -> clustermetadata.RuleNumber
+	21, // 33: clustermetadata.TermRevocation.propagation_intent:type_name -> clustermetadata.RuleNumber
+	25, // 34: clustermetadata.ExternallyCertifiedRevocation.term_revocation:type_name -> clustermetadata.TermRevocation
+	25, // 35: clustermetadata.ConsensusStatus.term_revocation:type_name -> clustermetadata.TermRevocation
+	23, // 36: clustermetadata.ConsensusStatus.current_position:type_name -> clustermetadata.PoolerPosition
+	24, // 37: clustermetadata.ConsensusStatus.replication_primary:type_name -> clustermetadata.ReplicationPrimary
+	18, // 38: clustermetadata.ConsensusStatus.id:type_name -> clustermetadata.ID
+	3,  // 39: clustermetadata.LeadershipStatus.signal:type_name -> clustermetadata.LeadershipSignal
+	28, // 40: clustermetadata.AvailabilityStatus.leadership_status:type_name -> clustermetadata.LeadershipStatus
+	30, // 41: clustermetadata.AvailabilityStatus.cohort_eligibility_status:type_name -> clustermetadata.CohortEligibilityStatus
+	4,  // 42: clustermetadata.CohortEligibilityStatus.signal:type_name -> clustermetadata.CohortEligibilitySignal
+	43, // [43:43] is the sub-list for method output_type
+	43, // [43:43] is the sub-list for method input_type
+	43, // [43:43] is the sub-list for extension type_name
+	43, // [43:43] is the sub-list for extension extendee
+	0,  // [0:43] is the sub-list for field type_name
 }
 
 func init() { file_clustermetadata_proto_init() }

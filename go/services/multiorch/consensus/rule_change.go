@@ -291,8 +291,9 @@ func (r *coordinatorLedRuleChange) propose(
 	}
 	proposal := req.GetProposal()
 	_, err := r.coordinator.rpcClient.SetTermPrimary(rpcCtx, p.MultiPooler, &consensusdatapb.SetTermPrimaryRequest{
-		Leader: proposal.GetProposalLeader(),
-		Rule:   proposal.GetProposedRule(),
+		Leader:            proposal.GetProposalLeader(),
+		Rule:              proposal.GetProposedRule(),
+		PrimaryRevocation: proposal.GetTermRevocation(),
 	})
 	return err
 }

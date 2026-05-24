@@ -426,6 +426,12 @@ message ReplicationPrimary {
   // from the most recent SetTermPrimary/Propose; treat as "what this pooler currently
   // believes," not as the canonical primary for the cluster.
   PoolerAddress primary = 2;
+
+  // The revocation that established this primary, as supplied by the
+  // SetTermPrimary/Propose RPC that recorded it. Used to reject stale
+  // SetTermPrimary attempts whose revocation is below what has already been
+  // recorded for this primary lineage.
+  TermRevocation primary_revocation = 3;
 }
 
 // TermRevocation records that this pooler has revoked participation in all terms

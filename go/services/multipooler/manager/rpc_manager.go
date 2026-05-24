@@ -138,7 +138,7 @@ func (pm *MultiPoolerManager) SetPrimaryConnInfo(ctx context.Context, primary *c
 			Id:           primary.GetId(),
 			Host:         host,
 			PostgresPort: port,
-		})
+		}, nil)
 	}
 
 	// Call the locked version that assumes action lock is already held
@@ -1085,7 +1085,7 @@ func (pm *MultiPoolerManager) DemoteStalePrimary(
 		RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: consensusTerm},
 		LeaderId:   source.GetId(),
 	}
-	rewindPerformed, finalLSN, err := pm.demoteStalePrimaryLocked(ctx, sourceAddr, syntheticRule)
+	rewindPerformed, finalLSN, err := pm.demoteStalePrimaryLocked(ctx, sourceAddr, syntheticRule, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1127,6 +1127,7 @@ func (pm *MultiPoolerManager) demoteStalePrimaryLocked(
 	ctx context.Context,
 	source *clustermetadatapb.PoolerAddress,
 	rule *clustermetadatapb.ShardRule,
+	primaryRevocation *clustermetadatapb.TermRevocation,
 ) (rewindPerformed bool, finalLSN string, err error) {
 	if err := AssertActionLockHeld(ctx); err != nil {
 		return false, "", err
@@ -1168,11 +1169,12 @@ func (pm *MultiPoolerManager) demoteStalePrimaryLocked(
 		"source_host", host,
 		"source_port", port)
 
-	// Record the (rule, primary) tuple so ReplicationPrimary stays the canonical
-	// source for "who is the primary now." The new flow's SetTermPrimary
-	// passes the real rule; the legacy DemoteStalePrimary RPC synthesises one
-	// from its term parameter.
-	pm.consensusState.RecordTermPrimary(rule, source)
+	// Record the (rule, primary, revocation) tuple so ReplicationPrimary stays
+	// the canonical source for "who is the primary now." The new flow's
+	// SetTermPrimary passes the real rule and revocation; the legacy
+	// DemoteStalePrimary RPC synthesises a rule from its term parameter and
+	// has no revocation to record.
+	pm.consensusState.RecordTermPrimary(rule, source, primaryRevocation)
 
 	// Call the locked version directly since we already hold the action lock
 	// (calling SetPrimaryConnInfo would deadlock trying to acquire the same lock)

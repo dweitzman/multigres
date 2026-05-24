@@ -42,13 +42,18 @@ func newLeaderAddress(name, host string, port int32) *clustermetadatapb.PoolerAd
 }
 
 // ruleAtTermForLeader builds a ShardRule with the given coordinator_term and
-// the leader_id matching the supplied leader. Used to satisfy SetTermPrimary's
-// leader.id == rule.leader_id validation in tests.
+// the leader_id matching the supplied leader.
 func ruleAtTermForLeader(leader *clustermetadatapb.PoolerAddress, term int64) *clustermetadatapb.ShardRule {
 	return &clustermetadatapb.ShardRule{
 		RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: term},
 		LeaderId:   leader.GetId(),
 	}
+}
+
+// validPrimaryRevocationAt builds a TermRevocation suitable for SetTermPrimary
+// — high enough to be acceptable and structurally valid for downstream code.
+func validPrimaryRevocationAt(term int64) *clustermetadatapb.TermRevocation {
+	return &clustermetadatapb.TermRevocation{RevokedBelowTerm: term}
 }
 
 func TestSetTermPrimary_ValidationErrors(t *testing.T) {
@@ -59,14 +64,28 @@ func TestSetTermPrimary_ValidationErrors(t *testing.T) {
 		expectErrMatch string
 	}{
 		{
-			name:           "NilLeader",
-			req:            &consensusdatapb.SetTermPrimaryRequest{Rule: ruleAtTermForLeader(validLeader, 5)},
+			name: "NilLeader",
+			req: &consensusdatapb.SetTermPrimaryRequest{
+				Rule:              ruleAtTermForLeader(validLeader, 5),
+				PrimaryRevocation: validPrimaryRevocationAt(5),
+			},
 			expectErrMatch: "leader is required",
 		},
 		{
-			name:           "NilRule",
-			req:            &consensusdatapb.SetTermPrimaryRequest{Leader: validLeader},
+			name: "NilRule",
+			req: &consensusdatapb.SetTermPrimaryRequest{
+				Leader:            validLeader,
+				PrimaryRevocation: validPrimaryRevocationAt(5),
+			},
 			expectErrMatch: "rule is required",
+		},
+		{
+			name: "NilPrimaryRevocation",
+			req: &consensusdatapb.SetTermPrimaryRequest{
+				Leader: validLeader,
+				Rule:   ruleAtTermForLeader(validLeader, 5),
+			},
+			expectErrMatch: "primary_revocation is required",
 		},
 		{
 			name: "RuleMissingLeaderId",
@@ -75,35 +94,25 @@ func TestSetTermPrimary_ValidationErrors(t *testing.T) {
 				Rule: &clustermetadatapb.ShardRule{
 					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
 				},
+				PrimaryRevocation: validPrimaryRevocationAt(5),
 			},
 			expectErrMatch: "rule.leader_id is required",
 		},
 		{
-			name: "LeaderIdMismatchesRule",
-			req: &consensusdatapb.SetTermPrimaryRequest{
-				Leader: validLeader,
-				Rule: &clustermetadatapb.ShardRule{
-					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
-					LeaderId: &clustermetadatapb.ID{
-						Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "different",
-					},
-				},
-			},
-			expectErrMatch: "does not match rule.leader_id",
-		},
-		{
 			name: "MissingHost",
 			req: &consensusdatapb.SetTermPrimaryRequest{
-				Leader: &clustermetadatapb.PoolerAddress{Id: validLeader.GetId(), PostgresPort: 5432},
-				Rule:   ruleAtTermForLeader(validLeader, 5),
+				Leader:            &clustermetadatapb.PoolerAddress{Id: validLeader.GetId(), PostgresPort: 5432},
+				Rule:              ruleAtTermForLeader(validLeader, 5),
+				PrimaryRevocation: validPrimaryRevocationAt(5),
 			},
 			expectErrMatch: "leader host is required",
 		},
 		{
 			name: "MissingPostgresPort",
 			req: &consensusdatapb.SetTermPrimaryRequest{
-				Leader: &clustermetadatapb.PoolerAddress{Id: validLeader.GetId(), Host: "host"},
-				Rule:   ruleAtTermForLeader(validLeader, 5),
+				Leader:            &clustermetadatapb.PoolerAddress{Id: validLeader.GetId(), Host: "host"},
+				Rule:              ruleAtTermForLeader(validLeader, 5),
+				PrimaryRevocation: validPrimaryRevocationAt(5),
 			},
 			expectErrMatch: "has no postgres port configured",
 		},
@@ -120,8 +129,9 @@ func TestSetTermPrimary_ValidationErrors(t *testing.T) {
 			req: func() *consensusdatapb.SetTermPrimaryRequest {
 				selfLeader := newLeaderAddress("test-pooler", "host", 5432)
 				return &consensusdatapb.SetTermPrimaryRequest{
-					Leader: selfLeader,
-					Rule:   ruleAtTermForLeader(selfLeader, 5),
+					Leader:            selfLeader,
+					Rule:              ruleAtTermForLeader(selfLeader, 5),
+					PrimaryRevocation: validPrimaryRevocationAt(5),
 				}
 			}(),
 			expectErrMatch: "leader is self; designated leaders are appointed via Propose",
@@ -175,8 +185,9 @@ func TestSetTermPrimary_NoOpWhenPositionNotHigher(t *testing.T) {
 			incomingRule := tt.incomingPos.GetDecision()
 			incomingRule.LeaderId = leader.GetId()
 			req := &consensusdatapb.SetTermPrimaryRequest{
-				Leader: leader,
-				Rule:   incomingRule,
+				Leader:            leader,
+				Rule:              incomingRule,
+				PrimaryRevocation: validPrimaryRevocationAt(incomingRule.GetRuleNumber().GetCoordinatorTerm()),
 			}
 			resp, err := pm.SetTermPrimary(t.Context(), req)
 			require.NoError(t, err)
@@ -241,8 +252,9 @@ func TestSetTermPrimary_StandbyAppliesNewPrimary(t *testing.T) {
 
 	leader := newLeaderAddress("new-primary", "primary-host", 5432)
 	req := &consensusdatapb.SetTermPrimaryRequest{
-		Leader: leader,
-		Rule:   ruleAtTermForLeader(leader, 10),
+		Leader:            leader,
+		Rule:              ruleAtTermForLeader(leader, 10),
+		PrimaryRevocation: validPrimaryRevocationAt(10),
 	}
 	resp, err := pm.SetTermPrimary(t.Context(), req)
 	require.NoError(t, err)
@@ -313,8 +325,9 @@ func TestSetTermPrimary_StalePrimaryDemotes(t *testing.T) {
 
 	leader := newLeaderAddress("new-primary", "primary-host", 5432)
 	req := &consensusdatapb.SetTermPrimaryRequest{
-		Leader: leader,
-		Rule:   ruleAtTermForLeader(leader, 10),
+		Leader:            leader,
+		Rule:              ruleAtTermForLeader(leader, 10),
+		PrimaryRevocation: validPrimaryRevocationAt(10),
 	}
 	resp, err := pm.SetTermPrimary(t.Context(), req)
 	require.NoError(t, err)
@@ -395,8 +408,9 @@ func TestSetTermPrimary_IgnoresRevokedRule(t *testing.T) {
 
 			leader := newLeaderAddress("new-primary", "primary-host", 5432)
 			req := &consensusdatapb.SetTermPrimaryRequest{
-				Leader: leader,
-				Rule:   ruleAtTermForLeader(leader, tt.incomingTerm),
+				Leader:            leader,
+				Rule:              ruleAtTermForLeader(leader, tt.incomingTerm),
+				PrimaryRevocation: validPrimaryRevocationAt(tt.incomingTerm),
 			}
 			resp, err := pm.SetTermPrimary(t.Context(), req)
 			require.NoError(t, err, "SetTermPrimary should silently ignore revoked rules")
@@ -441,8 +455,9 @@ func TestSetTermPrimary_AppliesViaOutgoingDecisionOverride(t *testing.T) {
 
 	leader := newLeaderAddress("new-primary", "primary-host", 5432)
 	req := &consensusdatapb.SetTermPrimaryRequest{
-		Leader: leader,
-		Rule:   ruleAtTermForLeader(leader, 3),
+		Leader:            leader,
+		Rule:              ruleAtTermForLeader(leader, 3),
+		PrimaryRevocation: validPrimaryRevocationAt(3),
 	}
 	resp, err := pm.SetTermPrimary(t.Context(), req)
 	require.NoError(t, err)
@@ -537,8 +552,9 @@ func TestSetTermPrimary_ApplyPathErrors(t *testing.T) {
 
 			leader := newLeaderAddress("new-primary", "primary-host", 5432)
 			req := &consensusdatapb.SetTermPrimaryRequest{
-				Leader: leader,
-				Rule:   ruleAtTermForLeader(leader, 10),
+				Leader:            leader,
+				Rule:              ruleAtTermForLeader(leader, 10),
+				PrimaryRevocation: validPrimaryRevocationAt(10),
 			}
 			resp, err := pm.SetTermPrimary(t.Context(), req)
 			require.Error(t, err)

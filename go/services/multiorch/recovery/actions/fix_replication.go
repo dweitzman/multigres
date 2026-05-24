@@ -218,9 +218,12 @@ func (a *FixReplicationAction) fixNotReplicating(
 
 	// Configure primary_conninfo on the replica.
 	if a.config.GetUseNewConsensusFlow() {
+		// PrimaryRevocation reflects the revocation that established the
+		// observed primary; the follower uses it to reject older lineages.
 		informReq := &consensusdatapb.SetTermPrimaryRequest{
-			Leader: topoclient.PoolerAddressFor(primary.MultiPooler),
-			Rule:   primary.GetConsensusStatus().GetCurrentPosition().GetDecision(),
+			Leader:            topoclient.PoolerAddressFor(primary.MultiPooler),
+			Rule:              primary.GetConsensusStatus().GetCurrentPosition().GetDecision(),
+			PrimaryRevocation: primary.GetConsensusStatus().GetTermRevocation(),
 		}
 		if _, err := a.rpcClient.SetTermPrimary(ctx, replica.MultiPooler, informReq); err != nil {
 			return mterrors.Wrap(err, "failed to inform replica of primary")

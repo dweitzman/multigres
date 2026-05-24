@@ -194,24 +194,42 @@ message ProposeResponse {
 
 // SetTermPrimaryRequest tells a pooler about the current leader and the rule
 // the caller knows the cluster is at. The pooler compares the supplied rule
-// against its own; if the supplied rule is strictly higher it applies the
-// change (standby: update primary_conninfo; stale primary: demote), otherwise
-// it returns success without changes. Idempotent under retries and safe
-// against out-of-order delivery from stale recovery rounds.
+// against its own; if the supplied rule is strictly higher and the supplied
+// primary_revocation is at least as high as the revocation recorded for the
+// previously-known primary, it applies the change (standby: update
+// primary_conninfo; stale primary: demote). Otherwise it returns success
+// without changes. Idempotent under retries and safe against out-of-order
+// delivery from stale recovery rounds.
 //
-// The pooler also validates that leader.id matches rule.leader_id — the
-// rule's identity is authoritative; the leader field is just the contact
-// information needed to act on that identity.
+// `leader` is treated as eventually-consistent discovery information about
+// where to find the primary that authority (rule + primary_revocation) names.
+// The pooler does not require leader.id to match rule.leader_id — a propagation
+// flow legitimately points followers at a finalizing node distinct from the
+// dead leader recorded in the rule.
 message SetTermPrimaryRequest {
-  // Contact info for the leader named in rule.leader_id. The pooler uses
-  // leader.host and leader.postgres_port when it rewrites primary_conninfo.
-  // leader.id must match rule.leader_id.
+  // Contact info for the primary the follower should replicate from. The
+  // pooler uses leader.host and leader.postgres_port when it rewrites
+  // primary_conninfo. leader.id need not match rule.leader_id.
   clustermetadata.PoolerAddress leader = 1;
 
   // The rule the caller is informing about. The pooler compares this against
   // its own observed rule (by RuleNumber) and only applies the change when
   // the supplied rule is strictly higher.
   clustermetadata.ShardRule rule = 2;
+
+  // The revocation that established the primary identified by `leader`. Required.
+  //
+  // This is NOT a new recruitment of the receiving follower — accepting a
+  // SetTermPrimary does not set the follower's own term. It informs the
+  // follower of the authority with which the primary was established so that
+  // stale SetTermPrimary calls (carrying older revocations) can be rejected.
+  //
+  // If primary_revocation.revoked_below_term is strictly less than the
+  // revocation already recorded for the most recently known primary
+  // (ReplicationPrimary.primary_revocation), the call is rejected as stale.
+  // Equal or higher revocations are acceptable; on accept the recorded value
+  // is updated.
+  clustermetadata.TermRevocation primary_revocation = 3;
 }
 
 // SetTermPrimaryResponse carries the pooler's state after processing a

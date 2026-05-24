@@ -57,47 +57,59 @@ func NewConsensusState(poolerDir string, serviceID *clustermetadatapb.ID) *Conse
 	}
 }
 
-// RecordTermPrimary updates the highest-known rule and last-known primary based on
-// what this pooler has been told. Either argument may be nil. Bump semantics:
+// RecordTermPrimary updates the highest-known rule, last-known primary, and the
+// revocation that established that primary based on what this pooler has been
+// told. Arguments may be nil. Update semantics:
 //
-//   - rule: updated only when strictly greater than the current value
-//     (comparison by RuleNumber: coordinator_term then leader_subterm).
+//   - rule: must not regress (strictly older inputs are dropped).
 //
-//   - primary: updated when the rule advances, OR when the supplied rule
-//     equals the current rule but the primary's contact info has changed.
-//     The same-rule-different-contact case covers a primary pooler being
-//     re-homed (host or port changes) without a new election.
+//   - primary_revocation: must not regress either — a SetTermPrimary backed
+//     by a strictly older revocation than what was last recorded is dropped
+//     even if the rule itself is current. Equal-or-higher is accepted.
+//
+//   - primary: updated whenever a fresh (rule, revocation) pair survives the
+//     no-regression checks and primary is supplied. This covers a primary
+//     pooler being re-homed (host or port changes) without a new election.
 //
 // Safe to call on no-op SetTermPrimary paths so the recorded values reflect
 // everything the pooler has been told, regardless of whether postgres-side
 // changes were applied.
-func (cs *ConsensusState) RecordTermPrimary(rule *clustermetadatapb.ShardRule, primary *clustermetadatapb.PoolerAddress) {
+func (cs *ConsensusState) RecordTermPrimary(rule *clustermetadatapb.ShardRule, primary *clustermetadatapb.PoolerAddress, primaryRevocation *clustermetadatapb.TermRevocation) {
 	if rule == nil {
 		return
 	}
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
-	cmp := consensus.CompareRuleNumbers(rule.GetRuleNumber(), cs.replicationPrimary.GetRule().GetRuleNumber())
-	if cmp < 0 {
+	ruleCmp := consensus.CompareRuleNumbers(rule.GetRuleNumber(), cs.replicationPrimary.GetRule().GetRuleNumber())
+	if ruleCmp < 0 {
 		return
 	}
-	if cmp == 0 && (primary == nil || proto.Equal(primary, cs.replicationPrimary.GetPrimary())) {
+	recordedRevocation := cs.replicationPrimary.GetPrimaryRevocation()
+	if primaryRevocation != nil &&
+		primaryRevocation.GetRevokedBelowTerm() < recordedRevocation.GetRevokedBelowTerm() {
+		return
+	}
+	primaryChanged := primary != nil && !proto.Equal(primary, cs.replicationPrimary.GetPrimary())
+	revocationAdvances := primaryRevocation != nil &&
+		primaryRevocation.GetRevokedBelowTerm() > recordedRevocation.GetRevokedBelowTerm()
+	if ruleCmp == 0 && !primaryChanged && !revocationAdvances {
 		return
 	}
 	// Build the next value by starting from the existing fields (via getters,
 	// which are nil-safe) and overlaying the updates we want to apply.
 	next := &clustermetadatapb.ReplicationPrimary{
-		Rule:    cs.replicationPrimary.GetRule(),
-		Primary: cs.replicationPrimary.GetPrimary(),
+		Rule:              cs.replicationPrimary.GetRule(),
+		Primary:           cs.replicationPrimary.GetPrimary(),
+		PrimaryRevocation: cs.replicationPrimary.GetPrimaryRevocation(),
 	}
-	if cmp > 0 {
+	if ruleCmp > 0 {
 		next.Rule = proto.Clone(rule).(*clustermetadatapb.ShardRule)
 	}
-	// Update primary only when one is supplied; an RPC that advances the rule
-	// without re-stating the primary (or a future WAL-observation path) leaves
-	// the previously-recorded contact info in place.
 	if primary != nil {
 		next.Primary = proto.Clone(primary).(*clustermetadatapb.PoolerAddress)
+	}
+	if primaryRevocation != nil {
+		next.PrimaryRevocation = cloneRevocation(primaryRevocation)
 	}
 	cs.replicationPrimary = next
 }

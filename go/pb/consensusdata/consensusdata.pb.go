@@ -783,26 +783,43 @@ func (x *ProposeResponse) GetConsensusStatus() *clustermetadata.ConsensusStatus 
 
 // SetTermPrimaryRequest tells a pooler about the current leader and the rule
 // the caller knows the cluster is at. The pooler compares the supplied rule
-// against its own; if the supplied rule is strictly higher it applies the
-// change (standby: update primary_conninfo; stale primary: demote), otherwise
-// it returns success without changes. Idempotent under retries and safe
-// against out-of-order delivery from stale recovery rounds.
+// against its own; if the supplied rule is strictly higher and the supplied
+// primary_revocation is at least as high as the revocation recorded for the
+// previously-known primary, it applies the change (standby: update
+// primary_conninfo; stale primary: demote). Otherwise it returns success
+// without changes. Idempotent under retries and safe against out-of-order
+// delivery from stale recovery rounds.
 //
-// The pooler also validates that leader.id matches rule.leader_id — the
-// rule's identity is authoritative; the leader field is just the contact
-// information needed to act on that identity.
+// `leader` is treated as eventually-consistent discovery information about
+// where to find the primary that authority (rule + primary_revocation) names.
+// The pooler does not require leader.id to match rule.leader_id — a propagation
+// flow legitimately points followers at a finalising node distinct from the
+// dead leader recorded in the rule.
 type SetTermPrimaryRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Contact info for the leader named in rule.leader_id. The pooler uses
-	// leader.host and leader.postgres_port when it rewrites primary_conninfo.
-	// leader.id must match rule.leader_id.
+	// Contact info for the primary the follower should replicate from. The
+	// pooler uses leader.host and leader.postgres_port when it rewrites
+	// primary_conninfo. leader.id need not match rule.leader_id.
 	Leader *clustermetadata.PoolerAddress `protobuf:"bytes,1,opt,name=leader,proto3" json:"leader,omitempty"`
 	// The rule the caller is informing about. The pooler compares this against
 	// its own observed rule (by RuleNumber) and only applies the change when
 	// the supplied rule is strictly higher.
-	Rule          *clustermetadata.ShardRule `protobuf:"bytes,2,opt,name=rule,proto3" json:"rule,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Rule *clustermetadata.ShardRule `protobuf:"bytes,2,opt,name=rule,proto3" json:"rule,omitempty"`
+	// The revocation that established the primary identified by `leader`. Required.
+	//
+	// This is NOT a new recruitment of the receiving follower — accepting a
+	// SetTermPrimary does not set the follower's own term. It informs the
+	// follower of the authority with which the primary was established so that
+	// stale SetTermPrimary calls (carrying older revocations) can be rejected.
+	//
+	// If primary_revocation.revoked_below_term is strictly less than the
+	// revocation already recorded for the most recently known primary
+	// (ReplicationPrimary.primary_revocation), the call is rejected as stale.
+	// Equal or higher revocations are acceptable; on accept the recorded value
+	// is updated.
+	PrimaryRevocation *clustermetadata.TermRevocation `protobuf:"bytes,3,opt,name=primary_revocation,json=primaryRevocation,proto3" json:"primary_revocation,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *SetTermPrimaryRequest) Reset() {
@@ -845,6 +862,13 @@ func (x *SetTermPrimaryRequest) GetLeader() *clustermetadata.PoolerAddress {
 func (x *SetTermPrimaryRequest) GetRule() *clustermetadata.ShardRule {
 	if x != nil {
 		return x.Rule
+	}
+	return nil
+}
+
+func (x *SetTermPrimaryRequest) GetPrimaryRevocation() *clustermetadata.TermRevocation {
+	if x != nil {
+		return x.PrimaryRevocation
 	}
 	return nil
 }
@@ -1057,10 +1081,11 @@ const file_consensusdata_proto_rawDesc = "" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12?\n" +
 	"\x11accepted_node_ids\x18\x03 \x03(\v2\x13.clustermetadata.IDR\x0facceptedNodeIds\"^\n" +
 	"\x0fProposeResponse\x12K\n" +
-	"\x10consensus_status\x18\x01 \x01(\v2 .clustermetadata.ConsensusStatusR\x0fconsensusStatus\"\x7f\n" +
+	"\x10consensus_status\x18\x01 \x01(\v2 .clustermetadata.ConsensusStatusR\x0fconsensusStatus\"\xcf\x01\n" +
 	"\x15SetTermPrimaryRequest\x126\n" +
 	"\x06leader\x18\x01 \x01(\v2\x1e.clustermetadata.PoolerAddressR\x06leader\x12.\n" +
-	"\x04rule\x18\x02 \x01(\v2\x1a.clustermetadata.ShardRuleR\x04rule\"e\n" +
+	"\x04rule\x18\x02 \x01(\v2\x1a.clustermetadata.ShardRuleR\x04rule\x12N\n" +
+	"\x12primary_revocation\x18\x03 \x01(\v2\x1f.clustermetadata.TermRevocationR\x11primaryRevocation\"e\n" +
 	"\x16SetTermPrimaryResponse\x12K\n" +
 	"\x10consensus_status\x18\x01 \x01(\v2 .clustermetadata.ConsensusStatusR\x0fconsensusStatus\"\xa5\x01\n" +
 	"\x10PropagateRequest\x12H\n" +
@@ -1130,15 +1155,16 @@ var file_consensusdata_proto_depIdxs = []int32{
 	17, // 15: consensusdata.ProposeResponse.consensus_status:type_name -> clustermetadata.ConsensusStatus
 	20, // 16: consensusdata.SetTermPrimaryRequest.leader:type_name -> clustermetadata.PoolerAddress
 	21, // 17: consensusdata.SetTermPrimaryRequest.rule:type_name -> clustermetadata.ShardRule
-	17, // 18: consensusdata.SetTermPrimaryResponse.consensus_status:type_name -> clustermetadata.ConsensusStatus
-	19, // 19: consensusdata.PropagateRequest.term_revocation:type_name -> clustermetadata.TermRevocation
-	21, // 20: consensusdata.PropagateRequest.expected_proposal:type_name -> clustermetadata.ShardRule
-	17, // 21: consensusdata.PropagateResponse.consensus_status:type_name -> clustermetadata.ConsensusStatus
-	22, // [22:22] is the sub-list for method output_type
-	22, // [22:22] is the sub-list for method input_type
-	22, // [22:22] is the sub-list for extension type_name
-	22, // [22:22] is the sub-list for extension extendee
-	0,  // [0:22] is the sub-list for field type_name
+	19, // 18: consensusdata.SetTermPrimaryRequest.primary_revocation:type_name -> clustermetadata.TermRevocation
+	17, // 19: consensusdata.SetTermPrimaryResponse.consensus_status:type_name -> clustermetadata.ConsensusStatus
+	19, // 20: consensusdata.PropagateRequest.term_revocation:type_name -> clustermetadata.TermRevocation
+	21, // 21: consensusdata.PropagateRequest.expected_proposal:type_name -> clustermetadata.ShardRule
+	17, // 22: consensusdata.PropagateResponse.consensus_status:type_name -> clustermetadata.ConsensusStatus
+	23, // [23:23] is the sub-list for method output_type
+	23, // [23:23] is the sub-list for method input_type
+	23, // [23:23] is the sub-list for extension type_name
+	23, // [23:23] is the sub-list for extension extendee
+	0,  // [0:23] is the sub-list for field type_name
 }
 
 func init() { file_consensusdata_proto_init() }

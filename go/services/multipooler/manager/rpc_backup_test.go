@@ -130,6 +130,7 @@ func setBackupPrimary(pm *MultiPoolerManager, primaryName, host string, port int
 			LeaderId:   id,
 		},
 		&clustermetadatapb.PoolerAddress{Id: id, Host: host, PostgresPort: port},
+		nil,
 	)
 }
 

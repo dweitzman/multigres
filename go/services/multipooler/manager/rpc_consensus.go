@@ -783,10 +783,11 @@ func (pm *MultiPoolerManager) Propose(ctx context.Context, req *consensusdatapb.
 		pm.logger.WarnContext(ctx, "Failed to update topology after propose", "error", err)
 	}
 
-	// Record the (rule, primary) — this pooler IS now the primary. Stamping
-	// the published ReplicationPrimary lets the health stream advertise the
-	// new leadership immediately.
-	pm.consensusState.RecordTermPrimary(proposedRule, proposalLeader)
+	// Record the (rule, primary, revocation) — this pooler IS now the primary.
+	// Stamping the published ReplicationPrimary lets the health stream advertise
+	// the new leadership immediately. The revocation we just validated is the
+	// authority under which we hold the leader role.
+	pm.consensusState.RecordTermPrimary(proposedRule, proposalLeader, revocation)
 
 	pm.logger.InfoContext(ctx, "Propose complete",
 		"revoked_below_term", revokedBelowTerm)
@@ -828,26 +829,22 @@ func (pm *MultiPoolerManager) SetTermPrimary(ctx context.Context, req *consensus
 
 	leader := req.GetLeader()
 	rule := req.GetRule()
+	primaryRevocation := req.GetPrimaryRevocation()
 	if leader == nil {
 		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "leader is required")
 	}
 	if rule == nil {
 		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "rule is required")
 	}
-	// The rule's leader_id is authoritative; the leader field carries contact
-	// info for that ID. A mismatch is a caller bug — we'd otherwise route
-	// replication at an identity that doesn't match the consensus-elected one.
-	ruleLeaderID := rule.GetLeaderId()
-	if ruleLeaderID == nil {
+	if primaryRevocation == nil {
+		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "primary_revocation is required")
+	}
+	if rule.GetLeaderId() == nil {
 		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "rule.leader_id is required")
 	}
 	leaderID := leader.GetId()
-	if leaderID == nil ||
-		leaderID.GetCell() != ruleLeaderID.GetCell() ||
-		leaderID.GetName() != ruleLeaderID.GetName() {
-		return nil, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,
-			"leader.id %q does not match rule.leader_id %q",
-			leaderID.GetName(), ruleLeaderID.GetName())
+	if leaderID == nil {
+		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "leader.id is required")
 	}
 	if leader.GetHost() == "" {
 		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "leader host is required")
@@ -894,6 +891,24 @@ func (pm *MultiPoolerManager) SetTermPrimary(ctx context.Context, req *consensus
 		return &consensusdatapb.SetTermPrimaryResponse{ConsensusStatus: cs}, nil
 	}
 
+	// Authority check: the primary_revocation establishes the authority with
+	// which this leader was appointed. A SetTermPrimary backed by a strictly
+	// lower revocation than what we already recorded for the previous primary
+	// lineage is stale (an older recovery round arriving out of order); refuse
+	// it so the recorded leader info doesn't regress.
+	recordedPrimary := pm.consensusState.GetReplicationPrimary()
+	recordedRevocation := recordedPrimary.GetPrimaryRevocation()
+	if primaryRevocation.GetRevokedBelowTerm() < recordedRevocation.GetRevokedBelowTerm() {
+		pm.logger.InfoContext(ctx, "SetTermPrimary: primary_revocation below recorded primary's revocation, ignoring",
+			"incoming_revoked_below_term", primaryRevocation.GetRevokedBelowTerm(),
+			"recorded_revoked_below_term", recordedRevocation.GetRevokedBelowTerm())
+		cs, err := pm.getCachedConsensusStatus()
+		if err != nil {
+			return nil, mterrors.Wrap(err, "failed to build consensus status")
+		}
+		return &consensusdatapb.SetTermPrimaryResponse{ConsensusStatus: cs}, nil
+	}
+
 	// Record what we've been told, even if we don't end up applying the change.
 	// Two consumers:
 	//   - Health stream / multiorch: reads highest_known_rule to skip redundant
@@ -902,7 +917,7 @@ func (pm *MultiPoolerManager) SetTermPrimary(ctx context.Context, req *consensus
 	//   - Pooler-side reconciliation: reads last-known-primary to retry
 	//     ALTER SYSTEM SET primary_conninfo if this SetTermPrimary arrived while
 	//     postgres was unavailable.
-	pm.consensusState.RecordTermPrimary(rule, leader)
+	pm.consensusState.RecordTermPrimary(rule, leader, primaryRevocation)
 
 	// Observe the freshest view of our rule. SetTermPrimary is the staleness gate,
 	// so we want authoritative state — not the cached snapshot.
@@ -952,7 +967,7 @@ func (pm *MultiPoolerManager) SetTermPrimary(ctx context.Context, req *consensus
 			"incoming_rule", rule.GetRuleNumber(),
 			"is_primary", isPrimary,
 			"rewind_pending", needsRewind)
-		if _, _, err := pm.demoteStalePrimaryLocked(ctx, leader, rule); err != nil {
+		if _, _, err := pm.demoteStalePrimaryLocked(ctx, leader, rule, primaryRevocation); err != nil {
 			return nil, err
 		}
 	} else {
@@ -1163,7 +1178,7 @@ func (pm *MultiPoolerManager) Propagate(ctx context.Context, req *consensusdatap
 		Host:         pm.multipooler.GetHostname(),
 		PostgresPort: pm.multipooler.GetPortMap()["postgres"],
 	}
-	pm.consensusState.RecordTermPrimary(selfPos.GetDecision(), selfAddr)
+	pm.consensusState.RecordTermPrimary(selfPos.GetDecision(), selfAddr, revocation)
 
 	pm.logger.InfoContext(ctx, "Propagate complete", "revoked_below_term", revokedBelowTerm)
 

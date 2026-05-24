@@ -295,9 +295,16 @@ func (c *Coordinator) runPropagation(
 				dispatched <- dispatchResult{poolerName: name, isLeader: true, err: err}
 				return
 			}
+			// The propagation revocation establishes the authority under which
+			// the propagation leader will finalize expectedProposal. Followers
+			// use it both to reject stale SetTermPrimary deliveries from older
+			// recovery rounds and to accept the leader_id mismatch — the rule's
+			// authored leader_id is the now-dead primary, while the leader
+			// contact info points at the propagation leader that's finalizing it.
 			_, err := c.rpcClient.SetTermPrimary(rpcCtx, fHealth.MultiPooler, &consensusdatapb.SetTermPrimaryRequest{
-				Leader: propLeaderAddr,
-				Rule:   expectedProposal,
+				Leader:            propLeaderAddr,
+				Rule:              expectedProposal,
+				PrimaryRevocation: revocation,
 			})
 			dispatched <- dispatchResult{poolerName: name, isLeader: false, err: err}
 		}()
