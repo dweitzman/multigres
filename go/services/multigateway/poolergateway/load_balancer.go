@@ -125,19 +125,9 @@ func (lb *LoadBalancer) SetReplicationLagThresholds(lowLag, highTolerance time.D
 // AddPooler creates a new PoolerConnection for the given pooler.
 // If a connection already exists for this pooler, it updates the pooler info.
 //
-// AddPooler does not establish leader identity from real consensus state —
-// that comes exclusively from LeaderObservation on health streams. The one
-// concession is a cold-start fallback: if no LeaderObservation has been
-// received for the shard yet and topology says this pooler is PRIMARY, we
-// seed `leaders[shard]` with a synthetic LeaderObservation at term 0. Any
-// real observation (term >= 1) beats this seed unconditionally, so a stale
-// Type=PRIMARY assertion from a demoted-then-restarted pooler cannot
-// override consensus. The seed only matters during the gateway's startup
-// window before health streams have produced any observations.
-//
-// TODO: once multipooler publishes its current LeaderObservation into its
-// etcd record (the proto would need a `last_observed_leader` field), drop
-// the synthetic seed and use that real observation instead.
+// Leader identity is sourced from LeaderObservation on health streams —
+// AddPooler only contributes a cold-start fallback hint, see
+// maybeSeedColdStartLeaderLocked.
 func (lb *LoadBalancer) AddPooler(pooler *clustermetadatapb.MultiPooler) error {
 	poolerID := poolerIDString(pooler.Id)
 
@@ -150,7 +140,8 @@ func (lb *LoadBalancer) AddPooler(pooler *clustermetadatapb.MultiPooler) error {
 	// can also fire here: at cluster bootstrap, poolers are first discovered
 	// as REPLICA, then their Type transitions to PRIMARY after multiorch
 	// promotes one. That transition is the first topology signal of who
-	// leads, before any health stream reports a LeaderObservation.
+	// leads, before any health stream reports a LeaderObservation. The
+	// notify call drains the failover buffer if the leader is now serving.
 	if conn, exists := lb.connections[poolerID]; exists {
 		conn.UpdatePoolerInfo(pooler)
 		lb.maybeSeedColdStartLeaderLocked(key, pooler)
@@ -165,11 +156,10 @@ func (lb *LoadBalancer) AddPooler(pooler *clustermetadatapb.MultiPooler) error {
 
 	lb.connections[poolerID] = conn
 	lb.maybeSeedColdStartLeaderLocked(key, pooler)
-
-	// If a prior LeaderObservation already named this pooler the leader, the
-	// first health update may be slow — trigger buffer drain now so traffic
-	// waiting on the leader's arrival proceeds as soon as it reports SERVING.
-	lb.notifyIfLeaderServingLocked(key, conn)
+	// No notifyIfLeaderServingLocked here: the connection was just opened, its
+	// health goroutine has not run yet, and conn.Health() is still the initial
+	// NOT_SERVING placeholder. The first onPoolerHealthUpdate will fire the
+	// notify path once a real health snapshot arrives.
 
 	lb.logger.Debug("added pooler connection",
 		"pooler_id", poolerID,
@@ -201,7 +191,7 @@ func (lb *LoadBalancer) maybeSeedColdStartLeaderLocked(key shardKey, pooler *clu
 		LeaderId:   pooler.Id,
 		LeaderTerm: 0,
 	}
-	lb.logger.Debug("cold-start leader hint from topology",
+	lb.logger.Info("cold-start leader hint from topology",
 		"pooler_id", poolerIDString(pooler.Id),
 		"tablegroup", key.tableGroup,
 		"shard", key.shard)

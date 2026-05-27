@@ -658,11 +658,11 @@ func TestLoadBalancer_LeaderObservationBeforeConnection(t *testing.T) {
 	assert.Equal(t, poolerID(futureLeader), conn.ID())
 }
 
-// TestLoadBalancer_StalePrimaryTypeDoesNotEvict is the regression for the
-// failover archive: a demoted-then-restarted pooler re-asserts Type=PRIMARY
-// in topology. The gateway must not redirect traffic to it; the known leader
-// at the higher term wins.
-func TestLoadBalancer_StalePrimaryTypeDoesNotEvict(t *testing.T) {
+// TestLoadBalancer_StalePrimaryTypeDoesNotOverrideLeader is the regression
+// for the failover archive: a demoted-then-restarted pooler re-asserts
+// Type=PRIMARY in topology. The gateway must not redirect traffic to it;
+// the consensus-confirmed leader at the higher term wins.
+func TestLoadBalancer_StalePrimaryTypeDoesNotOverrideLeader(t *testing.T) {
 	logger := slog.Default()
 	lb := NewLoadBalancer(context.Background(), "zone1", logger, grpc.WithTransportCredentials(insecure.NewCredentials()))
 
