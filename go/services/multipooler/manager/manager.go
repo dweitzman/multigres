@@ -48,6 +48,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/proto"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
@@ -336,7 +337,22 @@ func NewMultiPoolerManagerWithTimeout(logger *slog.Logger, multiPooler *clusterm
 
 	// Create the serving state manager with the query service and health streamer as initial components.
 	// The ReplTracker is registered later when heartbeat is started.
-	pm.servingState = NewStateManager(logger, pm.record, pm.qsc, pm.healthStreamer)
+	//
+	// leaderObsFor: derive the published LeaderObservation from the pooler's
+	// latest recorded consensus rule. Returns non-nil only when consensus
+	// names this pooler as leader. SetState clears the field otherwise.
+	leaderObsFor := func() *clustermetadatapb.LeaderObservation {
+		rp := pm.consensusState.GetReplicationPrimary()
+		rule := rp.GetRule()
+		if !proto.Equal(rule.GetLeaderId(), pm.serviceID) {
+			return nil
+		}
+		return &clustermetadatapb.LeaderObservation{
+			LeaderId:   pm.serviceID,
+			LeaderTerm: rule.GetRuleNumber().GetCoordinatorTerm(),
+		}
+	}
+	pm.servingState = NewStateManager(logger, pm.record, leaderObsFor, pm.qsc, pm.healthStreamer)
 
 	// Register pgBackRest health metrics.
 	var metricsErr error

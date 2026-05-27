@@ -16,6 +16,7 @@ package manager
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -24,6 +25,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/multigres/multigres/go/common/servenv/toporeg"
+	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 )
 
@@ -44,6 +46,11 @@ const (
 type MutablePoolerRecordState struct {
 	Type          clustermetadatapb.PoolerType
 	ServingStatus clustermetadatapb.PoolerServingStatus
+	// LastObservedLeader is the pooler's most recent recorded consensus
+	// observation. Set ONLY when this pooler currently considers itself the
+	// leader of its shard; replicas leave it nil. Published into etcd so
+	// multigateway can bootstrap leader routing on discovery.
+	LastObservedLeader *clustermetadatapb.LeaderObservation
 }
 
 // poolerTopoStore is the subset of topoclient.Store used by poolerRecord.
@@ -133,6 +140,14 @@ func (r *poolerRecord) ServingStatus() clustermetadatapb.PoolerServingStatus {
 	return r.desired.Load().ServingStatus
 }
 
+// LastObservedLeader returns the pooler's most recently published consensus
+// leader observation, or nil if this pooler is not currently the leader.
+// Returns the live pointer from the immutable desired proto; callers must
+// not mutate.
+func (r *poolerRecord) LastObservedLeader() *clustermetadatapb.LeaderObservation {
+	return r.desired.Load().LastObservedLeader
+}
+
 // Snapshot returns a deep clone of the current desired state. Use this when
 // passing the record to code that requires a *MultiPooler value and may
 // mutate it locally.
@@ -155,11 +170,18 @@ func (r *poolerRecord) Snapshot() *clustermetadatapb.MultiPooler {
 //
 // fn must not block or call back into poolerRecord; it should perform
 // simple field assignments only.
+//
+// Returns an error (without applying fn) if the resulting state violates
+// the consistency invariant between Type and LastObservedLeader: a pooler
+// is the leader iff Type == PRIMARY iff LastObservedLeader is set and
+// names this pooler. Callers must keep the two fields in sync.
 func (r *poolerRecord) Mutate(ctx context.Context, fn func(*MutablePoolerRecordState)) error {
 	if err := AssertActionLockHeld(ctx); err != nil {
 		return err
 	}
-	r.applyMutation(fn)
+	if err := r.applyMutation(fn); err != nil {
+		return err
+	}
 
 	// Non-blocking send: if the channel is already full, a publish is already
 	// pending and will pick up the latest desired state.
@@ -171,20 +193,47 @@ func (r *poolerRecord) Mutate(ctx context.Context, fn func(*MutablePoolerRecordS
 }
 
 // applyMutation clones the current desired proto, hands a
-// MutablePoolerRecordState view to fn, then writes back the (possibly
-// updated) Type and ServingStatus and atomically stores the result.
-// Caller is responsible for sequencing (action lock, publisher state).
-func (r *poolerRecord) applyMutation(fn func(*MutablePoolerRecordState)) {
+// MutablePoolerRecordState view to fn, validates the Type ↔
+// LastObservedLeader invariant, then atomically stores the result. Caller
+// is responsible for sequencing (action lock, publisher state). Returns
+// the validation error and leaves the stored state unchanged on violation.
+func (r *poolerRecord) applyMutation(fn func(*MutablePoolerRecordState)) error {
 	current := r.desired.Load()
 	state := MutablePoolerRecordState{
-		Type:          current.Type,
-		ServingStatus: current.ServingStatus,
+		Type:               current.Type,
+		ServingStatus:      current.ServingStatus,
+		LastObservedLeader: current.LastObservedLeader,
 	}
 	fn(&state)
+	if err := r.validateState(&state); err != nil {
+		return err
+	}
 	next := proto.Clone(current).(*clustermetadatapb.MultiPooler)
 	next.Type = state.Type
 	next.ServingStatus = state.ServingStatus
+	next.LastObservedLeader = state.LastObservedLeader
 	r.desired.Store(next)
+	return nil
+}
+
+// validateState enforces the Type ↔ LastObservedLeader consistency
+// invariant: a pooler is the leader iff Type == PRIMARY iff
+// LastObservedLeader is set and names this pooler. Any deviation is a
+// caller bug.
+func (r *poolerRecord) validateState(state *MutablePoolerRecordState) error {
+	isPrimary := state.Type == clustermetadatapb.PoolerType_PRIMARY
+	hasObs := state.LastObservedLeader != nil
+	switch {
+	case isPrimary && !hasObs:
+		return fmt.Errorf("invariant violated: Type=PRIMARY but LastObservedLeader is nil")
+	case !isPrimary && hasObs:
+		return fmt.Errorf("invariant violated: Type=%s but LastObservedLeader is set", state.Type)
+	case hasObs && !proto.Equal(state.LastObservedLeader.LeaderId, r.Id()):
+		return fmt.Errorf("invariant violated: LastObservedLeader.LeaderId=%s does not match this pooler's Id=%s",
+			topoclient.MultiPoolerIDString(state.LastObservedLeader.LeaderId),
+			topoclient.MultiPoolerIDString(r.Id()))
+	}
+	return nil
 }
 
 // Register starts the publisher goroutine and kicks off initial registration

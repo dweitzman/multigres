@@ -55,7 +55,7 @@ type PoolerHealth struct {
 
 	// LeaderObservation contains the pooler's view of who the consensus leader is.
 	// Used for term-based leader reconciliation.
-	LeaderObservation *multipoolerservice.LeaderObservation
+	LeaderObservation *clustermetadatapb.LeaderObservation
 
 	// ReplicationLagNs is the replication lag in nanoseconds reported by the pooler.
 	// Zero on the primary or when not yet measured.

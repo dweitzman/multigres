@@ -23,7 +23,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	"github.com/multigres/multigres/go/pb/multipoolerservice"
 	"github.com/multigres/multigres/go/pb/query"
 )
 
@@ -87,7 +86,7 @@ func TestPoolerHealth_SimpleCopy(t *testing.T) {
 			Cell:      "zone1",
 			Name:      "pooler1",
 		}
-		primaryObs := &multipoolerservice.LeaderObservation{
+		primaryObs := &clustermetadatapb.LeaderObservation{
 			LeaderId:   poolerID,
 			LeaderTerm: 42,
 		}

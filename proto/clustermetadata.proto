@@ -178,6 +178,16 @@ message MultiPooler {
   // PgDataDir is the PostgreSQL data directory path (from the PGDATA environment variable).
   // Used by multiadmin to compute the primary's data directory for pgBackRest.
   string pg_data_dir = 11;
+
+  // last_observed_leader is set ONLY when this pooler currently considers
+  // itself the leader of its shard. Replicas leave this empty so etcd
+  // doesn't carry the leader's view of itself in every pooler's record.
+  //
+  // Consumers (multigateway) read this on discovery to bootstrap leader
+  // routing without relying on `type` as a hint. Best-effort: empty until
+  // the pooler has been told (via SetTermPrimary / Propose / Recruit) that
+  // it is the leader; cleared again on demotion.
+  LeaderObservation last_observed_leader = 12;
 }
 
 // MultiGateway represents metadata about a running multigateway component instance in the cluster.
@@ -392,6 +402,22 @@ message PoolerPosition {
   // beyond the LSN at which the rule was committed. For a primary: pg_current_wal_lsn().
   // For a standby: pg_last_wal_receive_lsn() (or pg_last_wal_replay_lsn() if receive is null).
   string lsn = 2;
+}
+
+// LeaderObservation represents a pooler's view of who the consensus leader is.
+// Carried on the multipooler health stream and also stored on the leader's
+// own MultiPooler topology record (so multigateway can bootstrap leader
+// routing from etcd at discovery time without relying on `MultiPooler.type`
+// as a hint).
+message LeaderObservation {
+  // leader_id is the ID of the pooler this node believes is the consensus leader.
+  // May be this pooler's own ID if it believes itself to be leader.
+  ID leader_id = 1;
+
+  // leader_term is the consensus term at which this observation was made.
+  // The leader never changes within a leader_term. Higher values indicate
+  // more recent leader appointments.
+  int64 leader_term = 2;
 }
 
 // ReplicationPrimary advertises the primary this pooler believes it should be

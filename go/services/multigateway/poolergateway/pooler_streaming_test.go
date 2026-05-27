@@ -384,7 +384,7 @@ func TestPoolerConnection_StreamHealth_LeaderObservation(t *testing.T) {
 
 	// Send a response with LeaderObservation.
 	resp := makeHealthResponse(clustermetadatapb.PoolerServingStatus_SERVING)
-	resp.LeaderObservation = &multipoolerservice.LeaderObservation{
+	resp.LeaderObservation = &clustermetadatapb.LeaderObservation{
 		LeaderId: &clustermetadatapb.ID{
 			Component: clustermetadatapb.ID_MULTIPOOLER,
 			Cell:      "zone1",

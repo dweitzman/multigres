@@ -29,7 +29,6 @@ import (
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
-	"github.com/multigres/multigres/go/pb/multipoolerservice"
 	"github.com/multigres/multigres/go/pb/query"
 )
 
@@ -68,7 +67,7 @@ type LoadBalancer struct {
 	// shard. Populated only from health-stream observations; never from topology.
 	// The leader_id field of the observation may name a pooler we are not
 	// currently connected to — GetConnection handles that case at read time.
-	leaders map[shardKey]*multipoolerservice.LeaderObservation
+	leaders map[shardKey]*clustermetadatapb.LeaderObservation
 
 	// onPrimaryServing is called when a new primary is detected via health stream.
 	// Used to stop failover buffering for the shard. May be nil.
@@ -97,7 +96,7 @@ func NewLoadBalancer(ctx context.Context, localCell string, logger *slog.Logger,
 		logger:      logger,
 		ctx:         ctx,
 		connections: make(map[string]*PoolerConnection),
-		leaders:     make(map[shardKey]*multipoolerservice.LeaderObservation),
+		leaders:     make(map[shardKey]*clustermetadatapb.LeaderObservation),
 		grpcDialOpt: grpcDialOpt,
 	}
 }
@@ -187,7 +186,7 @@ func (lb *LoadBalancer) maybeSeedColdStartLeaderLocked(key shardKey, pooler *clu
 	if lb.leaders[key] != nil {
 		return
 	}
-	lb.leaders[key] = &multipoolerservice.LeaderObservation{
+	lb.leaders[key] = &clustermetadatapb.LeaderObservation{
 		LeaderId:   pooler.Id,
 		LeaderTerm: 0,
 	}
@@ -558,7 +557,7 @@ func (lb *LoadBalancer) Close() error {
 	lb.mu.Lock()
 	connections := lb.connections
 	lb.connections = make(map[string]*PoolerConnection)
-	lb.leaders = make(map[shardKey]*multipoolerservice.LeaderObservation)
+	lb.leaders = make(map[shardKey]*clustermetadatapb.LeaderObservation)
 	lb.mu.Unlock()
 
 	lb.logger.Info("closing all pooler connections", "count", len(connections))
