@@ -46,11 +46,11 @@ const (
 type MutablePoolerRecordState struct {
 	Type          clustermetadatapb.PoolerType
 	ServingStatus clustermetadatapb.PoolerServingStatus
-	// LastObservedLeader is the pooler's most recent recorded consensus
+	// CurrentLeadership is the pooler's most recent recorded consensus
 	// observation. Set ONLY when this pooler currently considers itself the
 	// leader of its shard; replicas leave it nil. Published into etcd so
 	// multigateway can bootstrap leader routing on discovery.
-	LastObservedLeader *clustermetadatapb.LeaderObservation
+	CurrentLeadership *clustermetadatapb.LeaderObservation
 }
 
 // poolerTopoStore is the subset of topoclient.Store used by poolerRecord.
@@ -140,12 +140,12 @@ func (r *poolerRecord) ServingStatus() clustermetadatapb.PoolerServingStatus {
 	return r.desired.Load().ServingStatus
 }
 
-// LastObservedLeader returns the pooler's most recently published consensus
+// CurrentLeadership returns the pooler's most recently published consensus
 // leader observation, or nil if this pooler is not currently the leader.
 // Returns the live pointer from the immutable desired proto; callers must
 // not mutate.
-func (r *poolerRecord) LastObservedLeader() *clustermetadatapb.LeaderObservation {
-	return r.desired.Load().LastObservedLeader
+func (r *poolerRecord) CurrentLeadership() *clustermetadatapb.LeaderObservation {
+	return r.desired.Load().CurrentLeadership
 }
 
 // Snapshot returns a deep clone of the current desired state. Use this when
@@ -172,8 +172,8 @@ func (r *poolerRecord) Snapshot() *clustermetadatapb.MultiPooler {
 // simple field assignments only.
 //
 // Returns an error (without applying fn) if the resulting state violates
-// the consistency invariant between Type and LastObservedLeader: a pooler
-// is the leader iff Type == PRIMARY iff LastObservedLeader is set and
+// the consistency invariant between Type and CurrentLeadership: a pooler
+// is the leader iff Type == PRIMARY iff CurrentLeadership is set and
 // names this pooler. Callers must keep the two fields in sync.
 func (r *poolerRecord) Mutate(ctx context.Context, fn func(*MutablePoolerRecordState)) error {
 	if err := AssertActionLockHeld(ctx); err != nil {
@@ -194,7 +194,7 @@ func (r *poolerRecord) Mutate(ctx context.Context, fn func(*MutablePoolerRecordS
 
 // applyMutation clones the current desired proto, hands a
 // MutablePoolerRecordState view to fn, validates the Type ↔
-// LastObservedLeader invariant, then atomically stores the result. Caller
+// CurrentLeadership invariant, then atomically stores the result. Caller
 // is responsible for sequencing (action lock, publisher state). Returns
 // the validation error and leaves the stored state unchanged on violation.
 func (r *poolerRecord) applyMutation(fn func(*MutablePoolerRecordState)) error {
@@ -202,7 +202,7 @@ func (r *poolerRecord) applyMutation(fn func(*MutablePoolerRecordState)) error {
 	state := MutablePoolerRecordState{
 		Type:               current.Type,
 		ServingStatus:      current.ServingStatus,
-		LastObservedLeader: current.LastObservedLeader,
+		CurrentLeadership: current.CurrentLeadership,
 	}
 	fn(&state)
 	if err := r.validateState(&state); err != nil {
@@ -211,26 +211,26 @@ func (r *poolerRecord) applyMutation(fn func(*MutablePoolerRecordState)) error {
 	next := proto.Clone(current).(*clustermetadatapb.MultiPooler)
 	next.Type = state.Type
 	next.ServingStatus = state.ServingStatus
-	next.LastObservedLeader = state.LastObservedLeader
+	next.CurrentLeadership = state.CurrentLeadership
 	r.desired.Store(next)
 	return nil
 }
 
-// validateState enforces the Type ↔ LastObservedLeader consistency
+// validateState enforces the Type ↔ CurrentLeadership consistency
 // invariant: a pooler is the leader iff Type == PRIMARY iff
-// LastObservedLeader is set and names this pooler. Any deviation is a
+// CurrentLeadership is set and names this pooler. Any deviation is a
 // caller bug.
 func (r *poolerRecord) validateState(state *MutablePoolerRecordState) error {
 	isPrimary := state.Type == clustermetadatapb.PoolerType_PRIMARY
-	hasObs := state.LastObservedLeader != nil
+	hasObs := state.CurrentLeadership != nil
 	switch {
 	case isPrimary && !hasObs:
-		return fmt.Errorf("invariant violated: Type=PRIMARY but LastObservedLeader is nil")
+		return fmt.Errorf("invariant violated: Type=PRIMARY but CurrentLeadership is nil")
 	case !isPrimary && hasObs:
-		return fmt.Errorf("invariant violated: Type=%s but LastObservedLeader is set", state.Type)
-	case hasObs && !proto.Equal(state.LastObservedLeader.LeaderId, r.Id()):
-		return fmt.Errorf("invariant violated: LastObservedLeader.LeaderId=%s does not match this pooler's Id=%s",
-			topoclient.MultiPoolerIDString(state.LastObservedLeader.LeaderId),
+		return fmt.Errorf("invariant violated: Type=%s but CurrentLeadership is set", state.Type)
+	case hasObs && !proto.Equal(state.CurrentLeadership.LeaderId, r.Id()):
+		return fmt.Errorf("invariant violated: CurrentLeadership.LeaderId=%s does not match this pooler's Id=%s",
+			topoclient.MultiPoolerIDString(state.CurrentLeadership.LeaderId),
 			topoclient.MultiPoolerIDString(r.Id()))
 	}
 	return nil

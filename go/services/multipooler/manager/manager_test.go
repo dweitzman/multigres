@@ -189,6 +189,10 @@ func TestManagerState_RetryUntilSuccess(t *testing.T) {
 		PortMap:       map[string]int32{"grpc": 8080},
 		Type:          clustermetadatapb.PoolerType_PRIMARY,
 		ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
+		CurrentLeadership: &clustermetadatapb.LeaderObservation{
+			LeaderId:   serviceID,
+			LeaderTerm: 1,
+		},
 		ShardKey: &clustermetadatapb.ShardKey{
 			Database:   database,
 			TableGroup: constants.DefaultTableGroup,
@@ -350,6 +354,10 @@ func TestValidateAndUpdateTerm(t *testing.T) {
 				PortMap:       map[string]int32{"grpc": 8080},
 				Type:          clustermetadatapb.PoolerType_PRIMARY,
 				ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
+				CurrentLeadership: &clustermetadatapb.LeaderObservation{
+					LeaderId:   serviceID,
+					LeaderTerm: 1,
+				},
 				ShardKey: &clustermetadatapb.ShardKey{
 					Database:   database,
 					TableGroup: constants.DefaultTableGroup,

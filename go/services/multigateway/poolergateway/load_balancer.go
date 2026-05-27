@@ -177,7 +177,7 @@ func (lb *LoadBalancer) AddPooler(pooler *clustermetadatapb.MultiPooler) error {
 // lb.mu.
 //
 // TODO: once multipooler publishes its current LeaderObservation into its
-// etcd record (the proto would need a `last_observed_leader` field), drop
+// etcd record (the proto would need a `current_leadership` field), drop
 // this synthetic seed and use the real observation instead.
 func (lb *LoadBalancer) maybeSeedColdStartLeaderLocked(key shardKey, pooler *clustermetadatapb.MultiPooler) {
 	if pooler.Type != clustermetadatapb.PoolerType_PRIMARY {

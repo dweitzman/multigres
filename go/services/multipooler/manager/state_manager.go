@@ -45,11 +45,11 @@ type StateAware interface {
 // Mutate also schedules an asynchronous publish so callers cannot forget to
 // reflect the new state to etcd.
 //
-// SetState also keeps the record's LastObservedLeader field in sync with
+// SetState also keeps the record's CurrentLeadership field in sync with
 // consensus state via the leaderObsFor callback. When transitioning to
 // PRIMARY, the callback returns the LeaderObservation derived from the
 // pooler's latest recorded consensus rule. When transitioning away from
-// PRIMARY, LastObservedLeader is cleared. The Type ↔ LastObservedLeader
+// PRIMARY, CurrentLeadership is cleared. The Type ↔ CurrentLeadership
 // invariant is enforced by poolerRecord.Mutate.
 type StateManager struct {
 	mu     sync.Mutex
@@ -108,11 +108,11 @@ func (ssm *StateManager) RegisterAndSync(ctx context.Context, component StateAwa
 }
 
 // SetState transitions all components to the given state in parallel and
-// keeps the record's LastObservedLeader in sync via leaderObsFor. The
+// keeps the record's CurrentLeadership in sync via leaderObsFor. The
 // record is updated only after all components converge.
 //
-// LastObservedLeader is derived from leaderObsFor when transitioning to
-// PRIMARY, and cleared otherwise. The Type ↔ LastObservedLeader invariant
+// CurrentLeadership is derived from leaderObsFor when transitioning to
+// PRIMARY, and cleared otherwise. The Type ↔ CurrentLeadership invariant
 // is validated by record.Mutate; if leaderObsFor returns nil for a PRIMARY
 // transition (i.e. consensusState does not name this pooler), Mutate will
 // reject the transition with an error. That's intentional: a pooler that
@@ -120,14 +120,14 @@ func (ssm *StateManager) RegisterAndSync(ctx context.Context, component StateAwa
 //
 // Returns an error if any component fails to transition or the invariant
 // is violated. No-op if Type, ServingStatus, and the derived
-// LastObservedLeader are all unchanged.
+// CurrentLeadership are all unchanged.
 func (ssm *StateManager) SetState(ctx context.Context, poolerType clustermetadatapb.PoolerType, servingStatus clustermetadatapb.PoolerServingStatus) error {
 	ssm.mu.Lock()
 	defer ssm.mu.Unlock()
 
 	currentType := ssm.record.Type()
 	currentStatus := ssm.record.ServingStatus()
-	currentObs := ssm.record.LastObservedLeader()
+	currentObs := ssm.record.CurrentLeadership()
 
 	var desiredObs *clustermetadatapb.LeaderObservation
 	if poolerType == clustermetadatapb.PoolerType_PRIMARY {
@@ -156,12 +156,12 @@ func (ssm *StateManager) SetState(ctx context.Context, poolerType clustermetadat
 
 	// All components converged — update the record and schedule a publish.
 	// Requires the caller to hold the action lock; Mutate will return an
-	// error otherwise. Mutate also validates the Type ↔ LastObservedLeader
+	// error otherwise. Mutate also validates the Type ↔ CurrentLeadership
 	// invariant.
 	if err := ssm.record.Mutate(ctx, func(s *MutablePoolerRecordState) {
 		s.Type = poolerType
 		s.ServingStatus = servingStatus
-		s.LastObservedLeader = desiredObs
+		s.CurrentLeadership = desiredObs
 	}); err != nil {
 		return err
 	}

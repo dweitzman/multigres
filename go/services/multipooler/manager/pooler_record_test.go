@@ -68,14 +68,36 @@ func (f *fakeTopoStore) clearError() {
 }
 
 func newTestPoolerProto(poolerType clustermetadatapb.PoolerType, status clustermetadatapb.PoolerServingStatus) *clustermetadatapb.MultiPooler {
-	return &clustermetadatapb.MultiPooler{
-		Id: &clustermetadatapb.ID{
-			Component: clustermetadatapb.ID_MULTIPOOLER,
-			Cell:      "zone1",
-			Name:      "test-pooler",
-		},
+	id := &clustermetadatapb.ID{
+		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Cell:      "zone1",
+		Name:      "test-pooler",
+	}
+	mp := &clustermetadatapb.MultiPooler{
+		Id:            id,
 		Type:          poolerType,
 		ServingStatus: status,
+	}
+	// The Mutate invariant requires CurrentLeadership to be set IFF
+	// Type == PRIMARY (and to name this pooler). Seed it so fixtures with
+	// Type=PRIMARY start in a valid state.
+	if poolerType == clustermetadatapb.PoolerType_PRIMARY {
+		mp.CurrentLeadership = &clustermetadatapb.LeaderObservation{
+			LeaderId:   id,
+			LeaderTerm: 1,
+		}
+	}
+	return mp
+}
+
+// setPrimary updates the MutablePoolerRecordState fields to Type=PRIMARY
+// with a consistent LeaderObservation naming the given pooler. Use inside
+// a Mutate closure so the result satisfies the Mutate invariant.
+func setPrimary(s *MutablePoolerRecordState, poolerID *clustermetadatapb.ID, term int64) {
+	s.Type = clustermetadatapb.PoolerType_PRIMARY
+	s.CurrentLeadership = &clustermetadatapb.LeaderObservation{
+		LeaderId:   poolerID,
+		LeaderTerm: term,
 	}
 }
 
@@ -125,7 +147,7 @@ func TestPoolerRecord_PublishIfNeeded_WritesOnStateChange(t *testing.T) {
 	require.Equal(t, int32(1), ts.calls.Load())
 
 	require.NoError(t, r.Mutate(newActionLockedCtx(t), func(s *MutablePoolerRecordState) {
-		s.Type = clustermetadatapb.PoolerType_PRIMARY
+		setPrimary(s, r.Id(), 1)
 	}))
 	r.publishIfNeeded(t.Context())
 	assert.Equal(t, int32(2), ts.calls.Load())
@@ -157,7 +179,7 @@ func TestPoolerRecord_Mutate_UpdatesDesiredAndSchedulesPublish(t *testing.T) {
 	r := newPoolerRecord(newTestLogger(), ts, newTestPoolerProto(clustermetadatapb.PoolerType_REPLICA, clustermetadatapb.PoolerServingStatus_NOT_SERVING))
 
 	require.NoError(t, r.Mutate(newActionLockedCtx(t), func(s *MutablePoolerRecordState) {
-		s.Type = clustermetadatapb.PoolerType_PRIMARY
+		setPrimary(s, r.Id(), 1)
 		s.ServingStatus = clustermetadatapb.PoolerServingStatus_SERVING
 	}))
 
@@ -196,7 +218,7 @@ func TestPoolerRecord_Mutate_CoalescesPendingWakeups(t *testing.T) {
 		s.ServingStatus = clustermetadatapb.PoolerServingStatus_SERVING
 	}))
 	require.NoError(t, r.Mutate(ctx, func(s *MutablePoolerRecordState) {
-		s.Type = clustermetadatapb.PoolerType_PRIMARY
+		setPrimary(s, r.Id(), 1)
 	}))
 	require.NoError(t, r.Mutate(ctx, func(s *MutablePoolerRecordState) {
 		s.ServingStatus = clustermetadatapb.PoolerServingStatus_NOT_SERVING
@@ -271,7 +293,7 @@ func TestPoolerRecord_WakeupTriggersImmediatePublish(t *testing.T) {
 	go r.publisherLoop(ctx, tickC)
 
 	require.NoError(t, r.Mutate(newActionLockedCtx(t), func(s *MutablePoolerRecordState) {
-		s.Type = clustermetadatapb.PoolerType_PRIMARY
+		setPrimary(s, r.Id(), 1)
 		s.ServingStatus = clustermetadatapb.PoolerServingStatus_SERVING
 	}))
 
@@ -375,7 +397,7 @@ func TestPoolerRecord_Unregister_NoFinalize(t *testing.T) {
 
 	// Mutate to PRIMARY before Unregister.
 	require.NoError(t, r.Mutate(newActionLockedCtx(t), func(s *MutablePoolerRecordState) {
-		s.Type = clustermetadatapb.PoolerType_PRIMARY
+		setPrimary(s, r.Id(), 1)
 	}))
 
 	r.Unregister(t.Context(), nil)

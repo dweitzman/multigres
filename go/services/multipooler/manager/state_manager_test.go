@@ -62,7 +62,7 @@ func newTestLogger() *slog.Logger {
 
 // testStateManagerPoolerID returns a stable test pooler ID. Used as both the record's
 // own Id and as LeaderObservation.LeaderId, so the Mutate invariant
-// (LastObservedLeader.LeaderId must match the pooler's Id) is satisfied
+// (CurrentLeadership.LeaderId must match the pooler's Id) is satisfied
 // when newTestMultiPooler seeds Type=PRIMARY with a LeaderObservation.
 func testStateManagerPoolerID() *clustermetadatapb.ID {
 	return &clustermetadatapb.ID{
@@ -79,7 +79,7 @@ func newTestMultiPooler(poolerType clustermetadatapb.PoolerType, status clusterm
 		ServingStatus: status,
 	}
 	if poolerType == clustermetadatapb.PoolerType_PRIMARY {
-		mp.LastObservedLeader = &clustermetadatapb.LeaderObservation{
+		mp.CurrentLeadership = &clustermetadatapb.LeaderObservation{
 			LeaderId:   testStateManagerPoolerID(),
 			LeaderTerm: 1,
 		}

@@ -965,7 +965,7 @@ type MultiPooler struct {
 	// PgDataDir is the PostgreSQL data directory path (from the PGDATA environment variable).
 	// Used by multiadmin to compute the primary's data directory for pgBackRest.
 	PgDataDir string `protobuf:"bytes,11,opt,name=pg_data_dir,json=pgDataDir,proto3" json:"pg_data_dir,omitempty"`
-	// last_observed_leader is set ONLY when this pooler currently considers
+	// current_leadership is set ONLY when this pooler currently considers
 	// itself the leader of its shard. Replicas leave this empty so etcd
 	// doesn't carry the leader's view of itself in every pooler's record.
 	//
@@ -973,9 +973,9 @@ type MultiPooler struct {
 	// routing without relying on `type` as a hint. Best-effort: empty until
 	// the pooler has been told (via SetTermPrimary / Propose / Recruit) that
 	// it is the leader; cleared again on demotion.
-	LastObservedLeader *LeaderObservation `protobuf:"bytes,12,opt,name=last_observed_leader,json=lastObservedLeader,proto3" json:"last_observed_leader,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	CurrentLeadership *LeaderObservation `protobuf:"bytes,12,opt,name=current_leadership,json=currentLeadership,proto3" json:"current_leadership,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *MultiPooler) Reset() {
@@ -1071,9 +1071,9 @@ func (x *MultiPooler) GetPgDataDir() string {
 	return ""
 }
 
-func (x *MultiPooler) GetLastObservedLeader() *LeaderObservation {
+func (x *MultiPooler) GetCurrentLeadership() *LeaderObservation {
 	if x != nil {
-		return x.LastObservedLeader
+		return x.CurrentLeadership
 	}
 	return nil
 }
@@ -2325,7 +2325,7 @@ const file_clustermetadata_proto_rawDesc = "" +
 	"\rPoolerAddress\x12#\n" +
 	"\x02id\x18\x01 \x01(\v2\x13.clustermetadata.IDR\x02id\x12\x12\n" +
 	"\x04host\x18\x02 \x01(\tR\x04host\x12#\n" +
-	"\rpostgres_port\x18\x03 \x01(\x05R\fpostgresPort\"\xd3\x04\n" +
+	"\rpostgres_port\x18\x03 \x01(\x05R\fpostgresPort\"\xd0\x04\n" +
 	"\vMultiPooler\x12#\n" +
 	"\x02id\x18\x01 \x01(\v2\x13.clustermetadata.IDR\x02id\x126\n" +
 	"\tshard_key\x18\x02 \x01(\v2\x19.clustermetadata.ShardKeyR\bshardKey\x126\n" +
@@ -2337,8 +2337,8 @@ const file_clustermetadata_proto_rawDesc = "" +
 	"\n" +
 	"pooler_dir\x18\n" +
 	" \x01(\tR\tpoolerDir\x12\x1e\n" +
-	"\vpg_data_dir\x18\v \x01(\tR\tpgDataDir\x12T\n" +
-	"\x14last_observed_leader\x18\f \x01(\v2\".clustermetadata.LeaderObservationR\x12lastObservedLeader\x1a:\n" +
+	"\vpg_data_dir\x18\v \x01(\tR\tpgDataDir\x12Q\n" +
+	"\x12current_leadership\x18\f \x01(\v2\".clustermetadata.LeaderObservationR\x11currentLeadership\x1a:\n" +
 	"\fPortMapEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\x05R\x05value:\x028\x01\"\xf1\x01\n" +
@@ -2520,7 +2520,7 @@ var file_clustermetadata_proto_depIdxs = []int32{
 	0,  // 10: clustermetadata.MultiPooler.type:type_name -> clustermetadata.PoolerType
 	1,  // 11: clustermetadata.MultiPooler.serving_status:type_name -> clustermetadata.PoolerServingStatus
 	32, // 12: clustermetadata.MultiPooler.port_map:type_name -> clustermetadata.MultiPooler.PortMapEntry
-	24, // 13: clustermetadata.MultiPooler.last_observed_leader:type_name -> clustermetadata.LeaderObservation
+	24, // 13: clustermetadata.MultiPooler.current_leadership:type_name -> clustermetadata.LeaderObservation
 	18, // 14: clustermetadata.MultiGateway.id:type_name -> clustermetadata.ID
 	33, // 15: clustermetadata.MultiGateway.port_map:type_name -> clustermetadata.MultiGateway.PortMapEntry
 	18, // 16: clustermetadata.MultiOrch.id:type_name -> clustermetadata.ID
