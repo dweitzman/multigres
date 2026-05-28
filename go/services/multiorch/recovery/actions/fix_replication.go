@@ -190,18 +190,25 @@ func (a *FixReplicationAction) retargetReplication(
 		"target", target.MultiPooler.Id.Name,
 		"primary", primary.MultiPooler.Id.Name,
 		"problem_code", string(problemCode))
-	eventlog.Emit(ctx, a.logger, eventlog.Started, eventlog.NodeJoin{
-		NodeName: target.MultiPooler.Id.Name,
-	})
+
+	// Event shape depends on the problem we're addressing: a replica being
+	// retargeted is a NodeJoin (new/recovering follower), a stale primary
+	// being demoted is a PrimaryDemotion. Integration tests assert on these
+	// event types to confirm which recovery path ran.
+	var startEvent, successEvent, failEvent eventlog.Event
+	if problemCode == types.ProblemStaleLeader {
+		evt := eventlog.PrimaryDemotion{NodeName: target.MultiPooler.Id.Name, Reason: "stale"}
+		startEvent, successEvent, failEvent = evt, evt, evt
+	} else {
+		evt := eventlog.NodeJoin{NodeName: target.MultiPooler.Id.Name}
+		startEvent, successEvent, failEvent = evt, evt, evt
+	}
+	eventlog.Emit(ctx, a.logger, eventlog.Started, startEvent)
 	defer func() {
 		if retErr == nil {
-			eventlog.Emit(ctx, a.logger, eventlog.Success, eventlog.NodeJoin{
-				NodeName: target.MultiPooler.Id.Name,
-			})
+			eventlog.Emit(ctx, a.logger, eventlog.Success, successEvent)
 		} else {
-			eventlog.Emit(ctx, a.logger, eventlog.Failed, eventlog.NodeJoin{
-				NodeName: target.MultiPooler.Id.Name,
-			}, "error", retErr)
+			eventlog.Emit(ctx, a.logger, eventlog.Failed, failEvent, "error", retErr)
 		}
 	}()
 
