@@ -53,6 +53,28 @@ func CompareRuleNumbers(a, b *clustermetadatapb.RuleNumber) int {
 	return 0
 }
 
+// MostAuthoritativeObservation returns the LeaderObservation with the
+// highest LeaderTerm among the given observations, ignoring nil entries.
+// Returns nil if all observations are nil. Used by callers that need
+// to choose between observations from different sources (topology
+// CurrentLeadership, health-stream LeaderObservation, locally cached).
+//
+// TODO: when LeaderObservation gains a full RuleNumber (PR 2 in the
+// PoolerType-elimination roadmap), this will compare by RuleNumber
+// rather than coordinator term alone.
+func MostAuthoritativeObservation(obs ...*clustermetadatapb.LeaderObservation) *clustermetadatapb.LeaderObservation {
+	var best *clustermetadatapb.LeaderObservation
+	for _, o := range obs {
+		if o == nil {
+			continue
+		}
+		if best == nil || o.GetLeaderTerm() > best.GetLeaderTerm() {
+			best = o
+		}
+	}
+	return best
+}
+
 // MostAdvancedPosition returns the highest-ranked PoolerPosition among the
 // given statuses. Rule number takes precedence; LSN breaks ties within the
 // same rule. Returns nil if no status has a parseable LSN.

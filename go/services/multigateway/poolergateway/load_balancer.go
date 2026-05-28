@@ -25,6 +25,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	"github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -124,9 +125,11 @@ func (lb *LoadBalancer) SetReplicationLagThresholds(lowLag, highTolerance time.D
 // AddPooler creates a new PoolerConnection for the given pooler.
 // If a connection already exists for this pooler, it updates the pooler info.
 //
-// Leader identity is sourced from LeaderObservation on health streams —
-// AddPooler only contributes a cold-start fallback hint, see
-// maybeSeedColdStartLeaderLocked.
+// Leader identity is sourced from LeaderObservation on health streams.
+// AddPooler also contributes a discovery-time seed when the pooler's
+// etcd record carries CurrentLeadership (set only by the pooler that
+// considers itself the consensus leader). See
+// maybeSeedLeaderFromTopologyLocked.
 func (lb *LoadBalancer) AddPooler(pooler *clustermetadatapb.MultiPooler) error {
 	poolerID := poolerIDString(pooler.Id)
 
@@ -135,15 +138,13 @@ func (lb *LoadBalancer) AddPooler(pooler *clustermetadatapb.MultiPooler) error {
 
 	key := shardKey{tableGroup: pooler.GetShardKey().GetTableGroup(), shard: pooler.GetShardKey().GetShard()}
 
-	// Existing pooler — refresh topology metadata. The cold-start hint below
-	// can also fire here: at cluster bootstrap, poolers are first discovered
-	// as REPLICA, then their Type transitions to PRIMARY after multiorch
-	// promotes one. That transition is the first topology signal of who
-	// leads, before any health stream reports a LeaderObservation. The
-	// notify call drains the failover buffer if the leader is now serving.
+	// Existing pooler — refresh topology metadata. The discovery-time seed
+	// below can fire when a leader's CurrentLeadership arrives via a
+	// topology update (e.g. after multiorch promotes someone). The notify
+	// call drains the failover buffer if the leader is now serving.
 	if conn, exists := lb.connections[poolerID]; exists {
 		conn.UpdatePoolerInfo(pooler)
-		lb.maybeSeedColdStartLeaderLocked(key, pooler)
+		lb.maybeSeedLeaderFromTopologyLocked(key, pooler)
 		lb.notifyIfLeaderServingLocked(key, conn)
 		return nil
 	}
@@ -154,7 +155,7 @@ func (lb *LoadBalancer) AddPooler(pooler *clustermetadatapb.MultiPooler) error {
 	}
 
 	lb.connections[poolerID] = conn
-	lb.maybeSeedColdStartLeaderLocked(key, pooler)
+	lb.maybeSeedLeaderFromTopologyLocked(key, pooler)
 	// No notifyIfLeaderServingLocked here: the connection was just opened, its
 	// health goroutine has not run yet, and conn.Health() is still the initial
 	// NOT_SERVING placeholder. The first onPoolerHealthUpdate will fire the
@@ -168,30 +169,37 @@ func (lb *LoadBalancer) AddPooler(pooler *clustermetadatapb.MultiPooler) error {
 	return nil
 }
 
-// maybeSeedColdStartLeaderLocked sets `leaders[key]` to a term-0 synthetic
-// LeaderObservation when topology says this pooler is PRIMARY and no real
-// observation has been received yet for the shard. Any real observation
-// (term >= 1) overrides this seed via the standard term-reconciliation in
-// onPoolerHealthUpdate, so a stale Type=PRIMARY assertion from a
-// demoted-then-restarted pooler cannot override consensus. Caller must hold
-// lb.mu.
+// maybeSeedLeaderFromTopologyLocked installs `leaders[key]` from the
+// CurrentLeadership field on the pooler's topology record, which is
+// populated only by the pooler that considers itself the consensus
+// leader (see multipooler/manager/state_manager.go derivation). The
+// seed is skipped when the field is empty or carries a non-higher
+// term than the existing observation — that ordering protects against
+// a stale leadership claim from a demoted-then-restarted pooler
+// overriding consensus.
 //
-// TODO: once multipooler publishes its current LeaderObservation into its
-// etcd record (the proto would need a `current_leadership` field), drop
-// this synthetic seed and use the real observation instead.
-func (lb *LoadBalancer) maybeSeedColdStartLeaderLocked(key shardKey, pooler *clustermetadatapb.MultiPooler) {
-	if pooler.Type != clustermetadatapb.PoolerType_PRIMARY {
+// The function does NOT clear an existing entry when a pooler retracts
+// its claim (CurrentLeadership=nil): the cached entry may have been
+// raised by a higher-term health-stream observation from this pooler
+// or another, and a lower-bound retract should not invalidate it.
+// The cache is overwritten only by higher-term observations.
+//
+// Caller must hold lb.mu.
+func (lb *LoadBalancer) maybeSeedLeaderFromTopologyLocked(key shardKey, pooler *clustermetadatapb.MultiPooler) {
+	cl := pooler.GetCurrentLeadership()
+	if cl.GetLeaderId() == nil {
 		return
 	}
-	if lb.leaders[key] != nil {
+	existing := lb.leaders[key]
+	chosen := consensus.MostAuthoritativeObservation(existing, cl)
+	if chosen == existing {
 		return
 	}
-	lb.leaders[key] = &clustermetadatapb.LeaderObservation{
-		LeaderId:   pooler.Id,
-		LeaderTerm: 0,
-	}
-	lb.logger.Info("cold-start leader hint from topology",
+	lb.leaders[key] = chosen
+	lb.logger.Info("seeded leader from topology CurrentLeadership",
 		"pooler_id", poolerIDString(pooler.Id),
+		"leader_id", poolerIDString(cl.GetLeaderId()),
+		"leader_term", cl.GetLeaderTerm(),
 		"tablegroup", key.tableGroup,
 		"shard", key.shard)
 }

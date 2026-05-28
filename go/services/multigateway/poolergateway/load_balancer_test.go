@@ -37,7 +37,7 @@ func poolerID(pooler *clustermetadatapb.MultiPooler) string {
 }
 
 func createTestMultiPooler(name, cell, tableGroup, shard string, poolerType clustermetadatapb.PoolerType) *clustermetadatapb.MultiPooler {
-	return &clustermetadatapb.MultiPooler{
+	mp := &clustermetadatapb.MultiPooler{
 		Id: &clustermetadatapb.ID{
 			Component: clustermetadatapb.ID_MULTIPOOLER,
 			Cell:      cell,
@@ -53,6 +53,17 @@ func createTestMultiPooler(name, cell, tableGroup, shard string, poolerType clus
 			"grpc": 50051,
 		},
 	}
+	// Mirror the multipooler-side invariant: a pooler that thinks it is
+	// the consensus leader publishes CurrentLeadership naming itself.
+	// Tests that need a "stale Type=PRIMARY with no leadership claim"
+	// scenario should clear this field explicitly.
+	if poolerType == clustermetadatapb.PoolerType_PRIMARY {
+		mp.CurrentLeadership = &clustermetadatapb.LeaderObservation{
+			LeaderId:   mp.Id,
+			LeaderTerm: 1,
+		}
+	}
+	return mp
 }
 
 func TestLoadBalancer_AddRemovePooler(t *testing.T) {
@@ -62,8 +73,10 @@ func TestLoadBalancer_AddRemovePooler(t *testing.T) {
 	// Initially empty
 	assert.Equal(t, 0, lb.ConnectionCount())
 
-	// Add a pooler
-	pooler := createTestMultiPooler("pooler1", "zone1", constants.DefaultTableGroup, "0", clustermetadatapb.PoolerType_PRIMARY)
+	// Add a pooler. Starts as REPLICA (no CurrentLeadership) so the
+	// leaders[] cache stays empty and the pooler is selectable for
+	// REPLICA reads after a type change.
+	pooler := createTestMultiPooler("pooler1", "zone1", constants.DefaultTableGroup, "0", clustermetadatapb.PoolerType_REPLICA)
 	err := lb.AddPooler(pooler)
 	require.NoError(t, err)
 	assert.Equal(t, 1, lb.ConnectionCount())
@@ -73,13 +86,13 @@ func TestLoadBalancer_AddRemovePooler(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, lb.ConnectionCount())
 
-	// Updating pooler type (simulating topology update from UNKNOWN to PRIMARY)
+	// Updating pooler type (simulating topology update from UNKNOWN to REPLICA)
 	poolerUpdated := createTestMultiPooler("pooler1", "zone1", constants.DefaultTableGroup, "0", clustermetadatapb.PoolerType_REPLICA)
 	err = lb.AddPooler(poolerUpdated)
 	require.NoError(t, err)
 	assert.Equal(t, 1, lb.ConnectionCount(), "should still have only one connection")
 
-	// Verify the type was updated via GetConnection
+	// Verify the type is observable via GetConnection
 	target := &query.Target{
 		TableGroup: constants.DefaultTableGroup,
 		Shard:      "0",
@@ -87,7 +100,7 @@ func TestLoadBalancer_AddRemovePooler(t *testing.T) {
 	}
 	conn, err := lb.GetConnection(target)
 	require.NoError(t, err)
-	assert.Equal(t, clustermetadatapb.PoolerType_REPLICA, conn.Type(), "pooler type should be updated")
+	assert.Equal(t, clustermetadatapb.PoolerType_REPLICA, conn.Type(), "pooler type should be observable")
 
 	// Remove the pooler
 	lb.RemovePooler(poolerID(pooler))
