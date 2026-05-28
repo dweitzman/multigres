@@ -378,6 +378,9 @@ func TestPoolerRecord_RegisterAndUnregister(t *testing.T) {
 	r.Unregister(t.Context(), func(s *MutablePoolerRecordState) {
 		s.Type = clustermetadatapb.PoolerType_DRAINED
 		s.ServingStatus = clustermetadatapb.PoolerServingStatus_NOT_SERVING
+		// Clear CurrentLeadership so the Type↔leader-observation invariant
+		// is satisfied (DRAINED implies not-leader).
+		s.CurrentLeadership = nil
 	})
 
 	// The final publish should carry whatever state finalize stamped.

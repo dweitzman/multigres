@@ -771,14 +771,19 @@ func (pm *MultiPoolerManager) getPoolerType() clustermetadatapb.PoolerType {
 // of which may be nil. Used by callers that need "the freshest rule
 // this pooler knows about" — RPCs update consensusState first; postgres
 // WAL replay populates rule_store first; the two can briefly disagree.
-// Returns nil only if both sources are nil (cold boot before any
-// observation or RPC).
+// Returns nil if both sources are nil (cold boot before any observation
+// or RPC) or if pm is partially initialized (monitor-only unit tests).
 func (pm *MultiPoolerManager) latestRule() *clustermetadatapb.ShardRule {
 	var consensusRule *clustermetadatapb.ShardRule
-	if rp := pm.consensusState.GetReplicationPrimary(); rp != nil {
-		consensusRule = rp.GetRule()
+	if pm.consensusState != nil {
+		if rp := pm.consensusState.GetReplicationPrimary(); rp != nil {
+			consensusRule = rp.GetRule()
+		}
 	}
-	storeRule := pm.rules.cachedPosition().GetRule()
+	var storeRule *clustermetadatapb.ShardRule
+	if pm.rules != nil {
+		storeRule = pm.rules.cachedPosition().GetRule()
+	}
 
 	if consensusRule == nil {
 		return storeRule
@@ -1592,6 +1597,10 @@ func (pm *MultiPoolerManager) StopTopoRegistration(ctx context.Context) {
 	pm.record.Unregister(ctx, func(s *MutablePoolerRecordState) {
 		s.Type = clustermetadatapb.PoolerType_DRAINED
 		s.ServingStatus = clustermetadatapb.PoolerServingStatus_NOT_SERVING
+		// Clear CurrentLeadership to keep the Type ↔ leader-observation
+		// invariant. DRAINED implies not-leader; lingering leadership data
+		// would also be misleading to consumers reading the record.
+		s.CurrentLeadership = nil
 	})
 }
 
@@ -1669,6 +1678,11 @@ const (
 	// primary regardless of how it got out of sync (failed SetTermPrimary apply,
 	// hand edit, snapshot restore, etc.).
 	remedialActionFixPrimaryConnInfo
+	// remedialActionDiscoverRole fires when the pooler is at Type=UNKNOWN
+	// (boot before observation; observation after a transient failure) and
+	// postgres is now readable. The action observes the durable rule and
+	// transitions out of UNKNOWN — see attemptRoleDiscoveryLocked.
+	remedialActionDiscoverRole
 )
 
 // monitorPostgresIteration performs one iteration of PostgreSQL monitoring.
@@ -1921,6 +1935,13 @@ func (pm *MultiPoolerManager) determineRemedialAction(ctx context.Context, curre
 
 	// Postgres is running: Check if pooler type needs adjustment
 	if currentState.postgresRunning {
+		// Type=UNKNOWN means we haven't established a role yet (cold boot,
+		// transient observation failure). Try discovery before the rule-vs-
+		// postgres drift checks below, since those compare Type against
+		// postgres state and would misfire on UNKNOWN.
+		if pm.getPoolerType() == clustermetadatapb.PoolerType_UNKNOWN {
+			return remedialActionDiscoverRole
+		}
 		if currentState.isPrimary && pm.getPoolerType() != clustermetadatapb.PoolerType_PRIMARY {
 			return remedialActionDemoteStalePrimary
 		}
@@ -2100,7 +2121,11 @@ func (pm *MultiPoolerManager) takeRemedialAction(ctx context.Context, action rem
 		}
 		if err := pm.startPostgres(ctx); err != nil {
 			pm.logger.ErrorContext(ctx, "MonitorPostgres: failed to start PostgreSQL, will retry", "error", err)
+			return
 		}
+		// Postgres is now up — attempt role discovery in the same iteration
+		// rather than waiting for the next monitor tick.
+		pm.attemptRoleDiscoveryLocked(ctx)
 
 	case remedialActionRestoreFromBackup:
 		pm.setMonitorReason(ctx, reasonRestoringFromBackup, "MonitorPostgres: directory not initialized but backups available, restoring from backup")
@@ -2109,7 +2134,11 @@ func (pm *MultiPoolerManager) takeRemedialAction(ctx context.Context, action rem
 		}
 		if err := pm.restoreAndStartPostgres(ctx); err != nil {
 			pm.logger.ErrorContext(ctx, "MonitorPostgres: failed to restore from backup, will retry", "error", err)
+			return
 		}
+		// Postgres is now up with restored data — discover role from the
+		// rule that came with the backup.
+		pm.attemptRoleDiscoveryLocked(ctx)
 
 	case remedialActionCreateFirstBackup:
 		pm.setMonitorReason(ctx, reasonCreatingFirstBackup, "MonitorPostgres: no backup found, attempting to create one")
@@ -2139,6 +2168,33 @@ func (pm *MultiPoolerManager) takeRemedialAction(ctx context.Context, action rem
 		if err := pm.rules.reconcileGUC(ctx, !state.isPrimary); err != nil {
 			pm.logger.ErrorContext(ctx, "MonitorPostgres: GUC reconciliation failed", "error", err)
 		}
+
+	case remedialActionDiscoverRole:
+		pm.setMonitorReason(ctx, reasonPostgresRunning, "MonitorPostgres: PostgreSQL is running")
+		pm.logger.InfoContext(ctx, "MonitorPostgres: discovering role from rule")
+		pm.attemptRoleDiscoveryLocked(ctx)
+	}
+}
+
+// attemptRoleDiscoveryLocked observes the durable rule from postgres and
+// transitions topology to match. Safe to call after any path that makes
+// postgres readable (startup, restore, first-backup). No-op if postgres
+// isn't readable or the rule hasn't been bootstrapped yet — the next
+// monitor tick will retry via remedialActionDiscoverRole.
+//
+// Requires the action lock. Tolerates a partially-initialized manager
+// (nil rules or nil servingState) so monitor-only unit tests that
+// exercise StartPostgres/Restore branches don't need full wiring.
+func (pm *MultiPoolerManager) attemptRoleDiscoveryLocked(ctx context.Context) {
+	if pm.rules == nil || pm.servingState == nil {
+		return
+	}
+	if _, err := pm.rules.observePosition(ctx); err != nil {
+		pm.logger.DebugContext(ctx, "attemptRoleDiscovery: observePosition failed (postgres not ready yet or rule not bootstrapped); will retry on next monitor tick", "error", err)
+		return
+	}
+	if err := pm.servingState.SetState(ctx, pm.latestRule(), clustermetadatapb.PoolerServingStatus_SERVING); err != nil {
+		pm.logger.WarnContext(ctx, "attemptRoleDiscovery: SetState failed", "error", err)
 	}
 }
 

@@ -318,8 +318,11 @@ func (mp *MultiPooler) Init(startCtx context.Context) error {
 	multipooler.ServingStatus = clustermetadatapb.PoolerServingStatus_NOT_SERVING
 	multipooler.PoolerDir = mp.poolerDir.Get()
 	multipooler.PgDataDir = os.Getenv(constants.PgDataDirEnvVar)
-	// For now, all poolers start as REPLICA
-	multipooler.Type = clustermetadatapb.PoolerType_REPLICA
+	// Boot at UNKNOWN; the manager transitions to PRIMARY or REPLICA after
+	// observing the rule from postgres (or learning it via a coordinator
+	// RPC). Until that happens, the pooler honestly advertises "I do not
+	// yet know my role" and is paired with NOT_SERVING.
+	multipooler.Type = clustermetadatapb.PoolerType_UNKNOWN
 
 	logger.InfoContext(startCtx, "Initializing MultiPoolerManager")
 	poolerManager, err := manager.NewMultiPoolerManager(logger, multipooler, &manager.Config{
