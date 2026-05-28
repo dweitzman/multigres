@@ -24,6 +24,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 )
@@ -341,6 +342,35 @@ func TestStateManager_HealthStreamerIntegration(t *testing.T) {
 	// Record should be updated
 	assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, r.Type())
 	assert.Equal(t, clustermetadatapb.PoolerServingStatus_SERVING, r.ServingStatus())
+}
+
+// TestStateManager_LeaderOnlyPublication verifies the publication
+// contract: CurrentLeadership is set on the pooler record IFF the
+// caller-supplied rule names this pooler as leader. Replicas leave it
+// nil so etcd carries only the leader's view of itself.
+func TestStateManager_LeaderOnlyPublication(t *testing.T) {
+	comp := &testComponent{}
+	r := newTestRecord(clustermetadatapb.PoolerType_REPLICA, clustermetadatapb.PoolerServingStatus_NOT_SERVING)
+	ssm := NewStateManager(newTestLogger(), r, comp)
+
+	// Rule names someone else as leader → Type=REPLICA, CurrentLeadership=nil.
+	require.NoError(t, ssm.SetState(newActionLockedCtx(t), testReplicaRule(), clustermetadatapb.PoolerServingStatus_SERVING))
+	assert.Equal(t, clustermetadatapb.PoolerType_REPLICA, r.Type())
+	assert.Nil(t, r.CurrentLeadership(), "REPLICA must not publish CurrentLeadership")
+
+	// Rule names this pooler as leader → Type=PRIMARY, CurrentLeadership
+	// names this pooler at the rule's term.
+	require.NoError(t, ssm.SetState(newActionLockedCtx(t), testLeaderRule(), clustermetadatapb.PoolerServingStatus_SERVING))
+	assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, r.Type())
+	cl := r.CurrentLeadership()
+	require.NotNil(t, cl, "PRIMARY must publish CurrentLeadership")
+	assert.True(t, proto.Equal(cl.GetLeaderId(), testStateManagerPoolerID()), "CurrentLeadership.LeaderId must name this pooler")
+	assert.Equal(t, int64(1), cl.GetLeaderTerm())
+
+	// Demote back to REPLICA → CurrentLeadership cleared again.
+	require.NoError(t, ssm.SetState(newActionLockedCtx(t), testReplicaRule(), clustermetadatapb.PoolerServingStatus_SERVING))
+	assert.Equal(t, clustermetadatapb.PoolerType_REPLICA, r.Type())
+	assert.Nil(t, r.CurrentLeadership(), "Demotion must clear CurrentLeadership")
 }
 
 func TestStateManager_ParallelExecution(t *testing.T) {

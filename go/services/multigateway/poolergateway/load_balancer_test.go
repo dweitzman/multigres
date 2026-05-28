@@ -765,6 +765,75 @@ func TestLoadBalancer_ReplicaCandidatesExcludeLeader(t *testing.T) {
 	}
 }
 
+// TestLoadBalancer_CurrentLeadershipDoesNotDowngradeLeader verifies the
+// term-ordering invariant for the new topology seed: a freshly discovered
+// pooler whose CurrentLeadership carries a lower term than the cached
+// observation must not displace the cached entry. This protects against a
+// just-restarted (or briefly stale) pooler re-publishing an older
+// leadership claim and downgrading the gateway's view of who leads.
+func TestLoadBalancer_CurrentLeadershipDoesNotDowngradeLeader(t *testing.T) {
+	logger := slog.Default()
+	lb := NewLoadBalancer(context.Background(), "zone1", logger, grpc.WithTransportCredentials(insecure.NewCredentials()))
+
+	// Establish a high-term leader entry via the health stream first.
+	leader := createTestMultiPooler("leader", "zone1", constants.DefaultTableGroup, "0", clustermetadatapb.PoolerType_PRIMARY)
+	require.NoError(t, lb.AddPooler(leader))
+
+	lb.mu.Lock()
+	connLeader := lb.connections[poolerID(leader)]
+	lb.mu.Unlock()
+	simulateHealthUpdate(connLeader,
+		clustermetadatapb.PoolerServingStatus_SERVING,
+		&clustermetadatapb.LeaderObservation{LeaderId: leader.Id, LeaderTerm: 7})
+
+	// A different pooler is discovered with a lower-term CurrentLeadership
+	// claiming itself as leader (a stale snapshot from before the latest
+	// election). This MUST NOT override the term-7 entry.
+	stale := createTestMultiPooler("stale", "zone1", constants.DefaultTableGroup, "0", clustermetadatapb.PoolerType_REPLICA)
+	stale.CurrentLeadership = &clustermetadatapb.LeaderObservation{
+		LeaderId:   stale.Id,
+		LeaderTerm: 3,
+	}
+	require.NoError(t, lb.AddPooler(stale))
+
+	target := &query.Target{
+		TableGroup: constants.DefaultTableGroup,
+		Shard:      "0",
+		PoolerType: clustermetadatapb.PoolerType_PRIMARY,
+	}
+	conn, err := lb.GetConnection(target)
+	require.NoError(t, err)
+	assert.Equal(t, poolerID(leader), conn.ID(),
+		"Lower-term CurrentLeadership must not override a higher-term LeaderObservation")
+}
+
+// TestLoadBalancer_LeaderSeedRequiresCurrentLeadership verifies that
+// AddPooler no longer infers leadership from Type==PRIMARY: a pooler whose
+// topology record carries Type=PRIMARY but no CurrentLeadership does not
+// seed the leaders[] cache, and a write target therefore resolves to
+// UNAVAILABLE until a real leader observation arrives.
+func TestLoadBalancer_LeaderSeedRequiresCurrentLeadership(t *testing.T) {
+	logger := slog.Default()
+	lb := NewLoadBalancer(context.Background(), "zone1", logger, grpc.WithTransportCredentials(insecure.NewCredentials()))
+
+	pooler := createTestMultiPooler("pooler1", "zone1", constants.DefaultTableGroup, "0", clustermetadatapb.PoolerType_PRIMARY)
+	// Clear the CurrentLeadership that the helper auto-populates. This is
+	// the rolling-upgrade / mid-transition scenario where Type=PRIMARY is
+	// set but the pooler hasn't yet published its leadership observation.
+	pooler.CurrentLeadership = nil
+	require.NoError(t, lb.AddPooler(pooler))
+
+	target := &query.Target{
+		TableGroup: constants.DefaultTableGroup,
+		Shard:      "0",
+		PoolerType: clustermetadatapb.PoolerType_PRIMARY,
+	}
+	_, err := lb.GetConnection(target)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no leader observed yet",
+		"Type=PRIMARY without CurrentLeadership must not seed the leader cache")
+}
+
 func TestLoadBalancerListener(t *testing.T) {
 	logger := slog.Default()
 	lb := NewLoadBalancer(context.Background(), "zone1", logger, grpc.WithTransportCredentials(insecure.NewCredentials()))
