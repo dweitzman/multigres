@@ -447,9 +447,11 @@ type SetTermPrimaryRequest struct {
 	// The rule the caller is informing about. The pooler compares this against
 	// its own observed rule (by RuleNumber) and only applies the change when
 	// the supplied rule is strictly higher.
-	Rule          *clustermetadata.ShardRule `protobuf:"bytes,2,opt,name=rule,proto3" json:"rule,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Rule *clustermetadata.ShardRule `protobuf:"bytes,2,opt,name=rule,proto3" json:"rule,omitempty"`
+	// When true, waits until replication is successfully streaming before returning.
+	AwaitStreaming bool `protobuf:"varint,3,opt,name=await_streaming,json=awaitStreaming,proto3" json:"await_streaming,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *SetTermPrimaryRequest) Reset() {
@@ -494,6 +496,13 @@ func (x *SetTermPrimaryRequest) GetRule() *clustermetadata.ShardRule {
 		return x.Rule
 	}
 	return nil
+}
+
+func (x *SetTermPrimaryRequest) GetAwaitStreaming() bool {
+	if x != nil {
+		return x.AwaitStreaming
+	}
+	return false
 }
 
 // SetTermPrimaryResponse carries the pooler's state after processing a
@@ -566,10 +575,11 @@ const file_consensusdata_proto_rawDesc = "" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12?\n" +
 	"\x11accepted_node_ids\x18\x03 \x03(\v2\x13.clustermetadata.IDR\x0facceptedNodeIds\"^\n" +
 	"\x0fProposeResponse\x12K\n" +
-	"\x10consensus_status\x18\x01 \x01(\v2 .clustermetadata.ConsensusStatusR\x0fconsensusStatus\"\x7f\n" +
+	"\x10consensus_status\x18\x01 \x01(\v2 .clustermetadata.ConsensusStatusR\x0fconsensusStatus\"\xa8\x01\n" +
 	"\x15SetTermPrimaryRequest\x126\n" +
 	"\x06leader\x18\x01 \x01(\v2\x1e.clustermetadata.PoolerAddressR\x06leader\x12.\n" +
-	"\x04rule\x18\x02 \x01(\v2\x1a.clustermetadata.ShardRuleR\x04rule\"e\n" +
+	"\x04rule\x18\x02 \x01(\v2\x1a.clustermetadata.ShardRuleR\x04rule\x12'\n" +
+	"\x0fawait_streaming\x18\x03 \x01(\bR\x0eawaitStreaming\"e\n" +
 	"\x16SetTermPrimaryResponse\x12K\n" +
 	"\x10consensus_status\x18\x01 \x01(\v2 .clustermetadata.ConsensusStatusR\x0fconsensusStatusB4Z2github.com/multigres/multigres/go/pb/consensusdatab\x06proto3"
 

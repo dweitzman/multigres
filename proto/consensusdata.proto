@@ -117,6 +117,9 @@ message SetTermPrimaryRequest {
   // its own observed rule (by RuleNumber) and only applies the change when
   // the supplied rule is strictly higher.
   clustermetadata.ShardRule rule = 2;
+
+  // When true, waits until replication is successfully streaming before returning.
+  bool await_streaming = 3;
 }
 
 // SetTermPrimaryResponse carries the pooler's state after processing a

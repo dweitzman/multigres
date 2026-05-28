@@ -28,6 +28,7 @@ import (
 	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
+	"github.com/multigres/multigres/go/tools/retry"
 )
 
 // buildConsensusStatus constructs a ConsensusStatus from a pre-resolved revocation,
@@ -628,8 +629,7 @@ func (pm *MultiPoolerManager) SetTermPrimary(ctx context.Context, req *consensus
 	if leader.GetHost() == "" {
 		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "leader host is required")
 	}
-	port := leader.GetPostgresPort()
-	if port == 0 {
+	if leader.GetPostgresPort() == 0 {
 		return nil, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,
 			"leader %s has no postgres port configured", leaderID.GetName())
 	}
@@ -642,6 +642,29 @@ func (pm *MultiPoolerManager) SetTermPrimary(ctx context.Context, req *consensus
 			"SetTermPrimary received on %s but leader is self; designated leaders are appointed via Propose",
 			pm.serviceID.GetName())
 	}
+
+	// Mutation portion runs under the action lock and releases it on return,
+	// so the optional await-streaming poll below holds no lock.
+	resp, err := pm.setTermPrimaryLocked(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	if req.GetAwaitStreaming() {
+		if err := pm.awaitWalReceiverStreaming(ctx); err != nil {
+			return nil, mterrors.Wrap(err, "await_streaming")
+		}
+	}
+	return resp, nil
+}
+
+// setTermPrimaryLocked performs the mutation portion of SetTermPrimary under
+// the action lock. The no-op paths (rule revoked, incoming rule not higher)
+// still return a successful response carrying the cached ConsensusStatus.
+func (pm *MultiPoolerManager) setTermPrimaryLocked(ctx context.Context, req *consensusdatapb.SetTermPrimaryRequest) (*consensusdatapb.SetTermPrimaryResponse, error) {
+	leader := req.GetLeader()
+	rule := req.GetRule()
+	port := leader.GetPostgresPort()
 
 	ctx, err := pm.actionLock.Acquire(ctx, "SetTermPrimary")
 	if err != nil {
@@ -770,6 +793,55 @@ func (pm *MultiPoolerManager) SetTermPrimary(ctx context.Context, req *consensus
 		return nil, mterrors.Wrap(err, "failed to build consensus status after SetTermPrimary")
 	}
 	return &consensusdatapb.SetTermPrimaryResponse{ConsensusStatus: cs}, nil
+}
+
+// Bounds for awaitWalReceiverStreaming. The total wait is short by design:
+// the recovery loop must keep moving so unrelated, higher-priority issues
+// (e.g. failover detection) aren't blocked behind a single pooler's
+// replication catch-up.
+const (
+	awaitStreamingBaseWait = 50 * time.Millisecond
+	awaitStreamingMaxWait  = 200 * time.Millisecond
+)
+
+// awaitWalReceiverStreaming polls the local postgres until pg_stat_wal_receiver
+// reports status="streaming" with a non-empty receive LSN, or the bounded
+// wait budget is exhausted.
+//
+// The action lock is NOT held while this runs: the mutation portion of
+// SetTermPrimary released it before the wait. Polling reads
+// pg_stat_wal_receiver, which doesn't require the action lock, and a
+// concurrent SetTermPrimary at a strictly-higher rule supersedes our work
+// cleanly — the new RPC's mutation will eventually surface "streaming"
+// against whichever leader won.
+func (pm *MultiPoolerManager) awaitWalReceiverStreaming(ctx context.Context) error {
+	r := retry.New(awaitStreamingBaseWait, awaitStreamingMaxWait)
+	var lastErr error
+	for _, err := range r.Attempts(ctx) {
+		if err != nil {
+			if lastErr != nil {
+				return mterrors.Wrap(lastErr, "timeout awaiting WAL receiver streaming")
+			}
+			return mterrors.Wrap(err, "context cancelled while awaiting WAL receiver streaming")
+		}
+		status, qerr := pm.queryReplicationStatus(ctx)
+		if qerr != nil {
+			lastErr = qerr
+			continue
+		}
+		if status.GetWalReceiverStatus() == "streaming" && status.GetLastReceiveLsn() != "" {
+			pm.logger.InfoContext(ctx, "WAL receiver streaming confirmed",
+				"last_receive_lsn", status.GetLastReceiveLsn())
+			return nil
+		}
+		lastErr = mterrors.Errorf(mtrpcpb.Code_INTERNAL,
+			"WAL receiver not streaming (status: %q, last_receive_lsn: %q)",
+			status.GetWalReceiverStatus(), status.GetLastReceiveLsn())
+	}
+	if lastErr == nil {
+		lastErr = mterrors.New(mtrpcpb.Code_DEADLINE_EXCEEDED, "timeout awaiting WAL receiver streaming")
+	}
+	return lastErr
 }
 
 // ConsensusStatus returns the current status of this node for consensus
