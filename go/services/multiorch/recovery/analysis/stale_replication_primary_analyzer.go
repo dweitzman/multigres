@@ -69,7 +69,7 @@ func (a *StaleReplicationPrimaryAnalyzer) ProblemCode() types.ProblemCode {
 }
 
 func (a *StaleReplicationPrimaryAnalyzer) RecoveryAction() types.RecoveryAction {
-	return a.factory.NewFixReplicationAction()
+	return a.factory.NewSetReplicationPrimaryAction()
 }
 
 func (a *StaleReplicationPrimaryAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, error) {
@@ -130,7 +130,7 @@ func (a *StaleReplicationPrimaryAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Pr
 			Priority:       types.PriorityHigh,
 			Scope:          types.ScopePooler,
 			DetectedAt:     time.Now(),
-			RecoveryAction: a.factory.NewFixReplicationAction(),
+			RecoveryAction: a.factory.NewSetReplicationPrimaryAction(),
 		})
 	}
 
@@ -153,7 +153,7 @@ func (a *StaleReplicationPrimaryAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Pr
 			Priority:       types.PriorityEmergency - types.Priority(i),
 			Scope:          types.ScopePooler,
 			DetectedAt:     time.Now(),
-			RecoveryAction: a.factory.NewFixReplicationAction(),
+			RecoveryAction: a.factory.NewSetReplicationPrimaryAction(),
 		})
 	}
 

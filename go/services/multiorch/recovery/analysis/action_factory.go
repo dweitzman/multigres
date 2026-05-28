@@ -68,9 +68,10 @@ func (f *RecoveryActionFactory) NewAppointLeaderAction() types.RecoveryAction {
 	return actions.NewAppointLeaderAction(f.config, f.coordinator, f.poolerStore, f.topoStore, f.logger)
 }
 
-// NewFixReplicationAction creates a fix replication action.
-func (f *RecoveryActionFactory) NewFixReplicationAction() types.RecoveryAction {
-	return actions.NewFixReplicationAction(f.config, f.rpcClient, f.poolerStore, f.topoStore, f.logger)
+// NewSetReplicationPrimaryAction creates an action that informs a pooler
+// about the current cluster leader via SetTermPrimary.
+func (f *RecoveryActionFactory) NewSetReplicationPrimaryAction() types.RecoveryAction {
+	return actions.NewSetReplicationPrimaryAction(f.config, f.rpcClient, f.poolerStore, f.topoStore, f.logger)
 }
 
 // NewReconcileCohortAction creates an action to add or remove a cohort member.
