@@ -60,6 +60,15 @@ const (
 	ProblemPoolerNotInCohort      ProblemCode = "PoolerNotInCohort"
 	ProblemCohortMemberIneligible ProblemCode = "CohortMemberIneligible"
 
+	// Consensus liveness problems.
+
+	// ProblemUnresolvedRevocation indicates a pooler has been holding a
+	// TermRevocation that hasn't progressed to a recorded rule for the
+	// revoked term — a runaway recruit that the original coordinator
+	// never finished (e.g. it crashed mid-flight). Remediation: trigger
+	// AppointLeader to push consensus forward.
+	ProblemUnresolvedRevocation ProblemCode = "UnresolvedRevocation"
+
 	// Non-actionable: if all hosts are down, there is no way we can failover.
 	ProblemLeaderAndReplicasDead ProblemCode = "LeaderAndReplicasDead"
 

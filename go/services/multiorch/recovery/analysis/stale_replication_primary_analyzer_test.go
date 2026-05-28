@@ -18,9 +18,11 @@ import (
 	"context"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/multigres/multigres/go/common/rpcclient"
 	"github.com/multigres/multigres/go/common/topoclient/memorytopo"
@@ -280,5 +282,163 @@ func TestStaleReplicationPrimaryAnalyzer_Analyze(t *testing.T) {
 		require.Error(t, err)
 		assert.Nil(t, problems)
 		assert.Contains(t, err.Error(), "factory not initialized")
+	})
+
+	// Runaway-recruit subcases. The analyzer should short-circuit to a
+	// single ProblemUnresolvedRevocation when the leader's term is below
+	// an accepted revocation that has been outstanding long enough.
+	oldCoordID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIORCH, Cell: "cell1", Name: "old-coord"}
+	leaderAtTerm := func(term int64) *PoolerAnalysis {
+		return &PoolerAnalysis{
+			PoolerID:      leaderID,
+			ShardKey:      shardKey,
+			IsLeader:      true,
+			IsInitialized: true,
+			ConsensusStatus: &clustermetadatapb.ConsensusStatus{
+				CurrentPosition: &clustermetadatapb.PoolerPosition{
+					Rule: &clustermetadatapb.ShardRule{
+						RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: term},
+						LeaderId:   leaderID,
+					},
+				},
+			},
+		}
+	}
+	poolerWithRevocation := func(id *clustermetadatapb.ID, revokedTerm int64, initiatedAt time.Time, recordedTerm int64) *PoolerAnalysis {
+		pa := &PoolerAnalysis{
+			PoolerID:        id,
+			ShardKey:        shardKey,
+			IsLeader:        false,
+			IsInitialized:   true,
+			ConsensusStatus: &clustermetadatapb.ConsensusStatus{},
+		}
+		if revokedTerm > 0 {
+			pa.ConsensusStatus.TermRevocation = &clustermetadatapb.TermRevocation{
+				RevokedBelowTerm:       revokedTerm,
+				AcceptedCoordinatorId:  oldCoordID,
+				CoordinatorInitiatedAt: timestamppb.New(initiatedAt),
+			}
+		}
+		if recordedTerm > 0 {
+			pa.ConsensusStatus.CurrentPosition = &clustermetadatapb.PoolerPosition{
+				Rule: &clustermetadatapb.ShardRule{
+					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: recordedTerm},
+					LeaderId:   leaderID,
+				},
+			}
+		}
+		return pa
+	}
+
+	t.Run("runaway recruit: leader below stale revocation triggers AppointLeader", func(t *testing.T) {
+		oldEnough := time.Now().Add(-(unresolvedRevocationThreshold + 5*time.Second))
+		sa := &ShardAnalysis{
+			ShardKey:          shardKey,
+			LeaderReachable:   true,
+			LeaderObservation: clusterObs, // leader at term 2
+			Leader:            leaderAtTerm(2),
+			Analyses: []*PoolerAnalysis{
+				leaderAtTerm(2),
+				// Replica accepted revocation at term 3 — leader is below.
+				poolerWithRevocation(replicaID, 3, oldEnough, 2),
+			},
+		}
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		require.Len(t, problems, 1, "should short-circuit to a single shard-level problem")
+		p := problems[0]
+		assert.Equal(t, types.ProblemUnresolvedRevocation, p.Code)
+		assert.Equal(t, types.ScopeShard, p.Scope)
+		assert.Equal(t, types.PriorityEmergency, p.Priority)
+		assert.Contains(t, p.Description, "term 2")
+		assert.Contains(t, p.Description, "term 3")
+		require.NotNil(t, p.RecoveryAction)
+	})
+
+	t.Run("runaway recruit: skipped when revocation is fresh", func(t *testing.T) {
+		recent := time.Now().Add(-(unresolvedRevocationThreshold - 2*time.Second))
+		stale := poolerWithRevocation(replicaID, 3, recent, 2)
+		// Add a non-self-claiming stale-rep-primary so we can confirm
+		// the per-pooler problem path still runs.
+		stale.ConsensusStatus.ReplicationPrimary = &clustermetadatapb.ReplicationPrimary{
+			Rule: &clustermetadatapb.ShardRule{
+				RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
+				LeaderId:   otherID,
+			},
+		}
+		sa := &ShardAnalysis{
+			ShardKey:          shardKey,
+			LeaderReachable:   true,
+			LeaderObservation: clusterObs,
+			Leader:            leaderAtTerm(2),
+			Analyses:          []*PoolerAnalysis{leaderAtTerm(2), stale},
+		}
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		require.Len(t, problems, 1)
+		assert.Equal(t, types.ProblemReplicaNotReplicating, problems[0].Code,
+			"fresh revocation should not preempt the normal stale-rep path")
+	})
+
+	t.Run("runaway recruit: skipped when leader is unreachable", func(t *testing.T) {
+		oldEnough := time.Now().Add(-(unresolvedRevocationThreshold + 5*time.Second))
+		sa := &ShardAnalysis{
+			ShardKey:          shardKey,
+			LeaderReachable:   false, // LeaderIsDead handles this case
+			LeaderObservation: clusterObs,
+			Leader:            leaderAtTerm(2),
+			Analyses: []*PoolerAnalysis{
+				leaderAtTerm(2),
+				poolerWithRevocation(replicaID, 3, oldEnough, 2),
+			},
+		}
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		assert.Empty(t, problems)
+	})
+
+	t.Run("runaway recruit: skipped when leader's term is at or above the revoked term", func(t *testing.T) {
+		oldEnough := time.Now().Add(-(unresolvedRevocationThreshold + 5*time.Second))
+		// Replica has a stale revocation but leader has caught up.
+		// Replica also points at the cluster leader so it's otherwise
+		// healthy — we want this test to isolate the runaway-recruit
+		// branch from the per-pooler stale-rep-primary branch.
+		healthyReplica := poolerWithRevocation(replicaID, 3, oldEnough, 3)
+		healthyReplica.ConsensusStatus.ReplicationPrimary = &clustermetadatapb.ReplicationPrimary{
+			Rule: &clustermetadatapb.ShardRule{
+				RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 3},
+				LeaderId:   leaderID,
+			},
+		}
+		sa := &ShardAnalysis{
+			ShardKey:          shardKey,
+			LeaderReachable:   true,
+			LeaderObservation: clusterObs,
+			Leader:            leaderAtTerm(3),
+			Analyses:          []*PoolerAnalysis{leaderAtTerm(3), healthyReplica},
+		}
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		assert.Empty(t, problems, "leader at/above revoked term — no runaway")
+	})
+
+	t.Run("runaway recruit: picks highest revoked term across multiple poolers", func(t *testing.T) {
+		oldEnough := time.Now().Add(-(unresolvedRevocationThreshold + 5*time.Second))
+		other2 := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "replica-2"}
+		sa := &ShardAnalysis{
+			ShardKey:          shardKey,
+			LeaderReachable:   true,
+			LeaderObservation: clusterObs,
+			Leader:            leaderAtTerm(2),
+			Analyses: []*PoolerAnalysis{
+				leaderAtTerm(2),
+				poolerWithRevocation(replicaID, 3, oldEnough, 2),
+				poolerWithRevocation(other2, 5, oldEnough, 2),
+			},
+		}
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		require.Len(t, problems, 1)
+		assert.Contains(t, problems[0].Description, "term 5")
 	})
 }

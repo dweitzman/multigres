@@ -47,6 +47,13 @@ import (
 // SetTermPrimary handler dispatches between the stale-primary demote
 // branch and the standby retarget branch based on local postgres state.
 //
+// Special case — runaway recruit: if the current leader's term is
+// strictly less than some pooler's accepted revocation, SetTermPrimary
+// against any pooler would be rejected at the pooler side
+// (IsRuleRevoked). The analyzer suppresses the per-pooler problems and
+// emits a single ProblemUnresolvedRevocation that triggers
+// AppointLeader instead, advancing consensus past the runaway.
+//
 // Separating the codes here lets recovery prioritize stale-primary
 // remediation ahead of follower retargeting, and lets integration tests
 // assert on the right event shape (primary.demotion vs node.join).
@@ -83,6 +90,14 @@ func (a *StaleReplicationPrimaryAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Pr
 	clusterLeaderID := sa.LeaderObservation.GetLeaderId()
 	if clusterLeaderID == nil {
 		return nil, nil
+	}
+
+	// Runaway-recruit short-circuit: if the leader is reachable but its
+	// term is below an accepted revocation that's been outstanding for
+	// long enough, SetTermPrimary against any pooler would be rejected
+	// by IsRuleRevoked. Emit AppointLeader instead.
+	if problem := a.unresolvedRevocationProblem(sa); problem != nil {
+		return []types.Problem{*problem}, nil
 	}
 
 	var problems []types.Problem
@@ -168,4 +183,94 @@ func leaderIDName(id *clustermetadatapb.ID) string {
 		return "<no observation>"
 	}
 	return id.GetName()
+}
+
+// unresolvedRevocationThreshold is how long a TermRevocation can sit
+// across the cohort without the leader catching up to (or beyond) the
+// revoked term before we suspect the originating recruit went runaway.
+// Short enough that a wedged cluster gets nudged within seconds; long
+// enough to absorb the normal recruit → propose → first-rule-record
+// window.
+const unresolvedRevocationThreshold = 20 * time.Second
+
+// unresolvedRevocationProblem checks whether the current leader's term
+// is below an accepted TermRevocation that's been outstanding longer
+// than unresolvedRevocationThreshold. When it is, SetTermPrimary
+// against any pooler would be rejected by IsRuleRevoked, so the right
+// move is to AppointLeader at a strictly higher term instead.
+//
+// Skipped (returns nil) when the leader is unreachable or unknown —
+// LeaderIsDead drives recovery in that case and we don't want to
+// double-fire.
+//
+// TODO: end-to-end test for the runaway-recruit scenario. Simulate a
+// coordinator crashing between Recruit (revocation accepted by some
+// poolers) and Propose. A second coordinator should detect via this
+// path and complete leader appointment at a strictly higher term.
+func (a *StaleReplicationPrimaryAnalyzer) unresolvedRevocationProblem(sa *ShardAnalysis) *types.Problem {
+	if sa.Leader == nil || !sa.LeaderReachable {
+		return nil
+	}
+	leaderTerm := sa.Leader.ConsensusStatus.GetCurrentPosition().GetRule().GetRuleNumber().GetCoordinatorTerm()
+
+	var maxStaleTerm int64
+	var oldestInitiatedAt time.Time
+	var initiatingCoordinator string
+	for _, pa := range sa.Analyses {
+		rev := pa.ConsensusStatus.GetTermRevocation()
+		if rev == nil {
+			continue
+		}
+		revoked := rev.GetRevokedBelowTerm()
+		if revoked <= leaderTerm {
+			// Leader is at or above what was promised to be revoked —
+			// SetTermPrimary at the leader's rule will be accepted by
+			// IsRuleRevoked's rule-vs-revocation comparison.
+			continue
+		}
+		initiated := rev.GetCoordinatorInitiatedAt()
+		if initiated == nil {
+			continue
+		}
+		t := initiated.AsTime()
+		if time.Since(t) < unresolvedRevocationThreshold {
+			continue
+		}
+		if revoked > maxStaleTerm {
+			maxStaleTerm = revoked
+			oldestInitiatedAt = t
+			initiatingCoordinator = rev.GetAcceptedCoordinatorId().GetName()
+			continue
+		}
+		// Multiple poolers may report slightly different timestamps for
+		// the same recruit (clock skew, RPC ordering). The oldest is
+		// the strongest evidence of how long the runaway has been
+		// outstanding.
+		if revoked == maxStaleTerm && (oldestInitiatedAt.IsZero() || t.Before(oldestInitiatedAt)) {
+			oldestInitiatedAt = t
+			initiatingCoordinator = rev.GetAcceptedCoordinatorId().GetName()
+		}
+	}
+	if maxStaleTerm == 0 {
+		return nil
+	}
+
+	return &types.Problem{
+		Code:      types.ProblemUnresolvedRevocation,
+		CheckName: a.Name(),
+		ShardKey:  sa.ShardKey,
+		Description: fmt.Sprintf(
+			"leader %s is at term %d, but a TermRevocation accepted by pooler(s) at term %d (initiated by %s at %s, %s ago) demands a higher term — runaway recruit; appointing leader",
+			sa.Leader.PoolerID.GetName(),
+			leaderTerm,
+			maxStaleTerm,
+			initiatingCoordinator,
+			oldestInitiatedAt.Format(time.RFC3339),
+			time.Since(oldestInitiatedAt).Truncate(time.Second),
+		),
+		Priority:       types.PriorityEmergency,
+		Scope:          types.ScopeShard,
+		DetectedAt:     time.Now(),
+		RecoveryAction: a.factory.NewAppointLeaderAction(),
+	}
 }

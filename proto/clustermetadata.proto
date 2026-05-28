@@ -474,8 +474,8 @@ message TermRevocation {
   ID accepted_coordinator_id = 2;
 
   // When the coordinator created this term, set by the coordinator before
-  // recruiting. All poolers that accept the same recruitment store the same value.
-  // TODO: populate once RecruitRequest carries this timestamp.
+  // recruiting. All poolers that accept the same recruitment store the same
+  // value.
   google.protobuf.Timestamp coordinator_initiated_at = 3;
 
   // The rule the coordinator observed across the cohort at recruit time —

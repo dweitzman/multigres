@@ -1868,8 +1868,8 @@ type TermRevocation struct {
 	// a different coordinator at the same term is refused.
 	AcceptedCoordinatorId *ID `protobuf:"bytes,2,opt,name=accepted_coordinator_id,json=acceptedCoordinatorId,proto3" json:"accepted_coordinator_id,omitempty"`
 	// When the coordinator created this term, set by the coordinator before
-	// recruiting. All poolers that accept the same recruitment store the same value.
-	// TODO: populate once RecruitRequest carries this timestamp.
+	// recruiting. All poolers that accept the same recruitment store the same
+	// value.
 	CoordinatorInitiatedAt *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=coordinator_initiated_at,json=coordinatorInitiatedAt,proto3" json:"coordinator_initiated_at,omitempty"`
 	// The rule the coordinator observed across the cohort at recruit time —
 	// the "from" side of the transition this recruit was authoring. Used as
