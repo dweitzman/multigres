@@ -384,7 +384,7 @@ func TestStaleReplicationPrimaryAnalyzer_Analyze(t *testing.T) {
 		oldEnough := time.Now().Add(-(unresolvedRevocationThreshold + 5*time.Second))
 		sa := &ShardAnalysis{
 			ShardKey:          shardKey,
-			LeaderReachable:   false, // LeaderIsDead handles this case
+			LeaderReachable:   false, // LeaderUnreachable handles this case
 			LeaderObservation: clusterObs,
 			Leader:            leaderAtTerm(2),
 			Analyses: []*PoolerAnalysis{

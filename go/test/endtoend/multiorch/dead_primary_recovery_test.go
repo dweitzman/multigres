@@ -403,9 +403,9 @@ func TestDeadPrimaryRecovery(t *testing.T) {
 		// The final failover in this test is triggered via Recruit on the
 		// primary (emergency demote), which sets resignedLeaderAtTerm and is
 		// detected by LeaderResignedAnalyzer. Earlier iterations use SIGKILL
-		// and fire LeaderIsDeadAnalyzer. Either reason indicates leader failure.
-		assert.Regexp(t, "LeaderIsDead|LeaderResigned", reason,
-			"reason should indicate leader failure (LeaderIsDead) or resignation (LeaderResigned)")
+		// and fire LeaderUnreachableAnalyzer. Either reason indicates leader failure.
+		assert.Regexp(t, "LeaderUnreachable|LeaderResigned", reason,
+			"reason should indicate leader failure (LeaderUnreachable) or resignation (LeaderResigned)")
 
 		// Verify cohort_members and accepted_members are valid JSON arrays
 		var cohortMembers, acceptedMembers []string

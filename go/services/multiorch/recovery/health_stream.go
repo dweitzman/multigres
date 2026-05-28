@@ -33,6 +33,7 @@ import (
 	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	"github.com/multigres/multigres/go/services/multiorch/store"
+	"github.com/multigres/multigres/go/tools/pgutil"
 	"github.com/multigres/multigres/go/tools/retry"
 )
 
@@ -415,6 +416,12 @@ func (hs *HealthStream) applySnapshot(ctx context.Context, poolerID string, pool
 
 	poolerIDStr := topoclient.MultiPoolerIDString(poolerHealth.MultiPooler.Id)
 	update := func(existing *multiorchdatapb.PoolerHealthState) *multiorchdatapb.PoolerHealthState {
+		// Capture the previously-known LSN before we overwrite ConsensusStatus,
+		// so we can stamp last_lsn_advance_time when the new snapshot's LSN
+		// is strictly higher.
+		prevLsn := existing.GetConsensusStatus().GetCurrentPosition().GetLsn()
+		newLsn := snapshot.Status.GetConsensusStatus().GetCurrentPosition().GetLsn()
+
 		existing.LastCheckSuccessful = now
 		existing.LastSeen = now
 		existing.IsUpToDate = true
@@ -435,6 +442,17 @@ func (hs *HealthStream) applySnapshot(ctx context.Context, poolerID string, pool
 		}
 		// NOTE: when PostgresReady is false, LastPostgresReadyTime is intentionally
 		// left at its previous value so callers can reason about "last known good" time.
+
+		// Stamp LastLsnAdvanceTime on forward LSN movement. Used by
+		// LeaderNotWritableAnalyzer as a sanity backup to the primary's
+		// own pg_last_committed_xact() signal. Heartbeats commit
+		// regularly on the primary, so a healthy primary advances this
+		// every Ns; replicas advance it as they receive WAL bytes.
+		if lsnAdvanced(prevLsn, newLsn) {
+			existing.LastLsnAdvanceTime = now
+		}
+		// When the LSN is equal or unparseable, leave the timestamp at
+		// its previous value (sticky — analyzers compare against now()).
 		existing.StreamSnapshotsReceived++
 		return existing
 	}
@@ -473,4 +491,31 @@ func (hs *HealthStream) markDisconnected(poolerID string) {
 		return existing
 	}
 	hs.store.DoUpdate(poolerID, cb)
+}
+
+// lsnAdvanced reports whether newLsn parses strictly higher than prevLsn.
+// Returns false on empty strings or parse failures (don't stamp advance on
+// noise). Defined here so health_stream.go can keep the LSN-progress
+// timestamp up to date without pulling pgutil into more places than
+// necessary.
+func lsnAdvanced(prevLsn, newLsn string) bool {
+	if newLsn == "" {
+		return false
+	}
+	if prevLsn == "" {
+		// First observation with a usable LSN — treat as an advance so
+		// the timestamp gets stamped (otherwise a perpetually-idle
+		// system would never set it).
+		_, err := pgutil.ParseLSN(newLsn)
+		return err == nil
+	}
+	prev, err := pgutil.ParseLSN(prevLsn)
+	if err != nil {
+		return false
+	}
+	curr, err := pgutil.ParseLSN(newLsn)
+	if err != nil {
+		return false
+	}
+	return curr > prev
 }

@@ -250,6 +250,9 @@ func (g *AnalysisGenerator) generateAnalysisForPooler(
 				analysis.WalReceiverNotStreamingSince = ts.AsTime()
 			}
 		}
+		if ts := pooler.GetLastLsnAdvanceTime(); ts != nil {
+			analysis.LastLsnAdvance = ts.AsTime()
+		}
 	}
 
 	return analysis
@@ -427,7 +430,7 @@ func (g *AnalysisGenerator) computeShardLevelFields(sa *ShardAnalysis, poolers m
 		sa.LeaderHasResigned = types.LeaderNeedsReplacement(leaderPooler)
 		// LeaderReachable requires the leader to be serving as PRIMARY and
 		// not have resigned. A resigned leader has voluntarily stepped down;
-		// treating it as reachable would prevent LeaderIsDead detection even
+		// treating it as reachable would prevent LeaderUnreachable detection even
 		// when postgres is still running on the demoted node.
 		sa.LeaderReachable = leaderPooler.IsLastCheckValid &&
 			leaderPooler.GetStatus().GetPostgresReady() &&

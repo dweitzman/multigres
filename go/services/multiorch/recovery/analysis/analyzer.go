@@ -46,7 +46,8 @@ func DefaultAnalyzers(factory *RecoveryActionFactory) []Analyzer {
 			&ShardNeedsInitializationAnalyzer{factory: factory},
 			&StaleReplicationPrimaryAnalyzer{factory: factory},
 			&LeaderResignedAnalyzer{factory: factory},
-			&LeaderIsDeadAnalyzer{factory: factory},
+			&LeaderUnreachableAnalyzer{factory: factory},
+			&WritesNotProgressingAnalyzer{factory: factory},
 			&CohortMismatchAnalyzer{factory: factory},
 			&StuckReplicationAnalyzer{factory: factory},
 		}

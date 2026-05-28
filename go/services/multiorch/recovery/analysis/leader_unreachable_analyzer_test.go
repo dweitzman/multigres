@@ -31,7 +31,7 @@ import (
 	"github.com/multigres/multigres/go/services/multiorch/store"
 )
 
-func TestLeaderIsDeadAnalyzer_Analyze(t *testing.T) {
+func TestLeaderUnreachableAnalyzer_Analyze(t *testing.T) {
 	// Set up factory for tests
 	ctx := context.Background()
 	ts, _ := memorytopo.NewServerAndFactory(ctx, "cell1")
@@ -47,13 +47,13 @@ func TestLeaderIsDeadAnalyzer_Analyze(t *testing.T) {
 	cfg := config.NewTestConfig()
 	factory := NewRecoveryActionFactory(cfg, poolerStore, rpcClient, ts, coord, slog.Default())
 
-	analyzer := &LeaderIsDeadAnalyzer{factory: factory}
+	analyzer := &LeaderUnreachableAnalyzer{factory: factory}
 
 	leaderID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "leader-1"}
 	shardKey := &clustermetadatapb.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"}
 
 	// deadLeaderShardAnalysis builds a ShardAnalysis that has a dead leader and an
-	// initialized replica — the base case for LeaderIsDead detection.
+	// initialized replica — the base case for LeaderUnreachable detection.
 	deadLeaderShardAnalysis := func(overrides ...func(*ShardAnalysis)) *ShardAnalysis {
 		sa := &ShardAnalysis{
 			ShardKey:              shardKey,
@@ -85,7 +85,7 @@ func TestLeaderIsDeadAnalyzer_Analyze(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, problems, 1)
 		problem := problems[0]
-		require.Equal(t, types.ProblemLeaderIsDead, problem.Code)
+		require.Equal(t, types.ProblemLeaderUnreachable, problem.Code)
 		require.Equal(t, types.ScopeShard, problem.Scope)
 		require.Equal(t, types.PriorityEmergency, problem.Priority)
 		require.Equal(t, leaderID, problem.PoolerID)
@@ -143,7 +143,7 @@ func TestLeaderIsDeadAnalyzer_Analyze(t *testing.T) {
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
 		require.Len(t, problems, 1)
-		require.Equal(t, types.ProblemLeaderIsDead, problems[0].Code)
+		require.Equal(t, types.ProblemLeaderUnreachable, problems[0].Code)
 		require.Equal(t, leaderID, problems[0].PoolerID)
 	})
 
@@ -156,12 +156,12 @@ func TestLeaderIsDeadAnalyzer_Analyze(t *testing.T) {
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
 		require.Len(t, problems, 1)
-		require.Equal(t, types.ProblemLeaderIsDead, problems[0].Code)
+		require.Equal(t, types.ProblemLeaderUnreachable, problems[0].Code)
 		require.Equal(t, leaderID, problems[0].PoolerID)
 	})
 
 	t.Run("analyzer name is correct", func(t *testing.T) {
-		require.Equal(t, types.CheckName("LeaderIsDead"), analyzer.Name())
+		require.Equal(t, types.CheckName("LeaderUnreachable"), analyzer.Name())
 	})
 
 	t.Run("ignores when leader pooler down but replicas connected (postgres still running, recent timestamp)", func(t *testing.T) {
@@ -203,7 +203,7 @@ func TestLeaderIsDeadAnalyzer_Analyze(t *testing.T) {
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
 		require.Len(t, problems, 1, "should trigger failover when postgres process is dead even if replicas still appear connected")
-		require.Equal(t, types.ProblemLeaderIsDead, problems[0].Code)
+		require.Equal(t, types.ProblemLeaderUnreachable, problems[0].Code)
 	})
 
 	t.Run("triggers failover when replicas connected but postgres timestamp expired", func(t *testing.T) {
@@ -217,7 +217,7 @@ func TestLeaderIsDeadAnalyzer_Analyze(t *testing.T) {
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
 		require.Len(t, problems, 1, "should trigger failover when postgres timestamp has expired")
-		require.Equal(t, types.ProblemLeaderIsDead, problems[0].Code)
+		require.Equal(t, types.ProblemLeaderUnreachable, problems[0].Code)
 	})
 
 	t.Run("suppresses failover with zero timestamp when replicas are streaming", func(t *testing.T) {
@@ -265,7 +265,7 @@ func TestLeaderIsDeadAnalyzer_Analyze(t *testing.T) {
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
 		require.Len(t, problems, 1, "should detect dead leader when postgres crashes during promotion")
-		require.Equal(t, types.ProblemLeaderIsDead, problems[0].Code)
+		require.Equal(t, types.ProblemLeaderUnreachable, problems[0].Code)
 	})
 
 	t.Run("does not suppress LeaderIsDead when multipooler unreachable during promotion", func(t *testing.T) {
@@ -279,6 +279,6 @@ func TestLeaderIsDeadAnalyzer_Analyze(t *testing.T) {
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
 		require.Len(t, problems, 1, "should detect dead leader when multipooler is unreachable even if promotion flag is set")
-		require.Equal(t, types.ProblemLeaderIsDead, problems[0].Code)
+		require.Equal(t, types.ProblemLeaderUnreachable, problems[0].Code)
 	})
 }

@@ -69,7 +69,7 @@ type ShardAnalysis struct {
 	// HasInitializedReplica is true if at least one non-leader, reachable, initialized pooler exists
 	// in the shard. This is a postgres-layer check (is there a standby that has joined the cluster?),
 	// not a consensus-layer check — it does not require the pooler to be a cohort member. Used by
-	// LeaderIsDeadAnalyzer to avoid false positives when no postgres standby can observe the leader.
+	// LeaderUnreachableAnalyzer to avoid false positives when no postgres standby can observe the leader.
 	HasInitializedReplica bool
 
 	// ReplicasConnectedToLeader is true only if ALL postgres standbys in the shard are still
@@ -101,7 +101,7 @@ type ShardAnalysis struct {
 	// PromotingPrimaryID is the ID of the topology primary that is currently running
 	// pg_promote() but has not yet transitioned to accepting connections. Nil when no
 	// promotion is in progress.
-	// Used by LeaderIsDeadAnalyzer to suppress spurious failover detection during the
+	// Used by LeaderUnreachableAnalyzer to suppress spurious failover detection during the
 	// brief window (~5–10s) when the newly promoted node's postgres is not yet ready.
 	PromotingPrimaryID *clustermetadatapb.ID
 }
@@ -159,6 +159,13 @@ type PoolerAnalysis struct {
 	// Consumers apply a duration threshold to absorb bootstrap windows
 	// and transient reconnects.
 	WalReceiverNotStreamingSince time.Time
+
+	// LastLsnAdvance is the orch-side timestamp of when this pooler's
+	// CurrentPosition.Lsn was last observed to move forward. Zero
+	// until the first advance observation. Used by
+	// WritesNotProgressingAnalyzer to detect "replica claims to be
+	// streaming but is not actually receiving WAL" conditions.
+	LastLsnAdvance time.Time
 
 	// ConsensusStatus from the pooler's most recent StatusResponse snapshot.
 	// Used to derive the primary term via commonconsensus.PrimaryTerm(ConsensusStatus).

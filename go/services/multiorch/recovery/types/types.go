@@ -38,7 +38,12 @@ const (
 	ProblemShardNeedsInitialization ProblemCode = "ShardNeedsInitialization"
 
 	// Leader problems (catastrophic - block everything else).
-	ProblemLeaderIsDead      ProblemCode = "LeaderIsDead"
+
+	// ProblemLeaderUnreachable indicates the cluster leader cannot
+	// be reached — by orch directly AND by other poolers acting as
+	// witnesses (their WAL receivers can't reach the leader's
+	// postgres).
+	ProblemLeaderUnreachable ProblemCode = "LeaderUnreachable"
 	ProblemLeaderResigned    ProblemCode = "LeaderResigned"
 	ProblemLeaderDiskStalled ProblemCode = "LeaderDiskStalled"
 	ProblemStaleLeader       ProblemCode = "StaleLeader"
@@ -68,6 +73,17 @@ const (
 	// never finished (e.g. it crashed mid-flight). Remediation: trigger
 	// AppointLeader to push consensus forward.
 	ProblemUnresolvedRevocation ProblemCode = "UnresolvedRevocation"
+
+	// ProblemWritesNotProgressing indicates the cohort's replicas
+	// believe they're streaming from the primary, but none of them have
+	// observed an LSN advance for longer than the threshold. Heartbeats
+	// commit every few seconds on a healthy primary, so this signals
+	// the primary has stopped writing WAL — disk wedged, fsync stuck,
+	// or similar "alive enough for handshakes but not actually serving"
+	// failure. Remediation: AppointLeader at a new term. Distinct from
+	// LeaderUnreachable, which keys off pooler reachability rather than
+	// write progress.
+	ProblemWritesNotProgressing ProblemCode = "WritesNotProgressing"
 
 	// Non-actionable: if all hosts are down, there is no way we can failover.
 	ProblemLeaderAndReplicasDead ProblemCode = "LeaderAndReplicasDead"

@@ -200,7 +200,7 @@ const unresolvedRevocationThreshold = 20 * time.Second
 // move is to AppointLeader at a strictly higher term instead.
 //
 // Skipped (returns nil) when the leader is unreachable or unknown —
-// LeaderIsDead drives recovery in that case and we don't want to
+// LeaderUnreachable drives recovery in that case and we don't want to
 // double-fire.
 //
 // TODO: end-to-end test for the runaway-recruit scenario. Simulate a

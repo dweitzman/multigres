@@ -79,4 +79,20 @@ message PoolerHealthState {
 
   // Monotonic counter of health snapshots received on the current or past streams.
   int64 stream_snapshots_received = 23;
+
+  // Wall-clock time (multiorch's clock) at which we last observed
+  // this pooler's ConsensusStatus.CurrentPosition.Lsn move strictly
+  // forward compared to the previously cached value. Updated by the
+  // health stream on each snapshot whose LSN parses higher than the
+  // stored snapshot's LSN.
+  //
+  // Used by LeaderNotWritableAnalyzer as a sanity backup to the
+  // primary-side last_committed_xact_time signal — orch's
+  // observation cadence and network delays affect this value, so
+  // last_committed_xact_time is preferred when available, but this
+  // field works for replicas too (their last_receive_lsn advances on
+  // every WAL byte received, including heartbeats).
+  //
+  // Zero / unset until the first LSN advance observation.
+  google.protobuf.Timestamp last_lsn_advance_time = 24;
 }
