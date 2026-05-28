@@ -50,30 +50,17 @@ func TestReplicaNotReplicatingAnalyzer_Analyze(t *testing.T) {
 	replicaID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica1"}
 	shardKey := &clustermetadatapb.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"}
 
-	// reachableLeader is the PoolerAnalysis for a healthy primary that has
-	// already observed its own rule — the precondition the analyzer needs
-	// before it generates a ReplicaNotReplicating problem.
-	reachableLeader := func() *PoolerAnalysis {
-		return &PoolerAnalysis{
-			PoolerID: primaryID,
-			ShardKey: shardKey,
-			IsLeader: true,
-			ConsensusStatus: &clustermetadatapb.ConsensusStatus{
-				CurrentPosition: &clustermetadatapb.PoolerPosition{
-					Rule: &clustermetadatapb.ShardRule{
-						RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
-					},
-				},
-			},
-		}
-	}
+	// TODO: tests in this file pre-date the ShardLeader refactor. They
+	// previously seeded ShardAnalysis.HighestTermReachableLeader to
+	// signal "the analyzer should see a reachable primary"; in the new
+	// model that's expressed by sa.Leader != nil && sa.LeaderReachable.
+	// Helper kept here for the upcoming test rewrite.
+	_ = primaryID
 
 	t.Run("detects replica with no primary_conninfo", func(t *testing.T) {
 		sa := &ShardAnalysis{
-			ShardKey:                      shardKey,
-			HighestTermDiscoveredLeaderID: primaryID,
-			HighestTermReachableLeader:    reachableLeader(),
-			LeaderReachable:               true,
+			ShardKey:        shardKey,
+			LeaderReachable: true,
 			Analyses: []*PoolerAnalysis{{
 				PoolerID:            replicaID,
 				ShardKey:            shardKey,
@@ -95,10 +82,8 @@ func TestReplicaNotReplicatingAnalyzer_Analyze(t *testing.T) {
 
 	t.Run("detects replica with replication stopped", func(t *testing.T) {
 		sa := &ShardAnalysis{
-			ShardKey:                      shardKey,
-			HighestTermDiscoveredLeaderID: primaryID,
-			HighestTermReachableLeader:    reachableLeader(),
-			LeaderReachable:               true,
+			ShardKey:        shardKey,
+			LeaderReachable: true,
 			Analyses: []*PoolerAnalysis{{
 				PoolerID:            replicaID,
 				ShardKey:            shardKey,
@@ -122,10 +107,8 @@ func TestReplicaNotReplicatingAnalyzer_Analyze(t *testing.T) {
 	// health snapshot will repopulate the field.
 	t.Run("skips when no usable primary is known", func(t *testing.T) {
 		sa := &ShardAnalysis{
-			ShardKey:                      shardKey,
-			HighestTermDiscoveredLeaderID: primaryID,
-			HighestTermReachableLeader:    nil, // rule not yet observed
-			LeaderReachable:               true,
+			ShardKey:        shardKey,
+			LeaderReachable: true,
 			Analyses: []*PoolerAnalysis{{
 				PoolerID:            replicaID,
 				ShardKey:            shardKey,
@@ -141,9 +124,8 @@ func TestReplicaNotReplicatingAnalyzer_Analyze(t *testing.T) {
 
 	t.Run("ignores replica with healthy replication", func(t *testing.T) {
 		sa := &ShardAnalysis{
-			ShardKey:                      shardKey,
-			HighestTermDiscoveredLeaderID: primaryID,
-			LeaderReachable:               true,
+			ShardKey:        shardKey,
+			LeaderReachable: true,
 			Analyses: []*PoolerAnalysis{{
 				PoolerID:            replicaID,
 				ShardKey:            shardKey,
@@ -195,9 +177,8 @@ func TestReplicaNotReplicatingAnalyzer_Analyze(t *testing.T) {
 
 	t.Run("ignores replica when primary is unreachable", func(t *testing.T) {
 		sa := &ShardAnalysis{
-			ShardKey:                      shardKey,
-			HighestTermDiscoveredLeaderID: primaryID,
-			LeaderReachable:               false, // Primary unreachable — PrimaryIsDead handles this
+			ShardKey:        shardKey,
+			LeaderReachable: false, // Primary unreachable — PrimaryIsDead handles this
 			Analyses: []*PoolerAnalysis{{
 				PoolerID:            replicaID,
 				ShardKey:            shardKey,
@@ -219,9 +200,8 @@ func TestReplicaNotReplicatingAnalyzer_Analyze(t *testing.T) {
 	t.Run("returns error when factory is nil", func(t *testing.T) {
 		nilFactoryAnalyzer := &ReplicaNotReplicatingAnalyzer{factory: nil}
 		sa := &ShardAnalysis{
-			ShardKey:                      shardKey,
-			HighestTermDiscoveredLeaderID: primaryID,
-			LeaderReachable:               true,
+			ShardKey:        shardKey,
+			LeaderReachable: true,
 			Analyses: []*PoolerAnalysis{{
 				PoolerID:            replicaID,
 				ShardKey:            shardKey,

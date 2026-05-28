@@ -39,19 +39,19 @@ type ShardAnalysis struct {
 
 	// Shard-level aggregates computed once by the generator.
 
-	// Leaders is the list of all reachable poolers in the shard that are reporting
-	// as the consensus leader. More than one entry usually indicates a stale-leader but
-	// could be a sign of split-brain if there's a consensus bug or unsafe manual override.
-	Leaders []*PoolerAnalysis
+	// LeaderObservation is the cluster-wide authoritative leader claim
+	// derived from every pooler's etcd CurrentLeadership and health-stream
+	// ConsensusStatus via consensus.MostAuthoritativeObservation. Nil
+	// when no observation exists from any source yet. The leader's pooler
+	// ID is LeaderObservation.GetLeaderId() — use that anywhere the old
+	// HighestTermDiscoveredLeaderID was read.
+	LeaderObservation *clustermetadatapb.LeaderObservation
 
-	// HighestTermReachableLeader is the leader with the highest LeaderTerm among all
-	// leaders in Leaders. Nil when Leaders is empty or there is a tie.
-	HighestTermReachableLeader *PoolerAnalysis
-
-	// HighestTermDiscoveredLeaderID is the pooler ID of the highest-term leader known to exist
-	// in this shard's topology, regardless of whether it is currently reachable.
-	// Nil if no leader has been recorded in topology yet.
-	HighestTermDiscoveredLeaderID *clustermetadatapb.ID
+	// Leader is the PoolerAnalysis for the cluster-authoritative leader,
+	// or nil if the named pooler is not in this shard's known set (e.g.
+	// observed via a peer's health stream but record not yet discovered).
+	// All Leader* convenience booleans below are populated from this.
+	Leader *PoolerAnalysis
 
 	// LeaderReachable is true if the topology leader's pooler is reachable AND
 	// its Postgres is running. False when TopologyLeaderID is nil.
@@ -161,6 +161,26 @@ type PoolerAnalysis struct {
 	// (cohort eligibility, leader-resignation request). May be nil for older
 	// poolers that don't publish it.
 	AvailabilityStatus *clustermetadatapb.AvailabilityStatus
+}
+
+// SelfLeaderObservation returns this pooler's own most-recent
+// health-stream view of who the consensus leader is, derived from its
+// ConsensusStatus.ReplicationPrimary.Rule. Returns nil if the pooler
+// hasn't reported a rule yet.
+//
+// Distinct from ShardAnalysis.LeaderObservation, which is the
+// cluster-wide max over all poolers' observations. Used by analyzers
+// to detect "stale primaries" — poolers whose self-view still names
+// themselves at an older rule than the cluster authoritative view.
+func (pa *PoolerAnalysis) SelfLeaderObservation() *clustermetadatapb.LeaderObservation {
+	rule := pa.ConsensusStatus.GetReplicationPrimary().GetRule()
+	if rule == nil {
+		return nil
+	}
+	return &clustermetadatapb.LeaderObservation{
+		LeaderId:         rule.GetLeaderId(),
+		LeaderRuleNumber: rule.GetRuleNumber(),
+	}
 }
 
 // compareLeaderTimeline compares two leader PoolerAnalysis entries by the

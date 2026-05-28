@@ -20,22 +20,25 @@ import (
 	"slices"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
-	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
 )
 
-// StaleLeaderAnalyzer detects stale leaders that came back online after failover.
-// This happens when an old primary restarts without being properly demoted.
+// StaleLeaderAnalyzer detects stale primaries — poolers whose own
+// health-stream view still names themselves as leader, but at a rule
+// strictly older than the cluster-wide authoritative observation.
+// This happens when an old primary restarts without being properly
+// demoted, or when SetTermPrimary hasn't yet reached the demoted node.
 //
-// The analyzer operates at the shard level: when multiple leaders are detected,
-// it reports all of them except the highest-term leader as stale. Problems are
-// sorted most-stale-first with descending priorities so the recovery system addresses
-// the most out-of-date primary first.
+// Problems are sorted most-stale-first with descending priorities so
+// the recovery system addresses the most out-of-date primary first.
 //
-// Note: This is NOT true split-brain. True split-brain means both primaries can accept
-// writes. In this scenario, the new primary cannot accept writes because it cannot
-// recruit standbys while the stale leader exists.
+// Note: This is NOT true split-brain. True split-brain means both
+// primaries can accept writes. In this scenario, the new primary
+// cannot accept writes because it cannot recruit standbys while the
+// stale leader exists.
 type StaleLeaderAnalyzer struct {
 	factory *RecoveryActionFactory
 }
@@ -57,27 +60,35 @@ func (a *StaleLeaderAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, error
 		return nil, errors.New("recovery action factory not initialized")
 	}
 
-	// Need multiple leaders to detect staleness.
-	if len(sa.Leaders) <= 1 {
+	// Need a cluster-authoritative leader observation to compare against.
+	if sa.LeaderObservation.GetLeaderId() == nil {
 		return nil, nil
 	}
 
-	// A tie in LeaderTerm indicates a consensus bug — skip automatic demotion.
-	if sa.HighestTermReachableLeader == nil {
-		return nil, nil
-	}
-
-	// Collect stale leaders: every topology-PRIMARY pooler that is not the
-	// highest-term leader is stale. This includes poolers whose own rule has
-	// caught up (LeaderTerm == 0 because the rule now names a different
-	// leader) — exactly the post-emergency-demotion state we need to repair.
-	mostAdvancedIDStr := topoclient.MultiPoolerIDString(sa.HighestTermReachableLeader.PoolerID)
+	// A stale primary is a pooler whose own health-stream observation
+	// still names itself as leader, but the cluster authoritative view
+	// names someone else. The rule number on the self-observation
+	// doesn't matter here — if pooler-A claims to be leader at 5.1 and
+	// the cluster also names pooler-A (at any rule, possibly newer),
+	// A is still the leader, not stale.
+	clusterLeaderID := sa.LeaderObservation.GetLeaderId()
 	var staleLeaders []*PoolerAnalysis
-	for _, p := range sa.Leaders {
-		if topoclient.MultiPoolerIDString(p.PoolerID) == mostAdvancedIDStr {
+	for _, pa := range sa.Analyses {
+		if pa.IsLeader {
 			continue
 		}
-		staleLeaders = append(staleLeaders, p)
+		selfObs := pa.SelfLeaderObservation()
+		if !proto.Equal(selfObs.GetLeaderId(), pa.PoolerID) {
+			continue // pooler doesn't think it's the leader
+		}
+		// Pooler thinks IT is leader; cluster says someone else is. Stale.
+		if proto.Equal(selfObs.GetLeaderId(), clusterLeaderID) {
+			// Sanity: self-named ID matches cluster-named ID but IsLeader
+			// is false. Shouldn't happen given generator.go's IsLeader
+			// derivation. Skip rather than misclassify.
+			continue
+		}
+		staleLeaders = append(staleLeaders, pa)
 	}
 
 	if len(staleLeaders) == 0 {
@@ -88,6 +99,9 @@ func (a *StaleLeaderAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, error
 	// recovery system processes the most out-of-date leader at highest
 	// priority.
 	slices.SortFunc(staleLeaders, compareLeaderTimeline)
+
+	clusterLeaderName := sa.LeaderObservation.GetLeaderId().GetName()
+	clusterLeaderTerm := sa.LeaderObservation.GetLeaderRuleNumber().GetCoordinatorTerm()
 
 	// Assign descending priorities so the most stale leader (sorted first)
 	// gets PriorityEmergency, the next gets PriorityEmergency-1, etc.
@@ -101,8 +115,8 @@ func (a *StaleLeaderAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, error
 			Description: fmt.Sprintf("Stale leader detected: %s (stale_leader_term %d) is stale, most advanced leader %s (most_advanced_leader_term %d)",
 				stale.PoolerID.Name,
 				commonconsensus.LeaderTerm(stale.ConsensusStatus),
-				sa.HighestTermReachableLeader.PoolerID.Name,
-				commonconsensus.LeaderTerm(sa.HighestTermReachableLeader.ConsensusStatus)),
+				clusterLeaderName,
+				clusterLeaderTerm),
 			Priority:       types.PriorityEmergency - types.Priority(i),
 			Scope:          types.ScopeShard,
 			DetectedAt:     time.Now(),

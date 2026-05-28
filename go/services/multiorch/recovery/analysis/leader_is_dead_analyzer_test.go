@@ -56,10 +56,9 @@ func TestLeaderIsDeadAnalyzer_Analyze(t *testing.T) {
 	// initialized replica — the base case for LeaderIsDead detection.
 	deadLeaderShardAnalysis := func(overrides ...func(*ShardAnalysis)) *ShardAnalysis {
 		sa := &ShardAnalysis{
-			ShardKey:                      shardKey,
-			HighestTermDiscoveredLeaderID: leaderID,
-			LeaderReachable:               false,
-			HasInitializedReplica:         true,
+			ShardKey:              shardKey,
+			LeaderReachable:       false,
+			HasInitializedReplica: true,
 			Analyses: []*PoolerAnalysis{
 				{
 					PoolerID:      &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "follower-1"},
@@ -101,7 +100,7 @@ func TestLeaderIsDeadAnalyzer_Analyze(t *testing.T) {
 
 	t.Run("ignores when no leader exists in topology (future analysis)", func(t *testing.T) {
 		sa := deadLeaderShardAnalysis(func(sa *ShardAnalysis) {
-			sa.HighestTermDiscoveredLeaderID = nil
+			sa.LeaderObservation = nil
 		})
 
 		problems, err := analyzer.Analyze(sa)

@@ -78,12 +78,11 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 	healthyShard := func(standbys []*clustermetadatapb.ID, replicas ...*PoolerAnalysis) *ShardAnalysis {
 		analyses := append([]*PoolerAnalysis{leaderPA}, replicas...)
 		return &ShardAnalysis{
-			ShardKey:                      shardKey,
-			HighestTermDiscoveredLeaderID: primaryID,
-			LeaderReachable:               true,
-			LeaderPostgresReady:           true,
-			LeaderStandbyIDs:              standbys,
-			Analyses:                      analyses,
+			ShardKey:            shardKey,
+			LeaderReachable:     true,
+			LeaderPostgresReady: true,
+			LeaderStandbyIDs:    standbys,
+			Analyses:            analyses,
 		}
 	}
 

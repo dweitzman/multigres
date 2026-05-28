@@ -69,7 +69,7 @@ func (a *CohortMismatchAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, er
 
 	// We only act when the shard has a reachable, ready leader to receive the
 	// rule update. Bootstrap and failover paths set up the cohort separately.
-	if sa.HighestTermDiscoveredLeaderID == nil || !sa.LeaderReachable || !sa.LeaderPostgresReady {
+	if sa.LeaderObservation.GetLeaderId() == nil || !sa.LeaderReachable || !sa.LeaderPostgresReady {
 		return nil, nil
 	}
 

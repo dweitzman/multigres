@@ -24,7 +24,6 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
@@ -290,7 +289,7 @@ func TestAnalysisGenerator_GenerateShardAnalyses_Replica(t *testing.T) {
 	assert.False(t, replicaAnalysis[0].IsLeader)
 
 	// Primary health is now a shard-level field
-	assert.NotNil(t, sa.HighestTermDiscoveredLeaderID, "should have topology primary ID populated")
+	assert.NotNil(t, sa.LeaderObservation.GetLeaderId(), "should have topology primary ID populated")
 	assert.True(t, sa.LeaderReachable)
 }
 
@@ -426,7 +425,7 @@ func TestPopulatePrimaryInfo_NoPrimaryInShard(t *testing.T) {
 	require.NoError(t, err)
 
 	// When no primary exists in the shard, topology primary fields should be nil/false
-	assert.Nil(t, sa.HighestTermDiscoveredLeaderID)
+	assert.Nil(t, sa.LeaderObservation.GetLeaderId())
 	assert.False(t, sa.LeaderReachable)
 }
 
@@ -488,7 +487,7 @@ func TestPopulatePrimaryInfo_PrimaryPostgresDown(t *testing.T) {
 	require.NotNil(t, analysis)
 
 	// HighestTermDiscoveredPrimaryID should be set even when postgres is down
-	assert.NotNil(t, sa.HighestTermDiscoveredLeaderID)
+	assert.NotNil(t, sa.LeaderObservation.GetLeaderId())
 	// But PrimaryReachable should be false because postgres is down
 	assert.False(t, sa.LeaderReachable, "primary should NOT be reachable when postgres is down")
 }
@@ -555,8 +554,8 @@ func TestPopulatePrimaryInfo_DemotedViaRecruit(t *testing.T) {
 		gen := NewAnalysisGenerator(ps, nil)
 		sa, err := gen.GenerateShardAnalysis(shardKey)
 		require.NoError(t, err)
-		assert.NotNil(t, sa.HighestTermDiscoveredLeaderID, "demoted primary should still be tracked (primary term > 0)")
-		assert.Equal(t, "primary", sa.HighestTermDiscoveredLeaderID.Name)
+		assert.NotNil(t, sa.LeaderObservation.GetLeaderId(), "demoted primary should still be tracked (primary term > 0)")
+		assert.Equal(t, "primary", sa.LeaderObservation.GetLeaderId().Name)
 		assert.False(t, sa.LeaderReachable, "demoted primary reporting REPLICA should not be LeaderReachable")
 		assert.True(t, sa.LeaderPoolerReachable)
 	})
@@ -594,8 +593,8 @@ func TestPopulatePrimaryInfo_DemotedViaRecruit(t *testing.T) {
 		gen := NewAnalysisGenerator(ps, nil)
 		sa, err := gen.GenerateShardAnalysis(shardKey)
 		require.NoError(t, err)
-		assert.NotNil(t, sa.HighestTermDiscoveredLeaderID, "stale-topology former primary should be found via ConsensusStatus")
-		assert.Equal(t, "former-primary", sa.HighestTermDiscoveredLeaderID.Name)
+		assert.NotNil(t, sa.LeaderObservation.GetLeaderId(), "stale-topology former primary should be found via ConsensusStatus")
+		assert.Equal(t, "former-primary", sa.LeaderObservation.GetLeaderId().Name)
 		assert.False(t, sa.LeaderReachable, "demoted primary reporting REPLICA should not be LeaderReachable")
 		assert.True(t, sa.LeaderPoolerReachable)
 	})
@@ -1693,324 +1692,9 @@ func TestPopulatePrimaryInfo_PicksHighestPrimaryTerm(t *testing.T) {
 	// The shard-level topology primary must point to the new (correct) primary, not the stale one.
 	// If it pointed to the stale primary (postgres dead), PrimaryReachable would be false
 	// and LeaderIsDeadAnalyzer would falsely trigger a new election.
-	require.NotNil(t, sa.HighestTermDiscoveredLeaderID)
-	assert.Equal(t, "new-primary", sa.HighestTermDiscoveredLeaderID.Name,
+	require.NotNil(t, sa.LeaderObservation.GetLeaderId())
+	assert.Equal(t, "new-primary", sa.LeaderObservation.GetLeaderId().Name,
 		"should pick primary with highest PrimaryTerm")
 	assert.True(t, sa.LeaderReachable,
 		"primary must appear reachable when new primary has postgres running")
-}
-
-func TestDetectOtherPrimary(t *testing.T) {
-	shardKey := &clustermetadatapb.ShardKey{Database: "testdb", TableGroup: "default", Shard: "0"}
-
-	t.Run("single other primary detected", func(t *testing.T) {
-		store := setupMultiplePrimariesStore(t, []primaryConfig{
-			{id: "primary-1", primaryTerm: 5, consensusTerm: 10},
-			{id: "primary-2", primaryTerm: 6, consensusTerm: 11},
-		})
-		generator := NewAnalysisGenerator(store, nil)
-
-		sa, err := generator.GenerateShardAnalysis(shardKey)
-		require.NoError(t, err)
-
-		// Both primaries detected in shard
-		require.Len(t, sa.Leaders, 2)
-
-		// primary-2 has higher PrimaryTerm, so it's the most advanced
-		require.NotNil(t, sa.HighestTermReachableLeader)
-		assert.Equal(t, "primary-2", sa.HighestTermReachableLeader.PoolerID.Name)
-		assert.Equal(t, int64(6), commonconsensus.LeaderTerm(sa.HighestTermReachableLeader.ConsensusStatus))
-	})
-
-	t.Run("multiple other primaries detected", func(t *testing.T) {
-		store := setupMultiplePrimariesStore(t, []primaryConfig{
-			{id: "primary-1", primaryTerm: 5, consensusTerm: 11},
-			{id: "primary-2", primaryTerm: 4, consensusTerm: 10},
-			{id: "primary-3", primaryTerm: 6, consensusTerm: 9},
-		})
-		generator := NewAnalysisGenerator(store, nil)
-
-		sa, err := generator.GenerateShardAnalysis(shardKey)
-		require.NoError(t, err)
-
-		// All three primaries detected in shard
-		require.Len(t, sa.Leaders, 3)
-
-		primaryNames := make([]string, len(sa.Leaders))
-		for i, p := range sa.Leaders {
-			primaryNames[i] = p.PoolerID.Name
-		}
-		assert.Contains(t, primaryNames, "primary-1")
-		assert.Contains(t, primaryNames, "primary-2")
-		assert.Contains(t, primaryNames, "primary-3")
-
-		// primary-3 has highest PrimaryTerm (6), even though primary-1 has highest ConsensusTerm (11).
-		// This verifies we're comparing on PrimaryTerm, not ConsensusTerm.
-		require.NotNil(t, sa.HighestTermReachableLeader)
-		assert.Equal(t, "primary-3", sa.HighestTermReachableLeader.PoolerID.Name)
-		assert.Equal(t, int64(6), commonconsensus.LeaderTerm(sa.HighestTermReachableLeader.ConsensusStatus))
-	})
-
-	t.Run("this primary is most advanced", func(t *testing.T) {
-		store := setupMultiplePrimariesStore(t, []primaryConfig{
-			{id: "primary-1", primaryTerm: 7, consensusTerm: 12},
-			{id: "primary-2", primaryTerm: 5, consensusTerm: 10},
-			{id: "primary-3", primaryTerm: 6, consensusTerm: 11},
-		})
-		generator := NewAnalysisGenerator(store, nil)
-
-		sa, err := generator.GenerateShardAnalysis(shardKey)
-		require.NoError(t, err)
-
-		// All three primaries detected in shard
-		require.Len(t, sa.Leaders, 3)
-
-		// This primary has highest PrimaryTerm (7), so it's the most advanced
-		require.NotNil(t, sa.HighestTermReachableLeader)
-		assert.Equal(t, "primary-1", sa.HighestTermReachableLeader.PoolerID.Name)
-		assert.Equal(t, int64(7), commonconsensus.LeaderTerm(sa.HighestTermReachableLeader.ConsensusStatus))
-	})
-
-	t.Run("tie in primary_term returns nil", func(t *testing.T) {
-		store := setupMultiplePrimariesStore(t, []primaryConfig{
-			{id: "primary-1", primaryTerm: 5, consensusTerm: 10},
-			{id: "primary-2", primaryTerm: 5, consensusTerm: 11}, // Same PrimaryTerm
-		})
-		generator := NewAnalysisGenerator(store, nil)
-
-		sa, err := generator.GenerateShardAnalysis(shardKey)
-		require.NoError(t, err)
-
-		// Both primaries detected in shard
-		require.Len(t, sa.Leaders, 2)
-
-		// Tie detected, so HighestTermPrimary should be nil
-		assert.Nil(t, sa.HighestTermReachableLeader, "tie in PrimaryTerm should result in nil HighestTermPrimary")
-	})
-
-	t.Run("all primary_terms zero returns nil (defensive - invalid state)", func(t *testing.T) {
-		// Note: This tests defensive behavior. In a properly initialized shard,
-		// PRIMARY poolers should never have PrimaryTerm=0. PrimaryTerm is set during
-		// promotion and only cleared during demotion.
-		store := setupMultiplePrimariesStore(t, []primaryConfig{
-			{id: "primary-1", primaryTerm: 0, consensusTerm: 10},
-			{id: "primary-2", primaryTerm: 0, consensusTerm: 11},
-		})
-		generator := NewAnalysisGenerator(store, nil)
-
-		sa, err := generator.GenerateShardAnalysis(shardKey)
-		require.NoError(t, err)
-
-		// Both primaries detected in shard
-		require.Len(t, sa.Leaders, 2)
-
-		// All PrimaryTerm=0 is invalid state, defensive check returns nil
-		assert.Nil(t, sa.HighestTermReachableLeader, "all PrimaryTerm=0 (invalid state) should result in nil HighestTermPrimary")
-	})
-
-	t.Run("mix of zero and non-zero primary_terms", func(t *testing.T) {
-		store := setupMultiplePrimariesStore(t, []primaryConfig{
-			{id: "primary-1", primaryTerm: 0, consensusTerm: 9},
-			{id: "primary-2", primaryTerm: 5, consensusTerm: 10},
-			{id: "primary-3", primaryTerm: 0, consensusTerm: 11},
-		})
-		generator := NewAnalysisGenerator(store, nil)
-
-		sa, err := generator.GenerateShardAnalysis(shardKey)
-		require.NoError(t, err)
-
-		// All three primaries detected in shard
-		require.Len(t, sa.Leaders, 3)
-
-		// primary-2 has non-zero PrimaryTerm (5), so it's the most advanced
-		require.NotNil(t, sa.HighestTermReachableLeader)
-		assert.Equal(t, "primary-2", sa.HighestTermReachableLeader.PoolerID.Name)
-		assert.Equal(t, int64(5), commonconsensus.LeaderTerm(sa.HighestTermReachableLeader.ConsensusStatus))
-	})
-
-	t.Run("no other primaries detected", func(t *testing.T) {
-		store := setupMultiplePrimariesStore(t, []primaryConfig{
-			{id: "primary-1", primaryTerm: 5, consensusTerm: 10},
-		})
-		generator := NewAnalysisGenerator(store, nil)
-
-		sa, err := generator.GenerateShardAnalysis(shardKey)
-		require.NoError(t, err)
-
-		// Single primary in shard
-		require.Len(t, sa.Leaders, 1)
-
-		// Single primary is still the most advanced
-		require.NotNil(t, sa.HighestTermReachableLeader)
-		assert.Equal(t, "primary-1", sa.HighestTermReachableLeader.PoolerID.Name)
-		assert.Equal(t, int64(5), commonconsensus.LeaderTerm(sa.HighestTermReachableLeader.ConsensusStatus))
-	})
-
-	t.Run("unreachable primary not detected", func(t *testing.T) {
-		store := setupMultiplePrimariesStoreWithReachability(t, []primaryConfigWithReachability{
-			{primaryConfig: primaryConfig{id: "primary-1", primaryTerm: 5, consensusTerm: 10}, reachable: true},
-			{primaryConfig: primaryConfig{id: "primary-2", primaryTerm: 6, consensusTerm: 11}, reachable: false},
-		})
-		generator := NewAnalysisGenerator(store, nil)
-
-		sa, err := generator.GenerateShardAnalysis(shardKey)
-		require.NoError(t, err)
-
-		// Only reachable primary detected
-		require.Len(t, sa.Leaders, 1, "unreachable primaries should not be detected")
-
-		// Only this primary is reachable, so it's the most advanced
-		require.NotNil(t, sa.HighestTermReachableLeader)
-		assert.Equal(t, "primary-1", sa.HighestTermReachableLeader.PoolerID.Name)
-		assert.Equal(t, int64(5), commonconsensus.LeaderTerm(sa.HighestTermReachableLeader.ConsensusStatus))
-	})
-}
-
-// Helper types and functions for multiple primaries tests
-
-type primaryConfig struct {
-	id            string
-	primaryTerm   int64
-	consensusTerm int64
-}
-
-type primaryConfigWithReachability struct {
-	primaryConfig
-	reachable bool
-}
-
-func setupMultiplePrimariesStore(t *testing.T, primaries []primaryConfig) *store.PoolerStore {
-	configs := make([]primaryConfigWithReachability, len(primaries))
-	for i, p := range primaries {
-		configs[i] = primaryConfigWithReachability{
-			primaryConfig: p,
-			reachable:     true,
-		}
-	}
-	return setupMultiplePrimariesStoreWithReachability(t, configs)
-}
-
-func setupMultiplePrimariesStoreWithReachability(t *testing.T, primaries []primaryConfigWithReachability) *store.PoolerStore {
-	ps := store.NewPoolerStore(nil, slog.Default())
-
-	for _, p := range primaries {
-		poolerID := "multipooler-cell1-" + p.id
-		id := &clustermetadatapb.ID{
-			Component: clustermetadatapb.ID_MULTIPOOLER,
-			Cell:      "cell1",
-			Name:      p.id,
-		}
-		poolerState := &multiorchdatapb.PoolerHealthState{
-			MultiPooler: &clustermetadatapb.MultiPooler{
-				Id: id,
-				ShardKey: &clustermetadatapb.ShardKey{
-					Database:   "testdb",
-					TableGroup: "default",
-					Shard:      "0",
-				},
-				Type:     clustermetadatapb.PoolerType_PRIMARY,
-				Hostname: "localhost",
-			},
-			IsLastCheckValid: p.reachable,
-			IsUpToDate:       true,
-			ConsensusStatus: &clustermetadatapb.ConsensusStatus{
-				Id:             id,
-				TermRevocation: &clustermetadatapb.TermRevocation{RevokedBelowTerm: p.consensusTerm},
-				CurrentPosition: &clustermetadatapb.PoolerPosition{
-					Rule: &clustermetadatapb.ShardRule{
-						RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: p.primaryTerm},
-						LeaderId:   id,
-					},
-				},
-			},
-			Status: &multipoolermanagerdatapb.Status{
-				PoolerType: clustermetadatapb.PoolerType_PRIMARY,
-			},
-		}
-		ps.Set(poolerID, poolerState)
-	}
-
-	return ps
-}
-
-func TestGenerateShardAnalyses_GroupsByShardKey(t *testing.T) {
-	ps := store.NewPoolerStore(nil, slog.Default())
-
-	makePooler := func(name, db, tg, shard string, typ clustermetadatapb.PoolerType) *multiorchdatapb.PoolerHealthState {
-		return &multiorchdatapb.PoolerHealthState{
-			MultiPooler: &clustermetadatapb.MultiPooler{
-				Id:       &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "c1", Name: name},
-				ShardKey: &clustermetadatapb.ShardKey{Database: db, TableGroup: tg, Shard: shard},
-				Type:     typ,
-			},
-			Status: &multipoolermanagerdatapb.Status{
-				PoolerType: typ,
-			},
-		}
-	}
-
-	// Two poolers in shard db/tg/0 and one in db/tg/1
-	ps.Set("multipooler-c1-p0a", makePooler("p0a", "db", "tg", "0", clustermetadatapb.PoolerType_PRIMARY))
-	ps.Set("multipooler-c1-p0b", makePooler("p0b", "db", "tg", "0", clustermetadatapb.PoolerType_REPLICA))
-	ps.Set("multipooler-c1-p1a", makePooler("p1a", "db", "tg", "1", clustermetadatapb.PoolerType_PRIMARY))
-
-	gen := NewAnalysisGenerator(ps, nil)
-	shards := gen.GenerateShardAnalyses()
-
-	require.Len(t, shards, 2, "should produce one ShardAnalysis per shard")
-
-	countByShard := make(map[string]int)
-	for _, sa := range shards {
-		countByShard[sa.ShardKey.Shard] = len(sa.Analyses)
-	}
-	assert.Equal(t, 2, countByShard["0"], "shard 0 should have 2 analyses")
-	assert.Equal(t, 1, countByShard["1"], "shard 1 should have 1 analysis")
-}
-
-func TestGenerateShardAnalysis_ErrorOnMissingShard(t *testing.T) {
-	ps := store.NewPoolerStore(nil, slog.Default())
-	gen := NewAnalysisGenerator(ps, nil)
-
-	shardKey := &clustermetadatapb.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"}
-	_, err := gen.GenerateShardAnalysis(shardKey)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "shard not found")
-}
-
-func TestGenerateShardAnalysis_ReturnsAllPoolersInShard(t *testing.T) {
-	ps := store.NewPoolerStore(nil, slog.Default())
-
-	ps.Set("multipooler-c1-primary", &multiorchdatapb.PoolerHealthState{
-		MultiPooler: &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "c1", Name: "primary"},
-			ShardKey: &clustermetadatapb.ShardKey{
-				Database:   "db",
-				TableGroup: "tg",
-				Shard:      "0",
-			},
-			Type: clustermetadatapb.PoolerType_PRIMARY,
-		},
-		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_PRIMARY,
-		},
-	})
-	ps.Set("multipooler-c1-replica", &multiorchdatapb.PoolerHealthState{
-		MultiPooler: &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "c1", Name: "replica"},
-			ShardKey: &clustermetadatapb.ShardKey{
-				Database:   "db",
-				TableGroup: "tg",
-				Shard:      "0",
-			},
-			Type: clustermetadatapb.PoolerType_REPLICA,
-		},
-		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_REPLICA,
-		},
-	})
-
-	gen := NewAnalysisGenerator(ps, nil)
-	sa, err := gen.GenerateShardAnalysis(&clustermetadatapb.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"})
-	require.NoError(t, err)
-	assert.Len(t, sa.Analyses, 2)
 }

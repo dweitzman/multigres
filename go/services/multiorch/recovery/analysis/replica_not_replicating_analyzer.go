@@ -59,13 +59,13 @@ func (a *ReplicaNotReplicatingAnalyzer) analyzePooler(sa *ShardAnalysis, poolerA
 		return nil, nil
 	}
 
-	// Skip if there's no usable primary yet. HighestTermReachableLeader is
-	// non-nil only when the leader is reachable AND has published its rule
-	// (findHighestTermLeader filters out unobserved-rule leaders). Without a
-	// rule the recovery action can't populate SetTermPrimaryRequest.Rule — firing
-	// the problem now would produce a guaranteed-fail SetTermPrimary on the next
-	// cycle. PrimaryIsDead handles the unreachable case separately.
-	if sa.HighestTermReachableLeader == nil {
+	// Skip if there's no usable primary yet. sa.Leader is non-nil only when
+	// the cluster-authoritative LeaderObservation names a pooler in our
+	// known set. Reachability is a separate concern (sa.LeaderReachable);
+	// PrimaryIsDead handles the unreachable case. Without a leader the
+	// recovery action can't populate SetTermPrimaryRequest.Rule — firing
+	// the problem now would produce a guaranteed-fail SetTermPrimary.
+	if sa.Leader == nil || !sa.LeaderReachable {
 		return nil, nil
 	}
 
