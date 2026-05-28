@@ -386,8 +386,15 @@ func TestReplicationStatus(t *testing.T) {
 			mock.MakeQueryResult([]string{"synchronous_commit"}, [][]any{{"on"}}))
 
 		pm.qsc = &mockPoolerController{queryService: mockQueryService}
-		pm.rules = newRuleStore(logger, mockQueryService, noopSyncStandbyManager{})
-		pm.rules = &fakeRuleStore{}
+		// Seed the rule store with a position naming this pooler as leader
+		// so Open's SetState derives Type=PRIMARY (was previously taken from
+		// the topology record directly).
+		pm.rules = &fakeRuleStore{pos: &clustermetadatapb.PoolerPosition{
+			Rule: &clustermetadatapb.ShardRule{
+				LeaderId:   serviceID,
+				RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
+			},
+		}}
 
 		senv := servenv.NewServEnv(viperutil.NewRegistry())
 		go pm.Start(senv)
@@ -477,8 +484,18 @@ func TestReplicationStatus(t *testing.T) {
 				[][]any{{"0/12345600", "0/12345678", "f", "not paused", "2025-01-01 00:00:00", "host=primary port=5432 user=repl application_name=test", "streaming", nil, nil, nil}}))
 
 		pm.qsc = &mockPoolerController{queryService: mockQueryService}
-		pm.rules = newRuleStore(logger, mockQueryService, noopSyncStandbyManager{})
-		pm.rules = &fakeRuleStore{}
+		// Seed the rule store with a position naming a different pooler as
+		// leader so SetState derives Type=REPLICA.
+		pm.rules = &fakeRuleStore{pos: &clustermetadatapb.PoolerPosition{
+			Rule: &clustermetadatapb.ShardRule{
+				LeaderId: &clustermetadatapb.ID{
+					Component: clustermetadatapb.ID_MULTIPOOLER,
+					Cell:      "zone1",
+					Name:      "other-leader",
+				},
+				RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
+			},
+		}}
 
 		senv := servenv.NewServEnv(viperutil.NewRegistry())
 		go pm.Start(senv)
@@ -563,8 +580,14 @@ func TestReplicationStatus(t *testing.T) {
 				[][]any{{"0/12345600", "0/12345678", "f", "not paused", "2025-01-01 00:00:00", "host=primary port=5432 user=repl application_name=test", "streaming", nil, nil, nil}}))
 
 		pm.qsc = &mockPoolerController{queryService: mockQueryService}
-		pm.rules = newRuleStore(logger, mockQueryService, noopSyncStandbyManager{})
-		pm.rules = &fakeRuleStore{}
+		// Rule says this pooler is leader (so derived Type=PRIMARY) but the
+		// mock postgres reports standby — the mismatch the test exercises.
+		pm.rules = &fakeRuleStore{pos: &clustermetadatapb.PoolerPosition{
+			Rule: &clustermetadatapb.ShardRule{
+				LeaderId:   serviceID,
+				RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
+			},
+		}}
 
 		senv := servenv.NewServEnv(viperutil.NewRegistry())
 		go pm.Start(senv)
@@ -719,8 +742,19 @@ func TestReplicationStatus(t *testing.T) {
 			mock.MakeQueryResult([]string{"synchronous_commit"}, [][]any{{"on"}}))
 
 		pm.qsc = &mockPoolerController{queryService: mockQueryService}
-		pm.rules = newRuleStore(logger, mockQueryService, noopSyncStandbyManager{})
-		pm.rules = &fakeRuleStore{}
+		// Rule says someone else is leader (so derived Type=REPLICA) but
+		// the mock postgres reports primary — the mismatch the test
+		// exercises.
+		pm.rules = &fakeRuleStore{pos: &clustermetadatapb.PoolerPosition{
+			Rule: &clustermetadatapb.ShardRule{
+				LeaderId: &clustermetadatapb.ID{
+					Component: clustermetadatapb.ID_MULTIPOOLER,
+					Cell:      "zone1",
+					Name:      "other-leader",
+				},
+				RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
+			},
+		}}
 
 		senv := servenv.NewServEnv(viperutil.NewRegistry())
 		go pm.Start(senv)
