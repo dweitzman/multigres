@@ -48,7 +48,6 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/protobuf/proto"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
@@ -339,20 +338,11 @@ func NewMultiPoolerManagerWithTimeout(logger *slog.Logger, multiPooler *clusterm
 	// The ReplTracker is registered later when heartbeat is started.
 	//
 	// leaderObsFor: derive the published LeaderObservation from the pooler's
-	// latest recorded consensus rule. Returns non-nil only when consensus
-	// names this pooler as leader. SetState clears the field otherwise.
-	leaderObsFor := func() *clustermetadatapb.LeaderObservation {
-		rp := pm.consensusState.GetReplicationPrimary()
-		rule := rp.GetRule()
-		if !proto.Equal(rule.GetLeaderId(), pm.serviceID) {
-			return nil
-		}
-		return &clustermetadatapb.LeaderObservation{
-			LeaderId:   pm.serviceID,
-			LeaderTerm: rule.GetRuleNumber().GetCoordinatorTerm(),
-		}
-	}
-	pm.servingState = NewStateManager(logger, pm.record, leaderObsFor, pm.qsc, pm.healthStreamer)
+	// latest observed rule in postgres (the durable source of truth — the
+	// rule table is replicated to followers via WAL and survives restarts).
+	// Returns non-nil only when the rule names this pooler as leader.
+	// SetState clears the field otherwise.
+	pm.servingState = NewStateManager(logger, pm.record, pm.qsc, pm.healthStreamer)
 
 	// Register pgBackRest health metrics.
 	var metricsErr error
@@ -468,8 +458,21 @@ func (pm *MultiPoolerManager) openLocked(ctx context.Context, targetServingStatu
 	// streamer) and Mutates the record. The publisher (if running, started
 	// by StartTopoRegistration) picks it up and writes to etcd.
 	go pm.runHealthHeartbeat(pm.ctx, timeouts.DefaultHealthHeartbeatInterval)
-	if err := pm.servingState.SetState(ctx, pm.record.Type(), targetServingStatus); err != nil {
-		pm.logger.ErrorContext(ctx, "Failed to transition serving status on open", "target", targetServingStatus, "error", err)
+
+	// Derive state from the latest known rule (consensusState or rule_store,
+	// whichever is more recent). On first boot both sources are empty and
+	// SetState produces UNKNOWN; in that case we must pair with NOT_SERVING
+	// and let the heartbeat reconciliation loop transition us forward once
+	// observePosition succeeds or a coordinator RPC lands. On Pause/resume
+	// the sources still hold the pre-Pause rule, so we re-enter the same
+	// Type immediately without extra I/O.
+	rule := pm.latestRule()
+	serving := targetServingStatus
+	if rule == nil {
+		serving = clustermetadatapb.PoolerServingStatus_NOT_SERVING
+	}
+	if err := pm.servingState.SetState(ctx, rule, serving); err != nil {
+		pm.logger.ErrorContext(ctx, "Failed to transition serving status on open", "target", serving, "error", err)
 	}
 }
 
@@ -557,8 +560,10 @@ func (pm *MultiPoolerManager) closeLocked(ctx context.Context, logMessage string
 	// streamer broadcasts NOT_SERVING to subscribers. The publisher (if
 	// running) picks up the Mutate and writes NOT_SERVING to etcd —
 	// pausing the manager intentionally still reflects in topology so
-	// callers see the pooler is not serving queries.
-	if err := pm.servingState.SetState(ctx, pm.record.Type(), clustermetadatapb.PoolerServingStatus_NOT_SERVING); err != nil {
+	// callers see the pooler is not serving queries. Use the cached rule
+	// so Type stays whatever it is right now (cached position survives
+	// pause/resume; on shutdown the cache reflects the last known role).
+	if err := pm.servingState.SetState(ctx, pm.latestRule(), clustermetadatapb.PoolerServingStatus_NOT_SERVING); err != nil {
 		pm.logger.WarnContext(ctx, "Failed to transition to NOT_SERVING during close", "error", err)
 	}
 
@@ -759,6 +764,32 @@ func (pm *MultiPoolerManager) getPoolerType() clustermetadatapb.PoolerType {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 	return pm.record.Type()
+}
+
+// latestRule returns the higher-numbered rule between consensusState's
+// recorded replicationPrimary and rule_store's cached position, either
+// of which may be nil. Used by callers that need "the freshest rule
+// this pooler knows about" — RPCs update consensusState first; postgres
+// WAL replay populates rule_store first; the two can briefly disagree.
+// Returns nil only if both sources are nil (cold boot before any
+// observation or RPC).
+func (pm *MultiPoolerManager) latestRule() *clustermetadatapb.ShardRule {
+	var consensusRule *clustermetadatapb.ShardRule
+	if rp := pm.consensusState.GetReplicationPrimary(); rp != nil {
+		consensusRule = rp.GetRule()
+	}
+	storeRule := pm.rules.cachedPosition().GetRule()
+
+	if consensusRule == nil {
+		return storeRule
+	}
+	if storeRule == nil {
+		return consensusRule
+	}
+	if commonconsensus.CompareRuleNumbers(consensusRule.GetRuleNumber(), storeRule.GetRuleNumber()) >= 0 {
+		return consensusRule
+	}
+	return storeRule
 }
 
 // shardKey returns a ShardKey identifying this pooler's shard.
@@ -1112,8 +1143,9 @@ func (pm *MultiPoolerManager) setNotServing(ctx context.Context, state *demotion
 
 	// Use the serving state manager to transition components.
 	// This updates query service, heartbeat, and the pooler record. Mutate
-	// inside StateManager schedules an async publish to topology.
-	if err := pm.servingState.SetState(ctx, pm.record.Type(), clustermetadatapb.PoolerServingStatus_NOT_SERVING); err != nil {
+	// inside StateManager schedules an async publish to topology. Pass the
+	// cached rule so Type stays consistent with what was last observed.
+	if err := pm.servingState.SetState(ctx, pm.latestRule(), clustermetadatapb.PoolerServingStatus_NOT_SERVING); err != nil {
 		return mterrors.Wrap(err, "failed to transition to NOT_SERVING")
 	}
 
@@ -1452,8 +1484,11 @@ func (pm *MultiPoolerManager) updateTopologyAfterPromotion(ctx context.Context, 
 		pm.logger.InfoContext(ctx, "Updating pooler type in topology to PRIMARY")
 	}
 
-	// SetState is idempotent — if already at PRIMARY/SERVING it short-circuits.
-	if err := pm.servingState.SetState(ctx, clustermetadatapb.PoolerType_PRIMARY, clustermetadatapb.PoolerServingStatus_SERVING); err != nil {
+	// SetState derives Type=PRIMARY from the cached rule (which was updated
+	// to name this pooler as leader earlier in the promotion path).
+	// Idempotent: if already at PRIMARY/SERVING with the same observation
+	// it short-circuits.
+	if err := pm.servingState.SetState(ctx, pm.latestRule(), clustermetadatapb.PoolerServingStatus_SERVING); err != nil {
 		return mterrors.Wrap(err, "failed to set serving state for promotion")
 	}
 
@@ -1623,8 +1658,8 @@ const (
 	remedialActionNone remedialAction = iota
 	remedialActionStartPostgres
 	remedialActionRestoreFromBackup
-	remedialActionAdjustTypeToPrimary
-	remedialActionAdjustTypeToReplica
+	remedialActionDemoteStalePrimary
+	remedialActionResignStaleLeader
 	remedialActionCreateFirstBackup
 	remedialActionReconcileGUC
 	// remedialActionFixPrimaryConnInfo means postgres is in recovery and the
@@ -1887,10 +1922,10 @@ func (pm *MultiPoolerManager) determineRemedialAction(ctx context.Context, curre
 	// Postgres is running: Check if pooler type needs adjustment
 	if currentState.postgresRunning {
 		if currentState.isPrimary && pm.getPoolerType() != clustermetadatapb.PoolerType_PRIMARY {
-			return remedialActionAdjustTypeToPrimary
+			return remedialActionDemoteStalePrimary
 		}
 		if !currentState.isPrimary && pm.getPoolerType() == clustermetadatapb.PoolerType_PRIMARY {
-			return remedialActionAdjustTypeToReplica
+			return remedialActionResignStaleLeader
 		}
 		// Postgres is standby and type is already REPLICA, but check if the resignation
 		// signal needs to be (re-)published. This handles the case where the signal was
@@ -1900,7 +1935,7 @@ func (pm *MultiPoolerManager) determineRemedialAction(ctx context.Context, curre
 			resigned := pm.resignedLeaderAtTerm
 			pm.mu.Unlock()
 			if currentState.primaryTerm != 0 && resigned == 0 {
-				return remedialActionAdjustTypeToReplica
+				return remedialActionResignStaleLeader
 			}
 			// Drift check: replica is otherwise healthy but its primary_conninfo
 			// may not match what we've been told via SetTermPrimary/Propose. Reconcile
@@ -1973,29 +2008,61 @@ func (pm *MultiPoolerManager) takeRemedialAction(ctx context.Context, action rem
 		// No action to take
 		return
 
-	case remedialActionAdjustTypeToPrimary:
+	case remedialActionDemoteStalePrimary:
+		// Stale-primary drift: postgres reports primary but the committed
+		// rule does not name this pooler as leader. The rule is
+		// authoritative for routing (StateManager derives Type from it), so
+		// we drive postgres back into line with the rule by restarting as
+		// standby. Set rewindPending=true so the next standby-side
+		// operation routes through pg_rewind dry-run (timeline-divergence
+		// safe). Set resigned-at-term so the coordinator sees the signal
+		// even if multiorch is already considering this node.
 		pm.setMonitorReason(ctx, reasonPostgresRunning, "MonitorPostgres: PostgreSQL is running")
-		pm.logger.InfoContext(ctx, "MonitorPostgres: PostgreSQL is running and primary")
-		pm.logger.InfoContext(ctx, "MonitorPostgres: Changing pooler type to primary")
-		if err := pm.changeTypeLocked(ctx, clustermetadatapb.PoolerType_PRIMARY); err != nil {
-			pm.logger.ErrorContext(ctx, "MonitorPostgres: failed to change pooler type to primary", "error", err)
-		}
+		pm.logger.WarnContext(ctx, "MonitorPostgres: stale-primary drift — postgres reports PRIMARY but committed rule names a different leader; restarting as standby",
+			"service_id", pm.serviceID.String())
 
-	case remedialActionAdjustTypeToReplica:
-		pm.setMonitorReason(ctx, reasonPostgresRunning, "MonitorPostgres: PostgreSQL is running")
-		pm.logger.InfoContext(ctx, "MonitorPostgres: PostgreSQL is running but not primary")
-		pm.logger.InfoContext(ctx, "MonitorPostgres: Changing pooler type to replica")
-		// Signal voluntary resignation so the coordinator can trigger an immediate
-		// election. Use the primary_term (the term at which we were elected) since
-		// the coordinator uses this to decide whether the signal is still active.
 		if state.primaryTerm != 0 {
 			if err := pm.setResignedLeaderAtTerm(ctx, state.primaryTerm); err != nil {
 				pm.logger.ErrorContext(ctx, "MonitorPostgres: failed to set resigned primary term", "error", err)
 				return
 			}
 		}
-		if err := pm.changeTypeLocked(ctx, clustermetadatapb.PoolerType_REPLICA); err != nil {
-			pm.logger.ErrorContext(ctx, "MonitorPostgres: failed to change pooler type to replica", "error", err)
+
+		demoteState, err := pm.checkDemotionState(ctx)
+		if err != nil {
+			pm.logger.ErrorContext(ctx, "MonitorPostgres: failed to check demotion state before stale-primary restart", "error", err)
+			return
+		}
+		pm.rewindPending.Store(true)
+		if err := pm.restartPostgresAsStandby(ctx, demoteState); err != nil {
+			pm.logger.ErrorContext(ctx, "MonitorPostgres: failed to restart postgres as standby on stale-primary drift", "error", err)
+			return
+		}
+
+		// Transition topology to NOT_SERVING. Type is derived from the rule
+		// (REPLICA now that we restarted as a standby).
+		if err := pm.servingState.SetState(ctx, pm.latestRule(), clustermetadatapb.PoolerServingStatus_NOT_SERVING); err != nil {
+			pm.logger.ErrorContext(ctx, "MonitorPostgres: failed to transition to NOT_SERVING after stale-primary restart", "error", err)
+		}
+
+	case remedialActionResignStaleLeader:
+		// Resigned-leader drift: postgres reports not-primary but the
+		// committed rule still names this pooler as leader. The safer
+		// default is to ask consensus to re-elect rather than promote
+		// postgres locally: set resigned-at-term and stay
+		// (PRIMARY-by-rule, NOT_SERVING) until the rule updates.
+		pm.setMonitorReason(ctx, reasonPostgresRunning, "MonitorPostgres: PostgreSQL is running")
+		pm.logger.WarnContext(ctx, "MonitorPostgres: resigned-leader drift — postgres reports not-primary but committed rule still names this pooler as leader; signaling resignation",
+			"service_id", pm.serviceID.String(),
+			"primary_term", state.primaryTerm)
+		if state.primaryTerm != 0 {
+			if err := pm.setResignedLeaderAtTerm(ctx, state.primaryTerm); err != nil {
+				pm.logger.ErrorContext(ctx, "MonitorPostgres: failed to set resigned primary term", "error", err)
+				return
+			}
+		}
+		if err := pm.servingState.SetState(ctx, pm.latestRule(), clustermetadatapb.PoolerServingStatus_NOT_SERVING); err != nil {
+			pm.logger.ErrorContext(ctx, "MonitorPostgres: failed to transition to NOT_SERVING on resigned-leader drift", "error", err)
 		}
 
 	case remedialActionFixPrimaryConnInfo:

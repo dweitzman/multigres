@@ -16,6 +16,7 @@ package manager
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 
@@ -40,17 +41,25 @@ type StateAware interface {
 // The current state lives in the poolerRecord (Type and ServingStatus),
 // which is the source of truth for topology.
 //
-// On SetState, the manager fans out OnStateChange to all registered components
-// in parallel, waits for completion, then updates the record via Mutate. The
-// Mutate also schedules an asynchronous publish so callers cannot forget to
-// reflect the new state to etcd.
+// On SetState, the manager derives PoolerType and CurrentLeadership from
+// the caller-supplied ShardRule, fans out OnStateChange to all registered
+// components in parallel, waits for completion, then updates the record
+// via Mutate. The Mutate also schedules an asynchronous publish so callers
+// cannot forget to reflect the new state to etcd.
 //
-// SetState also keeps the record's CurrentLeadership field in sync with
-// consensus state via the leaderObsFor callback. When transitioning to
-// PRIMARY, the callback returns the LeaderObservation derived from the
-// pooler's latest recorded consensus rule. When transitioning away from
-// PRIMARY, CurrentLeadership is cleared. The Type ↔ CurrentLeadership
-// invariant is enforced by poolerRecord.Mutate.
+// Type derivation:
+//   - rule names this pooler as leader → PRIMARY (CurrentLeadership set)
+//   - rule exists but names someone else as leader → REPLICA. (Cohort
+//     membership is not consulted: a pooler that is replicating from the
+//     leader but is not in the cohort is called an observer; observers and
+//     cohort replicas both publish as REPLICA.)
+//   - rule == nil → UNKNOWN
+//
+// Callers choose the source of the rule explicitly: read from rule_store
+// (durable, lags RPCs by postgres apply time), from consensusState (in
+// memory, updated immediately by RPCs), or from a freshly-received RPC
+// payload. Each call site knows which source reflects ground truth at
+// that moment — there is no single blessed source.
 type StateManager struct {
 	mu     sync.Mutex
 	logger *slog.Logger
@@ -59,31 +68,20 @@ type StateManager struct {
 	// is the exclusive caller of record.Mutate for Type/ServingStatus.
 	record *poolerRecord
 
-	// leaderObsFor returns the LeaderObservation to publish into the record
-	// when this pooler is the leader, or nil if it isn't. Typically reads
-	// the latest rule from ConsensusState.replicationPrimary and filters to
-	// "names this pooler." Must not return non-nil for a leader that isn't
-	// this pooler — Mutate will reject that.
-	leaderObsFor func() *clustermetadatapb.LeaderObservation
-
 	// Registered components that react to state changes.
 	components []StateAware
 }
 
-// NewStateManager creates a new StateManager. leaderObsFor must return the
-// LeaderObservation to associate with this pooler when it transitions to
-// PRIMARY, or nil if the pooler is not currently the consensus leader.
+// NewStateManager creates a new StateManager.
 func NewStateManager(
 	logger *slog.Logger,
 	record *poolerRecord,
-	leaderObsFor func() *clustermetadatapb.LeaderObservation,
 	components ...StateAware,
 ) *StateManager {
 	return &StateManager{
-		logger:       logger,
-		record:       record,
-		leaderObsFor: leaderObsFor,
-		components:   components,
+		logger:     logger,
+		record:     record,
+		components: components,
 	}
 }
 
@@ -107,47 +105,47 @@ func (ssm *StateManager) RegisterAndSync(ctx context.Context, component StateAwa
 	return component.OnStateChange(ctx, ssm.record.Type(), ssm.record.ServingStatus())
 }
 
-// SetState transitions all components to the given state in parallel and
-// keeps the record's CurrentLeadership in sync via leaderObsFor. The
-// record is updated only after all components converge.
+// SetState transitions all components to the target state and updates the
+// record. PoolerType and CurrentLeadership are derived from rule (see type
+// docs for the derivation rules); only the serving status is independently
+// caller-controlled.
 //
-// CurrentLeadership is derived from leaderObsFor when transitioning to
-// PRIMARY, and cleared otherwise. The Type ↔ CurrentLeadership invariant
-// is validated by record.Mutate; if leaderObsFor returns nil for a PRIMARY
-// transition (i.e. consensusState does not name this pooler), Mutate will
-// reject the transition with an error. That's intentional: a pooler that
-// hasn't yet recorded itself as the consensus leader cannot become Type=PRIMARY.
+// rule may be nil when the pooler has not yet substantiated any role —
+// that yields Type=UNKNOWN, which callers MUST pair with NOT_SERVING.
+// Passing (nil, SERVING) returns an error rather than silently downgrading:
+// a pooler with no rule substantiated cannot honestly claim to serve, and
+// the caller is in a better position than SetState to log the reason.
 //
-// Returns an error if any component fails to transition or the invariant
-// is violated. No-op if Type, ServingStatus, and the derived
-// CurrentLeadership are all unchanged.
-func (ssm *StateManager) SetState(ctx context.Context, poolerType clustermetadatapb.PoolerType, servingStatus clustermetadatapb.PoolerServingStatus) error {
+// Returns an error if any component fails to transition. No-op if the
+// derived Type, CurrentLeadership, and the requested ServingStatus all
+// match the current record.
+func (ssm *StateManager) SetState(ctx context.Context, rule *clustermetadatapb.ShardRule, servingStatus clustermetadatapb.PoolerServingStatus) error {
 	ssm.mu.Lock()
 	defer ssm.mu.Unlock()
+
+	newType, newObs := deriveTypeAndObs(rule, ssm.record.Id())
+	if newType == clustermetadatapb.PoolerType_UNKNOWN && servingStatus != clustermetadatapb.PoolerServingStatus_NOT_SERVING {
+		return fmt.Errorf("SetState: cannot request servingStatus=%s with no rule observed (Type=UNKNOWN must be paired with NOT_SERVING)", servingStatus)
+	}
 
 	currentType := ssm.record.Type()
 	currentStatus := ssm.record.ServingStatus()
 	currentObs := ssm.record.CurrentLeadership()
 
-	var desiredObs *clustermetadatapb.LeaderObservation
-	if poolerType == clustermetadatapb.PoolerType_PRIMARY {
-		desiredObs = ssm.leaderObsFor()
-	}
-
-	if currentType == poolerType && currentStatus == servingStatus && proto.Equal(currentObs, desiredObs) {
+	if currentType == newType && currentStatus == servingStatus && proto.Equal(currentObs, newObs) {
 		ssm.logger.InfoContext(ctx, "Serving state unchanged, skipping",
-			"type", poolerType, "status", servingStatus)
+			"type", newType, "status", servingStatus)
 		return nil
 	}
 
 	ssm.logger.InfoContext(ctx, "Setting serving state",
-		"target_type", poolerType, "target_status", servingStatus,
+		"target_type", newType, "target_status", servingStatus,
 		"current_type", currentType, "current_status", currentStatus)
 
 	g, ctx := errgroup.WithContext(ctx)
 	for _, c := range ssm.components {
 		g.Go(func() error {
-			return c.OnStateChange(ctx, poolerType, servingStatus)
+			return c.OnStateChange(ctx, newType, servingStatus)
 		})
 	}
 	if err := g.Wait(); err != nil {
@@ -159,15 +157,31 @@ func (ssm *StateManager) SetState(ctx context.Context, poolerType clustermetadat
 	// error otherwise. Mutate also validates the Type ↔ CurrentLeadership
 	// invariant.
 	if err := ssm.record.Mutate(ctx, func(s *MutablePoolerRecordState) {
-		s.Type = poolerType
+		s.Type = newType
 		s.ServingStatus = servingStatus
-		s.CurrentLeadership = desiredObs
+		s.CurrentLeadership = newObs
 	}); err != nil {
 		return err
 	}
 
 	ssm.logger.InfoContext(ctx, "Serving state converged",
-		"type", poolerType, "status", servingStatus)
+		"type", newType, "status", servingStatus)
 
 	return nil
+}
+
+// deriveTypeAndObs returns the PoolerType and LeaderObservation implied
+// by rule for the pooler identified by selfID. See StateManager docs for
+// the derivation rules.
+func deriveTypeAndObs(rule *clustermetadatapb.ShardRule, selfID *clustermetadatapb.ID) (clustermetadatapb.PoolerType, *clustermetadatapb.LeaderObservation) {
+	if rule == nil {
+		return clustermetadatapb.PoolerType_UNKNOWN, nil
+	}
+	if proto.Equal(rule.GetLeaderId(), selfID) {
+		return clustermetadatapb.PoolerType_PRIMARY, &clustermetadatapb.LeaderObservation{
+			LeaderId:   selfID,
+			LeaderTerm: rule.GetRuleNumber().GetCoordinatorTerm(),
+		}
+	}
+	return clustermetadatapb.PoolerType_REPLICA, nil
 }

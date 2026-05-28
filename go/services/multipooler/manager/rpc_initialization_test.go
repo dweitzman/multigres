@@ -424,7 +424,7 @@ func TestDetermineRemedialAction(t *testing.T) {
 				isPrimary:       true,
 			},
 			poolerType:     clustermetadatapb.PoolerType_REPLICA,
-			expectedAction: remedialActionAdjustTypeToPrimary,
+			expectedAction: remedialActionDemoteStalePrimary,
 		},
 		{
 			name: "postgres_ready_demote_to_replica",
@@ -434,7 +434,7 @@ func TestDetermineRemedialAction(t *testing.T) {
 				isPrimary:       false,
 			},
 			poolerType:     clustermetadatapb.PoolerType_PRIMARY,
-			expectedAction: remedialActionAdjustTypeToReplica,
+			expectedAction: remedialActionResignStaleLeader,
 		},
 		{
 			name: "postgres_ready_type_matches_replica_no_primary_term",
@@ -458,7 +458,7 @@ func TestDetermineRemedialAction(t *testing.T) {
 			poolerType:         clustermetadatapb.PoolerType_REPLICA,
 			primaryTerm:        5,
 			resignedLeaderTerm: 0,
-			expectedAction:     remedialActionAdjustTypeToReplica,
+			expectedAction:     remedialActionResignStaleLeader,
 		},
 		{
 			// Signal already published — no action needed.
@@ -732,7 +732,7 @@ func TestTakeRemedialAction_ResignationSignal(t *testing.T) {
 	}{
 		{
 			name:        "AdjustTypeToReplica sets resignation at primary_term",
-			action:      remedialActionAdjustTypeToReplica,
+			action:      remedialActionResignStaleLeader,
 			poolerType:  clustermetadatapb.PoolerType_PRIMARY,
 			primaryTerm: 5,
 			wantAvStatus: &clustermetadatapb.AvailabilityStatus{
@@ -747,7 +747,7 @@ func TestTakeRemedialAction_ResignationSignal(t *testing.T) {
 		},
 		{
 			name:        "AdjustTypeToReplica sets no resignation when primary_term is zero",
-			action:      remedialActionAdjustTypeToReplica,
+			action:      remedialActionResignStaleLeader,
 			poolerType:  clustermetadatapb.PoolerType_PRIMARY,
 			primaryTerm: 0,
 			wantAvStatus: &clustermetadatapb.AvailabilityStatus{
@@ -758,7 +758,7 @@ func TestTakeRemedialAction_ResignationSignal(t *testing.T) {
 		},
 		{
 			name:           "AdjustTypeToPrimary does not clear existing resignation signal",
-			action:         remedialActionAdjustTypeToPrimary,
+			action:         remedialActionDemoteStalePrimary,
 			poolerType:     clustermetadatapb.PoolerType_REPLICA,
 			resignedBefore: 7,
 			wantAvStatus: &clustermetadatapb.AvailabilityStatus{

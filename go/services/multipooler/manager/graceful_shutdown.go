@@ -76,9 +76,10 @@ func (pm *MultiPoolerManager) GracefulShutdown(ctx context.Context) {
 	// Transition to NOT_SERVING so the gateway sees a clean rejection for new
 	// queries while in-flight transactions are allowed to complete (bounded by
 	// --connpool-drain-grace-period). Best-effort: a failure here is logged but
-	// doesn't block the rest of shutdown.
+	// doesn't block the rest of shutdown. Pass the cached rule so Type stays
+	// consistent with the role we were running as.
 	if pm.servingState != nil {
-		if err := pm.servingState.SetState(lockCtx, pm.record.Type(), clustermetadatapb.PoolerServingStatus_NOT_SERVING); err != nil {
+		if err := pm.servingState.SetState(lockCtx, pm.latestRule(), clustermetadatapb.PoolerServingStatus_NOT_SERVING); err != nil {
 			pm.logger.WarnContext(lockCtx, "transition to NOT_SERVING returned error; proceeding with shutdown",
 				"error", err)
 		}

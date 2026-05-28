@@ -711,9 +711,12 @@ func (pm *MultiPoolerManager) SetTermPrimary(ctx context.Context, req *consensus
 		// external pg_promote-then-restart) but the pooler's topology entry still
 		// reads PRIMARY. Without this, the stale PRIMARY label causes the
 		// stale-leader analyzer to keep firing forever. Propose has the same
-		// step on its replica branch for the same reason.
-		if err := pm.changeTypeLocked(ctx, clustermetadatapb.PoolerType_REPLICA); err != nil {
-			pm.logger.WarnContext(ctx, "Failed to update pooler type to REPLICA after SetTermPrimary", "error", err)
+		// step on its replica branch for the same reason. Pass the incoming
+		// rule directly: rule_store's cached position still names this pooler
+		// as leader until WAL replay catches up, so SetState would otherwise
+		// derive Type=PRIMARY here.
+		if err := pm.servingState.SetState(ctx, rule, clustermetadatapb.PoolerServingStatus_SERVING); err != nil {
+			pm.logger.WarnContext(ctx, "Failed to transition to REPLICA after SetTermPrimary", "error", err)
 		}
 	}
 

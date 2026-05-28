@@ -16,6 +16,7 @@ package manager
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -200,8 +201,8 @@ func (r *poolerRecord) Mutate(ctx context.Context, fn func(*MutablePoolerRecordS
 func (r *poolerRecord) applyMutation(fn func(*MutablePoolerRecordState)) error {
 	current := r.desired.Load()
 	state := MutablePoolerRecordState{
-		Type:               current.Type,
-		ServingStatus:      current.ServingStatus,
+		Type:              current.Type,
+		ServingStatus:     current.ServingStatus,
 		CurrentLeadership: current.CurrentLeadership,
 	}
 	fn(&state)
@@ -225,7 +226,7 @@ func (r *poolerRecord) validateState(state *MutablePoolerRecordState) error {
 	hasObs := state.CurrentLeadership != nil
 	switch {
 	case isPrimary && !hasObs:
-		return fmt.Errorf("invariant violated: Type=PRIMARY but CurrentLeadership is nil")
+		return errors.New("invariant violated: Type=PRIMARY but CurrentLeadership is nil")
 	case !isPrimary && hasObs:
 		return fmt.Errorf("invariant violated: Type=%s but CurrentLeadership is set", state.Type)
 	case hasObs && !proto.Equal(state.CurrentLeadership.LeaderId, r.Id()):
@@ -300,7 +301,15 @@ func (r *poolerRecord) Unregister(ctx context.Context, finalize func(*MutablePoo
 	r.publisherWG.Wait()
 
 	if finalize != nil {
-		r.applyMutation(finalize)
+		if err := r.applyMutation(finalize); err != nil {
+			// Validation failure during shutdown finalize: log and proceed.
+			// Continuing with the existing desired state is safer than
+			// blocking shutdown — the publisher is already cancelled and
+			// the subsequent topology write will still capture whatever
+			// state we have.
+			r.logger.WarnContext(ctx, "Unregister finalize mutation failed validation; publishing existing desired state",
+				"error", err)
+		}
 	}
 
 	desired := r.desired.Load()
