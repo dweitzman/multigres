@@ -84,6 +84,22 @@ message StandbyReplicationStatus {
   // before terminating the WAL receiver connection.
   // From current_setting('wal_receiver_timeout').
   google.protobuf.Duration wal_receiver_timeout = 11;
+
+  // Timestamp the pooler's WAL receiver entered a non-"streaming" state
+  // (anything other than wal_receiver_status="streaming") and stayed
+  // there. Sticky: set on the transition out of "streaming", cleared
+  // when "streaming" resumes. Unset when:
+  //   - currently streaming;
+  //   - no primary_conninfo is configured (no replication expected,
+  //     e.g. primaries or fresh standbys before initial bootstrap);
+  //   - the multipooler process just started and hasn't yet made an
+  //     observation in the current "primary_conninfo set" epoch.
+  //
+  // Consumers (a future StuckReplicationAnalyzer in multiorch, and the
+  // pooler's own postgres monitor for self-rewind / self-drain
+  // decisions) should apply a duration threshold to absorb bootstrap
+  // windows and transient reconnects.
+  google.protobuf.Timestamp wal_receiver_not_streaming_since = 12;
 }
 
 // Wait for PostgreSQL server to reach a specific LSN position

@@ -350,7 +350,66 @@ func (pm *MultiPoolerManager) queryReplicationStatus(ctx context.Context) (*mult
 	}
 	status.PrimaryConnInfo = parsedConnInfo
 
+	// Track WAL receiver streaming transitions. The state machine is only
+	// active while primary_conninfo is set — primaries (and standbys with
+	// no replication configured yet) shouldn't be flagged as "stuck."
+	primaryConfigured := primaryConnInfo != ""
+	if since := pm.updateWalReceiverStreamState(status.WalReceiverStatus, primaryConfigured); !since.IsZero() {
+		status.WalReceiverNotStreamingSince = timestamppb.New(since)
+	}
+
 	return status, nil
+}
+
+// updateWalReceiverStreamState advances pm.walReceiverStreamState based on
+// the latest observation of pg_stat_wal_receiver.status. Returns the
+// "not streaming since" timestamp to surface in StandbyReplicationStatus,
+// or the zero time when the receiver is currently streaming or no epoch
+// is active.
+//
+// Lifecycle of an epoch:
+//   - primary_conninfo cleared → reset state (zero-value epoch)
+//   - first observation with primary_conninfo set → initialize. If the
+//     receiver is already streaming, record that. If not, stamp the
+//     "since" timestamp now (this absorbs the first-observation-while-
+//     bootstrapping case under the consumer's duration threshold).
+//   - subsequent observations toggle currentlyStreaming and stamp/clear
+//     notStreamingSince on transitions.
+func (pm *MultiPoolerManager) updateWalReceiverStreamState(walReceiverStatus string, primaryConfigured bool) time.Time {
+	pm.walReceiverStreamMu.Lock()
+	defer pm.walReceiverStreamMu.Unlock()
+
+	if !primaryConfigured {
+		// No replication expected — reset.
+		pm.walReceiverStreamState = walReceiverStreamState{}
+		return time.Time{}
+	}
+
+	isStreaming := walReceiverStatus == "streaming"
+
+	if !pm.walReceiverStreamState.initialized {
+		pm.walReceiverStreamState.initialized = true
+		pm.walReceiverStreamState.currentlyStreaming = isStreaming
+		if !isStreaming {
+			pm.walReceiverStreamState.notStreamingSince = time.Now()
+		}
+		return pm.walReceiverStreamState.notStreamingSince
+	}
+
+	if isStreaming {
+		pm.walReceiverStreamState.currentlyStreaming = true
+		pm.walReceiverStreamState.notStreamingSince = time.Time{}
+		return time.Time{}
+	}
+
+	// Not streaming, and we're already initialized in this epoch.
+	if pm.walReceiverStreamState.currentlyStreaming {
+		// Just transitioned out of "streaming".
+		pm.walReceiverStreamState.currentlyStreaming = false
+		pm.walReceiverStreamState.notStreamingSince = time.Now()
+	}
+	// Otherwise sticky: keep the original transition timestamp.
+	return pm.walReceiverStreamState.notStreamingSince
 }
 
 // waitForReplicationPause polls until WAL replay is paused and returns the status at that moment.

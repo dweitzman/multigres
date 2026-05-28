@@ -208,6 +208,35 @@ type MultiPoolerManager struct {
 	// healthStreamer streams health state to subscribers.
 	// Owns all health-related state and provides typed update methods.
 	healthStreamer *healthStreamer
+
+	// walReceiverStream tracks transitions of the local WAL receiver
+	// in/out of pg_stat_wal_receiver.status="streaming" so we can surface
+	// a "not streaming since" timestamp in StandbyReplicationStatus.
+	// Updated inside queryReplicationStatus after each successful query.
+	// Future consumers: a StuckReplicationAnalyzer in multiorch (purely
+	// observability) and the pooler's postgres monitor itself, which
+	// will use the duration to decide when to self-rewind or
+	// self-degrade. See proto comment on
+	// StandbyReplicationStatus.wal_receiver_not_streaming_since.
+	walReceiverStreamMu    sync.Mutex
+	walReceiverStreamState walReceiverStreamState
+}
+
+// walReceiverStreamState tracks one pooler's WAL receiver streaming
+// transitions across successive queryReplicationStatus calls. The zero
+// value represents "no observation yet in the current
+// primary_conninfo-set epoch."
+type walReceiverStreamState struct {
+	// initialized is true after the first observation in the current
+	// epoch. Reset to false when primary_conninfo is cleared.
+	initialized bool
+	// currentlyStreaming is the last observed boolean state
+	// (wal_receiver_status == "streaming").
+	currentlyStreaming bool
+	// notStreamingSince is the timestamp the receiver entered (or was
+	// first observed in) a non-"streaming" state in the current epoch.
+	// Zero when currently streaming or when no epoch is active.
+	notStreamingSince time.Time
 }
 
 // promotionState tracks which parts of the promotion are complete
