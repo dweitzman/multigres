@@ -209,6 +209,94 @@ func TestReplicaNotReplicatingAnalyzer_Analyze(t *testing.T) {
 		require.Empty(t, problems)
 	})
 
+	t.Run("detects replica whose ReplicationPrimary names a wrong (non-self) leader", func(t *testing.T) {
+		// Replica's primary_conninfo is set, replication isn't stopped, but
+		// its self-reported ReplicationPrimary names the old leader at term 1
+		// while the cluster has advanced to term 2 under a different leader.
+		// SetTermPrimary against the new leader will retarget it.
+		newLeaderID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "new-leader"}
+		staleLeaderID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "old-leader"}
+		newLeaderPA := &PoolerAnalysis{
+			PoolerID: newLeaderID,
+			ShardKey: shardKey,
+			IsLeader: true,
+			ConsensusStatus: &clustermetadatapb.ConsensusStatus{
+				CurrentPosition: &clustermetadatapb.PoolerPosition{
+					Rule: &clustermetadatapb.ShardRule{
+						RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 2},
+						LeaderId:   newLeaderID,
+					},
+				},
+			},
+		}
+		sa := &ShardAnalysis{
+			ShardKey:        shardKey,
+			LeaderReachable: true,
+			Leader:          newLeaderPA,
+			LeaderObservation: &clustermetadatapb.LeaderObservation{
+				LeaderId:         newLeaderID,
+				LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 2},
+			},
+			Analyses: []*PoolerAnalysis{{
+				PoolerID:            replicaID,
+				ShardKey:            shardKey,
+				IsLeader:            false,
+				IsInitialized:       true,
+				PrimaryConnInfoHost: "old-leader.example.com",
+				ReplicationStopped:  false,
+				ConsensusStatus: &clustermetadatapb.ConsensusStatus{
+					ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{
+						Rule: &clustermetadatapb.ShardRule{
+							RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
+							LeaderId:   staleLeaderID,
+						},
+					},
+				},
+			}},
+		}
+
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		require.Len(t, problems, 1)
+		require.Equal(t, types.ProblemReplicaNotReplicating, problems[0].Code)
+		require.Equal(t, replicaID.Name, problems[0].PoolerID.Name)
+	})
+
+	t.Run("ignores replica whose ReplicationPrimary matches cluster leader", func(t *testing.T) {
+		// Healthy steady state: replica's ReplicationPrimary names the same
+		// LeaderId as the cluster, even if the rule number is slightly older.
+		// Per the staleness model, same LeaderId at any rule = not stale.
+		sa := &ShardAnalysis{
+			ShardKey:        shardKey,
+			LeaderReachable: true,
+			Leader:          reachableLeader,
+			LeaderObservation: &clustermetadatapb.LeaderObservation{
+				LeaderId:         primaryID,
+				LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 2},
+			},
+			Analyses: []*PoolerAnalysis{{
+				PoolerID:            replicaID,
+				ShardKey:            shardKey,
+				IsLeader:            false,
+				IsInitialized:       true,
+				PrimaryConnInfoHost: "primary.example.com",
+				ReplicationStopped:  false,
+				ConsensusStatus: &clustermetadatapb.ConsensusStatus{
+					ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{
+						Rule: &clustermetadatapb.ShardRule{
+							RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
+							LeaderId:   primaryID,
+						},
+					},
+				},
+			}},
+		}
+
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		require.Empty(t, problems)
+	})
+
 	t.Run("analyzer name is correct", func(t *testing.T) {
 		require.Equal(t, types.CheckName("ReplicaNotReplicating"), analyzer.Name())
 	})

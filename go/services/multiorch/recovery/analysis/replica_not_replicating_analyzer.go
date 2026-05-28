@@ -19,11 +19,17 @@ import (
 	"fmt"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
 )
 
-// ReplicaNotReplicatingAnalyzer detects when a replica has no replication configured.
-// This happens when primary_conninfo is not set or replication is stopped.
+// ReplicaNotReplicatingAnalyzer detects when a replica's ReplicationPrimary
+// is out of step with the cluster-authoritative leader: no primary_conninfo
+// configured, replication explicitly stopped, or replication pointed at a
+// pooler other than the current cluster leader. All three cases reduce to
+// the same fix — SetTermPrimary against the current leader — but they
+// happen at different stages of a pooler's lifecycle.
 type ReplicaNotReplicatingAnalyzer struct {
 	factory *RecoveryActionFactory
 }
@@ -69,8 +75,8 @@ func (a *ReplicaNotReplicatingAnalyzer) analyzePooler(sa *ShardAnalysis, poolerA
 		return nil, nil
 	}
 
-	// Check if replication is not configured or stopped
-	if !a.needsReplicationFix(poolerAnalysis) {
+	// Check if replication is not configured, stopped, or stale
+	if !a.needsReplicationFix(sa, poolerAnalysis) {
 		return nil, nil
 	}
 
@@ -87,15 +93,30 @@ func (a *ReplicaNotReplicatingAnalyzer) analyzePooler(sa *ShardAnalysis, poolerA
 	}, nil
 }
 
-// needsReplicationFix returns true if replication is not configured or stopped.
-func (a *ReplicaNotReplicatingAnalyzer) needsReplicationFix(analysis *PoolerAnalysis) bool {
-	// No primary_conninfo configured
+// needsReplicationFix returns true if the pooler's ReplicationPrimary is out
+// of step with the cluster-authoritative leader.
+func (a *ReplicaNotReplicatingAnalyzer) needsReplicationFix(sa *ShardAnalysis, analysis *PoolerAnalysis) bool {
+	// No primary_conninfo configured — pooler hasn't been told about a
+	// primary yet, or had its config wiped (e.g. fresh standby).
 	if analysis.PrimaryConnInfoHost == "" {
 		return true
 	}
 
-	// Replication explicitly stopped
+	// Replication explicitly stopped — WAL replay paused, WAL receiver
+	// in non-streaming state, etc. The pooler is configured but isn't
+	// making progress.
 	if analysis.ReplicationStopped {
+		return true
+	}
+
+	// Pooler's self-reported ReplicationPrimary names a leader other
+	// than the cluster's authoritative one — stale. The StaleLeader
+	// analyzer covers the special case where the stale claim names the
+	// pooler itself; here we cover everyone else.
+	selfObs := analysis.SelfLeaderObservation()
+	if selfObs.GetLeaderId() != nil &&
+		!proto.Equal(selfObs.GetLeaderId(), analysis.PoolerID) &&
+		!proto.Equal(selfObs.GetLeaderId(), sa.LeaderObservation.GetLeaderId()) {
 		return true
 	}
 
