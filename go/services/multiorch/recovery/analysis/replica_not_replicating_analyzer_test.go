@@ -50,17 +50,28 @@ func TestReplicaNotReplicatingAnalyzer_Analyze(t *testing.T) {
 	replicaID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica1"}
 	shardKey := &clustermetadatapb.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"}
 
-	// TODO: tests in this file pre-date the ShardLeader refactor. They
-	// previously seeded ShardAnalysis.HighestTermReachableLeader to
-	// signal "the analyzer should see a reachable primary"; in the new
-	// model that's expressed by sa.Leader != nil && sa.LeaderReachable.
-	// Helper kept here for the upcoming test rewrite.
-	_ = primaryID
+	// reachableLeader is the PoolerAnalysis for a healthy primary that
+	// has already observed its own rule — the precondition the analyzer
+	// needs (sa.Leader != nil && sa.LeaderReachable) before it will
+	// generate a ReplicaNotReplicating problem.
+	reachableLeader := &PoolerAnalysis{
+		PoolerID: primaryID,
+		ShardKey: shardKey,
+		IsLeader: true,
+		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
+			CurrentPosition: &clustermetadatapb.PoolerPosition{
+				Rule: &clustermetadatapb.ShardRule{
+					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
+				},
+			},
+		},
+	}
 
 	t.Run("detects replica with no primary_conninfo", func(t *testing.T) {
 		sa := &ShardAnalysis{
 			ShardKey:        shardKey,
 			LeaderReachable: true,
+			Leader:          reachableLeader,
 			Analyses: []*PoolerAnalysis{{
 				PoolerID:            replicaID,
 				ShardKey:            shardKey,
@@ -84,6 +95,7 @@ func TestReplicaNotReplicatingAnalyzer_Analyze(t *testing.T) {
 		sa := &ShardAnalysis{
 			ShardKey:        shardKey,
 			LeaderReachable: true,
+			Leader:          reachableLeader,
 			Analyses: []*PoolerAnalysis{{
 				PoolerID:            replicaID,
 				ShardKey:            shardKey,
@@ -106,9 +118,12 @@ func TestReplicaNotReplicatingAnalyzer_Analyze(t *testing.T) {
 	// rule to put in SetTermPrimaryRequest. Waiting one cycle is cheap; the next
 	// health snapshot will repopulate the field.
 	t.Run("skips when no usable primary is known", func(t *testing.T) {
+		// sa.Leader == nil signals "no cluster-authoritative leader pooler
+		// is in our known set yet" — the analyzer needs a leader to put
+		// in SetTermPrimaryRequest.Rule, so it bows out.
 		sa := &ShardAnalysis{
 			ShardKey:        shardKey,
-			LeaderReachable: true,
+			LeaderReachable: false,
 			Analyses: []*PoolerAnalysis{{
 				PoolerID:            replicaID,
 				ShardKey:            shardKey,
@@ -126,6 +141,7 @@ func TestReplicaNotReplicatingAnalyzer_Analyze(t *testing.T) {
 		sa := &ShardAnalysis{
 			ShardKey:        shardKey,
 			LeaderReachable: true,
+			Leader:          reachableLeader,
 			Analyses: []*PoolerAnalysis{{
 				PoolerID:            replicaID,
 				ShardKey:            shardKey,
@@ -202,6 +218,7 @@ func TestReplicaNotReplicatingAnalyzer_Analyze(t *testing.T) {
 		sa := &ShardAnalysis{
 			ShardKey:        shardKey,
 			LeaderReachable: true,
+			Leader:          reachableLeader,
 			Analyses: []*PoolerAnalysis{{
 				PoolerID:            replicaID,
 				ShardKey:            shardKey,

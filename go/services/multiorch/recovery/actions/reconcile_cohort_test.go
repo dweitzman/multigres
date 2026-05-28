@@ -67,6 +67,10 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 				Type:     clustermetadatapb.PoolerType_PRIMARY,
 				Hostname: "primary.example.com",
 				PortMap:  map[string]int32{"postgres": 5432},
+				CurrentLeadership: &clustermetadatapb.LeaderObservation{
+					LeaderId:         primaryID,
+					LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 3, LeaderSubterm: 7},
+				},
 			},
 			ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 				TermRevocation: &clustermetadatapb.TermRevocation{RevokedBelowTerm: 3},
@@ -163,7 +167,9 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 		defer ts.Close()
 		ps := store.NewPoolerStore(fakeClient, slog.Default())
 		// Primary with no CurrentPosition.Rule — e.g. fresh process before
-		// the first health snapshot populates the consensus rule.
+		// the first health snapshot populates the consensus rule. CurrentLeadership
+		// is still set so ShardLeader can identify the primary; the action then
+		// observes the missing CurrentPosition.Rule and returns FAILED_PRECONDITION.
 		ps.Set("multipooler-cell1-primary", &multiorchdatapb.PoolerHealthState{
 			MultiPooler: &clustermetadatapb.MultiPooler{
 				Id:       primaryID,
@@ -171,6 +177,10 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 				Type:     clustermetadatapb.PoolerType_PRIMARY,
 				Hostname: "primary.example.com",
 				PortMap:  map[string]int32{"postgres": 5432},
+				CurrentLeadership: &clustermetadatapb.LeaderObservation{
+					LeaderId:         primaryID,
+					LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
+				},
 			},
 			ConsensusStatus: &clustermetadatapb.ConsensusStatus{},
 		})

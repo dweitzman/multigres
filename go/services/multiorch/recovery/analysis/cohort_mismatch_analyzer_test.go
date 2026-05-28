@@ -83,6 +83,11 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 			LeaderPostgresReady: true,
 			LeaderStandbyIDs:    standbys,
 			Analyses:            analyses,
+			LeaderObservation: &clustermetadatapb.LeaderObservation{
+				LeaderId:         primaryID,
+				LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
+			},
+			Leader: leaderPA,
 		}
 	}
 

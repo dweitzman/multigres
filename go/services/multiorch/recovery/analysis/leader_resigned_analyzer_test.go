@@ -50,9 +50,15 @@ func TestLeaderResignedAnalyzer_Analyze(t *testing.T) {
 	leaderID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "leader-1"}
 	shardKey := &clustermetadatapb.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"}
 
+	leaderObs := &clustermetadatapb.LeaderObservation{
+		LeaderId:         leaderID,
+		LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
+	}
+
 	t.Run("fires when leader has resigned", func(t *testing.T) {
 		sa := &ShardAnalysis{
 			ShardKey:          shardKey,
+			LeaderObservation: leaderObs,
 			LeaderHasResigned: true,
 		}
 		problems, err := analyzer.Analyze(sa)
@@ -69,6 +75,7 @@ func TestLeaderResignedAnalyzer_Analyze(t *testing.T) {
 	t.Run("does not fire when leader has not resigned", func(t *testing.T) {
 		sa := &ShardAnalysis{
 			ShardKey:          shardKey,
+			LeaderObservation: leaderObs,
 			LeaderHasResigned: false,
 		}
 		problems, err := analyzer.Analyze(sa)

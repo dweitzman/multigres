@@ -721,24 +721,28 @@ func TestProcessShardProblems_DependencyEnforcement(t *testing.T) {
 		// Even though IsLastCheckValid is false, ConsensusStatus carries the
 		// last-known state from before the primary went unreachable, and
 		// analysis.IsLeader is rule-based.
+		primaryRule := &clustermetadatapb.ShardRule{
+			RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
+			LeaderId:   primaryID,
+		}
 		primaryPooler := &multiorchdatapb.PoolerHealthState{
 			MultiPooler: &clustermetadatapb.MultiPooler{
 				Id:       primaryID,
 				ShardKey: &clustermetadatapb.ShardKey{Database: "db1", TableGroup: "tg1", Shard: "0"},
 				Type:     clustermetadatapb.PoolerType_PRIMARY,
 				Hostname: "primary-host",
+				CurrentLeadership: &clustermetadatapb.LeaderObservation{
+					LeaderId:         primaryID,
+					LeaderRuleNumber: primaryRule.GetRuleNumber(),
+				},
 			},
 			IsLastCheckValid: false,
 			IsUpToDate:       true,
 			LastSeen:         timestamppb.Now(),
 			ConsensusStatus: &clustermetadatapb.ConsensusStatus{
-				Id: primaryID,
-				CurrentPosition: &clustermetadatapb.PoolerPosition{
-					Rule: &clustermetadatapb.ShardRule{
-						RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
-						LeaderId:   primaryID,
-					},
-				},
+				Id:                 primaryID,
+				CurrentPosition:    &clustermetadatapb.PoolerPosition{Rule: primaryRule},
+				ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{Rule: primaryRule},
 			},
 		}
 		engine.poolerStore.Set("multipooler-cell1-primary-pooler", primaryPooler)
@@ -1048,25 +1052,29 @@ func TestRecoveryLoop_PostRecoveryRefresh(t *testing.T) {
 	initialReplica1Check := time.Now().Add(-4 * time.Minute)
 	initialReplica2Check := time.Now().Add(-3 * time.Minute)
 
+	primaryRule := &clustermetadatapb.ShardRule{
+		RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
+		LeaderId:   primaryID,
+	}
 	primaryPooler := &multiorchdatapb.PoolerHealthState{
 		MultiPooler: &clustermetadatapb.MultiPooler{
 			Id:       primaryID,
 			ShardKey: &clustermetadatapb.ShardKey{Database: "db1", TableGroup: "tg1", Shard: "0"},
 			Type:     clustermetadatapb.PoolerType_PRIMARY,
 			Hostname: "primary-host",
+			CurrentLeadership: &clustermetadatapb.LeaderObservation{
+				LeaderId:         primaryID,
+				LeaderRuleNumber: primaryRule.GetRuleNumber(),
+			},
 		},
 		IsLastCheckValid:   false, // Primary is dead
 		IsUpToDate:         true,
 		LastSeen:           timestamppb.New(time.Now().Add(-1 * time.Minute)),
 		LastCheckAttempted: timestamppb.New(initialPrimaryCheck),
 		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
-			Id: primaryID,
-			CurrentPosition: &clustermetadatapb.PoolerPosition{
-				Rule: &clustermetadatapb.ShardRule{
-					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
-					LeaderId:   primaryID,
-				},
-			},
+			Id:                 primaryID,
+			CurrentPosition:    &clustermetadatapb.PoolerPosition{Rule: primaryRule},
+			ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{Rule: primaryRule},
 		},
 	}
 	engine.poolerStore.Set("multipooler-cell1-primary-pooler", primaryPooler)

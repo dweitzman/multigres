@@ -176,13 +176,14 @@ func TestFixReplicationAction_ExecuteUnsupportedProblemCode(t *testing.T) {
 			Type: clustermetadatapb.PoolerType_REPLICA,
 		},
 	})
+	primaryID := &clustermetadatapb.ID{
+		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Cell:      "cell1",
+		Name:      "primary",
+	}
 	poolerStore.Set("multipooler-cell1-primary", &multiorchdatapb.PoolerHealthState{
 		MultiPooler: &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
-				Cell:      "cell1",
-				Name:      "primary",
-			},
+			Id: primaryID,
 			ShardKey: &clustermetadatapb.ShardKey{
 				Database:   "testdb",
 				TableGroup: "default",
@@ -191,6 +192,10 @@ func TestFixReplicationAction_ExecuteUnsupportedProblemCode(t *testing.T) {
 			Type:     clustermetadatapb.PoolerType_PRIMARY,
 			Hostname: "primary.example.com",
 			PortMap:  map[string]int32{"postgres": 5432},
+			CurrentLeadership: &clustermetadatapb.LeaderObservation{
+				LeaderId:         primaryID,
+				LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
+			},
 		},
 	})
 
@@ -275,13 +280,14 @@ func TestFixReplicationAction_ExecuteSuccessNotReplicating(t *testing.T) {
 		},
 		Lsn: "0/1234",
 	}
+	primaryID := &clustermetadatapb.ID{
+		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Cell:      "cell1",
+		Name:      "primary",
+	}
 	poolerStore.Set("multipooler-cell1-primary", &multiorchdatapb.PoolerHealthState{
 		MultiPooler: &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
-				Cell:      "cell1",
-				Name:      "primary",
-			},
+			Id: primaryID,
 			ShardKey: &clustermetadatapb.ShardKey{
 				Database:   "testdb",
 				TableGroup: "default",
@@ -290,6 +296,10 @@ func TestFixReplicationAction_ExecuteSuccessNotReplicating(t *testing.T) {
 			Type:     clustermetadatapb.PoolerType_PRIMARY,
 			Hostname: "primary.example.com",
 			PortMap:  map[string]int32{"postgres": 5432},
+			CurrentLeadership: &clustermetadatapb.LeaderObservation{
+				LeaderId:         primaryID,
+				LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
+			},
 		},
 		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 			TermRevocation:  &clustermetadatapb.TermRevocation{RevokedBelowTerm: 1},
@@ -380,13 +390,14 @@ func TestFixReplicationAction_ExecuteAlreadyConfigured(t *testing.T) {
 			Type: clustermetadatapb.PoolerType_REPLICA,
 		},
 	})
+	primaryID := &clustermetadatapb.ID{
+		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Cell:      "cell1",
+		Name:      "primary",
+	}
 	poolerStore.Set("multipooler-cell1-primary", &multiorchdatapb.PoolerHealthState{
 		MultiPooler: &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
-				Cell:      "cell1",
-				Name:      "primary",
-			},
+			Id: primaryID,
 			ShardKey: &clustermetadatapb.ShardKey{
 				Database:   "testdb",
 				TableGroup: "default",
@@ -395,6 +406,10 @@ func TestFixReplicationAction_ExecuteAlreadyConfigured(t *testing.T) {
 			Type:     clustermetadatapb.PoolerType_PRIMARY,
 			Hostname: "primary.example.com",
 			PortMap:  map[string]int32{"postgres": 5432},
+			CurrentLeadership: &clustermetadatapb.LeaderObservation{
+				LeaderId:         primaryID,
+				LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
+			},
 		},
 	})
 
@@ -578,12 +593,13 @@ func TestFixReplicationAction_FailsWhenReplicationDoesNotStart(t *testing.T) {
 		},
 		Type: clustermetadatapb.PoolerType_REPLICA,
 	}
+	primaryID := &clustermetadatapb.ID{
+		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Cell:      "cell1",
+		Name:      "primary",
+	}
 	primary := &clustermetadatapb.MultiPooler{
-		Id: &clustermetadatapb.ID{
-			Component: clustermetadatapb.ID_MULTIPOOLER,
-			Cell:      "cell1",
-			Name:      "primary",
-		},
+		Id: primaryID,
 		ShardKey: &clustermetadatapb.ShardKey{
 			Database:   "testdb",
 			TableGroup: "default",
@@ -592,6 +608,10 @@ func TestFixReplicationAction_FailsWhenReplicationDoesNotStart(t *testing.T) {
 		Type:     clustermetadatapb.PoolerType_PRIMARY,
 		Hostname: "primary.example.com",
 		PortMap:  map[string]int32{"postgres": 5432},
+		CurrentLeadership: &clustermetadatapb.LeaderObservation{
+			LeaderId:         primaryID,
+			LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
+		},
 	}
 
 	// Create in topology for markPoolerDrained to work

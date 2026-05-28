@@ -59,6 +59,10 @@ func TestLeaderIsDeadAnalyzer_Analyze(t *testing.T) {
 			ShardKey:              shardKey,
 			LeaderReachable:       false,
 			HasInitializedReplica: true,
+			LeaderObservation: &clustermetadatapb.LeaderObservation{
+				LeaderId:         leaderID,
+				LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
+			},
 			Analyses: []*PoolerAnalysis{
 				{
 					PoolerID:      &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "follower-1"},

@@ -34,14 +34,14 @@ import (
 // in its current rule with the given coordinator term. This is the minimal
 // fixture required for commonconsensus.IsLeader to return true for a given pooler.
 func primaryConsensusStatus(id *clustermetadatapb.ID, term int64) *clustermetadatapb.ConsensusStatus {
+	rule := &clustermetadatapb.ShardRule{
+		RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: term},
+		LeaderId:   id,
+	}
 	return &clustermetadatapb.ConsensusStatus{
-		Id: id,
-		CurrentPosition: &clustermetadatapb.PoolerPosition{
-			Rule: &clustermetadatapb.ShardRule{
-				RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: term},
-				LeaderId:   id,
-			},
-		},
+		Id:                 id,
+		CurrentPosition:    &clustermetadatapb.PoolerPosition{Rule: rule},
+		ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{Rule: rule},
 	}
 }
 
@@ -435,15 +435,16 @@ func TestPopulatePrimaryInfo_PrimaryPostgresDown(t *testing.T) {
 
 	primaryID := "multipooler-cell1-primary"
 	replicaID := "multipooler-cell1-replica"
+	primaryPoolerID := &clustermetadatapb.ID{
+		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Cell:      "cell1",
+		Name:      "primary",
+	}
 
 	// Primary with PostgresReady: false (postgres is down)
 	ps.Set(primaryID, &multiorchdatapb.PoolerHealthState{
 		MultiPooler: &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
-				Cell:      "cell1",
-				Name:      "primary",
-			},
+			Id: primaryPoolerID,
 			ShardKey: &clustermetadatapb.ShardKey{
 				Database:   "db1",
 				TableGroup: "tg1",
@@ -451,6 +452,7 @@ func TestPopulatePrimaryInfo_PrimaryPostgresDown(t *testing.T) {
 			},
 		},
 		IsLastCheckValid: true,
+		ConsensusStatus:  primaryConsensusStatus(primaryPoolerID, 1),
 		Status: &multipoolermanagerdatapb.Status{
 			PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 			PostgresReady: false, // Postgres is down!
@@ -709,6 +711,7 @@ func TestIsInStandbyList(t *testing.T) {
 				IsLastCheckValid: true,
 				IsUpToDate:       true,
 				LastSeen:         timestamppb.Now(),
+				ConsensusStatus:  primaryConsensusStatus(primaryID, 1),
 				Status: &multipoolermanagerdatapb.Status{
 					PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 					PostgresReady: true,
@@ -733,16 +736,17 @@ func TestPopulatePrimaryInfo_PrimaryHealthFields(t *testing.T) {
 
 		primaryID := "multipooler-cell1-primary"
 		replicaID := "multipooler-cell1-replica"
+		primaryPoolerID := &clustermetadatapb.ID{
+			Component: clustermetadatapb.ID_MULTIPOOLER,
+			Cell:      "cell1",
+			Name:      "primary",
+		}
 
 		// Primary with pooler reachable and postgres running
 		respondedAt := time.Now().Add(-3 * time.Second)
 		ps.Set(primaryID, &multiorchdatapb.PoolerHealthState{
 			MultiPooler: &clustermetadatapb.MultiPooler{
-				Id: &clustermetadatapb.ID{
-					Component: clustermetadatapb.ID_MULTIPOOLER,
-					Cell:      "cell1",
-					Name:      "primary",
-				},
+				Id: primaryPoolerID,
 				ShardKey: &clustermetadatapb.ShardKey{
 					Database:   "db1",
 					TableGroup: "tg1",
@@ -753,6 +757,7 @@ func TestPopulatePrimaryInfo_PrimaryHealthFields(t *testing.T) {
 			},
 			IsLastCheckValid:      true,
 			LastPostgresReadyTime: timestamppb.New(respondedAt),
+			ConsensusStatus:       primaryConsensusStatus(primaryPoolerID, 1),
 			Status: &multipoolermanagerdatapb.Status{
 				PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 				PostgresReady: true,
@@ -854,14 +859,15 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 		primaryID := "multipooler-cell1-primary"
 		replica1ID := "multipooler-cell1-replica1"
 		replica2ID := "multipooler-cell1-replica2"
+		primaryPoolerID := &clustermetadatapb.ID{
+			Component: clustermetadatapb.ID_MULTIPOOLER,
+			Cell:      "cell1",
+			Name:      "primary",
+		}
 
 		ps.Set(primaryID, &multiorchdatapb.PoolerHealthState{
 			MultiPooler: &clustermetadatapb.MultiPooler{
-				Id: &clustermetadatapb.ID{
-					Component: clustermetadatapb.ID_MULTIPOOLER,
-					Cell:      "cell1",
-					Name:      "primary",
-				},
+				Id: primaryPoolerID,
 				ShardKey: &clustermetadatapb.ShardKey{
 					Database:   "db1",
 					TableGroup: "tg1",
@@ -871,6 +877,7 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 				PortMap:  map[string]int32{"postgres": 5432},
 			},
 			IsLastCheckValid: false, // Primary pooler is down
+			ConsensusStatus:  primaryConsensusStatus(primaryPoolerID, 1),
 			Status: &multipoolermanagerdatapb.Status{
 				PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 				PostgresReady: false,
@@ -1434,10 +1441,11 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 
 		primaryID := "multipooler-cell1-primary"
 		replicaID := "multipooler-cell1-replica"
+		primaryPoolerID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary"}
 
 		ps.Set(primaryID, &multiorchdatapb.PoolerHealthState{
 			MultiPooler: &clustermetadatapb.MultiPooler{
-				Id: &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary"},
+				Id: primaryPoolerID,
 				ShardKey: &clustermetadatapb.ShardKey{
 					Database:   "db1",
 					TableGroup: "tg1",
@@ -1446,6 +1454,7 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 				Hostname: "primary-host",
 				PortMap:  map[string]int32{"postgres": 5432},
 			},
+			ConsensusStatus: primaryConsensusStatus(primaryPoolerID, 1),
 			Status: &multipoolermanagerdatapb.Status{
 				PoolerType: clustermetadatapb.PoolerType_PRIMARY,
 			},
@@ -1518,6 +1527,7 @@ func TestPopulatePrimaryInfo_IsInPrimaryStandbyList(t *testing.T) {
 		IsLastCheckValid: true,
 		IsUpToDate:       true,
 		LastSeen:         timestamppb.Now(),
+		ConsensusStatus:  primaryConsensusStatus(primaryID, 1),
 		Status: &multipoolermanagerdatapb.Status{
 			PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 			PostgresReady: true,
@@ -1632,16 +1642,7 @@ func TestPopulatePrimaryInfo_PicksHighestPrimaryTerm(t *testing.T) {
 		MultiPooler:      shardConfig(newPrimaryID),
 		IsLastCheckValid: true,
 		LastSeen:         timestamppb.Now(),
-		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
-			Id:             newPrimaryID,
-			TermRevocation: &clustermetadatapb.TermRevocation{RevokedBelowTerm: 11},
-			CurrentPosition: &clustermetadatapb.PoolerPosition{
-				Rule: &clustermetadatapb.ShardRule{
-					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 6},
-					LeaderId:   newPrimaryID,
-				},
-			},
-		},
+		ConsensusStatus:  primaryConsensusStatus(newPrimaryID, 6),
 		Status: &multipoolermanagerdatapb.Status{
 			PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 			PostgresReady: true,
@@ -1653,16 +1654,7 @@ func TestPopulatePrimaryInfo_PicksHighestPrimaryTerm(t *testing.T) {
 		MultiPooler:      shardConfig(stalePrimaryID),
 		IsLastCheckValid: true,
 		LastSeen:         timestamppb.Now(),
-		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
-			Id:             stalePrimaryID,
-			TermRevocation: &clustermetadatapb.TermRevocation{RevokedBelowTerm: 10},
-			CurrentPosition: &clustermetadatapb.PoolerPosition{
-				Rule: &clustermetadatapb.ShardRule{
-					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
-					LeaderId:   stalePrimaryID,
-				},
-			},
-		},
+		ConsensusStatus:  primaryConsensusStatus(stalePrimaryID, 5),
 		Status: &multipoolermanagerdatapb.Status{
 			PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 			PostgresReady: false,
