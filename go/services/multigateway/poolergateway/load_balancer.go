@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/mterrors"
@@ -199,7 +200,7 @@ func (lb *LoadBalancer) maybeSeedLeaderFromTopologyLocked(key shardKey, pooler *
 	lb.logger.Info("seeded leader from topology CurrentLeadership",
 		"pooler_id", poolerIDString(pooler.Id),
 		"leader_id", poolerIDString(cl.GetLeaderId()),
-		"leader_term", cl.GetLeaderTerm(),
+		"leader_rule_number", consensus.RuleNumberString(cl.GetLeaderRuleNumber()),
 		"tablegroup", key.tableGroup,
 		"shard", key.shard)
 }
@@ -265,12 +266,9 @@ func (lb *LoadBalancer) GetConnection(target *query.Target) (*PoolerConnection, 
 	}
 
 	// REPLICA: collect every connection eligible to serve reads in the shard.
-	// A consensus-confirmed leader (term >= 1) is excluded by ID; the
-	// cold-start topology seed (term 0) is treated as if no leader is known
-	// yet, so a pooler that has since transitioned to Type=REPLICA can still
-	// be selected.
+	// A known leader (named in leaders[]) is excluded by ID.
 	confirmedLeaderID := ""
-	if leaderObs != nil && leaderObs.LeaderTerm > 0 {
+	if leaderObs != nil {
 		confirmedLeaderID = poolerIDString(leaderObs.LeaderId)
 	}
 	var candidates []*PoolerConnection
@@ -446,40 +444,27 @@ func (lb *LoadBalancer) onPoolerHealthUpdate(conn *PoolerConnection) {
 	defer lb.mu.Unlock()
 
 	existing := lb.leaders[key]
-
-	switch {
-	case existing == nil || obs.LeaderTerm > existing.LeaderTerm:
-		// New leader or higher term — record identity unconditionally. The
-		// named pooler may not be in `connections` yet; that's fine.
-		lb.leaders[key] = obs
+	chosen := consensus.MostAuthoritativeObservation(existing, obs)
+	if !proto.Equal(chosen, existing) {
+		lb.leaders[key] = chosen
 		lb.logger.Debug("leader observation recorded",
 			"tablegroup", key.tableGroup,
 			"shard", key.shard,
-			"leader_id", poolerIDString(obs.LeaderId),
-			"term", obs.LeaderTerm)
+			"leader_id", poolerIDString(chosen.LeaderId),
+			"leader_rule_number", consensus.RuleNumberString(chosen.GetLeaderRuleNumber()))
+	}
 
-		// If the named leader is connected and serving, drain the buffer.
-		// (Only stop failover buffering when the leader is SERVING — the
-		// LeaderObservation can arrive before the pooler has transitioned
-		// its query server to PRIMARY/SERVING, e.g. during Promote where
-		// UpdateLeaderObservation fires before changeTypeLocked. Draining
-		// buffered requests too early would send them to a pooler that
-		// still rejects PRIMARY traffic.)
-		if leaderConn, ok := lb.connections[poolerIDString(obs.LeaderId)]; ok {
-			lb.notifyIfLeaderServingLocked(key, leaderConn)
-		}
-
-	case obs.LeaderTerm == existing.LeaderTerm:
-		// Same term — the leader is already known but may not have been
-		// SERVING when we first saw the observation. Re-check now so that
-		// StopBuffering fires once the leader transitions to SERVING.
-		if leaderConn, ok := lb.connections[poolerIDString(existing.LeaderId)]; ok {
-			lb.notifyIfLeaderServingLocked(key, leaderConn)
-		}
-
-	default:
-		// Stale term — ignore.
-		return
+	// Whether or not the cached observation changed, the leader connection's
+	// SERVING status may have advanced since we last looked — re-check to
+	// drive buffer drain. notifyIfLeaderServingLocked is idempotent.
+	// (Only stop failover buffering when the leader is SERVING — the
+	// LeaderObservation can arrive before the pooler has transitioned
+	// its query server to PRIMARY/SERVING, e.g. during Promote where
+	// UpdateLeaderObservation fires before topology reflects it. Draining
+	// buffered requests too early would send them to a pooler that still
+	// rejects PRIMARY traffic.)
+	if leaderConn, ok := lb.connections[poolerIDString(chosen.GetLeaderId())]; ok {
+		lb.notifyIfLeaderServingLocked(key, leaderConn)
 	}
 }
 

@@ -213,8 +213,8 @@ func TestHealthStreamer_UpdateLeaderObservation(t *testing.T) {
 	_, ch := hs.subscribe()
 
 	// Update primary observation
-	obs := &poolerserver.LeaderObservation{
-		LeaderTerm: 42,
+	obs := &clustermetadatapb.LeaderObservation{
+		LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 42},
 	}
 	hs.UpdateLeaderObservation(obs)
 
@@ -223,7 +223,7 @@ func TestHealthStreamer_UpdateLeaderObservation(t *testing.T) {
 	case received := <-ch:
 		require.NotNil(t, received)
 		require.NotNil(t, received.LeaderObservation)
-		assert.Equal(t, int64(42), received.LeaderObservation.LeaderTerm)
+		assert.Equal(t, int64(42), received.LeaderObservation.GetLeaderRuleNumber().GetCoordinatorTerm())
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("subscriber did not receive health broadcast")
 	}

@@ -59,8 +59,8 @@ func createTestMultiPooler(name, cell, tableGroup, shard string, poolerType clus
 	// scenario should clear this field explicitly.
 	if poolerType == clustermetadatapb.PoolerType_PRIMARY {
 		mp.CurrentLeadership = &clustermetadatapb.LeaderObservation{
-			LeaderId:   mp.Id,
-			LeaderTerm: 1,
+			LeaderId:         mp.Id,
+			LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
 		}
 	}
 	return mp
@@ -123,7 +123,7 @@ func TestLoadBalancer_GetConnection_Primary(t *testing.T) {
 	connPrimary := lb.connections[poolerID(primary)]
 	lb.mu.Unlock()
 	simulateHealthUpdate(connPrimary, clustermetadatapb.PoolerServingStatus_SERVING,
-		&clustermetadatapb.LeaderObservation{LeaderId: primary.Id, LeaderTerm: 1})
+		&clustermetadatapb.LeaderObservation{LeaderId: primary.Id, LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1}})
 
 	// Should find the primary via cache
 	target := &query.Target{
@@ -168,7 +168,7 @@ func TestLoadBalancer_GetConnection_CrossCellPrimary(t *testing.T) {
 	connRemote := lb.connections[poolerID(remotePrimary)]
 	lb.mu.Unlock()
 	simulateHealthUpdate(connRemote, clustermetadatapb.PoolerServingStatus_SERVING,
-		&clustermetadatapb.LeaderObservation{LeaderId: remotePrimary.Id, LeaderTerm: 1})
+		&clustermetadatapb.LeaderObservation{LeaderId: remotePrimary.Id, LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1}})
 
 	// Should find primary in remote cell via cache
 	target := &query.Target{
@@ -223,9 +223,9 @@ func TestLoadBalancer_GetConnection_ShardMatch(t *testing.T) {
 	connShard1 := lb.connections[poolerID(shard1)]
 	lb.mu.Unlock()
 	simulateHealthUpdate(connShard0, clustermetadatapb.PoolerServingStatus_SERVING,
-		&clustermetadatapb.LeaderObservation{LeaderId: shard0.Id, LeaderTerm: 1})
+		&clustermetadatapb.LeaderObservation{LeaderId: shard0.Id, LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1}})
 	simulateHealthUpdate(connShard1, clustermetadatapb.PoolerServingStatus_SERVING,
-		&clustermetadatapb.LeaderObservation{LeaderId: shard1.Id, LeaderTerm: 1})
+		&clustermetadatapb.LeaderObservation{LeaderId: shard1.Id, LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1}})
 
 	// Request specific shard — should find correct primary via cache
 	target := &query.Target{
@@ -299,24 +299,24 @@ func TestLoadBalancer_PrimaryCaching(t *testing.T) {
 		simulateHealthUpdate(connPrimary1,
 			clustermetadatapb.PoolerServingStatus_SERVING,
 			&clustermetadatapb.LeaderObservation{
-				LeaderId:   primary1.Id,
-				LeaderTerm: 5,
+				LeaderId:         primary1.Id,
+				LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
 			})
 
 		// primary2 thinks primary2 is leader with term 10 (higher)
 		simulateHealthUpdate(connPrimary2,
 			clustermetadatapb.PoolerServingStatus_SERVING,
 			&clustermetadatapb.LeaderObservation{
-				LeaderId:   primary2.Id,
-				LeaderTerm: 10,
+				LeaderId:         primary2.Id,
+				LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 10},
 			})
 
 		// replica1 also thinks primary2 is leader with term 10
 		simulateHealthUpdate(connReplica1,
 			clustermetadatapb.PoolerServingStatus_SERVING,
 			&clustermetadatapb.LeaderObservation{
-				LeaderId:   primary2.Id,
-				LeaderTerm: 10,
+				LeaderId:         primary2.Id,
+				LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 10},
 			})
 
 		target := &query.Target{
@@ -351,24 +351,24 @@ func TestLoadBalancer_PrimaryCaching(t *testing.T) {
 		simulateHealthUpdate(connPrimary1,
 			clustermetadatapb.PoolerServingStatus_SERVING,
 			&clustermetadatapb.LeaderObservation{
-				LeaderId:   primary1.Id,
-				LeaderTerm: 15,
+				LeaderId:         primary1.Id,
+				LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 15},
 			})
 
 		// primary2 thinks primary2 is leader with term 12 (stale)
 		simulateHealthUpdate(connPrimary2,
 			clustermetadatapb.PoolerServingStatus_NOT_SERVING,
 			&clustermetadatapb.LeaderObservation{
-				LeaderId:   primary2.Id,
-				LeaderTerm: 12,
+				LeaderId:         primary2.Id,
+				LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 12},
 			})
 
 		// replica1 observed the new leader (primary1) with term 20 (highest)
 		simulateHealthUpdate(connReplica1,
 			clustermetadatapb.PoolerServingStatus_SERVING,
 			&clustermetadatapb.LeaderObservation{
-				LeaderId:   primary1.Id,
-				LeaderTerm: 20,
+				LeaderId:         primary1.Id,
+				LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 20},
 			})
 
 		target := &query.Target{
@@ -419,8 +419,8 @@ func TestLoadBalancer_PrimaryCaching(t *testing.T) {
 		simulateHealthUpdate(connPrimary,
 			clustermetadatapb.PoolerServingStatus_SERVING,
 			&clustermetadatapb.LeaderObservation{
-				LeaderId:   primary.Id,
-				LeaderTerm: 1,
+				LeaderId:         primary.Id,
+				LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
 			})
 
 		// Verify routing
@@ -476,7 +476,7 @@ func TestLoadBalancer_HealthStreamOverridesSeed(t *testing.T) {
 	conn := lb.connections[poolerID(pooler)]
 	lb.mu.Unlock()
 	simulateHealthUpdate(conn, clustermetadatapb.PoolerServingStatus_SERVING,
-		&clustermetadatapb.LeaderObservation{LeaderId: pooler.Id, LeaderTerm: 5})
+		&clustermetadatapb.LeaderObservation{LeaderId: pooler.Id, LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5}})
 
 	// Topo update: type changed to REPLICA — but health-confirmed entry (term > 0) is NOT invalidated
 	poolerAsReplica := createTestMultiPooler("pooler1", "zone1", constants.DefaultTableGroup, "0", clustermetadatapb.PoolerType_REPLICA)
@@ -530,14 +530,14 @@ func TestLoadBalancer_UnknownTypePrimarySelection(t *testing.T) {
 		simulateHealthUpdate(connUnknown1,
 			clustermetadatapb.PoolerServingStatus_SERVING,
 			&clustermetadatapb.LeaderObservation{
-				LeaderId:   unknown2.Id,
-				LeaderTerm: 10,
+				LeaderId:         unknown2.Id,
+				LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 10},
 			})
 		simulateHealthUpdate(connUnknown2,
 			clustermetadatapb.PoolerServingStatus_SERVING,
 			&clustermetadatapb.LeaderObservation{
-				LeaderId:   unknown1.Id,
-				LeaderTerm: 5,
+				LeaderId:         unknown1.Id,
+				LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
 			})
 
 		target := &query.Target{
@@ -647,8 +647,8 @@ func TestLoadBalancer_LeaderObservationBeforeConnection(t *testing.T) {
 	simulateHealthUpdate(connObserver,
 		clustermetadatapb.PoolerServingStatus_SERVING,
 		&clustermetadatapb.LeaderObservation{
-			LeaderId:   futureLeader.Id,
-			LeaderTerm: 7,
+			LeaderId:         futureLeader.Id,
+			LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 7},
 		})
 
 	target := &query.Target{
@@ -693,8 +693,8 @@ func TestLoadBalancer_StalePrimaryTypeDoesNotOverrideLeader(t *testing.T) {
 	simulateHealthUpdate(connNewLeader,
 		clustermetadatapb.PoolerServingStatus_SERVING,
 		&clustermetadatapb.LeaderObservation{
-			LeaderId:   newLeader.Id,
-			LeaderTerm: 2,
+			LeaderId:         newLeader.Id,
+			LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 2},
 		})
 
 	target := &query.Target{
@@ -747,7 +747,7 @@ func TestLoadBalancer_ReplicaCandidatesExcludeLeader(t *testing.T) {
 	// a observes itself as leader; b and c are eligible replica candidates.
 	simulateHealthUpdate(connA,
 		clustermetadatapb.PoolerServingStatus_SERVING,
-		&clustermetadatapb.LeaderObservation{LeaderId: a.Id, LeaderTerm: 1})
+		&clustermetadatapb.LeaderObservation{LeaderId: a.Id, LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1}})
 
 	target := &query.Target{
 		TableGroup: constants.DefaultTableGroup,
@@ -784,15 +784,15 @@ func TestLoadBalancer_CurrentLeadershipDoesNotDowngradeLeader(t *testing.T) {
 	lb.mu.Unlock()
 	simulateHealthUpdate(connLeader,
 		clustermetadatapb.PoolerServingStatus_SERVING,
-		&clustermetadatapb.LeaderObservation{LeaderId: leader.Id, LeaderTerm: 7})
+		&clustermetadatapb.LeaderObservation{LeaderId: leader.Id, LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 7}})
 
 	// A different pooler is discovered with a lower-term CurrentLeadership
 	// claiming itself as leader (a stale snapshot from before the latest
 	// election). This MUST NOT override the term-7 entry.
 	stale := createTestMultiPooler("stale", "zone1", constants.DefaultTableGroup, "0", clustermetadatapb.PoolerType_REPLICA)
 	stale.CurrentLeadership = &clustermetadatapb.LeaderObservation{
-		LeaderId:   stale.Id,
-		LeaderTerm: 3,
+		LeaderId:         stale.Id,
+		LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 3},
 	}
 	require.NoError(t, lb.AddPooler(stale))
 

@@ -83,8 +83,8 @@ func newTestPoolerProto(poolerType clustermetadatapb.PoolerType, status clusterm
 	// Type=PRIMARY start in a valid state.
 	if poolerType == clustermetadatapb.PoolerType_PRIMARY {
 		mp.CurrentLeadership = &clustermetadatapb.LeaderObservation{
-			LeaderId:   id,
-			LeaderTerm: 1,
+			LeaderId:         id,
+			LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
 		}
 	}
 	return mp
@@ -96,8 +96,8 @@ func newTestPoolerProto(poolerType clustermetadatapb.PoolerType, status clusterm
 func setPrimary(s *MutablePoolerRecordState, poolerID *clustermetadatapb.ID, term int64) {
 	s.Type = clustermetadatapb.PoolerType_PRIMARY
 	s.CurrentLeadership = &clustermetadatapb.LeaderObservation{
-		LeaderId:   poolerID,
-		LeaderTerm: term,
+		LeaderId:         poolerID,
+		LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: term},
 	}
 }
 

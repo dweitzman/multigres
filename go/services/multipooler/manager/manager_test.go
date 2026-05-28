@@ -190,8 +190,8 @@ func TestManagerState_RetryUntilSuccess(t *testing.T) {
 		Type:          clustermetadatapb.PoolerType_PRIMARY,
 		ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
 		CurrentLeadership: &clustermetadatapb.LeaderObservation{
-			LeaderId:   serviceID,
-			LeaderTerm: 1,
+			LeaderId:         serviceID,
+			LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
 		},
 		ShardKey: &clustermetadatapb.ShardKey{
 			Database:   database,
@@ -355,8 +355,8 @@ func TestValidateAndUpdateTerm(t *testing.T) {
 				Type:          clustermetadatapb.PoolerType_PRIMARY,
 				ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
 				CurrentLeadership: &clustermetadatapb.LeaderObservation{
-					LeaderId:   serviceID,
-					LeaderTerm: 1,
+					LeaderId:         serviceID,
+					LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
 				},
 				ShardKey: &clustermetadatapb.ShardKey{
 					Database:   database,
@@ -1046,8 +1046,8 @@ func TestPause_PreservesPublisher(t *testing.T) {
 	require.NoError(t, pm.record.Mutate(lockCtx, func(s *MutablePoolerRecordState) {
 		s.Type = clustermetadatapb.PoolerType_PRIMARY
 		s.CurrentLeadership = &clustermetadatapb.LeaderObservation{
-			LeaderId:   serviceID,
-			LeaderTerm: 1,
+			LeaderId:         serviceID,
+			LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
 		}
 	}))
 

@@ -414,10 +414,9 @@ message LeaderObservation {
   // May be this pooler's own ID if it believes itself to be leader.
   ID leader_id = 1;
 
-  // leader_term is the consensus term at which this observation was made.
-  // The leader never changes within a leader_term. Higher values indicate
-  // more recent leader appointments.
-  int64 leader_term = 2;
+  // leader_rule_number identifies the rule under which this observation was
+  // made.
+  RuleNumber leader_rule_number = 2;
 }
 
 // ReplicationPrimary advertises the primary this pooler believes it should be

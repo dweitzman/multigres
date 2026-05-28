@@ -36,7 +36,7 @@ type HealthState struct {
 
 	// LeaderObservation contains this pooler's view of who the consensus leader is.
 	// May be nil if no leader observation is available.
-	LeaderObservation *LeaderObservation
+	LeaderObservation *clustermetadatapb.LeaderObservation
 
 	// RecommendedStalenessTimeout is the duration clients should use
 	// to detect a stale/dead health stream.
@@ -45,18 +45,6 @@ type HealthState struct {
 	// ReplicationLagNs is the current replication lag in nanoseconds,
 	// measured via heartbeat timestamps. Zero on the primary or when unknown.
 	ReplicationLagNs int64
-}
-
-// LeaderObservation represents a pooler's view of who the consensus leader is.
-type LeaderObservation struct {
-	// LeaderID is the ID of the pooler this node believes is the consensus leader.
-	// May be this pooler's own ID if it believes itself to be leader.
-	LeaderID *clustermetadatapb.ID
-
-	// LeaderTerm is the consensus term at which this observation was made.
-	// The leader never changes within a leader term. Higher values indicate
-	// more recent leader appointments.
-	LeaderTerm int64
 }
 
 // HealthProvider provides health information for the pooler.

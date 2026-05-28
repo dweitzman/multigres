@@ -31,8 +31,6 @@ import (
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	pgctldpb "github.com/multigres/multigres/go/pb/pgctldservice"
-
-	"github.com/multigres/multigres/go/services/multipooler/poolerserver"
 )
 
 // broadcastHealth broadcasts the current health state to all subscribers.
@@ -764,8 +762,6 @@ func (pm *MultiPoolerManager) demoteStalePrimaryLocked(
 		return false, "", err
 	}
 
-	ruleTerm := rule.GetRuleNumber().GetCoordinatorTerm()
-
 	port := source.GetPostgresPort()
 	if port == 0 {
 		return false, "", mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT, "postgres port not configured on source pooler")
@@ -813,9 +809,9 @@ func (pm *MultiPoolerManager) demoteStalePrimaryLocked(
 	}
 
 	// Report the new primary (source) so the gateway can use this observation.
-	pm.healthStreamer.UpdateLeaderObservation(&poolerserver.LeaderObservation{
-		LeaderID:   source.GetId(),
-		LeaderTerm: ruleTerm,
+	pm.healthStreamer.UpdateLeaderObservation(&clustermetadatapb.LeaderObservation{
+		LeaderId:         source.GetId(),
+		LeaderRuleNumber: rule.GetRuleNumber(),
 	})
 
 	if lsn, err := pm.getStandbyReplayLSN(ctx); err == nil {

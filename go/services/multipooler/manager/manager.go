@@ -916,10 +916,10 @@ func (pm *MultiPoolerManager) checkAndSetReady() {
 		// commonconsensus.LeaderTerm returns 0 unless the rule names us as the
 		// leader, so publishing serviceID here is safe.
 		if cs, err := pm.getInconsistentConsensusStatus(pm.ctx); err == nil {
-			if primaryTerm := commonconsensus.LeaderTerm(cs); primaryTerm > 0 {
-				pm.healthStreamer.UpdateLeaderObservation(&poolerserver.LeaderObservation{
-					LeaderID:   pm.serviceID,
-					LeaderTerm: primaryTerm,
+			if rule := cs.GetReplicationPrimary().GetRule(); commonconsensus.LeaderTerm(cs) > 0 {
+				pm.healthStreamer.UpdateLeaderObservation(&clustermetadatapb.LeaderObservation{
+					LeaderId:         pm.serviceID,
+					LeaderRuleNumber: rule.GetRuleNumber(),
 				})
 			}
 		}

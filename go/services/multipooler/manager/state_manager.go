@@ -179,8 +179,8 @@ func deriveTypeAndObs(rule *clustermetadatapb.ShardRule, selfID *clustermetadata
 	}
 	if proto.Equal(rule.GetLeaderId(), selfID) {
 		return clustermetadatapb.PoolerType_PRIMARY, &clustermetadatapb.LeaderObservation{
-			LeaderId:   selfID,
-			LeaderTerm: rule.GetRuleNumber().GetCoordinatorTerm(),
+			LeaderId:         selfID,
+			LeaderRuleNumber: rule.GetRuleNumber(),
 		}
 	}
 	return clustermetadatapb.PoolerType_REPLICA, nil

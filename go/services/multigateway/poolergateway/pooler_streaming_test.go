@@ -390,7 +390,7 @@ func TestPoolerConnection_StreamHealth_LeaderObservation(t *testing.T) {
 			Cell:      "zone1",
 			Name:      "primary-pooler",
 		},
-		LeaderTerm: 42,
+		LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 42},
 	}
 	setup.server.responseCh <- resp
 
@@ -400,6 +400,6 @@ func TestPoolerConnection_StreamHealth_LeaderObservation(t *testing.T) {
 
 	health := setup.conn.Health()
 	require.NotNil(t, health.LeaderObservation)
-	assert.Equal(t, int64(42), health.LeaderObservation.LeaderTerm)
+	assert.Equal(t, int64(42), health.LeaderObservation.GetLeaderRuleNumber().GetCoordinatorTerm())
 	assert.Equal(t, "primary-pooler", health.LeaderObservation.LeaderId.GetName())
 }

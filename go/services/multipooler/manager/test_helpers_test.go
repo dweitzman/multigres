@@ -44,8 +44,8 @@ func setPoolerTypeForTest(t *testing.T, pm *MultiPoolerManager, poolerType clust
 		s.Type = poolerType
 		if poolerType == clustermetadatapb.PoolerType_PRIMARY {
 			s.CurrentLeadership = &clustermetadatapb.LeaderObservation{
-				LeaderId:   pm.record.Id(),
-				LeaderTerm: 1,
+				LeaderId:         pm.record.Id(),
+				LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
 			}
 		} else {
 			s.CurrentLeadership = nil

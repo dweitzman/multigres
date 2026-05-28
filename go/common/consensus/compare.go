@@ -16,9 +16,18 @@
 package consensus
 
 import (
+	"fmt"
+
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	"github.com/multigres/multigres/go/tools/pgutil"
 )
+
+// RuleNumberString formats a RuleNumber as "term/subterm" for logs and
+// status messages. Returns "0/0" for nil, matching the comparison
+// semantics in CompareRuleNumbers (nil is treated as zero).
+func RuleNumberString(rn *clustermetadatapb.RuleNumber) string {
+	return fmt.Sprintf("%d/%d", rn.GetCoordinatorTerm(), rn.GetLeaderSubterm())
+}
 
 // CompareRuleNumbers compares two RuleNumbers lexicographically.
 // Returns -1 if a < b, 0 if a == b, 1 if a > b.
@@ -54,21 +63,22 @@ func CompareRuleNumbers(a, b *clustermetadatapb.RuleNumber) int {
 }
 
 // MostAuthoritativeObservation returns the LeaderObservation with the
-// highest LeaderTerm among the given observations, ignoring nil entries.
-// Returns nil if all observations are nil. Used by callers that need
-// to choose between observations from different sources (topology
-// CurrentLeadership, health-stream LeaderObservation, locally cached).
+// highest RuleNumber among the given observations, ignoring nil
+// entries. Returns nil if all observations are nil. Used by callers
+// that need to choose between observations from different sources
+// (topology CurrentLeadership, health-stream LeaderObservation,
+// locally cached).
 //
-// TODO: when LeaderObservation gains a full RuleNumber (PR 2 in the
-// PoolerType-elimination roadmap), this will compare by RuleNumber
-// rather than coordinator term alone.
+// Ordering is by (coordinator_term, leader_subterm) lexicographically,
+// so observations that share a coordinator_term but differ in subterm
+// (e.g. lease refreshes) can be ordered correctly.
 func MostAuthoritativeObservation(obs ...*clustermetadatapb.LeaderObservation) *clustermetadatapb.LeaderObservation {
 	var best *clustermetadatapb.LeaderObservation
 	for _, o := range obs {
 		if o == nil {
 			continue
 		}
-		if best == nil || o.GetLeaderTerm() > best.GetLeaderTerm() {
+		if best == nil || CompareRuleNumbers(o.GetLeaderRuleNumber(), best.GetLeaderRuleNumber()) > 0 {
 			best = o
 		}
 	}

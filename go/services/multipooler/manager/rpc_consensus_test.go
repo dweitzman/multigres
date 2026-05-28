@@ -792,8 +792,8 @@ func TestPropose(t *testing.T) {
 
 				state := pm.healthStreamer.getState()
 				require.NotNil(t, state.LeaderObservation)
-				assert.True(t, proto.Equal(selfID, state.LeaderObservation.LeaderID))
-				assert.Equal(t, int64(7), state.LeaderObservation.LeaderTerm)
+				assert.True(t, proto.Equal(selfID, state.LeaderObservation.GetLeaderId()))
+				assert.Equal(t, int64(7), state.LeaderObservation.GetLeaderRuleNumber().GetCoordinatorTerm())
 
 				pm.mu.Lock()
 				assert.Equal(t, int64(0), pm.resignedLeaderAtTerm, "clearResignedLeaderAtTerm should have cleared the term")

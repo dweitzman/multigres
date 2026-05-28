@@ -29,7 +29,6 @@ import (
 	"github.com/multigres/multigres/go/common/protoutil"
 	"github.com/multigres/multigres/go/common/servenv"
 	"github.com/multigres/multigres/go/common/sqltypes"
-	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multipoolerpb "github.com/multigres/multigres/go/pb/multipoolerservice"
 	"github.com/multigres/multigres/go/pb/query"
 	"github.com/multigres/multigres/go/services/multipooler/connpoolmanager"
@@ -669,10 +668,7 @@ func healthStateToProto(state *poolerserver.HealthState) *multipoolerpb.StreamPo
 	}
 
 	if state.LeaderObservation != nil {
-		resp.LeaderObservation = &clustermetadatapb.LeaderObservation{
-			LeaderId:   state.LeaderObservation.LeaderID,
-			LeaderTerm: state.LeaderObservation.LeaderTerm,
-		}
+		resp.LeaderObservation = state.LeaderObservation
 	}
 
 	if state.RecommendedStalenessTimeout > 0 {

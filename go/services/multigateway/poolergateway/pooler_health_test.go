@@ -87,8 +87,8 @@ func TestPoolerHealth_SimpleCopy(t *testing.T) {
 			Name:      "pooler1",
 		}
 		primaryObs := &clustermetadatapb.LeaderObservation{
-			LeaderId:   poolerID,
-			LeaderTerm: 42,
+			LeaderId:         poolerID,
+			LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 42},
 		}
 		lastErr := errors.New("test error")
 		lastResp := time.Now()

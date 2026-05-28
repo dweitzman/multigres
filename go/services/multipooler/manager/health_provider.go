@@ -58,7 +58,7 @@ type healthStreamer struct {
 	// Mutable fields (updated via typed methods)
 	servingStatus     clustermetadatapb.PoolerServingStatus
 	poolerType        clustermetadatapb.PoolerType
-	leaderObservation *poolerserver.LeaderObservation
+	leaderObservation *clustermetadatapb.LeaderObservation
 
 	// Client management
 	clients map[chan *poolerserver.HealthState]struct{}
@@ -92,7 +92,7 @@ func (hs *healthStreamer) SetQueryServer(qs poolerserver.PoolerController) {
 
 // UpdateLeaderObservation updates the primary observation (term + primary ID)
 // and broadcasts to clients.
-func (hs *healthStreamer) UpdateLeaderObservation(obs *poolerserver.LeaderObservation) {
+func (hs *healthStreamer) UpdateLeaderObservation(obs *clustermetadatapb.LeaderObservation) {
 	hs.mu.Lock()
 	defer hs.mu.Unlock()
 

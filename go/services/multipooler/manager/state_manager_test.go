@@ -81,8 +81,8 @@ func newTestMultiPooler(poolerType clustermetadatapb.PoolerType, status clusterm
 	}
 	if poolerType == clustermetadatapb.PoolerType_PRIMARY {
 		mp.CurrentLeadership = &clustermetadatapb.LeaderObservation{
-			LeaderId:   testStateManagerPoolerID(),
-			LeaderTerm: 1,
+			LeaderId:         testStateManagerPoolerID(),
+			LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
 		}
 	}
 	return mp
@@ -365,7 +365,7 @@ func TestStateManager_LeaderOnlyPublication(t *testing.T) {
 	cl := r.CurrentLeadership()
 	require.NotNil(t, cl, "PRIMARY must publish CurrentLeadership")
 	assert.True(t, proto.Equal(cl.GetLeaderId(), testStateManagerPoolerID()), "CurrentLeadership.LeaderId must name this pooler")
-	assert.Equal(t, int64(1), cl.GetLeaderTerm())
+	assert.Equal(t, int64(1), cl.GetLeaderRuleNumber().GetCoordinatorTerm())
 
 	// Demote back to REPLICA → CurrentLeadership cleared again.
 	require.NoError(t, ssm.SetState(newActionLockedCtx(t), testReplicaRule(), clustermetadatapb.PoolerServingStatus_SERVING))

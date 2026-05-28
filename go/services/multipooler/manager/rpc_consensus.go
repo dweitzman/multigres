@@ -28,7 +28,6 @@ import (
 	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
-	"github.com/multigres/multigres/go/services/multipooler/poolerserver"
 )
 
 // buildConsensusStatus constructs a ConsensusStatus from a pre-resolved revocation,
@@ -549,9 +548,9 @@ func (pm *MultiPoolerManager) Propose(ctx context.Context, req *consensusdatapb.
 	if _, err = pm.rules.updateRule(ctx, ruleUpdate); err != nil {
 		return nil, mterrors.Wrap(err, "propose failed: could not write rule")
 	}
-	pm.healthStreamer.UpdateLeaderObservation(&poolerserver.LeaderObservation{
-		LeaderID:   pm.serviceID,
-		LeaderTerm: revokedBelowTerm,
+	pm.healthStreamer.UpdateLeaderObservation(&clustermetadatapb.LeaderObservation{
+		LeaderId:         pm.serviceID,
+		LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: revokedBelowTerm},
 	})
 	// IMPORTANT: updateTopologyAfterPromotion must only be called after updateRule
 	// succeeds. It advertises PRIMARY + SERVING to the gateway, opening write traffic.
@@ -717,12 +716,6 @@ func (pm *MultiPoolerManager) SetTermPrimary(ctx context.Context, req *consensus
 	// Recruit refuses with "rewind pending after emergency demotion".
 	needsRewind := pm.rewindPending.Load()
 
-	// Reported to the gateway as the new leader's term. Not term validation —
-	// the rule compare above is the gate. SetTermPrimary does not bump the local
-	// revocation: revocations are authored by coordinators via Recruit, and
-	// an SetTermPrimary is a notification, not a revoke.
-	consensusTerm := rule.GetRuleNumber().GetCoordinatorTerm()
-
 	if isPrimary || needsRewind {
 		pm.logger.InfoContext(ctx, "SetTermPrimary: demoting stale primary",
 			"new_leader", leader.GetId().GetName(),
@@ -761,9 +754,9 @@ func (pm *MultiPoolerManager) SetTermPrimary(ctx context.Context, req *consensus
 	// already recorded in consensusState.replicationPrimary. Plan to make
 	// RecordTermPrimary (or its successor) drive the health-stream
 	// observation directly, so callers don't have to remember to do both.
-	pm.healthStreamer.UpdateLeaderObservation(&poolerserver.LeaderObservation{
-		LeaderID:   leader.GetId(),
-		LeaderTerm: consensusTerm,
+	pm.healthStreamer.UpdateLeaderObservation(&clustermetadatapb.LeaderObservation{
+		LeaderId:         leader.GetId(),
+		LeaderRuleNumber: rule.GetRuleNumber(),
 	})
 
 	if err := pm.clearResignedLeaderAtTerm(ctx); err != nil {

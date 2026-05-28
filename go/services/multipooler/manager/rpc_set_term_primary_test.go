@@ -340,8 +340,8 @@ func TestSetTermPrimary_StalePrimaryDemotes(t *testing.T) {
 	// Gateway leader observation should reflect the new primary.
 	healthState := pm.healthStreamer.getState()
 	require.NotNil(t, healthState.LeaderObservation)
-	assert.Equal(t, "new-primary", healthState.LeaderObservation.LeaderID.Name)
-	assert.Equal(t, int64(10), healthState.LeaderObservation.LeaderTerm)
+	assert.Equal(t, "new-primary", healthState.LeaderObservation.GetLeaderId().GetName())
+	assert.Equal(t, int64(10), healthState.LeaderObservation.GetLeaderRuleNumber().GetCoordinatorTerm())
 }
 
 // TestSetTermPrimary_IgnoresRevokedRule verifies that when the incoming rule is
