@@ -220,18 +220,25 @@ func TestLeaderIsDeadAnalyzer_Analyze(t *testing.T) {
 		require.Equal(t, types.ProblemLeaderIsDead, problems[0].Code)
 	})
 
-	t.Run("triggers failover when replicas connected but postgres never responded (zero timestamp)", func(t *testing.T) {
+	t.Run("suppresses failover with zero timestamp when replicas are streaming", func(t *testing.T) {
+		// Cold-start case: multiorch just discovered the pooler via etcd
+		// (so a LeaderObservation exists) but its health stream hasn't yet
+		// returned a successful PostgresReady signal. LastPostgresReadyTime
+		// is zero — i.e., we've never directly observed postgres on the
+		// leader. The followers ARE actively receiving WAL, which is real
+		// evidence postgres is up. Trust that signal; failing over here
+		// would be triggered by our own lack of observation history, not
+		// by any actual leader failure.
 		sa := deadLeaderShardAnalysis(func(sa *ShardAnalysis) {
 			sa.LeaderPoolerReachable = false
 			sa.LeaderPostgresReady = false
 			sa.ReplicasConnectedToLeader = true
-			sa.LeaderLastPostgresReadyTime = time.Time{} // Zero: postgres never seen healthy on this leader
+			sa.LeaderLastPostgresReadyTime = time.Time{} // Zero: postgres never observed
 		})
 
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
-		require.Len(t, problems, 1, "should trigger failover when postgres has never responded")
-		require.Equal(t, types.ProblemLeaderIsDead, problems[0].Code)
+		require.Empty(t, problems, "should not fail over when we've never observed postgres and replicas are streaming")
 	})
 
 	t.Run("suppresses LeaderIsDead while pg_promote() is running", func(t *testing.T) {

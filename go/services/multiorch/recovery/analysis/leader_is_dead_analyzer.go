@@ -105,8 +105,17 @@ func (a *LeaderIsDeadAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, erro
 	if sa.ReplicasConnectedToLeader {
 		threshold := a.factory.Config().GetLeaderPostgresResponseThreshold()
 		lastReadyTime := sa.LeaderLastPostgresReadyTime
+		// "unresponsive" requires a stale-but-non-zero timestamp. A zero
+		// timestamp means we've never directly observed postgres on the
+		// leader — typically a cold-start where multiorch just discovered
+		// the pooler via etcd but its health stream has never returned. In
+		// that case we should defer to the ReplicasConnectedToLeader
+		// signal: if the followers are actively receiving WAL, the source
+		// postgres has to be alive. Failing over now would be a false
+		// positive triggered by our own lack of observation history.
 		primaryPostgresUnresponsive := !sa.LeaderPostgresReady &&
-			(lastReadyTime.IsZero() || time.Since(lastReadyTime) > threshold)
+			!lastReadyTime.IsZero() &&
+			time.Since(lastReadyTime) > threshold
 
 		// Cases 1 and 2: followers are connected and the leader pooler is down
 		// OR the postgres process is alive (but possibly unresponsive). Suppress
