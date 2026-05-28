@@ -19,6 +19,8 @@ import (
 	"slices"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/topoclient"
 	commontypes "github.com/multigres/multigres/go/common/types"
@@ -109,8 +111,16 @@ func (g *AnalysisGenerator) GenerateShardAnalysis(shardKey *clustermetadatapb.Sh
 // buildShardAnalysis constructs a ShardAnalysis for a shard, including shard-level aggregates.
 func (g *AnalysisGenerator) buildShardAnalysis(shardKey *clustermetadatapb.ShardKey, poolers map[string]*multiorchdatapb.PoolerHealthState) *ShardAnalysis {
 	sa := &ShardAnalysis{ShardKey: shardKey}
+	// Compute the cluster-wide authoritative LeaderObservation once and
+	// thread it into per-pooler analysis. Roles are derived from "does
+	// this pooler's id match the shard leader's?", not from PoolerType.
+	poolerSlice := make([]*multiorchdatapb.PoolerHealthState, 0, len(poolers))
+	for _, p := range poolers {
+		poolerSlice = append(poolerSlice, p)
+	}
+	leaderObs, _ := store.ShardLeader(poolerSlice)
 	for _, pooler := range poolers {
-		sa.Analyses = append(sa.Analyses, g.generateAnalysisForPooler(pooler, shardKey))
+		sa.Analyses = append(sa.Analyses, g.generateAnalysisForPooler(pooler, shardKey, leaderObs))
 	}
 	g.computeShardLevelFields(sa, poolers)
 	return sa
@@ -206,35 +216,25 @@ func (g *AnalysisGenerator) GenerateAnalysisForPooler(poolerIDStr string) (*Shar
 }
 
 // generateAnalysisForPooler creates a ReplicationAnalysis for a single pooler.
+// leaderObs is the cluster-wide authoritative LeaderObservation for the
+// shard (may be nil if no observation exists yet) — used to mark this
+// pooler as the leader without reading any PoolerType field.
 func (g *AnalysisGenerator) generateAnalysisForPooler(
 	pooler *multiorchdatapb.PoolerHealthState,
 	shardKey *clustermetadatapb.ShardKey,
+	leaderObs *clustermetadatapb.LeaderObservation,
 ) *PoolerAnalysis {
-	// Determine pooler type from health check (PoolerType).
-	// Nodes are never created with topology type PRIMARY, so health check is authoritative.
-	// Fall back to topology type only if health check type is UNKNOWN.
-	poolerType := pooler.GetStatus().GetPoolerType()
-	if poolerType == clustermetadatapb.PoolerType_UNKNOWN {
-		poolerType = pooler.MultiPooler.Type
-	}
-
 	analysis := &PoolerAnalysis{
-		PoolerID:         pooler.MultiPooler.Id,
-		ShardKey:         shardKey,
-		PoolerType:       poolerType,
-		IsLeader:         commonconsensus.IsLeader(pooler.GetConsensusStatus()),
-		LastCheckValid:   pooler.IsLastCheckValid,
-		IsInitialized:    store.IsInitialized(pooler),
-		HasDataDirectory: pooler.GetStatus().GetHasDataDirectory(),
-		CohortMembers:    pooler.GetStatus().GetCohortMembers(),
-		AnalyzedAt:       time.Now(),
+		PoolerID:       pooler.MultiPooler.Id,
+		ShardKey:       shardKey,
+		IsLeader:       leaderObs.GetLeaderId() != nil && proto.Equal(leaderObs.GetLeaderId(), pooler.GetMultiPooler().GetId()),
+		LastCheckValid: pooler.IsLastCheckValid,
+		IsInitialized:  store.IsInitialized(pooler),
+		CohortMembers:  pooler.GetStatus().GetCohortMembers(),
+		AnalyzedAt:     time.Now(),
 	}
-
-	// Compute staleness
-	analysis.IsStale = !pooler.IsUpToDate
 
 	// Store consensus status.
-	analysis.ConsensusTerm = pooler.GetConsensusStatus().GetTermRevocation().GetRevokedBelowTerm()
 	analysis.ConsensusStatus = pooler.GetConsensusStatus()
 	analysis.AvailabilityStatus = pooler.GetAvailabilityStatus()
 

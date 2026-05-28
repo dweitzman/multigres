@@ -15,6 +15,10 @@
 package store
 
 import (
+	"google.golang.org/protobuf/proto"
+
+	"github.com/multigres/multigres/go/common/consensus"
+	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multiorchdata "github.com/multigres/multigres/go/pb/multiorchdata"
 )
 
@@ -87,4 +91,61 @@ func IsInitialized(p *multiorchdata.PoolerHealthState) bool {
 	// Use the IsInitialized field from Status RPC directly.
 	// This is based on data directory state, not LSN.
 	return p.GetStatus().GetIsInitialized()
+}
+
+// EtcdLeaderObservation returns the pooler's etcd-published view of who
+// the consensus leader is. Non-nil only when this pooler currently
+// considers itself the leader of its shard (replicas leave the field
+// nil); see multipooler/manager/state_manager.go for the publication
+// rule.
+func EtcdLeaderObservation(p *multiorchdata.PoolerHealthState) *clustermetadatapb.LeaderObservation {
+	return p.GetMultiPooler().GetCurrentLeadership()
+}
+
+// HealthLeaderObservation returns the pooler's health-stream view of
+// who the consensus leader is, adapted from its ConsensusStatus snapshot.
+// Distinct from EtcdLeaderObservation in source: this one came from a
+// live RPC, that one came from etcd. Returns nil if the pooler has not
+// reported a consensus rule yet.
+func HealthLeaderObservation(p *multiorchdata.PoolerHealthState) *clustermetadatapb.LeaderObservation {
+	rule := p.GetConsensusStatus().GetReplicationPrimary().GetRule()
+	if rule == nil {
+		return nil
+	}
+	return &clustermetadatapb.LeaderObservation{
+		LeaderId:         rule.GetLeaderId(),
+		LeaderRuleNumber: rule.GetRuleNumber(),
+	}
+}
+
+// ShardLeader identifies the cluster-wide consensus leader for the
+// shard from the given poolers' observations, and returns both the
+// authoritative LeaderObservation and the matching pooler (if known).
+//
+// The observation is the highest-numbered across every pooler's
+// etcd-published CurrentLeadership and health-stream ConsensusStatus
+// — analogous to the gateway's `leaders[shard]` cache. The per-pooler
+// accessors above answer the narrower "what does this pooler think?"
+// question.
+//
+// Returns (nil, nil) if no pooler has reported an observation. Returns
+// (obs, nil) if the observation names a pooler that isn't in the slice
+// — possible when the leader has been observed via a peer's health
+// stream but its own record hasn't been discovered yet (or has been
+// removed).
+func ShardLeader(poolers []*multiorchdata.PoolerHealthState) (*clustermetadatapb.LeaderObservation, *multiorchdata.PoolerHealthState) {
+	obs := make([]*clustermetadatapb.LeaderObservation, 0, 2*len(poolers))
+	for _, p := range poolers {
+		obs = append(obs, EtcdLeaderObservation(p), HealthLeaderObservation(p))
+	}
+	best := consensus.MostAuthoritativeObservation(obs...)
+	if best == nil {
+		return nil, nil
+	}
+	for _, p := range poolers {
+		if proto.Equal(p.GetMultiPooler().GetId(), best.GetLeaderId()) {
+			return best, p
+		}
+	}
+	return best, nil
 }

@@ -137,15 +137,11 @@ type PoolerAnalysis struct {
 	PoolerID *clustermetadatapb.ID
 	ShardKey *clustermetadatapb.ShardKey
 
-	// Pooler properties
-	PoolerType clustermetadatapb.PoolerType
-	IsLeader   bool
+	IsLeader bool
 	// Represents if the poolerID is reachable and it's returning a
 	// valid status response
-	LastCheckValid   bool
-	IsStale          bool
-	IsInitialized    bool // Whether this pooler is fully initialized and ready to join the cohort
-	HasDataDirectory bool // Whether this pooler has a PostgreSQL data directory (PG_VERSION exists)
+	LastCheckValid bool
+	IsInitialized  bool // Whether this pooler is fully initialized and ready to join the cohort
 	// CohortMembers are the strongly-typed IDs from the most recent
 	// multigres.leadership_history record. Nil or empty both indicate no cohort
 	// has been established. When IsInitialized=true, an empty list means the
@@ -156,10 +152,6 @@ type PoolerAnalysis struct {
 	// Replica-specific fields
 	ReplicationStopped  bool
 	PrimaryConnInfoHost string
-
-	// This is no longer needed and can be derived from ConsensusStatus, but is
-	// left here for now.
-	ConsensusTerm int64 // This node's consensus term (from health check)
 
 	// ConsensusStatus from the pooler's most recent StatusResponse snapshot.
 	// Used to derive the primary term via commonconsensus.PrimaryTerm(ConsensusStatus).

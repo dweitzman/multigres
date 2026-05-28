@@ -151,67 +151,58 @@ func (s *PoolerStore) FindPoolerByID(id *clustermetadatapb.ID) (*multiorchdatapb
 	return found, nil
 }
 
-// FindHealthyPrimary finds a healthy, initialized primary in the given pooler slice.
-// It verifies health by making an RPC call to each candidate.
-// Returns an error if multiple primaries are found (likely a stale primary that needs to be demoted).
+// FindHealthyPrimary identifies the consensus leader for the shard
+// (across all known poolers' observations) and verifies it is healthy.
 //
-// Candidate selection uses a union of topology type and live health-stream data because
-// topology (from etcd) can be stale when etcd is unavailable after a failover. A pooler
-// is considered a candidate if either:
-//   - its topology type is PRIMARY (MultiPooler.Type), or
-//   - its most recent health-stream snapshot reports it is running as PRIMARY (Status.PoolerType).
+// Two-step shape:
+//  1. ShardLeader returns the cluster-wide authoritative
+//     LeaderObservation and the matching pooler in one pass, combining
+//     etcd CurrentLeadership and health-stream ConsensusStatus from
+//     every known pooler. Newer rule numbers win.
+//  2. Verify via Status RPC that the named pooler's postgres has
+//     transitioned to primary mode. This rejects stale leadership
+//     claims from a demoted-then-restarted pooler.
 //
-// Each candidate is then verified via Status RPC; only nodes whose live PoolerType
-// is PRIMARY are accepted, so stale topology entries running as standby are skipped.
+// Returns FAILED_PRECONDITION if no observation exists yet, the named
+// pooler is not in the slice, the RPC fails, or postgres reports a
+// non-primary role.
+//
+// Split-brain detection ("two poolers claim primary at the same term")
+// is no longer surfaced here: consensus guarantees one leader per rule
+// number, and MostAuthoritativeObservation resolves stale lower-term
+// claims silently. A genuine two-leaders-at-the-same-rule violation is
+// a consensus invariant breach that belongs upstream of this read path.
 func (s *PoolerStore) FindHealthyPrimary(
 	ctx context.Context,
 	poolers []*multiorchdatapb.PoolerHealthState,
 ) (*multiorchdatapb.PoolerHealthState, error) {
-	var healthyPrimary *multiorchdatapb.PoolerHealthState
-
-	for _, pooler := range poolers {
-		if pooler.MultiPooler == nil {
-			continue
-		}
-
-		// Accept candidates indicated as PRIMARY by topology OR live health data.
-		// Topology can be stale when etcd is unavailable; health data can lag during
-		// role transitions. Using the union avoids missing the actual primary in either case.
-		isTopologyPrimary := pooler.MultiPooler.Type == clustermetadatapb.PoolerType_PRIMARY
-		isHealthPrimary := pooler.Status != nil && pooler.Status.PoolerType == clustermetadatapb.PoolerType_PRIMARY
-		if !isTopologyPrimary && !isHealthPrimary {
-			continue
-		}
-
-		// Verify via Status RPC — check the live PoolerType to skip stale candidates
-		// (e.g. topology says PRIMARY but postgres is running as standby after a failover).
-		statusResp, err := s.rpcClient.Status(ctx, pooler.MultiPooler,
-			&multipoolermanagerdatapb.StatusRequest{})
-		if err != nil {
-			s.logger.WarnContext(ctx, "primary unreachable during health check",
-				"pooler", pooler.MultiPooler.Id.Name,
-				"error", err)
-			continue
-		}
-		if statusResp.GetStatus().GetPoolerType() != clustermetadatapb.PoolerType_PRIMARY {
-			s.logger.WarnContext(ctx, "pooler is not running as primary, skipping",
-				"pooler", pooler.MultiPooler.Id.Name,
-				"pooler_type", statusResp.GetStatus().GetPoolerType())
-			continue
-		}
-
-		if healthyPrimary != nil {
-			return nil, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
-				"multiple primaries found: %s and %s (stale primary needs demotion)",
-				healthyPrimary.MultiPooler.Id.Name, pooler.MultiPooler.Id.Name)
-		}
-		healthyPrimary = pooler
-	}
-
-	if healthyPrimary == nil {
+	obs, leader := ShardLeader(poolers)
+	if obs.GetLeaderId() == nil {
 		return nil, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
-			"no healthy primary found")
+			"no consensus leader observed across known poolers")
+	}
+	if leader == nil {
+		return nil, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
+			"consensus leader %s not present in known poolers", obs.GetLeaderId().GetName())
 	}
 
-	return healthyPrimary, nil
+	statusResp, err := s.rpcClient.Status(ctx, leader.MultiPooler,
+		&multipoolermanagerdatapb.StatusRequest{})
+	if err != nil {
+		s.logger.WarnContext(ctx, "primary unreachable during health check",
+			"pooler", leader.MultiPooler.Id.Name,
+			"error", err)
+		return nil, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
+			"consensus leader %s unreachable: %v", leader.MultiPooler.Id.Name, err)
+	}
+	if statusResp.GetStatus().GetPoolerType() != clustermetadatapb.PoolerType_PRIMARY {
+		s.logger.WarnContext(ctx, "pooler is not running as primary, skipping",
+			"pooler", leader.MultiPooler.Id.Name,
+			"pooler_type", statusResp.GetStatus().GetPoolerType())
+		return nil, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
+			"consensus leader %s reports pooler_type=%s, not PRIMARY",
+			leader.MultiPooler.Id.Name, statusResp.GetStatus().GetPoolerType())
+	}
+
+	return leader, nil
 }

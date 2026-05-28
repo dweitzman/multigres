@@ -58,7 +58,6 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 		return &PoolerAnalysis{
 			PoolerID:            id,
 			ShardKey:            shardKey,
-			PoolerType:          clustermetadatapb.PoolerType_REPLICA,
 			IsLeader:            false,
 			LastCheckValid:      true,
 			IsInitialized:       true,
@@ -71,7 +70,6 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 	leaderPA := &PoolerAnalysis{
 		PoolerID:       primaryID,
 		ShardKey:       shardKey,
-		PoolerType:     clustermetadatapb.PoolerType_PRIMARY,
 		IsLeader:       true,
 		LastCheckValid: true,
 		IsInitialized:  true,

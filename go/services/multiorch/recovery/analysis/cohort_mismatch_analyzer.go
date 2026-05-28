@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/multigres/multigres/go/common/topoclient"
-	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
 )
 
@@ -145,7 +144,7 @@ func (a *CohortMismatchAnalyzer) isAdditionCandidate(sa *ShardAnalysis, pa *Pool
 	if !pa.IsInitialized {
 		return false
 	}
-	if pa.PoolerType != clustermetadatapb.PoolerType_REPLICA {
+	if pa.IsLeader {
 		return false
 	}
 	// Replication must be configured and not stopped — otherwise the standby
