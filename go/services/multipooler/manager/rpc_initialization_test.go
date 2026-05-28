@@ -598,11 +598,15 @@ func TestTakeRemedialAction_StartPostgres(t *testing.T) {
 
 	mockPgctld := &mockPgctldClient{}
 
-	pm := &MultiPoolerManager{
-		pgctldClient: mockPgctld,
-		logger:       slog.Default(),
-		actionLock:   NewActionLock(),
-	}
+	// Use the full helper so attemptRoleDiscoveryLocked (called after a
+	// successful startPostgres) has the rules + servingState + record it
+	// needs. The fakeRuleStore returns "no position" so role discovery
+	// is a clean no-op for the test.
+	pm := newRemedialActionTestManager(t, &clustermetadatapb.MultiPooler{
+		Id:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "test-pooler"},
+		Type: clustermetadatapb.PoolerType_UNKNOWN,
+	})
+	pm.pgctldClient = mockPgctld
 
 	// Acquire lock before calling takeRemedialAction
 	lockCtx, err := pm.actionLock.Acquire(ctx, "test")
@@ -667,14 +671,11 @@ func TestTakeRemedialAction_LogDeduplication(t *testing.T) {
 
 	mockPgctld := &mockPgctldClient{}
 
-	pm := &MultiPoolerManager{
-		logger:       slog.Default(),
-		actionLock:   NewActionLock(),
-		pgctldClient: mockPgctld,
-		record: newRecordFromProto(&clustermetadatapb.MultiPooler{
-			Type: clustermetadatapb.PoolerType_REPLICA,
-		}),
-	}
+	pm := newRemedialActionTestManager(t, &clustermetadatapb.MultiPooler{
+		Id:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "test-pooler"},
+		Type: clustermetadatapb.PoolerType_REPLICA,
+	})
+	pm.pgctldClient = mockPgctld
 
 	pm.pgMonitorLastLoggedReason = "starting_postgres"
 
@@ -716,6 +717,8 @@ func newRemedialActionTestManager(t *testing.T, multipooler *clustermetadatapb.M
 		record:            record,
 		serviceID:         multipooler.Id,
 		topoClient:        ts,
+		rules:             &fakeRuleStore{},
+		consensusState:    NewConsensusState("", multipooler.Id),
 		servingState:      NewStateManager(slog.Default(), record),
 		cohortEligibility: clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE,
 	}

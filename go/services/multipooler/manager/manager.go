@@ -771,19 +771,11 @@ func (pm *MultiPoolerManager) getPoolerType() clustermetadatapb.PoolerType {
 // of which may be nil. Used by callers that need "the freshest rule
 // this pooler knows about" — RPCs update consensusState first; postgres
 // WAL replay populates rule_store first; the two can briefly disagree.
-// Returns nil if both sources are nil (cold boot before any observation
-// or RPC) or if pm is partially initialized (monitor-only unit tests).
+// Returns nil if both sources are empty (cold boot before any
+// observation or RPC).
 func (pm *MultiPoolerManager) latestRule() *clustermetadatapb.ShardRule {
-	var consensusRule *clustermetadatapb.ShardRule
-	if pm.consensusState != nil {
-		if rp := pm.consensusState.GetReplicationPrimary(); rp != nil {
-			consensusRule = rp.GetRule()
-		}
-	}
-	var storeRule *clustermetadatapb.ShardRule
-	if pm.rules != nil {
-		storeRule = pm.rules.cachedPosition().GetRule()
-	}
+	consensusRule := pm.consensusState.GetReplicationPrimary().GetRule()
+	storeRule := pm.rules.cachedPosition().GetRule()
 
 	if consensusRule == nil {
 		return storeRule
@@ -2182,13 +2174,8 @@ func (pm *MultiPoolerManager) takeRemedialAction(ctx context.Context, action rem
 // isn't readable or the rule hasn't been bootstrapped yet — the next
 // monitor tick will retry via remedialActionDiscoverRole.
 //
-// Requires the action lock. Tolerates a partially-initialized manager
-// (nil rules or nil servingState) so monitor-only unit tests that
-// exercise StartPostgres/Restore branches don't need full wiring.
+// Requires the action lock.
 func (pm *MultiPoolerManager) attemptRoleDiscoveryLocked(ctx context.Context) {
-	if pm.rules == nil || pm.servingState == nil {
-		return
-	}
 	if _, err := pm.rules.observePosition(ctx); err != nil {
 		pm.logger.DebugContext(ctx, "attemptRoleDiscovery: observePosition failed (postgres not ready yet or rule not bootstrapped); will retry on next monitor tick", "error", err)
 		return
