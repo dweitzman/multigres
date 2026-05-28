@@ -614,7 +614,6 @@ func TestFixReplicationAction_FailsWhenReplicationDoesNotStart(t *testing.T) {
 		},
 	}
 
-	// Create in topology for markPoolerDrained to work
 	require.NoError(t, ts.CreateMultiPooler(ctx, replica))
 	require.NoError(t, ts.CreateMultiPooler(ctx, primary))
 
@@ -641,17 +640,21 @@ func TestFixReplicationAction_FailsWhenReplicationDoesNotStart(t *testing.T) {
 
 	err := action.Execute(ctx, problem)
 
-	// Should succeed: pg_rewind was not feasible so the pooler is marked DRAINED
-	// and the action returns nil — the problem is resolved by draining the node.
-	require.NoError(t, err)
+	// When pg_rewind is infeasible the action returns an error so the next
+	// recovery cycle re-runs detection. Orch does NOT mark Type=DRAINED from
+	// the outside; persistent self-drain is the pooler's responsibility (see
+	// remedialActionSelfDrain TODO in multipooler manager).
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pg_rewind not feasible")
 
 	// Verify SetTermPrimary was called (configuration was attempted)
 	assert.Contains(t, fakeClient.CallLog, "SetTermPrimary(multipooler-cell1-replica1)")
 	// Verify pg_rewind was tried after replication failed to start
 	assert.Contains(t, fakeClient.CallLog, "RewindToSource(multipooler-cell1-replica1)")
 
-	// Verify the pooler was marked as DRAINED in topology when pg_rewind wasn't feasible
+	// Topology Type stays whatever the pooler last published — orch leaves it
+	// alone. Test setUp wrote a REPLICA record above.
 	updatedPooler, err := ts.GetMultiPooler(ctx, replicaID)
 	require.NoError(t, err)
-	assert.Equal(t, clustermetadatapb.PoolerType_DRAINED, updatedPooler.Type)
+	assert.Equal(t, clustermetadatapb.PoolerType_REPLICA, updatedPooler.Type)
 }

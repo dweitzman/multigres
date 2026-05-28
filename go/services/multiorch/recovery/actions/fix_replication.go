@@ -16,7 +16,6 @@ package actions
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -107,7 +106,7 @@ func NewFixReplicationAction(
 		poolerStore:        poolerStore,
 		topoStore:          topoStore,
 		logger:             logger,
-		rewind:             NewRewindAction(cfg, rpcClient, poolerStore, topoStore, logger),
+		rewind:             NewRewindAction(cfg, rpcClient, poolerStore, logger),
 		verifyMaxAttempts:  maxAttempts,
 		verifyPollInterval: pollInterval,
 	}
@@ -246,11 +245,6 @@ func (a *FixReplicationAction) retargetReplication(
 	}
 
 	if rewindErr := a.rewind.Run(ctx, primary, target); rewindErr != nil {
-		if errors.Is(rewindErr, errPoolerDrained) {
-			// pg_rewind was not feasible; pooler marked as DRAINED.
-			// No point verifying replication — treat as resolved.
-			return nil
-		}
 		return mterrors.Wrap(rewindErr, "pg_rewind failed")
 	}
 	// Re-verify replication after rewind. RewindToSource restarts

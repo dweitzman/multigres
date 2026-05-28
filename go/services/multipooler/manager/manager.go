@@ -1675,6 +1675,9 @@ const (
 	// postgres is now readable. The action observes the durable rule and
 	// transitions out of UNKNOWN — see attemptRoleDiscoveryLocked.
 	remedialActionDiscoverRole
+	// TODO: remedialActionSelfDrain — set Type=DRAINED after prolonged
+	// inability to replicate (e.g. WAL receiver stuck for >Ns, pg_rewind
+	// infeasible because the source recycled WAL).
 )
 
 // monitorPostgresIteration performs one iteration of PostgreSQL monitoring.
@@ -2214,7 +2217,8 @@ func (pm *MultiPoolerManager) hasCompleteBackups(ctx context.Context) bool {
 // trusting local WAL. This bears on the broader self-rewind plan:
 //   - replicas with phantom transactions: orch sends an explicit
 //     RewindToSource RPC today; a future change should let the local monitor
-//     detect stuck replication and self-heal without needing orch in the loop.
+//     detect stuck replication and self-heal without needing orch in the loop
+//     (see remedialActionSelfDrain TODO above for the related drain path).
 //   - primaries demoted unexpectedly (crash, SIGKILL, external pg_demote):
 //     the restart-as-standby helper should require callers to declare
 //     "clean" vs "unexpected" so an unexpected transition can set
