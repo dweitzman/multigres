@@ -52,7 +52,7 @@ func (a *StaleLeaderAnalyzer) ProblemCode() types.ProblemCode {
 }
 
 func (a *StaleLeaderAnalyzer) RecoveryAction() types.RecoveryAction {
-	return a.factory.NewDemoteStaleLeaderAction()
+	return a.factory.NewFixReplicationAction()
 }
 
 func (a *StaleLeaderAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, error) {
@@ -117,10 +117,14 @@ func (a *StaleLeaderAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, error
 				commonconsensus.LeaderTerm(stale.ConsensusStatus),
 				clusterLeaderName,
 				clusterLeaderTerm),
-			Priority:       types.PriorityEmergency - types.Priority(i),
-			Scope:          types.ScopeShard,
+			Priority: types.PriorityEmergency - types.Priority(i),
+			// ScopePooler: a stale leader is one specific misbehaving pooler.
+			// The shard already has a healthy elected leader (otherwise
+			// LeaderIsDead would fire instead); other replicas can keep
+			// progressing while this one is retargeted via SetTermPrimary.
+			Scope:          types.ScopePooler,
 			DetectedAt:     time.Now(),
-			RecoveryAction: a.factory.NewDemoteStaleLeaderAction(),
+			RecoveryAction: a.factory.NewFixReplicationAction(),
 		})
 	}
 	return problems, nil

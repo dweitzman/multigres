@@ -86,7 +86,7 @@ func TestFixReplicationAction_ExecuteReplicaNotFound(t *testing.T) {
 	err := action.Execute(ctx, problem)
 
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to find affected replica")
+	assert.Contains(t, err.Error(), "failed to find affected pooler")
 }
 
 func TestFixReplicationAction_ExecuteNoPrimary(t *testing.T) {

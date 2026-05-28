@@ -90,7 +90,7 @@ func TestStaleLeaderAnalyzer_Analyze(t *testing.T) {
 		require.Len(t, problems, 1)
 		p := problems[0]
 		assert.Equal(t, types.ProblemStaleLeader, p.Code)
-		assert.Equal(t, types.ScopeShard, p.Scope)
+		assert.Equal(t, types.ScopePooler, p.Scope)
 		assert.Equal(t, types.PriorityEmergency, p.Priority)
 		assert.Equal(t, staleID, p.PoolerID)
 		assert.Contains(t, p.Description, "stale-primary")

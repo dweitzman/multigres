@@ -73,11 +73,6 @@ func (f *RecoveryActionFactory) NewFixReplicationAction() types.RecoveryAction {
 	return actions.NewFixReplicationAction(f.config, f.rpcClient, f.poolerStore, f.topoStore, f.logger)
 }
 
-// NewDemoteStaleLeaderAction creates an action to demote a stale primary.
-func (f *RecoveryActionFactory) NewDemoteStaleLeaderAction() types.RecoveryAction {
-	return actions.NewDemoteStaleLeaderAction(f.config, f.rpcClient, f.poolerStore, f.topoStore, f.logger)
-}
-
 // NewReconcileCohortAction creates an action to add or remove a cohort member.
 func (f *RecoveryActionFactory) NewReconcileCohortAction() types.RecoveryAction {
 	return actions.NewReconcileCohortAction(f.config, f.rpcClient, f.poolerStore, f.topoStore, f.logger)
