@@ -144,6 +144,20 @@ func (re *Engine) processShardProblems(ctx context.Context, shardKey *clustermet
 
 	// Attempt recoveries in priority order
 	for _, problem := range filteredProblems {
+		// Observability-only problems carry no recovery action. They
+		// fire every cycle while the condition persists, so we keep
+		// the per-cycle log at debug level to avoid spam — metrics
+		// and event emission downstream still get the full signal.
+		if problem.RecoveryAction == nil {
+			re.logger.DebugContext(ctx, "observability-only problem detected; no recovery action queued",
+				"problem_code", problem.Code,
+				"pooler_id", topoclient.MultiPoolerIDString(problem.PoolerID),
+				"shard_key", problem.ShardKey.String(),
+				"description", problem.Description,
+			)
+			continue
+		}
+
 		// Skip follower recoveries if leader is unhealthy and action requires healthy leader
 		if problem.RecoveryAction.RequiresHealthyLeader() && hasLeaderProblem {
 			re.logger.InfoContext(ctx, "skipping recovery - requires healthy leader but leader is unhealthy",

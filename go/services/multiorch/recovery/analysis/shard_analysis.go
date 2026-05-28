@@ -152,6 +152,14 @@ type PoolerAnalysis struct {
 	ReplicationStopped  bool
 	PrimaryConnInfoHost string
 
+	// WalReceiverNotStreamingSince is the pooler-published timestamp of
+	// when its WAL receiver last exited "streaming" state (and stayed
+	// out). Zero when currently streaming, when no primary_conninfo is
+	// configured, or when the pooler hasn't published the field yet.
+	// Consumers apply a duration threshold to absorb bootstrap windows
+	// and transient reconnects.
+	WalReceiverNotStreamingSince time.Time
+
 	// ConsensusStatus from the pooler's most recent StatusResponse snapshot.
 	// Used to derive the primary term via commonconsensus.PrimaryTerm(ConsensusStatus).
 	ConsensusStatus *clustermetadatapb.ConsensusStatus

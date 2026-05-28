@@ -245,6 +245,10 @@ func (g *AnalysisGenerator) generateAnalysisForPooler(
 			if rs.PrimaryConnInfo != nil {
 				analysis.PrimaryConnInfoHost = rs.PrimaryConnInfo.Host
 			}
+
+			if ts := rs.GetWalReceiverNotStreamingSince(); ts != nil {
+				analysis.WalReceiverNotStreamingSince = ts.AsTime()
+			}
 		}
 	}
 
