@@ -62,6 +62,27 @@ const (
 
 	// Non-actionable: if all hosts are down, there is no way we can failover.
 	ProblemLeaderAndReplicasDead ProblemCode = "LeaderAndReplicasDead"
+
+	// Observability-only problems — emitted to surface a condition the
+	// recovery loop cannot directly resolve. Remediation lives elsewhere
+	// (typically inside the pooler) or requires operator intervention.
+	// The recovery loop dispatches these through a no-op action so
+	// metrics/alerts fire but no work is queued.
+
+	// ProblemReplicaStuck indicates the pooler is configured to replicate
+	// from the right primary but its WAL receiver has been non-streaming
+	// for too long. The pooler tracks "WAL receiver stuck since" locally
+	// (clock starts when a streaming receiver stops, not when orch first
+	// looks) and surfaces the timestamp in its health snapshot. The
+	// pooler's postgres monitor handles recovery — self-rewind first,
+	// then self-drain if rewind is infeasible.
+	ProblemReplicaStuck ProblemCode = "ReplicaStuck"
+
+	// ProblemStuckConsensus indicates the current cohort can't make
+	// progress: not enough healthy members for the leader to commit.
+	// Recovery requires either the missing members coming back or an
+	// externally certified rule change; orch can't take action.
+	ProblemStuckConsensus ProblemCode = "StuckConsensus"
 )
 
 // Category groups checks by what they monitor.
