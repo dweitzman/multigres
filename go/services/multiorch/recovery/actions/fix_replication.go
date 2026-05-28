@@ -113,6 +113,13 @@ func NewFixReplicationAction(
 }
 
 // Execute retargets the affected pooler at the current cluster leader.
+//
+// The problem already identifies the target pooler. The leader to point it
+// at comes from store.ShardLeader over the same in-store health snapshot
+// the analyzer used — no additional Status RPC is needed to "verify the
+// primary." SetTermPrimary is idempotent on the receiving pooler (it
+// no-ops when the incoming rule isn't higher than the local rule), so we
+// also skip any pre-flight verification of the target's current state.
 func (a *FixReplicationAction) Execute(ctx context.Context, problem types.Problem) error {
 	a.logger.InfoContext(ctx, "executing fix replication action",
 		"shard_key", problem.ShardKey.String(),
@@ -129,47 +136,30 @@ func (a *FixReplicationAction) Execute(ctx context.Context, problem types.Proble
 			"unsupported problem code for fix replication: %s", problem.Code)
 	}
 
-	// Find the affected pooler
 	target, err := a.poolerStore.FindPoolerByID(problem.PoolerID)
 	if err != nil {
 		return mterrors.Wrap(err, "failed to find affected pooler")
 	}
 
-	// Get all poolers in this shard to find the primary
 	poolers := a.poolerStore.FindPoolersInShard(problem.ShardKey)
 	if len(poolers) == 0 {
 		return fmt.Errorf("no poolers found for shard %s", problem.ShardKey)
 	}
-
-	// Find a healthy primary in the shard
-	primary, err := a.poolerStore.FindHealthyPrimary(ctx, poolers)
-	if err != nil {
-		return mterrors.Wrap(err, "failed to find primary")
+	obs, leader := store.ShardLeader(poolers)
+	if obs.GetLeaderId() == nil {
+		return mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
+			"no consensus leader observed across known poolers")
+	}
+	if leader == nil {
+		return mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
+			"consensus leader %s not present in known poolers", obs.GetLeaderId().GetName())
 	}
 
-	a.logger.InfoContext(ctx, "found primary for replication",
-		"primary", primary.MultiPooler.Id.Name,
+	a.logger.InfoContext(ctx, "retargeting at cluster leader",
+		"leader", leader.MultiPooler.Id.Name,
 		"target", target.MultiPooler.Id.Name)
 
-	// For ProblemReplicaNotReplicating we re-verify against fresh RPC state
-	// before mutating — the original detection might have been racing a
-	// concurrent recovery. For ProblemStaleLeader, SetTermPrimary itself is
-	// idempotent (no-ops when the incoming rule isn't higher than the local
-	// rule), so the pre-flight RPC is wasted and skipped.
-	if problem.Code == types.ProblemReplicaNotReplicating {
-		needsFix, _, err := a.verifyProblemExists(ctx, target, primary, problem.Code)
-		if err != nil {
-			return mterrors.Wrap(err, "failed to verify replication status")
-		}
-		if !needsFix {
-			a.logger.InfoContext(ctx, "replication already configured correctly, problem resolved",
-				"shard_key", problem.ShardKey.String(),
-				"pooler", problem.PoolerID.Name)
-			return nil
-		}
-	}
-
-	return a.retargetReplication(ctx, target, primary, problem.Code)
+	return a.retargetReplication(ctx, target, leader, problem.Code)
 }
 
 // retargetReplication informs `target` about the current cluster leader via
@@ -241,6 +231,15 @@ func (a *FixReplicationAction) retargetReplication(
 		return mterrors.Wrap(err, "replication did not start after stale-leader demote")
 	}
 
+	// TODO: delete the rewind fallback below once the postgres monitor
+	// self-rewinds on prolonged inability to replicate (see
+	// remedialActionSelfDrain TODO in multipooler manager and the related
+	// pass-1 plan to add remedialActionSelfRewind triggered by
+	// rewindPending=true). The monitor has the freshest local view of WAL
+	// receiver state; orch shouldn't be in the loop for this. Once the
+	// monitor handles it, RewindAction loses its only caller and can
+	// either be deleted or kept as an admin escape hatch.
+
 	// Re-check the primary's latest health-stream state before running pg_rewind.
 	// pg_rewind stops the target's postgres before contacting the source; if the
 	// primary postgres is no longer running the stop will leave two nodes down.
@@ -270,93 +269,6 @@ func (a *FixReplicationAction) retargetReplication(
 		"target", target.MultiPooler.Id.Name,
 		"primary", primary.MultiPooler.Id.Name)
 	return nil
-}
-
-// verifyProblemExists re-checks whether the replication problem still exists.
-// Returns true if the problem persists, false if already resolved.
-func (a *FixReplicationAction) verifyProblemExists(
-	ctx context.Context,
-	replica *multiorchdatapb.PoolerHealthState,
-	primary *multiorchdatapb.PoolerHealthState,
-	problemCode types.ProblemCode,
-) (bool, *multipoolermanagerdatapb.StandbyReplicationStatus, error) {
-	switch problemCode {
-	case types.ProblemReplicaNotReplicating:
-		return a.verifyReplicaNotReplicating(ctx, replica, primary)
-
-	default:
-		return false, nil, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,
-			"unsupported problem code for verifyProblemExists: %s", problemCode)
-	}
-}
-
-// verifyReplicaNotReplicating checks if the replica still has no replication configured.
-func (a *FixReplicationAction) verifyReplicaNotReplicating(
-	ctx context.Context,
-	replica *multiorchdatapb.PoolerHealthState,
-	primary *multiorchdatapb.PoolerHealthState,
-) (bool, *multipoolermanagerdatapb.StandbyReplicationStatus, error) {
-	status, err := a.getReplicationStatus(ctx, replica)
-	if err != nil {
-		return false, nil, err
-	}
-	if status == nil {
-		// No status means we can't determine state, assume problem exists
-		return true, nil, nil
-	}
-
-	// Check if primary_conninfo is configured
-	if status.PrimaryConnInfo == nil || status.PrimaryConnInfo.Host == "" {
-		a.logger.InfoContext(ctx, "replica has no primary_conninfo configured",
-			"replica", replica.MultiPooler.Id.Name)
-		return true, status, nil
-	}
-
-	// Check if pointing to the right primary
-	expectedHost := primary.MultiPooler.Hostname
-	expectedPort := primary.MultiPooler.PortMap["postgres"]
-
-	// TODO: Do we need to verify timeline_id matches the primary's timeline?
-	if status.PrimaryConnInfo.Host != expectedHost ||
-		status.PrimaryConnInfo.Port != expectedPort {
-		// Wrong primary - this would be ProblemReplicaWrongPrimary
-		a.logger.InfoContext(ctx, "replica pointing to wrong primary",
-			"replica", replica.MultiPooler.Id.Name,
-			"current_host", status.PrimaryConnInfo.Host,
-			"current_port", status.PrimaryConnInfo.Port,
-			"expected_host", expectedHost,
-			"expected_port", expectedPort)
-		return true, status, nil
-	}
-
-	// Check if WAL replay is paused (might need to resume)
-	if status.IsWalReplayPaused {
-		a.logger.InfoContext(ctx, "replica has WAL replay paused",
-			"replica", replica.MultiPooler.Id.Name)
-		return true, status, nil
-	}
-
-	a.logger.InfoContext(ctx, "replication already configured correctly",
-		"replica", replica.MultiPooler.Id.Name,
-		"last_receive_lsn", status.LastReceiveLsn,
-		"last_replay_lsn", status.LastReplayLsn)
-
-	return false, status, nil
-}
-
-// getReplicationStatus gets the current replication status from the replica.
-func (a *FixReplicationAction) getReplicationStatus(
-	ctx context.Context,
-	replica *multiorchdatapb.PoolerHealthState,
-) (*multipoolermanagerdatapb.StandbyReplicationStatus, error) {
-	statusResp, err := a.rpcClient.Status(ctx, replica.MultiPooler, &multipoolermanagerdatapb.StatusRequest{})
-	if err != nil {
-		return nil, mterrors.Wrap(err, "failed to get replication status")
-	}
-	if statusResp.Status == nil {
-		return nil, nil
-	}
-	return statusResp.Status.ReplicationStatus, nil
 }
 
 // verifyReplicationStarted checks that replication is actively streaming.
