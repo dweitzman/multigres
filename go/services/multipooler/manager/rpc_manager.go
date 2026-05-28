@@ -802,7 +802,9 @@ func (pm *MultiPoolerManager) demoteStalePrimaryLocked(
 
 	// Record the (rule, primary) tuple so ReplicationPrimary stays the canonical
 	// source for "who is the primary now." SetTermPrimary passes the real rule.
-	pm.consensusState.RecordTermPrimary(rule, source)
+	// Routes through recordTermPrimary so any prior resignation signal is
+	// auto-cleared once we've learned about a newer-term leader.
+	pm.recordTermPrimary(ctx, rule, source)
 
 	// Call the locked version directly since we already hold the action lock
 	// (calling setPrimaryConnInfo without the suffix would deadlock trying to acquire the same lock)

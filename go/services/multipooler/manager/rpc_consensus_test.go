@@ -1058,3 +1058,78 @@ func TestSetResignedLeaderAtTerm_BroadcastsOnChange(t *testing.T) {
 	require.NoError(t, pm.setResignedLeaderAtTerm(lockCtx, 0))
 	assert.Equal(t, 1, drain(), "clearing the term is also a change and should broadcast")
 }
+
+// TestRecordTermPrimary_AutoClearsStaleResignation verifies that
+// pm.recordTermPrimary clears the resignedLeaderAtTerm signal when the
+// new rule's term has advanced past the term we resigned at. This is
+// the "auto-clear on learning a newer term primary" behavior: a
+// resignation signal that referred to an earlier term must not outlive
+// the term it referenced.
+func TestRecordTermPrimary_AutoClearsStaleResignation(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	selfID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "self"}
+	otherID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "other"}
+	addr := &clustermetadatapb.PoolerAddress{Id: otherID}
+	rule := func(term int64, leader *clustermetadatapb.ID) *clustermetadatapb.ShardRule {
+		return &clustermetadatapb.ShardRule{
+			RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: term},
+			LeaderId:   leader,
+		}
+	}
+
+	cases := []struct {
+		name             string
+		resignedAt       int64
+		newRule          *clustermetadatapb.ShardRule
+		wantResignedTerm int64
+	}{
+		{
+			name:             "newer term clears stale resignation",
+			resignedAt:       5,
+			newRule:          rule(7, otherID),
+			wantResignedTerm: 0,
+		},
+		{
+			name:             "same term different leader clears",
+			resignedAt:       5,
+			newRule:          rule(5, otherID),
+			wantResignedTerm: 0,
+		},
+		{
+			name:             "older term leaves resignation alone",
+			resignedAt:       5,
+			newRule:          rule(4, otherID),
+			wantResignedTerm: 5,
+		},
+		{
+			name:             "no prior resignation: nothing to clear",
+			resignedAt:       0,
+			newRule:          rule(7, otherID),
+			wantResignedTerm: 0,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pm := &MultiPoolerManager{
+				logger:         logger,
+				serviceID:      selfID,
+				actionLock:     NewActionLock(),
+				consensusState: NewConsensusState("", selfID),
+				healthStreamer: newHealthStreamer(logger, selfID, "tg", "0"),
+			}
+			pm.resignedLeaderAtTerm = tc.resignedAt
+
+			lockCtx, err := pm.actionLock.Acquire(t.Context(), "test")
+			require.NoError(t, err)
+			defer pm.actionLock.Release(lockCtx)
+
+			pm.recordTermPrimary(lockCtx, tc.newRule, addr)
+
+			pm.mu.Lock()
+			got := pm.resignedLeaderAtTerm
+			pm.mu.Unlock()
+			assert.Equal(t, tc.wantResignedTerm, got)
+		})
+	}
+}

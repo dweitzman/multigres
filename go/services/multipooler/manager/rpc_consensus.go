@@ -236,6 +236,39 @@ func (pm *MultiPoolerManager) clearResignedLeaderAtTerm(ctx context.Context) err
 	return nil
 }
 
+// recordTermPrimary updates consensusState.replicationPrimary AND clears
+// any stale resignation signal when the new rule names a different
+// leader or carries a higher term than the one we resigned at. This
+// keeps the LeadershipStatus.REQUESTING_DEMOTION signal from outliving
+// the term it referred to — once consensus has moved on, our
+// resignation is moot and the coordinator should not see it.
+//
+// Callers that want to skip the resignation-clearing logic (e.g.
+// because they want to preserve an outgoing-leader's resignation
+// signal until a separate clean-up step runs) can call
+// pm.consensusState.RecordTermPrimary directly.
+//
+// Requires the action lock.
+func (pm *MultiPoolerManager) recordTermPrimary(ctx context.Context, rule *clustermetadatapb.ShardRule, primary *clustermetadatapb.PoolerAddress) {
+	pm.consensusState.RecordTermPrimary(rule, primary)
+	pm.mu.Lock()
+	resigned := pm.resignedLeaderAtTerm
+	pm.mu.Unlock()
+	if resigned == 0 {
+		return
+	}
+	newTerm := rule.GetRuleNumber().GetCoordinatorTerm()
+	// Clear if the new rule advances past our resigned term, OR if it
+	// names a different leader at the same term. The "same term,
+	// different leader" case shouldn't happen with a well-behaved
+	// coordinator (one leader per term) but treat as moot anyway.
+	if newTerm > resigned || (newTerm == resigned && !proto.Equal(rule.GetLeaderId(), pm.serviceID)) {
+		if err := pm.clearResignedLeaderAtTerm(ctx); err != nil {
+			pm.logger.WarnContext(ctx, "recordTermPrimary: failed to clear stale resignation signal", "error", err)
+		}
+	}
+}
+
 // Recruit handles a coordinator's request to stop replication participation and
 // record a TermRevocation, returning the node's stable position afterward.
 //
@@ -529,8 +562,9 @@ func (pm *MultiPoolerManager) Propose(ctx context.Context, req *consensusdatapb.
 
 	// Record the (rule, primary) — this pooler IS now the primary. Stamping
 	// the published ReplicationPrimary lets the health stream advertise the
-	// new leadership immediately.
-	pm.consensusState.RecordTermPrimary(proposedRule, proposalLeader)
+	// new leadership immediately. Routes through recordTermPrimary so any
+	// prior resignation signal is auto-cleared if this term is newer.
+	pm.recordTermPrimary(ctx, proposedRule, proposalLeader)
 
 	pm.logger.InfoContext(ctx, "Propose complete",
 		"revoked_below_term", revokedBelowTerm)
@@ -645,7 +679,7 @@ func (pm *MultiPoolerManager) SetTermPrimary(ctx context.Context, req *consensus
 	//   - Pooler-side reconciliation: reads last-known-primary to retry
 	//     ALTER SYSTEM SET primary_conninfo if this SetTermPrimary arrived while
 	//     postgres was unavailable.
-	pm.consensusState.RecordTermPrimary(rule, leader)
+	pm.recordTermPrimary(ctx, rule, leader)
 
 	// Observe the freshest view of our rule. SetTermPrimary is the staleness gate,
 	// so we want authoritative state — not the cached snapshot.
