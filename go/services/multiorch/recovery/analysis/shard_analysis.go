@@ -20,7 +20,6 @@ import (
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
 )
 
 // ShardAnalysis groups all per-pooler analyses for a single shard.
@@ -194,26 +193,4 @@ func compareLeaderTimeline(a, b *PoolerAnalysis) int {
 		commonconsensus.LeaderTerm(a.ConsensusStatus),
 		commonconsensus.LeaderTerm(b.ConsensusStatus),
 	)
-}
-
-// analyzeAllPoolers runs fn against each pooler analysis in sa, collecting all problems.
-// Both the shard analysis and the per-pooler analysis are passed so callbacks can
-// access shard-level fields (e.g. LeaderReachable) alongside pooler-specific state.
-// Errors are accumulated — the first error encountered is returned alongside any problems collected.
-func analyzeAllPoolers(sa *ShardAnalysis, fn func(*ShardAnalysis, *PoolerAnalysis) (*types.Problem, error)) ([]types.Problem, error) {
-	var problems []types.Problem
-	var firstErr error
-	for _, poolerAnalysis := range sa.Analyses {
-		p, err := fn(sa, poolerAnalysis)
-		if err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-			continue
-		}
-		if p != nil {
-			problems = append(problems, *p)
-		}
-	}
-	return problems, firstErr
 }
