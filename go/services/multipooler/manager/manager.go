@@ -48,6 +48,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/proto"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
@@ -220,6 +221,16 @@ type MultiPoolerManager struct {
 	// StandbyReplicationStatus.wal_receiver_not_streaming_since.
 	walReceiverStreamMu    sync.Mutex
 	walReceiverStreamState walReceiverStreamState
+
+	// lastSelfRewindAttempt is the timestamp of the most recent
+	// remedialActionSelfRewind dispatch. Used to enforce a cooldown so
+	// the monitor doesn't hammer the same pooler with pg_rewind
+	// repeatedly during a persistent stuck-replication condition;
+	// instead we retry once per selfRewindCooldown. The drain threshold
+	// eventually escalates if rewind never succeeds. Guarded by
+	// walReceiverStreamMu (same scope as the stuck-since timestamp it
+	// gates).
+	lastSelfRewindAttempt time.Time
 }
 
 // walReceiverStreamState tracks one pooler's WAL receiver streaming
@@ -1704,10 +1715,128 @@ const (
 	// postgres is now readable. The action observes the durable rule and
 	// transitions out of UNKNOWN — see attemptRoleDiscoveryLocked.
 	remedialActionDiscoverRole
-	// TODO: remedialActionSelfDrain — set Type=DRAINED after prolonged
-	// inability to replicate (e.g. WAL receiver stuck for >Ns, pg_rewind
-	// infeasible because the source recycled WAL).
+	// remedialActionSelfRewind fires when this standby's WAL receiver has
+	// been in a non-"streaming" state for longer than walReceiverStuckThreshold,
+	// AND consensusState.replicationPrimary names a different pooler at a
+	// known address. Runs pg_rewind against that primary and restarts as
+	// standby. Recovers from divergent WAL (unclean demotion, phantom
+	// transactions) without orch having to issue an explicit RewindToSource
+	// RPC.
+	remedialActionSelfRewind
+	// remedialActionSelfDrain fires when this standby has been stuck for
+	// even longer than the self-rewind threshold AND a previous rewind
+	// attempt didn't resolve the condition. Sets Type=DRAINED on this
+	// pooler's own MultiPooler record so the provisioner allocates a
+	// replacement and multiorch routes around the pooler.
+	//
+	// TODO: switch to a lifecycle-stage advertisement (e.g. DEGRADED)
+	// once the lifecycle-stage PR lands. Type=DRAINED is the today-shape
+	// equivalent.
+	remedialActionSelfDrain
 )
+
+// Thresholds for stuck-replication self-recovery.
+//
+// walReceiverNotStreamingSince is stamped on the first observation of
+// "not streaming" within a primary_conninfo-set epoch. A fresh multipooler
+// restart that takes the WAL receiver a few seconds to come up sees a
+// non-zero "since" timestamp from the very first poll, so the thresholds
+// must comfortably absorb that.
+const (
+	// walReceiverStuckThreshold gates the first remedialActionSelfRewind.
+	// Self-rewind is a medium-cost action (stop postgres + pg_rewind
+	// dry-run + restart), so 30s of broken streaming is the floor before
+	// we'd consider it.
+	walReceiverStuckThreshold = 10 * time.Second
+
+	// selfRewindCooldown is the minimum gap between successive self-rewind
+	// attempts. After dispatching one, the monitor refuses to dispatch
+	// another until at least this much wall time has passed even if the
+	// stuck condition persists. The drain threshold eventually escalates
+	// when rewind never clears the condition.
+	selfRewindCooldown = 2 * time.Minute
+
+	// walReceiverDrainThreshold gates remedialActionSelfDrain. Reached
+	// only when self-rewind has had multiple cycles to attempt repair
+	// and failed; the pooler advertises itself as DRAINED so orchestration
+	// allocates a replacement.
+	walReceiverDrainThreshold = 5 * time.Minute
+)
+
+// walReceiverNotStreamingSince returns the timestamp the WAL receiver
+// last transitioned out of "streaming" state, or the zero time when
+// currently streaming / no epoch is active. Safe to call concurrently.
+func (pm *MultiPoolerManager) walReceiverNotStreamingSince() time.Time {
+	pm.walReceiverStreamMu.Lock()
+	defer pm.walReceiverStreamMu.Unlock()
+	return pm.walReceiverStreamState.notStreamingSince
+}
+
+// stuckReplicationRemedialAction returns the remedial action (if any)
+// indicated by a stuck WAL receiver. Returns remedialActionNone unless
+// all of:
+//   - we have a recorded ReplicationPrimary naming a different pooler
+//     with a usable address (host + postgres port),
+//   - the WAL receiver has been non-streaming for at least
+//     walReceiverStuckThreshold.
+//
+// Self-rewind dispatch is gated by selfRewindCooldown so the monitor
+// doesn't hammer the same pooler repeatedly during a persistent stuck
+// condition: after a dispatch, we wait at least selfRewindCooldown
+// before another attempt regardless of how stuck we still are.
+//
+// Escalates to remedialActionSelfDrain once the stuck duration crosses
+// walReceiverDrainThreshold — by that point several rewind attempts
+// have had time to fail and we advertise the pooler out of service.
+//
+// Caller is expected to have already confirmed we're running as a
+// standby (currentState.isPrimary == false). Safe to call concurrently.
+func (pm *MultiPoolerManager) stuckReplicationRemedialAction() remedialAction {
+	pm.walReceiverStreamMu.Lock()
+	stuckSince := pm.walReceiverStreamState.notStreamingSince
+	lastRewind := pm.lastSelfRewindAttempt
+	pm.walReceiverStreamMu.Unlock()
+
+	if stuckSince.IsZero() {
+		return remedialActionNone
+	}
+	stuckFor := time.Since(stuckSince)
+	if stuckFor < walReceiverStuckThreshold {
+		return remedialActionNone
+	}
+
+	// Need a known primary to rewind against (and to identify "not us").
+	rp := pm.consensusState.GetReplicationPrimary()
+	leader := rp.GetPrimary()
+	if leader == nil ||
+		leader.GetId() == nil ||
+		leader.GetHost() == "" ||
+		leader.GetPostgresPort() == 0 ||
+		proto.Equal(leader.GetId(), pm.serviceID) {
+		return remedialActionNone
+	}
+
+	if stuckFor >= walReceiverDrainThreshold {
+		return remedialActionSelfDrain
+	}
+	// Within rewind window: respect cooldown so successive monitor
+	// ticks during a persistent stuck condition don't fire repeated
+	// rewinds. The drain threshold will eventually trip if rewind
+	// never clears the state.
+	if !lastRewind.IsZero() && time.Since(lastRewind) < selfRewindCooldown {
+		return remedialActionNone
+	}
+	return remedialActionSelfRewind
+}
+
+// recordSelfRewindAttempt stamps the cooldown timer. Called immediately
+// before a self-rewind dispatch so a panic mid-rewind still counts as
+// an attempt and back-pressures retries.
+func (pm *MultiPoolerManager) recordSelfRewindAttempt() {
+	pm.walReceiverStreamMu.Lock()
+	defer pm.walReceiverStreamMu.Unlock()
+	pm.lastSelfRewindAttempt = time.Now()
+}
 
 // monitorPostgresIteration performs one iteration of PostgreSQL monitoring.
 // Returns the discovered postgres state on success, or an error if the state
@@ -1988,19 +2117,15 @@ func (pm *MultiPoolerManager) determineRemedialAction(ctx context.Context, curre
 			if pm.primaryConnInfoDiffersFromRecorded(currentState) {
 				return remedialActionFixPrimaryConnInfo
 			}
-			// TODO: self-rewind detection. A replica may need pg_rewind even
-			// when it was never primary — phantom transactions can leak in
-			// (e.g. via a brief sync-replication ack that got rolled back on
-			// the primary). The old consensus flow let orch re-issue an
-			// explicit rewind whenever it suspected one; the new flow's
-			// SetTermPrimary is idempotent and won't repeat work, so the monitor
-			// needs to self-detect stuck replication. Check
-			// pg_stat_wal_receiver.status: if not "streaming" for
-			// >stuckThreshold AND we have a recorded primary, treat as
-			// suspected divergence — set rewindPending=true so the next
-			// remedialActionFixPrimaryConnInfo iteration runs
-			// pg_rewind dry-run before re-establishing replication. Cheap
-			// when no divergence, conclusive when there is.
+			// Self-rewind / self-drain. If the WAL receiver has been stuck
+			// for long enough AND we have a recorded primary to point at,
+			// the monitor takes over local recovery without waiting for
+			// orch. Self-drain (an interim Type=DRAINED until the
+			// lifecycle PR lands) follows if rewind hasn't cleared the
+			// stuck state after a longer window.
+			if action := pm.stuckReplicationRemedialAction(); action != remedialActionNone {
+				return action
+			}
 		}
 		// Pooler type already matches; check for a stale GUC that needs re-applying.
 		// Only reconcile the GUC when actually running as primary: synchronous_standby_names
@@ -2197,7 +2322,78 @@ func (pm *MultiPoolerManager) takeRemedialAction(ctx context.Context, action rem
 		pm.setMonitorReason(ctx, reasonPostgresRunning, "MonitorPostgres: PostgreSQL is running")
 		pm.logger.InfoContext(ctx, "MonitorPostgres: discovering role from rule")
 		pm.attemptRoleDiscoveryLocked(ctx)
+
+	case remedialActionSelfRewind:
+		// WAL receiver has been broken for too long against a known
+		// primary. Run pg_rewind locally and restart as standby.
+		// Re-checked under the action lock — by the time we dispatch the
+		// stuck-since timestamp might have cleared (e.g. SetTermPrimary
+		// fired between determineRemedialAction and here).
+		stuckSince := pm.walReceiverNotStreamingSince()
+		if stuckSince.IsZero() || time.Since(stuckSince) < walReceiverStuckThreshold {
+			pm.logger.InfoContext(ctx, "MonitorPostgres: self-rewind skipped; stuck-since cleared since detection")
+			return
+		}
+		rp := pm.consensusState.GetReplicationPrimary()
+		leader := rp.GetPrimary()
+		rule := rp.GetRule()
+		if leader == nil || rule == nil {
+			pm.logger.InfoContext(ctx, "MonitorPostgres: self-rewind skipped; replication primary lost under the lock")
+			return
+		}
+		pm.logger.WarnContext(ctx, "MonitorPostgres: self-rewind — WAL receiver has been broken for too long; running pg_rewind against recorded primary",
+			"primary", leader.GetId().GetName(),
+			"stuck_since", stuckSince,
+			"stuck_for", time.Since(stuckSince))
+		// Stamp the cooldown timer BEFORE the rewind so a panic or hang
+		// still counts as an attempt and back-pressures retries.
+		pm.recordSelfRewindAttempt()
+		if _, _, err := pm.demoteStalePrimaryLocked(ctx, leader, rule); err != nil {
+			pm.logger.ErrorContext(ctx, "MonitorPostgres: self-rewind failed; next monitor cycle will retry after cooldown or escalate to drain", "error", err)
+		}
+
+	case remedialActionSelfDrain:
+		// Stuck even longer than the rewind threshold. Self-mark
+		// Type=DRAINED so multiorch routes around this pooler and the
+		// provisioner allocates a replacement.
+		//
+		// TODO: switch to a lifecycle-stage advertisement (e.g.
+		// DEGRADED) once the upcoming lifecycle PR lands. DRAINED today
+		// is a co-opt of a PoolerType value semantically about routing
+		// intent, but it achieves the same observable outcome:
+		// gateway/orch ignore this pooler for serving/cohort decisions.
+		stuckSince := pm.walReceiverNotStreamingSince()
+		pm.logger.WarnContext(ctx, "MonitorPostgres: self-drain — WAL receiver stuck past drain threshold; advertising Type=DRAINED",
+			"stuck_since", stuckSince,
+			"stuck_for", time.Since(stuckSince))
+		if err := pm.selfDrainLocked(ctx); err != nil {
+			pm.logger.ErrorContext(ctx, "MonitorPostgres: self-drain failed", "error", err)
+		}
 	}
+}
+
+// selfDrainLocked sets this pooler's MultiPooler.Type to DRAINED via the
+// servingState API so the pooler republishes itself as out-of-service.
+// Caller must hold the action lock.
+//
+// TODO: replace with a lifecycle-stage write once the lifecycle PR
+// lands; DRAINED is a stopgap that achieves the same observable effect
+// (gateway/orch route around the pooler, provisioner allocates a
+// replacement).
+func (pm *MultiPoolerManager) selfDrainLocked(ctx context.Context) error {
+	if err := AssertActionLockHeld(ctx); err != nil {
+		return err
+	}
+	// Pass nil rule so SetState derives Type=UNKNOWN from "no rule
+	// known" and we then override to DRAINED here. Simpler: write
+	// directly via the topo store.
+	_, err := pm.topoClient.UpdateMultiPoolerFields(ctx, pm.serviceID, func(mp *clustermetadatapb.MultiPooler) error {
+		mp.Type = clustermetadatapb.PoolerType_DRAINED
+		// Clear leadership advertisement — a drained pooler cannot be leader.
+		mp.CurrentLeadership = nil
+		return nil
+	})
+	return err
 }
 
 // attemptRoleDiscoveryLocked observes the durable rule from postgres and

@@ -20,6 +20,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 )
 
 // TestUpdateWalReceiverStreamState exercises the state machine that
@@ -138,5 +140,118 @@ func TestUpdateWalReceiverStreamState(t *testing.T) {
 		pm := &MultiPoolerManager{}
 		got := pm.updateWalReceiverStreamState("", true)
 		require.False(t, got.IsZero())
+	})
+}
+
+// TestStuckReplicationRemedialAction covers the decision rules that turn
+// a stuck WAL receiver into a remedial action (or no action). The tests
+// drive pm.walReceiverStreamState + pm.consensusState directly to model
+// each case without spinning up real postgres.
+func TestStuckReplicationRemedialAction(t *testing.T) {
+	selfID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "self"}
+	leaderID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "leader"}
+
+	// withRecordedLeader returns a manager whose consensusState names
+	// leaderID at the given address — the precondition for self-rewind.
+	withRecordedLeader := func(t *testing.T) *MultiPoolerManager {
+		t.Helper()
+		pm := &MultiPoolerManager{serviceID: selfID}
+		pm.consensusState = NewConsensusState(t.TempDir(), selfID)
+		pm.consensusState.RecordTermPrimary(
+			&clustermetadatapb.ShardRule{
+				RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
+				LeaderId:   leaderID,
+			},
+			&clustermetadatapb.PoolerAddress{
+				Id:           leaderID,
+				Host:         "leader.example.com",
+				PostgresPort: 5432,
+			},
+		)
+		return pm
+	}
+
+	t.Run("returns none when WAL receiver is currently streaming", func(t *testing.T) {
+		pm := withRecordedLeader(t)
+		// Default walReceiverStreamState has zero notStreamingSince.
+		assert.Equal(t, remedialActionNone, pm.stuckReplicationRemedialAction())
+	})
+
+	t.Run("returns none when not stuck long enough", func(t *testing.T) {
+		pm := withRecordedLeader(t)
+		pm.walReceiverStreamState.initialized = true
+		pm.walReceiverStreamState.notStreamingSince = time.Now().Add(-1 * time.Second)
+		assert.Equal(t, remedialActionNone, pm.stuckReplicationRemedialAction())
+	})
+
+	t.Run("returns SelfRewind when stuck past threshold with a known primary", func(t *testing.T) {
+		pm := withRecordedLeader(t)
+		pm.walReceiverStreamState.initialized = true
+		pm.walReceiverStreamState.notStreamingSince = time.Now().Add(-(walReceiverStuckThreshold + time.Second))
+		assert.Equal(t, remedialActionSelfRewind, pm.stuckReplicationRemedialAction())
+	})
+
+	t.Run("returns none when no recorded primary exists", func(t *testing.T) {
+		// Stuck for long enough but consensusState has no leader yet —
+		// can't rewind against nothing.
+		pm := &MultiPoolerManager{serviceID: selfID}
+		pm.consensusState = NewConsensusState(t.TempDir(), selfID)
+		pm.walReceiverStreamState.initialized = true
+		pm.walReceiverStreamState.notStreamingSince = time.Now().Add(-(walReceiverStuckThreshold + time.Second))
+		assert.Equal(t, remedialActionNone, pm.stuckReplicationRemedialAction())
+	})
+
+	t.Run("returns none when recorded primary is ourselves", func(t *testing.T) {
+		// A self-claim shouldn't trigger self-rewind. Stale-leader detection
+		// on orch handles that case via SetTermPrimary.
+		pm := &MultiPoolerManager{serviceID: selfID}
+		pm.consensusState = NewConsensusState(t.TempDir(), selfID)
+		pm.consensusState.RecordTermPrimary(
+			&clustermetadatapb.ShardRule{
+				RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
+				LeaderId:   selfID,
+			},
+			&clustermetadatapb.PoolerAddress{Id: selfID, Host: "self.example.com", PostgresPort: 5432},
+		)
+		pm.walReceiverStreamState.initialized = true
+		pm.walReceiverStreamState.notStreamingSince = time.Now().Add(-(walReceiverStuckThreshold + time.Second))
+		assert.Equal(t, remedialActionNone, pm.stuckReplicationRemedialAction())
+	})
+
+	t.Run("rewind cooldown blocks immediate re-dispatch", func(t *testing.T) {
+		pm := withRecordedLeader(t)
+		pm.walReceiverStreamState.initialized = true
+		pm.walReceiverStreamState.notStreamingSince = time.Now().Add(-(walReceiverStuckThreshold + time.Second))
+		// Pretend a rewind was just attempted.
+		pm.lastSelfRewindAttempt = time.Now()
+		assert.Equal(t, remedialActionNone, pm.stuckReplicationRemedialAction())
+	})
+
+	t.Run("rewind cooldown lapses after enough wall time", func(t *testing.T) {
+		pm := withRecordedLeader(t)
+		pm.walReceiverStreamState.initialized = true
+		pm.walReceiverStreamState.notStreamingSince = time.Now().Add(-(walReceiverStuckThreshold + time.Second))
+		// Last attempt was longer ago than the cooldown.
+		pm.lastSelfRewindAttempt = time.Now().Add(-(selfRewindCooldown + time.Second))
+		assert.Equal(t, remedialActionSelfRewind, pm.stuckReplicationRemedialAction())
+	})
+
+	t.Run("escalates to SelfDrain past drain threshold regardless of cooldown", func(t *testing.T) {
+		pm := withRecordedLeader(t)
+		pm.walReceiverStreamState.initialized = true
+		pm.walReceiverStreamState.notStreamingSince = time.Now().Add(-(walReceiverDrainThreshold + time.Second))
+		// Even if we just attempted rewind, the drain escalation fires.
+		pm.lastSelfRewindAttempt = time.Now()
+		assert.Equal(t, remedialActionSelfDrain, pm.stuckReplicationRemedialAction())
+	})
+
+	t.Run("recordSelfRewindAttempt stamps the cooldown timer", func(t *testing.T) {
+		pm := &MultiPoolerManager{}
+		assert.True(t, pm.lastSelfRewindAttempt.IsZero())
+		before := time.Now()
+		pm.recordSelfRewindAttempt()
+		after := time.Now()
+		assert.False(t, pm.lastSelfRewindAttempt.IsZero())
+		assert.True(t, !pm.lastSelfRewindAttempt.Before(before) && !pm.lastSelfRewindAttempt.After(after))
 	})
 }
