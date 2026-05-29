@@ -171,7 +171,8 @@ type MultiPoolerManager struct {
 	pgMonitor *timer.PeriodicRunner
 
 	// rewindPending suppresses the postgres monitor after emergency demotion until a
-	// rewind completes successfully. Set by emergencyDemoteLocked, cleared by RewindToSource.
+	// rewind completes successfully. Set by emergencyDemoteLocked, cleared by the
+	// self-rewind path once divergence is repaired.
 	rewindPending atomic.Bool
 
 	// promotionInProgress is set while pg_promote() has been called but postgres has not yet
@@ -1720,8 +1721,7 @@ const (
 	// AND consensusState.replicationPrimary names a different pooler at a
 	// known address. Runs pg_rewind against that primary and restarts as
 	// standby. Recovers from divergent WAL (unclean demotion, phantom
-	// transactions) without orch having to issue an explicit RewindToSource
-	// RPC.
+	// transactions) locally, without an orch-driven RPC round-trip.
 	remedialActionSelfRewind
 	// remedialActionSelfDrain fires when this standby has been stuck for
 	// even longer than the self-rewind threshold AND a previous rewind
@@ -2244,14 +2244,12 @@ func (pm *MultiPoolerManager) takeRemedialAction(ctx context.Context, action rem
 			"target_primary", target.GetId().GetName(),
 			"target_host", targetHost,
 			"target_port", targetPort)
-		// TODO: when rewindPending=true (an unexpected demotion happened
-		// without a follow-up pg_rewind), just setting primary_conninfo is
-		// not enough — the WAL receiver will fail to start due to timeline
-		// divergence. Route through demoteStalePrimaryLocked instead, which
-		// runs pg_rewind dry-run (cheap when there's no divergence) before
-		// re-establishing replication. This would let the monitor self-heal
-		// a stuck-replica scenario without waiting for orch's
-		// FixReplicationAction to issue a RewindToSource RPC.
+		// When rewindPending=true (an unexpected demotion happened without a
+		// follow-up pg_rewind), just setting primary_conninfo is not enough —
+		// the WAL receiver will fail to start due to timeline divergence. The
+		// remedialActionSelfRewind path picks that up once the WAL receiver
+		// has been stuck past walReceiverStuckThreshold and runs pg_rewind
+		// locally.
 		if err := pm.setPrimaryConnInfoLocked(ctx, targetHost, targetPort,
 			true /* stopReplicationBefore */, true /* startReplicationAfter */); err != nil {
 			pm.logger.ErrorContext(ctx, "MonitorPostgres: failed to reconcile primary_conninfo", "error", err)
@@ -2433,22 +2431,13 @@ func (pm *MultiPoolerManager) hasCompleteBackups(ctx context.Context) bool {
 
 // startPostgres starts PostgreSQL via pgctld
 //
-// TODO: preemptive-rewind safety. A monitor-driven restart can't know what
-// happened between the previous run and now — postgres may have crashed
-// mid-write as primary, or may have been killed externally. The safe default
-// is to come back as a standby with rewindPending=true so that the next
-// SetTermPrimary/Propose/standby-conninfo path routes through demoteStalePrimaryLocked
-// (which runs pg_rewind dry-run; cheap when there's no divergence) before
-// trusting local WAL. This bears on the broader self-rewind plan:
-//   - replicas with phantom transactions: orch sends an explicit
-//     RewindToSource RPC today; a future change should let the local monitor
-//     detect stuck replication and self-heal without needing orch in the loop
-//     (see remedialActionSelfDrain TODO above for the related drain path).
-//   - primaries demoted unexpectedly (crash, SIGKILL, external pg_demote):
-//     the restart-as-standby helper should require callers to declare
-//     "clean" vs "unexpected" so an unexpected transition can set
-//     rewindPending up front, increasing the odds of fast convergence once
-//     a new leader is announced.
+// TODO: preemptive-rewind safety for primary unexpectedly demoted (crash,
+// SIGKILL, external pg_demote). The restart-as-standby helper should
+// require callers to declare "clean" vs "unexpected" so an unexpected
+// transition can set rewindPending up front, letting remedialActionSelfRewind
+// pick it up once a new leader is announced. (Replicas with phantom
+// transactions are already handled by the self-rewind path; this is about
+// catching the demoted-primary edge case earlier.)
 func (pm *MultiPoolerManager) startPostgres(ctx context.Context) error {
 	pm.logger.InfoContext(ctx, "MonitorPostgres: Attempting to restart PostgreSQL")
 	if pm.pgctldClient == nil {

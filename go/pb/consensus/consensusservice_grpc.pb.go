@@ -37,7 +37,6 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	MultiPoolerConsensus_Status_FullMethodName              = "/consensus.MultiPoolerConsensus/Status"
 	MultiPoolerConsensus_UpdateConsensusRule_FullMethodName = "/consensus.MultiPoolerConsensus/UpdateConsensusRule"
-	MultiPoolerConsensus_RewindToSource_FullMethodName      = "/consensus.MultiPoolerConsensus/RewindToSource"
 	MultiPoolerConsensus_Recruit_FullMethodName             = "/consensus.MultiPoolerConsensus/Recruit"
 	MultiPoolerConsensus_Propose_FullMethodName             = "/consensus.MultiPoolerConsensus/Propose"
 	MultiPoolerConsensus_SetTermPrimary_FullMethodName      = "/consensus.MultiPoolerConsensus/SetTermPrimary"
@@ -58,9 +57,6 @@ type MultiPoolerConsensusClient interface {
 	// primary handler updates synchronous_standby_names and records the cohort
 	// change in rule_history.
 	UpdateConsensusRule(ctx context.Context, in *multipoolermanagerdata.UpdateConsensusRuleRequest, opts ...grpc.CallOption) (*multipoolermanagerdata.UpdateConsensusRuleResponse, error)
-	// RewindToSource performs pg_rewind to synchronize this server with a source.
-	// This is used to repair diverged timelines after failover.
-	RewindToSource(ctx context.Context, in *multipoolermanagerdata.RewindToSourceRequest, opts ...grpc.CallOption) (*multipoolermanagerdata.RewindToSourceResponse, error)
 	// Recruit asks a pooler to revoke all terms below the one specified and
 	// record the coordinator's exclusive claim on that term.
 	Recruit(ctx context.Context, in *consensusdata.RecruitRequest, opts ...grpc.CallOption) (*consensusdata.RecruitResponse, error)
@@ -96,16 +92,6 @@ func (c *multiPoolerConsensusClient) UpdateConsensusRule(ctx context.Context, in
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(multipoolermanagerdata.UpdateConsensusRuleResponse)
 	err := c.cc.Invoke(ctx, MultiPoolerConsensus_UpdateConsensusRule_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *multiPoolerConsensusClient) RewindToSource(ctx context.Context, in *multipoolermanagerdata.RewindToSourceRequest, opts ...grpc.CallOption) (*multipoolermanagerdata.RewindToSourceResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(multipoolermanagerdata.RewindToSourceResponse)
-	err := c.cc.Invoke(ctx, MultiPoolerConsensus_RewindToSource_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -157,9 +143,6 @@ type MultiPoolerConsensusServer interface {
 	// primary handler updates synchronous_standby_names and records the cohort
 	// change in rule_history.
 	UpdateConsensusRule(context.Context, *multipoolermanagerdata.UpdateConsensusRuleRequest) (*multipoolermanagerdata.UpdateConsensusRuleResponse, error)
-	// RewindToSource performs pg_rewind to synchronize this server with a source.
-	// This is used to repair diverged timelines after failover.
-	RewindToSource(context.Context, *multipoolermanagerdata.RewindToSourceRequest) (*multipoolermanagerdata.RewindToSourceResponse, error)
 	// Recruit asks a pooler to revoke all terms below the one specified and
 	// record the coordinator's exclusive claim on that term.
 	Recruit(context.Context, *consensusdata.RecruitRequest) (*consensusdata.RecruitResponse, error)
@@ -186,9 +169,6 @@ func (UnimplementedMultiPoolerConsensusServer) Status(context.Context, *consensu
 }
 func (UnimplementedMultiPoolerConsensusServer) UpdateConsensusRule(context.Context, *multipoolermanagerdata.UpdateConsensusRuleRequest) (*multipoolermanagerdata.UpdateConsensusRuleResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpdateConsensusRule not implemented")
-}
-func (UnimplementedMultiPoolerConsensusServer) RewindToSource(context.Context, *multipoolermanagerdata.RewindToSourceRequest) (*multipoolermanagerdata.RewindToSourceResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RewindToSource not implemented")
 }
 func (UnimplementedMultiPoolerConsensusServer) Recruit(context.Context, *consensusdata.RecruitRequest) (*consensusdata.RecruitResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Recruit not implemented")
@@ -252,24 +232,6 @@ func _MultiPoolerConsensus_UpdateConsensusRule_Handler(srv interface{}, ctx cont
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(MultiPoolerConsensusServer).UpdateConsensusRule(ctx, req.(*multipoolermanagerdata.UpdateConsensusRuleRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _MultiPoolerConsensus_RewindToSource_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(multipoolermanagerdata.RewindToSourceRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(MultiPoolerConsensusServer).RewindToSource(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: MultiPoolerConsensus_RewindToSource_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(MultiPoolerConsensusServer).RewindToSource(ctx, req.(*multipoolermanagerdata.RewindToSourceRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -342,10 +304,6 @@ var MultiPoolerConsensus_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpdateConsensusRule",
 			Handler:    _MultiPoolerConsensus_UpdateConsensusRule_Handler,
-		},
-		{
-			MethodName: "RewindToSource",
-			Handler:    _MultiPoolerConsensus_RewindToSource_Handler,
 		},
 		{
 			MethodName: "Recruit",

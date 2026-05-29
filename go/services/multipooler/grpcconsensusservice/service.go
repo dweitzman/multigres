@@ -93,12 +93,3 @@ func (s *consensusService) SetTermPrimary(ctx context.Context, req *consensusdat
 	}
 	return resp, nil
 }
-
-// RewindToSource performs pg_rewind to synchronize this server with a source
-func (s *consensusService) RewindToSource(ctx context.Context, req *multipoolermanagerdatapb.RewindToSourceRequest) (*multipoolermanagerdatapb.RewindToSourceResponse, error) {
-	resp, err := s.manager.RewindToSource(ctx, req.Source)
-	if err != nil {
-		return nil, mterrors.ToGRPC(err)
-	}
-	return resp, nil
-}

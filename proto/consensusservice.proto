@@ -39,11 +39,6 @@ service MultiPoolerConsensus {
   rpc UpdateConsensusRule(multipoolermanagerdata.UpdateConsensusRuleRequest)
     returns (multipoolermanagerdata.UpdateConsensusRuleResponse);
 
-  // RewindToSource performs pg_rewind to synchronize this server with a source.
-  // This is used to repair diverged timelines after failover.
-  rpc RewindToSource(multipoolermanagerdata.RewindToSourceRequest)
-    returns (multipoolermanagerdata.RewindToSourceResponse);
-
   // Recruit → Propose → SetTermPrimary appointment protocol.
 
   // Recruit asks a pooler to revoke all terms below the one specified and

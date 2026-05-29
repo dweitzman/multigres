@@ -162,9 +162,6 @@ type MultiPoolerClient interface {
 	// success without changes.
 	SetTermPrimary(ctx context.Context, pooler *clustermetadatapb.MultiPooler, request *consensusdatapb.SetTermPrimaryRequest) (*consensusdatapb.SetTermPrimaryResponse, error)
 
-	// RewindToSource performs pg_rewind to synchronize a replica with its source.
-	RewindToSource(ctx context.Context, pooler *clustermetadatapb.MultiPooler, request *multipoolermanagerdatapb.RewindToSourceRequest) (*multipoolermanagerdatapb.RewindToSourceResponse, error)
-
 	//
 	// Manager Service Methods - Status and Monitoring
 	//

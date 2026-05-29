@@ -75,7 +75,6 @@ type FakeClient struct {
 	RestoreFromBackupResponses          map[string]*multipoolermanagerdatapb.RestoreFromBackupResponse
 	GetBackupsResponses                 map[string]*multipoolermanagerdatapb.GetBackupsResponse
 	GetBackupByJobIdResponses           map[string]*multipoolermanagerdatapb.GetBackupByJobIdResponse
-	RewindToSourceResponses             map[string]*multipoolermanagerdatapb.RewindToSourceResponse
 	SetPostgresRestartsEnabledResponses map[string]*multipoolermanagerdatapb.SetPostgresRestartsEnabledResponse
 
 	// Errors to return - keyed by pooler ID
@@ -109,7 +108,6 @@ func NewFakeClient() *FakeClient {
 		RestoreFromBackupResponses:          make(map[string]*multipoolermanagerdatapb.RestoreFromBackupResponse),
 		GetBackupsResponses:                 make(map[string]*multipoolermanagerdatapb.GetBackupsResponse),
 		GetBackupByJobIdResponses:           make(map[string]*multipoolermanagerdatapb.GetBackupByJobIdResponse),
-		RewindToSourceResponses:             make(map[string]*multipoolermanagerdatapb.RewindToSourceResponse),
 		SetPostgresRestartsEnabledResponses: make(map[string]*multipoolermanagerdatapb.SetPostgresRestartsEnabledResponse),
 		Errors:                              make(map[string]error),
 		CallLog:                             make([]string, 0),
@@ -453,26 +451,6 @@ func (f *FakeClient) ExpireBackups(ctx context.Context, pooler *clustermetadatap
 	}
 
 	return &multipoolermanagerdatapb.ExpireBackupsResponse{}, nil
-}
-
-//
-// Manager Service Methods - Timeline Repair
-//
-
-func (f *FakeClient) RewindToSource(ctx context.Context, pooler *clustermetadatapb.MultiPooler, req *multipoolermanagerdatapb.RewindToSourceRequest) (*multipoolermanagerdatapb.RewindToSourceResponse, error) {
-	poolerID := f.getPoolerID(pooler)
-	f.logCall("RewindToSource", poolerID)
-
-	if err := f.checkError(poolerID); err != nil {
-		return nil, err
-	}
-
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-	if resp, ok := f.RewindToSourceResponses[poolerID]; ok {
-		return resp, nil
-	}
-	return &multipoolermanagerdatapb.RewindToSourceResponse{}, nil
 }
 
 //
