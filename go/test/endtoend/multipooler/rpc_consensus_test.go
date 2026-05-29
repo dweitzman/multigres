@@ -31,7 +31,6 @@ import (
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	consensuspb "github.com/multigres/multigres/go/pb/consensus"
-	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 	multipoolermanagerpb "github.com/multigres/multigres/go/pb/multipoolermanager"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
@@ -56,7 +55,7 @@ func TestConsensus_Status(t *testing.T) {
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { primaryConn.Close() })
-	primaryConsensusClient := consensuspb.NewMultiPoolerConsensusClient(primaryConn)
+	primaryManagerClient := multipoolermanagerpb.NewMultiPoolerManagerClient(primaryConn)
 
 	standbyConn, err := grpc.NewClient(
 		fmt.Sprintf("localhost:%d", setup.StandbyMultipooler.GrpcPort),
@@ -64,21 +63,21 @@ func TestConsensus_Status(t *testing.T) {
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { standbyConn.Close() })
-	standbyConsensusClient := consensuspb.NewMultiPoolerConsensusClient(standbyConn)
+	standbyManagerClient := multipoolermanagerpb.NewMultiPoolerManagerClient(standbyConn)
 
 	t.Run("Status_Primary", func(t *testing.T) {
 		t.Log("Testing Status on primary multipooler...")
 
-		req := &consensusdatapb.StatusRequest{}
-		resp, err := primaryConsensusClient.Status(utils.WithShortDeadline(t), req)
+		req := &multipoolermanagerdatapb.StatusRequest{}
+		resp, err := primaryManagerClient.Status(utils.WithShortDeadline(t), req)
 		require.NoError(t, err, "Status should succeed on primary")
 		require.NotNil(t, resp, "Response should not be nil")
 
 		// Verify node ID
-		assert.Equal(t, setup.PrimaryMultipooler.Name, resp.GetId().GetName(), "PoolerId should match")
+		assert.Equal(t, setup.PrimaryMultipooler.Name, resp.GetConsensusStatus().GetId().GetName(), "PoolerId should match")
 
 		// Verify cell
-		assert.Equal(t, "test-cell", resp.GetId().GetCell(), "Cell should match")
+		assert.Equal(t, "test-cell", resp.GetConsensusStatus().GetId().GetCell(), "Cell should match")
 
 		// Verify term (should be 1 from setup)
 		assert.Equal(t, int64(1), resp.GetConsensusStatus().GetTermRevocation().GetRevokedBelowTerm(), "TermNumber should be 1")
@@ -96,16 +95,16 @@ func TestConsensus_Status(t *testing.T) {
 	t.Run("Status_Standby", func(t *testing.T) {
 		t.Log("Testing Status on standby multipooler...")
 
-		req := &consensusdatapb.StatusRequest{}
-		resp, err := standbyConsensusClient.Status(utils.WithShortDeadline(t), req)
+		req := &multipoolermanagerdatapb.StatusRequest{}
+		resp, err := standbyManagerClient.Status(utils.WithShortDeadline(t), req)
 		require.NoError(t, err, "Status should succeed on standby")
 		require.NotNil(t, resp, "Response should not be nil")
 
 		// Verify node ID
-		assert.Equal(t, setup.StandbyMultipooler.Name, resp.GetId().GetName(), "PoolerId should match")
+		assert.Equal(t, setup.StandbyMultipooler.Name, resp.GetConsensusStatus().GetId().GetName(), "PoolerId should match")
 
 		// Verify cell
-		assert.Equal(t, "test-cell", resp.GetId().GetCell(), "Cell should match")
+		assert.Equal(t, "test-cell", resp.GetConsensusStatus().GetId().GetCell(), "Cell should match")
 
 		// Verify this node is not the consensus primary
 		assert.False(t, consensus.IsLeader(resp.GetConsensusStatus()), "Standby should not be consensus primary")

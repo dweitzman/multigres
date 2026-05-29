@@ -24,11 +24,11 @@ import (
 	"github.com/multigres/multigres/go/test/endtoend/shardsetup"
 	"github.com/multigres/multigres/go/test/utils"
 
-	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
+	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
 
 // TestMultipoolerPrimaryLSN verifies that a primary pooler reports a valid WAL position
-// via the consensus Status RPC.
+// via the manager Status RPC.
 func TestMultipoolerPrimaryLSN(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping end-to-end tests in short mode")
@@ -43,7 +43,7 @@ func TestMultipoolerPrimaryLSN(t *testing.T) {
 	t.Cleanup(func() { primaryClient.Close() })
 
 	ctx := utils.WithTimeout(t, 5*time.Second)
-	statusResp, err := primaryClient.Consensus.Status(ctx, &consensusdatapb.StatusRequest{})
+	statusResp, err := primaryClient.Manager.Status(ctx, &multipoolermanagerdatapb.StatusRequest{})
 	require.NoError(t, err)
 	assert.NotEmpty(t, statusResp.GetConsensusStatus().GetCurrentPosition().GetLsn(), "Primary LSN should not be empty")
 	assert.Contains(t, statusResp.GetConsensusStatus().GetCurrentPosition().GetLsn(), "/", "LSN should be in PostgreSQL format (e.g., 0/1234ABCD)")

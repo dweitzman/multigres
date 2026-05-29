@@ -843,17 +843,3 @@ func (pm *MultiPoolerManager) awaitWalReceiverStreaming(ctx context.Context) err
 	}
 	return lastErr
 }
-
-// ConsensusStatus returns the current status of this node for consensus
-func (pm *MultiPoolerManager) ConsensusStatus(ctx context.Context, req *consensusdatapb.StatusRequest) (*consensusdatapb.StatusResponse, error) {
-	consensusStatus, statusErr := pm.getInconsistentConsensusStatus(ctx)
-	if statusErr != nil {
-		pm.logger.WarnContext(ctx, "Failed to build consensus status for StatusResponse", "error", statusErr)
-	}
-
-	return &consensusdatapb.StatusResponse{
-		Id:                 pm.serviceID,
-		ConsensusStatus:    consensusStatus,
-		AvailabilityStatus: pm.buildAvailabilityStatus(),
-	}, nil
-}

@@ -148,10 +148,6 @@ type MultiPoolerClient interface {
 	// leader) or point replication at the new primary (if replica).
 	Propose(ctx context.Context, pooler *clustermetadatapb.MultiPooler, request *consensusdatapb.ProposeRequest) (*consensusdatapb.ProposeResponse, error)
 
-	// ConsensusStatus gets the consensus status of the multipooler.
-	// This may be called frequently for monitoring, so implementations cache connections.
-	ConsensusStatus(ctx context.Context, pooler *clustermetadatapb.MultiPooler, request *consensusdatapb.StatusRequest) (*consensusdatapb.StatusResponse, error)
-
 	// UpdateConsensusRule updates the synchronous standby list (quorum membership).
 	UpdateConsensusRule(ctx context.Context, pooler *clustermetadatapb.MultiPooler, request *multipoolermanagerdatapb.UpdateConsensusRuleRequest) (*multipoolermanagerdatapb.UpdateConsensusRuleResponse, error)
 
@@ -167,6 +163,13 @@ type MultiPoolerClient interface {
 	//
 
 	// Status gets unified status that works for both PRIMARY and REPLICA poolers.
+	//
+	// TODO: rewire the Status implementation to take a single snapshot from
+	// the ManagerHealthStream so there is only one observation API. Doing so
+	// lets us delete MultiPoolerManager.Status from the proto and drop the
+	// unary handler from the pooler service. Blocked on migrating the ~25
+	// endtoend tests that call client.Manager.Status (the raw gRPC stub) to
+	// either the streaming endpoint or this rpcclient wrapper.
 	Status(ctx context.Context, pooler *clustermetadatapb.MultiPooler, request *multipoolermanagerdatapb.StatusRequest) (*multipoolermanagerdatapb.StatusResponse, error)
 
 	//
