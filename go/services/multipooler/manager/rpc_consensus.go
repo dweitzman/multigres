@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/eventlog"
@@ -181,6 +182,52 @@ func (pm *MultiPoolerManager) setCohortEligibility(signal clustermetadatapb.Coho
 	pm.mu.Unlock()
 	if changed {
 		pm.broadcastHealth()
+	}
+}
+
+// markPoolerActive performs the STARTING → ACTIVE transition once postgres
+// has been observed running and responsive. The pgMonitor callback fires
+// every 5 s; the early-return below is the only thing preventing that tick
+// from issuing a topology publish every cycle. Removing it would turn
+// lifecycle into a per-tick heartbeat at the cost of N publishes per 5 s
+// across the cluster and would silently change the meaning of
+// LifecycleStatus.Updated from "first time ACTIVE" to "last seen ACTIVE".
+// Keep the guard.
+//
+// pm.multipooler is the single in-memory source of truth: the guard reads it,
+// the mutation writes it, and topoPublisher.Notify hands the same pointer to
+// the publisher goroutine which clones-then-writes. The action lock is held
+// across the mutate-then-Notify sequence so lifecycle writes serialise
+// against the consensus state machine (Promote/Demote/BeginTerm) the same
+// way every other Notify caller does.
+func (pm *MultiPoolerManager) markPoolerActive(ctx context.Context) {
+	// Cheap pre-check before acquiring the action lock: if the record
+	// already reads ACTIVE, skip the lock acquisition entirely. The guard
+	// inside record.Mutate's callback is the authoritative one.
+	if pm.record.Snapshot().GetLifecycleStatus().GetStatus() == clustermetadatapb.PoolerLifecycleStatus_LIFECYCLE_ACTIVE {
+		return
+	}
+
+	lockCtx, err := pm.actionLock.Acquire(ctx, "markPoolerActive")
+	if err != nil {
+		pm.logger.WarnContext(ctx, "failed to acquire action lock for lifecycle ACTIVE; will retry next tick",
+			"error", err)
+		return
+	}
+	defer pm.actionLock.Release(lockCtx)
+
+	if err := pm.record.Mutate(lockCtx, func(s *MutablePoolerRecordState) {
+		if s.LifecycleStatus.GetStatus() == clustermetadatapb.PoolerLifecycleStatus_LIFECYCLE_ACTIVE {
+			return
+		}
+		s.LifecycleStatus = &clustermetadatapb.PoolerLifecycle{
+			Status:  clustermetadatapb.PoolerLifecycleStatus_LIFECYCLE_ACTIVE,
+			Reason:  "pooler active",
+			Updated: timestamppb.Now(),
+		}
+	}); err != nil {
+		pm.logger.WarnContext(lockCtx, "record.Mutate for ACTIVE lifecycle failed",
+			"error", err)
 	}
 }
 
@@ -731,43 +778,57 @@ func (pm *MultiPoolerManager) setTermPrimaryLocked(ctx context.Context, req *con
 		return nil, mterrors.Wrap(err, "failed to check recovery status")
 	}
 
-	// A standby with rewindPending=true was emergency-demoted earlier and still
-	// has divergent WAL relative to the new primary. Routing through
-	// demoteStalePrimaryLocked runs pg_rewind, which clears rewindPending and
-	// makes the node recruitable again. Without this, the lightweight standby
-	// branch sets primary_conninfo but leaves the WAL divergent, and the next
-	// Recruit refuses with "rewind pending after emergency demotion".
-	needsRewind := pm.rewindPending.Load()
+	// A stale primary needs pg_rewind before it can stream from the new leader;
+	// a standby with rewindPending=true was emergency-demoted earlier and has
+	// the same need. Both routes converge on restartAsStandbyLocked, which gates
+	// the pg_rewind step on rewindPending and clears the flag on success. Without
+	// this, the lightweight standby branch would set primary_conninfo but leave
+	// the WAL divergent, and the next Recruit would refuse with "rewind pending
+	// after emergency demotion".
+	if isPrimary {
+		pm.rewindPending.Store(true)
+	}
 
-	if isPrimary || needsRewind {
-		pm.logger.InfoContext(ctx, "SetTermPrimary: demoting stale primary",
+	if pm.rewindPending.Load() {
+		// If a rewind is pending, restartAsStandbyLocked() will take care of the rewind.
+		pm.logger.InfoContext(ctx, "SetTermPrimary: stale primary, restarting as standby",
 			"new_leader", leader.GetId().GetName(),
 			"incoming_rule", rule.GetRuleNumber(),
-			"is_primary", isPrimary,
-			"rewind_pending", needsRewind)
-		if _, _, err := pm.demoteStalePrimaryLocked(ctx, leader, rule); err != nil {
+			"is_primary", isPrimary)
+		// restartAsStandbyLocked sets primary_conninfo to leader on success,
+		// so we don't need a separate setPrimaryConnInfoLocked call here.
+		if _, err := pm.restartAsStandbyLocked(ctx, leader.GetHost(), port); err != nil {
 			return nil, err
+		}
+		if err := pm.resetSynchronousReplication(ctx); err != nil {
+			pm.logger.WarnContext(ctx, "Failed to reset synchronous replication", "error", err)
 		}
 	} else {
 		pm.logger.InfoContext(ctx, "SetTermPrimary: updating standby primary_conninfo",
 			"new_leader", leader.GetId().GetName(),
 			"incoming_rule", rule.GetRuleNumber())
+		// Already a standby with an active stream; pause replay, swap
+		// conninfo, resume on the new primary.
 		if err := pm.setPrimaryConnInfoLocked(ctx, leader.GetHost(), port,
 			true /* stopReplicationBefore */, true /* startReplicationAfter */); err != nil {
 			return nil, err
 		}
-		// Ensure topology reflects REPLICA. This matters when postgres has
-		// already been demoted (e.g. by a prior Recruit on this node or an
-		// external pg_promote-then-restart) but the pooler's topology entry still
-		// reads PRIMARY. Without this, the stale PRIMARY label causes the
-		// stale-leader analyzer to keep firing forever. Propose has the same
-		// step on its replica branch for the same reason. Pass the incoming
-		// rule directly: rule_store's cached position still names this pooler
-		// as leader until WAL replay catches up, so SetState would otherwise
-		// derive Type=PRIMARY here.
-		if err := pm.servingState.SetState(ctx, rule, clustermetadatapb.PoolerServingStatus_SERVING); err != nil {
-			pm.logger.WarnContext(ctx, "Failed to transition to REPLICA after SetTermPrimary", "error", err)
-		}
+	}
+
+	// Ensure topology reflects REPLICA. This matters in three cases:
+	//   - This pooler was the stale primary (rewindPending path) and just
+	//     restarted as standby — topology still reads PRIMARY at the old rule.
+	//   - This pooler is already a standby but its topology entry still reads
+	//     PRIMARY (e.g. an external pg_promote-then-restart left the label stale).
+	//   - This pooler was demoted by a prior Recruit but the topology update
+	//     never landed.
+	// Without this, the stale PRIMARY label causes the stale-leader analyzer
+	// to keep firing forever. Propose has the same step on its replica branch
+	// for the same reason. Pass the incoming rule directly: rule_store's cached
+	// position may still name this pooler as leader until WAL replay catches
+	// up, so SetState would otherwise derive Type=PRIMARY here.
+	if err := pm.servingState.SetState(ctx, rule, clustermetadatapb.PoolerServingStatus_SERVING); err != nil {
+		pm.logger.WarnContext(ctx, "Failed to transition to REPLICA after SetTermPrimary", "error", err)
 	}
 
 	// Advertise the new leader to the health stream so the gateway can route

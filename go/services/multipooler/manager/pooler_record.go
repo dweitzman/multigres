@@ -52,6 +52,11 @@ type MutablePoolerRecordState struct {
 	// leader of its shard; replicas leave it nil. Published into etcd so
 	// multigateway can bootstrap leader routing on discovery.
 	CurrentLeadership *clustermetadatapb.LeaderObservation
+	// LifecycleStatus advertises the pooler's start/stop lifecycle to the
+	// rest of the cluster. Orch's pooler watcher closes per-pooler health
+	// streams when this transitions to LIFECYCLE_SHUTDOWN, avoiding the
+	// reconnect-loop-until-eviction window for clean exits.
+	LifecycleStatus *clustermetadatapb.PoolerLifecycle
 }
 
 // poolerTopoStore is the subset of topoclient.Store used by poolerRecord.
@@ -204,6 +209,7 @@ func (r *poolerRecord) applyMutation(fn func(*MutablePoolerRecordState)) error {
 		Type:              current.Type,
 		ServingStatus:     current.ServingStatus,
 		CurrentLeadership: current.CurrentLeadership,
+		LifecycleStatus:   current.LifecycleStatus,
 	}
 	fn(&state)
 	if err := r.validateState(&state); err != nil {
@@ -213,6 +219,7 @@ func (r *poolerRecord) applyMutation(fn func(*MutablePoolerRecordState)) error {
 	next.Type = state.Type
 	next.ServingStatus = state.ServingStatus
 	next.CurrentLeadership = state.CurrentLeadership
+	next.LifecycleStatus = state.LifecycleStatus
 	r.desired.Store(next)
 	return nil
 }

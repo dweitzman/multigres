@@ -49,6 +49,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
@@ -487,6 +488,17 @@ func (pm *MultiPoolerManager) openLocked(ctx context.Context, targetServingStatu
 					"postgres_running", newState.postgresRunning)
 				pm.broadcastHealth()
 			}
+			// Transition lifecycle STARTING → ACTIVE once postgres is up
+			// and responding. markPoolerActive is idempotent (short-circuits
+			// when already ACTIVE) so calling it every tick is cheap, and
+			// it retries the topology write on the next tick if it fails.
+			// The transition is monotonic per boot: once ACTIVE, postgres
+			// going down doesn't flip the lifecycle back to STARTING —
+			// runtime health is communicated via Status.PostgresReady /
+			// PostgresStatus, not via Lifecycle.
+			if newState.postgresRunning {
+				pm.markPoolerActive(ctx)
+			}
 			prevState = newState
 		}
 	}, nil)
@@ -609,7 +621,7 @@ func (pm *MultiPoolerManager) closeLocked(ctx context.Context, logMessage string
 	}
 
 	pm.pgMonitor.Stop()
-	pm.closeConnectionsLocked()
+	pm.closeConnectionsLocked(false /* forReopen */)
 	pm.cancel()
 	pm.isOpen = false
 	pm.logger.InfoContext(ctx, "MultiPoolerManager: "+logMessage)
@@ -735,7 +747,12 @@ func (pm *MultiPoolerManager) openConnectionsLocked() {
 // without canceling the main context. Caller must hold pm.mu.
 // This is used by reopenConnections() during auto-restore to avoid canceling
 // the startup context that WaitUntilReady is waiting on.
-func (pm *MultiPoolerManager) closeConnectionsLocked() {
+//
+// When forReopen is true the pool manager is closed via CloseForReopen, which
+// marks the close as transient so connection requests racing the immediately
+// following openConnectionsLocked wait for it and retry instead of failing with
+// a closed-pool error.
+func (pm *MultiPoolerManager) closeConnectionsLocked(forReopen bool) {
 	// Close resources (safe to call even if nil/never opened)
 	if pm.replTracker != nil {
 		pm.replTracker.Close()
@@ -749,7 +766,11 @@ func (pm *MultiPoolerManager) closeConnectionsLocked() {
 
 	// Close connection pool manager
 	if pm.connPoolMgr != nil {
-		pm.connPoolMgr.Close()
+		if forReopen {
+			pm.connPoolMgr.CloseForReopen()
+		} else {
+			pm.connPoolMgr.Close()
+		}
 	}
 }
 
@@ -761,7 +782,10 @@ func (pm *MultiPoolerManager) reopenConnections(_ context.Context) {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 
-	pm.closeConnectionsLocked()
+	// forReopen=true: CloseForReopen marks a reopen window so in-flight
+	// connection requests wait for openConnectionsLocked below and retry,
+	// instead of leaking a transient closed-pool error to clients.
+	pm.closeConnectionsLocked(true /* forReopen */)
 	pm.openConnectionsLocked()
 }
 
@@ -1608,9 +1632,9 @@ func (pm *MultiPoolerManager) StartTopoRegistration(alarm func(string)) {
 }
 
 // StopTopoRegistration transitions the pooler to its shutdown topology
-// state (Type=DRAINED, ServingStatus=NOT_SERVING), stops the publisher with
-// a final publish, and cancels the toporeg retry goroutine. Safe to call
-// even if StartTopoRegistration was never invoked.
+// state (Type=DRAINED, ServingStatus=NOT_SERVING, LifecycleStatus=SHUTDOWN),
+// stops the publisher with a final publish, and cancels the toporeg retry
+// goroutine. Safe to call even if StartTopoRegistration was never invoked.
 //
 // Caller controls the deadline via ctx. ctx should NOT inherit from
 // pm.shutdownCtx, which GracefulShutdown cancels — by the time OnClose
@@ -1618,10 +1642,14 @@ func (pm *MultiPoolerManager) StartTopoRegistration(alarm func(string)) {
 //
 // Type=DRAINED is set so administrative views (e.g. `multigres getpoolers`)
 // reflect that this pooler has gone away rather than continuing to display
-// its last live role. This is purely cosmetic — failover keys off
-// LeadershipStatus.REQUESTING_DEMOTION on the health stream, not off
-// PoolerType. On restart the pooler re-registers with PoolerType_REPLICA
-// and the orchestrator promotes as usual.
+// its last live role. LifecycleStatus=LIFECYCLE_SHUTDOWN is the signal the
+// orchestrator's pooler watcher reacts to in order to close the per-pooler
+// health stream — without it, the orchestrator would dial the dead address
+// for ~4 h until forgetLongUnseenInstances tore down the cache entry. The
+// entry itself is left in place; the 4 h bookkeeping handles eventual
+// cleanup. On restart the pooler re-registers with PoolerType_REPLICA and
+// LifecycleStatus=LIFECYCLE_STARTING, and the orchestrator promotes as
+// usual.
 //
 // Does not require the manager's action lock — record.Unregister stops the
 // publisher before applying the finalize callback, so no other goroutine
@@ -1634,6 +1662,11 @@ func (pm *MultiPoolerManager) StopTopoRegistration(ctx context.Context) {
 		// invariant. DRAINED implies not-leader; lingering leadership data
 		// would also be misleading to consumers reading the record.
 		s.CurrentLeadership = nil
+		s.LifecycleStatus = &clustermetadatapb.PoolerLifecycle{
+			Status:  clustermetadatapb.PoolerLifecycleStatus_LIFECYCLE_SHUTDOWN,
+			Reason:  "pooler shutdown",
+			Updated: timestamppb.Now(),
+		}
 	})
 }
 
@@ -2346,7 +2379,12 @@ func (pm *MultiPoolerManager) takeRemedialAction(ctx context.Context, action rem
 		// Stamp the cooldown timer BEFORE the rewind so a panic or hang
 		// still counts as an attempt and back-pressures retries.
 		pm.recordSelfRewindAttempt()
-		if _, _, err := pm.demoteStalePrimaryLocked(ctx, leader, rule); err != nil {
+		// Raise rewindPending so restartAsStandbyLocked runs the pg_rewind
+		// step. This standby's WAL has been stuck against the known primary
+		// long enough that divergence is suspected; pg_rewind's dry-run is
+		// cheap when there's no actual divergence.
+		pm.rewindPending.Store(true)
+		if _, err := pm.restartAsStandbyLocked(ctx, leader.GetHost(), leader.GetPostgresPort()); err != nil {
 			pm.logger.ErrorContext(ctx, "MonitorPostgres: self-rewind failed; next monitor cycle will retry after cooldown or escalate to drain", "error", err)
 		}
 
