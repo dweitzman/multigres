@@ -26,10 +26,8 @@
 package pgquery
 
 import (
-	"context"
 	"log/slog"
 
-	"github.com/multigres/multigres/go/common/sqltypes"
 	"github.com/multigres/multigres/go/services/multipooler/internal/executor"
 )
 
@@ -46,21 +44,4 @@ type Engine struct {
 // connection pool underneath it may churn, but the reference does not change.
 func NewEngine(logger *slog.Logger, qs executor.InternalQueryService) *Engine {
 	return &Engine{logger: logger, qs: qs}
-}
-
-// query executes a query using the internal query service and returns the result.
-func (e *Engine) query(ctx context.Context, sql string) (*sqltypes.Result, error) {
-	return e.qs.Query(ctx, sql)
-}
-
-// exec executes a command that doesn't return rows.
-func (e *Engine) exec(ctx context.Context, sql string) error {
-	_, err := e.query(ctx, sql)
-	return err
-}
-
-// queryArgs executes a parameterized query using the internal query service and
-// returns the result. It helps prevent SQL injection.
-func (e *Engine) queryArgs(ctx context.Context, sql string, args ...any) (*sqltypes.Result, error) {
-	return e.qs.QueryArgs(ctx, sql, args...)
 }

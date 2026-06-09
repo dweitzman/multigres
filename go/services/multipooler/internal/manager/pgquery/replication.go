@@ -18,16 +18,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
-	"strconv"
-	"strings"
 	"time"
 
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/multigres/multigres/go/common/mterrors"
-	"github.com/multigres/multigres/go/common/parser/ast"
 	"github.com/multigres/multigres/go/services/multipooler/internal/executor"
 	"github.com/multigres/multigres/go/tools/retry"
 
@@ -42,91 +38,6 @@ import (
 // replication settings. These are low-level operations that directly interact
 // with the database.
 // ============================================================================
-
-// IsPrimary checks if the connected database is a primary (not in recovery)
-func (e *Engine) IsPrimary(ctx context.Context) (bool, error) {
-	inRecovery, err := e.IsInRecovery(ctx)
-	return !inRecovery, err
-}
-
-// IsInRecovery checks if the connected database is in recovery mode (standby).
-// Returns true if the database is a standby, false if it's a primary.
-func (e *Engine) IsInRecovery(ctx context.Context) (bool, error) {
-	queryCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
-	defer cancel()
-	result, err := e.query(queryCtx, "SELECT pg_is_in_recovery()")
-	if err != nil {
-		return false, fmt.Errorf("failed to query pg_is_in_recovery: %w", err)
-	}
-
-	var inRecovery bool
-	if err := executor.ScanSingleRow(result, &inRecovery); err != nil {
-		return false, fmt.Errorf("failed to scan pg_is_in_recovery result: %w", err)
-	}
-
-	return inRecovery, nil
-}
-
-// PrimaryLSN gets the current WAL write location (primary only)
-func (e *Engine) PrimaryLSN(ctx context.Context) (string, error) {
-	queryCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
-	defer cancel()
-	result, err := e.query(queryCtx, "SELECT pg_current_wal_lsn()::text")
-	if err != nil {
-		return "", mterrors.Wrap(err, "failed to get current WAL LSN")
-	}
-	var lsn string
-	if err := executor.ScanSingleRow(result, &lsn); err != nil {
-		return "", mterrors.Wrap(err, "failed to scan WAL LSN result")
-	}
-	return lsn, nil
-}
-
-// StandbyReplayLSN gets the last replayed WAL location (standby only)
-func (e *Engine) StandbyReplayLSN(ctx context.Context) (string, error) {
-	queryCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
-	defer cancel()
-	result, err := e.query(queryCtx, "SELECT pg_last_wal_replay_lsn()::text")
-	if err != nil {
-		return "", mterrors.Wrap(err, "failed to get replay LSN")
-	}
-	var lsn string
-	if err := executor.ScanSingleRow(result, &lsn); err != nil {
-		return "", mterrors.Wrap(err, "failed to scan replay LSN result")
-	}
-	return lsn, nil
-}
-
-// SchemaExists checks if the multigres schema exists in the database
-func (e *Engine) SchemaExists(ctx context.Context) (bool, error) {
-	queryCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
-	defer cancel()
-	sql := "SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = 'multigres')"
-	result, err := e.query(queryCtx, sql)
-	if err != nil {
-		return false, mterrors.Wrap(err, "failed to check schema exists")
-	}
-	var exists bool
-	if err := executor.ScanSingleRow(result, &exists); err != nil {
-		return false, mterrors.Wrap(err, "failed to scan schema exists result")
-	}
-	return exists, nil
-}
-
-// CheckLSNReached checks if the standby has replayed up to or past the target LSN
-func (e *Engine) CheckLSNReached(ctx context.Context, targetLsn string) (bool, error) {
-	queryCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
-	defer cancel()
-	result, err := e.queryArgs(queryCtx, "SELECT pg_last_wal_replay_lsn() >= $1::pg_lsn", targetLsn)
-	if err != nil {
-		return false, mterrors.Wrap(err, "failed to check if replay LSN reached target")
-	}
-	var reachedTarget bool
-	if err := executor.ScanSingleRow(result, &reachedTarget); err != nil {
-		return false, mterrors.Wrap(err, "failed to scan LSN comparison result")
-	}
-	return reachedTarget, nil
-}
 
 // sqlGetReplicationStatus is the SQL query to retrieve all relevant replication
 // status fields from pg_stat_wal_receiver. This is used by
@@ -156,7 +67,7 @@ SELECT	pg_last_wal_replay_lsn(),
 func (e *Engine) ReplicationStatus(ctx context.Context) (*multipoolermanagerdatapb.StandbyReplicationStatus, error) {
 	queryCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer cancel()
-	result, err := e.query(queryCtx, sqlGetReplicationStatus)
+	result, err := e.qs.Query(queryCtx, sqlGetReplicationStatus)
 	if err != nil {
 		return nil, mterrors.Wrap(err, "failed to query replication status")
 	}
@@ -312,56 +223,6 @@ func (e *Engine) WaitForReplicationPause(ctx context.Context) (*multipoolermanag
 		})
 }
 
-// ReadPrimaryConnInfo returns the current primary_conninfo setting as a raw string.
-// Returns an empty string if primary_conninfo is not set.
-func (e *Engine) ReadPrimaryConnInfo(ctx context.Context) (string, error) {
-	queryCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
-	defer cancel()
-	result, err := e.query(queryCtx, "SELECT current_setting('primary_conninfo', true)")
-	if err != nil {
-		return "", mterrors.Wrap(err, "failed to read primary_conninfo")
-	}
-	var connInfo *string
-	if err := executor.ScanSingleRow(result, &connInfo); err != nil {
-		return "", mterrors.Wrap(err, "failed to scan primary_conninfo")
-	}
-	if connInfo == nil {
-		return "", nil
-	}
-	return *connInfo, nil
-}
-
-// SetPrimaryConnInfo sets the primary_conninfo connection string
-func (e *Engine) SetPrimaryConnInfo(ctx context.Context, connInfo string) error {
-	e.logger.InfoContext(ctx, "Setting primary_conninfo", "conninfo", connInfo)
-
-	execCtx, execCancel := context.WithTimeout(ctx, 500*time.Millisecond)
-	defer execCancel()
-	sql := "ALTER SYSTEM SET primary_conninfo = " + ast.QuoteStringLiteral(connInfo)
-	if err := e.exec(execCtx, sql); err != nil {
-		e.logger.ErrorContext(ctx, "Failed to set primary_conninfo", "error", err)
-		return mterrors.Wrap(err, "failed to set primary_conninfo")
-	}
-
-	return nil
-}
-
-// ResetPrimaryConnInfo clears primary_conninfo and reloads PostgreSQL configuration.
-// This effectively disconnects the replica from the primary.
-func (e *Engine) ResetPrimaryConnInfo(ctx context.Context) error {
-	// Clear primary_conninfo using ALTER SYSTEM (should be quick)
-	e.logger.InfoContext(ctx, "Clearing primary_conninfo")
-
-	execCtx, execCancel := context.WithTimeout(ctx, 500*time.Millisecond)
-	defer execCancel()
-	if err := e.exec(execCtx, "ALTER SYSTEM RESET primary_conninfo"); err != nil {
-		e.logger.ErrorContext(ctx, "Failed to clear primary_conninfo", "error", err)
-		return mterrors.Wrap(err, "failed to clear primary_conninfo")
-	}
-
-	return e.ReloadConfig(ctx)
-}
-
 // WaitForReplayStabilize waits, best effort, for WAL replay to stop making
 // observable progress. The intent is to approximate replay is idle given the WAL
 // that is currently available to this standby.
@@ -428,27 +289,6 @@ func (e *Engine) WaitForReplayStabilize(ctx context.Context) (*multipoolermanage
 	}
 }
 
-// ReplayState returns the current replay LSN and pause state.
-// Returns FAILED_PRECONDITION if the server is not in recovery (replay LSN is NULL).
-func (e *Engine) ReplayState(ctx context.Context) (replayLsn string, isPaused bool, err error) {
-	queryCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
-	defer cancel()
-	result, err := e.query(queryCtx, "SELECT pg_last_wal_replay_lsn(), pg_is_wal_replay_paused()")
-	if err != nil {
-		return "", false, mterrors.Wrap(err, "failed to query replay state")
-	}
-
-	var lsn *string
-	if err := executor.ScanSingleRow(result, &lsn, &isPaused); err != nil {
-		return "", false, mterrors.Wrap(err, "failed to scan replay state")
-	}
-	if lsn == nil {
-		return "", false, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
-			"pg_last_wal_replay_lsn is NULL (not in recovery) — unexpected during revoke")
-	}
-	return *lsn, isPaused, nil
-}
-
 // WaitForReceiverDisconnect waits for the WAL receiver to fully disconnect after clearing primary_conninfo.
 // It polls pg_stat_wal_receiver to confirm the receiver has stopped.
 func (e *Engine) WaitForReceiverDisconnect(ctx context.Context) (*multipoolermanagerdatapb.StandbyReplicationStatus, error) {
@@ -473,7 +313,7 @@ func (e *Engine) WaitForReceiverDisconnect(ctx context.Context) (*multipoolerman
 		func(waitCtx context.Context) (*multipoolermanagerdatapb.StandbyReplicationStatus, bool, error) {
 			// Pull the count, the walreceiver status, and the live primary_conninfo
 			// in a single query so each poll is also a diagnostic snapshot.
-			result, err := e.query(waitCtx, `SELECT
+			result, err := e.qs.Query(waitCtx, `SELECT
 				(SELECT COUNT(*) FROM pg_stat_wal_receiver),
 				coalesce((SELECT status FROM pg_stat_wal_receiver), ''),
 				current_setting('primary_conninfo')`)
@@ -533,7 +373,7 @@ func (e *Engine) PauseReplication(ctx context.Context, mode multipoolermanagerda
 		execCtx, execCancel := context.WithTimeout(ctx, 500*time.Millisecond)
 		defer execCancel()
 
-		if err := e.exec(execCtx, "SELECT pg_wal_replay_pause()"); err != nil {
+		if _, err := e.qs.Query(execCtx, "SELECT pg_wal_replay_pause()"); err != nil {
 			e.logger.ErrorContext(ctx, "Failed to pause WAL replay", "error", err)
 			return nil, mterrors.Wrap(err, "failed to pause WAL replay")
 		}
@@ -591,7 +431,7 @@ func (e *Engine) PauseReplication(ctx context.Context, mode multipoolermanagerda
 		// Now that receiver is disconnected, pause replay
 		execCtx, execCancel := context.WithTimeout(ctx, 500*time.Millisecond)
 		defer execCancel()
-		if err := e.exec(execCtx, "SELECT pg_wal_replay_pause()"); err != nil {
+		if _, err := e.qs.Query(execCtx, "SELECT pg_wal_replay_pause()"); err != nil {
 			e.logger.ErrorContext(ctx, "Failed to pause WAL replay", "error", err)
 			return nil, mterrors.Wrap(err, "failed to pause WAL replay")
 		}
@@ -621,194 +461,10 @@ func (e *Engine) ResumeWALReplay(ctx context.Context) error {
 	execCtx, execCancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer execCancel()
 
-	if err := e.exec(execCtx, "SELECT pg_wal_replay_resume()"); err != nil {
+	if _, err := e.qs.Query(execCtx, "SELECT pg_wal_replay_resume()"); err != nil {
 		e.logger.ErrorContext(ctx, "Failed to resume WAL replay", "error", err)
 		return mterrors.Wrap(err, "failed to resume WAL replay")
 	}
 
 	return nil
-}
-
-// ReloadConfig reloads PostgreSQL configuration bound to this engine's query
-// service and logger.
-func (e *Engine) ReloadConfig(ctx context.Context) error {
-	return ReloadConfig(ctx, e.logger, e.qs)
-}
-
-// ValidateExpectedLSN validates that the current replay LSN matches the expected LSN
-func (e *Engine) ValidateExpectedLSN(ctx context.Context, expectedLSN string) error {
-	if expectedLSN == "" {
-		return nil // No validation requested
-	}
-
-	queryCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
-	defer cancel()
-	sql := "SELECT pg_last_wal_replay_lsn()::text, pg_is_wal_replay_paused()"
-	result, err := e.query(queryCtx, sql)
-	if err != nil {
-		e.logger.ErrorContext(ctx, "Failed to get current replay LSN and pause state", "error", err)
-		return mterrors.Wrap(err, "failed to get current replay LSN and pause state")
-	}
-
-	var currentLSN string
-	var isPaused bool
-	err = executor.ScanSingleRow(result, &currentLSN, &isPaused)
-	if err != nil {
-		return mterrors.Wrap(err, "failed to get current replay LSN")
-	}
-
-	// Best practice: WAL replay should be paused before promotion
-	// The coordinator should have called StopReplication during Discovery stage
-	if !isPaused {
-		e.logger.WarnContext(ctx, "WAL replay is not paused before promotion - coordinator may have skipped Discovery stage",
-			"current_lsn", currentLSN,
-			"expected_lsn", expectedLSN)
-		// Note: We don't fail here as this is a soft check, but it indicates
-		// a potential issue in the consensus flow
-	}
-
-	if currentLSN != expectedLSN {
-		e.logger.ErrorContext(ctx, "LSN mismatch - node does not have expected durable state",
-			"expected_lsn", expectedLSN,
-			"current_lsn", currentLSN)
-		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
-			fmt.Sprintf("LSN mismatch: expected %s, current %s. "+
-				"This indicates an error in an earlier consensus stage.",
-				expectedLSN, currentLSN))
-	}
-
-	e.logger.InfoContext(ctx, "LSN validation passed",
-		"lsn", currentLSN,
-		"wal_replay_paused", isPaused)
-	return nil
-}
-
-// ReloadConfig reloads PostgreSQL configuration to apply changes made via
-// ALTER SYSTEM, and waits for postmaster to finish re-reading the config files
-// before returning.
-//
-// pg_reload_conf() returns immediately after sending SIGHUP to postmaster, well
-// before any of that work has happened. We use pg_conf_load_time() — the
-// timestamp of postmaster's most recent successful config load — as the
-// completion signal: once a follow-up query observes it advance past the
-// pre-reload value, postmaster has re-read postgresql.auto.conf and signalled
-// its child processes.
-//
-// Caveat: this guarantees postmaster has processed the reload, not that every
-// child process has. Backends (the walreceiver, individual query backends)
-// each pick up SIGHUP at their own pace — typically within milliseconds, but
-// not synchronously. Callers that need to observe a child's reaction (e.g.
-// polling pg_stat_wal_receiver for the walreceiver to disconnect after
-// clearing primary_conninfo) should still poll, but they can do so knowing
-// the new config is loaded server-side rather than racing with postmaster's
-// signal handler.
-func ReloadConfig(ctx context.Context, logger *slog.Logger, qs executor.InternalQueryService) error {
-	if qs == nil {
-		return errors.New("internal query service not available")
-	}
-
-	loadTimeCtx, loadTimeCancel := context.WithTimeout(ctx, 500*time.Millisecond)
-	defer loadTimeCancel()
-	result, err := qs.Query(loadTimeCtx, "SELECT pg_conf_load_time()")
-	if err != nil {
-		return mterrors.Wrap(err, "failed to read pg_conf_load_time before reload")
-	}
-	var loadTimeBefore string
-	if err := executor.ScanSingleRow(result, &loadTimeBefore); err != nil {
-		return mterrors.Wrap(err, "failed to scan pg_conf_load_time before reload")
-	}
-
-	logger.InfoContext(ctx, "Reloading PostgreSQL configuration")
-	reloadCtx, reloadCancel := context.WithTimeout(ctx, 500*time.Millisecond)
-	defer reloadCancel()
-	if _, err := qs.Query(reloadCtx, "SELECT pg_reload_conf()"); err != nil {
-		logger.ErrorContext(ctx, "Failed to reload configuration", "error", err)
-		return mterrors.Wrap(err, "failed to reload PostgreSQL configuration")
-	}
-
-	// Poll pg_conf_load_time() until it advances. retry.New uses "do work, then
-	// back off" semantics, so the backoff timer starts after the previous query
-	// finishes — a slow query under load doesn't cause back-to-back hammering.
-	waitCtx, waitCancel := context.WithTimeout(ctx, 5*time.Second)
-	defer waitCancel()
-	r := retry.New(1*time.Millisecond, 20*time.Millisecond)
-	for _, attemptErr := range r.Attempts(waitCtx) {
-		if attemptErr != nil {
-			return mterrors.New(mtrpcpb.Code_DEADLINE_EXCEEDED,
-				"timeout waiting for pg_conf_load_time to advance after pg_reload_conf")
-		}
-		queryCtx, queryCancel := context.WithTimeout(waitCtx, 500*time.Millisecond)
-		result, err := qs.Query(queryCtx, "SELECT pg_conf_load_time()")
-		queryCancel()
-		if err != nil {
-			return mterrors.Wrap(err, "failed to poll pg_conf_load_time after reload")
-		}
-		var loadTimeAfter string
-		if err := executor.ScanSingleRow(result, &loadTimeAfter); err != nil {
-			return mterrors.Wrap(err, "failed to scan pg_conf_load_time after reload")
-		}
-		if loadTimeAfter != loadTimeBefore {
-			return nil
-		}
-	}
-	// Unreachable: r.Attempts only exits via the ctx-cancelled branch above.
-	return mterrors.New(mtrpcpb.Code_INTERNAL, "reload polling loop exited unexpectedly")
-}
-
-// ParseAndRedactPrimaryConnInfo parses a PostgreSQL primary_conninfo connection string into structured fields
-// Example input: "host=localhost port=5432 user=postgres application_name=cell_name"
-// Returns a PrimaryConnInfo message with parsed fields, or an error if parsing fails
-// Note: Passwords are redacted in the raw field for security
-func ParseAndRedactPrimaryConnInfo(connInfoStr string) (*multipoolermanagerdatapb.PrimaryConnInfo, error) {
-	connInfo := &multipoolermanagerdatapb.PrimaryConnInfo{}
-
-	// Simple space-based parsing of key=value pairs
-	parts := strings.Split(connInfoStr, " ")
-	redactedParts := make([]string, 0, len(parts))
-
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-
-		kv := strings.SplitN(part, "=", 2)
-		if len(kv) != 2 {
-			// Not a key=value pair - parsing failed
-			return nil, fmt.Errorf("invalid key=value format in primary_conninfo: %q", part)
-		}
-
-		key := strings.TrimSpace(kv[0])
-		value := strings.TrimSpace(kv[1])
-
-		if key == "" {
-			return nil, fmt.Errorf("empty key in primary_conninfo: %q", part)
-		}
-
-		// Redact sensitive fields in the raw string
-		if key == "password" {
-			redactedParts = append(redactedParts, key+"=[REDACTED]")
-		} else {
-			redactedParts = append(redactedParts, part)
-		}
-
-		// Parse specific fields we care about
-		switch key {
-		case "host":
-			connInfo.Host = value
-		case "port":
-			if port, err := strconv.ParseInt(value, 10, 32); err == nil {
-				connInfo.Port = int32(port)
-			}
-		case "user":
-			connInfo.User = value
-		case "application_name":
-			connInfo.ApplicationName = value
-		}
-	}
-
-	// Set the redacted raw string
-	connInfo.Raw = strings.Join(redactedParts, " ")
-
-	return connInfo, nil
 }
