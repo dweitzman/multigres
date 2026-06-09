@@ -52,7 +52,7 @@ func (pm *MultiPoolerManager) isInitialized(ctx context.Context) bool {
 	cacheInitialized := false
 
 	// Try to check if multigres schema exists via a query
-	exists, err := pm.querySchemaExists(ctx)
+	exists, err := pm.pg.SchemaExists(ctx)
 	if err == nil {
 		initialized = exists
 		cacheInitialized = true
@@ -162,7 +162,7 @@ func (pm *MultiPoolerManager) getServerStatus(ctx context.Context) multipoolerma
 	if pm.promotionInProgress.Load() {
 		return multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_PROMOTING
 	}
-	isPrimary, err := pm.isPrimary(ctx)
+	isPrimary, err := pm.pg.IsPrimary(ctx)
 	if err != nil {
 		return multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_UNKNOWN
 	}
@@ -174,15 +174,15 @@ func (pm *MultiPoolerManager) getServerStatus(ctx context.Context) multipoolerma
 
 // getWALPosition returns the current WAL position and any error encountered
 func (pm *MultiPoolerManager) getWALPosition(ctx context.Context) (string, error) {
-	isPrimary, err := pm.isPrimary(ctx)
+	isPrimary, err := pm.pg.IsPrimary(ctx)
 	if err != nil {
 		return "", err
 	}
 
 	if isPrimary {
-		return pm.getPrimaryLSN(ctx)
+		return pm.pg.PrimaryLSN(ctx)
 	}
-	return pm.getStandbyReplayLSN(ctx)
+	return pm.pg.StandbyReplayLSN(ctx)
 }
 
 // getShardID returns the shard ID for this pooler.

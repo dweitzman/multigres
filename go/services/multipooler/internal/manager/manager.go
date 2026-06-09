@@ -40,6 +40,7 @@ import (
 	"github.com/multigres/multigres/go/services/multipooler/internal/manager/actionlock"
 	backupengine "github.com/multigres/multigres/go/services/multipooler/internal/manager/backup"
 	"github.com/multigres/multigres/go/services/multipooler/internal/manager/consensus"
+	"github.com/multigres/multigres/go/services/multipooler/internal/manager/pgquery"
 	"github.com/multigres/multigres/go/services/multipooler/internal/poolerserver"
 	"github.com/multigres/multigres/go/services/multipooler/internal/pubsub"
 	"github.com/multigres/multigres/go/tools/ctxutil"
@@ -201,6 +202,11 @@ type MultiPoolerManager struct {
 	// owns the gRPC handlers, delegating the pgBackRest steps to the engine.
 	backup *backupengine.Engine
 
+	// pg is the local-Postgres mechanism engine. The manager owns HA policy and
+	// the gRPC handlers, delegating the per-instance replication mechanism
+	// (role/LSN/WAL/conn-info/config) to the engine.
+	pg *pgquery.Engine
+
 	// healthStreamer streams health state to subscribers.
 	// Owns all health-related state and provides typed update methods.
 	healthStreamer *healthStreamer
@@ -323,6 +329,7 @@ func NewMultiPoolerManagerWithTimeout(logger *slog.Logger, multiPooler *clusterm
 		drainGracePeriod = config.ConnPoolConfig.DrainGracePeriod()
 	}
 	pm.qsc = poolerserver.NewQueryPoolerServer(logger, connPoolMgr, multiPooler.Id, multiPooler.GetShardKey().GetTableGroup(), multiPooler.GetShardKey().GetShard(), pm, drainGracePeriod, config.VpidStampEnabled)
+	pm.pg = pgquery.NewEngine(pm.logger, pm.qsc.InternalQueryService())
 	pm.rules = consensus.NewRuleStore(pm.logger, pm.qsc.InternalQueryService(), consensus.NewSyncStandbyManager(pm.logger, pm.qsc.InternalQueryService(), multiPooler.Id))
 
 	// The health streamer must wait for the query server to update its type before
@@ -813,7 +820,7 @@ func (pm *MultiPoolerManager) checkReplicaGuardrails(ctx context.Context) error 
 	}
 
 	// Guardrail: Check if the PostgreSQL instance is in recovery (standby mode)
-	isInRecovery, err := pm.isInRecovery(ctx)
+	isInRecovery, err := pm.pg.IsInRecovery(ctx)
 	if err != nil {
 		pm.logger.ErrorContext(ctx, "Failed to check if instance is in recovery", "error", err)
 		return mterrors.Wrap(err, "failed to check recovery status")
@@ -831,7 +838,7 @@ func (pm *MultiPoolerManager) checkReplicaGuardrails(ctx context.Context) error 
 // checkPrimaryGuardrails verifies that PostgreSQL is not in recovery mode.
 // This is the canonical guardrail for primary-only operations.
 func (pm *MultiPoolerManager) checkPrimaryGuardrails(ctx context.Context) error {
-	isInRecovery, err := pm.isInRecovery(ctx)
+	isInRecovery, err := pm.pg.IsInRecovery(ctx)
 	if err != nil {
 		pm.logger.ErrorContext(ctx, "Failed to check if instance is in recovery", "error", err)
 		return mterrors.Wrap(err, "failed to check recovery status")
@@ -1071,7 +1078,7 @@ func (pm *MultiPoolerManager) checkDemotionState(ctx context.Context) (*demotion
 	state.isNotServing = (servingStatus == clustermetadatapb.PoolerServingStatus_NOT_SERVING)
 
 	// Check if PostgreSQL is in recovery mode (canonical way to check if read-only)
-	isPrimary, err := pm.isPrimary(ctx)
+	isPrimary, err := pm.pg.IsPrimary(ctx)
 	if err != nil {
 		pm.logger.ErrorContext(ctx, "Failed to check recovery status", "error", err)
 		return nil, mterrors.Wrap(err, "failed to check recovery status")
@@ -1167,7 +1174,7 @@ func (pm *MultiPoolerManager) restartPostgresAsStandby(ctx context.Context, stat
 	}
 
 	// Verify server is in recovery mode (standby)
-	inRecovery, err := pm.isInRecovery(ctx)
+	inRecovery, err := pm.pg.IsInRecovery(ctx)
 	if err != nil {
 		return mterrors.Wrap(err, "failed to verify standby status")
 	}
@@ -1301,7 +1308,7 @@ func (pm *MultiPoolerManager) checkPromotionState(ctx context.Context) (*promoti
 	state := &promotionState{}
 
 	// Check PostgreSQL promotion state
-	isInRecovery, err := pm.isInRecovery(ctx)
+	isInRecovery, err := pm.pg.IsInRecovery(ctx)
 	if err != nil {
 		pm.logger.ErrorContext(ctx, "Failed to check recovery status", "error", err)
 		return nil, mterrors.Wrap(err, "failed to check recovery status")
@@ -1311,7 +1318,7 @@ func (pm *MultiPoolerManager) checkPromotionState(ctx context.Context) (*promoti
 
 	if state.isPrimaryInPostgres {
 		// Get current primary LSN
-		state.currentLSN, err = pm.getPrimaryLSN(ctx)
+		state.currentLSN, err = pm.pg.PrimaryLSN(ctx)
 		if err != nil {
 			pm.logger.ErrorContext(ctx, "Failed to get current LSN", "error", err)
 			return nil, err
@@ -1389,7 +1396,7 @@ func (pm *MultiPoolerManager) promoteStandbyToPrimary(ctx context.Context, state
 	}
 
 	// Clear primary_conninfo after promotion to prevent accidental replication on restart
-	if err := pm.resetPrimaryConnInfo(ctx); err != nil {
+	if err := pm.pg.ResetPrimaryConnInfo(ctx); err != nil {
 		pm.logger.WarnContext(ctx, "Failed to clear primary_conninfo after promotion", "error", err)
 		// Log but don't fail - promotion already succeeded
 	}
@@ -1420,7 +1427,7 @@ func (pm *MultiPoolerManager) waitForPromotionComplete(ctx context.Context) erro
 
 		case <-ticker.C:
 			if !promotedFromRecovery {
-				isInRecovery, err := pm.isInRecovery(promotionCtx)
+				isInRecovery, err := pm.pg.IsInRecovery(promotionCtx)
 				if err != nil {
 					pm.logger.ErrorContext(ctx, "Failed to check recovery status during promotion", "error", err)
 					return mterrors.Wrap(err, "failed to check recovery status")
@@ -1763,7 +1770,7 @@ func (pm *MultiPoolerManager) discoverPostgresState(ctx context.Context) (postgr
 	state.postgresRunning = (statusResp.Status == pgctldpb.ServerStatus_RUNNING)
 	if state.postgresRunning {
 		var err error
-		state.isPrimary, err = pm.isPrimary(ctx)
+		state.isPrimary, err = pm.pg.IsPrimary(ctx)
 		if err != nil {
 			pm.logger.ErrorContext(ctx, "Failed to determine primary status", "error", err)
 		}
@@ -1873,7 +1880,7 @@ func (pm *MultiPoolerManager) primaryConnInfoDiffersFromRecorded(_ postgresState
 	// Use a short deadline so a slow query never blocks the monitor tick.
 	ctx, cancel := context.WithTimeout(pm.ctx, 500*time.Millisecond)
 	defer cancel()
-	connInfoStr, err := pm.readPrimaryConnInfo(ctx)
+	connInfoStr, err := pm.pg.ReadPrimaryConnInfo(ctx)
 	if err != nil {
 		// Conservative: don't trigger reconciliation we can't verify.
 		return false
@@ -1881,7 +1888,7 @@ func (pm *MultiPoolerManager) primaryConnInfoDiffersFromRecorded(_ postgresState
 	if connInfoStr == "" {
 		return true
 	}
-	parsed, err := parseAndRedactPrimaryConnInfo(connInfoStr)
+	parsed, err := pgquery.ParseAndRedactPrimaryConnInfo(connInfoStr)
 	if err != nil || parsed == nil {
 		// Unparsable conninfo is itself drift worth fixing.
 		return true

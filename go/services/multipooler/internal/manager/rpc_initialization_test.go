@@ -30,9 +30,11 @@ import (
 
 	"github.com/multigres/multigres/go/common/constants"
 	"github.com/multigres/multigres/go/common/topoclient/memorytopo"
+	"github.com/multigres/multigres/go/services/multipooler/internal/executor/mock"
 	"github.com/multigres/multigres/go/services/multipooler/internal/manager/actionlock"
 	backupengine "github.com/multigres/multigres/go/services/multipooler/internal/manager/backup"
 	"github.com/multigres/multigres/go/services/multipooler/internal/manager/consensus"
+	"github.com/multigres/multigres/go/services/multipooler/internal/manager/pgquery"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	pgctldpb "github.com/multigres/multigres/go/pb/pgctldservice"
@@ -61,6 +63,10 @@ func NewTestMultiPoolerManager(t *testing.T) *MultiPoolerManager {
 	// Swap in a fake rule store so tests that exercise ObservePosition /
 	// CachedPosition don't crash on the real store's nil query service.
 	pm.rules = &fakeRuleStore{}
+	// Same reason for the postgres engine: the real qsc has no executor until the
+	// pool is opened, so back it with a mock query service. An empty mock errors
+	// on every query, which the discover/initialize paths handle gracefully.
+	pm.pg = pgquery.NewEngine(slog.Default(), mock.NewQueryService())
 	return pm
 }
 
@@ -80,6 +86,9 @@ func TestIsInitialized(t *testing.T) {
 		pm := &MultiPoolerManager{
 			config: &Config{},
 			record: newRecordFromProto(&clustermetadatapb.MultiPooler{PoolerDir: poolerDir}),
+			// An empty mock query service errors on every query, modeling an
+			// unreachable postgres so isInitialized falls back to the marker file.
+			pg: pgquery.NewEngine(slog.Default(), mock.NewQueryService()),
 		}
 
 		assert.False(t, pm.isInitialized(ctx))
@@ -97,6 +106,9 @@ func TestIsInitialized(t *testing.T) {
 		pm := &MultiPoolerManager{
 			config: &Config{},
 			record: newRecordFromProto(&clustermetadatapb.MultiPooler{PoolerDir: poolerDir}),
+			// An empty mock query service errors on every query, modeling an
+			// unreachable postgres so isInitialized falls back to the marker file.
+			pg: pgquery.NewEngine(slog.Default(), mock.NewQueryService()),
 		}
 
 		assert.False(t, pm.isInitialized(ctx))
@@ -117,6 +129,9 @@ func TestIsInitialized(t *testing.T) {
 		pm := &MultiPoolerManager{
 			config: &Config{},
 			record: newRecordFromProto(&clustermetadatapb.MultiPooler{PoolerDir: poolerDir}),
+			// An empty mock query service errors on every query, modeling an
+			// unreachable postgres so isInitialized falls back to the marker file.
+			pg: pgquery.NewEngine(slog.Default(), mock.NewQueryService()),
 		}
 
 		// Marker present, postgres unreachable → trust marker, return true.

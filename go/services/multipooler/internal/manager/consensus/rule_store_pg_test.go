@@ -38,6 +38,7 @@ import (
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	"github.com/multigres/multigres/go/services/multipooler/internal/executor"
 	"github.com/multigres/multigres/go/services/multipooler/internal/manager/actionlock"
+	"github.com/multigres/multigres/go/services/multipooler/internal/manager/pgquery"
 	testutils "github.com/multigres/multigres/go/test/utils"
 	"github.com/multigres/multigres/go/tools/pathutil"
 )
@@ -1075,7 +1076,7 @@ func TestRuleStorePG_GUCDriftDetectedAndHealed(t *testing.T) {
 	_, err = corruptQS.Query(t.Context(), "ALTER SYSTEM SET synchronous_commit = 'local'")
 	require.NoError(t, err)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	require.NoError(t, ReloadPostgresConfig(t.Context(), logger, corruptQS))
+	require.NoError(t, pgquery.ReloadConfig(t.Context(), logger, corruptQS))
 
 	// HasInconsistentGUC queries postgres and detects the drift.
 	assert.True(t, rs.HasInconsistentGUC(ctx), "drift should be detected after external GUC change")

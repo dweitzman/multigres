@@ -74,7 +74,7 @@ func (pm *MultiPoolerManager) WaitForLSN(ctx context.Context, targetLsn string) 
 
 		case <-ticker.C:
 			// Check if the standby has replayed up to the target LSN
-			reachedTarget, err := pm.checkLSNReached(ctx, targetLsn)
+			reachedTarget, err := pm.pg.CheckLSNReached(ctx, targetLsn)
 			if err != nil {
 				pm.logger.ErrorContext(ctx, "Failed to check replay LSN", "error", err)
 				return err
@@ -114,7 +114,7 @@ func (pm *MultiPoolerManager) setPrimaryConnInfoLocked(ctx context.Context, host
 	}
 
 	// Guardrail: Check if the PostgreSQL instance is in recovery (standby mode)
-	isPrimary, err := pm.isPrimary(ctx)
+	isPrimary, err := pm.pg.IsPrimary(ctx)
 	if err != nil {
 		pm.logger.ErrorContext(ctx, "Failed to check if instance is in recovery", "error", err)
 		return mterrors.Wrap(err, "failed to check recovery status")
@@ -130,7 +130,7 @@ func (pm *MultiPoolerManager) setPrimaryConnInfoLocked(ctx context.Context, host
 
 	// Optionally stop replication before making changes
 	if stopReplicationBefore {
-		_, err := pm.pauseReplication(ctx, multipoolermanagerdatapb.ReplicationPauseMode_REPLICATION_PAUSE_MODE_REPLAY_ONLY, false)
+		_, err := pm.pg.PauseReplication(ctx, multipoolermanagerdatapb.ReplicationPauseMode_REPLICATION_PAUSE_MODE_REPLAY_ONLY, false)
 		if err != nil {
 			return err
 		}
@@ -154,12 +154,12 @@ func (pm *MultiPoolerManager) setPrimaryConnInfoLocked(ctx context.Context, host
 	}
 
 	// Set primary_conninfo using ALTER SYSTEM
-	if err = pm.setPrimaryConnInfo(ctx, connInfo); err != nil {
+	if err = pm.pg.SetPrimaryConnInfo(ctx, connInfo); err != nil {
 		return err
 	}
 
 	// Reload PostgreSQL configuration to apply changes
-	if err = pm.reloadPostgresConfig(ctx); err != nil {
+	if err = pm.pg.ReloadConfig(ctx); err != nil {
 		return err
 	}
 
@@ -174,7 +174,7 @@ func (pm *MultiPoolerManager) setPrimaryConnInfoLocked(ctx context.Context, host
 		}
 
 		pm.logger.InfoContext(ctx, "Starting replication after setting primary_conninfo")
-		if err := pm.resumeWALReplay(ctx); err != nil {
+		if err := pm.pg.ResumeWALReplay(ctx); err != nil {
 			return err
 		}
 	}
@@ -218,7 +218,7 @@ func (pm *MultiPoolerManager) StartReplication(ctx context.Context) error {
 	}
 
 	// Resume WAL replay on the standby
-	if err := pm.resumeWALReplay(ctx); err != nil {
+	if err := pm.pg.ResumeWALReplay(ctx); err != nil {
 		return err
 	}
 
@@ -247,7 +247,7 @@ func (pm *MultiPoolerManager) StopReplication(ctx context.Context, mode multipoo
 		return err
 	}
 
-	_, err = pm.pauseReplication(ctx, mode, wait)
+	_, err = pm.pg.PauseReplication(ctx, mode, wait)
 	if err != nil {
 		return err
 	}
@@ -281,7 +281,7 @@ func (pm *MultiPoolerManager) StandbyReplicationStatus(ctx context.Context) (*mu
 	}
 
 	// Query all replication status fields
-	status, err := pm.queryReplicationStatus(ctx)
+	status, err := pm.pg.ReplicationStatus(ctx)
 	if err != nil {
 		pm.logger.ErrorContext(ctx, "Failed to get replication status", "error", err)
 		return nil, err
@@ -331,7 +331,7 @@ func (pm *MultiPoolerManager) Status(ctx context.Context) (*multipoolermanagerda
 	resp.AvailabilityStatus = pm.buildAvailabilityStatus()
 
 	// Try to get detailed status based on PostgreSQL role
-	isPrimary, err := pm.isPrimary(ctx)
+	isPrimary, err := pm.pg.IsPrimary(ctx)
 	if err != nil {
 		// Can't determine role - return what we have
 		pm.logger.WarnContext(ctx, "Failed to check PostgreSQL role, returning partial status", "error", err)
@@ -383,7 +383,7 @@ func (pm *MultiPoolerManager) ResetReplication(ctx context.Context) error {
 	}
 
 	// Pause the receiver (clear primary_conninfo) and wait for disconnect
-	_, err = pm.pauseReplication(ctx, multipoolermanagerdatapb.ReplicationPauseMode_REPLICATION_PAUSE_MODE_RECEIVER_ONLY, true /* wait */)
+	_, err = pm.pg.PauseReplication(ctx, multipoolermanagerdatapb.ReplicationPauseMode_REPLICATION_PAUSE_MODE_RECEIVER_ONLY, true /* wait */)
 	if err != nil {
 		return err
 	}
@@ -535,7 +535,7 @@ func (pm *MultiPoolerManager) getPrimaryStatusInternal(ctx context.Context) (*mu
 	status := &multipoolermanagerdatapb.PrimaryStatus{}
 
 	// Get current LSN
-	lsn, err := pm.getPrimaryLSN(ctx)
+	lsn, err := pm.pg.PrimaryLSN(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -582,7 +582,7 @@ func (pm *MultiPoolerManager) getPrimaryStatusInternal(ctx context.Context) (*mu
 // getStandbyStatusInternal gets standby replication status without guardrail checks.
 // Called by Status() which has already verified the PostgreSQL role.
 func (pm *MultiPoolerManager) getStandbyStatusInternal(ctx context.Context) (*multipoolermanagerdatapb.StandbyReplicationStatus, error) {
-	return pm.queryReplicationStatus(ctx)
+	return pm.pg.ReplicationStatus(ctx)
 }
 
 // PrimaryStatus gets the status of the leader server
@@ -616,7 +616,7 @@ func (pm *MultiPoolerManager) PrimaryPosition(ctx context.Context) (string, erro
 	}
 
 	// Get current primary LSN position
-	return pm.getPrimaryLSN(ctx)
+	return pm.pg.PrimaryLSN(ctx)
 }
 
 // StopReplicationAndGetStatus stops PostgreSQL replication (replay and/or receiver based on mode) and returns the status
@@ -637,7 +637,7 @@ func (pm *MultiPoolerManager) StopReplicationAndGetStatus(ctx context.Context, m
 		return nil, err
 	}
 
-	status, err := pm.pauseReplication(ctx, mode, wait)
+	status, err := pm.pg.PauseReplication(ctx, mode, wait)
 	if err != nil {
 		return nil, err
 	}
@@ -726,7 +726,7 @@ func (pm *MultiPoolerManager) emergencyDemoteLocked(ctx context.Context, consens
 	}
 
 	// Capture State & Make PostgreSQL Read-Only
-	finalLSN, err := pm.getPrimaryLSN(ctx)
+	finalLSN, err := pm.pg.PrimaryLSN(ctx)
 	if err != nil {
 		pm.logger.ErrorContext(ctx, "Failed to capture final LSN", "error", err)
 		return err
@@ -963,7 +963,7 @@ func (pm *MultiPoolerManager) restartAsStandbyLocked(
 	}
 
 	// Sanity check: postgres must come back in recovery mode.
-	inRecovery, err := pm.isInRecovery(ctx)
+	inRecovery, err := pm.pg.IsInRecovery(ctx)
 	if err != nil {
 		return false, mterrors.Wrap(err, "verify standby status after restart")
 	}

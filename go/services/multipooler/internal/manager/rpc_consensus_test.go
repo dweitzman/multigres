@@ -36,6 +36,7 @@ import (
 	"github.com/multigres/multigres/go/services/multipooler/internal/manager/actionlock"
 	"github.com/multigres/multigres/go/services/multipooler/internal/manager/consensus"
 	"github.com/multigres/multigres/go/services/multipooler/internal/manager/consensus/consensustest"
+	"github.com/multigres/multigres/go/services/multipooler/internal/manager/pgquery"
 	"github.com/multigres/multigres/go/tools/viperutil"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -95,6 +96,7 @@ func setupManagerWithMockDB(t *testing.T, mockQueryService *mock.QueryService, r
 	// Assign mock pooler controller and rule store BEFORE starting the manager
 	// to avoid race conditions.
 	pm.qsc = &mockPoolerController{queryService: mockQueryService}
+	pm.pg = pgquery.NewEngine(pm.logger, mockQueryService)
 	pm.rules = rules
 
 	senv := servenv.NewServEnv(viperutil.NewRegistry())

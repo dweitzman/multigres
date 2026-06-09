@@ -29,6 +29,7 @@ import (
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	"github.com/multigres/multigres/go/services/multipooler/internal/executor"
 	"github.com/multigres/multigres/go/services/multipooler/internal/manager/actionlock"
+	"github.com/multigres/multigres/go/services/multipooler/internal/manager/pgquery"
 )
 
 // SyncStandbyManager owns all writes to the synchronous_standby_names GUC.
@@ -114,10 +115,10 @@ func (s *postgresqlSyncStandbyManager) setStandbyNames(ctx context.Context, meth
 }
 
 func (s *postgresqlSyncStandbyManager) reloadConfig(ctx context.Context) error {
-	if err := ReloadPostgresConfig(ctx, s.logger, s.qs); err != nil {
+	if err := pgquery.ReloadConfig(ctx, s.logger, s.qs); err != nil {
 		return err
 	}
-	// ReloadPostgresConfig confirms postmaster has re-read the config, but pooled
+	// pgquery.ReloadConfig confirms postmaster has re-read the config, but pooled
 	// backends pick up SIGHUP asynchronously. Sleep briefly so the next WAL write
 	// is unlikely to land on a backend still using the old GUC values.
 	select {

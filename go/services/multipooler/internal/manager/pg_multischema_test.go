@@ -29,6 +29,7 @@ import (
 	"github.com/multigres/multigres/go/services/multipooler/internal/executor"
 	"github.com/multigres/multigres/go/services/multipooler/internal/executor/mock"
 	"github.com/multigres/multigres/go/services/multipooler/internal/manager/consensus"
+	"github.com/multigres/multigres/go/services/multipooler/internal/manager/pgquery"
 	"github.com/multigres/multigres/go/services/multipooler/internal/poolerserver"
 	"github.com/multigres/multigres/go/services/multipooler/internal/pubsub"
 
@@ -92,6 +93,7 @@ func newTestManagerWithMock(tableGroup, shard string) (*MultiPoolerManager, *moc
 		servicePoolerID: svcPoolerID,
 	}
 	pm.rules = consensus.NewRuleStore(logger, mockQueryService, noopSyncStandbyManager{})
+	pm.pg = pgquery.NewEngine(logger, mockQueryService)
 
 	return pm, mockQueryService
 }

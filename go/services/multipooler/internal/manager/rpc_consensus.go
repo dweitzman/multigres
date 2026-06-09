@@ -328,7 +328,7 @@ func (pm *MultiPoolerManager) Recruit(ctx context.Context, req *consensusdatapb.
 		return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, err.Error())
 	}
 
-	isPrimary, err := pm.isPrimary(ctx)
+	isPrimary, err := pm.pg.IsPrimary(ctx)
 	if err != nil {
 		return nil, mterrors.Wrap(err, "failed to determine role for recruit")
 	}
@@ -346,12 +346,12 @@ func (pm *MultiPoolerManager) Recruit(ctx context.Context, req *consensusdatapb.
 			err = pm.emergencyDemoteLocked(stopCtx, revokedBelowTerm, recruitDrainTimeout)
 		} else {
 			// Save primary_conninfo so we can restore it if the position check fails.
-			if savedConnInfo, err = pm.readPrimaryConnInfo(stopCtx); err != nil {
+			if savedConnInfo, err = pm.pg.ReadPrimaryConnInfo(stopCtx); err != nil {
 				pm.logger.WarnContext(stopCtx, "Failed to save primary_conninfo before recruit; recovery from race condition will not be possible", "error", err)
 			}
 			pm.logger.InfoContext(stopCtx, "Recruiting standby: pausing replication",
 				"revoked_below_term", revokedBelowTerm)
-			_, err = pm.pauseReplication(stopCtx,
+			_, err = pm.pg.PauseReplication(stopCtx,
 				multipoolermanagerdatapb.ReplicationPauseMode_REPLICATION_PAUSE_MODE_RECEIVER_ONLY,
 				true /* wait */)
 		}
@@ -364,7 +364,7 @@ func (pm *MultiPoolerManager) Recruit(ctx context.Context, req *consensusdatapb.
 
 	if !isPrimary {
 		stabilizeCtx, stabilizeSpan := telemetry.Tracer().Start(ctx, "consensus/stabilize")
-		_, err = pm.waitForReplayStabilize(stabilizeCtx)
+		_, err = pm.pg.WaitForReplayStabilize(stabilizeCtx)
 		stabilizeSpan.End()
 		if err != nil {
 			eventlog.Emit(ctx, pm.logger, eventlog.Failed, termEvent, "error", err)
@@ -419,10 +419,10 @@ const recruitDrainTimeout = 5 * time.Second
 // setPrimaryConnInfoAndReload sets primary_conninfo and reloads postgres config so the
 // WAL receiver reconnects. Used to restore a standby's replication after a recruit failure.
 func (pm *MultiPoolerManager) setPrimaryConnInfoAndReload(ctx context.Context, connInfo string) error {
-	if err := pm.setPrimaryConnInfo(ctx, connInfo); err != nil {
+	if err := pm.pg.SetPrimaryConnInfo(ctx, connInfo); err != nil {
 		return err
 	}
-	return pm.reloadPostgresConfig(ctx)
+	return pm.pg.ReloadConfig(ctx)
 }
 
 // Propose handles a coordinator's proposal for a new shard rule. The pooler
@@ -521,7 +521,7 @@ func (pm *MultiPoolerManager) Propose(ctx context.Context, req *consensusdatapb.
 	// primary_conninfo set. Together these prove that Recruit ran (which clears
 	// primary_conninfo and goes into recovery mode) and that no prior Propose on
 	// this node succeeded.
-	inRecovery, err := pm.isInRecovery(ctx)
+	inRecovery, err := pm.pg.IsInRecovery(ctx)
 	if err != nil {
 		return nil, mterrors.Wrap(err, "failed to verify standby state before propose")
 	}
@@ -529,7 +529,7 @@ func (pm *MultiPoolerManager) Propose(ctx context.Context, req *consensusdatapb.
 		return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
 			"postgres is not in standby mode; call Recruit before Propose")
 	}
-	connInfo, err := pm.readPrimaryConnInfo(ctx)
+	connInfo, err := pm.pg.ReadPrimaryConnInfo(ctx)
 	if err != nil {
 		return nil, mterrors.Wrap(err, "failed to verify primary_conninfo before propose")
 	}
@@ -736,7 +736,7 @@ func (pm *MultiPoolerManager) SetTermPrimary(ctx context.Context, req *consensus
 	// Decide between "standby update" and "stale-primary demote" based on
 	// actual postgres recovery state rather than topology — a node mid-promote
 	// or mid-demote may have a topology label that lags reality.
-	isPrimary, err := pm.isPrimary(ctx)
+	isPrimary, err := pm.pg.IsPrimary(ctx)
 	if err != nil {
 		return nil, mterrors.Wrap(err, "failed to check recovery status")
 	}
