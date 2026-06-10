@@ -392,11 +392,42 @@ func TestDiscoverPostgresState_StatusError(t *testing.T) {
 
 // TestDetermineRemedialAction tests the decision logic that maps discovered state to remedial actions.
 // This is a table-driven test covering all decision paths in the monitor loop.
+//
+// The postgres-running cases are driven by the reconciliation triple
+// (intendedRole from the rule, isPrimary from pg_is_in_recovery, current
+// poolerType). Each case seeds a rule (via cachedPos and/or a consensus-recorded
+// primary) so intendedRole() is well-defined; the same seeding patterns used in
+// TestIntendedRole and TestDetermineRemedialAction_StalePrimaryDemote apply here.
 func TestDetermineRemedialAction(t *testing.T) {
+	selfID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "test-cell", Name: "self"}
+	otherID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "test-cell", Name: "other"}
+	otherAddr := &clustermetadatapb.PoolerAddress{Id: otherID, Host: "other-host", PostgresPort: 5432}
+
+	// selfPos builds a cached position whose rule names the given leader at the
+	// given term.
+	selfPos := func(term int64, leader *clustermetadatapb.ID) *clustermetadatapb.PoolerPosition {
+		return &clustermetadatapb.PoolerPosition{
+			Rule: &clustermetadatapb.ShardRule{
+				RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: term},
+				LeaderId:   leader,
+			},
+		}
+	}
+	recordedPrimary := func(term int64, leader *clustermetadatapb.ID, addr *clustermetadatapb.PoolerAddress) *consensus.ConsensusState {
+		cs := consensus.NewConsensusState("", selfID)
+		cs.RecordTermPrimary(&clustermetadatapb.ShardRule{
+			RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: term},
+			LeaderId:   leader,
+		}, addr)
+		return cs
+	}
+
 	tests := []struct {
 		name               string
 		state              postgresState
 		poolerType         clustermetadatapb.PoolerType
+		consensusState     *consensus.ConsensusState
+		cachedPos          *clustermetadatapb.PoolerPosition
 		primaryTerm        int64
 		resignedLeaderTerm int64
 		inconsistentGUC    bool
@@ -406,74 +437,117 @@ func TestDetermineRemedialAction(t *testing.T) {
 			name:           "pgctld_unavailable",
 			state:          postgresState{pgctldAvailable: false},
 			poolerType:     clustermetadatapb.PoolerType_PRIMARY,
+			cachedPos:      selfPos(5, selfID),
 			expectedAction: remedialActionNone,
 		},
 		{
-			name: "postgres_ready_type_matches_primary",
+			// No rule known yet: intendedRole is UNKNOWN, so the monitor waits
+			// for a rule-bearing backup rather than acting on observed state.
+			name: "no_rule_waits",
 			state: postgresState{
 				pgctldAvailable: true,
 				postgresRunning: true,
 				isPrimary:       true,
 			},
 			poolerType:     clustermetadatapb.PoolerType_PRIMARY,
+			cachedPos:      nil,
 			expectedAction: remedialActionNone,
 		},
 		{
-			name: "postgres_ready_promote_to_primary",
+			// Cold boot: record type still UNKNOWN, postgres running, rule names
+			// self -> publish the derived role (PRIMARY) and transition to SERVING.
+			name: "unknown_type_with_rule_publishes_role",
+			state: postgresState{
+				pgctldAvailable: true,
+				postgresRunning: true,
+				isPrimary:       true,
+			},
+			poolerType:     clustermetadatapb.PoolerType_UNKNOWN,
+			cachedPos:      selfPos(5, selfID),
+			expectedAction: remedialActionReconcileRole,
+		},
+		{
+			// Rule names self (intended PRIMARY) and postgres is a primary, but
+			// the published label still says REPLICA: publish the role.
+			name: "label_drift_replica_to_primary_publishes_role",
 			state: postgresState{
 				pgctldAvailable: true,
 				postgresRunning: true,
 				isPrimary:       true,
 			},
 			poolerType:     clustermetadatapb.PoolerType_REPLICA,
-			expectedAction: remedialActionAdjustTypeToPrimary,
+			cachedPos:      selfPos(5, selfID),
+			expectedAction: remedialActionReconcileRole,
 		},
 		{
-			name: "postgres_ready_demote_to_replica",
+			// Intended REPLICA (consensus recorded a higher rule naming another
+			// leader with contact info) but postgres is still a primary: demote.
+			name: "intended_replica_but_primary_demotes",
 			state: postgresState{
 				pgctldAvailable: true,
 				postgresRunning: true,
-				isPrimary:       false,
+				isPrimary:       true,
 			},
 			poolerType:     clustermetadatapb.PoolerType_PRIMARY,
-			expectedAction: remedialActionAdjustTypeToReplica,
+			consensusState: recordedPrimary(5, otherID, otherAddr),
+			cachedPos:      selfPos(4, selfID),
+			expectedAction: remedialActionDemoteStalePrimary,
 		},
 		{
-			name: "postgres_ready_type_matches_replica_no_primary_term",
+			// Intended PRIMARY (rule names self) but postgres is a standby and we
+			// have not resigned yet: resign so the coordinator re-elects.
+			name: "intended_primary_but_standby_resigns",
 			state: postgresState{
 				pgctldAvailable: true,
 				postgresRunning: true,
 				isPrimary:       false,
 			},
-			poolerType:     clustermetadatapb.PoolerType_REPLICA,
-			expectedAction: remedialActionNone,
-		},
-		{
-			// After emergency demotion + process restart, resignedLeaderAtTerm is lost.
-			// The monitor should re-publish it by triggering the replica adjustment action.
-			name: "postgres_ready_replica_missing_resignation_signal",
-			state: postgresState{
-				pgctldAvailable: true,
-				postgresRunning: true,
-				isPrimary:       false,
-			},
-			poolerType:         clustermetadatapb.PoolerType_REPLICA,
+			poolerType:         clustermetadatapb.PoolerType_PRIMARY,
+			cachedPos:          selfPos(5, selfID),
 			primaryTerm:        5,
 			resignedLeaderTerm: 0,
-			expectedAction:     remedialActionAdjustTypeToReplica,
+			expectedAction:     remedialActionResignLeadership,
 		},
 		{
-			// Signal already published — no action needed.
-			name: "postgres_ready_replica_resignation_signal_present",
+			// Same as above but resignation already published: no further action.
+			name: "intended_primary_but_standby_already_resigned",
 			state: postgresState{
 				pgctldAvailable: true,
 				postgresRunning: true,
 				isPrimary:       false,
 			},
-			poolerType:         clustermetadatapb.PoolerType_REPLICA,
+			poolerType:         clustermetadatapb.PoolerType_PRIMARY,
+			cachedPos:          selfPos(5, selfID),
 			primaryTerm:        5,
 			resignedLeaderTerm: 5,
 			expectedAction:     remedialActionNone,
+		},
+		{
+			// Intended PRIMARY, postgres primary, label already PRIMARY, but the
+			// GUC drifted: reconcile it.
+			name: "intended_primary_with_stale_guc",
+			state: postgresState{
+				pgctldAvailable: true,
+				postgresRunning: true,
+				isPrimary:       true,
+			},
+			poolerType:      clustermetadatapb.PoolerType_PRIMARY,
+			cachedPos:       selfPos(5, selfID),
+			inconsistentGUC: true,
+			expectedAction:  remedialActionReconcileGUC,
+		},
+		{
+			// Intended REPLICA, postgres standby, label already REPLICA, in sync:
+			// nothing to do.
+			name: "intended_replica_in_sync",
+			state: postgresState{
+				pgctldAvailable: true,
+				postgresRunning: true,
+				isPrimary:       false,
+			},
+			poolerType:     clustermetadatapb.PoolerType_REPLICA,
+			cachedPos:      selfPos(5, otherID),
+			expectedAction: remedialActionNone,
 		},
 		{
 			name: "postgres_stopped_start",
@@ -521,29 +595,23 @@ func TestDetermineRemedialAction(t *testing.T) {
 			poolerType:     clustermetadatapb.PoolerType_PRIMARY,
 			expectedAction: remedialActionCreateFirstBackup,
 		},
-		{
-			name: "postgres_primary_with_stale_guc",
-			state: postgresState{
-				pgctldAvailable: true,
-				postgresRunning: true,
-				isPrimary:       true,
-			},
-			poolerType:      clustermetadatapb.PoolerType_PRIMARY,
-			inconsistentGUC: true,
-			expectedAction:  remedialActionReconcileGUC,
-		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := &MultiPoolerManager{
+				serviceID: selfID,
 				record: newRecordFromProto(&clustermetadatapb.MultiPooler{
 					Type: tt.poolerType,
 				}),
 			}
-			pm.consensusState = consensus.NewConsensusState("", nil)
+			if tt.consensusState != nil {
+				pm.consensusState = tt.consensusState
+			} else {
+				pm.consensusState = consensus.NewConsensusState("", selfID)
+			}
 			pm.resignedLeaderAtTerm = tt.resignedLeaderTerm
-			pm.rules = &fakeRuleStore{inconsistentGUC: tt.inconsistentGUC}
+			pm.rules = &fakeRuleStore{pos: tt.cachedPos, inconsistentGUC: tt.inconsistentGUC}
 			tt.state.primaryTerm = tt.primaryTerm
 
 			got := pm.determineRemedialAction(t.Context(), tt.state)
@@ -884,10 +952,11 @@ func TestTakeRemedialAction_LogDeduplication(t *testing.T) {
 	assert.Equal(t, "restoring_from_backup", pm.pgMonitorLastLoggedReason)
 }
 
-// Note: Type adjustment action execution (AdjustTypeToPrimary, AdjustTypeToReplica) is tested in
-// integration tests because it requires topoClient and full infrastructure.
-// The decision logic for type adjustment is tested in TestDetermineRemedialAction above.
-// The resignation signal behavior is tested below without full infrastructure.
+// Note: role publication (remedialActionReconcileRole, which calls SetState) is
+// tested in integration tests because it requires topoClient and full
+// infrastructure. The decision logic is tested in TestDetermineRemedialAction
+// above. The resignation signal behavior is tested below without full
+// infrastructure.
 
 func newRemedialActionTestManager(t *testing.T, multipooler *clustermetadatapb.MultiPooler) *MultiPoolerManager {
 	t.Helper()
@@ -917,8 +986,8 @@ func TestTakeRemedialAction_ResignationSignal(t *testing.T) {
 		wantAvStatus   *clustermetadatapb.AvailabilityStatus
 	}{
 		{
-			name:        "AdjustTypeToReplica sets resignation at primary_term",
-			action:      remedialActionAdjustTypeToReplica,
+			name:        "ResignLeadership sets resignation at primary_term",
+			action:      remedialActionResignLeadership,
 			poolerType:  clustermetadatapb.PoolerType_PRIMARY,
 			primaryTerm: 5,
 			wantAvStatus: &clustermetadatapb.AvailabilityStatus{
@@ -932,8 +1001,8 @@ func TestTakeRemedialAction_ResignationSignal(t *testing.T) {
 			},
 		},
 		{
-			name:        "AdjustTypeToReplica sets no resignation when primary_term is zero",
-			action:      remedialActionAdjustTypeToReplica,
+			name:        "ResignLeadership sets no resignation when primary_term is zero",
+			action:      remedialActionResignLeadership,
 			poolerType:  clustermetadatapb.PoolerType_PRIMARY,
 			primaryTerm: 0,
 			wantAvStatus: &clustermetadatapb.AvailabilityStatus{
@@ -943,8 +1012,8 @@ func TestTakeRemedialAction_ResignationSignal(t *testing.T) {
 			},
 		},
 		{
-			name:           "AdjustTypeToPrimary does not clear existing resignation signal",
-			action:         remedialActionAdjustTypeToPrimary,
+			name:           "ReconcileRole does not clear existing resignation signal",
+			action:         remedialActionReconcileRole,
 			poolerType:     clustermetadatapb.PoolerType_REPLICA,
 			resignedBefore: 7,
 			wantAvStatus: &clustermetadatapb.AvailabilityStatus{
