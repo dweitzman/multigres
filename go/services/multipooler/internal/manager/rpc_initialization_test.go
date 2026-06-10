@@ -647,6 +647,95 @@ func TestDetermineRemedialAction_StalePrimaryDemote(t *testing.T) {
 	}
 }
 
+// TestIntendedRole verifies that intendedRole() derives the PoolerType from
+// the freshest rule this pooler knows about (latestRule, which merges the
+// consensus-recorded replication primary with the rule store's cached
+// position): UNKNOWN when no rule exists, PRIMARY when the freshest rule names
+// this pooler as leader, REPLICA when it names another pooler. The
+// consensus-recorded rule can outrank our cached position — that is the
+// stale-primary signal, where intendedRole() reports REPLICA even though our
+// cached rule still names self.
+func TestIntendedRole(t *testing.T) {
+	selfID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "test-cell", Name: "self"}
+	otherID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "test-cell", Name: "other"}
+	otherAddr := &clustermetadatapb.PoolerAddress{Id: otherID, Host: "other-host", PostgresPort: 5432}
+
+	selfPos := func(term int64, leader *clustermetadatapb.ID) *clustermetadatapb.PoolerPosition {
+		return &clustermetadatapb.PoolerPosition{
+			Rule: &clustermetadatapb.ShardRule{
+				RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: term},
+				LeaderId:   leader,
+			},
+		}
+	}
+	recordedPrimary := func(term int64, leader *clustermetadatapb.ID, addr *clustermetadatapb.PoolerAddress) *consensus.ConsensusState {
+		cs := consensus.NewConsensusState("", selfID)
+		cs.RecordTermPrimary(&clustermetadatapb.ShardRule{
+			RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: term},
+			LeaderId:   leader,
+		}, addr)
+		return cs
+	}
+
+	tests := []struct {
+		name           string
+		consensusState *consensus.ConsensusState
+		cachedPos      *clustermetadatapb.PoolerPosition
+		expectedRole   clustermetadatapb.PoolerType
+	}{
+		{
+			// Neither source has a rule: nothing to derive a role from.
+			name:           "no_rule_is_unknown",
+			consensusState: consensus.NewConsensusState("", selfID),
+			cachedPos:      nil,
+			expectedRole:   clustermetadatapb.PoolerType_UNKNOWN,
+		},
+		{
+			// Cached rule names self and consensus has nothing higher: PRIMARY.
+			name:           "cached_rule_names_self_is_primary",
+			consensusState: consensus.NewConsensusState("", selfID),
+			cachedPos:      selfPos(5, selfID),
+			expectedRole:   clustermetadatapb.PoolerType_PRIMARY,
+		},
+		{
+			// Cached rule names another pooler: REPLICA.
+			name:           "cached_rule_names_other_is_replica",
+			consensusState: consensus.NewConsensusState("", selfID),
+			cachedPos:      selfPos(5, otherID),
+			expectedRole:   clustermetadatapb.PoolerType_REPLICA,
+		},
+		{
+			// Consensus has recorded a higher-numbered rule naming another
+			// leader than our cached rule (which still names self). The freshest
+			// rule wins, so intendedRole reports REPLICA — the stale-primary
+			// signal.
+			name:           "recorded_primary_outranks_self_is_replica",
+			consensusState: recordedPrimary(5, otherID, otherAddr),
+			cachedPos:      selfPos(4, selfID),
+			expectedRole:   clustermetadatapb.PoolerType_REPLICA,
+		},
+		{
+			// Only the consensus-recorded rule exists and it names self: PRIMARY.
+			name:           "recorded_primary_names_self_is_primary",
+			consensusState: recordedPrimary(5, selfID, &clustermetadatapb.PoolerAddress{Id: selfID, Host: "self-host", PostgresPort: 5432}),
+			cachedPos:      nil,
+			expectedRole:   clustermetadatapb.PoolerType_PRIMARY,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pm := &MultiPoolerManager{
+				serviceID:      selfID,
+				consensusState: tt.consensusState,
+				rules:          &fakeRuleStore{pos: tt.cachedPos},
+			}
+
+			require.Equal(t, tt.expectedRole, pm.intendedRole())
+		})
+	}
+}
+
 func TestTakeRemedialAction_PgctldUnavailable(t *testing.T) {
 	ctx := t.Context()
 

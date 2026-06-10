@@ -854,6 +854,14 @@ func (pm *MultiPoolerManager) latestRule() *clustermetadatapb.ShardRule {
 	return storeRule
 }
 
+// intendedRole returns the PoolerType implied for this pooler by the freshest
+// rule it knows about (see latestRule). UNKNOWN when no rule is known yet,
+// PRIMARY when the rule names this pooler as leader, otherwise REPLICA.
+func (pm *MultiPoolerManager) intendedRole() clustermetadatapb.PoolerType {
+	t, _ := deriveTypeAndObs(pm.latestRule(), pm.serviceID)
+	return t
+}
+
 // checkReplicaGuardrails verifies that the pooler is a REPLICA and PostgreSQL is in recovery mode
 // This is a common guardrail for replication-related operations on standby servers
 func (pm *MultiPoolerManager) checkReplicaGuardrails(ctx context.Context) error {
@@ -1827,6 +1835,13 @@ func (pm *MultiPoolerManager) discoverPostgresState(ctx context.Context) (postgr
 		state.isPrimary, err = pm.isPrimary(ctx)
 		if err != nil {
 			pm.logger.ErrorContext(ctx, "Failed to determine primary status", "error", err)
+		}
+		// Refresh the cached rule from postgres so latestRule (and the
+		// intended role derived from it) reflect WAL-replayed rules. Log and
+		// continue on failure: the tick must never fail just because a single
+		// observation could not be refreshed.
+		if _, err := pm.rules.ObservePosition(ctx); err != nil {
+			pm.logger.DebugContext(ctx, "MonitorPostgres: ObservePosition failed; using cached rule", "error", err)
 		}
 		// Lock-free first pass from the monitor: use the inconsistent read,
 		// which falls back to the cached rule when postgres is unreachable.
