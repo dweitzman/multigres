@@ -1701,6 +1701,13 @@ const (
 	// primary regardless of how it got out of sync (failed SetTermPrimary apply,
 	// hand edit, snapshot restore, etc.).
 	remedialActionFixPrimaryConnInfo
+	// remedialActionDemoteStalePrimary means postgres is running as a primary
+	// but consensus has recorded a higher-numbered rule naming another leader.
+	// The SetTermPrimary-ordered demote never completed (the RPC's restart
+	// failed, or postgres came back as a primary after a crash). Restart as a
+	// standby of the recorded primary (with pg_rewind) so we stop serving a
+	// deposed term. See staleStandbyDemoteTarget for the gating.
+	remedialActionDemoteStalePrimary
 )
 
 // monitorPostgresIteration performs one iteration of PostgreSQL monitoring.
@@ -1943,6 +1950,52 @@ func (pm *MultiPoolerManager) primaryConnInfoDiffersFromRecorded(_ postgresState
 	return parsed.GetHost() != targetHost || parsed.GetPort() != targetPort
 }
 
+// staleStandbyDemoteTarget reports the primary this pooler should restart as a
+// standby of, when postgres is running as a primary but consensus has moved on.
+// It returns the recorded ReplicationPrimary's address only when ALL hold:
+//
+//   - a ReplicationPrimary has been recorded (via SetTermPrimary) with usable
+//     contact info. Without a source we can neither pg_rewind nor stream, so we
+//     return nil and wait rather than restart blind;
+//   - the recorded rule does not name this pooler as leader;
+//   - the recorded rule is strictly higher than our applied position, so we act
+//     only when a newer term has genuinely superseded us (the same rule-number
+//     gate SetTermPrimary itself applies before demoting);
+//   - the recorded rule is not revoked — restarting toward a just-revoked primary
+//     would race the in-flight Recruit/Propose flow.
+//
+// Used by the postgres monitor to retry a SetTermPrimary-ordered demote that
+// never completed (its restartAsStandbyLocked failed, or postgres came back as a
+// primary after a crash). Returns nil when no safe demote target exists.
+func (pm *MultiPoolerManager) staleStandbyDemoteTarget() *clustermetadatapb.PoolerAddress {
+	rp := pm.consensusState.GetReplicationPrimary()
+	if rp == nil {
+		return nil
+	}
+	target := rp.GetPrimary()
+	if target == nil || target.GetHost() == "" || target.GetPostgresPort() == 0 {
+		return nil
+	}
+	// The recorded leader is us: this is not a "superseded by another leader"
+	// case, so there is nothing to demote toward.
+	if leader := rp.GetRule().GetLeaderId(); leader != nil && pm.serviceID != nil &&
+		leader.GetCell() == pm.serviceID.GetCell() && leader.GetName() == pm.serviceID.GetName() {
+		return nil
+	}
+	// Only act when the recorded rule outranks our applied position. A lower or
+	// equal recorded rule is stale relative to us and must not trigger a demote.
+	selfRuleNum := pm.rules.CachedPosition().GetRule().GetRuleNumber()
+	if commonconsensus.CompareRuleNumbers(rp.GetRule().GetRuleNumber(), selfRuleNum) <= 0 {
+		return nil
+	}
+	// Don't race a mid-flight Recruit/Propose: skip a revoked rule.
+	rev, err := pm.consensusState.GetInconsistentRevocation()
+	if err != nil || commonconsensus.IsRuleRevoked(rp.GetRule(), rev) {
+		return nil
+	}
+	return target
+}
+
 // determineRemedialAction decides what action to take based on discovered state.
 // This is pure decision logic with no side effects.
 func (pm *MultiPoolerManager) determineRemedialAction(ctx context.Context, currentState postgresState) remedialAction {
@@ -1953,6 +2006,14 @@ func (pm *MultiPoolerManager) determineRemedialAction(ctx context.Context, curre
 
 	// Postgres is running: Check if pooler type needs adjustment
 	if currentState.postgresRunning {
+		// Stale primary: postgres is running as a primary, but consensus has
+		// recorded a higher-numbered rule naming another leader. The ordered
+		// demote never completed; retry it. Only fires when we have a recorded
+		// primary to rewind against and stream from — otherwise we fall through
+		// and wait rather than restart blind.
+		if currentState.isPrimary && pm.staleStandbyDemoteTarget() != nil {
+			return remedialActionDemoteStalePrimary
+		}
 		if currentState.isPrimary && pm.getPoolerType() != clustermetadatapb.PoolerType_PRIMARY {
 			return remedialActionAdjustTypeToPrimary
 		}
@@ -2063,6 +2124,32 @@ func (pm *MultiPoolerManager) takeRemedialAction(ctx context.Context, action rem
 		}
 		if err := pm.changeTypeLocked(ctx, clustermetadatapb.PoolerType_REPLICA); err != nil {
 			pm.logger.ErrorContext(ctx, "MonitorPostgres: failed to change pooler type to replica", "error", err)
+		}
+
+	case remedialActionDemoteStalePrimary:
+		// Re-check under the action lock: the decision was made on a lock-free
+		// snapshot and may have raced a revocation or another demote path.
+		target := pm.staleStandbyDemoteTarget()
+		if target == nil {
+			return
+		}
+		pm.setMonitorReason(ctx, reasonPostgresRunning, "MonitorPostgres: PostgreSQL is running")
+		pm.logger.InfoContext(ctx, "MonitorPostgres: stale primary; consensus names another leader, restarting as standby",
+			"target_primary", target.GetId().GetName(),
+			"target_host", target.GetHost(),
+			"target_port", target.GetPostgresPort())
+		// postgres is a primary on a deposed term, so its timeline has likely
+		// diverged from the new leader; restartAsStandbyLocked runs pg_rewind
+		// (cheap when there's no divergence) when rewindPending is set.
+		pm.rewindPending.Store(true)
+		if _, err := pm.restartAsStandbyLocked(ctx, target.GetHost(), target.GetPostgresPort()); err != nil {
+			pm.logger.ErrorContext(ctx, "MonitorPostgres: failed to restart stale primary as standby", "error", err)
+			return
+		}
+		// Publish REPLICA so the gateway and stale-leader analyzer stop treating
+		// us as a primary. Mirrors SetTermPrimary's post-demote step.
+		if err := pm.changeTypeLocked(ctx, clustermetadatapb.PoolerType_REPLICA); err != nil {
+			pm.logger.WarnContext(ctx, "MonitorPostgres: failed to update pooler type to REPLICA after demote", "error", err)
 		}
 
 	case remedialActionFixPrimaryConnInfo:

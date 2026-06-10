@@ -552,6 +552,101 @@ func TestDetermineRemedialAction(t *testing.T) {
 	}
 }
 
+// TestDetermineRemedialAction_StalePrimaryDemote covers the consensus-authoritative
+// "rogue primary" path: postgres is running as a primary, but consensus has
+// recorded a higher-numbered rule naming a different leader. The monitor must
+// retry the SetTermPrimary-ordered demote — but only when it has a recorded
+// primary to rewind against and stream from. Without one, it waits.
+func TestDetermineRemedialAction_StalePrimaryDemote(t *testing.T) {
+	selfID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "test-cell", Name: "self"}
+	otherID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "test-cell", Name: "other"}
+	otherAddr := &clustermetadatapb.PoolerAddress{Id: otherID, Host: "other-host", PostgresPort: 5432}
+
+	// Postgres is up and running as a primary; the published label is PRIMARY,
+	// so the only thing that should pull us off remedialActionNone is a demote.
+	runningPrimary := postgresState{pgctldAvailable: true, postgresRunning: true, isPrimary: true}
+
+	selfPos := func(term int64) *clustermetadatapb.PoolerPosition {
+		return &clustermetadatapb.PoolerPosition{
+			Rule: &clustermetadatapb.ShardRule{
+				RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: term},
+				LeaderId:   selfID,
+			},
+		}
+	}
+	recordedPrimary := func(term int64, leader *clustermetadatapb.ID, addr *clustermetadatapb.PoolerAddress) *consensus.ConsensusState {
+		cs := consensus.NewConsensusState("", selfID)
+		cs.RecordTermPrimary(&clustermetadatapb.ShardRule{
+			RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: term},
+			LeaderId:   leader,
+		}, addr)
+		return cs
+	}
+
+	tests := []struct {
+		name           string
+		consensusState *consensus.ConsensusState
+		cachedPos      *clustermetadatapb.PoolerPosition
+		expectedAction remedialAction
+	}{
+		{
+			// Recorded rule outranks our applied position and names another
+			// leader with usable contact info: retry the demote.
+			name:           "higher_rule_names_other_leader_demotes",
+			consensusState: recordedPrimary(5, otherID, otherAddr),
+			cachedPos:      selfPos(4),
+			expectedAction: remedialActionDemoteStalePrimary,
+		},
+		{
+			// No recorded primary: we have nothing to rewind against or stream
+			// from, so wait rather than restart blind.
+			name:           "no_recorded_primary_waits",
+			consensusState: consensus.NewConsensusState("", selfID),
+			cachedPos:      selfPos(4),
+			expectedAction: remedialActionNone,
+		},
+		{
+			// Recorded rule advanced but carries no contact info: still no
+			// source to connect to, so wait.
+			name:           "recorded_primary_without_address_waits",
+			consensusState: recordedPrimary(5, otherID, nil),
+			cachedPos:      selfPos(4),
+			expectedAction: remedialActionNone,
+		},
+		{
+			// Recorded rule is not higher than our applied position: it is stale
+			// relative to us and must not trigger a demote.
+			name:           "recorded_rule_not_higher_waits",
+			consensusState: recordedPrimary(4, otherID, otherAddr),
+			cachedPos:      selfPos(4),
+			expectedAction: remedialActionNone,
+		},
+		{
+			// Recorded rule names us as the leader: not a "superseded" case.
+			name:           "recorded_rule_names_self_waits",
+			consensusState: recordedPrimary(5, selfID, &clustermetadatapb.PoolerAddress{Id: selfID, Host: "self-host", PostgresPort: 5432}),
+			cachedPos:      selfPos(4),
+			expectedAction: remedialActionNone,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pm := &MultiPoolerManager{
+				serviceID: selfID,
+				record: newRecordFromProto(&clustermetadatapb.MultiPooler{
+					Type: clustermetadatapb.PoolerType_PRIMARY,
+				}),
+			}
+			pm.consensusState = tt.consensusState
+			pm.rules = &fakeRuleStore{pos: tt.cachedPos}
+
+			got := pm.determineRemedialAction(t.Context(), runningPrimary)
+			require.Equal(t, tt.expectedAction, got)
+		})
+	}
+}
+
 func TestTakeRemedialAction_PgctldUnavailable(t *testing.T) {
 	ctx := t.Context()
 
