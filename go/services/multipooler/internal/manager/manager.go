@@ -50,6 +50,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -470,7 +471,7 @@ func (pm *MultiPoolerManager) openLocked(ctx context.Context, targetServingStatu
 	// streamer) and Mutates the record. The publisher (if running, started
 	// by StartTopoRegistration) picks it up and writes to etcd.
 	go pm.runHealthHeartbeat(pm.ctx, timeouts.DefaultHealthHeartbeatInterval)
-	if err := pm.servingState.SetState(ctx, pm.record.Type(), targetServingStatus); err != nil {
+	if err := pm.servingState.SetState(ctx, pm.record.Type(), pm.record.SelfLeadership(), targetServingStatus); err != nil {
 		pm.logger.ErrorContext(ctx, "Failed to transition serving status on open", "target", targetServingStatus, "error", err)
 	}
 }
@@ -560,7 +561,7 @@ func (pm *MultiPoolerManager) closeLocked(ctx context.Context, logMessage string
 	// running) picks up the Mutate and writes NOT_SERVING to etcd —
 	// pausing the manager intentionally still reflects in topology so
 	// callers see the pooler is not serving queries.
-	if err := pm.servingState.SetState(ctx, pm.record.Type(), clustermetadatapb.PoolerServingStatus_NOT_SERVING); err != nil {
+	if err := pm.servingState.SetState(ctx, pm.record.Type(), pm.record.SelfLeadership(), clustermetadatapb.PoolerServingStatus_NOT_SERVING); err != nil {
 		pm.logger.WarnContext(ctx, "Failed to transition to NOT_SERVING during close", "error", err)
 	}
 
@@ -757,6 +758,17 @@ func (pm *MultiPoolerManager) getPoolerType() clustermetadatapb.PoolerType {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 	return pm.record.Type()
+}
+
+// leaderObs builds the LeaderObservation this pooler records when it is the
+// leader under rule. The caller supplies the rule it knows names this pooler as
+// leader — the proposed rule on promotion, the recorded rule in the monitor —
+// so the source is explicit rather than read implicitly here.
+func (pm *MultiPoolerManager) leaderObs(rule *clustermetadatapb.ShardRule) *clustermetadatapb.LeaderObservation {
+	return &clustermetadatapb.LeaderObservation{
+		LeaderId:         rule.GetLeaderId(),
+		LeaderRuleNumber: rule.GetRuleNumber(),
+	}
 }
 
 // shardKey returns a ShardKey identifying this pooler's shard.
@@ -1114,7 +1126,7 @@ func (pm *MultiPoolerManager) setNotServing(ctx context.Context, state *demotion
 	// Use the serving state manager to transition components.
 	// This updates query service, heartbeat, and the pooler record. Mutate
 	// inside StateManager schedules an async publish to topology.
-	if err := pm.servingState.SetState(ctx, pm.record.Type(), clustermetadatapb.PoolerServingStatus_NOT_SERVING); err != nil {
+	if err := pm.servingState.SetState(ctx, pm.record.Type(), pm.record.SelfLeadership(), clustermetadatapb.PoolerServingStatus_NOT_SERVING); err != nil {
 		return mterrors.Wrap(err, "failed to transition to NOT_SERVING")
 	}
 
@@ -1449,15 +1461,17 @@ func (pm *MultiPoolerManager) waitForPromotionComplete(ctx context.Context) erro
 // NOT_SERVING. Skipping the SetState call left the pooler stuck at
 // PRIMARY/NOT_SERVING, which prevented the multigateway buffer from draining
 // after the failover.
-func (pm *MultiPoolerManager) updateTopologyAfterPromotion(ctx context.Context, state *promotionState) error {
+func (pm *MultiPoolerManager) updateTopologyAfterPromotion(ctx context.Context, state *promotionState, rule *clustermetadatapb.ShardRule) error {
 	if state.isPrimaryInTopology {
 		pm.logger.InfoContext(ctx, "Topology type already PRIMARY; ensuring serving status is SERVING")
 	} else {
 		pm.logger.InfoContext(ctx, "Updating pooler type in topology to PRIMARY")
 	}
 
+	// rule is the rule this pooler was just promoted under; it names this pooler
+	// as leader, so the leadership observation built from it is authoritative.
 	// SetState is idempotent — if already at PRIMARY/SERVING it short-circuits.
-	if err := pm.servingState.SetState(ctx, clustermetadatapb.PoolerType_PRIMARY, clustermetadatapb.PoolerServingStatus_SERVING); err != nil {
+	if err := pm.servingState.SetState(ctx, clustermetadatapb.PoolerType_PRIMARY, pm.leaderObs(rule), clustermetadatapb.PoolerServingStatus_SERVING); err != nil {
 		return mterrors.Wrap(err, "failed to set serving state for promotion")
 	}
 
@@ -1563,7 +1577,8 @@ func (pm *MultiPoolerManager) StartTopoRegistration(alarm func(string)) {
 // can publish over our shutdown state regardless of locking.
 func (pm *MultiPoolerManager) StopTopoRegistration(ctx context.Context) {
 	pm.record.Unregister(ctx, func(s *MutablePoolerRecordState) {
-		s.Type = clustermetadatapb.PoolerType_DRAINED
+		s.Type = clustermetadatapb.PoolerType_UNKNOWN
+		s.SelfLeadership = nil
 		s.ServingStatus = clustermetadatapb.PoolerServingStatus_NOT_SERVING
 		s.LifecycleStatus = &clustermetadatapb.PoolerLifecycle{
 			Status:  clustermetadatapb.PoolerLifecycleStatus_LIFECYCLE_SHUTDOWN,
@@ -1899,7 +1914,7 @@ func (pm *MultiPoolerManager) determineRemedialAction(ctx context.Context, curre
 
 	// Postgres is running: Check if pooler type needs adjustment
 	if currentState.postgresRunning {
-		if currentState.isPrimary && pm.getPoolerType() != clustermetadatapb.PoolerType_PRIMARY {
+		if currentState.isPrimary && pm.getPoolerType() != clustermetadatapb.PoolerType_PRIMARY && proto.Equal(pm.rules.CachedPosition().GetRule().GetLeaderId(), pm.record.Id()) {
 			return remedialActionAdjustTypeToPrimary
 		}
 		if !currentState.isPrimary && pm.getPoolerType() == clustermetadatapb.PoolerType_PRIMARY {
@@ -1990,7 +2005,13 @@ func (pm *MultiPoolerManager) takeRemedialAction(ctx context.Context, action rem
 		pm.setMonitorReason(ctx, reasonPostgresRunning, "MonitorPostgres: PostgreSQL is running")
 		pm.logger.InfoContext(ctx, "MonitorPostgres: PostgreSQL is running and primary")
 		pm.logger.InfoContext(ctx, "MonitorPostgres: Changing pooler type to primary")
-		if err := pm.changeTypeLocked(ctx, clustermetadatapb.PoolerType_PRIMARY); err != nil {
+		// A PRIMARY must carry a leadership observation. The monitor has no rule
+		// handed to it here, so it observes the rule the node committed when it
+		// promoted (its cached position).
+		// TODO(consensus-authoritative): reconcile against the authoritative
+		// consensus rule rather than the locally-committed one.
+		obs := pm.leaderObs(pm.rules.CachedPosition().GetRule())
+		if err := pm.servingState.SetState(ctx, clustermetadatapb.PoolerType_PRIMARY, obs, clustermetadatapb.PoolerServingStatus_SERVING); err != nil {
 			pm.logger.ErrorContext(ctx, "MonitorPostgres: failed to change pooler type to primary", "error", err)
 		}
 
@@ -2007,7 +2028,8 @@ func (pm *MultiPoolerManager) takeRemedialAction(ctx context.Context, action rem
 				return
 			}
 		}
-		if err := pm.changeTypeLocked(ctx, clustermetadatapb.PoolerType_REPLICA); err != nil {
+		// A REPLICA pooler record carries no self leadership observation.
+		if err := pm.servingState.SetState(ctx, clustermetadatapb.PoolerType_REPLICA, nil, clustermetadatapb.PoolerServingStatus_SERVING); err != nil {
 			pm.logger.ErrorContext(ctx, "MonitorPostgres: failed to change pooler type to replica", "error", err)
 		}
 

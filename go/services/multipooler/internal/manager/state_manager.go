@@ -92,7 +92,13 @@ func (ssm *StateManager) RegisterAndSync(ctx context.Context, component StateAwa
 // The record is updated only after all components converge.
 // Returns an error if any component fails to transition.
 // No-op if the state hasn't changed.
-func (ssm *StateManager) SetState(ctx context.Context, poolerType clustermetadatapb.PoolerType, servingStatus clustermetadatapb.PoolerServingStatus) error {
+//
+// selfLeadership is the observation to record alongside the type: callers pass
+// the observation that names this pooler as leader when poolerType is PRIMARY,
+// and nil otherwise (a replica has no self-leadership). The poolerRecord
+// enforces the Type ⇔ SelfLeadership invariant, so a selfLeadership
+// inconsistent with poolerType is rejected.
+func (ssm *StateManager) SetState(ctx context.Context, poolerType clustermetadatapb.PoolerType, selfLeadership *clustermetadatapb.LeaderObservation, servingStatus clustermetadatapb.PoolerServingStatus) error {
 	ssm.mu.Lock()
 	defer ssm.mu.Unlock()
 
@@ -120,10 +126,12 @@ func (ssm *StateManager) SetState(ctx context.Context, poolerType clustermetadat
 
 	// All components converged — update the record and schedule a publish.
 	// Requires the caller to hold the action lock; Mutate will return an
-	// error otherwise.
+	// error otherwise. Mutate also enforces the Type ⇔ SelfLeadership
+	// invariant and rejects an inconsistent (type, obs) pair.
 	if err := ssm.record.Mutate(ctx, func(s *MutablePoolerRecordState) {
 		s.Type = poolerType
 		s.ServingStatus = servingStatus
+		s.SelfLeadership = selfLeadership
 	}); err != nil {
 		return err
 	}
