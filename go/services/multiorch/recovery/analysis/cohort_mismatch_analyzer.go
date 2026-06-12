@@ -90,29 +90,54 @@ func (a *CohortMismatchAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, er
 		cohortIDs[topoclient.MultiPoolerIDString(id)] = struct{}{}
 	}
 
+	// Count current cohort members that are fit, so removals can be guarded by
+	// durability: we never drop a member if doing so would leave fewer fit
+	// members than the durability policy requires.
+	fitMembers := 0
+	for _, pa := range sa.Analyses {
+		if _, inCohort := cohortIDs[topoclient.MultiPoolerIDString(pa.PoolerID)]; inCohort && fitForCohort(pa) {
+			fitMembers++
+		}
+	}
+	requiredCount := int(sa.BootstrapDurabilityPolicy.GetRequiredCount())
+
 	var problems []types.Problem
 	for _, pa := range sa.Analyses {
-		// Removal candidates: current cohort members signaling INELIGIBLE.
+		// Removal candidates: current cohort members that are no longer fit
+		// (unreachable, not streaming, lagging, paused, or self-reported
+		// INELIGIBLE).
 		if _, inCohort := cohortIDs[topoclient.MultiPoolerIDString(pa.PoolerID)]; inCohort {
-			if types.PoolerIsCohortIneligible(pa.AvailabilityStatus) {
-				problems = append(problems, types.Problem{
-					Code:           types.ProblemCohortMemberIneligible,
-					CheckName:      "CohortMismatch",
-					PoolerID:       pa.PoolerID,
-					ShardKey:       pa.ShardKey,
-					Description:    fmt.Sprintf("Cohort member %s self-reported INELIGIBLE", pa.PoolerID.Name),
-					Priority:       types.PriorityNormal,
-					Scope:          types.ScopePooler,
-					DetectedAt:     time.Now(),
-					RecoveryAction: a.factory.NewReconcileCohortAction(),
-				})
+			if fitForCohort(pa) {
+				continue
 			}
+			// Quorum guard: an unfit member is not counted in fitMembers, so the
+			// fit members that remain after removing it is exactly fitMembers.
+			// Only remove if those still satisfy the durability requirement —
+			// keeping a degraded member is safer than dropping below the floor.
+			//
+			// TODO(durability accounting): confirm whether the leader counts
+			// toward RequiredCount and whether sync replication is ANY-N or
+			// FIRST-N. This guard is deliberately conservative (errs toward
+			// keeping members) until that is settled.
+			if fitMembers < requiredCount {
+				continue
+			}
+			problems = append(problems, types.Problem{
+				Code:           types.ProblemCohortMemberIneligible,
+				CheckName:      "CohortMismatch",
+				PoolerID:       pa.PoolerID,
+				ShardKey:       pa.ShardKey,
+				Description:    fmt.Sprintf("Cohort member %s is no longer fit for the cohort", pa.PoolerID.Name),
+				Priority:       types.PriorityNormal,
+				Scope:          types.ScopePooler,
+				DetectedAt:     time.Now(),
+				RecoveryAction: a.factory.NewReconcileCohortAction(),
+			})
 			continue
 		}
 
-		// Addition candidates: replicas not currently in the cohort that are
-		// healthy enough to be added.
-		if !a.isAdditionCandidate(sa, pa) {
+		// Addition candidates: replicas not currently in the cohort that are fit.
+		if !fitForCohort(pa) {
 			continue
 		}
 		problems = append(problems, types.Problem{
@@ -130,32 +155,27 @@ func (a *CohortMismatchAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, er
 	return problems, nil
 }
 
-// isAdditionCandidate reports whether a non-cohort pooler is healthy enough to
-// be added: initialized, actively replaying WAL, and not signaling INELIGIBLE.
+// fitForCohort reports whether a pooler is healthy enough to be (or remain) a
+// synchronous cohort member: it has a recent successful health check, is
+// initialized, is actively streaming from the primary within the replay-lag
+// bound and not paused, and is not self-reporting INELIGIBLE. The same predicate
+// drives both additions (a fit non-member should join) and removals (a member
+// that is no longer fit should leave, subject to the durability quorum guard).
+//
+// A stalled, lagging, paused, or unreachable standby can't reliably acknowledge
+// writes, so counting it toward durability would hurt durability/latency.
 //
 // TODO: long-term, most of these checks should fold into the pooler's
-// self-reported cohort eligibility signal. The pooler is in the best position
-// to know whether it can durably serve as a cohort member — whether it has a
-// working backup, whether it's drained, and — the key fitness signal — whether
-// its replication lag is low enough to acknowledge writes without hurting
-// latency. That lag indicator should live on AvailabilityStatus so the analyzer
-// can simply trust CohortEligibilityStatus rather than reconstruct the judgment
-// from individual health fields.
-//
-// The IsLeader gate is also conceptually unnecessary — there's no correctness
-// problem with an acting primary adding itself to the cohort. This may be useful
-// in some propagation scenarios.
-func (a *CohortMismatchAnalyzer) isAdditionCandidate(_ *ShardAnalysis, pa *PoolerAnalysis) bool {
-	if !pa.LastCheckValid {
+// self-reported cohort eligibility signal. The pooler is in the best position to
+// know whether it can durably serve as a cohort member — whether it has a working
+// backup, whether it's drained, and — the key fitness signal — whether its
+// replication lag is low enough to acknowledge writes without hurting latency.
+// That lag indicator should live on AvailabilityStatus so the analyzer can simply
+// trust CohortEligibilityStatus rather than reconstruct the judgment here.
+func fitForCohort(pa *PoolerAnalysis) bool {
+	if pa == nil || !pa.LastCheckValid || !pa.IsInitialized {
 		return false
 	}
-	if !pa.IsInitialized {
-		return false
-	}
-	// Replication fitness, read directly from the standby's replication status:
-	// it must be actively streaming from the primary, caught up within bound,
-	// and not paused. A stalled, lagging, or paused standby can't reliably
-	// acknowledge writes, so adding it would hurt durability/latency.
 	rs := pa.ReplicationStatus
 	if rs.GetIsWalReplayPaused() || rs.GetWalReceiverStatus() != walReceiverStatusStreaming {
 		return false

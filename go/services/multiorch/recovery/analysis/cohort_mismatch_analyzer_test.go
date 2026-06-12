@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/multigres/multigres/go/common/rpcclient"
+	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/common/topoclient/memorytopo"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	"github.com/multigres/multigres/go/services/multiorch/consensus"
@@ -108,6 +109,37 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 		require.Len(t, problems, 1)
 		assert.Equal(t, types.ProblemCohortMemberIneligible, problems[0].Code)
 		assert.Equal(t, replicaA.Name, problems[0].PoolerID.Name)
+	})
+
+	t.Run("removes unfit cohort member when quorum still satisfied", func(t *testing.T) {
+		// replica-a is in the cohort but no longer streaming; replica-b is a fit
+		// cohort member. With RequiredCount=1, removing the unfit member still
+		// leaves one fit member, so the removal is allowed.
+		unfit := healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_UNKNOWN)
+		unfit.ReplicationStatus.WalReceiverStatus = "stopping"
+		sa := healthyShard(
+			[]*clustermetadatapb.ID{replicaA, replicaB},
+			unfit,
+			healthyReplicaPA(replicaB, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_UNKNOWN),
+		)
+		sa.BootstrapDurabilityPolicy = topoclient.AtLeastN(1)
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		require.Len(t, problems, 1)
+		assert.Equal(t, types.ProblemCohortMemberIneligible, problems[0].Code)
+		assert.Equal(t, replicaA.Name, problems[0].PoolerID.Name)
+	})
+
+	t.Run("keeps unfit cohort member when removal would drop below quorum", func(t *testing.T) {
+		// replica-a is the only other cohort member and is unfit; removing it
+		// would leave zero fit members, below RequiredCount=1, so it is kept.
+		unfit := healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_UNKNOWN)
+		unfit.ReplicationStatus.WalReceiverStatus = "stopping"
+		sa := healthyShard([]*clustermetadatapb.ID{replicaA}, unfit)
+		sa.BootstrapDurabilityPolicy = topoclient.AtLeastN(1)
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		assert.Empty(t, problems)
 	})
 
 	t.Run("ignores eligible cohort member already in cohort", func(t *testing.T) {
