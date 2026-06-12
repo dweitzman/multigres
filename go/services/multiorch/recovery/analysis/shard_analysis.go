@@ -20,6 +20,7 @@ import (
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
 )
 
@@ -122,7 +123,7 @@ func (sa *ShardAnalysis) IsInStandbyList(id *clustermetadatapb.ID) bool {
 func (sa *ShardAnalysis) Replicas() []*PoolerAnalysis {
 	var replicas []*PoolerAnalysis
 	for _, pa := range sa.Analyses {
-		if !pa.IsLeader {
+		if !commonconsensus.IsLeader(pa.ConsensusStatus) {
 			replicas = append(replicas, pa)
 		}
 	}
@@ -137,32 +138,22 @@ type PoolerAnalysis struct {
 	PoolerID *clustermetadatapb.ID
 	ShardKey *clustermetadatapb.ShardKey
 
-	// Pooler properties
-	PoolerType clustermetadatapb.PoolerType
-	IsLeader   bool
 	// Represents if the poolerID is reachable and it's returning a
 	// valid status response
 	LastCheckValid   bool
-	IsStale          bool
 	IsInitialized    bool // Whether this pooler is fully initialized and ready to join the cohort
 	HasDataDirectory bool // Whether this pooler has a PostgreSQL data directory (PG_VERSION exists)
-	// CohortMembers are the strongly-typed IDs from the most recent
-	// multigres.leadership_history record. Nil or empty both indicate no cohort
-	// has been established. When IsInitialized=true, an empty list means the
-	// 0-member bootstrap record is present — Phase 2 is needed.
-	CohortMembers []*clustermetadatapb.ID
-	AnalyzedAt    time.Time
+	AnalyzedAt       time.Time
 
-	// Replica-specific fields
-	ReplicationStopped  bool
-	PrimaryConnInfoHost string
-
-	// This is no longer needed and can be derived from ConsensusStatus, but is
-	// left here for now.
-	ConsensusTerm int64 // This node's consensus term (from health check)
+	// ReplicationStatus is the standby's raw replication status from its most
+	// recent snapshot (nil for the leader, or a standby with no WAL receiver).
+	// Analyzers read it directly to judge replication fitness rather than relying
+	// on pre-computed flags.
+	ReplicationStatus *multipoolermanagerdatapb.StandbyReplicationStatus
 
 	// ConsensusStatus from the pooler's most recent StatusResponse snapshot.
-	// Used to derive the primary term via commonconsensus.PrimaryTerm(ConsensusStatus).
+	// Leadership and term are derived from it on demand (commonconsensus.IsLeader /
+	// LeaderTerm) rather than cached as separate fields.
 	ConsensusStatus *clustermetadatapb.ConsensusStatus
 
 	// AvailabilityStatus carries the pooler's self-reported willingness signals

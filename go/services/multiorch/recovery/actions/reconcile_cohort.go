@@ -150,10 +150,7 @@ func (a *ReconcileCohortAction) RequiresHealthyLeader() bool {
 func (a *ReconcileCohortAction) Metadata() types.RecoveryMetadata {
 	return types.RecoveryMetadata{
 		Name:        "ReconcileCohort",
-		Description: "Add or remove a single cohort member on the shard leader",
 		Timeout:     30 * time.Second,
-		LockTimeout: 15 * time.Second,
-		Retryable:   true,
 	}
 }
 

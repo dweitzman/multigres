@@ -56,23 +56,20 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 			}
 		}
 		return &PoolerAnalysis{
-			PoolerID:            id,
-			ShardKey:            shardKey,
-			PoolerType:          clustermetadatapb.PoolerType_REPLICA,
-			IsLeader:            false,
-			LastCheckValid:      true,
-			IsInitialized:       true,
-			PrimaryConnInfoHost: "primary.example.com",
-			ReplicationStopped:  false,
-			AvailabilityStatus:  av,
+			PoolerID:           id,
+			ShardKey:           shardKey,
+			LastCheckValid:     true,
+			IsInitialized:      true,
+			ReplicationStatus:  streamingReplicationStatus(),
+			AvailabilityStatus: av,
 		}
 	}
 
+	// The leader carries no standby replication status (it's the primary, not a
+	// standby), so it is never an addition candidate.
 	leaderPA := &PoolerAnalysis{
 		PoolerID:       primaryID,
 		ShardKey:       shardKey,
-		PoolerType:     clustermetadatapb.PoolerType_PRIMARY,
-		IsLeader:       true,
 		LastCheckValid: true,
 		IsInitialized:  true,
 	}
@@ -132,7 +129,7 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 
 	t.Run("ignores non-replicating non-cohort pooler", func(t *testing.T) {
 		pa := healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE)
-		pa.PrimaryConnInfoHost = "" // not yet replicating
+		pa.ReplicationStatus = nil // not yet replicating
 		sa := healthyShard(nil, pa)
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
@@ -141,7 +138,7 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 
 	t.Run("ignores replica with stopped replication", func(t *testing.T) {
 		pa := healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE)
-		pa.ReplicationStopped = true
+		pa.ReplicationStatus.WalReceiverStatus = "stopping" // not streaming
 		sa := healthyShard(nil, pa)
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
@@ -196,14 +193,10 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 		assert.Contains(t, err.Error(), "factory not initialized")
 	})
 
-	t.Run("ignores leader as addition candidate", func(t *testing.T) {
-		// A leader's PoolerAnalysis happens to satisfy every other condition
-		// (initialized, replicating-ish), but it must never be added to the
-		// cohort as a "missing replica".
+	t.Run("ignores leader (no standby replication status)", func(t *testing.T) {
+		// The leader is not in the cohort and is initialized, but it carries no
+		// standby replication status, so it is not an addition candidate.
 		leaderShard := healthyShard(nil)
-		// Inject the leader as a non-cohort-member by mutating its state to
-		// look like an addition candidate apart from IsLeader=true.
-		leaderShard.Analyses[0].PrimaryConnInfoHost = "primary.example.com"
 		problems, err := analyzer.Analyze(leaderShard)
 		require.NoError(t, err)
 		assert.Empty(t, problems)

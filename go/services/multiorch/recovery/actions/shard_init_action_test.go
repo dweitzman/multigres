@@ -116,7 +116,6 @@ func TestShardInitAction_Metadata(t *testing.T) {
 	action := NewShardInitAction(nil, nil, nil, nil, slog.Default())
 	m := action.Metadata()
 	assert.Equal(t, "ShardInit", m.Name)
-	assert.True(t, m.Retryable)
 	assert.Equal(t, 2*timeouts.RuleWriteTimeout+5*time.Second, m.Timeout)
 }
 

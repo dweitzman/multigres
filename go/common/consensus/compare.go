@@ -84,9 +84,41 @@ func MostAuthoritativeObservation(obs ...*clustermetadatapb.LeaderObservation) *
 	return best
 }
 
+// HighestKnownRule returns the ShardRule with the greatest rule number known to
+// any of the given consensus statuses. For each status it considers both the
+// rule the pooler is currently positioned at and the rule under which its
+// replication primary holds leadership — a follower can learn of a newer leader
+// via its replication primary before its own position advances. Unlike
+// MostAdvancedPosition, ranking is purely by rule number (no LSN tiebreak, no
+// LSN requirement), since leader identity is a function of the rule alone.
+// Returns nil when no status carries a rule.
+func HighestKnownRule(statuses []*clustermetadatapb.ConsensusStatus) *clustermetadatapb.ShardRule {
+	var best *clustermetadatapb.ShardRule
+	for _, cs := range statuses {
+		for _, rule := range []*clustermetadatapb.ShardRule{
+			cs.GetCurrentPosition().GetRule(),
+			cs.GetReplicationPrimary().GetRule(),
+		} {
+			if rule == nil {
+				continue
+			}
+			if best == nil || CompareRuleNumbers(rule.GetRuleNumber(), best.GetRuleNumber()) > 0 {
+				best = rule
+			}
+		}
+	}
+	return best
+}
+
 // MostAdvancedPosition returns the highest-ranked PoolerPosition among the
 // given statuses. Rule number takes precedence; LSN breaks ties within the
 // same rule. Returns nil if no status has a parseable LSN.
+//
+// Use this only to pick the most-advanced timeline during failover — i.e. which
+// candidate has the most WAL and should become the next leader to minimize data
+// loss. The LSN tiebreak and LSN requirement exist for exactly that purpose. To
+// answer "who is the current leader?" use HighestKnownRule instead: leader
+// identity is a function of the rule alone and must not depend on WAL position.
 //
 // This is the cached-snapshot analogue of discoverMostAdvancedTimeline, which
 // runs over recruited statuses and returns the eligible-leader set. Callers

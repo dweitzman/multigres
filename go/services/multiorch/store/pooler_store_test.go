@@ -136,29 +136,55 @@ func TestPoolerStore_FindPoolerByID(t *testing.T) {
 	})
 }
 
+// consensusLeaderPooler builds a pooler health state whose consensus status
+// names leaderName as the shard leader at the given rule term. FindHealthyPrimary
+// derives the leader from consensus, not the topology Type label, so tests drive
+// it through the rule a pooler is positioned at.
+func consensusLeaderPooler(name, leaderName string, ruleTerm int64) *multiorchdatapb.PoolerHealthState {
+	return &multiorchdatapb.PoolerHealthState{
+		MultiPooler: &clustermetadatapb.MultiPooler{
+			Id: &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: name},
+		},
+		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
+			CurrentPosition: &clustermetadatapb.PoolerPosition{
+				Rule: &clustermetadatapb.ShardRule{
+					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: ruleTerm},
+					LeaderId:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: leaderName},
+				},
+			},
+		},
+	}
+}
+
+// leaderStatusResp builds a live Status RPC response whose consensus status
+// names the pooler itself as the leader — what FindHealthyPrimary verifies.
+func leaderStatusResp(name string) *multipoolermanagerdatapb.StatusResponse {
+	id := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: name}
+	return &multipoolermanagerdatapb.StatusResponse{
+		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
+			Id: id,
+			CurrentPosition: &clustermetadatapb.PoolerPosition{
+				Rule: &clustermetadatapb.ShardRule{
+					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
+					LeaderId:   id,
+				},
+			},
+		},
+	}
+}
+
 func TestPoolerStore_FindHealthyPrimary(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("finds healthy primary", func(t *testing.T) {
+	t.Run("returns the consensus leader when it is running as primary", func(t *testing.T) {
 		fakeClient := rpcclient.NewFakeClient()
-		fakeClient.SetStatusResponse("multipooler-cell1-primary", &multipoolermanagerdatapb.StatusResponse{
-			Status: &multipoolermanagerdatapb.Status{PoolerType: clustermetadatapb.PoolerType_PRIMARY},
-		})
+		fakeClient.SetStatusResponse("multipooler-cell1-primary", leaderStatusResp("primary"))
 		poolerStore := NewPoolerStore(fakeClient, slog.Default())
 
+		// Both poolers' consensus names "primary" as the leader at rule 1.
 		poolers := []*multiorchdatapb.PoolerHealthState{
-			{
-				MultiPooler: &clustermetadatapb.MultiPooler{
-					Id:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "replica"},
-					Type: clustermetadatapb.PoolerType_REPLICA,
-				},
-			},
-			{
-				MultiPooler: &clustermetadatapb.MultiPooler{
-					Id:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary"},
-					Type: clustermetadatapb.PoolerType_PRIMARY,
-				},
-			},
+			consensusLeaderPooler("replica", "primary", 1),
+			consensusLeaderPooler("primary", "primary", 1),
 		}
 
 		primary, err := poolerStore.FindHealthyPrimary(ctx, poolers)
@@ -167,74 +193,63 @@ func TestPoolerStore_FindHealthyPrimary(t *testing.T) {
 		assert.Equal(t, "primary", primary.MultiPooler.Id.Name)
 	})
 
-	t.Run("returns error when no primary exists", func(t *testing.T) {
+	t.Run("returns error when no consensus leader is known", func(t *testing.T) {
 		poolerStore := NewPoolerStore(&rpcclient.FakeClient{}, slog.Default())
 
+		// No consensus status on any pooler — nothing names a leader.
 		poolers := []*multiorchdatapb.PoolerHealthState{
-			{
-				MultiPooler: &clustermetadatapb.MultiPooler{
-					Id:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "replica1"},
-					Type: clustermetadatapb.PoolerType_REPLICA,
-				},
-			},
-			{
-				MultiPooler: &clustermetadatapb.MultiPooler{
-					Id:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "replica2"},
-					Type: clustermetadatapb.PoolerType_REPLICA,
-				},
-			},
+			{MultiPooler: &clustermetadatapb.MultiPooler{Id: &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "replica1"}}},
+			{MultiPooler: &clustermetadatapb.MultiPooler{Id: &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "replica2"}}},
 		}
 
 		primary, err := poolerStore.FindHealthyPrimary(ctx, poolers)
 
 		assert.Error(t, err)
 		assert.Nil(t, primary)
-		assert.Contains(t, err.Error(), "no healthy primary found")
+		assert.Contains(t, err.Error(), "no consensus leader known")
 	})
 
-	t.Run("skips pooler where PrimaryStatus fails (e.g. standby mode)", func(t *testing.T) {
+	t.Run("returns error when the consensus leader is not running as primary", func(t *testing.T) {
 		fakeClient := rpcclient.NewFakeClient()
 		fakeClient.Errors["multipooler-cell1-primary"] = errors.New("operation not allowed: the PostgreSQL instance is in standby mode")
 		poolerStore := NewPoolerStore(fakeClient, slog.Default())
 
 		poolers := []*multiorchdatapb.PoolerHealthState{
-			{
-				MultiPooler: &clustermetadatapb.MultiPooler{
-					Id:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary"},
-					Type: clustermetadatapb.PoolerType_PRIMARY,
-				},
-			},
+			consensusLeaderPooler("primary", "primary", 1),
 		}
 
 		primary, err := poolerStore.FindHealthyPrimary(ctx, poolers)
 
 		assert.Error(t, err)
 		assert.Nil(t, primary)
-		assert.Contains(t, err.Error(), "no healthy primary found")
+		assert.Contains(t, err.Error(), "consensus leader unreachable")
 	})
 
-	t.Run("skips unreachable primary and finds next", func(t *testing.T) {
+	t.Run("returns error when the consensus leader is not in the pooler set", func(t *testing.T) {
+		poolerStore := NewPoolerStore(rpcclient.NewFakeClient(), slog.Default())
+
+		// The only pooler reports a leader ("ghost") that is not present.
+		poolers := []*multiorchdatapb.PoolerHealthState{
+			consensusLeaderPooler("replica", "ghost", 1),
+		}
+
+		primary, err := poolerStore.FindHealthyPrimary(ctx, poolers)
+
+		assert.Error(t, err)
+		assert.Nil(t, primary)
+		assert.Contains(t, err.Error(), "not in the pooler set")
+	})
+
+	t.Run("resolves split-brain by choosing the highest-rule leader", func(t *testing.T) {
 		fakeClient := rpcclient.NewFakeClient()
-		// primary1 PrimaryStatus returns an error (unreachable)
-		fakeClient.Errors["multipooler-cell1-primary1"] = errors.New("connection refused")
-		fakeClient.SetStatusResponse("multipooler-cell2-primary2", &multipoolermanagerdatapb.StatusResponse{
-			Status: &multipoolermanagerdatapb.Status{PoolerType: clustermetadatapb.PoolerType_PRIMARY},
-		})
+		fakeClient.SetStatusResponse("multipooler-cell1-primary2", leaderStatusResp("primary2"))
 		poolerStore := NewPoolerStore(fakeClient, slog.Default())
 
+		// primary1 still believes it leads at rule 1; primary2 leads at the
+		// higher rule 2. Consensus resolves to primary2 — no error.
 		poolers := []*multiorchdatapb.PoolerHealthState{
-			{
-				MultiPooler: &clustermetadatapb.MultiPooler{
-					Id:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary1"},
-					Type: clustermetadatapb.PoolerType_PRIMARY,
-				},
-			},
-			{
-				MultiPooler: &clustermetadatapb.MultiPooler{
-					Id:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell2", Name: "primary2"},
-					Type: clustermetadatapb.PoolerType_PRIMARY,
-				},
-			},
+			consensusLeaderPooler("primary1", "primary1", 1),
+			consensusLeaderPooler("primary2", "primary2", 2),
 		}
 
 		primary, err := poolerStore.FindHealthyPrimary(ctx, poolers)
@@ -243,67 +258,17 @@ func TestPoolerStore_FindHealthyPrimary(t *testing.T) {
 		assert.Equal(t, "primary2", primary.MultiPooler.Id.Name)
 	})
 
-	t.Run("returns error when multiple healthy primaries found", func(t *testing.T) {
+	t.Run("derives the leader from consensus regardless of stale topology", func(t *testing.T) {
+		// Post-failover: promoted-replica leads at the higher rule 2; the
+		// demoted old leader is still at rule 1. FindHealthyPrimary follows
+		// consensus to promoted-replica, never the topology Type label.
 		fakeClient := rpcclient.NewFakeClient()
-		fakeClient.SetStatusResponse("multipooler-cell1-primary1", &multipoolermanagerdatapb.StatusResponse{
-			Status: &multipoolermanagerdatapb.Status{PoolerType: clustermetadatapb.PoolerType_PRIMARY},
-		})
-		fakeClient.SetStatusResponse("multipooler-cell2-primary2", &multipoolermanagerdatapb.StatusResponse{
-			Status: &multipoolermanagerdatapb.Status{PoolerType: clustermetadatapb.PoolerType_PRIMARY},
-		})
+		fakeClient.SetStatusResponse("multipooler-cell1-promoted-replica", leaderStatusResp("promoted-replica"))
 		poolerStore := NewPoolerStore(fakeClient, slog.Default())
 
 		poolers := []*multiorchdatapb.PoolerHealthState{
-			{
-				MultiPooler: &clustermetadatapb.MultiPooler{
-					Id:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary1"},
-					Type: clustermetadatapb.PoolerType_PRIMARY,
-				},
-			},
-			{
-				MultiPooler: &clustermetadatapb.MultiPooler{
-					Id:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell2", Name: "primary2"},
-					Type: clustermetadatapb.PoolerType_PRIMARY,
-				},
-			},
-		}
-
-		primary, err := poolerStore.FindHealthyPrimary(ctx, poolers)
-
-		assert.Error(t, err)
-		assert.Nil(t, primary)
-		assert.Contains(t, err.Error(), "multiple primaries found")
-	})
-
-	t.Run("finds primary from stale topology using health data", func(t *testing.T) {
-		// Simulates the post-failover scenario: etcd is unavailable so topology is stale.
-		// The promoted primary (promoted-replica) still has Type=REPLICA in topology but its
-		// live health snapshot reports PoolerType=PRIMARY. The stale-topology primary
-		// (stale-primary) has Type=PRIMARY in topology but PrimaryStatus fails because it
-		// is actually running as a standby after demotion.
-		fakeClient := rpcclient.NewFakeClient()
-		fakeClient.Errors["multipooler-cell1-stale-primary"] = errors.New("operation not allowed: the PostgreSQL instance is in standby mode")
-		fakeClient.SetStatusResponse("multipooler-cell1-promoted-replica", &multipoolermanagerdatapb.StatusResponse{
-			Status: &multipoolermanagerdatapb.Status{PoolerType: clustermetadatapb.PoolerType_PRIMARY},
-		})
-		poolerStore := NewPoolerStore(fakeClient, slog.Default())
-
-		poolers := []*multiorchdatapb.PoolerHealthState{
-			{
-				MultiPooler: &clustermetadatapb.MultiPooler{
-					Id:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "stale-primary"},
-					Type: clustermetadatapb.PoolerType_PRIMARY, // stale topology
-				},
-			},
-			{
-				MultiPooler: &clustermetadatapb.MultiPooler{
-					Id:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "promoted-replica"},
-					Type: clustermetadatapb.PoolerType_REPLICA, // stale topology
-				},
-				Status: &multipoolermanagerdatapb.Status{
-					PoolerType: clustermetadatapb.PoolerType_PRIMARY, // health data shows it's actually primary
-				},
-			},
+			consensusLeaderPooler("old-leader", "old-leader", 1),
+			consensusLeaderPooler("promoted-replica", "promoted-replica", 2),
 		}
 
 		primary, err := poolerStore.FindHealthyPrimary(ctx, poolers)

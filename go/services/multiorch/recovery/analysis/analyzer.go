@@ -44,10 +44,10 @@ func DefaultAnalyzers(factory *RecoveryActionFactory) []Analyzer {
 	if defaultAnalyzers == nil {
 		return []Analyzer{
 			&ShardNeedsInitializationAnalyzer{factory: factory},
-			&StaleLeaderAnalyzer{factory: factory},
 			&LeaderResignedAnalyzer{factory: factory},
 			&LeaderIsDeadAnalyzer{factory: factory},
-			&ReplicaNotReplicatingAnalyzer{factory: factory},
+			&SetPrimaryAnalyzer{factory: factory},
+			&NeedsRewindAnalyzer{factory: factory},
 			&CohortMismatchAnalyzer{factory: factory},
 		}
 	}

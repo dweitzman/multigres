@@ -210,45 +210,22 @@ func (g *AnalysisGenerator) generateAnalysisForPooler(
 	pooler *multiorchdatapb.PoolerHealthState,
 	shardKey *clustermetadatapb.ShardKey,
 ) *PoolerAnalysis {
-	// Determine pooler type from health check (PoolerType).
-	// Nodes are never created with topology type PRIMARY, so health check is authoritative.
-	// Fall back to topology type only if health check type is UNKNOWN.
-	poolerType := pooler.GetStatus().GetPoolerType()
-	if poolerType == clustermetadatapb.PoolerType_UNKNOWN {
-		poolerType = pooler.MultiPooler.Type
-	}
-
 	analysis := &PoolerAnalysis{
 		PoolerID:         pooler.MultiPooler.Id,
 		ShardKey:         shardKey,
-		PoolerType:       poolerType,
-		IsLeader:         commonconsensus.IsLeader(pooler.GetConsensusStatus()),
 		LastCheckValid:   pooler.IsLastCheckValid,
 		IsInitialized:    store.IsInitialized(pooler),
 		HasDataDirectory: pooler.GetStatus().GetHasDataDirectory(),
-		CohortMembers:    pooler.GetStatus().GetCohortMembers(),
 		AnalyzedAt:       time.Now(),
 	}
 
-	// Compute staleness
-	analysis.IsStale = !pooler.IsUpToDate
-
-	// Store consensus status.
-	analysis.ConsensusTerm = pooler.GetConsensusStatus().GetTermRevocation().GetRevokedBelowTerm()
+	// Carry raw status snapshots; analyzers derive leadership, term, cohort
+	// membership, and replication fitness from these on demand rather than from
+	// pre-computed flags. ReplicationStatus is nil for the leader (or a standby
+	// with no WAL receiver).
 	analysis.ConsensusStatus = pooler.GetConsensusStatus()
 	analysis.AvailabilityStatus = pooler.GetAvailabilityStatus()
-
-	// If this is a REPLICA, populate replica-specific fields
-	if !analysis.IsLeader {
-		if rs := pooler.GetStatus().GetReplicationStatus(); rs != nil {
-			analysis.ReplicationStopped = rs.IsWalReplayPaused
-
-			// Extract primary connection info
-			if rs.PrimaryConnInfo != nil {
-				analysis.PrimaryConnInfoHost = rs.PrimaryConnInfo.Host
-			}
-		}
-	}
+	analysis.ReplicationStatus = pooler.GetStatus().GetReplicationStatus()
 
 	return analysis
 }
@@ -321,15 +298,13 @@ func (g *AnalysisGenerator) allReplicasConnectedToLeader(
 			continue
 		}
 
-		// Skip non-replicas. Note: a node whose postgres crashed into recovery mode
-		// without going through the normal resign flow could report PoolerType_REPLICA
-		// while still being the consensus leader. Such a node would be incorrectly
-		// counted as a follower here, overstating connected-follower count.
-		replicaType := pooler.GetStatus().GetPoolerType()
-		if replicaType == clustermetadatapb.PoolerType_UNKNOWN {
-			replicaType = pooler.MultiPooler.Type
-		}
-		if replicaType != clustermetadatapb.PoolerType_REPLICA {
+		// Skip poolers operating as a (possibly stale) primary, judged by their
+		// self-reported consensus leadership rather than the topology Type label.
+		// A node whose postgres crashed into recovery while still being the
+		// consensus leader still names itself leader in its consensus status, so
+		// it is correctly excluded from the connected-follower count instead of
+		// being miscounted as a follower.
+		if commonconsensus.IsLeader(pooler.GetConsensusStatus()) {
 			continue
 		}
 
@@ -442,7 +417,7 @@ func (g *AnalysisGenerator) computeShardLevelFields(sa *ShardAnalysis, poolers m
 
 	// Collect all reachable primaries in the shard.
 	for _, pa := range sa.Analyses {
-		if pa.IsLeader && pa.LastCheckValid {
+		if commonconsensus.IsLeader(pa.ConsensusStatus) && pa.LastCheckValid {
 			sa.Leaders = append(sa.Leaders, pa)
 		}
 	}
@@ -487,7 +462,7 @@ func (g *AnalysisGenerator) computeShardLevelFields(sa *ShardAnalysis, poolers m
 
 	// HasInitializedReplica: any non-primary, reachable, initialized pooler.
 	for _, pa := range sa.Analyses {
-		if !pa.IsLeader && pa.LastCheckValid && pa.IsInitialized {
+		if !commonconsensus.IsLeader(pa.ConsensusStatus) && pa.LastCheckValid && pa.IsInitialized {
 			sa.HasInitializedReplica = true
 			break
 		}

@@ -154,13 +154,10 @@ func (a *AppointLeaderAction) RequiresHealthyLeader() bool {
 func (a *AppointLeaderAction) Metadata() types.RecoveryMetadata {
 	return types.RecoveryMetadata{
 		Name:        "AppointLeader",
-		Description: "Elect a new primary for the shard using consensus",
 		// Two sequential phases each bounded by RuleWriteTimeout
 		// (Recruit, then concurrent Promote/SetPrimary), plus margin so the
 		// action context does not race its own phases to the deadline.
 		Timeout:     2*timeouts.RuleWriteTimeout + 5*time.Second,
-		LockTimeout: 15 * time.Second,
-		Retryable:   true, // can retry if it fails
 	}
 }
 

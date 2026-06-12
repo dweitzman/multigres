@@ -70,7 +70,6 @@ type RecruitmentResult struct {
 // callers. buildProposalCore is agnostic to which strategy is in use.
 type discoverer func(
 	recruited []*clustermetadatapb.ConsensusStatus,
-	outgoingRule *clustermetadatapb.ShardRule,
 ) []*clustermetadatapb.ConsensusStatus
 
 // quorumMode controls which quorum requirements are enforced before calling
@@ -258,7 +257,7 @@ func newExternallyCertifiedDiscoverer(
 	if err != nil {
 		return nil, fmt.Errorf("invalid frozen_lsn in cert: %w", err)
 	}
-	return func(recruited []*clustermetadatapb.ConsensusStatus, outgoingRule *clustermetadatapb.ShardRule) []*clustermetadatapb.ConsensusStatus {
+	return func(recruited []*clustermetadatapb.ConsensusStatus) []*clustermetadatapb.ConsensusStatus {
 		qualified := make([]*clustermetadatapb.ConsensusStatus, 0, len(recruited))
 		for _, cs := range recruited {
 			lsn, err := pgutil.ParseLSN(cs.GetCurrentPosition().GetLsn())
@@ -266,7 +265,7 @@ func newExternallyCertifiedDiscoverer(
 				qualified = append(qualified, cs)
 			}
 		}
-		return discoverMostAdvancedTimeline(qualified, outgoingRule)
+		return discoverMostAdvancedTimeline(qualified)
 	}, nil
 }
 
@@ -350,7 +349,8 @@ func buildProposalCore(
 		// below after the proposal is built.
 	}
 
-	eligibleLeaders := discover(recruitedStatuses, outgoingRule)
+	eligibleLeaders := discover(recruitedStatuses)
+	// TODO: filter the list of eligible leaders to the ones with the expected outgoing rule
 	if len(eligibleLeaders) == 0 {
 		// Unreachable: filterByValidPosition ensures at least one status survives
 		// with a parseable LSN, and outgoingRule (if set) is always derived from one of
@@ -394,17 +394,10 @@ func buildProposalCore(
 // unparsable LSNs are skipped here as a defensive fallback.
 func discoverMostAdvancedTimeline(
 	recruitedStatuses []*clustermetadatapb.ConsensusStatus,
-	outgoingRule *clustermetadatapb.ShardRule,
 ) []*clustermetadatapb.ConsensusStatus {
 	var bestLSN pgutil.LSN
 	var eligibleLeaders []*clustermetadatapb.ConsensusStatus
 	for _, cs := range recruitedStatuses {
-		if outgoingRule != nil {
-			ruleNum := cs.GetCurrentPosition().GetRule().GetRuleNumber()
-			if CompareRuleNumbers(ruleNum, outgoingRule.GetRuleNumber()) != 0 {
-				continue
-			}
-		}
 		lsn, err := pgutil.ParseLSN(cs.GetCurrentPosition().GetLsn())
 		if err != nil {
 			// The caller's filterByValidPosition guarantees all surviving statuses

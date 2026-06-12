@@ -38,22 +38,21 @@ const (
 	ProblemShardNeedsInitialization ProblemCode = "ShardNeedsInitialization"
 
 	// Leader problems (catastrophic - block everything else).
-	ProblemLeaderIsDead      ProblemCode = "LeaderIsDead"
-	ProblemLeaderResigned    ProblemCode = "LeaderResigned"
-	ProblemLeaderDiskStalled ProblemCode = "LeaderDiskStalled"
-	ProblemStaleLeader       ProblemCode = "StaleLeader"
-
-	// Leader configuration problems (can fix while leader alive).
-	ProblemLeaderNotAcceptingWrites ProblemCode = "LeaderNotAcceptingWrites"
-	ProblemLeaderMisconfigured      ProblemCode = "LeaderMisconfigured"
-	ProblemLeaderIsReadOnly         ProblemCode = "LeaderIsReadOnly"
+	ProblemLeaderIsDead   ProblemCode = "LeaderIsDead"
+	ProblemLeaderResigned ProblemCode = "LeaderResigned"
 
 	// Replica problems (require healthy leader).
-	ProblemReplicaNotReplicating ProblemCode = "ReplicaNotReplicating"
-	ProblemReplicaWrongPrimary   ProblemCode = "ReplicaWrongPrimary"
-	ProblemReplicaLagging        ProblemCode = "ReplicaLagging"
-	ProblemReplicaMisconfigured  ProblemCode = "ReplicaMisconfigured"
-	ProblemReplicaIsWritable     ProblemCode = "ReplicaIsWritable"
+	//
+	// ProblemNeedsSetPrimary: the pooler is not following the current leader's
+	// rule (missing/wrong/stale ReplicationPrimary) and needs a SetPrimary RPC to
+	// learn who the leader is. Also covers stale leaders (a self-believed leader
+	// that is not the highest-rule leader), which a SetPrimary demotes by
+	// restarting as a standby.
+	//
+	// ProblemNeedsRewind: the pooler already knows the current leader's rule but
+	// replication is still stuck (e.g. timeline divergence) and needs a rewind.
+	ProblemNeedsSetPrimary ProblemCode = "NeedsSetPrimary"
+	ProblemNeedsRewind     ProblemCode = "NeedsRewind"
 
 	// Cohort drift problems (require healthy leader; not service-impacting on
 	// their own, but durability degrades if left unaddressed).
@@ -168,20 +167,8 @@ type RecoveryAction interface {
 
 // RecoveryMetadata describes the recovery action.
 type RecoveryMetadata struct {
-	Name        string
-	Description string
-	Timeout     time.Duration
-	// LockTimeout is the maximum time to wait for lock acquisition.
-	// Should be shorter than Timeout to leave time for the actual operation.
-	// Defaults to 15 seconds if zero.
-	LockTimeout time.Duration
-	Retryable   bool
-}
-
-// GetLockTimeout returns the lock timeout, defaulting to 15 seconds if not set.
-func (m RecoveryMetadata) GetLockTimeout() time.Duration {
-	if m.LockTimeout == 0 {
-		return 15 * time.Second
-	}
-	return m.LockTimeout
+	// Name identifies the action in logs and metrics.
+	Name string
+	// Timeout bounds how long the action's Execute may run.
+	Timeout time.Duration
 }

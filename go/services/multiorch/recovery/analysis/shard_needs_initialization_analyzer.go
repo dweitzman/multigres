@@ -60,7 +60,7 @@ func (a *ShardNeedsInitializationAnalyzer) Analyze(sa *ShardAnalysis) ([]types.P
 
 	for _, pa := range sa.Analyses {
 		// If any pooler has cohort members, the cohort is already established.
-		if len(pa.CohortMembers) > 0 {
+		if len(pa.ConsensusStatus.GetCurrentPosition().GetRule().GetCohortMembers()) > 0 {
 			return nil, nil
 		}
 	}

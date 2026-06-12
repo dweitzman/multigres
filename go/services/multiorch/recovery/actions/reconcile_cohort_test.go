@@ -36,7 +36,6 @@ func TestReconcileCohortAction_Metadata(t *testing.T) {
 	action := NewReconcileCohortAction(nil, nil, nil, nil, slog.Default())
 	md := action.Metadata()
 	assert.Equal(t, "ReconcileCohort", md.Name)
-	assert.True(t, md.Retryable)
 	assert.True(t, action.RequiresHealthyLeader())
 	assert.Equal(t, types.PriorityNormal, action.Priority())
 	assert.Nil(t, action.GracePeriod())
@@ -278,7 +277,7 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 
 		action := NewReconcileCohortAction(nil, fakeClient, ps, nil, slog.Default())
 		err := action.Execute(ctx, types.Problem{
-			Code:     types.ProblemReplicaNotReplicating,
+			Code:     types.ProblemNeedsSetPrimary,
 			ShardKey: shardKey,
 			PoolerID: replicaID,
 		})

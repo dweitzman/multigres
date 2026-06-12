@@ -20,8 +20,18 @@ import (
 	"time"
 
 	"github.com/multigres/multigres/go/common/topoclient"
-	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
+)
+
+const (
+	// walReceiverStatusStreaming is the pg_stat_wal_receiver.status value that
+	// indicates a standby is actively connected to and streaming from its primary.
+	walReceiverStatusStreaming = "streaming"
+
+	// cohortCandidateMaxReplayLag bounds how far behind a standby may be replayed
+	// and still be eligible to join the synchronous cohort. Beyond this, adding it
+	// would stall writes waiting for its acknowledgement.
+	cohortCandidateMaxReplayLag = 10 * time.Second
 )
 
 // CohortMismatchAnalyzer detects drift between the desired cohort and the
@@ -121,36 +131,36 @@ func (a *CohortMismatchAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, er
 }
 
 // isAdditionCandidate reports whether a non-cohort pooler is healthy enough to
-// be added: it must be a non-leader REPLICA, initialized, replicating, and not
-// signaling INELIGIBLE.
+// be added: initialized, actively replaying WAL, and not signaling INELIGIBLE.
 //
 // TODO: long-term, most of these checks should fold into the pooler's
 // self-reported cohort eligibility signal. The pooler is in the best position
-// to know whether it can durably serve as a cohort member — it knows whether
-// it has a working backup, whether it's in a drained state, whether
-// replication is healthy, and so on. The analyzer should largely just trust
-// the CohortEligibilityStatus signal rather than reconstruct that judgment
+// to know whether it can durably serve as a cohort member — whether it has a
+// working backup, whether it's drained, and — the key fitness signal — whether
+// its replication lag is low enough to acknowledge writes without hurting
+// latency. That lag indicator should live on AvailabilityStatus so the analyzer
+// can simply trust CohortEligibilityStatus rather than reconstruct the judgment
 // from individual health fields.
 //
 // The IsLeader gate is also conceptually unnecessary — there's no correctness
-// problem an acting primary adding itself to the cohort. This may be useful
+// problem with an acting primary adding itself to the cohort. This may be useful
 // in some propagation scenarios.
 func (a *CohortMismatchAnalyzer) isAdditionCandidate(_ *ShardAnalysis, pa *PoolerAnalysis) bool {
-	if pa.IsLeader {
-		return false
-	}
 	if !pa.LastCheckValid {
 		return false
 	}
 	if !pa.IsInitialized {
 		return false
 	}
-	if pa.PoolerType != clustermetadatapb.PoolerType_REPLICA {
+	// Replication fitness, read directly from the standby's replication status:
+	// it must be actively streaming from the primary, caught up within bound,
+	// and not paused. A stalled, lagging, or paused standby can't reliably
+	// acknowledge writes, so adding it would hurt durability/latency.
+	rs := pa.ReplicationStatus
+	if rs.GetIsWalReplayPaused() || rs.GetWalReceiverStatus() != walReceiverStatusStreaming {
 		return false
 	}
-	// Replication must be configured and not stopped — otherwise the standby
-	// can't acknowledge writes and adding it would degrade durability.
-	if pa.PrimaryConnInfoHost == "" || pa.ReplicationStopped {
+	if lag := rs.GetLag(); lag != nil && lag.AsDuration() > cohortCandidateMaxReplayLag {
 		return false
 	}
 	if types.PoolerIsCohortIneligible(pa.AvailabilityStatus) {

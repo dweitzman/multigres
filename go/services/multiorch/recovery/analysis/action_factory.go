@@ -68,14 +68,14 @@ func (f *RecoveryActionFactory) NewAppointLeaderAction() types.RecoveryAction {
 	return actions.NewAppointLeaderAction(f.config, f.coordinator, f.poolerStore, f.topoStore, f.logger)
 }
 
-// NewFixReplicationAction creates a fix replication action.
-func (f *RecoveryActionFactory) NewFixReplicationAction() types.RecoveryAction {
-	return actions.NewFixReplicationAction(f.config, f.rpcClient, f.poolerStore, f.topoStore, f.logger)
+// NewSetPrimaryAction creates an action that tells a pooler the current leader's rule.
+func (f *RecoveryActionFactory) NewSetPrimaryAction() types.RecoveryAction {
+	return actions.NewSetPrimaryAction(f.rpcClient, f.poolerStore, f.logger)
 }
 
-// NewDemoteStaleLeaderAction creates an action to demote a stale primary.
-func (f *RecoveryActionFactory) NewDemoteStaleLeaderAction() types.RecoveryAction {
-	return actions.NewDemoteStaleLeaderAction(f.config, f.rpcClient, f.poolerStore, f.topoStore, f.logger)
+// NewRewindAction creates an action that rewinds a stuck pooler to the leader's history.
+func (f *RecoveryActionFactory) NewRewindAction() types.RecoveryAction {
+	return actions.NewRewindAction(f.rpcClient, f.poolerStore, f.logger)
 }
 
 // NewReconcileCohortAction creates an action to add or remove a cohort member.
