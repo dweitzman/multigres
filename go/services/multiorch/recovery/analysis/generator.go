@@ -227,6 +227,11 @@ func (g *AnalysisGenerator) generateAnalysisForPooler(
 	analysis.ConsensusStatus = pooler.GetConsensusStatus()
 	analysis.AvailabilityStatus = pooler.GetAvailabilityStatus()
 	analysis.ReplicationStatus = pooler.GetStatus().GetReplicationStatus()
+	analysis.PostgresReady = pooler.GetStatus().GetPostgresReady()
+	// RunningAsPrimary is the postgres recovery-mode signal (pg_is_in_recovery),
+	// reported by the pooler as PoolerType=PRIMARY when serving as a primary. This
+	// is the legitimate primary/standby recovery-mode use, not the topology label.
+	analysis.RunningAsPrimary = pooler.GetStatus().GetPoolerType() == clustermetadatapb.PoolerType_PRIMARY
 
 	return analysis
 }
@@ -433,24 +438,21 @@ func (g *AnalysisGenerator) computeShardLevelFields(sa *ShardAnalysis, poolers m
 		// StatusResponse on every health stream snapshot, so LeaderNeedsReplacement
 		// correctly detects REQUESTING_DEMOTION signals without a separate RPC.
 		sa.LeaderHasResigned = types.LeaderNeedsReplacement(topologyPrimary)
-		// LeaderReachable requires the leader to actually be serving as a postgres
-		// primary and not have resigned. A node demoted via Recruit still names
-		// itself leader in consensus (until the new rule replicates) but reports
-		// PoolerType=REPLICA because its postgres restarted as a standby — this is
-		// the recovery-mode signal (pg_is_in_recovery), not the topology routing
-		// label. Keying off it lets LeaderIsDead trigger even while the demoted
-		// node's postgres is still running.
-		sa.LeaderReachable = topologyPrimary.IsLastCheckValid &&
-			topologyPrimary.GetStatus().GetPostgresReady() &&
-			!sa.LeaderHasResigned &&
-			topologyPrimary.GetStatus().GetPoolerType() == clustermetadatapb.PoolerType_PRIMARY
+
+		// LeaderReachable is "is the single leader currently fit to serve?" —
+		// computed by the fitToLead predicate over the leader's analysis. A node
+		// demoted via Recruit still names itself leader in consensus (until the new
+		// rule replicates) but reports its postgres running as a standby, so it is
+		// not fit and LeaderIsDead can trigger even while its postgres still runs.
+		leaderPA := findAnalysisByID(sa.Analyses, topologyPrimary.MultiPooler.Id)
+		sa.LeaderReachable = fitToLead(leaderPA)
 
 		// Expose the leader as a PoolerAnalysis only when its pooler is reachable.
 		// Analyzers that re-point replicas (SetPrimary/NeedsRewind) need a reachable
 		// leader whose rule they can deliver; if it's unreachable, LeaderIsDead
 		// handles it instead. This is the same single leader — never a stale stand-in.
 		if topologyPrimary.IsLastCheckValid {
-			sa.HighestTermReachableLeader = findAnalysisByID(sa.Analyses, topologyPrimary.MultiPooler.Id)
+			sa.HighestTermReachableLeader = leaderPA
 		}
 
 		if topologyPrimary.LastPostgresReadyTime != nil {

@@ -50,7 +50,14 @@ import (
 // coordinator-synthesized signals (e.g. TEMPORARILY_UNAVAILABLE for unreachable
 // nodes) are handled here too.
 func LeaderNeedsReplacement(p *multiorchdatapb.PoolerHealthState) bool {
-	av := p.GetAvailabilityStatus()
+	return LeaderResignSignaled(p.GetAvailabilityStatus(), p.GetConsensusStatus())
+}
+
+// LeaderResignSignaled reports whether a leader's self-reported signals indicate
+// it needs replacement, given its availability and consensus status directly
+// (rather than the enclosing PoolerHealthState). Used by fitness predicates that
+// reason over a PoolerAnalysis. See LeaderNeedsReplacement for the semantics.
+func LeaderResignSignaled(av *clustermetadatapb.AvailabilityStatus, consensus *clustermetadatapb.ConsensusStatus) bool {
 	if PoolerIsCohortIneligible(av) {
 		return true
 	}
@@ -62,7 +69,7 @@ func LeaderNeedsReplacement(p *multiorchdatapb.PoolerHealthState) bool {
 		return false
 	}
 	// Verify the signal is for the current primary term, not a stale one.
-	primaryTerm := commonconsensus.LeaderTerm(p.GetConsensusStatus())
+	primaryTerm := commonconsensus.LeaderTerm(consensus)
 	return leadershipStatus.LeaderTerm != 0 && leadershipStatus.LeaderTerm == primaryTerm
 }
 

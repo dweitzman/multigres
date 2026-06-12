@@ -105,6 +105,23 @@ type ShardAnalysis struct {
 	PromotingPrimaryID *clustermetadatapb.ID
 }
 
+// fitToLead reports whether a pooler is currently fit to serve as the shard
+// leader: it is the consensus leader, has a recent successful health check, its
+// postgres is ready and actually running as a primary (not a demoted standby),
+// and it has not signaled that it needs replacement. This is the single predicate
+// behind "should we replace the leader?" — when the discovered leader is not
+// fitToLead, failover detection takes over.
+func fitToLead(pa *PoolerAnalysis) bool {
+	if pa == nil {
+		return false
+	}
+	return commonconsensus.IsLeader(pa.ConsensusStatus) &&
+		pa.LastCheckValid &&
+		pa.PostgresReady &&
+		pa.RunningAsPrimary &&
+		!types.LeaderResignSignaled(pa.AvailabilityStatus, pa.ConsensusStatus)
+}
+
 // IsInStandbyList reports whether the given pooler ID appears in the leader's
 // synchronous standby list. Returns false when no standby list is available.
 func (sa *ShardAnalysis) IsInStandbyList(id *clustermetadatapb.ID) bool {
@@ -141,6 +158,14 @@ type PoolerAnalysis struct {
 	IsInitialized    bool // Whether this pooler is fully initialized and ready to join the cohort
 	HasDataDirectory bool // Whether this pooler has a PostgreSQL data directory (PG_VERSION exists)
 	AnalyzedAt       time.Time
+
+	// Raw postgres health signals from the most recent snapshot. PostgresReady is
+	// whether postgres accepts connections (pg_isready). RunningAsPrimary is the
+	// recovery-mode signal (pg_is_in_recovery() == false) — a node demoted to a
+	// standby reports false here even while consensus still names it leader. These
+	// are postgres-layer facts, not the topology PoolerType routing label.
+	PostgresReady    bool
+	RunningAsPrimary bool
 
 	// ReplicationStatus is the standby's raw replication status from its most
 	// recent snapshot (nil for the leader, or a standby with no WAL receiver).
