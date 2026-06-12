@@ -211,11 +211,11 @@ func (a *ShardInitAction) RequiresHealthyLeader() bool {
 
 func (a *ShardInitAction) Metadata() types.RecoveryMetadata {
 	return types.RecoveryMetadata{
-		Name:        "ShardInit",
+		Name: "ShardInit",
 		// Two sequential phases each bounded by RuleWriteTimeout
 		// (Recruit, then concurrent Promote/SetPrimary), plus margin so the
 		// action context does not race its own phases to the deadline.
-		Timeout:     2*timeouts.RuleWriteTimeout + 5*time.Second,
+		Timeout: 2*timeouts.RuleWriteTimeout + 5*time.Second,
 	}
 }
 

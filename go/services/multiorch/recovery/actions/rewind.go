@@ -130,8 +130,8 @@ func (a *RewindAction) RequiresHealthyLeader() bool {
 
 func (a *RewindAction) Metadata() types.RecoveryMetadata {
 	return types.RecoveryMetadata{
-		Name:        "Rewind",
-		Timeout:     60 * time.Second,
+		Name:    "Rewind",
+		Timeout: 60 * time.Second,
 	}
 }
 

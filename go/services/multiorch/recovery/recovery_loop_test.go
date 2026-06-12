@@ -29,6 +29,7 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/rpcclient"
 	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/common/topoclient/memorytopo"
@@ -136,10 +137,8 @@ func (m *mockRecoveryAction) Metadata() types.RecoveryMetadata {
 		return m.metadata
 	}
 	return types.RecoveryMetadata{
-		Name:        m.name,
-		Description: "Mock recovery action",
-		Timeout:     m.timeout,
-		Retryable:   true,
+		Name:    m.name,
+		Timeout: m.timeout,
 	}
 }
 
@@ -187,7 +186,7 @@ func TestGroupProblemsByShard(t *testing.T) {
 			ShardKey: &clustermetadatapb.ShardKey{Database: "db1", TableGroup: "tg1", Shard: "0"},
 		},
 		{
-			Code:     types.ProblemReplicaNotReplicating,
+			Code:     types.ProblemNeedsSetPrimary,
 			PoolerID: poolerID2,
 			ShardKey: &clustermetadatapb.ShardKey{Database: "db1", TableGroup: "tg1", Shard: "0"},
 		},
@@ -233,7 +232,7 @@ func TestPrioritySorting(t *testing.T) {
 
 	problems := []types.Problem{
 		{
-			Code:     types.ProblemReplicaNotReplicating,
+			Code:     types.ProblemNeedsSetPrimary,
 			PoolerID: poolerID2,
 			ShardKey: &clustermetadatapb.ShardKey{Database: "db1", TableGroup: "tg1", Shard: "0"},
 			Priority: types.PriorityHigh,
@@ -263,7 +262,7 @@ func TestPrioritySorting(t *testing.T) {
 	assert.Equal(t, types.ProblemLeaderIsDead, problems[0].Code)
 
 	assert.Equal(t, types.PriorityHigh, problems[1].Priority)
-	assert.Equal(t, types.ProblemReplicaNotReplicating, problems[1].Code)
+	assert.Equal(t, types.ProblemNeedsSetPrimary, problems[1].Code)
 
 	assert.Equal(t, types.PriorityNormal, problems[2].Priority)
 	assert.Equal(t, types.ProblemCode("ConfigurationDrift"), problems[2].Code)
@@ -386,7 +385,7 @@ func TestFilterAndPrioritize_ShardWideOnly(t *testing.T) {
 	// Create problems with different scopes
 	problems := []types.Problem{
 		{
-			Code:     types.ProblemReplicaNotReplicating,
+			Code:     types.ProblemNeedsSetPrimary,
 			PoolerID: poolerID2,
 			Priority: types.PriorityHigh,
 			Scope:    types.ScopePooler,
@@ -452,7 +451,7 @@ func TestFilterAndPrioritize_NoShardWide(t *testing.T) {
 	// Create problems - two for pooler1, one for pooler2
 	problems := []types.Problem{
 		{
-			Code:     types.ProblemReplicaNotReplicating,
+			Code:     types.ProblemNeedsSetPrimary,
 			PoolerID: poolerID1,
 			Priority: types.PriorityHigh,
 			Scope:    types.ScopePooler,
@@ -463,7 +462,7 @@ func TestFilterAndPrioritize_NoShardWide(t *testing.T) {
 			},
 		},
 		{
-			Code:     types.ProblemLeaderMisconfigured,
+			Code:     types.ProblemNeedsRewind,
 			PoolerID: poolerID1,
 			Priority: types.PriorityNormal,
 			Scope:    types.ScopePooler,
@@ -474,7 +473,7 @@ func TestFilterAndPrioritize_NoShardWide(t *testing.T) {
 			},
 		},
 		{
-			Code:     types.ProblemReplicaLagging,
+			Code:     types.ProblemPoolerNotInCohort,
 			PoolerID: poolerID2,
 			Priority: types.PriorityNormal,
 			Scope:    types.ScopePooler,
@@ -491,9 +490,9 @@ func TestFilterAndPrioritize_NoShardWide(t *testing.T) {
 
 	// Should keep only highest priority problem per pooler
 	require.Len(t, filtered, 3)
-	assert.Equal(t, types.ProblemReplicaNotReplicating, filtered[0].Code)
-	assert.Equal(t, types.ProblemLeaderMisconfigured, filtered[1].Code)
-	assert.Equal(t, types.ProblemReplicaLagging, filtered[2].Code)
+	assert.Equal(t, types.ProblemNeedsSetPrimary, filtered[0].Code)
+	assert.Equal(t, types.ProblemNeedsRewind, filtered[1].Code)
+	assert.Equal(t, types.ProblemPoolerNotInCohort, filtered[2].Code)
 }
 
 // TestFilterAndPrioritize_MultipleShardWide tests that when multiple shard-wide
@@ -572,7 +571,7 @@ func (m *mockPrimaryDeadAnalyzer) RecoveryAction() types.RecoveryAction {
 func (m *mockPrimaryDeadAnalyzer) Analyze(sa *analysis.ShardAnalysis) ([]types.Problem, error) {
 	var problems []types.Problem
 	for _, a := range sa.Analyses {
-		if a.IsLeader && !a.LastCheckValid {
+		if commonconsensus.IsLeader(a.ConsensusStatus) && !a.LastCheckValid {
 			problems = append(problems, types.Problem{
 				Code:           types.ProblemLeaderIsDead,
 				CheckName:      m.Name(),
@@ -599,7 +598,7 @@ func (m *mockReplicaNotReplicatingAnalyzer) Name() types.CheckName {
 }
 
 func (m *mockReplicaNotReplicatingAnalyzer) ProblemCode() types.ProblemCode {
-	return types.ProblemReplicaNotReplicating
+	return types.ProblemNeedsSetPrimary
 }
 
 func (m *mockReplicaNotReplicatingAnalyzer) RecoveryAction() types.RecoveryAction {
@@ -609,9 +608,9 @@ func (m *mockReplicaNotReplicatingAnalyzer) RecoveryAction() types.RecoveryActio
 func (m *mockReplicaNotReplicatingAnalyzer) Analyze(sa *analysis.ShardAnalysis) ([]types.Problem, error) {
 	var problems []types.Problem
 	for _, a := range sa.Analyses {
-		if !a.IsLeader && a.ReplicationStopped {
+		if !commonconsensus.IsLeader(a.ConsensusStatus) && a.ReplicationStatus.GetIsWalReplayPaused() {
 			problems = append(problems, types.Problem{
-				Code:           types.ProblemReplicaNotReplicating,
+				Code:           types.ProblemNeedsSetPrimary,
 				CheckName:      m.Name(),
 				PoolerID:       a.PoolerID,
 				ShardKey:       a.ShardKey,
@@ -826,7 +825,7 @@ func TestProcessShardProblems_DependencyEnforcement(t *testing.T) {
 		// Should detect only replica problem
 		problems := detectProblems(t, engine)
 		require.Len(t, problems, 1, "should detect only replica not replicating")
-		assert.Equal(t, types.ProblemReplicaNotReplicating, problems[0].Code)
+		assert.Equal(t, types.ProblemNeedsSetPrimary, problems[0].Code)
 
 		shardKey := &clustermetadatapb.ShardKey{Database: "db1", TableGroup: "tg1", Shard: "0"}
 
@@ -1373,9 +1372,9 @@ func TestRecoveryLoop_PriorityOrdering(t *testing.T) {
 	// Create three separate analyzers, each detecting a problem with different priority
 	normalAnalyzer := &customAnalyzer{
 		analyzeFn: func(a *analysis.PoolerAnalysis) *types.Problem {
-			if !a.IsLeader && a.ReplicationStopped {
+			if !commonconsensus.IsLeader(a.ConsensusStatus) && a.ReplicationStatus.GetIsWalReplayPaused() {
 				return &types.Problem{
-					Code:           types.ProblemReplicaNotReplicating,
+					Code:           types.ProblemNeedsSetPrimary,
 					CheckName:      "NormalPriorityAnalyzer",
 					PoolerID:       a.PoolerID,
 					ShardKey:       a.ShardKey,
@@ -1389,15 +1388,15 @@ func TestRecoveryLoop_PriorityOrdering(t *testing.T) {
 			return nil
 		},
 		name:           "NormalPriorityAnalyzer",
-		problemCode:    types.ProblemReplicaNotReplicating,
+		problemCode:    types.ProblemNeedsSetPrimary,
 		recoveryAction: normalRecovery,
 	}
 
 	emergencyAnalyzer := &customAnalyzer{
 		analyzeFn: func(a *analysis.PoolerAnalysis) *types.Problem {
-			if !a.IsLeader && a.ReplicationStopped {
+			if !commonconsensus.IsLeader(a.ConsensusStatus) && a.ReplicationStatus.GetIsWalReplayPaused() {
 				return &types.Problem{
-					Code:           types.ProblemReplicaNotReplicating,
+					Code:           types.ProblemNeedsSetPrimary,
 					CheckName:      "EmergencyPriorityAnalyzer",
 					PoolerID:       a.PoolerID,
 					ShardKey:       a.ShardKey,
@@ -1411,15 +1410,15 @@ func TestRecoveryLoop_PriorityOrdering(t *testing.T) {
 			return nil
 		},
 		name:           "EmergencyPriorityAnalyzer",
-		problemCode:    types.ProblemReplicaNotReplicating,
+		problemCode:    types.ProblemNeedsSetPrimary,
 		recoveryAction: emergencyRecovery,
 	}
 
 	highAnalyzer := &customAnalyzer{
 		analyzeFn: func(a *analysis.PoolerAnalysis) *types.Problem {
-			if !a.IsLeader && a.ReplicationStopped {
+			if !commonconsensus.IsLeader(a.ConsensusStatus) && a.ReplicationStatus.GetIsWalReplayPaused() {
 				return &types.Problem{
-					Code:           types.ProblemReplicaNotReplicating,
+					Code:           types.ProblemNeedsSetPrimary,
 					CheckName:      "HighPriorityAnalyzer",
 					PoolerID:       a.PoolerID,
 					ShardKey:       a.ShardKey,
@@ -1433,7 +1432,7 @@ func TestRecoveryLoop_PriorityOrdering(t *testing.T) {
 			return nil
 		},
 		name:           "HighPriorityAnalyzer",
-		problemCode:    types.ProblemReplicaNotReplicating,
+		problemCode:    types.ProblemNeedsSetPrimary,
 		recoveryAction: highRecovery,
 	}
 
@@ -1534,9 +1533,9 @@ func TestRecoveryLoop_TracingSpans(t *testing.T) {
 
 	analyzeFunc := func(a *analysis.PoolerAnalysis) *types.Problem {
 		// Detect replica with paused WAL replay
-		if !a.IsLeader && a.ReplicationStopped {
+		if !commonconsensus.IsLeader(a.ConsensusStatus) && a.ReplicationStatus.GetIsWalReplayPaused() {
 			return &types.Problem{
-				Code:           types.ProblemReplicaNotReplicating,
+				Code:           types.ProblemNeedsSetPrimary,
 				CheckName:      "TracingTestAnalyzer",
 				PoolerID:       a.PoolerID,
 				ShardKey:       a.ShardKey,
@@ -1553,7 +1552,7 @@ func TestRecoveryLoop_TracingSpans(t *testing.T) {
 	analyzer := &customAnalyzer{
 		analyzeFn:      analyzeFunc,
 		name:           "TracingTestAnalyzer",
-		problemCode:    types.ProblemReplicaNotReplicating,
+		problemCode:    types.ProblemNeedsSetPrimary,
 		recoveryAction: successAction,
 	}
 
@@ -1646,7 +1645,7 @@ func TestRecoveryLoop_TracingSpans(t *testing.T) {
 		}
 		if attr.Key == "problem.code" {
 			foundProblem = true
-			assert.Equal(t, string(types.ProblemReplicaNotReplicating), attr.Value.AsString())
+			assert.Equal(t, string(types.ProblemNeedsSetPrimary), attr.Value.AsString())
 		}
 	}
 	assert.True(t, foundDatabase, "attempt span should have shard.database attribute")

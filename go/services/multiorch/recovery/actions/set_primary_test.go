@@ -33,8 +33,10 @@ import (
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
 
-const setPrimaryTestPrimaryKey = "multipooler-cell1-primary"
-const setPrimaryTestReplicaKey = "multipooler-cell1-replica1"
+const (
+	setPrimaryTestPrimaryKey = "multipooler-cell1-primary"
+	setPrimaryTestReplicaKey = "multipooler-cell1-replica1"
+)
 
 func setPrimaryTestShardKey() *clustermetadatapb.ShardKey {
 	return &clustermetadatapb.ShardKey{Database: "testdb", TableGroup: "default", Shard: "0"}

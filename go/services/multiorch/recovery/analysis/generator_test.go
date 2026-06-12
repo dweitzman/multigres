@@ -97,7 +97,7 @@ func TestAnalysisGenerator_GenerateShardAnalyses_SinglePrimary(t *testing.T) {
 	assert.Equal(t, "testdb", analysis.ShardKey.Database)
 	assert.Equal(t, "testtg", analysis.ShardKey.TableGroup)
 	assert.Equal(t, "0", analysis.ShardKey.Shard)
-	assert.True(t, analysis.IsLeader)
+	assert.True(t, commonconsensus.IsLeader(analysis.ConsensusStatus))
 	assert.True(t, analysis.LastCheckValid)
 }
 
@@ -205,14 +205,14 @@ func TestAnalysisGenerator_GenerateShardAnalyses_PrimaryWithReplicas(t *testing.
 	// Find the primary analysis
 	var primaryAnalysis *PoolerAnalysis
 	for _, a := range analyses {
-		if a.IsLeader {
+		if commonconsensus.IsLeader(a.ConsensusStatus) {
 			primaryAnalysis = a
 			break
 		}
 	}
 
 	require.NotNil(t, primaryAnalysis, "should find primary analysis")
-	assert.True(t, primaryAnalysis.IsLeader)
+	assert.True(t, commonconsensus.IsLeader(primaryAnalysis.ConsensusStatus))
 }
 
 func TestAnalysisGenerator_GenerateShardAnalyses_Replica(t *testing.T) {
@@ -287,7 +287,7 @@ func TestAnalysisGenerator_GenerateShardAnalyses_Replica(t *testing.T) {
 	// Find the replica analysis
 	replicaAnalysis := sa.Replicas()
 	require.Len(t, replicaAnalysis, 1, "should find one replica")
-	assert.False(t, replicaAnalysis[0].IsLeader)
+	assert.False(t, commonconsensus.IsLeader(replicaAnalysis[0].ConsensusStatus))
 
 	// Primary health is now a shard-level field
 	assert.NotNil(t, sa.HighestTermDiscoveredLeaderID, "should have topology primary ID populated")

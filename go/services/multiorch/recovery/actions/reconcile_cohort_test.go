@@ -55,6 +55,29 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 	replicaID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "replica1"}
 	shardKey := &clustermetadatapb.ShardKey{Database: "testdb", TableGroup: "default", Shard: "0"}
 
+	// leaderConsensus is the primary's consensus status: it names itself as the
+	// shard leader at rule (term 3, subterm 7), so FindHealthyPrimary identifies
+	// and health-checks it via commonconsensus.IsLeader.
+	leaderConsensus := func() *clustermetadatapb.ConsensusStatus {
+		return &clustermetadatapb.ConsensusStatus{
+			Id:             primaryID,
+			TermRevocation: &clustermetadatapb.TermRevocation{RevokedBelowTerm: 3},
+			CurrentPosition: &clustermetadatapb.PoolerPosition{
+				Rule: &clustermetadatapb.ShardRule{
+					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 3, LeaderSubterm: 7},
+					LeaderId:   primaryID,
+				},
+			},
+		}
+	}
+	// leaderStatusResponse is what the primary returns from Status, naming itself
+	// the leader so FindHealthyPrimary's health check passes.
+	leaderStatusResponse := func() *rpcclient.ResponseWithDelay[*multipoolermanagerdatapb.StatusResponse] {
+		return &rpcclient.ResponseWithDelay[*multipoolermanagerdatapb.StatusResponse]{
+			Response: &multipoolermanagerdatapb.StatusResponse{ConsensusStatus: leaderConsensus()},
+		}
+	}
+
 	setupStore := func(t *testing.T, fakeClient *rpcclient.FakeClient) (*store.PoolerStore, func()) {
 		t.Helper()
 		ts, _ := memorytopo.NewServerAndFactory(ctx, "cell1")
@@ -67,14 +90,7 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 				Hostname: "primary.example.com",
 				PortMap:  map[string]int32{"postgres": 5432},
 			},
-			ConsensusStatus: &clustermetadatapb.ConsensusStatus{
-				TermRevocation: &clustermetadatapb.TermRevocation{RevokedBelowTerm: 3},
-				CurrentPosition: &clustermetadatapb.PoolerPosition{
-					Rule: &clustermetadatapb.ShardRule{
-						RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 3, LeaderSubterm: 7},
-					},
-				},
-			},
+			ConsensusStatus: leaderConsensus(),
 		})
 		ps.Set("multipooler-cell1-replica1", &multiorchdatapb.PoolerHealthState{
 			MultiPooler: &clustermetadatapb.MultiPooler{
@@ -92,9 +108,7 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 	t.Run("ProblemPoolerNotInCohort issues UpdateConsensusRule with ADD", func(t *testing.T) {
 		fakeClient := &rpcclient.FakeClient{
 			StatusResponses: map[string]*rpcclient.ResponseWithDelay[*multipoolermanagerdatapb.StatusResponse]{
-				"multipooler-cell1-primary": {Response: &multipoolermanagerdatapb.StatusResponse{
-					Status: &multipoolermanagerdatapb.Status{IsInitialized: true, PoolerType: clustermetadatapb.PoolerType_PRIMARY},
-				}},
+				"multipooler-cell1-primary": leaderStatusResponse(),
 			},
 			UpdateConsensusRuleResponses: map[string]*multipoolermanagerdatapb.UpdateConsensusRuleResponse{
 				"multipooler-cell1-primary": {},
@@ -125,9 +139,7 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 	t.Run("ProblemCohortMemberIneligible issues UpdateConsensusRule with REMOVE", func(t *testing.T) {
 		fakeClient := &rpcclient.FakeClient{
 			StatusResponses: map[string]*rpcclient.ResponseWithDelay[*multipoolermanagerdatapb.StatusResponse]{
-				"multipooler-cell1-primary": {Response: &multipoolermanagerdatapb.StatusResponse{
-					Status: &multipoolermanagerdatapb.Status{IsInitialized: true, PoolerType: clustermetadatapb.PoolerType_PRIMARY},
-				}},
+				"multipooler-cell1-primary": leaderStatusResponse(),
 			},
 			UpdateConsensusRuleResponses: map[string]*multipoolermanagerdatapb.UpdateConsensusRuleResponse{
 				"multipooler-cell1-primary": {},
@@ -153,16 +165,16 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 	t.Run("returns FAILED_PRECONDITION when primary has no recorded rule", func(t *testing.T) {
 		fakeClient := &rpcclient.FakeClient{
 			StatusResponses: map[string]*rpcclient.ResponseWithDelay[*multipoolermanagerdatapb.StatusResponse]{
-				"multipooler-cell1-primary": {Response: &multipoolermanagerdatapb.StatusResponse{
-					Status: &multipoolermanagerdatapb.Status{IsInitialized: true, PoolerType: clustermetadatapb.PoolerType_PRIMARY},
-				}},
+				"multipooler-cell1-primary": leaderStatusResponse(),
 			},
 		}
 		ts, _ := memorytopo.NewServerAndFactory(ctx, "cell1")
 		defer ts.Close()
 		ps := store.NewPoolerStore(fakeClient, slog.Default())
-		// Primary with no CurrentPosition.Rule — e.g. fresh process before
-		// the first health snapshot populates the consensus rule.
+		// Primary that names itself the leader but has no recorded RuleNumber —
+		// e.g. a fresh process before the first snapshot populates the rule.
+		// FindHealthyPrimary still identifies it (LeaderId is set), but the cohort
+		// reconcile has no rule to CAS against.
 		ps.Set("multipooler-cell1-primary", &multiorchdatapb.PoolerHealthState{
 			MultiPooler: &clustermetadatapb.MultiPooler{
 				Id:       primaryID,
@@ -171,7 +183,12 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 				Hostname: "primary.example.com",
 				PortMap:  map[string]int32{"postgres": 5432},
 			},
-			ConsensusStatus: &clustermetadatapb.ConsensusStatus{},
+			ConsensusStatus: &clustermetadatapb.ConsensusStatus{
+				Id: primaryID,
+				CurrentPosition: &clustermetadatapb.PoolerPosition{
+					Rule: &clustermetadatapb.ShardRule{LeaderId: primaryID},
+				},
+			},
 		})
 		ps.Set("multipooler-cell1-replica1", &multiorchdatapb.PoolerHealthState{
 			MultiPooler: &clustermetadatapb.MultiPooler{
@@ -267,9 +284,7 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 	t.Run("rejects unsupported problem code", func(t *testing.T) {
 		fakeClient := &rpcclient.FakeClient{
 			StatusResponses: map[string]*rpcclient.ResponseWithDelay[*multipoolermanagerdatapb.StatusResponse]{
-				"multipooler-cell1-primary": {Response: &multipoolermanagerdatapb.StatusResponse{
-					Status: &multipoolermanagerdatapb.Status{IsInitialized: true, PoolerType: clustermetadatapb.PoolerType_PRIMARY},
-				}},
+				"multipooler-cell1-primary": leaderStatusResponse(),
 			},
 		}
 		ps, cleanup := setupStore(t, fakeClient)

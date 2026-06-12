@@ -503,7 +503,7 @@ func TestRecoveryGracePeriod_NonTrackedProblemTypes(t *testing.T) {
 
 	// IsDeadlineExpired should return true (execute immediately)
 	problem := types.Problem{
-		Code:           types.ProblemReplicaNotReplicating,
+		Code:           types.ProblemNeedsSetPrimary,
 		RecoveryAction: action,
 		ShardKey: &clustermetadatapb.ShardKey{
 			Database:   "testdb",
@@ -520,11 +520,11 @@ func TestRecoveryGracePeriod_NonTrackedProblemTypes(t *testing.T) {
 	poolerIDStr := topoclient.MultiPoolerIDString(problem.PoolerID)
 
 	// Reset should be a noop for non-tracked problem types
-	tracker.Observe(types.ProblemReplicaNotReplicating, poolerIDStr, action, true)
+	tracker.Observe(types.ProblemNeedsSetPrimary, poolerIDStr, action, true)
 
 	// Verify no entry was created
 	tracker.mu.Lock()
-	key := gracePeriodKey{code: types.ProblemReplicaNotReplicating, entityID: poolerIDStr}
+	key := gracePeriodKey{code: types.ProblemNeedsSetPrimary, entityID: poolerIDStr}
 	_, exists := tracker.deadlines[key]
 	tracker.mu.Unlock()
 
@@ -619,7 +619,7 @@ func TestRecoveryGracePeriod_ForceExpireAll(t *testing.T) {
 		RecoveryAction: action,
 	}
 	problemB := types.Problem{
-		Code:           types.ProblemStaleLeader,
+		Code:           types.ProblemNeedsRewind,
 		Scope:          types.ScopePooler,
 		PoolerID:       poolerID,
 		ShardKey:       shardKey,
@@ -629,7 +629,7 @@ func TestRecoveryGracePeriod_ForceExpireAll(t *testing.T) {
 	// Observe both problems as unhealthy using the same entity IDs as the recovery loop
 	// (string(commontypes.FormatShardKey(shardKey) for shard-wide, MultiPoolerIDString for pooler-scoped).
 	tracker.Observe(types.ProblemLeaderIsDead, problemA.EntityID(), action, false)
-	tracker.Observe(types.ProblemStaleLeader, problemB.EntityID(), action, false)
+	tracker.Observe(types.ProblemNeedsRewind, problemB.EntityID(), action, false)
 
 	// Neither problem should execute yet (deadline is 10s away)
 	require.False(t, tracker.ShouldExecute(problemA), "should not execute before grace period expires")

@@ -64,7 +64,6 @@ func TestLeaderIsDeadAnalyzer_Analyze(t *testing.T) {
 				{
 					PoolerID:      &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "follower-1"},
 					ShardKey:      shardKey,
-					IsLeader:      false,
 					IsInitialized: true,
 				},
 			},

@@ -149,8 +149,8 @@ func (a *ReconcileCohortAction) RequiresHealthyLeader() bool {
 
 func (a *ReconcileCohortAction) Metadata() types.RecoveryMetadata {
 	return types.RecoveryMetadata{
-		Name:        "ReconcileCohort",
-		Timeout:     30 * time.Second,
+		Name:    "ReconcileCohort",
+		Timeout: 30 * time.Second,
 	}
 }
 

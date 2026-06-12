@@ -133,8 +133,8 @@ func (a *SetPrimaryAction) RequiresHealthyLeader() bool {
 
 func (a *SetPrimaryAction) Metadata() types.RecoveryMetadata {
 	return types.RecoveryMetadata{
-		Name:        "SetPrimary",
-		Timeout:     45 * time.Second,
+		Name:    "SetPrimary",
+		Timeout: 45 * time.Second,
 	}
 }
 
