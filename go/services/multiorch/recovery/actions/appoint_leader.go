@@ -22,6 +22,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/timeouts"
 	"github.com/multigres/multigres/go/common/topoclient"
@@ -85,14 +86,12 @@ func (a *AppointLeaderAction) Execute(ctx context.Context, problem types.Problem
 	// is not ready, or if the primary has signalled it needs replacement, we still
 	// need to trigger failover.
 	//
-	// Note: this relies on the resign flow maintaining PoolerType_PRIMARY until
-	// the stale-leader demotion completes. If a node somehow becomes the consensus
-	// leader while reporting PoolerType_REPLICA (e.g. a crash-restart as standby
-	// without going through the normal resign → appoint → demote flow), this check
-	// would miss it and proceed with an appointment unnecessarily.
+	// Leadership is judged from consensus, not the PoolerType label: a node that
+	// is the consensus leader, reachable, and postgres-ready means a healthy
+	// primary already exists and no appointment is needed.
 	for _, pooler := range cohort {
 		if pooler.MultiPooler == nil ||
-			pooler.GetStatus().GetPoolerType() != clustermetadatapb.PoolerType_PRIMARY ||
+			!commonconsensus.IsLeader(pooler.GetConsensusStatus()) ||
 			!pooler.IsLastCheckValid ||
 			!pooler.GetStatus().GetPostgresReady() {
 			continue

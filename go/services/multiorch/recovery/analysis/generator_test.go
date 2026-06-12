@@ -438,13 +438,14 @@ func TestPopulatePrimaryInfo_PrimaryPostgresDown(t *testing.T) {
 	replicaID := "multipooler-cell1-replica"
 
 	// Primary with PostgresReady: false (postgres is down)
+	primaryProtoID := &clustermetadatapb.ID{
+		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Cell:      "cell1",
+		Name:      "primary",
+	}
 	ps.Set(primaryID, &multiorchdatapb.PoolerHealthState{
 		MultiPooler: &clustermetadatapb.MultiPooler{
-			Id: &clustermetadatapb.ID{
-				Component: clustermetadatapb.ID_MULTIPOOLER,
-				Cell:      "cell1",
-				Name:      "primary",
-			},
+			Id: primaryProtoID,
 			ShardKey: &clustermetadatapb.ShardKey{
 				Database:   "db1",
 				TableGroup: "tg1",
@@ -452,6 +453,7 @@ func TestPopulatePrimaryInfo_PrimaryPostgresDown(t *testing.T) {
 			},
 		},
 		IsLastCheckValid: true,
+		ConsensusStatus:  primaryConsensusStatus(primaryProtoID, 1),
 		Status: &multipoolermanagerdatapb.Status{
 			PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 			PostgresReady: false, // Postgres is down!
@@ -710,6 +712,7 @@ func TestIsInStandbyList(t *testing.T) {
 				IsLastCheckValid: true,
 				IsUpToDate:       true,
 				LastSeen:         timestamppb.Now(),
+				ConsensusStatus:  primaryConsensusStatus(primaryID, 1),
 				Status: &multipoolermanagerdatapb.Status{
 					PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 					PostgresReady: true,
@@ -737,13 +740,14 @@ func TestPopulatePrimaryInfo_PrimaryHealthFields(t *testing.T) {
 
 		// Primary with pooler reachable and postgres running
 		respondedAt := time.Now().Add(-3 * time.Second)
+		primaryProtoID := &clustermetadatapb.ID{
+			Component: clustermetadatapb.ID_MULTIPOOLER,
+			Cell:      "cell1",
+			Name:      "primary",
+		}
 		ps.Set(primaryID, &multiorchdatapb.PoolerHealthState{
 			MultiPooler: &clustermetadatapb.MultiPooler{
-				Id: &clustermetadatapb.ID{
-					Component: clustermetadatapb.ID_MULTIPOOLER,
-					Cell:      "cell1",
-					Name:      "primary",
-				},
+				Id: primaryProtoID,
 				ShardKey: &clustermetadatapb.ShardKey{
 					Database:   "db1",
 					TableGroup: "tg1",
@@ -754,6 +758,7 @@ func TestPopulatePrimaryInfo_PrimaryHealthFields(t *testing.T) {
 			},
 			IsLastCheckValid:      true,
 			LastPostgresReadyTime: timestamppb.New(respondedAt),
+			ConsensusStatus:       primaryConsensusStatus(primaryProtoID, 1),
 			Status: &multipoolermanagerdatapb.Status{
 				PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 				PostgresReady: true,
@@ -872,6 +877,9 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 				PortMap:  map[string]int32{"postgres": 5432},
 			},
 			IsLastCheckValid: false, // Primary pooler is down
+			ConsensusStatus: primaryConsensusStatus(&clustermetadatapb.ID{
+				Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary",
+			}, 1),
 			Status: &multipoolermanagerdatapb.Status{
 				PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 				PostgresReady: false,
@@ -970,6 +978,9 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 				PortMap:  map[string]int32{"postgres": 5432},
 			},
 			IsLastCheckValid: false,
+			ConsensusStatus: primaryConsensusStatus(&clustermetadatapb.ID{
+				Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary",
+			}, 1),
 			Status: &multipoolermanagerdatapb.Status{
 				PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 				PostgresReady: false,
@@ -1059,6 +1070,9 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 				PortMap:  map[string]int32{"postgres": 5432},
 			},
 			IsLastCheckValid: false,
+			ConsensusStatus: primaryConsensusStatus(&clustermetadatapb.ID{
+				Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary",
+			}, 1),
 			Status: &multipoolermanagerdatapb.Status{
 				PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 				PostgresReady: false,
@@ -1116,6 +1130,9 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 				PortMap:  map[string]int32{"postgres": 5432},
 			},
 			IsLastCheckValid: true,
+			ConsensusStatus: primaryConsensusStatus(&clustermetadatapb.ID{
+				Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary",
+			}, 1),
 			Status: &multipoolermanagerdatapb.Status{
 				PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 				PostgresReady: true,
@@ -1152,6 +1169,9 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 				PortMap:  map[string]int32{"postgres": 5432},
 			},
 			IsLastCheckValid: false,
+			ConsensusStatus: primaryConsensusStatus(&clustermetadatapb.ID{
+				Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary",
+			}, 1),
 			Status: &multipoolermanagerdatapb.Status{
 				PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 				PostgresReady: false,
@@ -1212,6 +1232,9 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 				Hostname: "primary-host",
 				PortMap:  map[string]int32{"postgres": 5432},
 			},
+			ConsensusStatus: primaryConsensusStatus(&clustermetadatapb.ID{
+				Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary",
+			}, 1),
 			Status: &multipoolermanagerdatapb.Status{
 				PoolerType: clustermetadatapb.PoolerType_PRIMARY,
 			},
@@ -1268,6 +1291,9 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 				Hostname: "primary-host",
 				PortMap:  map[string]int32{"postgres": 5432},
 			},
+			ConsensusStatus: primaryConsensusStatus(&clustermetadatapb.ID{
+				Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary",
+			}, 1),
 			Status: &multipoolermanagerdatapb.Status{
 				PoolerType: clustermetadatapb.PoolerType_PRIMARY,
 			},
@@ -1328,6 +1354,9 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 				Hostname: "primary-host",
 				PortMap:  map[string]int32{"postgres": 5432},
 			},
+			ConsensusStatus: primaryConsensusStatus(&clustermetadatapb.ID{
+				Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary",
+			}, 1),
 			Status: &multipoolermanagerdatapb.Status{
 				PoolerType: clustermetadatapb.PoolerType_PRIMARY,
 			},
@@ -1391,6 +1420,9 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 				Hostname: "primary-host",
 				PortMap:  map[string]int32{"postgres": 5432},
 			},
+			ConsensusStatus: primaryConsensusStatus(&clustermetadatapb.ID{
+				Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary",
+			}, 1),
 			Status: &multipoolermanagerdatapb.Status{
 				PoolerType: clustermetadatapb.PoolerType_PRIMARY,
 			},
@@ -1458,6 +1490,9 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 				Hostname: "primary-host",
 				PortMap:  map[string]int32{"postgres": 5432},
 			},
+			ConsensusStatus: primaryConsensusStatus(&clustermetadatapb.ID{
+				Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary",
+			}, 1),
 			Status: &multipoolermanagerdatapb.Status{
 				PoolerType: clustermetadatapb.PoolerType_PRIMARY,
 			},
@@ -1517,6 +1552,9 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 			},
 			IsLastCheckValid:        false,
 			StreamSnapshotsReceived: 5,
+			ConsensusStatus: primaryConsensusStatus(&clustermetadatapb.ID{
+				Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary",
+			}, 1),
 			Status: &multipoolermanagerdatapb.Status{
 				PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 				PostgresReady: false,
@@ -1599,6 +1637,7 @@ func TestPopulatePrimaryInfo_IsInPrimaryStandbyList(t *testing.T) {
 		IsLastCheckValid: true,
 		IsUpToDate:       true,
 		LastSeen:         timestamppb.Now(),
+		ConsensusStatus:  primaryConsensusStatus(primaryID, 1),
 		Status: &multipoolermanagerdatapb.Status{
 			PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 			PostgresReady: true,
@@ -1793,10 +1832,7 @@ func TestDetectOtherPrimary(t *testing.T) {
 		sa, err := generator.GenerateShardAnalysis(shardKey)
 		require.NoError(t, err)
 
-		// Both primaries detected in shard
-		require.Len(t, sa.Leaders, 2)
-
-		// primary-2 has higher PrimaryTerm, so it's the most advanced
+		// primary-2 has higher PrimaryTerm, so it's the single leader.
 		require.NotNil(t, sa.HighestTermReachableLeader)
 		assert.Equal(t, "primary-2", sa.HighestTermReachableLeader.PoolerID.Name)
 		assert.Equal(t, int64(6), commonconsensus.LeaderTerm(sa.HighestTermReachableLeader.ConsensusStatus))
@@ -1812,17 +1848,6 @@ func TestDetectOtherPrimary(t *testing.T) {
 
 		sa, err := generator.GenerateShardAnalysis(shardKey)
 		require.NoError(t, err)
-
-		// All three primaries detected in shard
-		require.Len(t, sa.Leaders, 3)
-
-		primaryNames := make([]string, len(sa.Leaders))
-		for i, p := range sa.Leaders {
-			primaryNames[i] = p.PoolerID.Name
-		}
-		assert.Contains(t, primaryNames, "primary-1")
-		assert.Contains(t, primaryNames, "primary-2")
-		assert.Contains(t, primaryNames, "primary-3")
 
 		// primary-3 has highest PrimaryTerm (6), even though primary-1 has highest ConsensusTerm (11).
 		// This verifies we're comparing on PrimaryTerm, not ConsensusTerm.
@@ -1842,9 +1867,6 @@ func TestDetectOtherPrimary(t *testing.T) {
 		sa, err := generator.GenerateShardAnalysis(shardKey)
 		require.NoError(t, err)
 
-		// All three primaries detected in shard
-		require.Len(t, sa.Leaders, 3)
-
 		// This primary has highest PrimaryTerm (7), so it's the most advanced
 		require.NotNil(t, sa.HighestTermReachableLeader)
 		assert.Equal(t, "primary-1", sa.HighestTermReachableLeader.PoolerID.Name)
@@ -1860,9 +1882,6 @@ func TestDetectOtherPrimary(t *testing.T) {
 
 		sa, err := generator.GenerateShardAnalysis(shardKey)
 		require.NoError(t, err)
-
-		// Both primaries detected in shard
-		require.Len(t, sa.Leaders, 2)
 
 		// Tie detected, so HighestTermPrimary should be nil
 		assert.Nil(t, sa.HighestTermReachableLeader, "tie in PrimaryTerm should result in nil HighestTermPrimary")
@@ -1881,9 +1900,6 @@ func TestDetectOtherPrimary(t *testing.T) {
 		sa, err := generator.GenerateShardAnalysis(shardKey)
 		require.NoError(t, err)
 
-		// Both primaries detected in shard
-		require.Len(t, sa.Leaders, 2)
-
 		// All PrimaryTerm=0 is invalid state, defensive check returns nil
 		assert.Nil(t, sa.HighestTermReachableLeader, "all PrimaryTerm=0 (invalid state) should result in nil HighestTermPrimary")
 	})
@@ -1898,9 +1914,6 @@ func TestDetectOtherPrimary(t *testing.T) {
 
 		sa, err := generator.GenerateShardAnalysis(shardKey)
 		require.NoError(t, err)
-
-		// All three primaries detected in shard
-		require.Len(t, sa.Leaders, 3)
 
 		// primary-2 has non-zero PrimaryTerm (5), so it's the most advanced
 		require.NotNil(t, sa.HighestTermReachableLeader)
@@ -1917,16 +1930,13 @@ func TestDetectOtherPrimary(t *testing.T) {
 		sa, err := generator.GenerateShardAnalysis(shardKey)
 		require.NoError(t, err)
 
-		// Single primary in shard
-		require.Len(t, sa.Leaders, 1)
-
 		// Single primary is still the most advanced
 		require.NotNil(t, sa.HighestTermReachableLeader)
 		assert.Equal(t, "primary-1", sa.HighestTermReachableLeader.PoolerID.Name)
 		assert.Equal(t, int64(5), commonconsensus.LeaderTerm(sa.HighestTermReachableLeader.ConsensusStatus))
 	})
 
-	t.Run("unreachable primary not detected", func(t *testing.T) {
+	t.Run("highest-term leader unreachable yields no reachable leader", func(t *testing.T) {
 		store := setupMultiplePrimariesStoreWithReachability(t, []primaryConfigWithReachability{
 			{primaryConfig: primaryConfig{id: "primary-1", primaryTerm: 5, consensusTerm: 10}, reachable: true},
 			{primaryConfig: primaryConfig{id: "primary-2", primaryTerm: 6, consensusTerm: 11}, reachable: false},
@@ -1936,13 +1946,14 @@ func TestDetectOtherPrimary(t *testing.T) {
 		sa, err := generator.GenerateShardAnalysis(shardKey)
 		require.NoError(t, err)
 
-		// Only reachable primary detected
-		require.Len(t, sa.Leaders, 1, "unreachable primaries should not be detected")
-
-		// Only this primary is reachable, so it's the most advanced
-		require.NotNil(t, sa.HighestTermReachableLeader)
-		assert.Equal(t, "primary-1", sa.HighestTermReachableLeader.PoolerID.Name)
-		assert.Equal(t, int64(5), commonconsensus.LeaderTerm(sa.HighestTermReachableLeader.ConsensusStatus))
+		// The single leader is the highest-term one (primary-2), even though it is
+		// unreachable. We must NOT fall back to the lower-term reachable primary-1 —
+		// that would anoint a stale leader. The leader is discovered but, being
+		// unreachable, is not exposed as a reachable leader; LeaderIsDead handles it.
+		require.NotNil(t, sa.HighestTermDiscoveredLeaderID)
+		assert.Equal(t, "primary-2", sa.HighestTermDiscoveredLeaderID.Name)
+		assert.Nil(t, sa.HighestTermReachableLeader,
+			"a stale lower-term reachable primary must not be treated as the leader")
 	})
 }
 

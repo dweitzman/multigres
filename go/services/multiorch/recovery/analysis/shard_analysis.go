@@ -15,7 +15,6 @@
 package analysis
 
 import (
-	"cmp"
 	"time"
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
@@ -40,13 +39,11 @@ type ShardAnalysis struct {
 
 	// Shard-level aggregates computed once by the generator.
 
-	// Leaders is the list of all reachable poolers in the shard that are reporting
-	// as the consensus leader. More than one entry usually indicates a stale-leader but
-	// could be a sign of split-brain if there's a consensus bug or unsafe manual override.
-	Leaders []*PoolerAnalysis
-
-	// HighestTermReachableLeader is the leader with the highest LeaderTerm among all
-	// leaders in Leaders. Nil when Leaders is empty or there is a tie.
+	// HighestTermReachableLeader is the shard's single leader — the highest-term
+	// consensus leader — exposed as a PoolerAnalysis only when its pooler is
+	// reachable. Nil when no leader is known or the leader is currently unreachable
+	// (LeaderIsDead handles the unreachable case). Analyzers that re-point replicas
+	// use this as the leader whose rule should be delivered.
 	HighestTermReachableLeader *PoolerAnalysis
 
 	// HighestTermDiscoveredLeaderID is the pooler ID of the highest-term leader known to exist
@@ -160,19 +157,6 @@ type PoolerAnalysis struct {
 	// (cohort eligibility, leader-resignation request). May be nil for older
 	// poolers that don't publish it.
 	AvailabilityStatus *clustermetadatapb.AvailabilityStatus
-}
-
-// compareLeaderTimeline compares two leader PoolerAnalysis entries by the
-// coordinator term of each pooler's current rule (via commonconsensus.LeaderTerm).
-// Returns negative if a is less advanced than b, 0 if equal, positive if a is
-// more advanced. LSN is intentionally excluded: for leaders, the coordinator
-// term must be unique per promotion, so equal terms indicate a consensus bug
-// rather than a resolvable tie.
-func compareLeaderTimeline(a, b *PoolerAnalysis) int {
-	return cmp.Compare(
-		commonconsensus.LeaderTerm(a.ConsensusStatus),
-		commonconsensus.LeaderTerm(b.ConsensusStatus),
-	)
 }
 
 // analyzeAllPoolers runs fn against each pooler analysis in sa, collecting all problems.
