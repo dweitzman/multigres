@@ -56,7 +56,7 @@ func pollLeaderHealth(ctx context.Context, rpcClient rpcclient.MultiPoolerClient
 		return nil, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
 			"consensus leader %s no longer reports itself as the leader", leader.GetMultiPooler().GetId().GetName())
 	}
-	if !statusResp.GetStatus().GetPostgresReady() {
+	if !statusResp.GetStatus().GetPostgresListening() {
 		return nil, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
 			"consensus leader %s postgres is not ready", leader.GetMultiPooler().GetId().GetName())
 	}

@@ -22,9 +22,12 @@ import (
 	"path/filepath"
 	"time"
 
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	"github.com/multigres/multigres/go/common/mterrors"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	pgctldpb "github.com/multigres/multigres/go/pb/pgctldservice"
+	"github.com/multigres/multigres/go/services/multipooler/internal/executor"
 	"github.com/multigres/multigres/go/tools/retry"
 )
 
@@ -114,7 +117,7 @@ func (pm *MultiPoolerManager) hasDataDirectory() bool {
 // whether it accepts connections. Returns true if the process is running (even if
 // suspended via SIGSTOP). Returns false if the process is dead (e.g. after SIGKILL).
 //
-// When pgctld is not available, falls back to isPostgresReady (which requires
+// When pgctld is not available, falls back to isPostgresListening (which requires
 // both process existence and connection acceptance).
 func (pm *MultiPoolerManager) isPostgresRunning(ctx context.Context) bool {
 	if pm.pgctldClient == nil {
@@ -134,10 +137,10 @@ func (pm *MultiPoolerManager) isPostgresRunning(ctx context.Context) bool {
 	return statusResp.Status == pgctldpb.ServerStatus_RUNNING
 }
 
-// isPostgresReady checks if PostgreSQL is currently running and accepting connections.
+// isPostgresListening checks if PostgreSQL is currently running and accepting connections.
 // Returns true only if the process is running AND pg_isready succeeds.
 // Use isPostgresRunning to check only if the process exists.
-func (pm *MultiPoolerManager) isPostgresReady(ctx context.Context) bool {
+func (pm *MultiPoolerManager) isPostgresListening(ctx context.Context) bool {
 	if pm.pgctldClient == nil {
 		// No pgctld client, try a simple query to check if PostgreSQL is responding
 		_, err := pm.query(ctx, "SELECT 1")
@@ -151,6 +154,26 @@ func (pm *MultiPoolerManager) isPostgresReady(ctx context.Context) bool {
 	}
 
 	return statusResp.Status == pgctldpb.ServerStatus_RUNNING && statusResp.Ready
+}
+
+// queryPostmasterStartTime runs a real query against postgres to determine both
+// whether it is queryable (the query succeeded) and, when it is, the postmaster
+// start time. Returns (false, nil) when the query fails — postgres is down, hung,
+// or otherwise not answering. Unlike isPostgresListening (pg_isready, which only
+// proves a connection can be opened), this proves queries actually work, and the
+// returned start time advances on every restart (useful for detecting flapping).
+func (pm *MultiPoolerManager) queryPostmasterStartTime(ctx context.Context) (bool, *timestamppb.Timestamp) {
+	queryCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	result, err := pm.query(queryCtx, "SELECT pg_postmaster_start_time()")
+	if err != nil {
+		return false, nil
+	}
+	var startTime time.Time
+	if err := executor.ScanSingleRow(result, &startTime); err != nil {
+		return false, nil
+	}
+	return true, timestamppb.New(startTime)
 }
 
 // getServerStatus returns the observed state of the PostgreSQL server process.

@@ -94,7 +94,7 @@ func TestCopyInterruptedByBackendCrash(t *testing.T) {
 		t.Fatal("COPY did not return after the backend was killed (possible hang or torn stream)")
 	}
 
-	waitForPostgresReady(t, setup, 60*time.Second)
+	waitForPostgresListening(t, setup, 60*time.Second)
 	t.Log("postgres auto-restarted by the monitor")
 
 	// A fresh connection must serve queries again after recovery.

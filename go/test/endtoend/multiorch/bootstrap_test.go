@@ -70,9 +70,9 @@ func TestBootstrapInitialization(t *testing.T) {
 			status, err := client.Manager.Status(ctx, &multipoolermanagerdatapb.StatusRequest{})
 			require.NoError(t, err, "should get status from %s", name)
 
-			t.Logf("Node %s Status: IsInitialized=%v, HasDataDirectory=%v, PostgresReady=%v, PostgresStatus=%s, PoolerType=%s, CohortMembers=%d",
+			t.Logf("Node %s Status: IsInitialized=%v, HasDataDirectory=%v, PostgresListening=%v, PostgresStatus=%s, PoolerType=%s, CohortMembers=%d",
 				name, status.Status.IsInitialized, status.Status.HasDataDirectory,
-				status.Status.PostgresReady, status.Status.PostgresStatus, status.Status.PoolerType,
+				status.Status.PostgresListening, status.Status.PostgresStatus, status.Status.PoolerType,
 				len(status.Status.CohortMembers))
 
 			// No node should have a cohort configured before multiorch starts
@@ -364,7 +364,7 @@ func TestBootstrapInitialization(t *testing.T) {
 				if !r.Status.IsInitialized {
 					return false, "not yet initialized"
 				}
-				if !r.Status.PostgresReady {
+				if !r.Status.PostgresListening {
 					return false, "postgres not running"
 				}
 				return true, ""
@@ -384,12 +384,12 @@ func TestBootstrapInitialization(t *testing.T) {
 
 		assert.True(t, status.Status.IsInitialized, "Standby should be initialized after auto-restore")
 		assert.True(t, status.Status.HasDataDirectory, "Standby should have data directory after auto-restore")
-		assert.True(t, status.Status.PostgresReady, "PostgreSQL should be running after auto-restore")
+		assert.True(t, status.Status.PostgresListening, "PostgreSQL should be running after auto-restore")
 		assert.Equal(t, multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_STANDBY, status.Status.PostgresStatus, "Should be in standby role after auto-restore")
 
-		t.Logf("Auto-restore succeeded: IsInitialized=%v, HasDataDirectory=%v, PostgresReady=%v, ServerStatus=%s",
+		t.Logf("Auto-restore succeeded: IsInitialized=%v, HasDataDirectory=%v, PostgresListening=%v, ServerStatus=%s",
 			status.Status.IsInitialized, status.Status.HasDataDirectory,
-			status.Status.PostgresReady, status.Status.PostgresStatus)
+			status.Status.PostgresListening, status.Status.PostgresStatus)
 	})
 
 	t.Run("verify archive_command config on all nodes", func(t *testing.T) {

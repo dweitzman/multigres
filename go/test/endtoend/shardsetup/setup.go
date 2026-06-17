@@ -1679,7 +1679,7 @@ func (s *ShardSetup) ReinitializeCluster(t *testing.T) {
 	// 3c. Clear stale topology state. Without this, a pooler that was elected
 	// PRIMARY in the previous suite reads its stale role from etcd on restart,
 	// finds an empty data directory (wiped in step 3), and hangs in recovery —
-	// never reaching PostgresReady. The restart loop below then times out on
+	// never reaching PostgresListening. The restart loop below then times out on
 	// WaitForManagerReady for that pooler.
 	//
 	// We wipe:
@@ -1698,7 +1698,7 @@ func (s *ShardSetup) ReinitializeCluster(t *testing.T) {
 		// has released the postmaster's listen socket — under CI load the old
 		// postmaster can still own the pg-port when we get here. Restarting now
 		// makes the new postmaster fail to bind ("could not create any TCP/IP
-		// sockets: address already in use"), so it never reaches PostgresReady
+		// sockets: address already in use"), so it never reaches PostgresListening
 		// and WaitForManagerReady times out with an opaque error. Wait for the
 		// port to actually free first.
 		waitForPortFree(t, inst.Pgctld.PgPort, 60*time.Second)
@@ -2265,7 +2265,7 @@ func formatPoolerHealth(healthList []*multiorchpb.PoolerHealth) string {
 
 		// Format as: pooler-1:PRIMARY/up or pooler-1:UNKNOWN/down
 		status := "down"
-		if h.Reachable && h.PostgresReady {
+		if h.Reachable && h.PostgresListening {
 			status = "up"
 		}
 

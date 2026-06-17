@@ -76,19 +76,19 @@ type ShardAnalysis struct {
 	// failover when only the leader pooler process is down but Postgres is still running.
 	ReplicasConnectedToLeader bool
 
-	// LeaderPostgresReady is true if the topology leader's Postgres is accepting connections
+	// LeaderPostgresListening is true if the topology leader's Postgres is accepting connections
 	// (pg_isready succeeds). Distinct from LeaderReachable: the pooler may be reachable
 	// but Postgres may not yet be ready (e.g. still starting up).
-	LeaderPostgresReady bool
+	LeaderPostgresListening bool
 
 	// LeaderPostgresRunning is true if the topology leader's Postgres process exists,
 	// even if it is not accepting connections. False when the process is dead (SIGKILL).
 	LeaderPostgresRunning bool
 
-	// LeaderLastPostgresReadyTime is the last time the topology leader's Postgres
-	// responded healthy (IsPostgresReady was true). Zero if never seen ready.
+	// LeaderLastPostgresListeningTime is the last time the topology leader's Postgres
+	// responded healthy (IsPostgresListening was true). Zero if never seen ready.
 	// Used to time-bound failover suppression when followers are still connected.
-	LeaderLastPostgresReadyTime time.Time
+	LeaderLastPostgresListeningTime time.Time
 
 	// LeaderHasResigned is true when the topology leader has voluntarily requested
 	// replacement via the REQUESTING_DEMOTION signal (set during Recruit's

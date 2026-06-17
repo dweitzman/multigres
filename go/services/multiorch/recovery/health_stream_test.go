@@ -301,8 +301,8 @@ func TestHealthStream_Disconnect(t *testing.T) {
 
 	// Inject one snapshot so the stream is "connected" with valid data.
 	stream.Ch <- makeSnapshot(&multipoolermanagerdatapb.Status{
-		PoolerType:    clustermetadata.PoolerType_PRIMARY,
-		PostgresReady: true,
+		PoolerType:        clustermetadata.PoolerType_PRIMARY,
+		PostgresListening: true,
 	})
 	require.Eventually(t, func() bool {
 		s, ok := poolerStore.Get(key)
@@ -418,9 +418,9 @@ func TestHealthStream_DeletedDuringStream(t *testing.T) {
 	require.False(t, ok, "deleted pooler should not be resurrected by a snapshot")
 }
 
-// TestHealthStream_LastPostgresReadyTime tests that LastPostgresReadyTime is set/preserved correctly.
-func TestHealthStream_LastPostgresReadyTime(t *testing.T) {
-	t.Run("sets LastPostgresReadyTime when PostgresReady is true", func(t *testing.T) {
+// TestHealthStream_LastPostgresListeningTime tests that LastPostgresListeningTime is set/preserved correctly.
+func TestHealthStream_LastPostgresListeningTime(t *testing.T) {
+	t.Run("sets LastPostgresListeningTime when PostgresListening is true", func(t *testing.T) {
 		ctx := t.Context()
 
 		fakeClient := rpcclient.NewFakeClient()
@@ -440,20 +440,20 @@ func TestHealthStream_LastPostgresReadyTime(t *testing.T) {
 
 		before := time.Now()
 		stream.Ch <- makeSnapshot(&multipoolermanagerdatapb.Status{
-			PoolerType:    clustermetadata.PoolerType_PRIMARY,
-			PostgresReady: true,
+			PoolerType:        clustermetadata.PoolerType_PRIMARY,
+			PostgresListening: true,
 		})
 
 		require.Eventually(t, func() bool {
 			s, ok := poolerStore.Get(key)
-			return ok && s.LastPostgresReadyTime != nil
+			return ok && s.LastPostgresListeningTime != nil
 		}, 2*time.Second, 10*time.Millisecond)
 
 		updated, _ := poolerStore.Get(key)
-		require.True(t, updated.LastPostgresReadyTime.AsTime().After(before))
+		require.True(t, updated.LastPostgresListeningTime.AsTime().After(before))
 	})
 
-	t.Run("preserves LastPostgresReadyTime when PostgresReady is false", func(t *testing.T) {
+	t.Run("preserves LastPostgresListeningTime when PostgresListening is false", func(t *testing.T) {
 		ctx := t.Context()
 
 		fakeClient := rpcclient.NewFakeClient()
@@ -473,7 +473,7 @@ func TestHealthStream_LastPostgresReadyTime(t *testing.T) {
 				Type: clustermetadata.PoolerType_PRIMARY, Hostname: "host2",
 				PortMap: map[string]int32{"grpc": 5432},
 			},
-			LastPostgresReadyTime: lastReadyTime,
+			LastPostgresListeningTime: lastReadyTime,
 		})
 
 		sm.Start(poolerID)
@@ -481,8 +481,8 @@ func TestHealthStream_LastPostgresReadyTime(t *testing.T) {
 		completeHandshake(t, stream)
 
 		stream.Ch <- makeSnapshot(&multipoolermanagerdatapb.Status{
-			PoolerType:    clustermetadata.PoolerType_PRIMARY,
-			PostgresReady: false,
+			PoolerType:        clustermetadata.PoolerType_PRIMARY,
+			PostgresListening: false,
 		})
 
 		require.Eventually(t, func() bool {
@@ -491,9 +491,9 @@ func TestHealthStream_LastPostgresReadyTime(t *testing.T) {
 		}, 2*time.Second, 10*time.Millisecond)
 
 		updated, _ := poolerStore.Get(key)
-		require.NotNil(t, updated.LastPostgresReadyTime)
-		require.WithinDuration(t, lastReadyTime.AsTime(), updated.LastPostgresReadyTime.AsTime(), time.Second,
-			"LastPostgresReadyTime should not change when PostgresReady is false")
+		require.NotNil(t, updated.LastPostgresListeningTime)
+		require.WithinDuration(t, lastReadyTime.AsTime(), updated.LastPostgresListeningTime.AsTime(), time.Second,
+			"LastPostgresListeningTime should not change when PostgresListening is false")
 	})
 }
 
@@ -526,8 +526,8 @@ func TestHealthStream_StalenessTimeout(t *testing.T) {
 
 	// Send one snapshot so the stream is marked connected.
 	stream.Ch <- makeSnapshot(&multipoolermanagerdatapb.Status{
-		PoolerType:    clustermetadata.PoolerType_PRIMARY,
-		PostgresReady: true,
+		PoolerType:        clustermetadata.PoolerType_PRIMARY,
+		PostgresListening: true,
 	})
 	require.Eventually(t, func() bool {
 		s, ok := poolerStore.Get(key)
@@ -594,8 +594,8 @@ func TestHealthStream_StartResponseConfig(t *testing.T) {
 
 	// Send an initial snapshot so the stream is marked connected.
 	stream.Ch <- makeSnapshot(&multipoolermanagerdatapb.Status{
-		PoolerType:    clustermetadata.PoolerType_PRIMARY,
-		PostgresReady: true,
+		PoolerType:        clustermetadata.PoolerType_PRIMARY,
+		PostgresListening: true,
 	})
 	require.Eventually(t, func() bool {
 		s, ok := poolerStore.Get(key)

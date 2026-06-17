@@ -459,7 +459,7 @@ func (pm *MultiPoolerManager) openLocked(ctx context.Context, targetServingStatu
 			// it retries the topology write on the next tick if it fails.
 			// The transition is monotonic per boot: once ACTIVE, postgres
 			// going down doesn't flip the lifecycle back to STARTING —
-			// runtime health is communicated via Status.PostgresReady /
+			// runtime health is communicated via Status.PostgresListening /
 			// PostgresStatus, not via Lifecycle.
 			if newState.postgresRunning {
 				pm.markPoolerActive(ctx)
@@ -1388,8 +1388,8 @@ func (pm *MultiPoolerManager) promoteStandbyToPrimary(ctx context.Context, state
 		return mterrors.Wrap(err, "failed to promote standby")
 	}
 
-	// Wait for promotion to complete: pg_is_in_recovery()=false AND postgres_ready=true.
-	// Keeping promotionInProgress set until postgres_ready ensures multiorch suppresses
+	// Wait for promotion to complete: pg_is_in_recovery()=false AND postgres_listening=true.
+	// Keeping promotionInProgress set until postgres_listening ensures multiorch suppresses
 	// PrimaryIsDead for the full window — including the gap between pg_is_in_recovery()=false
 	// and postgres actually accepting connections.
 	pm.logger.InfoContext(ctx, "Waiting for promotion to complete")
@@ -1471,7 +1471,7 @@ func (pm *MultiPoolerManager) dropUnloggedTablesAfterPromotion(ctx context.Conte
 
 // waitForPromotionComplete polls until the node has left recovery mode AND postgres
 // is accepting connections. Both conditions are required: pg_is_in_recovery()=false
-// confirms the WAL-level promotion, and postgres_ready=true confirms clients can
+// confirms the WAL-level promotion, and postgres_listening=true confirms clients can
 // connect. Clearing promotionInProgress only when both are true ensures multiorch's
 // PrimaryIsDeadAnalyzer suppression window matches the full visibility gap.
 func (pm *MultiPoolerManager) waitForPromotionComplete(ctx context.Context) error {
@@ -1503,7 +1503,7 @@ func (pm *MultiPoolerManager) waitForPromotionComplete(ctx context.Context) erro
 				}
 			}
 
-			if promotedFromRecovery && pm.isPostgresReady(promotionCtx) {
+			if promotedFromRecovery && pm.isPostgresListening(promotionCtx) {
 				pm.logger.InfoContext(ctx, "Promotion completed successfully - node is now primary and accepting connections")
 				return nil
 			}

@@ -128,7 +128,7 @@ func (a *LeaderIsDeadAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, erro
 
 		// Case 1: the leader pooler is unreachable (e.g. its process crashed) while
 		// postgres keeps serving. We cannot observe the leader's postgres directly —
-		// a dead pooler reports nothing, so LeaderPostgresReady/LastPostgresReadyTime
+		// a dead pooler reports nothing, so LeaderPostgresListening/LastPostgresListeningTime
 		// are unavailable — but the replicas' fresh streaming proves it is alive, so
 		// suppress failover.
 		if !sa.LeaderPoolerReachable {
@@ -142,8 +142,8 @@ func (a *LeaderIsDeadAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, erro
 		// The leader pooler is reachable, so we can trust the direct postgres signal
 		// it reports.
 		threshold := a.factory.Config().GetLeaderPostgresResponseThreshold()
-		lastReadyTime := sa.LeaderLastPostgresReadyTime
-		primaryPostgresUnresponsive := !sa.LeaderPostgresReady &&
+		lastReadyTime := sa.LeaderLastPostgresListeningTime
+		primaryPostgresUnresponsive := !sa.LeaderPostgresListening &&
 			(lastReadyTime.IsZero() || time.Since(lastReadyTime) > threshold)
 
 		// Case 2: postgres process is alive but possibly unresponsive (pg_isready
@@ -153,8 +153,8 @@ func (a *LeaderIsDeadAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, erro
 			a.factory.Logger().Warn("leader postgres reachable and responsive, replicas connected, suppressing failover",
 				"shard_key", sa.ShardKey.String(),
 				"leader_pooler_id", topoclient.ComponentIDString(sa.HighestShardRule.GetLeaderId()),
-				"leader_postgres_ready", sa.LeaderPostgresReady,
-				"last_postgres_ready_time", lastReadyTime,
+				"leader_postgres_listening", sa.LeaderPostgresListening,
+				"last_postgres_listening_time", lastReadyTime,
 				"threshold", threshold)
 			return nil, nil
 		}
@@ -162,8 +162,8 @@ func (a *LeaderIsDeadAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, erro
 			a.factory.Logger().Warn("leader postgres process alive but unresponsive beyond threshold, allowing failover",
 				"shard_key", sa.ShardKey.String(),
 				"leader_pooler_id", topoclient.ComponentIDString(sa.HighestShardRule.GetLeaderId()),
-				"leader_postgres_ready", sa.LeaderPostgresReady,
-				"last_postgres_ready_time", lastReadyTime,
+				"leader_postgres_listening", sa.LeaderPostgresListening,
+				"last_postgres_listening_time", lastReadyTime,
 				"threshold", threshold)
 		}
 
@@ -174,7 +174,7 @@ func (a *LeaderIsDeadAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, erro
 			a.factory.Logger().Warn("leader pooler reachable but postgres process is dead, replicas still connected (stale connections)",
 				"shard_key", sa.ShardKey.String(),
 				"leader_pooler_id", topoclient.ComponentIDString(sa.HighestShardRule.GetLeaderId()),
-				"leader_postgres_ready", sa.LeaderPostgresReady,
+				"leader_postgres_listening", sa.LeaderPostgresListening,
 				"leader_postgres_running", sa.LeaderPostgresRunning,
 			)
 		}

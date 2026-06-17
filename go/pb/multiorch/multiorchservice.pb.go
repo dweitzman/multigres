@@ -237,15 +237,15 @@ func (x *DetectedProblem) GetDetectedAt() *timestamppb.Timestamp {
 }
 
 type PoolerHealth struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	PoolerId        *clustermetadata.ID    `protobuf:"bytes,1,opt,name=pooler_id,json=poolerId,proto3" json:"pooler_id,omitempty"`
-	Reachable       bool                   `protobuf:"varint,2,opt,name=reachable,proto3" json:"reachable,omitempty"`
-	PostgresRunning bool                   `protobuf:"varint,3,opt,name=postgres_running,json=postgresRunning,proto3" json:"postgres_running,omitempty"`
-	PoolerType      string                 `protobuf:"bytes,4,opt,name=pooler_type,json=poolerType,proto3" json:"pooler_type,omitempty"` // PRIMARY, REPLICA, UNKNOWN
-	LastCheck       *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=last_check,json=lastCheck,proto3" json:"last_check,omitempty"`
-	PostgresReady   bool                   `protobuf:"varint,6,opt,name=postgres_ready,json=postgresReady,proto3" json:"postgres_ready,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	PoolerId          *clustermetadata.ID    `protobuf:"bytes,1,opt,name=pooler_id,json=poolerId,proto3" json:"pooler_id,omitempty"`
+	Reachable         bool                   `protobuf:"varint,2,opt,name=reachable,proto3" json:"reachable,omitempty"`
+	PostgresRunning   bool                   `protobuf:"varint,3,opt,name=postgres_running,json=postgresRunning,proto3" json:"postgres_running,omitempty"`
+	PoolerType        string                 `protobuf:"bytes,4,opt,name=pooler_type,json=poolerType,proto3" json:"pooler_type,omitempty"` // PRIMARY, REPLICA, UNKNOWN
+	LastCheck         *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=last_check,json=lastCheck,proto3" json:"last_check,omitempty"`
+	PostgresListening bool                   `protobuf:"varint,6,opt,name=postgres_listening,json=postgresListening,proto3" json:"postgres_listening,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *PoolerHealth) Reset() {
@@ -313,9 +313,9 @@ func (x *PoolerHealth) GetLastCheck() *timestamppb.Timestamp {
 	return nil
 }
 
-func (x *PoolerHealth) GetPostgresReady() bool {
+func (x *PoolerHealth) GetPostgresListening() bool {
 	if x != nil {
-		return x.PostgresReady
+		return x.PostgresListening
 	}
 	return false
 }
@@ -824,7 +824,7 @@ const file_multiorchservice_proto_rawDesc = "" +
 	"\bpriority\x18\x06 \x01(\x05R\bpriority\x12\x14\n" +
 	"\x05scope\x18\a \x01(\tR\x05scope\x12;\n" +
 	"\vdetected_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"detectedAt\"\x8c\x02\n" +
+	"detectedAt\"\x94\x02\n" +
 	"\fPoolerHealth\x120\n" +
 	"\tpooler_id\x18\x01 \x01(\v2\x13.clustermetadata.IDR\bpoolerId\x12\x1c\n" +
 	"\treachable\x18\x02 \x01(\bR\treachable\x12)\n" +
@@ -832,8 +832,8 @@ const file_multiorchservice_proto_rawDesc = "" +
 	"\vpooler_type\x18\x04 \x01(\tR\n" +
 	"poolerType\x129\n" +
 	"\n" +
-	"last_check\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tlastCheck\x12%\n" +
-	"\x0epostgres_ready\x18\x06 \x01(\bR\rpostgresReady\"\x18\n" +
+	"last_check\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tlastCheck\x12-\n" +
+	"\x12postgres_listening\x18\x06 \x01(\bR\x11postgresListening\"\x18\n" +
 	"\x16DisableRecoveryRequest\"M\n" +
 	"\x17DisableRecoveryResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +

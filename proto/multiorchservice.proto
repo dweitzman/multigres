@@ -88,7 +88,7 @@ message PoolerHealth {
   bool postgres_running = 3;
   string pooler_type = 4; // PRIMARY, REPLICA, UNKNOWN
   google.protobuf.Timestamp last_check = 5;
-  bool postgres_ready = 6;
+  bool postgres_listening = 6;
 }
 
 message DisableRecoveryRequest {

@@ -95,7 +95,7 @@ func TestBackendCrashRecoveryUnderLoad(t *testing.T) {
 	// Hard-crash postgres on the primary. Restarts stay enabled, so the
 	// multipooler monitor auto-restarts the same backend.
 	setup.KillPostgres(t, setup.PrimaryName)
-	waitForPostgresReady(t, setup, 60*time.Second)
+	waitForPostgresListening(t, setup, 60*time.Second)
 	t.Log("postgres auto-restarted by the monitor")
 
 	// Transparent recovery: load must resume on its own. Wait for the success
@@ -158,7 +158,7 @@ func TestBackendCrashTransparentReconnect(t *testing.T) {
 	t.Logf("client session started on backend pid %d", pid1)
 
 	setup.KillPostgres(t, setup.PrimaryName)
-	waitForPostgresReady(t, setup, 60*time.Second)
+	waitForPostgresListening(t, setup, 60*time.Second)
 	t.Log("postgres auto-restarted by the monitor")
 
 	// The same client session must recover. The first statement after the crash
@@ -192,9 +192,9 @@ func waitForSuccessfulWrites(t *testing.T, v *shardsetup.WriterValidator, minWri
 	}, timeout, 100*time.Millisecond, "expected at least %d successful writes", minWrites)
 }
 
-// waitForPostgresReady polls the primary's multipooler manager until it reports
+// waitForPostgresListening polls the primary's multipooler manager until it reports
 // postgres ready again (after the monitor auto-restarts a crashed backend).
-func waitForPostgresReady(t *testing.T, setup *shardsetup.ShardSetup, timeout time.Duration) {
+func waitForPostgresListening(t *testing.T, setup *shardsetup.ShardSetup, timeout time.Duration) {
 	t.Helper()
 	client := setup.NewPrimaryClient(t)
 	defer client.Close()
@@ -204,6 +204,6 @@ func waitForPostgresReady(t *testing.T, setup *shardsetup.ShardSetup, timeout ti
 		if err != nil {
 			return false
 		}
-		return status.Status.PostgresReady
+		return status.Status.PostgresListening
 	}, timeout, 500*time.Millisecond, "postgres should be auto-restarted by the monitor")
 }

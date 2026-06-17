@@ -67,7 +67,7 @@ func makeDemoteScenarioPoolers(t *testing.T, poolerStore *store.PoolerStore) (st
 			Type:     clustermetadatapb.PoolerType_PRIMARY,
 		},
 		Status: &multipoolermanagerdatapb.Status{
-			PostgresReady: true,
+			PostgresListening: true,
 		},
 	})
 

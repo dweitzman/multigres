@@ -160,7 +160,7 @@ func RequirePoolerCondition(
 }
 
 // WaitForHigherTermPrimary polls all multipoolers in setup until one reports
-// IsInitialized + PoolerType_PRIMARY + PostgresReady at a term strictly
+// IsInitialized + PoolerType_PRIMARY + PostgresListening at a term strictly
 // greater than oldTerm AND has at least minStandbyCount followers actively
 // streaming from it, then returns its name. The elected primary may be the
 // same pooler as before (re-elected at a higher term) or a different one;
@@ -182,7 +182,7 @@ func WaitForHigherTermPrimary(t *testing.T, setup *ShardSetup, oldTerm int64, mi
 				}
 				if !(r.Status.IsInitialized &&
 					r.Status.PoolerType == clustermetadatapb.PoolerType_PRIMARY &&
-					r.Status.PostgresReady) {
+					r.Status.PostgresListening) {
 					continue
 				}
 				term := r.ConsensusStatus.GetTermRevocation().GetRevokedBelowTerm()
@@ -202,7 +202,7 @@ func WaitForHigherTermPrimary(t *testing.T, setup *ShardSetup, oldTerm int64, mi
 }
 
 // WaitForNewPrimary polls all multipoolers in setup until one other than oldPrimaryName
-// reports IsInitialized + PoolerType_PRIMARY + PostgresReady, then returns its name.
+// reports IsInitialized + PoolerType_PRIMARY + PostgresListening, then returns its name.
 // Elapsed time is recorded as a timing measurement.
 // Fails the test if no new primary is elected within timeout.
 func WaitForNewPrimary(t *testing.T, setup *ShardSetup, oldPrimaryName string, timeout time.Duration) string {
@@ -222,7 +222,7 @@ func WaitForNewPrimary(t *testing.T, setup *ShardSetup, oldPrimaryName string, t
 				}
 				if r.Status.IsInitialized &&
 					r.Status.PoolerType == clustermetadatapb.PoolerType_PRIMARY &&
-					r.Status.PostgresReady {
+					r.Status.PostgresListening {
 					return r.Name, true, ""
 				}
 			}
@@ -241,8 +241,8 @@ func FormatPoolerDiagnostics(s *multipoolermanagerdatapb.Status, cs *clustermeta
 		return "[status=nil]"
 	}
 	termNumber := cs.GetTermRevocation().GetRevokedBelowTerm()
-	result := fmt.Sprintf("[postgres_ready=%v, initialized=%v, pooler_type=%v, term=%d",
-		s.PostgresReady, s.IsInitialized, s.PoolerType, termNumber)
+	result := fmt.Sprintf("[postgres_listening=%v, initialized=%v, pooler_type=%v, term=%d",
+		s.PostgresListening, s.IsInitialized, s.PoolerType, termNumber)
 	if s.PostgresAction != multipoolermanagerdatapb.PostgresAction_POSTGRES_ACTION_UNSPECIFIED {
 		dur := time.Duration(0)
 		if s.PostgresActionDuration != nil {

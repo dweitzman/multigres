@@ -111,7 +111,7 @@ func WaitForManagerReady(t *testing.T, manager *ProcessInstance) {
 		if err != nil {
 			return false
 		}
-		return resp.Status != nil && resp.Status.PostgresReady
+		return resp.Status != nil && resp.Status.PostgresListening
 	}, testconst.ManagerStartTimeout, 100*time.Millisecond, "Manager should become ready within %s", testconst.ManagerStartTimeout)
 
 	t.Logf("Manager %s is ready", manager.Name)

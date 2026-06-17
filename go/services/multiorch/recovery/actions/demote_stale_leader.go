@@ -124,7 +124,7 @@ func (a *DemoteStaleLeaderAction) Execute(ctx context.Context, problem types.Pro
 	// Demote requires postgres to be healthy. If postgres is not running yet,
 	// we should skip this attempt and let the next recovery cycle retry once
 	// postgres is ready. This avoids wasting time on RPCs that will fail.
-	// if !stalePrimary.IsPostgresReady {
+	// if !stalePrimary.IsPostgresListening {
 	// 	return mterrors.New(mtrpcpb.Code_UNAVAILABLE,
 	// 		fmt.Sprintf("postgres not running on stale leader %s, skipping demote attempt", poolerIDStr))
 	// }

@@ -436,10 +436,10 @@ func (hs *HealthStream) applySnapshot(ctx context.Context, poolerID topoclient.C
 		} else {
 			existing.ConsensusStatus = nil
 		}
-		if status.PostgresReady {
-			existing.LastPostgresReadyTime = now
+		if status.PostgresListening {
+			existing.LastPostgresListeningTime = now
 		}
-		// NOTE: when PostgresReady is false, LastPostgresReadyTime is intentionally
+		// NOTE: when PostgresListening is false, LastPostgresListeningTime is intentionally
 		// left at its previous value so callers can reason about "last known good" time.
 		existing.StreamSnapshotsReceived++
 		return existing
@@ -450,7 +450,7 @@ func (hs *HealthStream) applySnapshot(ctx context.Context, poolerID topoclient.C
 	hs.logger.DebugContext(ctx, "health snapshot applied",
 		"pooler_id", poolerID,
 		"pooler_type", status.PoolerType,
-		"postgres_ready", status.PostgresReady,
+		"postgres_listening", status.PostgresListening,
 		"postgres_running", status.PostgresRunning,
 	)
 }
@@ -472,7 +472,7 @@ func (hs *HealthStream) markDisconnected(poolerID topoclient.ComponentID) {
 	cb := func(existing *multiorchdatapb.PoolerHealthState) *multiorchdatapb.PoolerHealthState {
 		existing.IsLastCheckValid = false
 		if existing.Status != nil {
-			existing.Status.PostgresReady = false
+			existing.Status.PostgresListening = false
 			existing.Status.PostgresRunning = false
 		}
 		existing.StreamConnected = false

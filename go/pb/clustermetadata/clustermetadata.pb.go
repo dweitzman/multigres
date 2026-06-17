@@ -2347,8 +2347,19 @@ type AvailabilityStatus struct {
 	// member signaling INELIGIBLE is a candidate for removal/replacement; a
 	// non-member signaling INELIGIBLE should be skipped when growing the cohort.
 	CohortEligibilityStatus *CohortEligibilityStatus `protobuf:"bytes,2,opt,name=cohort_eligibility_status,json=cohortEligibilityStatus,proto3" json:"cohort_eligibility_status,omitempty"`
-	unknownFields           protoimpl.UnknownFields
-	sizeCache               protoimpl.SizeCache
+	// postmaster_start_time is when this pooler's postgres last started. Unset when
+	// postgres is not running. It advances on every (re)start, so observers can
+	// tell a freshly restarted postgres from one that has been up a while (e.g. to
+	// detect flapping or distinguish "restarted" from "never went down").
+	PostmasterStartTime *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=postmaster_start_time,json=postmasterStartTime,proto3" json:"postmaster_start_time,omitempty"`
+	// postgres_queryable reports whether a real query against postgres succeeded
+	// (stronger than postgres_listening / pg_isready, which only proves a
+	// connection can be opened). This is the signal orchestration should gate on:
+	// a postgres that is listening but cannot actually answer queries (e.g. stuck
+	// in recovery or a hung backend) reports listening=true but queryable=false.
+	PostgresQueryable bool `protobuf:"varint,4,opt,name=postgres_queryable,json=postgresQueryable,proto3" json:"postgres_queryable,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *AvailabilityStatus) Reset() {
@@ -2393,6 +2404,20 @@ func (x *AvailabilityStatus) GetCohortEligibilityStatus() *CohortEligibilityStat
 		return x.CohortEligibilityStatus
 	}
 	return nil
+}
+
+func (x *AvailabilityStatus) GetPostmasterStartTime() *timestamppb.Timestamp {
+	if x != nil {
+		return x.PostmasterStartTime
+	}
+	return nil
+}
+
+func (x *AvailabilityStatus) GetPostgresQueryable() bool {
+	if x != nil {
+		return x.PostgresQueryable
+	}
+	return false
 }
 
 // CohortEligibilityStatus carries the pooler's cohort-eligibility signal.
@@ -2585,10 +2610,12 @@ const file_clustermetadata_proto_rawDesc = "" +
 	"\x10LeadershipStatus\x12\x1f\n" +
 	"\vleader_term\x18\x01 \x01(\x03R\n" +
 	"leaderTerm\x129\n" +
-	"\x06signal\x18\x02 \x01(\x0e2!.clustermetadata.LeadershipSignalR\x06signal\"\xca\x01\n" +
+	"\x06signal\x18\x02 \x01(\x0e2!.clustermetadata.LeadershipSignalR\x06signal\"\xc9\x02\n" +
 	"\x12AvailabilityStatus\x12N\n" +
 	"\x11leadership_status\x18\x01 \x01(\v2!.clustermetadata.LeadershipStatusR\x10leadershipStatus\x12d\n" +
-	"\x19cohort_eligibility_status\x18\x02 \x01(\v2(.clustermetadata.CohortEligibilityStatusR\x17cohortEligibilityStatus\"[\n" +
+	"\x19cohort_eligibility_status\x18\x02 \x01(\v2(.clustermetadata.CohortEligibilityStatusR\x17cohortEligibilityStatus\x12N\n" +
+	"\x15postmaster_start_time\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x13postmasterStartTime\x12-\n" +
+	"\x12postgres_queryable\x18\x04 \x01(\bR\x11postgresQueryable\"[\n" +
 	"\x17CohortEligibilityStatus\x12@\n" +
 	"\x06signal\x18\x01 \x01(\x0e2(.clustermetadata.CohortEligibilitySignalR\x06signal*@\n" +
 	"\n" +
@@ -2723,12 +2750,13 @@ var file_clustermetadata_proto_depIdxs = []int32{
 	4,  // 42: clustermetadata.LeadershipStatus.signal:type_name -> clustermetadata.LeadershipSignal
 	31, // 43: clustermetadata.AvailabilityStatus.leadership_status:type_name -> clustermetadata.LeadershipStatus
 	33, // 44: clustermetadata.AvailabilityStatus.cohort_eligibility_status:type_name -> clustermetadata.CohortEligibilityStatus
-	5,  // 45: clustermetadata.CohortEligibilityStatus.signal:type_name -> clustermetadata.CohortEligibilitySignal
-	46, // [46:46] is the sub-list for method output_type
-	46, // [46:46] is the sub-list for method input_type
-	46, // [46:46] is the sub-list for extension type_name
-	46, // [46:46] is the sub-list for extension extendee
-	0,  // [0:46] is the sub-list for field type_name
+	37, // 45: clustermetadata.AvailabilityStatus.postmaster_start_time:type_name -> google.protobuf.Timestamp
+	5,  // 46: clustermetadata.CohortEligibilityStatus.signal:type_name -> clustermetadata.CohortEligibilitySignal
+	47, // [47:47] is the sub-list for method output_type
+	47, // [47:47] is the sub-list for method input_type
+	47, // [47:47] is the sub-list for extension type_name
+	47, // [47:47] is the sub-list for extension extendee
+	0,  // [0:47] is the sub-list for field type_name
 }
 
 func init() { file_clustermetadata_proto_init() }

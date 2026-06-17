@@ -297,13 +297,13 @@ func (pm *MultiPoolerManager) StandbyReplicationStatus(ctx context.Context) (*mu
 // initialization status without needing a separate RPC.
 func (pm *MultiPoolerManager) Status(ctx context.Context) (*multipoolermanagerdatapb.StatusResponse, error) {
 	poolerStatus := &multipoolermanagerdatapb.Status{
-		PoolerType:       pm.getPoolerType(),
-		IsInitialized:    pm.isInitialized(ctx),
-		HasDataDirectory: pm.hasDataDirectory(),
-		PostgresReady:    pm.isPostgresReady(ctx),
-		PostgresRunning:  pm.isPostgresRunning(ctx),
-		PostgresStatus:   pm.getServerStatus(ctx),
-		ShardId:          pm.getShardID(),
+		PoolerType:        pm.getPoolerType(),
+		IsInitialized:     pm.isInitialized(ctx),
+		HasDataDirectory:  pm.hasDataDirectory(),
+		PostgresListening: pm.isPostgresListening(ctx),
+		PostgresRunning:   pm.isPostgresRunning(ctx),
+		PostgresStatus:    pm.getServerStatus(ctx),
+		ShardId:           pm.getShardID(),
 	}
 
 	if action, duration := pm.actionLock.ActiveAction(); action != multipoolermanagerdatapb.PostgresAction_POSTGRES_ACTION_UNSPECIFIED {
@@ -329,7 +329,8 @@ func (pm *MultiPoolerManager) Status(ctx context.Context) (*multipoolermanagerda
 	if cs, err := pm.getInconsistentConsensusStatus(ctx); err == nil {
 		resp.ConsensusStatus = cs
 	}
-	resp.AvailabilityStatus = pm.buildAvailabilityStatus()
+	postgresQueryable, postmasterStartTime := pm.queryPostmasterStartTime(ctx)
+	resp.AvailabilityStatus = pm.buildAvailabilityStatus(postgresQueryable, postmasterStartTime)
 
 	// Try to get detailed status based on PostgreSQL role
 	isPrimary, err := pm.isPrimary(ctx)

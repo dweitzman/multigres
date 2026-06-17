@@ -215,7 +215,7 @@ func TestAppointInitialLeader(t *testing.T) {
 	for i, id := range cohortIDs {
 		mp := createMockNode(fakeClient, id.Name, 0, walPositions[i], true, sentinelRule)
 		mp.Status.IsInitialized = true
-		mp.Status.PostgresReady = true
+		mp.Status.PostgresListening = true
 		mp.Status.PostgresRunning = true
 		// Cached cohort statuses populate Id and CurrentPosition (with sentinel
 		// rule) so MostAdvancedPosition can derive the cert and pre-vote can

@@ -52,7 +52,7 @@ func TestPollLeaderHealth(t *testing.T) {
 		fakeClient := rpcclient.NewFakeClient()
 		fakeClient.SetStatusResponse("multipooler-cell1-primary", &multipoolermanagerdatapb.StatusResponse{
 			ConsensusStatus: servingStatus,
-			Status:          &multipoolermanagerdatapb.Status{PostgresReady: true},
+			Status:          &multipoolermanagerdatapb.Status{PostgresListening: true},
 		})
 
 		got, err := pollLeaderHealth(ctx, fakeClient, store.ShardMembers{Leader: leaderState})
@@ -68,7 +68,7 @@ func TestPollLeaderHealth(t *testing.T) {
 		fakeClient := rpcclient.NewFakeClient()
 		fakeClient.SetStatusResponse("multipooler-cell1-primary", &multipoolermanagerdatapb.StatusResponse{
 			ConsensusStatus: servingStatus,
-			Status:          &multipoolermanagerdatapb.Status{PostgresReady: false},
+			Status:          &multipoolermanagerdatapb.Status{PostgresListening: false},
 		})
 
 		got, err := pollLeaderHealth(ctx, fakeClient, store.ShardMembers{Leader: leaderState})

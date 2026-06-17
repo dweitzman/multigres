@@ -64,7 +64,7 @@ type PoolerHealthState struct {
 	// Timestamp of the last time PostgreSQL specifically responded as healthy
 	// (i.e. pg_isready passed). Never cleared on failure — callers must compare
 	// against time.Now() to detect staleness.
-	LastPostgresReadyTime *timestamppb.Timestamp `protobuf:"bytes,16,opt,name=last_postgres_ready_time,json=lastPostgresReadyTime,proto3" json:"last_postgres_ready_time,omitempty"`
+	LastPostgresListeningTime *timestamppb.Timestamp `protobuf:"bytes,16,opt,name=last_postgres_listening_time,json=lastPostgresListeningTime,proto3" json:"last_postgres_listening_time,omitempty"`
 	// Availability status from the most recent StatusResponse. Non-nil only for
 	// nodes that are or have been primary. Used by PrimaryNeedsReplacement to
 	// detect voluntary demotions (REQUESTING_DEMOTION) without a separate RPC.
@@ -161,9 +161,9 @@ func (x *PoolerHealthState) GetConsensusStatus() *clustermetadata.ConsensusStatu
 	return nil
 }
 
-func (x *PoolerHealthState) GetLastPostgresReadyTime() *timestamppb.Timestamp {
+func (x *PoolerHealthState) GetLastPostgresListeningTime() *timestamppb.Timestamp {
 	if x != nil {
-		return x.LastPostgresReadyTime
+		return x.LastPostgresListeningTime
 	}
 	return nil
 }
@@ -207,7 +207,7 @@ var File_multiorchdata_proto protoreflect.FileDescriptor
 
 const file_multiorchdata_proto_rawDesc = "" +
 	"\n" +
-	"\x13multiorchdata.proto\x12\rmultiorchdata\x1a\x15clustermetadata.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1cmultipoolermanagerdata.proto\"\x9d\b\n" +
+	"\x13multiorchdata.proto\x12\rmultiorchdata\x1a\x15clustermetadata.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1cmultipoolermanagerdata.proto\"\xa9\b\n" +
 	"\x11PoolerHealthState\x12?\n" +
 	"\fmulti_pooler\x18\x01 \x01(\v2\x1c.clustermetadata.MultiPoolerR\vmultiPooler\x12!\n" +
 	"\ris_up_to_date\x18\x02 \x01(\bR\n" +
@@ -216,15 +216,15 @@ const file_multiorchdata_proto_rawDesc = "" +
 	"\x14last_check_attempted\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x12lastCheckAttempted\x12N\n" +
 	"\x15last_check_successful\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\x13lastCheckSuccessful\x127\n" +
 	"\tlast_seen\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\blastSeen\x12K\n" +
-	"\x10consensus_status\x18\x0e \x01(\v2 .clustermetadata.ConsensusStatusR\x0fconsensusStatus\x12S\n" +
-	"\x18last_postgres_ready_time\x18\x10 \x01(\v2\x1a.google.protobuf.TimestampR\x15lastPostgresReadyTime\x12T\n" +
+	"\x10consensus_status\x18\x0e \x01(\v2 .clustermetadata.ConsensusStatusR\x0fconsensusStatus\x12[\n" +
+	"\x1clast_postgres_listening_time\x18\x10 \x01(\v2\x1a.google.protobuf.TimestampR\x19lastPostgresListeningTime\x12T\n" +
 	"\x13availability_status\x18\x11 \x01(\v2#.clustermetadata.AvailabilityStatusR\x12availabilityStatus\x12)\n" +
 	"\x10stream_connected\x18\x14 \x01(\bR\x0fstreamConnected\x12P\n" +
 	"\x16stream_connected_since\x18\x15 \x01(\v2\x1a.google.protobuf.TimestampR\x14streamConnectedSince\x126\n" +
 	"\x06status\x18\x16 \x01(\v2\x1e.multipoolermanagerdata.StatusR\x06status\x12:\n" +
 	"\x19stream_snapshots_received\x18\x17 \x01(\x03R\x17streamSnapshotsReceivedJ\x04\b\a\x10\bJ\x04\b\b\x10\tJ\x04\b\t\x10\n" +
 	"J\x04\b\n" +
-	"\x10\vJ\x04\b\v\x10\fJ\x04\b\f\x10\rJ\x04\b\r\x10\x0eR\vpooler_typeR\x0eprimary_statusR\x12replication_statusR\x11is_postgres_readyR\x0eis_initializedR\x12has_data_directoryR\x0ecohort_membersR\x13is_postgres_runningB4Z2github.com/multigres/multigres/go/pb/multiorchdatab\x06proto3"
+	"\x10\vJ\x04\b\v\x10\fJ\x04\b\f\x10\rJ\x04\b\r\x10\x0eR\vpooler_typeR\x0eprimary_statusR\x12replication_statusR\x15is_postgres_listeningR\x0eis_initializedR\x12has_data_directoryR\x0ecohort_membersR\x13is_postgres_runningB4Z2github.com/multigres/multigres/go/pb/multiorchdatab\x06proto3"
 
 var (
 	file_multiorchdata_proto_rawDescOnce sync.Once
@@ -253,7 +253,7 @@ var file_multiorchdata_proto_depIdxs = []int32{
 	2, // 2: multiorchdata.PoolerHealthState.last_check_successful:type_name -> google.protobuf.Timestamp
 	2, // 3: multiorchdata.PoolerHealthState.last_seen:type_name -> google.protobuf.Timestamp
 	3, // 4: multiorchdata.PoolerHealthState.consensus_status:type_name -> clustermetadata.ConsensusStatus
-	2, // 5: multiorchdata.PoolerHealthState.last_postgres_ready_time:type_name -> google.protobuf.Timestamp
+	2, // 5: multiorchdata.PoolerHealthState.last_postgres_listening_time:type_name -> google.protobuf.Timestamp
 	4, // 6: multiorchdata.PoolerHealthState.availability_status:type_name -> clustermetadata.AvailabilityStatus
 	2, // 7: multiorchdata.PoolerHealthState.stream_connected_since:type_name -> google.protobuf.Timestamp
 	5, // 8: multiorchdata.PoolerHealthState.status:type_name -> multipoolermanagerdata.Status

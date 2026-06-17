@@ -91,7 +91,7 @@ func TestMultiGateway_PostgresCrashRecovery(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		return status.Status.PostgresReady
+		return status.Status.PostgresListening
 	}, 30*time.Second, 500*time.Millisecond, "Postgres should be auto-restarted by monitor")
 	t.Log("Postgres auto-restarted successfully")
 

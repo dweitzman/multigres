@@ -664,6 +664,19 @@ message AvailabilityStatus {
   // member signaling INELIGIBLE is a candidate for removal/replacement; a
   // non-member signaling INELIGIBLE should be skipped when growing the cohort.
   CohortEligibilityStatus cohort_eligibility_status = 2;
+
+  // postmaster_start_time is when this pooler's postgres last started. Unset when
+  // postgres is not running. It advances on every (re)start, so observers can
+  // tell a freshly restarted postgres from one that has been up a while (e.g. to
+  // detect flapping or distinguish "restarted" from "never went down").
+  google.protobuf.Timestamp postmaster_start_time = 3;
+
+  // postgres_queryable reports whether a real query against postgres succeeded
+  // (stronger than postgres_listening / pg_isready, which only proves a
+  // connection can be opened). This is the signal orchestration should gate on:
+  // a postgres that is listening but cannot actually answer queries (e.g. stuck
+  // in recovery or a hung backend) reports listening=true but queryable=false.
+  bool postgres_queryable = 4;
 }
 
 // CohortEligibilitySignal describes a pooler's self-reported willingness to

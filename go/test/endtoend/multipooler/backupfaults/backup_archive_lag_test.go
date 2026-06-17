@@ -391,7 +391,7 @@ func logWALState(t *testing.T, setup *shardsetup.ShardSetup, primaryName string)
 
 // verifyReplicasStreamingOnTerm waits until every multipooler other than
 // verifyReplicasStreaming asserts that every non-primary pooler reports
-// REPLICA + PostgresReady + a streaming WAL receiver. Used after each recovery
+// REPLICA + PostgresListening + a streaming WAL receiver. Used after each recovery
 // step to confirm the cohort is healthy before the next assertion.
 //
 // Does not assert ConsensusStatus.TermRevocation.RevokedBelowTerm: under the
@@ -417,7 +417,7 @@ func verifyReplicasStreaming(t *testing.T, setup *shardsetup.ShardSetup, exclude
 			if s.PoolerType != clustermetadatapb.PoolerType_REPLICA {
 				return false, fmt.Sprintf("not yet REPLICA (is %v)", s.PoolerType)
 			}
-			if !s.PostgresReady {
+			if !s.PostgresListening {
 				return false, "postgres not running"
 			}
 			if s.ReplicationStatus == nil || s.ReplicationStatus.PrimaryConnInfo == nil {

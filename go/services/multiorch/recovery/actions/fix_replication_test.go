@@ -663,7 +663,7 @@ func TestFixReplicationAction_SucceedsViaRewind(t *testing.T) {
 	})
 	poolerStore.Set("multipooler-cell1-primary", &multiorchdatapb.PoolerHealthState{
 		MultiPooler: primary,
-		Status:      &multipoolermanagerdatapb.Status{PostgresReady: true},
+		Status:      &multipoolermanagerdatapb.Status{PostgresListening: true},
 		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 			Id:             fixReplPrimaryID,
 			TermRevocation: &clustermetadatapb.TermRevocation{RevokedBelowTerm: 1},
@@ -786,7 +786,7 @@ func TestFixReplicationAction_FailsWhenReplicationDoesNotStart(t *testing.T) {
 	})
 	poolerStore.Set("multipooler-cell1-primary", &multiorchdatapb.PoolerHealthState{
 		MultiPooler: primary,
-		Status:      &multipoolermanagerdatapb.Status{PostgresReady: true},
+		Status:      &multipoolermanagerdatapb.Status{PostgresListening: true},
 		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 			Id:              fixReplPrimaryID,
 			CurrentPosition: leaderCurrentPosition(1),

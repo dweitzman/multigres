@@ -203,11 +203,11 @@ func (s *MultiOrchServer) buildPoolerHealthList(req *multiorchpb.ShardStatusRequ
 		poolerType := p.GetStatus().GetPoolerType().String()
 
 		healthList = append(healthList, &multiorchpb.PoolerHealth{
-			PoolerId:      p.MultiPooler.Id,
-			Reachable:     p.IsLastCheckValid,
-			PostgresReady: p.GetStatus().GetPostgresReady(),
-			PoolerType:    poolerType,
-			LastCheck:     p.LastCheckAttempted,
+			PoolerId:          p.MultiPooler.Id,
+			Reachable:         p.IsLastCheckValid,
+			PostgresListening: p.GetStatus().GetPostgresListening(),
+			PoolerType:        poolerType,
+			LastCheck:         p.LastCheckAttempted,
 		})
 	}
 

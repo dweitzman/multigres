@@ -1171,7 +1171,7 @@ type Status struct {
 	// True if the postgres process is running (e.g. SIGSTOP'd postgres: process exists but
 	// pg_isready fails). False if the process is dead (e.g. after SIGKILL).
 	// Use this to distinguish a temporarily-unresponsive postgres (SIGSTOP) from a dead
-	// postgres (SIGKILL) when postgres_ready is false.
+	// postgres (SIGKILL) when postgres_listening is false.
 	PostgresRunning bool `protobuf:"varint,6,opt,name=postgres_running,json=postgresRunning,proto3" json:"postgres_running,omitempty"`
 	// Observed state of the PostgreSQL server process. This reflects what postgres
 	// actually is right now and may differ from pooler_type during transitions.
@@ -1194,9 +1194,9 @@ type Status struct {
 	// Whether PostgreSQL is currently running and accepting connections (pg_isready passed).
 	// This is the combined check: process must exist AND respond to pg_isready.
 	// Use postgres_running to check only if the process exists.
-	PostgresReady bool `protobuf:"varint,14,opt,name=postgres_ready,json=postgresReady,proto3" json:"postgres_ready,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	PostgresListening bool `protobuf:"varint,14,opt,name=postgres_listening,json=postgresListening,proto3" json:"postgres_listening,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *Status) Reset() {
@@ -1313,9 +1313,9 @@ func (x *Status) GetCohortMembers() []*clustermetadata.ID {
 	return nil
 }
 
-func (x *Status) GetPostgresReady() bool {
+func (x *Status) GetPostgresListening() bool {
 	if x != nil {
-		return x.PostgresReady
+		return x.PostgresListening
 	}
 	return false
 }
@@ -2909,7 +2909,7 @@ const file_multipoolermanagerdata_proto_rawDesc = "" +
 	"\x05ready\x18\x02 \x01(\bR\x05ready\x12D\n" +
 	"\x13connected_followers\x18\x03 \x03(\v2\x13.clustermetadata.IDR\x12connectedFollowers\x12s\n" +
 	"\x17sync_replication_config\x18\x04 \x01(\v2;.multipoolermanagerdata.SynchronousReplicationConfigurationR\x15syncReplicationConfig\x12&\n" +
-	"\x0fmax_wal_senders\x18\x05 \x01(\x05R\rmaxWalSenders\"\x8d\x06\n" +
+	"\x0fmax_wal_senders\x18\x05 \x01(\x05R\rmaxWalSenders\"\x95\x06\n" +
 	"\x06Status\x12<\n" +
 	"\vpooler_type\x18\x01 \x01(\x0e2\x1b.clustermetadata.PoolerTypeR\n" +
 	"poolerType\x12L\n" +
@@ -2924,8 +2924,8 @@ const file_multipoolermanagerdata_proto_rawDesc = "" +
 	" \x01(\tR\ashardId\x12O\n" +
 	"\x0fpostgres_action\x18\v \x01(\x0e2&.multipoolermanagerdata.PostgresActionR\x0epostgresAction\x12S\n" +
 	"\x18postgres_action_duration\x18\f \x01(\v2\x19.google.protobuf.DurationR\x16postgresActionDuration\x12:\n" +
-	"\x0ecohort_members\x18\r \x03(\v2\x13.clustermetadata.IDR\rcohortMembers\x12%\n" +
-	"\x0epostgres_ready\x18\x0e \x01(\bR\rpostgresReady\"\x0f\n" +
+	"\x0ecohort_members\x18\r \x03(\v2\x13.clustermetadata.IDR\rcohortMembers\x12-\n" +
+	"\x12postgres_listening\x18\x0e \x01(\bR\x11postgresListening\"\x0f\n" +
 	"\rStatusRequest\"\xeb\x01\n" +
 	"\x0eStatusResponse\x126\n" +
 	"\x06status\x18\x01 \x01(\v2\x1e.multipoolermanagerdata.StatusR\x06status\x12T\n" +

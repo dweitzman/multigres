@@ -83,9 +83,9 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 				LeaderId:      primaryID,
 				CohortMembers: standbys,
 			},
-			LeaderReachable:     true,
-			LeaderPostgresReady: true,
-			Analyses:            analyses,
+			LeaderReachable:         true,
+			LeaderPostgresListening: true,
+			Analyses:                analyses,
 		}
 	}
 
@@ -167,7 +167,7 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 
 	t.Run("does not fire when leader postgres is not ready", func(t *testing.T) {
 		sa := healthyShard(nil, healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE))
-		sa.LeaderPostgresReady = false
+		sa.LeaderPostgresListening = false
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
 		assert.Empty(t, problems)

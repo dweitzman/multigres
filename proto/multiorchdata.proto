@@ -49,7 +49,7 @@ message PoolerHealthState {
   // replaced by the embedded status field below (field 22).
   reserved 7, 8, 9, 10, 11, 12, 13;
   reserved "pooler_type", "primary_status", "replication_status",
-           "is_postgres_ready", "is_initialized", "has_data_directory",
+           "is_postgres_listening", "is_initialized", "has_data_directory",
            "cohort_members", "is_postgres_running";
 
   // Consensus status from ConsensusStatus RPC (for divergence detection)
@@ -58,7 +58,7 @@ message PoolerHealthState {
   // Timestamp of the last time PostgreSQL specifically responded as healthy
   // (i.e. pg_isready passed). Never cleared on failure — callers must compare
   // against time.Now() to detect staleness.
-  google.protobuf.Timestamp last_postgres_ready_time = 16;
+  google.protobuf.Timestamp last_postgres_listening_time = 16;
 
   // Availability status from the most recent StatusResponse. Non-nil only for
   // nodes that are or have been primary. Used by PrimaryNeedsReplacement to

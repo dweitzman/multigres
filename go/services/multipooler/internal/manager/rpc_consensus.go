@@ -146,11 +146,15 @@ func (pm *MultiPoolerManager) getInconsistentConsensusStatus(ctx context.Context
 
 // buildAvailabilityStatus returns the current AvailabilityStatus for this node.
 // Leaders that have resigned publish a LeadershipStatus. Every pooler publishes
-// its cohort eligibility, so the result is non-nil.
-func (pm *MultiPoolerManager) buildAvailabilityStatus() *clustermetadatapb.AvailabilityStatus {
+// its cohort eligibility, so the result is non-nil. postgresQueryable and
+// postmasterStartTime are supplied by the caller (from queryPostmasterStartTime)
+// so the single postgres query is not repeated.
+func (pm *MultiPoolerManager) buildAvailabilityStatus(postgresQueryable bool, postmasterStartTime *timestamppb.Timestamp) *clustermetadatapb.AvailabilityStatus {
 	return &clustermetadatapb.AvailabilityStatus{
 		LeadershipStatus:        pm.buildLeadershipStatus(),
 		CohortEligibilityStatus: pm.buildCohortEligibilityStatus(),
+		PostgresQueryable:       postgresQueryable,
+		PostmasterStartTime:     postmasterStartTime,
 	}
 }
 

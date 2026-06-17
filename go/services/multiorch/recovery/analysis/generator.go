@@ -420,7 +420,7 @@ func (g *AnalysisGenerator) computeShardLevelFields(sa *ShardAnalysis, poolers m
 	sa.Leader = topologyPrimary
 	if topologyPrimary != nil {
 		sa.LeaderPoolerReachable = topologyPrimary.IsLastCheckValid
-		sa.LeaderPostgresReady = topologyPrimary.GetStatus().GetPostgresReady()
+		sa.LeaderPostgresListening = topologyPrimary.GetStatus().GetPostgresListening()
 		sa.LeaderPostgresRunning = topologyPrimary.GetStatus().GetPostgresRunning()
 		// LeaderHasResigned: AvailabilityStatus and ConsensusTerm are populated from
 		// StatusResponse on every health stream snapshot, so LeaderNeedsReplacement
@@ -431,10 +431,10 @@ func (g *AnalysisGenerator) computeShardLevelFields(sa *ShardAnalysis, poolers m
 		// resigned, so LeaderIsDead can trigger even while a demoted node's postgres
 		// is still running.
 		sa.LeaderReachable = topologyPrimary.IsLastCheckValid &&
-			topologyPrimary.GetStatus().GetPostgresReady() &&
+			topologyPrimary.GetStatus().GetPostgresListening() &&
 			!sa.LeaderHasResigned
-		if topologyPrimary.LastPostgresReadyTime != nil {
-			sa.LeaderLastPostgresReadyTime = topologyPrimary.LastPostgresReadyTime.AsTime()
+		if topologyPrimary.LastPostgresListeningTime != nil {
+			sa.LeaderLastPostgresListeningTime = topologyPrimary.LastPostgresListeningTime.AsTime()
 		}
 
 		// Detect pg_promote transition: multipooler explicitly signals promotion is running.

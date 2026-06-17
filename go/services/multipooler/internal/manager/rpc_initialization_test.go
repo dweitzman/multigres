@@ -411,7 +411,7 @@ func TestDetermineRemedialAction(t *testing.T) {
 			expectedAction: remedialActionNone,
 		},
 		{
-			name: "postgres_ready_type_matches_primary",
+			name: "postgres_listening_type_matches_primary",
 			state: postgresState{
 				pgctldAvailable: true,
 				postgresRunning: true,
@@ -421,7 +421,7 @@ func TestDetermineRemedialAction(t *testing.T) {
 			expectedAction: remedialActionNone,
 		},
 		{
-			name: "postgres_ready_promote_to_primary",
+			name: "postgres_listening_promote_to_primary",
 			state: postgresState{
 				pgctldAvailable: true,
 				postgresRunning: true,
@@ -431,7 +431,7 @@ func TestDetermineRemedialAction(t *testing.T) {
 			expectedAction: remedialActionAdjustTypeToPrimary,
 		},
 		{
-			name: "postgres_ready_demote_to_replica",
+			name: "postgres_listening_demote_to_replica",
 			state: postgresState{
 				pgctldAvailable: true,
 				postgresRunning: true,
@@ -441,7 +441,7 @@ func TestDetermineRemedialAction(t *testing.T) {
 			expectedAction: remedialActionAdjustTypeToReplica,
 		},
 		{
-			name: "postgres_ready_type_matches_replica_no_primary_term",
+			name: "postgres_listening_type_matches_replica_no_primary_term",
 			state: postgresState{
 				pgctldAvailable: true,
 				postgresRunning: true,
@@ -453,7 +453,7 @@ func TestDetermineRemedialAction(t *testing.T) {
 		{
 			// After emergency demotion + process restart, resignedLeaderAtTerm is lost.
 			// The monitor should re-publish it by triggering the replica adjustment action.
-			name: "postgres_ready_replica_missing_resignation_signal",
+			name: "postgres_listening_replica_missing_resignation_signal",
 			state: postgresState{
 				pgctldAvailable: true,
 				postgresRunning: true,
@@ -466,7 +466,7 @@ func TestDetermineRemedialAction(t *testing.T) {
 		},
 		{
 			// Signal already published — no action needed.
-			name: "postgres_ready_replica_resignation_signal_present",
+			name: "postgres_listening_replica_resignation_signal_present",
 			state: postgresState{
 				pgctldAvailable: true,
 				postgresRunning: true,
@@ -637,7 +637,7 @@ func TestTakeRemedialAction_PgctldUnavailable(t *testing.T) {
 	assert.Equal(t, "", pm.pgMonitorLastLoggedReason)
 }
 
-func TestTakeRemedialAction_PostgresReady(t *testing.T) {
+func TestTakeRemedialAction_PostgresListening(t *testing.T) {
 	ctx := t.Context()
 
 	pm := &MultiPoolerManager{
@@ -881,7 +881,7 @@ func TestTakeRemedialAction_ResignationSignal(t *testing.T) {
 
 			pm.takeRemedialAction(lockCtx, tc.action, postgresState{primaryTerm: tc.primaryTerm})
 
-			assert.Equal(t, tc.wantAvStatus, pm.buildAvailabilityStatus())
+			assert.Equal(t, tc.wantAvStatus, pm.buildAvailabilityStatus(false, nil))
 		})
 	}
 }
