@@ -233,6 +233,10 @@ from both succeeding.
 > (forced failover when a quorum is permanently lost). Document the operator
 > entry point once it lands.
 
+> TODO: add a worked end-to-end example — a 3-node `AT_LEAST_2` cohort losing
+> its leader, traced step by step (recruit responses, term/LSN selection,
+> promote, the diverged-follower pg_rewind) — to make the protocol concrete.
+
 ## Implementation map
 
 | Concern                             | Code                                                                                                                                                  |

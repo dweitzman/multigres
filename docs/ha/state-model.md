@@ -67,8 +67,8 @@ enforced here: because the term is `max + 1` and recruitment requires overlap
 with a majority of the outgoing cohort, two coordinators cannot both commit the
 same term.
 
-> TODO: the "majority overlap forces a single winner" argument belongs in
-> [rule-change.md](rule-change.md) — link it here once written.
+For the full argument — why majority overlap forces a single winner — see
+[Changing the Rules Safely](rule-change.md#why-recruitment-is-enough-majority--revocation).
 
 ## Cohort and quorum
 
@@ -120,11 +120,12 @@ within the same term), performs a compare-and-swap against the row it read, and
 writes both tables in a single CTE so the audit log can never diverge from
 `current_rule`.
 
-> TODO: `UpdateRule` also orchestrates the `synchronous_standby_names` /
-> `synchronous_commit` GUC transition (the `Both` → `Incoming` policy handoff via
-> `BuildPolicyTransition`) and the promotion hook. That mechanism is the subject
-> of [rule-change.md](rule-change.md); only the _state_ it produces is described
-> here.
+`UpdateRule` also orchestrates the `synchronous_standby_names` /
+`synchronous_commit` GUC transition (the `Both` → `Incoming` policy handoff via
+`BuildPolicyTransition`) and the promotion hook. That mechanism — and why the
+blocking rule-write doubles as the durability checkpoint — is covered in
+[Changing the Rules Safely](rule-change.md#committing-the-change-the-durability-checkpoint);
+only the _state_ it produces is described here.
 
 ## The revocation promise
 
@@ -171,9 +172,11 @@ Two predicates encode the safety rules:
   override**: if the cohort has demonstrably moved past the rule the revocation
   was authored to leave, the promise is moot.
 
-> TODO: `ExternallyCertifiedRevocation` (revoking the outgoing cohort via an
-> external operator rather than Recruit RPCs) is part of this model but is best
-> explained alongside the recruit flow. Cover in [rule-change.md](rule-change.md).
+A related message, `ExternallyCertifiedRevocation`, revokes the outgoing cohort
+via a coordinator's certification (a frozen LSN) rather than Recruit RPCs —
+used for bootstrap and operator override. It is explained alongside the recruit
+flow in
+[Changing the Rules Safely](rule-change.md#bootstrap-and-operator-override-externally-certified-revocation).
 
 ## Positions and PostgreSQL state
 
