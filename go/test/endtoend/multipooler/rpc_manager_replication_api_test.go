@@ -26,13 +26,81 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
+	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/test/endtoend/shardsetup"
 	"github.com/multigres/multigres/go/test/utils"
+	"github.com/multigres/multigres/go/tools/ctxutil"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multipoolermanagerpb "github.com/multigres/multigres/go/pb/multipoolermanager"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
+
+// queryRoundtripTimeout bounds a single ExecuteQuery roundtrip
+// (gRPC → multipooler → postgres). It is more generous than
+// utils.WithShortDeadline's 2s because these tests run under the instrumented,
+// CPU-contended coverage CI jobs, where 2s yields spurious DeadlineExceeded on
+// otherwise-fast queries. It is used for one-shot queries; calls inside
+// require.Eventually keep the short deadline so the loop can re-attempt within
+// its own budget rather than spending it all on one slow attempt.
+const queryRoundtripTimeout = 10 * time.Second
+
+// setShardDurabilityPolicy changes the shard's durability policy on the primary
+// via UpdateConsensusRule, leaving the cohort unchanged. The compare-and-swap
+// guard uses the primary's current rule number.
+func setShardDurabilityPolicy(t *testing.T, ctx context.Context, primaryClient *shardsetup.MultipoolerClient, policy *clustermetadatapb.DurabilityPolicy) {
+	t.Helper()
+	_, err := primaryClient.Consensus.UpdateConsensusRule(ctx, &multipoolermanagerdatapb.UpdateConsensusRuleRequest{
+		Operation:            multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_UNSPECIFIED,
+		DurabilityPolicy:     policy,
+		ExpectedOutgoingRule: currentRuleNumberFromClient(t, ctx, primaryClient.Manager),
+	})
+	require.NoError(t, err, "UpdateConsensusRule (durability policy change) should succeed")
+}
+
+// useLocalDurabilityForReceiverTest switches the shard to AT_LEAST_1 (local
+// commit, no sync standby) so the primary commits without waiting for a standby
+// whose receiver the test stops. Changing the policy — rather than poking
+// synchronous_commit directly — avoids racing the GUC reconciler, which reverts a
+// manual ALTER SYSTEM back to the policy's value.
+//
+// Must be called AFTER setupPoolerTest: it registers a cleanup that re-enables the
+// standby's WAL receiver and restores AT_LEAST_2, and that cleanup must run BEFORE
+// the shared clean-state validation (LIFO), which checks baseline GUCs. Restoring
+// AT_LEAST_2 needs a streaming standby to acknowledge the rule write, so the
+// cleanup re-enables the receiver and waits for it to reconnect first.
+func useLocalDurabilityForReceiverTest(t *testing.T, primaryClient *shardsetup.MultipoolerClient, standbyManager multipoolermanagerpb.MultiPoolerManagerClient, standbyPooler *shardsetup.MultiPoolerTestClient) {
+	t.Helper()
+
+	setShardDurabilityPolicy(t, utils.WithTimeout(t, 15*time.Second), primaryClient, topoclient.AtLeastN(1))
+	require.Eventually(t, func() bool {
+		v, err := shardsetup.QueryStringValue(utils.WithShortDeadline(t), primaryClient.Pooler, "SHOW synchronous_commit")
+		return err == nil && v == "local"
+	}, 15*time.Second, 200*time.Millisecond, "synchronous_commit should become 'local' after switching to AT_LEAST_1")
+
+	t.Cleanup(func() {
+		base := ctxutil.Detach(t.Context())
+
+		// Re-enable the receiver so the AT_LEAST_2 rule write can be acknowledged.
+		startCtx, cancel := context.WithTimeout(base, 10*time.Second)
+		defer cancel()
+		if _, err := standbyManager.StartReplication(startCtx, &multipoolermanagerdatapb.StartReplicationRequest{}); err != nil {
+			t.Logf("cleanup: StartReplication failed: %v", err)
+		}
+
+		// Wait for the receiver to reconnect (monitor-driven) before restoring sync.
+		require.Eventually(t, func() bool {
+			qctx, qcancel := context.WithTimeout(base, 2*time.Second)
+			defer qcancel()
+			resp, err := standbyPooler.ExecuteQuery(qctx, "SELECT count(*) FROM pg_stat_wal_receiver", 1)
+			return err == nil && len(resp.Rows) == 1 && string(resp.Rows[0].Values[0]) == "1"
+		}, 20*time.Second, 200*time.Millisecond, "cleanup: WAL receiver should reconnect before restoring AT_LEAST_2")
+
+		polCtx, polCancel := context.WithTimeout(base, 15*time.Second)
+		defer polCancel()
+		setShardDurabilityPolicy(t, polCtx, primaryClient, topoclient.AtLeastN(2))
+	})
+}
 
 // TestReplicationAPIs tests the replication-related API functionality (WaitForLSN, StartReplication, StopReplication).
 func TestReplicationAPIs(t *testing.T) {
@@ -269,9 +337,9 @@ func TestReplicationAPIs(t *testing.T) {
 		// writes to the primary. With sync replication, writes would hang waiting for the
 		// disconnected standby.
 		setupPoolerTest(t, setup, WithDropTables("test_receiver_only"), WithResetGuc("synchronous_commit"))
-		_, err := primaryPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "ALTER SYSTEM SET synchronous_commit = 'local'", 0)
-		require.NoError(t, err, "Failed to set synchronous_commit to local")
-		shardsetup.ReloadConfig(context.Background(), t, primaryPoolerClient, "primary")
+		// Switch to local durability so the primary commits without blocking on the
+		// standby whose receiver we stop below (see useLocalDurabilityForReceiverTest).
+		useLocalDurabilityForReceiverTest(t, primaryClient, standbyManagerClient, standbyPoolerClient)
 
 		// Verify replication is working by checking pg_stat_wal_receiver
 		t.Log("Verifying replication is streaming...")
@@ -285,7 +353,7 @@ func TestReplicationAPIs(t *testing.T) {
 		}, 10*time.Second, 500*time.Millisecond, "Replication should be streaming")
 
 		// Verify WAL replay is NOT paused initially
-		queryResp, err := standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT pg_is_wal_replay_paused()", 1)
+		queryResp, err := standbyPoolerClient.ExecuteQuery(utils.WithTimeout(t, queryRoundtripTimeout), "SELECT pg_is_wal_replay_paused()", 1)
 		require.NoError(t, err)
 		require.Len(t, queryResp.Rows, 1)
 		isPaused := string(queryResp.Rows[0].Values[0])
@@ -295,9 +363,9 @@ func TestReplicationAPIs(t *testing.T) {
 
 		// Create a test table and insert data on primary before stopping receiver
 		t.Log("Creating test table and inserting data on primary...")
-		_, err = primaryPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "CREATE TABLE IF NOT EXISTS test_receiver_only (id SERIAL PRIMARY KEY, data TEXT)", 0)
+		_, err = primaryPoolerClient.ExecuteQuery(utils.WithTimeout(t, queryRoundtripTimeout), "CREATE TABLE IF NOT EXISTS test_receiver_only (id SERIAL PRIMARY KEY, data TEXT)", 0)
 		require.NoError(t, err)
-		_, err = primaryPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "INSERT INTO test_receiver_only (data) VALUES ('before_stop')", 0)
+		_, err = primaryPoolerClient.ExecuteQuery(utils.WithTimeout(t, queryRoundtripTimeout), "INSERT INTO test_receiver_only (data) VALUES ('before_stop')", 0)
 		require.NoError(t, err)
 
 		// Wait for data to replicate to standby
@@ -319,19 +387,19 @@ func TestReplicationAPIs(t *testing.T) {
 			Mode: multipoolermanagerdatapb.ReplicationPauseMode_REPLICATION_PAUSE_MODE_RECEIVER_ONLY,
 			Wait: true,
 		}
-		_, err = standbyManagerClient.StopReplication(utils.WithShortDeadline(t), stopReq)
+		_, err = standbyManagerClient.StopReplication(utils.WithTimeout(t, queryRoundtripTimeout), stopReq)
 		require.NoError(t, err, "StopReplication with RECEIVER_ONLY should succeed")
 
 		// Since wait=true, receiver should already be disconnected when the call returns
 		t.Log("Verifying receiver is disconnected (should be immediate with wait=true)...")
-		queryResp, err = standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT COUNT(*) FROM pg_stat_wal_receiver", 1)
+		queryResp, err = standbyPoolerClient.ExecuteQuery(utils.WithTimeout(t, queryRoundtripTimeout), "SELECT COUNT(*) FROM pg_stat_wal_receiver", 1)
 		require.NoError(t, err)
 		require.Len(t, queryResp.Rows, 1)
 		receiverCount := string(queryResp.Rows[0].Values[0])
 		assert.Equal(t, "0", receiverCount, "WAL receiver should be disconnected after RECEIVER_ONLY with wait=true")
 
 		// Verify WAL replay is still NOT paused (RECEIVER_ONLY shouldn't pause replay)
-		queryResp, err = standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT pg_is_wal_replay_paused()", 1)
+		queryResp, err = standbyPoolerClient.ExecuteQuery(utils.WithTimeout(t, queryRoundtripTimeout), "SELECT pg_is_wal_replay_paused()", 1)
 		require.NoError(t, err)
 		require.Len(t, queryResp.Rows, 1)
 		isPaused = string(queryResp.Rows[0].Values[0])
@@ -340,7 +408,7 @@ func TestReplicationAPIs(t *testing.T) {
 
 		// Verify that data inserted before stopping receiver is still visible (replay continues on buffered WAL)
 		t.Log("Verifying that previously replicated data is still visible...")
-		dataResp, err := standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT COUNT(*) FROM test_receiver_only WHERE data = 'before_stop'", 1)
+		dataResp, err := standbyPoolerClient.ExecuteQuery(utils.WithTimeout(t, queryRoundtripTimeout), "SELECT COUNT(*) FROM test_receiver_only WHERE data = 'before_stop'", 1)
 		require.NoError(t, err)
 		require.Len(t, dataResp.Rows, 1)
 		count := string(dataResp.Rows[0].Values[0])
@@ -348,13 +416,13 @@ func TestReplicationAPIs(t *testing.T) {
 
 		// Insert new data on primary after receiver is disconnected
 		t.Log("Inserting new data on primary after receiver disconnect...")
-		_, err = primaryPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "INSERT INTO test_receiver_only (data) VALUES ('after_stop')", 0)
+		_, err = primaryPoolerClient.ExecuteQuery(utils.WithTimeout(t, queryRoundtripTimeout), "INSERT INTO test_receiver_only (data) VALUES ('after_stop')", 0)
 		require.NoError(t, err)
 
 		// Verify that new data does NOT appear on standby (receiver is disconnected)
 		t.Log("Verifying that new data does not replicate (receiver disconnected)...")
 		time.Sleep(2 * time.Second) // Give it time to potentially replicate (it shouldn't)
-		newDataResp, err := standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT COUNT(*) FROM test_receiver_only WHERE data = 'after_stop'", 1)
+		newDataResp, err := standbyPoolerClient.ExecuteQuery(utils.WithTimeout(t, queryRoundtripTimeout), "SELECT COUNT(*) FROM test_receiver_only WHERE data = 'after_stop'", 1)
 		require.NoError(t, err)
 		require.Len(t, newDataResp.Rows, 1)
 		newCount := string(newDataResp.Rows[0].Values[0])
@@ -383,9 +451,9 @@ func TestReplicationAPIs(t *testing.T) {
 
 		// Create a test table and insert data on primary before stopping receiver
 		t.Log("Creating test table and inserting data on primary...")
-		_, err = primaryPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "CREATE TABLE IF NOT EXISTS test_receiver_only_nowait (id SERIAL PRIMARY KEY, data TEXT)", 0)
+		_, err = primaryPoolerClient.ExecuteQuery(utils.WithTimeout(t, queryRoundtripTimeout), "CREATE TABLE IF NOT EXISTS test_receiver_only_nowait (id SERIAL PRIMARY KEY, data TEXT)", 0)
 		require.NoError(t, err)
-		_, err = primaryPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "INSERT INTO test_receiver_only_nowait (data) VALUES ('before_stop')", 0)
+		_, err = primaryPoolerClient.ExecuteQuery(utils.WithTimeout(t, queryRoundtripTimeout), "INSERT INTO test_receiver_only_nowait (data) VALUES ('before_stop')", 0)
 		require.NoError(t, err)
 
 		// Wait for data to replicate to standby
@@ -407,7 +475,7 @@ func TestReplicationAPIs(t *testing.T) {
 			Mode: multipoolermanagerdatapb.ReplicationPauseMode_REPLICATION_PAUSE_MODE_RECEIVER_ONLY,
 			Wait: false,
 		}
-		_, err := standbyManagerClient.StopReplication(utils.WithShortDeadline(t), stopReq)
+		_, err := standbyManagerClient.StopReplication(utils.WithTimeout(t, queryRoundtripTimeout), stopReq)
 		require.NoError(t, err, "StopReplication with RECEIVER_ONLY and wait=false should succeed")
 
 		// Since wait=false, the call returns immediately, but receiver should eventually disconnect
@@ -422,7 +490,7 @@ func TestReplicationAPIs(t *testing.T) {
 		}, 10*time.Second, 500*time.Millisecond, "WAL receiver should eventually disconnect")
 
 		// Verify WAL replay is still NOT paused
-		queryResp, err := standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT pg_is_wal_replay_paused()", 1)
+		queryResp, err := standbyPoolerClient.ExecuteQuery(utils.WithTimeout(t, queryRoundtripTimeout), "SELECT pg_is_wal_replay_paused()", 1)
 		require.NoError(t, err)
 		require.Len(t, queryResp.Rows, 1)
 		isPaused := string(queryResp.Rows[0].Values[0])
@@ -431,7 +499,7 @@ func TestReplicationAPIs(t *testing.T) {
 
 		// Verify that data inserted before stopping receiver is still visible
 		t.Log("Verifying that previously replicated data is still visible...")
-		dataResp, err := standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT COUNT(*) FROM test_receiver_only_nowait WHERE data = 'before_stop'", 1)
+		dataResp, err := standbyPoolerClient.ExecuteQuery(utils.WithTimeout(t, queryRoundtripTimeout), "SELECT COUNT(*) FROM test_receiver_only_nowait WHERE data = 'before_stop'", 1)
 		require.NoError(t, err)
 		require.Len(t, dataResp.Rows, 1)
 		count := string(dataResp.Rows[0].Values[0])
@@ -448,9 +516,9 @@ func TestReplicationAPIs(t *testing.T) {
 
 		// Use async replication since this test disconnects the standby and then writes to the primary.
 		setupPoolerTest(t, setup, WithDropTables("test_replay_and_receiver"), WithResetGuc("synchronous_commit"))
-		_, err := primaryPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "ALTER SYSTEM SET synchronous_commit = 'local'", 0)
-		require.NoError(t, err, "Failed to set synchronous_commit to local")
-		shardsetup.ReloadConfig(context.Background(), t, primaryPoolerClient, "primary")
+		// Switch to local durability so the primary commits without blocking on the
+		// standby whose receiver we stop below (see useLocalDurabilityForReceiverTest).
+		useLocalDurabilityForReceiverTest(t, primaryClient, standbyManagerClient, standbyPoolerClient)
 		// Verify replication is working
 		t.Log("Verifying replication is streaming...")
 		require.Eventually(t, func() bool {
@@ -463,7 +531,7 @@ func TestReplicationAPIs(t *testing.T) {
 		}, 10*time.Second, 500*time.Millisecond, "Replication should be streaming")
 
 		// Verify WAL replay is NOT paused initially
-		queryResp, err := standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT pg_is_wal_replay_paused()", 1)
+		queryResp, err := standbyPoolerClient.ExecuteQuery(utils.WithTimeout(t, queryRoundtripTimeout), "SELECT pg_is_wal_replay_paused()", 1)
 		require.NoError(t, err)
 		require.Len(t, queryResp.Rows, 1)
 		isPaused := string(queryResp.Rows[0].Values[0])
@@ -472,9 +540,9 @@ func TestReplicationAPIs(t *testing.T) {
 
 		// Create a test table and insert data on primary before pausing
 		t.Log("Creating test table and inserting initial data on primary...")
-		_, err = primaryPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "CREATE TABLE IF NOT EXISTS test_replay_and_receiver (id SERIAL PRIMARY KEY, data TEXT)", 0)
+		_, err = primaryPoolerClient.ExecuteQuery(utils.WithTimeout(t, queryRoundtripTimeout), "CREATE TABLE IF NOT EXISTS test_replay_and_receiver (id SERIAL PRIMARY KEY, data TEXT)", 0)
 		require.NoError(t, err)
-		_, err = primaryPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "INSERT INTO test_replay_and_receiver (data) VALUES ('before_pause')", 0)
+		_, err = primaryPoolerClient.ExecuteQuery(utils.WithTimeout(t, queryRoundtripTimeout), "INSERT INTO test_replay_and_receiver (data) VALUES ('before_pause')", 0)
 		require.NoError(t, err)
 
 		// Wait for data to replicate to standby
@@ -501,7 +569,7 @@ func TestReplicationAPIs(t *testing.T) {
 
 		// Since wait=true, both replay and receiver should be stopped when the call returns
 		t.Log("Verifying replay is paused (should be immediate with wait=true)...")
-		queryResp, err = standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT pg_is_wal_replay_paused()", 1)
+		queryResp, err = standbyPoolerClient.ExecuteQuery(utils.WithTimeout(t, queryRoundtripTimeout), "SELECT pg_is_wal_replay_paused()", 1)
 		require.NoError(t, err)
 		require.Len(t, queryResp.Rows, 1)
 		isPaused = string(queryResp.Rows[0].Values[0])
@@ -509,7 +577,7 @@ func TestReplicationAPIs(t *testing.T) {
 		assert.Equal(t, "t", isPaused, "WAL replay should be paused after REPLAY_AND_RECEIVER with wait=true")
 
 		t.Log("Verifying receiver is disconnected (should be immediate with wait=true)...")
-		queryResp, err = standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT COUNT(*) FROM pg_stat_wal_receiver", 1)
+		queryResp, err = standbyPoolerClient.ExecuteQuery(utils.WithTimeout(t, queryRoundtripTimeout), "SELECT COUNT(*) FROM pg_stat_wal_receiver", 1)
 		require.NoError(t, err)
 		require.Len(t, queryResp.Rows, 1)
 		receiverCount := string(queryResp.Rows[0].Values[0])
@@ -517,20 +585,20 @@ func TestReplicationAPIs(t *testing.T) {
 
 		// Insert new data on primary after stopping replication
 		t.Log("Inserting new data on primary after stopping replication...")
-		_, err = primaryPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "INSERT INTO test_replay_and_receiver (data) VALUES ('after_pause')", 0)
+		_, err = primaryPoolerClient.ExecuteQuery(utils.WithTimeout(t, queryRoundtripTimeout), "INSERT INTO test_replay_and_receiver (data) VALUES ('after_pause')", 0)
 		require.NoError(t, err)
 
 		// Verify that new data does NOT appear on standby (both receiver disconnected and replay paused)
 		t.Log("Verifying that new data does not appear on standby...")
 		time.Sleep(2 * time.Second) // Give it time to potentially replicate (it shouldn't)
-		newDataResp, err := standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT COUNT(*) FROM test_replay_and_receiver WHERE data = 'after_pause'", 1)
+		newDataResp, err := standbyPoolerClient.ExecuteQuery(utils.WithTimeout(t, queryRoundtripTimeout), "SELECT COUNT(*) FROM test_replay_and_receiver WHERE data = 'after_pause'", 1)
 		require.NoError(t, err)
 		require.Len(t, newDataResp.Rows, 1)
 		newCount := string(newDataResp.Rows[0].Values[0])
 		assert.Equal(t, "0", newCount, "New data should NOT appear on standby after REPLAY_AND_RECEIVER stop")
 
 		// Verify old data is still visible
-		oldDataResp, err := standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT COUNT(*) FROM test_replay_and_receiver WHERE data = 'before_pause'", 1)
+		oldDataResp, err := standbyPoolerClient.ExecuteQuery(utils.WithTimeout(t, queryRoundtripTimeout), "SELECT COUNT(*) FROM test_replay_and_receiver WHERE data = 'before_pause'", 1)
 		require.NoError(t, err)
 		require.Len(t, oldDataResp.Rows, 1)
 		oldCount := string(oldDataResp.Rows[0].Values[0])
@@ -558,9 +626,9 @@ func TestReplicationAPIs(t *testing.T) {
 
 		// Create a test table and insert data on primary before pausing
 		t.Log("Creating test table and inserting initial data on primary...")
-		_, err = primaryPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "CREATE TABLE IF NOT EXISTS test_replay_and_receiver_nowait (id SERIAL PRIMARY KEY, data TEXT)", 0)
+		_, err = primaryPoolerClient.ExecuteQuery(utils.WithTimeout(t, queryRoundtripTimeout), "CREATE TABLE IF NOT EXISTS test_replay_and_receiver_nowait (id SERIAL PRIMARY KEY, data TEXT)", 0)
 		require.NoError(t, err)
-		_, err = primaryPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "INSERT INTO test_replay_and_receiver_nowait (data) VALUES ('before_pause')", 0)
+		_, err = primaryPoolerClient.ExecuteQuery(utils.WithTimeout(t, queryRoundtripTimeout), "INSERT INTO test_replay_and_receiver_nowait (data) VALUES ('before_pause')", 0)
 		require.NoError(t, err)
 
 		// Wait for data to replicate to standby
@@ -582,7 +650,7 @@ func TestReplicationAPIs(t *testing.T) {
 			Mode: multipoolermanagerdatapb.ReplicationPauseMode_REPLICATION_PAUSE_MODE_REPLAY_AND_RECEIVER,
 			Wait: false,
 		}
-		_, err := standbyManagerClient.StopReplication(utils.WithShortDeadline(t), stopReq)
+		_, err := standbyManagerClient.StopReplication(utils.WithTimeout(t, queryRoundtripTimeout), stopReq)
 		require.NoError(t, err, "StopReplication with REPLAY_AND_RECEIVER and wait=false should succeed")
 
 		// Since wait=false, the call returns immediately, but eventually both should stop
@@ -609,7 +677,7 @@ func TestReplicationAPIs(t *testing.T) {
 
 		// Verify that old data is still visible
 		t.Log("Verifying that previously replicated data is still visible...")
-		oldDataResp, err := standbyPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "SELECT COUNT(*) FROM test_replay_and_receiver_nowait WHERE data = 'before_pause'", 1)
+		oldDataResp, err := standbyPoolerClient.ExecuteQuery(utils.WithTimeout(t, queryRoundtripTimeout), "SELECT COUNT(*) FROM test_replay_and_receiver_nowait WHERE data = 'before_pause'", 1)
 		require.NoError(t, err)
 		require.Len(t, oldDataResp.Rows, 1)
 		oldCount := string(oldDataResp.Rows[0].Values[0])
@@ -653,7 +721,7 @@ func TestReplicationStatus(t *testing.T) {
 		t.Log("Testing ReplicationStatus on PRIMARY pooler...")
 
 		// Call ReplicationStatus on PRIMARY
-		statusResp, err := primaryManagerClient.Status(utils.WithShortDeadline(t), &multipoolermanagerdatapb.StatusRequest{})
+		statusResp, err := primaryManagerClient.Status(utils.WithTimeout(t, queryRoundtripTimeout), &multipoolermanagerdatapb.StatusRequest{})
 		require.NoError(t, err, "ReplicationStatus should succeed on PRIMARY")
 		require.NotNil(t, statusResp.Status, "Status should not be nil")
 
@@ -690,7 +758,7 @@ func TestReplicationStatus(t *testing.T) {
 		}, 10*time.Second, 500*time.Millisecond, "Standby should be connected (from default setup)")
 
 		// Call ReplicationStatus on REPLICA
-		statusResp, err := standbyManagerClient.Status(utils.WithShortDeadline(t), &multipoolermanagerdatapb.StatusRequest{})
+		statusResp, err := standbyManagerClient.Status(utils.WithTimeout(t, queryRoundtripTimeout), &multipoolermanagerdatapb.StatusRequest{})
 		require.NoError(t, err, "ReplicationStatus should succeed on REPLICA")
 		require.NotNil(t, statusResp.Status, "Status should not be nil")
 
@@ -718,10 +786,10 @@ func TestReplicationStatus(t *testing.T) {
 		t.Log("Testing unified ReplicationStatus API works for both PRIMARY and REPLICA...")
 
 		// Call the same RPC on both PRIMARY and REPLICA
-		primaryStatusResp, err := primaryManagerClient.Status(utils.WithShortDeadline(t), &multipoolermanagerdatapb.StatusRequest{})
+		primaryStatusResp, err := primaryManagerClient.Status(utils.WithTimeout(t, queryRoundtripTimeout), &multipoolermanagerdatapb.StatusRequest{})
 		require.NoError(t, err, "ReplicationStatus should succeed on PRIMARY")
 
-		standbyStatusResp, err := standbyManagerClient.Status(utils.WithShortDeadline(t), &multipoolermanagerdatapb.StatusRequest{})
+		standbyStatusResp, err := standbyManagerClient.Status(utils.WithTimeout(t, queryRoundtripTimeout), &multipoolermanagerdatapb.StatusRequest{})
 		require.NoError(t, err, "ReplicationStatus should succeed on REPLICA")
 
 		// Verify each returns the appropriate status
