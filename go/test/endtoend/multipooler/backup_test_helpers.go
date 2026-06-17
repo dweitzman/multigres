@@ -211,6 +211,7 @@ func corruptBackupDataFile(t *testing.T, tempDir string) {
 	original, err := os.ReadFile(target)
 	require.NoError(t, err, "read backup file %s", target)
 	t.Cleanup(func() {
+		// #nosec G703 -- target is a backup data file discovered under the test's own repo dir.
 		if err := os.WriteFile(target, original, 0o600); err != nil {
 			t.Logf("warning: failed to restore corrupted backup file %s: %v", target, err)
 		}

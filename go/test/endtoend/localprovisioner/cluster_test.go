@@ -1236,6 +1236,7 @@ func TestClusterLifecycle(t *testing.T) {
 		t.Log("Testing that changing database fails...")
 		modifiedConfig := strings.ReplaceAll(string(originalConfig), "database: postgres", "database: different_db")
 		require.NotEqual(t, string(originalConfig), modifiedConfig, "config should have been modified for database test")
+		// #nosec G703 -- configFile is under the test's own temp dir, not user-controlled.
 		err = os.WriteFile(configFile, []byte(modifiedConfig), 0o644)
 		require.NoError(t, err)
 
@@ -1250,6 +1251,7 @@ func TestClusterLifecycle(t *testing.T) {
 		// Note: We only test database changes here. Tablegroup and shard changes
 		// are blocked by MVP validation before the immutable field check runs.
 		// The immutable field validation for those fields is still in place.
+		// #nosec G703 -- configFile is under the test's own temp dir, not user-controlled.
 		err = os.WriteFile(configFile, originalConfig, 0o644)
 		require.NoError(t, err)
 

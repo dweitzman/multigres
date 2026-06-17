@@ -758,11 +758,13 @@ func overrideRetentionInConfig(t *testing.T, poolerDir string, retentionFull str
 
 	updated := strings.Replace(string(original), "repo1-retention-full=7", "repo1-retention-full="+retentionFull, 1)
 	require.NotEqual(t, string(original), updated, "Should have replaced repo1-retention-full=7 in config")
+	// #nosec G703 -- configPath is the pooler's own pgbackrest.conf under poolerDir.
 	err = os.WriteFile(configPath, []byte(updated), 0o644)
 	require.NoError(t, err, "Should be able to write updated pgbackrest.conf")
 	t.Logf("Updated retention-full to %s in %s", retentionFull, configPath)
 
 	t.Cleanup(func() {
+		// #nosec G703 -- configPath is the pooler's own pgbackrest.conf under poolerDir.
 		_ = os.WriteFile(configPath, original, 0o644)
 	})
 }

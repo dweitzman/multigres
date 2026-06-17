@@ -1079,6 +1079,7 @@ func (pm *MultiPoolerManager) fixPgBackRestPaths(ctx context.Context) error {
 	newContent := re.ReplaceAllString(string(content), poolerDir)
 
 	// Write the file back
+	// #nosec G703 -- autoConfPath is postgresql.auto.conf under the pooler's own data dir, not user input.
 	if err := os.WriteFile(autoConfPath, []byte(newContent), 0o600); err != nil {
 		return mterrors.Wrap(err, "failed to write postgresql.auto.conf")
 	}

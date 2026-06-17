@@ -122,6 +122,7 @@ func (w *WriterValidator) createTable(ctx context.Context) error {
 
 // dropTable drops the test table.
 func (w *WriterValidator) dropTable(ctx context.Context) error {
+	// #nosec G202 -- tableName is a constant from test setup, not user-controlled.
 	query := "DROP TABLE IF EXISTS " + w.tableName
 	_, err := w.db.ExecContext(ctx, query)
 	return err
@@ -169,6 +170,9 @@ func (w *WriterValidator) Stop() {
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.cancel != nil {
+		w.cancel()
+	}
 	w.started = false
 }
 

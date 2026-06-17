@@ -598,6 +598,7 @@ func PrintLogLocation(tempDir string) {
 		}
 
 		println("\n--- " + path + " ---")
+		// #nosec G122 -- path comes from walking the test's own log dir during cleanup.
 		content, readErr := os.ReadFile(path)
 		if readErr != nil {
 			println("  [error reading log: " + readErr.Error() + "]")
