@@ -312,7 +312,7 @@ func TestAtLeastNPolicy_BuildSyncReplicationConfig(t *testing.T) {
 			"N=1 should pin synchronous_commit to local-flush durability")
 		require.Equal(t, multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_ANY, cfg.SyncMethod)
 		require.Equal(t, 1, cfg.NumSync, "NumSync must be a valid positive value; the empty standby list is what disables sync")
-		require.Empty(t, cfg.SyncStandbyIDs, "N=1 should produce an empty standby list so Postgres clears synchronous_standby_names")
+		require.Empty(t, cfg.SyncStandbyIDs, "N=1 should produce an empty standby list (single node satisfies local-flush durability with no sync standby)")
 	})
 
 	t.Run("N=2 with cohort of 2 sets num_sync=1", func(t *testing.T) {

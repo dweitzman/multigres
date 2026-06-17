@@ -66,6 +66,12 @@ type RuleStorer interface {
 	// inRecovery is false) and re-applies the GUC if needed. Requires the
 	// action lock.
 	ReconcileGUC(ctx context.Context, inRecovery bool) error
+
+	// FenceSyncStandby fences synchronous_standby_names to a fail-closed value
+	// (see SyncStandbyManager.Fence) so a node that is (or is becoming) a standby
+	// blocks writes if it is promoted before a real cohort policy is applied.
+	// Requires the action lock and that postgres is already in recovery.
+	FenceSyncStandby(ctx context.Context) error
 }
 
 // ruleStore manages the current shard rule in postgres.
@@ -158,6 +164,13 @@ func (rs *ruleStore) ReconcileGUC(ctx context.Context, inRecovery bool) error {
 		Policy: policy,
 		Cohort: pos.GetRule().GetCohortMembers(),
 	})
+}
+
+// FenceSyncStandby fences synchronous_standby_names to a fail-closed value so a
+// node that is (or is becoming) a standby blocks writes if promoted before a real
+// cohort policy is applied. See SyncStandbyManager.Fence.
+func (rs *ruleStore) FenceSyncStandby(ctx context.Context) error {
+	return rs.syncStandby.Fence(ctx)
 }
 
 // ----------------------------------------------------------------------------

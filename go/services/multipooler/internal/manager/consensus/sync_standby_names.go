@@ -60,6 +60,29 @@ func BuildSynchronousStandbyNamesValue(method multipoolermanagerdatapb.Synchrono
 	return fmt.Sprintf("%s %d (%s)", methodStr, numSync, FormatStandbyList(names)), nil
 }
 
+// fenceStandbyAppName is a synthetic application_name that no real pooler can
+// ever hold. NewReplicaID forbids underscores inside a cell or name, so a genuine
+// app name ("{cell}_{name}") contains exactly one underscore; this one contains
+// several, so no connected standby will ever match it.
+const fenceStandbyAppName = "multigres_fence_no_synchronous_standby"
+
+// FenceSyncStandbyNamesValue is a fail-closed synchronous_standby_names value: it
+// requires one acknowledgement from a standby that can never connect, so a
+// primary configured with it blocks every commit until a real cohort policy is
+// applied. A node in recovery (a standby) ignores synchronous_standby_names
+// entirely, so installing this while demoted is inert — it only takes effect if
+// the node is promoted before the real policy is set, which is exactly when
+// fail-closed behavior is wanted.
+//
+// This is defense-in-depth, not the primary correctness mechanism. Promotion
+// applies the real cohort via SetPolicy before pg_promote, and routing every
+// synchronous_standby_names write through SyncStandbyManager keeps its cache
+// coherent (it is the sole writer) so that apply is never skipped. The fence is
+// the safe default state for "no usable cohort": if any path ever makes a node
+// primary without first applying a real cohort, it blocks writes instead of
+// silently committing unacknowledged.
+const FenceSyncStandbyNamesValue = `FIRST 1 ("` + fenceStandbyAppName + `")`
+
 // ----------------------------------------------------------------------------
 // Validation Helpers
 // ----------------------------------------------------------------------------

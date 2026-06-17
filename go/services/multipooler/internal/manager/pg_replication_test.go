@@ -853,66 +853,6 @@ func TestParseSyncReplicationConfig(t *testing.T) {
 	}
 }
 
-func TestSetSynchronousStandbyNames(t *testing.T) {
-	tests := []struct {
-		name              string
-		synchronousMethod multipoolermanagerdatapb.SynchronousMethod
-		numSync           int32
-		names             []consensus.ReplicaID
-		setupMock         func(*mock.QueryService)
-		expectError       bool
-	}{
-		{
-			name:              "FIRST method with multiple standbys",
-			synchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
-			numSync:           1,
-			names:             []consensus.ReplicaID{mustPoolerIDFromAppName("cell1_pooler1"), mustPoolerIDFromAppName("cell1_pooler2")},
-			setupMock: func(m *mock.QueryService) {
-				m.AddQueryPatternOnce("ALTER SYSTEM SET synchronous_standby_names", mock.MakeQueryResult(nil, nil))
-			},
-			expectError: false,
-		},
-		{
-			name:              "ANY method with multiple standbys",
-			synchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_ANY,
-			numSync:           2,
-			names:             []consensus.ReplicaID{mustPoolerIDFromAppName("cell1_pooler1"), mustPoolerIDFromAppName("cell2_pooler2"), mustPoolerIDFromAppName("cell2_pooler3")},
-			setupMock: func(m *mock.QueryService) {
-				m.AddQueryPatternOnce("ALTER SYSTEM SET synchronous_standby_names", mock.MakeQueryResult(nil, nil))
-			},
-			expectError: false,
-		},
-		{
-			name:              "db exec error",
-			synchronousMethod: multipoolermanagerdatapb.SynchronousMethod_SYNCHRONOUS_METHOD_FIRST,
-			numSync:           1,
-			names:             []consensus.ReplicaID{mustPoolerIDFromAppName("cell1_pooler1")},
-			setupMock: func(m *mock.QueryService) {
-				m.AddQueryPatternOnceWithError("ALTER SYSTEM SET synchronous_standby_names", errors.New("exec error"))
-			},
-			expectError: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			pm, mockQueryService := newTestManagerWithMock("default", "0-inf")
-
-			tt.setupMock(mockQueryService)
-
-			ctx := context.Background()
-			err := pm.setSynchronousStandbyNames(ctx, tt.synchronousMethod, tt.numSync, tt.names)
-
-			if tt.expectError {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-			}
-			assert.NoError(t, mockQueryService.ExpectationsWereMet())
-		})
-	}
-}
-
 func TestValidateExpectedLSN(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -1454,62 +1394,6 @@ func TestResetPrimaryConnInfo(t *testing.T) {
 
 			ctx := context.Background()
 			err := pm.resetPrimaryConnInfo(ctx)
-
-			if tt.expectError {
-				assert.Error(t, err)
-				if tt.errorContains != "" {
-					assert.Contains(t, err.Error(), tt.errorContains)
-				}
-			} else {
-				assert.NoError(t, err)
-			}
-			assert.NoError(t, mockQueryService.ExpectationsWereMet())
-		})
-	}
-}
-
-func TestClearSyncReplicationForDemotion(t *testing.T) {
-	tests := []struct {
-		name          string
-		setupMock     func(*mock.QueryService)
-		expectError   bool
-		errorContains string
-	}{
-		{
-			name: "successful clear synchronous replication",
-			setupMock: func(m *mock.QueryService) {
-				m.AddQueryPatternOnce("ALTER SYSTEM RESET synchronous_standby_names", mock.MakeQueryResult(nil, nil))
-				expectReloadConfig(m)
-			},
-			expectError: false,
-		},
-		{
-			name: "ALTER SYSTEM fails",
-			setupMock: func(m *mock.QueryService) {
-				m.AddQueryPatternOnceWithError("ALTER SYSTEM RESET synchronous_standby_names", errors.New("permission denied"))
-			},
-			expectError:   true,
-			errorContains: "failed to clear synchronous_standby_names for demotion",
-		},
-		{
-			name: "pg_reload_conf fails",
-			setupMock: func(m *mock.QueryService) {
-				m.AddQueryPatternOnce("ALTER SYSTEM RESET synchronous_standby_names", mock.MakeQueryResult(nil, nil))
-				expectReloadConfigFailure(m, errors.New("reload failed"))
-			},
-			expectError:   true,
-			errorContains: "failed to reload configuration for demotion",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			pm, mockQueryService := newTestManagerWithMock("default", "0-inf")
-
-			tt.setupMock(mockQueryService)
-
-			ctx := context.Background()
-			err := pm.clearSyncReplicationForDemotion(ctx)
 
 			if tt.expectError {
 				assert.Error(t, err)

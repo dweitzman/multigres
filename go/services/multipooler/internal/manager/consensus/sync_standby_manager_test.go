@@ -127,76 +127,86 @@ func TestSetPolicy_ErrorLeavesCache(t *testing.T) {
 	assert.Empty(t, ssm.lastStandbyNames)
 }
 
-func TestClear_ResetsAndInvalidatesCache(t *testing.T) {
+func TestFence_FencesAndUpdatesCache(t *testing.T) {
 	mockQS := mock.NewQueryService()
 	ssm := newTestSSM(mockQS)
 	mockQS.AddQueryPatternOnce("SELECT pg_is_in_recovery", mock.MakeQueryResult([]string{"pg_is_in_recovery"}, [][]any{{true}}))
-	mockQS.AddQueryPatternOnce("ALTER SYSTEM RESET synchronous_standby_names", mock.MakeQueryResult(nil, nil))
+	mockQS.AddQueryPatternOnce("ALTER SYSTEM SET synchronous_commit", mock.MakeQueryResult(nil, nil))
+	mockQS.AddQueryPatternOnce("ALTER SYSTEM SET synchronous_standby_names", mock.MakeQueryResult(nil, nil))
 	expectReloadConfig(mockQS)
 
-	// Pre-seed cache to verify it gets cleared.
+	// Pre-seed cache to verify it is replaced with the fence values, not emptied.
 	ssm.lastSyncCommit = "on"
 	ssm.lastStandbyNames = `ANY 1 ("zone1_standby-1")`
 
-	require.NoError(t, ssm.Clear(withTestActionLock(t)))
+	require.NoError(t, ssm.Fence(withTestActionLock(t)))
 	require.NoError(t, mockQS.ExpectationsWereMet())
 
-	assert.Empty(t, ssm.lastSyncCommit)
-	assert.Empty(t, ssm.lastStandbyNames)
+	// Fail-closed: the cleared state is the fence, not empty.
+	assert.Equal(t, "on", ssm.lastSyncCommit)
+	assert.Equal(t, FenceSyncStandbyNamesValue, ssm.lastStandbyNames)
 }
 
-func TestClear_RefusedOnPrimary(t *testing.T) {
+func TestFence_RefusedOnPrimary(t *testing.T) {
 	mockQS := mock.NewQueryService()
 	ssm := newTestSSM(mockQS)
 	mockQS.AddQueryPatternOnce("SELECT pg_is_in_recovery", mock.MakeQueryResult([]string{"pg_is_in_recovery"}, [][]any{{false}}))
 
-	err := ssm.Clear(withTestActionLock(t))
+	err := ssm.Fence(withTestActionLock(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not in recovery mode")
 	require.NoError(t, mockQS.ExpectationsWereMet())
 }
 
-func TestClear_ResetFails(t *testing.T) {
+func TestFence_FenceFails(t *testing.T) {
 	mockQS := mock.NewQueryService()
 	ssm := newTestSSM(mockQS)
 	mockQS.AddQueryPatternOnce("SELECT pg_is_in_recovery", mock.MakeQueryResult([]string{"pg_is_in_recovery"}, [][]any{{true}}))
-	mockQS.AddQueryPatternOnceWithError("ALTER SYSTEM RESET synchronous_standby_names", errors.New("permission denied"))
+	mockQS.AddQueryPatternOnce("ALTER SYSTEM SET synchronous_commit", mock.MakeQueryResult(nil, nil))
+	mockQS.AddQueryPatternOnceWithError("ALTER SYSTEM SET synchronous_standby_names", errors.New("permission denied"))
 
-	err := ssm.Clear(withTestActionLock(t))
+	err := ssm.Fence(withTestActionLock(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "permission denied")
 	require.NoError(t, mockQS.ExpectationsWereMet())
 }
 
-func TestClear_ReloadFails(t *testing.T) {
+func TestFence_ReloadFails(t *testing.T) {
 	mockQS := mock.NewQueryService()
 	ssm := newTestSSM(mockQS)
 	mockQS.AddQueryPatternOnce("SELECT pg_is_in_recovery", mock.MakeQueryResult([]string{"pg_is_in_recovery"}, [][]any{{true}}))
-	mockQS.AddQueryPatternOnce("ALTER SYSTEM RESET synchronous_standby_names", mock.MakeQueryResult(nil, nil))
+	mockQS.AddQueryPatternOnce("ALTER SYSTEM SET synchronous_commit", mock.MakeQueryResult(nil, nil))
+	mockQS.AddQueryPatternOnce("ALTER SYSTEM SET synchronous_standby_names", mock.MakeQueryResult(nil, nil))
 	expectReloadConfigFailure(mockQS, errors.New("reload failed"))
 
-	err := ssm.Clear(withTestActionLock(t))
+	err := ssm.Fence(withTestActionLock(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "reload failed")
 	require.NoError(t, mockQS.ExpectationsWereMet())
 }
 
-func TestSetPolicy_NoEligibleStandbys(t *testing.T) {
-	// AtLeastNPolicy{N: 1} produces a config with empty SyncStandbyIDs (the leader
-	// is durable on its own). SetPolicy must refuse — callers should use Clear.
+func TestSetPolicy_LocalDurabilityClearsStandbys(t *testing.T) {
+	// AtLeastNPolicy{N: 1} is a local-durability policy: it produces no sync
+	// standbys (the leader is durable on its own). SetPolicy applies it faithfully
+	// — synchronous_commit=local with an empty synchronous_standby_names, which is
+	// non-blocking by design — rather than refusing.
 	mockQS := mock.NewQueryService()
 	ssm := newTestSSM(mockQS)
+	mockQS.AddQueryPatternOnce("ALTER SYSTEM SET synchronous_commit", mock.MakeQueryResult(nil, nil))
+	mockQS.AddQueryPatternOnce("ALTER SYSTEM SET synchronous_standby_names", mock.MakeQueryResult(nil, nil))
+	expectReloadConfig(mockQS)
+
 	pc := commonconsensus.PolicyWithCohort{
 		Policy: commonconsensus.AtLeastNPolicy{N: 1},
 		Cohort: ssmTestCohort(),
 	}
 
 	ctx := WithPriorRuleWritesDrained(withTestActionLock(t))
-	err := ssm.SetPolicy(ctx, pc)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no eligible standbys")
-	// No ALTER SYSTEM queries should have been issued.
-	assert.NoError(t, mockQS.ExpectationsWereMet())
+	require.NoError(t, ssm.SetPolicy(ctx, pc))
+	require.NoError(t, mockQS.ExpectationsWereMet())
+
+	assert.Equal(t, "local", ssm.lastSyncCommit)
+	assert.Empty(t, ssm.lastStandbyNames)
 }
 
 func TestSetPolicy_ComputeGUCFails(t *testing.T) {
@@ -252,30 +262,30 @@ func TestSetPolicy_ReloadFails(t *testing.T) {
 	assert.Empty(t, ssm.lastStandbyNames)
 }
 
-func TestClear_RequiresActionLock(t *testing.T) {
+func TestFence_RequiresActionLock(t *testing.T) {
 	ssm := newTestSSM(mock.NewQueryService())
-	err := ssm.Clear(t.Context())
+	err := ssm.Fence(t.Context())
 	assert.EqualError(t, err, "context does not hold an action lock")
 }
 
-func TestClear_RecoveryCheckScanError(t *testing.T) {
+func TestFence_RecoveryCheckScanError(t *testing.T) {
 	mockQS := mock.NewQueryService()
 	ssm := newTestSSM(mockQS)
 	// Return an empty result so ScanSingleRow has no row to scan.
 	mockQS.AddQueryPatternOnce("SELECT pg_is_in_recovery", mock.MakeQueryResult(nil, nil))
 
-	err := ssm.Clear(withTestActionLock(t))
+	err := ssm.Fence(withTestActionLock(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "could not scan pg_is_in_recovery")
 	require.NoError(t, mockQS.ExpectationsWereMet())
 }
 
-func TestClear_RecoveryCheckFails(t *testing.T) {
+func TestFence_RecoveryCheckFails(t *testing.T) {
 	mockQS := mock.NewQueryService()
 	ssm := newTestSSM(mockQS)
 	mockQS.AddQueryPatternOnceWithError("SELECT pg_is_in_recovery", errors.New("connection refused"))
 
-	err := ssm.Clear(withTestActionLock(t))
+	err := ssm.Fence(withTestActionLock(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "could not verify recovery mode")
 	assert.Contains(t, err.Error(), "connection refused")

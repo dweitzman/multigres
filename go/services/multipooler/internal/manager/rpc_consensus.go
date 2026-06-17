@@ -807,8 +807,11 @@ func (pm *MultiPoolerManager) setPrimaryLocked(ctx context.Context, req *consens
 		if _, err := pm.restartAsStandbyLocked(ctx, leader.GetHost(), port); err != nil {
 			return nil, err
 		}
-		if err := pm.resetSynchronousReplication(ctx); err != nil {
-			pm.logger.WarnContext(ctx, "Failed to reset synchronous replication", "error", err)
+		// Fence synchronous_standby_names now that this node is a read-only
+		// standby. If/when this node is promoted in the future, its sync standby
+		// names will be reconfigured beforehand.
+		if err := pm.rules.FenceSyncStandby(ctx); err != nil {
+			pm.logger.WarnContext(ctx, "Failed to fence synchronous replication after demotion", "error", err)
 		}
 	} else {
 		pm.logger.InfoContext(ctx, "SetPrimary: updating standby primary_conninfo",

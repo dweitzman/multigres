@@ -38,7 +38,7 @@ func (noopSyncStandbyManager) SetPolicy(_ context.Context, _ commonconsensus.Pol
 	return nil
 }
 
-func (noopSyncStandbyManager) Clear(_ context.Context) error {
+func (noopSyncStandbyManager) Fence(_ context.Context) error {
 	return nil
 }
 
@@ -75,7 +75,7 @@ func (f *failingSyncStandbyManager) SetPolicy(_ context.Context, _ commonconsens
 	return nil
 }
 
-func (f *failingSyncStandbyManager) Clear(_ context.Context) error { return nil }
+func (f *failingSyncStandbyManager) Fence(_ context.Context) error { return nil }
 
 func (f *failingSyncStandbyManager) NeedsApply(_ context.Context, _ commonconsensus.PolicyWithCohort) (bool, error) {
 	return false, nil

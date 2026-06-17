@@ -45,7 +45,7 @@ func (noopSyncStandbyManager) SetPolicy(_ context.Context, _ commonconsensus.Pol
 	return nil
 }
 
-func (noopSyncStandbyManager) Clear(_ context.Context) error {
+func (noopSyncStandbyManager) Fence(_ context.Context) error {
 	return nil
 }
 
@@ -72,6 +72,8 @@ type fakeRuleStore struct {
 	inconsistentGUC    bool
 	reconcileGUCCalled bool
 	reconcileGUCErr    error
+	fenceSyncCalled    bool
+	fenceSyncErr       error
 }
 
 func (f *fakeRuleStore) ObservePosition(_ context.Context) (*clustermetadatapb.PoolerPosition, error) {
@@ -141,6 +143,13 @@ func (f *fakeRuleStore) ReconcileGUC(_ context.Context, _ bool) error {
 	defer f.mu.Unlock()
 	f.reconcileGUCCalled = true
 	return f.reconcileGUCErr
+}
+
+func (f *fakeRuleStore) FenceSyncStandby(_ context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fenceSyncCalled = true
+	return f.fenceSyncErr
 }
 
 // assertPromoteRecorded asserts that exactly one UpdateRule call was made with

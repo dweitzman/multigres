@@ -45,11 +45,15 @@ type SyncStandbyManager interface {
 	// of which are set automatically by ruleStore.UpdateRule.
 	SetPolicy(ctx context.Context, pc commonconsensus.PolicyWithCohort) error
 
-	// Clear resets synchronous_standby_names to its default (empty) value and
-	// invalidates the in-memory cache. It must only be called after postgres has
-	// entered recovery mode (pg_is_in_recovery() = true); calling it on a primary
-	// would allow commits to proceed without standby acknowledgment.
-	Clear(ctx context.Context) error
+	// Fence installs the fail-closed fence value (FenceSyncStandbyNamesValue) for
+	// synchronous_standby_names and refreshes the in-memory cache. Use it on a node
+	// that is (or is becoming) a standby so that, if promoted before SetPolicy
+	// installs the real cohort, commits block rather than proceeding
+	// unacknowledged. A standby ignores synchronous_standby_names, so the fence is
+	// inert until promotion. It must only be called after postgres has entered
+	// recovery mode (pg_is_in_recovery() = true); fencing a live primary would
+	// block its writes.
+	Fence(ctx context.Context) error
 
 	// NeedsApply returns true if the given policy would produce GUC strings that
 	// differ from what postgres currently has. It first checks the in-memory cache;
@@ -129,7 +133,7 @@ func (s *postgresqlSyncStandbyManager) reloadConfig(ctx context.Context) error {
 }
 
 // computedGUC holds the GUC strings and the config needed to apply them.
-// A zero wantCommit means the policy produced no eligible standbys.
+// wantStandby is empty for a permissive (local-durability) policy.
 type computedGUC struct {
 	cfg          *commonconsensus.SyncReplicationConfig
 	standbyNames []ReplicaID
@@ -137,9 +141,11 @@ type computedGUC struct {
 	wantStandby  string
 }
 
-// computeGUC derives the expected GUC state for the current policy.
-// Returns a zero computedGUC (wantCommit == "") when the policy produces no
-// eligible standbys; the caller should use Clear in that case.
+// computeGUC derives the expected GUC state for the current policy and applies it
+// faithfully: a permissive (local-durability) policy produces no sync standbys, so
+// it yields an empty synchronous_standby_names, which is non-blocking. The
+// SetPolicy path is for applying an explicit, validated policy — unlike the
+// demotion Fence path, it does not second-guess an empty standby list.
 func (s *postgresqlSyncStandbyManager) computeGUC(pc commonconsensus.PolicyWithCohort) (computedGUC, error) {
 	cfg, err := pc.Policy.BuildSyncReplicationConfig(s.logger, pc.Cohort, s.localID)
 	if err != nil {
@@ -149,16 +155,16 @@ func (s *postgresqlSyncStandbyManager) computeGUC(pc commonconsensus.PolicyWithC
 	if err != nil {
 		return computedGUC{}, err
 	}
-	if len(standbyNames) == 0 {
-		return computedGUC{}, nil
-	}
 	wantCommit, err := syncCommitString(cfg.SyncCommit)
 	if err != nil {
 		return computedGUC{}, err
 	}
-	wantStandby, err := BuildSynchronousStandbyNamesValue(cfg.SyncMethod, int32(cfg.NumSync), standbyNames)
-	if err != nil {
-		return computedGUC{}, err
+	wantStandby := ""
+	if len(standbyNames) > 0 {
+		wantStandby, err = BuildSynchronousStandbyNamesValue(cfg.SyncMethod, int32(cfg.NumSync), standbyNames)
+		if err != nil {
+			return computedGUC{}, err
+		}
 	}
 	return computedGUC{cfg: cfg, standbyNames: standbyNames, wantCommit: wantCommit, wantStandby: wantStandby}, nil
 }
@@ -233,9 +239,6 @@ func (s *postgresqlSyncStandbyManager) SetPolicy(ctx context.Context, pc commonc
 	if err != nil {
 		return fmt.Errorf("SetPolicy: %w", err)
 	}
-	if g.wantCommit == "" {
-		return errors.New("SetPolicy: policy produced no eligible standbys; use Clear to reset synchronous_standby_names")
-	}
 
 	s.mu.Lock()
 	unchanged := s.lastSyncCommit == g.wantCommit && s.lastStandbyNames == g.wantStandby
@@ -261,16 +264,27 @@ func (s *postgresqlSyncStandbyManager) SetPolicy(ctx context.Context, pc commonc
 	return nil
 }
 
-// Clear resets synchronous_standby_names to its default value and invalidates the
-// in-memory cache. Called during demotion so that commits do not block on standbys
-// that are no longer connected to this node.
-func (s *postgresqlSyncStandbyManager) Clear(ctx context.Context) error {
+// Fence installs the fail-closed fence value (FenceSyncStandbyNamesValue) for
+// synchronous_standby_names and refreshes the in-memory cache. The safe "no
+// usable cohort" state is the fence, not empty: an empty value is fail-open (a
+// primary commits without waiting for any standby).
+//
+// Called on a node that is becoming (or already is) a standby — e.g. during
+// demotion in SetPrimary. A standby ignores synchronous_standby_names, so the
+// fence is inert until the node is promoted; if a promotion races ahead of
+// SetPolicy installing the real cohort, the fence makes commits block instead of
+// proceeding unacknowledged. synchronous_commit is forced to "on" so the fence is
+// effective regardless of any prior value.
+//
+// It must only be called after postgres has entered recovery mode
+// (pg_is_in_recovery() = true); fencing a live primary would block its writes.
+func (s *postgresqlSyncStandbyManager) Fence(ctx context.Context) error {
 	if err := actionlock.AssertActionLockHeld(ctx); err != nil {
 		return err
 	}
 
-	// Safety: clearing synchronous_standby_names on a primary would allow commits
-	// to proceed without standby acknowledgment, violating durability guarantees.
+	// Safety: only fence a node that is already read-only. On a primary this
+	// would block in-flight writes; the caller must demote first.
 	checkCtx, checkCancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer checkCancel()
 	result, err := s.qs.Query(checkCtx, "SELECT pg_is_in_recovery()")
@@ -282,20 +296,24 @@ func (s *postgresqlSyncStandbyManager) Clear(ctx context.Context) error {
 		return fmt.Errorf("clear: could not scan pg_is_in_recovery result: %w", err)
 	}
 	if !inRecovery {
-		return errors.New("clear: postgres is not in recovery mode — refusing to clear synchronous_standby_names on a primary")
+		return errors.New("clear: postgres is not in recovery mode — refusing to fence synchronous_standby_names on a primary")
 	}
 
+	if err := s.setSynchronousCommit(ctx, multipoolermanagerdatapb.SynchronousCommitLevel_SYNCHRONOUS_COMMIT_ON); err != nil {
+		return fmt.Errorf("clear: %w", err)
+	}
 	execCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	if err := s.exec(execCtx, "ALTER SYSTEM RESET synchronous_standby_names"); err != nil {
-		return fmt.Errorf("clear: failed to reset synchronous_standby_names: %w", err)
+	sql := "ALTER SYSTEM SET synchronous_standby_names = " + ast.QuoteStringLiteral(FenceSyncStandbyNamesValue)
+	if err := s.exec(execCtx, sql); err != nil {
+		return fmt.Errorf("clear: failed to fence synchronous_standby_names: %w", err)
 	}
 	if err := s.reloadConfig(ctx); err != nil {
 		return fmt.Errorf("clear: %w", err)
 	}
 	s.mu.Lock()
-	s.lastSyncCommit = ""
-	s.lastStandbyNames = ""
+	s.lastSyncCommit = "on"
+	s.lastStandbyNames = FenceSyncStandbyNamesValue
 	s.mu.Unlock()
 	return nil
 }
