@@ -116,18 +116,18 @@ func (a *FixReplicationAction) Execute(ctx context.Context, problem types.Proble
 		return mterrors.Wrap(err, "failed to find affected replica")
 	}
 
-	primary := a.poolerStore.FindShardMembers(problem.ShardKey).Leader
-	if primary == nil {
+	leader := a.poolerStore.FindShardMembers(problem.ShardKey).Leader
+	if leader == nil {
 		return mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
 			"no consensus leader known for shard %s", problem.ShardKey)
 	}
 
 	a.logger.InfoContext(ctx, "found primary for replication",
-		"primary", primary.MultiPooler.Id.Name,
+		"primary", leader.MultiPooler.Id.Name,
 		"replica", replica.MultiPooler.Id.Name)
 
 	// Re-verify the problem still exists
-	needsFix, _, err := a.verifyProblemExists(ctx, replica, primary, problem.Code)
+	needsFix, _, err := a.verifyProblemExists(ctx, replica, leader, problem.Code)
 	if err != nil {
 		return mterrors.Wrap(err, "failed to verify replication status")
 	}
@@ -141,7 +141,7 @@ func (a *FixReplicationAction) Execute(ctx context.Context, problem types.Proble
 	// Dispatch to the appropriate fix based on the problem
 	switch problem.Code {
 	case types.ProblemReplicaNotReplicating:
-		return a.fixNotReplicating(ctx, replica, primary)
+		return a.fixNotReplicating(ctx, replica, leader)
 
 	// TODO: Future problem codes to handle
 	// case types.ProblemReplicaWrongPrimary:
