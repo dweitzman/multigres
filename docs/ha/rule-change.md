@@ -213,6 +213,11 @@ Combined with the revocation pledges from step 1, this is what makes split brain
 impossible: revocation eliminates rogue cohorts, and committing only on a
 quorum ack ensures no future coordinator can miss that the transition happened.
 
+If the leader dies _between_ writing the rule and reaching that quorum ack, the
+change is left in-flight — neither committed nor safe to discard. Completing such
+an interrupted rule change is the special case covered in
+[Propagating stuck rule transitions](propagation.md).
+
 ## Bootstrap and operator override: externally-certified revocation
 
 `AppointInitialLeader`

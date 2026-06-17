@@ -15,22 +15,26 @@ docs are layered: start at the top and descend only as far as you need.
 3. Then, in either order:
    - **[How we change the rules safely](rule-change.md)** — the recruit → build
      proposal → promote/set-primary protocol, with the PostgreSQL specifics.
+     - **[Propagating stuck rule transitions](propagation.md)** — the special
+       case where a rule change was interrupted before it committed. _(Draft —
+       based on an unmerged branch.)_
    - **[When we change the rules](recovery.md)** — how multiorch monitors health
      and decides to act. _(Skeleton — high-level responsibilities, details TODO.)_
 
 ## Want X? Read Y
 
-| If you want to understand…                                    | Read                              |
-| ------------------------------------------------------------- | --------------------------------- |
-| Why HA needs consensus at all; the preservation invariant     | [overview](consensus-overview.md) |
-| Rogue cohorts and why a safe rule change has two steps        | [overview](consensus-overview.md) |
-| What a "rule", "cohort", "quorum", or "term" _is_ in the code | [state model](state-model.md)     |
-| Where the current rule is stored and how it's changed         | [state model](state-model.md)     |
-| What the on-disk revocation promise guarantees                | [state model](state-model.md)     |
-| How a safe rule change works (recruit → promote)              | [rule change](rule-change.md)     |
-| How recruit / promote / set-primary act on PostgreSQL         | [rule change](rule-change.md)     |
-| How failure is detected and recovery decided                  | recovery.md _(TODO)_              |
-| Why a specific design choice was made                         | [decision log](decision-log/)     |
+| If you want to understand…                                    | Read                                    |
+| ------------------------------------------------------------- | --------------------------------------- |
+| Why HA needs consensus at all; the preservation invariant     | [overview](consensus-overview.md)       |
+| Rogue cohorts and why a safe rule change has two steps        | [overview](consensus-overview.md)       |
+| What a "rule", "cohort", "quorum", or "term" _is_ in the code | [state model](state-model.md)           |
+| Where the current rule is stored and how it's changed         | [state model](state-model.md)           |
+| What the on-disk revocation promise guarantees                | [state model](state-model.md)           |
+| How a safe rule change works (recruit → promote)              | [rule change](rule-change.md)           |
+| How recruit / promote / set-primary act on PostgreSQL         | [rule change](rule-change.md)           |
+| How failure is detected and recovery decided                  | recovery.md _(TODO)_                    |
+| How an interrupted rule change is finished                    | [propagation](propagation.md) _(draft)_ |
+| Why a specific design choice was made                         | [decision log](decision-log/)           |
 
 ## Decision log
 
