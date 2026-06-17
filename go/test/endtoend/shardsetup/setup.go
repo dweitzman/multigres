@@ -861,7 +861,8 @@ func (s *ShardSetup) RequireRecovery(t *testing.T, orchName string, timeout time
 				t.Logf("RequireRecovery: %s: %s", r.Name, FormatPoolerDiagnostics(r.Status, r.ConsensusStatus))
 			}
 		}
-		logMultiOrchStatus(utils.WithShortDeadline(t), t, s, "RequireRecovery")
+		label := fmt.Sprintf("RequireRecovery (elapsed=%s, timeout=%s)", time.Since(start).Round(time.Second), timeout)
+		logMultiOrchStatus(utils.WithShortDeadline(t), t, s, label)
 	}
 
 	// Log cluster state every 5 seconds while the RPC is in flight.
@@ -893,14 +894,16 @@ func (s *ShardSetup) RequireRecovery(t *testing.T, orchName string, timeout time
 	}
 
 	if len(resp.RemainingProblemCodes) > 0 {
-		t.Logf("RequireRecovery: %d problems remain on '%s': %v — final cluster state:",
-			len(resp.RemainingProblemCodes), orchName, resp.RemainingProblemCodes)
+		t.Logf("RequireRecovery: %d problems remain on '%s' after %s: %v — final cluster state:",
+			len(resp.RemainingProblemCodes), orchName, time.Since(start).Round(time.Millisecond), resp.RemainingProblemCodes)
 		logClusterState()
-		t.Fatalf("RequireRecovery: recovery did not complete within %s", timeout)
+		t.Fatalf("RequireRecovery: recovery did not complete within %s (elapsed %s)", timeout, time.Since(start).Round(time.Millisecond))
 	}
 
-	testtiming.Record(t, "recovery: "+orchName, time.Since(start), timeout)
-	t.Logf("Recovery completed successfully on multiorch '%s' - all problems resolved", orchName)
+	elapsed := time.Since(start)
+	testtiming.Record(t, "recovery: "+orchName, elapsed, timeout)
+	t.Logf("Recovery completed successfully on multiorch '%s' in %s - all problems resolved",
+		orchName, elapsed.Round(time.Millisecond))
 }
 
 // WaitForHealthStreamsEstablished blocks until the named multiorch instance
