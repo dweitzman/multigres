@@ -367,7 +367,7 @@ func findPrimary(ctx context.Context, config *Config) (*PoolerInfo, error) {
 			continue
 		}
 
-		postgresReady := status.Status.PostgresReady
+		postgresReady := status.Status.PostgresListening
 		primaryIsOperational := status.Status.PrimaryStatus != nil && status.Status.PrimaryStatus.Ready
 
 		if postgresReady && primaryIsOperational {
@@ -471,7 +471,7 @@ func waitForNewPrimary(ctx context.Context, config *Config, oldServiceID string,
 				continue
 			}
 
-			postgresReady := status.Status.PostgresReady
+			postgresReady := status.Status.PostgresListening
 			primaryIsOperational := status.Status.PrimaryStatus != nil && status.Status.PrimaryStatus.Ready
 
 			if debug && attempt%10 == 0 {
@@ -520,7 +520,7 @@ func waitForReplicaHealth(ctx context.Context, config *Config, cell, serviceID s
 		}
 
 		poolerType := status.Status.PoolerType
-		postgresReady := status.Status.PostgresReady
+		postgresReady := status.Status.PostgresListening
 		replStatus := status.Status.ReplicationStatus
 
 		if poolerType == clustermetadatapb.PoolerType_REPLICA && postgresReady && replStatus != nil {
@@ -551,7 +551,7 @@ func waitForReplicaHealth(ctx context.Context, config *Config, cell, serviceID s
 						continue
 					}
 
-					if !primaryStatus.Status.PostgresReady {
+					if !primaryStatus.Status.PostgresListening {
 						continue
 					}
 
@@ -629,7 +629,7 @@ func printReplicationStatus(ctx context.Context, config *Config) {
 			continue
 		}
 
-		if status.Status.PostgresReady && status.Status.PrimaryStatus != nil && status.Status.PrimaryStatus.Ready {
+		if status.Status.PostgresListening && status.Status.PrimaryStatus != nil && status.Status.PrimaryStatus.Ready {
 			primaryCell = cell
 			primaryServiceID = serviceID
 			break
@@ -677,7 +677,7 @@ func printReplicationStatus(ctx context.Context, config *Config) {
 			continue
 		}
 
-		if !status.Status.PostgresReady {
+		if !status.Status.PostgresListening {
 			fmt.Fprintf(os.Stderr, "  %sPostgreSQL not ready%s\n", colorRed, colorReset)
 			continue
 		}
