@@ -7,6 +7,12 @@ The overview is abstract: transactions, rules, cohorts, rogue cohorts. This page
 maps each of those ideas to a concrete proto message or table, and shows where
 each piece of state lives and how durable it is.
 
+> TODO: define the actors. "Coordinator" is used throughout (here and in the
+> overview) but never defined: it is the agent that drives a rule change — a
+> multiorch instance during failover, or the primary pooler itself for a
+> leader-led change. Pair this with the pooler-roles note below (leader /
+> follower / observer).
+
 ## State lives in three tiers
 
 A poolers's complete view of its place in the cluster is `ConsensusStatus`
@@ -191,6 +197,14 @@ ordered by rule number first, LSN second
 ([`ComparePosition`](../../go/common/consensus/compare.go)); the most advanced
 position across a cohort is the candidate the overview calls "the most advanced
 transaction history."
+
+> TODO: distinguish "transaction history" (the consensus concept — the single
+> durable chain from the overview) from a Postgres **timeline** (the WAL lineage
+> that forks on `pg_promote`, identified by a timeline ID). They are related but
+> not the same: a Postgres timeline fork is the mechanism by which a node
+> diverges, and `pg_rewind` reconciles a divergent timeline back onto the chosen
+> history. Worth a short note so "history" and "timeline" aren't read as
+> synonyms.
 
 Two PostgreSQL facts shape how a position is read (see the `current_lsn`
 expression in
