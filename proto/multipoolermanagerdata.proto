@@ -434,6 +434,12 @@ message UpdateConsensusRuleRequest {
 
   // Coordinator ID that initiated this operation (for audit trail)
   clustermetadata.ID coordinator_id = 6;
+
+  // Optional new durability policy for the shard. When set, the policy is changed
+  // as part of this rule update (in addition to any cohort operation). Leave unset
+  // to keep the current policy. A cohort operation is not required when only the
+  // policy is being changed (operation may be UNSPECIFIED in that case).
+  clustermetadata.DurabilityPolicy durability_policy = 7;
 }
 
 message UpdateConsensusRuleResponse {

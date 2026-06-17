@@ -68,7 +68,8 @@ func (s *consensusService) UpdateConsensusRule(ctx context.Context, req *multipo
 		req.Operation,
 		req.StandbyIds,
 		req.ExpectedOutgoingRule,
-		req.CoordinatorId)
+		req.CoordinatorId,
+		req.DurabilityPolicy)
 	if err != nil {
 		return nil, mterrors.ToGRPC(err)
 	}

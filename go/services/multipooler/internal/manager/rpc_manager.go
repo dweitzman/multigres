@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	"github.com/multigres/multigres/go/common/constants"
@@ -399,14 +400,16 @@ func (pm *MultiPoolerManager) ResetReplication(ctx context.Context) error {
 // proceeds only if this pooler's current recorded rule matches the given
 // RuleNumber. If they differ (the caller's view is stale), the operation
 // fails — the caller should re-read state and retry.
-func (pm *MultiPoolerManager) UpdateConsensusRule(ctx context.Context, operation multipoolermanagerdatapb.CohortUpdateOperation, standbyIDs []*clustermetadatapb.ID, expectedOutgoingRule *clustermetadatapb.RuleNumber, coordinatorID *clustermetadatapb.ID) error {
+func (pm *MultiPoolerManager) UpdateConsensusRule(ctx context.Context, operation multipoolermanagerdatapb.CohortUpdateOperation, standbyIDs []*clustermetadatapb.ID, expectedOutgoingRule *clustermetadatapb.RuleNumber, coordinatorID *clustermetadatapb.ID, durabilityPolicy *clustermetadatapb.DurabilityPolicy) error {
 	if err := pm.checkReady(); err != nil {
 		return err
 	}
 
-	// Validate operation
-	if operation == multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_UNSPECIFIED {
-		return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "operation must be specified")
+	// A cohort operation and a durability-policy change are independently optional,
+	// but at least one must be requested.
+	changingCohort := operation != multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_UNSPECIFIED
+	if !changingCohort && durabilityPolicy == nil {
+		return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "operation or durability_policy must be specified")
 	}
 
 	if expectedOutgoingRule == nil {
@@ -414,16 +417,21 @@ func (pm *MultiPoolerManager) UpdateConsensusRule(ctx context.Context, operation
 			"expected_outgoing_rule is required (compare-and-swap guard)")
 	}
 
-	// Validate standby IDs using the shared validation function
-	requestedApplicationNames, err := consensus.ValidateStandbyIDs(standbyIDs)
-	if err != nil {
-		return err
+	// Validate standby IDs only when changing the cohort; a policy-only change
+	// leaves the cohort untouched.
+	var requestedApplicationNames []consensus.ReplicaID
+	if changingCohort {
+		names, err := consensus.ValidateStandbyIDs(standbyIDs)
+		if err != nil {
+			return err
+		}
+		requestedApplicationNames = names
 	}
 
 	// Pre-compute history fields before acquiring the lock.
 	leaderID := pm.servicePoolerID
 
-	ctx, err = pm.actionLock.Acquire(ctx, "UpdateConsensusRule")
+	ctx, err := pm.actionLock.Acquire(ctx, "UpdateConsensusRule")
 	if err != nil {
 		return err
 	}
@@ -459,31 +467,36 @@ func (pm *MultiPoolerManager) UpdateConsensusRule(ctx context.Context, operation
 
 	// === Apply Operation ===
 
-	var updatedStandbys []consensus.ReplicaID
-	switch operation {
-	case multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_ADD:
-		updatedStandbys = consensus.ApplyAddOperation(currentApplicationNames, requestedApplicationNames)
+	updatedStandbys := currentApplicationNames
+	operationName := "set_durability_policy"
+	if changingCohort {
+		switch operation {
+		case multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_ADD:
+			updatedStandbys = consensus.ApplyAddOperation(currentApplicationNames, requestedApplicationNames)
 
-	case multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_REMOVE:
-		updatedStandbys = consensus.ApplyRemoveOperation(currentApplicationNames, requestedApplicationNames)
+		case multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_REMOVE:
+			updatedStandbys = consensus.ApplyRemoveOperation(currentApplicationNames, requestedApplicationNames)
 
-	default:
-		return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
-			"unsupported operation: "+operation.String())
+		default:
+			return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
+				"unsupported operation: "+operation.String())
+		}
+
+		// Validate that the final list is not empty
+		if len(updatedStandbys) == 0 {
+			return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
+				"resulting standby list cannot be empty after operation")
+		}
+		operationName = standbyUpdateOperationName(operation)
 	}
 
-	// Validate that the final list is not empty
-	if len(updatedStandbys) == 0 {
-		return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
-			"resulting standby list cannot be empty after operation")
-	}
-
-	// Check if there are any changes (idempotent).
-	if poolerIDSetEqual(currentApplicationNames, updatedStandbys) {
+	// Check if there are any changes (idempotent): neither the cohort nor the
+	// durability policy differs from what's already recorded.
+	cohortChanged := !poolerIDSetEqual(currentApplicationNames, updatedStandbys)
+	policyChanged := durabilityPolicy != nil && !proto.Equal(durabilityPolicy, pos.GetRule().GetDurabilityPolicy())
+	if !cohortChanged && !policyChanged {
 		return nil
 	}
-
-	operationName := standbyUpdateOperationName(operation)
 
 	// Insert history before applying GUCs
 	// Rationale: we want to ensure that a new cohort is advertised
@@ -513,6 +526,9 @@ func (pm *MultiPoolerManager) UpdateConsensusRule(ctx context.Context, operation
 		WithPreviousRule(
 			expectedOutgoingRule.GetCoordinatorTerm(),
 			expectedOutgoingRule.GetLeaderSubterm())
+	if durabilityPolicy != nil {
+		standbyUpdate = standbyUpdate.WithDurabilityPolicy(durabilityPolicy)
+	}
 	if _, err := pm.DoUpdateRule(ctx, standbyUpdate); err != nil {
 		return mterrors.Wrap(err, "failed to record replication config history")
 	}
