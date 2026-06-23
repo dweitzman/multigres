@@ -227,9 +227,6 @@ func (g *AnalysisGenerator) generateAnalysisForPooler(
 		AnalyzedAt:        time.Now(),
 	}
 
-	// Compute staleness
-	analysis.IsStale = !pooler.IsUpToDate
-
 	// Store consensus status.
 	analysis.ConsensusTerm = pooler.GetConsensusStatus().GetTermRevocation().GetRevokedBelowTerm()
 	analysis.ConsensusStatus = pooler.GetConsensusStatus()

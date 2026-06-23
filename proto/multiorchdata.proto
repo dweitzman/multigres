@@ -37,20 +37,24 @@ message PoolerHealthState {
   clustermetadata.MultiPooler multi_pooler = 1;
 
   // Computed fields (cached by multiorch)
-  bool is_up_to_date = 2;
   bool is_last_check_valid = 3;
 
   // Timestamps for staleness detection
   google.protobuf.Timestamp last_check_attempted = 4;
+  // TODO(dw-pooler-cache): this is orchestrator-stamped runtime state, not
+  // wire-format data. Once the pooler-cache rider lands, move it (and the other
+  // orch-derived bookkeeping) off this proto and onto the rider Go struct.
   google.protobuf.Timestamp last_check_successful = 5;
   google.protobuf.Timestamp last_seen = 6;
 
   // Field numbers 7–13 were individual mirrored Status fields;
   // replaced by the embedded status field below (field 22).
-  reserved 7, 8, 9, 10, 11, 12, 13;
+  // Field 2 (is_up_to_date) was orch-derived bookkeeping with no readers;
+  // removed in favor of freshness reasoning over last_seen / pooler_captured_at.
+  reserved 2, 7, 8, 9, 10, 11, 12, 13;
   reserved "pooler_type", "primary_status", "replication_status",
            "is_postgres_ready", "is_initialized", "has_data_directory",
-           "cohort_members", "is_postgres_running";
+           "cohort_members", "is_postgres_running", "is_up_to_date";
 
   // Consensus status from ConsensusStatus RPC (for divergence detection)
   clustermetadata.ConsensusStatus consensus_status = 14;

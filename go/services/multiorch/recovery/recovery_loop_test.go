@@ -729,7 +729,6 @@ func TestProcessShardProblems_DependencyEnforcement(t *testing.T) {
 				Hostname: "primary-host",
 			},
 			IsLastCheckValid: false,
-			IsUpToDate:       true,
 			LastSeen:         timestamppb.Now(),
 			ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 				Id: primaryID,
@@ -751,7 +750,6 @@ func TestProcessShardProblems_DependencyEnforcement(t *testing.T) {
 				Hostname: "replica-host",
 			},
 			IsLastCheckValid: true,
-			IsUpToDate:       true,
 			LastSeen:         timestamppb.Now(),
 			Status: &multipoolermanagerdatapb.Status{
 				PoolerType: clustermetadatapb.PoolerType_REPLICA,
@@ -799,7 +797,6 @@ func TestProcessShardProblems_DependencyEnforcement(t *testing.T) {
 				Hostname: "primary-host",
 			},
 			IsLastCheckValid: true, // Primary is healthy
-			IsUpToDate:       true,
 			LastSeen:         timestamppb.Now(),
 			// Consensus rule names this pooler the leader, so analysis derives
 			// leadership from consensus rather than the PoolerType label.
@@ -823,7 +820,6 @@ func TestProcessShardProblems_DependencyEnforcement(t *testing.T) {
 				Hostname: "replica-host",
 			},
 			IsLastCheckValid: true,
-			IsUpToDate:       true,
 			LastSeen:         timestamppb.Now(),
 			Status: &multipoolermanagerdatapb.Status{
 				PoolerType: clustermetadatapb.PoolerType_REPLICA,
@@ -916,7 +912,6 @@ func TestRecoveryLoop_ValidationPreventsStaleRecovery(t *testing.T) {
 			Hostname: "replica-host",
 		},
 		IsLastCheckValid: true,
-		IsUpToDate:       true,
 		LastSeen:         timestamppb.Now(),
 		Status: &multipoolermanagerdatapb.Status{
 			PoolerType: clustermetadatapb.PoolerType_REPLICA,
@@ -1067,7 +1062,6 @@ func TestRecoveryLoop_PostRecoveryRefresh(t *testing.T) {
 			Hostname: "primary-host",
 		},
 		IsLastCheckValid:   false, // Primary is dead
-		IsUpToDate:         true,
 		LastSeen:           timestamppb.New(time.Now().Add(-1 * time.Minute)),
 		LastCheckAttempted: timestamppb.New(initialPrimaryCheck),
 		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
@@ -1090,7 +1084,6 @@ func TestRecoveryLoop_PostRecoveryRefresh(t *testing.T) {
 			Hostname: "replica1-host",
 		},
 		IsLastCheckValid:   true,
-		IsUpToDate:         true,
 		LastSeen:           timestamppb.Now(),
 		LastCheckAttempted: timestamppb.New(initialReplica1Check),
 	}
@@ -1104,7 +1097,6 @@ func TestRecoveryLoop_PostRecoveryRefresh(t *testing.T) {
 			Hostname: "replica2-host",
 		},
 		IsLastCheckValid:   true,
-		IsUpToDate:         true,
 		LastSeen:           timestamppb.Now(),
 		LastCheckAttempted: timestamppb.New(initialReplica2Check),
 	}
@@ -1257,7 +1249,6 @@ func TestRecoveryLoop_FullCycle(t *testing.T) {
 			Hostname: "primary-host",
 		},
 		IsLastCheckValid: true,
-		IsUpToDate:       true,
 		LastSeen:         timestamppb.Now(),
 	}
 	engine.poolerStore.Set("multipooler-cell1-primary-pooler", primaryPooler)
@@ -1270,7 +1261,6 @@ func TestRecoveryLoop_FullCycle(t *testing.T) {
 			Hostname: "replica1-host",
 		},
 		IsLastCheckValid: true,
-		IsUpToDate:       true,
 		LastSeen:         timestamppb.Now(),
 		Status: &multipoolermanagerdatapb.Status{
 			PoolerType: clustermetadatapb.PoolerType_REPLICA,
@@ -1289,7 +1279,6 @@ func TestRecoveryLoop_FullCycle(t *testing.T) {
 			Hostname: "replica2-host",
 		},
 		IsLastCheckValid: true,
-		IsUpToDate:       true,
 		LastSeen:         timestamppb.Now(),
 		Status: &multipoolermanagerdatapb.Status{
 			PoolerType: clustermetadatapb.PoolerType_REPLICA,
@@ -1461,7 +1450,6 @@ func TestRecoveryLoop_PriorityOrdering(t *testing.T) {
 			Hostname: "replica-host",
 		},
 		IsLastCheckValid: true,
-		IsUpToDate:       true,
 		LastSeen:         timestamppb.Now(),
 		Status: &multipoolermanagerdatapb.Status{
 			PoolerType: clustermetadatapb.PoolerType_REPLICA,
@@ -1581,7 +1569,6 @@ func TestRecoveryLoop_TracingSpans(t *testing.T) {
 			Hostname: "replica-host",
 		},
 		IsLastCheckValid: true,
-		IsUpToDate:       true,
 		LastSeen:         timestamppb.Now(),
 		Status: &multipoolermanagerdatapb.Status{
 			PoolerType: clustermetadatapb.PoolerType_REPLICA,
@@ -1709,7 +1696,6 @@ func TestRecoveryLoop_GracePeriodIntegration(t *testing.T) {
 			Hostname: "primary-host",
 		},
 		IsLastCheckValid: true,
-		IsUpToDate:       true,
 		LastSeen:         timestamppb.Now(),
 	}
 	engine.poolerStore.Set("multipooler-cell1-primary-pooler", primaryPooler)
@@ -1722,7 +1708,6 @@ func TestRecoveryLoop_GracePeriodIntegration(t *testing.T) {
 			Hostname: "replica-host",
 		},
 		IsLastCheckValid: true,
-		IsUpToDate:       true,
 		LastSeen:         timestamppb.Now(),
 	}
 	engine.poolerStore.Set("multipooler-cell1-replica-pooler", replicaPooler)
@@ -1840,7 +1825,6 @@ func TestRecoveryLoop_DeadlineResetAfterSuccess(t *testing.T) {
 			Hostname: "replica-host",
 		},
 		IsLastCheckValid: true,
-		IsUpToDate:       true,
 		LastSeen:         timestamppb.Now(),
 	}
 	engine.poolerStore.Set("multipooler-cell1-replica-pooler", replicaPooler)
@@ -2016,7 +2000,6 @@ func TestRecoveryLoop_PerPoolerGracePeriod(t *testing.T) {
 			Hostname: "primary-host",
 		},
 		IsLastCheckValid: true,
-		IsUpToDate:       true,
 		LastSeen:         timestamppb.Now(),
 	}
 	engine.poolerStore.Set("multipooler-cell1-primary-pooler", primaryPooler)
@@ -2029,7 +2012,6 @@ func TestRecoveryLoop_PerPoolerGracePeriod(t *testing.T) {
 			Hostname: "replica1-host",
 		},
 		IsLastCheckValid: true,
-		IsUpToDate:       true,
 		LastSeen:         timestamppb.Now(),
 	}
 	engine.poolerStore.Set("multipooler-cell1-replica1-pooler", replica1Pooler)
@@ -2042,7 +2024,6 @@ func TestRecoveryLoop_PerPoolerGracePeriod(t *testing.T) {
 			Hostname: "replica2-host",
 		},
 		IsLastCheckValid: true,
-		IsUpToDate:       true,
 		LastSeen:         timestamppb.Now(),
 	}
 	engine.poolerStore.Set("multipooler-cell1-replica2-pooler", replica2Pooler)

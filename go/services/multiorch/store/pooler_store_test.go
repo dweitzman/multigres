@@ -255,25 +255,25 @@ func replicationStatus(self, leader *clustermetadatapb.ID, term int64) *clusterm
 func TestPoolerStore_DoUpdateRange(t *testing.T) {
 	store := NewPoolerStore()
 
-	// pooler1: IsUpToDate=true — should be reset to false
+	// pooler1: IsLastCheckValid=true — should be reset to false
 	store.Set("pooler1", &multiorchdatapb.PoolerHealthState{
 		MultiPooler: &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "pooler1"},
 		},
-		IsUpToDate: true,
+		IsLastCheckValid: true,
 	})
-	// pooler2: IsUpToDate=false — should remain false and not be written back
+	// pooler2: IsLastCheckValid=false — should remain false and not be written back
 	store.Set("pooler2", &multiorchdatapb.PoolerHealthState{
 		MultiPooler: &clustermetadatapb.MultiPooler{
 			Id: &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "pooler2"},
 		},
-		IsUpToDate: false,
+		IsLastCheckValid: false,
 	})
 
 	writeCount := 0
 	store.DoUpdateRange(func(key topoclient.ComponentID, value *multiorchdatapb.PoolerHealthState) (*multiorchdatapb.PoolerHealthState, bool) {
-		if value.IsUpToDate {
-			value.IsUpToDate = false
+		if value.IsLastCheckValid {
+			value.IsLastCheckValid = false
 			writeCount++
 			return value, true // write and continue
 		}
@@ -285,9 +285,9 @@ func TestPoolerStore_DoUpdateRange(t *testing.T) {
 
 	p1, ok := store.Get("pooler1")
 	require.True(t, ok)
-	require.False(t, p1.IsUpToDate, "pooler1 IsUpToDate should have been reset to false")
+	require.False(t, p1.IsLastCheckValid, "pooler1 IsLastCheckValid should have been reset to false")
 
 	p2, ok := store.Get("pooler2")
 	require.True(t, ok)
-	require.False(t, p2.IsUpToDate, "pooler2 IsUpToDate should remain false")
+	require.False(t, p2.IsLastCheckValid, "pooler2 IsLastCheckValid should remain false")
 }

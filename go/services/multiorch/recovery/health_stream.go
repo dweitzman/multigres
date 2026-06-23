@@ -423,7 +423,6 @@ func (hs *HealthStream) applySnapshot(ctx context.Context, poolerID topoclient.C
 	update := func(existing *multiorchdatapb.PoolerHealthState) *multiorchdatapb.PoolerHealthState {
 		existing.LastCheckSuccessful = now
 		existing.LastSeen = now
-		existing.IsUpToDate = true
 		existing.IsLastCheckValid = true
 		existing.Status = proto.Clone(status).(*multipoolermanagerdatapb.Status)
 		if snapshot.Status.AvailabilityStatus != nil {

@@ -133,7 +133,7 @@ func TestPoolerWatcher_InitialDiscovery(t *testing.T) {
 	p1, exists := poolerStore.Get(poolerKey("zone1", "pooler1"))
 	require.True(t, exists)
 	assert.Equal(t, "host1", p1.MultiPooler.Hostname)
-	assert.False(t, p1.IsUpToDate, "new pooler should not be marked up-to-date")
+	assert.False(t, p1.IsLastCheckValid, "new pooler should not be marked checked")
 
 	// Both should trigger onNewPooler
 	ok = waitForCondition(t, 5*time.Second, func() bool { return countNew() == 2 })
@@ -224,7 +224,6 @@ func TestPoolerWatcher_PoolerMetadataUpdate(t *testing.T) {
 	// Simulate a health-check populating some state
 	pid := poolerKey("zone1", "pooler1")
 	existing, _ := poolerStore.Get(pid)
-	existing.IsUpToDate = true
 	existing.IsLastCheckValid = true
 	poolerStore.Set(pid, existing)
 
@@ -246,7 +245,6 @@ func TestPoolerWatcher_PoolerMetadataUpdate(t *testing.T) {
 	// Health-check state should be preserved
 	updated, exists := poolerStore.Get(pid)
 	require.True(t, exists)
-	assert.True(t, updated.IsUpToDate, "IsUpToDate should be preserved")
 	assert.True(t, updated.IsLastCheckValid, "IsLastCheckValid should be preserved")
 
 	// An update to an existing pooler should NOT trigger another onNewPooler callback

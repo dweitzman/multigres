@@ -159,7 +159,6 @@ func TestForgetLongUnseenInstances_LongUnseen(t *testing.T) {
 		LastSeen:            timestamppb.New(now.Add(-threshold - time.Hour)), // > 4 hours ago
 		LastCheckAttempted:  timestamppb.New(now.Add(-threshold - time.Hour)),
 		LastCheckSuccessful: timestamppb.New(now.Add(-threshold - time.Hour)),
-		IsUpToDate:          true,
 	}
 	engine.poolerStore.Set("zone1/old-healthy", oldHealthyPooler)
 
@@ -180,7 +179,6 @@ func TestForgetLongUnseenInstances_LongUnseen(t *testing.T) {
 		LastSeen:            timestamppb.New(now.Add(-time.Hour)), // Only 1 hour ago
 		LastCheckAttempted:  timestamppb.New(now.Add(-time.Hour)),
 		LastCheckSuccessful: timestamppb.New(now.Add(-time.Hour)),
-		IsUpToDate:          true,
 	}
 	engine.poolerStore.Set("zone1/recent-healthy", recentHealthyPooler)
 

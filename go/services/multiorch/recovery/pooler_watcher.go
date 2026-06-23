@@ -459,7 +459,6 @@ func (cw *cellPoolerWatcher) handlePoolerEvent(wd *topoclient.WatchDataRecursive
 		// nothing live to monitor.
 		cw.store.Set(poolerID, &multiorchdatapb.PoolerHealthState{
 			MultiPooler: pooler,
-			IsUpToDate:  false,
 		})
 		cw.logger.Debug("cached already-SHUTDOWN pooler without opening stream", "pooler_id", poolerID)
 
@@ -496,7 +495,6 @@ func (cw *cellPoolerWatcher) handlePoolerEvent(wd *topoclient.WatchDataRecursive
 		// New pooler — add to store and queue for immediate health check.
 		cw.store.Set(poolerID, &multiorchdatapb.PoolerHealthState{
 			MultiPooler: pooler,
-			IsUpToDate:  false,
 		})
 		cw.onNewPooler(pooler.Id)
 		cw.logger.Info("new pooler discovered via watcher",

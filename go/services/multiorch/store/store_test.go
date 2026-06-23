@@ -48,7 +48,6 @@ func TestProtoStore_BasicOperations(t *testing.T) {
 			Type: clustermetadata.PoolerType_PRIMARY,
 		},
 		LastSeen:         timestamppb.Now(),
-		IsUpToDate:       true,
 		IsLastCheckValid: true,
 	}
 
@@ -221,13 +220,13 @@ func TestProtoStore_Range_ModifyDuringIteration(t *testing.T) {
 	store := NewProtoStore[string, *multiorchdatapb.PoolerHealthState]()
 
 	// Add test items
-	store.Set("key1", &multiorchdatapb.PoolerHealthState{IsUpToDate: true})
-	store.Set("key2", &multiorchdatapb.PoolerHealthState{IsUpToDate: false})
+	store.Set("key1", &multiorchdatapb.PoolerHealthState{IsLastCheckValid: true})
+	store.Set("key2", &multiorchdatapb.PoolerHealthState{IsLastCheckValid: false})
 
 	// Collect keys to delete (cannot delete during Range due to lock)
 	var toDelete []string
 	store.Range(func(key string, value *multiorchdatapb.PoolerHealthState) bool {
-		if value.IsUpToDate {
+		if value.IsLastCheckValid {
 			toDelete = append(toDelete, key)
 		}
 		return true
@@ -261,29 +260,29 @@ func TestProtoStore_CloningBehavior(t *testing.T) {
 				Database: "original_db",
 			},
 		},
-		IsUpToDate: true,
+		IsLastCheckValid: true,
 	}
 	store.Set("key1", original)
 
 	// Modify original after storing - should not affect stored value
 	original.MultiPooler.ShardKey.Database = "modified_db"
-	original.IsUpToDate = false
+	original.IsLastCheckValid = false
 
 	// Get should return clone of original stored value, not the modified one
 	retrieved, ok := store.Get("key1")
 	require.True(t, ok)
 	require.Equal(t, "original_db", retrieved.MultiPooler.GetShardKey().GetDatabase())
-	require.True(t, retrieved.IsUpToDate)
+	require.True(t, retrieved.IsLastCheckValid)
 
 	// Modify retrieved value - should not affect stored value
 	retrieved.MultiPooler.ShardKey.Database = "retrieved_modified"
-	retrieved.IsUpToDate = false
+	retrieved.IsLastCheckValid = false
 
 	// Get again - should still return original stored value
 	retrieved2, ok := store.Get("key1")
 	require.True(t, ok)
 	require.Equal(t, "original_db", retrieved2.MultiPooler.GetShardKey().GetDatabase())
-	require.True(t, retrieved2.IsUpToDate)
+	require.True(t, retrieved2.IsLastCheckValid)
 }
 
 func TestProtoStore_RangeCloningBehavior(t *testing.T) {
@@ -301,13 +300,13 @@ func TestProtoStore_RangeCloningBehavior(t *testing.T) {
 				Database: "original_db",
 			},
 		},
-		IsUpToDate: true,
+		IsLastCheckValid: true,
 	})
 
 	// Modify value during Range iteration
 	store.Range(func(key string, value *multiorchdatapb.PoolerHealthState) bool {
 		value.MultiPooler.ShardKey.Database = "modified_in_range"
-		value.IsUpToDate = false
+		value.IsLastCheckValid = false
 		return true
 	})
 
@@ -315,7 +314,7 @@ func TestProtoStore_RangeCloningBehavior(t *testing.T) {
 	retrieved, ok := store.Get("key1")
 	require.True(t, ok)
 	require.Equal(t, "original_db", retrieved.MultiPooler.GetShardKey().GetDatabase())
-	require.True(t, retrieved.IsUpToDate)
+	require.True(t, retrieved.IsLastCheckValid)
 }
 
 // TestProtoStore_DoUpdate_Concurrent verifies that concurrent DoUpdate calls do not

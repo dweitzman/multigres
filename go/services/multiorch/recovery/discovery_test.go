@@ -394,15 +394,14 @@ func TestDiscovery_PreservesTimestamps(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "host1", poolerInfo.MultiPooler.Hostname)
 	require.Nil(t, poolerInfo.LastSeen, "LastSeen should be nil (not yet health checked successfully)")
-	// Note: IsUpToDate may already be true here - health workers run concurrently and set it
-	// to true even on a failed check (FakeClient returns an error but IsUpToDate is still set).
+	// Note: IsLastCheckValid may already be true here - health workers run concurrently
+	// and set it even on a failed check (FakeClient returns an error but the flag is still set).
 
 	// Simulate health check by updating timestamps
 	now := timestamppb.Now()
 	poolerInfo.LastSeen = now
 	poolerInfo.LastCheckAttempted = now
 	poolerInfo.LastCheckSuccessful = now
-	poolerInfo.IsUpToDate = true
 	poolerInfo.IsLastCheckValid = true
 	engine.poolerStore.Set(poolerKey("zone1", "pooler1"), poolerInfo)
 
@@ -430,7 +429,6 @@ func TestDiscovery_PreservesTimestamps(t *testing.T) {
 	require.True(t, now.AsTime().Equal(updatedInfo.LastSeen.AsTime()), "LastSeen should be preserved")
 	require.True(t, now.AsTime().Equal(updatedInfo.LastCheckAttempted.AsTime()), "LastCheckAttempted should be preserved")
 	require.True(t, now.AsTime().Equal(updatedInfo.LastCheckSuccessful.AsTime()), "LastCheckSuccessful should be preserved")
-	require.True(t, updatedInfo.IsUpToDate, "IsUpToDate should be preserved")
 	require.True(t, updatedInfo.IsLastCheckValid, "IsLastCheckValid should be preserved")
 }
 

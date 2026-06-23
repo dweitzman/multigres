@@ -517,7 +517,6 @@ func TestRecoveryEngine_BookkeepingLoop_Integration(t *testing.T) {
 		LastSeen:            timestamppb.New(oldTime),
 		LastCheckAttempted:  timestamppb.New(oldTime),
 		LastCheckSuccessful: timestamppb.New(oldTime),
-		IsUpToDate:          true,
 	}
 	re.poolerStore.Set(key1, oldPooler)
 	key2 := poolerKey("zone1", "never-seen")
@@ -533,7 +532,6 @@ func TestRecoveryEngine_BookkeepingLoop_Integration(t *testing.T) {
 		},
 		LastCheckAttempted: timestamppb.New(oldTime),
 		LastSeen:           nil, // Never seen
-		IsUpToDate:         false,
 	}
 	re.poolerStore.Set(key2, neverSeenPooler)
 
@@ -552,7 +550,6 @@ func TestRecoveryEngine_BookkeepingLoop_Integration(t *testing.T) {
 		LastSeen:            timestamppb.New(recentTime),
 		LastCheckAttempted:  timestamppb.New(recentTime),
 		LastCheckSuccessful: timestamppb.New(recentTime),
-		IsUpToDate:          true,
 	}
 	re.poolerStore.Set(key3, healthyPooler)
 
@@ -651,14 +648,12 @@ func TestRecoveryEngine_FullIntegration(t *testing.T) {
 	info, ok := re.poolerStore.Get(keyNew)
 	require.True(t, ok)
 	require.Nil(t, info.LastSeen, "LastSeen should be nil initially")
-	require.False(t, info.IsUpToDate, "IsUpToDate should be false initially")
 
 	// Simulate health check
 	now := time.Now()
 	info.LastSeen = timestamppb.New(now)
 	info.LastCheckAttempted = timestamppb.New(now)
 	info.LastCheckSuccessful = timestamppb.New(now)
-	info.IsUpToDate = true
 	re.poolerStore.Set(keyNew, info)
 
 	// Update topology (change hostname)
@@ -680,7 +675,6 @@ func TestRecoveryEngine_FullIntegration(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "host2", updatedInfo.MultiPooler.Hostname, "hostname should be updated")
 	require.Equal(t, now.Unix(), updatedInfo.LastSeen.AsTime().Unix(), "LastSeen should be preserved")
-	require.True(t, updatedInfo.IsUpToDate, "IsUpToDate should be preserved")
 
 	// Wait for bookkeeping to remove old pooler
 	require.Eventually(t, func() bool {
