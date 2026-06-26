@@ -67,14 +67,21 @@ func GoContinueOnPanic(ctx context.Context, source string, fn func()) {
 }
 
 // GoCrashOnPanic runs fn in a new goroutine. If fn panics, the panic is logged
-// with its stack under source and counted, then re-raised so the process
-// crashes. Use only when continuing past the panic could violate correctness
-// and a restart is the intended recovery.
+// with its stack under source and counted, any registered crash flusher runs
+// (see RegisterCrashFlusher), then the panic is re-raised so the process crashes.
+// Use only when continuing past the panic could violate correctness and a restart
+// is the intended recovery.
+//
+// The synchronous log written by record — not the metric or any flushed
+// telemetry — is the authoritative crash record; it reaches stderr before the
+// re-panic regardless of how telemetry is configured. The crash flush is purely
+// best-effort.
 func GoCrashOnPanic(ctx context.Context, source string, fn func()) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
 				record(ctx, source, modeCrash, r)
+				flushBeforeCrash(ctx)
 				panic(r)
 			}
 		}()

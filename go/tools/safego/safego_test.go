@@ -16,6 +16,7 @@ package safego
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"sync"
@@ -82,6 +83,9 @@ func TestRecovered_RedactsPanicDetail(t *testing.T) {
 // standard Go pattern for exercising process-terminating behavior.
 func TestGoCrashOnPanic_Crashes(t *testing.T) {
 	if os.Getenv("SAFEGO_CRASH_CHILD") == "1" {
+		RegisterCrashFlusher(func(context.Context) {
+			fmt.Fprintln(os.Stderr, "CRASH_FLUSH_RAN")
+		})
 		GoCrashOnPanic(context.Background(), "crash-source", func() {
 			panic("fatal-boom")
 		})
@@ -101,7 +105,52 @@ func TestGoCrashOnPanic_Crashes(t *testing.T) {
 
 	output := string(out)
 	assert.Contains(t, output, "recovered from panic in goroutine", "should log before re-panicking")
+	assert.Contains(t, output, "CRASH_FLUSH_RAN", "the registered crash flusher should run before the crash")
 	assert.Contains(t, output, "fatal-boom", "the original panic value should reach the crash output")
+}
+
+func TestFlushBeforeCrash_RunsFlusher(t *testing.T) {
+	ran := make(chan struct{})
+	RegisterCrashFlusher(func(context.Context) { close(ran) })
+	t.Cleanup(func() { RegisterCrashFlusher(nil) })
+
+	flushBeforeCrash(t.Context())
+	select {
+	case <-ran:
+	default:
+		t.Fatal("registered flusher was not invoked")
+	}
+}
+
+func TestFlushBeforeCrash_NoFlusherIsNoop(t *testing.T) {
+	RegisterCrashFlusher(nil)
+	// Must not block or panic when nothing is registered.
+	flushBeforeCrash(t.Context())
+}
+
+func TestFlushBeforeCrash_BoundsAHangingFlusher(t *testing.T) {
+	prev := crashFlushTimeout
+	crashFlushTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { crashFlushTimeout = prev })
+
+	block := make(chan struct{})
+	t.Cleanup(func() { close(block) }) // release the leaked flusher goroutine
+	RegisterCrashFlusher(func(context.Context) { <-block })
+	t.Cleanup(func() { RegisterCrashFlusher(nil) })
+
+	start := time.Now()
+	flushBeforeCrash(t.Context())
+	assert.Less(t, time.Since(start), time.Second,
+		"a flusher that ignores the deadline must not stall the crash past the timeout")
+}
+
+func TestFlushBeforeCrash_GuardsAPanickingFlusher(t *testing.T) {
+	RegisterCrashFlusher(func(context.Context) { panic("flusher blew up") })
+	t.Cleanup(func() { RegisterCrashFlusher(nil) })
+
+	// A panic inside the flusher must not propagate out of flushBeforeCrash
+	// (it would otherwise replace the original crash value).
+	require.NotPanics(t, func() { flushBeforeCrash(t.Context()) })
 }
 
 func TestPanicCounter(t *testing.T) {
