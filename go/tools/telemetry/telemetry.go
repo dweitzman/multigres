@@ -54,6 +54,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/multigres/multigres/go/tools/safego"
+
 	"go.opentelemetry.io/contrib/bridges/otelslog"
 	"go.opentelemetry.io/contrib/exporters/autoexport"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -167,6 +169,10 @@ func (t *Telemetry) InitTelemetry(ctx context.Context, serviceName string, attrs
 	))
 
 	t.initialized = true
+
+	// Give a deliberate crash (safego.GoCrashOnPanic) a chance to export the
+	// crashing operation's buffered telemetry before the process dies.
+	safego.RegisterCrashFlusher(t.ForceFlush)
 
 	slog.DebugContext(ctx, "OpenTelemetry initialized", "service", serviceName)
 
@@ -369,6 +375,49 @@ func (t *Telemetry) GetMeterProvider() metric.MeterProvider {
 		return otel.GetMeterProvider()
 	}
 	return t.meterProvider
+}
+
+// ForceFlush makes a best-effort attempt to export any buffered telemetry
+// without shutting the providers down. It is registered as safego's crash
+// flusher (see InitTelemetry) so a deliberate crash gets a chance to emit the
+// crashing operation's trace span, the OTLP copy of the panic log record, and
+// recent metric deltas before the process dies — all of which are otherwise
+// buffered for periodic export and lost on exit.
+//
+// Best-effort by design: per-provider errors are ignored, the caller (safego)
+// bounds the time, and a nil/uninitialized provider is skipped. The lock is held
+// only to read the provider pointers, not during the flush I/O.
+//
+// The three providers are flushed concurrently. They share one short deadline,
+// so flushing sequentially would let a slow or hung export starve the others —
+// and the trace span of the crashing operation is the signal we least want
+// stuck behind a hanging log export. They are independent I/O with no ordering
+// requirement, so each gets the full budget in parallel.
+func (t *Telemetry) ForceFlush(ctx context.Context) {
+	t.mu.Lock()
+	tp, mp, lp := t.tracerProvider, t.meterProvider, t.loggerProvider
+	t.mu.Unlock()
+
+	var wg sync.WaitGroup
+	flush := func(name string, f func(context.Context) error) {
+		wg.Add(1)
+		// safego: a panic inside a provider's ForceFlush must not escape the
+		// crash path and replace the original panic; wg.Done still fires on unwind.
+		safego.GoContinueOnPanic(ctx, "telemetry-flush-"+name, func() {
+			defer wg.Done()
+			_ = f(ctx)
+		})
+	}
+	if tp != nil {
+		flush("traces", tp.ForceFlush)
+	}
+	if mp != nil {
+		flush("metrics", mp.ForceFlush)
+	}
+	if lp != nil {
+		flush("logs", lp.ForceFlush)
+	}
+	wg.Wait()
 }
 
 // ShutdownTelemetry gracefully shuts down all telemetry providers

@@ -154,6 +154,36 @@ func TestShutdownTelemetry_BeforeInit(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestForceFlush_BeforeInitIsNoop(t *testing.T) {
+	// ForceFlush on an uninitialized Telemetry (nil providers) must not panic or
+	// block: it is the crash-path flusher and may run before/without init.
+	require.NotPanics(t, func() {
+		NewTelemetry().ForceFlush(context.Background())
+	})
+}
+
+func TestForceFlush_AfterInit(t *testing.T) {
+	setup := SetupTestTelemetry(t)
+	ctx := context.Background()
+	require.NoError(t, setup.Telemetry.InitTelemetry(ctx, "test-service"))
+
+	tracer := otel.Tracer("test")
+	_, span := tracer.Start(ctx, "test-span")
+	span.End()
+
+	// Best-effort flush of all three providers in parallel must complete without
+	// panicking and within the caller's deadline.
+	flushCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	done := make(chan struct{})
+	go func() { defer close(done); setup.Telemetry.ForceFlush(flushCtx) }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("ForceFlush did not return")
+	}
+}
+
 func TestShutdownTelemetry_WithTimeout(t *testing.T) {
 	setup := SetupTestTelemetry(t)
 	ctx := context.Background()
