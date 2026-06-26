@@ -16,10 +16,12 @@ package backup
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"strings"
 
 	"github.com/multigres/multigres/go/tools/executil"
+	"github.com/multigres/multigres/go/tools/safego"
 )
 
 // safeCombinedOutput executes a command and streams its output to avoid blocking.
@@ -53,29 +55,29 @@ func safeCombinedOutput(cmd *executil.Cmd) (string, error) {
 	// the caller read these without a separate lock.
 	var stdoutScanErr, stderrScanErr error
 
-	go func() {
+	safego.GoContinueOnPanic(context.TODO(), "multipooler.backup-cmd-stdout-scanner", func() {
 		defer close(stdoutDone)
 		scanner := bufio.NewScanner(stdout)
 		for scanner.Scan() {
 			lines <- scanner.Text() + "\n"
 		}
 		stdoutScanErr = scanner.Err()
-	}()
+	})
 
-	go func() {
+	safego.GoContinueOnPanic(context.TODO(), "multipooler.backup-cmd-stderr-scanner", func() {
 		defer close(stderrDone)
 		scanner := bufio.NewScanner(stderr)
 		for scanner.Scan() {
 			lines <- scanner.Text() + "\n"
 		}
 		stderrScanErr = scanner.Err()
-	}()
+	})
 
-	go func() {
+	safego.GoContinueOnPanic(context.TODO(), "multipooler.backup-cmd-output-closer", func() {
 		<-stdoutDone
 		<-stderrDone
 		close(lines)
-	}()
+	})
 
 	var combinedBuf strings.Builder
 	for line := range lines {

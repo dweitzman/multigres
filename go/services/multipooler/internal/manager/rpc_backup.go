@@ -32,6 +32,7 @@ import (
 	"github.com/multigres/multigres/go/services/multipooler/internal/manager/actionlock"
 	backupengine "github.com/multigres/multigres/go/services/multipooler/internal/manager/backup"
 	"github.com/multigres/multigres/go/tools/executil"
+	"github.com/multigres/multigres/go/tools/safego"
 	"github.com/multigres/multigres/go/tools/telemetry"
 )
 
@@ -488,7 +489,7 @@ func (pm *MultiPoolerManager) runLongCommand(ctx context.Context, cmd *executil.
 	logCtx, cancelLog := context.WithCancel(ctx)
 
 	// Log progress periodically in background
-	go func() {
+	safego.GoContinueOnPanic(logCtx, "multipooler.backup-progress-logger", func() {
 		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
 
@@ -503,7 +504,7 @@ func (pm *MultiPoolerManager) runLongCommand(ctx context.Context, cmd *executil.
 					"elapsed_seconds", int(elapsed.Seconds()))
 			}
 		}
-	}()
+	})
 
 	output, err := cmd.CombinedOutput()
 

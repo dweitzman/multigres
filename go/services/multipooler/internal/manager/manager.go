@@ -45,6 +45,7 @@ import (
 	"github.com/multigres/multigres/go/tools/ctxutil"
 	"github.com/multigres/multigres/go/tools/grpccommon"
 	"github.com/multigres/multigres/go/tools/retry"
+	"github.com/multigres/multigres/go/tools/safego"
 	"github.com/multigres/multigres/go/tools/telemetry"
 	"github.com/multigres/multigres/go/tools/timer"
 
@@ -519,7 +520,9 @@ func (pm *MultiPoolerManager) openLocked(ctx context.Context, targetServingStatu
 	// SetState notifies all components (query service, heartbeat, health
 	// streamer) and Mutates the record. The publisher (if running, started
 	// by StartTopoRegistration) picks it up and writes to etcd.
-	go pm.runHealthHeartbeat(pm.ctx, timeouts.DefaultHealthHeartbeatInterval)
+	safego.GoContinueOnPanic(pm.ctx, "multipooler.health-heartbeat", func() {
+		pm.runHealthHeartbeat(pm.ctx, timeouts.DefaultHealthHeartbeatInterval)
+	})
 	if err := pm.servingState.SetState(ctx, pm.record.Type(), pm.record.SelfLeadership(), targetServingStatus); err != nil {
 		pm.logger.ErrorContext(ctx, "Failed to transition serving status on open", "target", targetServingStatus, "error", err)
 	}
@@ -1479,7 +1482,7 @@ func (pm *MultiPoolerManager) promoteStandbyToPrimary(ctx context.Context, state
 	// record); the postgres monitor is the backstop that marks within ~100ms once
 	// it observes the completed checkpoint.
 	checkpointCtx := pm.ctx
-	go func() {
+	safego.GoContinueOnPanic(checkpointCtx, "multipooler.post-promotion-checkpoint", func() {
 		if err := pm.exec(checkpointCtx, "CHECKPOINT"); err != nil {
 			pm.logger.WarnContext(checkpointCtx, "Async post-promotion checkpoint failed; rewind-readiness will be delayed until PostgreSQL's own checkpoint completes", "error", err)
 			return
@@ -1488,7 +1491,7 @@ func (pm *MultiPoolerManager) promoteStandbyToPrimary(ctx context.Context, state
 			pm.logger.InfoContext(checkpointCtx, "Post-promotion checkpoint complete; advertising rewind-ready", "coordinator_term", coordinatorTerm)
 			pm.broadcastHealth()
 		}
-	}()
+	})
 
 	// Promotion supersedes any pending rewind from a prior emergency demotion:
 	// the consensus protocol picked this node as the new leader at a higher
@@ -1667,7 +1670,7 @@ func (pm *MultiPoolerManager) Start(senv *servenv.ServEnv) {
 	})
 
 	// Start loading multipooler record from topology asynchronously
-	go pm.loadShardConfigFromGlobalTopo()
+	safego.GoContinueOnPanic(pm.ctx, "multipooler.load-shard-config", pm.loadShardConfigFromGlobalTopo)
 
 	senv.OnRunE(func() error {
 		// Block until manager is ready or error before registering gRPC services
@@ -1730,13 +1733,15 @@ func (pm *MultiPoolerManager) StartBackupHealth() {
 // launch) and from openLocked on every reopen when backupHealthEnabled is set.
 func (pm *MultiPoolerManager) startBackupHealthPollerLocked() {
 	ctx := pm.ctx
-	go pm.backup.RunHealthPoller(ctx, 0)
-	go func() {
+	safego.GoContinueOnPanic(ctx, "multipooler.backup-health-poller", func() {
+		pm.backup.RunHealthPoller(ctx, 0)
+	})
+	safego.GoContinueOnPanic(ctx, "multipooler.backup-health-refresh", func() {
 		if err := pm.WaitUntilReady(ctx); err != nil {
 			return // ctx cancelled before ready (shutdown); nothing to refresh
 		}
 		pm.backup.RefreshHealthNow(ctx)
-	}()
+	})
 }
 
 // StartTopoRegistration starts the publisher goroutine and kicks off the

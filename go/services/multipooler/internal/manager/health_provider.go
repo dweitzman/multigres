@@ -24,6 +24,7 @@ import (
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	querypb "github.com/multigres/multigres/go/pb/query"
 	"github.com/multigres/multigres/go/services/multipooler/internal/poolerserver"
+	"github.com/multigres/multigres/go/tools/safego"
 )
 
 const (
@@ -277,13 +278,13 @@ func (pm *MultiPoolerManager) SubscribeHealth(ctx context.Context) (*poolerserve
 	if pm.shutdownCtx != nil {
 		shutdownDone = pm.shutdownCtx.Done()
 	}
-	go func() {
+	safego.GoContinueOnPanic(ctx, "multipooler.health-subscription-cleanup", func() {
 		select {
 		case <-ctx.Done():
 		case <-shutdownDone:
 		}
 		pm.healthStreamer.unsubscribe(ch)
-	}()
+	})
 
 	return state, ch, nil
 }
