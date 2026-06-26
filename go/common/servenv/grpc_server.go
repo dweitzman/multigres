@@ -396,6 +396,11 @@ func (g *GrpcServer) Create() error {
 func (g *GrpcServer) interceptors() ([]grpc.ServerOption, error) {
 	interceptors := &serverInterceptorBuilder{}
 
+	// Added first so it is the outermost interceptor: it recovers panics from
+	// every handler and from the interceptors below it, turning a would-be
+	// process crash into a failed request.
+	interceptors.Add(recoveryStreamInterceptor, recoveryUnaryInterceptor)
+
 	if g.auth.Get() != "" {
 		slog.Info("enabling auth plugin", "plugin", g.auth.Get())
 		pluginInitializer, err := GetAuthenticator(g.auth.Get())
