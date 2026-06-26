@@ -20,6 +20,8 @@ import (
 	"errors"
 	"sync"
 	"time"
+
+	"github.com/multigres/multigres/go/tools/safego"
 )
 
 // ErrStopped is sent to notification channels when the runner is stopped
@@ -63,6 +65,7 @@ type PeriodicRunner struct {
 	timer    *time.Timer
 	wg       sync.WaitGroup
 	callback func(ctx context.Context)
+	name     string // panic-attribution label for the callback; set via WithName
 
 	// Channels to notify after next cycle completes (for WithAfterNextFullCycle)
 	cycleNotifications []chan error
@@ -87,6 +90,7 @@ type StartOptions struct {
 	fastStart          bool       // If true, schedule callback immediately (0 delay) instead of waiting for first interval
 	onStart            func()     // Optional callback invoked when actually starting (not when already running)
 	afterNextFullCycle chan error // Optional channel to receive cycle completion status (nil = success, ErrStopped = stopped)
+	name               string     // Optional panic-attribution label for the callback
 }
 
 // StartOption is a functional option for StartWithOptions.
@@ -98,6 +102,15 @@ type StartOption func(*StartOptions)
 func WithFastStart() StartOption {
 	return func(opts *StartOptions) {
 		opts.fastStart = true
+	}
+}
+
+// WithName sets a label used to attribute panics recovered from the callback
+// (in logs and the safego panic metric). Optional; without it the callback's
+// panics are attributed to a generic source and the stack still identifies them.
+func WithName(name string) StartOption {
+	return func(opts *StartOptions) {
+		opts.name = name
 	}
 }
 
@@ -173,6 +186,7 @@ func (r *PeriodicRunner) StartWithOptions(callback func(ctx context.Context), op
 
 	r.state = running
 	r.callback = callback
+	r.name = options.name
 	r.ctx, r.cancel = context.WithCancel(r.parentCtx)
 
 	if options.onStart != nil {
@@ -323,14 +337,23 @@ func (r *PeriodicRunner) execute() {
 	// Capture callback, context, and notification channels while holding the lock
 	callback := r.callback
 	ctx := r.ctx
+	name := r.name
 	notifications := r.cycleNotifications
 	r.cycleNotifications = nil // Clear for next cycle
 
 	// Release lock during callback execution to avoid blocking Stop()
 	r.mu.Unlock()
 
-	// Execute callback
-	callback(ctx)
+	// Execute the callback panic-safely: this runs on a time.AfterFunc goroutine
+	// with no caller above it, so an unrecovered panic would crash the process.
+	// Recover, log+count, and let the next tick run instead.
+	source := name
+	if source == "" {
+		source = "timer.PeriodicRunner"
+	}
+	safego.RunContinueOnPanic(ctx, source, func() {
+		callback(ctx)
+	})
 
 	// Notify all waiting channels that cycle completed successfully
 	for _, ch := range notifications {

@@ -535,3 +535,21 @@ func TestPeriodicRunnerUpdateIntervalWhenStopped(t *testing.T) {
 
 	runner.Stop()
 }
+
+func TestPeriodicRunner_RecoversCallbackPanic(t *testing.T) {
+	r := NewPeriodicRunner(t.Context(), 5*time.Millisecond)
+	t.Cleanup(r.Stop)
+
+	var calls atomic.Int32
+	r.StartWithOptions(func(context.Context) {
+		// Panic on the first tick; if the panic were not recovered the test
+		// binary would crash. Later ticks must still run.
+		if calls.Add(1) == 1 {
+			panic("callback boom")
+		}
+	}, WithFastStart(), WithName("test-runner"))
+
+	require.Eventually(t, func() bool {
+		return calls.Load() >= 2
+	}, 5*time.Second, 10*time.Millisecond, "runner should keep ticking after a recovered callback panic")
+}
