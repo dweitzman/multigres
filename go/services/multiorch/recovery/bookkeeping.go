@@ -15,11 +15,13 @@
 package recovery
 
 import (
+	"context"
 	"time"
 
 	"github.com/multigres/multigres/go/common/topoclient"
 	commontypes "github.com/multigres/multigres/go/common/types"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	"github.com/multigres/multigres/go/tools/safego"
 )
 
 // shutdownEtcdCleanupAge is how long a pooler's topology entry must have
@@ -41,7 +43,7 @@ const shutdownEtcdCleanupAge = 24 * time.Hour
 func (re *Engine) runBookkeeping() {
 	re.logger.Debug("running bookkeeping tasks")
 
-	go re.reloadConfigs()
+	safego.GoContinueOnPanic(context.TODO(), "multiorch.recovery-reload-configs", func() { re.reloadConfigs() })
 
 	re.cleanupOldShutdownEntries()
 }

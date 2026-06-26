@@ -26,6 +26,7 @@ import (
 	"go.opentelemetry.io/otel/semconv/v1.37.0/dbconv"
 
 	"github.com/multigres/multigres/go/services/multipooler/internal/connstate"
+	"github.com/multigres/multigres/go/tools/safego"
 )
 
 var (
@@ -294,7 +295,7 @@ func (pool *Pool[C]) open() {
 				pool.logger.Error("pool refresh check failed", "pool", pool.Name, "error", err)
 			}
 			if refresh {
-				go pool.reopen()
+				safego.GoContinueOnPanic(context.TODO(), "multipooler.pool-reopen", func() { pool.reopen() })
 				return false
 			}
 			return true

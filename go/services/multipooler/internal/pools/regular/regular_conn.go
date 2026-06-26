@@ -32,6 +32,7 @@ import (
 	"github.com/multigres/multigres/go/pb/query"
 	"github.com/multigres/multigres/go/services/multipooler/internal/connstate"
 	"github.com/multigres/multigres/go/services/multipooler/internal/pools/admin"
+	"github.com/multigres/multigres/go/tools/safego"
 )
 
 // errStreamingAlreadyStarted is a sentinel used internally to signal that a
@@ -621,10 +622,10 @@ func execOnce[T any](c *Conn, ctx context.Context, op func() (T, error)) (T, err
 	}
 
 	ch := make(chan result, 1)
-	go func() {
+	safego.GoContinueOnPanic(ctx, "multipooler.regular-exec-once", func() {
 		val, err := op()
 		ch <- result{val: val, err: err}
-	}()
+	})
 
 	select {
 	case <-ctx.Done():
@@ -655,10 +656,10 @@ func execWithContextCancel[T any](c *Conn, ctx context.Context, op func() (T, er
 	}
 
 	ch := make(chan result, 1)
-	go func() {
+	safego.GoContinueOnPanic(ctx, "multipooler.regular-exec-with-cancel", func() {
 		val, err := op()
 		ch <- result{val: val, err: err}
-	}()
+	})
 
 	select {
 	case <-ctx.Done():

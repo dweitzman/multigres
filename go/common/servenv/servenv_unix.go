@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/multigres/multigres/go/tools/netutil"
+	"github.com/multigres/multigres/go/tools/safego"
 
 	"go.opentelemetry.io/otel/attribute"
 	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
@@ -103,11 +104,11 @@ func (sv *ServEnv) Init(id ServiceIdentity) error {
 	if sv.catchSigpipe {
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, syscall.SIGPIPE)
-		go func() {
+		safego.GoContinueOnPanic(context.TODO(), "servenv.sigpipe-handler", func() {
 			<-sigChan
 			slog.Warn("Caught SIGPIPE (ignoring all future SIGPIPEs)")
 			signal.Ignore(syscall.SIGPIPE)
-		}()
+		})
 	}
 
 	// Add version tag to every info log
@@ -218,7 +219,7 @@ func (sv *ServEnv) startOrphanDetection() {
 		close(closeComplete)
 	})
 
-	go func() {
+	safego.GoContinueOnPanic(context.TODO(), "servenv.orphan-detection", func() {
 		ticker := time.NewTicker(1 * time.Second)
 		defer ticker.Stop()
 
@@ -269,5 +270,5 @@ func (sv *ServEnv) startOrphanDetection() {
 				return
 			}
 		}
-	}()
+	})
 }

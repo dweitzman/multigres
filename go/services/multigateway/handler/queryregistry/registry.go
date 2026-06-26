@@ -31,6 +31,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/multigres/multigres/go/tools/safego"
+
 	"github.com/multigres/multigres/go/common/cache/theine"
 )
 
@@ -194,7 +196,7 @@ func newRegistry(cfg Config, doorkeeper bool) *Registry {
 		ctx, cancel := context.WithCancel(context.Background())
 		r.samplerCancel = cancel
 		r.samplerDone = make(chan struct{})
-		go r.runSampler(ctx)
+		safego.GoContinueOnPanic(ctx, "multigateway.queryregistry-sampler", func() { r.runSampler(ctx) })
 	}
 	return r
 }

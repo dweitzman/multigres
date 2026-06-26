@@ -33,6 +33,7 @@ import (
 	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
+	"github.com/multigres/multigres/go/tools/safego"
 )
 
 // coordinatorLedRuleChange orchestrates the recruit → check → promote workflow
@@ -222,9 +223,9 @@ type recruitResult struct {
 func (r *coordinatorLedRuleChange) dispatchRecruit(ctx context.Context, cohort []*multiorchdatapb.PoolerHealthState, revocation *clustermetadatapb.TermRevocation) chan recruitResult {
 	recruited := make(chan recruitResult, len(cohort))
 	for _, p := range cohort {
-		go func() {
+		safego.GoContinueOnPanic(ctx, "multiorch.consensus-recruit-dispatch", func() {
 			recruited <- recruitResult{pooler: p, cs: r.recruit(ctx, p, revocation)}
-		}()
+		})
 	}
 	return recruited
 }
@@ -285,10 +286,10 @@ func (r *coordinatorLedRuleChange) dispatchPromote(
 	promoteResults := make(chan promoteResult, len(cohort))
 	for _, p := range cohort {
 		isLeader := topoclient.ClusterIDString(p.MultiPooler.Id) == leaderKey
-		go func() {
+		safego.GoContinueOnPanic(ctx, "multiorch.consensus-promote-dispatch", func() {
 			err := r.promote(ctx, p, propReq, isLeader)
 			promoteResults <- promoteResult{poolerName: p.MultiPooler.Id.Name, isLeader: isLeader, err: err}
-		}()
+		})
 	}
 
 	return promoteResults

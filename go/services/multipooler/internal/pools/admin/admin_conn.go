@@ -27,6 +27,7 @@ import (
 	"github.com/multigres/multigres/go/common/sqltypes"
 	"github.com/multigres/multigres/go/services/multipooler/internal/connstate"
 	"github.com/multigres/multigres/go/services/multipooler/internal/pools/connpool"
+	"github.com/multigres/multigres/go/tools/safego"
 )
 
 // maxQueryAttempts is the maximum number of attempts for retrying queries.
@@ -302,10 +303,10 @@ func execQueryWithContextCancel(ctx context.Context, conn *client.Conn, op func(
 	}
 
 	ch := make(chan result, 1)
-	go func() {
+	safego.GoContinueOnPanic(ctx, "multipooler.admin-exec-query", func() {
 		results, err := op()
 		ch <- result{results: results, err: err}
-	}()
+	})
 
 	select {
 	case <-ctx.Done():
@@ -355,7 +356,7 @@ type queryResult struct {
 func (c *Conn) execBackendFunc(ctx context.Context, sql, operation string, processID uint32) (bool, error) {
 	// Run query in goroutine so we can respect context cancellation.
 	ch := make(chan queryResult, 1)
-	go func() {
+	safego.GoContinueOnPanic(ctx, "multipooler.admin-backend-func", func() {
 		results, err := c.queryWithRetry(ctx, sql)
 		if err != nil {
 			ch <- queryResult{err: fmt.Errorf("failed to %s backend %d: %w", operation, processID, err)}
@@ -370,7 +371,7 @@ func (c *Conn) execBackendFunc(ctx context.Context, sql, operation string, proce
 			success = val == "t"
 		}
 		ch <- queryResult{success: success}
-	}()
+	})
 
 	select {
 	case <-ctx.Done():

@@ -21,6 +21,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/multigres/multigres/go/tools/safego"
+
 	"github.com/multigres/multigres/go/common/sqltypes"
 	multipoolerpb "github.com/multigres/multigres/go/pb/multipoolerservice"
 )
@@ -78,7 +80,7 @@ func (m *GRPCNotificationManager) Subscribe(pgChannel string, notifCh chan *sqlt
 		m.streams[pgChannel] = cancel
 		m.metrics.StreamAdd(ctx)
 		ready = make(chan struct{})
-		go m.streamNotifications(ctx, pgChannel, ready)
+		safego.GoContinueOnPanic(ctx, "multigateway.stream-notifications", func() { m.streamNotifications(ctx, pgChannel, ready) })
 	}
 	m.mu.Unlock()
 

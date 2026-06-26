@@ -25,6 +25,7 @@ import (
 
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	"github.com/multigres/multigres/go/tools/safego"
 )
 
 // watchPoolersInCell watches the poolers directory for a single cell, delivering
@@ -199,7 +200,7 @@ func (b *cellSyncBroadcaster) syncAll(ctx context.Context) error {
 	}
 
 	done := make(chan struct{})
-	go func() { wg.Wait(); close(done) }()
+	safego.GoContinueOnPanic(ctx, "poolerwatch.syncall-wait", func() { wg.Wait(); close(done) })
 	select {
 	case <-done:
 		return nil

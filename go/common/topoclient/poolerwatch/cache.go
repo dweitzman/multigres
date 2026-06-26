@@ -31,6 +31,7 @@ import (
 
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	"github.com/multigres/multigres/go/tools/safego"
 	"github.com/multigres/multigres/go/tools/timer"
 )
 
@@ -338,13 +339,13 @@ func New[T any](ctx context.Context, config Config[T]) *PoolerCache[T] {
 	}
 	// Auto-shutdown on parent context cancellation. The goroutine exits as
 	// soon as Shutdown has finished, regardless of who called it first.
-	go func() {
+	safego.GoContinueOnPanic(ctx, "poolerwatch.cache-auto-shutdown", func() {
 		select {
 		case <-ctx.Done():
 			c.Shutdown()
 		case <-c.shutdownDone:
 		}
-	}()
+	})
 	return c
 }
 

@@ -18,6 +18,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/multigres/multigres/go/tools/safego"
 )
 
 // ErrLeaseLost is set as the context cause (via context.WithCancelCause)
@@ -111,7 +113,7 @@ func WithLease(
 	fnCtx, cancelCause := context.WithCancelCause(lockCtx)
 	defer cancelCause(nil)
 
-	go func() {
+	safego.GoContinueOnPanic(fnCtx, "topoclient.lease-health-monitor", func() {
 		ticker := time.NewTicker(options.checkInterval)
 		defer ticker.Stop()
 		for {
@@ -126,7 +128,7 @@ func WithLease(
 				}
 			}
 		}
-	}()
+	})
 
 	return fn(fnCtx)
 }

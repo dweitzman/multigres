@@ -31,6 +31,7 @@ import (
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	"github.com/multigres/multigres/go/services/multipooler/internal/connpoolmanager"
 	"github.com/multigres/multigres/go/services/multipooler/internal/pools/reserved"
+	"github.com/multigres/multigres/go/tools/safego"
 )
 
 // request types for the serialized event loop.
@@ -98,7 +99,7 @@ func (l *Listener) Start(ctx context.Context) {
 	l.stopped = make(chan struct{})
 	ctx, l.cancel = context.WithCancel(ctx)
 	l.wg.Add(1)
-	go l.run(ctx)
+	safego.GoContinueOnPanic(ctx, "multipooler.pubsub-listener", func() { l.run(ctx) })
 }
 
 // Stop shuts down the listener and waits for goroutines to exit. Idempotent.
@@ -257,7 +258,7 @@ func (l *Listener) run(ctx context.Context) {
 
 		// Start reader goroutine with split read/write pattern.
 		readerCh = make(chan readerMessage, 64)
-		go l.readLoop(conn, readerCh)
+		safego.GoContinueOnPanic(ctx, "multipooler.pubsub-read-loop", func() { l.readLoop(conn, readerCh) })
 	}
 
 	// Connection is acquired lazily on first subscribe (not eagerly on startup)

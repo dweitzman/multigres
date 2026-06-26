@@ -17,6 +17,7 @@
 package servenv
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -29,6 +30,7 @@ import (
 	viperdebug "github.com/multigres/multigres/go/common/servenv/viperdebug"
 	"github.com/multigres/multigres/go/tools/event"
 	"github.com/multigres/multigres/go/tools/netutil"
+	"github.com/multigres/multigres/go/tools/safego"
 	"github.com/multigres/multigres/go/tools/stringutil"
 	"github.com/multigres/multigres/go/tools/telemetry"
 	"github.com/multigres/multigres/go/tools/viperutil"
@@ -305,10 +307,10 @@ func (se *ServEnv) fireHooksWithTimeout(timeout time.Duration, name string, hook
 	defer timer.Stop()
 
 	done := make(chan struct{})
-	go func() {
+	safego.GoContinueOnPanic(context.TODO(), "servenv.fire-hooks-timeout", func() {
 		hookFn()
 		close(done)
-	}()
+	})
 
 	select {
 	case <-done:
@@ -355,11 +357,11 @@ func (sv *ServEnv) CobraPreRunE(cmd *cobra.Command) error {
 	// Register logging on config file change.
 	ch := make(chan struct{})
 	viperutil.NotifyConfigReload(sv.reg, ch)
-	go func() {
+	safego.GoContinueOnPanic(context.TODO(), "servenv.config-reload-log", func() {
 		for range ch {
 			slog.Info("Change in configuration", "settings", viperdebug.AllSettings(sv.reg))
 		}
-	}()
+	})
 
 	watchCancel, err := sv.vc.LoadConfig(sv.reg)
 	if err != nil {

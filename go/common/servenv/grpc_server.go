@@ -26,6 +26,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/multigres/multigres/go/tools/safego"
+
 	grpcmiddleware "github.com/grpc-ecosystem/go-grpc-middleware"
 
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
@@ -460,11 +462,11 @@ func (g *GrpcServer) Serve(sv *ServEnv) error {
 	//       runs all OnRun() hooks after Create() and before Serve().
 	//       If this was not the case, the binary would crash with
 	//       the error "grpc: Server.RegisterService after Server.Serve".
-	go func() {
+	safego.GoContinueOnPanic(context.TODO(), "servenv.grpc-serve", func() {
 		if err := g.Server.Serve(listener); err != nil {
 			slog.Error("gRPC server failed", "err", err)
 		}
-	}()
+	})
 
 	sv.OnTermSync(func() {
 		slog.Info("Initiated graceful stop of gRPC server")

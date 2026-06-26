@@ -33,6 +33,7 @@ import (
 	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	"github.com/multigres/multigres/go/tools/retry"
+	"github.com/multigres/multigres/go/tools/safego"
 )
 
 const (
@@ -286,7 +287,7 @@ func (hs *HealthStream) streamOnce(ctx context.Context, poolerHealth *Pooler) (c
 	// resetCh carries the new timer duration whenever a message is received.
 	// Buffered so the recv loop never blocks on the watchdog goroutine.
 	resetCh := make(chan time.Duration, 1)
-	go func() {
+	safego.GoContinueOnPanic(ctx, "multiorch.health-stream-staleness-watchdog", func() {
 		current := initialStaleness
 		timer := time.NewTimer(current)
 		defer timer.Stop()
@@ -312,7 +313,7 @@ func (hs *HealthStream) streamOnce(ctx context.Context, poolerHealth *Pooler) (c
 				return
 			}
 		}
-	}()
+	})
 
 	stream, err := hs.factory.rpcClient.ManagerHealthStream(watchdogCtx, poolerHealth.Health().MultiPooler)
 	if err != nil {

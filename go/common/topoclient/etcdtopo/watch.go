@@ -29,6 +29,7 @@ import (
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/pb/mtrpc"
+	"github.com/multigres/multigres/go/tools/safego"
 )
 
 // Watch is part of the topoclient.Conn interface.
@@ -74,7 +75,7 @@ func (s *etcdtopo) Watch(ctx context.Context, filePath string) (*topoclient.Watc
 
 	// Create the notifications channel, send updates to it.
 	notifications := make(chan *topoclient.WatchData, 10)
-	go func() {
+	safego.GoContinueOnPanic(ctx, "etcdtopo.watch-notify", func() {
 		defer close(notifications)
 		defer outerCancel()
 
@@ -152,7 +153,7 @@ func (s *etcdtopo) Watch(ctx context.Context, filePath string) (*topoclient.Watc
 				}
 			}
 		}
-	}()
+	})
 
 	return wd, notifications, nil
 }
@@ -198,7 +199,7 @@ func (s *etcdtopo) WatchRecursive(ctx context.Context, dirpath string) ([]*topoc
 
 	// Create the notifications channel, send updates to it.
 	notifications := make(chan *topoclient.WatchDataRecursive, 10)
-	go func() {
+	safego.GoContinueOnPanic(ctx, "etcdtopo.watch-recursive-notify", func() {
 		defer close(notifications)
 		defer outerCancel()
 
@@ -272,7 +273,7 @@ func (s *etcdtopo) WatchRecursive(ctx context.Context, dirpath string) ([]*topoc
 				}
 			}
 		}
-	}()
+	})
 
 	return initialwd, notifications, nil
 }

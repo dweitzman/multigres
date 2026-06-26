@@ -26,6 +26,8 @@ import (
 	"math/rand/v2"
 	"time"
 
+	"github.com/multigres/multigres/go/tools/safego"
+
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"google.golang.org/protobuf/proto"
@@ -569,22 +571,22 @@ func (mg *MultiGateway) Init(ctx context.Context) error {
 	})
 
 	// Start the PostgreSQL listener in a goroutine
-	go func() {
+	safego.GoContinueOnPanic(ctx, "multigateway.pg-listener-serve", func() {
 		logger.InfoContext(ctx, "PostgreSQL listener starting", "port", mg.pgPort.Get())
 		if err := mg.pgListener.Serve(); err != nil {
 			logger.ErrorContext(ctx, "PostgreSQL listener error", "error", err)
 		}
-	}()
+	})
 
 	// Start the replica listener if configured.
 	if mg.pgReplicaListener != nil {
-		go func() {
+		safego.GoContinueOnPanic(ctx, "multigateway.pg-replica-listener-serve", func() {
 			replicaPort := mg.pgReplicaPort.Get()
 			logger.InfoContext(ctx, "replica PostgreSQL listener starting", "port", replicaPort)
 			if err := mg.pgReplicaListener.Serve(); err != nil {
 				logger.ErrorContext(ctx, "replica PostgreSQL listener error", "error", err)
 			}
-		}()
+		})
 	}
 
 	logger.InfoContext(ctx, "multigateway starting up",

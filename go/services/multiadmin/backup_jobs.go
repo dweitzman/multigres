@@ -15,6 +15,7 @@
 package multiadmin
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	multiadminpb "github.com/multigres/multigres/go/pb/multiadmin"
+	"github.com/multigres/multigres/go/tools/safego"
 )
 
 // DefaultBackupJobExpiration is the default time after which completed/failed backup jobs are removed
@@ -62,7 +64,7 @@ func NewBackupJobTrackerWithExpiration(expiration time.Duration) *BackupJobTrack
 		stop:       make(chan struct{}),
 		done:       make(chan struct{}),
 	}
-	go jt.cleanupLoop()
+	safego.GoContinueOnPanic(context.TODO(), "multiadmin.backup-job-cleanup-loop", func() { jt.cleanupLoop() })
 	return jt
 }
 

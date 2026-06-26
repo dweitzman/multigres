@@ -24,6 +24,7 @@ import (
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/pb/mtrpc"
 	"github.com/multigres/multigres/go/tools/retry"
+	"github.com/multigres/multigres/go/tools/safego"
 )
 
 // WrapperConn wraps a Conn with automatic reconnection and error handling.
@@ -61,7 +62,7 @@ func (c *WrapperConn) handleConnectionError(conn Conn, err error) {
 	// If there is no connection, we want to retry irrespective of the error.
 	if conn == nil {
 		slog.Error("Connection error, will keep retrying", "err", err)
-		go c.retryConnection(err)
+		safego.GoContinueOnPanic(context.TODO(), "topoclient.wrapperconn-retry", func() { c.retryConnection(err) })
 		return
 	}
 	if err == nil {
@@ -69,18 +70,18 @@ func (c *WrapperConn) handleConnectionError(conn Conn, err error) {
 	}
 	if strings.Contains(err.Error(), "context deadline exceeded") {
 		slog.Error("Connection error, will keep retrying", "err", err)
-		go c.retryConnection(err)
+		safego.GoContinueOnPanic(context.TODO(), "topoclient.wrapperconn-retry", func() { c.retryConnection(err) })
 		return
 	}
 	if strings.Contains(err.Error(), "context canceled") {
 		slog.Error("Connection error, will keep retrying", "err", err)
-		go c.retryConnection(err)
+		safego.GoContinueOnPanic(context.TODO(), "topoclient.wrapperconn-retry", func() { c.retryConnection(err) })
 		return
 	}
 	switch mterrors.Code(err) {
 	case mtrpc.Code_UNAVAILABLE, mtrpc.Code_FAILED_PRECONDITION, mtrpc.Code_CLUSTER_EVENT:
 		slog.Error("Connection error, will keep retrying", "err", err)
-		go c.retryConnection(err)
+		safego.GoContinueOnPanic(context.TODO(), "topoclient.wrapperconn-retry", func() { c.retryConnection(err) })
 	}
 }
 
@@ -101,7 +102,8 @@ func (c *WrapperConn) retryConnection(err error) {
 		c.retrying = true
 		if c.wrapped != nil {
 			// Close the connection in a goroutine to prevent blocking.
-			go c.wrapped.Close()
+			wrapped := c.wrapped
+			safego.GoContinueOnPanic(context.TODO(), "topoclient.wrapperconn-close-wrapped", func() { wrapped.Close() })
 			c.wrapped = nil
 		}
 		return false
@@ -155,7 +157,7 @@ func (c *WrapperConn) retryConnection(err error) {
 				// If the wrapper was closed, we have to close this extra
 				// connection and stop retrying.
 				// No need to hold the lock while closing the connection.
-				go conn.Close()
+				safego.GoContinueOnPanic(context.TODO(), "topoclient.wrapperconn-close-extra", func() { conn.Close() })
 				return false
 			}
 			c.wrapped = conn

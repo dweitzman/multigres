@@ -20,6 +20,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/multigres/multigres/go/tools/safego"
+
 	commontypes "github.com/multigres/multigres/go/common/types"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 )
@@ -235,13 +237,13 @@ func (sb *shardBuffer) stopBuffering(reason string, gen uint64) {
 		for _, e := range entries {
 			sem <- struct{}{} // Acquire drain slot.
 			wg.Add(1)
-			go func() {
+			safego.GoContinueOnPanic(sb.buf.ctx, "multigateway.buffer-drain-entry", func() {
 				defer func() {
 					<-sem // Release drain slot.
 					wg.Done()
 				}()
 				sb.drainEntry(e)
-			}()
+			})
 		}
 		wg.Wait()
 

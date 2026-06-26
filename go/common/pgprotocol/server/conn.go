@@ -34,6 +34,7 @@ import (
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/pgprotocol/protocol"
 	"github.com/multigres/multigres/go/common/sqltypes"
+	"github.com/multigres/multigres/go/tools/safego"
 )
 
 const (
@@ -1521,7 +1522,7 @@ func (c *Conn) EnableAsyncNotifications(ctx context.Context) chan<- *sqltypes.No
 	ctx, cancel := context.WithCancel(ctx)
 	c.notifPush = &notifPusher{ch: ch, cancel: cancel}
 
-	go func() {
+	safego.GoContinueOnPanic(ctx, "pgprotocol.async-notifications", func() {
 		for {
 			select {
 			case <-ctx.Done():
@@ -1545,7 +1546,7 @@ func (c *Conn) EnableAsyncNotifications(ctx context.Context) chan<- *sqltypes.No
 				}
 			}
 		}
-	}()
+	})
 
 	return ch
 }

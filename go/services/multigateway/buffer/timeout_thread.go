@@ -17,6 +17,8 @@ package buffer
 import (
 	"time"
 
+	"github.com/multigres/multigres/go/tools/safego"
+
 	"github.com/multigres/multigres/go/common/mterrors"
 	commontypes "github.com/multigres/multigres/go/common/types"
 )
@@ -38,7 +40,7 @@ func newTimeoutThread(buf *Buffer) *timeoutThread {
 }
 
 func (tt *timeoutThread) start() {
-	go tt.run()
+	safego.GoContinueOnPanic(tt.buf.ctx, "multigateway.buffer-timeout-thread", func() { tt.run() })
 }
 
 func (tt *timeoutThread) stop() {

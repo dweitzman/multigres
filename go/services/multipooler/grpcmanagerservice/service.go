@@ -29,6 +29,7 @@ import (
 	multipoolermanagerpb "github.com/multigres/multigres/go/pb/multipoolermanager"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	"github.com/multigres/multigres/go/services/multipooler/internal/manager"
+	"github.com/multigres/multigres/go/tools/safego"
 )
 
 // managerService is the gRPC wrapper for MultiPoolerManager
@@ -240,7 +241,7 @@ func (s *managerService) ManagerHealthStream(
 	// pollCh is buffered so bursts coalesce — only one snapshot is sent per
 	// batch of poll requests received while the send loop is busy.
 	pollCh := make(chan struct{}, 1)
-	go func() {
+	safego.GoContinueOnPanic(ctx, "multipooler.manager-health-poll-recv", func() {
 		for {
 			msg, err := stream.Recv()
 			if err != nil {
@@ -253,7 +254,7 @@ func (s *managerService) ManagerHealthStream(
 				}
 			}
 		}
-	}()
+	})
 
 	// Periodic ticker so we poll Status() even without a broadcast.
 	// This catches postgres process death (reported by pgctld) within

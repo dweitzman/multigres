@@ -18,6 +18,8 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/multigres/multigres/go/tools/safego"
+
 	"github.com/multigres/multigres/go/common/pgprotocol/server"
 	"github.com/multigres/multigres/go/common/sqltypes"
 )
@@ -65,7 +67,7 @@ func (s *handlerSubSync) SyncSubscriptions(
 		state.AsyncNotifCh = asyncCh
 		fwdCtx, cancel := context.WithCancel(ctx)
 		s.forwardCancel = cancel
-		go s.forwardNotifications(fwdCtx, notifCh, asyncCh)
+		safego.GoContinueOnPanic(fwdCtx, "multigateway.forward-notifications", func() { s.forwardNotifications(fwdCtx, notifCh, asyncCh) })
 	}
 
 	// Stop async pusher and release notification channel if no more listen channels.

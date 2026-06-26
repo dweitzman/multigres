@@ -26,6 +26,8 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/multigres/multigres/go/tools/safego"
 )
 
 // Run starts listening for RPC and HTTP requests,
@@ -51,12 +53,12 @@ func (sv *ServEnv) Run(bindAddress string, port int, grpcServer *GrpcServer) err
 			sv.PopulateListeningURL(int32(actualPort))
 		}
 	}
-	go func() {
+	safego.GoContinueOnPanic(context.TODO(), "servenv.http-serve", func() {
 		err := sv.HTTPServe(l)
 		if err != nil {
 			slog.Error("http serve returned unexpected error", "err", err)
 		}
-	}()
+	})
 
 	if err := grpcServer.Create(); err != nil {
 		return fmt.Errorf("grpc server create: %w", err)
@@ -79,7 +81,7 @@ func (sv *ServEnv) Run(bindAddress string, port int, grpcServer *GrpcServer) err
 	startTime := time.Now()
 	slog.Info("entering lameduck mode", "period", sv.lameduckPeriod.Get())
 	slog.Info("firing asynchronous OnTerm hooks")
-	go sv.onTermHooks.Fire()
+	safego.GoContinueOnPanic(context.TODO(), "servenv.term-hooks", func() { sv.onTermHooks.Fire() })
 
 	sv.fireOnTermSyncHooks(sv.onTermTimeout.Get())
 	if remain := sv.lameduckPeriod.Get() - time.Since(startTime); remain > 0 {

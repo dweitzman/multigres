@@ -24,6 +24,7 @@ import (
 	multiadminpb "github.com/multigres/multigres/go/pb/multiadmin"
 	multipoolermanagerdata "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	"github.com/multigres/multigres/go/tools/ctxutil"
+	"github.com/multigres/multigres/go/tools/safego"
 	"github.com/multigres/multigres/go/tools/telemetry"
 
 	"google.golang.org/grpc/codes"
@@ -54,7 +55,7 @@ func (s *MultiAdminServer) Backup(ctx context.Context, req *multiadminpb.BackupR
 	s.backupJobTracker.CreateJobWithID(jobID, multiadminpb.JobType_JOB_TYPE_BACKUP, req.Database, req.TableGroup, req.Shard)
 
 	// Start the backup operation asynchronously with a linked root span
-	go func() {
+	safego.GoContinueOnPanic(ctx, "multiadmin.backup-execute", func() {
 		bgCtx := ctxutil.Detach(ctx)
 		bgCtx, span := ctxutil.StartLinkedSpan(bgCtx, telemetry.Tracer(), "Backup")
 		defer span.End()
@@ -64,7 +65,7 @@ func (s *MultiAdminServer) Backup(ctx context.Context, req *multiadminpb.BackupR
 			s.logger.ErrorContext(bgCtx, "Backup failed", "job_id", jobID, "error", err)
 			s.backupJobTracker.FailJob(jobID, err.Error())
 		}
-	}()
+	})
 
 	return &multiadminpb.BackupResponse{
 		JobId: jobID,
@@ -181,7 +182,7 @@ func (s *MultiAdminServer) RestoreFromBackup(ctx context.Context, req *multiadmi
 	// so that job state is not lost after multiadmin restart
 
 	// Start restore in background with a linked root span
-	go func() {
+	safego.GoContinueOnPanic(ctx, "multiadmin.restore-execute", func() {
 		bgCtx := ctxutil.Detach(ctx)
 		bgCtx, span := ctxutil.StartLinkedSpan(bgCtx, telemetry.Tracer(), "Restore")
 		defer span.End()
@@ -191,7 +192,7 @@ func (s *MultiAdminServer) RestoreFromBackup(ctx context.Context, req *multiadmi
 			s.logger.ErrorContext(bgCtx, "Restore failed", "job_id", jobID, "error", err)
 			s.backupJobTracker.FailJob(jobID, err.Error())
 		}
-	}()
+	})
 
 	return &multiadminpb.RestoreFromBackupResponse{
 		JobId: jobID,

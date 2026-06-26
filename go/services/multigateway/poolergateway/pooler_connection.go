@@ -24,6 +24,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/multigres/multigres/go/tools/safego"
+
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/constants"
 	"github.com/multigres/multigres/go/common/queryservice"
@@ -223,7 +225,7 @@ func newPoolerConnection(
 	pc.poolerInfo.Store(poolerInfo)
 
 	// Start health stream goroutine
-	go pc.checkConn()
+	safego.GoContinueOnPanic(ctx, "multigateway.pooler-check-conn", func() { pc.checkConn() })
 
 	logger.DebugContext(ctx, "pooler connection established",
 		"pooler_id", poolerID,

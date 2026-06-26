@@ -30,6 +30,7 @@ import (
 	multiadminpb "github.com/multigres/multigres/go/pb/multiadmin"
 	multiorchpb "github.com/multigres/multigres/go/pb/multiorch"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
+	"github.com/multigres/multigres/go/tools/safego"
 )
 
 // ApplyCertifiedRuleChange installs a new shard rule using an externally
@@ -241,14 +242,14 @@ func (s *MultiAdminServer) probeMostAdvanced(
 	}
 	results := make(chan probeResult, len(poolers))
 	for _, p := range poolers {
-		go func() {
+		safego.GoContinueOnPanic(ctx, "multiadmin.rule-change-status-probe", func() {
 			resp, err := s.rpcClient.Status(ctx, p, &multipoolermanagerdatapb.StatusRequest{})
 			if err != nil {
 				results <- probeResult{pooler: p, err: err}
 				return
 			}
 			results <- probeResult{pooler: p, pos: resp.GetConsensusStatus().GetCurrentPosition()}
-		}()
+		})
 	}
 
 	var (

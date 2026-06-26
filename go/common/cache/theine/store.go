@@ -17,6 +17,7 @@
 package theine
 
 import (
+	"context"
 	"hash/maphash"
 	"runtime"
 	"sync"
@@ -26,6 +27,7 @@ import (
 	"github.com/gammazero/deque"
 
 	"github.com/multigres/multigres/go/common/cache/theine/bf"
+	"github.com/multigres/multigres/go/tools/safego"
 )
 
 const (
@@ -207,7 +209,7 @@ func NewStore[K cachekey, V cacheval](maxsize int64, doorkeeper bool) *Store[K, 
 		s.shards = append(s.shards, NewShard[K, V](uint(dequeSize), doorkeeper))
 	}
 
-	go s.maintenance()
+	safego.GoContinueOnPanic(context.TODO(), "cache.maintenance", func() { s.maintenance() })
 	s.open.Store(true)
 	return s
 }
@@ -217,7 +219,7 @@ func (s *Store[K, V]) EnsureOpen() {
 		return
 	}
 	s.writebuf = make(chan WriteBufItem[K, V], s.writebufsize)
-	go s.maintenance()
+	safego.GoContinueOnPanic(context.TODO(), "cache.maintenance", func() { s.maintenance() })
 }
 
 func (s *Store[K, V]) getFromShard(key K, hash uint64, shard *Shard[K, V], epoch uint32) (V, bool) {

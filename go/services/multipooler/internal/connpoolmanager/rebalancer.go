@@ -18,6 +18,8 @@ import (
 	"context"
 	"maps"
 	"time"
+
+	"github.com/multigres/multigres/go/tools/safego"
 )
 
 // startRebalancer starts the background rebalancer goroutine.
@@ -28,7 +30,7 @@ import (
 //  4. Garbage collects inactive user pools
 func (m *Manager) startRebalancer() {
 	m.rebalancerWg.Add(1)
-	go m.rebalanceLoop()
+	safego.GoContinueOnPanic(m.rebalancerCtx, "multipooler.connpool-rebalancer", func() { m.rebalanceLoop() })
 }
 
 // rebalanceLoop is the main loop for the rebalancer goroutine.

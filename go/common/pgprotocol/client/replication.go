@@ -23,6 +23,7 @@ import (
 
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/pgprotocol/protocol"
+	"github.com/multigres/multigres/go/tools/safego"
 )
 
 // replStreamState tracks where a connection is in the copy-both replication
@@ -300,7 +301,7 @@ func (c *Conn) makeReadsCancelable(ctx context.Context) (stop func()) {
 	}
 	done := make(chan struct{})
 	finished := make(chan struct{})
-	go func() {
+	safego.GoContinueOnPanic(ctx, "pgprotocol.make-reads-cancelable", func() {
 		defer close(finished)
 		select {
 		case <-ctx.Done():
@@ -308,7 +309,7 @@ func (c *Conn) makeReadsCancelable(ctx context.Context) (stop func()) {
 			_ = c.SetReadDeadline(time.Now())
 		case <-done:
 		}
-	}()
+	})
 	return func() {
 		close(done)
 		<-finished                         // wait for the watcher to exit (no late SetReadDeadline)

@@ -33,6 +33,7 @@ import (
 	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/pb/mtrpc"
 	"github.com/multigres/multigres/go/tools/ctxutil"
+	"github.com/multigres/multigres/go/tools/safego"
 )
 
 var leaseTTL = 30 // This is the default used for all non-named locks
@@ -229,12 +230,12 @@ func (s *etcdtopo) lock(ctx context.Context, nodePath, contents string, ttl int)
 	if err != nil {
 		return nil, convertError(err, nodePath)
 	}
-	go func() {
+	safego.GoContinueOnPanic(ctx, "etcdtopo.lock-keepalive-drain", func() {
 		// Drain the lease keepAlive channel, we're not
 		// interested in its contents.
 		for range leaseKA {
 		}
-	}()
+	})
 
 	// Create an ephemeral node in the locks directory.
 	key, revision, err := s.newUniqueEphemeralKV(ctx, s.cli, lease.ID, nodePath, contents)
@@ -305,10 +306,10 @@ func (s *etcdtopo) TryLockWithLease(ctx context.Context, key, contents string, t
 	// Drain the KeepAlive channel so the etcd client continues sending
 	// lease renewals. If this channel fills up, renewals stop and the
 	// lease expires. We don't need the response contents.
-	go func() {
+	safego.GoContinueOnPanic(ctx, "etcdtopo.trylock-keepalive-drain", func() {
 		for range leaseKA {
 		}
-	}()
+	})
 
 	// Atomically create the key. The compare-version=0 condition ensures
 	// that if another holder already created the key, this transaction

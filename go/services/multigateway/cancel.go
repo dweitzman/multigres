@@ -22,6 +22,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/multigres/multigres/go/tools/safego"
+
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
@@ -114,7 +116,7 @@ func NewCancelManager(
 	}
 	empty := make(map[uint32]string)
 	cm.prefixCache.Store(&empty)
-	go cm.refreshPrefixCachePeriodically(ctx)
+	safego.GoContinueOnPanic(ctx, "multigateway.refresh-prefix-cache", func() { cm.refreshPrefixCachePeriodically(ctx) })
 	return cm
 }
 

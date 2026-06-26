@@ -17,10 +17,13 @@
 package servenv
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net"
 	"os"
+
+	"github.com/multigres/multigres/go/tools/safego"
 )
 
 // serveSocketFile listen to the named socket and serves RPCs on it.
@@ -43,10 +46,10 @@ func (g *GrpcServer) serveSocketFile() error {
 		return fmt.Errorf("cannot listen on socket file %q: %w", name, err)
 	}
 	slog.Info("Listening on socket file for gRPC", "name", name)
-	go func() {
+	safego.GoContinueOnPanic(context.TODO(), "servenv.grpc-serve-socket", func() {
 		if err := g.Server.Serve(l); err != nil {
 			slog.Error("gRPC server failed on socket file", "err", err)
 		}
-	}()
+	})
 	return nil
 }

@@ -29,6 +29,7 @@ import (
 	"github.com/multigres/multigres/go/services/multipooler/internal/connstate"
 	"github.com/multigres/multigres/go/services/multipooler/internal/pools/connpool"
 	"github.com/multigres/multigres/go/services/multipooler/internal/pools/regular"
+	"github.com/multigres/multigres/go/tools/safego"
 )
 
 // PoolConfig holds configuration for the reserved pool.
@@ -140,7 +141,7 @@ func NewPool(ctx context.Context, config *PoolConfig) *Pool {
 	// Start background killer goroutine.
 	// Ticker interval is 1/10th the idle timeout (like Vitess).
 	interval := p.config.InactivityTimeout / 10
-	go p.idleKiller(interval)
+	safego.GoContinueOnPanic(p.ctx, "multipooler.reserved-idle-killer", func() { p.idleKiller(interval) })
 
 	return p
 }

@@ -31,6 +31,7 @@ import (
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/analysis"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
+	"github.com/multigres/multigres/go/tools/safego"
 	"github.com/multigres/multigres/go/tools/telemetry"
 )
 
@@ -105,10 +106,12 @@ func (re *Engine) performRecoveryCycle(ctx context.Context) {
 	var wg sync.WaitGroup
 	for _, shardProblems := range problemsByShard {
 		wg.Add(1)
-		go func(problems []types.Problem) {
-			defer wg.Done()
-			re.processShardProblems(ctx, problems[0].ShardKey, problems)
-		}(shardProblems)
+		safego.GoContinueOnPanic(ctx, "multiorch.recovery-process-shard-problems", func() {
+			func(problems []types.Problem) {
+				defer wg.Done()
+				re.processShardProblems(ctx, problems[0].ShardKey, problems)
+			}(shardProblems)
+		})
 	}
 	wg.Wait()
 

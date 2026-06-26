@@ -21,11 +21,14 @@ Modifications Copyright 2025 Supabase, Inc.
 package servenv
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/multigres/multigres/go/tools/safego"
 )
 
 func (sv *ServEnv) pprofInit() error {
@@ -46,7 +49,7 @@ func (sv *ServEnv) pprofInit() error {
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, syscall.SIGUSR1)
 
-		go func() {
+		safego.GoContinueOnPanic(context.TODO(), "servenv.pprof-signal", func() {
 			for range sigChan {
 				// Check current state and toggle
 				if isProfileStarted() {
@@ -58,7 +61,7 @@ func (sv *ServEnv) pprofInit() error {
 					}
 				}
 			}
-		}()
+		})
 
 		sv.OnTerm(stop)
 	}
