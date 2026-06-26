@@ -29,6 +29,7 @@ import (
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	"github.com/multigres/multigres/go/services/multipooler/internal/manager/actionlock"
+	"github.com/multigres/multigres/go/tools/safego"
 )
 
 const (
@@ -95,7 +96,7 @@ type poolerRecord struct {
 
 	publisherMu     sync.Mutex
 	publisherCancel context.CancelFunc
-	publisherWG     sync.WaitGroup
+	publisherWG     safego.WaitGroup
 
 	registerOnce sync.Once
 	tr           *toporeg.TopoReg
@@ -266,7 +267,7 @@ func (r *poolerRecord) Register(parent context.Context, alarm func(string)) {
 		r.publisherMu.Lock()
 		r.publisherCancel = cancel
 		r.publisherMu.Unlock()
-		r.publisherWG.Go(func() {
+		r.publisherWG.GoContinueOnPanic(ctx, "multipooler.record-publisher", func() {
 			r.runPublisher(ctx)
 		})
 

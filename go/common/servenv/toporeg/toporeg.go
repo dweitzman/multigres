@@ -24,18 +24,18 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sync"
 	"time"
 
 	"github.com/multigres/multigres/go/common/servenv"
 	"github.com/multigres/multigres/go/tools/retry"
+	"github.com/multigres/multigres/go/tools/safego"
 )
 
 // TopoReg contains the metadata of the component being registered.
 type TopoReg struct {
 	ctx    context.Context
 	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	wg     safego.WaitGroup
 	logger *slog.Logger
 
 	unregister func(ctx context.Context) error
@@ -62,7 +62,7 @@ func Register(register func(ctx context.Context) error, unregister func(ctx cont
 		alarm(fmt.Sprintf("Failed to register component with topology: %v", err))
 		tp.logger.Error("Failed to register component with topology", "error", err)
 	}
-	tp.wg.Go(func() {
+	tp.wg.GoContinueOnPanic(tp.ctx, "toporeg.register-loop", func() {
 		// We've already tried once. Use WithInitialDelay to wait before retrying.
 		r := retry.New(10*time.Millisecond, 30*time.Second, retry.WithInitialDelay())
 		for _, err := range r.Attempts(tp.ctx) {

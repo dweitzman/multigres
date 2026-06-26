@@ -17,11 +17,11 @@ package poolerwatch
 import (
 	"context"
 	"log/slog"
-	"sync"
 	"time"
 
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	"github.com/multigres/multigres/go/tools/safego"
 )
 
 // CellStatus holds discovery status for a single cell. Populated by
@@ -67,7 +67,7 @@ type topoWatch struct {
 
 	ctx    context.Context
 	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	wg     safego.WaitGroup
 
 	// broadcaster lets Sync(ctx) ask every per-cell watcher goroutine to
 	// drain its in-flight events before returning.
@@ -89,7 +89,7 @@ func newTopoWatch(ctx context.Context, store topoclient.ConnProvider, logger *sl
 
 // Start launches the per-cell watcher goroutines.
 func (c *topoWatch) Start() {
-	c.wg.Go(func() {
+	c.wg.GoContinueOnPanic(c.ctx, "poolerwatch.topo-watch", func() {
 		watchPoolersAcrossCells(c.ctx, c.store, c.logger, c.broadcaster,
 			c.handlers.OnSnapshot,
 			c.handlers.OnUpsert,

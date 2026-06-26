@@ -29,6 +29,7 @@ import (
 	"github.com/multigres/multigres/go/common/pgprotocol/bufpool"
 	"github.com/multigres/multigres/go/common/pgprotocol/pid"
 	"github.com/multigres/multigres/go/common/pgprotocol/scram"
+	"github.com/multigres/multigres/go/tools/safego"
 )
 
 // Listener listens for incoming PostgreSQL client connections.
@@ -101,7 +102,7 @@ type Listener struct {
 	conns map[uint32]*Conn
 
 	// wg tracks active connection handlers.
-	wg sync.WaitGroup
+	wg safego.WaitGroup
 
 	// ctx is the context for the listener, cancelled when Close is called.
 	ctx    context.Context
@@ -330,7 +331,7 @@ func (l *Listener) Serve() error {
 		conn.authMetrics = l.authMetrics
 
 		// Handle connection in a new goroutine.
-		l.wg.Go(func() {
+		l.wg.GoContinueOnPanic(l.ctx, "pgprotocol.server-conn", func() {
 			l.handleConnection(conn)
 		})
 	}

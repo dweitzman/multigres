@@ -228,7 +228,7 @@ func watchPoolersAcrossCells(
 	}
 
 	var mu sync.Mutex
-	var wg sync.WaitGroup
+	var wg safego.WaitGroup
 	cellEntries := make(map[string]*cellEntry)
 
 	startCell := func(cell string) {
@@ -244,7 +244,7 @@ func watchPoolersAcrossCells(
 		if broadcaster != nil {
 			syncReq = broadcaster.register(cell)
 		}
-		wg.Go(func() {
+		wg.GoContinueOnPanic(ctx, "poolerwatch.multi-cell-watch-cell", func() {
 			defer close(done)
 			if broadcaster != nil {
 				defer broadcaster.deregister(cell)

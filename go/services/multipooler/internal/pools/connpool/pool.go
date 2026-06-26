@@ -150,7 +150,7 @@ type Pool[C Connection] struct {
 	idleCount atomic.Int64
 
 	// workers is a waitgroup for all the currently running worker goroutines
-	workers    sync.WaitGroup
+	workers    safego.WaitGroup
 	close      atomic.Pointer[chan struct{}]
 	capacityMu sync.Mutex
 
@@ -236,7 +236,7 @@ func NewPool[C Connection](ctx context.Context, config *Config) *Pool[C] {
 }
 
 func (pool *Pool[C]) runWorker(close <-chan struct{}, interval time.Duration, worker func(now time.Time) bool) {
-	pool.workers.Go(func() {
+	pool.workers.GoContinueOnPanic(pool.ctx, "multipooler.connpool-worker", func() {
 		tick := time.NewTicker(interval)
 
 		defer tick.Stop()

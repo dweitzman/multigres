@@ -61,7 +61,7 @@ type shardBuffer struct {
 	lastEnd          time.Time   // When buffering last ended
 	generation       uint64      // Incremented on each IDLE→BUFFERING transition
 	maxDurationTimer *time.Timer // Fires when MaxFailoverDuration is exceeded
-	drainWg          sync.WaitGroup
+	drainWg          safego.WaitGroup
 }
 
 func newShardBuffer(buf *Buffer, key *clustermetadatapb.ShardKey) *shardBuffer {
@@ -232,7 +232,7 @@ func (sb *shardBuffer) stopBuffering(reason string, gen uint64) {
 	concurrency := sb.buf.config.DrainConcurrency.Get()
 	sem := make(chan struct{}, concurrency)
 
-	sb.drainWg.Go(func() {
+	sb.drainWg.GoContinueOnPanic(sb.buf.ctx, "multigateway.buffer-drain", func() {
 		var wg sync.WaitGroup
 		for _, e := range entries {
 			sem <- struct{}{} // Acquire drain slot.

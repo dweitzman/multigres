@@ -74,7 +74,7 @@ type HealthStreamFactory struct {
 	// stream goroutine.
 	rootCtx    context.Context
 	rootCancel context.CancelFunc
-	wg         sync.WaitGroup
+	wg         safego.WaitGroup
 }
 
 // Option is a functional option for NewHealthStreamFactory.
@@ -141,7 +141,7 @@ func (f *HealthStreamFactory) New(cache *PoolerCache, poolerID topoclient.Compon
 		poolerID: poolerID,
 		cancel:   cancel,
 	}
-	f.wg.Go(func() {
+	f.wg.GoContinueOnPanic(streamCtx, "multiorch.health-stream-subscriber", func() {
 		hs.run(streamCtx)
 	})
 	return hs

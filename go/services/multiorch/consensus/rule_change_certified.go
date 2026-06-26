@@ -27,6 +27,7 @@ import (
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
+	"github.com/multigres/multigres/go/tools/safego"
 )
 
 // ApplyCertifiedRuleChange installs a new shard rule using a fully-populated
@@ -162,10 +163,10 @@ func (c *Coordinator) refreshShardConsensusStatuses(
 
 	var (
 		mu sync.Mutex
-		wg sync.WaitGroup
+		wg safego.WaitGroup
 	)
 	for _, p := range poolers {
-		wg.Go(func() {
+		wg.GoContinueOnPanic(ctx, "multiorch.consensus-certified-dispatch", func() {
 			rpcCtx, cancel := context.WithTimeout(ctx, timeouts.RemoteOperationTimeout)
 			defer cancel()
 			resp, err := c.rpcClient.Status(rpcCtx, p, &multipoolermanagerdatapb.StatusRequest{})
