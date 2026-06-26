@@ -256,3 +256,46 @@ func disallowRawConsensusStatusReplicationPrimary(m dsl.Matcher) {
 				!m.File().Name.Matches(`_test\.go$`)).
 		Report("do not read ConsensusStatus.ReplicationPrimary directly; use commonconsensus.ReplicationPrimaryOrNil, which treats a phantom 0/0 entry as absent")
 }
+
+// requireSafeGoroutines flags goroutine launches in service/common production
+// code that do not route through safego. A goroutine whose body panics crashes
+// the whole process (there is no caller to recover it), so the panic behavior
+// must be explicit. The three launch paths it covers:
+//
+//   - bare `go f()`: use safego.GoContinueOnPanic / GoCrashOnPanic.
+//   - sync.WaitGroup.Go: recovers then re-panics (still a crash); use
+//     safego.WaitGroup, which makes the continue-vs-crash choice explicit.
+//   - errgroup.Group.Go: does not recover panics. For combine-result fan-outs
+//     this should adopt conc (see safego.WaitGroup's TODO); existing sites carry
+//     a //nolint with that TODO.
+//
+// Scope: go/services and go/common production code. Excluded: test files; the
+// test-support topo/pg fakes (memorytopo, topoclient/test, fakepgserver); and
+// go/tools, where safego and the timer package are the sanctioned launch points.
+func requireSafeGoroutines(m dsl.Matcher) {
+	m.Import("sync")
+	m.Import("golang.org/x/sync/errgroup")
+
+	m.Match(`go $_($*_)`).
+		Where(
+			(m.File().PkgPath.Matches(`/go/services/`) || m.File().PkgPath.Matches(`/go/common/`)) &&
+				!m.File().Name.Matches(`_test\.go$`) &&
+				!m.File().PkgPath.Matches(`/memorytopo$|/topoclient/test$|/fakepgserver$`)).
+		Report("launch goroutines via safego.GoContinueOnPanic/GoCrashOnPanic so panic behavior is explicit; a bare `go` whose body panics crashes the whole process")
+
+	m.Match(`$wg.Go($_)`).
+		Where(
+			m["wg"].Type.Is("*sync.WaitGroup") &&
+				(m.File().PkgPath.Matches(`/go/services/`) || m.File().PkgPath.Matches(`/go/common/`)) &&
+				!m.File().Name.Matches(`_test\.go$`) &&
+				!m.File().PkgPath.Matches(`/memorytopo$|/topoclient/test$|/fakepgserver$`)).
+		Report("use safego.WaitGroup instead of sync.WaitGroup.Go; sync.WaitGroup.Go recovers then re-panics, crashing the process on a worker panic")
+
+	m.Match(`$g.Go($_)`).
+		Where(
+			m["g"].Type.Is("*errgroup.Group") &&
+				(m.File().PkgPath.Matches(`/go/services/`) || m.File().PkgPath.Matches(`/go/common/`)) &&
+				!m.File().Name.Matches(`_test\.go$`) &&
+				!m.File().PkgPath.Matches(`/memorytopo$|/topoclient/test$|/fakepgserver$`)).
+		Report("errgroup.Group.Go does not recover panics; a worker panic crashes the process. For combine-result fan-outs adopt conc (see safego.WaitGroup), or add a //nolint with a TODO")
+}

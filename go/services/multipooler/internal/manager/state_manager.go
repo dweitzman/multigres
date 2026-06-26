@@ -124,6 +124,7 @@ func (ssm *StateManager) SetState(ctx context.Context, poolerType clustermetadat
 
 	g, ctx := errgroup.WithContext(ctx)
 	for _, c := range ssm.components {
+		//nolint:gocritic // TODO(safego): errgroup.Go lacks panic recovery; this all-or-nothing state fan-out should adopt conc/pool (see safego.WaitGroup).
 		g.Go(func() error {
 			return c.OnStateChange(ctx, poolerType, servingStatus)
 		})

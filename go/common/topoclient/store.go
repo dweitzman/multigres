@@ -577,6 +577,7 @@ func (ts *store) Close() error {
 	g, _ := errgroup.WithContext(context.TODO())
 
 	// Close global topology connection
+	//nolint:gocritic // TODO(safego): errgroup.Go lacks panic recovery; this combine-result fan-out should adopt conc/pool (see safego.WaitGroup).
 	g.Go(func() error {
 		if ts.globalTopo != nil {
 			if err := ts.globalTopo.Close(); err != nil {
@@ -588,7 +589,7 @@ func (ts *store) Close() error {
 	})
 
 	// Close all cell connections
-
+	//nolint:gocritic // TODO(safego): errgroup.Go lacks panic recovery; this combine-result fan-out should adopt conc/pool (see safego.WaitGroup).
 	g.Go(func() error {
 		ts.cellConnsMu.Lock()
 		defer ts.cellConnsMu.Unlock()

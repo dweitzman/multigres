@@ -31,17 +31,23 @@ import (
 // lint. WaitGroup makes the choice explicit and, by default (GoContinueOnPanic),
 // contains the panic so one worker's failure does not take the process down.
 //
-// SCOPE: this type contains a child's panic here and lets Wait return normally —
-// the right semantic for INDEPENDENT work (one item failing must not abort the
-// others). It is the wrong tool for ALL-OR-NOTHING fan-out, where a child's
-// panic (or error) should propagate to the joining goroutine.
+// SCOPE — this is a "wait for completion" group, NOT a "gather results" group.
+// Wait answers "have the goroutines finished/exited?", and a contained panic
+// still satisfies that (the goroutine has stopped). Use it when a worker failing
+// is survivable: lifetime/shutdown tracking, or a best-effort fan-out where a
+// missing contribution is already tolerated (e.g. a quorum gather that skips
+// non-responders).
 //
-// TODO(safego): for the all-or-nothing case — chiefly the errgroup.Group.Go
-// sites (topoclient store, manager state_manager) where a partial result is
-// invalid — evaluate adopting sourcegraph/conc (conc.WaitGroup / conc/pool).
-// conc captures a child panic with its stack and re-raises it at Wait, and its
-// pools convert a panic into a returned error. That propagate-to-join semantic
-// is complementary to this type's contain-and-continue semantic; pick per site.
+// Do NOT use it to combine results where every worker's output is required. There
+// a missing result silently corrupts the combination, so failure must propagate
+// to the join — containment is not a legal choice. Use errgroup.Group (when the
+// failure is an error) or sourcegraph/conc (when you want results gathered and a
+// child panic re-raised / returned at Wait).
+//
+// TODO(safego): for the all-or-nothing result case — chiefly the errgroup.Group.Go
+// sites (topoclient store, manager state_manager) — evaluate adopting
+// sourcegraph/conc (conc/pool): it gathers results and converts a child panic
+// into a returned error, giving errgroup the panic safety it lacks today.
 type WaitGroup struct {
 	wg sync.WaitGroup
 }
