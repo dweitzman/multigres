@@ -52,41 +52,54 @@ const (
 	modeRPC panicMode = "rpc"
 )
 
-// GoContinueOnPanic runs fn in a new goroutine. If fn panics, the panic is
-// recovered, logged with its stack under source, and counted; the goroutine
-// exits but the process continues.
-func GoContinueOnPanic(ctx context.Context, source string, fn func()) {
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				record(ctx, source, modeContinue, r)
-			}
-		}()
-		fn()
+// RunContinueOnPanic runs fn on the current goroutine. If fn panics, the panic is
+// recovered, logged with its stack under source, and counted; RunContinueOnPanic
+// then returns normally so the caller continues. Use to make an existing
+// goroutine's body panic-safe (e.g. a periodic callback) without spawning another.
+func RunContinueOnPanic(ctx context.Context, source string, fn func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			record(ctx, source, modeContinue, r)
+		}
 	}()
+	fn()
 }
 
-// GoCrashOnPanic runs fn in a new goroutine. If fn panics, the panic is logged
-// with its stack under source and counted, any registered crash flusher runs
-// (see RegisterCrashFlusher), then the panic is re-raised so the process crashes.
-// Use only when continuing past the panic could violate correctness and a restart
-// is the intended recovery.
+// RunCrashOnPanic runs fn on the current goroutine. If fn panics, the panic is
+// logged with its stack under source and counted, any registered crash flusher
+// runs (see RegisterCrashFlusher), then the panic is re-raised so the process
+// crashes. Use only when continuing past the panic could violate correctness and
+// a restart is the intended recovery.
 //
 // The synchronous log written by record — not the metric or any flushed
 // telemetry — is the authoritative crash record; it reaches stderr before the
 // re-panic regardless of how telemetry is configured. The crash flush is purely
 // best-effort.
-func GoCrashOnPanic(ctx context.Context, source string, fn func()) {
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				record(ctx, source, modeCrash, r)
-				flushBeforeCrash(ctx)
-				panic(r)
-			}
-		}()
-		fn()
+func RunCrashOnPanic(ctx context.Context, source string, fn func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			record(ctx, source, modeCrash, r)
+			flushBeforeCrash(ctx)
+			panic(r)
+		}
 	}()
+	fn()
+}
+
+// GoContinueOnPanic runs fn in a new goroutine with RunContinueOnPanic semantics:
+// a panic is recovered, logged with its stack under source, and counted; the
+// goroutine exits but the process continues.
+func GoContinueOnPanic(ctx context.Context, source string, fn func()) {
+	go RunContinueOnPanic(ctx, source, fn)
+}
+
+// GoCrashOnPanic runs fn in a new goroutine with RunCrashOnPanic semantics: a
+// panic is logged with its stack under source and counted, the crash flusher
+// runs, then the panic is re-raised so the process crashes. Use only when
+// continuing past the panic could violate correctness and a restart is the
+// intended recovery.
+func GoCrashOnPanic(ctx context.Context, source string, fn func()) {
+	go RunCrashOnPanic(ctx, source, fn)
 }
 
 // Recovered logs the recovered panic value r with its stack under source and
