@@ -19,17 +19,27 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/metric/noop"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
+
+// testMetricReader collects the panic counter for TestPanicCounter. The meter
+// provider is installed once in TestMain (before any goroutine runs), so the
+// package's lazy counter binds to it on first use and no test mutates the
+// package globals — a reassignment would race with goroutines calling incPanic.
+var testMetricReader sdkmetric.Reader
+
+func TestMain(m *testing.M) {
+	testMetricReader = sdkmetric.NewManualReader()
+	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(testMetricReader)))
+	os.Exit(m.Run()) //nolint:forbidigo // TestMain() is allowed to call os.Exit
+}
 
 func TestGoContinueOnPanic_RunsFn(t *testing.T) {
 	done := make(chan int, 1)
@@ -154,23 +164,12 @@ func TestFlushBeforeCrash_GuardsAPanickingFlusher(t *testing.T) {
 }
 
 func TestPanicCounter(t *testing.T) {
-	// Install an in-memory meter provider and reset the lazy init so this test's
-	// reader observes the counter.
-	reader := sdkmetric.NewManualReader()
-	prev := otel.GetMeterProvider()
-	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)))
-	panicCounterOnce = sync.Once{}
-	panicCounter = noop.Int64Counter{}
-	t.Cleanup(func() {
-		otel.SetMeterProvider(prev)
-		panicCounterOnce = sync.Once{}
-		panicCounter = noop.Int64Counter{}
-	})
-
+	// The meter provider is installed in TestMain; use a unique source so leftover
+	// goroutines from other tests (different sources) cannot perturb this count.
 	GoContinueOnPanic(t.Context(), "counter-test", func() { panic("x") })
 
 	require.Eventually(t, func() bool {
-		return panicCount(t, reader, "counter-test", "continue") == 1
+		return panicCount(t, testMetricReader, "counter-test", "continue") == 1
 	}, 5*time.Second, 20*time.Millisecond, "continue panic should be counted once")
 }
 
