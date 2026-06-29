@@ -242,7 +242,6 @@ func TestDetermineRemedialAction(t *testing.T) {
 		poolerType         clustermetadatapb.PoolerType
 		seedPrimary        *clustermetadatapb.ReplicationPrimary
 		cachedPos          *clustermetadatapb.PoolerPosition
-		primaryTerm        int64
 		resignedLeaderTerm int64
 		inconsistentGUC    bool
 		expectedAction     remedialAction
@@ -268,9 +267,11 @@ func TestDetermineRemedialAction(t *testing.T) {
 			expectedAction: remedialActionNone,
 		},
 		{
-			// Cold boot: record type still UNKNOWN, postgres running, rule names
-			// self -> publish the derived role (PRIMARY) and transition to SERVING.
-			name: "unknown_type_with_rule_publishes_role",
+			// The published PoolerType label is observability-only and is no longer a
+			// reconcile trigger. With no writable drift and not DRAINING, a label that
+			// lags the rule-derived role (here UNKNOWN while the rule names self) is
+			// left to update lazily, not reconciled here.
+			name: "label_drift_alone_unknown_to_primary_is_noop",
 			state: postgresState{
 				pgctldAvailable: true,
 				postgresRunning: true,
@@ -278,12 +279,13 @@ func TestDetermineRemedialAction(t *testing.T) {
 			},
 			poolerType:     clustermetadatapb.PoolerType_UNKNOWN,
 			cachedPos:      selfPos(5, selfID),
-			expectedAction: remedialActionReconcileState,
+			expectedAction: remedialActionNone,
 		},
 		{
-			// Rule names self (intended PRIMARY) and postgres is a primary, but
-			// the published label still says REPLICA: publish the role.
-			name: "label_drift_replica_to_primary_publishes_role",
+			// Rule names self and postgres is a primary, but the published label still
+			// says REPLICA. Label drift alone no longer reconciles (no writable drift
+			// here); the label updates lazily.
+			name: "label_drift_alone_replica_to_primary_is_noop",
 			state: postgresState{
 				pgctldAvailable: true,
 				postgresRunning: true,
@@ -291,7 +293,7 @@ func TestDetermineRemedialAction(t *testing.T) {
 			},
 			poolerType:     clustermetadatapb.PoolerType_REPLICA,
 			cachedPos:      selfPos(5, selfID),
-			expectedAction: remedialActionReconcileState,
+			expectedAction: remedialActionNone,
 		},
 		{
 			// Intended REPLICA (consensus recorded a higher rule naming another
@@ -318,7 +320,6 @@ func TestDetermineRemedialAction(t *testing.T) {
 			},
 			poolerType:         clustermetadatapb.PoolerType_PRIMARY,
 			cachedPos:          selfPos(5, selfID),
-			primaryTerm:        5,
 			resignedLeaderTerm: 0,
 			expectedAction:     remedialActionResignLeadership,
 		},
@@ -332,7 +333,6 @@ func TestDetermineRemedialAction(t *testing.T) {
 			},
 			poolerType:         clustermetadatapb.PoolerType_PRIMARY,
 			cachedPos:          selfPos(5, selfID),
-			primaryTerm:        5,
 			resignedLeaderTerm: 5,
 			expectedAction:     remedialActionNone,
 		},
@@ -350,7 +350,6 @@ func TestDetermineRemedialAction(t *testing.T) {
 			},
 			poolerType:         clustermetadatapb.PoolerType_REPLICA,
 			cachedPos:          selfPos(5, selfID),
-			primaryTerm:        5,
 			resignedLeaderTerm: 5,
 			expectedAction:     remedialActionNone,
 		},
@@ -398,10 +397,11 @@ func TestDetermineRemedialAction(t *testing.T) {
 		},
 		{
 			// Former primary now running as a standby while the rule has moved to
-			// another leader, but the published label still says PRIMARY: republish
-			// the rule-derived REPLICA role. (The reverse-direction relabel of the
-			// old observed-role AdjustTypeToReplica path.)
-			name: "label_drift_primary_to_replica",
+			// another leader, but the published label still says PRIMARY. This is a
+			// healthy standby (rule names another, postgres in recovery) — no demote,
+			// no resign — and label drift alone no longer reconciles (no writable
+			// drift here); the PRIMARY label updates lazily.
+			name: "label_drift_alone_primary_to_replica_is_noop",
 			state: postgresState{
 				pgctldAvailable: true,
 				postgresRunning: true,
@@ -409,7 +409,7 @@ func TestDetermineRemedialAction(t *testing.T) {
 			},
 			poolerType:     clustermetadatapb.PoolerType_PRIMARY,
 			cachedPos:      selfPos(5, otherID),
-			expectedAction: remedialActionReconcileState,
+			expectedAction: remedialActionNone,
 		},
 		{
 			name: "postgres_stopped_start",
@@ -474,7 +474,6 @@ func TestDetermineRemedialAction(t *testing.T) {
 				withResignedLeaderAtTerm(tt.resignedLeaderTerm),
 				withRuleStore(&fakeRuleStore{pos: tt.cachedPos, inconsistentGUC: tt.inconsistentGUC}),
 			)
-			tt.state.primaryTerm = tt.primaryTerm
 
 			// lastAppliedWritable == state.writable: this table exercises role,
 			// demote, resign and GUC decisions, not writable drift (covered
@@ -890,21 +889,29 @@ func TestTakeRemedialAction_LogDeduplication(t *testing.T) {
 }
 
 func TestTakeRemedialAction_ResignationSignal(t *testing.T) {
+	selfID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "test-pooler"}
 	otherID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "other-pooler"}
+	selfPos := func(term int64) *clustermetadatapb.PoolerPosition {
+		return &clustermetadatapb.PoolerPosition{Rule: &clustermetadatapb.ShardRule{
+			RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: term},
+			LeaderId:   selfID,
+		}}
+	}
 	tests := []struct {
 		name           string
 		action         remedialAction
 		poolerType     clustermetadatapb.PoolerType
-		primaryTerm    int64                             // set in consensus state before action
 		resignedBefore int64                             // set resignedLeaderAtTerm before action (0 = don't set)
-		cachedPos      *clustermetadatapb.PoolerPosition // rule the monitor reads for ReconcileRole
+		cachedPos      *clustermetadatapb.PoolerPosition // rule the monitor reads; the resign term comes from it
 		wantAvStatus   *clustermetadatapb.AvailabilityStatus
 	}{
 		{
-			name:        "ResignLeadership sets resignation at primary_term",
-			action:      remedialActionResignLeadership,
-			poolerType:  clustermetadatapb.PoolerType_PRIMARY,
-			primaryTerm: 5,
+			// The resign term is the highest-known rule's term; seed a rule naming
+			// self at term 5.
+			name:       "ResignLeadership sets resignation at the highest-known term",
+			action:     remedialActionResignLeadership,
+			poolerType: clustermetadatapb.PoolerType_PRIMARY,
+			cachedPos:  selfPos(5),
 			wantAvStatus: &clustermetadatapb.AvailabilityStatus{
 				LeadershipStatus: &clustermetadatapb.LeadershipStatus{
 					LeaderTerm: 5,
@@ -916,10 +923,10 @@ func TestTakeRemedialAction_ResignationSignal(t *testing.T) {
 			},
 		},
 		{
-			name:        "ResignLeadership sets no resignation when primary_term is zero",
-			action:      remedialActionResignLeadership,
-			poolerType:  clustermetadatapb.PoolerType_PRIMARY,
-			primaryTerm: 0,
+			// No known rule (nil position) -> term 0 -> no resignation signal.
+			name:       "ResignLeadership sets no resignation when no known term",
+			action:     remedialActionResignLeadership,
+			poolerType: clustermetadatapb.PoolerType_PRIMARY,
 			wantAvStatus: &clustermetadatapb.AvailabilityStatus{
 				CohortEligibilityStatus: &clustermetadatapb.CohortEligibilityStatus{
 					Signal: clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE,
@@ -956,11 +963,11 @@ func TestTakeRemedialAction_ResignationSignal(t *testing.T) {
 			ctx := t.Context()
 
 			multipooler := &clustermetadatapb.MultiPooler{
-				Id:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "test-pooler"},
+				Id:   selfID,
 				Type: tc.poolerType,
 			}
 			if tc.poolerType == clustermetadatapb.PoolerType_PRIMARY {
-				// Record invariant: a PRIMARY record must carry a self-leadership obs.
+				// Record invariant: a PRIMARY record carries a PRIMARY routing_state.
 				multipooler.RoutingState = &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY}
 			}
 			dir := t.TempDir()
@@ -983,7 +990,7 @@ func TestTakeRemedialAction_ResignationSignal(t *testing.T) {
 				require.NoError(t, pm.consensusMgr.SetResignedLeaderAtTerm(lockCtx, tc.resignedBefore))
 			}
 
-			pm.takeRemedialAction(lockCtx, tc.action, postgresState{primaryTerm: tc.primaryTerm})
+			pm.takeRemedialAction(lockCtx, tc.action, postgresState{})
 
 			assert.Equal(t, tc.wantAvStatus, pm.buildAvailabilityStatus())
 		})
@@ -1273,7 +1280,6 @@ func TestPostgresStateEqual(t *testing.T) {
 		backupsAvailable:         true,
 		isPrimary:                true,
 		bootstrapSentinelPresent: true,
-		primaryTerm:              42,
 	}
 
 	t.Run("equal states", func(t *testing.T) {
@@ -1290,7 +1296,6 @@ func TestPostgresStateEqual(t *testing.T) {
 		{"backupsAvailable", func() postgresState { s := base; s.backupsAvailable = false; return s }()},
 		{"isPrimary", func() postgresState { s := base; s.isPrimary = false; return s }()},
 		{"bootstrapSentinelPresent", func() postgresState { s := base; s.bootstrapSentinelPresent = false; return s }()},
-		{"primaryTerm", func() postgresState { s := base; s.primaryTerm = 99; return s }()},
 	}
 	for _, tc := range tests {
 		t.Run("differs in "+tc.name, func(t *testing.T) {
