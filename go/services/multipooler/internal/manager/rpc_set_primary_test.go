@@ -360,11 +360,13 @@ func TestSetPrimary_StalePrimaryDemotes(t *testing.T) {
 	assert.True(t, ruleStore.clearSyncCalled,
 		"stale-primary demotion should clear sync standby names via ClearSyncStandby")
 
-	// Gateway leader observation should reflect the new primary.
+	// Having demoted itself to a standby following the new primary, this pooler's
+	// own health stream must NOT advertise a writable PRIMARY routing_state. The
+	// new primary's identity is carried by ReplicationPrimary (asserted above), not
+	// by this pooler's routing_state.
 	healthState := pm.healthStreamer.getState()
-	require.NotNil(t, healthState.LeaderObservation)
-	assert.Equal(t, "new-primary", healthState.LeaderObservation.LeaderID.Name)
-	assert.Equal(t, int64(10), healthState.LeaderObservation.LeaderTerm)
+	assert.NotEqual(t, clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY, healthState.RoutingState.GetRole(),
+		"a demoted standby must not advertise itself as the writable PRIMARY")
 }
 
 // TestSetPrimary_IgnoresRevokedRule verifies that when the incoming rule is

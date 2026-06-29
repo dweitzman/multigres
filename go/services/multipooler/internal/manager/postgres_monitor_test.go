@@ -465,7 +465,7 @@ func TestDetermineRemedialAction(t *testing.T) {
 			if tt.poolerType == clustermetadatapb.PoolerType_PRIMARY {
 				// Record invariant: a PRIMARY record must carry a self-leadership
 				// observation that names itself.
-				seed.SelfLeadership = &clustermetadatapb.LeaderObservation{LeaderId: selfID}
+				seed.RoutingState = &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY}
 			}
 			pm := newTestManager(t,
 				withServiceID(selfID),
@@ -499,10 +499,10 @@ func TestDetermineRemedialAction_PrimaryDrift(t *testing.T) {
 		return newTestManager(t,
 			withServiceID(selfID),
 			withRecord(newRecordFromProto(&clustermetadatapb.MultiPooler{
-				Id:             selfID,
-				Type:           clustermetadatapb.PoolerType_PRIMARY,
-				SelfLeadership: &clustermetadatapb.LeaderObservation{LeaderId: selfID},
-				ServingStatus:  serving,
+				Id:            selfID,
+				Type:          clustermetadatapb.PoolerType_PRIMARY,
+				RoutingState:  &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY},
+				ServingStatus: serving,
 			})),
 			withRuleStore(&fakeRuleStore{pos: &clustermetadatapb.PoolerPosition{
 				Rule: &clustermetadatapb.ShardRule{
@@ -633,9 +633,9 @@ func TestDetermineRemedialAction_StalePrimaryDemote(t *testing.T) {
 			pm := newTestManager(t,
 				withServiceID(selfID),
 				withRecord(newRecordFromProto(&clustermetadatapb.MultiPooler{
-					Id:             selfID,
-					Type:           clustermetadatapb.PoolerType_PRIMARY,
-					SelfLeadership: &clustermetadatapb.LeaderObservation{LeaderId: selfID},
+					Id:           selfID,
+					Type:         clustermetadatapb.PoolerType_PRIMARY,
+					RoutingState: &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY},
 				})),
 				withReplicationPrimary(tt.seedPrimary),
 				withRuleStore(&fakeRuleStore{pos: tt.cachedPos}),
@@ -961,7 +961,7 @@ func TestTakeRemedialAction_ResignationSignal(t *testing.T) {
 			}
 			if tc.poolerType == clustermetadatapb.PoolerType_PRIMARY {
 				// Record invariant: a PRIMARY record must carry a self-leadership obs.
-				multipooler.SelfLeadership = &clustermetadatapb.LeaderObservation{LeaderId: multipooler.Id}
+				multipooler.RoutingState = &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY}
 			}
 			dir := t.TempDir()
 			// Seed a revocation of everything below term 1 so the manager has a term.
@@ -999,7 +999,7 @@ func TestTakeRemedialAction_ReconcileGUC(t *testing.T) {
 		Id:   selfID,
 		Type: clustermetadatapb.PoolerType_PRIMARY,
 		// A PRIMARY record must name itself as leader (the record invariant).
-		SelfLeadership: &clustermetadatapb.LeaderObservation{LeaderId: selfID},
+		RoutingState: &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY},
 	}, withRuleStore(frs))
 
 	lockCtx, err := pm.actionLock.Acquire(ctx, "test")
@@ -1014,7 +1014,7 @@ func TestTakeRemedialAction_ReconcileGUC(t *testing.T) {
 
 // TestTakeRemedialAction_ReconcileRole_AppliesRuleDerivedRole verifies that
 // ReconcileRole applies the role the committed rule implies — transitioning the
-// pooler to PRIMARY and recording the self-leadership observation built from the
+// pooler to PRIMARY and recording the PRIMARY routing_state derived from the
 // rule — even when the record's label still says REPLICA.
 func TestTakeRemedialAction_ReconcileRole_AppliesRuleDerivedRole(t *testing.T) {
 	multipooler := &clustermetadatapb.MultiPooler{
@@ -1023,7 +1023,7 @@ func TestTakeRemedialAction_ReconcileRole_AppliesRuleDerivedRole(t *testing.T) {
 	}
 	committed := &clustermetadatapb.RuleNumber{CoordinatorTerm: 4}
 	// The committed rule names this pooler leader, so the rule-derived role is
-	// PRIMARY — ReconcileRole must publish PRIMARY plus the self-leadership obs
+	// PRIMARY — ReconcileRole must publish PRIMARY plus the PRIMARY routing_state
 	// regardless of the stale REPLICA label on the record.
 	pm := newRemedialActionTestManager(t, multipooler, withRuleStore(&fakeRuleStore{pos: &clustermetadatapb.PoolerPosition{
 		Rule: &clustermetadatapb.ShardRule{RuleNumber: committed, LeaderId: multipooler.Id},
@@ -1037,10 +1037,10 @@ func TestTakeRemedialAction_ReconcileRole_AppliesRuleDerivedRole(t *testing.T) {
 		postgresState{pgctldAvailable: true, postgresRunning: true, isPrimary: true})
 
 	assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, pm.record.Type())
-	obs := pm.record.SelfLeadership()
-	require.NotNil(t, obs, "ReconcileRole must apply the rule-derived role with its self-leadership observation when the rule names this pooler leader")
-	assert.Equal(t, multipooler.Id, obs.GetLeaderId())
-	assert.Equal(t, committed, obs.GetLeaderRuleNumber())
+	rs := pm.record.RoutingState()
+	require.NotNil(t, rs, "ReconcileRole must apply the rule-derived role with its PRIMARY routing_state when the rule names this pooler leader")
+	assert.Equal(t, clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY, rs.GetRole())
+	assert.Equal(t, committed, rs.GetRule())
 }
 
 func TestHasCompleteBackups_WithCompleteBackup(t *testing.T) {

@@ -16,7 +16,6 @@ package manager
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -26,7 +25,6 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/multigres/multigres/go/common/servenv/toporeg"
-	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	"github.com/multigres/multigres/go/services/multipooler/internal/manager/actionlock"
 )
@@ -46,14 +44,15 @@ const (
 // immutable — exposing only this struct in the mutation API makes that
 // contract a property of the type system rather than a runtime check.
 type MutablePoolerRecordState struct {
+	// TODO: can we drop Type?...
 	Type            clustermetadatapb.PoolerType
 	ServingStatus   clustermetadatapb.PoolerServingStatus
 	LifecycleStatus *clustermetadatapb.PoolerLifecycle
-	// SelfLeadership is the pooler's most recent recorded consensus
-	// observation. Set ONLY when this pooler currently considers itself the
-	// leader of its shard; replicas leave it nil. Published into etcd so
-	// multigateway can bootstrap leader routing on discovery.
-	SelfLeadership *clustermetadatapb.LeaderObservation
+	// RoutingState is the pooler's self-reported routing/HA role. Set ONLY when
+	// this pooler is the writable PRIMARY (role == PRIMARY); replicas — and a
+	// consensus leader not yet writable — leave it nil, avoiding etcd churn.
+	// Published into etcd so multigateway can bootstrap write routing on discovery.
+	RoutingState *clustermetadatapb.RoutingState
 }
 
 // poolerTopoStore is the subset of topoclient.Store used by poolerRecord.
@@ -120,7 +119,7 @@ func newPoolerRecord(logger *slog.Logger, topoClient poolerTopoStore, initial *c
 		Type:            initial.Type,
 		ServingStatus:   initial.ServingStatus,
 		LifecycleStatus: initial.LifecycleStatus,
-		SelfLeadership:  initial.SelfLeadership,
+		RoutingState:    initial.RoutingState,
 	}); err != nil {
 		return nil, err
 	}
@@ -156,10 +155,10 @@ func (r *poolerRecord) ServingStatus() clustermetadatapb.PoolerServingStatus {
 	return r.desired.Load().ServingStatus
 }
 
-// SelfLeadership returns the pooler's most recent recorded consensus
-// observation, or nil if this pooler is not currently the leader of its shard.
-func (r *poolerRecord) SelfLeadership() *clustermetadatapb.LeaderObservation {
-	return r.desired.Load().SelfLeadership
+// RoutingState returns the pooler's recorded routing/HA advertisement, or nil if
+// this pooler is not currently the writable PRIMARY of its shard.
+func (r *poolerRecord) RoutingState() *clustermetadatapb.RoutingState {
+	return r.desired.Load().RoutingState
 }
 
 // Snapshot returns a deep clone of the current desired state. Use this when
@@ -217,7 +216,7 @@ func (r *poolerRecord) applyMutation(fn func(*MutablePoolerRecordState)) error {
 		Type:            current.Type,
 		ServingStatus:   current.ServingStatus,
 		LifecycleStatus: current.LifecycleStatus,
-		SelfLeadership:  current.SelfLeadership,
+		RoutingState:    current.RoutingState,
 	}
 	fn(&state)
 	if err := r.validateState(&state); err != nil {
@@ -227,26 +226,26 @@ func (r *poolerRecord) applyMutation(fn func(*MutablePoolerRecordState)) error {
 	next.Type = state.Type
 	next.ServingStatus = state.ServingStatus
 	next.LifecycleStatus = state.LifecycleStatus
-	next.SelfLeadership = state.SelfLeadership
+	next.RoutingState = state.RoutingState
 	r.desired.Store(next)
 	return nil
 }
 
-// validateState enforces the Type ↔ SelfLeadership consistency invariant: a
-// pooler is the leader iff Type == PRIMARY iff SelfLeadership is set and
-// names this pooler. Any deviation is a caller bug.
+// validateState enforces that a routing_state persisted into the topology record
+// is the writable PRIMARY advertisement only: role == PRIMARY, and Type ==
+// PRIMARY (writability implies highest-known leadership, which sets the label).
+// Replicas — and a consensus leader that is not yet writable — leave routing_state
+// nil, so Type and routing_state are otherwise independent.
 func (r *poolerRecord) validateState(state *MutablePoolerRecordState) error {
-	isPrimary := state.Type == clustermetadatapb.PoolerType_PRIMARY
-	hasObs := state.SelfLeadership != nil
-	switch {
-	case isPrimary && !hasObs:
-		return errors.New("invariant violated: Type=PRIMARY but SelfLeadership is nil")
-	case !isPrimary && hasObs:
-		return fmt.Errorf("invariant violated: Type=%s but SelfLeadership is set", state.Type)
-	case hasObs && !proto.Equal(state.SelfLeadership.LeaderId, r.Id()):
-		return fmt.Errorf("invariant violated: SelfLeadership.LeaderId=%s does not match this pooler's Id=%s",
-			topoclient.ComponentIDString(state.SelfLeadership.LeaderId),
-			topoclient.ComponentIDString(r.Id()))
+	rs := state.RoutingState
+	if rs == nil {
+		return nil
+	}
+	if rs.GetRole() != clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY {
+		return fmt.Errorf("invariant violated: routing_state persisted to topology must be PRIMARY, got %s", rs.GetRole())
+	}
+	if state.Type != clustermetadatapb.PoolerType_PRIMARY {
+		return fmt.Errorf("invariant violated: routing_state is PRIMARY but Type=%s", state.Type)
 	}
 	return nil
 }

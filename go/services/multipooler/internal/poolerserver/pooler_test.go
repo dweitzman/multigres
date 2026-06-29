@@ -145,7 +145,7 @@ func TestStartRequest_DrainRegular_RejectsSingleQueries(t *testing.T) {
 func TestStartRequest_PrimaryOpOnReplica_ReservedConnAllowed(t *testing.T) {
 	s := newStartRequestTestServer()
 	s.servingStatus = clustermetadatapb.PoolerServingStatus_DISABLED
-	s.isHighestKnownLeader = false
+	s.writable = false
 
 	target := &query.Target{Mode: query.Mode_MODE_WRITABLE}
 	// A fresh PRIMARY-targeted request on a demoted (REPLICA) pooler is rejected
@@ -161,7 +161,7 @@ func TestStartRequest_PrimaryOpOnReplica_ReservedConnAllowed(t *testing.T) {
 func TestStartRequest_PrimaryQueryOnReplica_Rejected(t *testing.T) {
 	s := newStartRequestTestServer()
 	s.servingStatus = clustermetadatapb.PoolerServingStatus_SERVING
-	s.isHighestKnownLeader = false
+	s.writable = false
 
 	// PRIMARY query hitting a REPLICA pooler should be rejected with MTF01.
 	target := &query.Target{Mode: query.Mode_MODE_WRITABLE}
@@ -171,54 +171,51 @@ func TestStartRequest_PrimaryQueryOnReplica_Rejected(t *testing.T) {
 func TestStartRequest_PrimaryQueryOnPrimary_Allowed(t *testing.T) {
 	s := newStartRequestTestServer()
 	s.servingStatus = clustermetadatapb.PoolerServingStatus_SERVING
-	s.isHighestKnownLeader = true
 	s.writable = true // writable primary admits WRITABLE traffic
 
 	target := &query.Target{Mode: query.Mode_MODE_WRITABLE}
 	require.NoError(t, s.StartRequest(target, RequestSingleQuery))
 }
 
-// A WRITABLE request is rejected on a node that is the highest-known leader but
-// not yet writable (e.g. mid-promote, before the rule committed / out of
-// recovery) — write admission gates on writability, not highest-known leadership.
+// A WRITABLE request is rejected on a node that is not yet writable (e.g.
+// mid-promote, before the rule committed / out of recovery) — write admission
+// gates on writability (routing role PRIMARY).
 func TestStartRequest_WritableQueryOnNonWritableLeader_Rejected(t *testing.T) {
 	s := newStartRequestTestServer()
 	s.servingStatus = clustermetadatapb.PoolerServingStatus_SERVING
-	s.isHighestKnownLeader = true
 	s.writable = false
 
 	target := &query.Target{Mode: query.Mode_MODE_WRITABLE}
 	requireMTF01(t, s.StartRequest(target, RequestSingleQuery))
 }
 
-// A CONSISTENT (read) request is allowed on the highest-known leader even when
-// it is not writable: a deposed-but-still-running leader can serve
-// read-consistent queries.
-func TestStartRequest_ConsistentQueryOnNonWritableLeader_Allowed(t *testing.T) {
+// A CONSISTENT (read) request is now rejected on a non-writable node, just like
+// WRITABLE: consistent reads must be served by the writable PRIMARY, so a
+// deposed-but-still-running / mid-promote leader returns MTF01 to trigger
+// buffering and re-discovery rather than serving a possibly stale read.
+func TestStartRequest_ConsistentQueryOnNonWritableLeader_Rejected(t *testing.T) {
 	s := newStartRequestTestServer()
 	s.servingStatus = clustermetadatapb.PoolerServingStatus_SERVING
-	s.isHighestKnownLeader = true
 	s.writable = false
-
-	target := &query.Target{Mode: query.Mode_MODE_CONSISTENT}
-	require.NoError(t, s.StartRequest(target, RequestSingleQuery))
-}
-
-// A CONSISTENT request hitting a non-leader is rejected with MTF01 (stale
-// routing) so the gateway re-discovers the leader.
-func TestStartRequest_ConsistentQueryOnNonLeader_Rejected(t *testing.T) {
-	s := newStartRequestTestServer()
-	s.servingStatus = clustermetadatapb.PoolerServingStatus_SERVING
-	s.isHighestKnownLeader = false
 
 	target := &query.Target{Mode: query.Mode_MODE_CONSISTENT}
 	requireMTF01(t, s.StartRequest(target, RequestSingleQuery))
 }
 
+// A CONSISTENT request is admitted on the writable PRIMARY.
+func TestStartRequest_ConsistentQueryOnWritablePrimary_Allowed(t *testing.T) {
+	s := newStartRequestTestServer()
+	s.servingStatus = clustermetadatapb.PoolerServingStatus_SERVING
+	s.writable = true
+
+	target := &query.Target{Mode: query.Mode_MODE_CONSISTENT}
+	require.NoError(t, s.StartRequest(target, RequestSingleQuery))
+}
+
 func TestStartRequest_ReplicaQueryOnPrimary_Allowed(t *testing.T) {
 	s := newStartRequestTestServer()
 	s.servingStatus = clustermetadatapb.PoolerServingStatus_SERVING
-	s.isHighestKnownLeader = true
+	s.writable = true
 
 	// PRIMARY pooler can serve REPLICA traffic.
 	target := &query.Target{Mode: query.Mode_MODE_INCONSISTENT}
@@ -228,7 +225,7 @@ func TestStartRequest_ReplicaQueryOnPrimary_Allowed(t *testing.T) {
 func TestStartRequest_NilTarget_Skipped(t *testing.T) {
 	s := newStartRequestTestServer()
 	s.servingStatus = clustermetadatapb.PoolerServingStatus_SERVING
-	s.isHighestKnownLeader = false
+	s.writable = false
 
 	// Nil target should skip target validation (e.g., GetAuthCredentials).
 	require.NoError(t, s.StartRequest(nil, RequestSingleQuery))
@@ -237,7 +234,7 @@ func TestStartRequest_NilTarget_Skipped(t *testing.T) {
 func TestStartRequest_TableGroupMismatch_Bug(t *testing.T) {
 	s := newStartRequestTestServer()
 	s.servingStatus = clustermetadatapb.PoolerServingStatus_SERVING
-	s.isHighestKnownLeader = true
+	s.writable = true
 	s.tableGroup = "tg1"
 	s.shard = "0"
 
@@ -253,7 +250,7 @@ func TestStartRequest_TableGroupMismatch_Bug(t *testing.T) {
 func TestStartRequest_ShardMismatch_Bug(t *testing.T) {
 	s := newStartRequestTestServer()
 	s.servingStatus = clustermetadatapb.PoolerServingStatus_SERVING
-	s.isHighestKnownLeader = true
+	s.writable = true
 	s.tableGroup = "tg1"
 	s.shard = "0"
 
@@ -268,7 +265,6 @@ func TestStartRequest_ShardMismatch_Bug(t *testing.T) {
 func TestStartRequest_FullTargetMatch_Allowed(t *testing.T) {
 	s := newStartRequestTestServer()
 	s.servingStatus = clustermetadatapb.PoolerServingStatus_SERVING
-	s.isHighestKnownLeader = true
 	s.writable = true // writable primary admits WRITABLE traffic
 	s.tableGroup = "tg1"
 	s.shard = "0"
@@ -408,7 +404,7 @@ func TestOnStateChange_TwoStageDrain(t *testing.T) {
 	pooler.gracePeriod = 5 * time.Second
 	ctx := t.Context()
 
-	require.NoError(t, pooler.OnStateChange(ctx, servingstate.State{IsHighestKnownLeader: true, Writable: true, ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING}))
+	require.NoError(t, pooler.OnStateChange(ctx, servingstate.State{Routing: &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY}, ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING}))
 
 	// One in-flight transaction (reserved) and one in-flight single query (regular).
 	mock.reservedAdd(1)
@@ -417,7 +413,7 @@ func TestOnStateChange_TwoStageDrain(t *testing.T) {
 	drainDone := make(chan struct{})
 	go func() {
 		defer close(drainDone)
-		_ = pooler.OnStateChange(ctx, servingstate.State{IsHighestKnownLeader: true, Writable: true, ServingStatus: clustermetadatapb.PoolerServingStatus_DISABLED})
+		_ = pooler.OnStateChange(ctx, servingstate.State{Routing: &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY}, ServingStatus: clustermetadatapb.PoolerServingStatus_DISABLED})
 	}()
 
 	// Stage 1: blocked on the in-flight transaction. Single queries are served,
@@ -455,13 +451,13 @@ func TestOnStateChange_GracePeriodExpiresInStage1(t *testing.T) {
 	pooler.gracePeriod = 100 * time.Millisecond
 	ctx := t.Context()
 
-	require.NoError(t, pooler.OnStateChange(ctx, servingstate.State{IsHighestKnownLeader: true, Writable: true, ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING}))
+	require.NoError(t, pooler.OnStateChange(ctx, servingstate.State{Routing: &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY}, ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING}))
 
 	// A transaction that never commits — stage 1 (WaitForReservedDrain) blocks.
 	mock.reservedAdd(1)
 
 	start := time.Now()
-	require.NoError(t, pooler.OnStateChange(ctx, servingstate.State{IsHighestKnownLeader: true, Writable: true, ServingStatus: clustermetadatapb.PoolerServingStatus_DISABLED}))
+	require.NoError(t, pooler.OnStateChange(ctx, servingstate.State{Routing: &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY}, ServingStatus: clustermetadatapb.PoolerServingStatus_DISABLED}))
 	elapsed := time.Since(start)
 
 	assert.GreaterOrEqual(t, elapsed, 80*time.Millisecond, "should block ~grace period waiting on the held transaction")
@@ -480,7 +476,7 @@ func TestOnStateChange_WaitsForInflightRequests(t *testing.T) {
 	pooler.gracePeriod = 5 * time.Second
 	ctx := t.Context()
 
-	require.NoError(t, pooler.OnStateChange(ctx, servingstate.State{IsHighestKnownLeader: true, Writable: true, ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING}))
+	require.NoError(t, pooler.OnStateChange(ctx, servingstate.State{Routing: &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY}, ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING}))
 
 	// Simulate two in-flight connections
 	mock.regularAdd(1)
@@ -489,7 +485,7 @@ func TestOnStateChange_WaitsForInflightRequests(t *testing.T) {
 	drainDone := make(chan struct{})
 	go func() {
 		defer close(drainDone)
-		_ = pooler.OnStateChange(ctx, servingstate.State{IsHighestKnownLeader: true, Writable: true, ServingStatus: clustermetadatapb.PoolerServingStatus_DISABLED})
+		_ = pooler.OnStateChange(ctx, servingstate.State{Routing: &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY}, ServingStatus: clustermetadatapb.PoolerServingStatus_DISABLED})
 	}()
 
 	// Drain should not complete while connections are in-flight
@@ -522,7 +518,7 @@ func TestOnStateChange_GracePeriodExpires(t *testing.T) {
 	pooler.gracePeriod = 100 * time.Millisecond
 	ctx := t.Context()
 
-	require.NoError(t, pooler.OnStateChange(ctx, servingstate.State{IsHighestKnownLeader: true, Writable: true, ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING}))
+	require.NoError(t, pooler.OnStateChange(ctx, servingstate.State{Routing: &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY}, ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING}))
 
 	// Simulate a connection that will never return
 	mock.regularAdd(1)
@@ -531,7 +527,7 @@ func TestOnStateChange_GracePeriodExpires(t *testing.T) {
 	drainDone := make(chan struct{})
 	go func() {
 		defer close(drainDone)
-		_ = pooler.OnStateChange(ctx, servingstate.State{IsHighestKnownLeader: true, Writable: true, ServingStatus: clustermetadatapb.PoolerServingStatus_DISABLED})
+		_ = pooler.OnStateChange(ctx, servingstate.State{Routing: &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY}, ServingStatus: clustermetadatapb.PoolerServingStatus_DISABLED})
 	}()
 
 	select {
@@ -558,14 +554,14 @@ func TestOnStateChange_BackToServing(t *testing.T) {
 	ctx := t.Context()
 
 	// SERVING → DISABLED → SERVING
-	require.NoError(t, pooler.OnStateChange(ctx, servingstate.State{IsHighestKnownLeader: true, Writable: true, ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING}))
+	require.NoError(t, pooler.OnStateChange(ctx, servingstate.State{Routing: &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY}, ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING}))
 	assert.True(t, pooler.IsServing())
 
-	require.NoError(t, pooler.OnStateChange(ctx, servingstate.State{IsHighestKnownLeader: true, Writable: true, ServingStatus: clustermetadatapb.PoolerServingStatus_DISABLED}))
+	require.NoError(t, pooler.OnStateChange(ctx, servingstate.State{Routing: &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY}, ServingStatus: clustermetadatapb.PoolerServingStatus_DISABLED}))
 	assert.False(t, pooler.IsServing())
 
 	// Transition back to SERVING
-	require.NoError(t, pooler.OnStateChange(ctx, servingstate.State{IsHighestKnownLeader: true, Writable: true, ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING}))
+	require.NoError(t, pooler.OnStateChange(ctx, servingstate.State{Routing: &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY}, ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING}))
 	assert.True(t, pooler.IsServing())
 
 	// Requests should work again
@@ -581,7 +577,7 @@ func TestOnStateChange_ConcurrentRequests(t *testing.T) {
 	pooler.gracePeriod = 2 * time.Second
 	ctx := t.Context()
 
-	require.NoError(t, pooler.OnStateChange(ctx, servingstate.State{IsHighestKnownLeader: true, Writable: true, ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING}))
+	require.NoError(t, pooler.OnStateChange(ctx, servingstate.State{Routing: &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY}, ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING}))
 
 	const numRequests = 50
 	var wg sync.WaitGroup
@@ -607,7 +603,7 @@ func TestOnStateChange_ConcurrentRequests(t *testing.T) {
 	drainDone := make(chan struct{})
 	go func() {
 		defer close(drainDone)
-		_ = pooler.OnStateChange(ctx, servingstate.State{IsHighestKnownLeader: true, Writable: true, ServingStatus: clustermetadatapb.PoolerServingStatus_DISABLED})
+		_ = pooler.OnStateChange(ctx, servingstate.State{Routing: &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY}, ServingStatus: clustermetadatapb.PoolerServingStatus_DISABLED})
 	}()
 
 	// Wait for all goroutines and drain to complete
@@ -626,7 +622,7 @@ func TestAwaitStateChange_AlreadyMatches(t *testing.T) {
 	ctx := t.Context()
 
 	// Transition to PRIMARY/SERVING
-	require.NoError(t, s.OnStateChange(ctx, servingstate.State{IsHighestKnownLeader: true, Writable: true, ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING}))
+	require.NoError(t, s.OnStateChange(ctx, servingstate.State{Routing: &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY}, ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING}))
 
 	// AwaitStateChange should return immediately when state already matches
 	done := make(chan struct{})
@@ -661,7 +657,7 @@ func TestAwaitStateChange_BlocksUntilTransition(t *testing.T) {
 	}
 
 	// Transition to the awaited state
-	require.NoError(t, s.OnStateChange(ctx, servingstate.State{IsHighestKnownLeader: true, Writable: true, ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING}))
+	require.NoError(t, s.OnStateChange(ctx, servingstate.State{Routing: &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY}, ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING}))
 
 	select {
 	case <-done:

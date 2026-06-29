@@ -56,15 +56,11 @@ type healthStreamer struct {
 	shard      string
 
 	// Mutable fields (updated via typed methods)
-	servingStatus     clustermetadatapb.PoolerServingStatus
-	poolerType        clustermetadatapb.PoolerType
-	leaderObservation *poolerserver.LeaderObservation
+	servingStatus clustermetadatapb.PoolerServingStatus
 
-	// writable reports whether postgres can accept writes (!pg_is_in_recovery).
-	// Published separately from poolerType (which tracks the consensus term, not
-	// writability) so the gateway can hold write traffic for a leader that is
-	// SERVING but still mid-promotion.
-	writable bool
+	// routingState is the self-reported routing/HA role + qualifying rule published
+	// to the gateway. role == PRIMARY is the writable signal. Updated by OnStateChange.
+	routingState *clustermetadatapb.RoutingState
 
 	// Client management
 	clients map[chan *poolerserver.HealthState]struct{}
@@ -109,42 +105,25 @@ func (hs *healthStreamer) SetQueryServer(qs poolerserver.PoolerController) {
 	hs.queryServer = qs
 }
 
-// UpdateLeaderObservation updates the primary observation (term + primary ID)
-// and broadcasts to clients.
-func (hs *healthStreamer) UpdateLeaderObservation(obs *poolerserver.LeaderObservation) {
-	hs.mu.Lock()
-	defer hs.mu.Unlock()
-
-	hs.leaderObservation = obs
-	hs.broadcastLocked()
-}
-
-// OnStateChange updates both poolerType and servingStatus atomically with a single
-// broadcast. This implements the StateAware interface so the healthStreamer can be
-// registered with StateManager.
+// OnStateChange updates the routing state and serving status atomically with a
+// single broadcast. This implements the StateAware interface so the healthStreamer
+// can be registered with StateManager.
 //
-// For SERVING transitions, it waits for the query server (via queryReadyGate)
+// For SERVING transitions, it waits for the query server (via AwaitStateChange)
 // to finish updating before broadcasting. This prevents the gateway from
-// discovering the new primary before the pooler can actually serve that type.
+// discovering the new primary before the pooler can actually serve writes.
 // not-serving transitions broadcast immediately so the gateway can start
 // buffering without delay.
 func (hs *healthStreamer) OnStateChange(ctx context.Context, state servingstate.State) error {
 	if state.ServingStatus == clustermetadatapb.PoolerServingStatus_SERVING && hs.queryServer != nil {
-		hs.queryServer.AwaitStateChange(ctx, state.IsHighestKnownLeader, state.ServingStatus)
+		hs.queryServer.AwaitStateChange(ctx, state.Writable(), state.ServingStatus)
 	}
 
 	hs.mu.Lock()
 	defer hs.mu.Unlock()
 
 	prev := hs.servingStatus
-	// The health stream reports the PoolerType routing label from highest-known
-	// leadership (the consensus term), not writability — a node can be the term
-	// leader before it has finished promoting. A non-leader is a read replica for
-	// routing.
-	hs.poolerType = poolerTypeForLeader(state.IsHighestKnownLeader)
-	// writable is published separately so the gateway gates write traffic on
-	// write-safety (out of recovery AND highest committed leader), not routing.
-	hs.writable = state.Writable
+	hs.routingState = state.Routing
 	hs.servingStatus = state.ServingStatus
 	hs.broadcastLocked()
 	if prev != state.ServingStatus {
@@ -183,10 +162,9 @@ func (hs *healthStreamer) buildStateLocked() *poolerserver.HealthState {
 	return &poolerserver.HealthState{
 		PoolerID:                    hs.poolerID,
 		ServingStatus:               hs.servingStatus,
-		LeaderObservation:           hs.leaderObservation,
+		RoutingState:                hs.routingState,
 		RecommendedStalenessTimeout: hs.recommendedStalenessTimeout,
 		ReplicationLagNs:            hs.replicationLagNs.Load(),
-		Writable:                    hs.writable,
 	}
 }
 

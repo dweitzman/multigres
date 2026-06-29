@@ -20,8 +20,6 @@ import (
 	"fmt"
 	"time"
 
-	"google.golang.org/protobuf/proto"
-
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/services/multipooler/internal/manager/actionlock"
 	"github.com/multigres/multigres/go/tools/telemetry"
@@ -31,22 +29,20 @@ import (
 	pgctldpb "github.com/multigres/multigres/go/pb/pgctldservice"
 )
 
-// deriveTypeAndObs maps a consensus rule to the pooler role it implies and the
-// self-leadership observation to publish. A nil rule (no rule known yet) yields
-// UNKNOWN; a rule naming this pooler yields PRIMARY plus an observation; any
-// other rule yields REPLICA with no observation. This is the single place the
-// rule is translated into a role.
-func deriveTypeAndObs(rule *clustermetadatapb.ShardRule, selfID *clustermetadatapb.ID) (clustermetadatapb.PoolerType, *clustermetadatapb.LeaderObservation) {
+// roleForRule maps a consensus rule to the pooler role it implies: UNKNOWN for a
+// nil rule (none known yet), PRIMARY if the rule names this pooler as leader,
+// REPLICA otherwise. It is a pure rule→role mapping and says nothing about which
+// rule it was given — callers decide whether to pass the highest-*committed* rule
+// (write-safety) or the highest-*known* rule (routing label), the two leadership
+// notions this package keeps distinct.
+func roleForRule(rule *clustermetadatapb.ShardRule, selfID *clustermetadatapb.ID) clustermetadatapb.PoolerType {
 	if rule == nil {
-		return clustermetadatapb.PoolerType_UNKNOWN, nil
+		return clustermetadatapb.PoolerType_UNKNOWN
 	}
-	if proto.Equal(rule.GetLeaderId(), selfID) {
-		return clustermetadatapb.PoolerType_PRIMARY, &clustermetadatapb.LeaderObservation{
-			LeaderId:         selfID,
-			LeaderRuleNumber: rule.GetRuleNumber(),
-		}
+	if commonconsensus.RuleNamesLeader(rule, selfID) {
+		return clustermetadatapb.PoolerType_PRIMARY
 	}
-	return clustermetadatapb.PoolerType_REPLICA, nil
+	return clustermetadatapb.PoolerType_REPLICA
 }
 
 // highestKnownRule returns the highest-numbered rule this pooler knows of, combining
@@ -94,19 +90,10 @@ func (pm *MultiPoolerManager) highestCommittedRule() *clustermetadatapb.ShardRul
 // to write-safety (writable); a deposed-but-not-yet-demoted primary is excluded.
 func (pm *MultiPoolerManager) isHighestNonRevokedCommittedLeader() bool {
 	rule := pm.highestCommittedRule()
-	role, _ := deriveTypeAndObs(rule, pm.serviceID)
-	if role != clustermetadatapb.PoolerType_PRIMARY {
+	if !commonconsensus.RuleNamesLeader(rule, pm.serviceID) {
 		return false
 	}
 	return !commonconsensus.IsRuleRevoked(rule, pm.consensusMgr.Promises().GetInconsistentRevocation())
-}
-
-// intendedRole is the pooler role implied by the highest rule it knows of — the
-// consensus-authoritative source of truth for the published PoolerType,
-// independent of the observed postgres recovery mode.
-func (pm *MultiPoolerManager) intendedRole() clustermetadatapb.PoolerType {
-	t, _ := deriveTypeAndObs(pm.highestKnownRule(), pm.serviceID)
-	return t
 }
 
 // staleStandbyDemoteTarget returns the leader this pooler should restart as a
@@ -597,7 +584,7 @@ func (pm *MultiPoolerManager) determineRemedialAction(ctx context.Context, curre
 	// role (determineRoleAction), then when the role needs no action
 	// reconcile the replication settings (determineReplicationSettingsAction).
 	if currentState.postgresRunning {
-		intended := pm.intendedRole()
+		intended := roleForRule(pm.highestKnownRule(), pm.serviceID)
 		if intended == clustermetadatapb.PoolerType_UNKNOWN {
 			// No rule-bearing position observed yet; wait rather than act on the
 			// observed postgres state. This also defers DRAINING -> SERVING recovery:
@@ -711,9 +698,7 @@ func (pm *MultiPoolerManager) takeRemedialAction(ctx context.Context, action rem
 		// demoted), so the role resolves to REPLICA (nil self-leadership); we just
 		// restarted as a standby, so postgres is no longer primary. Serving status
 		// is unchanged (a healthy standby keeps serving reads).
-		_, obs := deriveTypeAndObs(pm.highestKnownRule(), pm.serviceID)
 		if err := pm.stateManager.Mutate(ctx, func(s *servingStateMutation) {
-			s.SelfLeadership = obs
 			s.InRecovery = true // just restarted as a standby
 		}); err != nil {
 			pm.logger.WarnContext(ctx, "MonitorPostgres: failed to apply role after demote", "error", err)
@@ -728,14 +713,14 @@ func (pm *MultiPoolerManager) takeRemedialAction(ctx context.Context, action rem
 		// only out of DRAINING (the transient drain this loop owns); a DISABLED
 		// pooler (stopping/paused/operator-drained) is left not-serving, since this
 		// case also fires for plain role/writable drift.
-		intended, obs := deriveTypeAndObs(pm.highestKnownRule(), pm.serviceID)
+		intended := roleForRule(pm.highestKnownRule(), pm.serviceID)
 		pm.logger.InfoContext(ctx, "MonitorPostgres: reconciling state from rule",
 			"intended_role", intended.String(), "in_recovery", !state.isPrimary)
 		if err := pm.stateManager.Mutate(ctx, func(s *servingStateMutation) {
-			s.SelfLeadership = obs
-			// Feed the observed recovery fact; the StateManager derives writable
-			// from it plus the committed-leadership query. (isPrimary == out of
-			// recovery; postgresState keeps that name pending a follow-up rename.)
+			// Feed the observed recovery fact; the StateManager derives the routing
+			// role and write-safety from it plus the live leadership snapshot.
+			// (isPrimary == out of recovery; postgresState keeps that name pending a
+			// follow-up rename.)
 			s.InRecovery = !state.isPrimary
 			if s.ServingStatus == clustermetadatapb.PoolerServingStatus_DRAINING {
 				s.ServingStatus = clustermetadatapb.PoolerServingStatus_SERVING

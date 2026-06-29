@@ -118,7 +118,7 @@ func (l *Listener) Stop() {
 // standbys never receive them — so writability (out of recovery AND highest
 // committed leader) is exactly the right gate.
 func (l *Listener) OnStateChange(_ context.Context, state servingstate.State) error {
-	if state.Writable && state.ServingStatus == clustermetadatapb.PoolerServingStatus_SERVING {
+	if state.Writable() && state.ServingStatus == clustermetadatapb.PoolerServingStatus_SERVING {
 		//nolint:gocritic // Long-lived background listener; must not use the transient state-change ctx.
 		l.Start(context.Background())
 	} else {

@@ -51,14 +51,14 @@ func newTestPooler(cell, name, tableGroup, shard string, lifecycle clustermetada
 	}
 }
 
-// withSelfLeader attaches a self_leadership observation naming the pooler
-// itself as leader at the given coordinator term. This mirrors the topology
-// record of a real PRIMARY pooler and is how the gateway learns of a leader
-// at discovery time.
+// withSelfLeader attaches a writable-PRIMARY routing_state naming the pooler
+// itself as the writable leader at the given coordinator term. This mirrors the
+// topology record of a real writable PRIMARY pooler and is how the gateway learns
+// of a leader at discovery time.
 func withSelfLeader(p *clustermetadatapb.MultiPooler, coordinatorTerm int64) *clustermetadatapb.MultiPooler {
-	p.SelfLeadership = &clustermetadatapb.LeaderObservation{
-		LeaderId:         p.Id,
-		LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: coordinatorTerm},
+	p.RoutingState = &clustermetadatapb.RoutingState{
+		Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY,
+		Rule: &clustermetadatapb.RuleNumber{CoordinatorTerm: coordinatorTerm},
 	}
 	return p
 }

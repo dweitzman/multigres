@@ -26,7 +26,6 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	"github.com/multigres/multigres/go/services/multipooler/internal/servingstate"
 	"github.com/multigres/multigres/go/tools/telemetry"
 )
 
@@ -83,26 +82,14 @@ func TestServingTransitions(t *testing.T) {
 	ctx := t.Context()
 
 	// DISABLED (initial) → SERVING records one transition.
-	require.NoError(t, hs.OnStateChange(ctx, servingstate.State{
-		IsHighestKnownLeader: true,
-		Writable:             true,
-		ServingStatus:        clustermetadatapb.PoolerServingStatus_SERVING,
-	}))
+	require.NoError(t, hs.OnStateChange(ctx, writableState(clustermetadatapb.PoolerServingStatus_SERVING)))
 
 	// SERVING → SERVING is a no-op (role change only, leader/primary → replica):
 	// no new transition.
-	require.NoError(t, hs.OnStateChange(ctx, servingstate.State{
-		IsHighestKnownLeader: false,
-		Writable:             false,
-		ServingStatus:        clustermetadatapb.PoolerServingStatus_SERVING,
-	}))
+	require.NoError(t, hs.OnStateChange(ctx, replicaState(clustermetadatapb.PoolerServingStatus_SERVING)))
 
 	// SERVING → DISABLED records a second transition.
-	require.NoError(t, hs.OnStateChange(ctx, servingstate.State{
-		IsHighestKnownLeader: false,
-		Writable:             false,
-		ServingStatus:        clustermetadatapb.PoolerServingStatus_DISABLED,
-	}))
+	require.NoError(t, hs.OnStateChange(ctx, replicaState(clustermetadatapb.PoolerServingStatus_DISABLED)))
 
 	m := findMetric(t, reader, "mg.pooler.serving.transitions")
 	sum, ok := m.Data.(metricdata.Sum[int64])

@@ -54,15 +54,11 @@ type QueryPoolerServer struct {
 	shard      string
 
 	mu sync.Mutex
-	// isHighestKnownLeader reports highest-known leadership (the routing signal).
-	// Set from OnStateChange. CONSISTENT reads gate on this — a deposed-but-
-	// running leader can still serve read-consistent queries.
-	isHighestKnownLeader bool
-	// writable is true iff this pooler can accept a write: postgres is out of
-	// recovery AND the last-written committed WAL rule names this pooler as the
-	// (non-revoked) leader. WRITABLE requests gate on this, so a write is never
-	// admitted on the strength of merely highest-known leadership (a mid-promote
-	// or deposed-but-running node).
+	// writable is true iff the routing role is PRIMARY: postgres is out of recovery
+	// AND we are both the highest non-revoked committed leader AND the highest-known
+	// leader. Both WRITABLE and CONSISTENT requests gate on it — a write is never
+	// admitted on a mid-promote or deposed-but-running node, and consistent reads go
+	// only to the writable leader, not a stale one. Set from OnStateChange.
 	writable       bool
 	servingStatus  clustermetadatapb.PoolerServingStatus
 	healthProvider HealthProvider
@@ -172,17 +168,16 @@ func NewQueryPoolerServer(logger *slog.Logger, poolManager connpoolmanager.PoolM
 // follows. On timeout, errors are acceptable — that is what the grace period
 // bounds.
 func (s *QueryPoolerServer) OnStateChange(ctx context.Context, state servingstate.State) error {
-	isHighestKnownLeader := state.IsHighestKnownLeader
+	writable := state.Writable()
 	servingStatus := state.ServingStatus
 	s.mu.Lock()
 
 	s.logger.InfoContext(ctx, "Transitioning serving type",
-		"leader_from", s.isHighestKnownLeader, "leader_to", isHighestKnownLeader,
+		"writable_from", s.writable, "writable_to", writable,
 		"status_from", s.servingStatus, "status_to", servingStatus)
 
 	if servingStatus == clustermetadatapb.PoolerServingStatus_SERVING {
-		s.isHighestKnownLeader = isHighestKnownLeader
-		s.writable = state.Writable
+		s.writable = writable
 		s.servingStatus = servingStatus
 		s.drainPhase = drainNone
 		s.notifyStateChangedLocked()
@@ -191,8 +186,8 @@ func (s *QueryPoolerServer) OnStateChange(ctx context.Context, state servingstat
 	}
 
 	// not-serving: begin stage 1 of the graceful drain.
-	// The leader role is NOT updated yet — in-flight requests on reserved
-	// connections (e.g., COMMIT after a demotion) must still see the old role
+	// Writability is NOT updated yet — in-flight requests on reserved
+	// connections (e.g., COMMIT after a demotion) must still see the old value
 	// so that checkTargetLocked allows them to complete.
 	s.drainPhase = drainReserved
 	s.mu.Unlock()
@@ -238,11 +233,10 @@ func (s *QueryPoolerServer) OnStateChange(ctx context.Context, state servingstat
 		s.drainStats.recordDrain(ctx, time.Since(drainStart).Seconds(), outcome)
 	}
 
-	// Complete the transition. The leader role is set here (after drain) so that
-	// in-flight requests saw the old role throughout the drain phase.
+	// Complete the transition. Writability is set here (after drain) so that
+	// in-flight requests saw the old value throughout the drain phase.
 	s.mu.Lock()
-	s.isHighestKnownLeader = isHighestKnownLeader
-	s.writable = state.Writable
+	s.writable = writable
 	s.servingStatus = servingStatus
 	s.drainPhase = drainNone
 	s.notifyStateChangedLocked()
@@ -358,23 +352,16 @@ func (s *QueryPoolerServer) checkTargetLocked(target *query.Target, existingRese
 		return nil
 	}
 
-	// A leader-bound request hitting a pooler that can't serve it as leader means
+	// A leader-bound request hitting a pooler that is not the writable PRIMARY means
 	// the gateway has stale topology (a demotion happened). Return MTF01 to trigger
-	// buffering and re-discovery. The required leadership differs by mode:
-	//
-	//   - WRITABLE gates on writability: postgres out of recovery AND we are the
-	//     last-written committed (non-revoked) leader. Highest-known leadership is
-	//     NOT sufficient — a mid-promote or deposed-but-running node could otherwise
-	//     admit a write before consensus committed.
-	//   - CONSISTENT (a read) gates on highest-known leadership: a deposed-but-
-	//     running leader can still serve read-consistent queries.
+	// buffering and re-discovery. Both WRITABLE and CONSISTENT gate on writability
+	// (the routing role being PRIMARY): postgres out of recovery AND we are both the
+	// highest non-revoked committed leader AND the highest-known leader. A mid-promote
+	// or deposed-but-running node must admit neither a write nor a consistent read
+	// (the latter would be served stale).
 	switch target.GetMode() {
-	case query.Mode_MODE_WRITABLE:
+	case query.Mode_MODE_WRITABLE, query.Mode_MODE_CONSISTENT:
 		if !s.writable {
-			return mterrors.MTF01.New()
-		}
-	case query.Mode_MODE_CONSISTENT:
-		if !s.isHighestKnownLeader {
 			return mterrors.MTF01.New()
 		}
 	}
@@ -393,10 +380,10 @@ func (s *QueryPoolerServer) notifyStateChangedLocked() {
 // AwaitStateChange blocks until the pooler's type and serving status match
 // the given targets, or ctx is cancelled. Used by the health streamer to
 // ensure the query server is ready before broadcasting the new state.
-func (s *QueryPoolerServer) AwaitStateChange(ctx context.Context, isHighestKnownLeader bool, servingStatus clustermetadatapb.PoolerServingStatus) {
+func (s *QueryPoolerServer) AwaitStateChange(ctx context.Context, writable bool, servingStatus clustermetadatapb.PoolerServingStatus) {
 	for {
 		s.mu.Lock()
-		if s.isHighestKnownLeader == isHighestKnownLeader && s.servingStatus == servingStatus {
+		if s.writable == writable && s.servingStatus == servingStatus {
 			s.mu.Unlock()
 			return
 		}
@@ -451,9 +438,8 @@ func (s *QueryPoolerServer) StartServiceForTests() error {
 	ctx, cancel := context.WithTimeout(context.TODO(), 5*time.Second)
 	defer cancel()
 	return s.OnStateChange(ctx, servingstate.State{
-		IsHighestKnownLeader: true,
-		Writable:             true,
-		ServingStatus:        clustermetadatapb.PoolerServingStatus_SERVING,
+		Routing:       &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY},
+		ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
 	})
 }
 

@@ -24,7 +24,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/constants"
 	"github.com/multigres/multigres/go/common/queryservice"
 	"github.com/multigres/multigres/go/common/rpcclient"
@@ -48,24 +47,19 @@ type poolerHealth struct {
 	PoolerID *clustermetadatapb.ID
 
 	// ServingStatus is the serving state reported by the pooler. Buffer
-	// drain (notifyIfLeaderServing) requires both SERVING and the
-	// broadcast's LeaderObservation naming this pooler — see that function
-	// for the race the dual check guards against.
+	// drain (notifyIfLeaderServing) requires both SERVING and the pooler's own
+	// routing_state being PRIMARY — see that function for the race it guards.
 	ServingStatus clustermetadatapb.PoolerServingStatus
 
-	// LeaderObservation contains the pooler's view of who the consensus leader
-	// is, identified by leader id and the rule number under which the
-	// observation was made. Used for rule-number-based leader reconciliation.
-	LeaderObservation *clustermetadatapb.LeaderObservation
+	// RoutingState is the pooler's self-reported routing/HA role + qualifying rule.
+	// role == PRIMARY means it is the writable leader (the signal write/CONSISTENT
+	// routing and buffer-drain gate on); role == REPLICA means it is not. The
+	// pooler's identity is the enclosing PoolerID — a replica never names a leader.
+	RoutingState *clustermetadatapb.RoutingState
 
 	// ReplicationLagNs is the replication lag in nanoseconds reported by the pooler.
 	// Zero on the primary or when not yet measured.
 	ReplicationLagNs int64
-
-	// Writable reports whether the pooler can accept writes (postgres out of
-	// recovery). A consensus leader mid-promotion is SERVING (reads) but not yet
-	// Writable; the failover buffer holds write traffic until this is true.
-	Writable bool
 
 	// LastError is the most recent error from the health stream.
 	LastError error
@@ -82,29 +76,29 @@ func (h *poolerHealth) isServing() bool {
 	return h.ServingStatus == clustermetadatapb.PoolerServingStatus_SERVING
 }
 
-// isWritable returns true if the pooler can accept writes (postgres out of
-// recovery). The failover buffer drains write traffic only once this is true.
+// isWritable returns true if the pooler advertises routing role PRIMARY — it is
+// the writable leader. The failover buffer drains write traffic only once this is
+// true.
 func (h *poolerHealth) isWritable() bool {
-	return h != nil && h.Writable
+	return h != nil && h.RoutingState.GetRole() == clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY
 }
 
 // simpleCopy returns a shallow copy of the poolerHealth.
-// This is not a deep copy: pointer fields (Target, PoolerID, LeaderObservation)
-// reference the same underlying objects. This is safe because these proto objects
-// are treated as immutable - they are never modified after creation.
+// This is not a deep copy: pointer fields (PoolerID, RoutingState) reference the
+// same underlying objects. This is safe because these proto objects are treated
+// as immutable - they are never modified after creation.
 // Returns a shallow copy that is safe to read concurrently.
 func (h *poolerHealth) simpleCopy() *poolerHealth {
 	if h == nil {
 		return nil
 	}
 	return &poolerHealth{
-		PoolerID:          h.PoolerID,
-		ServingStatus:     h.ServingStatus,
-		LeaderObservation: h.LeaderObservation,
-		ReplicationLagNs:  h.ReplicationLagNs,
-		Writable:          h.Writable,
-		LastError:         h.LastError,
-		LastResponse:      h.LastResponse,
+		PoolerID:         h.PoolerID,
+		ServingStatus:    h.ServingStatus,
+		RoutingState:     h.RoutingState,
+		ReplicationLagNs: h.ReplicationLagNs,
+		LastError:        h.LastError,
+		LastResponse:     h.LastResponse,
 	}
 }
 
@@ -187,7 +181,7 @@ func newPoolerConnection(
 	logger.DebugContext(ctx, "creating pooler connection",
 		"pooler_id", poolerID,
 		"addr", addr,
-		"is_leader", pooler.GetSelfLeadership() != nil)
+		"is_primary", pooler.GetRoutingState().GetRole() == clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY)
 
 	// Create gRPC connection with telemetry attributes
 	conn, err := grpccommon.NewClient(addr,
@@ -245,18 +239,19 @@ func (pc *poolerConnection) Cell() string {
 	return pc.poolerInfo.Load().Id.GetCell()
 }
 
-// believesSelfLeader reports whether this pooler considers itself the shard
-// leader, judged from the better of its topology self_leadership (read at
-// discovery) and its latest health-stream observation. A pooler in this state
-// is either the current leader or a stale leader that has not yet learned of a
-// newer one; either way it must not be selected for replica reads.
+// believesSelfLeader reports whether this pooler advertises itself as the
+// writable PRIMARY, from either its topology routing_state (read at discovery)
+// or its latest health-stream routing_state. A pooler in this state is either
+// the current writable leader or a not-yet-resigned stale one; either way it
+// must not be selected for replica reads.
 func (pc *poolerConnection) believesSelfLeader() bool {
-	var healthObs *clustermetadatapb.LeaderObservation
-	if h := pc.Health(); h != nil {
-		healthObs = h.LeaderObservation
+	if pc.poolerInfo.Load().GetRoutingState().GetRole() == clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY {
+		return true
 	}
-	obs := commonconsensus.MostAuthoritativeObservation(pc.poolerInfo.Load().GetSelfLeadership(), healthObs)
-	return obs != nil && topoclient.ComponentIDString(obs.GetLeaderId()) == pc.ID()
+	if h := pc.Health(); h != nil && h.RoutingState.GetRole() == clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY {
+		return true
+	}
+	return false
 }
 
 // UpdatePoolerInfo refreshes the pooler metadata (hostname, ports, shard) from
@@ -436,13 +431,12 @@ func (pc *poolerConnection) processHealthResponse(response *multipoolerservice.S
 
 	// Build new health snapshot from the response.
 	newHealth := &poolerHealth{
-		PoolerID:          response.PoolerId,
-		ServingStatus:     response.ServingStatus,
-		LeaderObservation: response.LeaderObservation,
-		ReplicationLagNs:  response.ReplicationLagNs,
-		Writable:          response.Writable,
-		LastError:         nil,
-		LastResponse:      time.Now(),
+		PoolerID:         response.PoolerId,
+		ServingStatus:    response.ServingStatus,
+		RoutingState:     response.RoutingState,
+		ReplicationLagNs: response.ReplicationLagNs,
+		LastError:        nil,
+		LastResponse:     time.Now(),
 	}
 
 	pc.healthMu.Lock()

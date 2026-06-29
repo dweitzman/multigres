@@ -271,46 +271,51 @@ func newRemedialActionTestManager(t *testing.T, multipooler *clustermetadatapb.M
 	// Default the recorded service identity to this pooler unless an option
 	// overrode it, so the promises default is rooted at the right ID.
 	cfg := resolveTestManagerConfig(t, append([]testManagerOption{withServiceID(multipooler.Id)}, opts...)...)
+	consensusMgr := cfg.consensusManager(t)
 	pm := &MultiPoolerManager{
 		logger:       slog.Default(),
 		actionLock:   actionlock.NewActionLock(),
 		record:       record,
 		serviceID:    multipooler.Id,
 		topoClient:   ts,
-		stateManager: NewStateManager(slog.Default(), record, func() bool { return true }),
-		consensusMgr: cfg.consensusManager(t),
+		stateManager: NewStateManager(slog.Default(), record, consensusMgr.CachedConsensusStatus),
+		consensusMgr: consensusMgr,
 	}
 	cfg.seedLockedState(t, pm)
 	return pm
 }
 
-// TestUpdateTopologyAfterPromotion_PublishesSelfLeadership verifies the
-// promotion path records a self-leadership observation naming this pooler under
-// the rule it was promoted under, alongside Type=PRIMARY + SERVING.
-func TestUpdateTopologyAfterPromotion_PublishesSelfLeadership(t *testing.T) {
+// TestUpdateTopologyAfterPromotion_PublishesRoutingState verifies the promotion
+// path records a PRIMARY routing_state carrying the rule it was promoted under,
+// alongside Type=PRIMARY + SERVING.
+func TestUpdateTopologyAfterPromotion_PublishesRoutingState(t *testing.T) {
 	multipooler := &clustermetadatapb.MultiPooler{
 		Id:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "test-pooler"},
 		Type: clustermetadatapb.PoolerType_REPLICA,
 	}
-	pm := newRemedialActionTestManager(t, multipooler)
+
+	// The pooler is promoted under this rule, which names it as leader. Seed the
+	// rule store so the StateManager's injected consensus snapshot already names
+	// this pooler as the committed leader — as it would in production, where
+	// UpdateRule runs before updateTopologyAfterPromotion.
+	rule := &clustermetadatapb.ShardRule{
+		RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 7, LeaderSubterm: 2},
+		LeaderId:   multipooler.Id,
+	}
+	pm := newRemedialActionTestManager(t, multipooler, withRuleStore(&fakeRuleStore{pos: &clustermetadatapb.PoolerPosition{Rule: rule}}))
 
 	lockCtx, err := pm.actionLock.Acquire(t.Context(), "test")
 	require.NoError(t, err)
 	defer pm.actionLock.Release(lockCtx)
 
-	// The pooler is promoted under this rule, which names it as leader.
-	rule := &clustermetadatapb.ShardRule{
-		RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 7, LeaderSubterm: 2},
-		LeaderId:   multipooler.Id,
-	}
 	require.NoError(t, pm.updateTopologyAfterPromotion(lockCtx, &promotionState{}, rule))
 
 	assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, pm.record.Type())
 	assert.Equal(t, clustermetadatapb.PoolerServingStatus_SERVING, pm.record.ServingStatus())
-	obs := pm.record.SelfLeadership()
-	require.NotNil(t, obs, "promotion must publish a self-leadership observation")
-	assert.Equal(t, multipooler.Id, obs.GetLeaderId())
-	assert.Equal(t, rule.GetRuleNumber(), obs.GetLeaderRuleNumber())
+	rs := pm.record.RoutingState()
+	require.NotNil(t, rs, "promotion must publish a PRIMARY routing_state")
+	assert.Equal(t, clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY, rs.GetRole())
+	assert.Equal(t, rule.GetRuleNumber(), rs.GetRule())
 }
 
 // Integration Tests for MonitorPostgres

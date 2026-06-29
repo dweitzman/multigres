@@ -113,7 +113,7 @@ func TestPrimaryPosition(t *testing.T) {
 			}
 			// A PRIMARY record must name itself as leader (the record invariant).
 			if tt.poolerType == clustermetadatapb.PoolerType_PRIMARY {
-				multipooler.SelfLeadership = &clustermetadatapb.LeaderObservation{LeaderId: serviceID}
+				multipooler.RoutingState = &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY}
 			}
 			require.NoError(t, ts.CreateMultiPooler(ctx, multipooler))
 
@@ -188,7 +188,7 @@ func TestActionLock_MutationMethodsTimeout(t *testing.T) {
 		Type:          clustermetadatapb.PoolerType_PRIMARY,
 		ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
 		// A PRIMARY record must name itself as leader (the record invariant).
-		SelfLeadership: &clustermetadatapb.LeaderObservation{LeaderId: serviceID},
+		RoutingState: &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY},
 		ShardKey: &clustermetadatapb.ShardKey{
 			Database:   database,
 			TableGroup: constants.DefaultTableGroup,
@@ -347,7 +347,7 @@ func TestReplicationStatus(t *testing.T) {
 			Type:          clustermetadatapb.PoolerType_PRIMARY,
 			ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
 			// A PRIMARY record must name itself as leader (the record invariant).
-			SelfLeadership: &clustermetadatapb.LeaderObservation{LeaderId: serviceID},
+			RoutingState: &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY},
 			ShardKey: &clustermetadatapb.ShardKey{
 				Database:   database,
 				TableGroup: constants.DefaultTableGroup,
@@ -364,9 +364,17 @@ func TestReplicationStatus(t *testing.T) {
 			PgctldAddr: pgctldAddr,
 		}
 		mockQueryService := mock.NewQueryService()
+		// The committed rule names this pooler leader, so the StateManager derives
+		// (and Open publishes) PoolerType PRIMARY — the consensus rule, not the
+		// topology label, is authoritative for the type.
 		pm, err := NewMultiPoolerManagerForTesting(t, logger, multipooler, config,
 			withMockController(&mockPoolerController{queryService: mockQueryService}),
-			withFakeRules(&fakeRuleStore{}))
+			withFakeRules(&fakeRuleStore{pos: &clustermetadatapb.PoolerPosition{
+				Rule: &clustermetadatapb.ShardRule{
+					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
+					LeaderId:   serviceID,
+				},
+			}}))
 		require.NoError(t, err)
 		t.Cleanup(func() { pm.ShutdownForTest(context.Background()) })
 
@@ -511,7 +519,7 @@ func TestReplicationStatus(t *testing.T) {
 			Type:          clustermetadatapb.PoolerType_PRIMARY,
 			ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
 			// A PRIMARY record must name itself as leader (the record invariant).
-			SelfLeadership: &clustermetadatapb.LeaderObservation{LeaderId: serviceID},
+			RoutingState: &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY},
 			ShardKey: &clustermetadatapb.ShardKey{
 				Database:   database,
 				TableGroup: constants.DefaultTableGroup,
@@ -528,9 +536,17 @@ func TestReplicationStatus(t *testing.T) {
 			PgctldAddr: pgctldAddr,
 		}
 		mockQueryService := mock.NewQueryService()
+		// The committed rule names this pooler leader, so the derived PoolerType is
+		// PRIMARY even though postgres is in recovery — that mismatch (PRIMARY label
+		// vs standby postgres) is exactly what this test observes.
 		pm, err := NewMultiPoolerManagerForTesting(t, logger, multipooler, config,
 			withMockController(&mockPoolerController{queryService: mockQueryService}),
-			withFakeRules(&fakeRuleStore{}))
+			withFakeRules(&fakeRuleStore{pos: &clustermetadatapb.PoolerPosition{
+				Rule: &clustermetadatapb.ShardRule{
+					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
+					LeaderId:   serviceID,
+				},
+			}}))
 		require.NoError(t, err)
 		t.Cleanup(func() { pm.ShutdownForTest(context.Background()) })
 
@@ -592,7 +608,7 @@ func TestReplicationStatus(t *testing.T) {
 			Type:          clustermetadatapb.PoolerType_PRIMARY,
 			ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
 			// A PRIMARY record must name itself as leader (the record invariant).
-			SelfLeadership: &clustermetadatapb.LeaderObservation{LeaderId: serviceID},
+			RoutingState: &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY},
 			ShardKey: &clustermetadatapb.ShardKey{
 				Database:   database,
 				TableGroup: constants.DefaultTableGroup,
@@ -757,7 +773,7 @@ func TestUpdateConsensusRule_HistoryFailurePreventsGUCUpdate(t *testing.T) {
 		Type:          clustermetadatapb.PoolerType_PRIMARY,
 		ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
 		// A PRIMARY record must name itself as leader (the record invariant).
-		SelfLeadership: &clustermetadatapb.LeaderObservation{LeaderId: serviceID},
+		RoutingState: &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY},
 		ShardKey: &clustermetadatapb.ShardKey{
 			Database:   database,
 			TableGroup: constants.DefaultTableGroup,

@@ -29,7 +29,6 @@ import (
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	"github.com/multigres/multigres/go/services/multipooler/internal/manager/consensus"
-	"github.com/multigres/multigres/go/services/multipooler/internal/poolerserver"
 	"github.com/multigres/multigres/go/tools/telemetry"
 )
 
@@ -425,16 +424,6 @@ func (pm *MultiPoolerManager) promoteLocked(ctx context.Context, req *consensusd
 	if err := pm.updateTopologyAfterPromotion(ctx, state, proposedRule); err != nil {
 		pm.logger.WarnContext(ctx, "Failed to update topology after promote", "error", err)
 	}
-	// UpdateLeaderObservation broadcasts (leader = self). Issue it AFTER
-	// updateTopologyAfterPromotion's SetState(PRIMARY, SERVING) so the
-	// broadcast that names this pooler as leader is also the first that
-	// reports PRIMARY+SERVING — keeping the gateway's buffer-drain check
-	// (serving && broadcast-names-self) from firing before the queryServer
-	// has finished transitioning to PRIMARY.
-	pm.healthStreamer.UpdateLeaderObservation(&poolerserver.LeaderObservation{
-		LeaderID:   pm.serviceID,
-		LeaderTerm: revokedBelowTerm,
-	})
 
 	// Record the (rule, primary) — this pooler IS now the primary. Stamping
 	// the published ReplicationPrimary lets the health stream advertise the
@@ -604,12 +593,6 @@ func (pm *MultiPoolerManager) setPrimaryLocked(ctx context.Context, req *consens
 		return nil, mterrors.Wrap(err, "failed to check recovery status")
 	}
 
-	// Reported to the gateway as the new leader's term. Not term validation —
-	// the rule compare above is the gate. SetPrimary does not bump the local
-	// revocation: revocations are authored by coordinators via Recruit, and
-	// an SetPrimary is a notification, not a revoke.
-	consensusTerm := rule.GetRuleNumber().GetCoordinatorTerm()
-
 	if isPrimary {
 		if _, err := pm.consensusMgr.SetSuspectedDivergence(ctx, true); err != nil {
 			pm.logger.ErrorContext(ctx, "failed to set suspected divergence in SetPrimary", "error", err)
@@ -659,37 +642,11 @@ func (pm *MultiPoolerManager) setPrimaryLocked(ctx context.Context, req *consens
 		}
 	}
 
-	// Ensure topology reflects REPLICA. This matters when postgres has
-	// already been demoted (e.g. by a prior Recruit on this node or an
-	// external pg_promote-then-restart) but the pooler's topology entry still
-	// reads PRIMARY. Without this, the stale PRIMARY label causes the
-	// stale-leader analyzer to keep firing forever. Promote has the same
-	// step on its replica branch for the same reason.
-	// A REPLICA pooler record carries no self leadership observation.
-	// Republish REPLICA (clear any stale PRIMARY self-leadership) so the
-	// stale-leader analyzer stops firing, and sync the recovery fact: we just
-	// restarted as a standby, so the derived writable signal must reflect that
-	// immediately rather than waiting a monitor cycle. Serving status is owned by
-	// the lifecycle and the monitor's reconcileState, not by "here is your
-	// primary" bookkeeping.
 	if err := pm.stateManager.Mutate(ctx, func(s *servingStateMutation) {
-		s.SelfLeadership = nil
 		s.InRecovery = true // just restarted as a standby
 	}); err != nil {
-		pm.logger.WarnContext(ctx, "Failed to update pooler type to REPLICA after SetPrimary", "error", err)
+		pm.logger.WarnContext(ctx, "Failed to sync recovery state to REPLICA after SetPrimary", "error", err)
 	}
-
-	// Advertise the new leader to the health stream so the gateway can route
-	// reads/writes against it. The stale-primary branch gets this for free
-	// via demoteStalePrimaryLocked; the standby branch must do it explicitly.
-	// TODO: LeaderObservation is redundant with the (rule, primary) tuple
-	// already recorded in consensusPromises.replicationPrimary. Plan to make
-	// RecordTermPrimary (or its successor) drive the health-stream
-	// observation directly, so callers don't have to remember to do both.
-	pm.healthStreamer.UpdateLeaderObservation(&poolerserver.LeaderObservation{
-		LeaderID:   leader.GetId(),
-		LeaderTerm: consensusTerm,
-	})
 
 	if err := pm.consensusMgr.ClearResignedLeaderAtTerm(ctx); err != nil {
 		pm.logger.WarnContext(ctx, "Failed to clear resigned leader term after promote", "error", err)

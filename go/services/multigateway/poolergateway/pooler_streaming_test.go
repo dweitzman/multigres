@@ -375,21 +375,17 @@ func TestPoolerConnection_StreamHealth_Callback(t *testing.T) {
 		"callback should be invoked on subsequent health updates")
 }
 
-// TestPoolerConnection_StreamHealth_LeaderObservation verifies that
-// LeaderObservation data from the health stream is correctly stored in health state.
-func TestPoolerConnection_StreamHealth_LeaderObservation(t *testing.T) {
+// TestPoolerConnection_StreamHealth_RoutingState verifies that the routing_state
+// from the health stream is correctly stored in health state.
+func TestPoolerConnection_StreamHealth_RoutingState(t *testing.T) {
 	setup := setupStreamingTest(t, t.Context())
 	waitForStreamOpened(t, setup.server)
 
-	// Send a response with LeaderObservation.
+	// Send a response with a writable PRIMARY routing_state.
 	resp := makeHealthResponse(clustermetadatapb.PoolerServingStatus_SERVING)
-	resp.LeaderObservation = &clustermetadatapb.LeaderObservation{
-		LeaderId: &clustermetadatapb.ID{
-			Component: clustermetadatapb.ID_MULTIPOOLER,
-			Cell:      "zone1",
-			Name:      "primary-pooler",
-		},
-		LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 42},
+	resp.RoutingState = &clustermetadatapb.RoutingState{
+		Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY,
+		Rule: &clustermetadatapb.RuleNumber{CoordinatorTerm: 42},
 	}
 	setup.server.responseCh <- resp
 
@@ -398,7 +394,7 @@ func TestPoolerConnection_StreamHealth_LeaderObservation(t *testing.T) {
 	}, 2*time.Second, 10*time.Millisecond)
 
 	health := setup.conn.Health()
-	require.NotNil(t, health.LeaderObservation)
-	assert.Equal(t, int64(42), health.LeaderObservation.GetLeaderRuleNumber().GetCoordinatorTerm())
-	assert.Equal(t, "primary-pooler", health.LeaderObservation.LeaderId.GetName())
+	require.NotNil(t, health.RoutingState)
+	assert.Equal(t, clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY, health.RoutingState.GetRole())
+	assert.Equal(t, int64(42), health.RoutingState.GetRule().GetCoordinatorTerm())
 }

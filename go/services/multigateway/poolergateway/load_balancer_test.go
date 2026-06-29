@@ -54,16 +54,25 @@ func createTestMultiPooler(name, cell, tableGroup, shard string, poolerType clus
 	}
 }
 
-// withSelfLeadership sets the pooler's self_leadership observation naming itself
-// as leader at the given coordinator term. This mirrors a real leader's topology
-// record (Type=PRIMARY ⇒ self_leadership set), which is how the gateway learns a
-// shard's leader from etcd at discovery time.
+// withSelfLeadership sets the pooler's routing_state to a writable PRIMARY at the
+// given coordinator term. This mirrors a real writable leader's topology record
+// (Type=PRIMARY ⇒ routing_state role=PRIMARY), which is how the gateway learns a
+// shard's writable primary from etcd at discovery time.
 func withSelfLeadership(p *clustermetadatapb.MultiPooler, coordinatorTerm int64) *clustermetadatapb.MultiPooler {
-	p.SelfLeadership = &clustermetadatapb.LeaderObservation{
-		LeaderId:         p.Id,
-		LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: coordinatorTerm},
+	p.RoutingState = &clustermetadatapb.RoutingState{
+		Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY,
+		Rule: &clustermetadatapb.RuleNumber{CoordinatorTerm: coordinatorTerm},
 	}
 	return p
+}
+
+// primaryRouting builds a writable-PRIMARY routing_state at the given coordinator
+// term, as a health stream reports for the writable leader.
+func primaryRouting(coordinatorTerm int64) *clustermetadatapb.RoutingState {
+	return &clustermetadatapb.RoutingState{
+		Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY,
+		Rule: &clustermetadatapb.RuleNumber{CoordinatorTerm: coordinatorTerm},
+	}
 }
 
 func TestLoadBalancer_AddRemovePooler(t *testing.T) {
@@ -109,8 +118,7 @@ func TestLoadBalancer_GetConnection_Primary(t *testing.T) {
 	addPoolerForTest(t, lb, primary)
 
 	connPrimary := connForTest(t, lb, primary)
-	simulateHealthUpdate(connPrimary, clustermetadatapb.PoolerServingStatus_SERVING,
-		&clustermetadatapb.LeaderObservation{LeaderId: primary.Id, LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1}})
+	simulateHealthUpdate(connPrimary, clustermetadatapb.PoolerServingStatus_SERVING, primaryRouting(1))
 
 	// Should find the primary via cache
 	target := protoutil.NewTarget(constants.DefaultPostgresDatabase, constants.DefaultTableGroup, "0", query.Mode_MODE_WRITABLE)
@@ -143,8 +151,7 @@ func TestLoadBalancer_GetConnection_CrossCellPrimary(t *testing.T) {
 	addPoolerForTest(t, lb, remotePrimary)
 
 	connRemote := connForTest(t, lb, remotePrimary)
-	simulateHealthUpdate(connRemote, clustermetadatapb.PoolerServingStatus_SERVING,
-		&clustermetadatapb.LeaderObservation{LeaderId: remotePrimary.Id, LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1}})
+	simulateHealthUpdate(connRemote, clustermetadatapb.PoolerServingStatus_SERVING, primaryRouting(1))
 
 	// Should find primary in remote cell via cache
 	target := protoutil.NewTarget(constants.DefaultPostgresDatabase, constants.DefaultTableGroup, "0", query.Mode_MODE_WRITABLE)
@@ -186,10 +193,8 @@ func TestLoadBalancer_GetConnection_ShardMatch(t *testing.T) {
 
 	connShard0 := connForTest(t, lb, shard0)
 	connShard1 := connForTest(t, lb, shard1)
-	simulateHealthUpdate(connShard0, clustermetadatapb.PoolerServingStatus_SERVING,
-		&clustermetadatapb.LeaderObservation{LeaderId: shard0.Id, LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1}})
-	simulateHealthUpdate(connShard1, clustermetadatapb.PoolerServingStatus_SERVING,
-		&clustermetadatapb.LeaderObservation{LeaderId: shard1.Id, LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1}})
+	simulateHealthUpdate(connShard0, clustermetadatapb.PoolerServingStatus_SERVING, primaryRouting(1))
+	simulateHealthUpdate(connShard1, clustermetadatapb.PoolerServingStatus_SERVING, primaryRouting(1))
 
 	// Request specific shard — should find correct primary via cache
 	target := protoutil.NewTarget(constants.DefaultPostgresDatabase, constants.DefaultTableGroup, "1", query.Mode_MODE_WRITABLE)
@@ -205,12 +210,12 @@ func TestLoadBalancer_GetConnection_ShardMatch(t *testing.T) {
 
 // simulateHealthUpdate simulates receiving a health update from the stream.
 // This uses the same code path as real health updates, ensuring any callbacks are triggered.
-func simulateHealthUpdate(conn *poolerConnection, status clustermetadatapb.PoolerServingStatus, observation *clustermetadatapb.LeaderObservation) {
+func simulateHealthUpdate(conn *poolerConnection, status clustermetadatapb.PoolerServingStatus, routingState *clustermetadatapb.RoutingState) {
 	info := conn.PoolerInfo()
 	conn.processHealthResponse(&multipoolerservice.StreamPoolerHealthResponse{
-		PoolerId:          info.Id,
-		ServingStatus:     status,
-		LeaderObservation: observation,
+		PoolerId:      info.Id,
+		ServingStatus: status,
+		RoutingState:  routingState,
 	})
 }
 
@@ -229,24 +234,25 @@ func TestLoadBalancer_WriteResumeWaitsForWritable(t *testing.T) {
 	addPoolerForTest(t, lb, p)
 	conn := connForTest(t, lb, p)
 
-	obs := &clustermetadatapb.LeaderObservation{
-		LeaderId:         p.Id,
-		LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
-	}
 	injectHealth := func(writable bool) {
+		// Writability is now carried by the routing_state role: PRIMARY when the
+		// leader is writable, REPLICA while still in recovery mid-promotion.
+		role := clustermetadatapb.RoutingRole_ROUTING_ROLE_REPLICA
+		if writable {
+			role = clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY
+		}
 		conn.processHealthResponse(&multipoolerservice.StreamPoolerHealthResponse{
-			PoolerId:          p.Id,
-			ServingStatus:     clustermetadatapb.PoolerServingStatus_SERVING,
-			LeaderObservation: obs,
-			Writable:          writable,
+			PoolerId:      p.Id,
+			ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
+			RoutingState:  &clustermetadatapb.RoutingState{Role: role, Rule: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5}},
 		})
 	}
 
-	// Observed leader, SERVING, but still in recovery: hold.
+	// SERVING but still in recovery (REPLICA role): hold.
 	injectHealth(false)
 	assert.Equal(t, 0, resumed, "write traffic must stay buffered until the leader is writable")
 
-	// Out of recovery: writable → resume.
+	// Out of recovery: writable PRIMARY → resume.
 	injectHealth(true)
 	assert.Equal(t, 1, resumed, "resume once the leader reports writable")
 }
@@ -267,20 +273,15 @@ func TestLoadBalancer_PrimaryCaching(t *testing.T) {
 		connPrimary2 := connForTest(t, lb, primary2)
 		connReplica1 := connForTest(t, lb, replica1)
 
-		// primary1 thinks primary1 is leader with term 5
-		simulateHealthUpdate(connPrimary1,
-			clustermetadatapb.PoolerServingStatus_SERVING,
-			&clustermetadatapb.LeaderObservation{LeaderId: primary1.Id, LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5}})
+		// primary1 self-reports a PRIMARY routing_state at term 5.
+		simulateHealthUpdate(connPrimary1, clustermetadatapb.PoolerServingStatus_SERVING, primaryRouting(5))
 
-		// primary2 thinks primary2 is leader with term 10 (higher)
-		simulateHealthUpdate(connPrimary2,
-			clustermetadatapb.PoolerServingStatus_SERVING,
-			&clustermetadatapb.LeaderObservation{LeaderId: primary2.Id, LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 10}})
+		// primary2 self-reports a PRIMARY routing_state at term 10 (higher).
+		simulateHealthUpdate(connPrimary2, clustermetadatapb.PoolerServingStatus_SERVING, primaryRouting(10))
 
-		// replica1 also thinks primary2 is leader with term 10
-		simulateHealthUpdate(connReplica1,
-			clustermetadatapb.PoolerServingStatus_SERVING,
-			&clustermetadatapb.LeaderObservation{LeaderId: primary2.Id, LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 10}})
+		// replica1 self-reports a REPLICA routing_state (no leader claim).
+		simulateHealthUpdate(connReplica1, clustermetadatapb.PoolerServingStatus_SERVING,
+			&clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_REPLICA})
 
 		target := protoutil.NewTarget(constants.DefaultPostgresDatabase, constants.DefaultTableGroup, "0", query.Mode_MODE_WRITABLE)
 		conn, err := lb.getConnection(target)
@@ -288,7 +289,7 @@ func TestLoadBalancer_PrimaryCaching(t *testing.T) {
 		assert.Equal(t, poolerID(primary2), conn.ID(), "Should select primary with highest term")
 	})
 
-	t.Run("replica reports higher term primary", func(t *testing.T) {
+	t.Run("newly promoted primary at higher term supersedes stale primary", func(t *testing.T) {
 		lb := newTestLB(t, "zone1")
 
 		primary1 := createTestMultiPooler("primary1", "zone1", constants.DefaultTableGroup, "0", clustermetadatapb.PoolerType_PRIMARY)
@@ -303,25 +304,20 @@ func TestLoadBalancer_PrimaryCaching(t *testing.T) {
 		connPrimary2 := connForTest(t, lb, primary2)
 		connReplica1 := connForTest(t, lb, replica1)
 
-		// primary1 thinks primary1 is leader with term 15
-		simulateHealthUpdate(connPrimary1,
-			clustermetadatapb.PoolerServingStatus_SERVING,
-			&clustermetadatapb.LeaderObservation{LeaderId: primary1.Id, LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 15}})
+		// primary2 self-reports a stale PRIMARY routing_state at term 12, then stops serving.
+		simulateHealthUpdate(connPrimary2, clustermetadatapb.PoolerServingStatus_DISABLED, primaryRouting(12))
 
-		// primary2 thinks primary2 is leader with term 12 (stale)
-		simulateHealthUpdate(connPrimary2,
-			clustermetadatapb.PoolerServingStatus_DISABLED,
-			&clustermetadatapb.LeaderObservation{LeaderId: primary2.Id, LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 12}})
+		// primary1 self-reports a PRIMARY routing_state at term 20 (the newest leader).
+		simulateHealthUpdate(connPrimary1, clustermetadatapb.PoolerServingStatus_SERVING, primaryRouting(20))
 
-		// replica1 observed the new leader (primary1) with term 20 (highest)
-		simulateHealthUpdate(connReplica1,
-			clustermetadatapb.PoolerServingStatus_SERVING,
-			&clustermetadatapb.LeaderObservation{LeaderId: primary1.Id, LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 20}})
+		// replica1 self-reports a REPLICA routing_state.
+		simulateHealthUpdate(connReplica1, clustermetadatapb.PoolerServingStatus_SERVING,
+			&clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_REPLICA})
 
 		target := protoutil.NewTarget(constants.DefaultPostgresDatabase, constants.DefaultTableGroup, "0", query.Mode_MODE_WRITABLE)
 		conn, err := lb.getConnection(target)
 		require.NoError(t, err)
-		assert.Equal(t, poolerID(primary1), conn.ID(), "Should trust replica's observation with highest term")
+		assert.Equal(t, poolerID(primary1), conn.ID(), "Should select the newest primary's self-reported leadership")
 	})
 
 	t.Run("no observations uses topology self_leadership", func(t *testing.T) {
@@ -354,9 +350,7 @@ func TestLoadBalancer_PrimaryCaching(t *testing.T) {
 
 		// Health update populates the leader entry with a real (term > 0)
 		// observation.
-		simulateHealthUpdate(connPrimary,
-			clustermetadatapb.PoolerServingStatus_SERVING,
-			&clustermetadatapb.LeaderObservation{LeaderId: primary.Id, LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1}})
+		simulateHealthUpdate(connPrimary, clustermetadatapb.PoolerServingStatus_SERVING, primaryRouting(1))
 
 		// Verify routing
 		target := protoutil.NewTarget(constants.DefaultPostgresDatabase, constants.DefaultTableGroup, "0", query.Mode_MODE_WRITABLE)
@@ -398,8 +392,7 @@ func TestLoadBalancer_KnownLeaderSurvivesTopologyDemotion(t *testing.T) {
 
 	// Health stream confirms the same leader at the same rule.
 	conn := connForTest(t, lb, pooler)
-	simulateHealthUpdate(conn, clustermetadatapb.PoolerServingStatus_SERVING,
-		&clustermetadatapb.LeaderObservation{LeaderId: pooler.Id, LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5}})
+	simulateHealthUpdate(conn, clustermetadatapb.PoolerServingStatus_SERVING, primaryRouting(5))
 
 	// The pooler is re-discovered demoted: Type=REPLICA and self_leadership
 	// cleared. mergeTopologyLeaderLocked must NOT erase the known leader — only
@@ -428,34 +421,30 @@ func TestLoadBalancer_UnknownTypePrimarySelection(t *testing.T) {
 	connUnknown2 := connForTest(t, lb, unknown2)
 
 	t.Run("UNKNOWN poolers without observations return error", func(t *testing.T) {
-		// No LeaderObservation set - simulates initial state before health stream
+		// No routing_state set - simulates initial state before health stream
 		simulateHealthUpdate(connUnknown1, clustermetadatapb.PoolerServingStatus_SERVING, nil)
 		simulateHealthUpdate(connUnknown2, clustermetadatapb.PoolerServingStatus_SERVING, nil)
 
 		target := protoutil.NewTarget(constants.DefaultPostgresDatabase, constants.DefaultTableGroup, "0", query.Mode_MODE_WRITABLE)
 		_, err := lb.getConnection(target)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "no leader observed yet",
+		assert.Contains(t, err.Error(), "no writable primary observed yet",
 			"Should not fall back to UNKNOWN type poolers")
 	})
 
 	t.Run("UNKNOWN poolers with observation cached via health callback", func(t *testing.T) {
-		// Both UNKNOWN poolers point to each other (pathological case)
-		simulateHealthUpdate(connUnknown1,
-			clustermetadatapb.PoolerServingStatus_SERVING,
-			&clustermetadatapb.LeaderObservation{LeaderId: unknown2.Id, LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 10}})
-		simulateHealthUpdate(connUnknown2,
-			clustermetadatapb.PoolerServingStatus_SERVING,
-			&clustermetadatapb.LeaderObservation{LeaderId: unknown1.Id, LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5}})
+		// Each UNKNOWN pooler self-reports a PRIMARY routing_state; the highest rule
+		// wins regardless of the topology type label.
+		simulateHealthUpdate(connUnknown1, clustermetadatapb.PoolerServingStatus_SERVING, primaryRouting(5))
+		simulateHealthUpdate(connUnknown2, clustermetadatapb.PoolerServingStatus_SERVING, primaryRouting(10))
 
 		target := protoutil.NewTarget(constants.DefaultPostgresDatabase, constants.DefaultTableGroup, "0", query.Mode_MODE_WRITABLE)
-		// The health callback caches the observed primary with highest term (unknown2 at term 10).
-		// The cache returns the identified pooler regardless of type —
-		// the observation is authoritative.
+		// The health callback caches the self-reported primary with the highest term
+		// (unknown2 at term 10), regardless of the UNKNOWN topology type label.
 		conn, err := lb.getConnection(target)
 		require.NoError(t, err)
 		assert.Equal(t, poolerID(unknown2), conn.ID(),
-			"Observation takes precedence over pooler type")
+			"Self-reported PRIMARY routing_state takes precedence over topology type")
 	})
 }
 
@@ -513,29 +502,26 @@ func TestLoadBalancer_SelectReplicaByLocalityAndServingStatus(t *testing.T) {
 	})
 }
 
-// TestLoadBalancer_LeaderObservationBeforeConnection covers the silent-drop
-// race from the failover archive: a higher-term LeaderObservation arrives for
-// pooler X before X has been added via AddPooler. With the old shape, the
-// observation was dropped because the connection didn't exist yet. With the
-// new shape, leader identity is recorded regardless and routing works the
+// TestLoadBalancer_LeaderIdentityBeforeConnection covers the silent-drop race
+// from the failover archive: a writable-PRIMARY routing_state is recorded for
+// pooler X (e.g. merged from X's topology record) before X has been added via
+// AddPooler. Leader identity must be recorded regardless, and routing works the
 // moment X is added.
-func TestLoadBalancer_LeaderObservationBeforeConnection(t *testing.T) {
+func TestLoadBalancer_LeaderIdentityBeforeConnection(t *testing.T) {
 	lb := newTestLB(t, "zone1")
 
-	// observer is in the shard but is NOT the leader; we use its health stream
-	// to deliver an observation naming a pooler we have not added yet.
+	// observer is in the shard but is NOT the leader; it keeps the shardSummary
+	// alive so a recorded leader identity is not auto-cleared.
 	observer := createTestMultiPooler("observer", "zone1", constants.DefaultTableGroup, "0", clustermetadatapb.PoolerType_REPLICA)
 	addPoolerForTest(t, lb, observer)
-
-	connObserver := connForTest(t, lb, observer)
 
 	// The future leader exists in topology but has not been added yet.
 	futureLeader := createTestMultiPooler("future-leader", "zone1", constants.DefaultTableGroup, "0", clustermetadatapb.PoolerType_REPLICA)
 
-	// observer reports that future-leader is the consensus leader at term 7.
-	simulateHealthUpdate(connObserver,
-		clustermetadatapb.PoolerServingStatus_SERVING,
-		&clustermetadatapb.LeaderObservation{LeaderId: futureLeader.Id, LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 7}})
+	// The shard's writable-PRIMARY identity is recorded as future-leader at rule 7
+	// before any connection to it exists.
+	setLeaderForTest(t, lb, constants.DefaultPostgresDatabase, constants.DefaultTableGroup, "0",
+		futureLeader.Id, &clustermetadatapb.RuleNumber{CoordinatorTerm: 7})
 
 	target := protoutil.NewTarget(constants.DefaultPostgresDatabase, constants.DefaultTableGroup, "0", query.Mode_MODE_WRITABLE)
 
@@ -546,7 +532,7 @@ func TestLoadBalancer_LeaderObservationBeforeConnection(t *testing.T) {
 		"Identity must be recorded; the gateway should distinguish 'known but unreachable' from 'unknown'")
 
 	// AddPooler the leader. No additional observation needed — routing must
-	// work immediately, proving identity was not dropped at observation time.
+	// work immediately, proving identity was not dropped at recording time.
 	addPoolerForTest(t, lb, futureLeader)
 	conn, err := lb.getConnection(target)
 	require.NoError(t, err)
@@ -569,9 +555,7 @@ func TestLoadBalancer_StalePrimaryTypeDoesNotEvict(t *testing.T) {
 
 	// new-leader's health stream confirms itself as leader at term 2 (the
 	// post-failover state).
-	simulateHealthUpdate(connNewLeader,
-		clustermetadatapb.PoolerServingStatus_SERVING,
-		&clustermetadatapb.LeaderObservation{LeaderId: newLeader.Id, LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 2}})
+	simulateHealthUpdate(connNewLeader, clustermetadatapb.PoolerServingStatus_SERVING, primaryRouting(2))
 
 	target := protoutil.NewTarget(constants.DefaultPostgresDatabase, constants.DefaultTableGroup, "0", query.Mode_MODE_WRITABLE)
 	conn, err := lb.getConnection(target)
@@ -640,9 +624,7 @@ func TestLoadBalancer_ReplicaCandidatesExcludeLeader(t *testing.T) {
 	connA := connForTest(t, lb, a)
 
 	// a observes itself as leader; b and c are eligible replica candidates.
-	simulateHealthUpdate(connA,
-		clustermetadatapb.PoolerServingStatus_SERVING,
-		&clustermetadatapb.LeaderObservation{LeaderId: a.Id, LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1}})
+	simulateHealthUpdate(connA, clustermetadatapb.PoolerServingStatus_SERVING, primaryRouting(1))
 
 	target := protoutil.NewTarget(constants.DefaultPostgresDatabase, constants.DefaultTableGroup, "0", query.Mode_MODE_INCONSISTENT)
 
@@ -673,12 +655,11 @@ func TestLoadBalancer_StaleLeaderExcludedFromReplicas(t *testing.T) {
 	connStale := connForTest(t, lb, stale)
 	connReplica := connForTest(t, lb, replica)
 
-	// stale still believes it is the leader at the old rule 1; replica already
-	// tracks the new leader at rule 2.
-	simulateHealthUpdate(connStale, clustermetadatapb.PoolerServingStatus_SERVING,
-		&clustermetadatapb.LeaderObservation{LeaderId: stale.Id, LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1}})
+	// stale still believes it is the leader at the old rule 1 (self-reports a
+	// PRIMARY routing_state); replica self-reports a plain REPLICA routing_state.
+	simulateHealthUpdate(connStale, clustermetadatapb.PoolerServingStatus_SERVING, primaryRouting(1))
 	simulateHealthUpdate(connReplica, clustermetadatapb.PoolerServingStatus_SERVING,
-		&clustermetadatapb.LeaderObservation{LeaderId: newLeader.Id, LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 2}})
+		&clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_REPLICA})
 
 	target := protoutil.NewTarget(constants.DefaultPostgresDatabase, constants.DefaultTableGroup, "0", query.Mode_MODE_INCONSISTENT)
 	// Only `replica` is eligible: new-leader is the leader (self_leadership) and
@@ -715,10 +696,8 @@ func TestLoadBalancer_CentrallyKnownLeaderUnknownToItselfEligibleAsReplica(t *te
 	// A peer's health stream has already named `leader` the shard leader at rule
 	// 2, recorded in the central map. Set it directly rather than wiring a second
 	// connection, mirroring how onPoolerHealthUpdate would populate it.
-	setLeaderForTest(t, lb, constants.DefaultPostgresDatabase, constants.DefaultTableGroup, "0", &clustermetadatapb.LeaderObservation{
-		LeaderId:         leader.Id,
-		LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 2},
-	})
+	setLeaderForTest(t, lb, constants.DefaultPostgresDatabase, constants.DefaultTableGroup, "0",
+		leader.Id, &clustermetadatapb.RuleNumber{CoordinatorTerm: 2})
 
 	target := protoutil.NewTarget(constants.DefaultPostgresDatabase, constants.DefaultTableGroup, "0", query.Mode_MODE_INCONSISTENT)
 	// `leader` is the only connection and is eligible despite the central map
@@ -746,12 +725,11 @@ func TestLoadBalancer_LeadershipFor(t *testing.T) {
 	connStale := connForTest(t, lb, stale)
 	connFollower := connForTest(t, lb, follower)
 
-	// stale still believes it leads at the old rule 1; follower already tracks
-	// the new leader at rule 2.
-	simulateHealthUpdate(connStale, clustermetadatapb.PoolerServingStatus_SERVING,
-		&clustermetadatapb.LeaderObservation{LeaderId: stale.Id, LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1}})
+	// stale still believes it leads at the old rule 1 (self-reports PRIMARY@1);
+	// follower self-reports a plain REPLICA routing_state.
+	simulateHealthUpdate(connStale, clustermetadatapb.PoolerServingStatus_SERVING, primaryRouting(1))
 	simulateHealthUpdate(connFollower, clustermetadatapb.PoolerServingStatus_SERVING,
-		&clustermetadatapb.LeaderObservation{LeaderId: leader.Id, LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 2}})
+		&clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_REPLICA})
 
 	assert.Equal(t, leadershipLeader, lb.leadershipFor(connLeader))
 	assert.Equal(t, leadershipStaleLeader, lb.leadershipFor(connStale))
@@ -791,37 +769,31 @@ func TestLoadBalancer_OnLeaderServingRequiresSelfNamedLeader(t *testing.T) {
 		calls = append(calls, sk)
 	})
 
-	// The eventual leader is also the observer here — it carries the
-	// LeaderObservation that names itself, but the broadcast naming itself
-	// only arrives after consensus completes the rule change.
+	// The eventual leader carries a writable-PRIMARY self_leadership record in
+	// topology, but its own health-stream broadcast only reports a writable
+	// PRIMARY routing_state after consensus completes the rule change.
 	leader := withSelfLeadership(createTestMultiPooler("leader", "zone1", constants.DefaultTableGroup, "0", clustermetadatapb.PoolerType_PRIMARY), 2)
 	addPoolerForTest(t, lb, leader)
 	connLeader := connForTest(t, lb, leader)
 
-	// First broadcast: pooler is SERVING but its broadcast still names the
-	// OLD leader. This is the pre-promotion snapshot. Must not drain the
-	// buffer — the pooler hasn't acknowledged being leader yet.
-	oldLeaderID := &clustermetadatapb.ID{
-		Component: clustermetadatapb.ID_MULTIPOOLER,
-		Cell:      "zone1",
-		Name:      "old-leader",
-	}
+	// First broadcast: pooler is SERVING but still a REPLICA (mid-promotion, not
+	// yet writable). This is the pre-promotion snapshot. Must not drain the buffer
+	// — the pooler hasn't become the writable leader yet.
 	simulateHealthUpdate(connLeader,
 		clustermetadatapb.PoolerServingStatus_SERVING,
-		&clustermetadatapb.LeaderObservation{LeaderId: oldLeaderID, LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 2}})
+		&clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_REPLICA})
 	assert.Empty(t, calls,
-		"OnLeaderServing must not fire while the pooler's broadcast names a different leader")
+		"OnLeaderServing must not fire while the pooler's broadcast does not name itself the writable PRIMARY")
 
-	// Second broadcast: pooler now names itself in the broadcast and is
-	// writable (postgres out of recovery). This is the post-OnStateChange,
-	// post-promotion snapshot. Drain the buffer.
+	// Second broadcast: pooler now self-reports a writable PRIMARY routing_state
+	// (postgres out of recovery). This is the post-OnStateChange, post-promotion
+	// snapshot. Drain the buffer.
 	connLeader.processHealthResponse(&multipoolerservice.StreamPoolerHealthResponse{
-		PoolerId:          leader.Id,
-		ServingStatus:     clustermetadatapb.PoolerServingStatus_SERVING,
-		LeaderObservation: &clustermetadatapb.LeaderObservation{LeaderId: leader.Id, LeaderRuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 2}},
-		Writable:          true,
+		PoolerId:      leader.Id,
+		ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
+		RoutingState:  primaryRouting(2),
 	})
-	require.Len(t, calls, 1, "OnLeaderServing must fire once the pooler self-identifies as leader")
+	require.Len(t, calls, 1, "OnLeaderServing must fire once the pooler self-identifies as the writable PRIMARY")
 	assert.Equal(t, constants.DefaultTableGroup, calls[0].GetTableGroup())
 	assert.Equal(t, "0", calls[0].GetShard())
 }

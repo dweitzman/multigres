@@ -20,33 +20,39 @@
 // interface structurally and cannot import the manager package back.
 package servingstate
 
-import clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+import (
+	"google.golang.org/protobuf/proto"
 
-// State is the effective serving state components react to. It carries two
-// distinct leadership notions deliberately — see the field docs — so a consumer
-// is forced to pick the one its decision actually needs rather than conflating
-// routing with write-safety.
+	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+)
+
+// State is the effective serving state components react to.
 type State struct {
-	// IsHighestKnownLeader reports highest-known leadership: the highest rule we
-	// know of (including ReplicationPrimary observations recorded via
-	// SetPrimary/Promote, which can be ahead of what we've committed) names us.
-	// It drives routing — the PoolerType label and the gateway-staleness check —
-	// and must NOT be used to gate writes.
-	//
-	// It deliberately ignores revocation: a deposed-but-still-running leader
-	// (committed at a now-revoked term) is not Writable, but it remains the
-	// highest-known leader for routing so read-consistent queries can still be
-	// served from it. Only Writable is revocation-aware.
-	IsHighestKnownLeader bool
-
-	// Writable reports write-safety: postgres is out of recovery AND our highest
-	// *committed* rule names us leader. This is the authority for accepting
-	// writes — heartbeats, LISTEN/NOTIFY, and the gateway's write traffic. Unlike
-	// IsHighestKnownLeader it is never true on the strength of a not-yet-committed
-	// rule, so it stays false during the window between pg_promote() and the rule
-	// commit.
-	Writable bool
+	// Routing is the self-reported routing/HA role plus the rule that qualifies
+	// it. role == PRIMARY is the writable signal (see Writable): the conjunction
+	// of postgres being out of recovery, our highest non-revoked *committed* rule
+	// naming us (never true on a not-yet-committed rule — the pg_promote()→commit
+	// window), AND being the highest-known leader (so a superseded stale primary
+	// resigns the moment it learns a newer leader, before it can rewind). The
+	// qualifying rule is the committed rule when PRIMARY (write authority) and the
+	// highest-known rule when REPLICA (advisory). Published verbatim to the gateway.
+	Routing *clustermetadatapb.RoutingState
 
 	// ServingStatus is the serving intent (SERVING / DISABLED / DRAINING).
 	ServingStatus clustermetadatapb.PoolerServingStatus
+}
+
+// Writable reports write-safety: it is true iff the routing role is PRIMARY. It
+// is a derived accessor (the role already encodes it), used to gate write
+// traffic — heartbeats, LISTEN/NOTIFY, query admission, and the gateway's writes.
+func (s State) Writable() bool {
+	return s.Routing.GetRole() == clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY
+}
+
+// Equal reports whether two States are equivalent. It exists because State
+// carries a proto RoutingState pointer and so cannot be compared with ==; the
+// StateManager uses it to dedup redundant fan-outs.
+func (s State) Equal(o State) bool {
+	return s.ServingStatus == o.ServingStatus &&
+		proto.Equal(s.Routing, o.Routing)
 }

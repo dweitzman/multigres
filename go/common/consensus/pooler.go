@@ -33,6 +33,23 @@ func NamesSelfAsLeader(cs *clustermetadatapb.ConsensusStatus) bool {
 	return idsEqual(self, leader)
 }
 
+// IsNonRevokedCommittedLeader reports whether cs names its own pooler as the
+// leader of its highest *committed* rule — its current position only, excluding
+// the replication primary it may have been told to follow — and that committed
+// rule has not been revoked by cs's term revocation.
+//
+// This is the write-safety leadership input: durable (never ahead of what's
+// committed, so it stays false in the pg_promote()→commit window) and
+// revocation-aware (a deposed leader at a now-revoked term is excluded). Contrast
+// NamesSelfAsLeader, which is the highest-known (routing) check.
+func IsNonRevokedCommittedLeader(cs *clustermetadatapb.ConsensusStatus) bool {
+	committed := cs.GetCurrentPosition().GetRule()
+	if !RuleNamesLeader(committed, cs.GetId()) {
+		return false
+	}
+	return !IsRuleRevoked(committed, cs.GetTermRevocation())
+}
+
 // LeaderTerm returns the coordinator term of the pooler's current recorded
 // rule if the pooler names itself as leader (per NamesSelfAsLeader). Returns 0
 // when it does not, when the consensus status is nil/empty, or when the rule has

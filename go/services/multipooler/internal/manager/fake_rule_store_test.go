@@ -23,6 +23,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -128,6 +129,25 @@ func (f *fakeRuleStore) UpdateRule(ctx context.Context, update *consensus.RuleUp
 	}
 	if updateErrAfterHook != nil {
 		return nil, updateErrAfterHook
+	}
+
+	// Mirror the real rule store: a committed UpdateRule advances the cached
+	// position to the newly written rule (new coordinator term, new leader). This
+	// is what lets a freshly promoted pooler observe itself as the committed leader
+	// via CachedPosition immediately after Promote, exactly as in production.
+	if pos != nil && update.GetLeaderID() != nil {
+		f.mu.Lock()
+		next := proto.Clone(pos).(*clustermetadatapb.PoolerPosition)
+		if next.Rule == nil {
+			next.Rule = &clustermetadatapb.ShardRule{}
+		}
+		if next.Rule.RuleNumber == nil {
+			next.Rule.RuleNumber = &clustermetadatapb.RuleNumber{}
+		}
+		next.Rule.RuleNumber.CoordinatorTerm = update.GetTermNumber()
+		next.Rule.LeaderId = update.GetLeaderID()
+		f.pos = next
+		f.mu.Unlock()
 	}
 	return pos, nil
 }

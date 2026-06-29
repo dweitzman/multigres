@@ -215,7 +215,8 @@ func disallowWallClockInConsensus(m dsl.Matcher) {
 // MultiPoolerInfo is disallowed. The postgres recovery-mode role reported in a
 // pooler's health Status (Status.PoolerType) is also a different field.
 //
-// Use consensus instead (GetSelfLeadership() != nil / commonconsensus.NamesSelfAsLeader).
+// The gateway derives the writable leader from routing_state (GetRoutingState());
+// orch derives leadership from consensus state (commonconsensus.NamesSelfAsLeader).
 func disallowMultiPoolerTypeForRouting(m dsl.Matcher) {
 	m.Import("github.com/multigres/multigres/go/pb/clustermetadata")
 	m.Import("github.com/multigres/multigres/go/common/topoclient")
@@ -226,7 +227,27 @@ func disallowMultiPoolerTypeForRouting(m dsl.Matcher) {
 				m["x"].Type.Is("*topoclient.MultiPoolerInfo")) &&
 				m.File().PkgPath.Matches(`services/(multigateway|multiorch|multiadmin)`) &&
 				!m.File().Name.Matches(`_test\.go$`)).
-		Report("do not consult MultiPooler.Type for leader identity; use self_leadership / consensus")
+		Report("do not consult MultiPooler.Type for leader identity; gateway uses routing_state, orch uses consensus state")
+}
+
+// disallowRoutingStateInOrch forbids multiorch from reading a discovered pooler's
+// routing_state — both the .RoutingState field and the GetRoutingState() getter.
+// routing_state is the gateway-facing WRITABILITY/HA signal; the orchestrator must
+// derive leadership from consensus state (ConsensusStatus / rule history /
+// commonconsensus.NamesSelfAsLeader), never from the routing label. Reading it here
+// would re-create the PoolerType overload (one signal meaning both consensus
+// leadership and routing) that this concept exists to avoid. Test files are excluded.
+func disallowRoutingStateInOrch(m dsl.Matcher) {
+	m.Import("github.com/multigres/multigres/go/pb/clustermetadata")
+	m.Import("github.com/multigres/multigres/go/common/topoclient")
+
+	m.Match(`$x.RoutingState`, `$x.GetRoutingState()`).
+		Where(
+			(m["x"].Type.Is("*clustermetadata.MultiPooler") ||
+				m["x"].Type.Is("*topoclient.MultiPoolerInfo")) &&
+				m.File().PkgPath.Matches(`services/multiorch`) &&
+				!m.File().Name.Matches(`_test\.go$`)).
+		Report("do not consult routing_state in multiorch; it is the gateway-facing writability signal — use consensus state for leadership")
 }
 
 // disallowPoolerTypeEnumInGateway forbids mentions of the clustermetadata.PoolerType
@@ -254,7 +275,7 @@ func disallowPoolerTypeEnumInGateway(m dsl.Matcher) {
 	).Where(
 		m.File().PkgPath.Matches(`services/multigateway`) &&
 			!m.File().Name.Matches(`_test\.go$`)).
-		Report("PoolerType is the topology role label; gateway routing must use query.Mode for intent and consensus state (LeaderObservation / self_leadership) for identity")
+		Report("PoolerType is the topology role label; gateway routing must use query.Mode for intent and routing_state (RoutingRole) for the writable primary")
 }
 
 // disallowRawConsensusStatusReplicationPrimary flags reads of a ConsensusStatus's

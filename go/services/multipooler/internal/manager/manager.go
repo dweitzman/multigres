@@ -26,7 +26,6 @@ import (
 	"time"
 
 	"github.com/multigres/multigres/go/common/backup"
-	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/constants"
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/pgprotocol/client"
@@ -369,7 +368,7 @@ func newMultiPoolerManager(logger *slog.Logger, multiPooler *clustermetadatapb.M
 
 	// Create the serving state manager with the query service and health streamer as initial components.
 	// The ReplTracker is registered later when heartbeat is started.
-	pm.stateManager = NewStateManager(logger, pm.record, pm.isHighestNonRevokedCommittedLeader, pm.qsc, pm.healthStreamer)
+	pm.stateManager = NewStateManager(logger, pm.record, pm.consensusMgr.CachedConsensusStatus, pm.qsc, pm.healthStreamer)
 
 	// Construct the pgBackRest engine. It owns all pgBackRest interaction and its
 	// own metrics. The pgbackrest.conf path, pgpass file, and repo config are
@@ -843,17 +842,6 @@ func (pm *MultiPoolerManager) getPoolerType() clustermetadatapb.PoolerType {
 	return pm.record.Type()
 }
 
-// leaderObs builds the LeaderObservation this pooler records when it is the
-// leader under rule. The caller supplies the rule it knows names this pooler as
-// leader — the proposed rule on promotion, the recorded rule in the monitor —
-// so the source is explicit rather than read implicitly here.
-func (pm *MultiPoolerManager) leaderObs(rule *clustermetadatapb.ShardRule) *clustermetadatapb.LeaderObservation {
-	return &clustermetadatapb.LeaderObservation{
-		LeaderId:         rule.GetLeaderId(),
-		LeaderRuleNumber: rule.GetRuleNumber(),
-	}
-}
-
 // shardKey returns a ShardKey identifying this pooler's shard.
 func (pm *MultiPoolerManager) shardKey() *clustermetadatapb.ShardKey {
 	return pm.record.ShardKey()
@@ -976,21 +964,6 @@ func (pm *MultiPoolerManager) checkAndSetReady() {
 			// Already closed
 		default:
 			close(pm.readyChan)
-		}
-
-		// Set initial leader observation from the highest known rule.
-		// commonconsensus.LeaderTerm returns 0 unless the rule names us as the
-		// leader, so publishing serviceID here is safe. Fall back to the cached
-		// position if postgres is unreachable.
-		cs, err := pm.consensusMgr.InconsistentConsensusStatus(pm.ctx)
-		if err != nil {
-			cs = pm.consensusMgr.CachedConsensusStatus()
-		}
-		if primaryTerm := commonconsensus.LeaderTerm(cs); primaryTerm > 0 {
-			pm.healthStreamer.UpdateLeaderObservation(&poolerserver.LeaderObservation{
-				LeaderID:   pm.serviceID,
-				LeaderTerm: primaryTerm,
-			})
 		}
 	}
 }
@@ -1576,7 +1549,6 @@ func (pm *MultiPoolerManager) updateTopologyAfterPromotion(ctx context.Context, 
 	// start immediately rather than waiting for the next monitor tick to observe
 	// it. Mutate is idempotent — if already at this state it short-circuits.
 	if err := pm.stateManager.Mutate(ctx, func(s *servingStateMutation) {
-		s.SelfLeadership = pm.leaderObs(rule)
 		s.InRecovery = false // promotion already waited for postgres to leave recovery
 		s.ServingStatus = clustermetadatapb.PoolerServingStatus_SERVING
 	}); err != nil {
@@ -1732,7 +1704,7 @@ func (pm *MultiPoolerManager) StartTopoRegistration(alarm func(string)) {
 func (pm *MultiPoolerManager) StopTopoRegistration(ctx context.Context) {
 	pm.record.Unregister(ctx, func(s *MutablePoolerRecordState) {
 		s.Type = clustermetadatapb.PoolerType_UNKNOWN
-		s.SelfLeadership = nil
+		s.RoutingState = nil
 		s.ServingStatus = clustermetadatapb.PoolerServingStatus_DISABLED
 		s.LifecycleStatus = &clustermetadatapb.PoolerLifecycle{
 			Status:  clustermetadatapb.PoolerLifecycleStatus_LIFECYCLE_SHUTDOWN,

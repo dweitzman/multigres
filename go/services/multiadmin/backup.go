@@ -146,26 +146,29 @@ func (s *MultiAdminServer) findPoolerForBackup(ctx context.Context, database, ta
 	}
 
 	if forceLeader {
+		// Topology carries routing_state only for the writable PRIMARY, so this
+		// selects the writable leader (highest rule if several briefly claim it) —
+		// never a non-writable / deposed node.
 		var bestLeader *clustermetadatapb.MultiPooler
-		var bestObs *clustermetadatapb.LeaderObservation
+		var bestRule *clustermetadatapb.RuleNumber
 		for _, p := range poolers {
-			obs := p.GetSelfLeadership()
-			if obs == nil {
+			rs := p.GetRoutingState()
+			if rs.GetRole() != clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY {
 				continue
 			}
-			if commonconsensus.MostAuthoritativeObservation(bestObs, obs) == obs {
+			if bestLeader == nil || commonconsensus.CompareRuleNumbers(rs.GetRule(), bestRule) > 0 {
 				bestLeader = p
-				bestObs = obs
+				bestRule = rs.GetRule()
 			}
 		}
 		if bestLeader != nil {
 			return bestLeader, nil
 		}
-		return nil, fmt.Errorf("leader pooler not found for database=%s, table_group=%s, shard=%s", database, tableGroup, shard)
+		return nil, fmt.Errorf("writable primary pooler not found for database=%s, table_group=%s, shard=%s", database, tableGroup, shard)
 	}
 
 	for _, p := range poolers {
-		if p.GetSelfLeadership() == nil {
+		if p.GetRoutingState().GetRole() != clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY {
 			return p, nil
 		}
 	}

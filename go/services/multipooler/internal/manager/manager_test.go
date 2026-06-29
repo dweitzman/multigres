@@ -182,8 +182,8 @@ func TestManagerState_RetryUntilSuccess(t *testing.T) {
 		PortMap:       map[string]int32{"grpc": 8080},
 		Type:          clustermetadatapb.PoolerType_PRIMARY,
 		ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
-		// A PRIMARY record must name itself as leader (the record invariant).
-		SelfLeadership: &clustermetadatapb.LeaderObservation{LeaderId: serviceID},
+		// A PRIMARY record carries a PRIMARY routing_state (the record invariant).
+		RoutingState: &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY},
 		ShardKey: &clustermetadatapb.ShardKey{
 			Database:   database,
 			TableGroup: constants.DefaultTableGroup,
@@ -659,8 +659,8 @@ func TestPause_PreservesPublisher(t *testing.T) {
 	// up and reflect it in topology.
 	require.NoError(t, pm.record.Mutate(lockCtx, func(s *MutablePoolerRecordState) {
 		s.Type = clustermetadatapb.PoolerType_PRIMARY
-		// A PRIMARY must carry a self-leadership observation naming itself.
-		s.SelfLeadership = &clustermetadatapb.LeaderObservation{LeaderId: serviceID}
+		// A PRIMARY record carries a PRIMARY routing_state (the record invariant).
+		s.RoutingState = &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY}
 	}))
 
 	require.Eventually(t, func() bool {

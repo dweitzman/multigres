@@ -130,54 +130,43 @@ func TestReplTrackerEnableHeartbeat(t *testing.T) {
 }
 
 // TestReplTrackerOnStateChangeGating verifies the writer (primary mode) runs
-// only when this pooler is the consensus leader AND postgres is out of recovery
-// AND serving. The postgresPrimary gate is the important one: a consensus leader
-// whose postgres is still in recovery must NOT run the heartbeat writer, since
-// every write would fail against a read-only standby.
+// only when this pooler is writable (routing role PRIMARY — committed leadership
+// AND postgres out of recovery, encoded in a single signal) AND serving. The
+// writable gate is the important one: a consensus leader whose postgres is still
+// in recovery is not writable and must NOT run the heartbeat writer, since every
+// write would fail against a read-only standby.
 func TestReplTrackerOnStateChangeGating(t *testing.T) {
 	tests := []struct {
-		name              string
-		isConsensusLeader bool
-		postgresPrimary   bool
-		servingStatus     clustermetadatapb.PoolerServingStatus
-		wantPrimary       bool
+		name          string
+		writable      bool
+		servingStatus clustermetadatapb.PoolerServingStatus
+		wantPrimary   bool
 	}{
 		{
-			name:              "leader, writable, serving -> writer runs",
-			isConsensusLeader: true,
-			postgresPrimary:   true,
-			servingStatus:     clustermetadatapb.PoolerServingStatus_SERVING,
-			wantPrimary:       true,
+			name:          "writable, serving -> writer runs",
+			writable:      true,
+			servingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
+			wantPrimary:   true,
 		},
 		{
-			name:              "leader but not yet writable -> writer stays off",
-			isConsensusLeader: true,
-			postgresPrimary:   false,
-			servingStatus:     clustermetadatapb.PoolerServingStatus_SERVING,
-			wantPrimary:       false,
+			// A leader still in recovery (or mid-promote) is not writable, so the
+			// not-writable gate keeps the writer off.
+			name:          "not writable -> writer stays off",
+			writable:      false,
+			servingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
+			wantPrimary:   false,
 		},
 		{
-			// A non-leader is never writable (Writable encodes committed
-			// leadership), so the not-writable gate keeps the writer off.
-			name:              "not leader, not writable -> writer stays off",
-			isConsensusLeader: false,
-			postgresPrimary:   false,
-			servingStatus:     clustermetadatapb.PoolerServingStatus_SERVING,
-			wantPrimary:       false,
+			name:          "writable but draining -> writer stays off",
+			writable:      true,
+			servingStatus: clustermetadatapb.PoolerServingStatus_DRAINING,
+			wantPrimary:   false,
 		},
 		{
-			name:              "leader and writable but draining -> writer stays off",
-			isConsensusLeader: true,
-			postgresPrimary:   true,
-			servingStatus:     clustermetadatapb.PoolerServingStatus_DRAINING,
-			wantPrimary:       false,
-		},
-		{
-			name:              "leader and writable but disabled -> writer stays off",
-			isConsensusLeader: true,
-			postgresPrimary:   true,
-			servingStatus:     clustermetadatapb.PoolerServingStatus_DISABLED,
-			wantPrimary:       false,
+			name:          "writable but disabled -> writer stays off",
+			writable:      true,
+			servingStatus: clustermetadatapb.PoolerServingStatus_DISABLED,
+			wantPrimary:   false,
 		},
 	}
 
@@ -193,7 +182,11 @@ func TestReplTrackerOnStateChangeGating(t *testing.T) {
 			rt := NewReplTracker(queryService, slog.Default(), []byte("test-shard"), "test-pooler", 250)
 			defer rt.Close()
 
-			err := rt.OnStateChange(context.Background(), servingstate.State{IsHighestKnownLeader: tt.isConsensusLeader, Writable: tt.postgresPrimary, ServingStatus: tt.servingStatus})
+			role := clustermetadatapb.RoutingRole_ROUTING_ROLE_REPLICA
+			if tt.writable {
+				role = clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY
+			}
+			err := rt.OnStateChange(context.Background(), servingstate.State{Routing: &clustermetadatapb.RoutingState{Role: role}, ServingStatus: tt.servingStatus})
 			assert.NoError(t, err)
 			assert.Equal(t, tt.wantPrimary, rt.IsPrimary())
 			assert.Equal(t, tt.wantPrimary, rt.hw.IsOpen(), "writer open state must match primary mode")

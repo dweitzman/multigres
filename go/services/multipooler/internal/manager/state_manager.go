@@ -20,7 +20,9 @@ import (
 	"sync"
 
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/protobuf/proto"
 
+	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	"github.com/multigres/multigres/go/services/multipooler/internal/manager/actionlock"
 	"github.com/multigres/multigres/go/services/multipooler/internal/servingstate"
@@ -68,58 +70,69 @@ type StateManager struct {
 	// postgres observation). Local-only, never published to topology. Guarded by mu.
 	inRecovery bool
 
-	// committedLeader reports whether our highest non-revoked committed rule names
-	// us — the consensus half of write-safety. Injected (a downward capability,
-	// queried live rather than stored) so the StateManager recomputes writability
-	// from the rule store + revocation on demand: a revocation or new committed-rule
-	// observation flips writable without any explicit set. See writableLocked.
-	committedLeader func() bool
+	// consensusStatus returns this pooler's live consensus snapshot, from which the
+	// StateManager derives the routing role and write-safety (combined with its
+	// cached recovery state). Injected (queried live, not stored) so a revocation
+	// or a new committed/known-rule observation flips the derived state without any
+	// explicit set. See effectiveStateLocked.
+	consensusStatus func() *clustermetadatapb.ConsensusStatus
 
 	// lastFannedOut is the effective state most recently delivered to components,
-	// or nil if none has been yet. Used to skip redundant fan-outs: components
-	// react to the (IsHighestKnownLeader, Writable, ServingStatus) tuple, and
-	// distinct PoolerTypes (REPLICA vs UNKNOWN) collapse to the same tuple, so a
-	// record-only change that leaves the tuple identical must not re-notify.
+	// or nil if none has been yet. Used to skip redundant fan-outs (compared via
+	// State.Equal): a record-only change that leaves the effective state identical
+	// must not re-notify.
 	lastFannedOut *servingstate.State
 
 	// Registered components that react to state changes.
 	components []StateAware
 }
 
-// NewStateManager creates a new StateManager. committedLeader is the live
-// committed-leadership query (whether our highest non-revoked committed rule
-// names us); the StateManager combines it with its cached recovery state to
-// compute writability.
+// NewStateManager creates a new StateManager. consensusStatus returns the live
+// consensus snapshot (e.g. ConsensusManager.CachedConsensusStatus); the
+// StateManager combines it with its cached recovery state to derive the routing
+// role and write-safety.
 func NewStateManager(
 	logger *slog.Logger,
 	record *poolerRecord,
-	committedLeader func() bool,
+	consensusStatus func() *clustermetadatapb.ConsensusStatus,
 	components ...StateAware,
 ) *StateManager {
 	return &StateManager{
 		logger:          logger,
 		record:          record,
-		committedLeader: committedLeader,
+		consensusStatus: consensusStatus,
 		components:      components,
 	}
 }
 
-// writableLocked computes the live write-safety signal: postgres out of recovery
-// AND we are the highest non-revoked committed leader. Caller must hold mu.
-func (ssm *StateManager) writableLocked() bool {
-	return !ssm.inRecovery && ssm.committedLeader()
+// effectiveStateLocked builds the servingstate.State components react to from the
+// given mutation result and the live consensus snapshot. The routing role is
+// PRIMARY iff postgres is out of recovery AND we are both the highest non-revoked
+// committed leader (write-late: never on a not-yet-committed rule) AND the
+// highest-known leader (resign-early: false the moment a higher known rule names
+// someone else). The qualifying rule is the committed rule when PRIMARY, the
+// highest-known rule when REPLICA. Caller must hold mu.
+func (ssm *StateManager) effectiveStateLocked(m servingStateMutation, cs *clustermetadatapb.ConsensusStatus) servingstate.State {
+	role := clustermetadatapb.RoutingRole_ROUTING_ROLE_REPLICA
+	rule := commonconsensus.HighestKnownRule([]*clustermetadatapb.ConsensusStatus{cs}).GetRuleNumber()
+	if !m.InRecovery && commonconsensus.IsNonRevokedCommittedLeader(cs) && commonconsensus.NamesSelfAsLeader(cs) {
+		role = clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY
+		rule = cs.GetCurrentPosition().GetRule().GetRuleNumber()
+	}
+	return servingstate.State{
+		Routing:       &clustermetadatapb.RoutingState{Role: role, Rule: rule},
+		ServingStatus: m.ServingStatus,
+	}
 }
 
-// effectiveStateLocked builds the servingstate.State components react to from the
-// given mutation result. IsHighestKnownLeader is the self-leadership observation
-// being non-nil (highest-known leadership, the PoolerType source); Writable is
-// recomputed live from recovery + committed leadership. Caller must hold mu.
-func (ssm *StateManager) effectiveStateLocked(m servingStateMutation) servingstate.State {
-	return servingstate.State{
-		IsHighestKnownLeader: m.SelfLeadership != nil,
-		Writable:             !m.InRecovery && ssm.committedLeader(),
-		ServingStatus:        m.ServingStatus,
+// recordRoutingState returns the routing_state to persist in the topology record:
+// the PRIMARY advertisement when writable, nil otherwise. Replicas leave it empty
+// to avoid etcd write amplification (topology carries the writable PRIMARY only).
+func recordRoutingState(s servingstate.State) *clustermetadatapb.RoutingState {
+	if !s.Writable() {
+		return nil
 	}
+	return s.Routing
 }
 
 // Register adds a component to be notified on state changes.
@@ -139,17 +152,16 @@ func (ssm *StateManager) RegisterAndSync(ctx context.Context, component StateAwa
 	ssm.mu.Lock()
 	defer ssm.mu.Unlock()
 	ssm.components = append(ssm.components, component)
-	return component.OnStateChange(ctx, servingstate.State{
-		IsHighestKnownLeader: ssm.record.SelfLeadership() != nil,
-		Writable:             ssm.writableLocked(),
-		ServingStatus:        ssm.record.ServingStatus(),
-	})
+	return component.OnStateChange(ctx, ssm.effectiveStateLocked(servingStateMutation{
+		InRecovery:    ssm.inRecovery,
+		ServingStatus: ssm.record.ServingStatus(),
+	}, ssm.consensusStatus()))
 }
 
 // fanOutLocked notifies every registered component of the target effective state
 // in parallel and waits for them to converge. Caller must hold mu.
 func (ssm *StateManager) fanOutLocked(ctx context.Context, target servingstate.State) error {
-	if ssm.lastFannedOut != nil && *ssm.lastFannedOut == target {
+	if ssm.lastFannedOut != nil && ssm.lastFannedOut.Equal(target) {
 		// Components are already at this effective state; nothing to notify.
 		return nil
 	}
@@ -171,18 +183,15 @@ func (ssm *StateManager) fanOutLocked(ctx context.Context, target servingstate.S
 
 // servingStateMutation is the mutable view passed to Mutate. A callback changes
 // any subset of fields and sees the previous values; fields it leaves alone are
-// carried forward. SelfLeadership and ServingStatus are topology-backed (persisted
-// to the poolerRecord); InRecovery is the local-only recovery observation. There
-// is deliberately no Writable field — writability is derived from InRecovery and
-// the committed-leadership query, never set directly.
+// carried forward. ServingStatus is topology-backed (persisted to the
+// poolerRecord); InRecovery is the local-only recovery observation.
 //
-// There is also no PoolerType field: the consensus-leadership observation is the
-// source of truth, and PoolerType (PRIMARY iff a self-leadership obs is held,
-// REPLICA otherwise) is derived from it when persisting the record.
+// There is deliberately no leadership/routing field: the routing role, write-
+// safety, and the derived PoolerType label are all computed from InRecovery and
+// the live leadership snapshot (see effectiveStateLocked), never set directly.
 type servingStateMutation struct {
-	SelfLeadership *clustermetadatapb.LeaderObservation
-	InRecovery     bool
-	ServingStatus  clustermetadatapb.PoolerServingStatus
+	InRecovery    bool
+	ServingStatus clustermetadatapb.PoolerServingStatus
 }
 
 // Mutate applies fn to the current state, fans the resulting effective state out
@@ -207,38 +216,45 @@ func (ssm *StateManager) Mutate(ctx context.Context, fn func(s *servingStateMuta
 	defer ssm.mu.Unlock()
 
 	cur := servingStateMutation{
-		SelfLeadership: ssm.record.SelfLeadership(),
-		InRecovery:     ssm.inRecovery,
-		ServingStatus:  ssm.record.ServingStatus(),
+		InRecovery:    ssm.inRecovery,
+		ServingStatus: ssm.record.ServingStatus(),
 	}
 	next := cur
 	fn(&next)
 
-	// Leadership drives the derived PoolerType, so the record changes when
-	// leader-ness flips or serving changes. An obs-only change (same leader-ness,
-	// new rule number) is published via UpdateLeaderObservation, not here.
-	leaderChanged := (next.SelfLeadership != nil) != (cur.SelfLeadership != nil)
-	servingChanged := next.ServingStatus != cur.ServingStatus
-	recoveryChanged := next.InRecovery != cur.InRecovery
+	// Read the consensus snapshot once so the effective state and the derived
+	// record fields (Type, routing_state) are computed from the same facts.
+	cs := ssm.consensusStatus()
+	nextEffective := ssm.effectiveStateLocked(next, cs)
+
+	// The record changes when the derived PoolerType label (highest-known
+	// leadership), the persisted routing_state (the writable PRIMARY advertisement),
+	// or the serving status changes. All three are derived — callers no longer set
+	// leadership directly.
+	desiredType := poolerTypeForLeader(commonconsensus.NamesSelfAsLeader(cs))
+	desiredRouting := recordRoutingState(nextEffective)
+	recordChanged := desiredType != ssm.record.Type() ||
+		next.ServingStatus != ssm.record.ServingStatus() ||
+		!proto.Equal(desiredRouting, ssm.record.RoutingState())
 
 	// Writability is recomputed live, so the effective state can differ from what
 	// was last fanned out even when fn changed nothing here (e.g. a revocation
 	// flipped committed leadership). Compare the freshly computed effective state,
 	// not just the mutated fields, so such a change still re-notifies.
-	nextEffective := ssm.effectiveStateLocked(next)
-	effectiveChanged := ssm.lastFannedOut == nil || *ssm.lastFannedOut != nextEffective
-	if !leaderChanged && !servingChanged && !recoveryChanged && !effectiveChanged {
+	effectiveChanged := ssm.lastFannedOut == nil || !ssm.lastFannedOut.Equal(nextEffective)
+	recoveryChanged := next.InRecovery != cur.InRecovery
+	if !effectiveChanged && !recordChanged && !recoveryChanged {
 		return nil
 	}
 
 	ssm.logger.InfoContext(ctx, "Applying serving state",
-		"leader", nextEffective.IsHighestKnownLeader, "status", nextEffective.ServingStatus,
-		"writable", nextEffective.Writable, "in_recovery", next.InRecovery,
-		"prev_leader", cur.SelfLeadership != nil, "prev_status", cur.ServingStatus, "prev_in_recovery", cur.InRecovery)
+		"role", nextEffective.Routing.GetRole(), "status", nextEffective.ServingStatus,
+		"writable", nextEffective.Writable(), "in_recovery", next.InRecovery,
+		"known_leader", commonconsensus.NamesSelfAsLeader(cs), "prev_status", cur.ServingStatus, "prev_in_recovery", cur.InRecovery)
 
 	// Fan out first so a failed transition leaves the record untouched. The
-	// fan-out dedups on the effective tuple, so a recovery-only or record-only
-	// change that leaves the tuple identical does not re-notify.
+	// fan-out dedups on the effective state, so a recovery-only or record-only
+	// change that leaves the effective state identical does not re-notify.
 	if err := ssm.fanOutLocked(ctx, nextEffective); err != nil {
 		return err
 	}
@@ -246,10 +262,10 @@ func (ssm *StateManager) Mutate(ctx context.Context, fn func(s *servingStateMuta
 	// were computed from before the (fallible) record write.
 	ssm.inRecovery = next.InRecovery
 
-	if leaderChanged || servingChanged {
+	if recordChanged {
 		if err := ssm.record.Mutate(ctx, func(s *MutablePoolerRecordState) {
-			s.Type = poolerTypeForLeader(next.SelfLeadership != nil)
-			s.SelfLeadership = next.SelfLeadership
+			s.Type = desiredType
+			s.RoutingState = desiredRouting
 			s.ServingStatus = next.ServingStatus
 		}); err != nil {
 			return err
@@ -274,5 +290,5 @@ func (ssm *StateManager) lastAppliedWritable() bool {
 	if ssm.lastFannedOut == nil {
 		return false
 	}
-	return ssm.lastFannedOut.Writable
+	return ssm.lastFannedOut.Writable()
 }

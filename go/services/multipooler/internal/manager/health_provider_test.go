@@ -29,6 +29,22 @@ import (
 	"github.com/multigres/multigres/go/services/multipooler/internal/servingstate"
 )
 
+// writableState builds a writable PRIMARY serving state with the given status.
+func writableState(status clustermetadatapb.PoolerServingStatus) servingstate.State {
+	return servingstate.State{
+		Routing:       &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY},
+		ServingStatus: status,
+	}
+}
+
+// replicaState builds a non-writable REPLICA serving state with the given status.
+func replicaState(status clustermetadatapb.PoolerServingStatus) servingstate.State {
+	return servingstate.State{
+		Routing:       &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_REPLICA},
+		ServingStatus: status,
+	}
+}
+
 func TestHealthStreamer_BroadcastToSubscribers(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	serviceID := &clustermetadatapb.ID{
@@ -45,7 +61,7 @@ func TestHealthStreamer_BroadcastToSubscribers(t *testing.T) {
 	assert.Equal(t, 2, hs.clientCount())
 
 	// Update state (triggers broadcast)
-	require.NoError(t, hs.OnStateChange(context.Background(), servingstate.State{IsHighestKnownLeader: false, Writable: false, ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING}))
+	require.NoError(t, hs.OnStateChange(context.Background(), replicaState(clustermetadatapb.PoolerServingStatus_SERVING)))
 
 	// Both clients should receive the state
 	timeout1 := time.After(100 * time.Millisecond)
@@ -76,7 +92,7 @@ func TestHealthStreamer_SubscribeReceivesCurrentState(t *testing.T) {
 	hs := newHealthStreamer(logger, serviceID, "initial", "0")
 
 	// Set initial state via OnStateChange
-	require.NoError(t, hs.OnStateChange(context.Background(), servingstate.State{IsHighestKnownLeader: false, Writable: false, ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING}))
+	require.NoError(t, hs.OnStateChange(context.Background(), replicaState(clustermetadatapb.PoolerServingStatus_SERVING)))
 
 	// Subscribe should return current state
 	state, _ := hs.subscribe()
@@ -102,7 +118,7 @@ func TestHealthStreamer_FullBufferClosesChannel(t *testing.T) {
 
 	// Send more than buffer size without draining
 	for range defaultHealthStreamBufferSize + 5 {
-		require.NoError(t, hs.OnStateChange(context.Background(), servingstate.State{IsHighestKnownLeader: false, Writable: false, ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING}))
+		require.NoError(t, hs.OnStateChange(context.Background(), replicaState(clustermetadatapb.PoolerServingStatus_SERVING)))
 	}
 
 	// Channel should be closed due to buffer overflow
@@ -140,7 +156,7 @@ func TestHealthStreamer_GetState(t *testing.T) {
 	assert.Equal(t, clustermetadatapb.PoolerServingStatus_DISABLED, got.ServingStatus)
 
 	// Update and verify
-	require.NoError(t, hs.OnStateChange(context.Background(), servingstate.State{IsHighestKnownLeader: false, Writable: false, ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING}))
+	require.NoError(t, hs.OnStateChange(context.Background(), replicaState(clustermetadatapb.PoolerServingStatus_SERVING)))
 	got = hs.getState()
 	assert.Equal(t, clustermetadatapb.PoolerServingStatus_SERVING, got.ServingStatus)
 }
@@ -197,7 +213,7 @@ func TestHealthProvider_SubscribeHealthReturnsNilWhenNoStreamer(t *testing.T) {
 	assert.Nil(t, ch)
 }
 
-func TestHealthStreamer_UpdateLeaderObservation(t *testing.T) {
+func TestHealthStreamer_PublishesRoutingState(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	serviceID := &clustermetadatapb.ID{
 		Component: clustermetadatapb.ID_MULTIPOOLER,
@@ -209,18 +225,22 @@ func TestHealthStreamer_UpdateLeaderObservation(t *testing.T) {
 	// Subscribe
 	_, ch := hs.subscribe()
 
-	// Update primary observation
-	obs := &poolerserver.LeaderObservation{
-		LeaderTerm: 42,
-	}
-	hs.UpdateLeaderObservation(obs)
+	// A writable PRIMARY state is published as a PRIMARY routing_state.
+	require.NoError(t, hs.OnStateChange(context.Background(), servingstate.State{
+		Routing: &clustermetadatapb.RoutingState{
+			Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY,
+			Rule: &clustermetadatapb.RuleNumber{CoordinatorTerm: 42},
+		},
+		ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING,
+	}))
 
-	// Verify subscriber receives the updated state
+	// Verify subscriber receives the updated routing_state.
 	select {
 	case received := <-ch:
 		require.NotNil(t, received)
-		require.NotNil(t, received.LeaderObservation)
-		assert.Equal(t, int64(42), received.LeaderObservation.LeaderTerm)
+		require.NotNil(t, received.RoutingState)
+		assert.Equal(t, clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY, received.RoutingState.GetRole())
+		assert.Equal(t, int64(42), received.RoutingState.GetRule().GetCoordinatorTerm())
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("subscriber did not receive health broadcast")
 	}
@@ -239,7 +259,7 @@ func TestHealthStreamer_OnStateChange(t *testing.T) {
 	_, ch := hs.subscribe()
 
 	// Call OnStateChange — updates both fields atomically with one broadcast
-	err := hs.OnStateChange(context.Background(), servingstate.State{IsHighestKnownLeader: true, Writable: true, ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING})
+	err := hs.OnStateChange(context.Background(), writableState(clustermetadatapb.PoolerServingStatus_SERVING))
 	require.NoError(t, err)
 
 	// Verify subscriber receives a single broadcast with both fields updated
@@ -318,7 +338,7 @@ func TestHealthStreamer_WaitsForQueryServerOnServing(t *testing.T) {
 	// It should block because qps hasn't transitioned yet.
 	hsDone := make(chan struct{})
 	go func() {
-		_ = hs.OnStateChange(t.Context(), servingstate.State{IsHighestKnownLeader: true, Writable: true, ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING})
+		_ = hs.OnStateChange(t.Context(), writableState(clustermetadatapb.PoolerServingStatus_SERVING))
 		close(hsDone)
 	}()
 
@@ -330,7 +350,7 @@ func TestHealthStreamer_WaitsForQueryServerOnServing(t *testing.T) {
 	}
 
 	// Now transition the query server.
-	require.NoError(t, qps.OnStateChange(t.Context(), servingstate.State{IsHighestKnownLeader: true, Writable: true, ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING}))
+	require.NoError(t, qps.OnStateChange(t.Context(), writableState(clustermetadatapb.PoolerServingStatus_SERVING)))
 
 	// Health streamer should unblock and broadcast.
 	select {
@@ -356,7 +376,7 @@ func TestHealthStreamer_DoesNotWaitOnNotServing(t *testing.T) {
 
 	// Create a query server that is PRIMARY/SERVING.
 	qps := poolerserver.NewQueryPoolerServer(logger, nil, nil, "", "", nil, 0, false)
-	require.NoError(t, qps.OnStateChange(t.Context(), servingstate.State{IsHighestKnownLeader: true, Writable: true, ServingStatus: clustermetadatapb.PoolerServingStatus_SERVING}))
+	require.NoError(t, qps.OnStateChange(t.Context(), writableState(clustermetadatapb.PoolerServingStatus_SERVING)))
 	hs.SetQueryServer(qps)
 
 	ch := make(chan *poolerserver.HealthState, 10)
@@ -365,7 +385,7 @@ func TestHealthStreamer_DoesNotWaitOnNotServing(t *testing.T) {
 	// DISABLED should broadcast immediately, even though qps is still PRIMARY/SERVING.
 	hsDone := make(chan struct{})
 	go func() {
-		_ = hs.OnStateChange(t.Context(), servingstate.State{IsHighestKnownLeader: false, Writable: false, ServingStatus: clustermetadatapb.PoolerServingStatus_DISABLED})
+		_ = hs.OnStateChange(t.Context(), replicaState(clustermetadatapb.PoolerServingStatus_DISABLED))
 		close(hsDone)
 	}()
 
@@ -377,32 +397,26 @@ func TestHealthStreamer_DoesNotWaitOnNotServing(t *testing.T) {
 }
 
 // TestHealthStreamer_PublishesWritability verifies the health stream publishes
-// Writable from postgresPrimary, independent of PoolerType/serving: a consensus
-// leader still in recovery is PRIMARY + SERVING but not yet Writable, and flips to
-// Writable only once postgres leaves recovery. This is what lets the gateway hold
-// write traffic for a leader mid-promotion.
+// the routing_state role as the write-safety signal: a consensus leader still in
+// recovery (or mid-promotion) is REPLICA + SERVING and not yet writable, and flips
+// to a PRIMARY routing_state only once it is the writable leader. This is what lets
+// the gateway hold write traffic for a leader mid-promotion.
 func TestHealthStreamer_PublishesWritability(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	hs := newHealthStreamer(logger, nil, "tg1", "0")
 	ch := make(chan *poolerserver.HealthState, 10)
 	hs.clients[ch] = struct{}{}
 
-	// Leader, SERVING (can answer reads), but postgres still in recovery: not writable.
-	require.NoError(t, hs.OnStateChange(t.Context(), servingstate.State{
-		IsHighestKnownLeader: true,
-		Writable:             false,
-		ServingStatus:        clustermetadatapb.PoolerServingStatus_SERVING,
-	}))
+	// Leader-elect, SERVING (can answer reads), but not yet writable: REPLICA role.
+	require.NoError(t, hs.OnStateChange(t.Context(), replicaState(clustermetadatapb.PoolerServingStatus_SERVING)))
 	st := <-ch
 	assert.Equal(t, clustermetadatapb.PoolerServingStatus_SERVING, st.ServingStatus)
-	assert.False(t, st.Writable, "leader still in recovery must not advertise writable")
+	assert.Equal(t, clustermetadatapb.RoutingRole_ROUTING_ROLE_REPLICA, st.RoutingState.GetRole(),
+		"leader still in recovery must not advertise a writable PRIMARY routing_state")
 
-	// Promotion completes (out of recovery): now writable.
-	require.NoError(t, hs.OnStateChange(t.Context(), servingstate.State{
-		IsHighestKnownLeader: true,
-		Writable:             true,
-		ServingStatus:        clustermetadatapb.PoolerServingStatus_SERVING,
-	}))
+	// Promotion completes (out of recovery): now a writable PRIMARY routing_state.
+	require.NoError(t, hs.OnStateChange(t.Context(), writableState(clustermetadatapb.PoolerServingStatus_SERVING)))
 	st = <-ch
-	assert.True(t, st.Writable, "writable once postgres leaves recovery")
+	assert.Equal(t, clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY, st.RoutingState.GetRole(),
+		"writable PRIMARY once postgres leaves recovery")
 }

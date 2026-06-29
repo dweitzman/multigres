@@ -88,7 +88,7 @@ func (rt *ReplTracker) makeNonPrimary() {
 // leader) is exactly the gate the writer needs — writing heartbeats to a standby
 // or a deposed primary fails every interval and spams the log.
 func (rt *ReplTracker) OnStateChange(_ context.Context, state servingstate.State) error {
-	if state.Writable && state.ServingStatus == clustermetadatapb.PoolerServingStatus_SERVING {
+	if state.Writable() && state.ServingStatus == clustermetadatapb.PoolerServingStatus_SERVING {
 		rt.makePrimary()
 	} else {
 		rt.makeNonPrimary()

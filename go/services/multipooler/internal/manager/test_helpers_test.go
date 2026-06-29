@@ -54,12 +54,12 @@ func setPoolerTypeForTest(t *testing.T, pm *MultiPoolerManager, poolerType clust
 	defer pm.actionLock.Release(ctx)
 	require.NoError(t, pm.record.Mutate(ctx, func(s *MutablePoolerRecordState) {
 		s.Type = poolerType
-		// Keep the Type ⇔ SelfLeadership invariant: a PRIMARY names itself; any
-		// other type carries no self-leadership.
+		// Keep the record's routing_state invariant: a PRIMARY carries a PRIMARY
+		// routing_state; any other type leaves it nil.
 		if poolerType == clustermetadatapb.PoolerType_PRIMARY {
-			s.SelfLeadership = &clustermetadatapb.LeaderObservation{LeaderId: pm.record.Id()}
+			s.RoutingState = &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY}
 		} else {
-			s.SelfLeadership = nil
+			s.RoutingState = nil
 		}
 	}))
 }
