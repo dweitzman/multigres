@@ -92,6 +92,16 @@ func (s *shardSummary) primary() *clustermetadatapb.ID {
 // currently recorded as primary retracts it (→ no writable primary → buffer) —
 // this is the resign/demotion path. Returns true if the recorded primary changed.
 // Safe to call concurrently.
+//
+// TODO(replica WAL ceiling): a REPLICA's rule is currently ignored
+// entirely. If a replica reports a committed rule for a HIGHER primary than the
+// current PRIMARY's rule, and we have no live health for that higher primary, the
+// shard effectively has no writable primary: we should treat that as "no primary"
+// and buffer, rather than keep routing to the lower-rule pooler that still claims
+// to be the writable PRIMARY (a stale, gateway-reachable, consensus-partitioned
+// leader whose writes will hang). This needs a separate per-replica committed-rule
+// ceiling kept distinct from the routing role; until it lands we trust the PRIMARY
+// self-report and such writes hang instead of buffering+re-discovering.
 func (s *shardSummary) mergeRouting(poolerID *clustermetadatapb.ID, rs *clustermetadatapb.RoutingState) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
