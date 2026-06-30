@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/multigres/multigres/go/common/backup"
+	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/constants"
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/pgprotocol/client"
@@ -870,33 +871,27 @@ func (pm *MultiPoolerManager) checkReady() error {
 	}
 }
 
-// checkPoolerType verifies that the pooler matches the expected type
-func (pm *MultiPoolerManager) checkPoolerType(expectedType clustermetadatapb.PoolerType, operationName string) error {
-	pm.mu.Lock()
-	poolerType := pm.record.Type()
-	pm.mu.Unlock()
-
-	if poolerType != expectedType {
-		pm.logger.Error(operationName+" called on incorrect pooler type",
-			"service_id", pm.serviceID.String(),
-			"pooler_type", poolerType.String(),
-			"expected_type", expectedType.String())
-		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
-			fmt.Sprintf("operation not allowed: pooler type is %s, must be %s (service_id: %s)",
-				poolerType.String(), expectedType.String(), pm.serviceID.String()))
-	}
-	return nil
-}
-
-// checkReplicaGuardrails verifies that the pooler is a REPLICA and PostgreSQL is in recovery mode
-// This is a common guardrail for replication-related operations on standby servers
+// checkReplicaGuardrails verifies that this pooler may perform standby
+// replication operations: the highest known consensus rule must not name this
+// pooler as leader, and PostgreSQL must be in recovery (standby) mode.
+//
+// The recovery-mode check is the canonical, ground-truth precondition (mirroring
+// checkPrimaryGuardrails). The consensus check rejects only a pooler whose
+// highest known rule still names itself — i.e. one that has not learned of any
+// newer term. A demoted primary catching up on replication to a newer term has,
+// by definition, already learned that newer rule (which names the new leader),
+// so its highest known rule no longer names itself and it remains a valid
+// replica.
 func (pm *MultiPoolerManager) checkReplicaGuardrails(ctx context.Context) error {
-	// Guardrail: Check pooler type - only REPLICA poolers can perform replication operations
-	if err := pm.checkPoolerType(clustermetadatapb.PoolerType_REPLICA, "Replication operation"); err != nil {
-		return err
+	// Consensus guardrail: a pooler whose highest known rule names itself as
+	// leader must not be reconfigured as a replica.
+	if commonconsensus.NamesSelfAsLeader(pm.consensusMgr.CachedConsensusStatus()) {
+		pm.logger.ErrorContext(ctx, "Replication operation called while highest known rule names this pooler as leader", "service_id", pm.serviceID.String())
+		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
+			fmt.Sprintf("operation not allowed: the highest known consensus rule names this pooler as leader (service_id: %s)", pm.serviceID.String()))
 	}
 
-	// Guardrail: Check if the PostgreSQL instance is in recovery (standby mode)
+	// Postgres guardrail: the instance must be in recovery (standby) mode.
 	isInRecovery, err := pm.isInRecovery(ctx)
 	if err != nil {
 		pm.logger.ErrorContext(ctx, "Failed to check if instance is in recovery", "error", err)
