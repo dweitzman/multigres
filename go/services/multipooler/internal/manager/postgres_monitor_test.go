@@ -126,17 +126,16 @@ func TestDiscoverPostgresState_Running(t *testing.T) {
 	assert.True(t, state.pgctldAvailable)
 	assert.True(t, state.dirInitialized)
 	assert.True(t, state.postgresRunning)
-	assert.False(t, state.isPrimary, "pg_is_in_recovery=t means standby")
+	assert.True(t, state.isInRecovery, "pg_is_in_recovery=t means standby")
 	assert.False(t, state.bootstrapSentinelPresent)
 }
 
 // TestDiscoverPostgresState_RunningRoleProbeFails is a regression test: when
-// postgres is running but pg_is_in_recovery cannot be read, the role is
+// postgres is running but pg_is_in_recovery cannot be read, the recovery state is
 // genuinely ambiguous and discovery must surface an error so the monitor skips
-// remediation. Acting on the guessed value is dangerous because isPrimary
-// defaults to true on probe failure, which would make a healthy but
-// momentarily-unqueryable replica look like a stale primary and trigger a
-// destructive demote.
+// remediation. Acting on a guessed value is dangerous: a wrong guess could make a
+// healthy but momentarily-unqueryable replica look like a stale primary and trigger
+// a destructive demote.
 func TestDiscoverPostgresState_RunningRoleProbeFails(t *testing.T) {
 	ctx := t.Context()
 
@@ -155,7 +154,7 @@ func TestDiscoverPostgresState_RunningRoleProbeFails(t *testing.T) {
 
 	state, err := pm.discoverPostgresState(ctx)
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "determine primary status")
+	assert.ErrorContains(t, err, "determine recovery status")
 	// The process-up fact is still observed; only the role is ambiguous.
 	assert.True(t, state.postgresRunning)
 }
@@ -260,7 +259,7 @@ func TestDetermineRemedialAction(t *testing.T) {
 			state: postgresState{
 				pgctldAvailable: true,
 				postgresRunning: true,
-				isPrimary:       true,
+				isInRecovery:    false,
 			},
 			poolerType:     clustermetadatapb.PoolerType_PRIMARY,
 			cachedPos:      nil,
@@ -275,7 +274,7 @@ func TestDetermineRemedialAction(t *testing.T) {
 			state: postgresState{
 				pgctldAvailable: true,
 				postgresRunning: true,
-				isPrimary:       true,
+				isInRecovery:    false,
 			},
 			poolerType:     clustermetadatapb.PoolerType_UNKNOWN,
 			cachedPos:      selfPos(5, selfID),
@@ -289,7 +288,7 @@ func TestDetermineRemedialAction(t *testing.T) {
 			state: postgresState{
 				pgctldAvailable: true,
 				postgresRunning: true,
-				isPrimary:       true,
+				isInRecovery:    false,
 			},
 			poolerType:     clustermetadatapb.PoolerType_REPLICA,
 			cachedPos:      selfPos(5, selfID),
@@ -302,7 +301,7 @@ func TestDetermineRemedialAction(t *testing.T) {
 			state: postgresState{
 				pgctldAvailable: true,
 				postgresRunning: true,
-				isPrimary:       true,
+				isInRecovery:    false,
 			},
 			poolerType:     clustermetadatapb.PoolerType_PRIMARY,
 			seedPrimary:    recordedPrimary(5, otherID, otherAddr),
@@ -316,7 +315,7 @@ func TestDetermineRemedialAction(t *testing.T) {
 			state: postgresState{
 				pgctldAvailable: true,
 				postgresRunning: true,
-				isPrimary:       false,
+				isInRecovery:    true,
 			},
 			poolerType:         clustermetadatapb.PoolerType_PRIMARY,
 			cachedPos:          selfPos(5, selfID),
@@ -329,7 +328,7 @@ func TestDetermineRemedialAction(t *testing.T) {
 			state: postgresState{
 				pgctldAvailable: true,
 				postgresRunning: true,
-				isPrimary:       false,
+				isInRecovery:    true,
 			},
 			poolerType:         clustermetadatapb.PoolerType_PRIMARY,
 			cachedPos:          selfPos(5, selfID),
@@ -346,7 +345,7 @@ func TestDetermineRemedialAction(t *testing.T) {
 			state: postgresState{
 				pgctldAvailable: true,
 				postgresRunning: true,
-				isPrimary:       false,
+				isInRecovery:    true,
 			},
 			poolerType:         clustermetadatapb.PoolerType_REPLICA,
 			cachedPos:          selfPos(5, selfID),
@@ -360,8 +359,7 @@ func TestDetermineRemedialAction(t *testing.T) {
 			state: postgresState{
 				pgctldAvailable: true,
 				postgresRunning: true,
-				isPrimary:       true,
-				writable:        true,
+				isInRecovery:    false,
 			},
 			poolerType:      clustermetadatapb.PoolerType_PRIMARY,
 			cachedPos:       selfPos(5, selfID),
@@ -375,7 +373,7 @@ func TestDetermineRemedialAction(t *testing.T) {
 			state: postgresState{
 				pgctldAvailable: true,
 				postgresRunning: true,
-				isPrimary:       false,
+				isInRecovery:    true,
 			},
 			poolerType:     clustermetadatapb.PoolerType_REPLICA,
 			cachedPos:      selfPos(5, otherID),
@@ -388,8 +386,7 @@ func TestDetermineRemedialAction(t *testing.T) {
 			state: postgresState{
 				pgctldAvailable: true,
 				postgresRunning: true,
-				isPrimary:       true,
-				writable:        true,
+				isInRecovery:    false,
 			},
 			poolerType:     clustermetadatapb.PoolerType_PRIMARY,
 			cachedPos:      selfPos(5, selfID),
@@ -405,7 +402,7 @@ func TestDetermineRemedialAction(t *testing.T) {
 			state: postgresState{
 				pgctldAvailable: true,
 				postgresRunning: true,
-				isPrimary:       false,
+				isInRecovery:    true,
 			},
 			poolerType:     clustermetadatapb.PoolerType_PRIMARY,
 			cachedPos:      selfPos(5, otherID),
@@ -475,26 +472,28 @@ func TestDetermineRemedialAction(t *testing.T) {
 				withRuleStore(&fakeRuleStore{pos: tt.cachedPos, inconsistentGUC: tt.inconsistentGUC}),
 			)
 
-			// lastAppliedWritable == state.writable: this table exercises role,
-			// demote, resign and GUC decisions, not writable drift (covered
-			// separately), so pass no drift here.
-			got := pm.determineRemedialAction(t.Context(), tt.state, tt.state.writable)
+			// Seed the StateManager's cached recovery to match the observation so this
+			// table isolates role/demote/resign/GUC decisions; recovery drift is covered
+			// separately (see TestDetermineRemedialAction_RecoveryDrift).
+			pm.stateManager.inRecovery = tt.state.isInRecovery
+			got := pm.determineRemedialAction(t.Context(), tt.state)
 			require.Equal(t, tt.expectedAction, got)
 		})
 	}
 }
 
-// TestDetermineRemedialAction_PrimaryDrift covers the physical-primary-drift path:
-// the role is already aligned (rule names self, record says PRIMARY), but the
-// StateManager's last-applied primary-ness differs from what postgres reports.
-// That drift alone must trigger remedialActionReconcileState so the writable-only
-// components (heartbeat writer, LISTEN) re-evaluate — e.g. recovery clearing again
-// after a resign.
-func TestDetermineRemedialAction_PrimaryDrift(t *testing.T) {
+// TestDetermineRemedialAction_RecoveryDrift covers the recovery-observation-drift
+// path: the role is already aligned (rule names self, record says PRIMARY), but the
+// recovery state the monitor observes differs from what the StateManager has cached
+// (or serving was left DRAINING). Either must trigger remedialActionReconcileState
+// so the StateManager re-derives and the writable-only components (heartbeat writer,
+// LISTEN) re-evaluate. The monitor reports only the recovery observation; it does
+// not compute writability itself.
+func TestDetermineRemedialAction_RecoveryDrift(t *testing.T) {
 	selfID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "test-cell", Name: "self"}
 	newAlignedPrimaryManager := func(serving clustermetadatapb.PoolerServingStatus) *MultiPoolerManager {
-		// Rule names self, so intendedRole is PRIMARY and the record already agrees:
-		// no role drift, isolating the physical-primary / serving decisions.
+		// Rule names self, so the role is PRIMARY and the record already agrees:
+		// no role drift, isolating the recovery / serving decisions.
 		return newTestManager(t,
 			withServiceID(selfID),
 			withRecord(newRecordFromProto(&clustermetadatapb.MultiPooler{
@@ -512,21 +511,22 @@ func TestDetermineRemedialAction_PrimaryDrift(t *testing.T) {
 		)
 	}
 
-	runningPrimary := postgresState{pgctldAvailable: true, postgresRunning: true, isPrimary: true, writable: true}
+	runningPrimary := postgresState{pgctldAvailable: true, postgresRunning: true, isInRecovery: false}
 
-	t.Run("primary drift reconciles", func(t *testing.T) {
+	t.Run("recovery drift reconciles", func(t *testing.T) {
 		pm := newAlignedPrimaryManager(clustermetadatapb.PoolerServingStatus_SERVING)
-		// Components last saw a non-writable backend (false) but postgres is now
-		// writable (true): the writable drift must reconcile.
-		got := pm.determineRemedialAction(t.Context(), runningPrimary, false /* lastAppliedWritable */)
+		// The StateManager has cached in-recovery, but postgres is now observed out
+		// of recovery: the recovery drift must reconcile (which re-derives writability).
+		pm.stateManager.inRecovery = true
+		got := pm.determineRemedialAction(t.Context(), runningPrimary)
 		require.Equal(t, remedialActionReconcileState, got)
 	})
 
 	t.Run("draining reconciles", func(t *testing.T) {
-		// Role and writability aligned, but serving was left DRAINING (e.g. a demotion
-		// that errored before re-serving). The monitor re-enables it.
+		// Recovery aligned, but serving was left DRAINING (e.g. a demotion that
+		// errored before re-serving). The monitor re-enables it.
 		pm := newAlignedPrimaryManager(clustermetadatapb.PoolerServingStatus_DRAINING)
-		got := pm.determineRemedialAction(t.Context(), runningPrimary, true /* lastAppliedWritable */)
+		got := pm.determineRemedialAction(t.Context(), runningPrimary)
 		require.Equal(t, remedialActionReconcileState, got)
 	})
 
@@ -534,13 +534,13 @@ func TestDetermineRemedialAction_PrimaryDrift(t *testing.T) {
 		// DISABLED is a deliberate non-serving state (stopping/paused/operator);
 		// the monitor must NOT auto-re-enable it.
 		pm := newAlignedPrimaryManager(clustermetadatapb.PoolerServingStatus_DISABLED)
-		got := pm.determineRemedialAction(t.Context(), runningPrimary, true /* lastAppliedWritable */)
+		got := pm.determineRemedialAction(t.Context(), runningPrimary)
 		require.Equal(t, remedialActionNone, got)
 	})
 
 	t.Run("no drift is a no-op", func(t *testing.T) {
 		pm := newAlignedPrimaryManager(clustermetadatapb.PoolerServingStatus_SERVING)
-		got := pm.determineRemedialAction(t.Context(), runningPrimary, true /* lastAppliedWritable */)
+		got := pm.determineRemedialAction(t.Context(), runningPrimary)
 		require.Equal(t, remedialActionNone, got)
 	})
 }
@@ -557,7 +557,7 @@ func TestDetermineRemedialAction_StalePrimaryDemote(t *testing.T) {
 
 	// Postgres is up and running as a primary; the published label is PRIMARY,
 	// so the only thing that should pull us off remedialActionNone is a demote.
-	runningPrimary := postgresState{pgctldAvailable: true, postgresRunning: true, isPrimary: true}
+	runningPrimary := postgresState{pgctldAvailable: true, postgresRunning: true, isInRecovery: false}
 
 	selfPos := func(term int64) *clustermetadatapb.PoolerPosition {
 		return &clustermetadatapb.PoolerPosition{
@@ -640,9 +640,9 @@ func TestDetermineRemedialAction_StalePrimaryDemote(t *testing.T) {
 				withRuleStore(&fakeRuleStore{pos: tt.cachedPos}),
 			)
 
-			// No writable drift here: pass the state's own writable so this table
-			// isolates the demote-vs-wait decision (covered by writable drift separately).
-			got := pm.determineRemedialAction(t.Context(), runningPrimary, runningPrimary.writable)
+			// This table isolates the demote-vs-wait decision; recovery drift is
+			// covered separately (see TestDetermineRemedialAction_RecoveryDrift).
+			got := pm.determineRemedialAction(t.Context(), runningPrimary)
 			require.Equal(t, tt.expectedAction, got)
 		})
 	}
@@ -1013,7 +1013,7 @@ func TestTakeRemedialAction_ReconcileGUC(t *testing.T) {
 	require.NoError(t, err)
 	defer pm.actionLock.Release(lockCtx)
 
-	pm.takeRemedialAction(lockCtx, remedialActionReconcileGUC, postgresState{isPrimary: true})
+	pm.takeRemedialAction(lockCtx, remedialActionReconcileGUC, postgresState{isInRecovery: false})
 
 	assert.True(t, frs.reconcileGUCCalled, "ReconcileGUC should have been called")
 	assert.Equal(t, "postgres_running", pm.pgMonitorLastLoggedReason)
@@ -1041,7 +1041,7 @@ func TestTakeRemedialAction_ReconcileRole_AppliesRuleDerivedRole(t *testing.T) {
 	defer pm.actionLock.Release(lockCtx)
 
 	pm.takeRemedialAction(lockCtx, remedialActionReconcileState,
-		postgresState{pgctldAvailable: true, postgresRunning: true, isPrimary: true})
+		postgresState{pgctldAvailable: true, postgresRunning: true, isInRecovery: false})
 
 	assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, pm.record.Type())
 	rs := pm.record.RoutingState()
@@ -1278,7 +1278,7 @@ func TestPostgresStateEqual(t *testing.T) {
 		dirInitialized:           true,
 		postgresRunning:          true,
 		backupsAvailable:         true,
-		isPrimary:                true,
+		isInRecovery:             false,
 		bootstrapSentinelPresent: true,
 	}
 
@@ -1294,7 +1294,7 @@ func TestPostgresStateEqual(t *testing.T) {
 		{"dirInitialized", func() postgresState { s := base; s.dirInitialized = false; return s }()},
 		{"postgresRunning", func() postgresState { s := base; s.postgresRunning = false; return s }()},
 		{"backupsAvailable", func() postgresState { s := base; s.backupsAvailable = false; return s }()},
-		{"isPrimary", func() postgresState { s := base; s.isPrimary = false; return s }()},
+		{"isInRecovery", func() postgresState { s := base; s.isInRecovery = true; return s }()},
 		{"bootstrapSentinelPresent", func() postgresState { s := base; s.bootstrapSentinelPresent = false; return s }()},
 	}
 	for _, tc := range tests {

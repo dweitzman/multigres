@@ -274,21 +274,12 @@ func (ssm *StateManager) Mutate(ctx context.Context, fn func(s *servingStateMuta
 	return nil
 }
 
-// lastAppliedWritable returns the write-safety value most recently delivered to
-// components (what they currently believe), or false if nothing has been fanned
-// out yet. The monitor compares its freshly recomputed writable against this to
-// decide whether components are stale and a reconcile is needed.
-//
-// This deliberately returns the last-delivered value, NOT a live recompute: if it
-// recomputed live it would already reflect a revocation or recovery change, agree
-// with the monitor's fresh value, and the monitor would detect no drift — leaving
-// components stuck at the old writability. Returning what was last delivered lets
-// the monitor see the divergence and re-notify.
-func (ssm *StateManager) lastAppliedWritable() bool {
+// InRecovery returns the recovery state the StateManager currently has cached
+// (the last value the postgres monitor reconciled in). The monitor compares its
+// fresh observation against this to decide whether to reconcile the difference —
+// the monitor owns the recovery observation; the StateManager owns the derivation.
+func (ssm *StateManager) InRecovery() bool {
 	ssm.mu.Lock()
 	defer ssm.mu.Unlock()
-	if ssm.lastFannedOut == nil {
-		return false
-	}
-	return ssm.lastFannedOut.Writable()
+	return ssm.inRecovery
 }

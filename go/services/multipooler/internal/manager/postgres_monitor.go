@@ -65,37 +65,6 @@ func (pm *MultiPoolerManager) highestKnownRule() *clustermetadatapb.ShardRule {
 	})
 }
 
-// highestCommittedRule returns the highest rule this pooler has durably committed
-// into its own CurrentPosition — the leader recorded in the rule store (the
-// WAL-replicated current_rule row). It is the committed counterpart to
-// highestKnownRule, and deliberately EXCLUDES the ReplicationPrimary recorded via
-// SetPrimary/RecordTermPrimary, which can name a leader at a rule number ahead of
-// what we have committed. Returns nil if no position has been observed yet.
-//
-// Leadership terminology used throughout this package:
-//   - "highest committed leader": highestCommittedRule names us. The authority
-//     for write-safety (writable) — durable, never ahead of what we've committed.
-//   - "highest known leader": highestKnownRule names us (also factors in
-//     ReplicationPrimary). Drives the routing label (PoolerType) and
-//     skip-redundant-RPC decisions, and must NOT gate writes.
-func (pm *MultiPoolerManager) highestCommittedRule() *clustermetadatapb.ShardRule {
-	return pm.consensusMgr.Rules().CachedPosition().GetRule()
-}
-
-// isHighestNonRevokedCommittedLeader reports whether this pooler is the highest committed
-// leader: our highest committed rule names us AND that rule has not been revoked.
-// Revocation matters because a Recruit establishing a higher term revokes the
-// lower terms — so being the WAL leader at term 7 does not count once we've
-// recorded a revocation of terms below 8. This is the committed-leadership input
-// to write-safety (writable); a deposed-but-not-yet-demoted primary is excluded.
-func (pm *MultiPoolerManager) isHighestNonRevokedCommittedLeader() bool {
-	rule := pm.highestCommittedRule()
-	if !commonconsensus.RuleNamesLeader(rule, pm.serviceID) {
-		return false
-	}
-	return !commonconsensus.IsRuleRevoked(rule, pm.consensusMgr.Promises().GetInconsistentRevocation())
-}
-
 // staleStandbyDemoteTarget returns the leader this pooler should restart as a
 // standby of, for the case where consensus has moved on but postgres is still
 // running as a primary on a deposed term. Returns nil unless there is a recorded
@@ -146,12 +115,11 @@ type postgresState struct {
 	dirInitialized   bool
 	postgresRunning  bool
 	backupsAvailable bool
-	isPrimary        bool
-	// writable is the derived write-safety signal: postgres is out of recovery
-	// (isPrimary) AND our highest unrevoked *committed* rule names us leader. Distinct from
-	// isPrimary (raw recovery, used for stale-primary/resign detection) and from
-	// highest-known leadership (routing). See highestCommittedRule.
-	writable                 bool
+	// isInRecovery is the raw recovery observation (pg_is_in_recovery): true on a
+	// standby, false on a primary. It is the one write-safety input the StateManager
+	// cannot observe itself; the monitor reports it and the StateManager combines it
+	// with live consensus to derive writability and the routing role.
+	isInRecovery             bool
 	bootstrapSentinelPresent bool
 	// rewindSourceReady is true when this pooler is a primary whose last completed
 	// checkpoint is on its current running timeline, so it is safe to pg_rewind
@@ -166,8 +134,7 @@ func postgresStateEqual(a, b postgresState) bool {
 		a.dirInitialized == b.dirInitialized &&
 		a.postgresRunning == b.postgresRunning &&
 		a.backupsAvailable == b.backupsAvailable &&
-		a.isPrimary == b.isPrimary &&
-		a.writable == b.writable &&
+		a.isInRecovery == b.isInRecovery &&
 		a.bootstrapSentinelPresent == b.bootstrapSentinelPresent &&
 		a.rewindSourceReady == b.rewindSourceReady
 }
@@ -249,7 +216,7 @@ func (pm *MultiPoolerManager) monitorPostgresIteration(ctx context.Context) (pos
 	}
 
 	// Determine what remediation is needed
-	action := pm.determineRemedialAction(ctx, currentState, pm.stateManager.lastAppliedWritable())
+	action := pm.determineRemedialAction(ctx, currentState)
 	if action == remedialActionNone {
 		// No action needed - just log status
 		if currentState.postgresRunning {
@@ -279,7 +246,7 @@ func (pm *MultiPoolerManager) monitorPostgresIteration(ctx context.Context) (pos
 	}
 
 	// Re-determine action based on current state
-	action = pm.determineRemedialAction(lockCtx, currentState, pm.stateManager.lastAppliedWritable())
+	action = pm.determineRemedialAction(lockCtx, currentState)
 
 	// Take remedial action with lock held
 	pm.takeRemedialAction(lockCtx, action, currentState)
@@ -316,46 +283,34 @@ func (pm *MultiPoolerManager) discoverPostgresState(ctx context.Context) (postgr
 	// Check if Postgres is running
 	state.postgresRunning = (statusResp.Status == pgctldpb.ServerStatus_RUNNING)
 	if state.postgresRunning {
-		var err error
-		state.isPrimary, err = pm.isPrimary(ctx)
+		primary, err := pm.isPrimary(ctx)
 		if err != nil {
 			// Postgres is running but we can't read its recovery mode, leaving the
-			// role genuinely ambiguous. Acting on a guessed value is dangerous:
-			// isPrimary defaults to true on error, which would make a healthy but
-			// momentarily-unqueryable replica look like a stale primary and trigger a
-			// destructive demote (pg_rewind), or flip the published writable bit on a
-			// guess. Surface the error so the monitor skips remediation this tick and
-			// retries, matching the bootstrap-sentinel handling below.
-			return state, fmt.Errorf("determine primary status: %w", err)
+			// role genuinely ambiguous. Acting on a guessed value is dangerous: a
+			// wrong guess could make a healthy but momentarily-unqueryable replica look
+			// like a stale primary and trigger a destructive demote (pg_rewind), or
+			// flip the derived writable bit on a guess. Surface the error so the monitor
+			// skips remediation this tick and retries, matching the bootstrap-sentinel
+			// handling below.
+			return state, fmt.Errorf("determine recovery status: %w", err)
 		}
+		state.isInRecovery = !primary
 		// A primary is a rewind source only once it has checkpointed onto its
 		// current timeline. Cheap to skip on standbys (rewindSourceReady would
 		// return false anyway).
-		if state.isPrimary {
+		if !state.isInRecovery {
 			ready, rrErr := pm.rewindSourceReady(ctx)
 			if rrErr != nil {
-				// Unlike isPrimary above, this is safe to leave best-effort: a failed
-				// probe leaves rewindSourceReady=false, and that error defaults in the
-				// fail-safe direction. The worst case is that other poolers don't yet
-				// pick us as a pg_rewind source, which only delays their recovery — it
-				// never triggers an action. So we warn and continue rather than failing
-				// the whole tick (which would also block unrelated remediation).
+				// Unlike the recovery probe above, this is safe to leave best-effort: a
+				// failed probe leaves rewindSourceReady=false, defaulting in the fail-safe
+				// direction. The worst case is that other poolers don't yet pick us as a
+				// pg_rewind source, which only delays their recovery — it never triggers
+				// an action. So we warn and continue rather than failing the whole tick.
 				pm.logger.WarnContext(ctx, "Failed to determine rewind-source readiness", "error", rrErr)
 			} else {
 				state.rewindSourceReady = ready
 			}
 		}
-		// Derive write-safety the same way the StateManager does (so this stays an
-		// apples-to-apples input to the writable drift check): out of recovery AND we
-		// are the highest non-revoked *committed* leader (never writable in the
-		// pg_promote()->commit window, nor as a deposed primary at a revoked term)
-		// AND the highest-*known* rule still names us (so a superseded stale primary
-		// stops being writable the moment it learns a newer leader, before it can
-		// rewind). isPrimary stays the raw recovery fact for stale-primary/resign
-		// detection.
-		state.writable = state.isPrimary &&
-			pm.isHighestNonRevokedCommittedLeader() &&
-			commonconsensus.RuleNamesLeader(pm.highestKnownRule(), pm.serviceID)
 	}
 
 	// Check if backups are available (only if directory not initialized)
@@ -474,13 +429,13 @@ func (pm *MultiPoolerManager) primaryConnInfoDiffersFromRecorded(ctx context.Con
 
 // determineRoleAction returns the action needed to align this pooler's role with
 // consensus, from two raw facts: whether the highest-known rule names this pooler
-// (namesSelf) and whether postgres is running as a primary (state.isPrimary).
-func (pm *MultiPoolerManager) determineRoleAction(namesSelf bool, state postgresState, lastAppliedWritable bool) remedialAction {
-	// Rule names another leader, postgres is a PRIMARY.
+// (namesSelf) and whether postgres is in recovery (state.isInRecovery).
+func (pm *MultiPoolerManager) determineRoleAction(namesSelf bool, state postgresState) remedialAction {
+	// Rule names another leader, postgres is a PRIMARY (out of recovery).
 	// Diagnosis: Stale primary. We should restart as a replica, but we anticipate
 	// having extra / phantom transactions so don't restart until we've been informed
 	// the current leader to allow rewinding.
-	if !namesSelf && state.isPrimary {
+	if !namesSelf && !state.isInRecovery {
 		if pm.staleStandbyDemoteTarget() != nil {
 			return remedialActionDemoteStalePrimary
 		}
@@ -496,24 +451,18 @@ func (pm *MultiPoolerManager) determineRoleAction(namesSelf bool, state postgres
 	// Promote's promoteStandbyToPrimary), and disambiguate resign (we lost our
 	// postgres) from promote (newly elected). Embedding the leader host/port in the
 	// WAL rule would also let replicas reconcile without waiting for SetPrimary.
-	if namesSelf && !state.isPrimary {
+	if namesSelf && state.isInRecovery {
 		if pm.consensusMgr.ResignedLeaderAtTerm() == 0 {
 			return remedialActionResignLeadership
 		}
 		return remedialActionNone
 	}
 
-	// Here we reconcile the StateManager's effective state against what we've
-	// observed and fix any drift. The Mutate it triggers updates the cached
-	// recovery fact and re-fans-out the derived state; we only need to fire it when
-	// something components react to has drifted:
-	//   - writable drift: the freshly-observed derived writable differs from what
-	//     components were last told. This covers both a recovery flip AND a
-	//     committed-leadership change (revocation / new committed rule) that leaves
-	//     recovery unchanged, so the heartbeat writer / LISTEN / gateway don't keep
-	//     acting on stale writability. We never set writable here — it is derived;
-	//     this only detects the drift. (The PoolerType topology label is
-	//     observability-only and is left to update lazily, not a reconcile trigger.)
+	// Reconcile the one input the monitor owns — the recovery observation — into the
+	// StateManager when it has drifted from what the StateManager has cached. The
+	// Mutate it triggers updates the cached recovery fact and re-fans-out the derived
+	// state (writability, routing role); the monitor does not compute writability
+	// itself. We also re-enable serving out of a transient DRAINING:
 	//   - DRAINING: serving was disabled transiently for an in-place transition
 	//     (demotion) and is re-enabled here once the node is healthy and role-aligned
 	//     — e.g. after a demote restarts the node as a standby, or a demote that
@@ -522,7 +471,7 @@ func (pm *MultiPoolerManager) determineRoleAction(namesSelf bool, state postgres
 	//     under the action lock, so an actionable DRAINING means the drain finished
 	//     and restoring SERVING is safe. A resigned leader is handled by the branch
 	//     above.
-	if state.writable != lastAppliedWritable ||
+	if state.isInRecovery != pm.stateManager.InRecovery() ||
 		pm.record.ServingStatus() == clustermetadatapb.PoolerServingStatus_DRAINING {
 		return remedialActionReconcileState
 	}
@@ -536,7 +485,7 @@ func (pm *MultiPoolerManager) determineReplicationSettingsAction(ctx context.Con
 	// primary_conninfo is a standby concern: reconcile it to the recorded
 	// ReplicationPrimary when it has drifted from what we've been told via
 	// SetPrimary/Promote.
-	if !state.isPrimary {
+	if state.isInRecovery {
 		if pm.primaryConnInfoDiffersFromRecorded(ctx) {
 			return remedialActionFixPrimaryConnInfo
 		}
@@ -557,7 +506,7 @@ func (pm *MultiPoolerManager) determineReplicationSettingsAction(ctx context.Con
 
 	// synchronous_standby_names is a primary concern: it has no effect on a
 	// standby, and setting it there leaks state.
-	if state.isPrimary && pm.consensusMgr.Rules().HasInconsistentGUC(ctx) {
+	if !state.isInRecovery && pm.consensusMgr.Rules().HasInconsistentGUC(ctx) {
 		return remedialActionReconcileGUC
 	}
 
@@ -566,7 +515,7 @@ func (pm *MultiPoolerManager) determineReplicationSettingsAction(ctx context.Con
 
 // determineRemedialAction decides what action to take based on discovered state.
 // This is pure decision logic with no side effects.
-func (pm *MultiPoolerManager) determineRemedialAction(ctx context.Context, currentState postgresState, lastAppliedWritable bool) remedialAction {
+func (pm *MultiPoolerManager) determineRemedialAction(ctx context.Context, currentState postgresState) remedialAction {
 	// Pgctld unavailable: No action possible
 	if !currentState.pgctldAvailable {
 		return remedialActionNone
@@ -586,9 +535,9 @@ func (pm *MultiPoolerManager) determineRemedialAction(ctx context.Context, curre
 		}
 		// namesSelf: the highest-known rule names this pooler as leader. The role
 		// decisions below combine it with the raw postgres recovery state
-		// (state.isPrimary) — no detour through the PoolerType routing label.
+		// (state.isInRecovery) — no detour through the PoolerType routing label.
 		namesSelf := commonconsensus.RuleNamesLeader(known, pm.serviceID)
-		if action := pm.determineRoleAction(namesSelf, currentState, lastAppliedWritable); action != remedialActionNone {
+		if action := pm.determineRoleAction(namesSelf, currentState); action != remedialActionNone {
 			return action
 		}
 		if action := pm.determineReplicationSettingsAction(ctx, currentState); action != remedialActionNone {
@@ -605,21 +554,24 @@ func (pm *MultiPoolerManager) determineRemedialAction(ctx context.Context, curre
 }
 
 // shouldMarkRewindReady reports whether this pooler should advertise rewind
-// readiness this tick: postgres has checkpointed onto its current timeline
-// (rewindSourceReady), this pooler is writable, has not resigned leadership, and
-// the published ReplicationPrimary has not yet advertised it. The last check makes
-// the resulting action a false->true edge, so its broadcast fires once per
-// promotion rather than every tick.
+// readiness this tick: it has a completed checkpoint on its current timeline
+// (rewindSourceReady), has not resigned leadership, and the published
+// ReplicationPrimary has not yet advertised it. The last check makes the resulting
+// action a false->true edge, so its broadcast fires once per promotion rather than
+// every tick.
 //
-// Gating on writable (committed, non-revoked leadership — not merely highest-known)
-// is what makes advertising a rewind source safe in both directions: a freshly
-// promoted leader advertises only once its rule commits, and a deposed leader stops
-// advertising the moment a higher rule supersedes it — so a diverged follower never
-// rewinds against a stale or not-yet-committed history.
+// Rewind-readiness is a postgres-timeline property, not a consensus one. It does
+// NOT gate on writability/leadership: rewindSourceReady already implies out of
+// recovery (it is only probed for a primary) plus a checkpoint on the current
+// timeline, which is exactly what makes pg_rewind against us safe — independent of
+// whether our rule has committed. Consensus correctness (who should rewind against
+// whom) is handled by which leader the coordinator tells followers to follow, so a
+// non-leader's self-advertised flag is never used as a follower's rewind target.
 func (pm *MultiPoolerManager) shouldMarkRewindReady(state postgresState) bool {
-	if !state.rewindSourceReady || !state.writable {
+	if !state.rewindSourceReady {
 		return false
 	}
+	// A leader that has asked to resign should not keep inviting rewinds to itself.
 	if pm.consensusMgr.ResignedLeaderAtTerm() != 0 {
 		return false
 	}
@@ -717,13 +669,11 @@ func (pm *MultiPoolerManager) takeRemedialAction(ctx context.Context, action rem
 		// case also fires for plain role/writable drift.
 		intended := roleForRule(pm.highestKnownRule(), pm.serviceID)
 		pm.logger.InfoContext(ctx, "MonitorPostgres: reconciling state from rule",
-			"intended_role", intended.String(), "in_recovery", !state.isPrimary)
+			"intended_role", intended.String(), "in_recovery", state.isInRecovery)
 		if err := pm.stateManager.Mutate(ctx, func(s *servingStateMutation) {
 			// Feed the observed recovery fact; the StateManager derives the routing
 			// role and write-safety from it plus the live leadership snapshot.
-			// (isPrimary == out of recovery; postgresState keeps that name pending a
-			// follow-up rename.)
-			s.InRecovery = !state.isPrimary
+			s.InRecovery = state.isInRecovery
 			if s.ServingStatus == clustermetadatapb.PoolerServingStatus_DRAINING {
 				s.ServingStatus = clustermetadatapb.PoolerServingStatus_SERVING
 			}
@@ -827,7 +777,7 @@ func (pm *MultiPoolerManager) takeRemedialAction(ctx context.Context, action rem
 	case remedialActionReconcileGUC:
 		pm.setMonitorReason(ctx, reasonPostgresRunning, "MonitorPostgres: PostgreSQL is running")
 		pm.logger.InfoContext(ctx, "MonitorPostgres: re-applying stale GUC")
-		if err := pm.consensusMgr.Rules().ReconcileGUC(ctx, !state.isPrimary); err != nil {
+		if err := pm.consensusMgr.Rules().ReconcileGUC(ctx, state.isInRecovery); err != nil {
 			pm.logger.ErrorContext(ctx, "MonitorPostgres: GUC reconciliation failed", "error", err)
 		}
 

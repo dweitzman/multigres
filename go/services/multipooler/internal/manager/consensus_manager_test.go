@@ -181,6 +181,10 @@ func newTestManager(t *testing.T, opts ...testManagerOption) *MultiPoolerManager
 		record:       cfg.record,
 		consensusMgr: cfg.consensusManager(t),
 	}
+	// The postgres monitor reconciles its recovery observation into the StateManager
+	// (and reads back its cached recovery), so it must be wired even for tests that
+	// only exercise determineRemedialAction.
+	pm.stateManager = NewStateManager(pm.logger, pm.record, pm.consensusMgr.CachedConsensusStatus)
 	cfg.seedLockedState(t, pm)
 	return pm
 }
