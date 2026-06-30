@@ -43,7 +43,6 @@ import (
 	"github.com/multigres/multigres/go/cmd/multigres/command/cluster"
 	"github.com/multigres/multigres/go/common/constants"
 	"github.com/multigres/multigres/go/common/topoclient"
-	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	pb "github.com/multigres/multigres/go/pb/pgctldservice"
 	"github.com/multigres/multigres/go/provisioner/local"
 	"github.com/multigres/multigres/go/test/endtoend/shardsetup"
@@ -998,21 +997,19 @@ func TestClusterLifecycle(t *testing.T) {
 		testPostgreSQLConnection(t, tempDir, testPorts.Zones[1].PgctldPGPort, "2")
 		t.Log("Both PostgreSQL instances are working correctly!")
 
-		// Wait for pooler types to be assigned (PRIMARY or REPLICA, not UNKNOWN)
-		// This ensures bootstrap has fully completed including pooler-type assignment
+		// Wait for the consensus cohort to be established (bootstrap + election
+		// complete) and learn which zone won the leadership.
 		zone1Addr := fmt.Sprintf("localhost:%d", testPorts.Zones[0].MultipoolerGRPCPort)
 		zone2Addr := fmt.Sprintf("localhost:%d", testPorts.Zones[1].MultipoolerGRPCPort)
-		t.Log("Waiting for pooler types to be assigned...")
-		zone1Type, err := shardsetup.WaitForPoolerTypeAssigned(t, zone1Addr, 30*time.Second)
-		require.NoError(t, err, "zone1 pooler type should be assigned")
-		zone2Type, err := shardsetup.WaitForPoolerTypeAssigned(t, zone2Addr, 30*time.Second)
-		require.NoError(t, err, "zone2 pooler type should be assigned")
+		t.Log("Waiting for the consensus cohort to be established...")
+		leaderID, cohort, err := shardsetup.WaitForCohortEstablished(t, []string{zone1Addr, zone2Addr}, 30*time.Second)
+		require.NoError(t, err, "cohort should be established")
+		require.Len(t, cohort, 2, "both zone poolers should be in the cohort")
+		require.NotNil(t, leaderID, "a leader should be elected")
 
-		// Verify exactly one PRIMARY and one REPLICA
-		zone1IsPrimary := zone1Type == clustermetadatapb.PoolerType_PRIMARY
-		zone2IsPrimary := zone2Type == clustermetadatapb.PoolerType_PRIMARY
-		require.True(t, zone1IsPrimary != zone2IsPrimary, "exactly one zone should be PRIMARY, got zone1=%s zone2=%s", zone1Type, zone2Type)
-		t.Logf("Zone1 type: %s, Zone2 type: %s", zone1Type, zone2Type)
+		// Consensus elects exactly one leader; its cell identifies the primary zone.
+		zone1IsPrimary := leaderID.GetCell() == "zone1"
+		t.Logf("Leader is %s/%s (zone1IsPrimary=%v)", leaderID.GetCell(), leaderID.GetName(), zone1IsPrimary)
 
 		// Test multipooler gRPC functionality via TCP
 		// Run write tests on primary, read-only tests on replica
@@ -1192,16 +1189,15 @@ func TestClusterLifecycle(t *testing.T) {
 		testPostgreSQLConnection(t, tempDir, testPorts.Zones[1].PgctldPGPort, "2")
 		t.Log("Both PostgreSQL instances are working correctly after restart!")
 
-		// Wait for pooler types to be restored from topology after restart
-		t.Log("Waiting for pooler types to be re-assigned after restart...")
-		zone1TypeAfterRestart, err := shardsetup.WaitForPoolerTypeAssigned(t, zone1Addr, 30*time.Second)
-		require.NoError(t, err, "zone1 pooler type should be assigned after restart")
-		_, err = shardsetup.WaitForPoolerTypeAssigned(t, zone2Addr, 30*time.Second)
-		require.NoError(t, err, "zone2 pooler type should be assigned after restart")
+		// Wait for the cohort to re-establish after restart and confirm leadership
+		// is preserved.
+		t.Log("Waiting for the consensus cohort to re-establish after restart...")
+		leaderIDAfterRestart, _, err := shardsetup.WaitForCohortEstablished(t, []string{zone1Addr, zone2Addr}, 30*time.Second)
+		require.NoError(t, err, "cohort should re-establish after restart")
 
 		// Verify primary/replica roles are preserved after restart
 		t.Log("Verifying primary/replica roles are preserved after restart...")
-		zone1IsPrimaryAfterRestart := zone1TypeAfterRestart == clustermetadatapb.PoolerType_PRIMARY
+		zone1IsPrimaryAfterRestart := leaderIDAfterRestart.GetCell() == "zone1"
 		require.Equal(t, zone1IsPrimary, zone1IsPrimaryAfterRestart,
 			"primary/replica roles must be preserved after restart")
 		t.Logf("Zone1 is primary after restart: %v (preserved from before)", zone1IsPrimaryAfterRestart)

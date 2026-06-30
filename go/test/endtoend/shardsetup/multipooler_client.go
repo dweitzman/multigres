@@ -136,46 +136,46 @@ func IsLeader(addr string) (bool, error) {
 	return commonconsensus.NamesSelfAsLeader(resp.GetConsensusStatus()), nil
 }
 
-// WaitForPoolerTypeAssigned waits for the pooler type to be assigned (either PRIMARY or REPLICA, not UNKNOWN).
-// This is useful when the test needs to call RPCs that require the pooler type to be known.
-func WaitForPoolerTypeAssigned(t *testing.T, addr string, timeout time.Duration) (clustermetadatapb.PoolerType, error) {
+// WaitForCohortEstablished polls the given poolers and returns as soon as any of
+// them reports an established cohort — the highest rule it knows carries a
+// non-empty cohort — yielding that rule's leader id and cohort members. A
+// populated cohort is the unambiguous "bootstrap/election complete" signal.
+// Consensus agrees on the rule, so whichever pooler answers first is
+// authoritative; the leader id identifies which pooler (by cell/name) won.
+func WaitForCohortEstablished(t *testing.T, addrs []string, timeout time.Duration) (leaderID *clustermetadatapb.ID, cohortMembers []*clustermetadatapb.ID, err error) {
 	t.Helper()
 
-	conn, err := grpc.NewClient("passthrough:///"+addr, grpccommon.LocalClientDialOptions()...)
-	if err != nil {
-		return clustermetadatapb.PoolerType_UNKNOWN, fmt.Errorf("failed to create client: %w", err)
+	clients := make([]multipoolermanagerpb.MultiPoolerManagerClient, 0, len(addrs))
+	for _, addr := range addrs {
+		conn, derr := grpc.NewClient("passthrough:///"+addr, grpccommon.LocalClientDialOptions()...)
+		if derr != nil {
+			return nil, nil, fmt.Errorf("failed to create client for %s: %w", addr, derr)
+		}
+		defer conn.Close()
+		clients = append(clients, multipoolermanagerpb.NewMultiPoolerManagerClient(conn))
 	}
-	defer conn.Close()
 
-	client := multipoolermanagerpb.NewMultiPoolerManagerClient(conn)
-
-	var poolerType clustermetadatapb.PoolerType
 	require.Eventually(t, func() bool {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		resp, err := client.Status(ctx, &multipoolermanagerdatapb.StatusRequest{})
-		cancel()
-
-		if err != nil {
-			t.Logf("Waiting for pooler type at %s... (Status RPC error: %v)", addr, err)
-			return false
+		for _, client := range clients {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			resp, serr := client.Status(ctx, &multipoolermanagerdatapb.StatusRequest{})
+			cancel()
+			if serr != nil || resp == nil {
+				continue
+			}
+			rule := commonconsensus.HighestKnownRule([]*clustermetadatapb.ConsensusStatus{resp.GetConsensusStatus()})
+			if len(rule.GetCohortMembers()) == 0 {
+				continue
+			}
+			leaderID = rule.GetLeaderId()
+			cohortMembers = rule.GetCohortMembers()
+			return true
 		}
+		t.Logf("Waiting for cohort to be established across %d poolers...", len(addrs))
+		return false
+	}, timeout, 500*time.Millisecond, "cohort was not established within %v", timeout)
 
-		if resp == nil || resp.Status == nil {
-			t.Logf("Waiting for pooler type at %s... (nil status response)", addr)
-			return false
-		}
-
-		poolerType = resp.Status.PoolerType
-		if poolerType == clustermetadatapb.PoolerType_UNKNOWN {
-			t.Logf("Waiting for pooler type at %s... (currently UNKNOWN)", addr)
-			return false
-		}
-
-		t.Logf("Pooler type at %s is now %s", addr, poolerType.String())
-		return true
-	}, timeout, 500*time.Millisecond, "pooler type was not assigned within %v", timeout)
-
-	return poolerType, nil
+	return leaderID, cohortMembers, nil
 }
 
 // Test helper functions
