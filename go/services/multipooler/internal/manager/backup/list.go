@@ -131,14 +131,18 @@ func (e *Engine) parseBackups(ctx context.Context, infoData []pgBackRestInfo) []
 		shard := ""
 		jobID := ""
 		multipoolerID := ""
-		poolerType := clustermetadatapb.PoolerType_UNKNOWN
+		routingRole := clustermetadatapb.RoutingRole_ROUTING_ROLE_UNKNOWN
 		if pgBackup.Annotation != nil {
 			tableGroup = pgBackup.Annotation["table_group"]
 			shard = pgBackup.Annotation["shard"]
 			jobID = pgBackup.Annotation["job_id"]
 			multipoolerID = pgBackup.Annotation["multipooler_id"]
+			// The annotation key/values stay "pooler_type"=PRIMARY/REPLICA for
+			// compatibility with backups taken before the routing-role migration.
+			// PoolerType and RoutingRole share numeric enum values, so parse the
+			// legacy PoolerType string and cast the number to RoutingRole.
 			if pt, ok := clustermetadatapb.PoolerType_value[pgBackup.Annotation["pooler_type"]]; ok {
-				poolerType = clustermetadatapb.PoolerType(pt)
+				routingRole = clustermetadatapb.RoutingRole(pt)
 			}
 		}
 
@@ -200,7 +204,7 @@ func (e *Engine) parseBackups(ctx context.Context, infoData []pgBackRestInfo) []
 			BackupSizeBytes: backupSizeBytes,
 			Type:            pgBackup.Type,
 			MultipoolerId:   multipoolerID,
-			PoolerType:      poolerType,
+			RoutingRole:     routingRole,
 			StartTimestamp:  startTs,
 			StopTimestamp:   stopTs,
 		})

@@ -31,7 +31,7 @@ import (
 
 // Backup performs the backup steps inside the parent "backup" span.
 // Caller must hold both the action lock and the backup lease.
-func (e *Engine) Backup(ctx context.Context, pgBackRestType PgBackRestType, jobID string, pg2Args []string, poolerType clustermetadatapb.PoolerType) (retBackupID string, retErr error) {
+func (e *Engine) Backup(ctx context.Context, pgBackRestType PgBackRestType, jobID string, pg2Args []string, routingRole clustermetadatapb.RoutingRole) (retBackupID string, retErr error) {
 	if err := actionlock.AssertActionLockHeld(ctx); err != nil {
 		return "", err
 	}
@@ -108,7 +108,12 @@ func (e *Engine) Backup(ctx context.Context, pgBackRestType PgBackRestType, jobI
 	// annotation is globally unique. Left as-is for now since restore matching
 	// keys off job_id, not multipooler_id.
 	args = append(args, "--annotation=multipooler_id="+multipoolerName)
-	args = append(args, "--annotation=pooler_type="+poolerType.String())
+	// Keep the legacy "pooler_type"=PRIMARY/REPLICA annotation for string
+	// compatibility with backups taken before the routing-role migration. The
+	// value is sourced from the routing role; PoolerType and RoutingRole share
+	// numeric enum values (UNKNOWN=0, PRIMARY=1, REPLICA=2), so the cast yields
+	// the same PRIMARY/REPLICA strings.
+	args = append(args, "--annotation=pooler_type="+clustermetadatapb.PoolerType(routingRole).String())
 	args = append(args, "--annotation=job_id="+effectiveJobID)
 
 	// Capture the full PostgreSQL server_version and persist it as an annotation

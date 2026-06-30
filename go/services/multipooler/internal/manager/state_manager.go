@@ -283,3 +283,20 @@ func (ssm *StateManager) InRecovery() bool {
 	defer ssm.mu.Unlock()
 	return ssm.inRecovery
 }
+
+// RoutingRole returns the routing role from the state the StateManager most
+// recently applied to its components: PRIMARY iff this pooler was the writable
+// leader (out of recovery, the highest non-revoked committed leader, naming
+// itself) as of that application, else REPLICA, or ROUTING_ROLE_UNKNOWN if no
+// state has been applied yet. Like InRecovery, this is a pure in-memory read of
+// the last-applied state — it does not consult live consensus, so callers need
+// not hold the action lock. The StateManager is the source of truth for the
+// routing role; the record's routing_state is its persisted projection.
+func (ssm *StateManager) RoutingRole() clustermetadatapb.RoutingRole {
+	ssm.mu.Lock()
+	defer ssm.mu.Unlock()
+	if ssm.lastFannedOut == nil {
+		return clustermetadatapb.RoutingRole_ROUTING_ROLE_UNKNOWN
+	}
+	return ssm.lastFannedOut.Routing.GetRole()
+}

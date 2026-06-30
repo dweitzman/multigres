@@ -34,6 +34,7 @@ import (
 	"github.com/multigres/multigres/go/services/multipooler/internal/manager/actionlock"
 	backupengine "github.com/multigres/multigres/go/services/multipooler/internal/manager/backup"
 	"github.com/multigres/multigres/go/services/multipooler/internal/manager/consensus"
+	"github.com/multigres/multigres/go/services/multipooler/internal/servingstate"
 	"github.com/multigres/multigres/go/test/utils"
 	"github.com/multigres/multigres/go/tools/timer"
 
@@ -120,6 +121,16 @@ func createTestManagerWithBackupLocation(t *testing.T, poolerDir, tableGroup, sh
 			&fakeRuleStore{},
 			nil,
 		),
+	}
+
+	// Wire the StateManager (the source of truth for the routing role) and seed
+	// its last-applied routing role to match the test pooler's type, so backup
+	// policy — which reads StateManager.RoutingRole — sees the right role without
+	// driving a full consensus/serving transition. PoolerType and RoutingRole
+	// share numeric enum values (UNKNOWN=0, PRIMARY=1, REPLICA=2).
+	pm.stateManager = NewStateManager(pm.logger, pm.record, pm.consensusMgr.CachedConsensusStatus)
+	pm.stateManager.lastFannedOut = &servingstate.State{
+		Routing: &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole(poolerType)},
 	}
 
 	// Build the backup engine the way the production constructor does, feeding
@@ -819,6 +830,13 @@ exit 0
 				logger:     slog.Default(),
 				pgMonitor:  timer.NewPeriodicRunner(context.TODO(), 10*time.Second),
 			}
+			// Seed the StateManager (source of truth for the routing role) to
+			// PRIMARY, matching the record, so backup policy sees the right role.
+			pm.stateManager = NewStateManager(pm.logger, pm.record, func() *clustermetadatapb.ConsensusStatus { return nil })
+			pm.stateManager.lastFannedOut = &servingstate.State{
+				Routing: &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY},
+			}
+
 			pm.backup = backupengine.NewEngine(pm.logger, pm.runLongCommand, pm.record, backupengine.Settings{PgDataDir: poolerDir})
 			pm.backup.SetBackupConfig(backupConfig)
 			pm.backup.SetConfigPath(configPath)
@@ -947,7 +965,7 @@ func TestGetPrimaryAsPg2Args(t *testing.T) {
 			}
 
 			// Call GetPrimaryAsPg2Args
-			got, err := pm.GetPrimaryAsPg2Args(context.Background(), nil, false)
+			got, err := pm.GetPrimaryAsPg2Args(context.Background(), nil, clustermetadatapb.RoutingRole(tt.poolerType), false)
 
 			// Check error expectation
 			if tt.expectError {
@@ -1017,7 +1035,7 @@ func TestGetPrimaryAsPg2Args_WithOverrides(t *testing.T) {
 
 		args, err := pm.GetPrimaryAsPg2Args(ctx, map[string]string{
 			"pg2_path": "/custom/path",
-		}, false)
+		}, clustermetadatapb.RoutingRole_ROUTING_ROLE_REPLICA, false)
 
 		require.NoError(t, err)
 		assert.Contains(t, args, "--pg2-host=primary.example.com")
@@ -1055,7 +1073,7 @@ func TestGetPrimaryAsPg2Args_WithOverrides(t *testing.T) {
 			require.NoError(t, err, "failed to create primary pooler in topology")
 		}
 
-		_, err := pm.GetPrimaryAsPg2Args(ctx, nil, false)
+		_, err := pm.GetPrimaryAsPg2Args(ctx, nil, clustermetadatapb.RoutingRole_ROUTING_ROLE_REPLICA, false)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "pg_data_dir")
 	})
@@ -1066,14 +1084,14 @@ func TestGetPrimaryAsPg2Args_WithOverrides(t *testing.T) {
 		setBackupPrimary(t, pm, "test-primary-local", "localhost", 5432)
 
 		// Without override - should error
-		_, err := pm.GetPrimaryAsPg2Args(ctx, nil, false)
+		_, err := pm.GetPrimaryAsPg2Args(ctx, nil, clustermetadatapb.RoutingRole_ROUTING_ROLE_REPLICA, false)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "local mode backup requires pg2_path override")
 
 		// With override - should work
 		args, err := pm.GetPrimaryAsPg2Args(ctx, map[string]string{
 			"pg2_path": "/primary/data",
-		}, false)
+		}, clustermetadatapb.RoutingRole_ROUTING_ROLE_REPLICA, false)
 		require.NoError(t, err)
 		assert.Contains(t, args, "--pg2-host=localhost")
 		assert.Contains(t, args, "--pg2-port=5432")
@@ -1110,7 +1128,7 @@ func TestGetPrimaryAsPg2Args_WithOverrides(t *testing.T) {
 
 		args, err := pm.GetPrimaryAsPg2Args(ctx, map[string]string{
 			"pg2_host_port": "9999",
-		}, false)
+		}, clustermetadatapb.RoutingRole_ROUTING_ROLE_REPLICA, false)
 
 		require.NoError(t, err)
 		assert.Contains(t, args, "--pg2-host-port=9999")

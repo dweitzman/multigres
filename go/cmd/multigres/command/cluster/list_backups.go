@@ -104,7 +104,7 @@ func runListBackups(cmd *cobra.Command, args []string) error {
 		colWidths.status = max(colWidths.status, len(backupStatusToString(b.Status)))
 		colWidths.size = max(colWidths.size, len(formatBytes(b.BackupSizeBytes)))
 		colWidths.poolerID = max(colWidths.poolerID, len(b.MultipoolerServiceId))
-		colWidths.poolerType = max(colWidths.poolerType, len(poolerTypeToString(b.PoolerType)))
+		colWidths.poolerType = max(colWidths.poolerType, len(routingRoleToString(b.RoutingRole)))
 	}
 
 	// Build format string
@@ -125,8 +125,8 @@ func runListBackups(cmd *cobra.Command, args []string) error {
 	for _, b := range resp.Backups {
 		status := backupStatusToString(b.Status)
 		size := formatBytes(b.BackupSizeBytes)
-		poolerType := poolerTypeToString(b.PoolerType)
-		cmd.Printf(format, b.BackupId, b.Database, b.Type, status, b.MultipoolerServiceId, poolerType, size)
+		routingRole := routingRoleToString(b.RoutingRole)
+		cmd.Printf(format, b.BackupId, b.Database, b.Type, status, b.MultipoolerServiceId, routingRole, size)
 	}
 
 	return nil
@@ -145,11 +145,11 @@ func backupStatusToString(status multiadminpb.BackupStatus) string {
 	}
 }
 
-func poolerTypeToString(pt clustermetadatapb.PoolerType) string {
-	switch pt {
-	case clustermetadatapb.PoolerType_PRIMARY:
+func routingRoleToString(r clustermetadatapb.RoutingRole) string {
+	switch r {
+	case clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY:
 		return "primary"
-	case clustermetadatapb.PoolerType_REPLICA:
+	case clustermetadatapb.RoutingRole_ROUTING_ROLE_REPLICA:
 		return "replica"
 	default:
 		return "unknown"

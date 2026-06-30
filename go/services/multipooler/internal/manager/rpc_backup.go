@@ -115,9 +115,12 @@ func (pm *MultiPoolerManager) backupLocked(ctx context.Context, forcePrimary boo
 		}
 	}()
 
-	// Policy and primary-source resolution are owned by the manager (it has the
-	// role and the consensus-recorded primary); the engine is pure pgBackRest.
-	if err := pm.allowBackupOnPrimary(ctx, forcePrimary); err != nil {
+	// Policy and primary-source resolution are owned by the manager; the engine
+	// is pure pgBackRest. "Primary" here is the routing primary — this pooler is
+	// the writable leader — from the StateManager (the source of truth for the
+	// routing role) rather than the consensus topology label.
+	routingRole := pm.stateManager.RoutingRole()
+	if err := pm.allowBackupOnPrimary(ctx, routingRole, forcePrimary); err != nil {
 		return "", err
 	}
 	// Validate the requested backup type before resolving the backup source, so
@@ -126,23 +129,23 @@ func (pm *MultiPoolerManager) backupLocked(ctx context.Context, forcePrimary boo
 	if err != nil {
 		return "", err
 	}
-	pg2Args, err := pm.GetPrimaryAsPg2Args(ctx, overrides, forcePrimary)
+	pg2Args, err := pm.GetPrimaryAsPg2Args(ctx, overrides, routingRole, forcePrimary)
 	if err != nil {
 		return "", mterrors.Wrap(err, "failed to get primary as pg2 arguments")
 	}
 
 	retErr = telemetry.WithSpan(ctx, "backup", func(ctx context.Context) error {
 		var err error
-		retBackupID, err = pm.backup.Backup(ctx, pgBackRestType, jobID, pg2Args, pm.getPoolerType())
+		retBackupID, err = pm.backup.Backup(ctx, pgBackRestType, jobID, pg2Args, routingRole)
 		return err
 	})
 	return retBackupID, retErr
 }
 
-// allowBackupOnPrimary checks if a backup operation is allowed on a primary pooler
-func (pm *MultiPoolerManager) allowBackupOnPrimary(ctx context.Context, forcePrimary bool) error {
-	poolerType := pm.getPoolerType()
-	isPrimary := (poolerType == clustermetadatapb.PoolerType_PRIMARY)
+// allowBackupOnPrimary checks if a backup operation is allowed on the writable
+// (routing) primary pooler.
+func (pm *MultiPoolerManager) allowBackupOnPrimary(ctx context.Context, routingRole clustermetadatapb.RoutingRole, forcePrimary bool) error {
+	isPrimary := (routingRole == clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY)
 
 	if isPrimary && !forcePrimary {
 		slog.WarnContext(ctx, "Backup requested on primary database without ForcePrimary flag")
@@ -163,13 +166,12 @@ func (pm *MultiPoolerManager) allowBackupOnPrimary(ctx context.Context, forcePri
 func (pm *MultiPoolerManager) GetPrimaryAsPg2Args(
 	ctx context.Context,
 	overrides map[string]string,
+	routingRole clustermetadatapb.RoutingRole,
 	forcePrimary bool,
 ) ([]string, error) {
-	poolerType := pm.getPoolerType()
-
 	// Primary poolers (or forced-primary nodes, e.g. during first-backup creation)
 	// backup locally from pg1 — no pg2 needed.
-	if poolerType == clustermetadatapb.PoolerType_PRIMARY || forcePrimary {
+	if routingRole == clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY || forcePrimary {
 		return []string{}, nil
 	}
 
@@ -314,11 +316,29 @@ func (pm *MultiPoolerManager) restoreFromBackupLocked(ctx context.Context, backu
 		}
 	}()
 
-	// Check that this is a standby, not a primary
-	poolerType := pm.getPoolerType()
-	if poolerType == clustermetadatapb.PoolerType_PRIMARY {
-		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
-			"cannot restore to a primary pooler; restore is only supported for standby poolers")
+	// Restore wipes and rebuilds the data directory, so block it only when
+	// postgres is a running primary. Use pgctld to confidently determine whether
+	// postgres is running (it inspects pid files etc.): if it is not running
+	// (e.g. the first restore runs before postgres is up), restore is safe. Only
+	// when it is running do we probe recovery and reject a primary. This is a
+	// physical postgres-role check, not a consensus/routing one.
+	pgctldClient := pm.getPgCtldClient()
+	if pgctldClient == nil {
+		return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "pgctld_client is required")
+	}
+	statusResp, err := pgctldClient.Status(ctx, &pgctldpb.StatusRequest{})
+	if err != nil {
+		return mterrors.Wrap(err, "failed to check postgres status before restore")
+	}
+	if statusResp.GetStatus() == pgctldpb.ServerStatus_RUNNING {
+		inRecovery, err := pm.isInRecovery(ctx)
+		if err != nil {
+			return mterrors.Wrap(err, "failed to check recovery status before restore")
+		}
+		if !inRecovery {
+			return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
+				"cannot restore to a running primary; restore is only supported when postgres is stopped or in standby mode")
+		}
 	}
 
 	// Check that PGDATA doesn't exist (caller must remove it before restore)
