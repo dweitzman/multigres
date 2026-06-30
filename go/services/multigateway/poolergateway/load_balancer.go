@@ -67,11 +67,13 @@ type shardSummary struct {
 
 	mu sync.Mutex
 	// primaryID identifies the shard's current writable PRIMARY: the pooler
-	// advertising routing_state role==PRIMARY at the highest rule, merged across
-	// topology routing_state records (mergeTopologyLeader) and health-stream
-	// routing_state (onPoolerHealthUpdate). nil when no writable primary is known
-	// — writes buffer until one appears. primaryRule is its qualifying rule, used
-	// to rank competing PRIMARY claims during the brief overlapping-failover window.
+	// advertising routing_state role==PRIMARY at the highest rule on its live
+	// health stream (onPoolerHealthUpdate). It is derived from live health only —
+	// never from the etcd topology record — so we route writes only to a primary
+	// we have a confirmed connection to (the topology routing_state exists for
+	// multiadmin backup, not gateway routing). nil when no writable primary is
+	// known — writes buffer until one appears. primaryRule is its qualifying rule,
+	// used to rank competing PRIMARY claims during the brief overlapping-failover window.
 	primaryID   *clustermetadatapb.ID
 	primaryRule *clustermetadatapb.RuleNumber
 }
@@ -118,29 +120,26 @@ func (s *shardSummary) mergeRouting(poolerID *clustermetadatapb.ID, rs *clusterm
 // constructs the connection, and OnGone closes it. loadBalancer owns no
 // per-pooler registry of its own.
 //
-// Per-shard state is tracked via the shards map, populated from two sources
-// that both carry a rule number: a pooler's self_leadership in its topology
-// record (folded in when the hook calls mergeTopologyLeader) and
-// LeaderObservation messages on health streams (delivered via
-// onPoolerHealthUpdate). The most-authoritative observation (highest rule
-// number) wins, regardless of source. The pooler.Type field from etcd
-// topology is never consulted for leader identity — only self_leadership is.
-// A shardSummary survives connection lifecycle events except when the last
-// pooler in the shard leaves (see onPoolerGone): removing one pooler does
-// not erase consensus's choice of leader.
+// Per-shard state is tracked via the shards map, populated solely from
+// routing_state on poolers' live health streams (onPoolerHealthUpdate). The
+// highest-rule PRIMARY self-report wins; a primary going away (REPLICA, or the
+// pooler leaving) retracts it. The topology record is never consulted for leader
+// identity — neither pooler.Type nor topology routing_state — so the gateway only
+// routes writes to a primary it has a confirmed live connection to. A shardSummary
+// survives connection lifecycle events except when the last pooler in the shard
+// leaves (see onPoolerGone).
 //
 // Concurrency: a two-lock model is in play.
 //   - lb.mu protects ONLY the lb.shards map (lookups, inserts, deletes).
-//   - Each *shardSummary has its own mu protecting its leader field; reads
-//     go through leader(), mutations through mergeLeader().
+//   - Each *shardSummary has its own mu protecting its primary; reads go through
+//     primary(), mutations through mergeRouting().
 //
 // Lock ordering: take lb.mu first (if needed), then summary.mu. No method
 // holds both at once — summaryForPooler() releases lb.mu before returning the
 // *shardSummary, and callers then invoke summary methods which self-lock.
 // Cache reads happen after lb.mu has been released, so the cache OnLive/
-// OnGone hooks (which call mergeTopologyLeader / notifyIfLeaderServing →
-// lb.mu) can never deadlock against an LB method holding lb.mu and waiting
-// on the cache.
+// OnGone hooks (which call notifyIfLeaderServing → lb.mu) can never deadlock
+// against an LB method holding lb.mu and waiting on the cache.
 type loadBalancer struct {
 	// localCell is the cell where this gateway is running
 	localCell string
@@ -154,15 +153,12 @@ type loadBalancer struct {
 	// mu protects shards.
 	mu sync.Mutex
 
-	// shards maps shard key to the gateway's per-shard summary (currently the
-	// most-authoritative LeaderObservation seen for that shard). Populated
-	// from a pooler's self_leadership topology record (via
-	// mergeTopologyLeader) and from LeaderObservation messages on health
-	// streams (via onPoolerHealthUpdate). The leader_id field of the
-	// observation may name a pooler we are not currently connected to —
-	// GetConnection handles that case at read time by consulting the cache.
-	// Entries are auto-cleared by onPoolerGone once no poolers remain in the
-	// shard.
+	// shards maps shard key to the gateway's per-shard summary (the writable
+	// PRIMARY for that shard). Populated solely from routing_state on poolers'
+	// live health streams (via onPoolerHealthUpdate); since the summary only ever
+	// names a pooler we hold a live connection to, getConnection always finds its
+	// rider in the cache. Entries are auto-cleared by onPoolerGone once no poolers
+	// remain in the shard.
 	shards map[shardKey]*shardSummary
 
 	// cache is the pooler cache that owns the per-pooler *poolerConnection
@@ -238,32 +234,6 @@ func newLoadBalancer(opts loadBalancerOpts) *loadBalancer {
 		highReplicationLagToleranceNs: opts.HighTolerance.Nanoseconds(),
 		cache:                         opts.Cache,
 	}
-}
-
-// mergeTopologyLeader folds a pooler's routing_state (from its topology record)
-// into the shard's shardSummary. Topology carries routing_state only for the
-// writable PRIMARY, so this only ever installs/refreshes a primary — it is a
-// no-op for a replica (nil routing_state) and never retracts; retraction comes
-// from a former primary's health stream reporting REPLICA, or from onPoolerGone.
-//
-// Called by the pooler cache's OnLive and OnUpdate hooks. Acquires lb.mu and
-// the summary's mu internally (in that order, non-overlapping); must not be
-// called while holding either.
-func (lb *loadBalancer) mergeTopologyLeader(pooler *clustermetadatapb.MultiPooler) {
-	rs := pooler.GetRoutingState()
-	if rs == nil {
-		return
-	}
-	summary := lb.summaryForPooler(pooler)
-	if !summary.mergeRouting(pooler.Id, rs) {
-		return
-	}
-
-	lb.logger.Debug("routing primary from topology routing_state",
-		"pooler_id", topoclient.ComponentIDString(pooler.Id),
-		"tablegroup", pooler.GetShardKey().GetTableGroup(),
-		"shard", pooler.GetShardKey().GetShard(),
-		"rule", commonconsensus.FormatRuleNumber(rs.GetRule()))
 }
 
 // shardSummary returns the existing summary for the shard, creating one if

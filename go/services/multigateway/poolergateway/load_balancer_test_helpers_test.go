@@ -62,7 +62,6 @@ func newTestLBWithLeaderServing(t *testing.T, localCell string, onLeaderServing 
 				t.Errorf("newPoolerConnection failed: %v", err)
 				return nil
 			}
-			lb.mergeTopologyLeader(p)
 			lb.notifyIfLeaderServing(p, conn)
 			return conn
 		},
@@ -71,7 +70,6 @@ func newTestLBWithLeaderServing(t *testing.T, localCell string, onLeaderServing 
 				return
 			}
 			conn.UpdatePoolerInfo(curr)
-			lb.mergeTopologyLeader(curr)
 			lb.notifyIfLeaderServing(curr, conn)
 		},
 		OnGone: func(p *clustermetadatapb.MultiPooler, conn *poolerConnection, _ poolerwatch.GoneReason) {
