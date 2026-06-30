@@ -308,7 +308,7 @@ func TestUpdateTopologyAfterPromotion_PublishesRoutingState(t *testing.T) {
 	require.NoError(t, err)
 	defer pm.actionLock.Release(lockCtx)
 
-	require.NoError(t, pm.updateTopologyAfterPromotion(lockCtx, &promotionState{}, rule))
+	require.NoError(t, pm.updateTopologyAfterPromotion(lockCtx, rule))
 
 	assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, pm.record.Type())
 	assert.Equal(t, clustermetadatapb.PoolerServingStatus_SERVING, pm.record.ServingStatus())

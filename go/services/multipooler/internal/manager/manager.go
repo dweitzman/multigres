@@ -200,13 +200,6 @@ type MultiPoolerManager struct {
 	healthStreamer *healthStreamer
 }
 
-// promotionState tracks which parts of the promotion are complete
-type promotionState struct {
-	isPrimaryInPostgres bool
-	isPrimaryInTopology bool
-	currentLSN          string
-}
-
 // demotionState tracks which parts of the demotion are complete
 type demotionState struct {
 	isReplicaInTopology bool   // PoolerType == REPLICA
@@ -1291,49 +1284,15 @@ func (pm *MultiPoolerManager) drainWriteActivity(ctx context.Context, drainTimeo
 	return nil
 }
 
-// checkPromotionState checks the current state to determine what steps remain
-func (pm *MultiPoolerManager) checkPromotionState(ctx context.Context) (*promotionState, error) {
-	state := &promotionState{}
-
-	// Check PostgreSQL promotion state
-	isInRecovery, err := pm.isInRecovery(ctx)
-	if err != nil {
-		pm.logger.ErrorContext(ctx, "Failed to check recovery status", "error", err)
-		return nil, mterrors.Wrap(err, "failed to check recovery status")
-	}
-
-	state.isPrimaryInPostgres = !isInRecovery
-
-	if state.isPrimaryInPostgres {
-		// Get current primary LSN
-		state.currentLSN, err = pm.getPrimaryLSN(ctx)
-		if err != nil {
-			pm.logger.ErrorContext(ctx, "Failed to get current LSN", "error", err)
-			return nil, err
-		}
-	}
-
-	// Check topology state
-	pm.mu.Lock()
-	poolerType := pm.record.Type()
-	pm.mu.Unlock()
-
-	state.isPrimaryInTopology = (poolerType == clustermetadatapb.PoolerType_PRIMARY)
-
-	pm.logger.InfoContext(ctx, "Checked promotion state",
-		"is_primary_in_postgres", state.isPrimaryInPostgres,
-		"is_primary_in_topology", state.isPrimaryInTopology)
-
-	return state, nil
-}
-
 // promoteStandbyToPrimary calls pg_promote() and waits for promotion to complete.
 // coordinatorTerm is the term being promoted to; it scopes the async
 // post-promotion checkpoint's rewind-ready mark so a later re-promotion can't
 // inherit a stale mark.
-func (pm *MultiPoolerManager) promoteStandbyToPrimary(ctx context.Context, state *promotionState, coordinatorTerm int64) error {
-	// Return early if already promoted
-	if state.isPrimaryInPostgres {
+func (pm *MultiPoolerManager) promoteStandbyToPrimary(ctx context.Context, inRecovery bool, coordinatorTerm int64) error {
+	// Return early if postgres is already a primary (idempotent). inRecovery is
+	// the standby observation the Promote caller already verified before writing
+	// the rule, so we don't re-query postgres here.
+	if !inRecovery {
 		pm.logger.InfoContext(ctx, "PostgreSQL already promoted, skipping")
 		return nil
 	}
@@ -1530,12 +1489,8 @@ func (pm *MultiPoolerManager) waitForPromotionComplete(ctx context.Context) erro
 // DRAINING. Skipping the Mutate call left the pooler stuck at
 // PRIMARY/DRAINING, which prevented the multigateway buffer from draining
 // after the failover.
-func (pm *MultiPoolerManager) updateTopologyAfterPromotion(ctx context.Context, state *promotionState, rule *clustermetadatapb.ShardRule) error {
-	if state.isPrimaryInTopology {
-		pm.logger.InfoContext(ctx, "Topology type already PRIMARY; ensuring serving status is SERVING")
-	} else {
-		pm.logger.InfoContext(ctx, "Updating pooler type in topology to PRIMARY")
-	}
+func (pm *MultiPoolerManager) updateTopologyAfterPromotion(ctx context.Context, rule *clustermetadatapb.ShardRule) error {
+	pm.logger.InfoContext(ctx, "Updating topology after promotion: setting writable state and SERVING")
 
 	// rule is the rule this pooler was just promoted under; it names this pooler
 	// as leader, so the leadership observation built from it is authoritative.

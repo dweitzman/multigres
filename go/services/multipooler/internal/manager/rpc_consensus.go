@@ -384,10 +384,6 @@ func (pm *MultiPoolerManager) promoteLocked(ctx context.Context, req *consensusd
 	}
 
 	// Leader path: promote postgres, write rule, enable query service.
-	state, err := pm.checkPromotionState(ctx)
-	if err != nil {
-		return nil, err
-	}
 	// TODO: If this proposal already exists, we're being asked to propagate
 	// rather than make a new entry. We can make the rule store understand
 	// propagation for that case.
@@ -410,7 +406,7 @@ func (pm *MultiPoolerManager) promoteLocked(ctx context.Context, req *consensusd
 			if err := pm.consensusMgr.ClearResignedLeaderAtTerm(ctx); err != nil {
 				return mterrors.Wrap(err, "failed to clear resigned primary term")
 			}
-			return pm.promoteStandbyToPrimary(hookCtx, state, proposedRule.GetRuleNumber().GetCoordinatorTerm())
+			return pm.promoteStandbyToPrimary(hookCtx, inRecovery, proposedRule.GetRuleNumber().GetCoordinatorTerm())
 		})
 	if req.GetProposal().GetSkipOutgoingQuorum() {
 		ruleUpdate.WithSkipOutgoingQuorum()
@@ -421,7 +417,7 @@ func (pm *MultiPoolerManager) promoteLocked(ctx context.Context, req *consensusd
 	// IMPORTANT: updateTopologyAfterPromotion must only be called after UpdateRule
 	// succeeds. It advertises PRIMARY + SERVING to the gateway, opening write traffic.
 	// UpdateRule is the durability gate: it waits for sync-standby acknowledgment.
-	if err := pm.updateTopologyAfterPromotion(ctx, state, proposedRule); err != nil {
+	if err := pm.updateTopologyAfterPromotion(ctx, proposedRule); err != nil {
 		pm.logger.WarnContext(ctx, "Failed to update topology after promote", "error", err)
 	}
 

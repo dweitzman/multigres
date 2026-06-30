@@ -475,9 +475,6 @@ func expectLeaderPromoteMocks(m *mock.QueryService) {
 // list must also register the matching DROP TABLE patterns.
 func expectLeaderPromoteMocksWithUnlogged(m *mock.QueryService, unloggedTables []string) {
 	expectStandbyReadyMocks(m)
-	// checkPromotionState: postgres is still in recovery (standby before promotion)
-	m.AddQueryPatternOnce("SELECT pg_is_in_recovery",
-		mock.MakeQueryResult([]string{"pg_is_in_recovery"}, [][]any{{"t"}}))
 	// promoteStandbyToPrimary: call pg_promote()
 	m.AddQueryPatternOnce("SELECT pg_promote", mock.MakeQueryResult(nil, nil))
 	// waitForPromotionComplete: poll until pg_is_in_recovery returns false
@@ -761,9 +758,7 @@ func TestPromote(t *testing.T) {
 			req:         makeLeaderReq(),
 			setupMocks: func(m *mock.QueryService) {
 				expectStandbyReadyMocks(m)
-				// checkPromotionState: standby. UpdateRule then fails (no pg_promote called).
-				m.AddQueryPatternOnce("SELECT pg_is_in_recovery",
-					mock.MakeQueryResult([]string{"pg_is_in_recovery"}, [][]any{{"t"}}))
+				// UpdateRule then fails (no pg_promote called).
 			},
 			expectError:       true,
 			expectErrContains: "promote failed: could not write rule",
@@ -840,9 +835,6 @@ func TestPromote(t *testing.T) {
 			},
 			setupMocks: func(m *mock.QueryService) {
 				expectStandbyReadyMocks(m)
-				// checkPromotionState: standby.
-				m.AddQueryPatternOnce("SELECT pg_is_in_recovery",
-					mock.MakeQueryResult([]string{"pg_is_in_recovery"}, [][]any{{"t"}}))
 			},
 			expectError:       true,
 			expectErrContains: "durability policy has missing or invalid fields",
