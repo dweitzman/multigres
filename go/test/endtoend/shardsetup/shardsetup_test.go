@@ -26,7 +26,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	"github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/test/utils"
 )
 
@@ -95,7 +95,7 @@ func TestShardSetup_ThreeNodeCluster(t *testing.T) {
 	assert.Equal(t, "f", inRecovery, "primary should NOT be in recovery")
 
 	// Verify primary has correct pooler type
-	err = ValidatePoolerType(ctx, primaryClient.Manager, clustermetadatapb.PoolerType_PRIMARY, setup.PrimaryName)
+	err = ValidateConsensusRole(ctx, primaryClient.Manager, consensus.ConsensusRoleLeader, setup.PrimaryName)
 	require.NoError(t, err)
 
 	// Verify all standbys are in recovery and replicating
@@ -108,7 +108,7 @@ func TestShardSetup_ThreeNodeCluster(t *testing.T) {
 		assert.Equal(t, "t", inRecovery, "%s should be in recovery", standby.Name)
 
 		// Verify pooler type is REPLICA
-		err = ValidatePoolerType(ctx, standbyClient.Manager, clustermetadatapb.PoolerType_REPLICA, standby.Name)
+		err = ValidateConsensusRole(ctx, standbyClient.Manager, consensus.ConsensusRoleFollower, standby.Name)
 		require.NoError(t, err)
 
 		// Verify replication is streaming (SetupTest configures replication)

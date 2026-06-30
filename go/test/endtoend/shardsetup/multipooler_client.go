@@ -28,6 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 
+	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/sqltypes"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
@@ -126,11 +127,13 @@ func IsLeader(addr string) (bool, error) {
 		return false, fmt.Errorf("Status RPC failed: %w", err)
 	}
 
-	if resp == nil || resp.Status == nil {
+	if resp == nil {
 		return false, errors.New("received nil status response")
 	}
 
-	return resp.Status.PoolerType == clustermetadatapb.PoolerType_PRIMARY, nil
+	// "Leader" is the consensus self-report: the highest known rule names this
+	// pooler. Read it from the in-band ConsensusStatus rather than a PoolerType label.
+	return commonconsensus.NamesSelfAsLeader(resp.GetConsensusStatus()), nil
 }
 
 // WaitForPoolerTypeAssigned waits for the pooler type to be assigned (either PRIMARY or REPLICA, not UNKNOWN).

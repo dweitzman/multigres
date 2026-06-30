@@ -23,6 +23,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 
@@ -181,7 +182,7 @@ func WaitForHigherTermPrimary(t *testing.T, setup *ShardSetup, oldTerm int64, mi
 					continue
 				}
 				if !(r.Status.IsInitialized &&
-					r.Status.PoolerType == clustermetadatapb.PoolerType_PRIMARY &&
+					commonconsensus.NamesSelfAsLeader(r.ConsensusStatus) &&
 					r.Status.PostgresReady) {
 					continue
 				}
@@ -221,7 +222,7 @@ func WaitForNewPrimary(t *testing.T, setup *ShardSetup, oldPrimaryName string, t
 					continue
 				}
 				if r.Status.IsInitialized &&
-					r.Status.PoolerType == clustermetadatapb.PoolerType_PRIMARY &&
+					commonconsensus.NamesSelfAsLeader(r.ConsensusStatus) &&
 					r.Status.PostgresReady {
 					return r.Name, true, ""
 				}
@@ -241,8 +242,8 @@ func FormatPoolerDiagnostics(s *multipoolermanagerdatapb.Status, cs *clustermeta
 		return "[status=nil]"
 	}
 	termNumber := cs.GetTermRevocation().GetRevokedBelowTerm()
-	result := fmt.Sprintf("[postgres_ready=%v, initialized=%v, pooler_type=%v, term=%d",
-		s.PostgresReady, s.IsInitialized, s.PoolerType, termNumber)
+	result := fmt.Sprintf("[postgres_ready=%v, initialized=%v, is_leader=%v, term=%d",
+		s.PostgresReady, s.IsInitialized, commonconsensus.NamesSelfAsLeader(cs), termNumber)
 	if s.PostgresAction != multipoolermanagerdatapb.PostgresAction_POSTGRES_ACTION_UNSPECIFIED {
 		dur := time.Duration(0)
 		if s.PostgresActionDuration != nil {

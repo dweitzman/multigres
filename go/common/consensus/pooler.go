@@ -16,21 +16,66 @@ package consensus
 
 import clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 
+// ConsensusRole is a pooler's role relative to the highest rule it knows: the
+// leader, a follower (a cohort member that is not the leader), or an observer
+// (not a member of that rule's cohort — including the cold-start case where no
+// rule is known yet).
+type ConsensusRole int
+
+const (
+	ConsensusRoleObserver ConsensusRole = iota
+	ConsensusRoleFollower
+	ConsensusRoleLeader
+)
+
+func (r ConsensusRole) String() string {
+	switch r {
+	case ConsensusRoleLeader:
+		return "leader"
+	case ConsensusRoleFollower:
+		return "follower"
+	case ConsensusRoleObserver:
+		return "observer"
+	default:
+		return "unknown"
+	}
+}
+
+// SelfConsensusRole derives a pooler's role from its own consensus status, using
+// the highest rule it knows (across its current position and the replication
+// primary it follows). It returns:
+//   - ConsensusRoleLeader when that rule names this pooler as leader,
+//   - ConsensusRoleFollower when this pooler is in that rule's cohort but not the leader,
+//   - ConsensusRoleObserver otherwise (not a cohort member, or no rule known yet).
+func SelfConsensusRole(cs *clustermetadatapb.ConsensusStatus) ConsensusRole {
+	rule := HighestKnownRule([]*clustermetadatapb.ConsensusStatus{cs})
+	self := cs.GetId()
+	if RuleNamesLeader(rule, self) {
+		return ConsensusRoleLeader
+	}
+	for _, member := range rule.GetCohortMembers() {
+		if idsEqual(member, self) {
+			return ConsensusRoleFollower
+		}
+	}
+	return ConsensusRoleObserver
+}
+
 // NamesSelfAsLeader reports whether cs names its own pooler as the leader of the
 // highest rule it knows — across both its current position and the replication
-// primary it follows (HighestKnownRule over this single status).
+// primary it follows (HighestKnownRule over this single status). It is the
+// leader-only projection of SelfConsensusRole, kept as a convenience for the
+// many callers that only care whether this pooler is the leader; use
+// SelfConsensusRole when the follower/observer distinction matters.
 //
 // Returns false when cs, its ID, or any known rule is absent.
+//
+// TODO: deprecate in favor of SelfConsensusRole once all callers have migrated
+// (notably the multiorch analysis package threads a NamesSelfAsLeader bool).
+// Not marked Deprecated yet because staticcheck SA1019 fails the build at every
+// call site, so the tag must land together with the call-site migration.
 func NamesSelfAsLeader(cs *clustermetadatapb.ConsensusStatus) bool {
-	self := cs.GetId()
-	if self == nil {
-		return false
-	}
-	leader := HighestKnownRule([]*clustermetadatapb.ConsensusStatus{cs}).GetLeaderId()
-	if leader == nil {
-		return false
-	}
-	return idsEqual(self, leader)
+	return SelfConsensusRole(cs) == ConsensusRoleLeader
 }
 
 // IsNonRevokedCommittedLeader reports whether cs names its own pooler as the

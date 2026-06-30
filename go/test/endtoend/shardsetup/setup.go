@@ -1221,8 +1221,8 @@ func checkBootstrapStatus(ctx context.Context, t *testing.T, setup *ShardSetup) 
 		isFullyInitialized := false
 		diag := FormatPoolerDiagnostics(status, statusResp.GetConsensusStatus())
 
-		switch status.PoolerType {
-		case clustermetadatapb.PoolerType_PRIMARY:
+		switch consensus.SelfConsensusRole(statusResp.GetConsensusStatus()) {
+		case consensus.ConsensusRoleLeader:
 			// Verify the sync standby list contains every multipooler in the cohort.
 			syncNames := make(map[string]struct{})
 			if status.PrimaryStatus != nil && status.PrimaryStatus.SyncReplicationConfig != nil {
@@ -1260,7 +1260,7 @@ func checkBootstrapStatus(ctx context.Context, t *testing.T, setup *ShardSetup) 
 					name, actionSuffix, diag))
 			}
 
-		case clustermetadatapb.PoolerType_REPLICA:
+		case consensus.ConsensusRoleFollower:
 			// Check that primary_conn_info is configured
 			hasHost := status.ReplicationStatus != nil &&
 				status.ReplicationStatus.PrimaryConnInfo != nil &&
@@ -1499,8 +1499,8 @@ func (s *ShardSetup) ValidateCleanState() error {
 			if inRecovery != "f" {
 				return fmt.Errorf("%s pg_is_in_recovery=%s (expected f)", name, inRecovery)
 			}
-			// Validate pooler type is PRIMARY
-			if err := ValidatePoolerType(ctx, client.Manager, clustermetadatapb.PoolerType_PRIMARY, name); err != nil {
+			// Validate consensus role is leader
+			if err := ValidateConsensusRole(ctx, client.Manager, consensus.ConsensusRoleLeader, name); err != nil {
 				return err
 			}
 		} else {
@@ -1517,8 +1517,8 @@ func (s *ShardSetup) ValidateCleanState() error {
 				return fmt.Errorf("%s pg_is_wal_replay_paused=%s (expected f)", name, isPaused)
 			}
 
-			// Validate pooler type is REPLICA
-			if err := ValidatePoolerType(ctx, client.Manager, clustermetadatapb.PoolerType_REPLICA, name); err != nil {
+			// Validate consensus role is follower
+			if err := ValidateConsensusRole(ctx, client.Manager, consensus.ConsensusRoleFollower, name); err != nil {
 				return err
 			}
 		}

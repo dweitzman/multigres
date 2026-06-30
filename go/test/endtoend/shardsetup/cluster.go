@@ -27,6 +27,7 @@ import (
 	_ "github.com/lib/pq"
 	"github.com/stretchr/testify/require"
 
+	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/constants"
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -217,7 +218,7 @@ func (s *ShardSetup) TryFindPrimary(t *testing.T) (*MultipoolerInstance, bool) {
 			continue
 		}
 
-		if resp.Status.IsInitialized && resp.Status.PoolerType == clustermetadatapb.PoolerType_PRIMARY {
+		if resp.Status.IsInitialized && commonconsensus.NamesSelfAsLeader(resp.GetConsensusStatus()) {
 			s.PrimaryName = name
 			t.Logf("TryFindPrimary: current primary is %s", name)
 			return inst, true

@@ -23,7 +23,7 @@ import (
 	_ "github.com/lib/pq"
 	"github.com/stretchr/testify/require"
 
-	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/test/endtoend/shardsetup"
 )
 
@@ -78,9 +78,9 @@ func waitForShardReady(t *testing.T, setup *shardsetup.ShardSetup, expectedStand
 				if r.Err != nil || r.Status == nil {
 					continue
 				}
-				if r.Status.IsInitialized && r.Status.PoolerType == clustermetadatapb.PoolerType_PRIMARY {
+				if r.Status.IsInitialized && commonconsensus.NamesSelfAsLeader(r.ConsensusStatus) {
 					primaryStatus = &statuses[i]
-				} else if r.Status.IsInitialized && r.Status.PoolerType == clustermetadatapb.PoolerType_REPLICA && r.Status.PostgresReady {
+				} else if r.Status.IsInitialized && !commonconsensus.NamesSelfAsLeader(r.ConsensusStatus) && r.Status.PostgresReady {
 					replicaStatuses[r.Name] = &statuses[i]
 				}
 			}

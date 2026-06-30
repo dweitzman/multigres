@@ -22,25 +22,23 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	multipoolermanagerpb "github.com/multigres/multigres/go/pb/multipoolermanager"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
 
-// ValidatePoolerType checks that the pooler type in topology matches the expected value.
-// Follows the pattern from multipooler/setup_test.go:validatePoolerType.
-func ValidatePoolerType(ctx context.Context, client multipoolermanagerpb.MultiPoolerManagerClient, expectedType clustermetadatapb.PoolerType, nodeName string) error {
+// ValidateConsensusRole checks that the pooler's self-reported consensus role
+// (leader / follower / observer, derived from its ConsensusStatus) matches the
+// expected role.
+func ValidateConsensusRole(ctx context.Context, client multipoolermanagerpb.MultiPoolerManagerClient, expected commonconsensus.ConsensusRole, nodeName string) error {
 	status, err := client.Status(ctx, &multipoolermanagerdatapb.StatusRequest{})
 	if err != nil {
 		return fmt.Errorf("%s failed to get status: %w", nodeName, err)
 	}
 
-	if status.Status == nil {
-		return fmt.Errorf("%s status response has nil Status field", nodeName)
-	}
-
-	if status.Status.PoolerType != expectedType {
-		return fmt.Errorf("%s pooler type=%s (expected %s)", nodeName, status.Status.PoolerType.String(), expectedType.String())
+	role := commonconsensus.SelfConsensusRole(status.GetConsensusStatus())
+	if role != expected {
+		return fmt.Errorf("%s consensus role=%s (expected %s)", nodeName, role, expected)
 	}
 
 	return nil
