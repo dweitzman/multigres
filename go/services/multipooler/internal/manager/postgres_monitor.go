@@ -105,11 +105,11 @@ type postgresState struct {
 	// with live consensus to derive writability and the routing role.
 	isInRecovery             bool
 	bootstrapSentinelPresent bool
-	// rewindSourceReady is true when this pooler is a primary whose last completed
+	// primaryCheckpointedOnCurrentTimeline is true when this pooler is a primary whose last completed
 	// checkpoint is on its current running timeline, so it is safe to pg_rewind
 	// from. False on standbys and on a freshly promoted primary that has not yet
 	// checkpointed onto its new timeline.
-	rewindSourceReady bool
+	primaryCheckpointedOnCurrentTimeline bool
 }
 
 // postgresStateEqual reports whether two postgresState values are identical.
@@ -120,7 +120,7 @@ func postgresStateEqual(a, b postgresState) bool {
 		a.backupsAvailable == b.backupsAvailable &&
 		a.isInRecovery == b.isInRecovery &&
 		a.bootstrapSentinelPresent == b.bootstrapSentinelPresent &&
-		a.rewindSourceReady == b.rewindSourceReady
+		a.primaryCheckpointedOnCurrentTimeline == b.primaryCheckpointedOnCurrentTimeline
 }
 
 // remedialAction represents actions the postgres monitor can take
@@ -157,7 +157,7 @@ const (
 	// coordinator re-elects.
 	remedialActionResignLeadership
 	// remedialActionMarkRewindReady means this pooler is the non-resigned leader,
-	// postgres has checkpointed onto its current timeline (rewindSourceReady), but
+	// postgres has checkpointed onto its current timeline (primaryCheckpointedOnCurrentTimeline), but
 	// the published ReplicationPrimary has not yet advertised rewind_ready. Mark it
 	// and broadcast so a diverged follower's recovery (orch's gated pg_rewind) can
 	// proceed. Purely a state-publication step — no postgres mutation.
@@ -280,19 +280,19 @@ func (pm *MultiPoolerManager) discoverPostgresState(ctx context.Context) (postgr
 		}
 		state.isInRecovery = !primary
 		// A primary is a rewind source only once it has checkpointed onto its
-		// current timeline. Cheap to skip on standbys (rewindSourceReady would
+		// current timeline. Cheap to skip on standbys (primaryCheckpointedOnCurrentTimeline would
 		// return false anyway).
 		if !state.isInRecovery {
-			ready, rrErr := pm.rewindSourceReady(ctx)
+			ready, rrErr := pm.primaryCheckpointedOnCurrentTimeline(ctx)
 			if rrErr != nil {
 				// Unlike the recovery probe above, this is safe to leave best-effort: a
-				// failed probe leaves rewindSourceReady=false, defaulting in the fail-safe
+				// failed probe leaves primaryCheckpointedOnCurrentTimeline=false, defaulting in the fail-safe
 				// direction. The worst case is that other poolers don't yet pick us as a
 				// pg_rewind source, which only delays their recovery — it never triggers
 				// an action. So we warn and continue rather than failing the whole tick.
 				pm.logger.WarnContext(ctx, "Failed to determine rewind-source readiness", "error", rrErr)
 			} else {
-				state.rewindSourceReady = ready
+				state.primaryCheckpointedOnCurrentTimeline = ready
 			}
 		}
 	}
@@ -539,20 +539,20 @@ func (pm *MultiPoolerManager) determineRemedialAction(ctx context.Context, curre
 
 // shouldMarkRewindReady reports whether this pooler should advertise rewind
 // readiness this tick: it has a completed checkpoint on its current timeline
-// (rewindSourceReady), has not resigned leadership, and the published
+// (primaryCheckpointedOnCurrentTimeline), has not resigned leadership, and the published
 // ReplicationPrimary has not yet advertised it. The last check makes the resulting
 // action a false->true edge, so its broadcast fires once per promotion rather than
 // every tick.
 //
 // Rewind-readiness is a postgres-timeline property, not a consensus one. It does
-// NOT gate on writability/leadership: rewindSourceReady already implies out of
+// NOT gate on writability/leadership: primaryCheckpointedOnCurrentTimeline already implies out of
 // recovery (it is only probed for a primary) plus a checkpoint on the current
 // timeline, which is exactly what makes pg_rewind against us safe — independent of
 // whether our rule has committed. Consensus correctness (who should rewind against
 // whom) is handled by which leader the coordinator tells followers to follow, so a
 // non-leader's self-advertised flag is never used as a follower's rewind target.
 func (pm *MultiPoolerManager) shouldMarkRewindReady(state postgresState) bool {
-	if !state.rewindSourceReady {
+	if !state.primaryCheckpointedOnCurrentTimeline {
 		return false
 	}
 	// A leader that has asked to resign should not keep inviting rewinds to itself.

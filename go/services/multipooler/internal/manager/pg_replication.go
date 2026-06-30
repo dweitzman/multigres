@@ -55,7 +55,17 @@ import (
 // Replication Status Query Methods
 // ----------------------------------------------------------------------------
 
-// isPrimary checks if the connected database is a primary (not in recovery)
+// isPrimary checks whether the connected postgres is a primary — i.e.
+// pg_is_in_recovery() reports false. "primary" here means exactly that
+// postgres recovery-mode fact (the blessed primary/standby vocabulary); it is
+// NOT the consensus leader, the writable leader, or the routing PoolerType,
+// which are distinct concepts that the word "primary" is easily confused with.
+//
+// TODO: the name still risks that confusion at call sites. "in recovery" is
+// unambiguous, so prefer isInRecovery() in new code and migrate callers that
+// only need the recovery bit; keep a "primary" framing only where reporting the
+// literal POSTGRES_STATUS_PRIMARY. (Deferred: flipping every call site's polarity
+// at once is risky in this failover-critical path.)
 func (pm *MultiPoolerManager) isPrimary(ctx context.Context) (bool, error) {
 	inRecovery, err := pm.isInRecovery(ctx)
 	return !inRecovery, err
@@ -158,7 +168,7 @@ func (pm *MultiPoolerManager) getPrimaryLSN(ctx context.Context) (string, error)
 	return lsn, nil
 }
 
-// rewindSourceReady reports whether this pooler is safe to pg_rewind from: it is
+// primaryCheckpointedOnCurrentTimeline reports whether this pooler is safe to pg_rewind from: it is
 // a primary (not in recovery) AND its last completed checkpoint is on its current
 // running timeline. The check matters because pg_rewind copies the source's
 // checkpoint-timeline into the target's minRecoveryPoint; a freshly promoted
@@ -179,7 +189,7 @@ func (pm *MultiPoolerManager) getPrimaryLSN(ctx context.Context) (string, error)
 // enhancement could let a standby on a matching timeline serve as a rewind source
 // (using pg_last_wal_replay_lsn() instead of pg_current_wal_lsn()), but the common
 // case rewinds a diverged old primary against a writable leader.
-func (pm *MultiPoolerManager) rewindSourceReady(ctx context.Context) (bool, error) {
+func (pm *MultiPoolerManager) primaryCheckpointedOnCurrentTimeline(ctx context.Context) (bool, error) {
 	queryCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer cancel()
 	const sql = `SELECT CASE WHEN pg_is_in_recovery() THEN false ELSE
