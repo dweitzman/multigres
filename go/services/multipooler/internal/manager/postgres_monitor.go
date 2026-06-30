@@ -29,22 +29,6 @@ import (
 	pgctldpb "github.com/multigres/multigres/go/pb/pgctldservice"
 )
 
-// roleForRule maps a consensus rule to the pooler role it implies: UNKNOWN for a
-// nil rule (none known yet), PRIMARY if the rule names this pooler as leader,
-// REPLICA otherwise. It is a pure rule→role mapping and says nothing about which
-// rule it was given — callers decide whether to pass the highest-*committed* rule
-// (write-safety) or the highest-*known* rule (routing label), the two leadership
-// notions this package keeps distinct.
-func roleForRule(rule *clustermetadatapb.ShardRule, selfID *clustermetadatapb.ID) clustermetadatapb.PoolerType {
-	if rule == nil {
-		return clustermetadatapb.PoolerType_UNKNOWN
-	}
-	if commonconsensus.RuleNamesLeader(rule, selfID) {
-		return clustermetadatapb.PoolerType_PRIMARY
-	}
-	return clustermetadatapb.PoolerType_REPLICA
-}
-
 // highestKnownRule returns the highest-numbered rule this pooler knows of, combining
 // the rule it has applied into its own position with the rule it was most
 // recently told to follow via SetPrimary/Promote (consensusPromises's recorded
@@ -660,16 +644,14 @@ func (pm *MultiPoolerManager) takeRemedialAction(ctx context.Context, action rem
 
 	case remedialActionReconcileState:
 		pm.setMonitorReason(ctx, reasonPostgresRunning, "MonitorPostgres: PostgreSQL is running")
-		// The StateManager's effective state has drifted (role, write-safety,
-		// and/or a transient drain). Reconcile in one Mutate: the leadership obs
-		// sets the derived role, and the derived writable syncs the write-safety
-		// state that gates the heartbeat writer / LISTEN. Serving is re-enabled
-		// only out of DRAINING (the transient drain this loop owns); a DISABLED
-		// pooler (stopping/paused/operator-drained) is left not-serving, since this
-		// case also fires for plain role/writable drift.
-		intended := roleForRule(pm.highestKnownRule(), pm.serviceID)
-		pm.logger.InfoContext(ctx, "MonitorPostgres: reconciling state from rule",
-			"intended_role", intended.String(), "in_recovery", state.isInRecovery)
+		// The observed recovery state has drifted from what the StateManager cached
+		// (or serving was left DRAINING). Reconcile in one Mutate: feed the observed
+		// recovery fact and the StateManager re-derives the routing role and
+		// write-safety (which gate the heartbeat writer / LISTEN). Serving is
+		// re-enabled only out of DRAINING (the transient drain this loop owns); a
+		// DISABLED pooler (stopping/paused/operator-drained) is left not-serving.
+		pm.logger.InfoContext(ctx, "MonitorPostgres: reconciling observed recovery into serving state",
+			"in_recovery", state.isInRecovery)
 		if err := pm.stateManager.Mutate(ctx, func(s *servingStateMutation) {
 			// Feed the observed recovery fact; the StateManager derives the routing
 			// role and write-safety from it plus the live leadership snapshot.
