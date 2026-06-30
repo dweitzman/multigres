@@ -27,7 +27,6 @@ import (
 	"github.com/multigres/multigres/go/test/endtoend/shardsetup"
 	"github.com/multigres/multigres/go/test/utils"
 
-	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
 
@@ -274,8 +273,8 @@ func waitForDivergenceRepaired(t *testing.T, setup *shardsetup.ShardSetup, oldPr
 	// Verify old primary is now a replica with replication configured
 	shardsetup.RequirePoolerCondition(t, []*shardsetup.MultipoolerInstance{oldPrimary},
 		func(r shardsetup.PoolerStatusResult) (bool, string) {
-			if r.Status.PoolerType != clustermetadatapb.PoolerType_REPLICA {
-				return false, fmt.Sprintf("type=%v, waiting for REPLICA", r.Status.PoolerType)
+			if role := commonconsensus.SelfConsensusRole(r.ConsensusStatus); role != commonconsensus.ConsensusRoleFollower {
+				return false, fmt.Sprintf("role=%v, waiting for follower", role)
 			}
 			if r.Status.ReplicationStatus == nil || r.Status.ReplicationStatus.PrimaryConnInfo == nil {
 				return false, "replication not yet configured"

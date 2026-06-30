@@ -47,17 +47,24 @@ Before defining new constants, helpers, or type wrappers for PG/SQL concepts, ch
 
 When in doubt, `grep -r '<concept>' go/common/` before adding a new definition. Reuse keeps wire-protocol constants and PG semantics consistent across the codebase.
 
-## Terminology: Leader vs. Primary
+## Terminology: roles and the state they derive from
 
-"Primary" is overloaded in distributed databases. Use these terms consistently:
+"Primary" is overloaded in distributed databases. Multigres de-conflates it into
+three independent notions, each derived from its own source of truth:
 
-| Term                             | Meaning                                                                                                                       |
-| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| **leader / follower**            | Consensus-elected coordinator and the nodes that follow it. Use in orchestration, failover, and HA code.                      |
-| **primary / standby / replica**  | PostgreSQL recovery-mode state (`pg_is_in_recovery()`). Use only when directly observing or configuring postgres replication. |
-| **PoolerType PRIMARY / REPLICA** | Topology routing labels (writes vs. reads). Intentionally kept as-is.                                                         |
+| Notion                                            | Source of truth                                                    | How to derive                                                                                                                                                                 | Use it for                                                               |
+| ------------------------------------------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| **consensus role** — leader / follower / observer | `ConsensusStatus` (the pooler's view of the highest rule it knows) | `commonconsensus.SelfConsensusRole(cs)`: **leader** = that rule names self; **follower** = self is in that rule's cohort; **observer** = not a cohort member (or no rule yet) | orchestration, failover, HA, and tests asserting who the cluster elected |
+| **postgres role** — primary / standby             | PostgreSQL recovery mode                                           | `pg_is_in_recovery()` (e.g. `isInRecovery`)                                                                                                                                   | directly observing or configuring postgres replication                   |
+| **routing role** — PRIMARY / REPLICA              | `RoutingState` (the writability self-report)                       | `StateManager.RoutingRole()`; persisted in `MultiPooler.routing_state`, streamed to the gateway                                                                               | the gateway's "is there a writable leader, and which one" decision       |
 
-Quick check: if the code is about _the shard, consensus, or high-availability leader_, use leader/follower/observer. If it's about _postgres replication mode_, use primary/standby/replica.
+Key points:
+
+- **`ConsensusStatus` + `ConsensusRole`** answer _"what does consensus say this node is?"_ Prefer `SelfConsensusRole` so follower and observer stay distinct (treating a non-cohort observer as a follower is a bug). `NamesSelfAsLeader` is a leader-only shim slated for deprecation — don't reach for it in new code.
+- **`RoutingState` + `RoutingRole`** answer _"is this the writable leader to route to?"_ — the conjunction of postgres-out-of-recovery + committed + non-revoked + highest-known leader. Gateway and backup code use this, not the consensus role.
+- The legacy stored `PoolerType` label is **deprecated** and being removed; derive the consensus role or routing role above instead, and don't add new references to it.
+
+Quick check: consensus/HA/election → consensus role (`SelfConsensusRole`); postgres replication mechanics → primary/standby (`isInRecovery`); gateway routing/writability → routing role (`RoutingRole`).
 
 ## Generated Files
 

@@ -291,7 +291,7 @@ func TestDeadPrimaryRecovery(t *testing.T) {
 			if !r.Status.PostgresReady {
 				return false, "postgres not running"
 			}
-			if r.Status.PoolerType == clustermetadatapb.PoolerType_REPLICA {
+			if commonconsensus.SelfConsensusRole(r.ConsensusStatus) == commonconsensus.ConsensusRoleFollower {
 				if r.Status.ReplicationStatus == nil || r.Status.ReplicationStatus.PrimaryConnInfo == nil {
 					return false, "replication not configured"
 				}
@@ -339,7 +339,7 @@ func TestDeadPrimaryRecovery(t *testing.T) {
 		resp, err := client.Manager.Status(utils.WithShortDeadline(t), &multipoolermanagerdatapb.StatusRequest{})
 		require.NoError(t, err)
 		require.True(t, resp.Status.IsInitialized, "Final primary should be initialized")
-		require.Equal(t, clustermetadatapb.PoolerType_PRIMARY, resp.Status.PoolerType, "Final leader should have PRIMARY pooler type")
+		require.Equal(t, commonconsensus.ConsensusRoleLeader, commonconsensus.SelfConsensusRole(resp.GetConsensusStatus()), "final leader should have consensus role leader")
 
 		// Verify we can connect and query
 		socketDir := filepath.Join(finalPrimaryInst.Pgctld.PoolerDir, "pg_sockets")
@@ -650,8 +650,8 @@ func waitForNodeToRejoinAsStandby(t *testing.T, setup *shardsetup.ShardSetup, mu
 			s := r.Status
 			if r.Name == multipoolerName {
 				// Check replica health and replication state.
-				if s.PoolerType != clustermetadatapb.PoolerType_REPLICA {
-					return false, fmt.Sprintf("not yet REPLICA (is %v)", s.PoolerType)
+				if role := commonconsensus.SelfConsensusRole(r.ConsensusStatus); role != commonconsensus.ConsensusRoleFollower {
+					return false, fmt.Sprintf("not yet follower (is %v)", role)
 				}
 				if !s.PostgresReady {
 					return false, "postgres not running"
@@ -777,11 +777,11 @@ func verifyStandbyIsStillReplica(t *testing.T, name string, inst *shardsetup.Mul
 	resp, err := client.Manager.Status(utils.WithTimeout(t, 5*time.Second), &multipoolermanagerdatapb.StatusRequest{})
 	require.NoError(t, err)
 	require.True(t, resp.Status.IsInitialized, "Multipooler %s should be initialized", name)
-	require.Equal(t, clustermetadatapb.PoolerType_REPLICA, resp.Status.PoolerType,
-		"Multipooler %s should still be REPLICA (no failover should have occurred)", name)
+	require.Equal(t, commonconsensus.ConsensusRoleFollower, commonconsensus.SelfConsensusRole(resp.GetConsensusStatus()),
+		"Multipooler %s should still be a follower (no failover should have occurred)", name)
 	require.NotNil(t, resp.Status.ReplicationStatus, "Standby %s should have replication status", name)
 	require.NotNil(t, resp.Status.ReplicationStatus.PrimaryConnInfo, "Standby %s should have PrimaryConnInfo", name)
-	t.Logf("Standby %s is still replicating (type=%s), no failover triggered", name, resp.Status.PoolerType)
+	t.Logf("Standby %s is still replicating (role=%s), no failover triggered", name, commonconsensus.SelfConsensusRole(resp.GetConsensusStatus()))
 }
 
 // killMultipooler terminates the multipooler process (simulates pooler crash)

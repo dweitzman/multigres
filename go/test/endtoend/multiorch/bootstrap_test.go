@@ -37,7 +37,6 @@ import (
 	"github.com/multigres/multigres/go/test/utils"
 	"github.com/multigres/multigres/go/tools/testtiming"
 
-	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
 
@@ -70,9 +69,9 @@ func TestBootstrapInitialization(t *testing.T) {
 			status, err := client.Manager.Status(ctx, &multipoolermanagerdatapb.StatusRequest{})
 			require.NoError(t, err, "should get status from %s", name)
 
-			t.Logf("Node %s Status: IsInitialized=%v, HasDataDirectory=%v, PostgresReady=%v, PostgresStatus=%s, PoolerType=%s, CohortMembers=%d",
+			t.Logf("Node %s Status: IsInitialized=%v, HasDataDirectory=%v, PostgresReady=%v, PostgresStatus=%s, ConsensusRole=%s, CohortMembers=%d",
 				name, status.Status.IsInitialized, status.Status.HasDataDirectory,
-				status.Status.PostgresReady, status.Status.PostgresStatus, status.Status.PoolerType,
+				status.Status.PostgresReady, status.Status.PostgresStatus, commonconsensus.SelfConsensusRole(status.GetConsensusStatus()),
 				len(status.Status.CohortMembers))
 
 			// No node should have a cohort configured before multiorch starts
@@ -179,15 +178,15 @@ func TestBootstrapInitialization(t *testing.T) {
 			ctx := utils.WithTimeout(t, 5*time.Second)
 			status, err := client.Manager.Status(ctx, &multipoolermanagerdatapb.StatusRequest{})
 			require.NoError(t, err)
-			if status.Status.IsInitialized && status.Status.PoolerType == clustermetadatapb.PoolerType_REPLICA {
+			if status.Status.IsInitialized && commonconsensus.SelfConsensusRole(status.GetConsensusStatus()) == commonconsensus.ConsensusRoleFollower {
 				standbyCount++
 
 				// Verify replica has primary_term = 0 (never been primary)
 				assert.Equal(t, int64(0), commonconsensus.LeaderTerm(status.ConsensusStatus),
 					"Standby %s should have primary_term=0 (never been primary)", name)
 
-				t.Logf("Standby node: %s (pooler_type=%s, primary_term=%d)",
-					name, status.Status.PoolerType, commonconsensus.LeaderTerm(status.ConsensusStatus))
+				t.Logf("Standby node: %s (consensus_role=%s, primary_term=%d)",
+					name, commonconsensus.SelfConsensusRole(status.GetConsensusStatus()), commonconsensus.LeaderTerm(status.ConsensusStatus))
 			}
 			client.Close()
 		}
@@ -323,7 +322,7 @@ func TestBootstrapInitialization(t *testing.T) {
 			status, err := client.Manager.Status(ctx, &multipoolermanagerdatapb.StatusRequest{})
 			client.Close()
 
-			if err == nil && status.Status.IsInitialized && status.Status.PoolerType == clustermetadatapb.PoolerType_REPLICA {
+			if err == nil && status.Status.IsInitialized && commonconsensus.SelfConsensusRole(status.GetConsensusStatus()) == commonconsensus.ConsensusRoleFollower {
 				standbyName = name
 				standbyInst = inst
 				break
@@ -447,5 +446,5 @@ func verifyMultigresTables(t *testing.T, name string, grpcPort int) {
 		t.Errorf("Heartbeat table should exist on %s", name)
 	}
 
-	t.Logf("Verified multigres tables exist on %s (pooler_type=%s)", name, status.Status.PoolerType)
+	t.Logf("Verified multigres tables exist on %s (consensus_role=%s)", name, commonconsensus.SelfConsensusRole(status.GetConsensusStatus()))
 }

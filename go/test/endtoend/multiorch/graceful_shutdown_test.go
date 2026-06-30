@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	"github.com/multigres/multigres/go/test/endtoend/shardsetup"
@@ -241,8 +242,8 @@ func TestStandbyGracefulShutdownDoesNotTriggerFailover(t *testing.T) {
 		resp, err := client.Manager.Status(utils.WithTimeout(t, 5*time.Second), &multipoolermanagerdatapb.StatusRequest{})
 		client.Close()
 		require.NoError(t, err)
-		require.Equal(t, clustermetadatapb.PoolerType_REPLICA, resp.Status.PoolerType,
-			"surviving standby %s must still be a REPLICA", name)
+		require.Equal(t, commonconsensus.ConsensusRoleFollower, commonconsensus.SelfConsensusRole(resp.GetConsensusStatus()),
+			"surviving standby %s must still be a follower", name)
 		require.NotNil(t, resp.Status.ReplicationStatus,
 			"surviving standby %s must still have replication configured", name)
 		require.NotNil(t, resp.Status.ReplicationStatus.PrimaryConnInfo,
@@ -329,7 +330,7 @@ func TestMultiReplicaContinuityAfterStandbyShutdown(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		if resp.Status.PoolerType != clustermetadatapb.PoolerType_REPLICA {
+		if commonconsensus.SelfConsensusRole(resp.GetConsensusStatus()) != commonconsensus.ConsensusRoleFollower {
 			return false
 		}
 		if resp.Status.ReplicationStatus == nil {
@@ -351,7 +352,7 @@ func TestMultiReplicaContinuityAfterStandbyShutdown(t *testing.T) {
 	defer primaryClient.Close()
 	resp, err := primaryClient.Manager.Status(utils.WithTimeout(t, 5*time.Second), &multipoolermanagerdatapb.StatusRequest{})
 	require.NoError(t, err)
-	require.Equal(t, clustermetadatapb.PoolerType_PRIMARY, resp.Status.PoolerType)
+	require.Equal(t, commonconsensus.ConsensusRoleLeader, commonconsensus.SelfConsensusRole(resp.GetConsensusStatus()))
 	require.NotNil(t, resp.Status.PrimaryStatus)
 	t.Logf("Primary %s remains healthy with %d connected followers",
 		primaryName, len(resp.Status.PrimaryStatus.ConnectedFollowers))

@@ -26,7 +26,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	multipoolermanagerdata "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	"github.com/multigres/multigres/go/test/endtoend/shardsetup"
 	"github.com/multigres/multigres/go/test/s3mock"
@@ -414,8 +414,8 @@ func verifyReplicasStreaming(t *testing.T, setup *shardsetup.ShardSetup, exclude
 	shardsetup.EventuallyPoolerCondition(t, replicas, timeout, 1*time.Second,
 		func(r shardsetup.PoolerStatusResult) (bool, string) {
 			s := r.Status
-			if s.PoolerType != clustermetadatapb.PoolerType_REPLICA {
-				return false, fmt.Sprintf("not yet REPLICA (is %v)", s.PoolerType)
+			if role := commonconsensus.SelfConsensusRole(r.ConsensusStatus); role != commonconsensus.ConsensusRoleFollower {
+				return false, fmt.Sprintf("not yet follower (is %v)", role)
 			}
 			if !s.PostgresReady {
 				return false, "postgres not running"

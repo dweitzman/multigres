@@ -26,10 +26,10 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
+	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/test/endtoend/shardsetup"
 	"github.com/multigres/multigres/go/test/utils"
 
-	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multipoolermanagerpb "github.com/multigres/multigres/go/pb/multipoolermanager"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
@@ -657,8 +657,8 @@ func TestReplicationStatus(t *testing.T) {
 		require.NoError(t, err, "ReplicationStatus should succeed on PRIMARY")
 		require.NotNil(t, statusResp.Status, "Status should not be nil")
 
-		// Verify pooler type
-		assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, statusResp.Status.PoolerType, "PoolerType should be PRIMARY")
+		// Verify consensus role
+		assert.Equal(t, commonconsensus.ConsensusRoleLeader, commonconsensus.SelfConsensusRole(statusResp.GetConsensusStatus()), "should be the consensus leader")
 
 		// Verify PrimaryStatus is populated
 		assert.NotNil(t, statusResp.Status.PrimaryStatus, "PrimaryStatus should be populated for PRIMARY pooler")
@@ -694,8 +694,8 @@ func TestReplicationStatus(t *testing.T) {
 		require.NoError(t, err, "ReplicationStatus should succeed on REPLICA")
 		require.NotNil(t, statusResp.Status, "Status should not be nil")
 
-		// Verify pooler type
-		assert.Equal(t, clustermetadatapb.PoolerType_REPLICA, statusResp.Status.PoolerType, "PoolerType should be REPLICA")
+		// Verify consensus role
+		assert.Equal(t, commonconsensus.ConsensusRoleFollower, commonconsensus.SelfConsensusRole(statusResp.GetConsensusStatus()), "should be a consensus follower")
 
 		// Verify ReplicationStatus is populated
 		assert.Nil(t, statusResp.Status.PrimaryStatus, "PrimaryStatus should be nil for REPLICA pooler")
@@ -725,11 +725,11 @@ func TestReplicationStatus(t *testing.T) {
 		require.NoError(t, err, "ReplicationStatus should succeed on REPLICA")
 
 		// Verify each returns the appropriate status
-		assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, primaryStatusResp.Status.PoolerType)
+		assert.Equal(t, commonconsensus.ConsensusRoleLeader, commonconsensus.SelfConsensusRole(primaryStatusResp.GetConsensusStatus()))
 		assert.NotNil(t, primaryStatusResp.Status.PrimaryStatus, "PRIMARY should return PrimaryStatus")
 		assert.Nil(t, primaryStatusResp.Status.ReplicationStatus, "PRIMARY should not return ReplicationStatus")
 
-		assert.Equal(t, clustermetadatapb.PoolerType_REPLICA, standbyStatusResp.Status.PoolerType)
+		assert.Equal(t, commonconsensus.ConsensusRoleFollower, commonconsensus.SelfConsensusRole(standbyStatusResp.GetConsensusStatus()))
 		assert.Nil(t, standbyStatusResp.Status.PrimaryStatus, "REPLICA should not return PrimaryStatus")
 		assert.NotNil(t, standbyStatusResp.Status.ReplicationStatus, "REPLICA should return ReplicationStatus")
 
