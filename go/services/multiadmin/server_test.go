@@ -602,7 +602,6 @@ func TestMultiAdminServerGetPoolerStatus(t *testing.T) {
 		// Setup fake response - use the same key format as the rpc client
 		poolerKey := topoclient.ComponentIDString(poolerID)
 		expectedStatus := &multipoolermanagerdatapb.Status{
-			PoolerType:     clustermetadatapb.PoolerType_PRIMARY,
 			IsInitialized:  true,
 			PostgresReady:  true,
 			PostgresStatus: multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY,
@@ -624,7 +623,6 @@ func TestMultiAdminServerGetPoolerStatus(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, resp)
 		require.NotNil(t, resp.Status)
-		assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, resp.Status.PoolerType)
 		assert.True(t, resp.Status.IsInitialized)
 		assert.True(t, resp.Status.PostgresReady)
 		assert.Equal(t, multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY, resp.Status.PostgresStatus)

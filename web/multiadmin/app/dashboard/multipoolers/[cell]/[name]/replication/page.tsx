@@ -103,13 +103,11 @@ export default function PoolerReplicationPage({ params }: PageProps) {
 }
 
 function ReplicationView({ status }: { status: PoolerStatus }) {
-  const role = status.pooler_type ?? "—";
   const postgresStatus = formatEnum(status.postgres_status, "POSTGRES_STATUS_");
 
   return (
     <>
       <div className="px-4 lg:px-6 grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <SummaryCard label="Pooler type" value={role} mono />
         <SummaryCard
           label="Postgres status"
           value={postgresStatus || "—"}

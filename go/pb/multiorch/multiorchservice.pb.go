@@ -241,9 +241,11 @@ type PoolerHealth struct {
 	PoolerId        *clustermetadata.ID    `protobuf:"bytes,1,opt,name=pooler_id,json=poolerId,proto3" json:"pooler_id,omitempty"`
 	Reachable       bool                   `protobuf:"varint,2,opt,name=reachable,proto3" json:"reachable,omitempty"`
 	PostgresRunning bool                   `protobuf:"varint,3,opt,name=postgres_running,json=postgresRunning,proto3" json:"postgres_running,omitempty"`
-	PoolerType      string                 `protobuf:"bytes,4,opt,name=pooler_type,json=poolerType,proto3" json:"pooler_type,omitempty"` // PRIMARY, REPLICA, UNKNOWN
 	LastCheck       *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=last_check,json=lastCheck,proto3" json:"last_check,omitempty"`
 	PostgresReady   bool                   `protobuf:"varint,6,opt,name=postgres_ready,json=postgresReady,proto3" json:"postgres_ready,omitempty"`
+	// This pooler's consensus status as last observed by orch; carries the rule
+	// (leader id, cohort members, term) and the pooler's committed position.
+	ConsensusStatus *clustermetadata.ConsensusStatus `protobuf:"bytes,7,opt,name=consensus_status,json=consensusStatus,proto3" json:"consensus_status,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -299,13 +301,6 @@ func (x *PoolerHealth) GetPostgresRunning() bool {
 	return false
 }
 
-func (x *PoolerHealth) GetPoolerType() string {
-	if x != nil {
-		return x.PoolerType
-	}
-	return ""
-}
-
 func (x *PoolerHealth) GetLastCheck() *timestamppb.Timestamp {
 	if x != nil {
 		return x.LastCheck
@@ -318,6 +313,13 @@ func (x *PoolerHealth) GetPostgresReady() bool {
 		return x.PostgresReady
 	}
 	return false
+}
+
+func (x *PoolerHealth) GetConsensusStatus() *clustermetadata.ConsensusStatus {
+	if x != nil {
+		return x.ConsensusStatus
+	}
+	return nil
 }
 
 type DisableRecoveryRequest struct {
@@ -824,16 +826,15 @@ const file_multiorchservice_proto_rawDesc = "" +
 	"\bpriority\x18\x06 \x01(\x05R\bpriority\x12\x14\n" +
 	"\x05scope\x18\a \x01(\tR\x05scope\x12;\n" +
 	"\vdetected_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"detectedAt\"\x8c\x02\n" +
+	"detectedAt\"\xb8\x02\n" +
 	"\fPoolerHealth\x120\n" +
 	"\tpooler_id\x18\x01 \x01(\v2\x13.clustermetadata.IDR\bpoolerId\x12\x1c\n" +
 	"\treachable\x18\x02 \x01(\bR\treachable\x12)\n" +
-	"\x10postgres_running\x18\x03 \x01(\bR\x0fpostgresRunning\x12\x1f\n" +
-	"\vpooler_type\x18\x04 \x01(\tR\n" +
-	"poolerType\x129\n" +
+	"\x10postgres_running\x18\x03 \x01(\bR\x0fpostgresRunning\x129\n" +
 	"\n" +
 	"last_check\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tlastCheck\x12%\n" +
-	"\x0epostgres_ready\x18\x06 \x01(\bR\rpostgresReady\"\x18\n" +
+	"\x0epostgres_ready\x18\x06 \x01(\bR\rpostgresReady\x12K\n" +
+	"\x10consensus_status\x18\a \x01(\v2 .clustermetadata.ConsensusStatusR\x0fconsensusStatus\"\x18\n" +
 	"\x16DisableRecoveryRequest\"M\n" +
 	"\x17DisableRecoveryResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
@@ -895,8 +896,9 @@ var file_multiorchservice_proto_goTypes = []any{
 	(*clustermetadata.ShardKey)(nil),                      // 14: clustermetadata.ShardKey
 	(*clustermetadata.ID)(nil),                            // 15: clustermetadata.ID
 	(*timestamppb.Timestamp)(nil),                         // 16: google.protobuf.Timestamp
-	(*clustermetadata.ShardRule)(nil),                     // 17: clustermetadata.ShardRule
-	(*clustermetadata.ExternallyCertifiedRevocation)(nil), // 18: clustermetadata.ExternallyCertifiedRevocation
+	(*clustermetadata.ConsensusStatus)(nil),               // 17: clustermetadata.ConsensusStatus
+	(*clustermetadata.ShardRule)(nil),                     // 18: clustermetadata.ShardRule
+	(*clustermetadata.ExternallyCertifiedRevocation)(nil), // 19: clustermetadata.ExternallyCertifiedRevocation
 }
 var file_multiorchservice_proto_depIdxs = []int32{
 	14, // 0: multiorch.ShardStatusRequest.shard_key:type_name -> clustermetadata.ShardKey
@@ -907,26 +909,27 @@ var file_multiorchservice_proto_depIdxs = []int32{
 	16, // 5: multiorch.DetectedProblem.detected_at:type_name -> google.protobuf.Timestamp
 	15, // 6: multiorch.PoolerHealth.pooler_id:type_name -> clustermetadata.ID
 	16, // 7: multiorch.PoolerHealth.last_check:type_name -> google.protobuf.Timestamp
-	14, // 8: multiorch.ApplyCertifiedRuleChangeRequest.shard_key:type_name -> clustermetadata.ShardKey
-	17, // 9: multiorch.ApplyCertifiedRuleChangeRequest.proposed_rule:type_name -> clustermetadata.ShardRule
-	18, // 10: multiorch.ApplyCertifiedRuleChangeRequest.cert:type_name -> clustermetadata.ExternallyCertifiedRevocation
-	0,  // 11: multiorch.MultiOrchService.GetShardStatus:input_type -> multiorch.ShardStatusRequest
-	4,  // 12: multiorch.MultiOrchService.DisableRecovery:input_type -> multiorch.DisableRecoveryRequest
-	6,  // 13: multiorch.MultiOrchService.EnableRecovery:input_type -> multiorch.EnableRecoveryRequest
-	8,  // 14: multiorch.MultiOrchService.GetRecoveryStatus:input_type -> multiorch.GetRecoveryStatusRequest
-	10, // 15: multiorch.MultiOrchService.TriggerRecoveryNow:input_type -> multiorch.TriggerRecoveryNowRequest
-	12, // 16: multiorch.MultiOrchService.ApplyCertifiedRuleChange:input_type -> multiorch.ApplyCertifiedRuleChangeRequest
-	1,  // 17: multiorch.MultiOrchService.GetShardStatus:output_type -> multiorch.ShardStatusResponse
-	5,  // 18: multiorch.MultiOrchService.DisableRecovery:output_type -> multiorch.DisableRecoveryResponse
-	7,  // 19: multiorch.MultiOrchService.EnableRecovery:output_type -> multiorch.EnableRecoveryResponse
-	9,  // 20: multiorch.MultiOrchService.GetRecoveryStatus:output_type -> multiorch.GetRecoveryStatusResponse
-	11, // 21: multiorch.MultiOrchService.TriggerRecoveryNow:output_type -> multiorch.TriggerRecoveryNowResponse
-	13, // 22: multiorch.MultiOrchService.ApplyCertifiedRuleChange:output_type -> multiorch.ApplyCertifiedRuleChangeResponse
-	17, // [17:23] is the sub-list for method output_type
-	11, // [11:17] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	17, // 8: multiorch.PoolerHealth.consensus_status:type_name -> clustermetadata.ConsensusStatus
+	14, // 9: multiorch.ApplyCertifiedRuleChangeRequest.shard_key:type_name -> clustermetadata.ShardKey
+	18, // 10: multiorch.ApplyCertifiedRuleChangeRequest.proposed_rule:type_name -> clustermetadata.ShardRule
+	19, // 11: multiorch.ApplyCertifiedRuleChangeRequest.cert:type_name -> clustermetadata.ExternallyCertifiedRevocation
+	0,  // 12: multiorch.MultiOrchService.GetShardStatus:input_type -> multiorch.ShardStatusRequest
+	4,  // 13: multiorch.MultiOrchService.DisableRecovery:input_type -> multiorch.DisableRecoveryRequest
+	6,  // 14: multiorch.MultiOrchService.EnableRecovery:input_type -> multiorch.EnableRecoveryRequest
+	8,  // 15: multiorch.MultiOrchService.GetRecoveryStatus:input_type -> multiorch.GetRecoveryStatusRequest
+	10, // 16: multiorch.MultiOrchService.TriggerRecoveryNow:input_type -> multiorch.TriggerRecoveryNowRequest
+	12, // 17: multiorch.MultiOrchService.ApplyCertifiedRuleChange:input_type -> multiorch.ApplyCertifiedRuleChangeRequest
+	1,  // 18: multiorch.MultiOrchService.GetShardStatus:output_type -> multiorch.ShardStatusResponse
+	5,  // 19: multiorch.MultiOrchService.DisableRecovery:output_type -> multiorch.DisableRecoveryResponse
+	7,  // 20: multiorch.MultiOrchService.EnableRecovery:output_type -> multiorch.EnableRecoveryResponse
+	9,  // 21: multiorch.MultiOrchService.GetRecoveryStatus:output_type -> multiorch.GetRecoveryStatusResponse
+	11, // 22: multiorch.MultiOrchService.TriggerRecoveryNow:output_type -> multiorch.TriggerRecoveryNowResponse
+	13, // 23: multiorch.MultiOrchService.ApplyCertifiedRuleChange:output_type -> multiorch.ApplyCertifiedRuleChangeResponse
+	18, // [18:24] is the sub-list for method output_type
+	12, // [12:18] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_multiorchservice_proto_init() }

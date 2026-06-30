@@ -2276,13 +2276,13 @@ func formatPoolerHealth(healthList []*multiorchpb.PoolerHealth) string {
 			poolerName = h.PoolerId.Name
 		}
 
-		// Format as: pooler-1:PRIMARY/up or pooler-1:UNKNOWN/down
+		// Format as: pooler-1:leader/up or pooler-1:observer/down
 		status := "down"
 		if h.Reachable && h.PostgresReady {
 			status = "up"
 		}
 
-		poolerStatuses = append(poolerStatuses, fmt.Sprintf("%s:%s/%s", poolerName, h.PoolerType, status))
+		poolerStatuses = append(poolerStatuses, fmt.Sprintf("%s:%s/%s", poolerName, consensus.SelfConsensusRole(h.GetConsensusStatus()), status))
 	}
 
 	return fmt.Sprintf("%d/%d reachable (%s)", reachableCount, len(healthList), strings.Join(poolerStatuses, ", "))

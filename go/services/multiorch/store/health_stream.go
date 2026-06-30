@@ -26,6 +26,7 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/rpcclient"
 	"github.com/multigres/multigres/go/common/timeouts"
 	"github.com/multigres/multigres/go/common/topoclient"
@@ -436,7 +437,7 @@ func (hs *HealthStream) applySnapshot(ctx context.Context, poolerHealth *Pooler,
 
 	logger.DebugContext(ctx, "health snapshot applied",
 		"pooler_id", hs.poolerID,
-		"pooler_type", status.PoolerType,
+		"consensus_role", commonconsensus.SelfConsensusRole(snapshot.Status.GetConsensusStatus()),
 		"postgres_ready", status.PostgresReady,
 		"postgres_running", status.PostgresRunning,
 	)

@@ -147,7 +147,6 @@ func TestFixReplicationAction_ExecuteUnsupportedProblemCode(t *testing.T) {
 				Response: &multipoolermanagerdatapb.StatusResponse{
 					Status: &multipoolermanagerdatapb.Status{
 						IsInitialized: true,
-						PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 					},
 					ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 						Id:              fixReplPrimaryID,
@@ -226,7 +225,6 @@ func TestFixReplicationAction_ExecuteSuccessNotReplicating(t *testing.T) {
 				Response: &multipoolermanagerdatapb.StatusResponse{
 					Status: &multipoolermanagerdatapb.Status{
 						IsInitialized: true,
-						PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 					},
 					ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 						Id:              fixReplPrimaryID,
@@ -335,7 +333,6 @@ func TestFixReplicationAction_ExecuteAlreadyConfigured(t *testing.T) {
 				Response: &multipoolermanagerdatapb.StatusResponse{
 					Status: &multipoolermanagerdatapb.Status{
 						IsInitialized: true,
-						PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 					},
 					ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 						Id:              fixReplPrimaryID,
@@ -594,7 +591,6 @@ func TestFixReplicationAction_SucceedsViaRewind(t *testing.T) {
 	baseFakeClient.SetStatusResponse("multipooler-cell1-primary", &multipoolermanagerdatapb.StatusResponse{
 		Status: &multipoolermanagerdatapb.Status{
 			IsInitialized: true,
-			PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 		},
 		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 			Id:              fixReplPrimaryID,
@@ -719,7 +715,6 @@ func TestFixReplicationAction_FailsWhenReplicationDoesNotStart(t *testing.T) {
 	baseFakeClient.SetStatusResponse("multipooler-cell1-primary", &multipoolermanagerdatapb.StatusResponse{
 		Status: &multipoolermanagerdatapb.Status{
 			IsInitialized: true,
-			PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 		},
 		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 			Id:              fixReplPrimaryID,

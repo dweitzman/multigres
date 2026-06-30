@@ -97,7 +97,7 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 		fakeClient := &rpcclient.FakeClient{
 			StatusResponses: map[topoclient.ComponentID]*rpcclient.ResponseWithDelay[*multipoolermanagerdatapb.StatusResponse]{
 				"multipooler-cell1-primary": {Response: &multipoolermanagerdatapb.StatusResponse{
-					Status:          &multipoolermanagerdatapb.Status{IsInitialized: true, PoolerType: clustermetadatapb.PoolerType_PRIMARY},
+					Status:          &multipoolermanagerdatapb.Status{IsInitialized: true},
 					ConsensusStatus: selfLeaderConsensus(primaryID),
 				}},
 			},
@@ -131,7 +131,7 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 		fakeClient := &rpcclient.FakeClient{
 			StatusResponses: map[topoclient.ComponentID]*rpcclient.ResponseWithDelay[*multipoolermanagerdatapb.StatusResponse]{
 				"multipooler-cell1-primary": {Response: &multipoolermanagerdatapb.StatusResponse{
-					Status:          &multipoolermanagerdatapb.Status{IsInitialized: true, PoolerType: clustermetadatapb.PoolerType_PRIMARY},
+					Status:          &multipoolermanagerdatapb.Status{IsInitialized: true},
 					ConsensusStatus: selfLeaderConsensus(primaryID),
 				}},
 			},
@@ -233,7 +233,7 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 		fakeClient := &rpcclient.FakeClient{
 			StatusResponses: map[topoclient.ComponentID]*rpcclient.ResponseWithDelay[*multipoolermanagerdatapb.StatusResponse]{
 				"multipooler-cell1-primary": {Response: &multipoolermanagerdatapb.StatusResponse{
-					Status:          &multipoolermanagerdatapb.Status{IsInitialized: true, PoolerType: clustermetadatapb.PoolerType_PRIMARY},
+					Status:          &multipoolermanagerdatapb.Status{IsInitialized: true},
 					ConsensusStatus: selfLeaderConsensus(primaryID),
 				}},
 			},

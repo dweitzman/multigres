@@ -166,9 +166,6 @@ message PrimaryStatus {
 // This RPC works even when the database connection is unavailable - fields that require
 // database access will be nil/empty in that case.
 message Status {
-  // Pooler type from topology (PRIMARY or REPLICA)
-  clustermetadata.PoolerType pooler_type = 1;
-
   // Primary status information (only populated if pooler is acting as primary AND db is connected)
   PrimaryStatus primary_status = 2;
 

@@ -296,7 +296,6 @@ func (pm *MultiPoolerManager) StandbyReplicationStatus(ctx context.Context) (*mu
 // initialization status without needing a separate RPC.
 func (pm *MultiPoolerManager) Status(ctx context.Context) (*multipoolermanagerdatapb.StatusResponse, error) {
 	poolerStatus := &multipoolermanagerdatapb.Status{
-		PoolerType:       pm.getPoolerType(),
 		IsInitialized:    pm.isInitialized(ctx),
 		HasDataDirectory: pm.hasDataDirectory(),
 		PostgresReady:    pm.isPostgresReady(ctx),

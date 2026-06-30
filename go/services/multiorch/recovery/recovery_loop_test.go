@@ -640,7 +640,6 @@ func TestProcessShardProblems_DependencyEnforcement(t *testing.T) {
 	fakeClient := rpcclient.NewFakeClient()
 	fakeClient.SetStatusResponse("multipooler-cell1-primary-pooler", &multipoolermanagerdatapb.StatusResponse{
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_PRIMARY,
 			PrimaryStatus: &multipoolermanagerdatapb.PrimaryStatus{
 				Lsn:   "0/DEADBEEF",
 				Ready: true,
@@ -649,7 +648,6 @@ func TestProcessShardProblems_DependencyEnforcement(t *testing.T) {
 	})
 	fakeClient.SetStatusResponse("multipooler-cell1-replica-pooler", &multipoolermanagerdatapb.StatusResponse{
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_REPLICA,
 			ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 				LastReplayLsn:           "0/DEADBEEF",
 				LastReceiveLsn:          "0/DEADBEEF",
@@ -755,7 +753,6 @@ func TestProcessShardProblems_DependencyEnforcement(t *testing.T) {
 			IsUpToDate:       true,
 			LastSeen:         timestamppb.Now(),
 			Status: &multipoolermanagerdatapb.Status{
-				PoolerType: clustermetadatapb.PoolerType_REPLICA,
 				ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 					IsWalReplayPaused: true, // Replication stopped
 				},
@@ -827,7 +824,6 @@ func TestProcessShardProblems_DependencyEnforcement(t *testing.T) {
 			IsUpToDate:       true,
 			LastSeen:         timestamppb.Now(),
 			Status: &multipoolermanagerdatapb.Status{
-				PoolerType: clustermetadatapb.PoolerType_REPLICA,
 				ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 					IsWalReplayPaused: true, // Replication stopped
 				},
@@ -865,7 +861,6 @@ func TestRecoveryLoop_ValidationPreventsStaleRecovery(t *testing.T) {
 	fakeClient := rpcclient.NewFakeClient()
 	fakeClient.SetStatusResponse("multipooler-cell1-replica-pooler", &multipoolermanagerdatapb.StatusResponse{
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_REPLICA,
 			ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 				LastReplayLsn:           "0/DEADBEEF",
 				LastReceiveLsn:          "0/DEADBEEF",
@@ -920,7 +915,6 @@ func TestRecoveryLoop_ValidationPreventsStaleRecovery(t *testing.T) {
 		IsUpToDate:       true,
 		LastSeen:         timestamppb.Now(),
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_REPLICA,
 			ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 				IsWalReplayPaused: true, // Replication stopped
 			},
@@ -973,7 +967,6 @@ func TestRecoveryLoop_PostRecoveryRefresh(t *testing.T) {
 	fakeClient := rpcclient.NewFakeClient()
 	fakeClient.SetStatusResponse("multipooler-cell1-primary-pooler", &multipoolermanagerdatapb.StatusResponse{
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_PRIMARY,
 			PrimaryStatus: &multipoolermanagerdatapb.PrimaryStatus{
 				Lsn:   "0/DEADBEEF",
 				Ready: true,
@@ -982,7 +975,6 @@ func TestRecoveryLoop_PostRecoveryRefresh(t *testing.T) {
 	})
 	fakeClient.SetStatusResponse("multipooler-cell1-replica1-pooler", &multipoolermanagerdatapb.StatusResponse{
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_REPLICA,
 			ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 				LastReplayLsn:           "0/DEADBEEF",
 				LastReceiveLsn:          "0/DEADBEEF",
@@ -999,7 +991,6 @@ func TestRecoveryLoop_PostRecoveryRefresh(t *testing.T) {
 	})
 	fakeClient.SetStatusResponse("multipooler-cell1-replica2-pooler", &multipoolermanagerdatapb.StatusResponse{
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_REPLICA,
 			ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 				LastReplayLsn:           "0/DEADBEEF",
 				LastReceiveLsn:          "0/DEADBEEF",
@@ -1124,7 +1115,6 @@ func TestRecoveryLoop_PostRecoveryRefresh(t *testing.T) {
 	// Now fix the primary in the fake client so validation will pass
 	fakeClient.SetStatusResponse("multipooler-cell1-primary-pooler", &multipoolermanagerdatapb.StatusResponse{
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_PRIMARY,
 			PrimaryStatus: &multipoolermanagerdatapb.PrimaryStatus{
 				Lsn:   "0/NEWPRIMARY",
 				Ready: true,
@@ -1156,7 +1146,6 @@ func TestRecoveryLoop_FullCycle(t *testing.T) {
 	fakeClient := rpcclient.NewFakeClient()
 	fakeClient.SetStatusResponse("multipooler-cell1-primary-pooler", &multipoolermanagerdatapb.StatusResponse{
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_PRIMARY,
 			PrimaryStatus: &multipoolermanagerdatapb.PrimaryStatus{
 				Lsn:   "0/DEADBEEF",
 				Ready: true,
@@ -1165,7 +1154,6 @@ func TestRecoveryLoop_FullCycle(t *testing.T) {
 	})
 	fakeClient.SetStatusResponse("multipooler-cell1-replica1-pooler", &multipoolermanagerdatapb.StatusResponse{
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_REPLICA,
 			ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 				LastReplayLsn:           "0/DEADBEEF",
 				LastReceiveLsn:          "0/DEADBEEF",
@@ -1182,7 +1170,6 @@ func TestRecoveryLoop_FullCycle(t *testing.T) {
 	})
 	fakeClient.SetStatusResponse("multipooler-cell1-replica2-pooler", &multipoolermanagerdatapb.StatusResponse{
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_REPLICA,
 			ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 				LastReplayLsn:           "0/DEADBEEF",
 				LastReceiveLsn:          "0/DEADBEEF",
@@ -1276,7 +1263,6 @@ func TestRecoveryLoop_FullCycle(t *testing.T) {
 		IsUpToDate:       true,
 		LastSeen:         timestamppb.Now(),
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_REPLICA,
 			ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 				IsWalReplayPaused: true, // Problem
 			},
@@ -1295,7 +1281,6 @@ func TestRecoveryLoop_FullCycle(t *testing.T) {
 		IsUpToDate:       true,
 		LastSeen:         timestamppb.Now(),
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_REPLICA,
 			ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 				IsWalReplayPaused: true, // Problem
 			},
@@ -1322,7 +1307,6 @@ func TestRecoveryLoop_PriorityOrdering(t *testing.T) {
 	fakeClient := rpcclient.NewFakeClient()
 	fakeClient.SetStatusResponse("multipooler-cell1-primary-pooler", &multipoolermanagerdatapb.StatusResponse{
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_PRIMARY,
 			PrimaryStatus: &multipoolermanagerdatapb.PrimaryStatus{
 				Lsn:   "0/DEADBEEF",
 				Ready: true,
@@ -1331,7 +1315,6 @@ func TestRecoveryLoop_PriorityOrdering(t *testing.T) {
 	})
 	fakeClient.SetStatusResponse("multipooler-cell1-replica-pooler", &multipoolermanagerdatapb.StatusResponse{
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_REPLICA,
 			ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 				LastReplayLsn:           "0/DEADBEEF",
 				LastReceiveLsn:          "0/DEADBEEF",
@@ -1467,7 +1450,6 @@ func TestRecoveryLoop_PriorityOrdering(t *testing.T) {
 		IsUpToDate:       true,
 		LastSeen:         timestamppb.Now(),
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_REPLICA,
 			ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 				IsWalReplayPaused: true,
 			},
@@ -1587,7 +1569,6 @@ func TestRecoveryLoop_TracingSpans(t *testing.T) {
 		IsUpToDate:       true,
 		LastSeen:         timestamppb.Now(),
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_REPLICA,
 			ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 				IsWalReplayPaused: true,
 			},
@@ -1816,7 +1797,6 @@ func TestRecoveryLoop_DeadlineResetAfterSuccess(t *testing.T) {
 	// Set up fake client with initial status response (problem state)
 	fakeClient.SetStatusResponse("multipooler-cell1-replica-pooler", &multipoolermanagerdatapb.StatusResponse{
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_REPLICA,
 			ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 				LastReplayLsn:           "0/DEADBEEF",
 				LastReceiveLsn:          "0/DEADBEEF",

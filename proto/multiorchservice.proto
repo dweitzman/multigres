@@ -86,9 +86,11 @@ message PoolerHealth {
   clustermetadata.ID pooler_id = 1;
   bool reachable = 2;
   bool postgres_running = 3;
-  string pooler_type = 4; // PRIMARY, REPLICA, UNKNOWN
   google.protobuf.Timestamp last_check = 5;
   bool postgres_ready = 6;
+  // This pooler's consensus status as last observed by orch; carries the rule
+  // (leader id, cohort members, term) and the pooler's committed position.
+  clustermetadata.ConsensusStatus consensus_status = 7;
 }
 
 message DisableRecoveryRequest {

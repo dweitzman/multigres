@@ -79,7 +79,6 @@ func TestAnalysisGenerator_GenerateShardAnalyses_SinglePrimary(t *testing.T) {
 		LastSeen:         timestamppb.Now(),
 		ConsensusStatus:  primaryConsensusStatus(primaryID, 1),
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_PRIMARY,
 			PrimaryStatus: &multipoolermanagerdatapb.PrimaryStatus{
 				Lsn:   "0/1234567",
 				Ready: true,
@@ -139,7 +138,6 @@ func TestAnalysisGenerator_GenerateShardAnalyses_PrimaryWithReplicas(t *testing.
 		LastSeen:         timestamppb.Now(),
 		ConsensusStatus:  primaryConsensusStatus(primaryID, 1),
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_PRIMARY,
 			PrimaryStatus: &multipoolermanagerdatapb.PrimaryStatus{
 				Lsn:                "0/1234567",
 				Ready:              true,
@@ -164,7 +162,6 @@ func TestAnalysisGenerator_GenerateShardAnalyses_PrimaryWithReplicas(t *testing.
 		IsUpToDate:       true,
 		LastSeen:         timestamppb.Now(),
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_REPLICA,
 			ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 				IsWalReplayPaused: false,
 				Lag:               durationpb.New(100 * time.Millisecond), // 100ms lag
@@ -188,7 +185,6 @@ func TestAnalysisGenerator_GenerateShardAnalyses_PrimaryWithReplicas(t *testing.
 		IsUpToDate:       true,
 		LastSeen:         timestamppb.Now(),
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_REPLICA,
 			ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 				IsWalReplayPaused: false,
 				Lag:               durationpb.New(15 * time.Second), // 15s lag (> 10s threshold)
@@ -246,7 +242,6 @@ func TestAnalysisGenerator_GenerateShardAnalyses_Replica(t *testing.T) {
 		LastSeen:         timestamppb.Now(),
 		ConsensusStatus:  primaryConsensusStatus(primaryID, 1),
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 			PostgresReady: true,
 		},
 	}
@@ -267,7 +262,6 @@ func TestAnalysisGenerator_GenerateShardAnalyses_Replica(t *testing.T) {
 		IsUpToDate:       true,
 		LastSeen:         timestamppb.Now(),
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_REPLICA,
 			ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 				IsWalReplayPaused: false,
 				Lag:               durationpb.New(500 * time.Millisecond),
@@ -315,9 +309,7 @@ func TestAnalysisGenerator_GenerateShardAnalyses_MultipleTableGroups(t *testing.
 		IsLastCheckValid: true,
 		IsUpToDate:       true,
 		LastSeen:         timestamppb.Now(),
-		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_PRIMARY,
-		},
+		Status:           &multipoolermanagerdatapb.Status{},
 	}
 	store.SeedCache(t, ps, store.NewPooler(tg1Primary, nil))
 
@@ -338,9 +330,7 @@ func TestAnalysisGenerator_GenerateShardAnalyses_MultipleTableGroups(t *testing.
 		IsLastCheckValid: true,
 		IsUpToDate:       true,
 		LastSeen:         timestamppb.Now(),
-		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_PRIMARY,
-		},
+		Status:           &multipoolermanagerdatapb.Status{},
 	}
 	store.SeedCache(t, ps, store.NewPooler(tg2Primary, nil))
 
@@ -381,9 +371,7 @@ func TestGenerateShardAnalyses_SkipsNilEntries(t *testing.T) {
 			},
 		},
 		IsLastCheckValid: true,
-		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_REPLICA,
-		},
+		Status:           &multipoolermanagerdatapb.Status{},
 	}, nil))
 
 	gen := NewAnalysisGenerator(ps, nil)
@@ -413,7 +401,6 @@ func TestPopulatePrimaryInfo_NoPrimaryInShard(t *testing.T) {
 		},
 		IsLastCheckValid: true,
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_REPLICA,
 			ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 				LastReplayLsn: "0/1234",
 			},
@@ -450,7 +437,6 @@ func TestPopulatePrimaryInfo_PrimaryPostgresDown(t *testing.T) {
 		IsLastCheckValid: true,
 		ConsensusStatus:  primaryConsensusStatus(&clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary"}, 1),
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 			PostgresReady: false, // Postgres is down!
 			PrimaryStatus: &multipoolermanagerdatapb.PrimaryStatus{Lsn: "0/1234"},
 		},
@@ -471,7 +457,6 @@ func TestPopulatePrimaryInfo_PrimaryPostgresDown(t *testing.T) {
 		},
 		IsLastCheckValid: true,
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_REPLICA,
 			ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 				LastReplayLsn: "0/1234",
 			},
@@ -511,9 +496,7 @@ func TestPopulatePrimaryInfo_DemotedViaRecruit(t *testing.T) {
 			Type: clustermetadatapb.PoolerType_REPLICA,
 		},
 		IsLastCheckValid: true,
-		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_REPLICA,
-		},
+		Status:           &multipoolermanagerdatapb.Status{},
 	}
 
 	shardKey := &clustermetadatapb.ShardKey{Database: "db1", TableGroup: "tg1", Shard: "shard1"}
@@ -550,7 +533,6 @@ func TestPopulatePrimaryInfo_DemotedViaRecruit(t *testing.T) {
 				},
 			},
 			Status: &multipoolermanagerdatapb.Status{
-				PoolerType:      clustermetadatapb.PoolerType_REPLICA, // running as standby after REVOKE
 				PostgresReady:   true,
 				PostgresRunning: true,
 			},
@@ -597,7 +579,6 @@ func TestPopulatePrimaryInfo_DemotedViaRecruit(t *testing.T) {
 				},
 			},
 			Status: &multipoolermanagerdatapb.Status{
-				PoolerType:      clustermetadatapb.PoolerType_REPLICA, // running as standby after REVOKE
 				PostgresReady:   true,
 				PostgresRunning: true,
 			},
@@ -688,7 +669,7 @@ func TestGenerateShardAnalysis_StaleLeaderSupersededViaFollowerRule(t *testing.T
 		MultiPooler:      &clustermetadatapb.MultiPooler{Id: staleLeaderID, ShardKey: shardKey, Type: clustermetadatapb.PoolerType_PRIMARY},
 		IsLastCheckValid: true,
 		ConsensusStatus:  primaryConsensusStatus(staleLeaderID, 5),
-		Status:           &multipoolermanagerdatapb.Status{PoolerType: clustermetadatapb.PoolerType_PRIMARY, PostgresReady: true, PostgresRunning: true},
+		Status:           &multipoolermanagerdatapb.Status{PostgresReady: true, PostgresRunning: true},
 	}, nil))
 	// Follower: already replicating from the new leader at the higher term (6).
 	// The new leader itself has not reported health yet (absent from the store).
@@ -837,7 +818,6 @@ func TestIsInStandbyList(t *testing.T) {
 					},
 				},
 				Status: &multipoolermanagerdatapb.Status{
-					PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 					PostgresReady: true,
 					PrimaryStatus: tt.primaryStatus,
 				},
@@ -879,7 +859,6 @@ func TestPopulatePrimaryInfo_PrimaryHealthFields(t *testing.T) {
 			IsLastCheckValid:      true,
 			LastPostgresReadyTime: timestamppb.New(respondedAt),
 			Status: &multipoolermanagerdatapb.Status{
-				PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 				PostgresReady: true,
 			},
 		}, nil))
@@ -898,9 +877,7 @@ func TestPopulatePrimaryInfo_PrimaryHealthFields(t *testing.T) {
 				},
 			},
 			IsLastCheckValid: true,
-			Status: &multipoolermanagerdatapb.Status{
-				PoolerType: clustermetadatapb.PoolerType_REPLICA,
-			},
+			Status:           &multipoolermanagerdatapb.Status{},
 		}, nil))
 
 		gen := NewAnalysisGenerator(ps, nil)
@@ -936,7 +913,6 @@ func TestPopulatePrimaryInfo_PrimaryHealthFields(t *testing.T) {
 			ConsensusStatus:  primaryConsensusStatus(&clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary"}, 1),
 			IsLastCheckValid: false, // Pooler unreachable
 			Status: &multipoolermanagerdatapb.Status{
-				PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 				PostgresReady: false,
 			},
 		}, nil))
@@ -955,9 +931,7 @@ func TestPopulatePrimaryInfo_PrimaryHealthFields(t *testing.T) {
 				},
 			},
 			IsLastCheckValid: true,
-			Status: &multipoolermanagerdatapb.Status{
-				PoolerType: clustermetadatapb.PoolerType_REPLICA,
-			},
+			Status:           &multipoolermanagerdatapb.Status{},
 		}, nil))
 
 		gen := NewAnalysisGenerator(ps, nil)
@@ -992,7 +966,6 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 			ConsensusStatus:  primaryConsensusStatus(&clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary"}, 1),
 			IsLastCheckValid: false, // Primary pooler is down
 			Status: &multipoolermanagerdatapb.Status{
-				PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 				PostgresReady: false,
 			},
 		}, nil))
@@ -1016,7 +989,6 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 			IsLastCheckValid:        true,
 			StreamSnapshotsReceived: 1,
 			Status: &multipoolermanagerdatapb.Status{
-				PoolerType: clustermetadatapb.PoolerType_REPLICA,
 				ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 					LastReceiveLsn:     "0/1234567",
 					WalReceiverStatus:  "streaming",
@@ -1046,7 +1018,6 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 			IsLastCheckValid:        true,
 			StreamSnapshotsReceived: 1,
 			Status: &multipoolermanagerdatapb.Status{
-				PoolerType: clustermetadatapb.PoolerType_REPLICA,
 				ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 					LastReceiveLsn:     "0/1234567",
 					WalReceiverStatus:  "streaming",
@@ -1087,7 +1058,6 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 			ConsensusStatus:  primaryConsensusStatus(&clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary"}, 1),
 			IsLastCheckValid: false,
 			Status: &multipoolermanagerdatapb.Status{
-				PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 				PostgresReady: false,
 			},
 		}, nil))
@@ -1109,7 +1079,6 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 			IsLastCheckValid:        true,
 			StreamSnapshotsReceived: 1,
 			Status: &multipoolermanagerdatapb.Status{
-				PoolerType: clustermetadatapb.PoolerType_REPLICA,
 				ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 					LastReceiveLsn:     "0/1234567",
 					WalReceiverStatus:  "streaming",
@@ -1139,7 +1108,6 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 			IsLastCheckValid:        true,
 			StreamSnapshotsReceived: 1,
 			Status: &multipoolermanagerdatapb.Status{
-				PoolerType:        clustermetadatapb.PoolerType_REPLICA,
 				ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 					// No PrimaryConnInfo - replica is disconnected
 				},
@@ -1174,7 +1142,6 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 			ConsensusStatus:  primaryConsensusStatus(&clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary"}, 1),
 			IsLastCheckValid: false,
 			Status: &multipoolermanagerdatapb.Status{
-				PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 				PostgresReady: false,
 			},
 		}, nil))
@@ -1196,9 +1163,7 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 			},
 			IsLastCheckValid:        false, // Replica unreachable
 			StreamSnapshotsReceived: 1,     // Was previously healthy
-			Status: &multipoolermanagerdatapb.Status{
-				PoolerType: clustermetadatapb.PoolerType_REPLICA,
-			},
+			Status:                  &multipoolermanagerdatapb.Status{},
 		}, nil))
 
 		gen := NewAnalysisGenerator(ps, nil)
@@ -1230,7 +1195,6 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 			ConsensusStatus:  primaryConsensusStatus(&clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary"}, 1),
 			IsLastCheckValid: true,
 			Status: &multipoolermanagerdatapb.Status{
-				PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 				PostgresReady: true,
 			},
 		}, nil))
@@ -1264,7 +1228,6 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 			ConsensusStatus:  primaryConsensusStatus(&clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary"}, 1),
 			IsLastCheckValid: false,
 			Status: &multipoolermanagerdatapb.Status{
-				PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 				PostgresReady: false,
 			},
 		}, nil))
@@ -1286,7 +1249,6 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 			IsLastCheckValid:        true,
 			StreamSnapshotsReceived: 1,
 			Status: &multipoolermanagerdatapb.Status{
-				PoolerType: clustermetadatapb.PoolerType_REPLICA,
 				ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 					LastReceiveLsn:     "0/1234567",
 					WalReceiverStatus:  "streaming",
@@ -1321,9 +1283,7 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 				PortMap:  map[string]int32{"postgres": 5432},
 			},
 			ConsensusStatus: primaryConsensusStatus(&clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary"}, 1),
-			Status: &multipoolermanagerdatapb.Status{
-				PoolerType: clustermetadatapb.PoolerType_PRIMARY,
-			},
+			Status:          &multipoolermanagerdatapb.Status{},
 		}, nil))
 
 		for _, status := range []string{"", "starting", "waiting", "stopping"} {
@@ -1339,7 +1299,6 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 				IsLastCheckValid:        true,
 				StreamSnapshotsReceived: 1,
 				Status: &multipoolermanagerdatapb.Status{
-					PoolerType: clustermetadatapb.PoolerType_REPLICA,
 					ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 						LastReceiveLsn:     "0/1234567",
 						WalReceiverStatus:  status, // not "streaming"
@@ -1375,9 +1334,7 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 				PortMap:  map[string]int32{"postgres": 5432},
 			},
 			ConsensusStatus: primaryConsensusStatus(&clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary"}, 1),
-			Status: &multipoolermanagerdatapb.Status{
-				PoolerType: clustermetadatapb.PoolerType_PRIMARY,
-			},
+			Status:          &multipoolermanagerdatapb.Status{},
 		}, nil))
 
 		fixedNow := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
@@ -1395,7 +1352,6 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 			IsLastCheckValid:        true,
 			StreamSnapshotsReceived: 1,
 			Status: &multipoolermanagerdatapb.Status{
-				PoolerType: clustermetadatapb.PoolerType_REPLICA,
 				ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 					LastReceiveLsn:     "0/1234567",
 					WalReceiverStatus:  "streaming",
@@ -1433,9 +1389,7 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 				PortMap:  map[string]int32{"postgres": 5432},
 			},
 			ConsensusStatus: primaryConsensusStatus(&clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary"}, 1),
-			Status: &multipoolermanagerdatapb.Status{
-				PoolerType: clustermetadatapb.PoolerType_PRIMARY,
-			},
+			Status:          &multipoolermanagerdatapb.Status{},
 		}, nil))
 
 		fixedNow := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
@@ -1455,7 +1409,6 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 			IsLastCheckValid:        true,
 			StreamSnapshotsReceived: 1,
 			Status: &multipoolermanagerdatapb.Status{
-				PoolerType: clustermetadatapb.PoolerType_REPLICA,
 				ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 					LastReceiveLsn:            "0/1234567",
 					WalReceiverStatus:         "streaming",
@@ -1494,9 +1447,7 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 				PortMap:  map[string]int32{"postgres": 5432},
 			},
 			ConsensusStatus: primaryConsensusStatus(&clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary"}, 1),
-			Status: &multipoolermanagerdatapb.Status{
-				PoolerType: clustermetadatapb.PoolerType_PRIMARY,
-			},
+			Status:          &multipoolermanagerdatapb.Status{},
 		}, nil))
 
 		fixedNow := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
@@ -1518,7 +1469,6 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 			IsLastCheckValid:        true,
 			StreamSnapshotsReceived: 1,
 			Status: &multipoolermanagerdatapb.Status{
-				PoolerType: clustermetadatapb.PoolerType_REPLICA,
 				ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 					LastReceiveLsn:            "0/1234567",
 					WalReceiverStatus:         "streaming",
@@ -1559,9 +1509,7 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 				PortMap:  map[string]int32{"postgres": 5432},
 			},
 			ConsensusStatus: primaryConsensusStatus(&clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary"}, 1),
-			Status: &multipoolermanagerdatapb.Status{
-				PoolerType: clustermetadatapb.PoolerType_PRIMARY,
-			},
+			Status:          &multipoolermanagerdatapb.Status{},
 		}, nil))
 
 		store.SeedCache(t, ps, store.NewPooler(&multiorchdatapb.PoolerHealthState{
@@ -1576,7 +1524,6 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 			IsLastCheckValid:        true,
 			StreamSnapshotsReceived: 1,
 			Status: &multipoolermanagerdatapb.Status{
-				PoolerType: clustermetadatapb.PoolerType_REPLICA,
 				ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 					LastReceiveLsn:    "0/1234567",
 					WalReceiverStatus: "streaming",
@@ -1620,7 +1567,6 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 			IsLastCheckValid:        false,
 			StreamSnapshotsReceived: 5,
 			Status: &multipoolermanagerdatapb.Status{
-				PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 				PostgresReady: false,
 			},
 		}, nil))
@@ -1634,7 +1580,6 @@ func TestAllReplicasConnectedToLeader(t *testing.T) {
 			IsLastCheckValid:        true,
 			StreamSnapshotsReceived: 10,
 			Status: &multipoolermanagerdatapb.Status{
-				PoolerType: clustermetadatapb.PoolerType_REPLICA,
 				ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 					LastReceiveLsn:     "0/1234567",
 					WalReceiverStatus:  "streaming",
@@ -1712,7 +1657,6 @@ func TestPopulatePrimaryInfo_IsInPrimaryStandbyList(t *testing.T) {
 			},
 		},
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 			PostgresReady: true,
 			PrimaryStatus: &multipoolermanagerdatapb.PrimaryStatus{
 				Lsn:   "0/1234567",
@@ -1739,7 +1683,6 @@ func TestPopulatePrimaryInfo_IsInPrimaryStandbyList(t *testing.T) {
 		IsUpToDate:       true,
 		LastSeen:         timestamppb.Now(),
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_REPLICA,
 			ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 				IsWalReplayPaused: false,
 				Lag:               durationpb.New(100 * time.Millisecond),
@@ -1762,7 +1705,6 @@ func TestPopulatePrimaryInfo_IsInPrimaryStandbyList(t *testing.T) {
 		IsUpToDate:       true,
 		LastSeen:         timestamppb.Now(),
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_REPLICA,
 			ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 				IsWalReplayPaused: false,
 				Lag:               durationpb.New(100 * time.Millisecond),
@@ -1836,7 +1778,6 @@ func TestPopulatePrimaryInfo_PicksHighestPrimaryTerm(t *testing.T) {
 			},
 		},
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 			PostgresReady: true,
 		},
 	}, nil))
@@ -1857,7 +1798,6 @@ func TestPopulatePrimaryInfo_PicksHighestPrimaryTerm(t *testing.T) {
 			},
 		},
 		Status: &multipoolermanagerdatapb.Status{
-			PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 			PostgresReady: false,
 		},
 	}, nil))
@@ -1871,9 +1811,7 @@ func TestPopulatePrimaryInfo_PicksHighestPrimaryTerm(t *testing.T) {
 		},
 		IsLastCheckValid: true,
 		LastSeen:         timestamppb.Now(),
-		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_REPLICA,
-		},
+		Status:           &multipoolermanagerdatapb.Status{},
 	}, nil))
 
 	generator := NewAnalysisGenerator(ps, nil)
@@ -2013,9 +1951,7 @@ func setupMultiplePrimariesStoreWithReachability(t *testing.T, primaries []prima
 					},
 				},
 			},
-			Status: &multipoolermanagerdatapb.Status{
-				PoolerType: clustermetadatapb.PoolerType_PRIMARY,
-			},
+			Status: &multipoolermanagerdatapb.Status{},
 		}
 		store.SeedCache(t, ps, store.NewPooler(poolerState, nil))
 	}
@@ -2033,9 +1969,7 @@ func TestGenerateShardAnalyses_GroupsByShardKey(t *testing.T) {
 				ShardKey: &clustermetadatapb.ShardKey{Database: db, TableGroup: tg, Shard: shard},
 				Type:     typ,
 			},
-			Status: &multipoolermanagerdatapb.Status{
-				PoolerType: typ,
-			},
+			Status: &multipoolermanagerdatapb.Status{},
 		}, nil)
 	}
 
@@ -2080,9 +2014,7 @@ func TestGenerateShardAnalysis_ReturnsAllPoolersInShard(t *testing.T) {
 			},
 			Type: clustermetadatapb.PoolerType_PRIMARY,
 		},
-		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_PRIMARY,
-		},
+		Status: &multipoolermanagerdatapb.Status{},
 	}, nil))
 	store.SeedCache(t, ps, store.NewPooler(&multiorchdatapb.PoolerHealthState{
 		MultiPooler: &clustermetadatapb.MultiPooler{
@@ -2094,9 +2026,7 @@ func TestGenerateShardAnalysis_ReturnsAllPoolersInShard(t *testing.T) {
 			},
 			Type: clustermetadatapb.PoolerType_REPLICA,
 		},
-		Status: &multipoolermanagerdatapb.Status{
-			PoolerType: clustermetadatapb.PoolerType_REPLICA,
-		},
+		Status: &multipoolermanagerdatapb.Status{},
 	}, nil))
 
 	gen := NewAnalysisGenerator(ps, nil)

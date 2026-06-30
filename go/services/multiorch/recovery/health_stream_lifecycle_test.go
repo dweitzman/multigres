@@ -52,7 +52,6 @@ func TestHealthStream_StreamEOFWithoutSpecialSignal_KeepsBackoff(t *testing.T) {
 
 	// Send a regular snapshot.
 	stream.Ch <- makeSnapshot(&multipoolermanagerdatapb.Status{
-		PoolerType:    clustermetadata.PoolerType_PRIMARY,
 		PostgresReady: true,
 	})
 

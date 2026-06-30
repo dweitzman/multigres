@@ -62,6 +62,12 @@ export interface MultiPoolerWithStatus extends MultiPooler {
 
 export type PoolerType = "PRIMARY" | "REPLICA";
 
+// RoutingRole from clustermetadata.proto (protojson enum names).
+export type RoutingRole =
+  | "ROUTING_ROLE_UNKNOWN"
+  | "ROUTING_ROLE_PRIMARY"
+  | "ROUTING_ROLE_REPLICA";
+
 // MultiOrch from clustermetadata.proto
 export interface MultiOrch {
   id?: ID;
@@ -90,7 +96,7 @@ export interface BackupInfo {
   backupTime?: string;
   backupSizeBytes?: number;
   multipoolerServiceId?: string;
-  poolerType?: PoolerType;
+  routingRole?: RoutingRole;
 }
 
 // Request/Response types
@@ -189,7 +195,8 @@ export interface GetPoolerStatusResponse {
 }
 
 export interface PoolerStatus {
-  pooler_type?: PoolerType;
+  // pooler_type removed: the pooler's role is no longer a Status field. Derive
+  // it from consensus where needed.
   primary_status?: PrimaryStatus;
   replication_status?: StandbyReplicationStatus;
   is_initialized?: boolean;

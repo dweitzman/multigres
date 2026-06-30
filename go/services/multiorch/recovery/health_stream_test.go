@@ -136,7 +136,6 @@ func TestHealthStream_UpdatesStore_Primary(t *testing.T) {
 	completeHandshake(t, stream)
 
 	stream.Ch <- makeSnapshot(&multipoolermanagerdatapb.Status{
-		PoolerType: clustermetadata.PoolerType_PRIMARY,
 		PrimaryStatus: &multipoolermanagerdatapb.PrimaryStatus{
 			Lsn:   "0/123ABC",
 			Ready: true,
@@ -156,7 +155,6 @@ func TestHealthStream_UpdatesStore_Primary(t *testing.T) {
 	require.True(t, updated.Health().IsUpToDate)
 	require.NotNil(t, updated.Health().LastSeen)
 	require.NotNil(t, updated.Health().LastCheckSuccessful)
-	require.Equal(t, clustermetadata.PoolerType_PRIMARY, updated.Health().GetStatus().GetPoolerType())
 	require.NotNil(t, updated.Health().GetStatus().GetPrimaryStatus())
 	require.Equal(t, "0/123ABC", updated.Health().GetStatus().GetPrimaryStatus().GetLsn())
 	require.True(t, updated.Health().GetStatus().GetPrimaryStatus().GetReady())
@@ -186,7 +184,6 @@ func TestHealthStream_UpdatesStore_Replica(t *testing.T) {
 	completeHandshake(t, stream)
 
 	stream.Ch <- makeSnapshot(&multipoolermanagerdatapb.Status{
-		PoolerType: clustermetadata.PoolerType_REPLICA,
 		ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
 			LastReplayLsn:           "0/123ABC",
 			LastReceiveLsn:          "0/123DEF",
@@ -207,7 +204,6 @@ func TestHealthStream_UpdatesStore_Replica(t *testing.T) {
 	}, 2*time.Second, 10*time.Millisecond)
 
 	updated, _ := poolerStore.GetRider(key)
-	require.Equal(t, clustermetadata.PoolerType_REPLICA, updated.Health().GetStatus().GetPoolerType())
 	require.NotNil(t, updated.Health().GetStatus().GetReplicationStatus())
 	require.Equal(t, "0/123ABC", updated.Health().GetStatus().GetReplicationStatus().GetLastReplayLsn())
 	require.Equal(t, "0/123DEF", updated.Health().GetStatus().GetReplicationStatus().GetLastReceiveLsn())
@@ -244,7 +240,6 @@ func TestHealthStream_Poll(t *testing.T) {
 
 	// Inject initial snapshot.
 	stream.Ch <- makeSnapshot(&multipoolermanagerdatapb.Status{
-		PoolerType:    clustermetadata.PoolerType_PRIMARY,
 		PrimaryStatus: &multipoolermanagerdatapb.PrimaryStatus{Lsn: "0/AAAAAA", Ready: true},
 	})
 	require.Eventually(t, func() bool {
@@ -259,7 +254,6 @@ func TestHealthStream_Poll(t *testing.T) {
 
 	// Inject updated snapshot (as if pooler responded to the poll).
 	stream.Ch <- makeSnapshot(&multipoolermanagerdatapb.Status{
-		PoolerType:    clustermetadata.PoolerType_PRIMARY,
 		PrimaryStatus: &multipoolermanagerdatapb.PrimaryStatus{Lsn: "0/BBBBBB", Ready: true},
 	})
 
@@ -302,7 +296,6 @@ func TestHealthStream_Disconnect(t *testing.T) {
 
 	// Inject one snapshot so the stream is "connected" with valid data.
 	stream.Ch <- makeSnapshot(&multipoolermanagerdatapb.Status{
-		PoolerType:    clustermetadata.PoolerType_PRIMARY,
 		PostgresReady: true,
 	})
 	require.Eventually(t, func() bool {
@@ -360,7 +353,6 @@ func TestHealthStream_ConcurrentWatcherUpdate(t *testing.T) {
 	})
 
 	stream.Ch <- makeSnapshot(&multipoolermanagerdatapb.Status{
-		PoolerType:      clustermetadata.PoolerType_REPLICA,
 		PostgresRunning: true,
 	})
 
@@ -411,7 +403,6 @@ func TestHealthStream_DeletedDuringStream(t *testing.T) {
 	poolerwatch.DeleteForTest(t, poolerStore, key)
 
 	stream.Ch <- makeSnapshot(&multipoolermanagerdatapb.Status{
-		PoolerType:      clustermetadata.PoolerType_PRIMARY,
 		PostgresRunning: true,
 	})
 
@@ -444,7 +435,6 @@ func TestHealthStream_LastPostgresReadyTime(t *testing.T) {
 
 		before := time.Now()
 		stream.Ch <- makeSnapshot(&multipoolermanagerdatapb.Status{
-			PoolerType:    clustermetadata.PoolerType_PRIMARY,
 			PostgresReady: true,
 		})
 
@@ -485,7 +475,6 @@ func TestHealthStream_LastPostgresReadyTime(t *testing.T) {
 		completeHandshake(t, stream)
 
 		stream.Ch <- makeSnapshot(&multipoolermanagerdatapb.Status{
-			PoolerType:    clustermetadata.PoolerType_PRIMARY,
 			PostgresReady: false,
 		})
 
@@ -530,7 +519,6 @@ func TestHealthStream_StalenessTimeout(t *testing.T) {
 
 	// Send one snapshot so the stream is marked connected.
 	stream.Ch <- makeSnapshot(&multipoolermanagerdatapb.Status{
-		PoolerType:    clustermetadata.PoolerType_PRIMARY,
 		PostgresReady: true,
 	})
 	require.Eventually(t, func() bool {
@@ -598,7 +586,6 @@ func TestHealthStream_StartResponseConfig(t *testing.T) {
 
 	// Send an initial snapshot so the stream is marked connected.
 	stream.Ch <- makeSnapshot(&multipoolermanagerdatapb.Status{
-		PoolerType:    clustermetadata.PoolerType_PRIMARY,
 		PostgresReady: true,
 	})
 	require.Eventually(t, func() bool {
@@ -631,7 +618,6 @@ func TestHealthStream_TypeMismatch(t *testing.T) {
 
 	// Pooler reports PRIMARY (type mismatch).
 	stream.Ch <- makeSnapshot(&multipoolermanagerdatapb.Status{
-		PoolerType: clustermetadata.PoolerType_PRIMARY,
 		PrimaryStatus: &multipoolermanagerdatapb.PrimaryStatus{
 			Lsn:   "0/FFFFFF",
 			Ready: true,
@@ -646,8 +632,9 @@ func TestHealthStream_TypeMismatch(t *testing.T) {
 	updated, _ := poolerStore.GetRider(key)
 	require.Equal(t, clustermetadata.PoolerType_REPLICA, updated.Health().MultiPooler.Type,
 		"topology type should remain REPLICA")
-	require.Equal(t, clustermetadata.PoolerType_PRIMARY, updated.Health().GetStatus().GetPoolerType(),
-		"reported type should be PRIMARY")
+	// PostgreSQL is acting as a primary even though topology Type is REPLICA;
+	// the reported PrimaryStatus reflects that divergence (Status no longer
+	// carries a pooler_type label).
 	require.NotNil(t, updated.Health().GetStatus().GetPrimaryStatus())
 	require.Equal(t, "0/FFFFFF", updated.Health().GetStatus().GetPrimaryStatus().GetLsn())
 	require.True(t, updated.Health().GetStatus().GetPrimaryStatus().GetReady())

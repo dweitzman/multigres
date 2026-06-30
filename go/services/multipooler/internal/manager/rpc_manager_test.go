@@ -407,7 +407,6 @@ func TestReplicationStatus(t *testing.T) {
 		require.NotNil(t, status)
 
 		// Verify response structure
-		assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, status.Status.PoolerType)
 		assert.NotNil(t, status.Status.PrimaryStatus, "PrimaryStatus should be populated")
 		assert.Nil(t, status.Status.ReplicationStatus, "ReplicationStatus should be nil for PRIMARY")
 		assert.Equal(t, "0/12345678", status.Status.PrimaryStatus.Lsn)
@@ -494,7 +493,6 @@ func TestReplicationStatus(t *testing.T) {
 		require.NotNil(t, status)
 
 		// Verify response structure
-		assert.Equal(t, clustermetadatapb.PoolerType_REPLICA, status.Status.PoolerType)
 		assert.Nil(t, status.Status.PrimaryStatus, "PrimaryStatus should be nil for REPLICA")
 		assert.NotNil(t, status.Status.ReplicationStatus, "ReplicationStatus should be populated")
 		assert.Equal(t, "0/12345600", status.Status.ReplicationStatus.LastReplayLsn)
@@ -585,8 +583,7 @@ func TestReplicationStatus(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, status)
 
-		// PoolerType from topology says PRIMARY, but status shows standby state
-		assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, status.Status.PoolerType)
+		// PostgreSQL is a standby, so Status reports standby state (regardless of role).
 		assert.Nil(t, status.Status.PrimaryStatus, "PrimaryStatus should be nil since PostgreSQL is a standby")
 		assert.NotNil(t, status.Status.ReplicationStatus, "ReplicationStatus should be populated since PostgreSQL is a standby")
 	})
@@ -737,8 +734,7 @@ func TestReplicationStatus(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, status)
 
-		// PoolerType from topology says REPLICA, but status shows primary state
-		assert.Equal(t, clustermetadatapb.PoolerType_REPLICA, status.Status.PoolerType)
+		// PostgreSQL is a primary, so Status reports primary state (regardless of role).
 		assert.NotNil(t, status.Status.PrimaryStatus, "PrimaryStatus should be populated since PostgreSQL is a primary")
 		assert.Nil(t, status.Status.ReplicationStatus, "ReplicationStatus should be nil since PostgreSQL is a primary")
 	})
