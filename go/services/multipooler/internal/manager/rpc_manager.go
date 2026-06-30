@@ -681,17 +681,6 @@ func (pm *MultiPoolerManager) demoteToStandbyLocked(ctx context.Context, consens
 		return err
 	}
 
-	// Check current demotion state
-	state, err := pm.checkDemotionState(ctx)
-	if err != nil {
-		return err
-	}
-
-	// If everything is already complete, return early (fully idempotent)
-	if state.isReplicaInTopology && state.isReadOnly {
-		return nil
-	}
-
 	// Transition to DRAINING — rejects all queries and stops heartbeat. This
 	// ensures no new writes arrive while we drain existing connections. DRAINING
 	// (not DISABLED) marks this as a transient drain: if we error out before
@@ -741,7 +730,7 @@ func (pm *MultiPoolerManager) demoteToStandbyLocked(ctx context.Context, consens
 	// Restart PostgreSQL as standby. Unlike the old stop-only path, this keeps
 	// the node in the cluster as a replication target, avoiding timeline divergence
 	// in most cases. The coordinator still uses pg_rewind for nodes that diverged.
-	if err := pm.restartPostgresAsStandby(ctx, state); err != nil {
+	if err := pm.restartPostgresAsStandby(ctx); err != nil {
 		return err
 	}
 

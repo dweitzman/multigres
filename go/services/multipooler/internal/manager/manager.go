@@ -200,13 +200,6 @@ type MultiPoolerManager struct {
 	healthStreamer *healthStreamer
 }
 
-// demotionState tracks which parts of the demotion are complete
-type demotionState struct {
-	isReplicaInTopology bool   // PoolerType == REPLICA
-	isReadOnly          bool   // default_transaction_read_only = on
-	finalLSN            string // Captured LSN before demotion
-}
-
 // NewMultiPoolerManager creates a new MultiPoolerManager instance
 func NewMultiPoolerManager(logger *slog.Logger, multiPooler *clustermetadatapb.MultiPooler, config *Config) (*MultiPoolerManager, error) {
 	return NewMultiPoolerManagerWithTimeout(logger, multiPooler, config, 5*time.Minute)
@@ -1073,43 +1066,6 @@ func (pm *MultiPoolerManager) loadShardConfigFromGlobalTopo() {
 	}
 }
 
-// checkDemotionState checks the current state to determine what steps remain
-func (pm *MultiPoolerManager) checkDemotionState(ctx context.Context) (*demotionState, error) {
-	state := &demotionState{}
-
-	// Check topology state
-	pm.mu.Lock()
-	poolerType := pm.record.Type()
-	servingStatus := pm.record.ServingStatus()
-	pm.mu.Unlock()
-
-	state.isReplicaInTopology = (poolerType == clustermetadatapb.PoolerType_REPLICA)
-
-	// Check if PostgreSQL is in recovery mode (canonical way to check if read-only)
-	isPrimary, err := pm.isPrimary(ctx)
-	if err != nil {
-		pm.logger.ErrorContext(ctx, "Failed to check recovery status", "error", err)
-		return nil, mterrors.Wrap(err, "failed to check recovery status")
-	}
-	state.isReadOnly = !isPrimary
-
-	// Capture current LSN
-	state.finalLSN, err = pm.getWALPosition(ctx)
-	if err != nil {
-		pm.logger.ErrorContext(ctx, "Failed to get LSN", "error", err)
-		return nil, mterrors.Wrap(err, "failed to get LSN")
-	}
-
-	pm.logger.InfoContext(ctx, "Checked demotion state",
-		"is_replica_in_topology", state.isReplicaInTopology,
-		"is_read_only", state.isReadOnly,
-		"is_primary", isPrimary,
-		"pooler_type", poolerType,
-		"serving_status", servingStatus)
-
-	return state, nil
-}
-
 // restartPostgresAsStandby restarts PostgreSQL as a standby server
 // This creates standby.signal and restarts PostgreSQL via pgctld
 //
@@ -1122,12 +1078,7 @@ func (pm *MultiPoolerManager) checkDemotionState(ctx context.Context) (*demotion
 // or self-rewind detection) routes through pg_rewind dry-run before
 // trusting local WAL. Today the only setter is demoteToStandbyLocked,
 // which leaves several transition paths under-defended.
-func (pm *MultiPoolerManager) restartPostgresAsStandby(ctx context.Context, state *demotionState) error {
-	if state.isReadOnly {
-		pm.logger.InfoContext(ctx, "PostgreSQL already running as standby, skipping")
-		return nil
-	}
-
+func (pm *MultiPoolerManager) restartPostgresAsStandby(ctx context.Context) error {
 	if pm.pgctldClient == nil {
 		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, "pgctld client not initialized")
 	}
