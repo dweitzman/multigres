@@ -147,7 +147,7 @@ func (pm *MultiPoolerManager) Recruit(ctx context.Context, req *consensusdatapb.
 		return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, err.Error())
 	}
 
-	isPrimary, err := pm.isPrimary(ctx)
+	inRecovery, err := pm.isInRecovery(ctx)
 	if err != nil {
 		return nil, mterrors.Wrap(err, "failed to determine role for recruit")
 	}
@@ -161,7 +161,7 @@ func (pm *MultiPoolerManager) Recruit(ctx context.Context, req *consensusdatapb.
 	var savedConnInfo string // non-empty if standby; used for recovery on race failure
 	{
 		stopCtx, stopSpan := telemetry.Tracer().Start(ctx, "consensus/stop-replication")
-		if isPrimary {
+		if !inRecovery {
 			pm.logger.InfoContext(stopCtx, "Recruiting primary: demoting and restarting as standby",
 				"revoked_below_term", revokedBelowTerm)
 			err = pm.demoteToStandbyLocked(stopCtx, revokedBelowTerm, recruitDrainTimeout)
@@ -183,7 +183,7 @@ func (pm *MultiPoolerManager) Recruit(ctx context.Context, req *consensusdatapb.
 		}
 	}
 
-	if !isPrimary {
+	if inRecovery {
 		stabilizeCtx, stabilizeSpan := telemetry.Tracer().Start(ctx, "consensus/stabilize")
 		_, err = pm.waitForReplayStabilize(stabilizeCtx)
 		stabilizeSpan.End()
@@ -210,7 +210,7 @@ func (pm *MultiPoolerManager) Recruit(ctx context.Context, req *consensusdatapb.
 		raceErr := mterrors.Wrap(err, "failed to persist term revocation")
 		eventlog.Emit(ctx, pm.logger, eventlog.Failed, termEvent, "error", raceErr)
 		// Attempt to restore the node to its prior replication role.
-		if isPrimary {
+		if !inRecovery {
 			// TODO: In theory it should be safe to re-promote the primary if this happens, but to keep things
 			// simpler for now we just keep publishing the signal that this pooler resigned from its term as
 			// leader to allow orch to do a failover.
@@ -613,7 +613,7 @@ func (pm *MultiPoolerManager) setPrimaryLocked(ctx context.Context, req *consens
 	// Decide between "standby update" and "stale-primary demote" based on
 	// actual postgres recovery state rather than topology — a node mid-promote
 	// or mid-demote may have a topology label that lags reality.
-	isPrimary, err := pm.isPrimary(ctx)
+	inRecovery, err := pm.isInRecovery(ctx)
 	if err != nil {
 		return nil, mterrors.Wrap(err, "failed to check recovery status")
 	}
@@ -624,7 +624,7 @@ func (pm *MultiPoolerManager) setPrimaryLocked(ctx context.Context, req *consens
 	// an SetPrimary is a notification, not a revoke.
 	consensusTerm := rule.GetRuleNumber().GetCoordinatorTerm()
 
-	if isPrimary {
+	if !inRecovery {
 		if _, err := pm.consensusMgr.SetSuspectedDivergence(ctx, true); err != nil {
 			pm.logger.ErrorContext(ctx, "failed to set suspected divergence in SetPrimary", "error", err)
 		}
@@ -648,7 +648,7 @@ func (pm *MultiPoolerManager) setPrimaryLocked(ctx context.Context, req *consens
 		pm.logger.InfoContext(ctx, "SetPrimary: stale primary, restarting as standby",
 			"new_leader", leader.GetId().GetName(),
 			"incoming_rule", rule.GetRuleNumber(),
-			"is_primary", isPrimary)
+			"in_recovery", inRecovery)
 		// restartAsStandbyLocked sets primary_conninfo to leader on success,
 		// so we don't need a separate setPrimaryConnInfoLocked call here.
 		if _, err := pm.restartAsStandbyLocked(ctx, leader.GetHost(), port); err != nil {

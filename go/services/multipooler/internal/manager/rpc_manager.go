@@ -114,13 +114,13 @@ func (pm *MultiPoolerManager) setPrimaryConnInfoLocked(ctx context.Context, host
 	}
 
 	// Guardrail: Check if the PostgreSQL instance is in recovery (standby mode)
-	isPrimary, err := pm.isPrimary(ctx)
+	inRecovery, err := pm.isInRecovery(ctx)
 	if err != nil {
 		pm.logger.ErrorContext(ctx, "Failed to check if instance is in recovery", "error", err)
 		return mterrors.Wrap(err, "failed to check recovery status")
 	}
 
-	if isPrimary {
+	if !inRecovery {
 		pm.logger.ErrorContext(ctx, "setPrimaryConnInfo called on non-standby instance", "service_id", pm.serviceID.String())
 		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
 			fmt.Sprintf("operation not allowed: the PostgreSQL instance is not in standby mode (service_id: %s)", pm.serviceID.String()))
@@ -335,7 +335,7 @@ func (pm *MultiPoolerManager) Status(ctx context.Context) (*multipoolermanagerda
 	resp.AvailabilityStatus = pm.buildAvailabilityStatus()
 
 	// Try to get detailed status based on PostgreSQL role
-	isPrimary, err := pm.isPrimary(ctx)
+	inRecovery, err := pm.isInRecovery(ctx)
 	if err != nil {
 		// Can't determine role - return what we have
 		pm.logger.WarnContext(ctx, "Failed to check PostgreSQL role, returning partial status", "error", err)
@@ -343,8 +343,8 @@ func (pm *MultiPoolerManager) Status(ctx context.Context) (*multipoolermanagerda
 	}
 
 	// Populate role-specific status
-	if isPrimary {
-		// Acting as primary - get primary status (skip guardrails since we already checked isPrimary)
+	if !inRecovery {
+		// Acting as primary - get primary status (skip guardrails since we already checked recovery mode)
 		primaryStatus, err := pm.getPrimaryStatusInternal(ctx)
 		if err != nil {
 			pm.logger.WarnContext(ctx, "Failed to get primary status", "error", err)

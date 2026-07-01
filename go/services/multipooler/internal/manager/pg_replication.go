@@ -55,12 +55,6 @@ import (
 // Replication Status Query Methods
 // ----------------------------------------------------------------------------
 
-// isPrimary checks if the connected database is a primary (not in recovery)
-func (pm *MultiPoolerManager) isPrimary(ctx context.Context) (bool, error) {
-	inRecovery, err := pm.isInRecovery(ctx)
-	return !inRecovery, err
-}
-
 // isInRecovery checks if the connected database is in recovery mode (standby).
 // Returns true if the database is a standby, false if it's a primary.
 func (pm *MultiPoolerManager) isInRecovery(ctx context.Context) (bool, error) {

@@ -202,7 +202,7 @@ type MultiPoolerManager struct {
 
 // promotionState tracks which parts of the promotion are complete
 type promotionState struct {
-	isPrimaryInPostgres bool
+	inRecovery          bool
 	isPrimaryInTopology bool
 	currentLSN          string
 }
@@ -382,7 +382,12 @@ func newMultiPoolerManager(logger *slog.Logger, multiPooler *clustermetadatapb.M
 	// Wire the backup-health poller to the manager's pg connection: role
 	// (only a primary archives WAL), pg_stat_archiver (WAL archive lag), and
 	// the backup-relevant settings (archive/restore config).
-	pm.backup.SetRoleProvider(pm.isPrimary)
+	// The backup engine reasons in terms of "is this a primary" (only a primary
+	// archives WAL); adapt the recovery-mode primitive to that at the boundary.
+	pm.backup.SetRoleProvider(func(ctx context.Context) (bool, error) {
+		inRecovery, err := pm.isInRecovery(ctx)
+		return !inRecovery, err
+	})
 	pm.backup.SetArchiverStatsProvider(pm.archiverStats)
 	pm.backup.SetPGSettingsProvider(pm.backupSettings)
 
@@ -1114,12 +1119,12 @@ func (pm *MultiPoolerManager) checkDemotionState(ctx context.Context) (*demotion
 	state.isReplicaInTopology = (poolerType == clustermetadatapb.PoolerType_REPLICA)
 
 	// Check if PostgreSQL is in recovery mode (canonical way to check if read-only)
-	isPrimary, err := pm.isPrimary(ctx)
+	inRecovery, err := pm.isInRecovery(ctx)
 	if err != nil {
 		pm.logger.ErrorContext(ctx, "Failed to check recovery status", "error", err)
 		return nil, mterrors.Wrap(err, "failed to check recovery status")
 	}
-	state.isReadOnly = !isPrimary
+	state.isReadOnly = inRecovery
 
 	// Capture current LSN
 	state.finalLSN, err = pm.getWALPosition(ctx)
@@ -1131,7 +1136,7 @@ func (pm *MultiPoolerManager) checkDemotionState(ctx context.Context) (*demotion
 	pm.logger.InfoContext(ctx, "Checked demotion state",
 		"is_replica_in_topology", state.isReplicaInTopology,
 		"is_read_only", state.isReadOnly,
-		"is_primary", isPrimary,
+		"in_recovery", inRecovery,
 		"pooler_type", poolerType,
 		"serving_status", servingStatus)
 
@@ -1323,9 +1328,9 @@ func (pm *MultiPoolerManager) checkPromotionState(ctx context.Context) (*promoti
 		return nil, mterrors.Wrap(err, "failed to check recovery status")
 	}
 
-	state.isPrimaryInPostgres = !isInRecovery
+	state.inRecovery = isInRecovery
 
-	if state.isPrimaryInPostgres {
+	if !state.inRecovery {
 		// Get current primary LSN
 		state.currentLSN, err = pm.getPrimaryLSN(ctx)
 		if err != nil {
@@ -1342,7 +1347,7 @@ func (pm *MultiPoolerManager) checkPromotionState(ctx context.Context) (*promoti
 	state.isPrimaryInTopology = (poolerType == clustermetadatapb.PoolerType_PRIMARY)
 
 	pm.logger.InfoContext(ctx, "Checked promotion state",
-		"is_primary_in_postgres", state.isPrimaryInPostgres,
+		"in_recovery", state.inRecovery,
 		"is_primary_in_topology", state.isPrimaryInTopology)
 
 	return state, nil
@@ -1354,7 +1359,7 @@ func (pm *MultiPoolerManager) checkPromotionState(ctx context.Context) (*promoti
 // inherit a stale mark.
 func (pm *MultiPoolerManager) promoteStandbyToPrimary(ctx context.Context, state *promotionState, coordinatorTerm int64) error {
 	// Return early if already promoted
-	if state.isPrimaryInPostgres {
+	if !state.inRecovery {
 		pm.logger.InfoContext(ctx, "PostgreSQL already promoted, skipping")
 		return nil
 	}
