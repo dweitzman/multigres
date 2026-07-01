@@ -109,7 +109,7 @@ func TestStateManager_SetState_PrimaryServing(t *testing.T) {
 	ssm := NewStateManager(newTestLogger(), r, selfLeaderConsensusStatus, comp)
 
 	err := ssm.Mutate(newActionLockedCtx(t), func(s *servingStateMutation) {
-		s.PostgresPrimary = true
+		s.InRecovery = false
 		s.ServingStatus = clustermetadatapb.PoolerServingStatus_SERVING
 	})
 	require.NoError(t, err)
@@ -131,7 +131,7 @@ func TestStateManager_SetState_NotServing(t *testing.T) {
 	ssm := NewStateManager(newTestLogger(), r, selfLeaderConsensusStatus, comp)
 
 	err := ssm.Mutate(newActionLockedCtx(t), func(s *servingStateMutation) {
-		s.PostgresPrimary = true
+		s.InRecovery = false
 		s.ServingStatus = clustermetadatapb.PoolerServingStatus_DISABLED
 	})
 	require.NoError(t, err)
@@ -150,7 +150,7 @@ func TestStateManager_SetState_ComponentError(t *testing.T) {
 	ssm := NewStateManager(newTestLogger(), r, nilConsensusStatus, comp)
 
 	err := ssm.Mutate(newActionLockedCtx(t), func(s *servingStateMutation) {
-		s.PostgresPrimary = false
+		s.InRecovery = true
 		s.ServingStatus = clustermetadatapb.PoolerServingStatus_SERVING
 	})
 	require.Error(t, err)
@@ -172,7 +172,7 @@ func TestStateManager_DemotionFlow(t *testing.T) {
 
 	// Step 1: Stop serving (still the writable leader, so routing stays PRIMARY)
 	err := ssm.Mutate(newActionLockedCtx(t), func(s *servingStateMutation) {
-		s.PostgresPrimary = true
+		s.InRecovery = false
 		s.ServingStatus = clustermetadatapb.PoolerServingStatus_DISABLED
 	})
 	require.NoError(t, err)
@@ -182,7 +182,7 @@ func TestStateManager_DemotionFlow(t *testing.T) {
 
 	// Step 1b: Retry DISABLED (idempotent — should be a no-op)
 	err = ssm.Mutate(newActionLockedCtx(t), func(s *servingStateMutation) {
-		s.PostgresPrimary = true
+		s.InRecovery = false
 		s.ServingStatus = clustermetadatapb.PoolerServingStatus_DISABLED
 	})
 	require.NoError(t, err)
@@ -192,7 +192,7 @@ func TestStateManager_DemotionFlow(t *testing.T) {
 
 	// Step 2: Transition to replica serving (recovery -> not the writable leader)
 	err = ssm.Mutate(newActionLockedCtx(t), func(s *servingStateMutation) {
-		s.PostgresPrimary = false
+		s.InRecovery = true
 		s.ServingStatus = clustermetadatapb.PoolerServingStatus_SERVING
 	})
 	require.NoError(t, err)
@@ -209,7 +209,7 @@ func TestStateManager_MultipleComponents(t *testing.T) {
 	ssm := NewStateManager(newTestLogger(), r, selfLeaderConsensusStatus, comp1, comp2)
 
 	err := ssm.Mutate(newActionLockedCtx(t), func(s *servingStateMutation) {
-		s.PostgresPrimary = true
+		s.InRecovery = false
 		s.ServingStatus = clustermetadatapb.PoolerServingStatus_SERVING
 	})
 	require.NoError(t, err)
@@ -229,7 +229,7 @@ func TestStateManager_MultipleComponents_OneError(t *testing.T) {
 	ssm := NewStateManager(newTestLogger(), r, nilConsensusStatus, comp1, comp2)
 
 	err := ssm.Mutate(newActionLockedCtx(t), func(s *servingStateMutation) {
-		s.PostgresPrimary = false
+		s.InRecovery = true
 		s.ServingStatus = clustermetadatapb.PoolerServingStatus_SERVING
 	})
 	require.Error(t, err)
@@ -251,7 +251,7 @@ func TestStateManager_Register(t *testing.T) {
 	ssm.Register(comp2)
 
 	err := ssm.Mutate(newActionLockedCtx(t), func(s *servingStateMutation) {
-		s.PostgresPrimary = true
+		s.InRecovery = false
 		s.ServingStatus = clustermetadatapb.PoolerServingStatus_SERVING
 	})
 	require.NoError(t, err)
@@ -267,7 +267,7 @@ func TestStateManager_RegisterAndSync(t *testing.T) {
 	// Create manager with no components, then transition state.
 	ssm := NewStateManager(newTestLogger(), r, selfLeaderConsensusStatus)
 	err := ssm.Mutate(newActionLockedCtx(t), func(s *servingStateMutation) {
-		s.PostgresPrimary = true
+		s.InRecovery = false
 		s.ServingStatus = clustermetadatapb.PoolerServingStatus_SERVING
 	})
 	require.NoError(t, err)
@@ -311,7 +311,7 @@ func TestStateManager_NoComponents(t *testing.T) {
 	ssm := NewStateManager(newTestLogger(), r, selfLeaderConsensusStatus)
 
 	err := ssm.Mutate(newActionLockedCtx(t), func(s *servingStateMutation) {
-		s.PostgresPrimary = true
+		s.InRecovery = false
 		s.ServingStatus = clustermetadatapb.PoolerServingStatus_SERVING
 	})
 	require.NoError(t, err)
@@ -340,7 +340,7 @@ func TestStateManager_HealthStreamerIntegration(t *testing.T) {
 	_, ch := hs.subscribe()
 
 	err := ssm.Mutate(newActionLockedCtx(t), func(s *servingStateMutation) {
-		s.PostgresPrimary = true
+		s.InRecovery = false
 		s.ServingStatus = clustermetadatapb.PoolerServingStatus_SERVING
 	})
 	require.NoError(t, err)
@@ -373,7 +373,7 @@ func TestStateManager_ParallelExecution(t *testing.T) {
 	ssm := NewStateManager(newTestLogger(), r, selfLeaderConsensusStatus, comp1, comp2)
 
 	err := ssm.Mutate(newActionLockedCtx(t), func(s *servingStateMutation) {
-		s.PostgresPrimary = true
+		s.InRecovery = false
 		s.ServingStatus = clustermetadatapb.PoolerServingStatus_SERVING
 	})
 	require.NoError(t, err)
@@ -389,7 +389,7 @@ func TestStateManager_SetState_RequiresActionLock(t *testing.T) {
 
 	// No action lock on the context: SetState must reject before doing anything.
 	err := ssm.Mutate(t.Context(), func(s *servingStateMutation) {
-		s.PostgresPrimary = true
+		s.InRecovery = false
 		s.ServingStatus = clustermetadatapb.PoolerServingStatus_SERVING
 	})
 	require.Error(t, err)
@@ -400,51 +400,49 @@ func TestStateManager_SetState_RequiresActionLock(t *testing.T) {
 	assert.Equal(t, clustermetadatapb.PoolerServingStatus_DISABLED, r.ServingStatus())
 }
 
-// TestStateManager_HasDrift covers the physical-primary / serving drift detection
+// TestStateManager_HasDrift covers the recovery-flag / serving drift detection
 // that the postgres monitor uses to decide whether to reconcile (fixDrift). The
-// role facts are held fixed as the active writable leader (self-leader consensus +
-// PostgresPrimary=true) so this isolates the recovery-flag / serving-status inputs,
-// matching the old determineRemedialAction primary-drift coverage that moved here.
+// consensus facts are held fixed as the active writable leader (self-leader
+// snapshot), so this isolates the recovery-flag / serving-status inputs, matching
+// the old determineRemedialAction primary-drift coverage that moved here.
 func TestStateManager_HasDrift(t *testing.T) {
 	// newFannedOut builds a manager whose last-fanned-out effective state is
-	// (PRIMARY, serving): the active writable leader currently in `serving`.
+	// (PRIMARY, serving): the active writable leader (out of recovery) in `serving`.
 	newFannedOut := func(t *testing.T, serving clustermetadatapb.PoolerServingStatus) *StateManager {
 		r := newTestRecord(clustermetadatapb.PoolerType_PRIMARY, serving)
 		ssm := NewStateManager(newTestLogger(), r, selfLeaderConsensusStatus)
-		// Establish lastFannedOut = (PRIMARY, serving) as the active writable leader.
 		require.NoError(t, ssm.Mutate(newActionLockedCtx(t), func(s *servingStateMutation) {
-			s.PostgresPrimary = true
+			s.InRecovery = false
 			s.ServingStatus = serving
 		}))
 		return ssm
 	}
 
-	t.Run("primary drift reconciles", func(t *testing.T) {
-		// Last fanned out as the writable leader (PostgresPrimary true), but postgres
-		// now reports recovery (postgresPrimary=false): the routing role would flip,
-		// so this is drift.
+	t.Run("recovery flip reconciles", func(t *testing.T) {
+		// Last fanned out as the writable leader (out of recovery), but postgres now
+		// reports in-recovery: the routing role flips to REPLICA, so this is drift.
 		ssm := newFannedOut(t, clustermetadatapb.PoolerServingStatus_SERVING)
-		assert.True(t, ssm.hasDrift(false /* postgresPrimary */))
+		assert.True(t, ssm.hasDrift(true /* inRecovery */))
 	})
 
 	t.Run("draining always reconciles", func(t *testing.T) {
 		// DRAINING is a transient drain the monitor owns; hasDrift always reports it
 		// so fixDrift completes DRAINING->SERVING once healthy and role-aligned.
 		ssm := newFannedOut(t, clustermetadatapb.PoolerServingStatus_DRAINING)
-		assert.True(t, ssm.hasDrift(true /* postgresPrimary */))
+		assert.True(t, ssm.hasDrift(false /* inRecovery */))
 	})
 
 	t.Run("disabled is left alone", func(t *testing.T) {
 		// DISABLED is a deliberate non-serving state; with the recovery flag and role
 		// unchanged there is no drift, so the monitor must not auto-reconcile it.
 		ssm := newFannedOut(t, clustermetadatapb.PoolerServingStatus_DISABLED)
-		assert.False(t, ssm.hasDrift(true /* postgresPrimary */))
+		assert.False(t, ssm.hasDrift(false /* inRecovery */))
 	})
 
 	t.Run("no drift is a no-op", func(t *testing.T) {
 		// Recovery flag and serving status match what was last fanned out: no drift.
 		ssm := newFannedOut(t, clustermetadatapb.PoolerServingStatus_SERVING)
-		assert.False(t, ssm.hasDrift(true /* postgresPrimary */))
+		assert.False(t, ssm.hasDrift(false /* inRecovery */))
 	})
 }
 
@@ -456,12 +454,13 @@ func TestStateManager_FixDrift(t *testing.T) {
 		r := newTestRecord(clustermetadatapb.PoolerType_PRIMARY, clustermetadatapb.PoolerServingStatus_SERVING)
 		ssm := NewStateManager(newTestLogger(), r, selfLeaderConsensusStatus)
 		require.NoError(t, ssm.Mutate(newActionLockedCtx(t), func(s *servingStateMutation) {
-			s.PostgresPrimary = true
+			s.InRecovery = false
 			s.ServingStatus = clustermetadatapb.PoolerServingStatus_SERVING
 		}))
 		require.Equal(t, clustermetadatapb.PoolerType_PRIMARY, r.Type())
 
-		require.NoError(t, ssm.fixDrift(newActionLockedCtx(t), false /* postgresPrimary */))
+		// Postgres now reports in-recovery: fixDrift re-derives REPLICA.
+		require.NoError(t, ssm.fixDrift(newActionLockedCtx(t), true /* inRecovery */))
 		assert.Equal(t, clustermetadatapb.PoolerType_REPLICA, r.Type())
 		assert.Equal(t, clustermetadatapb.PoolerServingStatus_SERVING, r.ServingStatus())
 	})
@@ -470,7 +469,9 @@ func TestStateManager_FixDrift(t *testing.T) {
 		r := newTestRecord(clustermetadatapb.PoolerType_PRIMARY, clustermetadatapb.PoolerServingStatus_DRAINING)
 		ssm := NewStateManager(newTestLogger(), r, selfLeaderConsensusStatus)
 
-		require.NoError(t, ssm.fixDrift(newActionLockedCtx(t), true /* postgresPrimary */))
+		// Out of recovery and the active leader: fixDrift keeps PRIMARY and completes
+		// the transient DRAINING to SERVING.
+		require.NoError(t, ssm.fixDrift(newActionLockedCtx(t), false /* inRecovery */))
 		assert.Equal(t, clustermetadatapb.PoolerServingStatus_SERVING, r.ServingStatus())
 		assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, r.Type())
 	})
@@ -483,7 +484,7 @@ func nilConsensusStatus() *clustermetadatapb.ConsensusStatus { return nil }
 // selfLeaderConsensusStatus is a StateManager consensus-snapshot injector in
 // which testPoolerID is the active committed leader (commonconsensus.IsActiveLeader
 // is true): the committed rule names self and is not revoked or superseded.
-// Combined with s.PostgresPrimary = true it yields routing role PRIMARY.
+// Combined with s.InRecovery = false it yields routing role PRIMARY.
 func selfLeaderConsensusStatus() *clustermetadatapb.ConsensusStatus {
 	return &clustermetadatapb.ConsensusStatus{
 		Id: testPoolerID,
@@ -510,30 +511,30 @@ func TestDeriveRoutingRole(t *testing.T) {
 	}
 
 	tests := []struct {
-		name            string
-		postgresPrimary bool
-		cs              *clustermetadatapb.ConsensusStatus
-		want            servingstate.RoutingRole
+		name       string
+		inRecovery bool
+		cs         *clustermetadatapb.ConsensusStatus
+		want       servingstate.RoutingRole
 	}{
 		{
-			name:            "out of recovery and active leader is primary",
-			postgresPrimary: true,
-			cs:              selfLeaderConsensusStatus(),
-			want:            servingstate.RoutingRolePrimary,
+			name:       "out of recovery and active leader is primary",
+			inRecovery: false,
+			cs:         selfLeaderConsensusStatus(),
+			want:       servingstate.RoutingRolePrimary,
 		},
 		{
-			name:            "in recovery is replica even as active leader",
-			postgresPrimary: false,
-			cs:              selfLeaderConsensusStatus(),
-			want:            servingstate.RoutingRoleReplica,
+			name:       "in recovery is replica even as active leader",
+			inRecovery: true,
+			cs:         selfLeaderConsensusStatus(),
+			want:       servingstate.RoutingRoleReplica,
 		},
 		{
 			// pg_promote() has flipped postgres out of recovery, but the new rule has
 			// not committed to this pooler's WAL yet, so its committed rule still names
 			// the previous leader. Admitting writes here would land them on a
 			// not-yet-committed term — this is the window the routing role closes.
-			name:            "primary but committed rule names another is replica",
-			postgresPrimary: true,
+			name:       "primary but committed rule names another is replica",
+			inRecovery: false,
 			cs: &clustermetadatapb.ConsensusStatus{
 				Id: testPoolerID,
 				CurrentPosition: &clustermetadatapb.PoolerPosition{
@@ -546,17 +547,17 @@ func TestDeriveRoutingRole(t *testing.T) {
 			want: servingstate.RoutingRoleReplica,
 		},
 		{
-			name:            "primary with no consensus snapshot is replica",
-			postgresPrimary: true,
-			cs:              nil,
-			want:            servingstate.RoutingRoleReplica,
+			name:       "primary with no consensus snapshot is replica",
+			inRecovery: false,
+			cs:         nil,
+			want:       servingstate.RoutingRoleReplica,
 		},
 		{
 			// Self's committed rule (term 1) is revoked below term 2: the pooler was
 			// recruited into a higher term's reconfiguration, so the rule no longer
 			// carries write authority.
-			name:            "primary but committed rule revoked is replica",
-			postgresPrimary: true,
+			name:       "primary but committed rule revoked is replica",
+			inRecovery: false,
 			cs: func() *clustermetadatapb.ConsensusStatus {
 				cs := selfLeaderConsensusStatus()
 				cs.TermRevocation = &clustermetadatapb.TermRevocation{RevokedBelowTerm: 2}
@@ -568,8 +569,8 @@ func TestDeriveRoutingRole(t *testing.T) {
 			// Self's committed rule (term 1) names self, but a higher rule (term 2)
 			// naming another pooler is known via ReplicationPrimary — self has been
 			// superseded, so it is no longer the active leader.
-			name:            "primary but superseded by higher known rule is replica",
-			postgresPrimary: true,
+			name:       "primary but superseded by higher known rule is replica",
+			inRecovery: false,
 			cs: func() *clustermetadatapb.ConsensusStatus {
 				cs := selfLeaderConsensusStatus()
 				cs.ReplicationPrimary = &clustermetadatapb.ReplicationPrimary{
@@ -586,7 +587,7 @@ func TestDeriveRoutingRole(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, deriveRoutingRole(tt.postgresPrimary, tt.cs))
+			assert.Equal(t, tt.want, deriveRoutingRole(tt.inRecovery, tt.cs))
 		})
 	}
 }

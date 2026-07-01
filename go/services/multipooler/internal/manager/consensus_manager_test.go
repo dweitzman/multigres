@@ -198,13 +198,12 @@ func newTestManager(t *testing.T, opts ...testManagerOption) *MultiPoolerManager
 	cfg.seedLockedState(t, pm)
 	// Prime the StateManager's last-fanned-out state to reflect what components
 	// last saw: the seeded record's own label and serving status, with the physical
-	// recovery flag assumed aligned with that label (PRIMARY <-> primary). This is
-	// the faithful port of the old determineRemedialAction lastAppliedPrimary input
-	// (which the tables passed as state.isPrimary): a freshly-built manager is NOT
-	// drifted relative to its seed, so drift is registered only when the observed
-	// postgresState / consensus diverges from the seeded label.
+	// recovery flag assumed aligned with that label (a PRIMARY record is out of
+	// recovery). A freshly-built manager is NOT drifted relative to its seed, so
+	// drift is registered only when the observed postgresState / consensus diverges
+	// from the seeded label.
 	primaryBaseline := pm.record.Type() == clustermetadatapb.PoolerType_PRIMARY
-	pm.stateManager.postgresPrimary = primaryBaseline
+	pm.stateManager.inRecovery = !primaryBaseline
 	baseline := servingstate.State{
 		RoutingRole:   servingstate.RoutingRoleReplica,
 		ServingStatus: pm.record.ServingStatus(),

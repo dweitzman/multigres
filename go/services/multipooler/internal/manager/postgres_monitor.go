@@ -467,7 +467,7 @@ func (pm *MultiPoolerManager) determineRoleAction(role commonconsensus.Consensus
 	// committed rule landing after pg_promote, or a revocation) to the query
 	// server's write gate, and completes a transient DRAINING. hasDrift reads the
 	// consensus snapshot itself, so it and fixDrift derive from the same inputs.
-	if pm.stateManager.hasDrift(state.isPrimary) {
+	if pm.stateManager.hasDrift(!state.isPrimary /* inRecovery */) {
 		return remedialActionReconcileState
 	}
 
@@ -634,7 +634,7 @@ func (pm *MultiPoolerManager) takeRemedialAction(ctx context.Context, action rem
 		// self-leadership and the writable signal). Serving status is unchanged (a
 		// healthy standby keeps serving reads).
 		if err := pm.stateManager.Mutate(ctx, func(s *servingStateMutation) {
-			s.PostgresPrimary = false
+			s.InRecovery = true
 		}); err != nil {
 			pm.logger.WarnContext(ctx, "MonitorPostgres: failed to apply role after demote", "error", err)
 		}
@@ -649,7 +649,7 @@ func (pm *MultiPoolerManager) takeRemedialAction(ctx context.Context, action rem
 		// the query server's write gate. Serving is re-enabled only out of DRAINING;
 		// a DISABLED pooler is left not-serving.
 		pm.logger.InfoContext(ctx, "MonitorPostgres: reconciling drifted state", "postgres_primary", state.isPrimary)
-		if err := pm.stateManager.fixDrift(ctx, state.isPrimary); err != nil {
+		if err := pm.stateManager.fixDrift(ctx, !state.isPrimary /* inRecovery */); err != nil {
 			pm.logger.ErrorContext(ctx, "MonitorPostgres: failed to reconcile drifted state", "error", err)
 		}
 
@@ -673,7 +673,7 @@ func (pm *MultiPoolerManager) takeRemedialAction(ctx context.Context, action rem
 		// the writer keeps issuing INSERTs against a read-only standby every
 		// interval until re-election.
 		if err := pm.stateManager.Mutate(ctx, func(s *servingStateMutation) {
-			s.PostgresPrimary = false
+			s.InRecovery = true
 		}); err != nil {
 			pm.logger.WarnContext(ctx, "MonitorPostgres: failed to sync postgres primary status on resign", "error", err)
 		}

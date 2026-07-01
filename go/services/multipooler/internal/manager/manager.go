@@ -1561,12 +1561,12 @@ func (pm *MultiPoolerManager) updateTopologyAfterPromotion(ctx context.Context, 
 	// Promotion has already waited for postgres to leave recovery AND for the new
 	// rule to commit (DoUpdateRule blocks on the sync-standby ack before this
 	// runs), so the consensus snapshot now names this pooler the active committed
-	// leader: poking PostgresPrimary here derives routing role PRIMARY and its
+	// leader: poking InRecovery here derives routing role PRIMARY and its
 	// leadership observation, letting the heartbeat writer / LISTEN and the gateway
 	// start immediately rather than waiting for the next monitor tick. Mutate is
 	// idempotent — if already at this state it short-circuits.
 	if err := pm.stateManager.Mutate(ctx, func(s *servingStateMutation) {
-		s.PostgresPrimary = true
+		s.InRecovery = false
 		s.ServingStatus = clustermetadatapb.PoolerServingStatus_SERVING
 	}); err != nil {
 		return mterrors.Wrap(err, "failed to set serving state for promotion")

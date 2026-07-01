@@ -302,7 +302,7 @@ func TestUpdateTopologyAfterPromotion_PublishesSelfLeadership(t *testing.T) {
 	}
 	// The committed consensus position names self as leader under that rule, so the
 	// StateManager derives routing role PRIMARY (IsActiveLeader) once the promotion
-	// pokes PostgresPrimary.
+	// pokes InRecovery.
 	pm := newRemedialActionTestManager(t, multipooler,
 		withRuleStore(&fakeRuleStore{pos: &clustermetadatapb.PoolerPosition{Rule: rule}}))
 

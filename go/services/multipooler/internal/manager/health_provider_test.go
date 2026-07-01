@@ -377,7 +377,7 @@ func TestHealthStreamer_DoesNotWaitOnNotServing(t *testing.T) {
 }
 
 // TestHealthStreamer_PublishesWritability verifies the health stream publishes
-// Writable from postgresPrimary, independent of PoolerType/serving: a consensus
+// Writable from inRecovery, independent of PoolerType/serving: a consensus
 // leader still in recovery is PRIMARY + SERVING but not yet Writable, and flips to
 // Writable only once postgres leaves recovery. This is what lets the gateway hold
 // write traffic for a leader mid-promotion.

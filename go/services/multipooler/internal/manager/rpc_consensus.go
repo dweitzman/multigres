@@ -687,7 +687,7 @@ func (pm *MultiPoolerManager) setPrimaryLocked(ctx context.Context, req *consens
 	// cycle. Serving status is owned by the lifecycle and the monitor's reconcile,
 	// not by "here is your primary" bookkeeping.
 	if err := pm.stateManager.Mutate(ctx, func(s *servingStateMutation) {
-		s.PostgresPrimary = false
+		s.InRecovery = true
 	}); err != nil {
 		pm.logger.WarnContext(ctx, "Failed to update pooler type to REPLICA after SetPrimary", "error", err)
 	}
