@@ -1371,3 +1371,119 @@ func mustNewPolicyFromProto(t *testing.T, dp *clustermetadatapb.DurabilityPolicy
 	require.NoError(t, err)
 	return p
 }
+
+// seedStuckProposal writes proposal_* columns directly, bypassing UpdateRule's
+// two-phase write entirely. This simulates the crash scenario Propagate exists
+// to recover from: a previous session wrote the proposal (phase 1) but never
+// reached phase 2 (markProposalAsDecision), e.g. because its writer died before
+// or during the synchronous-replication handshake.
+func seedStuckProposal(ctx context.Context, t *testing.T, conn *client.Conn, leaderID *clustermetadatapb.ID, cohort []*clustermetadatapb.ID, term, subterm int64) {
+	t.Helper()
+	qs := &connQueryService{conn: conn}
+	leaderPID, err := NewReplicaID(leaderID)
+	require.NoError(t, err)
+	cohortPIDs, err := ToReplicaIDs(cohort)
+	require.NoError(t, err)
+	_, err = qs.QueryArgs(ctx, `
+		UPDATE multigres.current_rule
+		SET proposal_coordinator_term = $1,
+		    proposal_leader_subterm = $2,
+		    proposal_leader_id = $3,
+		    proposal_cohort_members = $4,
+		    proposal_durability_policy_name = $5,
+		    proposal_durability_quorum_type = $6,
+		    proposal_durability_required_count = $7
+		WHERE shard_id = $8`,
+		term, subterm, leaderPID.appName, ReplicaIDsToAppNames(cohortPIDs),
+		"AT_LEAST_2", "QUORUM_TYPE_AT_LEAST_N", int64(2), []byte("0"))
+	require.NoError(t, err)
+}
+
+func TestRuleStorePG_PropagateProposal_FinalizesStuckProposal(t *testing.T) {
+	skipIfNoPG(t)
+	ctx := withTestActionLock(t)
+	resetRuleStoreTables(ctx, t)
+
+	rs, conn := newTestRuleStore(ctx, t)
+	defer conn.Close()
+
+	oldLeaderID := testPoolerID(t, "zone1", "old-leader")
+	newLeaderID := testPoolerID(t, "zone1", "new-leader")
+	cohort := []*clustermetadatapb.ID{oldLeaderID, newLeaderID}
+
+	// Establish a decision so there's an "outgoing" cohort/policy to transition
+	// from, then seed a stuck proposal beyond it — as if a coordinator wrote the
+	// proposal and crashed before marking it decided.
+	_, err := rs.UpdateRule(ctx, NewRuleUpdate(1, oldLeaderID, "promotion", "initial", time.Now()).
+		WithLeader(oldLeaderID).WithCohort(cohort))
+	require.NoError(t, err)
+	seedStuckProposal(ctx, t, conn, newLeaderID, cohort, 2, 0)
+
+	promotionHookCalled := false
+	expectedProposal := &clustermetadatapb.ShardRule{
+		RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 2, LeaderSubterm: 0},
+	}
+	pos, err := rs.PropagateProposal(ctx, expectedProposal, testPoolerID(t, "zone1", "coordinator-1"), time.Now(),
+		func(ctx context.Context) error {
+			promotionHookCalled = true
+			return nil
+		})
+	require.NoError(t, err)
+	require.NotNil(t, pos)
+	assert.True(t, promotionHookCalled, "promotion hook must run before the quorum gate")
+	assert.Equal(t, int64(2), pos.GetDecision().GetRuleNumber().GetCoordinatorTerm())
+	assert.Equal(t, int64(0), pos.GetDecision().GetRuleNumber().GetLeaderSubterm())
+	assert.Equal(t, "new-leader", pos.GetDecision().GetLeaderId().GetName())
+	assert.Nil(t, pos.GetProposal(), "propagation must clear the proposal it finalized")
+
+	// Re-reading from a fresh observation must agree — the proposal isn't just
+	// cleared in the returned value, it's cleared in the DB.
+	observed, err := rs.ObservePosition(ctx)
+	require.NoError(t, err)
+	assert.Nil(t, observed.GetProposal())
+	assert.Equal(t, int64(2), observed.GetDecision().GetRuleNumber().GetCoordinatorTerm())
+}
+
+func TestRuleStorePG_PropagateProposal_NoProposal_Rejected(t *testing.T) {
+	skipIfNoPG(t)
+	ctx := withTestActionLock(t)
+	resetRuleStoreTables(ctx, t)
+
+	rs, conn := newTestRuleStore(ctx, t)
+	defer conn.Close()
+
+	expectedProposal := &clustermetadatapb.ShardRule{
+		RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 2, LeaderSubterm: 0},
+	}
+	_, err := rs.PropagateProposal(ctx, expectedProposal, testPoolerID(t, "zone1", "coordinator-1"), time.Now(),
+		func(ctx context.Context) error { return nil })
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no in-flight proposal")
+}
+
+func TestRuleStorePG_PropagateProposal_MismatchedProposal_Rejected(t *testing.T) {
+	skipIfNoPG(t)
+	ctx := withTestActionLock(t)
+	resetRuleStoreTables(ctx, t)
+
+	rs, conn := newTestRuleStore(ctx, t)
+	defer conn.Close()
+
+	oldLeaderID := testPoolerID(t, "zone1", "old-leader")
+	newLeaderID := testPoolerID(t, "zone1", "new-leader")
+	cohort := []*clustermetadatapb.ID{oldLeaderID, newLeaderID}
+
+	_, err := rs.UpdateRule(ctx, NewRuleUpdate(1, oldLeaderID, "promotion", "initial", time.Now()).
+		WithLeader(oldLeaderID).WithCohort(cohort))
+	require.NoError(t, err)
+	seedStuckProposal(ctx, t, conn, newLeaderID, cohort, 2, 0)
+
+	// Caller expects a different rule number than what's actually stored.
+	expectedProposal := &clustermetadatapb.ShardRule{
+		RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 3, LeaderSubterm: 0},
+	}
+	_, err = rs.PropagateProposal(ctx, expectedProposal, testPoolerID(t, "zone1", "coordinator-1"), time.Now(),
+		func(ctx context.Context) error { return nil })
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does not match expected")
+}

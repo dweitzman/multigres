@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -159,6 +160,19 @@ func (f *fakeRuleStore) UpdateRule(ctx context.Context, update *consensus.RuleUp
 	f.pos = newPos
 	f.mu.Unlock()
 	return newPos, nil
+}
+
+// PropagateProposal is not yet exercised by any test in this package; callers
+// needing to test it should extend this fake with recorded calls, matching
+// the UpdateRule pattern above.
+func (f *fakeRuleStore) PropagateProposal(
+	_ context.Context,
+	_ *clustermetadatapb.ShardRule,
+	_ *clustermetadatapb.ID,
+	_ time.Time,
+	_ func(ctx context.Context) error,
+) (*clustermetadatapb.PoolerPosition, error) {
+	return nil, errors.New("fakeRuleStore: PropagateProposal not implemented")
 }
 
 func (f *fakeRuleStore) HasInconsistentGUC(_ context.Context) bool {
