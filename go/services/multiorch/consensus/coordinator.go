@@ -18,17 +18,21 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"time"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
+	"github.com/multigres/multigres/go/common/eventlog"
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/rpcclient"
+	"github.com/multigres/multigres/go/common/timeouts"
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
+	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
 )
 
 // Coordinator orchestrates consensus-based leader election for shards.
@@ -106,6 +110,14 @@ func (c *Coordinator) runFailover(ctx context.Context, cohort []*multiorchdatapb
 		return mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION, "%v", err)
 	}
 
+	if revocation.GetPropagationIntent() != nil {
+		c.logger.InfoContext(ctx, "Detected in-flight proposal beyond the cohort's outgoing decision; using propagation path",
+			"outgoing_decision", commonconsensus.FormatRuleNumber(revocation.GetOutgoingDecision()),
+			"propagation_intent", commonconsensus.FormatRuleNumber(revocation.GetPropagationIntent()),
+			"recruited_term", revocation.GetRevokedBelowTerm())
+		return c.runPropagation(ctx, cohort, cohortStatuses, revocation, reason)
+	}
+
 	poolerByID, _ := buildCohortMaps(cohort)
 	buildProposal := func(r commonconsensus.RecruitmentResult) (*consensusdatapb.CoordinatorProposal, error) {
 		return buildFailoverProposal(r, poolerByID)
@@ -117,6 +129,187 @@ func (c *Coordinator) runFailover(ctx context.Context, cohort []*multiorchdatapb
 		return commonconsensus.CheckProposalPossible(rev, statuses, buildProposal)
 	}
 	return c.newRuleChange(reason, tryBuildProposal, checkProposalPossible).Run(ctx, cohort, revocation)
+}
+
+// runPropagation handles the dead-leader propagation path: when NewTermRevocation
+// detects an in-flight proposal beyond the cohort's outgoing decision
+// (propagation_intent set), we recruit all nodes with the propagation revocation
+// and then drive the existing WAL entry to quorum via the Propagate RPC rather
+// than writing a new rule.
+//
+// cachedStatuses are the same statuses that were passed to NewTermRevocation —
+// they already show the matching proposal. We use them for a fast pre-vote
+// check before committing to a recruitment round.
+//
+// The most-advanced recruited node whose proposal matches propagation_intent
+// becomes the propagation leader. It receives Propagate (promote, drive the WAL
+// entry to quorum, self-promote); all other recruited nodes receive SetPrimary
+// pointing at that leader.
+func (c *Coordinator) runPropagation(
+	ctx context.Context,
+	cohort []*multiorchdatapb.PoolerHealthState,
+	cachedStatuses []*clustermetadatapb.ConsensusStatus,
+	revocation *clustermetadatapb.TermRevocation,
+	reason string,
+) error {
+	if err := checkRecentAcceptance(ctx, c.logger, cohort); err != nil {
+		return mterrors.Errorf(mtrpcpb.Code_UNAVAILABLE, "%v", err)
+	}
+
+	if err := commonconsensus.CheckPropagationPossible(revocation, cachedStatuses); err != nil {
+		return mterrors.Errorf(mtrpcpb.Code_UNAVAILABLE, "pre-vote failed: %v", err)
+	}
+
+	proposedTerm := revocation.GetRevokedBelowTerm()
+	start := time.Now()
+	primaryPromotion := eventlog.PrimaryPromotion{
+		ProposedTerm: proposedTerm,
+		Reason:       reason,
+	}
+	eventlog.Emit(ctx, c.logger, eventlog.Started, primaryPromotion)
+
+	// Phase 1: recruit all nodes concurrently with the propagation revocation.
+	type recruitResult struct {
+		pooler *multiorchdatapb.PoolerHealthState
+		cs     *clustermetadatapb.ConsensusStatus
+	}
+	results := make(chan recruitResult, len(cohort))
+	for _, p := range cohort {
+		go func() {
+			rpcCtx, cancel := context.WithTimeout(ctx, timeouts.RemoteOperationTimeout)
+			defer cancel()
+			resp, err := c.rpcClient.Recruit(rpcCtx, p.MultiPooler, &consensusdatapb.RecruitRequest{
+				TermRevocation: revocation,
+			})
+			if err != nil {
+				c.logger.WarnContext(ctx, "Propagation recruit failed",
+					"pooler", p.MultiPooler.Id.Name, "error", err)
+				results <- recruitResult{pooler: p}
+				return
+			}
+			c.logger.InfoContext(ctx, "Propagation recruit succeeded",
+				"pooler", p.MultiPooler.Id.Name)
+			results <- recruitResult{pooler: p, cs: resp.GetConsensusStatus()}
+		}()
+	}
+
+	_, healthByID := buildCohortMaps(cohort)
+	var recruitedStatuses []*clustermetadatapb.ConsensusStatus
+	for range len(cohort) {
+		if rr := <-results; rr.cs != nil {
+			recruitedStatuses = append(recruitedStatuses, rr.cs)
+		}
+	}
+	recruitMs := time.Since(start).Milliseconds()
+
+	// Phase 2: find the propagation leader candidates — most-advanced recruited
+	// nodes with the matching proposal — and pick the first eligible one
+	// (arbitrary choice when tied).
+	leaders, err := commonconsensus.FindPropagationLeaders(revocation, recruitedStatuses)
+	if err != nil {
+		promoteEvent := eventlog.PrimaryPromotion{ProposedTerm: proposedTerm, Reason: reason, RecruitMs: &recruitMs}
+		wrapped := mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION, "recruitment failed: %v", err)
+		eventlog.Emit(ctx, c.logger, eventlog.Failed, promoteEvent, "error", wrapped)
+		return wrapped
+	}
+	var propLeaderCS *clustermetadatapb.ConsensusStatus
+	for _, cs := range leaders {
+		ph := healthByID[topoclient.ClusterIDString(cs.GetId())]
+		if types.PoolerIsCohortIneligible(ph.GetAvailabilityStatus()) {
+			c.logger.WarnContext(ctx, "Skipping ineligible propagation leader candidate",
+				"pooler", cs.GetId().GetName())
+			continue
+		}
+		propLeaderCS = cs
+		break
+	}
+	if propLeaderCS == nil {
+		promoteEvent := eventlog.PrimaryPromotion{ProposedTerm: proposedTerm, Reason: reason, RecruitMs: &recruitMs}
+		wrapped := mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
+			"no eligible propagation leader: all candidates are cohort-ineligible")
+		eventlog.Emit(ctx, c.logger, eventlog.Failed, promoteEvent, "error", wrapped)
+		return wrapped
+	}
+
+	leaderKey := topoclient.ClusterIDString(propLeaderCS.GetId())
+	mp := healthByID[leaderKey].MultiPooler
+	propLeaderAddr := topoclient.PoolerAddressFor(mp)
+	expectedProposal := propLeaderCS.GetCurrentPosition().GetProposal()
+	selectedAt := time.Now()
+
+	// Phase 3: dispatch Propagate to the leader and SetPrimary to all other
+	// recruited nodes concurrently.
+	type dispatchResult struct {
+		poolerName string
+		isLeader   bool
+		err        error
+	}
+	total := len(recruitedStatuses)
+	dispatched := make(chan dispatchResult, total)
+
+	for _, cs := range recruitedStatuses {
+		isLeader := topoclient.ClusterIDString(cs.GetId()) == leaderKey
+		fHealth := healthByID[topoclient.ClusterIDString(cs.GetId())]
+		go func() {
+			rpcCtx, cancel := context.WithTimeout(ctx, timeouts.RemoteOperationTimeout)
+			defer cancel()
+			name := cs.GetId().GetName()
+			if isLeader {
+				_, err := c.rpcClient.Propagate(rpcCtx, mp, &consensusdatapb.PropagateRequest{
+					TermRevocation:   revocation,
+					ExpectedProposal: expectedProposal,
+					Leader:           propLeaderAddr,
+				})
+				dispatched <- dispatchResult{poolerName: name, isLeader: true, err: err}
+				return
+			}
+			// The propagation revocation establishes the authority under which
+			// the propagation leader will finalize expectedProposal. Followers
+			// accept the leader_id mismatch (the rule's authored leader_id is
+			// the now-dead primary, while the leader contact info points at the
+			// propagation leader finalizing it) because their own accepted
+			// revocation — established via the Recruit above — carries a
+			// matching propagation_intent.
+			_, err := c.rpcClient.SetPrimary(rpcCtx, fHealth.MultiPooler, &consensusdatapb.SetPrimaryRequest{
+				ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{
+					Rule:    expectedProposal,
+					Primary: propLeaderAddr,
+				},
+			})
+			dispatched <- dispatchResult{poolerName: name, isLeader: false, err: err}
+		}()
+	}
+
+	var leaderErr error
+	for range total {
+		dr := <-dispatched
+		if dr.err != nil {
+			if dr.isLeader {
+				leaderErr = dr.err
+			} else {
+				c.logger.WarnContext(ctx, "SetPrimary failed for follower during propagation",
+					"pooler", dr.poolerName, "error", dr.err)
+			}
+		} else {
+			c.logger.InfoContext(ctx, "Propagation dispatch succeeded",
+				"pooler", dr.poolerName, "is_leader", dr.isLeader)
+		}
+	}
+
+	promoteMs := time.Since(selectedAt).Milliseconds()
+	promoteEvent := eventlog.PrimaryPromotion{
+		NewPrimary:   mp.GetId().GetName(),
+		ProposedTerm: proposedTerm,
+		Reason:       reason,
+		RecruitMs:    &recruitMs,
+		PromoteMs:    &promoteMs,
+	}
+	if leaderErr != nil {
+		eventlog.Emit(ctx, c.logger, eventlog.Failed, promoteEvent, "error", leaderErr)
+		return mterrors.Wrapf(leaderErr, "propagation leader %s failed Propagate", mp.GetId().GetName())
+	}
+	eventlog.Emit(ctx, c.logger, eventlog.Success, promoteEvent)
+	return nil
 }
 
 // AppointInitialLeader orchestrates consensus leader election for a freshly
