@@ -298,7 +298,7 @@ func TestRecruit(t *testing.T) {
 					RevokedBelowTerm:       7,
 					AcceptedCoordinatorId:  coordinatorB,
 					CoordinatorInitiatedAt: recruitTS,
-					OutgoingDecision:       &clustermetadatapb.RuleNumber{},
+					OutgoingDecision:       &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
 				},
 			},
 			// ValidateRevocation rejects at step 1 — postgres is never touched.
@@ -309,8 +309,11 @@ func TestRecruit(t *testing.T) {
 			expectPersistedCoordinator: "coordinator-a",
 		},
 		{
-			name:              "StandbyReject_OlderTerm",
-			initialRevocation: &clustermetadatapb.TermRevocation{RevokedBelowTerm: 10},
+			name: "StandbyReject_OlderTerm",
+			initialRevocation: &clustermetadatapb.TermRevocation{
+				RevokedBelowTerm: 10,
+				OutgoingDecision: &clustermetadatapb.RuleNumber{CoordinatorTerm: 2},
+			},
 			// WAL check passes; rejection is caught by the stored-term check.
 			ruleStore: &fakeRuleStore{pos: makeRulePosition(2)},
 			req: &consensusdatapb.RecruitRequest{
@@ -318,7 +321,7 @@ func TestRecruit(t *testing.T) {
 					RevokedBelowTerm:       5,
 					AcceptedCoordinatorId:  coordinatorA,
 					CoordinatorInitiatedAt: recruitTS,
-					OutgoingDecision:       &clustermetadatapb.RuleNumber{},
+					OutgoingDecision:       &clustermetadatapb.RuleNumber{CoordinatorTerm: 2},
 				},
 			},
 			// ValidateRevocation rejects at step 1 — postgres is never touched.
@@ -337,7 +340,7 @@ func TestRecruit(t *testing.T) {
 					RevokedBelowTerm:       7,
 					AcceptedCoordinatorId:  coordinatorA,
 					CoordinatorInitiatedAt: recruitTS,
-					OutgoingDecision:       &clustermetadatapb.RuleNumber{},
+					OutgoingDecision:       &clustermetadatapb.RuleNumber{CoordinatorTerm: 2},
 				},
 			},
 			setupMocks: func(m *mock.QueryService) {

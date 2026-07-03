@@ -72,10 +72,10 @@ func TestQueryRuleHistory(t *testing.T) {
 		createdAt := "2026-03-24 09:00:17.000000+00"
 
 		mockQueryService.AddQueryPatternOnce(
-			"SELECT coordinator_term, leader_subterm, event_type",
+			"SELECT decision_coordinator_term, decision_leader_subterm, event_type",
 			mock.MakeQueryResult(
 				[]string{
-					"coordinator_term", "leader_subterm", "event_type", "leader_id", "coordinator_id",
+					"decision_coordinator_term", "decision_leader_subterm", "event_type", "leader_id", "coordinator_id",
 					"wal_position", "operation", "reason", "cohort_members", "accepted_members",
 					"durability_policy_name", "durability_quorum_type", "durability_required_count",
 					"created_at",
@@ -130,10 +130,10 @@ func TestQueryRuleHistory(t *testing.T) {
 		rs := NewRuleStore(slog.New(slog.DiscardHandler), mockQueryService, noopSyncStandbyManager{})
 
 		mockQueryService.AddQueryPatternOnce(
-			"SELECT coordinator_term, leader_subterm, event_type",
+			"SELECT decision_coordinator_term, decision_leader_subterm, event_type",
 			mock.MakeQueryResult(
 				[]string{
-					"coordinator_term", "leader_subterm", "event_type", "leader_id", "coordinator_id",
+					"decision_coordinator_term", "decision_leader_subterm", "event_type", "leader_id", "coordinator_id",
 					"wal_position", "operation", "reason", "cohort_members", "accepted_members",
 					"durability_policy_name", "durability_quorum_type", "durability_required_count",
 					"created_at",
@@ -153,7 +153,7 @@ func TestQueryRuleHistory(t *testing.T) {
 		rs := NewRuleStore(slog.New(slog.DiscardHandler), mockQueryService, noopSyncStandbyManager{})
 
 		mockQueryService.AddQueryPatternOnceWithError(
-			"SELECT coordinator_term, leader_subterm, event_type",
+			"SELECT decision_coordinator_term, decision_leader_subterm, event_type",
 			errors.New("connection refused"),
 		)
 
@@ -264,25 +264,25 @@ func TestScanRuleHistoryRow_AcceptedInvalid(t *testing.T) {
 
 func TestBuildPoolerPosition_LeaderInvalid(t *testing.T) {
 	bad := "noseparator"
-	_, err := buildPoolerPosition(1, 0, &bad, "", nil, "AT_LEAST_2", "QUORUM_TYPE_AT_LEAST_N", 2, time.Time{}, "0/0")
+	_, err := buildPoolerPosition(1, 0, &bad, "", nil, "AT_LEAST_2", "QUORUM_TYPE_AT_LEAST_N", 2, time.Time{}, proposalRow{}, "0/0")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to parse leader_id")
 }
 
 func TestBuildPoolerPosition_CoordinatorInvalid(t *testing.T) {
-	_, err := buildPoolerPosition(1, 0, nil, "noseparator", nil, "AT_LEAST_2", "QUORUM_TYPE_AT_LEAST_N", 2, time.Time{}, "0/0")
+	_, err := buildPoolerPosition(1, 0, nil, "noseparator", nil, "AT_LEAST_2", "QUORUM_TYPE_AT_LEAST_N", 2, time.Time{}, proposalRow{}, "0/0")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to parse coordinator_id")
 }
 
 func TestBuildPoolerPosition_CohortInvalid(t *testing.T) {
-	_, err := buildPoolerPosition(1, 0, nil, "", []string{"noseparator"}, "AT_LEAST_2", "QUORUM_TYPE_AT_LEAST_N", 2, time.Time{}, "0/0")
+	_, err := buildPoolerPosition(1, 0, nil, "", []string{"noseparator"}, "AT_LEAST_2", "QUORUM_TYPE_AT_LEAST_N", 2, time.Time{}, proposalRow{}, "0/0")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to parse cohort_members")
 }
 
 func TestBuildPoolerPosition_UnknownQuorumType(t *testing.T) {
-	_, err := buildPoolerPosition(1, 0, nil, "", nil, "AT_LEAST_2", "QUORUM_TYPE_BOGUS", 2, time.Time{}, "0/0")
+	_, err := buildPoolerPosition(1, 0, nil, "", nil, "AT_LEAST_2", "QUORUM_TYPE_BOGUS", 2, time.Time{}, proposalRow{}, "0/0")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown quorum_type")
 }
