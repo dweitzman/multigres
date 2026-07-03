@@ -458,8 +458,14 @@ type PropagateRequest struct {
 	// The handler validates this matches the node's current proposal exactly
 	// (rule number, cohort, durability policy) before proceeding.
 	ExpectedProposal *clustermetadata.ShardRule `protobuf:"bytes,2,opt,name=expected_proposal,json=expectedProposal,proto3" json:"expected_proposal,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Contact info for the receiving pooler itself, i.e. the propagation leader.
+	// Mirrors CoordinatorProposal.proposal_leader on PromoteRequest: since
+	// Propagate always designates its own recipient as the new primary, the
+	// handler needs this to record its own ReplicationPrimary the same way a
+	// freshly promoted leader does (its primary is, self-referentially, itself).
+	Leader        *clustermetadata.PoolerAddress `protobuf:"bytes,3,opt,name=leader,proto3" json:"leader,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PropagateRequest) Reset() {
@@ -502,6 +508,13 @@ func (x *PropagateRequest) GetTermRevocation() *clustermetadata.TermRevocation {
 func (x *PropagateRequest) GetExpectedProposal() *clustermetadata.ShardRule {
 	if x != nil {
 		return x.ExpectedProposal
+	}
+	return nil
+}
+
+func (x *PropagateRequest) GetLeader() *clustermetadata.PoolerAddress {
+	if x != nil {
+		return x.Leader
 	}
 	return nil
 }
@@ -576,10 +589,11 @@ const file_consensusdata_proto_rawDesc = "" +
 	"\x11SetPrimaryRequest\x12T\n" +
 	"\x13replication_primary\x18\x03 \x01(\v2#.clustermetadata.ReplicationPrimaryR\x12replicationPrimary\"a\n" +
 	"\x12SetPrimaryResponse\x12K\n" +
-	"\x10consensus_status\x18\x01 \x01(\v2 .clustermetadata.ConsensusStatusR\x0fconsensusStatus\"\xa5\x01\n" +
+	"\x10consensus_status\x18\x01 \x01(\v2 .clustermetadata.ConsensusStatusR\x0fconsensusStatus\"\xdd\x01\n" +
 	"\x10PropagateRequest\x12H\n" +
 	"\x0fterm_revocation\x18\x01 \x01(\v2\x1f.clustermetadata.TermRevocationR\x0etermRevocation\x12G\n" +
-	"\x11expected_proposal\x18\x02 \x01(\v2\x1a.clustermetadata.ShardRuleR\x10expectedProposal\"`\n" +
+	"\x11expected_proposal\x18\x02 \x01(\v2\x1a.clustermetadata.ShardRuleR\x10expectedProposal\x126\n" +
+	"\x06leader\x18\x03 \x01(\v2\x1e.clustermetadata.PoolerAddressR\x06leader\"`\n" +
 	"\x11PropagateResponse\x12K\n" +
 	"\x10consensus_status\x18\x01 \x01(\v2 .clustermetadata.ConsensusStatusR\x0fconsensusStatusB4Z2github.com/multigres/multigres/go/pb/consensusdatab\x06proto3"
 
@@ -626,12 +640,13 @@ var file_consensusdata_proto_depIdxs = []int32{
 	12, // 9: consensusdata.SetPrimaryResponse.consensus_status:type_name -> clustermetadata.ConsensusStatus
 	9,  // 10: consensusdata.PropagateRequest.term_revocation:type_name -> clustermetadata.TermRevocation
 	11, // 11: consensusdata.PropagateRequest.expected_proposal:type_name -> clustermetadata.ShardRule
-	12, // 12: consensusdata.PropagateResponse.consensus_status:type_name -> clustermetadata.ConsensusStatus
-	13, // [13:13] is the sub-list for method output_type
-	13, // [13:13] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	10, // 12: consensusdata.PropagateRequest.leader:type_name -> clustermetadata.PoolerAddress
+	12, // 13: consensusdata.PropagateResponse.consensus_status:type_name -> clustermetadata.ConsensusStatus
+	14, // [14:14] is the sub-list for method output_type
+	14, // [14:14] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_consensusdata_proto_init() }

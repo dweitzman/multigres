@@ -158,6 +158,12 @@ type MultiPoolerClient interface {
 	// success without changes.
 	SetPrimary(ctx context.Context, pooler *clustermetadatapb.MultiPooler, request *consensusdatapb.SetPrimaryRequest) (*consensusdatapb.SetPrimaryResponse, error)
 
+	// Propagate asks a pooler to finalise an in-WAL rule change it already
+	// holds as a proposal, rather than write a fresh one. Sent to the node
+	// the coordinator selects as propagation leader when it discovers the
+	// cohort's most-advanced position is an undecided proposal.
+	Propagate(ctx context.Context, pooler *clustermetadatapb.MultiPooler, request *consensusdatapb.PropagateRequest) (*consensusdatapb.PropagateResponse, error)
+
 	// RewindToSource performs pg_rewind to synchronize a replica with its source.
 	RewindToSource(ctx context.Context, pooler *clustermetadatapb.MultiPooler, request *multipoolermanagerdatapb.RewindToSourceRequest) (*multipoolermanagerdatapb.RewindToSourceResponse, error)
 

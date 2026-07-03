@@ -162,3 +162,18 @@ func (ConsensusSetPrimary) EventType() string { return "consensus.set_primary" }
 func (e ConsensusSetPrimary) LogAttrs() []slog.Attr {
 	return []slog.Attr{slog.String("rule", e.Rule)}
 }
+
+// ConsensusPropagate is emitted by a multipooler node when it executes the
+// Propagate RPC: it finalises an in-WAL proposal into a decision instead of
+// writing a fresh rule, driving postgres to primary and confirming quorum
+// along the way. Distinct from consensus.promote because the rule already
+// existed before this round — Propagate proves and marks it decided rather
+// than creating it.
+type ConsensusPropagate struct {
+	Rule string
+}
+
+func (ConsensusPropagate) EventType() string { return "consensus.propagate" }
+func (e ConsensusPropagate) LogAttrs() []slog.Attr {
+	return []slog.Attr{slog.String("rule", e.Rule)}
+}

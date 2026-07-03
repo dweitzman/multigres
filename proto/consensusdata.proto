@@ -132,6 +132,13 @@ message PropagateRequest {
   // The handler validates this matches the node's current proposal exactly
   // (rule number, cohort, durability policy) before proceeding.
   clustermetadata.ShardRule expected_proposal = 2;
+
+  // Contact info for the receiving pooler itself, i.e. the propagation leader.
+  // Mirrors CoordinatorProposal.proposal_leader on PromoteRequest: since
+  // Propagate always designates its own recipient as the new primary, the
+  // handler needs this to record its own ReplicationPrimary the same way a
+  // freshly promoted leader does (its primary is, self-referentially, itself).
+  clustermetadata.PoolerAddress leader = 3;
 }
 
 // PropagateResponse carries the pooler's state after a successful Propagate.

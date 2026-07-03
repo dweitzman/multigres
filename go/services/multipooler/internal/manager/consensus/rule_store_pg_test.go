@@ -1423,7 +1423,8 @@ func TestRuleStorePG_PropagateProposal_FinalizesStuckProposal(t *testing.T) {
 	expectedProposal := &clustermetadatapb.ShardRule{
 		RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 2, LeaderSubterm: 0},
 	}
-	pos, err := rs.PropagateProposal(ctx, expectedProposal, testPoolerID(t, "zone1", "coordinator-1"), time.Now(),
+	pos, err := rs.PropagateProposal(ctx, &clustermetadatapb.RuleNumber{CoordinatorTerm: 1, LeaderSubterm: 0},
+		expectedProposal, testPoolerID(t, "zone1", "coordinator-1"), time.Now(),
 		func(ctx context.Context) error {
 			promotionHookCalled = true
 			return nil
@@ -1455,7 +1456,8 @@ func TestRuleStorePG_PropagateProposal_NoProposal_Rejected(t *testing.T) {
 	expectedProposal := &clustermetadatapb.ShardRule{
 		RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 2, LeaderSubterm: 0},
 	}
-	_, err := rs.PropagateProposal(ctx, expectedProposal, testPoolerID(t, "zone1", "coordinator-1"), time.Now(),
+	_, err := rs.PropagateProposal(ctx, &clustermetadatapb.RuleNumber{CoordinatorTerm: 0, LeaderSubterm: 0},
+		expectedProposal, testPoolerID(t, "zone1", "coordinator-1"), time.Now(),
 		func(ctx context.Context) error { return nil })
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no in-flight proposal")
@@ -1482,8 +1484,40 @@ func TestRuleStorePG_PropagateProposal_MismatchedProposal_Rejected(t *testing.T)
 	expectedProposal := &clustermetadatapb.ShardRule{
 		RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 3, LeaderSubterm: 0},
 	}
-	_, err = rs.PropagateProposal(ctx, expectedProposal, testPoolerID(t, "zone1", "coordinator-1"), time.Now(),
+	_, err = rs.PropagateProposal(ctx, &clustermetadatapb.RuleNumber{CoordinatorTerm: 1, LeaderSubterm: 0},
+		expectedProposal, testPoolerID(t, "zone1", "coordinator-1"), time.Now(),
 		func(ctx context.Context) error { return nil })
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "does not match expected")
+}
+
+func TestRuleStorePG_PropagateProposal_StaleOutgoingDecision_Rejected(t *testing.T) {
+	skipIfNoPG(t)
+	ctx := withTestActionLock(t)
+	resetRuleStoreTables(ctx, t)
+
+	rs, conn := newTestRuleStore(ctx, t)
+	defer conn.Close()
+
+	oldLeaderID := testPoolerID(t, "zone1", "old-leader")
+	newLeaderID := testPoolerID(t, "zone1", "new-leader")
+	cohort := []*clustermetadatapb.ID{oldLeaderID, newLeaderID}
+
+	// The actual decision is at term 1, but the coordinator's view (baked into
+	// its term_revocation.outgoing_decision) is stale at term 0 — as if it
+	// discovered the proposal before learning the decision had already
+	// advanced. The proposal itself matches; only the paired baseline is wrong.
+	_, err := rs.UpdateRule(ctx, NewRuleUpdate(1, oldLeaderID, "promotion", "initial", time.Now()).
+		WithLeader(oldLeaderID).WithCohort(cohort))
+	require.NoError(t, err)
+	seedStuckProposal(ctx, t, conn, newLeaderID, cohort, 2, 0)
+
+	expectedProposal := &clustermetadatapb.ShardRule{
+		RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 2, LeaderSubterm: 0},
+	}
+	_, err = rs.PropagateProposal(ctx, &clustermetadatapb.RuleNumber{CoordinatorTerm: 0, LeaderSubterm: 0},
+		expectedProposal, testPoolerID(t, "zone1", "coordinator-1"), time.Now(),
+		func(ctx context.Context) error { return nil })
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "coordinator view is stale")
 }

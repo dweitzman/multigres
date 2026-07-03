@@ -167,6 +167,7 @@ func (f *fakeRuleStore) UpdateRule(ctx context.Context, update *consensus.RuleUp
 // the UpdateRule pattern above.
 func (f *fakeRuleStore) PropagateProposal(
 	_ context.Context,
+	_ *clustermetadatapb.RuleNumber,
 	_ *clustermetadatapb.ShardRule,
 	_ *clustermetadatapb.ID,
 	_ time.Time,

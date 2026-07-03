@@ -521,21 +521,11 @@ func (pm *MultiPoolerManager) SetPrimary(ctx context.Context, req *consensusdata
 	if rule == nil {
 		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "replication_primary.rule is required")
 	}
-	// The rule's leader_id is authoritative; the leader field carries contact
-	// info for that ID. A mismatch is a caller bug — we'd otherwise route
-	// replication at an identity that doesn't match the consensus-elected one.
 	ruleLeaderID := rule.GetLeaderId()
 	if ruleLeaderID == nil {
 		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "rule.leader_id is required")
 	}
 	leaderID := leader.GetId()
-	if leaderID == nil ||
-		leaderID.GetCell() != ruleLeaderID.GetCell() ||
-		leaderID.GetName() != ruleLeaderID.GetName() {
-		return nil, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,
-			"leader.id %q does not match rule.leader_id %q",
-			leaderID.GetName(), ruleLeaderID.GetName())
-	}
 	if leader.GetHost() == "" {
 		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "leader host is required")
 	}
@@ -577,6 +567,25 @@ func (pm *MultiPoolerManager) SetPrimary(ctx context.Context, req *consensusdata
 			"revoked_below_term", revocation.GetRevokedBelowTerm(),
 			"outgoing_decision", revocation.GetOutgoingDecision())
 		return &consensusdatapb.SetPrimaryResponse{ConsensusStatus: pm.consensusMgr.CachedConsensusStatus()}, nil
+	}
+
+	// The rule's leader_id is normally authoritative for who to replicate
+	// from; a mismatch would otherwise mean routing replication at an
+	// identity that doesn't match the consensus-elected one. The one
+	// exception is propagation: the coordinator legitimately points
+	// followers at a node that's finalizing an in-WAL proposal, distinct
+	// from the dead leader still recorded in the rule. This pooler's
+	// accepted (not-revoked, checked above) revocation carrying a
+	// propagation_intent matching this exact rule is its record — made via
+	// Recruit — of having agreed to exactly that.
+	if leaderID == nil ||
+		leaderID.GetCell() != ruleLeaderID.GetCell() ||
+		leaderID.GetName() != ruleLeaderID.GetName() {
+		if !proto.Equal(rule.GetRuleNumber(), revocation.GetPropagationIntent()) {
+			return nil, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,
+				"leader.id %q does not match rule.leader_id %q, and no accepted propagation_intent matches this rule",
+				leaderID.GetName(), ruleLeaderID.GetName())
+		}
 	}
 
 	// Record what we've been told, even if we don't end up applying the change.
@@ -715,4 +724,145 @@ func (pm *MultiPoolerManager) setPrimaryLocked(ctx context.Context, req *consens
 		return nil, mterrors.Wrap(err, "failed to build consensus status after SetPrimary")
 	}
 	return &consensusdatapb.SetPrimaryResponse{ConsensusStatus: cs}, nil
+}
+
+// Propagate asks this pooler to finalise an in-WAL rule change it already holds
+// as a proposal, rather than write a fresh one. The coordinator sends this
+// instead of Promote when it discovers this node's proposal is the cohort's
+// most-advanced position, ahead of any decision (propagation_intent set on the
+// term revocation) — the rule already exists; propagating proves it reached
+// quorum and marks it decided instead of overwriting it.
+//
+// Preconditions mirror Promote: a matching Recruit must have run for this exact
+// term, and postgres must be in the standby state Recruit leaves it in.
+func (pm *MultiPoolerManager) Propagate(ctx context.Context, req *consensusdatapb.PropagateRequest) (*consensusdatapb.PropagateResponse, error) {
+	var err error
+	ctx, err = pm.actionLock.Acquire(ctx, "Propagate")
+	if err != nil {
+		return nil, err
+	}
+	defer pm.actionLock.Release(ctx)
+
+	revocation := req.GetTermRevocation()
+	if revocation == nil {
+		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "term_revocation is required")
+	}
+	propagationIntent := revocation.GetPropagationIntent()
+	if propagationIntent == nil {
+		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "term_revocation.propagation_intent is required")
+	}
+	expectedProposal := req.GetExpectedProposal()
+	if expectedProposal == nil {
+		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "expected_proposal is required")
+	}
+	if commonconsensus.CompareRuleNumbers(expectedProposal.GetRuleNumber(), propagationIntent) != 0 {
+		return nil, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,
+			"expected_proposal rule number %v does not match term_revocation.propagation_intent %v",
+			expectedProposal.GetRuleNumber(), propagationIntent)
+	}
+	if expectedProposal.GetCoordinatorId() == nil {
+		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "expected_proposal.coordinator_id is required")
+	}
+	if expectedProposal.GetCreationTime() == nil {
+		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "expected_proposal.creation_time is required")
+	}
+	leader := req.GetLeader()
+	if leader == nil || leader.GetHost() == "" || leader.GetPostgresPort() == 0 {
+		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "leader with host and postgres_port is required")
+	}
+
+	coordinatorID := revocation.GetAcceptedCoordinatorId()
+
+	pm.logger.InfoContext(ctx, "Propagate received",
+		"rule", commonconsensus.FormatRuleNumber(expectedProposal.GetRuleNumber()),
+		"revoked_below_term", revocation.GetRevokedBelowTerm(),
+		"coordinator_id", coordinatorID.GetName())
+
+	// Step 1: Validate the term revocation — same as Promote/Recruit. Fails
+	// open on I/O error (nil status passes safely).
+	beforeStatus, err := pm.consensusMgr.ConsensusStatus(ctx)
+	if err != nil {
+		return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, err.Error())
+	}
+	if err := commonconsensus.ValidateRevocation(beforeStatus, revocation); err != nil {
+		return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, err.Error())
+	}
+
+	// Require an explicit Recruit() for this exact term before accepting a
+	// Propagate — same rationale as Promote: ValidateRevocation already
+	// ensures storedTerm <= revokedBelowTerm, so a mismatch here always means
+	// Recruit was never called for this term.
+	storedTerm := beforeStatus.GetTermRevocation().GetRevokedBelowTerm()
+	if storedTerm != revocation.GetRevokedBelowTerm() {
+		return nil, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
+			"must Recruit before Propagate: stored term %d != request term %d", storedTerm, revocation.GetRevokedBelowTerm())
+	}
+
+	// Verify postgres is in the expected standby state — same as Promote:
+	// in recovery with no primary_conninfo set. Together these prove that
+	// Recruit ran and that no prior Promote/Propagate on this node succeeded.
+	pgMode, err := pm.postgresMode(ctx)
+	if err != nil {
+		return nil, mterrors.Wrap(err, "failed to verify standby state before propagate")
+	}
+	if pgMode.OutOfRecovery() {
+		return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
+			"postgres is not in standby mode; call Recruit before Propagate")
+	}
+	connInfo, err := pm.readPrimaryConnInfo(ctx)
+	if err != nil {
+		return nil, mterrors.Wrap(err, "failed to verify primary_conninfo before propagate")
+	}
+	if connInfo != "" {
+		return nil, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
+			"primary_conninfo is set (%q); call Recruit before Propagate to stop replication", connInfo)
+	}
+
+	state, err := pm.checkPromotionState(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	propagateEvent := eventlog.ConsensusPropagate{Rule: commonconsensus.FormatRuleNumber(expectedProposal.GetRuleNumber())}
+	eventlog.Emit(ctx, pm.logger, eventlog.Started, propagateEvent)
+
+	pos, err := pm.consensusMgr.Rules().PropagateProposal(ctx, revocation.GetOutgoingDecision(), expectedProposal, coordinatorID, expectedProposal.GetCreationTime().AsTime(),
+		func(hookCtx context.Context) error {
+			if err := pm.consensusMgr.ClearResignedLeaderAtTerm(ctx); err != nil {
+				return mterrors.Wrap(err, "failed to clear resigned primary term")
+			}
+			return pm.promoteStandbyToPrimary(hookCtx, state, expectedProposal.GetRuleNumber().GetCoordinatorTerm())
+		})
+	if err != nil {
+		eventlog.Emit(ctx, pm.logger, eventlog.Failed, propagateEvent, "error", err)
+		return nil, mterrors.Wrap(err, "propagate failed")
+	}
+	eventlog.Emit(ctx, pm.logger, eventlog.Success, propagateEvent)
+
+	// Advertise PRIMARY + SERVING now that the rule has committed — same
+	// ordering rationale as Promote: UpdateRule (here, PropagateProposal) is
+	// the durability gate, so this must run only after it succeeds.
+	if err := pm.stateManager.Mutate(ctx, func(s *servingStateMutation) {
+		s.PostgresMode = pgmode.Primary
+		if s.ServingStatus == clustermetadatapb.PoolerServingStatus_DRAINING {
+			s.ServingStatus = clustermetadatapb.PoolerServingStatus_SERVING
+		}
+	}); err != nil {
+		pm.logger.WarnContext(ctx, "Failed to update serving state after propagate", "error", err)
+	}
+
+	// Record the (rule, primary) — this pooler IS now the primary, same as
+	// after Promote. Self-referential: leader is this pooler's own contact info.
+	if err := pm.consensusMgr.RecordTermPrimary(ctx, &clustermetadatapb.ReplicationPrimary{
+		Rule:    pos.GetDecision(),
+		Primary: leader,
+	}); err != nil {
+		pm.logger.ErrorContext(ctx, "failed to record replication primary after propagate", "error", err)
+	}
+
+	pm.logger.InfoContext(ctx, "Propagate complete",
+		"rule", commonconsensus.FormatRuleNumber(expectedProposal.GetRuleNumber()),
+		"revoked_below_term", revocation.GetRevokedBelowTerm())
+
+	return &consensusdatapb.PropagateResponse{ConsensusStatus: pm.consensusMgr.CachedConsensusStatus()}, nil
 }

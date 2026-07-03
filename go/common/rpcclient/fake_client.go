@@ -60,6 +60,7 @@ type FakeClient struct {
 	RecruitResponses    map[topoclient.ComponentID]*consensusdatapb.RecruitResponse
 	PromoteResponses    map[topoclient.ComponentID]*consensusdatapb.PromoteResponse
 	SetPrimaryResponses map[topoclient.ComponentID]*consensusdatapb.SetPrimaryResponse
+	PropagateResponses  map[topoclient.ComponentID]*consensusdatapb.PropagateResponse
 
 	// Manager service responses - keyed by pooler ID
 	WaitForLSNResponses          map[topoclient.ComponentID]*multipoolermanagerdatapb.WaitForLSNResponse
@@ -97,6 +98,7 @@ type FakeClient struct {
 	// Request tracking for verification in tests
 	PromoteRequests    map[topoclient.ComponentID]*consensusdatapb.PromoteRequest
 	SetPrimaryRequests map[topoclient.ComponentID]*consensusdatapb.SetPrimaryRequest
+	PropagateRequests  map[topoclient.ComponentID]*consensusdatapb.PropagateRequest
 
 	// OnManagerHealthStream, if set, is called after each FakeManagerHealthStream
 	// is created. Tests use this to capture the stream and inject snapshots.
@@ -126,6 +128,8 @@ func NewFakeClient() *FakeClient {
 		CallLog:                             make([]string, 0),
 		PromoteRequests:                     make(map[topoclient.ComponentID]*consensusdatapb.PromoteRequest),
 		SetPrimaryRequests:                  make(map[topoclient.ComponentID]*consensusdatapb.SetPrimaryRequest),
+		PropagateRequests:                   make(map[topoclient.ComponentID]*consensusdatapb.PropagateRequest),
+		PropagateResponses:                  make(map[topoclient.ComponentID]*consensusdatapb.PropagateResponse),
 	}
 }
 
@@ -290,6 +294,29 @@ func (f *FakeClient) SetPrimary(ctx context.Context, pooler *clustermetadatapb.M
 		return resp, nil
 	}
 	return &consensusdatapb.SetPrimaryResponse{}, nil
+}
+
+func (f *FakeClient) Propagate(ctx context.Context, pooler *clustermetadatapb.MultiPooler, request *consensusdatapb.PropagateRequest) (*consensusdatapb.PropagateResponse, error) {
+	poolerID := f.getPoolerID(pooler)
+	f.logCall("Propagate", poolerID)
+
+	f.mu.Lock()
+	if f.PropagateRequests == nil {
+		f.PropagateRequests = make(map[topoclient.ComponentID]*consensusdatapb.PropagateRequest)
+	}
+	f.PropagateRequests[poolerID] = request
+	f.mu.Unlock()
+
+	if err := f.checkError(poolerID); err != nil {
+		return nil, err
+	}
+
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	if resp, ok := f.PropagateResponses[poolerID]; ok {
+		return resp, nil
+	}
+	return &consensusdatapb.PropagateResponse{}, nil
 }
 
 func (f *FakeClient) UpdateConsensusRule(ctx context.Context, pooler *clustermetadatapb.MultiPooler, request *multipoolermanagerdatapb.UpdateConsensusRuleRequest) (*multipoolermanagerdatapb.UpdateConsensusRuleResponse, error) {

@@ -85,6 +85,17 @@ func (s *consensusService) SetPrimary(ctx context.Context, req *consensusdata.Se
 	return resp, nil
 }
 
+// Propagate asks this pooler to finalise an in-WAL rule change it already
+// holds as a proposal, rather than write a fresh one. See manager.Propagate
+// for details.
+func (s *consensusService) Propagate(ctx context.Context, req *consensusdata.PropagateRequest) (*consensusdata.PropagateResponse, error) {
+	resp, err := s.manager.Propagate(ctx, req)
+	if err != nil {
+		return nil, mterrors.ToGRPC(err)
+	}
+	return resp, nil
+}
+
 // RewindToSource performs pg_rewind to synchronize this server with a source
 func (s *consensusService) RewindToSource(ctx context.Context, req *multipoolermanagerdatapb.RewindToSourceRequest) (*multipoolermanagerdatapb.RewindToSourceResponse, error) {
 	resp, err := s.manager.RewindToSource(ctx, req.Source)

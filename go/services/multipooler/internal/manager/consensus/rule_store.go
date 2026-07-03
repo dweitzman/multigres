@@ -49,9 +49,13 @@ type RuleStorer interface {
 	// into a decision, after confirming via a quorum-gate write that it actually
 	// reached the outgoing/incoming cohort — the original write's own
 	// acknowledgement can't be trusted since its writer may have crashed before
-	// learning the outcome. promotionHook is required. Requires the action lock.
+	// learning the outcome. expectedOutgoingDecision is the decision this
+	// proposal is expected to transition from — a proposal is never verified on
+	// its own, only paired with its baseline decision. promotionHook is
+	// required. Requires the action lock.
 	PropagateProposal(
 		ctx context.Context,
+		expectedOutgoingDecision *clustermetadatapb.RuleNumber,
 		expectedProposal *clustermetadatapb.ShardRule,
 		coordinatorID *clustermetadatapb.ID,
 		createdAt time.Time,
@@ -1031,6 +1035,7 @@ func (rs *ruleStore) markProposalAsDecision(
 // quorum-confirmation write needs a primary.
 func (rs *ruleStore) PropagateProposal(
 	ctx context.Context,
+	expectedOutgoingDecision *clustermetadatapb.RuleNumber,
 	expectedProposal *clustermetadatapb.ShardRule,
 	coordinatorID *clustermetadatapb.ID,
 	createdAt time.Time,
@@ -1038,6 +1043,9 @@ func (rs *ruleStore) PropagateProposal(
 ) (*clustermetadatapb.PoolerPosition, error) {
 	if err := actionlock.AssertActionLockHeld(ctx); err != nil {
 		return nil, fmt.Errorf("PropagateProposal: %w", err)
+	}
+	if expectedOutgoingDecision == nil {
+		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "PropagateProposal requires expected_outgoing_decision")
 	}
 	if expectedProposal.GetRuleNumber() == nil {
 		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "PropagateProposal requires expected_proposal.rule_number")
@@ -1061,6 +1069,21 @@ func (rs *ruleStore) PropagateProposal(
 	current, lockedCtx, err := rs.readCurrentRuleLocked(ctx, true)
 	if err != nil {
 		return nil, err
+	}
+
+	// CAS the decision baseline: a proposal is never meaningful on its own,
+	// only paired with the decision it transitions from (the caller's
+	// term_revocation.outgoing_decision). If the stored decision has moved
+	// since the coordinator learned about this proposal, its view is stale —
+	// reject rather than build a GUC transition from a baseline nobody
+	// actually authorized this call against.
+	dNum := current.GetDecision().GetRuleNumber()
+	if dNum.GetCoordinatorTerm() != expectedOutgoingDecision.GetCoordinatorTerm() ||
+		dNum.GetLeaderSubterm() != expectedOutgoingDecision.GetLeaderSubterm() {
+		return nil, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
+			"committed decision (%d.%d) does not match expected outgoing_decision (%d.%d); coordinator view is stale",
+			dNum.GetCoordinatorTerm(), dNum.GetLeaderSubterm(),
+			expectedOutgoingDecision.GetCoordinatorTerm(), expectedOutgoingDecision.GetLeaderSubterm())
 	}
 
 	currentProposal := current.GetProposal()
