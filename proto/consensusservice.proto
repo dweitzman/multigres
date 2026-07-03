@@ -57,4 +57,10 @@ service MultiPoolerConsensus {
   // leadership and routing role. "SetPrimary" reads as if it makes the pooler a
   // primary; it actually points the pooler at one.
   rpc SetPrimary(consensusdata.SetPrimaryRequest) returns (consensusdata.SetPrimaryResponse);
+
+  // Propagate asks a pooler to finalise an in-WAL rule change it already
+  // holds as a proposal, rather than writing a fresh rule. The coordinator
+  // issues this instead of Promote when it detects an in-flight proposal
+  // beyond the cohort's outgoing decision.
+  rpc Propagate(consensusdata.PropagateRequest) returns (consensusdata.PropagateResponse);
 }

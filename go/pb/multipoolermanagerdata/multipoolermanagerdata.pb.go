@@ -1852,14 +1852,14 @@ type UpdateConsensusRuleRequest struct {
 	// List of multipooler IDs to add to or remove from the cohort.
 	// The application names will be generated as {cell}_{name} from these IDs.
 	StandbyIds []*clustermetadata.ID `protobuf:"bytes,2,rep,name=standby_ids,json=standbyIds,proto3" json:"standby_ids,omitempty"`
-	// expected_outgoing_rule is the RuleNumber the caller observed as the
-	// primary's current rule. The primary applies the change only if its
-	// recorded rule still matches this value (compare-and-swap). It rejects
+	// expected_outgoing_decision is the RuleNumber the caller observed as the
+	// primary's current decision. The primary applies the change only if its
+	// recorded decision still matches this value (compare-and-swap). It rejects
 	// with a "rule has changed" error otherwise, signaling that the caller's
 	// view is stale and it should re-read state and retry. This prevents
 	// races between concurrent coordinators making cohort decisions based on
 	// stale snapshots. Required.
-	ExpectedOutgoingRule *clustermetadata.RuleNumber `protobuf:"bytes,4,opt,name=expected_outgoing_rule,json=expectedOutgoingRule,proto3" json:"expected_outgoing_rule,omitempty"`
+	ExpectedOutgoingDecision *clustermetadata.RuleNumber `protobuf:"bytes,4,opt,name=expected_outgoing_decision,json=expectedOutgoingDecision,proto3" json:"expected_outgoing_decision,omitempty"`
 	// Coordinator ID that initiated this operation (for audit trail)
 	CoordinatorId *clustermetadata.ID `protobuf:"bytes,6,opt,name=coordinator_id,json=coordinatorId,proto3" json:"coordinator_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -1910,9 +1910,9 @@ func (x *UpdateConsensusRuleRequest) GetStandbyIds() []*clustermetadata.ID {
 	return nil
 }
 
-func (x *UpdateConsensusRuleRequest) GetExpectedOutgoingRule() *clustermetadata.RuleNumber {
+func (x *UpdateConsensusRuleRequest) GetExpectedOutgoingDecision() *clustermetadata.RuleNumber {
 	if x != nil {
-		return x.ExpectedOutgoingRule
+		return x.ExpectedOutgoingDecision
 	}
 	return nil
 }
@@ -2989,12 +2989,12 @@ const file_multipoolermanagerdata_proto_rawDesc = "" +
 	"\atimeout\x18\x02 \x01(\v2\x19.google.protobuf.DurationR\atimeout\x12A\n" +
 	"\atrigger\x18\x03 \x01(\x0e2'.multipoolermanagerdata.SnapshotTriggerR\atrigger\x12;\n" +
 	"\vcaptured_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"capturedAt\"\xae\x02\n" +
+	"capturedAt\"\xb6\x02\n" +
 	"\x1aUpdateConsensusRuleRequest\x12K\n" +
 	"\toperation\x18\x01 \x01(\x0e2-.multipoolermanagerdata.CohortUpdateOperationR\toperation\x124\n" +
 	"\vstandby_ids\x18\x02 \x03(\v2\x13.clustermetadata.IDR\n" +
-	"standbyIds\x12Q\n" +
-	"\x16expected_outgoing_rule\x18\x04 \x01(\v2\x1b.clustermetadata.RuleNumberR\x14expectedOutgoingRule\x12:\n" +
+	"standbyIds\x12Y\n" +
+	"\x1aexpected_outgoing_decision\x18\x04 \x01(\v2\x1b.clustermetadata.RuleNumberR\x18expectedOutgoingDecision\x12:\n" +
 	"\x0ecoordinator_id\x18\x06 \x01(\v2\x13.clustermetadata.IDR\rcoordinatorId\"\x1d\n" +
 	"\x1bUpdateConsensusRuleResponse\"\xf1\x01\n" +
 	"\rBackupRequest\x12#\n" +
@@ -3210,7 +3210,7 @@ var file_multipoolermanagerdata_proto_depIdxs = []int32{
 	49, // 34: multipoolermanagerdata.ManagerHealthSnapshot.captured_at:type_name -> google.protobuf.Timestamp
 	5,  // 35: multipoolermanagerdata.UpdateConsensusRuleRequest.operation:type_name -> multipoolermanagerdata.CohortUpdateOperation
 	50, // 36: multipoolermanagerdata.UpdateConsensusRuleRequest.standby_ids:type_name -> clustermetadata.ID
-	54, // 37: multipoolermanagerdata.UpdateConsensusRuleRequest.expected_outgoing_rule:type_name -> clustermetadata.RuleNumber
+	54, // 37: multipoolermanagerdata.UpdateConsensusRuleRequest.expected_outgoing_decision:type_name -> clustermetadata.RuleNumber
 	50, // 38: multipoolermanagerdata.UpdateConsensusRuleRequest.coordinator_id:type_name -> clustermetadata.ID
 	46, // 39: multipoolermanagerdata.BackupRequest.overrides:type_name -> multipoolermanagerdata.BackupRequest.OverridesEntry
 	41, // 40: multipoolermanagerdata.GetBackupsResponse.backups:type_name -> multipoolermanagerdata.BackupMetadata

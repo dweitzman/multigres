@@ -325,24 +325,30 @@ func (x *PromoteResponse) GetConsensusStatus() *clustermetadata.ConsensusStatus 
 
 // SetPrimaryRequest tells a pooler about the current leader and the rule
 // the caller knows the cluster is at. The pooler compares the supplied rule
-// against its own; if the supplied rule is strictly higher it applies the
-// change (standby: update primary_conninfo; stale primary: demote), otherwise
-// it returns success without changes. Idempotent under retries and safe
-// against out-of-order delivery from stale recovery rounds.
+// against its own; if the supplied rule is strictly higher and the supplied
+// primary_revocation is at least as high as the revocation recorded for the
+// previously-known primary, it applies the change (standby: update
+// primary_conninfo; stale primary: demote). Otherwise it returns success
+// without changes. Idempotent under retries and safe against out-of-order
+// delivery from stale recovery rounds.
 //
-// The pooler also validates that leader.id matches rule.leader_id — the
-// rule's identity is authoritative; the leader field is just the contact
-// information needed to act on that identity.
+// replication_primary.primary is treated as eventually-consistent discovery
+// information about where to find the primary that authority (rule +
+// primary_revocation) names. The pooler does not require primary.id to match
+// rule.leader_id — a propagation flow legitimately points followers at a
+// finalizing node distinct from the dead leader recorded in the rule.
 type SetPrimaryRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The (rule, primary, rewind_ready) the follower should adopt. Contact info
-	// for the leader is replication_primary.primary (host + postgres_port used to
-	// rewrite primary_conninfo); the rule is replication_primary.rule, which the
-	// pooler compares against its own observed rule (by RuleNumber) and only
-	// applies when strictly higher. primary.id must match rule.leader_id.
-	// replication_primary.rewind_ready relays whether the leader has checkpointed
-	// onto its current timeline: a diverged follower defers its pg_rewind until
-	// it is true, but sets up primary_conninfo and attempts to stream regardless.
+	// The (rule, primary, rewind_ready, primary_revocation) the follower should
+	// adopt. Contact info for the leader is replication_primary.primary (host +
+	// postgres_port used to rewrite primary_conninfo); the rule is
+	// replication_primary.rule, which the pooler compares against its own
+	// observed rule (by RuleNumber) and only applies when strictly higher.
+	// replication_primary.rewind_ready relays whether the leader has
+	// checkpointed onto its current timeline: a diverged follower defers its
+	// pg_rewind until it is true, but sets up primary_conninfo and attempts to
+	// stream regardless. replication_primary.primary_revocation is required and
+	// gates staleness as described above.
 	ReplicationPrimary *clustermetadata.ReplicationPrimary `protobuf:"bytes,3,opt,name=replication_primary,json=replicationPrimary,proto3" json:"replication_primary,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
@@ -431,6 +437,120 @@ func (x *SetPrimaryResponse) GetConsensusStatus() *clustermetadata.ConsensusStat
 	return nil
 }
 
+// PropagateRequest asks the receiving pooler to finalise an in-WAL rule change
+// that it already holds as a proposal. Unlike Promote, no new rule is written —
+// the pooler promotes postgres, waits for the existing WAL entry to reach
+// sync-standby quorum, marks it as decided, then self-promotes by writing a
+// new rule at (term_revocation.revoked_below_term, 0) with the same cohort and
+// durability policy.
+//
+// The coordinator issues Propagate to the node that holds the in-WAL proposal
+// and SetPrimary to all followers, pointing them at that node as their
+// replication source.
+type PropagateRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The propagation recruitment revocation. Must have propagation_intent set
+	// to the rule number of the in-WAL proposal being finalised.
+	TermRevocation *clustermetadata.TermRevocation `protobuf:"bytes,1,opt,name=term_revocation,json=termRevocation,proto3" json:"term_revocation,omitempty"`
+	// The full ShardRule the coordinator expects to find in-WAL on this node.
+	// The handler validates this matches the node's current proposal exactly
+	// (rule number, cohort, durability policy) before proceeding.
+	ExpectedProposal *clustermetadata.ShardRule `protobuf:"bytes,2,opt,name=expected_proposal,json=expectedProposal,proto3" json:"expected_proposal,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *PropagateRequest) Reset() {
+	*x = PropagateRequest{}
+	mi := &file_consensusdata_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PropagateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PropagateRequest) ProtoMessage() {}
+
+func (x *PropagateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_consensusdata_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PropagateRequest.ProtoReflect.Descriptor instead.
+func (*PropagateRequest) Descriptor() ([]byte, []int) {
+	return file_consensusdata_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *PropagateRequest) GetTermRevocation() *clustermetadata.TermRevocation {
+	if x != nil {
+		return x.TermRevocation
+	}
+	return nil
+}
+
+func (x *PropagateRequest) GetExpectedProposal() *clustermetadata.ShardRule {
+	if x != nil {
+		return x.ExpectedProposal
+	}
+	return nil
+}
+
+// PropagateResponse carries the pooler's state after a successful Propagate.
+// On success the node has decided the propagated rule and written its
+// self-promotion rule; consensus_status reflects the self-promotion decision.
+type PropagateResponse struct {
+	state           protoimpl.MessageState           `protogen:"open.v1"`
+	ConsensusStatus *clustermetadata.ConsensusStatus `protobuf:"bytes,1,opt,name=consensus_status,json=consensusStatus,proto3" json:"consensus_status,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *PropagateResponse) Reset() {
+	*x = PropagateResponse{}
+	mi := &file_consensusdata_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PropagateResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PropagateResponse) ProtoMessage() {}
+
+func (x *PropagateResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_consensusdata_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PropagateResponse.ProtoReflect.Descriptor instead.
+func (*PropagateResponse) Descriptor() ([]byte, []int) {
+	return file_consensusdata_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *PropagateResponse) GetConsensusStatus() *clustermetadata.ConsensusStatus {
+	if x != nil {
+		return x.ConsensusStatus
+	}
+	return nil
+}
+
 var File_consensusdata_proto protoreflect.FileDescriptor
 
 const file_consensusdata_proto_rawDesc = "" +
@@ -454,6 +574,11 @@ const file_consensusdata_proto_rawDesc = "" +
 	"\x11SetPrimaryRequest\x12T\n" +
 	"\x13replication_primary\x18\x03 \x01(\v2#.clustermetadata.ReplicationPrimaryR\x12replicationPrimary\"a\n" +
 	"\x12SetPrimaryResponse\x12K\n" +
+	"\x10consensus_status\x18\x01 \x01(\v2 .clustermetadata.ConsensusStatusR\x0fconsensusStatus\"\xa5\x01\n" +
+	"\x10PropagateRequest\x12H\n" +
+	"\x0fterm_revocation\x18\x01 \x01(\v2\x1f.clustermetadata.TermRevocationR\x0etermRevocation\x12G\n" +
+	"\x11expected_proposal\x18\x02 \x01(\v2\x1a.clustermetadata.ShardRuleR\x10expectedProposal\"`\n" +
+	"\x11PropagateResponse\x12K\n" +
 	"\x10consensus_status\x18\x01 \x01(\v2 .clustermetadata.ConsensusStatusR\x0fconsensusStatusB4Z2github.com/multigres/multigres/go/pb/consensusdatab\x06proto3"
 
 var (
@@ -468,7 +593,7 @@ func file_consensusdata_proto_rawDescGZIP() []byte {
 	return file_consensusdata_proto_rawDescData
 }
 
-var file_consensusdata_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_consensusdata_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_consensusdata_proto_goTypes = []any{
 	(*CoordinatorProposal)(nil),                // 0: consensusdata.CoordinatorProposal
 	(*RecruitRequest)(nil),                     // 1: consensusdata.RecruitRequest
@@ -477,29 +602,34 @@ var file_consensusdata_proto_goTypes = []any{
 	(*PromoteResponse)(nil),                    // 4: consensusdata.PromoteResponse
 	(*SetPrimaryRequest)(nil),                  // 5: consensusdata.SetPrimaryRequest
 	(*SetPrimaryResponse)(nil),                 // 6: consensusdata.SetPrimaryResponse
-	(*clustermetadata.TermRevocation)(nil),     // 7: clustermetadata.TermRevocation
-	(*clustermetadata.PoolerAddress)(nil),      // 8: clustermetadata.PoolerAddress
-	(*clustermetadata.ShardRule)(nil),          // 9: clustermetadata.ShardRule
-	(*clustermetadata.ConsensusStatus)(nil),    // 10: clustermetadata.ConsensusStatus
-	(*clustermetadata.ID)(nil),                 // 11: clustermetadata.ID
-	(*clustermetadata.ReplicationPrimary)(nil), // 12: clustermetadata.ReplicationPrimary
+	(*PropagateRequest)(nil),                   // 7: consensusdata.PropagateRequest
+	(*PropagateResponse)(nil),                  // 8: consensusdata.PropagateResponse
+	(*clustermetadata.TermRevocation)(nil),     // 9: clustermetadata.TermRevocation
+	(*clustermetadata.PoolerAddress)(nil),      // 10: clustermetadata.PoolerAddress
+	(*clustermetadata.ShardRule)(nil),          // 11: clustermetadata.ShardRule
+	(*clustermetadata.ConsensusStatus)(nil),    // 12: clustermetadata.ConsensusStatus
+	(*clustermetadata.ID)(nil),                 // 13: clustermetadata.ID
+	(*clustermetadata.ReplicationPrimary)(nil), // 14: clustermetadata.ReplicationPrimary
 }
 var file_consensusdata_proto_depIdxs = []int32{
-	7,  // 0: consensusdata.CoordinatorProposal.term_revocation:type_name -> clustermetadata.TermRevocation
-	8,  // 1: consensusdata.CoordinatorProposal.proposal_leader:type_name -> clustermetadata.PoolerAddress
-	9,  // 2: consensusdata.CoordinatorProposal.proposed_rule:type_name -> clustermetadata.ShardRule
-	7,  // 3: consensusdata.RecruitRequest.term_revocation:type_name -> clustermetadata.TermRevocation
-	10, // 4: consensusdata.RecruitResponse.consensus_status:type_name -> clustermetadata.ConsensusStatus
+	9,  // 0: consensusdata.CoordinatorProposal.term_revocation:type_name -> clustermetadata.TermRevocation
+	10, // 1: consensusdata.CoordinatorProposal.proposal_leader:type_name -> clustermetadata.PoolerAddress
+	11, // 2: consensusdata.CoordinatorProposal.proposed_rule:type_name -> clustermetadata.ShardRule
+	9,  // 3: consensusdata.RecruitRequest.term_revocation:type_name -> clustermetadata.TermRevocation
+	12, // 4: consensusdata.RecruitResponse.consensus_status:type_name -> clustermetadata.ConsensusStatus
 	0,  // 5: consensusdata.PromoteRequest.proposal:type_name -> consensusdata.CoordinatorProposal
-	11, // 6: consensusdata.PromoteRequest.accepted_node_ids:type_name -> clustermetadata.ID
-	10, // 7: consensusdata.PromoteResponse.consensus_status:type_name -> clustermetadata.ConsensusStatus
-	12, // 8: consensusdata.SetPrimaryRequest.replication_primary:type_name -> clustermetadata.ReplicationPrimary
-	10, // 9: consensusdata.SetPrimaryResponse.consensus_status:type_name -> clustermetadata.ConsensusStatus
-	10, // [10:10] is the sub-list for method output_type
-	10, // [10:10] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	13, // 6: consensusdata.PromoteRequest.accepted_node_ids:type_name -> clustermetadata.ID
+	12, // 7: consensusdata.PromoteResponse.consensus_status:type_name -> clustermetadata.ConsensusStatus
+	14, // 8: consensusdata.SetPrimaryRequest.replication_primary:type_name -> clustermetadata.ReplicationPrimary
+	12, // 9: consensusdata.SetPrimaryResponse.consensus_status:type_name -> clustermetadata.ConsensusStatus
+	9,  // 10: consensusdata.PropagateRequest.term_revocation:type_name -> clustermetadata.TermRevocation
+	11, // 11: consensusdata.PropagateRequest.expected_proposal:type_name -> clustermetadata.ShardRule
+	12, // 12: consensusdata.PropagateResponse.consensus_status:type_name -> clustermetadata.ConsensusStatus
+	13, // [13:13] is the sub-list for method output_type
+	13, // [13:13] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_consensusdata_proto_init() }
@@ -513,7 +643,7 @@ func file_consensusdata_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_consensusdata_proto_rawDesc), len(file_consensusdata_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

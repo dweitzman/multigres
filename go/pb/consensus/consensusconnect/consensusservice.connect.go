@@ -64,6 +64,9 @@ const (
 	// MultiPoolerConsensusSetPrimaryProcedure is the fully-qualified name of the MultiPoolerConsensus's
 	// SetPrimary RPC.
 	MultiPoolerConsensusSetPrimaryProcedure = "/consensus.MultiPoolerConsensus/SetPrimary"
+	// MultiPoolerConsensusPropagateProcedure is the fully-qualified name of the MultiPoolerConsensus's
+	// Propagate RPC.
+	MultiPoolerConsensusPropagateProcedure = "/consensus.MultiPoolerConsensus/Propagate"
 )
 
 // MultiPoolerConsensusClient is a client for the consensus.MultiPoolerConsensus service.
@@ -91,6 +94,11 @@ type MultiPoolerConsensusClient interface {
 	// leadership and routing role. "SetPrimary" reads as if it makes the pooler a
 	// primary; it actually points the pooler at one.
 	SetPrimary(context.Context, *connect.Request[consensusdata.SetPrimaryRequest]) (*connect.Response[consensusdata.SetPrimaryResponse], error)
+	// Propagate asks a pooler to finalise an in-WAL rule change it already
+	// holds as a proposal, rather than writing a fresh rule. The coordinator
+	// issues this instead of Promote when it detects an in-flight proposal
+	// beyond the cohort's outgoing decision.
+	Propagate(context.Context, *connect.Request[consensusdata.PropagateRequest]) (*connect.Response[consensusdata.PropagateResponse], error)
 }
 
 // NewMultiPoolerConsensusClient constructs a client for the consensus.MultiPoolerConsensus service.
@@ -134,6 +142,12 @@ func NewMultiPoolerConsensusClient(httpClient connect.HTTPClient, baseURL string
 			connect.WithSchema(multiPoolerConsensusMethods.ByName("SetPrimary")),
 			connect.WithClientOptions(opts...),
 		),
+		propagate: connect.NewClient[consensusdata.PropagateRequest, consensusdata.PropagateResponse](
+			httpClient,
+			baseURL+MultiPoolerConsensusPropagateProcedure,
+			connect.WithSchema(multiPoolerConsensusMethods.ByName("Propagate")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -144,6 +158,7 @@ type multiPoolerConsensusClient struct {
 	recruit             *connect.Client[consensusdata.RecruitRequest, consensusdata.RecruitResponse]
 	promote             *connect.Client[consensusdata.PromoteRequest, consensusdata.PromoteResponse]
 	setPrimary          *connect.Client[consensusdata.SetPrimaryRequest, consensusdata.SetPrimaryResponse]
+	propagate           *connect.Client[consensusdata.PropagateRequest, consensusdata.PropagateResponse]
 }
 
 // UpdateConsensusRule calls consensus.MultiPoolerConsensus.UpdateConsensusRule.
@@ -171,6 +186,11 @@ func (c *multiPoolerConsensusClient) SetPrimary(ctx context.Context, req *connec
 	return c.setPrimary.CallUnary(ctx, req)
 }
 
+// Propagate calls consensus.MultiPoolerConsensus.Propagate.
+func (c *multiPoolerConsensusClient) Propagate(ctx context.Context, req *connect.Request[consensusdata.PropagateRequest]) (*connect.Response[consensusdata.PropagateResponse], error) {
+	return c.propagate.CallUnary(ctx, req)
+}
+
 // MultiPoolerConsensusHandler is an implementation of the consensus.MultiPoolerConsensus service.
 type MultiPoolerConsensusHandler interface {
 	// UpdateConsensusRule applies a cohort-membership change (add/remove). The
@@ -196,6 +216,11 @@ type MultiPoolerConsensusHandler interface {
 	// leadership and routing role. "SetPrimary" reads as if it makes the pooler a
 	// primary; it actually points the pooler at one.
 	SetPrimary(context.Context, *connect.Request[consensusdata.SetPrimaryRequest]) (*connect.Response[consensusdata.SetPrimaryResponse], error)
+	// Propagate asks a pooler to finalise an in-WAL rule change it already
+	// holds as a proposal, rather than writing a fresh rule. The coordinator
+	// issues this instead of Promote when it detects an in-flight proposal
+	// beyond the cohort's outgoing decision.
+	Propagate(context.Context, *connect.Request[consensusdata.PropagateRequest]) (*connect.Response[consensusdata.PropagateResponse], error)
 }
 
 // NewMultiPoolerConsensusHandler builds an HTTP handler from the service implementation. It returns
@@ -235,6 +260,12 @@ func NewMultiPoolerConsensusHandler(svc MultiPoolerConsensusHandler, opts ...con
 		connect.WithSchema(multiPoolerConsensusMethods.ByName("SetPrimary")),
 		connect.WithHandlerOptions(opts...),
 	)
+	multiPoolerConsensusPropagateHandler := connect.NewUnaryHandler(
+		MultiPoolerConsensusPropagateProcedure,
+		svc.Propagate,
+		connect.WithSchema(multiPoolerConsensusMethods.ByName("Propagate")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/consensus.MultiPoolerConsensus/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case MultiPoolerConsensusUpdateConsensusRuleProcedure:
@@ -247,6 +278,8 @@ func NewMultiPoolerConsensusHandler(svc MultiPoolerConsensusHandler, opts ...con
 			multiPoolerConsensusPromoteHandler.ServeHTTP(w, r)
 		case MultiPoolerConsensusSetPrimaryProcedure:
 			multiPoolerConsensusSetPrimaryHandler.ServeHTTP(w, r)
+		case MultiPoolerConsensusPropagateProcedure:
+			multiPoolerConsensusPropagateHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -274,4 +307,8 @@ func (UnimplementedMultiPoolerConsensusHandler) Promote(context.Context, *connec
 
 func (UnimplementedMultiPoolerConsensusHandler) SetPrimary(context.Context, *connect.Request[consensusdata.SetPrimaryRequest]) (*connect.Response[consensusdata.SetPrimaryResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("consensus.MultiPoolerConsensus.SetPrimary is not implemented"))
+}
+
+func (UnimplementedMultiPoolerConsensusHandler) Propagate(context.Context, *connect.Request[consensusdata.PropagateRequest]) (*connect.Response[consensusdata.PropagateResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("consensus.MultiPoolerConsensus.Propagate is not implemented"))
 }

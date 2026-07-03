@@ -1505,17 +1505,17 @@ export class UpdateConsensusRuleRequest extends Message<UpdateConsensusRuleReque
   standbyIds: ID[] = [];
 
   /**
-   * expected_outgoing_rule is the RuleNumber the caller observed as the
-   * primary's current rule. The primary applies the change only if its
-   * recorded rule still matches this value (compare-and-swap). It rejects
+   * expected_outgoing_decision is the RuleNumber the caller observed as the
+   * primary's current decision. The primary applies the change only if its
+   * recorded decision still matches this value (compare-and-swap). It rejects
    * with a "rule has changed" error otherwise, signaling that the caller's
    * view is stale and it should re-read state and retry. This prevents
    * races between concurrent coordinators making cohort decisions based on
    * stale snapshots. Required.
    *
-   * @generated from field: clustermetadata.RuleNumber expected_outgoing_rule = 4;
+   * @generated from field: clustermetadata.RuleNumber expected_outgoing_decision = 4;
    */
-  expectedOutgoingRule?: RuleNumber;
+  expectedOutgoingDecision?: RuleNumber;
 
   /**
    * Coordinator ID that initiated this operation (for audit trail)
@@ -1534,7 +1534,7 @@ export class UpdateConsensusRuleRequest extends Message<UpdateConsensusRuleReque
   static readonly fields: FieldList = proto3.util.newFieldList(() => [
     { no: 1, name: "operation", kind: "enum", T: proto3.getEnumType(CohortUpdateOperation) },
     { no: 2, name: "standby_ids", kind: "message", T: ID, repeated: true },
-    { no: 4, name: "expected_outgoing_rule", kind: "message", T: RuleNumber },
+    { no: 4, name: "expected_outgoing_decision", kind: "message", T: RuleNumber },
     { no: 6, name: "coordinator_id", kind: "message", T: ID },
   ]);
 

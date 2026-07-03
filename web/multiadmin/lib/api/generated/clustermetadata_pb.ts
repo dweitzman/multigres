@@ -1550,32 +1550,44 @@ export class ShardRule extends Message<ShardRule> {
 }
 
 /**
- * PoolerPosition describes a pooler's committed position in logical and physical
- * time. It captures the highest ShardRule this pooler has replicated (or written,
- * for a leader) and the latest WAL position.
+ * PoolerPosition describes a pooler's position in logical and physical time.
+ * It captures the last marked decision rule (durable, both cohorts confirmed)
+ * and the latest WAL position. When a cohort transition is in progress, it also
+ * carries the in-flight proposal rule.
  *
  * Used in Status and Recruit responses so the coordinator can determine
  * which pooler is most advanced when selecting a promotion candidate.
  *
- * Comparison: prefer the pooler with the higher rule (coordinator_term first,
- * then leader_subterm). Break ties by LSN.
+ * Comparison: prefer the pooler with the higher decision (coordinator_term first,
+ * then leader_subterm). When decisions match, the proposal field breaks the tie
+ * (a node with an in-flight proposal — or a higher proposal — is further ahead).
+ * LSN breaks ties when both decision and proposal match.
  *
  * @generated from message clustermetadata.PoolerPosition
  */
 export class PoolerPosition extends Message<PoolerPosition> {
   /**
-   * The highest shard rule this pooler has committed to local WAL.
+   * The last marked decision rule: the most recently confirmed durable rule on
+   * this node (written to WAL and acknowledged by the required quorum).
    *
-   * @generated from field: clustermetadata.ShardRule rule = 1;
+   * @generated from field: clustermetadata.ShardRule decision = 1;
    */
-  rule?: ShardRule;
+  decision?: ShardRule;
+
+  /**
+   * In-flight proposal rule, populated while a rule transition is in progress.
+   * Null when no transition is in progress.
+   *
+   * @generated from field: clustermetadata.ShardRule proposal = 2;
+   */
+  proposal?: ShardRule;
 
   /**
    * The current real-time WAL head at the time of reading. Note that this is likely
-   * beyond the LSN at which the rule was committed. For a primary: pg_current_wal_lsn().
+   * beyond the LSN at which the decision was committed. For a primary: pg_current_wal_lsn().
    * For a standby: pg_last_wal_receive_lsn() (or pg_last_wal_replay_lsn() if receive is null).
    *
-   * @generated from field: string lsn = 2;
+   * @generated from field: string lsn = 3;
    */
   lsn = "";
 
@@ -1587,8 +1599,9 @@ export class PoolerPosition extends Message<PoolerPosition> {
   static readonly runtime: typeof proto3 = proto3;
   static readonly typeName = "clustermetadata.PoolerPosition";
   static readonly fields: FieldList = proto3.util.newFieldList(() => [
-    { no: 1, name: "rule", kind: "message", T: ShardRule },
-    { no: 2, name: "lsn", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 1, name: "decision", kind: "message", T: ShardRule },
+    { no: 2, name: "proposal", kind: "message", T: ShardRule },
+    { no: 3, name: "lsn", kind: "scalar", T: 9 /* ScalarType.STRING */ },
   ]);
 
   static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): PoolerPosition {
@@ -1722,6 +1735,25 @@ export class ReplicationPrimary extends Message<ReplicationPrimary> {
    */
   rewindReady = false;
 
+  /**
+   * The revocation that established `primary`'s leadership. Required on
+   * SetPrimary requests. This is NOT a new recruitment of the receiving
+   * follower — accepting a SetPrimary does not set the follower's own term.
+   * It informs the follower of the authority with which the primary was
+   * established so that stale SetPrimary calls (carrying older revocations)
+   * can be rejected: if primary_revocation.revoked_below_term is strictly
+   * less than the revocation already recorded here, the call is rejected as
+   * stale. Equal or higher revocations are accepted; on accept the recorded
+   * value is updated. `primary` is treated as eventually-consistent discovery
+   * information about where to find the primary that this revocation names —
+   * the receiver does not require primary.id to match rule.leader_id, since a
+   * propagation flow legitimately points followers at a finalizing node
+   * distinct from the dead leader recorded in the rule.
+   *
+   * @generated from field: clustermetadata.TermRevocation primary_revocation = 4;
+   */
+  primaryRevocation?: TermRevocation;
+
   constructor(data?: PartialMessage<ReplicationPrimary>) {
     super();
     proto3.util.initPartial(data, this);
@@ -1733,6 +1765,7 @@ export class ReplicationPrimary extends Message<ReplicationPrimary> {
     { no: 1, name: "rule", kind: "message", T: ShardRule },
     { no: 2, name: "primary", kind: "message", T: PoolerAddress },
     { no: 3, name: "rewind_ready", kind: "scalar", T: 8 /* ScalarType.BOOL */ },
+    { no: 4, name: "primary_revocation", kind: "message", T: TermRevocation },
   ]);
 
   static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): ReplicationPrimary {
@@ -1803,15 +1836,33 @@ export class TermRevocation extends Message<TermRevocation> {
   coordinatorInitiatedAt?: Timestamp;
 
   /**
-   * The rule the coordinator observed across the cohort at recruit time —
-   * the "from" side of the transition this recruit was authoring. Used as
-   * an override key during SetPrimary: if a subsequent SetPrimary carries a rule
-   * strictly greater than this, the cluster has demonstrably moved past
-   * the runaway recruit's premise and the revocation is moot.
+   * The highest marked decision the coordinator observed across the cohort at
+   * recruit time — the "from" side of the transition this recruit was authoring.
+   * Always a decision (never an in-flight proposal). Used as an override key
+   * during SetPrimary: if a subsequent SetPrimary carries a rule strictly
+   * greater than this, the cluster has demonstrably moved past the runaway
+   * recruit's premise and the revocation is moot.
    *
-   * @generated from field: clustermetadata.RuleNumber outgoing_rule = 4;
+   * @generated from field: clustermetadata.RuleNumber outgoing_decision = 4;
    */
-  outgoingRule?: RuleNumber;
+  outgoingDecision?: RuleNumber;
+
+  /**
+   * Set when the most-advanced position observed across the cohort at recruit
+   * time was an in-flight proposal beyond outgoing_decision (rather than a
+   * marked decision). Its value is that proposal's rule number. This signals
+   * to the recruiting coordinator that a Propagate + SetPrimary flow is needed
+   * to finalise the in-WAL entry, rather than a fresh proposal via Promote.
+   *
+   * A pooler holding a proposal beyond outgoing_decision would normally refuse
+   * this revocation (see ValidateRevocation) unless its proposal exactly
+   * matches propagation_intent — that match is the coordinator's explicit
+   * acknowledgement that it knows about the in-WAL entry and promises to
+   * propagate it rather than overwrite it.
+   *
+   * @generated from field: clustermetadata.RuleNumber propagation_intent = 5;
+   */
+  propagationIntent?: RuleNumber;
 
   constructor(data?: PartialMessage<TermRevocation>) {
     super();
@@ -1824,7 +1875,8 @@ export class TermRevocation extends Message<TermRevocation> {
     { no: 1, name: "revoked_below_term", kind: "scalar", T: 3 /* ScalarType.INT64 */ },
     { no: 2, name: "accepted_coordinator_id", kind: "message", T: ID },
     { no: 3, name: "coordinator_initiated_at", kind: "message", T: Timestamp },
-    { no: 4, name: "outgoing_rule", kind: "message", T: RuleNumber },
+    { no: 4, name: "outgoing_decision", kind: "message", T: RuleNumber },
+    { no: 5, name: "propagation_intent", kind: "message", T: RuleNumber },
   ]);
 
   static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): TermRevocation {
@@ -1852,7 +1904,7 @@ export class TermRevocation extends Message<TermRevocation> {
  * The external actor certifies:
  *
  *  1. No pooler in the outgoing cohort can make progress beyond frozen_lsn
- *     under term_revocation.outgoing_rule — all durable transactions at the
+ *     under term_revocation.outgoing_decision — all durable transactions at the
  *     time of revocation are captured at or below that position.
  *
  *  2. The term in term_revocation is globally unique; no other coordinator has
@@ -1866,7 +1918,7 @@ export class TermRevocation extends Message<TermRevocation> {
 export class ExternallyCertifiedRevocation extends Message<ExternallyCertifiedRevocation> {
   /**
    * Records the unique coordinator term for this proposal, the coordinator
-   * facilitating the request, and the outgoing_rule the cohort is being
+   * facilitating the request, and the outgoing_decision the cohort is being
    * transitioned from. The coordinator fills this in even though it is acting
    * on behalf of an external operator request.
    *
@@ -1876,7 +1928,7 @@ export class ExternallyCertifiedRevocation extends Message<ExternallyCertifiedRe
 
   /**
    * The LSN at which the outgoing cohort's progress is frozen. No durable writes
-   * occurred beyond this position under term_revocation.outgoing_rule. The chosen
+   * occurred beyond this position under term_revocation.outgoing_decision. The chosen
    * leader's WAL position must meet or exceed this LSN.
    *
    * @generated from field: string frozen_lsn = 2;
