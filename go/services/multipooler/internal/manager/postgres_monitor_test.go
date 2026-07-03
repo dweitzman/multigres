@@ -259,7 +259,7 @@ func TestDetermineRemedialAction(t *testing.T) {
 	// given term.
 	selfPos := func(term int64, leader *clustermetadatapb.ID) *clustermetadatapb.PoolerPosition {
 		return &clustermetadatapb.PoolerPosition{
-			Rule: &clustermetadatapb.ShardRule{
+			Decision: &clustermetadatapb.ShardRule{
 				RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: term},
 				LeaderId:   leader,
 			},
@@ -536,7 +536,7 @@ func TestDetermineRemedialAction_StalePrimaryDemote(t *testing.T) {
 
 	selfPos := func(term int64) *clustermetadatapb.PoolerPosition {
 		return &clustermetadatapb.PoolerPosition{
-			Rule: &clustermetadatapb.ShardRule{
+			Decision: &clustermetadatapb.ShardRule{
 				RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: term},
 				LeaderId:   selfID,
 			},
@@ -638,7 +638,7 @@ func TestStaleStandbyDemoteTarget(t *testing.T) {
 	newPM := func(t *testing.T, recordedRule *clustermetadatapb.ShardRule, addr *clustermetadatapb.PoolerAddress, selfTerm int64) *MultiPoolerManager {
 		opts := []testManagerOption{
 			withServiceID(selfID),
-			withRuleStore(&fakeRuleStore{pos: &clustermetadatapb.PoolerPosition{Rule: rule(selfTerm, selfID)}}),
+			withRuleStore(&fakeRuleStore{pos: &clustermetadatapb.PoolerPosition{Decision: rule(selfTerm, selfID)}}),
 		}
 		if recordedRule != nil {
 			// RewindReady so the rewind-ready gate is satisfied; cases that expect
@@ -679,7 +679,7 @@ func TestStaleStandbyDemoteTarget(t *testing.T) {
 			withServiceID(selfID),
 			withPromises(cs),
 			withReplicationPrimary(&clustermetadatapb.ReplicationPrimary{Rule: rule(5, otherID), Primary: otherAddr, RewindReady: true}),
-			withRuleStore(&fakeRuleStore{pos: &clustermetadatapb.PoolerPosition{Rule: rule(4, selfID)}}),
+			withRuleStore(&fakeRuleStore{pos: &clustermetadatapb.PoolerPosition{Decision: rule(4, selfID)}}),
 		)
 		require.Nil(t, pm.staleStandbyDemoteTarget())
 	})
@@ -699,7 +699,7 @@ func TestStaleStandbyDemoteTarget(t *testing.T) {
 		pm := newTestManager(t,
 			withServiceID(selfID),
 			withReplicationPrimary(&clustermetadatapb.ReplicationPrimary{Rule: rule(5, otherID), Primary: otherAddr, RewindReady: false}),
-			withRuleStore(&fakeRuleStore{pos: &clustermetadatapb.PoolerPosition{Rule: rule(4, selfID)}}),
+			withRuleStore(&fakeRuleStore{pos: &clustermetadatapb.PoolerPosition{Decision: rule(4, selfID)}}),
 		)
 		require.Nil(t, pm.staleStandbyDemoteTarget())
 	})
@@ -893,7 +893,7 @@ func TestTakeRemedialAction_ResignationSignal(t *testing.T) {
 	selfID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "test-pooler"}
 	otherID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "other-pooler"}
 	selfPos := func(term int64) *clustermetadatapb.PoolerPosition {
-		return &clustermetadatapb.PoolerPosition{Rule: &clustermetadatapb.ShardRule{
+		return &clustermetadatapb.PoolerPosition{Decision: &clustermetadatapb.ShardRule{
 			RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: term},
 			LeaderId:   selfID,
 		}}
@@ -942,7 +942,7 @@ func TestTakeRemedialAction_ResignationSignal(t *testing.T) {
 			// Rule names another leader, so the rule-derived role is REPLICA;
 			// ReconcileRole republishes REPLICA and must leave resignation intact.
 			cachedPos: &clustermetadatapb.PoolerPosition{
-				Rule: &clustermetadatapb.ShardRule{
+				Decision: &clustermetadatapb.ShardRule{
 					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 8},
 					LeaderId:   otherID,
 				},
@@ -1034,7 +1034,7 @@ func TestTakeRemedialAction_ReconcileRole_AppliesRuleDerivedRole(t *testing.T) {
 	// PRIMARY — ReconcileRole must publish PRIMARY plus the self-leadership obs
 	// regardless of the stale REPLICA label on the record.
 	pm := newRemedialActionTestManager(t, multipooler, withRuleStore(&fakeRuleStore{pos: &clustermetadatapb.PoolerPosition{
-		Rule: &clustermetadatapb.ShardRule{RuleNumber: committed, LeaderId: multipooler.Id},
+		Decision: &clustermetadatapb.ShardRule{RuleNumber: committed, LeaderId: multipooler.Id},
 	}}))
 
 	lockCtx, err := pm.actionLock.Acquire(t.Context(), "test")
@@ -1402,7 +1402,7 @@ func TestPrimaryConnInfoDiffersFromRecorded(t *testing.T) {
 			},
 			seedRevocation: &clustermetadatapb.TermRevocation{
 				RevokedBelowTerm: 9,
-				OutgoingRule:     &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
+				OutgoingDecision: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
 			},
 			want: false,
 		},

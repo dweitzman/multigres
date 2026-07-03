@@ -219,9 +219,9 @@ func newTestManager(t *testing.T, opts ...testManagerOption) *MultiPoolerManager
 	baselineRouting := servingstate.RoutingState{Role: servingstate.RoutingRoleReplica}
 	if pm.record.Type() == clustermetadatapb.PoolerType_PRIMARY {
 		baselineRouting.Role = servingstate.RoutingRolePrimary
-		baselineRouting.Rule = cs.GetCurrentPosition().GetRule().GetRuleNumber()
+		baselineRouting.Rule = cs.GetCurrentPosition().GetDecision().GetRuleNumber()
 	} else {
-		baselineRouting.Rule = commonconsensus.HighestKnownRule([]*clustermetadatapb.ConsensusStatus{cs}).GetRuleNumber()
+		baselineRouting.Rule = commonconsensus.HighestDecidedRule([]*clustermetadatapb.ConsensusStatus{cs}).GetRuleNumber()
 	}
 	baseline := servingstate.State{
 		Routing:       baselineRouting,

@@ -153,7 +153,7 @@ func (pm *MultiPoolerManager) Recruit(ctx context.Context, req *consensusdatapb.
 	}
 
 	termEvent := eventlog.ConsensusRecruit{
-		Rule: commonconsensus.FormatRuleNumber(revocation.GetOutgoingRule()),
+		Rule: commonconsensus.FormatRuleNumber(revocation.GetOutgoingDecision()),
 	}
 	eventlog.Emit(ctx, pm.logger, eventlog.Started, termEvent)
 
@@ -575,7 +575,7 @@ func (pm *MultiPoolerManager) SetPrimary(ctx context.Context, req *consensusdata
 		pm.logger.InfoContext(ctx, "SetPrimary: rule revoked, ignoring",
 			"incoming_rule", rule.GetRuleNumber(),
 			"revoked_below_term", revocation.GetRevokedBelowTerm(),
-			"outgoing_rule", revocation.GetOutgoingRule())
+			"outgoing_decision", revocation.GetOutgoingDecision())
 		return &consensusdatapb.SetPrimaryResponse{ConsensusStatus: pm.consensusMgr.CachedConsensusStatus()}, nil
 	}
 
@@ -600,10 +600,10 @@ func (pm *MultiPoolerManager) SetPrimary(ctx context.Context, req *consensusdata
 
 	// Compare by RuleNumber only — LSN is intentionally not part of the gate.
 	// See SetPrimaryRequest's proto comment for the reasoning.
-	if commonconsensus.CompareRuleNumbers(rule.GetRuleNumber(), selfPos.GetRule().GetRuleNumber()) <= 0 {
+	if commonconsensus.CompareRuleNumbers(rule.GetRuleNumber(), selfPos.GetDecision().GetRuleNumber()) <= 0 {
 		pm.logger.InfoContext(ctx, "SetPrimary: incoming rule not higher, no-op",
 			"incoming_rule", rule.GetRuleNumber(),
-			"self_rule", selfPos.GetRule().GetRuleNumber())
+			"self_rule", selfPos.GetDecision().GetRuleNumber())
 		return &consensusdatapb.SetPrimaryResponse{ConsensusStatus: pm.consensusMgr.CachedConsensusStatus()}, nil
 	}
 

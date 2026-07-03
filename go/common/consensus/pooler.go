@@ -48,16 +48,26 @@ func (r ConsensusRole) String() string {
 	}
 }
 
-// SelfConsensusRole reports the pooler's role in the highest rule it knows
-// (HighestKnownRule over this single status): leader if that rule names self,
-// follower if self is one of that rule's cohort members, observer otherwise
-// (including when cs, its ID, or any known rule is absent).
+// SelfConsensusRole reports the pooler's role in the highest known DECISION
+// (HighestDecidedRule over this single status): leader if that rule names
+// self, follower if self is one of that rule's cohort members, observer
+// otherwise (including when cs, its ID, or any known rule is absent).
+//
+// Deliberately decision-only, not proposal-aware: an in-flight proposal
+// naming self as leader is not yet safe to act on (it may still be discarded
+// rather than propagated), so this does not report ConsensusRoleLeader from a
+// proposal alone. Every caller was written before PoolerPosition.proposal
+// existed as a concept, so none of them were designed with "I hold an
+// undecided proposal naming me leader" in mind — that's a case-by-case
+// question per caller (does it need to react earlier, pending propagation?),
+// not yet audited. Treat this as the conservative default until that audit
+// happens.
 //
 // Callers that only need a leader/non-leader answer compare against
 // ConsensusRoleLeader; keep follower and observer distinct otherwise, since
 // treating a non-cohort observer as a follower is a bug.
 func SelfConsensusRole(cs *clustermetadatapb.ConsensusStatus) ConsensusRole {
-	rule := HighestKnownRule([]*clustermetadatapb.ConsensusStatus{cs})
+	rule := HighestDecidedRule([]*clustermetadatapb.ConsensusStatus{cs})
 	self := cs.GetId()
 	if self == nil {
 		return ConsensusRoleObserver
@@ -75,11 +85,17 @@ func SelfConsensusRole(cs *clustermetadatapb.ConsensusStatus) ConsensusRole {
 
 // IsActiveLeader reports whether cs names its own pooler as a leader fit to accept
 // write transactions. That means:
-// - Highest leader known to the pooler (it hasn't been asked to replicate from somewhere else)
-// - Highest leader written to the pooler's WAL
-// - The pooler hasn't been recruited to revoke that rule
+//   - No in-flight proposal: an undecided proposal means the current position is
+//     provisional (see PoolerPosition), so writes are never accepted while one is
+//     outstanding, regardless of what the proposal names.
+//   - Highest leader known to the pooler (it hasn't been asked to replicate from somewhere else)
+//   - Highest leader written to the pooler's WAL
+//   - The pooler hasn't been recruited to revoke that rule
 func IsActiveLeader(cs *clustermetadatapb.ConsensusStatus) bool {
-	committed := cs.GetCurrentPosition().GetRule()
+	if cs.GetCurrentPosition().GetProposal() != nil {
+		return false
+	}
+	committed := cs.GetCurrentPosition().GetDecision()
 	if !RuleNamesLeader(committed, cs.GetId()) {
 		return false
 	}
@@ -98,5 +114,5 @@ func LeaderTerm(cs *clustermetadatapb.ConsensusStatus) int64 {
 	if SelfConsensusRole(cs) != ConsensusRoleLeader {
 		return 0
 	}
-	return cs.GetCurrentPosition().GetRule().GetRuleNumber().GetCoordinatorTerm()
+	return cs.GetCurrentPosition().GetDecision().GetRuleNumber().GetCoordinatorTerm()
 }

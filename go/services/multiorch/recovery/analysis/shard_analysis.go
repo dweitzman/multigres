@@ -55,12 +55,12 @@ type ShardAnalysis struct {
 	// shard's pooler.
 	TombstoneIDs map[topoclient.ComponentID]struct{}
 
-	// HighestShardRule is the highest known consensus rule across all poolers in
-	// the shard (commonconsensus.HighestKnownRule), or nil if no leader is known.
+	// HighestDecidedRule is the highest known consensus rule across all poolers in
+	// the shard (commonconsensus.HighestDecidedRule), or nil if no leader is known.
 	// It is the single source of leader identity: GetLeaderId() names the shard
 	// leader and GetCohortMembers() is its recorded synchronous cohort. Whether that leader is
 	// currently serving is judged by leaderServing() from the rider, not stored here.
-	HighestShardRule *clustermetadatapb.ShardRule
+	HighestDecidedRule *clustermetadatapb.ShardRule
 
 	// Leader is the health of the pooler that HighestShardRule names as leader, or
 	// nil if we have no health for it. The rule can name a leader we have never
@@ -78,7 +78,7 @@ type ShardAnalysis struct {
 // IsInStandbyList reports whether the given pooler ID appears in the leader's
 // synchronous standby list. Returns false when no standby list is available.
 func (sa *ShardAnalysis) IsInStandbyList(id *clustermetadatapb.ID) bool {
-	for _, standbyID := range sa.HighestShardRule.GetCohortMembers() {
+	for _, standbyID := range sa.HighestDecidedRule.GetCohortMembers() {
 		if standbyID.Cell == id.Cell && standbyID.Name == id.Name {
 			return true
 		}

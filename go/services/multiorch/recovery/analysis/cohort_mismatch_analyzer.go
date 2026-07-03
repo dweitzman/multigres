@@ -72,8 +72,8 @@ func (a *CohortMismatchAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, er
 	// Build cohort map keyed by serialized ID, paired with the raw
 	// *clustermetadata.ID so we can emit a Problem for a missing-from-cache
 	// cohort member (no pooler rider carries its ID otherwise).
-	cohortIDs := make(map[topoclient.ComponentID]*clustermetadatapb.ID, len(sa.HighestShardRule.GetCohortMembers()))
-	for _, id := range sa.HighestShardRule.GetCohortMembers() {
+	cohortIDs := make(map[topoclient.ComponentID]*clustermetadatapb.ID, len(sa.HighestDecidedRule.GetCohortMembers()))
+	for _, id := range sa.HighestDecidedRule.GetCohortMembers() {
 		cohortIDs[topoclient.ComponentIDString(id)] = id
 	}
 
@@ -151,7 +151,7 @@ func (a *CohortMismatchAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, er
 		//
 		// For non-tombstone missing-from-cache cases the pooler may still be
 		// alive somewhere; gate those on the durability policy.
-		if !isTombstone && !commonconsensus.IsCohortMemberRemovalSafe(sa.HighestShardRule, id) {
+		if !isTombstone && !commonconsensus.IsCohortMemberRemovalSafe(sa.HighestDecidedRule, id) {
 			continue
 		}
 		if isTombstone {

@@ -121,9 +121,9 @@ func (a *ReconcileCohortAction) Execute(ctx context.Context, problem types.Probl
 	// the underlying RPC could apply them in one shot. Coalescing same-shard,
 	// same-operation problems would cut RPC fanout and history churn.
 	req := &multipoolermanagerdatapb.UpdateConsensusRuleRequest{
-		Operation:            op,
-		StandbyIds:           []*clustermetadatapb.ID{targetID},
-		ExpectedOutgoingRule: members.HighestKnownRule.GetRuleNumber(),
+		Operation:                op,
+		StandbyIds:               []*clustermetadatapb.ID{targetID},
+		ExpectedOutgoingDecision: members.HighestKnownRule.GetRuleNumber(),
 	}
 
 	if _, err := a.rpcClient.UpdateConsensusRule(ctx, leader.Health().MultiPooler, req); err != nil {

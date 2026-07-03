@@ -73,7 +73,7 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 				Id:             primaryID,
 				TermRevocation: &clustermetadatapb.TermRevocation{RevokedBelowTerm: 3},
 				CurrentPosition: &clustermetadatapb.PoolerPosition{
-					Rule: &clustermetadatapb.ShardRule{
+					Decision: &clustermetadatapb.ShardRule{
 						RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 3, LeaderSubterm: 7},
 						LeaderId:   primaryID,
 					},
@@ -122,9 +122,9 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 		assert.Equal(t, multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_ADD, req.Operation)
 		require.Len(t, req.StandbyIds, 1)
 		assert.Equal(t, replicaID.Name, req.StandbyIds[0].Name)
-		require.NotNil(t, req.ExpectedOutgoingRule, "CAS guard must be set")
-		assert.Equal(t, int64(3), req.ExpectedOutgoingRule.CoordinatorTerm)
-		assert.Equal(t, int64(7), req.ExpectedOutgoingRule.LeaderSubterm)
+		require.NotNil(t, req.ExpectedOutgoingDecision, "CAS guard must be set")
+		assert.Equal(t, int64(3), req.ExpectedOutgoingDecision.CoordinatorTerm)
+		assert.Equal(t, int64(7), req.ExpectedOutgoingDecision.LeaderSubterm)
 	})
 
 	t.Run("ProblemCohortMemberIneligible issues UpdateConsensusRule with REMOVE", func(t *testing.T) {
@@ -255,13 +255,13 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 }
 
 // selfLeaderConsensus builds a consensus status in which the pooler names itself
-// as the consensus leader (so commonconsensus.HighestKnownRule/IsLeader identify
+// as the consensus leader (so commonconsensus.HighestDecidedRule/IsLeader identify
 // it) without a recorded rule number.
 func selfLeaderConsensus(id *clustermetadatapb.ID) *clustermetadatapb.ConsensusStatus {
 	return &clustermetadatapb.ConsensusStatus{
 		Id: id,
 		CurrentPosition: &clustermetadatapb.PoolerPosition{
-			Rule: &clustermetadatapb.ShardRule{LeaderId: id},
+			Decision: &clustermetadatapb.ShardRule{LeaderId: id},
 		},
 	}
 }

@@ -30,7 +30,7 @@ func TestSelfConsensusRoleLeadership(t *testing.T) {
 		return &clustermetadatapb.ConsensusStatus{
 			Id: self,
 			CurrentPosition: &clustermetadatapb.PoolerPosition{
-				Rule: &clustermetadatapb.ShardRule{LeaderId: leader},
+				Decision: &clustermetadatapb.ShardRule{LeaderId: leader},
 			},
 		}
 	}
@@ -98,7 +98,7 @@ func TestSelfConsensusRoleLeadership(t *testing.T) {
 			name: "self-claim superseded by a higher replication-primary rule",
 			cs: &clustermetadatapb.ConsensusStatus{
 				Id:              id("zone1", "pooler-1"),
-				CurrentPosition: &clustermetadatapb.PoolerPosition{Rule: ruleAt(id("zone1", "pooler-1"), 5)},
+				CurrentPosition: &clustermetadatapb.PoolerPosition{Decision: ruleAt(id("zone1", "pooler-1"), 5)},
 				ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{
 					Rule: ruleAt(id("zone1", "pooler-2"), 6),
 				},
@@ -111,7 +111,7 @@ func TestSelfConsensusRoleLeadership(t *testing.T) {
 			name: "self-claim at highest rule despite a lower replication-primary rule",
 			cs: &clustermetadatapb.ConsensusStatus{
 				Id:              id("zone1", "pooler-1"),
-				CurrentPosition: &clustermetadatapb.PoolerPosition{Rule: ruleAt(id("zone1", "pooler-1"), 6)},
+				CurrentPosition: &clustermetadatapb.PoolerPosition{Decision: ruleAt(id("zone1", "pooler-1"), 6)},
 				ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{
 					Rule: ruleAt(id("zone1", "pooler-2"), 4),
 				},
@@ -171,7 +171,7 @@ func TestSelfConsensusRole(t *testing.T) {
 			cs: &clustermetadatapb.ConsensusStatus{
 				Id: self,
 				CurrentPosition: &clustermetadatapb.PoolerPosition{
-					Rule: &clustermetadatapb.ShardRule{LeaderId: self, CohortMembers: []*clustermetadatapb.ID{self, other}},
+					Decision: &clustermetadatapb.ShardRule{LeaderId: self, CohortMembers: []*clustermetadatapb.ID{self, other}},
 				},
 			},
 			want: ConsensusRoleLeader,
@@ -181,7 +181,7 @@ func TestSelfConsensusRole(t *testing.T) {
 			cs: &clustermetadatapb.ConsensusStatus{
 				Id: self,
 				CurrentPosition: &clustermetadatapb.PoolerPosition{
-					Rule: &clustermetadatapb.ShardRule{LeaderId: other, CohortMembers: []*clustermetadatapb.ID{self, other}},
+					Decision: &clustermetadatapb.ShardRule{LeaderId: other, CohortMembers: []*clustermetadatapb.ID{self, other}},
 				},
 			},
 			want: ConsensusRoleFollower,
@@ -191,7 +191,7 @@ func TestSelfConsensusRole(t *testing.T) {
 			cs: &clustermetadatapb.ConsensusStatus{
 				Id: self,
 				CurrentPosition: &clustermetadatapb.PoolerPosition{
-					Rule: &clustermetadatapb.ShardRule{LeaderId: other, CohortMembers: []*clustermetadatapb.ID{other}},
+					Decision: &clustermetadatapb.ShardRule{LeaderId: other, CohortMembers: []*clustermetadatapb.ID{other}},
 				},
 			},
 			want: ConsensusRoleObserver,
@@ -202,7 +202,7 @@ func TestSelfConsensusRole(t *testing.T) {
 			// nil self against matching a nil leader ID.
 			name: "nil self id with leaderless rule is observer",
 			cs: &clustermetadatapb.ConsensusStatus{
-				CurrentPosition: &clustermetadatapb.PoolerPosition{Rule: &clustermetadatapb.ShardRule{}},
+				CurrentPosition: &clustermetadatapb.PoolerPosition{Decision: &clustermetadatapb.ShardRule{}},
 			},
 			want: ConsensusRoleObserver,
 		},
@@ -225,7 +225,7 @@ func TestIsActiveLeader(t *testing.T) {
 		return &clustermetadatapb.ConsensusStatus{
 			Id: self,
 			CurrentPosition: &clustermetadatapb.PoolerPosition{
-				Rule: &clustermetadatapb.ShardRule{
+				Decision: &clustermetadatapb.ShardRule{
 					LeaderId:   leader,
 					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: term},
 				},
@@ -260,7 +260,7 @@ func TestIsActiveLeader(t *testing.T) {
 			name: "self-claim only in replication primary, not yet committed",
 			cs: &clustermetadatapb.ConsensusStatus{
 				Id:              self,
-				CurrentPosition: &clustermetadatapb.PoolerPosition{Rule: &clustermetadatapb.ShardRule{LeaderId: other, RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4}}},
+				CurrentPosition: &clustermetadatapb.PoolerPosition{Decision: &clustermetadatapb.ShardRule{LeaderId: other, RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4}}},
 				ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{
 					Rule: &clustermetadatapb.ShardRule{LeaderId: self, RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5}},
 				},
@@ -271,7 +271,7 @@ func TestIsActiveLeader(t *testing.T) {
 			name: "committed rule names self but is revoked",
 			cs: &clustermetadatapb.ConsensusStatus{
 				Id:              self,
-				CurrentPosition: &clustermetadatapb.PoolerPosition{Rule: &clustermetadatapb.ShardRule{LeaderId: self, RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4}}},
+				CurrentPosition: &clustermetadatapb.PoolerPosition{Decision: &clustermetadatapb.ShardRule{LeaderId: self, RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4}}},
 				TermRevocation:  &clustermetadatapb.TermRevocation{RevokedBelowTerm: 5},
 			},
 			want: false,
@@ -281,7 +281,7 @@ func TestIsActiveLeader(t *testing.T) {
 			// committed leader (write-safety input must fail closed here).
 			name: "nil self id with leaderless committed rule",
 			cs: &clustermetadatapb.ConsensusStatus{
-				CurrentPosition: &clustermetadatapb.PoolerPosition{Rule: &clustermetadatapb.ShardRule{}},
+				CurrentPosition: &clustermetadatapb.PoolerPosition{Decision: &clustermetadatapb.ShardRule{}},
 			},
 			want: false,
 		},
@@ -292,7 +292,7 @@ func TestIsActiveLeader(t *testing.T) {
 			name: "committed self but superseded by higher known rule",
 			cs: &clustermetadatapb.ConsensusStatus{
 				Id:              self,
-				CurrentPosition: &clustermetadatapb.PoolerPosition{Rule: &clustermetadatapb.ShardRule{LeaderId: self, RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5}}},
+				CurrentPosition: &clustermetadatapb.PoolerPosition{Decision: &clustermetadatapb.ShardRule{LeaderId: self, RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5}}},
 				ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{
 					Rule: &clustermetadatapb.ShardRule{LeaderId: other, RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 6}},
 				},
@@ -328,7 +328,7 @@ func TestLeaderTerm(t *testing.T) {
 			cs: &clustermetadatapb.ConsensusStatus{
 				Id: id("zone1", "pooler-1"),
 				CurrentPosition: &clustermetadatapb.PoolerPosition{
-					Rule: &clustermetadatapb.ShardRule{
+					Decision: &clustermetadatapb.ShardRule{
 						LeaderId:   id("zone1", "pooler-2"),
 						RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 7},
 					},
@@ -341,7 +341,7 @@ func TestLeaderTerm(t *testing.T) {
 			cs: &clustermetadatapb.ConsensusStatus{
 				Id: id("zone1", "pooler-1"),
 				CurrentPosition: &clustermetadatapb.PoolerPosition{
-					Rule: &clustermetadatapb.ShardRule{
+					Decision: &clustermetadatapb.ShardRule{
 						LeaderId:   id("zone1", "pooler-1"),
 						RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 7},
 					},
@@ -354,7 +354,7 @@ func TestLeaderTerm(t *testing.T) {
 			cs: &clustermetadatapb.ConsensusStatus{
 				Id: id("zone1", "pooler-1"),
 				CurrentPosition: &clustermetadatapb.PoolerPosition{
-					Rule: &clustermetadatapb.ShardRule{
+					Decision: &clustermetadatapb.ShardRule{
 						LeaderId: id("zone1", "pooler-1"),
 					},
 				},

@@ -54,7 +54,7 @@ import (
 // identify the shard leader — so the pooler and orch can never rank rules
 // differently.
 func (pm *MultiPoolerManager) highestKnownRule() *clustermetadatapb.ShardRule {
-	return commonconsensus.HighestKnownRule([]*clustermetadatapb.ConsensusStatus{
+	return commonconsensus.HighestDecidedRule([]*clustermetadatapb.ConsensusStatus{
 		pm.consensusMgr.CachedConsensusStatus(),
 	})
 }
@@ -92,7 +92,7 @@ func (pm *MultiPoolerManager) staleStandbyDemoteTarget() *clustermetadatapb.Pool
 	}
 	// Only act when the recorded rule outranks our applied position. A lower or
 	// equal recorded rule is stale relative to us and must not trigger a demote.
-	selfRuleNum := pm.consensusMgr.Rules().CachedPosition().GetRule().GetRuleNumber()
+	selfRuleNum := pm.consensusMgr.Rules().CachedPosition().GetDecision().GetRuleNumber()
 	if commonconsensus.CompareRuleNumbers(rp.GetRule().GetRuleNumber(), selfRuleNum) <= 0 {
 		return nil
 	}
@@ -884,7 +884,7 @@ func (pm *MultiPoolerManager) restoreAndStartPostgres(ctx context.Context) error
 	pm.logger.InfoContext(ctx, "MonitorPostgres: successfully restored from backup",
 		"backup_id", latestBackup.BackupId,
 		"shard", pm.getShardID(),
-		"rule", commonconsensus.FormatRuleNumber(pm.consensusMgr.Rules().CachedPosition().GetRule().GetRuleNumber()))
+		"rule", commonconsensus.FormatRuleNumber(pm.consensusMgr.Rules().CachedPosition().GetDecision().GetRuleNumber()))
 
 	return nil
 }

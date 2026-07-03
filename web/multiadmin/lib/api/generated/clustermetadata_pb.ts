@@ -1735,25 +1735,6 @@ export class ReplicationPrimary extends Message<ReplicationPrimary> {
    */
   rewindReady = false;
 
-  /**
-   * The revocation that established `primary`'s leadership. Required on
-   * SetPrimary requests. This is NOT a new recruitment of the receiving
-   * follower — accepting a SetPrimary does not set the follower's own term.
-   * It informs the follower of the authority with which the primary was
-   * established so that stale SetPrimary calls (carrying older revocations)
-   * can be rejected: if primary_revocation.revoked_below_term is strictly
-   * less than the revocation already recorded here, the call is rejected as
-   * stale. Equal or higher revocations are accepted; on accept the recorded
-   * value is updated. `primary` is treated as eventually-consistent discovery
-   * information about where to find the primary that this revocation names —
-   * the receiver does not require primary.id to match rule.leader_id, since a
-   * propagation flow legitimately points followers at a finalizing node
-   * distinct from the dead leader recorded in the rule.
-   *
-   * @generated from field: clustermetadata.TermRevocation primary_revocation = 4;
-   */
-  primaryRevocation?: TermRevocation;
-
   constructor(data?: PartialMessage<ReplicationPrimary>) {
     super();
     proto3.util.initPartial(data, this);
@@ -1765,7 +1746,6 @@ export class ReplicationPrimary extends Message<ReplicationPrimary> {
     { no: 1, name: "rule", kind: "message", T: ShardRule },
     { no: 2, name: "primary", kind: "message", T: PoolerAddress },
     { no: 3, name: "rewind_ready", kind: "scalar", T: 8 /* ScalarType.BOOL */ },
-    { no: 4, name: "primary_revocation", kind: "message", T: TermRevocation },
   ]);
 
   static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): ReplicationPrimary {

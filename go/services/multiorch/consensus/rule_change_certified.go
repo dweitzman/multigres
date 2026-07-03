@@ -111,7 +111,7 @@ func (c *Coordinator) ApplyCertifiedRuleChange(
 		"shard", shardKey,
 		"leader", proposedRule.GetLeaderId().GetName(),
 		"cohort_size", len(cohort),
-		"outgoing_term", revocation.GetOutgoingRule().GetCoordinatorTerm(),
+		"outgoing_term", revocation.GetOutgoingDecision().GetCoordinatorTerm(),
 		"new_term", revocation.GetRevokedBelowTerm(),
 		"frozen_lsn", cert.GetFrozenLsn(),
 		"reason", reason)
@@ -252,8 +252,8 @@ func validateCertifiedRuleChange(
 	if rev == nil {
 		return mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT, "cert.term_revocation is required")
 	}
-	if rev.GetOutgoingRule() == nil {
-		return mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT, "cert.term_revocation.outgoing_rule is required (use a zero RuleNumber for initial appointment)")
+	if rev.GetOutgoingDecision() == nil {
+		return mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT, "cert.term_revocation.outgoing_decision is required (use a zero RuleNumber for initial appointment)")
 	}
 	if rev.GetRevokedBelowTerm() <= 0 {
 		return mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT, "cert.term_revocation.revoked_below_term must be positive")
@@ -273,10 +273,10 @@ func validateCertifiedRuleChange(
 			"proposed_rule.rule_number.coordinator_term (%d) must equal cert.term_revocation.revoked_below_term (%d)",
 			proposedRule.GetRuleNumber().GetCoordinatorTerm(), rev.GetRevokedBelowTerm())
 	}
-	if rev.GetRevokedBelowTerm() <= rev.GetOutgoingRule().GetCoordinatorTerm() {
+	if rev.GetRevokedBelowTerm() <= rev.GetOutgoingDecision().GetCoordinatorTerm() {
 		return mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,
-			"cert.term_revocation.revoked_below_term (%d) must be greater than cert.term_revocation.outgoing_rule.coordinator_term (%d)",
-			rev.GetRevokedBelowTerm(), rev.GetOutgoingRule().GetCoordinatorTerm())
+			"cert.term_revocation.revoked_below_term (%d) must be greater than cert.term_revocation.outgoing_decision.coordinator_term (%d)",
+			rev.GetRevokedBelowTerm(), rev.GetOutgoingDecision().GetCoordinatorTerm())
 	}
 
 	// Leader must be in the cohort.

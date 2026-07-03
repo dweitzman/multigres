@@ -44,7 +44,7 @@ func primaryRuleStatus(id *clustermetadatapb.ID, term int64) *clustermetadatapb.
 	return &clustermetadatapb.ConsensusStatus{
 		Id: id,
 		CurrentPosition: &clustermetadatapb.PoolerPosition{
-			Rule: &clustermetadatapb.ShardRule{
+			Decision: &clustermetadatapb.ShardRule{
 				RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: term},
 				LeaderId:   id,
 			},
@@ -63,7 +63,7 @@ func TestStaleLeaderAnalyzer_Analyze(t *testing.T) {
 		sa := &ShardAnalysis{
 			ShardKey: shardKey,
 			Analyses: []*store.Pooler{selfLeaderRider(staleID, shardKey, 5, true)},
-			HighestShardRule: &clustermetadatapb.ShardRule{
+			HighestDecidedRule: &clustermetadatapb.ShardRule{
 				RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 6},
 				LeaderId:   newID,
 			},
@@ -93,7 +93,7 @@ func TestStaleLeaderAnalyzer_Analyze(t *testing.T) {
 				selfLeaderRider(newID, shardKey, 6, false),
 				selfLeaderRider(staleID, shardKey, 5, true),
 			},
-			HighestShardRule: &clustermetadatapb.ShardRule{
+			HighestDecidedRule: &clustermetadatapb.ShardRule{
 				RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 6},
 				LeaderId:   newID,
 			},
@@ -136,7 +136,7 @@ func TestStaleLeaderAnalyzer_Analyze(t *testing.T) {
 			ShardKey: shardKey,
 			// Only one primary — it is the leader, no stale primary to detect.
 			Analyses: []*store.Pooler{selfLeaderRider(primaryID, shardKey, 5, true)},
-			HighestShardRule: &clustermetadatapb.ShardRule{
+			HighestDecidedRule: &clustermetadatapb.ShardRule{
 				RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
 				LeaderId:   primaryID,
 			},
@@ -171,7 +171,7 @@ func TestStaleLeaderAnalyzer_Analyze(t *testing.T) {
 				selfLeaderRider(stale1ID, shardKey, 4, true),
 				selfLeaderRider(stale2ID, shardKey, 5, true),
 			},
-			HighestShardRule: &clustermetadatapb.ShardRule{
+			HighestDecidedRule: &clustermetadatapb.ShardRule{
 				RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 6},
 				LeaderId:   newID,
 			},

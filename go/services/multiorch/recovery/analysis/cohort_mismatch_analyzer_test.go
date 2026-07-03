@@ -91,7 +91,7 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 		analyses := append([]*store.Pooler{leader}, replicas...)
 		return &ShardAnalysis{
 			ShardKey: shardKey,
-			HighestShardRule: &clustermetadatapb.ShardRule{
+			HighestDecidedRule: &clustermetadatapb.ShardRule{
 				RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
 				LeaderId:      primaryID,
 				CohortMembers: standbys,
@@ -267,7 +267,7 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 		}
 		return &ShardAnalysis{
 			ShardKey: shardKey,
-			HighestShardRule: &clustermetadatapb.ShardRule{
+			HighestDecidedRule: &clustermetadatapb.ShardRule{
 				RuleNumber:       &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
 				LeaderId:         primaryID,
 				CohortMembers:    cohortIDs,

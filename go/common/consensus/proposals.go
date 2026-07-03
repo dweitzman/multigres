@@ -38,14 +38,14 @@ type RecruitmentResult struct {
 	// been filtered by whether they could accept it via ValidateRevocation.
 	TermRevocation *clustermetadatapb.TermRevocation
 
-	// OutgoingRule is the highest recorded ShardRule across all recruited nodes,
+	// OutgoingDecision is the highest recorded ShardRule across all recruited nodes,
 	// determined from current_position.rule (WAL-backed, authoritative).
 	// May be nil for BuildExternallyCertifiedProposal when nodes have no
 	// recorded rule (e.g. fresh bootstrap before any rule has been written).
-	OutgoingRule *clustermetadatapb.ShardRule
+	OutgoingDecision *clustermetadatapb.ShardRule
 
 	// EligibleLeaders are the recruited nodes with the best WAL position.
-	// For nodes with a recorded rule, this is those matching OutgoingRule's rule
+	// For nodes with a recorded rule, this is those matching OutgoingDecision's rule
 	// number with the highest LSN. For bootstrap (no rule), this is all nodes
 	// tied at the highest LSN. The buildProposal callback must choose its
 	// leader from this set.
@@ -113,8 +113,8 @@ const (
 // The INCOMING cohort (proposed in the returned proposal) is additionally
 // validated by validateProposal.
 //
-// TODO: This assumes OutgoingRule is already durably recorded. If a cohort change
-// was in progress when the leader failed, some nodes may hold OutgoingRule in WAL
+// TODO: This assumes OutgoingDecision is already durably recorded. If a cohort change
+// was in progress when the leader failed, some nodes may hold OutgoingDecision in WAL
 // while others do not, and the previous cohort's policy may apply instead. We
 // don't yet have enough information from the Recruit responses alone to detect
 // this safely, so for now we proceed optimistically.
@@ -157,7 +157,7 @@ func CheckProposalPossible(
 // proposal is possible given the current observed statuses, without requiring
 // nodes to have already accepted the revocation. It is the externally-certified
 // counterpart of CheckProposalPossible: it uses skipOutgoingQuorum so that
-// bootstrap scenarios with no recorded rule (no OutgoingRule) are handled correctly.
+// bootstrap scenarios with no recorded rule (no OutgoingDecision) are handled correctly.
 //
 // Returns an error if no viable proposal exists; the proposal itself is not
 // returned since nodes have not yet committed to the revocation.
@@ -194,7 +194,7 @@ func CheckExternallyCertifiedProposalPossible(
 // recruited members, ensuring the new cluster can make durable writes.
 //
 // Two additional checks enforce the cert's guarantees:
-//   - No recruited node may have a rule beyond revocation.outgoing_rule; if
+//   - No recruited node may have a rule beyond revocation.outgoing_decision; if
 //     one does, the outgoing cohort was not actually frozen at the certified
 //     point. (Enforced inside buildProposalCore.)
 //   - Only nodes with an LSN at or above cert.frozen_lsn are eligible to be
@@ -228,12 +228,12 @@ func BuildExternallyCertifiedProposal(
 // frozen_lsn is required on the cert: without it, the cert provides no real
 // guarantee about what the outgoing cohort was frozen at. Bootstrap callers
 // must set it explicitly (e.g. "0/0"). The outgoing rule itself comes from
-// cert.term_revocation.outgoing_rule, and buildProposalCore enforces that no
+// cert.term_revocation.outgoing_decision, and buildProposalCore enforces that no
 // recruit reports a strictly newer rule — surfaced as a specific error rather
 // than returning a discoverer that would yield "no eligible leaders".
 //
 // Safety contract: the cert externally certifies that no durable writes
-// occurred beyond frozen_lsn under term_revocation.outgoing_rule. Any node
+// occurred beyond frozen_lsn under term_revocation.outgoing_decision. Any node
 // whose LSN ≥ frozen_lsn therefore holds every committed transaction up to
 // that frozen point — which is why buildProposalCore is safe to skip the
 // outgoing-cohort quorum check for this discoverer (skipOutgoingQuorum).
@@ -241,14 +241,14 @@ func newExternallyCertifiedDiscoverer(
 	cert *clustermetadatapb.ExternallyCertifiedRevocation,
 	nodes []*clustermetadatapb.ConsensusStatus,
 ) (discoverer, error) {
-	if cert.GetTermRevocation().GetOutgoingRule() == nil {
-		return nil, errors.New("cert.term_revocation.outgoing_rule is required")
+	if cert.GetTermRevocation().GetOutgoingDecision() == nil {
+		return nil, errors.New("cert.term_revocation.outgoing_decision is required")
 	}
 	if cert.GetFrozenLsn() == "" {
 		return nil, errors.New("cert is missing frozen_lsn")
 	}
 	for _, cs := range nodes {
-		if cs.GetCurrentPosition().GetRule() == nil {
+		if cs.GetCurrentPosition().GetDecision() == nil {
 			// Recruited nodes should always carry a rule.
 			return nil, fmt.Errorf("node %s has no recorded rule; consensus state may be uninitialized",
 				topoclient.ClusterIDString(cs.GetId()))
@@ -285,6 +285,9 @@ func buildProposalCore(
 	discover discoverer,
 	buildProposal func(RecruitmentResult) (*consensusdatapb.CoordinatorProposal, error),
 ) (*consensusdatapb.CoordinatorProposal, error) {
+	if revocation.GetPropagationIntent() != nil {
+		return nil, errors.New("revocation has propagation_intent set: use propagation recruitment (SetPrimary) to finalize an in-WAL rule change, not a proposal-building function")
+	}
 	if len(recruitedStatuses) == 0 {
 		return nil, errors.New("empty list of statuses")
 	}
@@ -295,25 +298,25 @@ func buildProposalCore(
 		return nil, errors.New("all recruited nodes reported an invalid or missing WAL position")
 	}
 
-	// The revocation's outgoing_rule is the rule the coordinator committed to
+	// The revocation's outgoing_decision is the rule the coordinator committed to
 	// transitioning from when it authored the revocation. Bind this proposal
 	// to that view: no recruit may report a strictly newer rule, and we look
 	// up the full ShardRule (cohort_members + durability_policy) by matching
 	// a recruit whose rule number equals it.
-	expectedOutgoing := revocation.GetOutgoingRule()
+	expectedOutgoing := revocation.GetOutgoingDecision()
 	if expectedOutgoing == nil {
-		return nil, errors.New("revocation.outgoing_rule is required (use NewTermRevocation to construct revocations)")
+		return nil, errors.New("revocation.outgoing_decision is required (use NewTermRevocation to construct revocations)")
 	}
 	var outgoingRule *clustermetadatapb.ShardRule
 	for _, cs := range recruitedStatuses {
-		rule := cs.GetCurrentPosition().GetRule()
+		rule := cs.GetCurrentPosition().GetDecision()
 		if rule == nil {
 			continue
 		}
 		cmp := CompareRuleNumbers(rule.GetRuleNumber(), expectedOutgoing)
 		if cmp > 0 {
 			return nil, fmt.Errorf(
-				"recruit %s reports rule %v strictly greater than revocation.outgoing_rule %v; coordinator view is stale, re-discover",
+				"recruit %s reports rule %v strictly greater than revocation.outgoing_decision %v; coordinator view is stale, re-discover",
 				topoclient.ClusterIDString(cs.GetId()),
 				rule.GetRuleNumber(),
 				expectedOutgoing,
@@ -359,9 +362,9 @@ func buildProposalCore(
 	}
 
 	result := RecruitmentResult{
-		TermRevocation:  revocation,
-		OutgoingRule:    outgoingRule,
-		EligibleLeaders: eligibleLeaders,
+		TermRevocation:   revocation,
+		OutgoingDecision: outgoingRule,
+		EligibleLeaders:  eligibleLeaders,
 	}
 
 	proposal, err := buildProposal(result)
@@ -400,7 +403,7 @@ func discoverMostAdvancedTimeline(
 	var eligibleLeaders []*clustermetadatapb.ConsensusStatus
 	for _, cs := range recruitedStatuses {
 		if outgoingRule != nil {
-			ruleNum := cs.GetCurrentPosition().GetRule().GetRuleNumber()
+			ruleNum := cs.GetCurrentPosition().GetDecision().GetRuleNumber()
 			if CompareRuleNumbers(ruleNum, outgoingRule.GetRuleNumber()) != 0 {
 				continue
 			}

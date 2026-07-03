@@ -145,7 +145,7 @@ func (f *fakeRuleStore) UpdateRule(ctx context.Context, update *consensus.RuleUp
 	// would never reflect the new rule. The LSN is carried over from the prior
 	// position (the write does not move the WAL cursor here).
 	newPos := &clustermetadatapb.PoolerPosition{
-		Rule: &clustermetadatapb.ShardRule{
+		Decision: &clustermetadatapb.ShardRule{
 			LeaderId:      update.GetLeaderID(),
 			CoordinatorId: update.GetCoordinatorID(),
 			RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: update.GetTermNumber()},

@@ -2049,23 +2049,9 @@ type ReplicationPrimary struct {
 	// pooler itself, the value is computed live (checkpointed timeline == running
 	// timeline); for a follower it is the value most recently relayed via
 	// SetPrimary about the leader it follows.
-	RewindReady bool `protobuf:"varint,3,opt,name=rewind_ready,json=rewindReady,proto3" json:"rewind_ready,omitempty"`
-	// The revocation that established `primary`'s leadership. Required on
-	// SetPrimary requests. This is NOT a new recruitment of the receiving
-	// follower — accepting a SetPrimary does not set the follower's own term.
-	// It informs the follower of the authority with which the primary was
-	// established so that stale SetPrimary calls (carrying older revocations)
-	// can be rejected: if primary_revocation.revoked_below_term is strictly
-	// less than the revocation already recorded here, the call is rejected as
-	// stale. Equal or higher revocations are accepted; on accept the recorded
-	// value is updated. `primary` is treated as eventually-consistent discovery
-	// information about where to find the primary that this revocation names —
-	// the receiver does not require primary.id to match rule.leader_id, since a
-	// propagation flow legitimately points followers at a finalizing node
-	// distinct from the dead leader recorded in the rule.
-	PrimaryRevocation *TermRevocation `protobuf:"bytes,4,opt,name=primary_revocation,json=primaryRevocation,proto3" json:"primary_revocation,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	RewindReady   bool `protobuf:"varint,3,opt,name=rewind_ready,json=rewindReady,proto3" json:"rewind_ready,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ReplicationPrimary) Reset() {
@@ -2117,13 +2103,6 @@ func (x *ReplicationPrimary) GetRewindReady() bool {
 		return x.RewindReady
 	}
 	return false
-}
-
-func (x *ReplicationPrimary) GetPrimaryRevocation() *TermRevocation {
-	if x != nil {
-		return x.PrimaryRevocation
-	}
-	return nil
 }
 
 // TermRevocation records that this pooler has revoked participation in all terms
@@ -2726,12 +2705,11 @@ const file_clustermetadata_proto_rawDesc = "" +
 	"\x03lsn\x18\x03 \x01(\tR\x03lsn\"q\n" +
 	"\fRoutingState\x120\n" +
 	"\x04role\x18\x01 \x01(\x0e2\x1c.clustermetadata.RoutingRoleR\x04role\x12/\n" +
-	"\x04rule\x18\x02 \x01(\v2\x1b.clustermetadata.RuleNumberR\x04rule\"\xf1\x01\n" +
+	"\x04rule\x18\x02 \x01(\v2\x1b.clustermetadata.RuleNumberR\x04rule\"\xa1\x01\n" +
 	"\x12ReplicationPrimary\x12.\n" +
 	"\x04rule\x18\x01 \x01(\v2\x1a.clustermetadata.ShardRuleR\x04rule\x128\n" +
 	"\aprimary\x18\x02 \x01(\v2\x1e.clustermetadata.PoolerAddressR\aprimary\x12!\n" +
-	"\frewind_ready\x18\x03 \x01(\bR\vrewindReady\x12N\n" +
-	"\x12primary_revocation\x18\x04 \x01(\v2\x1f.clustermetadata.TermRevocationR\x11primaryRevocation\"\xf7\x02\n" +
+	"\frewind_ready\x18\x03 \x01(\bR\vrewindReady\"\xf7\x02\n" +
 	"\x0eTermRevocation\x12,\n" +
 	"\x12revoked_below_term\x18\x01 \x01(\x03R\x10revokedBelowTerm\x12K\n" +
 	"\x17accepted_coordinator_id\x18\x02 \x01(\v2\x13.clustermetadata.IDR\x15acceptedCoordinatorId\x12T\n" +
@@ -2882,25 +2860,24 @@ var file_clustermetadata_proto_depIdxs = []int32{
 	24, // 32: clustermetadata.RoutingState.rule:type_name -> clustermetadata.RuleNumber
 	25, // 33: clustermetadata.ReplicationPrimary.rule:type_name -> clustermetadata.ShardRule
 	15, // 34: clustermetadata.ReplicationPrimary.primary:type_name -> clustermetadata.PoolerAddress
-	29, // 35: clustermetadata.ReplicationPrimary.primary_revocation:type_name -> clustermetadata.TermRevocation
-	20, // 36: clustermetadata.TermRevocation.accepted_coordinator_id:type_name -> clustermetadata.ID
-	38, // 37: clustermetadata.TermRevocation.coordinator_initiated_at:type_name -> google.protobuf.Timestamp
-	24, // 38: clustermetadata.TermRevocation.outgoing_decision:type_name -> clustermetadata.RuleNumber
-	24, // 39: clustermetadata.TermRevocation.propagation_intent:type_name -> clustermetadata.RuleNumber
-	29, // 40: clustermetadata.ExternallyCertifiedRevocation.term_revocation:type_name -> clustermetadata.TermRevocation
-	29, // 41: clustermetadata.ConsensusStatus.term_revocation:type_name -> clustermetadata.TermRevocation
-	26, // 42: clustermetadata.ConsensusStatus.current_position:type_name -> clustermetadata.PoolerPosition
-	28, // 43: clustermetadata.ConsensusStatus.replication_primary:type_name -> clustermetadata.ReplicationPrimary
-	20, // 44: clustermetadata.ConsensusStatus.id:type_name -> clustermetadata.ID
-	5,  // 45: clustermetadata.LeadershipStatus.signal:type_name -> clustermetadata.LeadershipSignal
-	32, // 46: clustermetadata.AvailabilityStatus.leadership_status:type_name -> clustermetadata.LeadershipStatus
-	34, // 47: clustermetadata.AvailabilityStatus.cohort_eligibility_status:type_name -> clustermetadata.CohortEligibilityStatus
-	6,  // 48: clustermetadata.CohortEligibilityStatus.signal:type_name -> clustermetadata.CohortEligibilitySignal
-	49, // [49:49] is the sub-list for method output_type
-	49, // [49:49] is the sub-list for method input_type
-	49, // [49:49] is the sub-list for extension type_name
-	49, // [49:49] is the sub-list for extension extendee
-	0,  // [0:49] is the sub-list for field type_name
+	20, // 35: clustermetadata.TermRevocation.accepted_coordinator_id:type_name -> clustermetadata.ID
+	38, // 36: clustermetadata.TermRevocation.coordinator_initiated_at:type_name -> google.protobuf.Timestamp
+	24, // 37: clustermetadata.TermRevocation.outgoing_decision:type_name -> clustermetadata.RuleNumber
+	24, // 38: clustermetadata.TermRevocation.propagation_intent:type_name -> clustermetadata.RuleNumber
+	29, // 39: clustermetadata.ExternallyCertifiedRevocation.term_revocation:type_name -> clustermetadata.TermRevocation
+	29, // 40: clustermetadata.ConsensusStatus.term_revocation:type_name -> clustermetadata.TermRevocation
+	26, // 41: clustermetadata.ConsensusStatus.current_position:type_name -> clustermetadata.PoolerPosition
+	28, // 42: clustermetadata.ConsensusStatus.replication_primary:type_name -> clustermetadata.ReplicationPrimary
+	20, // 43: clustermetadata.ConsensusStatus.id:type_name -> clustermetadata.ID
+	5,  // 44: clustermetadata.LeadershipStatus.signal:type_name -> clustermetadata.LeadershipSignal
+	32, // 45: clustermetadata.AvailabilityStatus.leadership_status:type_name -> clustermetadata.LeadershipStatus
+	34, // 46: clustermetadata.AvailabilityStatus.cohort_eligibility_status:type_name -> clustermetadata.CohortEligibilityStatus
+	6,  // 47: clustermetadata.CohortEligibilityStatus.signal:type_name -> clustermetadata.CohortEligibilitySignal
+	48, // [48:48] is the sub-list for method output_type
+	48, // [48:48] is the sub-list for method input_type
+	48, // [48:48] is the sub-list for extension type_name
+	48, // [48:48] is the sub-list for extension extendee
+	0,  // [0:48] is the sub-list for field type_name
 }
 
 func init() { file_clustermetadata_proto_init() }

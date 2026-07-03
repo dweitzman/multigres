@@ -66,27 +66,49 @@ func FormatRuleNumber(rn *clustermetadatapb.RuleNumber) string {
 	return fmt.Sprintf("%d.%d", rn.GetCoordinatorTerm(), rn.GetLeaderSubterm())
 }
 
-// MostAdvancedPosition returns the highest-ranked PoolerPosition among the
-// given statuses. Rule number takes precedence; LSN breaks ties within the
-// same rule. Returns nil if no status has a parseable LSN.
-//
-// This is the cached-snapshot analogue of discoverMostAdvancedTimeline, which
-// runs over recruited statuses and returns the eligible-leader set. Callers
-// that need to derive an ExternallyCertifiedRevocation from cached cohort
-// state — e.g. the bootstrap path before recruitment — use this to obtain the
-// outgoing rule number and frozen LSN.
-func MostAdvancedPosition(statuses []*clustermetadatapb.ConsensusStatus) *clustermetadatapb.PoolerPosition {
-	var best *clustermetadatapb.PoolerPosition
+// MostAdvancedStatuses returns all ConsensusStatuses tied at the highest
+// position, using ComparePosition (decision, then proposal, then LSN).
+// Returns nil if no status has a parseable LSN.
+func MostAdvancedStatuses(statuses []*clustermetadatapb.ConsensusStatus) []*clustermetadatapb.ConsensusStatus {
+	var bestPos *clustermetadatapb.PoolerPosition
+	var result []*clustermetadatapb.ConsensusStatus
 	for _, cs := range statuses {
 		pos := cs.GetCurrentPosition()
 		if _, err := pgutil.ParseLSN(pos.GetLsn()); err != nil {
 			continue
 		}
-		if best == nil || ComparePosition(pos, best) > 0 {
-			best = pos
+		if bestPos == nil {
+			bestPos = pos
+			result = append(result, cs)
+			continue
+		}
+		cmp := ComparePosition(pos, bestPos)
+		if cmp > 0 {
+			bestPos = pos
+			result = result[:0]
+			result = append(result, cs)
+		} else if cmp == 0 {
+			result = append(result, cs)
 		}
 	}
-	return best
+	return result
+}
+
+// MostAdvancedPosition returns the highest-ranked PoolerPosition among the
+// given statuses, using the same ordering as ComparePosition (decision, then
+// proposal, then LSN). Returns nil if no status has a parseable LSN.
+//
+// This is the cached-snapshot analogue of discoverMostAdvancedTimeline, which
+// runs over recruited statuses and returns the eligible-leader set. Callers
+// that need to derive an ExternallyCertifiedRevocation from cached cohort
+// state — e.g. the bootstrap path before recruitment — use this to obtain the
+// outgoing decision number and frozen LSN.
+func MostAdvancedPosition(statuses []*clustermetadatapb.ConsensusStatus) *clustermetadatapb.PoolerPosition {
+	best := MostAdvancedStatuses(statuses)
+	if len(best) == 0 {
+		return nil
+	}
+	return best[0].GetCurrentPosition()
 }
 
 // ReplicationPrimaryOrNil returns cs's replication primary, or nil when it
@@ -111,14 +133,20 @@ func ReplicationPrimaryOrNil(cs *clustermetadatapb.ConsensusStatus) *clustermeta
 	return rp
 }
 
-// HighestKnownRule returns the ShardRule with the greatest rule number known to
+// HighestDecidedRule returns the ShardRule with the greatest rule number known to
 // any of the given consensus statuses. For each status it considers both the
-// rule the pooler is currently positioned at and the rule under which its
-// replication primary holds leadership — a follower can learn of a newer leader
-// via its replication primary before its own position advances. Unlike
-// MostAdvancedPosition, ranking is purely by rule number (no LSN tiebreak, no
-// LSN requirement), since leader identity is a function of the rule alone.
-// Returns nil when no status carries a rule.
+// pooler's own committed decision and the rule under which its replication
+// primary holds leadership — a follower can learn of a newer leader via its
+// replication primary before its own position advances. The replication-primary
+// contribution is best-effort, not confirmed-decided (see ReplicationPrimary's
+// doc): it's the sender's assertion, relayed via SetPrimary/Promote, which the
+// receiver has not itself durably confirmed. "Decided" in this function's name
+// refers to the first source (the committed decision); callers that need a
+// strictly-confirmed rule with no best-effort component should read
+// CurrentPosition.Decision directly instead. Unlike MostAdvancedPosition,
+// ranking is purely by rule number (no LSN tiebreak, no LSN requirement), since
+// leader identity is a function of the rule alone. Returns nil when no status
+// carries a rule.
 //
 // A phantom 0/0 replication primary (see ReplicationPrimaryOrNil) is ignored so
 // it never shadows a real rule.
@@ -128,11 +156,11 @@ func ReplicationPrimaryOrNil(cs *clustermetadatapb.ConsensusStatus) *clustermeta
 // by a single coordinator and must name exactly one leader) — i.e. split brain.
 // Today such a tie is resolved silently by keeping the first-seen rule. A future
 // enhancement should surface this as an error rather than papering over it.
-func HighestKnownRule(statuses []*clustermetadatapb.ConsensusStatus) *clustermetadatapb.ShardRule {
+func HighestDecidedRule(statuses []*clustermetadatapb.ConsensusStatus) *clustermetadatapb.ShardRule {
 	var best *clustermetadatapb.ShardRule
 	for _, cs := range statuses {
 		for _, rule := range []*clustermetadatapb.ShardRule{
-			cs.GetCurrentPosition().GetRule(),
+			cs.GetCurrentPosition().GetDecision(),
 			ReplicationPrimaryOrNil(cs).GetRule(),
 		} {
 			if rule == nil {
@@ -200,12 +228,29 @@ func RuleNamesLeader(rule *clustermetadatapb.ShardRule, id *clustermetadatapb.ID
 }
 
 // ComparePosition returns negative, zero, or positive based on whether a is
-// behind, equal to, or ahead of b. Rule number takes precedence; LSN breaks
-// ties within the same rule. A missing or unparsable LSN is treated as less
-// than any valid LSN.
+// behind, equal to, or ahead of b. Comparison order follows the unified logical
+// clock position:
+//  1. Decision rule number — higher always wins.
+//  2. Proposal rule number — a node with a proposal (or a higher proposal) is
+//     further ahead; nil proposal is treated as less than any proposal.
+//  3. LSN — breaks ties when decision and proposal both match.
+//
+// A missing or unparsable LSN is treated as less than any valid LSN.
 func ComparePosition(a, b *clustermetadatapb.PoolerPosition) int {
-	if cmp := CompareRuleNumbers(a.GetRule().GetRuleNumber(), b.GetRule().GetRuleNumber()); cmp != 0 {
+	if cmp := CompareRuleNumbers(a.GetDecision().GetRuleNumber(), b.GetDecision().GetRuleNumber()); cmp != 0 {
 		return cmp
+	}
+	aProposal := a.GetProposal()
+	bProposal := b.GetProposal()
+	switch {
+	case aProposal == nil && bProposal != nil:
+		return -1
+	case aProposal != nil && bProposal == nil:
+		return 1
+	case aProposal != nil && bProposal != nil:
+		if cmp := CompareRuleNumbers(aProposal.GetRuleNumber(), bProposal.GetRuleNumber()); cmp != 0 {
+			return cmp
+		}
 	}
 	lsnA, errA := pgutil.ParseLSN(a.GetLsn())
 	lsnB, errB := pgutil.ParseLSN(b.GetLsn())

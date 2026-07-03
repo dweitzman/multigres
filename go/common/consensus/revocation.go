@@ -29,19 +29,25 @@ import (
 
 // NewTermRevocation constructs a TermRevocation for a coordinator-led safe
 // transition. Use this for failover-style rule changes where the
-// coordinator's view of the outgoing rule comes from discovery over the
+// coordinator's view of the outgoing decision comes from discovery over the
 // cohort. The revocation term is derived from the highest term observed
 // across the provided ConsensusStatus values — the maximum of each node's
 // accepted revocation term and its recorded rule's coordinator term —
-// incremented by one. outgoing_rule is the highest RuleNumber recorded
-// across the cohort.
+// incremented by one. outgoing_decision is the highest decision RuleNumber
+// recorded across the cohort.
+//
+// If the highest position across the cohort is an in-flight proposal (i.e.
+// some node's proposal.rule_number > the highest decision), propagation_intent
+// is set to that proposal rule number. The caller can inspect this field to
+// decide whether to use the safe-proposal path (BuildSafeProposal) or the
+// propagation path (Propagate RPC + SetPrimary).
 //
 // statuses must be non-empty and at least one status must carry a recorded
 // rule. An empty list or a cohort with no recorded rules indicates the
 // caller has nothing meaningful to transition from — that's a fresh-cluster
 // or bootstrap scenario where the agent (e.g. multiorch's
 // AppointInitialLeader) constructs the TermRevocation directly with an
-// explicit outgoing_rule, rather than going through this helper.
+// explicit outgoing_decision, rather than going through this helper.
 func NewTermRevocation(
 	statuses []*clustermetadatapb.ConsensusStatus,
 	coordinatorID *clustermetadatapb.ID,
@@ -54,35 +60,49 @@ func NewTermRevocation(
 		return nil, errors.New("NewTermRevocation: initiatedAt must be non-nil")
 	}
 	var maxTerm int64
-	var maxRule *clustermetadatapb.RuleNumber
+	var maxDecision *clustermetadatapb.RuleNumber
+	var maxProposal *clustermetadatapb.RuleNumber
 	for _, cs := range statuses {
 		if t := cs.GetTermRevocation().GetRevokedBelowTerm(); t > maxTerm {
 			maxTerm = t
 		}
-		ruleNum := cs.GetCurrentPosition().GetRule().GetRuleNumber()
-		if ruleNum == nil {
-			continue
+		pos := cs.GetCurrentPosition()
+		decisionNum := pos.GetDecision().GetRuleNumber()
+		if decisionNum != nil {
+			if t := decisionNum.GetCoordinatorTerm(); t > maxTerm {
+				maxTerm = t
+			}
+			// Capture the max decision RuleNumber for OutgoingDecision. OutgoingDecision must
+			// always reference a marked decision — never an in-flight proposal.
+			// "First non-nil" matters when the decision is the zero RuleNumber —
+			// CompareRuleNumbers treats zero == nil, so without the explicit nil check
+			// we'd never lift maxDecision above nil.
+			if maxDecision == nil || CompareRuleNumbers(decisionNum, maxDecision) > 0 {
+				maxDecision = decisionNum
+			}
 		}
-		if t := ruleNum.GetCoordinatorTerm(); t > maxTerm {
-			maxTerm = t
-		}
-		// Capture the first non-nil RuleNumber we see; bump only on strictly
-		// greater. The "first non-nil" path matters when the recorded rule
-		// is the zero RuleNumber — CompareRuleNumbers treats zero == nil, so
-		// without the explicit nil check we'd never lift maxRule above nil.
-		if maxRule == nil || CompareRuleNumbers(ruleNum, maxRule) > 0 {
-			maxRule = ruleNum
+		if proposalNum := pos.GetProposal().GetRuleNumber(); proposalNum != nil {
+			if t := proposalNum.GetCoordinatorTerm(); t > maxTerm {
+				maxTerm = t
+			}
+			if maxProposal == nil || CompareRuleNumbers(proposalNum, maxProposal) > 0 {
+				maxProposal = proposalNum
+			}
 		}
 	}
-	if maxRule == nil {
-		return nil, errors.New("NewTermRevocation: no cohort member reports a recorded rule; agent should construct revocation directly with explicit outgoing_rule")
+	if maxDecision == nil {
+		return nil, errors.New("NewTermRevocation: no cohort member reports a recorded decision; agent should construct revocation directly with explicit outgoing_decision")
 	}
-	return &clustermetadatapb.TermRevocation{
+	rev := &clustermetadatapb.TermRevocation{
 		RevokedBelowTerm:       maxTerm + 1,
 		AcceptedCoordinatorId:  coordinatorID,
 		CoordinatorInitiatedAt: initiatedAt,
-		OutgoingRule:           maxRule,
-	}, nil
+		OutgoingDecision:       maxDecision,
+	}
+	if maxProposal != nil && CompareRuleNumbers(maxProposal, maxDecision) > 0 {
+		rev.PropagationIntent = maxProposal
+	}
+	return rev, nil
 }
 
 // IsRuleRevoked reports whether the pooler's recorded revocation forbids
@@ -96,15 +116,15 @@ func NewTermRevocation(
 // A rule is revoked when:
 //   - revocation.revoked_below_term is non-zero and exceeds the rule's
 //     coordinator_term, AND
-//   - the rule does not strictly exceed revocation.outgoing_rule.
+//   - the rule does not strictly exceed revocation.outgoing_decision.
 //
 // The second clause is the runaway-recruit override: if durable WAL exists
-// for a rule strictly newer than outgoing_rule, the cohort has demonstrably
+// for a rule strictly newer than outgoing_decision, the cohort has demonstrably
 // moved past the rule the revocation was authored to transition away from,
 // so the promise is moot. See the TermRevocation proto for the full safety
 // argument.
 //
-// revocation may be nil (treated as no revocation). outgoing_rule may be nil
+// revocation may be nil (treated as no revocation). outgoing_decision may be nil
 // on revocations written by older code that predates the field; nil means
 // "no override available" and the override branch cannot fire.
 func IsRuleRevoked(rule *clustermetadatapb.ShardRule, revocation *clustermetadatapb.TermRevocation) bool {
@@ -115,7 +135,7 @@ func IsRuleRevoked(rule *clustermetadatapb.ShardRule, revocation *clustermetadat
 	if rule.GetRuleNumber().GetCoordinatorTerm() >= revokedBelow {
 		return false
 	}
-	outgoing := revocation.GetOutgoingRule()
+	outgoing := revocation.GetOutgoingDecision()
 	if outgoing != nil && CompareRuleNumbers(rule.GetRuleNumber(), outgoing) > 0 {
 		return false
 	}
@@ -161,19 +181,19 @@ func ValidateRevocation(status *clustermetadatapb.ConsensusStatus, revocation *c
 	if revocation.GetCoordinatorInitiatedAt() == nil {
 		return errors.New("cannot accept revocation: coordinator_initiated_at is required")
 	}
-	if revocation.GetOutgoingRule() == nil {
-		return errors.New("cannot accept revocation: outgoing_rule is required")
+	if revocation.GetOutgoingDecision() == nil {
+		return errors.New("cannot accept revocation: outgoing_decision is required")
 	}
 	revokedBelowTerm := revocation.GetRevokedBelowTerm()
-	// Invariant: outgoing_rule represents the rule the coordinator is
+	// Invariant: outgoing_decision represents the rule the coordinator is
 	// transitioning from. Its coordinator_term must be strictly less than
 	// revoked_below_term — the new term is by construction max(observed) + 1,
-	// so outgoing_rule.coordinator_term <= max(observed) < revoked_below_term.
+	// so outgoing_decision.coordinator_term <= max(observed) < revoked_below_term.
 	// A violation indicates a malformed revocation (or future code paths
 	// constructing revocations by hand without using NewTermRevocation).
-	if outTerm := revocation.GetOutgoingRule().GetCoordinatorTerm(); outTerm >= revokedBelowTerm {
+	if outTerm := revocation.GetOutgoingDecision().GetCoordinatorTerm(); outTerm >= revokedBelowTerm {
 		return fmt.Errorf(
-			"cannot accept revocation: outgoing_rule coordinator_term %d >= revoked_below_term %d",
+			"cannot accept revocation: outgoing_decision coordinator_term %d >= revoked_below_term %d",
 			outTerm, revokedBelowTerm,
 		)
 	}
@@ -186,28 +206,61 @@ func ValidateRevocation(status *clustermetadatapb.ConsensusStatus, revocation *c
 	if _, err := pgutil.ParseLSN(pos.Lsn); err != nil {
 		return mterrors.Wrap(err, "cannot accept revocation")
 	}
-	ruleCoordTerm := pos.GetRule().GetRuleNumber().GetCoordinatorTerm()
+	ruleCoordTerm := pos.GetDecision().GetRuleNumber().GetCoordinatorTerm()
 	if ruleCoordTerm >= revokedBelowTerm {
 		return fmt.Errorf(
-			"cannot accept revocation: recorded rule is at coordinator term %d >= revoked_below_term %d",
+			"cannot accept revocation: recorded decision is at coordinator term %d >= revoked_below_term %d",
 			ruleCoordTerm, revokedBelowTerm,
 		)
 	}
-	// TODO: reject revocations whose outgoing_rule is known to be obsolete.
-	// This may require us to first have more clarity about what's a proposal vs
-	// what's a decision.
+	// If the node's committed decision is strictly beyond outgoing_decision, the
+	// revocation is stale: it describes a transition from a state the node has
+	// already moved past.
+	if CompareRuleNumbers(pos.GetDecision().GetRuleNumber(), revocation.GetOutgoingDecision()) > 0 {
+		return fmt.Errorf(
+			"cannot accept revocation: committed decision (%d.%d) is beyond outgoing_decision (%d.%d)",
+			pos.GetDecision().GetRuleNumber().GetCoordinatorTerm(),
+			pos.GetDecision().GetRuleNumber().GetLeaderSubterm(),
+			revocation.GetOutgoingDecision().GetCoordinatorTerm(),
+			revocation.GetOutgoingDecision().GetLeaderSubterm(),
+		)
+	}
+	// If the node has an in-flight proposal beyond outgoing_decision, the
+	// coordinator's view is stale relative to WAL: it doesn't know about this
+	// entry. Exception: if the revocation carries a propagation_intent that
+	// exactly matches the proposal, the coordinator has explicitly acknowledged
+	// the entry and promises to propagate it rather than write a new WAL entry.
+	if proposalNum := pos.GetProposal().GetRuleNumber(); proposalNum != nil {
+		if CompareRuleNumbers(proposalNum, revocation.GetOutgoingDecision()) > 0 {
+			if !proto.Equal(proposalNum, revocation.GetPropagationIntent()) {
+				return fmt.Errorf(
+					"cannot accept revocation: in-flight proposal (%d.%d) is beyond outgoing_decision (%d.%d); use propagation_intent to acknowledge",
+					proposalNum.GetCoordinatorTerm(),
+					proposalNum.GetLeaderSubterm(),
+					revocation.GetOutgoingDecision().GetCoordinatorTerm(),
+					revocation.GetOutgoingDecision().GetLeaderSubterm(),
+				)
+			}
+		}
+	}
 
 	// Conditions 2 and 3: stored-revocation consistency.
 	stored := status.GetTermRevocation()
 	if stored != nil {
 		storedTerm := stored.GetRevokedBelowTerm()
 		if storedTerm > revokedBelowTerm {
-			return fmt.Errorf(
-				"cannot accept revocation: already accepted term %d > requested %d",
-				storedTerm, revokedBelowTerm,
-			)
-		}
-		if storedTerm == revokedBelowTerm {
+			// Allow a revocation with a strictly higher outgoing_decision to override a
+			// stale stored one, even when the new revokedBelowTerm is lower. A higher
+			// outgoing_decision means the coordinator observed a more advanced cluster
+			// state, so the stored revocation was based on older information.
+			if CompareRuleNumbers(revocation.GetOutgoingDecision(), stored.GetOutgoingDecision()) <= 0 {
+				return fmt.Errorf(
+					"cannot accept revocation: already accepted term %d > requested %d",
+					storedTerm, revokedBelowTerm,
+				)
+			}
+			// New revocation has a higher outgoing_decision: it supersedes the stored one.
+		} else if storedTerm == revokedBelowTerm {
 			storedCoord := topoclient.ClusterIDString(stored.GetAcceptedCoordinatorId())
 			reqCoord := topoclient.ClusterIDString(revocation.GetAcceptedCoordinatorId())
 			if storedCoord != reqCoord {

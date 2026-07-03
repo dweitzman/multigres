@@ -58,8 +58,8 @@ func createMockNode(fakeClient *rpcclient.FakeClient, name string, term int64, w
 				RevokedBelowTerm: term,
 			},
 			CurrentPosition: &clustermetadatapb.PoolerPosition{
-				Lsn:  walPosition,
-				Rule: rule,
+				Lsn:      walPosition,
+				Decision: rule,
 			},
 		},
 	})
@@ -128,16 +128,16 @@ func TestAppointLeader(t *testing.T) {
 		// here too. createMockNode leaves these fields zero on the cached status.
 		mp.ConsensusStatus.Id = id
 		mp.ConsensusStatus.CurrentPosition = &clustermetadatapb.PoolerPosition{
-			Lsn:  walPositions[i],
-			Rule: outgoingRule,
+			Lsn:      walPositions[i],
+			Decision: outgoingRule,
 		}
 		key := topoclient.ComponentIDString(id)
 		fakeClient.RecruitResponses[key] = &consensusdatapb.RecruitResponse{
 			ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 				Id: id,
 				CurrentPosition: &clustermetadatapb.PoolerPosition{
-					Lsn:  walPositions[i],
-					Rule: outgoingRule,
+					Lsn:      walPositions[i],
+					Decision: outgoingRule,
 				},
 			},
 		}
@@ -223,8 +223,8 @@ func TestAppointInitialLeader(t *testing.T) {
 		mp.ConsensusStatus = &clustermetadatapb.ConsensusStatus{
 			Id: id,
 			CurrentPosition: &clustermetadatapb.PoolerPosition{
-				Lsn:  walPositions[i],
-				Rule: sentinelRule,
+				Lsn:      walPositions[i],
+				Decision: sentinelRule,
 			},
 		}
 		key := topoclient.ComponentIDString(id)
@@ -232,8 +232,8 @@ func TestAppointInitialLeader(t *testing.T) {
 			ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 				Id: id,
 				CurrentPosition: &clustermetadatapb.PoolerPosition{
-					Lsn:  walPositions[i],
-					Rule: sentinelRule,
+					Lsn:      walPositions[i],
+					Decision: sentinelRule,
 				},
 			},
 		}

@@ -555,21 +555,6 @@ message ReplicationPrimary {
   // timeline); for a follower it is the value most recently relayed via
   // SetPrimary about the leader it follows.
   bool rewind_ready = 3;
-
-  // The revocation that established `primary`'s leadership. Required on
-  // SetPrimary requests. This is NOT a new recruitment of the receiving
-  // follower — accepting a SetPrimary does not set the follower's own term.
-  // It informs the follower of the authority with which the primary was
-  // established so that stale SetPrimary calls (carrying older revocations)
-  // can be rejected: if primary_revocation.revoked_below_term is strictly
-  // less than the revocation already recorded here, the call is rejected as
-  // stale. Equal or higher revocations are accepted; on accept the recorded
-  // value is updated. `primary` is treated as eventually-consistent discovery
-  // information about where to find the primary that this revocation names —
-  // the receiver does not require primary.id to match rule.leader_id, since a
-  // propagation flow legitimately points followers at a finalizing node
-  // distinct from the dead leader recorded in the rule.
-  TermRevocation primary_revocation = 4;
 }
 
 // TermRevocation records that this pooler has revoked participation in all terms

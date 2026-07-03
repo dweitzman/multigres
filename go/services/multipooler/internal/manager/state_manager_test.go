@@ -604,7 +604,7 @@ func selfLeaderConsensusStatus() *clustermetadatapb.ConsensusStatus {
 	return &clustermetadatapb.ConsensusStatus{
 		Id: testPoolerID,
 		CurrentPosition: &clustermetadatapb.PoolerPosition{
-			Rule: &clustermetadatapb.ShardRule{
+			Decision: &clustermetadatapb.ShardRule{
 				RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
 				LeaderId:   testPoolerID,
 			},
@@ -653,7 +653,7 @@ func TestDeriveRoutingRole(t *testing.T) {
 			cs: &clustermetadatapb.ConsensusStatus{
 				Id: testPoolerID,
 				CurrentPosition: &clustermetadatapb.PoolerPosition{
-					Rule: &clustermetadatapb.ShardRule{
+					Decision: &clustermetadatapb.ShardRule{
 						RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
 						LeaderId:   otherPoolerID,
 					},

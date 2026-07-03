@@ -34,7 +34,7 @@ import (
 
 // ApplyCertifiedRuleChange installs a new shard rule using an externally
 // certified revocation. Multiadmin is a convenience layer over the multiorch
-// RPC: it (1) optionally derives outgoing_rule_number and frozen_lsn by
+// RPC: it (1) optionally derives outgoing_decision_number and frozen_lsn by
 // probing the proposed cohort, (2) picks an orch and fills in any identity
 // or timing fields the caller omitted, and (3) forwards the fully-populated
 // request to the chosen multiorch.
@@ -163,7 +163,7 @@ func (s *MultiAdminServer) dialOrch(ctx context.Context, orch *clustermetadatapb
 
 // buildCert returns the ExternallyCertifiedRevocation to forward. For an
 // explicit cert this is a clone of the caller's input. For unsafe_derive_cert
-// it probes the proposed cohort and computes term_revocation.outgoing_rule
+// it probes the proposed cohort and computes term_revocation.outgoing_decision
 // and frozen_lsn from the most-advanced response.
 func (s *MultiAdminServer) buildCert(
 	ctx context.Context,
@@ -184,7 +184,7 @@ func (s *MultiAdminServer) buildCert(
 		}
 		return &clustermetadatapb.ExternallyCertifiedRevocation{
 			TermRevocation: &clustermetadatapb.TermRevocation{
-				OutgoingRule: outgoingRule,
+				OutgoingDecision: outgoingRule,
 			},
 			FrozenLsn: frozenLSN,
 		}, nil
@@ -288,7 +288,7 @@ func (s *MultiAdminServer) probeMostAdvanced(
 	s.logger.InfoContext(ctx, "derived cert from reachable cohort",
 		"reachable", len(reachable), "total", len(poolers))
 
-	outgoingRule := best.GetRule().GetRuleNumber()
+	outgoingRule := best.GetDecision().GetRuleNumber()
 	if outgoingRule == nil {
 		// Fresh bootstrap: no rule recorded anywhere. Bootstrap convention.
 		outgoingRule = &clustermetadatapb.RuleNumber{}
@@ -325,7 +325,7 @@ func fillIdentityFields(
 		rev.CoordinatorInitiatedAt = now
 	}
 	if rev.GetRevokedBelowTerm() == 0 {
-		rev.RevokedBelowTerm = rev.GetOutgoingRule().GetCoordinatorTerm() + 1
+		rev.RevokedBelowTerm = rev.GetOutgoingDecision().GetCoordinatorTerm() + 1
 	}
 
 	if proposedRule.GetRuleNumber() == nil {

@@ -74,7 +74,7 @@ func replicasStreamingFromLeader(sa *ShardAnalysis) bool {
 	}
 	primaryHost := sa.Leader.Health().GetMultiPooler().GetHostname()
 	primaryPort := sa.Leader.Health().GetMultiPooler().GetPortMap()["postgres"]
-	leaderKey := topoclient.ComponentIDString(sa.HighestShardRule.GetLeaderId())
+	leaderKey := topoclient.ComponentIDString(sa.HighestDecidedRule.GetLeaderId())
 
 	replicaCount := 0
 	connectedCount := 0
@@ -227,7 +227,7 @@ func (a *LeaderNeedsReplacementAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Pro
 	}
 
 	// No known leader yet (no consensus rule names one) — nothing to fail over.
-	if sa.HighestShardRule.GetLeaderId() == nil {
+	if sa.HighestDecidedRule.GetLeaderId() == nil {
 		return nil, nil
 	}
 
@@ -239,7 +239,7 @@ func (a *LeaderNeedsReplacementAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Pro
 		return []types.Problem{{
 			Code:           types.ProblemLeaderResigned,
 			CheckName:      a.Name(),
-			PoolerID:       sa.HighestShardRule.GetLeaderId(),
+			PoolerID:       sa.HighestDecidedRule.GetLeaderId(),
 			ShardKey:       sa.ShardKey,
 			Description:    fmt.Sprintf("Leader for shard %s has requested demotion", sa.ShardKey),
 			Priority:       types.PriorityEmergency,
@@ -277,7 +277,7 @@ func (a *LeaderNeedsReplacementAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Pro
 	if leaderPromoting(sa) && leaderLive && leaderPostgresRunning(sa) {
 		a.factory.Logger().Info("primary promotion in progress, suppressing LeaderIsDead",
 			"shard_key", sa.ShardKey.String(),
-			"promoting_primary", topoclient.ComponentIDString(sa.HighestShardRule.GetLeaderId()))
+			"promoting_primary", topoclient.ComponentIDString(sa.HighestDecidedRule.GetLeaderId()))
 		return nil, nil
 	}
 
@@ -322,7 +322,7 @@ func (a *LeaderNeedsReplacementAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Pro
 		if !leaderLive {
 			a.factory.Logger().Warn("leader pooler unreachable but replicas still streaming from its postgres, suppressing failover",
 				"shard_key", sa.ShardKey.String(),
-				"leader_pooler_id", topoclient.ComponentIDString(sa.HighestShardRule.GetLeaderId()),
+				"leader_pooler_id", topoclient.ComponentIDString(sa.HighestDecidedRule.GetLeaderId()),
 				"leader_postgres_running", leaderPGRunning)
 			return nil, nil
 		}
@@ -340,7 +340,7 @@ func (a *LeaderNeedsReplacementAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Pro
 		if leaderPGRunning && !primaryPostgresUnresponsive {
 			a.factory.Logger().Warn("leader postgres reachable and responsive, replicas connected, suppressing failover",
 				"shard_key", sa.ShardKey.String(),
-				"leader_pooler_id", topoclient.ComponentIDString(sa.HighestShardRule.GetLeaderId()),
+				"leader_pooler_id", topoclient.ComponentIDString(sa.HighestDecidedRule.GetLeaderId()),
 				"leader_postgres_ready", leaderPostgresReady(sa),
 				"last_postgres_ready_time", lastReadyTime,
 				"threshold", threshold)
@@ -349,7 +349,7 @@ func (a *LeaderNeedsReplacementAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Pro
 		if leaderPGRunning && primaryPostgresUnresponsive {
 			a.factory.Logger().Warn("leader postgres process alive but unresponsive beyond threshold, allowing failover",
 				"shard_key", sa.ShardKey.String(),
-				"leader_pooler_id", topoclient.ComponentIDString(sa.HighestShardRule.GetLeaderId()),
+				"leader_pooler_id", topoclient.ComponentIDString(sa.HighestDecidedRule.GetLeaderId()),
 				"leader_postgres_ready", leaderPostgresReady(sa),
 				"last_postgres_ready_time", lastReadyTime,
 				"threshold", threshold)
@@ -361,7 +361,7 @@ func (a *LeaderNeedsReplacementAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Pro
 		if !leaderPGRunning {
 			a.factory.Logger().Warn("leader pooler reachable but postgres process is dead, replicas still connected (stale connections)",
 				"shard_key", sa.ShardKey.String(),
-				"leader_pooler_id", topoclient.ComponentIDString(sa.HighestShardRule.GetLeaderId()),
+				"leader_pooler_id", topoclient.ComponentIDString(sa.HighestDecidedRule.GetLeaderId()),
 				"leader_postgres_ready", leaderPostgresReady(sa),
 				"leader_postgres_running", leaderPGRunning,
 			)
@@ -372,7 +372,7 @@ func (a *LeaderNeedsReplacementAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Pro
 	return []types.Problem{{
 		Code:           types.ProblemLeaderIsDead,
 		CheckName:      a.Name(),
-		PoolerID:       sa.HighestShardRule.GetLeaderId(),
+		PoolerID:       sa.HighestDecidedRule.GetLeaderId(),
 		ShardKey:       sa.ShardKey,
 		Description:    fmt.Sprintf("Leader for shard %s is dead/unreachable", sa.ShardKey),
 		Priority:       types.PriorityEmergency,

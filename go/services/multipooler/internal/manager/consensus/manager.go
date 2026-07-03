@@ -255,7 +255,7 @@ func statusReplicationPrimary(pos *clustermetadatapb.PoolerPosition, replication
 	// postgres, replicated through WAL). highestKnownRule is the rule last recorded
 	// via a SetPrimary/Promote RPC, which can lead the rule store before the write
 	// has been observed locally.
-	ruleStoreRule := pos.GetRule()
+	ruleStoreRule := pos.GetDecision()
 	highestKnownRule := replicationPrimary.GetRule()
 	rpcPrimary := replicationPrimary.GetPrimary()
 	if ruleStoreRule == nil && highestKnownRule == nil && rpcPrimary == nil {

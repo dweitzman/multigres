@@ -55,8 +55,8 @@ func TestRuleNamesLeader(t *testing.T) {
 
 func pos(term int64, lsn string) *clustermetadatapb.PoolerPosition {
 	return &clustermetadatapb.PoolerPosition{
-		Rule: &clustermetadatapb.ShardRule{RuleNumber: rn(term, 0)},
-		Lsn:  lsn,
+		Decision: &clustermetadatapb.ShardRule{RuleNumber: rn(term, 0)},
+		Lsn:      lsn,
 	}
 }
 
@@ -114,7 +114,7 @@ func TestMostAdvancedPosition(t *testing.T) {
 			status("b", pos(4, "0/100")),
 			status("c", pos(3, "0/500000")),
 		})
-		assert.Equal(t, int64(4), got.GetRule().GetRuleNumber().GetCoordinatorTerm())
+		assert.Equal(t, int64(4), got.GetDecision().GetRuleNumber().GetCoordinatorTerm())
 		assert.Equal(t, "0/100", got.GetLsn())
 	})
 
@@ -134,7 +134,7 @@ func TestMostAdvancedPosition(t *testing.T) {
 		})
 		// pooler-a's rule is higher (5) but its LSN is unparsable, so it's
 		// filtered out and pooler-b wins despite the lower rule.
-		assert.Equal(t, int64(3), got.GetRule().GetRuleNumber().GetCoordinatorTerm())
+		assert.Equal(t, int64(3), got.GetDecision().GetRuleNumber().GetCoordinatorTerm())
 		assert.Equal(t, "0/100", got.GetLsn())
 	})
 }
@@ -272,12 +272,12 @@ func leaderID(name string) *clustermetadatapb.ID {
 	return &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: name}
 }
 
-func TestHighestKnownRule(t *testing.T) {
+func TestHighestDecidedRule(t *testing.T) {
 	// status with a current_position rule.
 	posStatus := func(term int64, leader string) *clustermetadatapb.ConsensusStatus {
 		return &clustermetadatapb.ConsensusStatus{
 			CurrentPosition: &clustermetadatapb.PoolerPosition{
-				Rule: &clustermetadatapb.ShardRule{RuleNumber: rn(term, 0), LeaderId: leaderID(leader)},
+				Decision: &clustermetadatapb.ShardRule{RuleNumber: rn(term, 0), LeaderId: leaderID(leader)},
 			},
 		}
 	}
@@ -291,12 +291,12 @@ func TestHighestKnownRule(t *testing.T) {
 	}
 
 	t.Run("nil when no statuses carry a rule", func(t *testing.T) {
-		assert.Nil(t, HighestKnownRule(nil))
-		assert.Nil(t, HighestKnownRule([]*clustermetadatapb.ConsensusStatus{{}}))
+		assert.Nil(t, HighestDecidedRule(nil))
+		assert.Nil(t, HighestDecidedRule([]*clustermetadatapb.ConsensusStatus{{}}))
 	})
 
 	t.Run("highest rule number across positions wins", func(t *testing.T) {
-		got := HighestKnownRule([]*clustermetadatapb.ConsensusStatus{posStatus(5, "a"), posStatus(7, "b"), posStatus(6, "c")})
+		got := HighestDecidedRule([]*clustermetadatapb.ConsensusStatus{posStatus(5, "a"), posStatus(7, "b"), posStatus(6, "c")})
 		assert.Equal(t, "b", got.GetLeaderId().GetName())
 	})
 
@@ -304,7 +304,7 @@ func TestHighestKnownRule(t *testing.T) {
 		// A follower positioned at rule 5 but replicating from a leader at rule 8.
 		follower := posStatus(5, "old")
 		follower.ReplicationPrimary = replStatus(8, "new").ReplicationPrimary
-		got := HighestKnownRule([]*clustermetadatapb.ConsensusStatus{follower, posStatus(5, "old")})
+		got := HighestDecidedRule([]*clustermetadatapb.ConsensusStatus{follower, posStatus(5, "old")})
 		assert.Equal(t, "new", got.GetLeaderId().GetName(), "newer leader via replication primary should win")
 	})
 
@@ -316,7 +316,7 @@ func TestHighestKnownRule(t *testing.T) {
 		phantom.ReplicationPrimary = &clustermetadatapb.ReplicationPrimary{
 			Rule: &clustermetadatapb.ShardRule{RuleNumber: rn(0, 0)},
 		}
-		got := HighestKnownRule([]*clustermetadatapb.ConsensusStatus{phantom})
+		got := HighestDecidedRule([]*clustermetadatapb.ConsensusStatus{phantom})
 		assert.Equal(t, "leader", got.GetLeaderId().GetName(), "real position rule should win over phantom 0/0 replication primary")
 	})
 }

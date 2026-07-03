@@ -183,7 +183,7 @@ func TestSetPrimary_NoOpWhenPositionNotHigher(t *testing.T) {
 			pm, _ := setupManagerWithMockDB(t, mockQueryService, &fakeRuleStore{pos: makeRulePosition(tt.selfTerm)})
 
 			leader := newLeaderAddress("new-primary", "primary-host", 5432)
-			incomingRule := tt.incomingPos.GetRule()
+			incomingRule := tt.incomingPos.GetDecision()
 			incomingRule.LeaderId = leader.GetId()
 			req := &consensusdatapb.SetPrimaryRequest{
 				ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{
@@ -203,7 +203,7 @@ func TestSetPrimary_NoOpWhenPositionNotHigher(t *testing.T) {
 			// were issued (ExpectationsWereMet below).
 			highest := pm.consensusMgr.GetReplicationPrimary()
 			require.NotNil(t, highest, "SetPrimary should record the rule even on no-op")
-			assert.Equal(t, tt.incomingPos.GetRule().GetRuleNumber().GetCoordinatorTerm(),
+			assert.Equal(t, tt.incomingPos.GetDecision().GetRuleNumber().GetCoordinatorTerm(),
 				highest.GetRule().GetRuleNumber().GetCoordinatorTerm())
 			require.NotNil(t, highest.GetPrimary(), "SetPrimary should record the primary even on no-op")
 			assert.Equal(t, "new-primary", highest.GetPrimary().Id.Name)
@@ -411,7 +411,7 @@ func TestSetPrimary_IgnoresRevokedRule(t *testing.T) {
 
 			consensustest.SeedTerm(t, tmpDir, &clustermetadatapb.TermRevocation{
 				RevokedBelowTerm: tt.revokedBelow,
-				OutgoingRule:     tt.outgoing,
+				OutgoingDecision: tt.outgoing,
 			})
 			_, err := pm.consensusMgr.Promises().Load()
 			require.NoError(t, err)
@@ -439,25 +439,25 @@ func TestSetPrimary_IgnoresRevokedRule(t *testing.T) {
 	}
 }
 
-// TestSetPrimary_AppliesViaOutgoingRuleOverride verifies that an SetPrimary whose
+// TestSetPrimary_AppliesViaOutgoingDecisionOverride verifies that an SetPrimary whose
 // rule term is below revoked_below_term is accepted when the rule strictly
-// exceeds the revocation's recorded outgoing_rule — the runaway-recruit
+// exceeds the revocation's recorded outgoing_decision — the runaway-recruit
 // self-heal path. To avoid wiring full postgres mocks for the apply branch,
 // the test sets self's rule term above the incoming rule so SetPrimary takes
 // its "not higher, no-op" branch after the revocation check passes; the
 // (rule, leader) tuple is still recorded by RecordTermPrimary, which is the
 // observable proving the override fired.
-func TestSetPrimary_AppliesViaOutgoingRuleOverride(t *testing.T) {
+func TestSetPrimary_AppliesViaOutgoingDecisionOverride(t *testing.T) {
 	mockQueryService := mock.NewQueryService()
 
 	const selfRuleTerm = 10
 	pm, tmpDir := setupManagerWithMockDB(t, mockQueryService, &fakeRuleStore{pos: makeRulePosition(selfRuleTerm)})
 
-	// Revocation at term 5 with outgoing_rule at term 1; an incoming rule
-	// at term 3 is below revoked_below_term but strictly above outgoing_rule.
+	// Revocation at term 5 with outgoing_decision at term 1; an incoming rule
+	// at term 3 is below revoked_below_term but strictly above outgoing_decision.
 	consensustest.SeedTerm(t, tmpDir, &clustermetadatapb.TermRevocation{
 		RevokedBelowTerm: 5,
-		OutgoingRule:     &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
+		OutgoingDecision: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
 	})
 	_, err := pm.consensusMgr.Promises().Load()
 	require.NoError(t, err)

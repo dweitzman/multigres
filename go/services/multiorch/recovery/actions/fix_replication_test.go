@@ -269,7 +269,7 @@ func TestFixReplicationAction_ExecuteSuccessNotReplicating(t *testing.T) {
 		},
 	}, nil))
 	primaryPosition := &clustermetadatapb.PoolerPosition{
-		Rule: &clustermetadatapb.ShardRule{
+		Decision: &clustermetadatapb.ShardRule{
 			RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
 			LeaderId:   fixReplPrimaryID,
 		},
@@ -668,7 +668,7 @@ func TestFixReplicationAction_SucceedsViaRewind(t *testing.T) {
 			Id:             fixReplPrimaryID,
 			TermRevocation: &clustermetadatapb.TermRevocation{RevokedBelowTerm: 1},
 			CurrentPosition: &clustermetadatapb.PoolerPosition{
-				Rule: &clustermetadatapb.ShardRule{
+				Decision: &clustermetadatapb.ShardRule{
 					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
 					LeaderId:   fixReplPrimaryID,
 				},
@@ -842,7 +842,7 @@ var fixReplPrimaryID = &clustermetadatapb.ID{
 // as the consensus leader at the given coordinator term.
 func leaderCurrentPosition(term int64) *clustermetadatapb.PoolerPosition {
 	return &clustermetadatapb.PoolerPosition{
-		Rule: &clustermetadatapb.ShardRule{
+		Decision: &clustermetadatapb.ShardRule{
 			RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: term},
 			LeaderId:   fixReplPrimaryID,
 		},

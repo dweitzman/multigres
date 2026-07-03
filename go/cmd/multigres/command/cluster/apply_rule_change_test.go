@@ -71,7 +71,7 @@ func TestBuildRequest_CertModeHappyPath(t *testing.T) {
 			Cert: &clustermetadatapb.ExternallyCertifiedRevocation{
 				FrozenLsn: "0/0",
 				TermRevocation: &clustermetadatapb.TermRevocation{
-					OutgoingRule: &clustermetadatapb.RuleNumber{
+					OutgoingDecision: &clustermetadatapb.RuleNumber{
 						CoordinatorTerm: 5,
 						LeaderSubterm:   3,
 					},
@@ -202,7 +202,7 @@ func testConfirmRequest() *multiadminpb.ApplyCertifiedRuleChangeRequest {
 			Cert: &clustermetadatapb.ExternallyCertifiedRevocation{
 				FrozenLsn: "0/0",
 				TermRevocation: &clustermetadatapb.TermRevocation{
-					OutgoingRule: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
+					OutgoingDecision: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
 				},
 			},
 		},
@@ -220,7 +220,7 @@ func TestConfirm_AcceptsMatchingShardName(t *testing.T) {
 	assert.Contains(t, output, "Leader:      zone1/mp1")
 	assert.Contains(t, output, "Durability:  AT_LEAST_2")
 	assert.Contains(t, output, "Cert mode:   explicit")
-	assert.Contains(t, output, "outgoing_rule_term=5")
+	assert.Contains(t, output, "outgoing_decision_term=5")
 }
 
 func TestConfirm_RejectsMismatchedShardName(t *testing.T) {

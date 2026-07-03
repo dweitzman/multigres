@@ -34,18 +34,22 @@ var (
 	ts1 = timestamppb.New(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	ts2 = timestamppb.New(time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC))
 
-	// zeroOutgoingRule is a placeholder outgoing_rule used in tests where the
-	// specific outgoing rule value doesn't matter — only that it's non-nil so
+	// zeroOutgoingDecision is a placeholder outgoing_decision used in tests where the
+	// specific outgoing decision value doesn't matter — only that it's non-nil so
 	// ValidateRevocation accepts the revocation.
-	zeroOutgoingRule = &clustermetadatapb.RuleNumber{}
+	zeroOutgoingDecision = &clustermetadatapb.RuleNumber{}
 )
 
 func TestValidateRevocation(t *testing.T) {
+	// outgoingAt4 represents the highest rule observed across the cohort when
+	// the revocation was authored — coordinator_term=4, which is what you'd see
+	// when the node being tested has committed decision at term=4.
+	outgoingAt4 := &clustermetadatapb.RuleNumber{CoordinatorTerm: 4}
 	revocationAt5 := &clustermetadatapb.TermRevocation{
 		RevokedBelowTerm:       5,
 		AcceptedCoordinatorId:  coordA,
 		CoordinatorInitiatedAt: ts1,
-		OutgoingRule:           zeroOutgoingRule,
+		OutgoingDecision:       outgoingAt4,
 	}
 
 	tests := []struct {
@@ -66,7 +70,7 @@ func TestValidateRevocation(t *testing.T) {
 			revocation: &clustermetadatapb.TermRevocation{
 				RevokedBelowTerm:       5,
 				CoordinatorInitiatedAt: ts1,
-				OutgoingRule:           zeroOutgoingRule,
+				OutgoingDecision:       zeroOutgoingDecision,
 			},
 			wantErr: "accepted_coordinator_id is required",
 		},
@@ -76,35 +80,35 @@ func TestValidateRevocation(t *testing.T) {
 			revocation: &clustermetadatapb.TermRevocation{
 				RevokedBelowTerm:      5,
 				AcceptedCoordinatorId: coordA,
-				OutgoingRule:          zeroOutgoingRule,
+				OutgoingDecision:      zeroOutgoingDecision,
 			},
 			wantErr: "coordinator_initiated_at is required",
 		},
 		{
-			name:   "NilOutgoingRule_Refused",
+			name:   "NilOutgoingDecision_Refused",
 			status: nil,
 			revocation: &clustermetadatapb.TermRevocation{
 				RevokedBelowTerm:       5,
 				AcceptedCoordinatorId:  coordA,
 				CoordinatorInitiatedAt: ts1,
 			},
-			wantErr: "outgoing_rule is required",
+			wantErr: "outgoing_decision is required",
 		},
 		{
-			// outgoing_rule.coordinator_term must be strictly less than
+			// outgoing_decision.coordinator_term must be strictly less than
 			// revoked_below_term. NewTermRevocation always produces values that
 			// satisfy this, but a hand-built revocation (e.g. from an external
 			// agent constructing a cert) could violate it and ValidateRevocation
 			// catches it on read.
-			name:   "OutgoingRuleTermAtOrAboveRevokedBelow_Refused",
+			name:   "OutgoingDecisionTermAtOrAboveRevokedBelow_Refused",
 			status: nil,
 			revocation: &clustermetadatapb.TermRevocation{
 				RevokedBelowTerm:       5,
 				AcceptedCoordinatorId:  coordA,
 				CoordinatorInitiatedAt: ts1,
-				OutgoingRule:           &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
+				OutgoingDecision:       &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
 			},
-			wantErr: "outgoing_rule coordinator_term 5 >= revoked_below_term 5",
+			wantErr: "outgoing_decision coordinator_term 5 >= revoked_below_term 5",
 		},
 		{
 			name:       "NilStatus_Refused",
@@ -122,7 +126,7 @@ func TestValidateRevocation(t *testing.T) {
 			name: "BadLsn_Refused",
 			status: &clustermetadatapb.ConsensusStatus{
 				CurrentPosition: &clustermetadatapb.PoolerPosition{
-					Rule: &clustermetadatapb.ShardRule{
+					Decision: &clustermetadatapb.ShardRule{
 						RuleNumber: &clustermetadatapb.RuleNumber{
 							CoordinatorTerm: 4,
 						},
@@ -157,16 +161,67 @@ func TestValidateRevocation(t *testing.T) {
 			wantErr:    "coordinator term 7 >= revoked_below_term 5",
 		},
 		{
+			// if the committed decision is beyond outgoing_decision, the
+			// revocation is stale
+			name: "CommittedRuleBeyondOutgoingDecision_Refused",
+			status: &clustermetadatapb.ConsensusStatus{
+				CurrentPosition: positionAtCoordTerm(1),
+			},
+			revocation: &clustermetadatapb.TermRevocation{
+				RevokedBelowTerm:       2,
+				AcceptedCoordinatorId:  coordA,
+				CoordinatorInitiatedAt: ts1,
+				OutgoingDecision:       zeroOutgoingDecision, // {0,0} < committed {1,0}
+			},
+			wantErr: "committed decision (1.0) is beyond outgoing_decision (0.0)",
+		},
+		{
+			// committed decision equals outgoing_decision — not beyond it, so OK.
+			name: "CommittedRuleEqualsOutgoingDecision_Accepted",
+			status: &clustermetadatapb.ConsensusStatus{
+				CurrentPosition: positionAtCoordTerm(0),
+			},
+			revocation: &clustermetadatapb.TermRevocation{
+				RevokedBelowTerm:       1,
+				AcceptedCoordinatorId:  coordA,
+				CoordinatorInitiatedAt: ts1,
+				OutgoingDecision:       zeroOutgoingDecision, // {0,0} == committed {0,0}
+			},
+		},
+		{
+			// Stored term=10 > requested term=5, and stored outgoing_decision >= incoming
+			// outgoing_decision so the override rule does not apply.
 			name: "StoredTerm_HigherThanRequested_Refused",
 			status: &clustermetadatapb.ConsensusStatus{
 				TermRevocation: &clustermetadatapb.TermRevocation{
 					RevokedBelowTerm:      10,
 					AcceptedCoordinatorId: coordA,
+					OutgoingDecision:      outgoingAt4, // same as incoming — no override
 				},
 				CurrentPosition: positionAtCoordTerm(4),
 			},
 			revocation: revocationAt5,
 			wantErr:    "already accepted term 10 > requested 5",
+		},
+		{
+			// incoming revocation has a higher outgoing_decision than the
+			// stored one, so it supersedes it even though revokedBelowTerm is lower.
+			// Scenario: stored is "outgoing=2 → term=5", incoming is "outgoing=3 → term=4".
+			name: "StoredTerm_HigherButIncomingHasHigherOutgoingDecision_Accepted",
+			status: &clustermetadatapb.ConsensusStatus{
+				TermRevocation: &clustermetadatapb.TermRevocation{
+					RevokedBelowTerm:      5,
+					AcceptedCoordinatorId: coordA,
+					OutgoingDecision:      &clustermetadatapb.RuleNumber{CoordinatorTerm: 2},
+				},
+				CurrentPosition: positionAtCoordTerm(3),
+			},
+			revocation: &clustermetadatapb.TermRevocation{
+				RevokedBelowTerm:       4,
+				AcceptedCoordinatorId:  coordA,
+				CoordinatorInitiatedAt: ts1,
+				OutgoingDecision:       &clustermetadatapb.RuleNumber{CoordinatorTerm: 3},
+			},
 		},
 		{
 			name: "StoredTerm_LowerThanRequested_Accepted",
@@ -201,7 +256,7 @@ func TestValidateRevocation(t *testing.T) {
 				RevokedBelowTerm:       5,
 				AcceptedCoordinatorId:  coordB,
 				CoordinatorInitiatedAt: ts1,
-				OutgoingRule:           zeroOutgoingRule,
+				OutgoingDecision:       outgoingAt4,
 			},
 			wantErr: "already accepted term 5 from coordinator",
 		},
@@ -219,7 +274,7 @@ func TestValidateRevocation(t *testing.T) {
 				RevokedBelowTerm:       5,
 				AcceptedCoordinatorId:  coordA,
 				CoordinatorInitiatedAt: ts2,
-				OutgoingRule:           zeroOutgoingRule,
+				OutgoingDecision:       outgoingAt4,
 			},
 			wantErr: "different coordinator_initiated_at",
 		},
@@ -234,6 +289,74 @@ func TestValidateRevocation(t *testing.T) {
 			},
 			revocation: revocationAt5,
 			wantErr:    "coordinator term 6 >= revoked_below_term 5",
+		},
+		{
+			name: "ProposalBeyondOutgoing_NoIntent_Refused",
+			status: &clustermetadatapb.ConsensusStatus{
+				CurrentPosition: &clustermetadatapb.PoolerPosition{
+					Decision: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 3}},
+					Proposal: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5}},
+					Lsn:      "0/1",
+				},
+			},
+			revocation: &clustermetadatapb.TermRevocation{
+				RevokedBelowTerm:       10,
+				AcceptedCoordinatorId:  coordA,
+				CoordinatorInitiatedAt: ts1,
+				OutgoingDecision:       &clustermetadatapb.RuleNumber{CoordinatorTerm: 3},
+			},
+			wantErr: "in-flight proposal (5.0) is beyond outgoing_decision (3.0)",
+		},
+		{
+			name: "ProposalBeyondOutgoing_WithMatchingIntent_Accepted",
+			status: &clustermetadatapb.ConsensusStatus{
+				CurrentPosition: &clustermetadatapb.PoolerPosition{
+					Decision: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 3}},
+					Proposal: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5}},
+					Lsn:      "0/1",
+				},
+			},
+			revocation: &clustermetadatapb.TermRevocation{
+				RevokedBelowTerm:       10,
+				AcceptedCoordinatorId:  coordA,
+				CoordinatorInitiatedAt: ts1,
+				OutgoingDecision:       &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
+				PropagationIntent:      &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
+			},
+		},
+		{
+			name: "ProposalBeyondOutgoing_WithMismatchedIntent_Refused",
+			status: &clustermetadatapb.ConsensusStatus{
+				CurrentPosition: &clustermetadatapb.PoolerPosition{
+					Decision: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 3}},
+					Proposal: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 6}},
+					Lsn:      "0/1",
+				},
+			},
+			revocation: &clustermetadatapb.TermRevocation{
+				RevokedBelowTerm:       10,
+				AcceptedCoordinatorId:  coordA,
+				CoordinatorInitiatedAt: ts1,
+				OutgoingDecision:       &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
+				PropagationIntent:      &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
+			},
+			wantErr: "in-flight proposal (6.0) is beyond outgoing_decision (5.0)",
+		},
+		{
+			name: "ProposalAtOrBelowOutgoing_NoIntent_Accepted",
+			status: &clustermetadatapb.ConsensusStatus{
+				CurrentPosition: &clustermetadatapb.PoolerPosition{
+					Decision: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 3}},
+					Proposal: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4}},
+					Lsn:      "0/1",
+				},
+			},
+			revocation: &clustermetadatapb.TermRevocation{
+				RevokedBelowTerm:       10,
+				AcceptedCoordinatorId:  coordA,
+				CoordinatorInitiatedAt: ts1,
+				OutgoingDecision:       &clustermetadatapb.RuleNumber{CoordinatorTerm: 4},
+			},
 		},
 	}
 
@@ -254,7 +377,7 @@ func TestValidateRevocation(t *testing.T) {
 // given coordinator term.
 func positionAtCoordTerm(coordTerm int64) *clustermetadatapb.PoolerPosition {
 	return &clustermetadatapb.PoolerPosition{
-		Rule: &clustermetadatapb.ShardRule{
+		Decision: &clustermetadatapb.ShardRule{
 			RuleNumber: &clustermetadatapb.RuleNumber{
 				CoordinatorTerm: coordTerm,
 			},
@@ -286,25 +409,25 @@ func TestNewTermRevocation(t *testing.T) {
 	t.Run("no cohort member has a recorded rule returns error", func(t *testing.T) {
 		// Bootstrap-shaped scenario: cohort visible but nobody reports a
 		// rule. NewTermRevocation refuses; the agent should construct the
-		// revocation directly with an explicit outgoing_rule.
+		// revocation directly with an explicit outgoing_decision.
 		statuses := []*clustermetadatapb.ConsensusStatus{{}, {}}
 		rev, err := NewTermRevocation(statuses, coord, ts1)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "no cohort member reports a recorded rule")
+		assert.Contains(t, err.Error(), "no cohort member reports a recorded decision")
 		require.Nil(t, rev)
 	})
 
 	t.Run("revocation-term-only statuses with no recorded rule return error", func(t *testing.T) {
 		// Same shape: statuses carry a stored revocation but no recorded
 		// rule. NewTermRevocation requires at least one rule to derive
-		// outgoing_rule from.
+		// outgoing_decision from.
 		statuses := []*clustermetadatapb.ConsensusStatus{
 			{TermRevocation: &clustermetadatapb.TermRevocation{RevokedBelowTerm: 3}},
 			{TermRevocation: &clustermetadatapb.TermRevocation{RevokedBelowTerm: 7}},
 		}
 		rev, err := NewTermRevocation(statuses, coord, ts1)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "no cohort member reports a recorded rule")
+		assert.Contains(t, err.Error(), "no cohort member reports a recorded decision")
 		require.Nil(t, rev)
 	})
 
@@ -329,7 +452,7 @@ func TestNewTermRevocation(t *testing.T) {
 			RevokedBelowTerm:       8,
 			AcceptedCoordinatorId:  coord,
 			CoordinatorInitiatedAt: ts1,
-			OutgoingRule:           &clustermetadatapb.RuleNumber{CoordinatorTerm: 4},
+			OutgoingDecision:       &clustermetadatapb.RuleNumber{CoordinatorTerm: 4},
 		}, rev)
 	})
 
@@ -344,7 +467,7 @@ func TestNewTermRevocation(t *testing.T) {
 			RevokedBelowTerm:       10,
 			AcceptedCoordinatorId:  coord,
 			CoordinatorInitiatedAt: ts1,
-			OutgoingRule:           &clustermetadatapb.RuleNumber{CoordinatorTerm: 9},
+			OutgoingDecision:       &clustermetadatapb.RuleNumber{CoordinatorTerm: 9},
 		}, rev)
 	})
 
@@ -359,26 +482,26 @@ func TestNewTermRevocation(t *testing.T) {
 			RevokedBelowTerm:       12,
 			AcceptedCoordinatorId:  coord,
 			CoordinatorInitiatedAt: ts1,
-			OutgoingRule:           &clustermetadatapb.RuleNumber{CoordinatorTerm: 11},
+			OutgoingDecision:       &clustermetadatapb.RuleNumber{CoordinatorTerm: 11},
 		}, rev)
 	})
 
-	t.Run("outgoing_rule picks the highest RuleNumber across statuses", func(t *testing.T) {
+	t.Run("outgoing_decision picks the highest RuleNumber across statuses", func(t *testing.T) {
 		statuses := []*clustermetadatapb.ConsensusStatus{
 			{CurrentPosition: &clustermetadatapb.PoolerPosition{
-				Rule: &clustermetadatapb.ShardRule{
+				Decision: &clustermetadatapb.ShardRule{
 					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4, LeaderSubterm: 2},
 				},
 				Lsn: "16/B374D848",
 			}},
 			{CurrentPosition: &clustermetadatapb.PoolerPosition{
-				Rule: &clustermetadatapb.ShardRule{
+				Decision: &clustermetadatapb.ShardRule{
 					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4, LeaderSubterm: 5},
 				},
 				Lsn: "16/B374D900",
 			}},
 			{CurrentPosition: &clustermetadatapb.PoolerPosition{
-				Rule: &clustermetadatapb.ShardRule{
+				Decision: &clustermetadatapb.ShardRule{
 					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 3, LeaderSubterm: 9},
 				},
 				Lsn: "16/B374D700",
@@ -390,8 +513,95 @@ func TestNewTermRevocation(t *testing.T) {
 			RevokedBelowTerm:       5,
 			AcceptedCoordinatorId:  coord,
 			CoordinatorInitiatedAt: ts1,
-			OutgoingRule:           &clustermetadatapb.RuleNumber{CoordinatorTerm: 4, LeaderSubterm: 5},
+			OutgoingDecision:       &clustermetadatapb.RuleNumber{CoordinatorTerm: 4, LeaderSubterm: 5},
 		}, rev)
+	})
+
+	t.Run("no proposals: propagation_intent is nil", func(t *testing.T) {
+		statuses := []*clustermetadatapb.ConsensusStatus{
+			{CurrentPosition: positionAtCoordTerm(4)},
+			{CurrentPosition: positionAtCoordTerm(4)},
+		}
+		rev, err := NewTermRevocation(statuses, coord, ts1)
+		require.NoError(t, err)
+		require.Nil(t, rev.GetPropagationIntent(), "no proposals means no propagation_intent")
+	})
+
+	t.Run("proposal beyond decision: propagation_intent set", func(t *testing.T) {
+		// Node B has an in-flight proposal (4.7) beyond the max decision (4.5).
+		// NewTermRevocation should set propagation_intent to (4.7) and
+		// outgoing_decision to (4.5).
+		statuses := []*clustermetadatapb.ConsensusStatus{
+			{CurrentPosition: &clustermetadatapb.PoolerPosition{
+				Decision: &clustermetadatapb.ShardRule{
+					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4, LeaderSubterm: 5},
+				},
+				Lsn: "16/1000",
+			}},
+			{CurrentPosition: &clustermetadatapb.PoolerPosition{
+				Decision: &clustermetadatapb.ShardRule{
+					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4, LeaderSubterm: 5},
+				},
+				Proposal: &clustermetadatapb.ShardRule{
+					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4, LeaderSubterm: 7},
+				},
+				Lsn: "16/2000",
+			}},
+		}
+		rev, err := NewTermRevocation(statuses, coord, ts1)
+		require.NoError(t, err)
+		require.Equal(t, int64(4), rev.GetOutgoingDecision().GetCoordinatorTerm())
+		require.Equal(t, int64(5), rev.GetOutgoingDecision().GetLeaderSubterm())
+		require.NotNil(t, rev.GetPropagationIntent())
+		require.Equal(t, int64(4), rev.GetPropagationIntent().GetCoordinatorTerm())
+		require.Equal(t, int64(7), rev.GetPropagationIntent().GetLeaderSubterm())
+		// RevokedBelowTerm must be above the proposal term too.
+		require.Greater(t, rev.GetRevokedBelowTerm(), int64(4))
+	})
+
+	t.Run("proposal equal to decision: no propagation_intent", func(t *testing.T) {
+		// A proposal that equals the max decision means it has already been decided.
+		statuses := []*clustermetadatapb.ConsensusStatus{
+			{CurrentPosition: &clustermetadatapb.PoolerPosition{
+				Decision: &clustermetadatapb.ShardRule{
+					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4, LeaderSubterm: 7},
+				},
+				Proposal: &clustermetadatapb.ShardRule{
+					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4, LeaderSubterm: 7},
+				},
+				Lsn: "16/1000",
+			}},
+		}
+		rev, err := NewTermRevocation(statuses, coord, ts1)
+		require.NoError(t, err)
+		require.Nil(t, rev.GetPropagationIntent(), "proposal == decision means already decided")
+	})
+
+	t.Run("multiple nodes with proposals: highest proposal wins", func(t *testing.T) {
+		statuses := []*clustermetadatapb.ConsensusStatus{
+			{CurrentPosition: &clustermetadatapb.PoolerPosition{
+				Decision: &clustermetadatapb.ShardRule{
+					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4, LeaderSubterm: 5},
+				},
+				Proposal: &clustermetadatapb.ShardRule{
+					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4, LeaderSubterm: 6},
+				},
+				Lsn: "16/1000",
+			}},
+			{CurrentPosition: &clustermetadatapb.PoolerPosition{
+				Decision: &clustermetadatapb.ShardRule{
+					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4, LeaderSubterm: 5},
+				},
+				Proposal: &clustermetadatapb.ShardRule{
+					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4, LeaderSubterm: 9},
+				},
+				Lsn: "16/2000",
+			}},
+		}
+		rev, err := NewTermRevocation(statuses, coord, ts1)
+		require.NoError(t, err)
+		require.NotNil(t, rev.GetPropagationIntent())
+		require.Equal(t, int64(9), rev.GetPropagationIntent().GetLeaderSubterm(), "highest proposal wins")
 	})
 }
 
@@ -402,7 +612,7 @@ func TestIsRuleRevoked(t *testing.T) {
 		}
 	}
 	revocation := func(revokedBelow int64, outgoing *clustermetadatapb.RuleNumber) *clustermetadatapb.TermRevocation {
-		return &clustermetadatapb.TermRevocation{RevokedBelowTerm: revokedBelow, OutgoingRule: outgoing}
+		return &clustermetadatapb.TermRevocation{RevokedBelowTerm: revokedBelow, OutgoingDecision: outgoing}
 	}
 	ruleNum := func(term, subterm int64) *clustermetadatapb.RuleNumber {
 		return &clustermetadatapb.RuleNumber{CoordinatorTerm: term, LeaderSubterm: subterm}

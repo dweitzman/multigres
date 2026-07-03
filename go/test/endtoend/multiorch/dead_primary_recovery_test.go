@@ -221,7 +221,7 @@ func TestDeadPrimaryRecovery(t *testing.T) {
 	recruitTerm := oldPrimaryTerm + 1
 	t.Logf("Calling Recruit on primary %s with term %d to trigger emergency demotion", currentPrimaryName, recruitTerm)
 
-	outgoingRule := statusResp.ConsensusStatus.GetCurrentPosition().GetRule().GetRuleNumber()
+	outgoingRule := statusResp.ConsensusStatus.GetCurrentPosition().GetDecision().GetRuleNumber()
 	require.NotNil(t, outgoingRule, "primary should have a recorded rule before recruit")
 	recruitReq := &consensusdatapb.RecruitRequest{
 		TermRevocation: &clustermetadatapb.TermRevocation{
@@ -232,7 +232,7 @@ func TestDeadPrimaryRecovery(t *testing.T) {
 				Name:      "test-coordinator",
 			},
 			CoordinatorInitiatedAt: timestamppb.Now(),
-			OutgoingRule:           outgoingRule,
+			OutgoingDecision:       outgoingRule,
 		},
 	}
 	recruitResp, err := primaryClient.Consensus.Recruit(utils.WithTimeout(t, 10*time.Second), recruitReq)
@@ -315,7 +315,7 @@ func TestDeadPrimaryRecovery(t *testing.T) {
 			if err != nil {
 				return false
 			}
-			leaderName := commonconsensus.HighestKnownRule(
+			leaderName := commonconsensus.HighestDecidedRule(
 				[]*clustermetadatapb.ConsensusStatus{status.ConsensusStatus},
 			).GetLeaderId().GetName()
 			if leaderName != finalPrimary.Name {

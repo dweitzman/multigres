@@ -51,7 +51,7 @@ func (e errSyncStandbyManager) NeedsApply(_ context.Context, _ commonconsensus.P
 // makePoolerPosition builds a PoolerPosition with the given rule number.
 func makePoolerPosition(coordinatorTerm, leaderSubterm int64) *clustermetadatapb.PoolerPosition {
 	return &clustermetadatapb.PoolerPosition{
-		Rule: &clustermetadatapb.ShardRule{
+		Decision: &clustermetadatapb.ShardRule{
 			RuleNumber: &clustermetadatapb.RuleNumber{
 				CoordinatorTerm: coordinatorTerm,
 				LeaderSubterm:   leaderSubterm,
@@ -171,14 +171,14 @@ func TestCacheRuleObservation_StaleRuleIgnored(t *testing.T) {
 	// Seed cache with rule number (2, 1).
 	rs.cacheRuleObservation(makePoolerPosition(2, 1))
 	require.NotNil(t, rs.CachedPosition())
-	assert.Equal(t, int64(2), rs.CachedPosition().GetRule().GetRuleNumber().GetCoordinatorTerm())
+	assert.Equal(t, int64(2), rs.CachedPosition().GetDecision().GetRuleNumber().GetCoordinatorTerm())
 
 	// Stale observation: rule number (1, 5) is strictly less than (2, 1).
 	rs.cacheRuleObservation(makePoolerPosition(1, 5))
 
 	// Cache must still hold the newer rule.
-	assert.Equal(t, int64(2), rs.CachedPosition().GetRule().GetRuleNumber().GetCoordinatorTerm())
-	assert.Equal(t, int64(1), rs.CachedPosition().GetRule().GetRuleNumber().GetLeaderSubterm())
+	assert.Equal(t, int64(2), rs.CachedPosition().GetDecision().GetRuleNumber().GetCoordinatorTerm())
+	assert.Equal(t, int64(1), rs.CachedPosition().GetDecision().GetRuleNumber().GetLeaderSubterm())
 }
 
 func TestHasInconsistentGUC_FalseWhenCacheCold(t *testing.T) {
@@ -193,7 +193,7 @@ func TestHasInconsistentGUC_FalseWhenPolicyInvalid(t *testing.T) {
 	// (UNKNOWN quorum type). HasInconsistentGUC must swallow the error and
 	// return false rather than crash or report drift.
 	rs.lastPos = &clustermetadatapb.PoolerPosition{
-		Rule: &clustermetadatapb.ShardRule{
+		Decision: &clustermetadatapb.ShardRule{
 			RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
 			DurabilityPolicy: &clustermetadatapb.DurabilityPolicy{
 				QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_UNKNOWN,
@@ -211,7 +211,7 @@ func TestHasInconsistentGUC_FalseWhenNeedsApplyErrors(t *testing.T) {
 		errSyncStandbyManager{needsApplyErr: errors.New("postgres down")},
 	)
 	rs.lastPos = &clustermetadatapb.PoolerPosition{
-		Rule: &clustermetadatapb.ShardRule{
+		Decision: &clustermetadatapb.ShardRule{
 			RuleNumber:       &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
 			DurabilityPolicy: testBootstrapPolicy(),
 		},

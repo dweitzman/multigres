@@ -69,7 +69,7 @@ func (c *Coordinator) newRuleChange(
 //     commonconsensus.NewTermRevocation to derive it from cohort statuses.
 //   - For externally-certified transitions (bootstrap, operator override),
 //     construct the cert and pass cert.GetTermRevocation() — the agent
-//     defines revoked_below_term and outgoing_rule, not local discovery.
+//     defines revoked_below_term and outgoing_decision, not local discovery.
 func (r *coordinatorLedRuleChange) Run(
 	ctx context.Context,
 	cohort []*multiorchdatapb.PoolerHealthState,
@@ -90,7 +90,7 @@ func (r *coordinatorLedRuleChange) Run(
 
 	r.coordinator.logger.InfoContext(ctx, "Starting rule change",
 		"proposed_term", proposedTerm,
-		"outgoing_rule", commonconsensus.FormatRuleNumber(revocation.GetOutgoingRule()),
+		"outgoing_decision", commonconsensus.FormatRuleNumber(revocation.GetOutgoingDecision()),
 		"cohort_size", len(cohort))
 
 	// Back off if any node recently accepted a revocation — another coordinator
@@ -375,14 +375,14 @@ func (r *coordinatorLedRuleChange) promote(
 
 // buildFailoverProposal constructs a CoordinatorProposal for normal failover.
 // It picks the first eligible leader from result.EligibleLeaders and derives
-// the cohort and durability policy from result.OutgoingRule. Resigned poolers
+// the cohort and durability policy from result.OutgoingDecision. Resigned poolers
 // are expected to have been filtered out upstream (see Coordinator.runFailover);
 // any pooler reaching this point is treated as a valid leader candidate.
 func buildFailoverProposal(
 	result commonconsensus.RecruitmentResult,
 	addressByID map[string]*clustermetadatapb.PoolerAddress,
 ) (*consensusdatapb.CoordinatorProposal, error) {
-	if result.OutgoingRule == nil {
+	if result.OutgoingDecision == nil {
 		return nil, errors.New("no committed rule found; use bootstrap path for fresh clusters")
 	}
 	if len(result.EligibleLeaders) == 0 {
@@ -400,8 +400,8 @@ func buildFailoverProposal(
 		ProposalLeader: addr,
 		ProposedRule: &clustermetadatapb.ShardRule{
 			RuleNumber:       &clustermetadatapb.RuleNumber{CoordinatorTerm: result.TermRevocation.GetRevokedBelowTerm()},
-			CohortMembers:    result.OutgoingRule.GetCohortMembers(),
-			DurabilityPolicy: result.OutgoingRule.GetDurabilityPolicy(),
+			CohortMembers:    result.OutgoingDecision.GetCohortMembers(),
+			DurabilityPolicy: result.OutgoingDecision.GetDurabilityPolicy(),
 			LeaderId:         leader.GetId(),
 			// The coordinator that ran the recruit round (carried in the
 			// revocation's accepted_coordinator_id) is also the

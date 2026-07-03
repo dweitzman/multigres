@@ -85,7 +85,7 @@ func FindShardMembers(cache *PoolerCache, shardKey *clustermetadatapb.ShardKey) 
 		}
 	}
 
-	rule := commonconsensus.HighestKnownRule(statuses)
+	rule := commonconsensus.HighestDecidedRule(statuses)
 	leaderID := rule.GetLeaderId()
 
 	var leader *Pooler

@@ -46,7 +46,7 @@ func withRule(id *clustermetadatapb.ID, coordinatorTerm, leaderSubterm int64, le
 		MultiPooler: &clustermetadatapb.MultiPooler{Id: id, ShardKey: shard()},
 		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 			CurrentPosition: &clustermetadatapb.PoolerPosition{
-				Rule: &clustermetadatapb.ShardRule{
+				Decision: &clustermetadatapb.ShardRule{
 					RuleNumber: &clustermetadatapb.RuleNumber{
 						CoordinatorTerm: coordinatorTerm,
 						LeaderSubterm:   leaderSubterm,

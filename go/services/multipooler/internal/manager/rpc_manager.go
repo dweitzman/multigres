@@ -318,8 +318,8 @@ func (pm *MultiPoolerManager) Status(ctx context.Context) (*multipoolermanagerda
 	// Get cohort members from the current rule (best-effort).
 	if pos, err := pm.consensusMgr.Rules().ObservePosition(ctx); err != nil {
 		pm.logger.WarnContext(ctx, "Failed to read current rule for status", "error", err)
-	} else if pos.Rule != nil {
-		poolerStatus.CohortMembers = pos.Rule.CohortMembers
+	} else if pos.Decision != nil {
+		poolerStatus.CohortMembers = pos.Decision.CohortMembers
 	}
 
 	resp := &multipoolermanagerdatapb.StatusResponse{
@@ -400,11 +400,11 @@ func (pm *MultiPoolerManager) ResetReplication(ctx context.Context) error {
 // or removing members. It is idempotent and only valid when synchronous
 // replication is already configured.
 //
-// expectedOutgoingRule provides compare-and-swap semantics: the operation
+// expectedOutgoingDecision provides compare-and-swap semantics: the operation
 // proceeds only if this pooler's current recorded rule matches the given
 // RuleNumber. If they differ (the caller's view is stale), the operation
 // fails — the caller should re-read state and retry.
-func (pm *MultiPoolerManager) UpdateConsensusRule(ctx context.Context, operation multipoolermanagerdatapb.CohortUpdateOperation, standbyIDs []*clustermetadatapb.ID, expectedOutgoingRule *clustermetadatapb.RuleNumber, coordinatorID *clustermetadatapb.ID) error {
+func (pm *MultiPoolerManager) UpdateConsensusRule(ctx context.Context, operation multipoolermanagerdatapb.CohortUpdateOperation, standbyIDs []*clustermetadatapb.ID, expectedOutgoingDecision *clustermetadatapb.RuleNumber, coordinatorID *clustermetadatapb.ID) error {
 	if err := pm.checkReady(); err != nil {
 		return err
 	}
@@ -414,9 +414,9 @@ func (pm *MultiPoolerManager) UpdateConsensusRule(ctx context.Context, operation
 		return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "operation must be specified")
 	}
 
-	if expectedOutgoingRule == nil {
+	if expectedOutgoingDecision == nil {
 		return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
-			"expected_outgoing_rule is required (compare-and-swap guard)")
+			"expected_outgoing_decision is required (compare-and-swap guard)")
 	}
 
 	// Validate standby IDs using the shared validation function
@@ -446,7 +446,7 @@ func (pm *MultiPoolerManager) UpdateConsensusRule(ctx context.Context, operation
 	if err != nil {
 		return err
 	}
-	currentCohort := pos.GetRule().GetCohortMembers()
+	currentCohort := pos.GetDecision().GetCohortMembers()
 
 	// Check if synchronous replication is configured (i.e. the primary already
 	// has a cohort recorded from a previous Promote/promotion).
@@ -507,7 +507,7 @@ func (pm *MultiPoolerManager) UpdateConsensusRule(ctx context.Context, operation
 	// changing the leader, just amending its cohort. The rule store assigns
 	// a fresh leader_subterm.
 	standbyUpdate := consensus.NewRuleUpdate(
-		expectedOutgoingRule.GetCoordinatorTerm(),
+		expectedOutgoingDecision.GetCoordinatorTerm(),
 		coordID,
 		"replication_config",
 		"UpdateConsensusRule: "+operationName,
@@ -516,8 +516,8 @@ func (pm *MultiPoolerManager) UpdateConsensusRule(ctx context.Context, operation
 		WithCohort(updatedStandbyIDs).
 		WithOperation(operationName).
 		WithPreviousRule(
-			expectedOutgoingRule.GetCoordinatorTerm(),
-			expectedOutgoingRule.GetLeaderSubterm())
+			expectedOutgoingDecision.GetCoordinatorTerm(),
+			expectedOutgoingDecision.GetLeaderSubterm())
 	if _, err := pm.DoUpdateRule(ctx, standbyUpdate); err != nil {
 		return mterrors.Wrap(err, "failed to record replication config history")
 	}
@@ -526,7 +526,7 @@ func (pm *MultiPoolerManager) UpdateConsensusRule(ctx context.Context, operation
 		"operation", operation,
 		"old_cohort", currentCohort,
 		"new_cohort", updatedStandbyIDs,
-		"expected_outgoing_rule", expectedOutgoingRule)
+		"expected_outgoing_decision", expectedOutgoingDecision)
 
 	// The committed rule changed, so recalc the routing role from the fresh
 	// consensus snapshot. Today this is a no-op: UpdateConsensusRule only amends

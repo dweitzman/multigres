@@ -37,7 +37,7 @@ func primaryConsensusStatus(id *clustermetadatapb.ID, term int64) *clustermetada
 	return &clustermetadatapb.ConsensusStatus{
 		Id: id,
 		CurrentPosition: &clustermetadatapb.PoolerPosition{
-			Rule: &clustermetadatapb.ShardRule{
+			Decision: &clustermetadatapb.ShardRule{
 				RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: term},
 				LeaderId:   id,
 			},
@@ -283,7 +283,7 @@ func TestAnalysisGenerator_GenerateShardAnalyses_Replica(t *testing.T) {
 	assert.NotEqual(t, commonconsensus.ConsensusRoleLeader, commonconsensus.SelfConsensusRole(replicaAnalysis[0].Health().GetConsensusStatus()))
 
 	// Primary health is now a shard-level field
-	assert.NotNil(t, sa.HighestShardRule.GetLeaderId(), "should have topology primary ID populated")
+	assert.NotNil(t, sa.HighestDecidedRule.GetLeaderId(), "should have topology primary ID populated")
 }
 
 func TestAnalysisGenerator_GenerateShardAnalyses_MultipleTableGroups(t *testing.T) {
@@ -415,7 +415,7 @@ func TestPopulatePrimaryInfo_NoPrimaryInShard(t *testing.T) {
 	require.NoError(t, err)
 
 	// When no primary exists in the shard, topology primary fields should be nil.
-	assert.Nil(t, sa.HighestShardRule.GetLeaderId())
+	assert.Nil(t, sa.HighestDecidedRule.GetLeaderId())
 }
 
 // Task 7: Test for primary with postgres down
@@ -474,7 +474,7 @@ func TestPopulatePrimaryInfo_PrimaryPostgresDown(t *testing.T) {
 	require.NotNil(t, analysis)
 
 	// HighestTermDiscoveredPrimaryID should be set even when postgres is down
-	assert.NotNil(t, sa.HighestShardRule.GetLeaderId())
+	assert.NotNil(t, sa.HighestDecidedRule.GetLeaderId())
 	// But PrimaryReachable should be false because postgres is down
 	assert.False(t, leaderServing(sa), "primary should NOT be serving when postgres is down")
 }
@@ -549,8 +549,8 @@ func TestPopulatePrimaryInfo_DemotedViaRecruit(t *testing.T) {
 		gen := NewAnalysisGenerator(ps, nil)
 		sa, err := gen.GenerateShardAnalysis(shardKey)
 		require.NoError(t, err)
-		assert.NotNil(t, sa.HighestShardRule.GetLeaderId(), "demoted primary should still be tracked (primary term > 0)")
-		assert.Equal(t, "primary", sa.HighestShardRule.GetLeaderId().Name)
+		assert.NotNil(t, sa.HighestDecidedRule.GetLeaderId(), "demoted primary should still be tracked (primary term > 0)")
+		assert.Equal(t, "primary", sa.HighestDecidedRule.GetLeaderId().Name)
 		assert.False(t, leaderServing(sa), "demoted primary reporting REPLICA should not be serving")
 	})
 
@@ -595,8 +595,8 @@ func TestPopulatePrimaryInfo_DemotedViaRecruit(t *testing.T) {
 		gen := NewAnalysisGenerator(ps, nil)
 		sa, err := gen.GenerateShardAnalysis(shardKey)
 		require.NoError(t, err)
-		assert.NotNil(t, sa.HighestShardRule.GetLeaderId(), "stale-topology former primary should be found via ConsensusStatus")
-		assert.Equal(t, "former-primary", sa.HighestShardRule.GetLeaderId().Name)
+		assert.NotNil(t, sa.HighestDecidedRule.GetLeaderId(), "stale-topology former primary should be found via ConsensusStatus")
+		assert.Equal(t, "former-primary", sa.HighestDecidedRule.GetLeaderId().Name)
 		assert.False(t, leaderServing(sa), "demoted primary reporting REPLICA should not be serving")
 	})
 }
@@ -645,8 +645,8 @@ func TestGenerateShardAnalysis_LeaderNamedButAbsentFromStore(t *testing.T) {
 	sa, err := gen.GenerateShardAnalysis(shardKey)
 	require.NoError(t, err)
 
-	require.NotNil(t, sa.HighestShardRule.GetLeaderId(), "consensus must still identify the leader")
-	assert.Equal(t, "absent-leader", sa.HighestShardRule.GetLeaderId().Name)
+	require.NotNil(t, sa.HighestDecidedRule.GetLeaderId(), "consensus must still identify the leader")
+	assert.Equal(t, "absent-leader", sa.HighestDecidedRule.GetLeaderId().Name)
 	assert.Nil(t, sa.Leader, "no health state exists for the named leader")
 	assert.False(t, leaderServing(sa), "a leader with no health cannot be serving")
 }
@@ -696,10 +696,10 @@ func TestGenerateShardAnalysis_StaleLeaderSupersededViaFollowerRule(t *testing.T
 	sa, err := gen.GenerateShardAnalysis(shardKey)
 	require.NoError(t, err)
 
-	require.NotNil(t, sa.HighestShardRule.GetLeaderId())
-	assert.Equal(t, "new-leader", sa.HighestShardRule.GetLeaderId().Name,
+	require.NotNil(t, sa.HighestDecidedRule.GetLeaderId())
+	assert.Equal(t, "new-leader", sa.HighestDecidedRule.GetLeaderId().Name,
 		"the leader named by the follower's higher-term rule must win over the stale self-claiming leader")
-	assert.Equal(t, int64(6), sa.HighestShardRule.GetRuleNumber().GetCoordinatorTerm())
+	assert.Equal(t, int64(6), sa.HighestDecidedRule.GetRuleNumber().GetCoordinatorTerm())
 	assert.Nil(t, sa.Leader, "the new leader has no health state yet, so Leader is nil")
 }
 
@@ -742,7 +742,7 @@ func TestPopulatePrimaryInfo_PicksHighestPrimaryTerm(t *testing.T) {
 			Id:             newPrimaryID,
 			TermRevocation: &clustermetadatapb.TermRevocation{RevokedBelowTerm: 11},
 			CurrentPosition: &clustermetadatapb.PoolerPosition{
-				Rule: &clustermetadatapb.ShardRule{
+				Decision: &clustermetadatapb.ShardRule{
 					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 6},
 					LeaderId:   newPrimaryID,
 				},
@@ -763,7 +763,7 @@ func TestPopulatePrimaryInfo_PicksHighestPrimaryTerm(t *testing.T) {
 			Id:             stalePrimaryID,
 			TermRevocation: &clustermetadatapb.TermRevocation{RevokedBelowTerm: 10},
 			CurrentPosition: &clustermetadatapb.PoolerPosition{
-				Rule: &clustermetadatapb.ShardRule{
+				Decision: &clustermetadatapb.ShardRule{
 					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
 					LeaderId:   stalePrimaryID,
 				},
@@ -798,8 +798,8 @@ func TestPopulatePrimaryInfo_PicksHighestPrimaryTerm(t *testing.T) {
 	// The shard-level topology primary must point to the new (correct) primary, not the stale one.
 	// If it pointed to the stale primary (postgres dead), PrimaryReachable would be false
 	// and LeaderIsDeadAnalyzer would falsely trigger a new election.
-	require.NotNil(t, sa.HighestShardRule.GetLeaderId())
-	assert.Equal(t, "new-primary", sa.HighestShardRule.GetLeaderId().Name,
+	require.NotNil(t, sa.HighestDecidedRule.GetLeaderId())
+	assert.Equal(t, "new-primary", sa.HighestDecidedRule.GetLeaderId().Name,
 		"should pick primary with highest PrimaryTerm")
 	assert.True(t, leaderServing(sa),
 		"primary must appear reachable when new primary has postgres running")
@@ -812,7 +812,7 @@ func TestDetectOtherPrimary(t *testing.T) {
 	// analysis. Leadership is the highest known consensus rule, regardless of
 	// reachability.
 	leaderOf := func(sa *ShardAnalysis) (string, int64) {
-		return sa.HighestShardRule.GetLeaderId().GetName(), sa.HighestShardRule.GetRuleNumber().GetCoordinatorTerm()
+		return sa.HighestDecidedRule.GetLeaderId().GetName(), sa.HighestDecidedRule.GetRuleNumber().GetCoordinatorTerm()
 	}
 
 	t.Run("highest-rule primary wins among two", func(t *testing.T) {
@@ -918,7 +918,7 @@ func setupMultiplePrimariesStoreWithReachability(t *testing.T, primaries []prima
 				Id:             id,
 				TermRevocation: &clustermetadatapb.TermRevocation{RevokedBelowTerm: p.consensusTerm},
 				CurrentPosition: &clustermetadatapb.PoolerPosition{
-					Rule: &clustermetadatapb.ShardRule{
+					Decision: &clustermetadatapb.ShardRule{
 						RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: p.primaryTerm},
 						LeaderId:   id,
 					},

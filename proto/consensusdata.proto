@@ -79,29 +79,31 @@ message PromoteResponse {
 
 // SetPrimaryRequest tells a pooler about the current leader and the rule
 // the caller knows the cluster is at. The pooler compares the supplied rule
-// against its own; if the supplied rule is strictly higher and the supplied
-// primary_revocation is at least as high as the revocation recorded for the
-// previously-known primary, it applies the change (standby: update
-// primary_conninfo; stale primary: demote). Otherwise it returns success
-// without changes. Idempotent under retries and safe against out-of-order
-// delivery from stale recovery rounds.
+// against its own recorded revocation (the same TermRevocation accepted via
+// Recruit) using the standard not-revoked check: applied when the rule is
+// not revoked (strictly exceeds outgoing_decision, or matches an accepted
+// propagation_intent), otherwise it returns success without changes.
+// Idempotent under retries and safe against out-of-order delivery from stale
+// recovery rounds — a later, unrelated Recruit round cannot invalidate an
+// already-accepted, more-advanced rule, since the not-revoked override keys
+// off rule position, not revocation recency.
 //
 // replication_primary.primary is treated as eventually-consistent discovery
-// information about where to find the primary that authority (rule +
-// primary_revocation) names. The pooler does not require primary.id to match
-// rule.leader_id — a propagation flow legitimately points followers at a
-// finalizing node distinct from the dead leader recorded in the rule.
+// information about where to find the primary that the (not-revoked) rule
+// names. The pooler does not require primary.id to match rule.leader_id when
+// the rule matches an accepted propagation_intent — a propagation flow
+// legitimately points followers at a finalizing node distinct from the dead
+// leader recorded in the rule.
 message SetPrimaryRequest {
-  // The (rule, primary, rewind_ready, primary_revocation) the follower should
-  // adopt. Contact info for the leader is replication_primary.primary (host +
-  // postgres_port used to rewrite primary_conninfo); the rule is
-  // replication_primary.rule, which the pooler compares against its own
-  // observed rule (by RuleNumber) and only applies when strictly higher.
+  // The (rule, primary, rewind_ready) the follower should adopt. Contact info
+  // for the leader is replication_primary.primary (host + postgres_port used
+  // to rewrite primary_conninfo); the rule is replication_primary.rule, which
+  // the pooler compares against its own observed rule (by RuleNumber) and
+  // only applies when strictly higher and not revoked.
   // replication_primary.rewind_ready relays whether the leader has
   // checkpointed onto its current timeline: a diverged follower defers its
   // pg_rewind until it is true, but sets up primary_conninfo and attempts to
-  // stream regardless. replication_primary.primary_revocation is required and
-  // gates staleness as described above.
+  // stream regardless.
   clustermetadata.ReplicationPrimary replication_primary = 3;
 }
 

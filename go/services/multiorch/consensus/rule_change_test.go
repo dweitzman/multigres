@@ -57,7 +57,7 @@ func makePoolerState(cell, name string) *multiorchdatapb.PoolerHealthState {
 		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 			Id: id,
 			CurrentPosition: &clustermetadatapb.PoolerPosition{
-				Rule: &clustermetadatapb.ShardRule{
+				Decision: &clustermetadatapb.ShardRule{
 					RuleNumber: &clustermetadatapb.RuleNumber{},
 				},
 			},
@@ -71,7 +71,7 @@ var testInitiatedAt = timestamppb.New(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC
 
 // newTestRevocation builds a TermRevocation suitable for rule_change.Run from
 // the given cohort. Tests that don't care about specific revocation contents
-// (term, outgoing_rule, etc.) use this to satisfy Run's "revocation is required"
+// (term, outgoing_decision, etc.) use this to satisfy Run's "revocation is required"
 // contract; tests that need richer state construct their own.
 func newTestRevocation(t *testing.T, coord *Coordinator, cohort []*multiorchdatapb.PoolerHealthState) *clustermetadatapb.TermRevocation {
 	t.Helper()
@@ -167,9 +167,9 @@ func TestBuildFailoverProposal(t *testing.T) {
 
 	t.Run("picks first eligible leader", func(t *testing.T) {
 		result := commonconsensus.RecruitmentResult{
-			TermRevocation:  rev,
-			OutgoingRule:    outgoingRule,
-			EligibleLeaders: []*clustermetadatapb.ConsensusStatus{makeCS("mp1"), makeCS("mp2")},
+			TermRevocation:   rev,
+			OutgoingDecision: outgoingRule,
+			EligibleLeaders:  []*clustermetadatapb.ConsensusStatus{makeCS("mp1"), makeCS("mp2")},
 		}
 
 		proposal, err := buildFailoverProposal(result, addressByID)
@@ -180,11 +180,11 @@ func TestBuildFailoverProposal(t *testing.T) {
 		assert.Equal(t, "mp1", proposal.GetProposedRule().GetLeaderId().GetName())
 	})
 
-	t.Run("no OutgoingRule returns error", func(t *testing.T) {
+	t.Run("no OutgoingDecision returns error", func(t *testing.T) {
 		result := commonconsensus.RecruitmentResult{
-			TermRevocation:  rev,
-			OutgoingRule:    nil,
-			EligibleLeaders: []*clustermetadatapb.ConsensusStatus{makeCS("mp1")},
+			TermRevocation:   rev,
+			OutgoingDecision: nil,
+			EligibleLeaders:  []*clustermetadatapb.ConsensusStatus{makeCS("mp1")},
 		}
 
 		_, err := buildFailoverProposal(result, addressByID)
@@ -194,9 +194,9 @@ func TestBuildFailoverProposal(t *testing.T) {
 
 	t.Run("no EligibleLeaders returns error", func(t *testing.T) {
 		result := commonconsensus.RecruitmentResult{
-			TermRevocation:  rev,
-			OutgoingRule:    outgoingRule,
-			EligibleLeaders: nil,
+			TermRevocation:   rev,
+			OutgoingDecision: outgoingRule,
+			EligibleLeaders:  nil,
 		}
 
 		_, err := buildFailoverProposal(result, addressByID)

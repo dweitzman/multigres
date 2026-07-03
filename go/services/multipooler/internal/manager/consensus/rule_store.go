@@ -105,7 +105,7 @@ func NewRuleStore(
 func (rs *ruleStore) cacheRuleObservation(pos *clustermetadatapb.PoolerPosition) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
-	if rs.lastPos != nil && pos != nil && consensus.CompareRuleNumbers(pos.GetRule().GetRuleNumber(), rs.lastPos.GetRule().GetRuleNumber()) < 0 {
+	if rs.lastPos != nil && pos != nil && consensus.CompareRuleNumbers(pos.GetDecision().GetRuleNumber(), rs.lastPos.GetDecision().GetRuleNumber()) < 0 {
 		// This position observation is stale. Ignore it.
 		return
 	}
@@ -125,16 +125,16 @@ func (rs *ruleStore) CachedPosition() *clustermetadatapb.PoolerPosition {
 // without the action lock.
 func (rs *ruleStore) HasInconsistentGUC(ctx context.Context) bool {
 	pos := rs.CachedPosition()
-	if pos.GetRule().GetDurabilityPolicy() == nil {
+	if pos.GetDecision().GetDurabilityPolicy() == nil {
 		return false
 	}
-	policy, err := consensus.NewPolicyFromProto(pos.GetRule().GetDurabilityPolicy())
+	policy, err := consensus.NewPolicyFromProto(pos.GetDecision().GetDurabilityPolicy())
 	if err != nil {
 		return false
 	}
 	needs, err := rs.syncStandby.NeedsApply(ctx, consensus.PolicyWithCohort{
 		Policy: policy,
-		Cohort: pos.GetRule().GetCohortMembers(),
+		Cohort: pos.GetDecision().GetCohortMembers(),
 	})
 	if err != nil {
 		return false
@@ -153,16 +153,16 @@ func (rs *ruleStore) ReconcileGUC(ctx context.Context, inRecovery bool) error {
 	if err != nil {
 		return fmt.Errorf("ReconcileGUC: %w", err)
 	}
-	if pos.GetRule().GetDurabilityPolicy() == nil {
+	if pos.GetDecision().GetDurabilityPolicy() == nil {
 		return nil
 	}
-	policy, err := consensus.NewPolicyFromProto(pos.GetRule().GetDurabilityPolicy())
+	policy, err := consensus.NewPolicyFromProto(pos.GetDecision().GetDurabilityPolicy())
 	if err != nil {
 		return fmt.Errorf("ReconcileGUC: invalid durability policy: %w", err)
 	}
 	return rs.syncStandby.SetPolicy(lockedCtx, consensus.PolicyWithCohort{
 		Policy: policy,
-		Cohort: pos.GetRule().GetCohortMembers(),
+		Cohort: pos.GetDecision().GetCohortMembers(),
 	})
 }
 
@@ -578,7 +578,7 @@ func (rs *ruleStore) UpdateRule(ctx context.Context, update *RuleUpdateBuilder) 
 		return nil, err
 	}
 
-	currentRule := current.GetRule()
+	currentRule := current.GetDecision()
 	currentTerm := currentRule.GetRuleNumber().GetCoordinatorTerm()
 	currentSubterm := currentRule.GetRuleNumber().GetLeaderSubterm()
 
@@ -990,8 +990,8 @@ func buildPoolerPosition(
 	}
 
 	return &clustermetadatapb.PoolerPosition{
-		Rule: rule,
-		Lsn:  lsn,
+		Decision: rule,
+		Lsn:      lsn,
 	}, nil
 }
 

@@ -230,7 +230,7 @@ func (a *applyRuleChangeCmd) buildRequest() (*multiadminpb.ApplyCertifiedRuleCha
 		req.CertSource = &multiadminpb.ApplyCertifiedRuleChangeRequest_Cert{
 			Cert: &clustermetadatapb.ExternallyCertifiedRevocation{
 				TermRevocation: &clustermetadatapb.TermRevocation{
-					OutgoingRule: &clustermetadatapb.RuleNumber{
+					OutgoingDecision: &clustermetadatapb.RuleNumber{
 						CoordinatorTerm: a.outgoingRuleTerm.Get(),
 						LeaderSubterm:   a.outgoingLeaderSubterm.Get(),
 					},
@@ -273,8 +273,8 @@ func (a *applyRuleChangeCmd) run(cmd *cobra.Command, _ []string) error {
 		resp.GetInstalledRule().GetLeaderId().GetCell(),
 		resp.GetInstalledRule().GetLeaderId().GetName(),
 	)
-	cmd.Printf("Cert outgoing_rule_term=%d, frozen_lsn=%s\n",
-		resp.GetCertUsed().GetTermRevocation().GetOutgoingRule().GetCoordinatorTerm(),
+	cmd.Printf("Cert outgoing_decision_term=%d, frozen_lsn=%s\n",
+		resp.GetCertUsed().GetTermRevocation().GetOutgoingDecision().GetCoordinatorTerm(),
 		resp.GetCertUsed().GetFrozenLsn(),
 	)
 	return nil
@@ -308,8 +308,8 @@ func confirm(cmd *cobra.Command, req *multiadminpb.ApplyCertifiedRuleChangeReque
 	cmd.Printf("Durability:  %s\n", req.GetProposedRule().GetDurabilityPolicy().GetPolicyName())
 	switch cs := req.GetCertSource().(type) {
 	case *multiadminpb.ApplyCertifiedRuleChangeRequest_Cert:
-		cmd.Printf("Cert mode:   explicit (outgoing_rule_term=%d, frozen_lsn=%s)\n",
-			cs.Cert.GetTermRevocation().GetOutgoingRule().GetCoordinatorTerm(),
+		cmd.Printf("Cert mode:   explicit (outgoing_decision_term=%d, frozen_lsn=%s)\n",
+			cs.Cert.GetTermRevocation().GetOutgoingDecision().GetCoordinatorTerm(),
 			cs.Cert.GetFrozenLsn())
 	case *multiadminpb.ApplyCertifiedRuleChangeRequest_UnsafeDeriveCert:
 		cmd.Printf("Cert mode:   UNSAFE derive from reachable cohort\n")
