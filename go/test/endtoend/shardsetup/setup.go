@@ -34,6 +34,7 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
@@ -1302,8 +1303,8 @@ func checkBootstrapStatus(ctx context.Context, t *testing.T, setup *ShardSetup) 
 // startMultipoolerInstances starts pgctld and multipooler processes without initializing postgres.
 // Use this for bootstrap tests where multiorch will initialize the shard.
 //
-// TODO: Consider parallelizing Start() calls using a WaitGroup for faster startup.
-// Currently processes are started sequentially which adds latency.
+// Each instance's pgctld+multipooler start sequence is independent of the others,
+// so they run concurrently rather than one at a time.
 func startMultipoolerInstances(ctx context.Context, t *testing.T, instances []*MultipoolerInstance, deferMultipoolerStart bool) {
 	t.Helper()
 
@@ -1315,49 +1316,53 @@ func startMultipoolerInstances(ctx context.Context, t *testing.T, instances []*M
 		attribute.Bool("defer_multipooler_start", deferMultipoolerStart),
 	)
 
+	var g errgroup.Group
 	for _, inst := range instances {
-		pgctld := inst.Pgctld
-		multipooler := inst.Multipooler
+		g.Go(func() error {
+			pgctld := inst.Pgctld
+			multipooler := inst.Multipooler
 
-		// Create child span for each instance
-		instCtx, instSpan := telemetry.Tracer().Start(ctx, "shardsetup/startInstance")
-		instSpan.SetAttributes(
-			attribute.String("instance.name", inst.Name),
-			attribute.Int("pgctld.grpc_port", pgctld.GrpcPort),
-			attribute.Int("pg.port", pgctld.PgPort),
-			attribute.Int("multipooler.grpc_port", multipooler.GrpcPort),
-		)
+			// Create child span for each instance
+			instCtx, instSpan := telemetry.Tracer().Start(ctx, "shardsetup/startInstance")
+			defer instSpan.End()
+			instSpan.SetAttributes(
+				attribute.String("instance.name", inst.Name),
+				attribute.Int("pgctld.grpc_port", pgctld.GrpcPort),
+				attribute.Int("pg.port", pgctld.PgPort),
+				attribute.Int("multipooler.grpc_port", multipooler.GrpcPort),
+			)
 
-		// Start pgctld (postgres will be initialized later, or by multiorch for bootstrap)
-		if err := pgctld.Start(instCtx, t); err != nil {
-			instSpan.RecordError(err)
-			instSpan.SetStatus(codes.Error, "pgctld start failed")
-			instSpan.End()
-			t.Fatalf("failed to start pgctld for %s: %v", inst.Name, err)
-		}
-		t.Logf("Started pgctld for %s (gRPC=%d, PG=%d)", inst.Name, pgctld.GrpcPort, pgctld.PgPort)
+			// Start pgctld (postgres will be initialized later, or by multiorch for bootstrap)
+			if err := pgctld.Start(instCtx, t); err != nil {
+				instSpan.RecordError(err)
+				instSpan.SetStatus(codes.Error, "pgctld start failed")
+				return fmt.Errorf("failed to start pgctld for %s: %w", inst.Name, err)
+			}
+			t.Logf("Started pgctld for %s (gRPC=%d, PG=%d)", inst.Name, pgctld.GrpcPort, pgctld.PgPort)
 
-		if deferMultipoolerStart {
-			t.Logf("Multipooler %s not started (DeferMultipoolerStart); test will start it", inst.Name)
-			instSpan.End()
-			continue
-		}
+			if deferMultipoolerStart {
+				t.Logf("Multipooler %s not started (DeferMultipoolerStart); test will start it", inst.Name)
+				return nil
+			}
 
-		// Start multipooler
-		if err := multipooler.Start(instCtx, t); err != nil {
-			instSpan.RecordError(err)
-			instSpan.SetStatus(codes.Error, "multipooler start failed")
-			instSpan.End()
-			t.Fatalf("failed to start multipooler for %s: %v", inst.Name, err)
-		}
+			// Start multipooler
+			if err := multipooler.Start(instCtx, t); err != nil {
+				instSpan.RecordError(err)
+				instSpan.SetStatus(codes.Error, "multipooler start failed")
+				return fmt.Errorf("failed to start multipooler for %s: %w", inst.Name, err)
+			}
 
-		// Wait for multipooler to be ready, recording how long it took.
-		start := time.Now()
-		WaitForManagerReady(t, multipooler)
-		testtiming.Record(t, "manager ready: "+multipooler.Name, time.Since(start), testconst.ManagerStartTimeout)
-		t.Logf("Multipooler %s is ready (uninitialized)", inst.Name)
+			// Wait for multipooler to be ready, recording how long it took.
+			start := time.Now()
+			WaitForManagerReady(t, multipooler)
+			testtiming.Record(t, "manager ready: "+multipooler.Name, time.Since(start), testconst.ManagerStartTimeout)
+			t.Logf("Multipooler %s is ready (uninitialized)", inst.Name)
+			return nil
+		})
+	}
 
-		instSpan.End()
+	if err := g.Wait(); err != nil {
+		t.Fatalf("%v", err)
 	}
 
 	t.Logf("Started %d processes without initialization (ready for bootstrap)", len(instances))
