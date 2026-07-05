@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -527,7 +528,10 @@ func (s *ShardSetup) Cleanup(testsFailed bool) {
 		return
 	}
 
+	var logMu sync.Mutex
 	logf := func(format string, args ...any) {
+		logMu.Lock()
+		defer logMu.Unlock()
 		fmt.Fprintf(os.Stderr, format+"\n", args...)
 	}
 
@@ -535,25 +539,39 @@ func (s *ShardSetup) Cleanup(testsFailed bool) {
 	// For pgctld this issues pg_ctl stop via gRPC, which releases System V
 	// shared memory segments. The gRPC call must happen while the context
 	// is still active so it can reach the running pgctld.
+	//
+	// Each pooler instance (and multigateway/multiadmin/multiorch) is
+	// independent of the others, so terminate them concurrently. Within a
+	// single instance, multipooler must still stop before pgctld.
+	var wg sync.WaitGroup
 	for _, inst := range s.Multipoolers {
-		if inst.Multipooler != nil {
-			inst.Multipooler.TerminateGracefully(logf, 5*time.Second)
-		}
-		if inst.Pgctld != nil {
-			// pgctld needs longer: stopPostgreSQL issues pg_ctl stop
-			// via gRPC (10s timeout) before SIGTERM is sent.
-			inst.Pgctld.TerminateGracefully(logf, 15*time.Second)
-		}
+		wg.Go(func() {
+			if inst.Multipooler != nil {
+				inst.Multipooler.TerminateGracefully(logf, 5*time.Second)
+			}
+			if inst.Pgctld != nil {
+				// pgctld needs longer: stopPostgreSQL issues pg_ctl stop
+				// via gRPC (10s timeout) before SIGTERM is sent.
+				inst.Pgctld.TerminateGracefully(logf, 15*time.Second)
+			}
+		})
 	}
 	if s.Multigateway != nil {
-		s.Multigateway.TerminateGracefully(logf, 5*time.Second)
+		wg.Go(func() {
+			s.Multigateway.TerminateGracefully(logf, 5*time.Second)
+		})
 	}
 	if s.Multiadmin != nil {
-		s.Multiadmin.TerminateGracefully(logf, 5*time.Second)
+		wg.Go(func() {
+			s.Multiadmin.TerminateGracefully(logf, 5*time.Second)
+		})
 	}
 	for _, mo := range s.MultiOrchInstances {
-		mo.TerminateGracefully(logf, 5*time.Second)
+		wg.Go(func() {
+			mo.TerminateGracefully(logf, 5*time.Second)
+		})
 	}
+	wg.Wait()
 
 	// Cancel the context to terminate any remaining processes. Processes
 	// wrapped in run_in_test.sh (etcd) are started with
