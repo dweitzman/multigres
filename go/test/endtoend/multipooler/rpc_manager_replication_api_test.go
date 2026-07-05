@@ -271,7 +271,7 @@ func TestReplicationAPIs(t *testing.T) {
 		setupPoolerTest(t, setup, WithDropTables("test_receiver_only"), WithResetGuc("synchronous_commit"))
 		_, err := primaryPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "ALTER SYSTEM SET synchronous_commit = 'local'", 0)
 		require.NoError(t, err, "Failed to set synchronous_commit to local")
-		shardsetup.ReloadConfig(context.Background(), t, primaryPoolerClient, "primary")
+		require.NoError(t, shardsetup.ReloadConfig(context.Background(), primaryPoolerClient, "primary"))
 
 		// Verify replication is working by checking pg_stat_wal_receiver
 		t.Log("Verifying replication is streaming...")
@@ -450,7 +450,7 @@ func TestReplicationAPIs(t *testing.T) {
 		setupPoolerTest(t, setup, WithDropTables("test_replay_and_receiver"), WithResetGuc("synchronous_commit"))
 		_, err := primaryPoolerClient.ExecuteQuery(utils.WithShortDeadline(t), "ALTER SYSTEM SET synchronous_commit = 'local'", 0)
 		require.NoError(t, err, "Failed to set synchronous_commit to local")
-		shardsetup.ReloadConfig(context.Background(), t, primaryPoolerClient, "primary")
+		require.NoError(t, shardsetup.ReloadConfig(context.Background(), primaryPoolerClient, "primary"))
 		// Verify replication is working
 		t.Log("Verifying replication is streaming...")
 		require.Eventually(t, func() bool {

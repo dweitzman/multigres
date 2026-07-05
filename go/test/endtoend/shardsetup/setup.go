@@ -27,6 +27,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1543,40 +1544,55 @@ func (s *ShardSetup) ResetToCleanState(t *testing.T) {
 		return
 	}
 
-	// Stop multiorch instances first (clean state = not running)
+	// Stop multiorch instances first (clean state = not running). Independent
+	// of each other, so run concurrently.
+	var wg sync.WaitGroup
 	for name, mo := range s.MultiOrchInstances {
 		if mo.IsRunning() {
-			mo.TerminateGracefully(t.Logf, 5*time.Second)
-			t.Logf("Reset: Stopped multiorch %s", name)
+			wg.Go(func() {
+				mo.TerminateGracefully(t.Logf, 5*time.Second)
+				t.Logf("Reset: Stopped multiorch %s", name)
+			})
 		}
 	}
+	wg.Wait()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	// Each multipooler instance's GUC restore is independent of the others,
+	// so run them concurrently rather than one at a time.
+	var g errgroup.Group
 	for name, inst := range s.Multipoolers {
-		client, err := NewMultipoolerClient(inst.Multipooler.GrpcPort)
-		if err != nil {
-			t.Logf("Reset: Failed to connect to %s: %v", name, err)
-			continue
-		}
+		g.Go(func() error {
+			client, err := NewMultipoolerClient(inst.Multipooler.GrpcPort)
+			if err != nil {
+				t.Logf("Reset: Failed to connect to %s: %v", name, err)
+				return nil
+			}
+			defer client.Close()
 
-		isPrimary := name == s.PrimaryName
+			isPrimary := name == s.PrimaryName
 
-		// Restore GUCs to baseline values
-		if baselineGucs, ok := s.BaselineGucs[name]; ok && len(baselineGucs) > 0 {
-			RestoreGUCs(ctx, t, client.Pooler, baselineGucs, name)
-		}
+			// Restore GUCs to baseline values
+			if baselineGucs, ok := s.BaselineGucs[name]; ok && len(baselineGucs) > 0 {
+				if err := RestoreGUCs(ctx, t, client.Pooler, baselineGucs, name); err != nil {
+					return fmt.Errorf("Reset: %s: %w", name, err)
+				}
+			}
 
-		// Resume WAL replay if paused (for standbys)
-		if !isPrimary {
-			_, _ = client.Pooler.ExecuteQuery(ctx, "SELECT pg_wal_replay_resume()", 0)
-		}
+			// Resume WAL replay if paused (for standbys)
+			if !isPrimary {
+				_, _ = client.Pooler.ExecuteQuery(ctx, "SELECT pg_wal_replay_resume()", 0)
+			}
 
-		// Note: We don't reset term here. Term can only increase and there's no
-		// safe way to reset it without an RPC. Tests should handle any starting term.
-
-		client.Close()
+			// Note: We don't reset term here. Term can only increase and there's no
+			// safe way to reset it without an RPC. Tests should handle any starting term.
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		t.Fatalf("%v", err)
 	}
 }
 
@@ -1897,56 +1913,80 @@ func (s *ShardSetup) SetupTest(t *testing.T, opts ...SetupTestOption) {
 		s.pauseReplicationOnStandbys(t, ctx)
 	}
 
-	// Start multiorch instances
+	// Start multiorch instances. Independent of each other, so run concurrently.
 	// TODO (@rafa): once we have a way to disable multiorch on a shard, we don't need
 	// this big hammer of stopping / starting on each test.
-	for name, mo := range s.MultiOrchInstances {
-		if err := mo.Start(ctx, t); err != nil {
-			t.Fatalf("SetupTest: failed to start multiorch %s: %v", name, err)
+	{
+		var g errgroup.Group
+		for name, mo := range s.MultiOrchInstances {
+			g.Go(func() error {
+				if err := mo.Start(ctx, t); err != nil {
+					return fmt.Errorf("SetupTest: failed to start multiorch %s: %w", name, err)
+				}
+				t.Logf("SetupTest: Started multiorch '%s': gRPC=%d, HTTP=%d", name, mo.GrpcPort, mo.HttpPort)
+				return nil
+			})
 		}
-		t.Logf("SetupTest: Started multiorch '%s': gRPC=%d, HTTP=%d", name, mo.GrpcPort, mo.HttpPort)
+		if err := g.Wait(); err != nil {
+			t.Fatalf("%v", err)
+		}
 	}
 
 	// Register cleanup handler to restore to baseline state.
 	// Note: Processes are still running during t.Cleanup() - they're only stopped later
 	// by ShardSetup.Cleanup() which cancels s.ctx.
 	t.Cleanup(func() {
-		// Stop multiorch instances first (clean state = multiorch not running)
-		// Use explicit termination here since multiorch should be stopped before restoring state.
+		// Stop multiorch instances first (clean state = multiorch not running).
+		// Use explicit termination here since multiorch should be stopped before
+		// restoring state. Independent of each other, so run concurrently.
+		var stopWg sync.WaitGroup
 		for name, mo := range s.MultiOrchInstances {
 			if mo.IsRunning() {
-				mo.TerminateGracefully(t.Logf, 5*time.Second)
-				t.Logf("Cleanup: Stopped multiorch %s", name)
+				stopWg.Go(func() {
+					mo.TerminateGracefully(t.Logf, 5*time.Second)
+					t.Logf("Cleanup: Stopped multiorch %s", name)
+				})
 			}
 		}
+		stopWg.Wait()
 
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cleanupCancel()
 
+		// Each multipooler instance's GUC restore is independent of the others,
+		// so run them concurrently rather than one at a time.
+		var g errgroup.Group
 		for name, inst := range s.Multipoolers {
-			client, err := NewMultipoolerClient(inst.Multipooler.GrpcPort)
-			if err != nil {
-				t.Logf("Cleanup: failed to connect to %s: %v", name, err)
-				continue
-			}
+			g.Go(func() error {
+				client, err := NewMultipoolerClient(inst.Multipooler.GrpcPort)
+				if err != nil {
+					t.Logf("Cleanup: failed to connect to %s: %v", name, err)
+					return nil
+				}
+				defer client.Close()
 
-			isPrimary := name == s.PrimaryName
+				isPrimary := name == s.PrimaryName
 
-			// Restore GUCs to baseline values
-			if baselineGucs, ok := s.BaselineGucs[name]; ok && len(baselineGucs) > 0 {
-				RestoreGUCs(cleanupCtx, t, client.Pooler, baselineGucs, name)
-			}
+				// Restore GUCs to baseline values
+				if baselineGucs, ok := s.BaselineGucs[name]; ok && len(baselineGucs) > 0 {
+					if err := RestoreGUCs(cleanupCtx, t, client.Pooler, baselineGucs, name); err != nil {
+						return fmt.Errorf("Cleanup: %s: %w", name, err)
+					}
+				}
 
-			// Always resume WAL replay (must be after GUC restoration)
-			// This ensures we leave the system in a good state even if tests paused replay.
-			if !isPrimary {
-				_, _ = client.Pooler.ExecuteQuery(cleanupCtx, "SELECT pg_wal_replay_resume()", 0)
-			}
+				// Always resume WAL replay (must be after GUC restoration)
+				// This ensures we leave the system in a good state even if tests paused replay.
+				if !isPrimary {
+					_, _ = client.Pooler.ExecuteQuery(cleanupCtx, "SELECT pg_wal_replay_resume()", 0)
+				}
 
-			// Note: We don't reset term here. Term can only increase and there's no
-			// safe way to reset it without an RPC. Tests should handle any starting term.
-
-			client.Close()
+				// Note: We don't reset term here. Term can only increase and there's no
+				// safe way to reset it without an RPC. Tests should handle any starting term.
+				return nil
+			})
+		}
+		if err := g.Wait(); err != nil {
+			t.Fatalf("%v", err)
 		}
 
 		// Validate cleanup worked.
@@ -1971,7 +2011,9 @@ func (s *ShardSetup) breakReplication(t *testing.T, ctx context.Context) {
 		if err == nil {
 			_, _ = client.Pooler.ExecuteQuery(ctx, "ALTER SYSTEM RESET synchronous_standby_names", 0)
 			_, _ = client.Pooler.ExecuteQuery(ctx, "ALTER SYSTEM RESET synchronous_commit", 0)
-			ReloadConfig(ctx, t, client.Pooler, s.PrimaryName)
+			if err := ReloadConfig(ctx, client.Pooler, s.PrimaryName); err != nil {
+				t.Fatalf("breakReplication: %v", err)
+			}
 			client.Close()
 			t.Logf("SetupTest: Cleared synchronous_standby_names on primary %s", s.PrimaryName)
 		}
@@ -1990,7 +2032,9 @@ func (s *ShardSetup) breakReplication(t *testing.T, ctx context.Context) {
 		}
 
 		_, _ = client.Pooler.ExecuteQuery(ctx, "ALTER SYSTEM RESET primary_conninfo", 0)
-		ReloadConfig(ctx, t, client.Pooler, name)
+		if err := ReloadConfig(ctx, client.Pooler, name); err != nil {
+			t.Fatalf("breakReplication: %v", err)
+		}
 
 		// Wait for the WAL receiver to stop. ReloadConfig has already confirmed
 		// primary_conninfo is cleared; this waits for postgres to act on it.

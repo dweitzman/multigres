@@ -156,7 +156,7 @@ func TestGUCSelfHealing(t *testing.T) {
 	// allowing reconcileGUC's SELECT FOR UPDATE to commit without blocking.
 	_, err = pgClient.ExecuteQuery(ctx, "ALTER SYSTEM SET synchronous_standby_names = 'ANY 1 (*)'", 1)
 	require.NoError(t, err)
-	shardsetup.ReloadConfig(ctx, t, pgClient, setup.PrimaryName)
+	require.NoError(t, shardsetup.ReloadConfig(ctx, pgClient, setup.PrimaryName))
 
 	require.Eventually(t, func() bool {
 		val, qerr := shardsetup.QueryStringValue(utils.WithShortDeadline(t), pgClient, "SHOW synchronous_standby_names")
