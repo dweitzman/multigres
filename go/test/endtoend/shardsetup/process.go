@@ -500,16 +500,6 @@ func (p *ProcessInstance) waitForStartup(ctx context.Context, t *testing.T, time
 	}
 	t.Logf("%s server process started with PID %d", p.Name, p.Process.Process.Pid)
 
-	// Give the process a moment to potentially fail immediately
-	time.Sleep(500 * time.Millisecond)
-
-	// Check if process died immediately
-	if p.Process.ProcessState != nil {
-		t.Logf("%s process died immediately: exit code %d", p.Name, p.Process.ProcessState.ExitCode())
-		p.LogRecentOutput(t, "Process died immediately")
-		return fmt.Errorf("%s process died immediately: exit code %d", p.Name, p.Process.ProcessState.ExitCode())
-	}
-
 	// Wait for server to be ready
 	deadline := time.Now().Add(timeout)
 	connectAttempts := 0
