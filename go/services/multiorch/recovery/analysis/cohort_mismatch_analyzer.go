@@ -247,21 +247,30 @@ func (a *CohortMismatchAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, er
 // The IsLeader gate is also conceptually unnecessary — there's no correctness
 // problem an acting primary adding itself to the cohort. This may be useful
 // in some propagation scenarios.
-// unhealthyFor returns how long a pooler's health checks have been failing
-// continuously (now minus its last successful check), or 0 if its most
-// recent check succeeded or it has never been successfully checked (a
-// brand-new pooler shouldn't be judged unhealthy before its first check
-// lands).
+// unhealthyFor returns how long it's been since orch last successfully
+// heard from this pooler (now minus LastSeen), or 0 if it has never been
+// successfully checked (a brand-new pooler shouldn't be judged unhealthy
+// before its first check lands).
+//
+// Deliberately keyed on LastSeen rather than gating on IsLastCheckValid:
+// IsLastCheckValid only flips to false when a health check is actually
+// attempted and fails (store/health_stream.go markDisconnected). A pooler
+// whose check goroutine stopped running entirely — dropped from the watch,
+// crashed, network-partitioned before any failure was ever recorded — would
+// keep a stale IsLastCheckValid=true forever and never be judged unhealthy
+// under that gate, even though orch has heard nothing from it in a very long
+// time. LastSeen only advances on an actual successful observation, so its
+// age captures both "actively failing" and "gone silent" uniformly.
 func unhealthyFor(pa *store.Pooler, now time.Time) time.Duration {
-	h := pa.Health()
-	if h.GetIsLastCheckValid() {
+	// Check the field for nil directly rather than AsTime().IsZero(): an
+	// absent Timestamp's AsTime() is the Unix epoch (1970), not Go's zero
+	// time.Time, so IsZero() would never catch it and every never-seen
+	// pooler would look decades stale instead of "no data yet."
+	lastSeen := pa.Health().GetLastSeen()
+	if lastSeen == nil {
 		return 0
 	}
-	lastSuccess := h.GetLastCheckSuccessful().AsTime()
-	if lastSuccess.IsZero() {
-		return 0
-	}
-	return now.Sub(lastSuccess)
+	return now.Sub(lastSeen.AsTime())
 }
 
 func (a *CohortMismatchAnalyzer) isAdditionCandidate(_ *ShardAnalysis, pa *store.Pooler) bool {

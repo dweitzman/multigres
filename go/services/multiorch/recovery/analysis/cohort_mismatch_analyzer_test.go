@@ -476,11 +476,11 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 	// unhealthyReplicaPA returns a rider for a cohort member that's present
 	// (not missing from cache) but whose health checks have been failing
 	// since lastSuccess.
-	unhealthyReplicaPA := func(id *clustermetadatapb.ID, lastSuccess time.Time) *store.Pooler {
+	unhealthyReplicaPA := func(id *clustermetadatapb.ID, lastSeen time.Time) *store.Pooler {
 		return newRider(&multiorchdatapb.PoolerHealthState{
-			Multipooler:         &clustermetadatapb.Multipooler{Id: id, ShardKey: shardKey},
-			IsLastCheckValid:    false,
-			LastCheckSuccessful: timestamppb.New(lastSuccess),
+			Multipooler:      &clustermetadatapb.Multipooler{Id: id, ShardKey: shardKey},
+			IsLastCheckValid: false,
+			LastSeen:         timestamppb.New(lastSeen),
 			Status: &multipoolermanagerdatapb.Status{
 				IsInitialized: true,
 				ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
@@ -544,5 +544,42 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
 		assert.Empty(t, problems)
+	})
+
+	t.Run("gone silent with stale IsLastCheckValid=true is still caught", func(t *testing.T) {
+		// A pooler whose check goroutine stopped running entirely (dropped
+		// from the watch, crashed) keeps whatever IsLastCheckValid it last
+		// had — here, deliberately left true — with an old LastSeen. This
+		// must still be caught: unhealthyFor keys on LastSeen, not on
+		// IsLastCheckValid, precisely so this doesn't slip through.
+		extraReplica1 := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica-c"}
+		extraReplica2 := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica-d"}
+		goneSilent := newRider(&multiorchdatapb.PoolerHealthState{
+			Multipooler:      &clustermetadatapb.Multipooler{Id: replicaA, ShardKey: shardKey},
+			IsLastCheckValid: true,
+			LastSeen:         timestamppb.New(time.Now().Add(-2 * time.Minute)),
+			Status: &multipoolermanagerdatapb.Status{
+				IsInitialized: true,
+				ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
+					PrimaryConnInfo:   &multipoolermanagerdatapb.PrimaryConnInfo{Host: "primary.example.com"},
+					WalReceiverStatus: "streaming",
+					LastReceiveLsn:    "0/3000000",
+				},
+			},
+		})
+		sa := missingMemberShard(
+			atLeastN(2),
+			[]*clustermetadatapb.ID{primaryID, replicaA, replicaB, extraReplica1, extraReplica2},
+			nil,
+			goneSilent,
+			healthyReplicaPA(replicaB, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
+			healthyReplicaPA(extraReplica1, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
+			healthyReplicaPA(extraReplica2, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
+		)
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		require.Len(t, problems, 1)
+		assert.Equal(t, types.ProblemCohortMemberUnhealthy, problems[0].Code)
+		assert.Equal(t, replicaA.Name, problems[0].PoolerID.Name)
 	})
 }
