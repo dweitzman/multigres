@@ -60,6 +60,7 @@ const (
 	ProblemPoolerNotInCohort      ProblemCode = "PoolerNotInCohort"
 	ProblemCohortMemberIneligible ProblemCode = "CohortMemberIneligible"
 	ProblemCohortMemberUnhealthy  ProblemCode = "CohortMemberUnhealthy"
+	ProblemCohortMemberLagging    ProblemCode = "CohortMemberLagging"
 
 	// Non-actionable: if all hosts are down, there is no way we can failover.
 	ProblemLeaderAndReplicasDead ProblemCode = "LeaderAndReplicasDead"

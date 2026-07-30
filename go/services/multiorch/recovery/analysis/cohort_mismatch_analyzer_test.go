@@ -22,6 +22,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/multigres/multigres/go/common/rpcclient"
@@ -581,5 +582,97 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 		require.Len(t, problems, 1)
 		assert.Equal(t, types.ProblemCohortMemberUnhealthy, problems[0].Code)
 		assert.Equal(t, replicaA.Name, problems[0].PoolerID.Name)
+	})
+
+	// laggingReplicaPA returns a rider for a present, otherwise-healthy
+	// cohort member reporting the given replication lag.
+	laggingReplicaPA := func(id *clustermetadatapb.ID, lag time.Duration) *store.Pooler {
+		return newRider(&multiorchdatapb.PoolerHealthState{
+			Multipooler:      &clustermetadatapb.Multipooler{Id: id, ShardKey: shardKey},
+			IsLastCheckValid: true,
+			LastSeen:         timestamppb.Now(),
+			Status: &multipoolermanagerdatapb.Status{
+				IsInitialized: true,
+				ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
+					PrimaryConnInfo:   &multipoolermanagerdatapb.PrimaryConnInfo{Host: "primary.example.com"},
+					WalReceiverStatus: "streaming",
+					LastReceiveLsn:    "0/3000000",
+					Lag:               durationpb.New(lag),
+				},
+			},
+		})
+	}
+
+	t.Run("lag-eviction REMOVE proceeds when safety check passes", func(t *testing.T) {
+		// 5-member cohort under N=2, same shape as the other safe-removal
+		// cases: replicaA's lag exceeds MemberLagEvictionThreshold (5m default).
+		extraReplica1 := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica-c"}
+		extraReplica2 := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica-d"}
+		sa := missingMemberShard(
+			atLeastN(2),
+			[]*clustermetadatapb.ID{primaryID, replicaA, replicaB, extraReplica1, extraReplica2},
+			nil,
+			laggingReplicaPA(replicaA, 10*time.Minute),
+			healthyReplicaPA(replicaB, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
+			healthyReplicaPA(extraReplica1, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
+			healthyReplicaPA(extraReplica2, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
+		)
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		require.Len(t, problems, 1)
+		assert.Equal(t, types.ProblemCohortMemberLagging, problems[0].Code)
+		assert.Equal(t, replicaA.Name, problems[0].PoolerID.Name)
+	})
+
+	t.Run("lag-eviction REMOVE is blocked when safety check fails", func(t *testing.T) {
+		// 3-member cohort under N=2: removing the lagging member and losing
+		// the leader leaves only 1 recruitable — must not propose REMOVE.
+		sa := missingMemberShard(
+			atLeastN(2),
+			[]*clustermetadatapb.ID{primaryID, replicaA, replicaB},
+			nil,
+			laggingReplicaPA(replicaA, 10*time.Minute),
+			healthyReplicaPA(replicaB, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
+		)
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		assert.Empty(t, problems)
+	})
+
+	t.Run("lag within threshold does not propose REMOVE", func(t *testing.T) {
+		extraReplica1 := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica-c"}
+		extraReplica2 := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica-d"}
+		sa := missingMemberShard(
+			atLeastN(2),
+			[]*clustermetadatapb.ID{primaryID, replicaA, replicaB, extraReplica1, extraReplica2},
+			nil,
+			laggingReplicaPA(replicaA, 5*time.Second), // well under the 5m default
+			healthyReplicaPA(replicaB, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
+			healthyReplicaPA(extraReplica1, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
+			healthyReplicaPA(extraReplica2, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
+		)
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		assert.Empty(t, problems)
+	})
+
+	t.Run("no lag reading does not propose REMOVE", func(t *testing.T) {
+		// healthyReplicaPA never sets a Lag value at all — missing data must
+		// never be treated as "0 lag, therefore fine" or as "infinite lag,
+		// therefore evict." lagOf's ok=false must suppress eviction either way.
+		extraReplica1 := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica-c"}
+		extraReplica2 := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica-d"}
+		sa := missingMemberShard(
+			atLeastN(2),
+			[]*clustermetadatapb.ID{primaryID, replicaA, replicaB, extraReplica1, extraReplica2},
+			nil,
+			healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
+			healthyReplicaPA(replicaB, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
+			healthyReplicaPA(extraReplica1, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
+			healthyReplicaPA(extraReplica2, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
+		)
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		assert.Empty(t, problems)
 	})
 }

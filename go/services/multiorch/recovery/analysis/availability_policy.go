@@ -63,6 +63,14 @@ type AvailabilityPolicy struct {
 	// commitment change, not a transient failover-suppression judgment, and
 	// harder to reverse than briefly ignoring a stale snapshot.
 	MemberUnhealthyRemovalThreshold time.Duration
+
+	// MemberLagEvictionThreshold bounds how far a cohort member's replication
+	// lag may fall behind before CohortMismatchAnalyzer proposes evicting it
+	// (still gated by IsCohortMemberRemovalSafe, so eviction never proceeds
+	// without a failure-safe cohort remaining). A replica this far behind
+	// blocks synchronous acks from a healthier subset without adding
+	// durability itself.
+	MemberLagEvictionThreshold time.Duration
 }
 
 // DefaultAvailabilityPolicy returns the built-in policy used when no operator
@@ -76,5 +84,6 @@ func DefaultAvailabilityPolicy() AvailabilityPolicy {
 		FollowerStreamFreshness:         15 * time.Second,
 		LeaderChangeFreshness:           15 * time.Second,
 		MemberUnhealthyRemovalThreshold: 60 * time.Second,
+		MemberLagEvictionThreshold:      5 * time.Minute,
 	}
 }

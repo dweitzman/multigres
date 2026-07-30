@@ -44,6 +44,8 @@ var _ types.RecoveryAction = (*ReconcileCohortAction)(nil)
 //   - ProblemCohortMemberIneligible: remove the pooler via UpdateConsensusRule(REMOVE).
 //   - ProblemCohortMemberUnhealthy: same REMOVE, but for orch-observed health
 //     failures rather than the pooler's own self-report.
+//   - ProblemCohortMemberLagging: same REMOVE, for a member whose replication
+//     lag exceeds the eviction threshold.
 //
 // The action mutates exactly one cohort member per execution; multiple
 // drifting members produce multiple problems and run separately.
@@ -88,7 +90,7 @@ func (a *ReconcileCohortAction) Execute(ctx context.Context, problem types.Probl
 	switch problem.Code {
 	case types.ProblemPoolerNotInCohort:
 		op = multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_ADD
-	case types.ProblemCohortMemberIneligible, types.ProblemCohortMemberUnhealthy:
+	case types.ProblemCohortMemberIneligible, types.ProblemCohortMemberUnhealthy, types.ProblemCohortMemberLagging:
 		op = multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_REMOVE
 	default:
 		return mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,

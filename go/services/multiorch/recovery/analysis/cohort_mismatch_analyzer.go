@@ -92,15 +92,18 @@ func (a *CohortMismatchAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, er
 		// Removal candidates: current cohort members signaling INELIGIBLE.
 		if _, inCohort := cohortIDs[key]; inCohort {
 			seen[key] = struct{}{}
-			// Unlike a tombstoned member, an INELIGIBLE one is still an
-			// active cohort voter until removed — gate on
+			// Unlike a tombstoned member, these are still active cohort
+			// voters until removed — gate every removal reason on
 			// IsCohortMemberRemovalSafe the same way the missing-from-cache
 			// case below does, so removal doesn't leave the shard unable to
 			// survive a subsequent leader failure. Deferred every cycle
 			// until another member makes it safe.
+			ineligible := types.PoolerIsCohortIneligible(pa.Health().GetAvailabilityStatus())
+			unhealthyDur := unhealthyFor(pa, sa.Now)
+			lag, hasLag := lagOf(pa)
+			removalSafe := commonconsensus.IsCohortMemberRemovalSafe(undecidedRule, id)
 			switch {
-			case types.PoolerIsCohortIneligible(pa.Health().GetAvailabilityStatus()) &&
-				commonconsensus.IsCohortMemberRemovalSafe(undecidedRule, id):
+			case ineligible && removalSafe:
 				problems = append(problems, types.Problem{
 					Code:           types.ProblemCohortMemberIneligible,
 					CheckName:      "CohortMismatch",
@@ -115,10 +118,8 @@ func (a *CohortMismatchAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, er
 			// Prototype: a cohort member orch can't successfully health-check
 			// for too long, but that never went missing from the cache or
 			// tombstoned (e.g. a one-sided reachability problem between orch
-			// and this pooler). Gated the same way as every other removal
-			// path — deferred until another member makes it safe.
-			case unhealthyFor(pa, sa.Now) > sa.Policy.MemberUnhealthyRemovalThreshold &&
-				commonconsensus.IsCohortMemberRemovalSafe(undecidedRule, id):
+			// and this pooler).
+			case unhealthyDur > sa.Policy.MemberUnhealthyRemovalThreshold && removalSafe:
 				problems = append(problems, types.Problem{
 					Code:      types.ProblemCohortMemberUnhealthy,
 					CheckName: "CohortMismatch",
@@ -126,6 +127,23 @@ func (a *CohortMismatchAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, er
 					ShardKey:  sa.ShardKey,
 					Description: fmt.Sprintf("Cohort member %s has failed health checks for over %s",
 						id.Name, sa.Policy.MemberUnhealthyRemovalThreshold),
+					Priority:       types.PriorityNormal,
+					Scope:          types.ScopePooler,
+					DetectedAt:     time.Now(),
+					RecoveryAction: a.factory.NewReconcileCohortAction(),
+				})
+			// Prototype: a cohort member whose replication lag exceeds the
+			// eviction threshold blocks synchronous acks from a healthier
+			// subset without adding durability itself. hasLag is false when
+			// no lag reading is available at all — never evict on missing data.
+			case hasLag && lag > sa.Policy.MemberLagEvictionThreshold && removalSafe:
+				problems = append(problems, types.Problem{
+					Code:      types.ProblemCohortMemberLagging,
+					CheckName: "CohortMismatch",
+					PoolerID:  id,
+					ShardKey:  sa.ShardKey,
+					Description: fmt.Sprintf("Cohort member %s replication lag %s exceeds eviction threshold %s",
+						id.Name, lag, sa.Policy.MemberLagEvictionThreshold),
 					Priority:       types.PriorityNormal,
 					Scope:          types.ScopePooler,
 					DetectedAt:     time.Now(),
@@ -221,32 +239,6 @@ func (a *CohortMismatchAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, er
 	return problems, nil
 }
 
-// isAdditionCandidate reports whether a non-cohort pooler is healthy enough to
-// be added: it must be a non-leader REPLICA, initialized, actively streaming
-// from the leader, and not signaling INELIGIBLE.
-//
-// The "actively streaming" requirement (walReceiverStreaming, not merely
-// primary_conninfo set + replay unpaused) is load-bearing for restore_command
-// safety: admission clears the joining member's restore_command (ReconcileCohort
-// re-issues SetPrimary, which clears it once the node is named in the rule). A
-// node still catching up from the archive (receiver not yet streaming) would be
-// stranded if we admitted it and stripped the archive out from under it. Gating
-// on an active receiver here makes "a cohort member is, by construction,
-// streaming and archive-independent" a local property of admission rather than
-// something that only holds because ReplicaNotReplicating (higher priority)
-// happens to preempt this analyzer until the receiver comes up.
-//
-// TODO: long-term, most of these checks should fold into the pooler's
-// self-reported cohort eligibility signal. The pooler is in the best position
-// to know whether it can durably serve as a cohort member — it knows whether
-// it has a working backup, whether it's in a drained state, whether
-// replication is healthy, and so on. The analyzer should largely just trust
-// the CohortEligibilityStatus signal rather than reconstruct that judgment
-// from individual health fields.
-//
-// The IsLeader gate is also conceptually unnecessary — there's no correctness
-// problem an acting primary adding itself to the cohort. This may be useful
-// in some propagation scenarios.
 // unhealthyFor returns how long it's been since orch last successfully
 // heard from this pooler (now minus LastSeen), or 0 if it has never been
 // successfully checked (a brand-new pooler shouldn't be judged unhealthy
@@ -273,6 +265,44 @@ func unhealthyFor(pa *store.Pooler, now time.Time) time.Duration {
 	return now.Sub(lastSeen.AsTime())
 }
 
+// lagOf returns a standby's replication lag and true, or (0, false) if no
+// lag reading is available (e.g. not a standby, or postgres hasn't reported
+// one yet) — callers must treat missing data as "don't evict," not as zero
+// lag.
+func lagOf(pa *store.Pooler) (time.Duration, bool) {
+	lag := pa.Health().GetStatus().GetReplicationStatus().GetLag()
+	if lag == nil {
+		return 0, false
+	}
+	return lag.AsDuration(), true
+}
+
+// isAdditionCandidate reports whether a non-cohort pooler is healthy enough to
+// be added: it must be a non-leader REPLICA, initialized, actively streaming
+// from the leader, and not signaling INELIGIBLE.
+//
+// The "actively streaming" requirement (walReceiverStreaming, not merely
+// primary_conninfo set + replay unpaused) is load-bearing for restore_command
+// safety: admission clears the joining member's restore_command (ReconcileCohort
+// re-issues SetPrimary, which clears it once the node is named in the rule). A
+// node still catching up from the archive (receiver not yet streaming) would be
+// stranded if we admitted it and stripped the archive out from under it. Gating
+// on an active receiver here makes "a cohort member is, by construction,
+// streaming and archive-independent" a local property of admission rather than
+// something that only holds because ReplicaNotReplicating (higher priority)
+// happens to preempt this analyzer until the receiver comes up.
+//
+// TODO: long-term, most of these checks should fold into the pooler's
+// self-reported cohort eligibility signal. The pooler is in the best position
+// to know whether it can durably serve as a cohort member — it knows whether
+// it has a working backup, whether it's in a drained state, whether
+// replication is healthy, and so on. The analyzer should largely just trust
+// the CohortEligibilityStatus signal rather than reconstruct that judgment
+// from individual health fields.
+//
+// The IsLeader gate is also conceptually unnecessary — there's no correctness
+// problem an acting primary adding itself to the cohort. This may be useful
+// in some propagation scenarios.
 func (a *CohortMismatchAnalyzer) isAdditionCandidate(_ *ShardAnalysis, pa *store.Pooler) bool {
 	if commonconsensus.SelfConsensusRole(pa.Health().GetConsensusStatus()) == commonconsensus.ConsensusRoleLeader {
 		return false
