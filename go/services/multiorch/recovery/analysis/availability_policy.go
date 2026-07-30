@@ -55,6 +55,14 @@ type AvailabilityPolicy struct {
 	// change, so it is a separate, independently tunable knob from the
 	// failover-detection thresholds above.
 	LeaderChangeFreshness time.Duration
+
+	// MemberUnhealthyRemovalThreshold bounds how long a cohort member's
+	// health checks may keep failing before CohortMismatchAnalyzer proposes
+	// removing it (still gated by IsCohortMemberRemovalSafe). Deliberately
+	// longer than the freshness thresholds above: removal is a durability
+	// commitment change, not a transient failover-suppression judgment, and
+	// harder to reverse than briefly ignoring a stale snapshot.
+	MemberUnhealthyRemovalThreshold time.Duration
 }
 
 // DefaultAvailabilityPolicy returns the built-in policy used when no operator
@@ -64,8 +72,9 @@ type AvailabilityPolicy struct {
 // before the staleness watchdog's much longer window.
 func DefaultAvailabilityPolicy() AvailabilityPolicy {
 	return AvailabilityPolicy{
-		LeaderLivenessFreshness: 15 * time.Second,
-		FollowerStreamFreshness: 15 * time.Second,
-		LeaderChangeFreshness:   15 * time.Second,
+		LeaderLivenessFreshness:         15 * time.Second,
+		FollowerStreamFreshness:         15 * time.Second,
+		LeaderChangeFreshness:           15 * time.Second,
+		MemberUnhealthyRemovalThreshold: 60 * time.Second,
 	}
 }

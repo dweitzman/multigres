@@ -39,9 +39,11 @@ var _ types.RecoveryAction = (*ReconcileCohortAction)(nil)
 // ReconcileCohortAction applies a single cohort-membership change on the
 // shard's leader.
 //
-// It handles two problem codes:
+// It handles three problem codes:
 //   - ProblemPoolerNotInCohort: add the pooler via UpdateConsensusRule(ADD).
 //   - ProblemCohortMemberIneligible: remove the pooler via UpdateConsensusRule(REMOVE).
+//   - ProblemCohortMemberUnhealthy: same REMOVE, but for orch-observed health
+//     failures rather than the pooler's own self-report.
 //
 // The action mutates exactly one cohort member per execution; multiple
 // drifting members produce multiple problems and run separately.
@@ -86,7 +88,7 @@ func (a *ReconcileCohortAction) Execute(ctx context.Context, problem types.Probl
 	switch problem.Code {
 	case types.ProblemPoolerNotInCohort:
 		op = multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_ADD
-	case types.ProblemCohortMemberIneligible:
+	case types.ProblemCohortMemberIneligible, types.ProblemCohortMemberUnhealthy:
 		op = multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_REMOVE
 	default:
 		return mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,

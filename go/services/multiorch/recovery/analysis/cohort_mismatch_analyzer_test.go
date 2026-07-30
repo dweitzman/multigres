@@ -472,4 +472,77 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 		assert.Equal(t, replicaA.Name, problems[0].PoolerID.Name,
 			"tombstoned member must be chosen over a merely-missing one")
 	})
+
+	// unhealthyReplicaPA returns a rider for a cohort member that's present
+	// (not missing from cache) but whose health checks have been failing
+	// since lastSuccess.
+	unhealthyReplicaPA := func(id *clustermetadatapb.ID, lastSuccess time.Time) *store.Pooler {
+		return newRider(&multiorchdatapb.PoolerHealthState{
+			Multipooler:         &clustermetadatapb.Multipooler{Id: id, ShardKey: shardKey},
+			IsLastCheckValid:    false,
+			LastCheckSuccessful: timestamppb.New(lastSuccess),
+			Status: &multipoolermanagerdatapb.Status{
+				IsInitialized: true,
+				ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
+					PrimaryConnInfo:   &multipoolermanagerdatapb.PrimaryConnInfo{Host: "primary.example.com"},
+					WalReceiverStatus: "streaming",
+					LastReceiveLsn:    "0/3000000",
+				},
+			},
+		})
+	}
+
+	t.Run("unhealthy-too-long REMOVE proceeds when safety check passes", func(t *testing.T) {
+		// 5-member cohort under N=2, same shape as the missing-no-tombstone
+		// safe case: replicaA is present but has been failing health checks
+		// for well over MemberUnhealthyRemovalThreshold (60s default).
+		extraReplica1 := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica-c"}
+		extraReplica2 := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica-d"}
+		sa := missingMemberShard(
+			atLeastN(2),
+			[]*clustermetadatapb.ID{primaryID, replicaA, replicaB, extraReplica1, extraReplica2},
+			nil,
+			unhealthyReplicaPA(replicaA, time.Now().Add(-2*time.Minute)),
+			healthyReplicaPA(replicaB, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
+			healthyReplicaPA(extraReplica1, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
+			healthyReplicaPA(extraReplica2, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
+		)
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		require.Len(t, problems, 1)
+		assert.Equal(t, types.ProblemCohortMemberUnhealthy, problems[0].Code)
+		assert.Equal(t, replicaA.Name, problems[0].PoolerID.Name)
+	})
+
+	t.Run("unhealthy-too-long REMOVE is blocked when safety check fails", func(t *testing.T) {
+		// 3-member cohort under N=2: removing the unhealthy member and losing
+		// the leader leaves only 1 recruitable — must not propose REMOVE.
+		sa := missingMemberShard(
+			atLeastN(2),
+			[]*clustermetadatapb.ID{primaryID, replicaA, replicaB},
+			nil,
+			unhealthyReplicaPA(replicaA, time.Now().Add(-2*time.Minute)),
+			healthyReplicaPA(replicaB, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
+		)
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		assert.Empty(t, problems)
+	})
+
+	t.Run("unhealthy but within threshold does not propose REMOVE", func(t *testing.T) {
+		extraReplica1 := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica-c"}
+		extraReplica2 := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica-d"}
+		sa := missingMemberShard(
+			atLeastN(2),
+			[]*clustermetadatapb.ID{primaryID, replicaA, replicaB, extraReplica1, extraReplica2},
+			nil,
+			unhealthyReplicaPA(replicaA, time.Now().Add(-5*time.Second)), // well under the 60s default
+			healthyReplicaPA(replicaB, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
+			healthyReplicaPA(extraReplica1, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
+			healthyReplicaPA(extraReplica2, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
+		)
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		assert.Empty(t, problems)
+	})
 }

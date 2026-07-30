@@ -98,14 +98,34 @@ func (a *CohortMismatchAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, er
 			// case below does, so removal doesn't leave the shard unable to
 			// survive a subsequent leader failure. Deferred every cycle
 			// until another member makes it safe.
-			if types.PoolerIsCohortIneligible(pa.Health().GetAvailabilityStatus()) &&
-				commonconsensus.IsCohortMemberRemovalSafe(undecidedRule, id) {
+			switch {
+			case types.PoolerIsCohortIneligible(pa.Health().GetAvailabilityStatus()) &&
+				commonconsensus.IsCohortMemberRemovalSafe(undecidedRule, id):
 				problems = append(problems, types.Problem{
 					Code:           types.ProblemCohortMemberIneligible,
 					CheckName:      "CohortMismatch",
 					PoolerID:       id,
 					ShardKey:       sa.ShardKey,
 					Description:    fmt.Sprintf("Cohort member %s self-reported INELIGIBLE", id.Name),
+					Priority:       types.PriorityNormal,
+					Scope:          types.ScopePooler,
+					DetectedAt:     time.Now(),
+					RecoveryAction: a.factory.NewReconcileCohortAction(),
+				})
+			// Prototype: a cohort member orch can't successfully health-check
+			// for too long, but that never went missing from the cache or
+			// tombstoned (e.g. a one-sided reachability problem between orch
+			// and this pooler). Gated the same way as every other removal
+			// path — deferred until another member makes it safe.
+			case unhealthyFor(pa, sa.Now) > sa.Policy.MemberUnhealthyRemovalThreshold &&
+				commonconsensus.IsCohortMemberRemovalSafe(undecidedRule, id):
+				problems = append(problems, types.Problem{
+					Code:      types.ProblemCohortMemberUnhealthy,
+					CheckName: "CohortMismatch",
+					PoolerID:  id,
+					ShardKey:  sa.ShardKey,
+					Description: fmt.Sprintf("Cohort member %s has failed health checks for over %s",
+						id.Name, sa.Policy.MemberUnhealthyRemovalThreshold),
 					Priority:       types.PriorityNormal,
 					Scope:          types.ScopePooler,
 					DetectedAt:     time.Now(),
@@ -227,6 +247,23 @@ func (a *CohortMismatchAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, er
 // The IsLeader gate is also conceptually unnecessary — there's no correctness
 // problem an acting primary adding itself to the cohort. This may be useful
 // in some propagation scenarios.
+// unhealthyFor returns how long a pooler's health checks have been failing
+// continuously (now minus its last successful check), or 0 if its most
+// recent check succeeded or it has never been successfully checked (a
+// brand-new pooler shouldn't be judged unhealthy before its first check
+// lands).
+func unhealthyFor(pa *store.Pooler, now time.Time) time.Duration {
+	h := pa.Health()
+	if h.GetIsLastCheckValid() {
+		return 0
+	}
+	lastSuccess := h.GetLastCheckSuccessful().AsTime()
+	if lastSuccess.IsZero() {
+		return 0
+	}
+	return now.Sub(lastSuccess)
+}
+
 func (a *CohortMismatchAnalyzer) isAdditionCandidate(_ *ShardAnalysis, pa *store.Pooler) bool {
 	if commonconsensus.SelfConsensusRole(pa.Health().GetConsensusStatus()) == commonconsensus.ConsensusRoleLeader {
 		return false
