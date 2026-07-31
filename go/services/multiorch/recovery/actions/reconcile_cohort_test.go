@@ -220,7 +220,7 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 	t.Run("target pooler not in store resolves to a no-op, not an error", func(t *testing.T) {
 		// Execute no longer trusts problem.Code — with no rider for replicaID
 		// at all (and it's not in the leader's cohort or a tombstone either),
-		// eligibility.Decide correctly says there's nothing to do: the ADD
+		// eligibility.DecideAll correctly says there's nothing to do: the ADD
 		// this Problem originally proposed is moot.
 		fakeClient := &rpcclient.FakeClient{}
 		ps, cleanup := setupStore(t, fakeClient)
@@ -348,9 +348,126 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 		assert.Empty(t, fakeClient.CallLog, "no RPC should be dispatched")
 	})
 
+	t.Run("batches multiple ADD candidates into a single UpdateConsensusRule call", func(t *testing.T) {
+		fakeClient := &rpcclient.FakeClient{
+			StatusResponses: map[topoclient.ComponentID]*rpcclient.ResponseWithDelay[*multipoolermanagerdatapb.StatusResponse]{
+				"multipooler-cell1-primary": {Response: &multipoolermanagerdatapb.StatusResponse{
+					Status:          &multipoolermanagerdatapb.Status{IsInitialized: true, PoolerType: clustermetadatapb.PoolerType_PRIMARY},
+					ConsensusStatus: selfLeaderConsensus(primaryID),
+				}},
+			},
+			UpdateConsensusRuleResponses: map[topoclient.ComponentID]*multipoolermanagerdatapb.UpdateConsensusRuleResponse{
+				"multipooler-cell1-primary": {},
+			},
+		}
+		ps, cleanup := setupStore(t, fakeClient)
+		defer cleanup()
+		// A second healthy, joinable non-member alongside setupStore's default
+		// replicaID: both should ADD in the same RPC instead of trickling out
+		// one per recovery cycle.
+		store.SeedCache(t, ps, store.NewPooler(&multiorchdatapb.PoolerHealthState{
+			Multipooler:      &clustermetadatapb.Multipooler{Id: replica3ID, ShardKey: shardKey, Type: clustermetadatapb.PoolerType_REPLICA},
+			IsLastCheckValid: true,
+			Status: &multipoolermanagerdatapb.Status{
+				IsInitialized: true,
+				ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
+					PrimaryConnInfo:   &multipoolermanagerdatapb.PrimaryConnInfo{Host: "primary.example.com"},
+					WalReceiverStatus: "streaming",
+					LastReceiveLsn:    "0/3000000",
+				},
+			},
+		}, nil))
+
+		action := NewReconcileCohortAction(nil, fakeClient, ps, nil, slog.Default())
+		err := action.Execute(ctx, types.Problem{
+			Code:     types.ProblemPoolerNotInCohort,
+			ShardKey: shardKey,
+			PoolerID: replicaID,
+		})
+
+		require.NoError(t, err)
+		req := fakeClient.LastUpdateConsensusRuleRequest
+		require.NotNil(t, req)
+		assert.Equal(t, multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_ADD, req.Operation)
+		var gotNames []string
+		for _, id := range req.StandbyIds {
+			gotNames = append(gotNames, id.Name)
+		}
+		assert.ElementsMatch(t, []string{replicaID.Name, replica3ID.Name}, gotNames)
+	})
+
+	t.Run("batches multiple Urgent REMOVE candidates into a single UpdateConsensusRule call", func(t *testing.T) {
+		fakeClient := &rpcclient.FakeClient{
+			StatusResponses: map[topoclient.ComponentID]*rpcclient.ResponseWithDelay[*multipoolermanagerdatapb.StatusResponse]{
+				"multipooler-cell1-primary": {Response: &multipoolermanagerdatapb.StatusResponse{
+					Status:          &multipoolermanagerdatapb.Status{IsInitialized: true, PoolerType: clustermetadatapb.PoolerType_PRIMARY},
+					ConsensusStatus: selfLeaderConsensus(primaryID, primaryID, replicaID, replica2ID),
+				}},
+			},
+			UpdateConsensusRuleResponses: map[topoclient.ComponentID]*multipoolermanagerdatapb.UpdateConsensusRuleResponse{
+				"multipooler-cell1-primary": {},
+			},
+		}
+		ps, cleanup := setupStore(t, fakeClient)
+		defer cleanup()
+		// setupStore's default cohort is {primaryID, replica2ID}; extend it to
+		// also cover replicaID, then mark both replicaID and replica2ID
+		// quarantined (Urgent — bypasses the durability-safety gate entirely)
+		// so both should REMOVE in one call even though a 3-member AT_LEAST_1
+		// cohort couldn't safely lose both under the non-urgent path.
+		store.SeedCache(t, ps, store.NewPooler(&multiorchdatapb.PoolerHealthState{
+			Multipooler: &clustermetadatapb.Multipooler{
+				Id: primaryID, ShardKey: shardKey, Type: clustermetadatapb.PoolerType_PRIMARY,
+				Hostname: "primary.example.com", PortMap: map[string]int32{"postgres": 5432},
+			},
+			ConsensusStatus: &clustermetadatapb.ConsensusStatus{
+				Id:             primaryID,
+				TermRevocation: &clustermetadatapb.TermRevocation{RevokedBelowTerm: 3},
+				CurrentPosition: &clustermetadatapb.PoolerPosition{
+					Position: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{
+						RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 3, LeaderSubterm: 7},
+						LeaderId:      primaryID,
+						CohortMembers: []*clustermetadatapb.ID{primaryID, replicaID, replica2ID},
+						DurabilityPolicy: &clustermetadatapb.DurabilityPolicy{
+							QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_AT_LEAST_N,
+							RequiredCount: 1,
+						},
+					}},
+				},
+			},
+		}, nil))
+		quarantined := func(id *clustermetadatapb.ID) *store.Pooler {
+			return store.NewPooler(&multiorchdatapb.PoolerHealthState{
+				Multipooler: &clustermetadatapb.Multipooler{
+					Id: id, ShardKey: shardKey, Type: clustermetadatapb.PoolerType_REPLICA,
+					LifecycleStatus: &clustermetadatapb.PoolerLifecycle{Status: clustermetadatapb.PoolerLifecycleStatus_LIFECYCLE_QUARANTINED},
+				},
+			}, nil)
+		}
+		store.SeedCache(t, ps, quarantined(replicaID))
+		store.SeedCache(t, ps, quarantined(replica2ID))
+
+		action := NewReconcileCohortAction(nil, fakeClient, ps, nil, slog.Default())
+		err := action.Execute(ctx, types.Problem{
+			Code:     types.ProblemCohortMemberQuarantined,
+			ShardKey: shardKey,
+			PoolerID: replicaID,
+		})
+
+		require.NoError(t, err)
+		req := fakeClient.LastUpdateConsensusRuleRequest
+		require.NotNil(t, req)
+		assert.Equal(t, multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_REMOVE, req.Operation)
+		var gotNames []string
+		for _, id := range req.StandbyIds {
+			gotNames = append(gotNames, id.Name)
+		}
+		assert.ElementsMatch(t, []string{replicaID.Name, replica2ID.Name}, gotNames)
+	})
+
 	t.Run("problem.Code plays no role in the decision", func(t *testing.T) {
 		// Execute re-derives the operation from fresh state via
-		// eligibility.Decide; a nonsense/mismatched Code (here,
+		// eligibility.DecideAll; a nonsense/mismatched Code (here,
 		// ProblemReplicaNotReplicating on a genuine ADD candidate) doesn't
 		// stop it from applying the ADD that current state actually calls for.
 		fakeClient := &rpcclient.FakeClient{

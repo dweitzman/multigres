@@ -27,7 +27,7 @@ import (
 
 // CohortMismatchAnalyzer detects drift between the desired cohort and the
 // recorded cohort on the leader: a healthy non-member should be ADDed
-// (ProblemPoolerNotInCohort), and a member eligibility.Decide says to remove
+// (ProblemPoolerNotInCohort), and a member eligibility.DecideAll says to remove
 // should be REMOVEd (ProblemCohortMember{Ineligible,Quarantined,Unhealthy,
 // Lagging}). Both surface a single ReconcileCohortAction, which re-derives
 // and applies the same decision — see that action's doc.
@@ -64,56 +64,28 @@ func (a *CohortMismatchAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, er
 	// Detect against proposals as well as decisions to ensure we surface a problem, but
 	// the action to resolve will defer taking action if a proposal is in progress.
 	undecidedRule := commonconsensus.PossiblyUndecidedRule(sa.HighestPosition)
-	thresholds := cohortThresholds(sa.Policy)
-
-	// Build cohort map keyed by serialized ID, paired with the raw
-	// *clustermetadata.ID so we can call Decide for a missing-from-cache
-	// cohort member (no pooler rider carries its ID otherwise).
-	cohortIDs := make(map[topoclient.ComponentID]*clustermetadatapb.ID, len(undecidedRule.GetCohortMembers()))
-	for _, id := range undecidedRule.GetCohortMembers() {
-		cohortIDs[topoclient.ComponentIDString(id)] = id
+	tombstoned := func(id *clustermetadatapb.ID) bool {
+		_, ok := sa.TombstoneIDs[topoclient.ComponentIDString(id)]
+		return ok
 	}
+	decisions := eligibility.DecideAll(sa.Now, cohortThresholds(sa.Policy), undecidedRule, sa.Analyses, tombstoned)
 
-	// Decide for every pooler we can see, present or (for a cohort member
-	// with no corresponding rider) vanished entirely.
-	var ids []*clustermetadatapb.ID
-	var decisions []eligibility.Decision
-	seen := make(map[topoclient.ComponentID]struct{}, len(cohortIDs))
-	for _, pa := range sa.Analyses {
-		id := poolerID(pa)
-		seen[topoclient.ComponentIDString(id)] = struct{}{}
-		if d := eligibility.Decide(sa.Now, thresholds, undecidedRule, id, pa, false); d.Op != eligibility.OpNone {
-			ids = append(ids, id)
-			decisions = append(decisions, d)
-		}
-	}
-	for key, id := range cohortIDs {
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		_, tombstoned := sa.TombstoneIDs[key]
-		if d := eligibility.Decide(sa.Now, thresholds, undecidedRule, id, nil, tombstoned); d.Op != eligibility.OpNone {
-			ids = append(ids, id)
-			decisions = append(decisions, d)
-		}
-	}
-
-	return a.buildProblems(sa, ids, decisions), nil
+	return a.buildProblems(sa, decisions), nil
 }
 
 // buildProblems picks one Decision to act on. Cohort changes are
 // compare-and-swapped on the leader's outgoing rule number, so acting on
-// more than one per cycle would just race a single RPC against itself.
-// TODO: chain them (batched UpdateConsensusRule, or re-derive
-// ExpectedOutgoingRule between calls) so more than one can apply per cycle.
-// Until then: an Urgent removal first (nothing lost by acting now), then an
+// more than one per cycle would just race a single RPC against itself —
+// unless they're batched into one call (see ReconcileCohortAction, which
+// batches all same-tier candidates for whichever single Decision this picks).
+// Priority: an Urgent removal first (nothing lost by acting now), then an
 // addition (grows the safety margin), then a non-urgent removal (softest —
 // costs nothing to defer).
-func (a *CohortMismatchAnalyzer) buildProblems(sa *ShardAnalysis, ids []*clustermetadatapb.ID, decisions []eligibility.Decision) []types.Problem {
+func (a *CohortMismatchAnalyzer) buildProblems(sa *ShardAnalysis, decisions []eligibility.Decision) []types.Problem {
 	pick := func(want func(eligibility.Decision) bool) []types.Problem {
-		for i, d := range decisions {
+		for _, d := range decisions {
 			if want(d) {
-				return []types.Problem{a.problem(sa, ids[i], d)}
+				return []types.Problem{a.problem(sa, d)}
 			}
 		}
 		return nil
@@ -127,7 +99,7 @@ func (a *CohortMismatchAnalyzer) buildProblems(sa *ShardAnalysis, ids []*cluster
 	return pick(func(d eligibility.Decision) bool { return d.Op == eligibility.OpRemove })
 }
 
-func (a *CohortMismatchAnalyzer) problem(sa *ShardAnalysis, id *clustermetadatapb.ID, d eligibility.Decision) types.Problem {
+func (a *CohortMismatchAnalyzer) problem(sa *ShardAnalysis, d eligibility.Decision) types.Problem {
 	code := d.Reason
 	if d.Op == eligibility.OpAdd {
 		code = types.ProblemPoolerNotInCohort
@@ -135,7 +107,7 @@ func (a *CohortMismatchAnalyzer) problem(sa *ShardAnalysis, id *clustermetadatap
 	return types.Problem{
 		Code:           code,
 		CheckName:      "CohortMismatch",
-		PoolerID:       id,
+		PoolerID:       d.ID,
 		ShardKey:       sa.ShardKey,
 		Description:    d.Description,
 		Priority:       types.PriorityNormal,

@@ -40,52 +40,122 @@ import (
 type Op int
 
 const (
-	OpNone Op = iota
-	OpAdd
+	OpAdd Op = iota
 	OpRemove
 )
 
-// Decision is what Decide recommends doing about a cohort ID right now.
+// Decision is what DecideAll recommends doing about a cohort ID right now.
 type Decision struct {
+	// ID is the pooler this Decision is about.
+	ID *clustermetadatapb.ID
 	Op Op
 	// Reason and Description are meaningful only when Op == OpRemove; Op ==
 	// OpAdd always means types.ProblemPoolerNotInCohort.
 	Reason      types.ProblemCode
 	Description string
 	// Urgent is an OpRemove that costs nothing to act on immediately
-	// (tombstoned/quarantined — see Evaluate's unconditional). Callers
-	// choosing among several Decisions in one cycle should prefer an Urgent
-	// removal, then an OpAdd, then a non-urgent OpRemove — see the analyzer
-	// and action for why: an urgent removal was never contributing to
-	// durability anyway, an addition grows the safety margin, and a
-	// non-urgent removal is safe to defer since the member's already
-	// excluded.
+	// (tombstoned/quarantined — see evaluate's unconditional). It bypasses
+	// the durability-safety check entirely, unlike a non-urgent OpRemove.
 	Urgent bool
 }
 
-// Decide is Evaluate plus the durability-safety gate and the resulting
-// cohort operation, if any. It's the single function the analyzer (scanning
-// every pooler in a shard for problems to propose) and the action
-// (re-verifying and applying one specific target) both call, so neither can
-// compute a different answer for the same pooler.
-func Decide(now time.Time, thresholds Thresholds, rule *clustermetadatapb.ShardRule, id *clustermetadatapb.ID, pa *store.Pooler, tombstoned bool) Decision {
-	inCohort := IsCohortMember(rule, id)
-	reason, unconditional := Evaluate(now, thresholds, id, pa, inCohort, tombstoned)
-	switch {
-	case inCohort && reason != "":
-		if !unconditional && !commonconsensus.IsCohortMemberRemovalSafe(rule, id) {
-			return Decision{}
-		}
-		return Decision{Op: OpRemove, Reason: reason, Description: describeRemoval(now, id, pa, reason, tombstoned), Urgent: unconditional}
-	case !inCohort && reason == "":
-		return Decision{Op: OpAdd, Description: fmt.Sprintf("Pooler %s is replicating and eligible but not in the cohort", id.GetName())}
-	default:
-		return Decision{}
+// DecideAll judges every relevant ID in a shard: every pooler in poolers,
+// plus any cohort member named in rule with no corresponding pooler
+// (vanished entirely; tombstoned says whether that's a confirmed SHUTDOWN
+// vs. a transient gap). Both the analyzer and the action call this, so they
+// can't compute different answers for the same pooler.
+//
+// Non-urgent removals accumulate incrementally against a shrinking cohort,
+// since two individually-safe removals aren't always safe together; a
+// candidate that would break that is skipped, not returned. Urgent removals
+// (tombstoned/quarantined) and additions have no such limit and can all
+// batch into one UpdateConsensusRule call (see ReconcileCohortAction).
+//
+// Removing an unreachable follower assumes orch reaching the leader (to make
+// the change) but not the follower is itself evidence the leader can't
+// reach it either. TODO: use the leader's own replication stats instead,
+// once available — a more direct signal than orch's own reachability.
+func DecideAll(now time.Time, thresholds Thresholds, rule *clustermetadatapb.ShardRule, poolers []*store.Pooler, tombstoned func(*clustermetadatapb.ID) bool) []Decision {
+	if tombstoned == nil {
+		tombstoned = func(*clustermetadatapb.ID) bool { return false }
 	}
+	var decisions []Decision
+	var nonUrgentRemovals []Decision
+
+	consider := func(id *clustermetadatapb.ID, pa *store.Pooler, poolerTombstoned bool) {
+		inCohort := isCohortMember(rule, id)
+		reason, urgent := evaluate(now, thresholds, pa, inCohort, poolerTombstoned)
+		switch {
+		case inCohort && reason != "" && urgent:
+			decisions = append(decisions, Decision{ID: id, Op: OpRemove, Reason: reason, Description: describeRemoval(now, id, pa, reason, poolerTombstoned), Urgent: true})
+		case inCohort && reason != "":
+			nonUrgentRemovals = append(nonUrgentRemovals, Decision{ID: id, Op: OpRemove, Reason: reason, Description: describeRemoval(now, id, pa, reason, poolerTombstoned)})
+		case !inCohort && reason == "":
+			decisions = append(decisions, Decision{ID: id, Op: OpAdd, Description: fmt.Sprintf("Pooler %s is replicating and eligible but not in the cohort", id.GetName())})
+		}
+	}
+
+	seen := make(map[topoclient.ComponentID]struct{}, len(rule.GetCohortMembers()))
+	for _, pa := range poolers {
+		id := pa.Health().GetMultipooler().GetId()
+		seen[topoclient.ComponentIDString(id)] = struct{}{}
+		consider(id, pa, false)
+	}
+	for _, id := range rule.GetCohortMembers() {
+		if _, ok := seen[topoclient.ComponentIDString(id)]; ok {
+			continue
+		}
+		consider(id, nil, tombstoned(id))
+	}
+
+	return append(decisions, acceptSafeRemovals(rule, nonUrgentRemovals)...)
 }
 
-// IsCohortMember reports whether id is currently named in rule's cohort.
-func IsCohortMember(rule *clustermetadatapb.ShardRule, id *clustermetadatapb.ID) bool {
+// acceptSafeRemovals returns the prefix-order subset of candidates that's
+// safe to remove together: each is checked against the cohort as already
+// shrunk by every previously-accepted candidate, not the original rule.
+func acceptSafeRemovals(rule *clustermetadatapb.ShardRule, candidates []Decision) []Decision {
+	if len(candidates) == 0 {
+		return nil
+	}
+	policy, err := commonconsensus.NewPolicyFromProto(rule.GetDurabilityPolicy())
+	if err != nil {
+		return nil
+	}
+	cohort := rule.GetCohortMembers()
+	leaderID := rule.GetLeaderId()
+
+	var accepted []Decision
+	for _, d := range candidates {
+		trial := withoutID(cohort, d.ID)
+		recruited := withoutID(trial, leaderID)
+		if commonconsensus.CheckSufficientRecruitment(policy, trial, recruited) != nil {
+			continue // unsafe together with what's already accepted; leave it in the cohort and keep trying others
+		}
+		cohort = trial
+		accepted = append(accepted, d)
+	}
+	return accepted
+}
+
+// withoutID returns ids with target removed, or ids unchanged if target is
+// nil or absent.
+func withoutID(ids []*clustermetadatapb.ID, target *clustermetadatapb.ID) []*clustermetadatapb.ID {
+	if target == nil {
+		return ids
+	}
+	key := topoclient.ComponentIDString(target)
+	out := make([]*clustermetadatapb.ID, 0, len(ids))
+	for _, id := range ids {
+		if topoclient.ComponentIDString(id) != key {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// isCohortMember reports whether id is currently named in rule's cohort.
+func isCohortMember(rule *clustermetadatapb.ShardRule, id *clustermetadatapb.ID) bool {
 	key := topoclient.ComponentIDString(id)
 	for _, m := range rule.GetCohortMembers() {
 		if topoclient.ComponentIDString(m) == key {
@@ -108,16 +178,16 @@ func describeRemoval(now time.Time, id *clustermetadatapb.ID, pa *store.Pooler, 
 	case types.ProblemCohortMemberQuarantined:
 		return fmt.Sprintf("Cohort member %s has self-quarantined", id.GetName())
 	case types.ProblemCohortMemberUnhealthy:
-		return fmt.Sprintf("Cohort member %s has failed health checks for %s", id.GetName(), UnhealthyFor(pa, now))
+		return fmt.Sprintf("Cohort member %s has failed health checks for %s", id.GetName(), unhealthyFor(pa, now))
 	case types.ProblemCohortMemberLagging:
-		lag, _ := LagOf(pa)
+		lag, _ := lagOf(pa)
 		return fmt.Sprintf("Cohort member %s replication lag %s exceeds eviction threshold", id.GetName(), lag)
 	default:
 		return ""
 	}
 }
 
-// Thresholds bundles the duration knobs Evaluate compares a pooler's
+// Thresholds bundles the duration knobs evaluate compares a pooler's
 // unhealthy-duration and replication lag against.
 type Thresholds struct {
 	UnhealthyRemoval     time.Duration
@@ -137,13 +207,13 @@ func DefaultThresholds() Thresholds {
 	}
 }
 
-// Evaluate reports why id currently fails the cohort quality bar, or "" if
+// evaluate reports why id currently fails the cohort quality bar, or "" if
 // it passes, plus whether that reason justifies removal even if it leaves
 // the shard unable to survive a subsequent leader failure. Tombstoned or
 // quarantined poolers were never going to help a real failover, so removing
 // them costs no actual protection ("unconditional"); ineligible, unhealthy,
 // and lagging poolers might still ack a write in an emergency, so those stay
-// gated on the caller's own IsCohortMemberRemovalSafe check.
+// gated on the caller's own durability-safety check.
 //
 // pa is id's current health rider, or nil if it has no live rider at all
 // (vanished from the cache); tombstoned distinguishes a confirmed SHUTDOWN
@@ -157,7 +227,7 @@ func DefaultThresholds() Thresholds {
 // the memory of "was this pooler just excluded," so a value oscillating
 // between the higher removal/eviction threshold and the lower readmission
 // threshold stays excluded instead of flapping every cycle.
-func Evaluate(now time.Time, thresholds Thresholds, id *clustermetadatapb.ID, pa *store.Pooler, inCohort, tombstoned bool) (reason types.ProblemCode, unconditional bool) {
+func evaluate(now time.Time, thresholds Thresholds, pa *store.Pooler, inCohort, tombstoned bool) (reason types.ProblemCode, unconditional bool) {
 	if pa == nil {
 		return types.ProblemCohortMemberIneligible, tombstoned
 	}
@@ -176,19 +246,19 @@ func Evaluate(now time.Time, thresholds Thresholds, id *clustermetadatapb.ID, pa
 		unhealthyThreshold = thresholds.UnhealthyRemoval
 		lagThreshold = thresholds.LagEviction
 	}
-	if UnhealthyFor(pa, now) > unhealthyThreshold {
+	if unhealthyFor(pa, now) > unhealthyThreshold {
 		return types.ProblemCohortMemberUnhealthy, false
 	}
 	// hasLag is false when no lag reading is available at all — missing data
 	// must never be treated as "exceeds," on either the removal or the
 	// addition path.
-	if lag, hasLag := LagOf(pa); hasLag && lag > lagThreshold {
+	if lag, hasLag := lagOf(pa); hasLag && lag > lagThreshold {
 		return types.ProblemCohortMemberLagging, false
 	}
 	return "", false
 }
 
-// UnhealthyFor returns how long it's been since orch last successfully heard
+// unhealthyFor returns how long it's been since orch last successfully heard
 // from pa (now minus LastSeen), or 0 if it has never been successfully
 // checked (a brand-new pooler shouldn't be judged unhealthy before its first
 // check lands).
@@ -202,7 +272,7 @@ func Evaluate(now time.Time, thresholds Thresholds, id *clustermetadatapb.ID, pa
 // has heard nothing from it in a very long time. LastSeen only advances on
 // an actual successful observation, so its age captures both "actively
 // failing" and "gone silent" uniformly.
-func UnhealthyFor(pa *store.Pooler, now time.Time) time.Duration {
+func unhealthyFor(pa *store.Pooler, now time.Time) time.Duration {
 	// Check the field for nil directly rather than AsTime().IsZero(): an
 	// absent Timestamp's AsTime() is the Unix epoch (1970), not Go's zero
 	// time.Time, so IsZero() would never catch it and every never-seen
@@ -214,11 +284,11 @@ func UnhealthyFor(pa *store.Pooler, now time.Time) time.Duration {
 	return now.Sub(lastSeen.AsTime())
 }
 
-// LagOf returns a standby's replication lag and true, or (0, false) if no
+// lagOf returns a standby's replication lag and true, or (0, false) if no
 // lag reading is available (e.g. not a standby, or postgres hasn't reported
 // one yet) — callers must treat missing data as "don't evict," not as zero
 // lag.
-func LagOf(pa *store.Pooler) (time.Duration, bool) {
+func lagOf(pa *store.Pooler) (time.Duration, bool) {
 	lag := pa.Health().GetStatus().GetReplicationStatus().GetLag()
 	if lag == nil {
 		return 0, false
@@ -226,7 +296,7 @@ func LagOf(pa *store.Pooler) (time.Duration, bool) {
 	return lag.AsDuration(), true
 }
 
-// joinable reports the addition-only preconditions folded into Evaluate when
+// joinable reports the addition-only preconditions folded into evaluate when
 // inCohort is false: facts that only matter before membership, not after —
 // a member mid pg_rewind is still a valid voter even though it wouldn't pass
 // this today (see ConsensusStatus.RecruitBlockedUntil). The IsLeader check is

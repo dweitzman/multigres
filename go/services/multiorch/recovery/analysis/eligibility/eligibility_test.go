@@ -54,19 +54,29 @@ func healthyPooler(id *clustermetadatapb.ID) *store.Pooler {
 	}, nil)
 }
 
+func laggingPooler(id *clustermetadatapb.ID, lag time.Duration) *store.Pooler {
+	pa := healthyPooler(id)
+	pa.Health().Status.ReplicationStatus.Lag = durationpb.New(lag)
+	return pa
+}
+
+func atLeastN(n int32) *clustermetadatapb.DurabilityPolicy {
+	return &clustermetadatapb.DurabilityPolicy{QuorumType: clustermetadatapb.QuorumType_QUORUM_TYPE_AT_LEAST_N, RequiredCount: n}
+}
+
 func TestUnhealthyFor(t *testing.T) {
 	now := time.Now()
 
 	t.Run("never seen returns 0", func(t *testing.T) {
 		pa := store.NewPooler(&multiorchdatapb.PoolerHealthState{}, nil)
-		assert.Equal(t, time.Duration(0), UnhealthyFor(pa, now))
+		assert.Equal(t, time.Duration(0), unhealthyFor(pa, now))
 	})
 
 	t.Run("returns age since LastSeen", func(t *testing.T) {
 		pa := store.NewPooler(&multiorchdatapb.PoolerHealthState{
 			LastSeen: timestamppb.New(now.Add(-90 * time.Second)),
 		}, nil)
-		assert.InDelta(t, 90*time.Second, UnhealthyFor(pa, now), float64(time.Second))
+		assert.InDelta(t, 90*time.Second, unhealthyFor(pa, now), float64(time.Second))
 	})
 }
 
@@ -75,18 +85,14 @@ func TestLagOf(t *testing.T) {
 		pa := store.NewPooler(&multiorchdatapb.PoolerHealthState{
 			Status: &multipoolermanagerdatapb.Status{ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{}},
 		}, nil)
-		lag, ok := LagOf(pa)
+		lag, ok := lagOf(pa)
 		assert.False(t, ok)
 		assert.Equal(t, time.Duration(0), lag)
 	})
 
 	t.Run("returns the reported lag", func(t *testing.T) {
-		pa := store.NewPooler(&multiorchdatapb.PoolerHealthState{
-			Status: &multipoolermanagerdatapb.Status{
-				ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{Lag: durationpb.New(45 * time.Second)},
-			},
-		}, nil)
-		lag, ok := LagOf(pa)
+		pa := laggingPooler(&clustermetadatapb.ID{}, 45*time.Second)
+		lag, ok := lagOf(pa)
 		assert.True(t, ok)
 		assert.Equal(t, 45*time.Second, lag)
 	})
@@ -97,8 +103,8 @@ func TestIsCohortMember(t *testing.T) {
 	otherID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "b"}
 	rule := &clustermetadatapb.ShardRule{CohortMembers: []*clustermetadatapb.ID{memberID}}
 
-	assert.True(t, IsCohortMember(rule, memberID))
-	assert.False(t, IsCohortMember(rule, otherID))
+	assert.True(t, isCohortMember(rule, memberID))
+	assert.False(t, isCohortMember(rule, otherID))
 }
 
 func TestEvaluate(t *testing.T) {
@@ -106,11 +112,11 @@ func TestEvaluate(t *testing.T) {
 	now := time.Now()
 
 	t.Run("nil rider is ineligible, unconditional iff tombstoned", func(t *testing.T) {
-		reason, unconditional := Evaluate(now, testThresholds, id, nil, true, true)
+		reason, unconditional := evaluate(now, testThresholds, nil, true, true)
 		assert.Equal(t, types.ProblemCohortMemberIneligible, reason)
 		assert.True(t, unconditional)
 
-		reason, unconditional = Evaluate(now, testThresholds, id, nil, true, false)
+		reason, unconditional = evaluate(now, testThresholds, nil, true, false)
 		assert.Equal(t, types.ProblemCohortMemberIneligible, reason)
 		assert.False(t, unconditional)
 	})
@@ -118,7 +124,7 @@ func TestEvaluate(t *testing.T) {
 	t.Run("quarantined is always unconditional", func(t *testing.T) {
 		pa := healthyPooler(id)
 		pa.Health().Multipooler.LifecycleStatus = &clustermetadatapb.PoolerLifecycle{Status: clustermetadatapb.PoolerLifecycleStatus_LIFECYCLE_QUARANTINED}
-		reason, unconditional := Evaluate(now, testThresholds, id, pa, true, false)
+		reason, unconditional := evaluate(now, testThresholds, pa, true, false)
 		assert.Equal(t, types.ProblemCohortMemberQuarantined, reason)
 		assert.True(t, unconditional)
 	})
@@ -130,25 +136,25 @@ func TestEvaluate(t *testing.T) {
 				Signal: clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE,
 			},
 		}
-		reason, unconditional := Evaluate(now, testThresholds, id, pa, true, false)
+		reason, unconditional := evaluate(now, testThresholds, pa, true, false)
 		assert.Equal(t, types.ProblemCohortMemberIneligible, reason)
 		assert.False(t, unconditional)
 	})
 
 	t.Run("healthy member passes", func(t *testing.T) {
-		reason, _ := Evaluate(now, testThresholds, id, healthyPooler(id), true, false)
+		reason, _ := evaluate(now, testThresholds, healthyPooler(id), true, false)
 		assert.Empty(t, reason)
 	})
 
 	t.Run("healthy non-member is joinable", func(t *testing.T) {
-		reason, _ := Evaluate(now, testThresholds, id, healthyPooler(id), false, false)
+		reason, _ := evaluate(now, testThresholds, healthyPooler(id), false, false)
 		assert.Empty(t, reason)
 	})
 
 	t.Run("member unhealthy past removal threshold is excluded", func(t *testing.T) {
 		pa := healthyPooler(id)
 		pa.Health().LastSeen = timestamppb.New(now.Add(-90 * time.Second))
-		reason, unconditional := Evaluate(now, testThresholds, id, pa, true, false)
+		reason, unconditional := evaluate(now, testThresholds, pa, true, false)
 		assert.Equal(t, types.ProblemCohortMemberUnhealthy, reason)
 		assert.False(t, unconditional)
 	})
@@ -156,7 +162,7 @@ func TestEvaluate(t *testing.T) {
 	t.Run("member unhealthy within removal threshold is not excluded", func(t *testing.T) {
 		pa := healthyPooler(id)
 		pa.Health().LastSeen = timestamppb.New(now.Add(-5 * time.Second))
-		reason, _ := Evaluate(now, testThresholds, id, pa, true, false)
+		reason, _ := evaluate(now, testThresholds, pa, true, false)
 		assert.Empty(t, reason)
 	})
 
@@ -166,35 +172,33 @@ func TestEvaluate(t *testing.T) {
 		// design prevents.
 		pa := healthyPooler(id)
 		pa.Health().LastSeen = timestamppb.New(now.Add(-45 * time.Second))
-		reason, _ := Evaluate(now, testThresholds, id, pa, false, false)
+		reason, _ := evaluate(now, testThresholds, pa, false, false)
 		assert.Equal(t, types.ProblemCohortMemberUnhealthy, reason)
 	})
 
 	t.Run("non-member below readmission threshold is eligible again", func(t *testing.T) {
 		pa := healthyPooler(id)
 		pa.Health().LastSeen = timestamppb.New(now.Add(-10 * time.Second))
-		reason, _ := Evaluate(now, testThresholds, id, pa, false, false)
+		reason, _ := evaluate(now, testThresholds, pa, false, false)
 		assert.Empty(t, reason)
 	})
 
 	t.Run("member lagging past eviction threshold is excluded", func(t *testing.T) {
-		pa := healthyPooler(id)
-		pa.Health().Status.ReplicationStatus.Lag = durationpb.New(2 * time.Minute)
-		reason, unconditional := Evaluate(now, testThresholds, id, pa, true, false)
+		pa := laggingPooler(id, 2*time.Minute)
+		reason, unconditional := evaluate(now, testThresholds, pa, true, false)
 		assert.Equal(t, types.ProblemCohortMemberLagging, reason)
 		assert.False(t, unconditional)
 	})
 
 	t.Run("no lag reading is never treated as excessive lag", func(t *testing.T) {
-		pa := healthyPooler(id)
-		reason, _ := Evaluate(now, testThresholds, id, pa, true, false)
+		reason, _ := evaluate(now, testThresholds, healthyPooler(id), true, false)
 		assert.Empty(t, reason)
 	})
 
 	t.Run("non-member missing an addition-only precondition is excluded", func(t *testing.T) {
 		pa := healthyPooler(id)
 		pa.Health().Status.ReplicationStatus.WalReceiverStatus = "stopped"
-		reason, unconditional := Evaluate(now, testThresholds, id, pa, false, false)
+		reason, unconditional := evaluate(now, testThresholds, pa, false, false)
 		assert.Equal(t, types.ProblemCohortMemberIneligible, reason)
 		assert.False(t, unconditional)
 	})
@@ -204,19 +208,24 @@ func TestEvaluate(t *testing.T) {
 		// existing member — that's ReplicaNotReplicating's job, not this one.
 		pa := healthyPooler(id)
 		pa.Health().Status.ReplicationStatus.WalReceiverStatus = "stopped"
-		reason, _ := Evaluate(now, testThresholds, id, pa, true, false)
+		reason, _ := evaluate(now, testThresholds, pa, true, false)
 		assert.Empty(t, reason)
 	})
 }
 
-func TestDecide(t *testing.T) {
+func TestDecideAll(t *testing.T) {
 	now := time.Now()
 	leaderID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "leader"}
 	memberID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "member"}
 	nonMemberID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "non-member"}
 
-	atLeastN := func(n int32) *clustermetadatapb.DurabilityPolicy {
-		return &clustermetadatapb.DurabilityPolicy{QuorumType: clustermetadatapb.QuorumType_QUORUM_TYPE_AT_LEAST_N, RequiredCount: n}
+	decisionFor := func(decisions []Decision, id *clustermetadatapb.ID) *Decision {
+		for i := range decisions {
+			if decisions[i].ID.GetName() == id.GetName() {
+				return &decisions[i]
+			}
+		}
+		return nil
 	}
 
 	// wideCohort has enough spare capacity that removing one member and
@@ -243,8 +252,12 @@ func TestDecide(t *testing.T) {
 		}
 	}
 
+	leaderPooler := healthyPooler(leaderID)
+
 	t.Run("healthy non-member yields OpAdd", func(t *testing.T) {
-		d := Decide(now, testThresholds, wideCohort(), nonMemberID, healthyPooler(nonMemberID), false)
+		decisions := DecideAll(now, testThresholds, wideCohort(), []*store.Pooler{leaderPooler, healthyPooler(nonMemberID)}, nil)
+		d := decisionFor(decisions, nonMemberID)
+		require.NotNil(t, d)
 		assert.Equal(t, OpAdd, d.Op)
 		assert.NotEmpty(t, d.Description)
 	})
@@ -256,60 +269,119 @@ func TestDecide(t *testing.T) {
 				Signal: clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE,
 			},
 		}
-		d := Decide(now, testThresholds, wideCohort(), memberID, pa, false)
+		decisions := DecideAll(now, testThresholds, wideCohort(), []*store.Pooler{leaderPooler, pa}, nil)
+		d := decisionFor(decisions, memberID)
+		require.NotNil(t, d)
 		assert.Equal(t, OpRemove, d.Op)
 		assert.Equal(t, types.ProblemCohortMemberIneligible, d.Reason)
 		assert.False(t, d.Urgent)
 	})
 
-	t.Run("ineligible member yields OpNone when removal is unsafe", func(t *testing.T) {
+	t.Run("ineligible member yields no decision when removal is unsafe", func(t *testing.T) {
 		pa := healthyPooler(memberID)
 		pa.Health().AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{
 			CohortEligibilityStatus: &clustermetadatapb.CohortEligibilityStatus{
 				Signal: clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE,
 			},
 		}
-		d := Decide(now, testThresholds, tightCohort(), memberID, pa, false)
-		assert.Equal(t, OpNone, d.Op)
+		decisions := DecideAll(now, testThresholds, tightCohort(), []*store.Pooler{leaderPooler, pa}, nil)
+		assert.Nil(t, decisionFor(decisions, memberID))
 	})
 
 	t.Run("quarantined member yields Urgent OpRemove even when unsafe", func(t *testing.T) {
 		pa := healthyPooler(memberID)
 		pa.Health().Multipooler.LifecycleStatus = &clustermetadatapb.PoolerLifecycle{Status: clustermetadatapb.PoolerLifecycleStatus_LIFECYCLE_QUARANTINED}
-		d := Decide(now, testThresholds, tightCohort(), memberID, pa, false)
-		require.Equal(t, OpRemove, d.Op)
+		decisions := DecideAll(now, testThresholds, tightCohort(), []*store.Pooler{leaderPooler, pa}, nil)
+		d := decisionFor(decisions, memberID)
+		require.NotNil(t, d)
+		assert.Equal(t, OpRemove, d.Op)
 		assert.Equal(t, types.ProblemCohortMemberQuarantined, d.Reason)
 		assert.True(t, d.Urgent)
 	})
 
 	t.Run("tombstoned missing member yields Urgent OpRemove even when unsafe", func(t *testing.T) {
-		d := Decide(now, testThresholds, tightCohort(), memberID, nil, true)
-		require.Equal(t, OpRemove, d.Op)
+		decisions := DecideAll(now, testThresholds, tightCohort(), []*store.Pooler{leaderPooler}, func(*clustermetadatapb.ID) bool { return true })
+		d := decisionFor(decisions, memberID)
+		require.NotNil(t, d)
+		assert.Equal(t, OpRemove, d.Op)
 		assert.True(t, d.Urgent)
 	})
 
 	t.Run("missing-without-tombstone member yields OpRemove only when safe", func(t *testing.T) {
-		d := Decide(now, testThresholds, tightCohort(), memberID, nil, false)
-		assert.Equal(t, OpNone, d.Op)
+		notTombstoned := func(*clustermetadatapb.ID) bool { return false }
+		decisions := DecideAll(now, testThresholds, tightCohort(), []*store.Pooler{leaderPooler}, notTombstoned)
+		assert.Nil(t, decisionFor(decisions, memberID))
 
-		d = Decide(now, testThresholds, wideCohort(), memberID, nil, false)
+		decisions = DecideAll(now, testThresholds, wideCohort(), []*store.Pooler{leaderPooler}, notTombstoned)
+		d := decisionFor(decisions, memberID)
+		require.NotNil(t, d)
 		assert.Equal(t, OpRemove, d.Op)
 		assert.False(t, d.Urgent)
 	})
 
-	t.Run("healthy member yields OpNone", func(t *testing.T) {
-		d := Decide(now, testThresholds, wideCohort(), memberID, healthyPooler(memberID), false)
-		assert.Equal(t, OpNone, d.Op)
+	t.Run("healthy member yields no decision", func(t *testing.T) {
+		decisions := DecideAll(now, testThresholds, wideCohort(), []*store.Pooler{leaderPooler, healthyPooler(memberID)}, nil)
+		assert.Nil(t, decisionFor(decisions, memberID))
 	})
 
-	t.Run("ineligible non-member yields OpNone, not OpAdd", func(t *testing.T) {
+	t.Run("ineligible non-member yields no decision, not OpAdd", func(t *testing.T) {
 		pa := healthyPooler(nonMemberID)
 		pa.Health().AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{
 			CohortEligibilityStatus: &clustermetadatapb.CohortEligibilityStatus{
 				Signal: clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE,
 			},
 		}
-		d := Decide(now, testThresholds, wideCohort(), nonMemberID, pa, false)
-		assert.Equal(t, OpNone, d.Op)
+		decisions := DecideAll(now, testThresholds, wideCohort(), []*store.Pooler{leaderPooler, pa}, nil)
+		assert.Nil(t, decisionFor(decisions, nonMemberID))
+	})
+
+	t.Run("5-member cohort under AT_LEAST_2, all lagging: removes 2 and leaves 3", func(t *testing.T) {
+		m1 := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "m1"}
+		m2 := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "m2"}
+		m3 := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "m3"}
+		m4 := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "m4"}
+		rule := &clustermetadatapb.ShardRule{
+			LeaderId:         leaderID,
+			CohortMembers:    []*clustermetadatapb.ID{leaderID, m1, m2, m3, m4},
+			DurabilityPolicy: atLeastN(2),
+		}
+		lag := 2 * time.Minute // past LagEviction (1m) for all four
+		poolers := []*store.Pooler{leaderPooler, laggingPooler(m1, lag), laggingPooler(m2, lag), laggingPooler(m3, lag), laggingPooler(m4, lag)}
+
+		decisions := DecideAll(now, testThresholds, rule, poolers, nil)
+
+		var removed []string
+		for _, d := range decisions {
+			require.Equal(t, OpRemove, d.Op)
+			assert.False(t, d.Urgent)
+			removed = append(removed, d.ID.GetName())
+		}
+		assert.Len(t, removed, 2, "only 2 of the 4 lagging members can be removed and still leave 3 for cohort safety")
+	})
+
+	t.Run("unparseable durability policy drops non-urgent removals but not urgent ones", func(t *testing.T) {
+		// No DurabilityPolicy set: QuorumType defaults to UNKNOWN, which
+		// commonconsensus.NewPolicyFromProto rejects. acceptSafeRemovals must
+		// fail closed (skip the removal), not treat it as always-safe.
+		rule := &clustermetadatapb.ShardRule{
+			LeaderId:      leaderID,
+			CohortMembers: []*clustermetadatapb.ID{leaderID, memberID},
+		}
+
+		ineligible := healthyPooler(memberID)
+		ineligible.Health().AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{
+			CohortEligibilityStatus: &clustermetadatapb.CohortEligibilityStatus{
+				Signal: clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE,
+			},
+		}
+		decisions := DecideAll(now, testThresholds, rule, []*store.Pooler{leaderPooler, ineligible}, nil)
+		assert.Nil(t, decisionFor(decisions, memberID))
+
+		quarantined := healthyPooler(memberID)
+		quarantined.Health().Multipooler.LifecycleStatus = &clustermetadatapb.PoolerLifecycle{Status: clustermetadatapb.PoolerLifecycleStatus_LIFECYCLE_QUARANTINED}
+		decisions = DecideAll(now, testThresholds, rule, []*store.Pooler{leaderPooler, quarantined}, nil)
+		d := decisionFor(decisions, memberID)
+		require.NotNil(t, d, "an Urgent removal bypasses the policy check entirely")
+		assert.True(t, d.Urgent)
 	})
 }
