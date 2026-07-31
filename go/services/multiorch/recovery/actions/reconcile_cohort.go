@@ -25,6 +25,7 @@ import (
 	"github.com/multigres/multigres/go/common/topoclient"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	"github.com/multigres/multigres/go/services/multiorch/config"
+	"github.com/multigres/multigres/go/services/multiorch/recovery/analysis/eligibility"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
 	"github.com/multigres/multigres/go/services/multiorch/store"
 
@@ -39,9 +40,12 @@ var _ types.RecoveryAction = (*ReconcileCohortAction)(nil)
 // ReconcileCohortAction applies a single cohort-membership change on the
 // shard's leader.
 //
-// It handles two problem codes:
-//   - ProblemPoolerNotInCohort: add the pooler via UpdateConsensusRule(ADD).
-//   - ProblemCohortMemberIneligible: remove the pooler via UpdateConsensusRule(REMOVE).
+// problem.Code only gets it dispatched here; it plays no role in deciding
+// what to do. The actual decision — add, remove, or nothing — is re-derived
+// from scratch against current state via eligibility.DecideAll, the same
+// classifier Analyze() used, so a Problem that's gone stale by execution
+// time (the member recovered, or someone else already fixed it) is a safe
+// no-op instead of an incorrect action.
 //
 // The action mutates exactly one cohort member per execution; multiple
 // drifting members produce multiple problems and run separately.
@@ -82,34 +86,6 @@ func (a *ReconcileCohortAction) Execute(ctx context.Context, problem types.Probl
 		"pooler", problem.PoolerID.Name,
 		"problem_code", string(problem.Code))
 
-	var op multipoolermanagerdatapb.CohortUpdateOperation
-	switch problem.Code {
-	case types.ProblemPoolerNotInCohort:
-		op = multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_ADD
-	case types.ProblemCohortMemberIneligible:
-		op = multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_REMOVE
-	default:
-		return mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,
-			"unsupported problem code for reconcile cohort: %s", problem.Code)
-	}
-
-	// For ADD we need the pooler to be live in the cache (the cohort grows
-	// only if we have a healthy replica). For REMOVE the pooler may already
-	// be gone from the cache (the whole point of "cohort member is no longer
-	// tracked"), so we operate on the problem's raw ID directly.
-	var targetID *clustermetadatapb.ID
-	var target *store.Pooler
-	if op == multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_ADD {
-		t, err := store.FindPoolerByID(a.poolerStore, problem.PoolerID)
-		if err != nil {
-			return mterrors.Wrap(err, "failed to find target pooler")
-		}
-		target = t
-		targetID = target.Health().Multipooler.Id
-	} else {
-		targetID = problem.PoolerID
-	}
-
 	members := store.FindShardMembers(a.poolerStore, problem.ShardKey)
 	leader := members.Leader
 	if leader == nil || members.HighestKnownPosition == nil {
@@ -121,18 +97,59 @@ func (a *ReconcileCohortAction) Execute(ctx context.Context, problem types.Probl
 		return mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
 			"shard %s cannot update its cohort while it has an undecided proposal", problem.ShardKey)
 	}
+	// TODO: skip this cycle if there's no recent evidence the leader can
+	// actually commit writes quickly (e.g. blocked on sync-replication ack
+	// from a lagging standby) — no such signal exists yet to check against.
+	rule := members.HighestKnownPosition.GetDecision()
 
-	// TODO: batch multiple cohort changes into a single UpdateConsensusRule
-	// call. The proto already accepts repeated standby_ids; the analyzer emits
-	// one Problem per pooler and the recovery engine dispatches one action per
-	// problem, so each cycle currently fires N separate UpdateConsensusRule
-	// RPCs (each triggering its own rule_history write and reload) even though
-	// the underlying RPC could apply them in one shot. Coalescing same-shard,
-	// same-operation problems would cut RPC fanout and history churn.
+	// problem.Code and problem.PoolerID only got us here; the pooler cache
+	// updates asynchronously off each pooler's health stream, independent of
+	// the recovery loop's cadence, so what Analyze() saw can be stale by now.
+	// Re-derive every candidate in the shard from scratch with the same
+	// classifier Analyze() used: a stale Problem then resolves to a safe
+	// no-op instead of an incorrect action, and same-tier candidates can be
+	// batched into the one RPC below instead of trickling out one per cycle.
+	targetKey := topoclient.ComponentIDString(problem.PoolerID)
+	decisions := eligibility.DecideAll(time.Now(), eligibility.DefaultThresholds(), rule, members.Poolers,
+		func(id *clustermetadatapb.ID) bool { return isTombstoned(a.poolerStore, id) })
+
+	var target *eligibility.Decision
+	for i := range decisions {
+		if topoclient.ComponentIDString(decisions[i].ID) == targetKey {
+			target = &decisions[i]
+			break
+		}
+	}
+	if target == nil {
+		// The situation already resolved since Analyze() looked: the member
+		// recovered, or a non-member is correctly excluded. Nothing to do.
+		a.logger.InfoContext(ctx, "reconcile cohort: recommendation no longer applies, nothing to do", "target", problem.PoolerID.Name)
+		return nil
+	}
+
+	// Batch every other candidate at the same tier into this one RPC — safe
+	// for OpAdd (more members never hurts durability) and for an Urgent
+	// OpRemove (these were never really contributing anyway), but not for a
+	// non-urgent OpRemove: two individually-safe removals aren't necessarily
+	// safe together, so those still apply one at a time (see DecideAll).
+	op := multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_ADD
+	batchable := func(d eligibility.Decision) bool { return d.Op == eligibility.OpAdd }
+	if target.Op == eligibility.OpRemove {
+		op = multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_REMOVE
+		urgent := target.Urgent
+		batchable = func(d eligibility.Decision) bool { return d.Op == eligibility.OpRemove && d.Urgent == urgent && urgent }
+	}
+	standbyIDs := []*clustermetadatapb.ID{target.ID}
+	for _, d := range decisions {
+		if d.ID != target.ID && batchable(d) {
+			standbyIDs = append(standbyIDs, d.ID)
+		}
+	}
+
 	req := &multipoolermanagerdatapb.UpdateConsensusRuleRequest{
 		Operation:            op,
-		StandbyIds:           []*clustermetadatapb.ID{targetID},
-		ExpectedOutgoingRule: members.HighestKnownPosition.GetDecision().GetRuleNumber(),
+		StandbyIds:           standbyIDs,
+		ExpectedOutgoingRule: rule.GetRuleNumber(),
 	}
 
 	if _, err := a.rpcClient.UpdateConsensusRule(ctx, leader.Health().Multipooler, req); err != nil {
@@ -151,15 +168,42 @@ func (a *ReconcileCohortAction) Execute(ctx context.Context, problem types.Probl
 	// the monitor's ~one-tick backstop would. Best-effort — the ADD (the action's
 	// contract) already succeeded, and the monitor backstop still covers a failure
 	// here — so a member-side hiccup does not fail cohort reconciliation.
-	if op == multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_ADD && target != nil {
-		a.clearJoiningMemberArchive(ctx, leader, target)
+	if op == multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_ADD {
+		for _, id := range standbyIDs {
+			if pa := findPooler(members.Poolers, id); pa != nil {
+				a.clearJoiningMemberArchive(ctx, leader, pa)
+			}
+		}
 	}
 
 	a.logger.InfoContext(ctx, "reconcile cohort action completed",
-		"target", targetID.Name,
+		"targets", len(standbyIDs),
 		"primary", leader.Health().Multipooler.Id.Name,
 		"operation", op.String())
 	return nil
+}
+
+// findPooler returns the rider named id within poolers, or nil.
+func findPooler(poolers []*store.Pooler, id *clustermetadatapb.ID) *store.Pooler {
+	key := topoclient.ComponentIDString(id)
+	for _, pa := range poolers {
+		if topoclient.ComponentIDString(pa.Health().GetMultipooler().GetId()) == key {
+			return pa
+		}
+	}
+	return nil
+}
+
+// isTombstoned reports whether id is currently a cache tombstone (known
+// SHUTDOWN) — checked fresh, not carried over from whatever Analyze() saw.
+func isTombstoned(cache *store.PoolerCache, id *clustermetadatapb.ID) bool {
+	key := topoclient.ComponentIDString(id)
+	for _, t := range cache.Tombstones() {
+		if topoclient.ComponentIDString(t.ID) == key {
+			return true
+		}
+	}
+	return false
 }
 
 // clearJoiningMemberArchive re-issues SetPrimary to a pooler just added to the

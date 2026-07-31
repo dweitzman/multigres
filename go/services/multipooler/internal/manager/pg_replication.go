@@ -349,6 +349,13 @@ func (pm *MultipoolerManager) queryReplicationStatus(ctx context.Context) (*mult
 			if advanceTime, ok := reader.LastReceiveLSNAdvance(); ok {
 				status.LastReceiveLsnAdvanceTime = timestamppb.New(advanceTime)
 			}
+			// Same heartbeat-based lag measurement the gateway already uses for
+			// lag-aware read routing (health_provider.go's SetReplicationLag),
+			// surfaced here too so orch's cohort lag-eviction check has real data
+			// instead of an always-unset field. Left unset if not yet measured.
+			if lag, err := reader.Status(); err == nil {
+				status.Lag = durationpb.New(lag)
+			}
 		}
 	}
 

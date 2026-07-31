@@ -24,8 +24,11 @@ import (
 	"github.com/multigres/multigres/go/services/multiorch/store"
 )
 
-// ReplicaNotReplicatingAnalyzer detects when a replica has no replication configured.
-// This happens when primary_conninfo is not set or replication is stopped.
+// ReplicaNotReplicatingAnalyzer detects a replica that's correctly pointed at
+// the current leader but isn't actually streaming (paused replay, a WAL
+// receiver that connected and got FATAL, or an explicit StopReplication) —
+// the gap leader-info propagation can't see, since it only compares recorded
+// leader identity, not live streaming state. See needsReplicationFix.
 type ReplicaNotReplicatingAnalyzer struct {
 	factory *RecoveryActionFactory
 }
@@ -89,13 +92,24 @@ func (a *ReplicaNotReplicatingAnalyzer) analyzePooler(sa *ShardAnalysis, pa *sto
 	}, nil
 }
 
-// needsReplicationFix returns true if replication is not configured or stopped.
+// needsReplicationFix returns true if replication is configured but not
+// actually flowing.
+//
+// Deliberately does NOT check for a missing/wrong primary_conninfo: that leg
+// is now fully covered, faster, by propagateLeaderInfoToPooler
+// (leader_info_propagation.go), which re-sends SetPrimary every
+// leaderInfoPropagationInterval (1s) whenever a pooler's recorded primary
+// doesn't match the current leader — versus this analyzer's full recovery
+// cycle. An empty primary_conninfo also has no WAL receiver, so it's still
+// caught below via walReceiverActive without needing its own check.
+//
+// What propagation structurally can't detect: it only compares the pooler's
+// *recorded* leader identity/position, never live WAL-receiver state. A
+// replica whose primary_conninfo already correctly names the current leader
+// but isn't actually streaming (paused replay, a WAL receiver that connected
+// and got FATAL, or an explicit StopReplication) looks "already up to date"
+// to propagation and is never re-sent. This analyzer exists for that gap.
 func (a *ReplicaNotReplicatingAnalyzer) needsReplicationFix(pa *store.Pooler) bool {
-	// No primary_conninfo configured
-	if primaryConnInfoHost(pa) == "" {
-		return true
-	}
-
 	// Replication not running (e.g. WAL replay paused)
 	if !walReplayNotPaused(pa) {
 		return true
@@ -103,7 +117,8 @@ func (a *ReplicaNotReplicatingAnalyzer) needsReplicationFix(pa *store.Pooler) bo
 
 	// primary_conninfo is set but the WAL receiver is not active. This covers
 	// timeline divergence: the WAL receiver connects, gets FATAL, and exits,
-	// leaving primary_conninfo on disk but no active streaming.
+	// leaving primary_conninfo on disk but no active streaming. Also covers
+	// primary_conninfo being unset entirely (no receiver, no "streaming").
 	if !walReceiverActive(pa) {
 		return true
 	}
