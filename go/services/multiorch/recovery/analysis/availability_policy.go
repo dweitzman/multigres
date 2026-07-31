@@ -14,7 +14,11 @@
 
 package analysis
 
-import "time"
+import (
+	"time"
+
+	"github.com/multigres/multigres/go/services/multiorch/recovery/analysis/eligibility"
+)
 
 // AvailabilityPolicy is configuration that influences the orchestrator's
 // decisions about when to take action and what choices to make — for example,
@@ -56,6 +60,15 @@ type AvailabilityPolicy struct {
 	// failover-detection thresholds above.
 	LeaderChangeFreshness time.Duration
 
+	// The four Member* fields below mirror eligibility.Thresholds — they exist
+	// here, duplicated, only because ReconcileCohortAction (package actions)
+	// needs the same values and can't import this package (this package
+	// already imports actions). Values come from eligibility.DefaultThresholds
+	// so at least the numbers can't drift; the shape is still two policy
+	// structs standing in for one. Long-term this whole policy belongs a
+	// level lower (see the eligibility package doc — go/common/availability
+	// is the eventual home), shared directly rather than mirrored.
+
 	// MemberUnhealthyRemovalThreshold bounds how long a cohort member's
 	// health checks may keep failing before CohortMismatchAnalyzer proposes
 	// removing it (still gated by IsCohortMemberRemovalSafe). Deliberately
@@ -64,6 +77,12 @@ type AvailabilityPolicy struct {
 	// harder to reverse than briefly ignoring a stale snapshot.
 	MemberUnhealthyRemovalThreshold time.Duration
 
+	// MemberUnhealthyReadmissionThreshold is the lower bar a non-member must
+	// recover below to be added back — deliberately below
+	// MemberUnhealthyRemovalThreshold so a value hovering between the two
+	// doesn't flap the cohort every cycle.
+	MemberUnhealthyReadmissionThreshold time.Duration
+
 	// MemberLagEvictionThreshold bounds how far a cohort member's replication
 	// lag may fall behind before CohortMismatchAnalyzer proposes evicting it
 	// (still gated by IsCohortMemberRemovalSafe, so eviction never proceeds
@@ -71,6 +90,10 @@ type AvailabilityPolicy struct {
 	// blocks synchronous acks from a healthier subset without adding
 	// durability itself.
 	MemberLagEvictionThreshold time.Duration
+
+	// MemberLagReadmissionThreshold is MemberLagEvictionThreshold's
+	// counterpart for the lag check — see MemberUnhealthyReadmissionThreshold.
+	MemberLagReadmissionThreshold time.Duration
 }
 
 // DefaultAvailabilityPolicy returns the built-in policy used when no operator
@@ -79,11 +102,14 @@ type AvailabilityPolicy struct {
 // flip a pooler's liveness while a genuinely stalled stream is caught well
 // before the staleness watchdog's much longer window.
 func DefaultAvailabilityPolicy() AvailabilityPolicy {
+	t := eligibility.DefaultThresholds()
 	return AvailabilityPolicy{
-		LeaderLivenessFreshness:         15 * time.Second,
-		FollowerStreamFreshness:         15 * time.Second,
-		LeaderChangeFreshness:           15 * time.Second,
-		MemberUnhealthyRemovalThreshold: 60 * time.Second,
-		MemberLagEvictionThreshold:      5 * time.Minute,
+		LeaderLivenessFreshness:             15 * time.Second,
+		FollowerStreamFreshness:             15 * time.Second,
+		LeaderChangeFreshness:               15 * time.Second,
+		MemberUnhealthyRemovalThreshold:     t.UnhealthyRemoval,
+		MemberUnhealthyReadmissionThreshold: t.UnhealthyReadmission,
+		MemberLagEvictionThreshold:          t.LagEviction,
+		MemberLagReadmissionThreshold:       t.LagReadmission,
 	}
 }

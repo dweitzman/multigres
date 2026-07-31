@@ -16,29 +16,21 @@ package analysis
 
 import (
 	"errors"
-	"fmt"
 	"time"
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	"github.com/multigres/multigres/go/services/multiorch/recovery/analysis/eligibility"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
-	"github.com/multigres/multigres/go/services/multiorch/store"
 )
 
 // CohortMismatchAnalyzer detects drift between the desired cohort and the
-// recorded cohort on the leader.
-//
-// Two flavors of drift are reported:
-//
-//   - ProblemPoolerNotInCohort: a healthy, replicating, eligible pooler exists
-//     in the shard but is absent from the leader's recorded cohort.
-//   - ProblemCohortMemberIneligible: a current cohort member has self-reported
-//     INELIGIBLE via AvailabilityStatus.CohortEligibilityStatus and should be
-//     removed.
-//
-// Both surface a single ReconcileCohortAction; the action interprets the
-// problem code and applies the appropriate ADD/REMOVE.
+// recorded cohort on the leader: a healthy non-member should be ADDed
+// (ProblemPoolerNotInCohort), and a member eligibility.Decide says to remove
+// should be REMOVEd (ProblemCohortMember{Ineligible,Quarantined,Unhealthy,
+// Lagging}). Both surface a single ReconcileCohortAction, which re-derives
+// and applies the same decision — see that action's doc.
 //
 // TODO: this currently includes every healthy, eligible pooler in the cohort.
 // In the future we'll likely want to constrain cohort size (e.g. cap at
@@ -72,266 +64,94 @@ func (a *CohortMismatchAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, er
 	// Detect against proposals as well as decisions to ensure we surface a problem, but
 	// the action to resolve will defer taking action if a proposal is in progress.
 	undecidedRule := commonconsensus.PossiblyUndecidedRule(sa.HighestPosition)
+	thresholds := cohortThresholds(sa.Policy)
 
 	// Build cohort map keyed by serialized ID, paired with the raw
-	// *clustermetadata.ID so we can emit a Problem for a missing-from-cache
+	// *clustermetadata.ID so we can call Decide for a missing-from-cache
 	// cohort member (no pooler rider carries its ID otherwise).
 	cohortIDs := make(map[topoclient.ComponentID]*clustermetadatapb.ID, len(undecidedRule.GetCohortMembers()))
 	for _, id := range undecidedRule.GetCohortMembers() {
 		cohortIDs[topoclient.ComponentIDString(id)] = id
 	}
 
-	// Track which cohort members we observed in the cache during the loop;
-	// anything left over is missing entirely.
+	// Decide for every pooler we can see, present or (for a cohort member
+	// with no corresponding rider) vanished entirely.
+	var ids []*clustermetadatapb.ID
+	var decisions []eligibility.Decision
 	seen := make(map[topoclient.ComponentID]struct{}, len(cohortIDs))
-
-	var problems []types.Problem
 	for _, pa := range sa.Analyses {
 		id := poolerID(pa)
-		key := topoclient.ComponentIDString(id)
-		// Removal candidates: current cohort members signaling INELIGIBLE.
-		if _, inCohort := cohortIDs[key]; inCohort {
-			seen[key] = struct{}{}
-			// Unlike a tombstoned member, these are still active cohort
-			// voters until removed — gate every removal reason on
-			// IsCohortMemberRemovalSafe the same way the missing-from-cache
-			// case below does, so removal doesn't leave the shard unable to
-			// survive a subsequent leader failure. Deferred every cycle
-			// until another member makes it safe.
-			ineligible := types.PoolerIsCohortIneligible(pa.Health().GetAvailabilityStatus())
-			unhealthyDur := unhealthyFor(pa, sa.Now)
-			lag, hasLag := lagOf(pa)
-			removalSafe := commonconsensus.IsCohortMemberRemovalSafe(undecidedRule, id)
-			switch {
-			case ineligible && removalSafe:
-				problems = append(problems, types.Problem{
-					Code:           types.ProblemCohortMemberIneligible,
-					CheckName:      "CohortMismatch",
-					PoolerID:       id,
-					ShardKey:       sa.ShardKey,
-					Description:    fmt.Sprintf("Cohort member %s self-reported INELIGIBLE", id.Name),
-					Priority:       types.PriorityNormal,
-					Scope:          types.ScopePooler,
-					DetectedAt:     time.Now(),
-					RecoveryAction: a.factory.NewReconcileCohortAction(),
-				})
-			// Prototype: a cohort member orch can't successfully health-check
-			// for too long, but that never went missing from the cache or
-			// tombstoned (e.g. a one-sided reachability problem between orch
-			// and this pooler).
-			case unhealthyDur > sa.Policy.MemberUnhealthyRemovalThreshold && removalSafe:
-				problems = append(problems, types.Problem{
-					Code:      types.ProblemCohortMemberUnhealthy,
-					CheckName: "CohortMismatch",
-					PoolerID:  id,
-					ShardKey:  sa.ShardKey,
-					Description: fmt.Sprintf("Cohort member %s has failed health checks for over %s",
-						id.Name, sa.Policy.MemberUnhealthyRemovalThreshold),
-					Priority:       types.PriorityNormal,
-					Scope:          types.ScopePooler,
-					DetectedAt:     time.Now(),
-					RecoveryAction: a.factory.NewReconcileCohortAction(),
-				})
-			// Prototype: a cohort member whose replication lag exceeds the
-			// eviction threshold blocks synchronous acks from a healthier
-			// subset without adding durability itself. hasLag is false when
-			// no lag reading is available at all — never evict on missing data.
-			case hasLag && lag > sa.Policy.MemberLagEvictionThreshold && removalSafe:
-				problems = append(problems, types.Problem{
-					Code:      types.ProblemCohortMemberLagging,
-					CheckName: "CohortMismatch",
-					PoolerID:  id,
-					ShardKey:  sa.ShardKey,
-					Description: fmt.Sprintf("Cohort member %s replication lag %s exceeds eviction threshold %s",
-						id.Name, lag, sa.Policy.MemberLagEvictionThreshold),
-					Priority:       types.PriorityNormal,
-					Scope:          types.ScopePooler,
-					DetectedAt:     time.Now(),
-					RecoveryAction: a.factory.NewReconcileCohortAction(),
-				})
-			}
-			continue
+		seen[topoclient.ComponentIDString(id)] = struct{}{}
+		if d := eligibility.Decide(sa.Now, thresholds, undecidedRule, id, pa, false); d.Op != eligibility.OpNone {
+			ids = append(ids, id)
+			decisions = append(decisions, d)
 		}
-
-		// Addition candidates: replicas not currently in the cohort that are
-		// healthy enough to be added.
-		if !a.isAdditionCandidate(sa, pa) {
-			continue
-		}
-		problems = append(problems, types.Problem{
-			Code:           types.ProblemPoolerNotInCohort,
-			CheckName:      "CohortMismatch",
-			PoolerID:       id,
-			ShardKey:       sa.ShardKey,
-			Description:    fmt.Sprintf("Pooler %s is replicating and eligible but not in the cohort", id.Name),
-			Priority:       types.PriorityNormal,
-			Scope:          types.ScopePooler,
-			DetectedAt:     time.Now(),
-			RecoveryAction: a.factory.NewReconcileCohortAction(),
-		})
 	}
-
-	// Removal candidates: cohort members no longer in the live cache. Two
-	// confidence tiers — explicit cache tombstones (known SHUTDOWN) outrank
-	// missing-without-tombstone (could be a transient gap). Each candidate
-	// is gated by commonconsensus.IsCohortMemberRemovalSafe, which under
-	// the rule's durability policy verifies that removing the member AND
-	// having the current leader subsequently fail still leaves a
-	// recruitable quorum. To avoid compounding risk, we propose at most
-	// one REMOVE per cycle per shard; the next cycle picks up the next one
-	// once the previous applies.
-	var (
-		tombstoneRemove *clustermetadatapb.ID
-		missingRemove   *clustermetadatapb.ID
-	)
 	for key, id := range cohortIDs {
 		if _, ok := seen[key]; ok {
 			continue
 		}
-		isTombstone := false
-		if _, ok := sa.TombstoneIDs[key]; ok {
-			isTombstone = true
+		_, tombstoned := sa.TombstoneIDs[key]
+		if d := eligibility.Decide(sa.Now, thresholds, undecidedRule, id, nil, tombstoned); d.Op != eligibility.OpNone {
+			ids = append(ids, id)
+			decisions = append(decisions, d)
 		}
-		// Tombstones are KNOWN dead — they aren't contributing to the cohort
-		// anyway, so the durability-policy safety check (which asks "would
-		// removal + another failure leave a recruitable quorum?") doesn't
-		// apply. Removing a tombstone makes the rule accurate without
-		// degrading operational fault-tolerance beyond what already exists.
-		//
-		// For non-tombstone missing-from-cache cases the pooler may still be
-		// alive somewhere; gate those on the durability policy.
-		if !isTombstone && !commonconsensus.IsCohortMemberRemovalSafe(undecidedRule, id) {
-			continue
-		}
-		if isTombstone {
-			if tombstoneRemove == nil {
-				tombstoneRemove = id
+	}
+
+	return a.buildProblems(sa, ids, decisions), nil
+}
+
+// buildProblems picks one Decision to act on. Cohort changes are
+// compare-and-swapped on the leader's outgoing rule number, so acting on
+// more than one per cycle would just race a single RPC against itself.
+// TODO: chain them (batched UpdateConsensusRule, or re-derive
+// ExpectedOutgoingRule between calls) so more than one can apply per cycle.
+// Until then: an Urgent removal first (nothing lost by acting now), then an
+// addition (grows the safety margin), then a non-urgent removal (softest —
+// costs nothing to defer).
+func (a *CohortMismatchAnalyzer) buildProblems(sa *ShardAnalysis, ids []*clustermetadatapb.ID, decisions []eligibility.Decision) []types.Problem {
+	pick := func(want func(eligibility.Decision) bool) []types.Problem {
+		for i, d := range decisions {
+			if want(d) {
+				return []types.Problem{a.problem(sa, ids[i], d)}
 			}
-		} else if missingRemove == nil {
-			missingRemove = id
 		}
+		return nil
 	}
-	if tombstoneRemove != nil {
-		problems = append(problems, types.Problem{
-			Code:           types.ProblemCohortMemberIneligible,
-			CheckName:      "CohortMismatch",
-			PoolerID:       tombstoneRemove,
-			ShardKey:       sa.ShardKey,
-			Description:    fmt.Sprintf("Cohort member %s is SHUTDOWN (cache tombstone); removing from cohort", tombstoneRemove.GetName()),
-			Priority:       types.PriorityNormal,
-			Scope:          types.ScopePooler,
-			DetectedAt:     time.Now(),
-			RecoveryAction: a.factory.NewReconcileCohortAction(),
-		})
-	} else if missingRemove != nil {
-		problems = append(problems, types.Problem{
-			Code:           types.ProblemCohortMemberIneligible,
-			CheckName:      "CohortMismatch",
-			PoolerID:       missingRemove,
-			ShardKey:       sa.ShardKey,
-			Description:    fmt.Sprintf("Cohort member %s is no longer tracked by the pooler cache; removing from cohort", missingRemove.GetName()),
-			Priority:       types.PriorityNormal,
-			Scope:          types.ScopePooler,
-			DetectedAt:     time.Now(),
-			RecoveryAction: a.factory.NewReconcileCohortAction(),
-		})
+	if p := pick(func(d eligibility.Decision) bool { return d.Op == eligibility.OpRemove && d.Urgent }); p != nil {
+		return p
 	}
-	return problems, nil
+	if p := pick(func(d eligibility.Decision) bool { return d.Op == eligibility.OpAdd }); p != nil {
+		return p
+	}
+	return pick(func(d eligibility.Decision) bool { return d.Op == eligibility.OpRemove })
 }
 
-// unhealthyFor returns how long it's been since orch last successfully
-// heard from this pooler (now minus LastSeen), or 0 if it has never been
-// successfully checked (a brand-new pooler shouldn't be judged unhealthy
-// before its first check lands).
-//
-// Deliberately keyed on LastSeen rather than gating on IsLastCheckValid:
-// IsLastCheckValid only flips to false when a health check is actually
-// attempted and fails (store/health_stream.go markDisconnected). A pooler
-// whose check goroutine stopped running entirely — dropped from the watch,
-// crashed, network-partitioned before any failure was ever recorded — would
-// keep a stale IsLastCheckValid=true forever and never be judged unhealthy
-// under that gate, even though orch has heard nothing from it in a very long
-// time. LastSeen only advances on an actual successful observation, so its
-// age captures both "actively failing" and "gone silent" uniformly.
-func unhealthyFor(pa *store.Pooler, now time.Time) time.Duration {
-	// Check the field for nil directly rather than AsTime().IsZero(): an
-	// absent Timestamp's AsTime() is the Unix epoch (1970), not Go's zero
-	// time.Time, so IsZero() would never catch it and every never-seen
-	// pooler would look decades stale instead of "no data yet."
-	lastSeen := pa.Health().GetLastSeen()
-	if lastSeen == nil {
-		return 0
+func (a *CohortMismatchAnalyzer) problem(sa *ShardAnalysis, id *clustermetadatapb.ID, d eligibility.Decision) types.Problem {
+	code := d.Reason
+	if d.Op == eligibility.OpAdd {
+		code = types.ProblemPoolerNotInCohort
 	}
-	return now.Sub(lastSeen.AsTime())
+	return types.Problem{
+		Code:           code,
+		CheckName:      "CohortMismatch",
+		PoolerID:       id,
+		ShardKey:       sa.ShardKey,
+		Description:    d.Description,
+		Priority:       types.PriorityNormal,
+		Scope:          types.ScopePooler,
+		DetectedAt:     time.Now(),
+		RecoveryAction: a.factory.NewReconcileCohortAction(),
+	}
 }
 
-// lagOf returns a standby's replication lag and true, or (0, false) if no
-// lag reading is available (e.g. not a standby, or postgres hasn't reported
-// one yet) — callers must treat missing data as "don't evict," not as zero
-// lag.
-func lagOf(pa *store.Pooler) (time.Duration, bool) {
-	lag := pa.Health().GetStatus().GetReplicationStatus().GetLag()
-	if lag == nil {
-		return 0, false
+// cohortThresholds adapts the policy's cohort-quality durations to
+// eligibility.Thresholds.
+func cohortThresholds(p AvailabilityPolicy) eligibility.Thresholds {
+	return eligibility.Thresholds{
+		UnhealthyRemoval:     p.MemberUnhealthyRemovalThreshold,
+		UnhealthyReadmission: p.MemberUnhealthyReadmissionThreshold,
+		LagEviction:          p.MemberLagEvictionThreshold,
+		LagReadmission:       p.MemberLagReadmissionThreshold,
 	}
-	return lag.AsDuration(), true
-}
-
-// isAdditionCandidate reports whether a non-cohort pooler is healthy enough to
-// be added: it must be a non-leader REPLICA, initialized, actively streaming
-// from the leader, and not signaling INELIGIBLE.
-//
-// The "actively streaming" requirement (walReceiverStreaming, not merely
-// primary_conninfo set + replay unpaused) is load-bearing for restore_command
-// safety: admission clears the joining member's restore_command (ReconcileCohort
-// re-issues SetPrimary, which clears it once the node is named in the rule). A
-// node still catching up from the archive (receiver not yet streaming) would be
-// stranded if we admitted it and stripped the archive out from under it. Gating
-// on an active receiver here makes "a cohort member is, by construction,
-// streaming and archive-independent" a local property of admission rather than
-// something that only holds because ReplicaNotReplicating (higher priority)
-// happens to preempt this analyzer until the receiver comes up.
-//
-// TODO: long-term, most of these checks should fold into the pooler's
-// self-reported cohort eligibility signal. The pooler is in the best position
-// to know whether it can durably serve as a cohort member — it knows whether
-// it has a working backup, whether it's in a drained state, whether
-// replication is healthy, and so on. The analyzer should largely just trust
-// the CohortEligibilityStatus signal rather than reconstruct that judgment
-// from individual health fields.
-//
-// The IsLeader gate is also conceptually unnecessary — there's no correctness
-// problem an acting primary adding itself to the cohort. This may be useful
-// in some propagation scenarios.
-func (a *CohortMismatchAnalyzer) isAdditionCandidate(_ *ShardAnalysis, pa *store.Pooler) bool {
-	if commonconsensus.SelfConsensusRole(pa.Health().GetConsensusStatus()) == commonconsensus.ConsensusRoleLeader {
-		return false
-	}
-	if !pa.Health().IsLastCheckValid {
-		return false
-	}
-	if !pa.IsInitialized() {
-		return false
-	}
-	// Replication must be configured and not stopped — otherwise the standby
-	// can't acknowledge writes and adding it would degrade durability.
-	if primaryConnInfoHost(pa) == "" || !walReplayNotPaused(pa) {
-		return false
-	}
-	// The WAL receiver must actually be streaming from the leader — configured
-	// + replaying also matches a node still catching up from the archive, and
-	// admitting such a node would clear its restore_command mid-catch-up. See
-	// the doc comment above.
-	if !walReceiverStreaming(pa) {
-		return false
-	}
-	if types.PoolerIsCohortIneligible(pa.Health().GetAvailabilityStatus()) {
-		return false
-	}
-	// A pooler that hasn't caught back up to its pre-pg_rewind position would
-	// just have its Recruit() rejected — see ConsensusStatus.RecruitBlockedUntil.
-	if pa.Health().GetConsensusStatus().GetRecruitBlockedUntil() != nil {
-		return false
-	}
-	return true
 }

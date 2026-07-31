@@ -217,6 +217,52 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 		assert.Equal(t, replicaA.Name, problems[0].PoolerID.Name)
 	})
 
+	// quarantinedReplicaPA returns a rider for a present, otherwise-healthy
+	// cohort member that has self-quarantined.
+	quarantinedReplicaPA := func(id *clustermetadatapb.ID) *store.Pooler {
+		return newRider(&multiorchdatapb.PoolerHealthState{
+			Multipooler: &clustermetadatapb.Multipooler{
+				Id:              id,
+				ShardKey:        shardKey,
+				LifecycleStatus: &clustermetadatapb.PoolerLifecycle{Status: clustermetadatapb.PoolerLifecycleStatus_LIFECYCLE_QUARANTINED},
+			},
+			IsLastCheckValid: true,
+			Status: &multipoolermanagerdatapb.Status{
+				IsInitialized: true,
+				ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
+					PrimaryConnInfo:   &multipoolermanagerdatapb.PrimaryConnInfo{Host: "primary.example.com"},
+					WalReceiverStatus: "streaming",
+					LastReceiveLsn:    "0/3000000",
+				},
+			},
+		})
+	}
+
+	t.Run("quarantined cohort member triggers unconditional REMOVE", func(t *testing.T) {
+		// Same tight 3-member/N=2 shape as the tombstone test: a safety-gated
+		// removal would be unsafe, but quarantine — like a tombstone — was
+		// never going to help a real failover, so it bypasses the gate.
+		sa := missingMemberShard(
+			atLeastN(2),
+			[]*clustermetadatapb.ID{primaryID, replicaA, replicaB},
+			nil,
+			quarantinedReplicaPA(replicaA),
+			healthyReplicaPA(replicaB, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
+		)
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		require.Len(t, problems, 1)
+		assert.Equal(t, types.ProblemCohortMemberQuarantined, problems[0].Code)
+		assert.Equal(t, replicaA.Name, problems[0].PoolerID.Name)
+	})
+
+	t.Run("quarantined non-cohort replica is not proposed for addition", func(t *testing.T) {
+		sa := healthyShard(nil, quarantinedReplicaPA(replicaA))
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		assert.Empty(t, problems)
+	})
+
 	t.Run("ignores eligible cohort member already in cohort", func(t *testing.T) {
 		sa := healthyShard(
 			[]*clustermetadatapb.ID{replicaA},
@@ -321,9 +367,12 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 		assert.Empty(t, problems)
 	})
 
-	t.Run("emits both add and remove problems together", func(t *testing.T) {
-		// 4-member cohort under N=2 (A is in cohort, B is not) so removing A
-		// and losing the leader still leaves a recruitable quorum.
+	t.Run("addition outranks a safety-gated removal in the same cycle", func(t *testing.T) {
+		// Cohort changes CAS on the leader's outgoing rule number, so only one
+		// action comes out per cycle (see buildProblems). replicaA is a
+		// safety-gated removal candidate (INELIGIBLE) and replicaB is an
+		// addition candidate; addition outranks a safety-gated removal, so
+		// only the ADD is proposed here. The REMOVE follows next cycle.
 		extraReplica1 := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica-c"}
 		extraReplica2 := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica-d"}
 		sa := missingMemberShard(
@@ -337,10 +386,30 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 		)
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
-		require.Len(t, problems, 2)
-		codes := []types.ProblemCode{problems[0].Code, problems[1].Code}
-		assert.Contains(t, codes, types.ProblemCohortMemberIneligible)
-		assert.Contains(t, codes, types.ProblemPoolerNotInCohort)
+		require.Len(t, problems, 1)
+		assert.Equal(t, types.ProblemPoolerNotInCohort, problems[0].Code)
+		assert.Equal(t, replicaB.Name, problems[0].PoolerID.Name)
+	})
+
+	t.Run("unconditional removal outranks an addition in the same cycle", func(t *testing.T) {
+		// Same shape, but replicaA is quarantined (unconditional) instead of
+		// merely INELIGIBLE — the REMOVE wins over the ADD.
+		extraReplica1 := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica-c"}
+		extraReplica2 := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "replica-d"}
+		sa := missingMemberShard(
+			atLeastN(2),
+			[]*clustermetadatapb.ID{primaryID, replicaA, extraReplica1, extraReplica2},
+			nil,
+			quarantinedReplicaPA(replicaA),
+			healthyReplicaPA(replicaB, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
+			healthyReplicaPA(extraReplica1, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
+			healthyReplicaPA(extraReplica2, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
+		)
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		require.Len(t, problems, 1)
+		assert.Equal(t, types.ProblemCohortMemberQuarantined, problems[0].Code)
+		assert.Equal(t, replicaA.Name, problems[0].PoolerID.Name)
 	})
 
 	t.Run("returns error when factory is nil", func(t *testing.T) {
@@ -674,5 +743,101 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
 		assert.Empty(t, problems)
+	})
+
+	t.Run("non-cohort replica exceeding the unhealthy threshold is not proposed for addition", func(t *testing.T) {
+		// Regression: a pooler REMOVEd for exceeding MemberUnhealthyRemovalThreshold
+		// must not be immediately re-proposed for ADD the moment it's no longer
+		// a cohort member, or the two problem codes flap every recovery cycle.
+		// IsLastCheckValid stays true (a "gone silent" pooler, not a failing one)
+		// so this exercises exceedsUnhealthyThreshold specifically, not the
+		// earlier IsLastCheckValid gate.
+		goneSilent := newRider(&multiorchdatapb.PoolerHealthState{
+			Multipooler:      &clustermetadatapb.Multipooler{Id: replicaA, ShardKey: shardKey},
+			IsLastCheckValid: true,
+			LastSeen:         timestamppb.New(time.Now().Add(-2 * time.Minute)),
+			Status: &multipoolermanagerdatapb.Status{
+				IsInitialized: true,
+				ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
+					PrimaryConnInfo:   &multipoolermanagerdatapb.PrimaryConnInfo{Host: "primary.example.com"},
+					WalReceiverStatus: "streaming",
+					LastReceiveLsn:    "0/3000000",
+				},
+			},
+		})
+		sa := healthyShard(nil, goneSilent)
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		assert.Empty(t, problems)
+	})
+
+	t.Run("non-cohort replica exceeding the lag threshold is not proposed for addition", func(t *testing.T) {
+		// Same flap regression as above, for the lag-eviction path.
+		sa := healthyShard(nil, laggingReplicaPA(replicaA, 2*time.Minute))
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		assert.Empty(t, problems)
+	})
+
+	t.Run("non-cohort replica between the readmission and removal thresholds is not proposed for addition", func(t *testing.T) {
+		// The readmission threshold (30s default), not the removal threshold
+		// (60s default), governs addition eligibility. 45s would never have
+		// triggered removal had this pooler been a member, but a non-member
+		// still needs to be below the LOWER bar to be added — this is what
+		// keeps a value oscillating between the two thresholds from flapping
+		// the cohort every cycle.
+		goneSilent := newRider(&multiorchdatapb.PoolerHealthState{
+			Multipooler:      &clustermetadatapb.Multipooler{Id: replicaA, ShardKey: shardKey},
+			IsLastCheckValid: true,
+			LastSeen:         timestamppb.New(time.Now().Add(-45 * time.Second)),
+			Status: &multipoolermanagerdatapb.Status{
+				IsInitialized: true,
+				ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
+					PrimaryConnInfo:   &multipoolermanagerdatapb.PrimaryConnInfo{Host: "primary.example.com"},
+					WalReceiverStatus: "streaming",
+					LastReceiveLsn:    "0/3000000",
+				},
+			},
+		})
+		sa := healthyShard(nil, goneSilent)
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		assert.Empty(t, problems)
+	})
+
+	t.Run("non-cohort replica below the readmission threshold is proposed for addition", func(t *testing.T) {
+		goneSilent := newRider(&multiorchdatapb.PoolerHealthState{
+			Multipooler:      &clustermetadatapb.Multipooler{Id: replicaA, ShardKey: shardKey},
+			IsLastCheckValid: true,
+			LastSeen:         timestamppb.New(time.Now().Add(-10 * time.Second)),
+			Status: &multipoolermanagerdatapb.Status{
+				IsInitialized: true,
+				ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
+					PrimaryConnInfo:   &multipoolermanagerdatapb.PrimaryConnInfo{Host: "primary.example.com"},
+					WalReceiverStatus: "streaming",
+					LastReceiveLsn:    "0/3000000",
+				},
+			},
+		})
+		sa := healthyShard(nil, goneSilent)
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		require.Len(t, problems, 1)
+		assert.Equal(t, types.ProblemPoolerNotInCohort, problems[0].Code)
+	})
+
+	t.Run("non-cohort replica with lag between the readmission and eviction thresholds is not proposed for addition", func(t *testing.T) {
+		sa := healthyShard(nil, laggingReplicaPA(replicaA, 45*time.Second))
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		assert.Empty(t, problems)
+	})
+
+	t.Run("non-cohort replica with lag below the readmission threshold is proposed for addition", func(t *testing.T) {
+		sa := healthyShard(nil, laggingReplicaPA(replicaA, 10*time.Second))
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		require.Len(t, problems, 1)
+		assert.Equal(t, types.ProblemPoolerNotInCohort, problems[0].Code)
 	})
 }

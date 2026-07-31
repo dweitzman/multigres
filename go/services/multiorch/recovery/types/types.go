@@ -57,10 +57,11 @@ const (
 
 	// Cohort drift problems (require healthy leader; not service-impacting on
 	// their own, but durability degrades if left unaddressed).
-	ProblemPoolerNotInCohort      ProblemCode = "PoolerNotInCohort"
-	ProblemCohortMemberIneligible ProblemCode = "CohortMemberIneligible"
-	ProblemCohortMemberUnhealthy  ProblemCode = "CohortMemberUnhealthy"
-	ProblemCohortMemberLagging    ProblemCode = "CohortMemberLagging"
+	ProblemPoolerNotInCohort       ProblemCode = "PoolerNotInCohort"
+	ProblemCohortMemberIneligible  ProblemCode = "CohortMemberIneligible"
+	ProblemCohortMemberUnhealthy   ProblemCode = "CohortMemberUnhealthy"
+	ProblemCohortMemberLagging     ProblemCode = "CohortMemberLagging"
+	ProblemCohortMemberQuarantined ProblemCode = "CohortMemberQuarantined"
 
 	// Non-actionable: if all hosts are down, there is no way we can failover.
 	ProblemLeaderAndReplicasDead ProblemCode = "LeaderAndReplicasDead"

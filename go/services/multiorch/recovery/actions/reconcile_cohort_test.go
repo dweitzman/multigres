@@ -46,6 +46,9 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 	ctx := context.Background()
 	primaryID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary"}
 	replicaID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "replica1"}
+	replica2ID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "replica2"}
+	replica3ID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "replica3"}
+	replica4ID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "replica4"}
 	shardKey := &clustermetadatapb.ShardKey{Database: "testdb", TableGroup: "default", Shard: "0"}
 
 	setupStore := func(t *testing.T, fakeClient *rpcclient.FakeClient) (*store.PoolerCache, func()) {
@@ -65,8 +68,13 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 				TermRevocation: &clustermetadatapb.TermRevocation{RevokedBelowTerm: 3},
 				CurrentPosition: &clustermetadatapb.PoolerPosition{
 					Position: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{
-						RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 3, LeaderSubterm: 7},
-						LeaderId:   primaryID,
+						RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 3, LeaderSubterm: 7},
+						LeaderId:      primaryID,
+						CohortMembers: []*clustermetadatapb.ID{primaryID, replica2ID},
+						DurabilityPolicy: &clustermetadatapb.DurabilityPolicy{
+							QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_AT_LEAST_N,
+							RequiredCount: 1,
+						},
 					}},
 				},
 			},
@@ -79,6 +87,18 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 			},
 			ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 				TermRevocation: &clustermetadatapb.TermRevocation{RevokedBelowTerm: 3},
+			},
+			// Healthy and streaming by default — ReconcileCohortAction now
+			// re-verifies eligibility.Joinable/Evaluate against fresh state
+			// before applying, so an ADD target must actually pass it.
+			IsLastCheckValid: true,
+			Status: &multipoolermanagerdatapb.Status{
+				IsInitialized: true,
+				ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
+					PrimaryConnInfo:   &multipoolermanagerdatapb.PrimaryConnInfo{Host: "primary.example.com"},
+					WalReceiverStatus: "streaming",
+					LastReceiveLsn:    "0/3000000",
+				},
 			},
 		}, nil))
 		return ps, func() { _ = ts.Close() }
@@ -134,7 +154,7 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 			StatusResponses: map[topoclient.ComponentID]*rpcclient.ResponseWithDelay[*multipoolermanagerdatapb.StatusResponse]{
 				"multipooler-cell1-primary": {Response: &multipoolermanagerdatapb.StatusResponse{
 					Status:          &multipoolermanagerdatapb.Status{IsInitialized: true, PoolerType: clustermetadatapb.PoolerType_PRIMARY},
-					ConsensusStatus: selfLeaderConsensus(primaryID),
+					ConsensusStatus: selfLeaderConsensus(primaryID, primaryID, replicaID, replica2ID),
 				}},
 			},
 			UpdateConsensusRuleResponses: map[topoclient.ComponentID]*multipoolermanagerdatapb.UpdateConsensusRuleResponse{
@@ -143,6 +163,45 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 		}
 		ps, cleanup := setupStore(t, fakeClient)
 		defer cleanup()
+		// Execute now re-verifies eligibility fresh rather than trusting
+		// problem.Code, so replicaID must actually be a cohort member and
+		// actually excluded (self-reported INELIGIBLE, overriding the shared
+		// healthy default). The cohort must also be large enough that
+		// removing replicaID AND losing the leader still leaves a majority —
+		// IsCohortMemberRemovalSafe requires strict majority, not just the
+		// policy's raw count, so this needs 5 members (2 survivors of 4
+		// isn't a majority), not the 3-member shape used elsewhere.
+		store.SeedCache(t, ps, store.NewPooler(&multiorchdatapb.PoolerHealthState{
+			Multipooler: &clustermetadatapb.Multipooler{
+				Id: primaryID, ShardKey: shardKey, Type: clustermetadatapb.PoolerType_PRIMARY,
+				Hostname: "primary.example.com", PortMap: map[string]int32{"postgres": 5432},
+			},
+			ConsensusStatus: &clustermetadatapb.ConsensusStatus{
+				Id:             primaryID,
+				TermRevocation: &clustermetadatapb.TermRevocation{RevokedBelowTerm: 3},
+				CurrentPosition: &clustermetadatapb.PoolerPosition{
+					Position: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{
+						RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 3, LeaderSubterm: 7},
+						LeaderId:   primaryID,
+						CohortMembers: []*clustermetadatapb.ID{
+							primaryID, replicaID, replica2ID, replica3ID, replica4ID,
+						},
+						DurabilityPolicy: &clustermetadatapb.DurabilityPolicy{
+							QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_AT_LEAST_N,
+							RequiredCount: 2,
+						},
+					}},
+				},
+			},
+		}, nil))
+		store.SeedCache(t, ps, store.NewPooler(&multiorchdatapb.PoolerHealthState{
+			Multipooler: &clustermetadatapb.Multipooler{Id: replicaID, ShardKey: shardKey, Type: clustermetadatapb.PoolerType_REPLICA},
+			AvailabilityStatus: &clustermetadatapb.AvailabilityStatus{
+				CohortEligibilityStatus: &clustermetadatapb.CohortEligibilityStatus{
+					Signal: clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE,
+				},
+			},
+		}, nil))
 
 		action := NewReconcileCohortAction(nil, fakeClient, ps, nil, slog.Default())
 		err := action.Execute(ctx, types.Problem{
@@ -158,22 +217,23 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 		assert.Equal(t, multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_REMOVE, req.Operation)
 	})
 
-	t.Run("returns error when target pooler is not in store", func(t *testing.T) {
+	t.Run("target pooler not in store resolves to a no-op, not an error", func(t *testing.T) {
+		// Execute no longer trusts problem.Code — with no rider for replicaID
+		// at all (and it's not in the leader's cohort or a tombstone either),
+		// eligibility.Decide correctly says there's nothing to do: the ADD
+		// this Problem originally proposed is moot.
 		fakeClient := &rpcclient.FakeClient{}
-		ts, _ := memorytopo.NewServerAndFactory(ctx, "cell1")
-		defer ts.Close()
-		ps := store.NewTestCache(t)
-		// No poolers added to the store — FindPoolerByID will fail.
+		ps, cleanup := setupStore(t, fakeClient)
+		defer cleanup()
 
 		action := NewReconcileCohortAction(nil, fakeClient, ps, nil, slog.Default())
 		err := action.Execute(ctx, types.Problem{
 			Code:     types.ProblemPoolerNotInCohort,
 			ShardKey: shardKey,
-			PoolerID: replicaID,
+			PoolerID: &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "ghost"},
 		})
 
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "find target pooler")
+		require.NoError(t, err)
 		assert.NotContains(t, fakeClient.CallLog, "UpdateConsensusRule(multipooler-cell1-primary)")
 	})
 
@@ -288,13 +348,20 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 		assert.Empty(t, fakeClient.CallLog, "no RPC should be dispatched")
 	})
 
-	t.Run("rejects unsupported problem code", func(t *testing.T) {
+	t.Run("problem.Code plays no role in the decision", func(t *testing.T) {
+		// Execute re-derives the operation from fresh state via
+		// eligibility.Decide; a nonsense/mismatched Code (here,
+		// ProblemReplicaNotReplicating on a genuine ADD candidate) doesn't
+		// stop it from applying the ADD that current state actually calls for.
 		fakeClient := &rpcclient.FakeClient{
 			StatusResponses: map[topoclient.ComponentID]*rpcclient.ResponseWithDelay[*multipoolermanagerdatapb.StatusResponse]{
 				"multipooler-cell1-primary": {Response: &multipoolermanagerdatapb.StatusResponse{
 					Status:          &multipoolermanagerdatapb.Status{IsInitialized: true, PoolerType: clustermetadatapb.PoolerType_PRIMARY},
 					ConsensusStatus: selfLeaderConsensus(primaryID),
 				}},
+			},
+			UpdateConsensusRuleResponses: map[topoclient.ComponentID]*multipoolermanagerdatapb.UpdateConsensusRuleResponse{
+				"multipooler-cell1-primary": {},
 			},
 		}
 		ps, cleanup := setupStore(t, fakeClient)
@@ -307,20 +374,32 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 			PoolerID: replicaID,
 		})
 
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "unsupported problem code")
-		assert.NotContains(t, fakeClient.CallLog, "UpdateConsensusRule(multipooler-cell1-primary)")
+		require.NoError(t, err)
+		assert.Contains(t, fakeClient.CallLog, "UpdateConsensusRule(multipooler-cell1-primary)")
+		req := fakeClient.LastUpdateConsensusRuleRequest
+		require.NotNil(t, req)
+		assert.Equal(t, multipoolermanagerdatapb.CohortUpdateOperation_COHORT_UPDATE_OPERATION_ADD, req.Operation)
 	})
 }
 
 // selfLeaderConsensus builds a consensus status in which the pooler names itself
 // as the consensus leader (so commonconsensus.HighestKnownRule/IsLeader identify
-// it) without a recorded rule number.
-func selfLeaderConsensus(id *clustermetadatapb.ID) *clustermetadatapb.ConsensusStatus {
+// it) without a recorded rule number. If cohort is non-empty, an AT_LEAST_1
+// durability policy is attached too, so IsCohortMemberRemovalSafe has enough
+// to work with.
+func selfLeaderConsensus(id *clustermetadatapb.ID, cohort ...*clustermetadatapb.ID) *clustermetadatapb.ConsensusStatus {
+	rule := &clustermetadatapb.ShardRule{LeaderId: id}
+	if len(cohort) > 0 {
+		rule.CohortMembers = cohort
+		rule.DurabilityPolicy = &clustermetadatapb.DurabilityPolicy{
+			QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_AT_LEAST_N,
+			RequiredCount: 1,
+		}
+	}
 	return &clustermetadatapb.ConsensusStatus{
 		Id: id,
 		CurrentPosition: &clustermetadatapb.PoolerPosition{
-			Position: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{LeaderId: id}},
+			Position: &clustermetadatapb.RulePosition{Decision: rule},
 		},
 	}
 }
