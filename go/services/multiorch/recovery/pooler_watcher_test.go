@@ -99,8 +99,8 @@ func TestPoolerWatcher_InitialDiscovery(t *testing.T) {
 
 	p1, exists := poolerStore.GetRider(poolerKey("zone1", "pooler1"))
 	require.True(t, exists)
-	assert.Equal(t, "host1", p1.Health().Multipooler.Hostname)
-	assert.Nil(t, p1.Health().LastSeen, "new pooler should not have a health observation yet")
+	assert.Equal(t, "host1", p1.Multipooler().Hostname)
+	assert.Nil(t, p1.StaleHealth().LastSeen, "new pooler should not have a health observation yet")
 
 	// OnLive must have run for each discovered pooler — the cache rider's
 	// Stream handle (installed by the OnLive hook via HealthStream.spawnStream)
@@ -145,7 +145,7 @@ func TestPoolerWatcher_NewPoolerAddedAfterStart(t *testing.T) {
 
 	p1, exists := poolerStore.GetRider(poolerKey("zone1", "pooler1"))
 	require.True(t, exists)
-	assert.Equal(t, "host1", p1.Health().Multipooler.Hostname)
+	assert.Equal(t, "host1", p1.Multipooler().Hostname)
 	assert.NotNil(t, p1.HealthStream, "OnLive should have spawned a stream on discovery")
 }
 
@@ -201,13 +201,13 @@ func TestPoolerWatcher_PoolerMetadataUpdate(t *testing.T) {
 	// Wait for the update to propagate
 	require.Eventually(t, func() bool {
 		p, exists := poolerStore.GetRider(pid)
-		return exists && p.Health().Multipooler.Hostname == "host2"
+		return exists && p.Multipooler().Hostname == "host2"
 	}, 5*time.Second, 10*time.Millisecond, "expected hostname to be updated to host2")
 
 	// Health-check state should be preserved
 	updated, exists := poolerStore.GetRider(pid)
 	require.True(t, exists)
-	assert.NotNil(t, updated.Health().LastSeen, "LastSeen should be preserved")
+	assert.NotNil(t, updated.StaleHealth().LastSeen, "LastSeen should be preserved")
 
 	// An update to an existing pooler must NOT re-fire OnLive — that would
 	// install a fresh StreamHandle and replace the original one.

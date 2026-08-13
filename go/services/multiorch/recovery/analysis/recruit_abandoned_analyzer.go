@@ -56,7 +56,7 @@ func revocationStrandsFollower(sa *ShardAnalysis, p *store.Pooler) bool {
 	if sa.HighestPosition == nil {
 		return false
 	}
-	revocation := p.Health().GetConsensusStatus().GetTermRevocation()
+	revocation := p.StaleHealth().GetConsensusStatus().GetTermRevocation()
 	return commonconsensus.IsRuleRevoked(sa.HighestPosition, revocation)
 }
 
@@ -66,7 +66,7 @@ func revocationStrandsFollower(sa *ShardAnalysis, p *store.Pooler) bool {
 // recruit as abandoned. A revocation with no coordinator_initiated_at (which a
 // valid one always carries) is treated as not-yet-aged, erring toward waiting.
 func revocationAgedPastFailoverGrace(factory *RecoveryActionFactory, sa *ShardAnalysis, p *store.Pooler) bool {
-	initiatedAt := p.Health().GetConsensusStatus().GetTermRevocation().GetCoordinatorInitiatedAt()
+	initiatedAt := p.StaleHealth().GetConsensusStatus().GetTermRevocation().GetCoordinatorInitiatedAt()
 	if initiatedAt == nil {
 		return false
 	}
@@ -83,7 +83,7 @@ func (a *RecruitAbandonedAnalyzer) analyzePooler(sa *ShardAnalysis, pa *store.Po
 	}
 
 	// Only followers can be stranded; the leader defines the rule.
-	if commonconsensus.SelfConsensusRole(pa.Health().GetConsensusStatus()) == commonconsensus.ConsensusRoleLeader {
+	if commonconsensus.SelfConsensusRole(pa.StaleHealth().GetConsensusStatus()) == commonconsensus.ConsensusRoleLeader {
 		return nil, nil
 	}
 	hs, ok := pa.HealthWithin(sa.Now, sa.Policy.ObservationFreshness)
@@ -93,7 +93,7 @@ func (a *RecruitAbandonedAnalyzer) analyzePooler(sa *ShardAnalysis, pa *store.Po
 
 	// We need a known leader with an address to dial: the fix drives an
 	// UpdateConsensusRule on the leader and then a SetPrimary toward the follower.
-	if sa.Leader == nil || sa.Leader.Health().GetMultipooler().GetHostname() == "" {
+	if sa.Leader == nil || sa.Leader.Multipooler().GetHostname() == "" {
 		return nil, nil
 	}
 
@@ -109,7 +109,7 @@ func (a *RecruitAbandonedAnalyzer) analyzePooler(sa *ShardAnalysis, pa *store.Po
 	// revocation is a monotonic promise floor that ConsensusStatus keeps reporting
 	// even after the follower's rule catches up, so its mere presence is not
 	// enough.
-	if !commonconsensus.IsSelfRevoked(pa.Health().GetConsensusStatus()) {
+	if !commonconsensus.IsSelfRevoked(pa.StaleHealth().GetConsensusStatus()) {
 		return nil, nil
 	}
 

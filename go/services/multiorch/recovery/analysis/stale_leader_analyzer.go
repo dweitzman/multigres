@@ -98,7 +98,7 @@ func (a *StaleLeaderAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, error
 			ShardKey:  sa.ShardKey,
 			Description: fmt.Sprintf("Stale leader detected: %s (stale_leader_position %s) is stale, current leader %s (leader_position %s)",
 				poolerID(stale).Name,
-				commonconsensus.FormatRulePosition(stale.Health().GetConsensusStatus().GetCurrentPosition().GetPosition()),
+				commonconsensus.FormatRulePosition(stale.StaleHealth().GetConsensusStatus().GetCurrentPosition().GetPosition()),
 				leaderID.Name,
 				leaderPosition),
 			Priority:       types.PriorityHigh - types.Priority(i),

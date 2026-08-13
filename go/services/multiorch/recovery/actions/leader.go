@@ -47,17 +47,17 @@ func pollLeaderHealth(ctx context.Context, rpcClient rpcclient.MultipoolerClient
 		return nil, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION, "no consensus leader known")
 	}
 
-	statusResp, err := rpcClient.Status(ctx, leader.Health().Multipooler, &multipoolermanagerdatapb.StatusRequest{})
+	statusResp, err := rpcClient.Status(ctx, leader.Multipooler(), &multipoolermanagerdatapb.StatusRequest{})
 	if err != nil {
 		return nil, mterrors.Wrap(err, "consensus leader unreachable during health check")
 	}
 	if commonconsensus.SelfConsensusRole(statusResp.GetConsensusStatus()) != commonconsensus.ConsensusRoleLeader {
 		return nil, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
-			"consensus leader %s no longer reports itself as the leader", leader.Health().GetMultipooler().GetId().GetName())
+			"consensus leader %s no longer reports itself as the leader", leader.ID().GetName())
 	}
 	if !statusResp.GetStatus().GetPostgresReady() {
 		return nil, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
-			"consensus leader %s postgres is not ready", leader.Health().GetMultipooler().GetId().GetName())
+			"consensus leader %s postgres is not ready", leader.ID().GetName())
 	}
 	return leader, nil
 }

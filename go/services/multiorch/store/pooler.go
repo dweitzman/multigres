@@ -31,18 +31,17 @@ import (
 // health state with the per-pooler stream-lifecycle handle.
 //
 // Concurrency: all access to the proto state is mediated by an internal
-// mutex. Readers receive an independent clone via Health(); writers run
-// their callback under the lock via Mutate, so a read-modify-write inside
-// a single Mutate sees a consistent snapshot (no TOCTOU across the
-// callback). Health() callers may safely modify the returned proto since
-// it is independent of any future mutation. The HealthStream field is
-// set once at OnLive and pointer-stable.
+// mutex. Readers get the current immutable snapshot via StaleHealth(), an
+// atomic load with no clone (see StaleHealth's doc for why that's safe);
+// writers run their callback under the lock via Mutate, so a read-modify-write
+// inside a single Mutate sees a consistent snapshot (no TOCTOU across the
+// callback). The HealthStream field is set once at OnLive and pointer-stable.
 //
 // TODO (design cleanup, follow-up PR): PoolerHealthState shouldn't be a
 // proto at all — it's never serialized over any RPC (zero references
 // in multiorchservice.proto or any other .proto service). The proto
 // machinery is overhead with no payoff: schema rigidity, proto.Clone
-// cost on every Health()/Mutate(), generated code, etc.
+// cost on every StaleHealth()/Mutate(), generated code, etc.
 //
 // Beyond the proto issue, the type itself amalgamates three unrelated
 // concerns:
@@ -69,7 +68,7 @@ type Pooler struct {
 	HealthStream *HealthStream
 
 	// state is an immutable snapshot published by Mutate via copy-on-write
-	// and read by Health via atomic load. mu serializes concurrent Mutate
+	// and read by StaleHealth via atomic load. mu serializes concurrent Mutate
 	// callers (so their clone+modify+store sequences don't lose updates).
 	// Readers never need the mutex — atomic.Load yields a published snapshot
 	// that is by-construction never modified.
@@ -88,8 +87,14 @@ func NewPooler(initial *multiorchdatapb.PoolerHealthState, hs *HealthStream) *Po
 	return p
 }
 
-// Health returns the pooler's current health state snapshot. Returns nil
-// if no state has been published yet.
+// StaleHealth returns the pooler's current health state snapshot, exactly as
+// last recorded — no staleness bound. Returns nil if no state has ever been
+// published. Named for what it actually gives you: whatever we've got, no
+// matter how old. Safe for callers where that's genuinely fine (e.g. identity
+// via ID(), or a fact this package has reasoned is safe to trust even when
+// stale — see e.g. the RewindReady monotonicity note in
+// leader_info_propagation.go); prefer HealthWithin for anything that depends
+// on how current the data actually is.
 //
 // IMPORTANT: callers MUST NOT mutate the returned proto. The snapshot is
 // shared with other readers and with future Mutate calls (which copy the
@@ -99,10 +104,29 @@ func NewPooler(initial *multiorchdatapb.PoolerHealthState, hs *HealthStream) *Po
 // (Why no clone-on-read: snapshots are immutable by construction —
 // Mutate always allocates a new proto and atomic-publishes it — so the
 // safety contract is "writers don't reach in," not "readers defensively
-// copy." Read paths are hot — analyzers call Health() in tight loops —
+// copy." Read paths are hot — analyzers call StaleHealth() in tight loops —
 // so cloning every read would be wasteful.)
-func (p *Pooler) Health() *multiorchdatapb.PoolerHealthState {
+func (p *Pooler) StaleHealth() *multiorchdatapb.PoolerHealthState {
 	return p.state.Load()
+}
+
+// ID returns the pooler's identity ID. In production this is never nil: the
+// discovery hook (poolerCacheHooks' OnLive) always seeds Multipooler before a
+// rider exists, and nothing ever clears it. Implemented via nil-safe proto
+// getters rather than direct field access anyway, so a test fixture built
+// without a Multipooler degrades to nil instead of panicking.
+func (p *Pooler) ID() *clustermetadatapb.ID {
+	return p.Multipooler().GetId()
+}
+
+// Multipooler returns the etcd-sourced clustermetadata.Multipooler record
+// (identity, cell, address, etc.). Unlike StaleHealth(), this isn't subject
+// to observation staleness: it's set once at discovery (OnLive) and never
+// mutated by this cache, so there's no "how old is this" question — it's
+// just the current topology record. Never nil in production (see ID's doc);
+// nil-safe here anyway for the same reason.
+func (p *Pooler) Multipooler() *clustermetadatapb.Multipooler {
+	return p.StaleHealth().GetMultipooler()
 }
 
 // Mutate copy-on-writes the health state. fn receives a clone of the
@@ -137,7 +161,7 @@ func (p *Pooler) Mutate(fn func(*multiorchdatapb.PoolerHealthState)) {
 // than the pooler-clock pooler_captured_at, so the subtraction against now
 // stays same-clock and is unaffected by skew between the hosts.
 func (p *Pooler) ObservationAge(now time.Time) (time.Duration, bool) {
-	ls := p.Health().GetLastSeen()
+	ls := p.StaleHealth().GetLastSeen()
 	if ls == nil {
 		return 0, false
 	}
@@ -153,7 +177,7 @@ const DefaultObservationFreshness = 15 * time.Second
 
 // HealthWithin returns the pooler's health snapshot if it was recorded within
 // maxAge of now, and ok=false otherwise (including "never observed"). Prefer
-// this over Health() wherever a decision depends on how current the data is —
+// this over StaleHealth() wherever a decision depends on how current the data is —
 // it makes the staleness tolerance an explicit, mandatory choice at the call
 // site instead of a separately-remembered ObservationAge/observationFresh
 // check that's easy to omit.
@@ -162,7 +186,7 @@ func (p *Pooler) HealthWithin(now time.Time, maxAge time.Duration) (*multiorchda
 	if !ok || age > maxAge {
 		return nil, false
 	}
-	return p.Health(), true
+	return p.StaleHealth(), true
 }
 
 // DefaultLeaderWriteFreshness is the default freshness bound for
@@ -190,7 +214,7 @@ func LeaderWritesProgressing(leader *Pooler, highestKnownPosition *clustermetada
 	if !ok || age > freshness {
 		return false
 	}
-	if leader.Health().GetStatus().GetPostgresStatus() != multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY {
+	if leader.StaleHealth().GetStatus().GetPostgresStatus() != multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY {
 		return false
 	}
 	return commonconsensus.IsRuleDecided(highestKnownPosition)

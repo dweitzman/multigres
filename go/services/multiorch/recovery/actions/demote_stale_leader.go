@@ -140,16 +140,16 @@ func (a *DemoteStaleLeaderAction) Execute(ctx context.Context, problem types.Pro
 	// it is not actually stale (e.g. a spurious or already-resolved detection):
 	// there is nothing newer to rewind it toward. Do nothing rather than send a
 	// self-targeted SetPrimary, which the pooler would ignore.
-	if proto.Equal(correctLeader.Health().GetMultipooler().GetId(), problem.PoolerID) {
+	if proto.Equal(correctLeader.ID(), problem.PoolerID) {
 		a.logger.InfoContext(ctx, "stale leader is the current consensus leader, nothing to demote",
-			"leader", correctLeader.Health().Multipooler.Id.Name,
+			"leader", correctLeader.ID().GetName(),
 			"shard_key", commontypes.FormatShardKey(problem.ShardKey))
 		return nil
 	}
 
 	a.logger.InfoContext(ctx, "demoting stale leader via SetPrimary",
 		"stale_leader", poolerIDStr,
-		"correct_leader", correctLeader.Health().Multipooler.Id.Name,
+		"correct_leader", correctLeader.ID().GetName(),
 		"correct_leader_position", commonconsensus.FormatRulePosition(correctPosition))
 
 	eventlog.Emit(ctx, a.logger, eventlog.Started, eventlog.PrimaryDemotion{NodeName: string(poolerIDStr), Reason: "stale"})
@@ -172,15 +172,18 @@ func (a *DemoteStaleLeaderAction) Execute(ctx context.Context, problem types.Pro
 	// relaying the leader's published ReplicationPrimary. rewind_ready is the
 	// leader's self-report — it has no global equivalent, so relay it: the
 	// stale leader defers its pg_rewind until the correct leader has
-	// checkpointed onto its current timeline.
+	// checkpointed onto its current timeline. rewind_ready only ever goes
+	// false -> true within a coordinator term, so a stale read is still safe:
+	// stale-true remains valid, stale-false is merely conservative (see
+	// leader_info_propagation.go's shouldPropagateLeaderInfo).
 	setPrimaryReq := &consensusdatapb.SetPrimaryRequest{
 		ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{
 			Position:    correctPosition,
-			Primary:     topoclient.PoolerAddressFor(correctLeader.Health().Multipooler),
-			RewindReady: commonconsensus.ReplicationPrimaryOrNil(correctLeader.Health().GetConsensusStatus()).GetRewindReady(),
+			Primary:     topoclient.PoolerAddressFor(correctLeader.Multipooler()),
+			RewindReady: commonconsensus.ReplicationPrimaryOrNil(correctLeader.StaleHealth().GetConsensusStatus()).GetRewindReady(),
 		},
 	}
-	if _, err := a.rpcClient.SetPrimary(ctx, staleLeader.Health().Multipooler, setPrimaryReq); err != nil {
+	if _, err := a.rpcClient.SetPrimary(ctx, staleLeader.Multipooler(), setPrimaryReq); err != nil {
 		return mterrors.Wrap(err, "SetPrimary RPC failed")
 	}
 	a.logger.InfoContext(ctx, "stale leader demoted successfully via SetPrimary",

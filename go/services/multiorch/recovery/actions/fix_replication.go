@@ -125,8 +125,8 @@ func (a *FixReplicationAction) Execute(ctx context.Context, problem types.Proble
 	}
 
 	a.logger.InfoContext(ctx, "found primary for replication",
-		"primary", leader.Health().Multipooler.Id.Name,
-		"replica", replica.Health().Multipooler.Id.Name)
+		"primary", leader.ID().GetName(),
+		"replica", replica.ID().GetName())
 
 	// Re-verify the problem still exists
 	needsFix, _, err := a.verifyProblemExists(ctx, replica, leader, problem.Code)
@@ -170,19 +170,19 @@ func (a *FixReplicationAction) fixNotReplicating(
 	highestKnownPosition *clustermetadatapb.RulePosition,
 ) (retErr error) {
 	a.logger.InfoContext(ctx, "fixing replication: not configured",
-		"replica", replica.Health().Multipooler.Id.Name,
-		"primary", leader.Health().Multipooler.Id.Name)
+		"replica", replica.ID().GetName(),
+		"primary", leader.ID().GetName())
 	eventlog.Emit(ctx, a.logger, eventlog.Started, eventlog.NodeJoin{
-		NodeName: replica.Health().Multipooler.Id.Name,
+		NodeName: replica.ID().GetName(),
 	})
 	defer func() {
 		if retErr == nil {
 			eventlog.Emit(ctx, a.logger, eventlog.Success, eventlog.NodeJoin{
-				NodeName: replica.Health().Multipooler.Id.Name,
+				NodeName: replica.ID().GetName(),
 			})
 		} else {
 			eventlog.Emit(ctx, a.logger, eventlog.Failed, eventlog.NodeJoin{
-				NodeName: replica.Health().Multipooler.Id.Name,
+				NodeName: replica.ID().GetName(),
 			}, "error", retErr)
 		}
 	}()
@@ -192,14 +192,17 @@ func (a *FixReplicationAction) fixNotReplicating(
 	// holds that rule), the contact is the leader's topology address, and we
 	// relay the leader's self-reported rewind_ready so a diverged replica defers
 	// its pg_rewind until the leader has checkpointed onto its current timeline.
+	// rewind_ready only ever goes false -> true within a coordinator term, so a
+	// stale read is still safe: stale-true remains valid, stale-false is merely
+	// conservative (see leader_info_propagation.go's shouldPropagateLeaderInfo).
 	setPrimaryReq := &consensusdatapb.SetPrimaryRequest{
 		ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{
 			Position:    highestKnownPosition,
-			Primary:     topoclient.PoolerAddressFor(leader.Health().Multipooler),
-			RewindReady: commonconsensus.ReplicationPrimaryOrNil(leader.Health().GetConsensusStatus()).GetRewindReady(),
+			Primary:     topoclient.PoolerAddressFor(leader.Multipooler()),
+			RewindReady: commonconsensus.ReplicationPrimaryOrNil(leader.StaleHealth().GetConsensusStatus()).GetRewindReady(),
 		},
 	}
-	if _, err := a.rpcClient.SetPrimary(ctx, replica.Health().Multipooler, setPrimaryReq); err != nil {
+	if _, err := a.rpcClient.SetPrimary(ctx, replica.Multipooler(), setPrimaryReq); err != nil {
 		return mterrors.Wrap(err, "SetPrimary RPC failed")
 	}
 
@@ -224,8 +227,8 @@ func (a *FixReplicationAction) fixNotReplicating(
 	// on the next cycle and promote adding it to the cohort.
 
 	a.logger.InfoContext(ctx, "fix replication action completed successfully",
-		"replica", replica.Health().Multipooler.Id.Name,
-		"primary", leader.Health().Multipooler.Id.Name)
+		"replica", replica.ID().GetName(),
+		"primary", leader.ID().GetName())
 
 	return nil
 }
@@ -260,26 +263,26 @@ func (a *FixReplicationAction) verifyReplicaNotReplicating(
 	}
 	if status == nil {
 		return false, nil, mterrors.Errorf(mtrpcpb.Code_UNAVAILABLE,
-			"replication status unavailable for replica %s", replica.Health().GetMultipooler().GetId().GetName())
+			"replication status unavailable for replica %s", replica.ID().GetName())
 	}
 
 	// Check if primary_conninfo is configured
 	if status.PrimaryConnInfo == nil || status.PrimaryConnInfo.Host == "" {
 		a.logger.InfoContext(ctx, "replica has no primary_conninfo configured",
-			"replica", replica.Health().Multipooler.Id.Name)
+			"replica", replica.ID().GetName())
 		return true, status, nil
 	}
 
 	// Check if pointing to the right primary
-	expectedHost := primary.Health().Multipooler.Hostname
-	expectedPort := primary.Health().Multipooler.PortMap["postgres"]
+	expectedHost := primary.Multipooler().Hostname
+	expectedPort := primary.Multipooler().PortMap["postgres"]
 
 	// TODO: Do we need to verify timeline_id matches the primary's timeline?
 	if status.PrimaryConnInfo.Host != expectedHost ||
 		status.PrimaryConnInfo.Port != expectedPort {
 		// Wrong primary - this would be ProblemReplicaWrongPrimary
 		a.logger.InfoContext(ctx, "replica pointing to wrong primary",
-			"replica", replica.Health().Multipooler.Id.Name,
+			"replica", replica.ID().GetName(),
 			"current_host", status.PrimaryConnInfo.Host,
 			"current_port", status.PrimaryConnInfo.Port,
 			"expected_host", expectedHost,
@@ -290,7 +293,7 @@ func (a *FixReplicationAction) verifyReplicaNotReplicating(
 	// Check if WAL replay is paused (might need to resume)
 	if status.IsWalReplayPaused {
 		a.logger.InfoContext(ctx, "replica has WAL replay paused",
-			"replica", replica.Health().Multipooler.Id.Name)
+			"replica", replica.ID().GetName())
 		return true, status, nil
 	}
 
@@ -303,7 +306,7 @@ func (a *FixReplicationAction) verifyReplicaNotReplicating(
 	// new WAL to send (idle primary).
 	if status.WalReceiverStatus != "streaming" && status.WalReceiverStatus != "waiting" {
 		a.logger.InfoContext(ctx, "replica has primary_conninfo configured but WAL receiver is not active",
-			"replica", replica.Health().Multipooler.Id.Name,
+			"replica", replica.ID().GetName(),
 			"wal_receiver_status", status.WalReceiverStatus)
 		return true, status, nil
 	}
@@ -315,12 +318,12 @@ func (a *FixReplicationAction) verifyReplicaNotReplicating(
 	// lands in that window would incorrectly declare the problem resolved.
 	if status.WalReceiverStatus == "streaming" && status.LastReceiveLsn == "" {
 		a.logger.InfoContext(ctx, "WAL receiver shows streaming but no WAL received yet, treating as not active",
-			"replica", replica.Health().Multipooler.Id.Name)
+			"replica", replica.ID().GetName())
 		return true, status, nil
 	}
 
 	a.logger.InfoContext(ctx, "replication already configured correctly",
-		"replica", replica.Health().Multipooler.Id.Name,
+		"replica", replica.ID().GetName(),
 		"last_receive_lsn", status.LastReceiveLsn,
 		"last_replay_lsn", status.LastReplayLsn)
 
@@ -332,7 +335,7 @@ func (a *FixReplicationAction) getReplicationStatus(
 	ctx context.Context,
 	replica *store.Pooler,
 ) (*multipoolermanagerdatapb.StandbyReplicationStatus, error) {
-	statusResp, err := a.rpcClient.Status(ctx, replica.Health().Multipooler, &multipoolermanagerdatapb.StatusRequest{})
+	statusResp, err := a.rpcClient.Status(ctx, replica.Multipooler(), &multipoolermanagerdatapb.StatusRequest{})
 	if err != nil {
 		return nil, mterrors.Wrap(err, "failed to get replication status")
 	}
@@ -356,7 +359,7 @@ func (a *FixReplicationAction) verifyReplicationStarted(ctx context.Context, rep
 		case <-ticker.C:
 		}
 
-		statusResp, err := a.rpcClient.Status(ctx, replica.Health().Multipooler, &multipoolermanagerdatapb.StatusRequest{})
+		statusResp, err := a.rpcClient.Status(ctx, replica.Multipooler(), &multipoolermanagerdatapb.StatusRequest{})
 		if err != nil {
 			lastErr = mterrors.Wrap(err, "failed to get replication status after fix")
 			continue
@@ -386,7 +389,7 @@ func (a *FixReplicationAction) verifyReplicationStarted(ctx context.Context, rep
 		}
 
 		a.logger.InfoContext(ctx, "verified replication is streaming",
-			"replica", replica.Health().Multipooler.Id.Name,
+			"replica", replica.ID().GetName(),
 			"wal_receiver_status", status.WalReceiverStatus,
 			"last_receive_lsn", status.LastReceiveLsn,
 			"last_replay_lsn", status.LastReplayLsn)

@@ -29,7 +29,7 @@ import (
 type ShardAnalysis struct {
 	ShardKey *clustermetadatapb.ShardKey
 	// Analyses holds the cache rider for every pooler in the shard. Analyzers
-	// read raw health via Rider.Health() and derive judgments through the
+	// read raw health via Rider.StaleHealth() and derive judgments through the
 	// package helpers (walReplayNotPaused, primaryConnInfoHost, …) and the
 	// consensus SelfConsensusRole API rather than
 	// reading pre-baked digest fields.
@@ -79,7 +79,7 @@ type ShardAnalysis struct {
 func (sa *ShardAnalysis) Replicas() []*store.Pooler {
 	var replicas []*store.Pooler
 	for _, p := range sa.Analyses {
-		if commonconsensus.SelfConsensusRole(p.Health().GetConsensusStatus()) != commonconsensus.ConsensusRoleLeader {
+		if commonconsensus.SelfConsensusRole(p.StaleHealth().GetConsensusStatus()) != commonconsensus.ConsensusRoleLeader {
 			replicas = append(replicas, p)
 		}
 	}
@@ -92,14 +92,14 @@ func (sa *ShardAnalysis) Replicas() []*store.Pooler {
 
 // poolerID returns the pooler's ID from its health record.
 func poolerID(p *store.Pooler) *clustermetadatapb.ID {
-	return p.Health().GetMultipooler().GetId()
+	return p.ID()
 }
 
 // walReplayNotPaused reports whether the standby's WAL replay is active. A
 // pooler with no replication status returns false; callers that distinguish an
 // unavailable observation from a negative one must check for nil first.
 func walReplayNotPaused(p *store.Pooler) bool {
-	rs := p.Health().GetStatus().GetReplicationStatus()
+	rs := p.StaleHealth().GetStatus().GetReplicationStatus()
 	if rs == nil {
 		return false
 	}
@@ -109,7 +109,7 @@ func walReplayNotPaused(p *store.Pooler) bool {
 // primaryConnInfoHost returns the standby's configured primary host, or "" if
 // replication is not configured.
 func primaryConnInfoHost(p *store.Pooler) string {
-	return p.Health().GetStatus().GetReplicationStatus().GetPrimaryConnInfo().GetHost()
+	return p.StaleHealth().GetStatus().GetReplicationStatus().GetPrimaryConnInfo().GetHost()
 }
 
 // walReceiverActive reports whether the standby's WAL receiver is actively
@@ -118,7 +118,7 @@ func primaryConnInfoHost(p *store.Pooler) string {
 // the receiver is not running — this covers timeline divergence where the
 // receiver connects, gets FATAL, and exits, leaving primary_conninfo on disk.
 func walReceiverActive(p *store.Pooler) bool {
-	rs := p.Health().GetStatus().GetReplicationStatus()
+	rs := p.StaleHealth().GetStatus().GetReplicationStatus()
 	if rs == nil {
 		return false
 	}
@@ -135,7 +135,7 @@ func walReceiverActive(p *store.Pooler) bool {
 // healthy: the receiver is connected and current, the primary just has nothing
 // new to send.
 func walReceiverStreaming(p *store.Pooler) bool {
-	rs := p.Health().GetStatus().GetReplicationStatus()
+	rs := p.StaleHealth().GetStatus().GetReplicationStatus()
 	if rs == nil {
 		return false
 	}
@@ -156,8 +156,8 @@ func walReceiverStreaming(p *store.Pooler) bool {
 // resolvable tie.
 func compareLeaderTimeline(a, b *store.Pooler) int {
 	return commonconsensus.CompareRulePosition(
-		a.Health().GetConsensusStatus().GetCurrentPosition().GetPosition(),
-		b.Health().GetConsensusStatus().GetCurrentPosition().GetPosition(),
+		a.StaleHealth().GetConsensusStatus().GetCurrentPosition().GetPosition(),
+		b.StaleHealth().GetConsensusStatus().GetCurrentPosition().GetPosition(),
 	)
 }
 

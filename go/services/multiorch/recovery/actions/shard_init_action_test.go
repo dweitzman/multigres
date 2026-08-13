@@ -153,7 +153,7 @@ func TestShardInitAction_GetInitializedPoolers_FiltersByShard(t *testing.T) {
 
 	assert.False(t, cohortEstablished)
 	require.Len(t, initialized, 2)
-	names := []string{initialized[0].Health().Multipooler.Id.Name, initialized[1].Health().Multipooler.Id.Name}
+	names := []string{initialized[0].ID().GetName(), initialized[1].ID().GetName()}
 	assert.ElementsMatch(t, []string{"p1", "p2"}, names)
 }
 
@@ -174,7 +174,7 @@ func TestShardInitAction_GetInitializedPoolers_ExcludesStaleObservation(t *testi
 
 	assert.False(t, cohortEstablished)
 	require.Len(t, initialized, 1)
-	assert.Equal(t, "p2", initialized[0].Health().Multipooler.Id.Name)
+	assert.Equal(t, "p2", initialized[0].ID().GetName())
 }
 
 func TestShardInitAction_GetInitializedPoolers_CohortAlreadyEstablished(t *testing.T) {

@@ -154,20 +154,20 @@ func TestHealthStream_UpdatesStore_Primary(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		s, ok := poolerStore.GetRider(key)
-		return ok && s.Health().GetStatus().GetPrimaryStatus() != nil
+		return ok && s.StaleHealth().GetStatus().GetPrimaryStatus() != nil
 	}, 2*time.Second, 10*time.Millisecond, "snapshot should be applied")
 
 	updated, _ := poolerStore.GetRider(key)
-	require.NotNil(t, updated.Health().LastSeen)
-	require.NotNil(t, updated.Health().LastCheckSuccessful)
-	require.Equal(t, testSnapshotCapturedAt.AsTime(), updated.Health().GetPoolerCapturedAt().AsTime(),
+	require.NotNil(t, updated.StaleHealth().LastSeen)
+	require.NotNil(t, updated.StaleHealth().LastCheckSuccessful)
+	require.Equal(t, testSnapshotCapturedAt.AsTime(), updated.StaleHealth().GetPoolerCapturedAt().AsTime(),
 		"pooler-clock capture time should be stored from the snapshot")
-	require.Equal(t, clustermetadata.PoolerType_PRIMARY, updated.Health().GetStatus().GetPoolerType())
-	require.NotNil(t, updated.Health().GetStatus().GetPrimaryStatus())
-	require.Equal(t, "0/123ABC", updated.Health().GetStatus().GetPrimaryStatus().GetLsn())
-	require.True(t, updated.Health().GetStatus().GetPrimaryStatus().GetReady())
-	require.Len(t, updated.Health().GetStatus().GetPrimaryStatus().GetConnectedFollowers(), 2)
-	require.Nil(t, updated.Health().GetStatus().GetReplicationStatus())
+	require.Equal(t, clustermetadata.PoolerType_PRIMARY, updated.StaleHealth().GetStatus().GetPoolerType())
+	require.NotNil(t, updated.StaleHealth().GetStatus().GetPrimaryStatus())
+	require.Equal(t, "0/123ABC", updated.StaleHealth().GetStatus().GetPrimaryStatus().GetLsn())
+	require.True(t, updated.StaleHealth().GetStatus().GetPrimaryStatus().GetReady())
+	require.Len(t, updated.StaleHealth().GetStatus().GetPrimaryStatus().GetConnectedFollowers(), 2)
+	require.Nil(t, updated.StaleHealth().GetStatus().GetReplicationStatus())
 }
 
 // TestHealthStream_UpdatesStore_Replica tests that a REPLICA snapshot is applied to the store.
@@ -209,22 +209,22 @@ func TestHealthStream_UpdatesStore_Replica(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		s, ok := poolerStore.GetRider(key)
-		return ok && s.Health().GetStatus().GetReplicationStatus() != nil
+		return ok && s.StaleHealth().GetStatus().GetReplicationStatus() != nil
 	}, 2*time.Second, 10*time.Millisecond)
 
 	updated, _ := poolerStore.GetRider(key)
-	require.Equal(t, clustermetadata.PoolerType_REPLICA, updated.Health().GetStatus().GetPoolerType())
-	require.NotNil(t, updated.Health().GetStatus().GetReplicationStatus())
-	require.Equal(t, "0/123ABC", updated.Health().GetStatus().GetReplicationStatus().GetLastReplayLsn())
-	require.Equal(t, "0/123DEF", updated.Health().GetStatus().GetReplicationStatus().GetLastReceiveLsn())
-	require.False(t, updated.Health().GetStatus().GetReplicationStatus().GetIsWalReplayPaused())
-	require.Equal(t, "not paused", updated.Health().GetStatus().GetReplicationStatus().GetWalReplayPauseState())
-	require.Equal(t, int64(500), updated.Health().GetStatus().GetReplicationStatus().GetLag().AsDuration().Milliseconds())
-	require.Equal(t, "2025-01-19 20:00:00.000000+00", updated.Health().GetStatus().GetReplicationStatus().GetLastXactReplayTimestamp())
-	require.NotNil(t, updated.Health().GetStatus().GetReplicationStatus().GetPrimaryConnInfo())
-	require.Equal(t, "primary-host", updated.Health().GetStatus().GetReplicationStatus().GetPrimaryConnInfo().GetHost())
-	require.Equal(t, int32(5432), updated.Health().GetStatus().GetReplicationStatus().GetPrimaryConnInfo().GetPort())
-	require.Nil(t, updated.Health().GetStatus().GetPrimaryStatus())
+	require.Equal(t, clustermetadata.PoolerType_REPLICA, updated.StaleHealth().GetStatus().GetPoolerType())
+	require.NotNil(t, updated.StaleHealth().GetStatus().GetReplicationStatus())
+	require.Equal(t, "0/123ABC", updated.StaleHealth().GetStatus().GetReplicationStatus().GetLastReplayLsn())
+	require.Equal(t, "0/123DEF", updated.StaleHealth().GetStatus().GetReplicationStatus().GetLastReceiveLsn())
+	require.False(t, updated.StaleHealth().GetStatus().GetReplicationStatus().GetIsWalReplayPaused())
+	require.Equal(t, "not paused", updated.StaleHealth().GetStatus().GetReplicationStatus().GetWalReplayPauseState())
+	require.Equal(t, int64(500), updated.StaleHealth().GetStatus().GetReplicationStatus().GetLag().AsDuration().Milliseconds())
+	require.Equal(t, "2025-01-19 20:00:00.000000+00", updated.StaleHealth().GetStatus().GetReplicationStatus().GetLastXactReplayTimestamp())
+	require.NotNil(t, updated.StaleHealth().GetStatus().GetReplicationStatus().GetPrimaryConnInfo())
+	require.Equal(t, "primary-host", updated.StaleHealth().GetStatus().GetReplicationStatus().GetPrimaryConnInfo().GetHost())
+	require.Equal(t, int32(5432), updated.StaleHealth().GetStatus().GetReplicationStatus().GetPrimaryConnInfo().GetPort())
+	require.Nil(t, updated.StaleHealth().GetStatus().GetPrimaryStatus())
 }
 
 // TestHealthStream_Poll tests that Poll() sends a poll message and a subsequent snapshot is applied.
@@ -255,7 +255,7 @@ func TestHealthStream_Poll(t *testing.T) {
 	})
 	require.Eventually(t, func() bool {
 		s, ok := poolerStore.GetRider(key)
-		return ok && s.Health().GetStatus().GetPrimaryStatus() != nil && s.Health().GetStatus().GetPrimaryStatus().GetLsn() == "0/AAAAAA"
+		return ok && s.StaleHealth().GetStatus().GetPrimaryStatus() != nil && s.StaleHealth().GetStatus().GetPrimaryStatus().GetLsn() == "0/AAAAAA"
 	}, 2*time.Second, 10*time.Millisecond, "initial snapshot should be applied")
 
 	// Trigger a poll.
@@ -271,7 +271,7 @@ func TestHealthStream_Poll(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		s, ok := poolerStore.GetRider(key)
-		return ok && s.Health().GetStatus().GetPrimaryStatus() != nil && s.Health().GetStatus().GetPrimaryStatus().GetLsn() == "0/BBBBBB"
+		return ok && s.StaleHealth().GetStatus().GetPrimaryStatus() != nil && s.StaleHealth().GetStatus().GetPrimaryStatus().GetLsn() == "0/BBBBBB"
 	}, 2*time.Second, 10*time.Millisecond, "polled snapshot should be applied")
 }
 
@@ -312,7 +312,7 @@ func TestHealthStream_Disconnect(t *testing.T) {
 	})
 	require.Eventually(t, func() bool {
 		s, ok := poolerStore.GetRider(key)
-		return ok && s.Health().GetStatus().GetPostgresReady()
+		return ok && s.StaleHealth().GetStatus().GetPostgresReady()
 	}, 2*time.Second, 10*time.Millisecond)
 
 	// Close the stream to simulate a disconnect.
@@ -321,12 +321,12 @@ func TestHealthStream_Disconnect(t *testing.T) {
 	// The store should be marked unreachable.
 	require.Eventually(t, func() bool {
 		s, ok := poolerStore.GetRider(key)
-		return ok && !s.Health().StreamConnected
+		return ok && !s.StaleHealth().StreamConnected
 	}, 2*time.Second, 10*time.Millisecond, "pooler should be marked unreachable after disconnect")
 
 	// LastSeen should remain from the last successful snapshot, not cleared.
 	s, _ := poolerStore.GetRider(key)
-	require.NotNil(t, s.Health().LastSeen)
+	require.NotNil(t, s.StaleHealth().LastSeen)
 }
 
 // TestHealthStream_ConcurrentWatcherUpdate tests that a topology update written by the
@@ -375,13 +375,13 @@ func TestHealthStream_ConcurrentWatcherUpdate(t *testing.T) {
 	// past the assertion before the watcher update lands.
 	require.Eventually(t, func() bool {
 		s, ok := poolerStore.GetRider(key)
-		return ok && s.Health().GetStatus().GetPostgresRunning() && s.Health().Multipooler.Type == clustermetadata.PoolerType_PRIMARY
+		return ok && s.StaleHealth().GetStatus().GetPostgresRunning() && s.Multipooler().Type == clustermetadata.PoolerType_PRIMARY
 	}, 2*time.Second, 10*time.Millisecond, "watcher's topology update should not be overwritten by snapshot")
 
 	wg.Wait()
 
 	result, _ := poolerStore.GetRider(key)
-	rh := result.Health()
+	rh := result.StaleHealth()
 	// The watcher's topology promotion must be preserved.
 	require.Equal(t, clustermetadata.PoolerType_PRIMARY, rh.Multipooler.Type,
 		"watcher's topology update should not be overwritten by snapshot")
@@ -454,11 +454,11 @@ func TestHealthStream_LastPostgresReadyTime(t *testing.T) {
 
 		require.Eventually(t, func() bool {
 			s, ok := poolerStore.GetRider(key)
-			return ok && s.Health().LastPostgresReadyTime != nil
+			return ok && s.StaleHealth().LastPostgresReadyTime != nil
 		}, 2*time.Second, 10*time.Millisecond)
 
 		updated, _ := poolerStore.GetRider(key)
-		require.True(t, updated.Health().LastPostgresReadyTime.AsTime().After(before))
+		require.True(t, updated.StaleHealth().LastPostgresReadyTime.AsTime().After(before))
 	})
 
 	t.Run("preserves LastPostgresReadyTime when PostgresReady is false", func(t *testing.T) {
@@ -495,12 +495,12 @@ func TestHealthStream_LastPostgresReadyTime(t *testing.T) {
 
 		require.Eventually(t, func() bool {
 			s, ok := poolerStore.GetRider(key)
-			return ok && s.Health().GetStatus() != nil
+			return ok && s.StaleHealth().GetStatus() != nil
 		}, 2*time.Second, 10*time.Millisecond)
 
 		updated, _ := poolerStore.GetRider(key)
-		require.NotNil(t, updated.Health().LastPostgresReadyTime)
-		require.WithinDuration(t, lastReadyTime.AsTime(), updated.Health().LastPostgresReadyTime.AsTime(), time.Second,
+		require.NotNil(t, updated.StaleHealth().LastPostgresReadyTime)
+		require.WithinDuration(t, lastReadyTime.AsTime(), updated.StaleHealth().LastPostgresReadyTime.AsTime(), time.Second,
 			"LastPostgresReadyTime should not change when PostgresReady is false")
 	})
 }
@@ -539,7 +539,7 @@ func TestHealthStream_StalenessTimeout(t *testing.T) {
 	})
 	require.Eventually(t, func() bool {
 		s, ok := poolerStore.GetRider(key)
-		return ok && s.Health().GetStatus().GetPostgresReady()
+		return ok && s.StaleHealth().GetStatus().GetPostgresReady()
 	}, 2*time.Second, 10*time.Millisecond, "initial snapshot should be applied")
 
 	// Now let the stream go silent — don't close it, don't send anything.
@@ -548,7 +548,7 @@ func TestHealthStream_StalenessTimeout(t *testing.T) {
 	// Wait for the pooler to be marked unreachable.
 	require.Eventually(t, func() bool {
 		s, ok := poolerStore.GetRider(key)
-		return ok && !s.Health().StreamConnected
+		return ok && !s.StaleHealth().StreamConnected
 	}, 2*time.Second, 10*time.Millisecond, "pooler should be marked unreachable after staleness timeout")
 
 	// The stream manager should reconnect — a second stream must be dialled.
@@ -607,7 +607,7 @@ func TestHealthStream_StartResponseConfig(t *testing.T) {
 	})
 	require.Eventually(t, func() bool {
 		s, ok := poolerStore.GetRider(key)
-		return ok && s.Health().GetStatus().GetPostgresReady()
+		return ok && s.StaleHealth().GetStatus().GetPostgresReady()
 	}, 2*time.Second, 10*time.Millisecond, "initial snapshot should be applied")
 }
 
@@ -644,15 +644,15 @@ func TestHealthStream_TypeMismatch(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		s, ok := poolerStore.GetRider(key)
-		return ok && s.Health().GetStatus().GetPrimaryStatus() != nil
+		return ok && s.StaleHealth().GetStatus().GetPrimaryStatus() != nil
 	}, 2*time.Second, 10*time.Millisecond)
 
 	updated, _ := poolerStore.GetRider(key)
-	require.Equal(t, clustermetadata.PoolerType_REPLICA, updated.Health().Multipooler.Type,
+	require.Equal(t, clustermetadata.PoolerType_REPLICA, updated.Multipooler().Type,
 		"topology type should remain REPLICA")
-	require.Equal(t, clustermetadata.PoolerType_PRIMARY, updated.Health().GetStatus().GetPoolerType(),
+	require.Equal(t, clustermetadata.PoolerType_PRIMARY, updated.StaleHealth().GetStatus().GetPoolerType(),
 		"reported type should be PRIMARY")
-	require.NotNil(t, updated.Health().GetStatus().GetPrimaryStatus())
-	require.Equal(t, "0/FFFFFF", updated.Health().GetStatus().GetPrimaryStatus().GetLsn())
-	require.True(t, updated.Health().GetStatus().GetPrimaryStatus().GetReady())
+	require.NotNil(t, updated.StaleHealth().GetStatus().GetPrimaryStatus())
+	require.Equal(t, "0/FFFFFF", updated.StaleHealth().GetStatus().GetPrimaryStatus().GetLsn())
+	require.True(t, updated.StaleHealth().GetStatus().GetPrimaryStatus().GetReady())
 }

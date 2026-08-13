@@ -48,7 +48,7 @@ func (a *ReplicaNotReplicatingAnalyzer) analyzePooler(sa *ShardAnalysis, pa *sto
 	}
 
 	// Only analyze replicas
-	if commonconsensus.SelfConsensusRole(pa.Health().GetConsensusStatus()) == commonconsensus.ConsensusRoleLeader {
+	if commonconsensus.SelfConsensusRole(pa.StaleHealth().GetConsensusStatus()) == commonconsensus.ConsensusRoleLeader {
 		return nil, nil
 	}
 
@@ -78,7 +78,7 @@ func (a *ReplicaNotReplicatingAnalyzer) analyzePooler(sa *ShardAnalysis, pa *sto
 	// leader's rule + address), leader reachability no longer matters here — an
 	// unreachable-but-known leader is still the official term leader worth telling
 	// replicas about, and only knowing where to point them matters.
-	if !leaderServing(sa) || sa.Leader.Health().GetMultipooler().GetHostname() == "" {
+	if !leaderServing(sa) || sa.Leader.Multipooler().GetHostname() == "" {
 		return nil, nil
 	}
 

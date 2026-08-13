@@ -395,8 +395,8 @@ func TestDiscovery_PreservesTimestamps(t *testing.T) {
 
 	poolerInfo, ok := engine.poolerCache.GetRider(poolerKey("zone1", "pooler1"))
 	require.True(t, ok)
-	require.Equal(t, "host1", poolerInfo.Health().Multipooler.Hostname)
-	require.Nil(t, poolerInfo.Health().LastSeen, "LastSeen should be nil (not yet health checked successfully)")
+	require.Equal(t, "host1", poolerInfo.Multipooler().Hostname)
+	require.Nil(t, poolerInfo.StaleHealth().LastSeen, "LastSeen should be nil (not yet health checked successfully)")
 
 	// Simulate health check by updating timestamps
 	now := timestamppb.Now()
@@ -418,14 +418,14 @@ func TestDiscovery_PreservesTimestamps(t *testing.T) {
 	// Watch event - should update Multipooler but preserve timestamps
 	require.Eventually(t, func() bool {
 		info, ok := engine.poolerCache.GetRider(poolerKey("zone1", "pooler1"))
-		return ok && info.Health().Multipooler.Hostname == "host2"
+		return ok && info.Multipooler().Hostname == "host2"
 	}, 5*time.Second, 10*time.Millisecond, "expected hostname to be updated to host2")
 
 	updatedInfo, ok := engine.poolerCache.GetRider(poolerKey("zone1", "pooler1"))
 	require.True(t, ok)
 
 	// Multipooler record should be updated
-	uh := updatedInfo.Health()
+	uh := updatedInfo.StaleHealth()
 	require.Equal(t, "host2", uh.Multipooler.Hostname, "hostname should be updated")
 
 	// Timestamps and computed fields should be preserved (exact equality)

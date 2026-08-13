@@ -85,8 +85,8 @@ func (re *Engine) propagateLeaderInfoForShard(ctx context.Context, shardKey *clu
 	if leader == nil || members.HighestKnownPosition == nil {
 		return
 	}
-	leaderAddress := topoclient.PoolerAddressFor(leader.Health().GetMultipooler())
-	leaderRewindReady := commonconsensus.ReplicationPrimaryOrNil(leader.Health().GetConsensusStatus()).GetRewindReady()
+	leaderAddress := topoclient.PoolerAddressFor(leader.Multipooler())
+	leaderRewindReady := commonconsensus.ReplicationPrimaryOrNil(leader.StaleHealth().GetConsensusStatus()).GetRewindReady()
 
 	// One goroutine per pooler: each pooler appears at most once in a shard's
 	// member list, so there's never more than one in-flight SetPrimary to the
@@ -142,7 +142,7 @@ func (re *Engine) propagateLeaderInfoToPooler(
 	leaderRewindReady bool,
 	highestKnownPosition *clustermetadatapb.RulePosition,
 ) {
-	health := pooler.Health()
+	health := pooler.StaleHealth()
 	rp := commonconsensus.ReplicationPrimaryOrNil(health.GetConsensusStatus())
 	if !shouldPropagateLeaderInfo(rp, health.GetLastSeen(), time.Now(), leaderAddress, leaderRewindReady, highestKnownPosition) {
 		return

@@ -168,7 +168,7 @@ func TestPropagateLeaderInfoToPooler_CachesSuccessfulSetPrimary(t *testing.T) {
 	re.propagateLeaderInfoToPooler(t.Context(), pooler, leaderAddress, true, position)
 
 	require.Equal(t, []string{"SetPrimary(multipooler-zone1-p1)"}, fake.GetCallLog(), "SetPrimary must actually have been called")
-	got := pooler.Health().GetConsensusStatus().GetReplicationPrimary()
+	got := pooler.StaleHealth().GetConsensusStatus().GetReplicationPrimary()
 	require.NotNil(t, got)
 	assert.True(t, proto.Equal(leaderAddress, got.GetPrimary()))
 	assert.True(t, got.GetRewindReady())
@@ -198,6 +198,6 @@ func TestPropagateLeaderInfoToPooler_NeverRegressesCachedPrimary(t *testing.T) {
 	re.propagateLeaderInfoToPooler(t.Context(), pooler, leaderInfoTestAddress("stale-leader"), false, stalePosition)
 
 	require.Equal(t, []string{"SetPrimary(multipooler-zone1-p1)"}, fake.GetCallLog(), "SetPrimary must actually have been called with the stale info")
-	got := pooler.Health().GetConsensusStatus().GetReplicationPrimary()
+	got := pooler.StaleHealth().GetConsensusStatus().GetReplicationPrimary()
 	assert.True(t, proto.Equal(newerPrimary, got), "must not regress a fresher cached view with a stale optimistic update")
 }

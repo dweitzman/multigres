@@ -92,7 +92,7 @@ func (a *CohortMismatchAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, er
 		// Removal candidates: current cohort members signaling INELIGIBLE.
 		if _, inCohort := cohortIDs[key]; inCohort {
 			seen[key] = struct{}{}
-			if types.PoolerIsCohortIneligible(pa.Health().GetAvailabilityStatus()) {
+			if types.PoolerIsCohortIneligible(pa.StaleHealth().GetAvailabilityStatus()) {
 				problems = append(problems, types.Problem{
 					Code:           types.ProblemCohortMemberIneligible,
 					CheckName:      "CohortMismatch",
@@ -221,7 +221,7 @@ func (a *CohortMismatchAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Problem, er
 // problem an acting primary adding itself to the cohort. This may be useful
 // in some propagation scenarios.
 func (a *CohortMismatchAnalyzer) isAdditionCandidate(sa *ShardAnalysis, pa *store.Pooler) bool {
-	if commonconsensus.SelfConsensusRole(pa.Health().GetConsensusStatus()) == commonconsensus.ConsensusRoleLeader {
+	if commonconsensus.SelfConsensusRole(pa.StaleHealth().GetConsensusStatus()) == commonconsensus.ConsensusRoleLeader {
 		return false
 	}
 	hs, ok := pa.HealthWithin(sa.Now, sa.Policy.ObservationFreshness)
@@ -240,12 +240,12 @@ func (a *CohortMismatchAnalyzer) isAdditionCandidate(sa *ShardAnalysis, pa *stor
 	if !walReceiverStreaming(pa) {
 		return false
 	}
-	if types.PoolerIsCohortIneligible(pa.Health().GetAvailabilityStatus()) {
+	if types.PoolerIsCohortIneligible(pa.StaleHealth().GetAvailabilityStatus()) {
 		return false
 	}
 	// A pooler that hasn't caught back up to its pre-pg_rewind position would
 	// just have its Recruit() rejected — see ConsensusStatus.RecruitBlockedUntil.
-	if pa.Health().GetConsensusStatus().GetRecruitBlockedUntil() != nil {
+	if pa.StaleHealth().GetConsensusStatus().GetRecruitBlockedUntil() != nil {
 		return false
 	}
 	return true

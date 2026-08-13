@@ -52,11 +52,11 @@ import (
 // rather than the removed PoolerAnalysis digest. tSelfIsLeader reports whether
 // the pooler's own consensus status names itself the leader.
 func tSelfIsLeader(p *store.Pooler) bool {
-	return commonconsensus.SelfConsensusRole(p.Health().GetConsensusStatus()) == commonconsensus.ConsensusRoleLeader
+	return commonconsensus.SelfConsensusRole(p.StaleHealth().GetConsensusStatus()) == commonconsensus.ConsensusRoleLeader
 }
 
 func tWalReplayNotPaused(p *store.Pooler) bool {
-	rs := p.Health().GetStatus().GetReplicationStatus()
+	rs := p.StaleHealth().GetStatus().GetReplicationStatus()
 	return rs != nil && !rs.GetIsWalReplayPaused()
 }
 
@@ -563,12 +563,12 @@ func (m *mockPrimaryDeadAnalyzer) RecoveryAction() types.RecoveryAction {
 func (m *mockPrimaryDeadAnalyzer) Analyze(sa *analysis.ShardAnalysis) ([]types.Problem, error) {
 	var problems []types.Problem
 	for _, a := range sa.Analyses {
-		if tSelfIsLeader(a) && !a.Health().StreamConnected {
+		if tSelfIsLeader(a) && !a.StaleHealth().StreamConnected {
 			problems = append(problems, types.Problem{
 				Code:           types.ProblemLeaderIsDead,
 				CheckName:      m.Name(),
-				PoolerID:       a.Health().GetMultipooler().GetId(),
-				ShardKey:       a.Health().GetMultipooler().GetShardKey(),
+				PoolerID:       a.ID(),
+				ShardKey:       a.Multipooler().GetShardKey(),
 				Priority:       types.PriorityEmergency,
 				Scope:          types.ScopeShard,
 				RecoveryAction: m.recoveryAction,
@@ -600,8 +600,8 @@ func (m *mockReplicaNotReplicatingAnalyzer) Analyze(sa *analysis.ShardAnalysis) 
 			problems = append(problems, types.Problem{
 				Code:           types.ProblemReplicaNotReplicating,
 				CheckName:      m.Name(),
-				PoolerID:       a.Health().GetMultipooler().GetId(),
-				ShardKey:       a.Health().GetMultipooler().GetShardKey(),
+				PoolerID:       a.ID(),
+				ShardKey:       a.Multipooler().GetShardKey(),
 				Priority:       types.PriorityHigh,
 				Scope:          types.ScopePooler,
 				RecoveryAction: m.recoveryAction,
@@ -1354,8 +1354,8 @@ func TestRecoveryLoop_PriorityOrdering(t *testing.T) {
 				return &types.Problem{
 					Code:           types.ProblemReplicaNotReplicating,
 					CheckName:      "NormalPriorityAnalyzer",
-					PoolerID:       a.Health().GetMultipooler().GetId(),
-					ShardKey:       a.Health().GetMultipooler().GetShardKey(),
+					PoolerID:       a.ID(),
+					ShardKey:       a.Multipooler().GetShardKey(),
 					Priority:       types.PriorityNormal,
 					Scope:          types.ScopePooler,
 					RecoveryAction: normalRecovery,
@@ -1376,8 +1376,8 @@ func TestRecoveryLoop_PriorityOrdering(t *testing.T) {
 				return &types.Problem{
 					Code:           types.ProblemReplicaNotReplicating,
 					CheckName:      "EmergencyPriorityAnalyzer",
-					PoolerID:       a.Health().GetMultipooler().GetId(),
-					ShardKey:       a.Health().GetMultipooler().GetShardKey(),
+					PoolerID:       a.ID(),
+					ShardKey:       a.Multipooler().GetShardKey(),
 					Priority:       types.PriorityEmergency,
 					Scope:          types.ScopePooler,
 					RecoveryAction: emergencyRecovery,
@@ -1398,8 +1398,8 @@ func TestRecoveryLoop_PriorityOrdering(t *testing.T) {
 				return &types.Problem{
 					Code:           types.ProblemReplicaNotReplicating,
 					CheckName:      "HighPriorityAnalyzer",
-					PoolerID:       a.Health().GetMultipooler().GetId(),
-					ShardKey:       a.Health().GetMultipooler().GetShardKey(),
+					PoolerID:       a.ID(),
+					ShardKey:       a.Multipooler().GetShardKey(),
 					Priority:       types.PriorityHigh,
 					Scope:          types.ScopePooler,
 					RecoveryAction: highRecovery,
@@ -1512,8 +1512,8 @@ func TestRecoveryLoop_TracingSpans(t *testing.T) {
 			return &types.Problem{
 				Code:           types.ProblemReplicaNotReplicating,
 				CheckName:      "TracingTestAnalyzer",
-				PoolerID:       a.Health().GetMultipooler().GetId(),
-				ShardKey:       a.Health().GetMultipooler().GetShardKey(),
+				PoolerID:       a.ID(),
+				ShardKey:       a.Multipooler().GetShardKey(),
 				Scope:          types.ScopePooler,
 				Priority:       types.PriorityHigh,
 				RecoveryAction: successAction,
@@ -1705,12 +1705,12 @@ func TestRecoveryLoop_GracePeriodIntegration(t *testing.T) {
 			// Only detect problem for replica (not primary)
 			// This simulates realistic scenario where problem detection
 			// varies by pooler but should still trigger grace period
-			if a.Health().GetMultipooler().GetId() != nil && a.Health().GetMultipooler().GetId().Name == "replica-pooler" {
+			if a.ID() != nil && a.ID().Name == "replica-pooler" {
 				return &types.Problem{
 					Code:           testProblemCode,
 					CheckName:      "TestGracePeriodAnalyzer",
-					PoolerID:       a.Health().GetMultipooler().GetId(),
-					ShardKey:       a.Health().GetMultipooler().GetShardKey(),
+					PoolerID:       a.ID(),
+					ShardKey:       a.Multipooler().GetShardKey(),
 					Priority:       types.PriorityEmergency,
 					Scope:          types.ScopeShard,
 					RecoveryAction: mockAction,
@@ -1827,12 +1827,12 @@ func TestRecoveryLoop_DeadlineResetAfterSuccess(t *testing.T) {
 	// Create custom analyzer that can toggle problem detection
 	analyzer := &customAnalyzer{
 		analyzeFn: func(a *store.Pooler) *types.Problem {
-			if a.Health().GetMultipooler().GetId() != nil && a.Health().GetMultipooler().GetId().Name == "replica-pooler" && problemDetected {
+			if a.ID() != nil && a.ID().Name == "replica-pooler" && problemDetected {
 				return &types.Problem{
 					Code:           testProblemCode,
 					CheckName:      "TestDeadlineResetAnalyzer",
-					PoolerID:       a.Health().GetMultipooler().GetId(),
-					ShardKey:       a.Health().GetMultipooler().GetShardKey(),
+					PoolerID:       a.ID(),
+					ShardKey:       a.Multipooler().GetShardKey(),
 					Priority:       types.PriorityNormal,
 					Scope:          types.ScopePooler,
 					RecoveryAction: mockAction,
@@ -2019,12 +2019,12 @@ func TestRecoveryLoop_PerPoolerGracePeriod(t *testing.T) {
 	analyzer := &customAnalyzer{
 		analyzeFn: func(a *store.Pooler) *types.Problem {
 			// Detect problem for both replicas (not primary)
-			if a.Health().GetMultipooler().GetId() != nil && (a.Health().GetMultipooler().GetId().Name == "replica1-pooler" || a.Health().GetMultipooler().GetId().Name == "replica2-pooler") {
+			if a.ID() != nil && (a.ID().Name == "replica1-pooler" || a.ID().Name == "replica2-pooler") {
 				return &types.Problem{
 					Code:           testProblemCode,
 					CheckName:      "TestPerPoolerGracePeriodAnalyzer",
-					PoolerID:       a.Health().GetMultipooler().GetId(),
-					ShardKey:       a.Health().GetMultipooler().GetShardKey(),
+					PoolerID:       a.ID(),
+					ShardKey:       a.Multipooler().GetShardKey(),
 					Priority:       types.PriorityNormal,
 					Scope:          types.ScopePooler, // Pooler-specific problem
 					RecoveryAction: mockAction,

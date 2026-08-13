@@ -72,8 +72,8 @@ func replicasStreamingFromLeader(sa *ShardAnalysis) bool {
 	if sa.Leader == nil {
 		return false
 	}
-	primaryHost := sa.Leader.Health().GetMultipooler().GetHostname()
-	primaryPort := sa.Leader.Health().GetMultipooler().GetPortMap()["postgres"]
+	primaryHost := sa.Leader.Multipooler().GetHostname()
+	primaryPort := sa.Leader.Multipooler().GetPortMap()["postgres"]
 	undecidedRule := commonconsensus.PossiblyUndecidedRule(sa.HighestPosition)
 	leaderKey := topoclient.ComponentIDString(undecidedRule.GetLeaderId())
 
@@ -84,7 +84,7 @@ func replicasStreamingFromLeader(sa *ShardAnalysis) bool {
 			continue
 		}
 		// Skip the leader itself and any node that self-claims leadership.
-		if topoclient.ComponentIDString(poolerID(pa)) == leaderKey || commonconsensus.SelfConsensusRole(pa.Health().GetConsensusStatus()) == commonconsensus.ConsensusRoleLeader {
+		if topoclient.ComponentIDString(poolerID(pa)) == leaderKey || commonconsensus.SelfConsensusRole(pa.StaleHealth().GetConsensusStatus()) == commonconsensus.ConsensusRoleLeader {
 			continue
 		}
 		// Ignore followers with no fresh observation (never reported, or a stale
@@ -108,7 +108,7 @@ func replicasStreamingFromLeader(sa *ShardAnalysis) bool {
 // fresh (within wal_receiver_status_interval × multiplier, falling back to the
 // default threshold, and never older than wal_receiver_timeout).
 func followerStreamingFromLeader(sa *ShardAnalysis, replica *store.Pooler, primaryHost string, primaryPort int32) bool {
-	rs := replica.Health().GetStatus().GetReplicationStatus()
+	rs := replica.StaleHealth().GetStatus().GetReplicationStatus()
 	if rs == nil {
 		return false
 	}
@@ -161,12 +161,12 @@ func leaderObservedLive(sa *ShardAnalysis) bool {
 // should be replaced — cohort-eligibility INELIGIBLE or a term-matched
 // REQUESTING_DEMOTION — read from its self-reported AvailabilityStatus.
 func leaderHasResigned(sa *ShardAnalysis) bool {
-	return sa.Leader != nil && types.LeaderNeedsReplacement(sa.Leader.Health())
+	return sa.Leader != nil && types.LeaderNeedsReplacement(sa.Leader.StaleHealth())
 }
 
 // leaderPostgresReady reports the leader's last-snapshot pg_isready result.
 func leaderPostgresReady(sa *ShardAnalysis) bool {
-	return sa.Leader != nil && sa.Leader.Health().GetStatus().GetPostgresReady()
+	return sa.Leader != nil && sa.Leader.StaleHealth().GetStatus().GetPostgresReady()
 }
 
 // leaderServing reports whether the leader is a healthy, currently-serving
@@ -187,7 +187,7 @@ func leaderServing(sa *ShardAnalysis) bool {
 // leaderPostgresRunning reports whether the leader's last snapshot shows its
 // postgres process alive (may be true even when pg_isready fails, e.g. SIGSTOP).
 func leaderPostgresRunning(sa *ShardAnalysis) bool {
-	return sa.Leader != nil && sa.Leader.Health().GetStatus().GetPostgresRunning()
+	return sa.Leader != nil && sa.Leader.StaleHealth().GetStatus().GetPostgresRunning()
 }
 
 // leaderLastPostgresReadyTime returns when the leader's postgres last reported
@@ -196,7 +196,7 @@ func leaderLastPostgresReadyTime(sa *ShardAnalysis) time.Time {
 	if sa.Leader == nil {
 		return time.Time{}
 	}
-	if ts := sa.Leader.Health().GetLastPostgresReadyTime(); ts != nil {
+	if ts := sa.Leader.StaleHealth().GetLastPostgresReadyTime(); ts != nil {
 		return ts.AsTime()
 	}
 	return time.Time{}
@@ -206,7 +206,7 @@ func leaderLastPostgresReadyTime(sa *ShardAnalysis) time.Time {
 // in progress (postgres in the PROMOTING state).
 func leaderPromoting(sa *ShardAnalysis) bool {
 	return sa.Leader != nil &&
-		sa.Leader.Health().GetStatus().GetPostgresStatus() == multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_PROMOTING
+		sa.Leader.StaleHealth().GetStatus().GetPostgresStatus() == multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_PROMOTING
 }
 
 // hasInitializedReplica reports whether the shard has at least one non-leader,
@@ -214,7 +214,7 @@ func leaderPromoting(sa *ShardAnalysis) bool {
 // leader. Used to avoid false-positive failover when no standby has joined yet.
 func hasInitializedReplica(sa *ShardAnalysis) bool {
 	for _, pa := range sa.Analyses {
-		if commonconsensus.SelfConsensusRole(pa.Health().GetConsensusStatus()) == commonconsensus.ConsensusRoleLeader {
+		if commonconsensus.SelfConsensusRole(pa.StaleHealth().GetConsensusStatus()) == commonconsensus.ConsensusRoleLeader {
 			continue
 		}
 		if hs, ok := pa.HealthWithin(sa.Now, sa.Policy.ObservationFreshness); ok && hs.GetStatus().GetIsInitialized() {

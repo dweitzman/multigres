@@ -98,9 +98,9 @@ func TestFindPoolerByID_PresentAndAbsent(t *testing.T) {
 	want := withoutRule(poolerID("zone1", "p1"))
 	SeedCache(t, cache, want)
 
-	got, err := FindPoolerByID(cache, want.Health().Multipooler.Id)
+	got, err := FindPoolerByID(cache, want.ID())
 	require.NoError(t, err)
-	assert.Equal(t, want.Health().Multipooler.Id.Name, got.Health().Multipooler.Id.Name)
+	assert.Equal(t, want.ID().GetName(), got.ID().GetName())
 
 	_, err = FindPoolerByID(cache, poolerID("zone1", "missing"))
 	require.Error(t, err)
@@ -146,7 +146,7 @@ func TestFindShardMembers_LeaderResolvesFromHighestRule(t *testing.T) {
 	require.NotNil(t, members.HighestKnownPosition)
 	assert.Equal(t, int64(3), members.HighestKnownPosition.GetDecision().GetRuleNumber().GetCoordinatorTerm())
 	require.NotNil(t, members.Leader)
-	assert.Equal(t, "p1", members.Leader.Health().Multipooler.Id.Name)
+	assert.Equal(t, "p1", members.Leader.ID().GetName())
 }
 
 func TestFindShardMembers_LeaderResolvesFromUndecidedProposal(t *testing.T) {
@@ -165,7 +165,7 @@ func TestFindShardMembers_LeaderResolvesFromUndecidedProposal(t *testing.T) {
 	members := FindShardMembers(cache, shard())
 	require.NotNil(t, members.HighestKnownPosition)
 	require.NotNil(t, members.Leader)
-	assert.Equal(t, "p1", members.Leader.Health().Multipooler.Id.Name,
+	assert.Equal(t, "p1", members.Leader.ID().GetName(),
 		"leader should resolve via p1's undecided proposal, not its stale decision")
 }
 
@@ -185,7 +185,7 @@ func TestFindShardMembers_HigherRuleSupersedes(t *testing.T) {
 	assert.Equal(t, int64(3), members.HighestKnownPosition.GetDecision().GetRuleNumber().GetCoordinatorTerm(),
 		"higher coordinator_term wins")
 	require.NotNil(t, members.Leader)
-	assert.Equal(t, "p2", members.Leader.Health().Multipooler.Id.Name)
+	assert.Equal(t, "p2", members.Leader.ID().GetName())
 }
 
 func TestFindShardMembers_LeaderNamedButNotInCache(t *testing.T) {
@@ -239,5 +239,5 @@ func TestFindShardMembers_OnlyShardScoped(t *testing.T) {
 
 	members := FindShardMembers(cache, shard())
 	require.Len(t, members.Poolers, 1)
-	assert.Equal(t, "in", members.Poolers[0].Health().Multipooler.Id.Name)
+	assert.Equal(t, "in", members.Poolers[0].ID().GetName())
 }

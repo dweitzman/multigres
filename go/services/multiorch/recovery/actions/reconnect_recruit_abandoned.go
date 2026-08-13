@@ -88,7 +88,7 @@ func (a *ReconnectRecruitAbandonedAction) Execute(ctx context.Context, problem t
 			"no consensus leader known for shard %s", problem.ShardKey)
 	}
 
-	revocation := follower.Health().GetConsensusStatus().GetTermRevocation()
+	revocation := follower.StaleHealth().GetConsensusStatus().GetTermRevocation()
 
 	// Advance the rule only if the follower is still stranded — the highest known
 	// rule may already outrank the revocation (its decision is high enough, even
@@ -108,7 +108,7 @@ func (a *ReconnectRecruitAbandonedAction) Execute(ctx context.Context, problem t
 			Operation:            multipoolermanagerdatapb.RuleOperation_RULE_OPERATION_ADVANCE,
 			ExpectedOutgoingRule: members.HighestKnownPosition.GetDecision().GetRuleNumber(),
 		}
-		resp, err := a.rpcClient.UpdateConsensusRule(ctx, leader.Health().Multipooler, req)
+		resp, err := a.rpcClient.UpdateConsensusRule(ctx, leader.Multipooler(), req)
 		if err != nil {
 			return mterrors.Wrap(err, "leader-led rule advance failed")
 		}
@@ -119,27 +119,30 @@ func (a *ReconnectRecruitAbandonedAction) Execute(ctx context.Context, problem t
 				commonconsensus.FormatRulePosition(advanced))
 		}
 		a.logger.InfoContext(ctx, "advanced leader rule to reconnect stranded follower",
-			"leader", leader.Health().Multipooler.Id.Name,
-			"follower", follower.Health().Multipooler.Id.Name)
+			"leader", leader.ID().GetName(),
+			"follower", follower.ID().GetName())
 	}
 
 	// Relay the advanced decision to the follower. It no longer revokes this rule,
 	// so it accepts SetPrimary and rejoins. RewindReady is relayed so a follower
 	// that also needs a rewind defers it until the leader is checkpointed.
+	// rewind_ready only ever goes false -> true within a coordinator term, so a
+	// stale read is still safe: stale-true remains valid, stale-false is merely
+	// conservative (see leader_info_propagation.go's shouldPropagateLeaderInfo).
 	setReq := &consensusdatapb.SetPrimaryRequest{
 		ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{
 			Position:    advanced,
-			Primary:     topoclient.PoolerAddressFor(leader.Health().Multipooler),
-			RewindReady: commonconsensus.ReplicationPrimaryOrNil(leader.Health().GetConsensusStatus()).GetRewindReady(),
+			Primary:     topoclient.PoolerAddressFor(leader.Multipooler()),
+			RewindReady: commonconsensus.ReplicationPrimaryOrNil(leader.StaleHealth().GetConsensusStatus()).GetRewindReady(),
 		},
 	}
-	if _, err := a.rpcClient.SetPrimary(ctx, follower.Health().Multipooler, setReq); err != nil {
+	if _, err := a.rpcClient.SetPrimary(ctx, follower.Multipooler(), setReq); err != nil {
 		return mterrors.Wrap(err, "SetPrimary to reconnect stranded follower failed")
 	}
 
 	a.logger.InfoContext(ctx, "reconnect recruit-abandoned action completed",
-		"leader", leader.Health().Multipooler.Id.Name,
-		"follower", follower.Health().Multipooler.Id.Name)
+		"leader", leader.ID().GetName(),
+		"follower", follower.ID().GetName())
 	return nil
 }
 

@@ -73,11 +73,11 @@ func (f *HealthStreamFactory) NewForTest(t *testing.T, cache *PoolerCache, id *c
 // method; production code reaches state through OnLive hooks.
 func SeedCache(t *testing.T, cache *PoolerCache, state *Pooler) topoclient.ComponentID {
 	t.Helper()
-	if state == nil || state.Health().Multipooler == nil {
+	if state == nil || state.Multipooler() == nil {
 		return ""
 	}
-	poolerwatch.SeedForTest(t, cache, state.Health().Multipooler)
-	id := topoclient.ComponentIDString(state.Health().Multipooler.Id)
+	poolerwatch.SeedForTest(t, cache, state.Multipooler())
+	id := topoclient.ComponentIDString(state.ID())
 	cache.DoUpdate(id, func(*Pooler) *Pooler {
 		return state
 	})

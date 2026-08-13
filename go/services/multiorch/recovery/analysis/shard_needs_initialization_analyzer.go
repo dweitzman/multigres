@@ -57,7 +57,7 @@ func (a *ShardNeedsInitializationAnalyzer) Analyze(sa *ShardAnalysis) ([]types.P
 	for _, pa := range sa.Analyses {
 		// If any pooler has cohort members, consider the shard initialized.
 		// If it got stuck somehow, let stuck rule propagation deal with it.
-		position := pa.Health().GetConsensusStatus().GetCurrentPosition().GetPosition()
+		position := pa.StaleHealth().GetConsensusStatus().GetCurrentPosition().GetPosition()
 		if len(consensus.PossiblyUndecidedRule(position).GetCohortMembers()) > 0 {
 			return nil, nil
 		}

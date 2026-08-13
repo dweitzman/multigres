@@ -58,7 +58,7 @@ func TestPollLeaderHealth(t *testing.T) {
 		got, err := pollLeaderHealth(ctx, fakeClient, store.ShardMembers{Leader: leaderState})
 
 		require.NoError(t, err)
-		assert.Equal(t, "primary", got.Health().Multipooler.Id.Name)
+		assert.Equal(t, "primary", got.ID().GetName())
 	})
 
 	t.Run("errors when the leader still self-claims but its postgres is not ready", func(t *testing.T) {

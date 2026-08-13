@@ -105,7 +105,7 @@ func (a *ReconcileCohortAction) Execute(ctx context.Context, problem types.Probl
 			return mterrors.Wrap(err, "failed to find target pooler")
 		}
 		target = t
-		targetID = target.Health().Multipooler.Id
+		targetID = target.ID()
 	} else {
 		targetID = problem.PoolerID
 	}
@@ -137,7 +137,7 @@ func (a *ReconcileCohortAction) Execute(ctx context.Context, problem types.Probl
 		ExpectedOutgoingRule: members.HighestKnownPosition.GetDecision().GetRuleNumber(),
 	}
 
-	if _, err := a.rpcClient.UpdateConsensusRule(ctx, leader.Health().Multipooler, req); err != nil {
+	if _, err := a.rpcClient.UpdateConsensusRule(ctx, leader.Multipooler(), req); err != nil {
 		return mterrors.Wrap(err, "UpdateConsensusRule failed")
 	}
 
@@ -159,7 +159,7 @@ func (a *ReconcileCohortAction) Execute(ctx context.Context, problem types.Probl
 
 	a.logger.InfoContext(ctx, "reconcile cohort action completed",
 		"target", targetID.Name,
-		"primary", leader.Health().Multipooler.Id.Name,
+		"primary", leader.ID().GetName(),
 		"operation", op.String())
 	return nil
 }
@@ -174,10 +174,10 @@ func (a *ReconcileCohortAction) Execute(ctx context.Context, problem types.Probl
 // clear. Failures are logged and swallowed: this is a best-effort hardening step
 // layered on top of the pooler's own monitor backstop.
 func (a *ReconcileCohortAction) clearJoiningMemberArchive(ctx context.Context, leader, target *store.Pooler) {
-	statusResp, err := a.rpcClient.Status(ctx, leader.Health().Multipooler, &multipoolermanagerdatapb.StatusRequest{})
+	statusResp, err := a.rpcClient.Status(ctx, leader.Multipooler(), &multipoolermanagerdatapb.StatusRequest{})
 	if err != nil {
 		a.logger.WarnContext(ctx, "reconcile cohort: could not read leader status to clear joining member's archive; relying on monitor backstop",
-			"target", target.Health().Multipooler.Id.Name, "error", err)
+			"target", target.ID().GetName(), "error", err)
 		return
 	}
 	// The leader's own rule store reflects the ADD synchronously (UpdateConsensusRule
@@ -185,19 +185,19 @@ func (a *ReconcileCohortAction) clearJoiningMemberArchive(ctx context.Context, l
 	postAddRule := commonconsensus.HighestKnownRule([]*clustermetadatapb.ConsensusStatus{statusResp.GetConsensusStatus()})
 	if postAddRule == nil {
 		a.logger.WarnContext(ctx, "reconcile cohort: leader reported no rule after ADD; relying on monitor backstop",
-			"target", target.Health().Multipooler.Id.Name)
+			"target", target.ID().GetName())
 		return
 	}
 	setPrimaryReq := &consensusdatapb.SetPrimaryRequest{
 		ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{
 			Position:    postAddRule,
-			Primary:     topoclient.PoolerAddressFor(leader.Health().Multipooler),
+			Primary:     topoclient.PoolerAddressFor(leader.Multipooler()),
 			RewindReady: commonconsensus.ReplicationPrimaryOrNil(statusResp.GetConsensusStatus()).GetRewindReady(),
 		},
 	}
-	if _, err := a.rpcClient.SetPrimary(ctx, target.Health().Multipooler, setPrimaryReq); err != nil {
+	if _, err := a.rpcClient.SetPrimary(ctx, target.Multipooler(), setPrimaryReq); err != nil {
 		a.logger.WarnContext(ctx, "reconcile cohort: SetPrimary to clear joining member's archive failed; relying on monitor backstop",
-			"target", target.Health().Multipooler.Id.Name, "error", err)
+			"target", target.ID().GetName(), "error", err)
 	}
 }
 

@@ -224,7 +224,7 @@ func (hs *HealthStream) run(ctx context.Context) {
 
 		// Read current pooler metadata from store on every attempt.
 		poolerHealth, ok := hs.cache.GetRider(hs.poolerID)
-		if !ok || poolerHealth.Health().Multipooler == nil {
+		if !ok || poolerHealth.Multipooler() == nil {
 			logger.WarnContext(ctx, "pooler not found in store, stopping health stream",
 				"pooler_id", hs.poolerID)
 			return
@@ -314,7 +314,7 @@ func (hs *HealthStream) streamOnce(ctx context.Context, poolerHealth *Pooler) (c
 		}
 	}()
 
-	stream, err := hs.factory.rpcClient.ManagerHealthStream(watchdogCtx, poolerHealth.Health().Multipooler)
+	stream, err := hs.factory.rpcClient.ManagerHealthStream(watchdogCtx, poolerHealth.Multipooler())
 	if err != nil {
 		return false, fmt.Errorf("open stream: %w", err)
 	}
@@ -404,7 +404,7 @@ func (hs *HealthStream) applySnapshot(ctx context.Context, poolerHealth *Pooler,
 	status := snapshot.Status.Status
 	now := timestamppb.Now()
 
-	poolerIDStr := topoclient.ComponentIDString(poolerHealth.Health().Multipooler.Id)
+	poolerIDStr := topoclient.ComponentIDString(poolerHealth.ID())
 	update := func(existing *Pooler) *Pooler {
 		existing.Mutate(func(h *multiorchdatapb.PoolerHealthState) {
 			h.LastCheckSuccessful = now

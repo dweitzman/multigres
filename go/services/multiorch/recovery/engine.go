@@ -439,15 +439,15 @@ func (re *Engine) collectStreamHealthData() []StreamHealthData {
 	data := make([]StreamHealthData, 0, len(entries))
 	for _, entry := range entries {
 		state := entry.Rider
-		if state.Health().Multipooler == nil {
+		if state.ID() == nil {
 			continue
 		}
 		data = append(data, StreamHealthData{
-			PoolerID:          topoclient.ComponentIDString(state.Health().Multipooler.Id),
-			DBNamespace:       state.Health().Multipooler.GetShardKey().GetDatabase(),
-			Shard:             state.Health().Multipooler.GetShardKey().GetShard(),
-			Connected:         state.Health().StreamConnected,
-			SnapshotsReceived: state.Health().StreamSnapshotsReceived,
+			PoolerID:          topoclient.ComponentIDString(state.ID()),
+			DBNamespace:       state.Multipooler().GetShardKey().GetDatabase(),
+			Shard:             state.Multipooler().GetShardKey().GetShard(),
+			Connected:         state.StaleHealth().StreamConnected,
+			SnapshotsReceived: state.StaleHealth().StreamSnapshotsReceived,
 		})
 	}
 	return data
@@ -632,8 +632,8 @@ func (re *Engine) pollAndWaitForNewSnapshots(ctx context.Context) {
 	var baselines []poolerBaseline
 	for _, entry := range re.poolerCache.All() {
 		ph := entry.Rider
-		if ph != nil && ph.Health().StreamConnected {
-			baselines = append(baselines, poolerBaseline{topoclient.ComponentIDString(ph.Health().Multipooler.Id), ph.Health().StreamSnapshotsReceived})
+		if ph != nil && ph.StaleHealth().StreamConnected {
+			baselines = append(baselines, poolerBaseline{topoclient.ComponentIDString(ph.ID()), ph.StaleHealth().StreamSnapshotsReceived})
 		}
 	}
 
@@ -642,7 +642,7 @@ func (re *Engine) pollAndWaitForNewSnapshots(ctx context.Context) {
 	// the store asynchronously as they arrive.
 	for _, entry := range re.poolerCache.All() {
 		ph := entry.Rider
-		if ph != nil && ph.Health().Multipooler != nil && ph.Health().Multipooler.Id != nil && ph.HealthStream != nil {
+		if ph != nil && ph.ID() != nil && ph.HealthStream != nil {
 			_ = ph.HealthStream.Poll()
 		}
 	}
@@ -666,7 +666,7 @@ func (re *Engine) pollAndWaitForNewSnapshots(ctx context.Context) {
 				)
 				return
 			}
-			if ph, ok := re.poolerCache.GetRider(pb.id); ok && ph.Health().StreamSnapshotsReceived > pb.baseline {
+			if ph, ok := re.poolerCache.GetRider(pb.id); ok && ph.StaleHealth().StreamSnapshotsReceived > pb.baseline {
 				break
 			}
 			select {

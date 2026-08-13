@@ -73,7 +73,7 @@ func newPoolerCache(
 			if p == nil {
 				return time.Time{}
 			}
-			return p.Health().GetLastSeen().AsTime()
+			return p.StaleHealth().GetLastSeen().AsTime()
 		},
 		Logger: logger,
 	})

@@ -110,7 +110,7 @@ func (a *ShardInitAction) Execute(ctx context.Context, problem types.Problem) er
 	// Ensure the initialized poolers we see could ever satisfy the durability policy.
 	initializedIDs := make([]*clustermetadatapb.ID, len(initializedPoolers))
 	for i, p := range initializedPoolers {
-		initializedIDs[i] = p.Health().Multipooler.Id
+		initializedIDs[i] = p.ID()
 	}
 	if err := durabilityPolicy.SatisfiedBy(initializedIDs); err != nil {
 		return mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
@@ -171,10 +171,10 @@ func (a *ShardInitAction) Execute(ctx context.Context, problem types.Problem) er
 func (a *ShardInitAction) getInitializedPoolers(shardKey *clustermetadatapb.ShardKey) (initialized []*store.Pooler, cohortEstablished bool) {
 	now := time.Now()
 	for _, pooler := range store.FindPoolersInShard(a.poolerStore, shardKey) {
-		if pooler == nil || pooler.Health().Multipooler == nil || pooler.Health().Multipooler.Id == nil {
+		if pooler == nil || pooler.ID() == nil {
 			continue
 		}
-		position := pooler.Health().GetConsensusStatus().GetCurrentPosition().GetPosition()
+		position := pooler.StaleHealth().GetConsensusStatus().GetCurrentPosition().GetPosition()
 		if len(commonconsensus.PossiblyUndecidedRule(position).GetCohortMembers()) > 0 {
 			return nil, true
 		}
@@ -195,8 +195,8 @@ func (a *ShardInitAction) buildCohortFromIDs(poolers []*store.Pooler, committedI
 
 	var result []*multiorchdatapb.PoolerHealthState
 	for _, p := range poolers {
-		if _, ok := idSet[topoclient.ClusterIDString(p.Health().Multipooler.Id)]; ok {
-			result = append(result, p.Health())
+		if _, ok := idSet[topoclient.ClusterIDString(p.ID())]; ok {
+			result = append(result, p.StaleHealth())
 		}
 	}
 	return result
