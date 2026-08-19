@@ -73,11 +73,9 @@ import (
 // one for all of multigres fine?
 const tracingServiceName = "github.com/multigres/multigres"
 
-var tracer = otel.Tracer(tracingServiceName)
-
-// Tracer returns a tracer for creating spans named github.com/multigres/multigres
+// Tracer returns a tracer for creating spans named github.com/multigres/multigres.
 func Tracer() trace.Tracer {
-	return tracer
+	return otel.Tracer(tracingServiceName)
 }
 
 // Telemetry holds OpenTelemetry configuration and state
@@ -351,7 +349,7 @@ func (t *Telemetry) InitForCommand(cmd *cobra.Command, serviceName string, start
 	ctx := t.WithEnvTraceparent(cmd.Context())
 	var span trace.Span
 	if startSpan {
-		ctx, span = tracer.Start(ctx, cmd.Use)
+		ctx, span = Tracer().Start(ctx, cmd.Use)
 	}
 	cmd.SetContext(ctx)
 	return span, nil
