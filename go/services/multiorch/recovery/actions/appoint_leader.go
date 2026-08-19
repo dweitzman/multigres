@@ -114,7 +114,7 @@ func (a *AppointLeaderAction) Execute(ctx context.Context, problem types.Problem
 	for i, p := range shard.Poolers {
 		cohort[i] = p.Health()
 	}
-	if err := a.consensus.AppointLeader(ctx, problem.ShardKey, cohort, reason); err != nil {
+	if err := a.consensus.AppointLeader(ctx, problem.ShardKey, cohort, reason, problem.Code.RecruitCause()); err != nil {
 		return mterrors.Wrap(err, "failed to appoint leader")
 	}
 

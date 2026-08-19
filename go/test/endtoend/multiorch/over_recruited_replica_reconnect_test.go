@@ -134,7 +134,7 @@ func TestOverRecruitedReplicaReconnect(t *testing.T) {
 		Cell:      "test-cell",
 		Name:      "test-coordinator",
 	}
-	revocation, err := commonconsensus.NewTermRevocation(statuses, testCoordinatorID, timestamppb.Now(), ha.DefaultBackoffResetDuration())
+	revocation, err := commonconsensus.NewTermRevocation(statuses, testCoordinatorID, timestamppb.Now(), ha.DefaultBackoffResetDuration(), clustermetadatapb.RecruitCause_RECRUIT_CAUSE_INFERRED)
 	require.NoError(t, err, "build term revocation")
 	t.Logf("Recruiting only %s at new term %d (leader %s stays in place)", targetReplica, revocation.GetRevokedBelowTerm(), primaryName)
 

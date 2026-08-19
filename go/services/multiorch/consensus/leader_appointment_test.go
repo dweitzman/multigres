@@ -146,7 +146,7 @@ func TestAppointLeader(t *testing.T) {
 	}
 
 	shardKey := &clustermetadatapb.ShardKey{Database: "testdb", TableGroup: "default", Shard: "shard0"}
-	require.NoError(t, c.AppointLeader(ctx, shardKey, cohort, "test_failover"))
+	require.NoError(t, c.AppointLeader(ctx, shardKey, cohort, "test_failover", clustermetadatapb.RecruitCause_RECRUIT_CAUSE_INFERRED))
 
 	// The designated leader (mp1) should receive a Promote with the full
 	// CoordinatorProposal.
@@ -231,7 +231,7 @@ func TestAppointLeader_PropagatesUndecidedMostAdvancedPosition(t *testing.T) {
 	}
 
 	shardKey := &clustermetadatapb.ShardKey{Database: "testdb", TableGroup: "default", Shard: "shard0"}
-	require.NoError(t, c.AppointLeader(ctx, shardKey, []*multiorchdatapb.PoolerHealthState{mp}, "test_failover"))
+	require.NoError(t, c.AppointLeader(ctx, shardKey, []*multiorchdatapb.PoolerHealthState{mp}, "test_failover", clustermetadatapb.RecruitCause_RECRUIT_CAUSE_INFERRED))
 
 	leaderKey := topoclient.ComponentIDString(mpID)
 	propReq, ok := fakeClient.PromoteRequests[leaderKey]
@@ -422,7 +422,7 @@ func TestAppointLeader_TiebreaksByResignation(t *testing.T) {
 	cohort := []*multiorchdatapb.PoolerHealthState{resigned, standby}
 	shardKey := &clustermetadatapb.ShardKey{Database: "postgres", TableGroup: "default", Shard: "0-inf"}
 
-	require.NoError(t, c.AppointLeader(ctx, shardKey, cohort, "test_resignation_tiebreak"))
+	require.NoError(t, c.AppointLeader(ctx, shardKey, cohort, "test_resignation_tiebreak", clustermetadatapb.RecruitCause_RECRUIT_CAUSE_INFERRED))
 
 	// The standby (non-resigning) should have been promoted, not the resigned primary.
 	standbyKey := topoclient.ComponentIDString(cohortIDs[1])
@@ -512,7 +512,7 @@ func TestAppointLeader_IneligibleMemberExcludedFromOutgoingRule(t *testing.T) {
 	}
 
 	shardKey := &clustermetadatapb.ShardKey{Database: "testdb", TableGroup: "default", Shard: "shard0"}
-	require.NoError(t, c.AppointLeader(ctx, shardKey, cohort, "test_ineligible_outgoing_rule"))
+	require.NoError(t, c.AppointLeader(ctx, shardKey, cohort, "test_ineligible_outgoing_rule", clustermetadatapb.RecruitCause_RECRUIT_CAUSE_INFERRED))
 
 	// mp3 (highest LSN among the eligible pair) should be elected.
 	leaderKey := topoclient.ComponentIDString(cohortIDs[2])

@@ -213,6 +213,7 @@ func (s *MultiadminServer) buildCert(
 					// (see consensus.recruitAttempt) counts this as the first
 					// attempt rather than undercounting the escalation by one.
 					Attempt: 1,
+					Cause:   clustermetadatapb.RecruitCause_RECRUIT_CAUSE_EXTERNAL,
 				},
 			},
 			FrozenLsn: pos.GetLsn(),

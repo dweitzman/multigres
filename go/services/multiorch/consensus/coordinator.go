@@ -62,7 +62,7 @@ func NewCoordinator(coordinatorID *clustermetadatapb.ID, topoStore topoclient.St
 //
 // Returns an error if any stage fails. The operation is idempotent and can be
 // retried safely.
-func (c *Coordinator) AppointLeader(ctx context.Context, shardKey *clustermetadatapb.ShardKey, cohort []*multiorchdatapb.PoolerHealthState, reason string) error {
+func (c *Coordinator) AppointLeader(ctx context.Context, shardKey *clustermetadatapb.ShardKey, cohort []*multiorchdatapb.PoolerHealthState, reason string, cause clustermetadatapb.RecruitCause) error {
 	c.logger.InfoContext(ctx, "starting leader appointment",
 		"database", shardKey.GetDatabase(),
 		"tablegroup", shardKey.GetTableGroup(),
@@ -73,7 +73,7 @@ func (c *Coordinator) AppointLeader(ctx context.Context, shardKey *clustermetada
 		return mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT, "cohort is empty for shard %s", shardKey.GetShard())
 	}
 
-	return c.runFailover(ctx, cohort, reason)
+	return c.runFailover(ctx, cohort, reason, cause)
 }
 
 // runFailover wires the failover callbacks for a coordinatorLedRuleChange and
@@ -96,7 +96,7 @@ func (c *Coordinator) AppointLeader(ctx context.Context, shardKey *clustermetada
 // would. Picking a rewind-free replica makes failover faster; picking one
 // that needs rewinding is not fatal — the SetPrimary path runs pg_rewind
 // before the node serves writes or replicates.
-func (c *Coordinator) runFailover(ctx context.Context, cohort []*multiorchdatapb.PoolerHealthState, reason string) error {
+func (c *Coordinator) runFailover(ctx context.Context, cohort []*multiorchdatapb.PoolerHealthState, reason string, cause clustermetadatapb.RecruitCause) error {
 	// Drop INELIGIBLE members (raised only on a deliberate exit: graceful
 	// shutdown or admin-stopped WAL receiver) from both the recruit round and
 	// the outgoing-decision/term-safety-floor computation below — a position or
@@ -118,7 +118,7 @@ func (c *Coordinator) runFailover(ctx context.Context, cohort []*multiorchdatapb
 			"no eligible cohort members for failover; all ineligible: %v", ineligible)
 	}
 
-	revocation, err := commonconsensus.NewTermRevocation(consensusStatusesOf(cohort), c.coordinatorID, timestamppb.Now(), ha.DefaultBackoffResetDuration())
+	revocation, err := commonconsensus.NewTermRevocation(consensusStatusesOf(cohort), c.coordinatorID, timestamppb.Now(), ha.DefaultBackoffResetDuration(), cause)
 	if err != nil {
 		return mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION, "%v", err)
 	}
@@ -195,7 +195,7 @@ func (c *Coordinator) AppointInitialLeader(ctx context.Context, shardKey *cluste
 			"cannot bootstrap shard %s: no cohort member has a known WAL position", shardKey.GetShard())
 	}
 
-	revocation, err := commonconsensus.NewTermRevocation(cohortStatuses, c.coordinatorID, timestamppb.Now(), ha.DefaultBackoffResetDuration())
+	revocation, err := commonconsensus.NewTermRevocation(cohortStatuses, c.coordinatorID, timestamppb.Now(), ha.DefaultBackoffResetDuration(), clustermetadatapb.RecruitCause_RECRUIT_CAUSE_INFERRED)
 	if err != nil {
 		return mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION, "%v", err)
 	}

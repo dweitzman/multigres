@@ -549,7 +549,7 @@ func TestNewTermRevocation(t *testing.T) {
 	coord := &clustermetadatapb.ID{Name: "coord-1"}
 
 	t.Run("empty statuses returns error", func(t *testing.T) {
-		rev, err := NewTermRevocation(nil, coord, ts1, 0)
+		rev, err := NewTermRevocation(nil, coord, ts1, 0, clustermetadatapb.RecruitCause_RECRUIT_CAUSE_INFERRED)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "statuses must be non-empty")
 		require.Nil(t, rev)
@@ -559,9 +559,19 @@ func TestNewTermRevocation(t *testing.T) {
 		statuses := []*clustermetadatapb.ConsensusStatus{
 			{CurrentPosition: positionAtCoordTerm(4)},
 		}
-		rev, err := NewTermRevocation(statuses, coord, nil, 0)
+		rev, err := NewTermRevocation(statuses, coord, nil, 0, clustermetadatapb.RecruitCause_RECRUIT_CAUSE_INFERRED)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "initiatedAt must be non-nil")
+		require.Nil(t, rev)
+	})
+
+	t.Run("unspecified cause returns error", func(t *testing.T) {
+		statuses := []*clustermetadatapb.ConsensusStatus{
+			{CurrentPosition: positionAtCoordTerm(4)},
+		}
+		rev, err := NewTermRevocation(statuses, coord, ts1, 0, clustermetadatapb.RecruitCause_RECRUIT_CAUSE_UNSPECIFIED)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "cause must be specified")
 		require.Nil(t, rev)
 	})
 
@@ -570,7 +580,7 @@ func TestNewTermRevocation(t *testing.T) {
 		// rule. NewTermRevocation refuses; the agent should construct the
 		// revocation directly with an explicit outgoing_rule.
 		statuses := []*clustermetadatapb.ConsensusStatus{{}, {}}
-		rev, err := NewTermRevocation(statuses, coord, ts1, 0)
+		rev, err := NewTermRevocation(statuses, coord, ts1, 0, clustermetadatapb.RecruitCause_RECRUIT_CAUSE_INFERRED)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "no cohort member reports a recorded rule")
 		require.Nil(t, rev)
@@ -588,7 +598,7 @@ func TestNewTermRevocation(t *testing.T) {
 		statuses := []*clustermetadatapb.ConsensusStatus{
 			{CurrentPosition: positionWithUndecidedProposal(4, 6)},
 		}
-		rev, err := NewTermRevocation(statuses, coord, ts1, 0)
+		rev, err := NewTermRevocation(statuses, coord, ts1, 0, clustermetadatapb.RecruitCause_RECRUIT_CAUSE_INFERRED)
 		require.NoError(t, err)
 		require.NotNil(t, rev)
 		assert.Equal(t, int64(6), rev.GetOutgoingRule().GetCoordinatorTerm())
@@ -607,7 +617,7 @@ func TestNewTermRevocation(t *testing.T) {
 			{TermRevocation: &clustermetadatapb.TermRevocation{RevokedBelowTerm: 3}},
 			{TermRevocation: &clustermetadatapb.TermRevocation{RevokedBelowTerm: 7}},
 		}
-		rev, err := NewTermRevocation(statuses, coord, ts1, 0)
+		rev, err := NewTermRevocation(statuses, coord, ts1, 0, clustermetadatapb.RecruitCause_RECRUIT_CAUSE_INFERRED)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "no cohort member reports a recorded rule")
 		require.Nil(t, rev)
@@ -628,7 +638,7 @@ func TestNewTermRevocation(t *testing.T) {
 				CurrentPosition: positionAtCoordTerm(4),
 			},
 		}
-		rev, err := NewTermRevocation(statuses, coord, ts1, 0)
+		rev, err := NewTermRevocation(statuses, coord, ts1, 0, clustermetadatapb.RecruitCause_RECRUIT_CAUSE_INFERRED)
 		require.NoError(t, err)
 		prototest.RequireEqual(t, &clustermetadatapb.TermRevocation{
 			RevokedBelowTerm:       8,
@@ -638,6 +648,7 @@ func TestNewTermRevocation(t *testing.T) {
 			RecruitIntent: &clustermetadatapb.RecruitIntent{
 				ReplaceDecision: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4},
 				Attempt:         1,
+				Cause:           clustermetadatapb.RecruitCause_RECRUIT_CAUSE_INFERRED,
 			},
 		}, rev)
 	})
@@ -647,7 +658,7 @@ func TestNewTermRevocation(t *testing.T) {
 			{CurrentPosition: positionAtCoordTerm(4)},
 			{CurrentPosition: positionAtCoordTerm(9)},
 		}
-		rev, err := NewTermRevocation(statuses, coord, ts1, 0)
+		rev, err := NewTermRevocation(statuses, coord, ts1, 0, clustermetadatapb.RecruitCause_RECRUIT_CAUSE_INFERRED)
 		require.NoError(t, err)
 		prototest.RequireEqual(t, &clustermetadatapb.TermRevocation{
 			RevokedBelowTerm:       10,
@@ -657,6 +668,7 @@ func TestNewTermRevocation(t *testing.T) {
 			RecruitIntent: &clustermetadatapb.RecruitIntent{
 				ReplaceDecision: &clustermetadatapb.RuleNumber{CoordinatorTerm: 9},
 				Attempt:         1,
+				Cause:           clustermetadatapb.RecruitCause_RECRUIT_CAUSE_INFERRED,
 			},
 		}, rev)
 	})
@@ -666,7 +678,7 @@ func TestNewTermRevocation(t *testing.T) {
 			{TermRevocation: &clustermetadatapb.TermRevocation{RevokedBelowTerm: 6}},
 			{CurrentPosition: positionAtCoordTerm(11)},
 		}
-		rev, err := NewTermRevocation(statuses, coord, ts1, 0)
+		rev, err := NewTermRevocation(statuses, coord, ts1, 0, clustermetadatapb.RecruitCause_RECRUIT_CAUSE_INFERRED)
 		require.NoError(t, err)
 		prototest.RequireEqual(t, &clustermetadatapb.TermRevocation{
 			RevokedBelowTerm:       12,
@@ -676,6 +688,7 @@ func TestNewTermRevocation(t *testing.T) {
 			RecruitIntent: &clustermetadatapb.RecruitIntent{
 				ReplaceDecision: &clustermetadatapb.RuleNumber{CoordinatorTerm: 11},
 				Attempt:         1,
+				Cause:           clustermetadatapb.RecruitCause_RECRUIT_CAUSE_INFERRED,
 			},
 		}, rev)
 	})
@@ -701,7 +714,7 @@ func TestNewTermRevocation(t *testing.T) {
 				Lsn: "16/B374D700",
 			}},
 		}
-		rev, err := NewTermRevocation(statuses, coord, ts1, 0)
+		rev, err := NewTermRevocation(statuses, coord, ts1, 0, clustermetadatapb.RecruitCause_RECRUIT_CAUSE_INFERRED)
 		require.NoError(t, err)
 		prototest.RequireEqual(t, &clustermetadatapb.TermRevocation{
 			RevokedBelowTerm:       5,
@@ -711,6 +724,7 @@ func TestNewTermRevocation(t *testing.T) {
 			RecruitIntent: &clustermetadatapb.RecruitIntent{
 				ReplaceDecision: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4, LeaderSubterm: 5},
 				Attempt:         1,
+				Cause:           clustermetadatapb.RecruitCause_RECRUIT_CAUSE_INFERRED,
 			},
 		}, rev)
 	})
@@ -733,7 +747,7 @@ func TestNewTermRevocation(t *testing.T) {
 				CurrentPosition: positionAtCoordTerm(4),
 			},
 		}
-		rev, err := NewTermRevocation(statuses, coord, ts1, 5*time.Minute)
+		rev, err := NewTermRevocation(statuses, coord, ts1, 5*time.Minute, clustermetadatapb.RecruitCause_RECRUIT_CAUSE_INFERRED)
 		require.NoError(t, err)
 		prototest.RequireEqual(t, &clustermetadatapb.TermRevocation{
 			RevokedBelowTerm:       6,
@@ -743,8 +757,34 @@ func TestNewTermRevocation(t *testing.T) {
 			RecruitIntent: &clustermetadatapb.RecruitIntent{
 				ReplaceDecision: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4},
 				Attempt:         3,
+				Cause:           clustermetadatapb.RecruitCause_RECRUIT_CAUSE_INFERRED,
 			},
 		}, rev)
+	})
+
+	t.Run("carries attempt forward from a prior EXTERNAL-caused revocation", func(t *testing.T) {
+		// recruitAttempt is deliberately cause-agnostic: an operator's manual
+		// intervention (RECRUIT_CAUSE_EXTERNAL, always attempt 1 per buildCert)
+		// against the same decision is a fair baseline for an inferred failover
+		// to continue escalating from, not a reason to treat this as a fresh
+		// episode.
+		statuses := []*clustermetadatapb.ConsensusStatus{
+			{
+				TermRevocation: &clustermetadatapb.TermRevocation{
+					RevokedBelowTerm:       5,
+					CoordinatorInitiatedAt: ts1,
+					RecruitIntent: &clustermetadatapb.RecruitIntent{
+						ReplaceDecision: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4},
+						Attempt:         1,
+						Cause:           clustermetadatapb.RecruitCause_RECRUIT_CAUSE_EXTERNAL,
+					},
+				},
+				CurrentPosition: positionAtCoordTerm(4),
+			},
+		}
+		rev, err := NewTermRevocation(statuses, coord, ts1, 5*time.Minute, clustermetadatapb.RecruitCause_RECRUIT_CAUSE_INFERRED)
+		require.NoError(t, err)
+		assert.Equal(t, int64(2), rev.GetRecruitIntent().GetAttempt())
 	})
 
 	t.Run("resets attempt to 1 when the prior recruit is stale", func(t *testing.T) {
@@ -766,7 +806,7 @@ func TestNewTermRevocation(t *testing.T) {
 				CurrentPosition: positionAtCoordTerm(4),
 			},
 		}
-		rev, err := NewTermRevocation(statuses, coord, ts1, 5*time.Minute)
+		rev, err := NewTermRevocation(statuses, coord, ts1, 5*time.Minute, clustermetadatapb.RecruitCause_RECRUIT_CAUSE_INFERRED)
 		require.NoError(t, err)
 		prototest.RequireEqual(t, &clustermetadatapb.TermRevocation{
 			RevokedBelowTerm:       6,
@@ -776,6 +816,7 @@ func TestNewTermRevocation(t *testing.T) {
 			RecruitIntent: &clustermetadatapb.RecruitIntent{
 				ReplaceDecision: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4},
 				Attempt:         1,
+				Cause:           clustermetadatapb.RecruitCause_RECRUIT_CAUSE_INFERRED,
 			},
 		}, rev)
 	})
@@ -797,7 +838,7 @@ func TestNewTermRevocation(t *testing.T) {
 				CurrentPosition: positionAtCoordTerm(4),
 			},
 		}
-		rev, err := NewTermRevocation(statuses, coord, ts1, 0)
+		rev, err := NewTermRevocation(statuses, coord, ts1, 0, clustermetadatapb.RecruitCause_RECRUIT_CAUSE_INFERRED)
 		require.NoError(t, err)
 		prototest.RequireEqual(t, &clustermetadatapb.TermRevocation{
 			RevokedBelowTerm:       6,
@@ -807,6 +848,7 @@ func TestNewTermRevocation(t *testing.T) {
 			RecruitIntent: &clustermetadatapb.RecruitIntent{
 				ReplaceDecision: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4},
 				Attempt:         3,
+				Cause:           clustermetadatapb.RecruitCause_RECRUIT_CAUSE_INFERRED,
 			},
 		}, rev)
 	})
@@ -828,7 +870,7 @@ func TestNewTermRevocation(t *testing.T) {
 				CurrentPosition: positionAtCoordTerm(6),
 			},
 		}
-		rev, err := NewTermRevocation(statuses, coord, ts1, 0)
+		rev, err := NewTermRevocation(statuses, coord, ts1, 0, clustermetadatapb.RecruitCause_RECRUIT_CAUSE_INFERRED)
 		require.NoError(t, err)
 		prototest.RequireEqual(t, &clustermetadatapb.TermRevocation{
 			RevokedBelowTerm:       7,
@@ -838,6 +880,7 @@ func TestNewTermRevocation(t *testing.T) {
 			RecruitIntent: &clustermetadatapb.RecruitIntent{
 				ReplaceDecision: &clustermetadatapb.RuleNumber{CoordinatorTerm: 6},
 				Attempt:         1,
+				Cause:           clustermetadatapb.RecruitCause_RECRUIT_CAUSE_INFERRED,
 			},
 		}, rev)
 	})
@@ -872,7 +915,7 @@ func TestNewTermRevocation(t *testing.T) {
 				},
 			},
 		}
-		rev, err := NewTermRevocation(statuses, coord, ts1, 0)
+		rev, err := NewTermRevocation(statuses, coord, ts1, 0, clustermetadatapb.RecruitCause_RECRUIT_CAUSE_INFERRED)
 		require.NoError(t, err)
 		prototest.RequireEqual(t, &clustermetadatapb.TermRevocation{
 			RevokedBelowTerm:       10,
@@ -882,6 +925,7 @@ func TestNewTermRevocation(t *testing.T) {
 			RecruitIntent: &clustermetadatapb.RecruitIntent{
 				ReplaceDecision: &clustermetadatapb.RuleNumber{CoordinatorTerm: 6},
 				Attempt:         3,
+				Cause:           clustermetadatapb.RecruitCause_RECRUIT_CAUSE_INFERRED,
 			},
 		}, rev)
 	})

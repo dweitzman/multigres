@@ -81,7 +81,7 @@ func newTestRevocation(t *testing.T, coord *Coordinator, cohort []*multiorchdata
 			statuses = append(statuses, cs)
 		}
 	}
-	rev, err := commonconsensus.NewTermRevocation(statuses, coord.coordinatorID, testInitiatedAt, 0)
+	rev, err := commonconsensus.NewTermRevocation(statuses, coord.coordinatorID, testInitiatedAt, 0, clustermetadatapb.RecruitCause_RECRUIT_CAUSE_INFERRED)
 	require.NoError(t, err)
 	return rev
 }

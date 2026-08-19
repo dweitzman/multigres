@@ -284,6 +284,56 @@ proto3.util.setEnumType(RoutingRole, "clustermetadata.RoutingRole", [
 ]);
 
 /**
+ * RecruitCause classifies why a recruitment was initiated, for collective
+ * backoff purposes: how much this revocation should be trusted as evidence
+ * of a real, ongoing failover episode.
+ *
+ * @generated from enum clustermetadata.RecruitCause
+ */
+export enum RecruitCause {
+  /**
+   * @generated from enum value: RECRUIT_CAUSE_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * A health-signal-based guess that the leader is dead or unreachable
+   * (e.g. LeaderUnreachableByCohort, LeaderUnhealthy, LeaderUnspecified), or
+   * the shard's initial leader election racing concurrently across
+   * orchestrators. The riskiest cause: the inference/race can produce
+   * repeated failed attempts, which are real evidence to back off.
+   *
+   * @generated from enum value: RECRUIT_CAUSE_INFERRED = 1;
+   */
+  INFERRED = 1,
+
+  /**
+   * A high-confidence, self-reported signal — the leader itself asked to be
+   * replaced (LeaderResigned).
+   *
+   * @generated from enum value: RECRUIT_CAUSE_SIGNALED = 2;
+   */
+  SIGNALED = 2,
+
+  /**
+   * Not a health-based leader-replacement decision: an operator or external
+   * tool directed this change (e.g. multiadmin's externally-certified path).
+   * A single authoritative actor, not a race between orchestrators — doesn't
+   * gate, or get gated by, collective backoff.
+   *
+   * @generated from enum value: RECRUIT_CAUSE_EXTERNAL = 3;
+   */
+  EXTERNAL = 3,
+}
+// Retrieve enum metadata with: proto3.getEnumType(RecruitCause)
+proto3.util.setEnumType(RecruitCause, "clustermetadata.RecruitCause", [
+  { no: 0, name: "RECRUIT_CAUSE_UNSPECIFIED" },
+  { no: 1, name: "RECRUIT_CAUSE_INFERRED" },
+  { no: 2, name: "RECRUIT_CAUSE_SIGNALED" },
+  { no: 3, name: "RECRUIT_CAUSE_EXTERNAL" },
+]);
+
+/**
  * LeadershipSignal describes a leader's self-reported status for its current term.
  * Only published by nodes that are or were the consensus leader (leader_term != 0).
  * 0 (UNKNOWN) means the field was not intentionally set.
@@ -2181,6 +2231,14 @@ export class RecruitIntent extends Message<RecruitIntent> {
    */
   attempt = protoInt64.zero;
 
+  /**
+   * Why this recruitment is happening, so collective backoff can gate on it
+   * (or not) according to how much confidence the cause warrants.
+   *
+   * @generated from field: clustermetadata.RecruitCause cause = 3;
+   */
+  cause = RecruitCause.UNSPECIFIED;
+
   constructor(data?: PartialMessage<RecruitIntent>) {
     super();
     proto3.util.initPartial(data, this);
@@ -2191,6 +2249,7 @@ export class RecruitIntent extends Message<RecruitIntent> {
   static readonly fields: FieldList = proto3.util.newFieldList(() => [
     { no: 1, name: "replace_decision", kind: "message", T: RuleNumber },
     { no: 2, name: "attempt", kind: "scalar", T: 3 /* ScalarType.INT64 */ },
+    { no: 3, name: "cause", kind: "enum", T: proto3.getEnumType(RecruitCause) },
   ]);
 
   static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): RecruitIntent {

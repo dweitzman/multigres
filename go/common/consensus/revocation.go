@@ -39,27 +39,32 @@ import (
 //
 // statuses must be non-empty and at least one status must carry a recorded
 // rule. An empty list or a cohort with no recorded rules indicates the
-// caller has nothing meaningful to transition from — that's a fresh-cluster
-// or bootstrap scenario where the agent (e.g. multiorch's
-// AppointInitialLeader) constructs the TermRevocation directly with an
-// explicit outgoing_rule, rather than going through this helper.
+// caller has nothing meaningful to transition from.
 //
 // staleRecruitResetWindow bounds how old the most recent recruit may be before
 // its accumulated recruit-intent attempt count is treated as stale and reset to
 // 1 (see recruitAttempt). Zero disables the reset. Callers set it comfortably
 // above the collective backoff cap so it only fires when recruitment has
 // genuinely paused (e.g. the cluster was scaled to zero and restarted).
+//
+// cause must not be RECRUIT_CAUSE_UNSPECIFIED — callers must say why this
+// recruitment is happening, so collective backoff can later decide whether
+// to trust it as evidence of a real failover episode (see RecruitCause).
 func NewTermRevocation(
 	statuses []*clustermetadatapb.ConsensusStatus,
 	coordinatorID *clustermetadatapb.ID,
 	initiatedAt *timestamppb.Timestamp,
 	staleRecruitResetWindow time.Duration,
+	cause clustermetadatapb.RecruitCause,
 ) (*clustermetadatapb.TermRevocation, error) {
 	if len(statuses) == 0 {
 		return nil, errors.New("NewTermRevocation: statuses must be non-empty")
 	}
 	if initiatedAt == nil {
 		return nil, errors.New("NewTermRevocation: initiatedAt must be non-nil")
+	}
+	if cause == clustermetadatapb.RecruitCause_RECRUIT_CAUSE_UNSPECIFIED {
+		return nil, errors.New("NewTermRevocation: cause must be specified")
 	}
 	// Discovery: the cohort's most advanced position anchors this
 	// revocation's outgoing_rule — decision or undecided proposal alike.
@@ -109,6 +114,7 @@ func NewTermRevocation(
 		RecruitIntent: &clustermetadatapb.RecruitIntent{
 			ReplaceDecision: replaceDecision,
 			Attempt:         recruitAttempt(previousRecruitForDecision, initiatedAt, staleRecruitResetWindow),
+			Cause:           cause,
 		},
 	}, nil
 }

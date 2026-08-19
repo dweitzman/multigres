@@ -736,6 +736,34 @@ message RecruitIntent {
   // increments while replace_decision is unchanged; resets to 1 when it advances
   // (the cohort committed a newer decision).
   int64 attempt = 2;
+
+  // Why this recruitment is happening, so collective backoff can gate on it
+  // (or not) according to how much confidence the cause warrants.
+  RecruitCause cause = 3;
+}
+
+// RecruitCause classifies why a recruitment was initiated, for collective
+// backoff purposes: how much this revocation should be trusted as evidence
+// of a real, ongoing failover episode.
+enum RecruitCause {
+  RECRUIT_CAUSE_UNSPECIFIED = 0;
+
+  // A health-signal-based guess that the leader is dead or unreachable
+  // (e.g. LeaderUnreachableByCohort, LeaderUnhealthy, LeaderUnspecified), or
+  // the shard's initial leader election racing concurrently across
+  // orchestrators. The riskiest cause: the inference/race can produce
+  // repeated failed attempts, which are real evidence to back off.
+  RECRUIT_CAUSE_INFERRED = 1;
+
+  // A high-confidence, self-reported signal — the leader itself asked to be
+  // replaced (LeaderResigned).
+  RECRUIT_CAUSE_SIGNALED = 2;
+
+  // Not a health-based leader-replacement decision: an operator or external
+  // tool directed this change (e.g. multiadmin's externally-certified path).
+  // A single authoritative actor, not a race between orchestrators — doesn't
+  // gate, or get gated by, collective backoff.
+  RECRUIT_CAUSE_EXTERNAL = 3;
 }
 
 // ExternallyCertifiedRevocation certifies that the outgoing cohort's revocation

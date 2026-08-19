@@ -86,6 +86,23 @@ func (c ProblemCode) IsFailoverProblem() bool {
 		c == ProblemLeaderResigned
 }
 
+// RecruitCause maps a failover problem to why collective backoff should
+// trust (or not trust) a recruitment attempting to resolve it. Only
+// meaningful for codes where IsFailoverProblem is true; other codes never
+// reach a recruitment and return RECRUIT_CAUSE_UNSPECIFIED defensively.
+func (c ProblemCode) RecruitCause() clustermetadatapb.RecruitCause {
+	if c == ProblemLeaderResigned {
+		// The leader itself asked to be replaced — a high-confidence, self-reported signal.
+		return clustermetadatapb.RecruitCause_RECRUIT_CAUSE_SIGNALED
+	}
+	if c.IsFailoverProblem() {
+		// LeaderUnspecified, LeaderUnreachableByCohort, LeaderUnhealthy: a
+		// health-signal-based guess that can be wrong.
+		return clustermetadatapb.RecruitCause_RECRUIT_CAUSE_INFERRED
+	}
+	return clustermetadatapb.RecruitCause_RECRUIT_CAUSE_UNSPECIFIED
+}
+
 const (
 
 	// Replica problems (require healthy leader).

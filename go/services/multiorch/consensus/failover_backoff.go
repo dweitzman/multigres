@@ -63,12 +63,12 @@ func eligibleConsensusStatuses(cohort []*multiorchdatapb.PoolerHealthState) []*c
 // recruitment time for cohort and whether that time has arrived, per backoff.
 // Aggressive-first: acts immediately when no revocation is observed, or when
 // the observed one demonstrably targets a different, already-resolved
-// problem (see revocationsRelevantToDecision); otherwise defers to the
+// problem (see backoffRelevantRevocations); otherwise defers to the
 // revocation's deterministic collective backoff.
 func (c *Coordinator) NextFailoverAttempt(cohort []*multiorchdatapb.PoolerHealthState, backoff ha.BackoffSchedule) (readyAt time.Time, ready bool) {
 	statuses := eligibleConsensusStatuses(cohort)
 	decision := commonconsensus.HighestDecidedRule(statuses)
-	rev := commonconsensus.HighestTermRevocation(revocationsRelevantToDecision(statuses, decision))
+	rev := commonconsensus.HighestTermRevocation(backoffRelevantRevocations(statuses, decision))
 	if rev == nil {
 		return time.Time{}, true
 	}
@@ -76,18 +76,24 @@ func (c *Coordinator) NextFailoverAttempt(cohort []*multiorchdatapb.PoolerHealth
 	return readyAt, !time.Now().Before(readyAt)
 }
 
-// revocationsRelevantToDecision returns every TermRevocation among statuses
-// that cannot be shown to target a problem other than decision: it matches
+// backoffRelevantRevocations returns every TermRevocation among statuses that
+// cannot be shown to target a problem other than decision: it matches
 // decision, or carries no RecruitIntent at all (e.g. an externally-supplied
 // cert or an external resignation) and so can't be proven unrelated. Only a
 // revocation demonstrably targeting a *different* decision — resolved
 // history, e.g. a shard's original bootstrap recruitment — is excluded.
 //
+// Deliberately cause-agnostic: an EXTERNAL revocation against the same
+// decision counts too, letting a subsequent inferred failover continue the
+// escalation from its (hardcoded, see buildCert) attempt 1 — a reasonable
+// outcome, since an operator's manual intervention is a fair signal to allow
+// a prompt automatic retry.
+//
 // More permissive than commonconsensus.NewTermRevocation's own matching on
 // purpose: that caller only risks a slightly-wrong escalation count by
 // guessing wrong; this caller decides whether to act at all, so the same
 // ambiguity must default to caution, not a free pass.
-func revocationsRelevantToDecision(statuses []*clustermetadatapb.ConsensusStatus, decision *clustermetadatapb.RuleNumber) []*clustermetadatapb.TermRevocation {
+func backoffRelevantRevocations(statuses []*clustermetadatapb.ConsensusStatus, decision *clustermetadatapb.RuleNumber) []*clustermetadatapb.TermRevocation {
 	var relevant []*clustermetadatapb.TermRevocation
 	for _, cs := range statuses {
 		rev := cs.GetTermRevocation()

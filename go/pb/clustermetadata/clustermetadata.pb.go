@@ -379,6 +379,72 @@ func (RoutingRole) EnumDescriptor() ([]byte, []int) {
 	return file_clustermetadata_proto_rawDescGZIP(), []int{4}
 }
 
+// RecruitCause classifies why a recruitment was initiated, for collective
+// backoff purposes: how much this revocation should be trusted as evidence
+// of a real, ongoing failover episode.
+type RecruitCause int32
+
+const (
+	RecruitCause_RECRUIT_CAUSE_UNSPECIFIED RecruitCause = 0
+	// A health-signal-based guess that the leader is dead or unreachable
+	// (e.g. LeaderUnreachableByCohort, LeaderUnhealthy, LeaderUnspecified), or
+	// the shard's initial leader election racing concurrently across
+	// orchestrators. The riskiest cause: the inference/race can produce
+	// repeated failed attempts, which are real evidence to back off.
+	RecruitCause_RECRUIT_CAUSE_INFERRED RecruitCause = 1
+	// A high-confidence, self-reported signal — the leader itself asked to be
+	// replaced (LeaderResigned).
+	RecruitCause_RECRUIT_CAUSE_SIGNALED RecruitCause = 2
+	// Not a health-based leader-replacement decision: an operator or external
+	// tool directed this change (e.g. multiadmin's externally-certified path).
+	// A single authoritative actor, not a race between orchestrators — doesn't
+	// gate, or get gated by, collective backoff.
+	RecruitCause_RECRUIT_CAUSE_EXTERNAL RecruitCause = 3
+)
+
+// Enum value maps for RecruitCause.
+var (
+	RecruitCause_name = map[int32]string{
+		0: "RECRUIT_CAUSE_UNSPECIFIED",
+		1: "RECRUIT_CAUSE_INFERRED",
+		2: "RECRUIT_CAUSE_SIGNALED",
+		3: "RECRUIT_CAUSE_EXTERNAL",
+	}
+	RecruitCause_value = map[string]int32{
+		"RECRUIT_CAUSE_UNSPECIFIED": 0,
+		"RECRUIT_CAUSE_INFERRED":    1,
+		"RECRUIT_CAUSE_SIGNALED":    2,
+		"RECRUIT_CAUSE_EXTERNAL":    3,
+	}
+)
+
+func (x RecruitCause) Enum() *RecruitCause {
+	p := new(RecruitCause)
+	*p = x
+	return p
+}
+
+func (x RecruitCause) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (RecruitCause) Descriptor() protoreflect.EnumDescriptor {
+	return file_clustermetadata_proto_enumTypes[5].Descriptor()
+}
+
+func (RecruitCause) Type() protoreflect.EnumType {
+	return &file_clustermetadata_proto_enumTypes[5]
+}
+
+func (x RecruitCause) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use RecruitCause.Descriptor instead.
+func (RecruitCause) EnumDescriptor() ([]byte, []int) {
+	return file_clustermetadata_proto_rawDescGZIP(), []int{5}
+}
+
 // LeadershipSignal describes a leader's self-reported status for its current term.
 // Only published by nodes that are or were the consensus leader (leader_term != 0).
 // 0 (UNKNOWN) means the field was not intentionally set.
@@ -425,11 +491,11 @@ func (x LeadershipSignal) String() string {
 }
 
 func (LeadershipSignal) Descriptor() protoreflect.EnumDescriptor {
-	return file_clustermetadata_proto_enumTypes[5].Descriptor()
+	return file_clustermetadata_proto_enumTypes[6].Descriptor()
 }
 
 func (LeadershipSignal) Type() protoreflect.EnumType {
-	return &file_clustermetadata_proto_enumTypes[5]
+	return &file_clustermetadata_proto_enumTypes[6]
 }
 
 func (x LeadershipSignal) Number() protoreflect.EnumNumber {
@@ -438,7 +504,7 @@ func (x LeadershipSignal) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use LeadershipSignal.Descriptor instead.
 func (LeadershipSignal) EnumDescriptor() ([]byte, []int) {
-	return file_clustermetadata_proto_rawDescGZIP(), []int{5}
+	return file_clustermetadata_proto_rawDescGZIP(), []int{6}
 }
 
 // CohortEligibilitySignal describes a pooler's self-reported willingness to
@@ -482,11 +548,11 @@ func (x CohortEligibilitySignal) String() string {
 }
 
 func (CohortEligibilitySignal) Descriptor() protoreflect.EnumDescriptor {
-	return file_clustermetadata_proto_enumTypes[6].Descriptor()
+	return file_clustermetadata_proto_enumTypes[7].Descriptor()
 }
 
 func (CohortEligibilitySignal) Type() protoreflect.EnumType {
-	return &file_clustermetadata_proto_enumTypes[6]
+	return &file_clustermetadata_proto_enumTypes[7]
 }
 
 func (x CohortEligibilitySignal) Number() protoreflect.EnumNumber {
@@ -495,7 +561,7 @@ func (x CohortEligibilitySignal) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use CohortEligibilitySignal.Descriptor instead.
 func (CohortEligibilitySignal) EnumDescriptor() ([]byte, []int) {
-	return file_clustermetadata_proto_rawDescGZIP(), []int{6}
+	return file_clustermetadata_proto_rawDescGZIP(), []int{7}
 }
 
 // ComponentType represents the type of Multigres component
@@ -539,11 +605,11 @@ func (x ID_ComponentType) String() string {
 }
 
 func (ID_ComponentType) Descriptor() protoreflect.EnumDescriptor {
-	return file_clustermetadata_proto_enumTypes[7].Descriptor()
+	return file_clustermetadata_proto_enumTypes[8].Descriptor()
 }
 
 func (ID_ComponentType) Type() protoreflect.EnumType {
-	return &file_clustermetadata_proto_enumTypes[7]
+	return &file_clustermetadata_proto_enumTypes[8]
 }
 
 func (x ID_ComponentType) Number() protoreflect.EnumNumber {
@@ -2546,7 +2612,10 @@ type RecruitIntent struct {
 	// How many consecutive recruits have targeted replace_decision. Starts at 1 and
 	// increments while replace_decision is unchanged; resets to 1 when it advances
 	// (the cohort committed a newer decision).
-	Attempt       int64 `protobuf:"varint,2,opt,name=attempt,proto3" json:"attempt,omitempty"`
+	Attempt int64 `protobuf:"varint,2,opt,name=attempt,proto3" json:"attempt,omitempty"`
+	// Why this recruitment is happening, so collective backoff can gate on it
+	// (or not) according to how much confidence the cause warrants.
+	Cause         RecruitCause `protobuf:"varint,3,opt,name=cause,proto3,enum=clustermetadata.RecruitCause" json:"cause,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2593,6 +2662,13 @@ func (x *RecruitIntent) GetAttempt() int64 {
 		return x.Attempt
 	}
 	return 0
+}
+
+func (x *RecruitIntent) GetCause() RecruitCause {
+	if x != nil {
+		return x.Cause
+	}
+	return RecruitCause_RECRUIT_CAUSE_UNSPECIFIED
 }
 
 // ExternallyCertifiedRevocation certifies that the outgoing cohort's revocation
@@ -3137,10 +3213,11 @@ const file_clustermetadata_proto_rawDesc = "" +
 	"\x17accepted_coordinator_id\x18\x02 \x01(\v2\x13.clustermetadata.IDR\x15acceptedCoordinatorId\x12T\n" +
 	"\x18coordinator_initiated_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x16coordinatorInitiatedAt\x12@\n" +
 	"\routgoing_rule\x18\x04 \x01(\v2\x1b.clustermetadata.RuleNumberR\foutgoingRule\x12E\n" +
-	"\x0erecruit_intent\x18\x05 \x01(\v2\x1e.clustermetadata.RecruitIntentR\rrecruitIntent\"q\n" +
+	"\x0erecruit_intent\x18\x05 \x01(\v2\x1e.clustermetadata.RecruitIntentR\rrecruitIntent\"\xa6\x01\n" +
 	"\rRecruitIntent\x12F\n" +
 	"\x10replace_decision\x18\x01 \x01(\v2\x1b.clustermetadata.RuleNumberR\x0freplaceDecision\x12\x18\n" +
-	"\aattempt\x18\x02 \x01(\x03R\aattempt\"\x88\x01\n" +
+	"\aattempt\x18\x02 \x01(\x03R\aattempt\x123\n" +
+	"\x05cause\x18\x03 \x01(\x0e2\x1d.clustermetadata.RecruitCauseR\x05cause\"\x88\x01\n" +
 	"\x1dExternallyCertifiedRevocation\x12H\n" +
 	"\x0fterm_revocation\x18\x01 \x01(\v2\x1f.clustermetadata.TermRevocationR\x0etermRevocation\x12\x1d\n" +
 	"\n" +
@@ -3186,7 +3263,12 @@ const file_clustermetadata_proto_rawDesc = "" +
 	"\vRoutingRole\x12\x18\n" +
 	"\x14ROUTING_ROLE_UNKNOWN\x10\x00\x12\x18\n" +
 	"\x14ROUTING_ROLE_PRIMARY\x10\x01\x12\x18\n" +
-	"\x14ROUTING_ROLE_REPLICA\x10\x02*z\n" +
+	"\x14ROUTING_ROLE_REPLICA\x10\x02*\x81\x01\n" +
+	"\fRecruitCause\x12\x1d\n" +
+	"\x19RECRUIT_CAUSE_UNSPECIFIED\x10\x00\x12\x1a\n" +
+	"\x16RECRUIT_CAUSE_INFERRED\x10\x01\x12\x1a\n" +
+	"\x16RECRUIT_CAUSE_SIGNALED\x10\x02\x12\x1a\n" +
+	"\x16RECRUIT_CAUSE_EXTERNAL\x10\x03*z\n" +
 	"\x10LeadershipSignal\x12\x1d\n" +
 	"\x19LEADERSHIP_SIGNAL_UNKNOWN\x10\x00\x12\x1c\n" +
 	"\x18LEADERSHIP_SIGNAL_ACTIVE\x10\x01\x12)\n" +
@@ -3208,7 +3290,7 @@ func file_clustermetadata_proto_rawDescGZIP() []byte {
 	return file_clustermetadata_proto_rawDescData
 }
 
-var file_clustermetadata_proto_enumTypes = make([]protoimpl.EnumInfo, 8)
+var file_clustermetadata_proto_enumTypes = make([]protoimpl.EnumInfo, 9)
 var file_clustermetadata_proto_msgTypes = make([]protoimpl.MessageInfo, 35)
 var file_clustermetadata_proto_goTypes = []any{
 	(PoolerType)(0),                       // 0: clustermetadata.PoolerType
@@ -3216,108 +3298,110 @@ var file_clustermetadata_proto_goTypes = []any{
 	(PoolerServingStatus)(0),              // 2: clustermetadata.PoolerServingStatus
 	(QuorumType)(0),                       // 3: clustermetadata.QuorumType
 	(RoutingRole)(0),                      // 4: clustermetadata.RoutingRole
-	(LeadershipSignal)(0),                 // 5: clustermetadata.LeadershipSignal
-	(CohortEligibilitySignal)(0),          // 6: clustermetadata.CohortEligibilitySignal
-	(ID_ComponentType)(0),                 // 7: clustermetadata.ID.ComponentType
-	(*GlobalTopoConfig)(nil),              // 8: clustermetadata.GlobalTopoConfig
-	(*Cell)(nil),                          // 9: clustermetadata.Cell
-	(*Database)(nil),                      // 10: clustermetadata.Database
-	(*ShardInitClaim)(nil),                // 11: clustermetadata.ShardInitClaim
-	(*BackupLocation)(nil),                // 12: clustermetadata.BackupLocation
-	(*FilesystemBackup)(nil),              // 13: clustermetadata.FilesystemBackup
-	(*S3Backup)(nil),                      // 14: clustermetadata.S3Backup
-	(*PoolerAddress)(nil),                 // 15: clustermetadata.PoolerAddress
-	(*Multipooler)(nil),                   // 16: clustermetadata.Multipooler
-	(*Multigateway)(nil),                  // 17: clustermetadata.Multigateway
-	(*ShardKey)(nil),                      // 18: clustermetadata.ShardKey
-	(*Multiorch)(nil),                     // 19: clustermetadata.Multiorch
-	(*ID)(nil),                            // 20: clustermetadata.ID
-	(*KeyRange)(nil),                      // 21: clustermetadata.KeyRange
-	(*PoolerLifecycle)(nil),               // 22: clustermetadata.PoolerLifecycle
-	(*DurabilityPolicy)(nil),              // 23: clustermetadata.DurabilityPolicy
-	(*RuleNumber)(nil),                    // 24: clustermetadata.RuleNumber
-	(*ShardRule)(nil),                     // 25: clustermetadata.ShardRule
-	(*RulePosition)(nil),                  // 26: clustermetadata.RulePosition
-	(*PoolerPosition)(nil),                // 27: clustermetadata.PoolerPosition
-	(*RuleNumberPosition)(nil),            // 28: clustermetadata.RuleNumberPosition
-	(*LsnPosition)(nil),                   // 29: clustermetadata.LsnPosition
-	(*ConsensusPromises)(nil),             // 30: clustermetadata.ConsensusPromises
-	(*RoutingState)(nil),                  // 31: clustermetadata.RoutingState
-	(*ReplicationPrimary)(nil),            // 32: clustermetadata.ReplicationPrimary
-	(*TermRevocation)(nil),                // 33: clustermetadata.TermRevocation
-	(*RecruitIntent)(nil),                 // 34: clustermetadata.RecruitIntent
-	(*ExternallyCertifiedRevocation)(nil), // 35: clustermetadata.ExternallyCertifiedRevocation
-	(*ConsensusStatus)(nil),               // 36: clustermetadata.ConsensusStatus
-	(*LeadershipStatus)(nil),              // 37: clustermetadata.LeadershipStatus
-	(*AvailabilityStatus)(nil),            // 38: clustermetadata.AvailabilityStatus
-	(*CohortEligibilityStatus)(nil),       // 39: clustermetadata.CohortEligibilityStatus
-	nil,                                   // 40: clustermetadata.Multipooler.PortMapEntry
-	nil,                                   // 41: clustermetadata.Multigateway.PortMapEntry
-	nil,                                   // 42: clustermetadata.Multiorch.PortMapEntry
-	(*timestamppb.Timestamp)(nil),         // 43: google.protobuf.Timestamp
+	(RecruitCause)(0),                     // 5: clustermetadata.RecruitCause
+	(LeadershipSignal)(0),                 // 6: clustermetadata.LeadershipSignal
+	(CohortEligibilitySignal)(0),          // 7: clustermetadata.CohortEligibilitySignal
+	(ID_ComponentType)(0),                 // 8: clustermetadata.ID.ComponentType
+	(*GlobalTopoConfig)(nil),              // 9: clustermetadata.GlobalTopoConfig
+	(*Cell)(nil),                          // 10: clustermetadata.Cell
+	(*Database)(nil),                      // 11: clustermetadata.Database
+	(*ShardInitClaim)(nil),                // 12: clustermetadata.ShardInitClaim
+	(*BackupLocation)(nil),                // 13: clustermetadata.BackupLocation
+	(*FilesystemBackup)(nil),              // 14: clustermetadata.FilesystemBackup
+	(*S3Backup)(nil),                      // 15: clustermetadata.S3Backup
+	(*PoolerAddress)(nil),                 // 16: clustermetadata.PoolerAddress
+	(*Multipooler)(nil),                   // 17: clustermetadata.Multipooler
+	(*Multigateway)(nil),                  // 18: clustermetadata.Multigateway
+	(*ShardKey)(nil),                      // 19: clustermetadata.ShardKey
+	(*Multiorch)(nil),                     // 20: clustermetadata.Multiorch
+	(*ID)(nil),                            // 21: clustermetadata.ID
+	(*KeyRange)(nil),                      // 22: clustermetadata.KeyRange
+	(*PoolerLifecycle)(nil),               // 23: clustermetadata.PoolerLifecycle
+	(*DurabilityPolicy)(nil),              // 24: clustermetadata.DurabilityPolicy
+	(*RuleNumber)(nil),                    // 25: clustermetadata.RuleNumber
+	(*ShardRule)(nil),                     // 26: clustermetadata.ShardRule
+	(*RulePosition)(nil),                  // 27: clustermetadata.RulePosition
+	(*PoolerPosition)(nil),                // 28: clustermetadata.PoolerPosition
+	(*RuleNumberPosition)(nil),            // 29: clustermetadata.RuleNumberPosition
+	(*LsnPosition)(nil),                   // 30: clustermetadata.LsnPosition
+	(*ConsensusPromises)(nil),             // 31: clustermetadata.ConsensusPromises
+	(*RoutingState)(nil),                  // 32: clustermetadata.RoutingState
+	(*ReplicationPrimary)(nil),            // 33: clustermetadata.ReplicationPrimary
+	(*TermRevocation)(nil),                // 34: clustermetadata.TermRevocation
+	(*RecruitIntent)(nil),                 // 35: clustermetadata.RecruitIntent
+	(*ExternallyCertifiedRevocation)(nil), // 36: clustermetadata.ExternallyCertifiedRevocation
+	(*ConsensusStatus)(nil),               // 37: clustermetadata.ConsensusStatus
+	(*LeadershipStatus)(nil),              // 38: clustermetadata.LeadershipStatus
+	(*AvailabilityStatus)(nil),            // 39: clustermetadata.AvailabilityStatus
+	(*CohortEligibilityStatus)(nil),       // 40: clustermetadata.CohortEligibilityStatus
+	nil,                                   // 41: clustermetadata.Multipooler.PortMapEntry
+	nil,                                   // 42: clustermetadata.Multigateway.PortMapEntry
+	nil,                                   // 43: clustermetadata.Multiorch.PortMapEntry
+	(*timestamppb.Timestamp)(nil),         // 44: google.protobuf.Timestamp
 }
 var file_clustermetadata_proto_depIdxs = []int32{
-	12, // 0: clustermetadata.Database.backup_location:type_name -> clustermetadata.BackupLocation
-	23, // 1: clustermetadata.Database.bootstrap_durability_policy:type_name -> clustermetadata.DurabilityPolicy
-	20, // 2: clustermetadata.ShardInitClaim.claimer_id:type_name -> clustermetadata.ID
-	20, // 3: clustermetadata.ShardInitClaim.cohort_members:type_name -> clustermetadata.ID
-	13, // 4: clustermetadata.BackupLocation.filesystem:type_name -> clustermetadata.FilesystemBackup
-	14, // 5: clustermetadata.BackupLocation.s3:type_name -> clustermetadata.S3Backup
-	20, // 6: clustermetadata.PoolerAddress.id:type_name -> clustermetadata.ID
-	20, // 7: clustermetadata.Multipooler.id:type_name -> clustermetadata.ID
-	18, // 8: clustermetadata.Multipooler.shard_key:type_name -> clustermetadata.ShardKey
-	21, // 9: clustermetadata.Multipooler.key_range:type_name -> clustermetadata.KeyRange
+	13, // 0: clustermetadata.Database.backup_location:type_name -> clustermetadata.BackupLocation
+	24, // 1: clustermetadata.Database.bootstrap_durability_policy:type_name -> clustermetadata.DurabilityPolicy
+	21, // 2: clustermetadata.ShardInitClaim.claimer_id:type_name -> clustermetadata.ID
+	21, // 3: clustermetadata.ShardInitClaim.cohort_members:type_name -> clustermetadata.ID
+	14, // 4: clustermetadata.BackupLocation.filesystem:type_name -> clustermetadata.FilesystemBackup
+	15, // 5: clustermetadata.BackupLocation.s3:type_name -> clustermetadata.S3Backup
+	21, // 6: clustermetadata.PoolerAddress.id:type_name -> clustermetadata.ID
+	21, // 7: clustermetadata.Multipooler.id:type_name -> clustermetadata.ID
+	19, // 8: clustermetadata.Multipooler.shard_key:type_name -> clustermetadata.ShardKey
+	22, // 9: clustermetadata.Multipooler.key_range:type_name -> clustermetadata.KeyRange
 	0,  // 10: clustermetadata.Multipooler.type:type_name -> clustermetadata.PoolerType
 	2,  // 11: clustermetadata.Multipooler.serving_status:type_name -> clustermetadata.PoolerServingStatus
-	40, // 12: clustermetadata.Multipooler.port_map:type_name -> clustermetadata.Multipooler.PortMapEntry
-	22, // 13: clustermetadata.Multipooler.lifecycle_status:type_name -> clustermetadata.PoolerLifecycle
-	31, // 14: clustermetadata.Multipooler.routing_state:type_name -> clustermetadata.RoutingState
-	20, // 15: clustermetadata.Multigateway.id:type_name -> clustermetadata.ID
-	41, // 16: clustermetadata.Multigateway.port_map:type_name -> clustermetadata.Multigateway.PortMapEntry
-	20, // 17: clustermetadata.Multiorch.id:type_name -> clustermetadata.ID
-	42, // 18: clustermetadata.Multiorch.port_map:type_name -> clustermetadata.Multiorch.PortMapEntry
-	7,  // 19: clustermetadata.ID.component:type_name -> clustermetadata.ID.ComponentType
+	41, // 12: clustermetadata.Multipooler.port_map:type_name -> clustermetadata.Multipooler.PortMapEntry
+	23, // 13: clustermetadata.Multipooler.lifecycle_status:type_name -> clustermetadata.PoolerLifecycle
+	32, // 14: clustermetadata.Multipooler.routing_state:type_name -> clustermetadata.RoutingState
+	21, // 15: clustermetadata.Multigateway.id:type_name -> clustermetadata.ID
+	42, // 16: clustermetadata.Multigateway.port_map:type_name -> clustermetadata.Multigateway.PortMapEntry
+	21, // 17: clustermetadata.Multiorch.id:type_name -> clustermetadata.ID
+	43, // 18: clustermetadata.Multiorch.port_map:type_name -> clustermetadata.Multiorch.PortMapEntry
+	8,  // 19: clustermetadata.ID.component:type_name -> clustermetadata.ID.ComponentType
 	1,  // 20: clustermetadata.PoolerLifecycle.status:type_name -> clustermetadata.PoolerLifecycleStatus
-	43, // 21: clustermetadata.PoolerLifecycle.updated:type_name -> google.protobuf.Timestamp
+	44, // 21: clustermetadata.PoolerLifecycle.updated:type_name -> google.protobuf.Timestamp
 	3,  // 22: clustermetadata.DurabilityPolicy.quorum_type:type_name -> clustermetadata.QuorumType
-	24, // 23: clustermetadata.ShardRule.rule_number:type_name -> clustermetadata.RuleNumber
-	20, // 24: clustermetadata.ShardRule.leader_id:type_name -> clustermetadata.ID
-	20, // 25: clustermetadata.ShardRule.cohort_members:type_name -> clustermetadata.ID
-	23, // 26: clustermetadata.ShardRule.durability_policy:type_name -> clustermetadata.DurabilityPolicy
-	20, // 27: clustermetadata.ShardRule.coordinator_id:type_name -> clustermetadata.ID
-	43, // 28: clustermetadata.ShardRule.creation_time:type_name -> google.protobuf.Timestamp
-	25, // 29: clustermetadata.RulePosition.decision:type_name -> clustermetadata.ShardRule
-	25, // 30: clustermetadata.RulePosition.proposal:type_name -> clustermetadata.ShardRule
-	26, // 31: clustermetadata.PoolerPosition.position:type_name -> clustermetadata.RulePosition
-	24, // 32: clustermetadata.RuleNumberPosition.decision:type_name -> clustermetadata.RuleNumber
-	24, // 33: clustermetadata.RuleNumberPosition.proposal:type_name -> clustermetadata.RuleNumber
-	28, // 34: clustermetadata.LsnPosition.position:type_name -> clustermetadata.RuleNumberPosition
-	33, // 35: clustermetadata.ConsensusPromises.term_revocation:type_name -> clustermetadata.TermRevocation
-	29, // 36: clustermetadata.ConsensusPromises.recruit_blocked_until:type_name -> clustermetadata.LsnPosition
+	25, // 23: clustermetadata.ShardRule.rule_number:type_name -> clustermetadata.RuleNumber
+	21, // 24: clustermetadata.ShardRule.leader_id:type_name -> clustermetadata.ID
+	21, // 25: clustermetadata.ShardRule.cohort_members:type_name -> clustermetadata.ID
+	24, // 26: clustermetadata.ShardRule.durability_policy:type_name -> clustermetadata.DurabilityPolicy
+	21, // 27: clustermetadata.ShardRule.coordinator_id:type_name -> clustermetadata.ID
+	44, // 28: clustermetadata.ShardRule.creation_time:type_name -> google.protobuf.Timestamp
+	26, // 29: clustermetadata.RulePosition.decision:type_name -> clustermetadata.ShardRule
+	26, // 30: clustermetadata.RulePosition.proposal:type_name -> clustermetadata.ShardRule
+	27, // 31: clustermetadata.PoolerPosition.position:type_name -> clustermetadata.RulePosition
+	25, // 32: clustermetadata.RuleNumberPosition.decision:type_name -> clustermetadata.RuleNumber
+	25, // 33: clustermetadata.RuleNumberPosition.proposal:type_name -> clustermetadata.RuleNumber
+	29, // 34: clustermetadata.LsnPosition.position:type_name -> clustermetadata.RuleNumberPosition
+	34, // 35: clustermetadata.ConsensusPromises.term_revocation:type_name -> clustermetadata.TermRevocation
+	30, // 36: clustermetadata.ConsensusPromises.recruit_blocked_until:type_name -> clustermetadata.LsnPosition
 	4,  // 37: clustermetadata.RoutingState.role:type_name -> clustermetadata.RoutingRole
-	24, // 38: clustermetadata.RoutingState.rule:type_name -> clustermetadata.RuleNumber
-	26, // 39: clustermetadata.ReplicationPrimary.position:type_name -> clustermetadata.RulePosition
-	15, // 40: clustermetadata.ReplicationPrimary.primary:type_name -> clustermetadata.PoolerAddress
-	20, // 41: clustermetadata.TermRevocation.accepted_coordinator_id:type_name -> clustermetadata.ID
-	43, // 42: clustermetadata.TermRevocation.coordinator_initiated_at:type_name -> google.protobuf.Timestamp
-	24, // 43: clustermetadata.TermRevocation.outgoing_rule:type_name -> clustermetadata.RuleNumber
-	34, // 44: clustermetadata.TermRevocation.recruit_intent:type_name -> clustermetadata.RecruitIntent
-	24, // 45: clustermetadata.RecruitIntent.replace_decision:type_name -> clustermetadata.RuleNumber
-	33, // 46: clustermetadata.ExternallyCertifiedRevocation.term_revocation:type_name -> clustermetadata.TermRevocation
-	33, // 47: clustermetadata.ConsensusStatus.term_revocation:type_name -> clustermetadata.TermRevocation
-	27, // 48: clustermetadata.ConsensusStatus.current_position:type_name -> clustermetadata.PoolerPosition
-	32, // 49: clustermetadata.ConsensusStatus.replication_primary:type_name -> clustermetadata.ReplicationPrimary
-	20, // 50: clustermetadata.ConsensusStatus.id:type_name -> clustermetadata.ID
-	29, // 51: clustermetadata.ConsensusStatus.recruit_blocked_until:type_name -> clustermetadata.LsnPosition
-	5,  // 52: clustermetadata.LeadershipStatus.signal:type_name -> clustermetadata.LeadershipSignal
-	37, // 53: clustermetadata.AvailabilityStatus.leadership_status:type_name -> clustermetadata.LeadershipStatus
-	39, // 54: clustermetadata.AvailabilityStatus.cohort_eligibility_status:type_name -> clustermetadata.CohortEligibilityStatus
-	6,  // 55: clustermetadata.CohortEligibilityStatus.signal:type_name -> clustermetadata.CohortEligibilitySignal
-	56, // [56:56] is the sub-list for method output_type
-	56, // [56:56] is the sub-list for method input_type
-	56, // [56:56] is the sub-list for extension type_name
-	56, // [56:56] is the sub-list for extension extendee
-	0,  // [0:56] is the sub-list for field type_name
+	25, // 38: clustermetadata.RoutingState.rule:type_name -> clustermetadata.RuleNumber
+	27, // 39: clustermetadata.ReplicationPrimary.position:type_name -> clustermetadata.RulePosition
+	16, // 40: clustermetadata.ReplicationPrimary.primary:type_name -> clustermetadata.PoolerAddress
+	21, // 41: clustermetadata.TermRevocation.accepted_coordinator_id:type_name -> clustermetadata.ID
+	44, // 42: clustermetadata.TermRevocation.coordinator_initiated_at:type_name -> google.protobuf.Timestamp
+	25, // 43: clustermetadata.TermRevocation.outgoing_rule:type_name -> clustermetadata.RuleNumber
+	35, // 44: clustermetadata.TermRevocation.recruit_intent:type_name -> clustermetadata.RecruitIntent
+	25, // 45: clustermetadata.RecruitIntent.replace_decision:type_name -> clustermetadata.RuleNumber
+	5,  // 46: clustermetadata.RecruitIntent.cause:type_name -> clustermetadata.RecruitCause
+	34, // 47: clustermetadata.ExternallyCertifiedRevocation.term_revocation:type_name -> clustermetadata.TermRevocation
+	34, // 48: clustermetadata.ConsensusStatus.term_revocation:type_name -> clustermetadata.TermRevocation
+	28, // 49: clustermetadata.ConsensusStatus.current_position:type_name -> clustermetadata.PoolerPosition
+	33, // 50: clustermetadata.ConsensusStatus.replication_primary:type_name -> clustermetadata.ReplicationPrimary
+	21, // 51: clustermetadata.ConsensusStatus.id:type_name -> clustermetadata.ID
+	30, // 52: clustermetadata.ConsensusStatus.recruit_blocked_until:type_name -> clustermetadata.LsnPosition
+	6,  // 53: clustermetadata.LeadershipStatus.signal:type_name -> clustermetadata.LeadershipSignal
+	38, // 54: clustermetadata.AvailabilityStatus.leadership_status:type_name -> clustermetadata.LeadershipStatus
+	40, // 55: clustermetadata.AvailabilityStatus.cohort_eligibility_status:type_name -> clustermetadata.CohortEligibilityStatus
+	7,  // 56: clustermetadata.CohortEligibilityStatus.signal:type_name -> clustermetadata.CohortEligibilitySignal
+	57, // [57:57] is the sub-list for method output_type
+	57, // [57:57] is the sub-list for method input_type
+	57, // [57:57] is the sub-list for extension type_name
+	57, // [57:57] is the sub-list for extension extendee
+	0,  // [0:57] is the sub-list for field type_name
 }
 
 func init() { file_clustermetadata_proto_init() }
@@ -3334,7 +3418,7 @@ func file_clustermetadata_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_clustermetadata_proto_rawDesc), len(file_clustermetadata_proto_rawDesc)),
-			NumEnums:      8,
+			NumEnums:      9,
 			NumMessages:   35,
 			NumExtensions: 0,
 			NumServices:   0,

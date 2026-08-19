@@ -121,7 +121,7 @@ func TestSpuriousFailoverRecovery(t *testing.T) {
 		Cell:      "test-cell",
 		Name:      "test-coordinator",
 	}
-	revocation, err := commonconsensus.NewTermRevocation(statuses, testCoordinatorID, timestamppb.Now(), 0)
+	revocation, err := commonconsensus.NewTermRevocation(statuses, testCoordinatorID, timestamppb.Now(), 0, clustermetadatapb.RecruitCause_RECRUIT_CAUSE_INFERRED)
 	require.NoError(t, err, "build term revocation")
 	t.Logf("Recruiting at new term: %d", revocation.GetRevokedBelowTerm())
 
