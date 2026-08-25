@@ -70,12 +70,15 @@ func (pm *MultipoolerManager) postgresMode(ctx context.Context) (pgmode.Mode, er
 	defer cancel()
 	result, err := pm.query(queryCtx, "SELECT pg_is_in_recovery()")
 	if err != nil {
-		return pgmode.Unknown, fmt.Errorf("failed to query pg_is_in_recovery: %w", err)
+		code := mterrors.CodeOrUnavailable(err, mtrpcpb.Code_INTERNAL)
+		return pgmode.Unknown, mterrors.Errorf(code, "failed to query pg_is_in_recovery: %v", err)
 	}
 
 	var inRecovery bool
 	if err := executor.ScanSingleRow(result, &inRecovery); err != nil {
-		return pgmode.Unknown, fmt.Errorf("failed to scan pg_is_in_recovery result: %w", err)
+		// The query succeeded but returned an unexpected shape on a fixed literal
+		// call — a structural bug, not a transient condition a retry would fix.
+		return pgmode.Unknown, mterrors.Errorf(mtrpcpb.Code_INTERNAL, "failed to scan pg_is_in_recovery result: %v", err)
 	}
 
 	if inRecovery {

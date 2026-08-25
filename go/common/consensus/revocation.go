@@ -16,7 +16,6 @@ package consensus
 
 import (
 	"errors"
-	"fmt"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -24,6 +23,7 @@ import (
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	"github.com/multigres/multigres/go/tools/pgutil"
 )
 
@@ -156,7 +156,7 @@ func IsSelfRevoked(status *clustermetadatapb.ConsensusStatus) bool {
 
 // ValidateRevocation reports whether the given revocation is safe for a node
 // with the provided status to honor. It returns nil if the revocation should be
-// accepted, or a descriptive error explaining why it was refused.
+// accepted, or a coded error explaining why it was refused.
 //
 // The revocation must have a non-empty accepted_coordinator_id and a non-nil
 // coordinator_initiated_at; both are required fields.
@@ -180,13 +180,13 @@ func IsSelfRevoked(status *clustermetadatapb.ConsensusStatus) bool {
 // any revocation, so the last two checks pass for any incoming revocation.
 func ValidateRevocation(status *clustermetadatapb.ConsensusStatus, revocation *clustermetadatapb.TermRevocation) error {
 	if revocation == nil {
-		return errors.New("cannot accept revocation: revocation is nil")
+		return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "cannot accept revocation: revocation is nil")
 	}
 	if revocation.GetAcceptedCoordinatorId().GetName() == "" {
-		return errors.New("cannot accept revocation: accepted_coordinator_id is required")
+		return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "cannot accept revocation: accepted_coordinator_id is required")
 	}
 	if revocation.GetCoordinatorInitiatedAt() == nil {
-		return errors.New("cannot accept revocation: coordinator_initiated_at is required")
+		return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "cannot accept revocation: coordinator_initiated_at is required")
 	}
 	// outgoing_rule must be a real, established position — {0,0} (or nil) is
 	// reserved codebase-wide as the "no rule recorded" sentinel (see
@@ -195,7 +195,7 @@ func ValidateRevocation(status *clustermetadatapb.ConsensusStatus, revocation *c
 	// nothing.
 	outgoingRule := revocation.GetOutgoingRule()
 	if ruleNumberIsUnset(outgoingRule) {
-		return errors.New("cannot accept revocation: outgoing_rule is required")
+		return mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "cannot accept revocation: outgoing_rule is required")
 	}
 	revokedBelowTerm := revocation.GetRevokedBelowTerm()
 	// Invariant: outgoing_rule represents the rule the coordinator is
@@ -205,7 +205,8 @@ func ValidateRevocation(status *clustermetadatapb.ConsensusStatus, revocation *c
 	// A violation indicates a malformed revocation (or future code paths
 	// constructing revocations by hand without using NewTermRevocation).
 	if outTerm := outgoingRule.GetCoordinatorTerm(); outTerm >= revokedBelowTerm {
-		return fmt.Errorf(
+		// ABORTED indicates a retry might succeed if the term number is bumped higher.
+		return mterrors.Errorf(mtrpcpb.Code_ABORTED,
 			"cannot accept revocation: outgoing_rule coordinator_term %d >= revoked_below_term %d",
 			outTerm, revokedBelowTerm,
 		)
@@ -222,13 +223,17 @@ func ValidateRevocation(status *clustermetadatapb.ConsensusStatus, revocation *c
 	// never overrides a decision-level comparison.
 	pos := status.GetCurrentPosition()
 	if pos == nil {
-		return errors.New("cannot accept revocation: unknown WAL position")
+		// Not the caller's fault — this node's own position hasn't been
+		// observed yet (e.g. still starting up); a later call may succeed.
+		return mterrors.New(mtrpcpb.Code_UNAVAILABLE, "cannot accept revocation: unknown WAL position")
 	}
 	if _, err := pgutil.ParseLSN(pos.Lsn); err != nil {
-		return mterrors.Wrap(err, "cannot accept revocation")
+		// The LSN came from our own locally recorded status, not from the
+		// caller — a parse failure here means our stored state is corrupt.
+		return mterrors.Errorf(mtrpcpb.Code_INTERNAL, "cannot accept revocation: %v", err)
 	}
 	if !IsRuleRevoked(pos.GetPosition(), revocation) {
-		return fmt.Errorf(
+		return mterrors.Errorf(mtrpcpb.Code_ABORTED,
 			"cannot accept revocation: recorded position %s is not revoked by outgoing_rule %s / revoked_below_term %d",
 			FormatRulePosition(pos.GetPosition()), FormatRuleNumber(outgoingRule), revokedBelowTerm,
 		)
@@ -241,9 +246,10 @@ func ValidateRevocation(status *clustermetadatapb.ConsensusStatus, revocation *c
 	// ConsensusStatus.recruit_blocked_until and
 	// ConsensusPromises.SetRecruitBlockedUntil. Its mere presence here means
 	// this pooler hasn't caught back up yet; already omitted from status by
-	// the builder once it has.
+	// the builder once it has. Catching up is a matter of more WAL replay,
+	// not a state that needs to be explicitly fixed — retryable.
 	if status.GetRecruitBlockedUntil() != nil {
-		return fmt.Errorf(
+		return mterrors.Errorf(mtrpcpb.Code_UNAVAILABLE,
 			"cannot accept revocation: pooler has not caught up to its recruit position floor (floor lsn=%s)",
 			status.GetRecruitBlockedUntil().GetLsn(),
 		)
@@ -254,7 +260,8 @@ func ValidateRevocation(status *clustermetadatapb.ConsensusStatus, revocation *c
 	if stored != nil {
 		storedTerm := stored.GetRevokedBelowTerm()
 		if storedTerm > revokedBelowTerm {
-			return fmt.Errorf(
+			// A revocation with a higher term might still succeed.
+			return mterrors.Errorf(mtrpcpb.Code_ABORTED,
 				"cannot accept revocation: already accepted term %d > requested %d",
 				storedTerm, revokedBelowTerm,
 			)
@@ -263,14 +270,14 @@ func ValidateRevocation(status *clustermetadatapb.ConsensusStatus, revocation *c
 			storedCoord := topoclient.ClusterIDString(stored.GetAcceptedCoordinatorId())
 			reqCoord := topoclient.ClusterIDString(revocation.GetAcceptedCoordinatorId())
 			if storedCoord != reqCoord {
-				return fmt.Errorf(
+				return mterrors.Errorf(mtrpcpb.Code_ABORTED,
 					"cannot accept revocation: already accepted term %d from coordinator %s, requested by %s",
 					storedTerm, storedCoord, reqCoord,
 				)
 			}
 			// Same coordinator, same term: verify the recruitment round matches.
 			if !proto.Equal(stored.GetCoordinatorInitiatedAt(), revocation.GetCoordinatorInitiatedAt()) {
-				return fmt.Errorf(
+				return mterrors.Errorf(mtrpcpb.Code_ABORTED,
 					"cannot accept revocation: coordinator %s reused term %d with a different coordinator_initiated_at",
 					storedCoord, storedTerm,
 				)

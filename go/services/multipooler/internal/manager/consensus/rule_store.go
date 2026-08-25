@@ -449,7 +449,7 @@ func (rs *ruleStore) CreateRuleTables(ctx context.Context, policy *clustermetada
 // errRuleConflict is returned by UpdateRule when a compare-and-swap check fails:
 // either WithPreviousRule's explicit version check did not match, or a concurrent
 // write changed the rule between our read and our write.
-var errRuleConflict = errors.New("rule conflict: current rule version changed since last read")
+var errRuleConflict = mterrors.New(mtrpcpb.Code_ABORTED, "rule conflict: current rule version changed since last read")
 
 // ----------------------------------------------------------------------------
 // Shared row reader

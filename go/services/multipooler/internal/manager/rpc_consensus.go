@@ -258,7 +258,9 @@ func (pm *MultipoolerManager) Recruit(ctx context.Context, req *consensusdatapb.
 	// Fails open on I/O error: a nil status passes ValidateRevocation safely.
 	preStatus, _ := pm.consensusMgr.ConsensusStatus(ctx)
 	if err := commonconsensus.ValidateRevocation(preStatus, revocation); err != nil {
-		return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, err.Error())
+		// ValidateRevocation already returns a correctly coded error (permanent
+		// vs transient); propagate it as-is instead of collapsing it to one code.
+		return nil, err
 	}
 
 	pgMode, err := pm.postgresMode(ctx)
@@ -500,7 +502,9 @@ func (pm *MultipoolerManager) promoteLocked(ctx context.Context, req *consensusd
 		return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, err.Error())
 	}
 	if err := commonconsensus.ValidateRevocation(beforeStatus, revocation); err != nil {
-		return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, err.Error())
+		// ValidateRevocation already returns a correctly coded error (permanent
+		// vs transient); propagate it as-is instead of collapsing it to one code.
+		return nil, err
 	}
 
 	// Require an explicit Recruit() for this exact term before accepting a

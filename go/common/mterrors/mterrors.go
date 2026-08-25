@@ -469,6 +469,24 @@ func IsConnectionDead(err error) bool {
 	return errors.As(err, &diag) && diag.IsFatal()
 }
 
+// CodeOrUnavailable classifies a query failure for callers with no variable
+// input (e.g. a fixed literal query), where any non-transient failure
+// indicates a structural problem rather than bad input. A timeout or
+// connection error returns DEADLINE_EXCEEDED/UNAVAILABLE (retryable);
+// anything else returns fallback.
+func CodeOrUnavailable(err error, fallback mtrpcpb.Code) mtrpcpb.Code {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return mtrpcpb.Code_DEADLINE_EXCEEDED
+	case errors.Is(err, context.Canceled):
+		return mtrpcpb.Code_CANCELED
+	case IsConnectionError(err):
+		return mtrpcpb.Code_UNAVAILABLE
+	default:
+		return fallback
+	}
+}
+
 // IsTempBuffersFreeze recognizes the temporary-access freeze: PostgreSQL
 // rejects changing temp_buffers for the life of a backend once it has accessed
 // any temporary table — even when the accessing statement itself failed, since

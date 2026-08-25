@@ -16,14 +16,15 @@ package consensus
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 
 	"google.golang.org/protobuf/proto"
 
 	"github.com/multigres/multigres/go/common/consensus"
+	"github.com/multigres/multigres/go/common/mterrors"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	"github.com/multigres/multigres/go/services/multipooler/internal/manager/actionlock"
 )
 
@@ -175,11 +176,18 @@ func (cs *ConsensusPromises) AcceptRevocation(ctx context.Context, status *clust
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
+	// Defensive CAS guard; not reachable today since the caller holds the same
+	// action lock across its own status read and this check. ABORTED, though
+	// unlike ValidateRevocation's ABORTED cases this staleness is server-side
+	// only, so a same-request retry would likely work — kept uniform anyway.
 	if !proto.Equal(status.TermRevocation, cs.revocation) {
-		return errors.New("status parameter is out of date")
+		return mterrors.New(mtrpcpb.Code_ABORTED, "status parameter is out of date")
 	}
 
 	if err := consensus.ValidateRevocation(status, revocation); err != nil {
+		// ValidateRevocation already returns a correctly coded error; propagate
+		// it as-is so this checkpoint agrees with Recruit/Promote's pre-flight
+		// check on the identical validation failure.
 		return err
 	}
 
