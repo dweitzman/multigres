@@ -46,7 +46,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	adminserver "github.com/multigres/multigres/go/services/multiadmin"
@@ -152,6 +154,9 @@ func TestCohortChangeRejectedWithStuckProposal(t *testing.T) {
 	})
 	require.Error(t, err, "cohort change must be rejected while a proposal is stuck")
 	assert.ErrorContains(t, err, "undecided proposal")
+	st, ok := status.FromError(err)
+	require.True(t, ok, "error should be a gRPC status error")
+	assert.Equal(t, codes.FailedPrecondition, st.Code(), "an undecided proposal is a permanent state conflict, not retryable")
 
 	// The decision must be untouched — the rejected write must not have
 	// partially applied.

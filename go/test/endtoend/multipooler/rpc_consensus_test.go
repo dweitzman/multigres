@@ -23,7 +23,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/test/endtoend/shardsetup"
@@ -366,6 +368,9 @@ func TestUpdateConsensusRule(t *testing.T) {
 			})
 		require.Error(t, err, "Removing all standbys should fail")
 		assert.Contains(t, err.Error(), "durability not satisfied", "Error should indicate cohort cannot satisfy durability policy")
+		st, ok := status.FromError(err)
+		require.True(t, ok, "error should be a gRPC status error")
+		assert.Equal(t, codes.InvalidArgument, st.Code(), "an unsatisfiable durability policy is a malformed request, not a state conflict")
 		t.Log("Confirmed: removing all standbys correctly rejected")
 	})
 
@@ -383,6 +388,9 @@ func TestUpdateConsensusRule(t *testing.T) {
 			})
 		require.Error(t, err, "UpdateConsensusRule should fail on standby")
 		assert.Contains(t, err.Error(), "operation not allowed", "Error should indicate operation not allowed on REPLICA")
+		st, ok := status.FromError(err)
+		require.True(t, ok, "error should be a gRPC status error")
+		assert.Equal(t, codes.FailedPrecondition, st.Code(), "wrong pooler role is a permanent state conflict, not retryable")
 		t.Log("Confirmed: UpdateConsensusRule correctly rejected on REPLICA pooler")
 	})
 }
