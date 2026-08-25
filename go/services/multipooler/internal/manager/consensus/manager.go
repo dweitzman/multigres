@@ -200,13 +200,15 @@ func (cm *ConsensusManager) Rules() RuleStorer { return cm.rules }
 // postgres is unreachable, since a partial status (term without position) could
 // mislead callers about this pooler's rule position.
 func (cm *ConsensusManager) ConsensusStatus(ctx context.Context) (*clustermetadatapb.ConsensusStatus, error) {
+	// Both GetRevocation and ObservePosition already return correctly coded
+	// errors at their source; propagate as-is rather than collapsing the code.
 	revocation, err := cm.promises.GetRevocation(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read consensus term: %w", err)
+		return nil, err
 	}
 	pos, err := cm.rules.ObservePosition(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read current rule position: %w", err)
+		return nil, err
 	}
 	return cm.buildStatus(revocation, pos), nil
 }

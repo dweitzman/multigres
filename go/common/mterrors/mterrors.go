@@ -487,6 +487,18 @@ func CodeOrUnavailable(err error, fallback mtrpcpb.Code) mtrpcpb.Code {
 	}
 }
 
+// WrapOrUnavailable returns a coded error combining message and err, using
+// CodeOrUnavailable(err, fallback) to pick the code. Returns nil if err is
+// nil. Like Errorf, this does not preserve err as an inspectable cause
+// (see CodeOrUnavailable) — use this only where nothing downstream needs
+// errors.Is/As on the result.
+func WrapOrUnavailable(err error, fallback mtrpcpb.Code, message string) error {
+	if err == nil {
+		return nil
+	}
+	return Errorf(CodeOrUnavailable(err, fallback), "%s: %v", message, err)
+}
+
 // IsTempBuffersFreeze recognizes the temporary-access freeze: PostgreSQL
 // rejects changing temp_buffers for the life of a backend once it has accessed
 // any temporary table — even when the accessing statement itself failed, since

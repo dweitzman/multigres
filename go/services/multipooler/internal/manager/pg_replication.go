@@ -70,8 +70,7 @@ func (pm *MultipoolerManager) postgresMode(ctx context.Context) (pgmode.Mode, er
 	defer cancel()
 	result, err := pm.query(queryCtx, "SELECT pg_is_in_recovery()")
 	if err != nil {
-		code := mterrors.CodeOrUnavailable(err, mtrpcpb.Code_INTERNAL)
-		return pgmode.Unknown, mterrors.Errorf(code, "failed to query pg_is_in_recovery: %v", err)
+		return pgmode.Unknown, mterrors.WrapOrUnavailable(err, mtrpcpb.Code_INTERNAL, "failed to query pg_is_in_recovery")
 	}
 
 	var inRecovery bool
@@ -455,11 +454,13 @@ func (pm *MultipoolerManager) readPrimaryConnInfo(ctx context.Context) (string, 
 	defer cancel()
 	result, err := pm.query(queryCtx, "SELECT current_setting('primary_conninfo', true)")
 	if err != nil {
-		return "", mterrors.Wrap(err, "failed to read primary_conninfo")
+		return "", mterrors.WrapOrUnavailable(err, mtrpcpb.Code_INTERNAL, "failed to read primary_conninfo")
 	}
 	var connInfo *string
 	if err := executor.ScanSingleRow(result, &connInfo); err != nil {
-		return "", mterrors.Wrap(err, "failed to scan primary_conninfo")
+		// The query succeeded but returned an unexpected shape on a fixed
+		// literal call — a structural bug, not something a retry would fix.
+		return "", mterrors.Errorf(mtrpcpb.Code_INTERNAL, "failed to scan primary_conninfo: %v", err)
 	}
 	if connInfo == nil {
 		return "", nil

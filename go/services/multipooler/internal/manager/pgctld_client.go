@@ -16,10 +16,10 @@ package manager
 
 import (
 	"context"
-	"fmt"
 
 	"google.golang.org/grpc"
 
+	"github.com/multigres/multigres/go/common/mterrors"
 	pgctldpb "github.com/multigres/multigres/go/pb/pgctldservice"
 	"github.com/multigres/multigres/go/services/multipooler/internal/manager/actionlock"
 )
@@ -48,7 +48,7 @@ func NewProtectedPgctldClient(client pgctldpb.PgCtldClient) pgctldpb.PgCtldClien
 // Start starts PostgreSQL. Requires action lock to be held by caller.
 func (p *protectedPgctldClient) Start(ctx context.Context, req *pgctldpb.StartRequest, opts ...grpc.CallOption) (*pgctldpb.StartResponse, error) {
 	if err := actionlock.AssertActionLockHeld(ctx); err != nil {
-		return nil, fmt.Errorf("Start requires action lock to be held: %w", err)
+		return nil, mterrors.Wrapf(err, "Start requires action lock to be held")
 	}
 	return p.client.Start(ctx, req, opts...)
 }
@@ -56,7 +56,7 @@ func (p *protectedPgctldClient) Start(ctx context.Context, req *pgctldpb.StartRe
 // Stop stops PostgreSQL. Requires action lock to be held by caller.
 func (p *protectedPgctldClient) Stop(ctx context.Context, req *pgctldpb.StopRequest, opts ...grpc.CallOption) (*pgctldpb.StopResponse, error) {
 	if err := actionlock.AssertActionLockHeld(ctx); err != nil {
-		return nil, fmt.Errorf("Stop requires action lock to be held: %w", err)
+		return nil, mterrors.Wrapf(err, "Stop requires action lock to be held")
 	}
 	return p.client.Stop(ctx, req, opts...)
 }
@@ -64,7 +64,7 @@ func (p *protectedPgctldClient) Stop(ctx context.Context, req *pgctldpb.StopRequ
 // Restart restarts PostgreSQL. Requires action lock to be held by caller.
 func (p *protectedPgctldClient) Restart(ctx context.Context, req *pgctldpb.RestartRequest, opts ...grpc.CallOption) (*pgctldpb.RestartResponse, error) {
 	if err := actionlock.AssertActionLockHeld(ctx); err != nil {
-		return nil, fmt.Errorf("Restart requires action lock to be held: %w", err)
+		return nil, mterrors.Wrapf(err, "Restart requires action lock to be held")
 	}
 	return p.client.Restart(ctx, req, opts...)
 }
@@ -72,7 +72,7 @@ func (p *protectedPgctldClient) Restart(ctx context.Context, req *pgctldpb.Resta
 // ReloadConfig reloads PostgreSQL configuration. Requires action lock to be held by caller.
 func (p *protectedPgctldClient) ReloadConfig(ctx context.Context, req *pgctldpb.ReloadConfigRequest, opts ...grpc.CallOption) (*pgctldpb.ReloadConfigResponse, error) {
 	if err := actionlock.AssertActionLockHeld(ctx); err != nil {
-		return nil, fmt.Errorf("ReloadConfig requires action lock to be held: %w", err)
+		return nil, mterrors.Wrapf(err, "ReloadConfig requires action lock to be held")
 	}
 	return p.client.ReloadConfig(ctx, req, opts...)
 }
@@ -80,7 +80,7 @@ func (p *protectedPgctldClient) ReloadConfig(ctx context.Context, req *pgctldpb.
 // InitDataDir initializes the PostgreSQL data directory. Requires action lock to be held by caller.
 func (p *protectedPgctldClient) InitDataDir(ctx context.Context, req *pgctldpb.InitDataDirRequest, opts ...grpc.CallOption) (*pgctldpb.InitDataDirResponse, error) {
 	if err := actionlock.AssertActionLockHeld(ctx); err != nil {
-		return nil, fmt.Errorf("InitDataDir requires action lock to be held: %w", err)
+		return nil, mterrors.Wrapf(err, "InitDataDir requires action lock to be held")
 	}
 	return p.client.InitDataDir(ctx, req, opts...)
 }
@@ -88,7 +88,7 @@ func (p *protectedPgctldClient) InitDataDir(ctx context.Context, req *pgctldpb.I
 // PgRewind rewinds the PostgreSQL data directory. Requires action lock to be held by caller.
 func (p *protectedPgctldClient) PgRewind(ctx context.Context, req *pgctldpb.PgRewindRequest, opts ...grpc.CallOption) (*pgctldpb.PgRewindResponse, error) {
 	if err := actionlock.AssertActionLockHeld(ctx); err != nil {
-		return nil, fmt.Errorf("PgRewind requires action lock to be held: %w", err)
+		return nil, mterrors.Wrapf(err, "PgRewind requires action lock to be held")
 	}
 	return p.client.PgRewind(ctx, req, opts...)
 }
@@ -97,7 +97,7 @@ func (p *protectedPgctldClient) PgRewind(ctx context.Context, req *pgctldpb.PgRe
 // action lock to be held by caller (it can signal a running process).
 func (p *protectedPgctldClient) StopRestoreCommand(ctx context.Context, req *pgctldpb.StopRestoreCommandRequest, opts ...grpc.CallOption) (*pgctldpb.StopRestoreCommandResponse, error) {
 	if err := actionlock.AssertActionLockHeld(ctx); err != nil {
-		return nil, fmt.Errorf("StopRestoreCommand requires action lock to be held: %w", err)
+		return nil, mterrors.Wrapf(err, "StopRestoreCommand requires action lock to be held")
 	}
 	return p.client.StopRestoreCommand(ctx, req, opts...)
 }

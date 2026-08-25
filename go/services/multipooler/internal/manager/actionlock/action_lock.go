@@ -16,7 +16,6 @@ package actionlock
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -25,6 +24,7 @@ import (
 	"golang.org/x/sync/semaphore"
 
 	"github.com/multigres/multigres/go/common/mterrors"
+	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
 
@@ -69,7 +69,9 @@ func (al *ActionLock) Acquire(ctx context.Context, operation string) (context.Co
 	// Check if this context already holds the lock
 	if val, ok := ctx.Value(actionLockKey{}).(*actionLockValue); ok {
 		if !val.released.Load() {
-			return ctx, fmt.Errorf("context already holds the action lock (operation: %s)", val.operation)
+			// Reentrancy is always a caller bug, never transient.
+			return ctx, mterrors.Errorf(mtrpcpb.Code_INTERNAL,
+				"context already holds the action lock (operation: %s)", val.operation)
 		}
 	}
 
@@ -174,11 +176,12 @@ func (al *ActionLock) ActiveAction() (multipoolermanagerdatapb.PostgresAction, t
 func AssertActionLockHeld(ctx context.Context) error {
 	val, ok := ctx.Value(actionLockKey{}).(*actionLockValue)
 	if !ok {
-		return errors.New("context does not hold an action lock")
+		// Always a caller bug (missing Acquire on this code path), never transient.
+		return mterrors.New(mtrpcpb.Code_INTERNAL, "context does not hold an action lock")
 	}
 
 	if val.released.Load() {
-		return errors.New("context's action lock has been released")
+		return mterrors.New(mtrpcpb.Code_INTERNAL, "context's action lock has been released")
 	}
 
 	return nil

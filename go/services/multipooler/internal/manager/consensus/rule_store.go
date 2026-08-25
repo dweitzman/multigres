@@ -178,15 +178,15 @@ func (rs *ruleStore) HasInconsistentGUC(ctx context.Context) bool {
 // action lock.
 func (rs *ruleStore) ReconcileGUC(ctx context.Context, inRecovery bool) error {
 	if err := actionlock.AssertActionLockHeld(ctx); err != nil {
-		return fmt.Errorf("ReconcileGUC: %w", err)
+		return mterrors.Wrapf(err, "ReconcileGUC")
 	}
 	pos, lockedCtx, err := rs.readCurrentRuleLocked(ctx, inRecovery)
 	if err != nil {
-		return fmt.Errorf("ReconcileGUC: %w", err)
+		return mterrors.Wrapf(err, "ReconcileGUC")
 	}
 	policy, err := expectedSyncStandbyPolicy(pos.GetPosition())
 	if err != nil {
-		return fmt.Errorf("ReconcileGUC: %w", err)
+		return mterrors.Wrapf(err, "ReconcileGUC")
 	}
 	if policy.Policy == nil {
 		return nil
@@ -484,7 +484,7 @@ func (rs *ruleStore) readCurrentRule(ctx context.Context, forUpdate bool) (*clus
 		FROM multigres.current_rule
 		WHERE shard_id = $1`+suffix, []byte("0"))
 	if err != nil {
-		return nil, mterrors.Wrap(err, "failed to read current_rule")
+		return nil, mterrors.WrapOrUnavailable(err, mtrpcpb.Code_INTERNAL, "failed to read current_rule")
 	}
 	if len(result.StructuredRows()) == 0 {
 		return nil, mterrors.Errorf(mtrpcpb.Code_INTERNAL, "current_rule initial row missing for shard 0: tables may not be initialized")
@@ -757,7 +757,7 @@ func (rs *ruleStore) maybeFinalizeStuckProposal(
 // leader can safely skip straight to finishing the write.
 func (rs *ruleStore) UpdateRule(ctx context.Context, update *RuleUpdateBuilder) (*clustermetadatapb.PoolerPosition, error) {
 	if err := actionlock.AssertActionLockHeld(ctx); err != nil {
-		return nil, fmt.Errorf("UpdateRule: %w", err)
+		return nil, mterrors.Wrapf(err, "UpdateRule")
 	}
 
 	if update.force {

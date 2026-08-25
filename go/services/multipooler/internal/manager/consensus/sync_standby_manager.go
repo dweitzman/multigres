@@ -233,16 +233,16 @@ func (s *postgresqlSyncStandbyManager) NeedsApply(ctx context.Context, pc common
 // writer of synchronous_commit and synchronous_standby_names.
 func (s *postgresqlSyncStandbyManager) SetPolicy(ctx context.Context, pc commonconsensus.PolicyWithCohort) error {
 	if err := actionlock.AssertActionLockHeld(ctx); err != nil {
-		return fmt.Errorf("SetPolicy: %w", err)
+		return mterrors.Wrapf(err, "SetPolicy")
 	}
 
 	if err := AssertPriorRuleWritesDrained(ctx); err != nil {
-		return fmt.Errorf("SetPolicy: %w", err)
+		return mterrors.Wrapf(err, "SetPolicy")
 	}
 
 	g, err := s.computeGUC(pc)
 	if err != nil {
-		return fmt.Errorf("SetPolicy: %w", err)
+		return mterrors.Wrapf(err, "SetPolicy")
 	}
 	if g.wantCommit == "" {
 		return errors.New("SetPolicy: policy produced no eligible standbys; use Clear to reset synchronous_standby_names")

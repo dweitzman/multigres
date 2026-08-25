@@ -24,6 +24,7 @@ import (
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/constants"
+	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/services/multipooler/internal/manager/actionlock"
 	"github.com/multigres/multigres/go/services/multipooler/internal/pgmode"
 	"github.com/multigres/multigres/go/tools/telemetry"
@@ -378,7 +379,7 @@ func (pm *MultipoolerManager) discoverPostgresState(ctx context.Context) (postgr
 			// pgmode.Unknown on error, which never derives a writable role;
 			// surface the error so the monitor skips remediation this tick and
 			// retries, matching the bootstrap-sentinel handling below.
-			return state, fmt.Errorf("determine recovery mode: %w", err)
+			return state, mterrors.Wrapf(err, "determine recovery mode")
 		}
 
 		if connInfoStr, err := pm.readPrimaryConnInfo(ctx); err != nil {
@@ -1523,7 +1524,7 @@ func (pm *MultipoolerManager) startPostgres(ctx context.Context) error {
 		// pre-crash role in StateManager until the next monitor tick.
 		mode, err := pm.postgresMode(ctx)
 		if err != nil {
-			return fmt.Errorf("MonitorPostgres: failed to determine role after restart: %w", err)
+			return mterrors.Wrapf(err, "MonitorPostgres: failed to determine role after restart")
 		}
 		if pm.stateManager != nil {
 			if err := pm.stateManager.fixDrift(ctx, mode, pm.consensusMgr.SuspectedDivergence()); err != nil {
