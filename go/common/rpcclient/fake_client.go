@@ -81,6 +81,12 @@ type FakeClient struct {
 	// Errors to return - keyed by pooler ID
 	Errors map[topoclient.ComponentID]error
 
+	// ErrorOnce, if set for a pooler, is returned exactly once by the next
+	// call that consults it, then cleared — the following call for that
+	// pooler succeeds (or falls back to Errors, if also set). Use this to
+	// simulate a transient failure that clears on retry.
+	ErrorOnce map[topoclient.ComponentID]error
+
 	// RecruitDelays maps pooler IDs to artificial delays for Recruit calls.
 	// Use this to simulate slow or unresponsive nodes for testing timeout behavior.
 	// If the context is cancelled during the delay, the context error is returned.
@@ -123,6 +129,7 @@ func NewFakeClient() *FakeClient {
 		SetPostgresRestartsEnabledResponses: make(map[topoclient.ComponentID]*multipoolermanagerdatapb.SetPostgresRestartsEnabledResponse),
 		ReloadConfigResponses:               make(map[topoclient.ComponentID]*multipoolermanagerdatapb.ReloadConfigResponse),
 		Errors:                              make(map[topoclient.ComponentID]error),
+		ErrorOnce:                           make(map[topoclient.ComponentID]error),
 		RecruitDelays:                       make(map[topoclient.ComponentID]time.Duration),
 		RecruitGates:                        make(map[topoclient.ComponentID]chan struct{}),
 		CallLog:                             make([]string, 0),
@@ -163,8 +170,12 @@ func (f *FakeClient) ResetCallLog() {
 }
 
 func (f *FakeClient) checkError(poolerID topoclient.ComponentID) error {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err, ok := f.ErrorOnce[poolerID]; ok {
+		delete(f.ErrorOnce, poolerID)
+		return err
+	}
 	if err, ok := f.Errors[poolerID]; ok {
 		return err
 	}
