@@ -321,8 +321,13 @@ func (r *coordinatorLedRuleChange) recruit(
 	p *multiorchdatapb.PoolerHealthState,
 	revocation *clustermetadatapb.TermRevocation,
 ) *clustermetadatapb.ConsensusStatus {
-	resp, err := r.coordinator.rpcClient.Recruit(ctx, p.Multipooler, &consensusdatapb.RecruitRequest{
-		TermRevocation: revocation,
+	var resp *consensusdatapb.RecruitResponse
+	err := retryRPC(ctx, func() error {
+		var rpcErr error
+		resp, rpcErr = r.coordinator.rpcClient.Recruit(ctx, p.Multipooler, &consensusdatapb.RecruitRequest{
+			TermRevocation: revocation,
+		})
+		return rpcErr
 	})
 	switch {
 	case err != nil:
@@ -362,15 +367,19 @@ func (r *coordinatorLedRuleChange) promote(
 		// leaves recovery, the rule commit may block in SyncRepWaitForLSN until
 		// standbys reconnect to the new primary and acknowledge the write.
 		// The caller's context (from AppointLeaderAction) is the outer bound.
-		_, err := r.coordinator.rpcClient.Promote(ctx, p.Multipooler, req)
-		return err
+		return retryRPC(ctx, func() error {
+			_, err := r.coordinator.rpcClient.Promote(ctx, p.Multipooler, req)
+			return err
+		})
 	}
 	// rewindReady is false: the leader hasn't promoted yet, so it can't have
 	// checkpointed onto its new timeline either.
-	_, err := r.coordinator.rpcClient.SetPrimary(ctx, p.Multipooler, &consensusdatapb.SetPrimaryRequest{
-		ReplicationPrimary: commonconsensus.ReplicationPrimaryFromProposal(req.GetProposal(), false),
+	return retryRPC(ctx, func() error {
+		_, err := r.coordinator.rpcClient.SetPrimary(ctx, p.Multipooler, &consensusdatapb.SetPrimaryRequest{
+			ReplicationPrimary: commonconsensus.ReplicationPrimaryFromProposal(req.GetProposal(), false),
+		})
+		return err
 	})
-	return err
 }
 
 // buildFailoverProposal constructs a CoordinatorProposal for normal failover.

@@ -20,6 +20,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	"github.com/multigres/multigres/go/common/mterrors"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
@@ -79,7 +80,11 @@ func (c *Client) Recruit(ctx context.Context, pooler *clustermetadatapb.Multipoo
 		_ = closer()
 	}()
 
-	return conn.consensusClient.Recruit(ctx, request)
+	resp, err := conn.consensusClient.Recruit(ctx, request)
+	if err != nil {
+		return nil, mterrors.FromGRPC(err)
+	}
+	return resp, nil
 }
 
 // Promote sends a role assignment to a recruited pooler.
@@ -92,7 +97,11 @@ func (c *Client) Promote(ctx context.Context, pooler *clustermetadatapb.Multipoo
 		_ = closer()
 	}()
 
-	return conn.consensusClient.Promote(ctx, request)
+	resp, err := conn.consensusClient.Promote(ctx, request)
+	if err != nil {
+		return nil, mterrors.FromGRPC(err)
+	}
+	return resp, nil
 }
 
 // UpdateConsensusRule updates the synchronous standby list (quorum membership).
@@ -118,7 +127,11 @@ func (c *Client) SetPrimary(ctx context.Context, pooler *clustermetadatapb.Multi
 		_ = closer()
 	}()
 
-	return conn.consensusClient.SetPrimary(ctx, request)
+	resp, err := conn.consensusClient.SetPrimary(ctx, request)
+	if err != nil {
+		return nil, mterrors.FromGRPC(err)
+	}
+	return resp, nil
 }
 
 //

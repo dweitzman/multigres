@@ -263,6 +263,28 @@ func Code(err error) mtrpcpb.Code {
 	return mtrpcpb.Code_UNKNOWN
 }
 
+// IsRetryable reports whether err's code represents a transient condition
+// safe to retry automatically by resending the identical request. Only
+// UNAVAILABLE and DEADLINE_EXCEEDED qualify. ABORTED is deliberately
+// excluded: it signals a concurrency conflict where the identical request
+// cannot succeed no matter how many times it's resent — only a different
+// request (constructed by a higher-level retry, e.g. a fresh Recruit at a
+// new term) can help. See go/common/consensus/revocation.go's
+// ValidateRevocation doc comment for the reasoning.
+//
+// For an error that crossed a gRPC boundary, callers must run it through
+// FromGRPC first — a raw gRPC status error does not implement ErrorWithCode,
+// so Code(err) (and thus IsRetryable) would otherwise misclassify it as
+// UNKNOWN regardless of its actual code.
+func IsRetryable(err error) bool {
+	switch Code(err) {
+	case mtrpcpb.Code_UNAVAILABLE, mtrpcpb.Code_DEADLINE_EXCEEDED:
+		return true
+	default:
+		return false
+	}
+}
+
 // Wrap returns an error annotating err with a stack trace
 // at the point Wrap is called, and the supplied message.
 // If err is nil, Wrap returns nil.
