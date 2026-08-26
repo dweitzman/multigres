@@ -22,7 +22,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/multigres/multigres/go/common/mterrors"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	"github.com/multigres/multigres/go/tools/prototest"
 )
 
@@ -55,12 +57,17 @@ func TestValidateRevocation(t *testing.T) {
 		status     *clustermetadatapb.ConsensusStatus
 		revocation *clustermetadatapb.TermRevocation
 		wantErr    string
+		// wantCode is the expected mterrors code when wantErr != "". Every
+		// refusal branch must carry a code a retry-decision caller can rely
+		// on — see ValidateRevocation's doc comment for the policy.
+		wantCode mtrpcpb.Code
 	}{
 		{
 			name:       "NilRevocation_Refused",
 			status:     nil,
 			revocation: nil,
 			wantErr:    "revocation is nil",
+			wantCode:   mtrpcpb.Code_INVALID_ARGUMENT,
 		},
 		{
 			name:   "NilCoordinatorID_Refused",
@@ -70,7 +77,8 @@ func TestValidateRevocation(t *testing.T) {
 				CoordinatorInitiatedAt: ts1,
 				OutgoingRule:           outgoingRuleAt4,
 			},
-			wantErr: "accepted_coordinator_id is required",
+			wantErr:  "accepted_coordinator_id is required",
+			wantCode: mtrpcpb.Code_INVALID_ARGUMENT,
 		},
 		{
 			name:   "NilTimestamp_Refused",
@@ -80,7 +88,8 @@ func TestValidateRevocation(t *testing.T) {
 				AcceptedCoordinatorId: coordA,
 				OutgoingRule:          outgoingRuleAt4,
 			},
-			wantErr: "coordinator_initiated_at is required",
+			wantErr:  "coordinator_initiated_at is required",
+			wantCode: mtrpcpb.Code_INVALID_ARGUMENT,
 		},
 		{
 			name:   "NilOutgoingRule_Refused",
@@ -90,7 +99,8 @@ func TestValidateRevocation(t *testing.T) {
 				AcceptedCoordinatorId:  coordA,
 				CoordinatorInitiatedAt: ts1,
 			},
-			wantErr: "outgoing_rule is required",
+			wantErr:  "outgoing_rule is required",
+			wantCode: mtrpcpb.Code_INVALID_ARGUMENT,
 		},
 		{
 			// outgoing_rule.coordinator_term must be strictly less than
@@ -107,18 +117,24 @@ func TestValidateRevocation(t *testing.T) {
 				OutgoingRule:           &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
 			},
 			wantErr: "outgoing_rule coordinator_term 5 >= revoked_below_term 5",
+			// ABORTED, not INVALID_ARGUMENT: a fresh revocation with a bumped
+			// revoked_below_term could still succeed, matching the other
+			// term-relationship checks below.
+			wantCode: mtrpcpb.Code_ABORTED,
 		},
 		{
 			name:       "NilStatus_Refused",
 			status:     nil,
 			revocation: revocationAt5,
 			wantErr:    "cannot accept revocation: unknown WAL position",
+			wantCode:   mtrpcpb.Code_UNAVAILABLE,
 		},
 		{
 			name:       "NilPosition_Refused",
 			status:     &clustermetadatapb.ConsensusStatus{},
 			revocation: revocationAt5,
 			wantErr:    "cannot accept revocation: unknown WAL position",
+			wantCode:   mtrpcpb.Code_UNAVAILABLE,
 		},
 		{
 			name: "BadLsn_Refused",
@@ -134,6 +150,7 @@ func TestValidateRevocation(t *testing.T) {
 			},
 			revocation: revocationAt5,
 			wantErr:    "cannot accept revocation: failed to parse LSN: unexpected EOF",
+			wantCode:   mtrpcpb.Code_INTERNAL,
 		},
 		{
 			name: "WALSafety_RuleTermBelowRevocation_Accepted",
@@ -149,6 +166,7 @@ func TestValidateRevocation(t *testing.T) {
 			},
 			revocation: revocationAt5,
 			wantErr:    "cannot accept revocation: recorded position 5.0 is not revoked by outgoing_rule 4.0 / revoked_below_term 5",
+			wantCode:   mtrpcpb.Code_ABORTED,
 		},
 		{
 			name: "WALSafety_RuleTermAboveRevocation_Refused",
@@ -157,6 +175,7 @@ func TestValidateRevocation(t *testing.T) {
 			},
 			revocation: revocationAt5,
 			wantErr:    "cannot accept revocation: recorded position 7.0 is not revoked by outgoing_rule 4.0 / revoked_below_term 5",
+			wantCode:   mtrpcpb.Code_ABORTED,
 		},
 		{
 			// WAL safety extends to the proposal, not just the decision: the
@@ -170,6 +189,7 @@ func TestValidateRevocation(t *testing.T) {
 			},
 			revocation: revocationAt5,
 			wantErr:    "cannot accept revocation: recorded position 4.0 proposal=6.0 is not revoked by outgoing_rule 4.0 / revoked_below_term 5",
+			wantCode:   mtrpcpb.Code_ABORTED,
 		},
 		{
 			// The proposal's term is below revoked_below_term, so the
@@ -194,6 +214,7 @@ func TestValidateRevocation(t *testing.T) {
 			},
 			revocation: revocationAt5,
 			wantErr:    "already accepted term 10 > requested 5",
+			wantCode:   mtrpcpb.Code_ABORTED,
 		},
 		{
 			name: "StoredTerm_LowerThanRequested_Accepted",
@@ -230,7 +251,8 @@ func TestValidateRevocation(t *testing.T) {
 				CoordinatorInitiatedAt: ts1,
 				OutgoingRule:           outgoingRuleAt4,
 			},
-			wantErr: "already accepted term 5 from coordinator",
+			wantErr:  "already accepted term 5 from coordinator",
+			wantCode: mtrpcpb.Code_ABORTED,
 		},
 		{
 			name: "SameTerm_SameCoordinator_DifferentTimestamp_Refused",
@@ -248,7 +270,8 @@ func TestValidateRevocation(t *testing.T) {
 				CoordinatorInitiatedAt: ts2,
 				OutgoingRule:           outgoingRuleAt4,
 			},
-			wantErr: "different coordinator_initiated_at",
+			wantErr:  "different coordinator_initiated_at",
+			wantCode: mtrpcpb.Code_ABORTED,
 		},
 		{
 			name: "WALAndStoredTerm_BothChecked_WALFails",
@@ -261,6 +284,7 @@ func TestValidateRevocation(t *testing.T) {
 			},
 			revocation: revocationAt5,
 			wantErr:    "cannot accept revocation: recorded position 6.0 is not revoked by outgoing_rule 4.0 / revoked_below_term 5",
+			wantCode:   mtrpcpb.Code_ABORTED,
 		},
 		{
 			// recruit_blocked_until is only ever present in ConsensusStatus
@@ -274,6 +298,7 @@ func TestValidateRevocation(t *testing.T) {
 			},
 			revocation: revocationAt5,
 			wantErr:    "has not caught up to its recruit position floor (floor lsn=0/2000)",
+			wantCode:   mtrpcpb.Code_UNAVAILABLE,
 		},
 	}
 
@@ -285,6 +310,7 @@ func TestValidateRevocation(t *testing.T) {
 			} else {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tc.wantErr)
+				assert.Equal(t, tc.wantCode, mterrors.Code(err), "unexpected error code")
 			}
 		})
 	}

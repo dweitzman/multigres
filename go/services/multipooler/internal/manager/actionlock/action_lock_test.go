@@ -23,6 +23,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/multigres/multigres/go/common/mterrors"
+	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 )
 
 func TestActionLock_AcquireAndRelease(t *testing.T) {
@@ -55,8 +58,11 @@ func TestAssertActionLockHeld_WhenHeld(t *testing.T) {
 func TestAssertActionLockHeld_NoLockInfo(t *testing.T) {
 	ctx := context.Background()
 
-	// Assertion should fail for context without lock info
-	assert.Error(t, AssertActionLockHeld(ctx))
+	// Assertion should fail for context without lock info — always a caller
+	// bug, never transient.
+	err := AssertActionLockHeld(ctx)
+	require.Error(t, err)
+	assert.Equal(t, mtrpcpb.Code_INTERNAL, mterrors.Code(err))
 }
 
 func TestAssertActionLockHeld_AfterRelease(t *testing.T) {
@@ -69,8 +75,10 @@ func TestAssertActionLockHeld_AfterRelease(t *testing.T) {
 	// Release the lock
 	lock.Release(newCtx)
 
-	// Assertion should fail after release
-	assert.Error(t, AssertActionLockHeld(newCtx))
+	// Assertion should fail after release — always a caller bug, never transient.
+	err = AssertActionLockHeld(newCtx)
+	require.Error(t, err)
+	assert.Equal(t, mtrpcpb.Code_INTERNAL, mterrors.Code(err))
 }
 
 func TestActionLock_ReleasePanicsWithoutLockInfo(t *testing.T) {
@@ -108,9 +116,11 @@ func TestActionLock_AcquireFailsWhenAlreadyHeld(t *testing.T) {
 	require.NoError(t, err)
 	defer lock.Release(newCtx)
 
-	// Try to acquire again with the context that already holds it
+	// Try to acquire again with the context that already holds it — reentrancy
+	// is always a caller bug, never transient.
 	_, err = lock.Acquire(newCtx, "test-operation-2")
-	assert.Error(t, err)
+	require.Error(t, err)
+	assert.Equal(t, mtrpcpb.Code_INTERNAL, mterrors.Code(err))
 }
 
 func TestActionLock_ContextCancellation(t *testing.T) {
@@ -121,10 +131,13 @@ func TestActionLock_ContextCancellation(t *testing.T) {
 	firstCtx, err := lock.Acquire(context.Background(), "blocking-operation")
 	require.NoError(t, err)
 
-	// Try to acquire with cancelled context (should fail immediately)
+	// Try to acquire with cancelled context (should fail immediately). This
+	// exercises mterrors.Wrap correctly propagating context.Canceled through
+	// its cause chain rather than collapsing to UNKNOWN.
 	cancel()
 	_, err = lock.Acquire(ctx, "test-operation")
-	assert.Error(t, err)
+	require.Error(t, err)
+	assert.Equal(t, mtrpcpb.Code_CANCELED, mterrors.Code(err))
 
 	// Clean up
 	lock.Release(firstCtx)
