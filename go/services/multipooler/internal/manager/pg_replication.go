@@ -280,7 +280,7 @@ func (pm *MultipoolerManager) queryReplicationStatus(ctx context.Context) (*mult
 	defer cancel()
 	result, err := pm.query(queryCtx, sqlGetReplicationStatus)
 	if err != nil {
-		return nil, mterrors.Wrap(err, "failed to query replication status")
+		return nil, mterrors.WrapOrUnavailable(err, mtrpcpb.Code_INTERNAL, "failed to query replication status")
 	}
 
 	var replayLsn *string
@@ -296,7 +296,9 @@ func (pm *MultipoolerManager) queryReplicationStatus(ctx context.Context) (*mult
 
 	err = executor.ScanSingleRow(result, &replayLsn, &receiveLsn, &isPaused, &pauseState, &lastXactTime, &primaryConnInfo, &walReceiverStatus, &lastMsgReceiveTime, &walReceiverStatusInterval, &walReceiverTimeout)
 	if err != nil {
-		return nil, mterrors.Wrap(err, "failed to query replication status")
+		// The query succeeded but returned an unexpected shape on a fixed
+		// literal call — a structural bug, not something a retry would fix.
+		return nil, mterrors.Errorf(mtrpcpb.Code_INTERNAL, "failed to scan replication status: %v", err)
 	}
 	status := &multipoolermanagerdatapb.StandbyReplicationStatus{
 		IsWalReplayPaused:   isPaused,
@@ -477,7 +479,7 @@ func (pm *MultipoolerManager) setPrimaryConnInfo(ctx context.Context, connInfo s
 	sql := "ALTER SYSTEM SET primary_conninfo = " + ast.QuoteStringLiteral(connInfo)
 	if err := pm.exec(execCtx, sql); err != nil {
 		pm.logger.ErrorContext(ctx, "failed to set primary_conninfo", "error", err)
-		return mterrors.Wrap(err, "failed to set primary_conninfo")
+		return mterrors.WrapOrUnavailable(err, mtrpcpb.Code_INTERNAL, "failed to set primary_conninfo")
 	}
 
 	return nil
@@ -493,7 +495,7 @@ func (pm *MultipoolerManager) resetPrimaryConnInfo(ctx context.Context) error {
 	defer execCancel()
 	if err := pm.exec(execCtx, "ALTER SYSTEM RESET primary_conninfo"); err != nil {
 		pm.logger.ErrorContext(ctx, "failed to clear primary_conninfo", "error", err)
-		return mterrors.Wrap(err, "failed to clear primary_conninfo")
+		return mterrors.WrapOrUnavailable(err, mtrpcpb.Code_INTERNAL, "failed to clear primary_conninfo")
 	}
 
 	return pm.reloadPostgresConfig(ctx)
@@ -657,7 +659,7 @@ func (pm *MultipoolerManager) resetRestoreCommand(ctx context.Context) error {
 	defer execCancel()
 	if err := pm.exec(execCtx, "ALTER SYSTEM RESET restore_command"); err != nil {
 		pm.logger.ErrorContext(ctx, "failed to clear restore_command", "error", err)
-		return mterrors.Wrap(err, "failed to clear restore_command")
+		return mterrors.WrapOrUnavailable(err, mtrpcpb.Code_INTERNAL, "failed to clear restore_command")
 	}
 
 	return pm.reloadPostgresConfig(ctx)
@@ -693,7 +695,7 @@ func (pm *MultipoolerManager) stopRestoreCommand(ctx context.Context) error {
 	}
 	resp, err := pm.pgctldClient.StopRestoreCommand(ctx, &pgctldpb.StopRestoreCommandRequest{})
 	if err != nil {
-		return mterrors.Wrap(err, "failed to stop restore_command")
+		return mterrors.WrapOrUnavailable(err, mtrpcpb.Code_INTERNAL, "failed to stop restore_command")
 	}
 	if resp.GetFound() {
 		pm.logger.InfoContext(ctx, "stopped in-flight restore_command", "killed", resp.GetKilled(), "message", resp.GetMessage())
@@ -855,11 +857,13 @@ func (pm *MultipoolerManager) checkNoWALSource(ctx context.Context) error {
 	defer cancel()
 	result, err := pm.query(queryCtx, "SELECT current_setting('primary_conninfo', true), current_setting('restore_command', true)")
 	if err != nil {
-		return mterrors.Wrap(err, "failed to read WAL-source settings")
+		return mterrors.WrapOrUnavailable(err, mtrpcpb.Code_INTERNAL, "failed to read WAL-source settings")
 	}
 	var primaryConnInfo, restoreCommand string
 	if err := executor.ScanSingleRow(result, &primaryConnInfo, &restoreCommand); err != nil {
-		return mterrors.Wrap(err, "failed to scan WAL-source settings")
+		// The query succeeded but returned an unexpected shape on a fixed
+		// literal call — a structural bug, not something a retry would fix.
+		return mterrors.Errorf(mtrpcpb.Code_INTERNAL, "failed to scan WAL-source settings: %v", err)
 	}
 	if primaryConnInfo != "" {
 		return mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
@@ -917,7 +921,7 @@ func (pm *MultipoolerManager) queryReplayProgress(ctx context.Context) (replayPr
 		wait_event
 		FROM pg_stat_activity WHERE backend_type = 'startup' LIMIT 1`)
 	if err != nil {
-		return emptyProg, mterrors.Wrap(err, "failed to query replay progress")
+		return emptyProg, mterrors.WrapOrUnavailable(err, mtrpcpb.Code_INTERNAL, "failed to query replay progress")
 	}
 	// Zero rows means there is no startup process, i.e. the server is not in
 	// recovery (see the doc comment) — unexpected on the revoke/rewind paths.
@@ -929,7 +933,9 @@ func (pm *MultipoolerManager) queryReplayProgress(ctx context.Context) (replayPr
 	var replay, receive *string
 	var prog replayProgress
 	if err := executor.ScanSingleRow(result, &replay, &receive, &prog.isPaused, &prog.waitEventType, &prog.waitEvent); err != nil {
-		return emptyProg, mterrors.Wrap(err, "failed to scan replay progress")
+		// The query succeeded but returned an unexpected shape on a fixed
+		// literal call — a structural bug, not something a retry would fix.
+		return emptyProg, mterrors.Errorf(mtrpcpb.Code_INTERNAL, "failed to scan replay progress: %v", err)
 	}
 	// Defensive: a startup row with a NULL replay LSN would mean recovery has not
 	// applied anything yet. It should not happen once the standby is streaming,
@@ -940,13 +946,14 @@ func (pm *MultipoolerManager) queryReplayProgress(ctx context.Context) (replayPr
 	}
 
 	if prog.replayLSN, err = pgutil.ParseLSN(*replay); err != nil {
-		return emptyProg, mterrors.Wrapf(err, "failed to parse replay LSN %q", *replay)
+		// postgres's own function returned an unparseable LSN — structural, not transient.
+		return emptyProg, mterrors.Errorf(mtrpcpb.Code_INTERNAL, "failed to parse replay LSN %q: %v", *replay, err)
 	}
 	// A NULL receive LSN means the receiver never ran; leave hasReceive false so
 	// the caller cannot mistake it for caught up.
 	if receive != nil {
 		if prog.receiveLSN, err = pgutil.ParseLSN(*receive); err != nil {
-			return emptyProg, mterrors.Wrapf(err, "failed to parse receive LSN %q", *receive)
+			return emptyProg, mterrors.Errorf(mtrpcpb.Code_INTERNAL, "failed to parse receive LSN %q: %v", *receive, err)
 		}
 		prog.hasReceive = true
 	}
@@ -983,11 +990,13 @@ func (pm *MultipoolerManager) waitForReceiverDisconnect(ctx context.Context) (*m
 				current_setting('primary_conninfo')`)
 			if err != nil {
 				pm.logger.ErrorContext(ctx, "failed to query pg_stat_wal_receiver", "error", err)
-				return nil, false, mterrors.Wrap(err, "failed to query pg_stat_wal_receiver")
+				return nil, false, mterrors.WrapOrUnavailable(err, mtrpcpb.Code_INTERNAL, "failed to query pg_stat_wal_receiver")
 			}
 			if err := executor.ScanSingleRow(result, &lastCount, &lastStatus, &lastConnInfo); err != nil {
 				pm.logger.ErrorContext(ctx, "failed to scan pg_stat_wal_receiver row", "error", err)
-				return nil, false, mterrors.Wrap(err, "failed to scan pg_stat_wal_receiver row")
+				// The query succeeded but returned an unexpected shape on a fixed
+				// literal call — a structural bug, not something a retry would fix.
+				return nil, false, mterrors.Errorf(mtrpcpb.Code_INTERNAL, "failed to scan pg_stat_wal_receiver row: %v", err)
 			}
 
 			// Done when either the walreceiver slot is gone, OR it's sitting
@@ -1039,7 +1048,7 @@ func (pm *MultipoolerManager) pauseReplication(ctx context.Context, mode multipo
 
 		if err := pm.exec(execCtx, "SELECT pg_wal_replay_pause()"); err != nil {
 			pm.logger.ErrorContext(ctx, "failed to pause WAL replay", "error", err)
-			return nil, mterrors.Wrap(err, "failed to pause WAL replay")
+			return nil, mterrors.WrapOrUnavailable(err, mtrpcpb.Code_INTERNAL, "failed to pause WAL replay")
 		}
 
 		if wait {
@@ -1097,7 +1106,7 @@ func (pm *MultipoolerManager) pauseReplication(ctx context.Context, mode multipo
 		defer execCancel()
 		if err := pm.exec(execCtx, "SELECT pg_wal_replay_pause()"); err != nil {
 			pm.logger.ErrorContext(ctx, "failed to pause WAL replay", "error", err)
-			return nil, mterrors.Wrap(err, "failed to pause WAL replay")
+			return nil, mterrors.WrapOrUnavailable(err, mtrpcpb.Code_INTERNAL, "failed to pause WAL replay")
 		}
 
 		if wait {
@@ -1127,7 +1136,7 @@ func (pm *MultipoolerManager) resumeWALReplay(ctx context.Context) error {
 
 	if err := pm.exec(execCtx, "SELECT pg_wal_replay_resume()"); err != nil {
 		pm.logger.ErrorContext(ctx, "failed to resume WAL replay", "error", err)
-		return mterrors.Wrap(err, "failed to resume WAL replay")
+		return mterrors.WrapOrUnavailable(err, mtrpcpb.Code_INTERNAL, "failed to resume WAL replay")
 	}
 
 	return nil

@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/multigres/multigres/go/common/mterrors"
+	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	pgctldpb "github.com/multigres/multigres/go/pb/pgctldservice"
 	"github.com/multigres/multigres/go/tools/retry"
@@ -249,7 +250,10 @@ func (pm *MultipoolerManager) waitForDatabaseConnection(ctx context.Context) err
 		// Check if context was cancelled or exceeded deadline
 		if err != nil {
 			if lastErr != nil {
-				return mterrors.Wrap(lastErr, fmt.Sprintf("failed to connect to database after %d attempts: %v", attempt, err))
+				// pm.query's target ("SELECT 1") is a fixed literal with no user
+				// input, so a non-connection failure would be structural.
+				code := mterrors.CodeOrUnavailable(lastErr, mtrpcpb.Code_INTERNAL)
+				return mterrors.Errorf(code, "failed to connect to database after %d attempts: %v (last query error: %v)", attempt, err, lastErr)
 			}
 			return mterrors.Wrap(err, fmt.Sprintf("context error while waiting for database connection after %d attempts", attempt))
 		}

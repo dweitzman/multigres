@@ -1517,7 +1517,7 @@ func (pm *MultipoolerManager) startPostgres(ctx context.Context) error {
 
 		// Wait for database connection to be ready.
 		if err := pm.waitForDatabaseConnection(ctx); err != nil {
-			return fmt.Errorf("MonitorPostgres: database not ready after restart: %w", err)
+			return mterrors.Wrapf(err, "MonitorPostgres: database not ready after restart")
 		}
 
 		// Publish the post-restart physical role now, rather than leaving the

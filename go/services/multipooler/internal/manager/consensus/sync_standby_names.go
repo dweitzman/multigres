@@ -16,7 +16,6 @@ package consensus
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -155,7 +154,9 @@ func ApplyRemoveOperation(currentStandbys, standbysToRemove []ReplicaID) []Repli
 // signal handler.
 func ReloadPostgresConfig(ctx context.Context, logger *slog.Logger, qs executor.InternalQueryService) error {
 	if qs == nil {
-		return errors.New("internal query service not available")
+		// Wiring/config bug: the caller should never invoke this without a
+		// query service. Not transient.
+		return mterrors.New(mtrpcpb.Code_INTERNAL, "internal query service not available")
 	}
 
 	loadTimeCtx, loadTimeCancel := context.WithTimeout(ctx, timeouts.PostgresConfigTimeout)
@@ -170,7 +171,7 @@ func ReloadPostgresConfig(ctx context.Context, logger *slog.Logger, qs executor.
 	defer reloadCancel()
 	if _, err := qs.Query(reloadCtx, "SELECT pg_reload_conf()"); err != nil {
 		logger.ErrorContext(ctx, "failed to reload configuration", "error", err)
-		return mterrors.Wrap(err, "failed to reload PostgreSQL configuration")
+		return mterrors.WrapOrUnavailable(err, mtrpcpb.Code_INTERNAL, "failed to reload PostgreSQL configuration")
 	}
 
 	// Confirm the reload landed by waiting for pg_conf_load_time() to change
@@ -196,7 +197,9 @@ func ReloadPostgresConfig(ctx context.Context, logger *slog.Logger, qs executor.
 // waits for it to reach a wall-clock moment captured before the signal.
 func WaitForConfigReload(ctx context.Context, qs executor.InternalQueryService, isReloaded func(loadTime time.Time) bool) (time.Time, error) {
 	if qs == nil {
-		return time.Time{}, errors.New("internal query service not available")
+		// Wiring/config bug: the caller should never invoke this without a
+		// query service. Not transient.
+		return time.Time{}, mterrors.New(mtrpcpb.Code_INTERNAL, "internal query service not available")
 	}
 
 	waitCtx, waitCancel := context.WithTimeout(ctx, 5*time.Second)
@@ -230,11 +233,13 @@ func WaitForConfigReload(ctx context.Context, qs executor.InternalQueryService, 
 func readConfLoadTime(ctx context.Context, qs executor.InternalQueryService) (time.Time, error) {
 	result, err := qs.Query(ctx, "SELECT extract(epoch from pg_conf_load_time())")
 	if err != nil {
-		return time.Time{}, mterrors.Wrap(err, "failed to read pg_conf_load_time")
+		return time.Time{}, mterrors.WrapOrUnavailable(err, mtrpcpb.Code_INTERNAL, "failed to read pg_conf_load_time")
 	}
 	var epoch float64
 	if err := executor.ScanSingleRow(result, &epoch); err != nil {
-		return time.Time{}, mterrors.Wrap(err, "failed to scan pg_conf_load_time")
+		// The query succeeded but returned an unexpected shape on a fixed
+		// literal call — a structural bug, not something a retry would fix.
+		return time.Time{}, mterrors.Errorf(mtrpcpb.Code_INTERNAL, "failed to scan pg_conf_load_time: %v", err)
 	}
 	sec := int64(epoch)
 	nsec := int64((epoch - float64(sec)) * 1e9)

@@ -27,6 +27,7 @@ import (
 	"github.com/multigres/multigres/go/common/parser/ast"
 	"github.com/multigres/multigres/go/common/timeouts"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	"github.com/multigres/multigres/go/services/multipooler/internal/executor"
 	"github.com/multigres/multigres/go/services/multipooler/internal/manager/actionlock"
@@ -305,10 +306,10 @@ func (s *postgresqlSyncStandbyManager) Clear(ctx context.Context) error {
 	execCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err := s.exec(execCtx, "ALTER SYSTEM RESET synchronous_standby_names"); err != nil {
-		return fmt.Errorf("clear: failed to reset synchronous_standby_names: %w", err)
+		return mterrors.WrapOrUnavailable(err, mtrpcpb.Code_INTERNAL, "clear: failed to reset synchronous_standby_names")
 	}
 	if err := s.reloadConfig(ctx); err != nil {
-		return fmt.Errorf("clear: %w", err)
+		return mterrors.Wrapf(err, "clear")
 	}
 	s.mu.Lock()
 	s.lastSyncCommit = ""
