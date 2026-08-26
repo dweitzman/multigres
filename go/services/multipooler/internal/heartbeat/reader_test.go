@@ -33,10 +33,11 @@ func TestReaderReadHeartbeat(t *testing.T) {
 	tr := newTestReader(t, queryService, &now)
 	defer tr.Close()
 
+	quorumCommitTsNano := now.Add(-11 * time.Second).UnixNano()
 	// Add query result for heartbeat read
 	queryService.AddQueryPattern("SELECT ts, pg_last_wal_receive_lsn.*FROM multigres\\.heartbeat WHERE shard_id.*", mock.MakeQueryResult(
-		[]string{"ts", "receive_lsn"},
-		[][]any{{now.Add(-10 * time.Second).UnixNano(), "0/16E5D38"}},
+		[]string{"ts", "receive_lsn", "quorum_commit_lsn", "quorum_commit_ts"},
+		[][]any{{now.Add(-10 * time.Second).UnixNano(), "0/16E5D38", "0/16E5D00", quorumCommitTsNano}},
 	))
 
 	tr.readHeartbeat(t.Context())
@@ -52,6 +53,17 @@ func TestReaderReadHeartbeat(t *testing.T) {
 	advanceAt, ok := tr.LastReceiveLSNAdvance()
 	require.True(t, ok, "should have observed a receive LSN")
 	assert.Equal(t, now, advanceAt, "advance time should be the read time")
+
+	// ...and likewise for the quorum-commit watermark.
+	quorumAdvanceAt, ok := tr.LastQuorumCommitLSNAdvance()
+	require.True(t, ok, "should have observed a quorum commit LSN")
+	assert.Equal(t, now, quorumAdvanceAt, "advance time should be the read time")
+
+	// quorum_commit_ts is the leader's own stamp, reported as-is (not tracked
+	// on advance, unlike the LSN above).
+	commitTs, ok := tr.QuorumCommitTs()
+	require.True(t, ok, "should have observed a quorum commit ts")
+	assert.Equal(t, time.Unix(0, quorumCommitTsNano), commitTs)
 }
 
 // TestReaderTracksReceiveLSNAdvance verifies the WAL-receive progress tracking:
@@ -97,6 +109,90 @@ func TestReaderTracksReceiveLSNAdvance(t *testing.T) {
 	at3, ok := tr.LastReceiveLSNAdvance()
 	require.True(t, ok)
 	assert.Equal(t, at2, at3, "advance time must not move when receive_lsn is unchanged")
+}
+
+// TestReaderTracksQuorumCommitLSNAdvance mirrors TestReaderTracksReceiveLSNAdvance
+// for the quorum-commit watermark: the first observation stamps the advance
+// time, a genuine LSN increase bumps it, and an unchanged LSN leaves it in place.
+func TestReaderTracksQuorumCommitLSNAdvance(t *testing.T) {
+	queryService := mock.NewQueryService()
+	tr := newTestReader(t, queryService, nil)
+	defer tr.Close()
+
+	clock := time.Now()
+	tr.now = func() time.Time { return clock }
+
+	const pattern = "SELECT ts, pg_last_wal_receive_lsn.*FROM multigres\\.heartbeat WHERE shard_id.*"
+	addRead := func(quorumLSN string) {
+		queryService.AddQueryPatternOnce(pattern, mock.MakeQueryResult(
+			[]string{"ts", "receive_lsn", "quorum_commit_lsn"},
+			[][]any{{clock.UnixNano(), "0/100", quorumLSN}},
+		))
+	}
+
+	// First observation stamps the advance time.
+	addRead("0/100")
+	tr.readHeartbeat(t.Context())
+	at1, ok := tr.LastQuorumCommitLSNAdvance()
+	require.True(t, ok)
+	assert.Equal(t, clock, at1)
+
+	// A genuine increase bumps the advance time.
+	clock = clock.Add(1 * time.Second)
+	addRead("0/200")
+	tr.readHeartbeat(t.Context())
+	at2, ok := tr.LastQuorumCommitLSNAdvance()
+	require.True(t, ok)
+	assert.Equal(t, clock, at2)
+	assert.True(t, at2.After(at1), "advance time should move forward on an LSN increase")
+
+	// No increase leaves the advance time unchanged — this is the "quorum commits
+	// stalled" case even while WAL keeps streaming (receive_lsn is fixed at "0/100"
+	// throughout this test, so both signals happen to be flat here, but the point
+	// is quorum_commit_lsn is tracked independently of receive_lsn).
+	clock = clock.Add(1 * time.Second)
+	addRead("0/200")
+	tr.readHeartbeat(t.Context())
+	at3, ok := tr.LastQuorumCommitLSNAdvance()
+	require.True(t, ok)
+	assert.Equal(t, at2, at3, "advance time must not move when quorum_commit_lsn is unchanged")
+}
+
+// TestReaderQuorumCommitFlatWhileReceiveLSNAdvances covers the divergence this
+// signal exists to detect: WAL keeps streaming to this standby (receive_lsn
+// climbing) while the primary's quorum-commit watermark stays flat, meaning
+// quorum commits have stalled even though replicas are still receiving WAL.
+func TestReaderQuorumCommitFlatWhileReceiveLSNAdvances(t *testing.T) {
+	queryService := mock.NewQueryService()
+	tr := newTestReader(t, queryService, nil)
+	defer tr.Close()
+
+	clock := time.Now()
+	tr.now = func() time.Time { return clock }
+
+	const pattern = "SELECT ts, pg_last_wal_receive_lsn.*FROM multigres\\.heartbeat WHERE shard_id.*"
+	addRead := func(receiveLSN string) {
+		queryService.AddQueryPatternOnce(pattern, mock.MakeQueryResult(
+			[]string{"ts", "receive_lsn", "quorum_commit_lsn"},
+			[][]any{{clock.UnixNano(), receiveLSN, "0/100"}},
+		))
+	}
+
+	addRead("0/100")
+	tr.readHeartbeat(t.Context())
+	quorumAt1, ok := tr.LastQuorumCommitLSNAdvance()
+	require.True(t, ok)
+
+	clock = clock.Add(1 * time.Second)
+	addRead("0/200")
+	tr.readHeartbeat(t.Context())
+	receiveAt2, ok := tr.LastReceiveLSNAdvance()
+	require.True(t, ok)
+	assert.Equal(t, clock, receiveAt2, "receive_lsn advance should track the increase")
+
+	quorumAt2, ok := tr.LastQuorumCommitLSNAdvance()
+	require.True(t, ok)
+	assert.Equal(t, quorumAt1, quorumAt2, "quorum_commit_lsn advance must not move while quorum_commit_lsn itself is unchanged")
 }
 
 // TestReaderReadHeartbeatBadTimestamp covers the "failed to parse heartbeat
@@ -145,6 +241,76 @@ func TestReaderUnparsableReceiveLSN(t *testing.T) {
 
 	_, ok := tr.LastReceiveLSNAdvance()
 	assert.False(t, ok, "an unparsable receive_lsn records no advance")
+}
+
+// TestReaderUnparsableQuorumCommitLSN mirrors TestReaderUnparsableReceiveLSN for
+// quorum_commit_lsn: a present-but-unparsable value is best-effort and must not
+// fail the heartbeat-lag read.
+func TestReaderUnparsableQuorumCommitLSN(t *testing.T) {
+	queryService := mock.NewQueryService()
+	now := time.Now()
+	tr := newTestReader(t, queryService, &now)
+	defer tr.Close()
+
+	queryService.AddQueryPattern("SELECT ts, pg_last_wal_receive_lsn.*FROM multigres\\.heartbeat WHERE shard_id.*", mock.MakeQueryResult(
+		[]string{"ts", "receive_lsn", "quorum_commit_lsn"},
+		[][]any{{now.Add(-5 * time.Second).UnixNano(), "0/16E5D38", "garbage"}},
+	))
+
+	tr.readHeartbeat(t.Context())
+	lag, err := tr.Status()
+
+	require.NoError(t, err, "an unparsable quorum_commit_lsn must not fail the lag read")
+	assert.Equal(t, 5*time.Second, lag)
+	assert.EqualValues(t, 1, tr.Reads())
+	assert.EqualValues(t, 0, tr.ReadErrors())
+
+	_, ok := tr.LastQuorumCommitLSNAdvance()
+	assert.False(t, ok, "an unparsable quorum_commit_lsn records no advance")
+}
+
+// TestReaderQuorumCommitTsNullUntilSecondWrite covers the NULL quorum_commit_ts
+// case (e.g. right after a promotion, before the writer has a proven candidate).
+func TestReaderQuorumCommitTsNullUntilSecondWrite(t *testing.T) {
+	queryService := mock.NewQueryService()
+	now := time.Now()
+	tr := newTestReader(t, queryService, &now)
+	defer tr.Close()
+
+	queryService.AddQueryPattern("SELECT ts, pg_last_wal_receive_lsn.*FROM multigres\\.heartbeat WHERE shard_id.*", mock.MakeQueryResult(
+		[]string{"ts", "receive_lsn", "quorum_commit_lsn", "quorum_commit_ts"},
+		[][]any{{now.Add(-5 * time.Second).UnixNano(), "0/16E5D38", nil, nil}},
+	))
+
+	tr.readHeartbeat(t.Context())
+	_, err := tr.Status()
+	require.NoError(t, err)
+
+	_, ok := tr.QuorumCommitTs()
+	assert.False(t, ok, "a NULL quorum_commit_ts records no observation")
+}
+
+// TestReaderUnparsableQuorumCommitTs mirrors TestReaderUnparsableQuorumCommitLSN:
+// a present-but-unparsable value is best-effort and must not fail the read.
+func TestReaderUnparsableQuorumCommitTs(t *testing.T) {
+	queryService := mock.NewQueryService()
+	now := time.Now()
+	tr := newTestReader(t, queryService, &now)
+	defer tr.Close()
+
+	queryService.AddQueryPattern("SELECT ts, pg_last_wal_receive_lsn.*FROM multigres\\.heartbeat WHERE shard_id.*", mock.MakeQueryResult(
+		[]string{"ts", "receive_lsn", "quorum_commit_lsn", "quorum_commit_ts"},
+		[][]any{{now.Add(-5 * time.Second).UnixNano(), "0/16E5D38", "0/16E5D00", "garbage"}},
+	))
+
+	tr.readHeartbeat(t.Context())
+	lag, err := tr.Status()
+
+	require.NoError(t, err, "an unparsable quorum_commit_ts must not fail the lag read")
+	assert.Equal(t, 5*time.Second, lag)
+
+	_, ok := tr.QuorumCommitTs()
+	assert.False(t, ok, "an unparsable quorum_commit_ts records no observation")
 }
 
 // TestReaderReadHeartbeatError tests that we properly account for errors
