@@ -24,6 +24,7 @@ import (
 
 	"github.com/multigres/multigres/go/common/mterrors"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
+	"github.com/multigres/multigres/go/services/multiorch/store"
 )
 
 func TestRetryRPC_RetriesUntilSuccess(t *testing.T) {
@@ -81,7 +82,7 @@ func TestRetryRPC_GivesUpAfterMaxAttempts(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Equal(t, mtrpcpb.Code_UNAVAILABLE, mterrors.Code(err))
-	assert.Equal(t, retryRPCMaxAttempts, attempts, "should give up after the bounded attempt count")
+	assert.Equal(t, store.DefaultRPCRetryMaxAttempts, attempts, "should give up after the bounded attempt count")
 }
 
 func TestRetryRPC_RespectsContextCancellation(t *testing.T) {

@@ -75,6 +75,16 @@ type AvailabilityPolicy struct {
 	// (LeaderLivenessFreshness) or follower streaming evidence
 	// (FollowerStreamFreshness) — e.g. "is this replica initialized."
 	ObservationFreshness time.Duration
+
+	// RPCRetryMaxAttempts, RPCRetryBaseDelay, and RPCRetryMaxDelay bound the
+	// consensus package's low-level retry of a transient Recruit/Promote/
+	// SetPrimary failure. See store.DefaultRPCRetryMaxAttempts et al. — the
+	// values here and the ones consensus.retryRPC uses share that same
+	// source of truth (consensus can't import this package's
+	// AvailabilityPolicy type, since this package already imports consensus).
+	RPCRetryMaxAttempts int
+	RPCRetryBaseDelay   time.Duration
+	RPCRetryMaxDelay    time.Duration
 }
 
 // DefaultAvailabilityPolicy returns the built-in policy used when no operator
@@ -89,5 +99,8 @@ func DefaultAvailabilityPolicy() AvailabilityPolicy {
 		LeaderChangeFreshness:           store.DefaultLeaderWriteFreshness,
 		ConnectReplicasToNewLeaderGrace: 10 * time.Second,
 		ObservationFreshness:            store.DefaultObservationFreshness,
+		RPCRetryMaxAttempts:             store.DefaultRPCRetryMaxAttempts,
+		RPCRetryBaseDelay:               store.DefaultRPCRetryBaseDelay,
+		RPCRetryMaxDelay:                store.DefaultRPCRetryMaxDelay,
 	}
 }

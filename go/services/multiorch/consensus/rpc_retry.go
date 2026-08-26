@@ -16,24 +16,10 @@ package consensus
 
 import (
 	"context"
-	"time"
 
 	"github.com/multigres/multigres/go/common/mterrors"
+	"github.com/multigres/multigres/go/services/multiorch/store"
 	"github.com/multigres/multigres/go/tools/retry"
-)
-
-// retryRPCMaxAttempts bounds how many times retryRPC will call fn. Kept small:
-// failover is latency-sensitive, and a transient condition (postgres not
-// ready yet on the target pooler) either clears within a couple of short
-// retries or it doesn't — a long backoff schedule here would just add to
-// failover's tail latency without improving the odds.
-const retryRPCMaxAttempts = 3
-
-// retryRPCBaseDelay and retryRPCMaxDelay bound the backoff between attempts.
-// Short and tightly capped for the same latency-sensitivity reason.
-const (
-	retryRPCBaseDelay = 50 * time.Millisecond
-	retryRPCMaxDelay  = 400 * time.Millisecond
 )
 
 // retryRPC calls fn, retrying with a short bounded backoff only when the
@@ -48,7 +34,7 @@ const (
 // mterrors.FromGRPC first, since a raw gRPC status error would otherwise be
 // misclassified as UNKNOWN and never retried.
 func retryRPC(ctx context.Context, fn func() error) error {
-	r := retry.New(retryRPCBaseDelay, retryRPCMaxDelay)
+	r := retry.New(store.DefaultRPCRetryBaseDelay, store.DefaultRPCRetryMaxDelay)
 	var lastErr error
 	for attempt, waitErr := range r.Attempts(ctx) {
 		if waitErr != nil {
@@ -59,7 +45,7 @@ func retryRPC(ctx context.Context, fn func() error) error {
 		if lastErr == nil || !mterrors.IsRetryable(lastErr) {
 			return lastErr
 		}
-		if attempt >= retryRPCMaxAttempts {
+		if attempt >= store.DefaultRPCRetryMaxAttempts {
 			return lastErr
 		}
 	}

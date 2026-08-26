@@ -171,6 +171,22 @@ func (p *Pooler) HealthWithin(now time.Time, maxAge time.Duration) (*multiorchda
 // value.
 const DefaultLeaderWriteFreshness = 15 * time.Second
 
+// DefaultRPCRetryMaxAttempts, DefaultRPCRetryBaseDelay, and
+// DefaultRPCRetryMaxDelay bound the low-level retry of a transient
+// Recruit/Promote/SetPrimary failure (see consensus.retryRPC). Kept short and
+// tightly capped: failover is latency-sensitive, and a transient condition
+// either clears within a couple of short retries or it doesn't — a long
+// backoff schedule would only add to failover's tail latency. Shared here,
+// rather than living as bare constants in the consensus package, so
+// analysis.AvailabilityPolicy's defaults and consensus's retry wrapper read
+// the same source of truth (consensus can't import analysis's
+// AvailabilityPolicy type — analysis already imports consensus).
+const (
+	DefaultRPCRetryMaxAttempts = 3
+	DefaultRPCRetryBaseDelay   = 50 * time.Millisecond
+	DefaultRPCRetryMaxDelay    = 400 * time.Millisecond
+)
+
 // LeaderWritesProgressing reports whether it looks safe to attempt a
 // leader-led rule write right now (a cohort reconcile, a no-op rule advance,
 // etc.): a recent health report, postgres genuinely out of recovery (a
