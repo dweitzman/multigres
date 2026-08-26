@@ -104,6 +104,15 @@ message StandbyReplicationStatus {
   // not receive_lsn — so a fresh value means the leader is actively streaming new
   // WAL to this standby. Null if the reader has not yet observed a value.
   google.protobuf.Timestamp last_receive_lsn_advance_time = 12;
+
+  // Leader-stamped time of the last heartbeat write proven quorum-acked. A
+  // stale value while last_receive_lsn keeps advancing means quorum commits
+  // have stalled even though WAL is still streaming. Null if unobserved.
+  google.protobuf.Timestamp quorum_commit_ts = 13;
+
+  // The heartbeat table's quorum_commit_lsn, paired with quorum_commit_ts.
+  // Empty if unobserved.
+  string quorum_commit_lsn = 14;
 }
 
 // Wait for PostgreSQL server to reach a specific LSN position

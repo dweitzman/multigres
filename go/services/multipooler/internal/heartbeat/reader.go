@@ -275,6 +275,15 @@ func (r *Reader) LastQuorumCommitLSNAdvance() (time.Time, bool) {
 	return r.lastQuorumCommitLSNAdvanceTime, r.haveQuorumCommitLSN
 }
 
+// QuorumCommitLSN returns the most recently observed quorum_commit_lsn, and
+// whether any value has been observed yet. Diagnostic only, e.g. for
+// reporting backlog size against last_receive_lsn.
+func (r *Reader) QuorumCommitLSN() (pgutil.LSN, bool) {
+	r.lagMu.Lock()
+	defer r.lagMu.Unlock()
+	return r.lastQuorumCommitLSN, r.haveQuorumCommitLSN
+}
+
 // QuorumCommitTs returns the leader-stamped time paired with the most
 // recently observed quorum_commit_lsn, and whether any value has been
 // observed yet. Unlike LastQuorumCommitLSNAdvance, this needs no read
