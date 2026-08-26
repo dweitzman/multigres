@@ -32,10 +32,11 @@ import (
 // emits at most one shard-level problem per cycle. It reasons on two axes:
 //
 //   - Does the leader need replacing, and why? Either healthy (empty cause) or one
-//     of LeaderResigned / LeaderUnhealthy / LeaderUnreachableByCohort, chosen by
-//     the first-hand vs observer-derived evidence principle (see the leader problem
-//     docs in the types package). Observer-derived causes are quorum-gated; first-
-//     hand ones are not.
+//     of LeaderResigned / LeaderUnhealthy / LeaderUnreachableByCohort / LeaderStuck,
+//     chosen by the first-hand vs observer-derived evidence principle (see the
+//     leader problem docs in the types package). Observer-derived causes are
+//     quorum-gated; first-hand ones are not. LeaderStuck is the backstop, checked
+//     right before either healthy verdict is returned.
 //   - Could a failover succeed? Only if a durability-sufficient set of reachable,
 //     initialized poolers is available to recruit a replacement.
 //
@@ -50,10 +51,6 @@ import (
 // cohort reachable (unique rule number) with the remainder unable to satisfy the
 // policy (revocation). For ShardAtRisk we run it excluding the current leader — the
 // question is whether we could recover if the leader were lost.
-//
-// TODO(LeaderStuck): a "leader reachable but quorum-commit not advancing" cause is
-// not yet detected — it needs a quorum-commit signal (per-replica lag is not
-// quorum-safe).
 //
 // TODO(pooler-reported health): this analyzer reasons about postgres running/ready
 // directly (leaderPostgresReady/Running). Directionally it should trust a pooler's
@@ -387,15 +384,10 @@ func (a *LeaderNeedsReplacementAnalyzer) leaderReplacementCause(
 			fmt.Sprintf("Leader for shard %s is stepping down", sa.ShardKey), false
 	}
 
-	// Healthy and serving as a postgres primary — no replacement needed.
-	//
-	// TODO(LeaderStuck): a live, postgres-ready leader can still fail to make durable
-	// progress. Check the quorum-commit watermark (K-th-highest follower position from
-	// the receive-position advance signal): crossing the prior shard frontier ⇒
-	// healthy; rising only toward a known frontier ⇒ propagation (no failover); flat ⇒
-	// LeaderStuck.
+	// Healthy and serving as a postgres primary — but still check the
+	// quorum-commit backstop before calling it healthy.
 	if leaderLive && leaderPostgresReady(sa) {
-		return "", "", false
+		return a.quorumCommitStuckCause(sa)
 	}
 
 	if leaderLive {
@@ -429,11 +421,11 @@ func (a *LeaderNeedsReplacementAnalyzer) leaderReplacementCause(
 	}
 
 	// POSITIVE — a durability-sufficient set streaming from the leader proves it alive
-	// (you cannot stream from a dead primary) and serving a quorum → healthy. One
-	// streaming follower plus the leader itself can be the quorum. A future LeaderStuck
-	// check strengthens this to require the commit watermark to advance.
+	// (you cannot stream from a dead primary) and serving a quorum → healthy, subject
+	// to the same quorum-commit backstop as the first-hand healthy branch above. One
+	// streaming follower plus the leader itself can be the quorum.
 	if policy.SatisfiedBy(vouching) == nil {
-		return "", "", false
+		return a.quorumCommitStuckCause(sa)
 	}
 
 	// NEITHER — inconclusive, NOT healthy: we may simply not have looked long enough
@@ -504,6 +496,47 @@ func (a *LeaderNeedsReplacementAnalyzer) classifyFollowerToLeader(sa *ShardAnaly
 		return relationUnaware // knows the leader, had time, but isn't pointed at it
 	}
 	return relationCutOff
+}
+
+// freshestQuorumCommitTs returns the most recent quorum_commit_ts observed
+// across ALL known members of this shard (sa.Analyses — the full population,
+// deliberately NOT narrowed to the current cohort), and whether any of them
+// has reported one yet. quorum_commit_ts is a single leader-authored fact,
+// not an independent per-member value, so any pooler that has replicated a
+// fresh copy of it is valid proof quorum is not stuck — including an
+// observer that isn't (or isn't yet) a durability-required cohort member.
+// The leader's own rider never contributes: GetReplicationStatus() is nil
+// for a primary (it's the writer, not a reader).
+func freshestQuorumCommitTs(sa *ShardAnalysis) (freshest time.Time, have bool) {
+	for _, pa := range sa.Analyses {
+		if pa == nil {
+			continue
+		}
+		ts := pa.Health().GetStatus().GetReplicationStatus().GetQuorumCommitTs()
+		if ts == nil {
+			continue
+		}
+		if t := ts.AsTime(); !have || t.After(freshest) {
+			freshest, have = t, true
+		}
+	}
+	return freshest, have
+}
+
+// quorumCommitStuckCause checks the LeaderStuck backstop: the leader looks
+// healthy (directly or via cohort corroboration) but the freshest
+// shard-wide observed quorum_commit_ts is stale, meaning quorum commits have
+// stopped even though replicas can still show raw receive/replay LSN
+// progress (they replay WAL ahead of the primary's own synchronous-quorum
+// ack). Returns healthy (cause=="") when no pooler has reported a value
+// yet — absence of evidence must not convict.
+func (a *LeaderNeedsReplacementAnalyzer) quorumCommitStuckCause(sa *ShardAnalysis) (types.ProblemCode, string, bool) {
+	freshest, have := freshestQuorumCommitTs(sa)
+	if !have || sa.Now.Sub(freshest) <= sa.Policy.QuorumCommitStaleAfter {
+		return "", "", false
+	}
+	return types.ProblemLeaderStuck,
+		fmt.Sprintf("Leader for shard %s appears healthy but quorum commits have not advanced in over %s", sa.ShardKey, sa.Policy.QuorumCommitStaleAfter), false
 }
 
 // classifyCohortReachability sorts cohort followers by their relation to the leader,

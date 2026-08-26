@@ -56,6 +56,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	leaderID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "leader-1"}
 	follower1ID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "follower-1"}
 	follower2ID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "follower-2"}
+	observerID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "observer-1"}
 	shardKey := &clustermetadatapb.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"}
 
 	atLeastN := func(n int32) *clustermetadatapb.DurabilityPolicy {
@@ -204,6 +205,22 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 					},
 				},
 			}, nil)
+		}
+	}
+
+	// setQuorumCommitTs stamps a follower's replication status with a
+	// quorum_commit_ts, as if its heartbeat reader had observed one.
+	setQuorumCommitTs := func(sa *ShardAnalysis, id *clustermetadatapb.ID, at time.Time) {
+		for _, pa := range sa.Analyses {
+			if poolerID(pa).Name != id.Name {
+				continue
+			}
+			pa.Mutate(func(h *multiorchdatapb.PoolerHealthState) {
+				if h.Status.ReplicationStatus == nil {
+					h.Status.ReplicationStatus = &multipoolermanagerdatapb.StandbyReplicationStatus{}
+				}
+				h.Status.ReplicationStatus.QuorumCommitTs = timestamppb.New(at)
+			})
 		}
 	}
 
@@ -373,6 +390,50 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		sa := deadLeaderShardAnalysis(func(sa *ShardAnalysis) {
 			setLeaderLive(sa, true)
 			setLeaderPGReady(sa, true)
+		})
+
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		require.Empty(t, problems)
+	})
+
+	t.Run("ignores healthy leader with fresh quorum-commit watermark", func(t *testing.T) {
+		sa := deadLeaderShardAnalysis(func(sa *ShardAnalysis) {
+			setLeaderLive(sa, true)
+			setLeaderPGReady(sa, true)
+			setQuorumCommitTs(sa, follower1ID, sa.Now)
+		})
+
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		require.Empty(t, problems)
+	})
+
+	t.Run("LeaderStuck when quorum-commit watermark goes stale", func(t *testing.T) {
+		sa := deadLeaderShardAnalysis(func(sa *ShardAnalysis) {
+			setLeaderLive(sa, true)
+			setLeaderPGReady(sa, true)
+			setQuorumCommitTs(sa, follower1ID, sa.Now.Add(-sa.Policy.QuorumCommitStaleAfter-time.Second))
+		})
+
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		require.Len(t, problems, 1)
+		require.Equal(t, types.ProblemLeaderStuck, problems[0].Code)
+		require.Equal(t, leaderID, problems[0].PoolerID)
+	})
+
+	t.Run("a fresh non-cohort observer proves quorum is not stuck despite a stale cohort member", func(t *testing.T) {
+		// quorum_commit_ts is a single leader-authored fact, not an independent
+		// per-member value, so a witness outside the durability-required cohort
+		// is still valid proof — this must look at ALL known shard members, not
+		// just the cohort.
+		sa := deadLeaderShardAnalysis(func(sa *ShardAnalysis) {
+			setLeaderLive(sa, true)
+			setLeaderPGReady(sa, true)
+			setQuorumCommitTs(sa, follower1ID, sa.Now.Add(-sa.Policy.QuorumCommitStaleAfter-time.Second))
+			sa.Analyses = append(sa.Analyses, freshFollower(observerID, sa.Now))
+			setQuorumCommitTs(sa, observerID, sa.Now)
 		})
 
 		problems, err := analyzer.Analyze(sa)
@@ -593,6 +654,20 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
 		require.Empty(t, problems, "should not trigger failover when pooler is down but replicas are connected")
+	})
+
+	t.Run("LeaderStuck via cohort corroboration when quorum-commit watermark goes stale", func(t *testing.T) {
+		sa := deadLeaderShardAnalysis(func(sa *ShardAnalysis) {
+			setLeaderLive(sa, false)
+			connectReplica(sa)
+			setLeaderLastReady(sa, time.Now().Add(-5*time.Second))
+			setQuorumCommitTs(sa, follower1ID, sa.Now.Add(-sa.Policy.QuorumCommitStaleAfter-time.Second))
+		})
+
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		require.Len(t, problems, 1)
+		require.Equal(t, types.ProblemLeaderStuck, problems[0].Code)
 	})
 
 	t.Run("triggers failover when leader pooler up but postgres down", func(t *testing.T) {

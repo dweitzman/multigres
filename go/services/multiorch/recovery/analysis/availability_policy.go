@@ -75,6 +75,16 @@ type AvailabilityPolicy struct {
 	// (LeaderLivenessFreshness) or follower streaming evidence
 	// (FollowerStreamFreshness) — e.g. "is this replica initialized."
 	ObservationFreshness time.Duration
+
+	// QuorumCommitStaleAfter bounds how old the freshest cohort-observed
+	// quorum_commit_ts may be before LeaderStuck considers commits stalled.
+	// Longer than LeaderLivenessFreshness despite being the backstop check: unlike
+	// a directly-observed health snapshot, this signal is multi-hop (heartbeat
+	// interval, one-tick defer, replica's own reader poll, then health-snapshot
+	// propagation to orch), so those delays stack even when nothing is wrong. A
+	// false positive here drives a real failover attempt against a leader that's
+	// probably fine, so this threshold should stay generous.
+	QuorumCommitStaleAfter time.Duration
 }
 
 // DefaultAvailabilityPolicy returns the built-in policy used when no operator
@@ -89,5 +99,6 @@ func DefaultAvailabilityPolicy() AvailabilityPolicy {
 		LeaderChangeFreshness:           store.DefaultLeaderWriteFreshness,
 		ConnectReplicasToNewLeaderGrace: 10 * time.Second,
 		ObservationFreshness:            store.DefaultObservationFreshness,
+		QuorumCommitStaleAfter:          20 * time.Second,
 	}
 }
