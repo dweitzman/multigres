@@ -89,6 +89,10 @@ func (a *AppointLeaderAction) Execute(ctx context.Context, rechecked types.Reche
 	//
 	// TODO: Reconsider if trying to contact a dead leader here makes sense. If it's unreachable,
 	// this may just be wasting time.
+	//
+	// Confirmed via MUL-581 repro: when the leader is silently unreachable (network
+	// partition, not just a killed process), this poll hangs for the full 5s rather
+	// than failing fast, adding a flat 5s tax on top of an already-slow detection path.
 	shortCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if leader, err := pollLeaderHealth(shortCtx, a.rpcClient, shard); err == nil {

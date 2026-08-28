@@ -60,6 +60,11 @@ type ShardSetup struct {
 	TopoServer     topoclient.Store
 	CellName       string
 
+	// DurabilityPolicy is the setup's configured policy name (e.g.
+	// "MULTI_CELL_AT_LEAST_2"), needed by checkBootstrapStatus to know which
+	// poolers a primary is actually expected to sync to.
+	DurabilityPolicy string
+
 	// Context for all processes started by this ShardSetup.
 	// Cancelled when Cleanup() is called to gracefully terminate all processes.
 	runningCtx context.Context
@@ -260,6 +265,14 @@ func (s *ShardSetup) PrimaryPgctld(t *testing.T) *ProcessInstance {
 // Follows the patterns from multipooler/setup_test.go.
 func (s *ShardSetup) CreateMultipoolerInstance(t *testing.T, name string, grpcPort, pgPort, multipoolerPort int) *MultipoolerInstance {
 	t.Helper()
+	return s.CreateMultipoolerInstanceInCell(t, name, s.CellName, grpcPort, pgPort, multipoolerPort)
+}
+
+// CreateMultipoolerInstanceInCell is CreateMultipoolerInstance with an explicit
+// cell, for setups spanning more than one cell (e.g. MULTI_CELL_AT_LEAST_N
+// durability policy tests). The cell must already exist in topology.
+func (s *ShardSetup) CreateMultipoolerInstanceInCell(t *testing.T, name, cell string, grpcPort, pgPort, multipoolerPort int) *MultipoolerInstance {
+	t.Helper()
 
 	if s.Multipoolers == nil {
 		s.Multipoolers = make(map[string]*MultipoolerInstance)
@@ -286,7 +299,7 @@ func (s *ShardSetup) CreateMultipoolerInstance(t *testing.T, name string, grpcPo
 	// Create multipooler instance with pgBackRest cert paths and port
 	// The name (e.g., "primary") is used as the service-id, combined with cell in the topology
 	multipooler := CreateMultipoolerProcessInstance(t, name, s.TempDir, multipoolerPort, multipoolerHttpPort,
-		"localhost:"+strconv.Itoa(grpcPort), pgctld.PoolerDir, pgPort, s.EtcdClientAddr, s.CellName,
+		"localhost:"+strconv.Itoa(grpcPort), pgctld.PoolerDir, pgPort, s.EtcdClientAddr, cell,
 		s.PgBackRestCertPaths, pgbackrestPort)
 
 	inst := &MultipoolerInstance{

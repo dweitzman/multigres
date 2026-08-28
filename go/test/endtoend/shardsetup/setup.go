@@ -72,6 +72,7 @@ type SetupConfig struct {
 	TableGroup                         string
 	Shard                              string
 	CellName                           string
+	MultipoolerCells                   []string // If set, pooler i is placed in MultipoolerCells[i % len(MultipoolerCells)] instead of CellName; each distinct cell is registered in topology
 	DurabilityPolicy                   string   // Durability policy (e.g., "AT_LEAST_2")
 	SkipInitialization                 bool     // Start processes but don't initialize postgres (for bootstrap tests)
 	DeferMultipoolerStart              bool     // Start pgctld only; test starts multipooler itself
@@ -134,6 +135,16 @@ func WithDatabase(db string) SetupOption {
 func WithCellName(cell string) SetupOption {
 	return func(c *SetupConfig) {
 		c.CellName = cell
+	}
+}
+
+// WithMultipoolerCells spans multipoolers across multiple cells instead of the
+// single CellName: pooler i is placed in cells[i % len(cells)]. Each distinct
+// cell is registered in topology alongside CellName. For MULTI_CELL_AT_LEAST_N
+// durability policy tests.
+func WithMultipoolerCells(cells ...string) SetupOption {
+	return func(c *SetupConfig) {
+		c.MultipoolerCells = cells
 	}
 }
 
@@ -534,6 +545,23 @@ func New(t *testing.T, opts ...SetupOption) *ShardSetup {
 
 	t.Logf("Created topology cell '%s' at etcd %s", config.CellName, etcdClientAddr)
 
+	// Register any additional cells for a multi-cell setup (WithMultipoolerCells).
+	registeredCells := map[string]bool{config.CellName: true}
+	for _, cell := range config.MultipoolerCells {
+		if registeredCells[cell] {
+			continue
+		}
+		registeredCells[cell] = true
+		err = ts.CreateCell(context.Background(), cell, &clustermetadatapb.Cell{
+			ServerAddresses: []string{etcdClientAddr},
+			Root:            path.Join(testRoot, cell),
+		})
+		if err != nil {
+			t.Fatalf("failed to create cell %q: %v", cell, err)
+		}
+		t.Logf("Created topology cell '%s' at etcd %s", cell, etcdClientAddr)
+	}
+
 	// Create the database entry in topology with backup_location
 	var backupLocation *clustermetadatapb.BackupLocation
 
@@ -597,6 +625,7 @@ func New(t *testing.T, opts ...SetupOption) *ShardSetup {
 		EtcdCmd:            etcdCmd,
 		TopoServer:         ts,
 		CellName:           config.CellName,
+		DurabilityPolicy:   config.DurabilityPolicy,
 		runningCtx:         runningCtx,
 		cancel:             cancel,
 		Multipoolers:       make(map[string]*MultipoolerInstance),
@@ -621,7 +650,13 @@ func New(t *testing.T, opts ...SetupOption) *ShardSetup {
 		pgPort := utils.GetFreePort(t)
 		multipoolerPort := utils.GetFreePort(t)
 
-		inst := setup.CreateMultipoolerInstance(t, name, grpcPort, pgPort, multipoolerPort)
+		var inst *MultipoolerInstance
+		if len(config.MultipoolerCells) > 0 {
+			cell := config.MultipoolerCells[i%len(config.MultipoolerCells)]
+			inst = setup.CreateMultipoolerInstanceInCell(t, name, cell, grpcPort, pgPort, multipoolerPort)
+		} else {
+			inst = setup.CreateMultipoolerInstance(t, name, grpcPort, pgPort, multipoolerPort)
+		}
 		inst.Multipooler.ExtraArgs = append(inst.Multipooler.ExtraArgs, config.MultipoolerExtraArgs...)
 		if config.EnableMultipoolerPGTLS {
 			paths := setup.MultipoolerPGTLSCertPaths
@@ -1308,14 +1343,27 @@ func checkBootstrapStatus(ctx context.Context, t *testing.T, setup *ShardSetup) 
 
 		switch status.PoolerType {
 		case clustermetadatapb.PoolerType_PRIMARY:
-			// Verify the sync standby list contains every multipooler in the cohort.
+			// Verify the sync standby list contains every multipooler we expect
+			// to be eligible. Under MultiCellPolicy, poolers in the primary's own
+			// cell are deliberately excluded from sync standbys (see
+			// MultiCellPolicy.BuildSyncReplicationConfig) — they could never
+			// appear here, so they must not count as missing.
 			syncNames := make(map[string]struct{})
 			if status.PrimaryStatus != nil && status.PrimaryStatus.SyncReplicationConfig != nil {
 				for _, id := range status.PrimaryStatus.SyncReplicationConfig.StandbyIds {
 					syncNames[id.Name] = struct{}{}
 				}
 			}
-			missingSync := missingNames(allNames, syncNames)
+			expectedSyncNames := allNames
+			if strings.HasPrefix(setup.DurabilityPolicy, "MULTI_CELL") {
+				expectedSyncNames = make(map[string]struct{}, len(allNames))
+				for n := range allNames {
+					if n != name && setup.Multipoolers[n].Multipooler.Cell != inst.Multipooler.Cell {
+						expectedSyncNames[n] = struct{}{}
+					}
+				}
+			}
+			missingSync := missingNames(expectedSyncNames, syncNames)
 
 			// Verify connected_followers contains every replica (all names except this primary).
 			followerNames := make(map[string]struct{})

@@ -79,6 +79,16 @@ func (s *managerService) StopReplication(ctx context.Context, req *multipoolerma
 
 // Status gets unified status that works for both PRIMARY and REPLICA poolers
 func (s *managerService) Status(ctx context.Context, req *multipoolermanagerdatapb.StatusRequest) (*multipoolermanagerdatapb.StatusResponse, error) {
+	// TEMPORARY (MUL-581 repro): block until the caller's own deadline instead
+	// of answering, so a live poll like pollLeaderHealth experiences the same
+	// hang a genuine silent network partition would cause (as opposed to a
+	// fast connection-refused from a merely-killed process). Remove alongside
+	// the other TEMPORARY MUL-581 hooks.
+	if s.manager.PostgresRestartsDisabled() {
+		<-ctx.Done()
+		return nil, mterrors.ToGRPC(ctx.Err())
+	}
+
 	resp, err := s.manager.Status(ctx)
 	if err != nil {
 		return nil, mterrors.ToGRPC(err)
@@ -325,6 +335,13 @@ func (s *managerService) sendManagerHealthSnapshot(
 	trigger multipoolermanagerdatapb.SnapshotTrigger,
 	timeout time.Duration,
 ) error {
+	// TEMPORARY (MUL-581 repro): piggyback SetPostgresRestartsEnabled(false) to
+	// simulate a silently network-partitioned pooler by going quiet instead of
+	// sending. Remove once the partition-detection fix lands.
+	if s.manager.PostgresRestartsDisabled() {
+		return nil
+	}
+
 	statusResp, err := s.manager.Status(ctx)
 	if err != nil {
 		return mterrors.ToGRPC(err)

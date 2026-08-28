@@ -862,6 +862,16 @@ func (pm *MultipoolerManager) SetPostgresRestartsEnabled(ctx context.Context, re
 	return &multipoolermanagerdatapb.SetPostgresRestartsEnabledResponse{}, nil
 }
 
+// PostgresRestartsDisabled reports whether SetPostgresRestartsEnabled(false) was
+// called on this pooler.
+//
+// TEMPORARY (MUL-581 repro): also used by the health-stream send loop to go
+// silent, simulating a network-partitioned pooler. Remove this overload once
+// the partition-detection fix lands and a dedicated toggle replaces it.
+func (pm *MultipoolerManager) PostgresRestartsDisabled() bool {
+	return pm.postgresRestartsDisabled.Load()
+}
+
 // ====================================================================================
 // Helper methods for stale-primary demotion (used by SetPrimary)
 // ====================================================================================
