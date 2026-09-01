@@ -929,15 +929,6 @@ func (pm *MultipoolerManager) setPrimaryLocked(ctx context.Context, req *consens
 		pm.logger.InfoContext(ctx, "SetPrimary: updating standby primary_conninfo", //nolint:sloglint // message intentionally starts with an operation name or proper noun
 			"new_leader", leader.GetId().GetName(),
 			"incoming_position", incomingPosition)
-		// A coordinator-initiated SetPrimary overrides a prior manual
-		// StopReplication. walReceiverManuallyStopped prevents this node from
-		// being elected leader (INELIGIBLE), but once the coordinator has elected
-		// a different leader, this node must follow it. Clear the flag so that
-		// setPrimaryConnInfoLocked can configure replication toward the new leader.
-		if pm.walReceiverManuallyStopped.CompareAndSwap(true, false) {
-			pm.logger.InfoContext(ctx, "SetPrimary: cleared walReceiverManuallyStopped to allow replication toward new leader", //nolint:sloglint // message intentionally starts with an operation name or proper noun
-				"new_leader", leader.GetId().GetName())
-		}
 		// Already a standby with an active stream; pause replay, swap
 		// conninfo, resume on the new primary.
 		if err := pm.setPrimaryConnInfoLocked(ctx, leader.GetHost(), port,
