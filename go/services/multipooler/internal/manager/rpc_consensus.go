@@ -35,35 +35,12 @@ import (
 
 // buildAvailabilityStatus returns the current AvailabilityStatus for this node.
 // Leaders that have resigned publish a LeadershipStatus. Every pooler publishes
-// its cohort eligibility and leadership availability, so the result is non-nil.
-// postgresReady must be the value already obtained by the caller via isPostgresReady
-// so the check is not repeated.
-func (pm *MultipoolerManager) buildAvailabilityStatus(postgresReady bool) *clustermetadatapb.AvailabilityStatus {
+// its cohort eligibility, so the result is non-nil.
+func (pm *MultipoolerManager) buildAvailabilityStatus() *clustermetadatapb.AvailabilityStatus {
 	return &clustermetadatapb.AvailabilityStatus{
 		LeadershipStatus:        pm.consensusMgr.LeadershipStatus(),
 		CohortEligibilityStatus: pm.buildCohortEligibilityStatus(),
 		SuspectedDivergence:     pm.consensusMgr.SuspectedDivergence(),
-		LeadershipAvailability:  buildLeadershipAvailability(postgresReady),
-	}
-}
-
-// buildLeadershipAvailability reports whether postgres is ready to accept
-// promotion to consensus leader. STARTING when postgres is not yet ready
-// (starting, in crash recovery, socket not open); READY otherwise.
-//
-// The coordinator uses this as a tie-breaker when multiple nodes share the
-// same (most-advanced) WAL position: it prefers a READY node over a STARTING
-// one. A STARTING node can still be elected if it has a strictly higher WAL
-// position than all READY nodes.
-func buildLeadershipAvailability(postgresReady bool) *clustermetadatapb.LeadershipAvailability {
-	if !postgresReady {
-		return &clustermetadatapb.LeadershipAvailability{
-			Signal: clustermetadatapb.LeadershipAvailabilitySignal_LEADERSHIP_AVAILABILITY_SIGNAL_STARTING,
-			Reason: "postgres not ready for promotion",
-		}
-	}
-	return &clustermetadatapb.LeadershipAvailability{
-		Signal: clustermetadatapb.LeadershipAvailabilitySignal_LEADERSHIP_AVAILABILITY_SIGNAL_READY,
 	}
 }
 
@@ -72,9 +49,9 @@ func buildLeadershipAvailability(postgresReady bool) *clustermetadatapb.Leadersh
 // stopped (StopReplication cleared primary_conninfo) or when setCohortEligibility
 // was called explicitly (e.g. graceful shutdown).
 //
-// Note: postgres readiness is NOT a factor here — it is reported separately via
-// LeadershipAvailability. CohortEligibilityStatus expresses permanent/administrative
-// preferences about cohort membership, not transient startup state.
+// Note: postgres readiness (Status.PostgresReady, see coordinator.go) is a
+// separate, transient signal — this field is permanent/administrative cohort
+// membership preference only.
 func (pm *MultipoolerManager) buildCohortEligibilityStatus() *clustermetadatapb.CohortEligibilityStatus {
 	if pm.walReceiverManuallyStopped.Load() {
 		return &clustermetadatapb.CohortEligibilityStatus{

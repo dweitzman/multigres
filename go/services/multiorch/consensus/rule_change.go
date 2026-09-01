@@ -374,12 +374,10 @@ func (r *coordinatorLedRuleChange) promote(
 }
 
 // buildFailoverProposal constructs a CoordinatorProposal for normal failover.
-// It picks the first node from result.EligibleLeaders and resolves its contact
-// address from addressByID. EligibleLeaders is produced by the Discoverer
-// supplied to BuildSafeProposal — leadershipAwareDiscoverer ensures the set
-// contains the most-advanced node that reports ELIGIBLE leadership availability,
-// falling back to the most-advanced node overall if all are INELIGIBLE. Resigned
-// poolers are filtered out upstream in Coordinator.runFailover.
+// It picks the first node from result.EligibleLeaders (already sorted by
+// Coordinator.runFailover: postgres readiness, then leadership signal) and
+// resolves its contact address from addressByID. Resigned poolers are
+// filtered out upstream in Coordinator.runFailover.
 func buildFailoverProposal(
 	result commonconsensus.RecruitmentResult,
 	addressByID map[string]*clustermetadatapb.PoolerAddress,

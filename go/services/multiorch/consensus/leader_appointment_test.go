@@ -567,18 +567,16 @@ func TestPoolerHealthStateLess(t *testing.T) {
 	})
 }
 
-// TestAppointLeader_TiebreaksByLeadershipAvailability verifies that leadershipLess
-// breaks tied-LSN elections in favour of READY nodes over STARTING nodes.
+// TestAppointLeader_TiebreaksByPostgresReadiness verifies that postgresReadyLess
+// breaks tied-LSN elections in favour of postgres-ready nodes over not-yet-ready
+// nodes.
 //
 // Under synchronous replication both standbys ACK every write, so they routinely
 // reach the same WAL position. When the primary fails the two standbys are tied
 // candidates. A freshly restarted standby whose postgres is still in crash
-// recovery reports STARTING; leadershipLess must put the READY standby first in
-// the eligible-leaders list so it is proposed as the new leader.
-//
-// UNKNOWN (the proto zero-value, emitted by older poolers) is treated as READY
-// for backward compatibility — only an explicit STARTING signal demotes a node.
-func TestAppointLeader_TiebreaksByLeadershipAvailability(t *testing.T) {
+// recovery reports PostgresReady=false; postgresReadyLess must put the ready
+// standby first in the eligible-leaders list so it is proposed as the new leader.
+func TestAppointLeader_TiebreaksByPostgresReadiness(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	coordID := &clustermetadatapb.ID{
@@ -625,16 +623,12 @@ func TestAppointLeader_TiebreaksByLeadershipAvailability(t *testing.T) {
 			Lsn:      lsn,
 			Position: &clustermetadatapb.RulePosition{Decision: outgoingRule},
 		}
-		if id.Name == "starting" {
-			// leadershipLess reads AvailabilityStatus from the cohort health
-			// snapshot (not the Recruit response) — this is the health stream
-			// value that multiorch's applySnapshot cached before the election.
-			mp.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{
-				LeadershipAvailability: &clustermetadatapb.LeadershipAvailability{
-					Signal: clustermetadatapb.LeadershipAvailabilitySignal_LEADERSHIP_AVAILABILITY_SIGNAL_STARTING,
-					Reason: "postgres not ready for promotion",
-				},
-			}
+		// postgresReadyLess reads Status.PostgresReady from the cohort health
+		// snapshot (not the Recruit response) — this is the health stream
+		// value that multiorch's applySnapshot cached before the election.
+		// "starting" is left at its zero value (false, i.e. not ready).
+		if id.Name == "ready" {
+			mp.Status.PostgresReady = true
 		}
 		key := topoclient.ComponentIDString(id)
 		fakeClient.RecruitResponses[key] = &consensusdatapb.RecruitResponse{
@@ -653,20 +647,20 @@ func TestAppointLeader_TiebreaksByLeadershipAvailability(t *testing.T) {
 	shardKey := &clustermetadatapb.ShardKey{Database: "testdb", TableGroup: "default", Shard: "shard0"}
 	require.NoError(t, c.AppointLeader(ctx, shardKey, cohort, "tiebreak_test"))
 
-	// "ready" must be elected: both standbys are tied on LSN, but leadershipLess
-	// sorts READY before STARTING in the eligible-leaders slice.
+	// "ready" must be elected: both standbys are tied on LSN, but postgresReadyLess
+	// sorts the ready node before the not-yet-ready one in the eligible-leaders slice.
 	readyKey := topoclient.ComponentIDString(cohortIDs[1])
 	propReq, ok := fakeClient.PromoteRequests[readyKey]
-	require.True(t, ok, "Promote must be sent to the READY standby")
+	require.True(t, ok, "Promote must be sent to the ready standby")
 	require.Equal(t, "ready", propReq.GetProposal().GetProposalLeader().GetId().GetName(),
-		"leadershipLess must prefer READY over STARTING when LSNs are tied")
+		"postgresReadyLess must prefer the ready node over the starting one when LSNs are tied")
 
 	// "starting" must receive SetPrimary as a follower, not Promote.
 	startingKey := topoclient.ComponentIDString(cohortIDs[2])
 	_, isPromoted := fakeClient.PromoteRequests[startingKey]
-	require.False(t, isPromoted, "STARTING node must not be elected when a READY node is tied on LSN")
+	require.False(t, isPromoted, "not-yet-ready node must not be elected when a ready node is tied on LSN")
 	stp, ok := fakeClient.SetPrimaryRequests[startingKey]
-	require.True(t, ok, "SetPrimary must be sent to the STARTING node as a follower")
+	require.True(t, ok, "SetPrimary must be sent to the not-yet-ready node as a follower")
 	require.Equal(t, "ready", stp.GetReplicationPrimary().GetPrimary().GetId().GetName(),
-		"STARTING follower must be directed toward the READY leader")
+		"not-yet-ready follower must be directed toward the ready leader")
 }
