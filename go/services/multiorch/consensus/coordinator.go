@@ -17,7 +17,6 @@ package consensus
 import (
 	"context"
 	"log/slog"
-	"sort"
 	"sync"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -122,27 +121,9 @@ func (c *Coordinator) runFailover(ctx context.Context, cohort []*multiorchdatapb
 	}
 
 	poolerByID, healthByID := buildCohortMaps(cohort)
-	availLess := postgresReadyLess(healthByID)
-	signalLess := poolerHealthStateLess(healthByID)
 	buildProposal := func(r commonconsensus.RecruitmentResult) (*consensusdatapb.CoordinatorProposal, error) {
-		// Sort tied candidates with two orthogonal tiebreakers applied in order:
-		//   1. Postgres readiness: ready before not-ready (postgres not yet ready
-		//      for promotion — crash recovery still running, socket not open).
-		//   2. LeadershipSignal: non-resigning before REQUESTING_DEMOTION (node has
-		//      explicitly asked to be replaced via SwitchPrimary).
-		// WAL position is always the primary criterion; both tiebreakers only
-		// affect the ordering within the tied-LSN set.
-		sort.SliceStable(r.EligibleLeaders, func(i, j int) bool {
-			a, b := r.EligibleLeaders[i], r.EligibleLeaders[j]
-			if availLess(a, b) {
-				return true
-			}
-			if availLess(b, a) {
-				return false
-			}
-			return signalLess(a, b)
-		})
-		return buildFailoverProposal(r, poolerByID)
+		leader := selectFittestLeader(r.EligibleLeaders, healthByID)
+		return buildFailoverProposal(r, leader, poolerByID)
 	}
 	tryBuildProposal := func(rev *clustermetadatapb.TermRevocation, statuses []*clustermetadatapb.ConsensusStatus) (*consensusdatapb.CoordinatorProposal, error) {
 		return commonconsensus.BuildSafeProposal(rev, statuses, buildProposal)
@@ -298,22 +279,6 @@ func (c *Coordinator) GetBootstrapPolicy(ctx context.Context, database string) (
 
 	c.policyCache.Store(database, db.BootstrapDurabilityPolicy)
 	return db.BootstrapDurabilityPolicy, nil
-}
-
-// postgresReadyLess is the BuildSafeProposal tiebreaker for nodes tied at the
-// highest LSN: postgres-ready nodes sort first. A missing health snapshot
-// defaults to not-ready rather than assuming readiness we haven't observed.
-//
-// Recruited nodes still count toward outgoing-cohort quorum regardless of
-// readiness; this only reorders which tied node is proposed as leader.
-func postgresReadyLess(healthByID map[string]*multiorchdatapb.PoolerHealthState) func(a, b *clustermetadatapb.ConsensusStatus) bool {
-	isReady := func(id *clustermetadatapb.ID) bool {
-		h := healthByID[topoclient.ClusterIDString(id)]
-		return h.GetStatus().GetPostgresReady()
-	}
-	return func(a, b *clustermetadatapb.ConsensusStatus) bool {
-		return isReady(a.GetId()) && !isReady(b.GetId())
-	}
 }
 
 // poolerIDs extracts the clustermetadata IDs from a slice of PoolerHealthState.
