@@ -364,10 +364,18 @@ func CheckSufficientRecruitment(policy DurabilityPolicy, cohort, recruited []*cl
 		return err
 	}
 
-	unrecruited := unrecruitedOf(cohort, recruited)
-	if policy.SatisfiedBy(unrecruited) == nil {
+	return rogueQuorumCheck(policy, cohort, recruited)
+}
+
+// rogueQuorumCheck errors if the cohort members not in present could, on
+// their own, satisfy policy — an undetected quorum among exactly those
+// poolers. Shared by CheckSufficientRecruitment (present = recruited) and
+// ConfirmLatestRule (present = reached).
+func rogueQuorumCheck(policy DurabilityPolicy, cohort, present []*clustermetadatapb.ID) error {
+	absent := unrecruitedOf(cohort, present)
+	if policy.SatisfiedBy(absent) == nil {
 		return fmt.Errorf("revocation not satisfied: un-recruited cohort poolers %s could independently satisfy %s",
-			formatIDs(unrecruited), policy.Description())
+			formatIDs(absent), policy.Description())
 	}
 	return nil
 }
