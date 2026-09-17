@@ -39,15 +39,31 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 )
 
+// slogAttrsFromOTel converts OTel attributes into slog attributes, so that
+// resource attributes attached to spans/metrics (see Init) can be reused
+// verbatim as log attributes instead of tracked under separate key names.
+// AsInterface preserves the underlying type (string, bool, int64, ...) rather
+// than stringifying everything, so JSON log output matches the attribute's
+// native type.
+func slogAttrsFromOTel(attrs []attribute.KeyValue) []slog.Attr {
+	out := make([]slog.Attr, len(attrs))
+	for i, a := range attrs {
+		out[i] = slog.Any(string(a.Key), a.Value.AsInterface())
+	}
+	return out
+}
+
 // Init is the first phase of the server startup.
 // The id parameter provides service identification for telemetry resource attributes.
 func (sv *ServEnv) Init(id ServiceIdentity) error {
 	sv.mu.Lock()
 	sv.initStartTime = time.Now()
 	sv.mu.Unlock()
-	sv.lg.SetupLogging(id.logAttributes()...)
 
-	// Build OTel resource attributes from service identity
+	// Build OTel resource attributes from service identity. These are reused
+	// for both the telemetry Resource (spans/metrics) and log records, so
+	// cell/shard/tablegroup etc. carry the same key names everywhere instead
+	// of being tracked as two separate attribute lists.
 	var attrs []attribute.KeyValue
 	// Compute OTel-compliant service.instance.id (cell-qualified for multi-cell uniqueness).
 	// Per OTel semantic conventions, service.instance.id must be globally unique for each
@@ -87,6 +103,8 @@ func (sv *ServEnv) Init(id ServiceIdentity) error {
 			semconv.ServiceVersion(build.revision),
 		)
 	}
+
+	sv.lg.SetupLogging(slogAttrsFromOTel(attrs)...)
 
 	// Initialize OpenTelemetry with service identity attributes
 	if err := sv.telemetry.InitTelemetry(context.TODO(), id.ServiceName, attrs...); err != nil {
