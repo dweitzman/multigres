@@ -17,9 +17,11 @@ package multiadmin
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/multigres/multigres/go/common/backup"
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
+	"github.com/multigres/multigres/go/common/logattr"
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multiadminpb "github.com/multigres/multigres/go/pb/multiadmin"
@@ -34,11 +36,11 @@ import (
 // Backup starts an async backup of a specific shard
 func (s *MultiadminServer) Backup(ctx context.Context, req *multiadminpb.BackupRequest) (*multiadminpb.BackupResponse, error) {
 	s.logger.DebugContext(ctx, "backup request received",
-		"database", req.Database,
-		"table_group", req.TableGroup,
-		"shard", req.Shard,
-		"type", req.Type,
-		"force_primary", req.ForcePrimary)
+		logattr.Database(req.Database),
+		logattr.TableGroup(req.TableGroup),
+		slog.String("shard", req.Shard),
+		slog.String("type", req.Type),
+		slog.Bool("force_primary", req.ForcePrimary))
 
 	// Find a pooler synchronously so we can generate a stable job ID.
 	// The job ID includes the pooler name, which enables recovery after multiadmin restart.
@@ -77,11 +79,11 @@ func (s *MultiadminServer) executeBackup(ctx context.Context, jobID string, pool
 	s.backupJobTracker.UpdateJobStatus(jobID, multiadminpb.JobStatus_JOB_STATUS_RUNNING)
 
 	s.logger.InfoContext(ctx, "starting backup",
-		"job_id", jobID,
-		"database", req.Database,
-		"table_group", req.TableGroup,
-		"shard", req.Shard,
-		"force_primary", req.ForcePrimary)
+		slog.String("job_id", jobID),
+		logattr.Database(req.Database),
+		logattr.TableGroup(req.TableGroup),
+		slog.String("shard", req.Shard),
+		slog.Bool("force_primary", req.ForcePrimary))
 
 	// Call backup on the pooler using the shared rpcClient.
 	backupReq := &multipoolermanagerdata.BackupRequest{
@@ -207,10 +209,10 @@ func (s *MultiadminServer) GetBackupJobStatus(ctx context.Context, req *multiadm
 // getBackupJobStatusFromPooler queries a Multipooler for backup status when job is not in memory.
 func (s *MultiadminServer) getBackupJobStatusFromPooler(ctx context.Context, req *multiadminpb.GetBackupJobStatusRequest) (*multiadminpb.GetBackupJobStatusResponse, error) {
 	s.logger.DebugContext(ctx, "falling back to pooler for job status",
-		"job_id", req.JobId,
-		"database", req.Database,
-		"table_group", req.TableGroup,
-		"shard", req.Shard)
+		slog.String("job_id", req.JobId),
+		logattr.Database(req.Database),
+		logattr.TableGroup(req.TableGroup),
+		slog.String("shard", req.Shard))
 
 	// Find a replica pooler - all poolers for a shard share the same pgbackrest repo
 	pooler, err := s.findPoolerForBackup(ctx, req.Database, req.TableGroup, req.Shard, false)
@@ -264,10 +266,10 @@ func (s *MultiadminServer) getBackupJobStatusFromPooler(ctx context.Context, req
 // GetBackups lists backup artifacts with optional filtering
 func (s *MultiadminServer) GetBackups(ctx context.Context, req *multiadminpb.GetBackupsRequest) (*multiadminpb.GetBackupsResponse, error) {
 	s.logger.DebugContext(ctx, "GetBackups request received", //nolint:sloglint // message intentionally starts with an operation name or proper noun
-		"database", req.Database,
-		"table_group", req.TableGroup,
-		"shard", req.Shard,
-		"limit", req.Limit)
+		logattr.Database(req.Database),
+		logattr.TableGroup(req.TableGroup),
+		slog.String("shard", req.Shard),
+		slog.Uint64("limit", uint64(req.Limit)))
 
 	// Validate request
 	if req.Database == "" {
@@ -336,9 +338,9 @@ func (s *MultiadminServer) GetBackups(ctx context.Context, req *multiadminpb.Get
 // It finds a replica pooler and proxies the request to it.
 func (s *MultiadminServer) ExpireBackups(ctx context.Context, req *multiadminpb.ExpireBackupsRequest) (*multiadminpb.ExpireBackupsResponse, error) {
 	s.logger.DebugContext(ctx, "ExpireBackups request received", //nolint:sloglint // message intentionally starts with an operation name or proper noun
-		"database", req.Database,
-		"table_group", req.TableGroup,
-		"shard", req.Shard)
+		logattr.Database(req.Database),
+		logattr.TableGroup(req.TableGroup),
+		slog.String("shard", req.Shard))
 
 	if req.Database == "" {
 		return nil, status.Error(codes.InvalidArgument, "database cannot be empty")
@@ -361,10 +363,10 @@ func (s *MultiadminServer) ExpireBackups(ctx context.Context, req *multiadminpb.
 	}
 
 	s.logger.InfoContext(ctx, "ExpireBackups completed", //nolint:sloglint // message intentionally starts with an operation name or proper noun
-		"database", req.Database,
-		"table_group", req.TableGroup,
-		"shard", req.Shard,
-		"expired_backup_ids", resp.ExpiredBackupIds)
+		logattr.Database(req.Database),
+		logattr.TableGroup(req.TableGroup),
+		slog.String("shard", req.Shard),
+		slog.Any("expired_backup_ids", resp.ExpiredBackupIds))
 
 	return &multiadminpb.ExpireBackupsResponse{
 		ExpiredBackupIds: resp.ExpiredBackupIds,
@@ -376,9 +378,9 @@ func (s *MultiadminServer) ExpireBackups(ctx context.Context, req *multiadminpb.
 // duration + raw output. No job state to track.
 func (s *MultiadminServer) VerifyBackups(ctx context.Context, req *multiadminpb.VerifyBackupsRequest) (*multiadminpb.VerifyBackupsResponse, error) {
 	s.logger.DebugContext(ctx, "VerifyBackups request received", //nolint:sloglint // message intentionally starts with an operation name or proper noun
-		"database", req.Database,
-		"table_group", req.TableGroup,
-		"shard", req.Shard,
+		logattr.Database(req.Database),
+		logattr.TableGroup(req.TableGroup),
+		slog.String("shard", req.Shard),
 	)
 
 	if req.Database == "" {
@@ -402,10 +404,10 @@ func (s *MultiadminServer) VerifyBackups(ctx context.Context, req *multiadminpb.
 	}
 
 	s.logger.InfoContext(ctx, "VerifyBackups completed", //nolint:sloglint // message intentionally starts with an operation name or proper noun
-		"database", req.Database,
-		"table_group", req.TableGroup,
-		"shard", req.Shard,
-		"duration", resp.Duration.AsDuration(),
+		logattr.Database(req.Database),
+		logattr.TableGroup(req.TableGroup),
+		slog.String("shard", req.Shard),
+		slog.Duration("duration", resp.Duration.AsDuration()),
 	)
 
 	return &multiadminpb.VerifyBackupsResponse{
