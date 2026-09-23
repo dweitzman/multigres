@@ -881,13 +881,6 @@ func TestPromote(t *testing.T) {
 			},
 			// Verify the promotion was recorded with the right coordinator term and WAL
 			// position, and that the health streamer was updated for write traffic.
-			preRun: func(t *testing.T, pm *MultipoolerManager) {
-				// Pre-set so we can verify clearResignedLeaderAtTerm ran.
-				lockCtx, err := pm.actionLock.Acquire(t.Context(), "test-seed")
-				require.NoError(t, err)
-				require.NoError(t, pm.consensusMgr.SetResignedLeaderAtTerm(lockCtx, &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 7}}}))
-				pm.actionLock.Release(lockCtx)
-			},
 			postCheck: func(t *testing.T, pm *MultipoolerManager, rs *fakeRuleStore) {
 				update := rs.assertPromoteRecorded(t)
 				assert.Equal(t, int64(7), update.GetTermNumber())
@@ -914,7 +907,8 @@ func TestPromote(t *testing.T) {
 				assert.Equal(t, clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY, state.RoutingState.GetRole())
 				assert.Equal(t, int64(7), state.RoutingState.GetRule().GetCoordinatorTerm())
 
-				assert.Equal(t, int64(0), pm.consensusMgr.ResignedLeaderAtTerm(), "clearResignedLeaderAtTerm should have cleared the term")
+				assert.Equal(t, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE,
+					pm.consensusMgr.ContinueLeadershipSignal(pm.stateManager.PostgresMode()), "successful promote is fit to continue")
 
 				// ReplicationPrimary should advertise this pooler as the primary
 				// at the proposalLeader's host/port. Coordinators reading this
@@ -1033,15 +1027,12 @@ func TestPromote(t *testing.T) {
 			// the durability gate, and a failure here means the new primary
 			// hasn't satisfied sync replication.
 			//
-			// This also exercises the promotionHook clearing resignation
-			// before the failure: postCheck confirms resignation is
-			// re-established rather than lost (see rpc_consensus.go's defer
-			// in promoteLocked). Uses a custom revocation at outgoing term 3
-			// (rather than the shared recruitedTerm/makeLeaderReq, both fixed
-			// at outgoing term 0) so beforeStatus's decided position is
-			// non-zero: term 0 is indistinguishable from "not resigned" (see
-			// ConsensusManager.LeadershipStatus), so a term-0 baseline would
-			// pass this check without actually exercising it.
+			// (promotionInFlight correctly ending on failure, so
+			// ContinueLeadershipSignal reads INELIGIBLE again, is covered
+			// deterministically by the consensus package's own
+			// TestFitToContinueLeadership — this harness runs a real background
+			// postgres monitor against the same mock, which can race to update
+			// stateManager.pgMode independently of this specific failure.)
 			name:        "UpdateRuleFails",
 			initialTerm: recruitedTerm,
 			ruleStore: &fakeRuleStore{
@@ -1065,12 +1056,6 @@ func TestPromote(t *testing.T) {
 			},
 			expectError:       true,
 			expectErrContains: "promote failed: could not write rule",
-			postCheck: func(t *testing.T, pm *MultipoolerManager, rs *fakeRuleStore) {
-				status := pm.consensusMgr.LeadershipStatus()
-				require.NotNil(t, status, "resignation must be re-set after a failed promote")
-				assert.Equal(t, int64(3), status.LeaderTerm)
-				assert.Equal(t, clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION, status.Signal)
-			},
 		},
 		{
 			// Slot-based replication enabled: a follower physical-slot failure
@@ -1359,44 +1344,40 @@ func TestPromoteDropsUnloggedTables(t *testing.T) {
 }
 
 func TestAvailabilityStatus(t *testing.T) {
-	t.Run("buildAvailabilityStatus publishes cohort eligibility with no leadership status when no resignation is set", func(t *testing.T) {
+	t.Run("buildAvailabilityStatus publishes ELIGIBLE for a plain follower", func(t *testing.T) {
 		pm := newTestManager(t)
 		av := pm.buildAvailabilityStatus()
 		require.NotNil(t, av)
-		assert.Nil(t, av.LeadershipStatus)
-		require.NotNil(t, av.CohortEligibilityStatus)
-		assert.Equal(t, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE, av.CohortEligibilityStatus.Signal)
+		assert.Equal(t, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE, av.GetContinueLeadershipSignal())
+		assert.Equal(t, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE, av.GetCohortEligibilitySignal())
 	})
 
-	t.Run("resignedLeaderAtTerm set adds a LeadershipStatus alongside cohort eligibility", func(t *testing.T) {
-		pm := newTestManager(t, withResignedLeaderAtTerm(7))
+	t.Run("named leader stuck in recovery is INELIGIBLE to continue", func(t *testing.T) {
+		selfID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "test-cell", Name: "self"}
+		pm := newTestManager(t,
+			withServiceID(selfID),
+			withRuleStore(&fakeRuleStore{pos: &clustermetadatapb.PoolerPosition{Position: &clustermetadatapb.RulePosition{
+				Decision: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 7}, LeaderId: selfID},
+			}}}),
+		)
+		// Default seed record is REPLICA, which newTestManager primes to
+		// pgmode.InRecovery — combined with the rule above naming self leader,
+		// this is "named leader but not out of recovery."
 		av := pm.buildAvailabilityStatus()
 		require.NotNil(t, av)
-		require.NotNil(t, av.LeadershipStatus)
-		assert.Equal(t, int64(7), av.LeadershipStatus.LeaderTerm)
-		assert.Equal(t, clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION, av.LeadershipStatus.Signal)
-		require.NotNil(t, av.CohortEligibilityStatus)
-		assert.Equal(t, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE, av.CohortEligibilityStatus.Signal)
-	})
-
-	t.Run("no resignation -> no LeadershipStatus but keeps cohort eligibility", func(t *testing.T) {
-		pm := newTestManager(t)
-		av := pm.buildAvailabilityStatus()
-		require.NotNil(t, av)
-		assert.Nil(t, av.LeadershipStatus)
-		require.NotNil(t, av.CohortEligibilityStatus)
+		assert.Equal(t, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_INELIGIBLE, av.GetContinueLeadershipSignal())
+		assert.Equal(t, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE, av.GetCohortEligibilitySignal())
 	})
 
 	t.Run("SetCohortEligibility flips the signal", func(t *testing.T) {
 		pm := newTestManager(t)
 		lockCtx, err := pm.actionLock.Acquire(t.Context(), "test")
 		require.NoError(t, err)
-		require.NoError(t, pm.consensusMgr.SetCohortEligibility(lockCtx, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE))
+		require.NoError(t, pm.consensusMgr.SetCohortEligibility(lockCtx, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_INELIGIBLE))
 		pm.actionLock.Release(lockCtx)
 		av := pm.buildAvailabilityStatus()
 		require.NotNil(t, av)
-		require.NotNil(t, av.CohortEligibilityStatus)
-		assert.Equal(t, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE, av.CohortEligibilityStatus.Signal)
+		assert.Equal(t, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_INELIGIBLE, av.GetCohortEligibilitySignal())
 	})
 
 	t.Run("suspectedDivergence is published", func(t *testing.T) {
@@ -1422,7 +1403,7 @@ func TestRecruitRejectsWhileCohortIneligible(t *testing.T) {
 	lockCtx, err := pm.actionLock.Acquire(t.Context(), "seed-ineligible")
 	require.NoError(t, err)
 	require.NoError(t, pm.consensusMgr.SetCohortEligibility(lockCtx,
-		clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE))
+		clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_INELIGIBLE))
 	pm.actionLock.Release(lockCtx)
 
 	// A non-nil TermRevocation is required to reach the eligibility guard (the
@@ -1436,11 +1417,11 @@ func TestRecruitRejectsWhileCohortIneligible(t *testing.T) {
 	require.ErrorContains(t, err, "cohort-ineligible")
 }
 
-// TestSetResignedLeaderAtTerm_BroadcastsOnChange verifies that setting the
-// resignation term broadcasts to subscribers on change so the coordinator
-// sees the signal without waiting for the next periodic snapshot, and does
-// NOT broadcast when the value is unchanged (idempotent calls are cheap).
-func TestSetResignedLeaderAtTerm_BroadcastsOnChange(t *testing.T) {
+// TestSetBecomeLeaderEligibility_BroadcastsOnChange verifies that flipping the
+// future-leadership-eligibility signal broadcasts to subscribers on change so
+// the coordinator sees it without waiting for the next periodic snapshot, and
+// does NOT broadcast when the value is unchanged (idempotent calls are cheap).
+func TestSetBecomeLeaderEligibility_BroadcastsOnChange(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
 	id := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "test"}
 	streamer := newHealthStreamer(logger, id, "tg", "0")
@@ -1468,17 +1449,14 @@ func TestSetResignedLeaderAtTerm_BroadcastsOnChange(t *testing.T) {
 	require.NoError(t, err)
 	defer pm.actionLock.Release(lockCtx)
 
-	require.NoError(t, pm.consensusMgr.SetResignedLeaderAtTerm(lockCtx, &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5}}}))
-	assert.Equal(t, 1, drain(), "first call should broadcast on change from 0 to 5")
+	require.NoError(t, pm.consensusMgr.SetBecomeLeaderEligibility(lockCtx, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_INELIGIBLE))
+	assert.Equal(t, 1, drain(), "first call should broadcast on change from ELIGIBLE to INELIGIBLE")
 
-	require.NoError(t, pm.consensusMgr.SetResignedLeaderAtTerm(lockCtx, &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5}}}))
+	require.NoError(t, pm.consensusMgr.SetBecomeLeaderEligibility(lockCtx, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_INELIGIBLE))
 	assert.Equal(t, 0, drain(), "repeating the same value should NOT broadcast")
 
-	require.NoError(t, pm.consensusMgr.SetResignedLeaderAtTerm(lockCtx, &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 7}}}))
-	assert.Equal(t, 1, drain(), "changing to a new term should broadcast")
-
-	require.NoError(t, pm.consensusMgr.SetResignedLeaderAtTerm(lockCtx, &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 0}}}))
-	assert.Equal(t, 1, drain(), "clearing the term is also a change and should broadcast")
+	require.NoError(t, pm.consensusMgr.SetBecomeLeaderEligibility(lockCtx, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE))
+	assert.Equal(t, 1, drain(), "changing back should broadcast")
 }
 
 // TestWaitForReplayComplete covers the WAL-replay completion check used during

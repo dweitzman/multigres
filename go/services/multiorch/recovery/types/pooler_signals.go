@@ -20,7 +20,6 @@ package types
 // should move to go/common/consensus or a similar shared package.
 
 import (
-	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 )
@@ -31,18 +30,14 @@ import (
 //
 // Two independent signals trigger replacement:
 //
-//   - CohortEligibilityStatus.Signal == INELIGIBLE: the pooler is unwilling to
+//   - cohort_eligibility_signal == INELIGIBLE: the pooler is unwilling to
 //     remain in the cohort (e.g. graceful shutdown advertises this before
-//     stopping postgres). Not term-gated — eligibility is a current preference
-//     and staleness comes from the freshness of the surrounding health
-//     snapshot; a node that doesn't want to be in the cohort certainly should
-//     not continue as leader.
-//
-//   - LeadershipStatus.Signal == REQUESTING_DEMOTION with leader_term ==
-//     current primary term: emitted by Recruit's primary-demote path after a
-//     postgres crash so the coordinator can correlate the request with the
-//     specific term and avoid acting on a leftover signal from a previous
-//     election cycle that was never cleared (e.g. after a process restart).
+//     stopping postgres).
+//   - continue_leadership_signal == INELIGIBLE: the pooler is named leader by
+//     the rule but isn't fit to continue (e.g. postgres isn't out of
+//     recovery). Republished fresh every snapshot rather than latched, so
+//     unlike a one-time event it can't be a leftover from a previous election
+//     cycle — no term correlation needed.
 //
 // TODO: once the coordinator synthesizes AvailabilityStatus into
 // PoolerHealthState directly (see clustermetadata.proto TODO), read from
@@ -51,23 +46,7 @@ import (
 // nodes) are handled here too.
 func LeaderNeedsReplacement(p *multiorchdatapb.PoolerHealthState) bool {
 	av := p.GetAvailabilityStatus()
-	if PoolerIsCohortIneligible(av) {
-		return true
-	}
-	leadershipStatus := av.GetLeadershipStatus()
-	if leadershipStatus == nil {
-		return false
-	}
-	if leadershipStatus.Signal != clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION {
-		return false
-	}
-	// Verify the signal is for the current primary term, not a stale one.
-	// Uses the possibly-undecided rule (not just the decision) so a signal
-	// about a self-promotion that crashed before its own write was confirmed
-	// decided is still recognized.
-	position := p.GetConsensusStatus().GetCurrentPosition().GetPosition()
-	primaryTerm := commonconsensus.PossiblyUndecidedRule(position).GetRuleNumber().GetCoordinatorTerm()
-	return leadershipStatus.LeaderTerm != 0 && leadershipStatus.LeaderTerm == primaryTerm
+	return PoolerIsCohortIneligible(av) || av.GetContinueLeadershipSignal() == clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_INELIGIBLE
 }
 
 // PoolerIsCohortIneligible reports whether a pooler has self-reported that it
@@ -76,6 +55,13 @@ func LeaderNeedsReplacement(p *multiorchdatapb.PoolerHealthState) bool {
 // return false. Eligibility is a current preference and not term-gated;
 // staleness comes from the freshness of the surrounding health snapshot.
 func PoolerIsCohortIneligible(av *clustermetadatapb.AvailabilityStatus) bool {
-	signal := av.GetCohortEligibilityStatus().GetSignal()
-	return signal == clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE
+	return av.GetCohortEligibilitySignal() == clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_INELIGIBLE
+}
+
+// PoolerPrefersNotToBecomeLeader reports whether a pooler has self-reported
+// that it would rather not be elected leader in a future term. Advisory only
+// (see AvailabilityStatus.become_leader_eligibility_signal) — callers use this
+// as a tiebreak preference among candidates, never a hard exclusion.
+func PoolerPrefersNotToBecomeLeader(av *clustermetadatapb.AvailabilityStatus) bool {
+	return av.GetBecomeLeaderEligibilitySignal() == clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_INELIGIBLE
 }

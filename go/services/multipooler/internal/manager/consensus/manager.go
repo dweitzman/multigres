@@ -28,6 +28,7 @@ import (
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	"github.com/multigres/multigres/go/services/multipooler/internal/executor"
 	"github.com/multigres/multigres/go/services/multipooler/internal/manager/actionlock"
+	"github.com/multigres/multigres/go/services/multipooler/internal/pgmode"
 	"github.com/multigres/multigres/go/tools/pgutil"
 	"github.com/multigres/multigres/go/tools/retry"
 )
@@ -112,16 +113,21 @@ type ConsensusManager struct {
 	// leaderObservedAt.
 	rewindWaitEmittedFor time.Time
 
-	// resignedLeaderAtTerm is the consensus term at which this node voluntarily
-	// resigned as primary (via emergency-demote or graceful shutdown), or 0 if it
-	// has not resigned. A non-zero value tells the coordinator to trigger an
-	// immediate election. Cleared when this node is elected primary again. Atomic;
-	// production writes are serialized by the action lock (see Concurrency above).
-	resignedLeaderAtTerm atomic.Int64
+	// promotionInFlight marks a Promote attempt in progress, from its
+	// optimistic RecordTermPrimary claim through the outcome settling. While
+	// true, FitToContinueLeadership treats this node as fit even if
+	// observedPgMode isn't out of recovery yet — it's catching up, not stuck.
+	// Atomic; production writes are serialized by the action lock.
+	promotionInFlight atomic.Bool
 	// cohortEligibility is this node's self-reported willingness to be a member of
-	// the consensus cohort, holding a clustermetadatapb.CohortEligibilitySignal.
+	// the consensus cohort, holding a clustermetadatapb.EligibilitySignal.
 	// Atomic; production writes are serialized by the action lock.
 	cohortEligibility atomic.Int32
+	// becomeLeaderEligibility is this node's self-reported willingness to be
+	// elected leader in a future term. Distinct from cohortEligibility
+	// (willingness to replicate at all): advisory, never a hard exclusion.
+	// Atomic; production writes are serialized by the action lock.
+	becomeLeaderEligibility atomic.Int32
 	// suspectedDivergence marks that this node's WAL may have diverged from the
 	// cluster's chosen history, so the next restart-as-standby should run
 	// pg_rewind to drop potential phantom / non-durable WAL. Set when consensus
@@ -176,7 +182,8 @@ func newConsensusManager(id *clustermetadatapb.ID, promises *ConsensusPromises, 
 	cm := &ConsensusManager{id: id, promises: promises, rules: rules, broadcaster: broadcaster}
 	// Default to ELIGIBLE — a fresh node is willing to join the cohort. (The
 	// atomic's zero value is the proto's UNSPECIFIED, so set it explicitly.)
-	cm.cohortEligibility.Store(int32(clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE))
+	cm.cohortEligibility.Store(int32(clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE))
+	cm.becomeLeaderEligibility.Store(int32(clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE))
 	return cm
 }
 
@@ -305,19 +312,17 @@ func statusReplicationPrimary(pos *clustermetadatapb.PoolerPosition, replication
 	}
 }
 
-// LeadershipStatus returns the LeadershipStatus for this node. Non-nil only when
-// the node has resigned leadership (after a Recruit-driven emergency demotion or
-// graceful shutdown of a leader). Nil means it has not recently held or resigned
-// from primary leadership.
-func (cm *ConsensusManager) LeadershipStatus() *clustermetadatapb.LeadershipStatus {
-	resignedTerm := cm.ResignedLeaderAtTerm()
-	if resignedTerm == 0 {
-		return nil
+// ContinueLeadershipSignal returns AvailabilityStatus.continue_leadership_signal
+// given the current physical postgres mode (this manager cannot observe
+// postgres itself, so the caller supplies it — see FitToContinueLeadership).
+// ELIGIBLE both when healthy and when not currently claimed as leader at all
+// (the question doesn't apply); INELIGIBLE only when named leader but not
+// acting like one. Published fresh every poll cycle, not latched.
+func (cm *ConsensusManager) ContinueLeadershipSignal(pgMode pgmode.Mode) clustermetadatapb.EligibilitySignal {
+	if !cm.FitToContinueLeadership(pgMode) {
+		return clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_INELIGIBLE
 	}
-	return &clustermetadatapb.LeadershipStatus{
-		LeaderTerm: resignedTerm,
-		Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION,
-	}
+	return clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE
 }
 
 // RecordTermPrimary folds a newly observed ReplicationPrimary into the
@@ -413,70 +418,83 @@ func (cm *ConsensusManager) MarkSelfRewindReady(selfID *clustermetadatapb.ID, ex
 	return true
 }
 
-// ResignedLeaderAtTerm returns the term at which this node requested demotion as
-// primary, or 0 if it has not resigned.
-func (cm *ConsensusManager) ResignedLeaderAtTerm() int64 {
-	return cm.resignedLeaderAtTerm.Load()
+// FitToContinueLeadership reports whether this node is fit to continue as
+// primary. Vacuously true if the highest known rule doesn't name it leader.
+// Computed fresh from (role, pgMode, promotionInFlight), never latched, so a
+// superseding rule or postgres leaving recovery flips the answer immediately.
+func (cm *ConsensusManager) FitToContinueLeadership(pgMode pgmode.Mode) bool {
+	if consensus.SelfConsensusRole(cm.CachedConsensusStatus()) != consensus.ConsensusRoleLeader {
+		return true
+	}
+	return cm.isHealthyLeader(pgMode)
 }
 
-// NeedsResignation reports whether this node has not yet signaled resignation
-// for currentTerm (or a higher one). resignedLeaderAtTerm only records the
-// term of the most recent resignation, not "resigned at every term up to
-// now" — comparing it to 0 (or checking it's merely nonzero) conflates "never
-// resigned" with "resigned once, long ago, at a since-superseded term," which
-// would let a stale resignation mask the need to resign again from a newer
-// leadership claim. Callers must use this instead of comparing
-// ResignedLeaderAtTerm directly against 0.
-func (cm *ConsensusManager) NeedsResignation(currentTerm int64) bool {
-	return currentTerm > 0 && cm.ResignedLeaderAtTerm() < currentTerm
+// isHealthyLeader is the sub-question FitToContinueLeadership and
+// LeadershipStatus share once already-named-leader is established; not
+// meaningful on its own.
+func (cm *ConsensusManager) isHealthyLeader(pgMode pgmode.Mode) bool {
+	return cm.promotionInFlight.Load() || pgMode.OutOfRecovery()
 }
 
-// SetResignedLeaderAtTerm records that this node is requesting demotion as
-// primary at the given rule position. When the value changes it pushes an
-// immediate health broadcast so the coordinator can trigger an election
-// without waiting for the next heartbeat. Requires the action lock (ctx must
-// be an action-lock context), which serializes writers.
-//
-// TODO: LeadershipStatus.leader_term on the wire is currently a bare int64;
-// once it carries a full rule position, thread position's decision/proposal
-// through instead of collapsing to a single term here. For now this uses the
-// possibly-undecided rule so a resignation mid-promotion still correlates.
-func (cm *ConsensusManager) SetResignedLeaderAtTerm(ctx context.Context, position *clustermetadatapb.RulePosition) error {
+// BeginPromotionAttempt marks a Promote attempt as started, so
+// FitToContinueLeadership doesn't call this node unfit during the brief,
+// expected gap between the optimistic RecordTermPrimary claim and postgres
+// actually finishing pg_promote(). Requires the action lock, which the whole
+// attempt runs under.
+func (cm *ConsensusManager) BeginPromotionAttempt(ctx context.Context) error {
 	if err := actionlock.AssertActionLockHeld(ctx); err != nil {
 		return err
 	}
-	term := consensus.PossiblyUndecidedRule(position).GetRuleNumber().GetCoordinatorTerm()
-	if cm.resignedLeaderAtTerm.Swap(term) != term {
-		cm.broadcast()
-	}
+	cm.promotionInFlight.Store(true)
 	return nil
 }
 
-// ClearResignedLeaderAtTerm clears the leadership-demotion request (sets it to
-// 0). Called when this node is appointed primary at a new term; that promotion
-// flow broadcasts, so this does not. Requires the action lock.
-func (cm *ConsensusManager) ClearResignedLeaderAtTerm(ctx context.Context) error {
+// EndPromotionAttempt clears the in-flight marker once a Promote attempt's
+// outcome is settled (success or failure) — FitToContinueLeadership then goes
+// back to deriving purely from (role, observedPgMode), which by this point
+// correctly reflects the outcome either way. Requires the action lock.
+func (cm *ConsensusManager) EndPromotionAttempt(ctx context.Context) error {
 	if err := actionlock.AssertActionLockHeld(ctx); err != nil {
 		return err
 	}
-	cm.resignedLeaderAtTerm.Store(0)
+	cm.promotionInFlight.Store(false)
 	return nil
 }
 
 // CohortEligibility returns this node's self-reported cohort eligibility.
-func (cm *ConsensusManager) CohortEligibility() clustermetadatapb.CohortEligibilitySignal {
-	return clustermetadatapb.CohortEligibilitySignal(cm.cohortEligibility.Load())
+func (cm *ConsensusManager) CohortEligibility() clustermetadatapb.EligibilitySignal {
+	return clustermetadatapb.EligibilitySignal(cm.cohortEligibility.Load())
 }
 
 // SetCohortEligibility records this node's cohort eligibility. When the value
 // changes it pushes an immediate health broadcast so the coordinator sees the
 // new value without waiting for the next heartbeat. Requires the action lock
 // (ctx must be an action-lock context), which serializes writers.
-func (cm *ConsensusManager) SetCohortEligibility(ctx context.Context, signal clustermetadatapb.CohortEligibilitySignal) error {
+func (cm *ConsensusManager) SetCohortEligibility(ctx context.Context, signal clustermetadatapb.EligibilitySignal) error {
 	if err := actionlock.AssertActionLockHeld(ctx); err != nil {
 		return err
 	}
 	if cm.cohortEligibility.Swap(int32(signal)) != int32(signal) {
+		cm.broadcast()
+	}
+	return nil
+}
+
+// BecomeLeaderEligibility returns this node's self-reported willingness to be
+// elected leader in a future term.
+func (cm *ConsensusManager) BecomeLeaderEligibility() clustermetadatapb.EligibilitySignal {
+	return clustermetadatapb.EligibilitySignal(cm.becomeLeaderEligibility.Load())
+}
+
+// SetBecomeLeaderEligibility records this node's future-leadership preference.
+// When the value changes it pushes an immediate health broadcast so the
+// coordinator sees the new value without waiting for the next heartbeat.
+// Requires the action lock.
+func (cm *ConsensusManager) SetBecomeLeaderEligibility(ctx context.Context, signal clustermetadatapb.EligibilitySignal) error {
+	if err := actionlock.AssertActionLockHeld(ctx); err != nil {
+		return err
+	}
+	if cm.becomeLeaderEligibility.Swap(int32(signal)) != int32(signal) {
 		cm.broadcast()
 	}
 	return nil

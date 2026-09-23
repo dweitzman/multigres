@@ -453,10 +453,11 @@ func TestMarkPoolerActive_Idempotent(t *testing.T) {
 func TestGracefulShutdown_AdvertisesCohortIneligibleBeforeStop(t *testing.T) {
 	pm := newGracefulShutdownTestManager(t, nil)
 
-	var atStopSignal clustermetadatapb.CohortEligibilitySignal
+	var atStopSignal, atStopLeaderSignal clustermetadatapb.EligibilitySignal
 	pgctld := &recordingPgctldClient{
 		stopFn: func(string) error {
 			atStopSignal = pm.consensusMgr.CohortEligibility()
+			atStopLeaderSignal = pm.consensusMgr.BecomeLeaderEligibility()
 			return nil
 		},
 	}
@@ -467,15 +468,23 @@ func TestGracefulShutdown_AdvertisesCohortIneligibleBeforeStop(t *testing.T) {
 	require.Equal(t, []string{"fast"}, pgctld.modesCalled(),
 		"pgctld.Stop should have been called once (fast succeeded)")
 	require.Equal(t,
-		clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE,
+		clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_INELIGIBLE,
 		atStopSignal,
 		"cohort eligibility must be INELIGIBLE before pgctld.Stop runs; if it was "+
 			"the default ELIGIBLE, the announce was sequenced AFTER stop and the "+
 			"broadcast races stream EOF")
+	require.Equal(t,
+		clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_INELIGIBLE,
+		atStopLeaderSignal,
+		"future-leadership eligibility must also be INELIGIBLE before pgctld.Stop runs")
 
 	finalSignal := pm.consensusMgr.CohortEligibility()
 	require.Equal(t,
-		clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE,
+		clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_INELIGIBLE,
 		finalSignal,
 		"cohort eligibility must remain INELIGIBLE after GracefulShutdown returns")
+	require.Equal(t,
+		clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_INELIGIBLE,
+		pm.consensusMgr.BecomeLeaderEligibility(),
+		"future-leadership eligibility must remain INELIGIBLE after GracefulShutdown returns")
 }

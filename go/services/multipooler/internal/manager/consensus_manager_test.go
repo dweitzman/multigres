@@ -99,13 +99,13 @@ func NewMultipoolerManagerForTesting(t *testing.T, logger *slog.Logger, mp *clus
 // into a MultipoolerManager. Defaults are filled in by newTestManager, so a test
 // only sets what it cares about via the with* options.
 type testManagerConfig struct {
-	serviceID            *clustermetadatapb.ID
-	record               *poolerRecord
-	promises             *consensus.ConsensusPromises
-	rules                consensus.RuleStorer
-	replicationPrimary   *clustermetadatapb.ReplicationPrimary
-	cohortEligibility    clustermetadatapb.CohortEligibilitySignal
-	resignedLeaderAtTerm int64
+	serviceID          *clustermetadatapb.ID
+	record             *poolerRecord
+	promises           *consensus.ConsensusPromises
+	rules              consensus.RuleStorer
+	replicationPrimary *clustermetadatapb.ReplicationPrimary
+	cohortEligibility  clustermetadatapb.EligibilitySignal
+	promotionInFlight  bool
 }
 
 type testManagerOption func(*testManagerConfig)
@@ -135,8 +135,11 @@ func withReplicationPrimary(rp *clustermetadatapb.ReplicationPrimary) testManage
 	return func(c *testManagerConfig) { c.replicationPrimary = rp }
 }
 
-func withResignedLeaderAtTerm(term int64) testManagerOption {
-	return func(c *testManagerConfig) { c.resignedLeaderAtTerm = term }
+// withPromotionInFlight marks a Promote attempt as in progress (see
+// ConsensusManager.BeginPromotionAttempt), so FitToContinueLeadership treats
+// the manager as fit regardless of role/pgMode.
+func withPromotionInFlight(inFlight bool) testManagerOption {
+	return func(c *testManagerConfig) { c.promotionInFlight = inFlight }
 }
 
 // resolveTestManagerConfig applies the options and fills in defaults: a fake
@@ -145,7 +148,7 @@ func withResignedLeaderAtTerm(term int64) testManagerOption {
 func resolveTestManagerConfig(t *testing.T, opts ...testManagerOption) *testManagerConfig {
 	t.Helper()
 	cfg := &testManagerConfig{
-		cohortEligibility: clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE,
+		cohortEligibility: clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE,
 	}
 	for _, o := range opts {
 		o(cfg)
@@ -172,8 +175,8 @@ func (cfg *testManagerConfig) consensusManager(t *testing.T) *consensus.Consensu
 // manager's action lock. No-op when all are at their defaults.
 func (cfg *testManagerConfig) seedLockedState(t *testing.T, pm *MultipoolerManager) {
 	t.Helper()
-	eligibleDefault := clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE
-	if cfg.replicationPrimary == nil && cfg.resignedLeaderAtTerm == 0 && cfg.cohortEligibility == eligibleDefault {
+	eligibleDefault := clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE
+	if cfg.replicationPrimary == nil && cfg.cohortEligibility == eligibleDefault && !cfg.promotionInFlight {
 		return
 	}
 	lockCtx, err := pm.actionLock.Acquire(t.Context(), "test-seed")
@@ -182,15 +185,11 @@ func (cfg *testManagerConfig) seedLockedState(t *testing.T, pm *MultipoolerManag
 	if cfg.replicationPrimary != nil {
 		require.NoError(t, pm.consensusMgr.RecordTermPrimary(lockCtx, cfg.replicationPrimary))
 	}
-	if cfg.resignedLeaderAtTerm != 0 {
-		require.NoError(t, pm.consensusMgr.SetResignedLeaderAtTerm(lockCtx, &clustermetadatapb.RulePosition{
-			Decision: &clustermetadatapb.ShardRule{
-				RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: cfg.resignedLeaderAtTerm},
-			},
-		}))
-	}
 	if cfg.cohortEligibility != eligibleDefault {
 		require.NoError(t, pm.consensusMgr.SetCohortEligibility(lockCtx, cfg.cohortEligibility))
+	}
+	if cfg.promotionInFlight {
+		require.NoError(t, pm.consensusMgr.BeginPromotionAttempt(lockCtx))
 	}
 }
 

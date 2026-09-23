@@ -284,82 +284,35 @@ proto3.util.setEnumType(RoutingRole, "clustermetadata.RoutingRole", [
 ]);
 
 /**
- * LeadershipSignal describes a leader's self-reported status for its current term.
- * Only published by nodes that are or were the consensus leader (leader_term != 0).
- * 0 (UNKNOWN) means the field was not intentionally set.
+ * EligibilitySignal describes a pooler's self-reported willingness/fitness for
+ * a role — reused for cohort membership, current-leader continuation, and
+ * future-leader eligibility. 0 (UNKNOWN) is treated as ELIGIBLE, for backwards
+ * compatibility with poolers that don't publish it. Enforcement (hard
+ * exclusion vs advisory) is per-field, not per-value — see AvailabilityStatus.
  *
- * @generated from enum clustermetadata.LeadershipSignal
+ * @generated from enum clustermetadata.EligibilitySignal
  */
-export enum LeadershipSignal {
+export enum EligibilitySignal {
   /**
-   * @generated from enum value: LEADERSHIP_SIGNAL_UNKNOWN = 0;
+   * @generated from enum value: ELIGIBILITY_SIGNAL_UNKNOWN = 0;
    */
   UNKNOWN = 0,
 
   /**
-   * Node is actively and healthily serving as leader for leader_term.
-   * Published each poll cycle so the coordinator can distinguish a confirmed
-   * healthy leader from one that restarted and hasn't re-published yet.
-   *
-   * @generated from enum value: LEADERSHIP_SIGNAL_ACTIVE = 1;
-   */
-  ACTIVE = 1,
-
-  /**
-   * Node is requesting demotion from leadership for leader_term. Coordinator
-   * should trigger an immediate failover rather than waiting for a heartbeat
-   * timeout. The node may continue as a follower after demotion.
-   *
-   * Staleness check: coordinator verifies leadership_status.leader_term matches
-   * the node's known leader_term before acting, to ignore signals left over from
-   * a previous failover cycle.
-   *
-   * @generated from enum value: LEADERSHIP_SIGNAL_REQUESTING_DEMOTION = 2;
-   */
-  REQUESTING_DEMOTION = 2,
-}
-// Retrieve enum metadata with: proto3.getEnumType(LeadershipSignal)
-proto3.util.setEnumType(LeadershipSignal, "clustermetadata.LeadershipSignal", [
-  { no: 0, name: "LEADERSHIP_SIGNAL_UNKNOWN" },
-  { no: 1, name: "LEADERSHIP_SIGNAL_ACTIVE" },
-  { no: 2, name: "LEADERSHIP_SIGNAL_REQUESTING_DEMOTION" },
-]);
-
-/**
- * CohortEligibilitySignal describes a pooler's self-reported willingness to
- * be a member of the consensus cohort. 0 (UNKNOWN) means the field was not
- * intentionally set; coordinators should treat that the same as ELIGIBLE for
- * backwards compatibility with older poolers that don't publish the signal.
- *
- * @generated from enum clustermetadata.CohortEligibilitySignal
- */
-export enum CohortEligibilitySignal {
-  /**
-   * @generated from enum value: COHORT_ELIGIBILITY_SIGNAL_UNKNOWN = 0;
-   */
-  UNKNOWN = 0,
-
-  /**
-   * Pooler is willing to serve as a cohort member.
-   *
-   * @generated from enum value: COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE = 1;
+   * @generated from enum value: ELIGIBILITY_SIGNAL_ELIGIBLE = 1;
    */
   ELIGIBLE = 1,
 
   /**
-   * Pooler is not willing to serve as a cohort member. If currently a member,
-   * the coordinator should remove and (when possible) replace it. If not
-   * currently a member, the coordinator should not add it to the cohort.
-   *
-   * @generated from enum value: COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE = 2;
+   * @generated from enum value: ELIGIBILITY_SIGNAL_INELIGIBLE = 2;
    */
   INELIGIBLE = 2,
 }
-// Retrieve enum metadata with: proto3.getEnumType(CohortEligibilitySignal)
-proto3.util.setEnumType(CohortEligibilitySignal, "clustermetadata.CohortEligibilitySignal", [
-  { no: 0, name: "COHORT_ELIGIBILITY_SIGNAL_UNKNOWN" },
-  { no: 1, name: "COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE" },
-  { no: 2, name: "COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE" },
+// Retrieve enum metadata with: proto3.getEnumType(EligibilitySignal)
+proto3.util.setEnumType(EligibilitySignal, "clustermetadata.EligibilitySignal", [
+  { no: 0, name: "ELIGIBILITY_SIGNAL_UNKNOWN" },
+  { no: 1, name: "ELIGIBILITY_SIGNAL_ELIGIBLE" },
+  { no: 2, name: "ELIGIBILITY_SIGNAL_INELIGIBLE" },
 ]);
 
 /**
@@ -2410,64 +2363,13 @@ export class ConsensusStatus extends Message<ConsensusStatus> {
 }
 
 /**
- * LeadershipStatus is published only by nodes that are or have been the consensus leader.
- * It lets the coordinator distinguish an actively healthy leader, a leader
- * requesting demotion, and a node that has never held leadership.
- *
- * @generated from message clustermetadata.LeadershipStatus
- */
-export class LeadershipStatus extends Message<LeadershipStatus> {
-  /**
-   * The leader_term at which this node was most recently appointed.
-   * Non-zero only on nodes that have been appointed as leader.
-   *
-   * @generated from field: int64 leader_term = 1;
-   */
-  leaderTerm = protoInt64.zero;
-
-  /**
-   * @generated from field: clustermetadata.LeadershipSignal signal = 2;
-   */
-  signal = LeadershipSignal.UNKNOWN;
-
-  constructor(data?: PartialMessage<LeadershipStatus>) {
-    super();
-    proto3.util.initPartial(data, this);
-  }
-
-  static readonly runtime: typeof proto3 = proto3;
-  static readonly typeName = "clustermetadata.LeadershipStatus";
-  static readonly fields: FieldList = proto3.util.newFieldList(() => [
-    { no: 1, name: "leader_term", kind: "scalar", T: 3 /* ScalarType.INT64 */ },
-    { no: 2, name: "signal", kind: "enum", T: proto3.getEnumType(LeadershipSignal) },
-  ]);
-
-  static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): LeadershipStatus {
-    return new LeadershipStatus().fromBinary(bytes, options);
-  }
-
-  static fromJson(jsonValue: JsonValue, options?: Partial<JsonReadOptions>): LeadershipStatus {
-    return new LeadershipStatus().fromJson(jsonValue, options);
-  }
-
-  static fromJsonString(jsonString: string, options?: Partial<JsonReadOptions>): LeadershipStatus {
-    return new LeadershipStatus().fromJsonString(jsonString, options);
-  }
-
-  static equals(a: LeadershipStatus | PlainMessage<LeadershipStatus> | undefined, b: LeadershipStatus | PlainMessage<LeadershipStatus> | undefined): boolean {
-    return proto3.util.equals(LeadershipStatus, a, b);
-  }
-}
-
-/**
  * AvailabilityStatus carries best-effort operational fitness signals for a pooler.
  * Unlike ConsensusStatus (which is authoritative and backed by postgres WAL and
  * on-disk state), AvailabilityStatus is in-memory and may be absent after a
  * process restart. Coordinators must treat absence as "unknown," not "unfit."
  *
  * Signals are re-derivable from continuous health polling, so process restarts
- * do not create permanent unavailability. See LeadershipSignal for re-derivation
- * rules.
+ * do not create permanent unavailability.
  *
  * Sources: self-reported by the pooler (fast path) or synthesized by the
  * coordinator from observed health state.
@@ -2479,23 +2381,28 @@ export class LeadershipStatus extends Message<LeadershipStatus> {
  */
 export class AvailabilityStatus extends Message<AvailabilityStatus> {
   /**
-   * leadership_status is only set by poolers that are or have been the consensus leader.
+   * Only meaningful for the node currently named leader by the highest known
+   * rule (elsewhere in the same health snapshot); UNKNOWN/ELIGIBLE otherwise.
+   * INELIGIBLE means not fit to continue as leader (e.g. postgres isn't out
+   * of recovery) — coordinator should fail over immediately rather than wait
+   * for a heartbeat timeout. Republished fresh every snapshot (not latched),
+   * so no term or staleness check is needed: this signal and the leader term
+   * it's about are always read from the same current state.
    *
-   * @generated from field: clustermetadata.LeadershipStatus leadership_status = 1;
+   * @generated from field: clustermetadata.EligibilitySignal continue_leadership_signal = 1;
    */
-  leadershipStatus?: LeadershipStatus;
+  continueLeadershipSignal = EligibilitySignal.UNKNOWN;
 
   /**
-   * cohort_eligibility_status is published by every pooler regardless of
-   * current cohort membership. It expresses whether the pooler is willing to
-   * serve as a cohort member; meaning falls out of the combination with the
-   * pooler's current membership in ShardRule.cohort_members. A current cohort
-   * member signaling INELIGIBLE is a candidate for removal/replacement; a
-   * non-member signaling INELIGIBLE should be skipped when growing the cohort.
+   * Published by every pooler: willingness to be a cohort member (combine
+   * with ShardRule.cohort_members for meaning). A current member signaling
+   * INELIGIBLE is a removal/replacement candidate; a non-member signaling
+   * INELIGIBLE should be skipped when growing the cohort. Hard exclusion,
+   * unlike the two leadership signals. No per-term gating.
    *
-   * @generated from field: clustermetadata.CohortEligibilityStatus cohort_eligibility_status = 2;
+   * @generated from field: clustermetadata.EligibilitySignal cohort_eligibility_signal = 2;
    */
-  cohortEligibilityStatus?: CohortEligibilityStatus;
+  cohortEligibilitySignal = EligibilitySignal.UNKNOWN;
 
   /**
    * suspected_divergence is true when the pooler suspects its local WAL may have
@@ -2509,6 +2416,18 @@ export class AvailabilityStatus extends Message<AvailabilityStatus> {
    */
   suspectedDivergence = false;
 
+  /**
+   * Published by every pooler: willingness to be elected leader in a future
+   * term. Distinct from cohort_eligibility_signal (replicate at all — hard
+   * exclusion) and continue_leadership_signal (fit to continue as *current*
+   * leader). Advisory only, like continue_leadership_signal: a coordinator
+   * with no other viable candidate should still elect an ineligible pooler
+   * rather than leave the shard leaderless. No per-term gating.
+   *
+   * @generated from field: clustermetadata.EligibilitySignal become_leader_eligibility_signal = 4;
+   */
+  becomeLeaderEligibilitySignal = EligibilitySignal.UNKNOWN;
+
   constructor(data?: PartialMessage<AvailabilityStatus>) {
     super();
     proto3.util.initPartial(data, this);
@@ -2517,9 +2436,10 @@ export class AvailabilityStatus extends Message<AvailabilityStatus> {
   static readonly runtime: typeof proto3 = proto3;
   static readonly typeName = "clustermetadata.AvailabilityStatus";
   static readonly fields: FieldList = proto3.util.newFieldList(() => [
-    { no: 1, name: "leadership_status", kind: "message", T: LeadershipStatus },
-    { no: 2, name: "cohort_eligibility_status", kind: "message", T: CohortEligibilityStatus },
+    { no: 1, name: "continue_leadership_signal", kind: "enum", T: proto3.getEnumType(EligibilitySignal) },
+    { no: 2, name: "cohort_eligibility_signal", kind: "enum", T: proto3.getEnumType(EligibilitySignal) },
     { no: 3, name: "suspected_divergence", kind: "scalar", T: 8 /* ScalarType.BOOL */ },
+    { no: 4, name: "become_leader_eligibility_signal", kind: "enum", T: proto3.getEnumType(EligibilitySignal) },
   ]);
 
   static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): AvailabilityStatus {
@@ -2536,48 +2456,6 @@ export class AvailabilityStatus extends Message<AvailabilityStatus> {
 
   static equals(a: AvailabilityStatus | PlainMessage<AvailabilityStatus> | undefined, b: AvailabilityStatus | PlainMessage<AvailabilityStatus> | undefined): boolean {
     return proto3.util.equals(AvailabilityStatus, a, b);
-  }
-}
-
-/**
- * CohortEligibilityStatus carries the pooler's cohort-eligibility signal.
- * Unlike LeadershipStatus there is no per-term gating: eligibility is a
- * current preference, not tied to a specific epoch. Staleness comes from the
- * freshness of the surrounding health snapshot.
- *
- * @generated from message clustermetadata.CohortEligibilityStatus
- */
-export class CohortEligibilityStatus extends Message<CohortEligibilityStatus> {
-  /**
-   * @generated from field: clustermetadata.CohortEligibilitySignal signal = 1;
-   */
-  signal = CohortEligibilitySignal.UNKNOWN;
-
-  constructor(data?: PartialMessage<CohortEligibilityStatus>) {
-    super();
-    proto3.util.initPartial(data, this);
-  }
-
-  static readonly runtime: typeof proto3 = proto3;
-  static readonly typeName = "clustermetadata.CohortEligibilityStatus";
-  static readonly fields: FieldList = proto3.util.newFieldList(() => [
-    { no: 1, name: "signal", kind: "enum", T: proto3.getEnumType(CohortEligibilitySignal) },
-  ]);
-
-  static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): CohortEligibilityStatus {
-    return new CohortEligibilityStatus().fromBinary(bytes, options);
-  }
-
-  static fromJson(jsonValue: JsonValue, options?: Partial<JsonReadOptions>): CohortEligibilityStatus {
-    return new CohortEligibilityStatus().fromJson(jsonValue, options);
-  }
-
-  static fromJsonString(jsonString: string, options?: Partial<JsonReadOptions>): CohortEligibilityStatus {
-    return new CohortEligibilityStatus().fromJsonString(jsonString, options);
-  }
-
-  static equals(a: CohortEligibilityStatus | PlainMessage<CohortEligibilityStatus> | undefined, b: CohortEligibilityStatus | PlainMessage<CohortEligibilityStatus> | undefined): boolean {
-    return proto3.util.equals(CohortEligibilityStatus, a, b);
   }
 }
 

@@ -520,10 +520,7 @@ func TestPopulatePrimaryInfo_DemotedViaRecruit(t *testing.T) {
 			// Recruit marked the former leader resigned at its term; this is what
 			// makes it not LeaderReachable now that postgres restarted as a standby.
 			AvailabilityStatus: &clustermetadatapb.AvailabilityStatus{
-				LeadershipStatus: &clustermetadatapb.LeadershipStatus{
-					Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION,
-					LeaderTerm: 4,
-				},
+				ContinueLeadershipSignal: clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_INELIGIBLE,
 			},
 			Status: &multipoolermanagerdatapb.Status{
 				PoolerType:      clustermetadatapb.PoolerType_REPLICA, // running as standby after REVOKE
@@ -565,10 +562,7 @@ func TestPopulatePrimaryInfo_DemotedViaRecruit(t *testing.T) {
 			// Recruit marked the former leader resigned at its term; this is what
 			// makes it not LeaderReachable now that postgres restarted as a standby.
 			AvailabilityStatus: &clustermetadatapb.AvailabilityStatus{
-				LeadershipStatus: &clustermetadatapb.LeadershipStatus{
-					Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION,
-					LeaderTerm: 4,
-				},
+				ContinueLeadershipSignal: clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_INELIGIBLE,
 			},
 			Status: &multipoolermanagerdatapb.Status{
 				PoolerType:      clustermetadatapb.PoolerType_REPLICA, // running as standby after REVOKE

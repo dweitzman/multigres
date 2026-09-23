@@ -393,12 +393,9 @@ func TestAppointLeader_TiebreaksByResignation(t *testing.T) {
 	resigned := createMockNode(fakeClient, "resigned", 5, flushLSN, true, outgoingRule)
 	standby := createMockNode(fakeClient, "standby", 5, flushLSN, true, outgoingRule)
 
-	// Mark the resigned node as REQUESTING_DEMOTION in its AvailabilityStatus.
+	// Mark the resigned node as INELIGIBLE to continue in its AvailabilityStatus.
 	resigned.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{
-		LeadershipStatus: &clustermetadatapb.LeadershipStatus{
-			LeaderTerm: 5,
-			Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION,
-		},
+		ContinueLeadershipSignal: clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_INELIGIBLE,
 	}
 
 	for i, mp := range []*multiorchdatapb.PoolerHealthState{resigned, standby} {
@@ -478,9 +475,7 @@ func TestAppointLeader_IneligibleMemberExcludedFromOutgoingRule(t *testing.T) {
 
 	departing := createMockNode(fakeClient, "departing", 7, "0/1000000", true, higherRule)
 	departing.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{
-		CohortEligibilityStatus: &clustermetadatapb.CohortEligibilityStatus{
-			Signal: clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE,
-		},
+		CohortEligibilitySignal: clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_INELIGIBLE,
 	}
 	departing.ConsensusStatus.Id = cohortIDs[0]
 	departing.ConsensusStatus.CurrentPosition = &clustermetadatapb.PoolerPosition{
@@ -612,18 +607,18 @@ func TestAppointLeader_TiebreaksBySlotReadiness(t *testing.T) {
 // precedence between them and the fully-tied case.
 func TestPoolerHealthStateLess(t *testing.T) {
 	const (
-		active = clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_ACTIVE
-		resign = clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION
+		active = clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE
+		resign = clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_INELIGIBLE
 	)
 
 	// node builds a ConsensusStatus and its matching PoolerHealthState carrying
 	// the given leadership signal and failover-slot-ready count.
-	node := func(name string, signal clustermetadatapb.LeadershipSignal, slotsReady int32) (*clustermetadatapb.ConsensusStatus, *multiorchdatapb.PoolerHealthState) {
+	node := func(name string, signal clustermetadatapb.EligibilitySignal, slotsReady int32) (*clustermetadatapb.ConsensusStatus, *multiorchdatapb.PoolerHealthState) {
 		id := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: name}
 		cs := &clustermetadatapb.ConsensusStatus{Id: id}
 		h := &multiorchdatapb.PoolerHealthState{
 			AvailabilityStatus: &clustermetadatapb.AvailabilityStatus{
-				LeadershipStatus: &clustermetadatapb.LeadershipStatus{Signal: signal},
+				ContinueLeadershipSignal: signal,
 			},
 			Status: &multipoolermanagerdatapb.Status{FailoverSlotsReady: slotsReady},
 		}

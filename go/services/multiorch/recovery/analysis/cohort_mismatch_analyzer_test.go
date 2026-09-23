@@ -53,12 +53,10 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 
 	// healthyReplicaPA returns a rider for a healthy, replicating REPLICA,
 	// optionally with a cohort eligibility signal.
-	healthyReplicaPA := func(id *clustermetadatapb.ID, signal clustermetadatapb.CohortEligibilitySignal) *store.Pooler {
+	healthyReplicaPA := func(id *clustermetadatapb.ID, signal clustermetadatapb.EligibilitySignal) *store.Pooler {
 		var av *clustermetadatapb.AvailabilityStatus
-		if signal != clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_UNKNOWN {
-			av = &clustermetadatapb.AvailabilityStatus{
-				CohortEligibilityStatus: &clustermetadatapb.CohortEligibilityStatus{Signal: signal},
-			}
+		if signal != clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_UNKNOWN {
+			av = &clustermetadatapb.AvailabilityStatus{CohortEligibilitySignal: signal}
 		}
 		return newRider(&multiorchdatapb.PoolerHealthState{
 			Multipooler:        &clustermetadatapb.Multipooler{Id: id, ShardKey: shardKey},
@@ -155,7 +153,7 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 
 	t.Run("detects healthy replica missing from cohort", func(t *testing.T) {
 		// Cohort = {} — replica A is replicating, eligible by default, and absent.
-		sa := healthyShard(nil, healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_UNKNOWN))
+		sa := healthyShard(nil, healthyReplicaPA(replicaA, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_UNKNOWN))
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
 		require.Len(t, problems, 1)
@@ -189,7 +187,7 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 			Leader: leader,
 			Analyses: []*store.Pooler{
 				leader,
-				healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_UNKNOWN),
+				healthyReplicaPA(replicaA, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_UNKNOWN),
 			},
 		}
 		problems, err := analyzer.Analyze(sa)
@@ -207,10 +205,10 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 			atLeastN(2),
 			[]*clustermetadatapb.ID{primaryID, replicaA, replicaB, extraReplica1, extraReplica2},
 			nil,
-			healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE),
-			healthyReplicaPA(replicaB, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
-			healthyReplicaPA(extraReplica1, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
-			healthyReplicaPA(extraReplica2, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
+			healthyReplicaPA(replicaA, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_INELIGIBLE),
+			healthyReplicaPA(replicaB, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE),
+			healthyReplicaPA(extraReplica1, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE),
+			healthyReplicaPA(extraReplica2, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE),
 		)
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
@@ -222,7 +220,7 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 	t.Run("ignores eligible cohort member already in cohort", func(t *testing.T) {
 		sa := healthyShard(
 			[]*clustermetadatapb.ID{replicaA},
-			healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
+			healthyReplicaPA(replicaA, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE),
 		)
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
@@ -230,14 +228,14 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 	})
 
 	t.Run("ignores ineligible non-cohort pooler (don't add)", func(t *testing.T) {
-		sa := healthyShard(nil, healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE))
+		sa := healthyShard(nil, healthyReplicaPA(replicaA, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_INELIGIBLE))
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
 		assert.Empty(t, problems)
 	})
 
 	t.Run("ignores non-replicating non-cohort pooler", func(t *testing.T) {
-		pa := healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE)
+		pa := healthyReplicaPA(replicaA, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE)
 		pa.Mutate(func(h *multiorchdatapb.PoolerHealthState) { h.Status.ReplicationStatus = nil }) // not yet replicating
 		sa := healthyShard(nil, pa)
 		problems, err := analyzer.Analyze(sa)
@@ -246,7 +244,7 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 	})
 
 	t.Run("ignores replica with stopped replication", func(t *testing.T) {
-		pa := healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE)
+		pa := healthyReplicaPA(replicaA, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE)
 		pa.Mutate(func(h *multiorchdatapb.PoolerHealthState) { h.Status.ReplicationStatus.IsWalReplayPaused = true })
 		sa := healthyShard(nil, pa)
 		problems, err := analyzer.Analyze(sa)
@@ -259,7 +257,7 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 		// not streaming — the node is still catching up from the archive. It must
 		// NOT be admitted to the cohort yet, because admission clears its
 		// restore_command and would strand it mid-catch-up.
-		pa := healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE)
+		pa := healthyReplicaPA(replicaA, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE)
 		pa.Mutate(func(h *multiorchdatapb.PoolerHealthState) {
 			h.Status.ReplicationStatus.WalReceiverStatus = ""
 			h.Status.ReplicationStatus.LastReceiveLsn = ""
@@ -274,7 +272,7 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 		// postgres briefly reports "streaming" after a receiver reconnect before
 		// any WAL arrives (LastReceiveLsn empty). That is not genuine streaming, so
 		// the node must not be admitted on the strength of the flicker.
-		pa := healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE)
+		pa := healthyReplicaPA(replicaA, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE)
 		pa.Mutate(func(h *multiorchdatapb.PoolerHealthState) {
 			h.Status.ReplicationStatus.WalReceiverStatus = "streaming"
 			h.Status.ReplicationStatus.LastReceiveLsn = ""
@@ -286,7 +284,7 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 	})
 
 	t.Run("ignores uninitialized replica", func(t *testing.T) {
-		pa := healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE)
+		pa := healthyReplicaPA(replicaA, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE)
 		pa.Mutate(func(h *multiorchdatapb.PoolerHealthState) { h.Status.IsInitialized = false })
 		sa := healthyShard(nil, pa)
 		problems, err := analyzer.Analyze(sa)
@@ -295,7 +293,7 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 	})
 
 	t.Run("ignores replica stuck below its recruit position floor", func(t *testing.T) {
-		pa := healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE)
+		pa := healthyReplicaPA(replicaA, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE)
 		pa.Mutate(func(h *multiorchdatapb.PoolerHealthState) {
 			h.ConsensusStatus = &clustermetadatapb.ConsensusStatus{
 				RecruitBlockedUntil: &clustermetadatapb.LsnPosition{Lsn: "0/2000000"},
@@ -308,7 +306,7 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 	})
 
 	t.Run("does not fire when leader is unreachable", func(t *testing.T) {
-		sa := healthyShard(nil, healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE))
+		sa := healthyShard(nil, healthyReplicaPA(replicaA, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE))
 		sa.Leader.Mutate(func(h *multiorchdatapb.PoolerHealthState) { h.LastSeen = nil }) // stale observation → not serving
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
@@ -316,7 +314,7 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 	})
 
 	t.Run("does not fire when leader postgres is not ready", func(t *testing.T) {
-		sa := healthyShard(nil, healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE))
+		sa := healthyShard(nil, healthyReplicaPA(replicaA, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE))
 		sa.Leader.Mutate(func(h *multiorchdatapb.PoolerHealthState) { h.Status.PostgresReady = false })
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
@@ -332,10 +330,10 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 			atLeastN(2),
 			[]*clustermetadatapb.ID{primaryID, replicaA, extraReplica1, extraReplica2},
 			nil,
-			healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE),
-			healthyReplicaPA(replicaB, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
-			healthyReplicaPA(extraReplica1, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
-			healthyReplicaPA(extraReplica2, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
+			healthyReplicaPA(replicaA, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_INELIGIBLE),
+			healthyReplicaPA(replicaB, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE),
+			healthyReplicaPA(extraReplica1, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE),
+			healthyReplicaPA(extraReplica2, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE),
 		)
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
@@ -347,7 +345,7 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 
 	t.Run("returns error when factory is nil", func(t *testing.T) {
 		nilFactoryAnalyzer := &CohortMismatchAnalyzer{factory: nil}
-		sa := healthyShard(nil, healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE))
+		sa := healthyShard(nil, healthyReplicaPA(replicaA, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE))
 		problems, err := nilFactoryAnalyzer.Analyze(sa)
 		require.Error(t, err)
 		assert.Nil(t, problems)
@@ -372,7 +370,7 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 	})
 
 	t.Run("ignores replica with a genuinely stale health snapshot", func(t *testing.T) {
-		pa := healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE)
+		pa := healthyReplicaPA(replicaA, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE)
 		pa.Mutate(func(h *multiorchdatapb.PoolerHealthState) {
 			h.LastSeen = timestamppb.New(time.Now().Add(-time.Minute))
 		})
@@ -385,7 +383,7 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 	t.Run("still admits a replica with a momentary connectivity blip but a fresh observation", func(t *testing.T) {
 		// StreamConnected false (e.g. a stream reconnect) must not hide an
 		// otherwise fresh, eligible observation from cohort admission.
-		pa := healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE)
+		pa := healthyReplicaPA(replicaA, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE)
 		pa.Mutate(func(h *multiorchdatapb.PoolerHealthState) { h.StreamConnected = false })
 		sa := healthyShard(nil, pa)
 		problems, err := analyzer.Analyze(sa)
@@ -437,9 +435,9 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 			[]*clustermetadatapb.ID{primaryID, replicaA, replicaB, extraReplica1, extraReplica2},
 			nil, // no tombstones — replicaA is just missing
 			// replicaB, extraReplica1, extraReplica2 present as healthy cohort members
-			healthyReplicaPA(replicaB, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
-			healthyReplicaPA(extraReplica1, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
-			healthyReplicaPA(extraReplica2, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
+			healthyReplicaPA(replicaB, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE),
+			healthyReplicaPA(extraReplica1, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE),
+			healthyReplicaPA(extraReplica2, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE),
 		)
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
@@ -459,7 +457,7 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 			atLeastN(2),
 			[]*clustermetadatapb.ID{primaryID, replicaA, replicaB},
 			nil, // no tombstones
-			healthyReplicaPA(replicaB, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
+			healthyReplicaPA(replicaB, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE),
 		)
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
@@ -480,8 +478,8 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 			[]*clustermetadatapb.ID{replicaA}, // replicaA is a tombstone
 			// replicaB is also missing (no analysis), but isn't a tombstone.
 			// extraReplica1/2 are healthy cohort members.
-			healthyReplicaPA(extraReplica1, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
-			healthyReplicaPA(extraReplica2, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE),
+			healthyReplicaPA(extraReplica1, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE),
+			healthyReplicaPA(extraReplica2, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE),
 		)
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)

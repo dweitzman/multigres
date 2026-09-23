@@ -80,8 +80,8 @@ func (pm *MultipoolerManager) markPoolerQuarantinedLocked(ctx context.Context, r
 	//
 	// If the node is quarantined but still eligible, the coordinator will keep
 	// trying to recruit it and the orchestrator will not elect a new primary.
-	if pm.consensusMgr.CohortEligibility() != clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE {
-		if err := pm.consensusMgr.SetCohortEligibility(ctx, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE); err != nil {
+	if pm.consensusMgr.CohortEligibility() != clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_INELIGIBLE {
+		if err := pm.consensusMgr.SetCohortEligibility(ctx, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_INELIGIBLE); err != nil {
 			pm.logger.ErrorContext(ctx, "failed to mark cohort ineligible on quarantine", "error", err)
 		} else {
 			// Only count this as a change on success, so a failed set does not

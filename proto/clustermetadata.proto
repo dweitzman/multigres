@@ -837,36 +837,15 @@ message ConsensusStatus {
   LsnPosition recruit_blocked_until = 5;
 }
 
-// LeadershipSignal describes a leader's self-reported status for its current term.
-// Only published by nodes that are or were the consensus leader (leader_term != 0).
-// 0 (UNKNOWN) means the field was not intentionally set.
-enum LeadershipSignal {
-  LEADERSHIP_SIGNAL_UNKNOWN = 0;
-
-  // Node is actively and healthily serving as leader for leader_term.
-  // Published each poll cycle so the coordinator can distinguish a confirmed
-  // healthy leader from one that restarted and hasn't re-published yet.
-  LEADERSHIP_SIGNAL_ACTIVE = 1;
-
-  // Node is requesting demotion from leadership for leader_term. Coordinator
-  // should trigger an immediate failover rather than waiting for a heartbeat
-  // timeout. The node may continue as a follower after demotion.
-  //
-  // Staleness check: coordinator verifies leadership_status.leader_term matches
-  // the node's known leader_term before acting, to ignore signals left over from
-  // a previous failover cycle.
-  LEADERSHIP_SIGNAL_REQUESTING_DEMOTION = 2;
-}
-
-// LeadershipStatus is published only by nodes that are or have been the consensus leader.
-// It lets the coordinator distinguish an actively healthy leader, a leader
-// requesting demotion, and a node that has never held leadership.
-message LeadershipStatus {
-  // The leader_term at which this node was most recently appointed.
-  // Non-zero only on nodes that have been appointed as leader.
-  int64 leader_term = 1;
-
-  LeadershipSignal signal = 2;
+// EligibilitySignal describes a pooler's self-reported willingness/fitness for
+// a role — reused for cohort membership, current-leader continuation, and
+// future-leader eligibility. 0 (UNKNOWN) is treated as ELIGIBLE, for backwards
+// compatibility with poolers that don't publish it. Enforcement (hard
+// exclusion vs advisory) is per-field, not per-value — see AvailabilityStatus.
+enum EligibilitySignal {
+  ELIGIBILITY_SIGNAL_UNKNOWN = 0;
+  ELIGIBILITY_SIGNAL_ELIGIBLE = 1;
+  ELIGIBILITY_SIGNAL_INELIGIBLE = 2;
 }
 
 // AvailabilityStatus carries best-effort operational fitness signals for a pooler.
@@ -875,8 +854,7 @@ message LeadershipStatus {
 // process restart. Coordinators must treat absence as "unknown," not "unfit."
 //
 // Signals are re-derivable from continuous health polling, so process restarts
-// do not create permanent unavailability. See LeadershipSignal for re-derivation
-// rules.
+// do not create permanent unavailability.
 //
 // Sources: self-reported by the pooler (fast path) or synthesized by the
 // coordinator from observed health state.
@@ -884,16 +862,21 @@ message LeadershipStatus {
 // PoolerHealthState.AvailabilityStatus so the analyzer reads from one place
 // regardless of source.
 message AvailabilityStatus {
-  // leadership_status is only set by poolers that are or have been the consensus leader.
-  LeadershipStatus leadership_status = 1;
+  // Only meaningful for the node currently named leader by the highest known
+  // rule (elsewhere in the same health snapshot); UNKNOWN/ELIGIBLE otherwise.
+  // INELIGIBLE means not fit to continue as leader (e.g. postgres isn't out
+  // of recovery) — coordinator should fail over immediately rather than wait
+  // for a heartbeat timeout. Republished fresh every snapshot (not latched),
+  // so no term or staleness check is needed: this signal and the leader term
+  // it's about are always read from the same current state.
+  EligibilitySignal continue_leadership_signal = 1;
 
-  // cohort_eligibility_status is published by every pooler regardless of
-  // current cohort membership. It expresses whether the pooler is willing to
-  // serve as a cohort member; meaning falls out of the combination with the
-  // pooler's current membership in ShardRule.cohort_members. A current cohort
-  // member signaling INELIGIBLE is a candidate for removal/replacement; a
-  // non-member signaling INELIGIBLE should be skipped when growing the cohort.
-  CohortEligibilityStatus cohort_eligibility_status = 2;
+  // Published by every pooler: willingness to be a cohort member (combine
+  // with ShardRule.cohort_members for meaning). A current member signaling
+  // INELIGIBLE is a removal/replacement candidate; a non-member signaling
+  // INELIGIBLE should be skipped when growing the cohort. Hard exclusion,
+  // unlike the two leadership signals. No per-term gating.
+  EligibilitySignal cohort_eligibility_signal = 2;
 
   // suspected_divergence is true when the pooler suspects its local WAL may have
   // diverged from the cluster's chosen history and a pg_rewind may be needed to
@@ -902,28 +885,12 @@ message AvailabilityStatus {
   // suspected divergence may be slower to endorse a new rule proposal because it
   // needs to stop, run pg_rewind, and restart.
   bool suspected_divergence = 3;
-}
 
-// CohortEligibilitySignal describes a pooler's self-reported willingness to
-// be a member of the consensus cohort. 0 (UNKNOWN) means the field was not
-// intentionally set; coordinators should treat that the same as ELIGIBLE for
-// backwards compatibility with older poolers that don't publish the signal.
-enum CohortEligibilitySignal {
-  COHORT_ELIGIBILITY_SIGNAL_UNKNOWN = 0;
-
-  // Pooler is willing to serve as a cohort member.
-  COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE = 1;
-
-  // Pooler is not willing to serve as a cohort member. If currently a member,
-  // the coordinator should remove and (when possible) replace it. If not
-  // currently a member, the coordinator should not add it to the cohort.
-  COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE = 2;
-}
-
-// CohortEligibilityStatus carries the pooler's cohort-eligibility signal.
-// Unlike LeadershipStatus there is no per-term gating: eligibility is a
-// current preference, not tied to a specific epoch. Staleness comes from the
-// freshness of the surrounding health snapshot.
-message CohortEligibilityStatus {
-  CohortEligibilitySignal signal = 1;
+  // Published by every pooler: willingness to be elected leader in a future
+  // term. Distinct from cohort_eligibility_signal (replicate at all — hard
+  // exclusion) and continue_leadership_signal (fit to continue as *current*
+  // leader). Advisory only, like continue_leadership_signal: a coordinator
+  // with no other viable candidate should still elect an ineligible pooler
+  // rather than leave the shard leaderless. No per-term gating.
+  EligibilitySignal become_leader_eligibility_signal = 4;
 }

@@ -134,6 +134,16 @@ func (ssm *StateManager) RoutingRole() clustermetadatapb.RoutingRole {
 	return deriveRoutingState(ssm.pgMode, ssm.consensusStatus()).Role.ToProto()
 }
 
+// PostgresMode returns this pooler's last-observed physical postgres recovery
+// mode (see the pgMode field). Other components needing this (e.g.
+// ConsensusManager.FitToContinueLeadership, which cannot observe postgres
+// itself) read it from here rather than tracking their own copy.
+func (ssm *StateManager) PostgresMode() pgmode.Mode {
+	ssm.mu.Lock()
+	defer ssm.mu.Unlock()
+	return ssm.pgMode
+}
+
 // NewStateManager creates a new StateManager. consensusStatus returns the live
 // consensus snapshot (e.g. ConsensusManager.CachedConsensusStatus), combined with
 // the cached recovery state to derive the routing role / write-safety live.

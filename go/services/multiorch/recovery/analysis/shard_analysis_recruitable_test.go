@@ -66,9 +66,7 @@ func TestRecruitable(t *testing.T) {
 	t.Run("self-declared cohort-ineligible", func(t *testing.T) {
 		h := base()
 		h.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{
-			CohortEligibilityStatus: &clustermetadatapb.CohortEligibilityStatus{
-				Signal: clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE,
-			},
+			CohortEligibilitySignal: clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_INELIGIBLE,
 		}
 		p := store.NewPooler(h, nil)
 		assert.False(t, recruitable(p, now, freshness))

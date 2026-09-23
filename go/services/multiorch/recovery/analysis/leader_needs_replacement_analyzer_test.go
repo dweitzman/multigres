@@ -184,9 +184,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	setLeaderResigned := func(sa *ShardAnalysis) {
 		sa.Leader.Mutate(func(h *multiorchdatapb.PoolerHealthState) {
 			h.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{
-				CohortEligibilityStatus: &clustermetadatapb.CohortEligibilityStatus{
-					Signal: clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE,
-				},
+				CohortEligibilitySignal: clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_INELIGIBLE,
 			}
 		})
 	}
@@ -461,9 +459,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		sa := deadLeaderShardAnalysis(func(sa *ShardAnalysis) {
 			sa.Analyses[1].Mutate(func(h *multiorchdatapb.PoolerHealthState) {
 				h.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{
-					CohortEligibilityStatus: &clustermetadatapb.CohortEligibilityStatus{
-						Signal: clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE,
-					},
+					CohortEligibilitySignal: clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_INELIGIBLE,
 				}
 			})
 		})
@@ -504,9 +500,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 			dropFollower(sa, follower1ID)
 			sa.Analyses[0].Mutate(func(h *multiorchdatapb.PoolerHealthState) {
 				h.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{
-					CohortEligibilityStatus: &clustermetadatapb.CohortEligibilityStatus{
-						Signal: clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE,
-					},
+					CohortEligibilitySignal: clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_INELIGIBLE,
 				}
 			})
 		})

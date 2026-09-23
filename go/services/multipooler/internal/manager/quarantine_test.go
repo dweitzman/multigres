@@ -95,7 +95,7 @@ func TestTrackRecoveryOutcome_QuarantinesAfterTimeoutAndAttempts(t *testing.T) {
 	assert.False(t, since.IsZero(), "quarantine timestamp should be set")
 
 	// Side effects: cohort ineligible + restarts disabled so the node stops looping.
-	assert.Equal(t, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE,
+	assert.Equal(t, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_INELIGIBLE,
 		pm.consensusMgr.CohortEligibility())
 	assert.True(t, pm.postgresRestartsDisabled.Load(), "restarts should be disabled after quarantine")
 }
@@ -122,16 +122,16 @@ func TestTrackRecoveryOutcome_RetriesCohortIneligibilityAfterPartialApply(t *tes
 	})
 	quarantined, _, _ := quarantineState(pm)
 	require.True(t, quarantined, "precondition: node should be quarantined")
-	require.Equal(t, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE,
+	require.Equal(t, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_INELIGIBLE,
 		pm.consensusMgr.CohortEligibility())
 
 	// Simulate a first-quarantine tick where the lifecycle latched but the cohort
 	// ineligibility write did not stick: force eligibility back to ELIGIBLE.
 	withLock(t, pm, func(ctx context.Context) {
 		require.NoError(t, pm.consensusMgr.SetCohortEligibility(ctx,
-			clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE))
+			clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE))
 	})
-	require.Equal(t, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE,
+	require.Equal(t, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE,
 		pm.consensusMgr.CohortEligibility(), "precondition: quarantined but still recruitable")
 
 	// A later monitor tick must re-apply the missing side effect.
@@ -141,7 +141,7 @@ func TestTrackRecoveryOutcome_RetriesCohortIneligibilityAfterPartialApply(t *tes
 
 	stillQuarantined, _, _ := quarantineState(pm)
 	assert.True(t, stillQuarantined, "lifecycle verdict must remain latched")
-	assert.Equal(t, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE,
+	assert.Equal(t, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_INELIGIBLE,
 		pm.consensusMgr.CohortEligibility(),
 		"cohort ineligibility should be retried and applied on a later tick")
 }

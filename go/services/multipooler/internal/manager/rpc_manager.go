@@ -792,18 +792,9 @@ func (pm *MultipoolerManager) demoteToStandbyLocked(ctx context.Context, consens
 		return err
 	}
 
-	// Signal voluntary resignation so the coordinator can trigger an immediate
-	// election without waiting for a heartbeat timeout. Use this node's own
-	// primary_term (not the incoming consensusTerm) so the coordinator can
-	// correlate the signal with the term at which this node was elected.
-	// setResignedLeaderAtTerm broadcasts internally on a change so multiorch
-	// sees leadership_status.REQUESTING_DEMOTION before the next periodic
-	// health stream interval fires.
-	if cs := pm.consensusMgr.CachedConsensusStatus(); commonconsensus.SelfConsensusRole(cs) == commonconsensus.ConsensusRoleLeader {
-		if err := pm.consensusMgr.SetResignedLeaderAtTerm(ctx, cs.GetCurrentPosition().GetPosition()); err != nil {
-			return mterrors.Wrap(err, "failed to set resigned primary term")
-		}
-	}
+	// No explicit resignation signal: fixDrift below records pgMode as
+	// InRecovery and fans that out to the health streamer, so
+	// ContinueLeadershipSignal derives INELIGIBLE from it automatically.
 
 	// restore_command should never be set on a cohort member in recovery mode, so make sure
 	// it's cleared just in case. The reload inside resetRestoreCommand is redundant here

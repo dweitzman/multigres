@@ -646,7 +646,7 @@ func (pm *MultipoolerManager) trackRecoveryOutcome(ctx context.Context, action r
 	// they fully apply; once cohort eligibility is INELIGIBLE there is genuinely
 	// nothing left to do.
 	if lifecycle := pm.record.Snapshot().GetLifecycleStatus(); lifecycle.GetStatus() == clustermetadatapb.PoolerLifecycleStatus_LIFECYCLE_QUARANTINED {
-		if pm.consensusMgr.CohortEligibility() != clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE {
+		if pm.consensusMgr.CohortEligibility() != clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_INELIGIBLE {
 			pm.markPoolerQuarantinedLocked(ctx, lifecycle.GetReason())
 		}
 		return
@@ -789,9 +789,12 @@ func (pm *MultipoolerManager) determineRoleAction(role commonconsensus.Consensus
 	// Promote's promoteStandbyToPrimary), and disambiguate resign (we lost our
 	// postgres) from promote (newly elected). Embedding the leader host/port in the
 	// WAL rule would also let replicas reconcile without waiting for SetPrimary.
+	//
+	// The only way this doesn't resign is a Promote attempt in flight for this
+	// term. No "already resigned" state to track — repeating it is a no-op
+	// (stateManager.Mutate dedupes no-op fan-outs).
 	if role == commonconsensus.ConsensusRoleLeader && !state.pgMode.OutOfRecovery() {
-		currentTerm := commonconsensus.PossiblyUndecidedRule(pm.highestKnownPosition()).GetRuleNumber().GetCoordinatorTerm()
-		if pm.consensusMgr.NeedsResignation(currentTerm) {
+		if !pm.consensusMgr.FitToContinueLeadership(state.pgMode) {
 			return remedialActionResignLeadership
 		}
 		return remedialActionNone
@@ -1116,8 +1119,7 @@ func (pm *MultipoolerManager) shouldMarkRewindReady(state postgresState, role co
 	if !state.rewindSourceReady || role != commonconsensus.ConsensusRoleLeader {
 		return false
 	}
-	currentTerm := commonconsensus.PossiblyUndecidedRule(pm.highestKnownPosition()).GetRuleNumber().GetCoordinatorTerm()
-	if !pm.consensusMgr.NeedsResignation(currentTerm) {
+	if !pm.consensusMgr.FitToContinueLeadership(state.pgMode) {
 		return false
 	}
 	return !pm.consensusMgr.GetReplicationPrimary().GetRewindReady()
@@ -1217,18 +1219,13 @@ func (pm *MultipoolerManager) takeRemedialAction(ctx context.Context, action rem
 
 	case remedialActionResignLeadership:
 		pm.setMonitorReason(ctx, reasonPostgresRunning, "MonitorPostgres: PostgreSQL is running")
-		// The rule names us leader but postgres is running as a standby. Signal
-		// voluntary resignation at the highest-known rule's term so the coordinator
-		// re-elects; this branch only fires when that rule names us, so the term is
-		// current. We do not self-promote.
-		highestPosition := pm.highestKnownPosition()
+		// The rule names us leader but postgres is running as a standby. No
+		// explicit signal to send: the Mutate below records pgMode as
+		// InRecovery (and fans out to the health streamer), so
+		// continue_leadership_signal derives INELIGIBLE from it on the next
+		// health read. We do not self-promote.
 		pm.logger.InfoContext(ctx, "MonitorPostgres: rule names us leader but postgres is a standby; resigning", //nolint:sloglint // message intentionally starts with an operation name or proper noun
-			"position", commonconsensus.FormatRulePosition(highestPosition))
-		if commonconsensus.PossiblyUndecidedRule(highestPosition).GetRuleNumber().GetCoordinatorTerm() != 0 {
-			if err := pm.consensusMgr.SetResignedLeaderAtTerm(ctx, highestPosition); err != nil {
-				pm.logger.ErrorContext(ctx, "MonitorPostgres: failed to set resigned primary term", "error", err) //nolint:sloglint // message intentionally starts with an operation name or proper noun
-			}
-		}
+			"position", commonconsensus.FormatRulePosition(pm.highestKnownPosition()))
 		// This branch preempts the reconcileState drift check, so sync the
 		// writable state here: postgres is a standby, so stop the heartbeat
 		// writer / LISTEN even though we remain the rule's leader. Without this

@@ -24,6 +24,7 @@ import (
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	"github.com/multigres/multigres/go/services/multipooler/internal/manager/actionlock"
+	"github.com/multigres/multigres/go/services/multipooler/internal/pgmode"
 )
 
 // actionLockCtx returns a context holding a freshly-acquired action lock, for
@@ -37,35 +38,100 @@ func actionLockCtx(t *testing.T) context.Context {
 	return ctx
 }
 
-func TestNeedsResignation(t *testing.T) {
-	tests := []struct {
-		name               string
-		resignedLeaderTerm int64
-		currentTerm        int64
-		want               bool
-	}{
-		{name: "never resigned", resignedLeaderTerm: 0, currentTerm: 5, want: true},
-		{name: "resigned at exactly the current term", resignedLeaderTerm: 5, currentTerm: 5, want: false},
-		{name: "resigned at a higher term already", resignedLeaderTerm: 8, currentTerm: 5, want: false},
-		{
-			// The core bug this guards against: a resignation from an earlier,
-			// already-superseded term must not mask the need to resign again
-			// from a fresh, higher leadership claim.
-			name:               "stale resignation from a lower term does not mask a new claim",
-			resignedLeaderTerm: 5, currentTerm: 8, want: true,
-		},
-		{name: "no known current term", resignedLeaderTerm: 0, currentTerm: 0, want: false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cm := NewManagerForTesting(t, nil, nil, nil, nil)
-			ctx := actionLockCtx(t)
-			require.NoError(t, cm.SetResignedLeaderAtTerm(ctx, &clustermetadatapb.RulePosition{
-				Decision: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: tt.resignedLeaderTerm}},
-			}))
-			assert.Equal(t, tt.want, cm.NeedsResignation(tt.currentTerm))
-		})
-	}
+// stubRuleStore is a minimal RuleStorer exposing only a fixed CachedPosition,
+// for tests exercising FitToContinueLeadership/ContinueLeadershipSignal (which only
+// call that one method). Every other method panics if called.
+type stubRuleStore struct {
+	pos *clustermetadatapb.PoolerPosition
+}
+
+func (s stubRuleStore) CachedPosition() *clustermetadatapb.PoolerPosition { return s.pos }
+
+func (stubRuleStore) ObservePosition(context.Context) (*clustermetadatapb.PoolerPosition, error) {
+	panic("not implemented")
+}
+
+func (stubRuleStore) UpdateRule(context.Context, *RuleUpdateBuilder) (*clustermetadatapb.PoolerPosition, error) {
+	panic("not implemented")
+}
+
+func (stubRuleStore) CreateRuleTables(context.Context, *clustermetadatapb.DurabilityPolicy, *clustermetadatapb.ID) error {
+	panic("not implemented")
+}
+
+func (stubRuleStore) HasInconsistentGUC(context.Context) bool { panic("not implemented") }
+
+func (stubRuleStore) ReconcileGUC(context.Context, bool) error { panic("not implemented") }
+
+func (stubRuleStore) ClearSyncStandby(context.Context) error { panic("not implemented") }
+
+func TestFitToContinueLeadership(t *testing.T) {
+	selfID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "test-cell", Name: "self"}
+	otherID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "test-cell", Name: "other"}
+	selfLeaderPos := &clustermetadatapb.PoolerPosition{Position: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{
+		RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
+		LeaderId:   selfID,
+	}}}
+	followerPos := &clustermetadatapb.PoolerPosition{Position: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{
+		RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
+		LeaderId:      otherID,
+		CohortMembers: []*clustermetadatapb.ID{selfID, otherID},
+	}}}
+
+	t.Run("not named leader is vacuously fit regardless of pgMode", func(t *testing.T) {
+		cm := NewManagerForTesting(t, selfID, NewConsensusPromises(t.TempDir(), selfID), stubRuleStore{pos: followerPos}, nil)
+		assert.True(t, cm.FitToContinueLeadership(pgmode.InRecovery))
+		assert.True(t, cm.FitToContinueLeadership(pgmode.Primary))
+	})
+
+	t.Run("named leader and postgres out of recovery is fit", func(t *testing.T) {
+		cm := NewManagerForTesting(t, selfID, NewConsensusPromises(t.TempDir(), selfID), stubRuleStore{pos: selfLeaderPos}, nil)
+		assert.True(t, cm.FitToContinueLeadership(pgmode.Primary))
+	})
+
+	t.Run("named leader but postgres in recovery is not fit", func(t *testing.T) {
+		cm := NewManagerForTesting(t, selfID, NewConsensusPromises(t.TempDir(), selfID), stubRuleStore{pos: selfLeaderPos}, nil)
+		assert.False(t, cm.FitToContinueLeadership(pgmode.InRecovery))
+	})
+
+	t.Run("promotion in flight overrides an unfit read", func(t *testing.T) {
+		cm := NewManagerForTesting(t, selfID, NewConsensusPromises(t.TempDir(), selfID), stubRuleStore{pos: selfLeaderPos}, nil)
+		ctx := actionLockCtx(t)
+		require.NoError(t, cm.BeginPromotionAttempt(ctx))
+		assert.True(t, cm.FitToContinueLeadership(pgmode.InRecovery), "expected pending, not stuck")
+
+		require.NoError(t, cm.EndPromotionAttempt(ctx))
+		assert.False(t, cm.FitToContinueLeadership(pgmode.InRecovery), "settled back to deriving from role+pgMode")
+	})
+}
+
+func TestContinueLeadershipSignal(t *testing.T) {
+	selfID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "test-cell", Name: "self"}
+	otherID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "test-cell", Name: "other"}
+	selfLeaderPos := &clustermetadatapb.PoolerPosition{Position: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{
+		RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
+		LeaderId:   selfID,
+	}}}
+	followerPos := &clustermetadatapb.PoolerPosition{Position: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{
+		RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
+		LeaderId:      otherID,
+		CohortMembers: []*clustermetadatapb.ID{selfID, otherID},
+	}}}
+
+	t.Run("not named leader is ELIGIBLE (vacuous)", func(t *testing.T) {
+		cm := NewManagerForTesting(t, selfID, NewConsensusPromises(t.TempDir(), selfID), stubRuleStore{pos: followerPos}, nil)
+		assert.Equal(t, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE, cm.ContinueLeadershipSignal(pgmode.InRecovery))
+	})
+
+	t.Run("named leader and healthy is ELIGIBLE", func(t *testing.T) {
+		cm := NewManagerForTesting(t, selfID, NewConsensusPromises(t.TempDir(), selfID), stubRuleStore{pos: selfLeaderPos}, nil)
+		assert.Equal(t, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE, cm.ContinueLeadershipSignal(pgmode.Primary))
+	})
+
+	t.Run("named leader but stuck in recovery is INELIGIBLE", func(t *testing.T) {
+		cm := NewManagerForTesting(t, selfID, NewConsensusPromises(t.TempDir(), selfID), stubRuleStore{pos: selfLeaderPos}, nil)
+		assert.Equal(t, clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_INELIGIBLE, cm.ContinueLeadershipSignal(pgmode.InRecovery))
+	})
 }
 
 func ruleAt(term, subterm int64) *clustermetadatapb.ShardRule {

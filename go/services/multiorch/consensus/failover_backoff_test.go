@@ -26,7 +26,7 @@ import (
 
 // eligibilityNode builds a minimal PoolerHealthState carrying a name and cohort
 // eligibility signal. A nil AvailabilityStatus is expressed by passing setStatus=false.
-func eligibilityNode(name string, signal clustermetadatapb.CohortEligibilitySignal, setStatus bool) *multiorchdatapb.PoolerHealthState {
+func eligibilityNode(name string, signal clustermetadatapb.EligibilitySignal, setStatus bool) *multiorchdatapb.PoolerHealthState {
 	p := &multiorchdatapb.PoolerHealthState{
 		Multipooler: &clustermetadatapb.Multipooler{
 			Id: &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: name},
@@ -34,15 +34,15 @@ func eligibilityNode(name string, signal clustermetadatapb.CohortEligibilitySign
 	}
 	if setStatus {
 		p.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{
-			CohortEligibilityStatus: &clustermetadatapb.CohortEligibilityStatus{Signal: signal},
+			CohortEligibilitySignal: signal,
 		}
 	}
 	return p
 }
 
 func TestFilterCohortIneligible(t *testing.T) {
-	eligible := clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE
-	ineligible := clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE
+	eligible := clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_ELIGIBLE
+	ineligible := clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_INELIGIBLE
 
 	tests := []struct {
 		name           string
@@ -163,9 +163,7 @@ func TestEligibleConsensusStatuses(t *testing.T) {
 		}
 		if ineligible {
 			h.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{
-				CohortEligibilityStatus: &clustermetadatapb.CohortEligibilityStatus{
-					Signal: clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE,
-				},
+				CohortEligibilitySignal: clustermetadatapb.EligibilitySignal_ELIGIBILITY_SIGNAL_INELIGIBLE,
 			}
 		}
 		return h
