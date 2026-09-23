@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/multigres/multigres/go/common/logattr"
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/services/multipooler/internal/executor"
 	"github.com/multigres/multigres/go/services/multipooler/internal/switcher"
@@ -103,9 +104,9 @@ func (w *Writer) writeHeartbeat(ctx context.Context) {
 	} else {
 		w.writes.Add(1)
 		w.logger.DebugContext(ctx, "heartbeat written",
-			"shard_id", w.shardID,
-			"pooler_id", w.poolerID,
-			"ts", w.now().UnixNano())
+			slog.Any("shard_id", w.shardID),
+			logattr.PoolerIDString(w.poolerID),
+			slog.Int64("ts", w.now().UnixNano()))
 	}
 }
 

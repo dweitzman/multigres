@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/multigres/multigres/go/common/constants"
+	"github.com/multigres/multigres/go/common/logattr"
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/parser/ast"
 	"github.com/multigres/multigres/go/common/pgprotocol/client"
@@ -162,11 +163,11 @@ func (e *Executor) ExecuteQuery(ctx context.Context, target *query.Target, sql s
 
 	user := e.getUserFromOptions(options)
 	e.logger.DebugContext(ctx, "executing query",
-		"tablegroup", target.GetShardKey().GetTableGroup(),
-		"shard", target.GetShardKey().GetShard(),
-		"mode", target.GetMode().String(),
-		"user", user,
-		"query", sql)
+		logattr.TableGroup(target.GetShardKey().GetTableGroup()),
+		slog.String("shard", target.GetShardKey().GetShard()),
+		slog.String("mode", target.GetMode().String()),
+		logattr.User(user),
+		logattr.Query(sql))
 
 	// Check if we should use an existing reserved connection
 	if options != nil && options.ReservedConnectionId > 0 {
@@ -278,11 +279,11 @@ func (e *Executor) StreamExecute(
 	user := e.getUserFromOptions(options)
 	reasons := protoutil.GetReasons(reservationOptions)
 	e.logger.DebugContext(ctx, "stream executing query",
-		"tablegroup", target.GetShardKey().GetTableGroup(),
-		"shard", target.GetShardKey().GetShard(),
-		"mode", target.GetMode().String(),
-		"user", user,
-		"query", sql)
+		logattr.TableGroup(target.GetShardKey().GetTableGroup()),
+		slog.String("shard", target.GetShardKey().GetShard()),
+		slog.String("mode", target.GetMode().String()),
+		logattr.User(user),
+		logattr.Query(sql))
 
 	executeSQLPreparedStmt := options.GetExecuteSqlPreparedStatement()
 	prepareOnly := executeSQLPreparedStmt.GetPrepareOnly()
@@ -993,12 +994,12 @@ func (e *Executor) PortalStreamExecute(
 	}
 
 	e.logger.DebugContext(ctx, "portal stream execute",
-		"tablegroup", target.GetShardKey().GetTableGroup(),
-		"shard", target.GetShardKey().GetShard(),
-		"user", user,
-		"statement", preparedStatement.Name,
-		"portal", portal.Name,
-		"max_rows", maxRows)
+		logattr.TableGroup(target.GetShardKey().GetTableGroup()),
+		slog.String("shard", target.GetShardKey().GetShard()),
+		logattr.User(user),
+		slog.String("statement", preparedStatement.Name),
+		slog.String("portal", portal.Name),
+		slog.Int("max_rows", int(maxRows)))
 
 	// Convert formats from int32 to int16
 	paramFormats := int32ToInt16Slice(portal.ParamFormats)
@@ -1451,12 +1452,12 @@ func (e *Executor) Describe(
 	}
 
 	e.logger.DebugContext(ctx, "describe",
-		"tablegroup", target.GetShardKey().GetTableGroup(),
-		"shard", target.GetShardKey().GetShard(),
-		"user", user,
-		"has_statement", preparedStatement != nil,
-		"has_portal", portal != nil,
-		"reserved_connection_id", options.GetReservedConnectionId())
+		logattr.TableGroup(target.GetShardKey().GetTableGroup()),
+		slog.String("shard", target.GetShardKey().GetShard()),
+		logattr.User(user),
+		slog.Bool("has_statement", preparedStatement != nil),
+		slog.Bool("has_portal", portal != nil),
+		logattr.ReservedConnectionID(options.GetReservedConnectionId()))
 
 	// Acquire the connection: reserved (transactional) or regular (pooled).
 	var conn *regular.Conn

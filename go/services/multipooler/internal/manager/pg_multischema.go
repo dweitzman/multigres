@@ -16,9 +16,11 @@ package manager
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/multigres/multigres/go/common/constants"
+	"github.com/multigres/multigres/go/common/logattr"
 	"github.com/multigres/multigres/go/common/mterrors"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
@@ -114,7 +116,7 @@ func (pm *MultipoolerManager) initializeMultischemaData(ctx context.Context) err
 	}
 
 	pm.logger.InfoContext(ctx, "initializing multischema data",
-		"tablegroup", tableGroup, "shard", shard)
+		logattr.TableGroup(tableGroup), slog.String("shard", shard))
 
 	if err := pm.insertTablegroup(ctx, tableGroup); err != nil {
 		return err
@@ -272,7 +274,7 @@ func (pm *MultipoolerManager) insertTablegroup(ctx context.Context, name string)
 // Returns an error if the tablegroup doesn't exist.
 // Uses ON CONFLICT DO NOTHING on (tablegroup_oid, shard_name) to handle concurrent insertions gracefully.
 func (pm *MultipoolerManager) insertShard(ctx context.Context, tablegroupName string, shardName string) error {
-	pm.logger.InfoContext(ctx, "inserting shard", "tablegroup", tablegroupName, "shard", shardName)
+	pm.logger.InfoContext(ctx, "inserting shard", logattr.TableGroup(tablegroupName), slog.String("shard", shardName))
 
 	// First, fetch the tablegroup oid
 	queryCtx, queryCancel := context.WithTimeout(ctx, 500*time.Millisecond)

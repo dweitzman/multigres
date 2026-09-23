@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 
 	"github.com/multigres/multigres/go/common/backup"
 	"github.com/multigres/multigres/go/common/constants"
+	"github.com/multigres/multigres/go/common/logattr"
 	"github.com/multigres/multigres/go/common/servenv"
 	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/services/multipooler/grpcmanagerservice"
@@ -396,16 +398,16 @@ func (mp *Multipooler) Init(startCtx context.Context) error {
 
 	logger.InfoContext(
 		startCtx, "multipooler starting up",
-		"pgctld_addr", mp.pgctldAddr.Get(),
-		"cell", mp.cell.Get(),
-		"database", mp.database.Get(),
-		"table_group", mp.tableGroup.Get(),
-		"shard", mp.shard.Get(),
-		"socket_file_path", mp.socketFilePath.Get(),
-		"pooler_dir", mp.poolerDir.Get(),
-		"pg_port", mp.pgPort.Get(),
-		"http_port", mp.senv.GetHTTPPort(),
-		"grpc_port", mp.grpcServer.Port(),
+		slog.String("pgctld_addr", mp.pgctldAddr.Get()),
+		logattr.Cell(mp.cell.Get()),
+		logattr.Database(mp.database.Get()),
+		logattr.TableGroup(mp.tableGroup.Get()),
+		slog.String("shard", mp.shard.Get()),
+		slog.String("socket_file_path", mp.socketFilePath.Get()),
+		slog.String("pooler_dir", mp.poolerDir.Get()),
+		slog.Int("pg_port", mp.pgPort.Get()),
+		slog.Int("http_port", mp.senv.GetHTTPPort()),
+		slog.Int("grpc_port", mp.grpcServer.Port()),
 	)
 
 	if mp.database.Get() == "" {
