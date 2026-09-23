@@ -32,6 +32,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/multigres/multigres/go/common/logattr"
 	"github.com/multigres/multigres/go/common/mterrors"
 	pgClient "github.com/multigres/multigres/go/common/pgprotocol/client"
 	"github.com/multigres/multigres/go/common/pgprotocol/protocol"
@@ -229,13 +230,13 @@ func (sc *ScatterConn) StreamExecute(
 	defer sc.endAction(ctx, span, start, conn.Database(), tableGroup, shard, &retErr)
 
 	sc.logger.DebugContext(ctx, "scatter conn executing query",
-		"tablegroup", tableGroup,
-		"shard", shard,
-		"query", sql,
-		"user", conn.User(),
-		"database", conn.Database(),
-		"connection_id", conn.ConnectionID(),
-		"in_transaction", conn.IsInTransaction())
+		logattr.TableGroup(tableGroup),
+		slog.String("shard", shard),
+		logattr.Query(sql),
+		logattr.User(conn.User()),
+		logattr.Database(conn.Database()),
+		logattr.ConnectionID(conn.ConnectionID()),
+		slog.Bool("in_transaction", conn.IsInTransaction()))
 
 	target := sc.buildTarget(conn.Database(), tableGroup, shard, state)
 
@@ -436,9 +437,9 @@ func (sc *ScatterConn) StreamExecute(
 
 	// Case 3: Not in transaction, no temp table — use regular pooled connection
 	sc.logger.DebugContext(ctx, "executing query via regular pooled connection",
-		"tablegroup", tableGroup,
-		"shard", shard,
-		"mode", target.GetMode().String())
+		logattr.TableGroup(tableGroup),
+		slog.String("shard", shard),
+		slog.String("mode", target.GetMode().String()))
 
 	if _, err := sc.gateway.StreamExecute(ctx, target, sql, eo, nil, callback); err != nil {
 		// If it's a PostgreSQL error, don't wrap it - pass through unchanged
@@ -450,8 +451,8 @@ func (sc *ScatterConn) StreamExecute(
 	}
 
 	sc.logger.DebugContext(ctx, "query execution completed successfully",
-		"tablegroup", tableGroup,
-		"shard", shard)
+		logattr.TableGroup(tableGroup),
+		slog.String("shard", shard))
 
 	return nil
 }
@@ -483,13 +484,13 @@ func (sc *ScatterConn) PortalStreamExecute(
 	defer sc.endAction(ctx, span, start, conn.Database(), tableGroup, shard, &retErr)
 
 	sc.logger.DebugContext(ctx, "scatter conn executing portal",
-		"tablegroup", tableGroup,
-		"shard", shard,
-		"portal", portalInfo.Portal.Name,
-		"max_rows", maxRows,
-		"user", conn.User(),
-		"database", conn.Database(),
-		"connection_id", conn.ConnectionID())
+		logattr.TableGroup(tableGroup),
+		slog.String("shard", shard),
+		slog.String("portal", portalInfo.Portal.Name),
+		slog.Int("max_rows", int(maxRows)),
+		logattr.User(conn.User()),
+		logattr.Database(conn.Database()),
+		logattr.ConnectionID(conn.ConnectionID()))
 
 	// Create target for routing
 	target := sc.buildTarget(conn.Database(), tableGroup, shard, state)
@@ -620,10 +621,10 @@ func (sc *ScatterConn) PortalStreamExecute(
 
 	// Execute portal via QueryService (PoolerGateway) and stream results
 	sc.logger.DebugContext(ctx, "executing portal via query service",
-		"tablegroup", tableGroup,
-		"shard", shard,
-		"portal", portalInfo.Portal.Name,
-		"mode", target.GetMode().String())
+		logattr.TableGroup(tableGroup),
+		slog.String("shard", shard),
+		slog.String("portal", portalInfo.Portal.Name),
+		slog.String("mode", target.GetMode().String()))
 
 	reservedState, err := qs.PortalStreamExecute(ctx, target, portalInfo.PreparedStatementInfo.PreparedStatement, portalInfo.Portal, eo, portalOpts, reservationOpts, callback)
 	if err != nil {
@@ -651,10 +652,10 @@ func (sc *ScatterConn) PortalStreamExecute(
 	sc.applyReservedState(conn, state, target, reservedState)
 
 	sc.logger.DebugContext(ctx, "portal execution completed successfully",
-		"tablegroup", tableGroup,
-		"shard", shard,
-		"portal", portalInfo.Portal.Name,
-		"reserved_connection_id", reservedState.GetReservedConnectionId())
+		logattr.TableGroup(tableGroup),
+		slog.String("shard", shard),
+		slog.String("portal", portalInfo.Portal.Name),
+		logattr.ReservedConnectionID(reservedState.GetReservedConnectionId()))
 
 	return nil
 }
@@ -671,11 +672,11 @@ func (sc *ScatterConn) Describe(
 	preparedStatementInfo *preparedstatement.PreparedStatementInfo,
 ) (*querypb.StatementDescription, error) {
 	sc.logger.DebugContext(ctx, "scatter conn describing",
-		"tablegroup", tableGroup,
-		"shard", shard,
-		"user", conn.User(),
-		"database", conn.Database(),
-		"connection_id", conn.ConnectionID())
+		logattr.TableGroup(tableGroup),
+		slog.String("shard", shard),
+		logattr.User(conn.User()),
+		logattr.Database(conn.Database()),
+		logattr.ConnectionID(conn.ConnectionID()))
 
 	// Create target for routing
 	target := sc.buildTarget(conn.Database(), tableGroup, shard, state)
@@ -710,9 +711,9 @@ func (sc *ScatterConn) Describe(
 
 	// Call Describe on the query service
 	sc.logger.DebugContext(ctx, "describing via query service",
-		"tablegroup", tableGroup,
-		"shard", shard,
-		"mode", target.GetMode().String())
+		logattr.TableGroup(tableGroup),
+		slog.String("shard", shard),
+		slog.String("mode", target.GetMode().String()))
 
 	description, err := qs.Describe(ctx, target, preparedStatement, portal, eo)
 	if err != nil {
@@ -725,8 +726,8 @@ func (sc *ScatterConn) Describe(
 	}
 
 	sc.logger.DebugContext(ctx, "describe completed successfully",
-		"tablegroup", tableGroup,
-		"shard", shard)
+		logattr.TableGroup(tableGroup),
+		slog.String("shard", shard))
 
 	return description, nil
 }
@@ -1172,11 +1173,11 @@ func (sc *ScatterConn) CopyInitiate(
 	defer span.End()
 
 	sc.logger.DebugContext(ctx, "initiating COPY FROM STDIN",
-		"query", queryStr,
-		"tablegroup", tableGroup,
-		"shard", shard,
-		"user", conn.User(),
-		"database", conn.Database())
+		logattr.Query(queryStr),
+		logattr.TableGroup(tableGroup),
+		slog.String("shard", shard),
+		logattr.User(conn.User()),
+		logattr.Database(conn.Database()))
 
 	// Create target for routing - COPY always goes to PRIMARY
 	target := &querypb.Target{
@@ -1268,9 +1269,9 @@ func (sc *ScatterConn) CopySendData(
 	data []byte,
 ) error {
 	sc.logger.DebugContext(ctx, "sending COPY data chunk",
-		"size", len(data),
-		"tablegroup", tableGroup,
-		"shard", shard)
+		slog.Int("size", len(data)),
+		logattr.TableGroup(tableGroup),
+		slog.String("shard", shard))
 
 	// Create target for routing
 	target := &querypb.Target{
@@ -1325,9 +1326,9 @@ func (sc *ScatterConn) CopyFinalize(
 	defer span.End()
 
 	sc.logger.DebugContext(ctx, "finalizing COPY",
-		"final_chunk_size", len(finalData),
-		"tablegroup", tableGroup,
-		"shard", shard)
+		slog.Int("final_chunk_size", len(finalData)),
+		logattr.TableGroup(tableGroup),
+		slog.String("shard", shard))
 
 	// Create target for routing
 	target := &querypb.Target{
@@ -1400,8 +1401,8 @@ func (sc *ScatterConn) CopyAbort(
 	state *handler.MultigatewayConnectionState,
 ) error {
 	sc.logger.DebugContext(ctx, "aborting COPY",
-		"tablegroup", tableGroup,
-		"shard", shard)
+		logattr.TableGroup(tableGroup),
+		slog.String("shard", shard))
 
 	// Create target for routing
 	target := &querypb.Target{

@@ -24,6 +24,7 @@ import (
 
 	"github.com/multigres/multigres/go/common/callerid"
 	"github.com/multigres/multigres/go/common/constants"
+	"github.com/multigres/multigres/go/common/logattr"
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/parser"
 	"github.com/multigres/multigres/go/common/parser/ast"
@@ -803,12 +804,12 @@ func (h *MultigatewayHandler) ConnectionClosed(conn *server.Conn) {
 			defer cancel()
 			ctx = h.callerContext(ctx, conn, state)
 			h.logger.DebugContext(ctx, "releasing reserved connections on client disconnect",
-				"connection_id", conn.ConnectionID(),
-				"shard_states", len(state.ShardStates))
+				logattr.ConnectionID(conn.ConnectionID()),
+				slog.Int("shard_states", len(state.ShardStates)))
 			if err := h.executor.ReleaseAll(ctx, conn, state); err != nil {
 				h.logger.ErrorContext(ctx, "failed to release connections on client disconnect",
-					"connection_id", conn.ConnectionID(),
-					"error", err)
+					logattr.ConnectionID(conn.ConnectionID()),
+					logattr.Err(err))
 			}
 		}
 	}

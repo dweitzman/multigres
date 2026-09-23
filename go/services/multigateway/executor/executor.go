@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/multigres/multigres/go/common/constants"
+	"github.com/multigres/multigres/go/common/logattr"
 	"github.com/multigres/multigres/go/common/parser/ast"
 	"github.com/multigres/multigres/go/common/pgprotocol/server"
 	"github.com/multigres/multigres/go/common/preparedstatement"
@@ -111,10 +112,10 @@ func (e *Executor) StreamExecute(
 	callback func(ctx context.Context, res *sqltypes.Result) error,
 ) (*handler.ExecuteResult, error) {
 	e.logger.DebugContext(ctx, "executing query",
-		"query", queryStr,
-		"user", conn.User(),
-		"database", conn.Database(),
-		"connection_id", conn.ConnectionID())
+		logattr.Query(queryStr),
+		logattr.User(conn.User()),
+		logattr.Database(conn.Database()),
+		logattr.ConnectionID(conn.ConnectionID()))
 
 	planStart := time.Now()
 	plan, bindVars, cacheHit, normalizedSQL, fingerprint, err := e.resolvePlan(ctx, queryStr, astStmt, conn, state)
@@ -172,8 +173,8 @@ func (e *Executor) resolvePlan(
 			return nil, nil, false, "", "", err
 		}
 		e.logger.DebugContext(ctx, "query plan created (non-cacheable)",
-			"plan", plan.String(),
-			"tablegroup", plan.GetTableGroup())
+			slog.String("plan", plan.String()),
+			logattr.TableGroup(plan.GetTableGroup()))
 		return plan, nil, false, "", "", nil
 	}
 
@@ -249,11 +250,11 @@ func (e *Executor) PortalStreamExecute(
 	callback func(ctx context.Context, res *sqltypes.Result) error,
 ) (*handler.ExecuteResult, error) {
 	e.logger.DebugContext(ctx, "executing portal",
-		"portal", portalInfo.Portal.Name,
-		"max_rows", maxRows,
-		"user", conn.User(),
-		"database", conn.Database(),
-		"connection_id", conn.ConnectionID())
+		slog.String("portal", portalInfo.Portal.Name),
+		slog.Int("max_rows", int(maxRows)),
+		logattr.User(conn.User()),
+		logattr.Database(conn.Database()),
+		logattr.ConnectionID(conn.ConnectionID()))
 
 	planStart := time.Now()
 	plan, cacheHit, normalizedSQL, fingerprint, err := e.resolvePortalPlan(ctx, portalInfo, conn, state)
@@ -384,9 +385,9 @@ func (e *Executor) Describe(
 	preparedStatementInfo *preparedstatement.PreparedStatementInfo,
 ) (*query.StatementDescription, error) {
 	e.logger.DebugContext(ctx, "describe",
-		"user", conn.User(),
-		"database", conn.Database(),
-		"connection_id", conn.ConnectionID())
+		logattr.User(conn.User()),
+		logattr.Database(conn.Database()),
+		logattr.ConnectionID(conn.ConnectionID()))
 
 	// SHOW multigres.server_version is a gateway-only pseudo-variable with no backing
 	// postgres GUC. Answer Describe locally rather than forwarding it, which the
@@ -450,9 +451,9 @@ func (e *Executor) StreamReplication(
 	init *multipoolerpb.StreamReplicationInit,
 ) (multipoolerpb.MultipoolerService_StreamReplicationClient, error) {
 	e.logger.DebugContext(ctx, "stream replication",
-		"user", conn.User(),
-		"database", conn.Database(),
-		"connection_id", conn.ConnectionID())
+		logattr.User(conn.User()),
+		logattr.Database(conn.Database()),
+		logattr.ConnectionID(conn.ConnectionID()))
 
 	return e.exec.StreamReplication(ctx, conn, e.planner.GetDefaultTableGroup(), constants.DefaultShard, state, init)
 }

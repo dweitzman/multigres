@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/multigres/multigres/go/common/constants"
+	"github.com/multigres/multigres/go/common/logattr"
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/parser/ast"
 	"github.com/multigres/multigres/go/common/pgprotocol/server"
@@ -540,8 +541,8 @@ func (p *Planner) planDefault(sql string, stmt ast.Stmt, conn *server.Conn, opts
 	plan.ExecInfo = execInfoFromOpts(opts)
 
 	p.logger.Debug("created default route plan",
-		"plan", plan.String(),
-		"tablegroup", p.defaultTableGroup)
+		slog.String("plan", plan.String()),
+		logattr.TableGroup(p.defaultTableGroup))
 	return plan, nil
 }
 
@@ -622,7 +623,7 @@ func execInfoFromOpts(opts PlanOptions) engine.PlanExecInfo {
 // This allows dynamic configuration changes.
 func (p *Planner) SetDefaultTableGroup(tableGroup string) {
 	p.defaultTableGroup = tableGroup
-	p.logger.Info("default tablegroup updated", "tablegroup", tableGroup)
+	p.logger.Info("default tablegroup updated", logattr.TableGroup(tableGroup))
 }
 
 // GetDefaultTableGroup returns the current default tablegroup.

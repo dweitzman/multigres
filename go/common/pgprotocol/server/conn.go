@@ -31,6 +31,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/multigres/multigres/go/common/logattr"
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/pgprotocol/protocol"
 	"github.com/multigres/multigres/go/common/sqltypes"
@@ -284,7 +285,7 @@ func newConn(netConn net.Conn, listener *Listener, connectionID uint32) *Conn {
 		listener:       listener,
 		connectionID:   connectionID,
 		backendKeyData: generateBackendKey(),
-		logger:         listener.logger.With("connection_id", connectionID),
+		logger:         listener.logger.With(logattr.ConnectionID(connectionID)),
 		txnStatus:      protocol.TxnStatusIdle,
 		flushDelay:     defaultFlushDelay,
 		ctx:            ctx,

@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/multigres/multigres/go/common/constants"
+	"github.com/multigres/multigres/go/common/logattr"
 	"github.com/multigres/multigres/go/common/queryservice"
 	"github.com/multigres/multigres/go/common/rpcclient"
 	"github.com/multigres/multigres/go/common/topoclient"
@@ -172,9 +173,9 @@ func newPoolerConnection(
 	addr := poolerInfo.Addr()
 
 	logger.DebugContext(ctx, "creating pooler connection",
-		"pooler_id", poolerID,
-		"addr", addr,
-		"is_leader", pooler.GetRoutingState() != nil)
+		logattr.PoolerIDString(string(poolerID)),
+		slog.String("addr", addr),
+		slog.Bool("is_leader", pooler.GetRoutingState() != nil))
 
 	// Create gRPC connection with telemetry attributes
 	conn, err := grpccommon.NewClient(addr,
@@ -216,8 +217,8 @@ func newPoolerConnection(
 	go pc.checkConn()
 
 	logger.DebugContext(ctx, "pooler connection established",
-		"pooler_id", poolerID,
-		"addr", addr)
+		logattr.PoolerIDString(string(poolerID)),
+		slog.String("addr", addr))
 
 	return pc, nil
 }
@@ -261,7 +262,7 @@ func (pc *poolerConnection) QueryService() queryservice.QueryService {
 // from the pooler cache's OnGone hook when the pooler leaves the topology.
 func (pc *poolerConnection) Shutdown() error {
 	poolerID := pc.ID()
-	pc.logger.Debug("shutting down pooler connection", "pooler_id", poolerID)
+	pc.logger.Debug("shutting down pooler connection", logattr.PoolerIDString(string(poolerID)))
 
 	// Cancel the health stream context to stop the checkConn goroutine
 	if pc.cancel != nil {
@@ -290,7 +291,7 @@ func (pc *poolerConnection) Health() *poolerHealth {
 func (pc *poolerConnection) checkConn() {
 	defer close(pc.checkConnDone)
 	poolerID := pc.ID()
-	pc.logger.Debug("starting health check loop", "pooler_id", poolerID)
+	pc.logger.Debug("starting health check loop", logattr.PoolerIDString(string(poolerID)))
 
 	streamRetrier := retry.New(constants.DefaultHealthRetryDelay, constants.DefaultHealthCheckTimeout)
 
@@ -298,16 +299,16 @@ func (pc *poolerConnection) checkConn() {
 		if waitErr != nil {
 			// Context cancelled - connection is being closed.
 			pc.logger.Debug("health check loop exiting",
-				"pooler_id", poolerID,
-				"attempt", attempt,
-				"reason", waitErr)
+				logattr.PoolerIDString(string(poolerID)),
+				slog.Int("attempt", attempt),
+				slog.Any("reason", waitErr))
 			return
 		}
 
 		if attempt > 1 {
 			pc.logger.Debug("retrying health stream",
-				"pooler_id", poolerID,
-				"attempt", attempt)
+				logattr.PoolerIDString(string(poolerID)),
+				slog.Int("attempt", attempt))
 		}
 
 		// Create a separate context for this stream attempt.
@@ -344,19 +345,19 @@ func (pc *poolerConnection) streamHealth(
 	stream, err := pc.client.StreamPoolerHealth(streamCtx, &multipoolerservice.StreamPoolerHealthRequest{})
 	if err != nil {
 		pc.logger.WarnContext(streamCtx, "failed to open health stream",
-			"pooler_id", poolerID,
-			"error", err)
+			logattr.PoolerIDString(string(poolerID)),
+			logattr.Err(err))
 		return fmt.Errorf("failed to open health stream: %w", err)
 	}
 
-	pc.logger.DebugContext(streamCtx, "health stream opened", "pooler_id", poolerID)
+	pc.logger.DebugContext(streamCtx, "health stream opened", logattr.PoolerIDString(string(poolerID)))
 
 	// Set up staleness timer. If no message is received within the timeout,
 	// the timer cancels the stream context to unblock stream.Recv().
 	stalenessTimeout := constants.DefaultHealthCheckTimeout
 	stalenessTimer := time.AfterFunc(stalenessTimeout, func() {
 		pc.healthTimedOut.Store(true)
-		pc.logger.WarnContext(streamCtx, "health stream timed out", "pooler_id", poolerID)
+		pc.logger.WarnContext(streamCtx, "health stream timed out", logattr.PoolerIDString(string(poolerID)))
 		streamCancel()
 	})
 	defer stalenessTimer.Stop()
@@ -366,7 +367,7 @@ func (pc *poolerConnection) streamHealth(
 		response, err := stream.Recv()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				pc.logger.DebugContext(streamCtx, "health stream closed by server", "pooler_id", poolerID)
+				pc.logger.DebugContext(streamCtx, "health stream closed by server", logattr.PoolerIDString(string(poolerID)))
 				return io.EOF
 			}
 			if streamCtx.Err() != nil {
@@ -377,8 +378,8 @@ func (pc *poolerConnection) streamHealth(
 				return nil
 			}
 			pc.logger.WarnContext(streamCtx, "health stream error",
-				"pooler_id", poolerID,
-				"error", err)
+				logattr.PoolerIDString(string(poolerID)),
+				logattr.Err(err))
 			return fmt.Errorf("health stream recv: %w", err)
 		}
 
@@ -425,9 +426,9 @@ func (pc *poolerConnection) processHealthResponse(response *multipoolerservice.S
 	// Log state changes.
 	if prevHealth == nil || prevHealth.ServingStatus != newHealth.ServingStatus {
 		pc.logger.Info("pooler health state changed",
-			"pooler_id", poolerID,
-			"serving_status", newHealth.ServingStatus.String(),
-			"is_serving", newHealth.isServing())
+			logattr.PoolerIDString(string(poolerID)),
+			slog.String("serving_status", newHealth.ServingStatus.String()),
+			slog.Bool("is_serving", newHealth.isServing()))
 	}
 
 	// Notify listener of health update.

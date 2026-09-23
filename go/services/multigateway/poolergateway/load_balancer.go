@@ -25,6 +25,7 @@ import (
 	"google.golang.org/grpc"
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
+	"github.com/multigres/multigres/go/common/logattr"
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/common/topoclient/poolerwatch"
@@ -616,18 +617,18 @@ func (lb *loadBalancer) onPoolerHealthUpdate(conn *poolerConnection) {
 	if live && rs.GetRole() == clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY {
 		if summary.setPrimary(poolerID, rs) {
 			lb.logger.Debug("routing primary recorded",
-				"tablegroup", summary.shardKey.GetTableGroup(),
-				"shard", summary.shardKey.GetShard(),
-				"leader_id", poolerID,
-				"rule", commonconsensus.FormatRuleNumber(rs.GetRule()))
+				logattr.TableGroup(summary.shardKey.GetTableGroup()),
+				slog.String("shard", summary.shardKey.GetShard()),
+				slog.String("leader_id", string(poolerID)),
+				slog.String("rule", commonconsensus.FormatRuleNumber(rs.GetRule())))
 		}
 	} else if summary.clearPrimary(poolerID) {
 		lb.logger.Debug("routing primary retracted",
-			"tablegroup", summary.shardKey.GetTableGroup(),
-			"shard", summary.shardKey.GetShard(),
-			"pooler_id", poolerID,
-			"stale_stream", !live,
-			"last_error", health.LastError)
+			logattr.TableGroup(summary.shardKey.GetTableGroup()),
+			slog.String("shard", summary.shardKey.GetShard()),
+			logattr.PoolerIDString(string(poolerID)),
+			slog.Bool("stale_stream", !live),
+			slog.Any("last_error", health.LastError))
 	}
 
 	// Re-check the SERVING-leader notification: if the elected routing primary is

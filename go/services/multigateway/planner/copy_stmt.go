@@ -15,7 +15,10 @@
 package planner
 
 import (
+	"log/slog"
+
 	"github.com/multigres/multigres/go/common/constants"
+	"github.com/multigres/multigres/go/common/logattr"
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/parser/ast"
 	"github.com/multigres/multigres/go/services/multigateway/engine"
@@ -40,8 +43,8 @@ func (p *Planner) planCopyStmt(
 		if stmt.Filename == "" {
 			// COPY FROM STDIN - requires CopyStatement primitive (streaming)
 			p.logger.Debug("planning COPY FROM STDIN command",
-				"query", sql,
-				"tablegroup", p.defaultTableGroup)
+				logattr.Query(sql),
+				logattr.TableGroup(p.defaultTableGroup))
 
 			copyPrimitive := engine.NewCopyStatement(p.defaultTableGroup, sql, stmt)
 			plan := engine.NewPlan(sql, copyPrimitive)
@@ -53,9 +56,9 @@ func (p *Planner) planCopyStmt(
 			// this to support client-side file uploads or distributed file access
 			// across shards. This would require extending the COPY protocol handling.
 			p.logger.Debug("planning COPY FROM file command (pass-through)",
-				"query", sql,
-				"file", stmt.Filename,
-				"tablegroup", p.defaultTableGroup)
+				logattr.Query(sql),
+				slog.String("file", stmt.Filename),
+				logattr.TableGroup(p.defaultTableGroup))
 
 			route := engine.NewRoute(p.defaultTableGroup, constants.DefaultShard, sql, nil)
 			plan := engine.NewPlan(sql, route)
@@ -70,8 +73,8 @@ func (p *Planner) planCopyStmt(
 		// the same CopyStatement primitive as FROM STDIN; the primitive
 		// dispatches on stmt.IsFrom internally.
 		p.logger.Debug("planning COPY TO STDOUT command",
-			"query", sql,
-			"tablegroup", p.defaultTableGroup)
+			logattr.Query(sql),
+			logattr.TableGroup(p.defaultTableGroup))
 
 		copyPrimitive := engine.NewCopyStatement(p.defaultTableGroup, sql, stmt)
 		plan := engine.NewPlan(sql, copyPrimitive)
@@ -83,9 +86,9 @@ func (p *Planner) planCopyStmt(
 	// multigateway could intercept to support client downloads or
 	// distributed writes across shards.
 	p.logger.Debug("planning COPY TO file command (pass-through)",
-		"query", sql,
-		"file", stmt.Filename,
-		"tablegroup", p.defaultTableGroup)
+		logattr.Query(sql),
+		slog.String("file", stmt.Filename),
+		logattr.TableGroup(p.defaultTableGroup))
 
 	route := engine.NewRoute(p.defaultTableGroup, constants.DefaultShard, sql, nil)
 	plan := engine.NewPlan(sql, route)

@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/multigres/multigres/go/common/logattr"
 	commontypes "github.com/multigres/multigres/go/common/types"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 )
@@ -66,7 +67,7 @@ func newShardBuffer(buf *Buffer, key *clustermetadatapb.ShardKey) *shardBuffer {
 	return &shardBuffer{
 		buf:      buf,
 		shardKey: key,
-		logger:   buf.logger.With("tablegroup", key.TableGroup, "shard", key.Shard),
+		logger:   buf.logger.With(logattr.TableGroup(key.TableGroup), slog.String("shard", key.Shard)),
 		state:    stateIdle,
 	}
 }
