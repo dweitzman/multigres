@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/multigres/multigres/go/common/logattr"
 	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/common/topoclient/poolerwatch"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -91,10 +92,10 @@ func poolerCacheHooks(ctx context.Context, cache *store.PoolerCache, factory *st
 	return poolerwatch.Hooks[*store.Pooler]{
 		OnLive: func(p *clustermetadatapb.Multipooler, _ *store.Pooler) *store.Pooler {
 			logger.InfoContext(ctx, "pooler discovered live",
-				"pooler_id", topoclient.ComponentIDString(p.Id),
-				"database", p.GetShardKey().GetDatabase(),
-				"tablegroup", p.GetShardKey().GetTableGroup(),
-				"shard", p.GetShardKey().GetShard(),
+				logattr.PoolerID(p.Id),
+				logattr.Database(p.GetShardKey().GetDatabase()),
+				logattr.TableGroup(p.GetShardKey().GetTableGroup()),
+				slog.String("shard", p.GetShardKey().GetShard()),
 			)
 			return store.NewPooler(
 				&multiorchdatapb.PoolerHealthState{
@@ -116,12 +117,12 @@ func poolerCacheHooks(ctx context.Context, cache *store.PoolerCache, factory *st
 			}
 			switch reason {
 			case poolerwatch.GoneShutdown:
-				logger.InfoContext(ctx, "pooler entered SHUTDOWN lifecycle", "pooler_id", topoclient.ComponentIDString(p.Id))
+				logger.InfoContext(ctx, "pooler entered SHUTDOWN lifecycle", logattr.PoolerID(p.Id))
 			case poolerwatch.GoneMissingFromTopo:
 				logger.WarnContext(ctx, "pooler topology entry deleted and no longer reachable; grace expired",
-					"pooler_id", topoclient.ComponentIDString(p.Id))
+					logattr.PoolerID(p.Id))
 			case poolerwatch.GoneCacheShutdown:
-				logger.DebugContext(ctx, "pooler released because cache is shutting down", "pooler_id", topoclient.ComponentIDString(p.Id))
+				logger.DebugContext(ctx, "pooler released because cache is shutting down", logattr.PoolerID(p.Id))
 			}
 		},
 	}

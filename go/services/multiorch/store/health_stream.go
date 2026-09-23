@@ -26,6 +26,7 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/multigres/multigres/go/common/logattr"
 	"github.com/multigres/multigres/go/common/rpcclient"
 	"github.com/multigres/multigres/go/common/timeouts"
 	"github.com/multigres/multigres/go/common/topoclient"
@@ -226,7 +227,7 @@ func (hs *HealthStream) run(ctx context.Context) {
 		poolerHealth, ok := hs.cache.GetRider(hs.poolerID)
 		if !ok || poolerHealth.Health().Multipooler == nil {
 			logger.WarnContext(ctx, "pooler not found in store, stopping health stream",
-				"pooler_id", hs.poolerID)
+				logattr.PoolerIDString(string(hs.poolerID)))
 			return
 		}
 
@@ -244,8 +245,8 @@ func (hs *HealthStream) run(ctx context.Context) {
 
 		if streamErr != nil {
 			logger.WarnContext(ctx, "health stream disconnected",
-				"pooler_id", hs.poolerID,
-				"error", streamErr,
+				logattr.PoolerIDString(string(hs.poolerID)),
+				logattr.Err(streamErr),
 			)
 		}
 	}
@@ -303,8 +304,8 @@ func (hs *HealthStream) streamOnce(ctx context.Context, poolerHealth *Pooler) (c
 				timer.Reset(current)
 			case <-timer.C:
 				logger.WarnContext(ctx, "health stream stale: no message received within timeout, reconnecting",
-					"pooler_id", hs.poolerID,
-					"timeout", current,
+					logattr.PoolerIDString(string(hs.poolerID)),
+					slog.Duration("timeout", current),
 				)
 				cancelWatchdog()
 				return
@@ -397,7 +398,7 @@ func (hs *HealthStream) applySnapshot(ctx context.Context, poolerHealth *Pooler,
 	logger := hs.factory.logger
 	if snapshot.Status == nil || snapshot.Status.Status == nil {
 		logger.WarnContext(ctx, "received snapshot with nil status, skipping",
-			"pooler_id", hs.poolerID)
+			logattr.PoolerIDString(string(hs.poolerID)))
 		return
 	}
 
@@ -437,12 +438,12 @@ func (hs *HealthStream) applySnapshot(ctx context.Context, poolerHealth *Pooler,
 	hs.cache.DoUpdate(poolerIDStr, update)
 
 	logger.DebugContext(ctx, "health snapshot applied",
-		"pooler_id", hs.poolerID,
-		"pooler_type", status.PoolerType,
-		"postgres_ready", status.PostgresReady,
-		"postgres_running", status.PostgresRunning,
-		"cohort_eligibility", snapshot.Status.GetAvailabilityStatus().GetCohortEligibilityStatus().GetSignal().String(),
-		"leadership_signal", snapshot.Status.GetAvailabilityStatus().GetLeadershipStatus().GetSignal().String(),
+		logattr.PoolerIDString(string(hs.poolerID)),
+		slog.String("pooler_type", status.PoolerType.String()),
+		slog.Bool("postgres_ready", status.PostgresReady),
+		slog.Bool("postgres_running", status.PostgresRunning),
+		slog.String("cohort_eligibility", snapshot.Status.GetAvailabilityStatus().GetCohortEligibilityStatus().GetSignal().String()),
+		slog.String("leadership_signal", snapshot.Status.GetAvailabilityStatus().GetLeadershipStatus().GetSignal().String()),
 	)
 }
 

@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/multigres/multigres/go/common/ha"
+	"github.com/multigres/multigres/go/common/logattr"
 	"github.com/multigres/multigres/go/common/rpcclient"
 	"github.com/multigres/multigres/go/common/timeouts"
 	"github.com/multigres/multigres/go/common/topoclient"
@@ -670,9 +671,9 @@ func (re *Engine) pollAndWaitForNewSnapshots(ctx context.Context) {
 			}
 			if time.Now().After(deadline) {
 				re.logger.WarnContext(ctx, "poll snapshot not received within deadline",
-					"pooler_id", pb.id,
-					"wait", time.Since(start).Round(time.Millisecond),
-					"deadline", timeouts.PollResponseWait,
+					logattr.PoolerIDString(string(pb.id)),
+					slog.Duration("wait", time.Since(start).Round(time.Millisecond)),
+					slog.Duration("deadline", timeouts.PollResponseWait),
 				)
 				return
 			}

@@ -17,6 +17,7 @@ package recovery
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 	"sync"
 	"time"
@@ -26,6 +27,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	"github.com/multigres/multigres/go/common/logattr"
 	"github.com/multigres/multigres/go/common/topoclient"
 	commontypes "github.com/multigres/multigres/go/common/types"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -122,10 +124,10 @@ func (re *Engine) groupProblemsByShard(problems []types.Problem) map[string][]ty
 // processShardProblems handles all problems for a single shard.
 func (re *Engine) processShardProblems(ctx context.Context, shardKey *clustermetadatapb.ShardKey, problems []types.Problem) {
 	re.logger.DebugContext(ctx, "processing shard problems",
-		"database", shardKey.Database,
-		"tablegroup", shardKey.TableGroup,
-		"shard", shardKey.Shard,
-		"problem_count", len(problems),
+		logattr.Database(shardKey.Database),
+		logattr.TableGroup(shardKey.TableGroup),
+		slog.String("shard", shardKey.Shard),
+		slog.Int("problem_count", len(problems)),
 	)
 
 	// Check if there's a leader problem in this shard.
@@ -144,8 +146,8 @@ func (re *Engine) processShardProblems(ctx context.Context, shardKey *clustermet
 		// Skip follower recoveries if leader is unhealthy and action requires healthy leader
 		if problem.RecoveryAction.RequiresHealthyLeader() && hasLeaderProblem {
 			re.logger.InfoContext(ctx, "skipping recovery - requires healthy leader but leader is unhealthy",
-				"problem_code", problem.Code,
-				"pooler_id", topoclient.ComponentIDString(problem.PoolerID),
+				slog.String("problem_code", string(problem.Code)),
+				logattr.PoolerID(problem.PoolerID),
 			)
 			continue
 		}

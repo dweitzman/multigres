@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/multigres/multigres/go/common/logattr"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
 )
 
@@ -44,11 +45,11 @@ func NewAlertOnlyAction(logger *slog.Logger) *AlertOnlyAction {
 func (a *AlertOnlyAction) Execute(ctx context.Context, rechecked types.RecheckedProblem) error {
 	problem := rechecked.Problem
 	a.logger.WarnContext(ctx, "non-actionable problem detected; human intervention required",
-		"problem_code", problem.Code,
-		"database", problem.ShardKey.GetDatabase(),
-		"tablegroup", problem.ShardKey.GetTableGroup(),
-		"shard", problem.ShardKey.GetShard(),
-		"description", problem.Description,
+		slog.String("problem_code", string(problem.Code)),
+		logattr.Database(problem.ShardKey.GetDatabase()),
+		logattr.TableGroup(problem.ShardKey.GetTableGroup()),
+		slog.String("shard", problem.ShardKey.GetShard()),
+		slog.String("description", problem.Description),
 	)
 	return nil
 }

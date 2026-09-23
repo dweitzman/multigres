@@ -24,6 +24,7 @@ import (
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/ha"
+	"github.com/multigres/multigres/go/common/logattr"
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/rpcclient"
 	"github.com/multigres/multigres/go/common/topoclient"
@@ -64,10 +65,10 @@ func NewCoordinator(coordinatorID *clustermetadatapb.ID, topoStore topoclient.St
 // retried safely.
 func (c *Coordinator) AppointLeader(ctx context.Context, shardKey *clustermetadatapb.ShardKey, cohort []*multiorchdatapb.PoolerHealthState, reason string) error {
 	c.logger.InfoContext(ctx, "starting leader appointment",
-		"database", shardKey.GetDatabase(),
-		"tablegroup", shardKey.GetTableGroup(),
-		"shard", shardKey.GetShard(),
-		"cohort_size", len(cohort))
+		logattr.Database(shardKey.GetDatabase()),
+		logattr.TableGroup(shardKey.GetTableGroup()),
+		slog.String("shard", shardKey.GetShard()),
+		slog.Int("cohort_size", len(cohort)))
 
 	if len(cohort) == 0 {
 		return mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT, "cohort is empty for shard %s", shardKey.GetShard())

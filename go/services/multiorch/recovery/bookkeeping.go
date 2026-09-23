@@ -15,10 +15,11 @@
 package recovery
 
 import (
+	"log/slog"
 	"time"
 
+	"github.com/multigres/multigres/go/common/logattr"
 	"github.com/multigres/multigres/go/common/topoclient"
-	commontypes "github.com/multigres/multigres/go/common/types"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 )
 
@@ -59,9 +60,9 @@ func (re *Engine) cleanupOldShutdownEntries() {
 		}
 		if err := re.ts.UnregisterMultipooler(re.shutdownCtx, g.ID); err != nil {
 			re.logger.Warn("failed to hard-delete shutdown pooler from topology",
-				"pooler_id", topoclient.ComponentIDString(g.ID),
-				"shutdown_at", g.ShutdownAt,
-				"error", err,
+				logattr.PoolerID(g.ID),
+				slog.Time("shutdown_at", g.ShutdownAt),
+				logattr.Err(err),
 			)
 			continue
 		}
@@ -76,9 +77,9 @@ func (re *Engine) cleanupOldShutdownEntries() {
 // audit logs an audit message with consistent formatting.
 func (re *Engine) audit(auditType string, poolerID topoclient.ComponentID, shardKey *clustermetadatapb.ShardKey, message string) {
 	re.logger.Info("audit",
-		"audit_type", auditType,
-		"pooler_id", poolerID,
-		"shard_key", commontypes.FormatShardKey(shardKey),
-		"message", message,
+		slog.String("audit_type", auditType),
+		logattr.PoolerIDString(string(poolerID)),
+		logattr.ShardKey(shardKey),
+		slog.String("message", message),
 	)
 }

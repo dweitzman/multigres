@@ -20,6 +20,7 @@ import (
 	"time"
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
+	"github.com/multigres/multigres/go/common/logattr"
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/timeouts"
 	"github.com/multigres/multigres/go/common/topoclient"
@@ -78,9 +79,9 @@ func NewShardInitAction(
 func (a *ShardInitAction) Execute(ctx context.Context, rechecked types.RecheckedProblem) error {
 	problem := rechecked.Problem
 	a.logger.InfoContext(ctx, "executing shard init action",
-		"database", problem.ShardKey.Database,
-		"tablegroup", problem.ShardKey.TableGroup,
-		"shard", problem.ShardKey.Shard)
+		logattr.Database(problem.ShardKey.Database),
+		logattr.TableGroup(problem.ShardKey.TableGroup),
+		slog.String("shard", problem.ShardKey.Shard))
 
 	// The recovery loop force-polls all poolers before calling Execute, so the pooler
 	// store holds fresh state. getInitializedPoolers reads that state: it returns nil
