@@ -27,6 +27,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/multigres/multigres/go/common/logattr"
 	"github.com/multigres/multigres/go/common/rpcclient"
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -412,7 +413,7 @@ func (s *MultiadminServer) GetPoolerStatus(ctx context.Context, req *multiadminp
 	// Get pooler from topology
 	poolerInfo, err := s.ts.GetMultipooler(ctx, poolerID)
 	if err != nil {
-		s.logger.ErrorContext(ctx, "failed to get pooler from topology", "pooler_id", req.PoolerId, "error", err)
+		s.logger.ErrorContext(ctx, "failed to get pooler from topology", logattr.PoolerID(req.PoolerId), logattr.Err(err))
 
 		if errors.Is(err, &topoclient.TopoError{Code: topoclient.NoNode}) {
 			return nil, status.Errorf(codes.NotFound, "pooler '%s/%s' not found", req.PoolerId.Cell, req.PoolerId.Name)
@@ -424,7 +425,7 @@ func (s *MultiadminServer) GetPoolerStatus(ctx context.Context, req *multiadminp
 	// Call Status RPC on the pooler
 	statusResp, err := s.rpcClient.Status(ctx, poolerInfo.Multipooler, &multipoolermanagerdatapb.StatusRequest{})
 	if err != nil {
-		s.logger.ErrorContext(ctx, "failed to get status from pooler", "pooler_id", req.PoolerId, "error", err)
+		s.logger.ErrorContext(ctx, "failed to get status from pooler", logattr.PoolerID(req.PoolerId), logattr.Err(err))
 		return nil, status.Errorf(codes.Unavailable, "failed to get status from pooler: %v", err)
 	}
 
@@ -455,7 +456,7 @@ func (s *MultiadminServer) SetPostgresRestartsEnabled(ctx context.Context, req *
 	// Get pooler from topology
 	poolerInfo, err := s.ts.GetMultipooler(ctx, poolerID)
 	if err != nil {
-		s.logger.ErrorContext(ctx, "failed to get pooler from topology", "pooler_id", req.PoolerId, "error", err)
+		s.logger.ErrorContext(ctx, "failed to get pooler from topology", logattr.PoolerID(req.PoolerId), logattr.Err(err))
 
 		if errors.Is(err, &topoclient.TopoError{Code: topoclient.NoNode}) {
 			return nil, status.Errorf(codes.NotFound, "pooler '%s/%s' not found", req.PoolerId.Cell, req.PoolerId.Name)
@@ -468,7 +469,7 @@ func (s *MultiadminServer) SetPostgresRestartsEnabled(ctx context.Context, req *
 		Enabled: req.Enabled,
 	})
 	if err != nil {
-		s.logger.ErrorContext(ctx, "failed to update postgres restarts on pooler", "pooler_id", req.PoolerId, "enabled", req.Enabled, "error", err)
+		s.logger.ErrorContext(ctx, "failed to update postgres restarts on pooler", logattr.PoolerID(req.PoolerId), slog.Bool("enabled", req.Enabled), logattr.Err(err))
 		return nil, status.Errorf(codes.Unavailable, "failed to update postgres restarts on pooler: %v", err)
 	}
 
