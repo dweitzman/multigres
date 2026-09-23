@@ -344,3 +344,39 @@ func disallowConsensusStateInGateway(m dsl.Matcher) {
 			!m.File().Name.Matches(`_test\.go$`)).
 		Report("multigateway must not consult consensus state; route on RoutingState (writability) only")
 }
+
+// requireLogattrForTableGroup flags raw "tablegroup"/"table_group" log keys;
+// use logattr.TableGroup instead so the key spelling can't drift.
+func requireLogattrForTableGroup(m dsl.Matcher) {
+	m.Match(
+		`$logger.$method($ctx, $msg, $*_, "tablegroup", $val, $*_)`,
+		`$logger.$method($ctx, $msg, $*_, "table_group", $val, $*_)`,
+		`$logger.$method($msg, $*_, "tablegroup", $val, $*_)`,
+		`$logger.$method($msg, $*_, "table_group", $val, $*_)`,
+	).
+		Where(!m.File().PkgPath.Matches(`/logattr$`)).
+		Report("use logattr.TableGroup(...) instead of a raw \"tablegroup\"/\"table_group\" key")
+}
+
+// requireLogattrForPoolerID flags a raw "pooler_id" log key; use
+// logattr.PoolerID or logattr.PoolerIDString instead so the value's format
+// can't drift from the rest of the codebase.
+func requireLogattrForPoolerID(m dsl.Matcher) {
+	m.Match(
+		`$logger.$method($ctx, $msg, $*_, "pooler_id", $val, $*_)`,
+		`$logger.$method($msg, $*_, "pooler_id", $val, $*_)`,
+	).
+		Where(!m.File().PkgPath.Matches(`/logattr$`)).
+		Report("use logattr.PoolerID(...) or logattr.PoolerIDString(...) instead of a raw \"pooler_id\" key")
+}
+
+// requireLogattrForConnectionID flags a raw "connection_id" log key; use
+// logattr.ConnectionID instead so the value's format can't drift.
+func requireLogattrForConnectionID(m dsl.Matcher) {
+	m.Match(
+		`$logger.$method($ctx, $msg, $*_, "connection_id", $val, $*_)`,
+		`$logger.$method($msg, $*_, "connection_id", $val, $*_)`,
+	).
+		Where(!m.File().PkgPath.Matches(`/logattr$`)).
+		Report("use logattr.ConnectionID(...) instead of a raw \"connection_id\" key")
+}
