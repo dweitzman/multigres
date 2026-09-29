@@ -40,18 +40,20 @@ import (
 type coordinatorLedRuleChange struct {
 	coordinator           *Coordinator
 	reason                string
+	description           string
 	tryBuildProposal      func(*clustermetadatapb.TermRevocation, []*clustermetadatapb.ConsensusStatus) (*consensusdatapb.CoordinatorProposal, error)
 	checkProposalPossible func(*clustermetadatapb.TermRevocation, []*clustermetadatapb.ConsensusStatus) error
 }
 
 func (c *Coordinator) newRuleChange(
-	reason string,
+	reason, description string,
 	tryBuildProposal func(*clustermetadatapb.TermRevocation, []*clustermetadatapb.ConsensusStatus) (*consensusdatapb.CoordinatorProposal, error),
 	checkProposalPossible func(*clustermetadatapb.TermRevocation, []*clustermetadatapb.ConsensusStatus) error,
 ) *coordinatorLedRuleChange {
 	return &coordinatorLedRuleChange{
 		coordinator:           c,
 		reason:                reason,
+		description:           description,
 		tryBuildProposal:      tryBuildProposal,
 		checkProposalPossible: checkProposalPossible,
 	}
@@ -253,6 +255,7 @@ func (r *coordinatorLedRuleChange) collectRecruitsAndBuildProposal(cohort []*mul
 			propReq := &consensusdatapb.PromoteRequest{
 				Proposal:        p,
 				Reason:          r.reason,
+				Description:     r.description,
 				AcceptedNodeIds: ids,
 			}
 			return propReq, leaderKey, nil

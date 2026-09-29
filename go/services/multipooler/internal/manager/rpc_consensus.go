@@ -612,6 +612,7 @@ func (pm *MultipoolerManager) promoteLocked(ctx context.Context, req *consensusd
 		WithDurabilityPolicy(proposedRule.GetDurabilityPolicy()).
 		WithAcceptedMembers(req.GetAcceptedNodeIds()).
 		WithWALPosition(beforeStatus.GetCurrentPosition().GetLsn()).
+		WithDescription(req.GetDescription()).
 		WithPromotionHook(promotionHook).
 		// CAS catches drift across the whole Recruit-to-Promote window.
 		WithPreviousRule(

@@ -310,7 +310,7 @@ func TestRun_Success(t *testing.T) {
 		}},
 	}
 
-	rc := c.newRuleChange("test", fixedProposal(2, proposal), nopCheckProposalPossible)
+	rc := c.newRuleChange("test", "", fixedProposal(2, proposal), nopCheckProposalPossible)
 	require.NoError(t, rc.Run(ctx, cohort, newTestRevocation(t, c, cohort)))
 
 	// mp1 (leader) receives Promote; mp2 (follower) receives SetPrimary.
@@ -357,7 +357,7 @@ func TestRun_EarlyExit(t *testing.T) {
 		}, nil
 	}
 
-	rc := c.newRuleChange("test", tryBuildProposal, nopCheckProposalPossible)
+	rc := c.newRuleChange("test", "", tryBuildProposal, nopCheckProposalPossible)
 	require.NoError(t, rc.Run(ctx, cohort, newTestRevocation(t, c, cohort)))
 }
 
@@ -377,7 +377,7 @@ func TestRun_InsufficientRecruitment(t *testing.T) {
 		return nil, fmt.Errorf("not enough nodes: have %d", len(statuses))
 	}
 
-	rc := c.newRuleChange("test", tryBuildProposal, nopCheckProposalPossible)
+	rc := c.newRuleChange("test", "", tryBuildProposal, nopCheckProposalPossible)
 	err := rc.Run(ctx, cohort, newTestRevocation(t, c, cohort))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "recruitment failed")
@@ -396,7 +396,7 @@ func TestRun_BackoffOnRecentAcceptance(t *testing.T) {
 	}
 	cohort := []*multiorchdatapb.PoolerHealthState{mp1}
 
-	rc := c.newRuleChange("test", fixedProposal(1, &consensusdatapb.CoordinatorProposal{}), nopCheckProposalPossible)
+	rc := c.newRuleChange("test", "", fixedProposal(1, &consensusdatapb.CoordinatorProposal{}), nopCheckProposalPossible)
 	err := rc.Run(ctx, cohort, newTestRevocation(t, c, cohort))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "another coordinator started recruiting recently")
@@ -435,7 +435,7 @@ func TestRun_PreValidateFails(t *testing.T) {
 		return preValidateErr
 	}
 
-	rc := c.newRuleChange("test", fixedProposal(1, &consensusdatapb.CoordinatorProposal{}), checkProposalPossible)
+	rc := c.newRuleChange("test", "", fixedProposal(1, &consensusdatapb.CoordinatorProposal{}), checkProposalPossible)
 	err := rc.Run(ctx, cohort, newTestRevocation(t, c, cohort))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "pre-vote failed")
@@ -493,7 +493,7 @@ func TestRun_LeaderPromoteFails(t *testing.T) {
 		return proposal, nil
 	}
 
-	rc := c.newRuleChange("test", tryBuildProposal, nopCheckProposalPossible)
+	rc := c.newRuleChange("test", "", tryBuildProposal, nopCheckProposalPossible)
 	err := rc.Run(ctx, cohort, newTestRevocation(t, c, cohort))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to accept proposal")
@@ -540,7 +540,7 @@ func TestRun_SlowRecruitDoesNotBlockAfterQuorum(t *testing.T) {
 		}},
 	}
 
-	rc := c.newRuleChange("test", fixedProposal(1, proposal), nopCheckProposalPossible)
+	rc := c.newRuleChange("test", "", fixedProposal(1, proposal), nopCheckProposalPossible)
 
 	start := time.Now()
 	err := rc.Run(ctx, cohort, newTestRevocation(t, c, cohort))
@@ -624,7 +624,7 @@ func TestRun_StragglersGetSetTermPrimary(t *testing.T) {
 		return proposal, nil
 	}
 
-	rc := c.newRuleChange("test", tryBuildProposal, nopCheckProposalPossible)
+	rc := c.newRuleChange("test", "", tryBuildProposal, nopCheckProposalPossible)
 	require.NoError(t, rc.Run(ctx, cohort, newTestRevocation(t, c, cohort)))
 
 	assert.NotNil(t, fc.PromoteRequests[mp1Key],
@@ -680,7 +680,7 @@ func TestRun_NonLeaderPromoteFails(t *testing.T) {
 	fc.Errors[mp2Key] = errors.New("standby promote rejected")
 
 	// With mp2 failing Recruit, only mp1 recruits — use minNodes=1.
-	rc := c.newRuleChange("test", fixedProposal(1, proposal), nopCheckProposalPossible)
+	rc := c.newRuleChange("test", "", fixedProposal(1, proposal), nopCheckProposalPossible)
 	require.NoError(t, rc.Run(ctx, cohort, newTestRevocation(t, c, cohort)))
 
 	// Leader (mp1) received Promote.

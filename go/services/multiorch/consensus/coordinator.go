@@ -62,7 +62,7 @@ func NewCoordinator(coordinatorID *clustermetadatapb.ID, topoStore topoclient.St
 //
 // Returns an error if any stage fails. The operation is idempotent and can be
 // retried safely.
-func (c *Coordinator) AppointLeader(ctx context.Context, shardKey *clustermetadatapb.ShardKey, cohort []*multiorchdatapb.PoolerHealthState, reason string) error {
+func (c *Coordinator) AppointLeader(ctx context.Context, shardKey *clustermetadatapb.ShardKey, cohort []*multiorchdatapb.PoolerHealthState, reason, description string) error {
 	c.logger.InfoContext(ctx, "starting leader appointment",
 		"database", shardKey.GetDatabase(),
 		"tablegroup", shardKey.GetTableGroup(),
@@ -73,7 +73,7 @@ func (c *Coordinator) AppointLeader(ctx context.Context, shardKey *clustermetada
 		return mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT, "cohort is empty for shard %s", shardKey.GetShard())
 	}
 
-	return c.runFailover(ctx, cohort, reason)
+	return c.runFailover(ctx, cohort, reason, description)
 }
 
 // runFailover wires the failover callbacks for a coordinatorLedRuleChange and
@@ -96,7 +96,7 @@ func (c *Coordinator) AppointLeader(ctx context.Context, shardKey *clustermetada
 // would. Picking a rewind-free replica makes failover faster; picking one
 // that needs rewinding is not fatal — the SetPrimary path runs pg_rewind
 // before the node serves writes or replicates.
-func (c *Coordinator) runFailover(ctx context.Context, cohort []*multiorchdatapb.PoolerHealthState, reason string) error {
+func (c *Coordinator) runFailover(ctx context.Context, cohort []*multiorchdatapb.PoolerHealthState, reason, description string) error {
 	// Drop INELIGIBLE members (raised only on a deliberate exit: graceful
 	// shutdown or admin-stopped WAL receiver) from both the recruit round and
 	// the outgoing-decision/term-safety-floor computation below — a position or
@@ -145,7 +145,7 @@ func (c *Coordinator) runFailover(ctx context.Context, cohort []*multiorchdatapb
 	checkProposalPossible := func(rev *clustermetadatapb.TermRevocation, statuses []*clustermetadatapb.ConsensusStatus) error {
 		return commonconsensus.CheckProposalPossible(rev, statuses, buildProposal)
 	}
-	if err := c.newRuleChange(reason, tryBuildProposal, checkProposalPossible).Run(ctx, cohort, revocation); err != nil {
+	if err := c.newRuleChange(reason, description, tryBuildProposal, checkProposalPossible).Run(ctx, cohort, revocation); err != nil {
 		if len(ineligible) > 0 {
 			return mterrors.Wrapf(err, "failover excluded ineligible members %v", ineligible)
 		}
@@ -212,6 +212,7 @@ func (c *Coordinator) AppointInitialLeader(ctx context.Context, shardKey *cluste
 	}
 	return c.newRuleChange(
 		"ShardInit",
+		"", // no analyzer description for bootstrap
 		func(_ *clustermetadatapb.TermRevocation, statuses []*clustermetadatapb.ConsensusStatus) (*consensusdatapb.CoordinatorProposal, error) {
 			return commonconsensus.BuildExternallyCertifiedProposal(cert, statuses, buildProposalFn)
 		},

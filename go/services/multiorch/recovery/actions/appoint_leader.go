@@ -123,7 +123,7 @@ func (a *AppointLeaderAction) Execute(ctx context.Context, rechecked types.Reche
 	for i, p := range shard.Poolers {
 		cohort[i] = p.Health()
 	}
-	if err := a.consensus.AppointLeader(ctx, problem.ShardKey, cohort, reason); err != nil {
+	if err := a.consensus.AppointLeader(ctx, problem.ShardKey, cohort, reason, problem.Description); err != nil {
 		return mterrors.Wrap(err, "failed to appoint leader")
 	}
 

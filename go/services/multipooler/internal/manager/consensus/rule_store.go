@@ -220,6 +220,7 @@ type RuleUpdateBuilder struct {
 	coordinatorID *clustermetadatapb.ID
 	eventType     string
 	reason        string
+	description   string
 	createdAt     time.Time
 
 	// optional; nil means keep the existing value in current_rule
@@ -248,6 +249,7 @@ type promotionFn func(ctx context.Context) error
 // packages can inspect a constructed update.
 func (b *RuleUpdateBuilder) GetEventType() string                      { return b.eventType }
 func (b *RuleUpdateBuilder) GetReason() string                         { return b.reason }
+func (b *RuleUpdateBuilder) GetDescription() string                    { return b.description }
 func (b *RuleUpdateBuilder) GetTermNumber() int64                      { return b.termNumber }
 func (b *RuleUpdateBuilder) GetCoordinatorID() *clustermetadatapb.ID   { return b.coordinatorID }
 func (b *RuleUpdateBuilder) GetLeaderID() *clustermetadatapb.ID        { return b.leaderID }
@@ -308,6 +310,13 @@ func (b *RuleUpdateBuilder) WithOperation(op string) *RuleUpdateBuilder {
 
 func (b *RuleUpdateBuilder) WithAcceptedMembers(members []*clustermetadatapb.ID) *RuleUpdateBuilder {
 	b.acceptedMembers = members
+	return b
+}
+
+// WithDescription sets the human-readable, per-occurrence detail behind
+// reason (see PromoteRequest.description). Optional; defaults to "".
+func (b *RuleUpdateBuilder) WithDescription(description string) *RuleUpdateBuilder {
+	b.description = description
 	return b
 }
 
@@ -428,6 +437,7 @@ func (rs *ruleStore) CreateRuleTables(ctx context.Context, policy *clustermetada
 		wal_position              TEXT,
 		accepted_members          TEXT[],
 		reason                    TEXT NOT NULL,
+		description               TEXT NOT NULL DEFAULT '',
 		cohort_members            TEXT[] NOT NULL,
 		durability_policy_name    TEXT NOT NULL,
 		durability_quorum_type    TEXT NOT NULL,
@@ -1006,6 +1016,7 @@ func (rs *ruleStore) UpdateRule(ctx context.Context, update *RuleUpdateBuilder) 
 		walPosition:      update.walPosition,
 		operation:        update.operation,
 		reason:           update.reason,
+		description:      update.description,
 		acceptedMembers:  acceptedParam,
 		coordinatorIDStr: coordinatorIDStr,
 		isPromotion:      isPromotion,
@@ -1182,6 +1193,7 @@ type ruleProposalWriteParams struct {
 	walPosition         string
 	operation           string
 	reason              string
+	description         string
 	acceptedMembers     []string
 	coordinatorIDStr    string
 	isPromotion         bool
@@ -1232,7 +1244,8 @@ func (rs *ruleStore) writeRuleProposal(ctx context.Context, p ruleProposalWriteP
 		           NULLIF($14, '')  AS operation,
 		           $15::text        AS reason,
 		           $16::text[]      AS accepted_members,
-		           $17::text        AS new_coordinator_id
+		           $17::text        AS new_coordinator_id,
+		           $18::text        AS description
 		  ),
 		  locked AS (
 		    -- NOWAIT returns an error immediately if another transaction holds the row lock
@@ -1281,12 +1294,12 @@ func (rs *ruleStore) writeRuleProposal(ctx context.Context, p ruleProposalWriteP
 		    -- than inserting a second one — one row per rule number, always.
 		    INSERT INTO multigres.rule_history
 		      (coordinator_term, leader_subterm, event_type, leader_id, coordinator_id,
-		       wal_position, operation, reason, cohort_members, accepted_members,
+		       wal_position, operation, reason, description, cohort_members, accepted_members,
 		       durability_policy_name, durability_quorum_type, durability_required_count,
 		       decided, created_at)
 		    SELECT params.new_term, params.new_subterm, params.event_type, params.new_leader_id,
 		           params.new_coordinator_id, params.wal_position, params.operation, params.reason,
-		           params.new_cohort, params.accepted_members,
+		           params.description, params.new_cohort, params.accepted_members,
 		           params.dp_name, params.dp_quorum_type, params.dp_required_count,
 		           false, params.created_at
 		    FROM updated, params
@@ -1325,6 +1338,7 @@ func (rs *ruleStore) writeRuleProposal(ctx context.Context, p ruleProposalWriteP
 		p.reason,
 		p.acceptedMembers,
 		p.coordinatorIDStr,
+		p.description,
 	)
 	if err != nil {
 		return nil, mterrors.Wrap(err, "failed to write rule proposal")
@@ -1432,7 +1446,7 @@ func (rs *ruleStore) queryRuleHistory(ctx context.Context, limit int) ([]ruleHis
 
 	result, err := rs.queryService.QueryAdminArgs(queryCtx, `
 		SELECT coordinator_term, leader_subterm, event_type, leader_id, coordinator_id,
-		       wal_position, operation, reason, cohort_members, accepted_members,
+		       wal_position, operation, reason, description, cohort_members, accepted_members,
 		       durability_policy_name, durability_quorum_type, durability_required_count,
 		       decided, created_at
 		FROM multigres.rule_history
@@ -1457,6 +1471,7 @@ func (rs *ruleStore) queryRuleHistory(ctx context.Context, limit int) ([]ruleHis
 			&rec.WALPosition,
 			&rec.Operation,
 			&rec.Reason,
+			&rec.Description,
 			&cohortNames,
 			&acceptedNames,
 			&rec.DurabilityPolicyName,
@@ -1651,6 +1666,7 @@ type ruleHistoryRecord struct {
 	WALPosition             *string
 	Operation               *string
 	Reason                  string
+	Description             string
 	CohortMembers           []ReplicaID
 	AcceptedMembers         []ReplicaID
 	DurabilityPolicyName    string

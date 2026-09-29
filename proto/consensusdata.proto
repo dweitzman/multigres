@@ -81,6 +81,12 @@ message PromoteRequest {
   // IDs of cohort members that accepted the term revocation during recruitment.
   // Used to record which nodes acknowledged the proposal in the rule history.
   repeated clustermetadata.ID accepted_node_ids = 3;
+
+  // Human-readable, per-occurrence detail behind reason (e.g. distinguishing
+  // which of several sub-causes a coarse reason code covers). Recorded
+  // separately from reason so reason stays uniform across occurrences of the
+  // same code for grouping/querying.
+  string description = 4;
 }
 
 // PromoteResponse carries the pooler's state after applying a PromoteRequest.

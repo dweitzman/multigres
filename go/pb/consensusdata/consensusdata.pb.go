@@ -234,8 +234,13 @@ type PromoteRequest struct {
 	// IDs of cohort members that accepted the term revocation during recruitment.
 	// Used to record which nodes acknowledged the proposal in the rule history.
 	AcceptedNodeIds []*clustermetadata.ID `protobuf:"bytes,3,rep,name=accepted_node_ids,json=acceptedNodeIds,proto3" json:"accepted_node_ids,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Human-readable, per-occurrence detail behind reason (e.g. distinguishing
+	// which of several sub-causes a coarse reason code covers). Recorded
+	// separately from reason so reason stays uniform across occurrences of the
+	// same code for grouping/querying.
+	Description   string `protobuf:"bytes,4,opt,name=description,proto3" json:"description,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PromoteRequest) Reset() {
@@ -287,6 +292,13 @@ func (x *PromoteRequest) GetAcceptedNodeIds() []*clustermetadata.ID {
 		return x.AcceptedNodeIds
 	}
 	return nil
+}
+
+func (x *PromoteRequest) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
 }
 
 // PromoteResponse carries the pooler's state after applying a PromoteRequest.
@@ -456,11 +468,12 @@ const file_consensusdata_proto_rawDesc = "" +
 	"\x0eRecruitRequest\x12H\n" +
 	"\x0fterm_revocation\x18\x01 \x01(\v2\x1f.clustermetadata.TermRevocationR\x0etermRevocation\"^\n" +
 	"\x0fRecruitResponse\x12K\n" +
-	"\x10consensus_status\x18\x01 \x01(\v2 .clustermetadata.ConsensusStatusR\x0fconsensusStatus\"\xa9\x01\n" +
+	"\x10consensus_status\x18\x01 \x01(\v2 .clustermetadata.ConsensusStatusR\x0fconsensusStatus\"\xcb\x01\n" +
 	"\x0ePromoteRequest\x12>\n" +
 	"\bproposal\x18\x01 \x01(\v2\".consensusdata.CoordinatorProposalR\bproposal\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12?\n" +
-	"\x11accepted_node_ids\x18\x03 \x03(\v2\x13.clustermetadata.IDR\x0facceptedNodeIds\"^\n" +
+	"\x11accepted_node_ids\x18\x03 \x03(\v2\x13.clustermetadata.IDR\x0facceptedNodeIds\x12 \n" +
+	"\vdescription\x18\x04 \x01(\tR\vdescription\"^\n" +
 	"\x0fPromoteResponse\x12K\n" +
 	"\x10consensus_status\x18\x01 \x01(\v2 .clustermetadata.ConsensusStatusR\x0fconsensusStatus\"i\n" +
 	"\x11SetPrimaryRequest\x12T\n" +

@@ -116,7 +116,9 @@ func (c *Coordinator) ApplyCertifiedRuleChange(
 		"frozen_lsn", cert.GetFrozenLsn(),
 		"reason", reason)
 
-	return c.newRuleChange(reason, tryBuildProposal, checkProposalPossible).Run(ctx, cohort, revocation)
+	// No analyzer Problem is behind this path (admin-triggered rule change), so
+	// there is no per-occurrence description to carry.
+	return c.newRuleChange(reason, "", tryBuildProposal, checkProposalPossible).Run(ctx, cohort, revocation)
 }
 
 // refreshShardConsensusStatuses calls ConsensusStatus on every pooler

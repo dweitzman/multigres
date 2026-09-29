@@ -77,19 +77,19 @@ func TestQueryRuleHistory(t *testing.T) {
 			mock.MakeQueryResult(
 				[]string{
 					"coordinator_term", "leader_subterm", "event_type", "leader_id", "coordinator_id",
-					"wal_position", "operation", "reason", "cohort_members", "accepted_members",
+					"wal_position", "operation", "reason", "description", "cohort_members", "accepted_members",
 					"durability_policy_name", "durability_quorum_type", "durability_required_count",
 					"decided", "created_at",
 				},
 				[][]any{
 					{
 						int64(2), int64(1), "promotion", leaderAppName, coordID, walPos, operation,
-						"manual failover", "{zone1_pooler-2,zone1_pooler-3}", "{zone1_pooler-2}",
+						"manual failover", "leader unreachable", "{zone1_pooler-2,zone1_pooler-3}", "{zone1_pooler-2}",
 						nil, nil, nil, true, createdAt,
 					},
 					{
 						int64(1), int64(0), "replication_config", leaderAppName, coordID, nil, nil,
-						"initial bootstrap", "{zone1_pooler-1,zone1_pooler-2}", nil,
+						"initial bootstrap", "", "{zone1_pooler-1,zone1_pooler-2}", nil,
 						nil, nil, nil, true, createdAt,
 					},
 				},
@@ -111,6 +111,7 @@ func TestQueryRuleHistory(t *testing.T) {
 		require.NotNil(t, records[0].Operation)
 		assert.Equal(t, operation, *records[0].Operation)
 		assert.Equal(t, "manual failover", records[0].Reason)
+		assert.Equal(t, "leader unreachable", records[0].Description)
 		require.Len(t, records[0].CohortMembers, 2)
 		assert.Equal(t, "zone1_pooler-2", records[0].CohortMembers[0].appName)
 		assert.Equal(t, "zone1_pooler-3", records[0].CohortMembers[1].appName)
