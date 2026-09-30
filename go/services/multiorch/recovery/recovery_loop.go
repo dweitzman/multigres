@@ -345,6 +345,13 @@ func (re *Engine) attemptRecovery(ctx context.Context, problem types.Problem) {
 		"description", problem.Description,
 	)
 
+	// Refresh the shard's reachable poolers via live RPCs before the re-poll below,
+	// for actions that ask for it (within the time budget they choose).
+	if timeout := problem.RecoveryAction.Metadata().RefreshBeforeRecheckTimeout; timeout > 0 {
+		shard := store.FindShardMembers(re.poolerCache, problem.ShardKey)
+		store.RefreshRecentInParallel(ctx, re.rpcClient, shard.Poolers, timeout, re.logger)
+	}
+
 	// Force re-poll to validate the problem still exists
 	rechecked, err := re.recheckProblem(ctx, problem)
 	if err != nil {
@@ -363,6 +370,26 @@ func (re *Engine) attemptRecovery(ctx context.Context, problem types.Problem) {
 			"entity_id", entityID,
 		)
 		return
+	}
+
+	// The refresh and recheck above can surface newer evidence (for example another
+	// orchestrator's recruitment, which pushes this shard's backoff later), so
+	// re-apply the timing gate to the re-detected problem before acting. Only for
+	// failover problems: their gate is a pure function of the shard's observed
+	// revocations, whereas the others use a stateful grace tracker that
+	// filterAndPrioritize already consulted.
+	if rechecked.Problem.Code.IsFailoverProblem() {
+		if readyAt, ready := re.readyToExecute(rechecked.Problem); !ready {
+			span.SetAttributes(
+				attribute.String("result", "gated_after_recheck"),
+				attribute.String("ready_at", readyAt.Format(time.RFC3339)))
+			re.logger.DebugContext(ctx, "deferring recovery: gate not satisfied after recheck",
+				"problem_code", problem.Code,
+				"entity_id", entityID,
+				"ready_at", readyAt,
+			)
+			return
+		}
 	}
 
 	// Execute recovery action

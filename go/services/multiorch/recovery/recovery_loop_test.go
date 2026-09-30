@@ -1238,22 +1238,35 @@ func TestRecoveryLoop_ValidationPreventsStaleRecovery(t *testing.T) {
 	// NOW: Fix the problem in the store BEFORE validation.
 	// Under streaming, the store is kept current by stream snapshots, not by RPC
 	// force-polls. Simulate a stream snapshot arriving that shows the problem is fixed.
+	fixedReplicationStatus := &multipoolermanagerdatapb.StandbyReplicationStatus{
+		LastReplayLsn:           "0/DEADBEEF",
+		LastReceiveLsn:          "0/DEADBEEF",
+		IsWalReplayPaused:       false, // NOW FIXED!
+		WalReplayPauseState:     "not paused",
+		Lag:                     durationpb.New(0),
+		LastXactReplayTimestamp: "",
+		PrimaryConnInfo: &multipoolermanagerdatapb.PrimaryConnInfo{
+			Host: "primary-host",
+			Port: 5432,
+		},
+	}
 	fixed, _ := engine.poolerCache.GetRider("multipooler-cell1-replica-pooler")
 	fixed.Mutate(func(h *multiorchdatapb.PoolerHealthState) {
-		h.Status.ReplicationStatus = &multipoolermanagerdatapb.StandbyReplicationStatus{
-			LastReplayLsn:           "0/DEADBEEF",
-			LastReceiveLsn:          "0/DEADBEEF",
-			IsWalReplayPaused:       false, // NOW FIXED!
-			WalReplayPauseState:     "not paused",
-			Lag:                     durationpb.New(0),
-			LastXactReplayTimestamp: "",
-			PrimaryConnInfo: &multipoolermanagerdatapb.PrimaryConnInfo{
-				Host: "primary-host",
-				Port: 5432,
-			},
-		}
+		h.Status.ReplicationStatus = fixedReplicationStatus
 	})
 	store.SeedCache(t, engine.poolerCache, fixed)
+
+	// attemptRecovery now also opportunistically refreshes reachable-looking
+	// poolers via a live Status RPC before the recheck below -- keep the fake
+	// RPC response in sync with the "fixed" cache state above, since a real
+	// pooler's live Status() answer and its gossip broadcast reflect the same
+	// underlying state and could never actually disagree here.
+	fakeClient.SetStatusResponse("multipooler-cell1-replica-pooler", &multipoolermanagerdatapb.StatusResponse{
+		Status: &multipoolermanagerdatapb.Status{
+			PoolerType:        clustermetadatapb.PoolerType_REPLICA,
+			ReplicationStatus: fixedReplicationStatus,
+		},
+	})
 
 	// Attempt recovery - recheckProblem re-runs analyzers on current store state;
 	// since the store now shows healthy replication, the problem no longer exists.

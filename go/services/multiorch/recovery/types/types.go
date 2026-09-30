@@ -268,6 +268,13 @@ type RecoveryMetadata struct {
 	// Defaults to 15 seconds if zero.
 	LockTimeout time.Duration
 	Retryable   bool
+	// RefreshBeforeRecheckTimeout, when positive, asks the engine to refresh the
+	// shard's reachable poolers with a live Status RPC, waiting at most this long
+	// overall, before it re-runs the analyzer for the recheck. For actions
+	// disruptive enough (a failover) to warrant more confidence than the streamed
+	// cache gives. Zero means no refresh. A pooler that does not answer in time is
+	// itself evidence for the recheck, which then uses its cached state.
+	RefreshBeforeRecheckTimeout time.Duration
 }
 
 // GetLockTimeout returns the lock timeout, defaulting to 15 seconds if not set.

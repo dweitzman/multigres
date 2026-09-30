@@ -34,6 +34,8 @@ type RecoveryActionFactory struct {
 	topoStore   topoclient.Store
 	coordinator *consensus.Coordinator
 	logger      *slog.Logger
+	// policy supplies the timings actions are built with.
+	policy AvailabilityPolicy
 }
 
 // NewRecoveryActionFactory creates a factory for recovery actions.
@@ -55,6 +57,7 @@ func NewRecoveryActionFactory(
 		topoStore:   topoStore,
 		coordinator: coordinator,
 		logger:      logger,
+		policy:      DefaultAvailabilityPolicy(),
 	}
 }
 
@@ -65,7 +68,7 @@ func (f *RecoveryActionFactory) NewShardInitAction() types.RecoveryAction {
 
 // NewAppointLeaderAction creates an appoint leader action.
 func (f *RecoveryActionFactory) NewAppointLeaderAction() types.RecoveryAction {
-	return actions.NewAppointLeaderAction(f.config, f.coordinator, f.rpcClient, f.poolerStore, f.topoStore, f.logger)
+	return actions.NewAppointLeaderAction(f.config, f.coordinator, f.poolerStore, f.topoStore, f.logger, f.policy.PreRecheckRefreshTimeout)
 }
 
 // NewFixReplicationAction creates a fix replication action.

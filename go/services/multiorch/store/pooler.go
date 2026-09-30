@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -125,6 +126,72 @@ func (p *Pooler) Mutate(fn func(*multiorchdatapb.PoolerHealthState)) {
 	}
 	fn(next)
 	p.state.Store(next)
+}
+
+// ApplyStatusResponse updates p's cached health from a fresh StatusResponse,
+// however obtained (a streamed snapshot or a one-off live RPC poll), handling
+// its own locking via Mutate -- callers never need to know Mutate exists.
+// now is passed in rather than read internally so a caller applying several
+// related updates (see HealthStream.applySnapshot) can stamp them all
+// identically within one atomic update.
+//
+// Returns false, leaving p unmodified, if status carries no Status payload:
+// a response that's technically well-formed but empty must not clobber good
+// cached data with a blank one just because the RPC/stream message nominally
+// succeeded.
+// StatusResponse carries no pooler-stamped capture time (unlike a streamed
+// snapshot), so this clears PoolerCapturedAt rather than stamping it with the
+// orchestrator's clock: that field is documented as the pooler's own clock, and
+// consumers that compare it against orchestrator timestamps must be able to
+// trust that. Cleared means "unknown" and is never stale-but-wrong.
+//
+// Known limitation: nothing orders this against an older streamed snapshot that
+// was queued before the RPC answered but is applied after it, which can briefly
+// overwrite the fresher state. The next snapshot or refresh corrects it.
+func (p *Pooler) ApplyStatusResponse(status *multipoolermanagerdatapb.StatusResponse, now *timestamppb.Timestamp) bool {
+	if status.GetStatus() == nil {
+		return false
+	}
+	p.Mutate(func(h *multiorchdatapb.PoolerHealthState) {
+		applyStatusFields(h, status, now, nil)
+	})
+	return true
+}
+
+// applyStatusFields writes a StatusResponse's fields into h, including
+// PoolerCapturedAt, so it's never left describing a staler observation than
+// the rest of the fields it's applied alongside. Assumes status.GetStatus()
+// is non-nil -- callers must guard (see Pooler.ApplyStatusResponse and
+// HealthStream.applySnapshot). Package-private: applySnapshot needs to
+// compose this with extra stream-specific bookkeeping (StreamSnapshotsReceived)
+// inside its own Mutate call, so it can't go through the ApplyStatusResponse
+// convenience method above -- everyone else should use that instead.
+//
+// capturedAt is the pooler-clock capture time, passed in rather than derived
+// here: the streaming path has a real one from the envelope (a stream
+// message can sit queued before delivery, so pooler-capture time and
+// orchestrator-receipt time can genuinely diverge); a synchronous RPC poll
+// has no such value of its own and passes nil (unknown).
+func applyStatusFields(h *multiorchdatapb.PoolerHealthState, status *multipoolermanagerdatapb.StatusResponse, now, capturedAt *timestamppb.Timestamp) {
+	h.LastCheckSuccessful = now
+	h.LastSeen = now
+	h.Status = proto.Clone(status.GetStatus()).(*multipoolermanagerdatapb.Status)
+	if av := status.GetAvailabilityStatus(); av != nil {
+		h.AvailabilityStatus = proto.Clone(av).(*clustermetadatapb.AvailabilityStatus)
+	} else {
+		h.AvailabilityStatus = nil
+	}
+	if cs := status.GetConsensusStatus(); cs != nil {
+		h.ConsensusStatus = proto.Clone(cs).(*clustermetadatapb.ConsensusStatus)
+	} else {
+		h.ConsensusStatus = nil
+	}
+	if status.GetStatus().GetPostgresReady() {
+		h.LastPostgresReadyTime = now
+	}
+	// NOTE: when PostgresReady is false, LastPostgresReadyTime is intentionally
+	// left at its previous value so callers can reason about "last known good" time.
+	h.PoolerCapturedAt = capturedAt
 }
 
 // ObservationAge reports how long ago — on the orchestrator's clock — this
