@@ -16,61 +16,74 @@ package actions
 
 import (
 	"context"
+	"log/slog"
+	"sync"
+	"time"
 
-	commonconsensus "github.com/multigres/multigres/go/common/consensus"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/rpcclient"
+	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/services/multiorch/store"
 
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
 
-// pollLeaderHealth confirms — via a live Status RPC issued right now, not cached
-// state — that the shard's consensus leader is reachable, still names itself as
-// the leader, and has postgres ready to serve, and returns it along with the
-// live StatusResponse the check itself just fetched (callers that need a
-// fresher read of the leader than the cached store, e.g. quorum-commit
-// staleness, can use it instead of issuing their own extra RPC).
+// RefreshHealthNow issues a live Status RPC against pooler right now -- not
+// cached state -- and writes the confirmed fields back into its cached rider
+// via Pooler.ApplyStatusResponse, the same field-writing logic
+// HealthStream.applySnapshot uses for a regular gossip snapshot -- the two
+// can't drift out of sync on which fields a "fresh observation" updates.
+// Callers re-derive whatever shard-wide view they need (e.g.
+// store.FindShardMembers, or a fresh ShardAnalysis) after this returns,
+// rather than juggling a separate live-RPC-shaped snapshot alongside the
+// cache: there's only ever one shape, and it's now fresh.
 //
-// The leader is identified from cached state by the store (sl, produced by
-// PoolerStore.FindShardMembers), keeping leader identification (a store concern)
-// separate from this live liveness check (an RPC concern). Leader identity comes
-// purely from consensus; the named leader is then polled and rejected when:
-//   - it is unreachable (Status RPC fails),
-//   - it no longer names itself as the leader (resigned or dropped into recovery), or
-//   - its postgres is not ready — crucially, a primary whose postgres was killed
-//     while its multipooler stays alive keeps self-claiming the consensus rule
-//     (Status falls back to the cached rule position), so without the postgres-ready
-//     check appoint_leader would treat such a dead-primary as healthy and skip the
-//     failover it was dispatched to perform, or
-//   - its postgres is in recovery (a STANDBY): SelfConsensusRole names a leader
-//     purely from the consensus rule, so a rule-named leader whose Promote never
-//     completed still self-claims leader AND answers pg_isready continuously.
-//     Without this check appoint_leader would treat an in-recovery standby as an
-//     existing writable primary and skip the failover — mirrors the analyzer's
-//     leaderInRecovery guard so a routed failover actually promotes a real primary.
-func pollLeaderHealth(ctx context.Context, rpcClient rpcclient.MultipoolerClient, sl store.ShardMembers) (*store.Pooler, *multipoolermanagerdatapb.StatusResponse, error) {
-	leader := sl.Leader
-	if leader == nil {
-		return nil, nil, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION, "no consensus leader known")
-	}
-
-	statusResp, err := rpcClient.Status(ctx, leader.Health().Multipooler, &multipoolermanagerdatapb.StatusRequest{})
+// Returns an error, leaving the cache untouched, if the pooler is unreachable
+// or the RPC came back with no Status payload.
+func RefreshHealthNow(ctx context.Context, rpcClient rpcclient.MultipoolerClient, pooler *store.Pooler) error {
+	statusResp, err := rpcClient.Status(ctx, pooler.Health().GetMultipooler(), &multipoolermanagerdatapb.StatusRequest{})
 	if err != nil {
-		return nil, nil, mterrors.Wrap(err, "consensus leader unreachable during health check")
+		return mterrors.Wrap(err, "pooler unreachable during health refresh")
 	}
-	if commonconsensus.SelfConsensusRole(statusResp.GetConsensusStatus()) != commonconsensus.ConsensusRoleLeader {
-		return nil, nil, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
-			"consensus leader %s no longer reports itself as the leader", leader.Health().GetMultipooler().GetId().GetName())
+	if !pooler.ApplyStatusResponse(statusResp, timestamppb.Now()) {
+		return mterrors.Errorf(mtrpcpb.Code_INTERNAL, "pooler %s returned an empty status response",
+			topoclient.ComponentIDString(pooler.Health().GetMultipooler().GetId()))
 	}
-	if !statusResp.GetStatus().GetPostgresReady() {
-		return nil, nil, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
-			"consensus leader %s postgres is not ready", leader.Health().GetMultipooler().GetId().GetName())
+	return nil
+}
+
+// refreshRecentPoolersInParallel opportunistically refreshes, concurrently,
+// every pooler that already looks reachable (a fresh cached observation) --
+// skipping ones that already look stale/unreachable, since another attempt
+// is unlikely to succeed within the bounded timeout below and an unreachable
+// pooler is itself valid evidence for the judgment that follows. Best-effort:
+// failures are logged and otherwise ignored, never surfaced as an error.
+//
+// Only used by AppointLeaderAction today (see types.PreRecheckRefresher):
+// appointing a new leader is disruptive enough to warrant refreshing the
+// whole cohort it's judging, not just whichever pooler triggered detection.
+func refreshRecentPoolersInParallel(ctx context.Context, rpcClient rpcclient.MultipoolerClient, poolers []*store.Pooler, logger *slog.Logger) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	now := time.Now()
+	var wg sync.WaitGroup
+	for _, pooler := range poolers {
+		age, ok := pooler.ObservationAge(now)
+		if !ok || age > store.DefaultObservationFreshness {
+			continue
+		}
+		wg.Add(1)
+		go func(pooler *store.Pooler) {
+			defer wg.Done()
+			if err := RefreshHealthNow(ctx, rpcClient, pooler); err != nil {
+				logger.DebugContext(ctx, "best-effort pre-recheck refresh failed, continuing with cached state",
+					"pooler", topoclient.ComponentIDString(pooler.Health().GetMultipooler().GetId()), "error", err)
+			}
+		}(pooler)
 	}
-	if statusResp.GetStatus().GetPostgresStatus() == multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_STANDBY {
-		return nil, nil, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
-			"consensus leader %s postgres is in recovery (standby), not a writable primary", leader.Health().GetMultipooler().GetId().GetName())
-	}
-	return leader, statusResp, nil
+	wg.Wait()
 }

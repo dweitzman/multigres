@@ -345,6 +345,14 @@ func (re *Engine) attemptRecovery(ctx context.Context, problem types.Problem) {
 		"description", problem.Description,
 	)
 
+	// Let the action opportunistically refresh cached pooler health via live
+	// RPCs before the re-poll below, if it cares to (see PreRecheckRefresher) --
+	// most actions don't; AppointLeaderAction does, since it's disruptive
+	// enough to warrant extra confidence beyond the streamed cache.
+	if refresher, ok := problem.RecoveryAction.(types.PreRecheckRefresher); ok {
+		refresher.RefreshBeforeRecheck(ctx, problem)
+	}
+
 	// Force re-poll to validate the problem still exists
 	rechecked, err := re.recheckProblem(ctx, problem)
 	if err != nil {

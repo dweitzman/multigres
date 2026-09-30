@@ -89,6 +89,20 @@ func (c ProblemCode) IsFailoverProblem() bool {
 		c == ProblemLeaderQuorumWritesStalled
 }
 
+// PreRecheckRefresher is an optional capability a RecoveryAction may implement
+// to opportunistically refresh cached pooler health via live RPCs before
+// Engine.attemptRecovery re-verifies the problem still exists. The action
+// owns the how (which poolers, what freshness bar, sequential or parallel) --
+// the engine only knows when to call it. Most actions don't need this; it
+// exists for ones disruptive enough (e.g. AppointLeaderAction, which triggers
+// an actual failover) to warrant extra confidence beyond the streamed cache
+// before proceeding. Implementations should be best-effort and must not
+// return an error: a pooler that fails to refresh is itself valid evidence
+// for the re-analysis that follows, not a reason to abort the recheck.
+type PreRecheckRefresher interface {
+	RefreshBeforeRecheck(ctx context.Context, problem Problem)
+}
+
 const (
 
 	// Replica problems (require healthy leader).

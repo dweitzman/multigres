@@ -36,6 +36,9 @@ import (
 // Compile-time assertion that AppointLeaderAction implements types.RecoveryAction.
 var _ types.RecoveryAction = (*AppointLeaderAction)(nil)
 
+// Compile-time assertion that AppointLeaderAction implements types.PreRecheckRefresher.
+var _ types.PreRecheckRefresher = (*AppointLeaderAction)(nil)
+
 // AppointLeaderAction handles leader appointment using the coordinator's consensus protocol.
 // This action is used for both repair (mixed initialized/empty nodes) and reelect
 // (all nodes initialized) scenarios. The consensus.AppointLeader method handles
@@ -69,52 +72,23 @@ func NewAppointLeaderAction(
 	}
 }
 
-// Execute performs leader appointment by running the coordinator's consensus protocol
+// Execute performs leader appointment by running the coordinator's consensus protocol.
+//
+// Unlike an earlier version of this action, Execute trusts rechecked as-is and
+// does not re-poll or re-judge the leader itself: Engine.attemptRecovery
+// opportunistically refreshes reachable-looking shard members via a live RPC
+// before its subsequent full re-analysis, which already confirmed the problem
+// is still real using the same two-axis judgment the analyzer itself uses —
+// not a partial reimplementation of it.
 func (a *AppointLeaderAction) Execute(ctx context.Context, rechecked types.RecheckedProblem) error {
 	problem := rechecked.Problem
 	a.logger.InfoContext(ctx, "executing appoint leader action",
 		"shard_key", commontypes.FormatShardKey(problem.ShardKey))
 
-	// Gather every pooler known for the shard, then recheck the problem.
 	shard := store.FindShardMembers(a.poolerStore, problem.ShardKey)
 	if len(shard.Poolers) == 0 {
 		return fmt.Errorf("no poolers found for shard %s", commontypes.FormatShardKey(problem.ShardKey))
 	}
-
-	// Check if a healthy consensus leader already exists (problem resolved). The
-	// leader is named by the highest known rule across all poolers — the global
-	// consensus view, never a node's local self-claim — and is verified still
-	// leading via a live status check. An error means no healthy leader exists, so
-	// appointment proceeds.
-	//
-	// TODO: Reconsider if trying to contact a dead leader here makes sense. If it's unreachable,
-	// this may just be wasting time.
-	shortCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	if leader, statusResp, err := pollLeaderHealth(shortCtx, a.rpcClient, shard); err == nil {
-		// LeaderNeedsReplacement alone misses a leader that's reachable and
-		// self-reports fine but simply can't commit writes.
-		// TODO(https://github.com/multigres/multigres/pull/1481): stopgap using
-		// the default threshold directly -- replace once leaderFitnessCause is
-		// shared with this action and it has real policy-lookup access.
-		quorumCommitStale := consensus.QuorumCommitStale(
-			statusResp.GetStatus().GetPrimaryStatus().GetQuorumCommitTs(), time.Now(), consensus.DefaultQuorumCommitStaleAfter)
-		if quorumCommitStale || types.LeaderNeedsReplacement(leader.Health()) {
-			a.logger.InfoContext(ctx, "primary has requested replacement or is stuck, proceeding with election",
-				"primary", leader.Health().Multipooler.Id.Name,
-				"quorum_commit_stale", quorumCommitStale,
-				"shard_key", commontypes.FormatShardKey(problem.ShardKey))
-		} else {
-			a.logger.InfoContext(ctx, "primary already exists, skipping leader appointment",
-				"primary", leader.Health().Multipooler.Id.Name,
-				"shard_key", commontypes.FormatShardKey(problem.ShardKey))
-			return nil
-		}
-	}
-
-	a.logger.InfoContext(ctx, "verified shard still needs leader appointment, proceeding",
-		"shard_key", commontypes.FormatShardKey(problem.ShardKey),
-		"pooler_count", len(shard.Poolers))
 
 	// Use the coordinator's AppointLeader to handle the election.
 	// Use the problem code as the reason for the election.
@@ -131,6 +105,17 @@ func (a *AppointLeaderAction) Execute(ctx context.Context, rechecked types.Reche
 		"shard_key", commontypes.FormatShardKey(problem.ShardKey))
 
 	return nil
+}
+
+// RefreshBeforeRecheck opportunistically refreshes, in parallel, every shard
+// member this action already knows about, via a live RPC, before the engine
+// re-verifies the problem still exists. Appointing a new leader is
+// disruptive enough to warrant extra confidence beyond the streamed cache
+// across the whole cohort it's about to judge -- not just whichever pooler
+// happened to trigger detection.
+func (a *AppointLeaderAction) RefreshBeforeRecheck(ctx context.Context, problem types.Problem) {
+	shard := store.FindShardMembers(a.poolerStore, problem.ShardKey)
+	refreshRecentPoolersInParallel(ctx, a.rpcClient, shard.Poolers, a.logger)
 }
 
 // RecoveryAction interface implementation
