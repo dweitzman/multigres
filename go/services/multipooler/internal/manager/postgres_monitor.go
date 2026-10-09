@@ -110,11 +110,16 @@ func (pm *MultipoolerManager) staleStandbyDemoteTarget() *clustermetadatapb.Pool
 	return target
 }
 
-// postgresState represents the state of PostgreSQL for monitoring
+// postgresState represents the state of PostgreSQL for monitoring.
+//
+// postgresReady is true when postgres is RUNNING and pg_isready passes —
+// i.e. it is accepting connections. A node whose postgres is not ready has
+// no replication running and cannot participate in write quorum.
 type postgresState struct {
 	pgctldAvailable  bool
 	dirInitialized   bool
 	postgresRunning  bool
+	postgresReady    bool
 	backupsAvailable bool
 	// connInfo is the standby's primary_conninfo (parsed + redacted), read once
 	// per tick in discoverPostgresState so the monitor's decision paths can reuse
@@ -142,6 +147,7 @@ func postgresStateEqual(a, b postgresState) bool {
 	return a.pgctldAvailable == b.pgctldAvailable &&
 		a.dirInitialized == b.dirInitialized &&
 		a.postgresRunning == b.postgresRunning &&
+		a.postgresReady == b.postgresReady &&
 		a.backupsAvailable == b.backupsAvailable &&
 		a.pgMode == b.pgMode &&
 		a.bootstrapSentinelPresent == b.bootstrapSentinelPresent &&
@@ -480,8 +486,9 @@ func (pm *MultipoolerManager) discoverPostgresState(ctx context.Context) (postgr
 	// Check if directory is initialized
 	state.dirInitialized = (statusResp.Status != pgctldpb.ServerStatus_NOT_INITIALIZED)
 
-	// Check if Postgres is running
+	// Check if Postgres is running and ready to accept connections.
 	state.postgresRunning = (statusResp.Status == pgctldpb.ServerStatus_RUNNING)
+	state.postgresReady = state.postgresRunning && statusResp.Ready
 	if state.postgresRunning {
 		var err error
 		state.pgMode, err = pm.postgresMode(ctx)
@@ -1558,14 +1565,16 @@ func (pm *MultipoolerManager) startPostgres(ctx context.Context) error {
 
 	// If we already suspect divergence, bring postgres up "held": clear
 	// primary_conninfo first so the node does not stream from a leader it hasn't
-	// been rewound to. Postgres is down, so this edits postgresql.auto.conf
-	// directly rather than via ALTER SYSTEM. Best-effort — a failure here must not
-	// block the start; the rewind (restartAsStandbyLocked, once the leader is
-	// rewind-ready) re-establishes primary_conninfo afterwards — written back
-	// into postgresql.auto.conf before the post-rewind start, so even a standby
-	// that cannot reach consistency (and thus never accepts the SQL write) comes
-	// back streaming rather than held blind.
+	// been rewound to, and require restore_command to be absent so it cannot replay
+	// archived WAL while waiting for the rewind retry. Postgres is down, so this
+	// edits postgresql.auto.conf directly rather than via ALTER SYSTEM. Clearing
+	// primary_conninfo remains best-effort because restartAsStandbyLocked
+	// re-establishes it before the post-rewind start; clearing restore_command is a
+	// safety invariant and must succeed before postgres starts.
 	if pm.consensusMgr.SuspectedDivergence() {
+		if err := pm.dropRestoreCommandFromAutoConf(ctx); err != nil {
+			return fmt.Errorf("MonitorPostgres: failed to clear restore_command before held start: %w", err)
+		}
 		if err := pm.dropAutoConfSettings(ctx, "primary_conninfo"); err != nil {
 			pm.logger.ErrorContext(ctx, "MonitorPostgres: failed to clear primary_conninfo before held start", "error", err) //nolint:sloglint // message intentionally starts with an operation name or proper noun
 		}
