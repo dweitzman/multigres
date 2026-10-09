@@ -372,7 +372,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, problems, 1)
 		problem := problems[0]
-		require.Equal(t, types.ProblemLeaderUnsupported, problem.Code)
+		require.Equal(t, types.ProblemLeaderLacksCohortSupport, problem.Code)
 		require.Equal(t, types.ScopeShard, problem.Scope)
 		require.Equal(t, types.PriorityEmergency, problem.Priority)
 		require.Equal(t, leaderID, problem.PoolerID)
@@ -466,7 +466,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
 		require.Len(t, problems, 1)
-		require.Equal(t, types.ProblemLeaderUnsupported, problems[0].Code)
+		require.Equal(t, types.ProblemLeaderLacksCohortSupport, problems[0].Code)
 	})
 
 	t.Run("counts a self-revoked follower as cut off even though it still appears to stream", func(t *testing.T) {
@@ -509,7 +509,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
 		require.Len(t, problems, 1, "a self-revoked follower must not vouch for the leader just because it appears to stream")
-		require.Equal(t, types.ProblemLeaderUnsupported, problems[0].Code)
+		require.Equal(t, types.ProblemLeaderLacksCohortSupport, problems[0].Code)
 	})
 
 	// Regression: a staging incident where a recruit round reached quorum and
@@ -537,7 +537,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
 		require.Len(t, problems, 1, "a live, postgres-ready leader that never confirmed its own promotion must still be convicted")
-		require.Equal(t, types.ProblemLeaderUnsupported, problems[0].Code)
+		require.Equal(t, types.ProblemLeaderNotSelfConfirmed, problems[0].Code)
 	})
 
 	// Regression: term comparison alone is not enough. Here the leader's own
@@ -562,7 +562,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
 		require.Len(t, problems, 1, "a self-revoked leader must be convicted even with no higher term known anywhere else")
-		require.Equal(t, types.ProblemLeaderUnsupported, problems[0].Code)
+		require.Equal(t, types.ProblemLeaderNotSelfConfirmed, problems[0].Code)
 	})
 
 	// Regression: leader participation is a mandatory precondition, not one
@@ -586,7 +586,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
 		require.Len(t, problems, 1, "a leader that never confirmed its own promotion must be convicted even if followers vouch for it")
-		require.Equal(t, types.ProblemLeaderUnsupported, problems[0].Code)
+		require.Equal(t, types.ProblemLeaderNotSelfConfirmed, problems[0].Code)
 	})
 
 	t.Run("treats a leader within the connect grace as adapting, not lapsed", func(t *testing.T) {
@@ -702,7 +702,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 
 	t.Run("rule support is judged before the in-recovery guard", func(t *testing.T) {
 		// A standby leader that never confirmed its own promotion fails the
-		// rule-support axis first, so it is LeaderUnsupported, not LeaderUnhealthy.
+		// rule-support axis first, so it is LeaderNotSelfConfirmed, not LeaderUnhealthy.
 		sa := deadLeaderShardAnalysis(func(sa *ShardAnalysis) {
 			setLeaderLive(sa, true)
 			setLeaderPGReady(sa, true)
@@ -719,7 +719,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
 		require.Len(t, problems, 1)
-		require.Equal(t, types.ProblemLeaderUnsupported, problems[0].Code)
+		require.Equal(t, types.ProblemLeaderNotSelfConfirmed, problems[0].Code)
 	})
 
 	t.Run("anti-flap grace does not consult the quorum-commit backstop", func(t *testing.T) {
@@ -900,7 +900,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		// toward the recruitment quorum — leaving only follower1 reachable, which is
 		// below the majority of 3, so the failover is infeasible. (Were staleness not
 		// checked, follower2 would count and this would be an actionable
-		// LeaderUnsupported instead.)
+		// LeaderNotSelfConfirmed instead.)
 		sa := deadLeaderShardAnalysis(func(sa *ShardAnalysis) {
 			sa.Analyses[1].Mutate(func(h *multiorchdatapb.PoolerHealthState) {
 				h.LastSeen = timestamppb.New(sa.Now.Add(-time.Hour))
@@ -1053,7 +1053,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
 		require.Len(t, problems, 1)
-		require.Equal(t, types.ProblemLeaderUnsupported, problems[0].Code)
+		require.Equal(t, types.ProblemLeaderLacksCohortSupport, problems[0].Code)
 	})
 
 	t.Run("ignores when leader pooler down but all replicas still connected to postgres", func(t *testing.T) {
@@ -1103,7 +1103,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
 		require.Len(t, problems, 1)
-		require.Equal(t, types.ProblemLeaderUnsupported, problems[0].Code)
+		require.Equal(t, types.ProblemLeaderLacksCohortSupport, problems[0].Code)
 		require.Equal(t, leaderID, problems[0].PoolerID)
 	})
 
@@ -1128,7 +1128,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		// single streaming follower proves the leader is alive (you cannot stream
 		// from a dead primary), so the leader vouches for itself: {follower1, leader}
 		// meets AtLeast(2) and failover is suppressed. Without the leader-self-vouch
-		// this would be LeaderUnsupported.
+		// this would be LeaderNotSelfConfirmed.
 		sa := deadLeaderShardAnalysis(func(sa *ShardAnalysis) {
 			sa.Analyses[0] = store.NewPooler(&multiorchdatapb.PoolerHealthState{
 				Multipooler: &clustermetadatapb.Multipooler{Id: follower1ID, ShardKey: shardKey},
@@ -1395,6 +1395,6 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
 		require.Len(t, problems, 1, "should detect dead leader when multipooler is unreachable even if promotion flag is set")
-		require.Equal(t, types.ProblemLeaderUnsupported, problems[0].Code)
+		require.Equal(t, types.ProblemLeaderLacksCohortSupport, problems[0].Code)
 	})
 }

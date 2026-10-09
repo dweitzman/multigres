@@ -59,11 +59,13 @@ const (
 	//     the unbootstrapped case and belongs to ShardNeedsInitialization instead.)
 	//   - LeaderResigned: the leader voluntarily signalled it should step down.
 	//     First-hand; act immediately.
-	//   - LeaderUnsupported: no durability-sufficient set of the cohort currently
-	//     backs this rule — either the leader itself never confirmed the term (or
-	//     was revoked with no successor decided yet), or enough followers have
-	//     moved on (revoked past it) or gone unreachable. Quorum-gated, since this
-	//     is inferred from self-reports rather than a single authoritative signal.
+	//   - LeaderNotSelfConfirmed: the leader's own report does not confirm it as
+	//     leader of the current rule — it never confirmed the term, or was revoked
+	//     with no successor decided yet. Disqualifying regardless of follower
+	//     support, since writes only flow through the leader.
+	//   - LeaderLacksCohortSupport: enough followers have moved on (revoked past
+	//     the rule) that the remaining members cannot satisfy the durability
+	//     policy. Quorum-gated, since this is inferred from follower self-reports.
 	//   - LeaderUnhealthy: the rule IS supported, but the leader reports its own
 	//     postgres dead/unresponsive. First-hand about itself, so no quorum
 	//     corroboration is required.
@@ -76,7 +78,8 @@ const (
 	//     followers (receiveLsnStillAdvancing) is treated as backlog-draining
 	//     during propagation, not a genuine halt.
 	ProblemLeaderUnspecified         ProblemCode = "LeaderUnspecified"
-	ProblemLeaderUnsupported         ProblemCode = "LeaderUnsupported"
+	ProblemLeaderNotSelfConfirmed    ProblemCode = "LeaderNotSelfConfirmed"
+	ProblemLeaderLacksCohortSupport  ProblemCode = "LeaderLacksCohortSupport"
 	ProblemLeaderUnhealthy           ProblemCode = "LeaderUnhealthy"
 	ProblemLeaderResigned            ProblemCode = "LeaderResigned"
 	ProblemLeaderQuorumWritesStalled ProblemCode = "LeaderQuorumWritesStalled"
@@ -87,7 +90,8 @@ const (
 // which share one recovery action and one per-shard failover throttle.
 func (c ProblemCode) IsFailoverProblem() bool {
 	return c == ProblemLeaderUnspecified ||
-		c == ProblemLeaderUnsupported ||
+		c == ProblemLeaderNotSelfConfirmed ||
+		c == ProblemLeaderLacksCohortSupport ||
 		c == ProblemLeaderUnhealthy ||
 		c == ProblemLeaderResigned ||
 		c == ProblemLeaderQuorumWritesStalled

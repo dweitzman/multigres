@@ -41,8 +41,8 @@ import (
 //     rule? Consensus-bookkeeping evidence (self-reports, revocations, streaming).
 //   - Leader fitness: given the rule is supported, is the specific pooler named
 //     leader physically able to serve writes right now? Postgres-liveness
-//     evidence, orthogonal to consensus. Unsupported (LeaderUnsupported) is
-//     checked first: a leader nobody backs cannot be judged fit no matter how
+//     evidence, orthogonal to consensus. Rule support (LeaderNotSelfConfirmed,
+//     LeaderLacksCohortSupport) is checked first: a leader nobody backs cannot be judged fit no matter how
 //     healthy its postgres looks. The LeaderQuorumWritesStalled backstop (is the
 //     quorum-commit watermark advancing?) is the last fitness check, applied
 //     before either healthy verdict is returned.
@@ -544,14 +544,14 @@ func (a *LeaderNeedsReplacementAnalyzer) leaderReplacementCause(
 		// confirmed the term, or self-revoked with no successor decided yet) —
 		// disqualifying on its own regardless of follower support, since writes
 		// only ever flow through the leader.
-		return types.ProblemLeaderUnsupported,
+		return types.ProblemLeaderNotSelfConfirmed,
 			fmt.Sprintf("Leader for shard %s does not confirm its own role in the current rule", sa.ShardKey), false
 	case revocationSufficient(policy, cohort, cutOff):
 		// Followers conclusively lapsed are sufficient to revoke the term: the
 		// members not lapsed (including the leader) can no longer satisfy the
 		// policy. Mirrors the recruitment-feasibility gate: same conclusive
 		// revocation to detect the failure as to act.
-		return types.ProblemLeaderUnsupported,
+		return types.ProblemLeaderLacksCohortSupport,
 			fmt.Sprintf("Leader for shard %s is not backed by a durability-sufficient set of its cohort", sa.ShardKey), false
 	case leaderPart == participationActive || policy.SatisfiedBy(vouching) == nil:
 		// The rule is supported — either the leader confirms itself directly, or
