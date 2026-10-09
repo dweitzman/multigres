@@ -15,6 +15,8 @@
 package analysis
 
 import (
+	"time"
+
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
@@ -23,12 +25,13 @@ import (
 	"github.com/multigres/multigres/go/services/multiorch/store"
 )
 
-// quorumCommitFresh reports whether a quorum acknowledged a write within
-// QuorumCommitStaleAfter — the only proof that the shard is making durable
-// write progress. No watermark at all is not proof.
-func quorumCommitFresh(sa *ShardAnalysis) bool {
+// commitsStalledFor reports whether the shard has gone longer than patience
+// without a quorum acknowledging a write — the only proof of progress. No
+// watermark at all counts as stalled: its absence is not proof. A zero patience
+// never waits for commits, however fresh.
+func commitsStalledFor(sa *ShardAnalysis, patience time.Duration) bool {
 	ts := freshestQuorumCommitTs(sa)
-	return ts.GetSeconds() != 0 && sa.Now.Sub(ts.AsTime()) <= sa.Policy.QuorumCommitStaleAfter
+	return patience <= 0 || ts.GetSeconds() == 0 || sa.Now.Sub(ts.AsTime()) > patience
 }
 
 // freshestQuorumCommitTs returns the most recent quorum_commit_ts known for

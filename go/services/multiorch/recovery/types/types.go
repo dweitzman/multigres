@@ -59,9 +59,10 @@ const (
 	//     cannot satisfy the durability policy. Durable; progress is impossible.
 	//   - LeaderUnreachableByCohort: enough followers are pointed at the leader but
 	//     not streaming from it that the rest cannot form a quorum. An observation
-	//     that could recover on its own; progress is halted.
-	//   - LeaderUnhealthy: the leader reports its own postgres down, unresponsive,
-	//     or still in recovery.
+	//     that could recover on its own, so it only convicts once commits have
+	//     stalled for FollowerDisconnectPatience.
+	//   - LeaderUnhealthy: the leader reports its own postgres not running, not ready
+	//     (convicts after PostgresUnreadyPatience), or still in recovery.
 	//   - LeaderPromotionIncomplete: an undecided promotion's candidate has accepted
 	//     the new rule but no quorum commit proves it serving yet. While it shows
 	//     progress (mid pg_promote(), followers receiving its WAL), the failover is

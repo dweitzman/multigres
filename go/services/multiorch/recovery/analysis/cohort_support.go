@@ -15,6 +15,8 @@
 package analysis
 
 import (
+	"time"
+
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -143,13 +145,13 @@ func followerStreamingFromLeader(sa *ShardAnalysis, replica *store.Pooler, prima
 		return false
 	}
 	if ts := rs.LastMsgReceiveTime; ts != nil {
-		threshold := defaultReplicationHeartbeatStalenessThreshold
+		threshold := sa.Policy.WalReceiverStalenessFallback
 		delay := sa.Now.Sub(ts.AsTime())
 		if d := rs.WalReceiverTimeout; d != nil && delay > d.AsDuration() {
 			return false
 		}
 		if d := rs.WalReceiverStatusInterval; d != nil && d.AsDuration() > 0 {
-			threshold = replicationHeartbeatStalenessMultiplier * d.AsDuration()
+			threshold = time.Duration(sa.Policy.WalReceiverStalenessMultiplier) * d.AsDuration()
 		}
 		if delay > threshold {
 			return false

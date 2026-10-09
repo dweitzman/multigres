@@ -562,7 +562,7 @@ func TestReplicasStreamingFromLeader(t *testing.T) {
 	})
 
 	t.Run("returns false when last_msg_receive_time is stale (default threshold)", func(t *testing.T) {
-		// No WalReceiverStatusInterval supplied — falls back to defaultReplicationHeartbeatStalenessThreshold.
+		// No WalReceiverStatusInterval supplied — falls back to DefaultAvailabilityPolicy().WalReceiverStalenessFallback.
 		ps := store.NewTestCache(t)
 
 		store.SeedCache(t, ps, store.NewPooler(&multiorchdatapb.PoolerHealthState{
@@ -583,7 +583,7 @@ func TestReplicasStreamingFromLeader(t *testing.T) {
 		}, nil))
 
 		fixedNow := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-		staleTime := fixedNow.Add(-(defaultReplicationHeartbeatStalenessThreshold + time.Second))
+		staleTime := fixedNow.Add(-(DefaultAvailabilityPolicy().WalReceiverStalenessFallback + time.Second))
 
 		store.SeedCache(t, ps, store.NewPooler(&multiorchdatapb.PoolerHealthState{
 			Multipooler: &clustermetadatapb.Multipooler{
@@ -642,7 +642,7 @@ func TestReplicasStreamingFromLeader(t *testing.T) {
 
 		fixedNow := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 		interval := 5 * time.Second
-		dynamicThreshold := replicationHeartbeatStalenessMultiplier * interval // 15s
+		dynamicThreshold := time.Duration(DefaultAvailabilityPolicy().WalReceiverStalenessMultiplier) * interval // 15s
 		staleTime := fixedNow.Add(-(dynamicThreshold + time.Second))
 
 		store.SeedCache(t, ps, store.NewPooler(&multiorchdatapb.PoolerHealthState{

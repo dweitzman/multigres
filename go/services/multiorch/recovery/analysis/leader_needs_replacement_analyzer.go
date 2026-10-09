@@ -28,31 +28,33 @@ import (
 // LeaderNeedsReplacementAnalyzer decides, once per recovery cycle, whether a
 // shard's leader must be replaced. It asks one question: is the shard provably
 // making durable write progress under its current leader? The answer comes from
-// four checks, in order (see judgeLeader):
+// three steps (see judgeLeader):
 //
 //  1. Progress is impossible → replace. Durable consensus facts that won't
 //     change on their own: the leader resigned or shut down, it does not back
 //     the current rule, or enough of its cohort revoked that rule that it can
-//     no longer reach a quorum.
-//  2. Progress is halted → replace. Current observations that could recover on
-//     their own, so each has an anti-flap allowance: the leader's postgres is
-//     down or still in recovery, or enough of its cohort has stopped streaming
-//     from it. Checked before the watermark because they are fresher: a
-//     watermark may be QuorumCommitStaleAfter old.
-//  3. Progress is proven → keep. A quorum acknowledged a write within
-//     QuorumCommitStaleAfter (the heartbeat's quorum-commit watermark).
-//  4. Otherwise → replace: writes are not provably committing. An undecided
-//     promotion reports LeaderPromotionIncomplete, an established leader
-//     LeaderProgressUnproven. The problem is always reported, since writes are
-//     unavailable either way, but the failover is deferred (Problem.NotBefore)
-//     while progress may be imminent: for QuorumCommitStaleAfter after the
-//     current rule was created (its leader hasn't had time to commit a
+//     no longer reach a quorum. These act at once.
+//  2. Otherwise, wait for proof of progress: a quorum-commit watermark (the
+//     heartbeat's last quorum-acknowledged write) no older than a patience.
+//     The patience is QuorumCommitStaleAfter, unless a blocker is present.
+//     Each blocker has its own, shorter patience in the availability policy.
+//     A blocker is a state that would stop writes if it persisted: the
+//     leader's postgres is down, unready or still in recovery, or enough of its
+//     cohort is not streaming from it. Blockers are causes, not outcomes, so
+//     they never convict alone; they only shorten the wait, and a fresh commit
+//     overrides them (the blocker was wrong, or already recovered).
+//  3. Commits stalled longer than the patience → replace, with the blocker's
+//     code, or LeaderProgressUnproven when there is none (LeaderPromotionIncomplete
+//     for an undecided promotion). The problem is always reported, since writes
+//     are unavailable either way, but the failover is deferred
+//     (Problem.NotBefore) while progress may be imminent: for the patience after
+//     the current rule was created (its leader hasn't had time to commit a
 //     watermark), and for up to MaxPromotionTime while a promotion is
 //     propagating (its candidate is mid pg_promote(), or followers are
 //     receiving its WAL).
 //
-// While a promotion is in flight, the halted checks that a promotion itself
-// causes (a candidate still in recovery, followers reconnecting) don't apply.
+// While a promotion is in flight, the blockers that a promotion itself causes
+// (a candidate still in recovery, followers reconnecting) don't apply.
 //
 // The evidence behind each check lives in leader_evidence.go (the leader's own
 // report), cohort_support.go (its followers' reports) and leader_progress.go
@@ -114,68 +116,80 @@ func (a *LeaderNeedsReplacementAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Pro
 			fmt.Sprintf("Shard %s has cohort members but no designated leader", sa.ShardKey))), nil
 	}
 
-	verdict, replace := a.judgeLeader(sa, leaderID, cohort, policy)
-	if !replace {
+	verdict, progressProven := a.judgeLeader(sa, leaderID, cohort, policy)
+	if progressProven {
 		return a.atRiskProblemIfDegraded(sa, policy, cohort, leaderID), nil
 	}
+	// Anything short of proof is reported as a problem; verdict.notBefore only
+	// says when the failover for it may run.
 	return a.emitFailover(sa, leaderID, policy, cohort, verdict), nil
 }
 
-// leaderVerdict is why a leader must be replaced, and the earliest time to act.
+// leaderVerdict says why the shard has a leader problem, and when its failover
+// may run. The problem is always reported. notBefore only defers acting on it
+// while progress may be imminent, and is the zero time when there is no reason
+// to wait.
 type leaderVerdict struct {
 	cause       types.ProblemCode
 	description string
 	notBefore   time.Time
 }
 
+// replaceLeader is a verdict that the leader should be replaced, to run at once
+// unless notBefore is later set.
 func replaceLeader(cause types.ProblemCode, description string) leaderVerdict {
 	return leaderVerdict{cause: cause, description: description}
 }
 
-// judgeLeader applies the checks documented on LeaderNeedsReplacementAnalyzer.
-// It returns replace=false when the leader provably makes progress.
+// judgeLeader applies the steps documented on LeaderNeedsReplacementAnalyzer.
+// It returns progressProven=true when the shard provably makes progress, and
+// otherwise the verdict for the problem to report, whose notBefore may defer
+// the failover.
 func (a *LeaderNeedsReplacementAnalyzer) judgeLeader(
 	sa *ShardAnalysis,
 	leaderID *clustermetadatapb.ID,
 	cohort []*clustermetadatapb.ID,
 	policy commonconsensus.DurabilityPolicy,
-) (verdict leaderVerdict, replace bool) {
+) (verdict leaderVerdict, progressProven bool) {
 	inFlight := promotionInFlight(sa, leaderID)
-
 	revoked, disconnected := a.classifyFollowers(sa, cohort, leaderID)
 
 	// 1. Progress is impossible.
 	if verdict, ok := a.progressImpossible(sa, leaderID, cohort, policy, revoked); ok {
-		return verdict, true
+		return verdict, false
 	}
 
-	// 2. Progress is halted.
-	if verdict, ok := a.progressHalted(sa, cohort, policy, inFlight, revoked, disconnected); ok {
-		return verdict, true
+	// 2. Wait for proof of progress; a blocker shortens the wait.
+	patience := sa.Policy.QuorumCommitStaleAfter
+	blocker, blocked := a.findBlocker(sa, cohort, policy, inFlight, revoked, disconnected)
+	if blocked {
+		patience = blocker.patience
+	}
+	if !commitsStalledFor(sa, patience) {
+		return leaderVerdict{}, true
 	}
 
-	// 3. Progress is proven.
-	if quorumCommitFresh(sa) {
-		return leaderVerdict{}, false
-	}
-
-	// 4. Otherwise, progress is unproven. Defer while it may still be imminent:
-	// a new rule's leader needs QuorumCommitStaleAfter to commit a watermark,
-	// and a propagating promotion gets up to MaxPromotionTime.
+	// 3. Stalled, so writes are unavailable and this is a problem to report now.
+	// Whether to act on it now is separate: defer the failover (notBefore) while
+	// progress may still be imminent. A new rule's leader needs the patience to
+	// commit its first watermark, and a propagating promotion gets up to
+	// MaxPromotionTime.
 	created := commonconsensus.PossiblyUndecidedRule(sa.HighestPosition).GetCreationTime().AsTime()
-	if inFlight {
+	switch {
+	case blocked:
+		verdict = replaceLeader(blocker.cause, blocker.description)
+	case inFlight:
 		verdict = replaceLeader(types.ProblemLeaderPromotionIncomplete,
 			fmt.Sprintf("Shard %s is promoting a new leader that has not yet committed a quorum write", sa.ShardKey))
-		verdict.notBefore = created.Add(sa.Policy.QuorumCommitStaleAfter)
-		if a.promotionPropagating(sa, leaderID, cohort, policy) {
-			verdict.notBefore = created.Add(sa.Policy.MaxPromotionTime)
-		}
-		return verdict, true
+	default:
+		verdict = replaceLeader(types.ProblemLeaderProgressUnproven,
+			fmt.Sprintf("Shard %s has no quorum-commit watermark newer than %s", sa.ShardKey, patience))
 	}
-	verdict = replaceLeader(types.ProblemLeaderProgressUnproven,
-		fmt.Sprintf("Shard %s has no quorum-commit watermark newer than %s", sa.ShardKey, sa.Policy.QuorumCommitStaleAfter))
-	verdict.notBefore = created.Add(sa.Policy.QuorumCommitStaleAfter)
-	return verdict, true
+	verdict.notBefore = created.Add(patience)
+	if inFlight && !blocked && a.promotionPropagating(sa, leaderID, cohort, policy) {
+		verdict.notBefore = created.Add(sa.Policy.MaxPromotionTime)
+	}
+	return verdict, false
 }
 
 // progressImpossible reports the first durable consensus fact proving the
@@ -227,55 +241,71 @@ func (a *LeaderNeedsReplacementAnalyzer) progressImpossible(
 	return leaderVerdict{}, false
 }
 
-// progressHalted reports the first current observation showing the leader is
-// not making progress right now, if any. Each could recover on its own, so
-// each is judged with an allowance for transient blips.
-func (a *LeaderNeedsReplacementAnalyzer) progressHalted(
+// blocker is a state that would stop writes if it persisted. It is evidence of a
+// cause, not of a stall, so it only shortens how long judgeLeader waits for
+// commits to resume.
+type blocker struct {
+	cause       types.ProblemCode
+	description string
+	// patience is how long commits may be stalled before this blocker convicts.
+	// Zero means a state that cannot be a blip, so it convicts at once.
+	patience time.Duration
+}
+
+// findBlocker reports the first blocker, if any, from the followers' and the
+// leader's current state.
+func (a *LeaderNeedsReplacementAnalyzer) findBlocker(
 	sa *ShardAnalysis,
 	cohort []*clustermetadatapb.ID,
 	policy commonconsensus.DurabilityPolicy,
 	inFlight bool,
 	revoked, disconnected []*clustermetadatapb.ID,
-) (leaderVerdict, bool) {
+) (blocker, bool) {
 	// Enough followers are pointed at the leader yet not streaming (past
 	// ConnectReplicasToNewLeaderGrace) that the rest cannot form a quorum. Not
 	// during a promotion: the candidate's pg_promote() switches timeline,
 	// briefly disconnecting every cascading follower at once. A promotion whose
 	// followers never reconnect shows no WAL progress, so it isn't deferred
 	// (see promotionPropagating).
-	if !inFlight && revocationSufficient(policy, cohort, append(revoked, disconnected...)) {
-		return replaceLeader(types.ProblemLeaderUnreachableByCohort,
-			fmt.Sprintf("Leader for shard %s is not reachable by a durability-sufficient set of its cohort", sa.ShardKey)), true
+	lapsed := append(append([]*clustermetadatapb.ID{}, revoked...), disconnected...)
+	if !inFlight && revocationSufficient(policy, cohort, lapsed) {
+		return blocker{
+			cause:       types.ProblemLeaderUnreachableByCohort,
+			description: fmt.Sprintf("Leader for shard %s is not reachable by a durability-sufficient set of its cohort", sa.ShardKey),
+			patience:    sa.Policy.FollowerDisconnectPatience,
+		}, true
 	}
 
 	// The leader's postgres cannot serve writes. Judged only from a fresh report.
 	if !leaderObservedLive(sa) {
-		return leaderVerdict{}, false
+		return blocker{}, false
 	}
-	// A STANDBY answers pg_isready, so without this it would pass the readiness
-	// check below forever. Not during a promotion: the candidate is still a
-	// standby until its pg_promote() runs.
+	// A STANDBY answers pg_isready, so without this it would look fine forever.
+	// Not during a promotion: the candidate is still a standby until its
+	// pg_promote() runs. A standby cannot commit, so there is nothing to wait for.
 	if leaderInRecovery(sa) && !inFlight {
-		return replaceLeader(types.ProblemLeaderUnhealthy,
-			fmt.Sprintf("Leader for shard %s is reachable but its postgres is in recovery (not a primary)", sa.ShardKey)), true
+		return blocker{
+			cause:       types.ProblemLeaderUnhealthy,
+			description: fmt.Sprintf("Leader for shard %s is reachable but its postgres is in recovery (not a primary)", sa.ShardKey),
+		}, true
 	}
-	// A promotion in flight is mid pg_promote(), so briefly not ready is expected.
-	if !leaderPostgresReady(sa) && !(inFlight && leaderMidPromote(sa)) && !a.leaderRecentlyReady(sa) {
-		return replaceLeader(types.ProblemLeaderUnhealthy,
-			fmt.Sprintf("Leader for shard %s is reachable but its postgres is unhealthy", sa.ShardKey)), true
+	if leaderPostgresReady(sa) || (inFlight && leaderMidPromote(sa)) {
+		return blocker{}, false // a promotion mid pg_promote() is briefly not ready by design
 	}
-	return leaderVerdict{}, false
-}
-
-// leaderRecentlyReady is an anti-flap allowance: a leader whose postgres process
-// is alive and answered pg_isready within LeaderPostgresResponseThreshold is
-// given that long to recover locally before failing over.
-func (a *LeaderNeedsReplacementAnalyzer) leaderRecentlyReady(sa *ShardAnalysis) bool {
+	// Not ready and not running: a dead postgres cannot recover on its own the
+	// way a blip can, and the pooler's own restart is slower than failing over.
 	if !leaderPostgresRunning(sa) {
-		return false
+		return blocker{
+			cause:       types.ProblemLeaderUnhealthy,
+			description: fmt.Sprintf("Leader for shard %s is reachable but its postgres is not running", sa.ShardKey),
+		}, true
 	}
-	lastReady := leaderLastPostgresReadyTime(sa)
-	return !lastReady.IsZero() && sa.Now.Sub(lastReady) <= a.factory.Config().GetLeaderPostgresResponseThreshold()
+	// Running but not ready: starting or wedged. It may come back, so wait.
+	return blocker{
+		cause:       types.ProblemLeaderUnhealthy,
+		description: fmt.Sprintf("Leader for shard %s is reachable but its postgres is not ready", sa.ShardKey),
+		patience:    sa.Policy.PostgresUnreadyPatience,
+	}, true
 }
 
 // promotionPropagating reports whether an in-flight promotion still shows

@@ -27,19 +27,6 @@ import (
 	"github.com/multigres/multigres/go/services/multiorch/store"
 )
 
-// replicationHeartbeatStalenessMultiplier is applied to wal_receiver_status_interval
-// to compute the heartbeat staleness threshold. The replica sends a status message
-// to the primary every wal_receiver_status_interval; the primary echoes a keepalive
-// reply. Three missed intervals means the primary has gone silent well before the
-// wal_receiver_timeout (60s) would disconnect the WAL receiver.
-const replicationHeartbeatStalenessMultiplier = 3
-
-// defaultReplicationHeartbeatStalenessThreshold is the fallback threshold used
-// when wal_receiver_status_interval is not available in the replica's health
-// state. Equals replicationHeartbeatStalenessMultiplier × the default
-// wal_receiver_status_interval (10s).
-const defaultReplicationHeartbeatStalenessThreshold = 30 * time.Second
-
 // PoolersByShard is a structured map for efficient lookups.
 // Structure: [database][tablegroup][shard][pooler_id] -> PoolerHealthState
 type PoolersByShard map[string]map[string]map[string]map[topoclient.ComponentID]*store.Pooler

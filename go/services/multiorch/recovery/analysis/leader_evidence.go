@@ -15,8 +15,6 @@
 package analysis
 
 import (
-	"time"
-
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -86,9 +84,9 @@ func leaderMidPromote(sa *ShardAnalysis) bool {
 // PRIMARY": a standby answers pg_isready continuously, so it keeps postgres_ready
 // (and LastPostgresReadyTime) fresh and would otherwise pass the readiness checks
 // forever. Transient non-primary states (STARTING/UNKNOWN during a restart or a
-// wedged postgres) lose pg_isready, so the anti-flap timeout already fails them
-// over — treating them as "in recovery" here would instead fail over every
-// primary restart. PROMOTING is its own state (see leaderPromoting).
+// wedged postgres) lose pg_isready, which the not-ready blocker already handles
+// with a patience — treating them as "in recovery" here would instead fail over
+// every primary restart. PROMOTING is its own state (see leaderPromoting).
 func leaderInRecovery(sa *ShardAnalysis) bool {
 	return sa.Leader != nil &&
 		sa.Leader.Health().GetStatus().GetPostgresStatus() == multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_STANDBY
@@ -103,18 +101,6 @@ func leaderPostgresReady(sa *ShardAnalysis) bool {
 // postgres process alive (may be true even when pg_isready fails, e.g. SIGSTOP).
 func leaderPostgresRunning(sa *ShardAnalysis) bool {
 	return sa.Leader != nil && sa.Leader.Health().GetStatus().GetPostgresRunning()
-}
-
-// leaderLastPostgresReadyTime returns when the leader's postgres last reported
-// ready per its snapshots, or the zero time if never observed ready.
-func leaderLastPostgresReadyTime(sa *ShardAnalysis) time.Time {
-	if sa.Leader == nil {
-		return time.Time{}
-	}
-	if ts := sa.Leader.Health().GetLastPostgresReadyTime(); ts != nil {
-		return ts.AsTime()
-	}
-	return time.Time{}
 }
 
 // leaderServing reports whether the leader is a healthy, currently-serving

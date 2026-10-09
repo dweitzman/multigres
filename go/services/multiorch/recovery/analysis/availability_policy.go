@@ -33,6 +33,17 @@ import (
 // pooler's last health snapshot is too old to be trusted as a live signal. The
 // set of fields will grow as more decisions become policy-driven.
 //
+// TODO: the failover timings that govern leader appointment are still scattered
+// outside this struct: the recruitment backoff schedule and its reset window
+// (ha.DefaultBackoffSchedule, ha.DefaultBackoffResetDuration), the coordinator's
+// recent-acceptance back-off window (consensus.checkRecentAcceptance), and the
+// AppointLeader action's timeouts. Move AvailabilityPolicy to a leaf package that
+// consensus can import (analysis already imports consensus), then thread it
+// through the engine, coordinator and action factory so every such time is
+// defined here. Also drop the now-unused --leader-postgres-response-threshold
+// flag, and define QuorumCommitStaleAfter and the freshness defaults here
+// instead of copying them from consensus and store.
+//
 // This is an in-process Go struct, deliberately scoped to multiorch for now.
 // The longer-term direction (see the orch health/failover principles doc, P6)
 // is to source it from a proto distributed to poolers, with per-shard
@@ -85,11 +96,41 @@ type AvailabilityPolicy struct {
 	// healthy leader.
 	QuorumCommitStaleAfter time.Duration
 
-	// MaxPromotionTime bounds how long after a promotion is proposed its failover
-	// may be deferred while it still shows progress (mid pg_promote(), or
-	// followers receiving its WAL). Generous on purpose: a candidate with a large
-	// WAL backlog can need minutes before its first quorum commit, and failing it
-	// over hands the same backlog to the next candidate.
+	// PostgresUnreadyPatience bounds how long commits may be stalled before a
+	// leader whose postgres is running but not ready (starting, wedged) is
+	// convicted. It must exceed a healthy shard's ordinary watermark age, which
+	// in a 3-pooler cluster measured up to about 5.6s (the writer lags one write
+	// behind, plus snapshot propagation steps of about 5s), and stay below
+	// QuorumCommitStaleAfter, which it exists to beat.
+	PostgresUnreadyPatience time.Duration
+
+	// FollowerDisconnectPatience is the same for a durability-sufficient set of
+	// followers that are pointed at the leader but not streaming from it. Longer
+	// than PostgresUnreadyPatience on purpose: postgres can be slow to connect,
+	// and a failover that fires while replication is still being set up
+	// interrupts it before it begins, which can loop.
+	FollowerDisconnectPatience time.Duration
+
+	// WalReceiverStalenessMultiplier is applied to a follower's
+	// wal_receiver_status_interval to decide whether its WAL receiver has gone
+	// silent: it sends a status message every interval and the primary echoes a
+	// keepalive, so this many missed intervals means the primary stopped
+	// answering, well before wal_receiver_timeout would disconnect it.
+	WalReceiverStalenessMultiplier int
+
+	// WalReceiverStalenessFallback is that threshold when the follower's
+	// wal_receiver_status_interval is not in its health report. It equals
+	// WalReceiverStalenessMultiplier times the default interval (10s).
+	WalReceiverStalenessFallback time.Duration
+
+	// MaxPromotionTime bounds how long after a promotion is proposed Multiorch
+	// waits before superseding it with a new recruit, while it still shows
+	// progress (mid pg_promote(), or followers receiving its WAL). The stalled
+	// promotion is reported throughout; only the failover waits. It bounds when a
+	// replacement may start, not how long a promotion may run. Generous on
+	// purpose: a candidate with a large WAL backlog can need minutes before its
+	// first quorum commit, and failing it over hands the same backlog to the next
+	// candidate.
 	MaxPromotionTime time.Duration
 }
 
@@ -106,6 +147,10 @@ func DefaultAvailabilityPolicy() AvailabilityPolicy {
 		ConnectReplicasToNewLeaderGrace: 10 * time.Second,
 		ObservationFreshness:            store.DefaultObservationFreshness,
 		QuorumCommitStaleAfter:          consensus.DefaultQuorumCommitStaleAfter,
+		PostgresUnreadyPatience:         10 * time.Second,
+		FollowerDisconnectPatience:      15 * time.Second,
+		WalReceiverStalenessMultiplier:  3,
+		WalReceiverStalenessFallback:    30 * time.Second,
 		MaxPromotionTime:                5 * time.Minute,
 	}
 }
