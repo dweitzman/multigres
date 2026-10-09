@@ -48,17 +48,22 @@ type BackoffSchedule struct {
 	Max time.Duration
 	// JitterFraction is the width of the per-orchestrator jitter as a fraction of
 	// the (capped) exponential delay — e.g. 0.25 spreads orchs across the top 25%
-	// of the delay. Zero disables jitter.
+	// of the delay. Zero disables the fractional window.
 	JitterFraction float64
+	// MinJitterWindow is a floor on the jitter window, so a short Base does not
+	// narrow it and make two orchestrators more likely to land on the same slot.
+	// Zero means no floor; with a zero JitterFraction too, jitter is disabled.
+	MinJitterWindow time.Duration
 }
 
 // DefaultBackoffSchedule returns the built-in schedule. These are tuning knobs,
 // not load-bearing constants; adjust as failover behavior is characterized.
 func DefaultBackoffSchedule() BackoffSchedule {
 	return BackoffSchedule{
-		Base:           10 * time.Second,
-		Max:            5 * time.Minute,
-		JitterFraction: 0.25,
+		Base:            5 * time.Second,
+		Max:             5 * time.Minute,
+		JitterFraction:  0.25,
+		MinJitterWindow: 2500 * time.Millisecond,
 	}
 }
 
@@ -116,18 +121,18 @@ func (s BackoffSchedule) backoff(attempt int64) time.Duration {
 	return retry.ExponentialBackoffMagnitude(s.Base, max, int(attempt-1))
 }
 
-// jitter returns a deterministic offset in [0, JitterFraction*base), hashed
+// jitter returns a deterministic offset in [0, max(JitterFraction*base, MinJitterWindow)), hashed
 // from the caller identity, replace_decision, and attempt — every caller
 // observes the same inputs and agrees on the ordering, without a shared RNG.
 // replace_decision reshuffles the order across failover episodes, attempt
 // across rounds within one.
 //
-// TODO: the window is narrow at low attempt counts (e.g. 2.5s at attempt 1
+// TODO: the window is still narrow at low attempt counts (2.5s at attempt 1
 // with the default schedule), so with enough concurrent callers more than one
-// can still collide on the same slot. Consider a floor independent of
-// JitterFraction if collisions matter at scale.
+// can still collide on the same slot. Widen MinJitterWindow if collisions
+// matter at scale.
 func (s BackoffSchedule) jitter(orchID *clustermetadatapb.ID, replaceDecision *clustermetadatapb.RuleNumber, attempt int64, base time.Duration) time.Duration {
-	window := time.Duration(float64(base) * s.JitterFraction)
+	window := max(time.Duration(float64(base)*s.JitterFraction), s.MinJitterWindow)
 	if window <= 0 {
 		return 0
 	}

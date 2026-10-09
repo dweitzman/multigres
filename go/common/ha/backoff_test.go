@@ -164,3 +164,35 @@ func TestBackoffSchedule_MissingAttemptTreatedAsOne(t *testing.T) {
 	got := s.NextAttempt(revAt(initiated, decision(4), 0), orch("a")).Sub(initiated)
 	assert.Equal(t, 2*time.Second, got)
 }
+
+func TestDefaultBackoffSchedule_FirstRetryIsFiveSecondsPlusJitter(t *testing.T) {
+	// The first retry after a failed attempt lands 5s to 7.5s after that attempt
+	// started: the 5s floor plus up to the 2.5s minimum jitter window.
+	s := DefaultBackoffSchedule()
+	initiated := time.Unix(1_000_000, 0)
+	for _, name := range []string{"a", "b", "c", "d", "e", "f", "g", "h"} {
+		delay := s.NextAttempt(revAt(initiated, decision(4), 1), orch(name)).Sub(initiated)
+		assert.GreaterOrEqual(t, delay, 5*time.Second, "orch %s", name)
+		assert.Less(t, delay, 7500*time.Millisecond, "orch %s", name)
+	}
+}
+
+func TestDefaultBackoffSchedule_DoublesPerAttempt(t *testing.T) {
+	s := DefaultBackoffSchedule()
+	assert.Equal(t, 5*time.Second, s.backoff(1))
+	assert.Equal(t, 10*time.Second, s.backoff(2))
+	assert.Equal(t, 20*time.Second, s.backoff(3))
+}
+
+func TestBackoffSchedule_MinJitterWindowFloorsAShortDelay(t *testing.T) {
+	// A fractional window of 1s (25% of 4s) is widened to the 3s floor, so some
+	// offset must exceed the fractional window across enough callers.
+	s := BackoffSchedule{Base: 4 * time.Second, Max: time.Hour, JitterFraction: 0.25, MinJitterWindow: 3 * time.Second}
+	var widest time.Duration
+	for _, name := range []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"} {
+		j := s.jitter(orch(name), decision(4), 1, s.backoff(1))
+		assert.Less(t, j, 3*time.Second, "orch %s", name)
+		widest = max(widest, j)
+	}
+	assert.Greater(t, widest, time.Second, "the floor must widen the window past the 25%% fraction")
+}
