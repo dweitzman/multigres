@@ -35,7 +35,7 @@ import (
 )
 
 // TestPrimaryDeletedDataFilesDoesNotFailOver is a deliberately-red regression
-// test documenting a known gap, not a success-path test: LeaderQuorumWritesStalled
+// test documenting a known gap, not a success-path test: LeaderProgressUnproven
 // doesn't catch a leader whose pg_data/base was deleted out from under it, because
 // the heartbeat writer's already-open connection keeps reading/writing via
 // delete-while-open semantics, so quorum_commit_ts never goes stale. Same root
@@ -65,7 +65,7 @@ func TestPrimaryDeletedDataFilesDoesNotFailOver(t *testing.T) {
 	t.Logf("Initial primary: %s", oldPrimaryName)
 
 	// quorum_commit_ts is NULL until the writer's 2nd heartbeat -- wait for a
-	// real value, or LeaderQuorumWritesStalled's staleness check has nothing to go stale.
+	// real value, or LeaderProgressUnproven's staleness check has nothing to go stale.
 	primaryClient, err := shardsetup.NewMultipoolerClient(primary.Multipooler.GrpcPort)
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
@@ -131,7 +131,7 @@ func TestPrimaryDeletedDataFilesDoesNotFailOver(t *testing.T) {
 	t.Logf("fresh-connection query failed as expected: %v", err)
 	require.NoError(t, directDB.Close())
 
-	t.Log("Waiting to see whether multiorch detects LeaderQuorumWritesStalled and fails over...")
+	t.Log("Waiting to see whether multiorch detects LeaderProgressUnproven and fails over...")
 	newPrimaryName := shardsetup.WaitForNewPrimary(t, setup, oldPrimaryName, 90*time.Second)
 	require.NotEmpty(t, newPrimaryName, "a new primary should eventually be appointed once the old one's data files are gone")
 	require.NotEqual(t, oldPrimaryName, newPrimaryName)
@@ -141,7 +141,7 @@ func TestPrimaryDeletedDataFilesDoesNotFailOver(t *testing.T) {
 	// that postgres and the multipooler process both keep running throughout.
 	// Confirm the old primary's postmaster never restarted (a restart
 	// rewrites postmaster.pid with a new PID), so a passing test here is
-	// attributable to LeaderQuorumWritesStalled detecting stalled writes, not to an
+	// attributable to LeaderProgressUnproven detecting stalled writes, not to an
 	// incidental crash.
 	pidAfter, err := readPostmasterPID(pgDataDir)
 	require.NoError(t, err, "failed to read postmaster.pid after failover")
@@ -160,7 +160,7 @@ func readPostmasterPID(pgDataDir string) (int, error) {
 
 // TestPrimaryReadOnlyTransactionModeEventuallyFailsOver simulates a leader
 // that's reachable and looks healthy (postgres up, pg_isready passing, reads
-// working) but can't actually commit writes, and confirms LeaderQuorumWritesStalled
+// working) but can't actually commit writes, and confirms LeaderProgressUnproven
 // (PR #1455) catches it. default_transaction_read_only is the one fault
 // mechanism proven to affect an already-open connection immediately and
 // deterministically: unlike a filesystem-level fault (see
@@ -171,7 +171,7 @@ func readPostmasterPID(pgDataDir string) (int, error) {
 //
 // TODO: if multigres ever supports an intentional read-only-primary mode,
 // this same GUC would be indistinguishable from that legitimate
-// configuration, and LeaderQuorumWritesStalled would need to suppress
+// configuration, and LeaderProgressUnproven would need to suppress
 // conviction for it. That mode doesn't exist yet, so there's nothing to
 // suppress today.
 func TestPrimaryReadOnlyTransactionModeEventuallyFailsOver(t *testing.T) {
@@ -198,7 +198,7 @@ func TestPrimaryReadOnlyTransactionModeEventuallyFailsOver(t *testing.T) {
 	t.Logf("Initial primary: %s", oldPrimaryName)
 
 	// quorum_commit_ts is NULL until the writer's 2nd heartbeat -- wait for a
-	// real value, or LeaderQuorumWritesStalled's staleness check has nothing to go stale.
+	// real value, or LeaderProgressUnproven's staleness check has nothing to go stale.
 	primaryClient, err := shardsetup.NewMultipoolerClient(primary.Multipooler.GrpcPort)
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
@@ -271,21 +271,21 @@ func TestPrimaryReadOnlyTransactionModeEventuallyFailsOver(t *testing.T) {
 	require.NotEqual(t, oldPrimaryName, newPrimaryName)
 	t.Logf("New primary appointed: %s", newPrimaryName)
 
-	// Confirm LeaderQuorumWritesStalled -- not some other cause -- is what
+	// Confirm LeaderProgressUnproven -- not some other cause -- is what
 	// actually drove this promotion. Checked against the durable event log
 	// rather than polling live "current problems": the problem can clear the
 	// instant the new leader is promoted, so a live poll could race and never
 	// observe it even though it fired correctly.
-	const problemLeaderQuorumWritesStalled = "LeaderQuorumWritesStalled" // types.ProblemLeaderQuorumWritesStalled; can't import multiorch-internal types here
+	const problemLeaderProgressUnproven = "LeaderProgressUnproven" // types.ProblemLeaderProgressUnproven; can't import multiorch-internal types here
 	events := shardsetup.WaitForEvent(t, orchInst.LogFile, "primary.promotion", "success", 5*time.Second)
 	matches := shardsetup.FindEvents(events, "primary.promotion", "success")
 	found := false
 	for _, e := range matches {
-		if e["reason"] == problemLeaderQuorumWritesStalled && e["new_primary"] == newPrimaryName {
+		if e["reason"] == problemLeaderProgressUnproven && e["new_primary"] == newPrimaryName {
 			found = true
 			break
 		}
 	}
 	require.True(t, found, "expected a successful primary.promotion event with reason=%s and new_primary=%s, got %v",
-		problemLeaderQuorumWritesStalled, newPrimaryName, matches)
+		problemLeaderProgressUnproven, newPrimaryName, matches)
 }

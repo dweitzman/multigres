@@ -490,7 +490,8 @@ func (re *Engine) makePolicyLookup(ctx context.Context) func(string) *clustermet
 }
 
 // readyToExecute reports whether problem's timing gate permits acting now, and
-// the earliest time it will (zero if immediate). Failover problems use
+// the earliest time it will (zero if immediate). A problem's own NotBefore is
+// honored first (the analyzer expects it may resolve on its own). Failover problems use
 // collective recruitment backoff (independent orchs defer to a deterministic
 // slot derived from the shard's observed TermRevocation, escalating while
 // recruits churn against the same baseline; no observed revocation means act
@@ -510,6 +511,9 @@ func (re *Engine) makePolicyLookup(ctx context.Context) func(string) *clustermet
 // quorum-of-followers check is a different anti-false-positive mechanism.
 // Revisit if this causes false-positive failovers.
 func (re *Engine) readyToExecute(problem types.Problem) (readyAt time.Time, ready bool) {
+	if time.Now().Before(problem.NotBefore) {
+		return problem.NotBefore, false
+	}
 	if problem.Code.IsFailoverProblem() {
 		return re.nextFailoverAttempt(problem.ShardKey)
 	}

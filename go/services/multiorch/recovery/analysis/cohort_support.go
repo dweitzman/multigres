@@ -21,39 +21,30 @@ import (
 	"github.com/multigres/multigres/go/services/multiorch/store"
 )
 
-// ruleParticipation answers "does this cohort member currently back the
-// shard's highest-known rule?" — one of four conclusions, shared by both
-// classifyFollowerToLeader (followers) and leaderParticipation (the leader
-// itself), since both are ultimately answering the same question about
-// different roles with different evidence.
-type ruleParticipation int
+// followerState is what one follower's fresh report says about the leader's rule.
+type followerState int
 
 const (
-	// participationUnknown: we can't conclude anything. No fresh observation, or
-	// (for a follower) its highest-known rule doesn't name this leader, or (past
-	// the grace) it isn't even configured to follow it.
-	participationUnknown ruleParticipation = iota
-	// participationAdapting: it learned of this rule only within the connect
-	// grace, so not-yet-confirmed is inconclusive — give it time.
-	participationAdapting
-	// participationActive: conclusive evidence it backs this rule — a follower
-	// actively streaming from the leader, or the leader's own report confirming
-	// itself (commonconsensus.IsActiveLeader).
-	participationActive
-	// participationLapsed: conclusive evidence it does NOT back this rule
-	// (revoked past it, or — for a follower — configured-and-waited yet not
-	// streaming).
-	participationLapsed
+	// followerUnknown: no conclusion — no fresh report, its highest-known rule
+	// doesn't name this leader, or it isn't pointed at this leader at all.
+	followerUnknown followerState = iota
+	// followerAdapting: it learned of this rule within ConnectReplicasToNewLeaderGrace,
+	// so not streaming yet is expected.
+	followerAdapting
+	// followerStreaming: actively streaming from the leader.
+	followerStreaming
+	// followerRevoked: it accepted a revocation of the leader's rule.
+	followerRevoked
+	// followerDisconnected: pointed at the leader past the grace, yet not streaming.
+	followerDisconnected
 )
 
-// classifyFollowerReachability sorts cohort followers (the leader is judged
-// separately by leaderParticipation) by their participation in the leader's
-// rule, collecting the two conclusive sets: `vouching` (active → proves the
-// leader alive) and `cutOff` (lapsed → conclusively not backing it).
-// Adapting/unknown followers land in neither — their silence is not evidence.
-func (a *LeaderNeedsReplacementAnalyzer) classifyFollowerReachability(sa *ShardAnalysis, cohort []*clustermetadatapb.ID, leaderID *clustermetadatapb.ID) (vouching, cutOff []*clustermetadatapb.ID) {
+// classifyFollowers returns the cohort followers (the leader excluded) that have
+// conclusively left the leader's rule: revoked it, or stopped streaming from it.
+// Followers with no conclusive report are in neither set — silence is not evidence.
+func (a *LeaderNeedsReplacementAnalyzer) classifyFollowers(sa *ShardAnalysis, cohort []*clustermetadatapb.ID, leaderID *clustermetadatapb.ID) (revoked, disconnected []*clustermetadatapb.ID) {
 	if sa.Leader == nil {
-		// No leader identity to check followers against — no evidence either way.
+		// No leader address to check followers against — no evidence either way.
 		return nil, nil
 	}
 	primaryHost := sa.Leader.Health().GetMultipooler().GetHostname()
@@ -69,37 +60,35 @@ func (a *LeaderNeedsReplacementAnalyzer) classifyFollowerReachability(sa *ShardA
 
 	for _, member := range cohort {
 		if topoclient.ComponentIDString(member) == leaderKey {
-			continue // the leader's own participation is judged by leaderParticipation
+			continue
 		}
 		pa, ok := byID[topoclient.ComponentIDString(member)]
 		if !ok {
 			continue
 		}
-		switch a.classifyFollowerToLeader(sa, pa, leaderID, primaryHost, primaryPort) {
-		case participationActive:
-			vouching = append(vouching, member)
-		case participationLapsed:
-			cutOff = append(cutOff, member)
-		case participationAdapting, participationUnknown:
-			// no conclusive evidence either way
+		switch a.classifyFollower(sa, pa, leaderID, primaryHost, primaryPort) {
+		case followerRevoked:
+			revoked = append(revoked, member)
+		case followerDisconnected:
+			disconnected = append(disconnected, member)
+		case followerUnknown, followerAdapting, followerStreaming:
 		}
 	}
-	return vouching, cutOff
+	return revoked, disconnected
 }
 
-// classifyFollowerToLeader answers "does this follower back the leader's rule?".
+// classifyFollower answers "does this follower back the leader's rule?".
 // Revocation is checked before streaming: a follower's own TermRevocation is
-// authoritative bookkeeping, so a follower that reports itself revoked is
-// lapsed even if it appears to be streaming — that combination shouldn't
-// happen (recruit should have stopped its WAL receiver), so it's logged as a
-// suspicious anomaly rather than trusted as proof of life.
+// authoritative bookkeeping, so a follower that reports itself revoked counts as
+// revoked even if it appears to be streaming — that combination shouldn't happen
+// (recruit should have stopped its WAL receiver), so it's logged as an anomaly.
 //
 // RecruitBlockedUntil is deliberately not consulted: a blocked recruit is still
 // pointed at the leader and can report it unreachable — recruitability is a
 // feasibility concern (recruitableCohort), not detection.
-func (a *LeaderNeedsReplacementAnalyzer) classifyFollowerToLeader(sa *ShardAnalysis, pa *store.Pooler, leaderID *clustermetadatapb.ID, primaryHost string, primaryPort int32) ruleParticipation {
+func (a *LeaderNeedsReplacementAnalyzer) classifyFollower(sa *ShardAnalysis, pa *store.Pooler, leaderID *clustermetadatapb.ID, primaryHost string, primaryPort int32) followerState {
 	if !observationFresh(pa, sa.Now, sa.Policy.FollowerStreamFreshness) {
-		return participationUnknown
+		return followerUnknown
 	}
 	streaming := followerStreamingFromLeader(sa, pa, primaryHost, primaryPort)
 	if commonconsensus.IsSelfRevoked(pa.Health().GetConsensusStatus()) && revocationStrandsFollower(sa, pa) {
@@ -107,28 +96,37 @@ func (a *LeaderNeedsReplacementAnalyzer) classifyFollowerToLeader(sa *ShardAnaly
 			a.factory.Logger().Error("follower reports self-revoked yet still streaming WAL under the revoked rule",
 				"pooler_id", topoclient.ComponentIDString(poolerID(pa)), "shard_key", sa.ShardKey.String())
 		}
-		return participationLapsed
+		return followerRevoked
 	}
 	if streaming {
-		return participationActive
+		return followerStreaming
 	}
 	// Not streaming. Does it know it should be following THIS leader? Its highest-known
 	// rule may come from its replication primary, not only its own WAL position.
 	rule := commonconsensus.PossiblyUndecidedRule(
 		commonconsensus.HighestKnownRule([]*clustermetadatapb.ConsensusStatus{pa.Health().GetConsensusStatus()}))
 	if !commonconsensus.RuleNamesLeader(rule, leaderID) {
-		return participationUnknown
+		return followerUnknown
 	}
-	if created := rule.GetCreationTime(); created == nil || sa.Now.Sub(created.AsTime()) <= sa.Policy.ConnectReplicasToNewLeaderGrace {
-		return participationAdapting
+	if ruleWithinGrace(sa, rule) {
+		return followerAdapting
 	}
 	if !replicaConfiguredForLeader(pa, primaryHost, primaryPort) {
-		return participationUnknown // knows the leader, had time, but isn't pointed at it
+		return followerUnknown // knows the leader, had time, but isn't pointed at it
 	}
-	return participationLapsed
+	return followerDisconnected
 }
 
-// TODO: followerStreamingFromLeader/classifyFollowerToLeader should be named
+// ruleWithinGrace reports whether rule was created within
+// ConnectReplicasToNewLeaderGrace: too recently for a cohort member's report
+// not reflecting it yet to count as evidence. A rule with no creation time is
+// treated as within the grace, so missing metadata never convicts.
+func ruleWithinGrace(sa *ShardAnalysis, rule *clustermetadatapb.ShardRule) bool {
+	created := rule.GetCreationTime()
+	return created == nil || sa.Now.Sub(created.AsTime()) <= sa.Policy.ConnectReplicasToNewLeaderGrace
+}
+
+// TODO: followerStreamingFromLeader/classifyFollower should be named
 // "replica" instead of "follower", since they also work for observers (non-cohort members).
 
 // followerStreamingFromLeader reports whether a single follower is actively streaming

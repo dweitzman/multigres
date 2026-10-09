@@ -195,6 +195,17 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		decision.RuleNumber = &clustermetadatapb.RuleNumber{CoordinatorTerm: 1}
 	}
 
+	// setLeaderAcceptedPromotion records the in-flight proposal on the leader's
+	// own report, as Promote does (via RecordTermPrimary) before its
+	// quorum-gated rule write. Use after setRuleUndecided.
+	setLeaderAcceptedPromotion := func(sa *ShardAnalysis) {
+		sa.Leader.Mutate(func(h *multiorchdatapb.PoolerHealthState) {
+			h.ConsensusStatus.ReplicationPrimary = &clustermetadatapb.ReplicationPrimary{
+				Position: proto.Clone(sa.HighestPosition).(*clustermetadatapb.RulePosition),
+			}
+		})
+	}
+
 	// setLeaderPGRunning / setLeaderLastReady / setLeaderPromoting drive the
 	// leader's postgres state on its rider, replacing the removed shard-level
 	// verdict fields (now derived inside LeaderNeedsReplacementAnalyzer).
@@ -276,6 +287,12 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 				h.Status.ReplicationStatus.QuorumCommitTs = timestamppb.New(at)
 			})
 		}
+	}
+
+	// setQuorumCommitFresh stamps a just-committed watermark on follower1's
+	// report: the proof of progress a healthy shard always carries.
+	setQuorumCommitFresh := func(sa *ShardAnalysis) {
+		setQuorumCommitTs(sa, follower1ID, sa.Now)
 	}
 
 	// setLeaderQuorumCommitTs stamps the leader's own PrimaryStatus with a
@@ -372,7 +389,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, problems, 1)
 		problem := problems[0]
-		require.Equal(t, types.ProblemLeaderLacksCohortSupport, problem.Code)
+		require.Equal(t, types.ProblemLeaderUnreachableByCohort, problem.Code)
 		require.Equal(t, types.ScopeShard, problem.Scope)
 		require.Equal(t, types.PriorityEmergency, problem.Priority)
 		require.Equal(t, leaderID, problem.PoolerID)
@@ -382,19 +399,18 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	t.Run("does not count a follower still within the connect grace as cut off", func(t *testing.T) {
 		// follower1 knows the leader but its rule was created just now (within the
 		// connect grace) — not enough time to connect, so it does NOT testify. Only
-		// follower2 is cut off → sub-quorum revocation set → no failover.
+		// follower2 is cut off → sub-quorum revocation set → the leader is kept.
 		sa := deadLeaderShardAnalysis(func(sa *ShardAnalysis) {
 			sa.Analyses = []*store.Pooler{
 				cutOffCandidate(follower1ID, leaderID, sa.Now, "leader-host", 5432, sa.Now),
 				cutOffFollower(follower2ID, sa.Now),
 			}
+			setQuorumCommitTs(sa, follower2ID, sa.Now)
 		})
 
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
-		require.Len(t, problems, 1)
-		require.Equal(t, types.ProblemLeaderHealthUnknown, problems[0].Code, "a follower within the connect grace must not count toward revocation")
-		require.Equal(t, types.PriorityNormal, problems[0].Priority, "inconclusive is a warning, not an emergency")
+		require.Empty(t, problems, "a follower within the connect grace must not count toward revocation")
 	})
 
 	t.Run("does not count a follower whose rule names a different leader as cut off", func(t *testing.T) {
@@ -405,12 +421,12 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 				cutOffCandidate(follower1ID, follower2ID, sa.Now.Add(-time.Hour), "leader-host", 5432, sa.Now),
 				cutOffFollower(follower2ID, sa.Now),
 			}
+			setQuorumCommitTs(sa, follower2ID, sa.Now)
 		})
 
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
-		require.Len(t, problems, 1)
-		require.Equal(t, types.ProblemLeaderHealthUnknown, problems[0].Code, "a follower uninformed of this leader must not count toward revocation")
+		require.Empty(t, problems, "a follower uninformed of this leader must not count toward revocation")
 	})
 
 	t.Run("does not count a follower configured for a different primary as cut off", func(t *testing.T) {
@@ -421,12 +437,12 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 				cutOffCandidate(follower1ID, leaderID, sa.Now.Add(-time.Hour), "other-host", 5432, sa.Now),
 				cutOffFollower(follower2ID, sa.Now),
 			}
+			setQuorumCommitTs(sa, follower2ID, sa.Now)
 		})
 
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
-		require.Len(t, problems, 1)
-		require.Equal(t, types.ProblemLeaderHealthUnknown, problems[0].Code, "a follower pointed at a different primary must not count toward revocation")
+		require.Empty(t, problems, "a follower pointed at a different primary must not count toward revocation")
 	})
 
 	t.Run("counts a follower that learned the leader via its replication primary as cut off", func(t *testing.T) {
@@ -466,7 +482,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
 		require.Len(t, problems, 1)
-		require.Equal(t, types.ProblemLeaderLacksCohortSupport, problems[0].Code)
+		require.Equal(t, types.ProblemLeaderUnreachableByCohort, problems[0].Code)
 	})
 
 	t.Run("counts a self-revoked follower as cut off even though it still appears to stream", func(t *testing.T) {
@@ -589,15 +605,13 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		require.Equal(t, types.ProblemLeaderNotSelfConfirmed, problems[0].Code)
 	})
 
-	t.Run("treats a leader within the connect grace as adapting, not lapsed", func(t *testing.T) {
-		// A leader whose own report hasn't caught up yet is inconclusive, not
-		// convicted, while the rule is still within the connect grace.
-		// Distinct from inPromotionGrace's PROMOTING-status short-circuit in
-		// Analyze(): this exercises leaderParticipation's own grace check,
-		// reached whenever the leader isn't (or is no longer) flagged
-		// PROMOTING but the rule is still fresh.
+	t.Run("does not convict a leader whose report trails a just-created rule", func(t *testing.T) {
+		// A leader whose own report hasn't caught up to a just-created rule is
+		// not convicted as NotSelfConfirmed: its report may trail its followers'.
 		sa := deadLeaderShardAnalysis(func(sa *ShardAnalysis) {
 			setLeaderLive(sa, true)
+			setLeaderPGReady(sa, true)
+			setQuorumCommitFresh(sa)
 			setRuleCreatedNow(sa)
 			sa.Leader.Mutate(func(h *multiorchdatapb.PoolerHealthState) {
 				h.ConsensusStatus.CurrentPosition.Position.Decision = &clustermetadatapb.ShardRule{
@@ -608,8 +622,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
-		require.Len(t, problems, 1)
-		require.Equal(t, types.ProblemLeaderHealthUnknown, problems[0].Code, "a leader within the connect grace must not be convicted yet")
+		require.Empty(t, problems, "a leader within the connect grace must not be convicted yet")
 	})
 
 	t.Run("reports ShardStuck when a must-replace leader cannot reach a recruitment quorum", func(t *testing.T) {
@@ -632,7 +645,9 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		require.Equal(t, types.ProblemShardStuck, problems[0].Code)
 	})
 
-	t.Run("ignores healthy leader (reachable)", func(t *testing.T) {
+	t.Run("reports LeaderProgressUnproven for a healthy-looking leader with no watermark at all", func(t *testing.T) {
+		// Liveness alone doesn't prove writes commit; no watermark is not proof.
+		// The rule is an hour old, so the failover isn't deferred.
 		sa := deadLeaderShardAnalysis(func(sa *ShardAnalysis) {
 			setLeaderLive(sa, true)
 			setLeaderPGReady(sa, true)
@@ -640,7 +655,9 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
-		require.Empty(t, problems)
+		require.Len(t, problems, 1)
+		require.Equal(t, types.ProblemLeaderProgressUnproven, problems[0].Code)
+		require.False(t, problems[0].NotBefore.After(sa.Now), "an hour-old rule has had time to commit a watermark")
 	})
 
 	t.Run("fails over a live, pg_isready leader whose postgres is a standby (in recovery)", func(t *testing.T) {
@@ -722,9 +739,10 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		require.Equal(t, types.ProblemLeaderNotSelfConfirmed, problems[0].Code)
 	})
 
-	t.Run("anti-flap grace does not consult the quorum-commit backstop", func(t *testing.T) {
-		// A running leader whose postgres recently answered is held healthy while
-		// pg_isready flaps, even if the quorum-commit watermark is stale.
+	t.Run("anti-flap grace defers LeaderUnhealthy but not the watermark check", func(t *testing.T) {
+		// A running leader whose postgres recently answered isn't convicted as
+		// unhealthy while pg_isready flaps, but that isn't proof of progress: a
+		// stale watermark is still reported.
 		sa := deadLeaderShardAnalysis(func(sa *ShardAnalysis) {
 			setLeaderLive(sa, true)
 			setLeaderPGRunning(sa, true)
@@ -735,7 +753,8 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
-		require.Empty(t, problems)
+		require.Len(t, problems, 1)
+		require.Equal(t, types.ProblemLeaderProgressUnproven, problems[0].Code)
 	})
 
 	t.Run("ignores healthy leader with fresh quorum-commit watermark", func(t *testing.T) {
@@ -750,7 +769,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		require.Empty(t, problems)
 	})
 
-	t.Run("LeaderQuorumWritesStalled when quorum-commit watermark goes stale", func(t *testing.T) {
+	t.Run("LeaderProgressUnproven when quorum-commit watermark goes stale", func(t *testing.T) {
 		sa := deadLeaderShardAnalysis(func(sa *ShardAnalysis) {
 			setLeaderLive(sa, true)
 			setLeaderPGReady(sa, true)
@@ -760,7 +779,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
 		require.Len(t, problems, 1)
-		require.Equal(t, types.ProblemLeaderQuorumWritesStalled, problems[0].Code)
+		require.Equal(t, types.ProblemLeaderProgressUnproven, problems[0].Code)
 		require.Equal(t, leaderID, problems[0].PoolerID)
 	})
 
@@ -795,12 +814,13 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		require.Empty(t, problems, "leader's own fresh first-hand report takes precedence over a stale cohort-observed one")
 	})
 
-	t.Run("LSN still advancing on a quorum-sufficient set suppresses LeaderQuorumWritesStalled for an undecided rule",
+	t.Run("defers failover of a promotion whose followers are still receiving its WAL",
 		func(t *testing.T) {
 			sa := deadLeaderShardAnalysis(func(sa *ShardAnalysis) {
 				setLeaderLive(sa, true)
 				setLeaderPGReady(sa, true)
 				setRuleUndecided(sa)
+				setLeaderAcceptedPromotion(sa)
 				setQuorumCommitTs(sa, follower1ID, sa.Now.Add(-sa.Policy.QuorumCommitStaleAfter-time.Second))
 				setPrimaryConnInfo(sa, follower1ID, "leader-host", 5432)
 				setLastReceiveLsnAdvance(sa, follower1ID, sa.Now)
@@ -808,7 +828,10 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 
 			problems, err := analyzer.Analyze(sa)
 			require.NoError(t, err)
-			require.Empty(t, problems, "a quorum-sufficient set actively receiving fresh WAL from the candidate leader means an undecided promotion is likely still catching up, not stuck")
+			require.Len(t, problems, 1, "writes are unavailable until the promotion commits, so the problem is reported")
+			require.Equal(t, types.ProblemLeaderPromotionIncomplete, problems[0].Code)
+			require.WithinDuration(t, sa.Now.Add(sa.Policy.MaxPromotionTime), problems[0].NotBefore, 0,
+				"a quorum receiving fresh WAL from the candidate means it is likely still catching up, so failover waits")
 		})
 
 	t.Run("does not let a cascading standby's WAL advance excuse an undecided promotion", func(t *testing.T) {
@@ -823,6 +846,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 			setLeaderLive(sa, true)
 			setLeaderPGReady(sa, true)
 			setRuleUndecided(sa)
+			setLeaderAcceptedPromotion(sa)
 			setQuorumCommitTs(sa, follower1ID, sa.Now.Add(-sa.Policy.QuorumCommitStaleAfter-time.Second))
 			setPrimaryConnInfo(sa, follower1ID, "leader-host", 5432)
 			setPrimaryConnInfo(sa, follower2ID, "follower1-host", 5433)
@@ -832,10 +856,12 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
 		require.Len(t, problems, 1)
-		require.Equal(t, types.ProblemLeaderQuorumWritesStalled, problems[0].Code, "a cascading standby's WAL advance must not excuse the candidate leader")
+		require.Equal(t, types.ProblemLeaderPromotionIncomplete, problems[0].Code)
+		require.WithinDuration(t, sa.Now.Add(sa.Policy.QuorumCommitStaleAfter), problems[0].NotBefore, 0,
+			"a cascading standby's WAL advance must not extend the deferral to MaxPromotionTime")
 	})
 
-	t.Run("LeaderQuorumWritesStalled fires despite LSN still advancing once the rule is decided", func(t *testing.T) {
+	t.Run("LeaderProgressUnproven fires despite LSN still advancing once the rule is decided", func(t *testing.T) {
 		// A DECIDED rule is itself proof a quorum-acked commit already
 		// succeeded under this leadership (the finalize commit is quorum-gated
 		// like any other write), so the backlog-draining excuse no longer
@@ -850,7 +876,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
 		require.Len(t, problems, 1)
-		require.Equal(t, types.ProblemLeaderQuorumWritesStalled, problems[0].Code)
+		require.Equal(t, types.ProblemLeaderProgressUnproven, problems[0].Code)
 	})
 
 	t.Run("ignores when no leader exists in topology (future analysis)", func(t *testing.T) {
@@ -984,6 +1010,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		sa := deadLeaderShardAnalysis(func(sa *ShardAnalysis) {
 			setLeaderLive(sa, true)
 			setLeaderPGReady(sa, true)
+			setQuorumCommitFresh(sa)
 			dropFollower(sa, follower2ID)
 		})
 
@@ -1006,6 +1033,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 			dropFollower(sa, follower2ID)
 			setLeaderLive(sa, true)
 			setLeaderPGReady(sa, true)
+			setQuorumCommitFresh(sa)
 		})
 
 		problems, err := analyzer.Analyze(sa)
@@ -1053,13 +1081,16 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
 		require.Len(t, problems, 1)
-		require.Equal(t, types.ProblemLeaderLacksCohortSupport, problems[0].Code)
+		require.Equal(t, types.ProblemLeaderUnreachableByCohort, problems[0].Code)
 	})
 
 	t.Run("ignores when leader pooler down but all replicas still connected to postgres", func(t *testing.T) {
+		// The followers relay a fresh watermark, so writes provably commit even
+		// though orch can't observe the leader's pooler directly.
 		sa := deadLeaderShardAnalysis(func(sa *ShardAnalysis) {
 			setLeaderLive(sa, false)
 			connectReplica(sa)
+			setQuorumCommitFresh(sa)
 			setLeaderLastReady(sa, time.Now().Add(-5*time.Second)) // Responded recently
 		})
 
@@ -1068,7 +1099,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		require.Empty(t, problems, "should not trigger failover when pooler is down but replicas are connected")
 	})
 
-	t.Run("LeaderQuorumWritesStalled via cohort corroboration when quorum-commit watermark goes stale", func(t *testing.T) {
+	t.Run("LeaderProgressUnproven via cohort corroboration when quorum-commit watermark goes stale", func(t *testing.T) {
 		sa := deadLeaderShardAnalysis(func(sa *ShardAnalysis) {
 			setLeaderLive(sa, false)
 			connectReplica(sa)
@@ -1079,7 +1110,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
 		require.Len(t, problems, 1)
-		require.Equal(t, types.ProblemLeaderQuorumWritesStalled, problems[0].Code)
+		require.Equal(t, types.ProblemLeaderProgressUnproven, problems[0].Code)
 	})
 
 	t.Run("triggers failover when leader pooler up but postgres down", func(t *testing.T) {
@@ -1103,32 +1134,25 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
 		require.Len(t, problems, 1)
-		require.Equal(t, types.ProblemLeaderLacksCohortSupport, problems[0].Code)
+		require.Equal(t, types.ProblemLeaderUnreachableByCohort, problems[0].Code)
 		require.Equal(t, leaderID, problems[0].PoolerID)
 	})
 
-	t.Run("reports LeaderHealthUnknown on cold start (followers reachable but not yet observed streaming or cut off)", func(t *testing.T) {
-		// A freshly (re)started orch has fresh, initialized observations of the
-		// followers (enough to recruit) but has not yet seen their replication status
-		// or consensus rule, so it can neither confirm they stream from the leader nor
-		// that they are cut off from it; the leader is unobserved. This must NOT fail
-		// over — the followers may be streaming fine, we just haven't looked long
-		// enough. It surfaces an alert-only LeaderHealthUnknown warning instead.
-		sa := deadLeaderShardAnalysis()
+	t.Run("keeps the leader on cold start when followers relay a fresh watermark", func(t *testing.T) {
+		// A freshly (re)started orch has fresh follower reports but hasn't observed
+		// the leader or any streaming yet. Their relayed watermark is proof of
+		// progress on its own, so there is nothing to act on.
+		sa := deadLeaderShardAnalysis(setQuorumCommitFresh)
 
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
-		require.Len(t, problems, 1)
-		require.Equal(t, types.ProblemLeaderHealthUnknown, problems[0].Code, "cold start must not fail over")
-		require.Equal(t, types.PriorityNormal, problems[0].Priority)
+		require.Empty(t, problems, "cold start must not fail over a leader with a fresh watermark")
 	})
 
-	t.Run("suppresses failover when a single follower still streams from an unreachable leader", func(t *testing.T) {
-		// Leader pooler unreachable, only ONE of the two followers streaming. That
-		// single streaming follower proves the leader is alive (you cannot stream
-		// from a dead primary), so the leader vouches for itself: {follower1, leader}
-		// meets AtLeast(2) and failover is suppressed. Without the leader-self-vouch
-		// this would be LeaderNotSelfConfirmed.
+	t.Run("keeps an unreachable leader when a follower relays a fresh watermark", func(t *testing.T) {
+		// Leader pooler unreachable, only ONE of the two followers streaming, the
+		// other's report silent. The streaming follower relays a fresh watermark,
+		// which proves writes commit; one silent follower can't revoke the rule.
 		sa := deadLeaderShardAnalysis(func(sa *ShardAnalysis) {
 			sa.Analyses[0] = store.NewPooler(&multiorchdatapb.PoolerHealthState{
 				Multipooler: &clustermetadatapb.Multipooler{Id: follower1ID, ShardKey: shardKey},
@@ -1147,20 +1171,19 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 					CurrentPosition: &clustermetadatapb.PoolerPosition{Lsn: "0/1"},
 				},
 			}, nil)
+			setQuorumCommitFresh(sa)
 		})
 
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
-		require.Empty(t, problems, "a single streaming follower proves the leader alive; leader self-vouch makes quorum")
+		require.Empty(t, problems)
 	})
 
 	t.Run("does not convict ShardStuck when only a sub-quorum streams from an unreachable leader", func(t *testing.T) {
-		// Leader unobserved and only follower1 is reachable — and it is streaming from
-		// the leader. The stream proves the leader alive (you cannot stream from a dead
-		// primary), so {follower1, leader} meets AtLeast(2) → NOT a failover and NOT
-		// ShardStuck. Because losing the leader now could not be recovered (only one
-		// member reachable), we warn ShardAtRisk instead. Guards against regressing to
-		// ShardStuck when the positive streaming signal is dropped.
+		// Leader unobserved and only follower1 is reachable, streaming from the
+		// leader and relaying a fresh watermark: writes provably commit, so this is
+		// NOT a failover and NOT ShardStuck. Because losing the leader now could not
+		// be recovered (only one member reachable), we warn ShardAtRisk instead.
 		sa := deadLeaderShardAnalysis(func(sa *ShardAnalysis) {
 			sa.Analyses[0] = store.NewPooler(&multiorchdatapb.PoolerHealthState{
 				Multipooler: &clustermetadatapb.Multipooler{Id: follower1ID, ShardKey: shardKey},
@@ -1176,13 +1199,14 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 				},
 			}, nil)
 			dropFollower(sa, follower2ID)
+			setQuorumCommitFresh(sa)
 		})
 
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
 		require.Len(t, problems, 1)
 		require.Equal(t, types.ProblemShardAtRisk, problems[0].Code,
-			"a streaming follower proves the leader alive; warn fragility, do not convict ShardStuck")
+			"a fresh watermark proves progress; warn fragility, do not convict ShardStuck")
 	})
 
 	t.Run("resigned leader takes precedence over liveness", func(t *testing.T) {
@@ -1239,15 +1263,12 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		require.Equal(t, types.CheckName("LeaderNeedsReplacement"), analyzer.Name())
 	})
 
-	// TODO: this cluster of leader-fitness-axis subtests duplicates the theme
-	// of "ignores when leader pooler down but all replicas still connected to
-	// postgres" and "triggers failover when leader pooler up but postgres
-	// down" above — consolidate into one place.
 	t.Run("ignores when leader pooler down but replicas connected (postgres still running, recent timestamp)", func(t *testing.T) {
 		sa := deadLeaderShardAnalysis(func(sa *ShardAnalysis) {
 			setLeaderLive(sa, false)                               // Pooler is down
 			setLeaderPGReady(sa, false)                            // Unknown since pooler is down
 			connectReplica(sa)                                     // But replicas are still connected to postgres
+			setQuorumCommitFresh(sa)                               // and relay a fresh watermark
 			setLeaderLastReady(sa, time.Now().Add(-5*time.Second)) // Responded recently (within 30s default threshold)
 		})
 
@@ -1262,6 +1283,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 			setLeaderPGReady(sa, false)  // Postgres not yet accepting connections
 			setLeaderPGRunning(sa, true) // But process exists (starting up or SIGSTOP'd)
 			connectReplica(sa)           // Replicas still connected via streaming replication
+			setQuorumCommitFresh(sa)
 			setLeaderLastReady(sa, time.Now().Add(-5*time.Second))
 		})
 
@@ -1308,55 +1330,113 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	t.Run("suppresses failover when pooler unreachable but replicas connected, even with an expired postgres timestamp", func(t *testing.T) {
 		// When the leader pooler is unreachable we cannot observe its postgres
 		// directly, so the leader's own LastPostgresReadyTime is irrelevant. The
-		// replicas being connected (ReplicasConnectedToLeader requires fresh WAL
-		// heartbeats) is itself proof the leader's postgres is alive.
+		// followers' relayed watermark is the proof that writes commit.
 		sa := deadLeaderShardAnalysis(func(sa *ShardAnalysis) {
 			setLeaderLive(sa, false)
 			setLeaderPGReady(sa, false)
 			connectReplica(sa)
+			setQuorumCommitFresh(sa)
 			setLeaderLastReady(sa, time.Now().Add(-60*time.Second)) // Older than 30s default threshold
 		})
 
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
-		require.Empty(t, problems, "replicas streaming from the leader's postgres proves it is alive; do not fail over")
+		require.Empty(t, problems, "a relayed fresh watermark proves progress; do not fail over")
 	})
 
 	t.Run("suppresses failover when pooler unreachable but replicas connected, even with a zero postgres timestamp", func(t *testing.T) {
 		// Regression: the leader's pooler died before multiorch ever recorded a
-		// PostgresReady snapshot (zero timestamp), yet replicas are still streaming.
-		// Leader identity is recovered from the replicas' consensus rules, and their
-		// fresh streaming proves postgres is alive, so failover must be suppressed.
+		// PostgresReady snapshot (zero timestamp), yet replicas are still streaming
+		// and relaying a fresh watermark, so failover must be suppressed.
 		sa := deadLeaderShardAnalysis(func(sa *ShardAnalysis) {
 			setLeaderLive(sa, false)
 			setLeaderPGReady(sa, false)
 			connectReplica(sa)
+			setQuorumCommitFresh(sa)
 		})
 
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
-		require.Empty(t, problems, "a dead pooler cannot report a postgres timestamp; trust the streaming replicas")
+		require.Empty(t, problems, "a dead pooler cannot report a postgres timestamp; trust the relayed watermark")
 	})
 
-	t.Run("suppresses failover while pg_promote() is running within the grace window", func(t *testing.T) {
+	t.Run("defers failover while the candidate is mid pg_promote()", func(t *testing.T) {
 		sa := deadLeaderShardAnalysis(func(sa *ShardAnalysis) {
-			setRuleCreatedNow(sa)        // fresh rule → within the promotion grace window
-			setLeaderLive(sa, true)      // stream is live
-			setLeaderPGRunning(sa, true) // process is running
-			setLeaderPGReady(sa, false)  // not yet accepting connections (promoting)
-			setLeaderPromoting(sa)       // multipooler flagged promotion in progress
+			setRuleUndecided(sa)
+			setLeaderAcceptedPromotion(sa)
+			setLeaderLive(sa, true)
+			setLeaderPGRunning(sa, true)
+			setLeaderPGReady(sa, false) // not yet accepting connections
+			setLeaderPromoting(sa)
 		})
 
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
-		require.Empty(t, problems, "should suppress failover while pg_promote() is explicitly in progress")
+		require.Len(t, problems, 1, "writes are unavailable until the promotion commits")
+		require.Equal(t, types.ProblemLeaderPromotionIncomplete, problems[0].Code)
+		require.WithinDuration(t, sa.Now.Add(sa.Policy.MaxPromotionTime), problems[0].NotBefore, 0)
 	})
 
-	t.Run("does not suppress a promotion that has outlasted the grace window", func(t *testing.T) {
-		// Same promoting state, but the rule is old (base fixture CreationTime is an
-		// hour ago), so the grace has lapsed. A leader that claims to be promoting
-		// forever but never gains followers must fail over: postgres is not ready and
-		// never reported ready, so the anti-flap guard does not apply either.
+	// Regression: a promotion still draining a WAL backlog well past the connect
+	// grace (so the candidate's report can't be "trailing") must be reported but
+	// not failed over while its followers keep receiving WAL from it.
+	t.Run("defers failover of a slow promotion whose followers are still receiving WAL", func(t *testing.T) {
+		sa := deadLeaderShardAnalysis(func(sa *ShardAnalysis) {
+			setRuleUndecided(sa)
+			sa.HighestPosition.Proposal.CreationTime = timestamppb.New(sa.Now.Add(-time.Minute))
+			setLeaderAcceptedPromotion(sa)
+			setLeaderLive(sa, true)
+			setLeaderPGReady(sa, true)
+			connectReplica(sa)
+			setLastReceiveLsnAdvance(sa, follower1ID, sa.Now)
+			setLastReceiveLsnAdvance(sa, follower2ID, sa.Now)
+		})
+
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		require.Len(t, problems, 1)
+		require.Equal(t, types.ProblemLeaderPromotionIncomplete, problems[0].Code)
+		require.True(t, problems[0].NotBefore.After(sa.Now), "a propagating promotion must not be failed over yet")
+	})
+
+	t.Run("stops deferring a promotion that has outlasted MaxPromotionTime", func(t *testing.T) {
+		sa := deadLeaderShardAnalysis(func(sa *ShardAnalysis) {
+			setRuleUndecided(sa)
+			sa.HighestPosition.Proposal.CreationTime = timestamppb.New(sa.Now.Add(-sa.Policy.MaxPromotionTime - time.Second))
+			setLeaderAcceptedPromotion(sa)
+			setLeaderLive(sa, true)
+			setLeaderPGRunning(sa, true)
+			setLeaderPGReady(sa, false)
+			setLeaderPromoting(sa)
+		})
+
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		require.Len(t, problems, 1)
+		require.Equal(t, types.ProblemLeaderPromotionIncomplete, problems[0].Code)
+		require.False(t, problems[0].NotBefore.After(sa.Now), "a promotion past MaxPromotionTime must not be deferred")
+	})
+
+	t.Run("does not defer a promotion whose followers receive no WAL and which is not mid pg_promote()", func(t *testing.T) {
+		// Accepted but showing no progress: deferred only for QuorumCommitStaleAfter
+		// after the proposal, like any new rule — not up to MaxPromotionTime.
+		sa := deadLeaderShardAnalysis(func(sa *ShardAnalysis) {
+			setRuleUndecided(sa)
+			sa.HighestPosition.Proposal.CreationTime = timestamppb.New(sa.Now.Add(-time.Minute))
+			setLeaderAcceptedPromotion(sa)
+			setLeaderLive(sa, true)
+			setLeaderPGReady(sa, true)
+		})
+
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		require.Len(t, problems, 1)
+		require.Equal(t, types.ProblemLeaderPromotionIncomplete, problems[0].Code)
+		require.False(t, problems[0].NotBefore.After(sa.Now))
+	})
+
+	t.Run("a PROMOTING flag without an in-flight promotion does not excuse an unready postgres", func(t *testing.T) {
+		// The rule is decided, so no promotion is in flight: the flag is stale.
 		sa := deadLeaderShardAnalysis(func(sa *ShardAnalysis) {
 			setLeaderLive(sa, true)
 			setLeaderPGRunning(sa, true)
@@ -1366,22 +1446,79 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
-		require.Len(t, problems, 1, "should fail over once the promotion grace window lapses")
+		require.Len(t, problems, 1)
 		require.Equal(t, types.ProblemLeaderUnhealthy, problems[0].Code)
 	})
 
-	t.Run("does not suppress failover when postgres crashes during promotion", func(t *testing.T) {
+	t.Run("does not defer failover when postgres crashes during promotion", func(t *testing.T) {
 		sa := deadLeaderShardAnalysis(func(sa *ShardAnalysis) {
-			setLeaderLive(sa, true)       // stream still alive (multipooler survived)
+			setRuleUndecided(sa)
+			setLeaderAcceptedPromotion(sa)
+			setLeaderLive(sa, true)       // multipooler survived
 			setLeaderPGRunning(sa, false) // postgres process died during promotion
 			setLeaderPGReady(sa, false)
-			setLeaderPromoting(sa) // flag still set before cleared
+			setLeaderPromoting(sa) // flag still set until the promote call gives up
 		})
 
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
 		require.Len(t, problems, 1, "should detect dead leader when postgres crashes during promotion")
 		require.Equal(t, types.ProblemLeaderUnhealthy, problems[0].Code)
+	})
+
+	t.Run("exempts a candidate still in recovery before its pg_promote() from the in-recovery check", func(t *testing.T) {
+		sa := deadLeaderShardAnalysis(func(sa *ShardAnalysis) {
+			setRuleUndecided(sa)
+			setLeaderAcceptedPromotion(sa)
+			setLeaderLive(sa, true)
+			setLeaderPGReady(sa, true)
+			setLeaderPGStandby(sa) // Promote landed; pg_promote() hasn't run yet
+		})
+
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		require.Len(t, problems, 1)
+		require.Equal(t, types.ProblemLeaderPromotionIncomplete, problems[0].Code)
+	})
+
+	t.Run("does not count followers disconnected by a promotion's timeline switch as cut off", func(t *testing.T) {
+		// pg_promote() switches timeline, briefly disconnecting cascading followers
+		// all at once; during a promotion only revocation counts against the leader.
+		sa := deadLeaderShardAnalysis(cutOffAllFollowers, func(sa *ShardAnalysis) {
+			setRuleUndecided(sa)
+			setLeaderAcceptedPromotion(sa)
+			setLeaderLive(sa, true)
+			setLeaderPGRunning(sa, true)
+			setLeaderPGReady(sa, true)
+			setLeaderPromoting(sa)
+		})
+
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		require.Len(t, problems, 1)
+		require.Equal(t, types.ProblemLeaderPromotionIncomplete, problems[0].Code)
+	})
+
+	t.Run("a cohort-change proposal on an established leader is not a promotion", func(t *testing.T) {
+		// An undecided proposal that keeps the same leader doesn't relax anything:
+		// a stale watermark is LeaderProgressUnproven, not a deferred promotion.
+		sa := deadLeaderShardAnalysis(func(sa *ShardAnalysis) {
+			setLeaderLive(sa, true)
+			setLeaderPGReady(sa, true)
+			proposal := proto.Clone(sa.HighestPosition.Decision).(*clustermetadatapb.ShardRule)
+			proposal.RuleNumber = &clustermetadatapb.RuleNumber{CoordinatorTerm: 1, LeaderSubterm: 1}
+			proposal.CreationTime = timestamppb.New(sa.Now.Add(-time.Hour))
+			sa.HighestPosition.Proposal = proposal
+			setLeaderAcceptedPromotion(sa)
+			setQuorumCommitTs(sa, follower1ID, sa.Now.Add(-sa.Policy.QuorumCommitStaleAfter-time.Second))
+			setLastReceiveLsnAdvance(sa, follower1ID, sa.Now)
+		})
+
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		require.Len(t, problems, 1)
+		require.Equal(t, types.ProblemLeaderProgressUnproven, problems[0].Code)
+		require.False(t, problems[0].NotBefore.After(sa.Now))
 	})
 
 	t.Run("does not suppress failover when multipooler unreachable during promotion", func(t *testing.T) {
@@ -1395,6 +1532,6 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
 		require.Len(t, problems, 1, "should detect dead leader when multipooler is unreachable even if promotion flag is set")
-		require.Equal(t, types.ProblemLeaderLacksCohortSupport, problems[0].Code)
+		require.Equal(t, types.ProblemLeaderUnreachableByCohort, problems[0].Code)
 	})
 }

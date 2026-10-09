@@ -21,36 +21,49 @@ import (
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/mterrors"
-	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	"github.com/multigres/multigres/go/services/multiorch/consensus"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
 )
 
-// LeaderNeedsReplacementAnalyzer judges a shard's leader/durability situation and
-// emits at most one shard-level problem per cycle. It reasons on two independent
-// axes (see leaderReplacementCause for the judgment, leaderFitnessCause for the
-// second axis), then crosses the verdict with failover feasibility:
+// LeaderNeedsReplacementAnalyzer decides, once per recovery cycle, whether a
+// shard's leader must be replaced. It asks one question: is the shard provably
+// making durable write progress under its current leader? The answer comes from
+// four checks, in order (see judgeLeader):
 //
-//   - Rule support: does a durability-sufficient set of the cohort — the leader
-//     itself, mandatorily, plus enough followers — back the shard's highest-known
-//     rule? Consensus-bookkeeping evidence (self-reports, revocations, streaming).
-//   - Leader fitness: given the rule is supported, is the specific pooler named
-//     leader physically able to serve writes right now? Postgres-liveness
-//     evidence, orthogonal to consensus. Rule support (LeaderNotSelfConfirmed,
-//     LeaderLacksCohortSupport) is checked first: a leader nobody backs cannot be judged fit no matter how
-//     healthy its postgres looks. The LeaderQuorumWritesStalled backstop (is the
-//     quorum-commit watermark advancing?) is the last fitness check, applied
-//     before either healthy verdict is returned.
-//   - Could a failover succeed? Only if a durability-sufficient set of reachable,
-//     initialized poolers is available to recruit a replacement.
+//  1. Progress is impossible → replace. Durable consensus facts that won't
+//     change on their own: the leader resigned or shut down, it does not back
+//     the current rule, or enough of its cohort revoked that rule that it can
+//     no longer reach a quorum.
+//  2. Progress is halted → replace. Current observations that could recover on
+//     their own, so each has an anti-flap allowance: the leader's postgres is
+//     down or still in recovery, or enough of its cohort has stopped streaming
+//     from it. Checked before the watermark because they are fresher: a
+//     watermark may be QuorumCommitStaleAfter old.
+//  3. Progress is proven → keep. A quorum acknowledged a write within
+//     QuorumCommitStaleAfter (the heartbeat's quorum-commit watermark).
+//  4. Otherwise → replace: writes are not provably committing. An undecided
+//     promotion reports LeaderPromotionIncomplete, an established leader
+//     LeaderProgressUnproven. The problem is always reported, since writes are
+//     unavailable either way, but the failover is deferred (Problem.NotBefore)
+//     while progress may be imminent: for QuorumCommitStaleAfter after the
+//     current rule was created (its leader hasn't had time to commit a
+//     watermark), and for up to MaxPromotionTime while a promotion is
+//     propagating (its candidate is mid pg_promote(), or followers are
+//     receiving its WAL).
 //
-// Crossing the leader verdict with failover feasibility (non-actionable outcomes are
-// alert-only):
+// While a promotion is in flight, the halted checks that a promotion itself
+// causes (a candidate still in recovery, followers reconnecting) don't apply.
+//
+// The evidence behind each check lives in leader_evidence.go (the leader's own
+// report), cohort_support.go (its followers' reports) and leader_progress.go
+// (the watermark and WAL progress). This file only decides what that evidence
+// means.
+//
+// A replacement verdict is then gated on whether a failover could succeed
+// (non-actionable outcomes are alert-only):
 //   - replace + feasible   → the cause code (actionable → AppointLeader).
-//   - replace + infeasible → ShardStuck, or NoHealthyCohortMembers when blind.
-//   - healthy              → no problem, or ShardAtRisk if losing the leader would strand the shard.
-//   - inconclusive         → LeaderHealthUnknown, or the infeasible codes above when we also can't recruit.
+//   - replace + infeasible → ShardStuck, or NoHealthyCohortMembers when orch is blind.
+//   - keep                 → no problem, or ShardAtRisk if losing the leader would strand the shard.
 //
 // "Feasible" is CheckSufficientRecruitment: a strict majority of the outgoing
 // cohort reachable (unique rule number) with the remainder unable to satisfy the
@@ -79,9 +92,9 @@ func (a *LeaderNeedsReplacementAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Pro
 		return nil, errors.New("recovery action factory not initialized")
 	}
 
-	undecidedRule := commonconsensus.PossiblyUndecidedRule(sa.HighestPosition)
-	leaderID := undecidedRule.GetLeaderId()
-	cohort := undecidedRule.GetCohortMembers()
+	rule := commonconsensus.PossiblyUndecidedRule(sa.HighestPosition)
+	leaderID := rule.GetLeaderId()
+	cohort := rule.GetCohortMembers()
 
 	// No rule at all yet, or a rule naming neither a leader nor a cohort — the
 	// initial, unbootstrapped state. ShardNeedsInitialization owns that, so do
@@ -90,245 +103,196 @@ func (a *LeaderNeedsReplacementAnalyzer) Analyze(sa *ShardAnalysis) ([]types.Pro
 		return nil, nil
 	}
 
-	policy, err := commonconsensus.NewPolicyFromProto(undecidedRule.GetDurabilityPolicy())
+	policy, err := commonconsensus.NewPolicyFromProto(rule.GetDurabilityPolicy())
 	if err != nil {
 		return nil, mterrors.Wrap(err, "leader-needs-replacement: durability policy unavailable")
 	}
 
 	// A non-empty cohort with no designated leader needs one recruited.
 	if leaderID == nil {
-		return a.emitFailover(sa, nil, policy, cohort, types.ProblemLeaderUnspecified,
-			fmt.Sprintf("Shard %s has cohort members but no designated leader", sa.ShardKey)), nil
+		return a.emitFailover(sa, nil, policy, cohort, replaceLeader(types.ProblemLeaderUnspecified,
+			fmt.Sprintf("Shard %s has cohort members but no designated leader", sa.ShardKey))), nil
 	}
 
-	// Suppress failover briefly while the leader is mid-promotion (see
-	// inPromotionGrace).
-	if inPromotionGrace(sa) {
-		a.factory.Logger().Info("primary promotion in progress within grace, suppressing failover",
-			"shard_key", sa.ShardKey.String(),
-			"promoting_primary", topoclient.ComponentIDString(leaderID),
-			"rule_age", sa.Now.Sub(undecidedRule.GetCreationTime().AsTime()))
-		return nil, nil
-	}
-
-	// Judge the leader: healthy, must-replace (with a cause), or inconclusive.
-	cause, description, inconclusive := a.leaderReplacementCause(sa, cohort, leaderID, policy)
-
-	switch {
-	case inconclusive:
-		// We can neither confirm the leader healthy nor conclusively convict it.
-		// Never fail over; surface only a blind spot we cannot act through.
-		return a.emitInconclusive(sa, leaderID, policy, cohort), nil
-	case cause == "":
-		// Healthy leader — but warn if losing it now would strand the shard.
+	verdict, replace := a.judgeLeader(sa, leaderID, cohort, policy)
+	if !replace {
 		return a.atRiskProblemIfDegraded(sa, policy, cohort, leaderID), nil
-	default:
-		// Must replace: gate on whether a failover could actually succeed.
-		return a.emitFailover(sa, leaderID, policy, cohort, cause, description), nil
 	}
+	return a.emitFailover(sa, leaderID, policy, cohort, verdict), nil
 }
 
-// inPromotionGrace reports whether failover should be briefly suppressed because
-// the leader is mid-promotion: a freshly-created leadership rule needs a moment
-// for followers to reconnect and start streaming before "are followers vouching?"
-// is meaningful. The grace holds while the leader reports promoting (postgres
-// still running) AND the rule is younger than ConnectReplicasToNewLeaderGrace. The
-// rule-age bound is the point — a leader that claims to be promoting forever but
-// never gains followers cannot make progress, so once the grace lapses we stop
-// honoring the claim and let normal detection fail it over.
-//
-// TODO: remove the PROMOTING-status coupling. current_position's Decision
-// (read by IsActiveLeader) can't move before WAL catch-up — decided must
-// mean durably confirmed. replication_primary already updates early via
-// RecordTermPrimary, recording only what the pooler was told. Have orch's
-// self-check accept that as self-asserted-but-unconfirmed leadership while
-// promoting instead; the postgres monitor self-resigns if it turns out
-// unbacked (rule absent → resign → LeaderUnspecified → re-recruit).
-func inPromotionGrace(sa *ShardAnalysis) bool {
-	if !leaderPromoting(sa) || !leaderObservedLive(sa) || !leaderPostgresRunning(sa) {
+// leaderVerdict is why a leader must be replaced, and the earliest time to act.
+type leaderVerdict struct {
+	cause       types.ProblemCode
+	description string
+	notBefore   time.Time
+}
+
+func replaceLeader(cause types.ProblemCode, description string) leaderVerdict {
+	return leaderVerdict{cause: cause, description: description}
+}
+
+// judgeLeader applies the checks documented on LeaderNeedsReplacementAnalyzer.
+// It returns replace=false when the leader provably makes progress.
+func (a *LeaderNeedsReplacementAnalyzer) judgeLeader(
+	sa *ShardAnalysis,
+	leaderID *clustermetadatapb.ID,
+	cohort []*clustermetadatapb.ID,
+	policy commonconsensus.DurabilityPolicy,
+) (verdict leaderVerdict, replace bool) {
+	inFlight := promotionInFlight(sa, leaderID)
+
+	revoked, disconnected := a.classifyFollowers(sa, cohort, leaderID)
+
+	// 1. Progress is impossible.
+	if verdict, ok := a.progressImpossible(sa, leaderID, cohort, policy, revoked); ok {
+		return verdict, true
+	}
+
+	// 2. Progress is halted.
+	if verdict, ok := a.progressHalted(sa, cohort, policy, inFlight, revoked, disconnected); ok {
+		return verdict, true
+	}
+
+	// 3. Progress is proven.
+	if quorumCommitFresh(sa) {
+		return leaderVerdict{}, false
+	}
+
+	// 4. Otherwise, progress is unproven. Defer while it may still be imminent:
+	// a new rule's leader needs QuorumCommitStaleAfter to commit a watermark,
+	// and a propagating promotion gets up to MaxPromotionTime.
+	created := commonconsensus.PossiblyUndecidedRule(sa.HighestPosition).GetCreationTime().AsTime()
+	if inFlight {
+		verdict = replaceLeader(types.ProblemLeaderPromotionIncomplete,
+			fmt.Sprintf("Shard %s is promoting a new leader that has not yet committed a quorum write", sa.ShardKey))
+		verdict.notBefore = created.Add(sa.Policy.QuorumCommitStaleAfter)
+		if a.promotionPropagating(sa, leaderID, cohort, policy) {
+			verdict.notBefore = created.Add(sa.Policy.MaxPromotionTime)
+		}
+		return verdict, true
+	}
+	verdict = replaceLeader(types.ProblemLeaderProgressUnproven,
+		fmt.Sprintf("Shard %s has no quorum-commit watermark newer than %s", sa.ShardKey, sa.Policy.QuorumCommitStaleAfter))
+	verdict.notBefore = created.Add(sa.Policy.QuorumCommitStaleAfter)
+	return verdict, true
+}
+
+// progressImpossible reports the first durable consensus fact proving the
+// leader cannot make progress, if any: its own intent first, then its own
+// bookkeeping, then its followers'.
+func (a *LeaderNeedsReplacementAnalyzer) progressImpossible(
+	sa *ShardAnalysis,
+	leaderID *clustermetadatapb.ID,
+	cohort []*clustermetadatapb.ID,
+	policy commonconsensus.DurabilityPolicy,
+	revoked []*clustermetadatapb.ID,
+) (leaderVerdict, bool) {
+	// The leader asked to step down. leaderHasResigned is the fast path (its
+	// REQUESTING_DEMOTION/INELIGIBLE health broadcast); the SHUTDOWN tombstone is
+	// the durable fallback for when that ephemeral broadcast is lost.
+	// TODO: this still waits the shared failover grace; it could skip it (intent
+	// doesn't flap; multi-orch safety is the Recruit CAS), cutting the write outage.
+	if leaderHasResigned(sa) || leaderShutdownTombstoned(sa, leaderID) {
+		return replaceLeader(types.ProblemLeaderResigned,
+			fmt.Sprintf("Leader for shard %s is stepping down", sa.ShardKey)), true
+	}
+
+	// The leader accepted a revocation of the current rule (a recruit that stalled
+	// before establishing a successor). Revocations are durable, so even a stale
+	// report of one is conclusive.
+	if leaderRevokedCurrentRule(sa) {
+		return replaceLeader(types.ProblemLeaderNotSelfConfirmed,
+			fmt.Sprintf("Leader for shard %s has revoked its own rule", sa.ShardKey)), true
+	}
+
+	// The leader's fresh report shows it neither leads under the current rule nor
+	// has accepted the promotion to it — e.g. its Promote was lost while the
+	// followers' SetPrimary landed. Writes only flow through the leader, so this
+	// disqualifies it regardless of follower support. ruleWithinGrace allows for
+	// the leader's report trailing its followers' (Promote and SetPrimary are
+	// sent concurrently).
+	currentRule := commonconsensus.PossiblyUndecidedRule(sa.HighestPosition)
+	if leaderObservedLive(sa) && !leaderBacksCurrentRule(sa, leaderID) && !ruleWithinGrace(sa, currentRule) {
+		return replaceLeader(types.ProblemLeaderNotSelfConfirmed,
+			fmt.Sprintf("Leader for shard %s does not confirm its own role in the current rule", sa.ShardKey)), true
+	}
+
+	// Enough followers revoked the rule that the rest cannot satisfy the
+	// durability policy, so no quorum can commit under it.
+	if revocationSufficient(policy, cohort, revoked) {
+		return replaceLeader(types.ProblemLeaderLacksCohortSupport,
+			fmt.Sprintf("Leader for shard %s has lost its rule to revocations by its cohort", sa.ShardKey)), true
+	}
+	return leaderVerdict{}, false
+}
+
+// progressHalted reports the first current observation showing the leader is
+// not making progress right now, if any. Each could recover on its own, so
+// each is judged with an allowance for transient blips.
+func (a *LeaderNeedsReplacementAnalyzer) progressHalted(
+	sa *ShardAnalysis,
+	cohort []*clustermetadatapb.ID,
+	policy commonconsensus.DurabilityPolicy,
+	inFlight bool,
+	revoked, disconnected []*clustermetadatapb.ID,
+) (leaderVerdict, bool) {
+	// Enough followers are pointed at the leader yet not streaming (past
+	// ConnectReplicasToNewLeaderGrace) that the rest cannot form a quorum. Not
+	// during a promotion: the candidate's pg_promote() switches timeline,
+	// briefly disconnecting every cascading follower at once. A promotion whose
+	// followers never reconnect shows no WAL progress, so it isn't deferred
+	// (see promotionPropagating).
+	if !inFlight && revocationSufficient(policy, cohort, append(revoked, disconnected...)) {
+		return replaceLeader(types.ProblemLeaderUnreachableByCohort,
+			fmt.Sprintf("Leader for shard %s is not reachable by a durability-sufficient set of its cohort", sa.ShardKey)), true
+	}
+
+	// The leader's postgres cannot serve writes. Judged only from a fresh report.
+	if !leaderObservedLive(sa) {
+		return leaderVerdict{}, false
+	}
+	// A STANDBY answers pg_isready, so without this it would pass the readiness
+	// check below forever. Not during a promotion: the candidate is still a
+	// standby until its pg_promote() runs.
+	if leaderInRecovery(sa) && !inFlight {
+		return replaceLeader(types.ProblemLeaderUnhealthy,
+			fmt.Sprintf("Leader for shard %s is reachable but its postgres is in recovery (not a primary)", sa.ShardKey)), true
+	}
+	// A promotion in flight is mid pg_promote(), so briefly not ready is expected.
+	if !leaderPostgresReady(sa) && !(inFlight && leaderMidPromote(sa)) && !a.leaderRecentlyReady(sa) {
+		return replaceLeader(types.ProblemLeaderUnhealthy,
+			fmt.Sprintf("Leader for shard %s is reachable but its postgres is unhealthy", sa.ShardKey)), true
+	}
+	return leaderVerdict{}, false
+}
+
+// leaderRecentlyReady is an anti-flap allowance: a leader whose postgres process
+// is alive and answered pg_isready within LeaderPostgresResponseThreshold is
+// given that long to recover locally before failing over.
+func (a *LeaderNeedsReplacementAnalyzer) leaderRecentlyReady(sa *ShardAnalysis) bool {
+	if !leaderPostgresRunning(sa) {
 		return false
 	}
-	ruleAge := sa.Now.Sub(commonconsensus.PossiblyUndecidedRule(sa.HighestPosition).GetCreationTime().AsTime())
-	return ruleAge < sa.Policy.ConnectReplicasToNewLeaderGrace
+	lastReady := leaderLastPostgresReadyTime(sa)
+	return !lastReady.IsZero() && sa.Now.Sub(lastReady) <= a.factory.Config().GetLeaderPostgresResponseThreshold()
 }
 
-// leaderReplacementCause returns one of three verdicts: healthy (cause=="",
-// inconclusive==false), replace (cause!=""), or inconclusive (cause=="",
-// inconclusive==true — can neither confirm healthy nor conclusively convict; the
-// caller must NOT treat it as healthy). It judges two independent axes in order:
-//
-//   - Rule support: does a durability-sufficient set of the cohort — the leader
-//     itself, mandatorily, plus enough followers — currently back the shard's
-//     highest-known rule? This is consensus-bookkeeping evidence (self-reports,
-//     revocations, streaming), and it gates everything below: a leader nobody
-//     (including itself) backs cannot be judged fit to serve no matter how
-//     healthy its postgres looks.
-//   - Leader fitness: given the rule is supported, is the specific pooler named
-//     leader physically able to serve writes right now? Postgres-liveness
-//     evidence, orthogonal to consensus.
-//
-// The cause follows the first-hand vs observer-derived principle (see the
-// leader problem docs in the types package).
-func (a *LeaderNeedsReplacementAnalyzer) leaderReplacementCause(
+// promotionPropagating reports whether an in-flight promotion still shows
+// progress short of a quorum commit, within MaxPromotionTime of its proposal:
+// the candidate is mid pg_promote(), or a durability-sufficient set of followers
+// is receiving fresh WAL from it.
+func (a *LeaderNeedsReplacementAnalyzer) promotionPropagating(
 	sa *ShardAnalysis,
-	cohort []*clustermetadatapb.ID,
 	leaderID *clustermetadatapb.ID,
-	policy commonconsensus.DurabilityPolicy,
-) (cause types.ProblemCode, description string, inconclusive bool) {
-	// First-hand, authoritative intent to step down — act immediately, bypassing
-	// progress/liveness signals. leaderHasResigned is the fast path (the leader's
-	// REQUESTING_DEMOTION/INELIGIBLE health broadcast); the SHUTDOWN tombstone is the
-	// durable fallback for when that ephemeral broadcast is lost.
-	// TODO: first-hand causes still wait the shared failover grace; they could skip it
-	// (intent doesn't flap; multi-orch safety is the Recruit CAS), cutting the write outage.
-	if leaderHasResigned(sa) || leaderShutdownTombstoned(sa, leaderID) {
-		return types.ProblemLeaderResigned,
-			fmt.Sprintf("Leader for shard %s is stepping down", sa.ShardKey), false
-	}
-
-	vouching, cutOff := a.classifyFollowerReachability(sa, cohort, leaderID)
-	leaderPart := leaderParticipation(sa, vouching)
-
-	switch {
-	case leaderPart == participationLapsed:
-		// The leader's own report proves it doesn't back its own rule (never
-		// confirmed the term, or self-revoked with no successor decided yet) —
-		// disqualifying on its own regardless of follower support, since writes
-		// only ever flow through the leader.
-		return types.ProblemLeaderNotSelfConfirmed,
-			fmt.Sprintf("Leader for shard %s does not confirm its own role in the current rule", sa.ShardKey), false
-	case revocationSufficient(policy, cohort, cutOff):
-		// Followers conclusively lapsed are sufficient to revoke the term: the
-		// members not lapsed (including the leader) can no longer satisfy the
-		// policy. Mirrors the recruitment-feasibility gate: same conclusive
-		// revocation to detect the failure as to act.
-		return types.ProblemLeaderLacksCohortSupport,
-			fmt.Sprintf("Leader for shard %s is not backed by a durability-sufficient set of its cohort", sa.ShardKey), false
-	case leaderPart == participationActive || policy.SatisfiedBy(vouching) == nil:
-		// The rule is supported — either the leader confirms itself directly, or
-		// a durability-sufficient set of followers vouches for it indirectly (you
-		// cannot stream from a dead primary). Move to the fitness axis.
-		return a.leaderFitnessCause(sa, cohort, leaderID, policy)
-	default:
-		// NEITHER — inconclusive, NOT healthy: we may simply not have looked long
-		// enough (a freshly (re)started orch, or followers mid-reconnect).
-		return "", "", true
-	}
-}
-
-// leaderParticipation answers the same question as classifyFollowerToLeader,
-// but for the leader itself: does it back its own rule? A fresh, decided,
-// non-revoked, self-naming report (commonconsensus.IsActiveLeader) is direct
-// proof. When there is no fresh observation of the leader at all, a vouching
-// follower is indirect proof instead (you cannot stream from a dead primary)
-// — but only followers already confirmed active count, precisely so a
-// follower whose own evidence was discounted above (e.g.
-// self-revoked-but-streaming) can't indirectly vouch for the leader either.
-// vouching is classifyFollowerReachability's result. Note this indirect path
-// is only consulted absent a fresh observation — a directly-observed leader
-// whose own report fails the direct-proof check goes straight to lapsed, not
-// through this fallback. A genuinely mid-promotion leader can still fail the
-// direct-proof check (see inPromotionGrace's doc for why); that's tolerated
-// by suppressing failover earlier in Analyze(), before this is ever called,
-// not by this function treating it as active.
-func leaderParticipation(sa *ShardAnalysis, vouching []*clustermetadatapb.ID) ruleParticipation {
-	if sa.Leader == nil {
-		return participationUnknown
-	}
-	if leaderObservedLive(sa) {
-		cs := sa.Leader.Health().GetConsensusStatus()
-		if commonconsensus.IsActiveLeader(cs) {
-			return participationActive
-		}
-		rule := commonconsensus.PossiblyUndecidedRule(sa.HighestPosition)
-		if created := rule.GetCreationTime(); created != nil && sa.Now.Sub(created.AsTime()) <= sa.Policy.ConnectReplicasToNewLeaderGrace {
-			return participationAdapting
-		}
-		return participationLapsed
-	}
-	if len(vouching) > 0 {
-		return participationActive
-	}
-	return participationUnknown
-}
-
-// leaderFitnessCause judges the leader-fitness axis: given the rule is
-// already known to be supported, is this specific pooler's postgres actually
-// able to serve writes right now? Postgres state is first-hand — no quorum
-// corroboration needed, since a pooler's own state is its own to report; only the
-// quorum-commit backstop consults cohort-observed evidence. Shares
-// leaderReplacementCause's three-way verdict contract (named returns to make
-// that explicit), since it's a direct delegate of it.
-//
-// The last check before either healthy verdict is quorumCommitStuckCause, the
-// LeaderQuorumWritesStalled backstop: a live, postgres-ready leader can still fail to
-// make durable progress.
-func (a *LeaderNeedsReplacementAnalyzer) leaderFitnessCause(
-	sa *ShardAnalysis,
 	cohort []*clustermetadatapb.ID,
-	leaderID *clustermetadatapb.ID,
 	policy commonconsensus.DurabilityPolicy,
-) (cause types.ProblemCode, description string, inconclusive bool) {
-	if !leaderObservedLive(sa) {
-		// No direct observation to judge postgres fitness from. But
-		// leaderReplacementCause only reaches this axis once rule support is
-		// already confirmed — directly, or via a vouching cohort proving the
-		// leader alive without our own observation of it — so only the
-		// quorum-commit backstop (which any cohort member's report can feed)
-		// remains.
-		return a.quorumCommitStuckCause(sa, cohort, leaderID, policy)
+) bool {
+	created := sa.HighestPosition.GetProposal().GetCreationTime()
+	if created == nil || sa.Now.Sub(created.AsTime()) > sa.Policy.MaxPromotionTime {
+		return false
 	}
-	// A leader whose postgres is in recovery (a STANDBY) cannot accept writes, yet
-	// answers pg_isready continuously — so it would pass BOTH the healthy fast-path
-	// and the anti-flap grace below forever, masking the absence of a writable
-	// primary. Convict it so a real primary is promoted. (PROMOTING is handled
-	// upstream by inPromotionGrace; transient non-ready states by the anti-flap
-	// timeout — see leaderInRecovery.)
-	//
-	// TODO: this is a tactical guard. The durable fix is on the pooler side: a
-	// pooler that knows it should be acting as leader would detect in its postgres
-	// monitor that it is in recovery mode and publish that it needs to resign
-	// leadership — replace this guard once that lands.
-	if leaderInRecovery(sa) {
-		return types.ProblemLeaderUnhealthy,
-			fmt.Sprintf("Leader for shard %s is reachable but its postgres is in recovery (not a primary)", sa.ShardKey), false
-	}
-	if leaderPostgresReady(sa) {
-		return a.quorumCommitStuckCause(sa, cohort, leaderID, policy)
-	}
-	// The leader's own postgres is not ready. Anti-flap: treat as healthy while
-	// the process is alive and postgres responded within the response window;
-	// once it lapses, a wedged postgres must not block failover forever.
-	// (Interim guard, replaced by the LSN progress signal when LeaderQuorumWritesStalled lands.)
-	if leaderPostgresRunning(sa) {
-		threshold := a.factory.Config().GetLeaderPostgresResponseThreshold()
-		lastReady := leaderLastPostgresReadyTime(sa)
-		if !lastReady.IsZero() && time.Since(lastReady) <= threshold {
-			return "", "", false
-		}
-	}
-	return types.ProblemLeaderUnhealthy,
-		fmt.Sprintf("Leader for shard %s is reachable but its postgres is unhealthy", sa.ShardKey), false
-}
-
-// quorumCommitStuckCause checks the LeaderQuorumWritesStalled backstop: the leader looks
-// healthy but quorum commits have stalled even though replicas can still
-// show raw LSN progress (they replay WAL ahead of the primary's own
-// synchronous-quorum ack). Absence of evidence must not convict, so this is
-// healthy (cause=="") when no pooler has reported a quorum_commit_ts yet.
-func (a *LeaderNeedsReplacementAnalyzer) quorumCommitStuckCause(sa *ShardAnalysis, cohort []*clustermetadatapb.ID, leaderID *clustermetadatapb.ID, policy commonconsensus.DurabilityPolicy) (types.ProblemCode, string, bool) {
-	freshest := freshestQuorumCommitTs(sa)
-	if !consensus.QuorumCommitStale(freshest, sa.Now, sa.Policy.QuorumCommitStaleAfter) {
-		return "", "", false
-	}
-	// A DECIDED rule already proves a quorum-acked commit succeeded under this
-	// leadership (the finalize commit is itself quorum-gated), so the
-	// backlog-draining excuse only applies while still undecided.
-	if !commonconsensus.IsRuleDecided(sa.HighestPosition) && a.receiveLsnStillAdvancing(sa, cohort, leaderID, policy) {
-		return "", "", false
-	}
-	return types.ProblemLeaderQuorumWritesStalled,
-		fmt.Sprintf("Leader for shard %s appears healthy but quorum commits have not advanced in over %s", sa.ShardKey, sa.Policy.QuorumCommitStaleAfter), false
+	return leaderMidPromote(sa) || receiveLsnStillAdvancing(sa, cohort, leaderID, policy)
 }
 
 // atRiskProblemIfDegraded returns a ShardAtRisk warning when a healthy leader
@@ -362,36 +326,19 @@ func (a *LeaderNeedsReplacementAnalyzer) atRiskProblemIfDegraded(sa *ShardAnalys
 // Both are alert-only. Otherwise the cause is actionable via AppointLeader. The old
 // leader is not excluded from the reachable set — even an unhealthy-but-reachable
 // leader can still participate in the recruit that establishes the new term.
-func (a *LeaderNeedsReplacementAnalyzer) emitFailover(sa *ShardAnalysis, leaderID *clustermetadatapb.ID, policy commonconsensus.DurabilityPolicy, cohort []*clustermetadatapb.ID, cause types.ProblemCode, description string) []types.Problem {
+func (a *LeaderNeedsReplacementAnalyzer) emitFailover(sa *ShardAnalysis, leaderID *clustermetadatapb.ID, policy commonconsensus.DurabilityPolicy, cohort []*clustermetadatapb.ID, verdict leaderVerdict) []types.Problem {
 	if !recruitmentFeasible(policy, cohort, recruitableCohort(sa, cohort, nil)) {
 		return a.blindOrStuck(sa, leaderID, cohort,
-			fmt.Sprintf("Shard %s needs a new leader (%s) but cannot reach a sufficient recruitment quorum", sa.ShardKey, cause))
+			fmt.Sprintf("Shard %s needs a new leader (%s) but cannot reach a sufficient recruitment quorum", sa.ShardKey, verdict.cause))
 	}
-	return a.shardProblem(sa, leaderID, cause, types.PriorityEmergency, a.factory.NewAppointLeaderAction(), description)
-}
-
-// emitInconclusive handles a leader we can neither confirm healthy nor convict. It
-// never fails over; it emits an alert-only problem describing why we can't tell:
-// blind (no cohort health) → NoHealthyCohortMembers; a must-replace leader with no
-// recruitment quorum → ShardStuck; otherwise a recoverable-but-unconfirmed cohort →
-// LeaderHealthUnknown (a warning: the leader may be fine, we just lack conclusive
-// evidence). Transient at cold start; persistent means orch has lost sight of the
-// leader with an ambiguous cohort.
-//
-// TODO(propagation): the progress axis will further split LeaderHealthUnknown into
-// ShardWritesBlockedOnPropagation when a quorum is catching up but not yet current.
-func (a *LeaderNeedsReplacementAnalyzer) emitInconclusive(sa *ShardAnalysis, leaderID *clustermetadatapb.ID, policy commonconsensus.DurabilityPolicy, cohort []*clustermetadatapb.ID) []types.Problem {
-	if recruitmentFeasible(policy, cohort, recruitableCohort(sa, cohort, nil)) {
-		return a.shardProblem(sa, leaderID, types.ProblemLeaderHealthUnknown, types.PriorityNormal, a.factory.NewAlertOnlyAction(),
-			fmt.Sprintf("Shard %s leader health is unknown: orch cannot confirm it is serving a quorum nor that its cohort is cut off from it", sa.ShardKey))
-	}
-	return a.blindOrStuck(sa, leaderID, cohort,
-		fmt.Sprintf("Shard %s cannot confirm leader progress and cannot reach a sufficient recruitment quorum", sa.ShardKey))
+	problems := a.shardProblem(sa, leaderID, verdict.cause, types.PriorityEmergency, a.factory.NewAppointLeaderAction(), verdict.description)
+	problems[0].NotBefore = verdict.notBefore
+	return problems
 }
 
 // blindOrStuck returns the alert-only problem for an infeasible failover: no usable
 // health of any cohort member → NoHealthyCohortMembers (blind); otherwise a sub-quorum
-// cohort → ShardStuck (with stuckDescription). Shared by emitFailover/emitInconclusive.
+// cohort → ShardStuck (with stuckDescription).
 func (a *LeaderNeedsReplacementAnalyzer) blindOrStuck(sa *ShardAnalysis, leaderID *clustermetadatapb.ID, cohort []*clustermetadatapb.ID, stuckDescription string) []types.Problem {
 	if !hasUsableShardHealth(sa, cohort) {
 		return a.shardProblem(sa, leaderID, types.ProblemNoHealthyCohortMembers, types.PriorityEmergency, a.factory.NewAlertOnlyAction(),

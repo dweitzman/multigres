@@ -23,13 +23,26 @@ import (
 	"github.com/multigres/multigres/go/services/multiorch/store"
 )
 
+// quorumCommitFresh reports whether a quorum acknowledged a write within
+// QuorumCommitStaleAfter — the only proof that the shard is making durable
+// write progress. No watermark at all is not proof.
+func quorumCommitFresh(sa *ShardAnalysis) bool {
+	ts := freshestQuorumCommitTs(sa)
+	return ts.GetSeconds() != 0 && sa.Now.Sub(ts.AsTime()) <= sa.Policy.QuorumCommitStaleAfter
+}
+
 // freshestQuorumCommitTs returns the most recent quorum_commit_ts known for
 // this shard. quorum_commit_ts names one leader-authored fact, not
 // independent per-member values, so any source that has a fresh copy is
 // valid proof — including the leader's own (always >= any follower's replica,
 // since replication only adds delay) and a non-cohort observer's.
 //
-// TODO: verify a report's heartbeat leader_id matches leaderID (fencing-gap misattribution risk).
+// TODO: attribute the watermark to its author. A fresh watermark is the only
+// proof of progress, so one written by a previous leader (still visible on
+// followers) must not count for the current one. The heartbeat row already
+// stores leader_id; exposing it next to quorum_commit_ts in the status proto
+// would let this skip other authors. Until then the misattribution is bounded:
+// the old leader's watermark goes stale within QuorumCommitStaleAfter.
 func freshestQuorumCommitTs(sa *ShardAnalysis) *timestamppb.Timestamp {
 	var freshest *timestamppb.Timestamp
 	if sa.Leader != nil {
@@ -55,13 +68,13 @@ func freshestQuorumCommitTs(sa *ShardAnalysis) *timestamppb.Timestamp {
 // receiveLsnStillAdvancing reports whether a durability-sufficient set of the
 // cohort has a recent last_receive_lsn_advance_time from the candidate leader
 // specifically — evidence, during an undecided promotion (see
-// quorumCommitStuckCause), that a quorum-commit stall is backlog-draining
+// promotionPropagating), that the missing quorum commit is backlog-draining
 // rather than a genuine halt. Unlike raw LSN, last_receive_lsn_advance_time
 // only moves via live streaming (never restore_command replay), so it can't
 // be spoofed by archive replay. Gated on replicaConfiguredForLeader so WAL
 // advance from an unrelated primary can't stand in as evidence of this
 // leader's health.
-func (a *LeaderNeedsReplacementAnalyzer) receiveLsnStillAdvancing(sa *ShardAnalysis, cohort []*clustermetadatapb.ID, leaderID *clustermetadatapb.ID, policy commonconsensus.DurabilityPolicy) bool {
+func receiveLsnStillAdvancing(sa *ShardAnalysis, cohort []*clustermetadatapb.ID, leaderID *clustermetadatapb.ID, policy commonconsensus.DurabilityPolicy) bool {
 	if sa.Leader == nil {
 		return false
 	}
@@ -94,7 +107,7 @@ func (a *LeaderNeedsReplacementAnalyzer) receiveLsnStillAdvancing(sa *ShardAnaly
 	}
 	// A quorum-sufficient set actively receiving fresh WAL proves the leader
 	// itself is generating and streaming it right now, so it vouches too —
-	// same self-vouching inference as classifyFollowerReachability.
+	// you cannot stream WAL from a leader that isn't producing it.
 	vouching = append(vouching, leaderID)
 	return policy.SatisfiedBy(vouching) == nil
 }

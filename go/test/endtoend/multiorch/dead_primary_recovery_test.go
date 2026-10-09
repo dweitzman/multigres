@@ -464,9 +464,9 @@ func TestDeadPrimaryRecovery(t *testing.T) {
 		// The final failover in this test is triggered via Recruit on the
 		// primary (emergency demote), which sets resignedLeaderAtTerm and is
 		// reported as LeaderResigned. Earlier iterations use SIGKILL, reported as
-		// LeaderLacksCohortSupport, LeaderNotSelfConfirmed or LeaderUnhealthy depending on whether the
+		// LeaderUnreachableByCohort, LeaderUnhealthy or LeaderProgressUnproven depending on whether the
 		// leader's pooler is still observed. Any of these indicates leader failure.
-		assert.Regexp(t, "LeaderNotSelfConfirmed|LeaderLacksCohortSupport|LeaderUnhealthy|LeaderResigned", reason,
+		assert.Regexp(t, "LeaderUnreachableByCohort|LeaderLacksCohortSupport|LeaderNotSelfConfirmed|LeaderUnhealthy|LeaderProgressUnproven|LeaderResigned", reason,
 			"reason should indicate leader failure or resignation")
 
 		// Verify cohort_members and accepted_members are valid JSON arrays
@@ -840,7 +840,7 @@ func startDirectWrites(t *testing.T, primary *shardsetup.MultipoolerInstance) (s
 }
 
 // TestPoolerDownEventuallyFailsOver verifies that a dead multipooler
-// (postgres left running) eventually triggers failover via LeaderQuorumWritesStalled.
+// (postgres left running) eventually triggers failover via LeaderProgressUnproven.
 // Standbys keep streaming fine from the still-alive postgres primary, so
 // streaming-freshness alone never flags it; quorum_commit_ts (tied to the
 // heartbeat writer, which died with the multipooler) is what catches this.
@@ -874,7 +874,7 @@ func TestPoolerDownEventuallyFailsOver(t *testing.T) {
 	defer stopWrites()
 
 	// quorum_commit_ts is NULL until the writer's 2nd heartbeat -- wait for a
-	// real value, or LeaderQuorumWritesStalled's staleness check has nothing to go stale.
+	// real value, or LeaderProgressUnproven's staleness check has nothing to go stale.
 	primaryClient, err := shardsetup.NewMultipoolerClient(primary.Multipooler.GrpcPort)
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
@@ -920,11 +920,11 @@ func TestPoolerDownEventuallyFailsOver(t *testing.T) {
 	killMultipooler(t, primary)
 
 	// The leader's heartbeat writer died with it, so quorum_commit_ts on the
-	// heartbeat row freezes at its last value. LeaderQuorumWritesStalled only fires once
+	// heartbeat row freezes at its last value. LeaderProgressUnproven only fires once
 	// that's been stale for longer than QuorumCommitStaleAfter (20s default),
 	// plus the usual failover grace/recruit/promote time on top -- give this
 	// generous room rather than the 3s in TestPoolerDownNoFailover.
-	t.Log("Waiting for multiorch to detect LeaderQuorumWritesStalled and fail over...")
+	t.Log("Waiting for multiorch to detect LeaderProgressUnproven and fail over...")
 	newPrimaryName := shardsetup.WaitForNewPrimary(t, setup, oldPrimaryName, 90*time.Second)
 	require.NotEmpty(t, newPrimaryName, "a new primary should eventually be elected once quorum commits are seen to have stalled")
 	require.NotEqual(t, oldPrimaryName, newPrimaryName)

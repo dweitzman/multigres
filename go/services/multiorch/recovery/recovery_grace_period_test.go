@@ -342,3 +342,23 @@ func TestRecoveryGracePeriod_ConcurrentAccess(t *testing.T) {
 	assert.True(t, exists, "deadline should exist after concurrent access")
 	assert.False(t, deadline.IsZero(), "deadline should not be zero")
 }
+
+func TestReadyToExecute_HonorsProblemNotBefore(t *testing.T) {
+	re := &Engine{recoveryGracePeriodTracker: NewRecoveryGracePeriodTracker(t.Context(), config.NewTestConfig())}
+	action := &mockActionWithGracePeriod{}
+
+	// A failover problem deferred by its analyzer waits for NotBefore, before
+	// the recruitment backoff is even consulted.
+	notBefore := time.Now().Add(time.Minute)
+	deferred := shardProblem(types.ProblemLeaderPromotionIncomplete, action)
+	deferred.NotBefore = notBefore
+	readyAt, ready := re.readyToExecute(deferred)
+	assert.False(t, ready)
+	assert.Equal(t, notBefore, readyAt)
+
+	// Once NotBefore has passed, the problem's usual gate decides.
+	elapsed := shardProblem(types.ProblemShardAtRisk, action)
+	elapsed.NotBefore = time.Now().Add(-time.Minute)
+	_, ready = re.readyToExecute(elapsed)
+	assert.True(t, ready)
+}

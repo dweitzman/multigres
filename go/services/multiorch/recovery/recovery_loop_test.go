@@ -801,7 +801,7 @@ func TestFilterAndPrioritize_AlertOnlyShardWideDoesNotBlockPoolerScoped(t *testi
 
 	problems := []types.Problem{
 		{
-			Code:           types.ProblemLeaderHealthUnknown,
+			Code:           types.ProblemShardAtRisk,
 			PoolerID:       poolerID1,
 			Priority:       types.PriorityEmergency,
 			Scope:          types.ScopeShard,
@@ -2083,7 +2083,7 @@ func TestRecoveryLoop_TracingSpans(t *testing.T) {
 		},
 		{
 			// Ready and highest priority among the ready ones: picked.
-			Code:           types.ProblemLeaderHealthUnknown,
+			Code:           types.ProblemShardAtRisk,
 			PoolerID:       primaryID,
 			ShardKey:       shardKey,
 			Priority:       types.PriorityHigh,
@@ -2103,7 +2103,7 @@ func TestRecoveryLoop_TracingSpans(t *testing.T) {
 
 	spanFiltered := engine.filterAndPrioritize(ctx, spanProblems)
 	require.Len(t, spanFiltered, 1)
-	assert.Equal(t, types.ProblemLeaderHealthUnknown, spanFiltered[0].Code)
+	assert.Equal(t, types.ProblemShardAtRisk, spanFiltered[0].Code)
 
 	require.NoError(t, setup.ForceFlush(ctx))
 	results := make(map[string]string) // action.name -> result attribute

@@ -61,13 +61,11 @@ type AvailabilityPolicy struct {
 	// failover-detection thresholds above.
 	LeaderChangeFreshness time.Duration
 
-	// ConnectReplicasToNewLeaderGrace bounds how long after a leadership rule is created we keep
-	// suppressing failover for a leader that reports it is still promoting. It
-	// exists only to let freshly-promoted leaders' followers reconnect and start
-	// streaming before "are followers vouching?" becomes meaningful. It is bounded
-	// by rule age on purpose: a leader that claims to be promoting indefinitely but
-	// never gains followers cannot make progress, so once this lapses we stop
-	// honoring the claim and let normal detection fail it over.
+	// ConnectReplicasToNewLeaderGrace bounds how long after a rule is created a
+	// cohort member's report may still not reflect it without that counting as
+	// evidence: followers need time to repoint and start streaming, and the
+	// leader's own report can trail its followers' (Promote and SetPrimary are
+	// sent concurrently).
 	ConnectReplicasToNewLeaderGrace time.Duration
 
 	// ObservationFreshness bounds how stale a pooler's health snapshot may be
@@ -78,13 +76,21 @@ type AvailabilityPolicy struct {
 	ObservationFreshness time.Duration
 
 	// QuorumCommitStaleAfter bounds how old the freshest cohort-observed
-	// quorum_commit_ts may be before LeaderQuorumWritesStalled considers commits stalled.
+	// quorum_commit_ts may be before writes count as not provably progressing
+	// (LeaderProgressUnproven).
 	// Kept generous and longer than LeaderLivenessFreshness: this signal is
 	// multi-hop (heartbeat interval, one-tick defer, reader poll, then
 	// health-snapshot propagation), so delays stack even when nothing is
 	// wrong -- a false positive here drives a real failover against a
 	// healthy leader.
 	QuorumCommitStaleAfter time.Duration
+
+	// MaxPromotionTime bounds how long after a promotion is proposed its failover
+	// may be deferred while it still shows progress (mid pg_promote(), or
+	// followers receiving its WAL). Generous on purpose: a candidate with a large
+	// WAL backlog can need minutes before its first quorum commit, and failing it
+	// over hands the same backlog to the next candidate.
+	MaxPromotionTime time.Duration
 }
 
 // DefaultAvailabilityPolicy returns the built-in policy used when no operator
@@ -100,5 +106,6 @@ func DefaultAvailabilityPolicy() AvailabilityPolicy {
 		ConnectReplicasToNewLeaderGrace: 10 * time.Second,
 		ObservationFreshness:            store.DefaultObservationFreshness,
 		QuorumCommitStaleAfter:          consensus.DefaultQuorumCommitStaleAfter,
+		MaxPromotionTime:                5 * time.Minute,
 	}
 }

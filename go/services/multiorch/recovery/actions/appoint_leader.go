@@ -94,9 +94,11 @@ func (a *AppointLeaderAction) Execute(ctx context.Context, rechecked types.Reche
 	if leader, statusResp, err := pollLeaderHealth(shortCtx, a.rpcClient, shard); err == nil {
 		// LeaderNeedsReplacement alone misses a leader that's reachable and
 		// self-reports fine but simply can't commit writes.
-		// TODO(https://github.com/multigres/multigres/pull/1481): stopgap using
-		// the default threshold directly -- replace once leaderFitnessCause is
-		// shared with this action and it has real policy-lookup access.
+		// TODO: this re-judges leader health with its own, narrower rules, so it
+		// can disagree with LeaderNeedsReplacementAnalyzer (e.g. a leader with no
+		// quorum-commit watermark at all is unproven to the analyzer but "already
+		// exists" here, so detection repeats while this skips). Reuse the
+		// analyzer's verdict instead; the engine already re-runs it before Execute.
 		quorumCommitStale := consensus.QuorumCommitStale(
 			statusResp.GetStatus().GetPrimaryStatus().GetQuorumCommitTs(), time.Now(), consensus.DefaultQuorumCommitStaleAfter)
 		if quorumCommitStale || types.LeaderNeedsReplacement(leader.Health()) {

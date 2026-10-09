@@ -17,6 +17,7 @@ package analysis
 import (
 	"time"
 
+	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
@@ -67,6 +68,14 @@ func leaderPromoting(sa *ShardAnalysis) bool {
 		sa.Leader.Health().GetStatus().GetPostgresStatus() == multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_PROMOTING
 }
 
+// leaderMidPromote reports whether the leader is executing pg_promote(): it
+// reports PROMOTING and its postgres process is alive. A crashed postgres can
+// leave the PROMOTING flag set until the promote call gives up, so the flag
+// alone isn't evidence of progress.
+func leaderMidPromote(sa *ShardAnalysis) bool {
+	return leaderPromoting(sa) && leaderPostgresRunning(sa)
+}
+
 // leaderInRecovery reports whether the leader's last snapshot shows its postgres
 // genuinely in recovery as a STANDBY (pg_is_in_recovery() = true) — a node the
 // consensus rule names as leader but whose postgres never left recovery and so
@@ -75,12 +84,11 @@ func leaderPromoting(sa *ShardAnalysis) bool {
 //
 // This is deliberately the STANDBY state specifically, not "anything other than
 // PRIMARY": a standby answers pg_isready continuously, so it keeps postgres_ready
-// (and LastPostgresReadyTime) fresh and would otherwise pass both the healthy
-// fast-path and the anti-flap grace forever (see leaderFitnessCause). Transient
-// non-primary states (STARTING/UNKNOWN during a restart or a wedged postgres) lose
-// pg_isready, so the anti-flap timeout already fails them over — treating them as
-// "in recovery" here would instead fail over every primary restart. PROMOTING is
-// handled upstream by inPromotionGrace.
+// (and LastPostgresReadyTime) fresh and would otherwise pass the readiness checks
+// forever. Transient non-primary states (STARTING/UNKNOWN during a restart or a
+// wedged postgres) lose pg_isready, so the anti-flap timeout already fails them
+// over — treating them as "in recovery" here would instead fail over every
+// primary restart. PROMOTING is its own state (see leaderPromoting).
 func leaderInRecovery(sa *ShardAnalysis) bool {
 	return sa.Leader != nil &&
 		sa.Leader.Health().GetStatus().GetPostgresStatus() == multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_STANDBY
@@ -122,4 +130,43 @@ func leaderServing(sa *ShardAnalysis) bool {
 	return observationFresh(sa.Leader, sa.Now, sa.Policy.LeaderChangeFreshness) &&
 		leaderPostgresReady(sa) &&
 		!leaderHasResigned(sa)
+}
+
+// leaderRevokedCurrentRule reports whether the leader has accepted a revocation
+// of the shard's current rule — a recruit that revoked it and then stalled
+// before establishing a successor. Revocations are durable, so even a stale
+// report of one stays true. A candidate's own revocation of the rule it is
+// replacing does not count: it doesn't revoke the proposal it is promoting to.
+func leaderRevokedCurrentRule(sa *ShardAnalysis) bool {
+	return sa.Leader != nil &&
+		commonconsensus.IsRuleRevoked(sa.HighestPosition, sa.Leader.Health().GetConsensusStatus().GetTermRevocation())
+}
+
+// leaderBacksCurrentRule reports whether the leader's own report has accepted
+// the shard's current rule with itself as leader: its highest-known rule is the
+// same rule (by number) and names it. True for an established leader, and for
+// a candidate whose Promote has landed (Promote records the proposal before its
+// quorum-gated rule write). False for a candidate whose Promote was lost while
+// its followers' SetPrimary landed.
+func leaderBacksCurrentRule(sa *ShardAnalysis, leaderID *clustermetadatapb.ID) bool {
+	if sa.Leader == nil {
+		return false
+	}
+	own := commonconsensus.PossiblyUndecidedRule(
+		commonconsensus.HighestKnownRule([]*clustermetadatapb.ConsensusStatus{sa.Leader.Health().GetConsensusStatus()}))
+	current := commonconsensus.PossiblyUndecidedRule(sa.HighestPosition)
+	return commonconsensus.CompareRuleNumbers(own.GetRuleNumber(), current.GetRuleNumber()) == 0 &&
+		commonconsensus.RuleNamesLeader(own, leaderID)
+}
+
+// promotionInFlight reports whether the shard's current rule is an undecided
+// proposal that changes the leader to leaderID, and the candidate's fresh report
+// shows it has accepted that promotion. A proposal that keeps the same leader
+// (e.g. a cohort change) is not a promotion.
+func promotionInFlight(sa *ShardAnalysis, leaderID *clustermetadatapb.ID) bool {
+	position := sa.HighestPosition
+	return !commonconsensus.IsRuleDecided(position) &&
+		!commonconsensus.RuleNamesLeader(position.GetDecision(), leaderID) &&
+		leaderObservedLive(sa) &&
+		leaderBacksCurrentRule(sa, leaderID)
 }

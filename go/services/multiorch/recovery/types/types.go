@@ -43,46 +43,40 @@ const (
 	// recovery action and one per-shard failover throttle — the throttle keys on
 	// the outgoing decision, not the cause.
 	//
-	// Predictors vs backstop: the property we actually care about is whether the
-	// shard is making durable (quorum-commit) write progress. LeaderQuorumWritesStalled measures
-	// that directly and is the backstop that catches a stall from any cause. The
-	// other codes here are faster, higher-confidence *predictors* of (imminent)
-	// stuckness — they let us act before, or explain why, progress stops — but
-	// they are not exhaustive.
-	//
-	// The dividing principle is rule-support vs leader-fitness evidence (see
-	// LeaderNeedsReplacementAnalyzer's doc for the two-axis judgment these fall
-	// out of):
+	// What we care about is whether the shard is making durable (quorum-commit)
+	// write progress. LeaderProgressUnproven reports its absence directly and is
+	// the backstop for a stall from any cause. The other codes are direct facts
+	// proving progress impossible; they act sooner and explain why.
 	//   - LeaderUnspecified: the rule has a cohort but names no leader (e.g. a leader
 	//     was removed and none recruited yet) — recruit one. There is no leader to
 	//     reason about, so only the feasibility gate applies. (An *empty* cohort is
 	//     the unbootstrapped case and belongs to ShardNeedsInitialization instead.)
-	//   - LeaderResigned: the leader voluntarily signalled it should step down.
-	//     First-hand; act immediately.
-	//   - LeaderNotSelfConfirmed: the leader's own report does not confirm it as
-	//     leader of the current rule — it never confirmed the term, or was revoked
-	//     with no successor decided yet. Disqualifying regardless of follower
-	//     support, since writes only flow through the leader.
-	//   - LeaderLacksCohortSupport: enough followers have moved on (revoked past
-	//     the rule) that the remaining members cannot satisfy the durability
-	//     policy. Quorum-gated, since this is inferred from follower self-reports.
-	//   - LeaderUnhealthy: the rule IS supported, but the leader reports its own
-	//     postgres dead/unresponsive. First-hand about itself, so no quorum
-	//     corroboration is required.
-	//   - LeaderQuorumWritesStalled: the rule is supported and the leader claims
-	//     healthy, but the heartbeat's quorum-commit watermark isn't advancing —
-	//     replicas can look ahead on raw LSN regardless, since they replay WAL
-	//     ahead of the primary's own quorum ack. Covered by inPromotionGrace like
-	//     the other Leader* causes, plus its own dedicated exemption while the rule
-	//     is still undecided: fresh WAL streaming to a quorum-sufficient set of
-	//     followers (receiveLsnStillAdvancing) is treated as backlog-draining
-	//     during propagation, not a genuine halt.
+	//   - LeaderResigned: the leader asked to step down, or shut down.
+	//   - LeaderNotSelfConfirmed: the leader's own report does not back the current
+	//     rule — it revoked it, or never accepted its promotion. Disqualifying
+	//     regardless of follower support, since writes only flow through the leader.
+	//   - LeaderLacksCohortSupport: enough followers revoked the rule that the rest
+	//     cannot satisfy the durability policy. Durable; progress is impossible.
+	//   - LeaderUnreachableByCohort: enough followers are pointed at the leader but
+	//     not streaming from it that the rest cannot form a quorum. An observation
+	//     that could recover on its own; progress is halted.
+	//   - LeaderUnhealthy: the leader reports its own postgres down, unresponsive,
+	//     or still in recovery.
+	//   - LeaderPromotionIncomplete: an undecided promotion's candidate has accepted
+	//     the new rule but no quorum commit proves it serving yet. While it shows
+	//     progress (mid pg_promote(), followers receiving its WAL), the failover is
+	//     deferred via Problem.NotBefore rather than the outage going unreported.
+	//   - LeaderProgressUnproven: an established leader has no fresh quorum-commit
+	//     watermark proving writes are committing. Deferred via Problem.NotBefore
+	//     only while its rule is too new to have committed one.
 	ProblemLeaderUnspecified         ProblemCode = "LeaderUnspecified"
 	ProblemLeaderNotSelfConfirmed    ProblemCode = "LeaderNotSelfConfirmed"
 	ProblemLeaderLacksCohortSupport  ProblemCode = "LeaderLacksCohortSupport"
+	ProblemLeaderUnreachableByCohort ProblemCode = "LeaderUnreachableByCohort"
 	ProblemLeaderUnhealthy           ProblemCode = "LeaderUnhealthy"
 	ProblemLeaderResigned            ProblemCode = "LeaderResigned"
-	ProblemLeaderQuorumWritesStalled ProblemCode = "LeaderQuorumWritesStalled"
+	ProblemLeaderPromotionIncomplete ProblemCode = "LeaderPromotionIncomplete"
+	ProblemLeaderProgressUnproven    ProblemCode = "LeaderProgressUnproven"
 )
 
 // IsFailoverProblem reports whether this problem is resolved by
@@ -92,9 +86,11 @@ func (c ProblemCode) IsFailoverProblem() bool {
 	return c == ProblemLeaderUnspecified ||
 		c == ProblemLeaderNotSelfConfirmed ||
 		c == ProblemLeaderLacksCohortSupport ||
+		c == ProblemLeaderUnreachableByCohort ||
 		c == ProblemLeaderUnhealthy ||
 		c == ProblemLeaderResigned ||
-		c == ProblemLeaderQuorumWritesStalled
+		c == ProblemLeaderPromotionIncomplete ||
+		c == ProblemLeaderProgressUnproven
 }
 
 const (
@@ -125,7 +121,7 @@ const (
 	// Shard* prefix marks these as not directly actionable by orch, in contrast to
 	// the Leader* problems above (which the shard recovers from by failing over).
 	// None implies data loss — committed transactions met quorum and remain durable;
-	// only forward progress is blocked or (when health is unknown) unverifiable. All
+	// only forward progress is blocked or unverifiable. All
 	// are non-actionable alerts (no-op recovery action; the detected-problems metric
 	// is the signal), distinguished by whether the shard is progressing, stuck, or
 	// unobservable:
@@ -133,7 +129,7 @@ const (
 	//     not be recovered from. A warning — the shard is up but fragile.
 	//   - ShardStuck: the leader needs replacement AND no recruitment quorum is
 	//     reachable, so progress is halted and cannot resume automatically. Critical
-	//     — a human must intervene. (Stronger than LeaderQuorumWritesStalled, which is recoverable.)
+	//     — a human must intervene. (Stronger than LeaderProgressUnproven, which is recoverable.)
 	//   - NoHealthyCohortMembers: orch has no fresh, valid health from any initialized
 	//     pooler in the shard, so it is blind — it can determine the leader/rule only
 	//     from stale observations. Rather than convict the leader on stale evidence
@@ -141,15 +137,9 @@ const (
 	//     from ShardStuck, a confident verdict backed by fresh health showing the
 	//     leader failed with no reachable quorum. Often transient (an orch-side health
 	//     gap) and clears once fresh health returns.
-	//   - LeaderHealthUnknown: orch has a fresh, recoverable cohort but cannot conclude
-	//     whether the leader is serving a quorum or cut off from it — it hasn't gathered
-	//     conclusive evidence either way. A warning, not an emergency: the leader may be
-	//     fine. Transient at cold start (clears as evidence arrives); persistent means
-	//     orch has genuinely lost sight of the leader with an ambiguous cohort.
 	ProblemShardAtRisk            ProblemCode = "ShardAtRisk"
 	ProblemShardStuck             ProblemCode = "ShardStuck"
 	ProblemNoHealthyCohortMembers ProblemCode = "NoHealthyCohortMembers"
-	ProblemLeaderHealthUnknown    ProblemCode = "LeaderHealthUnknown"
 )
 
 // Category groups checks by what they monitor.
@@ -208,6 +198,12 @@ type Problem struct {
 	Scope          ProblemScope                // Whether this affects the whole cluster or just one pooler
 	DetectedAt     time.Time                   // When the problem was detected
 	RecoveryAction RecoveryAction              // What to do about it
+
+	// NotBefore, when set, is the earliest time the recovery action may run. The
+	// problem is real now, but there is reason to expect it may resolve on its
+	// own (e.g. a promotion still propagating), so acting is deferred rather
+	// than the problem going unreported.
+	NotBefore time.Time
 }
 
 // IsShardWide reports whether this problem affects the entire shard.
