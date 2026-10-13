@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/multigres/multigres/go/common/mterrors"
@@ -35,6 +36,10 @@ const maxQueryAttempts = 3
 // retryBackoff is the delay between retry attempts. This gives PostgreSQL
 // time to finish starting up when the connection error is due to a restart.
 const retryBackoff = 100 * time.Millisecond
+
+// cancelRequestTimeout bounds sending a cancel request when a query's context
+// expires. It sits on the timeout path, so keep it short.
+const cancelRequestTimeout = time.Second
 
 // DefaultCancelTimeout is the default timeout for cancel/terminate operations.
 // This is used when cancelling a backend query due to context cancellation.
@@ -381,6 +386,15 @@ func execQueryWithContextCancel(ctx context.Context, conn *client.Conn, op func(
 
 	select {
 	case <-ctx.Done():
+		// Ask the server to end the query first: closing the socket alone doesn't stop
+		// a backend blocked waiting for a synchronous standby ack, so each timed-out
+		// write would leave an orphaned backend (holding locks and a connection slot)
+		// until a standby acks. Best effort; the cancelled query's result is discarded.
+		cancelCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cancelRequestTimeout)
+		if err := conn.SendCancelRequest(cancelCtx); err != nil {
+			slog.DebugContext(ctx, "failed to send cancel request; closing the connection anyway", "error", err)
+		}
+		cancel()
 		// Force-close the connection to unblock the goroutine's blocking network read.
 		conn.ForceClose()
 		// Wait for the goroutine to finish (it returns quickly after ForceClose).
