@@ -136,7 +136,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	// is also marked initialized so it can participate in a recruitment quorum.
 	setLeaderLive := func(sa *snapshot.Shard, live bool) {
 		{
-			h := sa.IntendedLeader()
+			h := sa.IntendedLeaderHealth()
 			if live {
 				h.LastSeen = timestamppb.New(sa.Now)
 				h.Status.IsInitialized = true
@@ -161,7 +161,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	// setRuleCreatedNow marks the leadership rule as freshly created, so the
 	// promotion grace window is in effect.
 	setRuleCreatedNow := func(sa *snapshot.Shard) {
-		sa.HighestIntendedRule().Decision.CreationTime = timestamppb.New(sa.Now)
+		sa.HighestIntendedRule().Position().Decision.CreationTime = timestamppb.New(sa.Now)
 	}
 
 	// setRuleUndecided models a genuine leadership transition still in
@@ -170,17 +170,17 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	// locally-confirmed rule -- still names a distinct prior leader. A
 	// promotion to leaderID that's genuinely undecided can't already be
 	// reflected in the decision; if it were, it would BE decided.
-	// commonconsensus.IsRuleDecided(sa.HighestIntendedRule()) is false throughout,
+	// sa.HighestIntendedRule().IsDecided() is false throughout,
 	// simulating a leader whose promotion hasn't yet demonstrated a
 	// quorum-acked commit (the finalize/decide commit itself is
 	// quorum-gated, so it can't complete while a required standby is still
 	// catching up).
 	setRuleUndecided := func(sa *snapshot.Shard) {
-		decision := sa.HighestIntendedRule().Decision
+		decision := sa.HighestIntendedRule().Position().Decision
 		proposal := proto.Clone(decision).(*clustermetadatapb.ShardRule) // still names leaderID here
 		proposal.RuleNumber = &clustermetadatapb.RuleNumber{CoordinatorTerm: 2}
 		proposal.CreationTime = timestamppb.New(sa.Now)
-		sa.HighestIntendedRule().Proposal = proposal
+		sa.HighestIntendedRule().Position().Proposal = proposal
 
 		decision.LeaderId = priorLeaderID
 		decision.RuleNumber = &clustermetadatapb.RuleNumber{CoordinatorTerm: 1}
@@ -191,25 +191,25 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	// verdict fields (now derived inside LeaderNeedsReplacementAnalyzer).
 	setLeaderPGRunning := func(sa *snapshot.Shard, running bool) {
 		{
-			h := sa.IntendedLeader()
+			h := sa.IntendedLeaderHealth()
 			h.Status.PostgresRunning = running
 		}
 	}
 	setLeaderPGReady := func(sa *snapshot.Shard, ready bool) {
 		{
-			h := sa.IntendedLeader()
+			h := sa.IntendedLeaderHealth()
 			h.Status.PostgresReady = ready
 		}
 	}
 	setLeaderLastReady := func(sa *snapshot.Shard, at time.Time) {
 		{
-			h := sa.IntendedLeader()
+			h := sa.IntendedLeaderHealth()
 			h.LastPostgresReadyTime = timestamppb.New(at)
 		}
 	}
 	setLeaderPromoting := func(sa *snapshot.Shard) {
 		{
-			h := sa.IntendedLeader()
+			h := sa.IntendedLeaderHealth()
 			h.Status.PostgresStatus = multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_PROMOTING
 		}
 	}
@@ -219,7 +219,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	// postgres never left recovery and cannot accept writes.
 	setLeaderPGStandby := func(sa *snapshot.Shard) {
 		{
-			h := sa.IntendedLeader()
+			h := sa.IntendedLeaderHealth()
 			h.Status.PostgresStatus = multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_STANDBY
 		}
 	}
@@ -229,7 +229,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	// treats as a resignation.
 	setLeaderResigned := func(sa *snapshot.Shard) {
 		{
-			h := sa.IntendedLeader()
+			h := sa.IntendedLeaderHealth()
 			h.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{
 				CohortEligibilityStatus: &clustermetadatapb.CohortEligibilityStatus{
 					Signal: clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE,
@@ -290,7 +290,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	// (the first-hand signal, vs. setQuorumCommitTs's cohort-observed one).
 	setLeaderQuorumCommitTs := func(sa *snapshot.Shard, at time.Time) {
 		{
-			h := sa.IntendedLeader()
+			h := sa.IntendedLeaderHealth()
 			if h.Status.PrimaryStatus == nil {
 				h.Status.PrimaryStatus = &multipoolermanagerdatapb.PrimaryStatus{}
 			}
@@ -814,7 +814,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		// no ShardAtRisk fires (it would otherwise fire forever for any minimum-size
 		// cohort, e.g. the spurious-failover-recovery e2e scenario).
 		sa := deadLeaderShard(func(sa *snapshot.Shard) {
-			sa.HighestIntendedRule().Decision.CohortMembers = []*clustermetadatapb.ID{leaderID, follower1ID}
+			sa.HighestIntendedRule().Position().Decision.CohortMembers = []*clustermetadatapb.ID{leaderID, follower1ID}
 			dropFollower(sa, follower2ID)
 			setLeaderLive(sa, true)
 			setLeaderPGReady(sa, true)
@@ -829,7 +829,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		// A rule with cohort members but no designated leader needs one recruited.
 		// Both followers are reachable, so recruitment is feasible and actionable.
 		sa := deadLeaderShard(func(sa *snapshot.Shard) {
-			sa.HighestIntendedRule().Decision.LeaderId = nil
+			sa.HighestIntendedRule().Position().Decision.LeaderId = nil
 		})
 
 		problems, err := analyzer.Analyze(sa)
@@ -843,8 +843,8 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		// An empty cohort with no leader is the initial, unbootstrapped rule —
 		// ShardNeedsInitialization owns that, so this analyzer does nothing.
 		sa := deadLeaderShard(func(sa *snapshot.Shard) {
-			sa.HighestIntendedRule().Decision.LeaderId = nil
-			sa.HighestIntendedRule().Decision.CohortMembers = nil
+			sa.HighestIntendedRule().Position().Decision.LeaderId = nil
+			sa.HighestIntendedRule().Position().Decision.CohortMembers = nil
 		})
 
 		problems, err := analyzer.Analyze(sa)
@@ -1032,7 +1032,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	})
 
 	t.Run("shutdown tombstone drives failover when the leader is gone from cache", func(t *testing.T) {
-		// The leader has fully shut down: evicted from the live cache (sa.IntendedLeader() nil)
+		// The leader has fully shut down: evicted from the live cache (sa.IntendedLeaderHealth() nil)
 		// but recorded as a SHUTDOWN tombstone. With the ephemeral resignation broadcast
 		// lost, the durable tombstone still drives the failover — leaderID comes from the
 		// shard rule, so we act with no cached leader.

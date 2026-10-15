@@ -132,7 +132,7 @@ func replacePooler(sa *snapshot.Shard, id *clustermetadatapb.ID, state *multiorc
 // setFollowers replaces the shard's follower snapshots, keeping the published
 // rule and the leader.
 func setFollowers(sa *snapshot.Shard, followers ...*multiorchdatapb.PoolerHealthState) {
-	leader := sa.IntendedLeader()
+	leader := sa.IntendedLeaderHealth()
 	var next []*multiorchdatapb.PoolerHealthState
 	for _, p := range sa.Poolers {
 		if poolerID(p).GetName() == ruleCarrierName {
