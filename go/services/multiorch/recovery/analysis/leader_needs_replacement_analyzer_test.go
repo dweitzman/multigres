@@ -87,7 +87,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		}
 	}
 
-	// deadLeaderShardAnalysis builds a ShardAnalysis with a dead leader and two
+	// deadLeaderShard builds a shard snapshot with a dead leader and two
 	// initialized followers — the base case for leader-replacement detection. The
 	// leader rider starts not-valid (no live observation); use setLeaderLive to mark
 	// it observed-live in subtests that need a reachable leader.
@@ -100,9 +100,9 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	//
 	// The rule's CreationTime is set an hour in the past so the promotion grace
 	// window never accidentally suppresses detection; promotion subtests reset it.
-	deadLeaderShardAnalysis := func(overrides ...func(*snapshot.Shard)) *snapshot.Shard {
+	deadLeaderShard := func(overrides ...func(*snapshot.Shard)) *snapshot.Shard {
 		now := time.Now()
-		sa := newShardAnalysis(&snapshot.Shard{
+		sa := newTestShard(&snapshot.Shard{
 			ShardKey:           shardKey,
 			Now:                now,
 			AvailabilityPolicy: DefaultAvailabilityPolicy(),
@@ -376,7 +376,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	}
 
 	t.Run("detects dead leader (cohort confirms it is cut off)", func(t *testing.T) {
-		sa := deadLeaderShardAnalysis(cutOffAllFollowers)
+		sa := deadLeaderShard(cutOffAllFollowers)
 
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
@@ -393,7 +393,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		// follower1 knows the leader but its rule was created just now (within the
 		// connect grace) — not enough time to connect, so it does NOT testify. Only
 		// follower2 is cut off → sub-quorum revocation set → no failover.
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			setFollowers(sa, cutOffCandidate(follower1ID, leaderID, sa.Now, "leader-host", 5432, sa.Now),
 				cutOffFollower(follower2ID, sa.Now))
 		})
@@ -408,7 +408,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	t.Run("does not count a follower whose rule names a different leader as cut off", func(t *testing.T) {
 		// follower1's own rule names follower2, not the leader — it is uninformed of
 		// the current term, so it does not testify against this leader.
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			setFollowers(sa, cutOffCandidate(follower1ID, follower2ID, sa.Now.Add(-time.Hour), "leader-host", 5432, sa.Now),
 				cutOffFollower(follower2ID, sa.Now))
 		})
@@ -422,7 +422,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	t.Run("does not count a follower configured for a different primary as cut off", func(t *testing.T) {
 		// follower1 is not pointed at the leader (primary_conninfo → other-host), so it
 		// is not refusing THIS leader.
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			setFollowers(sa, cutOffCandidate(follower1ID, leaderID, sa.Now.Add(-time.Hour), "other-host", 5432, sa.Now),
 				cutOffFollower(follower2ID, sa.Now))
 		})
@@ -463,7 +463,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 				},
 			}
 		}
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			setFollowers(sa, viaReplPrimary(follower1ID, sa.Now), viaReplPrimary(follower2ID, sa.Now))
 		})
 
@@ -478,7 +478,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		// the response threshold. With both followers gone, only the leader is
 		// reachable — below a majority — so the failover is infeasible: ShardStuck.
 		// Exercises emitFailover's infeasible branch (distinct from emitInconclusive).
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			setLeaderLive(sa, true)
 			setLeaderPGRunning(sa, true)
 			setLeaderPGReady(sa, false)
@@ -494,7 +494,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	})
 
 	t.Run("ignores healthy leader (reachable)", func(t *testing.T) {
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			setLeaderLive(sa, true)
 			setLeaderPGReady(sa, true)
 		})
@@ -510,7 +510,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		// writes. It must NOT be judged a healthy serving primary (which would emit only
 		// an alert-only ShardAtRisk); it must route to failover so a real primary is
 		// promoted. Covers the healthy fast-path (postgres_ready = true).
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			setLeaderLive(sa, true)
 			setLeaderPGReady(sa, true) // a hot standby passes pg_isready
 			setLeaderPGStandby(sa)     // but postgres is in recovery
@@ -530,7 +530,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		// stays fresh and the anti-flap branch (postgres running + recently ready) would
 		// otherwise mask it forever. The in-recovery guard must fire before the anti-flap
 		// grace too — not only on the fast path.
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			setLeaderLive(sa, true)
 			setLeaderPGRunning(sa, true)                           // process alive
 			setLeaderPGReady(sa, false)                            // force the anti-flap branch
@@ -547,7 +547,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	})
 
 	t.Run("ignores healthy leader with fresh quorum-commit watermark", func(t *testing.T) {
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			setLeaderLive(sa, true)
 			setLeaderPGReady(sa, true)
 			setQuorumCommitTs(sa, follower1ID, sa.Now)
@@ -559,7 +559,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	})
 
 	t.Run("LeaderQuorumWritesStalled when quorum-commit watermark goes stale", func(t *testing.T) {
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			setLeaderLive(sa, true)
 			setLeaderPGReady(sa, true)
 			setQuorumCommitTs(sa, follower1ID, sa.Now.Add(-sa.AvailabilityPolicy.QuorumCommitStaleAfter-time.Second))
@@ -577,7 +577,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		// per-member value, so a witness outside the durability-required cohort
 		// is still valid proof — this must look at ALL known shard members, not
 		// just the cohort.
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			setLeaderLive(sa, true)
 			setLeaderPGReady(sa, true)
 			setQuorumCommitTs(sa, follower1ID, sa.Now.Add(-sa.AvailabilityPolicy.QuorumCommitStaleAfter-time.Second))
@@ -591,7 +591,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	})
 
 	t.Run("prefers the leader's own first-hand quorum-commit report when reachable", func(t *testing.T) {
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			setLeaderLive(sa, true)
 			setLeaderPGReady(sa, true)
 			setLeaderQuorumCommitTs(sa, sa.Now)                                                                       // fresh, first-hand
@@ -605,7 +605,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 
 	t.Run("LSN still advancing on a quorum-sufficient set suppresses LeaderQuorumWritesStalled for an undecided rule",
 		func(t *testing.T) {
-			sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+			sa := deadLeaderShard(func(sa *snapshot.Shard) {
 				setLeaderLive(sa, true)
 				setLeaderPGReady(sa, true)
 				setRuleUndecided(sa)
@@ -627,7 +627,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		// the leader's synchronous-commit quorum, so follower2's fresh WAL
 		// receipt cannot stand in for follower1's -- the only report that
 		// would actually speak to the candidate leader's health.
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			setLeaderLive(sa, true)
 			setLeaderPGReady(sa, true)
 			setRuleUndecided(sa)
@@ -648,7 +648,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		// succeeded under this leadership (the finalize commit is quorum-gated
 		// like any other write), so the backlog-draining excuse no longer
 		// applies -- unlike the undecided case above, this must convict.
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			setLeaderLive(sa, true)
 			setLeaderPGReady(sa, true)
 			setQuorumCommitTs(sa, follower1ID, sa.Now.Add(-sa.AvailabilityPolicy.QuorumCommitStaleAfter-time.Second))
@@ -662,7 +662,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	})
 
 	t.Run("ignores when no leader exists in topology (future analysis)", func(t *testing.T) {
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			setRule(sa, nil)
 		})
 
@@ -676,7 +676,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		// observation — orch is blind, so it cannot tell whether the leader really
 		// failed. Rather than convict on stale evidence (ShardStuck), surface the
 		// blind spot.
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			setFollowers(sa) // no reachable cohort member, leader not fresh
 		})
 
@@ -691,7 +691,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	t.Run("reports ShardStuck when the leader is dead but only one follower is reachable", func(t *testing.T) {
 		// One reachable follower is not a strict majority of the 3-member cohort, so
 		// recruitment is infeasible: ShardStuck rather than an actionable failover.
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			dropFollower(sa, follower2ID)
 		})
 
@@ -709,7 +709,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		// below the majority of 3, so the failover is infeasible. (Were staleness not
 		// checked, follower2 would count and this would be an actionable
 		// LeaderUnreachableByCohort instead.)
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			{
 				h := findPoolerByName(sa, follower2ID.Name)
 				h.LastSeen = timestamppb.New(sa.Now.Add(-time.Hour))
@@ -727,7 +727,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		// (e.g. graceful shutdown). Recruit would refuse it server-side, so
 		// recruitableCohort must not count it — leaving only follower1, below the
 		// majority of 3, so the failover is infeasible.
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			{
 				h := findPoolerByName(sa, follower2ID.Name)
 				h.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{
@@ -749,7 +749,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		// pg_rewind yet (RecruitBlockedUntil set). Recruit would refuse it
 		// server-side, so recruitableCohort must not count it — leaving only
 		// follower1, below the majority of 3, so the failover is infeasible.
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			{
 				h := findPoolerByName(sa, follower2ID.Name)
 				h.ConsensusStatus = &clustermetadatapb.ConsensusStatus{
@@ -771,7 +771,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		// (recruitableCohort excludes it). That distinction must produce ShardStuck
 		// (a confident "can't proceed" verdict), not NoHealthyCohortMembers (which
 		// would wrongly claim orch has no usable signal at all).
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			dropFollower(sa, follower1ID)
 			{
 				h := findPoolerByName(sa, follower2ID.Name)
@@ -793,7 +793,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		// Leader is healthy, so no failover is needed. But excluding the leader,
 		// only one follower is reachable — below a majority — so losing the leader
 		// now would strand the shard. Warn (ShardAtRisk), non-blocking.
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			setLeaderLive(sa, true)
 			setLeaderPGReady(sa, true)
 			dropFollower(sa, follower2ID)
@@ -813,7 +813,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		// leader loss — that is the operator's chosen posture, not a degradation — so
 		// no ShardAtRisk fires (it would otherwise fire forever for any minimum-size
 		// cohort, e.g. the spurious-failover-recovery e2e scenario).
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			sa.HighestIntendedRule().Decision.CohortMembers = []*clustermetadatapb.ID{leaderID, follower1ID}
 			dropFollower(sa, follower2ID)
 			setLeaderLive(sa, true)
@@ -828,7 +828,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	t.Run("recruits a leader when the rule names none but has a cohort", func(t *testing.T) {
 		// A rule with cohort members but no designated leader needs one recruited.
 		// Both followers are reachable, so recruitment is feasible and actionable.
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			sa.HighestIntendedRule().Decision.LeaderId = nil
 		})
 
@@ -842,7 +842,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	t.Run("ignores a rule with neither leader nor cohort (unbootstrapped)", func(t *testing.T) {
 		// An empty cohort with no leader is the initial, unbootstrapped rule —
 		// ShardNeedsInitialization owns that, so this analyzer does nothing.
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			sa.HighestIntendedRule().Decision.LeaderId = nil
 			sa.HighestIntendedRule().Decision.CohortMembers = nil
 		})
@@ -858,7 +858,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		// recruitableCohort/classifyFollowerToLeader — cutoff evidence is judged on
 		// observation freshness (HealthWithin), not on whether the health stream
 		// happens to be connected at this instant.
-		sa := deadLeaderShardAnalysis(cutOffAllFollowers, func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(cutOffAllFollowers, func(sa *snapshot.Shard) {
 			{
 				h := findPoolerByName(sa, follower1ID.Name)
 				h.StreamConnected = false
@@ -872,7 +872,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	})
 
 	t.Run("ignores when leader pooler down but all replicas still connected to postgres", func(t *testing.T) {
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			setLeaderLive(sa, false)
 			connectReplica(sa)
 			setLeaderLastReady(sa, time.Now().Add(-5*time.Second)) // Responded recently
@@ -884,7 +884,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	})
 
 	t.Run("LeaderQuorumWritesStalled via cohort corroboration when quorum-commit watermark goes stale", func(t *testing.T) {
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			setLeaderLive(sa, false)
 			connectReplica(sa)
 			setLeaderLastReady(sa, time.Now().Add(-5*time.Second))
@@ -898,7 +898,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	})
 
 	t.Run("triggers failover when leader pooler up but postgres down", func(t *testing.T) {
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			setLeaderLive(sa, true) // Pooler is up
 			// LeaderReachable remains false (postgres down)
 		})
@@ -911,7 +911,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	})
 
 	t.Run("triggers failover when both pooler and replicas disconnected", func(t *testing.T) {
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			setLeaderLive(sa, false)
 		}, cutOffAllFollowers)
 
@@ -929,7 +929,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		// that they are cut off from it; the leader is unobserved. This must NOT fail
 		// over — the followers may be streaming fine, we just haven't looked long
 		// enough. It surfaces an alert-only LeaderHealthUnknown warning instead.
-		sa := deadLeaderShardAnalysis()
+		sa := deadLeaderShard()
 
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
@@ -944,7 +944,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		// from a dead primary), so the leader vouches for itself: {follower1, leader}
 		// meets AtLeast(2) and failover is suppressed. Without the leader-self-vouch
 		// this would be LeaderUnreachableByCohort.
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			replacePooler(sa, follower1ID, &multiorchdatapb.PoolerHealthState{
 				Multipooler: &clustermetadatapb.Multipooler{Id: follower1ID, ShardKey: shardKey},
 				LastSeen:    timestamppb.New(sa.Now),
@@ -976,7 +976,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		// ShardStuck. Because losing the leader now could not be recovered (only one
 		// member reachable), we warn ShardAtRisk instead. Guards against regressing to
 		// ShardStuck when the positive streaming signal is dropped.
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			replacePooler(sa, follower1ID, &multiorchdatapb.PoolerHealthState{
 				Multipooler: &clustermetadatapb.Multipooler{Id: follower1ID, ShardKey: shardKey},
 				LastSeen:    timestamppb.New(sa.Now),
@@ -1004,7 +1004,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		// A resigned leader emits ProblemLeaderResigned regardless of liveness —
 		// even a dead leader is reported as resigned (voluntary), and immediately,
 		// without the follower-streaming suppression the dead path applies.
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			setLeaderResigned(sa)
 		})
 
@@ -1018,7 +1018,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	})
 
 	t.Run("resigned leader reported even when otherwise live and connected", func(t *testing.T) {
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			setLeaderLive(sa, true)
 			setLeaderPGReady(sa, true)
 			connectReplica(sa)
@@ -1036,7 +1036,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		// but recorded as a SHUTDOWN tombstone. With the ephemeral resignation broadcast
 		// lost, the durable tombstone still drives the failover — leaderID comes from the
 		// shard rule, so we act with no cached leader.
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			removePooler(sa, leaderID.Name)
 			sa.TombstoneIDs = map[topoclient.ComponentID]struct{}{
 				topoclient.ComponentIDString(leaderID): {},
@@ -1055,7 +1055,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	})
 
 	t.Run("ignores when leader pooler down but replicas connected (postgres still running, recent timestamp)", func(t *testing.T) {
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			setLeaderLive(sa, false)                               // Pooler is down
 			setLeaderPGReady(sa, false)                            // Unknown since pooler is down
 			connectReplica(sa)                                     // But replicas are still connected to postgres
@@ -1068,7 +1068,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	})
 
 	t.Run("ignores when pooler up, postgres starting (replicas connected, recent timestamp)", func(t *testing.T) {
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			setLeaderLive(sa, true)      // Pooler is up
 			setLeaderPGReady(sa, false)  // Postgres not yet accepting connections
 			setLeaderPGRunning(sa, true) // But process exists (starting up or SIGSTOP'd)
@@ -1082,7 +1082,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	})
 
 	t.Run("triggers failover when pooler up but postgres process dead (SIGKILL), replicas still connected", func(t *testing.T) {
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			setLeaderLive(sa, true)       // Pooler is up and reachable
 			setLeaderPGReady(sa, false)   // Postgres not accepting connections
 			setLeaderPGRunning(sa, false) // Process is dead (SIGKILL)
@@ -1102,7 +1102,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		// we trust its direct signal: suppress only while postgres responded recently,
 		// then allow failover once the response threshold lapses so a wedged postgres
 		// cannot block failover forever.
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			setLeaderLive(sa, true)
 			setLeaderPGRunning(sa, true)                            // process exists
 			setLeaderPGReady(sa, false)                             // but wedged (pg_isready fails)
@@ -1121,7 +1121,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		// directly, so the leader's own LastPostgresReadyTime is irrelevant. The
 		// replicas being connected (ReplicasConnectedToLeader requires fresh WAL
 		// heartbeats) is itself proof the leader's postgres is alive.
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			setLeaderLive(sa, false)
 			setLeaderPGReady(sa, false)
 			connectReplica(sa)
@@ -1138,7 +1138,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		// PostgresReady snapshot (zero timestamp), yet replicas are still streaming.
 		// Leader identity is recovered from the replicas' consensus rules, and their
 		// fresh streaming proves postgres is alive, so failover must be suppressed.
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			setLeaderLive(sa, false)
 			setLeaderPGReady(sa, false)
 			connectReplica(sa)
@@ -1150,7 +1150,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	})
 
 	t.Run("suppresses failover while pg_promote() is running within the grace window", func(t *testing.T) {
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			setRuleCreatedNow(sa)        // fresh rule → within the promotion grace window
 			setLeaderLive(sa, true)      // stream is live
 			setLeaderPGRunning(sa, true) // process is running
@@ -1168,7 +1168,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		// hour ago), so the grace has lapsed. A leader that claims to be promoting
 		// forever but never gains followers must fail over: postgres is not ready and
 		// never reported ready, so the anti-flap guard does not apply either.
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			setLeaderLive(sa, true)
 			setLeaderPGRunning(sa, true)
 			setLeaderPGReady(sa, false)
@@ -1182,7 +1182,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	})
 
 	t.Run("does not suppress failover when postgres crashes during promotion", func(t *testing.T) {
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			setLeaderLive(sa, true)       // stream still alive (multipooler survived)
 			setLeaderPGRunning(sa, false) // postgres process died during promotion
 			setLeaderPGReady(sa, false)
@@ -1196,7 +1196,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	})
 
 	t.Run("does not suppress failover when multipooler unreachable during promotion", func(t *testing.T) {
-		sa := deadLeaderShardAnalysis(func(sa *snapshot.Shard) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
 			setLeaderLive(sa, false) // stream disconnected (stale flag)
 			setLeaderPGRunning(sa, true)
 			setLeaderPGReady(sa, false)
