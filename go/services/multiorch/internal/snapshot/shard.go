@@ -72,28 +72,18 @@ type Shard struct {
 // This is the intended level (commonconsensus.HighestKnownRule), so it is not
 // called a position: a follower can learn of a newer leader via SetPrimary
 // before that leader has promoted or recorded the rule.
-func (sa *Shard) HighestIntendedRule() *clustermetadatapb.RulePosition {
+func (sa *Shard) HighestIntendedRule() commonconsensus.RuleTransition {
 	statuses := make([]*clustermetadatapb.ConsensusStatus, 0, len(sa.Poolers))
 	for _, p := range sa.Poolers {
 		if cs := p.GetConsensusStatus(); cs != nil {
 			statuses = append(statuses, cs)
 		}
 	}
-	return commonconsensus.HighestKnownRule(statuses)
+	return commonconsensus.NewRuleTransition(commonconsensus.HighestKnownRule(statuses))
 }
 
-// IntendedLeaderID returns the ID the shard's rule names as leader, or nil if
-// no rule is known. That is the leader the coordinator is installing, not
-// necessarily one that is established or serving: the rule may still be
-// undecided, and followers can learn of it through SetPrimary before the named
-// leader has been promoted or has recorded it. Judge whether it is serving
-// from its snapshot (see leaderServing).
-func (sa *Shard) IntendedLeaderID() *clustermetadatapb.ID {
-	return commonconsensus.PossiblyUndecidedRule(sa.HighestIntendedRule()).GetLeaderId()
-}
-
-// Pooler returns the snapshot for id, or nil if the shard has none.
-func (sa *Shard) Pooler(id *clustermetadatapb.ID) *multiorchdatapb.PoolerHealthState {
+// PoolerHealth returns the health snapshot for id, or nil if the shard has none.
+func (sa *Shard) PoolerHealth(id *clustermetadatapb.ID) *multiorchdatapb.PoolerHealthState {
 	if id == nil {
 		return nil
 	}
@@ -105,12 +95,13 @@ func (sa *Shard) Pooler(id *clustermetadatapb.ID) *multiorchdatapb.PoolerHealthS
 	return nil
 }
 
-// IntendedLeader returns the snapshot of the pooler IntendedLeaderID names, or
-// nil if no rule is known or we have no health for that pooler. The rule can
-// name a leader we have never observed; in that case we don't know where to
-// point replicas, so consumers that need the leader's host/port gate on
-// IntendedLeader being non-nil rather than on reachability — an
-// unreachable-but-known leader is still the intended one.
-func (sa *Shard) IntendedLeader() *multiorchdatapb.PoolerHealthState {
-	return sa.Pooler(sa.IntendedLeaderID())
+// IntendedLeaderHealth returns the health snapshot of the pooler the highest
+// intended rule names as leader (its PossiblyUndecidedRule, which can be a
+// proposal the leader has not recorded yet), or nil if no rule is known or we
+// have no health for that pooler. The rule can name a leader we have never
+// observed; in that case we don't know where to point replicas, so consumers
+// that need the leader's host/port gate on the result being non-nil rather than
+// on reachability — an unreachable-but-known leader is still the intended one.
+func (sa *Shard) IntendedLeaderHealth() *multiorchdatapb.PoolerHealthState {
+	return sa.PoolerHealth(sa.HighestIntendedRule().PossiblyUndecidedRule().GetLeaderId())
 }
