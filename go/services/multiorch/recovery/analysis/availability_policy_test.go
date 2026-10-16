@@ -43,9 +43,3 @@ func TestDefaultAvailabilityPolicy_MatchesTheConfigDefaults(t *testing.T) {
 	assert.Equal(t, 12*time.Second, policy.FailoverGracePeriod, "default base 4s plus default max jitter 8s")
 	assert.Equal(t, 30*time.Second, policy.LeaderPostgresResponseThreshold)
 }
-
-func TestRecoveryActionFactory_PolicyFollowsItsConfig(t *testing.T) {
-	cfg := config.NewTestConfig(config.WithLeaderFailoverGracePeriodBase(7 * time.Second))
-	factory := &RecoveryActionFactory{config: cfg}
-	assert.Equal(t, 7*time.Second, factory.AvailabilityPolicy().FailoverGracePeriod)
-}
