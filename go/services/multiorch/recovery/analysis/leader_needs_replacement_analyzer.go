@@ -276,13 +276,9 @@ func (a *LeaderNeedsReplacementAnalyzer) Analyze(sa *snapshot.Shard) ([]types.Pr
 	}
 
 	// Suppress failover briefly while the leader is mid-promotion (see
-	// inPromotionGrace).
+	// inPromotionGrace), surfacing why as an informational problem.
 	if inPromotionGrace(sa) {
-		a.factory.Logger().Info("primary promotion in progress within grace, suppressing failover",
-			"shard_key", sa.ShardKey.String(),
-			"promoting_primary", topoclient.ComponentIDString(intendedLeaderID),
-			"rule_age", sa.Now.Sub(intendedRule.GetCreationTime().AsTime()))
-		return nil, nil
+		return a.promotionInProgressProblem(sa, intendedLeaderID, intendedRule.GetCreationTime().AsTime()), nil
 	}
 
 	// Judge the leader: healthy, must-replace (with a cause), or inconclusive.
@@ -408,6 +404,23 @@ func (a *LeaderNeedsReplacementAnalyzer) atRiskProblem(sa *snapshot.Shard, leade
 		PoolerID:       leaderID,
 		ShardKey:       sa.ShardKey,
 		Description:    description,
+		Priority:       types.PriorityNormal,
+		Scope:          types.ScopePooler,
+		DetectedAt:     sa.Now,
+		RecoveryAction: a.factory.NewAlertOnlyAction(),
+	}}
+}
+
+// promotionInProgressProblem is the informational problem raised while failover is
+// held off for a promotion. It is ScopePooler for the same reason as atRiskProblem.
+func (a *LeaderNeedsReplacementAnalyzer) promotionInProgressProblem(sa *snapshot.Shard, leaderID *clustermetadatapb.ID, ruleCreatedAt time.Time) []types.Problem {
+	return []types.Problem{{
+		Code:      types.ProblemLeaderPromotionInProgress,
+		CheckName: a.Name(),
+		PoolerID:  leaderID,
+		ShardKey:  sa.ShardKey,
+		Description: fmt.Sprintf("Leader %s is promoting; failover suppressed (rule age %s)",
+			topoclient.ComponentIDString(leaderID), sa.Now.Sub(ruleCreatedAt).Round(time.Second)),
 		Priority:       types.PriorityNormal,
 		Scope:          types.ScopePooler,
 		DetectedAt:     sa.Now,

@@ -79,6 +79,7 @@ func (re *Engine) performRecoveryCycle(ctx context.Context) {
 
 	// Update detected problems metric
 	re.updateDetectedProblems(problems)
+	re.alertTransitions.observe(ctx, re.logger, problems, time.Now())
 
 	if len(problems) == 0 {
 		return // no problems detected
