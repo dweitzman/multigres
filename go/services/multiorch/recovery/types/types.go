@@ -143,6 +143,11 @@ const (
 	ProblemShardStuck             ProblemCode = "ShardStuck"
 	ProblemNoHealthyCohortMembers ProblemCode = "NoHealthyCohortMembers"
 	ProblemLeaderHealthUnknown    ProblemCode = "LeaderHealthUnknown"
+
+	// ProblemLeaderPromotionInProgress: the leader is mid-promotion and its rule is
+	// young, so failover is held off. Informational: it clears when the promotion
+	// finishes, or when the grace lapses and normal detection applies.
+	ProblemLeaderPromotionInProgress ProblemCode = "LeaderPromotionInProgress"
 )
 
 // Category groups checks by what they monitor.

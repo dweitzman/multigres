@@ -225,6 +225,9 @@ type Engine struct {
 	// recoveryGracePeriodTracker tracker for grace periods before recovery actions
 	recoveryGracePeriodTracker *RecoveryGracePeriodTracker
 
+	// alertTransitions logs alert-only problems when they appear and clear.
+	alertTransitions alertTransitionLogger
+
 	// Context for shutting down loops
 	shutdownCtx context.Context
 	cancel      context.CancelFunc
