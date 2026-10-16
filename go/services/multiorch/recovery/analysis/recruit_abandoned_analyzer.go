@@ -17,7 +17,6 @@ package analysis
 import (
 	"errors"
 	"fmt"
-	"time"
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
@@ -66,16 +65,12 @@ func revocationStrandsFollower(sa *snapshot.Shard, p *multiorchdatapb.PoolerHeal
 // bound within which a live failover completes. Only then do we treat the
 // recruit as abandoned. A revocation with no coordinator_initiated_at (which a
 // valid one always carries) is treated as not-yet-aged, erring toward waiting.
-func revocationAgedPastFailoverGrace(factory *RecoveryActionFactory, sa *snapshot.Shard, p *multiorchdatapb.PoolerHealthState) bool {
+func revocationAgedPastFailoverGrace(sa *snapshot.Shard, p *multiorchdatapb.PoolerHealthState) bool {
 	initiatedAt := p.GetConsensusStatus().GetTermRevocation().GetCoordinatorInitiatedAt()
 	if initiatedAt == nil {
 		return false
 	}
-	var grace time.Duration
-	if cfg := factory.Config(); cfg != nil {
-		grace = cfg.GetLeaderFailoverGracePeriodBase() + cfg.GetLeaderFailoverGracePeriodMaxJitter()
-	}
-	return sa.Now.Sub(initiatedAt.AsTime()) >= grace
+	return sa.Now.Sub(initiatedAt.AsTime()) >= sa.AvailabilityPolicy.FailoverGracePeriod
 }
 
 func (a *RecruitAbandonedAnalyzer) analyzePooler(sa *snapshot.Shard, pa *multiorchdatapb.PoolerHealthState) (*types.Problem, error) {
@@ -122,7 +117,7 @@ func (a *RecruitAbandonedAnalyzer) analyzePooler(sa *snapshot.Shard, pa *multior
 	// Give an in-flight recruit time to finish before concluding it was abandoned —
 	// another orchestrator may still be completing a legitimate failover at this
 	// term, and advancing the rule out from under it would fight it.
-	if !revocationAgedPastFailoverGrace(a.factory, sa, pa) {
+	if !revocationAgedPastFailoverGrace(sa, pa) {
 		return nil, nil
 	}
 
