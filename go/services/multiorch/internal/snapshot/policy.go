@@ -81,6 +81,17 @@ type AvailabilityPolicy struct {
 	// healthy leader.
 	QuorumCommitStaleAfter time.Duration
 
+	// LeaderPostgresResponseThreshold is how recently a reachable leader's postgres
+	// must have last answered as ready for it to still count as healthy while it
+	// is not ready now. It stops a briefly unready postgres from triggering a
+	// failover, and a wedged one from blocking it forever.
+	LeaderPostgresResponseThreshold time.Duration
+
+	// FailoverGracePeriod is how long after a revocation is issued a live failover
+	// is expected to complete (the base plus the maximum jitter of the failover
+	// grace). Only a revocation older than this is treated as abandoned.
+	FailoverGracePeriod time.Duration
+
 	// PreRecheckRefreshTimeout bounds how long, overall, a failover waits for
 	// live Status RPCs to the shard's reachable poolers before it re-runs the
 	// analyzer to confirm the problem. It sits on the failover critical path, so
