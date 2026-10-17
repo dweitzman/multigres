@@ -24,16 +24,6 @@ import (
 	"github.com/multigres/multigres/go/services/multiorch/store"
 )
 
-// flattenPoolers collects the pooler snapshots across all shards.
-// Used in tests to assert on individual poolers without caring about shard grouping.
-func flattenPoolers(shards []*snapshot.Shard) []*snapshot.PoolerHealthState {
-	var analyses []*snapshot.PoolerHealthState
-	for _, sa := range shards {
-		analyses = append(analyses, sa.Poolers...)
-	}
-	return analyses
-}
-
 // findPoolerByName returns the rider with the given name from a shard snapshot,
 // or nil if not found.
 func findPoolerByName(sa *snapshot.Shard, name string) *snapshot.PoolerHealthState {
@@ -159,10 +149,23 @@ func (c *testCapture) opts() store.SnapshotOptions {
 	return store.SnapshotOptions{Now: c.now, AvailabilityPolicy: DefaultAvailabilityPolicy()}
 }
 
-func (c *testCapture) all() []*snapshot.Shard {
-	return store.SnapshotShards(c.cache, c.opts())
-}
-
 func (c *testCapture) shard(key *clustermetadatapb.ShardKey) (*snapshot.Shard, error) {
 	return store.SnapshotShard(c.cache, key, c.opts())
+}
+
+// primaryConsensusStatus builds a ConsensusStatus that names id as the leader in its
+// current rule with the given coordinator term: the minimal fixture for a pooler that
+// claims leadership.
+func primaryConsensusStatus(id *clustermetadatapb.ID, term int64) *clustermetadatapb.ConsensusStatus {
+	return &clustermetadatapb.ConsensusStatus{
+		Id: id,
+		CurrentPosition: &clustermetadatapb.PoolerPosition{
+			Position: &clustermetadatapb.RulePosition{
+				Decision: &clustermetadatapb.ShardRule{
+					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: term},
+					LeaderId:   id,
+				},
+			},
+		},
+	}
 }

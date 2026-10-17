@@ -50,7 +50,7 @@ func TestHealthStream_applySnapshot(t *testing.T) {
 		hs.applySnapshot(t.Context(), pooler, &multipoolermanagerdatapb.ManagerHealthSnapshot{})
 
 		assert.True(t, pooler.Health().GetLastSeen().IsZero(), "nothing may be recorded for an empty snapshot")
-		assert.Zero(t, pooler.Health().GetStreamSnapshotsReceived())
+		assert.Zero(t, pooler.Health().StreamSnapshotsReceived)
 	})
 
 	t.Run("a snapshot is written through the shared field path", func(t *testing.T) {
@@ -68,6 +68,6 @@ func TestHealthStream_applySnapshot(t *testing.T) {
 		assert.True(t, health.GetStatus().GetPostgresReady())
 		assert.False(t, health.GetLastSeen().IsZero())
 		assert.False(t, health.GetLastPostgresReadyTime().IsZero())
-		assert.EqualValues(t, 1, health.GetStreamSnapshotsReceived())
+		assert.EqualValues(t, 1, health.StreamSnapshotsReceived)
 	})
 }

@@ -123,25 +123,11 @@ func (h *PoolerHealthState) GetAvailabilityStatus() *clustermetadatapb.Availabil
 	return h.AvailabilityStatus
 }
 
-func (h *PoolerHealthState) GetStreamConnected() bool {
-	if h == nil {
-		return false
-	}
-	return h.StreamConnected
-}
-
 func (h *PoolerHealthState) GetStatus() *multipoolermanagerdatapb.Status {
 	if h == nil {
 		return nil
 	}
 	return h.Status
-}
-
-func (h *PoolerHealthState) GetStreamSnapshotsReceived() int64 {
-	if h == nil {
-		return 0
-	}
-	return h.StreamSnapshotsReceived
 }
 
 // ID returns the pooler's ID, or nil if the record has none.
@@ -182,7 +168,7 @@ func (h *PoolerHealthState) AsIntendedPrimary(rule commonconsensus.RuleTransitio
 // captures "recently, successfully observed"; a brief stream interruption does not
 // change it until the observation genuinely ages out.
 func (h *PoolerHealthState) ObservedWithin(now time.Time, maxAge time.Duration) bool {
-	age, ok := ObservationAge(h, now)
+	age, ok := observationAge(h, now)
 	return ok && age <= maxAge
 }
 
