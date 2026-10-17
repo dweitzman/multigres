@@ -334,7 +334,7 @@ func TestDeadPrimaryRecovery(t *testing.T) {
 
 	// After the failovers settle, every pooler — the final primary included —
 	// must agree on who leads the shard.
-	t.Logf("Verifying every pooler's highest known rule names the final primary %s...", finalPrimary.Name)
+	t.Logf("Verifying every pooler's highest intended rule names the final primary %s...", finalPrimary.Name)
 	require.Eventually(t, func() bool {
 		for name, inst := range setup.Multipoolers {
 			client, err := shardsetup.NewMultipoolerClient(inst.Multipooler.GrpcPort)

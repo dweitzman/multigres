@@ -452,7 +452,7 @@ func (a *LeaderNeedsReplacementAnalyzer) leaderReplacementCause(
 	// non-ready states are handled by the anti-flap timeout — see intendedLeaderInRecovery.)
 	//
 	// TODO: this is a tactical guard. We are not yet verifying that the leader is
-	// non-revoked on the highest-known coordinator term, so this protects against a
+	// non-revoked on the highest-intended coordinator term, so this protects against a
 	// Promote() RPC that was never received. The durable fix is on the pooler side: a
 	// pooler that knows it should be acting as leader would detect in its postgres
 	// monitor that it is in recovery mode and publish that it needs to resign
@@ -559,7 +559,7 @@ func (a *LeaderNeedsReplacementAnalyzer) classifyFollowerToLeader(sa *snapshot.S
 		return relationConnected
 	}
 	// Not streaming. Does it know it should be following THIS leader? Its highest intended
-	// rule may come from its replication primary, not only its own WAL position.
+	// rule may come from its intended primary, not only its own WAL position.
 	rule := commonconsensus.NewRuleTransition(
 		commonconsensus.HighestIntendedRule([]*clustermetadatapb.ConsensusStatus{pa.GetConsensusStatus()})).PossiblyUndecidedRule()
 	if !commonconsensus.RuleNamesLeader(rule, leaderID) {

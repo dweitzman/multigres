@@ -646,7 +646,7 @@ func (pm *MultipoolerManager) promoteLocked(ctx context.Context, req *consensusd
 		ctx,
 		commonconsensus.IntendedPrimaryFromProposal(proposal, false),
 	); err != nil {
-		pm.logger.ErrorContext(ctx, "failed to record replication primary before promote", "error", err)
+		pm.logger.ErrorContext(ctx, "failed to record intended primary before promote", "error", err)
 	}
 
 	if _, err = pm.DoUpdateRule(ctx, ruleUpdate); err != nil {
@@ -681,7 +681,7 @@ func (pm *MultipoolerManager) promoteLocked(ctx context.Context, req *consensusd
 		Position: &clustermetadatapb.RulePosition{Decision: proposedRule},
 		Primary:  proposalLeader,
 	}); err != nil {
-		pm.logger.ErrorContext(ctx, "failed to record replication primary after promote", "error", err)
+		pm.logger.ErrorContext(ctx, "failed to record intended primary after promote", "error", err)
 	}
 
 	pm.logger.InfoContext(ctx, "promote complete",
@@ -794,7 +794,7 @@ func (pm *MultipoolerManager) SetPrimary(ctx context.Context, req *consensusdata
 	//     ALTER SYSTEM SET primary_conninfo if this SetPrimary arrived while
 	//     postgres was unavailable.
 	if err := pm.consensusMgr.RecordTermPrimary(ctx, rp); err != nil {
-		pm.logger.ErrorContext(ctx, "failed to record replication primary in SetPrimary", "error", err)
+		pm.logger.ErrorContext(ctx, "failed to record intended primary in SetPrimary", "error", err)
 	}
 
 	// If this pooler is (or is now being told it is) a cohort member, it must

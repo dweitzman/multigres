@@ -632,7 +632,7 @@ func TestSnapshotShard_LeaderNamedButAbsentFromStore(t *testing.T) {
 	}
 
 	ps := store.NewTestCache(t)
-	// Only the follower is in the store. Its replication primary rule names the
+	// Only the follower is in the store. Its intended primary rule names the
 	// leader at term 5, so consensus identifies a leader the store has no health for.
 	store.SeedCache(t, ps, store.NewPooler(&snapshot.PoolerHealthState{
 		Multipooler: &clustermetadatapb.Multipooler{
@@ -668,7 +668,7 @@ func TestSnapshotShard_LeaderNamedButAbsentFromStore(t *testing.T) {
 // reported a direct health update. A stale leader still self-claims leadership
 // at the old term, while a follower already replicates from the new leader at a
 // higher term. Leader identity must come from who the poolers say the leader is
-// (the rule's LeaderId, including via the replication primary), not from which
+// (the rule's LeaderId, including via the intended primary), not from which
 // pooler claims leadership for itself — otherwise the stale leader would be
 // mistaken for the primary and failover suppressed.
 func TestSnapshotShard_StaleLeaderSupersededViaFollowerRule(t *testing.T) {
@@ -818,7 +818,7 @@ func TestDetectOtherPrimary(t *testing.T) {
 	shardKey := &clustermetadatapb.ShardKey{Database: "testdb", TableGroup: "default", Shard: "0"}
 
 	// leaderName returns the shard leader's name and rule term from the generated
-	// analysis. Leadership is the highest known consensus rule, regardless of
+	// analysis. Leadership is the highest intended consensus rule, regardless of
 	// reachability.
 	leaderOf := func(sa *snapshot.Shard) (string, int64) {
 		return sa.HighestIntendedRule().PossiblyUndecidedRule().GetLeaderId().GetName(), sa.HighestIntendedRule().PossiblyUndecidedRule().GetRuleNumber().GetCoordinatorTerm()

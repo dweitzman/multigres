@@ -926,7 +926,7 @@ func leaderCurrentPosition(term int64) *clustermetadatapb.PoolerPosition {
 	}
 }
 
-// rewindReadyPrimary builds a replication primary that names fixReplPrimaryID as
+// rewindReadyPrimary builds a intended primary that names fixReplPrimaryID as
 // the rewind-ready leader at the given coordinator term. The rule number must be
 // non-zero so IntendedPrimaryOrNil does not treat it as a phantom 0/0 entry,
 // which would read rewind_ready as false and make fix_replication defer pg_rewind.

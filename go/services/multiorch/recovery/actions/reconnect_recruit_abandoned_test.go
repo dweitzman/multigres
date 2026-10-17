@@ -107,7 +107,7 @@ func TestReconnectRecruitAbandonedAction(t *testing.T) {
 
 	t.Run("skips the advance when the rule already outranks the revocation", func(t *testing.T) {
 		fake := rpcclient.NewFakeClient()
-		// Leader already at term 2: the highest known rule is not revoked by the
+		// Leader already at term 2: the highest intended rule is not revoked by the
 		// follower's revocation, so no advance is needed — just reconnect.
 		cache := seed(t, leaderCurrentPosition(2))
 		action := NewReconnectRecruitAbandonedAction(fake, slog.Default())
@@ -121,7 +121,7 @@ func TestReconnectRecruitAbandonedAction(t *testing.T) {
 
 	t.Run("defers when the highest rule has an undecided proposal", func(t *testing.T) {
 		fake := rpcclient.NewFakeClient()
-		// The leader's highest known rule is revoked but mid-transition (an
+		// The leader's highest intended rule is revoked but mid-transition (an
 		// outstanding proposal). The leader CAS-guards the advance on the decided
 		// outgoing rule, so we must wait rather than advance.
 		undecided := &clustermetadatapb.PoolerPosition{Position: &clustermetadatapb.RulePosition{

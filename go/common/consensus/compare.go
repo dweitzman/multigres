@@ -202,7 +202,7 @@ func MostAdvancedPosition(statuses []*clustermetadatapb.ConsensusStatus) *cluste
 	return best
 }
 
-// IntendedPrimaryOrNil returns cs's replication primary, or nil when it
+// IntendedPrimaryOrNil returns cs's intended primary, or nil when it
 // carries no established leader to replicate from.
 //
 // proto3 cannot distinguish an unset IntendedPrimary from one explicitly
@@ -211,7 +211,7 @@ func MostAdvancedPosition(statuses []*clustermetadatapb.ConsensusStatus) *cluste
 // that has never learned of a leader reports its IntendedPrimary at that
 // zero value, which is reported as absent here. Every real rule (including
 // the initial bootstrap row, written at {0,1} by CreateRuleTables) is
-// strictly greater than {0,0}, so a real replication primary is never
+// strictly greater than {0,0}, so a real intended primary is never
 // dropped.
 //
 // Always use this instead of ConsensusStatus.GetIntendedPrimary() (enforced
@@ -236,14 +236,14 @@ func IntendedPrimaryOrNil(cs *clustermetadatapb.ConsensusStatus) *clustermetadat
 //
 // For each status it considers both the
 // position the pooler is currently at and the position under which its
-// replication primary holds leadership — a follower can learn of a newer
+// intended primary holds leadership — a follower can learn of a newer
 // leader (possibly still undecided on the leader's own side) via its
-// replication primary before its own position advances. Unlike
+// intended primary before its own position advances. Unlike
 // MostAdvancedPosition, ranking is purely by position (no LSN tiebreak, no
 // LSN requirement), since leader identity is a function of the rule alone.
 // Returns nil when no status carries a rule.
 //
-// A phantom 0/0 replication primary (see IntendedPrimaryOrNil) is ignored so
+// A phantom 0/0 intended primary (see IntendedPrimaryOrNil) is ignored so
 // it never shadows a real rule.
 //
 // TODO: detect equivocation. Two rules sharing the same rule number but naming

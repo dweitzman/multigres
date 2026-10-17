@@ -796,7 +796,7 @@ func TestStaleStandbyDemoteTarget(t *testing.T) {
 		return &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: term}, LeaderId: leader}
 	}
 	// newPM builds a manager whose applied position is at selfTerm (naming self)
-	// and whose recorded replication primary is recordedRule/addr (nil = unset).
+	// and whose recorded intended primary is recordedRule/addr (nil = unset).
 	newPM := func(t *testing.T, recordedRule *clustermetadatapb.ShardRule, addr *clustermetadatapb.PoolerAddress, selfTerm int64) *MultipoolerManager {
 		opts := []testManagerOption{
 			withServiceID(selfID),
@@ -810,7 +810,7 @@ func TestStaleStandbyDemoteTarget(t *testing.T) {
 		return newTestManager(t, opts...)
 	}
 
-	t.Run("no recorded replication primary -> nil", func(t *testing.T) {
+	t.Run("no recorded intended primary -> nil", func(t *testing.T) {
 		require.Nil(t, newPM(t, nil, nil, 4).staleStandbyDemoteTarget())
 	})
 
@@ -1164,9 +1164,9 @@ func TestTakeRemedialAction_ResignationSignal(t *testing.T) {
 		wantAvStatus   *clustermetadatapb.AvailabilityStatus
 	}{
 		{
-			// The resign term is the highest-known rule's term; seed a rule naming
+			// The resign term is the highest-intended rule's term; seed a rule naming
 			// self at term 5.
-			name:       "ResignLeadership sets resignation at the highest-known term",
+			name:       "ResignLeadership sets resignation at the highest-intended term",
 			action:     remedialActionResignLeadership,
 			poolerType: clustermetadatapb.PoolerType_PRIMARY,
 			cachedPos:  selfPos(5),

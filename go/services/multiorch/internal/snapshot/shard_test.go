@@ -86,7 +86,7 @@ func TestShard_OutstandingProposalNamesTheIntendedLeader(t *testing.T) {
 }
 
 func TestShard_AdvertisedRuleCountsAsIntended(t *testing.T) {
-	// The follower learned of a newer rule only through its replication primary.
+	// The follower learned of a newer rule only through its intended primary.
 	decided := &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{RuleNumber: ruleNumber(1), LeaderId: podID("old")}}
 	advertised := &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{RuleNumber: ruleNumber(2), LeaderId: podID("new")}}
 	follower := withPosition(pooler("follower"), decided)

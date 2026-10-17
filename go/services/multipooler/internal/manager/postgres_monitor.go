@@ -44,7 +44,7 @@ import (
 // carries a rule.
 //
 // "Intended" is deliberately distinct from "committed": this ranks across both the
-// committed position and the replication primary, so it can name a leader whose
+// committed position and the intended primary, so it can name a leader whose
 // rule has not yet committed to local WAL.
 //
 // TODO: decisions that must be write-safe (e.g. admitting writes, advertising a
@@ -96,7 +96,7 @@ func (pm *MultipoolerManager) staleStandbyDemoteTarget() *clustermetadatapb.Pool
 		leader.GetCell() == pm.serviceID.GetCell() && leader.GetName() == pm.serviceID.GetName() {
 		return nil
 	}
-	// Only act when the replication primary's recorded rule position outranks
+	// Only act when the intended primary's recorded rule position outranks
 	// this pooler's own last locally-recovered position — that's the sign
 	// that rewinding against it might actually help. A lower or equal
 	// recorded position is stale relative to us and must not trigger a demote.

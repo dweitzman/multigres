@@ -294,7 +294,7 @@ func TestRecruitPositionFloorIfOutstanding(t *testing.T) {
 		{
 			// A proposal, when present, is always at or beyond its own
 			// position's decision (UpdateRule rejects writing below the
-			// current highest known rule, and finalizing a proposal clears
+			// current highest intended rule, and finalizing a proposal clears
 			// it to nil rather than leaving it equal to the new decision) —
 			// so realistic proposal values here are >= the decision term.
 			name:            "DecisionTied_ProposalAhead_Satisfied",

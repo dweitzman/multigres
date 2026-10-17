@@ -178,7 +178,7 @@ func (cfg *testManagerConfig) consensusManager(t *testing.T) *consensus.Consensu
 	return consensus.NewManagerForTesting(t, cfg.serviceID, cfg.promises, cfg.rules, nil)
 }
 
-// seedLockedState applies the replication-primary / resignation / eligibility
+// seedLockedState applies the intended-primary / resignation / eligibility
 // overrides through the action-lock-asserting setters, briefly acquiring the
 // manager's action lock. No-op when all are at their defaults.
 func (cfg *testManagerConfig) seedLockedState(t *testing.T, pm *MultipoolerManager) {

@@ -280,7 +280,7 @@ func disallowPoolerTypeEnumInGateway(m dsl.Matcher) {
 }
 
 // disallowRawConsensusStatusIntendedPrimary flags reads of a ConsensusStatus's
-// replication primary — both the generated GetIntendedPrimary() getter and the
+// intended primary — both the generated GetIntendedPrimary() getter and the
 // raw .IntendedPrimary field. proto3 cannot tell an unset IntendedPrimary
 // from one written with the zero-valued initial rule (0/0, no leader — the shape
 // of fresh cluster state, e.g. the first backup), so reading it raw lets a phantom

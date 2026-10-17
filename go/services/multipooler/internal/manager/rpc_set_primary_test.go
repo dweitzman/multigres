@@ -534,7 +534,7 @@ func TestSetPrimary_StalePrimaryDemotes(t *testing.T) {
 // here with UNAVAILABLE because the incoming leader is not yet rewind-ready).
 //
 // This catches a stale primary whose postgres was demoted but whose WAL/rule store
-// still asserts leadership — a case that pgMode alone, and a highest-known-rule
+// still asserts leadership — a case that pgMode alone, and a highest-intended-rule
 // role check (which would see the newer leader this node has already been told
 // about), would both miss.
 func TestSetPrimary_StaleLeaderByRuleStoreMarksDivergence(t *testing.T) {

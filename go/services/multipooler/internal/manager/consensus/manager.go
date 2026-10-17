@@ -52,7 +52,7 @@ type Broadcaster interface {
 //     current_rule row replicated through postgres WAL.
 //
 // and holds the in-memory, observational consensus state that is not durable:
-// the recorded replication primary (what a coordinator last told this pooler
+// the recorded intended primary (what a coordinator last told this pooler
 // via SetPrimary/Promote) and the time that leader was first observed. These
 // live here rather than in ConsensusPromises, whose name promises durability.
 //
@@ -350,7 +350,7 @@ func (cm *ConsensusManager) InconsistentConsensusStatus(ctx context.Context) (*c
 }
 
 // buildStatus assembles a ConsensusStatus from a pre-resolved revocation and
-// position plus the recorded replication primary. Any input may be nil; the
+// position plus the recorded intended primary. Any input may be nil; the
 // corresponding field is left unset. Never performs I/O.
 //
 // The published IntendedPrimary reflects best knowledge from any source: the
@@ -435,7 +435,7 @@ func (cm *ConsensusManager) LeadershipStatus() *clustermetadatapb.LeadershipStat
 }
 
 // RecordTermPrimary folds a newly observed IntendedPrimary into the
-// highest-known one via consensus.MergeIntendedPrimary — the same helper
+// pooler's current one via consensus.MergeIntendedPrimary — the same helper
 // orch's health-stream cache uses, so the two can't drift on what counts as
 // an advance. A nil argument (or nil rule) is a no-op.
 //
@@ -666,7 +666,7 @@ func (cm *ConsensusManager) ResetRewindBackoff() {
 
 // IsPotentialCohortMember reports whether selfID is named in the cohort of
 // either the decided rule or an outstanding (not yet decided) proposal at the
-// highest known position.
+// recorded position.
 //
 // Checking only whichever of decision/proposal PossiblyUndecidedRule would
 // pick is not safe here: while a newer proposal is still undecided, the

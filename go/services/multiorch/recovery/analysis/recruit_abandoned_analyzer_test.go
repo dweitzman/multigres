@@ -157,7 +157,7 @@ func TestRecruitAbandonedAnalyzer_Analyze(t *testing.T) {
 		require.Empty(t, problems)
 	})
 
-	t.Run("ignores when the highest known position has an undecided proposal", func(t *testing.T) {
+	t.Run("ignores when the highest intended rule has an undecided proposal", func(t *testing.T) {
 		// A coordinator (possibly a different orchestrator) is actively working
 		// on this term right now; don't race it.
 		analyzer := &RecruitAbandonedAnalyzer{factory: factory}

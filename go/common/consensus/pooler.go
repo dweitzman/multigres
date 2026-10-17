@@ -28,7 +28,7 @@ const (
 	// highest intended rule (or no rule is known yet).
 	ConsensusRoleObserver ConsensusRole = iota
 	// ConsensusRoleFollower means the pooler is a cohort member of the highest
-	// known rule but is not its leader.
+	// intended rule but is not its leader.
 	ConsensusRoleFollower
 	// ConsensusRoleLeader means the highest intended rule names the pooler as leader.
 	ConsensusRoleLeader

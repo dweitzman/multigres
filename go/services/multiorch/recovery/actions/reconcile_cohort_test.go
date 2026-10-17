@@ -49,7 +49,7 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 	replicaID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "replica1"}
 	shardKey := &clustermetadatapb.ShardKey{Database: "testdb", TableGroup: "default", Shard: "0"}
 
-	// rule is the highest known consensus position setupStore's primary
+	// rule is the highest intended rule setupStore's primary
 	// publishes; the rechecked snapshot derives it from there.
 	rule := &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{
 		RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 3, LeaderSubterm: 7},
@@ -315,7 +315,7 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 		assert.Contains(t, fakeClient.CallLog, "UpdateConsensusRule(multipooler-cell1-primary)")
 	})
 
-	t.Run("rejects when the highest known rule has an undecided proposal", func(t *testing.T) {
+	t.Run("rejects when the highest intended rule has an undecided proposal", func(t *testing.T) {
 		// Propagation isn't supported yet: a cohort change is leader-led and
 		// meaningless against an outstanding, not-yet-decided proposal.
 		undecided := &clustermetadatapb.RulePosition{

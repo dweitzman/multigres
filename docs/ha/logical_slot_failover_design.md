@@ -481,7 +481,7 @@ The invariant that avoids this: whichever node is currently primary ensures a ph
 discovered non-leader member of the shard**, as a standing reconcile, rather than only at consensus cohort
 transitions. The scope is deliberately _membership-based, not streaming-gated_ — cohort-**eligible** (a
 discovered member that is not the leader), not cohort-**committed** (committed membership is the streaming-gated
-state the deadlock hinges on). The leader is identified from consensus state — the highest known shard rule —
+state the deadlock hinges on). The leader is identified from consensus state — the highest intended shard rule —
 never from the topology `Multipooler.Type`, which multiorch must not consult for identity; the eligible set is
 therefore exactly the non-leader members the orchestrator already fans `SetPrimary` out to. Creating the slot on
 demand when such a member first tries to attach, or reconciling against the discovered non-leader set, both

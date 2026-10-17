@@ -187,7 +187,7 @@ func TestDemoteStaleLeaderAction_ExecuteNoCorrectLeader(t *testing.T) {
 }
 
 // TestDemoteStaleLeaderAction_ExecuteRewindsTowardRuleNamedLeader covers the
-// rewind-source selection: it must follow the highest known rule across the shard
+// rewind-source selection: it must follow the highest intended rule across the shard
 // (the global consensus view), not a node's local self-claim. A freshly promoted
 // leader known only via a replica's replication rule must be chosen over the
 // stale node's own (lower-term) self-claim.
@@ -239,7 +239,7 @@ func TestDemoteStaleLeaderAction_ExecuteRewindsTowardRuleNamedLeader(t *testing.
 
 // TestDemoteStaleLeaderAction_ExecuteNoOpWhenNodeIsCurrentLeader verifies that a
 // spurious/already-resolved detection is a no-op: when the node flagged as stale
-// is itself the highest known consensus leader, no SetPrimary RPC is issued (it
+// is itself the highest intended consensus leader, no SetPrimary RPC is issued (it
 // would otherwise be self-targeted, which the pooler rejects).
 func TestDemoteStaleLeaderAction_ExecuteNoOpWhenNodeIsCurrentLeader(t *testing.T) {
 	ctx := context.Background()
@@ -249,7 +249,7 @@ func TestDemoteStaleLeaderAction_ExecuteNoOpWhenNodeIsCurrentLeader(t *testing.T
 
 	fakeClient := rpcclient.NewFakeClient()
 	ps := store.NewTestCache(t)
-	// The node multiorch flagged as stale is actually the highest known leader.
+	// The node multiorch flagged as stale is actually the highest intended leader.
 	store.SeedCache(t, ps, store.NewPooler(&snapshot.PoolerHealthState{
 		Multipooler:     &clustermetadatapb.Multipooler{Id: nodeID, ShardKey: shardKey, Type: clustermetadatapb.PoolerType_PRIMARY},
 		ConsensusStatus: selfLeaderRule(nodeID, 7),

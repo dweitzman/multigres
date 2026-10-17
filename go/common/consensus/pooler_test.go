@@ -92,10 +92,10 @@ func TestSelfConsensusRoleLeadership(t *testing.T) {
 		},
 		{
 			// Mid-demotion: current position still self-claims (term 5) but the
-			// replication primary already names a higher-term leader. The node has
+			// intended primary already names a higher-term leader. The node has
 			// learned it is superseded, so it does not name itself at its highest
-			// known rule.
-			name: "self-claim superseded by a higher replication-primary rule",
+			// intended rule.
+			name: "self-claim superseded by a higher intended-primary rule",
 			cs: &clustermetadatapb.ConsensusStatus{
 				Id:              id("zone1", "pooler-1"),
 				CurrentPosition: &clustermetadatapb.PoolerPosition{Position: &clustermetadatapb.RulePosition{Decision: ruleAt(id("zone1", "pooler-1"), 5)}},
@@ -106,9 +106,9 @@ func TestSelfConsensusRoleLeadership(t *testing.T) {
 			want: false,
 		},
 		{
-			// A legitimate leader at the highest known rule: a lower-term stale
-			// replication primary must not unseat its self-claim.
-			name: "self-claim at highest rule despite a lower replication-primary rule",
+			// A legitimate leader at the highest intended rule: a lower-term stale
+			// intended primary must not unseat its self-claim.
+			name: "self-claim at highest rule despite a lower intended-primary rule",
 			cs: &clustermetadatapb.ConsensusStatus{
 				Id:              id("zone1", "pooler-1"),
 				CurrentPosition: &clustermetadatapb.PoolerPosition{Position: &clustermetadatapb.RulePosition{Decision: ruleAt(id("zone1", "pooler-1"), 6)}},
@@ -271,10 +271,10 @@ func TestIsActiveLeader(t *testing.T) {
 			want: true,
 		},
 		{
-			// The pg_promote→WAL-commit window: the highest known rule may name
+			// The pg_promote→WAL-commit window: the highest intended rule may name
 			// self, but the *committed* position does not yet — so write-safety
 			// leadership stays false until the new rule is durably committed.
-			name: "self-claim only in replication primary, not yet committed",
+			name: "self-claim only in intended primary, not yet committed",
 			cs: &clustermetadatapb.ConsensusStatus{
 				Id:              self,
 				CurrentPosition: &clustermetadatapb.PoolerPosition{Position: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{LeaderId: other, RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4}}}},
@@ -332,7 +332,7 @@ func TestIsActiveLeader(t *testing.T) {
 		},
 		{
 			// Superseded stale primary: our committed rule still names us and is not
-			// revoked, but we have learned (via the replication primary) of a higher
+			// revoked, but we have learned (via the intended primary) of a higher
 			// rule naming another pooler — so we are no longer the active leader.
 			name: "committed self but superseded by higher known rule",
 			cs: &clustermetadatapb.ConsensusStatus{

@@ -58,7 +58,7 @@ type QueryPoolerServer struct {
 	mu sync.Mutex
 	// routingRole is the write-safety role from OnStateChange: PRIMARY iff this
 	// pooler is the writable leader (out of recovery AND the active — committed,
-	// non-revoked, highest-known — consensus leader). Both leader-bound query
+	// non-revoked, highest-intended — consensus leader). Both leader-bound query
 	// modes (WRITABLE and CONSISTENT) gate on it: writes and read-your-writes reads
 	// route to the writable leader, closing the pg_promote()→WAL-commit window.
 	routingRole    servingstate.RoutingRole

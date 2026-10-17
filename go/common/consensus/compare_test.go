@@ -529,7 +529,7 @@ func TestHighestIntendedRule(t *testing.T) {
 			},
 		}
 	}
-	// status whose replication primary holds leadership at a given rule.
+	// status whose intended primary holds leadership at a given rule.
 	replStatus := func(term int64, leader string) *clustermetadatapb.ConsensusStatus {
 		return &clustermetadatapb.ConsensusStatus{
 			IntendedPrimary: &clustermetadatapb.IntendedPrimary{
@@ -550,24 +550,24 @@ func TestHighestIntendedRule(t *testing.T) {
 		assert.Equal(t, "b", got.GetLeaderId().GetName())
 	})
 
-	t.Run("replication primary rule is considered, not just position", func(t *testing.T) {
+	t.Run("intended primary rule is considered, not just position", func(t *testing.T) {
 		// A follower positioned at rule 5 but replicating from a leader at rule 8.
 		follower := posStatus(5, "old")
 		follower.IntendedPrimary = replStatus(8, "new").IntendedPrimary
 		got := PossiblyUndecidedRule(HighestIntendedRule([]*clustermetadatapb.ConsensusStatus{follower, posStatus(5, "old")}))
-		assert.Equal(t, "new", got.GetLeaderId().GetName(), "newer leader via replication primary should win")
+		assert.Equal(t, "new", got.GetLeaderId().GetName(), "newer leader via intended primary should win")
 	})
 
-	t.Run("phantom 0/0 replication primary is ignored", func(t *testing.T) {
+	t.Run("phantom 0/0 intended primary is ignored", func(t *testing.T) {
 		// A pooler positioned at a real rule (term 5) but carrying a zero-valued
-		// replication primary (rule 0/0, no leader) — the fresh/never-established
+		// intended primary (rule 0/0, no leader) — the fresh/never-established
 		// shape. The phantom entry must not shadow the real position rule.
 		phantom := posStatus(5, "leader")
 		phantom.IntendedPrimary = &clustermetadatapb.IntendedPrimary{
 			Position: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{RuleNumber: rn(0, 0)}},
 		}
 		got := PossiblyUndecidedRule(HighestIntendedRule([]*clustermetadatapb.ConsensusStatus{phantom}))
-		assert.Equal(t, "leader", got.GetLeaderId().GetName(), "real position rule should win over phantom 0/0 replication primary")
+		assert.Equal(t, "leader", got.GetLeaderId().GetName(), "real position rule should win over phantom 0/0 intended primary")
 	})
 }
 
@@ -615,7 +615,7 @@ func TestIntendedPrimaryOrNil(t *testing.T) {
 		assert.Nil(t, IntendedPrimaryOrNil(nil))
 	})
 
-	t.Run("unset replication primary", func(t *testing.T) {
+	t.Run("unset intended primary", func(t *testing.T) {
 		assert.Nil(t, IntendedPrimaryOrNil(&clustermetadatapb.ConsensusStatus{}))
 	})
 
@@ -637,7 +637,7 @@ func TestIntendedPrimaryOrNil(t *testing.T) {
 		assert.Nil(t, IntendedPrimaryOrNil(cs))
 	})
 
-	t.Run("established replication primary is returned", func(t *testing.T) {
+	t.Run("established intended primary is returned", func(t *testing.T) {
 		rp := &clustermetadatapb.IntendedPrimary{
 			Position: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{RuleNumber: rn(1, 0), LeaderId: leaderID("leader")}},
 		}

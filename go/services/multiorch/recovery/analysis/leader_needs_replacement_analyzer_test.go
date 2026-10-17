@@ -413,9 +413,9 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		require.Equal(t, types.ProblemLeaderHealthUnknown, problems[0].Code, "a follower pointed at a different primary must not count toward revocation")
 	})
 
-	t.Run("counts a follower that learned the leader via its replication primary as cut off", func(t *testing.T) {
+	t.Run("counts a follower that learned the leader via its intended primary as cut off", func(t *testing.T) {
 		// The follower's own WAL position doesn't name the leader, but its
-		// IntendedPrimary does — its highest-known rule still names the leader, so a
+		// IntendedPrimary does — its highest-intended rule still names the leader, so a
 		// configured-but-not-streaming follower is cut off. Both followers this way →
 		// durability-sufficient revocation → failover.
 		viaReplPrimary := func(id *clustermetadatapb.ID, now time.Time) *snapshot.PoolerHealthState {
