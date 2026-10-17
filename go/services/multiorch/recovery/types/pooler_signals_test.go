@@ -20,7 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
+	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 )
 
 func TestPoolerIsCohortIneligible(t *testing.T) {
@@ -77,10 +77,10 @@ func TestPoolerIsCohortIneligible(t *testing.T) {
 // poolerWithLeaderTerm builds a PoolerHealthState whose ConsensusStatus has
 // the given primary term. Used to construct fixtures that exercise the
 // staleness check on REQUESTING_DEMOTION.
-func poolerWithLeaderTerm(t *testing.T, primaryTerm int64) *multiorchdatapb.PoolerHealthState {
+func poolerWithLeaderTerm(t *testing.T, primaryTerm int64) *snapshot.PoolerHealthState {
 	t.Helper()
 	id := &clustermetadatapb.ID{Name: "mp1"}
-	return &multiorchdatapb.PoolerHealthState{
+	return &snapshot.PoolerHealthState{
 		Multipooler: &clustermetadatapb.Multipooler{Id: id},
 		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 			Id: id,
@@ -100,10 +100,10 @@ func poolerWithLeaderTerm(t *testing.T, primaryTerm int64) *multiorchdatapb.Pool
 // is at a different (stale) term but whose outstanding proposal is at
 // primaryTerm — e.g. a self-promotion whose write reached WAL but wasn't
 // marked decided yet.
-func poolerWithLeaderTermViaProposal(t *testing.T, primaryTerm int64) *multiorchdatapb.PoolerHealthState {
+func poolerWithLeaderTermViaProposal(t *testing.T, primaryTerm int64) *snapshot.PoolerHealthState {
 	t.Helper()
 	id := &clustermetadatapb.ID{Name: "mp1"}
-	return &multiorchdatapb.PoolerHealthState{
+	return &snapshot.PoolerHealthState{
 		Multipooler: &clustermetadatapb.Multipooler{Id: id},
 		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 			Id: id,

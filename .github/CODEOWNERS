@@ -38,7 +38,6 @@ proto/consensusdata.proto           @multigres/owners-cluster-management @multig
 proto/consensusservice.proto        @multigres/owners-cluster-management
 proto/multiadminservice.proto       @multigres/Maintainers
 proto/multigatewayservice.proto     @multigres/owners-query-serving
-proto/multiorchdata.proto           @multigres/owners-cluster-management
 proto/multiorchservice.proto        @multigres/owners-cluster-management
 proto/multipoolermanagerdata.proto  @multigres/owners-cluster-management @multigres/owners-operator
 proto/pgctldservice.proto           @multigres/owners-cluster-management

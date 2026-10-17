@@ -19,7 +19,6 @@ import (
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
 )
@@ -30,12 +29,12 @@ import (
 
 // leaderEndpoint returns the leader's postgres host and port; host is "" when
 // there is no leader snapshot or it hasn't reported a hostname.
-func leaderEndpoint(leader *multiorchdatapb.PoolerHealthState) (host string, port int32) {
+func leaderEndpoint(leader *snapshot.PoolerHealthState) (host string, port int32) {
 	return leader.GetMultipooler().GetHostname(), leader.GetMultipooler().GetPortMap()["postgres"]
 }
 
 // poolerID returns the pooler's ID from its health record.
-func poolerID(p *multiorchdatapb.PoolerHealthState) *clustermetadatapb.ID {
+func poolerID(p *snapshot.PoolerHealthState) *clustermetadatapb.ID {
 	return p.GetMultipooler().GetId()
 }
 
@@ -50,7 +49,7 @@ func poolerID(p *multiorchdatapb.PoolerHealthState) *clustermetadatapb.ID {
 // what it checks, not "reachable": this is purely about data trustworthiness,
 // a third axis distinct from both network connectivity (StreamConnected) and
 // recruitment eligibility (recruitable).
-func freshAndInitialized(p *multiorchdatapb.PoolerHealthState, now time.Time, freshness time.Duration) bool {
+func freshAndInitialized(p *snapshot.PoolerHealthState, now time.Time, freshness time.Duration) bool {
 	hs, ok := snapshot.HealthWithin(p, now, freshness)
 	return ok && hs.GetStatus().GetIsInitialized()
 }
@@ -62,7 +61,7 @@ func freshAndInitialized(p *multiorchdatapb.PoolerHealthState, now time.Time, fr
 // it exists so callers' feasibility judgments (is a recruitment quorum
 // reachable, is this pooler admissible) agree with what an actual Recruit
 // attempt would do, instead of counting a member that would just be refused.
-func recruitable(p *multiorchdatapb.PoolerHealthState, now time.Time, freshness time.Duration) bool {
+func recruitable(p *snapshot.PoolerHealthState, now time.Time, freshness time.Duration) bool {
 	if !freshAndInitialized(p, now, freshness) {
 		return false
 	}
@@ -85,7 +84,7 @@ func recruitable(p *multiorchdatapb.PoolerHealthState, now time.Time, freshness 
 // walReplayNotPaused reports whether the standby's WAL replay is active. A
 // pooler with no replication status returns false; callers that distinguish an
 // unavailable observation from a negative one must check for nil first.
-func walReplayNotPaused(p *multiorchdatapb.PoolerHealthState) bool {
+func walReplayNotPaused(p *snapshot.PoolerHealthState) bool {
 	rs := p.GetStatus().GetReplicationStatus()
 	if rs == nil {
 		return false
@@ -95,7 +94,7 @@ func walReplayNotPaused(p *multiorchdatapb.PoolerHealthState) bool {
 
 // primaryConnInfoHost returns the standby's configured primary host, or "" if
 // replication is not configured.
-func primaryConnInfoHost(p *multiorchdatapb.PoolerHealthState) string {
+func primaryConnInfoHost(p *snapshot.PoolerHealthState) string {
 	return p.GetStatus().GetReplicationStatus().GetPrimaryConnInfo().GetHost()
 }
 
@@ -104,7 +103,7 @@ func primaryConnInfoHost(p *multiorchdatapb.PoolerHealthState) string {
 // the primary has no new WAL to send. Any other status (including "") means
 // the receiver is not running — this covers timeline divergence where the
 // receiver connects, gets FATAL, and exits, leaving primary_conninfo on disk.
-func walReceiverActive(p *multiorchdatapb.PoolerHealthState) bool {
+func walReceiverActive(p *snapshot.PoolerHealthState) bool {
 	rs := p.GetStatus().GetReplicationStatus()
 	if rs == nil {
 		return false
@@ -121,7 +120,7 @@ func walReceiverActive(p *multiorchdatapb.PoolerHealthState) bool {
 // member must advance only by streaming, never the archive). "waiting" stays
 // healthy: the receiver is connected and current, the primary just has nothing
 // new to send.
-func walReceiverStreaming(p *multiorchdatapb.PoolerHealthState) bool {
+func walReceiverStreaming(p *snapshot.PoolerHealthState) bool {
 	rs := p.GetStatus().GetReplicationStatus()
 	if rs == nil {
 		return false
@@ -141,7 +140,7 @@ func walReceiverStreaming(p *multiorchdatapb.PoolerHealthState) bool {
 // stops at decision-then-proposal): for leaders, the coordinator term must be
 // unique per promotion, so equal terms indicate a consensus bug rather than a
 // resolvable tie.
-func compareLeaderTimeline(a, b *multiorchdatapb.PoolerHealthState) int {
+func compareLeaderTimeline(a, b *snapshot.PoolerHealthState) int {
 	return commonconsensus.CompareRulePosition(
 		a.GetConsensusStatus().GetCurrentPosition().GetPosition(),
 		b.GetConsensusStatus().GetCurrentPosition().GetPosition(),
@@ -152,7 +151,7 @@ func compareLeaderTimeline(a, b *multiorchdatapb.PoolerHealthState) int {
 // Both the shard snapshot and the pooler's snapshot are passed so callbacks can
 // access shard-level context alongside pooler-specific state.
 // Errors are accumulated — the first error encountered is returned alongside any problems collected.
-func analyzeAllPoolers(sa *snapshot.Shard, fn func(*snapshot.Shard, *multiorchdatapb.PoolerHealthState) (*types.Problem, error)) ([]types.Problem, error) {
+func analyzeAllPoolers(sa *snapshot.Shard, fn func(*snapshot.Shard, *snapshot.PoolerHealthState) (*types.Problem, error)) ([]types.Problem, error) {
 	var problems []types.Problem
 	var firstErr error
 	for _, poolerAnalysis := range sa.Poolers {
@@ -180,7 +179,7 @@ func analyzeAllPoolers(sa *snapshot.Shard, fn func(*snapshot.Shard, *multiorchda
 // "recently, successfully observed" — so callers need not separately consult a
 // connection flag or a snapshot counter, and a brief stream interruption does
 // not flip liveness until the observation genuinely ages out.
-func observationFresh(h *multiorchdatapb.PoolerHealthState, now time.Time, maxAge time.Duration) bool {
+func observationFresh(h *snapshot.PoolerHealthState, now time.Time, maxAge time.Duration) bool {
 	age, ok := snapshot.ObservationAge(h, now)
 	if !ok {
 		return false

@@ -22,7 +22,6 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
@@ -47,8 +46,8 @@ func TestRecruitAbandonedAnalyzer_Analyze(t *testing.T) {
 	}
 	highestPosition := ruleLedBy(1, 0)
 
-	leaderHealth := func() *multiorchdatapb.PoolerHealthState {
-		return &multiorchdatapb.PoolerHealthState{
+	leaderHealth := func() *snapshot.PoolerHealthState {
+		return &snapshot.PoolerHealthState{
 			Multipooler: &clustermetadatapb.Multipooler{Id: primaryID, ShardKey: shardKey, Hostname: "primary.example.com"},
 			LastSeen:    timestamppb.New(now),
 			Status: &multipoolermanagerdatapb.Status{
@@ -62,8 +61,8 @@ func TestRecruitAbandonedAnalyzer_Analyze(t *testing.T) {
 	// strandedFollower builds a follower recruited at term 2 (revocation revokes
 	// the term-1 rule) whose own WAL rule is still at term 1 — the abandoned
 	// recruit. initiatedAt controls the revocation's age for the grace gate.
-	strandedFollower := func(initiatedAt time.Time, ownRule *clustermetadatapb.RulePosition, initialized bool) *multiorchdatapb.PoolerHealthState {
-		return &multiorchdatapb.PoolerHealthState{
+	strandedFollower := func(initiatedAt time.Time, ownRule *clustermetadatapb.RulePosition, initialized bool) *snapshot.PoolerHealthState {
+		return &snapshot.PoolerHealthState{
 			Multipooler: &clustermetadatapb.Multipooler{Id: replicaID, ShardKey: shardKey},
 			LastSeen:    timestamppb.New(now),
 			Status:      &multipoolermanagerdatapb.Status{IsInitialized: initialized},
@@ -83,7 +82,7 @@ func TestRecruitAbandonedAnalyzer_Analyze(t *testing.T) {
 	// newSAWithGrace builds a shard snapshot with the given analyses, a serving
 	// leader, and the shard's committed rule at term 1. grace is the failover grace
 	// window of the snapshot's policy: a revocation older than it counts as abandoned.
-	newSAWithGrace := func(grace time.Duration, analyses ...*multiorchdatapb.PoolerHealthState) *snapshot.Shard {
+	newSAWithGrace := func(grace time.Duration, analyses ...*snapshot.PoolerHealthState) *snapshot.Shard {
 		policy := DefaultAvailabilityPolicy()
 		policy.FailoverGracePeriod = grace
 		return newTestShard(&snapshot.Shard{
@@ -95,7 +94,7 @@ func TestRecruitAbandonedAnalyzer_Analyze(t *testing.T) {
 	}
 
 	// newSA has no grace: a revocation is abandoned as soon as it is issued.
-	newSA := func(analyses ...*multiorchdatapb.PoolerHealthState) *snapshot.Shard {
+	newSA := func(analyses ...*snapshot.PoolerHealthState) *snapshot.Shard {
 		return newSAWithGrace(0, analyses...)
 	}
 
@@ -119,11 +118,11 @@ func TestRecruitAbandonedAnalyzer_Analyze(t *testing.T) {
 		placeholder := &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{LeaderId: primaryID}}
 		follower := strandedFollower(now.Add(-time.Minute), placeholder, true)
 
-		require.False(t, revocationStrandsFollower(&snapshot.Shard{Poolers: []*multiorchdatapb.PoolerHealthState{follower}}, follower))
+		require.False(t, revocationStrandsFollower(&snapshot.Shard{Poolers: []*snapshot.PoolerHealthState{follower}}, follower))
 
 		// Control: the same revocation does strand a follower behind a real rule.
 		real := strandedFollower(now.Add(-time.Minute), ruleLedBy(1, 0), true)
-		require.True(t, revocationStrandsFollower(&snapshot.Shard{Poolers: []*multiorchdatapb.PoolerHealthState{real}}, real))
+		require.True(t, revocationStrandsFollower(&snapshot.Shard{Poolers: []*snapshot.PoolerHealthState{real}}, real))
 	})
 
 	t.Run("ignores follower that already caught up to the revoked term", func(t *testing.T) {

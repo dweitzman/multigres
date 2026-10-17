@@ -25,8 +25,8 @@ import (
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
+	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 )
 
 // ApplyCertifiedRuleChange installs a new shard rule using a fully-populated
@@ -190,9 +190,9 @@ func (c *Coordinator) refreshShardConsensusStatuses(
 func (c *Coordinator) resolveCohort(
 	ctx context.Context,
 	cohortMembers []*clustermetadatapb.ID,
-) (map[string]*clustermetadatapb.PoolerAddress, []*multiorchdatapb.PoolerHealthState, error) {
+) (map[string]*clustermetadatapb.PoolerAddress, []*snapshot.PoolerHealthState, error) {
 	addressByID := make(map[string]*clustermetadatapb.PoolerAddress, len(cohortMembers))
-	cohort := make([]*multiorchdatapb.PoolerHealthState, 0, len(cohortMembers))
+	cohort := make([]*snapshot.PoolerHealthState, 0, len(cohortMembers))
 	for _, id := range cohortMembers {
 		info, err := c.topoStore.GetMultipooler(ctx, id)
 		if err != nil {
@@ -201,7 +201,7 @@ func (c *Coordinator) resolveCohort(
 		}
 		key := topoclient.ClusterIDString(id)
 		addressByID[key] = topoclient.PoolerAddressFor(info.Multipooler)
-		cohort = append(cohort, &multiorchdatapb.PoolerHealthState{
+		cohort = append(cohort, &snapshot.PoolerHealthState{
 			Multipooler: info.Multipooler,
 		})
 	}

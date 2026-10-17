@@ -27,7 +27,6 @@ import (
 	"github.com/multigres/multigres/go/common/rpcclient"
 	"github.com/multigres/multigres/go/common/topoclient/memorytopo"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	"github.com/multigres/multigres/go/services/multiorch/config"
 	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
@@ -88,7 +87,7 @@ func newRefreshEngine(t *testing.T, action types.RecoveryAction, skipRefresh boo
 	analysis.SetTestAnalyzers([]analysis.Analyzer{&staleHealthAnalyzer{action: action, skipRefresh: skipRefresh}})
 	t.Cleanup(analysis.ResetAnalyzers)
 
-	store.SeedCache(t, engine.poolerCache, store.NewPooler(&multiorchdatapb.PoolerHealthState{
+	store.SeedCache(t, engine.poolerCache, store.NewPooler(&snapshot.PoolerHealthState{
 		Multipooler: &clustermetadatapb.Multipooler{Id: poolerID, ShardKey: shardKey, Type: clustermetadatapb.PoolerType_PRIMARY},
 		LastSeen:    timestamppb.Now(),
 		Status:      &multipoolermanagerdatapb.Status{PoolerType: clustermetadatapb.PoolerType_PRIMARY, PostgresReady: false},
@@ -154,7 +153,7 @@ func TestAttemptRecovery_RegatesAFailoverAfterTheRecheck(t *testing.T) {
 
 	poolers := store.FindPoolersInShard(engine.poolerCache, problem.ShardKey)
 	require.Len(t, poolers, 1)
-	poolers[0].Mutate(func(h *multiorchdatapb.PoolerHealthState) {
+	poolers[0].Mutate(func(h *snapshot.PoolerHealthState) {
 		h.ConsensusStatus = &clustermetadatapb.ConsensusStatus{
 			CurrentPosition: &clustermetadatapb.PoolerPosition{Position: &clustermetadatapb.RulePosition{
 				Decision: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4}},
@@ -222,7 +221,7 @@ func TestAttemptRecovery_RefreshRefutesAStaleLeaderGuessWithTheRealAnalyzer(t *t
 	engine := NewEngine(ts, logger, cfg, []config.WatchTarget{}, fakeClient, newTestCoordinator(ts, fakeClient, "cell1"))
 
 	seed := func(self *clustermetadatapb.ID, status *multipoolermanagerdatapb.Status, readyAt *timestamppb.Timestamp) {
-		store.SeedCache(t, engine.poolerCache, store.NewPooler(&multiorchdatapb.PoolerHealthState{
+		store.SeedCache(t, engine.poolerCache, store.NewPooler(&snapshot.PoolerHealthState{
 			Multipooler:           &clustermetadatapb.Multipooler{Id: self, ShardKey: shardKey},
 			LastSeen:              timestamppb.Now(),
 			LastPostgresReadyTime: readyAt,

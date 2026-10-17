@@ -22,8 +22,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
+	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 )
 
 func TestHealthStream_applySnapshot(t *testing.T) {
@@ -33,7 +33,7 @@ func TestHealthStream_applySnapshot(t *testing.T) {
 	newStream := func(t *testing.T) (*HealthStream, *Pooler) {
 		t.Helper()
 		cache := NewTestCache(t)
-		pooler := NewPooler(&multiorchdatapb.PoolerHealthState{
+		pooler := NewPooler(&snapshot.PoolerHealthState{
 			Multipooler: &clustermetadatapb.Multipooler{Id: poolerID, ShardKey: shardKey},
 		}, nil)
 		id := SeedCache(t, cache, pooler)

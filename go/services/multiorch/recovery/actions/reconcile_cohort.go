@@ -29,7 +29,6 @@ import (
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
 
@@ -121,7 +120,7 @@ func (a *ReconcileCohortAction) Execute(ctx context.Context, rechecked types.Rec
 	// from the snapshot (the whole point of "cohort member is no longer
 	// tracked"), so we operate on the problem's raw ID directly.
 	var targetID *clustermetadatapb.ID
-	var target *multiorchdatapb.PoolerHealthState
+	var target *snapshot.PoolerHealthState
 	if op == multipoolermanagerdatapb.RuleOperation_RULE_OPERATION_COHORT_ADD {
 		target = shard.PoolerHealth(problem.PoolerID)
 		if target == nil {
@@ -198,7 +197,7 @@ func (a *ReconcileCohortAction) Execute(ctx context.Context, rechecked types.Rec
 // pre-ADD rule would not name the member, so relaying it would not trigger the
 // clear. Failures are logged and swallowed: this is a best-effort hardening step
 // layered on top of the pooler's own monitor backstop.
-func (a *ReconcileCohortAction) clearJoiningMemberArchive(ctx context.Context, leader, target *multiorchdatapb.PoolerHealthState) {
+func (a *ReconcileCohortAction) clearJoiningMemberArchive(ctx context.Context, leader, target *snapshot.PoolerHealthState) {
 	statusResp, err := a.rpcClient.Status(ctx, leader.Multipooler, &multipoolermanagerdatapb.StatusRequest{})
 	if err != nil {
 		a.logger.WarnContext(ctx, "reconcile cohort: could not read leader status to clear joining member's archive; relying on monitor backstop",

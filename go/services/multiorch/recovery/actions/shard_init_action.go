@@ -26,7 +26,6 @@ import (
 	commontypes "github.com/multigres/multigres/go/common/types"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	"github.com/multigres/multigres/go/services/multiorch/config"
 	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
@@ -35,7 +34,7 @@ import (
 // shardInitCoordinator is the subset of consensus.Coordinator used by ShardInitAction.
 type shardInitCoordinator interface {
 	GetBootstrapPolicy(ctx context.Context, database string) (*clustermetadatapb.DurabilityPolicy, error)
-	AppointInitialLeader(ctx context.Context, shardKey *clustermetadatapb.ShardKey, cohort []*multiorchdatapb.PoolerHealthState) error
+	AppointInitialLeader(ctx context.Context, shardKey *clustermetadatapb.ShardKey, cohort []*snapshot.PoolerHealthState) error
 	GetCoordinatorID() *clustermetadatapb.ID
 }
 
@@ -198,7 +197,7 @@ func (a *ShardInitAction) allowUnsafeInitialCohort() bool {
 // "Initialized" requires a fresh observation (snapshot.DefaultObservationFreshness), not just
 // a durable IsInitialized flag from an arbitrarily old snapshot — a pooler that looked
 // initialized once but has since gone stale should not be trusted for the bootstrap cohort.
-func (a *ShardInitAction) getInitializedPoolers(shard *snapshot.Shard) (initialized []*multiorchdatapb.PoolerHealthState, cohortEstablished bool) {
+func (a *ShardInitAction) getInitializedPoolers(shard *snapshot.Shard) (initialized []*snapshot.PoolerHealthState, cohortEstablished bool) {
 	for _, pooler := range shard.Poolers {
 		if pooler == nil || pooler.Multipooler == nil || pooler.Multipooler.Id == nil {
 			continue
@@ -216,13 +215,13 @@ func (a *ShardInitAction) getInitializedPoolers(shard *snapshot.Shard) (initiali
 
 // buildCohortFromIDs resolves committed cohort IDs to PoolerHealthState entries
 // from the snapshot. Returns only the poolers we can find there.
-func (a *ShardInitAction) buildCohortFromIDs(poolers []*multiorchdatapb.PoolerHealthState, committedIDs []*clustermetadatapb.ID) []*multiorchdatapb.PoolerHealthState {
+func (a *ShardInitAction) buildCohortFromIDs(poolers []*snapshot.PoolerHealthState, committedIDs []*clustermetadatapb.ID) []*snapshot.PoolerHealthState {
 	idSet := make(map[string]struct{}, len(committedIDs))
 	for _, id := range committedIDs {
 		idSet[topoclient.ClusterIDString(id)] = struct{}{}
 	}
 
-	var result []*multiorchdatapb.PoolerHealthState
+	var result []*snapshot.PoolerHealthState
 	for _, p := range poolers {
 		if _, ok := idSet[topoclient.ClusterIDString(p.Multipooler.Id)]; ok {
 			result = append(result, p)

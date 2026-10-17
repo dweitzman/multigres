@@ -18,7 +18,6 @@ import (
 	"time"
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
 
@@ -30,7 +29,7 @@ import (
 // It deliberately uses LastSeen (the orchestrator-clock receipt time) rather
 // than the pooler-clock pooler_captured_at, so the subtraction against now
 // stays same-clock and is unaffected by skew between the hosts.
-func ObservationAge(h *multiorchdatapb.PoolerHealthState, now time.Time) (time.Duration, bool) {
+func ObservationAge(h *PoolerHealthState, now time.Time) (time.Duration, bool) {
 	ls := h.GetLastSeen()
 	if ls == nil {
 		return 0, false
@@ -50,7 +49,7 @@ const DefaultObservationFreshness = 15 * time.Second
 // directly wherever a decision depends on how current the data is — it makes
 // the staleness tolerance an explicit, mandatory choice at the call site
 // instead of a separately-remembered ObservationAge check that's easy to omit.
-func HealthWithin(h *multiorchdatapb.PoolerHealthState, now time.Time, maxAge time.Duration) (*multiorchdatapb.PoolerHealthState, bool) {
+func HealthWithin(h *PoolerHealthState, now time.Time, maxAge time.Duration) (*PoolerHealthState, bool) {
 	age, ok := ObservationAge(h, now)
 	if !ok || age > maxAge {
 		return nil, false
@@ -75,7 +74,7 @@ const DefaultLeaderWriteFreshness = 15 * time.Second
 // write", not direct proof of it — the strongest signal would be a recent
 // successful heartbeat write, which isn't surfaced through health today.
 // Tighten this once that signal exists.
-func LeaderWritesProgressing(leader *multiorchdatapb.PoolerHealthState, intendedRule commonconsensus.RuleTransition, now time.Time, freshness time.Duration) bool {
+func LeaderWritesProgressing(leader *PoolerHealthState, intendedRule commonconsensus.RuleTransition, now time.Time, freshness time.Duration) bool {
 	if leader == nil {
 		return false
 	}

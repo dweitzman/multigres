@@ -21,7 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
+	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 )
 
 // shard returns the ShardKey used across this file's fixtures.
@@ -44,10 +44,10 @@ func TestFindPoolersInShard_OnlyShardScoped(t *testing.T) {
 	cache := NewTestCache(t)
 	defer cache.Shutdown()
 
-	inShard := NewPooler(&multiorchdatapb.PoolerHealthState{
+	inShard := NewPooler(&snapshot.PoolerHealthState{
 		Multipooler: &clustermetadatapb.Multipooler{Id: poolerID("zone1", "in"), ShardKey: shard()},
 	}, nil)
-	otherShard := NewPooler(&multiorchdatapb.PoolerHealthState{
+	otherShard := NewPooler(&snapshot.PoolerHealthState{
 		Multipooler: &clustermetadatapb.Multipooler{
 			Id:       poolerID("zone1", "other"),
 			ShardKey: &clustermetadatapb.ShardKey{Database: "db", TableGroup: "tg", Shard: "other"},

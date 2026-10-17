@@ -29,7 +29,7 @@ import (
 	"github.com/multigres/multigres/go/common/topoclient"
 	commontypes "github.com/multigres/multigres/go/common/types"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
+	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/actions"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/analysis"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
@@ -570,7 +570,7 @@ func (re *Engine) readyToExecute(problem types.Problem) (readyAt time.Time, read
 // loses), and the next cycle observing the new revocation.
 func (re *Engine) nextFailoverAttempt(shardKey *clustermetadatapb.ShardKey) (readyAt time.Time, ready bool) {
 	poolers := store.FindPoolersInShard(re.poolerCache, shardKey)
-	healthStates := make([]*multiorchdatapb.PoolerHealthState, len(poolers))
+	healthStates := make([]*snapshot.PoolerHealthState, len(poolers))
 	for i, p := range poolers {
 		healthStates[i] = p.Health()
 	}

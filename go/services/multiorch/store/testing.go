@@ -22,7 +22,7 @@ import (
 	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/common/topoclient/poolerwatch"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
+	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 )
 
 // NewTestCache builds a standalone PoolerCache for tests. It has no
@@ -38,10 +38,10 @@ func NewTestCache(t *testing.T) *PoolerCache {
 	})
 	cache.Start(poolerwatch.Hooks[*Pooler]{
 		OnLive: func(p *clustermetadatapb.Multipooler, _ *Pooler) *Pooler {
-			return NewPooler(&multiorchdatapb.PoolerHealthState{Multipooler: p}, nil)
+			return NewPooler(&snapshot.PoolerHealthState{Multipooler: p}, nil)
 		},
 		OnUpdate: func(_, curr *clustermetadatapb.Multipooler, rider *Pooler) {
-			rider.Mutate(func(h *multiorchdatapb.PoolerHealthState) {
+			rider.Mutate(func(h *snapshot.PoolerHealthState) {
 				h.Multipooler = curr
 			})
 		},

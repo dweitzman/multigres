@@ -24,7 +24,6 @@ import (
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 )
 
 // Shard is a frozen view of one shard: every pooler's health as of a single
@@ -34,7 +33,7 @@ type Shard struct {
 	ShardKey *clustermetadatapb.ShardKey
 	// Poolers holds the health snapshot of every pooler in the shard, captured
 	// once, so all reads agree.
-	Poolers []*multiorchdatapb.PoolerHealthState
+	Poolers []*PoolerHealthState
 
 	// Now is the evaluation timestamp (orchestrator clock) captured when this
 	// snapshot was taken. Analyzers use it — together with AvailabilityPolicy — to judge
@@ -83,7 +82,7 @@ func (sa *Shard) HighestIntendedRule() commonconsensus.RuleTransition {
 }
 
 // PoolerHealth returns the health snapshot for id, or nil if the shard has none.
-func (sa *Shard) PoolerHealth(id *clustermetadatapb.ID) *multiorchdatapb.PoolerHealthState {
+func (sa *Shard) PoolerHealth(id *clustermetadatapb.ID) *PoolerHealthState {
 	if id == nil {
 		return nil
 	}
@@ -102,7 +101,7 @@ func (sa *Shard) PoolerHealth(id *clustermetadatapb.ID) *multiorchdatapb.PoolerH
 // observed; in that case we don't know where to point replicas, so consumers
 // that need the leader's host/port gate on the result being non-nil rather than
 // on reachability — an unreachable-but-known leader is still the intended one.
-func (sa *Shard) IntendedLeaderHealth() *multiorchdatapb.PoolerHealthState {
+func (sa *Shard) IntendedLeaderHealth() *PoolerHealthState {
 	return sa.PoolerHealth(sa.HighestIntendedRule().PossiblyUndecidedRule().GetLeaderId())
 }
 

@@ -28,8 +28,8 @@ import (
 	"github.com/multigres/multigres/go/common/rpcclient"
 	"github.com/multigres/multigres/go/common/timeouts"
 	"github.com/multigres/multigres/go/common/topoclient"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
+	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 	"github.com/multigres/multigres/go/tools/retry"
 )
 
@@ -391,9 +391,9 @@ func (hs *HealthStream) streamOnce(ctx context.Context, poolerHealth *Pooler) (c
 
 // applySnapshot writes health fields from a snapshot into the pooler store.
 // This mirrors the field writes performed by the old pollPooler function on success.
-func (hs *HealthStream) applySnapshot(ctx context.Context, poolerHealth *Pooler, snapshot *multipoolermanagerdatapb.ManagerHealthSnapshot) {
+func (hs *HealthStream) applySnapshot(ctx context.Context, poolerHealth *Pooler, snap *multipoolermanagerdatapb.ManagerHealthSnapshot) {
 	logger := hs.factory.logger
-	if snapshot.GetStatus().GetStatus() == nil {
+	if snap.GetStatus().GetStatus() == nil {
 		logger.WarnContext(ctx, "received snapshot with nil status, skipping",
 			"pooler_id", hs.poolerID)
 		return
@@ -403,8 +403,8 @@ func (hs *HealthStream) applySnapshot(ctx context.Context, poolerHealth *Pooler,
 
 	poolerIDStr := topoclient.ComponentIDString(poolerHealth.Health().Multipooler.Id)
 	update := func(existing *Pooler) *Pooler {
-		existing.Mutate(func(h *multiorchdatapb.PoolerHealthState) {
-			applyStatusFields(h, snapshot.Status, now)
+		existing.Mutate(func(h *snapshot.PoolerHealthState) {
+			applyStatusFields(h, snap.Status, now)
 			h.StreamSnapshotsReceived++
 		})
 		return existing
@@ -414,18 +414,18 @@ func (hs *HealthStream) applySnapshot(ctx context.Context, poolerHealth *Pooler,
 
 	logger.DebugContext(ctx, "health snapshot applied",
 		"pooler_id", hs.poolerID,
-		"pooler_type", snapshot.Status.Status.PoolerType,
-		"postgres_ready", snapshot.Status.Status.PostgresReady,
-		"postgres_running", snapshot.Status.Status.PostgresRunning,
-		"cohort_eligibility", snapshot.Status.GetAvailabilityStatus().GetCohortEligibilityStatus().GetSignal().String(),
-		"leadership_signal", snapshot.Status.GetAvailabilityStatus().GetLeadershipStatus().GetSignal().String(),
+		"pooler_type", snap.Status.Status.PoolerType,
+		"postgres_ready", snap.Status.Status.PostgresReady,
+		"postgres_running", snap.Status.Status.PostgresRunning,
+		"cohort_eligibility", snap.Status.GetAvailabilityStatus().GetCohortEligibilityStatus().GetSignal().String(),
+		"leadership_signal", snap.Status.GetAvailabilityStatus().GetLeadershipStatus().GetSignal().String(),
 	)
 }
 
 // markConnected records that the stream is connected in the pooler store.
 func (hs *HealthStream) markConnected() {
 	cb := func(existing *Pooler) *Pooler {
-		existing.Mutate(func(h *multiorchdatapb.PoolerHealthState) {
+		existing.Mutate(func(h *snapshot.PoolerHealthState) {
 			h.StreamConnected = true
 		})
 		return existing
@@ -439,7 +439,7 @@ func (hs *HealthStream) markConnected() {
 // successfully reconnecting and getting fresh health.
 func (hs *HealthStream) markDisconnected() {
 	cb := func(existing *Pooler) *Pooler {
-		existing.Mutate(func(h *multiorchdatapb.PoolerHealthState) {
+		existing.Mutate(func(h *snapshot.PoolerHealthState) {
 			h.StreamConnected = false
 		})
 		return existing

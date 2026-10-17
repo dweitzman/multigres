@@ -24,7 +24,6 @@ import (
 
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
@@ -41,14 +40,14 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 
 	// healthyReplicaPA returns a rider for a healthy, replicating REPLICA,
 	// optionally with a cohort eligibility signal.
-	healthyReplicaPA := func(id *clustermetadatapb.ID, signal clustermetadatapb.CohortEligibilitySignal) *multiorchdatapb.PoolerHealthState {
+	healthyReplicaPA := func(id *clustermetadatapb.ID, signal clustermetadatapb.CohortEligibilitySignal) *snapshot.PoolerHealthState {
 		var av *clustermetadatapb.AvailabilityStatus
 		if signal != clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_UNKNOWN {
 			av = &clustermetadatapb.AvailabilityStatus{
 				CohortEligibilityStatus: &clustermetadatapb.CohortEligibilityStatus{Signal: signal},
 			}
 		}
-		return &multiorchdatapb.PoolerHealthState{
+		return &snapshot.PoolerHealthState{
 			Multipooler:        &clustermetadatapb.Multipooler{Id: id, ShardKey: shardKey},
 			LastSeen:           timestamppb.Now(),
 			AvailabilityStatus: av,
@@ -70,8 +69,8 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 	// leaderRider builds a fresh, currently-serving leader: recent snapshot,
 	// postgres ready, names itself leader. intendedLeaderServing(sa) reads this rider, so
 	// subtests that want an unusable leader mutate sa.IntendedLeaderHealth() (see below).
-	leaderRider := func() *multiorchdatapb.PoolerHealthState {
-		return &multiorchdatapb.PoolerHealthState{
+	leaderRider := func() *snapshot.PoolerHealthState {
+		return &snapshot.PoolerHealthState{
 			Multipooler:     &clustermetadatapb.Multipooler{Id: primaryID, ShardKey: shardKey},
 			LastSeen:        timestamppb.Now(),
 			ConsensusStatus: primaryConsensusStatus(primaryID, 1),
@@ -79,9 +78,9 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 		}
 	}
 
-	healthyShard := func(standbys []*clustermetadatapb.ID, replicas ...*multiorchdatapb.PoolerHealthState) *snapshot.Shard {
+	healthyShard := func(standbys []*clustermetadatapb.ID, replicas ...*snapshot.PoolerHealthState) *snapshot.Shard {
 		leader := leaderRider()
-		analyses := append([]*multiorchdatapb.PoolerHealthState{leader}, replicas...)
+		analyses := append([]*snapshot.PoolerHealthState{leader}, replicas...)
 		return newTestShard(&snapshot.Shard{
 			ShardKey:           shardKey,
 			Now:                time.Now(),
@@ -106,10 +105,10 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 		policy *clustermetadatapb.DurabilityPolicy,
 		cohortIDs []*clustermetadatapb.ID,
 		tombstones []*clustermetadatapb.ID,
-		analyses ...*multiorchdatapb.PoolerHealthState,
+		analyses ...*snapshot.PoolerHealthState,
 	) *snapshot.Shard {
 		leader := leaderRider()
-		full := append([]*multiorchdatapb.PoolerHealthState{leader}, analyses...)
+		full := append([]*snapshot.PoolerHealthState{leader}, analyses...)
 		tombSet := make(map[topoclient.ComponentID]struct{}, len(tombstones))
 		for _, id := range tombstones {
 			tombSet[topoclient.ComponentIDString(id)] = struct{}{}
@@ -159,7 +158,7 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 			ShardKey:           shardKey,
 			Now:                time.Now(),
 			AvailabilityPolicy: DefaultAvailabilityPolicy(),
-			Poolers: []*multiorchdatapb.PoolerHealthState{
+			Poolers: []*snapshot.PoolerHealthState{
 				leader,
 				healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_UNKNOWN),
 			},

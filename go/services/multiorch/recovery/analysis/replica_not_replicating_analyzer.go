@@ -19,7 +19,6 @@ import (
 	"fmt"
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
 )
@@ -42,7 +41,7 @@ func (a *ReplicaNotReplicatingAnalyzer) Analyze(sa *snapshot.Shard) ([]types.Pro
 	return analyzeAllPoolers(sa, a.analyzePooler)
 }
 
-func (a *ReplicaNotReplicatingAnalyzer) analyzePooler(sa *snapshot.Shard, pa *multiorchdatapb.PoolerHealthState) (*types.Problem, error) {
+func (a *ReplicaNotReplicatingAnalyzer) analyzePooler(sa *snapshot.Shard, pa *snapshot.PoolerHealthState) (*types.Problem, error) {
 	if a.factory == nil {
 		return nil, errors.New("recovery action factory not initialized")
 	}
@@ -109,7 +108,7 @@ func (a *ReplicaNotReplicatingAnalyzer) analyzePooler(sa *snapshot.Shard, pa *mu
 }
 
 // needsReplicationFix returns true if replication is not configured or stopped.
-func (a *ReplicaNotReplicatingAnalyzer) needsReplicationFix(pa *multiorchdatapb.PoolerHealthState) bool {
+func (a *ReplicaNotReplicatingAnalyzer) needsReplicationFix(pa *snapshot.PoolerHealthState) bool {
 	// No primary_conninfo configured
 	if primaryConnInfoHost(pa) == "" {
 		return true

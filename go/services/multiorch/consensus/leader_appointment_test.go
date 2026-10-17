@@ -30,13 +30,13 @@ import (
 	"github.com/multigres/multigres/go/common/topoclient/memorytopo"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
+	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 )
 
 // createMockNode creates a mock pooler for testing using FakeClient.
 // rule is the current shard rule shared by all nodes in the cluster (nil if no leader exists).
-func createMockNode(fakeClient *rpcclient.FakeClient, name string, term int64, walPosition string, healthy bool, rule *clustermetadatapb.ShardRule) *multiorchdatapb.PoolerHealthState {
+func createMockNode(fakeClient *rpcclient.FakeClient, name string, term int64, walPosition string, healthy bool, rule *clustermetadatapb.ShardRule) *snapshot.PoolerHealthState {
 	poolerID := &clustermetadatapb.ID{
 		Component: clustermetadatapb.ID_MULTIPOOLER,
 		Cell:      "zone1",
@@ -73,7 +73,7 @@ func createMockNode(fakeClient *rpcclient.FakeClient, name string, term int64, w
 		}
 	}
 
-	healthState := &multiorchdatapb.PoolerHealthState{
+	healthState := &snapshot.PoolerHealthState{
 		Multipooler:     pooler,
 		ConsensusStatus: &clustermetadatapb.ConsensusStatus{TermRevocation: consensusTerm},
 		Status: &multipoolermanagerdatapb.Status{
@@ -121,7 +121,7 @@ func TestAppointLeader(t *testing.T) {
 
 	// mp1 has the highest LSN, so failover should pick it as leader.
 	walPositions := []string{"0/3000000", "0/2000000", "0/1000000"}
-	cohort := make([]*multiorchdatapb.PoolerHealthState, 0, len(cohortIDs))
+	cohort := make([]*snapshot.PoolerHealthState, 0, len(cohortIDs))
 	for i, id := range cohortIDs {
 		mp := createMockNode(fakeClient, id.Name, 5, walPositions[i], true, outgoingRule)
 		// Pre-vote runs over cached cohort statuses (not Recruit responses), so
@@ -232,7 +232,7 @@ func TestAppointLeader_PropagatesUndecidedMostAdvancedPosition(t *testing.T) {
 	}
 
 	shardKey := &clustermetadatapb.ShardKey{Database: "testdb", TableGroup: "default", Shard: "shard0"}
-	require.NoError(t, c.AppointLeader(ctx, shardKey, []*multiorchdatapb.PoolerHealthState{mp}, "test_failover"))
+	require.NoError(t, c.AppointLeader(ctx, shardKey, []*snapshot.PoolerHealthState{mp}, "test_failover"))
 
 	leaderKey := topoclient.ComponentIDString(mpID)
 	propReq, ok := fakeClient.PromoteRequests[leaderKey]
@@ -287,7 +287,7 @@ func TestAppointInitialLeader(t *testing.T) {
 		DurabilityPolicy: topoclient.AtLeastN(3),
 	}
 	walPositions := []string{"0/2000000", "0/1500000", "0/1000000"}
-	cohort := make([]*multiorchdatapb.PoolerHealthState, 0, len(cohortIDs))
+	cohort := make([]*snapshot.PoolerHealthState, 0, len(cohortIDs))
 	for i, id := range cohortIDs {
 		mp := createMockNode(fakeClient, id.Name, 0, walPositions[i], true, sentinelRule)
 		mp.Status.IsInitialized = true
@@ -401,7 +401,7 @@ func TestAppointLeader_TiebreaksByResignation(t *testing.T) {
 		},
 	}
 
-	for i, mp := range []*multiorchdatapb.PoolerHealthState{resigned, standby} {
+	for i, mp := range []*snapshot.PoolerHealthState{resigned, standby} {
 		id := cohortIDs[i]
 		mp.ConsensusStatus.Id = id
 		mp.ConsensusStatus.CurrentPosition = &clustermetadatapb.PoolerPosition{
@@ -420,7 +420,7 @@ func TestAppointLeader_TiebreaksByResignation(t *testing.T) {
 		require.NoError(t, ts.CreateMultipooler(ctx, mp.Multipooler))
 	}
 
-	cohort := []*multiorchdatapb.PoolerHealthState{resigned, standby}
+	cohort := []*snapshot.PoolerHealthState{resigned, standby}
 	shardKey := &clustermetadatapb.ShardKey{Database: "postgres", TableGroup: "default", Shard: "0-inf"}
 
 	require.NoError(t, c.AppointLeader(ctx, shardKey, cohort, "test_resignation_tiebreak"))
@@ -490,7 +490,7 @@ func TestAppointLeader_IneligibleMemberExcludedFromOutgoingRule(t *testing.T) {
 	require.NoError(t, ts.CreateMultipooler(ctx, departing.Multipooler))
 
 	walPositions := []string{"0/2000000", "0/3000000"}
-	cohort := []*multiorchdatapb.PoolerHealthState{departing}
+	cohort := []*snapshot.PoolerHealthState{departing}
 	for i, id := range cohortIDs[1:] {
 		mp := createMockNode(fakeClient, id.Name, 4, walPositions[i], true, lowerRule)
 		mp.ConsensusStatus.Id = id
@@ -572,7 +572,7 @@ func TestAppointLeader_TiebreaksBySlotReadiness(t *testing.T) {
 	slotEmpty.Status.FailoverSlotsReady = 0
 	slotReady.Status.FailoverSlotsReady = 2
 
-	for i, mp := range []*multiorchdatapb.PoolerHealthState{slotEmpty, slotReady} {
+	for i, mp := range []*snapshot.PoolerHealthState{slotEmpty, slotReady} {
 		id := cohortIDs[i]
 		mp.ConsensusStatus.Id = id
 		mp.ConsensusStatus.CurrentPosition = &clustermetadatapb.PoolerPosition{
@@ -591,7 +591,7 @@ func TestAppointLeader_TiebreaksBySlotReadiness(t *testing.T) {
 		require.NoError(t, ts.CreateMultipooler(ctx, mp.Multipooler))
 	}
 
-	cohort := []*multiorchdatapb.PoolerHealthState{slotEmpty, slotReady}
+	cohort := []*snapshot.PoolerHealthState{slotEmpty, slotReady}
 	shardKey := &clustermetadatapb.ShardKey{Database: "postgres", TableGroup: "default", Shard: "0-inf"}
 
 	require.NoError(t, c.AppointLeader(ctx, shardKey, cohort, "test_slot_readiness_tiebreak"))
@@ -618,10 +618,10 @@ func TestPoolerHealthStateLess(t *testing.T) {
 
 	// node builds a ConsensusStatus and its matching PoolerHealthState carrying
 	// the given leadership signal and failover-slot-ready count.
-	node := func(name string, signal clustermetadatapb.LeadershipSignal, slotsReady int32) (*clustermetadatapb.ConsensusStatus, *multiorchdatapb.PoolerHealthState) {
+	node := func(name string, signal clustermetadatapb.LeadershipSignal, slotsReady int32) (*clustermetadatapb.ConsensusStatus, *snapshot.PoolerHealthState) {
 		id := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: name}
 		cs := &clustermetadatapb.ConsensusStatus{Id: id}
-		h := &multiorchdatapb.PoolerHealthState{
+		h := &snapshot.PoolerHealthState{
 			AvailabilityStatus: &clustermetadatapb.AvailabilityStatus{
 				LeadershipStatus: &clustermetadatapb.LeadershipStatus{Signal: signal},
 			},
@@ -629,8 +629,8 @@ func TestPoolerHealthStateLess(t *testing.T) {
 		}
 		return cs, h
 	}
-	lessFor := func(aCS, bCS *clustermetadatapb.ConsensusStatus, aH, bH *multiorchdatapb.PoolerHealthState) func(a, b *clustermetadatapb.ConsensusStatus) bool {
-		return poolerHealthStateLess(map[string]*multiorchdatapb.PoolerHealthState{
+	lessFor := func(aCS, bCS *clustermetadatapb.ConsensusStatus, aH, bH *snapshot.PoolerHealthState) func(a, b *clustermetadatapb.ConsensusStatus) bool {
+		return poolerHealthStateLess(map[string]*snapshot.PoolerHealthState{
 			topoclient.ClusterIDString(aCS.GetId()): aH,
 			topoclient.ClusterIDString(bCS.GetId()): bH,
 		})
@@ -710,7 +710,7 @@ func TestAppointLeader_TiebreaksByPostgresReadiness(t *testing.T) {
 		"starting": "0/2000000",
 	}
 
-	cohort := make([]*multiorchdatapb.PoolerHealthState, 0, len(cohortIDs))
+	cohort := make([]*snapshot.PoolerHealthState, 0, len(cohortIDs))
 	for _, id := range cohortIDs {
 		lsn := walPositions[id.Name]
 		mp := createMockNode(fakeClient, id.Name, 5, lsn, true, outgoingRule)

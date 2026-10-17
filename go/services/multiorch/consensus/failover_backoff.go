@@ -20,14 +20,14 @@ import (
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/ha"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
+	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
 )
 
 // filterCohortIneligible splits a cohort into the members that may
 // participate in the recruit round and the names of those advertising
 // INELIGIBLE (see runFailover).
-func filterCohortIneligible(cohort []*multiorchdatapb.PoolerHealthState) (eligible []*multiorchdatapb.PoolerHealthState, ineligible []string) {
+func filterCohortIneligible(cohort []*snapshot.PoolerHealthState) (eligible []*snapshot.PoolerHealthState, ineligible []string) {
 	for _, p := range cohort {
 		if types.PoolerIsCohortIneligible(p.GetAvailabilityStatus()) {
 			ineligible = append(ineligible, p.GetMultipooler().GetId().GetName())
@@ -40,7 +40,7 @@ func filterCohortIneligible(cohort []*multiorchdatapb.PoolerHealthState) (eligib
 
 // consensusStatusesOf extracts each pooler's ConsensusStatus, skipping any
 // that haven't reported one.
-func consensusStatusesOf(poolers []*multiorchdatapb.PoolerHealthState) []*clustermetadatapb.ConsensusStatus {
+func consensusStatusesOf(poolers []*snapshot.PoolerHealthState) []*clustermetadatapb.ConsensusStatus {
 	var statuses []*clustermetadatapb.ConsensusStatus
 	for _, p := range poolers {
 		if cs := p.GetConsensusStatus(); cs != nil {
@@ -54,7 +54,7 @@ func consensusStatusesOf(poolers []*multiorchdatapb.PoolerHealthState) []*cluste
 // member that isn't INELIGIBLE — the same set runFailover builds
 // NewTermRevocation's input from, so NextFailoverAttempt's decision
 // computation agrees with it on which members count.
-func eligibleConsensusStatuses(cohort []*multiorchdatapb.PoolerHealthState) []*clustermetadatapb.ConsensusStatus {
+func eligibleConsensusStatuses(cohort []*snapshot.PoolerHealthState) []*clustermetadatapb.ConsensusStatus {
 	eligible, _ := filterCohortIneligible(cohort)
 	return consensusStatusesOf(eligible)
 }
@@ -65,7 +65,7 @@ func eligibleConsensusStatuses(cohort []*multiorchdatapb.PoolerHealthState) []*c
 // the observed one demonstrably targets a different, already-resolved
 // problem (see backoffRelevantRevocations); otherwise defers to the
 // revocation's deterministic collective backoff.
-func (c *Coordinator) NextFailoverAttempt(cohort []*multiorchdatapb.PoolerHealthState, backoff ha.BackoffSchedule) (readyAt time.Time, ready bool) {
+func (c *Coordinator) NextFailoverAttempt(cohort []*snapshot.PoolerHealthState, backoff ha.BackoffSchedule) (readyAt time.Time, ready bool) {
 	statuses := eligibleConsensusStatuses(cohort)
 	decision := commonconsensus.HighestDecidedRule(statuses)
 	rev := commonconsensus.HighestRevokedBelowTermRevocation(backoffRelevantRevocations(statuses, decision))

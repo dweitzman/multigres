@@ -30,8 +30,8 @@ import (
 	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/common/topoclient/poolerwatch"
 	"github.com/multigres/multigres/go/pb/clustermetadata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
+	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 	"github.com/multigres/multigres/go/services/multiorch/store"
 )
 
@@ -82,7 +82,7 @@ func newTestHealthStreamFactory(ctx context.Context, fakeClient *rpcclient.FakeC
 
 // seedPooler adds a minimal pooler entry to the store and returns its key.
 func seedPooler(t *testing.T, poolerStore *store.PoolerCache, poolerID *clustermetadata.ID, poolerType clustermetadata.PoolerType) topoclient.ComponentID {
-	return store.SeedCache(t, poolerStore, store.NewPooler(&multiorchdatapb.PoolerHealthState{
+	return store.SeedCache(t, poolerStore, store.NewPooler(&snapshot.PoolerHealthState{
 		Multipooler: &clustermetadata.Multipooler{
 			Id: poolerID,
 			ShardKey: &clustermetadata.ShardKey{
@@ -288,7 +288,7 @@ func TestHealthStream_Disconnect(t *testing.T) {
 	poolerID := &clustermetadata.ID{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "failed-pooler"}
 	lastSeenTime := time.Now().Add(-1 * time.Hour)
 	key := topoclient.ComponentIDString(poolerID)
-	store.SeedCache(t, poolerStore, store.NewPooler(&multiorchdatapb.PoolerHealthState{
+	store.SeedCache(t, poolerStore, store.NewPooler(&snapshot.PoolerHealthState{
 		Multipooler: &clustermetadata.Multipooler{
 			Id: poolerID, ShardKey: &clustermetadata.ShardKey{Database: "mydb", TableGroup: "tg1", Shard: "0"},
 			Type: clustermetadata.PoolerType_PRIMARY, Hostname: "host1",
@@ -354,7 +354,7 @@ func TestHealthStream_ConcurrentWatcherUpdate(t *testing.T) {
 	wg.Go(func() {
 		time.Sleep(5 * time.Millisecond)
 		poolerStore.DoUpdate(key, func(existing *store.Pooler) *store.Pooler {
-			existing.Mutate(func(h *multiorchdatapb.PoolerHealthState) {
+			existing.Mutate(func(h *snapshot.PoolerHealthState) {
 				h.Multipooler.Type = clustermetadata.PoolerType_PRIMARY
 			})
 			return existing
@@ -472,7 +472,7 @@ func TestHealthStream_LastPostgresReadyTime(t *testing.T) {
 		poolerID := &clustermetadata.ID{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "pooler2"}
 		key := topoclient.ComponentIDString(poolerID)
 		lastReadyTime := timestamppb.New(time.Now().Add(-10 * time.Second))
-		store.SeedCache(t, poolerStore, store.NewPooler(&multiorchdatapb.PoolerHealthState{
+		store.SeedCache(t, poolerStore, store.NewPooler(&snapshot.PoolerHealthState{
 			Multipooler: &clustermetadata.Multipooler{
 				Id: poolerID, ShardKey: &clustermetadata.ShardKey{Database: "mydb", TableGroup: "tg1", Shard: "0"},
 				Type: clustermetadata.PoolerType_PRIMARY, Hostname: "host2",

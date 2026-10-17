@@ -21,7 +21,6 @@ import (
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
 )
@@ -244,7 +243,7 @@ func (a *CohortMismatchAnalyzer) Analyze(sa *snapshot.Shard) ([]types.Problem, e
 // The IsLeader gate is also conceptually unnecessary — there's no correctness
 // problem an acting primary adding itself to the cohort. This may be useful
 // in some propagation scenarios.
-func (a *CohortMismatchAnalyzer) isAdditionCandidate(sa *snapshot.Shard, pa *multiorchdatapb.PoolerHealthState) bool {
+func (a *CohortMismatchAnalyzer) isAdditionCandidate(sa *snapshot.Shard, pa *snapshot.PoolerHealthState) bool {
 	if commonconsensus.SelfConsensusRole(pa.GetConsensusStatus()) == commonconsensus.ConsensusRoleLeader {
 		return false
 	}

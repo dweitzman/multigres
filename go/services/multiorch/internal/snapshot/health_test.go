@@ -23,7 +23,6 @@ import (
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
 
@@ -38,8 +37,8 @@ func TestLeaderWritesProgressing(t *testing.T) {
 		Proposal: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 6, LeaderSubterm: 0}},
 	}
 
-	leader := func(lastSeen time.Time, status multipoolermanagerdatapb.PostgresStatus) *multiorchdatapb.PoolerHealthState {
-		return &multiorchdatapb.PoolerHealthState{
+	leader := func(lastSeen time.Time, status multipoolermanagerdatapb.PostgresStatus) *PoolerHealthState {
+		return &PoolerHealthState{
 			Multipooler: &clustermetadatapb.Multipooler{},
 			LastSeen:    timestamppb.New(lastSeen),
 			Status:      &multipoolermanagerdatapb.Status{PostgresStatus: status},
@@ -61,7 +60,7 @@ func TestLeaderWritesProgressing(t *testing.T) {
 	})
 
 	t.Run("never observed is not progressing", func(t *testing.T) {
-		l := &multiorchdatapb.PoolerHealthState{
+		l := &PoolerHealthState{
 			Multipooler: &clustermetadatapb.Multipooler{},
 			Status:      &multipoolermanagerdatapb.Status{PostgresStatus: multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY},
 		}

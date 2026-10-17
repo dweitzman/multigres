@@ -29,8 +29,8 @@ import (
 	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/common/topoclient/memorytopo"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
+	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
 	"github.com/multigres/multigres/go/services/multiorch/store"
 )
@@ -61,7 +61,7 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 		t.Helper()
 		ts, _ := memorytopo.NewServerAndFactory(ctx, "cell1")
 		ps := store.NewTestCache(t)
-		store.SeedCache(t, ps, store.NewPooler(&multiorchdatapb.PoolerHealthState{
+		store.SeedCache(t, ps, store.NewPooler(&snapshot.PoolerHealthState{
 			Multipooler: &clustermetadatapb.Multipooler{
 				Id:       primaryID,
 				ShardKey: shardKey,
@@ -77,7 +77,7 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 				CurrentPosition: &clustermetadatapb.PoolerPosition{Position: published},
 			},
 		}, nil))
-		store.SeedCache(t, ps, store.NewPooler(&multiorchdatapb.PoolerHealthState{
+		store.SeedCache(t, ps, store.NewPooler(&snapshot.PoolerHealthState{
 			Multipooler: &clustermetadatapb.Multipooler{
 				Id:       replicaID,
 				ShardKey: shardKey,
@@ -176,7 +176,7 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 		defer ts.Close()
 		ps := store.NewTestCache(t)
 		// Only the leader is known; the target pooler is absent from the snapshot.
-		store.SeedCache(t, ps, store.NewPooler(&multiorchdatapb.PoolerHealthState{
+		store.SeedCache(t, ps, store.NewPooler(&snapshot.PoolerHealthState{
 			Multipooler: &clustermetadatapb.Multipooler{Id: primaryID, ShardKey: shardKey},
 			ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 				Id:              primaryID,
@@ -259,7 +259,7 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 		ts, _ := memorytopo.NewServerAndFactory(ctx, "cell1")
 		defer ts.Close()
 		ps := store.NewTestCache(t)
-		store.SeedCache(t, ps, store.NewPooler(&multiorchdatapb.PoolerHealthState{
+		store.SeedCache(t, ps, store.NewPooler(&snapshot.PoolerHealthState{
 			Multipooler: &clustermetadatapb.Multipooler{
 				Id:       primaryID,
 				ShardKey: shardKey,
@@ -271,7 +271,7 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 			Status:          &multipoolermanagerdatapb.Status{PostgresStatus: multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY},
 			ConsensusStatus: &clustermetadatapb.ConsensusStatus{Id: primaryID, TermRevocation: &clustermetadatapb.TermRevocation{RevokedBelowTerm: 3}, CurrentPosition: &clustermetadatapb.PoolerPosition{Position: rule}},
 		}, nil))
-		store.SeedCache(t, ps, store.NewPooler(&multiorchdatapb.PoolerHealthState{
+		store.SeedCache(t, ps, store.NewPooler(&snapshot.PoolerHealthState{
 			Multipooler: &clustermetadatapb.Multipooler{
 				Id:       replicaID,
 				ShardKey: shardKey,

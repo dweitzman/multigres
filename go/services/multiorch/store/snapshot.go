@@ -25,7 +25,6 @@ import (
 	commontypes "github.com/multigres/multigres/go/common/types"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 )
 
@@ -45,7 +44,7 @@ type SnapshotOptions struct {
 func SnapshotShards(cache *PoolerCache, opts SnapshotOptions) []*snapshot.Shard {
 	type shardEntry struct {
 		key     *clustermetadatapb.ShardKey
-		poolers []*multiorchdatapb.PoolerHealthState
+		poolers []*snapshot.PoolerHealthState
 	}
 	byKey := make(map[commontypes.ShardKeyString]*shardEntry)
 	for _, entry := range cache.All() {
@@ -72,7 +71,7 @@ func SnapshotShards(cache *PoolerCache, opts SnapshotOptions) []*snapshot.Shard 
 // SnapshotShard freezes one shard. It returns NOT_FOUND if the cache holds no
 // poolers for it.
 func SnapshotShard(cache *PoolerCache, shardKey *clustermetadatapb.ShardKey, opts SnapshotOptions) (*snapshot.Shard, error) {
-	var poolers []*multiorchdatapb.PoolerHealthState
+	var poolers []*snapshot.PoolerHealthState
 	for _, entry := range cache.GetByShard(shardKey.GetDatabase(), shardKey.GetTableGroup(), shardKey.GetShard()) {
 		if health := healthOf(entry.Rider); health != nil {
 			poolers = append(poolers, health)
@@ -86,7 +85,7 @@ func SnapshotShard(cache *PoolerCache, shardKey *clustermetadatapb.ShardKey, opt
 
 // healthOf returns the rider's current health, or nil if the rider has no
 // identified pooler yet.
-func healthOf(p *Pooler) *multiorchdatapb.PoolerHealthState {
+func healthOf(p *Pooler) *snapshot.PoolerHealthState {
 	if p == nil {
 		return nil
 	}
@@ -108,13 +107,13 @@ func tombstoneIDs(cache *PoolerCache) map[topoclient.ComponentID]struct{} {
 
 func newShard(
 	shardKey *clustermetadatapb.ShardKey,
-	poolers []*multiorchdatapb.PoolerHealthState,
+	poolers []*snapshot.PoolerHealthState,
 	tombstones map[topoclient.ComponentID]struct{},
 	opts SnapshotOptions,
 ) *snapshot.Shard {
 	// Stable order, so ties between equally-ranked rules resolve the same way
 	// every time.
-	slices.SortFunc(poolers, func(a, b *multiorchdatapb.PoolerHealthState) int {
+	slices.SortFunc(poolers, func(a, b *snapshot.PoolerHealthState) int {
 		return strings.Compare(
 			string(topoclient.ComponentIDString(a.GetMultipooler().GetId())),
 			string(topoclient.ComponentIDString(b.GetMultipooler().GetId())),

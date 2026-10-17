@@ -24,12 +24,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/multigres/multigres/go/common/rpcclient"
+	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
 	"github.com/multigres/multigres/go/services/multiorch/store"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
 
@@ -56,7 +56,7 @@ func makeDemoteScenarioPoolers(t *testing.T, poolerStore *store.PoolerCache) (st
 		Name:      "correct-leader",
 	}
 
-	store.SeedCache(t, poolerStore, store.NewPooler(&multiorchdatapb.PoolerHealthState{
+	store.SeedCache(t, poolerStore, store.NewPooler(&snapshot.PoolerHealthState{
 		Multipooler: &clustermetadatapb.Multipooler{
 			Id:       staleLeaderID,
 			Hostname: "stale.example.com",
@@ -76,7 +76,7 @@ func makeDemoteScenarioPoolers(t *testing.T, poolerStore *store.PoolerCache) (st
 		}},
 		Lsn: "0/1000",
 	}
-	store.SeedCache(t, poolerStore, store.NewPooler(&multiorchdatapb.PoolerHealthState{
+	store.SeedCache(t, poolerStore, store.NewPooler(&snapshot.PoolerHealthState{
 		Multipooler: &clustermetadatapb.Multipooler{
 			Id:       correctLeaderID,
 			Hostname: "correct.example.com",
@@ -166,7 +166,7 @@ func TestDemoteStaleLeaderAction_ExecuteNoCorrectLeader(t *testing.T) {
 		Shard:      "0",
 	}
 	// Only the stale leader is in the store — no current leader exists.
-	store.SeedCache(t, poolerStore, store.NewPooler(&multiorchdatapb.PoolerHealthState{
+	store.SeedCache(t, poolerStore, store.NewPooler(&snapshot.PoolerHealthState{
 		Multipooler: &clustermetadatapb.Multipooler{
 			Id:       staleLeaderID,
 			ShardKey: shardKey,
@@ -204,19 +204,19 @@ func TestDemoteStaleLeaderAction_ExecuteRewindsTowardRuleNamedLeader(t *testing.
 	ps := store.NewTestCache(t)
 
 	// Stale leader: still self-claims term 5 and is the demote target.
-	store.SeedCache(t, ps, store.NewPooler(&multiorchdatapb.PoolerHealthState{
+	store.SeedCache(t, ps, store.NewPooler(&snapshot.PoolerHealthState{
 		Multipooler:     &clustermetadatapb.Multipooler{Id: staleID, ShardKey: shardKey, Type: clustermetadatapb.PoolerType_PRIMARY},
 		ConsensusStatus: selfLeaderRule(staleID, 5),
 	}, nil))
 	// New leader: has not published its own snapshot yet; only its address is known.
-	store.SeedCache(t, ps, store.NewPooler(&multiorchdatapb.PoolerHealthState{
+	store.SeedCache(t, ps, store.NewPooler(&snapshot.PoolerHealthState{
 		Multipooler: &clustermetadatapb.Multipooler{
 			Id: newID, ShardKey: shardKey, Type: clustermetadatapb.PoolerType_REPLICA,
 			Hostname: "new.example.com", PortMap: map[string]int32{"postgres": 5433},
 		},
 	}, nil))
 	// Replica replicating from the new leader at the higher term 6.
-	store.SeedCache(t, ps, store.NewPooler(&multiorchdatapb.PoolerHealthState{
+	store.SeedCache(t, ps, store.NewPooler(&snapshot.PoolerHealthState{
 		Multipooler:     &clustermetadatapb.Multipooler{Id: replicaID, ShardKey: shardKey, Type: clustermetadatapb.PoolerType_REPLICA},
 		ConsensusStatus: replicaFollowingRule(replicaID, newID, 6),
 	}, nil))
@@ -250,7 +250,7 @@ func TestDemoteStaleLeaderAction_ExecuteNoOpWhenNodeIsCurrentLeader(t *testing.T
 	fakeClient := rpcclient.NewFakeClient()
 	ps := store.NewTestCache(t)
 	// The node multiorch flagged as stale is actually the highest known leader.
-	store.SeedCache(t, ps, store.NewPooler(&multiorchdatapb.PoolerHealthState{
+	store.SeedCache(t, ps, store.NewPooler(&snapshot.PoolerHealthState{
 		Multipooler:     &clustermetadatapb.Multipooler{Id: nodeID, ShardKey: shardKey, Type: clustermetadatapb.PoolerType_PRIMARY},
 		ConsensusStatus: selfLeaderRule(nodeID, 7),
 	}, nil))

@@ -34,7 +34,7 @@ import (
 	"github.com/multigres/multigres/go/common/topoclient/memorytopo"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
+	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 )
 
 // makePoolerState creates a PoolerHealthState with the given cell/name.
@@ -42,13 +42,13 @@ import (
 // so the state is suitable as a cohort member: NewTermRevocation requires
 // at least one cohort member to report a recorded rule. Tests that need
 // richer status state overwrite the field after construction.
-func makePoolerState(cell, name string) *multiorchdatapb.PoolerHealthState {
+func makePoolerState(cell, name string) *snapshot.PoolerHealthState {
 	id := &clustermetadatapb.ID{
 		Component: clustermetadatapb.ID_MULTIPOOLER,
 		Cell:      cell,
 		Name:      name,
 	}
-	return &multiorchdatapb.PoolerHealthState{
+	return &snapshot.PoolerHealthState{
 		Multipooler: &clustermetadatapb.Multipooler{
 			Id:       id,
 			Hostname: "localhost",
@@ -73,7 +73,7 @@ var testInitiatedAt = timestamppb.New(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC
 // the given cohort. Tests that don't care about specific revocation contents
 // (term, outgoing_rule, etc.) use this to satisfy Run's "revocation is required"
 // contract; tests that need richer state construct their own.
-func newTestRevocation(t *testing.T, coord *Coordinator, cohort []*multiorchdatapb.PoolerHealthState) *clustermetadatapb.TermRevocation {
+func newTestRevocation(t *testing.T, coord *Coordinator, cohort []*snapshot.PoolerHealthState) *clustermetadatapb.TermRevocation {
 	t.Helper()
 	var statuses []*clustermetadatapb.ConsensusStatus
 	for _, p := range cohort {
@@ -89,7 +89,7 @@ func newTestRevocation(t *testing.T, coord *Coordinator, cohort []*multiorchdata
 // setRecruitOK configures the fake client to return a successful Recruit response
 // with an identity ConsensusStatus for the given pooler. The fake client
 // automatically stamps the request's TermRevocation onto the returned status.
-func setRecruitOK(fc *rpcclient.FakeClient, p *multiorchdatapb.PoolerHealthState) {
+func setRecruitOK(fc *rpcclient.FakeClient, p *snapshot.PoolerHealthState) {
 	key := topoclient.ComponentIDString(p.Multipooler.Id)
 	fc.RecruitResponses[key] = &consensusdatapb.RecruitResponse{
 		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
@@ -281,7 +281,7 @@ func TestRun_Success(t *testing.T) {
 
 	mp1 := makePoolerState("zone1", "mp1")
 	mp2 := makePoolerState("zone1", "mp2")
-	cohort := []*multiorchdatapb.PoolerHealthState{mp1, mp2}
+	cohort := []*snapshot.PoolerHealthState{mp1, mp2}
 
 	setRecruitOK(fc, mp1)
 	setRecruitOK(fc, mp2)
@@ -326,7 +326,7 @@ func TestRun_EarlyExit(t *testing.T) {
 
 	mp1 := makePoolerState("zone1", "mp1")
 	mp2 := makePoolerState("zone1", "mp2")
-	cohort := []*multiorchdatapb.PoolerHealthState{mp1, mp2}
+	cohort := []*snapshot.PoolerHealthState{mp1, mp2}
 
 	setRecruitOK(fc, mp1)
 	setRecruitOK(fc, mp2)
@@ -366,7 +366,7 @@ func TestRun_InsufficientRecruitment(t *testing.T) {
 
 	mp1 := makePoolerState("zone1", "mp1")
 	mp2 := makePoolerState("zone1", "mp2")
-	cohort := []*multiorchdatapb.PoolerHealthState{mp1, mp2}
+	cohort := []*snapshot.PoolerHealthState{mp1, mp2}
 
 	// No RecruitResponses set → fake client returns empty response (nil ConsensusStatus).
 
@@ -391,7 +391,7 @@ func TestRun_BackoffOnRecentAcceptance(t *testing.T) {
 		RevokedBelowTerm:       5,
 		CoordinatorInitiatedAt: timestamppb.New(time.Now().Add(-500 * time.Millisecond)),
 	}
-	cohort := []*multiorchdatapb.PoolerHealthState{mp1}
+	cohort := []*snapshot.PoolerHealthState{mp1}
 
 	rc := c.newRuleChange("test", fixedProposal(1, &consensusdatapb.CoordinatorProposal{}), nopCheckProposalPossible)
 	err := rc.Run(ctx, cohort, newTestRevocation(t, c, cohort))
@@ -408,7 +408,7 @@ func TestCheckRecentAcceptanceIgnoresInstalledTerm(t *testing.T) {
 	}
 	mp.ConsensusStatus.CurrentPosition.Position.Decision.RuleNumber.CoordinatorTerm = 5
 
-	require.NoError(t, checkRecentAcceptance(t.Context(), slog.Default(), []*multiorchdatapb.PoolerHealthState{mp}))
+	require.NoError(t, checkRecentAcceptance(t.Context(), slog.Default(), []*snapshot.PoolerHealthState{mp}))
 }
 
 func TestRun_PreValidateFails(t *testing.T) {
@@ -423,7 +423,7 @@ func TestRun_PreValidateFails(t *testing.T) {
 		RevokedBelowTerm:       5,
 		CoordinatorInitiatedAt: timestamppb.Now(),
 	}
-	cohort := []*multiorchdatapb.PoolerHealthState{mp1}
+	cohort := []*snapshot.PoolerHealthState{mp1}
 
 	setRecruitOK(fc, mp1)
 
@@ -450,7 +450,7 @@ func TestRun_LeaderPromoteFails(t *testing.T) {
 
 	mp1 := makePoolerState("zone1", "mp1")
 	mp2 := makePoolerState("zone1", "mp2")
-	cohort := []*multiorchdatapb.PoolerHealthState{mp1, mp2}
+	cohort := []*snapshot.PoolerHealthState{mp1, mp2}
 
 	setRecruitOK(fc, mp1)
 	setRecruitOK(fc, mp2)
@@ -513,7 +513,7 @@ func TestRun_SlowRecruitDoesNotBlockAfterQuorum(t *testing.T) {
 	mp1 := makePoolerState("zone1", "mp1")
 	mp2 := makePoolerState("zone1", "mp2")
 
-	cohort := []*multiorchdatapb.PoolerHealthState{mp1, mp2}
+	cohort := []*snapshot.PoolerHealthState{mp1, mp2}
 	setRecruitOK(fc, mp1)
 
 	mp2Key := topoclient.ComponentIDString(mp2.Multipooler.Id)
@@ -575,7 +575,7 @@ func TestRun_StragglersGetSetTermPrimary(t *testing.T) {
 
 	mp1 := makePoolerState("zone1", "mp1") // leader, responds during Phase 1
 	mp2 := makePoolerState("zone1", "mp2") // straggler, responds during Phase 2
-	cohort := []*multiorchdatapb.PoolerHealthState{mp1, mp2}
+	cohort := []*snapshot.PoolerHealthState{mp1, mp2}
 	setRecruitOK(fc, mp1)
 	setRecruitOK(fc, mp2)
 
@@ -638,7 +638,7 @@ func TestRun_NonLeaderPromoteFails(t *testing.T) {
 
 	mp1 := makePoolerState("zone1", "mp1")
 	mp2 := makePoolerState("zone1", "mp2")
-	cohort := []*multiorchdatapb.PoolerHealthState{mp1, mp2}
+	cohort := []*snapshot.PoolerHealthState{mp1, mp2}
 
 	setRecruitOK(fc, mp1)
 	setRecruitOK(fc, mp2)

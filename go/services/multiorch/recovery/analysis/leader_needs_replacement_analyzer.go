@@ -25,7 +25,6 @@ import (
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	"github.com/multigres/multigres/go/services/multiorch/consensus"
 	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
@@ -92,7 +91,7 @@ func (a *LeaderNeedsReplacementAnalyzer) RecoveryAction() types.RecoveryAction {
 // non-cohort observer, can be checked. A replica pointed at a different primary (or
 // none) indicates a deeper problem (misconfig/split-brain) and is neither streaming
 // from nor cut off from this leader.
-func replicaConfiguredForLeader(replica *multiorchdatapb.PoolerHealthState, primaryHost string, primaryPort int32) bool {
+func replicaConfiguredForLeader(replica *snapshot.PoolerHealthState, primaryHost string, primaryPort int32) bool {
 	connInfo := replica.GetStatus().GetReplicationStatus().GetPrimaryConnInfo()
 	return connInfo.GetHost() != "" && connInfo.GetHost() == primaryHost && connInfo.GetPort() == primaryPort
 }
@@ -105,7 +104,7 @@ func replicaConfiguredForLeader(replica *multiorchdatapb.PoolerHealthState, prim
 // receiver is in streaming state, and keepalives are fresh (within
 // wal_receiver_status_interval × multiplier, falling back to the default threshold,
 // and never older than wal_receiver_timeout).
-func followerStreamingFromLeader(sa *snapshot.Shard, replica *multiorchdatapb.PoolerHealthState, primaryHost string, primaryPort int32) bool {
+func followerStreamingFromLeader(sa *snapshot.Shard, replica *snapshot.PoolerHealthState, primaryHost string, primaryPort int32) bool {
 	if !replicaConfiguredForLeader(replica, primaryHost, primaryPort) {
 		return false
 	}
@@ -563,7 +562,7 @@ const (
 // RecruitBlockedUntil is deliberately not consulted: a blocked recruit is still
 // pointed at the leader and can report it unreachable — recruitability is a
 // feasibility concern (recruitableCohort), not detection.
-func (a *LeaderNeedsReplacementAnalyzer) classifyFollowerToLeader(sa *snapshot.Shard, pa *multiorchdatapb.PoolerHealthState, leaderID *clustermetadatapb.ID, primaryHost string, primaryPort int32) followerLeaderRelation {
+func (a *LeaderNeedsReplacementAnalyzer) classifyFollowerToLeader(sa *snapshot.Shard, pa *snapshot.PoolerHealthState, leaderID *clustermetadatapb.ID, primaryHost string, primaryPort int32) followerLeaderRelation {
 	if !observationFresh(pa, sa.Now, sa.AvailabilityPolicy.FollowerStreamFreshness) {
 		return relationUnaware
 	}
@@ -729,7 +728,7 @@ func cohortWithout(cohort []*clustermetadatapb.ID, exclude *clustermetadatapb.ID
 // cohortSatisfying returns the outgoing-cohort members (minus exclude, if
 // non-nil) whose rider passes pred. Shared by freshInitializedCohort and
 // recruitableCohort, which differ only in which question pred asks.
-func cohortSatisfying(sa *snapshot.Shard, cohort []*clustermetadatapb.ID, exclude *clustermetadatapb.ID, pred func(*multiorchdatapb.PoolerHealthState) bool) []*clustermetadatapb.ID {
+func cohortSatisfying(sa *snapshot.Shard, cohort []*clustermetadatapb.ID, exclude *clustermetadatapb.ID, pred func(*snapshot.PoolerHealthState) bool) []*clustermetadatapb.ID {
 	excludeKey := topoclient.ComponentIDString(exclude)
 	var satisfying []*clustermetadatapb.ID
 	for _, m := range cohort {
@@ -753,7 +752,7 @@ func cohortSatisfying(sa *snapshot.Shard, cohort []*clustermetadatapb.ID, exclud
 // (see freshAndInitialized's doc). Used only to judge "do we have any
 // trustworthy signal at all," not recruitment feasibility.
 func freshInitializedCohort(sa *snapshot.Shard, cohort []*clustermetadatapb.ID, exclude *clustermetadatapb.ID) []*clustermetadatapb.ID {
-	return cohortSatisfying(sa, cohort, exclude, func(pa *multiorchdatapb.PoolerHealthState) bool {
+	return cohortSatisfying(sa, cohort, exclude, func(pa *snapshot.PoolerHealthState) bool {
 		return freshAndInitialized(pa, sa.Now, sa.AvailabilityPolicy.ObservationFreshness)
 	})
 }
@@ -766,7 +765,7 @@ func freshInitializedCohort(sa *snapshot.Shard, cohort []*clustermetadatapb.ID, 
 // omitted — used to ask "could we recover if the leader were lost?" for the
 // ShardAtRisk check.
 func recruitableCohort(sa *snapshot.Shard, cohort []*clustermetadatapb.ID, exclude *clustermetadatapb.ID) []*clustermetadatapb.ID {
-	return cohortSatisfying(sa, cohort, exclude, func(pa *multiorchdatapb.PoolerHealthState) bool {
+	return cohortSatisfying(sa, cohort, exclude, func(pa *snapshot.PoolerHealthState) bool {
 		return recruitable(pa, sa.Now, sa.AvailabilityPolicy.ObservationFreshness)
 	})
 }

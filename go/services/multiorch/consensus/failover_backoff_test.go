@@ -21,13 +21,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
+	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 )
 
 // eligibilityNode builds a minimal PoolerHealthState carrying a name and cohort
 // eligibility signal. A nil AvailabilityStatus is expressed by passing setStatus=false.
-func eligibilityNode(name string, signal clustermetadatapb.CohortEligibilitySignal, setStatus bool) *multiorchdatapb.PoolerHealthState {
-	p := &multiorchdatapb.PoolerHealthState{
+func eligibilityNode(name string, signal clustermetadatapb.CohortEligibilitySignal, setStatus bool) *snapshot.PoolerHealthState {
+	p := &snapshot.PoolerHealthState{
 		Multipooler: &clustermetadatapb.Multipooler{
 			Id: &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: name},
 		},
@@ -46,13 +46,13 @@ func TestFilterCohortIneligible(t *testing.T) {
 
 	tests := []struct {
 		name           string
-		cohort         []*multiorchdatapb.PoolerHealthState
+		cohort         []*snapshot.PoolerHealthState
 		wantEligible   []string
 		wantIneligible []string
 	}{
 		{
 			name: "all eligible are kept, none reported ineligible",
-			cohort: []*multiorchdatapb.PoolerHealthState{
+			cohort: []*snapshot.PoolerHealthState{
 				eligibilityNode("mp1", eligible, true),
 				eligibilityNode("mp2", eligible, true),
 			},
@@ -61,7 +61,7 @@ func TestFilterCohortIneligible(t *testing.T) {
 		},
 		{
 			name: "an ineligible member is excluded and reported by name",
-			cohort: []*multiorchdatapb.PoolerHealthState{
+			cohort: []*snapshot.PoolerHealthState{
 				eligibilityNode("mp1", eligible, true),
 				eligibilityNode("mp2", ineligible, true),
 				eligibilityNode("mp3", eligible, true),
@@ -71,7 +71,7 @@ func TestFilterCohortIneligible(t *testing.T) {
 		},
 		{
 			name: "all ineligible leaves no eligible members",
-			cohort: []*multiorchdatapb.PoolerHealthState{
+			cohort: []*snapshot.PoolerHealthState{
 				eligibilityNode("mp1", ineligible, true),
 				eligibilityNode("mp2", ineligible, true),
 			},
@@ -80,7 +80,7 @@ func TestFilterCohortIneligible(t *testing.T) {
 		},
 		{
 			name: "a nil availability status is treated as eligible",
-			cohort: []*multiorchdatapb.PoolerHealthState{
+			cohort: []*snapshot.PoolerHealthState{
 				eligibilityNode("mp1", eligible, false),
 			},
 			wantEligible:   []string{"mp1"},
@@ -152,8 +152,8 @@ func TestBackoffRelevantRevocations(t *testing.T) {
 }
 
 func TestEligibleConsensusStatuses(t *testing.T) {
-	poolerHealth := func(name string, revokedBelow int64, ineligible bool) *multiorchdatapb.PoolerHealthState {
-		h := &multiorchdatapb.PoolerHealthState{
+	poolerHealth := func(name string, revokedBelow int64, ineligible bool) *snapshot.PoolerHealthState {
+		h := &snapshot.PoolerHealthState{
 			Multipooler: &clustermetadatapb.Multipooler{
 				Id: &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: name},
 			},
@@ -172,7 +172,7 @@ func TestEligibleConsensusStatuses(t *testing.T) {
 	}
 
 	t.Run("returns every eligible member's status", func(t *testing.T) {
-		got := eligibleConsensusStatuses([]*multiorchdatapb.PoolerHealthState{
+		got := eligibleConsensusStatuses([]*snapshot.PoolerHealthState{
 			poolerHealth("p1", 3, false),
 			poolerHealth("p2", 7, false),
 		})
@@ -183,7 +183,7 @@ func TestEligibleConsensusStatuses(t *testing.T) {
 		// A departing member (e.g. graceful shutdown) must be excluded here the
 		// same way runFailover excludes it from NewTermRevocation's cohort, or
 		// NextFailoverAttempt and NewTermRevocation can disagree on ReplaceDecision.
-		got := eligibleConsensusStatuses([]*multiorchdatapb.PoolerHealthState{
+		got := eligibleConsensusStatuses([]*snapshot.PoolerHealthState{
 			poolerHealth("p1", 3, false),
 			poolerHealth("p2", 7, true),
 		})

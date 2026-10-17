@@ -30,7 +30,6 @@ import (
 	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
 
@@ -39,7 +38,7 @@ func TestPooler_refreshNow(t *testing.T) {
 	leaderID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary"}
 
 	newPooler := func() *Pooler {
-		return NewPooler(&multiorchdatapb.PoolerHealthState{
+		return NewPooler(&snapshot.PoolerHealthState{
 			Multipooler: &clustermetadatapb.Multipooler{Id: leaderID, Type: clustermetadatapb.PoolerType_PRIMARY},
 		}, nil)
 	}
@@ -103,7 +102,7 @@ func TestRefreshRecentInParallel(t *testing.T) {
 	ready := &multipoolermanagerdatapb.StatusResponse{Status: &multipoolermanagerdatapb.Status{PostgresReady: true}}
 
 	poolerSeen := func(name string, lastSeen *timestamppb.Timestamp) *Pooler {
-		return NewPooler(&multiorchdatapb.PoolerHealthState{
+		return NewPooler(&snapshot.PoolerHealthState{
 			Multipooler: &clustermetadatapb.Multipooler{
 				Id: &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: name},
 			},
@@ -168,7 +167,7 @@ func TestPooler_applyStatusResponseSkipsWhenAStreamedSnapshotIsNewer(t *testing.
 		Status: &multipoolermanagerdatapb.Status{PostgresReady: true},
 	}
 	newPooler := func(lastSeen time.Time) *Pooler {
-		return NewPooler(&multiorchdatapb.PoolerHealthState{
+		return NewPooler(&snapshot.PoolerHealthState{
 			Multipooler: &clustermetadatapb.Multipooler{Id: leaderID},
 			LastSeen:    timestamppb.New(lastSeen),
 			Status:      &multipoolermanagerdatapb.Status{PostgresReady: false},

@@ -24,13 +24,12 @@ import (
 	"github.com/multigres/multigres/go/common/mterrors"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 )
 
 func seedPooler(t *testing.T, cache *PoolerCache, name string, shardKey *clustermetadatapb.ShardKey) {
 	t.Helper()
-	SeedCache(t, cache, NewPooler(&multiorchdatapb.PoolerHealthState{
+	SeedCache(t, cache, NewPooler(&snapshot.PoolerHealthState{
 		Multipooler: &clustermetadatapb.Multipooler{
 			Id:       &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: name},
 			ShardKey: shardKey,

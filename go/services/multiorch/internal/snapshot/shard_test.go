@@ -21,19 +21,18 @@ import (
 	"github.com/stretchr/testify/require"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 )
 
 func podID(name string) *clustermetadatapb.ID {
 	return &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: name}
 }
 
-func pooler(name string) *multiorchdatapb.PoolerHealthState {
-	return &multiorchdatapb.PoolerHealthState{Multipooler: &clustermetadatapb.Multipooler{Id: podID(name)}}
+func pooler(name string) *PoolerHealthState {
+	return &PoolerHealthState{Multipooler: &clustermetadatapb.Multipooler{Id: podID(name)}}
 }
 
 // withPosition gives p the rule position pos as its own WAL position.
-func withPosition(p *multiorchdatapb.PoolerHealthState, pos *clustermetadatapb.RulePosition) *multiorchdatapb.PoolerHealthState {
+func withPosition(p *PoolerHealthState, pos *clustermetadatapb.RulePosition) *PoolerHealthState {
 	p.ConsensusStatus = &clustermetadatapb.ConsensusStatus{
 		Id:              p.GetMultipooler().GetId(),
 		CurrentPosition: &clustermetadatapb.PoolerPosition{Position: pos},
@@ -46,7 +45,7 @@ func ruleNumber(term int64) *clustermetadatapb.RuleNumber {
 }
 
 func TestShard_NoRuleMeansNoLeader(t *testing.T) {
-	s := &Shard{Poolers: []*multiorchdatapb.PoolerHealthState{pooler("leader"), pooler("follower")}}
+	s := &Shard{Poolers: []*PoolerHealthState{pooler("leader"), pooler("follower")}}
 	assert.True(t, s.HighestIntendedRule().IsEmpty())
 	assert.Nil(t, s.HighestIntendedRule().PossiblyUndecidedRule().GetLeaderId())
 	assert.Nil(t, s.IntendedLeaderHealth())
@@ -54,7 +53,7 @@ func TestShard_NoRuleMeansNoLeader(t *testing.T) {
 
 func TestShard_PoolerLooksUpByID(t *testing.T) {
 	follower := pooler("follower")
-	s := &Shard{Poolers: []*multiorchdatapb.PoolerHealthState{pooler("leader"), follower}}
+	s := &Shard{Poolers: []*PoolerHealthState{pooler("leader"), follower}}
 	assert.Same(t, follower, s.PoolerHealth(podID("follower")))
 	assert.Nil(t, s.PoolerHealth(podID("absent")))
 	assert.Nil(t, s.PoolerHealth(nil))
@@ -63,14 +62,14 @@ func TestShard_PoolerLooksUpByID(t *testing.T) {
 func TestShard_IntendedLeaderIsThePoolerTheRuleNames(t *testing.T) {
 	leader := pooler("leader")
 	rule := &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{RuleNumber: ruleNumber(1), LeaderId: podID("leader")}}
-	s := &Shard{Poolers: []*multiorchdatapb.PoolerHealthState{withPosition(pooler("follower"), rule), leader}}
+	s := &Shard{Poolers: []*PoolerHealthState{withPosition(pooler("follower"), rule), leader}}
 	assert.Equal(t, "leader", s.HighestIntendedRule().PossiblyUndecidedRule().GetLeaderId().GetName())
 	assert.Same(t, leader, s.IntendedLeaderHealth())
 }
 
 func TestShard_IntendedLeaderWithoutHealthIsNil(t *testing.T) {
 	rule := &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{RuleNumber: ruleNumber(1), LeaderId: podID("absent")}}
-	s := &Shard{Poolers: []*multiorchdatapb.PoolerHealthState{withPosition(pooler("follower"), rule)}}
+	s := &Shard{Poolers: []*PoolerHealthState{withPosition(pooler("follower"), rule)}}
 	require.NotNil(t, s.HighestIntendedRule().PossiblyUndecidedRule().GetLeaderId())
 	assert.Nil(t, s.IntendedLeaderHealth())
 }
@@ -81,7 +80,7 @@ func TestShard_OutstandingProposalNamesTheIntendedLeader(t *testing.T) {
 		Decision: &clustermetadatapb.ShardRule{RuleNumber: ruleNumber(1), LeaderId: podID("follower")},
 		Proposal: &clustermetadatapb.ShardRule{RuleNumber: ruleNumber(2), LeaderId: podID("leader")},
 	}
-	s := &Shard{Poolers: []*multiorchdatapb.PoolerHealthState{leader, withPosition(follower, rule)}}
+	s := &Shard{Poolers: []*PoolerHealthState{leader, withPosition(follower, rule)}}
 	assert.False(t, s.HighestIntendedRule().IsDecided())
 	assert.Same(t, leader, s.IntendedLeaderHealth())
 }
@@ -92,7 +91,7 @@ func TestShard_AdvertisedRuleCountsAsIntended(t *testing.T) {
 	advertised := &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{RuleNumber: ruleNumber(2), LeaderId: podID("new")}}
 	follower := withPosition(pooler("follower"), decided)
 	follower.ConsensusStatus.IntendedPrimary = &clustermetadatapb.IntendedPrimary{Position: advertised}
-	s := &Shard{Poolers: []*multiorchdatapb.PoolerHealthState{follower}}
+	s := &Shard{Poolers: []*PoolerHealthState{follower}}
 	assert.Equal(t, "new", s.HighestIntendedRule().PossiblyUndecidedRule().GetLeaderId().GetName())
 }
 
@@ -106,17 +105,17 @@ func followerNames(s *Shard) []string {
 
 func TestShard_CohortEligibleFollowersAreEveryoneButTheIntendedLeader(t *testing.T) {
 	rule := &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{RuleNumber: ruleNumber(1), LeaderId: podID("leader")}}
-	s := &Shard{Poolers: []*multiorchdatapb.PoolerHealthState{pooler("leader"), withPosition(pooler("f1"), rule), pooler("fresh-standby")}}
+	s := &Shard{Poolers: []*PoolerHealthState{pooler("leader"), withPosition(pooler("f1"), rule), pooler("fresh-standby")}}
 	assert.ElementsMatch(t, []string{"f1", "fresh-standby"}, followerNames(s), "membership, not cohort or streaming state")
 }
 
 func TestShard_CohortEligibleFollowersWithLeaderHealthUnknown(t *testing.T) {
 	rule := &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{RuleNumber: ruleNumber(1), LeaderId: podID("absent")}}
-	s := &Shard{Poolers: []*multiorchdatapb.PoolerHealthState{withPosition(pooler("f1"), rule), pooler("f2")}}
+	s := &Shard{Poolers: []*PoolerHealthState{withPosition(pooler("f1"), rule), pooler("f2")}}
 	assert.ElementsMatch(t, []string{"f1", "f2"}, followerNames(s))
 }
 
 func TestShard_CohortEligibleFollowersWithNoRuleIsEveryMember(t *testing.T) {
-	s := &Shard{Poolers: []*multiorchdatapb.PoolerHealthState{pooler("a"), pooler("b")}}
+	s := &Shard{Poolers: []*PoolerHealthState{pooler("a"), pooler("b")}}
 	assert.ElementsMatch(t, []string{"a", "b"}, followerNames(s))
 }

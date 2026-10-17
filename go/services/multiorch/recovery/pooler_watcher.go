@@ -22,8 +22,8 @@ import (
 	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/common/topoclient/poolerwatch"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	"github.com/multigres/multigres/go/services/multiorch/config"
+	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 	"github.com/multigres/multigres/go/services/multiorch/store"
 )
 
@@ -97,7 +97,7 @@ func poolerCacheHooks(ctx context.Context, cache *store.PoolerCache, factory *st
 				"shard", p.GetShardKey().GetShard(),
 			)
 			return store.NewPooler(
-				&multiorchdatapb.PoolerHealthState{
+				&snapshot.PoolerHealthState{
 					Multipooler: p,
 				},
 				factory.New(cache, topoclient.ComponentIDString(p.Id)),
@@ -105,7 +105,7 @@ func poolerCacheHooks(ctx context.Context, cache *store.PoolerCache, factory *st
 		},
 
 		OnUpdate: func(_, curr *clustermetadatapb.Multipooler, rider *store.Pooler) {
-			rider.Mutate(func(h *multiorchdatapb.PoolerHealthState) {
+			rider.Mutate(func(h *snapshot.PoolerHealthState) {
 				h.Multipooler = curr
 			})
 		},

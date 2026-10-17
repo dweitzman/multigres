@@ -22,7 +22,7 @@ package types
 import (
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
+	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 )
 
 // LeaderNeedsReplacement reports whether a primary pooler has voluntarily
@@ -49,7 +49,7 @@ import (
 // PoolerHealthState.AvailabilityStatus instead of ConsensusStatus so that
 // coordinator-synthesized signals (e.g. TEMPORARILY_UNAVAILABLE for unreachable
 // nodes) are handled here too.
-func LeaderNeedsReplacement(p *multiorchdatapb.PoolerHealthState) bool {
+func LeaderNeedsReplacement(p *snapshot.PoolerHealthState) bool {
 	av := p.GetAvailabilityStatus()
 	if PoolerIsCohortIneligible(av) {
 		return true

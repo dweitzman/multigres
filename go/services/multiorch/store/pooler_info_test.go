@@ -22,8 +22,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
+	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 )
 
 func TestPooler_HealthWithin(t *testing.T) {
@@ -32,13 +32,13 @@ func TestPooler_HealthWithin(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		pooler     *multiorchdatapb.PoolerHealthState
+		pooler     *snapshot.PoolerHealthState
 		expectOK   bool
 		expectInit bool // only checked when expectOK
 	}{
 		{
 			name: "never observed",
-			pooler: &multiorchdatapb.PoolerHealthState{
+			pooler: &snapshot.PoolerHealthState{
 				Multipooler: &clustermetadatapb.Multipooler{},
 				Status:      &multipoolermanagerdatapb.Status{IsInitialized: true},
 			},
@@ -46,7 +46,7 @@ func TestPooler_HealthWithin(t *testing.T) {
 		},
 		{
 			name: "observation older than maxAge is untrustworthy",
-			pooler: &multiorchdatapb.PoolerHealthState{
+			pooler: &snapshot.PoolerHealthState{
 				Multipooler: &clustermetadatapb.Multipooler{},
 				LastSeen:    timestamppb.New(now.Add(-time.Minute)),
 				Status:      &multipoolermanagerdatapb.Status{IsInitialized: true},
@@ -55,7 +55,7 @@ func TestPooler_HealthWithin(t *testing.T) {
 		},
 		{
 			name: "fresh observation counts even with the connectivity flag false",
-			pooler: &multiorchdatapb.PoolerHealthState{
+			pooler: &snapshot.PoolerHealthState{
 				StreamConnected: false, // e.g. a momentary stream blip
 				Multipooler:     &clustermetadatapb.Multipooler{},
 				LastSeen:        timestamppb.New(now),
@@ -66,7 +66,7 @@ func TestPooler_HealthWithin(t *testing.T) {
 		},
 		{
 			name: "fresh and initialized",
-			pooler: &multiorchdatapb.PoolerHealthState{
+			pooler: &snapshot.PoolerHealthState{
 				Multipooler: &clustermetadatapb.Multipooler{},
 				LastSeen:    timestamppb.New(now),
 				Status:      &multipoolermanagerdatapb.Status{IsInitialized: true},
@@ -76,7 +76,7 @@ func TestPooler_HealthWithin(t *testing.T) {
 		},
 		{
 			name: "fresh but not initialized",
-			pooler: &multiorchdatapb.PoolerHealthState{
+			pooler: &snapshot.PoolerHealthState{
 				Multipooler: &clustermetadatapb.Multipooler{},
 				LastSeen:    timestamppb.New(now),
 				Status:      &multipoolermanagerdatapb.Status{IsInitialized: false},

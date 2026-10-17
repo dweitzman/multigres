@@ -22,7 +22,7 @@ import (
 
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
+	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 )
 
 // selectFittestLeader returns whichever candidate (already tied on WAL
@@ -53,7 +53,7 @@ import (
 // to a resigner. Also, criteria 1-2 manually chain two Less funcs
 // (poolerHealthStateLess itself chains two more); generalize to an ordered
 // list of criteria if another fitness signal shows up.
-func selectFittestLeader(candidates []*clustermetadatapb.ConsensusStatus, healthByID map[string]*multiorchdatapb.PoolerHealthState, rng *rand.Rand) *clustermetadatapb.ConsensusStatus {
+func selectFittestLeader(candidates []*clustermetadatapb.ConsensusStatus, healthByID map[string]*snapshot.PoolerHealthState, rng *rand.Rand) *clustermetadatapb.ConsensusStatus {
 	if len(candidates) == 0 {
 		return nil
 	}
@@ -88,7 +88,7 @@ func selectFittestLeader(candidates []*clustermetadatapb.ConsensusStatus, health
 //
 // Recruited nodes still count toward outgoing-cohort quorum regardless of
 // readiness; this only reorders which tied node is proposed as leader.
-func postgresReadyLess(healthByID map[string]*multiorchdatapb.PoolerHealthState) func(a, b *clustermetadatapb.ConsensusStatus) bool {
+func postgresReadyLess(healthByID map[string]*snapshot.PoolerHealthState) func(a, b *clustermetadatapb.ConsensusStatus) bool {
 	isReady := func(id *clustermetadatapb.ID) bool {
 		h := healthByID[topoclient.ClusterIDString(id)]
 		return h.GetStatus().GetPostgresReady()
@@ -120,7 +120,7 @@ var leadershipSignalPriority = map[clustermetadatapb.LeadershipSignal]int{
 // Recruited nodes participate in the outgoing-cohort quorum check regardless of
 // their leadership signal — this tiebreaker only affects which tied node is
 // proposed as leader, not the quorum denominator.
-func poolerHealthStateLess(healthByID map[string]*multiorchdatapb.PoolerHealthState) func(a, b *clustermetadatapb.ConsensusStatus) bool {
+func poolerHealthStateLess(healthByID map[string]*snapshot.PoolerHealthState) func(a, b *clustermetadatapb.ConsensusStatus) bool {
 	leadershipSignal := func(cs *clustermetadatapb.ConsensusStatus) clustermetadatapb.LeadershipSignal {
 		h := healthByID[topoclient.ClusterIDString(cs.GetId())]
 		return h.GetAvailabilityStatus().GetLeadershipStatus().GetSignal()

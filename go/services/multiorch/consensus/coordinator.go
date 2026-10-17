@@ -30,7 +30,7 @@ import (
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
+	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 )
 
 // Coordinator orchestrates consensus-based leader election for shards.
@@ -62,7 +62,7 @@ func NewCoordinator(coordinatorID *clustermetadatapb.ID, topoStore topoclient.St
 //
 // Returns an error if any stage fails. The operation is idempotent and can be
 // retried safely.
-func (c *Coordinator) AppointLeader(ctx context.Context, shardKey *clustermetadatapb.ShardKey, cohort []*multiorchdatapb.PoolerHealthState, reason string) error {
+func (c *Coordinator) AppointLeader(ctx context.Context, shardKey *clustermetadatapb.ShardKey, cohort []*snapshot.PoolerHealthState, reason string) error {
 	c.logger.InfoContext(ctx, "starting leader appointment",
 		"database", shardKey.GetDatabase(),
 		"tablegroup", shardKey.GetTableGroup(),
@@ -96,7 +96,7 @@ func (c *Coordinator) AppointLeader(ctx context.Context, shardKey *clustermetada
 // would. Picking a rewind-free replica makes failover faster; picking one
 // that needs rewinding is not fatal — the SetPrimary path runs pg_rewind
 // before the node serves writes or replicates.
-func (c *Coordinator) runFailover(ctx context.Context, cohort []*multiorchdatapb.PoolerHealthState, reason string) error {
+func (c *Coordinator) runFailover(ctx context.Context, cohort []*snapshot.PoolerHealthState, reason string) error {
 	// Drop INELIGIBLE members (raised only on a deliberate exit: graceful
 	// shutdown or admin-stopped WAL receiver) from both the recruit round and
 	// the outgoing-decision/term-safety-floor computation below — a position or
@@ -153,7 +153,7 @@ func (c *Coordinator) runFailover(ctx context.Context, cohort []*multiorchdatapb
 // Uses GetBootstrapPolicy (not AppointLeader's LoadQuorumRule) because freshly
 // restored standbys report UNKNOWN pooler type, which causes LoadQuorumRule to
 // fall back to majority quorum instead of the configured durability policy.
-func (c *Coordinator) AppointInitialLeader(ctx context.Context, shardKey *clustermetadatapb.ShardKey, cohort []*multiorchdatapb.PoolerHealthState) error {
+func (c *Coordinator) AppointInitialLeader(ctx context.Context, shardKey *clustermetadatapb.ShardKey, cohort []*snapshot.PoolerHealthState) error {
 	if len(cohort) == 0 {
 		return mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT, "cohort is empty for shard %s", shardKey.GetShard())
 	}
@@ -220,7 +220,7 @@ func (c *Coordinator) GetCoordinatorID() *clustermetadatapb.ID {
 }
 
 // GetShardNodes retrieves all multipooler nodes for a given shard from the topology.
-func (c *Coordinator) GetShardNodes(ctx context.Context, cell string, database string, tablegroup string, shardID string) ([]*multiorchdatapb.PoolerHealthState, error) {
+func (c *Coordinator) GetShardNodes(ctx context.Context, cell string, database string, tablegroup string, shardID string) ([]*snapshot.PoolerHealthState, error) {
 	// Get all multipoolers in the cell for this specific shard
 	poolers, err := c.topoStore.GetMultipoolersByCell(ctx, cell, &topoclient.GetMultipoolersByCellOptions{
 		DatabaseShard: &topoclient.DatabaseShard{
@@ -239,9 +239,9 @@ func (c *Coordinator) GetShardNodes(ctx context.Context, cell string, database s
 	}
 
 	// Convert topology poolers to PoolerHealthState instances
-	poolerHealths := make([]*multiorchdatapb.PoolerHealthState, 0, len(poolers))
+	poolerHealths := make([]*snapshot.PoolerHealthState, 0, len(poolers))
 	for _, poolerInfo := range poolers {
-		ph := &multiorchdatapb.PoolerHealthState{
+		ph := &snapshot.PoolerHealthState{
 			Multipooler: poolerInfo.Multipooler,
 		}
 		poolerHealths = append(poolerHealths, ph)
@@ -278,7 +278,7 @@ func (c *Coordinator) GetBootstrapPolicy(ctx context.Context, database string) (
 // poolerIDs extracts the clustermetadata IDs from a slice of PoolerHealthState.
 // Used at the boundary where poolers cross into the durability-policy layer,
 // which operates on bare *clustermetadatapb.ID values.
-func poolerIDs(poolers []*multiorchdatapb.PoolerHealthState) []*clustermetadatapb.ID {
+func poolerIDs(poolers []*snapshot.PoolerHealthState) []*clustermetadatapb.ID {
 	out := make([]*clustermetadatapb.ID, len(poolers))
 	for i, p := range poolers {
 		out[i] = p.Multipooler.Id

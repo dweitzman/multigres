@@ -29,8 +29,8 @@ import (
 	"github.com/multigres/multigres/go/common/topoclient/memorytopo"
 	"github.com/multigres/multigres/go/common/topoclient/poolerwatch"
 	"github.com/multigres/multigres/go/pb/clustermetadata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	"github.com/multigres/multigres/go/services/multiorch/config"
+	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 	"github.com/multigres/multigres/go/services/multiorch/store"
 )
 
@@ -400,7 +400,7 @@ func TestDiscovery_PreservesTimestamps(t *testing.T) {
 
 	// Simulate health check by updating timestamps
 	now := timestamppb.Now()
-	poolerInfo.Mutate(func(h *multiorchdatapb.PoolerHealthState) {
+	poolerInfo.Mutate(func(h *snapshot.PoolerHealthState) {
 		h.LastSeen = now
 	})
 	store.SeedCache(t, engine.poolerCache, poolerInfo)

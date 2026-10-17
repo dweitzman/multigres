@@ -25,12 +25,12 @@ import (
 
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/rpcclient"
+	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
 	"github.com/multigres/multigres/go/services/multiorch/store"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
 
@@ -61,12 +61,12 @@ func TestReconnectRecruitAbandonedAction(t *testing.T) {
 	// seed builds a cache with the leader at leaderTerm and the stranded follower.
 	seed := func(t *testing.T, leaderPos *clustermetadatapb.PoolerPosition) *store.PoolerCache {
 		cache := store.NewTestCache(t)
-		store.SeedCache(t, cache, store.NewPooler(&multiorchdatapb.PoolerHealthState{
+		store.SeedCache(t, cache, store.NewPooler(&snapshot.PoolerHealthState{
 			Multipooler:     leaderMP,
 			Status:          &multipoolermanagerdatapb.Status{PostgresReady: true},
 			ConsensusStatus: &clustermetadatapb.ConsensusStatus{Id: fixReplPrimaryID, CurrentPosition: leaderPos},
 		}, nil))
-		store.SeedCache(t, cache, store.NewPooler(&multiorchdatapb.PoolerHealthState{
+		store.SeedCache(t, cache, store.NewPooler(&snapshot.PoolerHealthState{
 			Multipooler: replicaMP,
 			ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 				Id:              replicaID,

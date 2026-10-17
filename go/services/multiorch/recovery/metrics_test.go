@@ -31,8 +31,8 @@ import (
 	"github.com/multigres/multigres/go/common/rpcclient"
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	"github.com/multigres/multigres/go/services/multiorch/config"
+	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
 	"github.com/multigres/multigres/go/services/multiorch/store"
 )
@@ -387,7 +387,7 @@ func TestEngine_CollectStreamHealthData(t *testing.T) {
 	assert.Empty(t, data)
 
 	// Populate the store with two poolers with different stream states.
-	store.SeedCache(t, engine.poolerCache, store.NewPooler(&multiorchdatapb.PoolerHealthState{
+	store.SeedCache(t, engine.poolerCache, store.NewPooler(&snapshot.PoolerHealthState{
 		Multipooler: &clustermetadatapb.Multipooler{
 			Id: &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "pooler1"},
 			ShardKey: &clustermetadatapb.ShardKey{
@@ -398,7 +398,7 @@ func TestEngine_CollectStreamHealthData(t *testing.T) {
 		StreamConnected:         true,
 		StreamSnapshotsReceived: 42,
 	}, nil))
-	store.SeedCache(t, engine.poolerCache, store.NewPooler(&multiorchdatapb.PoolerHealthState{
+	store.SeedCache(t, engine.poolerCache, store.NewPooler(&snapshot.PoolerHealthState{
 		Multipooler: &clustermetadatapb.Multipooler{
 			Id: &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "pooler2"},
 			ShardKey: &clustermetadatapb.ShardKey{
@@ -448,7 +448,7 @@ func TestEngine_CollectStreamHealthData_SkipsNilMultipooler(t *testing.T) {
 	)
 
 	// An entry with nil Multipooler should be silently skipped.
-	store.SeedCache(t, engine.poolerCache, store.NewPooler(&multiorchdatapb.PoolerHealthState{
+	store.SeedCache(t, engine.poolerCache, store.NewPooler(&snapshot.PoolerHealthState{
 		Multipooler:     nil,
 		StreamConnected: true,
 	}, nil))

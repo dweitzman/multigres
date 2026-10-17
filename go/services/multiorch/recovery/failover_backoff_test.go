@@ -24,8 +24,8 @@ import (
 
 	"github.com/multigres/multigres/go/common/ha"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	"github.com/multigres/multigres/go/services/multiorch/consensus"
+	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
 	"github.com/multigres/multigres/go/services/multiorch/store"
 )
@@ -66,7 +66,7 @@ func TestNextFailoverAttempt(t *testing.T) {
 				Attempt:         attempt,
 			}
 		}
-		store.SeedCache(t, cache, store.NewPooler(&multiorchdatapb.PoolerHealthState{
+		store.SeedCache(t, cache, store.NewPooler(&snapshot.PoolerHealthState{
 			Multipooler: &clustermetadatapb.Multipooler{
 				Id:       &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: name},
 				ShardKey: shardKey,
@@ -153,7 +153,7 @@ func TestNextFailoverAttempt(t *testing.T) {
 		// is a different scenario from — and does not cover — the untargeted
 		// (no RecruitIntent) shadowing case noted above.
 		cache := store.NewTestCache(t)
-		store.SeedCache(t, cache, store.NewPooler(&multiorchdatapb.PoolerHealthState{
+		store.SeedCache(t, cache, store.NewPooler(&snapshot.PoolerHealthState{
 			Multipooler: &clustermetadatapb.Multipooler{
 				Id:       &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "p1"},
 				ShardKey: shardKey,
@@ -174,7 +174,7 @@ func TestNextFailoverAttempt(t *testing.T) {
 				},
 			},
 		}, nil))
-		store.SeedCache(t, cache, store.NewPooler(&multiorchdatapb.PoolerHealthState{
+		store.SeedCache(t, cache, store.NewPooler(&snapshot.PoolerHealthState{
 			Multipooler: &clustermetadatapb.Multipooler{
 				Id:       &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "p2"},
 				ShardKey: shardKey,
@@ -218,7 +218,7 @@ func TestNextFailoverAttempt(t *testing.T) {
 		// a stranded straggler like pDeparting), this gate picks it up
 		// naturally.
 		cache := store.NewTestCache(t)
-		store.SeedCache(t, cache, store.NewPooler(&multiorchdatapb.PoolerHealthState{
+		store.SeedCache(t, cache, store.NewPooler(&snapshot.PoolerHealthState{
 			Multipooler: &clustermetadatapb.Multipooler{
 				Id:       &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "p1"},
 				ShardKey: shardKey,
@@ -239,7 +239,7 @@ func TestNextFailoverAttempt(t *testing.T) {
 				},
 			},
 		}, nil))
-		store.SeedCache(t, cache, store.NewPooler(&multiorchdatapb.PoolerHealthState{
+		store.SeedCache(t, cache, store.NewPooler(&snapshot.PoolerHealthState{
 			Multipooler: &clustermetadatapb.Multipooler{
 				Id:       &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "pDeparting"},
 				ShardKey: shardKey,

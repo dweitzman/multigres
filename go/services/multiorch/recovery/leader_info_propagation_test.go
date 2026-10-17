@@ -27,7 +27,6 @@ import (
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/rpcclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 	"github.com/multigres/multigres/go/services/multiorch/store"
 )
@@ -155,7 +154,7 @@ func TestShouldPropagateLeaderInfo(t *testing.T) {
 // needlessly re-send the same SetPrimary before the pooler's own streamed
 // health update reports it back (see shouldPropagateLeaderInfo).
 func TestReconcileFollowerSlots(t *testing.T) {
-	leader := &multiorchdatapb.PoolerHealthState{
+	leader := &snapshot.PoolerHealthState{
 		Multipooler: &clustermetadatapb.Multipooler{
 			Id:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "p0"},
 			Type: clustermetadatapb.PoolerType_PRIMARY,
@@ -188,7 +187,7 @@ func TestPropagateLeaderInfoToPooler_CachesSuccessfulSetPrimary(t *testing.T) {
 	re := &Engine{rpcClient: fake, logger: slog.Default(), poolerCache: cache}
 
 	poolerID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "p1"}
-	pooler := store.NewPooler(&multiorchdatapb.PoolerHealthState{
+	pooler := store.NewPooler(&snapshot.PoolerHealthState{
 		Multipooler: &clustermetadatapb.Multipooler{Id: poolerID},
 		LastSeen:    timestamppb.Now(),
 	}, nil)
@@ -221,7 +220,7 @@ func TestPropagateLeaderInfoToPooler_NeverRegressesCachedPrimary(t *testing.T) {
 		Position: &clustermetadatapb.RulePosition{Decision: leaderInfoTestRule(10)},
 		Primary:  leaderInfoTestAddress("newer-leader"),
 	}
-	pooler := store.NewPooler(&multiorchdatapb.PoolerHealthState{
+	pooler := store.NewPooler(&snapshot.PoolerHealthState{
 		Multipooler:     &clustermetadatapb.Multipooler{Id: poolerID},
 		ConsensusStatus: &clustermetadatapb.ConsensusStatus{IntendedPrimary: newerPrimary},
 		LastSeen:        timestamppb.Now(),
@@ -246,7 +245,7 @@ func TestPropagateLeaderInfoForShard(t *testing.T) {
 		rule := &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{
 			RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5}, LeaderId: id("leader"),
 		}}
-		return store.NewPooler(&multiorchdatapb.PoolerHealthState{
+		return store.NewPooler(&snapshot.PoolerHealthState{
 			Multipooler:     &clustermetadatapb.Multipooler{Id: id(name), ShardKey: shardKey},
 			ConsensusStatus: &clustermetadatapb.ConsensusStatus{Id: id(name), CurrentPosition: &clustermetadatapb.PoolerPosition{Position: rule}},
 			LastSeen:        timestamppb.Now(),
@@ -288,7 +287,7 @@ func TestPropagateLeaderInfoForShard(t *testing.T) {
 func TestPropagateLeaderInfoToPooler_FollowerEvictedFromCache(t *testing.T) {
 	fake := rpcclient.NewFakeClient()
 	re := &Engine{rpcClient: fake, logger: slog.Default(), poolerCache: store.NewTestCache(t)}
-	follower := &multiorchdatapb.PoolerHealthState{
+	follower := &snapshot.PoolerHealthState{
 		Multipooler: &clustermetadatapb.Multipooler{Id: &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "gone"}},
 		LastSeen:    timestamppb.Now(),
 	}

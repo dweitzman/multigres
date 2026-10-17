@@ -25,7 +25,6 @@ import (
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 	"github.com/multigres/multigres/go/services/multiorch/store"
@@ -95,7 +94,7 @@ func (re *Engine) propagateLeaderInfoForShard(ctx context.Context, shard *snapsh
 			continue
 		}
 		wg.Add(1)
-		go func(follower *multiorchdatapb.PoolerHealthState) {
+		go func(follower *snapshot.PoolerHealthState) {
 			defer wg.Done()
 			re.propagateLeaderInfoToPooler(ctx, follower, shard.Now, leaderAddress, leaderRewindReady, rule)
 		}(pooler)
@@ -107,7 +106,7 @@ func (re *Engine) propagateLeaderInfoForShard(ctx context.Context, shard *snapsh
 // follower set so it pre-creates their per-follower physical replication slots.
 // Best-effort: a failure is logged and retried on the next tick. No-op when the
 // set is empty (single-node shard, or nothing discovered yet).
-func (re *Engine) reconcileFollowerSlots(ctx context.Context, leader *multiorchdatapb.PoolerHealthState, followerIDs []*clustermetadatapb.ID) {
+func (re *Engine) reconcileFollowerSlots(ctx context.Context, leader *snapshot.PoolerHealthState, followerIDs []*clustermetadatapb.ID) {
 	if len(followerIDs) == 0 {
 		return
 	}
@@ -155,7 +154,7 @@ func shouldPropagateLeaderInfo(
 // leaderRewindReady.
 func (re *Engine) propagateLeaderInfoToPooler(
 	ctx context.Context,
-	follower *multiorchdatapb.PoolerHealthState,
+	follower *snapshot.PoolerHealthState,
 	now time.Time,
 	leaderAddress *clustermetadatapb.PoolerAddress,
 	leaderRewindReady bool,
@@ -190,7 +189,7 @@ func (re *Engine) propagateLeaderInfoToPooler(
 	if !ok {
 		return
 	}
-	entry.Rider.Mutate(func(h *multiorchdatapb.PoolerHealthState) {
+	entry.Rider.Mutate(func(h *snapshot.PoolerHealthState) {
 		if h.ConsensusStatus == nil {
 			h.ConsensusStatus = &clustermetadatapb.ConsensusStatus{}
 		}

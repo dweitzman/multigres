@@ -24,7 +24,6 @@ import (
 
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
@@ -55,8 +54,8 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	// connectReplica gives it a live stream. It carries a minimal cached
 	// position (recruitable requires one) but no rule, so it doesn't
 	// independently vouch for the leader either.
-	freshFollower := func(id *clustermetadatapb.ID, now time.Time) *multiorchdatapb.PoolerHealthState {
-		return &multiorchdatapb.PoolerHealthState{
+	freshFollower := func(id *clustermetadatapb.ID, now time.Time) *snapshot.PoolerHealthState {
+		return &snapshot.PoolerHealthState{
 			Multipooler: &clustermetadatapb.Multipooler{Id: id, ShardKey: shardKey},
 			LastSeen:    timestamppb.New(now),
 			Status:      &multipoolermanagerdatapb.Status{IsInitialized: true},
@@ -86,7 +85,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 			ShardKey:           shardKey,
 			Now:                now,
 			AvailabilityPolicy: DefaultAvailabilityPolicy(),
-			Poolers: []*multiorchdatapb.PoolerHealthState{
+			Poolers: []*snapshot.PoolerHealthState{
 				freshFollower(follower1ID, now),
 				freshFollower(follower2ID, now),
 			},
@@ -96,7 +95,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 			CohortMembers:    []*clustermetadatapb.ID{leaderID, follower1ID, follower2ID},
 			CreationTime:     timestamppb.New(now.Add(-time.Hour)),
 			DurabilityPolicy: atLeastN(2),
-		}}, &multiorchdatapb.PoolerHealthState{
+		}}, &snapshot.PoolerHealthState{
 			Multipooler: &clustermetadatapb.Multipooler{
 				Id:       leaderID,
 				ShardKey: shardKey,
@@ -228,7 +227,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 			if id.GetName() == ruleCarrierName || proto.Equal(id, leaderID) {
 				continue
 			}
-			sa.Poolers[i] = &multiorchdatapb.PoolerHealthState{
+			sa.Poolers[i] = &snapshot.PoolerHealthState{
 				Multipooler: &clustermetadatapb.Multipooler{Id: id, ShardKey: shardKey},
 				LastSeen:    timestamppb.New(sa.Now),
 				Status: &multipoolermanagerdatapb.Status{
@@ -319,8 +318,8 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	// ruleLeader (primary_conninfo connHost:connPort), with a rule of the given
 	// creation time, not streaming — a parametrizable base for exercising each
 	// classifyFollowerToLeader guard. cutOffFollower is the fully-cut-off case.
-	cutOffCandidate := func(id, ruleLeader *clustermetadatapb.ID, ruleCreated time.Time, connHost string, connPort int32, now time.Time) *multiorchdatapb.PoolerHealthState {
-		return &multiorchdatapb.PoolerHealthState{
+	cutOffCandidate := func(id, ruleLeader *clustermetadatapb.ID, ruleCreated time.Time, connHost string, connPort int32, now time.Time) *snapshot.PoolerHealthState {
+		return &snapshot.PoolerHealthState{
 			Multipooler: &clustermetadatapb.Multipooler{Id: id, ShardKey: shardKey},
 			LastSeen:    timestamppb.New(now),
 			ConsensusStatus: &clustermetadatapb.ConsensusStatus{
@@ -344,7 +343,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 
 	// cutOffFollower is the fully-cut-off case: knows the leader (rule an hour old,
 	// past the connect grace), pointed at it, not streaming → in the revocation set.
-	cutOffFollower := func(id *clustermetadatapb.ID, now time.Time) *multiorchdatapb.PoolerHealthState {
+	cutOffFollower := func(id *clustermetadatapb.ID, now time.Time) *snapshot.PoolerHealthState {
 		return cutOffCandidate(id, leaderID, now.Add(-time.Hour), "leader-host", 5432, now)
 	}
 
@@ -419,8 +418,8 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		// IntendedPrimary does — its highest-known rule still names the leader, so a
 		// configured-but-not-streaming follower is cut off. Both followers this way →
 		// durability-sufficient revocation → failover.
-		viaReplPrimary := func(id *clustermetadatapb.ID, now time.Time) *multiorchdatapb.PoolerHealthState {
-			return &multiorchdatapb.PoolerHealthState{
+		viaReplPrimary := func(id *clustermetadatapb.ID, now time.Time) *snapshot.PoolerHealthState {
+			return &snapshot.PoolerHealthState{
 				Multipooler: &clustermetadatapb.Multipooler{Id: id, ShardKey: shardKey},
 				LastSeen:    timestamppb.New(now),
 				ConsensusStatus: &clustermetadatapb.ConsensusStatus{
@@ -929,7 +928,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		// meets AtLeast(2) and failover is suppressed. Without the leader-self-vouch
 		// this would be LeaderUnreachableByCohort.
 		sa := deadLeaderShard(func(sa *snapshot.Shard) {
-			replacePooler(sa, follower1ID, &multiorchdatapb.PoolerHealthState{
+			replacePooler(sa, follower1ID, &snapshot.PoolerHealthState{
 				Multipooler: &clustermetadatapb.Multipooler{Id: follower1ID, ShardKey: shardKey},
 				LastSeen:    timestamppb.New(sa.Now),
 				Status: &multipoolermanagerdatapb.Status{
@@ -961,7 +960,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		// member reachable), we warn ShardAtRisk instead. Guards against regressing to
 		// ShardStuck when the positive streaming signal is dropped.
 		sa := deadLeaderShard(func(sa *snapshot.Shard) {
-			replacePooler(sa, follower1ID, &multiorchdatapb.PoolerHealthState{
+			replacePooler(sa, follower1ID, &snapshot.PoolerHealthState{
 				Multipooler: &clustermetadatapb.Multipooler{Id: follower1ID, ShardKey: shardKey},
 				LastSeen:    timestamppb.New(sa.Now),
 				Status: &multipoolermanagerdatapb.Status{

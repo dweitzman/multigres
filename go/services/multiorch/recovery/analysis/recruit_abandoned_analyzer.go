@@ -19,7 +19,6 @@ import (
 	"fmt"
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
 )
@@ -52,7 +51,7 @@ func (a *RecruitAbandonedAnalyzer) Analyze(sa *snapshot.Shard) ([]types.Problem,
 // stricter ValidateRevocation) so detection can't drift from enforcement.
 // Also consulted by ReplicaNotReplicatingAnalyzer to defer to this analyzer
 // instead of sending a SetPrimary the follower would just ignore.
-func revocationStrandsFollower(sa *snapshot.Shard, p *multiorchdatapb.PoolerHealthState) bool {
+func revocationStrandsFollower(sa *snapshot.Shard, p *snapshot.PoolerHealthState) bool {
 	if sa.HighestIntendedRule().IsEmpty() {
 		return false
 	}
@@ -65,7 +64,7 @@ func revocationStrandsFollower(sa *snapshot.Shard, p *multiorchdatapb.PoolerHeal
 // bound within which a live failover completes. Only then do we treat the
 // recruit as abandoned. A revocation with no coordinator_initiated_at (which a
 // valid one always carries) is treated as not-yet-aged, erring toward waiting.
-func revocationAgedPastFailoverGrace(sa *snapshot.Shard, p *multiorchdatapb.PoolerHealthState) bool {
+func revocationAgedPastFailoverGrace(sa *snapshot.Shard, p *snapshot.PoolerHealthState) bool {
 	initiatedAt := p.GetConsensusStatus().GetTermRevocation().GetCoordinatorInitiatedAt()
 	if initiatedAt == nil {
 		return false
@@ -73,7 +72,7 @@ func revocationAgedPastFailoverGrace(sa *snapshot.Shard, p *multiorchdatapb.Pool
 	return sa.Now.Sub(initiatedAt.AsTime()) >= sa.AvailabilityPolicy.FailoverGracePeriod
 }
 
-func (a *RecruitAbandonedAnalyzer) analyzePooler(sa *snapshot.Shard, pa *multiorchdatapb.PoolerHealthState) (*types.Problem, error) {
+func (a *RecruitAbandonedAnalyzer) analyzePooler(sa *snapshot.Shard, pa *snapshot.PoolerHealthState) (*types.Problem, error) {
 	if a.factory == nil {
 		return nil, errors.New("recovery action factory not initialized")
 	}

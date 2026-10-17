@@ -22,8 +22,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
+	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 )
 
 func TestRecruitable(t *testing.T) {
@@ -31,8 +31,8 @@ func TestRecruitable(t *testing.T) {
 	freshness := 30 * time.Second
 	id := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "p1"}
 
-	base := func() *multiorchdatapb.PoolerHealthState {
-		return &multiorchdatapb.PoolerHealthState{
+	base := func() *snapshot.PoolerHealthState {
+		return &snapshot.PoolerHealthState{
 			Multipooler: &clustermetadatapb.Multipooler{Id: id},
 			LastSeen:    timestamppb.New(now),
 			Status:      &multipoolermanagerdatapb.Status{IsInitialized: true},

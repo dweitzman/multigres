@@ -30,8 +30,8 @@ import (
 	"github.com/multigres/multigres/go/common/topoclient/memorytopo"
 	"github.com/multigres/multigres/go/common/topoclient/poolerwatch"
 	"github.com/multigres/multigres/go/pb/clustermetadata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	"github.com/multigres/multigres/go/services/multiorch/config"
+	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 	"github.com/multigres/multigres/go/services/multiorch/store"
 )
 
@@ -185,7 +185,7 @@ func TestPoolerWatcher_PoolerMetadataUpdate(t *testing.T) {
 	originalStream := existing.HealthStream
 
 	// Simulate a health-check populating some state
-	existing.Mutate(func(h *multiorchdatapb.PoolerHealthState) {
+	existing.Mutate(func(h *snapshot.PoolerHealthState) {
 		h.LastSeen = timestamppb.Now()
 	})
 	store.SeedCache(t, poolerStore, existing)

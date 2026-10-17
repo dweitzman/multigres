@@ -23,7 +23,6 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 )
@@ -75,13 +74,13 @@ type Pooler struct {
 	// Readers never need the mutex — atomic.Load yields a published snapshot
 	// that is by-construction never modified.
 	mu    sync.Mutex
-	state atomic.Pointer[multiorchdatapb.PoolerHealthState]
+	state atomic.Pointer[snapshot.PoolerHealthState]
 }
 
 // NewPooler constructs a Pooler with the given initial health state.
 // The initial state is stored as-is (no clone) since the caller is
 // surrendering ownership to the rider.
-func NewPooler(initial *multiorchdatapb.PoolerHealthState, hs *HealthStream) *Pooler {
+func NewPooler(initial *snapshot.PoolerHealthState, hs *HealthStream) *Pooler {
 	p := &Pooler{HealthStream: hs}
 	if initial != nil {
 		p.state.Store(initial)
@@ -99,7 +98,7 @@ func NewPooler(initial *multiorchdatapb.PoolerHealthState, hs *HealthStream) *Po
 // Each call returns whatever is current, so two calls can differ. Code that
 // needs one consistent view across several reads (analysis, actions) should
 // take a snapshot once, with SnapshotShard, and read from that.
-func (p *Pooler) Health() *multiorchdatapb.PoolerHealthState {
+func (p *Pooler) Health() *snapshot.PoolerHealthState {
 	return p.state.Load()
 }
 
@@ -111,15 +110,13 @@ func (p *Pooler) Health() *multiorchdatapb.PoolerHealthState {
 // store doesn't overwrite another's mutations. Inside fn, no concurrent
 // Mutate or reader can observe a partial update (the new pointer is
 // only published at function return).
-func (p *Pooler) Mutate(fn func(*multiorchdatapb.PoolerHealthState)) {
+func (p *Pooler) Mutate(fn func(*snapshot.PoolerHealthState)) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	curr := p.state.Load()
-	var next *multiorchdatapb.PoolerHealthState
-	if curr == nil {
-		next = &multiorchdatapb.PoolerHealthState{}
-	} else {
-		next = proto.Clone(curr).(*multiorchdatapb.PoolerHealthState)
+	next := curr.Clone()
+	if next == nil {
+		next = &snapshot.PoolerHealthState{}
 	}
 	fn(next)
 	p.state.Store(next)
@@ -140,7 +137,7 @@ func (p *Pooler) applyStatusResponse(status *multipoolermanagerdatapb.StatusResp
 	if status.GetStatus() == nil {
 		return false
 	}
-	p.Mutate(func(h *multiorchdatapb.PoolerHealthState) {
+	p.Mutate(func(h *snapshot.PoolerHealthState) {
 		if seen := h.GetLastSeen(); seen != nil && seen.AsTime().After(requestedAt) {
 			return
 		}
@@ -151,7 +148,7 @@ func (p *Pooler) applyStatusResponse(status *multipoolermanagerdatapb.StatusResp
 
 // applyStatusFields writes a StatusResponse's fields into h. status.GetStatus() must be
 // non-nil.
-func applyStatusFields(h *multiorchdatapb.PoolerHealthState, status *multipoolermanagerdatapb.StatusResponse, now *timestamppb.Timestamp) {
+func applyStatusFields(h *snapshot.PoolerHealthState, status *multipoolermanagerdatapb.StatusResponse, now *timestamppb.Timestamp) {
 	h.LastSeen = now
 	h.Status = proto.Clone(status.GetStatus()).(*multipoolermanagerdatapb.Status)
 	if av := status.GetAvailabilityStatus(); av != nil {
@@ -173,6 +170,6 @@ func applyStatusFields(h *multiorchdatapb.PoolerHealthState, status *multipooler
 
 // HealthWithin returns the pooler's current snapshot if it was recorded within
 // maxAge of now (see snapshot.HealthWithin).
-func (p *Pooler) HealthWithin(now time.Time, maxAge time.Duration) (*multiorchdatapb.PoolerHealthState, bool) {
+func (p *Pooler) HealthWithin(now time.Time, maxAge time.Duration) (*snapshot.PoolerHealthState, bool) {
 	return snapshot.HealthWithin(p.Health(), now, maxAge)
 }

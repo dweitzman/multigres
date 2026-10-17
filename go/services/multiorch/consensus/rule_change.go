@@ -27,11 +27,11 @@ import (
 	"github.com/multigres/multigres/go/common/eventlog"
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/topoclient"
+	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 )
 
 // coordinatorLedRuleChange orchestrates the recruit → check → promote workflow
@@ -71,7 +71,7 @@ func (c *Coordinator) newRuleChange(
 //     defines revoked_below_term and outgoing_rule, not local discovery.
 func (r *coordinatorLedRuleChange) Run(
 	ctx context.Context,
-	cohort []*multiorchdatapb.PoolerHealthState,
+	cohort []*snapshot.PoolerHealthState,
 	revocation *clustermetadatapb.TermRevocation,
 ) error {
 	if revocation == nil {
@@ -210,7 +210,7 @@ func (r *coordinatorLedRuleChange) Run(
 }
 
 type recruitResult struct {
-	pooler *multiorchdatapb.PoolerHealthState
+	pooler *snapshot.PoolerHealthState
 	cs     *clustermetadatapb.ConsensusStatus // nil if recruit failed
 }
 
@@ -218,7 +218,7 @@ type recruitResult struct {
 // returns a channel that receives their results as they arrive. Each result
 // includes the pooler's health state and the ConsensusStatus returned by its
 // Recruit, or nil if the RPC failed or returned an empty status.
-func (r *coordinatorLedRuleChange) dispatchRecruit(ctx context.Context, cohort []*multiorchdatapb.PoolerHealthState, revocation *clustermetadatapb.TermRevocation) chan recruitResult {
+func (r *coordinatorLedRuleChange) dispatchRecruit(ctx context.Context, cohort []*snapshot.PoolerHealthState, revocation *clustermetadatapb.TermRevocation) chan recruitResult {
 	recruited := make(chan recruitResult, len(cohort))
 	for _, p := range cohort {
 		go func() {
@@ -233,7 +233,7 @@ func (r *coordinatorLedRuleChange) dispatchRecruit(ctx context.Context, cohort [
 // proposal, or all recruits have been processed. It returns the first
 // successful proposal and the corresponding leader's key. If no proposal can
 // be built after processing all recruits, it returns an error.
-func (r *coordinatorLedRuleChange) collectRecruitsAndBuildProposal(cohort []*multiorchdatapb.PoolerHealthState, revocation *clustermetadatapb.TermRevocation, recruited chan recruitResult) (*consensusdatapb.PromoteRequest, string, error) {
+func (r *coordinatorLedRuleChange) collectRecruitsAndBuildProposal(cohort []*snapshot.PoolerHealthState, revocation *clustermetadatapb.TermRevocation, recruited chan recruitResult) (*consensusdatapb.PromoteRequest, string, error) {
 	var err error
 	var p *consensusdatapb.CoordinatorProposal
 	statuses := make([]*clustermetadatapb.ConsensusStatus, 0, len(cohort))
@@ -277,7 +277,7 @@ type promoteResult struct {
 // (nil if it succeeded).
 func (r *coordinatorLedRuleChange) dispatchPromote(
 	ctx context.Context,
-	cohort []*multiorchdatapb.PoolerHealthState,
+	cohort []*snapshot.PoolerHealthState,
 	propReq *consensusdatapb.PromoteRequest,
 	leaderKey string,
 ) chan promoteResult {
@@ -297,7 +297,7 @@ func (r *coordinatorLedRuleChange) dispatchPromote(
 // It returns the leader's error as soon as one is seen (there is nothing to gain
 // by waiting further if the leader failed), or nil if the leader succeeded.
 // Non-leader failures are logged as warnings and do not affect the return value.
-func (r *coordinatorLedRuleChange) waitForPromotes(ctx context.Context, cohort []*multiorchdatapb.PoolerHealthState, promoteResults chan promoteResult) error {
+func (r *coordinatorLedRuleChange) waitForPromotes(ctx context.Context, cohort []*snapshot.PoolerHealthState, promoteResults chan promoteResult) error {
 	for range len(cohort) {
 		pr := <-promoteResults
 		if pr.err != nil {
@@ -318,7 +318,7 @@ func (r *coordinatorLedRuleChange) waitForPromotes(ctx context.Context, cohort [
 // ConsensusStatus, or nil if the call failed or returned an empty status.
 func (r *coordinatorLedRuleChange) recruit(
 	ctx context.Context,
-	p *multiorchdatapb.PoolerHealthState,
+	p *snapshot.PoolerHealthState,
 	revocation *clustermetadatapb.TermRevocation,
 ) *clustermetadatapb.ConsensusStatus {
 	resp, err := r.coordinator.rpcClient.Recruit(ctx, p.Multipooler, &consensusdatapb.RecruitRequest{
@@ -350,7 +350,7 @@ func (r *coordinatorLedRuleChange) recruit(
 // field wants.
 func (r *coordinatorLedRuleChange) promote(
 	ctx context.Context,
-	p *multiorchdatapb.PoolerHealthState,
+	p *snapshot.PoolerHealthState,
 	req *consensusdatapb.PromoteRequest,
 	isLeader bool,
 ) error {
@@ -458,7 +458,7 @@ func buildBootstrapProposal(
 // checkRecentAcceptance returns an error if any node in the cohort recently
 // accepted a term revocation that is not yet reflected in its decided position,
 // which may indicate another coordinator is making a rule change.
-func checkRecentAcceptance(ctx context.Context, logger *slog.Logger, cohort []*multiorchdatapb.PoolerHealthState) error {
+func checkRecentAcceptance(ctx context.Context, logger *slog.Logger, cohort []*snapshot.PoolerHealthState) error {
 	const backoffWindow = 4 * time.Second
 	now := time.Now()
 	for _, pooler := range cohort {
@@ -491,9 +491,9 @@ func checkRecentAcceptance(ctx context.Context, logger *slog.Logger, cohort []*m
 // from a cohort slice. Keys are ClusterIDString values. Consensus paths only
 // need the leader's contact info to build proposals, so the cohort map is
 // flattened to PoolerAddress here.
-func buildCohortMaps(cohort []*multiorchdatapb.PoolerHealthState) (map[string]*clustermetadatapb.PoolerAddress, map[string]*multiorchdatapb.PoolerHealthState) {
+func buildCohortMaps(cohort []*snapshot.PoolerHealthState) (map[string]*clustermetadatapb.PoolerAddress, map[string]*snapshot.PoolerHealthState) {
 	addressByID := make(map[string]*clustermetadatapb.PoolerAddress, len(cohort))
-	healthByID := make(map[string]*multiorchdatapb.PoolerHealthState, len(cohort))
+	healthByID := make(map[string]*snapshot.PoolerHealthState, len(cohort))
 	for _, p := range cohort {
 		key := topoclient.ClusterIDString(p.Multipooler.Id)
 		addressByID[key] = topoclient.PoolerAddressFor(p.Multipooler)

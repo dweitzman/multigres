@@ -29,9 +29,9 @@ import (
 	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/common/topoclient/memorytopo"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	"github.com/multigres/multigres/go/services/multiorch/config"
+	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
 	"github.com/multigres/multigres/go/services/multiorch/store"
 )
@@ -48,7 +48,7 @@ type mockCoordinator struct {
 	bootstrapPolicyErr error
 
 	appointInitialLeaderErr error
-	appointedCohort         []*multiorchdatapb.PoolerHealthState
+	appointedCohort         []*snapshot.PoolerHealthState
 	appointedShardKey       *clustermetadatapb.ShardKey
 
 	coordinatorID *clustermetadatapb.ID
@@ -58,7 +58,7 @@ func (m *mockCoordinator) GetBootstrapPolicy(_ context.Context, _ string) (*clus
 	return m.bootstrapPolicy, m.bootstrapPolicyErr
 }
 
-func (m *mockCoordinator) AppointInitialLeader(_ context.Context, shardKey *clustermetadatapb.ShardKey, cohort []*multiorchdatapb.PoolerHealthState) error {
+func (m *mockCoordinator) AppointInitialLeader(_ context.Context, shardKey *clustermetadatapb.ShardKey, cohort []*snapshot.PoolerHealthState) error {
 	m.appointedShardKey = shardKey
 	m.appointedCohort = cohort
 	return m.appointInitialLeaderErr
@@ -83,7 +83,7 @@ func makePoolerState(cell, name, db, tableGroup, shard string, initialized bool,
 		Cell:      cell,
 		Name:      name,
 	}
-	return store.NewPooler(&multiorchdatapb.PoolerHealthState{
+	return store.NewPooler(&snapshot.PoolerHealthState{
 		LastSeen: timestamppb.Now(),
 		Status: &multipoolermanagerdatapb.Status{
 			IsInitialized: initialized,
@@ -165,7 +165,7 @@ func TestShardInitAction_GetInitializedPoolers_ExcludesStaleObservation(t *testi
 	// bootstrap cohort just because the durable IsInitialized flag is still true.
 	ps := newPoolerStore(t)
 	stale := makePoolerState("cell1", "p1", "testdb", "default", "0", true, nil)
-	stale.Mutate(func(h *multiorchdatapb.PoolerHealthState) {
+	stale.Mutate(func(h *snapshot.PoolerHealthState) {
 		h.LastSeen = timestamppb.New(time.Now().Add(-time.Hour))
 	})
 	store.SeedCache(t, ps, stale)
@@ -203,7 +203,7 @@ func TestShardInitAction_GetInitializedPoolers_CohortEstablishedViaUndecidedProp
 	existingCohort := []*clustermetadatapb.ID{
 		{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "p1"},
 	}
-	p1 := store.NewPooler(&multiorchdatapb.PoolerHealthState{
+	p1 := store.NewPooler(&snapshot.PoolerHealthState{
 		Status: &multipoolermanagerdatapb.Status{IsInitialized: true},
 		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 			Id: &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "p1"},

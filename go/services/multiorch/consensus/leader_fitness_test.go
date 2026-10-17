@@ -23,28 +23,28 @@ import (
 
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
+	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 )
 
 // readinessNode builds a ConsensusStatus and its matching PoolerHealthState
 // carrying the given Status.PostgresReady value. A nil health snapshot (pass
 // hasHealth=false) exercises the "no observation yet" default.
-func readinessNode(name string, ready, hasHealth bool) (*clustermetadatapb.ConsensusStatus, *multiorchdatapb.PoolerHealthState) {
+func readinessNode(name string, ready, hasHealth bool) (*clustermetadatapb.ConsensusStatus, *snapshot.PoolerHealthState) {
 	id := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: name}
 	cs := &clustermetadatapb.ConsensusStatus{Id: id}
 	if !hasHealth {
 		return cs, nil
 	}
-	h := &multiorchdatapb.PoolerHealthState{
+	h := &snapshot.PoolerHealthState{
 		Status: &multipoolermanagerdatapb.Status{PostgresReady: ready},
 	}
 	return cs, h
 }
 
 func TestPostgresReadyLess(t *testing.T) {
-	lessFor := func(aCS, bCS *clustermetadatapb.ConsensusStatus, aH, bH *multiorchdatapb.PoolerHealthState) func(a, b *clustermetadatapb.ConsensusStatus) bool {
-		return postgresReadyLess(map[string]*multiorchdatapb.PoolerHealthState{
+	lessFor := func(aCS, bCS *clustermetadatapb.ConsensusStatus, aH, bH *snapshot.PoolerHealthState) func(a, b *clustermetadatapb.ConsensusStatus) bool {
+		return postgresReadyLess(map[string]*snapshot.PoolerHealthState{
 			topoclient.ClusterIDString(aCS.GetId()): aH,
 			topoclient.ClusterIDString(bCS.GetId()): bH,
 		})
@@ -93,7 +93,7 @@ func TestSelectFittestLeader(t *testing.T) {
 
 	t.Run("single candidate wins regardless of fitness", func(t *testing.T) {
 		a, aH := readinessNode("only", false, true)
-		healthByID := map[string]*multiorchdatapb.PoolerHealthState{
+		healthByID := map[string]*snapshot.PoolerHealthState{
 			topoclient.ClusterIDString(a.GetId()): aH,
 		}
 		got := selectFittestLeader([]*clustermetadatapb.ConsensusStatus{a}, healthByID, rng)
@@ -109,7 +109,7 @@ func TestSelectFittestLeader(t *testing.T) {
 		bID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "notready_active"}
 		a := &clustermetadatapb.ConsensusStatus{Id: aID}
 		b := &clustermetadatapb.ConsensusStatus{Id: bID}
-		healthByID := map[string]*multiorchdatapb.PoolerHealthState{
+		healthByID := map[string]*snapshot.PoolerHealthState{
 			topoclient.ClusterIDString(aID): {
 				Status:             &multipoolermanagerdatapb.Status{PostgresReady: true, FailoverSlotsReady: 0},
 				AvailabilityStatus: &clustermetadatapb.AvailabilityStatus{LeadershipStatus: &clustermetadatapb.LeadershipStatus{Signal: resign}},
@@ -130,7 +130,7 @@ func TestSelectFittestLeader(t *testing.T) {
 		bID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "ready_resigning"}
 		a := &clustermetadatapb.ConsensusStatus{Id: aID}
 		b := &clustermetadatapb.ConsensusStatus{Id: bID}
-		healthByID := map[string]*multiorchdatapb.PoolerHealthState{
+		healthByID := map[string]*snapshot.PoolerHealthState{
 			topoclient.ClusterIDString(aID): {
 				Status:             &multipoolermanagerdatapb.Status{PostgresReady: true},
 				AvailabilityStatus: &clustermetadatapb.AvailabilityStatus{LeadershipStatus: &clustermetadatapb.LeadershipStatus{Signal: active}},
@@ -147,7 +147,7 @@ func TestSelectFittestLeader(t *testing.T) {
 	t.Run("fully tied candidates: same seed reproduces the same winner", func(t *testing.T) {
 		a, aH := readinessNode("first", true, true)
 		b, bH := readinessNode("second", true, true)
-		healthByID := map[string]*multiorchdatapb.PoolerHealthState{
+		healthByID := map[string]*snapshot.PoolerHealthState{
 			topoclient.ClusterIDString(a.GetId()): aH,
 			topoclient.ClusterIDString(b.GetId()): bH,
 		}
@@ -162,7 +162,7 @@ func TestSelectFittestLeader(t *testing.T) {
 	t.Run("fully tied candidates: both can win across different seeds", func(t *testing.T) {
 		a, aH := readinessNode("first", true, true)
 		b, bH := readinessNode("second", true, true)
-		healthByID := map[string]*multiorchdatapb.PoolerHealthState{
+		healthByID := map[string]*snapshot.PoolerHealthState{
 			topoclient.ClusterIDString(a.GetId()): aH,
 			topoclient.ClusterIDString(b.GetId()): bH,
 		}
