@@ -61,7 +61,7 @@ import (
 //     pooler's *multipoolermanagerdata.Status plus only the orch
 //     bookkeeping that has a justified consumer. Every field needs a
 //     real reader; if nobody reads it, it doesn't exist.
-//   - Helpers (FindPoolerByID, FindPoolersInShard, FindShardMembers)
+//   - Helpers (FindPoolersInShard)
 //     read identity from entry.Pooler and runtime state from the rider.
 //
 // Don't accrete fields on PoolerHealthState in the meantime — every new

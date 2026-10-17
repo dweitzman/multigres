@@ -23,11 +23,11 @@ import (
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/topoclient"
-	commontypes "github.com/multigres/multigres/go/common/types"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
+	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 	"github.com/multigres/multigres/go/services/multiorch/store"
 )
 
@@ -39,80 +39,65 @@ const leaderInfoPropagationInterval = 1 * time.Second
 
 const setPrimaryPropagationTimeout = 5 * time.Second
 
-// leaderInfoStaleHealthThreshold skips propagation to a pooler we haven't
-// heard from recently: it's likely unreachable, and this loop's per-pooler
-// SetPrimary calls run sequentially, so waiting out setPrimaryPropagationTimeout
-// against a dead pooler would delay reaching the next (possibly live) one.
+// leaderInfoStaleHealthThreshold skips propagation to a follower we haven't
+// heard from recently: it's likely unreachable, and a shard's pass waits for
+// every follower's SetPrimary, so a dead follower would hold the pass (and the
+// next tick) up for the full setPrimaryPropagationTimeout.
 const leaderInfoStaleHealthThreshold = 1 * time.Minute
 
 // runLeaderInfoPropagation is a lightweight loop, independent of the
-// recovery cycle, that keeps every pooler's known leader identity and
+// recovery cycle, that keeps every follower's known leader identity and
 // rewind-readiness current via SetPrimary. It exists because AppointLeaderAction
 // can block on the leader's Promote RPC for the full AppointLeaderAction timeout, during
 // which the (single-flight) recovery cycle can't do anything else — including
-// re-informing a standby that the leader it's waiting on has just become
+// re-informing a follower that the leader it's waiting on has just become
 // rewind-ready. This loop runs on its own short interval so that information
-// reaches standbys promptly regardless of what the recovery cycle is doing.
+// reaches followers promptly regardless of what the recovery cycle is doing.
 func (re *Engine) runLeaderInfoPropagation(ctx context.Context) {
-	for _, shardKey := range distinctShardKeys(re.poolerCache) {
-		re.propagateLeaderInfoForShard(ctx, shardKey)
+	// No bootstrap policy: propagation never reads it, and looking it up can block on topology.
+	opts := store.SnapshotOptions{Now: time.Now(), AvailabilityPolicy: re.actionFactory.AvailabilityPolicy()}
+	for _, shard := range store.SnapshotShards(re.poolerCache, opts) {
+		re.propagateLeaderInfoForShard(ctx, shard)
 	}
 }
 
-// distinctShardKeys returns one ShardKey per shard currently represented in
-// the pooler cache. Deliberately cheaper than store.SnapshotShards,
-// which freezes every pooler's health, more than this loop needs —
-// it only cares which shards exist, then re-derives everything else itself
-// via store.FindShardMembers.
-func distinctShardKeys(cache *store.PoolerCache) []*clustermetadatapb.ShardKey {
-	seen := make(map[commontypes.ShardKeyString]*clustermetadatapb.ShardKey)
-	for _, entry := range cache.All() {
-		key := entry.Pooler.GetShardKey()
-		seen[commontypes.FormatShardKey(key)] = key
-	}
-	keys := make([]*clustermetadatapb.ShardKey, 0, len(seen))
-	for _, key := range seen {
-		keys = append(keys, key)
-	}
-	return keys
-}
-
-// propagateLeaderInfoForShard tells every non-leader pooler in the shard
-// about the current leader and its rewind-readiness, skipping any pooler
-// that already knows both.
-func (re *Engine) propagateLeaderInfoForShard(ctx context.Context, shardKey *clustermetadatapb.ShardKey) {
-	members := store.FindShardMembers(re.poolerCache, shardKey)
-	leader := members.Leader
-	if leader == nil || members.HighestIntendedRule.IsEmpty() {
+// propagateLeaderInfoForShard tells every follower in the shard about the
+// current leader and its rewind-readiness, skipping any follower that already
+// knows both. It judges from the frozen shard, so the leader,
+// the rule and each pooler's state agree for the whole pass.
+func (re *Engine) propagateLeaderInfoForShard(ctx context.Context, shard *snapshot.Shard) {
+	leader := shard.IntendedLeaderHealth()
+	rule := shard.HighestIntendedRule()
+	if leader == nil || rule.IsEmpty() {
 		return
 	}
 
-	// Ensure the primary holds a physical replication slot for every
+	// Ensure the leader holds a physical replication slot for every
 	// cohort-eligible follower BEFORE any follower is pointed at it via
-	// SetPrimary below. A late-joining standby cannot stream — and therefore
+	// SetPrimary below. A late-joining follower cannot stream — and therefore
 	// cannot join the cohort, and therefore cannot get its slot via the
 	// cohort-add path — until its slot already exists on the primary; this
 	// discovery-driven, declarative reconcile breaks that ordering deadlock
-	// (§2.6). Idempotent and level-triggered, so a missed event or a primary
+	// (§2.6). Idempotent and level-triggered, so a missed event or a leader
 	// restart self-heals on the next tick.
-	re.reconcileFollowerSlots(ctx, leader, store.CohortEligibleFollowerIDs(members))
+	re.reconcileFollowerSlots(ctx, leader, shard.CohortEligibleFollowerIDs())
 
-	leaderAddress := topoclient.PoolerAddressFor(leader.Health().GetMultipooler())
-	leaderRewindReady := commonconsensus.ReplicationPrimaryOrNil(leader.Health().GetConsensusStatus()).GetRewindReady()
+	leaderAddress := topoclient.PoolerAddressFor(leader.GetMultipooler())
+	leaderRewindReady := commonconsensus.ReplicationPrimaryOrNil(leader.GetConsensusStatus()).GetRewindReady()
 
-	// One goroutine per pooler: each pooler appears at most once in a shard's
+	// One goroutine per follower: each pooler appears at most once in a shard's
 	// member list, so there's never more than one in-flight SetPrimary to the
-	// same pooler. Waiting for all of them keeps a slow/unreachable pooler
-	// from delaying the next tick, without blocking this one on that pooler.
+	// same follower. Waiting for all of them keeps a slow/unreachable follower
+	// from delaying the other followers in this pass.
 	var wg sync.WaitGroup
-	for _, pooler := range members.Poolers {
+	for _, pooler := range shard.Poolers {
 		if pooler == leader {
 			continue
 		}
 		wg.Add(1)
-		go func(pooler *store.Pooler) {
+		go func(follower *multiorchdatapb.PoolerHealthState) {
 			defer wg.Done()
-			re.propagateLeaderInfoToPooler(ctx, pooler, leaderAddress, leaderRewindReady, members.HighestIntendedRule)
+			re.propagateLeaderInfoToPooler(ctx, follower, shard.Now, leaderAddress, leaderRewindReady, rule)
 		}(pooler)
 	}
 	wg.Wait()
@@ -122,87 +107,95 @@ func (re *Engine) propagateLeaderInfoForShard(ctx context.Context, shardKey *clu
 // follower set so it pre-creates their per-follower physical replication slots.
 // Best-effort: a failure is logged and retried on the next tick. No-op when the
 // set is empty (single-node shard, or nothing discovered yet).
-func (re *Engine) reconcileFollowerSlots(ctx context.Context, leader *store.Pooler, followerIDs []*clustermetadatapb.ID) {
+func (re *Engine) reconcileFollowerSlots(ctx context.Context, leader *multiorchdatapb.PoolerHealthState, followerIDs []*clustermetadatapb.ID) {
 	if len(followerIDs) == 0 {
 		return
 	}
 	rpcCtx, cancel := context.WithTimeout(ctx, setPrimaryPropagationTimeout)
 	defer cancel()
-	if _, err := re.rpcClient.ReconcileFollowers(rpcCtx, leader.Health().GetMultipooler(), &multipoolermanagerdatapb.ReconcileFollowersRequest{
+	if _, err := re.rpcClient.ReconcileFollowers(rpcCtx, leader.GetMultipooler(), &multipoolermanagerdatapb.ReconcileFollowersRequest{
 		Followers: followerIDs,
 	}); err != nil {
 		re.logger.WarnContext(ctx, "leader-info propagation: ReconcileFollowers failed, will retry next tick",
-			"leader", leader.Health().GetMultipooler().GetId().GetName(), "error", err)
+			"leader", leader.GetMultipooler().GetId().GetName(), "error", err)
 	}
 }
 
-// shouldPropagateLeaderInfo reports whether a pooler needs a SetPrimary call
-// to learn the current leader or its rewind-readiness, given rp (the
-// pooler's own last-reported ReplicationPrimary, nil if never told anything)
-// and lastSeen (its own health, nil if we've never heard from it). now is
+// shouldPropagateLeaderInfo reports whether a follower needs a SetPrimary call
+// to learn the current leader or its rewind-readiness, given followerPrimary (the
+// follower's own last-reported ReplicationPrimary, nil if never told anything)
+// and followerLastSeen (when we last heard from the follower, nil if never). now is
 // passed in rather than read from the clock so this stays a pure function to
 // unit test directly, independent of the health cache and RPC client.
 func shouldPropagateLeaderInfo(
-	rp *clustermetadatapb.ReplicationPrimary,
-	lastSeen *timestamppb.Timestamp,
+	followerPrimary *clustermetadatapb.ReplicationPrimary,
+	followerLastSeen *timestamppb.Timestamp,
 	now time.Time,
 	leaderAddress *clustermetadatapb.PoolerAddress,
 	leaderRewindReady bool,
 	intendedRule commonconsensus.RuleTransition,
 ) bool {
-	if now.Sub(lastSeen.AsTime()) > leaderInfoStaleHealthThreshold {
-		return false // likely unreachable; don't let it stall the poolers behind it
+	if now.Sub(followerLastSeen.AsTime()) > leaderInfoStaleHealthThreshold {
+		return false // likely unreachable; don't let it hold up the pass
 	}
-	positionMatches := commonconsensus.ReplicationPrimaryMatches(rp, leaderAddress, intendedRule.Position())
+	positionMatches := commonconsensus.ReplicationPrimaryMatches(followerPrimary, leaderAddress, intendedRule.Position())
 	// rewind_ready only ever goes false -> true within a coordinator term (see
-	// RecordTermPrimary), so never tell a pooler that already believes true
+	// RecordTermPrimary), so never tell a follower that already believes true
 	// otherwise — even if our own cached view of the leader is stale-false.
-	if positionMatches && (rp.GetRewindReady() || rp.GetRewindReady() == leaderRewindReady) {
+	if positionMatches && (followerPrimary.GetRewindReady() || followerPrimary.GetRewindReady() == leaderRewindReady) {
 		return false // already knows everything we'd tell it
 	}
 	return true
 }
 
-// propagateLeaderInfoToPooler tells a single pooler about the current leader
-// and its rewind-readiness via SetPrimary, unless it already knows both.
+// propagateLeaderInfoToPooler tells one follower about the current leader (its
+// address, rewind-readiness and the intended rule) via SetPrimary, unless the
+// follower already knows all three. follower is the follower's health as of the
+// snapshot at now; the leader is described only by leaderAddress and
+// leaderRewindReady.
 func (re *Engine) propagateLeaderInfoToPooler(
 	ctx context.Context,
-	pooler *store.Pooler,
+	follower *multiorchdatapb.PoolerHealthState,
+	now time.Time,
 	leaderAddress *clustermetadatapb.PoolerAddress,
 	leaderRewindReady bool,
 	intendedRule commonconsensus.RuleTransition,
 ) {
-	health := pooler.Health()
-	rp := commonconsensus.ReplicationPrimaryOrNil(health.GetConsensusStatus())
-	if !shouldPropagateLeaderInfo(rp, health.GetLastSeen(), time.Now(), leaderAddress, leaderRewindReady, intendedRule) {
+	followerPrimary := commonconsensus.ReplicationPrimaryOrNil(follower.GetConsensusStatus())
+	if !shouldPropagateLeaderInfo(followerPrimary, follower.GetLastSeen(), now, leaderAddress, leaderRewindReady, intendedRule) {
 		return
 	}
 
-	replicationPrimary := &clustermetadatapb.ReplicationPrimary{
+	toTell := &clustermetadatapb.ReplicationPrimary{
 		Position:    intendedRule.Position(),
 		Primary:     leaderAddress,
 		RewindReady: leaderRewindReady,
 	}
 	rpcCtx, cancel := context.WithTimeout(ctx, setPrimaryPropagationTimeout)
 	defer cancel()
-	_, err := re.rpcClient.SetPrimary(rpcCtx, health.GetMultipooler(), &consensusdatapb.SetPrimaryRequest{
-		ReplicationPrimary: replicationPrimary,
+	_, err := re.rpcClient.SetPrimary(rpcCtx, follower.GetMultipooler(), &consensusdatapb.SetPrimaryRequest{
+		ReplicationPrimary: toTell,
 	})
 	if err != nil {
 		re.logger.WarnContext(ctx, "leader-info propagation: SetPrimary failed, will retry next tick",
-			"pooler", health.GetMultipooler().GetId().GetName(), "error", err)
+			"follower", follower.GetMultipooler().GetId().GetName(), "error", err)
 		return
 	}
 
 	// Optimistically cache the just-applied primary so the next reconcile
 	// tick doesn't redundantly re-send it before the pooler's own streamed
-	// health update reports it back to us.
-	pooler.Mutate(func(h *multiorchdatapb.PoolerHealthState) {
+	// health update reports it back to us. The pooler may have left the cache
+	// since the snapshot was taken; there is then nothing left to update.
+	entry, ok := re.poolerCache.Get(topoclient.ComponentIDString(follower.GetMultipooler().GetId()))
+	if !ok {
+		return
+	}
+	entry.Rider.Mutate(func(h *multiorchdatapb.PoolerHealthState) {
 		if h.ConsensusStatus == nil {
 			h.ConsensusStatus = &clustermetadatapb.ConsensusStatus{}
 		}
 		current := commonconsensus.ReplicationPrimaryOrNil(h.ConsensusStatus)
-		if merged, changed := commonconsensus.MergeReplicationPrimary(current, replicationPrimary); changed {
+		if merged, changed := commonconsensus.MergeReplicationPrimary(current, toTell); changed {
 			h.ConsensusStatus.ReplicationPrimary = merged //nolint:gocritic // the linter is trying to protect against not using ReplicationPrimaryOrNil on read, but this is a write.
 		}
 	})

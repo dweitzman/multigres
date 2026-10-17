@@ -16,35 +16,18 @@
 // cache. The cache itself lives in topoclient/poolerwatch and is generic
 // over a rider type; this package fixes the rider to *Pooler (which bundles
 // the proto health state with the per-pooler stream handle) and supplies
-// orch-specific helpers (FindPoolersInShard, FindShardMembers, etc).
+// orch-specific helpers (FindPoolersInShard).
 package store
 
 import (
-	"google.golang.org/protobuf/proto"
-
-	commonconsensus "github.com/multigres/multigres/go/common/consensus"
-	"github.com/multigres/multigres/go/common/mterrors"
-	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/common/topoclient/poolerwatch"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 )
 
 // PoolerCache is the orch-side type alias for the lifecycle-aware pooler
 // cache keyed by *Pooler riders.
 type PoolerCache = poolerwatch.PoolerCache[*Pooler]
-
-// FindPoolerByID looks up a single pooler by its component ID. Returns
-// NOT_FOUND if the pooler is not in the cache.
-func FindPoolerByID(cache *PoolerCache, id *clustermetadatapb.ID) (*Pooler, error) {
-	entry, ok := cache.Get(topoclient.ComponentIDString(id))
-	if !ok {
-		return nil, mterrors.Errorf(mtrpcpb.Code_NOT_FOUND,
-			"pooler %s/%s not found", id.GetCell(), id.GetName())
-	}
-	return entry.Rider, nil
-}
 
 // FindPoolersInShard returns every pooler the cache holds for the given
 // shard. The returned slice is empty if no poolers match.
@@ -55,73 +38,4 @@ func FindPoolersInShard(cache *PoolerCache, shardKey *clustermetadatapb.ShardKey
 		out = append(out, e.Rider)
 	}
 	return out
-}
-
-// ShardMembers is the result of FindShardMembers: the shard's poolers, the
-// highest intended rule across them, and the pooler that rule names as leader.
-type ShardMembers struct {
-	// Poolers is every pooler the cache holds for the shard.
-	Poolers []*Pooler
-	// HighestIntendedRule is the highest rule any of Poolers has told us of,
-	// including one a follower learned only through its replication primary; it
-	// is empty if none carries a rule. Its PossiblyUndecidedRule names the
-	// intended leader via GetLeaderId().
-	HighestIntendedRule commonconsensus.RuleTransition
-	// Leader is the pooler HighestIntendedRule names, or nil when no
-	// rule is known or the named pooler is not in the cache (e.g. known only
-	// via a follower's rule).
-	Leader *Pooler
-}
-
-// CohortEligibleFollowerIDs returns the IDs of the shard's cohort-eligible
-// followers: every member that is not the leader. The leader is identified from
-// consensus state — FindShardMembers derives members.Leader from the highest
-// known shard rule — never from the topology Multipooler.Type, which multiorch
-// must not consult for identity. This mirrors the SetPrimary fan-out in
-// propagateLeaderInfoForShard, which likewise points every non-leader member at
-// the primary: each such member streams from the primary and therefore needs a
-// per-follower physical replication slot pre-created there (§2.6). Eligibility is
-// membership, not streaming state or role, so a freshly discovered standby is
-// included before it streams — breaking the bootstrap ordering deadlock where a
-// late-joining standby can never stream, so can never join the cohort, so never
-// gets its slot. Pure; call on the result of FindShardMembers (a nil
-// members.Leader yields every member, so callers gate on a known leader before
-// acting).
-func CohortEligibleFollowerIDs(members ShardMembers) []*clustermetadatapb.ID {
-	ids := make([]*clustermetadatapb.ID, 0, len(members.Poolers))
-	for _, pooler := range members.Poolers {
-		if pooler == members.Leader {
-			continue
-		}
-		ids = append(ids, pooler.Health().GetMultipooler().GetId())
-	}
-	return ids
-}
-
-// FindShardMembers identifies the shard's members, consensus position, and
-// leader's health.
-func FindShardMembers(cache *PoolerCache, shardKey *clustermetadatapb.ShardKey) ShardMembers {
-	poolers := FindPoolersInShard(cache, shardKey)
-
-	statuses := make([]*clustermetadatapb.ConsensusStatus, 0, len(poolers))
-	for _, pooler := range poolers {
-		if cs := pooler.Health().GetConsensusStatus(); cs != nil {
-			statuses = append(statuses, cs)
-		}
-	}
-
-	rule := commonconsensus.NewRuleTransition(commonconsensus.HighestIntendedRule(statuses))
-	leaderID := rule.PossiblyUndecidedRule().GetLeaderId()
-
-	var leader *Pooler
-	if leaderID != nil {
-		for _, pooler := range poolers {
-			if proto.Equal(pooler.Health().GetMultipooler().GetId(), leaderID) {
-				leader = pooler
-				break
-			}
-		}
-	}
-
-	return ShardMembers{Poolers: poolers, HighestIntendedRule: rule, Leader: leader}
 }

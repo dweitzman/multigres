@@ -28,6 +28,7 @@ import (
 	"github.com/multigres/multigres/go/common/rpcclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
+	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 	"github.com/multigres/multigres/go/services/multiorch/store"
 )
 
@@ -154,13 +155,13 @@ func TestShouldPropagateLeaderInfo(t *testing.T) {
 // needlessly re-send the same SetPrimary before the pooler's own streamed
 // health update reports it back (see shouldPropagateLeaderInfo).
 func TestReconcileFollowerSlots(t *testing.T) {
-	leader := store.NewPooler(&multiorchdatapb.PoolerHealthState{
+	leader := &multiorchdatapb.PoolerHealthState{
 		Multipooler: &clustermetadatapb.Multipooler{
 			Id:   &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "p0"},
 			Type: clustermetadatapb.PoolerType_PRIMARY,
 		},
 		LastSeen: timestamppb.Now(),
-	}, nil)
+	}
 
 	t.Run("calls ReconcileFollowers on the leader when the set is non-empty", func(t *testing.T) {
 		fake := rpcclient.NewFakeClient()
@@ -183,18 +184,20 @@ func TestReconcileFollowerSlots(t *testing.T) {
 
 func TestPropagateLeaderInfoToPooler_CachesSuccessfulSetPrimary(t *testing.T) {
 	fake := rpcclient.NewFakeClient()
-	re := &Engine{rpcClient: fake, logger: slog.Default()}
+	cache := store.NewTestCache(t)
+	re := &Engine{rpcClient: fake, logger: slog.Default(), poolerCache: cache}
 
 	poolerID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "p1"}
 	pooler := store.NewPooler(&multiorchdatapb.PoolerHealthState{
 		Multipooler: &clustermetadatapb.Multipooler{Id: poolerID},
 		LastSeen:    timestamppb.Now(),
 	}, nil)
+	store.SeedCache(t, cache, pooler)
 
 	leaderAddress := leaderInfoTestAddress("leader")
 	position := &clustermetadatapb.RulePosition{Decision: leaderInfoTestRule(5)}
 
-	re.propagateLeaderInfoToPooler(t.Context(), pooler, leaderAddress, true, commonconsensus.NewRuleTransition(position))
+	re.propagateLeaderInfoToPooler(t.Context(), pooler.Health(), time.Now(), leaderAddress, true, commonconsensus.NewRuleTransition(position))
 
 	require.Equal(t, []string{"SetPrimary(multipooler-zone1-p1)"}, fake.GetCallLog(), "SetPrimary must actually have been called")
 	got := pooler.Health().GetConsensusStatus().GetReplicationPrimary()
@@ -210,7 +213,8 @@ func TestPropagateLeaderInfoToPooler_CachesSuccessfulSetPrimary(t *testing.T) {
 // (still in flight from an earlier tick) was completing.
 func TestPropagateLeaderInfoToPooler_NeverRegressesCachedPrimary(t *testing.T) {
 	fake := rpcclient.NewFakeClient()
-	re := &Engine{rpcClient: fake, logger: slog.Default()}
+	cache := store.NewTestCache(t)
+	re := &Engine{rpcClient: fake, logger: slog.Default(), poolerCache: cache}
 
 	poolerID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "p1"}
 	newerPrimary := &clustermetadatapb.ReplicationPrimary{
@@ -222,11 +226,75 @@ func TestPropagateLeaderInfoToPooler_NeverRegressesCachedPrimary(t *testing.T) {
 		ConsensusStatus: &clustermetadatapb.ConsensusStatus{ReplicationPrimary: newerPrimary},
 		LastSeen:        timestamppb.Now(),
 	}, nil)
+	store.SeedCache(t, cache, pooler)
 
 	stalePosition := &clustermetadatapb.RulePosition{Decision: leaderInfoTestRule(3)}
-	re.propagateLeaderInfoToPooler(t.Context(), pooler, leaderInfoTestAddress("stale-leader"), false, commonconsensus.NewRuleTransition(stalePosition))
+	re.propagateLeaderInfoToPooler(t.Context(), pooler.Health(), time.Now(), leaderInfoTestAddress("stale-leader"), false, commonconsensus.NewRuleTransition(stalePosition))
 
 	require.Equal(t, []string{"SetPrimary(multipooler-zone1-p1)"}, fake.GetCallLog(), "SetPrimary must actually have been called with the stale info")
 	got := pooler.Health().GetConsensusStatus().GetReplicationPrimary()
 	assert.True(t, proto.Equal(newerPrimary, got), "must not regress a fresher cached view with a stale optimistic update")
+}
+
+func TestPropagateLeaderInfoForShard(t *testing.T) {
+	shardKey := &clustermetadatapb.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"}
+	id := func(name string) *clustermetadatapb.ID {
+		return &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: name}
+	}
+	// pooler reports the leader's rule as its own position, so the shard's intended leader is "leader".
+	pooler := func(name string) *store.Pooler {
+		rule := &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{
+			RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5}, LeaderId: id("leader"),
+		}}
+		return store.NewPooler(&multiorchdatapb.PoolerHealthState{
+			Multipooler:     &clustermetadatapb.Multipooler{Id: id(name), ShardKey: shardKey},
+			ConsensusStatus: &clustermetadatapb.ConsensusStatus{Id: id(name), CurrentPosition: &clustermetadatapb.PoolerPosition{Position: rule}},
+			LastSeen:        timestamppb.Now(),
+		}, nil)
+	}
+	engine := func(t *testing.T, names ...string) (*Engine, *rpcclient.FakeClient, *store.PoolerCache) {
+		cache := store.NewTestCache(t)
+		for _, n := range names {
+			store.SeedCache(t, cache, pooler(n))
+		}
+		fake := rpcclient.NewFakeClient()
+		return &Engine{rpcClient: fake, logger: slog.Default(), poolerCache: cache}, fake, cache
+	}
+	snap := func(t *testing.T, cache *store.PoolerCache) *snapshot.Shard {
+		shard, err := store.SnapshotShard(cache, shardKey, store.SnapshotOptions{Now: time.Now()})
+		require.NoError(t, err)
+		return shard
+	}
+
+	t.Run("points followers at the leader and reconciles its follower slots", func(t *testing.T) {
+		re, fake, cache := engine(t, "leader", "f1", "f2")
+		re.propagateLeaderInfoForShard(t.Context(), snap(t, cache))
+		log := fake.GetCallLog()
+		assert.Contains(t, log, "ReconcileFollowers(multipooler-zone1-leader)")
+		assert.Contains(t, log, "SetPrimary(multipooler-zone1-f1)")
+		assert.Contains(t, log, "SetPrimary(multipooler-zone1-f2)")
+		assert.NotContains(t, log, "SetPrimary(multipooler-zone1-leader)", "the leader is never pointed at itself")
+	})
+
+	t.Run("does nothing when the intended leader is not in the snapshot", func(t *testing.T) {
+		re, fake, cache := engine(t, "f1", "f2")
+		re.propagateLeaderInfoForShard(t.Context(), snap(t, cache))
+		assert.Empty(t, fake.GetCallLog())
+	})
+}
+
+// A follower evicted from the cache while SetPrimary was in flight still gets its
+// call, and the missing cache entry is skipped rather than dereferenced.
+func TestPropagateLeaderInfoToPooler_FollowerEvictedFromCache(t *testing.T) {
+	fake := rpcclient.NewFakeClient()
+	re := &Engine{rpcClient: fake, logger: slog.Default(), poolerCache: store.NewTestCache(t)}
+	follower := &multiorchdatapb.PoolerHealthState{
+		Multipooler: &clustermetadatapb.Multipooler{Id: &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "gone"}},
+		LastSeen:    timestamppb.Now(),
+	}
+
+	re.propagateLeaderInfoToPooler(t.Context(), follower, time.Now(), leaderInfoTestAddress("leader"), true,
+		commonconsensus.NewRuleTransition(&clustermetadatapb.RulePosition{Decision: leaderInfoTestRule(5)}))
+
+	require.Equal(t, []string{"SetPrimary(multipooler-zone1-gone)"}, fake.GetCallLog())
 }
