@@ -806,7 +806,7 @@ func TestFilterAndPrioritize_AlertOnlyShardWideDoesNotBlockPoolerScoped(t *testi
 			PoolerID:       poolerID1,
 			Priority:       types.PriorityEmergency,
 			Scope:          types.ScopeShard,
-			RecoveryAction: actions.NewAlertOnlyAction(logger),
+			RecoveryAction: actions.NewAlertOnlyAction(),
 		},
 		{
 			Code:     types.ProblemReplicaNotReplicating,
@@ -852,7 +852,7 @@ func TestFilterAndPrioritize_AlertOnlyDoesNotStealPoolerSlot(t *testing.T) {
 			PoolerID:       poolerID,
 			Priority:       types.PriorityHigh,
 			Scope:          types.ScopePooler,
-			RecoveryAction: actions.NewAlertOnlyAction(logger),
+			RecoveryAction: actions.NewAlertOnlyAction(),
 		},
 		{
 			Code:     types.ProblemReplicaNotReplicating,

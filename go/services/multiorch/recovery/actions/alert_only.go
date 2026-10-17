@@ -16,9 +16,10 @@ package actions
 
 import (
 	"context"
-	"log/slog"
 	"time"
 
+	"github.com/multigres/multigres/go/common/mterrors"
+	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
 )
 
@@ -33,29 +34,21 @@ const AlertOnlyActionName = "AlertOnly"
 // AlertOnlyAction is the recovery action for non-actionable problems — ones an
 // orchestrator has detected but cannot fix on its own (e.g. ShardStuck,
 // ShardAtRisk). It performs no remediation; surfacing the problem is the whole
-// point. The alert signal is the detected-problems metric that the recovery
-// cycle already records; Execute only logs so the reason is visible in logs.
-type AlertOnlyAction struct {
-	logger *slog.Logger
-}
+// point. The engine drops these problems before prioritizing them, so Execute
+// is never expected to run; the detected-problems metric and the engine's alert transition
+// logs are the signal.
+type AlertOnlyAction struct{}
 
 // NewAlertOnlyAction creates an alert-only recovery action.
-func NewAlertOnlyAction(logger *slog.Logger) *AlertOnlyAction {
-	return &AlertOnlyAction{logger: logger}
+func NewAlertOnlyAction() *AlertOnlyAction {
+	return &AlertOnlyAction{}
 }
 
-// Execute records the problem for human attention and returns nil. It never
-// mutates cluster state.
-func (a *AlertOnlyAction) Execute(ctx context.Context, rechecked types.RecheckedProblem) error {
-	problem := rechecked.Problem
-	a.logger.WarnContext(ctx, "non-actionable problem detected; human intervention required",
-		"problem_code", problem.Code,
-		"database", problem.ShardKey.GetDatabase(),
-		"tablegroup", problem.ShardKey.GetTableGroup(),
-		"shard", problem.ShardKey.GetShard(),
-		"description", problem.Description,
-	)
-	return nil
+// Execute reports a bug: the engine never runs alert-only problems, so reaching
+// it means that filtering broke. It returns an error rather than panicking so a
+// slip here cannot take down the failover coordinator, and it changes nothing.
+func (a *AlertOnlyAction) Execute(context.Context, types.RecheckedProblem) error {
+	return mterrors.Errorf(mtrpcpb.Code_INTERNAL, "alert-only problems are never executed; the engine should have filtered this one")
 }
 
 func (a *AlertOnlyAction) Metadata() types.RecoveryMetadata {

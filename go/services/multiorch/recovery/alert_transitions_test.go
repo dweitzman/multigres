@@ -36,7 +36,7 @@ func TestAlertTransitionLogger(t *testing.T) {
 	alert := types.Problem{
 		Code:           types.ProblemShardAtRisk,
 		Scope:          types.ScopePooler,
-		RecoveryAction: actions.NewAlertOnlyAction(logger),
+		RecoveryAction: actions.NewAlertOnlyAction(),
 		Description:    "first description",
 	}
 

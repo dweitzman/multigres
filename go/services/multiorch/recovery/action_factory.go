@@ -84,7 +84,7 @@ func (f *actionFactory) NewReconcileCohortAction() types.RecoveryAction {
 // NewAlertOnlyAction creates a no-op action for non-actionable problems (e.g.
 // ShardStuck, ShardAtRisk) — detection is the point; there is nothing to fix.
 func (f *actionFactory) NewAlertOnlyAction() types.RecoveryAction {
-	return actions.NewAlertOnlyAction(f.logger)
+	return actions.NewAlertOnlyAction()
 }
 
 // NewReconnectRecruitAbandonedAction creates an action to reconnect a follower

@@ -15,25 +15,28 @@
 package actions
 
 import (
-	"log/slog"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/multigres/multigres/go/common/mterrors"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
 )
 
 func TestAlertOnlyAction(t *testing.T) {
-	a := NewAlertOnlyAction(slog.Default())
+	a := NewAlertOnlyAction()
 	problem := types.Problem{
 		Code:        types.ProblemShardStuck,
 		ShardKey:    &clustermetadatapb.ShardKey{Database: "db", TableGroup: "tg", Shard: "0"},
 		Description: "shard needs a new leader but no recruitment quorum is reachable",
 	}
 
-	// Execute is a no-op: it records the problem and never errors or mutates state.
-	require.NoError(t, a.Execute(t.Context(), types.RecheckedProblem{Problem: problem}))
+	// The engine never executes alert-only problems; if one slips through, it fails loudly.
+	err := a.Execute(t.Context(), types.RecheckedProblem{Problem: problem})
+	require.Error(t, err)
+	require.Equal(t, mtrpcpb.Code_INTERNAL, mterrors.Code(err))
 
 	require.Equal(t, "AlertOnly", a.Metadata().Name)
 	require.False(t, a.RequiresHealthyLeader())
