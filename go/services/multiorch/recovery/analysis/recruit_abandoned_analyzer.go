@@ -78,7 +78,7 @@ func (a *RecruitAbandonedAnalyzer) analyzePooler(sa *snapshot.Shard, pa *snapsho
 	}
 
 	// Only followers can be stranded; the leader defines the rule.
-	if commonconsensus.SelfConsensusRole(pa.GetConsensusStatus()) == commonconsensus.ConsensusRoleLeader {
+	if pa.ClaimsLeadership() {
 		return nil, nil
 	}
 	hs, ok := snapshot.HealthWithin(pa, sa.Now, sa.AvailabilityPolicy.ObservationFreshness)

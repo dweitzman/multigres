@@ -18,7 +18,6 @@ import (
 	"errors"
 	"fmt"
 
-	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
 )
@@ -47,7 +46,7 @@ func (a *ReplicaNotReplicatingAnalyzer) analyzePooler(sa *snapshot.Shard, pa *sn
 	}
 
 	// Only analyze replicas
-	if commonconsensus.SelfConsensusRole(pa.GetConsensusStatus()) == commonconsensus.ConsensusRoleLeader {
+	if pa.ClaimsLeadership() {
 		return nil, nil
 	}
 

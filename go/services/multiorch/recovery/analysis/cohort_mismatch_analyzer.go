@@ -244,7 +244,7 @@ func (a *CohortMismatchAnalyzer) Analyze(sa *snapshot.Shard) ([]types.Problem, e
 // problem an acting primary adding itself to the cohort. This may be useful
 // in some propagation scenarios.
 func (a *CohortMismatchAnalyzer) isAdditionCandidate(sa *snapshot.Shard, pa *snapshot.PoolerHealthState) bool {
-	if commonconsensus.SelfConsensusRole(pa.GetConsensusStatus()) == commonconsensus.ConsensusRoleLeader {
+	if pa.ClaimsLeadership() {
 		return false
 	}
 	if !pa.Recruitable(sa.Now, sa.AvailabilityPolicy.ObservationFreshness) {

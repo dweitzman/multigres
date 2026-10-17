@@ -31,6 +31,15 @@ func (h *PoolerHealthState) CohortIneligible() bool {
 	return signal == clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE
 }
 
+// ClaimsLeadership reports whether the pooler's own consensus status names itself
+// leader of the highest rule it knows, including a proposal not yet decided. It is
+// the pooler's claim, not a verdict: the claim can be stale, revoked or superseded
+// (see commonconsensus.IsActiveLeader for write authority). A pooler that claims
+// leadership but is not the shard's intended leader is a stale leader.
+func (h *PoolerHealthState) ClaimsLeadership() bool {
+	return commonconsensus.SelfConsensusRole(h.GetConsensusStatus()) == commonconsensus.ConsensusRoleLeader
+}
+
 // RequestsLeaderReplacement reports whether a leader pooler has voluntarily
 // signalled that it should be replaced via a new election. It reads the
 // self-reported AvailabilityStatus.

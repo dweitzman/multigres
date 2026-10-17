@@ -41,25 +41,11 @@ import (
 	"github.com/multigres/multigres/go/services/multiorch/store"
 	"github.com/multigres/multigres/go/tools/telemetry"
 
-	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	commontypes "github.com/multigres/multigres/go/common/types"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
-
-// tSelfIsLeader / tWalReplayNotPaused mirror the analysis-package derivations
-// for the mock analyzers in this package's tests, which operate on pooler
-// health directly. tSelfIsLeader reports whether
-// the pooler's own consensus status names itself the leader.
-func tSelfIsLeader(p *snapshot.PoolerHealthState) bool {
-	return commonconsensus.SelfConsensusRole(p.GetConsensusStatus()) == commonconsensus.ConsensusRoleLeader
-}
-
-func tWalReplayNotPaused(p *snapshot.PoolerHealthState) bool {
-	rs := p.GetStatus().GetReplicationStatus()
-	return rs != nil && !rs.GetIsWalReplayPaused()
-}
 
 // customAnalyzer is a test analyzer that can use a custom analyze function.
 type customAnalyzer struct {
@@ -888,7 +874,7 @@ func (m *mockPrimaryDeadAnalyzer) RecoveryAction() types.RecoveryAction {
 func (m *mockPrimaryDeadAnalyzer) Analyze(sa *snapshot.Shard) ([]types.Problem, error) {
 	var problems []types.Problem
 	for _, a := range sa.Poolers {
-		if tSelfIsLeader(a) && !a.StreamConnected {
+		if a.ClaimsLeadership() && !a.StreamConnected {
 			problems = append(problems, types.Problem{
 				Code:           types.ProblemLeaderUnreachableByCohort,
 				CheckName:      m.Name(),
@@ -921,7 +907,7 @@ func (m *mockReplicaNotReplicatingAnalyzer) RecoveryAction() types.RecoveryActio
 func (m *mockReplicaNotReplicatingAnalyzer) Analyze(sa *snapshot.Shard) ([]types.Problem, error) {
 	var problems []types.Problem
 	for _, a := range sa.Poolers {
-		if !tSelfIsLeader(a) && !tWalReplayNotPaused(a) {
+		if !a.ClaimsLeadership() && !a.WalReplayNotPaused() {
 			problems = append(problems, types.Problem{
 				Code:           types.ProblemReplicaNotReplicating,
 				CheckName:      m.Name(),
@@ -1749,7 +1735,7 @@ func TestRecoveryLoop_PriorityOrdering(t *testing.T) {
 	// Create three separate analyzers, each detecting a problem with different priority
 	normalAnalyzer := &customAnalyzer{
 		analyzeFn: func(a *snapshot.PoolerHealthState) *types.Problem {
-			if !tSelfIsLeader(a) && !tWalReplayNotPaused(a) {
+			if !a.ClaimsLeadership() && !a.WalReplayNotPaused() {
 				return &types.Problem{
 					Code:           types.ProblemReplicaNotReplicating,
 					CheckName:      "NormalPriorityAnalyzer",
@@ -1771,7 +1757,7 @@ func TestRecoveryLoop_PriorityOrdering(t *testing.T) {
 
 	emergencyAnalyzer := &customAnalyzer{
 		analyzeFn: func(a *snapshot.PoolerHealthState) *types.Problem {
-			if !tSelfIsLeader(a) && !tWalReplayNotPaused(a) {
+			if !a.ClaimsLeadership() && !a.WalReplayNotPaused() {
 				return &types.Problem{
 					Code:           types.ProblemReplicaNotReplicating,
 					CheckName:      "EmergencyPriorityAnalyzer",
@@ -1793,7 +1779,7 @@ func TestRecoveryLoop_PriorityOrdering(t *testing.T) {
 
 	highAnalyzer := &customAnalyzer{
 		analyzeFn: func(a *snapshot.PoolerHealthState) *types.Problem {
-			if !tSelfIsLeader(a) && !tWalReplayNotPaused(a) {
+			if !a.ClaimsLeadership() && !a.WalReplayNotPaused() {
 				return &types.Problem{
 					Code:           types.ProblemReplicaNotReplicating,
 					CheckName:      "HighPriorityAnalyzer",
@@ -1907,7 +1893,7 @@ func TestRecoveryLoop_TracingSpans(t *testing.T) {
 
 	analyzeFunc := func(a *snapshot.PoolerHealthState) *types.Problem {
 		// Detect replica with paused WAL replay
-		if !tSelfIsLeader(a) && !tWalReplayNotPaused(a) {
+		if !a.ClaimsLeadership() && !a.WalReplayNotPaused() {
 			return &types.Problem{
 				Code:           types.ProblemReplicaNotReplicating,
 				CheckName:      "TracingTestAnalyzer",

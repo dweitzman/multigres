@@ -215,3 +215,27 @@ func TestPoolerHealthState_RequestsLeaderReplacement(t *testing.T) {
 		assert.False(t, p.RequestsLeaderReplacement())
 	})
 }
+
+func TestPoolerHealthState_ClaimsLeadership(t *testing.T) {
+	rule := func(leader string, cohort ...string) *clustermetadatapb.RulePosition {
+		var members []*clustermetadatapb.ID
+		for _, c := range cohort {
+			members = append(members, podID(c))
+		}
+		return &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{
+			RuleNumber: ruleNumber(2), LeaderId: podID(leader), CohortMembers: members,
+		}}
+	}
+
+	assert.True(t, withPosition(pooler("a"), rule("a", "a", "b")).ClaimsLeadership(), "the rule names it leader")
+	assert.False(t, withPosition(pooler("b"), rule("a", "a", "b")).ClaimsLeadership(), "a cohort member that is not the leader")
+	assert.False(t, withPosition(pooler("c"), rule("a", "a", "b")).ClaimsLeadership(), "not in the cohort")
+	assert.False(t, pooler("a").ClaimsLeadership(), "no rule known")
+	assert.False(t, (*PoolerHealthState)(nil).ClaimsLeadership())
+
+	proposal := &clustermetadatapb.RulePosition{
+		Decision: &clustermetadatapb.ShardRule{RuleNumber: ruleNumber(1), LeaderId: podID("old")},
+		Proposal: &clustermetadatapb.ShardRule{RuleNumber: ruleNumber(2), LeaderId: podID("a")},
+	}
+	assert.True(t, withPosition(pooler("a"), proposal).ClaimsLeadership(), "a claim can rest on an undecided proposal")
+}

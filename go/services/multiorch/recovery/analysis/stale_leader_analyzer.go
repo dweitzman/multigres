@@ -56,7 +56,7 @@ func (a *StaleLeaderAnalyzer) Analyze(sa *snapshot.Shard) ([]types.Problem, erro
 
 	// The shard's leader is the pooler named by the highest intended rule.
 	// Any reachable pooler whose own consensus status says it believes itself the
-	// leader of its term (SelfConsensusRole == ConsensusRoleLeader) but is not that named leader is
+	// leader of its term (ClaimsLeadership) but is not that named leader is
 	// a stale leader to be demoted.
 	//
 	// This is safe even when the named leader has not been promoted yet: a rule
@@ -70,7 +70,7 @@ func (a *StaleLeaderAnalyzer) Analyze(sa *snapshot.Shard) ([]types.Problem, erro
 	var staleLeaders []*snapshot.PoolerHealthState
 	for _, pa := range sa.Poolers {
 		hs, ok := snapshot.HealthWithin(pa, sa.Now, sa.AvailabilityPolicy.ObservationFreshness)
-		if !ok || commonconsensus.SelfConsensusRole(hs.GetConsensusStatus()) != commonconsensus.ConsensusRoleLeader {
+		if !ok || !hs.ClaimsLeadership() {
 			continue
 		}
 		if proto.Equal(pa.ID(), leaderID) {
