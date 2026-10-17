@@ -156,11 +156,11 @@ func TestRecordTermPrimary(t *testing.T) {
 			ctx := actionLockCtx(t)
 			cm := NewManagerForTesting(t, nil, nil, nil, nil)
 			if tt.seedRule != nil {
-				require.NoError(t, cm.RecordTermPrimary(ctx, &clustermetadatapb.ReplicationPrimary{Position: &clustermetadatapb.RulePosition{Decision: tt.seedRule}, Primary: tt.seedPrimary}))
+				require.NoError(t, cm.RecordTermPrimary(ctx, &clustermetadatapb.IntendedPrimary{Position: &clustermetadatapb.RulePosition{Decision: tt.seedRule}, Primary: tt.seedPrimary}))
 			}
-			require.NoError(t, cm.RecordTermPrimary(ctx, &clustermetadatapb.ReplicationPrimary{Position: &clustermetadatapb.RulePosition{Decision: tt.callRule}, Primary: tt.callPrimary}))
+			require.NoError(t, cm.RecordTermPrimary(ctx, &clustermetadatapb.IntendedPrimary{Position: &clustermetadatapb.RulePosition{Decision: tt.callRule}, Primary: tt.callPrimary}))
 
-			got := cm.GetReplicationPrimary()
+			got := cm.GetIntendedPrimary()
 			if tt.wantRule == nil && tt.wantPrimary == nil {
 				assert.Nil(t, got)
 				return
@@ -189,14 +189,14 @@ func TestRecordTermPrimary(t *testing.T) {
 // by holding the returned pointer.
 func TestRecordTermPrimary_ReturnsCopies(t *testing.T) {
 	cm := NewManagerForTesting(t, nil, nil, nil, nil)
-	require.NoError(t, cm.RecordTermPrimary(actionLockCtx(t), &clustermetadatapb.ReplicationPrimary{Position: &clustermetadatapb.RulePosition{Decision: ruleAt(5, 0)}, Primary: primaryAt("p1", "hostA", 5432)}))
+	require.NoError(t, cm.RecordTermPrimary(actionLockCtx(t), &clustermetadatapb.IntendedPrimary{Position: &clustermetadatapb.RulePosition{Decision: ruleAt(5, 0)}, Primary: primaryAt("p1", "hostA", 5432)}))
 
-	got := cm.GetReplicationPrimary()
+	got := cm.GetIntendedPrimary()
 	require.NotNil(t, got)
 	require.NotNil(t, got.GetPrimary())
 	got.Primary.Host = "tampered"
 
-	got2 := cm.GetReplicationPrimary()
+	got2 := cm.GetIntendedPrimary()
 	require.NotNil(t, got2)
 	require.NotNil(t, got2.GetPrimary())
 	assert.Equal(t, "hostA", got2.GetPrimary().GetHost(),
@@ -205,7 +205,7 @@ func TestRecordTermPrimary_ReturnsCopies(t *testing.T) {
 
 // TestRecordTermPrimary_RewindReadySurvivesProposalBecomingDecision covers the
 // write-side counterpart of
-// TestStatusReplicationPrimary_RewindReadySurvivesSameTermRuleAdvance:
+// TestStatusIntendedPrimary_RewindReadySurvivesSameTermRuleAdvance:
 // promoteLocked records its own upcoming leadership as a Proposal before its
 // rule write commits, MarkSelfRewindReady may flip rewind_ready true while
 // that write is still in flight, and a second RecordTermPrimary call then
@@ -225,19 +225,19 @@ func TestRecordTermPrimary_RewindReadySurvivesProposalBecomingDecision(t *testin
 	}
 	primary := primaryAt("p1", "hostA", 5432)
 
-	require.NoError(t, cm.RecordTermPrimary(ctx, &clustermetadatapb.ReplicationPrimary{
+	require.NoError(t, cm.RecordTermPrimary(ctx, &clustermetadatapb.IntendedPrimary{
 		Position: proposedTransition,
 		Primary:  primary,
 	}))
 
 	require.True(t, cm.MarkSelfRewindReady(selfID, proposedTransition))
 
-	require.NoError(t, cm.RecordTermPrimary(ctx, &clustermetadatapb.ReplicationPrimary{
+	require.NoError(t, cm.RecordTermPrimary(ctx, &clustermetadatapb.IntendedPrimary{
 		Position: &clustermetadatapb.RulePosition{Decision: rule},
 		Primary:  primary,
 	}))
 
-	got := cm.GetReplicationPrimary()
+	got := cm.GetIntendedPrimary()
 	require.NotNil(t, got)
 	assert.True(t, got.GetRewindReady(), "rewind_ready must survive the proposal being decided")
 }
@@ -361,18 +361,18 @@ func TestRecruitPositionFloorIfOutstanding(t *testing.T) {
 	}
 }
 
-// TestStatusReplicationPrimary_RewindReadySurvivesSameTermRuleAdvance verifies
+// TestStatusIntendedPrimary_RewindReadySurvivesSameTermRuleAdvance verifies
 // that rewind_ready is not dropped when a cohort-membership change advances the
 // rule store position within the same coordinator term. Such changes do not
 // start a new Postgres timeline, so the leader's checkpoint readiness remains
 // valid for the whole term.
-func TestStatusReplicationPrimary_RewindReadySurvivesSameTermRuleAdvance(t *testing.T) {
+func TestStatusIntendedPrimary_RewindReadySurvivesSameTermRuleAdvance(t *testing.T) {
 	// RPC-delivered position: term 1, subterm 0 (when MarkSelfRewindReady ran).
 	rpcPos := &clustermetadatapb.RulePosition{Decision: ruleAt(1, 0)}
 	// Rule store has since advanced to subterm 1 (cohort change, same term).
 	ruleStorePos := &clustermetadatapb.RulePosition{Decision: ruleAt(1, 1)}
 
-	replicationPrimary := &clustermetadatapb.ReplicationPrimary{
+	intendedPrimary := &clustermetadatapb.IntendedPrimary{
 		Position:    rpcPos,
 		Primary:     primaryAt("p1", "hostA", 5432),
 		RewindReady: true,
@@ -381,7 +381,7 @@ func TestStatusReplicationPrimary_RewindReadySurvivesSameTermRuleAdvance(t *test
 		Position: ruleStorePos,
 	}
 
-	got := statusReplicationPrimary(pos, replicationPrimary)
+	got := statusIntendedPrimary(pos, intendedPrimary)
 
 	require.NotNil(t, got)
 	assert.True(t, got.RewindReady,
@@ -392,18 +392,18 @@ func TestStatusReplicationPrimary_RewindReadySurvivesSameTermRuleAdvance(t *test
 		"rule store position should win when it leads the RPC position")
 }
 
-// TestStatusReplicationPrimary_RewindReadyClearedOnNewTerm verifies that
+// TestStatusIntendedPrimary_RewindReadyClearedOnNewTerm verifies that
 // rewind_ready is NOT carried over when the rule store is at a higher
 // coordinator term than the RPC-delivered position. A new term means a new
 // promotion, which resets rewind readiness (RecordTermPrimary does this, and
-// statusReplicationPrimary must not republish stale readiness from a prior term).
-func TestStatusReplicationPrimary_RewindReadyClearedOnNewTerm(t *testing.T) {
+// statusIntendedPrimary must not republish stale readiness from a prior term).
+func TestStatusIntendedPrimary_RewindReadyClearedOnNewTerm(t *testing.T) {
 	// RPC-delivered position from an old leader (term 1).
 	rpcPos := &clustermetadatapb.RulePosition{Decision: ruleAt(1, 0)}
 	// Rule store has moved to a new coordinator term (a new leader was elected).
 	ruleStorePos := &clustermetadatapb.RulePosition{Decision: ruleAt(2, 0)}
 
-	replicationPrimary := &clustermetadatapb.ReplicationPrimary{
+	intendedPrimary := &clustermetadatapb.IntendedPrimary{
 		Position:    rpcPos,
 		Primary:     primaryAt("p1", "hostA", 5432),
 		RewindReady: true,
@@ -412,7 +412,7 @@ func TestStatusReplicationPrimary_RewindReadyClearedOnNewTerm(t *testing.T) {
 		Position: ruleStorePos,
 	}
 
-	got := statusReplicationPrimary(pos, replicationPrimary)
+	got := statusIntendedPrimary(pos, intendedPrimary)
 
 	require.NotNil(t, got)
 	assert.False(t, got.RewindReady,

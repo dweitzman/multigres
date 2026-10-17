@@ -207,10 +207,10 @@ func (a *FixReplicationAction) fixNotReplicating(
 	// relay the leader's self-reported rewind_ready so a diverged replica defers
 	// its pg_rewind until the leader has checkpointed onto its current timeline.
 	setPrimaryReq := &consensusdatapb.SetPrimaryRequest{
-		ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{
+		IntendedPrimary: &clustermetadatapb.IntendedPrimary{
 			Position:    shard.HighestIntendedRule().Position(),
 			Primary:     topoclient.PoolerAddressFor(leader.Multipooler),
-			RewindReady: commonconsensus.ReplicationPrimaryOrNil(leader.GetConsensusStatus()).GetRewindReady(),
+			RewindReady: commonconsensus.IntendedPrimaryOrNil(leader.GetConsensusStatus()).GetRewindReady(),
 		},
 	}
 	if _, err := a.rpcClient.SetPrimary(ctx, replica.Multipooler, setPrimaryReq); err != nil {

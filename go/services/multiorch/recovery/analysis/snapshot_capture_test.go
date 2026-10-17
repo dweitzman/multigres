@@ -644,7 +644,7 @@ func TestSnapshotShard_LeaderNamedButAbsentFromStore(t *testing.T) {
 		},
 		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 			Id: followerID,
-			ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{
+			IntendedPrimary: &clustermetadatapb.IntendedPrimary{
 				Position: &clustermetadatapb.RulePosition{
 					Decision: &clustermetadatapb.ShardRule{
 						RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
@@ -695,7 +695,7 @@ func TestSnapshotShard_StaleLeaderSupersededViaFollowerRule(t *testing.T) {
 		Multipooler: &clustermetadatapb.Multipooler{Id: followerID, ShardKey: shardKey, Type: clustermetadatapb.PoolerType_REPLICA},
 		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 			Id: followerID,
-			ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{
+			IntendedPrimary: &clustermetadatapb.IntendedPrimary{
 				Position: &clustermetadatapb.RulePosition{
 					Decision: &clustermetadatapb.ShardRule{
 						RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 6},

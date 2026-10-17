@@ -214,10 +214,10 @@ func (a *ReconcileCohortAction) clearJoiningMemberArchive(ctx context.Context, l
 		return
 	}
 	setPrimaryReq := &consensusdatapb.SetPrimaryRequest{
-		ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{
+		IntendedPrimary: &clustermetadatapb.IntendedPrimary{
 			Position:    postAddRule.Position(),
 			Primary:     topoclient.PoolerAddressFor(leader.Multipooler),
-			RewindReady: commonconsensus.ReplicationPrimaryOrNil(statusResp.GetConsensusStatus()).GetRewindReady(),
+			RewindReady: commonconsensus.IntendedPrimaryOrNil(statusResp.GetConsensusStatus()).GetRewindReady(),
 		},
 	}
 	if _, err := a.rpcClient.SetPrimary(ctx, target.Multipooler, setPrimaryReq); err != nil {

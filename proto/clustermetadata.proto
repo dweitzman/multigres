@@ -153,7 +153,7 @@ message S3Backup {
 // PoolerAddress identifies a pooler and carries the connection information a
 // peer needs to reach its postgres. Used wherever consensus references a
 // primary (CoordinatorProposal.proposal_leader, SetPrimaryRequest.leader,
-// ReplicationPrimary.primary, etc.) without dragging the full Multipooler
+// IntendedPrimary.primary, etc.) without dragging the full Multipooler
 // topology record onto the wire.
 message PoolerAddress {
   // The pooler being addressed.
@@ -631,9 +631,10 @@ message RoutingState {
   RuleNumber rule = 2;
 }
 
-// ReplicationPrimary advertises the primary this pooler believes it should be
-// pointed at for replication, along with the rule under which that primary
-// holds leadership. The primary contact info is the main payload — it's how a
+// IntendedPrimary is the primary this pooler has been told to use for
+// replication, along with the rule under which that primary holds leadership.
+// It records an intention, not observed replication state: the rule can be
+// ahead of anything the pooler has recorded in its own WAL. The primary contact info is the main payload — it's how a
 // pooler in a degraded state (partition, mid-bootstrap, SetPrimary-while-postgres-
 // was-down) figures out who to reconnect replication to. The rule is supporting
 // evidence and has secondary uses such as coordinators learning of rules newer
@@ -642,7 +643,7 @@ message RoutingState {
 // Not persisted across pooler restarts — best-effort, populated by SetPrimary and
 // Promote RPCs. Coordinators that notice a pooler has incorrect replication
 // settings will re-inform it.
-message ReplicationPrimary {
+message IntendedPrimary {
   // The rule position under which this primary holds leadership: decision is
   // the last settled rule the sender observed, proposal is a newer rule the
   // sender is establishing but has not yet confirmed decided (populated
@@ -781,7 +782,7 @@ message ExternallyCertifiedRevocation {
 //     The highest ShardRule committed to local WAL (from rule_history) and the
 //     current LSN. Authoritative because postgres WAL is durable and ordered.
 //
-//  3. replication_primary (best-effort, coordinator-provided)
+//  3. intended_primary (best-effort, coordinator-provided)
 //     The primary this pooler should be pointed at for replication, plus the
 //     rule under which that primary holds leadership. May be ahead of
 //     current_position; not persisted and may be stale after restarts.
@@ -808,11 +809,11 @@ message ConsensusStatus {
   // and the latest WAL position.
   PoolerPosition current_position = 2;
 
-  // replication_primary is the pooler's best-effort view of who its primary
+  // intended_primary is the pooler's best-effort view of who its primary
   // should be (and under what rule). May reflect a rule ahead of
   // current_position when the pooler has been informed of a newer rule that
   // has not yet been replicated through WAL.
-  ReplicationPrimary replication_primary = 3;
+  IntendedPrimary intended_primary = 3;
 
   // id identifies the pooler that produced this status. Makes ConsensusStatus
   // self-describing when passed around without a surrounding envelope.

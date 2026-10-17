@@ -169,9 +169,9 @@ func TestAppointLeader(t *testing.T) {
 		require.False(t, isPromote, "Promote should NOT be sent to follower %s", id.Name)
 		stp, ok := fakeClient.SetPrimaryRequests[key]
 		require.True(t, ok, "SetPrimary should be sent to %s", id.Name)
-		require.Equal(t, "mp1", stp.GetReplicationPrimary().GetPrimary().GetId().GetName(),
+		require.Equal(t, "mp1", stp.GetIntendedPrimary().GetPrimary().GetId().GetName(),
 			"follower %s should be informed of mp1 as leader", id.Name)
-		require.Equal(t, int64(6), commonconsensus.PossiblyUndecidedRule(stp.GetReplicationPrimary().GetPosition()).GetRuleNumber().GetCoordinatorTerm())
+		require.Equal(t, int64(6), commonconsensus.PossiblyUndecidedRule(stp.GetIntendedPrimary().GetPosition()).GetRuleNumber().GetCoordinatorTerm())
 	}
 }
 
@@ -345,9 +345,9 @@ func TestAppointInitialLeader(t *testing.T) {
 		require.False(t, isPromote, "Promote should NOT be sent to follower %s", id.Name)
 		stp, ok := fakeClient.SetPrimaryRequests[key]
 		require.True(t, ok, "SetPrimary should be sent to %s", id.Name)
-		require.Equal(t, "mp1", stp.GetReplicationPrimary().GetPrimary().GetId().GetName(),
+		require.Equal(t, "mp1", stp.GetIntendedPrimary().GetPrimary().GetId().GetName(),
 			"follower %s should be informed of mp1 as leader", id.Name)
-		require.Equal(t, int64(1), commonconsensus.PossiblyUndecidedRule(stp.GetReplicationPrimary().GetPosition()).GetRuleNumber().GetCoordinatorTerm())
+		require.Equal(t, int64(1), commonconsensus.PossiblyUndecidedRule(stp.GetIntendedPrimary().GetPosition()).GetRuleNumber().GetCoordinatorTerm())
 	}
 }
 
@@ -757,6 +757,6 @@ func TestAppointLeader_TiebreaksByPostgresReadiness(t *testing.T) {
 	require.False(t, isPromoted, "not-yet-ready node must not be elected when a ready node is tied on LSN")
 	stp, ok := fakeClient.SetPrimaryRequests[startingKey]
 	require.True(t, ok, "SetPrimary must be sent to the not-yet-ready node as a follower")
-	require.Equal(t, "ready", stp.GetReplicationPrimary().GetPrimary().GetId().GetName(),
+	require.Equal(t, "ready", stp.GetIntendedPrimary().GetPrimary().GetId().GetName(),
 		"not-yet-ready follower must be directed toward the ready leader")
 }

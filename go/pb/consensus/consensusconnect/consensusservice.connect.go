@@ -80,7 +80,7 @@ type MultipoolerConsensusClient interface {
 	// consensus term. Used both to endorse in-flight proposals and to catch
 	// followers up to durable decisions.
 	//
-	// TODO: consider renaming to SetReplicationPrimary for clarity — this sets the
+	// TODO: consider renaming to SetIntendedPrimary for clarity — this sets the
 	// postgres replication primary the pooler follows, distinct from consensus
 	// leadership and routing role. "SetPrimary" reads as if it makes the pooler a
 	// primary; it actually points the pooler at one.
@@ -170,7 +170,7 @@ type MultipoolerConsensusHandler interface {
 	// consensus term. Used both to endorse in-flight proposals and to catch
 	// followers up to durable decisions.
 	//
-	// TODO: consider renaming to SetReplicationPrimary for clarity — this sets the
+	// TODO: consider renaming to SetIntendedPrimary for clarity — this sets the
 	// postgres replication primary the pooler follows, distinct from consensus
 	// leadership and routing role. "SetPrimary" reads as if it makes the pooler a
 	// primary; it actually points the pooler at one.

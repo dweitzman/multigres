@@ -67,7 +67,7 @@ type Shard struct {
 //   - in the WAL: a pooler's own position, which may also carry an undecided
 //     proposal (these are what "position" always means);
 //   - intended: the above plus positions only advertised through a
-//     ReplicationPrimary, which no pooler's WAL need hold yet.
+//     IntendedPrimary, which no pooler's WAL need hold yet.
 //
 // This is the intended level (commonconsensus.HighestIntendedRule), so it is not
 // called a position: a follower can learn of a newer leader via SetPrimary

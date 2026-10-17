@@ -301,7 +301,7 @@ func TestBackup_CreateListAndRestore(t *testing.T) {
 					// the standby branch fires.
 					setPrimaryCtx := utils.WithTimeout(t, 30*time.Second)
 					_, err = standbyConsensusClient.SetPrimary(setPrimaryCtx, &consensusdatapb.SetPrimaryRequest{
-						ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{
+						IntendedPrimary: &clustermetadatapb.IntendedPrimary{
 							Position: &clustermetadatapb.RulePosition{
 								Decision: &clustermetadatapb.ShardRule{
 									RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: restoredTerm + 1},

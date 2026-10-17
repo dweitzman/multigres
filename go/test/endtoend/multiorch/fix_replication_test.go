@@ -269,7 +269,7 @@ func replicationDiagnostics(t *testing.T, primaryClient, replicaClient *shardset
 	// (best-effort, not persisted) — distinct from primary_conninfo, which is
 	// the pooler's own reconciliation of that record onto postgres. A nil/empty
 	// recorded_primary means orch never informed this pooler at all.
-	rp := replicaStatus.GetConsensusStatus().GetReplicationPrimary()
+	rp := replicaStatus.GetConsensusStatus().GetIntendedPrimary()
 	recordedPrimary := "none"
 	if rp != nil {
 		recordedPrimary = fmt.Sprintf("host=%s position=%s rewind_ready=%v",

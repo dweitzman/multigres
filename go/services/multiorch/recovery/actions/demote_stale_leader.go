@@ -160,15 +160,15 @@ func (a *DemoteStaleLeaderAction) Execute(ctx context.Context, rechecked types.R
 	// 5. Updates topology to REPLICA
 	// correctRule is the global HighestIntendedRule (above), not the
 	// leader's self-claim, so build the message explicitly rather than
-	// relaying the leader's published ReplicationPrimary. rewind_ready is the
+	// relaying the leader's published IntendedPrimary. rewind_ready is the
 	// leader's self-report — it has no global equivalent, so relay it: the
 	// stale leader defers its pg_rewind until the correct leader has
 	// checkpointed onto its current timeline.
 	setPrimaryReq := &consensusdatapb.SetPrimaryRequest{
-		ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{
+		IntendedPrimary: &clustermetadatapb.IntendedPrimary{
 			Position:    correctRule.Position(),
 			Primary:     topoclient.PoolerAddressFor(correctLeader.Multipooler),
-			RewindReady: commonconsensus.ReplicationPrimaryOrNil(correctLeader.GetConsensusStatus()).GetRewindReady(),
+			RewindReady: commonconsensus.IntendedPrimaryOrNil(correctLeader.GetConsensusStatus()).GetRewindReady(),
 		},
 	}
 	if _, err := a.rpcClient.SetPrimary(ctx, staleLeader.Multipooler, setPrimaryReq); err != nil {

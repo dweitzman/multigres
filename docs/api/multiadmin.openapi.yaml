@@ -765,7 +765,7 @@ paths:
          multiorch failures can occur before or after recruitment has modified consensus state. An error,
          timeout, or lost response does not guarantee rollback, and this API provides no idempotency key.
          Before retrying, use GetPoolers and GetPoolerStatus to inspect the shard and involved cohort:
-         compare currentPosition, termRevocation, and replicationPrimary against the intended transition.
+         compare currentPosition, termRevocation, and intendedPrimary against the intended transition.
          Confirm the installed rule and serving leader, or reconcile the partially applied transition before
          preparing another request. An unreachable member leaves its state uncertain; do not derive a new
          unsafe certificate or assume an old certificate is still valid solely from the error code.
@@ -1068,7 +1068,7 @@ components:
              The highest ShardRule committed to local WAL (from rule_history) and the
              current LSN. Authoritative because postgres WAL is durable and ordered.
 
-          3. replication_primary (best-effort, coordinator-provided)
+          3. intended_primary (best-effort, coordinator-provided)
              The primary this pooler should be pointed at for replication, plus the
              rule under which that primary holds leadership. May be ahead of
              current_position; not persisted and may be stale after restarts.
@@ -1085,6 +1085,14 @@ components:
             id identifies the pooler that produced this status. Makes ConsensusStatus
              self-describing when passed around without a surrounding envelope.
           title: id
+        intendedPrimary:
+          $ref: '#/components/schemas/clustermetadata.IntendedPrimary'
+          description: |-
+            intended_primary is the pooler's best-effort view of who its primary
+             should be (and under what rule). May reflect a rule ahead of
+             current_position when the pooler has been informed of a newer rule that
+             has not yet been replicated through WAL.
+          title: intended_primary
         recruitBlockedUntil:
           $ref: '#/components/schemas/clustermetadata.LsnPosition'
           description: |-
@@ -1105,14 +1113,6 @@ components:
              either pooler could still be recruited as the next leader despite
              silently missing committed data.
           title: recruit_blocked_until
-        replicationPrimary:
-          $ref: '#/components/schemas/clustermetadata.ReplicationPrimary'
-          description: |-
-            replication_primary is the pooler's best-effort view of who its primary
-             should be (and under what rule). May reflect a rule ahead of
-             current_position when the pooler has been informed of a newer rule that
-             has not yet been replicated through WAL.
-          title: replication_primary
         termRevocation:
           $ref: '#/components/schemas/clustermetadata.TermRevocation'
           description: |-
@@ -1270,6 +1270,62 @@ components:
         - MULTIORCH
       title: ComponentType
       type: string
+    clustermetadata.IntendedPrimary:
+      additionalProperties: false
+      description: |-
+        IntendedPrimary is the primary this pooler has been told to use for
+         replication, along with the rule under which that primary holds leadership.
+         It records an intention, not observed replication state: the rule can be
+         ahead of anything the pooler has recorded in its own WAL. The primary contact info is the main payload — it's how a
+         pooler in a degraded state (partition, mid-bootstrap, SetPrimary-while-postgres-
+         was-down) figures out who to reconnect replication to. The rule is supporting
+         evidence and has secondary uses such as coordinators learning of rules newer
+         than what's in any replica's WAL.
+
+         Not persisted across pooler restarts — best-effort, populated by SetPrimary and
+         Promote RPCs. Coordinators that notice a pooler has incorrect replication
+         settings will re-inform it.
+      properties:
+        position:
+          $ref: '#/components/schemas/clustermetadata.RulePosition'
+          description: |-
+            The rule position under which this primary holds leadership: decision is
+             the last settled rule the sender observed, proposal is a newer rule the
+             sender is establishing but has not yet confirmed decided (populated
+             during a live promotion, when SetPrimary races the leader's own decide-
+             in-progress write; nil once there is nothing left in flight). May be
+             ahead of the pooler's own committed PoolerPosition while replication
+             catches up. Coordinators compare this to what they would otherwise
+             SetPrimary with — if it already matches, the SetPrimary is redundant and
+             can be skipped.
+          title: position
+        primary:
+          $ref: '#/components/schemas/clustermetadata.PoolerAddress'
+          description: |-
+            Contact info for the primary the pooler was last told to use. Snapshot
+             from the most recent SetPrimary/Promote; treat as "what this pooler currently
+             believes," not as the canonical primary for the cluster.
+          title: primary
+        rewindReady:
+          description: |-
+            Whether the primary in this record is safe to pg_rewind from: it has
+             completed a checkpoint on its current timeline, so its control file no
+             longer advertises a stale checkpoint timeline. A diverged follower that
+             rewinds before this is true copies the stale timeline into its own
+             minRecoveryPoint and FATALs on startup. When the record's primary is this
+             pooler itself, the value is computed live (checkpointed timeline == running
+             timeline); for a follower it is the value most recently relayed via
+             SetPrimary about the leader it follows.
+
+             TODO: consider renaming to rewind_ready_through_coordinator_term int64
+             (0 = not ready, >0 = the coordinator term through which readiness holds).
+             The current bool is valid for the entire coordinator term and is
+             invalidated only by a new promotion — encoding the term explicitly in the
+             field name and value would make that scope self-documenting.
+          title: rewind_ready
+          type: boolean
+      title: IntendedPrimary
+      type: object
     clustermetadata.KeyRange:
       additionalProperties: false
       description: KeyRange represents a range of keys for sharding
@@ -1447,7 +1503,7 @@ components:
         PoolerAddress identifies a pooler and carries the connection information a
          peer needs to reach its postgres. Used wherever consensus references a
          primary (CoordinatorProposal.proposal_leader, SetPrimaryRequest.leader,
-         ReplicationPrimary.primary, etc.) without dragging the full Multipooler
+         IntendedPrimary.primary, etc.) without dragging the full Multipooler
          topology record onto the wire.
       properties:
         host:
@@ -1588,61 +1644,6 @@ components:
              decision, or a stuck proposal could never advance it and reset the count.
           title: replace_decision
       title: RecruitIntent
-      type: object
-    clustermetadata.ReplicationPrimary:
-      additionalProperties: false
-      description: |-
-        ReplicationPrimary advertises the primary this pooler believes it should be
-         pointed at for replication, along with the rule under which that primary
-         holds leadership. The primary contact info is the main payload — it's how a
-         pooler in a degraded state (partition, mid-bootstrap, SetPrimary-while-postgres-
-         was-down) figures out who to reconnect replication to. The rule is supporting
-         evidence and has secondary uses such as coordinators learning of rules newer
-         than what's in any replica's WAL.
-
-         Not persisted across pooler restarts — best-effort, populated by SetPrimary and
-         Promote RPCs. Coordinators that notice a pooler has incorrect replication
-         settings will re-inform it.
-      properties:
-        position:
-          $ref: '#/components/schemas/clustermetadata.RulePosition'
-          description: |-
-            The rule position under which this primary holds leadership: decision is
-             the last settled rule the sender observed, proposal is a newer rule the
-             sender is establishing but has not yet confirmed decided (populated
-             during a live promotion, when SetPrimary races the leader's own decide-
-             in-progress write; nil once there is nothing left in flight). May be
-             ahead of the pooler's own committed PoolerPosition while replication
-             catches up. Coordinators compare this to what they would otherwise
-             SetPrimary with — if it already matches, the SetPrimary is redundant and
-             can be skipped.
-          title: position
-        primary:
-          $ref: '#/components/schemas/clustermetadata.PoolerAddress'
-          description: |-
-            Contact info for the primary the pooler was last told to use. Snapshot
-             from the most recent SetPrimary/Promote; treat as "what this pooler currently
-             believes," not as the canonical primary for the cluster.
-          title: primary
-        rewindReady:
-          description: |-
-            Whether the primary in this record is safe to pg_rewind from: it has
-             completed a checkpoint on its current timeline, so its control file no
-             longer advertises a stale checkpoint timeline. A diverged follower that
-             rewinds before this is true copies the stale timeline into its own
-             minRecoveryPoint and FATALs on startup. When the record's primary is this
-             pooler itself, the value is computed live (checkpointed timeline == running
-             timeline); for a follower it is the value most recently relayed via
-             SetPrimary about the leader it follows.
-
-             TODO: consider renaming to rewind_ready_through_coordinator_term int64
-             (0 = not ready, >0 = the coordinator term through which readiness holds).
-             The current bool is valid for the entire coordinator term and is
-             invalidated only by a new promotion — encoding the term explicitly in the
-             field name and value would make that scope self-documenting.
-          title: rewind_ready
-          type: boolean
-      title: ReplicationPrimary
       type: object
     clustermetadata.RoutingRole:
       description: |-

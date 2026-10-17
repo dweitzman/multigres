@@ -66,9 +66,9 @@ type Broadcaster interface {
 //   - promises, rules: set once at construction, immutable thereafter. Each has
 //     its own internal synchronization (ConsensusPromises wraps a disk lock;
 //     RuleStorer guards its cache), so callers just use the returned value.
-//   - replicationPrimary, leaderObservedAt: guarded by mu. mu is deliberately
+//   - intendedPrimary, leaderObservedAt: guarded by mu. mu is deliberately
 //     NOT shared with ConsensusPromises's lock: that lock wraps disk writes, and
-//     GetReplicationPrimary is read on nearly every monitor tick — sharing would
+//     GetIntendedPrimary is read on nearly every monitor tick — sharing would
 //     serialize the latency-sensitive monitor loop behind term persistence.
 //   - resignedLeaderAtTerm, cohortEligibility: atomics, NOT under mu. Production
 //     writes go through the manager under the action lock (so writers are
@@ -99,13 +99,13 @@ type ConsensusManager struct {
 	// (then broadcasts are skipped — used by unit tests with no health stream).
 	broadcaster Broadcaster
 
-	// mu guards replicationPrimary and leaderObservedAt only.
+	// mu guards intendedPrimary and leaderObservedAt only.
 	mu sync.Mutex
-	// replicationPrimary is held in memory only — see HighestIntendedRule's proto
+	// intendedPrimary is held in memory only — see HighestIntendedRule's proto
 	// comment. Populated by RPCs that inform this pooler about the cluster state
 	// (SetPrimary today; Promote via the same RecordTermPrimary entry point).
 	// Restarts reset it to nil; coordinators re-inform the pooler. Guarded by mu.
-	replicationPrimary *clustermetadatapb.ReplicationPrimary
+	intendedPrimary *clustermetadatapb.IntendedPrimary
 	// leaderObservedAt is when RecordTermPrimary last saw the leader ID change (a
 	// new primary was recorded). Zero until the first leader is recorded. Used to
 	// measure how long a diverged follower's pg_rewind waited for that leader to
@@ -365,8 +365,8 @@ func (cm *ConsensusManager) buildStatus(revocation *clustermetadatapb.TermRevoca
 	if pos != nil {
 		status.CurrentPosition = pos
 	}
-	if highest := statusReplicationPrimary(pos, cm.GetReplicationPrimary()); highest != nil {
-		status.ReplicationPrimary = highest
+	if highest := statusIntendedPrimary(pos, cm.GetIntendedPrimary()); highest != nil {
+		status.IntendedPrimary = highest
 	}
 	if floor := cm.recruitPositionFloorIfOutstanding(pos); floor != nil {
 		status.RecruitBlockedUntil = floor
@@ -374,17 +374,17 @@ func (cm *ConsensusManager) buildStatus(revocation *clustermetadatapb.TermRevoca
 	return status
 }
 
-// statusReplicationPrimary returns the HighestIntendedRule to publish given the most
+// statusIntendedPrimary returns the HighestIntendedRule to publish given the most
 // recent observed position and the most recent rule+primary heard via RPC.
-func statusReplicationPrimary(pos *clustermetadatapb.PoolerPosition, replicationPrimary *clustermetadatapb.ReplicationPrimary) *clustermetadatapb.ReplicationPrimary {
+func statusIntendedPrimary(pos *clustermetadatapb.PoolerPosition, intendedPrimary *clustermetadatapb.IntendedPrimary) *clustermetadatapb.IntendedPrimary {
 	// ruleStorePosition is read fresh from the rule store (the current_rule row
 	// in postgres, replicated through WAL). highestKnownPosition is the
 	// position last recorded via a SetPrimary/Promote RPC (possibly still
 	// undecided if that promotion is still in flight), which can lead the
 	// rule store before the write has been observed locally.
 	ruleStorePosition := pos.GetPosition()
-	highestKnownPosition := replicationPrimary.GetPosition()
-	rpcPrimary := replicationPrimary.GetPrimary()
+	highestKnownPosition := intendedPrimary.GetPosition()
+	rpcPrimary := intendedPrimary.GetPrimary()
 	if consensus.PossiblyUndecidedRule(ruleStorePosition) == nil && consensus.PossiblyUndecidedRule(highestKnownPosition) == nil && rpcPrimary == nil {
 		return nil
 	}
@@ -401,7 +401,7 @@ func statusReplicationPrimary(pos *clustermetadatapb.PoolerPosition, replication
 	// timeline, so the leader's self-reported checkpoint readiness remains
 	// accurate. Only a new coordinator term (a new promotion or a different
 	// leader) invalidates it — that happens via RecordTermPrimary, which
-	// resets the flag to false when it installs a fresh ReplicationPrimary.
+	// resets the flag to false when it installs a fresh IntendedPrimary.
 	// On a follower, rewind_ready is the value last relayed via SetPrimary
 	// about the leader; republishing it is harmless since the leader's own
 	// status is what orch reads as the authority.
@@ -410,9 +410,9 @@ func statusReplicationPrimary(pos *clustermetadatapb.PoolerPosition, replication
 	ruleStoreRule := consensus.PossiblyUndecidedRule(ruleStorePosition)
 	if highestRule != nil && highestRule.GetRuleNumber().GetCoordinatorTerm() > 0 &&
 		(ruleStoreRule == nil || highestRule.GetRuleNumber().GetCoordinatorTerm() >= ruleStoreRule.GetRuleNumber().GetCoordinatorTerm()) {
-		rewindReady = replicationPrimary.GetRewindReady()
+		rewindReady = intendedPrimary.GetRewindReady()
 	}
-	return &clustermetadatapb.ReplicationPrimary{
+	return &clustermetadatapb.IntendedPrimary{
 		Position:    position,
 		Primary:     rpcPrimary,
 		RewindReady: rewindReady,
@@ -434,22 +434,22 @@ func (cm *ConsensusManager) LeadershipStatus() *clustermetadatapb.LeadershipStat
 	}
 }
 
-// RecordTermPrimary folds a newly observed ReplicationPrimary into the
-// highest-known one via consensus.MergeReplicationPrimary — the same helper
+// RecordTermPrimary folds a newly observed IntendedPrimary into the
+// highest-known one via consensus.MergeIntendedPrimary — the same helper
 // orch's health-stream cache uses, so the two can't drift on what counts as
 // an advance. A nil argument (or nil rule) is a no-op.
 //
 // Safe to call on no-op SetPrimary paths so the recorded values reflect
 // everything the pooler has been told, regardless of whether postgres-side
 // changes were applied.
-func (cm *ConsensusManager) RecordTermPrimary(ctx context.Context, rp *clustermetadatapb.ReplicationPrimary) error {
+func (cm *ConsensusManager) RecordTermPrimary(ctx context.Context, rp *clustermetadatapb.IntendedPrimary) error {
 	if err := actionlock.AssertActionLockHeld(ctx); err != nil {
 		return err
 	}
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
-	next, changed := consensus.MergeReplicationPrimary(cm.replicationPrimary, rp)
+	next, changed := consensus.MergeIntendedPrimary(cm.intendedPrimary, rp)
 	if !changed {
 		return nil
 	}
@@ -457,10 +457,10 @@ func (cm *ConsensusManager) RecordTermPrimary(ctx context.Context, rp *clusterme
 	// this leader can report how long it waited for the leader to become
 	// rewind-ready (~0 when this same call already advances to a rewind-ready
 	// leader).
-	if !proto.Equal(cm.replicationPrimary.GetPrimary().GetId(), next.GetPrimary().GetId()) {
+	if !proto.Equal(cm.intendedPrimary.GetPrimary().GetId(), next.GetPrimary().GetId()) {
 		cm.leaderObservedAt = time.Now()
 	}
-	cm.replicationPrimary = next
+	cm.intendedPrimary = next
 	return nil
 }
 
@@ -472,23 +472,23 @@ func (cm *ConsensusManager) LeaderObservedAt() time.Time {
 	return cm.leaderObservedAt
 }
 
-// GetReplicationPrimary returns a copy of the primary + rule this pooler has
+// GetIntendedPrimary returns a copy of the primary + rule this pooler has
 // been told to use, or nil if it has never been informed. The returned message
 // is the same one exposed in ConsensusStatus.
-func (cm *ConsensusManager) GetReplicationPrimary() *clustermetadatapb.ReplicationPrimary {
+func (cm *ConsensusManager) GetIntendedPrimary() *clustermetadatapb.IntendedPrimary {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
-	if cm.replicationPrimary == nil {
+	if cm.intendedPrimary == nil {
 		return nil
 	}
-	return proto.Clone(cm.replicationPrimary).(*clustermetadatapb.ReplicationPrimary)
+	return proto.Clone(cm.intendedPrimary).(*clustermetadatapb.IntendedPrimary)
 }
 
 // MarkSelfRewindReady records that this pooler is safe to pg_rewind from: it has
 // checkpointed onto its current timeline. The postgres monitor calls this once it
 // observes the condition (and the async post-promotion checkpoint can flip it as
 // soon as it completes). It is one-way: the flag auto-clears whenever
-// RecordTermPrimary installs a fresh ReplicationPrimary — a new coordinator term,
+// RecordTermPrimary installs a fresh IntendedPrimary — a new coordinator term,
 // or a SetPrimary naming a different leader (resignation / restart-as-replica) —
 // since the new record defaults rewind_ready to false. Returns true if the value
 // changed, so callers can broadcast the new health promptly.
@@ -502,28 +502,28 @@ func (cm *ConsensusManager) GetReplicationPrimary() *clustermetadatapb.Replicati
 // Both checks happen under the lock so the decision is atomic. (Whether this
 // pooler currently holds non-resigned leadership is the caller's concern —
 // resignation state lives in the manager, not here.) No-op if no
-// ReplicationPrimary has been recorded yet.
+// IntendedPrimary has been recorded yet.
 // Unlike the other mutators, MarkSelfRewindReady does NOT assert the action
 // lock: the async post-promotion checkpoint goroutine (see promoteStandbyToPrimary)
 // calls it without holding the lock. Its safety comes from mu plus the selfID /
 // expectedCoordinatorTerm guards, which ensure it only stamps the record it still
-// owns. This lock-free writer is also why replicationPrimary needs mu, not just
+// owns. This lock-free writer is also why intendedPrimary needs mu, not just
 // action-lock serialization.
 func (cm *ConsensusManager) MarkSelfRewindReady(selfID *clustermetadatapb.ID, expectedPosition *clustermetadatapb.RulePosition) bool {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
-	if cm.replicationPrimary == nil || cm.replicationPrimary.GetRewindReady() {
+	if cm.intendedPrimary == nil || cm.intendedPrimary.GetRewindReady() {
 		return false
 	}
-	if !proto.Equal(cm.replicationPrimary.GetPrimary().GetId(), selfID) {
+	if !proto.Equal(cm.intendedPrimary.GetPrimary().GetId(), selfID) {
 		return false
 	}
-	if !proto.Equal(cm.replicationPrimary.GetPosition(), expectedPosition) {
+	if !proto.Equal(cm.intendedPrimary.GetPosition(), expectedPosition) {
 		return false
 	}
-	next := proto.Clone(cm.replicationPrimary).(*clustermetadatapb.ReplicationPrimary)
+	next := proto.Clone(cm.intendedPrimary).(*clustermetadatapb.IntendedPrimary)
 	next.RewindReady = true
-	cm.replicationPrimary = next
+	cm.intendedPrimary = next
 	return true
 }
 
@@ -612,7 +612,7 @@ const (
 // recorded leader is ourselves (nothing to diverge from), or the recorded rule
 // is revoked by our term revocation.
 func (cm *ConsensusManager) RewindTarget() (host string, port int32, ok bool) {
-	rp := cm.GetReplicationPrimary()
+	rp := cm.GetIntendedPrimary()
 	target := rp.GetPrimary()
 	if target == nil || target.GetHost() == "" || target.GetPostgresPort() == 0 {
 		return "", 0, false

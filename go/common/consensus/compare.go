@@ -202,22 +202,22 @@ func MostAdvancedPosition(statuses []*clustermetadatapb.ConsensusStatus) *cluste
 	return best
 }
 
-// ReplicationPrimaryOrNil returns cs's replication primary, or nil when it
+// IntendedPrimaryOrNil returns cs's replication primary, or nil when it
 // carries no established leader to replicate from.
 //
-// proto3 cannot distinguish an unset ReplicationPrimary from one explicitly
+// proto3 cannot distinguish an unset IntendedPrimary from one explicitly
 // written with a zero-valued rule. RuleNumber{0,0} is reserved codebase-wide
 // as the "no rule recorded" sentinel (see ruleNumberIsUnset) — a follower
-// that has never learned of a leader reports its ReplicationPrimary at that
+// that has never learned of a leader reports its IntendedPrimary at that
 // zero value, which is reported as absent here. Every real rule (including
 // the initial bootstrap row, written at {0,1} by CreateRuleTables) is
 // strictly greater than {0,0}, so a real replication primary is never
 // dropped.
 //
-// Always use this instead of ConsensusStatus.GetReplicationPrimary() (enforced
+// Always use this instead of ConsensusStatus.GetIntendedPrimary() (enforced
 // by ruleguard) so a phantom 0/0 entry never gets mistaken for a real one.
-func ReplicationPrimaryOrNil(cs *clustermetadatapb.ConsensusStatus) *clustermetadatapb.ReplicationPrimary {
-	rp := cs.GetReplicationPrimary()
+func IntendedPrimaryOrNil(cs *clustermetadatapb.ConsensusStatus) *clustermetadatapb.IntendedPrimary {
+	rp := cs.GetIntendedPrimary()
 	position := rp.GetPosition()
 	if ruleNumberIsUnset(position.GetDecision().GetRuleNumber()) && ruleNumberIsUnset(position.GetProposal().GetRuleNumber()) {
 		return nil
@@ -231,7 +231,7 @@ func ReplicationPrimaryOrNil(cs *clustermetadatapb.ConsensusStatus) *clustermeta
 //   - decided: the decision half of a pooler's own position (HighestDecidedRule);
 //   - recorded: a pooler's own position, which may also carry an undecided
 //     proposal ("position" always means this level, as in MostAdvancedPosition);
-//   - intended: recorded, plus rules only advertised through a ReplicationPrimary,
+//   - intended: recorded, plus rules only advertised through a IntendedPrimary,
 //     which no pooler's WAL need hold yet. This function ranks at this level.
 //
 // For each status it considers both the
@@ -243,7 +243,7 @@ func ReplicationPrimaryOrNil(cs *clustermetadatapb.ConsensusStatus) *clustermeta
 // LSN requirement), since leader identity is a function of the rule alone.
 // Returns nil when no status carries a rule.
 //
-// A phantom 0/0 replication primary (see ReplicationPrimaryOrNil) is ignored so
+// A phantom 0/0 replication primary (see IntendedPrimaryOrNil) is ignored so
 // it never shadows a real rule.
 //
 // TODO: detect equivocation. Two rules sharing the same rule number but naming
@@ -256,7 +256,7 @@ func HighestIntendedRule(statuses []*clustermetadatapb.ConsensusStatus) *cluster
 	for _, cs := range statuses {
 		for _, position := range []*clustermetadatapb.RulePosition{
 			cs.GetCurrentPosition().GetPosition(),
-			ReplicationPrimaryOrNil(cs).GetPosition(),
+			IntendedPrimaryOrNil(cs).GetPosition(),
 		} {
 			if best == nil || CompareRulePosition(position, best) > 0 {
 				best = position
@@ -268,7 +268,7 @@ func HighestIntendedRule(statuses []*clustermetadatapb.ConsensusStatus) *cluster
 
 // HighestDecidedRule returns the highest decided rule number across the given
 // consensus statuses, considering only each status's own CurrentPosition —
-// unlike HighestIntendedRule, not ReplicationPrimary, which a follower can learn
+// unlike HighestIntendedRule, not IntendedPrimary, which a follower can learn
 // of before its own position replays it. This is the exact baseline
 // NewTermRevocation computes as a new attempt's ReplaceDecision; anything
 // comparing against that value must use this, not HighestIntendedRule, or the
@@ -283,8 +283,8 @@ func HighestDecidedRule(statuses []*clustermetadatapb.ConsensusStatus) *clusterm
 	return decision
 }
 
-// ReplicationPrimaryMatches reports whether a pooler's published
-// ReplicationPrimary already names target as its primary at a position no
+// IntendedPrimaryMatches reports whether a pooler's published
+// IntendedPrimary already names target as its primary at a position no
 // older than targetPosition. Coordinators use this to skip SetPrimary RPCs
 // that wouldn't change anything on the pooler.
 //
@@ -295,7 +295,7 @@ func HighestDecidedRule(statuses []*clustermetadatapb.ConsensusStatus) *clusterm
 //   - the published primary's (id, host, postgres port) differs from target's
 //
 // target and targetPosition are required; passing nil for either returns false.
-func ReplicationPrimaryMatches(rp *clustermetadatapb.ReplicationPrimary, target *clustermetadatapb.PoolerAddress, targetPosition *clustermetadatapb.RulePosition) bool {
+func IntendedPrimaryMatches(rp *clustermetadatapb.IntendedPrimary, target *clustermetadatapb.PoolerAddress, targetPosition *clustermetadatapb.RulePosition) bool {
 	if rp == nil || target == nil || targetPosition == nil {
 		return false
 	}
@@ -318,8 +318,8 @@ func ReplicationPrimaryMatches(rp *clustermetadatapb.ReplicationPrimary, target 
 	return true
 }
 
-// MergeReplicationPrimary folds a newly observed candidate into the
-// previously recorded current value. It returns the ReplicationPrimary that
+// MergeIntendedPrimary folds a newly observed candidate into the
+// previously recorded current value. It returns the IntendedPrimary that
 // should be recorded now and whether that's actually different from current
 // (false if candidate carries no rule or isn't at least as advanced).
 //
@@ -331,7 +331,7 @@ func ReplicationPrimaryMatches(rp *clustermetadatapb.ReplicationPrimary, target 
 // CompareRulePosition ranks as strictly more advanced. Folding rewind_ready
 // only within cmp==0 would miss exactly that transition and silently
 // regress a rewind_ready flip already observed.
-func MergeReplicationPrimary(current, candidate *clustermetadatapb.ReplicationPrimary) (result *clustermetadatapb.ReplicationPrimary, changed bool) {
+func MergeIntendedPrimary(current, candidate *clustermetadatapb.IntendedPrimary) (result *clustermetadatapb.IntendedPrimary, changed bool) {
 	if PossiblyUndecidedRule(candidate.GetPosition()) == nil {
 		return current, false
 	}
@@ -355,7 +355,7 @@ func MergeReplicationPrimary(current, candidate *clustermetadatapb.ReplicationPr
 	if cmp > 0 {
 		position = proto.Clone(candidate.GetPosition()).(*clustermetadatapb.RulePosition)
 	}
-	return &clustermetadatapb.ReplicationPrimary{
+	return &clustermetadatapb.IntendedPrimary{
 		Position:    position,
 		Primary:     primary,
 		RewindReady: rewindReady,

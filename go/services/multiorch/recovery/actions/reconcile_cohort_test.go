@@ -132,7 +132,7 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 		assert.Contains(t, fakeClient.CallLog, "SetPrimary(multipooler-cell1-replica1)")
 		setReq := fakeClient.SetPrimaryRequests["multipooler-cell1-replica1"]
 		require.NotNil(t, setReq)
-		assert.Equal(t, primaryID.Name, setReq.GetReplicationPrimary().GetPrimary().GetId().GetName())
+		assert.Equal(t, primaryID.Name, setReq.GetIntendedPrimary().GetPrimary().GetId().GetName())
 	})
 
 	t.Run("ProblemCohortMemberIneligible issues UpdateConsensusRule with REMOVE", func(t *testing.T) {

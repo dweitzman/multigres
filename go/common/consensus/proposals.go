@@ -66,14 +66,14 @@ type RecruitmentResult struct {
 	EligibleLeaders []*clustermetadatapb.ConsensusStatus
 }
 
-// ReplicationPrimaryFromProposal builds the ReplicationPrimary a cohort
+// IntendedPrimaryFromProposal builds the IntendedPrimary a cohort
 // member should be told from a CoordinatorProposal, shared by Promote
 // (leader) and SetPrimary (followers) so they can't drift apart.
 //
 // rewindReady is explicit rather than defaulted, since a silently-omitted
 // zero value here is exactly the kind of gap this exists to prevent.
-func ReplicationPrimaryFromProposal(proposal *consensusdatapb.CoordinatorProposal, rewindReady bool) *clustermetadatapb.ReplicationPrimary {
-	return &clustermetadatapb.ReplicationPrimary{
+func IntendedPrimaryFromProposal(proposal *consensusdatapb.CoordinatorProposal, rewindReady bool) *clustermetadatapb.IntendedPrimary {
+	return &clustermetadatapb.IntendedPrimary{
 		Position:    proposal.GetProposedTransition(),
 		Primary:     proposal.GetProposalLeader(),
 		RewindReady: rewindReady,

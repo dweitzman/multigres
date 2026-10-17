@@ -28,10 +28,10 @@ func rewindTestSelfID() *clustermetadatapb.ID {
 	return &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "self"}
 }
 
-// recordedPrimaryWithLeader builds a ReplicationPrimary naming leader with the
+// recordedPrimaryWithLeader builds a IntendedPrimary naming leader with the
 // given contact address, as RecordTermPrimary would store it.
-func recordedPrimaryWithLeader(leader *clustermetadatapb.ID, addr *clustermetadatapb.PoolerAddress) *clustermetadatapb.ReplicationPrimary {
-	return &clustermetadatapb.ReplicationPrimary{
+func recordedPrimaryWithLeader(leader *clustermetadatapb.ID, addr *clustermetadatapb.PoolerAddress) *clustermetadatapb.IntendedPrimary {
+	return &clustermetadatapb.IntendedPrimary{
 		Position: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{
 			RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
 			LeaderId:   leader,
@@ -46,8 +46,8 @@ func TestConsensusManager_RewindTarget(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		record     *clustermetadatapb.ReplicationPrimary // nil = nothing recorded
-		revocation *clustermetadatapb.TermRevocation     // nil = no revocation seeded
+		record     *clustermetadatapb.IntendedPrimary // nil = nothing recorded
+		revocation *clustermetadatapb.TermRevocation  // nil = no revocation seeded
 		wantOK     bool
 		wantHost   string
 		wantPort   int32
@@ -79,7 +79,7 @@ func TestConsensusManager_RewindTarget(t *testing.T) {
 		{
 			// A recorded leader with no usable contact address is not actionable.
 			name: "no_address_no_target",
-			record: &clustermetadatapb.ReplicationPrimary{
+			record: &clustermetadatapb.IntendedPrimary{
 				Position: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{
 					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
 					LeaderId:   other,

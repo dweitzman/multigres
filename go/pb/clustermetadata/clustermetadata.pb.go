@@ -1083,7 +1083,7 @@ func (x *S3Backup) GetUseEnvCredentials() bool {
 // PoolerAddress identifies a pooler and carries the connection information a
 // peer needs to reach its postgres. Used wherever consensus references a
 // primary (CoordinatorProposal.proposal_leader, SetPrimaryRequest.leader,
-// ReplicationPrimary.primary, etc.) without dragging the full Multipooler
+// IntendedPrimary.primary, etc.) without dragging the full Multipooler
 // topology record onto the wire.
 type PoolerAddress struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -2332,9 +2332,10 @@ func (x *RoutingState) GetRule() *RuleNumber {
 	return nil
 }
 
-// ReplicationPrimary advertises the primary this pooler believes it should be
-// pointed at for replication, along with the rule under which that primary
-// holds leadership. The primary contact info is the main payload — it's how a
+// IntendedPrimary is the primary this pooler has been told to use for
+// replication, along with the rule under which that primary holds leadership.
+// It records an intention, not observed replication state: the rule can be
+// ahead of anything the pooler has recorded in its own WAL. The primary contact info is the main payload — it's how a
 // pooler in a degraded state (partition, mid-bootstrap, SetPrimary-while-postgres-
 // was-down) figures out who to reconnect replication to. The rule is supporting
 // evidence and has secondary uses such as coordinators learning of rules newer
@@ -2343,7 +2344,7 @@ func (x *RoutingState) GetRule() *RuleNumber {
 // Not persisted across pooler restarts — best-effort, populated by SetPrimary and
 // Promote RPCs. Coordinators that notice a pooler has incorrect replication
 // settings will re-inform it.
-type ReplicationPrimary struct {
+type IntendedPrimary struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The rule position under which this primary holds leadership: decision is
 	// the last settled rule the sender observed, proposal is a newer rule the
@@ -2378,20 +2379,20 @@ type ReplicationPrimary struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ReplicationPrimary) Reset() {
-	*x = ReplicationPrimary{}
+func (x *IntendedPrimary) Reset() {
+	*x = IntendedPrimary{}
 	mi := &file_clustermetadata_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ReplicationPrimary) String() string {
+func (x *IntendedPrimary) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ReplicationPrimary) ProtoMessage() {}
+func (*IntendedPrimary) ProtoMessage() {}
 
-func (x *ReplicationPrimary) ProtoReflect() protoreflect.Message {
+func (x *IntendedPrimary) ProtoReflect() protoreflect.Message {
 	mi := &file_clustermetadata_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -2403,26 +2404,26 @@ func (x *ReplicationPrimary) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ReplicationPrimary.ProtoReflect.Descriptor instead.
-func (*ReplicationPrimary) Descriptor() ([]byte, []int) {
+// Deprecated: Use IntendedPrimary.ProtoReflect.Descriptor instead.
+func (*IntendedPrimary) Descriptor() ([]byte, []int) {
 	return file_clustermetadata_proto_rawDescGZIP(), []int{24}
 }
 
-func (x *ReplicationPrimary) GetPosition() *RulePosition {
+func (x *IntendedPrimary) GetPosition() *RulePosition {
 	if x != nil {
 		return x.Position
 	}
 	return nil
 }
 
-func (x *ReplicationPrimary) GetPrimary() *PoolerAddress {
+func (x *IntendedPrimary) GetPrimary() *PoolerAddress {
 	if x != nil {
 		return x.Primary
 	}
 	return nil
 }
 
-func (x *ReplicationPrimary) GetRewindReady() bool {
+func (x *IntendedPrimary) GetRewindReady() bool {
 	if x != nil {
 		return x.RewindReady
 	}
@@ -2690,7 +2691,7 @@ func (x *ExternallyCertifiedRevocation) GetFrozenLsn() string {
 //     The highest ShardRule committed to local WAL (from rule_history) and the
 //     current LSN. Authoritative because postgres WAL is durable and ordered.
 //
-//  3. replication_primary (best-effort, coordinator-provided)
+//  3. intended_primary (best-effort, coordinator-provided)
 //     The primary this pooler should be pointed at for replication, plus the
 //     rule under which that primary holds leadership. May be ahead of
 //     current_position; not persisted and may be stale after restarts.
@@ -2716,11 +2717,11 @@ type ConsensusStatus struct {
 	// current_position is the highest rule this pooler has committed to local WAL
 	// and the latest WAL position.
 	CurrentPosition *PoolerPosition `protobuf:"bytes,2,opt,name=current_position,json=currentPosition,proto3" json:"current_position,omitempty"`
-	// replication_primary is the pooler's best-effort view of who its primary
+	// intended_primary is the pooler's best-effort view of who its primary
 	// should be (and under what rule). May reflect a rule ahead of
 	// current_position when the pooler has been informed of a newer rule that
 	// has not yet been replicated through WAL.
-	ReplicationPrimary *ReplicationPrimary `protobuf:"bytes,3,opt,name=replication_primary,json=replicationPrimary,proto3" json:"replication_primary,omitempty"`
+	IntendedPrimary *IntendedPrimary `protobuf:"bytes,3,opt,name=intended_primary,json=intendedPrimary,proto3" json:"intended_primary,omitempty"`
 	// id identifies the pooler that produced this status. Makes ConsensusStatus
 	// self-describing when passed around without a surrounding envelope.
 	Id *ID `protobuf:"bytes,4,opt,name=id,proto3" json:"id,omitempty"`
@@ -2789,9 +2790,9 @@ func (x *ConsensusStatus) GetCurrentPosition() *PoolerPosition {
 	return nil
 }
 
-func (x *ConsensusStatus) GetReplicationPrimary() *ReplicationPrimary {
+func (x *ConsensusStatus) GetIntendedPrimary() *IntendedPrimary {
 	if x != nil {
-		return x.ReplicationPrimary
+		return x.IntendedPrimary
 	}
 	return nil
 }
@@ -3138,8 +3139,8 @@ const file_clustermetadata_proto_rawDesc = "" +
 	"\x15recruit_blocked_until\x18\x02 \x01(\v2\x1c.clustermetadata.LsnPositionR\x13recruitBlockedUntil\"q\n" +
 	"\fRoutingState\x120\n" +
 	"\x04role\x18\x01 \x01(\x0e2\x1c.clustermetadata.RoutingRoleR\x04role\x12/\n" +
-	"\x04rule\x18\x02 \x01(\v2\x1b.clustermetadata.RuleNumberR\x04rule\"\xac\x01\n" +
-	"\x12ReplicationPrimary\x129\n" +
+	"\x04rule\x18\x02 \x01(\v2\x1b.clustermetadata.RuleNumberR\x04rule\"\xa9\x01\n" +
+	"\x0fIntendedPrimary\x129\n" +
 	"\bposition\x18\x01 \x01(\v2\x1d.clustermetadata.RulePositionR\bposition\x128\n" +
 	"\aprimary\x18\x02 \x01(\v2\x1e.clustermetadata.PoolerAddressR\aprimary\x12!\n" +
 	"\frewind_ready\x18\x03 \x01(\bR\vrewindReady\"\xea\x02\n" +
@@ -3155,11 +3156,11 @@ const file_clustermetadata_proto_rawDesc = "" +
 	"\x1dExternallyCertifiedRevocation\x12H\n" +
 	"\x0fterm_revocation\x18\x01 \x01(\v2\x1f.clustermetadata.TermRevocationR\x0etermRevocation\x12\x1d\n" +
 	"\n" +
-	"frozen_lsn\x18\x02 \x01(\tR\tfrozenLsn\"\xf4\x02\n" +
+	"frozen_lsn\x18\x02 \x01(\tR\tfrozenLsn\"\xeb\x02\n" +
 	"\x0fConsensusStatus\x12H\n" +
 	"\x0fterm_revocation\x18\x01 \x01(\v2\x1f.clustermetadata.TermRevocationR\x0etermRevocation\x12J\n" +
-	"\x10current_position\x18\x02 \x01(\v2\x1f.clustermetadata.PoolerPositionR\x0fcurrentPosition\x12T\n" +
-	"\x13replication_primary\x18\x03 \x01(\v2#.clustermetadata.ReplicationPrimaryR\x12replicationPrimary\x12#\n" +
+	"\x10current_position\x18\x02 \x01(\v2\x1f.clustermetadata.PoolerPositionR\x0fcurrentPosition\x12K\n" +
+	"\x10intended_primary\x18\x03 \x01(\v2 .clustermetadata.IntendedPrimaryR\x0fintendedPrimary\x12#\n" +
 	"\x02id\x18\x04 \x01(\v2\x13.clustermetadata.IDR\x02id\x12P\n" +
 	"\x15recruit_blocked_until\x18\x05 \x01(\v2\x1c.clustermetadata.LsnPositionR\x13recruitBlockedUntil\"n\n" +
 	"\x10LeadershipStatus\x12\x1f\n" +
@@ -3254,7 +3255,7 @@ var file_clustermetadata_proto_goTypes = []any{
 	(*LsnPosition)(nil),                   // 29: clustermetadata.LsnPosition
 	(*ConsensusPromises)(nil),             // 30: clustermetadata.ConsensusPromises
 	(*RoutingState)(nil),                  // 31: clustermetadata.RoutingState
-	(*ReplicationPrimary)(nil),            // 32: clustermetadata.ReplicationPrimary
+	(*IntendedPrimary)(nil),               // 32: clustermetadata.IntendedPrimary
 	(*TermRevocation)(nil),                // 33: clustermetadata.TermRevocation
 	(*RecruitIntent)(nil),                 // 34: clustermetadata.RecruitIntent
 	(*ExternallyCertifiedRevocation)(nil), // 35: clustermetadata.ExternallyCertifiedRevocation
@@ -3307,8 +3308,8 @@ var file_clustermetadata_proto_depIdxs = []int32{
 	29, // 36: clustermetadata.ConsensusPromises.recruit_blocked_until:type_name -> clustermetadata.LsnPosition
 	4,  // 37: clustermetadata.RoutingState.role:type_name -> clustermetadata.RoutingRole
 	24, // 38: clustermetadata.RoutingState.rule:type_name -> clustermetadata.RuleNumber
-	26, // 39: clustermetadata.ReplicationPrimary.position:type_name -> clustermetadata.RulePosition
-	15, // 40: clustermetadata.ReplicationPrimary.primary:type_name -> clustermetadata.PoolerAddress
+	26, // 39: clustermetadata.IntendedPrimary.position:type_name -> clustermetadata.RulePosition
+	15, // 40: clustermetadata.IntendedPrimary.primary:type_name -> clustermetadata.PoolerAddress
 	20, // 41: clustermetadata.TermRevocation.accepted_coordinator_id:type_name -> clustermetadata.ID
 	43, // 42: clustermetadata.TermRevocation.coordinator_initiated_at:type_name -> google.protobuf.Timestamp
 	24, // 43: clustermetadata.TermRevocation.outgoing_rule:type_name -> clustermetadata.RuleNumber
@@ -3317,7 +3318,7 @@ var file_clustermetadata_proto_depIdxs = []int32{
 	33, // 46: clustermetadata.ExternallyCertifiedRevocation.term_revocation:type_name -> clustermetadata.TermRevocation
 	33, // 47: clustermetadata.ConsensusStatus.term_revocation:type_name -> clustermetadata.TermRevocation
 	27, // 48: clustermetadata.ConsensusStatus.current_position:type_name -> clustermetadata.PoolerPosition
-	32, // 49: clustermetadata.ConsensusStatus.replication_primary:type_name -> clustermetadata.ReplicationPrimary
+	32, // 49: clustermetadata.ConsensusStatus.intended_primary:type_name -> clustermetadata.IntendedPrimary
 	20, // 50: clustermetadata.ConsensusStatus.id:type_name -> clustermetadata.ID
 	29, // 51: clustermetadata.ConsensusStatus.recruit_blocked_until:type_name -> clustermetadata.LsnPosition
 	5,  // 52: clustermetadata.LeadershipStatus.signal:type_name -> clustermetadata.LeadershipSignal

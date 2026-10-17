@@ -39,7 +39,7 @@ import (
 // highestIntendedRule returns the highest-numbered rule this pooler knows of,
 // combining the rule it has applied into its own position with the rule it was
 // most recently told to follow via SetPrimary/Promote (consensusPromises's
-// recorded ReplicationPrimary). A standby told of a newer leader before its own
+// recorded IntendedPrimary). A standby told of a newer leader before its own
 // position advances still reads the newer rule. Returns nil if neither source
 // carries a rule.
 //
@@ -75,7 +75,7 @@ func (pm *MultipoolerManager) highestIntendedRule() *clustermetadatapb.RulePosit
 // diverged primary as a standby of a not-yet-checkpointed leader would FATAL on
 // our own un-replicated WAL).
 func (pm *MultipoolerManager) staleStandbyDemoteTarget() *clustermetadatapb.PoolerAddress {
-	rp := pm.consensusMgr.GetReplicationPrimary()
+	rp := pm.consensusMgr.GetIntendedPrimary()
 	if rp == nil {
 		return nil
 	}
@@ -222,7 +222,7 @@ const (
 	remedialActionReconcileGUC
 	// remedialActionFixPrimaryConnInfo means postgres is in recovery and the
 	// topology says REPLICA, but primary_conninfo doesn't match the primary
-	// recorded in consensus.ConsensusPromises.ReplicationPrimary (the most recent
+	// recorded in consensus.ConsensusPromises.IntendedPrimary (the most recent
 	// SetPrimary/Promote). Reconciles the GUC so this replica points at the right
 	// primary regardless of how it got out of sync (failed SetPrimary apply,
 	// hand edit, snapshot restore, etc.).
@@ -251,7 +251,7 @@ const (
 	remedialActionPromoteStaticLeader
 	// remedialActionMarkRewindReady means this pooler is the non-resigned leader,
 	// postgres has checkpointed onto its current timeline (rewindSourceReady), but
-	// the published ReplicationPrimary has not yet advertised rewind_ready. Mark it
+	// the published IntendedPrimary has not yet advertised rewind_ready. Mark it
 	// and broadcast so a diverged follower's recovery (orch's gated pg_rewind) can
 	// proceed. Purely a state-publication step — no postgres mutation.
 	remedialActionMarkRewindReady
@@ -690,7 +690,7 @@ func (pm *MultipoolerManager) connInfoReconcileAllowed() (*clustermetadatapb.Poo
 	if pm.walReceiverManuallyStopped.Load() {
 		return nil, false
 	}
-	rp := pm.consensusMgr.GetReplicationPrimary()
+	rp := pm.consensusMgr.GetIntendedPrimary()
 	if rp == nil {
 		return nil, false
 	}
@@ -860,8 +860,8 @@ func (pm *MultipoolerManager) primaryConnInfoDiffersFromRecorded(ctx context.Con
 }
 
 // reconcilePrimaryConnInfoToRecorded re-applies primary_conninfo so it points
-// at the currently-recorded ReplicationPrimary. Callers detect drift via
-// primaryConnInfoDiffersFromRecorded, which guarantees GetReplicationPrimary()
+// at the currently-recorded IntendedPrimary. Callers detect drift via
+// primaryConnInfoDiffersFromRecorded, which guarantees GetIntendedPrimary()
 // has a valid target by the time this runs. logPrefix distinguishes the two
 // call sites (the periodic monitor tick vs. an in-line SetPrimary reconcile)
 // in logs.
@@ -875,7 +875,7 @@ func (pm *MultipoolerManager) primaryConnInfoDiffersFromRecorded(ctx context.Con
 // scenario without waiting for orch's FixReplicationAction to issue a
 // RewindToSource RPC.
 func (pm *MultipoolerManager) reconcilePrimaryConnInfoToRecorded(ctx context.Context, logPrefix string) {
-	target := pm.consensusMgr.GetReplicationPrimary().GetPrimary()
+	target := pm.consensusMgr.GetIntendedPrimary().GetPrimary()
 	pm.logger.InfoContext(ctx, logPrefix+": primary_conninfo drift detected; rewriting to recorded primary",
 		"target_primary", target.GetId().GetName(),
 		"target_host", target.GetHost(),
@@ -957,7 +957,7 @@ func (pm *MultipoolerManager) shouldDisableRestoreCommand(ctx context.Context) b
 // the recorded consensus state.
 func (pm *MultipoolerManager) determineReplicationSettingsAction(ctx context.Context, state postgresState) remedialAction {
 	// primary_conninfo is a standby concern: reconcile it to the recorded
-	// ReplicationPrimary when it has drifted from what we've been told via
+	// IntendedPrimary when it has drifted from what we've been told via
 	// SetPrimary/Promote.
 	if !state.pgMode.OutOfRecovery() {
 		// A standby that suspects its WAL diverged must be rewound against the
@@ -1221,7 +1221,7 @@ func (pm *MultipoolerManager) shouldRewindForDivergence() bool {
 	if _, _, ok := pm.consensusMgr.RewindTarget(); !ok {
 		return false
 	}
-	if !pm.consensusMgr.GetReplicationPrimary().GetRewindReady() {
+	if !pm.consensusMgr.GetIntendedPrimary().GetRewindReady() {
 		return false
 	}
 	return pm.consensusMgr.RewindBackoffElapsed()
@@ -1230,7 +1230,7 @@ func (pm *MultipoolerManager) shouldRewindForDivergence() bool {
 // shouldMarkRewindReady reports whether this pooler should advertise rewind
 // readiness this tick: postgres has checkpointed onto its current timeline
 // (rewindSourceReady), this pooler is the rule-named leader and has not resigned
-// leadership, and the published ReplicationPrimary has not yet advertised it. The
+// leadership, and the published IntendedPrimary has not yet advertised it. The
 // last check makes the resulting action a false->true edge, so its broadcast
 // fires once per promotion rather than every tick.
 func (pm *MultipoolerManager) shouldMarkRewindReady(state postgresState, role commonconsensus.ConsensusRole) bool {
@@ -1240,7 +1240,7 @@ func (pm *MultipoolerManager) shouldMarkRewindReady(state postgresState, role co
 	if pm.consensusMgr.ResignedLeaderAtTerm() != 0 {
 		return false
 	}
-	return !pm.consensusMgr.GetReplicationPrimary().GetRewindReady()
+	return !pm.consensusMgr.GetIntendedPrimary().GetRewindReady()
 }
 
 // determinePostgresNotRunningAction decides how to bring postgres up when it is
@@ -1505,7 +1505,7 @@ func (pm *MultipoolerManager) takeRemedialAction(ctx context.Context, action rem
 		// record names us at the term we observed and that the flag was not already
 		// set; broadcast on the false->true edge so a diverged follower's recovery
 		// sees it without waiting for the next periodic snapshot.
-		expectedPosition := pm.consensusMgr.GetReplicationPrimary().GetPosition()
+		expectedPosition := pm.consensusMgr.GetIntendedPrimary().GetPosition()
 		if pm.consensusMgr.MarkSelfRewindReady(pm.serviceID, expectedPosition) {
 			pm.logger.InfoContext(ctx, "MonitorPostgres: checkpointed onto current timeline; advertising rewind-ready") //nolint:sloglint // message intentionally starts with an operation name or proper noun
 			pm.broadcastHealth()
@@ -1618,7 +1618,7 @@ func (pm *MultipoolerManager) startPostgres(ctx context.Context) error {
 	// currently treat err==nil as "started" (rpc_first_backup, provisioner/local)
 	// must switch to checking `started`.
 	if resp.GetCrashRecoveryRan() {
-		leader := commonconsensus.PossiblyUndecidedRule(pm.consensusMgr.GetReplicationPrimary().GetPosition()).GetLeaderId()
+		leader := commonconsensus.PossiblyUndecidedRule(pm.consensusMgr.GetIntendedPrimary().GetPosition()).GetLeaderId()
 		differentLeaderKnown := leader != nil && pm.serviceID != nil &&
 			(leader.GetCell() != pm.serviceID.GetCell() || leader.GetName() != pm.serviceID.GetName())
 		if differentLeaderKnown {

@@ -758,13 +758,13 @@ func TestDeriveRoutingRole(t *testing.T) {
 		},
 		{
 			// Self's committed rule (term 1) names self, but a higher rule (term 2)
-			// naming another pooler is known via ReplicationPrimary — self has been
+			// naming another pooler is known via IntendedPrimary — self has been
 			// superseded, so it is no longer the active leader.
 			name:   "primary but superseded by higher known rule is replica",
 			pgMode: pgmode.Primary,
 			cs: func() *clustermetadatapb.ConsensusStatus {
 				cs := selfLeaderConsensusStatus()
-				cs.ReplicationPrimary = &clustermetadatapb.ReplicationPrimary{
+				cs.IntendedPrimary = &clustermetadatapb.IntendedPrimary{
 					Position: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{
 						RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 2},
 						LeaderId:   otherPoolerID,

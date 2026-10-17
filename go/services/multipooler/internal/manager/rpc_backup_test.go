@@ -162,8 +162,8 @@ func newTestStateManagerForPoolerType(pm *MultipoolerManager, multipoolerID *clu
 	return ssm
 }
 
-// setBackupPrimary seeds the ReplicationPrimary on the test manager so the
-// backup paths that read pm.consensusMgr.GetReplicationPrimary() see a
+// setBackupPrimary seeds the IntendedPrimary on the test manager so the
+// backup paths that read pm.consensusMgr.GetIntendedPrimary() see a
 // configured primary. Synthetic rule at term 1 is sufficient — no consumer
 // of rp.GetPosition().GetDecision() reads cohort_members or durability_policy.
 func setBackupPrimary(t *testing.T, pm *MultipoolerManager, primaryName, host string, port int32) {
@@ -176,7 +176,7 @@ func setBackupPrimary(t *testing.T, pm *MultipoolerManager, primaryName, host st
 	lockCtx, err := pm.actionLock.Acquire(t.Context(), "test-seed")
 	require.NoError(t, err)
 	defer pm.actionLock.Release(lockCtx)
-	require.NoError(t, pm.consensusMgr.RecordTermPrimary(lockCtx, &clustermetadatapb.ReplicationPrimary{
+	require.NoError(t, pm.consensusMgr.RecordTermPrimary(lockCtx, &clustermetadatapb.IntendedPrimary{
 		Position: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{
 			RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
 			LeaderId:   id,
@@ -891,7 +891,7 @@ func TestGetPrimaryAsPg2Args(t *testing.T) {
 			poolerDir := t.TempDir()
 			pm := createTestManager(t, poolerDir, "", "", tt.poolerType)
 			// Only seed a recorded primary when the test case supplies one;
-			// the "no primary info" case leaves ReplicationPrimary empty so
+			// the "no primary info" case leaves IntendedPrimary empty so
 			// GetPrimaryAsPg2Args returns FAILED_PRECONDITION.
 			if tt.primaryHost != "" && tt.primaryPort != 0 {
 				setBackupPrimary(t, pm, "test-primary", tt.primaryHost, tt.primaryPort)

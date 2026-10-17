@@ -287,7 +287,7 @@ func IsRuleRevoked(position *clustermetadatapb.RulePosition, revocation *cluster
 // updates it, so a genuinely stranded node still reads as revoked.
 func IsSelfRevoked(status *clustermetadatapb.ConsensusStatus) bool {
 	current := status.GetCurrentPosition().GetPosition()
-	known := ReplicationPrimaryOrNil(status).GetPosition()
+	known := IntendedPrimaryOrNil(status).GetPosition()
 	highest := current
 	if CompareRulePosition(known, current) > 0 {
 		highest = known

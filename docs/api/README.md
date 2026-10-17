@@ -136,7 +136,7 @@ have no client-supplied idempotency key and must not be blindly retried.
 - **`ApplyCertifiedRuleChange`:** recruitment can modify consensus state before
   the request fails. Discover the shard's poolers with `GetPoolers`, then query
   the involved cohort with `GetPoolerStatus`. Compare the `currentPosition`,
-  `termRevocation`, and `replicationPrimary` fields in `consensusStatus` with
+  `termRevocation`, and `intendedPrimary` fields in `consensusStatus` with
   the intended transition. Confirm the installed rule and serving leader,
   or reconcile the partial transition before preparing another request. An
   unreachable member leaves its state uncertain. Do not assume a previous

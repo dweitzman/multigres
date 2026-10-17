@@ -61,7 +61,7 @@ makes a redundant call a safe no-op, so this can run freely.
 > [!NOTE]
 > Not yet documented: the reconciliation trigger (`FixReplicationAction`), how
 > the coordinator decides a pooler needs re-pointing (comparing published
-> `ReplicationPrimary` against the current rule via `ReplicationPrimaryMatches`),
+> `IntendedPrimary` against the current rule via `IntendedPrimaryMatches`),
 > and how this interacts with pg_rewind for diverged followers.
 
 ## The recovery loop

@@ -100,7 +100,7 @@ func TestReconnectRecruitAbandonedAction(t *testing.T) {
 		assert.Contains(t, fake.CallLog, "SetPrimary(multipooler-cell1-replica1)",
 			"must reconnect the follower after advancing")
 		// The position relayed to the follower is the one the advance returned.
-		relayed := fake.SetPrimaryRequests["multipooler-cell1-replica1"].GetReplicationPrimary().GetPosition()
+		relayed := fake.SetPrimaryRequests["multipooler-cell1-replica1"].GetIntendedPrimary().GetPosition()
 		assert.EqualValues(t, 1, relayed.GetDecision().GetRuleNumber().GetLeaderSubterm(),
 			"must relay the advanced rule the RPC returned")
 	})

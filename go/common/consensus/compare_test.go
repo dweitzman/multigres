@@ -141,7 +141,7 @@ func TestMostAdvancedPosition(t *testing.T) {
 	})
 }
 
-func TestReplicationPrimaryMatches(t *testing.T) {
+func TestIntendedPrimaryMatches(t *testing.T) {
 	mkID := func(name string) *clustermetadatapb.ID {
 		return &clustermetadatapb.ID{
 			Component: clustermetadatapb.ID_MULTIPOOLER,
@@ -162,8 +162,8 @@ func TestReplicationPrimaryMatches(t *testing.T) {
 	mkPosition := func(rule *clustermetadatapb.ShardRule) *clustermetadatapb.RulePosition {
 		return &clustermetadatapb.RulePosition{Decision: rule}
 	}
-	mkRP := func(rule *clustermetadatapb.ShardRule, primary *clustermetadatapb.PoolerAddress) *clustermetadatapb.ReplicationPrimary {
-		return &clustermetadatapb.ReplicationPrimary{Position: mkPosition(rule), Primary: primary}
+	mkRP := func(rule *clustermetadatapb.ShardRule, primary *clustermetadatapb.PoolerAddress) *clustermetadatapb.IntendedPrimary {
+		return &clustermetadatapb.IntendedPrimary{Position: mkPosition(rule), Primary: primary}
 	}
 
 	target := mkAddr("primary-1", "host-a", 5432)
@@ -171,79 +171,79 @@ func TestReplicationPrimaryMatches(t *testing.T) {
 	targetPosition := mkPosition(targetRule)
 
 	t.Run("nil rp returns false", func(t *testing.T) {
-		assert.False(t, ReplicationPrimaryMatches(nil, target, targetPosition))
+		assert.False(t, IntendedPrimaryMatches(nil, target, targetPosition))
 	})
 
 	t.Run("nil target returns false", func(t *testing.T) {
 		rp := mkRP(targetRule, target)
-		assert.False(t, ReplicationPrimaryMatches(rp, nil, targetPosition))
+		assert.False(t, IntendedPrimaryMatches(rp, nil, targetPosition))
 	})
 
 	t.Run("nil targetRule returns false", func(t *testing.T) {
 		rp := mkRP(targetRule, target)
-		assert.False(t, ReplicationPrimaryMatches(rp, target, nil))
+		assert.False(t, IntendedPrimaryMatches(rp, target, nil))
 	})
 
 	t.Run("published rule older than targetRule returns false", func(t *testing.T) {
 		rp := mkRP(mkRule(2), target)
-		assert.False(t, ReplicationPrimaryMatches(rp, target, targetPosition))
+		assert.False(t, IntendedPrimaryMatches(rp, target, targetPosition))
 	})
 
 	t.Run("published primary missing returns false", func(t *testing.T) {
 		rp := mkRP(targetRule, nil)
-		assert.False(t, ReplicationPrimaryMatches(rp, target, targetPosition))
+		assert.False(t, IntendedPrimaryMatches(rp, target, targetPosition))
 	})
 
 	t.Run("primary id mismatch returns false", func(t *testing.T) {
 		rp := mkRP(targetRule, mkAddr("primary-2", "host-a", 5432))
-		assert.False(t, ReplicationPrimaryMatches(rp, target, targetPosition))
+		assert.False(t, IntendedPrimaryMatches(rp, target, targetPosition))
 	})
 
 	t.Run("primary id different cell returns false", func(t *testing.T) {
 		other := mkAddr("primary-1", "host-a", 5432)
 		other.Id.Cell = "zone2"
 		rp := mkRP(targetRule, other)
-		assert.False(t, ReplicationPrimaryMatches(rp, target, targetPosition))
+		assert.False(t, IntendedPrimaryMatches(rp, target, targetPosition))
 	})
 
 	t.Run("primary id different component returns false", func(t *testing.T) {
 		other := mkAddr("primary-1", "host-a", 5432)
 		other.Id.Component = clustermetadatapb.ID_MULTIGATEWAY
 		rp := mkRP(targetRule, other)
-		assert.False(t, ReplicationPrimaryMatches(rp, target, targetPosition))
+		assert.False(t, IntendedPrimaryMatches(rp, target, targetPosition))
 	})
 
 	t.Run("primary hostname mismatch returns false", func(t *testing.T) {
 		rp := mkRP(targetRule, mkAddr("primary-1", "host-b", 5432))
-		assert.False(t, ReplicationPrimaryMatches(rp, target, targetPosition))
+		assert.False(t, IntendedPrimaryMatches(rp, target, targetPosition))
 	})
 
 	t.Run("primary port mismatch returns false", func(t *testing.T) {
 		rp := mkRP(targetRule, mkAddr("primary-1", "host-a", 5433))
-		assert.False(t, ReplicationPrimaryMatches(rp, target, targetPosition))
+		assert.False(t, IntendedPrimaryMatches(rp, target, targetPosition))
 	})
 
 	t.Run("exact match returns true", func(t *testing.T) {
 		rp := mkRP(targetRule, target)
-		assert.True(t, ReplicationPrimaryMatches(rp, target, targetPosition))
+		assert.True(t, IntendedPrimaryMatches(rp, target, targetPosition))
 	})
 
 	t.Run("published rule newer than targetRule still matches", func(t *testing.T) {
 		// Coordinator's targetRule may lag the pooler's published rule —
 		// "no older than" means published >= target.
 		rp := mkRP(mkRule(5), target)
-		assert.True(t, ReplicationPrimaryMatches(rp, target, targetPosition))
+		assert.True(t, IntendedPrimaryMatches(rp, target, targetPosition))
 	})
 }
 
-func TestMergeReplicationPrimary(t *testing.T) {
-	mkRP := func(term int64, rewindReady bool) *clustermetadatapb.ReplicationPrimary {
-		return &clustermetadatapb.ReplicationPrimary{
+func TestMergeIntendedPrimary(t *testing.T) {
+	mkRP := func(term int64, rewindReady bool) *clustermetadatapb.IntendedPrimary {
+		return &clustermetadatapb.IntendedPrimary{
 			Position:    &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{RuleNumber: rn(term, 0)}},
 			RewindReady: rewindReady,
 		}
 	}
-	mkRPWithAddr := func(term int64, host string, port int32) *clustermetadatapb.ReplicationPrimary {
+	mkRPWithAddr := func(term int64, host string, port int32) *clustermetadatapb.IntendedPrimary {
 		rp := mkRP(term, false)
 		rp.Primary = &clustermetadatapb.PoolerAddress{
 			Id:           &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "p1"},
@@ -255,62 +255,62 @@ func TestMergeReplicationPrimary(t *testing.T) {
 
 	t.Run("nil candidate never changes anything", func(t *testing.T) {
 		current := mkRP(5, false)
-		result, changed := MergeReplicationPrimary(current, nil)
+		result, changed := MergeIntendedPrimary(current, nil)
 		assert.False(t, changed)
 		assert.Same(t, current, result)
 	})
 
 	t.Run("nil current is always replaceable", func(t *testing.T) {
 		candidate := mkRP(5, false)
-		result, changed := MergeReplicationPrimary(nil, candidate)
+		result, changed := MergeIntendedPrimary(nil, candidate)
 		assert.True(t, changed)
 		assert.True(t, proto.Equal(candidate, result))
 	})
 
 	t.Run("higher position replaces", func(t *testing.T) {
-		result, changed := MergeReplicationPrimary(mkRP(3, false), mkRP(5, false))
+		result, changed := MergeIntendedPrimary(mkRP(3, false), mkRP(5, false))
 		assert.True(t, changed)
 		assert.True(t, proto.Equal(mkRP(5, false), result))
 	})
 
 	t.Run("lower position never replaces", func(t *testing.T) {
 		current := mkRP(5, false)
-		result, changed := MergeReplicationPrimary(current, mkRP(3, false))
+		result, changed := MergeIntendedPrimary(current, mkRP(3, false))
 		assert.False(t, changed)
 		assert.Same(t, current, result)
 	})
 
 	t.Run("same position, rewind_ready false to true replaces", func(t *testing.T) {
-		result, changed := MergeReplicationPrimary(mkRP(5, false), mkRP(5, true))
+		result, changed := MergeIntendedPrimary(mkRP(5, false), mkRP(5, true))
 		assert.True(t, changed)
 		assert.True(t, result.GetRewindReady())
 	})
 
 	t.Run("same position, rewind_ready true to false never regresses", func(t *testing.T) {
-		result, changed := MergeReplicationPrimary(mkRP(5, true), mkRP(5, false))
+		result, changed := MergeIntendedPrimary(mkRP(5, true), mkRP(5, false))
 		assert.False(t, changed)
 		assert.True(t, result.GetRewindReady())
 	})
 
 	t.Run("same position, both unchanged does not replace", func(t *testing.T) {
-		_, changed := MergeReplicationPrimary(mkRP(5, false), mkRP(5, false))
+		_, changed := MergeIntendedPrimary(mkRP(5, false), mkRP(5, false))
 		assert.False(t, changed)
-		_, changed = MergeReplicationPrimary(mkRP(5, true), mkRP(5, true))
+		_, changed = MergeIntendedPrimary(mkRP(5, true), mkRP(5, true))
 		assert.False(t, changed)
 	})
 
 	t.Run("same position, different host replaces", func(t *testing.T) {
-		_, changed := MergeReplicationPrimary(mkRPWithAddr(5, "host-a", 5432), mkRPWithAddr(5, "host-b", 5432))
+		_, changed := MergeIntendedPrimary(mkRPWithAddr(5, "host-a", 5432), mkRPWithAddr(5, "host-b", 5432))
 		assert.True(t, changed)
 	})
 
 	t.Run("same position, different port replaces", func(t *testing.T) {
-		_, changed := MergeReplicationPrimary(mkRPWithAddr(5, "host-a", 5432), mkRPWithAddr(5, "host-a", 5433))
+		_, changed := MergeIntendedPrimary(mkRPWithAddr(5, "host-a", 5432), mkRPWithAddr(5, "host-a", 5433))
 		assert.True(t, changed)
 	})
 
 	t.Run("same position, same address does not replace", func(t *testing.T) {
-		_, changed := MergeReplicationPrimary(mkRPWithAddr(5, "host-a", 5432), mkRPWithAddr(5, "host-a", 5432))
+		_, changed := MergeIntendedPrimary(mkRPWithAddr(5, "host-a", 5432), mkRPWithAddr(5, "host-a", 5432))
 		assert.False(t, changed)
 	})
 
@@ -318,18 +318,18 @@ func TestMergeReplicationPrimary(t *testing.T) {
 		// CompareRulePosition ranks a decision strictly above its own term's
 		// undecided proposal (cmp > 0, not cmp == 0), so this exercises the
 		// carry-forward on the advance path, not just the same-position path.
-		proposal := &clustermetadatapb.ReplicationPrimary{
+		proposal := &clustermetadatapb.IntendedPrimary{
 			Position: &clustermetadatapb.RulePosition{
 				Decision: &clustermetadatapb.ShardRule{RuleNumber: rn(4, 0)},
 				Proposal: &clustermetadatapb.ShardRule{RuleNumber: rn(5, 0)},
 			},
 			RewindReady: true,
 		}
-		decision := &clustermetadatapb.ReplicationPrimary{
+		decision := &clustermetadatapb.IntendedPrimary{
 			Position: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{RuleNumber: rn(5, 0)}},
 			// RewindReady deliberately left unset, as a caller not restating it would.
 		}
-		result, changed := MergeReplicationPrimary(proposal, decision)
+		result, changed := MergeIntendedPrimary(proposal, decision)
 		require.True(t, changed)
 		assert.True(t, result.GetRewindReady(), "rewind_ready must not regress across a same-term proposal->decision transition")
 	})
@@ -337,7 +337,7 @@ func TestMergeReplicationPrimary(t *testing.T) {
 	t.Run("primary preserved when candidate doesn't supply one", func(t *testing.T) {
 		current := mkRPWithAddr(5, "host-a", 5432)
 		candidate := mkRP(6, false) // advances the rule, no Primary set
-		result, changed := MergeReplicationPrimary(current, candidate)
+		result, changed := MergeIntendedPrimary(current, candidate)
 		require.True(t, changed)
 		assert.True(t, proto.Equal(current.GetPrimary(), result.GetPrimary()))
 	})
@@ -532,7 +532,7 @@ func TestHighestIntendedRule(t *testing.T) {
 	// status whose replication primary holds leadership at a given rule.
 	replStatus := func(term int64, leader string) *clustermetadatapb.ConsensusStatus {
 		return &clustermetadatapb.ConsensusStatus{
-			ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{
+			IntendedPrimary: &clustermetadatapb.IntendedPrimary{
 				Position: &clustermetadatapb.RulePosition{
 					Decision: &clustermetadatapb.ShardRule{RuleNumber: rn(term, 0), LeaderId: leaderID(leader)},
 				},
@@ -553,7 +553,7 @@ func TestHighestIntendedRule(t *testing.T) {
 	t.Run("replication primary rule is considered, not just position", func(t *testing.T) {
 		// A follower positioned at rule 5 but replicating from a leader at rule 8.
 		follower := posStatus(5, "old")
-		follower.ReplicationPrimary = replStatus(8, "new").ReplicationPrimary
+		follower.IntendedPrimary = replStatus(8, "new").IntendedPrimary
 		got := PossiblyUndecidedRule(HighestIntendedRule([]*clustermetadatapb.ConsensusStatus{follower, posStatus(5, "old")}))
 		assert.Equal(t, "new", got.GetLeaderId().GetName(), "newer leader via replication primary should win")
 	})
@@ -563,7 +563,7 @@ func TestHighestIntendedRule(t *testing.T) {
 		// replication primary (rule 0/0, no leader) — the fresh/never-established
 		// shape. The phantom entry must not shadow the real position rule.
 		phantom := posStatus(5, "leader")
-		phantom.ReplicationPrimary = &clustermetadatapb.ReplicationPrimary{
+		phantom.IntendedPrimary = &clustermetadatapb.IntendedPrimary{
 			Position: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{RuleNumber: rn(0, 0)}},
 		}
 		got := PossiblyUndecidedRule(HighestIntendedRule([]*clustermetadatapb.ConsensusStatus{phantom}))
@@ -593,13 +593,13 @@ func TestHighestDecidedRule(t *testing.T) {
 		assert.Equal(t, int64(7), got.GetCoordinatorTerm())
 	})
 
-	t.Run("ignores ReplicationPrimary, unlike HighestIntendedRule", func(t *testing.T) {
+	t.Run("ignores IntendedPrimary, unlike HighestIntendedRule", func(t *testing.T) {
 		// A follower decided at term 5 but replicating from a leader it has
-		// learned is at term 8 via ReplicationPrimary. Must not be picked up —
+		// learned is at term 8 via IntendedPrimary. Must not be picked up —
 		// NewTermRevocation's ReplaceDecision computation doesn't see it either,
 		// and the two must stay in exact agreement.
 		follower := posStatus(5)
-		follower.ReplicationPrimary = &clustermetadatapb.ReplicationPrimary{
+		follower.IntendedPrimary = &clustermetadatapb.IntendedPrimary{
 			Position: &clustermetadatapb.RulePosition{
 				Decision: &clustermetadatapb.ShardRule{RuleNumber: rn(8, 0)},
 			},
@@ -610,38 +610,38 @@ func TestHighestDecidedRule(t *testing.T) {
 	})
 }
 
-func TestReplicationPrimaryOrNil(t *testing.T) {
+func TestIntendedPrimaryOrNil(t *testing.T) {
 	t.Run("nil status", func(t *testing.T) {
-		assert.Nil(t, ReplicationPrimaryOrNil(nil))
+		assert.Nil(t, IntendedPrimaryOrNil(nil))
 	})
 
 	t.Run("unset replication primary", func(t *testing.T) {
-		assert.Nil(t, ReplicationPrimaryOrNil(&clustermetadatapb.ConsensusStatus{}))
+		assert.Nil(t, IntendedPrimaryOrNil(&clustermetadatapb.ConsensusStatus{}))
 	})
 
 	t.Run("zero-valued 0/0 rule is treated as absent", func(t *testing.T) {
 		cs := &clustermetadatapb.ConsensusStatus{
-			ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{
+			IntendedPrimary: &clustermetadatapb.IntendedPrimary{
 				Position: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{RuleNumber: rn(0, 0)}},
 			},
 		}
-		assert.Nil(t, ReplicationPrimaryOrNil(cs))
+		assert.Nil(t, IntendedPrimaryOrNil(cs))
 	})
 
 	t.Run("empty rule (no rule number) is treated as absent", func(t *testing.T) {
 		cs := &clustermetadatapb.ConsensusStatus{
-			ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{
+			IntendedPrimary: &clustermetadatapb.IntendedPrimary{
 				Position: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{}},
 			},
 		}
-		assert.Nil(t, ReplicationPrimaryOrNil(cs))
+		assert.Nil(t, IntendedPrimaryOrNil(cs))
 	})
 
 	t.Run("established replication primary is returned", func(t *testing.T) {
-		rp := &clustermetadatapb.ReplicationPrimary{
+		rp := &clustermetadatapb.IntendedPrimary{
 			Position: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{RuleNumber: rn(1, 0), LeaderId: leaderID("leader")}},
 		}
-		cs := &clustermetadatapb.ConsensusStatus{ReplicationPrimary: rp}
-		assert.Same(t, rp, ReplicationPrimaryOrNil(cs))
+		cs := &clustermetadatapb.ConsensusStatus{IntendedPrimary: rp}
+		assert.Same(t, rp, IntendedPrimaryOrNil(cs))
 	})
 }

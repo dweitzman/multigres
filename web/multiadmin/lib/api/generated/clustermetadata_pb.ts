@@ -814,7 +814,7 @@ export class S3Backup extends Message<S3Backup> {
  * PoolerAddress identifies a pooler and carries the connection information a
  * peer needs to reach its postgres. Used wherever consensus references a
  * primary (CoordinatorProposal.proposal_leader, SetPrimaryRequest.leader,
- * ReplicationPrimary.primary, etc.) without dragging the full Multipooler
+ * IntendedPrimary.primary, etc.) without dragging the full Multipooler
  * topology record onto the wire.
  *
  * @generated from message clustermetadata.PoolerAddress
@@ -1969,9 +1969,10 @@ export class RoutingState extends Message<RoutingState> {
 }
 
 /**
- * ReplicationPrimary advertises the primary this pooler believes it should be
- * pointed at for replication, along with the rule under which that primary
- * holds leadership. The primary contact info is the main payload — it's how a
+ * IntendedPrimary is the primary this pooler has been told to use for
+ * replication, along with the rule under which that primary holds leadership.
+ * It records an intention, not observed replication state: the rule can be
+ * ahead of anything the pooler has recorded in its own WAL. The primary contact info is the main payload — it's how a
  * pooler in a degraded state (partition, mid-bootstrap, SetPrimary-while-postgres-
  * was-down) figures out who to reconnect replication to. The rule is supporting
  * evidence and has secondary uses such as coordinators learning of rules newer
@@ -1981,9 +1982,9 @@ export class RoutingState extends Message<RoutingState> {
  * Promote RPCs. Coordinators that notice a pooler has incorrect replication
  * settings will re-inform it.
  *
- * @generated from message clustermetadata.ReplicationPrimary
+ * @generated from message clustermetadata.IntendedPrimary
  */
-export class ReplicationPrimary extends Message<ReplicationPrimary> {
+export class IntendedPrimary extends Message<IntendedPrimary> {
   /**
    * The rule position under which this primary holds leadership: decision is
    * the last settled rule the sender observed, proposal is a newer rule the
@@ -2028,33 +2029,33 @@ export class ReplicationPrimary extends Message<ReplicationPrimary> {
    */
   rewindReady = false;
 
-  constructor(data?: PartialMessage<ReplicationPrimary>) {
+  constructor(data?: PartialMessage<IntendedPrimary>) {
     super();
     proto3.util.initPartial(data, this);
   }
 
   static readonly runtime: typeof proto3 = proto3;
-  static readonly typeName = "clustermetadata.ReplicationPrimary";
+  static readonly typeName = "clustermetadata.IntendedPrimary";
   static readonly fields: FieldList = proto3.util.newFieldList(() => [
     { no: 1, name: "position", kind: "message", T: RulePosition },
     { no: 2, name: "primary", kind: "message", T: PoolerAddress },
     { no: 3, name: "rewind_ready", kind: "scalar", T: 8 /* ScalarType.BOOL */ },
   ]);
 
-  static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): ReplicationPrimary {
-    return new ReplicationPrimary().fromBinary(bytes, options);
+  static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): IntendedPrimary {
+    return new IntendedPrimary().fromBinary(bytes, options);
   }
 
-  static fromJson(jsonValue: JsonValue, options?: Partial<JsonReadOptions>): ReplicationPrimary {
-    return new ReplicationPrimary().fromJson(jsonValue, options);
+  static fromJson(jsonValue: JsonValue, options?: Partial<JsonReadOptions>): IntendedPrimary {
+    return new IntendedPrimary().fromJson(jsonValue, options);
   }
 
-  static fromJsonString(jsonString: string, options?: Partial<JsonReadOptions>): ReplicationPrimary {
-    return new ReplicationPrimary().fromJsonString(jsonString, options);
+  static fromJsonString(jsonString: string, options?: Partial<JsonReadOptions>): IntendedPrimary {
+    return new IntendedPrimary().fromJsonString(jsonString, options);
   }
 
-  static equals(a: ReplicationPrimary | PlainMessage<ReplicationPrimary> | undefined, b: ReplicationPrimary | PlainMessage<ReplicationPrimary> | undefined): boolean {
-    return proto3.util.equals(ReplicationPrimary, a, b);
+  static equals(a: IntendedPrimary | PlainMessage<IntendedPrimary> | undefined, b: IntendedPrimary | PlainMessage<IntendedPrimary> | undefined): boolean {
+    return proto3.util.equals(IntendedPrimary, a, b);
   }
 }
 
@@ -2299,7 +2300,7 @@ export class ExternallyCertifiedRevocation extends Message<ExternallyCertifiedRe
  *     The highest ShardRule committed to local WAL (from rule_history) and the
  *     current LSN. Authoritative because postgres WAL is durable and ordered.
  *
- *  3. replication_primary (best-effort, coordinator-provided)
+ *  3. intended_primary (best-effort, coordinator-provided)
  *     The primary this pooler should be pointed at for replication, plus the
  *     rule under which that primary holds leadership. May be ahead of
  *     current_position; not persisted and may be stale after restarts.
@@ -2338,14 +2339,14 @@ export class ConsensusStatus extends Message<ConsensusStatus> {
   currentPosition?: PoolerPosition;
 
   /**
-   * replication_primary is the pooler's best-effort view of who its primary
+   * intended_primary is the pooler's best-effort view of who its primary
    * should be (and under what rule). May reflect a rule ahead of
    * current_position when the pooler has been informed of a newer rule that
    * has not yet been replicated through WAL.
    *
-   * @generated from field: clustermetadata.ReplicationPrimary replication_primary = 3;
+   * @generated from field: clustermetadata.IntendedPrimary intended_primary = 3;
    */
-  replicationPrimary?: ReplicationPrimary;
+  intendedPrimary?: IntendedPrimary;
 
   /**
    * id identifies the pooler that produced this status. Makes ConsensusStatus
@@ -2387,7 +2388,7 @@ export class ConsensusStatus extends Message<ConsensusStatus> {
   static readonly fields: FieldList = proto3.util.newFieldList(() => [
     { no: 1, name: "term_revocation", kind: "message", T: TermRevocation },
     { no: 2, name: "current_position", kind: "message", T: PoolerPosition },
-    { no: 3, name: "replication_primary", kind: "message", T: ReplicationPrimary },
+    { no: 3, name: "intended_primary", kind: "message", T: IntendedPrimary },
     { no: 4, name: "id", kind: "message", T: ID },
     { no: 5, name: "recruit_blocked_until", kind: "message", T: LsnPosition },
   ]);

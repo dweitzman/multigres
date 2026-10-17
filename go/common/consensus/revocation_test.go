@@ -350,9 +350,9 @@ func TestIsSelfRevoked(t *testing.T) {
 		{
 			name: "recruited but following a higher accepted rule while WAL lags is not stranded",
 			status: &clustermetadatapb.ConsensusStatus{
-				CurrentPosition:    &clustermetadatapb.PoolerPosition{Position: rule(1, 0)},
-				ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{Position: rule(1, 5)},
-				TermRevocation:     rev,
+				CurrentPosition: &clustermetadatapb.PoolerPosition{Position: rule(1, 0)},
+				IntendedPrimary: &clustermetadatapb.IntendedPrimary{Position: rule(1, 5)},
+				TermRevocation:  rev,
 			},
 			want: false,
 		},

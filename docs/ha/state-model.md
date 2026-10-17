@@ -20,11 +20,11 @@ A poolers's complete view of its place in the cluster is `ConsensusStatus`
 combines three layers that differ in _where they are stored_ and _how much you
 can trust them_:
 
-| Tier                        | Message              | Backed by      | Survives restart? | Authoritative?                 |
-| --------------------------- | -------------------- | -------------- | ----------------- | ------------------------------ |
-| Revocation promise          | `TermRevocation`     | local disk     | yes               | yes — the node's pledge        |
-| WAL position                | `PoolerPosition`     | PostgreSQL WAL | yes + backed up   | yes — WAL is durable & ordered |
-| Most advanced known primary | `ReplicationPrimary` | process memory | no                | best-effort hint               |
+| Tier                        | Message           | Backed by      | Survives restart? | Authoritative?                 |
+| --------------------------- | ----------------- | -------------- | ----------------- | ------------------------------ |
+| Revocation promise          | `TermRevocation`  | local disk     | yes               | yes — the node's pledge        |
+| WAL position                | `PoolerPosition`  | PostgreSQL WAL | yes + backed up   | yes — WAL is durable & ordered |
+| Most advanced known primary | `IntendedPrimary` | process memory | no                | best-effort hint               |
 
 ## The shard rule
 
@@ -258,16 +258,16 @@ expression in
   draining a standby during a transition; see the decision log
   [Wait for WAL Replay to Stabilize During Standby Revoke](decision-log/2026-02-12-wait-for-replay-stabilize-during-revoke.md).
 
-## The best-effort tier: ReplicationPrimary
+## The best-effort tier: IntendedPrimary
 
-`ReplicationPrimary` is what a node has most recently been _told_ its primary
+`IntendedPrimary` is what a node has most recently been _told_ its primary
 should be (by a `SetPrimary` or `Promote` RPC), plus the rule under which that
 primary holds leadership. It is held in memory only — **not persisted** — so a
 restart clears it and a coordinator re-informs the node.
 
 It exists so a node in a degraded state (partition, mid-bootstrap, told to set a
 primary while PostgreSQL was down) knows who to reconnect replication to. It is
-also a coordinator optimization: `ReplicationPrimaryMatches`
+also a coordinator optimization: `IntendedPrimaryMatches`
 ([compare.go](../../go/common/consensus/compare.go)) lets a coordinator skip a
 `SetPrimary` RPC that wouldn't change anything. Treat it as "what this node
 currently believes," never as the canonical cluster primary — that authority

@@ -927,10 +927,10 @@ func TestPromote(t *testing.T) {
 
 				assert.Equal(t, int64(0), pm.consensusMgr.ResignedLeaderAtTerm(), "clearResignedLeaderAtTerm should have cleared the term")
 
-				// ReplicationPrimary should advertise this pooler as the primary
+				// IntendedPrimary should advertise this pooler as the primary
 				// at the proposalLeader's host/port. Coordinators reading this
 				// pooler's health stream see (self, host, port).
-				rp := pm.consensusMgr.GetReplicationPrimary()
+				rp := pm.consensusMgr.GetIntendedPrimary()
 				require.NotNil(t, rp)
 				require.NotNil(t, rp.GetPrimary())
 				assert.True(t, proto.Equal(selfID, rp.GetPrimary().GetId()))

@@ -416,7 +416,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 
 	t.Run("counts a follower that learned the leader via its replication primary as cut off", func(t *testing.T) {
 		// The follower's own WAL position doesn't name the leader, but its
-		// ReplicationPrimary does — its highest-known rule still names the leader, so a
+		// IntendedPrimary does — its highest-known rule still names the leader, so a
 		// configured-but-not-streaming follower is cut off. Both followers this way →
 		// durability-sufficient revocation → failover.
 		viaReplPrimary := func(id *clustermetadatapb.ID, now time.Time) *multiorchdatapb.PoolerHealthState {
@@ -426,7 +426,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 				ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 					Id:              id,
 					CurrentPosition: &clustermetadatapb.PoolerPosition{Lsn: "0/1"},
-					ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{
+					IntendedPrimary: &clustermetadatapb.IntendedPrimary{
 						Position: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{
 							RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 1},
 							LeaderId:      leaderID,

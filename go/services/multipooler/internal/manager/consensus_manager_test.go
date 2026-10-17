@@ -103,7 +103,7 @@ type testManagerConfig struct {
 	record               *poolerRecord
 	promises             *consensus.ConsensusPromises
 	rules                consensus.RuleStorer
-	replicationPrimary   *clustermetadatapb.ReplicationPrimary
+	intendedPrimary      *clustermetadatapb.IntendedPrimary
 	cohortEligibility    clustermetadatapb.CohortEligibilitySignal
 	resignedLeaderAtTerm int64
 	staticLeader         bool
@@ -136,11 +136,11 @@ func withRuleStore(rules consensus.RuleStorer) testManagerOption {
 	return func(c *testManagerConfig) { c.rules = rules }
 }
 
-// withReplicationPrimary records a ReplicationPrimary on the manager at
+// withIntendedPrimary records a IntendedPrimary on the manager at
 // construction (via RecordTermPrimary), seeding the recorded primary/leader the
 // consensus decision paths read.
-func withReplicationPrimary(rp *clustermetadatapb.ReplicationPrimary) testManagerOption {
-	return func(c *testManagerConfig) { c.replicationPrimary = rp }
+func withIntendedPrimary(rp *clustermetadatapb.IntendedPrimary) testManagerOption {
+	return func(c *testManagerConfig) { c.intendedPrimary = rp }
 }
 
 func withResignedLeaderAtTerm(term int64) testManagerOption {
@@ -184,14 +184,14 @@ func (cfg *testManagerConfig) consensusManager(t *testing.T) *consensus.Consensu
 func (cfg *testManagerConfig) seedLockedState(t *testing.T, pm *MultipoolerManager) {
 	t.Helper()
 	eligibleDefault := clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE
-	if cfg.replicationPrimary == nil && cfg.resignedLeaderAtTerm == 0 && cfg.cohortEligibility == eligibleDefault {
+	if cfg.intendedPrimary == nil && cfg.resignedLeaderAtTerm == 0 && cfg.cohortEligibility == eligibleDefault {
 		return
 	}
 	lockCtx, err := pm.actionLock.Acquire(t.Context(), "test-seed")
 	require.NoError(t, err)
 	defer pm.actionLock.Release(lockCtx)
-	if cfg.replicationPrimary != nil {
-		require.NoError(t, pm.consensusMgr.RecordTermPrimary(lockCtx, cfg.replicationPrimary))
+	if cfg.intendedPrimary != nil {
+		require.NoError(t, pm.consensusMgr.RecordTermPrimary(lockCtx, cfg.intendedPrimary))
 	}
 	if cfg.resignedLeaderAtTerm != 0 {
 		require.NoError(t, pm.consensusMgr.SetResignedLeaderAtTerm(lockCtx, &clustermetadatapb.RulePosition{

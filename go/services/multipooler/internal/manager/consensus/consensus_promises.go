@@ -80,7 +80,7 @@ func (cs *ConsensusPromises) Load() (int64, error) {
 // GetRecruitBlockedUntil returns the minimum position this pooler must reach
 // before Recruit() may succeed, or nil if no floor is set. No action lock
 // required: a plain mu-guarded read, safe from lock-free paths (e.g.
-// building a cached ConsensusStatus), mirroring GetReplicationPrimary.
+// building a cached ConsensusStatus), mirroring GetIntendedPrimary.
 func (cs *ConsensusPromises) GetRecruitBlockedUntil() *clustermetadatapb.LsnPosition {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()

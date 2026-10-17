@@ -139,11 +139,11 @@ func TestDemoteStaleLeaderAction_Execute(t *testing.T) {
 
 	req := fakeClient.SetPrimaryRequests["multipooler-cell1-stale-leader"]
 	require.NotNil(t, req)
-	require.NotNil(t, req.GetReplicationPrimary().GetPrimary())
-	assert.Equal(t, "correct-leader", req.GetReplicationPrimary().GetPrimary().GetId().GetName())
-	assert.Equal(t, "correct.example.com", req.GetReplicationPrimary().GetPrimary().GetHost())
-	require.NotNil(t, req.GetReplicationPrimary().GetPosition().GetDecision())
-	assert.Equal(t, int64(5), req.GetReplicationPrimary().GetPosition().GetDecision().GetRuleNumber().GetCoordinatorTerm())
+	require.NotNil(t, req.GetIntendedPrimary().GetPrimary())
+	assert.Equal(t, "correct-leader", req.GetIntendedPrimary().GetPrimary().GetId().GetName())
+	assert.Equal(t, "correct.example.com", req.GetIntendedPrimary().GetPrimary().GetHost())
+	require.NotNil(t, req.GetIntendedPrimary().GetPosition().GetDecision())
+	assert.Equal(t, int64(5), req.GetIntendedPrimary().GetPosition().GetDecision().GetRuleNumber().GetCoordinatorTerm())
 }
 
 // TestDemoteStaleLeaderAction_ExecuteNoCorrectLeader asserts the error path
@@ -231,10 +231,10 @@ func TestDemoteStaleLeaderAction_ExecuteRewindsTowardRuleNamedLeader(t *testing.
 	assert.Contains(t, fakeClient.CallLog, "SetPrimary(multipooler-cell1-stale-leader)")
 	req := fakeClient.SetPrimaryRequests["multipooler-cell1-stale-leader"]
 	require.NotNil(t, req)
-	require.NotNil(t, req.GetReplicationPrimary().GetPrimary())
-	assert.Equal(t, "new-leader", req.GetReplicationPrimary().GetPrimary().GetId().GetName(),
+	require.NotNil(t, req.GetIntendedPrimary().GetPrimary())
+	assert.Equal(t, "new-leader", req.GetIntendedPrimary().GetPrimary().GetId().GetName(),
 		"rewind target must be the leader named by the replica's higher-term rule, not the stale self-claim")
-	assert.Equal(t, int64(6), req.GetReplicationPrimary().GetPosition().GetDecision().GetRuleNumber().GetCoordinatorTerm())
+	assert.Equal(t, int64(6), req.GetIntendedPrimary().GetPosition().GetDecision().GetRuleNumber().GetCoordinatorTerm())
 }
 
 // TestDemoteStaleLeaderAction_ExecuteNoOpWhenNodeIsCurrentLeader verifies that a
@@ -285,7 +285,7 @@ func selfLeaderRule(id *clustermetadatapb.ID, term int64) *clustermetadatapb.Con
 func replicaFollowingRule(self, leader *clustermetadatapb.ID, term int64) *clustermetadatapb.ConsensusStatus {
 	return &clustermetadatapb.ConsensusStatus{
 		Id: self,
-		ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{
+		IntendedPrimary: &clustermetadatapb.IntendedPrimary{
 			Position: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{
 				RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: term},
 				LeaderId:   leader,

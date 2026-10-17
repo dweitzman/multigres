@@ -83,7 +83,7 @@ func (re *Engine) propagateLeaderInfoForShard(ctx context.Context, shard *snapsh
 	re.reconcileFollowerSlots(ctx, leader, shard.CohortEligibleFollowerIDs())
 
 	leaderAddress := topoclient.PoolerAddressFor(leader.GetMultipooler())
-	leaderRewindReady := commonconsensus.ReplicationPrimaryOrNil(leader.GetConsensusStatus()).GetRewindReady()
+	leaderRewindReady := commonconsensus.IntendedPrimaryOrNil(leader.GetConsensusStatus()).GetRewindReady()
 
 	// One goroutine per follower: each pooler appears at most once in a shard's
 	// member list, so there's never more than one in-flight SetPrimary to the
@@ -123,12 +123,12 @@ func (re *Engine) reconcileFollowerSlots(ctx context.Context, leader *multiorchd
 
 // shouldPropagateLeaderInfo reports whether a follower needs a SetPrimary call
 // to learn the current leader or its rewind-readiness, given followerPrimary (the
-// follower's own last-reported ReplicationPrimary, nil if never told anything)
+// follower's own last-reported IntendedPrimary, nil if never told anything)
 // and followerLastSeen (when we last heard from the follower, nil if never). now is
 // passed in rather than read from the clock so this stays a pure function to
 // unit test directly, independent of the health cache and RPC client.
 func shouldPropagateLeaderInfo(
-	followerPrimary *clustermetadatapb.ReplicationPrimary,
+	followerPrimary *clustermetadatapb.IntendedPrimary,
 	followerLastSeen *timestamppb.Timestamp,
 	now time.Time,
 	leaderAddress *clustermetadatapb.PoolerAddress,
@@ -138,7 +138,7 @@ func shouldPropagateLeaderInfo(
 	if now.Sub(followerLastSeen.AsTime()) > leaderInfoStaleHealthThreshold {
 		return false // likely unreachable; don't let it hold up the pass
 	}
-	positionMatches := commonconsensus.ReplicationPrimaryMatches(followerPrimary, leaderAddress, intendedRule.Position())
+	positionMatches := commonconsensus.IntendedPrimaryMatches(followerPrimary, leaderAddress, intendedRule.Position())
 	// rewind_ready only ever goes false -> true within a coordinator term (see
 	// RecordTermPrimary), so never tell a follower that already believes true
 	// otherwise — even if our own cached view of the leader is stale-false.
@@ -161,12 +161,12 @@ func (re *Engine) propagateLeaderInfoToPooler(
 	leaderRewindReady bool,
 	intendedRule commonconsensus.RuleTransition,
 ) {
-	followerPrimary := commonconsensus.ReplicationPrimaryOrNil(follower.GetConsensusStatus())
+	followerPrimary := commonconsensus.IntendedPrimaryOrNil(follower.GetConsensusStatus())
 	if !shouldPropagateLeaderInfo(followerPrimary, follower.GetLastSeen(), now, leaderAddress, leaderRewindReady, intendedRule) {
 		return
 	}
 
-	toTell := &clustermetadatapb.ReplicationPrimary{
+	toTell := &clustermetadatapb.IntendedPrimary{
 		Position:    intendedRule.Position(),
 		Primary:     leaderAddress,
 		RewindReady: leaderRewindReady,
@@ -174,7 +174,7 @@ func (re *Engine) propagateLeaderInfoToPooler(
 	rpcCtx, cancel := context.WithTimeout(ctx, setPrimaryPropagationTimeout)
 	defer cancel()
 	_, err := re.rpcClient.SetPrimary(rpcCtx, follower.GetMultipooler(), &consensusdatapb.SetPrimaryRequest{
-		ReplicationPrimary: toTell,
+		IntendedPrimary: toTell,
 	})
 	if err != nil {
 		re.logger.WarnContext(ctx, "leader-info propagation: SetPrimary failed, will retry next tick",
@@ -194,9 +194,9 @@ func (re *Engine) propagateLeaderInfoToPooler(
 		if h.ConsensusStatus == nil {
 			h.ConsensusStatus = &clustermetadatapb.ConsensusStatus{}
 		}
-		current := commonconsensus.ReplicationPrimaryOrNil(h.ConsensusStatus)
-		if merged, changed := commonconsensus.MergeReplicationPrimary(current, toTell); changed {
-			h.ConsensusStatus.ReplicationPrimary = merged //nolint:gocritic // the linter is trying to protect against not using ReplicationPrimaryOrNil on read, but this is a write.
+		current := commonconsensus.IntendedPrimaryOrNil(h.ConsensusStatus)
+		if merged, changed := commonconsensus.MergeIntendedPrimary(current, toTell); changed {
+			h.ConsensusStatus.IntendedPrimary = merged //nolint:gocritic // the linter is trying to protect against not using IntendedPrimaryOrNil on read, but this is a write.
 		}
 	})
 }

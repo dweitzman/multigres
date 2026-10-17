@@ -188,7 +188,7 @@ func TestGUCSelfHealing(t *testing.T) {
 // pooler-local loop converges on its own:
 //
 //  1. Establish replication on the standby (which populates the recorded
-//     ReplicationPrimary).
+//     IntendedPrimary).
 //  2. Externally clobber primary_conninfo on the standby's postgres to a
 //     wrong host/port so it no longer matches what the pooler has on file.
 //  3. Wait for the monitor (5s tick) to detect drift via
@@ -208,7 +208,7 @@ func TestPostgresMonitor_FixesPrimaryConnInfoDrift(t *testing.T) {
 	setup := getSharedTestSetup(t)
 	// Use WithoutReplication so this test owns the SetPrimaryConnInfo call
 	// below — that's how we both establish replication AND populate the
-	// recorded ReplicationPrimary the monitor reads from.
+	// recorded IntendedPrimary the monitor reads from.
 	setupPoolerTest(t, setup, WithoutReplication())
 
 	waitForManagerReady(t, setup, setup.StandbyMultipooler)
@@ -218,7 +218,7 @@ func TestPostgresMonitor_FixesPrimaryConnInfoDrift(t *testing.T) {
 	t.Cleanup(func() { standbyClient.Close() })
 
 	// Configure replication AND record the (rule, primary) tuple. SetPrimary
-	// populates ReplicationPrimary, which is what the monitor reads.
+	// populates IntendedPrimary, which is what the monitor reads.
 	primaryID := &clustermetadatapb.ID{
 		Component: clustermetadatapb.ID_MULTIPOOLER,
 		Cell:      setup.CellName,
@@ -228,7 +228,7 @@ func TestPostgresMonitor_FixesPrimaryConnInfoDrift(t *testing.T) {
 	// whatever the standby has observed, forcing SetPrimary's standby
 	// branch to apply.
 	_, err = standbyClient.Consensus.SetPrimary(t.Context(), &consensusdatapb.SetPrimaryRequest{
-		ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{
+		IntendedPrimary: &clustermetadatapb.IntendedPrimary{
 			Position: &clustermetadatapb.RulePosition{
 				Decision: &clustermetadatapb.ShardRule{
 					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1 << 30},
@@ -301,7 +301,7 @@ func TestPostgresMonitor_FixesPrimaryConnInfoDrift(t *testing.T) {
 // password supplied") with no self-heal in sight.
 //
 //  1. Establish replication on the standby (which populates the recorded
-//     ReplicationPrimary and, since pgpassPath is known by then, writes a
+//     IntendedPrimary and, since pgpassPath is known by then, writes a
 //     conninfo that includes passfile=).
 //  2. Externally clobber primary_conninfo to the same host/port but with the
 //     passfile= clause stripped out.
@@ -316,7 +316,7 @@ func TestPostgresMonitor_FixesMissingPassfileDrift(t *testing.T) {
 	setup := getSharedTestSetup(t)
 	// Use WithoutReplication so this test owns the SetPrimaryConnInfo call
 	// below — that's how we both establish replication AND populate the
-	// recorded ReplicationPrimary the monitor reads from.
+	// recorded IntendedPrimary the monitor reads from.
 	setupPoolerTest(t, setup, WithoutReplication())
 
 	waitForManagerReady(t, setup, setup.StandbyMultipooler)
@@ -326,7 +326,7 @@ func TestPostgresMonitor_FixesMissingPassfileDrift(t *testing.T) {
 	t.Cleanup(func() { standbyClient.Close() })
 
 	// Configure replication AND record the (rule, primary) tuple. SetPrimary
-	// populates ReplicationPrimary, which is what the monitor reads.
+	// populates IntendedPrimary, which is what the monitor reads.
 	primaryID := &clustermetadatapb.ID{
 		Component: clustermetadatapb.ID_MULTIPOOLER,
 		Cell:      setup.CellName,
@@ -338,7 +338,7 @@ func TestPostgresMonitor_FixesMissingPassfileDrift(t *testing.T) {
 	// whatever the standby has observed, forcing SetPrimary's standby
 	// branch to apply.
 	_, err = standbyClient.Consensus.SetPrimary(t.Context(), &consensusdatapb.SetPrimaryRequest{
-		ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{
+		IntendedPrimary: &clustermetadatapb.IntendedPrimary{
 			Position: &clustermetadatapb.RulePosition{
 				Decision: &clustermetadatapb.ShardRule{
 					RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1 << 30},

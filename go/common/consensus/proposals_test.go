@@ -205,7 +205,7 @@ var poolerIDs = struct {
 	zone3: newCellPoolers("zone3"),
 }
 
-func TestReplicationPrimaryFromProposal(t *testing.T) {
+func TestIntendedPrimaryFromProposal(t *testing.T) {
 	transition := &clustermetadatapb.RulePosition{
 		Decision: makeRule(ruleNum(1, 0), atLeast(2), makeID("zone1", "a")),
 		Proposal: makeRule(ruleNum(2, 0), atLeast(2), makeID("zone1", "b")),
@@ -217,7 +217,7 @@ func TestReplicationPrimaryFromProposal(t *testing.T) {
 	}
 
 	for _, rewindReady := range []bool{false, true} {
-		got := ReplicationPrimaryFromProposal(proposal, rewindReady)
+		got := IntendedPrimaryFromProposal(proposal, rewindReady)
 		assert.True(t, proto.Equal(transition, got.GetPosition()), "rewindReady=%v: position mismatch", rewindReady)
 		assert.True(t, proto.Equal(leader, got.GetPrimary()), "rewindReady=%v: primary mismatch", rewindReady)
 		assert.Equal(t, rewindReady, got.GetRewindReady())

@@ -123,10 +123,10 @@ func (a *ReconnectRecruitAbandonedAction) Execute(ctx context.Context, rechecked
 	// so it accepts SetPrimary and rejoins. RewindReady is relayed so a follower
 	// that also needs a rewind defers it until the leader is checkpointed.
 	setReq := &consensusdatapb.SetPrimaryRequest{
-		ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{
+		IntendedPrimary: &clustermetadatapb.IntendedPrimary{
 			Position:    advanced.Position(),
 			Primary:     topoclient.PoolerAddressFor(leader.Multipooler),
-			RewindReady: commonconsensus.ReplicationPrimaryOrNil(leader.GetConsensusStatus()).GetRewindReady(),
+			RewindReady: commonconsensus.IntendedPrimaryOrNil(leader.GetConsensusStatus()).GetRewindReady(),
 		},
 	}
 	if _, err := a.rpcClient.SetPrimary(ctx, follower.Multipooler, setReq); err != nil {

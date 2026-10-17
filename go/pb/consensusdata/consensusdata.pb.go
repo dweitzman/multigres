@@ -347,17 +347,17 @@ func (x *PromoteResponse) GetConsensusStatus() *clustermetadata.ConsensusStatus 
 type SetPrimaryRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The (position, primary, rewind_ready) the follower should adopt. Contact
-	// info for the leader is replication_primary.primary (host + postgres_port
+	// info for the leader is intended_primary.primary (host + postgres_port
 	// used to rewrite primary_conninfo); the position is
-	// replication_primary.position, which the pooler compares against its own
+	// intended_primary.position, which the pooler compares against its own
 	// observed position and only applies when strictly higher. primary.id must
-	// match the position's leader_id. replication_primary.rewind_ready relays
+	// match the position's leader_id. intended_primary.rewind_ready relays
 	// whether the leader has checkpointed onto its current timeline: a
 	// diverged follower defers its pg_rewind until it is true, but sets up
 	// primary_conninfo and attempts to stream regardless.
-	ReplicationPrimary *clustermetadata.ReplicationPrimary `protobuf:"bytes,3,opt,name=replication_primary,json=replicationPrimary,proto3" json:"replication_primary,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	IntendedPrimary *clustermetadata.IntendedPrimary `protobuf:"bytes,3,opt,name=intended_primary,json=intendedPrimary,proto3" json:"intended_primary,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *SetPrimaryRequest) Reset() {
@@ -390,9 +390,9 @@ func (*SetPrimaryRequest) Descriptor() ([]byte, []int) {
 	return file_consensusdata_proto_rawDescGZIP(), []int{5}
 }
 
-func (x *SetPrimaryRequest) GetReplicationPrimary() *clustermetadata.ReplicationPrimary {
+func (x *SetPrimaryRequest) GetIntendedPrimary() *clustermetadata.IntendedPrimary {
 	if x != nil {
-		return x.ReplicationPrimary
+		return x.IntendedPrimary
 	}
 	return nil
 }
@@ -462,9 +462,9 @@ const file_consensusdata_proto_rawDesc = "" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12?\n" +
 	"\x11accepted_node_ids\x18\x03 \x03(\v2\x13.clustermetadata.IDR\x0facceptedNodeIds\"^\n" +
 	"\x0fPromoteResponse\x12K\n" +
-	"\x10consensus_status\x18\x01 \x01(\v2 .clustermetadata.ConsensusStatusR\x0fconsensusStatus\"i\n" +
-	"\x11SetPrimaryRequest\x12T\n" +
-	"\x13replication_primary\x18\x03 \x01(\v2#.clustermetadata.ReplicationPrimaryR\x12replicationPrimary\"a\n" +
+	"\x10consensus_status\x18\x01 \x01(\v2 .clustermetadata.ConsensusStatusR\x0fconsensusStatus\"`\n" +
+	"\x11SetPrimaryRequest\x12K\n" +
+	"\x10intended_primary\x18\x03 \x01(\v2 .clustermetadata.IntendedPrimaryR\x0fintendedPrimary\"a\n" +
 	"\x12SetPrimaryResponse\x12K\n" +
 	"\x10consensus_status\x18\x01 \x01(\v2 .clustermetadata.ConsensusStatusR\x0fconsensusStatusB4Z2github.com/multigres/multigres/go/pb/consensusdatab\x06proto3"
 
@@ -482,19 +482,19 @@ func file_consensusdata_proto_rawDescGZIP() []byte {
 
 var file_consensusdata_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_consensusdata_proto_goTypes = []any{
-	(*CoordinatorProposal)(nil),                // 0: consensusdata.CoordinatorProposal
-	(*RecruitRequest)(nil),                     // 1: consensusdata.RecruitRequest
-	(*RecruitResponse)(nil),                    // 2: consensusdata.RecruitResponse
-	(*PromoteRequest)(nil),                     // 3: consensusdata.PromoteRequest
-	(*PromoteResponse)(nil),                    // 4: consensusdata.PromoteResponse
-	(*SetPrimaryRequest)(nil),                  // 5: consensusdata.SetPrimaryRequest
-	(*SetPrimaryResponse)(nil),                 // 6: consensusdata.SetPrimaryResponse
-	(*clustermetadata.TermRevocation)(nil),     // 7: clustermetadata.TermRevocation
-	(*clustermetadata.PoolerAddress)(nil),      // 8: clustermetadata.PoolerAddress
-	(*clustermetadata.RulePosition)(nil),       // 9: clustermetadata.RulePosition
-	(*clustermetadata.ConsensusStatus)(nil),    // 10: clustermetadata.ConsensusStatus
-	(*clustermetadata.ID)(nil),                 // 11: clustermetadata.ID
-	(*clustermetadata.ReplicationPrimary)(nil), // 12: clustermetadata.ReplicationPrimary
+	(*CoordinatorProposal)(nil),             // 0: consensusdata.CoordinatorProposal
+	(*RecruitRequest)(nil),                  // 1: consensusdata.RecruitRequest
+	(*RecruitResponse)(nil),                 // 2: consensusdata.RecruitResponse
+	(*PromoteRequest)(nil),                  // 3: consensusdata.PromoteRequest
+	(*PromoteResponse)(nil),                 // 4: consensusdata.PromoteResponse
+	(*SetPrimaryRequest)(nil),               // 5: consensusdata.SetPrimaryRequest
+	(*SetPrimaryResponse)(nil),              // 6: consensusdata.SetPrimaryResponse
+	(*clustermetadata.TermRevocation)(nil),  // 7: clustermetadata.TermRevocation
+	(*clustermetadata.PoolerAddress)(nil),   // 8: clustermetadata.PoolerAddress
+	(*clustermetadata.RulePosition)(nil),    // 9: clustermetadata.RulePosition
+	(*clustermetadata.ConsensusStatus)(nil), // 10: clustermetadata.ConsensusStatus
+	(*clustermetadata.ID)(nil),              // 11: clustermetadata.ID
+	(*clustermetadata.IntendedPrimary)(nil), // 12: clustermetadata.IntendedPrimary
 }
 var file_consensusdata_proto_depIdxs = []int32{
 	7,  // 0: consensusdata.CoordinatorProposal.term_revocation:type_name -> clustermetadata.TermRevocation
@@ -505,7 +505,7 @@ var file_consensusdata_proto_depIdxs = []int32{
 	0,  // 5: consensusdata.PromoteRequest.proposal:type_name -> consensusdata.CoordinatorProposal
 	11, // 6: consensusdata.PromoteRequest.accepted_node_ids:type_name -> clustermetadata.ID
 	10, // 7: consensusdata.PromoteResponse.consensus_status:type_name -> clustermetadata.ConsensusStatus
-	12, // 8: consensusdata.SetPrimaryRequest.replication_primary:type_name -> clustermetadata.ReplicationPrimary
+	12, // 8: consensusdata.SetPrimaryRequest.intended_primary:type_name -> clustermetadata.IntendedPrimary
 	10, // 9: consensusdata.SetPrimaryResponse.consensus_status:type_name -> clustermetadata.ConsensusStatus
 	10, // [10:10] is the sub-list for method output_type
 	10, // [10:10] is the sub-list for method input_type

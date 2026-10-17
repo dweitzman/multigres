@@ -55,7 +55,7 @@ func TestShouldPropagateLeaderInfo(t *testing.T) {
 
 	tests := []struct {
 		name              string
-		rp                *clustermetadatapb.ReplicationPrimary
+		rp                *clustermetadatapb.IntendedPrimary
 		lastSeen          *timestamppb.Timestamp
 		leaderRewindReady bool
 		want              bool
@@ -76,7 +76,7 @@ func TestShouldPropagateLeaderInfo(t *testing.T) {
 		},
 		{
 			name: "PositionBehind_Propagates",
-			rp: &clustermetadatapb.ReplicationPrimary{
+			rp: &clustermetadatapb.IntendedPrimary{
 				Position: olderPosition,
 				Primary:  leaderAddress,
 			},
@@ -86,7 +86,7 @@ func TestShouldPropagateLeaderInfo(t *testing.T) {
 		},
 		{
 			name: "PositionMatches_BothRewindReadyFalse_NoOp",
-			rp: &clustermetadatapb.ReplicationPrimary{
+			rp: &clustermetadatapb.IntendedPrimary{
 				Position:    currentPosition,
 				Primary:     leaderAddress,
 				RewindReady: false,
@@ -97,7 +97,7 @@ func TestShouldPropagateLeaderInfo(t *testing.T) {
 		},
 		{
 			name: "PositionMatches_BothRewindReadyTrue_NoOp",
-			rp: &clustermetadatapb.ReplicationPrimary{
+			rp: &clustermetadatapb.IntendedPrimary{
 				Position:    currentPosition,
 				Primary:     leaderAddress,
 				RewindReady: true,
@@ -108,7 +108,7 @@ func TestShouldPropagateLeaderInfo(t *testing.T) {
 		},
 		{
 			name: "PositionMatches_FollowerAlreadyTrue_LeaderViewStaleFalse_NeverRegress",
-			rp: &clustermetadatapb.ReplicationPrimary{
+			rp: &clustermetadatapb.IntendedPrimary{
 				Position:    currentPosition,
 				Primary:     leaderAddress,
 				RewindReady: true,
@@ -119,7 +119,7 @@ func TestShouldPropagateLeaderInfo(t *testing.T) {
 		},
 		{
 			name: "PositionMatches_FollowerFalse_LeaderTrue_PropagatesGoodNews",
-			rp: &clustermetadatapb.ReplicationPrimary{
+			rp: &clustermetadatapb.IntendedPrimary{
 				Position:    currentPosition,
 				Primary:     leaderAddress,
 				RewindReady: false,
@@ -130,7 +130,7 @@ func TestShouldPropagateLeaderInfo(t *testing.T) {
 		},
 		{
 			name: "PositionMatches_DifferentPrimaryContact_Propagates",
-			rp: &clustermetadatapb.ReplicationPrimary{
+			rp: &clustermetadatapb.IntendedPrimary{
 				Position:    currentPosition,
 				Primary:     leaderInfoTestAddress("stale-leader"),
 				RewindReady: true,
@@ -151,7 +151,7 @@ func TestShouldPropagateLeaderInfo(t *testing.T) {
 
 // TestPropagateLeaderInfoToPooler_CachesSuccessfulSetPrimary verifies that a
 // successful SetPrimary call optimistically updates the pooler's cached
-// ReplicationPrimary, so a reconcile tick immediately after doesn't
+// IntendedPrimary, so a reconcile tick immediately after doesn't
 // needlessly re-send the same SetPrimary before the pooler's own streamed
 // health update reports it back (see shouldPropagateLeaderInfo).
 func TestReconcileFollowerSlots(t *testing.T) {
@@ -200,7 +200,7 @@ func TestPropagateLeaderInfoToPooler_CachesSuccessfulSetPrimary(t *testing.T) {
 	re.propagateLeaderInfoToPooler(t.Context(), pooler.Health(), time.Now(), leaderAddress, true, commonconsensus.NewRuleTransition(position))
 
 	require.Equal(t, []string{"SetPrimary(multipooler-zone1-p1)"}, fake.GetCallLog(), "SetPrimary must actually have been called")
-	got := pooler.Health().GetConsensusStatus().GetReplicationPrimary()
+	got := pooler.Health().GetConsensusStatus().GetIntendedPrimary()
 	require.NotNil(t, got)
 	assert.True(t, proto.Equal(leaderAddress, got.GetPrimary()))
 	assert.True(t, got.GetRewindReady())
@@ -217,13 +217,13 @@ func TestPropagateLeaderInfoToPooler_NeverRegressesCachedPrimary(t *testing.T) {
 	re := &Engine{rpcClient: fake, logger: slog.Default(), poolerCache: cache}
 
 	poolerID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "p1"}
-	newerPrimary := &clustermetadatapb.ReplicationPrimary{
+	newerPrimary := &clustermetadatapb.IntendedPrimary{
 		Position: &clustermetadatapb.RulePosition{Decision: leaderInfoTestRule(10)},
 		Primary:  leaderInfoTestAddress("newer-leader"),
 	}
 	pooler := store.NewPooler(&multiorchdatapb.PoolerHealthState{
 		Multipooler:     &clustermetadatapb.Multipooler{Id: poolerID},
-		ConsensusStatus: &clustermetadatapb.ConsensusStatus{ReplicationPrimary: newerPrimary},
+		ConsensusStatus: &clustermetadatapb.ConsensusStatus{IntendedPrimary: newerPrimary},
 		LastSeen:        timestamppb.Now(),
 	}, nil)
 	store.SeedCache(t, cache, pooler)
@@ -232,7 +232,7 @@ func TestPropagateLeaderInfoToPooler_NeverRegressesCachedPrimary(t *testing.T) {
 	re.propagateLeaderInfoToPooler(t.Context(), pooler.Health(), time.Now(), leaderInfoTestAddress("stale-leader"), false, commonconsensus.NewRuleTransition(stalePosition))
 
 	require.Equal(t, []string{"SetPrimary(multipooler-zone1-p1)"}, fake.GetCallLog(), "SetPrimary must actually have been called with the stale info")
-	got := pooler.Health().GetConsensusStatus().GetReplicationPrimary()
+	got := pooler.Health().GetConsensusStatus().GetIntendedPrimary()
 	assert.True(t, proto.Equal(newerPrimary, got), "must not regress a fresher cached view with a stale optimistic update")
 }
 

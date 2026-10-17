@@ -318,7 +318,7 @@ export const MultiadminService = {
      * multiorch failures can occur before or after recruitment has modified consensus state. An error,
      * timeout, or lost response does not guarantee rollback, and this API provides no idempotency key.
      * Before retrying, use GetPoolers and GetPoolerStatus to inspect the shard and involved cohort:
-     * compare currentPosition, termRevocation, and replicationPrimary against the intended transition.
+     * compare currentPosition, termRevocation, and intendedPrimary against the intended transition.
      * Confirm the installed rule and serving leader, or reconcile the partially applied transition before
      * preparing another request. An unreachable member leaves its state uncertain; do not derive a new
      * unsafe certificate or assume an old certificate is still valid solely from the error code.

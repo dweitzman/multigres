@@ -347,11 +347,11 @@ func TestFixReplicationAction_ExecuteSuccessNotReplicating(t *testing.T) {
 	// Verify the request carried the primary's contact info and known position.
 	setPrimaryReq := fakeClient.SetPrimaryRequests["multipooler-cell1-replica1"]
 	require.NotNil(t, setPrimaryReq)
-	require.NotNil(t, setPrimaryReq.GetReplicationPrimary().GetPrimary())
-	assert.Equal(t, "primary", setPrimaryReq.GetReplicationPrimary().GetPrimary().GetId().GetName())
-	assert.Equal(t, "primary.example.com", setPrimaryReq.GetReplicationPrimary().GetPrimary().GetHost())
-	require.NotNil(t, setPrimaryReq.GetReplicationPrimary().GetPosition().GetDecision())
-	assert.Equal(t, int64(1), setPrimaryReq.GetReplicationPrimary().GetPosition().GetDecision().GetRuleNumber().GetCoordinatorTerm())
+	require.NotNil(t, setPrimaryReq.GetIntendedPrimary().GetPrimary())
+	assert.Equal(t, "primary", setPrimaryReq.GetIntendedPrimary().GetPrimary().GetId().GetName())
+	assert.Equal(t, "primary.example.com", setPrimaryReq.GetIntendedPrimary().GetPrimary().GetHost())
+	require.NotNil(t, setPrimaryReq.GetIntendedPrimary().GetPosition().GetDecision())
+	assert.Equal(t, int64(1), setPrimaryReq.GetIntendedPrimary().GetPosition().GetDecision().GetRuleNumber().GetCoordinatorTerm())
 }
 
 func TestFixReplicationAction_ExecuteAlreadyConfigured(t *testing.T) {
@@ -869,9 +869,9 @@ func TestFixReplicationAction_FailsWhenReplicationDoesNotStart(t *testing.T) {
 		Multipooler: primary,
 		Status:      &multipoolermanagerdatapb.Status{PostgresReady: true},
 		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
-			Id:                 fixReplPrimaryID,
-			CurrentPosition:    leaderCurrentPosition(1),
-			ReplicationPrimary: rewindReadyPrimary(1),
+			Id:              fixReplPrimaryID,
+			CurrentPosition: leaderCurrentPosition(1),
+			IntendedPrimary: rewindReadyPrimary(1),
 		},
 	}, nil))
 
@@ -928,10 +928,10 @@ func leaderCurrentPosition(term int64) *clustermetadatapb.PoolerPosition {
 
 // rewindReadyPrimary builds a replication primary that names fixReplPrimaryID as
 // the rewind-ready leader at the given coordinator term. The rule number must be
-// non-zero so ReplicationPrimaryOrNil does not treat it as a phantom 0/0 entry,
+// non-zero so IntendedPrimaryOrNil does not treat it as a phantom 0/0 entry,
 // which would read rewind_ready as false and make fix_replication defer pg_rewind.
-func rewindReadyPrimary(term int64) *clustermetadatapb.ReplicationPrimary {
-	return &clustermetadatapb.ReplicationPrimary{
+func rewindReadyPrimary(term int64) *clustermetadatapb.IntendedPrimary {
+	return &clustermetadatapb.IntendedPrimary{
 		Position: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{
 			RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: term},
 			LeaderId:   fixReplPrimaryID,

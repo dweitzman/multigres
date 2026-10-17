@@ -279,13 +279,13 @@ func disallowPoolerTypeEnumInGateway(m dsl.Matcher) {
 		Report("PoolerType is the topology role label; gateway routing must use query.Mode for intent and consensus state (RoutingState / routing_state) for identity")
 }
 
-// disallowRawConsensusStatusReplicationPrimary flags reads of a ConsensusStatus's
-// replication primary — both the generated GetReplicationPrimary() getter and the
-// raw .ReplicationPrimary field. proto3 cannot tell an unset ReplicationPrimary
+// disallowRawConsensusStatusIntendedPrimary flags reads of a ConsensusStatus's
+// replication primary — both the generated GetIntendedPrimary() getter and the
+// raw .IntendedPrimary field. proto3 cannot tell an unset IntendedPrimary
 // from one written with the zero-valued initial rule (0/0, no leader — the shape
 // of fresh cluster state, e.g. the first backup), so reading it raw lets a phantom
 // 0/0 entry masquerade as a real leader. Route reads through
-// commonconsensus.ReplicationPrimaryOrNil, which returns nil for a 0/0 entry.
+// commonconsensus.IntendedPrimaryOrNil, which returns nil for a 0/0 entry.
 //
 // Excluded:
 //   - any .../consensus package: go/common/consensus implements the safe accessor
@@ -294,17 +294,17 @@ func disallowPoolerTypeEnumInGateway(m dsl.Matcher) {
 //     distinguish an assignment target from a read.
 //   - test files.
 //
-// The unrelated ConsensusPromises.GetReplicationPrimary() (the multipooler's
+// The unrelated ConsensusPromises.GetIntendedPrimary() (the multipooler's
 // in-memory holder) is a different receiver type and is not matched.
-func disallowRawConsensusStatusReplicationPrimary(m dsl.Matcher) {
+func disallowRawConsensusStatusIntendedPrimary(m dsl.Matcher) {
 	m.Import("github.com/multigres/multigres/go/pb/clustermetadata")
 
-	m.Match(`$x.GetReplicationPrimary()`, `$x.ReplicationPrimary`).
+	m.Match(`$x.GetIntendedPrimary()`, `$x.IntendedPrimary`).
 		Where(
 			m["x"].Type.Is("*clustermetadata.ConsensusStatus") &&
 				!m.File().PkgPath.Matches(`/consensus$`) &&
 				!m.File().Name.Matches(`_test\.go$`)).
-		Report("do not read ConsensusStatus.ReplicationPrimary directly; use commonconsensus.ReplicationPrimaryOrNil, which treats a phantom 0/0 entry as absent")
+		Report("do not read ConsensusStatus.IntendedPrimary directly; use commonconsensus.IntendedPrimaryOrNil, which treats a phantom 0/0 entry as absent")
 }
 
 // disallowRoutingStateInOrch flags the multiorch reading a topology record's

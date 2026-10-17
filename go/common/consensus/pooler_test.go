@@ -99,7 +99,7 @@ func TestSelfConsensusRoleLeadership(t *testing.T) {
 			cs: &clustermetadatapb.ConsensusStatus{
 				Id:              id("zone1", "pooler-1"),
 				CurrentPosition: &clustermetadatapb.PoolerPosition{Position: &clustermetadatapb.RulePosition{Decision: ruleAt(id("zone1", "pooler-1"), 5)}},
-				ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{
+				IntendedPrimary: &clustermetadatapb.IntendedPrimary{
 					Position: &clustermetadatapb.RulePosition{Decision: ruleAt(id("zone1", "pooler-2"), 6)},
 				},
 			},
@@ -112,7 +112,7 @@ func TestSelfConsensusRoleLeadership(t *testing.T) {
 			cs: &clustermetadatapb.ConsensusStatus{
 				Id:              id("zone1", "pooler-1"),
 				CurrentPosition: &clustermetadatapb.PoolerPosition{Position: &clustermetadatapb.RulePosition{Decision: ruleAt(id("zone1", "pooler-1"), 6)}},
-				ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{
+				IntendedPrimary: &clustermetadatapb.IntendedPrimary{
 					Position: &clustermetadatapb.RulePosition{Decision: ruleAt(id("zone1", "pooler-2"), 4)},
 				},
 			},
@@ -278,7 +278,7 @@ func TestIsActiveLeader(t *testing.T) {
 			cs: &clustermetadatapb.ConsensusStatus{
 				Id:              self,
 				CurrentPosition: &clustermetadatapb.PoolerPosition{Position: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{LeaderId: other, RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 4}}}},
-				ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{
+				IntendedPrimary: &clustermetadatapb.IntendedPrimary{
 					Position: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{LeaderId: self, RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5}}},
 				},
 			},
@@ -338,7 +338,7 @@ func TestIsActiveLeader(t *testing.T) {
 			cs: &clustermetadatapb.ConsensusStatus{
 				Id:              self,
 				CurrentPosition: &clustermetadatapb.PoolerPosition{Position: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{LeaderId: self, RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5}}}},
-				ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{
+				IntendedPrimary: &clustermetadatapb.IntendedPrimary{
 					Position: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{LeaderId: other, RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 6}}},
 				},
 			},

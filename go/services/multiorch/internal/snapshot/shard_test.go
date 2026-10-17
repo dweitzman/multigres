@@ -91,7 +91,7 @@ func TestShard_AdvertisedRuleCountsAsIntended(t *testing.T) {
 	decided := &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{RuleNumber: ruleNumber(1), LeaderId: podID("old")}}
 	advertised := &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{RuleNumber: ruleNumber(2), LeaderId: podID("new")}}
 	follower := withPosition(pooler("follower"), decided)
-	follower.ConsensusStatus.ReplicationPrimary = &clustermetadatapb.ReplicationPrimary{Position: advertised}
+	follower.ConsensusStatus.IntendedPrimary = &clustermetadatapb.IntendedPrimary{Position: advertised}
 	s := &Shard{Poolers: []*multiorchdatapb.PoolerHealthState{follower}}
 	assert.Equal(t, "new", s.HighestIntendedRule().PossiblyUndecidedRule().GetLeaderId().GetName())
 }

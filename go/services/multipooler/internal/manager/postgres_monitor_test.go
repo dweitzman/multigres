@@ -278,8 +278,8 @@ func TestDetermineRemedialAction(t *testing.T) {
 			}},
 		}
 	}
-	recordedPrimary := func(term int64, leader *clustermetadatapb.ID, addr *clustermetadatapb.PoolerAddress) *clustermetadatapb.ReplicationPrimary {
-		return &clustermetadatapb.ReplicationPrimary{
+	recordedPrimary := func(term int64, leader *clustermetadatapb.ID, addr *clustermetadatapb.PoolerAddress) *clustermetadatapb.IntendedPrimary {
+		return &clustermetadatapb.IntendedPrimary{
 			Position: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{
 				RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: term},
 				LeaderId:   leader,
@@ -295,7 +295,7 @@ func TestDetermineRemedialAction(t *testing.T) {
 		name               string
 		state              postgresState
 		poolerType         clustermetadatapb.PoolerType
-		seedPrimary        *clustermetadatapb.ReplicationPrimary
+		seedPrimary        *clustermetadatapb.IntendedPrimary
 		cachedPos          *clustermetadatapb.PoolerPosition
 		resignedLeaderTerm int64
 		inconsistentGUC    bool
@@ -520,7 +520,7 @@ func TestDetermineRemedialAction(t *testing.T) {
 				t,
 				withServiceID(selfID),
 				withRecord(newRecordFromProto(seed)),
-				withReplicationPrimary(tt.seedPrimary),
+				withIntendedPrimary(tt.seedPrimary),
 				withResignedLeaderAtTerm(tt.resignedLeaderTerm),
 				withRuleStore(&fakeRuleStore{pos: tt.cachedPos, inconsistentGUC: tt.inconsistentGUC}),
 			)
@@ -556,8 +556,8 @@ func TestDetermineRemedialAction_StalePrimaryDemote(t *testing.T) {
 			}},
 		}
 	}
-	recordedPrimary := func(term int64, leader *clustermetadatapb.ID, addr *clustermetadatapb.PoolerAddress) *clustermetadatapb.ReplicationPrimary {
-		return &clustermetadatapb.ReplicationPrimary{
+	recordedPrimary := func(term int64, leader *clustermetadatapb.ID, addr *clustermetadatapb.PoolerAddress) *clustermetadatapb.IntendedPrimary {
+		return &clustermetadatapb.IntendedPrimary{
 			Position: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{
 				RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: term},
 				LeaderId:   leader,
@@ -571,7 +571,7 @@ func TestDetermineRemedialAction_StalePrimaryDemote(t *testing.T) {
 
 	tests := []struct {
 		name           string
-		seedPrimary    *clustermetadatapb.ReplicationPrimary
+		seedPrimary    *clustermetadatapb.IntendedPrimary
 		cachedPos      *clustermetadatapb.PoolerPosition
 		expectedAction remedialAction
 	}{
@@ -626,7 +626,7 @@ func TestDetermineRemedialAction_StalePrimaryDemote(t *testing.T) {
 					Type:         clustermetadatapb.PoolerType_PRIMARY,
 					RoutingState: &clustermetadatapb.RoutingState{Role: clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY},
 				})),
-				withReplicationPrimary(tt.seedPrimary),
+				withIntendedPrimary(tt.seedPrimary),
 				withRuleStore(&fakeRuleStore{pos: tt.cachedPos}),
 			)
 
@@ -650,7 +650,7 @@ func TestDeterminePostgresNotRunningAction_DivergedStartsHeld(t *testing.T) {
 
 	// Fully diverged, with a different, rewind-ready leader known — the strongest
 	// case for a rewind. A down node must still just start.
-	pm := newTestManager(t, withServiceID(selfID), withReplicationPrimary(&clustermetadatapb.ReplicationPrimary{
+	pm := newTestManager(t, withServiceID(selfID), withIntendedPrimary(&clustermetadatapb.IntendedPrimary{
 		Position: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{
 			RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
 			LeaderId:   otherID,
@@ -692,13 +692,13 @@ func TestShouldRewindForDivergence(t *testing.T) {
 	otherAddr := &clustermetadatapb.PoolerAddress{Id: otherID, Host: "other-host", PostgresPort: 5432}
 	selfAddr := &clustermetadatapb.PoolerAddress{Id: selfID, Host: "self-host", PostgresPort: 5432}
 
-	// recordedPrimary builds the ReplicationPrimary a test seeds via
-	// withReplicationPrimary; a nil addr means "no recorded leader".
-	recordedPrimary := func(leader *clustermetadatapb.ID, addr *clustermetadatapb.PoolerAddress, rewindReady bool) *clustermetadatapb.ReplicationPrimary {
+	// recordedPrimary builds the IntendedPrimary a test seeds via
+	// withIntendedPrimary; a nil addr means "no recorded leader".
+	recordedPrimary := func(leader *clustermetadatapb.ID, addr *clustermetadatapb.PoolerAddress, rewindReady bool) *clustermetadatapb.IntendedPrimary {
 		if addr == nil {
 			return nil
 		}
-		return &clustermetadatapb.ReplicationPrimary{
+		return &clustermetadatapb.IntendedPrimary{
 			Position: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{
 				RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
 				LeaderId:   leader,
@@ -709,62 +709,62 @@ func TestShouldRewindForDivergence(t *testing.T) {
 	}
 
 	tests := []struct {
-		name               string
-		replicationPrimary *clustermetadatapb.ReplicationPrimary
-		suspectDivergence  bool
-		backoffPending     bool // record a rewind attempt first, so the backoff has not elapsed
-		want               bool
+		name              string
+		intendedPrimary   *clustermetadatapb.IntendedPrimary
+		suspectDivergence bool
+		backoffPending    bool // record a rewind attempt first, so the backoff has not elapsed
+		want              bool
 	}{
 		{
 			// All conditions met: rewind toward the recorded, rewind-ready leader.
-			name:               "all_conditions_met",
-			replicationPrimary: recordedPrimary(otherID, otherAddr, true),
-			suspectDivergence:  true,
-			want:               true,
+			name:              "all_conditions_met",
+			intendedPrimary:   recordedPrimary(otherID, otherAddr, true),
+			suspectDivergence: true,
+			want:              true,
 		},
 		{
 			// No divergence suspected: nothing to rewind.
-			name:               "not_suspected",
-			replicationPrimary: recordedPrimary(otherID, otherAddr, true),
-			suspectDivergence:  false,
-			want:               false,
+			name:              "not_suspected",
+			intendedPrimary:   recordedPrimary(otherID, otherAddr, true),
+			suspectDivergence: false,
+			want:              false,
 		},
 		{
 			// Leader has not checkpointed onto its new timeline yet: hold.
-			name:               "leader_not_rewind_ready",
-			replicationPrimary: recordedPrimary(otherID, otherAddr, false),
-			suspectDivergence:  true,
-			want:               false,
+			name:              "leader_not_rewind_ready",
+			intendedPrimary:   recordedPrimary(otherID, otherAddr, false),
+			suspectDivergence: true,
+			want:              false,
 		},
 		{
 			// The recorded leader is us: nothing to diverge from.
-			name:               "recorded_leader_is_self",
-			replicationPrimary: recordedPrimary(selfID, selfAddr, true),
-			suspectDivergence:  true,
-			want:               false,
+			name:              "recorded_leader_is_self",
+			intendedPrimary:   recordedPrimary(selfID, selfAddr, true),
+			suspectDivergence: true,
+			want:              false,
 		},
 		{
 			// No recorded leader to rewind toward: hold.
-			name:               "no_recorded_leader",
-			replicationPrimary: recordedPrimary(otherID, nil, true),
-			suspectDivergence:  true,
-			want:               false,
+			name:              "no_recorded_leader",
+			intendedPrimary:   recordedPrimary(otherID, nil, true),
+			suspectDivergence: true,
+			want:              false,
 		},
 		{
 			// Backoff has not elapsed: don't thrash.
-			name:               "backoff_not_elapsed",
-			replicationPrimary: recordedPrimary(otherID, otherAddr, true),
-			suspectDivergence:  true,
-			backoffPending:     true,
-			want:               false,
+			name:              "backoff_not_elapsed",
+			intendedPrimary:   recordedPrimary(otherID, otherAddr, true),
+			suspectDivergence: true,
+			backoffPending:    true,
+			want:              false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			opts := []testManagerOption{withServiceID(selfID)}
-			if tt.replicationPrimary != nil {
-				opts = append(opts, withReplicationPrimary(tt.replicationPrimary))
+			if tt.intendedPrimary != nil {
+				opts = append(opts, withIntendedPrimary(tt.intendedPrimary))
 			}
 			pm := newTestManager(t, opts...)
 			if tt.suspectDivergence {
@@ -805,7 +805,7 @@ func TestStaleStandbyDemoteTarget(t *testing.T) {
 		if recordedRule != nil {
 			// RewindReady so the rewind-ready gate is satisfied; cases that expect
 			// nil do so for their own reason (not-ready is covered separately below).
-			opts = append(opts, withReplicationPrimary(&clustermetadatapb.ReplicationPrimary{Position: &clustermetadatapb.RulePosition{Decision: recordedRule}, Primary: addr, RewindReady: true}))
+			opts = append(opts, withIntendedPrimary(&clustermetadatapb.IntendedPrimary{Position: &clustermetadatapb.RulePosition{Decision: recordedRule}, Primary: addr, RewindReady: true}))
 		}
 		return newTestManager(t, opts...)
 	}
@@ -844,7 +844,7 @@ func TestStaleStandbyDemoteTarget(t *testing.T) {
 			t,
 			withServiceID(selfID),
 			withPromises(cs),
-			withReplicationPrimary(&clustermetadatapb.ReplicationPrimary{Position: &clustermetadatapb.RulePosition{Decision: rule(5, otherID)}, Primary: otherAddr, RewindReady: true}),
+			withIntendedPrimary(&clustermetadatapb.IntendedPrimary{Position: &clustermetadatapb.RulePosition{Decision: rule(5, otherID)}, Primary: otherAddr, RewindReady: true}),
 			withRuleStore(&fakeRuleStore{pos: &clustermetadatapb.PoolerPosition{Position: &clustermetadatapb.RulePosition{Decision: rule(4, selfID)}}}),
 		)
 		require.Nil(t, pm.staleStandbyDemoteTarget())
@@ -865,7 +865,7 @@ func TestStaleStandbyDemoteTarget(t *testing.T) {
 		pm := newTestManager(
 			t,
 			withServiceID(selfID),
-			withReplicationPrimary(&clustermetadatapb.ReplicationPrimary{Position: &clustermetadatapb.RulePosition{Decision: rule(5, otherID)}, Primary: otherAddr, RewindReady: false}),
+			withIntendedPrimary(&clustermetadatapb.IntendedPrimary{Position: &clustermetadatapb.RulePosition{Decision: rule(5, otherID)}, Primary: otherAddr, RewindReady: false}),
 			withRuleStore(&fakeRuleStore{pos: &clustermetadatapb.PoolerPosition{Position: &clustermetadatapb.RulePosition{Decision: rule(4, selfID)}}}),
 		)
 		require.Nil(t, pm.staleStandbyDemoteTarget())
@@ -876,13 +876,13 @@ func TestShouldMarkRewindReady(t *testing.T) {
 	selfID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "test-cell", Name: "self"}
 	// newMgr builds a manager whose consensus state controls the two inputs
 	// shouldMarkRewindReady reads beyond (rewindSourceReady, role): the resigned
-	// term and the recorded ReplicationPrimary's rewind-ready flag.
-	newMgr := func(resignedTerm int64, rp *clustermetadatapb.ReplicationPrimary) *MultipoolerManager {
+	// term and the recorded IntendedPrimary's rewind-ready flag.
+	newMgr := func(resignedTerm int64, rp *clustermetadatapb.IntendedPrimary) *MultipoolerManager {
 		return newTestManager(
 			t,
 			withServiceID(selfID),
 			withResignedLeaderAtTerm(resignedTerm),
-			withReplicationPrimary(rp),
+			withIntendedPrimary(rp),
 		)
 	}
 	rewindReadyState := postgresState{rewindSourceReady: true}
@@ -898,7 +898,7 @@ func TestShouldMarkRewindReady(t *testing.T) {
 	})
 	t.Run("already advertised as rewind-ready", func(t *testing.T) {
 		// RecordTermPrimary only records an rp that carries a rule, so give it one.
-		rp := &clustermetadatapb.ReplicationPrimary{
+		rp := &clustermetadatapb.IntendedPrimary{
 			Position:    &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 1}}},
 			RewindReady: true,
 		}
@@ -1061,7 +1061,7 @@ func TestTakeRemedialAction_RewindToLeaderFails(t *testing.T) {
 
 	pm := newTestManager(t,
 		withServiceID(selfID),
-		withReplicationPrimary(&clustermetadatapb.ReplicationPrimary{
+		withIntendedPrimary(&clustermetadatapb.IntendedPrimary{
 			Position:    &clustermetadatapb.RulePosition{Decision: rule},
 			Primary:     otherAddr,
 			RewindReady: true,
@@ -1755,7 +1755,7 @@ func TestPrimaryConnInfoDiffersFromRecorded(t *testing.T) {
 	tests := []struct {
 		name string
 		// seedRP, when non-nil, is recorded on consensusPromises before the call.
-		seedRP *clustermetadatapb.ReplicationPrimary
+		seedRP *clustermetadatapb.IntendedPrimary
 		// seedRevocation, when non-nil, is written to consensusPromises before the call.
 		seedRevocation *clustermetadatapb.TermRevocation
 		// seedManualStop, when true, sets the walReceiverManuallyStopped flag
@@ -1775,7 +1775,7 @@ func TestPrimaryConnInfoDiffersFromRecorded(t *testing.T) {
 		want        bool
 	}{
 		{
-			name: "NoReplicationPrimaryRecorded",
+			name: "NoIntendedPrimaryRecorded",
 			// rp == nil -> nothing to compare against
 			want: false,
 		},
@@ -1785,7 +1785,7 @@ func TestPrimaryConnInfoDiffersFromRecorded(t *testing.T) {
 			// setPrimaryConnInfoLocked would refuse with FAILED_PRECONDITION
 			// (once per 5s tick, noisily).
 			name: "ManualStopFlagSet",
-			seedRP: &clustermetadatapb.ReplicationPrimary{
+			seedRP: &clustermetadatapb.IntendedPrimary{
 				Position: &clustermetadatapb.RulePosition{Decision: mkRule(5, recordedID)},
 				Primary:  mkAddress(recordedHost, recordedPort),
 			},
@@ -1795,14 +1795,14 @@ func TestPrimaryConnInfoDiffersFromRecorded(t *testing.T) {
 		{
 			name: "PrimaryFieldMissing",
 			// rule recorded but primary contact info absent -> nothing to compare
-			seedRP: &clustermetadatapb.ReplicationPrimary{Position: &clustermetadatapb.RulePosition{Decision: mkRule(5, recordedID)}},
+			seedRP: &clustermetadatapb.IntendedPrimary{Position: &clustermetadatapb.RulePosition{Decision: mkRule(5, recordedID)}},
 			want:   false,
 		},
 		{
 			name: "SelfIsLeader",
 			// recorded rule names this pooler — primary-side case, not replica
 			// reconciliation
-			seedRP: &clustermetadatapb.ReplicationPrimary{
+			seedRP: &clustermetadatapb.IntendedPrimary{
 				Position: &clustermetadatapb.RulePosition{Decision: mkRule(5, selfID)},
 				Primary:  mkAddress(recordedHost, recordedPort),
 			},
@@ -1812,7 +1812,7 @@ func TestPrimaryConnInfoDiffersFromRecorded(t *testing.T) {
 			name: "RecordedRuleRevoked",
 			// revocation at term 9 outranks rule at term 5 -> reconcile would
 			// race the in-flight Recruit/Promote
-			seedRP: &clustermetadatapb.ReplicationPrimary{
+			seedRP: &clustermetadatapb.IntendedPrimary{
 				Position: &clustermetadatapb.RulePosition{Decision: mkRule(5, recordedID)},
 				Primary:  mkAddress(recordedHost, recordedPort),
 			},
@@ -1824,7 +1824,7 @@ func TestPrimaryConnInfoDiffersFromRecorded(t *testing.T) {
 		},
 		{
 			name: "RecordedHostEmpty",
-			seedRP: &clustermetadatapb.ReplicationPrimary{
+			seedRP: &clustermetadatapb.IntendedPrimary{
 				Position: &clustermetadatapb.RulePosition{Decision: mkRule(5, recordedID)},
 				Primary:  mkAddress("", recordedPort),
 			},
@@ -1832,7 +1832,7 @@ func TestPrimaryConnInfoDiffersFromRecorded(t *testing.T) {
 		},
 		{
 			name: "RecordedPortZero",
-			seedRP: &clustermetadatapb.ReplicationPrimary{
+			seedRP: &clustermetadatapb.IntendedPrimary{
 				Position: &clustermetadatapb.RulePosition{Decision: mkRule(5, recordedID)},
 				Primary:  mkAddress(recordedHost, 0),
 			},
@@ -1841,7 +1841,7 @@ func TestPrimaryConnInfoDiffersFromRecorded(t *testing.T) {
 		{
 			name: "ReadPrimaryConnInfoErrors",
 			// Conservative: don't trigger reconciliation we can't verify
-			seedRP: &clustermetadatapb.ReplicationPrimary{
+			seedRP: &clustermetadatapb.IntendedPrimary{
 				Position: &clustermetadatapb.RulePosition{Decision: mkRule(5, recordedID)},
 				Primary:  mkAddress(recordedHost, recordedPort),
 			},
@@ -1853,7 +1853,7 @@ func TestPrimaryConnInfoDiffersFromRecorded(t *testing.T) {
 			name: "LiveConnInfoEmpty_DriftsFromRecorded",
 			// Recorded says we should be following a primary; postgres has
 			// nothing -> drift
-			seedRP: &clustermetadatapb.ReplicationPrimary{
+			seedRP: &clustermetadatapb.IntendedPrimary{
 				Position: &clustermetadatapb.RulePosition{Decision: mkRule(5, recordedID)},
 				Primary:  mkAddress(recordedHost, recordedPort),
 			},
@@ -1863,7 +1863,7 @@ func TestPrimaryConnInfoDiffersFromRecorded(t *testing.T) {
 		},
 		{
 			name: "LiveConnInfoUnparseable_TreatedAsDrift",
-			seedRP: &clustermetadatapb.ReplicationPrimary{
+			seedRP: &clustermetadatapb.IntendedPrimary{
 				Position: &clustermetadatapb.RulePosition{Decision: mkRule(5, recordedID)},
 				Primary:  mkAddress(recordedHost, recordedPort),
 			},
@@ -1873,7 +1873,7 @@ func TestPrimaryConnInfoDiffersFromRecorded(t *testing.T) {
 		},
 		{
 			name: "LiveConnInfoMatchesRecorded",
-			seedRP: &clustermetadatapb.ReplicationPrimary{
+			seedRP: &clustermetadatapb.IntendedPrimary{
 				Position: &clustermetadatapb.RulePosition{Decision: mkRule(5, recordedID)},
 				Primary:  mkAddress(recordedHost, recordedPort),
 			},
@@ -1888,7 +1888,7 @@ func TestPrimaryConnInfoDiffersFromRecorded(t *testing.T) {
 			// the "fe_sendauth: no password supplied" incident: without the
 			// passfile check this reads as no-drift and the standby stays stuck.
 			name: "LiveConnInfoMissingPassfile_Drifts",
-			seedRP: &clustermetadatapb.ReplicationPrimary{
+			seedRP: &clustermetadatapb.IntendedPrimary{
 				Position: &clustermetadatapb.RulePosition{Decision: mkRule(5, recordedID)},
 				Primary:  mkAddress(recordedHost, recordedPort),
 			},
@@ -1900,7 +1900,7 @@ func TestPrimaryConnInfoDiffersFromRecorded(t *testing.T) {
 			// Host/port match and a passfile is present, but it points at a stale
 			// path (e.g. carried over from a different layout) -> fixable drift.
 			name: "LiveConnInfoStalePassfile_Drifts",
-			seedRP: &clustermetadatapb.ReplicationPrimary{
+			seedRP: &clustermetadatapb.IntendedPrimary{
 				Position: &clustermetadatapb.RulePosition{Decision: mkRule(5, recordedID)},
 				Primary:  mkAddress(recordedHost, recordedPort),
 			},
@@ -1910,7 +1910,7 @@ func TestPrimaryConnInfoDiffersFromRecorded(t *testing.T) {
 		},
 		{
 			name: "LiveConnInfoHostMismatch",
-			seedRP: &clustermetadatapb.ReplicationPrimary{
+			seedRP: &clustermetadatapb.IntendedPrimary{
 				Position: &clustermetadatapb.RulePosition{Decision: mkRule(5, recordedID)},
 				Primary:  mkAddress(recordedHost, recordedPort),
 			},
@@ -1921,7 +1921,7 @@ func TestPrimaryConnInfoDiffersFromRecorded(t *testing.T) {
 		},
 		{
 			name: "LiveConnInfoPortMismatch",
-			seedRP: &clustermetadatapb.ReplicationPrimary{
+			seedRP: &clustermetadatapb.IntendedPrimary{
 				Position: &clustermetadatapb.RulePosition{Decision: mkRule(5, recordedID)},
 				Primary:  mkAddress(recordedHost, recordedPort),
 			},
@@ -1934,7 +1934,7 @@ func TestPrimaryConnInfoDiffersFromRecorded(t *testing.T) {
 			// Host/port/passfile all match, but the replication user drifted from
 			// what expectedPrimaryConnInfo derives (connPoolMgr.PgUser()).
 			name: "LiveConnInfoUserMismatch",
-			seedRP: &clustermetadatapb.ReplicationPrimary{
+			seedRP: &clustermetadatapb.IntendedPrimary{
 				Position: &clustermetadatapb.RulePosition{Decision: mkRule(5, recordedID)},
 				Primary:  mkAddress(recordedHost, recordedPort),
 			},
@@ -1947,7 +1947,7 @@ func TestPrimaryConnInfoDiffersFromRecorded(t *testing.T) {
 			// Host/port/passfile all match, but application_name drifted from this
 			// pooler's servicePoolerID.
 			name: "LiveConnInfoAppNameMismatch",
-			seedRP: &clustermetadatapb.ReplicationPrimary{
+			seedRP: &clustermetadatapb.IntendedPrimary{
 				Position: &clustermetadatapb.RulePosition{Decision: mkRule(5, recordedID)},
 				Primary:  mkAddress(recordedHost, recordedPort),
 			},
@@ -2189,7 +2189,7 @@ func TestStandbyStuckDiverged(t *testing.T) {
 		Cell:      "zone1",
 		Name:      "primary-pooler",
 	}
-	seedRP := &clustermetadatapb.ReplicationPrimary{
+	seedRP := &clustermetadatapb.IntendedPrimary{
 		Position: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{
 			RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
 			LeaderId:   recordedID,
@@ -2205,7 +2205,7 @@ func TestStandbyStuckDiverged(t *testing.T) {
 	tests := []struct {
 		name string
 		// seedRP, when non-nil, is recorded before the call (populates RewindTarget).
-		seedRP *clustermetadatapb.ReplicationPrimary
+		seedRP *clustermetadatapb.IntendedPrimary
 		// seedManualStop simulates a prior StopReplication.
 		seedManualStop bool
 		// seedStuckSincePast pre-arms the debounce timer to a long-past instant.
@@ -2360,11 +2360,11 @@ func TestStartPostgres_MarksSuspectedDivergenceAfterCrashRecovery(t *testing.T) 
 	self := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "self"}
 	other := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "other"}
 
-	recordedPrimary := func(leader *clustermetadatapb.ID) *clustermetadatapb.ReplicationPrimary {
+	recordedPrimary := func(leader *clustermetadatapb.ID) *clustermetadatapb.IntendedPrimary {
 		if leader == nil {
 			return nil
 		}
-		return &clustermetadatapb.ReplicationPrimary{
+		return &clustermetadatapb.IntendedPrimary{
 			Position: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{
 				RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
 				LeaderId:   leader,
@@ -2413,7 +2413,7 @@ func TestStartPostgres_MarksSuspectedDivergenceAfterCrashRecovery(t *testing.T) 
 		t.Run(tt.name, func(t *testing.T) {
 			opts := []testManagerOption{withServiceID(self)}
 			if rp := recordedPrimary(tt.recordedLeader); rp != nil {
-				opts = append(opts, withReplicationPrimary(rp))
+				opts = append(opts, withIntendedPrimary(rp))
 			}
 			pm := newTestManager(t, opts...)
 			pm.pgctldClient = &mockPgctldClient{

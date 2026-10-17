@@ -100,15 +100,15 @@ message PromoteResponse {
 // information needed to act on that identity.
 message SetPrimaryRequest {
   // The (position, primary, rewind_ready) the follower should adopt. Contact
-  // info for the leader is replication_primary.primary (host + postgres_port
+  // info for the leader is intended_primary.primary (host + postgres_port
   // used to rewrite primary_conninfo); the position is
-  // replication_primary.position, which the pooler compares against its own
+  // intended_primary.position, which the pooler compares against its own
   // observed position and only applies when strictly higher. primary.id must
-  // match the position's leader_id. replication_primary.rewind_ready relays
+  // match the position's leader_id. intended_primary.rewind_ready relays
   // whether the leader has checkpointed onto its current timeline: a
   // diverged follower defers its pg_rewind until it is true, but sets up
   // primary_conninfo and attempts to stream regardless.
-  clustermetadata.ReplicationPrimary replication_primary = 3;
+  clustermetadata.IntendedPrimary intended_primary = 3;
 }
 
 // SetPrimaryResponse carries the pooler's state after processing a

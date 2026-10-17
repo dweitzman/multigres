@@ -644,7 +644,7 @@ func (pm *MultipoolerManager) promoteLocked(ctx context.Context, req *consensusd
 	// finish or supersede this term instead of it going undetected.
 	if err := pm.consensusMgr.RecordTermPrimary(
 		ctx,
-		commonconsensus.ReplicationPrimaryFromProposal(proposal, false),
+		commonconsensus.IntendedPrimaryFromProposal(proposal, false),
 	); err != nil {
 		pm.logger.ErrorContext(ctx, "failed to record replication primary before promote", "error", err)
 	}
@@ -677,7 +677,7 @@ func (pm *MultipoolerManager) promoteLocked(ctx context.Context, req *consensusd
 
 	// Upgrade the pre-write record above from Proposal to Decision now that
 	// DoUpdateRule has committed it.
-	if err := pm.consensusMgr.RecordTermPrimary(ctx, &clustermetadatapb.ReplicationPrimary{
+	if err := pm.consensusMgr.RecordTermPrimary(ctx, &clustermetadatapb.IntendedPrimary{
 		Position: &clustermetadatapb.RulePosition{Decision: proposedRule},
 		Primary:  proposalLeader,
 	}); err != nil {
@@ -718,14 +718,14 @@ func (pm *MultipoolerManager) SetPrimary(ctx context.Context, req *consensusdata
 		return nil, err
 	}
 
-	rp := req.GetReplicationPrimary()
+	rp := req.GetIntendedPrimary()
 	leader := rp.GetPrimary()
 	undecidedRule := commonconsensus.PossiblyUndecidedRule(rp.GetPosition())
 	if leader == nil {
-		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "replication_primary.primary is required")
+		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "intended_primary.primary is required")
 	}
 	if undecidedRule == nil {
-		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "replication_primary.position is required")
+		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "intended_primary.position is required")
 	}
 	// The rule's leader_id is authoritative; the leader field carries contact
 	// info for that ID. A mismatch is a caller bug — we'd otherwise route
@@ -878,7 +878,7 @@ func (pm *MultipoolerManager) SetPrimary(ctx context.Context, req *consensusdata
 }
 
 func (pm *MultipoolerManager) setPrimaryLocked(ctx context.Context, req *consensusdatapb.SetPrimaryRequest, selfPos *clustermetadatapb.PoolerPosition) (*consensusdatapb.SetPrimaryResponse, error) {
-	rp := req.GetReplicationPrimary()
+	rp := req.GetIntendedPrimary()
 	leader := rp.GetPrimary()
 	incomingPosition := commonconsensus.FormatRulePosition(rp.GetPosition())
 	port := leader.GetPostgresPort()
@@ -906,7 +906,7 @@ func (pm *MultipoolerManager) setPrimaryLocked(ctx context.Context, req *consens
 		// Demoting a (likely diverged) stale primary restarts it as a standby of the
 		// new leader, which requires a pg_rewind. Defer that until the leader is
 		// rewind-ready — it has checkpointed onto its current timeline, relayed here
-		// as replication_primary.rewind_ready. Restarting before then would FATAL on
+		// as intended_primary.rewind_ready. Restarting before then would FATAL on
 		// this node's own un-replicated WAL and leave it stuck. The record was already
 		// updated by RecordTermPrimary above, so orch's retry and the monitor's demote
 		// path both re-attempt once the leader advertises rewind_ready. The node stays
