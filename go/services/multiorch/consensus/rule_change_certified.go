@@ -188,6 +188,11 @@ func (c *Coordinator) resolveCohort(
 	cohortMembers []*clustermetadatapb.ID,
 	statusesByPoolerID map[string]*clustermetadatapb.ConsensusStatus,
 ) (map[string]*clustermetadatapb.PoolerAddress, []*snapshot.PoolerHealthState, error) {
+	// TODO: these records hold only a Multipooler and a ConsensusStatus. That is enough
+	// here because a certified change names its leader, so selectFittestLeader, which
+	// reads real health to rank failover candidates, never runs. A cohort type that says
+	// whether health is known would avoid a half-filled PoolerHealthState; revisit with
+	// the Assess/Plan work.
 	addressByID := make(map[string]*clustermetadatapb.PoolerAddress, len(cohortMembers))
 	cohort := make([]*snapshot.PoolerHealthState, 0, len(cohortMembers))
 	for _, id := range cohortMembers {
