@@ -353,7 +353,7 @@ func (cm *ConsensusManager) InconsistentConsensusStatus(ctx context.Context) (*c
 // position plus the recorded replication primary. Any input may be nil; the
 // corresponding field is left unset. Never performs I/O.
 //
-// The published HighestIntendedRule reflects best knowledge from any source: the
+// The published IntendedPrimary reflects best knowledge from any source: the
 // rule is the max of the observed position's rule and the rule from the most
 // recent SetPrimary/Promote RPC, and the primary is the contact info from that
 // RPC (ObservePosition cannot carry it).
@@ -374,26 +374,26 @@ func (cm *ConsensusManager) buildStatus(revocation *clustermetadatapb.TermRevoca
 	return status
 }
 
-// statusIntendedPrimary returns the HighestIntendedRule to publish given the most
+// statusIntendedPrimary returns the IntendedPrimary to publish given the most
 // recent observed position and the most recent rule+primary heard via RPC.
 func statusIntendedPrimary(pos *clustermetadatapb.PoolerPosition, intendedPrimary *clustermetadatapb.IntendedPrimary) *clustermetadatapb.IntendedPrimary {
 	// ruleStorePosition is read fresh from the rule store (the current_rule row
-	// in postgres, replicated through WAL). highestKnownPosition is the
+	// in postgres, replicated through WAL). rpcPosition is the
 	// position last recorded via a SetPrimary/Promote RPC (possibly still
 	// undecided if that promotion is still in flight), which can lead the
 	// rule store before the write has been observed locally.
 	ruleStorePosition := pos.GetPosition()
-	highestKnownPosition := intendedPrimary.GetPosition()
+	rpcPosition := intendedPrimary.GetPosition()
 	rpcPrimary := intendedPrimary.GetPrimary()
-	if consensus.PossiblyUndecidedRule(ruleStorePosition) == nil && consensus.PossiblyUndecidedRule(highestKnownPosition) == nil && rpcPrimary == nil {
+	if consensus.PossiblyUndecidedRule(ruleStorePosition) == nil && consensus.PossiblyUndecidedRule(rpcPosition) == nil && rpcPrimary == nil {
 		return nil
 	}
 	// Whichever position wins is republished whole (decision and proposal
 	// together), not flattened to a single merged rule.
 	position := ruleStorePosition
-	if consensus.CompareRulePosition(highestKnownPosition, ruleStorePosition) >= 0 {
+	if consensus.CompareRulePosition(rpcPosition, ruleStorePosition) >= 0 {
 		// RPC-delivered position leads or ties the rule store — use it.
-		position = highestKnownPosition
+		position = rpcPosition
 	}
 
 	// rewind_ready is valid for the entire coordinator term. Cohort-membership
@@ -406,10 +406,10 @@ func statusIntendedPrimary(pos *clustermetadatapb.PoolerPosition, intendedPrimar
 	// about the leader; republishing it is harmless since the leader's own
 	// status is what orch reads as the authority.
 	rewindReady := false
-	highestRule := consensus.PossiblyUndecidedRule(highestKnownPosition)
+	rpcRule := consensus.PossiblyUndecidedRule(rpcPosition)
 	ruleStoreRule := consensus.PossiblyUndecidedRule(ruleStorePosition)
-	if highestRule != nil && highestRule.GetRuleNumber().GetCoordinatorTerm() > 0 &&
-		(ruleStoreRule == nil || highestRule.GetRuleNumber().GetCoordinatorTerm() >= ruleStoreRule.GetRuleNumber().GetCoordinatorTerm()) {
+	if rpcRule != nil && rpcRule.GetRuleNumber().GetCoordinatorTerm() > 0 &&
+		(ruleStoreRule == nil || rpcRule.GetRuleNumber().GetCoordinatorTerm() >= ruleStoreRule.GetRuleNumber().GetCoordinatorTerm()) {
 		rewindReady = intendedPrimary.GetRewindReady()
 	}
 	return &clustermetadatapb.IntendedPrimary{
