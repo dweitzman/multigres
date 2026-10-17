@@ -203,7 +203,7 @@ func (a *FixReplicationAction) fixNotReplicating(
 	// relay the leader's self-reported rewind_ready so a diverged replica defers
 	// its pg_rewind until the leader has checkpointed onto its current timeline.
 	setPrimaryReq := &consensusdatapb.SetPrimaryRequest{
-		IntendedPrimary: leader.IntendedPrimaryAt(shard.HighestIntendedRule()),
+		IntendedPrimary: leader.AsIntendedPrimary(shard.HighestIntendedRule()),
 	}
 	if _, err := a.rpcClient.SetPrimary(ctx, replica.Multipooler, setPrimaryReq); err != nil {
 		return mterrors.Wrap(err, "SetPrimary RPC failed")

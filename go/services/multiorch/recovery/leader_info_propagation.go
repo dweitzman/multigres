@@ -79,7 +79,7 @@ func (re *Engine) propagateLeaderInfoForShard(ctx context.Context, shard *snapsh
 	// restart self-heals on the next tick.
 	re.reconcileFollowerSlots(ctx, leader, shard.CohortEligibleFollowerIDs())
 
-	want := leader.IntendedPrimaryAt(rule)
+	want := leader.AsIntendedPrimary(rule)
 
 	// One goroutine per follower: each pooler appears at most once in a shard's
 	// member list, so there's never more than one in-flight SetPrimary to the

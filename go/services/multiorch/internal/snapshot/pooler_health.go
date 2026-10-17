@@ -161,12 +161,13 @@ func (h *PoolerHealthState) IntendedPrimary() *clustermetadatapb.IntendedPrimary
 	return commonconsensus.IntendedPrimaryOrNil(h.GetConsensusStatus())
 }
 
-// IntendedPrimaryAt returns the IntendedPrimary that tells a follower to use this
-// pooler as its primary under rule: the rule's position, this pooler's topology
-// address, and its own rewind_ready. rewind_ready is the pooler's self-report with no
-// global equivalent, so it is relayed rather than derived: a follower that needs a
-// pg_rewind defers it until the leader has checkpointed onto its current timeline.
-func (h *PoolerHealthState) IntendedPrimaryAt(rule commonconsensus.RuleTransition) *clustermetadatapb.IntendedPrimary {
+// AsIntendedPrimary describes this pooler as the primary a follower should use under
+// rule: the rule's position, this pooler's own topology address and its own
+// rewind_ready. Call it on the leader, never on a follower; the result points at the
+// receiver. rewind_ready is the leader's self-report with no global equivalent, so it
+// is relayed rather than derived: a follower that needs a pg_rewind defers it until
+// the leader has checkpointed onto its current timeline.
+func (h *PoolerHealthState) AsIntendedPrimary(rule commonconsensus.RuleTransition) *clustermetadatapb.IntendedPrimary {
 	return &clustermetadatapb.IntendedPrimary{
 		Position:    rule.Position(),
 		Primary:     topoclient.PoolerAddressFor(h.GetMultipooler()),

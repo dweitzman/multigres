@@ -121,7 +121,7 @@ func (a *ReconnectRecruitAbandonedAction) Execute(ctx context.Context, rechecked
 	// so it accepts SetPrimary and rejoins. RewindReady is relayed so a follower
 	// that also needs a rewind defers it until the leader is checkpointed.
 	setReq := &consensusdatapb.SetPrimaryRequest{
-		IntendedPrimary: leader.IntendedPrimaryAt(advanced),
+		IntendedPrimary: leader.AsIntendedPrimary(advanced),
 	}
 	if _, err := a.rpcClient.SetPrimary(ctx, follower.Multipooler, setReq); err != nil {
 		return mterrors.Wrap(err, "SetPrimary to reconnect stranded follower failed")

@@ -24,6 +24,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/multigres/multigres/go/common/rpcclient"
+	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 	"github.com/multigres/multigres/go/services/multiorch/store"
@@ -247,7 +248,7 @@ func TestPropagateLeaderInfoForShard(t *testing.T) {
 			RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5}, LeaderId: id("leader"),
 		}}
 		return store.NewPooler(&snapshot.PoolerHealthState{
-			Multipooler:     &clustermetadatapb.Multipooler{Id: id(name), ShardKey: shardKey},
+			Multipooler:     &clustermetadatapb.Multipooler{Id: id(name), ShardKey: shardKey, Hostname: "host-" + name},
 			ConsensusStatus: &clustermetadatapb.ConsensusStatus{Id: id(name), CurrentPosition: &clustermetadatapb.PoolerPosition{Position: rule}},
 			LastSeen:        time.Now(),
 		}, nil)
@@ -274,6 +275,14 @@ func TestPropagateLeaderInfoForShard(t *testing.T) {
 		assert.Contains(t, log, "SetPrimary(multipooler-zone1-f1)")
 		assert.Contains(t, log, "SetPrimary(multipooler-zone1-f2)")
 		assert.NotContains(t, log, "SetPrimary(multipooler-zone1-leader)", "the leader is never pointed at itself")
+
+		for _, follower := range []string{"f1", "f2"} {
+			req := fake.SetPrimaryRequests[topoclient.ComponentIDString(id(follower))]
+			require.NotNil(t, req, follower)
+			primary := req.GetIntendedPrimary().GetPrimary()
+			assert.Equal(t, "leader", primary.GetId().GetName(), "%s is told to follow the leader, not itself", follower)
+			assert.Equal(t, "host-leader", primary.GetHost())
+		}
 	})
 
 	t.Run("does nothing when the intended leader is not in the snapshot", func(t *testing.T) {

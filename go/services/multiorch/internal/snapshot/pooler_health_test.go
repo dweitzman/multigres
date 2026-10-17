@@ -146,7 +146,7 @@ func TestPoolerHealthState_PostgresReadyWithin(t *testing.T) {
 	assert.False(t, (*PoolerHealthState)(nil).PostgresReadyWithin(now, time.Hour))
 }
 
-func TestPoolerHealthState_IntendedPrimaryAt(t *testing.T) {
+func TestPoolerHealthState_AsIntendedPrimary(t *testing.T) {
 	rule := &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{RuleNumber: ruleNumber(7), LeaderId: podID("leader")}}
 	leader := &PoolerHealthState{
 		Multipooler: &clustermetadatapb.Multipooler{
@@ -158,7 +158,7 @@ func TestPoolerHealthState_IntendedPrimaryAt(t *testing.T) {
 		}},
 	}
 
-	got := leader.IntendedPrimaryAt(commonconsensus.NewRuleTransition(rule))
+	got := leader.AsIntendedPrimary(commonconsensus.NewRuleTransition(rule))
 	assert.Equal(t, "leader", got.GetPrimary().GetId().GetName())
 	assert.Equal(t, "leader-host", got.GetPrimary().GetHost())
 	assert.Equal(t, int32(5432), got.GetPrimary().GetPostgresPort())
@@ -166,8 +166,8 @@ func TestPoolerHealthState_IntendedPrimaryAt(t *testing.T) {
 	assert.True(t, got.GetRewindReady(), "relays the pooler's own rewind_ready")
 
 	notReady := &PoolerHealthState{Multipooler: leader.Multipooler}
-	assert.False(t, notReady.IntendedPrimaryAt(commonconsensus.NewRuleTransition(rule)).GetRewindReady())
+	assert.False(t, notReady.AsIntendedPrimary(commonconsensus.NewRuleTransition(rule)).GetRewindReady())
 
-	nobody := (*PoolerHealthState)(nil).IntendedPrimaryAt(commonconsensus.NewRuleTransition(rule))
+	nobody := (*PoolerHealthState)(nil).AsIntendedPrimary(commonconsensus.NewRuleTransition(rule))
 	assert.Nil(t, nobody.GetPrimary(), "a missing record has no address to point followers at")
 }

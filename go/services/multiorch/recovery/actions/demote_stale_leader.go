@@ -163,7 +163,7 @@ func (a *DemoteStaleLeaderAction) Execute(ctx context.Context, rechecked types.R
 	// stale leader defers its pg_rewind until the correct leader has
 	// checkpointed onto its current timeline.
 	setPrimaryReq := &consensusdatapb.SetPrimaryRequest{
-		IntendedPrimary: correctLeader.IntendedPrimaryAt(correctRule),
+		IntendedPrimary: correctLeader.AsIntendedPrimary(correctRule),
 	}
 	if _, err := a.rpcClient.SetPrimary(ctx, staleLeader.Multipooler, setPrimaryReq); err != nil {
 		return mterrors.Wrap(err, "SetPrimary RPC failed")
