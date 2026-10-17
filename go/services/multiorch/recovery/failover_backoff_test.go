@@ -20,10 +20,13 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/multigres/multigres/go/common/ha"
+	"github.com/multigres/multigres/go/common/mterrors"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	"github.com/multigres/multigres/go/services/multiorch/consensus"
 	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
@@ -82,10 +85,35 @@ func TestNextFailoverAttempt(t *testing.T) {
 		}, nil))
 	}
 	termPtr := func(term int64) *int64 { return &term }
+	// frozen snapshots the shard, as the gate does when no recheck has produced one.
+	frozen := func(t *testing.T, cache *store.PoolerCache) *snapshot.Shard {
+		shard, err := store.SnapshotShard(cache, shardKey, store.SnapshotOptions{Now: time.Now()})
+		if mterrors.Code(err) == mtrpcpb.Code_NOT_FOUND {
+			return &snapshot.Shard{ShardKey: shardKey, Now: time.Now()}
+		}
+		require.NoError(t, err)
+		return shard
+	}
+
+	t.Run("judges the gate on the snapshot's clock, not the wall clock", func(t *testing.T) {
+		cache := store.NewTestCache(t)
+		initiated := time.Now()
+		seedRevocation(cache, "p1", initiated, termPtr(4), 1)
+		engine := newEngine(cache)
+		shard := frozen(t, cache)
+
+		shard.Now = initiated // backoff has just started, whatever the wall clock says
+		_, ready := engine.nextFailoverAttempt(shard)
+		assert.False(t, ready)
+
+		shard.Now = initiated.Add(time.Hour) // far past the backoff, though the wall clock has not moved
+		_, ready = engine.nextFailoverAttempt(shard)
+		assert.True(t, ready)
+	})
 
 	t.Run("acts immediately when no revocation is observed", func(t *testing.T) {
 		cache := store.NewTestCache(t)
-		readyAt, ready := newEngine(cache).nextFailoverAttempt(shardKey)
+		readyAt, ready := newEngine(cache).nextFailoverAttempt(frozen(t, cache))
 		assert.True(t, ready, "should act immediately with nothing to back off from")
 		assert.True(t, readyAt.IsZero())
 	})
@@ -93,7 +121,7 @@ func TestNextFailoverAttempt(t *testing.T) {
 	t.Run("defers while a recent revocation's backoff has not elapsed", func(t *testing.T) {
 		cache := store.NewTestCache(t)
 		seedRevocation(cache, "p1", time.Now(), termPtr(4), 1) // now + base(10s) → in the future
-		readyAt, ready := newEngine(cache).nextFailoverAttempt(shardKey)
+		readyAt, ready := newEngine(cache).nextFailoverAttempt(frozen(t, cache))
 		assert.False(t, ready, "should defer within the backoff window")
 		assert.True(t, readyAt.After(time.Now()))
 	})
@@ -101,7 +129,7 @@ func TestNextFailoverAttempt(t *testing.T) {
 	t.Run("acts once a stale revocation's backoff has elapsed", func(t *testing.T) {
 		cache := store.NewTestCache(t)
 		seedRevocation(cache, "p1", time.Now().Add(-time.Hour), termPtr(4), 5) // old anchor → ready time is in the past
-		_, ready := newEngine(cache).nextFailoverAttempt(shardKey)
+		_, ready := newEngine(cache).nextFailoverAttempt(frozen(t, cache))
 		assert.True(t, ready, "a long-stale revocation should not keep deferring")
 	})
 
@@ -111,7 +139,7 @@ func TestNextFailoverAttempt(t *testing.T) {
 		// this revocation (which targeted term 0) is resolved history.
 		cache := store.NewTestCache(t)
 		seedRevocation(cache, "p1", time.Now(), termPtr(0), 1)
-		readyAt, ready := newEngine(cache).nextFailoverAttempt(shardKey)
+		readyAt, ready := newEngine(cache).nextFailoverAttempt(frozen(t, cache))
 		assert.True(t, ready, "a revocation targeting a different problem should not gate this one")
 		assert.True(t, readyAt.IsZero())
 	})
@@ -133,7 +161,7 @@ func TestNextFailoverAttempt(t *testing.T) {
 		// human-supervised.
 		cache := store.NewTestCache(t)
 		seedRevocation(cache, "p1", time.Now(), nil, 0)
-		readyAt, ready := newEngine(cache).nextFailoverAttempt(shardKey)
+		readyAt, ready := newEngine(cache).nextFailoverAttempt(frozen(t, cache))
 		assert.False(t, ready, "an unidentifiable revocation should get the default cooldown, not a free pass")
 		assert.True(t, readyAt.After(time.Now()))
 	})
@@ -195,7 +223,7 @@ func TestNextFailoverAttempt(t *testing.T) {
 				},
 			},
 		}, nil))
-		readyAt, ready := newEngine(cache).nextFailoverAttempt(shardKey)
+		readyAt, ready := newEngine(cache).nextFailoverAttempt(frozen(t, cache))
 		assert.False(t, ready, "the live retry at the current decision must still gate, despite the stale higher-term revocation elsewhere")
 		assert.True(t, readyAt.After(time.Now()))
 	})
@@ -257,7 +285,7 @@ func TestNextFailoverAttempt(t *testing.T) {
 				},
 			},
 		}, nil))
-		readyAt, ready := newEngine(cache).nextFailoverAttempt(shardKey)
+		readyAt, ready := newEngine(cache).nextFailoverAttempt(frozen(t, cache))
 		assert.False(t, ready, "p1's live retry against decision 6 must still gate, despite pDeparting's higher, ineligible decision")
 		assert.True(t, readyAt.After(time.Now()))
 	})

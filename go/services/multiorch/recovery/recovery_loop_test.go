@@ -408,7 +408,7 @@ func TestFilterAndPrioritize_ShardWideOnly(t *testing.T) {
 		},
 	}
 
-	filtered := engine.filterAndPrioritize(ctx, problems)
+	filtered := engine.filterAndPrioritize(ctx, shardForProblems(t, engine, problems), problems)
 
 	// Should return only the shard-wide problem (PrimaryDead)
 	require.Len(t, filtered, 1)
@@ -472,7 +472,7 @@ func TestFilterAndPrioritize_NoShardWide(t *testing.T) {
 	}
 
 	// Problems are already sorted by priority
-	filtered := engine.filterAndPrioritize(ctx, problems)
+	filtered := engine.filterAndPrioritize(ctx, shardForProblems(t, engine, problems), problems)
 
 	// Should keep only highest priority problem per pooler: 1 from pooler1 (High wins over Normal), 1 from pooler2
 	require.Len(t, filtered, 2)
@@ -525,7 +525,7 @@ func TestFilterAndPrioritize_MultipleShardWide(t *testing.T) {
 		},
 	}
 
-	filtered := engine.filterAndPrioritize(ctx, problems)
+	filtered := engine.filterAndPrioritize(ctx, shardForProblems(t, engine, problems), problems)
 
 	// Should return only the highest priority shard-wide problem
 	// PriorityShardBootstrap (10000) > PriorityEmergency (1000)
@@ -596,7 +596,7 @@ func TestFilterAndPrioritize_GatedShardWideDoesNotBlockPoolerScoped(t *testing.T
 		},
 	}
 
-	filtered := engine.filterAndPrioritize(ctx, problems)
+	filtered := engine.filterAndPrioritize(ctx, shardForProblems(t, engine, problems), problems)
 
 	// The gated failover is dropped; the pooler-scoped fix proceeds.
 	require.Len(t, filtered, 1)
@@ -686,7 +686,7 @@ func TestProcessShardProblems_GatedLeaderProblemStillBlocksHealthyLeaderActions(
 	problems := detectProblems(t, engine)
 	require.Len(t, problems, 2, "should detect both the gated primary-unreachable problem and the replica-not-replicating problem")
 
-	engine.processShardProblems(ctx, shardKey, problems)
+	engine.processShardProblems(ctx, testShard(t, engine, shardKey), problems)
 
 	assert.False(t, replicaRecovery.executed.Load(),
 		"action requiring a healthy leader must not run while the shard's failover problem is gated")
@@ -756,7 +756,7 @@ func TestFilterAndPrioritize_GatedShardWideFallsBackToLowerPriorityShardWide(t *
 		},
 	}
 
-	filtered := engine.filterAndPrioritize(ctx, problems)
+	filtered := engine.filterAndPrioritize(ctx, shardForProblems(t, engine, problems), problems)
 
 	require.Len(t, filtered, 1)
 	assert.Equal(t, types.ProblemShardNeedsInitialization, filtered[0].Code)
@@ -805,7 +805,7 @@ func TestFilterAndPrioritize_AlertOnlyShardWideDoesNotBlockPoolerScoped(t *testi
 		},
 	}
 
-	filtered := engine.filterAndPrioritize(ctx, problems)
+	filtered := engine.filterAndPrioritize(ctx, shardForProblems(t, engine, problems), problems)
 
 	// The alert-only problem can never execute, so it's excluded entirely;
 	// only the pooler-scoped fix survives.
@@ -851,7 +851,7 @@ func TestFilterAndPrioritize_AlertOnlyDoesNotStealPoolerSlot(t *testing.T) {
 		},
 	}
 
-	filtered := engine.filterAndPrioritize(ctx, problems)
+	filtered := engine.filterAndPrioritize(ctx, shardForProblems(t, engine, problems), problems)
 
 	require.Len(t, filtered, 1)
 	assert.Equal(t, types.ProblemReplicaNotReplicating, filtered[0].Code,
@@ -1064,7 +1064,7 @@ func TestProcessShardProblems_DependencyEnforcement(t *testing.T) {
 		shardKey := &clustermetadatapb.ShardKey{Database: "db1", TableGroup: "tg1", Shard: "0"}
 
 		// Call processShardProblems - this exercises the full recovery flow
-		engine.processShardProblems(t.Context(), shardKey, problems)
+		engine.processShardProblems(t.Context(), testShard(t, engine, shardKey), problems)
 
 		// ASSERTION: Replica recovery should be SKIPPED due to dependency check
 		assert.False(t, replicaRecovery.executed.Load(),
@@ -1135,7 +1135,7 @@ func TestProcessShardProblems_DependencyEnforcement(t *testing.T) {
 		shardKey := &clustermetadatapb.ShardKey{Database: "db1", TableGroup: "tg1", Shard: "0"}
 
 		// Call processShardProblems
-		engine.processShardProblems(t.Context(), shardKey, problems)
+		engine.processShardProblems(t.Context(), testShard(t, engine, shardKey), problems)
 
 		// ASSERTION: Replica recovery should be executed (NOT skipped)
 		// It will still fail validation since the mock analyzer won't re-detect it,
@@ -1828,7 +1828,7 @@ func TestRecoveryLoop_PriorityOrdering(t *testing.T) {
 	shardKey := &clustermetadatapb.ShardKey{Database: "db1", TableGroup: "tg1", Shard: "0"}
 
 	// Process problems - they should be attempted in priority order
-	engine.processShardProblems(t.Context(), shardKey, problems)
+	engine.processShardProblems(t.Context(), testShard(t, engine, shardKey), problems)
 
 	// ASSERTION: Problems should be attempted in priority order (Emergency > High > Normal)
 	// Note: validation will fail for all since we don't change the state, but we can verify
@@ -2074,7 +2074,7 @@ func TestRecoveryLoop_TracingSpans(t *testing.T) {
 		},
 	}
 
-	spanFiltered := engine.filterAndPrioritize(ctx, spanProblems)
+	spanFiltered := engine.filterAndPrioritize(ctx, shardForProblems(t, engine, spanProblems), spanProblems)
 	require.Len(t, spanFiltered, 1)
 	assert.Equal(t, types.ProblemLeaderHealthUnknown, spanFiltered[0].Code)
 

@@ -90,15 +90,25 @@ func (re *Engine) performRecoveryCycle(ctx context.Context) {
 
 	// Group problems by shard
 	problemsByShard := re.groupProblemsByShard(problems)
+	snapsByShard := make(map[string]*snapshot.Shard, len(snaps))
+	for _, snap := range snaps {
+		snapsByShard[string(commontypes.FormatShardKey(snap.ShardKey))] = snap
+	}
 
-	// Process each shard independently in parallel
+	// Process each shard independently in parallel, each against the snapshot its
+	// problems were detected on.
 	var wg sync.WaitGroup
-	for _, shardProblems := range problemsByShard {
+	for key, shardProblems := range problemsByShard {
+		shard, ok := snapsByShard[key]
+		if !ok {
+			re.logger.ErrorContext(ctx, "problems detected for a shard with no snapshot", "shard", key)
+			continue
+		}
 		wg.Add(1)
-		go func(problems []types.Problem) {
+		go func(shard *snapshot.Shard, problems []types.Problem) {
 			defer wg.Done()
-			re.processShardProblems(ctx, problems[0].ShardKey, problems)
-		}(shardProblems)
+			re.processShardProblems(ctx, shard, problems)
+		}(shard, shardProblems)
 	}
 	wg.Wait()
 
@@ -119,8 +129,10 @@ func (re *Engine) groupProblemsByShard(problems []types.Problem) map[string][]ty
 	return grouped
 }
 
-// processShardProblems handles all problems for a single shard.
-func (re *Engine) processShardProblems(ctx context.Context, shardKey *clustermetadatapb.ShardKey, problems []types.Problem) {
+// processShardProblems handles all problems for a single shard, which were detected
+// on shard.
+func (re *Engine) processShardProblems(ctx context.Context, shard *snapshot.Shard, problems []types.Problem) {
+	shardKey := shard.ShardKey
 	re.logger.DebugContext(ctx, "processing shard problems",
 		"database", shardKey.Database,
 		"tablegroup", shardKey.TableGroup,
@@ -132,7 +144,7 @@ func (re *Engine) processShardProblems(ctx context.Context, shardKey *clustermet
 	hasLeaderProblem := re.hasLeaderProblem(problems)
 
 	// Sort by priority and apply filtering logic
-	filteredProblems := re.filterAndPrioritize(ctx, problems)
+	filteredProblems := re.filterAndPrioritize(ctx, shard, problems)
 
 	// Attempt recoveries. Pooler-scoped problems run in parallel since each
 	// targets a distinct node and can take up to its action timeout (e.g. 60s
@@ -182,7 +194,7 @@ func (re *Engine) hasLeaderProblem(problems []types.Problem) bool {
 //     pooler-scoped fixes — fall through to per-pooler filtering
 //   - Otherwise, return the highest-priority ready problem per pooler
 //     (different poolers run in parallel)
-func (re *Engine) filterAndPrioritize(ctx context.Context, problems []types.Problem) []types.Problem {
+func (re *Engine) filterAndPrioritize(ctx context.Context, shard *snapshot.Shard, problems []types.Problem) []types.Problem {
 	// Alert-only problems can never execute, so they're dropped up front.
 	// They're still visible via the detected_problems gauge.
 	actionable := make([]types.Problem, 0, len(problems))
@@ -220,7 +232,7 @@ func (re *Engine) filterAndPrioritize(ctx context.Context, problems []types.Prob
 	// higher-priority is ready, so check readiness for all of them first.
 	var readyShardWide []types.Problem
 	for _, p := range shardWideProblems {
-		if readyAt, ready := re.readyToExecute(p); !ready {
+		if readyAt, ready := re.readyToExecute(p, shard); !ready {
 			re.recordGated(ctx, p, readyAt)
 		} else {
 			readyShardWide = append(readyShardWide, p)
@@ -258,7 +270,7 @@ func (re *Engine) filterAndPrioritize(ctx context.Context, problems []types.Prob
 
 	var filtered []types.Problem
 	for _, p := range candidates {
-		readyAt, ready := re.readyToExecute(p)
+		readyAt, ready := re.readyToExecute(p, shard)
 		if !ready {
 			re.recordGated(ctx, p, readyAt)
 			continue
@@ -392,7 +404,7 @@ func (re *Engine) attemptRecovery(ctx context.Context, problem types.Problem) {
 	// orchestrator may have acted; re-apply the failover gate to what was just
 	// re-detected. (Other actions' gate tracks first-seen state, so it isn't re-run.)
 	if rechecked.Code.IsFailoverProblem() {
-		if readyAt, ready := re.readyToExecute(rechecked.Problem); !ready {
+		if readyAt, ready := re.readyToExecute(rechecked.Problem, rechecked.Shard); !ready {
 			span.SetAttributes(attribute.String("result", "gated_after_recheck"), attribute.String("ready_at", readyAt.Format(time.RFC3339)))
 			re.logger.DebugContext(ctx, "deferring recovery: gate closed during refresh and recheck",
 				"problem_code", problem.Code, "entity_id", entityID, "ready_at", readyAt)
@@ -536,7 +548,9 @@ func (re *Engine) bootstrapPolicyLookup(ctx context.Context) func(string) *clust
 // collective recruitment backoff (independent orchs defer to a deterministic
 // slot derived from the shard's observed TermRevocation, escalating while
 // recruits churn against the same baseline; no observed revocation means act
-// immediately). Every other action uses the local grace period.
+// immediately). Every other action uses the local grace period. shard is the frozen
+// view the failover gate is judged on: the one the problem was detected on, or the
+// recheck's after a recheck.
 //
 // TODO: this failover-vs-everything-else split is a stopgap; each recovery
 // action should own its "may I act now?" gate so this selection dissolves.
@@ -551,9 +565,9 @@ func (re *Engine) bootstrapPolicyLookup(ctx context.Context) func(string) *clust
 // observer-derived ones (LeaderUnreachableByCohort, LeaderUnhealthy), whose
 // quorum-of-followers check is a different anti-false-positive mechanism.
 // Revisit if this causes false-positive failovers.
-func (re *Engine) readyToExecute(problem types.Problem) (readyAt time.Time, ready bool) {
+func (re *Engine) readyToExecute(problem types.Problem, shard *snapshot.Shard) (readyAt time.Time, ready bool) {
 	if problem.Code.IsFailoverProblem() {
-		return re.nextFailoverAttempt(problem.ShardKey)
+		return re.nextFailoverAttempt(shard)
 	}
 	return re.recoveryGracePeriodTracker.ShouldExecute(problem)
 }
@@ -561,18 +575,13 @@ func (re *Engine) readyToExecute(problem types.Problem) (readyAt time.Time, read
 // nextFailoverAttempt returns this orchestrator's earliest permitted failover
 // recruitment time for the shard and whether that time has arrived — the
 // decision logic lives in consensus.Coordinator.NextFailoverAttempt, which
-// this just supplies with the shard's pooler health states (via streamed
+// this just supplies with the frozen shard's health and clock (via streamed
 // health snapshots, no orch-to-orch RPC).
 //
 // Note: an orchestrator doesn't see its own just-written revocation until it
 // streams back, so it may briefly re-enter the failover gate right after
 // recruiting. Bounded by recheckProblem, the term CAS (a stale re-attempt
 // loses), and the next cycle observing the new revocation.
-func (re *Engine) nextFailoverAttempt(shardKey *clustermetadatapb.ShardKey) (readyAt time.Time, ready bool) {
-	poolers := store.FindPoolersInShard(re.poolerCache, shardKey)
-	healthStates := make([]*snapshot.PoolerHealthState, len(poolers))
-	for i, p := range poolers {
-		healthStates[i] = p.Health()
-	}
-	return re.coordinator.NextFailoverAttempt(healthStates, re.recruitmentBackoff)
+func (re *Engine) nextFailoverAttempt(shard *snapshot.Shard) (readyAt time.Time, ready bool) {
+	return re.coordinator.NextFailoverAttempt(shard.Poolers, shard.Now, re.recruitmentBackoff)
 }

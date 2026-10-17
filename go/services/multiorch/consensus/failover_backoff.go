@@ -59,12 +59,12 @@ func eligibleConsensusStatuses(cohort []*snapshot.PoolerHealthState) []*clusterm
 }
 
 // NextFailoverAttempt returns this orchestrator's earliest permitted failover
-// recruitment time for cohort and whether that time has arrived, per backoff.
+// recruitment time for cohort and whether that time has arrived as of now, per backoff.
 // Aggressive-first: acts immediately when no revocation is observed, or when
 // the observed one demonstrably targets a different, already-resolved
 // problem (see backoffRelevantRevocations); otherwise defers to the
 // revocation's deterministic collective backoff.
-func (c *Coordinator) NextFailoverAttempt(cohort []*snapshot.PoolerHealthState, backoff ha.BackoffSchedule) (readyAt time.Time, ready bool) {
+func (c *Coordinator) NextFailoverAttempt(cohort []*snapshot.PoolerHealthState, now time.Time, backoff ha.BackoffSchedule) (readyAt time.Time, ready bool) {
 	statuses := eligibleConsensusStatuses(cohort)
 	decision := commonconsensus.HighestDecidedRule(statuses)
 	rev := commonconsensus.HighestRevokedBelowTermRevocation(backoffRelevantRevocations(statuses, decision))
@@ -72,7 +72,7 @@ func (c *Coordinator) NextFailoverAttempt(cohort []*snapshot.PoolerHealthState, 
 		return time.Time{}, true
 	}
 	readyAt = backoff.NextAttempt(rev, c.GetCoordinatorID())
-	return readyAt, !time.Now().Before(readyAt)
+	return readyAt, !now.Before(readyAt)
 }
 
 // backoffRelevantRevocations returns every TermRevocation among statuses
