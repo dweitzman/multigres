@@ -294,7 +294,6 @@ func NewEngine(
 
 	engine.actionFactory = newActionFactory(
 		config,
-		engine.poolerCache,
 		rpcClient,
 		ts,
 		coordinator,

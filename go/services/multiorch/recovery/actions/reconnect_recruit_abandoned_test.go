@@ -91,9 +91,10 @@ func TestReconnectRecruitAbandonedAction(t *testing.T) {
 			CurrentPosition: &clustermetadatapb.PoolerPosition{Position: ruleAt(1, 1)},
 		}
 
-		action := NewReconnectRecruitAbandonedAction(fake, seed(t, leaderCurrentPosition(1)), slog.Default())
+		cache := seed(t, leaderCurrentPosition(1))
+		action := NewReconnectRecruitAbandonedAction(fake, slog.Default())
 
-		require.NoError(t, action.Execute(ctx, types.RecheckedProblem{Problem: problem}))
+		require.NoError(t, action.Execute(ctx, recheck(t, cache, problem)))
 		assert.Contains(t, fake.CallLog, "UpdateConsensusRule(multipooler-cell1-primary)",
 			"must advance the rule on the leader")
 		assert.Contains(t, fake.CallLog, "SetPrimary(multipooler-cell1-replica1)",
@@ -108,9 +109,10 @@ func TestReconnectRecruitAbandonedAction(t *testing.T) {
 		fake := rpcclient.NewFakeClient()
 		// Leader already at term 2: the highest known rule is not revoked by the
 		// follower's revocation, so no advance is needed — just reconnect.
-		action := NewReconnectRecruitAbandonedAction(fake, seed(t, leaderCurrentPosition(2)), slog.Default())
+		cache := seed(t, leaderCurrentPosition(2))
+		action := NewReconnectRecruitAbandonedAction(fake, slog.Default())
 
-		require.NoError(t, action.Execute(ctx, types.RecheckedProblem{Problem: problem}))
+		require.NoError(t, action.Execute(ctx, recheck(t, cache, problem)))
 		assert.NotContains(t, fake.CallLog, "UpdateConsensusRule(multipooler-cell1-primary)",
 			"must not advance when the rule already outranks the revocation")
 		assert.Contains(t, fake.CallLog, "SetPrimary(multipooler-cell1-replica1)",
@@ -132,9 +134,10 @@ func TestReconnectRecruitAbandonedAction(t *testing.T) {
 				LeaderId:   fixReplPrimaryID,
 			},
 		}}
-		action := NewReconnectRecruitAbandonedAction(fake, seed(t, undecided), slog.Default())
+		cache := seed(t, undecided)
+		action := NewReconnectRecruitAbandonedAction(fake, slog.Default())
 
-		err := action.Execute(ctx, types.RecheckedProblem{Problem: problem})
+		err := action.Execute(ctx, recheck(t, cache, problem))
 		require.Error(t, err)
 		assert.Equal(t, mtrpcpb.Code_FAILED_PRECONDITION, mterrors.Code(err))
 		assert.Contains(t, err.Error(), "undecided proposal")
@@ -149,9 +152,10 @@ func TestReconnectRecruitAbandonedAction(t *testing.T) {
 		fake.UpdateConsensusRuleResponses["multipooler-cell1-primary"] = &multipoolermanagerdatapb.UpdateConsensusRuleResponse{
 			CurrentPosition: &clustermetadatapb.PoolerPosition{Position: ruleAt(1, 0)},
 		}
-		action := NewReconnectRecruitAbandonedAction(fake, seed(t, leaderCurrentPosition(1)), slog.Default())
+		cache := seed(t, leaderCurrentPosition(1))
+		action := NewReconnectRecruitAbandonedAction(fake, slog.Default())
 
-		err := action.Execute(ctx, types.RecheckedProblem{Problem: problem})
+		err := action.Execute(ctx, recheck(t, cache, problem))
 		require.Error(t, err)
 		assert.Equal(t, mtrpcpb.Code_INTERNAL, mterrors.Code(err))
 		assert.Contains(t, err.Error(), "still short of the follower's revocation")
@@ -164,9 +168,10 @@ func TestReconnectRecruitAbandonedAction(t *testing.T) {
 		fake := rpcclient.NewFakeClient()
 		fake.Errors["multipooler-cell1-primary"] = errors.New("rpc boom")
 
-		action := NewReconnectRecruitAbandonedAction(fake, seed(t, leaderCurrentPosition(1)), slog.Default())
+		cache := seed(t, leaderCurrentPosition(1))
+		action := NewReconnectRecruitAbandonedAction(fake, slog.Default())
 
-		err := action.Execute(ctx, types.RecheckedProblem{Problem: problem})
+		err := action.Execute(ctx, recheck(t, cache, problem))
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "leader-led rule advance failed")
 		assert.Contains(t, err.Error(), "rpc boom")
@@ -178,9 +183,10 @@ func TestReconnectRecruitAbandonedAction(t *testing.T) {
 
 		// Leader already at term 2: no advance needed, so Execute proceeds straight
 		// to the failing SetPrimary.
-		action := NewReconnectRecruitAbandonedAction(fake, seed(t, leaderCurrentPosition(2)), slog.Default())
+		cache := seed(t, leaderCurrentPosition(2))
+		action := NewReconnectRecruitAbandonedAction(fake, slog.Default())
 
-		err := action.Execute(ctx, types.RecheckedProblem{Problem: problem})
+		err := action.Execute(ctx, recheck(t, cache, problem))
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "SetPrimary to reconnect stranded follower failed")
 		assert.Contains(t, err.Error(), "rpc boom")

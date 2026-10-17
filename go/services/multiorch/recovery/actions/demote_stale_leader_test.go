@@ -94,7 +94,7 @@ func makeDemoteScenarioPoolers(t *testing.T, poolerStore *store.PoolerCache) (st
 }
 
 func TestDemoteStaleLeaderAction_Metadata(t *testing.T) {
-	action := NewDemoteStaleLeaderAction(nil, nil, slog.Default())
+	action := NewDemoteStaleLeaderAction(nil, slog.Default())
 	md := action.Metadata()
 	assert.Equal(t, "DemoteStaleLeader", md.Name)
 	assert.True(t, md.Retryable)
@@ -102,7 +102,7 @@ func TestDemoteStaleLeaderAction_Metadata(t *testing.T) {
 }
 
 func TestDemoteStaleLeaderAction_RequiresHealthyLeader(t *testing.T) {
-	action := NewDemoteStaleLeaderAction(nil, nil, slog.Default())
+	action := NewDemoteStaleLeaderAction(nil, slog.Default())
 	// We are repairing a leader, so requiring a healthy one is the wrong precondition.
 	assert.False(t, action.RequiresHealthyLeader())
 }
@@ -121,7 +121,7 @@ func TestDemoteStaleLeaderAction_Execute(t *testing.T) {
 	poolerStore := store.NewTestCache(t)
 	staleLeaderID := makeDemoteScenarioPoolers(t, poolerStore)
 
-	action := NewDemoteStaleLeaderAction(fakeClient, poolerStore, slog.Default())
+	action := NewDemoteStaleLeaderAction(fakeClient, slog.Default())
 
 	problem := types.Problem{
 		Code: types.ProblemStaleLeader,
@@ -132,7 +132,7 @@ func TestDemoteStaleLeaderAction_Execute(t *testing.T) {
 		},
 		PoolerID: staleLeaderID,
 	}
-	require.NoError(t, action.Execute(ctx, types.RecheckedProblem{Problem: problem}))
+	require.NoError(t, action.Execute(ctx, recheck(t, poolerStore, problem)))
 
 	assert.Contains(t, fakeClient.CallLog, "SetPrimary(multipooler-cell1-stale-leader)")
 	assert.NotContains(t, fakeClient.CallLog, "DemoteStalePrimary(multipooler-cell1-stale-leader)")
@@ -174,13 +174,13 @@ func TestDemoteStaleLeaderAction_ExecuteNoCorrectLeader(t *testing.T) {
 		},
 	}, nil))
 
-	action := NewDemoteStaleLeaderAction(fakeClient, poolerStore, slog.Default())
+	action := NewDemoteStaleLeaderAction(fakeClient, slog.Default())
 
-	err := action.Execute(ctx, types.RecheckedProblem{Problem: types.Problem{
+	err := action.Execute(ctx, recheck(t, poolerStore, types.Problem{
 		Code:     types.ProblemStaleLeader,
 		ShardKey: shardKey,
 		PoolerID: staleLeaderID,
-	}})
+	}))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no consensus leader known")
 	assert.Empty(t, fakeClient.CallLog, "no RPC should be issued when there is no leader to demote toward")
@@ -221,12 +221,12 @@ func TestDemoteStaleLeaderAction_ExecuteRewindsTowardRuleNamedLeader(t *testing.
 		ConsensusStatus: replicaFollowingRule(replicaID, newID, 6),
 	}, nil))
 
-	action := NewDemoteStaleLeaderAction(fakeClient, ps, slog.Default())
-	require.NoError(t, action.Execute(ctx, types.RecheckedProblem{Problem: types.Problem{
+	action := NewDemoteStaleLeaderAction(fakeClient, slog.Default())
+	require.NoError(t, action.Execute(ctx, recheck(t, ps, types.Problem{
 		Code:     types.ProblemStaleLeader,
 		ShardKey: shardKey,
 		PoolerID: staleID,
-	}}))
+	})))
 
 	assert.Contains(t, fakeClient.CallLog, "SetPrimary(multipooler-cell1-stale-leader)")
 	req := fakeClient.SetPrimaryRequests["multipooler-cell1-stale-leader"]
@@ -255,12 +255,12 @@ func TestDemoteStaleLeaderAction_ExecuteNoOpWhenNodeIsCurrentLeader(t *testing.T
 		ConsensusStatus: selfLeaderRule(nodeID, 7),
 	}, nil))
 
-	action := NewDemoteStaleLeaderAction(fakeClient, ps, slog.Default())
-	require.NoError(t, action.Execute(ctx, types.RecheckedProblem{Problem: types.Problem{
+	action := NewDemoteStaleLeaderAction(fakeClient, slog.Default())
+	require.NoError(t, action.Execute(ctx, recheck(t, ps, types.Problem{
 		Code:     types.ProblemStaleLeader,
 		ShardKey: shardKey,
 		PoolerID: nodeID,
-	}}))
+	})))
 
 	assert.Empty(t, fakeClient.CallLog,
 		"no SetPrimary RPC when the flagged node is actually the current consensus leader")

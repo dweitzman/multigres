@@ -25,13 +25,11 @@ import (
 	"github.com/multigres/multigres/go/services/multiorch/recovery/actions"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/analysis"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
-	"github.com/multigres/multigres/go/services/multiorch/store"
 )
 
 // actionFactory creates recovery actions with all necessary dependencies.
 type actionFactory struct {
 	config      *config.Config
-	poolerStore *store.PoolerCache
 	rpcClient   rpcclient.MultipoolerClient
 	topoStore   topoclient.Store
 	coordinator *consensus.Coordinator
@@ -41,7 +39,6 @@ type actionFactory struct {
 // newActionFactory creates a factory for recovery actions.
 func newActionFactory(
 	cfg *config.Config,
-	poolerStore *store.PoolerCache,
 	rpcClient rpcclient.MultipoolerClient,
 	topoStore topoclient.Store,
 	coordinator *consensus.Coordinator,
@@ -52,7 +49,6 @@ func newActionFactory(
 	}
 	return &actionFactory{
 		config:      cfg,
-		poolerStore: poolerStore,
 		rpcClient:   rpcClient,
 		topoStore:   topoStore,
 		coordinator: coordinator,
@@ -62,27 +58,27 @@ func newActionFactory(
 
 // NewShardInitAction creates a shard initialization action.
 func (f *actionFactory) NewShardInitAction() types.RecoveryAction {
-	return actions.NewShardInitAction(f.config, f.coordinator, f.poolerStore, f.topoStore, f.logger)
+	return actions.NewShardInitAction(f.config, f.coordinator, f.topoStore, f.logger)
 }
 
 // NewAppointLeaderAction creates an appoint leader action.
 func (f *actionFactory) NewAppointLeaderAction() types.RecoveryAction {
-	return actions.NewAppointLeaderAction(f.config, f.coordinator, f.poolerStore, f.logger, f.AvailabilityPolicy().PreRecheckRefreshTimeout)
+	return actions.NewAppointLeaderAction(f.config, f.coordinator, f.logger, f.AvailabilityPolicy().PreRecheckRefreshTimeout)
 }
 
 // NewFixReplicationAction creates a fix replication action.
 func (f *actionFactory) NewFixReplicationAction() types.RecoveryAction {
-	return actions.NewFixReplicationAction(f.config, f.rpcClient, f.poolerStore, f.logger)
+	return actions.NewFixReplicationAction(f.config, f.rpcClient, f.logger)
 }
 
 // NewDemoteStaleLeaderAction creates an action to demote a stale primary.
 func (f *actionFactory) NewDemoteStaleLeaderAction() types.RecoveryAction {
-	return actions.NewDemoteStaleLeaderAction(f.rpcClient, f.poolerStore, f.logger)
+	return actions.NewDemoteStaleLeaderAction(f.rpcClient, f.logger)
 }
 
 // NewReconcileCohortAction creates an action to add or remove a cohort member.
 func (f *actionFactory) NewReconcileCohortAction() types.RecoveryAction {
-	return actions.NewReconcileCohortAction(f.rpcClient, f.poolerStore, f.logger)
+	return actions.NewReconcileCohortAction(f.rpcClient, f.logger)
 }
 
 // NewAlertOnlyAction creates a no-op action for non-actionable problems (e.g.
@@ -94,7 +90,7 @@ func (f *actionFactory) NewAlertOnlyAction() types.RecoveryAction {
 // NewReconnectRecruitAbandonedAction creates an action to reconnect a follower
 // stranded by an abandoned recruit via a leader-led no-op rule advance.
 func (f *actionFactory) NewReconnectRecruitAbandonedAction() types.RecoveryAction {
-	return actions.NewReconnectRecruitAbandonedAction(f.rpcClient, f.poolerStore, f.logger)
+	return actions.NewReconnectRecruitAbandonedAction(f.rpcClient, f.logger)
 }
 
 // AvailabilityPolicy returns the policy built from the factory's current

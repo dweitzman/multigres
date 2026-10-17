@@ -109,12 +109,12 @@ func makePoolerState(cell, name, db, tableGroup, shard string, initialized bool,
 	}, nil)
 }
 
-func newTestAction(t *testing.T, coord shardInitCoordinator, poolerStore *store.PoolerCache, ts topoclient.Store) *ShardInitAction {
+func newTestAction(t *testing.T, coord shardInitCoordinator, ts topoclient.Store) *ShardInitAction {
 	t.Helper()
 	if ts == nil {
 		ts = memorytopo.NewServer(t.Context(), "cell1")
 	}
-	return NewShardInitAction(config.NewTestConfig(), coord, poolerStore, ts, slog.Default())
+	return NewShardInitAction(config.NewTestConfig(), coord, ts, slog.Default())
 }
 
 func newPoolerStore(t *testing.T) *store.PoolerCache {
@@ -125,7 +125,7 @@ func newPoolerStore(t *testing.T) *store.PoolerCache {
 // --- Interface / metadata ---
 
 func TestShardInitAction_Metadata(t *testing.T) {
-	action := NewShardInitAction(config.NewTestConfig(), nil, nil, nil, slog.Default())
+	action := NewShardInitAction(config.NewTestConfig(), nil, nil, slog.Default())
 	m := action.Metadata()
 	assert.Equal(t, "ShardInit", m.Name)
 	assert.True(t, m.Retryable)
@@ -133,11 +133,11 @@ func TestShardInitAction_Metadata(t *testing.T) {
 }
 
 func TestShardInitAction_RequiresHealthyLeader(t *testing.T) {
-	assert.False(t, NewShardInitAction(config.NewTestConfig(), nil, nil, nil, slog.Default()).RequiresHealthyLeader())
+	assert.False(t, NewShardInitAction(config.NewTestConfig(), nil, nil, slog.Default()).RequiresHealthyLeader())
 }
 
 func TestShardInitAction_GracePeriod(t *testing.T) {
-	action := NewShardInitAction(config.NewTestConfig(), nil, nil, nil, slog.Default())
+	action := NewShardInitAction(config.NewTestConfig(), nil, nil, slog.Default())
 	assert.Nil(t, action.GracePeriod(), "bootstrapping an uninitialized shard has nothing to defer for")
 }
 
@@ -150,12 +150,12 @@ func TestShardInitAction_GetInitializedPoolers_FiltersByShard(t *testing.T) {
 	store.SeedCache(t, ps, makePoolerState("cell1", "other", "otherdb", "default", "0", true, nil))
 	store.SeedCache(t, ps, makePoolerState("cell1", "shard1", "testdb", "default", "1", true, nil))
 
-	action := newTestAction(t, nil, ps, nil)
-	initialized, cohortEstablished := action.getInitializedPoolers(testShardInitShardKey)
+	action := newTestAction(t, nil, nil)
+	initialized, cohortEstablished := action.getInitializedPoolers(recheck(t, ps, types.Problem{ShardKey: testShardInitShardKey}).Shard)
 
 	assert.False(t, cohortEstablished)
 	require.Len(t, initialized, 2)
-	names := []string{initialized[0].Health().Multipooler.Id.Name, initialized[1].Health().Multipooler.Id.Name}
+	names := []string{initialized[0].Multipooler.Id.Name, initialized[1].Multipooler.Id.Name}
 	assert.ElementsMatch(t, []string{"p1", "p2"}, names)
 }
 
@@ -171,12 +171,12 @@ func TestShardInitAction_GetInitializedPoolers_ExcludesStaleObservation(t *testi
 	store.SeedCache(t, ps, stale)
 	store.SeedCache(t, ps, makePoolerState("cell1", "p2", "testdb", "default", "0", true, nil))
 
-	action := newTestAction(t, nil, ps, nil)
-	initialized, cohortEstablished := action.getInitializedPoolers(testShardInitShardKey)
+	action := newTestAction(t, nil, nil)
+	initialized, cohortEstablished := action.getInitializedPoolers(recheck(t, ps, types.Problem{ShardKey: testShardInitShardKey}).Shard)
 
 	assert.False(t, cohortEstablished)
 	require.Len(t, initialized, 1)
-	assert.Equal(t, "p2", initialized[0].Health().Multipooler.Id.Name)
+	assert.Equal(t, "p2", initialized[0].Multipooler.Id.Name)
 }
 
 func TestShardInitAction_GetInitializedPoolers_CohortAlreadyEstablished(t *testing.T) {
@@ -187,8 +187,8 @@ func TestShardInitAction_GetInitializedPoolers_CohortAlreadyEstablished(t *testi
 	store.SeedCache(t, ps, makePoolerState("cell1", "p1", "testdb", "default", "0", true, existingCohort))
 	store.SeedCache(t, ps, makePoolerState("cell1", "p2", "testdb", "default", "0", true, nil))
 
-	action := newTestAction(t, nil, ps, nil)
-	initialized, cohortEstablished := action.getInitializedPoolers(testShardInitShardKey)
+	action := newTestAction(t, nil, nil)
+	initialized, cohortEstablished := action.getInitializedPoolers(recheck(t, ps, types.Problem{ShardKey: testShardInitShardKey}).Shard)
 
 	assert.True(t, cohortEstablished)
 	assert.Nil(t, initialized)
@@ -225,8 +225,8 @@ func TestShardInitAction_GetInitializedPoolers_CohortEstablishedViaUndecidedProp
 	store.SeedCache(t, ps, p1)
 	store.SeedCache(t, ps, makePoolerState("cell1", "p2", "testdb", "default", "0", true, nil))
 
-	action := newTestAction(t, nil, ps, nil)
-	initialized, cohortEstablished := action.getInitializedPoolers(testShardInitShardKey)
+	action := newTestAction(t, nil, nil)
+	initialized, cohortEstablished := action.getInitializedPoolers(recheck(t, ps, types.Problem{ShardKey: testShardInitShardKey}).Shard)
 
 	assert.True(t, cohortEstablished)
 	assert.Nil(t, initialized)
@@ -236,8 +236,8 @@ func TestShardInitAction_GetInitializedPoolers_NotYetInitialized(t *testing.T) {
 	ps := newPoolerStore(t)
 	store.SeedCache(t, ps, makePoolerState("cell1", "p1", "testdb", "default", "0", false, nil))
 
-	action := newTestAction(t, nil, ps, nil)
-	initialized, cohortEstablished := action.getInitializedPoolers(testShardInitShardKey)
+	action := newTestAction(t, nil, nil)
+	initialized, cohortEstablished := action.getInitializedPoolers(recheck(t, ps, types.Problem{ShardKey: testShardInitShardKey}).Shard)
 
 	assert.False(t, cohortEstablished)
 	assert.Empty(t, initialized)
@@ -250,8 +250,8 @@ func TestShardInitAction_Execute_NoInitializedPoolers(t *testing.T) {
 	// Pooler exists but is not initialized
 	store.SeedCache(t, ps, makePoolerState("cell1", "p1", "testdb", "default", "0", false, nil))
 
-	action := newTestAction(t, nil, ps, nil)
-	err := action.Execute(t.Context(), types.RecheckedProblem{Problem: types.Problem{ShardKey: testShardInitShardKey}})
+	action := newTestAction(t, nil, nil)
+	err := action.Execute(t.Context(), recheck(t, ps, types.Problem{ShardKey: testShardInitShardKey}))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no initialized poolers found for shard")
 }
@@ -264,8 +264,8 @@ func TestShardInitAction_Execute_CohortAlreadyEstablished(t *testing.T) {
 	store.SeedCache(t, ps, makePoolerState("cell1", "p1", "testdb", "default", "0", true, existingCohort))
 
 	coord := &mockCoordinator{}
-	action := newTestAction(t, coord, ps, nil)
-	err := action.Execute(t.Context(), types.RecheckedProblem{Problem: types.Problem{ShardKey: testShardInitShardKey}})
+	action := newTestAction(t, coord, nil)
+	err := action.Execute(t.Context(), recheck(t, ps, types.Problem{ShardKey: testShardInitShardKey}))
 
 	require.NoError(t, err)
 	assert.Empty(t, coord.appointedCohort, "AppointInitialLeader must not be called when cohort is already established")
@@ -276,8 +276,8 @@ func TestShardInitAction_Execute_GetBootstrapPolicyError(t *testing.T) {
 	store.SeedCache(t, ps, makePoolerState("cell1", "p1", "testdb", "default", "0", true, nil))
 
 	coord := &mockCoordinator{bootstrapPolicyErr: errors.New("etcd unreachable")}
-	action := newTestAction(t, coord, ps, nil)
-	err := action.Execute(t.Context(), types.RecheckedProblem{Problem: types.Problem{ShardKey: testShardInitShardKey}})
+	action := newTestAction(t, coord, nil)
+	err := action.Execute(t.Context(), recheck(t, ps, types.Problem{ShardKey: testShardInitShardKey}))
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to load durability policy")
@@ -290,8 +290,8 @@ func TestShardInitAction_Execute_InsufficientInitializedPoolers(t *testing.T) {
 	store.SeedCache(t, ps, makePoolerState("cell1", "p1", "testdb", "default", "0", true, nil))
 
 	coord := &mockCoordinator{bootstrapPolicy: topoclient.AtLeastN(2)}
-	action := newTestAction(t, coord, ps, nil)
-	err := action.Execute(t.Context(), types.RecheckedProblem{Problem: types.Problem{ShardKey: testShardInitShardKey}})
+	action := newTestAction(t, coord, nil)
+	err := action.Execute(t.Context(), recheck(t, ps, types.Problem{ShardKey: testShardInitShardKey}))
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "insufficient initialized poolers")
@@ -307,8 +307,8 @@ func TestShardInitAction_Execute_NotFailureSafe(t *testing.T) {
 	store.SeedCache(t, ps, makePoolerState("cell1", "p2", "testdb", "default", "0", true, nil))
 
 	coord := &mockCoordinator{bootstrapPolicy: topoclient.AtLeastN(2)}
-	action := newTestAction(t, coord, ps, nil)
-	err := action.Execute(t.Context(), types.RecheckedProblem{Problem: types.Problem{ShardKey: testShardInitShardKey}})
+	action := newTestAction(t, coord, nil)
+	err := action.Execute(t.Context(), recheck(t, ps, types.Problem{ShardKey: testShardInitShardKey}))
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "aren't failure-safe")
@@ -325,8 +325,8 @@ func TestShardInitAction_Execute_NotFailureSafe_AllowedByConfig(t *testing.T) {
 
 	coord := &mockCoordinator{bootstrapPolicy: topoclient.AtLeastN(2)}
 	cfg := config.NewTestConfig(config.WithAllowUnsafeInitialCohort(true))
-	action := NewShardInitAction(cfg, coord, ps, memorytopo.NewServer(t.Context(), "cell1"), slog.Default())
-	err := action.Execute(t.Context(), types.RecheckedProblem{Problem: types.Problem{ShardKey: testShardInitShardKey}})
+	action := NewShardInitAction(cfg, coord, memorytopo.NewServer(t.Context(), "cell1"), slog.Default())
+	err := action.Execute(t.Context(), recheck(t, ps, types.Problem{ShardKey: testShardInitShardKey}))
 
 	require.NoError(t, err)
 	require.Len(t, coord.appointedCohort, 2)
@@ -342,9 +342,9 @@ func TestShardInitAction_Execute_Success(t *testing.T) {
 
 	coord := &mockCoordinator{bootstrapPolicy: topoclient.AtLeastN(2)}
 	ts := memorytopo.NewServer(t.Context(), "cell1")
-	action := newTestAction(t, coord, ps, ts)
+	action := newTestAction(t, coord, ts)
 
-	err := action.Execute(t.Context(), types.RecheckedProblem{Problem: types.Problem{ShardKey: testShardInitShardKey}})
+	err := action.Execute(t.Context(), recheck(t, ps, types.Problem{ShardKey: testShardInitShardKey}))
 	require.NoError(t, err)
 
 	require.Len(t, coord.appointedCohort, 3)
@@ -381,8 +381,8 @@ func TestShardInitAction_Execute_ClaimAfterCrash(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, won)
 
-	action := newTestAction(t, coord, ps, ts)
-	err = action.Execute(t.Context(), types.RecheckedProblem{Problem: types.Problem{ShardKey: testShardInitShardKey}})
+	action := newTestAction(t, coord, ts)
+	err = action.Execute(t.Context(), recheck(t, ps, types.Problem{ShardKey: testShardInitShardKey}))
 	require.NoError(t, err)
 
 	// The appointed cohort should use the etcd-committed names, not the pooler store names.
@@ -414,8 +414,8 @@ func TestShardInitAction_Execute_CommittedCohortNotFailureSafe(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, won)
 
-	action := newTestAction(t, coord, ps, ts)
-	err = action.Execute(t.Context(), types.RecheckedProblem{Problem: types.Problem{ShardKey: testShardInitShardKey}})
+	action := newTestAction(t, coord, ts)
+	err = action.Execute(t.Context(), recheck(t, ps, types.Problem{ShardKey: testShardInitShardKey}))
 
 	require.EqualError(t, err,
 		"committed cohort (2 members, all reachable) satisfies the durability policy but isn't failure-safe and is fixed for this shard's init claim; bootstrap via an externally-certified rule change (multiadmin) instead")
@@ -446,8 +446,8 @@ func TestShardInitAction_Execute_CommittedCohortMemberUnreachable(t *testing.T) 
 	require.NoError(t, err)
 	require.True(t, won)
 
-	action := newTestAction(t, coord, ps, ts)
-	err = action.Execute(t.Context(), types.RecheckedProblem{Problem: types.Problem{ShardKey: testShardInitShardKey}})
+	action := newTestAction(t, coord, ts)
+	err = action.Execute(t.Context(), recheck(t, ps, types.Problem{ShardKey: testShardInitShardKey}))
 
 	require.EqualError(t, err,
 		"committed cohort (2 of 3 reachable) satisfies the durability policy but isn't failure-safe while a member is unreachable; waiting for it to return")
@@ -474,8 +474,8 @@ func TestShardInitAction_Execute_ClaimLostToDifferentCoordinator(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, won)
 
-	action := newTestAction(t, coord, ps, ts)
-	err = action.Execute(t.Context(), types.RecheckedProblem{Problem: types.Problem{ShardKey: testShardInitShardKey}})
+	action := newTestAction(t, coord, ts)
+	err = action.Execute(t.Context(), recheck(t, ps, types.Problem{ShardKey: testShardInitShardKey}))
 
 	require.NoError(t, err)
 	assert.Empty(t, coord.appointedCohort, "AppointInitialLeader must not be called when another coordinator owns the claim")
@@ -491,9 +491,9 @@ func TestShardInitAction_Execute_AppointInitialLeaderError(t *testing.T) {
 		bootstrapPolicy:         topoclient.AtLeastN(2),
 		appointInitialLeaderErr: errors.New("consensus failed"),
 	}
-	action := newTestAction(t, coord, ps, memorytopo.NewServer(t.Context(), "cell1"))
+	action := newTestAction(t, coord, memorytopo.NewServer(t.Context(), "cell1"))
 
-	err := action.Execute(t.Context(), types.RecheckedProblem{Problem: types.Problem{ShardKey: testShardInitShardKey}})
+	err := action.Execute(t.Context(), recheck(t, ps, types.Problem{ShardKey: testShardInitShardKey}))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to appoint initial leader")
 	assert.Contains(t, err.Error(), "consensus failed")

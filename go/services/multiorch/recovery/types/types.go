@@ -20,10 +20,10 @@ import (
 	"context"
 	"time"
 
-	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/topoclient"
 	commontypes "github.com/multigres/multigres/go/common/types"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 )
 
 // CheckName uniquely identifies a health check.
@@ -237,19 +237,17 @@ type GracePeriodConfig struct {
 	MaxJitter time.Duration
 }
 
-// RecheckedProblem pairs a Problem with the exact consensus rule the engine's
-// pre-execution recheck just re-verified it against (the same shard snapshot
-// that redetected the problem — see recovery_loop.go's recheckProblem). The
-// two are bundled deliberately: an action performing a CAS-anchored mutation
-// must judge safety and anchor its CAS on the same rule, or the two could
-// silently disagree. Passing them as independent parameters would let a
-// caller pass a mismatched pair and still compile; this makes that
-// structurally impossible — the only way to obtain one is from a successful
-// recheck. HighestIntendedRule is empty if no rule was known for the shard at
-// recheck time; actions that don't mutate the consensus rule can ignore it.
+// RecheckedProblem pairs a Problem with the frozen shard snapshot the engine's
+// pre-execution recheck just re-verified it against (the snapshot that
+// redetected the problem — see recovery_loop.go's recheckProblem). The two are
+// bundled deliberately: an action must read pooler health, the leader and the
+// highest intended rule from that same snapshot, so its safety judgment and any
+// CAS-anchored mutation agree. The only way to obtain one is from a successful
+// recheck. Shard.HighestIntendedRule() is empty if no rule was known at recheck
+// time; actions that don't mutate the consensus rule can ignore it.
 type RecheckedProblem struct {
 	Problem
-	HighestIntendedRule commonconsensus.RuleTransition
+	Shard *snapshot.Shard
 }
 
 // RecoveryAction is a function that fixes a problem.

@@ -26,14 +26,13 @@ import (
 	"github.com/multigres/multigres/go/services/multiorch/config"
 	"github.com/multigres/multigres/go/services/multiorch/consensus"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/analysis"
-	"github.com/multigres/multigres/go/services/multiorch/store"
 )
 
 func TestActionFactory_BuildsAppointLeaderFromThePolicy(t *testing.T) {
 	ts, _ := memorytopo.NewServerAndFactory(t.Context(), "cell1")
 	rpcClient := &rpcclient.FakeClient{}
 	coord := consensus.NewCoordinator(nil, ts, rpcClient, slog.Default())
-	factory := newActionFactory(nil, store.NewTestCache(t), rpcClient, ts, coord, slog.Default())
+	factory := newActionFactory(nil, rpcClient, ts, coord, slog.Default())
 
 	metadata := factory.NewAppointLeaderAction().Metadata()
 

@@ -25,7 +25,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/rpcclient"
 	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/common/topoclient/memorytopo"
@@ -37,7 +36,7 @@ import (
 )
 
 func TestReconcileCohortAction_Metadata(t *testing.T) {
-	action := NewReconcileCohortAction(nil, nil, slog.Default())
+	action := NewReconcileCohortAction(nil, slog.Default())
 	md := action.Metadata()
 	assert.Equal(t, "ReconcileCohort", md.Name)
 	assert.True(t, md.Retryable)
@@ -52,15 +51,13 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 	shardKey := &clustermetadatapb.ShardKey{Database: "testdb", TableGroup: "default", Shard: "0"}
 
 	// rule is the highest known consensus position setupStore's primary
-	// publishes. Tests pass it as RecheckedProblem.HighestIntendedRule to stand
-	// in for what the engine's recheck would have supplied — Execute no
-	// longer derives it from the store itself.
+	// publishes; the rechecked snapshot derives it from there.
 	rule := &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{
 		RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 3, LeaderSubterm: 7},
 		LeaderId:   primaryID,
 	}}
 
-	setupStore := func(t *testing.T, fakeClient *rpcclient.FakeClient) (*store.PoolerCache, func()) {
+	setupStore := func(t *testing.T, fakeClient *rpcclient.FakeClient, published *clustermetadatapb.RulePosition) (*store.PoolerCache, func()) {
 		t.Helper()
 		ts, _ := memorytopo.NewServerAndFactory(ctx, "cell1")
 		ps := store.NewTestCache(t)
@@ -77,7 +74,7 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 			ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 				Id:              primaryID,
 				TermRevocation:  &clustermetadatapb.TermRevocation{RevokedBelowTerm: 3},
-				CurrentPosition: &clustermetadatapb.PoolerPosition{Position: rule},
+				CurrentPosition: &clustermetadatapb.PoolerPosition{Position: published},
 			},
 		}, nil))
 		store.SeedCache(t, ps, store.NewPooler(&multiorchdatapb.PoolerHealthState{
@@ -105,15 +102,15 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 				"multipooler-cell1-primary": {},
 			},
 		}
-		ps, cleanup := setupStore(t, fakeClient)
+		ps, cleanup := setupStore(t, fakeClient, rule)
 		defer cleanup()
 
-		action := NewReconcileCohortAction(fakeClient, ps, slog.Default())
-		err := action.Execute(ctx, types.RecheckedProblem{Problem: types.Problem{
+		action := NewReconcileCohortAction(fakeClient, slog.Default())
+		err := action.Execute(ctx, recheck(t, ps, types.Problem{
 			Code:     types.ProblemPoolerNotInCohort,
 			ShardKey: shardKey,
 			PoolerID: replicaID,
-		}, HighestIntendedRule: commonconsensus.NewRuleTransition(rule)})
+		}))
 
 		require.NoError(t, err)
 		assert.Contains(t, fakeClient.CallLog, "UpdateConsensusRule(multipooler-cell1-primary)")
@@ -156,15 +153,15 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 				"multipooler-cell1-primary": {},
 			},
 		}
-		ps, cleanup := setupStore(t, fakeClient)
+		ps, cleanup := setupStore(t, fakeClient, rule)
 		defer cleanup()
 
-		action := NewReconcileCohortAction(fakeClient, ps, slog.Default())
-		err := action.Execute(ctx, types.RecheckedProblem{Problem: types.Problem{
+		action := NewReconcileCohortAction(fakeClient, slog.Default())
+		err := action.Execute(ctx, recheck(t, ps, types.Problem{
 			Code:     types.ProblemCohortMemberIneligible,
 			ShardKey: shardKey,
 			PoolerID: replicaID,
-		}, HighestIntendedRule: commonconsensus.NewRuleTransition(rule)})
+		}))
 
 		require.NoError(t, err)
 		assert.Contains(t, fakeClient.CallLog, "UpdateConsensusRule(multipooler-cell1-primary)")
@@ -178,14 +175,21 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 		ts, _ := memorytopo.NewServerAndFactory(ctx, "cell1")
 		defer ts.Close()
 		ps := store.NewTestCache(t)
-		// No poolers added to the store — FindPoolerByID will fail.
+		// Only the leader is known; the target pooler is absent from the snapshot.
+		store.SeedCache(t, ps, store.NewPooler(&multiorchdatapb.PoolerHealthState{
+			Multipooler: &clustermetadatapb.Multipooler{Id: primaryID, ShardKey: shardKey},
+			ConsensusStatus: &clustermetadatapb.ConsensusStatus{
+				Id:              primaryID,
+				CurrentPosition: &clustermetadatapb.PoolerPosition{Position: rule},
+			},
+		}, nil))
 
-		action := NewReconcileCohortAction(fakeClient, ps, slog.Default())
-		err := action.Execute(ctx, types.RecheckedProblem{Problem: types.Problem{
+		action := NewReconcileCohortAction(fakeClient, slog.Default())
+		err := action.Execute(ctx, recheck(t, ps, types.Problem{
 			Code:     types.ProblemPoolerNotInCohort,
 			ShardKey: shardKey,
 			PoolerID: replicaID,
-		}, HighestIntendedRule: commonconsensus.NewRuleTransition(rule)})
+		}))
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "find target pooler")
@@ -213,15 +217,15 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 				"multipooler-cell1-primary": {},
 			},
 		}
-		ps, cleanup := setupStore(t, fakeClient)
+		ps, cleanup := setupStore(t, fakeClient, rule)
 		defer cleanup()
 
-		action := NewReconcileCohortAction(fakeClient, ps, slog.Default())
-		err := action.Execute(ctx, types.RecheckedProblem{Problem: types.Problem{
+		action := NewReconcileCohortAction(fakeClient, slog.Default())
+		err := action.Execute(ctx, recheck(t, ps, types.Problem{
 			Code:     types.ProblemPoolerNotInCohort,
 			ShardKey: shardKey,
 			PoolerID: replicaID,
-		}, HighestIntendedRule: commonconsensus.NewRuleTransition(rule)})
+		}))
 
 		require.NoError(t, err)
 		assert.Contains(t, fakeClient.CallLog, "UpdateConsensusRule(multipooler-cell1-primary)")
@@ -229,20 +233,19 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 	})
 
 	t.Run("returns error when no consensus rule is known for the shard", func(t *testing.T) {
-		// HighestIntendedRule is empty — the engine's recheck found no rule for the
-		// shard (e.g. no poolers ever reported one). Execute trusts that
-		// verdict directly rather than re-deriving it from the store.
+		// The rechecked snapshot has no rule for the shard (e.g. no poolers ever
+		// reported one). Execute trusts that verdict.
 		fakeClient := &rpcclient.FakeClient{}
 		ts, _ := memorytopo.NewServerAndFactory(ctx, "cell1")
 		defer ts.Close()
 		ps := store.NewTestCache(t)
 
-		action := NewReconcileCohortAction(fakeClient, ps, slog.Default())
-		err := action.Execute(ctx, types.RecheckedProblem{Problem: types.Problem{
+		action := NewReconcileCohortAction(fakeClient, slog.Default())
+		err := action.Execute(ctx, recheck(t, ps, types.Problem{
 			Code:     types.ProblemPoolerNotInCohort,
 			ShardKey: shardKey,
 			PoolerID: replicaID,
-		}})
+		}))
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "no consensus rule known")
@@ -276,12 +279,12 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 			},
 		}, nil))
 
-		action := NewReconcileCohortAction(fakeClient, ps, slog.Default())
-		err := action.Execute(ctx, types.RecheckedProblem{Problem: types.Problem{
+		action := NewReconcileCohortAction(fakeClient, slog.Default())
+		err := action.Execute(ctx, recheck(t, ps, types.Problem{
 			Code:     types.ProblemPoolerNotInCohort,
 			ShardKey: shardKey,
 			PoolerID: replicaID,
-		}, HighestIntendedRule: commonconsensus.NewRuleTransition(rule)})
+		}))
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "does not look able to commit writes right now")
@@ -298,15 +301,15 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 				"multipooler-cell1-primary": errors.New("rule CAS rejected"),
 			},
 		}
-		ps, cleanup := setupStore(t, fakeClient)
+		ps, cleanup := setupStore(t, fakeClient, rule)
 		defer cleanup()
 
-		action := NewReconcileCohortAction(fakeClient, ps, slog.Default())
-		err := action.Execute(ctx, types.RecheckedProblem{Problem: types.Problem{
+		action := NewReconcileCohortAction(fakeClient, slog.Default())
+		err := action.Execute(ctx, recheck(t, ps, types.Problem{
 			Code:     types.ProblemPoolerNotInCohort,
 			ShardKey: shardKey,
 			PoolerID: replicaID,
-		}, HighestIntendedRule: commonconsensus.NewRuleTransition(rule)})
+		}))
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "UpdateConsensusRule failed")
@@ -327,15 +330,15 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 			},
 		}
 		fakeClient := &rpcclient.FakeClient{}
-		ps, cleanup := setupStore(t, fakeClient)
+		ps, cleanup := setupStore(t, fakeClient, undecided)
 		defer cleanup()
 
-		action := NewReconcileCohortAction(fakeClient, ps, slog.Default())
-		err := action.Execute(ctx, types.RecheckedProblem{Problem: types.Problem{
+		action := NewReconcileCohortAction(fakeClient, slog.Default())
+		err := action.Execute(ctx, recheck(t, ps, types.Problem{
 			Code:     types.ProblemPoolerNotInCohort,
 			ShardKey: shardKey,
 			PoolerID: replicaID,
-		}, HighestIntendedRule: commonconsensus.NewRuleTransition(undecided)})
+		}))
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "undecided rule proposal")
@@ -351,15 +354,15 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 				}},
 			},
 		}
-		ps, cleanup := setupStore(t, fakeClient)
+		ps, cleanup := setupStore(t, fakeClient, rule)
 		defer cleanup()
 
-		action := NewReconcileCohortAction(fakeClient, ps, slog.Default())
-		err := action.Execute(ctx, types.RecheckedProblem{Problem: types.Problem{
+		action := NewReconcileCohortAction(fakeClient, slog.Default())
+		err := action.Execute(ctx, recheck(t, ps, types.Problem{
 			Code:     types.ProblemReplicaNotReplicating,
 			ShardKey: shardKey,
 			PoolerID: replicaID,
-		}, HighestIntendedRule: commonconsensus.NewRuleTransition(rule)})
+		}))
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "unsupported problem code")

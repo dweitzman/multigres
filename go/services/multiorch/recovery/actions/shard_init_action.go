@@ -30,7 +30,6 @@ import (
 	"github.com/multigres/multigres/go/services/multiorch/config"
 	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
-	"github.com/multigres/multigres/go/services/multiorch/store"
 )
 
 // shardInitCoordinator is the subset of consensus.Coordinator used by ShardInitAction.
@@ -45,7 +44,7 @@ var _ types.RecoveryAction = (*ShardInitAction)(nil)
 
 // ShardInitAction handles Phase 2 of shard bootstrap: the first backup has already
 // been created and all poolers have restored from it. This action:
-//  1. Reads the pooler store to collect initialized poolers and verify no cohort
+//  1. Reads the rechecked shard snapshot to collect initialized poolers and verify no cohort
 //     is established yet
 //  2. Ensures enough initialized poolers are available to satisfy the durability policy
 //  3. Claims the exclusive right to initialize via topoStore.ClaimShardInitialization
@@ -53,7 +52,6 @@ var _ types.RecoveryAction = (*ShardInitAction)(nil)
 type ShardInitAction struct {
 	config      *config.Config
 	coordinator shardInitCoordinator
-	poolerStore *store.PoolerCache
 	topoStore   topoclient.Store
 	logger      *slog.Logger
 }
@@ -62,14 +60,12 @@ type ShardInitAction struct {
 func NewShardInitAction(
 	cfg *config.Config,
 	coordinator shardInitCoordinator,
-	poolerStore *store.PoolerCache,
 	topoStore topoclient.Store,
 	logger *slog.Logger,
 ) *ShardInitAction {
 	return &ShardInitAction{
 		config:      cfg,
 		coordinator: coordinator,
-		poolerStore: poolerStore,
 		topoStore:   topoStore,
 		logger:      logger,
 	}
@@ -83,10 +79,11 @@ func (a *ShardInitAction) Execute(ctx context.Context, rechecked types.Rechecked
 		"tablegroup", problem.ShardKey.TableGroup,
 		"shard", problem.ShardKey.Shard)
 
-	// The recovery loop force-polls all poolers before calling Execute, so the pooler
-	// store holds fresh state. getInitializedPoolers reads that state: it returns nil
-	// if the cohort is already established, or the list of initialized poolers otherwise.
-	initializedPoolers, cohortEstablished := a.getInitializedPoolers(problem.ShardKey)
+	// The recovery loop force-polls all poolers before snapshotting the shard for the
+	// recheck, so the snapshot holds fresh state. getInitializedPoolers reads it: it
+	// returns nil if the cohort is already established, or the list of initialized
+	// poolers otherwise.
+	initializedPoolers, cohortEstablished := a.getInitializedPoolers(rechecked.Shard)
 	if cohortEstablished {
 		a.logger.InfoContext(ctx, "cohort already established, skipping",
 			"shard_key", commontypes.FormatShardKey(problem.ShardKey))
@@ -112,7 +109,7 @@ func (a *ShardInitAction) Execute(ctx context.Context, rechecked types.Rechecked
 	// Ensure the initialized poolers we see could ever satisfy the durability policy.
 	initializedIDs := make([]*clustermetadatapb.ID, len(initializedPoolers))
 	for i, p := range initializedPoolers {
-		initializedIDs[i] = p.Health().Multipooler.Id
+		initializedIDs[i] = p.Multipooler.Id
 	}
 	if err := durabilityPolicy.SatisfiedBy(initializedIDs); err != nil {
 		return mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
@@ -152,7 +149,7 @@ func (a *ShardInitAction) Execute(ctx context.Context, rechecked types.Rechecked
 		"shard_key", commontypes.FormatShardKey(problem.ShardKey),
 		"committed_cohort_size", len(committedIDs))
 
-	// Resolve committed IDs to full PoolerHealthState entries from the pooler store.
+	// Resolve committed IDs to full PoolerHealthState entries from the snapshot.
 	committedCohort := a.buildCohortFromIDs(initializedPoolers, committedIDs)
 	committedCohortIDs := make([]*clustermetadatapb.ID, len(committedCohort))
 	for i, p := range committedCohort {
@@ -192,26 +189,25 @@ func (a *ShardInitAction) allowUnsafeInitialCohort() bool {
 	return a.config.GetAllowUnsafeInitialCohort()
 }
 
-// getInitializedPoolers reads fresh pooler state from the store (already refreshed by the
-// recovery loop before Execute is called). It returns the list of initialized poolers, plus
-// a bool indicating whether the cohort is already established or being established (any
-// pooler has cohort members, decided or an outstanding undecided proposal).
-// If cohortEstablished is true the returned slice is nil and the caller should no-op.
+// getInitializedPoolers reads the rechecked shard snapshot. It returns the list of
+// initialized poolers, plus a bool indicating whether the cohort is already established
+// or being established (any pooler has cohort members, decided or an outstanding
+// undecided proposal). If cohortEstablished is true the returned slice is nil and the
+// caller should no-op.
 //
 // "Initialized" requires a fresh observation (snapshot.DefaultObservationFreshness), not just
 // a durable IsInitialized flag from an arbitrarily old snapshot — a pooler that looked
 // initialized once but has since gone stale should not be trusted for the bootstrap cohort.
-func (a *ShardInitAction) getInitializedPoolers(shardKey *clustermetadatapb.ShardKey) (initialized []*store.Pooler, cohortEstablished bool) {
-	now := time.Now()
-	for _, pooler := range store.FindPoolersInShard(a.poolerStore, shardKey) {
-		if pooler == nil || pooler.Health().Multipooler == nil || pooler.Health().Multipooler.Id == nil {
+func (a *ShardInitAction) getInitializedPoolers(shard *snapshot.Shard) (initialized []*multiorchdatapb.PoolerHealthState, cohortEstablished bool) {
+	for _, pooler := range shard.Poolers {
+		if pooler == nil || pooler.Multipooler == nil || pooler.Multipooler.Id == nil {
 			continue
 		}
-		position := pooler.Health().GetConsensusStatus().GetCurrentPosition().GetPosition()
+		position := pooler.GetConsensusStatus().GetCurrentPosition().GetPosition()
 		if len(commonconsensus.PossiblyUndecidedRule(position).GetCohortMembers()) > 0 {
 			return nil, true
 		}
-		if hs, ok := pooler.HealthWithin(now, snapshot.DefaultObservationFreshness); ok && hs.GetStatus().GetIsInitialized() {
+		if hs, ok := snapshot.HealthWithin(pooler, shard.Now, snapshot.DefaultObservationFreshness); ok && hs.GetStatus().GetIsInitialized() {
 			initialized = append(initialized, pooler)
 		}
 	}
@@ -219,8 +215,8 @@ func (a *ShardInitAction) getInitializedPoolers(shardKey *clustermetadatapb.Shar
 }
 
 // buildCohortFromIDs resolves committed cohort IDs to PoolerHealthState entries
-// from the local pooler store. Returns only the poolers we can find locally.
-func (a *ShardInitAction) buildCohortFromIDs(poolers []*store.Pooler, committedIDs []*clustermetadatapb.ID) []*multiorchdatapb.PoolerHealthState {
+// from the snapshot. Returns only the poolers we can find there.
+func (a *ShardInitAction) buildCohortFromIDs(poolers []*multiorchdatapb.PoolerHealthState, committedIDs []*clustermetadatapb.ID) []*multiorchdatapb.PoolerHealthState {
 	idSet := make(map[string]struct{}, len(committedIDs))
 	for _, id := range committedIDs {
 		idSet[topoclient.ClusterIDString(id)] = struct{}{}
@@ -228,8 +224,8 @@ func (a *ShardInitAction) buildCohortFromIDs(poolers []*store.Pooler, committedI
 
 	var result []*multiorchdatapb.PoolerHealthState
 	for _, p := range poolers {
-		if _, ok := idSet[topoclient.ClusterIDString(p.Health().Multipooler.Id)]; ok {
-			result = append(result, p.Health())
+		if _, ok := idSet[topoclient.ClusterIDString(p.Multipooler.Id)]; ok {
+			result = append(result, p)
 		}
 	}
 	return result

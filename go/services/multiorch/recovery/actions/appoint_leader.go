@@ -26,9 +26,6 @@ import (
 	"github.com/multigres/multigres/go/services/multiorch/config"
 	"github.com/multigres/multigres/go/services/multiorch/consensus"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
-	"github.com/multigres/multigres/go/services/multiorch/store"
-
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 )
 
 // Compile-time assertion that AppointLeaderAction implements types.RecoveryAction.
@@ -40,10 +37,9 @@ var _ types.RecoveryAction = (*AppointLeaderAction)(nil)
 // both cases by selecting the most advanced node based on WAL position and running
 // the full consensus protocol to establish a new primary.
 type AppointLeaderAction struct {
-	config      *config.Config
-	consensus   *consensus.Coordinator
-	poolerStore *store.PoolerCache
-	logger      *slog.Logger
+	config    *config.Config
+	consensus *consensus.Coordinator
+	logger    *slog.Logger
 	// refreshTimeout is the time budget for the live-RPC refresh before the
 	// engine's recheck (see RecoveryMetadata.RefreshBeforeRecheckTimeout).
 	refreshTimeout time.Duration
@@ -53,14 +49,12 @@ type AppointLeaderAction struct {
 func NewAppointLeaderAction(
 	cfg *config.Config,
 	consensus *consensus.Coordinator,
-	poolerStore *store.PoolerCache,
 	logger *slog.Logger,
 	refreshTimeout time.Duration,
 ) *AppointLeaderAction {
 	return &AppointLeaderAction{
 		config:         cfg,
 		consensus:      consensus,
-		poolerStore:    poolerStore,
 		logger:         logger,
 		refreshTimeout: refreshTimeout,
 	}
@@ -78,18 +72,14 @@ func (a *AppointLeaderAction) Execute(ctx context.Context, rechecked types.Reche
 	a.logger.InfoContext(ctx, "executing appoint leader action",
 		"shard_key", commontypes.FormatShardKey(problem.ShardKey))
 
-	shard := store.FindShardMembers(a.poolerStore, problem.ShardKey)
-	if len(shard.Poolers) == 0 {
+	cohort := rechecked.Shard.Poolers
+	if len(cohort) == 0 {
 		return fmt.Errorf("no poolers found for shard %s", commontypes.FormatShardKey(problem.ShardKey))
 	}
 
 	// Use the coordinator's AppointLeader to handle the election.
 	// Use the problem code as the reason for the election.
 	reason := string(problem.Code)
-	cohort := make([]*multiorchdatapb.PoolerHealthState, len(shard.Poolers))
-	for i, p := range shard.Poolers {
-		cohort[i] = p.Health()
-	}
 	if err := a.consensus.AppointLeader(ctx, problem.ShardKey, cohort, reason); err != nil {
 		return mterrors.Wrap(err, "failed to appoint leader")
 	}

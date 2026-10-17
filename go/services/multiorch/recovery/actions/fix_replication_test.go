@@ -40,7 +40,7 @@ import (
 )
 
 func TestFixReplicationAction_Metadata(t *testing.T) {
-	action := NewFixReplicationAction(config.NewTestConfig(), nil, nil, slog.Default())
+	action := NewFixReplicationAction(config.NewTestConfig(), nil, slog.Default())
 
 	metadata := action.Metadata()
 
@@ -51,7 +51,7 @@ func TestFixReplicationAction_Metadata(t *testing.T) {
 }
 
 func TestFixReplicationAction_RequiresHealthyLeader(t *testing.T) {
-	action := NewFixReplicationAction(config.NewTestConfig(), nil, nil, slog.Default())
+	action := NewFixReplicationAction(config.NewTestConfig(), nil, slog.Default())
 
 	// FixReplication requires a healthy primary to configure replication
 	assert.True(t, action.RequiresHealthyLeader())
@@ -60,12 +60,12 @@ func TestFixReplicationAction_RequiresHealthyLeader(t *testing.T) {
 func TestFixReplicationAction_DefersWhenReplicationStatusUnavailable(t *testing.T) {
 	replicaID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "replica"}
 	primaryID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary"}
-	replica := store.NewPooler(&multiorchdatapb.PoolerHealthState{
+	replica := &multiorchdatapb.PoolerHealthState{
 		Multipooler: &clustermetadatapb.Multipooler{Id: replicaID},
-	}, nil)
-	primary := store.NewPooler(&multiorchdatapb.PoolerHealthState{
+	}
+	primary := &multiorchdatapb.PoolerHealthState{
 		Multipooler: &clustermetadatapb.Multipooler{Id: primaryID},
-	}, nil)
+	}
 	client := &rpcclient.FakeClient{
 		StatusResponses: map[topoclient.ComponentID]*rpcclient.ResponseWithDelay[*multipoolermanagerdatapb.StatusResponse]{
 			topoclient.ComponentIDString(replicaID): {
@@ -73,7 +73,7 @@ func TestFixReplicationAction_DefersWhenReplicationStatusUnavailable(t *testing.
 			},
 		},
 	}
-	action := NewFixReplicationAction(config.NewTestConfig(), client, nil, slog.Default())
+	action := NewFixReplicationAction(config.NewTestConfig(), client, slog.Default())
 
 	needsFix, status, err := action.verifyReplicaNotReplicating(t.Context(), replica, primary)
 	require.Error(t, err)
@@ -90,7 +90,7 @@ func TestFixReplicationAction_ExecuteReplicaNotFound(t *testing.T) {
 	fakeClient := &rpcclient.FakeClient{}
 	poolerStore := store.NewTestCache(t)
 
-	action := NewFixReplicationAction(config.NewTestConfig(), fakeClient, poolerStore, slog.Default())
+	action := NewFixReplicationAction(config.NewTestConfig(), fakeClient, slog.Default())
 
 	problem := types.Problem{
 		Code: types.ProblemReplicaNotReplicating,
@@ -106,7 +106,7 @@ func TestFixReplicationAction_ExecuteReplicaNotFound(t *testing.T) {
 		},
 	}
 
-	err := action.Execute(ctx, types.RecheckedProblem{Problem: problem})
+	err := action.Execute(ctx, recheck(t, poolerStore, problem))
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to find affected replica")
@@ -138,7 +138,7 @@ func TestFixReplicationAction_ExecuteNoPrimary(t *testing.T) {
 		},
 	}, nil))
 
-	action := NewFixReplicationAction(config.NewTestConfig(), fakeClient, poolerStore, slog.Default())
+	action := NewFixReplicationAction(config.NewTestConfig(), fakeClient, slog.Default())
 
 	problem := types.Problem{
 		Code: types.ProblemReplicaNotReplicating,
@@ -150,7 +150,7 @@ func TestFixReplicationAction_ExecuteNoPrimary(t *testing.T) {
 		PoolerID: replicaID,
 	}
 
-	err := action.Execute(ctx, types.RecheckedProblem{Problem: problem})
+	err := action.Execute(ctx, recheck(t, poolerStore, problem))
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no consensus leader known")
@@ -215,7 +215,7 @@ func TestFixReplicationAction_ExecuteUnsupportedProblemCode(t *testing.T) {
 		},
 	}, nil))
 
-	action := NewFixReplicationAction(config.NewTestConfig(), fakeClient, poolerStore, slog.Default())
+	action := NewFixReplicationAction(config.NewTestConfig(), fakeClient, slog.Default())
 
 	problem := types.Problem{
 		Code: types.ProblemReplicaLagging, // Not yet supported
@@ -227,7 +227,7 @@ func TestFixReplicationAction_ExecuteUnsupportedProblemCode(t *testing.T) {
 		PoolerID: replicaID,
 	}
 
-	err := action.Execute(ctx, types.RecheckedProblem{Problem: problem})
+	err := action.Execute(ctx, recheck(t, poolerStore, problem))
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported problem code")
@@ -315,7 +315,7 @@ func TestFixReplicationAction_ExecuteSuccessNotReplicating(t *testing.T) {
 	}, nil))
 
 	cfg := config.NewTestConfig()
-	action := NewFixReplicationAction(cfg, fakeClient, poolerStore, slog.Default())
+	action := NewFixReplicationAction(cfg, fakeClient, slog.Default())
 
 	problem := types.Problem{
 		Code: types.ProblemReplicaNotReplicating,
@@ -327,7 +327,7 @@ func TestFixReplicationAction_ExecuteSuccessNotReplicating(t *testing.T) {
 		PoolerID: replicaID,
 	}
 
-	err := action.Execute(ctx, types.RecheckedProblem{Problem: problem})
+	err := action.Execute(ctx, recheck(t, poolerStore, problem))
 	require.NoError(t, err)
 
 	// Verify SetPrimary was called on the replica, NOT SetPrimaryConnInfo.
@@ -429,7 +429,7 @@ func TestFixReplicationAction_ExecuteAlreadyConfigured(t *testing.T) {
 		},
 	}, nil))
 
-	action := NewFixReplicationAction(config.NewTestConfig(), fakeClient, poolerStore, slog.Default())
+	action := NewFixReplicationAction(config.NewTestConfig(), fakeClient, slog.Default())
 
 	problem := types.Problem{
 		Code: types.ProblemReplicaNotReplicating,
@@ -441,7 +441,7 @@ func TestFixReplicationAction_ExecuteAlreadyConfigured(t *testing.T) {
 		PoolerID: replicaID,
 	}
 
-	err := action.Execute(ctx, types.RecheckedProblem{Problem: problem})
+	err := action.Execute(ctx, recheck(t, poolerStore, problem))
 
 	// Should succeed without calling SetPrimaryConnInfo (already configured)
 	require.NoError(t, err)
@@ -553,7 +553,7 @@ func TestFixReplicationAction_ExecuteStreamingNullLsn(t *testing.T) {
 		},
 	}, nil))
 
-	action := NewFixReplicationAction(config.NewTestConfig(), client, poolerStore, slog.Default())
+	action := NewFixReplicationAction(config.NewTestConfig(), client, slog.Default())
 
 	problem := types.Problem{
 		Code: types.ProblemReplicaNotReplicating,
@@ -565,7 +565,7 @@ func TestFixReplicationAction_ExecuteStreamingNullLsn(t *testing.T) {
 		PoolerID: replicaID,
 	}
 
-	err := action.Execute(ctx, types.RecheckedProblem{Problem: problem})
+	err := action.Execute(ctx, recheck(t, poolerStore, problem))
 
 	// The null-LSN guard treats the first poll as not-yet-replicating, so
 	// Execute proceeds to call SetPrimary (fixNotReplicating path).
@@ -620,10 +620,10 @@ func TestVerifyReplicationStarted_SlowWalReceiver(t *testing.T) {
 		streamAfterCalls: streamAfterCalls,
 	}
 
-	action := NewFixReplicationAction(config.NewTestConfig(), fakeClient, nil, slog.Default())
+	action := NewFixReplicationAction(config.NewTestConfig(), fakeClient, slog.Default())
 	action.verifyPollInterval = 10 * time.Millisecond // Fast polling for tests
 
-	replica := store.NewPooler(&multiorchdatapb.PoolerHealthState{
+	replica := &multiorchdatapb.PoolerHealthState{
 		Multipooler: &clustermetadatapb.Multipooler{
 			Id: &clustermetadatapb.ID{
 				Component: clustermetadatapb.ID_MULTIPOOLER,
@@ -631,7 +631,7 @@ func TestVerifyReplicationStarted_SlowWalReceiver(t *testing.T) {
 				Name:      "replica1",
 			},
 		},
-	}, nil)
+	}
 
 	err := action.verifyReplicationStarted(ctx, replica)
 	require.NoError(t, err, "verifyReplicationStarted should succeed when WAL receiver starts streaming after several polling cycles")
@@ -737,7 +737,7 @@ func TestFixReplicationAction_ExecuteRetryWhenConnInfoSetButNotStreaming(t *test
 		},
 	}, nil))
 
-	action := NewFixReplicationAction(config.NewTestConfig(), fakeClient, poolerStore, slog.Default())
+	action := NewFixReplicationAction(config.NewTestConfig(), fakeClient, slog.Default())
 	action.verifyPollInterval = 10 * time.Millisecond
 
 	problem := types.Problem{
@@ -746,7 +746,7 @@ func TestFixReplicationAction_ExecuteRetryWhenConnInfoSetButNotStreaming(t *test
 		PoolerID: replicaID,
 	}
 
-	err := action.Execute(ctx, types.RecheckedProblem{Problem: problem})
+	err := action.Execute(ctx, recheck(t, poolerStore, problem))
 
 	// Should succeed: the fix was re-run despite primary_conninfo being set
 	require.NoError(t, err)
@@ -875,7 +875,7 @@ func TestFixReplicationAction_FailsWhenReplicationDoesNotStart(t *testing.T) {
 		},
 	}, nil))
 
-	action := NewFixReplicationAction(config.NewTestConfig(), fakeClient, poolerStore, slog.Default())
+	action := NewFixReplicationAction(config.NewTestConfig(), fakeClient, slog.Default())
 	action.verifyPollInterval = 10 * time.Millisecond // Fast polling for tests
 
 	problem := types.Problem{
@@ -888,7 +888,7 @@ func TestFixReplicationAction_FailsWhenReplicationDoesNotStart(t *testing.T) {
 		PoolerID: replicaID,
 	}
 
-	err := action.Execute(ctx, types.RecheckedProblem{Problem: problem})
+	err := action.Execute(ctx, recheck(t, poolerStore, problem))
 
 	// SetPrimary configured the replica but the WAL receiver never reached
 	// "streaming", so verifyReplicationStarted fails and the action returns an

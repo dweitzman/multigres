@@ -24,7 +24,6 @@ import (
 	"github.com/multigres/multigres/go/common/rpcclient"
 	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
-	"github.com/multigres/multigres/go/services/multiorch/store"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
@@ -47,21 +46,18 @@ var _ types.RecoveryAction = (*ReconnectRecruitAbandonedAction)(nil)
 // outgoing rule, so concurrent orchestrators cannot double-advance; a loser sees
 // the rule already advanced and its later SetPrimary is harmless.
 type ReconnectRecruitAbandonedAction struct {
-	rpcClient   rpcclient.MultipoolerClient
-	poolerStore *store.PoolerCache
-	logger      *slog.Logger
+	rpcClient rpcclient.MultipoolerClient
+	logger    *slog.Logger
 }
 
 // NewReconnectRecruitAbandonedAction creates a new reconnect action.
 func NewReconnectRecruitAbandonedAction(
 	rpcClient rpcclient.MultipoolerClient,
-	poolerStore *store.PoolerCache,
 	logger *slog.Logger,
 ) *ReconnectRecruitAbandonedAction {
 	return &ReconnectRecruitAbandonedAction{
-		rpcClient:   rpcClient,
-		poolerStore: poolerStore,
-		logger:      logger,
+		rpcClient: rpcClient,
+		logger:    logger,
 	}
 }
 
@@ -73,26 +69,27 @@ func (a *ReconnectRecruitAbandonedAction) Execute(ctx context.Context, rechecked
 		"pooler", problem.PoolerID.Name,
 		"problem_code", string(problem.Code))
 
-	follower, err := store.FindPoolerByID(a.poolerStore, problem.PoolerID)
-	if err != nil {
-		return mterrors.Wrap(err, "failed to find stranded follower")
+	shard := rechecked.Shard
+	follower := shard.PoolerHealth(problem.PoolerID)
+	if follower == nil {
+		return mterrors.Errorf(mtrpcpb.Code_NOT_FOUND,
+			"failed to find stranded follower: pooler %s/%s not found", problem.PoolerID.GetCell(), problem.PoolerID.GetName())
 	}
 
-	members := store.FindShardMembers(a.poolerStore, problem.ShardKey)
-	leader := members.Leader
-	if leader == nil || members.HighestIntendedRule.IsEmpty() {
+	leader := shard.IntendedLeaderHealth()
+	if leader == nil || shard.HighestIntendedRule().IsEmpty() {
 		return mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
 			"no consensus leader known for shard %s", problem.ShardKey)
 	}
 
-	revocation := follower.Health().GetConsensusStatus().GetTermRevocation()
+	revocation := follower.GetConsensusStatus().GetTermRevocation()
 
 	// Advance the rule only if the follower is still stranded — the highest intended
 	// rule may already outrank the revocation (its decision is high enough, even
 	// mid-transition with an outstanding proposal, or a prior cycle / racing
 	// orchestrator already advanced it), in which case SetPrimary is safe to send
 	// as-is and no advance is needed.
-	advanced := members.HighestIntendedRule
+	advanced := shard.HighestIntendedRule()
 	if advanced.IsRevokedBy(revocation) {
 		// Advancing rewrites the rule; the leader refuses that while a proposal is
 		// undecided (it CAS-guards on the decided outgoing rule), so defer to a
@@ -105,7 +102,7 @@ func (a *ReconnectRecruitAbandonedAction) Execute(ctx context.Context, rechecked
 			Operation:            multipoolermanagerdatapb.RuleOperation_RULE_OPERATION_ADVANCE,
 			ExpectedOutgoingRule: advanced.Decision().GetRuleNumber(),
 		}
-		resp, err := a.rpcClient.UpdateConsensusRule(ctx, leader.Health().Multipooler, req)
+		resp, err := a.rpcClient.UpdateConsensusRule(ctx, leader.Multipooler, req)
 		if err != nil {
 			return mterrors.Wrap(err, "leader-led rule advance failed")
 		}
@@ -118,8 +115,8 @@ func (a *ReconnectRecruitAbandonedAction) Execute(ctx context.Context, rechecked
 				advanced)
 		}
 		a.logger.InfoContext(ctx, "advanced leader rule to reconnect stranded follower",
-			"leader", leader.Health().Multipooler.Id.Name,
-			"follower", follower.Health().Multipooler.Id.Name)
+			"leader", leader.Multipooler.Id.Name,
+			"follower", follower.Multipooler.Id.Name)
 	}
 
 	// Relay the advanced decision to the follower. It no longer revokes this rule,
@@ -128,17 +125,17 @@ func (a *ReconnectRecruitAbandonedAction) Execute(ctx context.Context, rechecked
 	setReq := &consensusdatapb.SetPrimaryRequest{
 		ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{
 			Position:    advanced.Position(),
-			Primary:     topoclient.PoolerAddressFor(leader.Health().Multipooler),
-			RewindReady: commonconsensus.ReplicationPrimaryOrNil(leader.Health().GetConsensusStatus()).GetRewindReady(),
+			Primary:     topoclient.PoolerAddressFor(leader.Multipooler),
+			RewindReady: commonconsensus.ReplicationPrimaryOrNil(leader.GetConsensusStatus()).GetRewindReady(),
 		},
 	}
-	if _, err := a.rpcClient.SetPrimary(ctx, follower.Health().Multipooler, setReq); err != nil {
+	if _, err := a.rpcClient.SetPrimary(ctx, follower.Multipooler, setReq); err != nil {
 		return mterrors.Wrap(err, "SetPrimary to reconnect stranded follower failed")
 	}
 
 	a.logger.InfoContext(ctx, "reconnect recruit-abandoned action completed",
-		"leader", leader.Health().Multipooler.Id.Name,
-		"follower", follower.Health().Multipooler.Id.Name)
+		"leader", leader.Multipooler.Id.Name,
+		"follower", follower.Multipooler.Id.Name)
 	return nil
 }
 

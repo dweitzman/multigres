@@ -105,3 +105,21 @@ func (sa *Shard) PoolerHealth(id *clustermetadatapb.ID) *multiorchdatapb.PoolerH
 func (sa *Shard) IntendedLeaderHealth() *multiorchdatapb.PoolerHealthState {
 	return sa.PoolerHealth(sa.HighestIntendedRule().PossiblyUndecidedRule().GetLeaderId())
 }
+
+// CohortEligibleFollowerIDs returns the IDs of every pooler in the shard except the
+// one the highest intended rule names as leader, whether or not we have health for
+// it. Eligibility is membership, not streaming state or role, so a freshly discovered
+// standby is included before it streams. With no known leader it yields every member,
+// so callers gate on a known leader before acting.
+func (sa *Shard) CohortEligibleFollowerIDs() []*clustermetadatapb.ID {
+	leaderID := sa.HighestIntendedRule().PossiblyUndecidedRule().GetLeaderId()
+	ids := make([]*clustermetadatapb.ID, 0, len(sa.Poolers))
+	for _, p := range sa.Poolers {
+		id := p.GetMultipooler().GetId()
+		if leaderID != nil && proto.Equal(id, leaderID) {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	return ids
+}

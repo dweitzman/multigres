@@ -68,7 +68,7 @@ func TestAlertTransitionLogger_IgnoresActionableProblems(t *testing.T) {
 
 	l.observe(context.Background(), logger, []types.Problem{{
 		Code:           types.ProblemLeaderUnhealthy,
-		RecoveryAction: actions.NewReconnectRecruitAbandonedAction(nil, nil, logger),
+		RecoveryAction: actions.NewReconnectRecruitAbandonedAction(nil, logger),
 	}}, time.Now())
 	assert.Empty(t, buf.String())
 }

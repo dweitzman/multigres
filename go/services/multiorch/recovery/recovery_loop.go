@@ -459,7 +459,6 @@ func (re *Engine) recheckProblem(ctx context.Context, problem types.Problem) (*t
 	if err != nil {
 		return nil, fmt.Errorf("failed to snapshot shard after re-poll: %w", err)
 	}
-	rule := snap.HighestIntendedRule()
 
 	// Re-run the analyzer that originally detected this problem
 	analyzers := analysis.DefaultAnalyzers(re.actionFactory)
@@ -485,7 +484,7 @@ func (re *Engine) recheckProblem(ctx context.Context, problem types.Problem) (*t
 						"entity_id", entityID,
 						"problem_code", problem.Code,
 					)
-					return &types.RecheckedProblem{Problem: p, HighestIntendedRule: rule}, nil
+					return &types.RecheckedProblem{Problem: p, Shard: snap}, nil
 				}
 			}
 
