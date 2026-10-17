@@ -71,7 +71,7 @@ func (a *ShardNeedsInitializationAnalyzer) Analyze(sa *snapshot.Shard) ([]types.
 	initializedIDs := make([]*clustermetadatapb.ID, 0, len(sa.Poolers))
 	for _, pa := range sa.Poolers {
 		if hs, ok := snapshot.HealthWithin(pa, sa.Now, sa.AvailabilityPolicy.ObservationFreshness); ok && hs.GetStatus().GetIsInitialized() {
-			initializedIDs = append(initializedIDs, poolerID(pa))
+			initializedIDs = append(initializedIDs, pa.ID())
 		}
 	}
 	if err := durabilityPolicy.SatisfiedBy(initializedIDs); err != nil {

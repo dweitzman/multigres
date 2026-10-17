@@ -108,7 +108,7 @@ func (a *ShardInitAction) Execute(ctx context.Context, rechecked types.Rechecked
 	// Ensure the initialized poolers we see could ever satisfy the durability policy.
 	initializedIDs := make([]*clustermetadatapb.ID, len(initializedPoolers))
 	for i, p := range initializedPoolers {
-		initializedIDs[i] = p.Multipooler.Id
+		initializedIDs[i] = p.ID()
 	}
 	if err := durabilityPolicy.SatisfiedBy(initializedIDs); err != nil {
 		return mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
@@ -152,7 +152,7 @@ func (a *ShardInitAction) Execute(ctx context.Context, rechecked types.Rechecked
 	committedCohort := a.buildCohortFromIDs(initializedPoolers, committedIDs)
 	committedCohortIDs := make([]*clustermetadatapb.ID, len(committedCohort))
 	for i, p := range committedCohort {
-		committedCohortIDs[i] = p.Multipooler.Id
+		committedCohortIDs[i] = p.ID()
 	}
 	if err := durabilityPolicy.SatisfiedBy(committedCohortIDs); err != nil {
 		return mterrors.Errorf(mtrpcpb.Code_UNAVAILABLE,
@@ -223,7 +223,7 @@ func (a *ShardInitAction) buildCohortFromIDs(poolers []*snapshot.PoolerHealthSta
 
 	var result []*snapshot.PoolerHealthState
 	for _, p := range poolers {
-		if _, ok := idSet[topoclient.ClusterIDString(p.Multipooler.Id)]; ok {
+		if _, ok := idSet[topoclient.ClusterIDString(p.ID())]; ok {
 			result = append(result, p)
 		}
 	}

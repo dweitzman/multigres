@@ -77,7 +77,7 @@ func SeedCache(t *testing.T, cache *PoolerCache, state *Pooler) topoclient.Compo
 		return ""
 	}
 	poolerwatch.SeedForTest(t, cache, state.Health().Multipooler)
-	id := topoclient.ComponentIDString(state.Health().Multipooler.Id)
+	id := topoclient.ComponentIDString(state.Health().ID())
 	cache.DoUpdate(id, func(*Pooler) *Pooler {
 		return state
 	})

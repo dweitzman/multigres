@@ -452,7 +452,7 @@ func (re *Engine) collectStreamHealthData() []StreamHealthData {
 			continue
 		}
 		data = append(data, StreamHealthData{
-			PoolerID:          topoclient.ComponentIDString(state.Health().Multipooler.Id),
+			PoolerID:          topoclient.ComponentIDString(state.Health().ID()),
 			DBNamespace:       state.Health().Multipooler.GetShardKey().GetDatabase(),
 			Shard:             state.Health().Multipooler.GetShardKey().GetShard(),
 			Connected:         state.Health().StreamConnected,
@@ -645,7 +645,7 @@ func (re *Engine) pollAndWaitForNewSnapshots(ctx context.Context) {
 	for _, entry := range re.poolerCache.All() {
 		ph := entry.Rider
 		if ph != nil && ph.Health().StreamConnected {
-			baselines = append(baselines, poolerBaseline{topoclient.ComponentIDString(ph.Health().Multipooler.Id), ph.Health().StreamSnapshotsReceived})
+			baselines = append(baselines, poolerBaseline{topoclient.ComponentIDString(ph.Health().ID()), ph.Health().StreamSnapshotsReceived})
 		}
 	}
 

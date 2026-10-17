@@ -77,7 +77,7 @@ func (a *ReplicaNotReplicatingAnalyzer) analyzePooler(sa *snapshot.Shard, pa *sn
 	// leader's rule + address), leader reachability no longer matters here — an
 	// unreachable-but-known leader is still the official term leader worth telling
 	// replicas about, and only knowing where to point them matters.
-	if host, _ := leaderEndpoint(sa.IntendedLeaderHealth()); !intendedLeaderServing(sa) || host == "" {
+	if host, _ := sa.IntendedLeaderHealth().Endpoint(); !intendedLeaderServing(sa) || host == "" {
 		return nil, nil
 	}
 
@@ -97,9 +97,9 @@ func (a *ReplicaNotReplicatingAnalyzer) analyzePooler(sa *snapshot.Shard, pa *sn
 	return &types.Problem{
 		Code:           types.ProblemReplicaNotReplicating,
 		CheckName:      "ReplicaNotReplicating",
-		PoolerID:       poolerID(pa),
+		PoolerID:       pa.ID(),
 		ShardKey:       sa.ShardKey,
-		Description:    fmt.Sprintf("Replica %s has no replication configured", poolerID(pa).Name),
+		Description:    fmt.Sprintf("Replica %s has no replication configured", pa.ID().Name),
 		Priority:       types.PriorityHigh,
 		Scope:          types.ScopePooler,
 		DetectedAt:     sa.Now,
@@ -110,19 +110,19 @@ func (a *ReplicaNotReplicatingAnalyzer) analyzePooler(sa *snapshot.Shard, pa *sn
 // needsReplicationFix returns true if replication is not configured or stopped.
 func (a *ReplicaNotReplicatingAnalyzer) needsReplicationFix(pa *snapshot.PoolerHealthState) bool {
 	// No primary_conninfo configured
-	if primaryConnInfoHost(pa) == "" {
+	if pa.PrimaryConnInfoHost() == "" {
 		return true
 	}
 
 	// Replication not running (e.g. WAL replay paused)
-	if !walReplayNotPaused(pa) {
+	if !pa.WalReplayNotPaused() {
 		return true
 	}
 
 	// primary_conninfo is set but the WAL receiver is not active. This covers
 	// timeline divergence: the WAL receiver connects, gets FATAL, and exits,
 	// leaving primary_conninfo on disk but no active streaming.
-	if !walReceiverActive(pa) {
+	if !pa.WalReceiverActive() {
 		return true
 	}
 

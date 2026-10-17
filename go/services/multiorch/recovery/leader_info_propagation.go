@@ -82,7 +82,7 @@ func (re *Engine) propagateLeaderInfoForShard(ctx context.Context, shard *snapsh
 	re.reconcileFollowerSlots(ctx, leader, shard.CohortEligibleFollowerIDs())
 
 	leaderAddress := topoclient.PoolerAddressFor(leader.GetMultipooler())
-	leaderRewindReady := commonconsensus.IntendedPrimaryOrNil(leader.GetConsensusStatus()).GetRewindReady()
+	leaderRewindReady := leader.IntendedPrimary().GetRewindReady()
 
 	// One goroutine per follower: each pooler appears at most once in a shard's
 	// member list, so there's never more than one in-flight SetPrimary to the
@@ -160,7 +160,7 @@ func (re *Engine) propagateLeaderInfoToPooler(
 	leaderRewindReady bool,
 	intendedRule commonconsensus.RuleTransition,
 ) {
-	followerPrimary := commonconsensus.IntendedPrimaryOrNil(follower.GetConsensusStatus())
+	followerPrimary := follower.IntendedPrimary()
 	if !shouldPropagateLeaderInfo(followerPrimary, follower.GetLastSeen(), now, leaderAddress, leaderRewindReady, intendedRule) {
 		return
 	}

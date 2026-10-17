@@ -53,10 +53,10 @@ func allFollowersStreaming(sa *snapshot.Shard) bool {
 		if pa == nil {
 			continue
 		}
-		if topoclient.ComponentIDString(poolerID(pa)) == leaderKey || commonconsensus.SelfConsensusRole(pa.GetConsensusStatus()) == commonconsensus.ConsensusRoleLeader {
+		if topoclient.ComponentIDString(pa.ID()) == leaderKey || commonconsensus.SelfConsensusRole(pa.GetConsensusStatus()) == commonconsensus.ConsensusRoleLeader {
 			continue
 		}
-		if !observationFresh(pa, sa.Now, sa.AvailabilityPolicy.FollowerStreamFreshness) {
+		if !pa.ObservedWithin(sa.Now, sa.AvailabilityPolicy.FollowerStreamFreshness) {
 			continue
 		}
 		replicaCount++

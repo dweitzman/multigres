@@ -38,7 +38,7 @@ func flattenPoolers(shards []*snapshot.Shard) []*snapshot.PoolerHealthState {
 // or nil if not found.
 func findPoolerByName(sa *snapshot.Shard, name string) *snapshot.PoolerHealthState {
 	for _, pa := range sa.Poolers {
-		if poolerID(pa).Name == name {
+		if pa.ID().Name == name {
 			return pa
 		}
 	}
@@ -74,7 +74,7 @@ func newTestShard(sa *snapshot.Shard, rule *clustermetadatapb.RulePosition, lead
 			sa.Poolers = append(sa.Poolers, leader)
 		}
 		if rule == nil {
-			rule = &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{LeaderId: poolerID(leader)}}
+			rule = &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{LeaderId: leader.ID()}}
 		}
 	}
 	setRule(sa, rule)
@@ -84,9 +84,9 @@ func newTestShard(sa *snapshot.Shard, rule *clustermetadatapb.RulePosition, lead
 // setRule replaces the shard's published rule; nil clears it.
 func setRule(sa *snapshot.Shard, rule *clustermetadatapb.RulePosition) {
 	for _, p := range sa.Poolers {
-		if poolerID(p).GetName() == ruleCarrierName {
+		if p.ID().GetName() == ruleCarrierName {
 			p.ConsensusStatus = &clustermetadatapb.ConsensusStatus{
-				Id:              poolerID(p),
+				Id:              p.ID(),
 				CurrentPosition: &clustermetadatapb.PoolerPosition{Position: rule},
 			}
 			return
@@ -111,7 +111,7 @@ func setRule(sa *snapshot.Shard, rule *clustermetadatapb.RulePosition) {
 func removePooler(sa *snapshot.Shard, name string) {
 	kept := sa.Poolers[:0:0]
 	for _, p := range sa.Poolers {
-		if poolerID(p).GetName() != name {
+		if p.ID().GetName() != name {
 			kept = append(kept, p)
 		}
 	}
@@ -121,7 +121,7 @@ func removePooler(sa *snapshot.Shard, name string) {
 // replacePooler swaps the named pooler's snapshot for state.
 func replacePooler(sa *snapshot.Shard, id *clustermetadatapb.ID, state *snapshot.PoolerHealthState) {
 	for i, p := range sa.Poolers {
-		if poolerID(p).GetName() == id.GetName() {
+		if p.ID().GetName() == id.GetName() {
 			sa.Poolers[i] = state
 			return
 		}
@@ -134,7 +134,7 @@ func setFollowers(sa *snapshot.Shard, followers ...*snapshot.PoolerHealthState) 
 	leader := sa.IntendedLeaderHealth()
 	var next []*snapshot.PoolerHealthState
 	for _, p := range sa.Poolers {
-		if poolerID(p).GetName() == ruleCarrierName {
+		if p.ID().GetName() == ruleCarrierName {
 			next = append(next, p)
 		}
 	}

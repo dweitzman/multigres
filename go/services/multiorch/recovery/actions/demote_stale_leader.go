@@ -22,7 +22,6 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/eventlog"
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/rpcclient"
@@ -133,14 +132,14 @@ func (a *DemoteStaleLeaderAction) Execute(ctx context.Context, rechecked types.R
 	// self-targeted SetPrimary, which the pooler would ignore.
 	if proto.Equal(correctLeader.GetMultipooler().GetId(), problem.PoolerID) {
 		a.logger.InfoContext(ctx, "stale leader is the current consensus leader, nothing to demote",
-			"leader", correctLeader.Multipooler.Id.Name,
+			"leader", correctLeader.ID().GetName(),
 			"shard_key", commontypes.FormatShardKey(problem.ShardKey))
 		return nil
 	}
 
 	a.logger.InfoContext(ctx, "demoting stale leader via SetPrimary",
 		"stale_leader", poolerIDStr,
-		"correct_leader", correctLeader.Multipooler.Id.Name,
+		"correct_leader", correctLeader.ID().GetName(),
 		"correct_leader_position", correctRule.String())
 
 	eventlog.Emit(ctx, a.logger, eventlog.Started, eventlog.PrimaryDemotion{NodeName: string(poolerIDStr), Reason: "stale"})
@@ -168,7 +167,7 @@ func (a *DemoteStaleLeaderAction) Execute(ctx context.Context, rechecked types.R
 		IntendedPrimary: &clustermetadatapb.IntendedPrimary{
 			Position:    correctRule.Position(),
 			Primary:     topoclient.PoolerAddressFor(correctLeader.Multipooler),
-			RewindReady: commonconsensus.IntendedPrimaryOrNil(correctLeader.GetConsensusStatus()).GetRewindReady(),
+			RewindReady: correctLeader.IntendedPrimary().GetRewindReady(),
 		},
 	}
 	if _, err := a.rpcClient.SetPrimary(ctx, staleLeader.Multipooler, setPrimaryReq); err != nil {

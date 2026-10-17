@@ -15,9 +15,12 @@
 package snapshot
 
 import (
+	"time"
+
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
@@ -139,4 +142,85 @@ func (h *PoolerHealthState) GetStreamSnapshotsReceived() int64 {
 		return 0
 	}
 	return h.StreamSnapshotsReceived
+}
+
+// ID returns the pooler's ID, or nil if the record has none.
+func (h *PoolerHealthState) ID() *clustermetadatapb.ID {
+	return h.GetMultipooler().GetId()
+}
+
+// Endpoint returns the pooler's postgres host and port; host is "" when it has not
+// reported a hostname.
+func (h *PoolerHealthState) Endpoint() (host string, port int32) {
+	return h.GetMultipooler().GetHostname(), h.GetMultipooler().GetPortMap()["postgres"]
+}
+
+// IntendedPrimary returns the primary the pooler reports it was told to use, or nil
+// if it has none (an unset or placeholder entry reads as nil).
+func (h *PoolerHealthState) IntendedPrimary() *clustermetadatapb.IntendedPrimary {
+	return commonconsensus.IntendedPrimaryOrNil(h.GetConsensusStatus())
+}
+
+// ObservedWithin reports whether the pooler's most recent successful health snapshot
+// is within maxAge of now on the orchestrator clock. A pooler never observed is not
+// within any age: with no observation we have no evidence it is alive. LastSeen
+// advances only on a successful snapshot, never on a disconnect, so this alone
+// captures "recently, successfully observed"; a brief stream interruption does not
+// change it until the observation genuinely ages out.
+func (h *PoolerHealthState) ObservedWithin(now time.Time, maxAge time.Duration) bool {
+	age, ok := ObservationAge(h, now)
+	return ok && age <= maxAge
+}
+
+// WalReplayNotPaused reports whether the standby's WAL replay is active. A pooler
+// with no replication status returns false; callers that distinguish an unavailable
+// observation from a negative one must check the status for nil first.
+func (h *PoolerHealthState) WalReplayNotPaused() bool {
+	rs := h.GetStatus().GetReplicationStatus()
+	if rs == nil {
+		return false
+	}
+	return !rs.GetIsWalReplayPaused()
+}
+
+// PrimaryConnInfoHost returns the standby's configured primary host, or "" if
+// replication is not configured.
+func (h *PoolerHealthState) PrimaryConnInfoHost() string {
+	return h.GetStatus().GetReplicationStatus().GetPrimaryConnInfo().GetHost()
+}
+
+// WalReceiverActive reports whether the standby's WAL receiver is actively streaming
+// or waiting. "waiting" is healthy: the receiver is connected but the primary has no
+// new WAL to send. Any other status (including "") means the receiver is not running;
+// this covers timeline divergence where the receiver connects, gets FATAL, and exits,
+// leaving primary_conninfo on disk.
+func (h *PoolerHealthState) WalReceiverActive() bool {
+	rs := h.GetStatus().GetReplicationStatus()
+	if rs == nil {
+		return false
+	}
+	return rs.GetWalReceiverStatus() == "streaming" || rs.GetWalReceiverStatus() == "waiting"
+}
+
+// WalReceiverStreaming is a stricter WalReceiverActive: it also rejects the brief
+// window after a receiver reconnect where postgres reports "streaming" before any WAL
+// has arrived (LastReceiveLsn still empty), the same FATAL-retry flicker FixReplication
+// guards against. It is the signal that a standby has bridged any initial archive
+// catch-up and is genuinely pulling WAL from the leader, which is what cohort
+// admission requires (a cohort member must advance only by streaming, never the
+// archive). "waiting" stays healthy: the receiver is connected and current, the
+// primary just has nothing new to send.
+func (h *PoolerHealthState) WalReceiverStreaming() bool {
+	rs := h.GetStatus().GetReplicationStatus()
+	if rs == nil {
+		return false
+	}
+	switch rs.GetWalReceiverStatus() {
+	case "waiting":
+		return true
+	case "streaming":
+		return rs.GetLastReceiveLsn() != ""
+	default:
+		return false
+	}
 }

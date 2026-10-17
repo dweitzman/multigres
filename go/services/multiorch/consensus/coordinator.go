@@ -281,7 +281,7 @@ func (c *Coordinator) GetBootstrapPolicy(ctx context.Context, database string) (
 func poolerIDs(poolers []*snapshot.PoolerHealthState) []*clustermetadatapb.ID {
 	out := make([]*clustermetadatapb.ID, len(poolers))
 	for i, p := range poolers {
-		out[i] = p.Multipooler.Id
+		out[i] = p.ID()
 	}
 	return out
 }

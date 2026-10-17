@@ -283,10 +283,10 @@ func (r *coordinatorLedRuleChange) dispatchPromote(
 ) chan promoteResult {
 	promoteResults := make(chan promoteResult, len(cohort))
 	for _, p := range cohort {
-		isLeader := topoclient.ClusterIDString(p.Multipooler.Id) == leaderKey
+		isLeader := topoclient.ClusterIDString(p.ID()) == leaderKey
 		go func() {
 			err := r.promote(ctx, p, propReq, isLeader)
-			promoteResults <- promoteResult{poolerName: p.Multipooler.Id.Name, isLeader: isLeader, err: err}
+			promoteResults <- promoteResult{poolerName: p.ID().GetName(), isLeader: isLeader, err: err}
 		}()
 	}
 
@@ -327,16 +327,16 @@ func (r *coordinatorLedRuleChange) recruit(
 	switch {
 	case err != nil:
 		r.coordinator.logger.WarnContext(ctx, "recruit failed",
-			"pooler", p.Multipooler.Id.Name, "error", err)
+			"pooler", p.ID().GetName(), "error", err)
 		return nil
 	case resp.GetConsensusStatus() == nil:
 		r.coordinator.logger.WarnContext(ctx, "recruit returned nil ConsensusStatus",
-			"pooler", p.Multipooler.Id.Name)
+			"pooler", p.ID().GetName())
 		return nil
 	default:
 		cs := resp.GetConsensusStatus()
 		r.coordinator.logger.InfoContext(ctx, "recruited pooler",
-			"pooler", p.Multipooler.Id.Name,
+			"pooler", p.ID().GetName(),
 			"lsn", cs.GetCurrentPosition().GetLsn())
 		return cs
 	}
@@ -477,7 +477,7 @@ func checkRecentAcceptance(ctx context.Context, logger *slog.Logger, cohort []*s
 		timeSince := now.Sub(acceptedRevocation.CoordinatorInitiatedAt.AsTime())
 		if timeSince >= 0 && timeSince < backoffWindow {
 			logger.InfoContext(ctx, "recent term acceptance detected, backing off",
-				"pooler", pooler.Multipooler.Id.Name,
+				"pooler", pooler.ID().GetName(),
 				"accepted_term", acceptedRevocation.RevokedBelowTerm,
 				"time_since_acceptance", timeSince)
 			return fmt.Errorf("another coordinator started recruiting recently (%v ago), backing off",
@@ -495,7 +495,7 @@ func buildCohortMaps(cohort []*snapshot.PoolerHealthState) (map[string]*clusterm
 	addressByID := make(map[string]*clustermetadatapb.PoolerAddress, len(cohort))
 	healthByID := make(map[string]*snapshot.PoolerHealthState, len(cohort))
 	for _, p := range cohort {
-		key := topoclient.ClusterIDString(p.Multipooler.Id)
+		key := topoclient.ClusterIDString(p.ID())
 		addressByID[key] = topoclient.PoolerAddressFor(p.Multipooler)
 		healthByID[key] = p
 	}

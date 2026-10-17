@@ -73,7 +73,7 @@ func (a *StaleLeaderAnalyzer) Analyze(sa *snapshot.Shard) ([]types.Problem, erro
 		if !ok || commonconsensus.SelfConsensusRole(hs.GetConsensusStatus()) != commonconsensus.ConsensusRoleLeader {
 			continue
 		}
-		if proto.Equal(poolerID(pa), leaderID) {
+		if proto.Equal(pa.ID(), leaderID) {
 			continue
 		}
 		staleLeaders = append(staleLeaders, pa)
@@ -97,10 +97,10 @@ func (a *StaleLeaderAnalyzer) Analyze(sa *snapshot.Shard) ([]types.Problem, erro
 		problems = append(problems, types.Problem{
 			Code:      types.ProblemStaleLeader,
 			CheckName: "StaleLeader",
-			PoolerID:  poolerID(stale),
+			PoolerID:  stale.ID(),
 			ShardKey:  sa.ShardKey,
 			Description: fmt.Sprintf("Stale leader detected: %s (stale_leader_position %s) is stale, current leader %s (leader_position %s)",
-				poolerID(stale).Name,
+				stale.ID().Name,
 				commonconsensus.FormatRulePosition(stale.GetConsensusStatus().GetCurrentPosition().GetPosition()),
 				leaderID.Name,
 				leaderPosition),

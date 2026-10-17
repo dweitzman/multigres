@@ -63,7 +63,7 @@ func (c *Coordinator) ApplyCertifiedRuleChange(
 		return err
 	}
 	for _, p := range cohort {
-		if cs, ok := statusesByPoolerID[topoclient.ClusterIDString(p.Multipooler.Id)]; ok {
+		if cs, ok := statusesByPoolerID[topoclient.ClusterIDString(p.ID())]; ok {
 			p.ConsensusStatus = cs
 		}
 	}

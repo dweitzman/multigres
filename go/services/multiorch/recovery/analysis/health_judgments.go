@@ -18,7 +18,6 @@ import (
 	"time"
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
-	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
 )
@@ -26,17 +25,6 @@ import (
 // The helpers below derive analyzer-relevant judgments from a pooler's raw
 // health in the snapshot, so the snapshot stays the single source of truth and
 // there is no parallel cached copy.
-
-// leaderEndpoint returns the leader's postgres host and port; host is "" when
-// there is no leader snapshot or it hasn't reported a hostname.
-func leaderEndpoint(leader *snapshot.PoolerHealthState) (host string, port int32) {
-	return leader.GetMultipooler().GetHostname(), leader.GetMultipooler().GetPortMap()["postgres"]
-}
-
-// poolerID returns the pooler's ID from its health record.
-func poolerID(p *snapshot.PoolerHealthState) *clustermetadatapb.ID {
-	return p.GetMultipooler().GetId()
-}
 
 // freshAndInitialized reports whether p's health snapshot is within freshness
 // and initialized — the bar for treating p's report as usable evidence at all
@@ -81,60 +69,6 @@ func recruitable(p *snapshot.PoolerHealthState, now time.Time, freshness time.Du
 	return hs.GetConsensusStatus().GetRecruitBlockedUntil() == nil
 }
 
-// walReplayNotPaused reports whether the standby's WAL replay is active. A
-// pooler with no replication status returns false; callers that distinguish an
-// unavailable observation from a negative one must check for nil first.
-func walReplayNotPaused(p *snapshot.PoolerHealthState) bool {
-	rs := p.GetStatus().GetReplicationStatus()
-	if rs == nil {
-		return false
-	}
-	return !rs.GetIsWalReplayPaused()
-}
-
-// primaryConnInfoHost returns the standby's configured primary host, or "" if
-// replication is not configured.
-func primaryConnInfoHost(p *snapshot.PoolerHealthState) string {
-	return p.GetStatus().GetReplicationStatus().GetPrimaryConnInfo().GetHost()
-}
-
-// walReceiverActive reports whether the standby's WAL receiver is actively
-// streaming or waiting. "waiting" is healthy: the receiver is connected but
-// the primary has no new WAL to send. Any other status (including "") means
-// the receiver is not running — this covers timeline divergence where the
-// receiver connects, gets FATAL, and exits, leaving primary_conninfo on disk.
-func walReceiverActive(p *snapshot.PoolerHealthState) bool {
-	rs := p.GetStatus().GetReplicationStatus()
-	if rs == nil {
-		return false
-	}
-	return rs.GetWalReceiverStatus() == "streaming" || rs.GetWalReceiverStatus() == "waiting"
-}
-
-// walReceiverStreaming is a stricter form of walReceiverActive: it additionally
-// rejects the brief window after a receiver reconnect where postgres reports
-// "streaming" before any WAL has actually arrived (LastReceiveLsn still empty) —
-// the same FATAL-retry flicker FixReplication guards against. It is the signal
-// that a standby has bridged any initial archive catch-up and is genuinely
-// pulling WAL from the leader, which is what cohort admission requires (a cohort
-// member must advance only by streaming, never the archive). "waiting" stays
-// healthy: the receiver is connected and current, the primary just has nothing
-// new to send.
-func walReceiverStreaming(p *snapshot.PoolerHealthState) bool {
-	rs := p.GetStatus().GetReplicationStatus()
-	if rs == nil {
-		return false
-	}
-	switch rs.GetWalReceiverStatus() {
-	case "waiting":
-		return true
-	case "streaming":
-		return rs.GetLastReceiveLsn() != ""
-	default:
-		return false
-	}
-}
-
 // compareLeaderTimeline compares two leader snapshots by rule position. LSN is
 // intentionally excluded from the comparison (CompareRulePosition already
 // stops at decision-then-proposal): for leaders, the coordinator term must be
@@ -167,22 +101,4 @@ func analyzeAllPoolers(sa *snapshot.Shard, fn func(*snapshot.Shard, *snapshot.Po
 		}
 	}
 	return problems, firstErr
-}
-
-// observationFresh reports whether the pooler's most recent successful health
-// snapshot is recent enough (within maxAge, measured against now on the
-// orchestrator clock) to be trusted as a live observation.
-//
-// A pooler that has never recorded a snapshot is NOT fresh: with no observation
-// we have no evidence it is alive. Because LastSeen advances only on a
-// successful snapshot (never on a disconnect), freshness alone captures
-// "recently, successfully observed" — so callers need not separately consult a
-// connection flag or a snapshot counter, and a brief stream interruption does
-// not flip liveness until the observation genuinely ages out.
-func observationFresh(h *snapshot.PoolerHealthState, now time.Time, maxAge time.Duration) bool {
-	age, ok := snapshot.ObservationAge(h, now)
-	if !ok {
-		return false
-	}
-	return age <= maxAge
 }

@@ -86,7 +86,7 @@ func (a *CohortMismatchAnalyzer) Analyze(sa *snapshot.Shard) ([]types.Problem, e
 
 	var problems []types.Problem
 	for _, pa := range sa.Poolers {
-		id := poolerID(pa)
+		id := pa.ID()
 		key := topoclient.ComponentIDString(id)
 		// Removal candidates: current cohort members signaling INELIGIBLE.
 		if _, inCohort := cohortIDs[key]; inCohort {
@@ -252,12 +252,12 @@ func (a *CohortMismatchAnalyzer) isAdditionCandidate(sa *snapshot.Shard, pa *sna
 	}
 	// Replication must be configured and not stopped — otherwise the standby
 	// can't acknowledge writes and adding it would degrade durability.
-	if primaryConnInfoHost(pa) == "" || !walReplayNotPaused(pa) {
+	if pa.PrimaryConnInfoHost() == "" || !pa.WalReplayNotPaused() {
 		return false
 	}
 	// The WAL receiver must actually be streaming from the leader — configured
 	// + replaying also matches a node still catching up from the archive, and
 	// admitting such a node would clear its restore_command mid-catch-up. See
 	// the doc comment above.
-	return walReceiverStreaming(pa)
+	return pa.WalReceiverStreaming()
 }

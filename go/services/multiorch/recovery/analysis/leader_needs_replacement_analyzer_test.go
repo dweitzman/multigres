@@ -130,7 +130,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	dropFollower := func(sa *snapshot.Shard, id *clustermetadatapb.ID) {
 		kept := sa.Poolers[:0:0]
 		for _, pa := range sa.Poolers {
-			if poolerID(pa).Name != id.Name {
+			if pa.ID().Name != id.Name {
 				kept = append(kept, pa)
 			}
 		}
@@ -223,7 +223,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	// ReplicasConnectedToLeader verdict.
 	connectReplica := func(sa *snapshot.Shard) {
 		for i, pa := range sa.Poolers {
-			id := poolerID(pa)
+			id := pa.ID()
 			if id.GetName() == ruleCarrierName || proto.Equal(id, leaderID) {
 				continue
 			}
@@ -251,7 +251,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	// quorum_commit_ts, as if its heartbeat reader had observed one.
 	setQuorumCommitTs := func(sa *snapshot.Shard, id *clustermetadatapb.ID, at time.Time) {
 		for _, pa := range sa.Poolers {
-			if poolerID(pa).Name != id.Name {
+			if pa.ID().Name != id.Name {
 				continue
 			}
 			{
@@ -283,7 +283,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	// quorum-proven signal).
 	setLastReceiveLsnAdvance := func(sa *snapshot.Shard, id *clustermetadatapb.ID, at time.Time) {
 		for _, pa := range sa.Poolers {
-			if poolerID(pa).Name != id.Name {
+			if pa.ID().Name != id.Name {
 				continue
 			}
 			{
@@ -301,7 +301,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	// candidate leader's.
 	setPrimaryConnInfo := func(sa *snapshot.Shard, id *clustermetadatapb.ID, host string, port int32) {
 		for _, pa := range sa.Poolers {
-			if poolerID(pa).Name != id.Name {
+			if pa.ID().Name != id.Name {
 				continue
 			}
 			{

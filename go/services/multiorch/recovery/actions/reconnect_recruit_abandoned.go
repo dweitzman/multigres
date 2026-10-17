@@ -115,8 +115,8 @@ func (a *ReconnectRecruitAbandonedAction) Execute(ctx context.Context, rechecked
 				advanced)
 		}
 		a.logger.InfoContext(ctx, "advanced leader rule to reconnect stranded follower",
-			"leader", leader.Multipooler.Id.Name,
-			"follower", follower.Multipooler.Id.Name)
+			"leader", leader.ID().GetName(),
+			"follower", follower.ID().GetName())
 	}
 
 	// Relay the advanced decision to the follower. It no longer revokes this rule,
@@ -126,7 +126,7 @@ func (a *ReconnectRecruitAbandonedAction) Execute(ctx context.Context, rechecked
 		IntendedPrimary: &clustermetadatapb.IntendedPrimary{
 			Position:    advanced.Position(),
 			Primary:     topoclient.PoolerAddressFor(leader.Multipooler),
-			RewindReady: commonconsensus.IntendedPrimaryOrNil(leader.GetConsensusStatus()).GetRewindReady(),
+			RewindReady: leader.IntendedPrimary().GetRewindReady(),
 		},
 	}
 	if _, err := a.rpcClient.SetPrimary(ctx, follower.Multipooler, setReq); err != nil {
@@ -134,8 +134,8 @@ func (a *ReconnectRecruitAbandonedAction) Execute(ctx context.Context, rechecked
 	}
 
 	a.logger.InfoContext(ctx, "reconnect recruit-abandoned action completed",
-		"leader", leader.Multipooler.Id.Name,
-		"follower", follower.Multipooler.Id.Name)
+		"leader", leader.ID().GetName(),
+		"follower", follower.ID().GetName())
 	return nil
 }
 

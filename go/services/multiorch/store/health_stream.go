@@ -401,7 +401,7 @@ func (hs *HealthStream) applySnapshot(ctx context.Context, poolerHealth *Pooler,
 
 	now := timestamppb.Now()
 
-	poolerIDStr := topoclient.ComponentIDString(poolerHealth.Health().Multipooler.Id)
+	poolerIDStr := topoclient.ComponentIDString(poolerHealth.Health().ID())
 	update := func(existing *Pooler) *Pooler {
 		existing.Mutate(func(h *snapshot.PoolerHealthState) {
 			applyStatusFields(h, snap.Status, now)

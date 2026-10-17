@@ -88,7 +88,7 @@ func (a *RecruitAbandonedAnalyzer) analyzePooler(sa *snapshot.Shard, pa *snapsho
 
 	// We need a known leader with an address to dial: the fix drives an
 	// UpdateConsensusRule on the leader and then a SetPrimary toward the follower.
-	if host, _ := leaderEndpoint(sa.IntendedLeaderHealth()); host == "" {
+	if host, _ := sa.IntendedLeaderHealth().Endpoint(); host == "" {
 		return nil, nil
 	}
 
@@ -123,9 +123,9 @@ func (a *RecruitAbandonedAnalyzer) analyzePooler(sa *snapshot.Shard, pa *snapsho
 	return &types.Problem{
 		Code:           types.ProblemReplicaRecruitAbandoned,
 		CheckName:      a.Name(),
-		PoolerID:       poolerID(pa),
+		PoolerID:       pa.ID(),
 		ShardKey:       sa.ShardKey,
-		Description:    fmt.Sprintf("Follower %s is stranded by an abandoned recruit (revocation outranks the committed rule)", poolerID(pa).Name),
+		Description:    fmt.Sprintf("Follower %s is stranded by an abandoned recruit (revocation outranks the committed rule)", pa.ID().Name),
 		Priority:       types.PriorityHigh,
 		Scope:          types.ScopePooler,
 		DetectedAt:     sa.Now,

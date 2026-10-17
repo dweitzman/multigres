@@ -127,7 +127,7 @@ func (a *ReconcileCohortAction) Execute(ctx context.Context, rechecked types.Rec
 			return mterrors.Errorf(mtrpcpb.Code_NOT_FOUND,
 				"failed to find target pooler: pooler %s/%s not found", problem.PoolerID.GetCell(), problem.PoolerID.GetName())
 		}
-		targetID = target.Multipooler.Id
+		targetID = target.ID()
 	} else {
 		targetID = problem.PoolerID
 	}
@@ -183,7 +183,7 @@ func (a *ReconcileCohortAction) Execute(ctx context.Context, rechecked types.Rec
 
 	a.logger.InfoContext(ctx, "reconcile cohort action completed",
 		"target", targetID.Name,
-		"primary", leader.Multipooler.Id.Name,
+		"primary", leader.ID().GetName(),
 		"operation", op.String())
 	return nil
 }
@@ -201,7 +201,7 @@ func (a *ReconcileCohortAction) clearJoiningMemberArchive(ctx context.Context, l
 	statusResp, err := a.rpcClient.Status(ctx, leader.Multipooler, &multipoolermanagerdatapb.StatusRequest{})
 	if err != nil {
 		a.logger.WarnContext(ctx, "reconcile cohort: could not read leader status to clear joining member's archive; relying on monitor backstop",
-			"target", target.Multipooler.Id.Name, "error", err)
+			"target", target.ID().GetName(), "error", err)
 		return
 	}
 	// The leader's own rule store reflects the ADD synchronously (UpdateConsensusRule
@@ -209,7 +209,7 @@ func (a *ReconcileCohortAction) clearJoiningMemberArchive(ctx context.Context, l
 	postAddRule := commonconsensus.NewRuleTransition(commonconsensus.HighestIntendedRule([]*clustermetadatapb.ConsensusStatus{statusResp.GetConsensusStatus()}))
 	if postAddRule.IsEmpty() {
 		a.logger.WarnContext(ctx, "reconcile cohort: leader reported no rule after ADD; relying on monitor backstop",
-			"target", target.Multipooler.Id.Name)
+			"target", target.ID().GetName())
 		return
 	}
 	setPrimaryReq := &consensusdatapb.SetPrimaryRequest{
@@ -221,7 +221,7 @@ func (a *ReconcileCohortAction) clearJoiningMemberArchive(ctx context.Context, l
 	}
 	if _, err := a.rpcClient.SetPrimary(ctx, target.Multipooler, setPrimaryReq); err != nil {
 		a.logger.WarnContext(ctx, "reconcile cohort: SetPrimary to clear joining member's archive failed; relying on monitor backstop",
-			"target", target.Multipooler.Id.Name, "error", err)
+			"target", target.ID().GetName(), "error", err)
 	}
 }
 

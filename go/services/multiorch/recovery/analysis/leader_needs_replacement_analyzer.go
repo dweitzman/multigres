@@ -136,7 +136,7 @@ func followerStreamingFromLeader(sa *snapshot.Shard, replica *snapshot.PoolerHea
 // stream interruption does not read as a dead leader while a genuinely stalled
 // stream does.
 func intendedLeaderObservedLive(sa *snapshot.Shard) bool {
-	return observationFresh(sa.IntendedLeaderHealth(), sa.Now, sa.AvailabilityPolicy.LeaderLivenessFreshness)
+	return sa.IntendedLeaderHealth().ObservedWithin(sa.Now, sa.AvailabilityPolicy.LeaderLivenessFreshness)
 }
 
 // intendedLeaderHasResigned reports whether the leader has voluntarily signalled it
@@ -181,7 +181,7 @@ func intendedLeaderPostgresReady(sa *snapshot.Shard) bool {
 // TODO: also require the leader's own recorded position to carry the intended
 // rule, so a leader that has not installed it yet doesn't count as serving.
 func intendedLeaderServing(sa *snapshot.Shard) bool {
-	return observationFresh(sa.IntendedLeaderHealth(), sa.Now, sa.AvailabilityPolicy.LeaderChangeFreshness) &&
+	return sa.IntendedLeaderHealth().ObservedWithin(sa.Now, sa.AvailabilityPolicy.LeaderChangeFreshness) &&
 		intendedLeaderPostgresReady(sa) &&
 		!intendedLeaderHasResigned(sa)
 }
@@ -563,7 +563,7 @@ const (
 // pointed at the leader and can report it unreachable — recruitability is a
 // feasibility concern (recruitableCohort), not detection.
 func (a *LeaderNeedsReplacementAnalyzer) classifyFollowerToLeader(sa *snapshot.Shard, pa *snapshot.PoolerHealthState, leaderID *clustermetadatapb.ID, primaryHost string, primaryPort int32) followerLeaderRelation {
-	if !observationFresh(pa, sa.Now, sa.AvailabilityPolicy.FollowerStreamFreshness) {
+	if !pa.ObservedWithin(sa.Now, sa.AvailabilityPolicy.FollowerStreamFreshness) {
 		return relationUnaware
 	}
 	if followerStreamingFromLeader(sa, pa, primaryHost, primaryPort) {
@@ -623,7 +623,7 @@ func (a *LeaderNeedsReplacementAnalyzer) receiveLsnStillAdvancing(sa *snapshot.S
 	if leader == nil {
 		return false
 	}
-	primaryHost, primaryPort := leaderEndpoint(leader)
+	primaryHost, primaryPort := leader.Endpoint()
 
 	leaderKey := topoclient.ComponentIDString(leaderID)
 	var vouching []*clustermetadatapb.ID
@@ -682,7 +682,7 @@ func (a *LeaderNeedsReplacementAnalyzer) classifyCohortReachability(sa *snapshot
 		// No leader identity to check followers against — no evidence either way.
 		return nil, nil
 	}
-	primaryHost, primaryPort := leaderEndpoint(leader)
+	primaryHost, primaryPort := leader.Endpoint()
 	leaderKey := topoclient.ComponentIDString(leaderID)
 
 	for _, member := range cohort {
