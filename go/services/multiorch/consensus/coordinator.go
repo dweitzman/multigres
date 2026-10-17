@@ -221,6 +221,7 @@ func (c *Coordinator) GetCoordinatorID() *clustermetadatapb.ID {
 
 // GetShardNodes retrieves all multipooler nodes for a given shard from the topology.
 func (c *Coordinator) GetShardNodes(ctx context.Context, cell string, database string, tablegroup string, shardID string) ([]*snapshot.PoolerHealthState, error) {
+	// TODO: unused (no callers); delete.
 	// Get all multipoolers in the cell for this specific shard
 	poolers, err := c.topoStore.GetMultipoolersByCell(ctx, cell, &topoclient.GetMultipoolersByCellOptions{
 		DatabaseShard: &topoclient.DatabaseShard{

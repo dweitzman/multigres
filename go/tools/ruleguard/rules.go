@@ -188,6 +188,8 @@ func requireSortedMapsOverStdlibMaps(m dsl.Matcher) {
 // scheduling is non-deterministic; this logic must remain step-driven and
 // synchronous so simulation and tests are reproducible.
 func disallowGoroutinesInDeterministicPkgs(m dsl.Matcher) {
+	// TODO: add services/multiorch/recovery/analysis to the package pattern below; it
+	// has no goroutines today, so the rule would only guard against regressions.
 	m.Match(`go $_($*_)`).
 		Where(
 			m.File().PkgPath.Matches(`common/(consensus|ha)$`) &&
@@ -202,6 +204,8 @@ func disallowGoroutinesInDeterministicPkgs(m dsl.Matcher) {
 // the host clock. Pure constructors like time.Date, time.Unix, time.UTC, and
 // timestamppb.New(t) are not flagged.
 func disallowWallClockInDeterministicPkgs(m dsl.Matcher) {
+	// TODO: add services/multiorch/recovery/analysis to the package pattern below; its
+	// analyzers read the snapshot's clock and have no wall-clock reads today.
 	m.Import("time")
 	m.Import("google.golang.org/protobuf/types/known/timestamppb")
 
@@ -343,4 +347,33 @@ func disallowConsensusStateInGateway(m dsl.Matcher) {
 		m.File().PkgPath.Matches(`services/multigateway`) &&
 			!m.File().Name.Matches(`_test\.go$`)).
 		Report("multigateway must not consult consensus state; route on RoutingState (writability) only")
+}
+
+// disallowHealthWritesInDecisionCode flags assigning to a PoolerHealthState's fields
+// in multiorch's analyzers, actions and consensus code. There a health record is a
+// frozen snapshot shared with every other reader of that snapshot; the only writer is
+// the store, which edits a Clone through Pooler.Mutate and publishes it whole. Reading
+// the record, cloning it and building a new one are not flagged, only writes to its
+// fields. The rule cannot see writes through a nested message (for example
+// h.ConsensusStatus.IntendedPrimary = ...), so those still need review. Test files are
+// excluded.
+func disallowHealthWritesInDecisionCode(m dsl.Matcher) {
+	m.Import("github.com/multigres/multigres/go/services/multiorch/internal/snapshot")
+
+	m.Match(
+		`$h.Multipooler = $_`,
+		`$h.LastSeen = $_`,
+		`$h.ConsensusStatus = $_`,
+		`$h.LastPostgresReadyTime = $_`,
+		`$h.AvailabilityStatus = $_`,
+		`$h.StreamConnected = $_`,
+		`$h.Status = $_`,
+		`$h.StreamSnapshotsReceived = $_`,
+		`$h.StreamSnapshotsReceived++`,
+		`$h.StreamSnapshotsReceived += $_`,
+	).Where(
+		m["h"].Type.Is("*snapshot.PoolerHealthState") &&
+			m.File().PkgPath.Matches(`services/multiorch/(consensus|recovery/(analysis|actions))$`) &&
+			!m.File().Name.Matches(`_test\.go$`)).
+		Report("do not write to a PoolerHealthState in decision code; it is a frozen snapshot, and only the store changes health (Pooler.Mutate on a Clone)")
 }

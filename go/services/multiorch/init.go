@@ -36,6 +36,12 @@ import (
 	"github.com/multigres/multigres/go/tools/viperutil"
 )
 
+// TODO: move config, consensus, store, grpcserver and recovery/... under internal/.
+// Only cmd/multiorch imports this package, so internal/ would let the compiler
+// guarantee that exported symbols have no outside users and make unused exports
+// safe to delete. Do it as one mechanical move: update the import paths, the
+// depguard and ruleguard path patterns, and run make metrics for the catalog.
+
 // maxPoolerConnections is the maximum number of simultaneous RPC connections
 // to multipooler instances that multiorch will maintain. This limits both the
 // RPC client connection cache capacity and serves as a warning threshold for

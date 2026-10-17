@@ -376,7 +376,7 @@ func TestResolveCohort(t *testing.T) {
 
 	t.Run("resolves all members", func(t *testing.T) {
 		addressByID, cohort, err := c.resolveCohort(t.Context(),
-			[]*clustermetadatapb.ID{mp1.Id, mp2.Id})
+			[]*clustermetadatapb.ID{mp1.Id, mp2.Id}, nil)
 		require.NoError(t, err)
 
 		// Address map keyed by ClusterIDString.
@@ -391,17 +391,28 @@ func TestResolveCohort(t *testing.T) {
 		assert.Equal(t, mp2.Id.Name, cohort[1].Multipooler.Id.Name)
 	})
 
+	t.Run("attaches each member's status when one is known", func(t *testing.T) {
+		status1 := &clustermetadatapb.ConsensusStatus{Id: mp1.Id}
+		_, cohort, err := c.resolveCohort(t.Context(),
+			[]*clustermetadatapb.ID{mp1.Id, mp2.Id},
+			map[string]*clustermetadatapb.ConsensusStatus{topoclient.ClusterIDString(mp1.Id): status1})
+		require.NoError(t, err)
+		require.Len(t, cohort, 2)
+		assert.Same(t, status1, cohort[0].ConsensusStatus)
+		assert.Nil(t, cohort[1].ConsensusStatus, "a member with no known status stays unset")
+	})
+
 	t.Run("unknown member returns error", func(t *testing.T) {
 		unknown := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "ghost"}
 		_, _, err := c.resolveCohort(t.Context(),
-			[]*clustermetadatapb.ID{mp1.Id, unknown})
+			[]*clustermetadatapb.ID{mp1.Id, unknown}, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to look up cohort member")
 		assert.Contains(t, err.Error(), "ghost")
 	})
 
 	t.Run("empty cohort returns empty result", func(t *testing.T) {
-		addressByID, cohort, err := c.resolveCohort(t.Context(), nil)
+		addressByID, cohort, err := c.resolveCohort(t.Context(), nil, nil)
 		require.NoError(t, err)
 		assert.Empty(t, addressByID)
 		assert.Empty(t, cohort)
