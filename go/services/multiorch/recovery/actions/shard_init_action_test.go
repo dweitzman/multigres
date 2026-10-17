@@ -23,7 +23,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/multigres/multigres/go/common/timeouts"
 	"github.com/multigres/multigres/go/common/topoclient"
@@ -84,7 +83,7 @@ func makePoolerState(cell, name, db, tableGroup, shard string, initialized bool,
 		Name:      name,
 	}
 	return store.NewPooler(&snapshot.PoolerHealthState{
-		LastSeen: timestamppb.Now(),
+		LastSeen: time.Now(),
 		Status: &multipoolermanagerdatapb.Status{
 			IsInitialized: initialized,
 		},
@@ -166,7 +165,7 @@ func TestShardInitAction_GetInitializedPoolers_ExcludesStaleObservation(t *testi
 	ps := newPoolerStore(t)
 	stale := makePoolerState("cell1", "p1", "testdb", "default", "0", true, nil)
 	stale.Mutate(func(h *snapshot.PoolerHealthState) {
-		h.LastSeen = timestamppb.New(time.Now().Add(-time.Hour))
+		h.LastSeen = time.Now().Add(-time.Hour)
 	})
 	store.SeedCache(t, ps, stale)
 	store.SeedCache(t, ps, makePoolerState("cell1", "p2", "testdb", "default", "0", true, nil))

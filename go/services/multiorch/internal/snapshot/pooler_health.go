@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -37,16 +36,16 @@ type PoolerHealthState struct {
 	Multipooler *clustermetadatapb.Multipooler
 
 	// LastSeen is when multiorch last received a successful health snapshot from the
-	// pooler, for staleness detection.
-	LastSeen *timestamppb.Timestamp
+	// pooler, for staleness detection. The zero time means never.
+	LastSeen time.Time
 
 	// ConsensusStatus is the pooler's consensus state, for divergence detection.
 	ConsensusStatus *clustermetadatapb.ConsensusStatus
 
 	// LastPostgresReadyTime is the last time PostgreSQL specifically responded as
 	// healthy (pg_isready passed). Never cleared on failure; callers compare it
-	// against the evaluation time to detect staleness.
-	LastPostgresReadyTime *timestamppb.Timestamp
+	// against the evaluation time to detect staleness. The zero time means never.
+	LastPostgresReadyTime time.Time
 
 	// AvailabilityStatus is from the most recent status response. Non-nil only for
 	// nodes that are or have been primary. Used to detect voluntary demotions
@@ -73,9 +72,9 @@ func (h *PoolerHealthState) Clone() *PoolerHealthState {
 	}
 	return &PoolerHealthState{
 		Multipooler:             cloneProto(h.Multipooler),
-		LastSeen:                cloneProto(h.LastSeen),
+		LastSeen:                h.LastSeen,
 		ConsensusStatus:         cloneProto(h.ConsensusStatus),
-		LastPostgresReadyTime:   cloneProto(h.LastPostgresReadyTime),
+		LastPostgresReadyTime:   h.LastPostgresReadyTime,
 		AvailabilityStatus:      cloneProto(h.AvailabilityStatus),
 		StreamConnected:         h.StreamConnected,
 		Status:                  cloneProto(h.Status),
@@ -95,9 +94,9 @@ func (h *PoolerHealthState) GetMultipooler() *clustermetadatapb.Multipooler {
 	return h.Multipooler
 }
 
-func (h *PoolerHealthState) GetLastSeen() *timestamppb.Timestamp {
+func (h *PoolerHealthState) GetLastSeen() time.Time {
 	if h == nil {
-		return nil
+		return time.Time{}
 	}
 	return h.LastSeen
 }
@@ -109,9 +108,9 @@ func (h *PoolerHealthState) GetConsensusStatus() *clustermetadatapb.ConsensusSta
 	return h.ConsensusStatus
 }
 
-func (h *PoolerHealthState) GetLastPostgresReadyTime() *timestamppb.Timestamp {
+func (h *PoolerHealthState) GetLastPostgresReadyTime() time.Time {
 	if h == nil {
-		return nil
+		return time.Time{}
 	}
 	return h.LastPostgresReadyTime
 }
@@ -170,6 +169,13 @@ func (h *PoolerHealthState) IntendedPrimary() *clustermetadatapb.IntendedPrimary
 func (h *PoolerHealthState) ObservedWithin(now time.Time, maxAge time.Duration) bool {
 	age, ok := ObservationAge(h, now)
 	return ok && age <= maxAge
+}
+
+// PostgresReadyWithin reports whether the pooler's postgres last reported ready within
+// maxAge of now. Never having reported ready is not within any age.
+func (h *PoolerHealthState) PostgresReadyWithin(now time.Time, maxAge time.Duration) bool {
+	ready := h.GetLastPostgresReadyTime()
+	return !ready.IsZero() && now.Sub(ready) <= maxAge
 }
 
 // WalReplayNotPaused reports whether the standby's WAL replay is active. A pooler

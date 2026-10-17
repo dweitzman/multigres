@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -43,7 +42,7 @@ func TestShardNeedsInitializationAnalyzer_Analyze(t *testing.T) {
 	initialized := func(name string) *snapshot.PoolerHealthState {
 		return &snapshot.PoolerHealthState{
 			Multipooler: &clustermetadatapb.Multipooler{Id: poolerIDFor(name), ShardKey: shardKey},
-			LastSeen:    timestamppb.New(now),
+			LastSeen:    now,
 			Status:      &multipoolermanagerdatapb.Status{IsInitialized: true},
 		}
 	}
@@ -84,7 +83,7 @@ func TestShardNeedsInitializationAnalyzer_Analyze(t *testing.T) {
 		blipped := &snapshot.PoolerHealthState{
 			Multipooler:     &clustermetadatapb.Multipooler{Id: poolerIDFor("pooler-2"), ShardKey: shardKey},
 			StreamConnected: false,
-			LastSeen:        timestamppb.New(now),
+			LastSeen:        now,
 			Status:          &multipoolermanagerdatapb.Status{IsInitialized: true},
 		}
 		sa := &snapshot.Shard{
@@ -103,7 +102,7 @@ func TestShardNeedsInitializationAnalyzer_Analyze(t *testing.T) {
 	t.Run("does not count a genuinely stale observation", func(t *testing.T) {
 		stale := &snapshot.PoolerHealthState{
 			Multipooler: &clustermetadatapb.Multipooler{Id: poolerIDFor("pooler-2"), ShardKey: shardKey},
-			LastSeen:    timestamppb.New(now.Add(-time.Minute)),
+			LastSeen:    now.Add(-time.Minute),
 			Status:      &multipoolermanagerdatapb.Status{IsInitialized: true},
 		}
 		sa := &snapshot.Shard{

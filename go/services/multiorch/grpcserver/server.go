@@ -30,6 +30,7 @@ import (
 	commontypes "github.com/multigres/multigres/go/common/types"
 	multiorchpb "github.com/multigres/multigres/go/pb/multiorch"
 	"github.com/multigres/multigres/go/services/multiorch/consensus"
+	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 	"github.com/multigres/multigres/go/services/multiorch/recovery"
 )
 
@@ -205,9 +206,17 @@ func (s *MultiorchServer) buildPoolerHealthList(req *multiorchpb.ShardStatusRequ
 			StreamConnected: h.StreamConnected,
 			PostgresReady:   h.GetStatus().GetPostgresReady(),
 			PoolerType:      poolerType,
-			LastSeen:        h.LastSeen,
+			LastSeen:        lastSeenProto(h),
 		})
 	}
 
 	return healthList
+}
+
+// lastSeenProto is h's last-seen time for the API, nil when the pooler was never seen.
+func lastSeenProto(h *snapshot.PoolerHealthState) *timestamppb.Timestamp {
+	if h.GetLastSeen().IsZero() {
+		return nil
+	}
+	return timestamppb.New(h.GetLastSeen())
 }

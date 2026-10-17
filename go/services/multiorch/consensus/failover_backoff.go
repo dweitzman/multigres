@@ -21,7 +21,6 @@ import (
 	"github.com/multigres/multigres/go/common/ha"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
-	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
 )
 
 // filterCohortIneligible splits a cohort into the members that may
@@ -29,7 +28,7 @@ import (
 // INELIGIBLE (see runFailover).
 func filterCohortIneligible(cohort []*snapshot.PoolerHealthState) (eligible []*snapshot.PoolerHealthState, ineligible []string) {
 	for _, p := range cohort {
-		if types.PoolerIsCohortIneligible(p.GetAvailabilityStatus()) {
+		if p.CohortIneligible() {
 			ineligible = append(ineligible, p.GetMultipooler().GetId().GetName())
 			continue
 		}

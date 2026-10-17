@@ -20,7 +20,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
@@ -33,9 +32,9 @@ func withReplication(rs *multipoolermanagerdatapb.StandbyReplicationStatus) *Poo
 func TestPoolerHealthState_NilReceiverReadsAsZero(t *testing.T) {
 	var h *PoolerHealthState
 	assert.Nil(t, h.GetMultipooler())
-	assert.Nil(t, h.GetLastSeen())
+	assert.True(t, h.GetLastSeen().IsZero())
 	assert.Nil(t, h.GetConsensusStatus())
-	assert.Nil(t, h.GetLastPostgresReadyTime())
+	assert.True(t, h.GetLastPostgresReadyTime().IsZero())
 	assert.Nil(t, h.GetAvailabilityStatus())
 	assert.False(t, h.GetStreamConnected())
 	assert.Nil(t, h.GetStatus())
@@ -57,7 +56,7 @@ func TestPoolerHealthState_CloneIsDeep(t *testing.T) {
 	orig := &PoolerHealthState{
 		Multipooler:     &clustermetadatapb.Multipooler{Id: podID("p1"), Hostname: "h"},
 		ConsensusStatus: &clustermetadatapb.ConsensusStatus{IntendedPrimary: &clustermetadatapb.IntendedPrimary{RewindReady: false}},
-		LastSeen:        timestamppb.Now(),
+		LastSeen:        time.Now(),
 		StreamConnected: true,
 	}
 	clone := orig.Clone()
@@ -96,7 +95,7 @@ func TestPoolerHealthState_IntendedPrimaryPlaceholderReadsAsNil(t *testing.T) {
 func TestPoolerHealthState_ObservedWithin(t *testing.T) {
 	now := time.Unix(1700000000, 0)
 	seen := func(age time.Duration) *PoolerHealthState {
-		return &PoolerHealthState{LastSeen: timestamppb.New(now.Add(-age))}
+		return &PoolerHealthState{LastSeen: now.Add(-age)}
 	}
 	assert.True(t, seen(5*time.Second).ObservedWithin(now, 10*time.Second))
 	assert.True(t, seen(10*time.Second).ObservedWithin(now, 10*time.Second), "exactly at the limit is still fresh")
@@ -131,4 +130,16 @@ func TestPoolerHealthState_PrimaryConnInfoHost(t *testing.T) {
 	h := withReplication(&multipoolermanagerdatapb.StandbyReplicationStatus{PrimaryConnInfo: &multipoolermanagerdatapb.PrimaryConnInfo{Host: "leader-host"}})
 	assert.Equal(t, "leader-host", h.PrimaryConnInfoHost())
 	assert.Empty(t, withReplication(&multipoolermanagerdatapb.StandbyReplicationStatus{}).PrimaryConnInfoHost())
+}
+
+func TestPoolerHealthState_PostgresReadyWithin(t *testing.T) {
+	now := time.Unix(1700000000, 0)
+	ready := func(age time.Duration) *PoolerHealthState {
+		return &PoolerHealthState{LastPostgresReadyTime: now.Add(-age)}
+	}
+	assert.True(t, ready(5*time.Second).PostgresReadyWithin(now, 10*time.Second))
+	assert.True(t, ready(10*time.Second).PostgresReadyWithin(now, 10*time.Second), "exactly at the limit counts")
+	assert.False(t, ready(11*time.Second).PostgresReadyWithin(now, 10*time.Second))
+	assert.False(t, (&PoolerHealthState{}).PostgresReadyWithin(now, time.Hour), "never ready is not within any age")
+	assert.False(t, (*PoolerHealthState)(nil).PostgresReadyWithin(now, time.Hour))
 }

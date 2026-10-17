@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/types/known/durationpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/multigres/multigres/go/common/rpcclient"
 	"github.com/multigres/multigres/go/common/timeouts"
@@ -399,7 +398,7 @@ func (hs *HealthStream) applySnapshot(ctx context.Context, poolerHealth *Pooler,
 		return
 	}
 
-	now := timestamppb.Now()
+	now := time.Now()
 
 	poolerIDStr := topoclient.ComponentIDString(poolerHealth.Health().ID())
 	update := func(existing *Pooler) *Pooler {

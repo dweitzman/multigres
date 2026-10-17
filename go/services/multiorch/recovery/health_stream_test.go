@@ -158,7 +158,7 @@ func TestHealthStream_UpdatesStore_Primary(t *testing.T) {
 	}, 2*time.Second, 10*time.Millisecond, "snapshot should be applied")
 
 	updated, _ := poolerStore.GetRider(key)
-	require.NotNil(t, updated.Health().LastSeen)
+	require.False(t, updated.Health().LastSeen.IsZero())
 	require.Equal(t, clustermetadata.PoolerType_PRIMARY, updated.Health().GetStatus().GetPoolerType())
 	require.NotNil(t, updated.Health().GetStatus().GetPrimaryStatus())
 	require.Equal(t, "0/123ABC", updated.Health().GetStatus().GetPrimaryStatus().GetLsn())
@@ -294,7 +294,7 @@ func TestHealthStream_Disconnect(t *testing.T) {
 			Type: clustermetadata.PoolerType_PRIMARY, Hostname: "host1",
 			PortMap: map[string]int32{"grpc": 5432},
 		},
-		LastSeen: timestamppb.New(lastSeenTime),
+		LastSeen: lastSeenTime,
 	}, nil))
 
 	sm.NewForTest(t, poolerStore, poolerID)
@@ -323,7 +323,7 @@ func TestHealthStream_Disconnect(t *testing.T) {
 
 	// LastSeen should remain from the last successful snapshot, not cleared.
 	s, _ := poolerStore.GetRider(key)
-	require.NotNil(t, s.Health().LastSeen)
+	require.False(t, s.Health().LastSeen.IsZero())
 }
 
 // TestHealthStream_ConcurrentWatcherUpdate tests that a topology update written by the
@@ -451,11 +451,11 @@ func TestHealthStream_LastPostgresReadyTime(t *testing.T) {
 
 		require.Eventually(t, func() bool {
 			s, ok := poolerStore.GetRider(key)
-			return ok && s.Health().LastPostgresReadyTime != nil
+			return ok && !s.Health().LastPostgresReadyTime.IsZero()
 		}, 2*time.Second, 10*time.Millisecond)
 
 		updated, _ := poolerStore.GetRider(key)
-		require.True(t, updated.Health().LastPostgresReadyTime.AsTime().After(before))
+		require.True(t, updated.Health().LastPostgresReadyTime.After(before))
 	})
 
 	t.Run("preserves LastPostgresReadyTime when PostgresReady is false", func(t *testing.T) {
@@ -471,7 +471,7 @@ func TestHealthStream_LastPostgresReadyTime(t *testing.T) {
 		sm := newTestHealthStreamFactory(ctx, fakeClient, poolerStore)
 		poolerID := &clustermetadata.ID{Component: clustermetadata.ID_MULTIPOOLER, Cell: "zone1", Name: "pooler2"}
 		key := topoclient.ComponentIDString(poolerID)
-		lastReadyTime := timestamppb.New(time.Now().Add(-10 * time.Second))
+		lastReadyTime := time.Now().Add(-10 * time.Second)
 		store.SeedCache(t, poolerStore, store.NewPooler(&snapshot.PoolerHealthState{
 			Multipooler: &clustermetadata.Multipooler{
 				Id: poolerID, ShardKey: &clustermetadata.ShardKey{Database: "mydb", TableGroup: "tg1", Shard: "0"},
@@ -496,8 +496,8 @@ func TestHealthStream_LastPostgresReadyTime(t *testing.T) {
 		}, 2*time.Second, 10*time.Millisecond)
 
 		updated, _ := poolerStore.GetRider(key)
-		require.NotNil(t, updated.Health().LastPostgresReadyTime)
-		require.WithinDuration(t, lastReadyTime.AsTime(), updated.Health().LastPostgresReadyTime.AsTime(), time.Second,
+		require.False(t, updated.Health().LastPostgresReadyTime.IsZero())
+		require.WithinDuration(t, lastReadyTime, updated.Health().LastPostgresReadyTime, time.Second,
 			"LastPostgresReadyTime should not change when PostgresReady is false")
 	})
 }

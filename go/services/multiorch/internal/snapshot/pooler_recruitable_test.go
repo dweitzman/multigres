@@ -12,29 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package analysis
+package snapshot
 
 import (
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
-	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 )
 
-func TestRecruitable(t *testing.T) {
+func TestPoolerHealthState_Recruitable(t *testing.T) {
 	now := time.Now()
 	freshness := 30 * time.Second
 	id := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "p1"}
 
-	base := func() *snapshot.PoolerHealthState {
-		return &snapshot.PoolerHealthState{
+	base := func() *PoolerHealthState {
+		return &PoolerHealthState{
 			Multipooler: &clustermetadatapb.Multipooler{Id: id},
-			LastSeen:    timestamppb.New(now),
+			LastSeen:    now,
 			Status:      &multipoolermanagerdatapb.Status{IsInitialized: true},
 			ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 				Id:              id,
@@ -45,21 +43,21 @@ func TestRecruitable(t *testing.T) {
 
 	t.Run("fresh, initialized, eligible, positioned, not blocked", func(t *testing.T) {
 		p := base()
-		assert.True(t, recruitable(p, now, freshness))
+		assert.True(t, p.Recruitable(now, freshness))
 	})
 
 	t.Run("stale observation", func(t *testing.T) {
 		h := base()
-		h.LastSeen = timestamppb.New(now.Add(-time.Hour))
+		h.LastSeen = now.Add(-time.Hour)
 		p := h
-		assert.False(t, recruitable(p, now, freshness))
+		assert.False(t, p.Recruitable(now, freshness))
 	})
 
 	t.Run("not initialized", func(t *testing.T) {
 		h := base()
 		h.Status.IsInitialized = false
 		p := h
-		assert.False(t, recruitable(p, now, freshness))
+		assert.False(t, p.Recruitable(now, freshness))
 	})
 
 	t.Run("self-declared cohort-ineligible", func(t *testing.T) {
@@ -70,7 +68,7 @@ func TestRecruitable(t *testing.T) {
 			},
 		}
 		p := h
-		assert.False(t, recruitable(p, now, freshness))
+		assert.False(t, p.Recruitable(now, freshness))
 	})
 
 	t.Run("no cached position", func(t *testing.T) {
@@ -82,13 +80,13 @@ func TestRecruitable(t *testing.T) {
 		h := base()
 		h.ConsensusStatus.CurrentPosition = nil
 		p := h
-		assert.False(t, recruitable(p, now, freshness))
+		assert.False(t, p.Recruitable(now, freshness))
 	})
 
 	t.Run("outstanding RecruitBlockedUntil", func(t *testing.T) {
 		h := base()
 		h.ConsensusStatus.RecruitBlockedUntil = &clustermetadatapb.LsnPosition{Lsn: "0/5"}
 		p := h
-		assert.False(t, recruitable(p, now, freshness))
+		assert.False(t, p.Recruitable(now, freshness))
 	})
 }

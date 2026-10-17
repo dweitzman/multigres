@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
@@ -133,12 +132,12 @@ func (p *Pooler) Mutate(fn func(*snapshot.PoolerHealthState)) {
 //
 // Known limitation: nothing orders this against an older streamed snapshot that was
 // queued before the RPC answered; it can briefly overwrite the fresher state.
-func (p *Pooler) applyStatusResponse(status *multipoolermanagerdatapb.StatusResponse, now *timestamppb.Timestamp, requestedAt time.Time) bool {
+func (p *Pooler) applyStatusResponse(status *multipoolermanagerdatapb.StatusResponse, now, requestedAt time.Time) bool {
 	if status.GetStatus() == nil {
 		return false
 	}
 	p.Mutate(func(h *snapshot.PoolerHealthState) {
-		if seen := h.GetLastSeen(); seen != nil && seen.AsTime().After(requestedAt) {
+		if h.GetLastSeen().After(requestedAt) {
 			return
 		}
 		applyStatusFields(h, status, now)
@@ -148,7 +147,7 @@ func (p *Pooler) applyStatusResponse(status *multipoolermanagerdatapb.StatusResp
 
 // applyStatusFields writes a StatusResponse's fields into h. status.GetStatus() must be
 // non-nil.
-func applyStatusFields(h *snapshot.PoolerHealthState, status *multipoolermanagerdatapb.StatusResponse, now *timestamppb.Timestamp) {
+func applyStatusFields(h *snapshot.PoolerHealthState, status *multipoolermanagerdatapb.StatusResponse, now time.Time) {
 	h.LastSeen = now
 	h.Status = proto.Clone(status.GetStatus()).(*multipoolermanagerdatapb.Status)
 	if av := status.GetAvailabilityStatus(); av != nil {

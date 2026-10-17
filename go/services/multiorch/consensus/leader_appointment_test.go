@@ -19,10 +19,10 @@ import (
 	"log/slog"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/rpcclient"
@@ -82,7 +82,7 @@ func createMockNode(fakeClient *rpcclient.FakeClient, name string, term int64, w
 		},
 	}
 	if healthy {
-		healthState.LastSeen = timestamppb.Now()
+		healthState.LastSeen = time.Now()
 	}
 	return healthState
 }

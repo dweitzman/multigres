@@ -19,8 +19,6 @@ import (
 	"sync"
 	"time"
 
-	"google.golang.org/protobuf/types/known/timestamppb"
-
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -123,18 +121,18 @@ func (re *Engine) reconcileFollowerSlots(ctx context.Context, leader *snapshot.P
 // shouldPropagateLeaderInfo reports whether a follower needs a SetPrimary call
 // to learn the current leader or its rewind-readiness, given followerPrimary (the
 // follower's own last-reported IntendedPrimary, nil if never told anything)
-// and followerLastSeen (when we last heard from the follower, nil if never). now is
+// and followerLastSeen (when we last heard from the follower, zero if never). now is
 // passed in rather than read from the clock so this stays a pure function to
 // unit test directly, independent of the health cache and RPC client.
 func shouldPropagateLeaderInfo(
 	followerPrimary *clustermetadatapb.IntendedPrimary,
-	followerLastSeen *timestamppb.Timestamp,
+	followerLastSeen time.Time,
 	now time.Time,
 	leaderAddress *clustermetadatapb.PoolerAddress,
 	leaderRewindReady bool,
 	intendedRule commonconsensus.RuleTransition,
 ) bool {
-	if now.Sub(followerLastSeen.AsTime()) > leaderInfoStaleHealthThreshold {
+	if now.Sub(followerLastSeen) > leaderInfoStaleHealthThreshold {
 		return false // likely unreachable; don't let it hold up the pass
 	}
 	positionMatches := commonconsensus.IntendedPrimaryMatches(followerPrimary, leaderAddress, intendedRule.Position())

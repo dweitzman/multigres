@@ -20,7 +20,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -49,7 +48,7 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 		}
 		return &snapshot.PoolerHealthState{
 			Multipooler:        &clustermetadatapb.Multipooler{Id: id, ShardKey: shardKey},
-			LastSeen:           timestamppb.Now(),
+			LastSeen:           time.Now(),
 			AvailabilityStatus: av,
 			Status: &multipoolermanagerdatapb.Status{
 				IsInitialized: true,
@@ -72,7 +71,7 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 	leaderRider := func() *snapshot.PoolerHealthState {
 		return &snapshot.PoolerHealthState{
 			Multipooler:     &clustermetadatapb.Multipooler{Id: primaryID, ShardKey: shardKey},
-			LastSeen:        timestamppb.Now(),
+			LastSeen:        time.Now(),
 			ConsensusStatus: primaryConsensusStatus(primaryID, 1),
 			Status:          &multipoolermanagerdatapb.Status{IsInitialized: true, PostgresReady: true},
 		}
@@ -304,7 +303,7 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 		sa := healthyShard(nil, healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE))
 		{
 			h := sa.IntendedLeaderHealth()
-			h.LastSeen = nil
+			h.LastSeen = time.Time{}
 		} // stale observation → not serving
 		problems, err := analyzer.Analyze(sa)
 		require.NoError(t, err)
@@ -375,7 +374,7 @@ func TestCohortMismatchAnalyzer_Analyze(t *testing.T) {
 		pa := healthyReplicaPA(replicaA, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE)
 		{
 			h := pa
-			h.LastSeen = timestamppb.New(time.Now().Add(-time.Minute))
+			h.LastSeen = time.Now().Add(-time.Minute)
 		}
 		sa := healthyShard(nil, pa)
 		problems, err := analyzer.Analyze(sa)

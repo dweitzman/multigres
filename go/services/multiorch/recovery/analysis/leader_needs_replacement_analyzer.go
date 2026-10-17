@@ -143,7 +143,7 @@ func intendedLeaderObservedLive(sa *snapshot.Shard) bool {
 // should be replaced — cohort-eligibility INELIGIBLE or a term-matched
 // REQUESTING_DEMOTION — read from its self-reported AvailabilityStatus.
 func intendedLeaderHasResigned(sa *snapshot.Shard) bool {
-	return types.LeaderNeedsReplacement(sa.IntendedLeaderHealth())
+	return sa.IntendedLeaderHealth().RequestsLeaderReplacement()
 }
 
 // intendedLeaderShutdownTombstoned reports whether the shard's leader has been observed in
@@ -190,15 +190,6 @@ func intendedLeaderServing(sa *snapshot.Shard) bool {
 // postgres process alive (may be true even when pg_isready fails, e.g. SIGSTOP).
 func intendedLeaderPostgresRunning(sa *snapshot.Shard) bool {
 	return sa.IntendedLeaderHealth().GetStatus().GetPostgresRunning()
-}
-
-// intendedLeaderLastPostgresReadyTime returns when the leader's postgres last reported
-// ready per its snapshots, or the zero time if never observed ready.
-func intendedLeaderLastPostgresReadyTime(sa *snapshot.Shard) time.Time {
-	if ts := sa.IntendedLeaderHealth().GetLastPostgresReadyTime(); ts != nil {
-		return ts.AsTime()
-	}
-	return time.Time{}
 }
 
 // intendedLeaderPromoting reports whether the leader's last snapshot shows pg_promote()
@@ -321,7 +312,7 @@ func (a *LeaderNeedsReplacementAnalyzer) atRiskProblemIfDegraded(sa *snapshot.Sh
 // readable wrapper over CheckSufficientRecruitment's error return.
 //
 // TODO: this approximates the coordinator's pre-vote check (CheckProposalPossible,
-// run before Recruit) using the intended rule and a hand-written recruitable()
+// run before Recruit) using the intended rule and a hand-written Recruitable()
 // predicate. Share one check with the coordinator, anchored on the recorded rule.
 func recruitmentFeasible(policy commonconsensus.DurabilityPolicy, cohort, reachable []*clustermetadatapb.ID) bool {
 	return commonconsensus.CheckSufficientRecruitment(policy, cohort, reachable) == nil
@@ -484,9 +475,7 @@ func (a *LeaderNeedsReplacementAnalyzer) leaderReplacementCause(
 		// must not block failover forever. (Interim guard, replaced by the LSN
 		// progress signal when LeaderQuorumWritesStalled lands.)
 		if intendedLeaderPostgresRunning(sa) {
-			threshold := sa.AvailabilityPolicy.LeaderPostgresResponseThreshold
-			lastReady := intendedLeaderLastPostgresReadyTime(sa)
-			if !lastReady.IsZero() && sa.Now.Sub(lastReady) <= threshold {
+			if sa.IntendedLeaderHealth().PostgresReadyWithin(sa.Now, sa.AvailabilityPolicy.LeaderPostgresResponseThreshold) {
 				return "", "", false
 			}
 		}
@@ -749,11 +738,11 @@ func cohortSatisfying(sa *snapshot.Shard, cohort []*clustermetadatapb.ID, exclud
 // freshInitializedCohort returns the outgoing-cohort members we currently
 // have a fresh, initialized observation for — i.e. members whose report is
 // usable evidence, regardless of whether they could actually be recruited
-// (see freshAndInitialized's doc). Used only to judge "do we have any
+// (see FreshAndInitialized's doc). Used only to judge "do we have any
 // trustworthy signal at all," not recruitment feasibility.
 func freshInitializedCohort(sa *snapshot.Shard, cohort []*clustermetadatapb.ID, exclude *clustermetadatapb.ID) []*clustermetadatapb.ID {
 	return cohortSatisfying(sa, cohort, exclude, func(pa *snapshot.PoolerHealthState) bool {
-		return freshAndInitialized(pa, sa.Now, sa.AvailabilityPolicy.ObservationFreshness)
+		return pa.FreshAndInitialized(sa.Now, sa.AvailabilityPolicy.ObservationFreshness)
 	})
 }
 
@@ -766,7 +755,7 @@ func freshInitializedCohort(sa *snapshot.Shard, cohort []*clustermetadatapb.ID, 
 // ShardAtRisk check.
 func recruitableCohort(sa *snapshot.Shard, cohort []*clustermetadatapb.ID, exclude *clustermetadatapb.ID) []*clustermetadatapb.ID {
 	return cohortSatisfying(sa, cohort, exclude, func(pa *snapshot.PoolerHealthState) bool {
-		return recruitable(pa, sa.Now, sa.AvailabilityPolicy.ObservationFreshness)
+		return pa.Recruitable(sa.Now, sa.AvailabilityPolicy.ObservationFreshness)
 	})
 }
 
@@ -776,7 +765,7 @@ func recruitableCohort(sa *snapshot.Shard, cohort []*clustermetadatapb.ID, exclu
 // convict the leader (see emitFailover, which reports NoHealthyCohortMembers then).
 // This asks freshness/initialization, not recruitability — a draining or
 // recruit-blocked pooler's report is still real, trustworthy evidence; it just
-// can't win a Recruit round (see freshAndInitialized vs recruitable).
+// can't win a Recruit round (see FreshAndInitialized vs Recruitable).
 //
 // This is exactly freshInitializedCohort being non-empty: the leader is itself a
 // cohort member (the rule's CohortMembers includes it, which is why emitFailover

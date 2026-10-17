@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
@@ -48,7 +47,7 @@ func TestPooler_HealthWithin(t *testing.T) {
 			name: "observation older than maxAge is untrustworthy",
 			pooler: &snapshot.PoolerHealthState{
 				Multipooler: &clustermetadatapb.Multipooler{},
-				LastSeen:    timestamppb.New(now.Add(-time.Minute)),
+				LastSeen:    now.Add(-time.Minute),
 				Status:      &multipoolermanagerdatapb.Status{IsInitialized: true},
 			},
 			expectOK: false,
@@ -58,7 +57,7 @@ func TestPooler_HealthWithin(t *testing.T) {
 			pooler: &snapshot.PoolerHealthState{
 				StreamConnected: false, // e.g. a momentary stream blip
 				Multipooler:     &clustermetadatapb.Multipooler{},
-				LastSeen:        timestamppb.New(now),
+				LastSeen:        now,
 				Status:          &multipoolermanagerdatapb.Status{IsInitialized: true},
 			},
 			expectOK:   true,
@@ -68,7 +67,7 @@ func TestPooler_HealthWithin(t *testing.T) {
 			name: "fresh and initialized",
 			pooler: &snapshot.PoolerHealthState{
 				Multipooler: &clustermetadatapb.Multipooler{},
-				LastSeen:    timestamppb.New(now),
+				LastSeen:    now,
 				Status:      &multipoolermanagerdatapb.Status{IsInitialized: true},
 			},
 			expectOK:   true,
@@ -78,7 +77,7 @@ func TestPooler_HealthWithin(t *testing.T) {
 			name: "fresh but not initialized",
 			pooler: &snapshot.PoolerHealthState{
 				Multipooler: &clustermetadatapb.Multipooler{},
-				LastSeen:    timestamppb.New(now),
+				LastSeen:    now,
 				Status:      &multipoolermanagerdatapb.Status{IsInitialized: false},
 			},
 			expectOK:   true,

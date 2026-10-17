@@ -89,7 +89,7 @@ func newRefreshEngine(t *testing.T, action types.RecoveryAction, skipRefresh boo
 
 	store.SeedCache(t, engine.poolerCache, store.NewPooler(&snapshot.PoolerHealthState{
 		Multipooler: &clustermetadatapb.Multipooler{Id: poolerID, ShardKey: shardKey, Type: clustermetadatapb.PoolerType_PRIMARY},
-		LastSeen:    timestamppb.Now(),
+		LastSeen:    time.Now(),
 		Status:      &multipoolermanagerdatapb.Status{PoolerType: clustermetadatapb.PoolerType_PRIMARY, PostgresReady: false},
 	}, nil))
 
@@ -220,10 +220,10 @@ func TestAttemptRecovery_RefreshRefutesAStaleLeaderGuessWithTheRealAnalyzer(t *t
 	})
 	engine := NewEngine(ts, logger, cfg, []config.WatchTarget{}, fakeClient, newTestCoordinator(ts, fakeClient, "cell1"))
 
-	seed := func(self *clustermetadatapb.ID, status *multipoolermanagerdatapb.Status, readyAt *timestamppb.Timestamp) {
+	seed := func(self *clustermetadatapb.ID, status *multipoolermanagerdatapb.Status, readyAt time.Time) {
 		store.SeedCache(t, engine.poolerCache, store.NewPooler(&snapshot.PoolerHealthState{
 			Multipooler:           &clustermetadatapb.Multipooler{Id: self, ShardKey: shardKey},
-			LastSeen:              timestamppb.Now(),
+			LastSeen:              time.Now(),
 			LastPostgresReadyTime: readyAt,
 			Status:                status,
 			ConsensusStatus:       consensusStatus(self),
@@ -232,9 +232,9 @@ func TestAttemptRecovery_RefreshRefutesAStaleLeaderGuessWithTheRealAnalyzer(t *t
 	// The cache is stale about the leader: running but not ready, last ready long ago.
 	seed(leaderID, &multipoolermanagerdatapb.Status{
 		PoolerType: clustermetadatapb.PoolerType_PRIMARY, IsInitialized: true, PostgresRunning: true, PostgresReady: false,
-	}, timestamppb.New(time.Now().Add(-time.Hour)))
-	seed(follower1ID, &multipoolermanagerdatapb.Status{IsInitialized: true}, nil)
-	seed(follower2ID, &multipoolermanagerdatapb.Status{IsInitialized: true}, nil)
+	}, time.Now().Add(-time.Hour))
+	seed(follower1ID, &multipoolermanagerdatapb.Status{IsInitialized: true}, time.Time{})
+	seed(follower2ID, &multipoolermanagerdatapb.Status{IsInitialized: true}, time.Time{})
 
 	problems := detectProblems(t, engine)
 	require.Len(t, problems, 1, "the stale cache must make the leader look unhealthy")

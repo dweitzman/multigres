@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -40,7 +39,7 @@ func TestLeaderWritesProgressing(t *testing.T) {
 	leader := func(lastSeen time.Time, status multipoolermanagerdatapb.PostgresStatus) *PoolerHealthState {
 		return &PoolerHealthState{
 			Multipooler: &clustermetadatapb.Multipooler{},
-			LastSeen:    timestamppb.New(lastSeen),
+			LastSeen:    lastSeen,
 			Status:      &multipoolermanagerdatapb.Status{PostgresStatus: status},
 		}
 	}

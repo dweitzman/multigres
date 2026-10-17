@@ -49,7 +49,7 @@ func TestRecruitAbandonedAnalyzer_Analyze(t *testing.T) {
 	leaderHealth := func() *snapshot.PoolerHealthState {
 		return &snapshot.PoolerHealthState{
 			Multipooler: &clustermetadatapb.Multipooler{Id: primaryID, ShardKey: shardKey, Hostname: "primary.example.com"},
-			LastSeen:    timestamppb.New(now),
+			LastSeen:    now,
 			Status: &multipoolermanagerdatapb.Status{
 				PostgresReady:  true,
 				PostgresStatus: multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY,
@@ -64,7 +64,7 @@ func TestRecruitAbandonedAnalyzer_Analyze(t *testing.T) {
 	strandedFollower := func(initiatedAt time.Time, ownRule *clustermetadatapb.RulePosition, initialized bool) *snapshot.PoolerHealthState {
 		return &snapshot.PoolerHealthState{
 			Multipooler: &clustermetadatapb.Multipooler{Id: replicaID, ShardKey: shardKey},
-			LastSeen:    timestamppb.New(now),
+			LastSeen:    now,
 			Status:      &multipoolermanagerdatapb.Status{IsInitialized: initialized},
 			ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 				Id:              replicaID,

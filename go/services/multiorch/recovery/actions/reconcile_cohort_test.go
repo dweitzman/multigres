@@ -23,7 +23,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/multigres/multigres/go/common/rpcclient"
 	"github.com/multigres/multigres/go/common/topoclient"
@@ -69,7 +68,7 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 				Hostname: "primary.example.com",
 				PortMap:  map[string]int32{"postgres": 5432},
 			},
-			LastSeen: timestamppb.Now(),
+			LastSeen: time.Now(),
 			Status:   &multipoolermanagerdatapb.Status{PostgresStatus: multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY},
 			ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 				Id:              primaryID,
@@ -267,7 +266,7 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 				Hostname: "primary.example.com",
 				PortMap:  map[string]int32{"postgres": 5432},
 			},
-			LastSeen:        timestamppb.New(time.Now().Add(-time.Hour)),
+			LastSeen:        time.Now().Add(-time.Hour),
 			Status:          &multipoolermanagerdatapb.Status{PostgresStatus: multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY},
 			ConsensusStatus: &clustermetadatapb.ConsensusStatus{Id: primaryID, TermRevocation: &clustermetadatapb.TermRevocation{RevokedBelowTerm: 3}, CurrentPosition: &clustermetadatapb.PoolerPosition{Position: rule}},
 		}, nil))

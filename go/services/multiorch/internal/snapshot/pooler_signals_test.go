@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package types
+package snapshot
 
 import (
 	"testing"
@@ -20,10 +20,9 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 )
 
-func TestPoolerIsCohortIneligible(t *testing.T) {
+func TestPoolerHealthState_CohortIneligible(t *testing.T) {
 	tests := []struct {
 		name string
 		av   *clustermetadatapb.AvailabilityStatus
@@ -69,7 +68,7 @@ func TestPoolerIsCohortIneligible(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, PoolerIsCohortIneligible(tc.av))
+			assert.Equal(t, tc.want, (&PoolerHealthState{AvailabilityStatus: tc.av}).CohortIneligible())
 		})
 	}
 }
@@ -77,10 +76,10 @@ func TestPoolerIsCohortIneligible(t *testing.T) {
 // poolerWithLeaderTerm builds a PoolerHealthState whose ConsensusStatus has
 // the given primary term. Used to construct fixtures that exercise the
 // staleness check on REQUESTING_DEMOTION.
-func poolerWithLeaderTerm(t *testing.T, primaryTerm int64) *snapshot.PoolerHealthState {
+func poolerWithLeaderTerm(t *testing.T, primaryTerm int64) *PoolerHealthState {
 	t.Helper()
 	id := &clustermetadatapb.ID{Name: "mp1"}
-	return &snapshot.PoolerHealthState{
+	return &PoolerHealthState{
 		Multipooler: &clustermetadatapb.Multipooler{Id: id},
 		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 			Id: id,
@@ -100,10 +99,10 @@ func poolerWithLeaderTerm(t *testing.T, primaryTerm int64) *snapshot.PoolerHealt
 // is at a different (stale) term but whose outstanding proposal is at
 // primaryTerm — e.g. a self-promotion whose write reached WAL but wasn't
 // marked decided yet.
-func poolerWithLeaderTermViaProposal(t *testing.T, primaryTerm int64) *snapshot.PoolerHealthState {
+func poolerWithLeaderTermViaProposal(t *testing.T, primaryTerm int64) *PoolerHealthState {
 	t.Helper()
 	id := &clustermetadatapb.ID{Name: "mp1"}
-	return &snapshot.PoolerHealthState{
+	return &PoolerHealthState{
 		Multipooler: &clustermetadatapb.Multipooler{Id: id},
 		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 			Id: id,
@@ -117,20 +116,20 @@ func poolerWithLeaderTermViaProposal(t *testing.T, primaryTerm int64) *snapshot.
 	}
 }
 
-func TestLeaderNeedsReplacement(t *testing.T) {
+func TestPoolerHealthState_RequestsLeaderReplacement(t *testing.T) {
 	t.Run("nil PoolerHealthState returns false", func(t *testing.T) {
-		assert.False(t, LeaderNeedsReplacement(nil))
+		assert.False(t, (*PoolerHealthState)(nil).RequestsLeaderReplacement())
 	})
 
 	t.Run("no AvailabilityStatus returns false", func(t *testing.T) {
 		p := poolerWithLeaderTerm(t, 5)
-		assert.False(t, LeaderNeedsReplacement(p))
+		assert.False(t, p.RequestsLeaderReplacement())
 	})
 
 	t.Run("AvailabilityStatus with no signals returns false", func(t *testing.T) {
 		p := poolerWithLeaderTerm(t, 5)
 		p.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{}
-		assert.False(t, LeaderNeedsReplacement(p))
+		assert.False(t, p.RequestsLeaderReplacement())
 	})
 
 	t.Run("REQUESTING_DEMOTION with matching term returns true", func(t *testing.T) {
@@ -141,7 +140,7 @@ func TestLeaderNeedsReplacement(t *testing.T) {
 				Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION,
 			},
 		}
-		assert.True(t, LeaderNeedsReplacement(p))
+		assert.True(t, p.RequestsLeaderReplacement())
 	})
 
 	t.Run("REQUESTING_DEMOTION with term matching an undecided proposal returns true", func(t *testing.T) {
@@ -156,7 +155,7 @@ func TestLeaderNeedsReplacement(t *testing.T) {
 				Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION,
 			},
 		}
-		assert.True(t, LeaderNeedsReplacement(p))
+		assert.True(t, p.RequestsLeaderReplacement())
 	})
 
 	t.Run("REQUESTING_DEMOTION with stale term returns false", func(t *testing.T) {
@@ -168,7 +167,7 @@ func TestLeaderNeedsReplacement(t *testing.T) {
 				Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION,
 			},
 		}
-		assert.False(t, LeaderNeedsReplacement(p))
+		assert.False(t, p.RequestsLeaderReplacement())
 	})
 
 	t.Run("LeadershipSignal_ACTIVE returns false even at matching term", func(t *testing.T) {
@@ -179,7 +178,7 @@ func TestLeaderNeedsReplacement(t *testing.T) {
 				Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_ACTIVE,
 			},
 		}
-		assert.False(t, LeaderNeedsReplacement(p))
+		assert.False(t, p.RequestsLeaderReplacement())
 	})
 
 	t.Run("CohortEligibility INELIGIBLE returns true even without leadership signal", func(t *testing.T) {
@@ -192,7 +191,7 @@ func TestLeaderNeedsReplacement(t *testing.T) {
 				Signal: clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE,
 			},
 		}
-		assert.True(t, LeaderNeedsReplacement(p))
+		assert.True(t, p.RequestsLeaderReplacement())
 	})
 
 	t.Run("CohortEligibility INELIGIBLE returns true regardless of term", func(t *testing.T) {
@@ -203,7 +202,7 @@ func TestLeaderNeedsReplacement(t *testing.T) {
 				Signal: clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE,
 			},
 		}
-		assert.True(t, LeaderNeedsReplacement(p))
+		assert.True(t, p.RequestsLeaderReplacement())
 	})
 
 	t.Run("CohortEligibility ELIGIBLE returns false", func(t *testing.T) {
@@ -213,6 +212,6 @@ func TestLeaderNeedsReplacement(t *testing.T) {
 				Signal: clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE,
 			},
 		}
-		assert.False(t, LeaderNeedsReplacement(p))
+		assert.False(t, p.RequestsLeaderReplacement())
 	})
 }

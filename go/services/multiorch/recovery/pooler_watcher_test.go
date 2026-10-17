@@ -23,7 +23,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/multigres/multigres/go/common/rpcclient"
 	"github.com/multigres/multigres/go/common/topoclient"
@@ -100,7 +99,7 @@ func TestPoolerWatcher_InitialDiscovery(t *testing.T) {
 	p1, exists := poolerStore.GetRider(poolerKey("zone1", "pooler1"))
 	require.True(t, exists)
 	assert.Equal(t, "host1", p1.Health().Multipooler.Hostname)
-	assert.Nil(t, p1.Health().LastSeen, "new pooler should not have a health observation yet")
+	assert.True(t, p1.Health().LastSeen.IsZero(), "new pooler should not have a health observation yet")
 
 	// OnLive must have run for each discovered pooler — the cache rider's
 	// Stream handle (installed by the OnLive hook via HealthStream.spawnStream)
@@ -186,7 +185,7 @@ func TestPoolerWatcher_PoolerMetadataUpdate(t *testing.T) {
 
 	// Simulate a health-check populating some state
 	existing.Mutate(func(h *snapshot.PoolerHealthState) {
-		h.LastSeen = timestamppb.Now()
+		h.LastSeen = time.Now()
 	})
 	store.SeedCache(t, poolerStore, existing)
 
@@ -207,7 +206,7 @@ func TestPoolerWatcher_PoolerMetadataUpdate(t *testing.T) {
 	// Health-check state should be preserved
 	updated, exists := poolerStore.GetRider(pid)
 	require.True(t, exists)
-	assert.NotNil(t, updated.Health().LastSeen, "LastSeen should be preserved")
+	assert.False(t, updated.Health().LastSeen.IsZero(), "LastSeen should be preserved")
 
 	// An update to an existing pooler must NOT re-fire OnLive — that would
 	// install a fresh StreamHandle and replace the original one.

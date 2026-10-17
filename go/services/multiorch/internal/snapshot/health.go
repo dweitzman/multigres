@@ -30,11 +30,11 @@ import (
 // than the pooler-clock pooler_captured_at, so the subtraction against now
 // stays same-clock and is unaffected by skew between the hosts.
 func ObservationAge(h *PoolerHealthState, now time.Time) (time.Duration, bool) {
-	ls := h.GetLastSeen()
-	if ls == nil {
+	seen := h.GetLastSeen()
+	if seen.IsZero() {
 		return 0, false
 	}
-	return now.Sub(ls.AsTime()), true
+	return now.Sub(seen), true
 }
 
 // DefaultObservationFreshness is the default staleness tolerance for callers

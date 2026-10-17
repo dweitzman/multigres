@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
@@ -41,7 +40,7 @@ func TestReplicaNotReplicatingAnalyzer_Analyze(t *testing.T) {
 	leaderHealth := func() *snapshot.PoolerHealthState {
 		return &snapshot.PoolerHealthState{
 			Multipooler: &clustermetadatapb.Multipooler{Id: primaryID, ShardKey: shardKey, Hostname: "primary.example.com"},
-			LastSeen:    timestamppb.New(time.Now()),
+			LastSeen:    time.Now(),
 			Status:      &multipoolermanagerdatapb.Status{PostgresReady: true},
 		}
 	}
@@ -53,7 +52,7 @@ func TestReplicaNotReplicatingAnalyzer_Analyze(t *testing.T) {
 	pooler := func(id *clustermetadatapb.ID, selfLeader, initialized bool, primaryHost string, walReplayPaused bool, walReceiverStatus string) *snapshot.PoolerHealthState {
 		h := &snapshot.PoolerHealthState{
 			Multipooler: &clustermetadatapb.Multipooler{Id: id, ShardKey: shardKey},
-			LastSeen:    timestamppb.Now(),
+			LastSeen:    time.Now(),
 			Status: &multipoolermanagerdatapb.Status{
 				IsInitialized:   initialized,
 				PostgresRunning: true,
@@ -156,7 +155,7 @@ func TestReplicaNotReplicatingAnalyzer_Analyze(t *testing.T) {
 		replica := pooler(replicaID, false, true, "", false, "")
 		{
 			h := replica
-			h.LastSeen = timestamppb.New(now.Add(-time.Minute))
+			h.LastSeen = now.Add(-time.Minute)
 		}
 		sa := newTestShard(&snapshot.Shard{
 			ShardKey:           shardKey,

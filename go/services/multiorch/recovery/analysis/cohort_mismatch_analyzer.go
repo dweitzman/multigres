@@ -114,7 +114,7 @@ func (a *CohortMismatchAnalyzer) Analyze(sa *snapshot.Shard) ([]types.Problem, e
 			// and UpdateConsensusRule's compare-and-swap means only one
 			// removal lands per cycle regardless — the rest fail the CAS and
 			// retry next cycle against the now-changed cohort.
-			if types.PoolerIsCohortIneligible(pa.GetAvailabilityStatus()) &&
+			if pa.CohortIneligible() &&
 				commonconsensus.IsCohortMemberRemovalSafe(intendedRule, id) {
 				problems = append(problems, types.Problem{
 					Code:           types.ProblemCohortMemberIneligible,
@@ -247,7 +247,7 @@ func (a *CohortMismatchAnalyzer) isAdditionCandidate(sa *snapshot.Shard, pa *sna
 	if commonconsensus.SelfConsensusRole(pa.GetConsensusStatus()) == commonconsensus.ConsensusRoleLeader {
 		return false
 	}
-	if !recruitable(pa, sa.Now, sa.AvailabilityPolicy.ObservationFreshness) {
+	if !pa.Recruitable(sa.Now, sa.AvailabilityPolicy.ObservationFreshness) {
 		return false
 	}
 	// Replication must be configured and not stopped — otherwise the standby

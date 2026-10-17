@@ -89,8 +89,8 @@ func TestIntendedLeaderServing(t *testing.T) {
 				PortMap:  map[string]int32{"postgres": 5432},
 			},
 			ConsensusStatus:       primaryConsensusStatus(&clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary"}, 1),
-			LastSeen:              timestamppb.Now(),
-			LastPostgresReadyTime: timestamppb.New(respondedAt),
+			LastSeen:              time.Now(),
+			LastPostgresReadyTime: respondedAt,
 			Status: &multipoolermanagerdatapb.Status{
 				PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 				PostgresReady: true,
@@ -218,7 +218,7 @@ func TestReplicasStreamingFromLeader(t *testing.T) {
 					Shard:      "shard1",
 				},
 			},
-			LastSeen:                timestamppb.New(time.Now()),
+			LastSeen:                time.Now(),
 			StreamSnapshotsReceived: 1,
 			Status: &multipoolermanagerdatapb.Status{
 				PoolerType: clustermetadatapb.PoolerType_REPLICA,
@@ -248,7 +248,7 @@ func TestReplicasStreamingFromLeader(t *testing.T) {
 					Shard:      "shard1",
 				},
 			},
-			LastSeen:                timestamppb.New(time.Now()),
+			LastSeen:                time.Now(),
 			StreamSnapshotsReceived: 1,
 			Status: &multipoolermanagerdatapb.Status{
 				PoolerType: clustermetadatapb.PoolerType_REPLICA,
@@ -310,7 +310,7 @@ func TestReplicasStreamingFromLeader(t *testing.T) {
 					Shard:      "shard1",
 				},
 			},
-			LastSeen:                timestamppb.New(time.Now()),
+			LastSeen:                time.Now(),
 			StreamSnapshotsReceived: 1,
 			Status: &multipoolermanagerdatapb.Status{
 				PoolerType: clustermetadatapb.PoolerType_REPLICA,
@@ -340,7 +340,7 @@ func TestReplicasStreamingFromLeader(t *testing.T) {
 					Shard:      "shard1",
 				},
 			},
-			LastSeen:                timestamppb.New(time.Now()),
+			LastSeen:                time.Now(),
 			StreamSnapshotsReceived: 1,
 			Status: &multipoolermanagerdatapb.Status{
 				PoolerType:        clustermetadatapb.PoolerType_REPLICA,
@@ -430,7 +430,7 @@ func TestReplicasStreamingFromLeader(t *testing.T) {
 				PortMap:  map[string]int32{"postgres": 5432},
 			},
 			ConsensusStatus: primaryConsensusStatus(&clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "primary"}, 1),
-			LastSeen:        timestamppb.New(time.Now()),
+			LastSeen:        time.Now(),
 			Status: &multipoolermanagerdatapb.Status{
 				PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
 				PostgresReady: true,
@@ -484,7 +484,7 @@ func TestReplicasStreamingFromLeader(t *testing.T) {
 					Shard:      "shard1",
 				},
 			},
-			LastSeen:                timestamppb.New(time.Now()),
+			LastSeen:                time.Now(),
 			StreamSnapshotsReceived: 1,
 			Status: &multipoolermanagerdatapb.Status{
 				PoolerType: clustermetadatapb.PoolerType_REPLICA,
@@ -537,7 +537,7 @@ func TestReplicasStreamingFromLeader(t *testing.T) {
 						Shard:      "shard1",
 					},
 				},
-				LastSeen:                timestamppb.New(time.Now()),
+				LastSeen:                time.Now(),
 				StreamSnapshotsReceived: 1,
 				Status: &multipoolermanagerdatapb.Status{
 					PoolerType: clustermetadatapb.PoolerType_REPLICA,
@@ -593,7 +593,7 @@ func TestReplicasStreamingFromLeader(t *testing.T) {
 					Shard:      "shard1",
 				},
 			},
-			LastSeen:                timestamppb.New(time.Now()),
+			LastSeen:                time.Now(),
 			StreamSnapshotsReceived: 1,
 			Status: &multipoolermanagerdatapb.Status{
 				PoolerType: clustermetadatapb.PoolerType_REPLICA,
@@ -653,7 +653,7 @@ func TestReplicasStreamingFromLeader(t *testing.T) {
 					Shard:      "shard1",
 				},
 			},
-			LastSeen:                timestamppb.New(time.Now()),
+			LastSeen:                time.Now(),
 			StreamSnapshotsReceived: 1,
 			Status: &multipoolermanagerdatapb.Status{
 				PoolerType: clustermetadatapb.PoolerType_REPLICA,
@@ -716,7 +716,7 @@ func TestReplicasStreamingFromLeader(t *testing.T) {
 					Shard:      "shard1",
 				},
 			},
-			LastSeen:                timestamppb.New(time.Now()),
+			LastSeen:                time.Now(),
 			StreamSnapshotsReceived: 1,
 			Status: &multipoolermanagerdatapb.Status{
 				PoolerType: clustermetadatapb.PoolerType_REPLICA,
@@ -774,7 +774,7 @@ func TestReplicasStreamingFromLeader(t *testing.T) {
 					Shard:      "shard1",
 				},
 			},
-			LastSeen:                timestamppb.New(time.Now()),
+			LastSeen:                time.Now(),
 			StreamSnapshotsReceived: 1,
 			Status: &multipoolermanagerdatapb.Status{
 				PoolerType: clustermetadatapb.PoolerType_REPLICA,
@@ -831,7 +831,7 @@ func TestReplicasStreamingFromLeader(t *testing.T) {
 				Id:       &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell1", Name: "replica1"},
 				ShardKey: &clustermetadatapb.ShardKey{Database: "db1", TableGroup: "tg1", Shard: "shard1"},
 			},
-			LastSeen:                timestamppb.New(time.Now()),
+			LastSeen:                time.Now(),
 			StreamSnapshotsReceived: 10,
 			Status: &multipoolermanagerdatapb.Status{
 				PoolerType: clustermetadatapb.PoolerType_REPLICA,
@@ -845,7 +845,7 @@ func TestReplicasStreamingFromLeader(t *testing.T) {
 		}, nil))
 
 		// New pooler just added by PoolerWatcher: no health data yet
-		// (StreamSnapshotsReceived==0, LastSeen==nil).
+		// (StreamSnapshotsReceived==0, LastSeen unset).
 		store.SeedCache(t, ps, store.NewPooler(&snapshot.PoolerHealthState{
 			Multipooler: &clustermetadatapb.Multipooler{
 				Id:       &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "cell2", Name: "replica2"},

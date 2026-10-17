@@ -20,8 +20,6 @@ import (
 	"sync"
 	"time"
 
-	"google.golang.org/protobuf/types/known/timestamppb"
-
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/rpcclient"
 	"github.com/multigres/multigres/go/common/topoclient"
@@ -45,7 +43,7 @@ func (p *Pooler) refreshNow(ctx context.Context, rpcClient rpcclient.Multipooler
 	if err != nil {
 		return mterrors.Wrap(err, "pooler unreachable during health refresh")
 	}
-	if !p.applyStatusResponse(statusResp, timestamppb.Now(), requestedAt) {
+	if !p.applyStatusResponse(statusResp, time.Now(), requestedAt) {
 		return mterrors.Errorf(mtrpcpb.Code_INTERNAL, "pooler %s returned an empty status response",
 			topoclient.ComponentIDString(p.Health().GetMultipooler().GetId()))
 	}

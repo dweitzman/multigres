@@ -21,7 +21,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/durationpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -75,7 +74,7 @@ func TestSnapshotShards_SinglePrimary(t *testing.T) {
 			},
 			Type: clustermetadatapb.PoolerType_PRIMARY,
 		},
-		LastSeen:        timestamppb.Now(),
+		LastSeen:        time.Now(),
 		ConsensusStatus: primaryConsensusStatus(primaryID, 1),
 		Status: &multipoolermanagerdatapb.Status{
 			PoolerType: clustermetadatapb.PoolerType_PRIMARY,
@@ -154,7 +153,7 @@ func TestSnapshotShards_PrimaryWithReplicas(t *testing.T) {
 			Type:     clustermetadatapb.PoolerType_PRIMARY,
 			Hostname: "primary.example.com",
 		},
-		LastSeen:        timestamppb.Now(),
+		LastSeen:        time.Now(),
 		ConsensusStatus: primaryConsensusStatus(primaryID, 1),
 		Status: &multipoolermanagerdatapb.Status{
 			PoolerType: clustermetadatapb.PoolerType_PRIMARY,
@@ -178,7 +177,7 @@ func TestSnapshotShards_PrimaryWithReplicas(t *testing.T) {
 			},
 			Type: clustermetadatapb.PoolerType_REPLICA,
 		},
-		LastSeen: timestamppb.Now(),
+		LastSeen: time.Now(),
 		Status: &multipoolermanagerdatapb.Status{
 			PoolerType: clustermetadatapb.PoolerType_REPLICA,
 			ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
@@ -200,7 +199,7 @@ func TestSnapshotShards_PrimaryWithReplicas(t *testing.T) {
 			},
 			Type: clustermetadatapb.PoolerType_REPLICA,
 		},
-		LastSeen: timestamppb.Now(),
+		LastSeen: time.Now(),
 		Status: &multipoolermanagerdatapb.Status{
 			PoolerType: clustermetadatapb.PoolerType_REPLICA,
 			ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
@@ -255,7 +254,7 @@ func TestSnapshotShards_Replica(t *testing.T) {
 			},
 			Type: clustermetadatapb.PoolerType_PRIMARY,
 		},
-		LastSeen:        timestamppb.Now(),
+		LastSeen:        time.Now(),
 		ConsensusStatus: primaryConsensusStatus(primaryID, 1),
 		Status: &multipoolermanagerdatapb.Status{
 			PoolerType:    clustermetadatapb.PoolerType_PRIMARY,
@@ -275,7 +274,7 @@ func TestSnapshotShards_Replica(t *testing.T) {
 			},
 			Type: clustermetadatapb.PoolerType_REPLICA,
 		},
-		LastSeen: timestamppb.Now(),
+		LastSeen: time.Now(),
 		Status: &multipoolermanagerdatapb.Status{
 			PoolerType: clustermetadatapb.PoolerType_REPLICA,
 			ReplicationStatus: &multipoolermanagerdatapb.StandbyReplicationStatus{
@@ -325,7 +324,7 @@ func TestSnapshotShards_MultipleTableGroups(t *testing.T) {
 			},
 			Type: clustermetadatapb.PoolerType_PRIMARY,
 		},
-		LastSeen: timestamppb.Now(),
+		LastSeen: time.Now(),
 		Status: &multipoolermanagerdatapb.Status{
 			PoolerType: clustermetadatapb.PoolerType_PRIMARY,
 		},
@@ -346,7 +345,7 @@ func TestSnapshotShards_MultipleTableGroups(t *testing.T) {
 			},
 			Type: clustermetadatapb.PoolerType_PRIMARY,
 		},
-		LastSeen: timestamppb.Now(),
+		LastSeen: time.Now(),
 		Status: &multipoolermanagerdatapb.Status{
 			PoolerType: clustermetadatapb.PoolerType_PRIMARY,
 		},
@@ -749,7 +748,7 @@ func TestPopulatePrimaryInfo_PicksHighestPrimaryTerm(t *testing.T) {
 	// New (correct) primary: higher PrimaryTerm, postgres running.
 	store.SeedCache(t, ps, store.NewPooler(&snapshot.PoolerHealthState{
 		Multipooler: shardConfig(newPrimaryID),
-		LastSeen:    timestamppb.Now(),
+		LastSeen:    time.Now(),
 		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 			Id:             newPrimaryID,
 			TermRevocation: &clustermetadatapb.TermRevocation{RevokedBelowTerm: 11},
@@ -769,7 +768,7 @@ func TestPopulatePrimaryInfo_PicksHighestPrimaryTerm(t *testing.T) {
 	// Stale primary: lower primary term, postgres NOT running (just came back after being killed).
 	store.SeedCache(t, ps, store.NewPooler(&snapshot.PoolerHealthState{
 		Multipooler: shardConfig(stalePrimaryID),
-		LastSeen:    timestamppb.Now(),
+		LastSeen:    time.Now(),
 		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 			Id:             stalePrimaryID,
 			TermRevocation: &clustermetadatapb.TermRevocation{RevokedBelowTerm: 10},
@@ -793,7 +792,7 @@ func TestPopulatePrimaryInfo_PicksHighestPrimaryTerm(t *testing.T) {
 			ShardKey: &clustermetadatapb.ShardKey{Database: "testdb", TableGroup: "default", Shard: "0"},
 			Type:     clustermetadatapb.PoolerType_REPLICA,
 		},
-		LastSeen: timestamppb.Now(),
+		LastSeen: time.Now(),
 		Status: &multipoolermanagerdatapb.Status{
 			PoolerType: clustermetadatapb.PoolerType_REPLICA,
 		},

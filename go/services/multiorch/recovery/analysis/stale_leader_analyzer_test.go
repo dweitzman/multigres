@@ -20,7 +20,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
@@ -35,7 +34,7 @@ func selfLeaderRider(id *clustermetadatapb.ID, shardKey *clustermetadatapb.Shard
 	return &snapshot.PoolerHealthState{
 		Multipooler:     &clustermetadatapb.Multipooler{Id: id, ShardKey: shardKey},
 		StreamConnected: streamConnected,
-		LastSeen:        timestamppb.Now(),
+		LastSeen:        time.Now(),
 		ConsensusStatus: primaryRuleStatus(id, term),
 	}
 }
@@ -122,7 +121,7 @@ func TestStaleLeaderAnalyzer_Analyze(t *testing.T) {
 		staleRider := selfLeaderRider(staleID, shardKey, 5, true)
 		{
 			h := staleRider
-			h.LastSeen = timestamppb.New(now.Add(-time.Hour))
+			h.LastSeen = now.Add(-time.Hour)
 		}
 		sa := newTestShard(&snapshot.Shard{
 			ShardKey:           shardKey,

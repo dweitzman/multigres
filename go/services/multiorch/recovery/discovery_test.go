@@ -22,7 +22,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/multigres/multigres/go/common/rpcclient"
 	"github.com/multigres/multigres/go/common/topoclient"
@@ -396,10 +395,10 @@ func TestDiscovery_PreservesTimestamps(t *testing.T) {
 	poolerInfo, ok := engine.poolerCache.GetRider(poolerKey("zone1", "pooler1"))
 	require.True(t, ok)
 	require.Equal(t, "host1", poolerInfo.Health().Multipooler.Hostname)
-	require.Nil(t, poolerInfo.Health().LastSeen, "LastSeen should be nil (not yet health checked successfully)")
+	require.True(t, poolerInfo.Health().LastSeen.IsZero(), "LastSeen should be unset (not yet health checked successfully)")
 
 	// Simulate health check by updating timestamps
-	now := timestamppb.Now()
+	now := time.Now()
 	poolerInfo.Mutate(func(h *snapshot.PoolerHealthState) {
 		h.LastSeen = now
 	})
@@ -427,7 +426,7 @@ func TestDiscovery_PreservesTimestamps(t *testing.T) {
 	require.Equal(t, "host2", uh.Multipooler.Hostname, "hostname should be updated")
 
 	// Timestamps and computed fields should be preserved (exact equality)
-	require.True(t, now.AsTime().Equal(uh.LastSeen.AsTime()), "LastSeen should be preserved")
+	require.True(t, now.Equal(uh.LastSeen), "LastSeen should be preserved")
 }
 
 func TestDiscovery_MultipleWatchTargets(t *testing.T) {
