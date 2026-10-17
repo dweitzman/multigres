@@ -22,12 +22,10 @@ import (
 	"github.com/multigres/multigres/go/common/eventlog"
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/rpcclient"
-	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/services/multiorch/config"
 	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
 
-	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
@@ -205,11 +203,7 @@ func (a *FixReplicationAction) fixNotReplicating(
 	// relay the leader's self-reported rewind_ready so a diverged replica defers
 	// its pg_rewind until the leader has checkpointed onto its current timeline.
 	setPrimaryReq := &consensusdatapb.SetPrimaryRequest{
-		IntendedPrimary: &clustermetadatapb.IntendedPrimary{
-			Position:    shard.HighestIntendedRule().Position(),
-			Primary:     topoclient.PoolerAddressFor(leader.Multipooler),
-			RewindReady: leader.IntendedPrimary().GetRewindReady(),
-		},
+		IntendedPrimary: leader.IntendedPrimaryAt(shard.HighestIntendedRule()),
 	}
 	if _, err := a.rpcClient.SetPrimary(ctx, replica.Multipooler, setPrimaryReq); err != nil {
 		return mterrors.Wrap(err, "SetPrimary RPC failed")

@@ -29,7 +29,6 @@ import (
 	commontypes "github.com/multigres/multigres/go/common/types"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
 
-	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 )
@@ -164,11 +163,7 @@ func (a *DemoteStaleLeaderAction) Execute(ctx context.Context, rechecked types.R
 	// stale leader defers its pg_rewind until the correct leader has
 	// checkpointed onto its current timeline.
 	setPrimaryReq := &consensusdatapb.SetPrimaryRequest{
-		IntendedPrimary: &clustermetadatapb.IntendedPrimary{
-			Position:    correctRule.Position(),
-			Primary:     topoclient.PoolerAddressFor(correctLeader.Multipooler),
-			RewindReady: correctLeader.IntendedPrimary().GetRewindReady(),
-		},
+		IntendedPrimary: correctLeader.IntendedPrimaryAt(correctRule),
 	}
 	if _, err := a.rpcClient.SetPrimary(ctx, staleLeader.Multipooler, setPrimaryReq); err != nil {
 		return mterrors.Wrap(err, "SetPrimary RPC failed")

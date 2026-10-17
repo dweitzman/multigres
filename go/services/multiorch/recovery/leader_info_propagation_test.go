@@ -23,7 +23,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
-	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/rpcclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
@@ -141,7 +140,8 @@ func TestShouldPropagateLeaderInfo(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := shouldPropagateLeaderInfo(tt.rp, tt.lastSeen, now, leaderAddress, tt.leaderRewindReady, commonconsensus.NewRuleTransition(currentPosition))
+			want := &clustermetadatapb.IntendedPrimary{Position: currentPosition, Primary: leaderAddress, RewindReady: tt.leaderRewindReady}
+			got := shouldPropagateLeaderInfo(tt.rp, tt.lastSeen, now, want)
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -195,7 +195,8 @@ func TestPropagateLeaderInfoToPooler_CachesSuccessfulSetPrimary(t *testing.T) {
 	leaderAddress := leaderInfoTestAddress("leader")
 	position := &clustermetadatapb.RulePosition{Decision: leaderInfoTestRule(5)}
 
-	re.propagateLeaderInfoToPooler(t.Context(), pooler.Health(), time.Now(), leaderAddress, true, commonconsensus.NewRuleTransition(position))
+	re.propagateLeaderInfoToPooler(t.Context(), pooler.Health(), time.Now(),
+		&clustermetadatapb.IntendedPrimary{Position: position, Primary: leaderAddress, RewindReady: true})
 
 	require.Equal(t, []string{"SetPrimary(multipooler-zone1-p1)"}, fake.GetCallLog(), "SetPrimary must actually have been called")
 	got := pooler.Health().GetConsensusStatus().GetIntendedPrimary()
@@ -227,7 +228,8 @@ func TestPropagateLeaderInfoToPooler_NeverRegressesCachedPrimary(t *testing.T) {
 	store.SeedCache(t, cache, pooler)
 
 	stalePosition := &clustermetadatapb.RulePosition{Decision: leaderInfoTestRule(3)}
-	re.propagateLeaderInfoToPooler(t.Context(), pooler.Health(), time.Now(), leaderInfoTestAddress("stale-leader"), false, commonconsensus.NewRuleTransition(stalePosition))
+	re.propagateLeaderInfoToPooler(t.Context(), pooler.Health(), time.Now(),
+		&clustermetadatapb.IntendedPrimary{Position: stalePosition, Primary: leaderInfoTestAddress("stale-leader")})
 
 	require.Equal(t, []string{"SetPrimary(multipooler-zone1-p1)"}, fake.GetCallLog(), "SetPrimary must actually have been called with the stale info")
 	got := pooler.Health().GetConsensusStatus().GetIntendedPrimary()
@@ -291,8 +293,11 @@ func TestPropagateLeaderInfoToPooler_FollowerEvictedFromCache(t *testing.T) {
 		LastSeen:    time.Now(),
 	}
 
-	re.propagateLeaderInfoToPooler(t.Context(), follower, time.Now(), leaderInfoTestAddress("leader"), true,
-		commonconsensus.NewRuleTransition(&clustermetadatapb.RulePosition{Decision: leaderInfoTestRule(5)}))
+	re.propagateLeaderInfoToPooler(t.Context(), follower, time.Now(), &clustermetadatapb.IntendedPrimary{
+		Position:    &clustermetadatapb.RulePosition{Decision: leaderInfoTestRule(5)},
+		Primary:     leaderInfoTestAddress("leader"),
+		RewindReady: true,
+	})
 
 	require.Equal(t, []string{"SetPrimary(multipooler-zone1-gone)"}, fake.GetCallLog())
 }

@@ -79,8 +79,7 @@ func (re *Engine) propagateLeaderInfoForShard(ctx context.Context, shard *snapsh
 	// restart self-heals on the next tick.
 	re.reconcileFollowerSlots(ctx, leader, shard.CohortEligibleFollowerIDs())
 
-	leaderAddress := topoclient.PoolerAddressFor(leader.GetMultipooler())
-	leaderRewindReady := leader.IntendedPrimary().GetRewindReady()
+	want := leader.IntendedPrimaryAt(rule)
 
 	// One goroutine per follower: each pooler appears at most once in a shard's
 	// member list, so there's never more than one in-flight SetPrimary to the
@@ -94,7 +93,7 @@ func (re *Engine) propagateLeaderInfoForShard(ctx context.Context, shard *snapsh
 		wg.Add(1)
 		go func(follower *snapshot.PoolerHealthState) {
 			defer wg.Done()
-			re.propagateLeaderInfoToPooler(ctx, follower, shard.Now, leaderAddress, leaderRewindReady, rule)
+			re.propagateLeaderInfoToPooler(ctx, follower, shard.Now, want)
 		}(pooler)
 	}
 	wg.Wait()
@@ -128,18 +127,16 @@ func shouldPropagateLeaderInfo(
 	followerPrimary *clustermetadatapb.IntendedPrimary,
 	followerLastSeen time.Time,
 	now time.Time,
-	leaderAddress *clustermetadatapb.PoolerAddress,
-	leaderRewindReady bool,
-	intendedRule commonconsensus.RuleTransition,
+	want *clustermetadatapb.IntendedPrimary,
 ) bool {
 	if now.Sub(followerLastSeen) > leaderInfoStaleHealthThreshold {
 		return false // likely unreachable; don't let it hold up the pass
 	}
-	positionMatches := commonconsensus.IntendedPrimaryMatches(followerPrimary, leaderAddress, intendedRule.Position())
+	positionMatches := commonconsensus.IntendedPrimaryMatches(followerPrimary, want.GetPrimary(), want.GetPosition())
 	// rewind_ready only ever goes false -> true within a coordinator term (see
 	// RecordTermPrimary), so never tell a follower that already believes true
 	// otherwise — even if our own cached view of the leader is stale-false.
-	if positionMatches && (followerPrimary.GetRewindReady() || followerPrimary.GetRewindReady() == leaderRewindReady) {
+	if positionMatches && (followerPrimary.GetRewindReady() || followerPrimary.GetRewindReady() == want.GetRewindReady()) {
 		return false // already knows everything we'd tell it
 	}
 	return true
@@ -148,30 +145,22 @@ func shouldPropagateLeaderInfo(
 // propagateLeaderInfoToPooler tells one follower about the current leader (its
 // address, rewind-readiness and the intended rule) via SetPrimary, unless the
 // follower already knows all three. follower is the follower's health as of the
-// snapshot at now; the leader is described only by leaderAddress and
-// leaderRewindReady.
+// snapshot at now; want is what to tell it about the leader.
 func (re *Engine) propagateLeaderInfoToPooler(
 	ctx context.Context,
 	follower *snapshot.PoolerHealthState,
 	now time.Time,
-	leaderAddress *clustermetadatapb.PoolerAddress,
-	leaderRewindReady bool,
-	intendedRule commonconsensus.RuleTransition,
+	want *clustermetadatapb.IntendedPrimary,
 ) {
 	followerPrimary := follower.IntendedPrimary()
-	if !shouldPropagateLeaderInfo(followerPrimary, follower.GetLastSeen(), now, leaderAddress, leaderRewindReady, intendedRule) {
+	if !shouldPropagateLeaderInfo(followerPrimary, follower.GetLastSeen(), now, want) {
 		return
 	}
 
-	toTell := &clustermetadatapb.IntendedPrimary{
-		Position:    intendedRule.Position(),
-		Primary:     leaderAddress,
-		RewindReady: leaderRewindReady,
-	}
 	rpcCtx, cancel := context.WithTimeout(ctx, setPrimaryPropagationTimeout)
 	defer cancel()
 	_, err := re.rpcClient.SetPrimary(rpcCtx, follower.GetMultipooler(), &consensusdatapb.SetPrimaryRequest{
-		IntendedPrimary: toTell,
+		IntendedPrimary: want,
 	})
 	if err != nil {
 		re.logger.WarnContext(ctx, "leader-info propagation: SetPrimary failed, will retry next tick",
@@ -192,7 +181,7 @@ func (re *Engine) propagateLeaderInfoToPooler(
 			h.ConsensusStatus = &clustermetadatapb.ConsensusStatus{}
 		}
 		current := commonconsensus.IntendedPrimaryOrNil(h.ConsensusStatus)
-		if merged, changed := commonconsensus.MergeIntendedPrimary(current, toTell); changed {
+		if merged, changed := commonconsensus.MergeIntendedPrimary(current, want); changed {
 			h.ConsensusStatus.IntendedPrimary = merged //nolint:gocritic // the linter is trying to protect against not using IntendedPrimaryOrNil on read, but this is a write.
 		}
 	})

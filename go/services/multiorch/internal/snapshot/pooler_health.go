@@ -20,6 +20,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
+	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
@@ -158,6 +159,19 @@ func (h *PoolerHealthState) Endpoint() (host string, port int32) {
 // if it has none (an unset or placeholder entry reads as nil).
 func (h *PoolerHealthState) IntendedPrimary() *clustermetadatapb.IntendedPrimary {
 	return commonconsensus.IntendedPrimaryOrNil(h.GetConsensusStatus())
+}
+
+// IntendedPrimaryAt returns the IntendedPrimary that tells a follower to use this
+// pooler as its primary under rule: the rule's position, this pooler's topology
+// address, and its own rewind_ready. rewind_ready is the pooler's self-report with no
+// global equivalent, so it is relayed rather than derived: a follower that needs a
+// pg_rewind defers it until the leader has checkpointed onto its current timeline.
+func (h *PoolerHealthState) IntendedPrimaryAt(rule commonconsensus.RuleTransition) *clustermetadatapb.IntendedPrimary {
+	return &clustermetadatapb.IntendedPrimary{
+		Position:    rule.Position(),
+		Primary:     topoclient.PoolerAddressFor(h.GetMultipooler()),
+		RewindReady: h.IntendedPrimary().GetRewindReady(),
+	}
 }
 
 // ObservedWithin reports whether the pooler's most recent successful health snapshot

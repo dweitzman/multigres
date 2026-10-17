@@ -22,10 +22,8 @@ import (
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/rpcclient"
-	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
 
-	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
@@ -123,11 +121,7 @@ func (a *ReconnectRecruitAbandonedAction) Execute(ctx context.Context, rechecked
 	// so it accepts SetPrimary and rejoins. RewindReady is relayed so a follower
 	// that also needs a rewind defers it until the leader is checkpointed.
 	setReq := &consensusdatapb.SetPrimaryRequest{
-		IntendedPrimary: &clustermetadatapb.IntendedPrimary{
-			Position:    advanced.Position(),
-			Primary:     topoclient.PoolerAddressFor(leader.Multipooler),
-			RewindReady: leader.IntendedPrimary().GetRewindReady(),
-		},
+		IntendedPrimary: leader.IntendedPrimaryAt(advanced),
 	}
 	if _, err := a.rpcClient.SetPrimary(ctx, follower.Multipooler, setReq); err != nil {
 		return mterrors.Wrap(err, "SetPrimary to reconnect stranded follower failed")

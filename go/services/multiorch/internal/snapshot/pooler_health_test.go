@@ -20,7 +20,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 
+	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
@@ -142,4 +144,30 @@ func TestPoolerHealthState_PostgresReadyWithin(t *testing.T) {
 	assert.False(t, ready(11*time.Second).PostgresReadyWithin(now, 10*time.Second))
 	assert.False(t, (&PoolerHealthState{}).PostgresReadyWithin(now, time.Hour), "never ready is not within any age")
 	assert.False(t, (*PoolerHealthState)(nil).PostgresReadyWithin(now, time.Hour))
+}
+
+func TestPoolerHealthState_IntendedPrimaryAt(t *testing.T) {
+	rule := &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{RuleNumber: ruleNumber(7), LeaderId: podID("leader")}}
+	leader := &PoolerHealthState{
+		Multipooler: &clustermetadatapb.Multipooler{
+			Id: podID("leader"), Hostname: "leader-host", PortMap: map[string]int32{"postgres": 5432},
+		},
+		ConsensusStatus: &clustermetadatapb.ConsensusStatus{IntendedPrimary: &clustermetadatapb.IntendedPrimary{
+			Position:    rule,
+			RewindReady: true,
+		}},
+	}
+
+	got := leader.IntendedPrimaryAt(commonconsensus.NewRuleTransition(rule))
+	assert.Equal(t, "leader", got.GetPrimary().GetId().GetName())
+	assert.Equal(t, "leader-host", got.GetPrimary().GetHost())
+	assert.Equal(t, int32(5432), got.GetPrimary().GetPostgresPort())
+	assert.True(t, proto.Equal(rule, got.GetPosition()), "carries the rule's position, not the pooler's own")
+	assert.True(t, got.GetRewindReady(), "relays the pooler's own rewind_ready")
+
+	notReady := &PoolerHealthState{Multipooler: leader.Multipooler}
+	assert.False(t, notReady.IntendedPrimaryAt(commonconsensus.NewRuleTransition(rule)).GetRewindReady())
+
+	nobody := (*PoolerHealthState)(nil).IntendedPrimaryAt(commonconsensus.NewRuleTransition(rule))
+	assert.Nil(t, nobody.GetPrimary(), "a missing record has no address to point followers at")
 }
