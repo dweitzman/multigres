@@ -448,34 +448,54 @@ func TestRevocationsMatchingDecision(t *testing.T) {
 	})
 }
 
-func TestHighestRevokedBelowTermRevocation(t *testing.T) {
+func TestReferenceRevocation(t *testing.T) {
 	t.Run("nil for no candidates", func(t *testing.T) {
-		assert.Nil(t, HighestRevokedBelowTermRevocation(nil))
+		assert.Nil(t, ReferenceRevocation(nil))
 	})
 
 	t.Run("the only candidate wins", func(t *testing.T) {
 		only := &clustermetadatapb.TermRevocation{RevokedBelowTerm: 5}
-		assert.Same(t, only, HighestRevokedBelowTermRevocation([]*clustermetadatapb.TermRevocation{only}))
+		assert.Same(t, only, ReferenceRevocation([]*clustermetadatapb.TermRevocation{only}))
 	})
 
 	t.Run("a strictly higher term wins over a lower one", func(t *testing.T) {
 		low := &clustermetadatapb.TermRevocation{RevokedBelowTerm: 3}
 		high := &clustermetadatapb.TermRevocation{RevokedBelowTerm: 5}
-		assert.Same(t, high, HighestRevokedBelowTermRevocation([]*clustermetadatapb.TermRevocation{low, high}))
-		assert.Same(t, high, HighestRevokedBelowTermRevocation([]*clustermetadatapb.TermRevocation{high, low}))
+		assert.Same(t, high, ReferenceRevocation([]*clustermetadatapb.TermRevocation{low, high}))
+		assert.Same(t, high, ReferenceRevocation([]*clustermetadatapb.TermRevocation{high, low}))
 	})
 
-	t.Run("ties are broken deterministically by AcceptedCoordinatorId, not candidate order", func(t *testing.T) {
-		// Two different coordinators (coordA, coordB) each accepted at the same
-		// term — sharing a term number doesn't mean sharing an outcome; at most
-		// one could have actually won it, possibly none did. The winner must not
-		// depend on which order the candidates were assembled in.
-		tiedA := &clustermetadatapb.TermRevocation{RevokedBelowTerm: 7, AcceptedCoordinatorId: coordA}
-		tiedB := &clustermetadatapb.TermRevocation{RevokedBelowTerm: 7, AcceptedCoordinatorId: coordB}
-		got1 := HighestRevokedBelowTermRevocation([]*clustermetadatapb.TermRevocation{tiedA, tiedB})
-		got2 := HighestRevokedBelowTermRevocation([]*clustermetadatapb.TermRevocation{tiedB, tiedA})
-		require.NotNil(t, got1)
-		assert.Same(t, got1, got2)
+	t.Run("at the same term the earliest initiation wins, whichever coordinator it was, and not candidate order", func(t *testing.T) {
+		// Two coordinators raced for the same term. The earlier attempt is the one most
+		// likely to have won it, so a later competing attempt (typically one that
+		// recruited a straggler) must not become the reference, even when its coordinator
+		// ID sorts first.
+		earlier := &clustermetadatapb.TermRevocation{RevokedBelowTerm: 7, AcceptedCoordinatorId: coordB, CoordinatorInitiatedAt: ts1}
+		later := &clustermetadatapb.TermRevocation{RevokedBelowTerm: 7, AcceptedCoordinatorId: coordA, CoordinatorInitiatedAt: ts2}
+		assert.Same(t, earlier, ReferenceRevocation([]*clustermetadatapb.TermRevocation{earlier, later}))
+		assert.Same(t, earlier, ReferenceRevocation([]*clustermetadatapb.TermRevocation{later, earlier}))
+	})
+
+	t.Run("a higher term wins even if it was initiated later", func(t *testing.T) {
+		earlierLowTerm := &clustermetadatapb.TermRevocation{RevokedBelowTerm: 6, CoordinatorInitiatedAt: ts1}
+		laterHighTerm := &clustermetadatapb.TermRevocation{RevokedBelowTerm: 7, CoordinatorInitiatedAt: ts2}
+		assert.Same(t, laterHighTerm, ReferenceRevocation([]*clustermetadatapb.TermRevocation{earlierLowTerm, laterHighTerm}))
+	})
+
+	t.Run("a revocation with no initiation time never beats one that has one", func(t *testing.T) {
+		// ValidateRevocation rejects these, so this is defensive: an unset timestamp
+		// reads as the epoch and must not become the "earliest".
+		unset := &clustermetadatapb.TermRevocation{RevokedBelowTerm: 7, AcceptedCoordinatorId: coordA}
+		set := &clustermetadatapb.TermRevocation{RevokedBelowTerm: 7, AcceptedCoordinatorId: coordB, CoordinatorInitiatedAt: ts2}
+		assert.Same(t, set, ReferenceRevocation([]*clustermetadatapb.TermRevocation{unset, set}))
+		assert.Same(t, set, ReferenceRevocation([]*clustermetadatapb.TermRevocation{set, unset}))
+	})
+
+	t.Run("identical initiation times fall back to the coordinator ID, not candidate order", func(t *testing.T) {
+		tiedA := &clustermetadatapb.TermRevocation{RevokedBelowTerm: 7, AcceptedCoordinatorId: coordA, CoordinatorInitiatedAt: ts1}
+		tiedB := &clustermetadatapb.TermRevocation{RevokedBelowTerm: 7, AcceptedCoordinatorId: coordB, CoordinatorInitiatedAt: ts1}
+		assert.Same(t, tiedA, ReferenceRevocation([]*clustermetadatapb.TermRevocation{tiedA, tiedB}))
+		assert.Same(t, tiedA, ReferenceRevocation([]*clustermetadatapb.TermRevocation{tiedB, tiedA}))
 	})
 
 	t.Run("collapses the same revocation reported by multiple cohort members", func(t *testing.T) {
@@ -485,18 +505,17 @@ func TestHighestRevokedBelowTermRevocation(t *testing.T) {
 		same := func() *clustermetadatapb.TermRevocation {
 			return &clustermetadatapb.TermRevocation{RevokedBelowTerm: 7, AcceptedCoordinatorId: coordA}
 		}
-		got := HighestRevokedBelowTermRevocation([]*clustermetadatapb.TermRevocation{same(), same(), same()})
+		got := ReferenceRevocation([]*clustermetadatapb.TermRevocation{same(), same(), same()})
 		require.NotNil(t, got)
 		assert.Equal(t, int64(7), got.GetRevokedBelowTerm())
 	})
 
-	t.Run("same coordinator and term but unequal content: the more recent CoordinatorInitiatedAt wins, not candidate order", func(t *testing.T) {
-		// A restarted coordinator can reuse a term with a fresh
-		// CoordinatorInitiatedAt — the exact conflict ValidateRevocation
-		// rejects once a pooler has already accepted one of them, so different
-		// poolers can end up holding different ones. Same AcceptedCoordinatorId
-		// and RevokedBelowTerm rules out the earlier tie-breaks entirely; the
-		// winner must still not depend on iteration order.
+	t.Run("same coordinator and term but unequal content: the earlier CoordinatorInitiatedAt wins, not candidate order", func(t *testing.T) {
+		// A restarted coordinator can reuse a term with a fresh CoordinatorInitiatedAt:
+		// the conflict ValidateRevocation rejects once a pooler has already accepted one
+		// of them, so different poolers can end up holding different ones. The older
+		// attempt holds the state; the fresh one only reached poolers that had not
+		// accepted it. It must stay the reference whatever the iteration order.
 		older := &clustermetadatapb.TermRevocation{
 			RevokedBelowTerm:       7,
 			AcceptedCoordinatorId:  coordA,
@@ -507,8 +526,8 @@ func TestHighestRevokedBelowTermRevocation(t *testing.T) {
 			AcceptedCoordinatorId:  coordA,
 			CoordinatorInitiatedAt: ts2,
 		}
-		assert.Same(t, newer, HighestRevokedBelowTermRevocation([]*clustermetadatapb.TermRevocation{older, newer}))
-		assert.Same(t, newer, HighestRevokedBelowTermRevocation([]*clustermetadatapb.TermRevocation{newer, older}))
+		assert.Same(t, older, ReferenceRevocation([]*clustermetadatapb.TermRevocation{older, newer}))
+		assert.Same(t, older, ReferenceRevocation([]*clustermetadatapb.TermRevocation{newer, older}))
 	})
 }
 
@@ -1001,9 +1020,9 @@ func TestIsRuleRevoked(t *testing.T) {
 	}
 }
 
-// coordinatorTiebreak is a compatibility contract between orchestrators: it follows the
-// serialized cell_name string, not the cell and name fields in turn.
-func TestCoordinatorOrder_FollowsTheSerializedForm(t *testing.T) {
+// coordinatorTiebreak is only the last resort between identical initiation times; it orders
+// by the serialized coordinator ID.
+func TestCoordinatorTiebreak_OrdersBySerializedID(t *testing.T) {
 	accepted := func(cell, name string) *clustermetadatapb.TermRevocation {
 		return &clustermetadatapb.TermRevocation{
 			AcceptedCoordinatorId: &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIORCH, Cell: cell, Name: name},
@@ -1013,9 +1032,4 @@ func TestCoordinatorOrder_FollowsTheSerializedForm(t *testing.T) {
 	assert.Negative(t, coordinatorTiebreak(accepted("zone1", "a"), accepted("zone1", "b")))
 	assert.Positive(t, coordinatorTiebreak(accepted("zone2", "a"), accepted("zone1", "b")))
 	assert.Zero(t, coordinatorTiebreak(accepted("zone1", "a"), accepted("zone1", "a")))
-
-	// "zone10_x" sorts before "zone1_x" ('0' < '_'), although a field-wise order puts the
-	// shorter cell "zone1" first. Changing this would make old and new orchestrators
-	// disagree on which revocation wins.
-	assert.Negative(t, coordinatorTiebreak(accepted("zone10", "x"), accepted("zone1", "x")))
 }

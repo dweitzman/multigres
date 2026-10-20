@@ -67,7 +67,7 @@ func eligibleConsensusStatuses(cohort []*snapshot.PoolerHealthState) []*clusterm
 func (c *Coordinator) NextFailoverAttempt(cohort []*snapshot.PoolerHealthState, now time.Time, backoff ha.BackoffSchedule) (readyAt time.Time, ready bool) {
 	statuses := eligibleConsensusStatuses(cohort)
 	decision := commonconsensus.HighestDecidedRule(statuses)
-	rev := commonconsensus.HighestRevokedBelowTermRevocation(backoffRelevantRevocations(statuses, decision))
+	rev := commonconsensus.ReferenceRevocation(backoffRelevantRevocations(statuses, decision))
 	if rev == nil {
 		return time.Time{}, true
 	}

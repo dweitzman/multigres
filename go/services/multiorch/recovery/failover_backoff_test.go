@@ -152,7 +152,7 @@ func TestNextFailoverAttempt(t *testing.T) {
 		// This only covers the case with no competing live attempt. It does
 		// NOT cover (and there is no test for) an untargeted revocation with
 		// a higher term than a concurrently-live, decision-matched one:
-		// HighestRevokedBelowTermRevocation picks purely by term, with no
+		// ReferenceRevocation picks purely by term, with no
 		// decision-awareness, so such a revocation would still win the
 		// reduction and collapse the live attempt's escalated backoff down
 		// to this flat default. Known, accepted gap (narrow — requires a

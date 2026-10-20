@@ -108,7 +108,7 @@ func NewTermRevocation(
 	// previousRecruitForDecision is the most recent prior attempt at THIS SAME
 	// decision — deliberately decision-scoped, unlike maxTerm above (see
 	// revocationsMatchingDecision's doc for why).
-	previousRecruitForDecision := HighestRevokedBelowTermRevocation(revocationsMatchingDecision(statuses, replaceDecision))
+	previousRecruitForDecision := ReferenceRevocation(revocationsMatchingDecision(statuses, replaceDecision))
 
 	return &clustermetadatapb.TermRevocation{
 		RevokedBelowTerm:       maxTerm + 1,
@@ -154,10 +154,10 @@ func revocationsMatchingDecision(statuses []*clustermetadatapb.ConsensusStatus, 
 	return matches
 }
 
-// HighestRevokedBelowTermRevocation returns the candidate with the highest
-// RevokedBelowTerm, or nil if candidates is empty.
+// ReferenceRevocation returns the revocation that recruitment attempts are paced from,
+// or nil if candidates is empty: the earliest attempt at the highest RevokedBelowTerm.
 //
-// This compares RevokedBelowTerm alone — it has no notion of which decision
+// This compares terms and initiation times alone — it has no notion of which decision
 // or shard state a candidate is about. Callers MUST pre-filter candidates to
 // a single, comparable scope before calling this (see revocationsMatchingDecision
 // above, and consensus.backoffRelevantRevocations in the multiorch package, for
@@ -165,51 +165,55 @@ func revocationsMatchingDecision(statuses []*clustermetadatapb.ConsensusStatus, 
 // decisions lets an unrelated, higher-term revocation win over one that's
 // actually relevant.
 //
-// Ties are possible: different coordinators can each believe they held the
-// same term against the same decision on different cohort members — at most
-// one could have actually won it, possibly none did. Ties are broken
-// deterministically (proto.Equal duplicates count as one candidate) rather
-// than by candidate order, so every caller computes the same result from the
-// same set regardless of how it assembled candidates — required wherever
-// independent orchestrators must agree on what a revocation "is" without
-// coordinating directly (see ha.BackoffSchedule):
+// Ties are possible: different coordinators can each believe they held the same term
+// against the same decision on different cohort members — at most one could have
+// actually won it, possibly none did. The earliest CoordinatorInitiatedAt is chosen,
+// as the attempt most likely to have won the term and changed the shard: a later
+// competing attempt, typically one that recruited a straggler, does not postpone the
+// next attempt. The same holds for a restarted coordinator that reuses a term with a
+// fresh CoordinatorInitiatedAt. A revocation with no initiation time (ValidateRevocation
+// rejects those, so this is defensive) is later than any that has one, so it can never
+// pull the anchor back to the epoch. Identical times
+// fall back to coordinatorTiebreak, and proto.Equal duplicates count as one candidate.
 //
-//   - Different AcceptedCoordinatorId: the lexicographically smaller one wins.
-//   - Same AcceptedCoordinatorId (e.g. a restarted coordinator reusing a term
-//     with a fresh CoordinatorInitiatedAt — the conflict ValidateRevocation
-//     rejects once a pooler has already accepted one of them): the more
-//     recent CoordinatorInitiatedAt wins, as the newer attempt.
-func HighestRevokedBelowTermRevocation(candidates []*clustermetadatapb.TermRevocation) *clustermetadatapb.TermRevocation {
-	var best *clustermetadatapb.TermRevocation
+// The result is a pure function of the set of distinct candidates, not their order, so
+// every caller computes the same result from the same set — required wherever
+// independent orchestrators must agree on what a revocation "is" without
+// coordinating directly (see ha.BackoffSchedule).
+func ReferenceRevocation(candidates []*clustermetadatapb.TermRevocation) *clustermetadatapb.TermRevocation {
+	var reference *clustermetadatapb.TermRevocation
 	for _, rev := range candidates {
-		switch {
-		case best == nil:
-			best = rev
-		case proto.Equal(best, rev):
-			// Same revocation observed via a different cohort member; keep best.
-		case rev.GetRevokedBelowTerm() != best.GetRevokedBelowTerm():
-			if rev.GetRevokedBelowTerm() > best.GetRevokedBelowTerm() {
-				best = rev
-			}
-		default:
-			switch order := coordinatorTiebreak(rev, best); {
-			case order < 0:
-				best = rev
-			case order == 0 && rev.GetCoordinatorInitiatedAt().AsTime().After(best.GetCoordinatorInitiatedAt().AsTime()):
-				best = rev
-			}
+		if reference == nil || betterReference(rev, reference) {
+			reference = rev
 		}
 	}
-	return best
+	return reference
 }
 
-// coordinatorTiebreak deterministically chooses between two revocations at the same term
-// from different coordinators. Neither coordinator wins the term; the order only has to be
-// the same everywhere, because the chosen revocation anchors the shared backoff schedule
-// and the next attempt count, and orchestrators that disagreed would compute different
-// retry times. It follows the serialized coordinator ID, so changing it (for example to
-// compare cell and name field by field, which disagrees when one cell name is a prefix of
-// another, as with zone1 and zone10) needs a migration.
+// betterReference reports whether a is a better reference than b: a higher term, then an
+// earlier initiation (an unset time counts as later than any set one), then the
+// coordinatorTiebreak.
+func betterReference(a, b *clustermetadatapb.TermRevocation) bool {
+	if a.GetRevokedBelowTerm() != b.GetRevokedBelowTerm() {
+		return a.GetRevokedBelowTerm() > b.GetRevokedBelowTerm()
+	}
+	aAt, bAt := a.GetCoordinatorInitiatedAt(), b.GetCoordinatorInitiatedAt()
+	switch {
+	case aAt == nil && bAt != nil:
+		return false
+	case aAt != nil && bAt == nil:
+		return true
+	case aAt != nil && !aAt.AsTime().Equal(bAt.AsTime()):
+		return aAt.AsTime().Before(bAt.AsTime())
+	}
+	return coordinatorTiebreak(a, b) < 0
+}
+
+// coordinatorTiebreak is the last resort between two revocations at the same term that
+// were initiated at the same time (or both with no recorded time): it orders them by the
+// serialized ID of the coordinator that accepted them. The order is arbitrary and only has
+// to be the same everywhere, because the chosen revocation anchors the shared backoff
+// schedule and the next attempt count.
 func coordinatorTiebreak(a, b *clustermetadatapb.TermRevocation) int {
 	return strings.Compare(
 		topoclient.ClusterIDString(a.GetAcceptedCoordinatorId()),
