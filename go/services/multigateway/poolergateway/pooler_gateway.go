@@ -162,8 +162,7 @@ type LocalPooler struct {
 
 // isLocal reports whether pooler is the local pooler.
 func (l *LocalPooler) isLocal(pooler *clustermetadatapb.Multipooler) bool {
-	id, local := pooler.GetId(), l.ID()
-	return id.GetComponent() == local.GetComponent() && id.GetCell() == local.GetCell() && id.GetName() == local.GetName()
+	return topoclient.SameID(pooler.GetId(), l.ID())
 }
 
 // NewPoolerGateway constructs a PoolerGateway along with its underlying

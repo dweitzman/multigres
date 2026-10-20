@@ -25,6 +25,7 @@ import (
 	commonbackup "github.com/multigres/multigres/go/common/backup"
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/constants"
+	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/services/multipooler/internal/connpoolmanager"
 	"github.com/multigres/multigres/go/services/multipooler/internal/manager/actionlock"
 	"github.com/multigres/multigres/go/services/multipooler/internal/manager/consensus"
@@ -92,8 +93,7 @@ func (pm *MultipoolerManager) staleStandbyDemoteTarget() *clustermetadatapb.Pool
 	}
 	// The recorded leader is us: not a "superseded by another leader" case, so
 	// there is nothing to demote toward.
-	if leader := commonconsensus.PossiblyUndecidedRule(rp.GetPosition()).GetLeaderId(); leader != nil && pm.serviceID != nil &&
-		leader.GetCell() == pm.serviceID.GetCell() && leader.GetName() == pm.serviceID.GetName() {
+	if topoclient.SameID(commonconsensus.PossiblyUndecidedRule(rp.GetPosition()).GetLeaderId(), pm.serviceID) {
 		return nil
 	}
 	// Only act when the intended primary's recorded rule position outranks
@@ -698,8 +698,7 @@ func (pm *MultipoolerManager) connInfoReconcileAllowed() (*clustermetadatapb.Poo
 	if target == nil {
 		return nil, false
 	}
-	if leader := commonconsensus.PossiblyUndecidedRule(rp.GetPosition()).GetLeaderId(); leader != nil &&
-		leader.GetCell() == pm.serviceID.GetCell() && leader.GetName() == pm.serviceID.GetName() {
+	if topoclient.SameID(commonconsensus.PossiblyUndecidedRule(rp.GetPosition()).GetLeaderId(), pm.serviceID) {
 		return nil, false
 	}
 	if commonconsensus.IsRuleRevoked(rp.GetPosition(), pm.consensusMgr.Promises().GetInconsistentRevocation()) {
@@ -1619,8 +1618,7 @@ func (pm *MultipoolerManager) startPostgres(ctx context.Context) error {
 	// must switch to checking `started`.
 	if resp.GetCrashRecoveryRan() {
 		leader := commonconsensus.PossiblyUndecidedRule(pm.consensusMgr.GetIntendedPrimary().GetPosition()).GetLeaderId()
-		differentLeaderKnown := leader != nil && pm.serviceID != nil &&
-			(leader.GetCell() != pm.serviceID.GetCell() || leader.GetName() != pm.serviceID.GetName())
+		differentLeaderKnown := leader != nil && pm.serviceID != nil && !topoclient.SameID(leader, pm.serviceID)
 		if differentLeaderKnown {
 			pm.logger.InfoContext(ctx, "MonitorPostgres: crash recovery ran with a different known leader; marking suspected divergence", //nolint:sloglint // message intentionally starts with an operation name or proper noun
 				"leader", leader.GetName())

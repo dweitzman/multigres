@@ -735,9 +735,7 @@ func (pm *MultipoolerManager) SetPrimary(ctx context.Context, req *consensusdata
 		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "rule.leader_id is required")
 	}
 	leaderID := leader.GetId()
-	if leaderID == nil ||
-		leaderID.GetCell() != ruleLeaderID.GetCell() ||
-		leaderID.GetName() != ruleLeaderID.GetName() {
+	if !topoclient.SameID(leaderID, ruleLeaderID) {
 		return nil, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,
 			"leader.id %q does not match rule.leader_id %q",
 			leaderID.GetName(), ruleLeaderID.GetName())

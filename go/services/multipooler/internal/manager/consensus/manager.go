@@ -622,7 +622,7 @@ func (cm *ConsensusManager) RewindTarget() (host string, port int32, ok bool) {
 	if leader == nil {
 		return "", 0, false
 	}
-	if cm.id != nil && leader.GetCell() == cm.id.GetCell() && leader.GetName() == cm.id.GetName() {
+	if topoclient.SameID(leader, cm.id) {
 		return "", 0, false
 	}
 	if consensus.IsRuleRevoked(rp.GetPosition(), cm.promises.GetInconsistentRevocation()) {
@@ -688,7 +688,7 @@ func (cm *ConsensusManager) IsPotentialCohortMember(selfID *clustermetadatapb.ID
 
 func ruleNamesCohortMember(rule *clustermetadatapb.ShardRule, selfID *clustermetadatapb.ID) bool {
 	for _, member := range rule.GetCohortMembers() {
-		if member.GetCell() == selfID.GetCell() && member.GetName() == selfID.GetName() {
+		if topoclient.SameID(member, selfID) {
 			return true
 		}
 	}

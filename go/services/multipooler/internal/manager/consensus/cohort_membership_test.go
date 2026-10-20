@@ -151,3 +151,18 @@ func TestIsPotentialCohortMember(t *testing.T) {
 func TestRuleNamesCohortMember_NilRule(t *testing.T) {
 	require.False(t, ruleNamesCohortMember(nil, idAt("self")))
 }
+
+func TestRuleNamesCohortMember_AnAbsentSelfMatchesNoMember(t *testing.T) {
+	// A cohort entry with no identity must not be taken for a pooler with no identity.
+	rule := &clustermetadatapb.ShardRule{CohortMembers: []*clustermetadatapb.ID{{}, idAt("p1")}}
+	require.False(t, ruleNamesCohortMember(rule, nil))
+	require.True(t, ruleNamesCohortMember(rule, idAt("p1")))
+	require.False(t, ruleNamesCohortMember(rule, idAt("p2")))
+}
+
+func TestRuleNamesCohortMember_TheComponentTypeCounts(t *testing.T) {
+	rule := &clustermetadatapb.ShardRule{CohortMembers: []*clustermetadatapb.ID{idAt("p1")}}
+	otherComponent := idAt("p1")
+	otherComponent.Component = clustermetadatapb.ID_MULTIORCH
+	require.False(t, ruleNamesCohortMember(rule, otherComponent))
+}
