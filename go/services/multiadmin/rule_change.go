@@ -393,7 +393,7 @@ func fillIdentityFields(
 	}
 	if rev.GetAcceptedCoordinatorId() == nil {
 		rev.AcceptedCoordinatorId = orchID
-	} else if !proto.Equal(rev.GetAcceptedCoordinatorId(), orchID) {
+	} else if !topoclient.SameID(rev.GetAcceptedCoordinatorId(), orchID) {
 		return status.Errorf(codes.InvalidArgument,
 			"cert.term_revocation.accepted_coordinator_id (%s) does not match chosen multiorch (%s)",
 			topoclient.ClusterIDString(rev.GetAcceptedCoordinatorId()), topoclient.ClusterIDString(orchID))

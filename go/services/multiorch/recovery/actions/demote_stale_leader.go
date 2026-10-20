@@ -20,8 +20,6 @@ import (
 	"log/slog"
 	"time"
 
-	"google.golang.org/protobuf/proto"
-
 	"github.com/multigres/multigres/go/common/eventlog"
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/rpcclient"
@@ -129,7 +127,7 @@ func (a *DemoteStaleLeaderAction) Execute(ctx context.Context, rechecked types.R
 	// it is not actually stale (e.g. a spurious or already-resolved detection):
 	// there is nothing newer to rewind it toward. Do nothing rather than send a
 	// self-targeted SetPrimary, which the pooler would ignore.
-	if proto.Equal(correctLeader.GetMultipooler().GetId(), problem.PoolerID) {
+	if topoclient.SameID(correctLeader.ID(), problem.PoolerID) {
 		a.logger.InfoContext(ctx, "stale leader is the current consensus leader, nothing to demote",
 			"leader", correctLeader.ID().GetName(),
 			"shard_key", commontypes.FormatShardKey(problem.ShardKey))

@@ -18,12 +18,12 @@ import (
 	"context"
 	"time"
 
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/eventlog"
 	"github.com/multigres/multigres/go/common/mterrors"
+	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
@@ -467,7 +467,7 @@ func (pm *MultipoolerManager) Promote(ctx context.Context, req *consensusdatapb.
 	// Promote is only valid for the designated leader. Non-leaders should
 	// receive the leader's identity via SetPrimary, which handles
 	// replication setup without requiring a prior Recruit.
-	if !proto.Equal(pm.serviceID, proposalLeader.GetId()) {
+	if !topoclient.SameID(pm.serviceID, proposalLeader.GetId()) {
 		return nil, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,
 			"Promote received on %s but proposal_leader is %s; non-leaders should be told via SetPrimary",
 			pm.serviceID.GetName(), proposalLeader.GetId().GetName())
@@ -756,7 +756,7 @@ func (pm *MultipoolerManager) SetPrimary(ctx context.Context, req *consensusdata
 	// the Recruit-established term revocation needed to safely promote).
 	//
 	// TODO: maybe treat "leader is self" as a no-op rather than an error?
-	if proto.Equal(pm.serviceID, leaderID) {
+	if topoclient.SameID(pm.serviceID, leaderID) {
 		return nil, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,
 			"SetPrimary received on %s but leader is self; designated leaders are appointed via Promote",
 			pm.serviceID.GetName())

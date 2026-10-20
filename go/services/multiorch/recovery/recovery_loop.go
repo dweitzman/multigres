@@ -24,8 +24,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
-	"google.golang.org/protobuf/proto"
-
 	"github.com/multigres/multigres/go/common/topoclient"
 	commontypes "github.com/multigres/multigres/go/common/types"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -491,7 +489,7 @@ func (re *Engine) recheckProblem(ctx context.Context, problem types.Problem) (*t
 				if p.Code != problem.Code {
 					continue
 				}
-				if problem.IsShardWide() || proto.Equal(p.PoolerID, problem.PoolerID) {
+				if problem.IsShardWide() || topoclient.SameID(p.PoolerID, problem.PoolerID) {
 					re.logger.DebugContext(ctx, "problem still exists after re-poll",
 						"entity_id", entityID,
 						"problem_code", problem.Code,

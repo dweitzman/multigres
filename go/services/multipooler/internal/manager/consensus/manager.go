@@ -26,6 +26,7 @@ import (
 
 	"github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/mterrors"
+	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	"github.com/multigres/multigres/go/services/multipooler/internal/executor"
@@ -515,7 +516,7 @@ func (cm *ConsensusManager) MarkSelfRewindReady(selfID *clustermetadatapb.ID, ex
 	if cm.intendedPrimary == nil || cm.intendedPrimary.GetRewindReady() {
 		return false
 	}
-	if !proto.Equal(cm.intendedPrimary.GetPrimary().GetId(), selfID) {
+	if !topoclient.SameID(cm.intendedPrimary.GetPrimary().GetId(), selfID) {
 		return false
 	}
 	if !proto.Equal(cm.intendedPrimary.GetPosition(), expectedPosition) {

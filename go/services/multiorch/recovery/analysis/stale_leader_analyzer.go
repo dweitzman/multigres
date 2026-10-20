@@ -19,9 +19,8 @@ import (
 	"fmt"
 	"slices"
 
-	"google.golang.org/protobuf/proto"
-
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
+	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
 )
@@ -73,7 +72,7 @@ func (a *StaleLeaderAnalyzer) Analyze(sa *snapshot.Shard) ([]types.Problem, erro
 		if !ok || !hs.ClaimsLeadership() {
 			continue
 		}
-		if proto.Equal(pa.ID(), leaderID) {
+		if topoclient.SameID(pa.ID(), leaderID) {
 			continue
 		}
 		staleLeaders = append(staleLeaders, pa)

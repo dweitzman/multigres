@@ -19,8 +19,6 @@ package snapshot
 import (
 	"time"
 
-	"google.golang.org/protobuf/proto"
-
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -87,7 +85,7 @@ func (sa *Shard) PoolerHealth(id *clustermetadatapb.ID) *PoolerHealthState {
 		return nil
 	}
 	for _, p := range sa.Poolers {
-		if proto.Equal(p.GetMultipooler().GetId(), id) {
+		if topoclient.SameID(p.ID(), id) {
 			return p
 		}
 	}
@@ -115,7 +113,7 @@ func (sa *Shard) CohortEligibleFollowerIDs() []*clustermetadatapb.ID {
 	ids := make([]*clustermetadatapb.ID, 0, len(sa.Poolers))
 	for _, p := range sa.Poolers {
 		id := p.GetMultipooler().GetId()
-		if leaderID != nil && proto.Equal(id, leaderID) {
+		if topoclient.SameID(id, leaderID) {
 			continue
 		}
 		ids = append(ids, id)

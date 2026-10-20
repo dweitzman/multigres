@@ -22,7 +22,6 @@ import (
 	"sync"
 	"time"
 
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -658,7 +657,7 @@ func resolveNewRuleValues(
 	// is allowed either way.
 	newLeader = currentRule.GetLeaderId()
 	if update.leaderID != nil {
-		if !isPromotion && currentRule.GetLeaderId() != nil && !proto.Equal(update.leaderID, currentRule.GetLeaderId()) {
+		if !isPromotion && currentRule.GetLeaderId() != nil && !topoclient.SameID(update.leaderID, currentRule.GetLeaderId()) {
 			return nil, nil, nil, consensus.PolicyWithCohort{}, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
 				"UpdateRule cannot change leader outside of a promotion: current leader %v, requested %v",
 				currentRule.GetLeaderId(), update.leaderID)
