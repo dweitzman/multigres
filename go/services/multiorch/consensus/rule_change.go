@@ -150,7 +150,7 @@ func (r *coordinatorLedRuleChange) Run(
 	// recruits and re-run tryBuildProposal on the augmented set. The right default
 	// should come from observed failover latency in production.
 
-	propReq, leaderKey, err := r.collectRecruitsAndBuildProposal(cohort, revocation, recruited)
+	propReq, leaderID, err := r.collectRecruitsAndBuildProposal(cohort, revocation, recruited)
 	selectedAt := time.Now()
 	recruitMs := selectedAt.Sub(start).Milliseconds()
 	if err != nil {
@@ -175,7 +175,7 @@ func (r *coordinatorLedRuleChange) Run(
 	// slow to factor into leader selection, but they still need to learn about
 	// the new term.
 
-	promoteResults := r.dispatchPromote(ctx, cohort, propReq, leaderKey)
+	promoteResults := r.dispatchPromote(ctx, cohort, propReq, leaderID)
 
 	// Phase 4: Wait for every Promote to return, not just the leader's. The rule
 	// change is committed when the leader's Promote succeeds — which can
@@ -231,9 +231,9 @@ func (r *coordinatorLedRuleChange) dispatchRecruit(ctx context.Context, cohort [
 // collectRecruitsAndBuildProposal reads recruit results from the channel and
 // accumulates ConsensusStatuses until tryBuildProposal returns a non-error
 // proposal, or all recruits have been processed. It returns the first
-// successful proposal and the corresponding leader's key. If no proposal can
+// successful proposal and the leader's ID. If no proposal can
 // be built after processing all recruits, it returns an error.
-func (r *coordinatorLedRuleChange) collectRecruitsAndBuildProposal(cohort []*snapshot.PoolerHealthState, revocation *clustermetadatapb.TermRevocation, recruited chan recruitResult) (*consensusdatapb.PromoteRequest, string, error) {
+func (r *coordinatorLedRuleChange) collectRecruitsAndBuildProposal(cohort []*snapshot.PoolerHealthState, revocation *clustermetadatapb.TermRevocation, recruited chan recruitResult) (*consensusdatapb.PromoteRequest, *clustermetadatapb.ID, error) {
 	var err error
 	var p *consensusdatapb.CoordinatorProposal
 	statuses := make([]*clustermetadatapb.ConsensusStatus, 0, len(cohort))
@@ -249,19 +249,18 @@ func (r *coordinatorLedRuleChange) collectRecruitsAndBuildProposal(cohort []*sna
 			for _, s := range statuses {
 				ids = append(ids, s.GetId())
 			}
-			leaderKey := topoclient.ClusterIDString(p.GetProposalLeader().GetId())
 			propReq := &consensusdatapb.PromoteRequest{
 				Proposal:        p,
 				Reason:          r.reason,
 				AcceptedNodeIds: ids,
 			}
-			return propReq, leaderKey, nil
+			return propReq, p.GetProposalLeader().GetId(), nil
 		}
 	}
 	if err == nil {
 		err = errors.New("no nodes responded to recruit")
 	}
-	return nil, "", mterrors.Wrap(err, "recruitment failed")
+	return nil, nil, mterrors.Wrap(err, "recruitment failed")
 }
 
 type promoteResult struct {
@@ -279,11 +278,11 @@ func (r *coordinatorLedRuleChange) dispatchPromote(
 	ctx context.Context,
 	cohort []*snapshot.PoolerHealthState,
 	propReq *consensusdatapb.PromoteRequest,
-	leaderKey string,
+	leaderID *clustermetadatapb.ID,
 ) chan promoteResult {
 	promoteResults := make(chan promoteResult, len(cohort))
 	for _, p := range cohort {
-		isLeader := topoclient.ClusterIDString(p.ID()) == leaderKey
+		isLeader := topoclient.SameID(p.ID(), leaderID)
 		go func() {
 			err := r.promote(ctx, p, propReq, isLeader)
 			promoteResults <- promoteResult{poolerName: p.ID().GetName(), isLeader: isLeader, err: err}

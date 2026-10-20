@@ -17,6 +17,7 @@ package consensus
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -190,15 +191,29 @@ func HighestRevokedBelowTermRevocation(candidates []*clustermetadatapb.TermRevoc
 			if rev.GetRevokedBelowTerm() > best.GetRevokedBelowTerm() {
 				best = rev
 			}
-		case topoclient.ClusterIDString(rev.GetAcceptedCoordinatorId()) != topoclient.ClusterIDString(best.GetAcceptedCoordinatorId()):
-			if topoclient.ClusterIDString(rev.GetAcceptedCoordinatorId()) < topoclient.ClusterIDString(best.GetAcceptedCoordinatorId()) {
+		default:
+			switch order := coordinatorTiebreak(rev, best); {
+			case order < 0:
+				best = rev
+			case order == 0 && rev.GetCoordinatorInitiatedAt().AsTime().After(best.GetCoordinatorInitiatedAt().AsTime()):
 				best = rev
 			}
-		case rev.GetCoordinatorInitiatedAt().AsTime().After(best.GetCoordinatorInitiatedAt().AsTime()):
-			best = rev
 		}
 	}
 	return best
+}
+
+// coordinatorTiebreak deterministically chooses between two revocations at the same term
+// from different coordinators. Neither coordinator wins the term; the order only has to be
+// the same everywhere, because the chosen revocation anchors the shared backoff schedule
+// and the next attempt count, and orchestrators that disagreed would compute different
+// retry times. It follows the serialized coordinator ID, so changing it (for example to
+// compare cell and name field by field, which disagrees when one cell name is a prefix of
+// another, as with zone1 and zone10) needs a migration.
+func coordinatorTiebreak(a, b *clustermetadatapb.TermRevocation) int {
+	return strings.Compare(
+		topoclient.ClusterIDString(a.GetAcceptedCoordinatorId()),
+		topoclient.ClusterIDString(b.GetAcceptedCoordinatorId()))
 }
 
 // recruitAttempt returns the collective-backoff attempt count for a new

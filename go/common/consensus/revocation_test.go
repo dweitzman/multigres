@@ -1000,3 +1000,22 @@ func TestIsRuleRevoked(t *testing.T) {
 		})
 	}
 }
+
+// coordinatorTiebreak is a compatibility contract between orchestrators: it follows the
+// serialized cell_name string, not the cell and name fields in turn.
+func TestCoordinatorOrder_FollowsTheSerializedForm(t *testing.T) {
+	accepted := func(cell, name string) *clustermetadatapb.TermRevocation {
+		return &clustermetadatapb.TermRevocation{
+			AcceptedCoordinatorId: &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIORCH, Cell: cell, Name: name},
+		}
+	}
+
+	assert.Negative(t, coordinatorTiebreak(accepted("zone1", "a"), accepted("zone1", "b")))
+	assert.Positive(t, coordinatorTiebreak(accepted("zone2", "a"), accepted("zone1", "b")))
+	assert.Zero(t, coordinatorTiebreak(accepted("zone1", "a"), accepted("zone1", "a")))
+
+	// "zone10_x" sorts before "zone1_x" ('0' < '_'), although a field-wise order puts the
+	// shorter cell "zone1" first. Changing this would make old and new orchestrators
+	// disagree on which revocation wins.
+	assert.Negative(t, coordinatorTiebreak(accepted("zone10", "x"), accepted("zone1", "x")))
+}

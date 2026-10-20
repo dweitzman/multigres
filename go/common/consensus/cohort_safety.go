@@ -46,11 +46,10 @@ func IsCohortMemberRemovalSafe(rule *clustermetadatapb.ShardRule, memberID *clus
 		return false
 	}
 	cohort := rule.GetCohortMembers()
-	wantedKey := topoclient.ComponentIDString(memberID)
 	found := false
 	newCohort := make([]*clustermetadatapb.ID, 0, len(cohort))
 	for _, id := range cohort {
-		if topoclient.ComponentIDString(id) == wantedKey {
+		if topoclient.SameID(id, memberID) {
 			found = true
 			continue
 		}
@@ -72,10 +71,9 @@ func cohortSurvivesMemberLoss(policy DurabilityPolicy, cohort []*clustermetadata
 	}
 	recruited := cohort
 	if member != nil {
-		memberKey := topoclient.ComponentIDString(member)
 		recruited = make([]*clustermetadatapb.ID, 0, len(cohort))
 		for _, id := range cohort {
-			if topoclient.ComponentIDString(id) != memberKey {
+			if !topoclient.SameID(id, member) {
 				recruited = append(recruited, id)
 			}
 		}

@@ -56,6 +56,23 @@ func ComponentIDString(id *clustermetadatapb.ID) ComponentID {
 	return ComponentID(fmt.Sprintf("%s-%s-%s", ComponentTypeToString(id.GetComponent()), id.GetCell(), id.GetName()))
 }
 
+// SameID reports whether a and b identify the same component: the same type, cell and
+// name. Like os.SameFile, it answers an identity question, so an absent ID is not the
+// same as anything, not even another absent ID: a missing ID can never be taken for a
+// real one. It builds no strings, so it does not allocate, and two distinct IDs cannot
+// collide the way their serialized forms can when a cell or name contains the separator
+// (cell "a-b" with name "c" and cell "a" with name "b-c" both serialize to the same
+// ComponentIDString). Use it to compare IDs; use the string forms where a string is
+// needed, such as a map key or a log field.
+func SameID(a, b *clustermetadatapb.ID) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	return a.GetComponent() == b.GetComponent() &&
+		a.GetCell() == b.GetCell() &&
+		a.GetName() == b.GetName()
+}
+
 // ClusterIDString returns a string representation of the cluster ID in cell_name format.
 // Returns empty string if id is nil.
 func ClusterIDString(id *clustermetadatapb.ID) string {

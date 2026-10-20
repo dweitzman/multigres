@@ -507,7 +507,7 @@ func validateProposal(
 	leaderKey := topoclient.ClusterIDString(leaderID)
 	foundLeader := false
 	for _, cs := range result.EligibleLeaders {
-		if topoclient.ClusterIDString(cs.GetId()) == leaderKey {
+		if topoclient.SameID(cs.GetId(), leaderID) {
 			foundLeader = true
 			break
 		}

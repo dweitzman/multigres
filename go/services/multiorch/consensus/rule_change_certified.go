@@ -287,7 +287,7 @@ func validateCertifiedRuleChange(
 	// Leader must be in the cohort.
 	leaderKey := topoclient.ClusterIDString(proposedRule.GetLeaderId())
 	for _, id := range proposedRule.GetCohortMembers() {
-		if topoclient.ClusterIDString(id) == leaderKey {
+		if topoclient.SameID(id, proposedRule.GetLeaderId()) {
 			return nil
 		}
 	}

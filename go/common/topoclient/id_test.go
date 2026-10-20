@@ -74,3 +74,46 @@ func TestComponentIDStringNilDoesNotPanic(t *testing.T) {
 		_ = topoclient.ComponentIDString(nil)
 	})
 }
+
+func TestSameID(t *testing.T) {
+	id := func(component clustermetadatapb.ID_ComponentType, cell, name string) *clustermetadatapb.ID {
+		return &clustermetadatapb.ID{Component: component, Cell: cell, Name: name}
+	}
+	pooler := clustermetadatapb.ID_MULTIPOOLER
+
+	assert.True(t, topoclient.SameID(id(pooler, "zone1", "p1"), id(pooler, "zone1", "p1")))
+	assert.False(t, topoclient.SameID(id(pooler, "zone1", "p1"), id(pooler, "zone1", "p2")), "different name")
+	assert.False(t, topoclient.SameID(id(pooler, "zone1", "p1"), id(pooler, "zone2", "p1")), "different cell")
+	assert.False(t, topoclient.SameID(id(pooler, "zone1", "p1"), id(clustermetadatapb.ID_MULTIORCH, "zone1", "p1")), "different component")
+
+	assert.False(t, topoclient.SameID(nil, id(pooler, "zone1", "p1")))
+	assert.False(t, topoclient.SameID(id(pooler, "zone1", "p1"), nil))
+	assert.False(t, topoclient.SameID(nil, nil), "an absent ID is never taken for a real one, nor for another absent one")
+}
+
+// Two distinct IDs whose serialized forms are identical because a cell or name contains
+// the separator: SameID tells them apart.
+func TestSameID_DoesNotCollideLikeTheStringForm(t *testing.T) {
+	a := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "pooler-1"}
+	b := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1-pooler", Name: "1"}
+
+	require.Equal(t, topoclient.ComponentIDString(a), topoclient.ComponentIDString(b), "the strings collide")
+	assert.False(t, topoclient.SameID(a, b))
+}
+
+func BenchmarkSameID(b *testing.B) {
+	x := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "pooler-1"}
+	y := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "pooler-2"}
+	b.Run("SameID", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			_ = topoclient.SameID(x, y)
+		}
+	})
+	b.Run("ComponentIDString", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			_ = topoclient.ComponentIDString(x) == topoclient.ComponentIDString(y)
+		}
+	})
+}

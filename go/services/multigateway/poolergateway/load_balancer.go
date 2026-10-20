@@ -314,8 +314,7 @@ func (lb *loadBalancer) notifyLeaderServingFromSummary(summary *shardSummary, co
 		return
 	}
 	leaderID, ok := summary.leaderID()
-	connID := conn.PoolerInfo().GetId()
-	if !ok || leaderID != topoclient.ComponentIDString(connID) {
+	if !ok || leaderID != conn.ID() {
 		return
 	}
 	health := conn.Health()

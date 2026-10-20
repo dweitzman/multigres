@@ -76,7 +76,7 @@ func (ts *store) ClaimShardInitialization(ctx context.Context, shardKey *cluster
 		return false, nil, mterrors.Wrapf(err, "failed to unmarshal shard init claim for %s", types.FormatShardKey(shardKey))
 	}
 
-	if ClusterIDString(committed.ClaimerId) == ClusterIDString(claimerID) {
+	if SameID(committed.ClaimerId, claimerID) {
 		return true, committed.CohortMembers, nil
 	}
 

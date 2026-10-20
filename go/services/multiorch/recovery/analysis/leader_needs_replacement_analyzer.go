@@ -614,10 +614,9 @@ func (a *LeaderNeedsReplacementAnalyzer) receiveLsnStillAdvancing(sa *snapshot.S
 	}
 	primaryHost, primaryPort := leader.Endpoint()
 
-	leaderKey := topoclient.ComponentIDString(leaderID)
 	var vouching []*clustermetadatapb.ID
 	for _, member := range cohort {
-		if topoclient.ComponentIDString(member) == leaderKey {
+		if topoclient.SameID(member, leaderID) {
 			continue
 		}
 		pa := sa.PoolerHealth(member)
@@ -672,10 +671,9 @@ func (a *LeaderNeedsReplacementAnalyzer) classifyCohortReachability(sa *snapshot
 		return nil, nil
 	}
 	primaryHost, primaryPort := leader.Endpoint()
-	leaderKey := topoclient.ComponentIDString(leaderID)
 
 	for _, member := range cohort {
-		if topoclient.ComponentIDString(member) == leaderKey {
+		if topoclient.SameID(member, leaderID) {
 			// Skip the leader: a live leader would have been judged by its own health
 			// above, so here we provisionally assume it alive and let the cohort's
 			// evidence confirm (vouch) or revoke that. It vouches for itself below.
@@ -704,10 +702,9 @@ func (a *LeaderNeedsReplacementAnalyzer) classifyCohortReachability(sa *snapshot
 // regardless of reachability) — used to ask what recruitment would be possible if
 // every member were reachable.
 func cohortWithout(cohort []*clustermetadatapb.ID, exclude *clustermetadatapb.ID) []*clustermetadatapb.ID {
-	excludeKey := topoclient.ComponentIDString(exclude)
 	out := make([]*clustermetadatapb.ID, 0, len(cohort))
 	for _, m := range cohort {
-		if topoclient.ComponentIDString(m) != excludeKey {
+		if !topoclient.SameID(m, exclude) {
 			out = append(out, m)
 		}
 	}
@@ -718,10 +715,9 @@ func cohortWithout(cohort []*clustermetadatapb.ID, exclude *clustermetadatapb.ID
 // non-nil) whose rider passes pred. Shared by freshInitializedCohort and
 // recruitableCohort, which differ only in which question pred asks.
 func cohortSatisfying(sa *snapshot.Shard, cohort []*clustermetadatapb.ID, exclude *clustermetadatapb.ID, pred func(*snapshot.PoolerHealthState) bool) []*clustermetadatapb.ID {
-	excludeKey := topoclient.ComponentIDString(exclude)
 	var satisfying []*clustermetadatapb.ID
 	for _, m := range cohort {
-		if exclude != nil && topoclient.ComponentIDString(m) == excludeKey {
+		if topoclient.SameID(m, exclude) {
 			continue
 		}
 		pa := sa.PoolerHealth(m)

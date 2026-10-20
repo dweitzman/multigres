@@ -377,3 +377,27 @@ func disallowHealthWritesInDecisionCode(m dsl.Matcher) {
 			!m.File().Name.Matches(`_test\.go$`)).
 		Report("do not write to a PoolerHealthState in decision code; it is a frozen snapshot, and only the store changes health (Pooler.Mutate on a Clone)")
 }
+
+// preferSameID flags comparing two serialized IDs with == or !=. Building a string per
+// comparison allocates, and the serialized forms of two distinct IDs can collide when a
+// cell or name contains the separator. topoclient.SameID compares the IDs themselves.
+// String forms are still right for map keys and log fields; this only flags the direct
+// comparison. Test files and the topoclient package, which defines the encodings, are
+// excluded.
+func preferSameID(m dsl.Matcher) {
+	m.Import("github.com/multigres/multigres/go/common/topoclient")
+
+	m.Match(
+		`topoclient.ComponentIDString($_) == $_`,
+		`topoclient.ComponentIDString($_) != $_`,
+		`$_ == topoclient.ComponentIDString($_)`,
+		`$_ != topoclient.ComponentIDString($_)`,
+		`topoclient.ClusterIDString($_) == $_`,
+		`topoclient.ClusterIDString($_) != $_`,
+		`$_ == topoclient.ClusterIDString($_)`,
+		`$_ != topoclient.ClusterIDString($_)`,
+	).Where(
+		!m.File().PkgPath.Matches(`common/topoclient$`) &&
+			!m.File().Name.Matches(`_test\.go$`)).
+		Report("compare IDs with topoclient.SameID(a, b): it allocates nothing, and the serialized forms of two distinct IDs can collide")
+}
