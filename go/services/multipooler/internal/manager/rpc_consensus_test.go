@@ -680,6 +680,7 @@ func TestPromote(t *testing.T) {
 	}
 	validProposedRule := &clustermetadatapb.ShardRule{
 		RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 7},
+		LeaderId:      selfID,
 		CohortMembers: []*clustermetadatapb.ID{selfID, otherPooler},
 		CoordinatorId: coordinatorA,
 		CreationTime:  ruleCreatedTS,
@@ -700,6 +701,8 @@ func TestPromote(t *testing.T) {
 	}
 
 	makeReplicaReq := func() *consensusdatapb.PromoteRequest {
+		ruleLedByOther := proto.Clone(validProposedRule).(*clustermetadatapb.ShardRule)
+		ruleLedByOther.LeaderId = otherPooler
 		return &consensusdatapb.PromoteRequest{
 			Proposal: &consensusdatapb.CoordinatorProposal{
 				TermRevocation: recruitedTerm,
@@ -708,7 +711,7 @@ func TestPromote(t *testing.T) {
 					Host:         "pg-primary.internal",
 					PostgresPort: 5432,
 				},
-				ProposedTransition: &clustermetadatapb.RulePosition{Proposal: validProposedRule},
+				ProposedTransition: &clustermetadatapb.RulePosition{Proposal: ruleLedByOther},
 			},
 		}
 	}
@@ -779,6 +782,27 @@ func TestPromote(t *testing.T) {
 			expectErrContains: "proposal.proposal_leader.id is required",
 		},
 		{
+			name:        "ProposedRuleNamesAnotherLeader",
+			initialTerm: recruitedTerm,
+			ruleStore:   &fakeRuleStore{},
+			req: &consensusdatapb.PromoteRequest{
+				Proposal: &consensusdatapb.CoordinatorProposal{
+					TermRevocation: recruitedTerm,
+					ProposalLeader: &clustermetadatapb.PoolerAddress{Id: selfID, Host: "pg-primary.internal", PostgresPort: 5432},
+					ProposedTransition: &clustermetadatapb.RulePosition{Proposal: &clustermetadatapb.ShardRule{
+						RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 7},
+						LeaderId:      otherPooler,
+						CohortMembers: []*clustermetadatapb.ID{selfID, otherPooler},
+						CoordinatorId: coordinatorA,
+						CreationTime:  ruleCreatedTS,
+					}},
+				},
+			},
+			setupMocks:        func(m *mock.QueryService) {},
+			expectError:       true,
+			expectErrContains: "proposal.proposed_rule.leader_id must match proposal.proposal_leader.id",
+		},
+		{
 			name:        "ZeroPostgresPort",
 			initialTerm: recruitedTerm,
 			ruleStore:   &fakeRuleStore{},
@@ -841,6 +865,7 @@ func TestPromote(t *testing.T) {
 					ProposalLeader: &clustermetadatapb.PoolerAddress{Id: selfID, Host: "pg-primary.internal", PostgresPort: 5432},
 					ProposedTransition: &clustermetadatapb.RulePosition{Proposal: &clustermetadatapb.ShardRule{
 						RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 9},
+						LeaderId:      selfID,
 						CohortMembers: []*clustermetadatapb.ID{selfID, otherPooler},
 						CoordinatorId: coordinatorA,
 						CreationTime:  ruleCreatedTS,
@@ -1018,6 +1043,7 @@ func TestPromote(t *testing.T) {
 					},
 					ProposedTransition: &clustermetadatapb.RulePosition{Proposal: &clustermetadatapb.ShardRule{
 						RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 7},
+						LeaderId:      selfID,
 						CohortMembers: []*clustermetadatapb.ID{selfID, otherPooler},
 						CoordinatorId: coordinatorA,
 						CreationTime:  ruleCreatedTS,
@@ -1173,6 +1199,7 @@ func TestPromote_LogicalFailoverMetricGating(t *testing.T) {
 			ProposalLeader: &clustermetadatapb.PoolerAddress{Id: selfID, Host: "pg-primary.internal", PostgresPort: 5432},
 			ProposedTransition: &clustermetadatapb.RulePosition{Proposal: &clustermetadatapb.ShardRule{
 				RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 7},
+				LeaderId:      selfID,
 				CohortMembers: []*clustermetadatapb.ID{selfID, otherPooler},
 				CoordinatorId: coordinatorA,
 				CreationTime:  ruleCreatedTS,
@@ -1273,6 +1300,7 @@ func TestPromoteDropsUnloggedTables(t *testing.T) {
 			ProposalLeader: &clustermetadatapb.PoolerAddress{Id: selfID, Host: "pg-primary.internal", PostgresPort: 5432},
 			ProposedTransition: &clustermetadatapb.RulePosition{Proposal: &clustermetadatapb.ShardRule{
 				RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 7},
+				LeaderId:      selfID,
 				CohortMembers: []*clustermetadatapb.ID{selfID, otherPooler},
 				CoordinatorId: coordinatorA,
 				CreationTime:  ruleCreatedTS,

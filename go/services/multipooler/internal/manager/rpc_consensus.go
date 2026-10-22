@@ -449,6 +449,12 @@ func (pm *MultipoolerManager) Promote(ctx context.Context, req *consensusdatapb.
 	if proposedRule == nil {
 		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "proposal.proposed_rule is required")
 	}
+	// The rule is written with this pooler as its leader below, so the rule must name
+	// the proposal's leader.
+	if !proto.Equal(proposedRule.GetLeaderId(), proposalLeader.GetId()) {
+		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
+			"proposal.proposed_rule.leader_id must match proposal.proposal_leader.id")
+	}
 	// Identity and timing for the installed rule come from the proposed
 	// rule itself, not the revocation. The revocation's
 	// accepted_coordinator_id identifies who ran the recruit round; the

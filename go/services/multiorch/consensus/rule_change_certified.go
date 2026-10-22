@@ -210,8 +210,8 @@ func (c *Coordinator) resolveCohort(
 
 // validateCertifiedRuleChange enforces the shape contract documented on the
 // proto request: every identity and timing field must be set, the proposed
-// rule_number must agree with the cert's revoked_below_term, and the leader
-// must be in the proposed cohort.
+// rule_number must agree with the cert's revoked_below_term, and the proposed rule
+// must be a valid coordinator-led change from the cert's outgoing rule.
 func validateCertifiedRuleChange(
 	shardKey *clustermetadatapb.ShardKey,
 	proposedTransition *clustermetadatapb.RulePosition,
@@ -275,19 +275,14 @@ func validateCertifiedRuleChange(
 			"proposed_rule.rule_number.coordinator_term (%d) must equal cert.term_revocation.revoked_below_term (%d)",
 			proposedRule.GetRuleNumber().GetCoordinatorTerm(), rev.GetRevokedBelowTerm())
 	}
-	if rev.GetRevokedBelowTerm() <= rev.GetOutgoingRule().GetCoordinatorTerm() {
-		return mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,
-			"cert.term_revocation.revoked_below_term (%d) must be greater than cert.term_revocation.outgoing_rule.coordinator_term (%d)",
-			rev.GetRevokedBelowTerm(), rev.GetOutgoingRule().GetCoordinatorTerm())
-	}
 
-	// Leader must be in the cohort.
-	leaderKey := topoclient.ClusterIDString(proposedRule.GetLeaderId())
-	for _, id := range proposedRule.GetCohortMembers() {
-		if topoclient.ClusterIDString(id) == leaderKey {
-			return nil
-		}
+	// The proposed rule is then checked like any other coordinator-led change: its
+	// contents (the leader is in the cohort, the policy holds), its rule number
+	// against the outgoing rule's, and, with a cert skipping the outgoing quorum, no
+	// policy transition from the outgoing rule, whose contents are not known here.
+	outgoing := &clustermetadatapb.ShardRule{RuleNumber: rev.GetOutgoingRule()}
+	if _, err := commonconsensus.ValidateRuleChange(commonconsensus.CoordinatorLedChange, outgoing, proposedRule, true); err != nil {
+		return mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT, "proposed_rule: %v", err)
 	}
-	return mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,
-		"proposed_rule.leader_id (%s) must be a member of proposed_rule.cohort_members", leaderKey)
+	return nil
 }

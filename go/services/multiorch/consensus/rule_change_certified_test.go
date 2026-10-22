@@ -109,7 +109,7 @@ func TestApplyCertifiedRuleChange_LeaderNotInCohort(t *testing.T) {
 	err := c.ApplyCertifiedRuleChange(context.Background(), shardKey, &clustermetadatapb.RulePosition{Proposal: rule}, cert, "test")
 	require.Error(t, err)
 	assert.Equal(t, mtrpcpb.Code_INVALID_ARGUMENT, mterrors.Code(err))
-	assert.Contains(t, err.Error(), "must be a member of proposed_rule.cohort_members")
+	assert.EqualError(t, err, "proposed_rule: leader zone1_mp1 is not in the cohort")
 }
 
 func TestApplyCertifiedRuleChange_RejectsEmptyFrozenLSN(t *testing.T) {
@@ -147,7 +147,7 @@ func TestApplyCertifiedRuleChange_RejectsRevocationNotAboveOutgoing(t *testing.T
 	err := c.ApplyCertifiedRuleChange(context.Background(), shardKey, &clustermetadatapb.RulePosition{Proposal: rule}, cert, "test")
 	require.Error(t, err)
 	assert.Equal(t, mtrpcpb.Code_INVALID_ARGUMENT, mterrors.Code(err))
-	assert.Contains(t, err.Error(), "must be greater than")
+	assert.EqualError(t, err, "proposed_rule: incoming rule number 6.0 must exceed the outgoing rule number 6.0")
 }
 
 func TestApplyCertifiedRuleChange_RejectsMissingTermRevocationFields(t *testing.T) {

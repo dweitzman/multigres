@@ -341,10 +341,10 @@ func TestBuildSafeProposal_ProposedRuleMissingAttestation(t *testing.T) {
 	}
 
 	_, err := BuildSafeProposal(rev, statuses, strip(func(r *clustermetadatapb.ShardRule) { r.CoordinatorId = nil }))
-	require.EqualError(t, err, "proposal validation: proposed rule has no coordinator_id")
+	require.EqualError(t, err, "proposal validation: proposed rule cannot replace the outgoing rule: incoming rule has no coordinator_id")
 
 	_, err = BuildSafeProposal(rev, statuses, strip(func(r *clustermetadatapb.ShardRule) { r.CreationTime = nil }))
-	require.EqualError(t, err, "proposal validation: proposed rule has no creation_time")
+	require.EqualError(t, err, "proposal validation: proposed rule cannot replace the outgoing rule: incoming rule has no creation_time")
 }
 
 // A failover through an undecided proposal that the recruits cannot decide is

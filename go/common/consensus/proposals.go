@@ -493,16 +493,19 @@ func validateProposal(
 		return errors.New("proposal outgoing decision doesn't match revocation outgoing rule")
 	}
 
-	// Identity and timing fields are caller-supplied attestations. We refuse
-	// to install a rule that drops them: a downstream consumer (rule_history,
-	// audit log, time-based ordering against external systems) would have no
-	// way to tell a missing field from a deliberate zero value.
-	if proposedRule.GetCoordinatorId() == nil {
-		return errors.New("proposed rule has no coordinator_id")
+	// The rule must be sound before anything below reasons about it. The pooler
+	// checks the same change before writing (see ruleStore.UpdateRule), so a proposal
+	// it would refuse fails here, before anything is committed to it. Promote writes
+	// the rule with ProposalLeader as its leader, so the rule must name that leader.
+	if ruleLeader := proposedRule.GetLeaderId(); ruleLeader == nil || !idsEqual(ruleLeader, leaderID) {
+		return fmt.Errorf("proposed rule's leader %s is not the proposal's leader %s",
+			topoclient.ClusterIDString(ruleLeader), leaderKey)
 	}
-	if proposedRule.GetCreationTime() == nil {
-		return errors.New("proposed rule has no creation_time")
+	transition, err := ValidateRuleChange(CoordinatorLedChange, result.OutgoingRule, proposedRule, proposal.GetSkipOutgoingQuorum())
+	if err != nil {
+		return fmt.Errorf("proposed rule cannot replace the outgoing rule: %w", err)
 	}
+	p := transition.Incoming.Policy
 
 	// TODO: relax this to support re-proposing/propagating stuck rule changes.
 	// In that case a coordinator must recruit at a higher term and re-propagate
@@ -514,11 +517,6 @@ func validateProposal(
 	if proposedTerm := proposedRule.GetRuleNumber().GetCoordinatorTerm(); proposedTerm > result.TermRevocation.GetRevokedBelowTerm() {
 		return fmt.Errorf("proposed rule term %d is above the recruitment revocation term %d",
 			proposedTerm, result.TermRevocation.GetRevokedBelowTerm())
-	}
-
-	p, err := NewPolicyFromProto(proposedRule.GetDurabilityPolicy())
-	if err != nil {
-		return fmt.Errorf("invalid durability policy in proposal: %w", err)
 	}
 
 	if !result.OutgoingRuleDecided && cert == nil {
