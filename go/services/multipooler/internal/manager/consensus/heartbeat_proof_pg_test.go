@@ -81,7 +81,7 @@ func TestRuleStorePG_DecideWritesProofToHeartbeat(t *testing.T) {
 	var lsns *[]string
 	rs.onProposalAcked, lsns = newProofRecorder(t, writer)
 
-	_, err := rs.UpdateRule(ctx, NewRuleUpdate(1, testPoolerID(t, "zone1", "coordinator-1"), "promotion", "initial primary", time.Now()))
+	_, err := rs.UpdateRule(ctx, newPromotionUpdate(1, testPoolerID(t, "zone1", "coordinator-1"), "promotion", "initial primary", time.Now()))
 	require.NoError(t, err)
 
 	require.Len(t, *lsns, 1)
@@ -109,15 +109,15 @@ func TestRuleStorePG_PropagationReportsConfirmedLSNToHook(t *testing.T) {
 
 	coordinatorID := testPoolerID(t, "zone1", "coordinator-1")
 	leaderID := testPoolerID(t, "zone1", "leader-1")
-	cohort := []*clustermetadatapb.ID{testPoolerID(t, "zone1", "member-1"), testPoolerID(t, "zone1", "member-2")}
-	_, err := rs.UpdateRule(ctx, NewRuleUpdate(3, coordinatorID, "promotion", "bootstrap", time.Now()).
+	cohort := []*clustermetadatapb.ID{leaderID, testPoolerID(t, "zone1", "member-1"), testPoolerID(t, "zone1", "member-2")}
+	_, err := rs.UpdateRule(ctx, newPromotionUpdate(3, coordinatorID, "promotion", "bootstrap", time.Now()).
 		WithLeader(leaderID).WithCohort(cohort))
 	require.NoError(t, err)
 	seedStuckProposal(ctx, t, conn, 4, leaderID, cohort, testBootstrapPolicy())
 	*lsns = nil // only the propagation below matters
 
-	_, err = rs.UpdateRule(ctx, NewRuleUpdate(5, coordinatorID, "promotion", "auto-recover stuck proposal", time.Now()).
-		WithLeader(testPoolerID(t, "zone1", "leader-3")).WithCohort(cohort).
+	_, err = rs.UpdateRule(ctx, newPromotionUpdate(5, coordinatorID, "promotion", "auto-recover stuck proposal", time.Now()).
+		WithLeader(cohort[1]).WithCohort(cohort).
 		WithPromotionHook(func(context.Context) error { return nil }))
 	require.NoError(t, err)
 
@@ -160,15 +160,15 @@ func propagate(ctx context.Context, t *testing.T, proofRefreshAfter time.Duratio
 
 	coordinatorID := testPoolerID(t, "zone1", "coordinator-1")
 	leaderID := testPoolerID(t, "zone1", "leader-1")
-	cohort := []*clustermetadatapb.ID{testPoolerID(t, "zone1", "member-1"), testPoolerID(t, "zone1", "member-2")}
-	_, err = rs.UpdateRule(ctx, NewRuleUpdate(3, coordinatorID, "promotion", "bootstrap", time.Now()).
+	cohort := []*clustermetadatapb.ID{leaderID, testPoolerID(t, "zone1", "member-1"), testPoolerID(t, "zone1", "member-2")}
+	_, err = rs.UpdateRule(ctx, newPromotionUpdate(3, coordinatorID, "promotion", "bootstrap", time.Now()).
 		WithLeader(leaderID).WithCohort(cohort))
 	require.NoError(t, err)
 	seedStuckProposal(ctx, t, conn, 4, leaderID, cohort, testBootstrapPolicy())
 	counter.confirms, counter.failWith = 0, confirmErr
 
 	_, err = rs.UpdateRule(ctx, NewRuleUpdate(5, coordinatorID, "promotion", "auto-recover stuck proposal", time.Now()).
-		WithLeader(testPoolerID(t, "zone1", "leader-3")).WithCohort(cohort).
+		WithLeader(cohort[1]).WithCohort(cohort).
 		WithPromotionHook(func(context.Context) error { return nil }))
 	return counter.confirms, err
 }

@@ -22,13 +22,18 @@ import (
 	"time"
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
+	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/sqltypes"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
+	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	"github.com/multigres/multigres/go/services/multipooler/internal/executor/mock"
 	"github.com/multigres/multigres/go/tools/pgutil"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // newMockRuleStore constructs a ruleStore wired to the given mock query service
@@ -425,35 +430,33 @@ func TestBuildPoolerPosition_UnknownQuorumType(t *testing.T) {
 	assert.Contains(t, err.Error(), "unknown quorum_type")
 }
 
-func TestUpdateRule_ForceModeSkipsWrite(t *testing.T) {
-	// Force-mode short-circuits before any postgres interaction, so this test
-	// can use the mock QueryService — no real UpdateRule SQL would fire.
-	rs := newMockRuleStore(mock.NewQueryService())
-	coordinatorID := &clustermetadatapb.ID{Cell: "zone1", Name: "coordinator-1"}
-	update := NewRuleUpdate(1, coordinatorID, "force_event", "test", time.Now()).WithForce()
-
-	pos, err := rs.UpdateRule(withTestActionLock(t), update)
-	require.NoError(t, err)
-	assert.Nil(t, pos, "force-mode UpdateRule returns nil position to signal no write happened")
-}
-
+// Identity and timing are validated with the rest of the change, after the current rule
+// is read and before anything is written.
 func TestUpdateRule_RequiresCoordinatorID(t *testing.T) {
-	rs := newMockRuleStore(mock.NewQueryService())
-	update := NewRuleUpdate(1, nil /* coordinatorID */, "promotion", "test", time.Now())
+	mockQueryService := mock.NewQueryService()
+	rs := newMockRuleStore(mockQueryService)
+	mockQueryService.AddQueryPatternOnce(readPattern, mockDecidedReadResult())
+	update := NewRuleUpdate(1, nil /* coordinatorID */, "config_change", "test", time.Now())
 
 	_, err := rs.UpdateRule(withTestActionLock(t), update)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "UpdateRule requires a non-nil coordinator_id")
+
+	require.EqualError(t, err, "incoming rule has no coordinator_id")
+	assert.Equal(t, mtrpcpb.Code_INVALID_ARGUMENT, mterrors.Code(err))
+	assert.NoError(t, mockQueryService.ExpectationsWereMet())
 }
 
 func TestUpdateRule_RequiresCreatedAt(t *testing.T) {
-	rs := newMockRuleStore(mock.NewQueryService())
+	mockQueryService := mock.NewQueryService()
+	rs := newMockRuleStore(mockQueryService)
+	mockQueryService.AddQueryPatternOnce(readPattern, mockDecidedReadResult())
 	coordinatorID := &clustermetadatapb.ID{Cell: "zone1", Name: "coordinator-1"}
-	update := NewRuleUpdate(1, coordinatorID, "promotion", "test", time.Time{} /* zero */)
+	update := NewRuleUpdate(1, coordinatorID, "config_change", "test", time.Time{} /* zero */)
 
 	_, err := rs.UpdateRule(withTestActionLock(t), update)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "UpdateRule requires a non-zero created_at")
+
+	require.EqualError(t, err, "incoming rule has no creation_time")
+	assert.Equal(t, mtrpcpb.Code_INVALID_ARGUMENT, mterrors.Code(err))
+	assert.NoError(t, mockQueryService.ExpectationsWereMet())
 }
 
 // mockDecidedReadResult returns a mock result matching readCurrentRule's
@@ -472,7 +475,7 @@ func mockDecidedReadResult() *sqltypes.Result {
 		},
 		[][]any{
 			{
-				int64(1), int64(0), "zone1_leader-1", "zone1_coordinator-1", "{zone1_member-1,zone1_member-2}",
+				int64(1), int64(0), "zone1_leader-1", "zone1_coordinator-1", "{zone1_leader-1,zone1_member-1,zone1_member-2}",
 				"AT_LEAST_2", "QUORUM_TYPE_AT_LEAST_N", int64(2), "2026-01-01 00:00:00+00",
 				nil, nil, nil, nil, nil, nil, nil, nil,
 				"0/100",
@@ -541,7 +544,7 @@ func TestUpdateRule_ProposeParseErrorPropagated(t *testing.T) {
 		},
 		[][]any{
 			{
-				int64(1), int64(1), "zone1_leader-1", "zone1_coordinator-1", "{zone1_member-1,zone1_member-2}",
+				int64(1), int64(1), "zone1_leader-1", "zone1_coordinator-1", "{zone1_leader-1,zone1_member-1,zone1_member-2}",
 				"AT_LEAST_2", "QUORUM_TYPE_BOGUS", int64(2), "2026-01-01 00:00:00+00",
 				nil, nil, nil, nil, nil, nil, nil, nil,
 				"0/100",
@@ -571,9 +574,9 @@ func TestUpdateRule_FinalizeErrorPropagated(t *testing.T) {
 		},
 		[][]any{
 			{
-				int64(1), int64(0), "zone1_leader-1", "zone1_coordinator-1", "{zone1_member-1,zone1_member-2}",
+				int64(1), int64(0), "zone1_leader-1", "zone1_coordinator-1", "{zone1_leader-1,zone1_member-1,zone1_member-2}",
 				"AT_LEAST_2", "QUORUM_TYPE_AT_LEAST_N", int64(2), "2026-01-01 00:00:00+00",
-				int64(1), int64(1), "zone1_leader-1", "{zone1_member-1,zone1_member-2}",
+				int64(1), int64(1), "zone1_leader-1", "{zone1_leader-1,zone1_member-1,zone1_member-2}",
 				"AT_LEAST_2", "QUORUM_TYPE_AT_LEAST_N", int64(2), "2026-01-01 00:01:00+00",
 				"0/100",
 			},
@@ -601,9 +604,9 @@ func mockProposeWriteResult(currentLSN string) *sqltypes.Result {
 		},
 		[][]any{
 			{
-				int64(1), int64(0), "zone1_leader-1", "zone1_coordinator-1", "{zone1_member-1,zone1_member-2}",
+				int64(1), int64(0), "zone1_leader-1", "zone1_coordinator-1", "{zone1_leader-1,zone1_member-1,zone1_member-2}",
 				"AT_LEAST_2", "QUORUM_TYPE_AT_LEAST_N", int64(2), "2026-01-01 00:00:00+00",
-				int64(1), int64(1), "zone1_leader-1", "{zone1_member-1,zone1_member-2}",
+				int64(1), int64(1), "zone1_leader-1", "{zone1_leader-1,zone1_member-1,zone1_member-2}",
 				"AT_LEAST_2", "QUORUM_TYPE_AT_LEAST_N", int64(2), "2026-01-01 00:01:00+00",
 				currentLSN,
 			},
@@ -782,4 +785,166 @@ func TestConfirmProposalQuorum(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to parse confirmed proposal LSN")
 	})
+}
+
+// The coordinator checks a proposal before committing anything to it, and the pooler
+// plans the same change again in Promote. Whatever the pooler would refuse, the
+// coordinator must refuse too, or a proposal could be recruited for and then fail. The
+// coordinator may refuse more: it also judges recruitment, which the pooler never sees.
+func TestCoordinatorProposalValidationCoversTheRuleStoresPlanning(t *testing.T) {
+	a := &clustermetadatapb.ID{Cell: "zone1", Name: "a"}
+	b := &clustermetadatapb.ID{Cell: "zone1", Name: "b"}
+	c := &clustermetadatapb.ID{Cell: "zone1", Name: "c"}
+	d := &clustermetadatapb.ID{Cell: "zone1", Name: "d"}
+	coordinator := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIORCH, Cell: "zone1", Name: "coordinator"}
+	createdAt := time.Unix(1700000000, 0)
+	atLeast := func(n int32) *clustermetadatapb.DurabilityPolicy {
+		return &clustermetadatapb.DurabilityPolicy{
+			PolicyName:    "AT_LEAST_N",
+			QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_AT_LEAST_N,
+			RequiredCount: n,
+		}
+	}
+	outgoing := &clustermetadatapb.ShardRule{
+		RuleNumber:       &clustermetadatapb.RuleNumber{CoordinatorTerm: 3},
+		LeaderId:         a,
+		CohortMembers:    []*clustermetadatapb.ID{a, b, c},
+		DurabilityPolicy: atLeast(2),
+		CoordinatorId:    coordinator,
+		CreationTime:     timestamppb.New(createdAt),
+	}
+	revocation := &clustermetadatapb.TermRevocation{
+		RevokedBelowTerm:      5,
+		OutgoingRule:          outgoing.GetRuleNumber(),
+		AcceptedCoordinatorId: coordinator,
+	}
+	proposedAs := func(modify func(*clustermetadatapb.ShardRule)) *clustermetadatapb.ShardRule {
+		rule := proto.Clone(outgoing).(*clustermetadatapb.ShardRule)
+		rule.RuleNumber = &clustermetadatapb.RuleNumber{CoordinatorTerm: 5}
+		modify(rule)
+		return rule
+	}
+	recruit := func(id *clustermetadatapb.ID) *clustermetadatapb.ConsensusStatus {
+		return &clustermetadatapb.ConsensusStatus{
+			Id:             id,
+			TermRevocation: revocation,
+			CurrentPosition: &clustermetadatapb.PoolerPosition{
+				Position: &clustermetadatapb.RulePosition{Decision: outgoing},
+				Lsn:      "0/1000000",
+			},
+		}
+	}
+
+	tests := []struct {
+		name             string
+		proposed         *clustermetadatapb.ShardRule
+		recruits         []*clustermetadatapb.ConsensusStatus
+		wantCoordRefuses bool
+		wantPlanRefuses  bool
+	}{
+		{
+			name:     "the same cohort and policy",
+			proposed: proposedAs(func(*clustermetadatapb.ShardRule) {}),
+			recruits: []*clustermetadatapb.ConsensusStatus{recruit(a), recruit(b), recruit(c)},
+		},
+		{
+			name:     "adding a member",
+			proposed: proposedAs(func(r *clustermetadatapb.ShardRule) { r.CohortMembers = []*clustermetadatapb.ID{a, b, c, d} }),
+			recruits: []*clustermetadatapb.ConsensusStatus{recruit(a), recruit(b), recruit(c)},
+		},
+		{
+			name:     "removing a member",
+			proposed: proposedAs(func(r *clustermetadatapb.ShardRule) { r.CohortMembers = []*clustermetadatapb.ID{a, b} }),
+			recruits: []*clustermetadatapb.ConsensusStatus{recruit(a), recruit(b), recruit(c)},
+		},
+		{
+			name: "a leader outside the proposed cohort",
+			proposed: proposedAs(func(r *clustermetadatapb.ShardRule) {
+				r.CohortMembers = []*clustermetadatapb.ID{b, c}
+			}),
+			recruits:         []*clustermetadatapb.ConsensusStatus{recruit(a), recruit(b), recruit(c)},
+			wantCoordRefuses: true,
+			wantPlanRefuses:  true,
+		},
+		{
+			name: "a cohort that cannot satisfy the policy",
+			proposed: proposedAs(func(r *clustermetadatapb.ShardRule) {
+				r.CohortMembers = []*clustermetadatapb.ID{a}
+			}),
+			recruits:         []*clustermetadatapb.ConsensusStatus{recruit(a), recruit(b), recruit(c)},
+			wantCoordRefuses: true,
+			wantPlanRefuses:  true,
+		},
+		{
+			name: "N and the cohort changing together",
+			proposed: proposedAs(func(r *clustermetadatapb.ShardRule) {
+				r.CohortMembers = []*clustermetadatapb.ID{a, b, c, d}
+				r.DurabilityPolicy = atLeast(3)
+			}),
+			recruits:         []*clustermetadatapb.ConsensusStatus{recruit(a), recruit(b), recruit(c)},
+			wantCoordRefuses: true,
+			wantPlanRefuses:  true,
+		},
+		{
+			name:             "no coordinator on the rule",
+			proposed:         proposedAs(func(r *clustermetadatapb.ShardRule) { r.CoordinatorId = nil }),
+			recruits:         []*clustermetadatapb.ConsensusStatus{recruit(a), recruit(b), recruit(c)},
+			wantCoordRefuses: true,
+			wantPlanRefuses:  true,
+		},
+		{
+			name:             "no creation time on the rule",
+			proposed:         proposedAs(func(r *clustermetadatapb.ShardRule) { r.CreationTime = nil }),
+			recruits:         []*clustermetadatapb.ConsensusStatus{recruit(a), recruit(b), recruit(c)},
+			wantCoordRefuses: true,
+			wantPlanRefuses:  true,
+		},
+		{
+			// Only the coordinator sees recruitment: a valid rule, too few recruits.
+			name:             "too few recruits for the outgoing cohort",
+			proposed:         proposedAs(func(*clustermetadatapb.ShardRule) {}),
+			recruits:         []*clustermetadatapb.ConsensusStatus{recruit(a)},
+			wantCoordRefuses: true,
+		},
+		{
+			// Promote writes at the revocation's term whatever number the rule carries.
+			name:             "a rule number short of the revocation's term",
+			proposed:         proposedAs(func(r *clustermetadatapb.ShardRule) { r.RuleNumber = &clustermetadatapb.RuleNumber{CoordinatorTerm: 4} }),
+			recruits:         []*clustermetadatapb.ConsensusStatus{recruit(a), recruit(b), recruit(c)},
+			wantCoordRefuses: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			proposal := &consensusdatapb.CoordinatorProposal{
+				TermRevocation:     revocation,
+				ProposalLeader:     &clustermetadatapb.PoolerAddress{Id: a},
+				ProposedTransition: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{RuleNumber: outgoing.GetRuleNumber()}, Proposal: tt.proposed},
+			}
+			// The leader of the proposed rule is the proposal's leader, as the builders set it.
+			tt.proposed.LeaderId = a
+
+			_, coordErr := commonconsensus.BuildSafeProposal(revocation, tt.recruits, func(commonconsensus.RecruitmentResult) (*consensusdatapb.CoordinatorProposal, error) {
+				return proposal, nil
+			})
+
+			// What Promote asks the rule store to write, from the same proposal.
+			createdTime := time.Time{}
+			if tt.proposed.GetCreationTime() != nil {
+				createdTime = tt.proposed.GetCreationTime().AsTime()
+			}
+			update := NewRuleUpdate(revocation.GetRevokedBelowTerm(), tt.proposed.GetCoordinatorId(), "promotion", "parity", createdTime).
+				WithLeader(proposal.GetProposalLeader().GetId()).
+				WithCohort(tt.proposed.GetCohortMembers()).
+				WithDurabilityPolicy(tt.proposed.GetDurabilityPolicy()).
+				WithPromotionHook(func(context.Context) error { return nil })
+			_, planErr := planRuleChange(outgoing, update, update.changeKind())
+
+			assert.Equal(t, tt.wantCoordRefuses, coordErr != nil, "coordinator verdict: %v", coordErr)
+			assert.Equal(t, tt.wantPlanRefuses, planErr != nil, "rule store planning verdict: %v", planErr)
+			if planErr != nil && coordErr != nil {
+				assert.Contains(t, coordErr.Error(), planErr.Error(), "the coordinator reports the same reason")
+			}
+		})
+	}
 }

@@ -258,16 +258,15 @@ type RuleUpdateBuilder struct {
 	operation       string
 	acceptedMembers []*clustermetadatapb.ID
 
-	force              bool
 	skipOutgoingQuorum bool        // skip BuildPolicyTransition; apply incoming GUC directly
 	previousRule       *ruleNumber // for compare-and-swap; nil means no check
-	promotionHook      promotionFn // non-nil iff postgres is known to be in recovery
+	promotionHook      promotionFn // non-nil iff the change is coordinator-led (a promotion)
 }
 
 // promotionFn is called by UpdateRule after the pre-promote GUC is applied and
 // before the rule history write. It must call pg_promote() and wait for promotion
-// to complete. It is provided iff the caller has already verified that postgres
-// is in recovery.
+// to complete. It is provided iff the change is coordinator-led, when the caller has
+// already verified that postgres is in recovery.
 type promotionFn func(ctx context.Context) error
 
 // Accessors for the builder's fields. Exposed so callers and tests in other
@@ -297,6 +296,23 @@ func (b *RuleUpdateBuilder) GetPreviousRule() (coordinatorTerm, leaderSubterm in
 	return b.previousRule.coordinatorTerm, b.previousRule.leaderSubterm, true
 }
 
+// changeKind is who is changing the rule. A change that carries a promotion hook is a
+// coordinator's (only Promote supplies one); anything else is the leader amending its
+// own rule. The rule number, the lock mode and the GUC path all follow from this.
+func (b *RuleUpdateBuilder) changeKind() consensus.RuleChangeKind {
+	if b.promotionHook != nil {
+		return consensus.CoordinatorLedChange
+	}
+	return consensus.LeaderLedChange
+}
+
+// TODO: replace this with two constructors, one for a leader amending its own rule and one
+// for a coordinator's change, each requiring the previous rule (both production callers
+// set it). The compare then becomes unconditional, a leader-led change needs no term, and
+// the kind is stated instead of inferred from the promotion hook. The coordinator one would
+// require the hook for now, but that couples consensus to postgres: a retried promotion
+// that finds postgres already primary still needs a coordinator-led write, with no
+// pg_promote to run.
 func NewRuleUpdate(termNumber int64, coordinatorID *clustermetadatapb.ID, eventType, reason string, createdAt time.Time) *RuleUpdateBuilder {
 	return &RuleUpdateBuilder{
 		termNumber:    termNumber,
@@ -339,11 +355,6 @@ func (b *RuleUpdateBuilder) WithAcceptedMembers(members []*clustermetadatapb.ID)
 
 func (b *RuleUpdateBuilder) WithDurabilityPolicy(policy *clustermetadatapb.DurabilityPolicy) *RuleUpdateBuilder {
 	b.durabilityPolicy = policy
-	return b
-}
-
-func (b *RuleUpdateBuilder) WithForce() *RuleUpdateBuilder {
-	b.force = true
 	return b
 }
 
@@ -639,63 +650,63 @@ func (rs *ruleStore) readCurrentRuleLocked(ctx context.Context, inRecovery bool)
 	return pos, lockedCtx, nil
 }
 
-// resolveNewRuleValues resolves the leader/cohort/durability-policy values
-// UpdateRule should write: caller-supplied values (via the builder) take
-// priority, nil retains the existing value from currentRule. Also validates
-// the resolved cohort can satisfy the resolved policy, and computes the
-// incoming PolicyWithCohort used both by propagation's finalize step (see
-// finalizeStuckProposal) and the GUC transition.
-func resolveNewRuleValues(
+// resolveIncomingRule builds the rule UpdateRule writes: the leader, cohort and
+// durability policy the caller supplied through the builder, where nil keeps the
+// value from currentRule, under the given rule number and the update's attestation.
+// Everything UpdateRule validates and writes comes from this rule.
+func resolveIncomingRule(
 	currentRule *clustermetadatapb.ShardRule,
 	update *RuleUpdateBuilder,
-	isPromotion bool,
-) (newLeader *clustermetadatapb.ID, newCohort []*clustermetadatapb.ID, newDP *clustermetadatapb.DurabilityPolicy, incomingPWC consensus.PolicyWithCohort, err error) {
+	kind consensus.RuleChangeKind,
+	ruleNumber *clustermetadatapb.RuleNumber,
+) (*clustermetadatapb.ShardRule, error) {
 	// Outside of a promotion, an existing leader can't be replaced: the current leader
 	// is the one issuing this write, and it has no way to instantaneously stop accepting
 	// transactions the moment the row changes — only a promotion (which goes through
 	// revocation/fencing on the outgoing leader first) can safely hand off leadership.
 	// Establishing the very first leader (currentRule has none yet) has no such risk and
 	// is allowed either way.
-	newLeader = currentRule.GetLeaderId()
+	newLeader := currentRule.GetLeaderId()
 	if update.leaderID != nil {
-		if !isPromotion && currentRule.GetLeaderId() != nil && !proto.Equal(update.leaderID, currentRule.GetLeaderId()) {
-			return nil, nil, nil, consensus.PolicyWithCohort{}, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
+		if kind == consensus.LeaderLedChange && currentRule.GetLeaderId() != nil && !proto.Equal(update.leaderID, currentRule.GetLeaderId()) {
+			return nil, mterrors.Errorf(mtrpcpb.Code_FAILED_PRECONDITION,
 				"UpdateRule cannot change leader outside of a promotion: current leader %v, requested %v",
 				currentRule.GetLeaderId(), update.leaderID)
 		}
 		newLeader = update.leaderID
 	}
-	newCohort = currentRule.GetCohortMembers()
+	newCohort := currentRule.GetCohortMembers()
 	if update.cohortMembers != nil {
 		newCohort = update.cohortMembers
 	}
-	newDP = currentRule.GetDurabilityPolicy()
+	newDP := currentRule.GetDurabilityPolicy()
 	if update.durabilityPolicy != nil {
 		dp := update.durabilityPolicy
 		if dp.QuorumType == clustermetadatapb.QuorumType_QUORUM_TYPE_UNKNOWN || dp.RequiredCount <= 0 {
-			return nil, nil, nil, consensus.PolicyWithCohort{}, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,
+			return nil, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,
 				"durability policy has missing or invalid fields: quorum_type=%v required_count=%d",
 				dp.QuorumType, dp.RequiredCount)
 		}
 		newDP = dp
 	}
 
-	// Validate that the new cohort can satisfy the new durability policy.
-	if len(newCohort) > 0 {
-		policy, policyErr := consensus.NewPolicyFromProto(newDP)
-		if policyErr != nil {
-			return nil, nil, nil, consensus.PolicyWithCohort{}, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT, "invalid durability policy: %v", policyErr)
-		}
-		if achievableErr := policy.SatisfiedBy(newCohort); achievableErr != nil {
-			return nil, nil, nil, consensus.PolicyWithCohort{}, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT, "cohort cannot achieve durability policy: %v", achievableErr)
-		}
+	if err := consensus.ValidateRuleContents(newLeader, newCohort, newDP); err != nil {
+		return nil, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT, "%v", err)
 	}
 
-	incomingPWC, err = consensus.NewPolicyWithCohort(newCohort, newDP)
-	if err != nil {
-		return nil, nil, nil, consensus.PolicyWithCohort{}, err
+	// A zero time is a missing creation time, not the year 1.
+	var creationTime *timestamppb.Timestamp
+	if !update.createdAt.IsZero() {
+		creationTime = timestamppb.New(update.createdAt)
 	}
-	return newLeader, newCohort, newDP, incomingPWC, nil
+	return &clustermetadatapb.ShardRule{
+		RuleNumber:       ruleNumber,
+		CoordinatorId:    update.coordinatorID,
+		CreationTime:     creationTime,
+		LeaderId:         newLeader,
+		CohortMembers:    newCohort,
+		DurabilityPolicy: newDP,
+	}, nil
 }
 
 // maybeFinalizeStuckProposal implements propagation: when current carries an
@@ -730,9 +741,7 @@ func resolveNewRuleValues(
 func (rs *ruleStore) maybeFinalizeStuckProposal(
 	ctx, lockedCtx context.Context,
 	current *clustermetadatapb.PoolerPosition,
-	update *RuleUpdateBuilder,
-	isPromotion bool,
-	incomingPWC consensus.PolicyWithCohort,
+	change validatedRuleChange,
 ) (*clustermetadatapb.PoolerPosition, bool, error) {
 	if consensus.IsRuleDecided(current.GetPosition()) {
 		return current, false, nil
@@ -742,8 +751,8 @@ func (rs *ruleStore) maybeFinalizeStuckProposal(
 	stuckRuleNumber := stuckProposal.GetRuleNumber()
 
 	var finalizePolicy consensus.PolicyWithCohort
-	if update.skipOutgoingQuorum {
-		finalizePolicy = incomingPWC
+	if change.skipOutgoingQuorum {
+		finalizePolicy = change.transition.Incoming
 	} else {
 		var err error
 		finalizePolicy, err = expectedSyncStandbyPolicy(current.GetPosition())
@@ -756,8 +765,8 @@ func (rs *ruleStore) maybeFinalizeStuckProposal(
 	}
 
 	promoted := false
-	if isPromotion {
-		if err := update.promotionHook(lockedCtx); err != nil {
+	if change.isPromotion() {
+		if err := change.promotionHook(lockedCtx); err != nil {
 			return nil, false, fmt.Errorf("propagation: promotion hook: %w", err)
 		}
 		promoted = true
@@ -806,7 +815,6 @@ func (rs *ruleStore) maybeFinalizeStuckProposal(
 // it is applied immediately before the write CTE.
 //
 // Returns the node's position (rule + WAL LSN) at the time of the write,
-// or nil if force mode skipped the write.
 //
 // This operation uses the remote-operation-timeout and will fail if it cannot
 // complete within that time. A timeout typically indicates that synchronous
@@ -826,34 +834,8 @@ func (rs *ruleStore) UpdateRule(ctx context.Context, update *RuleUpdateBuilder) 
 		return nil, fmt.Errorf("UpdateRule: %w", err)
 	}
 
-	if update.force {
-		// Force mode skips history recording entirely. Force operations are emergency
-		// operations that must configure replication GUCs regardless. The write would
-		// block on sync replication with unreachable standbys, consuming the parent
-		// context's deadline and causing subsequent GUC changes to fail.
-		rs.logger.InfoContext(ctx, "skipping rule update in force mode",
-			"coordinator_term", update.termNumber,
-			"event_type", update.eventType)
-		return nil, nil
-	}
-
-	// Identity and timing must be supplied by the caller. ClusterIDString(nil)
-	// silently returns "" and the coordinator_id column is TEXT NOT NULL (not
-	// rejected by postgres because "" != NULL), so without these checks a nil
-	// coordinatorID would write a corrupt row instead of failing. createdAt
-	// has the same property: a zero time.Time inserts as a zero timestamp.
-	// Failing fast here also avoids leaving partial work in the caller, which
-	// often touches postgres GUCs around this write.
-	if update.coordinatorID == nil {
-		return nil, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,
-			"UpdateRule requires a non-nil coordinator_id")
-	}
-	if update.createdAt.IsZero() {
-		return nil, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT,
-			"UpdateRule requires a non-zero created_at")
-	}
-
-	isPromotion := update.promotionHook != nil
+	kind := update.changeKind()
+	isPromotion := kind == consensus.CoordinatorLedChange
 
 	// Read the current rule to establish the CAS baseline and drain any in-flight
 	// rule writes from a previous action lock holder.
@@ -880,29 +862,7 @@ func (rs *ruleStore) UpdateRule(ctx context.Context, update *RuleUpdateBuilder) 
 	// decided — so resolving values against the pre-finalize read here gives
 	// the same answer as resolving them post-finalize would.
 	currentRule := consensus.PossiblyUndecidedRule(current.GetPosition())
-	currentTerm := currentRule.GetRuleNumber().GetCoordinatorTerm()
-	currentSubterm := currentRule.GetRuleNumber().GetLeaderSubterm()
-
-	// Optional explicit CAS: verify the caller's expected version matches what we read.
-	if update.previousRule != nil {
-		if currentTerm != update.previousRule.coordinatorTerm || currentSubterm != update.previousRule.leaderSubterm {
-			return nil, errRuleConflict
-		}
-	}
-
-	// Compute the next leader_subterm.
-	var nextSubterm int64
-	if update.termNumber > currentTerm {
-		nextSubterm = 0
-	} else if update.termNumber < currentTerm {
-		return nil, mterrors.Errorf(mtrpcpb.Code_INTERNAL,
-			"rule update rejected for term %d: current rule is at term %d",
-			update.termNumber, currentTerm)
-	} else {
-		nextSubterm = currentSubterm + 1
-	}
-
-	newLeader, newCohort, newDP, incomingPWC, err := resolveNewRuleValues(currentRule, update, isPromotion)
+	change, err := planRuleChange(currentRule, update, kind)
 	if err != nil {
 		return nil, err
 	}
@@ -912,47 +872,164 @@ func (rs *ruleStore) UpdateRule(ctx context.Context, update *RuleUpdateBuilder) 
 	// proposal names — before doing anything else with it. See
 	// maybeFinalizeStuckProposal's doc comment for the full design rationale.
 	// promoted tracks whether promotionHook already ran there, so the
-	// ordinary isPromotion branch further below doesn't call it a second
-	// time — pg_promote() only needs to happen once before either write.
-	// The returned position isn't needed here: currentRule/currentTerm/
-	// currentSubterm above already reflect it (finalize never changes a
-	// proposal's own content, only whether it's marked decided).
-	_, promoted, err := rs.maybeFinalizeStuckProposal(ctx, lockedCtx, current, update, isPromotion, incomingPWC)
+	// ordinary isPromotion branch in applyPreWritePolicy doesn't call it a
+	// second time — pg_promote() only needs to happen once before either write.
+	// The returned position isn't needed here: currentRule above already
+	// reflects it (finalize never changes a proposal's own content, only
+	// whether it's marked decided).
+	_, promoted, err := rs.maybeFinalizeStuckProposal(ctx, lockedCtx, current, change)
 	if err != nil {
 		return nil, err
 	}
 
-	// Compute the GUC transition. The Both policy satisfies the old and new durability
-	// requirements simultaneously and is applied before the WAL write. The Incoming
-	// (new) policy is applied after the write commits.
-	var transition *consensus.PolicyTransition
-	if update.skipOutgoingQuorum {
-		// Skip BuildPolicyTransition and apply the incoming cohort directly.
-		// Used when the outgoing cohort is empty (bootstrap) or the coordinator
-		// has already verified the transition is safe.
-		transition = &consensus.PolicyTransition{Both: incomingPWC, Incoming: incomingPWC}
-	} else {
-		outgoingPWC, err := consensus.NewPolicyWithCohort(currentRule.GetCohortMembers(), currentRule.GetDurabilityPolicy())
-		if err != nil {
-			return nil, err
-		}
-		transition, err = consensus.BuildPolicyTransition(outgoingPWC, incomingPWC)
-		if err != nil {
-			return nil, fmt.Errorf("compute GUC transition: %w", err)
+	if err := rs.applyPreWritePolicy(lockedCtx, change, promoted); err != nil {
+		return nil, err
+	}
+	pos, err := rs.writeRule(ctx, change)
+	if err != nil {
+		return nil, err
+	}
+	if err := rs.applyPostWritePolicy(lockedCtx, change); err != nil {
+		return nil, err
+	}
+	return pos, nil
+}
+
+// validatedRuleChange is a rule change that passed consensus.ValidateRuleChange, with
+// the GUC policies it yields. The steps that apply and write a change take one, so they
+// act on what was validated and nothing else: none of them sees the RuleUpdateBuilder.
+type validatedRuleChange struct {
+	// current is the rule being replaced; it may be an undecided proposal.
+	current *clustermetadatapb.ShardRule
+	// incoming is the rule being written.
+	incoming *clustermetadatapb.ShardRule
+	// transition holds the GUC policies: Both is applied before the WAL write and
+	// Incoming after it.
+	transition *consensus.PolicyTransition
+
+	kind               consensus.RuleChangeKind
+	skipOutgoingQuorum bool
+	// promotionHook runs pg_promote(); non-nil iff the change is coordinator-led.
+	promotionHook promotionFn
+	// event is what rule_history records about the change, apart from the rule itself.
+	event ruleChangeEvent
+}
+
+// ruleChangeEvent is the history-only metadata of a rule change.
+type ruleChangeEvent struct {
+	eventType       string
+	reason          string
+	walPosition     string
+	operation       string
+	acceptedMembers []*clustermetadatapb.ID
+}
+
+// planRuleChange builds the rule update would write over current and validates it,
+// before any write (propagation's included), so an unsupported change fails with
+// nothing done. It is the only step that reads the update's rule content.
+func planRuleChange(current *clustermetadatapb.ShardRule, update *RuleUpdateBuilder, kind consensus.RuleChangeKind) (validatedRuleChange, error) {
+	currentTerm := current.GetRuleNumber().GetCoordinatorTerm()
+	currentSubterm := current.GetRuleNumber().GetLeaderSubterm()
+
+	// Optional explicit CAS: verify the caller's expected version matches what we read.
+	if update.previousRule != nil {
+		if currentTerm != update.previousRule.coordinatorTerm || currentSubterm != update.previousRule.leaderSubterm {
+			return validatedRuleChange{}, errRuleConflict
 		}
 	}
 
+	if update.termNumber < currentTerm {
+		return validatedRuleChange{}, mterrors.Errorf(mtrpcpb.Code_INTERNAL,
+			"rule update rejected for term %d: current rule is at term %d",
+			update.termNumber, currentTerm)
+	}
+	// The rule number follows from who is changing the rule: a coordinator starts a new
+	// term at subterm 0, the leader advances the subterm within the current term.
+	// ValidateRuleChange checks the term against the outgoing rule's.
+	var nextSubterm int64
+	if kind == consensus.LeaderLedChange {
+		nextSubterm = currentSubterm + 1
+	}
+
+	incoming, err := resolveIncomingRule(current, update, kind,
+		&clustermetadatapb.RuleNumber{CoordinatorTerm: update.termNumber, LeaderSubterm: nextSubterm})
+	if err != nil {
+		return validatedRuleChange{}, err
+	}
+	transition, err := consensus.ValidateRuleChange(kind, current, incoming, update.skipOutgoingQuorum)
+	if err != nil {
+		return validatedRuleChange{}, mterrors.Errorf(mtrpcpb.Code_INVALID_ARGUMENT, "%v", err)
+	}
+	return validatedRuleChange{
+		current:            current,
+		incoming:           incoming,
+		transition:         transition,
+		kind:               kind,
+		skipOutgoingQuorum: update.skipOutgoingQuorum,
+		promotionHook:      update.promotionHook,
+		event: ruleChangeEvent{
+			eventType:       update.eventType,
+			reason:          update.reason,
+			walPosition:     update.walPosition,
+			operation:       update.operation,
+			acceptedMembers: update.acceptedMembers,
+		},
+	}, nil
+}
+
+// applyPreWritePolicy applies the transition's Both policy before the rule is written. It
+// satisfies both old and new durability requirements simultaneously.
+// Promotion path: set GUC while still a standby, then call pg_promote().
+// Primary path: set GUC immediately before the write CTE.
+// promoted means propagation's finalize step already ran promotionHook (pg_promote only
+// needs to happen once).
+// isPromotion is whether the change is a coordinator's, which promotes postgres.
+func (c validatedRuleChange) isPromotion() bool {
+	return c.kind == consensus.CoordinatorLedChange
+}
+
+func (rs *ruleStore) applyPreWritePolicy(ctx context.Context, change validatedRuleChange, promoted bool) error {
+	if change.isPromotion() {
+		if err := rs.syncStandby.SetPolicy(ctx, change.transition.Both); err != nil {
+			return fmt.Errorf("pre-promote GUC: %w", err)
+		}
+		if !promoted {
+			if err := change.promotionHook(ctx); err != nil {
+				return fmt.Errorf("promotion hook: %w", err)
+			}
+		}
+		return nil
+	}
+	if err := rs.syncStandby.SetPolicy(ctx, change.transition.Both); err != nil {
+		return fmt.Errorf("pre-write GUC: %w", err)
+	}
+	return nil
+}
+
+// applyPostWritePolicy applies the incoming (new) policy after the write commits.
+func (rs *ruleStore) applyPostWritePolicy(ctx context.Context, change validatedRuleChange) error {
+	if err := rs.syncStandby.SetPolicy(ctx, change.transition.Incoming); err != nil {
+		return fmt.Errorf("post-write GUC: %w", err)
+	}
+	return nil
+}
+
+// writeRule writes the change's incoming rule, first as a proposal and then as the
+// decision, and returns the resulting position.
+func (rs *ruleStore) writeRule(ctx context.Context, change validatedRuleChange) (*clustermetadatapb.PoolerPosition, error) {
+	incoming := change.incoming
+
 	// Convert values to SQL parameters.
 	var newLeaderStr string
-	if newLeader != nil {
-		pid, err := NewReplicaID(newLeader)
+	if incoming.GetLeaderId() != nil {
+		pid, err := NewReplicaID(incoming.GetLeaderId())
 		if err != nil {
 			return nil, mterrors.Wrap(err, "invalid leader ID")
 		}
 		newLeaderStr = pid.appName
 	}
 
-	cohortPIDs, err := ToReplicaIDs(newCohort)
+	cohortPIDs, err := ToReplicaIDs(incoming.GetCohortMembers())
 	if err != nil {
 		return nil, mterrors.Wrap(err, "invalid cohort member ID")
 	}
@@ -962,41 +1039,20 @@ func (rs *ruleStore) UpdateRule(ctx context.Context, update *RuleUpdateBuilder) 
 	}
 
 	var acceptedParam []string
-	if len(update.acceptedMembers) > 0 {
-		pids, err := ToReplicaIDs(update.acceptedMembers)
+	if len(change.event.acceptedMembers) > 0 {
+		pids, err := ToReplicaIDs(change.event.acceptedMembers)
 		if err != nil {
 			return nil, mterrors.Wrap(err, "invalid accepted member ID")
 		}
 		acceptedParam = ReplicaIDsToAppNames(pids)
 	}
 
-	coordinatorIDStr := topoclient.ClusterIDString(update.coordinatorID)
-	// newDP is always non-nil: UpdateRule falls back to the current rule's policy when
-	// the caller omits WithDurabilityPolicy(), so these values are always present.
-	dpName := newDP.PolicyName
-	dpQuorumType := newDP.QuorumType.String()
-	dpRequiredCount := int64(newDP.RequiredCount)
-
-	// Apply the transition GUC before writing the rule. The transition (Both) policy
-	// satisfies both old and new durability requirements simultaneously.
-	// Promotion path: set GUC while still a standby, then call pg_promote().
-	// Primary path: set GUC immediately before the write CTE.
-	if isPromotion {
-		if err := rs.syncStandby.SetPolicy(lockedCtx, transition.Both); err != nil {
-			return nil, fmt.Errorf("pre-promote GUC: %w", err)
-		}
-		// promoted means propagation's finalize step above already ran
-		// promotionHook (pg_promote only needs to happen once).
-		if !promoted {
-			if err := update.promotionHook(lockedCtx); err != nil {
-				return nil, fmt.Errorf("promotion hook: %w", err)
-			}
-		}
-	} else {
-		if err := rs.syncStandby.SetPolicy(lockedCtx, transition.Both); err != nil {
-			return nil, fmt.Errorf("pre-write GUC: %w", err)
-		}
-	}
+	coordinatorIDStr := topoclient.ClusterIDString(incoming.GetCoordinatorId())
+	// The policy is always non-nil: UpdateRule falls back to the current rule's policy
+	// when the caller omits WithDurabilityPolicy(), so these values are always present.
+	dpName := incoming.GetDurabilityPolicy().GetPolicyName()
+	dpQuorumType := incoming.GetDurabilityPolicy().GetQuorumType().String()
+	dpRequiredCount := int64(incoming.GetDurabilityPolicy().GetRequiredCount())
 
 	// Write the rule. This write blocks until a sync-standby WAL ack arrives.
 	// For promotions the ack only arrives after the full SetPrimary round-trip
@@ -1014,31 +1070,28 @@ func (rs *ruleStore) UpdateRule(ctx context.Context, update *RuleUpdateBuilder) 
 	// writeRuleProposal caches the resulting position itself, so its return
 	// value isn't needed here.
 	proposeEvent := eventlog.ConsensusRulePropose{
-		Rule: consensus.FormatRuleNumber(&clustermetadatapb.RuleNumber{
-			CoordinatorTerm: update.termNumber,
-			LeaderSubterm:   nextSubterm,
-		}),
+		Rule: consensus.FormatRuleNumber(incoming.GetRuleNumber()),
 	}
 	eventlog.Emit(ctx, rs.logger, eventlog.Started, proposeEvent)
 	proposalStartedAt := time.Now()
 	proposalPos, writeErr := rs.writeRuleProposal(ctx, ruleProposalWriteParams{
-		casTerm:          currentTerm,
-		casSubterm:       currentSubterm,
-		newTerm:          update.termNumber,
-		newSubterm:       nextSubterm,
+		casTerm:          change.current.GetRuleNumber().GetCoordinatorTerm(),
+		casSubterm:       change.current.GetRuleNumber().GetLeaderSubterm(),
+		newTerm:          incoming.GetRuleNumber().GetCoordinatorTerm(),
+		newSubterm:       incoming.GetRuleNumber().GetLeaderSubterm(),
 		newLeaderStr:     newLeaderStr,
 		newCohort:        newCohortParam,
 		dpName:           dpName,
 		dpQuorumType:     dpQuorumType,
 		dpRequiredCount:  dpRequiredCount,
-		createdAt:        update.createdAt,
-		eventType:        update.eventType,
-		walPosition:      update.walPosition,
-		operation:        update.operation,
-		reason:           update.reason,
+		createdAt:        incoming.GetCreationTime().AsTime(),
+		eventType:        change.event.eventType,
+		walPosition:      change.event.walPosition,
+		operation:        change.event.operation,
+		reason:           change.event.reason,
 		acceptedMembers:  acceptedParam,
 		coordinatorIDStr: coordinatorIDStr,
-		isPromotion:      isPromotion,
+		isPromotion:      change.isPromotion(),
 	})
 	if writeErr != nil {
 		eventlog.Emit(ctx, rs.logger, eventlog.Failed, proposeEvent, "error", writeErr)
@@ -1054,18 +1107,9 @@ func (rs *ruleStore) UpdateRule(ctx context.Context, update *RuleUpdateBuilder) 
 	// the decided rule on the incoming side. That would also let freshenQuorumProof's no-op
 	// write wait on the incoming cohort alone. Needs a safety review of how recruit and
 	// propagation treat an undecided proposal on the outgoing cohort.
-	pos, err := rs.markProposalAsDecision(ctx, update.termNumber, nextSubterm, coordinatorIDStr, update.createdAt,
+	return rs.markProposalAsDecision(ctx, incoming.GetRuleNumber().GetCoordinatorTerm(), incoming.GetRuleNumber().GetLeaderSubterm(),
+		coordinatorIDStr, incoming.GetCreationTime().AsTime(),
 		rs.newQuorumProof(ctx, proposalPos.GetLsn(), proposalStartedAt))
-	if err != nil {
-		return nil, err
-	}
-
-	// Apply the incoming (new) GUC after the write commits.
-	if err := rs.syncStandby.SetPolicy(lockedCtx, transition.Incoming); err != nil {
-		return nil, fmt.Errorf("post-write GUC: %w", err)
-	}
-
-	return pos, nil
 }
 
 // markProposalAsDecision promotes the current_rule row's proposal_* columns to

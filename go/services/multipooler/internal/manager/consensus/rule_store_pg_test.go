@@ -428,7 +428,7 @@ func TestRuleStorePG_ObservePosition_InitialPolicyCarriedThroughUpdate(t *testin
 	coordinatorID := testPoolerID(t, "zone1", "coordinator-1")
 
 	// Write a rule without specifying a durability policy — the initial row's policy must carry forward.
-	_, err := rs.UpdateRule(ctx, NewRuleUpdate(1, coordinatorID, "promotion", "initial", time.Now()))
+	_, err := rs.UpdateRule(ctx, newPromotionUpdate(1, coordinatorID, "promotion", "initial", time.Now()))
 	require.NoError(t, err)
 
 	pos, err := rs.ObservePosition(ctx)
@@ -460,13 +460,14 @@ func TestRuleStorePG_ObservePosition_SurfacesStuckProposal(t *testing.T) {
 	coordinatorID := testPoolerID(t, "zone1", "coordinator-1")
 	leaderID := testPoolerID(t, "zone1", "leader-1")
 	cohort := []*clustermetadatapb.ID{
+		leaderID,
 		testPoolerID(t, "zone1", "member-1"),
 		testPoolerID(t, "zone1", "member-2"),
 	}
 	now := time.Now()
 
 	_, err := rs.UpdateRule(ctx,
-		NewRuleUpdate(3, coordinatorID, "promotion", "bootstrap", now).
+		newPromotionUpdate(3, coordinatorID, "promotion", "bootstrap", now).
 			WithLeader(leaderID).
 			WithCohort(cohort),
 	)
@@ -589,11 +590,12 @@ func TestRuleStorePG_UpdateRule_RejectsWhenProposalStuck(t *testing.T) {
 	coordinatorID := testPoolerID(t, "zone1", "coordinator-1")
 	leaderID := testPoolerID(t, "zone1", "leader-1")
 	cohort := []*clustermetadatapb.ID{
+		leaderID,
 		testPoolerID(t, "zone1", "member-1"),
 		testPoolerID(t, "zone1", "member-2"),
 	}
 	_, err := rs.UpdateRule(ctx,
-		NewRuleUpdate(3, coordinatorID, "promotion", "bootstrap", time.Now()).
+		newPromotionUpdate(3, coordinatorID, "promotion", "bootstrap", time.Now()).
 			WithLeader(leaderID).
 			WithCohort(cohort),
 	)
@@ -632,11 +634,12 @@ func TestRuleStorePG_UpdateRule_SkipOutgoingQuorumSupersedesStuckProposal(t *tes
 	coordinatorID := testPoolerID(t, "zone1", "coordinator-1")
 	leaderID := testPoolerID(t, "zone1", "leader-1")
 	cohort := []*clustermetadatapb.ID{
+		leaderID,
 		testPoolerID(t, "zone1", "member-1"),
 		testPoolerID(t, "zone1", "member-2"),
 	}
 	_, err := rs.UpdateRule(ctx,
-		NewRuleUpdate(3, coordinatorID, "promotion", "bootstrap", time.Now()).
+		newPromotionUpdate(3, coordinatorID, "promotion", "bootstrap", time.Now()).
 			WithLeader(leaderID).
 			WithCohort(cohort),
 	)
@@ -644,9 +647,9 @@ func TestRuleStorePG_UpdateRule_SkipOutgoingQuorumSupersedesStuckProposal(t *tes
 
 	stuckRuleNumber := seedStuckProposal(ctx, t, conn, 4, leaderID, cohort, testBootstrapPolicy())
 
-	newLeaderID := testPoolerID(t, "zone1", "leader-2")
+	newLeaderID := cohort[1] // a cohort member takes over
 	pos, err := rs.UpdateRule(ctx,
-		NewRuleUpdate(5, coordinatorID, "promotion", "recover stuck proposal", time.Now()).
+		newPromotionUpdate(5, coordinatorID, "promotion", "recover stuck proposal", time.Now()).
 			WithLeader(newLeaderID).
 			WithCohort(cohort).
 			WithPreviousRule(stuckRuleNumber.CoordinatorTerm, stuckRuleNumber.LeaderSubterm).
@@ -655,7 +658,7 @@ func TestRuleStorePG_UpdateRule_SkipOutgoingQuorumSupersedesStuckProposal(t *tes
 	)
 	require.NoError(t, err, "skipOutgoingQuorum should supersede the stuck proposal")
 	assert.Equal(t, int64(5), pos.GetPosition().GetDecision().GetRuleNumber().GetCoordinatorTerm())
-	assert.Equal(t, "leader-2", pos.GetPosition().GetDecision().GetLeaderId().GetName())
+	assert.Equal(t, "member-1", pos.GetPosition().GetDecision().GetLeaderId().GetName())
 	assert.Nil(t, pos.GetPosition().GetProposal(), "the fresh write is fully decided, not stuck")
 }
 
@@ -678,11 +681,12 @@ func TestRuleStorePG_UpdateRule_PropagatesViaFinalizeThenPromote(t *testing.T) {
 	coordinatorID := testPoolerID(t, "zone1", "coordinator-1")
 	leaderID := testPoolerID(t, "zone1", "leader-1")
 	cohort := []*clustermetadatapb.ID{
+		leaderID,
 		testPoolerID(t, "zone1", "member-1"),
 		testPoolerID(t, "zone1", "member-2"),
 	}
 	_, err := rs.UpdateRule(ctx,
-		NewRuleUpdate(3, coordinatorID, "promotion", "bootstrap", time.Now()).
+		newPromotionUpdate(3, coordinatorID, "promotion", "bootstrap", time.Now()).
 			WithLeader(leaderID).
 			WithCohort(cohort),
 	)
@@ -690,10 +694,10 @@ func TestRuleStorePG_UpdateRule_PropagatesViaFinalizeThenPromote(t *testing.T) {
 
 	stuckRuleNumber := seedStuckProposal(ctx, t, conn, 4, leaderID, cohort, testBootstrapPolicy())
 
-	newLeaderID := testPoolerID(t, "zone1", "leader-3")
+	newLeaderID := cohort[1] // a cohort member takes over
 	promotionHookCalls := 0
 	pos, err := rs.UpdateRule(ctx,
-		NewRuleUpdate(5, coordinatorID, "promotion", "auto-recover stuck proposal", time.Now()).
+		newPromotionUpdate(5, coordinatorID, "promotion", "auto-recover stuck proposal", time.Now()).
 			WithLeader(newLeaderID).
 			WithCohort(cohort).
 			WithPromotionHook(func(context.Context) error {
@@ -704,7 +708,7 @@ func TestRuleStorePG_UpdateRule_PropagatesViaFinalizeThenPromote(t *testing.T) {
 	require.NoError(t, err, "an ordinary promotion should propagate the stuck proposal without a cert")
 	assert.Equal(t, 1, promotionHookCalls, "pg_promote must run exactly once, not once per phase")
 	assert.Equal(t, int64(5), pos.GetPosition().GetDecision().GetRuleNumber().GetCoordinatorTerm())
-	assert.Equal(t, "leader-3", pos.GetPosition().GetDecision().GetLeaderId().GetName())
+	assert.Equal(t, "member-1", pos.GetPosition().GetDecision().GetLeaderId().GetName())
 	assert.Nil(t, pos.GetPosition().GetProposal(), "the fresh write is fully decided, not stuck")
 
 	records, err := rs.queryRuleHistory(ctx, 10)
@@ -725,7 +729,7 @@ func TestRuleStorePG_UpdateRule_PropagatesViaFinalizeThenPromote(t *testing.T) {
 	require.True(t, ok, "the new leader's promotion must have its own rule_history row")
 	assert.True(t, newRec.Decided)
 	require.NotNil(t, newRec.LeaderID)
-	assert.Equal(t, "leader-3", newRec.LeaderID.appName[len("zone1_"):])
+	assert.Equal(t, "member-1", newRec.LeaderID.appName[len("zone1_"):])
 }
 
 func TestRuleStorePG_UpdateRule_FirstWrite(t *testing.T) {
@@ -737,7 +741,7 @@ func TestRuleStorePG_UpdateRule_FirstWrite(t *testing.T) {
 	defer conn.Close()
 
 	coordinatorID := testPoolerID(t, "zone1", "coordinator-1")
-	update := NewRuleUpdate(1, coordinatorID, "promotion", "initial primary", time.Now())
+	update := newPromotionUpdate(1, coordinatorID, "promotion", "initial primary", time.Now())
 
 	pos, err := rs.UpdateRule(ctx, update)
 	require.NoError(t, err)
@@ -757,7 +761,7 @@ func TestRuleStorePG_UpdateRule_SameTermIncrementsSubterm(t *testing.T) {
 	coordinatorID := testPoolerID(t, "zone1", "coordinator-1")
 	now := time.Now()
 
-	pos1, err := rs.UpdateRule(ctx, NewRuleUpdate(1, coordinatorID, "promotion", "first", now))
+	pos1, err := rs.UpdateRule(ctx, newPromotionUpdate(1, coordinatorID, "promotion", "first", now))
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), pos1.Position.Decision.RuleNumber.LeaderSubterm)
 
@@ -777,14 +781,16 @@ func TestRuleStorePG_UpdateRule_NewTermResetsSubterm(t *testing.T) {
 	coordinatorID := testPoolerID(t, "zone1", "coordinator-1")
 	now := time.Now()
 
-	// Establish term 1 with a few subterms.
-	for range 3 {
+	// Establish term 1 with a few subterms: a promotion, then the leader's own changes.
+	_, err := rs.UpdateRule(ctx, newPromotionUpdate(1, coordinatorID, "promotion", "setup", now))
+	require.NoError(t, err)
+	for range 2 {
 		_, err := rs.UpdateRule(ctx, NewRuleUpdate(1, coordinatorID, "config_change", "setup", now))
 		require.NoError(t, err)
 	}
 
 	// Advance to term 2: subterm must reset to 0.
-	pos, err := rs.UpdateRule(ctx, NewRuleUpdate(2, coordinatorID, "promotion", "new coordinator", now))
+	pos, err := rs.UpdateRule(ctx, newPromotionUpdate(2, coordinatorID, "promotion", "new coordinator", now))
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), pos.Position.Decision.RuleNumber.CoordinatorTerm)
 	assert.Equal(t, int64(0), pos.Position.Decision.RuleNumber.LeaderSubterm, "new term resets subterm to 0")
@@ -802,7 +808,7 @@ func TestRuleStorePG_UpdateRule_StaleTermRejected(t *testing.T) {
 	now := time.Now()
 
 	// Advance to term 2.
-	_, err := rs.UpdateRule(ctx, NewRuleUpdate(2, coordinatorID, "promotion", "initial", now))
+	_, err := rs.UpdateRule(ctx, newPromotionUpdate(2, coordinatorID, "promotion", "initial", now))
 	require.NoError(t, err)
 
 	// Attempt to write with stale term 1.
@@ -822,13 +828,14 @@ func TestRuleStorePG_UpdateRule_ObserveAfterWrite(t *testing.T) {
 	coordinatorID := testPoolerID(t, "zone1", "coordinator-1")
 	leaderID := testPoolerID(t, "zone1", "leader-1")
 	cohort := []*clustermetadatapb.ID{
+		leaderID,
 		testPoolerID(t, "zone1", "member-1"),
 		testPoolerID(t, "zone1", "member-2"),
 	}
 	now := time.Now()
 
 	_, err := rs.UpdateRule(ctx,
-		NewRuleUpdate(3, coordinatorID, "promotion", "bootstrap", now).
+		newPromotionUpdate(3, coordinatorID, "promotion", "bootstrap", now).
 			WithLeader(leaderID).
 			WithCohort(cohort),
 	)
@@ -848,9 +855,10 @@ func TestRuleStorePG_UpdateRule_ObserveAfterWrite(t *testing.T) {
 	assert.Equal(t, "zone1", pos.Position.Decision.CoordinatorId.Cell)
 	assert.Equal(t, "coordinator-1", pos.Position.Decision.CoordinatorId.Name)
 
-	require.Len(t, pos.Position.Decision.CohortMembers, 2)
-	assert.Equal(t, "member-1", pos.Position.Decision.CohortMembers[0].Name)
-	assert.Equal(t, "member-2", pos.Position.Decision.CohortMembers[1].Name)
+	require.Len(t, pos.Position.Decision.CohortMembers, 3)
+	assert.Equal(t, "leader-1", pos.Position.Decision.CohortMembers[0].Name)
+	assert.Equal(t, "member-1", pos.Position.Decision.CohortMembers[1].Name)
+	assert.Equal(t, "member-2", pos.Position.Decision.CohortMembers[2].Name)
 
 	assert.NotEmpty(t, pos.Lsn, "LSN should be populated after a write")
 }
@@ -866,6 +874,7 @@ func TestRuleStorePG_UpdateRule_HistoryFields(t *testing.T) {
 	coordinatorID := testPoolerID(t, "zone1", "coordinator-1")
 	leaderID := testPoolerID(t, "zone1", "leader-1")
 	cohort := []*clustermetadatapb.ID{
+		leaderID,
 		testPoolerID(t, "zone1", "member-1"),
 		testPoolerID(t, "zone1", "member-2"),
 	}
@@ -877,7 +886,7 @@ func TestRuleStorePG_UpdateRule_HistoryFields(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 
 	_, err := rs.UpdateRule(ctx,
-		NewRuleUpdate(5, coordinatorID, "promotion", "bootstrap failover", now).
+		newPromotionUpdate(5, coordinatorID, "promotion", "bootstrap failover", now).
 			WithLeader(leaderID).
 			WithCohort(cohort).
 			WithWALPosition(walPos).
@@ -910,10 +919,11 @@ func TestRuleStorePG_UpdateRule_HistoryFields(t *testing.T) {
 	require.NotNil(t, rec.Operation)
 	assert.Equal(t, op, *rec.Operation)
 
-	require.Len(t, rec.CohortMembers, 2)
+	require.Len(t, rec.CohortMembers, 3)
 	assert.Equal(t, "zone1", rec.CohortMembers[0].id.Cell)
-	assert.Equal(t, "member-1", rec.CohortMembers[0].id.Name)
-	assert.Equal(t, "member-2", rec.CohortMembers[1].id.Name)
+	assert.Equal(t, "leader-1", rec.CohortMembers[0].id.Name)
+	assert.Equal(t, "member-1", rec.CohortMembers[1].id.Name)
+	assert.Equal(t, "member-2", rec.CohortMembers[2].id.Name)
 
 	require.Len(t, rec.AcceptedMembers, 1)
 	assert.Equal(t, "member-1", rec.AcceptedMembers[0].id.Name)
@@ -933,7 +943,7 @@ func TestRuleStorePG_UpdateRule_CASSuccess(t *testing.T) {
 	now := time.Now()
 
 	// Write the first rule so we know the exact term/subterm.
-	pos1, err := rs.UpdateRule(ctx, NewRuleUpdate(1, coordinatorID, "promotion", "first", now))
+	pos1, err := rs.UpdateRule(ctx, newPromotionUpdate(1, coordinatorID, "promotion", "first", now))
 	require.NoError(t, err)
 	term := pos1.Position.Decision.RuleNumber.CoordinatorTerm  // 1
 	subterm := pos1.Position.Decision.RuleNumber.LeaderSubterm // 0
@@ -959,7 +969,7 @@ func TestRuleStorePG_UpdateRule_CASConflict(t *testing.T) {
 	now := time.Now()
 
 	// Write once to advance past the initial row's coordinates.
-	_, err := rs.UpdateRule(ctx, NewRuleUpdate(1, coordinatorID, "promotion", "first", now))
+	_, err := rs.UpdateRule(ctx, newPromotionUpdate(1, coordinatorID, "promotion", "first", now))
 	require.NoError(t, err)
 
 	// CAS with stale coordinates should fail with errRuleConflict.
@@ -981,7 +991,9 @@ func TestRuleStorePG_UpdateRule_HistoryRecorded(t *testing.T) {
 	coordinatorID := testPoolerID(t, "zone1", "coordinator-1")
 	now := time.Now()
 
-	for i := range 5 {
+	_, err := rs.UpdateRule(ctx, newPromotionUpdate(1, coordinatorID, "promotion", "write 0", now))
+	require.NoError(t, err)
+	for i := 1; i < 5; i++ {
 		_, err := rs.UpdateRule(ctx, NewRuleUpdate(1, coordinatorID, "config_change", fmt.Sprintf("write %d", i), now))
 		require.NoError(t, err)
 	}
@@ -999,6 +1011,12 @@ func TestRuleStorePG_UpdateRule_Concurrent(t *testing.T) {
 	const goroutines = 100
 	coordinatorID := testPoolerID(t, "zone1", "coordinator-1")
 	now := time.Now()
+
+	// Term 1 starts with a promotion; the concurrent writes are the leader's own changes.
+	seedRS, seedConn := newTestRuleStore(withTestActionLock(t), t)
+	defer seedConn.Close()
+	_, err := seedRS.UpdateRule(withTestActionLock(t), newPromotionUpdate(1, coordinatorID, "promotion", "setup", now))
+	require.NoError(t, err)
 
 	var wg sync.WaitGroup
 	errs := make([]error, goroutines)
@@ -1042,16 +1060,16 @@ func TestRuleStorePG_UpdateRule_Concurrent(t *testing.T) {
 	rs, conn := newTestRuleStore(ctx, t)
 	defer conn.Close()
 
-	records, err := rs.queryRuleHistory(ctx, goroutines+1)
+	records, err := rs.queryRuleHistory(ctx, goroutines+2)
 	require.NoError(t, err)
-	assert.Len(t, records, goroutines, "every concurrent write must produce a history row")
+	assert.Len(t, records, goroutines+1, "the promotion and every concurrent write must produce a history row")
 
 	pos, err := rs.ObservePosition(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, pos)
 	assert.Equal(t, int64(1), pos.Position.Decision.RuleNumber.CoordinatorTerm)
-	assert.Equal(t, int64(goroutines-1), pos.Position.Decision.RuleNumber.LeaderSubterm,
-		"final subterm should equal goroutines-1 after %d serialized writes", goroutines)
+	assert.Equal(t, int64(goroutines), pos.Position.Decision.RuleNumber.LeaderSubterm,
+		"final subterm should equal %d after the promotion and %d serialized writes", goroutines, goroutines)
 }
 
 func TestRuleStorePG_UpdateRule_DurabilityPolicyRoundTrip(t *testing.T) {
@@ -1077,7 +1095,7 @@ func TestRuleStorePG_UpdateRule_DurabilityPolicyRoundTrip(t *testing.T) {
 	bootstrapRuleState(ctx, t, rs, policy, cohort)
 
 	_, err := rs.UpdateRule(ctx,
-		NewRuleUpdate(7, coordinatorID, "promotion", "initial", now).
+		newPromotionUpdate(7, coordinatorID, "promotion", "initial", now).
 			WithDurabilityPolicy(policy).
 			WithCohort(cohort),
 	)
@@ -1117,7 +1135,7 @@ func TestRuleStorePG_UpdateRule_DurabilityPolicyPreservedOnUpdate(t *testing.T) 
 
 	// Write rule with durability policy.
 	_, err := rs.UpdateRule(ctx,
-		NewRuleUpdate(7, coordinatorID, "promotion", "initial", now).
+		newPromotionUpdate(7, coordinatorID, "promotion", "initial", now).
 			WithDurabilityPolicy(policy).
 			WithCohort(cohort),
 	)
@@ -1160,7 +1178,7 @@ func TestRuleStorePG_UpdateRule_DurabilityPolicyInHistory(t *testing.T) {
 	bootstrapRuleState(ctx, t, rs, policy, cohort)
 
 	_, err := rs.UpdateRule(ctx,
-		NewRuleUpdate(7, coordinatorID, "promotion", "initial", now).
+		newPromotionUpdate(7, coordinatorID, "promotion", "initial", now).
 			WithDurabilityPolicy(policy).
 			WithCohort(cohort),
 	)
@@ -1196,7 +1214,7 @@ func TestRuleStorePG_UpdateRule_DurabilityPolicyAchievabilityRejected(t *testing
 	now := time.Now()
 
 	_, err := rs.UpdateRule(ctx,
-		NewRuleUpdate(7, coordinatorID, "promotion", "initial", now).
+		newPromotionUpdate(7, coordinatorID, "promotion", "initial", now).
 			WithDurabilityPolicy(policy).
 			WithCohort(singleCellCohort),
 	)
@@ -1222,7 +1240,7 @@ func bootstrapRuleState(ctx context.Context, t *testing.T, rs *ruleStore, policy
 	t.Helper()
 	coordinatorID := testPoolerID(t, "zone1", "coordinator-bootstrap")
 	_, err := rs.UpdateRule(ctx,
-		NewRuleUpdate(1, coordinatorID, "promotion", "bootstrap", time.Now()).
+		newPromotionUpdate(1, coordinatorID, "promotion", "bootstrap", time.Now()).
 			WithDurabilityPolicy(policy).
 			WithCohort(cohort).
 			WithSkipOutgoingQuorum(),
@@ -1462,6 +1480,10 @@ func TestRuleStorePG_UpdateRule_FailsWhenRuleIsLocked(t *testing.T) {
 	rs, conn := newTestRuleStore(ctx, t)
 	defer conn.Close()
 
+	coordinatorID := testPoolerID(t, "zone1", "coordinator-1")
+	_, err := rs.UpdateRule(ctx, newPromotionUpdate(1, coordinatorID, "promotion", "setup", time.Now()))
+	require.NoError(t, err)
+
 	// Hold SELECT FOR UPDATE on current_rule for the duration of the test.
 	blockConn, err := pgTestFixture.newClientConn(t.Context())
 	require.NoError(t, err)
@@ -1472,8 +1494,7 @@ func TestRuleStorePG_UpdateRule_FailsWhenRuleIsLocked(t *testing.T) {
 	_, err = blockConn.Query(t.Context(), "SELECT * FROM multigres.current_rule FOR UPDATE")
 	require.NoError(t, err)
 
-	coordinatorID := testPoolerID(t, "zone1", "coordinator-1")
-	_, err = rs.UpdateRule(ctx, NewRuleUpdate(1, coordinatorID, "promotion", "locked", time.Now()))
+	_, err = rs.UpdateRule(ctx, NewRuleUpdate(1, coordinatorID, "config_change", "locked", time.Now()))
 
 	require.Error(t, err)
 	assert.EqualError(t, err, "failed to read current_rule: ERROR: could not obtain lock on row in relation \"current_rule\"")
@@ -1503,7 +1524,7 @@ func TestRuleStorePG_UpdateRule_RequiresActionLock(t *testing.T) {
 	defer conn.Close()
 
 	coordinatorID := testPoolerID(t, "zone1", "coordinator-1")
-	_, err := rs.UpdateRule(t.Context(), NewRuleUpdate(1, coordinatorID, "promotion", "no lock", time.Now()))
+	_, err := rs.UpdateRule(t.Context(), newPromotionUpdate(1, coordinatorID, "promotion", "no lock", time.Now()))
 	require.Error(t, err)
 	assert.EqualError(t, err, "UpdateRule: context does not hold an action lock")
 }
@@ -1528,9 +1549,13 @@ func TestRuleStorePG_UpdateRule_PreWriteGUCFails(t *testing.T) {
 	ctx := withTestActionLock(t)
 	resetRuleStoreTables(ctx, t)
 
-	rs, _ := newTestRuleStoreWithFailingSSM(t, []error{errors.New("alter system failed")})
+	// The setup promotion applies the GUC twice (before and after its write); the
+	// leader's own change then fails on its pre-write GUC.
+	rs, _ := newTestRuleStoreWithFailingSSM(t, []error{nil, nil, errors.New("alter system failed")})
 	coordinatorID := testPoolerID(t, "zone1", "coordinator-1")
-	_, err := rs.UpdateRule(ctx, NewRuleUpdate(1, coordinatorID, "config_change", "test", time.Now()))
+	_, err := rs.UpdateRule(ctx, newPromotionUpdate(1, coordinatorID, "promotion", "setup", time.Now()))
+	require.NoError(t, err)
+	_, err = rs.UpdateRule(ctx, NewRuleUpdate(1, coordinatorID, "config_change", "test", time.Now()))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "pre-write GUC")
 	assert.Contains(t, err.Error(), "alter system failed")
@@ -1545,7 +1570,7 @@ func TestRuleStorePG_UpdateRule_PrePromoteGUCFails(t *testing.T) {
 	coordinatorID := testPoolerID(t, "zone1", "coordinator-1")
 	hookCalled := false
 	_, err := rs.UpdateRule(ctx,
-		NewRuleUpdate(1, coordinatorID, "promotion", "test", time.Now()).
+		newPromotionUpdate(1, coordinatorID, "promotion", "test", time.Now()).
 			WithPromotionHook(func(context.Context) error {
 				hookCalled = true
 				return nil
@@ -1565,7 +1590,7 @@ func TestRuleStorePG_UpdateRule_PromotionHookFails(t *testing.T) {
 	rs, _ := newTestRuleStoreWithFailingSSM(t, nil) // SetPolicy always succeeds
 	coordinatorID := testPoolerID(t, "zone1", "coordinator-1")
 	_, err := rs.UpdateRule(ctx,
-		NewRuleUpdate(1, coordinatorID, "promotion", "test", time.Now()).
+		newPromotionUpdate(1, coordinatorID, "promotion", "test", time.Now()).
 			WithPromotionHook(func(context.Context) error {
 				return errors.New("pg_promote refused")
 			}),
@@ -1583,7 +1608,7 @@ func TestRuleStorePG_UpdateRule_PostWriteGUCFails(t *testing.T) {
 	// First SetPolicy (pre-write) succeeds, second (post-write) fails.
 	rs, _ := newTestRuleStoreWithFailingSSM(t, []error{nil, errors.New("post-write alter failed")})
 	coordinatorID := testPoolerID(t, "zone1", "coordinator-1")
-	_, err := rs.UpdateRule(ctx, NewRuleUpdate(1, coordinatorID, "config_change", "test", time.Now()))
+	_, err := rs.UpdateRule(ctx, newPromotionUpdate(1, coordinatorID, "config_change", "test", time.Now()))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "post-write GUC")
 	assert.Contains(t, err.Error(), "post-write alter failed")
@@ -1595,6 +1620,145 @@ func TestRuleStorePG_UpdateRule_PostWriteGUCFails(t *testing.T) {
 	require.NotNil(t, cached, "the decided write must be cached despite the later GUC failure")
 	assert.Equal(t, int64(1), cached.GetPosition().GetDecision().GetRuleNumber().GetCoordinatorTerm())
 	assert.Nil(t, cached.GetPosition().GetProposal(), "the finalize step clears the proposal it decided")
+}
+
+// TestRuleStorePG_UpdateRule_RuleNumberFollowsWhoChangesTheRule verifies the one rule
+// for the rule number: a change that carries a promotion hook is a coordinator's, which
+// starts a new term at subterm 0; any other change is the leader's, which advances the
+// subterm of the current term. The term given never decides which kind a change is.
+func TestRuleStorePG_UpdateRule_RuleNumberFollowsWhoChangesTheRule(t *testing.T) {
+	skipIfNoPG(t)
+	ctx := withTestActionLock(t)
+	resetRuleStoreTables(ctx, t)
+
+	rs, conn := newTestRuleStore(ctx, t)
+	defer conn.Close()
+
+	coordinatorID := testPoolerID(t, "zone1", "coordinator-1")
+	now := time.Now()
+	ruleNumber := func(pos *clustermetadatapb.PoolerPosition) string {
+		return commonconsensus.FormatRuleNumber(pos.GetPosition().GetDecision().GetRuleNumber())
+	}
+
+	pos, err := rs.UpdateRule(ctx, newPromotionUpdate(1, coordinatorID, "promotion", "a coordinator starts term 1", now))
+	require.NoError(t, err)
+	assert.Equal(t, "1.0", ruleNumber(pos))
+
+	pos, err = rs.UpdateRule(ctx, NewRuleUpdate(1, coordinatorID, "config_change", "the leader advances the subterm", now))
+	require.NoError(t, err)
+	assert.Equal(t, "1.1", ruleNumber(pos))
+
+	_, err = rs.UpdateRule(ctx, NewRuleUpdate(2, coordinatorID, "config_change", "a leader cannot start a term", now))
+	assert.EqualError(t, err, "a leader-led change keeps the coordinator term: outgoing 1, incoming 2")
+
+	_, err = rs.UpdateRule(ctx, newPromotionUpdate(1, coordinatorID, "promotion", "a coordinator cannot reuse a term", now))
+	assert.EqualError(t, err, "incoming rule number 1.0 must exceed the outgoing rule number 1.1")
+
+	pos, err = rs.UpdateRule(ctx, newPromotionUpdate(2, coordinatorID, "promotion", "a coordinator starts term 2", now))
+	require.NoError(t, err)
+	assert.Equal(t, "2.0", ruleNumber(pos))
+}
+
+// TestRuleStorePG_UpdateRule_RejectsLeaderOutsideCohort verifies that a write cannot
+// leave the rule's leader outside its cohort, whether the cohort is set together with
+// the leader or later changed around it (for example by removing the leader).
+func TestRuleStorePG_UpdateRule_RejectsLeaderOutsideCohort(t *testing.T) {
+	skipIfNoPG(t)
+	ctx := withTestActionLock(t)
+	resetRuleStoreTables(ctx, t)
+
+	rs, conn := newTestRuleStore(ctx, t)
+	defer conn.Close()
+
+	coordinatorID := testPoolerID(t, "zone1", "coordinator-1")
+	leaderID := testPoolerID(t, "zone1", "leader-1")
+	member1 := testPoolerID(t, "zone1", "member-1")
+	member2 := testPoolerID(t, "zone1", "member-2")
+
+	_, err := rs.UpdateRule(ctx,
+		newPromotionUpdate(1, coordinatorID, "promotion", "leader outside the cohort", time.Now()).
+			WithLeader(leaderID).
+			WithCohort([]*clustermetadatapb.ID{member1, member2}),
+	)
+	require.Error(t, err)
+	assert.EqualError(t, err, "leader zone1_leader-1 is not in the cohort")
+
+	_, err = rs.UpdateRule(ctx,
+		newPromotionUpdate(1, coordinatorID, "promotion", "bootstrap", time.Now()).
+			WithLeader(leaderID).
+			WithCohort([]*clustermetadatapb.ID{leaderID, member1, member2}),
+	)
+	require.NoError(t, err)
+
+	// Use the stored leader ID: a non-promotion write compares it with the current leader.
+	pos, err := rs.ObservePosition(ctx)
+	require.NoError(t, err)
+	_, err = rs.UpdateRule(ctx,
+		NewRuleUpdate(1, coordinatorID, "config_change", "remove the leader", time.Now()).
+			WithLeader(pos.GetPosition().GetDecision().GetLeaderId()).
+			WithCohort([]*clustermetadatapb.ID{member1, member2}),
+	)
+	require.Error(t, err)
+	assert.EqualError(t, err, "leader zone1_leader-1 is not in the cohort")
+
+	// The decision must be untouched.
+	pos, err = rs.ObservePosition(ctx)
+	require.NoError(t, err)
+	assert.Len(t, pos.GetPosition().GetDecision().GetCohortMembers(), 3)
+}
+
+// TestRuleStorePG_UpdateRule_UnsupportedTransitionFailsBeforePropagating verifies that
+// a change the policy cannot transition to is rejected before the stuck proposal is
+// decided or the promotion hook runs, so a failed attempt leaves nothing half-done.
+func TestRuleStorePG_UpdateRule_UnsupportedTransitionFailsBeforePropagating(t *testing.T) {
+	skipIfNoPG(t)
+	ctx := withTestActionLock(t)
+	resetRuleStoreTables(ctx, t)
+
+	rs, conn := newTestRuleStore(ctx, t)
+	defer conn.Close()
+
+	coordinatorID := testPoolerID(t, "zone1", "coordinator-1")
+	leaderID := testPoolerID(t, "zone1", "leader-1")
+	cohort := []*clustermetadatapb.ID{
+		leaderID,
+		testPoolerID(t, "zone1", "member-1"),
+		testPoolerID(t, "zone1", "member-2"),
+	}
+	_, err := rs.UpdateRule(ctx,
+		newPromotionUpdate(3, coordinatorID, "promotion", "bootstrap", time.Now()).
+			WithLeader(leaderID).
+			WithCohort(cohort),
+	)
+	require.NoError(t, err)
+	stuckRuleNumber := seedStuckProposal(ctx, t, conn, 4, leaderID, cohort, testBootstrapPolicy())
+
+	// Raising N and adding a member in one change is not a supported transition.
+	biggerCohort := append(append([]*clustermetadatapb.ID{}, cohort...), testPoolerID(t, "zone1", "member-3"))
+	atLeast3 := &clustermetadatapb.DurabilityPolicy{
+		PolicyName:    "AT_LEAST_3",
+		QuorumType:    clustermetadatapb.QuorumType_QUORUM_TYPE_AT_LEAST_N,
+		RequiredCount: 3,
+	}
+	promotionHookCalls := 0
+	_, err = rs.UpdateRule(ctx,
+		newPromotionUpdate(5, coordinatorID, "promotion", "unsupported change", time.Now()).
+			WithLeader(cohort[1]).
+			WithCohort(biggerCohort).
+			WithDurabilityPolicy(atLeast3).
+			WithPromotionHook(func(context.Context) error {
+				promotionHookCalls++
+				return nil
+			}),
+	)
+	require.Error(t, err)
+	assert.EqualError(t, err, "compute GUC transition: unsupported leader-led rule change: both N and cohort changed simultaneously")
+	assert.Zero(t, promotionHookCalls, "pg_promote must not run for a change that cannot be written")
+
+	pos, err := rs.ObservePosition(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, pos.GetPosition().GetProposal(), "the stuck proposal must still be undecided")
+	assert.Equal(t, stuckRuleNumber.CoordinatorTerm, pos.GetPosition().GetProposal().GetRuleNumber().GetCoordinatorTerm())
 }
 
 // TestRuleStorePG_UpdateRule_RejectsLeaderChangeOutsidePromotion verifies
@@ -1612,7 +1776,7 @@ func TestRuleStorePG_UpdateRule_RejectsLeaderChangeOutsidePromotion(t *testing.T
 	coordinatorID := testPoolerID(t, "zone1", "coordinator-1")
 	leaderID := testPoolerID(t, "zone1", "leader-1")
 	_, err := rs.UpdateRule(ctx,
-		NewRuleUpdate(1, coordinatorID, "promotion", "bootstrap", time.Now()).WithLeader(leaderID),
+		newPromotionUpdate(1, coordinatorID, "promotion", "bootstrap", time.Now()).WithLeader(leaderID),
 	)
 	require.NoError(t, err)
 
@@ -1642,7 +1806,7 @@ func TestRuleStorePG_UpdateRule_InvalidLeaderID(t *testing.T) {
 	// cell_name delimiter).
 	badLeader := &clustermetadatapb.ID{Cell: "zone1", Name: "bad_name"}
 	_, err := rs.UpdateRule(ctx,
-		NewRuleUpdate(1, coordinatorID, "promotion", "test", time.Now()).
+		newPromotionUpdate(1, coordinatorID, "promotion", "test", time.Now()).
 			WithLeader(badLeader),
 	)
 	require.Error(t, err)
@@ -1664,7 +1828,7 @@ func TestRuleStorePG_UpdateRule_InvalidCohortID(t *testing.T) {
 		{Cell: "zone1", Name: "bad_name"},
 	}
 	_, err := rs.UpdateRule(ctx,
-		NewRuleUpdate(1, coordinatorID, "promotion", "test", time.Now()).
+		newPromotionUpdate(1, coordinatorID, "promotion", "test", time.Now()).
 			WithCohort(badCohort),
 	)
 	require.Error(t, err)
@@ -1722,4 +1886,11 @@ func mustNewPolicyFromProto(t *testing.T, dp *clustermetadatapb.DurabilityPolicy
 	p, err := commonconsensus.NewPolicyFromProto(dp)
 	require.NoError(t, err)
 	return p
+}
+
+// newPromotionUpdate is NewRuleUpdate for a write that raises the coordinator term.
+// Only a promotion does that; a leader's own change keeps the term.
+func newPromotionUpdate(termNumber int64, coordinatorID *clustermetadatapb.ID, eventType, reason string, createdAt time.Time) *RuleUpdateBuilder {
+	return NewRuleUpdate(termNumber, coordinatorID, eventType, reason, createdAt).
+		WithPromotionHook(func(context.Context) error { return nil })
 }
