@@ -180,4 +180,28 @@ func TestSelectFittestLeader(t *testing.T) {
 		}
 		assert.True(t, sawA && sawB, "both tied candidates must be reachable, not just one")
 	})
+
+	t.Run("a declared PREFER_NOT loses to a tied peer", func(t *testing.T) {
+		// A switchover publishes the preference before the old leader's postgres
+		// leaves primary mode, so a failover can see it before REQUESTING_DEMOTION.
+		resigningID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "resigning"}
+		peerID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "peer"}
+		resigning := &clustermetadatapb.ConsensusStatus{Id: resigningID}
+		peer := &clustermetadatapb.ConsensusStatus{Id: peerID}
+		healthByID := map[string]*multiorchdatapb.PoolerHealthState{
+			topoclient.ClusterIDString(resigningID): {
+				Status: &multipoolermanagerdatapb.Status{PostgresReady: true},
+				AvailabilityStatus: &clustermetadatapb.AvailabilityStatus{
+					LeadershipPreference: clustermetadatapb.LeadershipPreference_LEADERSHIP_PREFERENCE_PREFER_NOT,
+				},
+			},
+			topoclient.ClusterIDString(peerID): {
+				Status: &multipoolermanagerdatapb.Status{PostgresReady: true},
+			},
+		}
+		for range 20 {
+			got := selectFittestLeader([]*clustermetadatapb.ConsensusStatus{resigning, peer}, healthByID, rng)
+			require.Same(t, peer, got, "the peer must win every time, not by a random tie-break")
+		}
+	})
 }

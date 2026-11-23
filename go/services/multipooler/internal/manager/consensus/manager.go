@@ -125,11 +125,21 @@ type ConsensusManager struct {
 	// has not resigned. A non-zero value tells the coordinator to trigger an
 	// immediate election. Cleared when this node is elected primary again. Atomic;
 	// production writes are serialized by the action lock (see Concurrency above).
+	//
+	// TODO: remove. Its trigger role moves to a fact derived from the current rule
+	// and postgres mode, and its "pick someone else" role to resigningLeadership;
+	// it stays only while older multiorch versions still read LeadershipStatus.
 	resignedLeaderAtTerm atomic.Int64
 	// cohortEligibility is this node's self-reported willingness to be a member of
 	// the consensus cohort, holding a clustermetadatapb.CohortEligibilitySignal.
 	// Atomic; production writes are serialized by the action lock.
 	cohortEligibility atomic.Int32
+	// resigningLeadership is set by a planned switchover (ResignLeadership) and
+	// means this node would rather not lead while it is still the named leader.
+	// For simplicity only the postgres monitor clears it, once another leader is
+	// named, so it can outlive the switchover by a tick. That is deliberate: a
+	// late clear only costs a tie-break, an early one would drop the switchover.
+	resigningLeadership atomic.Bool
 	// suspectedDivergence marks that this node's WAL may have diverged from the
 	// cluster's chosen history, so the next restart-as-standby should run
 	// pg_rewind to drop potential phantom / non-durable WAL. Set when consensus
@@ -563,6 +573,39 @@ func (cm *ConsensusManager) ClearResignedLeaderAtTerm(ctx context.Context) error
 	}
 	cm.resignedLeaderAtTerm.Store(0)
 	return nil
+}
+
+// SetResigningLeadership records that this node is resigning in a planned
+// switchover, and broadcasts if that changed. Requires the action lock.
+func (cm *ConsensusManager) SetResigningLeadership(ctx context.Context) error {
+	if err := actionlock.AssertActionLockHeld(ctx); err != nil {
+		return err
+	}
+	if !cm.resigningLeadership.Swap(true) {
+		cm.broadcast()
+	}
+	return nil
+}
+
+// ClearResigningLeadershipIfReplaced ends a switchover's resignation once the
+// highest rule this node knows names another leader, and reports whether it did.
+func (cm *ConsensusManager) ClearResigningLeadershipIfReplaced() bool {
+	if !cm.resigningLeadership.Load() {
+		return false
+	}
+	rule := consensus.PossiblyUndecidedRule(consensus.HighestIntendedRule(
+		[]*clustermetadatapb.ConsensusStatus{cm.CachedConsensusStatus()}))
+	if rule.GetLeaderId() == nil || consensus.RuleNamesLeader(rule, cm.id) {
+		return false
+	}
+	return cm.resigningLeadership.CompareAndSwap(true, false)
+}
+
+// PrefersNotToLead reports whether a planned switchover is still moving
+// leadership off this node: it is resigning and is still the named leader.
+func (cm *ConsensusManager) PrefersNotToLead() bool {
+	return cm.resigningLeadership.Load() &&
+		consensus.SelfConsensusRole(cm.CachedConsensusStatus()) == consensus.ConsensusRoleLeader
 }
 
 // CohortEligibility returns this node's self-reported cohort eligibility.

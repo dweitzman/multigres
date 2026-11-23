@@ -403,6 +403,15 @@ func (pm *MultipoolerManager) monitorPostgresIteration(noTimeoutCtx context.Cont
 	// discover context so the table read can't hang the tick.
 	pm.refreshMigrationHold(discoverCtx)
 
+	// A planned switchover's preference not to lead ends once another leader is
+	// named. Clearing it here, on the monitor's next tick, rather than wherever a
+	// new rule arrives keeps switchover simple: a late clear only costs a
+	// tie-break between equal candidates, while an early one would drop the
+	// operator's request.
+	if pm.consensusMgr.ClearResigningLeadershipIfReplaced() {
+		pm.logger.InfoContext(discoverCtx, "MonitorPostgres: another leader is named; no longer preferring not to lead") //nolint:sloglint // message intentionally starts with an operation name or proper noun
+	}
+
 	// Determine what remediation is needed
 	action := pm.determineRemedialAction(discoverCtx, currentState)
 	if action == remedialActionNone {
