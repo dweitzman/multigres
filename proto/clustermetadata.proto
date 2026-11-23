@@ -965,6 +965,24 @@ message AvailabilityStatus {
   // suspected divergence may be slower to endorse a new rule proposal because it
   // needs to stop, run pg_rewind, and restart.
   bool suspected_divergence = 3;
+
+  // leadership_preference is this pooler's preference about leading a future
+  // term. It only orders candidates that tie on WAL position; it never starts a
+  // failover and never excludes a candidate that is the only viable one.
+  LeadershipPreference leadership_preference = 4;
+}
+
+// LeadershipPreference is a pooler's declared preference about being chosen as
+// leader of a future term. Unlike LeadershipSignal it is not a request to act:
+// a coordinator uses it only to break ties between equally caught-up candidates.
+enum LeadershipPreference {
+  // No preference.
+  LEADERSHIP_PREFERENCE_UNSPECIFIED = 0;
+
+  // The pooler currently would rather another candidate lead. The pooler decides
+  // how long that lasts: a planned switchover, for example, prefers not to lead
+  // until a newer rule than the one it resigned from exists.
+  LEADERSHIP_PREFERENCE_PREFER_NOT = 1;
 }
 
 // CohortEligibilitySignal describes a pooler's self-reported willingness to

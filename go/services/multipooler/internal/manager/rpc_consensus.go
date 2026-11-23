@@ -37,11 +37,24 @@ import (
 // Leaders that have resigned publish a LeadershipStatus. Every pooler publishes
 // its cohort eligibility, so the result is non-nil.
 func (pm *MultipoolerManager) buildAvailabilityStatus() *clustermetadatapb.AvailabilityStatus {
+	cohort := pm.buildCohortEligibilityStatus()
 	return &clustermetadatapb.AvailabilityStatus{
 		LeadershipStatus:        pm.consensusMgr.LeadershipStatus(),
-		CohortEligibilityStatus: pm.buildCohortEligibilityStatus(),
+		CohortEligibilityStatus: cohort,
 		SuspectedDivergence:     pm.consensusMgr.SuspectedDivergence(),
+		LeadershipPreference:    pm.leadershipPreference(cohort),
 	}
+}
+
+// leadershipPreference is PREFER_NOT while a planned switchover is moving
+// leadership off this node, or while it won't be a cohort member at all (for
+// example during graceful shutdown). Each reason ends on its own terms.
+func (pm *MultipoolerManager) leadershipPreference(cohort *clustermetadatapb.CohortEligibilityStatus) clustermetadatapb.LeadershipPreference {
+	if pm.consensusMgr.PrefersNotToLead() ||
+		cohort.GetSignal() == clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE {
+		return clustermetadatapb.LeadershipPreference_LEADERSHIP_PREFERENCE_PREFER_NOT
+	}
+	return clustermetadatapb.LeadershipPreference_LEADERSHIP_PREFERENCE_UNSPECIFIED
 }
 
 // buildCohortEligibilityStatus returns the pooler's self-reported willingness
@@ -160,6 +173,15 @@ func (pm *MultipoolerManager) ResignLeadership(ctx context.Context, req *multipo
 	// Step 3: terminate any remaining write connections.
 	if _, err := pm.terminateWriteConnections(ctx); err != nil {
 		pm.logger.WarnContext(ctx, "resign_leadership: failed to terminate write connections (non-fatal)", "error", err)
+	}
+
+	// Declare that this node would rather not lead the next term, before postgres
+	// leaves primary mode: multiorch may start a failover as soon as it sees
+	// postgres in recovery, and must already know to prefer another candidate.
+	// This is a preference, not a trigger, so publishing it early cannot start a
+	// recruit while this node is still primary (unlike REQUESTING_DEMOTION below).
+	if err := pm.consensusMgr.SetResigningLeadership(ctx); err != nil {
+		pm.logger.WarnContext(ctx, "resign_leadership: failed to publish leadership preference (non-fatal)", "error", err)
 	}
 
 	// Step 4: restart PostgreSQL as standby. This triggers a fast shutdown, which

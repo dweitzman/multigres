@@ -373,6 +373,36 @@ proto3.util.setEnumType(LeadershipSignal, "clustermetadata.LeadershipSignal", [
 ]);
 
 /**
+ * LeadershipPreference is a pooler's declared preference about being chosen as
+ * leader of a future term. Unlike LeadershipSignal it is not a request to act:
+ * a coordinator uses it only to break ties between equally caught-up candidates.
+ *
+ * @generated from enum clustermetadata.LeadershipPreference
+ */
+export enum LeadershipPreference {
+  /**
+   * No preference.
+   *
+   * @generated from enum value: LEADERSHIP_PREFERENCE_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * The pooler currently would rather another candidate lead. The pooler decides
+   * how long that lasts: a planned switchover, for example, prefers not to lead
+   * until a newer rule than the one it resigned from exists.
+   *
+   * @generated from enum value: LEADERSHIP_PREFERENCE_PREFER_NOT = 1;
+   */
+  PREFER_NOT = 1,
+}
+// Retrieve enum metadata with: proto3.getEnumType(LeadershipPreference)
+proto3.util.setEnumType(LeadershipPreference, "clustermetadata.LeadershipPreference", [
+  { no: 0, name: "LEADERSHIP_PREFERENCE_UNSPECIFIED" },
+  { no: 1, name: "LEADERSHIP_PREFERENCE_PREFER_NOT" },
+]);
+
+/**
  * CohortEligibilitySignal describes a pooler's self-reported willingness to
  * be a member of the consensus cohort. 0 (UNKNOWN) means the field was not
  * intentionally set; coordinators should treat that the same as ELIGIBLE for
@@ -2660,6 +2690,15 @@ export class AvailabilityStatus extends Message<AvailabilityStatus> {
    */
   suspectedDivergence = false;
 
+  /**
+   * leadership_preference is this pooler's preference about leading a future
+   * term. It only orders candidates that tie on WAL position; it never starts a
+   * failover and never excludes a candidate that is the only viable one.
+   *
+   * @generated from field: clustermetadata.LeadershipPreference leadership_preference = 4;
+   */
+  leadershipPreference = LeadershipPreference.UNSPECIFIED;
+
   constructor(data?: PartialMessage<AvailabilityStatus>) {
     super();
     proto3.util.initPartial(data, this);
@@ -2671,6 +2710,7 @@ export class AvailabilityStatus extends Message<AvailabilityStatus> {
     { no: 1, name: "leadership_status", kind: "message", T: LeadershipStatus },
     { no: 2, name: "cohort_eligibility_status", kind: "message", T: CohortEligibilityStatus },
     { no: 3, name: "suspected_divergence", kind: "scalar", T: 8 /* ScalarType.BOOL */ },
+    { no: 4, name: "leadership_preference", kind: "enum", T: proto3.getEnumType(LeadershipPreference) },
   ]);
 
   static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): AvailabilityStatus {

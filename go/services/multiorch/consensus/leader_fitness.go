@@ -121,19 +121,23 @@ var leadershipSignalPriority = map[clustermetadatapb.LeadershipSignal]int{
 // their leadership signal — this tiebreaker only affects which tied node is
 // proposed as leader, not the quorum denominator.
 func poolerHealthStateLess(healthByID map[string]*multiorchdatapb.PoolerHealthState) func(a, b *clustermetadatapb.ConsensusStatus) bool {
-	leadershipSignal := func(cs *clustermetadatapb.ConsensusStatus) clustermetadatapb.LeadershipSignal {
-		h := healthByID[topoclient.ClusterIDString(cs.GetId())]
-		return h.GetAvailabilityStatus().GetLeadershipStatus().GetSignal()
+	// A declared PREFER_NOT ranks like REQUESTING_DEMOTION, which older poolers
+	// still send on resignation instead.
+	priority := func(cs *clustermetadatapb.ConsensusStatus) int {
+		av := healthByID[topoclient.ClusterIDString(cs.GetId())].GetAvailabilityStatus()
+		p := leadershipSignalPriority[av.GetLeadershipStatus().GetSignal()]
+		if av.GetLeadershipPreference() == clustermetadatapb.LeadershipPreference_LEADERSHIP_PREFERENCE_PREFER_NOT {
+			p = max(p, 1)
+		}
+		return p
 	}
 	failoverSlotsReady := func(cs *clustermetadatapb.ConsensusStatus) int32 {
 		h := healthByID[topoclient.ClusterIDString(cs.GetId())]
 		return h.GetStatus().GetFailoverSlotsReady()
 	}
 	return func(a, b *clustermetadatapb.ConsensusStatus) bool {
-		sigA := leadershipSignal(a)
-		sigB := leadershipSignal(b)
-		if leadershipSignalPriority[sigA] != leadershipSignalPriority[sigB] {
-			return leadershipSignalPriority[sigA] < leadershipSignalPriority[sigB]
+		if pa, pb := priority(a), priority(b); pa != pb {
+			return pa < pb
 		}
 		// Slot-aware tiebreak among otherwise-equal candidates: prefer the one
 		// with more failover-ready logical slots so a promotion keeps the most
