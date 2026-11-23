@@ -70,7 +70,7 @@ type Broadcaster interface {
 //     NOT shared with ConsensusPromises's lock: that lock wraps disk writes, and
 //     GetReplicationPrimary is read on nearly every monitor tick — sharing would
 //     serialize the latency-sensitive monitor loop behind term persistence.
-//   - resignedLeaderAtTerm, cohortEligibility: atomics, NOT under mu. Production
+//   - promotionInFlight, resigningLeadership, cohortEligibility: atomics, NOT under mu. Production
 //     writes go through the manager under the action lock (so writers are
 //     serialized there); the lock-free readers (Status/health snapshot, monitor
 //     decision phase) load them without any lock. The atomic makes those reads
@@ -79,7 +79,7 @@ type Broadcaster interface {
 //
 // The mutating methods assert the action lock is held (writes are serialized by
 // it), with one exception documented on MarkSelfRewindReady.
-// SetResignedLeaderAtTerm and SetCohortEligibility push an immediate health
+// SetResigningLeadership and SetCohortEligibility push an immediate health
 // broadcast through the injected Broadcaster on a real change (the coordinator
 // must see those promptly); nothing holds mu or any lock across that broadcast.
 type ConsensusManager struct {
@@ -120,16 +120,10 @@ type ConsensusManager struct {
 	// leaderObservedAt.
 	rewindWaitEmittedFor time.Time
 
-	// resignedLeaderAtTerm is the consensus term at which this node voluntarily
-	// resigned as primary (via emergency-demote or graceful shutdown), or 0 if it
-	// has not resigned. A non-zero value tells the coordinator to trigger an
-	// immediate election. Cleared when this node is elected primary again. Atomic;
-	// production writes are serialized by the action lock (see Concurrency above).
-	//
-	// TODO: remove. Its trigger role moves to a fact derived from the current rule
-	// and postgres mode, and its "pick someone else" role to resigningLeadership;
-	// it stays only while older multiorch versions still read LeadershipStatus.
-	resignedLeaderAtTerm atomic.Int64
+	// promotionInFlight marks a Promote attempt in progress, so this node isn't
+	// reported as a leader that isn't serving while it is still catching up to
+	// become one. Atomic; writes are serialized by the action lock.
+	promotionInFlight atomic.Bool
 	// cohortEligibility is this node's self-reported willingness to be a member of
 	// the consensus cohort, holding a clustermetadatapb.CohortEligibilitySignal.
 	// Atomic; production writes are serialized by the action lock.
@@ -273,12 +267,9 @@ type LeaderRecoveryAction int
 
 const (
 	// LeaderRecoveryActionNone means no action: either postgres's mode could
-	// not be read this tick (static leader), or this node has already
-	// broadcast its resignation and is waiting for a coordinator (default).
+	// not be read this tick (static leader), or a coordinator will re-elect
+	// (default; LeadershipStatus already reports this node isn't serving).
 	LeaderRecoveryActionNone LeaderRecoveryAction = iota
-	// LeaderRecoveryActionResign means the caller should signal resignation so
-	// a coordinator re-elects.
-	LeaderRecoveryActionResign
 	// LeaderRecoveryActionSelfPromote means the caller should promote postgres
 	// itself: there is no coordinator to ask (static leader).
 	LeaderRecoveryActionSelfPromote
@@ -288,9 +279,9 @@ const (
 // out of recovery.
 //
 // Default: diagnosis is a non-functioning primary. We could either re-promote
-// or resign leadership. For now we resign by broadcasting to multiorch that we
-// are not able to fulfill the leadership role at this term, at which point it
-// may choose to re-promote.
+// or leave it to a coordinator. For now we do nothing here: LeadershipStatus
+// reports that this node isn't serving as leader, and multiorch re-elects, which
+// may re-promote this node at a higher term.
 //
 // TODO(leader-led-leader-changes): promote here instead of resigning (reuse
 // Promote's promoteStandbyToPrimary), and disambiguate resign (we lost our
@@ -308,9 +299,6 @@ func (cm *ConsensusManager) LeaderInRecoveryAction(mode pgmode.Mode) LeaderRecov
 			return LeaderRecoveryActionSelfPromote
 		}
 		return LeaderRecoveryActionNone
-	}
-	if cm.ResignedLeaderAtTerm() == 0 {
-		return LeaderRecoveryActionResign
 	}
 	return LeaderRecoveryActionNone
 }
@@ -429,19 +417,27 @@ func statusReplicationPrimary(pos *clustermetadatapb.PoolerPosition, replication
 	}
 }
 
-// LeadershipStatus returns the LeadershipStatus for this node. Non-nil only when
-// the node has resigned leadership (after a Recruit-driven emergency demotion or
-// graceful shutdown of a leader). Nil means it has not recently held or resigned
-// from primary leadership.
-func (cm *ConsensusManager) LeadershipStatus() *clustermetadatapb.LeadershipStatus {
-	resignedTerm := cm.ResignedLeaderAtTerm()
-	if resignedTerm == 0 {
+// LeadershipStatus reports REQUESTING_DEMOTION while this node isn't serving as
+// the leader the highest rule names (see NotServingAsLeader), at the term of its
+// current position, which is the term multiorch checks it against. It is derived
+// from current state on every call, so it can't go stale. Nil otherwise.
+func (cm *ConsensusManager) LeadershipStatus(mode pgmode.Mode) *clustermetadatapb.LeadershipStatus {
+	if !cm.NotServingAsLeader(mode) {
 		return nil
 	}
+	position := cm.CachedConsensusStatus().GetCurrentPosition().GetPosition()
 	return &clustermetadatapb.LeadershipStatus{
-		LeaderTerm: resignedTerm,
+		LeaderTerm: consensus.PossiblyUndecidedRule(position).GetRuleNumber().GetCoordinatorTerm(),
 		Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION,
 	}
+}
+
+// NotServingAsLeader reports whether the highest rule this node knows names it
+// leader while its postgres is a standby (mode) and no promotion is in flight.
+// A static leader promotes itself instead, so it is never reported this way.
+func (cm *ConsensusManager) NotServingAsLeader(mode pgmode.Mode) bool {
+	return !cm.staticLeader && mode == pgmode.InRecovery && !cm.promotionInFlight.Load() &&
+		consensus.SelfConsensusRole(cm.CachedConsensusStatus()) == consensus.ConsensusRoleLeader
 }
 
 // RecordTermPrimary folds a newly observed ReplicationPrimary into the
@@ -537,41 +533,24 @@ func (cm *ConsensusManager) MarkSelfRewindReady(selfID *clustermetadatapb.ID, ex
 	return true
 }
 
-// ResignedLeaderAtTerm returns the term at which this node requested demotion as
-// primary, or 0 if it has not resigned.
-func (cm *ConsensusManager) ResignedLeaderAtTerm() int64 {
-	return cm.resignedLeaderAtTerm.Load()
-}
-
-// SetResignedLeaderAtTerm records that this node is requesting demotion as
-// primary at the given rule position. When the value changes it pushes an
-// immediate health broadcast so the coordinator can trigger an election
-// without waiting for the next heartbeat. Requires the action lock (ctx must
-// be an action-lock context), which serializes writers.
-//
-// TODO: LeadershipStatus.leader_term on the wire is currently a bare int64;
-// once it carries a full rule position, thread position's decision/proposal
-// through instead of collapsing to a single term here. For now this uses the
-// possibly-undecided rule so a resignation mid-promotion still correlates.
-func (cm *ConsensusManager) SetResignedLeaderAtTerm(ctx context.Context, position *clustermetadatapb.RulePosition) error {
+// BeginPromotionAttempt marks a Promote attempt as started, so this node isn't
+// reported as not serving while it catches up to become leader. Requires the
+// action lock, which the whole attempt runs under.
+func (cm *ConsensusManager) BeginPromotionAttempt(ctx context.Context) error {
 	if err := actionlock.AssertActionLockHeld(ctx); err != nil {
 		return err
 	}
-	term := consensus.PossiblyUndecidedRule(position).GetRuleNumber().GetCoordinatorTerm()
-	if cm.resignedLeaderAtTerm.Swap(term) != term {
-		cm.broadcast()
-	}
+	cm.promotionInFlight.Store(true)
 	return nil
 }
 
-// ClearResignedLeaderAtTerm clears the leadership-demotion request (sets it to
-// 0). Called when this node is appointed primary at a new term; that promotion
-// flow broadcasts, so this does not. Requires the action lock.
-func (cm *ConsensusManager) ClearResignedLeaderAtTerm(ctx context.Context) error {
+// EndPromotionAttempt clears the in-flight marker once a Promote attempt has
+// succeeded or failed. Requires the action lock.
+func (cm *ConsensusManager) EndPromotionAttempt(ctx context.Context) error {
 	if err := actionlock.AssertActionLockHeld(ctx); err != nil {
 		return err
 	}
-	cm.resignedLeaderAtTerm.Store(0)
+	cm.promotionInFlight.Store(false)
 	return nil
 }
 

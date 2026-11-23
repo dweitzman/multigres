@@ -491,7 +491,7 @@ func (pm *MultipoolerManager) unreadyFailoverSlots(ctx context.Context) (int, st
 // steps of a promotion, in order: ensure each follower has a physical slot,
 // point synchronized_standby_slots at them, and advisory-check readiness of
 // the synced failover slots. Called from promotionHook, timed separately from
-// the rest of promotion (ClearResignedLeaderAtTerm, pg_promote) since those
+// the rest of promotion (pg_promote and the rule write) since those
 // happen on every failover regardless of logical replication. No-op unless
 // slot-based replication is enabled.
 func (pm *MultipoolerManager) manageLogicalFailoverSlots(ctx context.Context, cohortMembers []*clustermetadatapb.ID) error {

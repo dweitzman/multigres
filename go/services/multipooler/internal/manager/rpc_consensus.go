@@ -39,7 +39,7 @@ import (
 func (pm *MultipoolerManager) buildAvailabilityStatus() *clustermetadatapb.AvailabilityStatus {
 	cohort := pm.buildCohortEligibilityStatus()
 	return &clustermetadatapb.AvailabilityStatus{
-		LeadershipStatus:        pm.consensusMgr.LeadershipStatus(),
+		LeadershipStatus:        pm.consensusMgr.LeadershipStatus(pm.stateManager.PostgresMode()),
 		CohortEligibilityStatus: cohort,
 		SuspectedDivergence:     pm.consensusMgr.SuspectedDivergence(),
 		LeadershipPreference:    pm.leadershipPreference(cohort),
@@ -179,7 +179,7 @@ func (pm *MultipoolerManager) ResignLeadership(ctx context.Context, req *multipo
 	// leaves primary mode: multiorch may start a failover as soon as it sees
 	// postgres in recovery, and must already know to prefer another candidate.
 	// This is a preference, not a trigger, so publishing it early cannot start a
-	// recruit while this node is still primary (unlike REQUESTING_DEMOTION below).
+	// recruit while this node is still primary.
 	if err := pm.consensusMgr.SetResigningLeadership(ctx); err != nil {
 		pm.logger.WarnContext(ctx, "resign_leadership: failed to publish leadership preference (non-fatal)", "error", err)
 	}
@@ -194,22 +194,22 @@ func (pm *MultipoolerManager) ResignLeadership(ctx context.Context, req *multipo
 		restartErr = mterrors.Wrap(err, "failed to restart postgres as standby during resign")
 	}
 
-	// Step 5: publish REQUESTING_DEMOTION so multiorch starts the election. This
-	// comes after the restart: publishing first lets Recruit disconnect the
-	// standbys before the shutdown checkpoint WAL reaches them, which leaves this
-	// node the most advanced, so it can be elected again or need a pg_rewind to
-	// rejoin. It is published even if the restart failed, so multiorch can still
-	// go ahead with the election. Best-effort: if this fails the caller can still
-	// poll for a new leader, and multiorch will eventually replace a leader whose
-	// postgres is not a primary.
-	if cs := pm.consensusMgr.CachedConsensusStatus(); commonconsensus.SelfConsensusRole(cs) == commonconsensus.ConsensusRoleLeader {
-		if err := pm.consensusMgr.SetResignedLeaderAtTerm(ctx, cs.GetCurrentPosition().GetPosition()); err != nil {
-			pm.logger.WarnContext(ctx, "resign_leadership: failed to publish REQUESTING_DEMOTION (non-fatal)", "error", err)
-		}
-	}
 	if restartErr != nil {
 		return nil, restartErr
 	}
+
+	// Step 5: record that postgres is now a standby and broadcast, so multiorch
+	// sees promptly that this leader isn't serving and starts the election. This
+	// only happens after the restart: starting the election earlier would let
+	// Recruit disconnect the standbys before the shutdown checkpoint WAL reaches
+	// them, leaving this node the most advanced, so it could be elected again or
+	// need a pg_rewind to rejoin.
+	if err := pm.stateManager.Mutate(ctx, func(s *servingStateMutation) {
+		s.PostgresMode = pgmode.InRecovery
+	}); err != nil {
+		pm.logger.WarnContext(ctx, "resign_leadership: failed to record standby mode (non-fatal)", "error", err)
+	}
+	pm.broadcastHealth()
 
 	// Step 6: mark rewind as not needed — this is a planned failover so there is
 	// no WAL divergence between the old primary and the new timeline.
@@ -597,11 +597,18 @@ func (pm *MultipoolerManager) promoteLocked(ctx context.Context, req *consensusd
 		reason = "promote"
 	}
 
-	promotionHook := func(hookCtx context.Context) error {
-		if err := pm.consensusMgr.ClearResignedLeaderAtTerm(ctx); err != nil {
-			return mterrors.Wrap(err, "failed to clear resigned primary term")
+	// While the promotion runs this node may already be the named leader with
+	// postgres still in recovery; don't report it as not serving meanwhile.
+	if err := pm.consensusMgr.BeginPromotionAttempt(ctx); err != nil {
+		return nil, err
+	}
+	defer func() {
+		if endErr := pm.consensusMgr.EndPromotionAttempt(ctx); endErr != nil {
+			pm.logger.ErrorContext(ctx, "failed to end promotion attempt", "error", endErr)
 		}
+	}()
 
+	promotionHook := func(hookCtx context.Context) error {
 		recordMetric := pm.slotBasedReplicationEnabled()
 		slotsStart := time.Now()
 		slotsErr := pm.manageLogicalFailoverSlots(hookCtx, proposedRule.GetCohortMembers())
@@ -618,19 +625,6 @@ func (pm *MultipoolerManager) promoteLocked(ctx context.Context, req *consensusd
 
 		return pm.promoteStandbyToPrimary(hookCtx, state, proposal.GetProposedTransition())
 	}
-
-	// The hook above clears resignation optimistically before promotion is
-	// confirmed, to shrink the window where other coordinators still see this
-	// node as needing replacement. If promotion then fails, re-establish it
-	// here — otherwise this node is stuck silently unpromoted and no longer
-	// signaling for replacement either.
-	defer func() {
-		if err != nil {
-			if resignErr := pm.consensusMgr.SetResignedLeaderAtTerm(ctx, beforeStatus.GetCurrentPosition().GetPosition()); resignErr != nil {
-				pm.logger.ErrorContext(ctx, "failed to re-set resigned primary term after failed promote", "error", resignErr)
-			}
-		}
-	}()
 
 	ruleUpdate := consensus.NewRuleUpdate(
 		revokedBelowTerm,
@@ -1006,10 +1000,6 @@ func (pm *MultipoolerManager) setPrimaryLocked(ctx context.Context, req *consens
 	// divergence.
 	if err := pm.stateManager.fixDrift(ctx, pgmode.InRecovery, pm.consensusMgr.SuspectedDivergence(), pm.migrationServingHold()); err != nil {
 		pm.logger.WarnContext(ctx, "failed to update postgres mode to InRecovery after SetPrimary", "error", err)
-	}
-
-	if err := pm.consensusMgr.ClearResignedLeaderAtTerm(ctx); err != nil {
-		pm.logger.WarnContext(ctx, "failed to clear resigned leader term after promote", "error", err)
 	}
 
 	pm.broadcastHealth()

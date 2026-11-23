@@ -117,7 +117,6 @@ func TestDetermineRemedialAction_StaticLeaderPrimaryDoesNotPromote(t *testing.T)
 
 	assert.NotEqual(t, remedialActionPromoteStaticLeader, got)
 	assert.NotEqual(t, remedialActionDemoteStalePrimary, got)
-	assert.NotEqual(t, remedialActionResignLeadership, got)
 }
 
 func TestResignLeadership_RejectedForStaticLeader(t *testing.T) {
