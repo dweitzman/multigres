@@ -1235,7 +1235,7 @@ func TestTakeRemedialAction_LogDeduplication(t *testing.T) {
 }
 
 // TestLeadershipStatus_ReportsALeaderThatIsNotServing verifies that
-// REQUESTING_DEMOTION is derived from current state: reported at the term of the
+// NOT_SERVING is derived from current state: reported at the term of the
 // node's position while the highest rule names it leader, its postgres is a
 // standby and no promotion is in flight, and not otherwise.
 func TestLeadershipStatus_ReportsALeaderThatIsNotServing(t *testing.T) {
@@ -1250,7 +1250,7 @@ func TestLeadershipStatus_ReportsALeaderThatIsNotServing(t *testing.T) {
 	requestingDemotionAt := func(term int64) *clustermetadatapb.LeadershipStatus {
 		return &clustermetadatapb.LeadershipStatus{
 			LeaderTerm: term,
-			Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION,
+			Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_NOT_SERVING,
 		}
 	}
 	tests := []struct {

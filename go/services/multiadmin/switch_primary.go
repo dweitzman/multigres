@@ -54,7 +54,7 @@ func (s *MultiadminServer) findShardPrimary(ctx context.Context, shardRef *clust
 }
 
 // SwitchPrimary performs a graceful switchover: it quiesces writes on the
-// current leader, which publishes REQUESTING_DEMOTION so multiorch's
+// current leader, which reports NOT_SERVING so multiorch's
 // LeaderResignedAnalyzer can elect a new primary through the normal consensus
 // flow. The RPC returns as soon as the old primary has been quiesced and
 // restarted as a standby — it does not wait for the new leader to appear.
@@ -103,7 +103,7 @@ func (s *MultiadminServer) SwitchPrimary(ctx context.Context, req *multiadminpb.
 	// transitions to DRAINING (rejecting new queries with MTF01 so the
 	// gateway buffers and retries), drains existing write connections, stops
 	// postgres cleanly (sending the shutdown-checkpoint WAL to connected
-	// standbys), and publishes REQUESTING_DEMOTION for multiorch to act on.
+	// standbys), and reports NOT_SERVING for multiorch to act on.
 	s.logger.InfoContext(ctx, "switch_primary: resigning current leader",
 		"leader", topoclient.ClusterIDString(leader.Id),
 		"reason", req.GetReason())

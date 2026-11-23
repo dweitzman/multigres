@@ -142,7 +142,7 @@ func intendedLeaderObservedLive(sa *snapshot.Shard) bool {
 
 // intendedLeaderHasResigned reports whether the leader has voluntarily signalled it
 // should be replaced — cohort-eligibility INELIGIBLE or a term-matched
-// REQUESTING_DEMOTION — read from its self-reported AvailabilityStatus.
+// NOT_SERVING — read from its self-reported AvailabilityStatus.
 func intendedLeaderHasResigned(sa *snapshot.Shard) bool {
 	return types.LeaderNeedsReplacement(sa.IntendedLeaderHealth())
 }
@@ -150,7 +150,7 @@ func intendedLeaderHasResigned(sa *snapshot.Shard) bool {
 // intendedLeaderShutdownTombstoned reports whether the shard's leader has been observed in
 // LIFECYCLE_SHUTDOWN. That lifecycle is written to topology at the END of a graceful
 // shutdown (after the drain), so acting on it does not preempt the drain — and it is
-// durable, so it still fires when the ephemeral REQUESTING_DEMOTION health broadcast is
+// durable, so it still fires when the ephemeral NOT_SERVING health broadcast is
 // lost. A SHUTDOWN pooler is tombstoned and evicted from the live cache (absent from
 // sa.IntendedLeaderHealth()), so we match it by ID against the cache's tombstone set; the leaderID still
 // comes from the shard rule, so we can act with no cached leader. STOPPING is
@@ -428,7 +428,7 @@ func (a *LeaderNeedsReplacementAnalyzer) leaderReplacementCause(
 ) (cause types.ProblemCode, description string, inconclusive bool) {
 	// First-hand, authoritative intent to step down — act immediately, bypassing
 	// progress/liveness signals. intendedLeaderHasResigned is the fast path (the leader's
-	// REQUESTING_DEMOTION/INELIGIBLE health broadcast); the SHUTDOWN tombstone is the
+	// NOT_SERVING/INELIGIBLE health broadcast); the SHUTDOWN tombstone is the
 	// durable fallback for when that ephemeral broadcast is lost.
 	// TODO: after a failed attempt, first-hand causes wait the same recruitment backoff
 	// as the rest; they could skip it (intent doesn't flap; multi-orch safety is the

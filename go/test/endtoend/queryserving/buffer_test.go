@@ -373,7 +373,7 @@ func openGatewayDB(t *testing.T, setup shardsetup.Cluster) *sql.DB {
 }
 
 // triggerFailover performs a planned failover via multiadmin's SwitchPrimary
-// (stops writes on the current primary + REQUESTING_DEMOTION, the real
+// (stops writes on the current primary + NOT_SERVING, the real
 // production path) and waits for a new primary to be elected.
 //
 // Deliberately not a raw Consensus.Recruit call: that would revoke the old

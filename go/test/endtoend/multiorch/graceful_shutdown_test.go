@@ -479,7 +479,7 @@ func TestStandbyGracefulShutdownLifecycleShutdown(t *testing.T) {
 //     cohort to exclude the terminated standby (verified via RequireRecovery
 //     converging on a healthy steady state without that node).
 //  2. SIGTERM the primary → primary's graceful-shutdown sequence runs to
-//     completion (announce REQUESTING_DEMOTION, smart→fast→immediate
+//     completion (report NOT_SERVING, smart→fast→immediate
 //     pgctld.Stop escalation, exit).
 //
 // Note on scope: this test deliberately does NOT assert that a new primary is

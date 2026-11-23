@@ -122,7 +122,7 @@ func (pm *MultipoolerManager) markPoolerActive(ctx context.Context) {
 
 // ResignLeadership gracefully resigns this pooler from leadership for use in a
 // planned failover. It quiesces writes, terminates remaining connections,
-// restarts PostgreSQL as a standby, then publishes REQUESTING_DEMOTION so
+// restarts PostgreSQL as a standby, then reports NOT_SERVING so
 // multiorch starts the election.
 //
 // By restarting postgres here, before Recruit runs on any node, we prevent the

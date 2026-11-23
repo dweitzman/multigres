@@ -76,7 +76,7 @@ func TestPoolerIsCohortIneligible(t *testing.T) {
 
 // poolerWithLeaderTerm builds a PoolerHealthState whose ConsensusStatus has
 // the given primary term. Used to construct fixtures that exercise the
-// staleness check on REQUESTING_DEMOTION.
+// staleness check on NOT_SERVING.
 func poolerWithLeaderTerm(t *testing.T, primaryTerm int64) *multiorchdatapb.PoolerHealthState {
 	t.Helper()
 	id := &clustermetadatapb.ID{Name: "mp1"}
@@ -133,18 +133,18 @@ func TestLeaderNeedsReplacement(t *testing.T) {
 		assert.False(t, LeaderNeedsReplacement(p))
 	})
 
-	t.Run("REQUESTING_DEMOTION with matching term returns true", func(t *testing.T) {
+	t.Run("NOT_SERVING with matching term returns true", func(t *testing.T) {
 		p := poolerWithLeaderTerm(t, 5)
 		p.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{
 			LeadershipStatus: &clustermetadatapb.LeadershipStatus{
 				LeaderTerm: 5,
-				Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION,
+				Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_NOT_SERVING,
 			},
 		}
 		assert.True(t, LeaderNeedsReplacement(p))
 	})
 
-	t.Run("REQUESTING_DEMOTION with term matching an undecided proposal returns true", func(t *testing.T) {
+	t.Run("NOT_SERVING with term matching an undecided proposal returns true", func(t *testing.T) {
 		// The signal's term matches primaryTerm via the pooler's outstanding
 		// proposal (decision is one term behind) — a self-promotion that
 		// crashed before its own write was confirmed decided must still be
@@ -153,31 +153,28 @@ func TestLeaderNeedsReplacement(t *testing.T) {
 		p.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{
 			LeadershipStatus: &clustermetadatapb.LeadershipStatus{
 				LeaderTerm: 5,
-				Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION,
+				Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_NOT_SERVING,
 			},
 		}
 		assert.True(t, LeaderNeedsReplacement(p))
 	})
 
-	t.Run("REQUESTING_DEMOTION with stale term returns false", func(t *testing.T) {
+	t.Run("NOT_SERVING with stale term returns false", func(t *testing.T) {
 		// Signal carries term 3 but node's current primary term is 5 — stale.
 		p := poolerWithLeaderTerm(t, 5)
 		p.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{
 			LeadershipStatus: &clustermetadatapb.LeadershipStatus{
 				LeaderTerm: 3,
-				Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION,
+				Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_NOT_SERVING,
 			},
 		}
 		assert.False(t, LeaderNeedsReplacement(p))
 	})
 
-	t.Run("LeadershipSignal_ACTIVE returns false even at matching term", func(t *testing.T) {
+	t.Run("an unset leadership signal returns false even at matching term", func(t *testing.T) {
 		p := poolerWithLeaderTerm(t, 5)
 		p.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{
-			LeadershipStatus: &clustermetadatapb.LeadershipStatus{
-				LeaderTerm: 5,
-				Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_ACTIVE,
-			},
+			LeadershipStatus: &clustermetadatapb.LeadershipStatus{LeaderTerm: 5},
 		}
 		assert.False(t, LeaderNeedsReplacement(p))
 	})
@@ -196,7 +193,7 @@ func TestLeaderNeedsReplacement(t *testing.T) {
 	})
 
 	t.Run("CohortEligibility INELIGIBLE returns true regardless of term", func(t *testing.T) {
-		// Cohort eligibility is not term-gated, unlike REQUESTING_DEMOTION.
+		// Cohort eligibility is not term-gated, unlike NOT_SERVING.
 		p := poolerWithLeaderTerm(t, 0)
 		p.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{
 			CohortEligibilityStatus: &clustermetadatapb.CohortEligibilityStatus{

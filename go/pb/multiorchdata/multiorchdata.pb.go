@@ -63,7 +63,7 @@ type PoolerHealthState struct {
 	LastPostgresReadyTime *timestamppb.Timestamp `protobuf:"bytes,16,opt,name=last_postgres_ready_time,json=lastPostgresReadyTime,proto3" json:"last_postgres_ready_time,omitempty"`
 	// Availability status from the most recent StatusResponse. Non-nil only for
 	// nodes that are or have been primary. Used by PrimaryNeedsReplacement to
-	// detect voluntary demotions (REQUESTING_DEMOTION) without a separate RPC.
+	// detect a leader that isn't serving (NOT_SERVING) without a separate RPC.
 	AvailabilityStatus *clustermetadata.AvailabilityStatus `protobuf:"bytes,17,opt,name=availability_status,json=availabilityStatus,proto3" json:"availability_status,omitempty"`
 	// Whether a ManagerHealthStream stream is currently active for this pooler.
 	StreamConnected bool `protobuf:"varint,20,opt,name=stream_connected,json=streamConnected,proto3" json:"stream_connected,omitempty"`

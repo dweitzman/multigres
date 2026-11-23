@@ -1577,7 +1577,7 @@ type StatusResponse struct {
 	state  protoimpl.MessageState `protogen:"open.v1"`
 	Status *Status                `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
 	// Availability status for nodes that are or have been primary. Wraps
-	// LeadershipStatus (ACTIVE or REQUESTING_DEMOTION) and the primary_term at
+	// LeadershipStatus (NOT_SERVING) and the primary_term at
 	// which the signal applies. Used by multiorch to detect voluntary demotions
 	// (Recruit) without a separate ConsensusStatus RPC call.
 	// Staleness check: availability_status.leadership_status.primary_term must

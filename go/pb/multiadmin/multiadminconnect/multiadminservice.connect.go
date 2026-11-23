@@ -320,7 +320,7 @@ type MultiadminServiceClient interface {
 	ApplyCertifiedRuleChange(context.Context, *connect.Request[multiadmin.ApplyCertifiedRuleChangeRequest]) (*connect.Response[multiadmin.ApplyCertifiedRuleChangeResponse], error)
 	// SwitchPrimary performs a graceful switchover for a shard. It quiesces
 	// writes on the current leader, restarts it as a standby, and publishes
-	// REQUESTING_DEMOTION so multiorch's LeaderResignedAnalyzer elects a new
+	// NOT_SERVING so multiorch's LeaderResignedAnalyzer elects a new
 	// leader through the normal consensus flow. The RPC returns as soon as the
 	// old primary has been quiesced — it does not wait for the new leader to
 	// appear.
@@ -968,7 +968,7 @@ type MultiadminServiceHandler interface {
 	ApplyCertifiedRuleChange(context.Context, *connect.Request[multiadmin.ApplyCertifiedRuleChangeRequest]) (*connect.Response[multiadmin.ApplyCertifiedRuleChangeResponse], error)
 	// SwitchPrimary performs a graceful switchover for a shard. It quiesces
 	// writes on the current leader, restarts it as a standby, and publishes
-	// REQUESTING_DEMOTION so multiorch's LeaderResignedAnalyzer elects a new
+	// NOT_SERVING so multiorch's LeaderResignedAnalyzer elects a new
 	// leader through the normal consensus flow. The RPC returns as soon as the
 	// old primary has been quiesced — it does not wait for the new leader to
 	// appear.

@@ -100,48 +100,54 @@ func TestSelectFittestLeader(t *testing.T) {
 		assert.Same(t, a, got)
 	})
 
-	t.Run("readiness dominates the signal/slot tiebreak", func(t *testing.T) {
-		// b is actively signaling (higher-priority than a's resign intent) and
-		// slot-ready, but not postgres-ready -- readiness must still win.
-		resign := clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION
-		active := clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_ACTIVE
-		aID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "ready_resigning"}
-		bID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "notready_active"}
+	t.Run("readiness dominates the preference/slot tiebreak", func(t *testing.T) {
+		// b has no preference and is slot-ready, but is not postgres-ready, while
+		// a prefers not to lead -- readiness must still win.
+		aID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "ready_prefers_not"}
+		bID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "notready_no_preference"}
 		a := &clustermetadatapb.ConsensusStatus{Id: aID}
 		b := &clustermetadatapb.ConsensusStatus{Id: bID}
 		healthByID := map[string]*multiorchdatapb.PoolerHealthState{
 			topoclient.ClusterIDString(aID): {
-				Status:             &multipoolermanagerdatapb.Status{PostgresReady: true, FailoverSlotsReady: 0},
-				AvailabilityStatus: &clustermetadatapb.AvailabilityStatus{LeadershipStatus: &clustermetadatapb.LeadershipStatus{Signal: resign}},
+				Status: &multipoolermanagerdatapb.Status{PostgresReady: true, FailoverSlotsReady: 0},
+				AvailabilityStatus: &clustermetadatapb.AvailabilityStatus{
+					LeadershipPreference: clustermetadatapb.LeadershipPreference_LEADERSHIP_PREFERENCE_PREFER_NOT,
+				},
 			},
 			topoclient.ClusterIDString(bID): {
-				Status:             &multipoolermanagerdatapb.Status{PostgresReady: false, FailoverSlotsReady: 5},
-				AvailabilityStatus: &clustermetadatapb.AvailabilityStatus{LeadershipStatus: &clustermetadatapb.LeadershipStatus{Signal: active}},
+				Status: &multipoolermanagerdatapb.Status{PostgresReady: false, FailoverSlotsReady: 5},
 			},
 		}
 		got := selectFittestLeader([]*clustermetadatapb.ConsensusStatus{a, b}, healthByID, rng)
 		assert.Same(t, a, got, "postgres-ready must win even against a not-ready node that otherwise scores better")
 	})
 
-	t.Run("tied on readiness falls through to the signal/slot tiebreak", func(t *testing.T) {
-		active := clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_ACTIVE
-		resign := clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION
-		aID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "ready_active"}
-		bID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "ready_resigning"}
-		a := &clustermetadatapb.ConsensusStatus{Id: aID}
-		b := &clustermetadatapb.ConsensusStatus{Id: bID}
+	t.Run("NOT_SERVING alone doesn't count against a candidate", func(t *testing.T) {
+		// A leader that drifted into recovery reports NOT_SERVING but has
+		// no preference: it is an ordinary candidate and may be re-promoted.
+		driftedID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "drifted"}
+		peerID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "peer"}
+		drifted := &clustermetadatapb.ConsensusStatus{Id: driftedID}
+		peer := &clustermetadatapb.ConsensusStatus{Id: peerID}
 		healthByID := map[string]*multiorchdatapb.PoolerHealthState{
-			topoclient.ClusterIDString(aID): {
-				Status:             &multipoolermanagerdatapb.Status{PostgresReady: true},
-				AvailabilityStatus: &clustermetadatapb.AvailabilityStatus{LeadershipStatus: &clustermetadatapb.LeadershipStatus{Signal: active}},
+			topoclient.ClusterIDString(driftedID): {
+				Status: &multipoolermanagerdatapb.Status{PostgresReady: true},
+				AvailabilityStatus: &clustermetadatapb.AvailabilityStatus{LeadershipStatus: &clustermetadatapb.LeadershipStatus{
+					LeaderTerm: 5,
+					Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_NOT_SERVING,
+				}},
 			},
-			topoclient.ClusterIDString(bID): {
-				Status:             &multipoolermanagerdatapb.Status{PostgresReady: true},
-				AvailabilityStatus: &clustermetadatapb.AvailabilityStatus{LeadershipStatus: &clustermetadatapb.LeadershipStatus{Signal: resign}},
+			topoclient.ClusterIDString(peerID): {
+				Status: &multipoolermanagerdatapb.Status{PostgresReady: true},
 			},
 		}
-		got := selectFittestLeader([]*clustermetadatapb.ConsensusStatus{b, a}, healthByID, rng)
-		assert.Same(t, a, got, "among equally-ready nodes, the non-resigning one must win")
+		var sawDrifted, sawPeer bool
+		for seed := range 20 {
+			got := selectFittestLeader([]*clustermetadatapb.ConsensusStatus{drifted, peer}, healthByID, rand.New(rand.NewPCG(uint64(seed), uint64(seed))))
+			sawDrifted = sawDrifted || got == drifted
+			sawPeer = sawPeer || got == peer
+		}
+		assert.True(t, sawDrifted && sawPeer, "the drifted leader ties with its peer")
 	})
 
 	t.Run("fully tied candidates: same seed reproduces the same winner", func(t *testing.T) {
@@ -183,7 +189,7 @@ func TestSelectFittestLeader(t *testing.T) {
 
 	t.Run("a declared PREFER_NOT loses to a tied peer", func(t *testing.T) {
 		// A switchover publishes the preference before the old leader's postgres
-		// leaves primary mode, so a failover can see it before REQUESTING_DEMOTION.
+		// leaves primary mode, so a failover sees it from the start.
 		resigningID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "resigning"}
 		peerID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "peer"}
 		resigning := &clustermetadatapb.ConsensusStatus{Id: resigningID}

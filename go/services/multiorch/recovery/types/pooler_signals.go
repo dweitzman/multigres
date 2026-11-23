@@ -38,11 +38,10 @@ import (
 //     snapshot; a node that doesn't want to be in the cohort certainly should
 //     not continue as leader.
 //
-//   - LeadershipStatus.Signal == REQUESTING_DEMOTION with leader_term ==
-//     current primary term: emitted by Recruit's primary-demote path after a
-//     postgres crash so the coordinator can correlate the request with the
-//     specific term and avoid acting on a leftover signal from a previous
-//     election cycle that was never cleared (e.g. after a process restart).
+//   - LeadershipStatus.Signal == NOT_SERVING with leader_term ==
+//     current primary term: the pooler is the named leader but isn't serving
+//     (its postgres is a standby). The pooler derives it from current state;
+//     the term check keeps a snapshot from being applied to a newer rule.
 //
 // TODO: once the coordinator synthesizes AvailabilityStatus into
 // PoolerHealthState directly (see clustermetadata.proto TODO), read from
@@ -58,7 +57,7 @@ func LeaderNeedsReplacement(p *multiorchdatapb.PoolerHealthState) bool {
 	if leadershipStatus == nil {
 		return false
 	}
-	if leadershipStatus.Signal != clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION {
+	if leadershipStatus.Signal != clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_NOT_SERVING {
 		return false
 	}
 	// Verify the signal is for the current primary term, not a stale one.

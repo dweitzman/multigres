@@ -71,7 +71,7 @@ func TestAppointLeader_AppointsOnlyOutgoingCohortMembers(t *testing.T) {
 					mp.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{
 						LeadershipStatus: &clustermetadatapb.LeadershipStatus{
 							LeaderTerm: 5,
-							Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION,
+							Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_NOT_SERVING,
 						},
 					}
 				}

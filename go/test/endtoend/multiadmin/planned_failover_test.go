@@ -33,7 +33,7 @@ import (
 
 // TestPlannedFailoverAutoSelectStandby verifies that a planned failover
 // completes successfully when no target is specified: multiadmin quiesces the
-// current primary and publishes REQUESTING_DEMOTION; multiorch then picks the
+// current primary and reports NOT_SERVING; multiorch then picks the
 // most-advanced standby and promotes it without needing pg_rewind.
 func TestPlannedFailoverAutoSelectStandby(t *testing.T) {
 	if testing.Short() {

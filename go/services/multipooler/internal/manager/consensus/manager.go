@@ -417,7 +417,7 @@ func statusReplicationPrimary(pos *clustermetadatapb.PoolerPosition, replication
 	}
 }
 
-// LeadershipStatus reports REQUESTING_DEMOTION while this node isn't serving as
+// LeadershipStatus reports NOT_SERVING while this node isn't serving as
 // the leader the highest rule names (see NotServingAsLeader), at the term of its
 // current position, which is the term multiorch checks it against. It is derived
 // from current state on every call, so it can't go stale. Nil otherwise.
@@ -428,7 +428,7 @@ func (cm *ConsensusManager) LeadershipStatus(mode pgmode.Mode) *clustermetadatap
 	position := cm.CachedConsensusStatus().GetCurrentPosition().GetPosition()
 	return &clustermetadatapb.LeadershipStatus{
 		LeaderTerm: consensus.PossiblyUndecidedRule(position).GetRuleNumber().GetCoordinatorTerm(),
-		Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION,
+		Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_NOT_SERVING,
 	}
 }
 

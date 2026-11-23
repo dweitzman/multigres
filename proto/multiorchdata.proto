@@ -50,7 +50,7 @@ message PoolerHealthState {
 
   // Availability status from the most recent StatusResponse. Non-nil only for
   // nodes that are or have been primary. Used by PrimaryNeedsReplacement to
-  // detect voluntary demotions (REQUESTING_DEMOTION) without a separate RPC.
+  // detect a leader that isn't serving (NOT_SERVING) without a separate RPC.
   clustermetadata.AvailabilityStatus availability_status = 17;
 
   // Stream health fields (populated when multiorch uses ManagerHealthStream).

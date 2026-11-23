@@ -1489,7 +1489,7 @@ func TestResigningLeadership_LastsUntilAnotherLeaderIsNamed(t *testing.T) {
 	assert.False(t, cm.PrefersNotToLead(), "being elected again later starts with no preference")
 }
 
-// resignRecordingPgctldClient records the REQUESTING_DEMOTION term and leadership
+// resignRecordingPgctldClient records the NOT_SERVING term and leadership
 // preference reported when pgctld was asked to restart postgres as a standby. With
 // restartHangs set, Restart blocks until the caller's deadline expires, like a
 // pgctld that doesn't answer in time.
@@ -1512,7 +1512,7 @@ func (c *resignRecordingPgctldClient) Restart(ctx context.Context, req *pgctldpb
 	return c.mockPgctldClient.Restart(ctx, req, opts...)
 }
 
-// TestResignLeadership_PublishesDemotionAfterRestart verifies REQUESTING_DEMOTION
+// TestResignLeadership_PublishesDemotionAfterRestart verifies NOT_SERVING
 // is reported only once postgres has been restarted as a standby, and not when
 // clearing restore_command or the restart fails, since the node is then still
 // serving. Reporting it before the restart would let the election's Recruit
@@ -1530,7 +1530,7 @@ func TestResignLeadership_PublishesDemotionAfterRestart(t *testing.T) {
 		restartHang bool // Restart blocks until the RPC deadline expires
 		wantErr     string
 		wantRestart bool
-		wantTerm    int64 // reported REQUESTING_DEMOTION term, 0 for none
+		wantTerm    int64 // reported NOT_SERVING term, 0 for none
 	}{
 		{
 			name:        "restart succeeds",
@@ -1621,8 +1621,8 @@ func TestResignLeadership_PublishesDemotionAfterRestart(t *testing.T) {
 			require.NoError(t, m.ExpectationsWereMet())
 
 			assert.Equal(t, tt.wantRestart, pgctld.restartCalled, "whether postgres was restarted as a standby")
-			assert.Zero(t, pgctld.resignedTermAtRestart, "REQUESTING_DEMOTION must not be published before postgres restarts")
-			assert.Equal(t, tt.wantTerm, pm.buildAvailabilityStatus().GetLeadershipStatus().GetLeaderTerm(), "REQUESTING_DEMOTION term reported")
+			assert.Zero(t, pgctld.resignedTermAtRestart, "NOT_SERVING must not be published before postgres restarts")
+			assert.Equal(t, tt.wantTerm, pm.buildAvailabilityStatus().GetLeadershipStatus().GetLeaderTerm(), "NOT_SERVING term reported")
 
 			wantPreference := clustermetadatapb.LeadershipPreference_LEADERSHIP_PREFERENCE_UNSPECIFIED
 			if tt.leader == self {

@@ -441,38 +441,33 @@ func (RoutingRole) EnumDescriptor() ([]byte, []int) {
 	return file_clustermetadata_proto_rawDescGZIP(), []int{5}
 }
 
-// LeadershipSignal describes a leader's self-reported status for its current term.
-// Only published by nodes that are or were the consensus leader (leader_term != 0).
-// 0 (UNKNOWN) means the field was not intentionally set.
+// LeadershipSignal describes whether a pooler is serving as the leader its
+// highest known rule names. 0 (UNKNOWN) means the field was not set.
 type LeadershipSignal int32
 
 const (
 	LeadershipSignal_LEADERSHIP_SIGNAL_UNKNOWN LeadershipSignal = 0
-	// Node is actively and healthily serving as leader for leader_term.
-	// Published each poll cycle so the coordinator can distinguish a confirmed
-	// healthy leader from one that restarted and hasn't re-published yet.
-	LeadershipSignal_LEADERSHIP_SIGNAL_ACTIVE LeadershipSignal = 1
-	// Node is requesting demotion from leadership for leader_term. Coordinator
-	// should trigger an immediate failover rather than waiting for a heartbeat
-	// timeout. The node may continue as a follower after demotion.
+	// The pooler is the leader its highest rule names for leader_term but isn't
+	// serving: its postgres is a standby and no promotion is in flight. It is
+	// derived from current state each time it is published, and a coordinator
+	// should fail over rather than wait for a heartbeat timeout. It says nothing
+	// about whether the pooler would make a good next leader (see
+	// LeadershipPreference), so the pooler may be re-promoted at a higher term.
 	//
-	// Staleness check: coordinator verifies leadership_status.leader_term matches
-	// the node's known leader_term before acting, to ignore signals left over from
-	// a previous failover cycle.
-	LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION LeadershipSignal = 2
+	// Staleness check: a coordinator acts only when leader_term matches the term
+	// of the pooler's current position in the same snapshot.
+	LeadershipSignal_LEADERSHIP_SIGNAL_NOT_SERVING LeadershipSignal = 2
 )
 
 // Enum value maps for LeadershipSignal.
 var (
 	LeadershipSignal_name = map[int32]string{
 		0: "LEADERSHIP_SIGNAL_UNKNOWN",
-		1: "LEADERSHIP_SIGNAL_ACTIVE",
-		2: "LEADERSHIP_SIGNAL_REQUESTING_DEMOTION",
+		2: "LEADERSHIP_SIGNAL_NOT_SERVING",
 	}
 	LeadershipSignal_value = map[string]int32{
-		"LEADERSHIP_SIGNAL_UNKNOWN":             0,
-		"LEADERSHIP_SIGNAL_ACTIVE":              1,
-		"LEADERSHIP_SIGNAL_REQUESTING_DEMOTION": 2,
+		"LEADERSHIP_SIGNAL_UNKNOWN":     0,
+		"LEADERSHIP_SIGNAL_NOT_SERVING": 2,
 	}
 )
 
@@ -3042,13 +3037,11 @@ func (x *ConsensusStatus) GetRecruitBlockedUntil() *LsnPosition {
 	return nil
 }
 
-// LeadershipStatus is published only by nodes that are or have been the consensus leader.
-// It lets the coordinator distinguish an actively healthy leader, a leader
-// requesting demotion, and a node that has never held leadership.
+// LeadershipStatus is published only while the pooler is the named leader but
+// isn't serving (see LEADERSHIP_SIGNAL_NOT_SERVING).
 type LeadershipStatus struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The leader_term at which this node was most recently appointed.
-	// Non-zero only on nodes that have been appointed as leader.
+	// The term of the pooler's current position, which names it leader.
 	LeaderTerm    int64            `protobuf:"varint,1,opt,name=leader_term,json=leaderTerm,proto3" json:"leader_term,omitempty"`
 	Signal        LeadershipSignal `protobuf:"varint,2,opt,name=signal,proto3,enum=clustermetadata.LeadershipSignal" json:"signal,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -3115,7 +3108,9 @@ func (x *LeadershipStatus) GetSignal() LeadershipSignal {
 // regardless of source.
 type AvailabilityStatus struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// leadership_status is only set by poolers that are or have been the consensus leader.
+	// leadership_status is set only while the pooler is the named leader but
+	// isn't serving. It triggers failover; leadership_preference decides nothing
+	// about it and vice versa.
 	LeadershipStatus *LeadershipStatus `protobuf:"bytes,1,opt,name=leadership_status,json=leadershipStatus,proto3" json:"leadership_status,omitempty"`
 	// cohort_eligibility_status is published by every pooler regardless of
 	// current cohort membership. It expresses whether the pooler is willing to
@@ -3454,11 +3449,10 @@ const file_clustermetadata_proto_rawDesc = "" +
 	"\vRoutingRole\x12\x18\n" +
 	"\x14ROUTING_ROLE_UNKNOWN\x10\x00\x12\x18\n" +
 	"\x14ROUTING_ROLE_PRIMARY\x10\x01\x12\x18\n" +
-	"\x14ROUTING_ROLE_REPLICA\x10\x02*z\n" +
+	"\x14ROUTING_ROLE_REPLICA\x10\x02*t\n" +
 	"\x10LeadershipSignal\x12\x1d\n" +
-	"\x19LEADERSHIP_SIGNAL_UNKNOWN\x10\x00\x12\x1c\n" +
-	"\x18LEADERSHIP_SIGNAL_ACTIVE\x10\x01\x12)\n" +
-	"%LEADERSHIP_SIGNAL_REQUESTING_DEMOTION\x10\x02*c\n" +
+	"\x19LEADERSHIP_SIGNAL_UNKNOWN\x10\x00\x12!\n" +
+	"\x1dLEADERSHIP_SIGNAL_NOT_SERVING\x10\x02\"\x04\b\x01\x10\x01*\x18LEADERSHIP_SIGNAL_ACTIVE*c\n" +
 	"\x14LeadershipPreference\x12%\n" +
 	"!LEADERSHIP_PREFERENCE_UNSPECIFIED\x10\x00\x12$\n" +
 	" LEADERSHIP_PREFERENCE_PREFER_NOT\x10\x01*\x92\x01\n" +
