@@ -1406,6 +1406,18 @@ func TestAvailabilityStatus(t *testing.T) {
 		assert.Equal(t, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE, av.CohortEligibilityStatus.Signal)
 	})
 
+	t.Run("a cohort-ineligible pooler prefers not to lead", func(t *testing.T) {
+		pm := newTestManager(t)
+		assert.Equal(t, clustermetadatapb.LeadershipPreference_LEADERSHIP_PREFERENCE_UNSPECIFIED,
+			pm.buildAvailabilityStatus().GetLeadershipPreference())
+		lockCtx, err := pm.actionLock.Acquire(t.Context(), "test")
+		require.NoError(t, err)
+		require.NoError(t, pm.consensusMgr.SetCohortEligibility(lockCtx, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE))
+		pm.actionLock.Release(lockCtx)
+		assert.Equal(t, clustermetadatapb.LeadershipPreference_LEADERSHIP_PREFERENCE_PREFER_NOT,
+			pm.buildAvailabilityStatus().GetLeadershipPreference(), "for example during graceful shutdown")
+	})
+
 	t.Run("suspectedDivergence is published", func(t *testing.T) {
 		pm := newTestManager(t)
 		assert.False(t, pm.buildAvailabilityStatus().SuspectedDivergence, "defaults to false")
@@ -1488,6 +1500,66 @@ func TestSetResignedLeaderAtTerm_BroadcastsOnChange(t *testing.T) {
 	assert.Equal(t, 1, drain(), "clearing the term is also a change and should broadcast")
 }
 
+// TestResigningLeadership_LastsUntilAnotherLeaderIsNamed verifies that a
+// switchover's preference not to lead survives a re-promotion of the same node,
+// reads as no preference as soon as another leader is named, and stays gone
+// once the monitor's clear has run, even if the node is elected again later.
+func TestResigningLeadership_LastsUntilAnotherLeaderIsNamed(t *testing.T) {
+	self := newLeaderAddress("test-pooler", "localhost", 5432)
+	other := newLeaderAddress("other-pooler", "other-host", 5432)
+	id := self.GetId()
+	rules := &fakeRuleStore{pos: &clustermetadatapb.PoolerPosition{
+		Position: &clustermetadatapb.RulePosition{Decision: ruleAtTermForLeader(self, 5)},
+		Lsn:      "0/3000000",
+	}}
+	streamer := newHealthStreamer(slog.New(slog.DiscardHandler), id, "tg", "0")
+	cm := consensus.NewManagerForTesting(t, id, consensus.NewConsensusPromises("", id), rules, streamer)
+	_, ch := streamer.subscribe()
+	drain := func() int {
+		n := 0
+		for {
+			select {
+			case <-ch:
+				n++
+			default:
+				return n
+			}
+		}
+	}
+	drain() // discard the initial state delivered by subscribe
+
+	lock := actionlock.NewActionLock()
+	lockCtx, err := lock.Acquire(t.Context(), "test")
+	require.NoError(t, err)
+	defer lock.Release(lockCtx)
+	learnLeader := func(leader *clustermetadatapb.PoolerAddress, term int64) {
+		t.Helper()
+		require.NoError(t, cm.RecordTermPrimary(lockCtx, &clustermetadatapb.ReplicationPrimary{
+			Position: &clustermetadatapb.RulePosition{Decision: ruleAtTermForLeader(leader, term)},
+			Primary:  leader,
+		}))
+	}
+
+	assert.False(t, cm.PrefersNotToLead())
+	require.NoError(t, cm.SetResigningLeadership(lockCtx))
+	assert.True(t, cm.PrefersNotToLead())
+	assert.Equal(t, 1, drain(), "starting to resign broadcasts")
+	require.NoError(t, cm.SetResigningLeadership(lockCtx))
+	assert.Equal(t, 0, drain(), "resigning again doesn't broadcast")
+
+	learnLeader(self, 6)
+	assert.True(t, cm.PrefersNotToLead(), "a re-promotion of this node doesn't end the switchover")
+	assert.False(t, cm.ClearResigningLeadershipIfReplaced())
+
+	learnLeader(other, 7)
+	assert.False(t, cm.PrefersNotToLead(), "no preference once another leader is named, before any clear")
+	assert.True(t, cm.ClearResigningLeadershipIfReplaced())
+	assert.False(t, cm.ClearResigningLeadershipIfReplaced(), "clearing twice is a no-op")
+
+	learnLeader(self, 8)
+	assert.False(t, cm.PrefersNotToLead(), "being elected again later starts with no preference")
+}
+
 // resignRecordingPgctldClient records the REQUESTING_DEMOTION term that was
 // published when pgctld was asked to restart postgres as a standby. With
 // restartHangs set, Restart blocks until the caller's deadline expires, like a
@@ -1497,10 +1569,12 @@ type resignRecordingPgctldClient struct {
 	pm                    *MultipoolerManager
 	restartHangs          bool
 	resignedTermAtRestart int64
+	preferenceAtRestart   clustermetadatapb.LeadershipPreference
 }
 
 func (c *resignRecordingPgctldClient) Restart(ctx context.Context, req *pgctldpb.RestartRequest, opts ...grpc.CallOption) (*pgctldpb.RestartResponse, error) {
 	c.resignedTermAtRestart = c.pm.consensusMgr.ResignedLeaderAtTerm()
+	c.preferenceAtRestart = c.pm.buildAvailabilityStatus().GetLeadershipPreference()
 	if c.restartHangs {
 		c.restartCalled = true
 		<-ctx.Done()
@@ -1514,7 +1588,9 @@ func (c *resignRecordingPgctldClient) Restart(ctx context.Context, req *pgctldpb
 // when clearing restore_command or the restart fails, so multiorch can go ahead
 // with the election. Publishing it before the restart lets the election's
 // Recruit disconnect the standbys before the old leader's shutdown checkpoint WAL
-// reaches them.
+// reaches them. The PREFER_NOT leadership preference, which is not a trigger, is
+// published before the restart, so a failover that starts as soon as postgres is
+// in recovery already prefers another candidate.
 func TestResignLeadership_PublishesDemotionAfterRestart(t *testing.T) {
 	self := newLeaderAddress("test-pooler", "localhost", 5432)
 	tests := []struct {
@@ -1621,6 +1697,15 @@ func TestResignLeadership_PublishesDemotionAfterRestart(t *testing.T) {
 			assert.Equal(t, tt.wantRestart, pgctld.restartCalled, "whether postgres was restarted as a standby")
 			assert.Zero(t, pgctld.resignedTermAtRestart, "REQUESTING_DEMOTION must not be published before postgres restarts")
 			assert.Equal(t, tt.wantTerm, pm.consensusMgr.ResignedLeaderAtTerm(), "REQUESTING_DEMOTION term published")
+
+			wantPreference := clustermetadatapb.LeadershipPreference_LEADERSHIP_PREFERENCE_UNSPECIFIED
+			if tt.wantTerm != 0 {
+				wantPreference = clustermetadatapb.LeadershipPreference_LEADERSHIP_PREFERENCE_PREFER_NOT
+			}
+			if tt.wantRestart {
+				assert.Equal(t, wantPreference, pgctld.preferenceAtRestart, "leadership preference when postgres was restarted")
+			}
+			assert.Equal(t, wantPreference, pm.buildAvailabilityStatus().GetLeadershipPreference(), "leadership preference after resigning")
 		})
 	}
 }
