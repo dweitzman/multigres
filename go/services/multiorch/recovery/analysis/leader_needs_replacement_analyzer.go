@@ -26,7 +26,6 @@ import (
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
-	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	"github.com/multigres/multigres/go/services/multiorch/consensus"
 	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
 	"github.com/multigres/multigres/go/services/multiorch/recovery/types"
@@ -140,9 +139,9 @@ func intendedLeaderObservedLive(sa *snapshot.Shard) bool {
 	return observationFresh(sa.IntendedLeaderHealth(), sa.Now, sa.AvailabilityPolicy.LeaderLivenessFreshness)
 }
 
-// intendedLeaderHasResigned reports whether the leader has voluntarily signalled it
-// should be replaced — cohort-eligibility INELIGIBLE or a term-matched
-// REQUESTING_DEMOTION — read from its self-reported AvailabilityStatus.
+// intendedLeaderHasResigned reports whether the leader's own report says it should
+// be replaced: it is leaving the cohort, or it believes it is leader but its
+// postgres is a standby (see types.LeaderNeedsReplacement).
 func intendedLeaderHasResigned(sa *snapshot.Shard) bool {
 	return types.LeaderNeedsReplacement(sa.IntendedLeaderHealth())
 }
@@ -150,7 +149,7 @@ func intendedLeaderHasResigned(sa *snapshot.Shard) bool {
 // intendedLeaderShutdownTombstoned reports whether the shard's leader has been observed in
 // LIFECYCLE_SHUTDOWN. That lifecycle is written to topology at the END of a graceful
 // shutdown (after the drain), so acting on it does not preempt the drain — and it is
-// durable, so it still fires when the ephemeral REQUESTING_DEMOTION health broadcast is
+// durable, so it still fires when the ephemeral INELIGIBLE health broadcast is
 // lost. A SHUTDOWN pooler is tombstoned and evicted from the live cache (absent from
 // sa.IntendedLeaderHealth()), so we match it by ID against the cache's tombstone set; the leaderID still
 // comes from the shard rule, so we can act with no cached leader. STOPPING is
@@ -204,7 +203,7 @@ func intendedLeaderLastPostgresReadyTime(sa *snapshot.Shard) time.Time {
 // intendedLeaderPromoting reports whether the leader's last snapshot shows pg_promote()
 // in progress (postgres in the PROMOTING state).
 func intendedLeaderPromoting(sa *snapshot.Shard) bool {
-	return sa.IntendedLeaderHealth().GetStatus().GetPostgresStatus() == multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_PROMOTING
+	return types.PostgresIsPromoting(sa.IntendedLeaderHealth())
 }
 
 // intendedLeaderInRecovery reports whether the leader's last snapshot shows its postgres
@@ -222,7 +221,7 @@ func intendedLeaderPromoting(sa *snapshot.Shard) bool {
 // "in recovery" here would instead fail over every primary restart. PROMOTING is
 // handled upstream by inPromotionGrace.
 func intendedLeaderInRecovery(sa *snapshot.Shard) bool {
-	return sa.IntendedLeaderHealth().GetStatus().GetPostgresStatus() == multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_STANDBY
+	return types.PostgresIsStandby(sa.IntendedLeaderHealth())
 }
 
 // inPromotionGrace reports whether failover should be briefly suppressed because
@@ -442,7 +441,7 @@ func (a *LeaderNeedsReplacementAnalyzer) leaderReplacementCause(
 ) (cause types.ProblemCode, description string, inconclusive bool) {
 	// First-hand, authoritative intent to step down — act immediately, bypassing
 	// progress/liveness signals. intendedLeaderHasResigned is the fast path (the leader's
-	// REQUESTING_DEMOTION/INELIGIBLE health broadcast); the SHUTDOWN tombstone is the
+	// INELIGIBLE health broadcast); the SHUTDOWN tombstone is the
 	// durable fallback for when that ephemeral broadcast is lost.
 	// TODO: after a failed attempt, first-hand causes wait the same recruitment backoff
 	// as the rest; they could skip it (intent doesn't flap; multi-orch safety is the
@@ -462,12 +461,9 @@ func (a *LeaderNeedsReplacementAnalyzer) leaderReplacementCause(
 	// live-leader path. (PROMOTING is handled upstream by inPromotionGrace; transient
 	// non-ready states are handled by the anti-flap timeout — see intendedLeaderInRecovery.)
 	//
-	// TODO: this is a tactical guard. We are not yet verifying that the leader is
-	// non-revoked on the highest intended coordinator term, so this protects against a
-	// Promote() RPC that was never received. The durable fix is on the pooler side: a
-	// pooler that knows it should be acting as leader would detect in its postgres
-	// monitor that it is in recovery mode and publish that it needs to resign
-	// leadership — replace this guard once that lands.
+	// A leader that knows it is leader but is a standby is already caught above
+	// (intendedLeaderHasResigned). This catches the rest: the rule names this
+	// pooler but it never learned so, e.g. a Promote() that never reached it.
 	if leaderLive && intendedLeaderInRecovery(sa) {
 		return types.ProblemLeaderUnhealthy,
 			fmt.Sprintf("Leader for shard %s is reachable but its postgres is in recovery (not a primary)", sa.ShardRef), false

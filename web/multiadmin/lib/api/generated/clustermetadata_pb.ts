@@ -335,6 +335,10 @@ proto3.util.setEnumType(RoutingRole, "clustermetadata.RoutingRole", [
  * Only published by nodes that are or were the consensus leader (leader_term != 0).
  * 0 (UNKNOWN) means the field was not intentionally set.
  *
+ * No longer published by poolers: multiorch detects a
+ * named leader whose postgres is in recovery from Status.postgres_status, and
+ * reads this only from older poolers.
+ *
  * @generated from enum clustermetadata.LeadershipSignal
  */
 export enum LeadershipSignal {
@@ -390,7 +394,7 @@ export enum LeadershipPreference {
   /**
    * The pooler currently would rather another candidate lead. The pooler decides
    * how long that lasts: a planned switchover, for example, prefers not to lead
-   * until a newer rule than the one it resigned from exists.
+   * until a rule names another leader.
    *
    * @generated from enum value: LEADERSHIP_PREFERENCE_PREFER_NOT = 1;
    */
@@ -2595,6 +2599,8 @@ export class ConsensusStatus extends Message<ConsensusStatus> {
  * It lets the coordinator distinguish an actively healthy leader, a leader
  * requesting demotion, and a node that has never held leadership.
  *
+ * No longer published; see LeadershipSignal.
+ *
  * @generated from message clustermetadata.LeadershipStatus
  */
 export class LeadershipStatus extends Message<LeadershipStatus> {
@@ -2660,7 +2666,7 @@ export class LeadershipStatus extends Message<LeadershipStatus> {
  */
 export class AvailabilityStatus extends Message<AvailabilityStatus> {
   /**
-   * leadership_status is only set by poolers that are or have been the consensus leader.
+   * No longer published; see LeadershipSignal. Read only from older poolers.
    *
    * @generated from field: clustermetadata.LeadershipStatus leadership_status = 1;
    */

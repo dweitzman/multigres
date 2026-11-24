@@ -273,9 +273,9 @@ also a coordinator optimization: `ReplicationPrimaryMatches`
 currently believes," never as the canonical cluster primary — that authority
 lives in `current_rule`.
 
-> TODO: leadership signaling (`LeadershipStatus`, `LeadershipSignal` —
-> ACTIVE / REQUESTING_DEMOTION) and cohort-eligibility signals are how a node
-> advertises fitness to the coordinator. They belong with health monitoring;
+> TODO: postgres status (a named leader in recovery), `LeadershipPreference`
+> (PREFER_NOT) and cohort-eligibility signals are how a node advertises fitness
+> to the coordinator. They belong with health monitoring;
 > document in [recovery.md](recovery.md).
 
 ## See also

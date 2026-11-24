@@ -90,13 +90,12 @@ type MultipoolerManagerClient interface {
 	VerifyBackups(ctx context.Context, in *multipoolermanagerdata.VerifyBackupsRequest, opts ...grpc.CallOption) (*multipoolermanagerdata.VerifyBackupsResponse, error)
 	// ResignLeadership gracefully resigns this pooler from leadership.
 	// Transitions the pooler to NOT_SERVING (rejecting new queries with MTF01),
-	// drains write connections, publishes REQUESTING_DEMOTION, and returns the
-	// WAL flush LSN at the moment writes were quiesced. The caller can then wait
-	// for standbys to reach that LSN before triggering a new election.
+	// drains write connections, declares that it prefers not to lead, restarts
+	// postgres as a standby, and returns the WAL flush LSN at the moment writes
+	// were quiesced. Multiorch then sees the leader's postgres in recovery and
+	// elects another leader.
 	//
 	// Only valid on a pooler that is currently the consensus leader (PRIMARY).
-	// Does NOT restart postgres as standby — that happens later via the normal
-	// Recruit path when multiorch picks up REQUESTING_DEMOTION.
 	ResignLeadership(ctx context.Context, in *multipoolermanagerdata.ResignLeadershipRequest, opts ...grpc.CallOption) (*multipoolermanagerdata.ResignLeadershipResponse, error)
 	// SetPostgresRestartsEnabled enables or disables automatic PostgreSQL restarts.
 	// When disabled, the monitor continues to run but will not auto-restart a stopped
@@ -517,13 +516,12 @@ type MultipoolerManagerServer interface {
 	VerifyBackups(context.Context, *multipoolermanagerdata.VerifyBackupsRequest) (*multipoolermanagerdata.VerifyBackupsResponse, error)
 	// ResignLeadership gracefully resigns this pooler from leadership.
 	// Transitions the pooler to NOT_SERVING (rejecting new queries with MTF01),
-	// drains write connections, publishes REQUESTING_DEMOTION, and returns the
-	// WAL flush LSN at the moment writes were quiesced. The caller can then wait
-	// for standbys to reach that LSN before triggering a new election.
+	// drains write connections, declares that it prefers not to lead, restarts
+	// postgres as a standby, and returns the WAL flush LSN at the moment writes
+	// were quiesced. Multiorch then sees the leader's postgres in recovery and
+	// elects another leader.
 	//
 	// Only valid on a pooler that is currently the consensus leader (PRIMARY).
-	// Does NOT restart postgres as standby — that happens later via the normal
-	// Recruit path when multiorch picks up REQUESTING_DEMOTION.
 	ResignLeadership(context.Context, *multipoolermanagerdata.ResignLeadershipRequest) (*multipoolermanagerdata.ResignLeadershipResponse, error)
 	// SetPostgresRestartsEnabled enables or disables automatic PostgreSQL restarts.
 	// When disabled, the monitor continues to run but will not auto-restart a stopped

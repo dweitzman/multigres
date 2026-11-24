@@ -135,6 +135,14 @@ func (ssm *StateManager) RoutingRole() clustermetadatapb.RoutingRole {
 	return ssm.deriveRoutingState(ssm.pgMode, ssm.consensusStatus()).Role.ToProto()
 }
 
+// PostgresMode returns the physical postgres mode last reported to the state
+// manager.
+func (ssm *StateManager) PostgresMode() pgmode.Mode {
+	ssm.mu.Lock()
+	defer ssm.mu.Unlock()
+	return ssm.pgMode
+}
+
 // RoutingState returns this pooler's current routing role together with the
 // rule that qualifies it, derived live like RoutingRole.
 func (ssm *StateManager) RoutingState() *clustermetadatapb.RoutingState {

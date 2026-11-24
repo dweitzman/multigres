@@ -48,9 +48,8 @@ message PoolerHealthState {
   // against time.Now() to detect staleness.
   google.protobuf.Timestamp last_postgres_ready_time = 16;
 
-  // Availability status from the most recent StatusResponse. Non-nil only for
-  // nodes that are or have been primary. Used by PrimaryNeedsReplacement to
-  // detect voluntary demotions (REQUESTING_DEMOTION) without a separate RPC.
+  // Availability status from the most recent StatusResponse: the pooler's
+  // cohort eligibility, leadership preference and suspected divergence.
   clustermetadata.AvailabilityStatus availability_status = 17;
 
   // Stream health fields (populated when multiorch uses ManagerHealthStream).

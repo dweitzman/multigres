@@ -419,6 +419,7 @@ func (hs *HealthStream) applySnapshot(ctx context.Context, poolerHealth *Pooler,
 		"postgres_running", snapshot.Status.Status.PostgresRunning,
 		"cohort_eligibility", snapshot.Status.GetAvailabilityStatus().GetCohortEligibilityStatus().GetSignal().String(),
 		"leadership_signal", snapshot.Status.GetAvailabilityStatus().GetLeadershipStatus().GetSignal().String(),
+		"leadership_preference", snapshot.Status.GetAvailabilityStatus().GetLeadershipPreference().String(),
 	)
 }
 

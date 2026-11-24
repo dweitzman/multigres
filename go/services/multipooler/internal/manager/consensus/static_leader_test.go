@@ -97,12 +97,12 @@ func TestLeaderInRecoveryAction(t *testing.T) {
 			want:   LeaderRecoveryActionNone,
 		},
 		{
-			// Without a static leader and with no prior resignation, signal one so a
-			// coordinator re-elects, as in Multigres.
-			name:   "consensus pooler with standby resigns",
+			// Without a static leader there is nothing to do here: health reports
+			// that the leader isn't serving and a coordinator re-elects.
+			name:   "consensus pooler with standby leaves it to a coordinator",
 			static: false,
 			mode:   pgmode.InRecovery,
-			want:   LeaderRecoveryActionResign,
+			want:   LeaderRecoveryActionNone,
 		},
 	}
 	for _, tt := range tests {

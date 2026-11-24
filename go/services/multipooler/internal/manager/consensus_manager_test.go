@@ -99,14 +99,13 @@ func NewMultipoolerManagerForTesting(t *testing.T, logger *slog.Logger, mp *clus
 // into a MultipoolerManager. Defaults are filled in by newTestManager, so a test
 // only sets what it cares about via the with* options.
 type testManagerConfig struct {
-	serviceID            *clustermetadatapb.ID
-	record               *poolerRecord
-	promises             *consensus.ConsensusPromises
-	rules                consensus.RuleStorer
-	replicationPrimary   *clustermetadatapb.ReplicationPrimary
-	cohortEligibility    clustermetadatapb.CohortEligibilitySignal
-	resignedLeaderAtTerm int64
-	staticLeader         bool
+	serviceID          *clustermetadatapb.ID
+	record             *poolerRecord
+	promises           *consensus.ConsensusPromises
+	rules              consensus.RuleStorer
+	replicationPrimary *clustermetadatapb.ReplicationPrimary
+	cohortEligibility  clustermetadatapb.CohortEligibilitySignal
+	staticLeader       bool
 }
 
 type testManagerOption func(*testManagerConfig)
@@ -141,10 +140,6 @@ func withRuleStore(rules consensus.RuleStorer) testManagerOption {
 // consensus decision paths read.
 func withReplicationPrimary(rp *clustermetadatapb.ReplicationPrimary) testManagerOption {
 	return func(c *testManagerConfig) { c.replicationPrimary = rp }
-}
-
-func withResignedLeaderAtTerm(term int64) testManagerOption {
-	return func(c *testManagerConfig) { c.resignedLeaderAtTerm = term }
 }
 
 // resolveTestManagerConfig applies the options and fills in defaults: a fake
@@ -184,7 +179,7 @@ func (cfg *testManagerConfig) consensusManager(t *testing.T) *consensus.Consensu
 func (cfg *testManagerConfig) seedLockedState(t *testing.T, pm *MultipoolerManager) {
 	t.Helper()
 	eligibleDefault := clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE
-	if cfg.replicationPrimary == nil && cfg.resignedLeaderAtTerm == 0 && cfg.cohortEligibility == eligibleDefault {
+	if cfg.replicationPrimary == nil && cfg.cohortEligibility == eligibleDefault {
 		return
 	}
 	lockCtx, err := pm.actionLock.Acquire(t.Context(), "test-seed")
@@ -192,13 +187,6 @@ func (cfg *testManagerConfig) seedLockedState(t *testing.T, pm *MultipoolerManag
 	defer pm.actionLock.Release(lockCtx)
 	if cfg.replicationPrimary != nil {
 		require.NoError(t, pm.consensusMgr.RecordTermPrimary(lockCtx, cfg.replicationPrimary))
-	}
-	if cfg.resignedLeaderAtTerm != 0 {
-		require.NoError(t, pm.consensusMgr.SetResignedLeaderAtTerm(lockCtx, &clustermetadatapb.RulePosition{
-			Decision: &clustermetadatapb.ShardRule{
-				RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: cfg.resignedLeaderAtTerm},
-			},
-		}))
 	}
 	if cfg.cohortEligibility != eligibleDefault {
 		require.NoError(t, pm.consensusMgr.SetCohortEligibility(lockCtx, cfg.cohortEligibility))

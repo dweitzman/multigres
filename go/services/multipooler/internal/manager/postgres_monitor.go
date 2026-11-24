@@ -265,10 +265,6 @@ const (
 	// both in one Mutate: it transitions the serving components (query service,
 	// replication tracker) and republishes the topology label + self-leadership.
 	remedialActionReconcileState
-	// remedialActionResignLeadership means the rule names us leader but postgres
-	// is running as a standby. We do not self-promote; signal resignation so the
-	// coordinator re-elects.
-	remedialActionResignLeadership
 	// remedialActionPromoteStaticLeader means this pooler is a static leader
 	// (Config.StaticLeader) and postgres is running as a standby, for example
 	// after the bootstrap restore. There is no coordinator to promote it, so the
@@ -992,16 +988,16 @@ func (pm *MultipoolerManager) determineRoleAction(role commonconsensus.Consensus
 
 	// Rule: LEADER
 	// Postgres: STANDBY / RECOVERY MODE
-	// Diagnosis: non-functioning primary. What to do next differs for a static
-	// leader (self-promote) vs. a coordinated one (resign); see
-	// consensus.ConsensusManager.LeaderInRecoveryAction.
+	// Diagnosis: non-functioning primary. A static leader promotes itself; see
+	// consensus.ConsensusManager.LeaderInRecoveryAction. A coordinated one needs
+	// no action of its own: its health reports that it isn't serving (see
+	// ConsensusManager.LeadershipStatus) and a coordinator re-elects. It falls
+	// through to the drift check, which stops writes while postgres is a standby.
 	if role == commonconsensus.ConsensusRoleLeader && !state.pgMode.OutOfRecovery() {
-		switch pm.consensusMgr.LeaderInRecoveryAction(state.pgMode) {
-		case consensus.LeaderRecoveryActionSelfPromote:
+		if pm.consensusMgr.LeaderInRecoveryAction(state.pgMode) == consensus.LeaderRecoveryActionSelfPromote {
 			return remedialActionPromoteStaticLeader
-		case consensus.LeaderRecoveryActionResign:
-			return remedialActionResignLeadership
-		default:
+		}
+		if state.pgMode != pgmode.InRecovery {
 			return remedialActionNone
 		}
 	}
@@ -1330,15 +1326,12 @@ func (pm *MultipoolerManager) shouldRewindForDivergence() bool {
 
 // shouldMarkRewindReady reports whether this pooler should advertise rewind
 // readiness this tick: postgres has checkpointed onto its current timeline
-// (rewindSourceReady), this pooler is the rule-named leader and has not resigned
-// leadership, and the published ReplicationPrimary has not yet advertised it. The
+// (rewindSourceReady, so postgres is a primary), this pooler is the rule-named
+// leader, and the published ReplicationPrimary has not yet advertised it. The
 // last check makes the resulting action a false->true edge, so its broadcast
 // fires once per promotion rather than every tick.
 func (pm *MultipoolerManager) shouldMarkRewindReady(state postgresState, role commonconsensus.ConsensusRole) bool {
 	if !state.rewindSourceReady || role != commonconsensus.ConsensusRoleLeader {
-		return false
-	}
-	if pm.consensusMgr.ResignedLeaderAtTerm() != 0 {
 		return false
 	}
 	return !pm.consensusMgr.GetReplicationPrimary().GetRewindReady()
@@ -1446,31 +1439,6 @@ func (pm *MultipoolerManager) takeRemedialAction(ctx context.Context, action rem
 		pm.logger.InfoContext(ctx, "MonitorPostgres: reconciling drifted state", "postgres_mode", state.pgMode.String()) //nolint:sloglint // message intentionally starts with an operation name or proper noun
 		if err := pm.stateManager.fixDrift(ctx, state.pgMode, pm.consensusMgr.SuspectedDivergence(), pm.migrationServingHold()); err != nil {
 			pm.logger.ErrorContext(ctx, "MonitorPostgres: failed to reconcile drifted state", "error", err) //nolint:sloglint // message intentionally starts with an operation name or proper noun
-		}
-
-	case remedialActionResignLeadership:
-		pm.setMonitorReason(ctx, reasonPostgresRunning, "MonitorPostgres: PostgreSQL is running")
-		// The rule names us leader but postgres is running as a standby. Signal
-		// voluntary resignation at the highest intended rule's term so the coordinator
-		// re-elects; this branch only fires when that rule names us, so the term is
-		// current. We do not self-promote.
-		highestPosition := pm.highestIntendedRule()
-		pm.logger.InfoContext(ctx, "MonitorPostgres: rule names us leader but postgres is a standby; resigning", //nolint:sloglint // message intentionally starts with an operation name or proper noun
-			"position", commonconsensus.FormatRulePosition(highestPosition))
-		if commonconsensus.PossiblyUndecidedRule(highestPosition).GetRuleNumber().GetCoordinatorTerm() != 0 {
-			if err := pm.consensusMgr.SetResignedLeaderAtTerm(ctx, highestPosition); err != nil {
-				pm.logger.ErrorContext(ctx, "MonitorPostgres: failed to set resigned primary term", "error", err) //nolint:sloglint // message intentionally starts with an operation name or proper noun
-			}
-		}
-		// This branch preempts the reconcileState drift check, so sync the
-		// writable state here: postgres is a standby, so stop the heartbeat
-		// writer / LISTEN even though we remain the rule's leader. Without this
-		// the writer keeps issuing INSERTs against a read-only standby every
-		// interval until re-election.
-		if err := pm.stateManager.Mutate(ctx, func(s *servingStateMutation) {
-			s.PostgresMode = pgmode.InRecovery
-		}); err != nil {
-			pm.logger.WarnContext(ctx, "MonitorPostgres: failed to sync postgres primary status on resign", "error", err) //nolint:sloglint // message intentionally starts with an operation name or proper noun
 		}
 
 	case remedialActionPromoteStaticLeader:

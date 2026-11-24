@@ -453,8 +453,8 @@ func TestDeadPrimaryRecovery(t *testing.T) {
 		assert.Contains(t, coordinatorID, expectedCoordinatorPrefix, "coordinator_id should start with cell_name_multiorch")
 		assert.NotEmpty(t, walPosition, "wal_position should not be empty")
 		// The final failover in this test is triggered via Recruit on the
-		// primary (emergency demote), which sets resignedLeaderAtTerm and is
-		// reported as LeaderResigned. Earlier iterations use SIGKILL, reported as
+		// primary (emergency demote), which leaves it the named leader in
+		// recovery, which multiorch reports as LeaderResigned. Earlier iterations use SIGKILL, reported as
 		// LeaderUnreachableByCohort or LeaderUnhealthy depending on whether the
 		// leader's pooler is still observed. Any of these indicates leader failure.
 		assert.Regexp(t, "LeaderUnreachableByCohort|LeaderUnhealthy|LeaderResigned", reason,

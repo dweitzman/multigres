@@ -40,6 +40,7 @@ import (
 	"github.com/multigres/multigres/go/services/multipooler/internal/manager/actionlock"
 	"github.com/multigres/multigres/go/services/multipooler/internal/manager/consensus"
 	"github.com/multigres/multigres/go/services/multipooler/internal/manager/consensus/consensustest"
+	"github.com/multigres/multigres/go/services/multipooler/internal/pgmode"
 	"github.com/multigres/multigres/go/tools/telemetry"
 	"github.com/multigres/multigres/go/tools/viperutil"
 
@@ -888,13 +889,6 @@ func TestPromote(t *testing.T) {
 			},
 			// Verify the promotion was recorded with the right coordinator term and WAL
 			// position, and that the health streamer was updated for write traffic.
-			preRun: func(t *testing.T, pm *MultipoolerManager) {
-				// Pre-set so we can verify clearResignedLeaderAtTerm ran.
-				lockCtx, err := pm.actionLock.Acquire(t.Context(), "test-seed")
-				require.NoError(t, err)
-				require.NoError(t, pm.consensusMgr.SetResignedLeaderAtTerm(lockCtx, &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 7}}}))
-				pm.actionLock.Release(lockCtx)
-			},
 			postCheck: func(t *testing.T, pm *MultipoolerManager, rs *fakeRuleStore) {
 				update := rs.assertPromoteRecorded(t)
 				assert.Equal(t, int64(7), update.GetTermNumber())
@@ -921,7 +915,7 @@ func TestPromote(t *testing.T) {
 				assert.Equal(t, clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY, state.RoutingState.GetRole())
 				assert.Equal(t, int64(7), state.RoutingState.GetRule().GetCoordinatorTerm())
 
-				assert.Equal(t, int64(0), pm.consensusMgr.ResignedLeaderAtTerm(), "clearResignedLeaderAtTerm should have cleared the term")
+				assert.Nil(t, pm.buildAvailabilityStatus().GetLeadershipStatus(), "a leader serving as primary doesn't request demotion")
 
 				// ReplicationPrimary should advertise this pooler as the primary
 				// at the proposalLeader's host/port. Coordinators reading this
@@ -1040,15 +1034,10 @@ func TestPromote(t *testing.T) {
 			// the durability gate, and a failure here means the new primary
 			// hasn't satisfied sync replication.
 			//
-			// This also exercises the promotionHook clearing resignation
-			// before the failure: postCheck confirms resignation is
-			// re-established rather than lost (see rpc_consensus.go's defer
-			// in promoteLocked). Uses a custom revocation at outgoing term 3
-			// (rather than the shared recruitedTerm/makeLeaderReq, both fixed
-			// at outgoing term 0) so beforeStatus's decided position is
-			// non-zero: term 0 is indistinguishable from "not resigned" (see
-			// ConsensusManager.LeadershipStatus), so a term-0 baseline would
-			// pass this check without actually exercising it.
+			// postgres was already promoted, so the node is serving and must not
+			// ask to be replaced. Uses a custom revocation at outgoing term 3
+			// rather than the shared recruitedTerm/makeLeaderReq (outgoing term 0)
+			// so the outgoing rule is a real, non-zero one.
 			name:        "UpdateRuleFails",
 			initialTerm: recruitedTerm,
 			ruleStore: &fakeRuleStore{
@@ -1073,10 +1062,7 @@ func TestPromote(t *testing.T) {
 			expectError:       true,
 			expectErrContains: "promote failed: could not write rule",
 			postCheck: func(t *testing.T, pm *MultipoolerManager, rs *fakeRuleStore) {
-				status := pm.consensusMgr.LeadershipStatus()
-				require.NotNil(t, status, "resignation must be re-set after a failed promote")
-				assert.Equal(t, int64(3), status.LeaderTerm)
-				assert.Equal(t, clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION, status.Signal)
+				assert.Nil(t, pm.buildAvailabilityStatus().GetLeadershipStatus(), "postgres was promoted, so the node is serving")
 			},
 		},
 		{
@@ -1375,17 +1361,6 @@ func TestAvailabilityStatus(t *testing.T) {
 		assert.Equal(t, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE, av.CohortEligibilityStatus.Signal)
 	})
 
-	t.Run("resignedLeaderAtTerm set adds a LeadershipStatus alongside cohort eligibility", func(t *testing.T) {
-		pm := newTestManager(t, withResignedLeaderAtTerm(7))
-		av := pm.buildAvailabilityStatus()
-		require.NotNil(t, av)
-		require.NotNil(t, av.LeadershipStatus)
-		assert.Equal(t, int64(7), av.LeadershipStatus.LeaderTerm)
-		assert.Equal(t, clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION, av.LeadershipStatus.Signal)
-		require.NotNil(t, av.CohortEligibilityStatus)
-		assert.Equal(t, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE, av.CohortEligibilityStatus.Signal)
-	})
-
 	t.Run("no resignation -> no LeadershipStatus but keeps cohort eligibility", func(t *testing.T) {
 		pm := newTestManager(t)
 		av := pm.buildAvailabilityStatus()
@@ -1455,51 +1430,6 @@ func TestRecruitRejectsWhileCohortIneligible(t *testing.T) {
 	require.ErrorContains(t, err, "cohort-ineligible")
 }
 
-// TestSetResignedLeaderAtTerm_BroadcastsOnChange verifies that setting the
-// resignation term broadcasts to subscribers on change so the coordinator
-// sees the signal without waiting for the next periodic snapshot, and does
-// NOT broadcast when the value is unchanged (idempotent calls are cheap).
-func TestSetResignedLeaderAtTerm_BroadcastsOnChange(t *testing.T) {
-	logger := slog.New(slog.DiscardHandler)
-	id := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "test"}
-	streamer := newHealthStreamer(logger, id, "tg", "0")
-	pm := &MultipoolerManager{
-		actionLock:   actionlock.NewActionLock(),
-		consensusMgr: consensus.NewManagerForTesting(t, id, consensus.NewConsensusPromises("", id), &fakeRuleStore{}, streamer),
-	}
-
-	// Subscribe so we can observe broadcasts.
-	_, ch := streamer.subscribe()
-	drain := func() int {
-		n := 0
-		for {
-			select {
-			case <-ch:
-				n++
-			default:
-				return n
-			}
-		}
-	}
-	drain() // discard the initial state delivered by subscribe.
-
-	lockCtx, err := pm.actionLock.Acquire(t.Context(), "test")
-	require.NoError(t, err)
-	defer pm.actionLock.Release(lockCtx)
-
-	require.NoError(t, pm.consensusMgr.SetResignedLeaderAtTerm(lockCtx, &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5}}}))
-	assert.Equal(t, 1, drain(), "first call should broadcast on change from 0 to 5")
-
-	require.NoError(t, pm.consensusMgr.SetResignedLeaderAtTerm(lockCtx, &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 5}}}))
-	assert.Equal(t, 0, drain(), "repeating the same value should NOT broadcast")
-
-	require.NoError(t, pm.consensusMgr.SetResignedLeaderAtTerm(lockCtx, &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 7}}}))
-	assert.Equal(t, 1, drain(), "changing to a new term should broadcast")
-
-	require.NoError(t, pm.consensusMgr.SetResignedLeaderAtTerm(lockCtx, &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 0}}}))
-	assert.Equal(t, 1, drain(), "clearing the term is also a change and should broadcast")
-}
-
 // TestResigningLeadership_LastsUntilAnotherLeaderIsNamed verifies that a
 // switchover's preference not to lead survives a re-promotion of the same node,
 // reads as no preference as soon as another leader is named, and stays gone
@@ -1560,20 +1490,18 @@ func TestResigningLeadership_LastsUntilAnotherLeaderIsNamed(t *testing.T) {
 	assert.False(t, cm.PrefersNotToLead(), "being elected again later starts with no preference")
 }
 
-// resignRecordingPgctldClient records the REQUESTING_DEMOTION term that was
-// published when pgctld was asked to restart postgres as a standby. With
+// resignRecordingPgctldClient records the leadership preference reported when
+// pgctld was asked to restart postgres as a standby. With
 // restartHangs set, Restart blocks until the caller's deadline expires, like a
 // pgctld that doesn't answer in time.
 type resignRecordingPgctldClient struct {
 	mockPgctldClient
-	pm                    *MultipoolerManager
-	restartHangs          bool
-	resignedTermAtRestart int64
-	preferenceAtRestart   clustermetadatapb.LeadershipPreference
+	pm                  *MultipoolerManager
+	restartHangs        bool
+	preferenceAtRestart clustermetadatapb.LeadershipPreference
 }
 
 func (c *resignRecordingPgctldClient) Restart(ctx context.Context, req *pgctldpb.RestartRequest, opts ...grpc.CallOption) (*pgctldpb.RestartResponse, error) {
-	c.resignedTermAtRestart = c.pm.consensusMgr.ResignedLeaderAtTerm()
 	c.preferenceAtRestart = c.pm.buildAvailabilityStatus().GetLeadershipPreference()
 	if c.restartHangs {
 		c.restartCalled = true
@@ -1583,15 +1511,12 @@ func (c *resignRecordingPgctldClient) Restart(ctx context.Context, req *pgctldpb
 	return c.mockPgctldClient.Restart(ctx, req, opts...)
 }
 
-// TestResignLeadership_PublishesDemotionAfterRestart verifies REQUESTING_DEMOTION
-// is published only once postgres has been restarted as a standby, and still is
-// when clearing restore_command or the restart fails, so multiorch can go ahead
-// with the election. Publishing it before the restart lets the election's
-// Recruit disconnect the standbys before the old leader's shutdown checkpoint WAL
-// reaches them. The PREFER_NOT leadership preference, which is not a trigger, is
-// published before the restart, so a failover that starts as soon as postgres is
-// in recovery already prefers another candidate.
-func TestResignLeadership_PublishesDemotionAfterRestart(t *testing.T) {
+// TestResignLeadership_PrefersNotToLeadBeforeRestart verifies the PREFER_NOT
+// leadership preference is published before postgres restarts as a standby, so
+// the failover multiorch starts once it sees postgres in recovery already prefers
+// another candidate. The pooler publishes no LeadershipStatus at any point:
+// multiorch reads postgres status instead.
+func TestResignLeadership_PrefersNotToLeadBeforeRestart(t *testing.T) {
 	self := newLeaderAddress("test-pooler", "localhost", 5432)
 	tests := []struct {
 		name        string
@@ -1601,13 +1526,13 @@ func TestResignLeadership_PublishesDemotionAfterRestart(t *testing.T) {
 		restartHang bool // Restart blocks until the RPC deadline expires
 		wantErr     string
 		wantRestart bool
-		wantTerm    int64 // published REQUESTING_DEMOTION term
+		wantStandby bool // the pooler's postgres mode is InRecovery afterwards
 	}{
 		{
 			name:        "restart succeeds",
 			leader:      self,
 			wantRestart: true,
-			wantTerm:    5,
+			wantStandby: true,
 		},
 		{
 			name:        "restart fails",
@@ -1615,7 +1540,6 @@ func TestResignLeadership_PublishesDemotionAfterRestart(t *testing.T) {
 			restartErr:  errors.New("restart failed"),
 			wantErr:     "failed to restart postgres as standby during resign",
 			wantRestart: true,
-			wantTerm:    5,
 		},
 		{
 			// The ResignLeadership caller's deadline expires while pgctld is
@@ -1625,21 +1549,20 @@ func TestResignLeadership_PublishesDemotionAfterRestart(t *testing.T) {
 			restartHang: true,
 			wantErr:     "context deadline exceeded",
 			wantRestart: true,
-			wantTerm:    5,
 		},
 		{
 			name:     "clearing restore_command fails",
 			leader:   self,
 			resetErr: errors.New("reset failed"),
 			wantErr:  "failed to clear restore_command before resign restart",
-			wantTerm: 5,
 		},
 		{
 			// A primary the rule doesn't name as leader has no leadership to
-			// resign, so nothing is published.
+			// resign, so it declares no preference.
 			name:        "not the rule's leader",
 			leader:      newLeaderAddress("other-pooler", "other-host", 5432),
 			wantRestart: true,
+			wantStandby: true,
 		},
 	}
 	for _, tt := range tests {
@@ -1695,11 +1618,11 @@ func TestResignLeadership_PublishesDemotionAfterRestart(t *testing.T) {
 			require.NoError(t, m.ExpectationsWereMet())
 
 			assert.Equal(t, tt.wantRestart, pgctld.restartCalled, "whether postgres was restarted as a standby")
-			assert.Zero(t, pgctld.resignedTermAtRestart, "REQUESTING_DEMOTION must not be published before postgres restarts")
-			assert.Equal(t, tt.wantTerm, pm.consensusMgr.ResignedLeaderAtTerm(), "REQUESTING_DEMOTION term published")
+			assert.Nil(t, pm.buildAvailabilityStatus().GetLeadershipStatus(), "LeadershipStatus is no longer published")
+			assert.Equal(t, tt.wantStandby, pm.stateManager.PostgresMode() == pgmode.InRecovery, "postgres recorded as a standby")
 
 			wantPreference := clustermetadatapb.LeadershipPreference_LEADERSHIP_PREFERENCE_UNSPECIFIED
-			if tt.wantTerm != 0 {
+			if tt.leader == self {
 				wantPreference = clustermetadatapb.LeadershipPreference_LEADERSHIP_PREFERENCE_PREFER_NOT
 			}
 			if tt.wantRestart {

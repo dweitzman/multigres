@@ -241,8 +241,8 @@ type MultiadminServiceClient interface {
 	// unsafe certificate or assume an old certificate is still valid solely from the error code.
 	ApplyCertifiedRuleChange(ctx context.Context, in *ApplyCertifiedRuleChangeRequest, opts ...grpc.CallOption) (*ApplyCertifiedRuleChangeResponse, error)
 	// SwitchPrimary performs a graceful switchover for a shard. It quiesces
-	// writes on the current leader, restarts it as a standby, and publishes
-	// REQUESTING_DEMOTION so multiorch's LeaderResignedAnalyzer elects a new
+	// writes on the current leader and restarts it as a standby that prefers not
+	// to lead; multiorch sees the leader's postgres in recovery and elects a new
 	// leader through the normal consensus flow. The RPC returns as soon as the
 	// old primary has been quiesced — it does not wait for the new leader to
 	// appear.
@@ -815,8 +815,8 @@ type MultiadminServiceServer interface {
 	// unsafe certificate or assume an old certificate is still valid solely from the error code.
 	ApplyCertifiedRuleChange(context.Context, *ApplyCertifiedRuleChangeRequest) (*ApplyCertifiedRuleChangeResponse, error)
 	// SwitchPrimary performs a graceful switchover for a shard. It quiesces
-	// writes on the current leader, restarts it as a standby, and publishes
-	// REQUESTING_DEMOTION so multiorch's LeaderResignedAnalyzer elects a new
+	// writes on the current leader and restarts it as a standby that prefers not
+	// to lead; multiorch sees the leader's postgres in recovery and elects a new
 	// leader through the normal consensus flow. The RPC returns as soon as the
 	// old primary has been quiesced — it does not wait for the new leader to
 	// appear.

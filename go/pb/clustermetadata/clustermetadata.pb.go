@@ -444,6 +444,10 @@ func (RoutingRole) EnumDescriptor() ([]byte, []int) {
 // LeadershipSignal describes a leader's self-reported status for its current term.
 // Only published by nodes that are or were the consensus leader (leader_term != 0).
 // 0 (UNKNOWN) means the field was not intentionally set.
+//
+// No longer published by poolers: multiorch detects a
+// named leader whose postgres is in recovery from Status.postgres_status, and
+// reads this only from older poolers.
 type LeadershipSignal int32
 
 const (
@@ -513,7 +517,7 @@ const (
 	LeadershipPreference_LEADERSHIP_PREFERENCE_UNSPECIFIED LeadershipPreference = 0
 	// The pooler currently would rather another candidate lead. The pooler decides
 	// how long that lasts: a planned switchover, for example, prefers not to lead
-	// until a newer rule than the one it resigned from exists.
+	// until a rule names another leader.
 	LeadershipPreference_LEADERSHIP_PREFERENCE_PREFER_NOT LeadershipPreference = 1
 )
 
@@ -3045,6 +3049,8 @@ func (x *ConsensusStatus) GetRecruitBlockedUntil() *LsnPosition {
 // LeadershipStatus is published only by nodes that are or have been the consensus leader.
 // It lets the coordinator distinguish an actively healthy leader, a leader
 // requesting demotion, and a node that has never held leadership.
+//
+// No longer published; see LeadershipSignal.
 type LeadershipStatus struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The leader_term at which this node was most recently appointed.
@@ -3115,7 +3121,7 @@ func (x *LeadershipStatus) GetSignal() LeadershipSignal {
 // regardless of source.
 type AvailabilityStatus struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// leadership_status is only set by poolers that are or have been the consensus leader.
+	// No longer published; see LeadershipSignal. Read only from older poolers.
 	LeadershipStatus *LeadershipStatus `protobuf:"bytes,1,opt,name=leadership_status,json=leadershipStatus,proto3" json:"leadership_status,omitempty"`
 	// cohort_eligibility_status is published by every pooler regardless of
 	// current cohort membership. It expresses whether the pooler is willing to
