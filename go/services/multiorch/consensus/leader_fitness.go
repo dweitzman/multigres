@@ -35,24 +35,23 @@ import (
 // Ordering:
 //  1. Postgres readiness (postgresReadyLess): ready before not-ready — not
 //     yet ready to promote (crash recovery still running, socket not open).
-//  2. LeadershipSignal (poolerHealthStateLess): non-resigning before
-//     REQUESTING_DEMOTION (node has explicitly asked to be replaced via
-//     SwitchPrimary), then failover-slot readiness.
+//  2. Leadership preference (poolerHealthStateLess): no preference before
+//     PREFER_NOT (for example a leader resigning in a planned switchover),
+//     then failover-slot readiness. Whether a node is serving as leader now
+//     plays no part: a leader that drifted into recovery is an ordinary
+//     candidate and may be re-promoted.
 //  3. Remaining ties are broken uniformly at random via rng, not by position
 //     — so a retried failover doesn't keep proposing the same candidate
 //     forever if its Promote keeps failing for an unrelated reason.
 //
-// Readiness outranks REQUESTING_DEMOTION deliberately: the former is a hard
-// feasibility signal, the latter a soft preference. But that signal currently
-// conflates "replace me" (SwitchPrimary) with self-detected drift, so a ready
-// resigner can beat a not-ready peer and defeat a switchover.
+// Readiness outranks the preference deliberately: the former is a hard
+// feasibility signal, the latter a soft one, so a ready resigner can still beat
+// a not-ready peer and defeat a switchover.
 //
-// TODO: model hard-unable (departing; excluded upstream via INELIGIBLE),
-// soft-unwilling (resigning), and transiently-not-ready as distinct states,
-// and consider a bounded wait for a ready non-resigner before falling back
-// to a resigner. Also, criteria 1-2 manually chain two Less funcs
-// (poolerHealthStateLess itself chains two more); generalize to an ordered
-// list of criteria if another fitness signal shows up.
+// TODO: consider a bounded wait for a ready peer before falling back to a
+// candidate that prefers not to lead. Also, criteria 1-2 manually chain two
+// Less funcs (poolerHealthStateLess itself chains two more); generalize to an
+// ordered list of criteria if another fitness signal shows up.
 func selectFittestLeader(candidates []*clustermetadatapb.ConsensusStatus, healthByID map[string]*multiorchdatapb.PoolerHealthState, rng *rand.Rand) *clustermetadatapb.ConsensusStatus {
 	if len(candidates) == 0 {
 		return nil
@@ -98,53 +97,37 @@ func postgresReadyLess(healthByID map[string]*multiorchdatapb.PoolerHealthState)
 	}
 }
 
-// leadershipSignalPriority maps each leadership signal to its sort priority.
-// Lower values sort first — nodes with higher priority values are deprioritised
-// as leader candidates when LSNs are tied. Add new signals here to extend the
-// ordering without touching poolerHealthStateLess.
-var leadershipSignalPriority = map[clustermetadatapb.LeadershipSignal]int{
-	clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_UNKNOWN:             0,
-	clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_ACTIVE:              0,
-	clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION: 1,
-}
-
 // poolerHealthStateLess returns a less function for sort.SliceStable that
-// orders ConsensusStatus entries by leadershipSignalPriority. It is used in
-// Coordinator.runFailover to prefer nodes with lower priority values among
-// candidates that share the highest LSN.
+// orders ConsensusStatus entries by leadership preference, then failover-slot
+// readiness. It is used in Coordinator.runFailover among candidates that share
+// the highest LSN.
 //
-// WAL position is always the primary criterion: a node with a higher-priority
-// signal still wins if it holds a strictly higher LSN than every other node.
+// WAL position is always the primary criterion: a node that prefers not to
+// lead still wins if it holds a strictly higher LSN than every other node.
 // This tiebreaker only affects the ordering of tied eligible leaders.
 //
 // Recruited nodes participate in the outgoing-cohort quorum check regardless of
-// their leadership signal — this tiebreaker only affects which tied node is
-// proposed as leader, not the quorum denominator.
+// their preference — this tiebreaker only affects which tied node is proposed
+// as leader, not the quorum denominator.
 func poolerHealthStateLess(healthByID map[string]*multiorchdatapb.PoolerHealthState) func(a, b *clustermetadatapb.ConsensusStatus) bool {
-	// A declared PREFER_NOT ranks like REQUESTING_DEMOTION, which older poolers
-	// still send on resignation instead.
-	priority := func(cs *clustermetadatapb.ConsensusStatus) int {
+	prefersNot := func(cs *clustermetadatapb.ConsensusStatus) bool {
 		av := healthByID[topoclient.ClusterIDString(cs.GetId())].GetAvailabilityStatus()
-		p := leadershipSignalPriority[av.GetLeadershipStatus().GetSignal()]
-		if av.GetLeadershipPreference() == clustermetadatapb.LeadershipPreference_LEADERSHIP_PREFERENCE_PREFER_NOT {
-			p = max(p, 1)
-		}
-		return p
+		return av.GetLeadershipPreference() == clustermetadatapb.LeadershipPreference_LEADERSHIP_PREFERENCE_PREFER_NOT
 	}
 	failoverSlotsReady := func(cs *clustermetadatapb.ConsensusStatus) int32 {
 		h := healthByID[topoclient.ClusterIDString(cs.GetId())]
 		return h.GetStatus().GetFailoverSlotsReady()
 	}
 	return func(a, b *clustermetadatapb.ConsensusStatus) bool {
-		if pa, pb := priority(a), priority(b); pa != pb {
-			return pa < pb
+		if pa, pb := prefersNot(a), prefersNot(b); pa != pb {
+			return !pa
 		}
 		// Slot-aware tiebreak among otherwise-equal candidates: prefer the one
 		// with more failover-ready logical slots so a promotion keeps the most
 		// subscribers resumable (see the durable slot-creation barrier). This
 		// only reorders candidates that already tied on WAL position (the
-		// EligibleLeaders set) and on leadership signal, so it never trades data
-		// safety or a resign intent for slot readiness. Zero when slot-based
+		// EligibleLeaders set) and on leadership preference, so it never trades
+		// data safety or a resign intent for slot readiness. Zero when slot-based
 		// replication is off, leaving the ordering unchanged.
 		return failoverSlotsReady(a) > failoverSlotsReady(b)
 	}

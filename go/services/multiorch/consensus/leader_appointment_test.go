@@ -352,7 +352,7 @@ func TestAppointInitialLeader(t *testing.T) {
 }
 
 // TestAppointLeader_TiebreaksByResignation verifies that poolerHealthStateLess
-// deprioritises nodes signalling REQUESTING_DEMOTION when LSNs are tied.
+// deprioritises a node that prefers not to lead when LSNs are tied.
 //
 // Under synchronous replication all standbys ACK every write, so they routinely
 // reach the same WAL position as the primary at shutdown. When SwitchPrimary
@@ -393,12 +393,14 @@ func TestAppointLeader_TiebreaksByResignation(t *testing.T) {
 	resigned := createMockNode(fakeClient, "resigned", 5, flushLSN, true, outgoingRule)
 	standby := createMockNode(fakeClient, "standby", 5, flushLSN, true, outgoingRule)
 
-	// Mark the resigned node as REQUESTING_DEMOTION in its AvailabilityStatus.
+	// The resigned node is the named leader but not serving, and prefers not to
+	// lead the next term, as a planned switchover reports.
 	resigned.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{
 		LeadershipStatus: &clustermetadatapb.LeadershipStatus{
 			LeaderTerm: 5,
 			Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION,
 		},
+		LeadershipPreference: clustermetadatapb.LeadershipPreference_LEADERSHIP_PREFERENCE_PREFER_NOT,
 	}
 
 	for i, mp := range []*multiorchdatapb.PoolerHealthState{resigned, standby} {
@@ -606,26 +608,23 @@ func TestAppointLeader_TiebreaksBySlotReadiness(t *testing.T) {
 }
 
 // TestPoolerHealthStateLess pins the comparator's ordering contract directly:
-// the leadership signal is the primary key (non-resigning before resigning) and
-// failover-slot readiness only breaks a tie between equal signals. The
-// end-to-end TiebreaksBy* tests each pin one dimension; this covers the
-// precedence between them and the fully-tied case.
+// the leadership preference is the primary key (no preference before
+// PREFER_NOT) and failover-slot readiness only breaks a tie between equal
+// preferences. The end-to-end TiebreaksBy* tests each pin one dimension; this
+// covers the precedence between them and the fully-tied case.
 func TestPoolerHealthStateLess(t *testing.T) {
-	const (
-		active = clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_ACTIVE
-		resign = clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION
-	)
-
 	// node builds a ConsensusStatus and its matching PoolerHealthState carrying
-	// the given leadership signal and failover-slot-ready count.
-	node := func(name string, signal clustermetadatapb.LeadershipSignal, slotsReady int32) (*clustermetadatapb.ConsensusStatus, *multiorchdatapb.PoolerHealthState) {
+	// the given leadership preference and failover-slot-ready count.
+	node := func(name string, prefersNot bool, slotsReady int32) (*clustermetadatapb.ConsensusStatus, *multiorchdatapb.PoolerHealthState) {
 		id := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: name}
 		cs := &clustermetadatapb.ConsensusStatus{Id: id}
+		av := &clustermetadatapb.AvailabilityStatus{}
+		if prefersNot {
+			av.LeadershipPreference = clustermetadatapb.LeadershipPreference_LEADERSHIP_PREFERENCE_PREFER_NOT
+		}
 		h := &multiorchdatapb.PoolerHealthState{
-			AvailabilityStatus: &clustermetadatapb.AvailabilityStatus{
-				LeadershipStatus: &clustermetadatapb.LeadershipStatus{Signal: signal},
-			},
-			Status: &multipoolermanagerdatapb.Status{FailoverSlotsReady: slotsReady},
+			AvailabilityStatus: av,
+			Status:             &multipoolermanagerdatapb.Status{FailoverSlotsReady: slotsReady},
 		}
 		return cs, h
 	}
@@ -636,27 +635,27 @@ func TestPoolerHealthStateLess(t *testing.T) {
 		})
 	}
 
-	t.Run("non-resigning sorts before resigning regardless of slot readiness", func(t *testing.T) {
-		// The resigning node is slot-ready and the active node is slot-empty:
-		// the signal must still dominate so the resign intent is honored.
-		a, aH := node("active_empty", active, 0)
-		b, bH := node("resign_ready", resign, 5)
+	t.Run("no preference sorts before PREFER_NOT regardless of slot readiness", func(t *testing.T) {
+		// The node that prefers not to lead is slot-ready and the other is
+		// slot-empty: the preference must still dominate.
+		a, aH := node("willing_empty", false, 0)
+		b, bH := node("prefers_not_ready", true, 5)
 		less := lessFor(a, b, aH, bH)
-		assert.True(t, less(a, b), "active (slot-empty) must sort before resigning (slot-ready)")
+		assert.True(t, less(a, b), "no preference (slot-empty) must sort before PREFER_NOT (slot-ready)")
 		assert.False(t, less(b, a))
 	})
 
-	t.Run("same signal: more failover-ready slots sorts first", func(t *testing.T) {
-		a, aH := node("ready2", active, 2)
-		b, bH := node("ready0", active, 0)
+	t.Run("same preference: more failover-ready slots sorts first", func(t *testing.T) {
+		a, aH := node("ready2", false, 2)
+		b, bH := node("ready0", false, 0)
 		less := lessFor(a, b, aH, bH)
 		assert.True(t, less(a, b))
 		assert.False(t, less(b, a))
 	})
 
 	t.Run("fully tied is not less in either direction", func(t *testing.T) {
-		a, aH := node("t1", active, 1)
-		b, bH := node("t2", active, 1)
+		a, aH := node("t1", false, 1)
+		b, bH := node("t2", false, 1)
 		less := lessFor(a, b, aH, bH)
 		assert.False(t, less(a, b))
 		assert.False(t, less(b, a))
