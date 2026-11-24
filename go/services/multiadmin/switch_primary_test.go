@@ -15,6 +15,7 @@
 package multiadmin
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -36,6 +37,22 @@ func makeRoutedPooler(cell, name string, role clustermetadatapb.RoutingRole) *cl
 	p := makePooler(cell, name)
 	p.RoutingState = &clustermetadatapb.RoutingState{Role: role}
 	return p
+}
+
+// statusAtRule reports a decided rule at the given term naming leader.
+func statusAtRule(term int64, leader *clustermetadatapb.ID) *multipoolermanagerdatapb.StatusResponse {
+	return &multipoolermanagerdatapb.StatusResponse{
+		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
+			CurrentPosition: &clustermetadatapb.PoolerPosition{
+				Position: &clustermetadatapb.RulePosition{
+					Decision: &clustermetadatapb.ShardRule{
+						RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: term},
+						LeaderId:   leader,
+					},
+				},
+			},
+		},
+	}
 }
 
 func TestSwitchPrimary_NoShardRef(t *testing.T) {
@@ -112,6 +129,8 @@ func TestSwitchPrimary_Success(t *testing.T) {
 	fc.SetResignLeadershipResponse(primaryKey, &multipoolermanagerdatapb.ResignLeadershipResponse{
 		FlushLsn: "0/2000000",
 	})
+	fc.SetStatusResponse(primaryKey, statusAtRule(1, primary.Id))
+	fc.SetStatusResponse(topoclient.ComponentIDString(replica.Id), statusAtRule(2, replica.Id))
 	s.SetRPCClient(fc)
 
 	resp, err := s.SwitchPrimary(ctx, &multiadminpb.SwitchPrimaryRequest{
@@ -120,6 +139,85 @@ func TestSwitchPrimary_Success(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "mp-primary", resp.GetOldLeaderId().GetName())
+	assert.Equal(t, "mp-replica", resp.GetNewLeaderId().GetName())
+}
+
+func TestSwitchPrimary_OldLeaderRenamed(t *testing.T) {
+	ctx := t.Context()
+	s := newTestServer(t, "cell1")
+
+	primary := makeRoutedPooler("cell1", "mp-primary", clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY)
+	replica := makeRoutedPooler("cell1", "mp-replica", clustermetadatapb.RoutingRole_ROUTING_ROLE_REPLICA)
+	require.NoError(t, s.ts.CreateMultipooler(ctx, primary))
+	require.NoError(t, s.ts.CreateMultipooler(ctx, replica))
+
+	fc := rpcclient.NewFakeClient()
+	primaryKey := topoclient.ComponentIDString(primary.Id)
+	fc.SetResignLeadershipResponse(primaryKey, &multipoolermanagerdatapb.ResignLeadershipResponse{})
+	fc.SetStatusResponse(primaryKey, statusAtRule(1, primary.Id))
+	// The replica follows a newer rule that names the old leader again.
+	fc.SetStatusResponse(topoclient.ComponentIDString(replica.Id), statusAtRule(2, primary.Id))
+	s.SetRPCClient(fc)
+
+	_, err := s.SwitchPrimary(ctx, &multiadminpb.SwitchPrimaryRequest{
+		ShardRef: &clustermetadatapb.ShardRef{Database: "db1", TableGroup: "default", Shard: "0-inf"},
+	})
+	require.Error(t, err)
+	assert.Equal(t, codes.Aborted, status.Code(err))
+	assert.Contains(t, err.Error(), "was named leader again at term 2")
+}
+
+func TestSwitchPrimary_LeaderLedRuleIsNotAFailure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+	s := newTestServer(t, "cell1")
+
+	primary := makeRoutedPooler("cell1", "mp-primary", clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY)
+	replica := makeRoutedPooler("cell1", "mp-replica", clustermetadatapb.RoutingRole_ROUTING_ROLE_REPLICA)
+	require.NoError(t, s.ts.CreateMultipooler(ctx, primary))
+	require.NoError(t, s.ts.CreateMultipooler(ctx, replica))
+
+	fc := rpcclient.NewFakeClient()
+	primaryKey := topoclient.ComponentIDString(primary.Id)
+	fc.SetResignLeadershipResponse(primaryKey, &multipoolermanagerdatapb.ResignLeadershipResponse{})
+	fc.SetStatusResponse(primaryKey, statusAtRule(1, primary.Id))
+	// A leader-led rule (same coordinator term, higher subterm) naming the old
+	// leader, e.g. a cohort update: keep waiting rather than fail.
+	leaderLed := statusAtRule(1, primary.Id)
+	leaderLed.ConsensusStatus.CurrentPosition.Position.Decision.RuleNumber.LeaderSubterm = 1
+	fc.SetStatusResponse(topoclient.ComponentIDString(replica.Id), leaderLed)
+	s.SetRPCClient(fc)
+
+	_, err := s.SwitchPrimary(ctx, &multiadminpb.SwitchPrimaryRequest{
+		ShardRef: &clustermetadatapb.ShardRef{Database: "db1", TableGroup: "default", Shard: "0-inf"},
+	})
+	require.Error(t, err)
+	assert.Equal(t, codes.DeadlineExceeded, status.Code(err), "a subterm bump must not read as re-promotion")
+}
+
+func TestSwitchPrimary_NoNewLeader(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+	s := newTestServer(t, "cell1")
+
+	primary := makeRoutedPooler("cell1", "mp-primary", clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY)
+	replica := makeRoutedPooler("cell1", "mp-replica", clustermetadatapb.RoutingRole_ROUTING_ROLE_REPLICA)
+	require.NoError(t, s.ts.CreateMultipooler(ctx, primary))
+	require.NoError(t, s.ts.CreateMultipooler(ctx, replica))
+
+	fc := rpcclient.NewFakeClient()
+	primaryKey := topoclient.ComponentIDString(primary.Id)
+	fc.SetResignLeadershipResponse(primaryKey, &multipoolermanagerdatapb.ResignLeadershipResponse{})
+	fc.SetStatusResponse(primaryKey, statusAtRule(1, primary.Id))
+	fc.SetStatusResponse(topoclient.ComponentIDString(replica.Id), statusAtRule(1, primary.Id))
+	s.SetRPCClient(fc)
+
+	_, err := s.SwitchPrimary(ctx, &multiadminpb.SwitchPrimaryRequest{
+		ShardRef: &clustermetadatapb.ShardRef{Database: "db1", TableGroup: "default", Shard: "0-inf"},
+	})
+	require.Error(t, err)
+	assert.Equal(t, codes.DeadlineExceeded, status.Code(err))
+	assert.Contains(t, err.Error(), "no new leader was decided")
 }
 
 // TestSwitchPrimary_BackoffWait verifies that SwitchPrimary waits for the
@@ -138,13 +236,12 @@ func TestSwitchPrimary_BackoffWait(t *testing.T) {
 	primaryKey := topoclient.ComponentIDString(primary.Id)
 	// Report a TermRevocation initiated 3.6 seconds ago so the backoff path
 	// triggers but the remaining wait is small (~400 ms + 500 ms jitter).
-	fc.SetStatusResponse(primaryKey, &multipoolermanagerdatapb.StatusResponse{
-		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
-			TermRevocation: &clustermetadatapb.TermRevocation{
-				CoordinatorInitiatedAt: timestamppb.New(time.Now().Add(-3600 * time.Millisecond)),
-			},
-		},
-	})
+	primaryStatus := statusAtRule(1, primary.Id)
+	primaryStatus.ConsensusStatus.TermRevocation = &clustermetadatapb.TermRevocation{
+		CoordinatorInitiatedAt: timestamppb.New(time.Now().Add(-3600 * time.Millisecond)),
+	}
+	fc.SetStatusResponse(primaryKey, primaryStatus)
+	fc.SetStatusResponse(topoclient.ComponentIDString(replica.Id), statusAtRule(2, replica.Id))
 	fc.SetResignLeadershipResponse(primaryKey, &multipoolermanagerdatapb.ResignLeadershipResponse{
 		FlushLsn: "0/3000000",
 	})

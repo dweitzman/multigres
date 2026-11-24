@@ -274,13 +274,20 @@ func HighestIntendedRule(statuses []*clustermetadatapb.ConsensusStatus) *cluster
 // comparing against that value must use this, not HighestIntendedRule, or the
 // two can disagree.
 func HighestDecidedRule(statuses []*clustermetadatapb.ConsensusStatus) *clustermetadatapb.RuleNumber {
-	var decision *clustermetadatapb.RuleNumber
+	return HighestDecidedShardRule(statuses).GetRuleNumber()
+}
+
+// HighestDecidedShardRule is HighestDecidedRule returning the whole rule, for
+// callers that also need its leader or cohort. Nil if no status has a decision.
+func HighestDecidedShardRule(statuses []*clustermetadatapb.ConsensusStatus) *clustermetadatapb.ShardRule {
+	var best *clustermetadatapb.ShardRule
 	for _, cs := range statuses {
-		if d := cs.GetCurrentPosition().GetPosition().GetDecision().GetRuleNumber(); decision == nil || CompareRuleNumbers(d, decision) > 0 {
-			decision = d
+		d := cs.GetCurrentPosition().GetPosition().GetDecision()
+		if d != nil && (best == nil || CompareRuleNumbers(d.GetRuleNumber(), best.GetRuleNumber()) > 0) {
+			best = d
 		}
 	}
-	return decision
+	return best
 }
 
 // ReplicationPrimaryMatches reports whether a pooler's published

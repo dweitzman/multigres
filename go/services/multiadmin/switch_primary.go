@@ -18,10 +18,12 @@ import (
 	"context"
 	"time"
 
+	"github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multiadminpb "github.com/multigres/multigres/go/pb/multiadmin"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
+	"github.com/multigres/multigres/go/tools/retry"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -54,10 +56,10 @@ func (s *MultiadminServer) findShardPrimary(ctx context.Context, shardRef *clust
 }
 
 // SwitchPrimary performs a graceful switchover: it quiesces writes on the
-// current leader, which reports NOT_SERVING so multiorch's
-// LeaderResignedAnalyzer can elect a new primary through the normal consensus
-// flow. The RPC returns as soon as the old primary has been quiesced and
-// restarted as a standby — it does not wait for the new leader to appear.
+// current leader, which then prefers not to lead and reports NOT_SERVING so
+// multiorch replaces it through the normal consensus flow. It returns once a
+// decided rule names another leader, and fails if the old leader is named
+// again or no new leader appears in time.
 func (s *MultiadminServer) SwitchPrimary(ctx context.Context, req *multiadminpb.SwitchPrimaryRequest) (*multiadminpb.SwitchPrimaryResponse, error) {
 	if req.GetShardRef() == nil {
 		return nil, status.Error(codes.InvalidArgument, "shard_ref is required")
@@ -80,8 +82,11 @@ func (s *MultiadminServer) SwitchPrimary(ctx context.Context, req *multiadminpb.
 	// Waiting here — before writes are frozen — avoids the pause that would
 	// otherwise sit while the old primary's postgres is still running and
 	// generating WAL.
+	// The leader's decided rule is also the baseline a new leader must beat.
 	const coordinatorBackoffWindow = 4 * time.Second
+	var baseline *clustermetadatapb.RuleNumber
 	if statusResp, err := s.rpcClient.Status(ctx, leader, &multipoolermanagerdatapb.StatusRequest{}); err == nil {
+		baseline = statusResp.GetConsensusStatus().GetCurrentPosition().GetPosition().GetDecision().GetRuleNumber()
 		if rev := statusResp.GetConsensusStatus().GetTermRevocation(); rev != nil {
 			if initAt := rev.GetCoordinatorInitiatedAt(); initAt != nil {
 				age := time.Since(initAt.AsTime())
@@ -113,15 +118,70 @@ func (s *MultiadminServer) SwitchPrimary(ctx context.Context, req *multiadminpb.
 		return nil, status.Errorf(codes.Internal, "ResignLeadership failed: %v", err)
 	}
 
-	s.logger.InfoContext(ctx, "switch_primary: complete; multiorch will elect a new leader",
+	s.logger.InfoContext(ctx, "switch_primary: old leader resigned; waiting for a new leader",
 		"old_leader", topoclient.ClusterIDString(leader.Id),
 		"flush_lsn", resignResp.GetFlushLsn())
 
-	response := &multiadminpb.SwitchPrimaryResponse{
-		OldLeaderId: proto.Clone(leader.Id).(*clustermetadatapb.ID),
+	// 5. Wait for multiorch to name a new leader.
+	newLeader, err := s.waitForNewLeader(ctx, shardRef, leader.Id, baseline)
+	if err != nil {
+		return nil, err
 	}
+	s.logger.InfoContext(ctx, "switch_primary: complete",
+		"old_leader", topoclient.ClusterIDString(leader.Id),
+		"new_leader", topoclient.ClusterIDString(newLeader))
 
-	return response, nil
+	return &multiadminpb.SwitchPrimaryResponse{
+		OldLeaderId: proto.Clone(leader.Id).(*clustermetadatapb.ID),
+		NewLeaderId: newLeader,
+	}, nil
+}
+
+// waitForNewLeader polls the shard's poolers until a decided rule at a higher
+// coordinator term than baseline names a leader. It returns that leader, or an
+// error if the rule names oldLeader again or none appears within 30s. Only the
+// coordinator term counts: a leader-led rule (a subterm bump, such as a cohort
+// update) is not a new election. With no baseline, only another leader counts.
+func (s *MultiadminServer) waitForNewLeader(ctx context.Context, shardRef *clustermetadatapb.ShardRef, oldLeader *clustermetadatapb.ID, baseline *clustermetadatapb.RuleNumber) (*clustermetadatapb.ID, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	for _, err := range retry.New(100*time.Millisecond, time.Second).Attempts(ctx) {
+		if err != nil {
+			return nil, status.Errorf(codes.DeadlineExceeded,
+				"old leader %s resigned, but no new leader was decided: %v",
+				topoclient.ClusterIDString(oldLeader), err)
+		}
+		rule := consensus.HighestDecidedShardRule(s.shardConsensusStatuses(ctx, shardRef))
+		term := rule.GetRuleNumber().GetCoordinatorTerm()
+		if rule == nil || term <= baseline.GetCoordinatorTerm() {
+			continue
+		}
+		if !proto.Equal(rule.GetLeaderId(), oldLeader) {
+			return proto.Clone(rule.GetLeaderId()).(*clustermetadatapb.ID), nil
+		}
+		if baseline != nil {
+			return nil, status.Errorf(codes.Aborted,
+				"switchover did not move leadership: %s was named leader again at term %d",
+				topoclient.ClusterIDString(oldLeader), term)
+		}
+	}
+	return nil, ctx.Err() // unreachable: Attempts only stops after yielding an error
+}
+
+// shardConsensusStatuses returns the consensus status of every reachable pooler
+// in the shard.
+func (s *MultiadminServer) shardConsensusStatuses(ctx context.Context, shardRef *clustermetadatapb.ShardRef) []*clustermetadatapb.ConsensusStatus {
+	poolers, err := s.findShardPoolers(ctx, shardRef)
+	if err != nil {
+		return nil
+	}
+	var statuses []*clustermetadatapb.ConsensusStatus
+	for _, p := range poolers {
+		if resp, err := s.rpcClient.Status(ctx, p, &multipoolermanagerdatapb.StatusRequest{}); err == nil {
+			statuses = append(statuses, resp.GetConsensusStatus())
+		}
+	}
+	return statuses
 }
 
 // findShardPoolers returns the poolers multigres manages for the given shard

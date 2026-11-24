@@ -1411,8 +1411,11 @@ message SwitchPrimaryRequest {
   string reason = 2;
 }
 
-// SwitchPrimaryResponse identifies the demoted pooler; election of its replacement is asynchronous.
+// SwitchPrimaryResponse identifies the demoted pooler and its replacement.
 message SwitchPrimaryResponse {
   // The pooler that was demoted.
   clustermetadata.ID old_leader_id = 1;
+
+  // The pooler named leader by the first decided rule after the switchover.
+  clustermetadata.ID new_leader_id = 2;
 }
