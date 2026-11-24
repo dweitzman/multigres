@@ -417,27 +417,34 @@ func statusReplicationPrimary(pos *clustermetadatapb.PoolerPosition, replication
 	}
 }
 
-// LeadershipStatus reports NOT_SERVING while this node isn't serving as
-// the leader the highest rule names (see NotServingAsLeader), at the term of its
-// current position, which is the term multiorch checks it against. It is derived
-// from current state on every call, so it can't go stale. Nil otherwise.
+// LeadershipStatus reports NOT_SERVING while this node isn't serving as the
+// leader the highest known rule names (see NotServingAsLeader), at that rule's
+// term. Multiorch acts only when that term matches the node's own position, so a
+// rule the node has only heard of counts once it commits it. It is derived from
+// current state on every call, so it can't go stale. Nil otherwise.
 func (cm *ConsensusManager) LeadershipStatus(mode pgmode.Mode) *clustermetadatapb.LeadershipStatus {
 	if !cm.NotServingAsLeader(mode) {
 		return nil
 	}
-	position := cm.CachedConsensusStatus().GetCurrentPosition().GetPosition()
 	return &clustermetadatapb.LeadershipStatus{
-		LeaderTerm: consensus.PossiblyUndecidedRule(position).GetRuleNumber().GetCoordinatorTerm(),
+		LeaderTerm: cm.highestKnownRule().GetRuleNumber().GetCoordinatorTerm(),
 		Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_NOT_SERVING,
 	}
 }
 
-// NotServingAsLeader reports whether the highest rule this node knows names it
+// NotServingAsLeader reports whether the highest known rule names this node
 // leader while its postgres is a standby (mode) and no promotion is in flight.
 // A static leader promotes itself instead, so it is never reported this way.
 func (cm *ConsensusManager) NotServingAsLeader(mode pgmode.Mode) bool {
 	return !cm.staticLeader && mode == pgmode.InRecovery && !cm.promotionInFlight.Load() &&
-		consensus.SelfConsensusRole(cm.CachedConsensusStatus()) == consensus.ConsensusRoleLeader
+		consensus.RuleNamesLeader(cm.highestKnownRule(), cm.id)
+}
+
+// highestKnownRule is the highest rule this node knows of, from its own position
+// or its replication primary. Nil if it knows none.
+func (cm *ConsensusManager) highestKnownRule() *clustermetadatapb.ShardRule {
+	return consensus.PossiblyUndecidedRule(consensus.HighestIntendedRule(
+		[]*clustermetadatapb.ConsensusStatus{cm.CachedConsensusStatus()}))
 }
 
 // RecordTermPrimary folds a newly observed ReplicationPrimary into the
@@ -572,8 +579,7 @@ func (cm *ConsensusManager) ClearResigningLeadershipIfReplaced() bool {
 	if !cm.resigningLeadership.Load() {
 		return false
 	}
-	rule := consensus.PossiblyUndecidedRule(consensus.HighestIntendedRule(
-		[]*clustermetadatapb.ConsensusStatus{cm.CachedConsensusStatus()}))
+	rule := cm.highestKnownRule()
 	if rule.GetLeaderId() == nil || consensus.RuleNamesLeader(rule, cm.id) {
 		return false
 	}
@@ -583,8 +589,7 @@ func (cm *ConsensusManager) ClearResigningLeadershipIfReplaced() bool {
 // PrefersNotToLead reports whether a planned switchover is still moving
 // leadership off this node: it is resigning and is still the named leader.
 func (cm *ConsensusManager) PrefersNotToLead() bool {
-	return cm.resigningLeadership.Load() &&
-		consensus.SelfConsensusRole(cm.CachedConsensusStatus()) == consensus.ConsensusRoleLeader
+	return cm.resigningLeadership.Load() && consensus.RuleNamesLeader(cm.highestKnownRule(), cm.id)
 }
 
 // CohortEligibility returns this node's self-reported cohort eligibility.
