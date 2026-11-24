@@ -321,9 +321,8 @@ type MultiadminServiceClient interface {
 	// SwitchPrimary performs a graceful switchover for a shard. It quiesces
 	// writes on the current leader and restarts it as a standby that prefers not
 	// to lead; multiorch sees the leader's postgres in recovery and elects a new
-	// leader through the normal consensus flow. The RPC returns as soon as the
-	// old primary has been quiesced — it does not wait for the new leader to
-	// appear.
+	// leader through the normal consensus flow. The RPC waits until a new leader
+	// is decided and returns it.
 	//
 	// Errors and recovery:
 	// FailedPrecondition (9), mapped to HTTP 400, means no standby was found for promotion. NotFound (5)
@@ -969,9 +968,8 @@ type MultiadminServiceHandler interface {
 	// SwitchPrimary performs a graceful switchover for a shard. It quiesces
 	// writes on the current leader and restarts it as a standby that prefers not
 	// to lead; multiorch sees the leader's postgres in recovery and elects a new
-	// leader through the normal consensus flow. The RPC returns as soon as the
-	// old primary has been quiesced — it does not wait for the new leader to
-	// appear.
+	// leader through the normal consensus flow. The RPC waits until a new leader
+	// is decided and returns it.
 	//
 	// Errors and recovery:
 	// FailedPrecondition (9), mapped to HTTP 400, means no standby was found for promotion. NotFound (5)

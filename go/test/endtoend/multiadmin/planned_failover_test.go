@@ -96,8 +96,13 @@ func TestPlannedFailoverAutoSelectStandby(t *testing.T) {
 	assert.Equal(t, initialPrimary.Name, resp.GetOldLeaderId().GetName(),
 		"old leader should be the initial primary")
 
-	t.Logf("SwitchPrimary returned: old=%s/%s",
-		resp.GetOldLeaderId().GetCell(), resp.GetOldLeaderId().GetName())
+	require.NotNil(t, resp.GetNewLeaderId(), "SwitchPrimary should report the new leader")
+	assert.NotEqual(t, initialPrimary.Name, resp.GetNewLeaderId().GetName(),
+		"new leader should differ from the old one")
+
+	t.Logf("SwitchPrimary returned: old=%s/%s new=%s/%s",
+		resp.GetOldLeaderId().GetCell(), resp.GetOldLeaderId().GetName(),
+		resp.GetNewLeaderId().GetCell(), resp.GetNewLeaderId().GetName())
 
 	// Wait for multiorch to elect a new leader.
 	setup.RequireRecovery(t, "multiorch", shardsetup.RecoveryScenarioPlannedFailover)
@@ -106,6 +111,8 @@ func TestPlannedFailoverAutoSelectStandby(t *testing.T) {
 	require.NotNil(t, newPrimary)
 	assert.NotEqual(t, initialPrimary.Name, newPrimary.Name,
 		"cluster primary should have changed after switchover")
+	assert.Equal(t, resp.GetNewLeaderId().GetName(), newPrimary.Name,
+		"the primary should be the leader SwitchPrimary reported")
 
 	t.Logf("Cluster primary after switchover: %s", newPrimary.Name)
 
@@ -167,6 +174,9 @@ func TestPlannedFailoverNoPgRewind(t *testing.T) {
 		Reason: "no-pg_rewind integration test",
 	})
 	require.NoError(t, err, "SwitchPrimary should succeed")
+	require.NotNil(t, resp.GetNewLeaderId(), "SwitchPrimary should report the new leader")
+	assert.NotEqual(t, resp.GetOldLeaderId().GetName(), resp.GetNewLeaderId().GetName(),
+		"new leader should differ from the old one")
 
 	setup.RequireRecovery(t, "multiorch", shardsetup.RecoveryScenarioPlannedFailover)
 

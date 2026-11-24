@@ -78,9 +78,9 @@ Recruit/Promote consensus flow.
 No pg_rewind is required because the old primary and the new primary
 diverge at the same WAL position.
 
-The command returns as soon as the old primary has been quiesced and
-restarted as a standby. Use "multigres cluster status" to watch for the
-new primary to appear.
+The command waits until a new leader is decided and prints it. It fails
+if the old primary is chosen again, or if no new leader is decided within
+30 seconds.
 
 Examples:
 
@@ -135,7 +135,9 @@ func (pf *switchPrimaryCmd) run(cmd *cobra.Command, _ []string) error {
 	cmd.Printf("Old leader: %s/%s\n",
 		resp.GetOldLeaderId().GetCell(),
 		resp.GetOldLeaderId().GetName())
-	cmd.Printf("Multiorch will elect a new leader. Run \"multigres cluster status\" to monitor.\n")
+	cmd.Printf("New leader: %s/%s\n",
+		resp.GetNewLeaderId().GetCell(),
+		resp.GetNewLeaderId().GetName())
 	return nil
 }
 

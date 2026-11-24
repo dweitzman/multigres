@@ -2429,7 +2429,7 @@ export class SwitchPrimaryRequest extends Message<SwitchPrimaryRequest> {
 }
 
 /**
- * SwitchPrimaryResponse identifies the demoted pooler; election of its replacement is asynchronous.
+ * SwitchPrimaryResponse identifies the demoted pooler and its replacement.
  *
  * @generated from message multiadmin.SwitchPrimaryResponse
  */
@@ -2441,6 +2441,13 @@ export class SwitchPrimaryResponse extends Message<SwitchPrimaryResponse> {
    */
   oldLeaderId?: ID;
 
+  /**
+   * The pooler named leader by the first decided rule after the switchover.
+   *
+   * @generated from field: clustermetadata.ID new_leader_id = 2;
+   */
+  newLeaderId?: ID;
+
   constructor(data?: PartialMessage<SwitchPrimaryResponse>) {
     super();
     proto3.util.initPartial(data, this);
@@ -2450,6 +2457,7 @@ export class SwitchPrimaryResponse extends Message<SwitchPrimaryResponse> {
   static readonly typeName = "multiadmin.SwitchPrimaryResponse";
   static readonly fields: FieldList = proto3.util.newFieldList(() => [
     { no: 1, name: "old_leader_id", kind: "message", T: ID },
+    { no: 2, name: "new_leader_id", kind: "message", T: ID },
   ]);
 
   static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): SwitchPrimaryResponse {

@@ -4026,8 +4026,12 @@ components:
       type: object
     multiadmin.SwitchPrimaryResponse:
       additionalProperties: false
-      description: SwitchPrimaryResponse identifies the demoted pooler; election of its replacement is asynchronous.
+      description: SwitchPrimaryResponse identifies the demoted pooler and its replacement.
       properties:
+        newLeaderId:
+          $ref: '#/components/schemas/clustermetadata.ID'
+          description: The pooler named leader by the first decided rule after the switchover.
+          title: new_leader_id
         oldLeaderId:
           $ref: '#/components/schemas/clustermetadata.ID'
           description: The pooler that was demoted.
