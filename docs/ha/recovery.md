@@ -33,7 +33,8 @@ for why probe state and component health are deliberately separated.
 
 > [!NOTE]
 > Not yet documented: how a dead leader is detected — the heartbeat timeout on
-> the health stream and the `LEADERSHIP_SIGNAL_NOT_SERVING` fast path.
+> the health stream, and the fast path for a leader whose postgres is in
+> recovery (`Status.postgres_status`).
 > The entry point is `AppointLeaderAction` → `Coordinator.AppointLeader`.
 
 ### 2. Cohort membership changes — a leader-led rule change
@@ -83,10 +84,10 @@ readiness/liveness probes. See
 for the boundary and its consequences.
 
 > [!NOTE]
-> Not yet documented: the concrete signaling types — `LeadershipStatus`
-> (NOT_SERVING: the named leader isn't serving, which triggers failover),
-> `LeadershipPreference` (PREFER_NOT: a tie-break when choosing the next leader)
-> and `CohortEligibilityStatus`.
+> Not yet documented: the concrete signaling types — `Status.postgres_status`
+> (a named leader in recovery triggers failover), `LeadershipPreference`
+> (PREFER_NOT: a tie-break when choosing the next leader) and
+> `CohortEligibilityStatus`. `LeadershipStatus` is deprecated.
 > This is the signaling layer the state model defers to recovery.
 
 ## Scenarios

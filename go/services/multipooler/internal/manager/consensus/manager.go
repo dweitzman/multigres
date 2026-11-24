@@ -70,7 +70,7 @@ type Broadcaster interface {
 //     NOT shared with ConsensusPromises's lock: that lock wraps disk writes, and
 //     GetReplicationPrimary is read on nearly every monitor tick — sharing would
 //     serialize the latency-sensitive monitor loop behind term persistence.
-//   - promotionInFlight, resigningLeadership, cohortEligibility: atomics, NOT under mu. Production
+//   - resigningLeadership, cohortEligibility: atomics, NOT under mu. Production
 //     writes go through the manager under the action lock (so writers are
 //     serialized there); the lock-free readers (Status/health snapshot, monitor
 //     decision phase) load them without any lock. The atomic makes those reads
@@ -120,10 +120,6 @@ type ConsensusManager struct {
 	// leaderObservedAt.
 	rewindWaitEmittedFor time.Time
 
-	// promotionInFlight marks a Promote attempt in progress, so this node isn't
-	// reported as a leader that isn't serving while it is still catching up to
-	// become one. Atomic; writes are serialized by the action lock.
-	promotionInFlight atomic.Bool
 	// cohortEligibility is this node's self-reported willingness to be a member of
 	// the consensus cohort, holding a clustermetadatapb.CohortEligibilitySignal.
 	// Atomic; production writes are serialized by the action lock.
@@ -417,29 +413,6 @@ func statusReplicationPrimary(pos *clustermetadatapb.PoolerPosition, replication
 	}
 }
 
-// LeadershipStatus reports NOT_SERVING while this node isn't serving as the
-// leader the highest known rule names (see NotServingAsLeader), at that rule's
-// term. Multiorch acts only when that term matches the node's own position, so a
-// rule the node has only heard of counts once it commits it. It is derived from
-// current state on every call, so it can't go stale. Nil otherwise.
-func (cm *ConsensusManager) LeadershipStatus(mode pgmode.Mode) *clustermetadatapb.LeadershipStatus {
-	if !cm.NotServingAsLeader(mode) {
-		return nil
-	}
-	return &clustermetadatapb.LeadershipStatus{
-		LeaderTerm: cm.highestKnownRule().GetRuleNumber().GetCoordinatorTerm(),
-		Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_NOT_SERVING,
-	}
-}
-
-// NotServingAsLeader reports whether the highest known rule names this node
-// leader while its postgres is a standby (mode) and no promotion is in flight.
-// A static leader promotes itself instead, so it is never reported this way.
-func (cm *ConsensusManager) NotServingAsLeader(mode pgmode.Mode) bool {
-	return !cm.staticLeader && mode == pgmode.InRecovery && !cm.promotionInFlight.Load() &&
-		consensus.RuleNamesLeader(cm.highestKnownRule(), cm.id)
-}
-
 // highestKnownRule is the highest rule this node knows of, from its own position
 // or its replication primary. Nil if it knows none.
 func (cm *ConsensusManager) highestKnownRule() *clustermetadatapb.ShardRule {
@@ -538,27 +511,6 @@ func (cm *ConsensusManager) MarkSelfRewindReady(selfID *clustermetadatapb.ID, ex
 	next.RewindReady = true
 	cm.replicationPrimary = next
 	return true
-}
-
-// BeginPromotionAttempt marks a Promote attempt as started, so this node isn't
-// reported as not serving while it catches up to become leader. Requires the
-// action lock, which the whole attempt runs under.
-func (cm *ConsensusManager) BeginPromotionAttempt(ctx context.Context) error {
-	if err := actionlock.AssertActionLockHeld(ctx); err != nil {
-		return err
-	}
-	cm.promotionInFlight.Store(true)
-	return nil
-}
-
-// EndPromotionAttempt clears the in-flight marker once a Promote attempt has
-// succeeded or failed. Requires the action lock.
-func (cm *ConsensusManager) EndPromotionAttempt(ctx context.Context) error {
-	if err := actionlock.AssertActionLockHeld(ctx); err != nil {
-		return err
-	}
-	cm.promotionInFlight.Store(false)
-	return nil
 }
 
 // SetResigningLeadership records that this node is resigning in a planned

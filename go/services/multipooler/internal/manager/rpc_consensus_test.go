@@ -40,6 +40,7 @@ import (
 	"github.com/multigres/multigres/go/services/multipooler/internal/manager/actionlock"
 	"github.com/multigres/multigres/go/services/multipooler/internal/manager/consensus"
 	"github.com/multigres/multigres/go/services/multipooler/internal/manager/consensus/consensustest"
+	"github.com/multigres/multigres/go/services/multipooler/internal/pgmode"
 	"github.com/multigres/multigres/go/tools/telemetry"
 	"github.com/multigres/multigres/go/tools/viperutil"
 
@@ -1489,20 +1490,18 @@ func TestResigningLeadership_LastsUntilAnotherLeaderIsNamed(t *testing.T) {
 	assert.False(t, cm.PrefersNotToLead(), "being elected again later starts with no preference")
 }
 
-// resignRecordingPgctldClient records the NOT_SERVING term and leadership
-// preference reported when pgctld was asked to restart postgres as a standby. With
+// resignRecordingPgctldClient records the leadership preference reported when
+// pgctld was asked to restart postgres as a standby. With
 // restartHangs set, Restart blocks until the caller's deadline expires, like a
 // pgctld that doesn't answer in time.
 type resignRecordingPgctldClient struct {
 	mockPgctldClient
-	pm                    *MultipoolerManager
-	restartHangs          bool
-	resignedTermAtRestart int64
-	preferenceAtRestart   clustermetadatapb.LeadershipPreference
+	pm                  *MultipoolerManager
+	restartHangs        bool
+	preferenceAtRestart clustermetadatapb.LeadershipPreference
 }
 
 func (c *resignRecordingPgctldClient) Restart(ctx context.Context, req *pgctldpb.RestartRequest, opts ...grpc.CallOption) (*pgctldpb.RestartResponse, error) {
-	c.resignedTermAtRestart = c.pm.buildAvailabilityStatus().GetLeadershipStatus().GetLeaderTerm()
 	c.preferenceAtRestart = c.pm.buildAvailabilityStatus().GetLeadershipPreference()
 	if c.restartHangs {
 		c.restartCalled = true
@@ -1512,15 +1511,12 @@ func (c *resignRecordingPgctldClient) Restart(ctx context.Context, req *pgctldpb
 	return c.mockPgctldClient.Restart(ctx, req, opts...)
 }
 
-// TestResignLeadership_PublishesDemotionAfterRestart verifies NOT_SERVING
-// is reported only once postgres has been restarted as a standby, and not when
-// clearing restore_command or the restart fails, since the node is then still
-// serving. Reporting it before the restart would let the election's Recruit
-// disconnect the standbys before the old leader's shutdown checkpoint WAL
-// reaches them. The PREFER_NOT leadership preference, which is not a trigger, is
-// published before the restart, so a failover that starts as soon as postgres is
-// in recovery already prefers another candidate.
-func TestResignLeadership_PublishesDemotionAfterRestart(t *testing.T) {
+// TestResignLeadership_PrefersNotToLeadBeforeRestart verifies the PREFER_NOT
+// leadership preference is published before postgres restarts as a standby, so
+// the failover multiorch starts once it sees postgres in recovery already prefers
+// another candidate. The pooler publishes no LeadershipStatus at any point:
+// multiorch reads postgres status instead.
+func TestResignLeadership_PrefersNotToLeadBeforeRestart(t *testing.T) {
 	self := newLeaderAddress("test-pooler", "localhost", 5432)
 	tests := []struct {
 		name        string
@@ -1530,13 +1526,13 @@ func TestResignLeadership_PublishesDemotionAfterRestart(t *testing.T) {
 		restartHang bool // Restart blocks until the RPC deadline expires
 		wantErr     string
 		wantRestart bool
-		wantTerm    int64 // reported NOT_SERVING term, 0 for none
+		wantStandby bool // the pooler's postgres mode is InRecovery afterwards
 	}{
 		{
 			name:        "restart succeeds",
 			leader:      self,
 			wantRestart: true,
-			wantTerm:    5,
+			wantStandby: true,
 		},
 		{
 			name:        "restart fails",
@@ -1562,10 +1558,11 @@ func TestResignLeadership_PublishesDemotionAfterRestart(t *testing.T) {
 		},
 		{
 			// A primary the rule doesn't name as leader has no leadership to
-			// resign, so nothing is published.
+			// resign, so it declares no preference.
 			name:        "not the rule's leader",
 			leader:      newLeaderAddress("other-pooler", "other-host", 5432),
 			wantRestart: true,
+			wantStandby: true,
 		},
 	}
 	for _, tt := range tests {
@@ -1621,8 +1618,8 @@ func TestResignLeadership_PublishesDemotionAfterRestart(t *testing.T) {
 			require.NoError(t, m.ExpectationsWereMet())
 
 			assert.Equal(t, tt.wantRestart, pgctld.restartCalled, "whether postgres was restarted as a standby")
-			assert.Zero(t, pgctld.resignedTermAtRestart, "NOT_SERVING must not be published before postgres restarts")
-			assert.Equal(t, tt.wantTerm, pm.buildAvailabilityStatus().GetLeadershipStatus().GetLeaderTerm(), "NOT_SERVING term reported")
+			assert.Nil(t, pm.buildAvailabilityStatus().GetLeadershipStatus(), "LeadershipStatus is no longer published")
+			assert.Equal(t, tt.wantStandby, pm.stateManager.PostgresMode() == pgmode.InRecovery, "postgres recorded as a standby")
 
 			wantPreference := clustermetadatapb.LeadershipPreference_LEADERSHIP_PREFERENCE_UNSPECIFIED
 			if tt.leader == self {

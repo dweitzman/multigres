@@ -122,9 +122,10 @@ func TestSelectFittestLeader(t *testing.T) {
 		assert.Same(t, a, got, "postgres-ready must win even against a not-ready node that otherwise scores better")
 	})
 
-	t.Run("NOT_SERVING alone doesn't count against a candidate", func(t *testing.T) {
-		// A leader that drifted into recovery reports NOT_SERVING but has
-		// no preference: it is an ordinary candidate and may be re-promoted.
+	t.Run("a leader in recovery alone doesn't count against a candidate", func(t *testing.T) {
+		// A leader that drifted into recovery (reported here as an older pooler
+		// would, via REQUESTING_DEMOTION) but has no preference: it is an
+		// ordinary candidate and may be re-promoted.
 		driftedID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "drifted"}
 		peerID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "peer"}
 		drifted := &clustermetadatapb.ConsensusStatus{Id: driftedID}
@@ -134,7 +135,7 @@ func TestSelectFittestLeader(t *testing.T) {
 				Status: &multipoolermanagerdatapb.Status{PostgresReady: true},
 				AvailabilityStatus: &clustermetadatapb.AvailabilityStatus{LeadershipStatus: &clustermetadatapb.LeadershipStatus{
 					LeaderTerm: 5,
-					Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_NOT_SERVING,
+					Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION,
 				}},
 			},
 			topoclient.ClusterIDString(peerID): {

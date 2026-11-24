@@ -79,13 +79,12 @@ service MultipoolerManager {
 
   // ResignLeadership gracefully resigns this pooler from leadership.
   // Transitions the pooler to NOT_SERVING (rejecting new queries with MTF01),
-  // drains write connections, reports NOT_SERVING, and returns the
-  // WAL flush LSN at the moment writes were quiesced. The caller can then wait
-  // for standbys to reach that LSN before triggering a new election.
+  // drains write connections, declares that it prefers not to lead, restarts
+  // postgres as a standby, and returns the WAL flush LSN at the moment writes
+  // were quiesced. Multiorch then sees the leader's postgres in recovery and
+  // elects another leader.
   //
   // Only valid on a pooler that is currently the consensus leader (PRIMARY).
-  // Does NOT restart postgres as standby — that happens later via the normal
-  // Recruit path when multiorch sees NOT_SERVING.
   rpc ResignLeadership(multipoolermanagerdata.ResignLeadershipRequest)
       returns (multipoolermanagerdata.ResignLeadershipResponse);
 

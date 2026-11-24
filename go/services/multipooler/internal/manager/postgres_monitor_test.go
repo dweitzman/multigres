@@ -1234,68 +1234,6 @@ func TestTakeRemedialAction_LogDeduplication(t *testing.T) {
 	assert.Equal(t, "restoring_from_backup", pm.pgMonitorLastLoggedReason)
 }
 
-// TestLeadershipStatus_ReportsALeaderThatIsNotServing verifies that
-// NOT_SERVING is derived from current state: reported at the term of the
-// highest known rule while it names the node leader, its postgres is a
-// standby and no promotion is in flight, and not otherwise.
-func TestLeadershipStatus_ReportsALeaderThatIsNotServing(t *testing.T) {
-	selfID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "test-pooler"}
-	otherID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "other-pooler"}
-	posLedBy := func(leader *clustermetadatapb.ID, term int64) *clustermetadatapb.PoolerPosition {
-		return &clustermetadatapb.PoolerPosition{Position: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{
-			RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: term},
-			LeaderId:   leader,
-		}}}
-	}
-	requestingDemotionAt := func(term int64) *clustermetadatapb.LeadershipStatus {
-		return &clustermetadatapb.LeadershipStatus{
-			LeaderTerm: term,
-			Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_NOT_SERVING,
-		}
-	}
-	tests := []struct {
-		name      string
-		pos       *clustermetadatapb.PoolerPosition
-		rp        *clustermetadatapb.ReplicationPrimary
-		mode      pgmode.Mode
-		promoting bool
-		want      *clustermetadatapb.LeadershipStatus
-	}{
-		{name: "named leader, postgres a standby", pos: posLedBy(selfID, 5), mode: pgmode.InRecovery, want: requestingDemotionAt(5)},
-		{name: "named leader, postgres a primary", pos: posLedBy(selfID, 5), mode: pgmode.Primary},
-		{name: "named leader, postgres mode unknown", pos: posLedBy(selfID, 5), mode: pgmode.Unknown},
-		{name: "named leader, promotion in flight", pos: posLedBy(selfID, 5), mode: pgmode.InRecovery, promoting: true},
-		{name: "another node is the named leader", pos: posLedBy(otherID, 6), mode: pgmode.InRecovery},
-		{name: "no known rule", mode: pgmode.InRecovery},
-		{
-			// Reported at the uncommitted rule's term, which won't match the
-			// node's position, so multiorch waits until the node commits it.
-			name: "named leader only by a rule not yet committed",
-			pos:  posLedBy(otherID, 5),
-			rp:   &clustermetadatapb.ReplicationPrimary{Position: posLedBy(selfID, 6).GetPosition()},
-			mode: pgmode.InRecovery, want: requestingDemotionAt(6),
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			opts := []testManagerOption{withServiceID(selfID), withRuleStore(&fakeRuleStore{pos: tc.pos})}
-			if tc.rp != nil {
-				opts = append(opts, withReplicationPrimary(tc.rp))
-			}
-			pm := newTestManager(t, opts...)
-			lockCtx, err := pm.actionLock.Acquire(t.Context(), "test")
-			require.NoError(t, err)
-			defer pm.actionLock.Release(lockCtx)
-			if tc.promoting {
-				require.NoError(t, pm.consensusMgr.BeginPromotionAttempt(lockCtx))
-			}
-			require.NoError(t, pm.stateManager.Mutate(lockCtx, func(s *servingStateMutation) { s.PostgresMode = tc.mode }))
-
-			assert.Equal(t, tc.want, pm.buildAvailabilityStatus().GetLeadershipStatus())
-		})
-	}
-}
-
 func TestTakeRemedialAction_ReconcileGUC(t *testing.T) {
 	ctx := t.Context()
 

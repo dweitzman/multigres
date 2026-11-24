@@ -331,8 +331,13 @@ proto3.util.setEnumType(RoutingRole, "clustermetadata.RoutingRole", [
 ]);
 
 /**
- * LeadershipSignal describes whether a pooler is serving as the leader its
- * highest known rule names. 0 (UNKNOWN) means the field was not set.
+ * LeadershipSignal describes a leader's self-reported status for its current term.
+ * Only published by nodes that are or were the consensus leader (leader_term != 0).
+ * 0 (UNKNOWN) means the field was not intentionally set.
+ *
+ * No longer published by poolers: multiorch detects a
+ * named leader whose postgres is in recovery from Status.postgres_status, and
+ * reads this only from older poolers.
  *
  * @generated from enum clustermetadata.LeadershipSignal
  */
@@ -343,24 +348,32 @@ export enum LeadershipSignal {
   UNKNOWN = 0,
 
   /**
-   * The pooler is the leader its highest rule names for leader_term but isn't
-   * serving: its postgres is a standby and no promotion is in flight. It is
-   * derived from current state each time it is published, and a coordinator
-   * should fail over rather than wait for a heartbeat timeout. It says nothing
-   * about whether the pooler would make a good next leader (see
-   * LeadershipPreference), so the pooler may be re-promoted at a higher term.
+   * Node is actively and healthily serving as leader for leader_term.
+   * Published each poll cycle so the coordinator can distinguish a confirmed
+   * healthy leader from one that restarted and hasn't re-published yet.
    *
-   * Staleness check: a coordinator acts only when leader_term matches the term
-   * of the pooler's current position in the same snapshot.
-   *
-   * @generated from enum value: LEADERSHIP_SIGNAL_NOT_SERVING = 2;
+   * @generated from enum value: LEADERSHIP_SIGNAL_ACTIVE = 1;
    */
-  NOT_SERVING = 2,
+  ACTIVE = 1,
+
+  /**
+   * Node is requesting demotion from leadership for leader_term. Coordinator
+   * should trigger an immediate failover rather than waiting for a heartbeat
+   * timeout. The node may continue as a follower after demotion.
+   *
+   * Staleness check: coordinator verifies leadership_status.leader_term matches
+   * the node's known leader_term before acting, to ignore signals left over from
+   * a previous failover cycle.
+   *
+   * @generated from enum value: LEADERSHIP_SIGNAL_REQUESTING_DEMOTION = 2;
+   */
+  REQUESTING_DEMOTION = 2,
 }
 // Retrieve enum metadata with: proto3.getEnumType(LeadershipSignal)
 proto3.util.setEnumType(LeadershipSignal, "clustermetadata.LeadershipSignal", [
   { no: 0, name: "LEADERSHIP_SIGNAL_UNKNOWN" },
-  { no: 2, name: "LEADERSHIP_SIGNAL_NOT_SERVING" },
+  { no: 1, name: "LEADERSHIP_SIGNAL_ACTIVE" },
+  { no: 2, name: "LEADERSHIP_SIGNAL_REQUESTING_DEMOTION" },
 ]);
 
 /**
@@ -381,7 +394,7 @@ export enum LeadershipPreference {
   /**
    * The pooler currently would rather another candidate lead. The pooler decides
    * how long that lasts: a planned switchover, for example, prefers not to lead
-   * until a newer rule than the one it resigned from exists.
+   * until a rule names another leader.
    *
    * @generated from enum value: LEADERSHIP_PREFERENCE_PREFER_NOT = 1;
    */
@@ -2582,14 +2595,18 @@ export class ConsensusStatus extends Message<ConsensusStatus> {
 }
 
 /**
- * LeadershipStatus is published only while the pooler is the named leader but
- * isn't serving (see LEADERSHIP_SIGNAL_NOT_SERVING).
+ * LeadershipStatus is published only by nodes that are or have been the consensus leader.
+ * It lets the coordinator distinguish an actively healthy leader, a leader
+ * requesting demotion, and a node that has never held leadership.
+ *
+ * No longer published; see LeadershipSignal.
  *
  * @generated from message clustermetadata.LeadershipStatus
  */
 export class LeadershipStatus extends Message<LeadershipStatus> {
   /**
-   * The term of the pooler's current position, which names it leader.
+   * The leader_term at which this node was most recently appointed.
+   * Non-zero only on nodes that have been appointed as leader.
    *
    * @generated from field: int64 leader_term = 1;
    */
@@ -2649,9 +2666,7 @@ export class LeadershipStatus extends Message<LeadershipStatus> {
  */
 export class AvailabilityStatus extends Message<AvailabilityStatus> {
   /**
-   * leadership_status is set only while the pooler is the named leader but
-   * isn't serving. It triggers failover; leadership_preference decides nothing
-   * about it and vice versa.
+   * No longer published; see LeadershipSignal. Read only from older poolers.
    *
    * @generated from field: clustermetadata.LeadershipStatus leadership_status = 1;
    */

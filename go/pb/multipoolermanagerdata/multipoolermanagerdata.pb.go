@@ -1576,13 +1576,9 @@ func (*StatusRequest) Descriptor() ([]byte, []int) {
 type StatusResponse struct {
 	state  protoimpl.MessageState `protogen:"open.v1"`
 	Status *Status                `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
-	// Availability status for nodes that are or have been primary. Wraps
-	// LeadershipStatus (NOT_SERVING) and the primary_term at
-	// which the signal applies. Used by multiorch to detect voluntary demotions
-	// (Recruit) without a separate ConsensusStatus RPC call.
-	// Staleness check: availability_status.leadership_status.primary_term must
-	// equal the coordinator term of the committed rule (via ConsensusStatus)
-	// to ensure signals from previous election cycles are ignored.
+	// Availability status: the pooler's cohort eligibility, leadership preference
+	// and suspected divergence. (leadership_status is deprecated and no longer
+	// published.)
 	AvailabilityStatus *clustermetadata.AvailabilityStatus `protobuf:"bytes,3,opt,name=availability_status,json=availabilityStatus,proto3" json:"availability_status,omitempty"`
 	// ConsensusStatus snapshot for this pooler. Used by multiorch to derive the
 	// primary term (via commonconsensus.PrimaryTerm) and to detect divergence

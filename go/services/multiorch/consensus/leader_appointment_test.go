@@ -398,7 +398,7 @@ func TestAppointLeader_TiebreaksByResignation(t *testing.T) {
 	resigned.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{
 		LeadershipStatus: &clustermetadatapb.LeadershipStatus{
 			LeaderTerm: 5,
-			Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_NOT_SERVING,
+			Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION,
 		},
 		LeadershipPreference: clustermetadatapb.LeadershipPreference_LEADERSHIP_PREFERENCE_PREFER_NOT,
 	}

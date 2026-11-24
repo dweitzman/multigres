@@ -953,7 +953,7 @@ func (s *ShardSetup) RequireRecovery(t *testing.T, orchName string, scenario Rec
 // but before any test action that depends on the orchestrator observing a
 // pooler-side event (notably SIGTERM-triggered failover, which only fires
 // quickly when the orchestrator is already subscribed to receive the
-// NOT_SERVING snapshot). RequireRecovery's "no problems" condition
+// cohort-ineligible snapshot). RequireRecovery's "no problems" condition
 // can be satisfied by topology state alone — before any health stream is up
 // — and that gap is the source of the stream-establishment flake under
 // CPU-overhead conditions (subprocess-coverage CI, busy runners).

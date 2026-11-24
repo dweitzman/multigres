@@ -138,7 +138,7 @@ func TestIntendedLeaderServing_DemotedViaRecruit(t *testing.T) {
 			// makes it not LeaderReachable now that postgres restarted as a standby.
 			AvailabilityStatus: &clustermetadatapb.AvailabilityStatus{
 				LeadershipStatus: &clustermetadatapb.LeadershipStatus{
-					Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_NOT_SERVING,
+					Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION,
 					LeaderTerm: 4,
 				},
 			},
@@ -183,7 +183,7 @@ func TestIntendedLeaderServing_DemotedViaRecruit(t *testing.T) {
 			// makes it not LeaderReachable now that postgres restarted as a standby.
 			AvailabilityStatus: &clustermetadatapb.AvailabilityStatus{
 				LeadershipStatus: &clustermetadatapb.LeadershipStatus{
-					Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_NOT_SERVING,
+					Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION,
 					LeaderTerm: 4,
 				},
 			},

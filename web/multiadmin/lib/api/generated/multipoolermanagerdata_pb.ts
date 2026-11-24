@@ -1276,13 +1276,9 @@ export class StatusResponse extends Message<StatusResponse> {
   status?: Status;
 
   /**
-   * Availability status for nodes that are or have been primary. Wraps
-   * LeadershipStatus (NOT_SERVING) and the primary_term at
-   * which the signal applies. Used by multiorch to detect voluntary demotions
-   * (Recruit) without a separate ConsensusStatus RPC call.
-   * Staleness check: availability_status.leadership_status.primary_term must
-   * equal the coordinator term of the committed rule (via ConsensusStatus)
-   * to ensure signals from previous election cycles are ignored.
+   * Availability status: the pooler's cohort eligibility, leadership preference
+   * and suspected divergence. (leadership_status is deprecated and no longer
+   * published.)
    *
    * @generated from field: clustermetadata.AvailabilityStatus availability_status = 3;
    */

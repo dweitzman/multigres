@@ -34,12 +34,10 @@ import (
 )
 
 // buildAvailabilityStatus returns the current AvailabilityStatus for this node.
-// Leaders that have resigned publish a LeadershipStatus. Every pooler publishes
-// its cohort eligibility, so the result is non-nil.
+// Every pooler publishes its cohort eligibility, so the result is non-nil.
 func (pm *MultipoolerManager) buildAvailabilityStatus() *clustermetadatapb.AvailabilityStatus {
 	cohort := pm.buildCohortEligibilityStatus()
 	return &clustermetadatapb.AvailabilityStatus{
-		LeadershipStatus:        pm.consensusMgr.LeadershipStatus(pm.stateManager.PostgresMode()),
 		CohortEligibilityStatus: cohort,
 		SuspectedDivergence:     pm.consensusMgr.SuspectedDivergence(),
 		LeadershipPreference:    pm.leadershipPreference(cohort),
@@ -122,8 +120,8 @@ func (pm *MultipoolerManager) markPoolerActive(ctx context.Context) {
 
 // ResignLeadership gracefully resigns this pooler from leadership for use in a
 // planned failover. It quiesces writes, terminates remaining connections,
-// restarts PostgreSQL as a standby, then reports NOT_SERVING so
-// multiorch starts the election.
+// declares that it prefers not to lead, and restarts PostgreSQL as a standby.
+// Multiorch sees the named leader's postgres in recovery and starts the election.
 //
 // By restarting postgres here, before Recruit runs on any node, we prevent the
 // "proposed leader not eligible" error: the Recruit fan-out disconnects the
@@ -596,17 +594,6 @@ func (pm *MultipoolerManager) promoteLocked(ctx context.Context, req *consensusd
 	if reason == "" {
 		reason = "promote"
 	}
-
-	// While the promotion runs this node may already be the named leader with
-	// postgres still in recovery; don't report it as not serving meanwhile.
-	if err := pm.consensusMgr.BeginPromotionAttempt(ctx); err != nil {
-		return nil, err
-	}
-	defer func() {
-		if endErr := pm.consensusMgr.EndPromotionAttempt(ctx); endErr != nil {
-			pm.logger.ErrorContext(ctx, "failed to end promotion attempt", "error", endErr)
-		}
-	}()
 
 	promotionHook := func(hookCtx context.Context) error {
 		recordMetric := pm.slotBasedReplicationEnabled()

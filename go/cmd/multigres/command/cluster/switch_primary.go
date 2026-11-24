@@ -71,7 +71,7 @@ func AddSwitchPrimaryCommand(clusterCmd *cobra.Command) {
 
 New queries for the current primary are rejected with MTF01 so the
 gateway can buffer and retry. The current primary is then restarted as
-a standby and reports NOT_SERVING. Multiorch's recovery engine
+a standby that prefers not to lead. Multiorch's recovery engine
 picks the most-advanced standby and promotes it via the normal
 Recruit/Promote consensus flow.
 

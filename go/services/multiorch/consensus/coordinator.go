@@ -85,7 +85,7 @@ func (c *Coordinator) AppointLeader(ctx context.Context, shardRef *clustermetada
 // proposal-building loop; the non-blocking Phase 2 drain in rule_change.go
 // ensures slow Recruit RPCs do not stall Run() after quorum is reached.
 //
-// A leader that signaled NOT_SERVING, or that prefers not to lead, stays
+// A leader whose postgres is in recovery, or that prefers not to lead, stays
 // in the recruitment cohort and may be re-promoted at the new term if it remains
 // the best candidate: neither means "remove me." Excluding it dropped a 2-pooler
 // AT_LEAST_2 cohort below quorum after a Recruit fan-out emergency-demoted the
