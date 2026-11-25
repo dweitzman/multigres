@@ -253,6 +253,19 @@ func TestLeaderPostgresDemoted(t *testing.T) {
 		})
 	}
 
+	t.Run("named leader only by an RPC-recorded rule while promote is under way", func(t *testing.T) {
+		// Promote records the proposed rule before pg_promote; the rule isn't in
+		// the pooler's WAL yet, so a standby postgres is expected.
+		p := withPostgres(&PoolerReport{Consensus: &clustermetadatapb.ConsensusStatus{Id: &clustermetadatapb.ID{Name: "mp1"}}}, clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STANDBY)
+		p.Consensus.ReplicationPrimary = &clustermetadatapb.ReplicationPrimary{
+			Position: &clustermetadatapb.RulePosition{Proposal: &clustermetadatapb.ShardRule{
+				LeaderId:   &clustermetadatapb.ID{Name: "mp1"},
+				RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 6},
+			}},
+		}
+		assert.False(t, LeaderPostgresDemoted(*p))
+	})
+
 	t.Run("another node is the named leader", func(t *testing.T) {
 		p := withPostgres(poolerWithLeaderTerm(t, 5), clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STANDBY)
 		p.Consensus.CurrentPosition.Position.Decision.LeaderId = &clustermetadatapb.ID{Name: "other"}

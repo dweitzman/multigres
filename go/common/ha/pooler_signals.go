@@ -43,16 +43,17 @@ func LeaderNeedsReplacement(r PoolerReport) bool {
 	return CohortIneligible(r.Availability) || LeaderPostgresDemoted(r)
 }
 
-// LeaderPostgresDemoted reports whether the highest rule a pooler knows names
-// it leader while its postgres is a standby. The pooler reads its rule before
-// its postgres status, and the rule naming it is written to its own postgres,
-// which refuses the write until pg_promote has taken it out of recovery. So
-// this means postgres was demoted, never that a promotion is under way.
+// LeaderPostgresDemoted reports whether the rule in a pooler's own WAL names it
+// leader while its postgres is a standby. Only a primary can write that rule,
+// and the pooler reads it before its postgres status, so this means postgres
+// was demoted after promoting. A rule learned only by RPC (ReplicationPrimary)
+// doesn't count: Promote records it before pg_promote runs.
 //
 // Older poolers reported this themselves as REQUESTING_DEMOTION at their current
 // term; that is honored too until no such poolers remain.
 func LeaderPostgresDemoted(r PoolerReport) bool {
-	if PostgresIsStandby(r.Availability) && commonconsensus.SelfConsensusRole(r.Consensus) == commonconsensus.ConsensusRoleLeader {
+	walRule := commonconsensus.PossiblyUndecidedRule(r.Consensus.GetCurrentPosition().GetPosition())
+	if PostgresIsStandby(r.Availability) && commonconsensus.RuleNamesLeader(walRule, r.Consensus.GetId()) {
 		return true
 	}
 	ls := r.Availability.GetLeadershipStatus()
