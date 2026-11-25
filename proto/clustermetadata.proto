@@ -997,6 +997,14 @@ message AvailabilityFacts {
   // pooler alongside STANDBY means postgres was demoted after the rule was
   // written. UNKNOWN when absent, including from older poolers.
   PostgresStatus postgres_status = 1;
+
+  // Whether a Promote RPC was running on this pooler. Read together with the
+  // rule recorded by RPC (ConsensusStatus.replication_primary), before the rule
+  // in the WAL: a successful Promote writes its rule to the WAL before it ends,
+  // so a recorded rule naming this pooler that the WAL lacks, with no Promote
+  // running, was abandoned. False from older poolers, which only report
+  // PROMOTING during pg_promote.
+  bool promote_running = 2;
 }
 
 // AvailabilityIntent is what a pooler wants. Each field documents its strength:

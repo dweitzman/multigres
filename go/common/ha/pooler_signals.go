@@ -46,14 +46,20 @@ func LeaderNeedsReplacement(r PoolerReport) bool {
 // LeaderPostgresDemoted reports whether the rule in a pooler's own WAL names it
 // leader while its postgres is a standby. Only a primary can write that rule,
 // and the pooler reads it before its postgres status, so this means postgres
-// was demoted after promoting. A rule learned only by RPC (ReplicationPrimary)
-// doesn't count: Promote records it before pg_promote runs.
+// was demoted after promoting. Two cases don't count:
+//   - a rule learned only by RPC (ReplicationPrimary): Promote records it
+//     before pg_promote runs;
+//   - a rule revoked by a recruit the pooler accepted: recruiting a leader
+//     makes it a standby, and a coordinator is replacing it.
 //
 // Older poolers reported this themselves as REQUESTING_DEMOTION at their current
 // term; that is honored too until no such poolers remain.
 func LeaderPostgresDemoted(r PoolerReport) bool {
-	walRule := commonconsensus.PossiblyUndecidedRule(r.Consensus.GetCurrentPosition().GetPosition())
-	if PostgresIsStandby(r.Availability) && commonconsensus.RuleNamesLeader(walRule, r.Consensus.GetId()) {
+	walPosition := r.Consensus.GetCurrentPosition().GetPosition()
+	walRule := commonconsensus.PossiblyUndecidedRule(walPosition)
+	if PostgresIsStandby(r.Availability) &&
+		commonconsensus.RuleNamesLeader(walRule, r.Consensus.GetId()) &&
+		!commonconsensus.IsRuleRevoked(walPosition, r.Consensus.GetTermRevocation()) {
 		return true
 	}
 	ls := r.Availability.GetLeadershipStatus()
@@ -63,6 +69,47 @@ func LeaderPostgresDemoted(r PoolerReport) bool {
 	position := r.Consensus.GetCurrentPosition().GetPosition()
 	term := commonconsensus.PossiblyUndecidedRule(position).GetRuleNumber().GetCoordinatorTerm()
 	return ls.GetLeaderTerm() != 0 && ls.GetLeaderTerm() == term
+}
+
+// PromotionPhase is how far a pooler has got in becoming leader, from its own
+// report.
+type PromotionPhase int
+
+const (
+	// PromotionNone: the pooler isn't becoming leader.
+	PromotionNone PromotionPhase = iota
+	// PromotionRunning: the pooler is becoming leader and Promote is running.
+	PromotionRunning
+	// PromotionAbandoned: the pooler is becoming leader but no Promote is
+	// running, so none will finish.
+	PromotionAbandoned
+)
+
+// LeaderPromotionPhase reports whether the pooler is becoming leader: a rule
+// naming it is recorded by RPC ahead of its WAL, or proposed in its WAL but not
+// yet decided.
+func LeaderPromotionPhase(r PoolerReport) PromotionPhase {
+	self := r.Consensus.GetId()
+	walPosition := r.Consensus.GetCurrentPosition().GetPosition()
+	rpcPosition := commonconsensus.ReplicationPrimaryOrNil(r.Consensus).GetPosition()
+	recordedAhead := commonconsensus.RuleNamesLeader(commonconsensus.PossiblyUndecidedRule(rpcPosition), self) &&
+		commonconsensus.CompareRulePosition(rpcPosition, walPosition) > 0
+	proposedInWAL := !commonconsensus.IsRuleDecided(walPosition) &&
+		commonconsensus.RuleNamesLeader(walPosition.GetProposal(), self)
+	switch {
+	case !recordedAhead && !proposedInWAL:
+		return PromotionNone
+	case PromoteRunning(r.Availability):
+		return PromotionRunning
+	default:
+		return PromotionAbandoned
+	}
+}
+
+// PromoteRunning reports whether a Promote is running on the pooler. Older
+// poolers don't report it, but do report PROMOTING during pg_promote.
+func PromoteRunning(av *clustermetadatapb.AvailabilityStatus) bool {
+	return av.GetFacts().GetPromoteRunning() || PostgresIsPromoting(av)
 }
 
 // PostgresIsStandby reports whether the pooler's postgres is running as a

@@ -311,16 +311,12 @@ func (pm *MultipoolerManager) StandbyReplicationStatus(ctx context.Context) (*mu
 // database access will be nil/empty in that case. This allows callers to always get
 // initialization status without needing a separate RPC.
 func (pm *MultipoolerManager) Status(ctx context.Context) (*multipoolermanagerdatapb.StatusResponse, error) {
-	// Read the consensus position before postgres status. A rule naming this
-	// pooler is only written once its postgres is out of recovery, so a report
-	// pairing that rule with a standby postgres means a real demotion, not a
-	// promotion that finished between the two reads.
-	// Best-effort: prefer a fresh read, fall back to the cached position if
-	// postgres is unreachable.
-	consensusStatus, err := pm.consensusMgr.InconsistentConsensusStatus(ctx)
-	if err != nil {
-		consensusStatus = pm.consensusMgr.CachedConsensusStatus()
-	}
+	// Read order: the rule recorded by RPC with promote_running, then the rule in
+	// the WAL (see StatusForReport), then postgres status. A rule naming this
+	// pooler is only written to the WAL once its postgres is out of recovery, so a
+	// report pairing that rule with a standby postgres means a real demotion, not
+	// a promotion that finished between the reads.
+	consensusStatus, promoteRunning := pm.consensusMgr.StatusForReport(ctx)
 	postgresStatus := pm.getServerStatus(ctx)
 	poolerStatus := &multipoolermanagerdatapb.Status{
 		PoolerType:       poolerTypeFromRoutingRole(pm.stateManager.RoutingRole()),
@@ -359,6 +355,7 @@ func (pm *MultipoolerManager) Status(ctx context.Context) (*multipoolermanagerda
 		ConsensusStatus: consensusStatus,
 		AvailabilityStatus: pm.buildAvailabilityStatus(&clustermetadatapb.AvailabilityFacts{
 			PostgresStatus: postgresStatus,
+			PromoteRunning: promoteRunning,
 		}),
 	}
 

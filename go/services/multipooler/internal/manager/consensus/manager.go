@@ -99,13 +99,17 @@ type ConsensusManager struct {
 	// (then broadcasts are skipped — used by unit tests with no health stream).
 	broadcaster Broadcaster
 
-	// mu guards replicationPrimary and leaderObservedAt only.
+	// mu guards replicationPrimary, promoteRunning and leaderObservedAt only.
 	mu sync.Mutex
 	// replicationPrimary is held in memory only (see the ReplicationPrimary proto
 	// comment). Populated by RPCs that inform this pooler about the cluster state
 	// (SetPrimary today; Promote via the same RecordTermPrimary entry point).
 	// Restarts reset it to nil; coordinators re-inform the pooler. Guarded by mu.
 	replicationPrimary *clustermetadatapb.ReplicationPrimary
+	// promoteRunning is set while a Promote runs. It shares mu with
+	// replicationPrimary, which Promote records, so the two can be read together
+	// (see StatusForReport). Guarded by mu.
+	promoteRunning bool
 	// leaderObservedAt is when RecordTermPrimary last saw the leader ID change (a
 	// new primary was recorded). Zero until the first leader is recorded. Used to
 	// measure how long a diverged follower's pg_rewind waited for that leader to
@@ -226,7 +230,7 @@ func (cm *ConsensusManager) ConsensusStatus(ctx context.Context) (*clustermetada
 	if err != nil {
 		return nil, fmt.Errorf("failed to read current rule position: %w", err)
 	}
-	return cm.buildStatus(revocation, pos), nil
+	return cm.buildStatus(revocation, pos, cm.GetReplicationPrimary()), nil
 }
 
 // CachedConsensusStatus builds a ConsensusStatus from the in-memory term cache and
@@ -247,7 +251,7 @@ func (cm *ConsensusManager) CachedConsensusStatus() *clustermetadatapb.Consensus
 	if pos == nil {
 		return nil
 	}
-	return cm.buildStatus(cm.promises.GetInconsistentRevocation(), pos)
+	return cm.buildStatus(cm.promises.GetInconsistentRevocation(), pos, cm.GetReplicationPrimary())
 }
 
 // StartsAsPrimary reports whether postgres should be started as a primary
@@ -331,6 +335,44 @@ func staticLeaderStatus(id *clustermetadatapb.ID) *clustermetadatapb.ConsensusSt
 	}
 }
 
+// BeginPromote marks a Promote as running until the returned func is called.
+// Call it before Promote records its rule.
+func (cm *ConsensusManager) BeginPromote() (end func()) {
+	cm.setPromoteRunning(true)
+	return func() { cm.setPromoteRunning(false) }
+}
+
+func (cm *ConsensusManager) setPromoteRunning(running bool) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	cm.promoteRunning = running
+}
+
+// StatusForReport returns what InconsistentConsensusStatus would, or the cached
+// status if postgres is unreachable, and whether a Promote is running.
+//
+// It reads the rule recorded by RPC and promoteRunning together, then the rule
+// in the WAL. A successful Promote writes its rule to the WAL before it ends, so
+// a recorded rule the WAL lacks, with no Promote running, was abandoned.
+func (cm *ConsensusManager) StatusForReport(ctx context.Context) (status *clustermetadatapb.ConsensusStatus, promoteRunning bool) {
+	cm.mu.Lock()
+	rp := proto.Clone(cm.replicationPrimary).(*clustermetadatapb.ReplicationPrimary)
+	promoteRunning = cm.promoteRunning
+	cm.mu.Unlock()
+
+	pos, err := cm.rules.ObservePosition(ctx)
+	if err != nil {
+		// Fall back as CachedConsensusStatus does, keeping the snapshot above.
+		if cm.staticLeader {
+			return staticLeaderStatus(cm.id), promoteRunning
+		}
+		if pos = cm.rules.CachedPosition(); pos == nil {
+			return nil, promoteRunning
+		}
+	}
+	return cm.buildStatus(cm.promises.GetInconsistentRevocation(), pos, rp), promoteRunning
+}
+
 // InconsistentConsensusStatus builds a ConsensusStatus from a fresh postgres
 // position read without holding the action lock; it may observe partially-updated
 // state during a concurrent Recruit, so it is suitable for observability only.
@@ -340,7 +382,7 @@ func (cm *ConsensusManager) InconsistentConsensusStatus(ctx context.Context) (*c
 	if err != nil {
 		return nil, err
 	}
-	return cm.buildStatus(cm.promises.GetInconsistentRevocation(), pos), nil
+	return cm.buildStatus(cm.promises.GetInconsistentRevocation(), pos, cm.GetReplicationPrimary()), nil
 }
 
 // buildStatus assembles a ConsensusStatus from a pre-resolved revocation and
@@ -351,7 +393,7 @@ func (cm *ConsensusManager) InconsistentConsensusStatus(ctx context.Context) (*c
 // rule is the max of the observed position's rule and the rule from the most
 // recent SetPrimary/Promote RPC, and the primary is the contact info from that
 // RPC (ObservePosition cannot carry it).
-func (cm *ConsensusManager) buildStatus(revocation *clustermetadatapb.TermRevocation, pos *clustermetadatapb.PoolerPosition) *clustermetadatapb.ConsensusStatus {
+func (cm *ConsensusManager) buildStatus(revocation *clustermetadatapb.TermRevocation, pos *clustermetadatapb.PoolerPosition, rp *clustermetadatapb.ReplicationPrimary) *clustermetadatapb.ConsensusStatus {
 	status := &clustermetadatapb.ConsensusStatus{Id: cm.id}
 	if revocation != nil {
 		status.TermRevocation = revocation
@@ -359,7 +401,7 @@ func (cm *ConsensusManager) buildStatus(revocation *clustermetadatapb.TermRevoca
 	if pos != nil {
 		status.CurrentPosition = pos
 	}
-	if highest := statusReplicationPrimary(pos, cm.GetReplicationPrimary()); highest != nil {
+	if highest := statusReplicationPrimary(pos, rp); highest != nil {
 		status.ReplicationPrimary = highest
 	}
 	if floor := cm.recruitPositionFloorIfOutstanding(pos); floor != nil {

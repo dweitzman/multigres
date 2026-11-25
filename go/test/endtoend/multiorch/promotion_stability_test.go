@@ -15,6 +15,7 @@
 package multiorch
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -23,6 +24,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	commonconsensus "github.com/multigres/multigres/go/common/consensus"
+	"github.com/multigres/multigres/go/common/faultinject"
+	"github.com/multigres/multigres/go/common/ha"
 	"github.com/multigres/multigres/go/test/endtoend/shardsetup"
 	"github.com/multigres/multigres/go/test/utils"
 
@@ -215,4 +219,181 @@ func TestPromotingStatusClearedOnlyWhenReady(t *testing.T) {
 		return false
 	}, 30*time.Second, 200*time.Millisecond,
 		"new primary should leave PROMOTING state within 30s")
+}
+
+// TestPromotionHeldBeforePgPromoteIsNotInterrupted holds the new leader's
+// Promote after it records the proposed rule but before pg_promote: it believes
+// it leads while its postgres is still a standby. No coordinator may take that
+// for a demoted leader and recruit over it, so the promotion that started must
+// be the one that finishes, at the same term.
+func TestPromotionHeldBeforePgPromoteIsNotInterrupted(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping TestPromotionHeldBeforePgPromoteIsNotInterrupted in short mode")
+	}
+	if utils.ShouldSkipRealPostgres() {
+		t.Skip("skipping: no real postgres binaries available")
+	}
+
+	// Two coordinators, so one can act while the other's Promote is held.
+	setup, cleanup := shardsetup.NewIsolated(t,
+		shardsetup.WithMultipoolerCount(3),
+		shardsetup.WithMultiorchCount(2),
+	)
+	defer cleanup()
+	setup.StartMultiorchs(t.Context(), t)
+
+	oldPrimaryName := setup.PrimaryName
+	primary := setup.GetPrimary(t)
+	require.NotNil(t, primary)
+
+	// Hold well past failure detection, within the AppointLeader action timeout.
+	const hold = 20 * time.Second
+	var standbys []*shardsetup.MultipoolerInstance
+	for name, inst := range setup.Multipoolers {
+		if name == oldPrimaryName {
+			continue
+		}
+		standbys = append(standbys, inst)
+		setup.SetFaults(t, name, fmt.Sprintf("%s delay=%s", faultinject.PromoteBeforePgPromote, hold))
+	}
+	t.Cleanup(func() {
+		for _, inst := range standbys {
+			setup.SetFaults(t, inst.Name, "")
+		}
+	})
+
+	// See TestPromotionAppointsExactlyOneLeader for why restarts are disabled.
+	setPostgresRestartsEnabled(t, primary, false)
+	setup.KillPostgres(t, oldPrimaryName)
+
+	// Catch a standby mid-promotion: it names itself leader, its postgres is a standby.
+	var promoting *shardsetup.MultipoolerInstance
+	var promotingTerm int64
+	require.Eventually(t, func() bool {
+		for _, inst := range standbys {
+			client, err := shardsetup.NewMultipoolerClient(inst.Multipooler.GrpcPort)
+			if err != nil {
+				continue
+			}
+			resp, err := client.Manager.Status(utils.WithShortDeadline(t), &multipoolermanagerdatapb.StatusRequest{})
+			client.Close()
+			if err != nil {
+				continue
+			}
+			cs := resp.GetConsensusStatus()
+			if commonconsensus.SelfConsensusRole(cs) == commonconsensus.ConsensusRoleLeader &&
+				resp.GetAvailabilityStatus().GetFacts().GetPostgresStatus() == clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STANDBY {
+				promoting = inst
+				rule := commonconsensus.HighestIntendedRule([]*clustermetadatapb.ConsensusStatus{cs})
+				promotingTerm = commonconsensus.PossiblyUndecidedRule(rule).GetRuleNumber().GetCoordinatorTerm()
+				return true
+			}
+		}
+		return false
+	}, 30*time.Second, 100*time.Millisecond, "a standby should be held mid-promotion")
+	t.Logf("%s is held mid-promotion at term %d", promoting.Name, promotingTerm)
+
+	newPrimaryName := shardsetup.WaitForNewPrimary(t, setup, oldPrimaryName, hold+30*time.Second)
+	assert.Equal(t, promoting.Name, newPrimaryName, "the held promotion should finish")
+
+	client, err := shardsetup.NewMultipoolerClient(setup.GetMultipoolerInstance(newPrimaryName).Multipooler.GrpcPort)
+	require.NoError(t, err)
+	defer client.Close()
+	resp, err := client.Manager.Status(utils.WithShortDeadline(t), &multipoolermanagerdatapb.StatusRequest{})
+	require.NoError(t, err)
+	assert.Equal(t, promotingTerm, leaderTerm(resp.GetConsensusStatus()),
+		"no coordinator should recruit over the held promotion")
+
+	setPostgresRestartsEnabled(t, primary, true)
+}
+
+// setPostgresRestartsEnabled turns the pooler's automatic postgres restarts on or off.
+func setPostgresRestartsEnabled(t *testing.T, inst *shardsetup.MultipoolerInstance, enabled bool) {
+	t.Helper()
+	client, err := shardsetup.NewMultipoolerClient(inst.Multipooler.GrpcPort)
+	require.NoError(t, err)
+	defer client.Close()
+	_, err = client.Manager.SetPostgresRestartsEnabled(utils.WithShortDeadline(t),
+		&multipoolermanagerdatapb.SetPostgresRestartsEnabledRequest{Enabled: enabled})
+	require.NoError(t, err)
+}
+
+// TestPromotionFailedAfterPgPromoteIsReplaced fails the new leader's Promote
+// after pg_promote but before its rule is written: postgres is a primary, its
+// WAL still names the old leader, and no Promote will finish. Multiorch must
+// treat that as an abandoned promotion and appoint a leader at a higher term.
+func TestPromotionFailedAfterPgPromoteIsReplaced(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping TestPromotionFailedAfterPgPromoteIsReplaced in short mode")
+	}
+	if utils.ShouldSkipRealPostgres() {
+		t.Skip("skipping: no real postgres binaries available")
+	}
+
+	setup, cleanup := shardsetup.NewIsolated(t,
+		shardsetup.WithMultipoolerCount(3),
+		shardsetup.WithMultiorchCount(1),
+	)
+	defer cleanup()
+	setup.StartMultiorchs(t.Context(), t)
+
+	oldPrimaryName := setup.PrimaryName
+	primary := setup.GetPrimary(t)
+	require.NotNil(t, primary)
+
+	var standbys []*shardsetup.MultipoolerInstance
+	for name, inst := range setup.Multipoolers {
+		if name == oldPrimaryName {
+			continue
+		}
+		standbys = append(standbys, inst)
+		setup.SetFaults(t, name, fmt.Sprintf("%s fail", faultinject.PromoteAfterPgPromote))
+	}
+	clearFaults := func() {
+		for _, inst := range standbys {
+			setup.SetFaults(t, inst.Name, "")
+		}
+	}
+	t.Cleanup(clearFaults)
+
+	setPostgresRestartsEnabled(t, primary, false)
+	setup.KillPostgres(t, oldPrimaryName)
+
+	// Wait for a standby left with an abandoned promotion.
+	var abandoned *shardsetup.MultipoolerInstance
+	var abandonedTerm int64
+	require.Eventually(t, func() bool {
+		for _, inst := range standbys {
+			client, err := shardsetup.NewMultipoolerClient(inst.Multipooler.GrpcPort)
+			if err != nil {
+				continue
+			}
+			resp, err := client.Manager.Status(utils.WithShortDeadline(t), &multipoolermanagerdatapb.StatusRequest{})
+			client.Close()
+			if err != nil {
+				continue
+			}
+			report := ha.PoolerReport{Consensus: resp.GetConsensusStatus(), Availability: resp.GetAvailabilityStatus()}
+			if ha.LeaderPromotionPhase(report) == ha.PromotionAbandoned {
+				abandoned = inst
+				rule := commonconsensus.HighestIntendedRule([]*clustermetadatapb.ConsensusStatus{resp.GetConsensusStatus()})
+				abandonedTerm = commonconsensus.PossiblyUndecidedRule(rule).GetRuleNumber().GetCoordinatorTerm()
+				return true
+			}
+		}
+		return false
+	}, 30*time.Second, 100*time.Millisecond, "a standby's promotion should fail after pg_promote")
+	t.Logf("%s abandoned its promotion at term %d", abandoned.Name, abandonedTerm)
+	clearFaults()
+
+	newPrimaryName := shardsetup.WaitForNewPrimary(t, setup, oldPrimaryName, 60*time.Second)
+	client, err := shardsetup.NewMultipoolerClient(setup.GetMultipoolerInstance(newPrimaryName).Multipooler.GrpcPort)
+	require.NoError(t, err)
+	defer client.Close()
+	require.Eventually(t, func() bool {
+		resp, err := client.Manager.Status(utils.WithShortDeadline(t), &multipoolermanagerdatapb.StatusRequest{})
+		return err == nil && leaderTerm(resp.GetConsensusStatus()) > abandonedTerm
+	}, 60*time.Second, 500*time.Millisecond, "a leader should be appointed above the abandoned term %d", abandonedTerm)
+
+	setPostgresRestartsEnabled(t, primary, true)
 }

@@ -17,6 +17,7 @@ package analysis
 import (
 	"time"
 
+	"github.com/multigres/multigres/go/common/timeouts"
 	"github.com/multigres/multigres/go/services/multiorch/config"
 	"github.com/multigres/multigres/go/services/multiorch/consensus"
 	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
@@ -32,10 +33,12 @@ func NewAvailabilityPolicy(cfg *config.Config) snapshot.AvailabilityPolicy {
 		FollowerStreamFreshness:         15 * time.Second,
 		LeaderChangeFreshness:           snapshot.DefaultLeaderWriteFreshness,
 		ConnectReplicasToNewLeaderGrace: 10 * time.Second,
-		ObservationFreshness:            snapshot.DefaultObservationFreshness,
-		QuorumCommitStaleAfter:          consensus.DefaultQuorumCommitStaleAfter,
-		PreRecheckRefreshTimeout:        5 * time.Second,
-		RecruitAbandonedAfter:           12 * time.Second,
+		// Longer than the appoint-leader action's own timeout, which bounds Promote.
+		PromoteRunningGrace:      2*timeouts.RuleWriteTimeout + 15*time.Second,
+		ObservationFreshness:     snapshot.DefaultObservationFreshness,
+		QuorumCommitStaleAfter:   consensus.DefaultQuorumCommitStaleAfter,
+		PreRecheckRefreshTimeout: 5 * time.Second,
+		RecruitAbandonedAfter:    12 * time.Second,
 	}
 	if cfg != nil {
 		p.LeaderPostgresResponseThreshold = cfg.GetLeaderPostgresResponseThreshold()

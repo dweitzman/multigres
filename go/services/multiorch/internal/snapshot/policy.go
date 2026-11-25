@@ -65,6 +65,11 @@ type AvailabilityPolicy struct {
 	// honoring the claim and let normal detection fail it over.
 	ConnectReplicasToNewLeaderGrace time.Duration
 
+	// PromoteRunningGrace bounds, by rule age, how long we hold off failover for a
+	// leader whose Promote is still running. A running Promote ends when its
+	// coordinator's deadline does, so this only matters if one hangs past that.
+	PromoteRunningGrace time.Duration
+
 	// ObservationFreshness bounds how stale a pooler's health snapshot may be
 	// before it stops counting as a trustworthy fact at all. It's the default
 	// tolerance for decisions that aren't specifically about leader liveness

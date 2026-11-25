@@ -452,6 +452,7 @@ func (pm *MultipoolerManager) Promote(ctx context.Context, req *consensusdatapb.
 		return nil, err
 	}
 	defer pm.actionLock.Release(ctx)
+	defer pm.consensusMgr.BeginPromote()()
 
 	proposal := req.GetProposal()
 	if proposal == nil {

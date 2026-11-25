@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 )
@@ -286,4 +287,67 @@ func TestPrefersNotToLead(t *testing.T) {
 			LeadershipPreference: clustermetadatapb.LeadershipPreference_LEADERSHIP_PREFERENCE_PREFER_NOT,
 		},
 	}))
+}
+
+func TestLeaderPostgresDemoted_RecruitedLeaderIsNotDemoted(t *testing.T) {
+	// Recruiting the leader makes its postgres a standby while a coordinator
+	// replaces it; that is expected, not a demotion.
+	p := poolerWithLeaderTerm(t, 5)
+	p.Availability = &clustermetadatapb.AvailabilityStatus{
+		Facts: &clustermetadatapb.AvailabilityFacts{PostgresStatus: clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STANDBY},
+	}
+	require.True(t, LeaderPostgresDemoted(*p), "precondition: demoted before the recruit")
+
+	p.Consensus.TermRevocation = &clustermetadatapb.TermRevocation{
+		RevokedBelowTerm: 6,
+		OutgoingRule:     &clustermetadatapb.RuleNumber{CoordinatorTerm: 5},
+	}
+	assert.False(t, LeaderPostgresDemoted(*p))
+}
+
+func TestLeaderPromotionPhase(t *testing.T) {
+	self := &clustermetadatapb.ID{Name: "mp1"}
+	other := &clustermetadatapb.ID{Name: "mp2"}
+	rule := func(term int64, leader *clustermetadatapb.ID) *clustermetadatapb.ShardRule {
+		return &clustermetadatapb.ShardRule{LeaderId: leader, RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: term}}
+	}
+	report := func(wal, rpc *clustermetadatapb.RulePosition, promoteRunning bool) PoolerReport {
+		cs := &clustermetadatapb.ConsensusStatus{Id: self, CurrentPosition: &clustermetadatapb.PoolerPosition{Position: wal}}
+		if rpc != nil {
+			cs.ReplicationPrimary = &clustermetadatapb.ReplicationPrimary{Position: rpc}
+		}
+		return PoolerReport{
+			Consensus:    cs,
+			Availability: &clustermetadatapb.AvailabilityStatus{Facts: &clustermetadatapb.AvailabilityFacts{PromoteRunning: promoteRunning}},
+		}
+	}
+	oldRule := &clustermetadatapb.RulePosition{Decision: rule(5, other)}
+	// As the coordinator sends it: the outgoing decision plus the new proposal.
+	toldToLead := &clustermetadatapb.RulePosition{Decision: rule(5, other), Proposal: rule(6, self)}
+
+	tests := []struct {
+		name string
+		r    PoolerReport
+		want PromotionPhase
+	}{
+		{"nothing reported", PoolerReport{}, PromotionNone},
+		{"follower", report(oldRule, nil, false), PromotionNone},
+		{"told to lead, Promote running", report(oldRule, toldToLead, true), PromotionRunning},
+		{"told to lead, no Promote running", report(oldRule, toldToLead, false), PromotionAbandoned},
+		{"re-promoted at a higher term", report(&clustermetadatapb.RulePosition{Decision: rule(5, self)}, &clustermetadatapb.RulePosition{Decision: rule(5, self), Proposal: rule(6, self)}, true), PromotionRunning},
+		{"proposal in its WAL, Promote running", report(toldToLead, toldToLead, true), PromotionRunning},
+		{"proposal in its WAL, no Promote running", report(toldToLead, toldToLead, false), PromotionAbandoned},
+		{"decided in its WAL", report(&clustermetadatapb.RulePosition{Decision: rule(6, self)}, &clustermetadatapb.RulePosition{Decision: rule(6, self)}, false), PromotionNone},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, LeaderPromotionPhase(tc.r))
+		})
+	}
+
+	t.Run("older poolers count PROMOTING as running", func(t *testing.T) {
+		r := report(oldRule, toldToLead, false)
+		r.Availability.Facts.PostgresStatus = clustermetadatapb.PostgresStatus_POSTGRES_STATUS_PROMOTING
+		assert.Equal(t, PromotionRunning, LeaderPromotionPhase(r))
+	})
 }

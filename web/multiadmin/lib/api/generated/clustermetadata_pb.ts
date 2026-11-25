@@ -2821,6 +2821,18 @@ export class AvailabilityFacts extends Message<AvailabilityFacts> {
    */
   postgresStatus = PostgresStatus.UNKNOWN;
 
+  /**
+   * Whether a Promote RPC was running on this pooler. Read together with the
+   * rule recorded by RPC (ConsensusStatus.replication_primary), before the rule
+   * in the WAL: a successful Promote writes its rule to the WAL before it ends,
+   * so a recorded rule naming this pooler that the WAL lacks, with no Promote
+   * running, was abandoned. False from older poolers, which only report
+   * PROMOTING during pg_promote.
+   *
+   * @generated from field: bool promote_running = 2;
+   */
+  promoteRunning = false;
+
   constructor(data?: PartialMessage<AvailabilityFacts>) {
     super();
     proto3.util.initPartial(data, this);
@@ -2830,6 +2842,7 @@ export class AvailabilityFacts extends Message<AvailabilityFacts> {
   static readonly typeName = "clustermetadata.AvailabilityFacts";
   static readonly fields: FieldList = proto3.util.newFieldList(() => [
     { no: 1, name: "postgres_status", kind: "enum", T: proto3.getEnumType(PostgresStatus) },
+    { no: 2, name: "promote_running", kind: "scalar", T: 8 /* ScalarType.BOOL */ },
   ]);
 
   static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): AvailabilityFacts {

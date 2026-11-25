@@ -201,10 +201,10 @@ func intendedLeaderLastPostgresReadyTime(sa *snapshot.Shard) time.Time {
 	return time.Time{}
 }
 
-// intendedLeaderPromoting reports whether the leader's last snapshot shows pg_promote()
-// in progress (postgres in the PROMOTING state).
-func intendedLeaderPromoting(sa *snapshot.Shard) bool {
-	return ha.PostgresIsPromoting(sa.IntendedLeaderHealth().GetAvailabilityStatus())
+// intendedLeaderPromotionPhase reports how far the leader has got in becoming
+// leader, from its last snapshot (see ha.LeaderPromotionPhase).
+func intendedLeaderPromotionPhase(sa *snapshot.Shard) ha.PromotionPhase {
+	return ha.LeaderPromotionPhase(types.HAReport(sa.IntendedLeaderHealth()))
 }
 
 // intendedLeaderInRecovery reports whether the leader's last snapshot shows its postgres
@@ -225,26 +225,21 @@ func intendedLeaderInRecovery(sa *snapshot.Shard) bool {
 	return ha.PostgresIsStandby(sa.IntendedLeaderHealth().GetAvailabilityStatus())
 }
 
-// inPromotionGrace reports whether failover should be briefly suppressed because
-// the leader is mid-promotion: a freshly-created leadership rule needs a moment
-// for followers to reconnect and start streaming before "are followers vouching?"
-// is meaningful. The grace holds while the leader reports promoting (postgres
-// still running) AND the rule is younger than ConnectReplicasToNewLeaderGrace. The
-// rule-age bound is the point — a leader that claims to be promoting forever but
-// never gains followers cannot make progress, so once the grace lapses we stop
-// honoring the claim and let normal detection fail it over.
-//
-// TODO: remove the PROMOTING-status coupling entirely — have promoteLocked
-// RecordTermPrimary the proposed rule *before* WAL catch-up, so orch reads the
-// pooler self-asserting leadership and suppresses without a PROMOTING flag; the
-// postgres monitor self-resigns if the promotion turns out unbacked/stuck (rule
-// absent → resign → LeaderUnspecified → re-recruit). Event-driven; the north star.
+// inPromotionGrace reports whether failover should be held off because the live
+// leader's Promote is still running (see ha.LeaderPromotionPhase). Postgres may
+// be a standby until pg_promote, and the rule waits on followers' acks after.
+// Bounded by rule age, so a Promote that hangs is still replaced. A postgres
+// demoted after its rule reached the WAL is not held.
 func inPromotionGrace(sa *snapshot.Shard) bool {
-	if !intendedLeaderPromoting(sa) || !intendedLeaderObservedLive(sa) || !intendedLeaderPostgresRunning(sa) {
+	if !intendedLeaderObservedLive(sa) || !intendedLeaderPostgresRunning(sa) {
+		return false
+	}
+	report := types.HAReport(sa.IntendedLeaderHealth())
+	if ha.LeaderPromotionPhase(report) != ha.PromotionRunning || ha.LeaderPostgresDemoted(report) {
 		return false
 	}
 	ruleAge := sa.Now.Sub(sa.HighestIntendedRule().PossiblyUndecidedRule().GetCreationTime().AsTime())
-	return ruleAge < sa.AvailabilityPolicy.ConnectReplicasToNewLeaderGrace
+	return ruleAge < sa.AvailabilityPolicy.PromoteRunningGrace
 }
 
 func (a *LeaderNeedsReplacementAnalyzer) Analyze(sa *snapshot.Shard) ([]types.Problem, error) {
@@ -450,6 +445,13 @@ func (a *LeaderNeedsReplacementAnalyzer) leaderReplacementCause(
 	if intendedLeaderNeedsReplacement(sa) || intendedLeaderShutdownTombstoned(sa, leaderID) {
 		return types.ProblemLeaderResigned,
 			fmt.Sprintf("Leader for shard %s is stepping down", sa.ShardRef), false
+	}
+
+	// A promotion no Promote is still running will never finish, whatever postgres
+	// reports. Not conclusive: a fresh report may show it retried or completed.
+	if leaderLive && intendedLeaderPromotionPhase(sa) == ha.PromotionAbandoned {
+		return types.ProblemLeaderUnhealthy,
+			fmt.Sprintf("Leader for shard %s was told to lead but its promotion stopped before finishing", sa.ShardRef), false
 	}
 
 	// A live leader whose postgres is in recovery (a STANDBY) cannot accept writes:

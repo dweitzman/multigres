@@ -201,8 +201,29 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		}
 		h.AvailabilityStatus.Facts = &clustermetadatapb.AvailabilityFacts{PostgresStatus: st}
 	}
+	// setLeaderToldToLead models a leader Promote has told about the intended rule
+	// by RPC, before the rule reaches its WAL; running says whether that Promote
+	// is still running.
+	setLeaderToldToLead := func(sa *snapshot.Shard, running bool) {
+		h := sa.IntendedLeaderHealth()
+		h.ConsensusStatus = &clustermetadatapb.ConsensusStatus{
+			Id: leaderID,
+			ReplicationPrimary: &clustermetadatapb.ReplicationPrimary{
+				Position: proto.Clone(sa.HighestIntendedRule().Position()).(*clustermetadatapb.RulePosition),
+			},
+		}
+		if h.AvailabilityStatus == nil {
+			h.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{}
+		}
+		if h.AvailabilityStatus.Facts == nil {
+			h.AvailabilityStatus.Facts = &clustermetadatapb.AvailabilityFacts{}
+		}
+		h.AvailabilityStatus.Facts.PromoteRunning = running
+	}
+	// setLeaderPromoting models pg_promote running inside Promote.
 	setLeaderPromoting := func(sa *snapshot.Shard) {
 		setLeaderPostgresStatus(sa, clustermetadatapb.PostgresStatus_POSTGRES_STATUS_PROMOTING)
+		setLeaderToldToLead(sa, true)
 	}
 
 	// setLeaderPGStandby marks the leader's postgres as genuinely in recovery (a
@@ -1175,6 +1196,40 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 		require.Equal(t, types.ProblemLeaderPromotionInProgress, problems[0].Code)
 		require.Equal(t, types.ScopePooler, problems[0].Scope)
 		require.Equal(t, actions.AlertOnlyActionName, problems[0].RecoveryAction.Metadata().Name, "must never trigger a recovery")
+	})
+
+	t.Run("suppresses failover while Promote runs before pg_promote", func(t *testing.T) {
+		// The leader believes it leads but its postgres is still a standby.
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
+			setRuleCreatedNow(sa)
+			setLeaderLive(sa, true)
+			setLeaderPGRunning(sa, true)
+			setLeaderPGReady(sa, true)
+			setLeaderPGStandby(sa)
+			setLeaderToldToLead(sa, true)
+		})
+
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		require.Len(t, problems, 1)
+		require.Equal(t, types.ProblemLeaderPromotionInProgress, problems[0].Code)
+	})
+
+	t.Run("replaces a leader whose Promote stopped before finishing", func(t *testing.T) {
+		sa := deadLeaderShard(func(sa *snapshot.Shard) {
+			setRuleCreatedNow(sa)
+			setLeaderLive(sa, true)
+			setLeaderPGRunning(sa, true)
+			setLeaderPGReady(sa, true)
+			setLeaderPostgresStatus(sa, clustermetadatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY)
+			setLeaderToldToLead(sa, false)
+		})
+
+		problems, err := analyzer.Analyze(sa)
+		require.NoError(t, err)
+		require.Len(t, problems, 1)
+		require.Equal(t, types.ProblemLeaderUnhealthy, problems[0].Code)
+		require.Contains(t, problems[0].Description, "promotion stopped before finishing")
 	})
 
 	t.Run("does not suppress a promotion that has outlasted the grace window", func(t *testing.T) {

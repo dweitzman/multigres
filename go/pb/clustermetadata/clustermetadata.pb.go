@@ -3292,6 +3292,13 @@ type AvailabilityFacts struct {
 	// pooler alongside STANDBY means postgres was demoted after the rule was
 	// written. UNKNOWN when absent, including from older poolers.
 	PostgresStatus PostgresStatus `protobuf:"varint,1,opt,name=postgres_status,json=postgresStatus,proto3,enum=clustermetadata.PostgresStatus" json:"postgres_status,omitempty"`
+	// Whether a Promote RPC was running on this pooler. Read together with the
+	// rule recorded by RPC (ConsensusStatus.replication_primary), before the rule
+	// in the WAL: a successful Promote writes its rule to the WAL before it ends,
+	// so a recorded rule naming this pooler that the WAL lacks, with no Promote
+	// running, was abandoned. False from older poolers, which only report
+	// PROMOTING during pg_promote.
+	PromoteRunning bool `protobuf:"varint,2,opt,name=promote_running,json=promoteRunning,proto3" json:"promote_running,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -3331,6 +3338,13 @@ func (x *AvailabilityFacts) GetPostgresStatus() PostgresStatus {
 		return x.PostgresStatus
 	}
 	return PostgresStatus_POSTGRES_STATUS_UNKNOWN
+}
+
+func (x *AvailabilityFacts) GetPromoteRunning() bool {
+	if x != nil {
+		return x.PromoteRunning
+	}
+	return false
 }
 
 // AvailabilityIntent is what a pooler wants. Each field documents its strength:
@@ -3609,9 +3623,10 @@ const file_clustermetadata_proto_rawDesc = "" +
 	"\x19cohort_eligibility_status\x18\x02 \x01(\v2(.clustermetadata.CohortEligibilityStatusR\x17cohortEligibilityStatus\x121\n" +
 	"\x14suspected_divergence\x18\x03 \x01(\bR\x13suspectedDivergence\x128\n" +
 	"\x05facts\x18\x04 \x01(\v2\".clustermetadata.AvailabilityFactsR\x05facts\x12;\n" +
-	"\x06intent\x18\x05 \x01(\v2#.clustermetadata.AvailabilityIntentR\x06intent\"]\n" +
+	"\x06intent\x18\x05 \x01(\v2#.clustermetadata.AvailabilityIntentR\x06intent\"\x86\x01\n" +
 	"\x11AvailabilityFacts\x12H\n" +
-	"\x0fpostgres_status\x18\x01 \x01(\x0e2\x1f.clustermetadata.PostgresStatusR\x0epostgresStatus\"p\n" +
+	"\x0fpostgres_status\x18\x01 \x01(\x0e2\x1f.clustermetadata.PostgresStatusR\x0epostgresStatus\x12'\n" +
+	"\x0fpromote_running\x18\x02 \x01(\bR\x0epromoteRunning\"p\n" +
 	"\x12AvailabilityIntent\x12Z\n" +
 	"\x15leadership_preference\x18\x01 \x01(\x0e2%.clustermetadata.LeadershipPreferenceR\x14leadershipPreference\"[\n" +
 	"\x17CohortEligibilityStatus\x12@\n" +

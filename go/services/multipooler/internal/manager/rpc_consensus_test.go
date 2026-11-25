@@ -1154,19 +1154,23 @@ func TestPromote_ReportNeverReadsAsDemotedLeader(t *testing.T) {
 				OutgoingRule:           &clustermetadatapb.RuleNumber{CoordinatorTerm: 0, LeaderSubterm: 1},
 			},
 			ProposalLeader: &clustermetadatapb.PoolerAddress{Id: selfID, Host: "pg-primary.internal", PostgresPort: 5432},
-			ProposedTransition: &clustermetadatapb.RulePosition{Proposal: &clustermetadatapb.ShardRule{
-				RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 7},
-				LeaderId:      selfID, // as the coordinator sets it
-				CohortMembers: []*clustermetadatapb.ID{selfID, otherPooler},
-				CoordinatorId: coordinator,
-				CreationTime:  ruleCreatedTS,
-			}},
+			ProposedTransition: &clustermetadatapb.RulePosition{
+				Decision: &clustermetadatapb.ShardRule{LeaderId: otherPooler, RuleNumber: &clustermetadatapb.RuleNumber{LeaderSubterm: 1}},
+				Proposal: &clustermetadatapb.ShardRule{
+					RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 7},
+					LeaderId:      selfID, // as the coordinator sets it
+					CohortMembers: []*clustermetadatapb.ID{selfID, otherPooler},
+					CoordinatorId: coordinator,
+					CreationTime:  ruleCreatedTS,
+				},
+			},
 		},
 	}
 	// The outgoing rule names the other pooler, as in a failover.
 	outgoing := func() *clustermetadatapb.PoolerPosition {
 		pos := makeRulePosition(0)
 		pos.Position.Decision.LeaderId = otherPooler
+		pos.Position.Decision.RuleNumber.LeaderSubterm = 1 // matches the revocation's outgoing rule
 		return pos
 	}
 
@@ -1181,11 +1185,10 @@ func TestPromote_ReportNeverReadsAsDemotedLeader(t *testing.T) {
 	}
 	// report builds what Status() publishes, given the postgres status at this step.
 	report := func(t *testing.T, ctx context.Context, pm *MultipoolerManager, pg clustermetadatapb.PostgresStatus) ha.PoolerReport {
-		cs, err := pm.consensusMgr.InconsistentConsensusStatus(ctx)
-		require.NoError(t, err)
+		cs, promoteRunning := pm.consensusMgr.StatusForReport(ctx)
 		return ha.PoolerReport{
 			Consensus:    cs,
-			Availability: pm.buildAvailabilityStatus(&clustermetadatapb.AvailabilityFacts{PostgresStatus: pg}),
+			Availability: pm.buildAvailabilityStatus(&clustermetadatapb.AvailabilityFacts{PostgresStatus: pg, PromoteRunning: promoteRunning}),
 		}
 	}
 	standby := clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STANDBY
@@ -1203,10 +1206,13 @@ func TestPromote_ReportNeverReadsAsDemotedLeader(t *testing.T) {
 			require.Equal(t, commonconsensus.ConsensusRoleLeader, commonconsensus.SelfConsensusRole(r.Consensus),
 				"precondition: the pooler already believes it leads")
 			assert.False(t, ha.LeaderNeedsReplacement(r), "before pg_promote")
+			assert.Equal(t, ha.PromotionRunning, ha.LeaderPromotionPhase(r), "before pg_promote")
 		}
 		rs.afterPromotionHook = func(ctx context.Context) {
 			sawAfter = true
-			assert.False(t, ha.LeaderNeedsReplacement(report(t, ctx, pm, primary)), "after pg_promote, before the rule write")
+			r := report(t, ctx, pm, primary)
+			assert.False(t, ha.LeaderNeedsReplacement(r), "after pg_promote, before the rule write")
+			assert.Equal(t, ha.PromotionRunning, ha.LeaderPromotionPhase(r), "after pg_promote, before the rule write")
 		}
 
 		_, err := pm.Promote(t.Context(), req)
@@ -1214,6 +1220,7 @@ func TestPromote_ReportNeverReadsAsDemotedLeader(t *testing.T) {
 		require.True(t, sawBefore && sawAfter, "both promotion hooks should run")
 
 		assert.False(t, ha.LeaderNeedsReplacement(report(t, t.Context(), pm, primary)), "promoted")
+		assert.Equal(t, ha.PromotionNone, ha.LeaderPromotionPhase(report(t, t.Context(), pm, primary)), "promoted")
 		// Control: once the rule is in its WAL, a standby postgres is a real demotion.
 		assert.True(t, ha.LeaderNeedsReplacement(report(t, t.Context(), pm, standby)), "demoted after promoting")
 	})
@@ -1227,8 +1234,11 @@ func TestPromote_ReportNeverReadsAsDemotedLeader(t *testing.T) {
 		})
 		_, err := pm.Promote(t.Context(), req)
 		require.ErrorContains(t, err, "promote failed: could not write rule")
-		// Left to multiorch's leader-in-recovery check, which refreshes before acting.
-		assert.False(t, ha.LeaderNeedsReplacement(report(t, t.Context(), pm, standby)))
+		// Not a demotion: multiorch sees an abandoned promotion and replaces it
+		// after a refresh.
+		r := report(t, t.Context(), pm, standby)
+		assert.False(t, ha.LeaderNeedsReplacement(r))
+		assert.Equal(t, ha.PromotionAbandoned, ha.LeaderPromotionPhase(r))
 	})
 }
 

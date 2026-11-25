@@ -42,6 +42,27 @@ deliberate:
 - Keep a field's name and type in a copy only if the meaning is identical. If
   decision logic needs a different meaning, give it a different name.
 
+## Read order
+
+Some conclusions depend on the order in which the pooler reads its state when
+it builds a report. `Status()` reads:
+
+1. The rule recorded by RPC (`ConsensusStatus.replication_primary`) and
+   `facts.promote_running`, together.
+2. The rule in the pooler's WAL (`ConsensusStatus.current_position`).
+3. Postgres status.
+
+That order supports two conclusions:
+
+- **Demoted:** the WAL rule names the pooler leader, but postgres is a standby.
+  Only a primary can write that rule, so postgres was demoted after promoting.
+- **Abandoned promotion:** the recorded rule names the pooler, the WAL lacks
+  it, and no Promote is running. A successful Promote writes its rule to the
+  WAL before it ends, so this one never finished.
+
+A change to the order, or a new conclusion that depends on it, needs the same
+kind of argument.
+
 ## Adding a signal
 
 1. **Check a decision reads it.** If only dashboards or logs need it, it goes in
@@ -70,6 +91,10 @@ either side older.
   reads it.
 - **Retiring a signal:** stop reading it in multiorch first. Poolers stop
   publishing it in a later release.
+
+`promote_running` bends the zero-value rule: older poolers leave it false, so
+before pg_promote their promotions read as abandoned. Multiorch then acts as it
+did before the fact existed, and counts PROMOTING as running.
 
 ## Migration targets
 
