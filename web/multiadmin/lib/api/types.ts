@@ -18,6 +18,7 @@ export {
   ID_ComponentType,
   PoolerType,
   PoolerServingStatus,
+  PostgresStatus,
 } from "./generated/clustermetadata_pb";
 
 // Gateway diagnostics types
@@ -37,7 +38,6 @@ export type {
   PrimaryConnInfo,
 } from "./generated/multipoolermanagerdata_pb";
 export {
-  PostgresStatus,
   PostgresAction,
   SynchronousCommitLevel,
   SynchronousMethod,

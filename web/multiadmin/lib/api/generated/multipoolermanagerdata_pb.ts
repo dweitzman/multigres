@@ -19,60 +19,8 @@
 
 import type { BinaryReadOptions, FieldList, JsonReadOptions, JsonValue, PartialMessage, PlainMessage } from "@bufbuild/protobuf";
 import { Duration, Message, proto3, protoInt64, Timestamp } from "@bufbuild/protobuf";
-import { AvailabilityStatus, ConsensusStatus, ID, PoolerPosition, PoolerType, RoutingRole, RuleNumber } from "./clustermetadata_pb";
+import { AvailabilityStatus, ConsensusStatus, ID, PoolerPosition, PoolerType, PostgresStatus, RoutingRole, RuleNumber } from "./clustermetadata_pb";
 import { Snapshot, TableGroupState } from "./shardingcatalog_pb";
-
-/**
- * PostgresStatus is the observed state of the PostgreSQL server process.
- * This reflects what postgres actually is right now and may differ from
- * PoolerType during transitions (e.g. a REPLICA pooler in PROMOTING state).
- *
- * @generated from enum multipoolermanagerdata.PostgresStatus
- */
-export enum PostgresStatus {
-  /**
-   * Cannot determine state: no data directory, process dead, or pgctld unreachable.
-   *
-   * @generated from enum value: POSTGRES_STATUS_UNKNOWN = 0;
-   */
-  UNKNOWN = 0,
-
-  /**
-   * Process is alive but not yet accepting connections (startup in progress).
-   *
-   * @generated from enum value: POSTGRES_STATUS_STARTING = 1;
-   */
-  STARTING = 1,
-
-  /**
-   * pg_is_in_recovery() = true; replicating from primary.
-   *
-   * @generated from enum value: POSTGRES_STATUS_STANDBY = 2;
-   */
-  STANDBY = 2,
-
-  /**
-   * pg_promote() has been issued; postgres has not yet transitioned to primary mode.
-   *
-   * @generated from enum value: POSTGRES_STATUS_PROMOTING = 3;
-   */
-  PROMOTING = 3,
-
-  /**
-   * pg_is_in_recovery() = false; accepting read-write connections.
-   *
-   * @generated from enum value: POSTGRES_STATUS_PRIMARY = 4;
-   */
-  PRIMARY = 4,
-}
-// Retrieve enum metadata with: proto3.getEnumType(PostgresStatus)
-proto3.util.setEnumType(PostgresStatus, "multipoolermanagerdata.PostgresStatus", [
-  { no: 0, name: "POSTGRES_STATUS_UNKNOWN" },
-  { no: 1, name: "POSTGRES_STATUS_STARTING" },
-  { no: 2, name: "POSTGRES_STATUS_STANDBY" },
-  { no: 3, name: "POSTGRES_STATUS_PROMOTING" },
-  { no: 4, name: "POSTGRES_STATUS_PRIMARY" },
-]);
 
 /**
  * PostgresAction identifies a long-running postgres manager operation.
@@ -1078,6 +1026,10 @@ export class PrimaryStatus extends Message<PrimaryStatus> {
  * This RPC works even when the database connection is unavailable - fields that require
  * database access will be nil/empty in that case.
  *
+ * Status serves many readers (multigateway, observability, debugging) and may
+ * grow freely. Signals that HA decisions depend on belong in
+ * clustermetadata.AvailabilityStatus instead; see docs/ha/pooler-signals.md.
+ *
  * @generated from message multipoolermanagerdata.Status
  */
 export class Status extends Message<Status> {
@@ -1131,7 +1083,7 @@ export class Status extends Message<Status> {
    * Observed state of the PostgreSQL server process. This reflects what postgres
    * actually is right now and may differ from pooler_type during transitions.
    *
-   * @generated from field: multipoolermanagerdata.PostgresStatus postgres_status = 7;
+   * @generated from field: clustermetadata.PostgresStatus postgres_status = 7;
    */
   postgresStatus = PostgresStatus.UNKNOWN;
 
@@ -1276,9 +1228,7 @@ export class StatusResponse extends Message<StatusResponse> {
   status?: Status;
 
   /**
-   * Availability status: the pooler's cohort eligibility, leadership preference
-   * and suspected divergence. (leadership_status is deprecated and no longer
-   * published.)
+   * The signals HA decisions read; see clustermetadata.AvailabilityStatus.
    *
    * @generated from field: clustermetadata.AvailabilityStatus availability_status = 3;
    */

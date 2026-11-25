@@ -509,6 +509,9 @@ func TestReplicationStatus(t *testing.T) {
 		assert.NotNil(t, status.Status.PrimaryStatus, "PrimaryStatus should be populated")
 		assert.Nil(t, status.Status.ReplicationStatus, "ReplicationStatus should be nil for PRIMARY")
 		assert.Equal(t, "0/12345678", status.Status.PrimaryStatus.Lsn)
+		assert.Equal(t, clustermetadatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY, status.Status.PostgresStatus)
+		assert.Equal(t, status.Status.PostgresStatus, status.AvailabilityStatus.GetFacts().GetPostgresStatus(),
+			"AvailabilityStatus reports the same postgres status as Status")
 	})
 
 	t.Run("PRIMARY_pooler_reports_its_own_first_hand_quorum_commit_watermark", func(t *testing.T) {

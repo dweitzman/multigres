@@ -72,7 +72,7 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 				PortMap:  map[string]int32{"postgres": 5432},
 			},
 			LastSeen: timestamppb.Now(),
-			Status:   &multipoolermanagerdatapb.Status{PostgresStatus: multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY},
+			Status:   &multipoolermanagerdatapb.Status{PostgresStatus: clustermetadatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY},
 			ConsensusStatus: &clustermetadatapb.ConsensusStatus{
 				Id:              primaryID,
 				TermRevocation:  &clustermetadatapb.TermRevocation{RevokedBelowTerm: 3},
@@ -285,7 +285,7 @@ func TestReconcileCohortAction_Execute(t *testing.T) {
 				PortMap:  map[string]int32{"postgres": 5432},
 			},
 			LastSeen:        timestamppb.New(time.Now().Add(-time.Hour)),
-			Status:          &multipoolermanagerdatapb.Status{PostgresStatus: multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY},
+			Status:          &multipoolermanagerdatapb.Status{PostgresStatus: clustermetadatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY},
 			ConsensusStatus: &clustermetadatapb.ConsensusStatus{Id: primaryID, TermRevocation: &clustermetadatapb.TermRevocation{RevokedBelowTerm: 3}, CurrentPosition: &clustermetadatapb.PoolerPosition{Position: rule}},
 		}, nil))
 		store.SeedCache(t, ps, store.NewPooler(&multiorchdatapb.PoolerHealthState{

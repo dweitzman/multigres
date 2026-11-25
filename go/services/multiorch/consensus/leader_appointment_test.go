@@ -400,7 +400,7 @@ func TestAppointLeader_TiebreaksByResignation(t *testing.T) {
 			LeaderTerm: 5,
 			Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION,
 		},
-		LeadershipPreference: clustermetadatapb.LeadershipPreference_LEADERSHIP_PREFERENCE_PREFER_NOT,
+		Intent: &clustermetadatapb.AvailabilityIntent{LeadershipPreference: clustermetadatapb.LeadershipPreference_LEADERSHIP_PREFERENCE_PREFER_NOT},
 	}
 
 	for i, mp := range []*multiorchdatapb.PoolerHealthState{resigned, standby} {
@@ -620,7 +620,7 @@ func TestPoolerHealthStateLess(t *testing.T) {
 		cs := &clustermetadatapb.ConsensusStatus{Id: id}
 		av := &clustermetadatapb.AvailabilityStatus{}
 		if prefersNot {
-			av.LeadershipPreference = clustermetadatapb.LeadershipPreference_LEADERSHIP_PREFERENCE_PREFER_NOT
+			av.Intent = &clustermetadatapb.AvailabilityIntent{LeadershipPreference: clustermetadatapb.LeadershipPreference_LEADERSHIP_PREFERENCE_PREFER_NOT}
 		}
 		h := &multiorchdatapb.PoolerHealthState{
 			AvailabilityStatus: av,

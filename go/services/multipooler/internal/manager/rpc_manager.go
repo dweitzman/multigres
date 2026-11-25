@@ -311,13 +311,24 @@ func (pm *MultipoolerManager) StandbyReplicationStatus(ctx context.Context) (*mu
 // database access will be nil/empty in that case. This allows callers to always get
 // initialization status without needing a separate RPC.
 func (pm *MultipoolerManager) Status(ctx context.Context) (*multipoolermanagerdatapb.StatusResponse, error) {
+	// Read the consensus position before postgres status. A rule naming this
+	// pooler is only written once its postgres is out of recovery, so a report
+	// pairing that rule with a standby postgres means a real demotion, not a
+	// promotion that finished between the two reads.
+	// Best-effort: prefer a fresh read, fall back to the cached position if
+	// postgres is unreachable.
+	consensusStatus, err := pm.consensusMgr.InconsistentConsensusStatus(ctx)
+	if err != nil {
+		consensusStatus = pm.consensusMgr.CachedConsensusStatus()
+	}
+	postgresStatus := pm.getServerStatus(ctx)
 	poolerStatus := &multipoolermanagerdatapb.Status{
 		PoolerType:       poolerTypeFromRoutingRole(pm.stateManager.RoutingRole()),
 		IsInitialized:    pm.isInitialized(ctx),
 		HasDataDirectory: pm.hasDataDirectory(),
 		PostgresReady:    pm.isPostgresReady(ctx),
 		PostgresRunning:  pm.isPostgresRunning(ctx),
-		PostgresStatus:   pm.getServerStatus(ctx),
+		PostgresStatus:   postgresStatus,
 		ShardId:          pm.getShardID(),
 	}
 
@@ -344,17 +355,12 @@ func (pm *MultipoolerManager) Status(ctx context.Context) (*multipoolermanagerda
 	}
 
 	resp := &multipoolermanagerdatapb.StatusResponse{
-		Status: poolerStatus,
+		Status:          poolerStatus,
+		ConsensusStatus: consensusStatus,
+		AvailabilityStatus: pm.buildAvailabilityStatus(&clustermetadatapb.AvailabilityFacts{
+			PostgresStatus: postgresStatus,
+		}),
 	}
-
-	// Best-effort status report: prefer a fresh read, fall back to the cached
-	// position if postgres is unreachable.
-	if cs, err := pm.consensusMgr.InconsistentConsensusStatus(ctx); err == nil {
-		resp.ConsensusStatus = cs
-	} else {
-		resp.ConsensusStatus = pm.consensusMgr.CachedConsensusStatus()
-	}
-	resp.AvailabilityStatus = pm.buildAvailabilityStatus()
 
 	// Try to get detailed status based on PostgreSQL role
 	pgMode, err := pm.postgresMode(ctx)

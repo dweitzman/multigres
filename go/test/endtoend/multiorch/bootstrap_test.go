@@ -79,7 +79,7 @@ func TestBootstrapInitialization(t *testing.T) {
 			// No node should have a cohort configured before multiorch starts
 			require.Empty(t, cohortMembers, "Node %s should have no cohort members before multiorch", name)
 			// No node should be primary before multiorch elects one
-			require.NotEqual(t, multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY, status.Status.PostgresStatus, "Node %s should not be primary before multiorch", name)
+			require.NotEqual(t, clustermetadatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY, status.Status.PostgresStatus, "Node %s should not be primary before multiorch", name)
 			t.Logf("Node %s has no cohort members and is not primary (ready for multiorch to configure)", name)
 		}()
 	}
@@ -386,7 +386,7 @@ func TestBootstrapInitialization(t *testing.T) {
 		assert.True(t, status.Status.IsInitialized, "Standby should be initialized after auto-restore")
 		assert.True(t, status.Status.HasDataDirectory, "Standby should have data directory after auto-restore")
 		assert.True(t, status.Status.PostgresReady, "PostgreSQL should be running after auto-restore")
-		assert.Equal(t, multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_STANDBY, status.Status.PostgresStatus, "Should be in standby role after auto-restore")
+		assert.Equal(t, clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STANDBY, status.Status.PostgresStatus, "Should be in standby role after auto-restore")
 
 		t.Logf("Auto-restore succeeded: IsInitialized=%v, HasDataDirectory=%v, PostgresReady=%v, ServerStatus=%s",
 			status.Status.IsInitialized, status.Status.HasDataDirectory,

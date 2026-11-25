@@ -53,7 +53,7 @@ func TestRecruitAbandonedAnalyzer_Analyze(t *testing.T) {
 			LastSeen:    timestamppb.New(now),
 			Status: &multipoolermanagerdatapb.Status{
 				PostgresReady:  true,
-				PostgresStatus: multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY,
+				PostgresStatus: clustermetadatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY,
 			},
 			ConsensusStatus: &clustermetadatapb.ConsensusStatus{Id: primaryID, CurrentPosition: &clustermetadatapb.PoolerPosition{Position: ruleLedBy(1, 0)}},
 		}

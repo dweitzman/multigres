@@ -2443,6 +2443,19 @@ components:
         - DRAINED
       title: PoolerType
       type: string
+    clustermetadata.PostgresStatus:
+      description: |-
+        PostgresStatus is the observed state of the PostgreSQL server process.
+         This reflects what postgres actually is right now and may differ from
+         PoolerType during transitions (e.g. a REPLICA pooler in PROMOTING state).
+      enum:
+        - POSTGRES_STATUS_UNKNOWN
+        - POSTGRES_STATUS_STARTING
+        - POSTGRES_STATUS_STANDBY
+        - POSTGRES_STATUS_PROMOTING
+        - POSTGRES_STATUS_PRIMARY
+      title: PostgresStatus
+      type: string
     clustermetadata.QuorumType:
       description: QuorumType enumerates supported quorum algorithms
       enum:
@@ -4322,19 +4335,6 @@ components:
         - POSTGRES_ACTION_CREATING_FIRST_BACKUP
       title: PostgresAction
       type: string
-    multipoolermanagerdata.PostgresStatus:
-      description: |-
-        PostgresStatus is the observed state of the PostgreSQL server process.
-         This reflects what postgres actually is right now and may differ from
-         PoolerType during transitions (e.g. a REPLICA pooler in PROMOTING state).
-      enum:
-        - POSTGRES_STATUS_UNKNOWN
-        - POSTGRES_STATUS_STARTING
-        - POSTGRES_STATUS_STANDBY
-        - POSTGRES_STATUS_PROMOTING
-        - POSTGRES_STATUS_PRIMARY
-      title: PostgresStatus
-      type: string
     multipoolermanagerdata.PrimaryConnInfo:
       additionalProperties: false
       description: Primary connection information parsed from PostgreSQL's primary_conninfo setting
@@ -4548,6 +4548,10 @@ components:
         Status provides unified status information that works for both PRIMARY and REPLICA poolers.
          This RPC works even when the database connection is unavailable - fields that require
          database access will be nil/empty in that case.
+
+         Status serves many readers (multigateway, observability, debugging) and may
+         grow freely. Signals that HA decisions depend on belong in
+         clustermetadata.AvailabilityStatus instead; see docs/ha/pooler-signals.md.
       properties:
         failoverSlotsReady:
           description: |-
@@ -4606,7 +4610,7 @@ components:
           title: postgres_running
           type: boolean
         postgresStatus:
-          $ref: '#/components/schemas/multipoolermanagerdata.PostgresStatus'
+          $ref: '#/components/schemas/clustermetadata.PostgresStatus'
           description: |-
             Observed state of the PostgreSQL server process. This reflects what postgres
              actually is right now and may differ from pooler_type during transitions.

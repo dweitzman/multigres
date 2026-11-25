@@ -203,6 +203,10 @@ message PrimaryStatus {
 // Status provides unified status information that works for both PRIMARY and REPLICA poolers.
 // This RPC works even when the database connection is unavailable - fields that require
 // database access will be nil/empty in that case.
+//
+// Status serves many readers (multigateway, observability, debugging) and may
+// grow freely. Signals that HA decisions depend on belong in
+// clustermetadata.AvailabilityStatus instead; see docs/ha/pooler-signals.md.
 message Status {
   // Pooler type from topology (PRIMARY or REPLICA)
   clustermetadata.PoolerType pooler_type = 1;
@@ -230,7 +234,7 @@ message Status {
 
   // Observed state of the PostgreSQL server process. This reflects what postgres
   // actually is right now and may differ from pooler_type during transitions.
-  PostgresStatus postgres_status = 7;
+  clustermetadata.PostgresStatus postgres_status = 7;
 
   // Current WAL position (empty if db not connected)
   string wal_position = 8;
@@ -262,22 +266,6 @@ message Status {
   int32 failover_slots_total = 16;
 }
 
-// PostgresStatus is the observed state of the PostgreSQL server process.
-// This reflects what postgres actually is right now and may differ from
-// PoolerType during transitions (e.g. a REPLICA pooler in PROMOTING state).
-enum PostgresStatus {
-  // Cannot determine state: no data directory, process dead, or pgctld unreachable.
-  POSTGRES_STATUS_UNKNOWN = 0;
-  // Process is alive but not yet accepting connections (startup in progress).
-  POSTGRES_STATUS_STARTING = 1;
-  // pg_is_in_recovery() = true; replicating from primary.
-  POSTGRES_STATUS_STANDBY = 2;
-  // pg_promote() has been issued; postgres has not yet transitioned to primary mode.
-  POSTGRES_STATUS_PROMOTING = 3;
-  // pg_is_in_recovery() = false; accepting read-write connections.
-  POSTGRES_STATUS_PRIMARY = 4;
-}
-
 // PostgresAction identifies a long-running postgres manager operation.
 enum PostgresAction {
   // No action in progress.
@@ -297,9 +285,7 @@ message StatusRequest {
 message StatusResponse {
   Status status = 1;
 
-  // Availability status: the pooler's cohort eligibility, leadership preference
-  // and suspected divergence. (leadership_status is deprecated and no longer
-  // published.)
+  // The signals HA decisions read; see clustermetadata.AvailabilityStatus.
   clustermetadata.AvailabilityStatus availability_status = 3;
 
   // ConsensusStatus snapshot for this pooler. Used by multiorch to derive the

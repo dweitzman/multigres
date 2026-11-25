@@ -216,8 +216,10 @@ func TestLeaderNeedsReplacement(t *testing.T) {
 }
 
 func TestCannotActAsLeader(t *testing.T) {
-	withPostgres := func(p *multiorchdatapb.PoolerHealthState, st multipoolermanagerdatapb.PostgresStatus) *multiorchdatapb.PoolerHealthState {
-		p.Status = &multipoolermanagerdatapb.Status{PostgresStatus: st}
+	withPostgres := func(p *multiorchdatapb.PoolerHealthState, st clustermetadatapb.PostgresStatus) *multiorchdatapb.PoolerHealthState {
+		p.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{
+			Facts: &clustermetadatapb.AvailabilityFacts{PostgresStatus: st},
+		}
 		return p
 	}
 	tests := []struct {
@@ -225,14 +227,14 @@ func TestCannotActAsLeader(t *testing.T) {
 		p    *multiorchdatapb.PoolerHealthState
 		want bool
 	}{
-		{name: "named leader, postgres a standby", p: withPostgres(poolerWithLeaderTerm(t, 5), multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_STANDBY), want: true},
-		{name: "named leader by its undecided proposal, postgres a standby", p: withPostgres(poolerWithLeaderTermViaProposal(t, 5), multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_STANDBY), want: true},
-		{name: "named leader, postgres a primary", p: withPostgres(poolerWithLeaderTerm(t, 5), multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY)},
-		{name: "named leader, postgres promoting", p: withPostgres(poolerWithLeaderTerm(t, 5), multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_PROMOTING)},
+		{name: "named leader, postgres a standby", p: withPostgres(poolerWithLeaderTerm(t, 5), clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STANDBY), want: true},
+		{name: "named leader by its undecided proposal, postgres a standby", p: withPostgres(poolerWithLeaderTermViaProposal(t, 5), clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STANDBY), want: true},
+		{name: "named leader, postgres a primary", p: withPostgres(poolerWithLeaderTerm(t, 5), clustermetadatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY)},
+		{name: "named leader, postgres promoting", p: withPostgres(poolerWithLeaderTerm(t, 5), clustermetadatapb.PostgresStatus_POSTGRES_STATUS_PROMOTING)},
 		// Starting or unknown is not evidence of recovery; other checks handle a
 		// leader whose postgres is down or restarting.
-		{name: "named leader, postgres starting", p: withPostgres(poolerWithLeaderTerm(t, 5), multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_STARTING)},
-		{name: "named leader, postgres unknown", p: withPostgres(poolerWithLeaderTerm(t, 5), multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_UNKNOWN)},
+		{name: "named leader, postgres starting", p: withPostgres(poolerWithLeaderTerm(t, 5), clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STARTING)},
+		{name: "named leader, postgres unknown", p: withPostgres(poolerWithLeaderTerm(t, 5), clustermetadatapb.PostgresStatus_POSTGRES_STATUS_UNKNOWN)},
 		{name: "no status reported", p: poolerWithLeaderTerm(t, 5)},
 		{name: "nil pooler", p: nil},
 	}
@@ -243,13 +245,31 @@ func TestCannotActAsLeader(t *testing.T) {
 	}
 
 	t.Run("another node is the named leader", func(t *testing.T) {
-		p := withPostgres(poolerWithLeaderTerm(t, 5), multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_STANDBY)
+		p := withPostgres(poolerWithLeaderTerm(t, 5), clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STANDBY)
 		p.ConsensusStatus.CurrentPosition.Position.Decision.LeaderId = &clustermetadatapb.ID{Name: "other"}
 		assert.False(t, CannotActAsLeader(p))
 	})
 
+	t.Run("older pooler reporting postgres status only in Status", func(t *testing.T) {
+		p := poolerWithLeaderTerm(t, 5)
+		p.Status = &multipoolermanagerdatapb.Status{PostgresStatus: clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STANDBY}
+		assert.True(t, CannotActAsLeader(p))
+	})
+
+	t.Run("the reported fact wins over Status", func(t *testing.T) {
+		p := withPostgres(poolerWithLeaderTerm(t, 5), clustermetadatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY)
+		p.Status = &multipoolermanagerdatapb.Status{PostgresStatus: clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STANDBY}
+		assert.False(t, CannotActAsLeader(p))
+	})
+
+	t.Run("a static leader has no one to replace it", func(t *testing.T) {
+		p := withPostgres(poolerWithLeaderTerm(t, 5), clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STANDBY)
+		p.Multipooler.LeadershipMode = clustermetadatapb.LeadershipMode_LEADERSHIP_MODE_STATIC
+		assert.False(t, CannotActAsLeader(p))
+	})
+
 	t.Run("a leader that can't act needs replacement", func(t *testing.T) {
-		p := withPostgres(poolerWithLeaderTerm(t, 5), multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_STANDBY)
+		p := withPostgres(poolerWithLeaderTerm(t, 5), clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STANDBY)
 		assert.True(t, LeaderNeedsReplacement(p))
 	})
 }

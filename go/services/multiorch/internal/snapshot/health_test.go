@@ -38,7 +38,7 @@ func TestLeaderWritesProgressing(t *testing.T) {
 		Proposal: &clustermetadatapb.ShardRule{RuleNumber: &clustermetadatapb.RuleNumber{CoordinatorTerm: 6, LeaderSubterm: 0}},
 	}
 
-	leader := func(lastSeen time.Time, status multipoolermanagerdatapb.PostgresStatus) *multiorchdatapb.PoolerHealthState {
+	leader := func(lastSeen time.Time, status clustermetadatapb.PostgresStatus) *multiorchdatapb.PoolerHealthState {
 		return &multiorchdatapb.PoolerHealthState{
 			Multipooler: &clustermetadatapb.Multipooler{},
 			LastSeen:    timestamppb.New(lastSeen),
@@ -51,30 +51,30 @@ func TestLeaderWritesProgressing(t *testing.T) {
 	})
 
 	t.Run("fresh primary with a decided rule is progressing", func(t *testing.T) {
-		l := leader(now, multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY)
+		l := leader(now, clustermetadatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY)
 		require.True(t, LeaderWritesProgressing(l, commonconsensus.NewRuleTransition(decided), now, freshness))
 	})
 
 	t.Run("stale observation is not progressing", func(t *testing.T) {
-		l := leader(now.Add(-time.Minute), multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY)
+		l := leader(now.Add(-time.Minute), clustermetadatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY)
 		require.False(t, LeaderWritesProgressing(l, commonconsensus.NewRuleTransition(decided), now, freshness))
 	})
 
 	t.Run("never observed is not progressing", func(t *testing.T) {
 		l := &multiorchdatapb.PoolerHealthState{
 			Multipooler: &clustermetadatapb.Multipooler{},
-			Status:      &multipoolermanagerdatapb.Status{PostgresStatus: multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY},
+			Status:      &multipoolermanagerdatapb.Status{PostgresStatus: clustermetadatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY},
 		}
 		require.False(t, LeaderWritesProgressing(l, commonconsensus.NewRuleTransition(decided), now, freshness))
 	})
 
 	t.Run("standby is not progressing even if fresh", func(t *testing.T) {
-		l := leader(now, multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_STANDBY)
+		l := leader(now, clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STANDBY)
 		require.False(t, LeaderWritesProgressing(l, commonconsensus.NewRuleTransition(decided), now, freshness))
 	})
 
 	t.Run("undecided highest position is not progressing", func(t *testing.T) {
-		l := leader(now, multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY)
+		l := leader(now, clustermetadatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY)
 		require.False(t, LeaderWritesProgressing(l, commonconsensus.NewRuleTransition(undecided), now, freshness))
 	})
 }

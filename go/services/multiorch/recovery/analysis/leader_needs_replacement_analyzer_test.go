@@ -194,7 +194,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	setLeaderPromoting := func(sa *snapshot.Shard) {
 		{
 			h := sa.IntendedLeaderHealth()
-			h.Status.PostgresStatus = multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_PROMOTING
+			h.Status.PostgresStatus = clustermetadatapb.PostgresStatus_POSTGRES_STATUS_PROMOTING
 		}
 	}
 
@@ -204,7 +204,7 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 	setLeaderPGStandby := func(sa *snapshot.Shard) {
 		{
 			h := sa.IntendedLeaderHealth()
-			h.Status.PostgresStatus = multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_STANDBY
+			h.Status.PostgresStatus = clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STANDBY
 		}
 	}
 

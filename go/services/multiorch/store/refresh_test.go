@@ -52,7 +52,7 @@ func TestPooler_refreshNow(t *testing.T) {
 			ConsensusStatus: servingStatus,
 			Status: &multipoolermanagerdatapb.Status{
 				PostgresReady:  true,
-				PostgresStatus: multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_STANDBY,
+				PostgresStatus: clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STANDBY,
 			},
 		})
 
@@ -61,7 +61,7 @@ func TestPooler_refreshNow(t *testing.T) {
 		require.NoError(t, err)
 		health := pooler.Health()
 		assert.True(t, health.GetStatus().GetPostgresReady())
-		assert.Equal(t, multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_STANDBY, health.GetStatus().GetPostgresStatus())
+		assert.Equal(t, clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STANDBY, health.GetStatus().GetPostgresStatus())
 		assert.True(t, proto.Equal(health.GetConsensusStatus(), servingStatus))
 		assert.NotNil(t, health.GetLastSeen())
 		assert.NotNil(t, health.GetLastPostgresReadyTime())

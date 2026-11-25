@@ -651,7 +651,7 @@ func TestMultiadminServerGetPoolerStatus(t *testing.T) {
 			PoolerType:     clustermetadatapb.PoolerType_PRIMARY,
 			IsInitialized:  true,
 			PostgresReady:  true,
-			PostgresStatus: multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY,
+			PostgresStatus: clustermetadatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY,
 			WalPosition:    "0/1000000",
 			ShardId:        "0-inf",
 		}
@@ -673,7 +673,7 @@ func TestMultiadminServerGetPoolerStatus(t *testing.T) {
 		assert.Equal(t, clustermetadatapb.PoolerType_PRIMARY, resp.Status.PoolerType)
 		assert.True(t, resp.Status.IsInitialized)
 		assert.True(t, resp.Status.PostgresReady)
-		assert.Equal(t, multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY, resp.Status.PostgresStatus)
+		assert.Equal(t, clustermetadatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY, resp.Status.PostgresStatus)
 		assert.Equal(t, "0/1000000", resp.Status.WalPosition)
 		require.NotNil(t, resp.ConsensusStatus.GetTermRevocation())
 		assert.Equal(t, int64(1), resp.ConsensusStatus.GetTermRevocation().GetRevokedBelowTerm())

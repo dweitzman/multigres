@@ -112,7 +112,7 @@ func postgresReadyLess(healthByID map[string]*multiorchdatapb.PoolerHealthState)
 func poolerHealthStateLess(healthByID map[string]*multiorchdatapb.PoolerHealthState) func(a, b *clustermetadatapb.ConsensusStatus) bool {
 	prefersNot := func(cs *clustermetadatapb.ConsensusStatus) bool {
 		av := healthByID[topoclient.ClusterIDString(cs.GetId())].GetAvailabilityStatus()
-		return av.GetLeadershipPreference() == clustermetadatapb.LeadershipPreference_LEADERSHIP_PREFERENCE_PREFER_NOT
+		return av.GetIntent().GetLeadershipPreference() == clustermetadatapb.LeadershipPreference_LEADERSHIP_PREFERENCE_PREFER_NOT
 	}
 	failoverSlotsReady := func(cs *clustermetadatapb.ConsensusStatus) int32 {
 		h := healthByID[topoclient.ClusterIDString(cs.GetId())]

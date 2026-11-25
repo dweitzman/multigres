@@ -26,6 +26,7 @@ import (
 	"github.com/multigres/multigres/go/test/endtoend/shardsetup"
 	"github.com/multigres/multigres/go/test/utils"
 
+	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
 
@@ -203,7 +204,7 @@ func TestPromotingStatusClearedOnlyWhenReady(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		promoting := resp.Status.PostgresStatus == multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_PROMOTING
+		promoting := resp.Status.PostgresStatus == clustermetadatapb.PostgresStatus_POSTGRES_STATUS_PROMOTING
 		ready := resp.Status.PostgresReady
 		// Once PROMOTING clears, postgres must be ready.
 		if !promoting {

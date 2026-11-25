@@ -915,7 +915,7 @@ func TestPromote(t *testing.T) {
 				assert.Equal(t, clustermetadatapb.RoutingRole_ROUTING_ROLE_PRIMARY, state.RoutingState.GetRole())
 				assert.Equal(t, int64(7), state.RoutingState.GetRule().GetCoordinatorTerm())
 
-				assert.Nil(t, pm.buildAvailabilityStatus().GetLeadershipStatus(), "a leader serving as primary doesn't request demotion")
+				assert.Nil(t, pm.buildAvailabilityStatus(nil).GetLeadershipStatus(), "a leader serving as primary doesn't request demotion")
 
 				// ReplicationPrimary should advertise this pooler as the primary
 				// at the proposalLeader's host/port. Coordinators reading this
@@ -1062,7 +1062,7 @@ func TestPromote(t *testing.T) {
 			expectError:       true,
 			expectErrContains: "promote failed: could not write rule",
 			postCheck: func(t *testing.T, pm *MultipoolerManager, rs *fakeRuleStore) {
-				assert.Nil(t, pm.buildAvailabilityStatus().GetLeadershipStatus(), "postgres was promoted, so the node is serving")
+				assert.Nil(t, pm.buildAvailabilityStatus(nil).GetLeadershipStatus(), "postgres was promoted, so the node is serving")
 			},
 		},
 		{
@@ -1354,7 +1354,7 @@ func TestPromoteDropsUnloggedTables(t *testing.T) {
 func TestAvailabilityStatus(t *testing.T) {
 	t.Run("buildAvailabilityStatus publishes cohort eligibility with no leadership status when no resignation is set", func(t *testing.T) {
 		pm := newTestManager(t)
-		av := pm.buildAvailabilityStatus()
+		av := pm.buildAvailabilityStatus(nil)
 		require.NotNil(t, av)
 		assert.Nil(t, av.LeadershipStatus)
 		require.NotNil(t, av.CohortEligibilityStatus)
@@ -1363,7 +1363,7 @@ func TestAvailabilityStatus(t *testing.T) {
 
 	t.Run("no resignation -> no LeadershipStatus but keeps cohort eligibility", func(t *testing.T) {
 		pm := newTestManager(t)
-		av := pm.buildAvailabilityStatus()
+		av := pm.buildAvailabilityStatus(nil)
 		require.NotNil(t, av)
 		assert.Nil(t, av.LeadershipStatus)
 		require.NotNil(t, av.CohortEligibilityStatus)
@@ -1375,7 +1375,7 @@ func TestAvailabilityStatus(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, pm.consensusMgr.SetCohortEligibility(lockCtx, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE))
 		pm.actionLock.Release(lockCtx)
-		av := pm.buildAvailabilityStatus()
+		av := pm.buildAvailabilityStatus(nil)
 		require.NotNil(t, av)
 		require.NotNil(t, av.CohortEligibilityStatus)
 		assert.Equal(t, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE, av.CohortEligibilityStatus.Signal)
@@ -1384,24 +1384,24 @@ func TestAvailabilityStatus(t *testing.T) {
 	t.Run("a cohort-ineligible pooler prefers not to lead", func(t *testing.T) {
 		pm := newTestManager(t)
 		assert.Equal(t, clustermetadatapb.LeadershipPreference_LEADERSHIP_PREFERENCE_UNSPECIFIED,
-			pm.buildAvailabilityStatus().GetLeadershipPreference())
+			pm.buildAvailabilityStatus(nil).GetIntent().GetLeadershipPreference())
 		lockCtx, err := pm.actionLock.Acquire(t.Context(), "test")
 		require.NoError(t, err)
 		require.NoError(t, pm.consensusMgr.SetCohortEligibility(lockCtx, clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE))
 		pm.actionLock.Release(lockCtx)
 		assert.Equal(t, clustermetadatapb.LeadershipPreference_LEADERSHIP_PREFERENCE_PREFER_NOT,
-			pm.buildAvailabilityStatus().GetLeadershipPreference(), "for example during graceful shutdown")
+			pm.buildAvailabilityStatus(nil).GetIntent().GetLeadershipPreference(), "for example during graceful shutdown")
 	})
 
 	t.Run("suspectedDivergence is published", func(t *testing.T) {
 		pm := newTestManager(t)
-		assert.False(t, pm.buildAvailabilityStatus().SuspectedDivergence, "defaults to false")
+		assert.False(t, pm.buildAvailabilityStatus(nil).SuspectedDivergence, "defaults to false")
 		lockCtx, err := pm.actionLock.Acquire(t.Context(), "test-seed")
 		require.NoError(t, err)
 		_, err = pm.consensusMgr.SetSuspectedDivergence(lockCtx, true)
 		require.NoError(t, err)
 		pm.actionLock.Release(lockCtx)
-		assert.True(t, pm.buildAvailabilityStatus().SuspectedDivergence, "reflects the in-memory flag")
+		assert.True(t, pm.buildAvailabilityStatus(nil).SuspectedDivergence, "reflects the in-memory flag")
 	})
 }
 
@@ -1502,7 +1502,7 @@ type resignRecordingPgctldClient struct {
 }
 
 func (c *resignRecordingPgctldClient) Restart(ctx context.Context, req *pgctldpb.RestartRequest, opts ...grpc.CallOption) (*pgctldpb.RestartResponse, error) {
-	c.preferenceAtRestart = c.pm.buildAvailabilityStatus().GetLeadershipPreference()
+	c.preferenceAtRestart = c.pm.buildAvailabilityStatus(nil).GetIntent().GetLeadershipPreference()
 	if c.restartHangs {
 		c.restartCalled = true
 		<-ctx.Done()
@@ -1618,7 +1618,7 @@ func TestResignLeadership_PrefersNotToLeadBeforeRestart(t *testing.T) {
 			require.NoError(t, m.ExpectationsWereMet())
 
 			assert.Equal(t, tt.wantRestart, pgctld.restartCalled, "whether postgres was restarted as a standby")
-			assert.Nil(t, pm.buildAvailabilityStatus().GetLeadershipStatus(), "LeadershipStatus is no longer published")
+			assert.Nil(t, pm.buildAvailabilityStatus(nil).GetLeadershipStatus(), "LeadershipStatus is no longer published")
 			assert.Equal(t, tt.wantStandby, pm.stateManager.PostgresMode() == pgmode.InRecovery, "postgres recorded as a standby")
 
 			wantPreference := clustermetadatapb.LeadershipPreference_LEADERSHIP_PREFERENCE_UNSPECIFIED
@@ -1628,7 +1628,7 @@ func TestResignLeadership_PrefersNotToLeadBeforeRestart(t *testing.T) {
 			if tt.wantRestart {
 				assert.Equal(t, wantPreference, pgctld.preferenceAtRestart, "leadership preference when postgres was restarted")
 			}
-			assert.Equal(t, wantPreference, pm.buildAvailabilityStatus().GetLeadershipPreference(), "leadership preference after resigning")
+			assert.Equal(t, wantPreference, pm.buildAvailabilityStatus(nil).GetIntent().GetLeadershipPreference(), "leadership preference after resigning")
 		})
 	}
 }

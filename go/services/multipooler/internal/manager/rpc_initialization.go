@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/multigres/multigres/go/common/mterrors"
+	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	pgctldpb "github.com/multigres/multigres/go/pb/pgctldservice"
 	"github.com/multigres/multigres/go/tools/retry"
@@ -155,21 +156,21 @@ func (pm *MultipoolerManager) isPostgresReady(ctx context.Context) bool {
 
 // getServerStatus returns the observed state of the PostgreSQL server process.
 // Priority: STARTING (action lock) > PROMOTING (in-flight pg_promote) > PRIMARY/STANDBY (pg_is_in_recovery).
-func (pm *MultipoolerManager) getServerStatus(ctx context.Context) multipoolermanagerdatapb.PostgresStatus {
+func (pm *MultipoolerManager) getServerStatus(ctx context.Context) clustermetadatapb.PostgresStatus {
 	if action, _ := pm.actionLock.ActiveAction(); action == multipoolermanagerdatapb.PostgresAction_POSTGRES_ACTION_STARTING {
-		return multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_STARTING
+		return clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STARTING
 	}
 	if pm.promotionInProgress.Load() {
-		return multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_PROMOTING
+		return clustermetadatapb.PostgresStatus_POSTGRES_STATUS_PROMOTING
 	}
 	pgMode, err := pm.postgresMode(ctx)
 	if err != nil {
-		return multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_UNKNOWN
+		return clustermetadatapb.PostgresStatus_POSTGRES_STATUS_UNKNOWN
 	}
 	if pgMode.OutOfRecovery() {
-		return multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY
+		return clustermetadatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY
 	}
-	return multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_STANDBY
+	return clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STANDBY
 }
 
 // getWALPosition returns the current WAL position and any error encountered

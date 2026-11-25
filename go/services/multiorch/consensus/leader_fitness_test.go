@@ -111,7 +111,7 @@ func TestSelectFittestLeader(t *testing.T) {
 			topoclient.ClusterIDString(aID): {
 				Status: &multipoolermanagerdatapb.Status{PostgresReady: true, FailoverSlotsReady: 0},
 				AvailabilityStatus: &clustermetadatapb.AvailabilityStatus{
-					LeadershipPreference: clustermetadatapb.LeadershipPreference_LEADERSHIP_PREFERENCE_PREFER_NOT,
+					Intent: &clustermetadatapb.AvailabilityIntent{LeadershipPreference: clustermetadatapb.LeadershipPreference_LEADERSHIP_PREFERENCE_PREFER_NOT},
 				},
 			},
 			topoclient.ClusterIDString(bID): {
@@ -199,7 +199,7 @@ func TestSelectFittestLeader(t *testing.T) {
 			topoclient.ClusterIDString(resigningID): {
 				Status: &multipoolermanagerdatapb.Status{PostgresReady: true},
 				AvailabilityStatus: &clustermetadatapb.AvailabilityStatus{
-					LeadershipPreference: clustermetadatapb.LeadershipPreference_LEADERSHIP_PREFERENCE_PREFER_NOT,
+					Intent: &clustermetadatapb.AvailabilityIntent{LeadershipPreference: clustermetadatapb.LeadershipPreference_LEADERSHIP_PREFERENCE_PREFER_NOT},
 				},
 			},
 			topoclient.ClusterIDString(peerID): {

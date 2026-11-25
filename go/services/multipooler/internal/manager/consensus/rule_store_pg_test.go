@@ -1573,6 +1573,13 @@ func TestRuleStorePG_UpdateRule_PromotionHookFails(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "promotion hook")
 	assert.Contains(t, err.Error(), "pg_promote refused")
+
+	// Multiorch relies on this: a rule naming the pooler is never written
+	// while its postgres is still a standby.
+	pos, err := rs.ObservePosition(ctx)
+	require.NoError(t, err)
+	assert.Zero(t, commonconsensus.PossiblyUndecidedRule(pos.GetPosition()).GetRuleNumber().GetCoordinatorTerm(),
+		"no rule is written when pg_promote fails")
 }
 
 func TestRuleStorePG_UpdateRule_PostWriteGUCFails(t *testing.T) {

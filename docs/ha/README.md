@@ -20,6 +20,8 @@ docs are layered. Start at the top, and descend only as far as you need.
        not yet implemented.)_
    - **[When we change the rules](recovery.md)** — how multiorch monitors health
      and decides to act. _(Skeleton — high-level responsibilities, details TODO.)_
+     - **[Pooler signals](pooler-signals.md)** — what poolers report (facts and
+       intent), where multiorch interprets it, and how to add a signal safely.
 
 ## Want X? Read Y
 
@@ -33,6 +35,7 @@ docs are layered. Start at the top, and descend only as far as you need.
 | How a safe rule change works (recruit → promote)              | [rule change](rule-change.md)             |
 | How recruit / promote / set-primary act on PostgreSQL         | [rule change](rule-change.md)             |
 | How failure is detected and recovery decided                  | recovery.md _(TODO)_                      |
+| What poolers report to multiorch; adding a signal             | [pooler signals](pooler-signals.md)       |
 | How an interrupted rule change is finished                    | [propagation](propagation.md) _(planned)_ |
 | Why a specific design choice was made                         | [decision log](decision-log/)             |
 

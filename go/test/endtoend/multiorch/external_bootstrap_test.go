@@ -98,7 +98,7 @@ func TestBootstrap_ViaExternalAPI(t *testing.T) {
 		require.NoError(t, err)
 		require.Empty(t, commonconsensus.PossiblyUndecidedRule(status.GetConsensusStatus().GetCurrentPosition().GetPosition()).GetCohortMembers(),
 			"pooler %s should have no cohort before CLI bootstrap", name)
-		require.NotEqual(t, multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY, status.Status.PostgresStatus,
+		require.NotEqual(t, clustermetadatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY, status.Status.PostgresStatus,
 			"pooler %s should not be primary before CLI bootstrap", name)
 	}
 

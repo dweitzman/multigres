@@ -34,13 +34,18 @@ import (
 )
 
 // buildAvailabilityStatus returns the current AvailabilityStatus for this node.
-// Every pooler publishes its cohort eligibility, so the result is non-nil.
-func (pm *MultipoolerManager) buildAvailabilityStatus() *clustermetadatapb.AvailabilityStatus {
+// facts are passed in so they come from the same reads as the rest of the
+// report. Every pooler publishes its cohort eligibility, so the result is
+// non-nil.
+func (pm *MultipoolerManager) buildAvailabilityStatus(facts *clustermetadatapb.AvailabilityFacts) *clustermetadatapb.AvailabilityStatus {
 	cohort := pm.buildCohortEligibilityStatus()
 	return &clustermetadatapb.AvailabilityStatus{
 		CohortEligibilityStatus: cohort,
 		SuspectedDivergence:     pm.consensusMgr.SuspectedDivergence(),
-		LeadershipPreference:    pm.leadershipPreference(cohort),
+		Facts:                   facts,
+		Intent: &clustermetadatapb.AvailabilityIntent{
+			LeadershipPreference: pm.leadershipPreference(cohort),
+		},
 	}
 }
 

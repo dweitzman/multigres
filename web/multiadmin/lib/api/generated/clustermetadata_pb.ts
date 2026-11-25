@@ -377,6 +377,58 @@ proto3.util.setEnumType(LeadershipSignal, "clustermetadata.LeadershipSignal", [
 ]);
 
 /**
+ * PostgresStatus is the observed state of the PostgreSQL server process.
+ * This reflects what postgres actually is right now and may differ from
+ * PoolerType during transitions (e.g. a REPLICA pooler in PROMOTING state).
+ *
+ * @generated from enum clustermetadata.PostgresStatus
+ */
+export enum PostgresStatus {
+  /**
+   * Cannot determine state: no data directory, process dead, or pgctld unreachable.
+   *
+   * @generated from enum value: POSTGRES_STATUS_UNKNOWN = 0;
+   */
+  UNKNOWN = 0,
+
+  /**
+   * Process is alive but not yet accepting connections (startup in progress).
+   *
+   * @generated from enum value: POSTGRES_STATUS_STARTING = 1;
+   */
+  STARTING = 1,
+
+  /**
+   * pg_is_in_recovery() = true; replicating from primary.
+   *
+   * @generated from enum value: POSTGRES_STATUS_STANDBY = 2;
+   */
+  STANDBY = 2,
+
+  /**
+   * pg_promote() has been issued; postgres has not yet transitioned to primary mode.
+   *
+   * @generated from enum value: POSTGRES_STATUS_PROMOTING = 3;
+   */
+  PROMOTING = 3,
+
+  /**
+   * pg_is_in_recovery() = false; accepting read-write connections.
+   *
+   * @generated from enum value: POSTGRES_STATUS_PRIMARY = 4;
+   */
+  PRIMARY = 4,
+}
+// Retrieve enum metadata with: proto3.getEnumType(PostgresStatus)
+proto3.util.setEnumType(PostgresStatus, "clustermetadata.PostgresStatus", [
+  { no: 0, name: "POSTGRES_STATUS_UNKNOWN" },
+  { no: 1, name: "POSTGRES_STATUS_STARTING" },
+  { no: 2, name: "POSTGRES_STATUS_STANDBY" },
+  { no: 3, name: "POSTGRES_STATUS_PROMOTING" },
+  { no: 4, name: "POSTGRES_STATUS_PRIMARY" },
+]);
+
+/**
  * LeadershipPreference is a pooler's declared preference about being chosen as
  * leader of a future term. Unlike LeadershipSignal it is not a request to act:
  * a coordinator uses it only to break ties between equally caught-up candidates.
@@ -2647,14 +2699,19 @@ export class LeadershipStatus extends Message<LeadershipStatus> {
 }
 
 /**
- * AvailabilityStatus carries best-effort operational fitness signals for a pooler.
+ * AvailabilityStatus is the curated set of pooler signals that HA decisions
+ * read, alongside ConsensusStatus. The general-purpose
+ * multipoolermanagerdata.Status serves other readers and may grow freely, while
+ * every field here is part of the decision logic's contract.
+ * See docs/ha/pooler-signals.md before adding one. In short:
+ *   - Add a field only if HA decision logic reads it.
+ *   - Observations go in facts, and what the pooler wants goes in intent.
+ *   - Each field says what its zero value means, since older poolers leave it
+ *     unset.
+ *
  * Unlike ConsensusStatus (which is authoritative and backed by postgres WAL and
  * on-disk state), AvailabilityStatus is in-memory and may be absent after a
  * process restart. Coordinators must treat absence as "unknown," not "unfit."
- *
- * Signals are re-derivable from continuous health polling, so process restarts
- * do not create permanent unavailability. See LeadershipSignal for re-derivation
- * rules.
  *
  * Sources: self-reported by the pooler (fast path) or synthesized by the
  * coordinator from observed health state.
@@ -2673,37 +2730,44 @@ export class AvailabilityStatus extends Message<AvailabilityStatus> {
   leadershipStatus?: LeadershipStatus;
 
   /**
-   * cohort_eligibility_status is published by every pooler regardless of
-   * current cohort membership. It expresses whether the pooler is willing to
-   * serve as a cohort member; meaning falls out of the combination with the
-   * pooler's current membership in ShardRule.cohort_members. A current cohort
-   * member signaling INELIGIBLE is a candidate for removal/replacement; a
-   * non-member signaling INELIGIBLE should be skipped when growing the cohort.
+   * cohort_eligibility_status is a declared intent: whether the pooler is
+   * willing to serve as a cohort member. It is published by every pooler
+   * regardless of current cohort membership; meaning falls out of the
+   * combination with the pooler's current membership in
+   * ShardRule.cohort_members. A current cohort member signaling INELIGIBLE is a
+   * candidate for removal/replacement; a non-member signaling INELIGIBLE should
+   * be skipped when growing the cohort. To move into intent.
    *
    * @generated from field: clustermetadata.CohortEligibilityStatus cohort_eligibility_status = 2;
    */
   cohortEligibilityStatus?: CohortEligibilityStatus;
 
   /**
-   * suspected_divergence is true when the pooler suspects its local WAL may have
-   * diverged from the cluster's chosen history and a pg_rewind may be needed to
-   * rejoin replication as a standby. This is a best-effort, in-memory signal that's
-   * usually set when a former primary learns an failover happened. A pooler with
-   * suspected divergence may be slower to endorse a new rule proposal because it
-   * needs to stop, run pg_rewind, and restart.
+   * suspected_divergence is an observed fact: true when the pooler suspects its
+   * local WAL may have diverged from the cluster's chosen history and a
+   * pg_rewind may be needed to rejoin replication as a standby. This is a
+   * best-effort, in-memory signal that's usually set when a former primary
+   * learns an failover happened. A pooler with suspected divergence may be
+   * slower to endorse a new rule proposal because it needs to stop, run
+   * pg_rewind, and restart. To move into facts.
    *
    * @generated from field: bool suspected_divergence = 3;
    */
   suspectedDivergence = false;
 
   /**
-   * leadership_preference is this pooler's preference about leading a future
-   * term. It only orders candidates that tie on WAL position; it never starts a
-   * failover and never excludes a candidate that is the only viable one.
+   * What the pooler observes about itself.
    *
-   * @generated from field: clustermetadata.LeadershipPreference leadership_preference = 4;
+   * @generated from field: clustermetadata.AvailabilityFacts facts = 4;
    */
-  leadershipPreference = LeadershipPreference.UNSPECIFIED;
+  facts?: AvailabilityFacts;
+
+  /**
+   * What the pooler wants.
+   *
+   * @generated from field: clustermetadata.AvailabilityIntent intent = 5;
+   */
+  intent?: AvailabilityIntent;
 
   constructor(data?: PartialMessage<AvailabilityStatus>) {
     super();
@@ -2716,7 +2780,8 @@ export class AvailabilityStatus extends Message<AvailabilityStatus> {
     { no: 1, name: "leadership_status", kind: "message", T: LeadershipStatus },
     { no: 2, name: "cohort_eligibility_status", kind: "message", T: CohortEligibilityStatus },
     { no: 3, name: "suspected_divergence", kind: "scalar", T: 8 /* ScalarType.BOOL */ },
-    { no: 4, name: "leadership_preference", kind: "enum", T: proto3.getEnumType(LeadershipPreference) },
+    { no: 4, name: "facts", kind: "message", T: AvailabilityFacts },
+    { no: 5, name: "intent", kind: "message", T: AvailabilityIntent },
   ]);
 
   static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): AvailabilityStatus {
@@ -2733,6 +2798,100 @@ export class AvailabilityStatus extends Message<AvailabilityStatus> {
 
   static equals(a: AvailabilityStatus | PlainMessage<AvailabilityStatus> | undefined, b: AvailabilityStatus | PlainMessage<AvailabilityStatus> | undefined): boolean {
     return proto3.util.equals(AvailabilityStatus, a, b);
+  }
+}
+
+/**
+ * AvailabilityFacts are a pooler's own observations, as of its latest report.
+ * They are raw observations, never conclusions like "replace me"; the
+ * coordinator decides what they imply. They may be stale or best-effort.
+ *
+ * @generated from message clustermetadata.AvailabilityFacts
+ */
+export class AvailabilityFacts extends Message<AvailabilityFacts> {
+  /**
+   * Observed state of this pooler's postgres; the same value as
+   * multipoolermanagerdata.Status.postgres_status in the same report. STARTING
+   * and PROMOTING come from the pooler's own in-progress action; the rest from
+   * postgres. Read after the report's consensus position, so a rule naming this
+   * pooler alongside STANDBY means postgres was demoted after the rule was
+   * written. UNKNOWN when absent, including from older poolers.
+   *
+   * @generated from field: clustermetadata.PostgresStatus postgres_status = 1;
+   */
+  postgresStatus = PostgresStatus.UNKNOWN;
+
+  constructor(data?: PartialMessage<AvailabilityFacts>) {
+    super();
+    proto3.util.initPartial(data, this);
+  }
+
+  static readonly runtime: typeof proto3 = proto3;
+  static readonly typeName = "clustermetadata.AvailabilityFacts";
+  static readonly fields: FieldList = proto3.util.newFieldList(() => [
+    { no: 1, name: "postgres_status", kind: "enum", T: proto3.getEnumType(PostgresStatus) },
+  ]);
+
+  static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): AvailabilityFacts {
+    return new AvailabilityFacts().fromBinary(bytes, options);
+  }
+
+  static fromJson(jsonValue: JsonValue, options?: Partial<JsonReadOptions>): AvailabilityFacts {
+    return new AvailabilityFacts().fromJson(jsonValue, options);
+  }
+
+  static fromJsonString(jsonString: string, options?: Partial<JsonReadOptions>): AvailabilityFacts {
+    return new AvailabilityFacts().fromJsonString(jsonString, options);
+  }
+
+  static equals(a: AvailabilityFacts | PlainMessage<AvailabilityFacts> | undefined, b: AvailabilityFacts | PlainMessage<AvailabilityFacts> | undefined): boolean {
+    return proto3.util.equals(AvailabilityFacts, a, b);
+  }
+}
+
+/**
+ * AvailabilityIntent is what a pooler wants. Each field documents its strength:
+ * whether it only orders candidates, excludes the pooler, or asks the
+ * coordinator to act.
+ *
+ * @generated from message clustermetadata.AvailabilityIntent
+ */
+export class AvailabilityIntent extends Message<AvailabilityIntent> {
+  /**
+   * Whether this pooler wants to lead a future term. Strength: orders
+   * candidates that tie on WAL position; it never starts a failover and never
+   * excludes a candidate that is the only viable one. UNSPECIFIED (no
+   * preference) when absent, including from older poolers.
+   *
+   * @generated from field: clustermetadata.LeadershipPreference leadership_preference = 1;
+   */
+  leadershipPreference = LeadershipPreference.UNSPECIFIED;
+
+  constructor(data?: PartialMessage<AvailabilityIntent>) {
+    super();
+    proto3.util.initPartial(data, this);
+  }
+
+  static readonly runtime: typeof proto3 = proto3;
+  static readonly typeName = "clustermetadata.AvailabilityIntent";
+  static readonly fields: FieldList = proto3.util.newFieldList(() => [
+    { no: 1, name: "leadership_preference", kind: "enum", T: proto3.getEnumType(LeadershipPreference) },
+  ]);
+
+  static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): AvailabilityIntent {
+    return new AvailabilityIntent().fromBinary(bytes, options);
+  }
+
+  static fromJson(jsonValue: JsonValue, options?: Partial<JsonReadOptions>): AvailabilityIntent {
+    return new AvailabilityIntent().fromJson(jsonValue, options);
+  }
+
+  static fromJsonString(jsonString: string, options?: Partial<JsonReadOptions>): AvailabilityIntent {
+    return new AvailabilityIntent().fromJsonString(jsonString, options);
+  }
+
+  static equals(a: AvailabilityIntent | PlainMessage<AvailabilityIntent> | undefined, b: AvailabilityIntent | PlainMessage<AvailabilityIntent> | undefined): boolean {
+    return proto3.util.equals(AvailabilityIntent, a, b);
   }
 }
 

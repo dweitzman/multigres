@@ -18,8 +18,8 @@ import (
 	"time"
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
+	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
-	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
 
 // observationAge reports how long ago — on the orchestrator's clock — h's
@@ -82,7 +82,7 @@ func LeaderWritesProgressing(leader *multiorchdatapb.PoolerHealthState, intended
 	if !ok || age > freshness {
 		return false
 	}
-	if leader.GetStatus().GetPostgresStatus() != multipoolermanagerdatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY {
+	if leader.GetStatus().GetPostgresStatus() != clustermetadatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY {
 		return false
 	}
 	return intendedRule.IsDecided()
