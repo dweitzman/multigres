@@ -20,6 +20,7 @@ import (
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/multigres/multigres/go/common/ha"
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
@@ -111,8 +112,7 @@ func postgresReadyLess(healthByID map[string]*multiorchdatapb.PoolerHealthState)
 // as leader, not the quorum denominator.
 func poolerHealthStateLess(healthByID map[string]*multiorchdatapb.PoolerHealthState) func(a, b *clustermetadatapb.ConsensusStatus) bool {
 	prefersNot := func(cs *clustermetadatapb.ConsensusStatus) bool {
-		av := healthByID[topoclient.ClusterIDString(cs.GetId())].GetAvailabilityStatus()
-		return av.GetIntent().GetLeadershipPreference() == clustermetadatapb.LeadershipPreference_LEADERSHIP_PREFERENCE_PREFER_NOT
+		return ha.PrefersNotToLead(healthByID[topoclient.ClusterIDString(cs.GetId())].GetAvailabilityStatus())
 	}
 	failoverSlotsReady := func(cs *clustermetadatapb.ConsensusStatus) int32 {
 		h := healthByID[topoclient.ClusterIDString(cs.GetId())]

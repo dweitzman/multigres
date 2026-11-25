@@ -10,7 +10,7 @@ decisions depend on.
 | -------------- | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | Facts          | `AvailabilityStatus.facts` (`AvailabilityFacts`)   | What the pooler observes about itself, such as its postgres status. Raw observations, never conclusions. |
 | Intent         | `AvailabilityStatus.intent` (`AvailabilityIntent`) | What the pooler wants, such as a preference not to lead. Each field documents its strength.              |
-| Interpretation | multiorch `recovery/types/pooler_signals.go`       | Pure functions that turn facts, intent and `ConsensusStatus` into answers like `CannotActAsLeader`.      |
+| Interpretation | `go/common/ha` (`pooler_signals.go`)               | Pure functions that turn facts, intent and `ConsensusStatus` into answers like `CannotActAsLeader`.      |
 
 Poolers report facts and intent. They never report verdicts like "replace me":
 multiorch decides what the signals imply. That keeps the policy in one place,
@@ -18,7 +18,10 @@ so improving it takes a multiorch upgrade, not a pooler rollout. The
 interpretation functions are pure, so a pooler could also run them itself later.
 
 Analyzers and other decision code ask the interpretation layer questions. They
-don't read raw signals.
+don't read raw signals. The interpretation functions take an `ha.PoolerReport`
+(the pooler's `ConsensusStatus`, `AvailabilityStatus` and leadership mode), so
+they can't depend on `Status`. Like the rest of `go/common/ha`, they must be
+deterministic: no clock reads, goroutines or map-order dependence.
 
 ## AvailabilityStatus vs Status
 
@@ -60,9 +63,11 @@ either side older.
 
 - **New signal:** multiorch treats the unset value as "no signal". Behavior
   improves once poolers report it.
-- **Moving a signal:** the pooler publishes it in both places, and multiorch
-  reads the new one with a fallback to the old. Drop the old one only once no
-  supported pooler or multiorch version reads it.
+- **Moving a signal:** the pooler publishes it in both places. Where multiorch
+  stores incoming reports (`store/pooler.go`), it fills the new field from the
+  old one for older poolers, so the interpretation layer reads only the new
+  field. Drop the old one only once no supported pooler or multiorch version
+  reads it.
 - **Retiring a signal:** stop reading it in multiorch first. Poolers stop
   publishing it in a later release.
 

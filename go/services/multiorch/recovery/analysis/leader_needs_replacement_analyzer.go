@@ -22,6 +22,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
+	"github.com/multigres/multigres/go/common/ha"
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
@@ -141,9 +142,9 @@ func intendedLeaderObservedLive(sa *snapshot.Shard) bool {
 
 // intendedLeaderHasResigned reports whether the leader's own report says it should
 // be replaced: it is leaving the cohort, or it believes it is leader but its
-// postgres is a standby (see types.LeaderNeedsReplacement).
+// postgres is a standby (see ha.LeaderNeedsReplacement).
 func intendedLeaderHasResigned(sa *snapshot.Shard) bool {
-	return types.LeaderNeedsReplacement(sa.IntendedLeaderHealth())
+	return ha.LeaderNeedsReplacement(types.HAReport(sa.IntendedLeaderHealth()))
 }
 
 // intendedLeaderShutdownTombstoned reports whether the shard's leader has been observed in
@@ -203,7 +204,7 @@ func intendedLeaderLastPostgresReadyTime(sa *snapshot.Shard) time.Time {
 // intendedLeaderPromoting reports whether the leader's last snapshot shows pg_promote()
 // in progress (postgres in the PROMOTING state).
 func intendedLeaderPromoting(sa *snapshot.Shard) bool {
-	return types.PostgresIsPromoting(sa.IntendedLeaderHealth())
+	return ha.PostgresIsPromoting(sa.IntendedLeaderHealth().GetAvailabilityStatus())
 }
 
 // intendedLeaderInRecovery reports whether the leader's last snapshot shows its postgres
@@ -221,7 +222,7 @@ func intendedLeaderPromoting(sa *snapshot.Shard) bool {
 // "in recovery" here would instead fail over every primary restart. PROMOTING is
 // handled upstream by inPromotionGrace.
 func intendedLeaderInRecovery(sa *snapshot.Shard) bool {
-	return types.PostgresIsStandby(sa.IntendedLeaderHealth())
+	return ha.PostgresIsStandby(sa.IntendedLeaderHealth().GetAvailabilityStatus())
 }
 
 // inPromotionGrace reports whether failover should be briefly suppressed because

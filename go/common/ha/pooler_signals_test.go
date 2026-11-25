@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package types
+package ha
 
 import (
 	"testing"
@@ -20,11 +20,9 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
-	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
-	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 )
 
-func TestPoolerIsCohortIneligible(t *testing.T) {
+func TestCohortIneligible(t *testing.T) {
 	tests := []struct {
 		name string
 		av   *clustermetadatapb.AvailabilityStatus
@@ -70,20 +68,19 @@ func TestPoolerIsCohortIneligible(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, PoolerIsCohortIneligible(tc.av))
+			assert.Equal(t, tc.want, CohortIneligible(tc.av))
 		})
 	}
 }
 
-// poolerWithLeaderTerm builds a PoolerHealthState whose ConsensusStatus has
-// the given primary term. Used to construct fixtures that exercise the
+// poolerWithLeaderTerm builds a PoolerReport whose ConsensusStatus names the
+// pooler leader at the given term. Used to construct fixtures that exercise the
 // staleness check on REQUESTING_DEMOTION from older poolers.
-func poolerWithLeaderTerm(t *testing.T, primaryTerm int64) *multiorchdatapb.PoolerHealthState {
+func poolerWithLeaderTerm(t *testing.T, primaryTerm int64) *PoolerReport {
 	t.Helper()
 	id := &clustermetadatapb.ID{Name: "mp1"}
-	return &multiorchdatapb.PoolerHealthState{
-		Multipooler: &clustermetadatapb.Multipooler{Id: id},
-		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
+	return &PoolerReport{
+		Consensus: &clustermetadatapb.ConsensusStatus{
 			Id: id,
 			CurrentPosition: &clustermetadatapb.PoolerPosition{
 				Position: &clustermetadatapb.RulePosition{Decision: &clustermetadatapb.ShardRule{
@@ -97,16 +94,15 @@ func poolerWithLeaderTerm(t *testing.T, primaryTerm int64) *multiorchdatapb.Pool
 	}
 }
 
-// poolerWithLeaderTermViaProposal builds a PoolerHealthState whose decision
+// poolerWithLeaderTermViaProposal builds a PoolerReport whose decision
 // is at a different (stale) term but whose outstanding proposal is at
 // primaryTerm — e.g. a self-promotion whose write reached WAL but wasn't
 // marked decided yet.
-func poolerWithLeaderTermViaProposal(t *testing.T, primaryTerm int64) *multiorchdatapb.PoolerHealthState {
+func poolerWithLeaderTermViaProposal(t *testing.T, primaryTerm int64) *PoolerReport {
 	t.Helper()
 	id := &clustermetadatapb.ID{Name: "mp1"}
-	return &multiorchdatapb.PoolerHealthState{
-		Multipooler: &clustermetadatapb.Multipooler{Id: id},
-		ConsensusStatus: &clustermetadatapb.ConsensusStatus{
+	return &PoolerReport{
+		Consensus: &clustermetadatapb.ConsensusStatus{
 			Id: id,
 			CurrentPosition: &clustermetadatapb.PoolerPosition{
 				Position: &clustermetadatapb.RulePosition{
@@ -119,30 +115,30 @@ func poolerWithLeaderTermViaProposal(t *testing.T, primaryTerm int64) *multiorch
 }
 
 func TestLeaderNeedsReplacement(t *testing.T) {
-	t.Run("nil PoolerHealthState returns false", func(t *testing.T) {
-		assert.False(t, LeaderNeedsReplacement(nil))
+	t.Run("empty report returns false", func(t *testing.T) {
+		assert.False(t, LeaderNeedsReplacement(PoolerReport{}))
 	})
 
 	t.Run("no AvailabilityStatus returns false", func(t *testing.T) {
 		p := poolerWithLeaderTerm(t, 5)
-		assert.False(t, LeaderNeedsReplacement(p))
+		assert.False(t, LeaderNeedsReplacement(*p))
 	})
 
 	t.Run("AvailabilityStatus with no signals returns false", func(t *testing.T) {
 		p := poolerWithLeaderTerm(t, 5)
-		p.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{}
-		assert.False(t, LeaderNeedsReplacement(p))
+		p.Availability = &clustermetadatapb.AvailabilityStatus{}
+		assert.False(t, LeaderNeedsReplacement(*p))
 	})
 
 	t.Run("legacy REQUESTING_DEMOTION with matching term returns true", func(t *testing.T) {
 		p := poolerWithLeaderTerm(t, 5)
-		p.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{
+		p.Availability = &clustermetadatapb.AvailabilityStatus{
 			LeadershipStatus: &clustermetadatapb.LeadershipStatus{
 				LeaderTerm: 5,
 				Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION,
 			},
 		}
-		assert.True(t, LeaderNeedsReplacement(p))
+		assert.True(t, LeaderNeedsReplacement(*p))
 	})
 
 	t.Run("legacy REQUESTING_DEMOTION with term matching an undecided proposal returns true", func(t *testing.T) {
@@ -151,33 +147,33 @@ func TestLeaderNeedsReplacement(t *testing.T) {
 		// crashed before its own write was confirmed decided must still be
 		// recognized.
 		p := poolerWithLeaderTermViaProposal(t, 5)
-		p.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{
+		p.Availability = &clustermetadatapb.AvailabilityStatus{
 			LeadershipStatus: &clustermetadatapb.LeadershipStatus{
 				LeaderTerm: 5,
 				Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION,
 			},
 		}
-		assert.True(t, LeaderNeedsReplacement(p))
+		assert.True(t, LeaderNeedsReplacement(*p))
 	})
 
 	t.Run("legacy REQUESTING_DEMOTION with stale term returns false", func(t *testing.T) {
 		// Signal carries term 3 but node's current primary term is 5 — stale.
 		p := poolerWithLeaderTerm(t, 5)
-		p.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{
+		p.Availability = &clustermetadatapb.AvailabilityStatus{
 			LeadershipStatus: &clustermetadatapb.LeadershipStatus{
 				LeaderTerm: 3,
 				Signal:     clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION,
 			},
 		}
-		assert.False(t, LeaderNeedsReplacement(p))
+		assert.False(t, LeaderNeedsReplacement(*p))
 	})
 
 	t.Run("an unset leadership signal returns false even at matching term", func(t *testing.T) {
 		p := poolerWithLeaderTerm(t, 5)
-		p.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{
+		p.Availability = &clustermetadatapb.AvailabilityStatus{
 			LeadershipStatus: &clustermetadatapb.LeadershipStatus{LeaderTerm: 5},
 		}
-		assert.False(t, LeaderNeedsReplacement(p))
+		assert.False(t, LeaderNeedsReplacement(*p))
 	})
 
 	t.Run("CohortEligibility INELIGIBLE returns true even without leadership signal", func(t *testing.T) {
@@ -185,46 +181,46 @@ func TestLeaderNeedsReplacement(t *testing.T) {
 		// touching LeadershipStatus, and the analyzer must still trigger
 		// replacement.
 		p := poolerWithLeaderTerm(t, 5)
-		p.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{
+		p.Availability = &clustermetadatapb.AvailabilityStatus{
 			CohortEligibilityStatus: &clustermetadatapb.CohortEligibilityStatus{
 				Signal: clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE,
 			},
 		}
-		assert.True(t, LeaderNeedsReplacement(p))
+		assert.True(t, LeaderNeedsReplacement(*p))
 	})
 
 	t.Run("CohortEligibility INELIGIBLE returns true regardless of term", func(t *testing.T) {
 		// Cohort eligibility is not term-gated, unlike REQUESTING_DEMOTION.
 		p := poolerWithLeaderTerm(t, 0)
-		p.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{
+		p.Availability = &clustermetadatapb.AvailabilityStatus{
 			CohortEligibilityStatus: &clustermetadatapb.CohortEligibilityStatus{
 				Signal: clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE,
 			},
 		}
-		assert.True(t, LeaderNeedsReplacement(p))
+		assert.True(t, LeaderNeedsReplacement(*p))
 	})
 
 	t.Run("CohortEligibility ELIGIBLE returns false", func(t *testing.T) {
 		p := poolerWithLeaderTerm(t, 5)
-		p.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{
+		p.Availability = &clustermetadatapb.AvailabilityStatus{
 			CohortEligibilityStatus: &clustermetadatapb.CohortEligibilityStatus{
 				Signal: clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_ELIGIBLE,
 			},
 		}
-		assert.False(t, LeaderNeedsReplacement(p))
+		assert.False(t, LeaderNeedsReplacement(*p))
 	})
 }
 
 func TestCannotActAsLeader(t *testing.T) {
-	withPostgres := func(p *multiorchdatapb.PoolerHealthState, st clustermetadatapb.PostgresStatus) *multiorchdatapb.PoolerHealthState {
-		p.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{
+	withPostgres := func(p *PoolerReport, st clustermetadatapb.PostgresStatus) *PoolerReport {
+		p.Availability = &clustermetadatapb.AvailabilityStatus{
 			Facts: &clustermetadatapb.AvailabilityFacts{PostgresStatus: st},
 		}
 		return p
 	}
 	tests := []struct {
 		name string
-		p    *multiorchdatapb.PoolerHealthState
+		p    *PoolerReport
 		want bool
 	}{
 		{name: "named leader, postgres a standby", p: withPostgres(poolerWithLeaderTerm(t, 5), clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STANDBY), want: true},
@@ -236,40 +232,38 @@ func TestCannotActAsLeader(t *testing.T) {
 		{name: "named leader, postgres starting", p: withPostgres(poolerWithLeaderTerm(t, 5), clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STARTING)},
 		{name: "named leader, postgres unknown", p: withPostgres(poolerWithLeaderTerm(t, 5), clustermetadatapb.PostgresStatus_POSTGRES_STATUS_UNKNOWN)},
 		{name: "no status reported", p: poolerWithLeaderTerm(t, 5)},
-		{name: "nil pooler", p: nil},
+		{name: "empty report", p: &PoolerReport{}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, CannotActAsLeader(tc.p))
+			assert.Equal(t, tc.want, CannotActAsLeader(*tc.p))
 		})
 	}
 
 	t.Run("another node is the named leader", func(t *testing.T) {
 		p := withPostgres(poolerWithLeaderTerm(t, 5), clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STANDBY)
-		p.ConsensusStatus.CurrentPosition.Position.Decision.LeaderId = &clustermetadatapb.ID{Name: "other"}
-		assert.False(t, CannotActAsLeader(p))
-	})
-
-	t.Run("older pooler reporting postgres status only in Status", func(t *testing.T) {
-		p := poolerWithLeaderTerm(t, 5)
-		p.Status = &multipoolermanagerdatapb.Status{PostgresStatus: clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STANDBY}
-		assert.True(t, CannotActAsLeader(p))
-	})
-
-	t.Run("the reported fact wins over Status", func(t *testing.T) {
-		p := withPostgres(poolerWithLeaderTerm(t, 5), clustermetadatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY)
-		p.Status = &multipoolermanagerdatapb.Status{PostgresStatus: clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STANDBY}
-		assert.False(t, CannotActAsLeader(p))
+		p.Consensus.CurrentPosition.Position.Decision.LeaderId = &clustermetadatapb.ID{Name: "other"}
+		assert.False(t, CannotActAsLeader(*p))
 	})
 
 	t.Run("a static leader has no one to replace it", func(t *testing.T) {
 		p := withPostgres(poolerWithLeaderTerm(t, 5), clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STANDBY)
-		p.Multipooler.LeadershipMode = clustermetadatapb.LeadershipMode_LEADERSHIP_MODE_STATIC
-		assert.False(t, CannotActAsLeader(p))
+		p.LeadershipMode = clustermetadatapb.LeadershipMode_LEADERSHIP_MODE_STATIC
+		assert.False(t, CannotActAsLeader(*p))
 	})
 
 	t.Run("a leader that can't act needs replacement", func(t *testing.T) {
 		p := withPostgres(poolerWithLeaderTerm(t, 5), clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STANDBY)
-		assert.True(t, LeaderNeedsReplacement(p))
+		assert.True(t, LeaderNeedsReplacement(*p))
 	})
+}
+
+func TestPrefersNotToLead(t *testing.T) {
+	assert.False(t, PrefersNotToLead(nil), "older poolers state no preference")
+	assert.False(t, PrefersNotToLead(&clustermetadatapb.AvailabilityStatus{}))
+	assert.True(t, PrefersNotToLead(&clustermetadatapb.AvailabilityStatus{
+		Intent: &clustermetadatapb.AvailabilityIntent{
+			LeadershipPreference: clustermetadatapb.LeadershipPreference_LEADERSHIP_PREFERENCE_PREFER_NOT,
+		},
+	}))
 }

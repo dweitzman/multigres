@@ -14,82 +14,17 @@
 
 package types
 
-// TODO: stateless helpers for interpreting consensus and availability signals
-// (like LeaderNeedsReplacement) live here to avoid an import cycle between the
-// analysis and actions packages. Once these utilities are needed more broadly they
-// should move to go/common/consensus or a similar shared package.
-
 import (
-	commonconsensus "github.com/multigres/multigres/go/common/consensus"
-	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	"github.com/multigres/multigres/go/common/ha"
 	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 )
 
-// This file is multiorch's interpretation layer: the one place that reads a
-// pooler's ConsensusStatus and AvailabilityStatus and turns them into plain
-// answers. Analyzers ask these questions rather than reading raw signals; see
-// docs/ha/pooler-signals.md.
-
-// LeaderNeedsReplacement reports whether a leader pooler's own report says it
-// should be replaced: it is leaving the cohort (CohortIneligible) or it can't act
-// as the leader it believes it is (CannotActAsLeader).
-func LeaderNeedsReplacement(p *multiorchdatapb.PoolerHealthState) bool {
-	return PoolerIsCohortIneligible(p.GetAvailabilityStatus()) || CannotActAsLeader(p)
-}
-
-// CannotActAsLeader reports whether a pooler believes it is the leader but its
-// postgres can't act as one: the highest rule it knows names it leader while its
-// postgres is a standby. Both facts come from the same report, so a stale report
-// can't convict a leader that has since promoted. A promotion never looks like
-// this: the rule naming the pooler is written to its own postgres, which refuses
-// the write until pg_promote has taken it out of recovery.
-//
-// Older poolers reported this themselves as REQUESTING_DEMOTION at their current
-// term; that is honored too until no such poolers remain.
-func CannotActAsLeader(p *multiorchdatapb.PoolerHealthState) bool {
-	// A static leader leads without consensus, so there is no one to replace it.
-	if p.GetMultipooler().GetLeadershipMode() == clustermetadatapb.LeadershipMode_LEADERSHIP_MODE_STATIC {
-		return false
+// HAReport is the part of a pooler's health state that HA decisions read; pass
+// it to the go/common/ha interpretation functions.
+func HAReport(p *multiorchdatapb.PoolerHealthState) ha.PoolerReport {
+	return ha.PoolerReport{
+		Consensus:      p.GetConsensusStatus(),
+		Availability:   p.GetAvailabilityStatus(),
+		LeadershipMode: p.GetMultipooler().GetLeadershipMode(),
 	}
-	cs := p.GetConsensusStatus()
-	if PostgresIsStandby(p) && commonconsensus.SelfConsensusRole(cs) == commonconsensus.ConsensusRoleLeader {
-		return true
-	}
-	ls := p.GetAvailabilityStatus().GetLeadershipStatus()
-	if ls.GetSignal() != clustermetadatapb.LeadershipSignal_LEADERSHIP_SIGNAL_REQUESTING_DEMOTION {
-		return false
-	}
-	position := cs.GetCurrentPosition().GetPosition()
-	term := commonconsensus.PossiblyUndecidedRule(position).GetRuleNumber().GetCoordinatorTerm()
-	return ls.GetLeaderTerm() != 0 && ls.GetLeaderTerm() == term
-}
-
-// PostgresIsStandby reports whether the pooler's postgres is running as a
-// standby (in recovery and accepting connections).
-func PostgresIsStandby(p *multiorchdatapb.PoolerHealthState) bool {
-	return postgresStatus(p) == clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STANDBY
-}
-
-// PostgresIsPromoting reports whether the pooler is promoting its postgres.
-func PostgresIsPromoting(p *multiorchdatapb.PoolerHealthState) bool {
-	return postgresStatus(p) == clustermetadatapb.PostgresStatus_POSTGRES_STATUS_PROMOTING
-}
-
-// postgresStatus reads the pooler's reported postgres status, falling back to
-// the general Status for older poolers that don't report it as a fact.
-func postgresStatus(p *multiorchdatapb.PoolerHealthState) clustermetadatapb.PostgresStatus {
-	if s := p.GetAvailabilityStatus().GetFacts().GetPostgresStatus(); s != clustermetadatapb.PostgresStatus_POSTGRES_STATUS_UNKNOWN {
-		return s
-	}
-	return p.GetStatus().GetPostgresStatus()
-}
-
-// PoolerIsCohortIneligible reports whether a pooler has self-reported that it
-// is unwilling to serve as a consensus cohort member. UNKNOWN (the default for
-// poolers that don't publish the field, e.g. older versions) and ELIGIBLE both
-// return false. Eligibility is a current preference and not term-gated;
-// staleness comes from the freshness of the surrounding health snapshot.
-func PoolerIsCohortIneligible(av *clustermetadatapb.AvailabilityStatus) bool {
-	signal := av.GetCohortEligibilityStatus().GetSignal()
-	return signal == clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE
 }

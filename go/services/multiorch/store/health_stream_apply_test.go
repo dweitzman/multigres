@@ -71,3 +71,44 @@ func TestHealthStream_applySnapshot(t *testing.T) {
 		assert.EqualValues(t, 1, health.GetStreamSnapshotsReceived())
 	})
 }
+
+func TestApplyStatusFields_FillsLegacyPostgresStatusFact(t *testing.T) {
+	standby := clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STANDBY
+	primary := clustermetadatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY
+
+	t.Run("older pooler without the fact", func(t *testing.T) {
+		h := &multiorchdatapb.PoolerHealthState{}
+		applyStatusFields(h, &multipoolermanagerdatapb.StatusResponse{
+			Status:             &multipoolermanagerdatapb.Status{PostgresStatus: standby},
+			AvailabilityStatus: &clustermetadatapb.AvailabilityStatus{},
+		}, nil)
+		assert.Equal(t, standby, h.GetAvailabilityStatus().GetFacts().GetPostgresStatus())
+	})
+
+	t.Run("older pooler without AvailabilityStatus", func(t *testing.T) {
+		h := &multiorchdatapb.PoolerHealthState{}
+		applyStatusFields(h, &multipoolermanagerdatapb.StatusResponse{
+			Status: &multipoolermanagerdatapb.Status{PostgresStatus: standby},
+		}, nil)
+		assert.Equal(t, standby, h.GetAvailabilityStatus().GetFacts().GetPostgresStatus())
+	})
+
+	t.Run("a reported fact is kept", func(t *testing.T) {
+		h := &multiorchdatapb.PoolerHealthState{}
+		applyStatusFields(h, &multipoolermanagerdatapb.StatusResponse{
+			Status: &multipoolermanagerdatapb.Status{PostgresStatus: standby},
+			AvailabilityStatus: &clustermetadatapb.AvailabilityStatus{
+				Facts: &clustermetadatapb.AvailabilityFacts{PostgresStatus: primary},
+			},
+		}, nil)
+		assert.Equal(t, primary, h.GetAvailabilityStatus().GetFacts().GetPostgresStatus())
+	})
+
+	t.Run("unknown status leaves AvailabilityStatus absent", func(t *testing.T) {
+		h := &multiorchdatapb.PoolerHealthState{}
+		applyStatusFields(h, &multipoolermanagerdatapb.StatusResponse{
+			Status: &multipoolermanagerdatapb.Status{},
+		}, nil)
+		assert.Nil(t, h.GetAvailabilityStatus())
+	})
+}

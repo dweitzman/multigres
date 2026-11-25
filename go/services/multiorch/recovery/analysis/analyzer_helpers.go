@@ -18,6 +18,7 @@ import (
 	"time"
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
+	"github.com/multigres/multigres/go/common/ha"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
 	"github.com/multigres/multigres/go/services/multiorch/internal/snapshot"
@@ -68,7 +69,7 @@ func recruitable(p *multiorchdatapb.PoolerHealthState, now time.Time, freshness 
 	}
 	hs, _ := snapshot.HealthWithin(p, now, freshness)
 	// Draining (graceful shutdown or an admin-stopped WAL receiver).
-	if types.PoolerIsCohortIneligible(hs.GetAvailabilityStatus()) {
+	if ha.CohortIneligible(hs.GetAvailabilityStatus()) {
 		return false
 	}
 	// No cached position — e.g. a flapping pooler whose consensus status

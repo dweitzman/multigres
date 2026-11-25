@@ -159,6 +159,7 @@ func applyStatusFields(h *multiorchdatapb.PoolerHealthState, status *multipooler
 	} else {
 		h.AvailabilityStatus = nil
 	}
+	fillLegacyFacts(h)
 	if cs := status.GetConsensusStatus(); cs != nil {
 		h.ConsensusStatus = proto.Clone(cs).(*clustermetadatapb.ConsensusStatus)
 	} else {
@@ -169,6 +170,24 @@ func applyStatusFields(h *multiorchdatapb.PoolerHealthState, status *multipooler
 	}
 	// NOTE: when PostgresReady is false, LastPostgresReadyTime is intentionally
 	// left at its previous value so callers can reason about "last known good" time.
+}
+
+// fillLegacyFacts copies postgres status from Status into AvailabilityStatus
+// facts for older poolers that only report it in Status, so HA decisions read
+// one place. Remove once every supported pooler reports the fact.
+func fillLegacyFacts(h *multiorchdatapb.PoolerHealthState) {
+	st := h.GetStatus().GetPostgresStatus()
+	if st == clustermetadatapb.PostgresStatus_POSTGRES_STATUS_UNKNOWN ||
+		h.GetAvailabilityStatus().GetFacts().GetPostgresStatus() != clustermetadatapb.PostgresStatus_POSTGRES_STATUS_UNKNOWN {
+		return
+	}
+	if h.AvailabilityStatus == nil {
+		h.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{}
+	}
+	if h.AvailabilityStatus.Facts == nil {
+		h.AvailabilityStatus.Facts = &clustermetadatapb.AvailabilityFacts{}
+	}
+	h.AvailabilityStatus.Facts.PostgresStatus = st
 }
 
 // HealthWithin returns the pooler's current snapshot if it was recorded within

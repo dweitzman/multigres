@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
+	"github.com/multigres/multigres/go/common/ha"
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multiorchdatapb "github.com/multigres/multigres/go/pb/multiorchdata"
@@ -115,7 +116,7 @@ func (a *CohortMismatchAnalyzer) Analyze(sa *snapshot.Shard) ([]types.Problem, e
 			// and UpdateConsensusRule's compare-and-swap means only one
 			// removal lands per cycle regardless — the rest fail the CAS and
 			// retry next cycle against the now-changed cohort.
-			if types.PoolerIsCohortIneligible(pa.GetAvailabilityStatus()) &&
+			if ha.CohortIneligible(pa.GetAvailabilityStatus()) &&
 				commonconsensus.IsCohortMemberRemovalSafe(intendedRule, id) {
 				problems = append(problems, types.Problem{
 					Code:           types.ProblemCohortMemberIneligible,

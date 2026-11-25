@@ -191,21 +191,25 @@ func TestLeaderNeedsReplacementAnalyzer_Analyze(t *testing.T) {
 			h.LastPostgresReadyTime = timestamppb.New(at)
 		}
 	}
-	setLeaderPromoting := func(sa *snapshot.Shard) {
-		{
-			h := sa.IntendedLeaderHealth()
-			h.Status.PostgresStatus = clustermetadatapb.PostgresStatus_POSTGRES_STATUS_PROMOTING
+	// setLeaderPostgresStatus sets the leader's postgres status where a current
+	// pooler reports it: in Status and as an AvailabilityStatus fact.
+	setLeaderPostgresStatus := func(sa *snapshot.Shard, st clustermetadatapb.PostgresStatus) {
+		h := sa.IntendedLeaderHealth()
+		h.Status.PostgresStatus = st
+		if h.AvailabilityStatus == nil {
+			h.AvailabilityStatus = &clustermetadatapb.AvailabilityStatus{}
 		}
+		h.AvailabilityStatus.Facts = &clustermetadatapb.AvailabilityFacts{PostgresStatus: st}
+	}
+	setLeaderPromoting := func(sa *snapshot.Shard) {
+		setLeaderPostgresStatus(sa, clustermetadatapb.PostgresStatus_POSTGRES_STATUS_PROMOTING)
 	}
 
 	// setLeaderPGStandby marks the leader's postgres as genuinely in recovery (a
 	// STANDBY: pg_is_in_recovery() = true), i.e. a rule-designated leader whose
 	// postgres never left recovery and cannot accept writes.
 	setLeaderPGStandby := func(sa *snapshot.Shard) {
-		{
-			h := sa.IntendedLeaderHealth()
-			h.Status.PostgresStatus = clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STANDBY
-		}
+		setLeaderPostgresStatus(sa, clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STANDBY)
 	}
 
 	// setLeaderResigned marks the leader as voluntarily wanting replacement via its
