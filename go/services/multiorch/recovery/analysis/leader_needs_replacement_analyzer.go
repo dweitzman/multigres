@@ -140,10 +140,10 @@ func intendedLeaderObservedLive(sa *snapshot.Shard) bool {
 	return observationFresh(sa.IntendedLeaderHealth(), sa.Now, sa.AvailabilityPolicy.LeaderLivenessFreshness)
 }
 
-// intendedLeaderHasResigned reports whether the leader's own report says it should
+// intendedLeaderNeedsReplacement reports whether the leader's own report says it should
 // be replaced: it is leaving the cohort, or it believes it is leader but its
 // postgres is a standby (see ha.LeaderNeedsReplacement).
-func intendedLeaderHasResigned(sa *snapshot.Shard) bool {
+func intendedLeaderNeedsReplacement(sa *snapshot.Shard) bool {
 	return ha.LeaderNeedsReplacement(types.HAReport(sa.IntendedLeaderHealth()))
 }
 
@@ -183,7 +183,7 @@ func intendedLeaderPostgresReady(sa *snapshot.Shard) bool {
 func intendedLeaderServing(sa *snapshot.Shard) bool {
 	return observationFresh(sa.IntendedLeaderHealth(), sa.Now, sa.AvailabilityPolicy.LeaderChangeFreshness) &&
 		intendedLeaderPostgresReady(sa) &&
-		!intendedLeaderHasResigned(sa)
+		!intendedLeaderNeedsReplacement(sa)
 }
 
 // intendedLeaderPostgresRunning reports whether the leader's last snapshot shows its
@@ -441,13 +441,13 @@ func (a *LeaderNeedsReplacementAnalyzer) leaderReplacementCause(
 	policy commonconsensus.DurabilityPolicy,
 ) (cause types.ProblemCode, description string, inconclusive bool) {
 	// First-hand, authoritative intent to step down — act immediately, bypassing
-	// progress/liveness signals. intendedLeaderHasResigned is the fast path (the leader's
+	// progress/liveness signals. intendedLeaderNeedsReplacement is the fast path (the leader's
 	// INELIGIBLE health broadcast); the SHUTDOWN tombstone is the
 	// durable fallback for when that ephemeral broadcast is lost.
 	// TODO: after a failed attempt, first-hand causes wait the same recruitment backoff
 	// as the rest; they could skip it (intent doesn't flap; multi-orch safety is the
 	// Recruit CAS), cutting the write outage.
-	if intendedLeaderHasResigned(sa) || intendedLeaderShutdownTombstoned(sa, leaderID) {
+	if intendedLeaderNeedsReplacement(sa) || intendedLeaderShutdownTombstoned(sa, leaderID) {
 		return types.ProblemLeaderResigned,
 			fmt.Sprintf("Leader for shard %s is stepping down", sa.ShardRef), false
 	}
@@ -463,7 +463,7 @@ func (a *LeaderNeedsReplacementAnalyzer) leaderReplacementCause(
 	// non-ready states are handled by the anti-flap timeout — see intendedLeaderInRecovery.)
 	//
 	// A leader that knows it is leader but is a standby is already caught above
-	// (intendedLeaderHasResigned). This catches the rest: the rule names this
+	// (intendedLeaderNeedsReplacement). This catches the rest: the rule names this
 	// pooler but it never learned so, e.g. a Promote() that never reached it.
 	if leaderLive && intendedLeaderInRecovery(sa) {
 		return types.ProblemLeaderUnhealthy,

@@ -33,26 +33,25 @@ type PoolerReport struct {
 }
 
 // LeaderNeedsReplacement reports whether a leader's own report says it should
-// be replaced: it is leaving the cohort (CohortIneligible) or it can't act as
-// the leader it believes it is (CannotActAsLeader).
+// be replaced: it is leaving the cohort (CohortIneligible) or its postgres was
+// demoted (LeaderPostgresDemoted).
 func LeaderNeedsReplacement(r PoolerReport) bool {
-	return CohortIneligible(r.Availability) || CannotActAsLeader(r)
-}
-
-// CannotActAsLeader reports whether a pooler believes it is the leader but its
-// postgres can't act as one: the highest rule it knows names it leader while its
-// postgres is a standby. The pooler reads its rule before its postgres status,
-// and the rule naming it is written to its own postgres, which refuses the write
-// until pg_promote has taken it out of recovery. So this means postgres was
-// demoted, never that a promotion is under way.
-//
-// Older poolers reported this themselves as REQUESTING_DEMOTION at their current
-// term; that is honored too until no such poolers remain.
-func CannotActAsLeader(r PoolerReport) bool {
 	// A static leader leads without consensus, so there is no one to replace it.
 	if r.LeadershipMode == clustermetadatapb.LeadershipMode_LEADERSHIP_MODE_STATIC {
 		return false
 	}
+	return CohortIneligible(r.Availability) || LeaderPostgresDemoted(r)
+}
+
+// LeaderPostgresDemoted reports whether the highest rule a pooler knows names
+// it leader while its postgres is a standby. The pooler reads its rule before
+// its postgres status, and the rule naming it is written to its own postgres,
+// which refuses the write until pg_promote has taken it out of recovery. So
+// this means postgres was demoted, never that a promotion is under way.
+//
+// Older poolers reported this themselves as REQUESTING_DEMOTION at their current
+// term; that is honored too until no such poolers remain.
+func LeaderPostgresDemoted(r PoolerReport) bool {
 	if PostgresIsStandby(r.Availability) && commonconsensus.SelfConsensusRole(r.Consensus) == commonconsensus.ConsensusRoleLeader {
 		return true
 	}

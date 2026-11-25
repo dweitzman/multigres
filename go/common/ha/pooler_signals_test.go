@@ -209,9 +209,22 @@ func TestLeaderNeedsReplacement(t *testing.T) {
 		}
 		assert.False(t, LeaderNeedsReplacement(*p))
 	})
+
+	t.Run("a static leader has no one to replace it", func(t *testing.T) {
+		p := poolerWithLeaderTerm(t, 5)
+		p.LeadershipMode = clustermetadatapb.LeadershipMode_LEADERSHIP_MODE_STATIC
+		p.Availability = &clustermetadatapb.AvailabilityStatus{
+			Facts: &clustermetadatapb.AvailabilityFacts{PostgresStatus: clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STANDBY},
+			CohortEligibilityStatus: &clustermetadatapb.CohortEligibilityStatus{
+				Signal: clustermetadatapb.CohortEligibilitySignal_COHORT_ELIGIBILITY_SIGNAL_INELIGIBLE,
+			},
+		}
+		assert.True(t, LeaderPostgresDemoted(*p), "the fact holds regardless of mode")
+		assert.False(t, LeaderNeedsReplacement(*p))
+	})
 }
 
-func TestCannotActAsLeader(t *testing.T) {
+func TestLeaderPostgresDemoted(t *testing.T) {
 	withPostgres := func(p *PoolerReport, st clustermetadatapb.PostgresStatus) *PoolerReport {
 		p.Availability = &clustermetadatapb.AvailabilityStatus{
 			Facts: &clustermetadatapb.AvailabilityFacts{PostgresStatus: st},
@@ -236,23 +249,17 @@ func TestCannotActAsLeader(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, CannotActAsLeader(*tc.p))
+			assert.Equal(t, tc.want, LeaderPostgresDemoted(*tc.p))
 		})
 	}
 
 	t.Run("another node is the named leader", func(t *testing.T) {
 		p := withPostgres(poolerWithLeaderTerm(t, 5), clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STANDBY)
 		p.Consensus.CurrentPosition.Position.Decision.LeaderId = &clustermetadatapb.ID{Name: "other"}
-		assert.False(t, CannotActAsLeader(*p))
+		assert.False(t, LeaderPostgresDemoted(*p))
 	})
 
-	t.Run("a static leader has no one to replace it", func(t *testing.T) {
-		p := withPostgres(poolerWithLeaderTerm(t, 5), clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STANDBY)
-		p.LeadershipMode = clustermetadatapb.LeadershipMode_LEADERSHIP_MODE_STATIC
-		assert.False(t, CannotActAsLeader(*p))
-	})
-
-	t.Run("a leader that can't act needs replacement", func(t *testing.T) {
+	t.Run("a demoted leader needs replacement", func(t *testing.T) {
 		p := withPostgres(poolerWithLeaderTerm(t, 5), clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STANDBY)
 		assert.True(t, LeaderNeedsReplacement(*p))
 	})

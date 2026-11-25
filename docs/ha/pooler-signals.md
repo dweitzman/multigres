@@ -10,7 +10,7 @@ decisions depend on.
 | -------------- | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | Facts          | `AvailabilityStatus.facts` (`AvailabilityFacts`)   | What the pooler observes about itself, such as its postgres status. Raw observations, never conclusions. |
 | Intent         | `AvailabilityStatus.intent` (`AvailabilityIntent`) | What the pooler wants, such as a preference not to lead. Each field documents its strength.              |
-| Interpretation | `go/common/ha` (`pooler_signals.go`)               | Pure functions that turn facts, intent and `ConsensusStatus` into answers like `CannotActAsLeader`.      |
+| Interpretation | `go/common/ha` (`pooler_signals.go`)               | Pure functions that turn facts, intent and `ConsensusStatus` into answers like `LeaderPostgresDemoted`.  |
 
 Poolers report facts and intent. They never report verdicts like "replace me":
 multiorch decides what the signals imply. That keeps the policy in one place,
