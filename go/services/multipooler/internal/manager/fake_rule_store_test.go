@@ -75,6 +75,10 @@ type fakeRuleStore struct {
 	reconcileGUCErr    error
 	clearSyncCalled    bool
 	clearSyncErr       error
+	// beforePromotionHook and afterPromotionHook run around the promotion hook
+	// (pg_promote), so tests can observe the pooler mid-promotion.
+	beforePromotionHook func(context.Context)
+	afterPromotionHook  func(context.Context)
 }
 
 func (f *fakeRuleStore) observePositionCallCount() int {
@@ -130,8 +134,14 @@ func (f *fakeRuleStore) UpdateRule(ctx context.Context, update *consensus.RuleUp
 		}
 	}
 	if hook := update.GetPromotionHook(); hook != nil {
+		if f.beforePromotionHook != nil {
+			f.beforePromotionHook(ctx)
+		}
 		if err := hook(ctx); err != nil {
 			return nil, err
+		}
+		if f.afterPromotionHook != nil {
+			f.afterPromotionHook(ctx)
 		}
 	}
 	if updateErrAfterHook != nil {

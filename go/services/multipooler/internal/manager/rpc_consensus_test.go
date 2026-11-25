@@ -32,7 +32,9 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/multigres/multigres/go/cmd/pgctld/testutil"
+	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/constants"
+	"github.com/multigres/multigres/go/common/ha"
 	"github.com/multigres/multigres/go/common/mterrors"
 	"github.com/multigres/multigres/go/common/servenv"
 	"github.com/multigres/multigres/go/common/topoclient/memorytopo"
@@ -1131,6 +1133,103 @@ func TestPromote(t *testing.T) {
 			}, time.Second, time.Millisecond, "mock expectations not met after promotion")
 		})
 	}
+}
+
+// TestPromote_ReportNeverReadsAsDemotedLeader checks the pooler's report at each
+// step of a promotion against multiorch's interpretation (go/common/ha): an
+// in-flight or failed promotion must never read as a demoted leader, which
+// multiorch treats as conclusive and would answer with a competing recruit.
+// Postgres status is taken from the step rather than queried, so the mocks stay
+// reserved for Promote itself.
+func TestPromote_ReportNeverReadsAsDemotedLeader(t *testing.T) {
+	selfID := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "test-pooler"}
+	otherPooler := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIPOOLER, Cell: "zone1", Name: "other-pooler"}
+	coordinator := &clustermetadatapb.ID{Component: clustermetadatapb.ID_MULTIORCH, Cell: "zone1", Name: "orch"}
+	req := &consensusdatapb.PromoteRequest{
+		Proposal: &consensusdatapb.CoordinatorProposal{
+			TermRevocation: &clustermetadatapb.TermRevocation{
+				RevokedBelowTerm:       7,
+				AcceptedCoordinatorId:  coordinator,
+				CoordinatorInitiatedAt: recruitTS,
+				OutgoingRule:           &clustermetadatapb.RuleNumber{CoordinatorTerm: 0, LeaderSubterm: 1},
+			},
+			ProposalLeader: &clustermetadatapb.PoolerAddress{Id: selfID, Host: "pg-primary.internal", PostgresPort: 5432},
+			ProposedTransition: &clustermetadatapb.RulePosition{Proposal: &clustermetadatapb.ShardRule{
+				RuleNumber:    &clustermetadatapb.RuleNumber{CoordinatorTerm: 7},
+				LeaderId:      selfID, // as the coordinator sets it
+				CohortMembers: []*clustermetadatapb.ID{selfID, otherPooler},
+				CoordinatorId: coordinator,
+				CreationTime:  ruleCreatedTS,
+			}},
+		},
+	}
+	// The outgoing rule names the other pooler, as in a failover.
+	outgoing := func() *clustermetadatapb.PoolerPosition {
+		pos := makeRulePosition(0)
+		pos.Position.Decision.LeaderId = otherPooler
+		return pos
+	}
+
+	setup := func(t *testing.T, rs *fakeRuleStore, mocks func(*mock.QueryService)) *MultipoolerManager {
+		qs := mock.NewQueryService()
+		mocks(qs)
+		pm, tmpDir := setupManagerWithMockDB(t, qs, rs)
+		consensustest.SeedTerm(t, tmpDir, req.GetProposal().GetTermRevocation())
+		_, err := pm.consensusMgr.Promises().Load()
+		require.NoError(t, err)
+		return pm
+	}
+	// report builds what Status() publishes, given the postgres status at this step.
+	report := func(t *testing.T, ctx context.Context, pm *MultipoolerManager, pg clustermetadatapb.PostgresStatus) ha.PoolerReport {
+		cs, err := pm.consensusMgr.InconsistentConsensusStatus(ctx)
+		require.NoError(t, err)
+		return ha.PoolerReport{
+			Consensus:    cs,
+			Availability: pm.buildAvailabilityStatus(&clustermetadatapb.AvailabilityFacts{PostgresStatus: pg}),
+		}
+	}
+	standby := clustermetadatapb.PostgresStatus_POSTGRES_STATUS_STANDBY
+	primary := clustermetadatapb.PostgresStatus_POSTGRES_STATUS_PRIMARY
+
+	t.Run("in flight", func(t *testing.T) {
+		rs := &fakeRuleStore{pos: outgoing()}
+		pm := setup(t, rs, expectLeaderPromoteMocks)
+		var sawBefore, sawAfter bool
+		rs.beforePromotionHook = func(ctx context.Context) {
+			sawBefore = true
+			r := report(t, ctx, pm, standby)
+			// Promote has already told the pooler it leads, by RPC, but
+			// postgres is still a standby: the window that must not convict.
+			require.Equal(t, commonconsensus.ConsensusRoleLeader, commonconsensus.SelfConsensusRole(r.Consensus),
+				"precondition: the pooler already believes it leads")
+			assert.False(t, ha.LeaderNeedsReplacement(r), "before pg_promote")
+		}
+		rs.afterPromotionHook = func(ctx context.Context) {
+			sawAfter = true
+			assert.False(t, ha.LeaderNeedsReplacement(report(t, ctx, pm, primary)), "after pg_promote, before the rule write")
+		}
+
+		_, err := pm.Promote(t.Context(), req)
+		require.NoError(t, err)
+		require.True(t, sawBefore && sawAfter, "both promotion hooks should run")
+
+		assert.False(t, ha.LeaderNeedsReplacement(report(t, t.Context(), pm, primary)), "promoted")
+		// Control: once the rule is in its WAL, a standby postgres is a real demotion.
+		assert.True(t, ha.LeaderNeedsReplacement(report(t, t.Context(), pm, standby)), "demoted after promoting")
+	})
+
+	t.Run("failed before pg_promote", func(t *testing.T) {
+		rs := &fakeRuleStore{pos: outgoing(), updateErr: errors.New("pre-promote GUC failed")}
+		pm := setup(t, rs, func(m *mock.QueryService) {
+			expectStandbyReadyMocks(m)
+			m.AddQueryPatternOnce("SELECT pg_is_in_recovery",
+				mock.MakeQueryResult([]string{"pg_is_in_recovery"}, [][]any{{"t"}}))
+		})
+		_, err := pm.Promote(t.Context(), req)
+		require.ErrorContains(t, err, "promote failed: could not write rule")
+		// Left to multiorch's leader-in-recovery check, which refreshes before acting.
+		assert.False(t, ha.LeaderNeedsReplacement(report(t, t.Context(), pm, standby)))
+	})
 }
 
 // TestPromote_LogicalFailoverMetricGating verifies that
