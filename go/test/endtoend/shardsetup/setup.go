@@ -41,6 +41,7 @@ import (
 
 	"github.com/multigres/multigres/go/cmd/pgctld/testutil"
 	"github.com/multigres/multigres/go/common/constants"
+	"github.com/multigres/multigres/go/common/faultinject"
 	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/test/endtoend/clustersetup"
 	"github.com/multigres/multigres/go/test/utils"
@@ -2070,6 +2071,32 @@ func (s *ShardSetup) GetMultipoolerID(name string) *clustermetadatapb.ID {
 // KillPostgres kills postgres using SIGKILL on a node (simulates hard database crash).
 // This sends SIGKILL directly to the postgres process without clean shutdown.
 // The multipooler stays running to report the unhealthy status to multiorch.
+// faultsFile is where a pooler reads its injected faults (see faultinject.EnvFile).
+func faultsFile(poolerDir string) string {
+	return filepath.Join(poolerDir, "faults")
+}
+
+// SetFaults replaces the faults injected into the named pooler, in faultinject's
+// file format. An empty spec clears them. The pooler picks the change up the next
+// time it reaches a fault point.
+func (s *ShardSetup) SetFaults(t *testing.T, name, spec string) {
+	t.Helper()
+	inst := s.GetMultipoolerInstance(name)
+	require.NotNil(t, inst, "node %s not found", name)
+	_, err := faultinject.Parse(spec)
+	require.NoError(t, err, "invalid fault spec")
+
+	path := faultsFile(inst.Multipooler.PoolerDir)
+	if spec == "" {
+		require.NoError(t, os.RemoveAll(path))
+		return
+	}
+	// Write then rename, so the pooler never reads a partial file.
+	tmp := path + ".tmp"
+	require.NoError(t, os.WriteFile(tmp, []byte(spec), 0o600))
+	require.NoError(t, os.Rename(tmp, path))
+}
+
 func (s *ShardSetup) KillPostgres(t *testing.T, name string) {
 	t.Helper()
 

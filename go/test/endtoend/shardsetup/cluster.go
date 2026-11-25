@@ -28,6 +28,7 @@ import (
 
 	"github.com/multigres/multigres/go/cmd/pgctld/testutil"
 	"github.com/multigres/multigres/go/common/constants"
+	"github.com/multigres/multigres/go/common/faultinject"
 	"github.com/multigres/multigres/go/common/topoclient"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
@@ -322,6 +323,7 @@ func CreateMultipoolerProcessInstance(t *testing.T, name, baseDir string, grpcPo
 		SocketFile:  socketFile,
 		Environment: append(utils.BaseTestEnv(), "PGCONNECT_TIMEOUT=5", "POSTGRES_PASSWORD="+TestPostgresPassword, constants.PgDataDirEnvVar+"="+filepath.Join(pgctldDataDir, "pg_data")),
 	}
+	inst.Environment = append(inst.Environment, faultinject.EnvFile+"="+faultsFile(pgctldDataDir))
 
 	// Store pgBackRest cert paths struct and port for later use when starting multipooler
 	inst.PgBackRestCertPaths = certPaths

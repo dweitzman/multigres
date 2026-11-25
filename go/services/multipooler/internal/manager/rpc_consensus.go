@@ -23,6 +23,7 @@ import (
 
 	commonconsensus "github.com/multigres/multigres/go/common/consensus"
 	"github.com/multigres/multigres/go/common/eventlog"
+	"github.com/multigres/multigres/go/common/faultinject"
 	"github.com/multigres/multigres/go/common/mterrors"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	consensusdatapb "github.com/multigres/multigres/go/pb/consensusdata"
@@ -601,6 +602,9 @@ func (pm *MultipoolerManager) promoteLocked(ctx context.Context, req *consensusd
 	}
 
 	promotionHook := func(hookCtx context.Context) error {
+		if err := faultinject.Check(hookCtx, faultinject.PromoteBeforePgPromote); err != nil {
+			return err
+		}
 		recordMetric := pm.slotBasedReplicationEnabled()
 		slotsStart := time.Now()
 		slotsErr := pm.manageLogicalFailoverSlots(hookCtx, proposedRule.GetCohortMembers())
@@ -615,7 +619,10 @@ func (pm *MultipoolerManager) promoteLocked(ctx context.Context, req *consensusd
 			return slotsErr
 		}
 
-		return pm.promoteStandbyToPrimary(hookCtx, state, proposal.GetProposedTransition())
+		if err := pm.promoteStandbyToPrimary(hookCtx, state, proposal.GetProposedTransition()); err != nil {
+			return err
+		}
+		return faultinject.Check(hookCtx, faultinject.PromoteAfterPgPromote)
 	}
 
 	ruleUpdate := consensus.NewRuleUpdate(
